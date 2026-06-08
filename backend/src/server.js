@@ -571,6 +571,16 @@ app.put('/api/me/preferences', authMiddleware, async (req, res, next) => {
 });
 
 // ============================================================
+// ENDPOINTS PUBLICOS (sin auth) — version del sistema
+// Hay que declararlos ANTES del app.use('/api', authMiddleware) porque
+// si no quedan capturados por el middleware global y devuelven 401.
+// El frontend los usa para mostrar la version y el updater para health check.
+// ============================================================
+app.get('/api/system/version', (_req, res) => {
+  res.json({ ok: true, version: AGROCORE_VERSION, build: AGROCORE_BUILD });
+});
+
+// ============================================================
 // TODO LO SIGUIENTE REQUIERE AUTH
 // ============================================================
 app.use('/api', authMiddleware);
@@ -3618,14 +3628,10 @@ app.delete('/api/banco-movimientos/:id', requireCompany, requirePermission('fina
 });
 
 // ============================================================
-// SYSTEM: versión actual + chequeo de actualizaciones
-// El script Update-AgroCore.ps1 consulta /api/system/check-update
-// y compara con la versión publicada en GitHub para avisar updates.
+// SYSTEM: chequeo de actualizaciones
+// /api/system/version se declara como ruta publica antes del authMiddleware.
+// /api/system/check-update requiere login (solo super admins lo usan).
 // ============================================================
-app.get('/api/system/version', async (_req, res) => {
-  res.json({ ok: true, version: AGROCORE_VERSION, build: AGROCORE_BUILD });
-});
-
 app.get('/api/system/check-update', authMiddleware, async (_req, res, next) => {
   try {
     // Si no está configurado AGROCORE_REPO en el .env, no hay forma de chequear.

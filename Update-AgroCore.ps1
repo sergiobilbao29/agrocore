@@ -1,10 +1,10 @@
 # ============================================================
-# AgroCore — actualizador automático
-# Pulla la última versión del repo, aplica migraciones de DB y reinicia el server.
+# AgroCore - actualizador automatico
+# Pulla la ultima version del repo, aplica migraciones de DB y reinicia el server.
 # Uso:
-#   - Doble clic al acceso directo "Actualizar AgroCore" en el menú Inicio
+#   - Doble clic al acceso directo "Actualizar AgroCore" en el menu Inicio
 #   - O ejecutar manualmente: powershell -ExecutionPolicy Bypass -File Update-AgroCore.ps1
-# Backup automático ANTES de tocar nada — si algo falla, el .sql queda en C:\AgroCore\backups.
+# Backup automatico ANTES de tocar nada. Si algo falla, el .sql queda en C:\AgroCore\backups.
 # ============================================================
 param(
   [string]$InstallDir = "C:\AgroCore",
@@ -20,43 +20,68 @@ function Info($msg) { Write-Host "[..] $msg" -ForegroundColor Gray }
 function Warn($msg) { Write-Host "[!]  $msg" -ForegroundColor Yellow }
 function Err($msg) { Write-Host "[ER] $msg" -ForegroundColor Red }
 
-H1 "AgroCore — Actualizador automático"
+H1 "AgroCore - Actualizador automatico"
 
-# 1. Verificar que existe la instalación
+# 1. Verificar que existe la instalacion
 if (-not (Test-Path $InstallDir)) { Err "No se encuentra AgroCore en $InstallDir"; pause; exit 1 }
 $backendDir = Join-Path $InstallDir "backend"
 if (-not (Test-Path $backendDir)) { Err "No se encuentra el backend en $backendDir"; pause; exit 1 }
-Ok "Instalación encontrada: $InstallDir"
+Ok "Instalacion encontrada: $InstallDir"
 
-# 2. Verificar versión actual vs última disponible
-H1 "Verificando versión disponible..."
+# 2. Leer AGROCORE_REPO del .env (con fallback al default)
+$envFileForRepo = Join-Path $backendDir ".env"
+$repoSlug = "agrocore-ar/agrocore"
+if (Test-Path $envFileForRepo) {
+  $repoLine = Select-String -Path $envFileForRepo -Pattern '^AGROCORE_REPO=' -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($repoLine) {
+    $val = $repoLine.Line -replace '^AGROCORE_REPO=',''
+    $val = $val.Trim().Trim('"').Trim("'")
+    if ($val) { $repoSlug = $val }
+  }
+}
+Info "Repositorio de actualizaciones: $repoSlug"
+
+# 3. Verificar version actual vs ultima disponible
+H1 "Verificando version disponible..."
 $currentVersion = "desconocida"
 $latestVersion  = "desconocida"
 try {
   $r = Invoke-RestMethod -Uri "http://localhost:3100/api/system/version" -TimeoutSec 5
   $currentVersion = $r.version
-  Info "Versión instalada: $currentVersion"
+  Info "Version instalada: $currentVersion"
 } catch {
-  Warn "No se pudo consultar el sistema corriendo. ¿Está apagado? Continuamos igual."
+  Warn "No se pudo consultar el sistema corriendo. Esta apagado? Continuamos igual."
 }
 try {
   $headers = @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'AgroCore-Updater' }
-  $r = Invoke-RestMethod -Uri "https://api.github.com/repos/agrocore-ar/agrocore/releases/latest" -Headers $headers -TimeoutSec 10
+  $r = Invoke-RestMethod -Uri "https://api.github.com/repos/$repoSlug/releases/latest" -Headers $headers -TimeoutSec 10
   $latestVersion = $r.tag_name -replace '^v',''
-  Info "Última versión publicada: $latestVersion"
+  Info "Ultima version publicada: $latestVersion"
 } catch {
-  Warn "No se pudo consultar GitHub. Continuamos con git pull."
+  Warn "No se pudo consultar GitHub ($repoSlug). Continuamos con git pull."
 }
 
 if ($currentVersion -ne "desconocida" -and $latestVersion -ne "desconocida" -and $currentVersion -eq $latestVersion) {
-  Ok "Ya estás en la última versión ($currentVersion). Nada que hacer."
-  Read-Host "Presioná Enter para salir"
+  Ok "Ya estas en la ultima version ($currentVersion). Nada que hacer."
+  Read-Host "Presiona Enter para salir"
   exit 0
 }
 
-# 3. Backup automático antes de actualizar
+# Si no se pudo determinar la ultima version (sin releases publicadas o sin internet),
+# preguntar antes de seguir.
+if ($latestVersion -eq "desconocida") {
+  Warn "No se pudo determinar la ultima version remota."
+  Warn "Esto pasa si el repositorio no tiene releases publicadas todavia, o si no hay internet."
+  $resp = Read-Host "Queres forzar el update igual (git pull + npm install + migrate)? [s/N]"
+  if ($resp -notmatch '^[sSyY]') {
+    Info "Cancelado por el usuario. Sin cambios."
+    exit 0
+  }
+}
+
+# 4. Backup automatico antes de actualizar
 if (-not $SkipBackup) {
-  H1 "Backup automático antes de actualizar..."
+  H1 "Backup automatico antes de actualizar..."
   $backupDir = Join-Path $InstallDir "backups"
   if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir | Out-Null }
   $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -71,14 +96,17 @@ if (-not $SkipBackup) {
     $envFile = Join-Path $backendDir ".env"
     $dbUrl = (Select-String -Path $envFile -Pattern "^DATABASE_URL=" | ForEach-Object { $_.Line -replace '^DATABASE_URL=','' })
     if ($dbUrl) {
+      # Sacar parametros tipo ?schema=public que pg_dump no acepta
+      $dbUrl = $dbUrl.Trim().Trim('"').Trim("'")
+      $dbUrl = $dbUrl.Split('?')[0]
       Info "Generando backup: $backupFile"
       & $pgDump --no-owner --no-acl --encoding=UTF8 -f $backupFile $dbUrl
-      if ($LASTEXITCODE -eq 0) { Ok "Backup generado." } else { Warn "Backup falló (código $LASTEXITCODE) — continuamos con cuidado." }
-    } else { Warn "No se pudo leer DATABASE_URL del .env — sin backup automático." }
-  } else { Warn "pg_dump no encontrado — sin backup automático." }
+      if ($LASTEXITCODE -eq 0) { Ok "Backup generado." } else { Warn "Backup fallo (codigo $LASTEXITCODE). Continuamos con cuidado." }
+    } else { Warn "No se pudo leer DATABASE_URL del .env. Sin backup automatico." }
+  } else { Warn "pg_dump no encontrado. Sin backup automatico." }
 }
 
-# 4. Detener AgroCore
+# 5. Detener AgroCore
 H1 "Deteniendo AgroCore..."
 $nodeProcs = Get-Process -Name "node" -ErrorAction SilentlyContinue
 if ($nodeProcs) {
@@ -89,19 +117,18 @@ if ($nodeProcs) {
   Info "AgroCore no estaba corriendo."
 }
 
-# 5. Pull de la última versión
-H1 "Descargando última versión..."
+# 6. Pull de la ultima version
+H1 "Descargando ultima version..."
 Push-Location $InstallDir
 try {
   if (Test-Path ".git") {
     Info "git pull..."
     & git pull --ff-only 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) { Err "git pull falló"; exit 2 }
-    Ok "Código actualizado."
+    if ($LASTEXITCODE -ne 0) { Err "git pull fallo"; exit 2 }
+    Ok "Codigo actualizado."
   } else {
-    Warn "No es un repositorio git. Descargando ZIP de la última release..."
-    $repo = "agrocore-ar/agrocore"
-    $zipUrl = "https://github.com/$repo/archive/refs/tags/v$latestVersion.zip"
+    Warn "No es un repositorio git. Descargando ZIP de la ultima release..."
+    $zipUrl = "https://github.com/$repoSlug/archive/refs/tags/v$latestVersion.zip"
     $zipPath = "$env:TEMP\agrocore-update.zip"
     Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
     Info "Extrayendo..."
@@ -110,22 +137,22 @@ try {
     $extractRoot = Get-ChildItem "$env:TEMP\agrocore-extract" -Directory | Select-Object -First 1
     Copy-Item -Path "$($extractRoot.FullName)\*" -Destination $InstallDir -Recurse -Force -Exclude @("node_modules",".env")
     Remove-Item $zipPath, "$env:TEMP\agrocore-extract" -Recurse -Force
-    Ok "Código extraído."
+    Ok "Codigo extraido."
   }
 } finally { Pop-Location }
 
-# 6. Reinstalar deps + migraciones
+# 7. Reinstalar deps + migraciones
 H1 "Actualizando dependencias..."
 Push-Location $backendDir
 try {
   Info "npm install (puede tardar 1-3 minutos)..."
   & npm install --omit=dev --no-audit --no-fund --loglevel=error
-  if ($LASTEXITCODE -ne 0) { Err "npm install falló"; exit 3 }
+  if ($LASTEXITCODE -ne 0) { Err "npm install fallo"; exit 3 }
   Ok "Dependencias actualizadas."
 
   Info "Aplicando migraciones de base..."
   & npx prisma migrate deploy
-  if ($LASTEXITCODE -ne 0) { Err "prisma migrate deploy falló"; exit 4 }
+  if ($LASTEXITCODE -ne 0) { Err "prisma migrate deploy fallo"; exit 4 }
   Ok "Migraciones aplicadas."
 
   Info "Regenerando Prisma Client..."
@@ -133,7 +160,7 @@ try {
   Ok "Prisma Client OK."
 } finally { Pop-Location }
 
-# 7. Reiniciar AgroCore
+# 8. Reiniciar AgroCore
 H1 "Reiniciando AgroCore..."
 $vbs = Join-Path $InstallDir "INICIAR-AGROCORE.vbs"
 if (Test-Path $vbs) {
@@ -141,30 +168,30 @@ if (Test-Path $vbs) {
   Start-Sleep -Seconds 3
   Ok "AgroCore reiniciado."
 } else {
-  Warn "No se encontró INICIAR-AGROCORE.vbs — iniciá AgroCore manualmente."
+  Warn "No se encontro INICIAR-AGROCORE.vbs. Inicia AgroCore manualmente."
 }
 
-# 8. Verificar que vuelve a responder
-Info "Verificando que el sistema responde..."
-$timeout = 30
+# 9. Verificar que vuelve a responder
+Info "Verificando que el sistema responde (hasta 60 segundos)..."
+$timeout = 60
 $started = $false
 for ($i = 0; $i -lt $timeout; $i++) {
   try {
     $r = Invoke-RestMethod -Uri "http://localhost:3100/api/system/version" -TimeoutSec 2 -ErrorAction Stop
     $started = $true
-    Ok "Sistema respondiendo en versión $($r.version)"
+    Ok "Sistema respondiendo en version $($r.version)"
     break
   } catch {
     Start-Sleep -Seconds 1
   }
 }
 if (-not $started) {
-  Err "El sistema no respondió en $timeout segundos. Revisar logs en backend\logs."
-  Read-Host "Presioná Enter"
+  Err "El sistema no respondio en $timeout segundos. Revisar logs en backend\logs."
+  Read-Host "Presiona Enter"
   exit 5
 }
 
-H1 "✅ Actualización completada"
-Ok "AgroCore actualizado a la última versión."
-Info "Abrí el navegador en http://localhost:3100 para verlo."
-Read-Host "Presioná Enter para salir"
+H1 "[OK] Actualizacion completada"
+Ok "AgroCore actualizado a la ultima version."
+Info "Abri el navegador en http://localhost:3100 para verlo."
+Read-Host "Presiona Enter para salir"
