@@ -1,0 +1,7 @@
+tunnel: 429bbfca-47c0-4d8b-bc15-dd9baf457bd5
+credentials-file: C:\Users\sergi\.cloudflared\429bbfca-47c0-4d8b-bc15-dd9baf457bd5.json
+
+ingress:
+  - hostname: demo.agrocore.ar
+    service: http://127.0.0.1:3100
+  - service: http_status:404

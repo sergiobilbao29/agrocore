@@ -1,0 +1,31 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno (NUNCA subir a git)
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Prisma
+# (el schema sí va al repo; las migraciones también, pero no los artefactos locales)
+prisma/dev.db
+prisma/dev.db-journal
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Builds
+dist/
+build/

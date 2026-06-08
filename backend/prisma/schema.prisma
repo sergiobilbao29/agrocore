@@ -1,0 +1,1021 @@
+// AgroCore — Prisma schema
+// Base de datos: PostgreSQL (local en fase de pruebas → AWS RDS en producción)
+// Todas las tablas son multi-empresa a través de companyId
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// EMPRESAS, USUARIOS Y PERMISOS (multi-tenant + RBAC)
+// ============================================================
+
+model Company {
+  id              String   @id @default(cuid())
+  name            String
+  cuit            String?
+  razonSocial     String?
+  domicilio       String?
+  localidad       String?
+  provincia       String?
+  pais            String?
+  telefono        String?
+  email           String?
+  condIVA         String?   // "RI", "Monotributo", "Exento", "ConsumidorFinal"
+  color           String?   // hex (#rrggbb) para tinte de UI
+  logoUrl         String?   // logo base64 o URL
+  informal        Boolean   @default(false) // sin facturación ARCA
+  activo          Boolean   @default(true)
+  // ---- Integración ARCA / AFIP (WSAA + WSCTG + WSFE) ----
+  arcaCuit        String?   // CUIT registrado en el cert de ARCA (puede diferir del cuit fiscal)
+  arcaCertCrt     String?   // contenido del cert.crt (PEM). DEBE ir encriptado at-rest en producción.
+  arcaPrivadaKey  String?   // contenido del privada.key (PEM). DEBE ir encriptado at-rest en producción.
+  arcaModo        String    @default("prod")  // "homo" | "prod" — ambiente AFIP (afecta a TODOS los servicios)
+  arcaConfigAt    DateTime? // última vez que se guardó la config ARCA
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relaciones
+  userCompanies   UserCompany[]
+  campos          Campo[]
+  productos       Producto[]
+  movimientos     Movimiento[]
+  clientes        Cliente[]
+  proveedores     Proveedor[]
+  facturas        Factura[]
+  facturasCompra  FacturaCompra[]
+  cheques         Cheque[]
+  ctasCtes        CtaCte[]
+  arrendamientos  Arrendamiento[]
+  efectivos       Efectivo[]
+  flujosCaja      FlujoCaja[]
+  viajes          Viaje[]
+  empleados       Empleado[]
+  movsEmpleado    MovimientoEmpleado[]
+  liquidaciones   LiquidacionSueldo[]
+  haciendaStocks  HaciendaStock[]
+  haciendaMovs    HaciendaMovimiento[]
+  catalogos       Catalogo[]
+  campanas        Campana[]
+  depositos       Deposito[]
+  liquidacionesCereal LiquidacionCereal[]
+  creditos        Credito[]
+  bancoCuentas    BancoCuenta[]
+  bancoMovimientos BancoMovimiento[]
+}
+
+model User {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  alias           String?  @unique  // nombre corto para login rapido (opcional)
+  passwordHash    String
+  nombre          String
+  apellido        String?
+  fotoUrl         String?   // foto base64 o URL (avatar)
+  activo          Boolean  @default(true)
+  superAdmin      Boolean  @default(false)  // acceso a todo
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  userCompanies   UserCompany[]
+  movimientos     Movimiento[]
+  bancoMovimientos BancoMovimiento[]
+  preferences     UserPreference?
+}
+
+// Preferencias por usuario. Por ahora guardamos:
+//   - shortcuts: array de IDs de módulos pin-eados al panel de Accesos Directos del Inicio
+//   - extras   : campo libre por si en el futuro queremos más cosas (tema, idioma, etc.)
+model UserPreference {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  shortcuts  Json     @default("[]")    // ej: ["facturacion","cheques","bancos","viajes","empleados"]
+  extras     Json?
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Role {
+  id              String   @id @default(cuid())
+  key             String   @unique   // "admin", "contable", "operaciones", "lectura"
+  label           String
+  description     String?
+  // Permisos serializados como JSON: array de strings tipo "produccion:*", "stock:read"
+  permissions     Json
+  builtin         Boolean  @default(false)  // roles de sistema no borrables
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  userCompanies   UserCompany[]
+}
+
+// Relación N:N User ↔ Company con rol por empresa
+model UserCompany {
+  id          String   @id @default(cuid())
+  userId      String
+  companyId   String
+  roleId      String
+  createdAt   DateTime @default(now())
+
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  role        Role    @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, companyId])
+  @@index([companyId])
+}
+
+// ============================================================
+// PRODUCCIÓN: campos, lotes, campañas, labores, insumos
+// ============================================================
+
+model Campo {
+  id              String   @id @default(cuid())
+  companyId       String
+  nombre          String
+  localidad       String?
+  provincia       String?
+  hectareas       Float    @default(0)
+  propietario     String?
+  observaciones   String?
+  activo          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lotes           Lote[]
+  arrendamientos  Arrendamiento[]
+  haciendaStocks  HaciendaStock[]
+  haciendaMovs    HaciendaMovimiento[]
+
+  @@index([companyId])
+}
+
+model Lote {
+  id              String   @id @default(cuid())
+  campoId         String
+  nombre          String
+  hectareas       Float    @default(0)
+  observaciones   String?
+  activo          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  campo           Campo    @relation(fields: [campoId], references: [id], onDelete: Cascade)
+  campanas        Campana[]
+
+  @@index([campoId])
+}
+
+model Campana {
+  id              String   @id @default(cuid())
+  companyId       String
+  loteId          String
+  cultivo         String
+  variedad        String?
+  ciclo           String?   // "2025/26"
+  hectareas       Float    @default(0)
+  rindeEstimado   Float?
+  rindeReal       Float?
+  fechaSiembra    DateTime?
+  fechaCosecha    DateTime?
+  estado          String    @default("planificada")  // planificada, en_curso, cosechada, cerrada
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lote            Lote      @relation(fields: [loteId], references: [id], onDelete: Cascade)
+  insumos         InsumoAplicado[]
+  labores         LaborAplicada[]
+
+  @@index([companyId])
+  @@index([loteId])
+}
+
+model InsumoAplicado {
+  id                  String   @id @default(cuid())
+  campanaId           String
+  productoId          String?     // FK al producto en inventario
+  nombre              String      // snapshot
+  cantidad            Float
+  unidad              String
+  hectareasAplicadas  Float?      // Hectareas reales donde se aplico (NULL = lote completo, legado)
+  fecha               DateTime
+  costo               Float?
+  observaciones       String?
+  createdAt           DateTime @default(now())
+
+  campana     Campana  @relation(fields: [campanaId], references: [id], onDelete: Cascade)
+  producto    Producto? @relation(fields: [productoId], references: [id])
+
+  @@index([campanaId])
+}
+
+model LaborAplicada {
+  id                  String   @id @default(cuid())
+  campanaId           String
+  tipo                String     // "siembra", "pulverizacion", "cosecha", etc.
+  hectareasAplicadas  Float?     // Hectareas reales donde se aplico (NULL = lote completo, legado)
+  fecha               DateTime
+  responsable         String?    // texto libre (legado, sigue funcionando)
+  costo               Float?
+  observaciones       String?
+  // ---- Empleado responsable + cálculo de ganancia por % ----
+  empleadoId          String?    // empleado externo / propio que realizó la labor
+  precioReferencia    Float?     // precio (por hectárea o total) que se toma como base de cobro
+  tipoPrecio          String?    // "por_hectarea" | "total"  (define cómo aplica el precio)
+  porcentajeEmpleado  Float?     // % que cobra el empleado sobre el precio total de la labor
+  gananciaEmpleado    Float?     // monto calculado y registrado en la planilla del empleado
+  movimientoEmpleadoId String?   // id del MovimientoEmpleado generado (para poder anular)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @default(now()) @updatedAt
+
+  campana     Campana  @relation(fields: [campanaId], references: [id], onDelete: Cascade)
+  empleado    Empleado? @relation(fields: [empleadoId], references: [id])
+  insumos     LaborInsumo[]
+
+  @@index([campanaId])
+  @@index([empleadoId])
+}
+
+// Insumos consumidos al ejecutar una labor (siembra: semilla + curasemilla;
+// pulverización: agroquímicos; etc.). Al crearse, descuentan stock real del
+// depósito correspondiente y dejan trazabilidad para los costos de la campaña.
+model LaborInsumo {
+  id              String   @id @default(cuid())
+  laborId         String
+  productoId      String
+  cantidad        Float
+  unidad          String?
+  precioUnit      Float?
+  total           Float?
+  movimientoId    String?    // movimiento de stock generado (para revertir si se anula la labor)
+  observaciones   String?
+  createdAt       DateTime @default(now())
+
+  labor           LaborAplicada @relation(fields: [laborId], references: [id], onDelete: Cascade)
+
+  @@index([laborId])
+  @@index([productoId])
+}
+
+// ============================================================
+// STOCK: productos (maestro) + movimientos (ledger)
+// ============================================================
+
+model Producto {
+  id              String   @id @default(cuid())
+  companyId       String
+  categoria       String    // "granos", "insumos", "hacienda", "repuestos", "combustibles", "otros"
+  nombre          String
+  unidad          String    // "tn", "kg", "lt", "cabezas", "unidad"
+  stockMinimo     Float     @default(0)
+  precioReferencia Float?
+  observaciones   String?
+  activo          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  movimientos     Movimiento[]
+  insumosAplicados InsumoAplicado[]
+  itemsFactura    FacturaItem[]
+  itemsFacturaCompra FacturaCompraItem[]
+
+  @@index([companyId])
+  @@index([categoria])
+}
+
+model Movimiento {
+  id            String   @id @default(cuid())
+  companyId     String
+  productoId    String
+  fecha         DateTime
+  tipo          String     // "ingreso" | "egreso"
+  motivo        String     // "compra", "venta", "cosecha", "aplicacion", "ajuste", "entrega_cerealera", "liquidacion_cerealera"
+  cantidad      Float
+  precio        Float?
+  total         Float?
+  contraparteId String?    // id de cliente/proveedor
+  contraparteTipo String?  // "cliente" | "proveedor"
+  referencia    String?    // nro factura, remito, etc.
+  observaciones String?
+  depositoId    String?    // null = depósito "campo" (default) | id de depósito (cerealera, propio, etc.)
+  userId        String?    // usuario que registró el movimiento (auditoría)
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  producto      Producto @relation(fields: [productoId], references: [id])
+  deposito      Deposito? @relation(fields: [depositoId], references: [id])
+  user          User?     @relation(fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([productoId])
+  @@index([fecha])
+  @@index([depositoId])
+  @@index([userId])
+}
+
+// ============================================================
+// CONTACTOS: clientes y proveedores (datos maestros)
+// ============================================================
+
+model Cliente {
+  id              String   @id @default(cuid())
+  companyId       String
+  razonSocial     String
+  nombreFantasia  String?
+  cuit            String?
+  condIVA         String?   // "RI", "Monotributo", "Exento", "ConsumidorFinal"
+  email           String?
+  telefono        String?
+  direccion       String?
+  localidad       String?
+  provincia       String?
+  pais            String?
+  observaciones   String?
+  activo          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  facturas        Factura[]
+
+  @@index([companyId])
+}
+
+model Proveedor {
+  id              String   @id @default(cuid())
+  companyId       String
+  razonSocial     String
+  nombreFantasia  String?
+  cuit            String?
+  condIVA         String?
+  rubro           String?   // específico de proveedores
+  email           String?
+  telefono        String?
+  direccion       String?
+  localidad       String?
+  provincia       String?
+  pais            String?
+  observaciones   String?
+  activo          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  facturasCompra  FacturaCompra[]
+
+  @@index([companyId])
+}
+
+// ============================================================
+// VENTAS: facturas emitidas (ARCA/AFIP) + items
+// ============================================================
+
+model Factura {
+  id              String   @id @default(cuid())
+  companyId       String
+  clienteId       String?
+  tipo            String    // "A", "B", "C", "E"
+  puntoVenta      Int
+  numero          Int
+  fecha           DateTime
+  condicionVenta  String?   // "contado", "cuenta_corriente"
+  subtotal        Float     @default(0)
+  iva             Float     @default(0)
+  total           Float     @default(0)
+  cae             String?
+  caeVto          DateTime?
+  estado          String    @default("pendiente") // pendiente, autorizada, anulada
+  origen          String    @default("agrocore") // "agrocore" (emitida desde el sistema) | "arca_externa" (emitida directamente en ARCA y cargada manualmente)
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cliente         Cliente?  @relation(fields: [clienteId], references: [id])
+  items           FacturaItem[]
+
+  @@unique([companyId, tipo, puntoVenta, numero])
+  @@index([companyId])
+  @@index([fecha])
+}
+
+model FacturaItem {
+  id            String   @id @default(cuid())
+  facturaId     String
+  productoId    String?           // si el item viene del catalogo de productos -> mueve stock
+  descripcion   String
+  cantidad      Float
+  precioUnit    Float
+  alicuotaIva   Float    @default(21)   // 0, 10.5, 21, 27
+  subtotal      Float
+  ivaImporte    Float
+  total         Float
+
+  factura       Factura  @relation(fields: [facturaId], references: [id], onDelete: Cascade)
+  producto      Producto? @relation(fields: [productoId], references: [id])
+
+  @@index([facturaId])
+  @@index([productoId])
+}
+
+// ============================================================
+// COMPRAS: facturas recibidas + items + libro IVA
+// ============================================================
+
+model FacturaCompra {
+  id              String   @id @default(cuid())
+  companyId       String
+  proveedorId     String?
+  tipo            String    // "A", "B", "C", "E"
+  puntoVenta      Int
+  numero          Int
+  fecha           DateTime
+  condicionCompra String?
+  subtotal        Float     @default(0)
+  iva             Float     @default(0)
+  total           Float     @default(0)
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  proveedor       Proveedor? @relation(fields: [proveedorId], references: [id])
+  items           FacturaCompraItem[]
+  viajes          Viaje[]   // viajes que esta factura cubre (fletes del transportista)
+
+  @@unique([companyId, proveedorId, tipo, puntoVenta, numero])
+  @@index([companyId])
+  @@index([fecha])
+}
+
+model FacturaCompraItem {
+  id                String  @id @default(cuid())
+  facturaCompraId   String
+  productoId        String?           // si el item viene del catalogo de productos -> mueve stock
+  descripcion       String
+  cantidad          Float
+  precioUnit        Float
+  alicuotaIva       Float   @default(21)
+  subtotal          Float
+  ivaImporte        Float
+  total             Float
+
+  facturaCompra     FacturaCompra @relation(fields: [facturaCompraId], references: [id], onDelete: Cascade)
+  producto          Producto? @relation(fields: [productoId], references: [id])
+
+  @@index([facturaCompraId])
+  @@index([productoId])
+}
+
+// ============================================================
+// FINANZAS: cheques, cuentas corrientes, efectivo, flujo de caja
+// ============================================================
+
+model Cheque {
+  id            String   @id @default(cuid())
+  companyId     String
+  tipo          String     // "propio" | "terceros"
+  formato       String?    // "fisico" | "electronico" (echeq)
+  banco         String?
+  cuenta        String?    // cuenta bancaria usada
+  nroCheque     String
+  fechaEmision  DateTime
+  fechaPago     DateTime
+  monto         Float
+  beneficiario  String?
+  librador      String?
+  estado        String     @default("en_cartera") // en_cartera, depositado, cobrado, endosado, rechazado
+  observaciones String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([fechaPago])
+}
+
+model CtaCte {
+  id              String   @id @default(cuid())
+  companyId       String
+  contactoTipo    String?    // "cliente" | "proveedor" | "libre"
+  contactoId      String?
+  nombreLibre     String?    // usado cuando contactoTipo=libre
+  fecha           DateTime
+  vencimiento     DateTime?  // fecha en que vence el pago/cobro (sobre todo para "libre": alquileres, impuestos, etc.)
+  detalle         String
+  categoria       String?    // categoría para libres: "Arrendamiento", "Servicio", "Impuesto", "Otro"
+  debe            Float     @default(0)
+  haber           Float     @default(0)
+  pagado          Boolean   @default(false)  // marca de saldado (solo se usa en libres)
+  referencia      String?    // nro factura, recibo, etc.
+  observaciones   String?
+  createdAt       DateTime @default(now())
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([contactoTipo, contactoId])
+  @@index([fecha])
+  @@index([vencimiento])
+}
+
+model Arrendamiento {
+  id              String   @id @default(cuid())
+  companyId       String
+  campoId         String?
+  propietario     String
+  hectareas       Float
+  importeHa       Float?
+  tipoPago        String?   // "efectivo", "quintales", "%"
+  vencimiento     DateTime?
+  pagado          Boolean   @default(false)
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campo           Campo?    @relation(fields: [campoId], references: [id])
+
+  @@index([companyId])
+}
+
+model Efectivo {
+  id            String   @id @default(cuid())
+  companyId     String
+  fecha         DateTime
+  tipo          String     // "ingreso" | "egreso" | "transferencia"
+  concepto      String
+  monto         Float
+  caja          String?    // caja de origen (o caja única para ingreso/egreso)
+  cajaDestino   String?    // caja de destino (solo para transferencia entre cajas)
+  clasificacion String?    // "empresa" | "propio" (para ingresos y egresos)
+  observaciones String?
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([fecha])
+}
+
+model FlujoCaja {
+  id            String   @id @default(cuid())
+  companyId     String
+  fecha         DateTime
+  concepto      String
+  categoria     String?   // "ingreso", "egreso", "inversion"
+  monto         Float
+  saldoAcum     Float?
+  observaciones String?
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([fecha])
+}
+
+// ============================================================
+// LOGÍSTICA: viajes (cartas de porte, fletes)
+// ============================================================
+
+model Viaje {
+  id              String   @id @default(cuid())
+  companyId       String
+  fecha           DateTime
+  origen          String?
+  destino         String?
+  producto        String?   // carga: "Soja", "Maíz", "Girasol"...
+  cantidad        Float?    // kg cargados (al subir el camión)
+  kgDescarga      Float?    // kg efectivamente descargados
+  unidad          String?
+  transportista   String?
+  transporteCuit  String?   // CUIT del transporte
+  chofer          String?
+  choferCuit      String?   // CUIT del chofer
+  patente         String?   // patente del camión
+  patenteAcoplado String?   // patente del acoplado / batea
+  tipoCamion      String?   // chasis, semi, bitren, jaula, tolva...
+  cartaPorte      String?   // nº de carta de porte
+  ctg             String?   // CTG (código de trazabilidad de granos) — separado de la CP
+  cdp             String?   // CDP (código si corresponde)
+  km              Float?
+  tarifa          Float?    // $/ton acordada con el transporte
+  combustible     Float?
+  peajes          Float?
+  comida          Float?
+  varios          Float?
+  total           Float?
+  flete           Float?    // total flete pagado
+  // Estado: "pendiente" -> "cargado" -> "descargado" -> "facturado" -> "pagado"
+  estado          String   @default("pendiente")
+  facturaCompraId String?   // factura del transportista vinculada (lo que él nos cobra)
+  observaciones   String?
+  // ---- Destino del cereal (cuando aplica) ----
+  destinoTipo         String?    // "cerealera" | "venta_directa" | "otro" (NULL = no aplica)
+  depositoDestinoId   String?    // si va a cerealera, depósito destino del cereal
+  liquidacionCerealId String?    // si ya se cargó la liquidación de venta, su id
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  facturaCompra   FacturaCompra?  @relation(fields: [facturaCompraId], references: [id])
+  depositoDestino Deposito?       @relation(fields: [depositoDestinoId], references: [id])
+
+  @@index([companyId])
+  @@index([fecha])
+  @@index([estado])
+  @@index([facturaCompraId])
+  @@index([depositoDestinoId])
+}
+
+// ============================================================
+// RRHH: empleados
+// ============================================================
+
+model Empleado {
+  id              String   @id @default(cuid())
+  companyId       String
+  nombre          String
+  apellido        String
+  dni             String?
+  cuil            String?
+  puesto          String?
+  fechaIngreso    DateTime?
+  fechaEgreso     DateTime?
+  sueldo          Float?
+  telefono        String?
+  email           String?
+  direccion       String?
+  observaciones   String?
+  fotoUrl         String?   // foto base64 o URL
+  activo          Boolean  @default(true)
+  // ---- Empleado propio vs externo + porcentaje por labor ----
+  tipo            String   @default("propio") // "propio" | "externo" (contratista, fasón, etc.)
+  cobraPorcentaje Boolean  @default(false)    // si cobra % por labor realizada
+  porcentajeDefault Float? // % por defecto sobre el precio de referencia de la labor
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  movimientos     MovimientoEmpleado[]
+  liquidaciones   LiquidacionSueldo[]
+  labores         LaborAplicada[]
+
+  @@index([companyId])
+}
+
+// Planilla del empleado: cada ingreso (horas, sueldo base, etc.) o egreso
+// (adelantos, compras personales, descuentos) que se carga mes a mes.
+// "periodo" (YYYY-MM) se deriva de "fecha" en el backend al consultar, pero
+// se guarda explícito para agrupar y filtrar rápido por mes.
+model MovimientoEmpleado {
+  id            String   @id @default(cuid())
+  companyId     String
+  empleadoId    String
+  fecha         DateTime
+  periodo       String     // "YYYY-MM" — mes al que pertenece el movimiento
+  tipo          String     // "ganancia" | "gasto"
+  categoria     String?    // "sueldo" | "horas" | "adelanto" | "compra" | "premio" | "descuento" | "otro"
+  concepto      String
+  horas         Float?     // si categoria = "horas"
+  valorHora     Float?     // si categoria = "horas"
+  monto         Float
+  liquidacionId String?    // si el movimiento ya quedó incluido en una liquidación
+  observaciones String?
+  createdAt     DateTime @default(now())
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  empleado      Empleado  @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([empleadoId])
+  @@index([empleadoId, periodo])
+}
+
+// Liquidación de sueldo de un empleado para un mes (periodo YYYY-MM).
+// Guarda la "foto" de los totales al momento de liquidar y cómo se pagó.
+// Si el pago fue en efectivo o cheque, los campos efectivoId / chequeId
+// enlazan el registro generado en esos módulos para poder revertirlo.
+model LiquidacionSueldo {
+  id             String   @id @default(cuid())
+  companyId      String
+  empleadoId     String
+  periodo        String     // "YYYY-MM"
+  fecha          DateTime   // fecha de la liquidación / pago
+  sueldoBase     Float    @default(0)
+  totalGanancias Float    @default(0)  // incluye sueldoBase
+  totalGastos    Float    @default(0)
+  neto           Float    @default(0)
+  medioPago      String     // "efectivo" | "cheque" | "transferencia"
+  caja           String?    // caja de efectivo usada (medioPago = efectivo)
+  banco          String?    // banco del cheque o de la transferencia
+  nroCheque      String?    // nro de cheque (medioPago = cheque)
+  referencia     String?    // nro de operación / comprobante de transferencia
+  efectivoId     String?    // id del egreso generado en Control de Efectivo
+  chequeId       String?    // id del cheque propio generado
+  observaciones  String?
+  createdAt      DateTime @default(now())
+
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  empleado       Empleado  @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+
+  @@unique([empleadoId, periodo])
+  @@index([companyId])
+  @@index([empleadoId])
+}
+
+// ============================================================
+// HACIENDA: stock por campo y por categoría, con declarado (SENASA/ARCA)
+// y real (lo que cuentan en el campo). Los movimientos (nacimientos,
+// muertes, compras, ventas, traslados, ajustes) alimentan el stock real.
+// ============================================================
+
+model HaciendaStock {
+  id            String   @id @default(cuid())
+  companyId     String
+  campoId       String
+  categoria     String     // "Vacas", "Vaquillonas", "Terneros", "Toros", "Novillos"...
+  declarado     Int       @default(0)   // lo registrado en SENASA / ARCA
+  observaciones String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campo         Campo     @relation(fields: [campoId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, campoId, categoria])
+  @@index([companyId])
+  @@index([campoId])
+}
+
+model HaciendaMovimiento {
+  id            String   @id @default(cuid())
+  companyId     String
+  campoId       String
+  categoria     String
+  fecha         DateTime
+  // "nacimiento" | "muerte" | "compra" | "venta" | "traslado_in" | "traslado_out" | "ajuste" | "conteo"
+  tipo          String
+  cantidad      Int        // siempre positivo; el "tipo" decide si suma o resta al stock real
+  campoOrigen   String?    // campo origen en traslados
+  campoDestino  String?    // campo destino en traslados
+  observaciones String?
+  createdAt     DateTime  @default(now())
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campo         Campo     @relation(fields: [campoId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([campoId, categoria])
+  @@index([fecha])
+}
+
+// ============================================================
+// CATÁLOGOS (maestros): cultivos, insumos, etc.
+// ============================================================
+
+model Catalogo {
+  id              String   @id @default(cuid())
+  companyId       String
+  tipo            String     // "cultivo", "insumo", "variedad", "unidad", "Labor", etc.
+  codigo          String?
+  nombre          String
+  descripcion     String?
+  // Precio sugerido — se usa principalmente en catálogos de Labor para precargar
+  // el form de Labor avanzada (precio referencia + tipo). Sigue editable al cargar.
+  precioReferencia Float?
+  tipoPrecio       String?    // "por_hectarea" | "total" (sólo aplica si hay precioReferencia)
+  activo          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, tipo, codigo])
+  @@index([companyId, tipo])
+}
+
+// ============================================================
+// CONFIGURACIÓN GLOBAL DEL SISTEMA (clave-valor, una sola fila id="global")
+// Acá viven los contactos compartidos por todas las empresas:
+// asesor comercial (para precios de granos), logística camiones,
+// contador, etc. Solo Super Admin la edita; cualquier usuario logueado
+// puede leerla (se necesita para armar el link de WhatsApp).
+// ============================================================
+model Setting {
+  id        String   @id
+  data      Json
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================================
+// DEPÓSITOS: ubicaciones físicas donde se almacena stock.
+// El depósito "campo" es el implícito (depositoId = null en Movimiento).
+// Tipos: "campo" (propio), "cerealera" (externo, el cereal sigue siendo
+// tuyo pero está físicamente en la planta), "otro".
+// ============================================================
+model Deposito {
+  id              String   @id @default(cuid())
+  companyId       String?  // NULL = compartido entre todas las empresas; si está seteado = privado a esa empresa
+  compartido      Boolean  @default(false)  // flag explícito; al ser true el companyId queda en NULL
+  nombre          String   // ej: "Cerealera Vicentin Junín", "Silo Las Pampas", "Galpón Lote 3"
+  tipo            String   // "campo" | "cerealera" | "otro"
+  cuit            String?  // si es cerealera, su CUIT
+  contacto        String?  // nombre del contacto comercial
+  telefono        String?
+  email           String?
+  direccion       String?
+  localidad       String?
+  provincia       String?
+  // Costos operativos por tonelada / mes (cuando es cerealera)
+  costoEstadiaMes Float?   // $/tn por mes de estadía
+  costoSecadaTn   Float?   // $/tn de secada (descuento porcentual sobre el grano)
+  observaciones   String?
+  activo          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  movimientos     Movimiento[]
+  liquidaciones   LiquidacionCereal[]
+  viajes          Viaje[]
+
+  @@index([companyId])
+  @@index([tipo])
+  @@index([compartido])
+}
+
+// ============================================================
+// LIQUIDACIÓN DE CEREAL: cuando el productor decide vender el cereal
+// que tenía depositado en la cerealera. Captura kilos brutos, descuentos
+// por humedad/merma, conceptos (flete, paritarios, secada, IIBB) y el
+// neto a cobrar — que entra como movimiento de cuenta corriente.
+// ============================================================
+model LiquidacionCereal {
+  id               String   @id @default(cuid())
+  companyId        String
+  depositoId       String   // cerealera donde estaba el grano
+  productoId       String   // cereal liquidado (soja, maíz, trigo, etc.)
+  clienteId        String?  // comprador (puede ser la misma cerealera o un tercero)
+  fecha            DateTime
+  numero           String?  // nro de liquidación del comprobante físico
+  kilosBrutos      Float    @default(0)
+  porcMerma        Float    @default(0)   // % merma por humedad/calidad
+  kilosNetos       Float    @default(0)   // brutos - merma
+  precioPorTn      Float    @default(0)
+  bruto            Float    @default(0)   // (kilosNetos / 1000) * precioPorTn
+  totalDescuentos  Float    @default(0)   // suma de conceptos negativos
+  totalImpuestos   Float    @default(0)   // IVA + IIBB + ganancias retenidas
+  neto             Float    @default(0)   // a cobrar
+  fechaCobroEst    DateTime?              // estimada de cobro (para el flujo proyectado)
+  cobrado          Boolean  @default(false)
+  observaciones    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  deposito         Deposito @relation(fields: [depositoId], references: [id])
+  conceptos        LiquidacionCerealConcepto[]
+
+  @@index([companyId])
+  @@index([depositoId])
+  @@index([fecha])
+}
+
+model LiquidacionCerealConcepto {
+  id              String   @id @default(cuid())
+  liquidacionId   String
+  tipo            String   // "descuento" (flete, secada, paritarios) | "impuesto" (IVA, IIBB, ret. ganancias)
+  concepto        String   // nombre del concepto
+  importe         Float    @default(0)
+  porcentaje      Float?   // si se calculó como % del bruto
+
+  liquidacion     LiquidacionCereal @relation(fields: [liquidacionId], references: [id], onDelete: Cascade)
+
+  @@index([liquidacionId])
+}
+
+// ============================================================
+// CRÉDITOS BANCARIOS: préstamos tomados con su plan de cuotas.
+// El sistema avisa los vencimientos próximos y entra al flujo proyectado.
+// ============================================================
+model Credito {
+  id              String   @id @default(cuid())
+  companyId       String
+  banco           String                  // ej: "Banco Nación", "Banco Provincia"
+  nroOperacion    String?                 // nro del préstamo
+  montoOriginal   Float                   // monto solicitado
+  tasaAnual       Float?                  // % TNA
+  cantCuotas      Int                     // total de cuotas
+  periodicidad    String   @default("mensual") // "mensual" | "bimestral" | "trimestral" | "semestral"
+  fechaPrimera    DateTime                // fecha de la primer cuota
+  destino         String?                 // ej: "compra cosechadora", "capital de trabajo"
+  estado          String   @default("activo") // "activo" | "cancelado" | "refinanciado"
+  observaciones   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cuotas          CuotaCredito[]
+
+  @@index([companyId])
+}
+
+model CuotaCredito {
+  id              String   @id @default(cuid())
+  creditoId       String
+  numero          Int                      // 1, 2, 3, ...
+  vencimiento     DateTime
+  importeCapital  Float    @default(0)
+  importeInteres  Float    @default(0)
+  importeOtros   Float    @default(0)     // seguros, gastos, IVA del interés
+  importeTotal    Float    @default(0)
+  pagada          Boolean  @default(false)
+  fechaPago       DateTime?
+  medioPago       String?                  // "efectivo" | "cheque" | "transferencia" | "debito_automatico"
+  referencia      String?                  // nro comprobante / cheque
+  observaciones   String?
+
+  credito         Credito  @relation(fields: [creditoId], references: [id], onDelete: Cascade)
+
+  @@index([creditoId])
+  @@index([vencimiento])
+}
+
+// ============================================================
+// BANCOS: cuentas bancarias + movimientos (depósitos, extracciones,
+// transferencias, comisiones, cheques cobrados/pagados, créditos
+// acreditados/cuotas debitadas). El saldo se calcula de los movimientos.
+// ============================================================
+model BancoCuenta {
+  id              String   @id @default(cuid())
+  companyId       String
+  banco           String                       // ej: "Banco Nación", "Galicia"
+  sucursal        String?
+  tipo            String   @default("cta_cte") // "cta_cte" | "caja_ahorro" | "usd" | "otro"
+  moneda          String   @default("ARS")     // "ARS" | "USD" | "EUR"
+  numero          String?                      // nro de cuenta
+  cbu             String?                      // CBU/CVU (22 dígitos)
+  alias           String?                      // alias bancario
+  titular         String?                      // razón social del titular
+  saldoInicial    Float    @default(0)         // saldo de apertura cuando arrancás a usar el sistema
+  fechaInicial    DateTime?                    // fecha del saldo inicial
+  observaciones   String?
+  activo          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  movimientos     BancoMovimiento[]
+  transferIn      BancoMovimiento[] @relation("BancoTransferOrigen")
+
+  @@index([companyId])
+  @@index([banco])
+}
+
+model BancoMovimiento {
+  id              String   @id @default(cuid())
+  companyId       String
+  cuentaId        String
+  fecha           DateTime
+  tipo            String                      // "deposito" | "extraccion" | "transferencia_in" | "transferencia_out" | "cheque_cobrado" | "cheque_pagado" | "credito_acreditado" | "cuota_credito" | "comision" | "impuesto" | "interes" | "otro"
+  concepto        String                      // descripción libre
+  monto           Float                       // siempre positivo; el tipo define si suma o resta al saldo
+  contraparte     String?                     // nombre del tercero (cliente/proveedor/banco)
+  referencia      String?                     // nro de operación, ID de transferencia, etc.
+  // Cuenta destino: solo cuando es transferencia interna entre cuentas propias
+  cuentaContraId  String?
+  // Vínculos con otros módulos (para revertir si se anula)
+  chequeId        String?
+  cuotaCreditoId  String?
+  efectivoId      String?                     // si corresponde a un retiro/depósito desde caja
+  conciliado      Boolean  @default(false)    // marcado al cruzar contra extracto del banco
+  observaciones   String?
+  userId          String?                     // usuario que lo cargó
+  createdAt       DateTime @default(now())
+
+  company         Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cuenta          BancoCuenta @relation(fields: [cuentaId], references: [id], onDelete: Cascade)
+  cuentaContra    BancoCuenta? @relation("BancoTransferOrigen", fields: [cuentaContraId], references: [id])
+  user            User? @relation(fields: [userId], references: [id])
+
+  @@index([companyId])
+  @@index([cuentaId])
+  @@index([fecha])
+  @@index([tipo])
+  @@index([chequeId])
+  @@index([cuotaCreditoId])
+}

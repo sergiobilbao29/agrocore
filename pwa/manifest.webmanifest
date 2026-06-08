@@ -1,0 +1,24 @@
+{
+  "name": "AgroCore — El corazón del negocio agrícola",
+  "short_name": "AgroCore",
+  "description": "Gestión agrícola multi-empresa con soporte offline para el campo.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#14532d",
+  "theme_color": "#15803d",
+  "lang": "es-AR",
+  "categories": ["productivity", "business", "agriculture"],
+  "icons": [
+    { "src": "/pwa/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/pwa/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Nueva OT", "short_name": "OT", "url": "/?modo=campo&accion=nueva-ot", "icons": [{ "src": "/pwa/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Registrar aplicación", "short_name": "Aplicar", "url": "/?modo=campo&accion=ejecutar", "icons": [{ "src": "/pwa/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Stock grano", "short_name": "Silos", "url": "/?modo=campo&accion=silos", "icons": [{ "src": "/pwa/icons/icon-192.png", "sizes": "192x192" }] }
+  ],
+  "screenshots": [],
+  "prefer_related_applications": false
+}

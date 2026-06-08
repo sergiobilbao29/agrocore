@@ -1,0 +1,213 @@
+====================================================================
+  AgroCore - Guia de instalacion y publicacion
+  Actualizado: mayo 2026
+====================================================================
+
+ARQUITECTURA ACTUAL
+-------------------
+- Backend:        Node.js + Express + Prisma + PostgreSQL  (puerto 3100)
+- Frontend:       AgroCore-web.html  (servido por Express en /app)
+- Landing:        https://agrocore.ar    (Cloudflare Pages, repo en GitHub)
+- Demo publico:   https://demo.agrocore.ar  (Cloudflare Tunnel "agrocore-demo")
+- Multi-empresa, multi-usuario, RBAC con permisos granulares.
+
+
+====================================================================
+  FASE 1 - PostgreSQL y Node.js
+====================================================================
+
+1.1 Instalar PostgreSQL 16
+   Descargar instalador de https://www.postgresql.org/download/windows/
+   Version 16.x. Durante la instalacion:
+     - Ruta por defecto (C:\Program Files\PostgreSQL\16)
+     - Password del usuario "postgres": elegir y anotar.
+     - Puerto: 5432 (default).
+     - Locale: cualquiera, no afecta.
+     - Desmarcar "Launch Stack Builder" al final.
+
+1.2 Agregar PostgreSQL al PATH
+   Variables de entorno -> Variables del sistema -> Path -> Nuevo:
+     C:\Program Files\PostgreSQL\16\bin
+
+1.3 Crear la base de datos y el usuario
+   En CMD nuevo:
+     psql -U postgres
+   (te pide el password del superadmin)
+   Ya adentro:
+     CREATE USER agrocore WITH PASSWORD 'agrocore_dev_2026';
+     CREATE DATABASE agrocore OWNER agrocore ENCODING 'UTF8';
+     GRANT ALL PRIVILEGES ON DATABASE agrocore TO agrocore;
+     \q
+
+1.4 Instalar Node.js LTS
+   Descargar de https://nodejs.org (boton verde LTS, version 20 o 22).
+   Marcar "Automatically install the necessary tools" al final.
+   Verificar:
+     node --version
+     npm --version
+
+1.5 Carpeta del proyecto
+   C:\AgroCore  (esta misma)
+
+
+====================================================================
+  FASE 2 - Backend (Node + Prisma)
+====================================================================
+
+2.1 Instalar dependencias
+   cd C:\AgroCore\backend
+   npm install
+
+2.2 Generar Prisma Client y aplicar migraciones
+   npm run db:generate
+   npm run db:migrate
+   npm run db:seed
+   npm run db:seed-maestros
+
+2.3 Levantar el servidor manualmente (test)
+   npm start
+   Deberia decir "AgroCore API listening on port 3100".
+   Probar en navegador: http://127.0.0.1:3100/app
+
+
+====================================================================
+  FASE 3 - Auto-arranque del backend con Windows
+====================================================================
+
+Para que el backend arranque solo cuando inicia sesion el usuario,
+sin abrir consolas visibles:
+
+   Doble clic en INSTALAR-INICIO-AUTOMATICO.bat
+
+Esto registra una tarea programada que dispara AgroCore-hidden.vbs,
+que a su vez corre _AgroCore-hidden.cmd (node src/server.js silencioso).
+
+Para desactivar el auto-arranque:
+   Doble clic en DESINSTALAR-INICIO-AUTOMATICO.bat
+
+Para detener el backend manualmente:
+   Doble clic en DETENER-AGROCORE.bat
+
+
+====================================================================
+  FASE 4 - Acceso desde la red local (LAN/WiFi)
+====================================================================
+
+Para que otras PCs/celulares en la misma red WiFi accedan a AgroCore:
+
+4.1 Abrir el puerto 3100 en el firewall
+   Clic derecho en ABRIR-PUERTO-3100.bat -> Ejecutar como administrador.
+   (Una sola vez. Crea regla de Windows Firewall.)
+
+4.2 Marcar la red WiFi como "Privada"
+   Configuracion -> Red e Internet -> tu WiFi -> Perfil de red = "Privada".
+
+4.3 Compartir la URL local
+   Cualquier dispositivo en la misma WiFi entra con:
+     http://<IP-LOCAL-DE-ESTA-PC>:3100/app
+   Para ver tu IP: ipconfig (busca IPv4 en la WiFi).
+
+Si algo falla, doble clic en DIAGNOSTICO-RED.bat.
+
+
+====================================================================
+  FASE 5 - Acceso desde Internet (demo.agrocore.ar)
+====================================================================
+
+Esto ya esta configurado. Funciona via Cloudflare Tunnel:
+
+  Cloudflare Tunnel "agrocore-demo"
+       |
+       v
+  http://localhost:3100  (tu Node)
+       ^
+       |
+  hostname: demo.agrocore.ar  (Cloudflare DNS)
+
+Configuracion clave (no tocar a menos que sepas que estas haciendo):
+
+  Tunnel ID:        429bbfca-47c0-4d8b-bc15-dd9baf457bd5
+  Config:           C:\Users\sergi\.cloudflared\config.yml
+  Credenciales:     C:\Users\sergi\.cloudflared\429bbfca-...json
+  Cert:             C:\Users\sergi\.cloudflared\cert.pem
+
+5.1 Como esta corriendo
+   Como servicio de Windows (cloudflared) que arranca con la PC.
+   Para verificar:
+     PowerShell:  Get-Service cloudflared
+     CMD:         sc query cloudflared
+
+5.2 Si necesitas reiniciarlo
+   PowerShell admin:
+     Restart-Service cloudflared
+
+5.3 Si nunca lo instalaste como servicio (corre a mano):
+   PowerShell admin:
+     cloudflared service install
+
+5.4 Para diagnosticar el demo de un vistazo
+   Doble clic en ESTADO-DEMO.bat
+
+
+====================================================================
+  FASE 6 - Landing publica (agrocore.ar)
+====================================================================
+
+La landing en https://agrocore.ar se sirve desde Cloudflare Pages,
+conectada al repo GitHub:
+  https://github.com/sergiobilbao29/agrocore-web
+
+Auto-deploy: cada push a la rama "main" se publica solo en 30-60 seg.
+
+Para editar la landing:
+  cd C:\AgroCore\web
+  (editar index.html)
+  git add .
+  git commit -m "descripcion del cambio"
+  git push origin main
+
+DNS y subdominios:
+  - agrocore.ar          -> Cloudflare Pages
+  - www.agrocore.ar      -> redirige a agrocore.ar (regla 301)
+  - demo.agrocore.ar     -> Cloudflare Tunnel agrocore-demo
+                            (redirige / -> /app via Express)
+
+
+====================================================================
+  REFERENCIA RAPIDA DE SCRIPTS .BAT
+====================================================================
+
+  AgroCore.bat                       Doble clic = abrir el sistema (arranca backend si no esta).
+  ESTADO-DEMO.bat                    Diagnostico de los 3 componentes del demo publico.
+  DIAGNOSTICO-RED.bat                Diagnostico de conectividad LAN.
+  ABRIR-PUERTO-3100.bat              [admin] Abre puerto en firewall (1 sola vez).
+  INSTALAR-INICIO-AUTOMATICO.bat     [1 sola vez] Backend arranca con Windows.
+  DESINSTALAR-INICIO-AUTOMATICO.bat  Quita el auto-arranque.
+  DETENER-AGROCORE.bat               Detiene el backend en puerto 3100.
+
+  _AgroCore-hidden.cmd               (interno) helper, no doble clic.
+  AgroCore-hidden.vbs                (interno) lanzador silencioso.
+
+
+====================================================================
+  REFERENCIA DE URLs
+====================================================================
+
+  https://agrocore.ar                Landing publica (Pages).
+  https://www.agrocore.ar            Redirige a agrocore.ar.
+  https://demo.agrocore.ar           Demo del sistema (login).
+  https://demo.agrocore.ar/app       Equivalente al de arriba.
+  http://127.0.0.1:3100/app          Sistema en esta PC.
+  http://<IP-LAN>:3100/app           Sistema desde otra PC en la misma WiFi.
+
+  https://github.com/sergiobilbao29/agrocore-web   Repo de la landing.
+
+
+====================================================================
+  PRODUCCION EN AWS (cliente final)
+====================================================================
+
+El sistema se despliega en una cuenta AWS del cliente final.
+La PC local + demo.agrocore.ar son SOLO para desarrollo y demos.
+
+Ver: docs\AgroCore - Documento de Arquitectura.docx

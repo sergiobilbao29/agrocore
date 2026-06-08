@@ -1,0 +1,17 @@
+{
+  "name": "AgroCore Argentina",
+  "short_name": "AgroCore",
+  "description": "Sistema integral de gestión para empresas rurales y agropecuarias.",
+  "start_url": "/app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#14532d",
+  "theme_color": "#15803d",
+  "lang": "es-AR",
+  "icons": [
+    { "src": "/web/img/logo-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/web/img/logo-icon-256.png", "sizes": "256x256", "type": "image/png", "purpose": "any" },
+    { "src": "/web/img/logo-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
