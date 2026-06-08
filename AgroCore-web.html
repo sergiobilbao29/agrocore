@@ -271,12 +271,17 @@
         <input id="login-pwd" type="password" value="" autocomplete="current-password"
                class="input" onkeydown="if(event.key==='Enter') handleLogin()" />
       </div>
+      <label class="flex items-center gap-2 text-xs text-slate-600 select-none cursor-pointer">
+        <input id="login-remember" type="checkbox" class="rounded border-slate-300" />
+        Recordarme en este equipo
+        <span class="text-[10px] text-slate-400">(si no, la sesión se cierra al cerrar el navegador)</span>
+      </label>
       <div id="login-err" class="hidden text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2"></div>
       <button onclick="handleLogin()" id="login-btn" class="w-full btn btn-primary justify-center mt-2">Ingresar →</button>
-      <p class="text-[11px] text-slate-500 text-center mt-4 leading-relaxed">
+      <p id="login-demo-hint" class="text-[11px] text-slate-500 text-center mt-4 leading-relaxed hidden">
         <b>Usuarios de prueba:</b><br/>
-        <span class="font-mono text-slate-700">Admin</span> / <span class="font-mono text-slate-700">admin123</span> (admin empresa)<br/>
-        <span class="font-mono text-slate-700">Super</span> / <span class="font-mono text-slate-700">super123</span> (super admin)
+        <span id="login-demo-admin" class="hidden"><span class="font-mono text-slate-700">Admin</span> / <span class="font-mono text-slate-700">admin123</span> (admin empresa)<br/></span>
+        <span id="login-demo-super" class="hidden"><span class="font-mono text-slate-700">Super</span> / <span class="font-mono text-slate-700">super123</span> (super admin)</span>
       </p>
     </div>
   </div>
@@ -430,13 +435,90 @@ const API_BASE = (location.protocol === 'http:' || location.protocol === 'https:
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+/* ============================================================
+ * AuthStore — guarda el token según el flag "Recordarme".
+ *   - Por defecto: sessionStorage (muere al cerrar el navegador)
+ *   - Si el usuario tildó "Recordarme": localStorage (persiste)
+ * Lee de los dos storages al arrancar para no perder sesiones
+ * viejas que ya estaban en localStorage.
+ * ============================================================ */
+const AuthStore = {
+  isRemember() { return localStorage.getItem('ac.remember') === '1'; },
+  setRemember(v) {
+    if (v) localStorage.setItem('ac.remember', '1');
+    else   localStorage.removeItem('ac.remember');
+  },
+  _store() { return this.isRemember() ? localStorage : sessionStorage; },
+  getToken() {
+    return sessionStorage.getItem('ac.token') || localStorage.getItem('ac.token');
+  },
+  setToken(t) {
+    const a = this._store(), b = (a === localStorage) ? sessionStorage : localStorage;
+    a.setItem('ac.token', t);
+    b.removeItem('ac.token');
+  },
+  removeToken() {
+    sessionStorage.removeItem('ac.token');
+    localStorage.removeItem('ac.token');
+  },
+  getUserRaw() {
+    return sessionStorage.getItem('ac.user') || localStorage.getItem('ac.user');
+  },
+  setUser(u) {
+    try {
+      const a = this._store(), b = (a === localStorage) ? sessionStorage : localStorage;
+      a.setItem('ac.user', JSON.stringify(u));
+      b.removeItem('ac.user');
+    } catch {}
+  },
+  removeUser() {
+    sessionStorage.removeItem('ac.user');
+    localStorage.removeItem('ac.user');
+  },
+};
+
 const state = {
-  token: localStorage.getItem('ac.token') || null,
+  token: AuthStore.getToken() || null,
   user: null,
   companyId: localStorage.getItem('ac.companyId') || null,
   currentPage: 'inicio',
   cache: {},
 };
+
+/* ============================================================
+ * IdleLogout — cierra sesión automáticamente después de 30 min
+ * sin actividad. Se resetea con mouse, teclado, click o touch.
+ * ============================================================ */
+const IdleLogout = (() => {
+  const TIMEOUT_MS = 30 * 60 * 1000; // 30 minutos
+  let timer = null;
+  let lastActivity = Date.now();
+  function check() {
+    const elapsed = Date.now() - lastActivity;
+    if (elapsed >= TIMEOUT_MS) {
+      if (state.token) {
+        try { toast('Sesión cerrada por inactividad (30 min sin uso)'); } catch {}
+        setTimeout(() => { try { logout(true); } catch {} }, 600);
+      }
+    } else {
+      timer = setTimeout(check, TIMEOUT_MS - elapsed);
+    }
+  }
+  function reset() {
+    lastActivity = Date.now();
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(check, TIMEOUT_MS);
+  }
+  function start() {
+    if (IdleLogout._started) return;
+    IdleLogout._started = true;
+    ['mousemove','keydown','click','touchstart','scroll'].forEach(ev => {
+      document.addEventListener(ev, reset, { passive: true });
+    });
+    reset();
+  }
+  return { start, reset };
+})();
 
 /* ============================================================
  * MODO OFFLINE — capa de sincronización
@@ -881,15 +963,20 @@ async function handleLogin() {
   if (!login || !pwd) { err.textContent='Completá usuario y contraseña'; err.classList.remove('hidden'); return; }
   const btn = $('#login-btn'); btn.disabled = true; btn.textContent = 'Ingresando…';
   try {
+    // Guardar primero la preferencia de "Recordarme" porque AuthStore.setToken
+    // decide en base a ese flag dónde escribir el token.
+    const remember = !!$('#login-remember')?.checked;
+    AuthStore.setRemember(remember);
     const r = await api('/api/auth/login', { method:'POST', body: JSON.stringify({ login, password: pwd }) });
     state.token = r.token;
     state.user = r.user;
-    localStorage.setItem('ac.token', r.token);
-    try { localStorage.setItem('ac.user', JSON.stringify(r.user)); } catch {}
+    AuthStore.setToken(r.token);
+    AuthStore.setUser(r.user);
     const comps = r.user.companies || [];
     const saved = state.companyId && comps.find(c => c.id === state.companyId);
     state.companyId = saved ? state.companyId : (comps[0]?.id || null);
     if (state.companyId) localStorage.setItem('ac.companyId', state.companyId);
+    IdleLogout.start();
     await boot();
   } catch (e) {
     err.textContent = e.message || 'Error de acceso';
@@ -900,29 +987,38 @@ async function handleLogin() {
 }
 
 function logout(silent=false) {
-  localStorage.removeItem('ac.token');
-  localStorage.removeItem('ac.user');
+  AuthStore.removeToken();
+  AuthStore.removeUser();
   state.token = null;
   state.user = null;
   $('#view-app').classList.add('hidden');
   $('#view-login').classList.remove('hidden');
   $('#login-pwd').value = '';
+  // Reflejar el flag actual en el checkbox para que el usuario vea su preferencia
+  const cb = document.getElementById('login-remember');
+  if (cb) cb.checked = AuthStore.isRemember();
   if (!silent) toast('Sesión cerrada');
 }
 
 /* ------------ Boot ------------ */
 async function boot() {
-  if (!state.token) { $('#view-login').classList.remove('hidden'); $('#view-app').classList.add('hidden'); return; }
+  if (!state.token) {
+    $('#view-login').classList.remove('hidden'); $('#view-app').classList.add('hidden');
+    // Mostrar el estado actual de "Recordarme" en el checkbox
+    const cb = document.getElementById('login-remember');
+    if (cb) cb.checked = AuthStore.isRemember();
+    return;
+  }
   if (!state.user) {
     try {
       const me = await api('/api/auth/me');
       state.user = me.user;
-      try { localStorage.setItem('ac.user', JSON.stringify(me.user)); } catch {}
+      AuthStore.setUser(me.user);
     } catch (e) {
       // Sin conexión: usar el último usuario conocido para poder trabajar
       // offline sin que el sistema cierre la sesión.
       let cached = null;
-      try { cached = JSON.parse(localStorage.getItem('ac.user') || 'null'); } catch {}
+      try { cached = JSON.parse(AuthStore.getUserRaw() || 'null'); } catch {}
       if (isNetworkError(e) && cached) {
         state.user = cached;
       } else {
@@ -938,6 +1034,7 @@ async function boot() {
   }
   $('#view-login').classList.add('hidden');
   $('#view-app').classList.remove('hidden');
+  IdleLogout.start();   // arranca el watchdog de inactividad (30 min)
   renderUserChip();
   renderCompanySelector();
   await applyCompanyTheme();
@@ -1200,7 +1297,7 @@ async function switchCompany(id) {
   state.companyId = id;
   localStorage.setItem('ac.companyId', id);
   state.cache = {};
-  try { const me = await api('/api/auth/me'); state.user = me.user; try { localStorage.setItem('ac.user', JSON.stringify(me.user)); } catch {} } catch {}
+  try { const me = await api('/api/auth/me'); state.user = me.user; AuthStore.setUser(me.user); } catch {}
   renderUserChip();
   renderCompanySelector();
   await applyCompanyTheme();
@@ -2006,6 +2103,18 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'08/06/2026',
+      titulo:'🗑️ Eliminar usuarios, empresas y roles desde el panel',
+      desc:'Botón 🗑️ en Administración → Usuarios, Empresas y Roles. Permisos: Usuarios solo el Super Admin; Empresas el Super Admin o el Administrador de esa empresa; Roles el Super Admin o cualquier Administrador. El Super Admin además puede borrar los roles "de sistema" (contable, operaciones, lectura) — útil para limpiar el sistema y dejar solo los roles que el cliente necesita. El rol "Administrador" nunca se borra (es el rol base de admin de empresa). Todas las eliminaciones piden DOBLE confirmación: advertencia + tipear el nombre exacto. Salvaguardas: (a) no te podés borrar a vos mismo, (b) no se puede borrar al último Super Admin activo, (c) no podés borrar la única empresa a la que tenés acceso si no sos Super Admin, (d) si hay datos asociados (movimientos, facturas, usuarios usando el rol) se rechaza por defecto. Para casos delicados hay opción de "forzar": movimientos quedan sin autor, empresa se borra en cascada, usuarios con ese rol pasan a "Lectura".' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'08/06/2026',
+      titulo:'🚀 Asistente "Preparar para entrega al cliente"',
+      desc:'Nuevo botón en Configuración → Sistema. Analiza la base y muestra checkboxes para limpiar todo lo "demo" antes de entregar al cliente: usuarios seed (Admin, Super), roles de sistema sin usuarios asignados, empresas cuyo nombre tiene "demo/prueba/test", y te avisa si tu Super Admin todavía tiene la contraseña por defecto. Vos marcás qué borrar, tipeás PREPARAR para confirmar, y se ejecuta todo en una sola pasada. Al final muestra un resumen con éxitos y errores. Recomendado: hacer un Backup antes por las dudas.' },
+    { tag:'Seguridad', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'08/06/2026',
+      titulo:'🙈 El login oculta solo los hints de usuarios de prueba',
+      desc:'La pantalla de login mostraba siempre "Usuarios de prueba: Admin/admin123, Super/super123" — útil en demo, peligroso en producción. Ahora el hint solo aparece si esos usuarios existen realmente en la base. Al implementar en un cliente, en cuanto borres esos usuarios del sistema (Administración → Usuarios → 🗑️) el hint desaparece automáticamente de la pantalla de login — no hay que tocar ningún archivo ni configuración. Si querés verificar antes de entregar al cliente, abrí el login en una pestaña incógnito.' },
+    { tag:'Seguridad', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'08/06/2026',
+      titulo:'🔒 Sesión más estricta — cerrar navegador = cerrar sesión',
+      desc:'Por defecto la sesión ahora muere cuando cerrás el navegador: si dejás el equipo abierto, otra persona NO entra automáticamente con tu usuario. El sistema también desloguea sólo a los 30 minutos sin actividad (mouse / teclado / clicks). Si querés el comportamiento anterior (sesión persistente entre arranques), tildá "Recordarme en este equipo" en el login. Solo hay que loguearse una vez con el tilde puesto y queda fijo para los próximos arranques en esa PC.' },
     { tag:'Nuevo',  color:'bg-green-100 text-green-800 border-green-300', fecha:'08/06/2026',
       titulo:'♻️ Restaurar backup desde archivo .sql',
       desc:'Configuración → Sistema → "Restaurar backup desde archivo". Subís un archivo .sql generado por AgroCore (o por pg_dump compatible) y el sistema lo aplica con psql sobre la base. La operación corre dentro de una transacción: si algo falla a mitad de camino se hace ROLLBACK automático y la base queda intacta. Requiere tipear RESTAURAR para confirmar y solo lo puede ejecutar un Super Admin. Soporta archivos de hasta 500 MB. Aviso claro de que la operación PISA toda la información cargada y se recomienda recargar o re-loguear cuando termina para refrescar los datos en pantalla.' },
@@ -4523,6 +4632,7 @@ pages.empresas = async function() {
             </div>
             <div class="flex gap-1 flex-shrink-0">
               ${puedeEditar(e) ? `<button class="btn btn-ghost text-xs" onclick='empForm(${JSON.stringify(e.id)})' title="Editar">✏️</button>`:''}
+              ${puedeBorrarEmpresa(e) ? `<button class="btn btn-ghost text-xs text-red-600 hover:bg-red-50" onclick='empEliminar(${JSON.stringify(e.id)}, ${JSON.stringify(e.name)})' title="Eliminar empresa">🗑️</button>`:''}
             </div>
           </div>
           <div class="grid grid-cols-3 gap-2 mt-3 text-xs">
@@ -4613,6 +4723,51 @@ async function empSave(id) {
     try { const me = await api('/api/auth/me'); state.user = me.user; renderCompanySelector(); } catch{}
     pages.empresas(); await applyCompanyTheme();
   } catch (e) { toast(e.message,'error'); }
+}
+
+// Permiso para borrar empresa: Super Admin, o Admin (role.key === 'admin') de esa empresa.
+function puedeBorrarEmpresa(e) {
+  if (state.user?.superAdmin) return true;
+  const mem = (state.user?.companies || []).find(c => c.id === e.id);
+  return !!mem && (mem.role?.key === 'admin' || (mem.role?.permissions || []).includes('*:*'));
+}
+
+async function empEliminar(id, nombre) {
+  // Doble confirmación: aviso + tipear el nombre
+  if (!confirm(`¿Eliminar la empresa "${nombre}"?\n\nEsto es PERMANENTE. Si la empresa tiene datos (clientes, facturas, movimientos…) el sistema te va a avisar y te dará la opción de cancelar.\n\nSi solo querés ocultarla temporalmente, mejor editala y desmarcá "Activo".`)) return;
+  const confirma = prompt(`Para confirmar, escribí el nombre de la empresa:\n\n${nombre}`);
+  if (!confirma || confirma.trim().toLowerCase() !== nombre.trim().toLowerCase()) {
+    return toast('Confirmación incorrecta. No se eliminó nada.', 'warn');
+  }
+  try {
+    await api('/api/empresas/' + id, { method: 'DELETE' });
+    toast(`Empresa "${nombre}" eliminada`, 'success');
+    delete state.cache.empresas;
+    try { const me = await api('/api/auth/me'); state.user = me.user; renderCompanySelector(); } catch{}
+    pages.empresas();
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (/datos asociados|tieneRelacionados/i.test(msg)) {
+      const force = confirm(
+        `${msg}\n\n` +
+        `¿Forzar el borrado de TODA la empresa?\n\n` +
+        `⚠️ ATENCIÓN: esto borra absolutamente todo lo cargado en esta empresa (clientes, facturas, cheques, cuentas corrientes, movimientos, bancos, campos, lotes, empleados, viajes, hacienda, todo). Operación IRREVERSIBLE.\n\n` +
+        `Si tenés dudas, cancelá y hacé un Backup primero (Configuración → Sistema).`
+      );
+      if (!force) return;
+      try {
+        await api('/api/empresas/' + id + '?force=1', { method: 'DELETE' });
+        toast(`Empresa "${nombre}" eliminada con todos sus datos`, 'success');
+        delete state.cache.empresas;
+        try { const me = await api('/api/auth/me'); state.user = me.user; renderCompanySelector(); } catch{}
+        pages.empresas();
+      } catch (e2) {
+        toast(e2.message || 'Error al forzar el borrado', 'error');
+      }
+    } else {
+      toast(msg, 'error');
+    }
+  }
 }
 
 /* ----- CONFIGURACIÓN: Datos / Contactos / ARCA / Sistema -----
@@ -5119,6 +5274,16 @@ function configRenderSistema(body) {
         <button class="btn btn-secondary text-red-700 border-red-300" onclick="sistemaLimpiarEmpresa()">🧹 Configurar limpieza…</button>
       </div>
 
+      <!-- Preparar para entrega al cliente -->
+      <div class="border border-indigo-300 rounded-lg p-4 bg-indigo-50">
+        <h3 class="font-bold text-indigo-900 mb-1">🚀 Preparar para entrega al cliente</h3>
+        <p class="text-sm text-indigo-800 mb-3">Asistente que analiza el sistema y te ofrece eliminar de un solo paso todo lo que NO debería quedar en una instalación productiva: usuarios de prueba (<code>Admin</code>, <code>Super</code>), roles de sistema sin uso, empresas que parecen ser de prueba, y te avisa si tu Super Admin todavía tiene la contraseña por defecto.</p>
+        <div class="bg-indigo-100 border border-indigo-300 text-indigo-900 text-xs rounded p-2 mb-3">
+          💡 Te muestra <b>primero</b> qué encontró para que vos elijas con checkboxes qué borrar. Solo después de confirmar ejecuta los cambios. Recomendado: hacé un Backup primero por las dudas.
+        </div>
+        <button class="btn btn-primary" style="background:#4f46e5;border-color:#4f46e5" onclick="prepararEntregaAbrir()">🚀 Iniciar asistente…</button>
+      </div>
+
     </div>`;
 }
 async function sistemaBackupDescargar() {
@@ -5344,6 +5509,142 @@ async function sistemaLimpiarConfirmar() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
+/* ============================================================
+ * 🚀 PREPARAR PARA ENTREGA AL CLIENTE
+ * Asistente que detecta lo "demo" del sistema y permite limpiarlo
+ * en un solo paso con checkboxes.
+ * ============================================================ */
+async function prepararEntregaAbrir() {
+  if (!state.user?.superAdmin) return toast('Solo el Super Admin puede usar este asistente', 'warn');
+  // Cargar diagnóstico
+  let d;
+  try {
+    d = await api('/api/admin/preparar-entrega/diagnostico');
+  } catch (e) { return toast(e.message || 'Error al diagnosticar', 'error'); }
+
+  const empresas = d.empresasDemo || [];
+  const seedUsers = d.seedUsers || [];
+  const rolesSinUso = d.rolesBuiltinSinUso || [];
+  const hayAlgo = empresas.length || seedUsers.length || rolesSinUso.length || d.miPasswordEsDemo;
+
+  const sec = (title, items, htmlForItem, vacio) => `
+    <div class="border border-slate-200 rounded-lg p-3 bg-white mb-3">
+      <div class="font-semibold text-slate-800 mb-2 flex items-center justify-between">
+        <span>${title}</span>
+        ${items.length ? `<span class="badge badge-blue text-[10px]">${items.length}</span>` : ''}
+      </div>
+      ${items.length ? `<div class="space-y-1">${items.map(htmlForItem).join('')}</div>` : `<div class="text-xs text-slate-400 italic">${vacio}</div>`}
+    </div>`;
+
+  openModal({
+    title: '🚀 Preparar para entrega al cliente', size: 'max-w-2xl',
+    body: `
+      <div class="text-xs text-slate-600 mb-3">El asistente analizó el sistema. Marcá qué querés que limpie ANTES de entregar al cliente:</div>
+
+      ${d.miPasswordEsDemo ? `
+        <div class="bg-amber-50 border border-amber-300 rounded-lg p-3 mb-3">
+          <div class="font-semibold text-amber-900 mb-1">⚠️ Tu Super Admin todavía tiene la contraseña por defecto</div>
+          <div class="text-xs text-amber-800">Tu usuario sigue usando <code class="font-mono">super123</code>. Antes de entregar, cambiá tu contraseña por una secreta. Esto no se hace automáticamente — andá al menú de usuario (arriba a la derecha) → <b>Cambiar contraseña</b>.</div>
+        </div>` : `
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-2 mb-3 text-xs text-emerald-800">
+          ✅ Tu contraseña de Super Admin no es la default.
+        </div>`}
+
+      ${sec('👤 Usuarios de prueba del seed',
+        seedUsers,
+        u => `<label class="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 rounded cursor-pointer">
+          <input type="checkbox" class="pe-user" data-id="${u.id}" ${u.id === d.yo.id ? 'disabled' : 'checked'}/>
+          <span class="font-mono text-slate-700">${esc(u.alias || '—')}</span>
+          <span class="text-slate-600">${esc([u.nombre, u.apellido].filter(Boolean).join(' '))}</span>
+          ${u.superAdmin ? '<span class="badge badge-yellow text-[10px]">SUPER</span>' : ''}
+          ${u.id === d.yo.id ? '<span class="text-[10px] text-slate-400 ml-auto">(sos vos — no se puede borrar a uno mismo)</span>' : ''}
+        </label>`,
+        'No hay usuarios de prueba en el sistema. ✅')}
+
+      ${sec('🛡️ Roles de sistema sin usuarios asignados',
+        rolesSinUso,
+        r => `<label class="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 rounded cursor-pointer">
+          <input type="checkbox" class="pe-role" data-id="${r.id}" checked/>
+          <span class="font-semibold">${esc(r.label)}</span>
+          <span class="text-[11px] text-slate-500 font-mono">${esc(r.key)}</span>
+        </label>`,
+        'Todos los roles de sistema están en uso. ✅')}
+
+      ${sec('🏢 Empresas que parecen de prueba (nombre con "demo", "prueba", "test")',
+        empresas,
+        e => `<label class="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 rounded cursor-pointer">
+          <input type="checkbox" class="pe-comp" data-id="${e.id}"/>
+          <span class="font-semibold">${esc(e.name)}</span>
+          ${e.cuit ? `<span class="text-[11px] text-slate-500 font-mono">${esc(e.cuit)}</span>` : ''}
+        </label>`,
+        'No hay empresas con nombres tipo demo. ✅')}
+
+      ${!hayAlgo ? `
+        <div class="bg-emerald-50 border border-emerald-300 rounded-lg p-3 text-center text-sm text-emerald-900">
+          🎉 <b>Todo limpio.</b> El sistema parece listo para entregar.
+        </div>` : `
+        <div class="bg-rose-50 border border-rose-300 rounded-lg p-3 mt-2">
+          <div class="text-xs text-rose-900 mb-2">⚠️ <b>Las empresas se borran con todos sus datos en cascada</b> (clientes, facturas, movimientos, etc.). Esta operación es IRREVERSIBLE. Hacé un Backup primero si tenés dudas.</div>
+          <label class="label text-rose-900">Para confirmar, escribí PREPARAR:</label>
+          <input id="pe-confirm" class="input" placeholder="PREPARAR"/>
+        </div>`}
+    `,
+    footer: !hayAlgo
+      ? `<button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
+      : `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+         <button class="btn btn-primary" style="background:#4f46e5;border-color:#4f46e5" onclick="prepararEntregaEjecutar()">🚀 Aplicar limpieza seleccionada</button>`
+  });
+}
+
+async function prepararEntregaEjecutar() {
+  const conf = document.getElementById('pe-confirm')?.value?.trim();
+  if (conf !== 'PREPARAR') return toast('Tenés que escribir exactamente PREPARAR para confirmar', 'warn');
+
+  const borrarSeedUsers = Array.from(document.querySelectorAll('.pe-user:checked')).map(c => c.dataset.id);
+  const borrarRolesBuiltin = Array.from(document.querySelectorAll('.pe-role:checked')).map(c => c.dataset.id);
+  const borrarEmpresasDemo = Array.from(document.querySelectorAll('.pe-comp:checked')).map(c => c.dataset.id);
+
+  if (!borrarSeedUsers.length && !borrarRolesBuiltin.length && !borrarEmpresasDemo.length) {
+    return toast('No marcaste nada para borrar', 'warn');
+  }
+
+  try {
+    const r = await api('/api/admin/preparar-entrega/ejecutar', {
+      method: 'POST',
+      body: JSON.stringify({ borrarSeedUsers, borrarRolesBuiltin, borrarEmpresasDemo, confirmacion: 'PREPARAR' })
+    });
+    closeModal();
+    const ok = r.acciones || [];
+    const err = r.errores || [];
+    const tipoLabel = { user: 'Usuario', role: 'Rol', company: 'Empresa' };
+    openModal({
+      title: err.length ? '⚠️ Limpieza terminada con avisos' : '✅ Limpieza completada',
+      size: 'max-w-lg',
+      body: `
+        <div class="text-sm text-slate-600 mb-3">
+          ${ok.length ? `Se eliminaron <b>${ok.length}</b> elementos.` : 'No se eliminó nada.'}
+          ${err.length ? ` Hubo <b>${err.length}</b> casos que no se pudieron procesar.` : ''}
+        </div>
+        ${ok.length ? `
+          <div class="text-xs font-semibold text-emerald-800 mb-1">Eliminados:</div>
+          <ul class="text-xs bg-emerald-50 border border-emerald-200 rounded p-2 mb-3 max-h-40 overflow-y-auto">
+            ${ok.map(a => `<li>• ${tipoLabel[a.tipo] || a.tipo} <span class="font-mono text-slate-500">${esc(a.id)}</span> — ${esc(a.accion)}</li>`).join('')}
+          </ul>` : ''}
+        ${err.length ? `
+          <div class="text-xs font-semibold text-rose-800 mb-1">Avisos:</div>
+          <ul class="text-xs bg-rose-50 border border-rose-200 rounded p-2 max-h-40 overflow-y-auto">
+            ${err.map(e => `<li>• ${tipoLabel[e.tipo] || e.tipo} <span class="font-mono text-slate-500">${esc(e.id)}</span> — ${esc(e.error)}</li>`).join('')}
+          </ul>` : ''}
+        <div class="text-xs text-slate-500 mt-3">
+          💡 Próximos pasos sugeridos: ${ok.some(a => a.tipo === 'user') ? 'recargar la página para refrescar el listado de usuarios. ' : ''}Cambiá tu password si todavía no lo hiciste, y probá entrar en una pestaña incógnita para ver el login limpio.
+        </div>`,
+      footer: `<button class="btn btn-primary" onclick="closeModal(); location.reload()">Listo, recargar</button>`,
+    });
+  } catch (e) {
+    toast(e.message || 'Error al ejecutar la limpieza', 'error');
+  }
+}
+
 /* ----- USUARIOS ----- */
 pages.usuarios = async function() {
   setHeader('Usuarios', 'Cuentas y accesos');
@@ -5393,6 +5694,7 @@ pages.usuarios = async function() {
               <td class="text-right whitespace-nowrap">
                 <button class="btn btn-ghost text-xs" onclick='usuForm(${JSON.stringify(u.id)})' title="Editar">✏️</button>
                 <button class="btn btn-ghost text-xs" onclick='usuResetPwd(${JSON.stringify(u.id)})' title="Resetear contraseña">🔑</button>
+                ${state.user.superAdmin && u.id !== state.user.id ? `<button class="btn btn-ghost text-xs text-red-600 hover:bg-red-50" onclick='usuEliminar(${JSON.stringify(u.id)}, ${JSON.stringify([u.nombre,u.apellido].filter(Boolean).join(" "))}, ${u.superAdmin?1:0})' title="Eliminar usuario">🗑️</button>` : ''}
               </td>
             </tr>`;
           }).join('') || '<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin usuarios</td></tr>'}
@@ -5533,6 +5835,48 @@ async function usuResetPwd(id) {
   try { await api('/api/usuarios/'+id+'/reset-password', { method:'POST', body: JSON.stringify({ newPassword: nw })});
     toast('Contraseña restablecida','success');
   } catch (e) { toast(e.message,'error'); }
+}
+
+async function usuEliminar(id, nombre, esSuper) {
+  // Confirmación en dos pasos: primero un confirm rápido, después
+  // pedimos que tipee el nombre completo del usuario para evitar accidentes.
+  const aviso = esSuper
+    ? `⚠️ Vas a eliminar al SUPER ADMIN "${nombre}".\n\nEsto es PERMANENTE. El usuario no podrá volver a loguearse y se borrarán sus accesos a empresas y preferencias.\n\n¿Continuar?`
+    : `¿Eliminar al usuario "${nombre}"?\n\nEsto es PERMANENTE. El usuario no podrá volver a loguearse.\nSi solo querés bloquear el acceso temporalmente, mejor usá Editar → desmarcar "Activo".`;
+  if (!confirm(aviso)) return;
+
+  // Segunda confirmación: tipear el nombre
+  const confirma = prompt(`Para confirmar, escribí el nombre del usuario:\n\n${nombre}`);
+  if (!confirma || confirma.trim().toLowerCase() !== nombre.trim().toLowerCase()) {
+    return toast('Confirmación incorrecta. No se eliminó nada.', 'warn');
+  }
+
+  try {
+    await api('/api/usuarios/' + id, { method: 'DELETE' });
+    toast(`Usuario "${nombre}" eliminado`, 'success');
+    renderUsuarios();
+  } catch (e) {
+    // Si el backend devuelve 409 con "registros asociados", ofrecer forzar.
+    const msg = e?.message || String(e);
+    if (/registros asociados|tieneRelacionados/i.test(msg)) {
+      const force = confirm(
+        `${msg}\n\n` +
+        `¿Forzar el borrado de todas formas?\n\n` +
+        `→ Los movimientos, cheques y demás registros del usuario quedarán SIN AUTOR registrado (no se pierden los datos en sí, pero se pierde la trazabilidad de quién los cargó).\n\n` +
+        `Recomendación: cancelar acá y usar Editar → desmarcar "Activo" para conservar la trazabilidad.`
+      );
+      if (!force) return;
+      try {
+        await api('/api/usuarios/' + id + '?force=1', { method: 'DELETE' });
+        toast(`Usuario "${nombre}" eliminado (con borrado forzado)`, 'success');
+        renderUsuarios();
+      } catch (e2) {
+        toast(e2.message || 'Error al forzar el borrado', 'error');
+      }
+    } else {
+      toast(msg, 'error');
+    }
+  }
 }
 
 /* ----- ROLES ----- */
@@ -5699,7 +6043,11 @@ pages.roles = async function() {
               <td class="text-center"><span class="badge badge-green">${count}</span></td>
               <td class="text-right whitespace-nowrap">
                 <button class="btn btn-ghost text-xs" onclick='rolForm(${JSON.stringify(r.id)})' title="Editar">✏️</button>
-                ${!r.builtin ? `<button class="btn btn-ghost text-xs text-red-600" onclick='rolDel(${JSON.stringify(r.id)})' title="Eliminar">🗑️</button>` : ''}
+                ${r.key === 'admin'
+                  ? ''
+                  : (!r.builtin || state.user.superAdmin
+                      ? `<button class="btn btn-ghost text-xs text-red-600" onclick='rolDel(${JSON.stringify(r.id)})' title="${r.builtin ? 'Eliminar rol de sistema (solo Super Admin)' : 'Eliminar'}">🗑️</button>`
+                      : '')}
               </td>
             </tr>`;}).join('') || '<tr><td colspan="5" class="text-center text-slate-400 py-8">Sin roles</td></tr>'}
         </tbody>
@@ -5842,9 +6190,43 @@ async function rolSave(id) {
   } catch (e) { toast(e.message,'error'); }
 }
 async function rolDel(id) {
-  if (!confirm('¿Borrar este rol?')) return;
-  try { await api('/api/roles/'+id,{method:'DELETE'}); toast('Borrado','success'); pages.roles(); }
-  catch (e) { toast(e.message,'error'); }
+  const rol = (state.cache.roles || []).find(r => r.id === id) || {};
+  const nombre = rol.label || 'este rol';
+  // Doble confirmación: aviso + tipear el nombre
+  const avisoBase = `¿Eliminar el rol "${nombre}"?\n\nEsto es PERMANENTE. Si el rol está siendo usado por algún usuario, el sistema te va a avisar.`;
+  const avisoBuiltin = rol.builtin
+    ? `\n\n⚠️ ATENCIÓN: este es un ROL DE SISTEMA (viene precargado). Borrarlo lo elimina de forma definitiva. Si después lo necesitás, vas a tener que recrearlo manualmente.`
+    : '';
+  if (!confirm(avisoBase + avisoBuiltin)) return;
+  const confirma = prompt(`Para confirmar, escribí el nombre del rol:\n\n${nombre}`);
+  if (!confirma || confirma.trim().toLowerCase() !== nombre.trim().toLowerCase()) {
+    return toast('Confirmación incorrecta. No se eliminó nada.', 'warn');
+  }
+  try {
+    await api('/api/roles/' + id, { method: 'DELETE' });
+    toast(`Rol "${nombre}" eliminado`, 'success');
+    pages.roles();
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (/está siendo usado|tieneRelacionados/i.test(msg)) {
+      const force = confirm(
+        `${msg}\n\n` +
+        `¿Forzar el borrado de todas formas?\n\n` +
+        `→ Los usuarios que tenían este rol pasarán automáticamente a tener el rol "Lectura" (mínimos permisos) en las empresas donde lo usaban.\n\n` +
+        `Recomendación: cancelar acá, ir a Usuarios y reasignarlos manualmente al rol correcto.`
+      );
+      if (!force) return;
+      try {
+        await api('/api/roles/' + id + '?force=1', { method: 'DELETE' });
+        toast(`Rol "${nombre}" eliminado (usuarios reasignados a Lectura)`, 'success');
+        pages.roles();
+      } catch (e2) {
+        toast(e2.message || 'Error al forzar el borrado', 'error');
+      }
+    } else {
+      toast(msg, 'error');
+    }
+  }
 }
 
 /* =========================================================
@@ -11443,7 +11825,25 @@ async function bcoMovDel(id) {
 /* =========================================================
  * INIT
  * ========================================================= */
+// Antes de mostrar el login, consultar el backend para saber si los usuarios
+// de prueba (Admin/admin123, Super/super123) todavia existen. Si NO existen,
+// no mostrar el hint — asi cuando alguien hace una implementacion en cliente,
+// solo tiene que borrar esos usuarios y el hint desaparece automaticamente.
+async function loadLoginDemoHint() {
+  try {
+    const r = await fetch(API_BASE + '/api/system/demo-status', { cache: 'no-store' });
+    if (!r.ok) return;
+    const data = await r.json();
+    const hint = document.getElementById('login-demo-hint');
+    if (!hint) return;
+    if (data.demoAdmin) document.getElementById('login-demo-admin')?.classList.remove('hidden');
+    if (data.demoSuper) document.getElementById('login-demo-super')?.classList.remove('hidden');
+    if (data.anyDemo)   hint.classList.remove('hidden');
+  } catch {} // si falla, simplemente no mostrar el hint
+}
+
 window.addEventListener('DOMContentLoaded', () => {
+  loadLoginDemoHint();
   boot().catch(err => {
     console.error('Boot error:', err);
     logout(true);

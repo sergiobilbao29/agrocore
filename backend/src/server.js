@@ -580,6 +580,27 @@ app.get('/api/system/version', (_req, res) => {
   res.json({ ok: true, version: AGROCORE_VERSION, build: AGROCORE_BUILD });
 });
 
+// Detecta si los usuarios de prueba del seed (Admin/admin123, Super/super123)
+// todavía existen. Si NO existen, el login no muestra el hint de "Usuarios de
+// prueba" — así, al implementar en un cliente, basta con borrar esos usuarios
+// para que el hint desaparezca automáticamente. No expone passwords ni datos
+// sensibles, solo un booleano.
+app.get('/api/system/demo-status', async (_req, res) => {
+  try {
+    const candidatos = ['Admin', 'admin', 'Super', 'super'];
+    const found = await prisma.user.findMany({
+      where: { OR: candidatos.map(a => ({ alias: { equals: a, mode: 'insensitive' } })) },
+      select: { alias: true, superAdmin: true },
+    });
+    const demoAdmin = found.some(u => /^admin$/i.test(u.alias || ''));
+    const demoSuper = found.some(u => /^super$/i.test(u.alias || ''));
+    res.json({ ok: true, demoAdmin, demoSuper, anyDemo: demoAdmin || demoSuper });
+  } catch (e) {
+    // Si falla, devolver "no demo" para no exponer credenciales por error
+    res.json({ ok: true, demoAdmin: false, demoSuper: false, anyDemo: false });
+  }
+});
+
 // ============================================================
 // TODO LO SIGUIENTE REQUIERE AUTH
 // ============================================================
@@ -656,11 +677,94 @@ app.put('/api/empresas/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Borrado de empresa.
+// Reglas:
+//   1) Super Admin o Admin de esa empresa pueden borrar
+//   2) Si la empresa tiene datos asociados (clientes, facturas, movimientos, etc.)
+//      se rechaza el borrado. La forma "limpia" de hacerlo es usar primero
+//      Limpiar Empresa (vacía movimientos) y después este endpoint.
+//   3) ?force=1 borra cascada en todo (UserCompany, BancoCuenta, Deposito,
+//      Catalogo, etc.) — solo recomendado si se sabe lo que se está haciendo.
 app.delete('/api/empresas/:id', async (req, res, next) => {
   try {
-    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
-    await prisma.company.delete({ where: { id: req.params.id } });
-    res.json({ ok: true });
+    const empresaId = req.params.id;
+    if (!_puedeAdminEmpresa(req, empresaId)) {
+      return res.status(403).json({ ok: false, error: 'Solo el Super Admin o un Administrador de la empresa pueden borrarla' });
+    }
+    // Si el user NO es super admin, validar que no se quede sin empresas
+    if (!req.user.superAdmin) {
+      const accesos = (req.user.userCompanies || []).filter(uc => uc.companyId !== empresaId);
+      if (accesos.length === 0) {
+        return res.status(400).json({ ok: false, error: 'No podés borrar la única empresa a la que tenés acceso, te quedarías sin empresas para trabajar. Pediéle a otro admin que la borre.' });
+      }
+    }
+
+    const force = String(req.query.force || '') === '1';
+    try {
+      // Limpiar UserCompany (los memberships con esta empresa)
+      await prisma.userCompany.deleteMany({ where: { companyId: empresaId } });
+      await prisma.company.delete({ where: { id: empresaId } });
+      return res.json({ ok: true });
+    } catch (e) {
+      const isFK = e?.code === 'P2003' || /Foreign key|violates foreign key/i.test(String(e?.message || ''));
+      if (!isFK) throw e;
+      if (!force) {
+        return res.status(409).json({
+          ok: false,
+          error: 'La empresa tiene datos asociados (clientes, facturas, movimientos, etc.). Por seguridad no se borra automáticamente.',
+          tieneRelacionados: true,
+          sugerencia: 'Usá primero "Limpiar empresa" en Configuración → Sistema para vaciar los movimientos. Si igual querés borrar todo, podés forzar — eso borra TODOS los datos de la empresa en cascada.',
+        });
+      }
+      // Force: cascada manual de las tablas que pueden tener referencias.
+      // Lo hacemos en transacción para que sea atómico (todo o nada).
+      // El orden importa: tablas hoja primero, raíz al final.
+      await prisma.$transaction(async (tx) => {
+        const m = (model) => tx[model] ? tx[model].deleteMany({ where: { companyId: empresaId } }).catch(() => null) : null;
+        // Memberships del usuario en la empresa
+        await tx.userCompany.deleteMany({ where: { companyId: empresaId } });
+        // Detalles e items que dependen de cabeceras (se borran primero por FK)
+        await m('facturaItem');             // por si tiene companyId directo
+        await m('facturaCompraItem');
+        await m('laborInsumo');
+        await m('liquidacionCerealConcepto');
+        await m('cuotaCredito');
+        await m('insumoAplicado');
+        // Cabeceras transaccionales
+        await m('movimientoEmpleado');
+        await m('liquidacionSueldo');
+        await m('liquidacionCereal');
+        await m('credito');
+        await m('laborAplicada');
+        await m('cheque');
+        await m('factura');
+        await m('facturaCompra');
+        await m('ctaCte');
+        await m('efectivo');
+        await m('flujoCaja');
+        await m('arrendamiento');
+        await m('viaje');
+        await m('haciendaMovimiento');
+        await m('haciendaStock');
+        await m('bancoMovimiento');
+        await m('bancoCuenta');
+        await m('movimiento');
+        // Maestros
+        await m('lote');
+        await m('campana');
+        await m('campo');
+        await m('empleado');
+        await m('cliente');
+        await m('proveedor');
+        await m('catalogo');
+        // Depósitos: pueden ser compartidos (companyId null). Solo borrar los exclusivos.
+        if (tx.deposito) await tx.deposito.deleteMany({ where: { companyId: empresaId } }).catch(() => null);
+        // Setting global no es por empresa, no se toca
+        // Borrar la empresa misma
+        await tx.company.delete({ where: { id: empresaId } });
+      });
+      return res.json({ ok: true, forzado: true });
+    }
   } catch (e) { next(e); }
 });
 
@@ -1092,9 +1196,19 @@ app.get('/api/roles', async (_req, res, next) => {
   catch (e) { next(e); }
 });
 
+// Devuelve true si el user es Super Admin O Administrador (role.key === 'admin')
+// en AL MENOS UNA empresa. Se usa para roles (que son globales del sistema):
+// alcanza con ser admin en alguna empresa para poder gestionarlos.
+function _esAdminEnAlguna(req) {
+  if (req.user?.superAdmin) return true;
+  return (req.user?.userCompanies || []).some(uc =>
+    uc.role?.key === 'admin' || (uc.role?.permissions || []).includes('*:*')
+  );
+}
+
 app.post('/api/roles', async (req, res, next) => {
   try {
-    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    if (!_esAdminEnAlguna(req)) return res.status(403).json({ ok: false, error: 'Solo Super Admin o Administradores pueden crear roles' });
     const role = await prisma.role.create({ data: roleSchema.parse(req.body) });
     res.status(201).json({ ok: true, data: role });
   } catch (e) { next(e); }
@@ -1102,7 +1216,7 @@ app.post('/api/roles', async (req, res, next) => {
 
 app.put('/api/roles/:id', async (req, res, next) => {
   try {
-    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    if (!_esAdminEnAlguna(req)) return res.status(403).json({ ok: false, error: 'Solo Super Admin o Administradores pueden editar roles' });
     const existing = await prisma.role.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     if (existing.builtin) return res.status(400).json({ ok: false, error: 'Rol de sistema no editable' });
@@ -1111,14 +1225,54 @@ app.put('/api/roles/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Borrado de rol.
+// Reglas:
+//   1) Super Admin o Admin en alguna empresa pueden borrar
+//   2) Roles "builtin" (admin, contable, operaciones, lectura) no se borran
+//   3) Si hay UserCompany usando este rol → rechazar y avisar cuántos
+//      usuarios lo tienen. La opción "force" reasigna esos usuarios al rol
+//      de "lectura" (mínimos permisos) antes de borrar.
 app.delete('/api/roles/:id', async (req, res, next) => {
   try {
-    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    if (!_esAdminEnAlguna(req)) return res.status(403).json({ ok: false, error: 'Solo Super Admin o Administradores pueden borrar roles' });
     const r = await prisma.role.findUnique({ where: { id: req.params.id } });
     if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
-    if (r.builtin) return res.status(400).json({ ok: false, error: 'Rol de sistema no borrable' });
+    // Builtin roles: solo el Super Admin puede borrarlos (los Admin no).
+    // Los Super Admin habilitan esto para poder limpiar la base al implementar
+    // en un cliente y dejar solo los roles que el cliente realmente usa.
+    if (r.builtin && !req.user.superAdmin) {
+      return res.status(400).json({ ok: false, error: 'Rol de sistema (admin, contable, operaciones, lectura). Solo el Super Admin puede borrarlo.' });
+    }
+    // Si el rol es "admin" no se puede borrar nunca — sin él, ningún Administrador
+    // podría seguir gestionando empresas / usuarios / roles, quedando el sistema
+    // con solo Super Admin manejando todo.
+    if (r.key === 'admin') {
+      return res.status(400).json({ ok: false, error: 'El rol "Administrador" no se puede borrar — es el rol base que necesitan los administradores de empresa para operar.' });
+    }
+
+    // Verificar uso actual del rol
+    const enUso = await prisma.userCompany.count({ where: { roleId: req.params.id } });
+    const force = String(req.query.force || '') === '1';
+    if (enUso > 0 && !force) {
+      return res.status(409).json({
+        ok: false,
+        error: `El rol "${r.label}" está siendo usado por ${enUso} ${enUso === 1 ? 'usuario' : 'usuarios'}. Por seguridad no se borra automáticamente.`,
+        tieneRelacionados: true,
+        enUso,
+        sugerencia: 'Reasigná esos usuarios a otro rol primero (Usuarios → Editar). Si igual querés borrarlo, podés forzar y todos esos accesos quedarán con el rol "Lectura" (mínimos permisos).',
+      });
+    }
+
+    if (force && enUso > 0) {
+      // Reasignar todos los UserCompany que usaban este rol al rol "lectura"
+      const lectura = await prisma.role.findFirst({ where: { key: 'lectura' } });
+      if (!lectura) {
+        return res.status(500).json({ ok: false, error: 'No se encontró el rol "lectura" base para reasignar. Pedile a soporte que verifique los roles del sistema.' });
+      }
+      await prisma.userCompany.updateMany({ where: { roleId: req.params.id }, data: { roleId: lectura.id } });
+    }
     await prisma.role.delete({ where: { id: req.params.id } });
-    res.json({ ok: true });
+    res.json({ ok: true, forzado: force && enUso > 0 });
   } catch (e) { next(e); }
 });
 
@@ -1243,11 +1397,66 @@ app.post('/api/usuarios/assign', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Borrado de usuario. Necesita varias salvaguardas porque un User borrado mal
+// puede romper movimientos, ctas corrientes y cualquier cosa que tenga FK al
+// usuario. Reglas:
+//   1) Solo super admin puede borrar (no alcanza con manageUsers)
+//   2) No te podes borrar a vos mismo
+//   3) No se puede borrar al ultimo super admin del sistema
+//   4) Si el usuario tiene registros relacionados (movimientos, cheques, etc.)
+//      se rechaza el borrado y se sugiere desactivarlo. El cliente puede
+//      forzar pasando ?force=1 — eso borra primero todos los registros
+//      dependientes en cascada (UserCompany, UserPreference) y deja los
+//      registros donde el user es solo "autor" (Movimiento.userId) en null.
 app.delete('/api/usuarios/:id', async (req, res, next) => {
   try {
-    if (!canManageUsers(req)) return res.status(403).json({ ok: false, error: 'Sin permisos' });
-    await prisma.user.delete({ where: { id: req.params.id } });
-    res.json({ ok: true });
+    if (!req.user?.superAdmin) {
+      return res.status(403).json({ ok: false, error: 'Solo el Super Admin puede borrar usuarios' });
+    }
+    const targetId = req.params.id;
+    if (targetId === req.user.id) {
+      return res.status(400).json({ ok: false, error: 'No te podés borrar a vos mismo. Pediéle a otro super admin que lo haga, o desactivá tu cuenta.' });
+    }
+    const target = await prisma.user.findUnique({ where: { id: targetId } });
+    if (!target) return res.status(404).json({ ok: false, error: 'Usuario no encontrado' });
+
+    // Si el target es super admin, validar que quede al menos uno
+    if (target.superAdmin) {
+      const otrosSupers = await prisma.user.count({ where: { superAdmin: true, id: { not: targetId }, activo: true } });
+      if (otrosSupers === 0) {
+        return res.status(400).json({ ok: false, error: 'No se puede borrar al último Super Admin activo del sistema. Creá otro antes, o desactivá este usuario en vez de borrarlo.' });
+      }
+    }
+
+    const force = String(req.query.force || '') === '1';
+
+    // Intentar borrado simple primero. Si falla por FK constraint, ofrecer force.
+    try {
+      // Limpiar dependencias "propias" del user (UserCompany memberships, UserPreference)
+      await prisma.userCompany.deleteMany({ where: { userId: targetId } });
+      try { await prisma.userPreference.deleteMany({ where: { userId: targetId } }); } catch {}
+      await prisma.user.delete({ where: { id: targetId } });
+      return res.json({ ok: true });
+    } catch (e) {
+      // P2003 = foreign key constraint violation
+      const msg = String(e?.message || e);
+      const isFK = e?.code === 'P2003' || /Foreign key constraint|violates foreign key/i.test(msg);
+      if (!isFK) throw e;
+      if (!force) {
+        return res.status(409).json({
+          ok: false,
+          error: 'El usuario tiene registros asociados (movimientos, cheques u otros). Por seguridad no se borra automáticamente.',
+          tieneRelacionados: true,
+          sugerencia: 'Te recomendamos DESACTIVAR el usuario (no podrá loguearse, pero queda la trazabilidad). Si querés borrarlo igual, los movimientos asociados quedarán SIN AUTOR registrado.',
+        });
+      }
+      // Force: limpiar todas las FK "soft" (donde el user es solo autor)
+      // poniendo userId = null en las tablas que lo permitan.
+      try { await prisma.movimiento.updateMany({ where: { userId: targetId }, data: { userId: null } }); } catch {}
+      // Ahora reintentar el delete
+      await prisma.user.delete({ where: { id: targetId } });
+      return res.json({ ok: true, forzado: true });
+    }
   } catch (e) { next(e); }
 });
 
@@ -3899,6 +4108,147 @@ app.post('/api/admin/restore', authMiddleware, requireSuperAdmin, uploadRestore.
 // Borra todos los movimientos contables y, según el scope, también stock,
 // bancos/cajas, producción y empleados. Catálogos compartidos NUNCA se tocan.
 // Operación destructiva — requiere confirmación con texto "BORRAR" en el body.
+// ============================================================
+// PREPARAR PARA ENTREGA AL CLIENTE
+// Diagnóstico + ejecución de la limpieza típica antes de entregar el sistema:
+//   - usuarios seed (Admin/admin123, Super/super123)
+//   - super admin todavía con password "super123"
+//   - roles builtin sin usuarios asignados
+//   - empresas que parecen de prueba (nombre con "demo", "prueba", "test")
+// Solo Super Admin. El frontend muestra checkboxes para que elija qué ejecutar.
+// ============================================================
+app.get('/api/admin/preparar-entrega/diagnostico', authMiddleware, requireSuperAdmin, async (req, res, next) => {
+  try {
+    // Detectar usuarios seed por alias case-insensitive
+    const seedUsers = await prisma.user.findMany({
+      where: { OR: [
+        { alias: { equals: 'Admin', mode: 'insensitive' } },
+        { alias: { equals: 'Super', mode: 'insensitive' } },
+      ] },
+      select: { id: true, alias: true, nombre: true, apellido: true, email: true, superAdmin: true, activo: true },
+    });
+
+    // Verificar si el password del usuario actual sigue siendo el default "super123"
+    let miPasswordEsDemo = false;
+    try {
+      const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { passwordHash: true } });
+      if (me?.passwordHash) miPasswordEsDemo = await bcrypt.compare('super123', me.passwordHash);
+    } catch {}
+
+    // Roles builtin sin usuarios asignados (no incluimos "admin" que es base)
+    const rolesBuiltin = await prisma.role.findMany({
+      where: { builtin: true, key: { not: 'admin' } },
+      select: { id: true, key: true, label: true, _count: { select: { userCompanies: true } } },
+    });
+    const rolesBuiltinSinUso = rolesBuiltin
+      .filter(r => r._count.userCompanies === 0)
+      .map(r => ({ id: r.id, key: r.key, label: r.label }));
+
+    // Empresas que parecen de prueba
+    const empresasDemo = await prisma.company.findMany({
+      where: { OR: [
+        { name: { contains: 'demo', mode: 'insensitive' } },
+        { name: { contains: 'prueba', mode: 'insensitive' } },
+        { name: { contains: 'test', mode: 'insensitive' } },
+      ] },
+      select: { id: true, name: true, razonSocial: true, cuit: true },
+    });
+
+    // Contar super admins activos totales
+    const superAdmins = await prisma.user.count({ where: { superAdmin: true, activo: true } });
+
+    res.json({ ok: true,
+      seedUsers, miPasswordEsDemo, rolesBuiltinSinUso, empresasDemo,
+      superAdminsActivos: superAdmins,
+      yo: { id: req.user.id, alias: req.user.alias, nombre: req.user.nombre, email: req.user.email },
+    });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/admin/preparar-entrega/ejecutar', authMiddleware, requireSuperAdmin, async (req, res, next) => {
+  try {
+    const schema = z.object({
+      borrarSeedUsers: z.array(z.string()).optional().default([]),       // IDs de seed users a borrar
+      borrarRolesBuiltin: z.array(z.string()).optional().default([]),    // IDs de roles builtin a borrar
+      borrarEmpresasDemo: z.array(z.string()).optional().default([]),    // IDs de empresas demo a borrar (force=true por defecto en esta operación)
+      confirmacion: z.literal('PREPARAR'),
+    });
+    const d = schema.parse(req.body);
+    const yo = req.user.id;
+    const acciones = [];
+    const errores = [];
+
+    // 1. Borrar usuarios seed seleccionados
+    for (const uid of d.borrarSeedUsers) {
+      if (uid === yo) { errores.push({ tipo: 'user', id: uid, error: 'No te podés borrar a vos mismo' }); continue; }
+      try {
+        // Limpiar memberships y prefs primero
+        await prisma.userCompany.deleteMany({ where: { userId: uid } });
+        await prisma.userPreference.deleteMany({ where: { userId: uid } }).catch(()=>null);
+        await prisma.movimiento.updateMany({ where: { userId: uid }, data: { userId: null } }).catch(()=>null);
+        await prisma.user.delete({ where: { id: uid } });
+        acciones.push({ tipo: 'user', id: uid, accion: 'borrado' });
+      } catch (e) {
+        errores.push({ tipo: 'user', id: uid, error: String(e?.message || e) });
+      }
+    }
+
+    // 2. Borrar roles builtin seleccionados (solo si no tienen usuarios)
+    for (const rid of d.borrarRolesBuiltin) {
+      try {
+        const r = await prisma.role.findUnique({ where: { id: rid } });
+        if (!r) { errores.push({ tipo: 'role', id: rid, error: 'No encontrado' }); continue; }
+        if (r.key === 'admin') { errores.push({ tipo: 'role', id: rid, error: 'Rol "admin" no se borra' }); continue; }
+        const enUso = await prisma.userCompany.count({ where: { roleId: rid } });
+        if (enUso > 0) {
+          // Reasignar a lectura primero
+          const lectura = await prisma.role.findFirst({ where: { key: 'lectura' } });
+          if (lectura && lectura.id !== rid) {
+            await prisma.userCompany.updateMany({ where: { roleId: rid }, data: { roleId: lectura.id } });
+          } else {
+            errores.push({ tipo: 'role', id: rid, error: 'Rol en uso y sin rol "Lectura" para reasignar' });
+            continue;
+          }
+        }
+        await prisma.role.delete({ where: { id: rid } });
+        acciones.push({ tipo: 'role', id: rid, accion: 'borrado' });
+      } catch (e) {
+        errores.push({ tipo: 'role', id: rid, error: String(e?.message || e) });
+      }
+    }
+
+    // 3. Borrar empresas demo (cascada completa)
+    for (const eid of d.borrarEmpresasDemo) {
+      try {
+        await prisma.$transaction(async (tx) => {
+          const m = (model) => tx[model] ? tx[model].deleteMany({ where: { companyId: eid } }).catch(()=>null) : null;
+          await tx.userCompany.deleteMany({ where: { companyId: eid } });
+          // Hojas/items
+          await m('facturaItem'); await m('facturaCompraItem'); await m('laborInsumo');
+          await m('liquidacionCerealConcepto'); await m('cuotaCredito'); await m('insumoAplicado');
+          // Cabeceras
+          await m('movimientoEmpleado'); await m('liquidacionSueldo'); await m('liquidacionCereal');
+          await m('credito'); await m('laborAplicada'); await m('cheque');
+          await m('factura'); await m('facturaCompra'); await m('ctaCte');
+          await m('efectivo'); await m('flujoCaja'); await m('arrendamiento');
+          await m('viaje'); await m('haciendaMovimiento'); await m('haciendaStock');
+          await m('bancoMovimiento'); await m('bancoCuenta'); await m('movimiento');
+          // Maestros
+          await m('lote'); await m('campana'); await m('campo');
+          await m('empleado'); await m('cliente'); await m('proveedor'); await m('catalogo');
+          if (tx.deposito) await tx.deposito.deleteMany({ where: { companyId: eid } }).catch(()=>null);
+          await tx.company.delete({ where: { id: eid } });
+        });
+        acciones.push({ tipo: 'company', id: eid, accion: 'borrada' });
+      } catch (e) {
+        errores.push({ tipo: 'company', id: eid, error: String(e?.message || e) });
+      }
+    }
+
+    res.json({ ok: true, acciones, errores });
+  } catch (e) { next(e); }
+});
+
 app.post('/api/admin/limpiar-empresa', authMiddleware, requireSuperAdmin, async (req, res, next) => {
   try {
     const schema = z.object({
