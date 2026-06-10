@@ -123,10 +123,23 @@ Push-Location $InstallDir
 try {
   if (Test-Path ".git") {
     Info "git pull..."
-    & git pull --ff-only 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) { Err "git pull fallo"; exit 2 }
-    Info "Actualizando submodulos (web/img, manual, etc)..."
-    & git submodule update --init --recursive 2>&1 | ForEach-Object { Write-Host "    $_" }
+    # Git escribe info por stderr ("From github.com/..."). Con ErrorActionPreference=Stop
+    # PowerShell lo interpreta como excepcion y mata el script. Por eso aca cambiamos
+    # temporalmente a Continue mientras corre git, y verificamos el exit code manualmente.
+    $oldErrPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $gitOut = & git pull --ff-only 2>&1
+      $gitOut | ForEach-Object { Write-Host "    $_" }
+      if ($LASTEXITCODE -ne 0) { Err "git pull fallo (exit code $LASTEXITCODE)"; exit 2 }
+      Info "Actualizando submodulos (web/img, manual, etc)..."
+      $subOut = & git submodule update --init --recursive 2>&1
+      $subOut | ForEach-Object { Write-Host "    $_" }
+      # No abortamos por error de submodulo, solo avisamos
+      if ($LASTEXITCODE -ne 0) { Warn "git submodule update salio con codigo $LASTEXITCODE (continuamos igual)" }
+    } finally {
+      $ErrorActionPreference = $oldErrPref
+    }
     Ok "Codigo actualizado."
   } else {
     Warn "No es un repositorio git. Descargando ZIP de la ultima release..."
