@@ -2132,6 +2132,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'10/06/2026',
+      titulo:'📥 3 importadores nuevos para Excels del cliente (segunda tanda)',
+      desc:'Configuración → Importación suma 3 importadores más: (1) HECTÁREAS SEMBRADAS — una hoja por empresa, lee Renspa+Campo+Cultivo+Has y crea un lote por cultivo (con forward-fill del Renspa entre filas en blanco). (2) PYME — Ventas hacienda menor (Lechón, Cordero, Chivito, Cancha) — por cada fila crea producto y movimiento de venta, y si la fila está "No pago" suma a Cuentas Corrientes. (3) PROVEEDORES — lee la hoja "Proveedores" del Excel de Cuentas Corrientes y carga el catálogo de proveedores (nombre, CUIT, teléfono, email, horarios). Salta los que ya existían matcheando por razón social.' },
+    { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'10/06/2026',
+      titulo:'↩️ Historial de importaciones + botón Deshacer',
+      desc:'Configuración → Importación ahora muestra arriba un panel con las últimas 50 importaciones realizadas (fecha, tipo, archivo, quién la hizo, cuántos registros, estado). Cada importación activa tiene un botón "↩️ Deshacer" que borra todos los registros que esa importación había creado. Si Denise sube un Excel mal y ve que importó 200 transferencias con un detalle equivocado, hace clic en Deshacer y vuelve atrás en 1 segundo. Las importaciones que UPDATEAN un registro existente (como stocks que ya estaban cargados) NO se restauran al valor previo — solo se borran los registros nuevos creados por la importación.' },
+    { tag:'Tecnico', color:'bg-slate-100 text-slate-700 border-slate-300', fecha:'10/06/2026',
+      titulo:'🔧 Update-AgroCore.ps1 ahora sincroniza el schema automáticamente',
+      desc:'El script de actualización ahora corre `prisma db push --accept-data-loss --skip-generate` después del migrate deploy, así cualquier campo nuevo agregado al schema (como el flag "oculto" del usuario) se aplica sin que tengas que correr nada manual en la EC2. El comando es idempotente: si no hay cambios, no hace nada. Si hay cambios, los aplica en segundos.' },
     { tag:'Seguridad', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'10/06/2026',
       titulo:'🥷 Modo invisible para Super Admins de mantenimiento',
       desc:'Los Super Admin tienen una opción nueva en su perfil "Modo invisible". Al activarla, ese usuario NO aparece en el listado de Usuarios para nadie (ni siquiera para otros Super Admin), y por lo tanto nadie puede eliminarlo ni editarlo. Solo el propio usuario se ve a sí mismo al loguearse. El backend rechaza cualquier intento de borrar/modificar un usuario oculto que no sea uno mismo. Pensado para que el mantenedor del sistema tenga un acceso de emergencia blindado contra borrados accidentales o malintencionados. El usuario puede activar/desactivar el flag cuando quiera desde su mismo perfil — pero solo a sí mismo, nunca a otros.' },
@@ -5131,10 +5140,14 @@ const IMPORT_CLIENTE_TIPOS = [
   { id:'transferencias',  label:'TRANSFERENCIAS bancarias', icon:'🔁', desc:'Hoja "Todas" con Fecha, Banco, Monto, Detalle, Empresa, Quien la realizó. Crea automáticamente la cuenta bancaria del banco si no existe y carga cada fila como movimiento bancario tipo transferencia saliente.' },
   { id:'ctacte-saldos',   label:'CUENTAS CORRIENTES — saldos pendientes', icon:'📒', desc:'Hoja "Resumen" con Nombre, Saldo, Prioridad, Estado, Observaciones, Fecha de pago. Carga cada fila como cuenta corriente "libre" con haber=saldo. Las marcadas Pagado quedan saldadas, el resto quedan pendientes con vencimiento.' },
   { id:'stock-hacienda',  label:'STOCK DE HACIENDA',       icon:'🐂', desc:'Una hoja por Renspa/campo, con Especie, Categoría, Stock real. Crea automáticamente el campo si no existe y carga el stock de hacienda por categoría. Si ya hay stock cargado, lo actualiza con el nuevo valor.' },
+  { id:'hectareas-sembradas', label:'HECTÁREAS SEMBRADAS', icon:'🌾', desc:'Una hoja por empresa (LLSP/El Pistrin/Peiretti Gerardo). Columnas: Renspa, Campo, Cultivo, Has sembradas. Por cada (campo, cultivo) crea un lote con sus hectáreas. Crea el campo si no existe y le asigna el Renspa. La empresa donde se carga es la activa del usuario (cambiá de empresa para cargar otra hoja).' },
+  { id:'pyme-ventas',     label:'PYME — Ventas hacienda menor', icon:'🐑', desc:'Excel de ventas de hacienda menor (Lechón, Cordero, Chivito, Cancha). Por cada fila crea el producto si no existe y un movimiento de venta. Si la fila dice "No pago", también suma a Cuentas Corrientes como deuda del cliente.' },
+  { id:'proveedores',     label:'PROVEEDORES (catálogo)', icon:'🏬', desc:'Hoja "Proveedores" del Excel de Cuentas Corrientes con Nombre, Teléfono, Mail, CUIT, Horarios. Carga cada uno como Proveedor en el sistema. Saltea los que ya existen (matching por razón social).' },
 ];
 
 function configRenderImportacion(body) {
   body.innerHTML = `
+    <div id="import-historial-wrap" class="mb-4"></div>
     <div class="bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-lg p-3 mb-4">
       🎯 <b>Importación directa desde los Excel del cliente.</b> Estos importadores leen los archivos tal como vienen (formato histórico de planillas administrativas), sin necesidad de re-armar nada. Subí el archivo del cliente exactamente como lo tenés.
     </div>
@@ -5174,6 +5187,93 @@ function configRenderImportacion(body) {
         </div>`).join('')}
     </div>
     <p class="text-[11px] text-slate-500 mt-4">💡 Tip: importá primero los <b>catálogos</b> (productos, clientes, proveedores, cuentas bancarias) y después los <b>movimientos</b> (cheques, saldos, stock inicial) — porque estos últimos referencian a los primeros.</p>`;
+  // Cargar el historial de importaciones de la empresa actual
+  importHistorialCargar();
+}
+
+const TIPO_IMP_LABEL = {
+  transferencias: '🔁 Transferencias bancarias',
+  'ctacte-saldos': '📒 Cuentas corrientes — saldos pendientes',
+  'stock-hacienda': '🐂 Stock de hacienda',
+  'hectareas-sembradas': '🌾 Hectáreas sembradas',
+  'pyme-ventas': '🐑 PyME — Ventas hacienda menor',
+  proveedores: '🏬 Proveedores (catálogo)',
+  cheques: '💳 Control de cheques',
+  creditos: '🏦 Créditos bancarios',
+  'cartas-porte': '🚛 Cartas de porte',
+  efectivo: '💵 Control efectivo',
+  'cerdos-ventas': '🐖 Cerdos — ventas',
+};
+
+async function importHistorialCargar() {
+  const wrap = document.getElementById('import-historial-wrap');
+  if (!wrap) return;
+  try {
+    const r = await api('/api/admin/importaciones');
+    const lotes = r.data || [];
+    if (!lotes.length) {
+      wrap.innerHTML = '';
+      return;
+    }
+    const fmtDate = (d) => {
+      const dt = new Date(d);
+      return dt.toLocaleString('es-AR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' });
+    };
+    wrap.innerHTML = `
+      <div class="border border-indigo-300 rounded-lg bg-indigo-50/40 overflow-hidden">
+        <div class="px-4 py-2 bg-indigo-100 text-indigo-900 font-semibold text-sm flex items-center justify-between">
+          <span>🕘 Historial de importaciones recientes</span>
+          <button class="text-xs text-indigo-700 hover:underline" onclick="importHistorialCargar()">↻ Refrescar</button>
+        </div>
+        <div class="p-2 text-xs text-indigo-900 bg-indigo-50/40">
+          ${lotes.length} ${lotes.length === 1 ? 'importación' : 'importaciones'} registradas. Podés deshacer cualquier importación activa para revertir los registros que creó (no se restauran los que ya existían y fueron actualizados).
+        </div>
+        <table class="data text-xs">
+          <thead><tr><th>Fecha</th><th>Tipo</th><th>Archivo</th><th>Usuario</th><th class="text-center">Importados</th><th>Estado</th><th></th></tr></thead>
+          <tbody>
+            ${lotes.map(l => {
+              const isActivo = l.estado === 'activo';
+              const estadoBadge = isActivo
+                ? '<span class="badge badge-green">Activa</span>'
+                : `<span class="badge badge-gray" title="Deshecho ${l.fechaDeshecho ? fmtDate(l.fechaDeshecho) : ''}">↩️ Deshecho</span>`;
+              const resumenStr = l.recordsResumen
+                ? Object.entries(l.recordsResumen).filter(([k,v]) => v > 0).map(([k,v]) => `${k}: ${v}`).join(', ')
+                : '';
+              return `<tr class="table-row">
+                <td class="whitespace-nowrap">${fmtDate(l.fecha)}</td>
+                <td>${esc(TIPO_IMP_LABEL[l.tipo] || l.tipo)}</td>
+                <td class="text-slate-600">${esc(l.archivoNombre || '—')}</td>
+                <td class="text-slate-600">${esc(l.usuario || '—')}</td>
+                <td class="text-center">
+                  <b>${l.importados}</b>
+                  ${l.fallos ? `<span class="badge badge-red ml-1">${l.fallos} fallos</span>` : ''}
+                  ${resumenStr ? `<div class="text-[10px] text-slate-500 font-mono mt-0.5">${esc(resumenStr)}</div>` : ''}
+                </td>
+                <td>${estadoBadge}</td>
+                <td class="text-right whitespace-nowrap">
+                  ${isActivo
+                    ? `<button class="btn btn-secondary text-red-600 border-red-200 text-xs" onclick='importDeshacer(${JSON.stringify(l.id)}, ${JSON.stringify(TIPO_IMP_LABEL[l.tipo] || l.tipo)}, ${l.importados})'>↩️ Deshacer</button>`
+                    : ''}
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    wrap.innerHTML = `<div class="text-xs text-slate-500">No se pudo cargar el historial: ${esc(e.message)}</div>`;
+  }
+}
+
+async function importDeshacer(loteId, tipoLabel, importados) {
+  if (!confirm(`¿Deshacer la importación de ${tipoLabel}?\n\nSe van a BORRAR los ${importados} registros que creó esta importación.\n\nLos registros que esta importación había ACTUALIZADO (por ejemplo, stocks que ya existían) NO se restauran al valor anterior — quedan con el valor importado.\n\nEsta operación es irreversible. ¿Continuar?`)) return;
+  try {
+    const r = await api('/api/admin/importaciones/' + loteId + '/deshacer', { method: 'POST' });
+    toast(`↩️ Importación deshecha — ${r.borrados} registros borrados${r.errores?.length ? ` (${r.errores.length} avisos)` : ''}`, 'success');
+    importHistorialCargar();
+  } catch (e) {
+    toast(e.message || 'No se pudo deshacer', 'error');
+  }
 }
 function importClientePlantilla(tipo) {
   $('#import-cliente-'+tipo)?.click();

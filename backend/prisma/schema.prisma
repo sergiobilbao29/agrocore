@@ -66,6 +66,7 @@ model Company {
   liquidacionesCereal LiquidacionCereal[]
   creditos        Credito[]
   bancoCuentas    BancoCuenta[]
+  importLotes     ImportLote[]
   bancoMovimientos BancoMovimiento[]
 }
 
@@ -1023,4 +1024,28 @@ model BancoMovimiento {
   @@index([tipo])
   @@index([chequeId])
   @@index([cuotaCreditoId])
+}
+
+// Historial de importaciones — cada importacion crea un lote para poder
+// deshacer (revertir) los registros si el usuario se da cuenta de que el
+// archivo estaba mal. recordsCreados es un JSON con la forma:
+//   { "BancoMovimiento": ["id1", "id2", ...], "BancoCuenta": ["id3"], ... }
+// Al deshacer, iteramos ese mapa y borramos los registros listados.
+model ImportLote {
+  id              String   @id @default(cuid())
+  companyId       String
+  tipo            String                       // "transferencias" | "ctacte-saldos" | "stock-hacienda" | etc.
+  fecha           DateTime @default(now())
+  userId          String?                      // quien importo
+  archivoNombre   String?                      // nombre del .xlsx subido
+  importados      Int      @default(0)         // registros creados con exito
+  fallos          Int      @default(0)         // filas que no se pudieron importar
+  recordsCreados  Json?                        // mapa { modelo: [ids] }
+  estado          String   @default("activo")  // "activo" | "deshecho"
+  fechaDeshecho   DateTime?
+  diagnostico     Json?                        // info extra: columnas detectadas, hojas procesadas, etc.
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, fecha])
 }

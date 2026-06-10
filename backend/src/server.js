@@ -24,7 +24,7 @@ const app = express();
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.3';
+const AGROCORE_VERSION = '0.7.4';
 const AGROCORE_BUILD = new Date('2026-06-10').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4505,6 +4505,30 @@ function _parseMonto(v) {
 }
 function _normalizar(s) { return String(s||'').trim().toLowerCase(); }
 
+// ============================================================
+// HELPERS DE HISTORIAL DE IMPORTACIONES
+// Cada importacion crea un ImportLote y los registros se "registran" en
+// recordsCreados (mapa { modelo: [ids] }) para poder revertirlos despues.
+// ============================================================
+async function _crearImportLote(req, tipo) {
+  return prisma.importLote.create({ data: {
+    companyId: req.companyId, tipo,
+    userId: req.user?.id || null,
+    archivoNombre: req.file?.originalname || null,
+    estado: 'activo',
+  }});
+}
+function _registrarRecord(records, modelo, id) {
+  if (!records[modelo]) records[modelo] = [];
+  records[modelo].push(id);
+}
+async function _cerrarImportLote(loteId, records, importados, fallos, diagnostico) {
+  return prisma.importLote.update({
+    where: { id: loteId },
+    data: { recordsCreados: records, importados, fallos, diagnostico: diagnostico || null },
+  });
+}
+
 // === Importar CONTROL DE CHEQUES del cliente ===
 // Entiende las 3 hojas: "Cheques fisicos a tercero", "echeq a tercero", "echeq emitidos"
 app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, requirePermission('finanzas:create'), upload.single('archivo'), async (req, res, next) => {
@@ -4771,7 +4795,12 @@ app.post('/api/admin/importar-cliente/transferencias', authMiddleware, requireCo
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
     let ok = 0; const errores = [];
-    // Cache de cuentas bancarias para no buscar/crear por cada fila
+    // Crear el lote de importacion para poder deshacerlo despues
+    const lote = await _crearImportLote(req, 'transferencias');
+    const records = {};
+    // Cache de cuentas bancarias para no buscar/crear por cada fila.
+    // Si la cuenta la CREAMOS nosotros (no existia), la trackeamos para poder
+    // deshacerla. Si ya existia, no la trackeamos.
     const cuentasCache = new Map(); // key = banco normalizado
     async function getOrCreateCuenta(banco) {
       if (!banco) return null;
@@ -4785,6 +4814,7 @@ app.post('/api/admin/importar-cliente/transferencias', authMiddleware, requireCo
           companyId: req.companyId, banco: banco.trim(),
           tipo: 'cta_cte', moneda: 'ARS', titular: null,
         }});
+        _registrarRecord(records, 'BancoCuenta', cuenta.id);
       }
       cuentasCache.set(key, cuenta);
       return cuenta;
@@ -4836,7 +4866,7 @@ app.post('/api/admin/importar-cliente/transferencias', authMiddleware, requireCo
         const detalle = kDetalle ? (r[kDetalle] || 'Transferencia') : 'Transferencia';
         const quien   = kQuien ? (r[kQuien] || '') : '';
         const obs     = kObs ? (r[kObs] || '') : '';
-        await prisma.bancoMovimiento.create({ data: {
+        const mov = await prisma.bancoMovimiento.create({ data: {
           companyId: req.companyId, cuentaId: cuenta.id,
           fecha, tipo: 'transferencia_out', concepto: String(detalle),
           monto: Math.abs(monto),
@@ -4844,12 +4874,14 @@ app.post('/api/admin/importar-cliente/transferencias', authMiddleware, requireCo
           observaciones: [empresa && `Empresa: ${empresa}`, quien && `Operó: ${quien}`, obs].filter(Boolean).join(' · ') || null,
           userId: req.user?.id || null,
         }});
+        _registrarRecord(records, 'BancoMovimiento', mov.id);
         ok++;
       } catch (e) { errores.push({ hoja: shTodas, fila: i+2, error: e.message }); }
     }
-    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100),
-      diagnostico: { hoja_procesada: shTodas, filas_leidas: rows.length,
-        columnas_detectadas: { banco: kBanco, monto: kMonto, fecha: kFecha, empresa: kEmpresa, detalle: kDetalle } } });
+    const diag = { hoja_procesada: shTodas, filas_leidas: rows.length,
+      columnas_detectadas: { banco: kBanco, monto: kMonto, fecha: kFecha, empresa: kEmpresa, detalle: kDetalle } };
+    await _cerrarImportLote(lote.id, records, ok, errores.length, diag);
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100), loteId: lote.id, diagnostico: diag });
   } catch (e) { next(e); }
 });
 
@@ -4865,6 +4897,8 @@ app.post('/api/admin/importar-cliente/ctacte-saldos', authMiddleware, requireCom
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
     let ok = 0; const errores = [];
+    const lote = await _crearImportLote(req, 'ctacte-saldos');
+    const records = {};
     const shResumen = wb.SheetNames.find(n => /resumen/i.test(n)) || wb.SheetNames[0];
     const ws = wb.Sheets[shResumen];
     // Leer todo como arreglo de arreglos (para manejar bien el offset del header en fila 3)
@@ -4899,7 +4933,7 @@ app.post('/api/admin/importar-cliente/ctacte-saldos', authMiddleware, requireCom
         const reclaman  = r[idx.reclaman] || '';
         const obsExtra  = r[idx.obs] || '';
         const vence     = _parseFechaArg(r[idx.vence]);
-        await prisma.ctaCte.create({ data: {
+        const cc = await prisma.ctaCte.create({ data: {
           companyId: req.companyId,
           contactoTipo: 'libre',
           nombreLibre: String(nombre).trim(),
@@ -4916,10 +4950,12 @@ app.post('/api/admin/importar-cliente/ctacte-saldos', authMiddleware, requireCom
             obsExtra,
           ].filter(Boolean).join(' · ') || null,
         }});
+        _registrarRecord(records, 'CtaCte', cc.id);
         ok++;
       } catch (e) { errores.push({ hoja: shResumen, fila: i+1, error: e.message }); }
     }
-    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100) });
+    await _cerrarImportLote(lote.id, records, ok, errores.length, { hoja_procesada: shResumen });
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100), loteId: lote.id });
   } catch (e) { next(e); }
 });
 
@@ -4936,6 +4972,8 @@ app.post('/api/admin/importar-cliente/stock-hacienda', authMiddleware, requireCo
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
     let ok = 0; const errores = [];
+    const lote = await _crearImportLote(req, 'stock-hacienda');
+    const records = {};
     const camposCache = new Map();
     async function getOrCreateCampo(nombre) {
       if (!nombre) return null;
@@ -4948,6 +4986,7 @@ app.post('/api/admin/importar-cliente/stock-hacienda', authMiddleware, requireCo
         campo = await prisma.campo.create({ data: {
           companyId: req.companyId, nombre: nombre.trim(), activo: true,
         }});
+        _registrarRecord(records, 'Campo', campo.id);
       }
       camposCache.set(key, campo);
       return campo;
@@ -4990,7 +5029,14 @@ app.post('/api/admin/importar-cliente/stock-hacienda', authMiddleware, requireCo
           const catCompleta = [especie, cat].filter(Boolean).join(' - ').trim();
           if (!catCompleta) continue;
           try {
-            await prisma.haciendaStock.upsert({
+            // Si ya existia un stock con esa combinacion, no podemos "deshacer"
+            // su valor previo. Marcamos solo los CREADOS, no los actualizados.
+            const existente = await prisma.haciendaStock.findUnique({
+              where: { companyId_campoId_categoria: {
+                companyId: req.companyId, campoId: campo.id, categoria: catCompleta,
+              }},
+            });
+            const upserted = await prisma.haciendaStock.upsert({
               where: { companyId_campoId_categoria: {
                 companyId: req.companyId, campoId: campo.id, categoria: catCompleta,
               }},
@@ -5001,12 +5047,388 @@ app.post('/api/admin/importar-cliente/stock-hacienda', authMiddleware, requireCo
               },
               update: { declarado: Math.round(stockReal), observaciones: r[idx.obs] || undefined },
             });
+            if (!existente) _registrarRecord(records, 'HaciendaStock', upserted.id);
             ok++;
           } catch (e) { errores.push({ hoja: shName, fila: i+1, error: e.message }); }
         }
       } catch (e) { errores.push({ hoja: shName, fila: 0, error: e.message }); }
     }
-    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100) });
+    await _cerrarImportLote(lote.id, records, ok, errores.length, { hojas_procesadas: wb.SheetNames });
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100), loteId: lote.id });
+  } catch (e) { next(e); }
+});
+
+// === Importar HECTAREAS SEMBRADAS por empresa/campo/cultivo ===
+// Excel con una hoja por empresa (LLSP, El Pistrin, Peiretti Gerardo, etc.) y
+// columnas: Renspa | Campo | Cultivo | Ha sembradas (header en fila 2).
+// Las filas vienen "agrupadas" por Renspa+Campo: solo aparecen en la primera
+// fila de cada grupo, las siguientes filas estan en blanco — hay que hacer
+// forward-fill. Por cada (Campo, Cultivo) crea un Lote con hectareas=Has.
+// Si el Campo no existe en la empresa actual, lo crea con el Renspa en obs.
+// IMPORTANTE: este importador usa la EMPRESA ACTIVA del usuario, NO la de la
+// hoja del Excel. Si querés cargar las 3 empresas, hay que cambiar de empresa
+// e importar 3 veces (una por hoja).
+app.post('/api/admin/importar-cliente/hectareas-sembradas', authMiddleware, requireCompany, requirePermission('produccion:create'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    let ok = 0; const errores = [];
+    const lote = await _crearImportLote(req, 'hectareas-sembradas');
+    const records = {};
+
+    const camposCache = new Map();
+    async function getOrCreateCampoConRenspa(nombre, renspa) {
+      if (!nombre) return null;
+      const key = _normalizar(nombre);
+      if (camposCache.has(key)) return camposCache.get(key);
+      let campo = await prisma.campo.findFirst({
+        where: { companyId: req.companyId, nombre: { equals: nombre, mode: 'insensitive' } },
+      });
+      if (!campo) {
+        campo = await prisma.campo.create({ data: {
+          companyId: req.companyId, nombre: String(nombre).trim(),
+          observaciones: renspa ? `RENSPA: ${renspa}` : null, activo: true,
+        }});
+        _registrarRecord(records, 'Campo', campo.id);
+      } else if (renspa && !_normalizar(campo.observaciones || '').includes('renspa')) {
+        // Actualizar Renspa si no estaba cargado
+        try {
+          await prisma.campo.update({ where: { id: campo.id }, data: {
+            observaciones: campo.observaciones ? `${campo.observaciones} · RENSPA: ${renspa}` : `RENSPA: ${renspa}`,
+          }});
+        } catch {}
+      }
+      camposCache.set(key, campo);
+      return campo;
+    }
+
+    const hojasDiag = [];
+    for (const shName of wb.SheetNames) {
+      const ws = wb.Sheets[shName];
+      const allRows = XLSX.utils.sheet_to_json(ws, { defval: null, header: 1, raw: false });
+      // Detectar header (busca fila con "Cultivo" o "cultivo" en primeras 10 filas)
+      let headerRowIdx = -1;
+      for (let r = 0; r < Math.min(10, allRows.length); r++) {
+        if ((allRows[r] || []).some(c => _normalizar(c) === 'cultivo')) { headerRowIdx = r; break; }
+      }
+      if (headerRowIdx < 0) {
+        hojasDiag.push({ hoja: shName, error: 'No se encontro la columna Cultivo' });
+        continue;
+      }
+      const header = allRows[headerRowIdx].map(c => _normalizar(c));
+      const idx = {
+        renspa:   header.findIndex(c => c && c.includes('renspa')),
+        campo:    header.findIndex(c => c === 'campo'),
+        cultivo:  header.findIndex(c => c && c.includes('cultivo')),
+        has:      header.findIndex(c => c && (c.includes('sembrad') || c.includes('ha '))),
+      };
+      // forward-fill de Renspa y Campo
+      let lastRenspa = null, lastCampo = null;
+      let okHoja = 0;
+      for (let i = headerRowIdx + 1; i < allRows.length; i++) {
+        const r = allRows[i];
+        if (!r) continue;
+        const renspaCell = idx.renspa >= 0 ? r[idx.renspa] : null;
+        const campoCell  = idx.campo  >= 0 ? r[idx.campo]  : null;
+        if (renspaCell) lastRenspa = String(renspaCell).trim();
+        if (campoCell)  lastCampo  = String(campoCell).trim();
+        const cultivo = r[idx.cultivo];
+        const has     = _parseMonto(r[idx.has]);
+        if (!lastCampo || !cultivo || !has) continue;
+        try {
+          const campo = await getOrCreateCampoConRenspa(lastCampo, lastRenspa);
+          if (!campo) continue;
+          const loteNuevo = await prisma.lote.create({ data: {
+            campoId: campo.id,
+            nombre: String(cultivo).trim(),
+            hectareas: has,
+            observaciones: `Sembrado · importado desde ${shName}`,
+            activo: true,
+          }});
+          _registrarRecord(records, 'Lote', loteNuevo.id);
+          okHoja++; ok++;
+        } catch (e) { errores.push({ hoja: shName, fila: i+1, error: e.message }); }
+      }
+      hojasDiag.push({ hoja: shName, importados: okHoja });
+    }
+    await _cerrarImportLote(lote.id, records, ok, errores.length, { hojas: hojasDiag });
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100), loteId: lote.id, diagnostico: { hojas: hojasDiag } });
+  } catch (e) { next(e); }
+});
+
+// === Importar PYME — VENTAS DE HACIENDA MENOR ===
+// Excel con 1 hoja, columnas (header fila 1):
+//   Fecha grupo | Tipo (Lechon/Cordero/Chivito/cancha) | KG | Estado (Pago/No pago)
+//   | Precio por KG | Total | Entregado a | Notas
+// Por cada fila crea:
+//   - Producto categoria=hacienda con nombre=Tipo (solo si no existe)
+//   - Movimiento egreso del producto con cantidad=KG, precio, total
+//   - Si Estado != "Pago", suma a CtaCte como "libre" con el "Entregado a" como nombre
+app.post('/api/admin/importar-cliente/pyme-ventas', authMiddleware, requireCompany, requirePermission('stock:create'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    let ok = 0; const errores = [];
+    const lote = await _crearImportLote(req, 'pyme-ventas');
+    const records = {};
+
+    const productosCache = new Map();
+    async function getOrCreateProducto(tipo) {
+      const key = _normalizar(tipo);
+      if (productosCache.has(key)) return productosCache.get(key);
+      // Mapear "cancha" -> "Cancha", capitalizar
+      const nombre = String(tipo).trim().replace(/^\w/, c => c.toUpperCase());
+      let prod = await prisma.producto.findFirst({
+        where: { companyId: req.companyId, nombre: { equals: nombre, mode: 'insensitive' } },
+      });
+      if (!prod) {
+        prod = await prisma.producto.create({ data: {
+          companyId: req.companyId, categoria: 'hacienda', nombre, unidad: 'kg',
+        }});
+        _registrarRecord(records, 'Producto', prod.id);
+      }
+      productosCache.set(key, prod);
+      return prod;
+    }
+
+    const shVentas = wb.SheetNames[0];
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[shVentas], { defval: null, raw: false });
+    if (rows.length === 0) {
+      await _cerrarImportLote(lote.id, records, 0, 0, { mensaje: 'Hoja vacia' });
+      return res.json({ ok: true, importados: 0, fallos: 0, loteId: lote.id });
+    }
+    function findKey(row, ...keywords) {
+      const keys = Object.keys(row);
+      for (const kw of keywords) {
+        const kwN = _normalizar(kw);
+        const k = keys.find(key => _normalizar(key).includes(kwN));
+        if (k) return k;
+      }
+      return null;
+    }
+    const kFecha   = findKey(rows[0], 'fecha');
+    const kTipo    = findKey(rows[0], 'tipo');
+    const kKg      = findKey(rows[0], 'kg');
+    const kEstado  = findKey(rows[0], 'estado');
+    const kPrecio  = findKey(rows[0], 'precio por kg', 'precio');
+    const kTotal   = findKey(rows[0], 'total');
+    const kCliente = findKey(rows[0], 'entregado a', 'cliente');
+    const kNotas   = findKey(rows[0], 'notas', 'observ');
+    if (!kFecha || !kTipo || !kKg) {
+      return res.status(400).json({ ok: false,
+        error: 'No se encontraron las columnas Fecha, Tipo y KG.',
+        diagnostico: { columnas_excel: Object.keys(rows[0]) } });
+    }
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      try {
+        const fecha = _parseFechaArg(r[kFecha]);
+        const tipo  = r[kTipo];
+        const kg    = _parseMonto(r[kKg]);
+        if (!fecha || !tipo || !kg) continue;
+        const prod = await getOrCreateProducto(tipo);
+        const precio = kPrecio ? _parseMonto(r[kPrecio]) : null;
+        const total  = kTotal  ? _parseMonto(r[kTotal])  : (precio ? kg * precio : null);
+        const cliente = kCliente ? (r[kCliente] || '') : '';
+        const notas   = kNotas   ? (r[kNotas]   || '') : '';
+        const estado  = kEstado  ? _normalizar(r[kEstado] || '') : '';
+        const mov = await prisma.movimiento.create({ data: {
+          companyId: req.companyId, productoId: prod.id,
+          fecha, tipo: 'egreso', motivo: 'venta',
+          cantidad: kg, precio, total,
+          observaciones: [cliente && `Cliente: ${cliente}`, notas].filter(Boolean).join(' · ') || null,
+          userId: req.user?.id || null,
+        }});
+        _registrarRecord(records, 'Movimiento', mov.id);
+        // Si NO está pago, sumar a cuentas a cobrar
+        if (estado && !estado.includes('pago') && cliente && total) {
+          const cc = await prisma.ctaCte.create({ data: {
+            companyId: req.companyId, contactoTipo: 'libre',
+            nombreLibre: String(cliente).trim(),
+            fecha, detalle: `Venta ${prod.nombre} ${kg} kg`,
+            categoria: 'Otro', debe: total, pagado: false,
+            observaciones: 'Importado desde PyME ventas (sin cobrar)',
+          }});
+          _registrarRecord(records, 'CtaCte', cc.id);
+        }
+        ok++;
+      } catch (e) { errores.push({ fila: i+2, error: e.message }); }
+    }
+    await _cerrarImportLote(lote.id, records, ok, errores.length, null);
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100), loteId: lote.id });
+  } catch (e) { next(e); }
+});
+
+// === Importar PROVEEDORES desde hoja "Proveedores" de CUENTAS CORRIENTES.xlsx ===
+// Columnas: Proveedores | Telefono | Mail | Cuit | Horarios
+app.post('/api/admin/importar-cliente/proveedores', authMiddleware, requireCompany, requirePermission('contactos:create'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    let ok = 0; const errores = [];
+    const lote = await _crearImportLote(req, 'proveedores');
+    const records = {};
+
+    // Buscar la hoja Proveedores (sino usar la primera)
+    const shProv = wb.SheetNames.find(n => /provee/i.test(n)) || wb.SheetNames[0];
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[shProv], { defval: null, raw: false });
+    if (rows.length === 0) {
+      await _cerrarImportLote(lote.id, records, 0, 0, { mensaje: 'Hoja vacia' });
+      return res.json({ ok: true, importados: 0, fallos: 0, loteId: lote.id });
+    }
+    function findKey(row, ...keywords) {
+      const keys = Object.keys(row);
+      for (const kw of keywords) {
+        const kwN = _normalizar(kw);
+        const k = keys.find(key => _normalizar(key).includes(kwN));
+        if (k) return k;
+      }
+      return null;
+    }
+    const kNombre   = findKey(rows[0], 'proveedor', 'razon social', 'razonsocial', 'nombre');
+    const kTel      = findKey(rows[0], 'telefono', 'tel');
+    const kMail     = findKey(rows[0], 'mail', 'email');
+    const kCuit     = findKey(rows[0], 'cuit');
+    const kHorarios = findKey(rows[0], 'horario');
+    if (!kNombre) {
+      return res.status(400).json({ ok: false,
+        error: 'No se encontró la columna Proveedores/Nombre/Razón social.',
+        diagnostico: { hoja_procesada: shProv, columnas_excel: Object.keys(rows[0]) } });
+    }
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      try {
+        const razon = r[kNombre];
+        if (!razon || !String(razon).trim()) continue;
+        const razonStr = String(razon).trim();
+        // Evitar duplicados: si ya existe un proveedor con la misma razon social, saltar
+        const existente = await prisma.proveedor.findFirst({
+          where: { companyId: req.companyId, razonSocial: { equals: razonStr, mode: 'insensitive' } },
+        });
+        if (existente) continue;
+        const tel  = kTel  ? r[kTel]  : null;
+        const mail = kMail ? r[kMail] : null;
+        const cuit = kCuit ? r[kCuit] : null;
+        const hor  = kHorarios ? r[kHorarios] : null;
+        const prov = await prisma.proveedor.create({ data: {
+          companyId: req.companyId, razonSocial: razonStr,
+          cuit: cuit ? String(cuit).trim() : null,
+          telefono: tel ? String(tel).trim() : null,
+          email: mail ? String(mail).trim() : null,
+          observaciones: hor ? `Horarios: ${hor}` : null,
+          activo: true,
+        }});
+        _registrarRecord(records, 'Proveedor', prov.id);
+        ok++;
+      } catch (e) { errores.push({ fila: i+2, error: e.message }); }
+    }
+    await _cerrarImportLote(lote.id, records, ok, errores.length, { hoja_procesada: shProv });
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100), loteId: lote.id });
+  } catch (e) { next(e); }
+});
+
+// === HISTORIAL DE IMPORTACIONES ===
+// Lista los ultimos 50 lotes de la empresa activa, con resumen y estado.
+app.get('/api/admin/importaciones', authMiddleware, requireCompany, async (req, res, next) => {
+  try {
+    const lotes = await prisma.importLote.findMany({
+      where: { companyId: req.companyId },
+      orderBy: { fecha: 'desc' },
+      take: 50,
+    });
+    // Incluir nombre del user que importo
+    const userIds = [...new Set(lotes.map(l => l.userId).filter(Boolean))];
+    const users = userIds.length
+      ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, nombre: true, apellido: true, alias: true } })
+      : [];
+    const usersMap = new Map(users.map(u => [u.id, u]));
+    res.json({ ok: true, data: lotes.map(l => ({
+      id: l.id, tipo: l.tipo, fecha: l.fecha,
+      archivoNombre: l.archivoNombre,
+      importados: l.importados, fallos: l.fallos,
+      estado: l.estado, fechaDeshecho: l.fechaDeshecho,
+      usuario: l.userId ? (() => { const u = usersMap.get(l.userId); return u ? [u.nombre, u.apellido].filter(Boolean).join(' ') || u.alias : null; })() : null,
+      // Cantidad por modelo para mostrar el "alcance" del lote
+      recordsResumen: l.recordsCreados ? Object.fromEntries(Object.entries(l.recordsCreados).map(([k, v]) => [k, (v || []).length])) : null,
+    })) });
+  } catch (e) { next(e); }
+});
+
+// === DESHACER LOTE DE IMPORTACION ===
+// Borra todos los registros que el lote creo, en orden inverso (hijos primero
+// para evitar FK violations). Marca el lote como deshecho.
+// IMPORTANTE: el deshacer NO restaura registros que el lote habia actualizado
+// (HaciendaStock con upsert que pisaba un valor previo). Esos quedan como
+// estan. Solo se borran registros que fueron CREADOS por la importacion.
+app.post('/api/admin/importaciones/:id/deshacer', authMiddleware, requireCompany, async (req, res, next) => {
+  try {
+    const lote = await prisma.importLote.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!lote) return res.status(404).json({ ok: false, error: 'Lote no encontrado' });
+    if (lote.estado !== 'activo') return res.status(400).json({ ok: false, error: 'El lote ya fue deshecho previamente' });
+
+    const records = lote.recordsCreados || {};
+    // Mapa de modelo Prisma -> nombre del accessor de Prisma Client
+    // (la convencion es camelCase del nombre del modelo).
+    const accessorByModel = {
+      'BancoMovimiento': 'bancoMovimiento',
+      'BancoCuenta':     'bancoCuenta',
+      'CtaCte':          'ctaCte',
+      'HaciendaStock':   'haciendaStock',
+      'Campo':           'campo',
+      'Movimiento':      'movimiento',
+      'Cheque':          'cheque',
+      'Viaje':           'viaje',
+      'Cliente':         'cliente',
+      'Proveedor':       'proveedor',
+      'Producto':        'producto',
+      'Credito':         'credito',
+      'CuotaCredito':    'cuotaCredito',
+    };
+    // Orden de borrado: hijos primero. Si un modelo no esta en esta lista lo
+    // borramos al final con "los demas".
+    const ordenBorrado = [
+      'BancoMovimiento', 'CuotaCredito', 'Movimiento',
+      'Cheque', 'Viaje', 'CtaCte',
+      'HaciendaStock',
+      'Credito',
+      'BancoCuenta',  // antes de Campo/Producto/Cliente/Proveedor porque puede tener FK indirecta
+      'Producto', 'Cliente', 'Proveedor',
+      'Campo',
+    ];
+    let borrados = 0;
+    const errores = [];
+    for (const modelo of ordenBorrado) {
+      const ids = records[modelo];
+      if (!ids || !ids.length) continue;
+      const accessor = accessorByModel[modelo];
+      if (!accessor || !prisma[accessor]) {
+        errores.push({ modelo, error: 'Accessor de Prisma no encontrado' });
+        continue;
+      }
+      try {
+        const r = await prisma[accessor].deleteMany({ where: { id: { in: ids } } });
+        borrados += r.count;
+      } catch (e) {
+        errores.push({ modelo, error: String(e.message || e) });
+      }
+    }
+    // Borrar tambien cualquier modelo "extra" no listado
+    for (const [modelo, ids] of Object.entries(records)) {
+      if (ordenBorrado.includes(modelo)) continue;
+      const accessor = accessorByModel[modelo];
+      if (!accessor || !prisma[accessor]) continue;
+      try {
+        const r = await prisma[accessor].deleteMany({ where: { id: { in: ids } } });
+        borrados += r.count;
+      } catch (e) { errores.push({ modelo, error: String(e.message || e) }); }
+    }
+    await prisma.importLote.update({
+      where: { id: lote.id },
+      data: { estado: 'deshecho', fechaDeshecho: new Date() },
+    });
+    res.json({ ok: true, borrados, errores: errores.length ? errores : undefined });
   } catch (e) { next(e); }
 });
 

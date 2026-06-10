@@ -157,6 +157,13 @@ try {
   if ($LASTEXITCODE -ne 0) { Err "prisma migrate deploy fallo"; exit 4 }
   Ok "Migraciones aplicadas."
 
+  # Sincronizar cualquier cambio de schema que no este en una migracion formal.
+  # Algunos campos agregados por db push en dev tambien necesitan correr aca.
+  # Es idempotente: si no hay cambios, no hace nada.
+  Info "Sincronizando schema de la base (db push)..."
+  & npx prisma db push --accept-data-loss --skip-generate 2>&1 | ForEach-Object { Write-Host "    $_" }
+  if ($LASTEXITCODE -ne 0) { Warn "db push fallo (codigo $LASTEXITCODE), continuamos igual." } else { Ok "Schema sincronizado." }
+
   Info "Regenerando Prisma Client..."
   & npx prisma generate
   Ok "Prisma Client OK."
