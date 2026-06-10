@@ -125,6 +125,8 @@ try {
     Info "git pull..."
     & git pull --ff-only 2>&1 | ForEach-Object { Write-Host "    $_" }
     if ($LASTEXITCODE -ne 0) { Err "git pull fallo"; exit 2 }
+    Info "Actualizando submodulos (web/img, manual, etc)..."
+    & git submodule update --init --recursive 2>&1 | ForEach-Object { Write-Host "    $_" }
     Ok "Codigo actualizado."
   } else {
     Warn "No es un repositorio git. Descargando ZIP de la ultima release..."
