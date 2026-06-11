@@ -195,10 +195,13 @@ children.push(
     new TextRun({ text: 'Aurora PostgreSQL + EC2 (Linux o Windows) + Cloudflare Tunnel', font: FONT, size: 22, color: '475569' }),
   ] }),
   new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 }, children: [
-    new TextRun({ text: 'Versión 2.0  ·  Junio 2026', font: FONT, size: 22, color: '475569' }),
+    new TextRun({ text: 'Versión 2.1  ·  Junio 2026', font: FONT, size: 22, color: '475569' }),
   ] }),
   new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 }, children: [
-    new TextRun({ text: 'Sistema AgroCore v0.7.2', font: FONT, size: 20, color: '64748B' }),
+    new TextRun({ text: 'Sistema AgroCore v0.7.4', font: FONT, size: 20, color: '64748B' }),
+  ] }),
+  new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 }, children: [
+    new TextRun({ text: 'Incluye facturación electrónica WSFE, lecciones aprendidas en implementaciones reales y guía de entrega al cliente', font: FONT, size: 18, color: '64748B', italics: true }),
   ] }),
   new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 1600 }, children: [
     new TextRun({ text: 'agrocore.ar', font: FONT, size: 20, color: COLOR_PRIMARY, bold: true }),
@@ -705,13 +708,24 @@ Register-ScheduledTask -TaskName "AgroCore-Backup-S3" -Action $action -Trigger $
 
 children.push(h2('10.2 Actualizaciones de AgroCore', COLOR_PRIMARY));
 children.push(p('Desde el sistema mismo: Configuración → Sistema → Verificar actualizaciones. Si hay una versión nueva, el cliente ve un aviso y puede ejecutar el script de actualización.'));
+children.push(p('El script Update-AgroCore.ps1 (Windows) y los pasos manuales (Linux) cubren:'));
+children.push(bullet('Backup automático del .sql ANTES de hacer cualquier cambio (queda en C:\\AgroCore\\backups\\ o /opt/agrocore/backups/).'));
+children.push(bullet('git pull para bajar el código nuevo.'));
+children.push(bullet('git submodule update --init --recursive para los assets de marca (logos, manual web, landing).'));
+children.push(bullet('npm install --omit=dev para nuevas dependencias.'));
+children.push(bullet('prisma migrate deploy para migraciones formales.'));
+children.push(bullet('prisma db push --accept-data-loss --skip-generate para cambios de schema que no estén en migraciones formales (idempotente).'));
+children.push(bullet('prisma generate para regenerar el cliente.'));
+children.push(bullet('Reinicio del servicio y verificación de salud.'));
 
 children.push(h3('Linux'));
 children.push(code(`cd /opt/agrocore
 sudo systemctl stop agrocore
 git pull
+git submodule update --init --recursive
 cd backend && npm install --omit=dev
 npx prisma migrate deploy
+npx prisma db push --accept-data-loss --skip-generate
 npx prisma generate
 sudo systemctl start agrocore
 sudo systemctl status agrocore`));
@@ -778,12 +792,181 @@ children.push(bullet('Verificar que no haya snapshots manuales acumulados (Auror
 children.push(bullet('Verificar que no haya Elastic IPs sin asociar (cuestan USD 3.60/mes cada una sin usar).'));
 children.push(bullet('Verificar que CloudWatch no esté guardando logs detallados sin necesidad.'));
 children.push(bullet('Para clientes pequeños: considerar migrar de Aurora a RDS PostgreSQL estándar (db.t3.small) — ahorra ~USD 40/mes.'));
+children.push(bullet('Bajar el período de retención de Performance Insights de 465 días (default si no se toca) a 7 días.'));
+children.push(bullet('Desactivar "Database Insights: Avanzado" — bajarlo a "Estándar". Suma USD 20-30/mes sin aportar valor a clientes chicos.'));
+
+children.push(h2('12.6 Aurora Serverless v2 se duerme — Prisma tira "Can\'t reach database server"', COLOR_PRIMARY));
+children.push(p('Aurora Serverless v2 con mínimo 0 ACUs se pausa después de 5 minutos sin tráfico. La primera conexión post-pausa tarda 10-15 segundos en despertar, y Prisma tiene un timeout default de 5 segundos → tira "Can\'t reach database server".'));
+children.push(p('Solución estructural: agregar "&connect_timeout=30" al final del DATABASE_URL en el .env. Eso le da margen a Prisma para esperar el despertar.'));
+children.push(p('Solución ocasional (despertar a mano antes del migrate): correr "psql ... -c \\"SELECT 1;\\"" para despertar Aurora y correr inmediatamente el comando que necesitabas.'));
+
+children.push(h2('12.7 Aurora no recuerdo la password del master', COLOR_PRIMARY));
+children.push(p('Pasa cuando se elige "Administrado en AWS Secrets Manager" durante la creación del clúster. La password queda guardada en Secrets Manager, no en tu cabeza. Pasos para recuperarla:'));
+children.push(num('AWS Secrets Manager → Secretos → buscás uno con nombre "rds!cluster-..." o que contenga el nombre del clúster.'));
+children.push(num('Si NO existe → la opción fue "Autoadministrado" sin contraseña tipeada (modo IAM auth only). En ese caso, modificar el clúster vía CLI: aws rds modify-db-cluster --db-cluster-identifier <id> --master-user-password "NEW" --apply-immediately --region <region>.'));
+children.push(num('Alternativa más limpia si la base está vacía: borrar y recrear el clúster con "Autoadministrado" y password tipeada (y desmarcar IAM auth si no la vas a usar).'));
+
+children.push(h2('12.8 Logos rotos en el login (submódulo web/ vacío)', COLOR_PRIMARY));
+children.push(p('Si los logos no aparecen en el login luego de una instalación nueva, es porque la carpeta web/ es un submódulo de git y no se bajó con el clone inicial. Verificación rápida:'));
+children.push(code(`Test-Path C:\\AgroCore\\web\\img\\logo-icon-128.png   # debe devolver True`));
+children.push(p('Si devuelve False, hay dos casos:'));
+children.push(bullet('El archivo .gitmodules existe en el repo principal: correr "git submodule update --init --recursive" para bajar el submódulo.'));
+children.push(bullet('El archivo .gitmodules NO existe: hay que crearlo en el repo principal con la URL del submódulo, commitearlo y pushear. Después en la EC2 hacer "git pull" y "git submodule update".'));
+children.push(p('El script Update-AgroCore.ps1 (versión 0.7.3+) ya ejecuta el submodule update automáticamente después de cada git pull.'));
+
+children.push(h2('12.9 Cloudflare Tunnel: servicio "Running" pero el túnel no conecta', COLOR_PRIMARY));
+children.push(p('Hay un bug conocido del comando "cloudflared service install" en Windows: a veces ignora el flag --config al registrar el servicio. Como resultado, el servicio arranca cloudflared.exe sin argumentos, no sabe a qué túnel conectar y queda corriendo en vacío (Get-Service dice Running pero tunnel info muestra "0 active connections").'));
+children.push(p('Diagnóstico:'));
+children.push(code(`sc.exe qc cloudflared
+# Mirá la línea BINARY_PATH_NAME — si no contiene --config y "tunnel run <nombre>", el servicio está mal armado.`));
+children.push(p('Solución definitiva — desinstalar y recrear el servicio manualmente con sc.exe especificando el comando completo:'));
+children.push(code(`# Limpiar todo lo viejo
+sc.exe stop cloudflared
+sc.exe delete cloudflared
+Remove-Item -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\Cloudflared" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\cloudflared" -Recurse -Force -ErrorAction SilentlyContinue
+
+# Crear el servicio con el comando COMPLETO
+$cloudflaredExe = (Get-Command cloudflared).Source
+$binaryPath = '"' + $cloudflaredExe + '" --config "C:\\ProgramData\\cloudflared\\config.yml" tunnel run <NOMBRE-DEL-TUNEL>'
+sc.exe create cloudflared binPath= $binaryPath start= auto DisplayName= "Cloudflared agent"
+sc.exe description cloudflared "Cloudflare Tunnel"
+Start-Service cloudflared
+
+# Verificar
+cloudflared tunnel info <NOMBRE-DEL-TUNEL>
+# Tiene que mostrar al menos 1 conexión activa`));
+children.push(p('Adicionalmente, copiar los archivos del túnel (cert.pem, config.yml, <ID>.json) de C:\\Users\\Administrator\\.cloudflared\\ a C:\\ProgramData\\cloudflared\\ porque el servicio SYSTEM no tiene permisos sobre la carpeta del usuario.'));
+
+children.push(h2('12.10 Prisma generate falla con EPERM rename .dll.node', COLOR_PRIMARY));
+children.push(p('"EPERM: operation not permitted, rename query_engine-windows.dll.node.tmpXXX". Pasa en Windows porque Node está corriendo y tiene el .dll lockeado.'));
+children.push(p('Solución:'));
+children.push(code(`taskkill /F /IM node.exe 2>$null
+Start-Sleep -Seconds 3
+cd C:\\AgroCore\\backend
+Remove-Item -Recurse -Force node_modules\\.prisma -ErrorAction SilentlyContinue
+npx prisma generate
+# Después, arrancar AgroCore`));
+
+children.push(h2('12.11 Update-AgroCore.ps1 se cuelga en "git pull" sin error real', COLOR_PRIMARY));
+children.push(p('Pasa cuando ErrorActionPreference="Stop" interpreta el output informativo de git por stderr ("From github.com/...") como excepción y termina el script aunque git realmente haya andado bien. Solución: cambiar temporalmente a Continue alrededor del bloque de git, verificar $LASTEXITCODE manualmente. El Update-AgroCore.ps1 v0.7.5+ ya viene con este fix.'));
+children.push(p('Workaround si te pasa en una instalación con script viejo — correr a mano:'));
+children.push(code(`cd C:\\AgroCore
+git pull
+git submodule update --init --recursive
+cd backend
+npm install --omit=dev
+npx prisma migrate deploy
+npx prisma db push --accept-data-loss --skip-generate
+npx prisma generate
+cd C:\\AgroCore
+.\\INICIAR-AGROCORE.vbs`));
+
+children.push(h2('12.12 Después del update, faltan campos en la base (ej. "Column does not exist")', COLOR_PRIMARY));
+children.push(p('Sucede cuando se agregan campos al schema.prisma usando "db push" en el ambiente de desarrollo. Esos cambios no quedan en migraciones formales, así que "migrate deploy" no los aplica en producción. Solución: el Update-AgroCore.ps1 v0.7.4+ corre automáticamente "prisma db push --accept-data-loss --skip-generate" después del migrate deploy.'));
+children.push(p('Si tu instalación tiene una versión vieja del script, correr a mano:'));
+children.push(code(`cd C:\\AgroCore\\backend
+npx prisma db push --accept-data-loss
+npx prisma generate
+# Reiniciar AgroCore`));
 
 // ============================================================
-// --- 13. CHECKLIST DE ENTREGA ---
+// --- 13. FACTURACIÓN ELECTRÓNICA: WSFE + WSCTG con ARCA ---
 // ============================================================
 children.push(new Paragraph({ children: [new PageBreak()] }));
-children.push(h1('13. Checklist de entrega al cliente'));
+children.push(h1('13. Facturación electrónica — WSFE y WSCTG con ARCA'));
+children.push(p('Esta sección documenta cómo dejar el sistema emitiendo facturas electrónicas y verificando CTGs (Carta de Porte de Granos) contra los servidores reales de AFIP/ARCA. La integración ya está implementada en AgroCore — solo hay que generar el certificado en AFIP y cargarlo en el sistema.'));
+
+children.push(h2('13.1 ¿AFIP/ARCA tiene un registro de qué software se usa?', COLOR_PRIMARY));
+children.push(note('Respuesta corta: NO. ARCA autentica al CUIT vía certificado digital, no al software. No hay un registro de "sistemas de gestión homologados" para WSFE/WSCTG. Cualquier desarrollador con un cliente que respete la documentación pública del SOAP puede integrar.', COLOR_PRIMARY, 'DCFCE7'));
+children.push(p('Detalles técnicos:'));
+children.push(bullet('El alias que ponés al crear el CSR (ej. "agrocore") es solo una etiqueta interna del certificado — ARCA lo guarda pero no toma acciones en base a eso.'));
+children.push(bullet('Cada llamada al webservice es "el CUIT X autenticado con su cert pide CAE para una factura Y" — ARCA no ve el software detrás.'));
+children.push(bullet('No existe homologación de software para WSFE/WSCTG. Sí existe para Controladores Fiscales (cajas con impresora fiscal), pero eso es hardware aparte.'));
+children.push(bullet('Las facturas emitidas aparecen igual en "Mis Comprobantes" del portal AFIP como si las hubieras cargado vía formulario web.'));
+
+children.push(h2('13.2 Generar el certificado en AFIP', COLOR_ACCENT));
+children.push(p('Este paso se hace una vez por empresa. Si la implementación es multi-empresa (LLSP + El Pistrin + Peiretti Gerardo) hay que hacer un cert por cada CUIT.'));
+
+children.push(h3('Paso 1 — Generar la clave privada y la solicitud (CSR)'));
+children.push(num('Logueate en AgroCore como Admin de la empresa.'));
+children.push(num('Andá a Configuración → 🏛️ ARCA.'));
+children.push(num('Elegí el ambiente: Homologación (sandbox para probar — recomendado primero) o Producción (real).'));
+children.push(num('Paso 1 del wizard: ingresá el nombre de la empresa y el CUIT, click "Generar".'));
+children.push(num('El sistema te descarga dos archivos: privada.key (la clave privada, NO la subas a AFIP, solo a AgroCore) y solicitud.csr (la solicitud, esa SÍ va a AFIP).'));
+children.push(num('Anotá el alias que el sistema le puso al cert (típicamente "agrocore" o "agrocore-<empresa>"). Vas a necesitarlo en el paso siguiente.'));
+
+children.push(h3('Paso 2 — Registrar el certificado en AFIP'));
+children.push(num('Logueate al portal AFIP con clave fiscal nivel 3. Para Homologación → wsaahomo.afip.gob.ar / portalcf.afip.gob.ar Homologación. Para Producción → portalcf.afip.gob.ar normal.'));
+children.push(num('Buscá el servicio "Administración de Certificados Digitales" (lo agregás en Administrador de Relaciones si no lo tenés).'));
+children.push(num('"Agregar alias" → ponés el mismo alias que mostró AgroCore (ej. agrocore-llsp), y subís la solicitud.csr generada en el paso 1.'));
+children.push(num('AFIP procesa y te devuelve un archivo cert.crt (el certificado X.509 firmado por la CA de AFIP). Guardalo.'));
+children.push(num('Asociar el alias a los servicios que vas a usar: ir a "Administrador de Relaciones de Clave Fiscal" → "Adherir nuevo servicio" → buscar "wsfe" → seleccionar usuario representante (el alias agrocore-llsp) → confirmar. Repetir para "wsctg" si vas a verificar Cartas de Porte.'));
+
+children.push(h3('Paso 3 — Cargar el certificado en AgroCore'));
+children.push(num('Volvé a Configuración → 🏛️ ARCA del sistema.'));
+children.push(num('Subí el cert.crt en el campo correspondiente (es el archivo que descargaste de AFIP).'));
+children.push(num('Confirmá el CUIT y el ambiente (Homo o Prod).'));
+children.push(num('Click "Guardar configuración".'));
+children.push(num('Click "Probar conexión ARCA" → autentica con WSAA + hace heartbeat a WSFE Dummy. Si ambas cosas responden OK, el cert está bien instalado.'));
+
+children.push(h2('13.3 Verificar CTGs (Cartas de Porte)', COLOR_ACCENT));
+children.push(p('Una vez configurado el cert para WSCTG, en la sección Logística → Viajes podés cargar el número de CTG/Carta de Porte y desde el formulario "Verificar CTGs" tirás la consulta a AFIP. El sistema te devuelve estado del CTG, kg cargados al origen y kg recibidos en destino. Si recibió menos que lo cargado, el sistema marca diferencia.'));
+children.push(p('Cuándo conviene verificar:'));
+children.push(bullet('Al recibir el aviso del recepcionado en la cerealera/destino (para validar kg).'));
+children.push(bullet('Antes de emitir factura por flete (para confirmar que el CTG está cerrado).'));
+children.push(bullet('Como auditoría periódica de viajes pendientes de liquidación.'));
+
+children.push(h2('13.4 Primera factura electrónica de producción', COLOR_ACCENT));
+children.push(p('Una vez que el cert está en Producción y conectado, podés emitir tu primera factura. Recomendado:'));
+children.push(num('Empezá con una factura tipo C (Monotributista) o B (RI a consumidor final) de bajo monto.'));
+children.push(num('Ventas → Facturación → Nueva factura → completá cliente, items, total.'));
+children.push(num('Tipo de comprobante: empezá con A/B/C según tu situación fiscal.'));
+children.push(num('Click "Emitir y solicitar CAE".'));
+children.push(num('AgroCore arma el XML, lo manda a WSFEv1, recibe el CAE y la fecha de vencimiento del CAE, y guarda todo en la factura.'));
+children.push(num('Si todo OK, descargás el PDF de la factura ya con el CAE impreso. Si hay error de validación de ARCA (ej. CUIT inválido, fecha fuera de rango, monto erróneo), el sistema te muestra el mensaje exacto que devolvió ARCA.'));
+
+children.push(h2('13.5 Errores comunes al facturar', COLOR_ACCENT));
+children.push(bullet('"Error 10001: CUIT no autorizado" — el alias no está asociado al servicio wsfe en AFIP. Ir a Administrador de Relaciones y adherir wsfe.'));
+children.push(bullet('"Error 10018: CertificadoEmisor inválido" — el cert está en homologación pero estás en producción (o al revés). Verificar el toggle Homo/Prod en Configuración → ARCA.'));
+children.push(bullet('"Token expirado" — el TA (Ticket de Acceso) tiene 12hs de validez. AgroCore lo cachea y renueva solo. Si ves este error reiterado, hay un problema con el reloj del sistema.'));
+children.push(bullet('"Error 10072: Fecha de comprobante fuera de rango" — las facturas no pueden ser de hace más de 10 días ni del futuro. Cargá con fecha de hoy.'));
+children.push(bullet('"FE_Error 1002: Punto de venta no autorizado" — primero hay que dar de alta el punto de venta electrónico en AFIP (servicio "Comprobantes en línea" → administrar puntos de venta).'));
+
+// ============================================================
+// --- 14. ENTREGA AL CLIENTE: ASISTENTES Y MODO INVISIBLE ---
+// ============================================================
+children.push(new Paragraph({ children: [new PageBreak()] }));
+children.push(h1('14. Entrega al cliente: asistentes y modo invisible del mantenedor'));
+children.push(p('A partir de v0.7.2 AgroCore incluye dos herramientas específicas para el momento de entrega productivo del sistema al cliente. Estas dos cosas son las que diferencian "el sistema le funciona al cliente" de "el sistema está blindado contra accidentes y mal uso".'));
+
+children.push(h2('14.1 Asistente "Preparar para entrega al cliente"', COLOR_PRIMARY));
+children.push(p('Ubicación: Configuración → Sistema → 🚀 Iniciar asistente. Solo lo ve el Super Admin.'));
+children.push(p('Analiza la base y muestra checkboxes para limpiar todo lo que NO debería quedar en una instalación productiva:'));
+children.push(bullet('Usuarios "Admin" y "Super" del seed (los que vienen creados por defecto con passwords admin123/super123).'));
+children.push(bullet('Roles "de sistema" sin usuarios asignados (si el cliente no usa "Contable" o "Operaciones", se borran).'));
+children.push(bullet('Empresas con nombre que contiene "Demo", "Prueba" o "Test" (las que quedaron de las pruebas internas).'));
+children.push(bullet('Te avisa si tu Super Admin sigue usando la password por defecto super123 (necesita ser cambiada a mano por seguridad, el asistente no toca passwords).'));
+children.push(p('El asistente pide tipear "PREPARAR" para confirmar. Al terminar muestra un resumen con éxitos y errores. Después, recargás y el sistema queda limpio.'));
+
+children.push(h2('14.2 Modo invisible para el Super Admin de mantenimiento', COLOR_PRIMARY));
+children.push(p('Ubicación: tu avatar arriba a la derecha → Mi cuenta → 🥷 Modo invisible (solo aparece si sos Super Admin).'));
+children.push(p('Cuando lo activás:'));
+children.push(bullet('Tu usuario desaparece del listado de Usuarios para todos los demás (incluyendo otros Super Admin).'));
+children.push(bullet('Nadie te puede borrar, editar ni resetear la contraseña.'));
+children.push(bullet('Solo vos mismo te ves al loguearte. Podés activar/desactivar el flag cuando quieras desde tu propio perfil.'));
+children.push(p('Pensado para que el equipo de implementación se reserve un acceso de mantenimiento del sistema que el cliente no pueda accidentalmente eliminar ni un atacante que comprometa una cuenta administradora pueda quitar.'));
+children.push(p('Workflow recomendado: al cerrar la implementación, dejás creado tu Super Admin con email y password secretos, activás el modo invisible, y solo después le pasás credenciales al cliente. Si en algún momento el cliente borra todos los super admin que tiene, tu acceso de emergencia sigue intacto.'));
+
+children.push(h2('14.3 Hint de usuarios de prueba en el login', COLOR_PRIMARY));
+children.push(p('En la pantalla de login, abajo, aparece el hint "Usuarios de prueba: Admin/admin123, Super/super123". Es útil en demo pero se ve raro en producción. Solución: este hint se muestra solo si esos usuarios existen realmente. Al borrarlos con el Asistente (sección 14.1), el hint desaparece automáticamente del login. No hay que tocar código ni archivos de configuración.'));
+children.push(p('Verificación: abrí https://cliente.agrocore.ar en una pestaña incógnita después de haber limpiado los usuarios — el hint ya no debería aparecer.'));
+
+// ============================================================
+// --- 15. CHECKLIST DE ENTREGA ---
+// ============================================================
+children.push(new Paragraph({ children: [new PageBreak()] }));
+children.push(h1('15. Checklist de entrega al cliente'));
 children.push(p('Antes de cerrar la implementación y entregar al cliente, verificar:'));
 children.push(bullet('AgroCore responde en https://cliente.agrocore.ar.'));
 children.push(bullet('Login con Super Admin del cliente funciona; la password ya NO es super123.'));
@@ -800,11 +983,11 @@ children.push(bullet('Manual de Usuario v1.9 enviado al cliente en PDF.'));
 children.push(bullet('Credenciales del cliente entregadas en forma segura (NUNCA por email plano — usar 1Password, Bitwarden o similar).'));
 
 // ============================================================
-// --- 14. CIERRE ---
+// --- 16. CIERRE ---
 // ============================================================
 children.push(new Paragraph({ children: [new PageBreak()] }));
-children.push(h1('14. Notas finales'));
-children.push(p('Esta guía cubre la implementación productiva de AgroCore en AWS para un cliente concreto. Se mantiene actualizada con el sistema en la versión 0.7.2.'));
+children.push(h1('16. Notas finales'));
+children.push(p('Esta guía cubre la implementación productiva de AgroCore en AWS para un cliente concreto. Se mantiene actualizada con el sistema en la versión 0.7.4 e incluye las lecciones aprendidas durante implementaciones reales (Peiretti, junio 2026).'));
 children.push(p('Para cualquier duda durante la implementación, los logs detallados están en:'));
 children.push(bullet('Linux: /var/log/agrocore.log + journalctl -u agrocore'));
 children.push(bullet('Windows: console output del proceso node (correrlo a mano la primera vez)'));
