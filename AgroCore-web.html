@@ -1122,7 +1122,7 @@ async function checkForUpdates() {
         </div>`,
       footer: esSuper
         ? `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-           <button class="btn btn-primary" onclick="instalarActualizacionEjecutar(${JSON.stringify(r.latest)})">🚀 Instalar ahora (v${esc(r.latest)})</button>`
+           <button class="btn btn-primary" onclick='instalarActualizacionEjecutar(${JSON.stringify(r.latest)})'>🚀 Instalar ahora (v${esc(r.latest)})</button>`
         : `<button class="btn btn-primary" onclick="closeModal()">Entendido</button>`,
     });
   } catch (e) { toast(e.message, 'error'); }
