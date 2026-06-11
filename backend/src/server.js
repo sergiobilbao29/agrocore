@@ -24,8 +24,8 @@ const app = express();
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.4';
-const AGROCORE_BUILD = new Date('2026-06-10').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.5';
+const AGROCORE_BUILD = new Date('2026-06-11').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -680,7 +680,159 @@ app.post('/api/empresas', async (req, res, next) => {
     if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
     const data = empresaSchema.parse(req.body);
     const c = await prisma.company.create({ data });
-    res.status(201).json({ ok: true, data: c });
+    // Auto-sembrar catalogos genericos desde una empresa "plantilla" (si esta
+    // configurada en Settings) o desde la primera empresa que tenga catalogos.
+    // Excluye los tipos "Banco" y "Caja" (esos siempre se cargan por empresa).
+    try {
+      const seeded = await _autoSembrarCatalogosDesdeTemplate(c.id);
+      res.status(201).json({ ok: true, data: c, catalogosSembrados: seeded });
+    } catch (e) {
+      console.warn('[empresa.create] No se pudieron sembrar catalogos automaticamente:', e.message);
+      res.status(201).json({ ok: true, data: c, catalogosSembrados: 0, catalogosError: e.message });
+    }
+  } catch (e) { next(e); }
+});
+
+// Helper: encuentra la empresa "plantilla" desde donde copiar catalogos.
+// Prioridad:
+//   1. Setting global 'templateCompanyId' (si existe y la empresa esta activa)
+//   2. Primera empresa con mas catalogos cargados (heuristica: la que tenga
+//      mas tipos distintos)
+// Devuelve null si no encontro ninguna candidata.
+async function _findTemplateCompany(excludeId) {
+  try {
+    const setting = await prisma.setting.findUnique({ where: { id: 'global' } }).catch(() => null);
+    let templateId = setting?.data?.templateCompanyId;
+    if (templateId && templateId !== excludeId) {
+      const exists = await prisma.company.findUnique({ where: { id: templateId } });
+      if (exists?.activo) return templateId;
+    }
+  } catch {}
+  // Heuristica: tomar la empresa con mas catalogos cargados (excluyendo la nueva)
+  const compsConCatalogos = await prisma.catalogo.groupBy({
+    by: ['companyId'],
+    where: { companyId: { not: excludeId } },
+    _count: { _all: true },
+    orderBy: { _count: { id: 'desc' } },
+    take: 1,
+  }).catch(() => []);
+  return compsConCatalogos[0]?.companyId || null;
+}
+
+// Helper: copia catalogos de una empresa plantilla a una empresa nueva.
+// EXCLUYE los tipos pasados en excludeTipos (default: Banco y Caja).
+// Devuelve la cantidad de catalogos copiados.
+async function _copiarCatalogos(sourceCompanyId, targetCompanyId, excludeTipos = ['banco', 'caja']) {
+  const excluded = excludeTipos.map(t => t.toLowerCase());
+  const fuente = await prisma.catalogo.findMany({
+    where: { companyId: sourceCompanyId, activo: true },
+  });
+  // Filtrar tipos excluidos
+  const aCopiar = fuente.filter(c => !excluded.includes(String(c.tipo).toLowerCase()));
+  if (!aCopiar.length) return 0;
+  // No duplicar: tomar los que ya tiene la empresa destino y descontarlos por (tipo, codigo)
+  const yaExistentes = await prisma.catalogo.findMany({
+    where: { companyId: targetCompanyId },
+    select: { tipo: true, codigo: true, nombre: true },
+  });
+  const existeKey = new Set(yaExistentes.map(c => `${(c.tipo||'').toLowerCase()}|${(c.codigo||c.nombre||'').toLowerCase()}`));
+  const nuevos = aCopiar.filter(c => !existeKey.has(`${(c.tipo||'').toLowerCase()}|${(c.codigo||c.nombre||'').toLowerCase()}`));
+  if (!nuevos.length) return 0;
+  await prisma.catalogo.createMany({
+    data: nuevos.map(c => ({
+      companyId: targetCompanyId,
+      tipo: c.tipo, codigo: c.codigo, nombre: c.nombre,
+      descripcion: c.descripcion,
+      precioReferencia: c.precioReferencia,
+      tipoPrecio: c.tipoPrecio,
+      activo: true,
+    })),
+    skipDuplicates: true,
+  });
+  return nuevos.length;
+}
+
+async function _autoSembrarCatalogosDesdeTemplate(newCompanyId) {
+  const templateId = await _findTemplateCompany(newCompanyId);
+  if (!templateId) return 0;
+  return _copiarCatalogos(templateId, newCompanyId);
+}
+
+// === COPIAR CATALOGOS de una empresa origen a una o varias destino ===
+// Body:
+//   sourceCompanyId: ID empresa origen
+//   targetCompanyIds: array de IDs destino, o "all" para todas las demas activas
+//   excludeTipos: array de tipos a NO copiar (default: ["Banco","Caja"])
+//   incluirOcultos: si true, copia tambien catalogos con activo=false (default false)
+// Devuelve cantidad copiada por empresa destino.
+app.post('/api/admin/copiar-catalogos', authMiddleware, async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo super admin' });
+    const schema = z.object({
+      sourceCompanyId: z.string().min(1),
+      targetCompanyIds: z.union([z.array(z.string()), z.literal('all')]),
+      excludeTipos: z.array(z.string()).optional(),
+    });
+    const d = schema.parse(req.body || {});
+    const exclude = (d.excludeTipos && d.excludeTipos.length ? d.excludeTipos : ['Banco', 'Caja']).map(t => t.toLowerCase());
+
+    // Resolver lista de empresas destino
+    let targetIds;
+    if (d.targetCompanyIds === 'all') {
+      const todas = await prisma.company.findMany({
+        where: { activo: true, id: { not: d.sourceCompanyId } },
+        select: { id: true },
+      });
+      targetIds = todas.map(t => t.id);
+    } else {
+      targetIds = d.targetCompanyIds.filter(id => id !== d.sourceCompanyId);
+    }
+    if (!targetIds.length) {
+      return res.json({ ok: true, resultados: [], total: 0,
+        mensaje: 'No hay empresas destino para procesar.' });
+    }
+    const resultados = [];
+    let total = 0;
+    for (const tid of targetIds) {
+      try {
+        const copiados = await _copiarCatalogos(d.sourceCompanyId, tid, exclude);
+        resultados.push({ companyId: tid, copiados, error: null });
+        total += copiados;
+      } catch (e) {
+        resultados.push({ companyId: tid, copiados: 0, error: String(e.message || e) });
+      }
+    }
+    res.json({ ok: true, resultados, total, excludeTipos: exclude });
+  } catch (e) { next(e); }
+});
+
+// === DESIGNAR empresa plantilla (de donde se copian catalogos al crear nuevas) ===
+app.put('/api/admin/empresa-plantilla', authMiddleware, async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo super admin' });
+    const schema = z.object({ companyId: z.string().nullable() });
+    const { companyId } = schema.parse(req.body || {});
+    if (companyId) {
+      const exists = await prisma.company.findUnique({ where: { id: companyId } });
+      if (!exists) return res.status(404).json({ ok: false, error: 'Empresa no encontrada' });
+    }
+    const setting = await prisma.setting.findUnique({ where: { id: 'global' } }).catch(() => null);
+    const data = (setting?.data && typeof setting.data === 'object') ? { ...setting.data } : {};
+    if (companyId) data.templateCompanyId = companyId;
+    else delete data.templateCompanyId;
+    await prisma.setting.upsert({
+      where: { id: 'global' },
+      create: { id: 'global', data },
+      update: { data },
+    });
+    res.json({ ok: true, templateCompanyId: companyId });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/admin/empresa-plantilla', authMiddleware, async (req, res, next) => {
+  try {
+    const setting = await prisma.setting.findUnique({ where: { id: 'global' } }).catch(() => null);
+    res.json({ ok: true, templateCompanyId: setting?.data?.templateCompanyId || null });
   } catch (e) { next(e); }
 });
 

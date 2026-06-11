@@ -2132,6 +2132,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'11/06/2026',
+      titulo:'📋 Catálogos compartidos entre empresas + empresa plantilla',
+      desc:'En Configuración → Sistema hay una sección nueva "📋 Catálogos genéricos compartidos entre empresas". Sirve para dos cosas: (1) copiar de una sola vez los catálogos genéricos (productos, cultivos, conceptos, labores, etc.) de una empresa "plantilla" a todas las demás. Útil cuando creaste varias empresas y los catálogos arrancaron vacíos. (2) Designar una empresa como "plantilla predeterminada": de ahora en adelante, cada vez que se cree una empresa nueva, el sistema le copia automáticamente los catálogos de la plantilla. Por default se EXCLUYEN los catálogos de Bancos y Cajas (que tienen sentido cargar individualmente por empresa). Los catálogos duplicados no se sobreescriben — solo se agregan los que faltaban.' },
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'10/06/2026',
       titulo:'📥 3 importadores nuevos para Excels del cliente (segunda tanda)',
       desc:'Configuración → Importación suma 3 importadores más: (1) HECTÁREAS SEMBRADAS — una hoja por empresa, lee Renspa+Campo+Cultivo+Has y crea un lote por cultivo (con forward-fill del Renspa entre filas en blanco). (2) PYME — Ventas hacienda menor (Lechón, Cordero, Chivito, Cancha) — por cada fila crea producto y movimiento de venta, y si la fila está "No pago" suma a Cuentas Corrientes. (3) PROVEEDORES — lee la hoja "Proveedores" del Excel de Cuentas Corrientes y carga el catálogo de proveedores (nombre, CUIT, teléfono, email, horarios). Salta los que ya existían matcheando por razón social.' },
@@ -5418,6 +5421,16 @@ function configRenderSistema(body) {
         <button class="btn btn-secondary text-red-700 border-red-300" onclick="sistemaLimpiarEmpresa()">🧹 Configurar limpieza…</button>
       </div>
 
+      <!-- Catálogos compartidos -->
+      <div class="border border-amber-300 rounded-lg p-4 bg-amber-50">
+        <h3 class="font-bold text-amber-900 mb-1">📋 Catálogos genéricos compartidos entre empresas</h3>
+        <p class="text-sm text-amber-800 mb-3">Cuando creás una empresa nueva, los catálogos arrancan vacíos. Acá podés <b>copiar los catálogos de una empresa "plantilla" a todas las demás</b> de una sola vez (productos, cultivos, conceptos de tesorería, labores, etc.). Quedan excluidos por default <b>Bancos</b> y <b>Cajas</b>, que tienen sentido cargar individualmente por empresa.</p>
+        <div class="bg-amber-100 border border-amber-300 text-amber-900 text-xs rounded p-2 mb-3">
+          💡 Adicionalmente podés designar una <b>"empresa plantilla"</b>: cuando se cree una nueva empresa, el sistema le copia automáticamente los catálogos de la plantilla. Así Denise puede crear las próximas empresas sin tener que cargar los catálogos a mano cada vez.
+        </div>
+        <button class="btn btn-primary" style="background:#b45309;border-color:#b45309" onclick="catalogosCompartirAbrir()">📋 Copiar / Configurar plantilla…</button>
+      </div>
+
       <!-- Preparar para entrega al cliente -->
       <div class="border border-indigo-300 rounded-lg p-4 bg-indigo-50">
         <h3 class="font-bold text-indigo-900 mb-1">🚀 Preparar para entrega al cliente</h3>
@@ -5786,6 +5799,131 @@ async function prepararEntregaEjecutar() {
     });
   } catch (e) {
     toast(e.message || 'Error al ejecutar la limpieza', 'error');
+  }
+}
+
+/* ============================================================
+ * 📋 COMPARTIR CATÁLOGOS entre empresas
+ * Permite copiar los catálogos de una empresa "plantilla" a todas las demás
+ * (o seleccionar destinos específicos). Excluye Bancos y Cajas por default.
+ * También permite designar la empresa plantilla para auto-sembrar en futuras
+ * empresas creadas.
+ * ============================================================ */
+async function catalogosCompartirAbrir() {
+  if (!state.user?.superAdmin) return toast('Solo el Super Admin puede usar esta función', 'warn');
+  // Cargar empresas y plantilla actual
+  let empresas = [];
+  let templateId = null;
+  try {
+    const r = await api('/api/empresas');
+    empresas = r.data || [];
+    const t = await api('/api/admin/empresa-plantilla');
+    templateId = t.templateCompanyId || null;
+  } catch (e) { return toast(e.message || 'Error al cargar datos', 'error'); }
+  if (empresas.length < 2) return toast('Necesitás al menos 2 empresas para copiar catálogos.', 'warn');
+
+  const empOriginDefault = templateId || state.companyId || empresas[0].id;
+
+  openModal({
+    title: '📋 Compartir catálogos genéricos entre empresas', size: 'max-w-2xl',
+    body: `
+      <div class="text-xs text-slate-600 mb-3">Copia los catálogos genéricos (productos, cultivos, conceptos de tesorería, labores, etc.) de una empresa "plantilla" a las demás empresas. <b>Bancos</b> y <b>Cajas</b> se excluyen por default porque suelen ser propios de cada empresa.</div>
+
+      <div class="border border-slate-200 rounded-lg p-3 mb-3 bg-slate-50">
+        <label class="label">Empresa origen (plantilla)</label>
+        <select id="cc-origen" class="input">
+          ${empresas.map(e => `<option value="${esc(e.id)}" ${e.id === empOriginDefault ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}
+        </select>
+        <label class="flex items-center gap-2 text-xs text-slate-700 mt-2 cursor-pointer">
+          <input id="cc-set-template" type="checkbox" ${templateId ? 'checked' : ''}/>
+          <span>Designar esta empresa como <b>plantilla predeterminada</b>: cuando se cree una nueva empresa, sus catálogos se copian de acá automáticamente.</span>
+        </label>
+      </div>
+
+      <div class="border border-slate-200 rounded-lg p-3 mb-3">
+        <label class="label">Empresas destino (a las que se copian)</label>
+        <div class="flex gap-2 mb-2 text-xs">
+          <button type="button" class="text-indigo-700 underline" onclick="document.querySelectorAll('.cc-target').forEach(c => c.checked = true)">Seleccionar todas</button>
+          <button type="button" class="text-indigo-700 underline" onclick="document.querySelectorAll('.cc-target').forEach(c => c.checked = false)">Ninguna</button>
+        </div>
+        <div class="space-y-1 max-h-48 overflow-y-auto border border-slate-200 rounded p-2">
+          ${empresas.map(e => `
+            <label class="flex items-center gap-2 text-sm p-1 hover:bg-slate-50 rounded cursor-pointer">
+              <input type="checkbox" class="cc-target" data-id="${esc(e.id)}" checked/>
+              <span>${esc(e.name)}</span>
+              <span class="text-[10px] text-slate-400">(se ignora si es la origen)</span>
+            </label>`).join('')}
+        </div>
+      </div>
+
+      <div class="border border-slate-200 rounded-lg p-3 mb-3">
+        <label class="label">Tipos a EXCLUIR (no copiar)</label>
+        <div class="text-xs text-slate-500 mb-2">Los catálogos de estos tipos NO se copian — quedan vacíos en las empresas destino y se cargan a mano por empresa.</div>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 rounded cursor-pointer">
+            <input type="checkbox" class="cc-exclude" value="Banco" checked/>
+            🏛️ Bancos
+          </label>
+          <label class="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 rounded cursor-pointer">
+            <input type="checkbox" class="cc-exclude" value="Caja" checked/>
+            💵 Cajas
+          </label>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" style="background:#b45309;border-color:#b45309" onclick="catalogosCompartirEjecutar()">📋 Copiar catálogos</button>`,
+  });
+}
+
+async function catalogosCompartirEjecutar() {
+  const sourceCompanyId = document.getElementById('cc-origen').value;
+  const setTemplate = document.getElementById('cc-set-template').checked;
+  const targetCompanyIds = Array.from(document.querySelectorAll('.cc-target:checked'))
+    .map(c => c.dataset.id).filter(id => id !== sourceCompanyId);
+  const excludeTipos = Array.from(document.querySelectorAll('.cc-exclude:checked')).map(c => c.value);
+
+  if (!targetCompanyIds.length) return toast('Marcá al menos una empresa destino distinta de la origen', 'warn');
+
+  if (!confirm(`¿Copiar catálogos de la empresa origen a ${targetCompanyIds.length} empresa(s)?\n\nSe excluyen los tipos: ${excludeTipos.join(', ') || '(ninguno)'}\n\nLos catálogos duplicados (mismo tipo + mismo nombre) NO se sobreescriben.`)) return;
+
+  try {
+    // Designar plantilla si se tildó
+    if (setTemplate) {
+      try {
+        await api('/api/admin/empresa-plantilla', { method: 'PUT', body: JSON.stringify({ companyId: sourceCompanyId }) });
+      } catch (e) {
+        toast('No se pudo designar plantilla: ' + e.message, 'warn');
+      }
+    } else {
+      // Si está destildado y antes había una plantilla, no la quitamos automáticamente
+      // (el usuario puede destildar sin querer; mejor mantener silencio)
+    }
+    // Copiar
+    const r = await api('/api/admin/copiar-catalogos', {
+      method: 'POST',
+      body: JSON.stringify({ sourceCompanyId, targetCompanyIds, excludeTipos }),
+    });
+    closeModal();
+    const errs = (r.resultados || []).filter(x => x.error);
+    openModal({
+      title: '✅ Catálogos copiados', size: 'max-w-md',
+      body: `
+        <div class="text-sm text-slate-700 mb-3">
+          Se copiaron <b>${r.total}</b> registros de catálogos en total a ${r.resultados.length} empresa(s).
+        </div>
+        ${r.resultados.length ? `
+          <div class="text-xs text-slate-600 bg-slate-50 border rounded p-2 max-h-48 overflow-y-auto">
+            ${r.resultados.map(x => `<div>• ${esc(x.companyId)} → ${x.copiados} ${x.error ? `<span class="text-red-600">— ${esc(x.error)}</span>` : 'copiados'}</div>`).join('')}
+          </div>` : ''}
+        <div class="text-[11px] text-slate-500 mt-3">
+          💡 Si una empresa destino dice 0 copiados, es porque ya tenía esos catálogos (no se duplican).
+        </div>`,
+      footer: `<button class="btn btn-primary" onclick="closeModal()">Listo</button>`,
+    });
+  } catch (e) {
+    toast(e.message || 'Error al copiar catálogos', 'error');
   }
 }
 
