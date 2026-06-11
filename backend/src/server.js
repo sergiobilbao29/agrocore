@@ -24,8 +24,8 @@ const app = express();
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.8';
-const AGROCORE_BUILD = new Date('2026-06-12').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.9';
+const AGROCORE_BUILD = new Date('2026-06-11').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -2453,6 +2453,41 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
         return a;
       }, 0);
 
+      // Desglose por caja (campo libre, ej. nombre del dueño "Lucas").
+      // Las transferencias entre cajas se reflejan: restan en origen y suman en destino.
+      const cajasMap = new Map();
+      const ensureCaja = (nombre) => {
+        const key = (nombre && String(nombre).trim()) || '(sin caja)';
+        if (!cajasMap.has(key)) {
+          cajasMap.set(key, {
+            nombre: key,
+            ingresos: 0, egresos: 0,
+            transferenciaIn: 0, transferenciaOut: 0,
+            saldo: 0, movimientos: 0,
+          });
+        }
+        return cajasMap.get(key);
+      };
+      for (const e of ef) {
+        const monto = Number(e.monto || 0);
+        const tipo = (e.tipo || '').toLowerCase();
+        if (tipo === 'ingreso') {
+          const c = ensureCaja(e.caja);
+          c.ingresos += monto; c.saldo += monto; c.movimientos += 1;
+        } else if (tipo === 'egreso') {
+          const c = ensureCaja(e.caja);
+          c.egresos += monto; c.saldo -= monto; c.movimientos += 1;
+        } else if (tipo === 'transferencia') {
+          const origen = ensureCaja(e.caja);
+          origen.transferenciaOut += monto; origen.saldo -= monto; origen.movimientos += 1;
+          if (e.cajaDestino) {
+            const destino = ensureCaja(e.cajaDestino);
+            destino.transferenciaIn += monto; destino.saldo += monto; destino.movimientos += 1;
+          }
+        }
+      }
+      const cajas = [...cajasMap.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+
       const fc = flujos.filter((f) => f.companyId === emp.id);
       const saldoFlujo = fc.reduce((a, f) => a + Number(f.monto || 0), 0);
 
@@ -2468,7 +2503,7 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
           vencidos: chVenc.length,
           montoVencidos: sumMonto(chVenc),
         },
-        efectivo: { saldo: saldoEfectivo, movimientos: ef.length },
+        efectivo: { saldo: saldoEfectivo, movimientos: ef.length, cajas },
         flujoCaja: { saldoActual: saldoFlujo, movimientos: fc.length },
       };
     });

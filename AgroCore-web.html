@@ -2216,6 +2216,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'11/06/2026',
+      titulo:'💰 Cajas por empresa + consolidado por dueño en Resumen multi-empresa',
+      desc:'Resumen multi-empresa ahora muestra el desglose del efectivo CAJA por CAJA dentro de cada empresa. Las administrativas suelen crear cajas con el nombre del dueño ("Lucas", "Mariano", "Oficina"...) para saber cuánta plata maneja cada uno. Si Lucas tiene cajas en LLSP, El Pistrín y Peiretti Gerardo, ahora hay un selector "Ver caja" arriba de la tabla que filtra todas las filas con ese nombre y muestra un banner verde con el CONSOLIDADO: "Caja Lucas — Sumando 3 empresas — $X". El detalle por fila incluye ingresos, egresos, transferencias entrantes/salientes y saldo, y el total se recalcula según lo filtrado. Las transferencias entre cajas de la misma empresa se reflejan correctamente (restan en origen, suman en destino).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'12/06/2026',
       titulo:'🔄 Pagos / Cobros Intercompany entre firmas del grupo',
       desc:'Cuando una firma del grupo cubre el compromiso de otra (típico en estructuras agropecuarias familiares), el sistema ahora lo modela como Cuentas Corrientes Intercompany sin romper la contabilidad de ninguna. Flujo: en Cuentas a Pagar elegís un proveedor, tildás los comprobantes a cancelar, importes (total o parcial), y como Método de Pago elegís "🔄 Intercompany (recursos de otra firma)". Seleccionás la firma del grupo que pone los fondos. Al confirmar, el sistema crea automáticamente: en la firma activa, una CtaCte tipo intercompany con HABER (deuda interna); en la firma origen, una CtaCte tipo intercompany con DEBE (saldo a favor); y un IntercompanyMovimiento de auditoría que vincula los dos asientos. La opción solo aparece si el usuario tiene acceso a más de una empresa y permiso "finanzas:intercompany" (nuevo permiso fino). Para cobranzas funciona igual pero inverso (el cliente paga a otra firma del grupo).' },
@@ -3662,6 +3665,7 @@ pages.resumenGlobal = async function() {
 
   // Restaurar seleccion previa de empresas del localStorage. Por defecto: todas.
   const STORAGE_KEY = 'ac.resumenEmpresas';
+  const CAJA_KEY = 'ac.resumenCajaFilter';
   let seleccionadas;
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
@@ -3673,6 +3677,7 @@ pages.resumenGlobal = async function() {
   if (!seleccionadas || seleccionadas.size === 0) {
     seleccionadas = new Set(todasLasEmpresas.map(e => e.companyId));
   }
+  let cajaFiltro = localStorage.getItem(CAJA_KEY) || '';
 
   // Render se redibuja cada vez que el usuario marca/desmarca una empresa.
   const render = () => {
@@ -3799,9 +3804,142 @@ pages.resumenGlobal = async function() {
         </table>
       </div>
 
+      ${(() => {
+        // ===== Cajas por empresa =====
+        // Aplanamos: [{empresaId, empresaName, color, caja, ingresos, egresos, saldo, ...}]
+        const filas = [];
+        for (const e of porEmp) {
+          const cajas = (e.efectivo && e.efectivo.cajas) || [];
+          for (const c of cajas) {
+            filas.push({
+              empresaId: e.companyId,
+              empresaName: e.companyName,
+              color: e.color,
+              caja: c.nombre,
+              ingresos: c.ingresos || 0,
+              egresos: c.egresos || 0,
+              transferenciaIn: c.transferenciaIn || 0,
+              transferenciaOut: c.transferenciaOut || 0,
+              saldo: c.saldo || 0,
+              movimientos: c.movimientos || 0,
+            });
+          }
+        }
+        // Lista única de nombres de caja para el selector (case-insensitive match)
+        const nombresUnicos = [...new Set(filas.map(f => f.caja))].sort((a,b)=>a.localeCompare(b,'es'));
+        const cf = cajaFiltro;
+        const cfLower = cf.toLowerCase();
+        const filasMostradas = cf ? filas.filter(f => f.caja.toLowerCase() === cfLower) : filas;
+        // Totales y consolidado de la caja filtrada
+        const totEmp = new Set(filasMostradas.map(f => f.empresaId));
+        const totSaldo = filasMostradas.reduce((a,f)=>a+f.saldo,0);
+        const totIngresos = filasMostradas.reduce((a,f)=>a+f.ingresos,0);
+        const totEgresos = filasMostradas.reduce((a,f)=>a+f.egresos,0);
+
+        if (filas.length === 0) {
+          return `
+          <div class="kpi p-0 overflow-hidden mt-4">
+            <div class="px-4 py-3 bg-slate-50 border-b">
+              <h3 class="font-semibold text-slate-800">Cajas por empresa</h3>
+              <div class="text-xs text-slate-500">Desglose del efectivo por caja (ej. dueño, sucursal, etc.) y consolidado entre empresas.</div>
+            </div>
+            <div class="text-center text-slate-400 py-8 px-4">Las empresas seleccionadas no tienen movimientos de efectivo todavía.</div>
+          </div>`;
+        }
+
+        return `
+        <div class="kpi p-0 overflow-hidden mt-4">
+          <div class="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 class="font-semibold text-slate-800">💰 Cajas por empresa</h3>
+              <div class="text-xs text-slate-500">Las administrativas crean cajas por dueño (ej. "Lucas"). Filtrá para ver cuánto tiene cada dueño consolidado entre empresas.</div>
+            </div>
+            <div class="flex items-end gap-2">
+              <div>
+                <label class="label">Ver caja</label>
+                <select id="caja-filtro" class="input" style="min-width:200px">
+                  <option value="">— Todas las cajas —</option>
+                  ${nombresUnicos.map(n => `<option value="${esc(n)}" ${n===cf?'selected':''}>${esc(n)}</option>`).join('')}
+                </select>
+              </div>
+              ${cf ? `<button class="btn btn-secondary" onclick="resumenSetCaja('')">✕ Limpiar</button>` : ''}
+            </div>
+          </div>
+
+          ${cf ? `
+            <div class="mx-4 mt-4 p-4 rounded-xl" style="background:linear-gradient(135deg,#065f46 0%,#047857 100%);color:#fff">
+              <div class="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <div class="text-xs uppercase tracking-wider font-bold" style="color:#a7f3d0">Consolidado caja</div>
+                  <div class="text-2xl font-extrabold mt-0.5">${esc(cf)}</div>
+                  <div class="text-xs mt-1" style="color:#d1fae5">Sumando ${totEmp.size} empresa${totEmp.size===1?'':'s'} · ${filasMostradas.length} caja${filasMostradas.length===1?'':'s'} con ese nombre</div>
+                </div>
+                <div class="text-right">
+                  <div class="text-3xl font-extrabold ${totSaldo<0?'text-red-200':''}">${fmt$(totSaldo)}</div>
+                  <div class="text-xs mt-1" style="color:#d1fae5">Ingresos: ${fmt$(totIngresos)} · Egresos: ${fmt$(totEgresos)}</div>
+                </div>
+              </div>
+            </div>
+          ` : ''}
+
+          <table class="data">
+            <thead>
+              <tr>
+                <th>Empresa</th>
+                <th>Caja</th>
+                <th class="text-right">Ingresos</th>
+                <th class="text-right">Egresos</th>
+                <th class="text-right">Transf. ↑ entra</th>
+                <th class="text-right">Transf. ↓ sale</th>
+                <th class="text-right">Saldo</th>
+                <th class="text-right">Movs.</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filasMostradas.length === 0
+                ? `<tr><td colspan="8" class="text-center text-slate-400 py-6">No hay coincidencias para "${esc(cf)}"</td></tr>`
+                : filasMostradas.map(f => `
+                  <tr class="table-row">
+                    <td>
+                      <div class="flex items-center gap-2">
+                        ${f.color ? `<span class="w-3 h-3 rounded-full" style="background:${esc(f.color)}"></span>` : ''}
+                        <span>${esc(f.empresaName)}</span>
+                      </div>
+                    </td>
+                    <td><b>${esc(f.caja)}</b></td>
+                    <td class="text-right text-emerald-700">${f.ingresos?fmt$(f.ingresos):'—'}</td>
+                    <td class="text-right text-red-600">${f.egresos?fmt$(f.egresos):'—'}</td>
+                    <td class="text-right text-slate-500">${f.transferenciaIn?fmt$(f.transferenciaIn):'—'}</td>
+                    <td class="text-right text-slate-500">${f.transferenciaOut?fmt$(f.transferenciaOut):'—'}</td>
+                    <td class="text-right font-semibold ${f.saldo<0?'text-red-600':''}">${fmt$(f.saldo)}</td>
+                    <td class="text-right text-xs text-slate-500">${f.movimientos}</td>
+                  </tr>`).join('')
+              }
+            </tbody>
+            <tfoot>
+              <tr class="font-bold bg-slate-50">
+                <td colspan="2">${cf ? `Total caja "${esc(cf)}"` : 'Total general'}</td>
+                <td class="text-right text-emerald-700">${fmt$(totIngresos)}</td>
+                <td class="text-right text-red-600">${fmt$(totEgresos)}</td>
+                <td></td>
+                <td></td>
+                <td class="text-right ${totSaldo<0?'text-red-700':''}">${fmt$(totSaldo)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>`;
+      })()}
+
       <div class="mt-3 text-xs text-slate-500">
         💡 Tu selección se guarda automáticamente para la próxima vez que entres. Esta vista <b>no mezcla</b> datos entre empresas: cada cheque, efectivo y flujo sigue asignado a la empresa donde se cargó. Solo agrupa los totales para que puedas verlos en conjunto.
       </div>`;
+
+    // Re-engancho el onchange del selector de caja despues de inyectar el HTML
+    setTimeout(() => {
+      const sel = document.getElementById('caja-filtro');
+      if (sel) sel.onchange = e => window.resumenSetCaja(e.target.value);
+    }, 0);
   };
 
   // Wrappers expuestos al onclick/onchange de los checkboxes.
@@ -3814,6 +3952,12 @@ pages.resumenGlobal = async function() {
   window.resumenToggleAll = (marcadaTodos) => {
     seleccionadas = new Set(marcadaTodos ? todasLasEmpresas.map(e => e.companyId) : []);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(seleccionadas)));
+    render();
+  };
+  window.resumenSetCaja = (nombre) => {
+    cajaFiltro = nombre || '';
+    if (cajaFiltro) localStorage.setItem(CAJA_KEY, cajaFiltro);
+    else localStorage.removeItem(CAJA_KEY);
     render();
   };
 
