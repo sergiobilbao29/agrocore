@@ -24,8 +24,8 @@ const app = express();
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.6';
-const AGROCORE_BUILD = new Date('2026-06-11').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.8';
+const AGROCORE_BUILD = new Date('2026-06-12').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -3750,90 +3750,299 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
 // FLUJO PROYECTADO ("estado de situación"): unifica ingresos y egresos
 // futuros desde múltiples fuentes y los ordena por fecha.
 // ============================================================
+// === HELPER: arma la data del Estado de situación ===
+// Devuelve items, vencidos, saldo inicial, serie acumulada y totales.
+// Acepta una o varias companies. Si se pasan varias y el user no es super admin,
+// se filtran a las que tiene acceso.
+async function _construirFlujoProyectado(req, opts = {}) {
+  const dias = Number(opts.dias || req.query.dias || 180);
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const horizonte = new Date(hoy);
+  horizonte.setDate(horizonte.getDate() + dias);
+
+  // Resolver empresas a incluir
+  let companyIds = [req.companyId];
+  const requested = opts.empresas || req.query.empresas;
+  if (requested) {
+    const arr = String(requested).split(',').map(s => s.trim()).filter(Boolean);
+    if (arr.length) {
+      if (req.user.superAdmin) {
+        companyIds = arr;
+      } else {
+        const userCmps = new Set((req.user.userCompanies || []).map(uc => uc.companyId));
+        companyIds = arr.filter(id => userCmps.has(id));
+        if (!companyIds.length) companyIds = [req.companyId];
+      }
+    }
+  }
+
+  // === Saldo inicial (idea 1) ===
+  // Sumamos saldos de cuentas bancarias (ARS/USD por separado) + efectivo en cajas.
+  const cuentas = await prisma.bancoCuenta.findMany({
+    where: { companyId: { in: companyIds }, activo: true },
+  });
+  const cuentasIds = cuentas.map(c => c.id);
+  const movsAgg = cuentasIds.length ? await prisma.bancoMovimiento.groupBy({
+    by: ['cuentaId', 'tipo'],
+    where: { cuentaId: { in: cuentasIds } },
+    _sum: { monto: true },
+  }) : [];
+  const saldoPorCuenta = {};
+  for (const c of cuentas) saldoPorCuenta[c.id] = { moneda: c.moneda || 'ARS', saldo: Number(c.saldoInicial || 0) };
+  for (const m of movsAgg) {
+    const sign = BANCO_TIPOS_INGRESO.includes(m.tipo) ? 1 : (BANCO_TIPOS_EGRESO.includes(m.tipo) ? -1 : 0);
+    if (saldoPorCuenta[m.cuentaId]) saldoPorCuenta[m.cuentaId].saldo += sign * Number(m._sum.monto || 0);
+  }
+  let bancosARS = 0, bancosUSD = 0;
+  for (const v of Object.values(saldoPorCuenta)) {
+    if (v.moneda === 'USD') bancosUSD += v.saldo; else bancosARS += v.saldo;
+  }
+  // Efectivo: sumar ingresos − egresos en cajas (excluye transferencias entre cajas)
+  const efectivos = await prisma.efectivo.findMany({
+    where: { companyId: { in: companyIds }, tipo: { in: ['ingreso', 'egreso'] } },
+    select: { tipo: true, monto: true },
+  });
+  let efectivoTotal = 0;
+  for (const e of efectivos) {
+    efectivoTotal += (e.tipo === 'ingreso' ? 1 : -1) * Number(e.monto || 0);
+  }
+  const saldoInicialARS = bancosARS + efectivoTotal;
+
+  // === Items proyectados y vencidos ===
+  const items = [];
+  const vencidos = [];
+  function push(fecha, ev) {
+    const f = new Date(fecha);
+    f.setHours(0,0,0,0);
+    if (f < hoy) vencidos.push({ ...ev, fecha: f });
+    else if (f <= horizonte) items.push({ ...ev, fecha: f });
+  }
+
+  // 1) Cheques
+  const cheques = await prisma.cheque.findMany({
+    where: { companyId: { in: companyIds } },
+  });
+  const estadosOk = ['en_cartera', 'pendiente', 'emitido', 'depositado'];
+  for (const ch of cheques) {
+    if (!estadosOk.includes(ch.estado || '')) continue;
+    if (!ch.fechaPago) continue;
+    const esIngreso = ch.tipo === 'terceros';
+    push(ch.fechaPago, {
+      tipo: esIngreso ? 'ingreso' : 'egreso',
+      categoria: 'cheque',
+      concepto: `${esIngreso ? 'Cheque de terceros' : 'Cheque propio'} ${ch.nroCheque || ''} ${ch.banco || ''}`.trim(),
+      importe: Number(ch.monto || 0), ref: ch.id,
+      contacto: ch.beneficiario || ch.librador || null,
+      empresaId: ch.companyId,
+    });
+  }
+
+  // 2) Cuentas corrientes (debe / haber)
+  const ctas = await prisma.ctaCte.findMany({
+    where: { companyId: { in: companyIds }, vencimiento: { not: null }, pagado: false },
+  });
+  for (const c of ctas) {
+    const debe = Number(c.debe || 0);
+    const haber = Number(c.haber || 0);
+    // Si el contacto NOS DEBE (debe > 0) es ingreso. Si NOSOTROS DEBEMOS (haber > 0) es egreso.
+    let tipo, importe;
+    if (debe > 0 && haber === 0) { tipo = 'ingreso'; importe = debe; }
+    else if (haber > 0 && debe === 0) { tipo = 'egreso'; importe = haber; }
+    else continue;
+    push(c.vencimiento, {
+      tipo, categoria: 'cta_cte',
+      concepto: c.detalle || c.nombreLibre || 'Cuenta corriente',
+      importe, ref: c.id,
+      contacto: c.nombreLibre || c.contactoTipo || null,
+      empresaId: c.companyId,
+    });
+  }
+
+  // 3) Cuotas de créditos no pagadas
+  const cuotas = await prisma.cuotaCredito.findMany({
+    where: { credito: { companyId: { in: companyIds } }, pagada: false },
+    include: { credito: { select: { banco: true, nroOperacion: true, companyId: true } } },
+  });
+  for (const q of cuotas) {
+    push(q.vencimiento, {
+      tipo: 'egreso', categoria: 'credito',
+      concepto: `Cuota ${q.numero} · ${q.credito.banco}${q.credito.nroOperacion ? ' #' + q.credito.nroOperacion : ''}`,
+      importe: Number(q.importeTotal || 0), ref: q.id,
+      contacto: q.credito.banco,
+      empresaId: q.credito.companyId,
+    });
+  }
+
+  // 4) Liquidaciones de cereal
+  const liqs = await prisma.liquidacionCereal.findMany({
+    where: { companyId: { in: companyIds }, fechaCobroEst: { not: null }, cobrado: false },
+    include: { deposito: { select: { nombre: true } } },
+  });
+  for (const l of liqs) {
+    push(l.fechaCobroEst, {
+      tipo: 'ingreso', categoria: 'cereal',
+      concepto: `Liquidación cereal · ${l.deposito?.nombre || 'Cerealera'}`,
+      importe: Number(l.neto || 0), ref: l.id,
+      empresaId: l.companyId,
+    });
+  }
+
+  // 5) Arrendamientos
+  const arrs = await prisma.arrendamiento.findMany({
+    where: { companyId: { in: companyIds }, vencimiento: { not: null }, pagado: false },
+    include: { campo: { select: { nombre: true } } },
+  });
+  for (const a of arrs) {
+    const importe = (Number(a.hectareas || 0) * Number(a.importeHa || 0)) || 0;
+    push(a.vencimiento, {
+      tipo: 'egreso', categoria: 'arrendamiento',
+      concepto: `Arrendamiento ${a.propietario}${a.campo?.nombre ? ' · ' + a.campo.nombre : ''}`,
+      importe, ref: a.id, contacto: a.propietario,
+      empresaId: a.companyId,
+    });
+  }
+
+  // 6) Facturas de venta pendientes de cobro (cta corriente, no anuladas)
+  //    Tomamos vencimiento estimado como fecha + 30 días si no hay campo explícito.
+  const facturas = await prisma.factura.findMany({
+    where: { companyId: { in: companyIds }, estado: { not: 'anulada' }, condicionVenta: 'cuenta_corriente' },
+    include: { cliente: { select: { razonSocial: true } } },
+  });
+  for (const f of facturas) {
+    // Estimar vencimiento: 30 días después de la fecha de emision
+    const venc = new Date(f.fecha);
+    venc.setDate(venc.getDate() + 30);
+    // Si ya cobró (se podría detectar por CtaCte pagada), saltamos. Por simplicidad
+    // asumimos que la CtaCte que genera la factura es la fuente de verdad. Para no
+    // duplicar con item #2, NO incluimos facturas que tengan una CtaCte abierta del
+    // mismo importe. Como heurística simple: solo incluimos si no existe CtaCte
+    // con referencia a esta factura. Pero el modelo CtaCte no guarda facturaId,
+    // así que por ahora SIEMPRE las metemos pero las marcamos con categoría
+    // "factura" para que el usuario pueda filtrarlas si percibe duplicado.
+    push(venc, {
+      tipo: 'ingreso', categoria: 'factura',
+      concepto: `Factura ${f.tipo}-${f.puntoVenta}-${f.numero} · ${f.cliente?.razonSocial || 'Cliente'}`,
+      importe: Number(f.total || 0), ref: f.id,
+      contacto: f.cliente?.razonSocial || null,
+      empresaId: f.companyId,
+    });
+  }
+
+  // 7) Viajes facturados (con flete a cobrar/pagar)
+  // Estado "facturado" → tarifa × kg/1000 es lo que el transporte cobra (egreso).
+  // Solo si tiene tarifa y kgDescarga.
+  const viajes = await prisma.viaje.findMany({
+    where: { companyId: { in: companyIds }, estado: 'facturado', tarifa: { gt: 0 } },
+  });
+  for (const v of viajes) {
+    const kg = Number(v.kgDescarga || v.cantidad || 0);
+    const importe = (Number(v.tarifa || 0) * kg) / 1000;
+    if (importe <= 0) continue;
+    // Estimación: 15 días post facturación
+    const venc = new Date(v.fecha);
+    venc.setDate(venc.getDate() + 15);
+    push(venc, {
+      tipo: 'egreso', categoria: 'viaje',
+      concepto: `Flete ${v.producto || 'viaje'} ${v.origen || ''} → ${v.destino || ''}`,
+      importe, ref: v.id,
+      contacto: v.transportista || null,
+      empresaId: v.companyId,
+    });
+  }
+
+  // === Sort + totales ===
+  items.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  vencidos.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  const totalIngresos = items.filter(i => i.tipo === 'ingreso').reduce((a, b) => a + b.importe, 0);
+  const totalEgresos = items.filter(i => i.tipo === 'egreso').reduce((a, b) => a + b.importe, 0);
+  const vencidosIngresos = vencidos.filter(i => i.tipo === 'ingreso').reduce((a, b) => a + b.importe, 0);
+  const vencidosEgresos = vencidos.filter(i => i.tipo === 'egreso').reduce((a, b) => a + b.importe, 0);
+  const saldoFinal = saldoInicialARS + totalIngresos - totalEgresos;
+
+  // === Serie acumulada día a día (idea 2) ===
+  // Generamos un punto por cada cambio de saldo (cada item) para el gráfico.
+  const serieAcumulada = [];
+  let saldoCorriente = saldoInicialARS;
+  serieAcumulada.push({ fecha: hoy.toISOString().slice(0,10), saldo: Math.round(saldoCorriente) });
+  for (const it of items) {
+    const sign = it.tipo === 'ingreso' ? 1 : -1;
+    saldoCorriente += sign * it.importe;
+    serieAcumulada.push({ fecha: new Date(it.fecha).toISOString().slice(0,10), saldo: Math.round(saldoCorriente) });
+  }
+
+  return {
+    saldoInicial: {
+      bancosARS: Math.round(bancosARS),
+      bancosUSD: Math.round(bancosUSD * 100) / 100,
+      efectivo: Math.round(efectivoTotal),
+      total: Math.round(saldoInicialARS),
+    },
+    vencidos: {
+      items: vencidos.map(v => ({ ...v, fecha: v.fecha.toISOString() })),
+      totalIngresos: Math.round(vencidosIngresos),
+      totalEgresos: Math.round(vencidosEgresos),
+      neto: Math.round(vencidosIngresos - vencidosEgresos),
+    },
+    items: items.map(i => ({ ...i, fecha: i.fecha.toISOString() })),
+    totalIngresos: Math.round(totalIngresos),
+    totalEgresos: Math.round(totalEgresos),
+    saldo: Math.round(totalIngresos - totalEgresos),
+    saldoFinal: Math.round(saldoFinal),
+    serieAcumulada,
+    empresas: companyIds,
+    horizonteDias: dias,
+  };
+}
+
 app.get('/api/flujo-proyectado', requireCompany, async (req, res, next) => {
   try {
-    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
-    const horizonte = new Date(hoy);
-    horizonte.setDate(horizonte.getDate() + Number(req.query.dias || 180));   // 180 días por default
-    const items = [];
+    const data = await _construirFlujoProyectado(req);
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
 
-    // 1) Cheques a depositar (terceros, en cartera, futuros) → ingreso
-    //    y cheques propios a pagar (no anulados, no acreditados) → egreso
-    const cheques = await prisma.cheque.findMany({
-      where: { companyId: req.companyId, fechaPago: { gte: hoy, lte: horizonte } },
-    });
-    for (const ch of cheques) {
-      const estadosOk = ['en_cartera', 'pendiente', 'emitido', 'depositado'];
-      if (!estadosOk.includes(ch.estado || '')) continue;
-      const esIngreso = ch.tipo === 'terceros';
-      items.push({
-        fecha: ch.fechaPago, tipo: esIngreso ? 'ingreso' : 'egreso',
-        categoria: 'cheque', concepto: `${ch.tipo === 'terceros' ? 'Cheque de terceros' : 'Cheque propio'} ${ch.nroCheque || ''} ${ch.banco || ''}`.trim(),
-        importe: Number(ch.monto || 0), ref: ch.id,
-        contacto: ch.beneficiario || ch.librador || null,
-      });
-    }
-
-    // 2) Cuentas corrientes con vencimiento futuro y no pagadas
-    const ctas = await prisma.ctaCte.findMany({
-      where: { companyId: req.companyId, vencimiento: { gte: hoy, lte: horizonte }, pagado: false },
-    });
-    for (const c of ctas) {
-      const esIngreso = c.tipo === 'debe';   // el cliente nos debe = nos va a entrar
-      items.push({
-        fecha: c.vencimiento, tipo: esIngreso ? 'ingreso' : 'egreso',
-        categoria: 'cta_cte', concepto: c.concepto || 'Cuenta corriente',
-        importe: Number(c.importe || 0), ref: c.id,
-        contacto: c.contactoTipo + ':' + c.contactoId,
-      });
-    }
-
-    // 3) Cuotas de créditos no pagadas
-    const cuotas = await prisma.cuotaCredito.findMany({
-      where: { credito: { companyId: req.companyId }, vencimiento: { gte: hoy, lte: horizonte }, pagada: false },
-      include: { credito: { select: { banco: true, nroOperacion: true } } },
-    });
-    for (const q of cuotas) {
-      items.push({
-        fecha: q.vencimiento, tipo: 'egreso', categoria: 'credito',
-        concepto: `Cuota ${q.numero} · ${q.credito.banco}${q.credito.nroOperacion ? ' #' + q.credito.nroOperacion : ''}`,
-        importe: Number(q.importeTotal || 0), ref: q.id,
-        contacto: q.credito.banco,
-      });
-    }
-
-    // 4) Liquidaciones de cereal con fecha estimada de cobro y no cobradas
-    const liqs = await prisma.liquidacionCereal.findMany({
-      where: { companyId: req.companyId, fechaCobroEst: { gte: hoy, lte: horizonte }, cobrado: false },
-      include: { deposito: { select: { nombre: true } } },
-    });
-    for (const l of liqs) {
-      items.push({
-        fecha: l.fechaCobroEst, tipo: 'ingreso', categoria: 'cereal',
-        concepto: `Liquidación cereal · ${l.deposito.nombre}`,
-        importe: Number(l.neto || 0), ref: l.id,
-      });
-    }
-
-    // 5) Arrendamientos a pagar (no pagados con vencimiento próximo)
-    const arrs = await prisma.arrendamiento.findMany({
-      where: { companyId: req.companyId, vencimiento: { gte: hoy, lte: horizonte }, pagado: false },
-      include: { campo: { select: { nombre: true } } },
-    });
-    for (const a of arrs) {
-      // El importe se calcula como hectáreas × importeHa (cuando aplica)
-      const importe = (Number(a.hectareas || 0) * Number(a.importeHa || 0)) || 0;
-      items.push({
-        fecha: a.vencimiento, tipo: 'egreso', categoria: 'arrendamiento',
-        concepto: `Arrendamiento ${a.propietario}${a.campo?.nombre ? ' · ' + a.campo.nombre : ''}`,
-        importe, ref: a.id, contacto: a.propietario,
-      });
-    }
-
-    items.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
-    const totalIngresos = items.filter(i => i.tipo === 'ingreso').reduce((a, b) => a + b.importe, 0);
-    const totalEgresos = items.filter(i => i.tipo === 'egreso').reduce((a, b) => a + b.importe, 0);
-    res.json({ ok: true, data: { items, totalIngresos, totalEgresos, saldo: totalIngresos - totalEgresos, horizonteDias: Number(req.query.dias || 180) } });
+// === Exportar Estado de situación a Excel (idea 8) ===
+app.get('/api/flujo-proyectado/export', requireCompany, async (req, res, next) => {
+  try {
+    const data = await _construirFlujoProyectado(req);
+    const wb = XLSX.utils.book_new();
+    // Hoja Resumen
+    const resumen = [
+      ['Estado de situación — Resumen'],
+      [''],
+      ['Horizonte (días)', data.horizonteDias],
+      ['Empresas incluidas', data.empresas.length],
+      [''],
+      ['Saldo inicial (bancos ARS + efectivo)', data.saldoInicial.total],
+      ['Saldo bancos USD', data.saldoInicial.bancosUSD],
+      [''],
+      ['Total a ingresar (proyectado)', data.totalIngresos],
+      ['Total a pagar (proyectado)', data.totalEgresos],
+      ['Saldo neto proyectado', data.saldo],
+      ['Saldo final proyectado', data.saldoFinal],
+      [''],
+      ['VENCIDOS — a cobrar (atrasado)', data.vencidos.totalIngresos],
+      ['VENCIDOS — a pagar (atrasado)', data.vencidos.totalEgresos],
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resumen), 'Resumen');
+    // Hoja Items proyectados
+    const headProy = ['Fecha', 'Tipo', 'Categoría', 'Concepto', 'Contacto', 'Importe'];
+    const rowsProy = data.items.map(i => [
+      new Date(i.fecha).toLocaleDateString('es-AR'),
+      i.tipo, i.categoria, i.concepto, i.contacto || '', i.importe,
+    ]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headProy, ...rowsProy]), 'Proyectado');
+    // Hoja Vencidos
+    const rowsVenc = data.vencidos.items.map(i => [
+      new Date(i.fecha).toLocaleDateString('es-AR'),
+      i.tipo, i.categoria, i.concepto, i.contacto || '', i.importe,
+    ]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headProy, ...rowsVenc]), 'Vencidos');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filename = `Estado-de-situacion-${new Date().toISOString().slice(0,10)}.xlsx`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
   } catch (e) { next(e); }
 });
 
@@ -4059,6 +4268,378 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
     );
     child.unref();
     res.json({ ok: true, mensaje: 'Actualización lanzada. El sistema va a reiniciarse en 30-90 segundos.' });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// COBROS Y PAGOS: pago/cobro general con multi-comprobante e Intercompany.
+// ============================================================
+// Helper: valida que el usuario tenga acceso a una empresa dada (super admin
+// puede a todas; resto solo a las que tiene membresia).
+function _userTieneAcceso(req, companyId) {
+  if (req.user.superAdmin) return true;
+  return (req.user.userCompanies || []).some(uc => uc.companyId === companyId);
+}
+
+// === GET cuentas pendientes (clientes que nos deben / proveedores que les debemos) ===
+// Devuelve la lista de comprobantes pendientes filtrada por contactoTipo y opcionalmente
+// por contactoId. Util para armar el modal de pago / cobro masivo.
+app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const tipo = String(req.query.tipo || ''); // 'cliente' | 'proveedor'
+    if (!['cliente', 'proveedor'].includes(tipo)) {
+      return res.status(400).json({ ok: false, error: 'tipo debe ser cliente o proveedor' });
+    }
+    const contactoId = req.query.contactoId || undefined;
+    const items = await prisma.ctaCte.findMany({
+      where: {
+        companyId: req.companyId,
+        contactoTipo: tipo,
+        ...(contactoId ? { contactoId } : {}),
+        pagado: false,
+        // Solo donde haya saldo pendiente
+        OR: [
+          { debe: { gt: 0 } },   // cliente nos debe → cobramos
+          { haber: { gt: 0 } },  // les debemos → pagamos
+        ],
+      },
+      orderBy: { fecha: 'asc' },
+    });
+    res.json({ ok: true, data: items });
+  } catch (e) { next(e); }
+});
+
+// === POST registrar pago a proveedor (multi-comprobante + multi-metodo) ===
+// Body:
+//   proveedorId: ID del proveedor
+//   comprobantes: [{ ctaCteId, importeAplicado }]
+//   metodo: 'efectivo' | 'cheque' | 'transferencia' | 'intercompany'
+//   monto: total que se paga (suma de comprobantes)
+//   // Segun metodo:
+//   cajaOrigen?: para efectivo
+//   chequeId?: para cheque (cheque de terceros que se endosa al proveedor)
+//   bancoCuentaId?: para transferencia
+//   empresaOrigenId?: para intercompany (la firma del grupo que pone los fondos)
+//   recursoIntercompany?: 'cheque' | 'transferencia' | 'efectivo' (opcional, default 'transferencia')
+//   chequeIdInterco?: si recursoIntercompany='cheque', cheque de la otra firma a usar
+//   cuentaOrigenInterco?: si transferencia desde la otra firma
+//   fecha: fecha del pago
+//   observaciones?
+app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      proveedorId: z.string().min(1),
+      comprobantes: z.array(z.object({
+        ctaCteId: z.string().min(1),
+        importeAplicado: z.number().positive(),
+      })).min(1),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany']),
+      monto: z.number().positive(),
+      fecha: z.coerce.date(),
+      cajaOrigen: z.string().nullable().optional(),
+      chequeId: z.string().nullable().optional(),
+      bancoCuentaId: z.string().nullable().optional(),
+      empresaOrigenId: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
+    if (Math.abs(sumaAplicada - d.monto) > 0.01) {
+      return res.status(400).json({ ok: false, error: 'La suma de los comprobantes (' + sumaAplicada + ') no coincide con el monto pagado (' + d.monto + ')' });
+    }
+
+    // Validar Intercompany
+    if (d.metodo === 'intercompany') {
+      if (!d.empresaOrigenId) return res.status(400).json({ ok: false, error: 'Falta empresaOrigenId para pago Intercompany' });
+      if (d.empresaOrigenId === req.companyId) return res.status(400).json({ ok: false, error: 'La empresa origen no puede ser la misma que la activa' });
+      if (!_userTieneAcceso(req, d.empresaOrigenId)) return res.status(403).json({ ok: false, error: 'No tenés acceso a la empresa origen del Intercompany' });
+      // Verificar permiso de intercompany
+      const tienePermInterco = req.user.superAdmin || (req.user.userCompanies || []).some(uc =>
+        uc.companyId === req.companyId &&
+        ((uc.role?.permissions || []).includes('finanzas:intercompany') ||
+         (uc.role?.permissions || []).includes('finanzas:*') ||
+         (uc.role?.permissions || []).includes('*:*'))
+      );
+      if (!tienePermInterco) return res.status(403).json({ ok: false, error: 'No tenés permiso finanzas:intercompany' });
+    }
+
+    // Resolver el proveedor (para el motivo)
+    const prov = await prisma.proveedor.findFirst({ where: { id: d.proveedorId, companyId: req.companyId } });
+    if (!prov) return res.status(404).json({ ok: false, error: 'Proveedor no encontrado' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Marcar/disminuir las CtaCte pendientes del proveedor
+      for (const c of d.comprobantes) {
+        const cc = await tx.ctaCte.findFirst({ where: { id: c.ctaCteId, companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId } });
+        if (!cc) throw new Error('Comprobante no encontrado: ' + c.ctaCteId);
+        const saldoPendiente = Number(cc.haber || 0) - Number(cc.debe || 0);
+        if (c.importeAplicado > saldoPendiente + 0.01) {
+          throw new Error('Importe aplicado (' + c.importeAplicado + ') excede el saldo pendiente del comprobante (' + saldoPendiente + ')');
+        }
+        // Marcar como pagado total/parcial: si paga todo, pagado=true. Sino, crear contra-asiento
+        // (un asiento debe=importe) que cierra el saldo.
+        if (Math.abs(c.importeAplicado - saldoPendiente) < 0.01) {
+          await tx.ctaCte.update({ where: { id: cc.id }, data: { pagado: true } });
+        }
+        // Crear contra-asiento: debe = importeAplicado (estamos pagando)
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId,
+          contactoTipo: 'proveedor', contactoId: d.proveedorId,
+          fecha: d.fecha,
+          detalle: 'Pago de ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
+          debe: c.importeAplicado,
+          referencia: cc.referencia,
+          observaciones: 'Pago via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
+        }});
+      }
+
+      // 2. Registrar el movimiento del recurso usado
+      if (d.metodo === 'cheque') {
+        if (!d.chequeId) throw new Error('Falta chequeId para pago con cheque');
+        const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
+        if (!ch) throw new Error('Cheque no encontrado');
+        await tx.cheque.update({ where: { id: ch.id }, data: { estado: 'endosado', beneficiario: prov.razonSocial } });
+      } else if (d.metodo === 'transferencia') {
+        if (!d.bancoCuentaId) throw new Error('Falta bancoCuentaId para transferencia');
+        await tx.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: d.bancoCuentaId,
+          fecha: d.fecha, tipo: 'transferencia_out',
+          concepto: 'Pago a ' + prov.razonSocial,
+          monto: d.monto, contraparte: prov.razonSocial,
+          observaciones: d.observaciones || null,
+          userId: req.user?.id || null,
+        }});
+      } else if (d.metodo === 'efectivo') {
+        await tx.efectivo.create({ data: {
+          companyId: req.companyId,
+          fecha: d.fecha, tipo: 'egreso',
+          concepto: 'Pago a ' + prov.razonSocial,
+          monto: d.monto,
+          caja: d.cajaOrigen || null,
+          clasificacion: 'empresa',
+          observaciones: d.observaciones || null,
+        }});
+      } else if (d.metodo === 'intercompany') {
+        // Crear los dos asientos espejo + IntercompanyMovimiento
+        const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
+        // En la empresa activa (DESTINO): haber = monto (le debemos a la otra firma)
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId,
+          contactoTipo: 'intercompany',
+          empresaContraparteId: d.empresaOrigenId,
+          intercompanyRef: interRef,
+          fecha: d.fecha,
+          detalle: 'Pago a ' + prov.razonSocial + ' cubierto por otra firma del grupo',
+          haber: d.monto,
+          observaciones: d.observaciones || null,
+        }});
+        // En la empresa origen (ORIGEN): debe = monto (saldo a favor)
+        await tx.ctaCte.create({ data: {
+          companyId: d.empresaOrigenId,
+          contactoTipo: 'intercompany',
+          empresaContraparteId: req.companyId,
+          intercompanyRef: interRef,
+          fecha: d.fecha,
+          detalle: 'Pago realizado para otra firma del grupo (proveedor: ' + prov.razonSocial + ')',
+          debe: d.monto,
+          observaciones: d.observaciones || null,
+        }});
+        // Header de auditoria
+        await tx.intercompanyMovimiento.create({ data: {
+          fecha: d.fecha,
+          empresaOrigenId: d.empresaOrigenId,
+          empresaDestinoId: req.companyId,
+          monto: d.monto,
+          motivo: 'Pago a ' + prov.razonSocial,
+          proveedorId: d.proveedorId,
+          intercompanyRef: interRef,
+          observaciones: d.observaciones || null,
+          userId: req.user?.id || null,
+        }});
+      }
+
+      return { ok: true, comprobantesAplicados: d.comprobantes.length };
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (e) { next(e); }
+});
+
+// === POST registrar cobro de cliente (multi-comprobante + multi-metodo) ===
+// Mismo esquema que pago a proveedor pero inverso.
+app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      clienteId: z.string().min(1),
+      comprobantes: z.array(z.object({
+        ctaCteId: z.string().min(1),
+        importeAplicado: z.number().positive(),
+      })).min(1),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany']),
+      monto: z.number().positive(),
+      fecha: z.coerce.date(),
+      cajaDestino: z.string().nullable().optional(),
+      chequeId: z.string().nullable().optional(),  // si recibimos un cheque NUEVO de terceros
+      bancoCuentaId: z.string().nullable().optional(),
+      empresaDestinoId: z.string().nullable().optional(),  // si el cliente paga a otra firma del grupo
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
+    if (Math.abs(sumaAplicada - d.monto) > 0.01) {
+      return res.status(400).json({ ok: false, error: 'La suma de comprobantes no coincide con el monto cobrado' });
+    }
+    if (d.metodo === 'intercompany') {
+      if (!d.empresaDestinoId) return res.status(400).json({ ok: false, error: 'Falta empresaDestinoId para Intercompany' });
+      if (d.empresaDestinoId === req.companyId) return res.status(400).json({ ok: false, error: 'La empresa destino no puede ser la misma' });
+      if (!_userTieneAcceso(req, d.empresaDestinoId)) return res.status(403).json({ ok: false, error: 'No tenés acceso a la empresa destino' });
+      const tienePerm = req.user.superAdmin || (req.user.userCompanies || []).some(uc =>
+        uc.companyId === req.companyId &&
+        ((uc.role?.permissions || []).includes('finanzas:intercompany') ||
+         (uc.role?.permissions || []).includes('finanzas:*') ||
+         (uc.role?.permissions || []).includes('*:*'))
+      );
+      if (!tienePerm) return res.status(403).json({ ok: false, error: 'No tenés permiso finanzas:intercompany' });
+    }
+    const cli = await prisma.cliente.findFirst({ where: { id: d.clienteId, companyId: req.companyId } });
+    if (!cli) return res.status(404).json({ ok: false, error: 'Cliente no encontrado' });
+
+    const result = await prisma.$transaction(async (tx) => {
+      for (const c of d.comprobantes) {
+        const cc = await tx.ctaCte.findFirst({ where: { id: c.ctaCteId, companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId } });
+        if (!cc) throw new Error('Comprobante no encontrado');
+        const saldoPendiente = Number(cc.debe || 0) - Number(cc.haber || 0);
+        if (c.importeAplicado > saldoPendiente + 0.01) throw new Error('Importe excede saldo pendiente');
+        if (Math.abs(c.importeAplicado - saldoPendiente) < 0.01) {
+          await tx.ctaCte.update({ where: { id: cc.id }, data: { pagado: true } });
+        }
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId,
+          contactoTipo: 'cliente', contactoId: d.clienteId,
+          fecha: d.fecha,
+          detalle: 'Cobro de ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
+          haber: c.importeAplicado,
+          referencia: cc.referencia,
+          observaciones: 'Cobro via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
+        }});
+      }
+      // Registrar el recurso recibido
+      if (d.metodo === 'cheque') {
+        // El cliente nos da un cheque de terceros → ya viene creado con chequeId
+        if (!d.chequeId) throw new Error('Falta chequeId del cheque recibido');
+      } else if (d.metodo === 'transferencia') {
+        if (!d.bancoCuentaId) throw new Error('Falta bancoCuentaId');
+        await tx.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: d.bancoCuentaId,
+          fecha: d.fecha, tipo: 'transferencia_in',
+          concepto: 'Cobro de ' + cli.razonSocial,
+          monto: d.monto, contraparte: cli.razonSocial,
+          observaciones: d.observaciones || null,
+          userId: req.user?.id || null,
+        }});
+      } else if (d.metodo === 'efectivo') {
+        await tx.efectivo.create({ data: {
+          companyId: req.companyId,
+          fecha: d.fecha, tipo: 'ingreso',
+          concepto: 'Cobro de ' + cli.razonSocial,
+          monto: d.monto,
+          caja: d.cajaDestino || null,
+          clasificacion: 'empresa',
+          observaciones: d.observaciones || null,
+        }});
+      } else if (d.metodo === 'intercompany') {
+        // El cliente le paga a otra firma del grupo (firma destino). El cobro
+        // queda pero los fondos entran a empresaDestinoId.
+        const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
+        // En la empresa activa (la del cliente): debe = monto a favor de la otra
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId,
+          contactoTipo: 'intercompany',
+          empresaContraparteId: d.empresaDestinoId,
+          intercompanyRef: interRef,
+          fecha: d.fecha,
+          detalle: 'Cobro de ' + cli.razonSocial + ' recibido por otra firma del grupo',
+          debe: d.monto,
+          observaciones: d.observaciones || null,
+        }});
+        // En la empresa destino: haber (le debe a nosotros)
+        await tx.ctaCte.create({ data: {
+          companyId: d.empresaDestinoId,
+          contactoTipo: 'intercompany',
+          empresaContraparteId: req.companyId,
+          intercompanyRef: interRef,
+          fecha: d.fecha,
+          detalle: 'Recibió cobro por cuenta de otra firma del grupo (cliente: ' + cli.razonSocial + ')',
+          haber: d.monto,
+          observaciones: d.observaciones || null,
+        }});
+        await tx.intercompanyMovimiento.create({ data: {
+          fecha: d.fecha,
+          empresaOrigenId: req.companyId,   // la que tenia el cliente (acreedora)
+          empresaDestinoId: d.empresaDestinoId,
+          monto: d.monto,
+          motivo: 'Cobro de ' + cli.razonSocial,
+          clienteId: d.clienteId,
+          intercompanyRef: interRef,
+          observaciones: d.observaciones || null,
+          userId: req.user?.id || null,
+        }});
+      }
+      return { ok: true, comprobantesAplicados: d.comprobantes.length };
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) { next(e); }
+});
+
+// === GET saldos Intercompany (matriz de saldos entre todas las firmas accesibles) ===
+app.get('/api/intercompany/saldos', authMiddleware, async (req, res, next) => {
+  try {
+    // Empresas a las que el usuario tiene acceso
+    const empresasAcceso = req.user.superAdmin
+      ? (await prisma.company.findMany({ where: { activo: true }, select: { id: true, name: true } }))
+      : (req.user.userCompanies || []).map(uc => ({ id: uc.companyId, name: uc.company?.name || uc.companyId }));
+    if (empresasAcceso.length < 2) {
+      return res.json({ ok: true, empresas: empresasAcceso, matriz: [], totalRegistros: 0 });
+    }
+    // Sumar saldos por empresa origen + empresa destino
+    const ctas = await prisma.ctaCte.findMany({
+      where: {
+        companyId: { in: empresasAcceso.map(e => e.id) },
+        contactoTipo: 'intercompany',
+      },
+      select: { companyId: true, empresaContraparteId: true, debe: true, haber: true },
+    });
+    // matriz[firmaA][firmaB] = saldo neto de A vs B (positivo: B le debe a A)
+    const matriz = {};
+    for (const e of empresasAcceso) matriz[e.id] = {};
+    for (const c of ctas) {
+      const a = c.companyId, b = c.empresaContraparteId;
+      if (!b) continue;
+      if (!matriz[a]) matriz[a] = {};
+      matriz[a][b] = (matriz[a][b] || 0) + Number(c.debe || 0) - Number(c.haber || 0);
+    }
+    res.json({ ok: true, empresas: empresasAcceso, matriz, totalRegistros: ctas.length });
+  } catch (e) { next(e); }
+});
+
+// === GET movimientos Intercompany detallados entre dos empresas ===
+app.get('/api/intercompany/movimientos', authMiddleware, async (req, res, next) => {
+  try {
+    const a = String(req.query.empresaA || '');
+    const b = String(req.query.empresaB || '');
+    if (!a || !b) return res.status(400).json({ ok: false, error: 'Faltan empresaA / empresaB' });
+    if (!_userTieneAcceso(req, a) || !_userTieneAcceso(req, b)) return res.status(403).json({ ok: false, error: 'Sin acceso a una de las empresas' });
+    const movs = await prisma.intercompanyMovimiento.findMany({
+      where: {
+        OR: [
+          { empresaOrigenId: a, empresaDestinoId: b },
+          { empresaOrigenId: b, empresaDestinoId: a },
+        ],
+      },
+      orderBy: { fecha: 'desc' },
+      include: { empresaOrigen: { select: { name: true } }, empresaDestino: { select: { name: true } } },
+    });
+    res.json({ ok: true, data: movs });
   } catch (e) { next(e); }
 });
 

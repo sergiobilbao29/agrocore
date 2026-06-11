@@ -67,6 +67,8 @@ model Company {
   creditos        Credito[]
   bancoCuentas    BancoCuenta[]
   importLotes     ImportLote[]
+  intercoOrigen   IntercompanyMovimiento[] @relation("IntercoOrigen")
+  intercoDestino  IntercompanyMovimiento[] @relation("IntercoDestino")
   bancoMovimientos BancoMovimiento[]
 }
 
@@ -92,6 +94,7 @@ model User {
   movimientos     Movimiento[]
   bancoMovimientos BancoMovimiento[]
   preferences     UserPreference?
+  intercoMovs     IntercompanyMovimiento[]
 }
 
 // Preferencias por usuario. Por ahora guardamos:
@@ -515,7 +518,10 @@ model Cheque {
 model CtaCte {
   id              String   @id @default(cuid())
   companyId       String
-  contactoTipo    String?    // "cliente" | "proveedor" | "libre"
+  // contactoTipo: "cliente" | "proveedor" | "libre" | "intercompany"
+  // Cuando es "intercompany", se ignoran contactoId / nombreLibre y se usa
+  // empresaContraparteId para vincular con la otra firma del grupo.
+  contactoTipo    String?
   contactoId      String?
   nombreLibre     String?    // usado cuando contactoTipo=libre
   fecha           DateTime
@@ -527,14 +533,63 @@ model CtaCte {
   pagado          Boolean   @default(false)  // marca de saldado (solo se usa en libres)
   referencia      String?    // nro factura, recibo, etc.
   observaciones   String?
+  // ---- Soporte INTERCOMPANY ----
+  // Cuando contactoTipo='intercompany', acá va el companyId de la firma
+  // contraparte del grupo (la que cubrió o que se beneficia del pago).
+  empresaContraparteId  String?
+  // Vincula los dos asientos espejo del Intercompany (uno en cada firma).
+  // Mismo UUID en ambos lados — permite identificarlos juntos.
+  intercompanyRef       String?
   createdAt       DateTime @default(now())
 
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
   @@index([contactoTipo, contactoId])
+  @@index([empresaContraparteId])
+  @@index([intercompanyRef])
   @@index([fecha])
   @@index([vencimiento])
+}
+
+// Registro de auditoria de movimientos INTERCOMPANY (entre firmas del mismo
+// grupo). Cada pago Intercompany crea:
+//  1. Un asiento CtaCte en la empresa ORIGEN (la que pone los fondos) con
+//     contactoTipo='intercompany', debe=monto, empresaContraparteId=destino.
+//  2. Un asiento CtaCte en la empresa DESTINO (la que se beneficia) con
+//     contactoTipo='intercompany', haber=monto, empresaContraparteId=origen.
+//  3. Este IntercompanyMovimiento como header de auditoria.
+//
+// Para CANCELAR un Intercompany se borran los 3 registros vinculados por
+// intercompanyRef (en ambas firmas) — onDelete cascade no llega a CtaCte
+// porque viven en empresas distintas, asi que se borra manual desde el endpoint.
+model IntercompanyMovimiento {
+  id                  String   @id @default(cuid())
+  fecha               DateTime
+  empresaOrigenId     String                       // la que pone el recurso (acreedora)
+  empresaDestinoId    String                       // la que se beneficia (deudora)
+  monto               Float
+  motivo              String                       // descripcion humana: "Pago a RENZ" / "Cobro de cliente X"
+  // Vinculos al recurso usado (opcionales):
+  proveedorId         String?                      // proveedor original al que se le pago
+  clienteId           String?                      // cliente original del que se cobro
+  chequeId            String?                      // si se uso un cheque de terceros
+  bancoMovimientoId   String?                      // si se uso una transferencia bancaria
+  efectivoId          String?                      // si se uso efectivo
+  // Ref unica para vincular los dos asientos espejo en CtaCte (se guarda el mismo
+  // intercompanyRef en este movimiento y en las CtaCte).
+  intercompanyRef     String   @unique
+  observaciones       String?
+  userId              String?
+  createdAt           DateTime @default(now())
+
+  empresaOrigen       Company  @relation("IntercoOrigen", fields: [empresaOrigenId], references: [id], onDelete: Cascade)
+  empresaDestino      Company  @relation("IntercoDestino", fields: [empresaDestinoId], references: [id], onDelete: Cascade)
+  user                User?    @relation(fields: [userId], references: [id])
+
+  @@index([empresaOrigenId])
+  @@index([empresaDestinoId])
+  @@index([fecha])
 }
 
 model Arrendamiento {

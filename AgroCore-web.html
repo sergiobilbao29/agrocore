@@ -914,11 +914,12 @@ const MODULES = [
   { id:'clientes',      label:'Clientes',             icon:'👥', perm:'contactos:read',  section:'Ventas' },
   { id:'facturacion',   label:'Facturación',          icon:'🧮', perm:'finanzas:read',   section:'Ventas' },
   { id:'liquidaciones', label:'Liquidaciones cereal', icon:'🧾', perm:'ventas:read',     section:'Ventas' },
-  { id:'ctasCtes',      label:'Cuentas corrientes',   icon:'📇', perm:'finanzas:read',   section:'Ventas' },
+  { id:'ctasCobrar',    label:'Cuentas a cobrar',     icon:'💰', perm:'finanzas:read',   section:'Ventas' },
 
   // ===== COMPRAS — todo lo que sale =====
   { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Compras' },
   { id:'compras',       label:'Compras',              icon:'🛒', perm:'finanzas:read',   section:'Compras' },
+  { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Compras' },
   { id:'libroIVA',      label:'Libro IVA',            icon:'📘', perm:'finanzas:read',   section:'Compras' },
 
   // ===== TESORERÍA — bancos, efectivo, cheques, créditos =====
@@ -927,6 +928,7 @@ const MODULES = [
   { id:'cheques',       label:'Cheques',              icon:'💳', perm:'finanzas:read',   section:'Tesorería' },
   { id:'creditos',      label:'Créditos bancarios',   icon:'🏦', perm:'finanzas:read',   section:'Tesorería' },
   { id:'arrendamientos',label:'Arrendamientos',       icon:'🏞️', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'intercompany',  label:'Cuentas Intercompany', icon:'🔄', perm:'finanzas:read',   section:'Tesorería' },
 
   // ===== PRODUCCIÓN agrícola =====
   { id:'campos',        label:'Campos y lotes',       icon:'🗺️', perm:'produccion:read', section:'Producción' },
@@ -2214,6 +2216,18 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'12/06/2026',
+      titulo:'🔄 Pagos / Cobros Intercompany entre firmas del grupo',
+      desc:'Cuando una firma del grupo cubre el compromiso de otra (típico en estructuras agropecuarias familiares), el sistema ahora lo modela como Cuentas Corrientes Intercompany sin romper la contabilidad de ninguna. Flujo: en Cuentas a Pagar elegís un proveedor, tildás los comprobantes a cancelar, importes (total o parcial), y como Método de Pago elegís "🔄 Intercompany (recursos de otra firma)". Seleccionás la firma del grupo que pone los fondos. Al confirmar, el sistema crea automáticamente: en la firma activa, una CtaCte tipo intercompany con HABER (deuda interna); en la firma origen, una CtaCte tipo intercompany con DEBE (saldo a favor); y un IntercompanyMovimiento de auditoría que vincula los dos asientos. La opción solo aparece si el usuario tiene acceso a más de una empresa y permiso "finanzas:intercompany" (nuevo permiso fino). Para cobranzas funciona igual pero inverso (el cliente paga a otra firma del grupo).' },
+    { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'12/06/2026',
+      titulo:'💸 Pago / Cobro multi-comprobante (modal grande)',
+      desc:'Configuración → Compras → Cuentas a pagar → botón "💸 Pagar". Modal nuevo: elegís proveedor, ves TODOS los comprobantes pendientes con checkboxes, tildás los que estás pagando (total o parcial ajustando el importe por fila), ves el total tildado y comparás contra el total a pagar (admite entregas a cuenta). Elegís método: 💵 Efectivo / 💳 Cheque / 🏛️ Transferencia / 🔄 Intercompany. El sistema crea los asientos contables correspondientes en todos los módulos. Lo mismo para cobranzas (Cuentas a cobrar → "💰 Cobrar").' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/06/2026',
+      titulo:'📋 Reorganización del menú: Cobrar/Pagar separados + Intercompany',
+      desc:'El menú lateral ahora tiene: VENTAS → 💰 Cuentas a cobrar (clientes que nos deben), COMPRAS → 💸 Cuentas a pagar (proveedores a los que les debemos), TESORERÍA → 🔄 Cuentas Intercompany (matriz de saldos cruzados entre firmas del grupo). Las tres son vistas del mismo modelo CtaCte pero pre-filtradas para que cada perfil vea lo que le corresponde. La página Cuentas Intercompany muestra una matriz: cada celda dice "esta firma le debe / tiene a favor $X contra aquella firma"; click en la celda para ver los movimientos detallados entre ambas.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/06/2026',
+      titulo:'🎯 Estado de situación renovado: 8 mejoras de un saque',
+      desc:'(1) 💰 Saldo HOY como punto de partida — suma cuentas bancarias ARS + efectivo en cajas. Ahora ves "tu plata real" arriba, y el reporte calcula el saldo FINAL proyectado en cada horizonte. (2) 📈 Gráfico de saldo acumulado día a día — sparkline que muestra los valles donde el saldo cae por debajo de cero. (3) 🎛️ Filtros por categoría — chips arriba para mostrar/ocultar cheques, ctas. ctes., créditos, cereal, arrendamientos, facturas y viajes. Los totales se recalculan. (4) 🌐 Filtro multi-empresa — botón "🌐 X de Y empresas" abre selector para ver datos consolidados de varias empresas (ideal para grupos como Peiretti con LLSP/El Pistrin/Gerardo). (5) 🧾 Facturas pendientes de cobro — si emitiste una factura en cta. corriente sin generar CtaCte aparte, ahora aparece igual con vencimiento estimado a 30 días. (6) 🚛 Viajes con flete facturado — los viajes en estado "facturado" con tarifa cargada aparecen como egreso por el flete (tarifa × kg / 1000). (7) ⚠️ Panel de VENCIDOS arriba — banner rojo con los items atrasados (cheques con fecha pasada no acreditados, ctas. ctes. con vencimiento vencido, etc.) con resumen de total a cobrar atrasado y total a pagar atrasado. Detalle expandible. (8) 📥 Exportar a Excel — botón que genera un xlsx con 3 hojas (Resumen / Proyectado / Vencidos) listo para enviarle al contador o al dueño.' },
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'11/06/2026',
       titulo:'🚀 Instalación de actualizaciones desde el sistema (sin RDP)',
       desc:'Cuando AgroCore detecta una versión nueva, el modal de "Actualización disponible" ahora muestra para el Super Admin un botón "🚀 Instalar ahora" que dispara el update directamente desde el navegador. El sistema lanza Update-AgroCore.ps1 en modo desatendido (-Unattended), el front muestra un spinner con progreso, hace polling cada 5 segundos sobre /api/system/version, y cuando detecta que el sistema volvió a estar arriba con la versión nueva, recarga la pestaña automáticamente. Tarda entre 1 y 3 minutos. Ya no hace falta conectarse por RDP al servidor para actualizar. Los usuarios que NO son Super Admin ven un mensaje indicándoles que avisen al Super Admin para instalar.' },
@@ -6363,6 +6377,7 @@ const SUB_PERMS = [
     { key: 'finanzas:credito:pagar',             label: 'Marcar cuotas de crédito como pagadas' },
     { key: 'finanzas:liquidacion_cereal:create', label: 'Cargar liquidaciones de cereal' },
     { key: 'finanzas:flujo_proyectado:read',     label: 'Ver Estado de situación (flujo proyectado)' },
+    { key: 'finanzas:intercompany',              label: 'Pagar/cobrar con recursos de otra firma del grupo (Intercompany)' },
   ], parent: 'finanzas' },
   // VENTAS — facturación externa ARCA
   { group: 'Ventas · Facturación', items: [
@@ -8230,8 +8245,13 @@ async function hacMovDel(id) {
 /* =========================================================
  * CUENTAS CORRIENTES
  * ========================================================= */
+// Aliases: las nuevas entradas del menú abren la misma página, solo pre-seleccionan
+// el tab. Permiten un futuro split sin tener que reescribir el contenido ahora.
+pages.ctasCobrar = async function() { state.ccTab = 'cobrar'; return pages.ctasCtes(); };
+pages.ctasPagar  = async function() { state.ccTab = 'pagar';  return pages.ctasCtes(); };
+
 pages.ctasCtes = async function() {
-  setHeader('Cuentas corrientes', 'Saldos a cobrar y a pagar');
+  setHeader(state.ccTab === 'pagar' ? 'Cuentas a pagar' : state.ccTab === 'cobrar' ? 'Cuentas a cobrar' : 'Cuentas corrientes', state.ccTab === 'pagar' ? 'Saldos pendientes con proveedores' : state.ccTab === 'cobrar' ? 'Saldos pendientes de clientes' : 'Saldos a cobrar y a pagar');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('ctasCtes','Ctas Ctes'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows=[], clis=[], provs=[];
@@ -8285,7 +8305,11 @@ pages.ctasCtes = async function() {
         ${tabBtn('pagar', '📤 A pagar', tab==='pagar')}
         ${tabBtn('otros', '📋 Otros / Manuales', tab==='otros')}
       </div>
-      ${can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ccForm()">+ Movimiento manual</button>`:''}
+      <div class="flex gap-2 items-center flex-wrap">
+        ${can('finanzas:create') && (tab==='cobrar') ? `<button class="btn btn-primary" onclick="pagoCobroAbrir('cobro')">💰 Cobrar (multi-comprobante)</button>` : ''}
+        ${can('finanzas:create') && (tab==='pagar') ? `<button class="btn btn-primary" onclick="pagoCobroAbrir('pago')">💸 Pagar (multi-comprobante)</button>` : ''}
+        ${can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ccForm()">+ Movimiento manual</button>`:''}
+      </div>
     </div>
     <div id="cc-body"></div>`;
 
@@ -8535,6 +8559,291 @@ async function ccCobroPagoSave(tipo, contactoId) {
   } catch (e) { toast(e.message,'error'); }
 }
 function ccLibreFilter(k,v){ state.ccLibreFilter = state.ccLibreFilter || { categoria:'', estado:'pendientes', direccion:'' }; state.ccLibreFilter[k]=v; pages.ctasCtes(); }
+
+/* =========================================================
+ * 💸 PAGO / COBRO MULTI-COMPROBANTE con métodos varios e Intercompany
+ * ========================================================= */
+async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
+  const esPago = modo === 'pago';
+  const tipoContacto = esPago ? 'proveedor' : 'cliente';
+  const lista = esPago ? (state.cache.proveedores || []) : (state.cache.clientes || []);
+  if (!lista.length) return toast('No hay ' + (esPago ? 'proveedores' : 'clientes') + ' cargados.', 'warn');
+
+  openModal({
+    title: esPago ? '💸 Pagar a proveedor' : '💰 Cobrar de cliente', size: 'max-w-3xl',
+    body: `
+      <div class="mb-3">
+        <label class="label">${esPago ? 'Proveedor' : 'Cliente'} *</label>
+        <select id="pc-contacto" class="input" onchange="pagoCobroCargarComprobantes('${modo}')">
+          <option value="">— Seleccionar —</option>
+          ${lista.map(c => `<option value="${esc(c.id)}">${esc(c.razonSocial)}${c.cuit?' · '+esc(c.cuit):''}</option>`).join('')}
+        </select>
+      </div>
+      <div id="pc-comprobantes" class="border border-slate-200 rounded-lg p-3 mb-3 bg-slate-50 min-h-[120px]">
+        <div class="text-sm text-slate-500 text-center py-6">Seleccioná un ${esPago ? 'proveedor' : 'cliente'} para ver sus comprobantes pendientes</div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <label class="label">Fecha</label>
+          <input type="date" id="pc-fecha" class="input" value="${new Date().toISOString().slice(0,10)}"/>
+        </div>
+        <div>
+          <label class="label">Método de pago *</label>
+          <select id="pc-metodo" class="input" onchange="pagoCobroMetodoCambio('${modo}')">
+            <option value="efectivo">💵 Efectivo</option>
+            <option value="cheque">💳 Cheque${esPago?' propio o de terceros endosado':' (de terceros recibido)'}</option>
+            <option value="transferencia">🏛️ Transferencia bancaria</option>
+            ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (recursos de otra firma)</option>` : ''}
+          </select>
+        </div>
+      </div>
+      <div id="pc-metodo-detalle" class="mb-3"></div>
+      <div class="bg-amber-50 border border-amber-300 rounded p-3 text-sm">
+        <div class="flex justify-between mb-1"><span>Total tildado:</span><b id="pc-total-tildado">$ 0</b></div>
+        <div class="flex justify-between"><span>Total a ${esPago?'pagar':'cobrar'}:</span><input id="pc-total-pago" type="number" class="input text-right w-32 py-0 text-sm" value="0"/></div>
+        <div id="pc-diff" class="text-xs mt-2"></div>
+      </div>
+      <div>
+        <label class="label">Observaciones</label>
+        <input id="pc-obs" class="input" placeholder="Opcional"/>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="pagoCobroConfirmar('${modo}')">${esPago?'💸 Registrar pago':'💰 Registrar cobro'}</button>`
+  });
+  state._pagoCobroData = { modo, comprobantes: [], tildados: {} };
+}
+
+async function pagoCobroCargarComprobantes(modo) {
+  const esPago = modo === 'pago';
+  const contactoId = document.getElementById('pc-contacto').value;
+  const cont = document.getElementById('pc-comprobantes');
+  if (!contactoId) {
+    cont.innerHTML = `<div class="text-sm text-slate-500 text-center py-6">Seleccioná un ${esPago?'proveedor':'cliente'} para ver sus comprobantes pendientes</div>`;
+    state._pagoCobroData.comprobantes = [];
+    state._pagoCobroData.tildados = {};
+    pagoCobroRecalcular();
+    return;
+  }
+  cont.innerHTML = `<div class="text-sm text-slate-500 text-center py-6">Cargando...</div>`;
+  try {
+    const tipo = esPago ? 'proveedor' : 'cliente';
+    const r = await api(`/api/ctas-ctes/pendientes?tipo=${tipo}&contactoId=${contactoId}`);
+    const items = (r.data || []).map(it => {
+      const saldoPendiente = esPago ? Number(it.haber || 0) - Number(it.debe || 0) : Number(it.debe || 0) - Number(it.haber || 0);
+      return { ...it, saldoPendiente };
+    }).filter(i => i.saldoPendiente > 0.01);
+    state._pagoCobroData.comprobantes = items;
+    state._pagoCobroData.tildados = {};
+    if (!items.length) {
+      cont.innerHTML = `<div class="text-sm text-slate-500 text-center py-6">No hay comprobantes pendientes para este ${esPago?'proveedor':'cliente'}.</div>`;
+      pagoCobroRecalcular();
+      return;
+    }
+    cont.innerHTML = `
+      <div class="text-xs text-slate-600 mb-2">${items.length} comprobante${items.length===1?'':'s'} pendiente${items.length===1?'':'s'}. Tildá los que estás pagando y ajustá el importe si es parcial.</div>
+      <div class="space-y-1 max-h-64 overflow-y-auto">
+        ${items.map((it, idx) => `
+          <div class="flex items-center gap-2 text-sm bg-white border border-slate-200 rounded p-2">
+            <input type="checkbox" class="pc-tilde" data-idx="${idx}" onchange="pagoCobroToggleTilde(${idx}, this.checked)"/>
+            <div class="flex-1 min-w-0">
+              <div class="font-medium truncate">${esc(it.detalle || 'Comprobante')}</div>
+              <div class="text-[11px] text-slate-500">${fmtDate(it.fecha)}${it.referencia ? ' · '+esc(it.referencia) : ''}</div>
+            </div>
+            <div class="text-right">
+              <div class="text-[11px] text-slate-500">Saldo:</div>
+              <div class="font-bold">${fmt$(it.saldoPendiente)}</div>
+            </div>
+            <input type="number" class="input text-right w-28 py-0 text-sm pc-importe" data-idx="${idx}" value="${it.saldoPendiente.toFixed(2)}" oninput="pagoCobroRecalcular()" min="0" step="0.01"/>
+          </div>`).join('')}
+      </div>`;
+    pagoCobroRecalcular();
+  } catch (e) {
+    cont.innerHTML = `<div class="text-sm text-red-600 text-center py-6">${esc(e.message)}</div>`;
+  }
+}
+
+function pagoCobroToggleTilde(idx, checked) {
+  state._pagoCobroData.tildados[idx] = checked;
+  pagoCobroRecalcular();
+}
+
+function pagoCobroRecalcular() {
+  const d = state._pagoCobroData;
+  let totalTildado = 0;
+  for (const idx in d.tildados) {
+    if (!d.tildados[idx]) continue;
+    const inp = document.querySelector(`.pc-importe[data-idx="${idx}"]`);
+    if (inp) totalTildado += Number(inp.value || 0);
+  }
+  document.getElementById('pc-total-tildado').textContent = fmt$(totalTildado);
+  // Si el usuario no tocó el total a pagar, lo emparejamos
+  const inpTotal = document.getElementById('pc-total-pago');
+  if (!inpTotal.dataset.touched) inpTotal.value = totalTildado.toFixed(2);
+  const totalPago = Number(inpTotal.value || 0);
+  const diffEl = document.getElementById('pc-diff');
+  const diff = totalPago - totalTildado;
+  if (Math.abs(diff) < 0.01) {
+    diffEl.innerHTML = '<span class="text-emerald-700">✅ Total coincide con comprobantes tildados.</span>';
+  } else if (diff > 0) {
+    diffEl.innerHTML = `<span class="text-amber-700">⚠️ Estás pagando $${diff.toFixed(2)} más de lo tildado. Será una <b>entrega a cuenta</b> sin asignación específica (no implementado todavía — ajustá los comprobantes).</span>`;
+  } else {
+    diffEl.innerHTML = `<span class="text-red-700">❌ El total tildado supera al total a pagar por $${(-diff).toFixed(2)}. Bajá importes o destildá.</span>`;
+  }
+  inpTotal.addEventListener('input', () => { inpTotal.dataset.touched = '1'; pagoCobroRecalcular(); }, { once: true });
+}
+
+function pagoCobroMetodoCambio(modo) {
+  const esPago = modo === 'pago';
+  const metodo = document.getElementById('pc-metodo').value;
+  const cont = document.getElementById('pc-metodo-detalle');
+  if (metodo === 'efectivo') {
+    cont.innerHTML = `<label class="label">Caja</label><input id="pc-caja" class="input" placeholder="Ej: Oficina, Caja Damián"/>`;
+  } else if (metodo === 'cheque') {
+    // Para pago: cheque de terceros en cartera para endosar
+    // Para cobro: ya tendrías que crear el cheque primero — por simplicidad acá pedimos el ID
+    cont.innerHTML = `<label class="label">${esPago ? 'Cheque a endosar (ID, en cartera)' : 'ID del cheque recibido'}</label><input id="pc-cheque" class="input" placeholder="ID del cheque (búscalo en Tesorería → Cheques)"/>`;
+  } else if (metodo === 'transferencia') {
+    const cuentas = state.cache.bancoCuentas || [];
+    cont.innerHTML = `<label class="label">Cuenta bancaria</label>
+      <select id="pc-banco" class="input">
+        <option value="">— Seleccionar —</option>
+        ${cuentas.filter(c => c.activo).map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}
+      </select>
+      ${!cuentas.length ? '<div class="text-xs text-amber-700 mt-1">No hay cuentas cargadas — cargá una en Tesorería → Bancos primero.</div>' : ''}`;
+  } else if (metodo === 'intercompany') {
+    const otrasEmpresas = (state.user?.companies || []).filter(c => c.id !== state.companyId);
+    cont.innerHTML = `
+      <div class="bg-indigo-50 border border-indigo-200 rounded p-2 text-xs text-indigo-900 mb-2">
+        🔄 <b>Intercompany:</b> ${esPago
+          ? 'Otra firma del grupo cubre este pago. Al confirmar, esta firma quedará con una <b>deuda interna</b> con la firma origen, y la firma origen tendrá un <b>saldo a favor</b>.'
+          : 'El cliente paga a otra firma del grupo. Al confirmar, esta firma quedará con un <b>saldo a favor</b> contra la firma destino, y la firma destino tendrá una <b>deuda interna</b>.'}
+      </div>
+      <label class="label">${esPago ? 'Firma del grupo que cubre el pago (origen)' : 'Firma del grupo que recibe los fondos (destino)'}</label>
+      <select id="pc-empresa-inter" class="input">
+        <option value="">— Seleccionar —</option>
+        ${otrasEmpresas.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+      </select>`;
+  }
+}
+
+async function pagoCobroConfirmar(modo) {
+  const esPago = modo === 'pago';
+  const d = state._pagoCobroData;
+  const contactoId = document.getElementById('pc-contacto').value;
+  if (!contactoId) return toast('Elegí un ' + (esPago?'proveedor':'cliente'), 'warn');
+  const fecha = document.getElementById('pc-fecha').value;
+  const metodo = document.getElementById('pc-metodo').value;
+  const obs = document.getElementById('pc-obs').value || null;
+  // Armar comprobantes
+  const comprobantes = [];
+  for (const idx in d.tildados) {
+    if (!d.tildados[idx]) continue;
+    const inp = document.querySelector(`.pc-importe[data-idx="${idx}"]`);
+    const importe = Number(inp?.value || 0);
+    if (importe <= 0) continue;
+    comprobantes.push({ ctaCteId: d.comprobantes[idx].id, importeAplicado: importe });
+  }
+  if (!comprobantes.length) return toast('Tildá al menos un comprobante', 'warn');
+  const monto = Number(document.getElementById('pc-total-pago').value || 0);
+  if (monto <= 0) return toast('El monto debe ser mayor a 0', 'warn');
+  const sumaComp = comprobantes.reduce((a,c) => a+c.importeAplicado, 0);
+  if (Math.abs(sumaComp - monto) > 0.01) return toast(`La suma de comprobantes (${fmt$(sumaComp)}) no coincide con el monto (${fmt$(monto)})`, 'error');
+
+  const body = {
+    [esPago ? 'proveedorId' : 'clienteId']: contactoId,
+    comprobantes, metodo, monto, fecha, observaciones: obs,
+  };
+  if (metodo === 'efectivo') body.cajaOrigen = document.getElementById('pc-caja')?.value || null;
+  if (metodo === 'cheque')   body.chequeId   = document.getElementById('pc-cheque')?.value || null;
+  if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('pc-banco')?.value || null;
+  if (metodo === 'intercompany') {
+    const otraEmp = document.getElementById('pc-empresa-inter')?.value;
+    if (!otraEmp) return toast('Seleccioná la firma del grupo', 'warn');
+    if (esPago) body.empresaOrigenId = otraEmp;
+    else body.empresaDestinoId = otraEmp;
+  }
+  try {
+    const url = esPago ? '/api/pagos-proveedores' : '/api/cobros-clientes';
+    await api(url, { method: 'POST', body: JSON.stringify(body) });
+    closeModal();
+    toast((esPago ? '💸 Pago' : '💰 Cobro') + ` registrado por ${fmt$(monto)} (${comprobantes.length} comprobante${comprobantes.length===1?'':'s'})`, 'success');
+    pages.ctasCtes();
+  } catch (e) { toast(e.message || 'Error al registrar', 'error'); }
+}
+
+/* =========================================================
+ * 🔄 CUENTAS INTERCOMPANY — matriz de saldos cruzados entre firmas
+ * ========================================================= */
+pages.intercompany = async function() {
+  setHeader('Cuentas Intercompany', 'Saldos cruzados entre las firmas del grupo');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('intercompany','Intercompany'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando...</div>`;
+  let r;
+  try { r = await api('/api/intercompany/saldos'); }
+  catch (e) { return toast(e.message,'error'); }
+  const emps = r.empresas || [];
+  if (emps.length < 2) {
+    $('#page-body').innerHTML = `<div class="kpi text-center text-slate-500 py-8">Para usar Intercompany necesitás al menos 2 empresas activas con saldos cruzados.</div>`;
+    return;
+  }
+  const matriz = r.matriz || {};
+  // Calcular netos: saldoAB = matriz[A][B] − matriz[B][A]
+  function neto(a, b) {
+    return (matriz[a]?.[b] || 0) - (matriz[b]?.[a] || 0);
+  }
+  $('#page-body').innerHTML = `
+    <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-3 mb-4 text-xs text-indigo-900">
+      💡 <b>Cómo leer la matriz:</b> cada celda muestra el saldo NETO entre las dos firmas. <b>Positivo</b> (verde) = la firma de la fila tiene saldo a favor contra la de la columna. <b>Negativo</b> (rojo) = la firma de la fila le debe a la de la columna.
+    </div>
+    <div class="kpi p-0 overflow-x-auto">
+      <table class="data text-sm">
+        <thead><tr>
+          <th class="text-left">Desde \\ Hacia</th>
+          ${emps.map(e => `<th class="text-right">${esc(e.name)}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${emps.map(a => `<tr class="table-row">
+            <td class="font-semibold">${esc(a.name)}</td>
+            ${emps.map(b => {
+              if (a.id === b.id) return `<td class="text-center text-slate-300">—</td>`;
+              const n = neto(a.id, b.id);
+              if (Math.abs(n) < 0.01) return `<td class="text-right text-slate-400">$0</td>`;
+              return `<td class="text-right cursor-pointer hover:bg-slate-100" onclick='intercoVerMovs(${JSON.stringify(a.id)}, ${JSON.stringify(b.id)}, ${JSON.stringify(a.name)}, ${JSON.stringify(b.name)})'>
+                <span class="font-bold ${n>=0?'text-emerald-700':'text-red-700'}">${n>=0?'+':''}${fmt$(n)}</span>
+              </td>`;
+            }).join('')}
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <p class="text-[11px] text-slate-500 mt-3">Click en una celda con saldo para ver los movimientos detallados entre esas dos firmas.</p>`;
+};
+
+async function intercoVerMovs(empAId, empBId, empAName, empBName) {
+  try {
+    const r = await api(`/api/intercompany/movimientos?empresaA=${empAId}&empresaB=${empBId}`);
+    const movs = r.data || [];
+    openModal({
+      title: `🔄 Movimientos entre ${empAName} y ${empBName}`, size: 'max-w-2xl',
+      body: !movs.length ? '<div class="text-sm text-slate-500 py-4 text-center">Sin movimientos entre estas firmas.</div>' : `
+        <table class="data text-sm">
+          <thead><tr><th>Fecha</th><th>Origen</th><th>Destino</th><th>Motivo</th><th class="text-right">Monto</th></tr></thead>
+          <tbody>
+            ${movs.map(m => `<tr>
+              <td>${fmtDate(m.fecha)}</td>
+              <td>${esc(m.empresaOrigen?.name || '')}</td>
+              <td>${esc(m.empresaDestino?.name || '')}</td>
+              <td class="text-xs">${esc(m.motivo)}${m.observaciones?'<br><span class="text-slate-400">'+esc(m.observaciones)+'</span>':''}</td>
+              <td class="text-right font-bold">${fmt$(m.monto)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`,
+      footer: '<button class="btn btn-primary" onclick="closeModal()">Cerrar</button>',
+    });
+  } catch (e) { toast(e.message, 'error'); }
+}
 
 function ccForm(id=null) {
   const it = id ? ((state.cache.ctasCtes||[]).find(x=>x.id===id)||{}) : {};
@@ -11895,19 +12204,50 @@ async function cuotaPagarConfirmar(credId, cuotaId) {
  * FLUJO PROYECTADO / ESTADO DE SITUACIÓN
  * Vista consolidada cronológica de ingresos y egresos futuros.
  * ========================================================= */
+const FLUJO_CATS = [
+  { id:'cheque',        lbl:'Cheques',         icon:'💳' },
+  { id:'cta_cte',       lbl:'Ctas. ctes.',     icon:'📇' },
+  { id:'credito',       lbl:'Créditos',        icon:'🏦' },
+  { id:'cereal',        lbl:'Liquid. cereal',  icon:'🌾' },
+  { id:'arrendamiento', lbl:'Arrendamientos',  icon:'🏞️' },
+  { id:'factura',       lbl:'Facturas',        icon:'🧾' },
+  { id:'viaje',         lbl:'Viajes / flete',  icon:'🚛' },
+];
+
 pages.flujoProyectado = async function() {
-  setHeader('Estado de situación', 'Lo que tenés que pagar y lo que vas a cobrar — ordenado cronológicamente');
+  setHeader('Estado de situación', 'Saldo de hoy + lo que vas a cobrar/pagar — ordenado cronológicamente');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('flujoProyectado','Estado de situación'); return; }
   state.flujoDias = state.flujoDias || 180;
-  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let data = { items:[], totalIngresos:0, totalEgresos:0, saldo:0 };
-  try { data = (await api('/api/flujo-proyectado?dias='+state.flujoDias)).data || data; } catch (e) { return toast(e.message,'error'); }
+  state.flujoCatsOcultas = state.flujoCatsOcultas || {};
+  // Empresas seleccionadas: por default la activa; permitir multi
+  if (!state.flujoEmpresas || !state.flujoEmpresas.length) {
+    state.flujoEmpresas = state.companyId ? [state.companyId] : [];
+  }
 
-  const ICONS = { cheque:'💳', cta_cte:'📇', credito:'🏦', cereal:'🌾', arrendamiento:'🏞️' };
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  const empParam = state.flujoEmpresas.join(',');
+  const qs = `dias=${state.flujoDias}` + (empParam ? `&empresas=${encodeURIComponent(empParam)}` : '');
+  let data;
+  try { data = (await api('/api/flujo-proyectado?'+qs)).data; }
+  catch (e) { return toast(e.message,'error'); }
+
+  const ICONS = Object.fromEntries(FLUJO_CATS.map(c => [c.id, c.icon]));
   const ahora = new Date();
-  // Agrupar por mes
+
+  // Aplicar filtros de categoría (cliente-side)
+  const itemsFiltrados = (data.items || []).filter(it => !state.flujoCatsOcultas[it.categoria]);
+  const vencidosFiltrados = (data.vencidos?.items || []).filter(it => !state.flujoCatsOcultas[it.categoria]);
+
+  // Recalcular totales con filtro
+  const totalIngresos = itemsFiltrados.filter(i => i.tipo==='ingreso').reduce((a,b) => a+b.importe, 0);
+  const totalEgresos  = itemsFiltrados.filter(i => i.tipo==='egreso').reduce((a,b) => a+b.importe, 0);
+  const venIngresos   = vencidosFiltrados.filter(i => i.tipo==='ingreso').reduce((a,b) => a+b.importe, 0);
+  const venEgresos    = vencidosFiltrados.filter(i => i.tipo==='egreso').reduce((a,b) => a+b.importe, 0);
+  const saldoFinal    = (data.saldoInicial?.total || 0) + totalIngresos - totalEgresos;
+
+  // Agrupar items por mes
   const porMes = {};
-  data.items.forEach(it => {
+  itemsFiltrados.forEach(it => {
     const k = new Date(it.fecha).toISOString().slice(0,7);
     if (!porMes[k]) porMes[k] = { ingresos:0, egresos:0, items:[] };
     porMes[k].items.push(it);
@@ -11916,20 +12256,90 @@ pages.flujoProyectado = async function() {
   });
   const meses = Object.entries(porMes).sort((a,b) => a[0].localeCompare(b[0]));
 
+  // Empresas del usuario (para el selector multi)
+  const empresasUser = state.user?.companies || [];
+
   $('#page-body').innerHTML = `
+    <!-- Toolbar: horizonte + empresas + exportar -->
     <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
-      <div class="flex gap-2 items-center">
+      <div class="flex gap-2 items-center flex-wrap">
         <span class="text-sm text-slate-600">Horizonte:</span>
         ${[30,90,180,365].map(d => `<button class="btn btn-${state.flujoDias===d?'primary':'secondary'} text-xs" onclick="state.flujoDias=${d}; pages.flujoProyectado();">${d} días</button>`).join('')}
       </div>
-      <div class="text-xs text-slate-500">${data.items.length} eventos previstos</div>
+      <div class="flex gap-2 items-center flex-wrap">
+        ${empresasUser.length > 1 ? `<button class="btn btn-secondary text-xs" onclick="flujoEmpresasModal()">🌐 ${state.flujoEmpresas.length} de ${empresasUser.length} empresas</button>` : ''}
+        <button class="btn btn-secondary text-xs" onclick="flujoExportar()">📥 Exportar Excel</button>
+        <span class="text-xs text-slate-500">${itemsFiltrados.length} eventos</span>
+      </div>
     </div>
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">A ingresar</div><div class="text-2xl font-bold mt-1 text-green-700">${fmt$(data.totalIngresos)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">A pagar</div><div class="text-2xl font-bold mt-1 text-red-700">${fmt$(data.totalEgresos)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Saldo neto</div><div class="text-2xl font-bold mt-1 ${data.saldo>=0?'text-green-700':'text-red-700'}">${fmt$(data.saldo)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Próximo evento</div><div class="text-base font-bold mt-1">${data.items[0]?fmtDate(data.items[0].fecha):'—'}</div></div>
+
+    <!-- VENCIDOS (idea 7) -->
+    ${(vencidosFiltrados.length > 0) ? `
+    <div class="mb-4 border-2 border-red-300 bg-red-50 rounded-xl overflow-hidden">
+      <div class="px-4 py-2 bg-red-100 text-red-900 flex items-center justify-between flex-wrap gap-2">
+        <div class="font-bold">⚠️ Atrasados (${vencidosFiltrados.length} item${vencidosFiltrados.length===1?'':'s'})</div>
+        <div class="text-xs flex gap-3">
+          <span class="text-green-700 font-bold">A cobrar atrasado: + ${fmt$(venIngresos)}</span>
+          <span class="text-red-700 font-bold">A pagar atrasado: - ${fmt$(venEgresos)}</span>
+        </div>
+      </div>
+      <details class="px-4 py-3 text-sm">
+        <summary class="cursor-pointer text-red-900 font-medium">Ver detalle</summary>
+        <div class="mt-3 space-y-2 max-h-72 overflow-y-auto">
+          ${vencidosFiltrados.map(it => {
+            const dias = Math.round((new Date(it.fecha) - ahora) / 86400000);
+            return `<div class="flex items-center gap-3 py-2 px-3 bg-white rounded border-l-4 border-l-red-500">
+              <div class="text-2xl">${ICONS[it.categoria]||'📌'}</div>
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-sm truncate">${esc(it.concepto)}</div>
+                <div class="text-xs text-slate-500">${fmtDate(it.fecha)} · hace ${Math.abs(dias)} día${Math.abs(dias)===1?'':'s'}${it.contacto?` · ${esc(it.contacto)}`:''}</div>
+              </div>
+              <div class="text-right">
+                <div class="font-bold ${it.tipo==='ingreso'?'text-green-700':'text-red-700'}">${it.tipo==='ingreso'?'+':'-'} ${fmt$(it.importe)}</div>
+                <div class="text-[10px] text-slate-400 uppercase">${esc(it.categoria.replace('_',' '))}</div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </details>
+    </div>` : ''}
+
+    <!-- KPIs principales con saldo inicial + final (idea 1) -->
+    <div class="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4">
+      <div class="kpi" title="Suma de cuentas bancarias ARS + efectivo en cajas">
+        <div class="text-xs text-slate-500">💰 Saldo HOY</div>
+        <div class="text-xl font-bold mt-1 ${(data.saldoInicial?.total||0)>=0?'text-green-700':'text-red-700'}">${fmt$(data.saldoInicial?.total||0)}</div>
+        ${data.saldoInicial?.bancosUSD ? `<div class="text-[10px] text-slate-500">+ US$ ${fmtN(data.saldoInicial.bancosUSD)}</div>` : ''}
+      </div>
+      <div class="kpi"><div class="text-xs text-slate-500">↗️ A ingresar</div><div class="text-xl font-bold mt-1 text-green-700">${fmt$(totalIngresos)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">↘️ A pagar</div><div class="text-xl font-bold mt-1 text-red-700">${fmt$(totalEgresos)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Δ Saldo neto</div><div class="text-xl font-bold mt-1 ${(totalIngresos-totalEgresos)>=0?'text-green-700':'text-red-700'}">${fmt$(totalIngresos-totalEgresos)}</div></div>
+      <div class="kpi" title="Saldo HOY + saldo neto proyectado">
+        <div class="text-xs text-slate-500">🎯 Saldo FINAL proyectado</div>
+        <div class="text-xl font-bold mt-1 ${saldoFinal>=0?'text-green-700':'text-red-700'}">${fmt$(saldoFinal)}</div>
+      </div>
     </div>
+
+    <!-- Gráfico de saldo acumulado (idea 2) -->
+    ${(data.serieAcumulada && data.serieAcumulada.length > 1) ? `
+    <div class="mb-4 kpi p-3">
+      <div class="text-xs text-slate-500 mb-2 flex items-center justify-between">
+        <span>📈 Saldo proyectado día a día</span>
+        <span class="text-[10px]">Los valles (zonas rojas) indican días con saldo negativo proyectado.</span>
+      </div>
+      <canvas id="flujo-chart" height="80"></canvas>
+    </div>` : ''}
+
+    <!-- Filtros por categoría (idea 3) -->
+    <div class="mb-4 flex items-center gap-2 flex-wrap text-xs">
+      <span class="text-slate-500">Mostrar:</span>
+      ${FLUJO_CATS.map(c => {
+        const oculto = state.flujoCatsOcultas[c.id];
+        return `<button class="px-2 py-1 rounded border ${oculto?'border-slate-200 bg-slate-100 text-slate-400 line-through':'border-emerald-300 bg-emerald-50 text-emerald-800'}" onclick="flujoToggleCategoria('${c.id}')">${c.icon} ${esc(c.lbl)}</button>`;
+      }).join('')}
+    </div>
+
+    <!-- Items proyectados agrupados por mes -->
     <div class="space-y-4">
       ${meses.map(([mes, m]) => {
         const [y, mm] = mes.split('-');
@@ -11957,9 +12367,125 @@ pages.flujoProyectado = async function() {
             }).join('')}
           </div>
         </div>`;
-      }).join('') || `<div class="kpi text-center text-slate-500 py-8">Sin eventos previstos en este horizonte.</div>`}
+      }).join('') || `<div class="kpi text-center text-slate-500 py-8">Sin eventos previstos en este horizonte para las empresas / categorías seleccionadas.</div>`}
     </div>`;
+
+  // Dibujar el chart de saldo acumulado si hay datos
+  if (data.serieAcumulada && data.serieAcumulada.length > 1) {
+    flujoDibujarChart(data.serieAcumulada);
+  }
 };
+
+// Dibuja el gráfico de saldo acumulado usando una librería liviana inline (SVG).
+// No depende de Chart.js para no agregar peso. Hace un sparkline simple.
+function flujoDibujarChart(serie) {
+  const canvas = document.getElementById('flujo-chart');
+  if (!canvas) return;
+  const W = canvas.offsetWidth || 800, H = 80;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  if (!serie.length) return;
+  const minS = Math.min(0, ...serie.map(p => p.saldo));
+  const maxS = Math.max(0, ...serie.map(p => p.saldo));
+  const rango = maxS - minS || 1;
+  const padL = 60, padR = 10, padT = 8, padB = 18;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const xAt = (i) => padL + (innerW * i / Math.max(1, serie.length - 1));
+  const yAt = (v) => padT + innerH * (1 - (v - minS) / rango);
+  // Línea de cero
+  if (minS < 0 && maxS > 0) {
+    const y0 = yAt(0);
+    ctx.strokeStyle = '#94a3b8';
+    ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(W-padR, y0); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif';
+    ctx.fillText('$0', 4, y0+3);
+  }
+  // Fill area: verde positivo, rojo negativo
+  for (let i = 0; i < serie.length - 1; i++) {
+    const x1 = xAt(i), x2 = xAt(i+1);
+    const y1 = yAt(serie[i].saldo), y2 = yAt(serie[i+1].saldo);
+    const y0 = (minS < 0 && maxS > 0) ? yAt(0) : (serie[i].saldo >= 0 ? H-padB : padT);
+    ctx.fillStyle = serie[i].saldo >= 0 ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)';
+    ctx.beginPath();
+    ctx.moveTo(x1, y0); ctx.lineTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x2, y0); ctx.closePath();
+    ctx.fill();
+  }
+  // Línea principal
+  ctx.strokeStyle = '#16a34a'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  serie.forEach((p, i) => {
+    const x = xAt(i), y = yAt(p.saldo);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  // Etiquetas de inicio y fin
+  ctx.fillStyle = '#0f172a'; ctx.font = '10px sans-serif';
+  const fmtCorto = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'k' : n.toFixed(0);
+  ctx.fillText(`$${fmtCorto(serie[0].saldo)}`, padL, padT+10);
+  const ultimo = serie[serie.length-1];
+  ctx.fillText(`$${fmtCorto(ultimo.saldo)}`, W-padR-50, yAt(ultimo.saldo)-4);
+  // Eje X: fecha inicio y fecha fin
+  ctx.fillStyle = '#64748b';
+  ctx.fillText(serie[0].fecha, padL, H-4);
+  ctx.fillText(ultimo.fecha, W-padR-60, H-4);
+}
+
+function flujoToggleCategoria(catId) {
+  state.flujoCatsOcultas[catId] = !state.flujoCatsOcultas[catId];
+  pages.flujoProyectado();
+}
+
+async function flujoEmpresasModal() {
+  const empresasUser = state.user?.companies || [];
+  if (empresasUser.length <= 1) return;
+  openModal({
+    title:'🌐 Empresas a incluir en el Estado de situación', size:'max-w-md',
+    body: `
+      <div class="text-xs text-slate-500 mb-3">Marca las empresas cuyos datos querés ver consolidados en el reporte. Por default se muestra solo la empresa activa.</div>
+      <div class="flex gap-2 mb-2 text-xs">
+        <button class="text-indigo-700 underline" onclick="document.querySelectorAll('.fe-emp').forEach(c => c.checked = true)">Todas</button>
+        <button class="text-indigo-700 underline" onclick="document.querySelectorAll('.fe-emp').forEach(c => c.checked = false)">Ninguna</button>
+      </div>
+      <div class="space-y-1 max-h-64 overflow-y-auto border rounded p-2">
+        ${empresasUser.map(e => `
+          <label class="flex items-center gap-2 text-sm p-1 cursor-pointer hover:bg-slate-50 rounded">
+            <input type="checkbox" class="fe-emp" data-id="${esc(e.id)}" ${state.flujoEmpresas.includes(e.id)?'checked':''}/>
+            <span>${esc(e.name)}</span>
+          </label>`).join('')}
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="flujoEmpresasAplicar()">Aplicar</button>`
+  });
+}
+
+function flujoEmpresasAplicar() {
+  const ids = Array.from(document.querySelectorAll('.fe-emp:checked')).map(c => c.dataset.id);
+  if (!ids.length) { toast('Marca al menos una empresa.', 'warn'); return; }
+  state.flujoEmpresas = ids;
+  closeModal();
+  pages.flujoProyectado();
+}
+
+async function flujoExportar() {
+  try {
+    const empParam = state.flujoEmpresas.join(',');
+    const qs = `dias=${state.flujoDias}` + (empParam ? `&empresas=${encodeURIComponent(empParam)}` : '');
+    const r = await fetch(API_BASE + '/api/flujo-proyectado/export?' + qs, {
+      headers: { 'Authorization': 'Bearer ' + state.token },
+    });
+    if (!r.ok) { toast('No se pudo exportar', 'error'); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `Estado-de-situacion-${new Date().toISOString().slice(0,10)}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    toast('Exportado ✅', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
 
 /* =========================================================
  * BANCOS — cuentas bancarias + movimientos
