@@ -8,8 +8,15 @@
 # ============================================================
 param(
   [string]$InstallDir = "C:\AgroCore",
-  [switch]$SkipBackup = $false
+  [switch]$SkipBackup = $false,
+  # Modo desatendido (lo lanza el sistema mismo desde el boton "Instalar
+  # actualizacion ahora" en la web). NO espera Enter al terminar.
+  [switch]$Unattended = $false
 )
+
+function Pause-IfInteractive($prompt) {
+  if (-not $Unattended) { Read-Host $prompt | Out-Null }
+}
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -63,7 +70,7 @@ try {
 
 if ($currentVersion -ne "desconocida" -and $latestVersion -ne "desconocida" -and $currentVersion -eq $latestVersion) {
   Ok "Ya estas en la ultima version ($currentVersion). Nada que hacer."
-  Read-Host "Presiona Enter para salir"
+  Pause-IfInteractive "Presiona Enter para salir"
   exit 0
 }
 
@@ -209,11 +216,11 @@ for ($i = 0; $i -lt $timeout; $i++) {
 }
 if (-not $started) {
   Err "El sistema no respondio en $timeout segundos. Revisar logs en backend\logs."
-  Read-Host "Presiona Enter"
+  Pause-IfInteractive "Presiona Enter"
   exit 5
 }
 
 H1 "[OK] Actualizacion completada"
 Ok "AgroCore actualizado a la ultima version."
 Info "Abri el navegador en http://localhost:3100 para verlo."
-Read-Host "Presiona Enter para salir"
+Pause-IfInteractive "Presiona Enter para salir"

@@ -1098,6 +1098,9 @@ async function checkForUpdates() {
       toast(`Ya estás en la última versión (v${r.version}) ✅`, 'success');
       return;
     }
+    // Si es Super Admin, ofrecemos instalar la actualización directamente desde
+    // acá. Caso contrario, mostramos el flujo manual de SIEMPRE (instrucciones).
+    const esSuper = !!state.user?.superAdmin;
     openModal({
       title:'🆙 Actualización disponible', size:'max-w-md',
       body: `
@@ -1105,18 +1108,97 @@ async function checkForUpdates() {
           <div class="text-5xl mb-3">🚀</div>
           <p class="text-sm text-slate-600 mb-2">Tu versión instalada: <b>v${esc(r.version)}</b></p>
           <p class="text-sm text-slate-600 mb-3">Última disponible: <b class="text-green-700">v${esc(r.latest)}</b></p>
-          <div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-3 mt-3 text-left">
-            <b>Para actualizar:</b>
-            <ol class="list-decimal ml-5 mt-1 space-y-0.5">
-              <li>Cerrá el navegador y todas las ventanas de AgroCore.</li>
-              <li>Abrí el menú Inicio → AgroCore → <b>"Actualizar AgroCore"</b> (o ejecutá <code>Update-AgroCore.ps1</code> desde C:\\AgroCore).</li>
-              <li>El script hace backup, baja la nueva versión, aplica migraciones y reinicia el sistema solo.</li>
-            </ol>
-          </div>
+          ${esSuper ? `
+            <div class="bg-green-50 border border-green-200 text-green-900 text-sm rounded-lg p-3 mt-3 text-left">
+              ✨ <b>Instalación automática:</b> el sistema baja la nueva versión, hace backup, aplica migraciones y se reinicia solo. Tarda 1-2 minutos. <b>NO cierres esta pestaña</b> mientras se actualiza.
+            </div>
+          ` : `
+            <div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-3 mt-3 text-left">
+              <b>Para actualizar:</b> pediéle a un usuario Super Admin que entre al sistema y haga clic en "🆙 Verificar actualizaciones" → "Instalar ahora". Solo el Super Admin puede instalar actualizaciones.
+            </div>
+          `}
         </div>`,
-      footer: `<button class="btn btn-primary" onclick="closeModal()">Entendido</button>`,
+      footer: esSuper
+        ? `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+           <button class="btn btn-primary" onclick="instalarActualizacionEjecutar(${JSON.stringify(r.latest)})">🚀 Instalar ahora (v${esc(r.latest)})</button>`
+        : `<button class="btn btn-primary" onclick="closeModal()">Entendido</button>`,
     });
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// Ejecuta la actualización remota llamando al endpoint del backend que lanza
+// el script Update-AgroCore.ps1 en modo desatendido. Como el script va a
+// matar Node, la API responde de inmediato y el cliente hace polling de
+// /api/system/version hasta detectar el cambio de versión.
+async function instalarActualizacionEjecutar(versionEsperada) {
+  closeModal();
+  // Modal de progreso
+  openModal({
+    title: '🚀 Actualizando AgroCore...', size: 'max-w-md',
+    body: `
+      <div class="text-center py-4">
+        <div class="text-5xl mb-3">⏳</div>
+        <p class="text-sm text-slate-700 mb-2">Estamos actualizando a la versión <b class="text-green-700">v${esc(versionEsperada)}</b>.</p>
+        <p class="text-xs text-slate-500 mb-4">Este proceso toma entre 1 y 3 minutos. <b>No cierres esta pestaña.</b></p>
+        <div id="upd-step" class="text-xs text-slate-600 mt-3 bg-slate-50 border border-slate-200 rounded p-2">Solicitando actualización al servidor...</div>
+        <div id="upd-spinner" class="mt-3">
+          <div class="inline-block w-8 h-8 border-4 border-slate-300 border-t-green-600 rounded-full animate-spin"></div>
+        </div>
+      </div>`,
+    footer: '<button id="upd-close-btn" class="btn btn-secondary" disabled>Cerrar (deshabilitado)</button>',
+  });
+  const stepEl = () => document.getElementById('upd-step');
+
+  try {
+    const r = await api('/api/admin/instalar-actualizacion', { method: 'POST' });
+    if (stepEl()) stepEl().innerHTML = '✅ Solicitud aceptada. Esperando a que el sistema vuelva a estar en línea...';
+  } catch (e) {
+    if (stepEl()) stepEl().innerHTML = `<span class="text-red-700">❌ ${esc(e.message || 'Error al lanzar la actualización')}</span>`;
+    const btn = document.getElementById('upd-close-btn');
+    if (btn) { btn.disabled = false; btn.textContent = 'Cerrar'; btn.onclick = closeModal; }
+    return;
+  }
+
+  // Polling cada 5 segundos por hasta 5 minutos
+  const inicio = Date.now();
+  const maxMs = 5 * 60 * 1000;
+  let bajoCaida = false;
+
+  async function ping() {
+    try {
+      const res = await fetch(API_BASE + '/api/system/version', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const j = await res.json();
+      // Si el server respondió pero AÚN tiene la versión vieja, esperar
+      if (j.version === versionEsperada) {
+        if (stepEl()) stepEl().innerHTML = `✅ Sistema actualizado a v${esc(j.version)}. Recargando...`;
+        setTimeout(() => location.reload(), 1500);
+        return true;
+      }
+      // El server responde con la versión vieja todavía — esperar
+      if (stepEl()) stepEl().innerHTML = `⏳ El sistema sigue corriendo la versión vieja (v${esc(j.version)}). Esperando reinicio...`;
+      return false;
+    } catch (e) {
+      bajoCaida = true;
+      // Esperado: el server se está reiniciando
+      if (stepEl()) stepEl().innerHTML = '⏳ Servidor caído (reiniciando). Esto es normal — esperando que vuelva...';
+      return false;
+    }
+  }
+
+  function intentar() {
+    if (Date.now() - inicio > maxMs) {
+      if (stepEl()) stepEl().innerHTML = `<span class="text-red-700">⚠️ Timeout (5 minutos). El sistema no terminó de actualizarse. Probá recargar manualmente o revisá los logs en C:\\AgroCore\\backups\\</span>`;
+      const btn = document.getElementById('upd-close-btn');
+      if (btn) { btn.disabled = false; btn.textContent = 'Cerrar'; btn.onclick = closeModal; }
+      return;
+    }
+    ping().then(ok => {
+      if (!ok) setTimeout(intentar, 5000);
+    });
+  }
+  // Esperar 10 segundos antes del primer ping (el script tarda en arrancar)
+  setTimeout(intentar, 10000);
 }
 
 async function loadSettings() {
@@ -2133,6 +2215,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'11/06/2026',
+      titulo:'🚀 Instalación de actualizaciones desde el sistema (sin RDP)',
+      desc:'Cuando AgroCore detecta una versión nueva, el modal de "Actualización disponible" ahora muestra para el Super Admin un botón "🚀 Instalar ahora" que dispara el update directamente desde el navegador. El sistema lanza Update-AgroCore.ps1 en modo desatendido (-Unattended), el front muestra un spinner con progreso, hace polling cada 5 segundos sobre /api/system/version, y cuando detecta que el sistema volvió a estar arriba con la versión nueva, recarga la pestaña automáticamente. Tarda entre 1 y 3 minutos. Ya no hace falta conectarse por RDP al servidor para actualizar. Los usuarios que NO son Super Admin ven un mensaje indicándoles que avisen al Super Admin para instalar.' },
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'11/06/2026',
+      titulo:'📲 Botón "Instalar app" visible siempre',
+      desc:'La card de "Instalar AgroCore en tu PC o celular" en el Inicio solo aparecía si el navegador exponía el evento beforeinstallprompt (no siempre lo hace — depende de versión, navegador, si ya se dismisseó el prompt antes, etc). Algunos usuarios no la veían y no sabían cómo instalar. Ahora la card aparece SIEMPRE, salvo cuando se detecta que ya está corriendo como PWA standalone (en ese caso no tiene sentido instalarla). Si el navegador no expuso el prompt automático, el botón muestra "Cómo instalar" y abre un modal con instrucciones específicas para Safari (iPhone), Chrome (Android) o Chrome/Edge (PC).' },
+    { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'11/06/2026',
       titulo:'📋 Catálogos compartidos entre empresas + empresa plantilla',
       desc:'En Configuración → Sistema hay una sección nueva "📋 Catálogos genéricos compartidos entre empresas". Sirve para dos cosas: (1) copiar de una sola vez los catálogos genéricos (productos, cultivos, conceptos, labores, etc.) de una empresa "plantilla" a todas las demás. Útil cuando creaste varias empresas y los catálogos arrancaron vacíos. (2) Designar una empresa como "plantilla predeterminada": de ahora en adelante, cada vez que se cree una empresa nueva, el sistema le copia automáticamente los catálogos de la plantilla. Por default se EXCLUYEN los catálogos de Bancos y Cajas (que tienen sentido cargar individualmente por empresa). Los catálogos duplicados no se sobreescriben — solo se agregan los que faltaban.' },
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'10/06/2026',
@@ -2447,16 +2535,20 @@ pages.inicio = async function() {
     </div>
 
     <!-- ============ INSTALAR EN ESCRITORIO / CELU ============ -->
-    <div id="install-pwa-card" class="mb-6 ${state._pwaInstallable?'':'hidden'}">
+    <!-- Visible SIEMPRE salvo cuando detectamos que ya está instalada (display-mode standalone).
+         Si el navegador no expuso beforeinstallprompt, el click muestra instrucciones manuales. -->
+    <div id="install-pwa-card" class="mb-6 ${isPwaStandalone()?'hidden':''}">
       <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
         <div class="flex items-center gap-3 min-w-0">
           <div class="text-3xl">📲</div>
           <div class="min-w-0">
             <div class="font-semibold text-emerald-900">Instalá AgroCore en tu PC o celular</div>
-            <div class="text-xs text-emerald-700">Queda como una app: abrís con un clic, sin navegador y con icono en el escritorio.</div>
+            <div class="text-xs text-emerald-700">${state._pwaInstallable
+              ? 'Tocá Instalar y queda como app con un clic.'
+              : 'Si el botón directo no abre nada, te muestro cómo hacerlo desde tu navegador.'}</div>
           </div>
         </div>
-        <button onclick="installPwaPrompt()" class="btn btn-primary text-sm whitespace-nowrap">⬇️ Instalar app</button>
+        <button onclick="installPwaPrompt()" class="btn btn-primary text-sm whitespace-nowrap">⬇️ ${state._pwaInstallable?'Instalar app':'Cómo instalar'}</button>
       </div>
     </div>
 
@@ -2551,13 +2643,28 @@ function renderShareBox() {
 // "Instalar". Si no se disparó (ya está instalada, o navegador no soportado),
 // mostramos instrucciones manuales según el dispositivo.
 // =========================================================
+// Detecta si la PWA ya está corriendo "instalada" (sin barra de navegador).
+// Si SI, ocultamos la card de instalar.
+function isPwaStandalone() {
+  try {
+    return window.matchMedia && window.matchMedia('(display-mode: standalone)').matches
+      || window.navigator.standalone === true; // iOS Safari
+  } catch { return false; }
+}
+
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   state._pwaDeferredPrompt = e;
   state._pwaInstallable = true;
-  // Si el usuario ya está en Inicio, mostramos la card sin recargar
+  // Si el usuario ya está en Inicio, refrescamos texto/botón de la card
   const card = document.getElementById('install-pwa-card');
-  if (card) card.classList.remove('hidden');
+  if (card) {
+    card.classList.remove('hidden');
+    const btn = card.querySelector('button');
+    if (btn) btn.textContent = '⬇️ Instalar app';
+    const desc = card.querySelector('.text-xs');
+    if (desc) desc.textContent = 'Tocá Instalar y queda como app con un clic.';
+  }
 });
 window.addEventListener('appinstalled', () => {
   state._pwaInstallable = false;

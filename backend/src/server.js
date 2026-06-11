@@ -4024,6 +4024,44 @@ app.delete('/api/banco-movimientos/:id', requireCompany, requirePermission('fina
 // /api/system/version se declara como ruta publica antes del authMiddleware.
 // /api/system/check-update requiere login (solo super admins lo usan).
 // ============================================================
+// === INSTALAR ACTUALIZACION REMOTAMENTE ===
+// Lanza Update-AgroCore.ps1 como proceso desacoplado. La API responde de
+// inmediato porque el script va a matar Node como parte del update.
+// El cliente debe hacer polling de /api/system/version hasta detectar el cambio.
+app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo el Super Admin puede instalar actualizaciones' });
+    if (os.platform() !== 'win32') {
+      return res.status(400).json({ ok: false, error: 'La actualización remota solo funciona en servidores Windows. En Linux ejecutá manualmente el script.' });
+    }
+    const scriptPath = path.join('C:', 'AgroCore', 'Update-AgroCore.ps1');
+    if (!fs.existsSync(scriptPath)) {
+      return res.status(500).json({ ok: false, error: 'No se encontró Update-AgroCore.ps1 en C:\\AgroCore' });
+    }
+    // Lanzar como proceso totalmente desacoplado. Usamos un "wrapper" cmd que
+    // a su vez llama a powershell para que cuando matemos node.exe no se mate
+    // a sí mismo. Sin shell intermedio y stdio:ignore, sobrevive a la muerte
+    // del proceso padre (Node).
+    const { spawn } = require('child_process');
+    const child = spawn(
+      'cmd.exe',
+      ['/c', 'start', '""', '/b', 'powershell.exe',
+        '-WindowStyle', 'Hidden',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', scriptPath,
+        '-Unattended',
+      ],
+      {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      }
+    );
+    child.unref();
+    res.json({ ok: true, mensaje: 'Actualización lanzada. El sistema va a reiniciarse en 30-90 segundos.' });
+  } catch (e) { next(e); }
+});
+
 app.get('/api/system/check-update', authMiddleware, async (_req, res, next) => {
   try {
     // Si no está configurado AGROCORE_REPO en el .env, no hay forma de chequear.
