@@ -64,6 +64,7 @@
   .btn-ghost{background:transparent;color:#374151;} .btn-ghost:hover{background:#f3f4f6;}
   .fade-in{animation:fadeIn .2s ease;}
   @keyframes fadeIn{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:translateY(0);}}
+  @keyframes ac-shake{ 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-6px)} 40%,80%{transform:translateX(6px)} }
   #company-selector{ color:#fff; background-color:rgba(255,255,255,.10); }
   #company-selector option{ background:#fff; color:#0f172a; font-weight:500; }
   #company-selector option:checked{ background:#15803d; color:#fff; font-weight:700; }
@@ -268,15 +269,31 @@
       </div>
       <div>
         <label class="label">Contraseña</label>
-        <input id="login-pwd" type="password" value="" autocomplete="current-password"
-               class="input" onkeydown="if(event.key==='Enter') handleLogin()" />
+        <div class="relative">
+          <input id="login-pwd" type="password" value="" autocomplete="current-password"
+                 class="input" style="padding-right:42px"
+                 onkeydown="if(event.key==='Enter') handleLogin()" />
+          <button type="button" id="login-pwd-toggle" onclick="loginTogglePwd()"
+                  class="absolute right-1 top-1/2 -translate-y-1/2 px-2 py-1 text-slate-500 hover:text-slate-800 rounded transition"
+                  title="Mostrar contraseña" tabindex="-1"
+                  aria-label="Mostrar u ocultar contraseña" aria-pressed="false">
+            <svg id="login-pwd-eye" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg id="login-pwd-eye-off" class="hidden" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>
+          </button>
+        </div>
       </div>
       <label class="flex items-center gap-2 text-xs text-slate-600 select-none cursor-pointer">
         <input id="login-remember" type="checkbox" class="rounded border-slate-300" />
         Recordarme en este equipo
         <span class="text-[10px] text-slate-400">(si no, la sesión se cierra al cerrar el navegador)</span>
       </label>
-      <div id="login-err" class="hidden text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2"></div>
+      <div id="login-err" class="hidden rounded-lg border-2 border-red-300 bg-red-50 p-3 flex items-start gap-2">
+        <div class="text-2xl leading-none">⚠️</div>
+        <div class="flex-1">
+          <div class="text-sm font-bold text-red-700 leading-tight">Login fallido</div>
+          <div id="login-err-msg" class="text-xs text-red-600 mt-0.5">Usuario o contraseña incorrectos.</div>
+        </div>
+      </div>
       <button onclick="handleLogin()" id="login-btn" class="w-full btn btn-primary justify-center mt-2">Ingresar →</button>
       <p id="login-demo-hint" class="text-[11px] text-slate-500 text-center mt-4 leading-relaxed hidden">
         <b>Usuarios de prueba:</b><br/>
@@ -957,12 +974,44 @@ const MODULES = [
 ];
 
 /* ------------ Login ------------ */
+function loginTogglePwd() {
+  const inp = document.getElementById('login-pwd');
+  const btn = document.getElementById('login-pwd-toggle');
+  const eye = document.getElementById('login-pwd-eye');
+  const eyeOff = document.getElementById('login-pwd-eye-off');
+  if (!inp) return;
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    if (eye) eye.classList.add('hidden');
+    if (eyeOff) eyeOff.classList.remove('hidden');
+    if (btn) { btn.title = 'Ocultar contraseña'; btn.setAttribute('aria-pressed', 'true'); }
+  } else {
+    inp.type = 'password';
+    if (eye) eye.classList.remove('hidden');
+    if (eyeOff) eyeOff.classList.add('hidden');
+    if (btn) { btn.title = 'Mostrar contraseña'; btn.setAttribute('aria-pressed', 'false'); }
+  }
+}
+
+function loginMostrarError(msg) {
+  const box = document.getElementById('login-err');
+  const txt = document.getElementById('login-err-msg');
+  if (txt) txt.textContent = msg || 'Usuario o contraseña incorrectos.';
+  if (box) {
+    box.classList.remove('hidden');
+    // Pequeño shake para que se note
+    box.style.animation = 'none';
+    void box.offsetWidth; // forzar reflow
+    box.style.animation = 'ac-shake .35s ease-in-out';
+  }
+}
+
 async function handleLogin() {
   const login = $('#login-email').value.trim();
   const pwd = $('#login-pwd').value;
   const err = $('#login-err');
   err.classList.add('hidden');
-  if (!login || !pwd) { err.textContent='Completá usuario y contraseña'; err.classList.remove('hidden'); return; }
+  if (!login || !pwd) { loginMostrarError('Completá usuario y contraseña'); return; }
   const btn = $('#login-btn'); btn.disabled = true; btn.textContent = 'Ingresando…';
   try {
     // Guardar primero la preferencia de "Recordarme" porque AuthStore.setToken
@@ -981,8 +1030,15 @@ async function handleLogin() {
     IdleLogout.start();
     await boot();
   } catch (e) {
-    err.textContent = e.message || 'Error de acceso';
-    err.classList.remove('hidden');
+    // Mensaje claro segun el codigo de respuesta
+    let msg = e.message || 'Error de acceso';
+    if (e.status === 401) msg = 'Usuario o contraseña incorrectos. Verificá los datos e intentá de nuevo.';
+    else if (isNetworkError && isNetworkError(e)) msg = 'No hay conexión con el servidor. Verificá tu red.';
+    else if (e.status >= 500) msg = 'El servidor tuvo un problema (' + e.status + '). Probá de nuevo en un minuto.';
+    loginMostrarError(msg);
+    // Limpiar la contraseña para que el usuario tipee de cero (no el usuario)
+    const pwdInp = document.getElementById('login-pwd');
+    if (pwdInp) { pwdInp.value = ''; pwdInp.focus(); }
   } finally {
     btn.disabled = false; btn.textContent = 'Ingresar →';
   }
@@ -2216,9 +2272,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'11/06/2026',
+      titulo:'🚨 Hotfix v0.7.11: pantalla de login no respondía',
+      desc:'En v0.7.10 una entrada de Novedades quedó con un escape mal hecho, lo que disparaba un SyntaxError al cargar la pagina y dejaba todas las funciones del frontend sin definir (handleLogin entre ellas). Resultado: el boton Ingresar no hacia nada. Corregido el escape, agregada validacion para que esto no vuelva a pasar, y de paso mejorada la pantalla de login con un ojo para mostrar/ocultar la contrasena y un cartel rojo grande cuando las credenciales son incorrectas.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/06/2026',
+      titulo:'👁️ Login: ver contraseña + mensaje de error claro',
+      desc:'En la pantalla de login ahora hay un boton de ojo a la derecha del campo de contrasena para mostrar/ocultar lo que escribiste (util cuando tipeaste algo raro y no estas seguro). Si las credenciales son incorrectas, en lugar del cartelito gris finito de antes ahora aparece un cartel rojo grande con icono "⚠️ Login fallido" y mensaje especifico segun el caso (credenciales mal, sin red, error del servidor). El campo de contrasena se limpia automaticamente para que tipees de cero.' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'11/06/2026',
       titulo:'🐛 Fix crítico: botón "Instalar ahora" tiraba "require is not defined"',
-      desc:'El endpoint del Super Admin para lanzar el update remoto tenía un `require(\\'child_process\\')` adentro, pero el server arranca con ESM (`import`), donde require no existe. Resultado: cuando se apretaba "🚀 Instalar ahora", el server devolvía 500 con "require is not defined" y el modal se quedaba colgado con el cartelito de error. Reemplazado por el `spawn` que ya estaba importado al tope del archivo (no se necesitaba importar nada más). De v0.7.10 en adelante, el update por modal funciona end-to-end.' },
+      desc:'El endpoint del Super Admin para lanzar el update remoto tenía un require(child_process) adentro, pero el server arranca con ESM (import), donde require no existe. Resultado: cuando se apretaba 🚀 Instalar ahora, el server devolvía 500 con "require is not defined" y el modal se quedaba colgado con el cartelito de error. Reemplazado por el spawn que ya estaba importado al tope del archivo. De v0.7.11 en adelante, el update por modal funciona end-to-end.' },
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'11/06/2026',
       titulo:'💰 Cajas por empresa + consolidado por dueño en Resumen multi-empresa',
       desc:'Resumen multi-empresa ahora muestra el desglose del efectivo CAJA por CAJA dentro de cada empresa. Las administrativas suelen crear cajas con el nombre del dueño ("Lucas", "Mariano", "Oficina"...) para saber cuánta plata maneja cada uno. Si Lucas tiene cajas en LLSP, El Pistrín y Peiretti Gerardo, ahora hay un selector "Ver caja" arriba de la tabla que filtra todas las filas con ese nombre y muestra un banner verde con el CONSOLIDADO: "Caja Lucas — Sumando 3 empresas — $X". El detalle por fila incluye ingresos, egresos, transferencias entrantes/salientes y saldo, y el total se recalcula según lo filtrado. Las transferencias entre cajas de la misma empresa se reflejan correctamente (restan en origen, suman en destino).' },
