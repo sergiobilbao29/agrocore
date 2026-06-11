@@ -24,7 +24,7 @@ const app = express();
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.9';
+const AGROCORE_VERSION = '0.7.10';
 const AGROCORE_BUILD = new Date('2026-06-11').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4286,7 +4286,7 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
     // a su vez llama a powershell para que cuando matemos node.exe no se mate
     // a sí mismo. Sin shell intermedio y stdio:ignore, sobrevive a la muerte
     // del proceso padre (Node).
-    const { spawn } = require('child_process');
+    // (spawn ya está importado arriba con ESM; no usar require — el módulo es ESM)
     const child = spawn(
       'cmd.exe',
       ['/c', 'start', '""', '/b', 'powershell.exe',

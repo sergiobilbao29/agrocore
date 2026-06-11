@@ -2216,6 +2216,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'11/06/2026',
+      titulo:'🐛 Fix crítico: botón "Instalar ahora" tiraba "require is not defined"',
+      desc:'El endpoint del Super Admin para lanzar el update remoto tenía un `require(\\'child_process\\')` adentro, pero el server arranca con ESM (`import`), donde require no existe. Resultado: cuando se apretaba "🚀 Instalar ahora", el server devolvía 500 con "require is not defined" y el modal se quedaba colgado con el cartelito de error. Reemplazado por el `spawn` que ya estaba importado al tope del archivo (no se necesitaba importar nada más). De v0.7.10 en adelante, el update por modal funciona end-to-end.' },
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'11/06/2026',
       titulo:'💰 Cajas por empresa + consolidado por dueño en Resumen multi-empresa',
       desc:'Resumen multi-empresa ahora muestra el desglose del efectivo CAJA por CAJA dentro de cada empresa. Las administrativas suelen crear cajas con el nombre del dueño ("Lucas", "Mariano", "Oficina"...) para saber cuánta plata maneja cada uno. Si Lucas tiene cajas en LLSP, El Pistrín y Peiretti Gerardo, ahora hay un selector "Ver caja" arriba de la tabla que filtra todas las filas con ese nombre y muestra un banner verde con el CONSOLIDADO: "Caja Lucas — Sumando 3 empresas — $X". El detalle por fila incluye ingresos, egresos, transferencias entrantes/salientes y saldo, y el total se recalcula según lo filtrado. Las transferencias entre cajas de la misma empresa se reflejan correctamente (restan en origen, suman en destino).' },
