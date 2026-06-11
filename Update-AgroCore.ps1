@@ -107,8 +107,12 @@ if (-not $SkipBackup) {
       $dbUrl = $dbUrl.Trim().Trim('"').Trim("'")
       $dbUrl = $dbUrl.Split('?')[0]
       Info "Generando backup: $backupFile"
-      & $pgDump --no-owner --no-acl --encoding=UTF8 -f $backupFile $dbUrl
-      if ($LASTEXITCODE -eq 0) { Ok "Backup generado." } else { Warn "Backup fallo (codigo $LASTEXITCODE). Continuamos con cuidado." }
+      $oldErrPref2 = $ErrorActionPreference
+      $ErrorActionPreference = 'Continue'
+      try {
+        & $pgDump --no-owner --no-acl --encoding=UTF8 -f $backupFile $dbUrl 2>&1 | ForEach-Object { Write-Host "    $_" }
+        if ($LASTEXITCODE -eq 0) { Ok "Backup generado." } else { Warn "Backup fallo (codigo $LASTEXITCODE). Continuamos con cuidado." }
+      } finally { $ErrorActionPreference = $oldErrPref2 }
     } else { Warn "No se pudo leer DATABASE_URL del .env. Sin backup automatico." }
   } else { Warn "pg_dump no encontrado. Sin backup automatico." }
 }
@@ -167,26 +171,35 @@ try {
 H1 "Actualizando dependencias..."
 Push-Location $backendDir
 try {
-  Info "npm install (puede tardar 1-3 minutos)..."
-  & npm install --omit=dev --no-audit --no-fund --loglevel=error
-  if ($LASTEXITCODE -ne 0) { Err "npm install fallo"; exit 3 }
-  Ok "Dependencias actualizadas."
+  # Mismo issue que con git: npm y prisma escriben info por stderr y con
+  # ErrorActionPreference=Stop el script muere. Cambiamos a Continue mientras
+  # corren estos comandos y verificamos LASTEXITCODE a mano.
+  $oldErrPref = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    Info "npm install (puede tardar 1-3 minutos)..."
+    & npm install --omit=dev --no-audit --no-fund --loglevel=error 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -ne 0) { Err "npm install fallo (exit $LASTEXITCODE)"; exit 3 }
+    Ok "Dependencias actualizadas."
 
-  Info "Aplicando migraciones de base..."
-  & npx prisma migrate deploy
-  if ($LASTEXITCODE -ne 0) { Err "prisma migrate deploy fallo"; exit 4 }
-  Ok "Migraciones aplicadas."
+    Info "Aplicando migraciones de base..."
+    & npx prisma migrate deploy 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -ne 0) { Err "prisma migrate deploy fallo (exit $LASTEXITCODE)"; exit 4 }
+    Ok "Migraciones aplicadas."
 
-  # Sincronizar cualquier cambio de schema que no este en una migracion formal.
-  # Algunos campos agregados por db push en dev tambien necesitan correr aca.
-  # Es idempotente: si no hay cambios, no hace nada.
-  Info "Sincronizando schema de la base (db push)..."
-  & npx prisma db push --accept-data-loss --skip-generate 2>&1 | ForEach-Object { Write-Host "    $_" }
-  if ($LASTEXITCODE -ne 0) { Warn "db push fallo (codigo $LASTEXITCODE), continuamos igual." } else { Ok "Schema sincronizado." }
+    # Sincronizar cualquier cambio de schema que no este en una migracion formal.
+    # Algunos campos agregados por db push en dev tambien necesitan correr aca.
+    # Es idempotente: si no hay cambios, no hace nada.
+    Info "Sincronizando schema de la base (db push)..."
+    & npx prisma db push --accept-data-loss --skip-generate 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -ne 0) { Warn "db push fallo (codigo $LASTEXITCODE), continuamos igual." } else { Ok "Schema sincronizado." }
 
-  Info "Regenerando Prisma Client..."
-  & npx prisma generate
-  Ok "Prisma Client OK."
+    Info "Regenerando Prisma Client..."
+    & npx prisma generate 2>&1 | ForEach-Object { Write-Host "    $_" }
+    if ($LASTEXITCODE -ne 0) { Warn "prisma generate fallo (codigo $LASTEXITCODE)" } else { Ok "Prisma Client OK." }
+  } finally {
+    $ErrorActionPreference = $oldErrPref
+  }
 } finally { Pop-Location }
 
 # 8. Reiniciar AgroCore
