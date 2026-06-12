@@ -5553,40 +5553,141 @@ app.post('/api/admin/importar-cliente/efectivo', authMiddleware, requireCompany,
 });
 
 // === Importar CERDOS (ventas) ===
+// Acepta tanto la planilla "VENTAS CERDOS" (una sola hoja de ventas) como la "PYME"
+// con varias hojas por categoría (Lechón, Capón, etc.). Detecta hojas y columnas
+// por palabras clave para tolerar mayúsculas, acentos, espacios y nombres variados.
 app.post('/api/admin/importar-cliente/cerdos-ventas', authMiddleware, requireCompany, requirePermission('stock:create'), upload.single('archivo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const shVentas = wb.SheetNames.find(n => /vent/i.test(n));
-    if (!shVentas) return res.status(400).json({ ok: false, error: 'No se encontró la hoja VENTAS' });
-    // Buscar (o crear) un producto "Cerdos" categoría hacienda
-    let prod = await prisma.producto.findFirst({ where: { companyId: req.companyId, nombre: { equals: 'Cerdos', mode: 'insensitive' } } });
-    if (!prod) {
-      prod = await prisma.producto.create({ data: {
-        companyId: req.companyId, categoria: 'hacienda', nombre: 'Cerdos', unidad: 'cabezas',
-      }});
+
+    // Helper local: detectar columna por keywords (case + acentos tolerantes)
+    function findKey(row, ...keywords) {
+      if (!row) return null;
+      const keys = Object.keys(row);
+      for (const kw of keywords) {
+        const kwN = _normalizar(kw);
+        const k = keys.find(key => _normalizar(key).includes(kwN));
+        if (k) return k;
+      }
+      return null;
     }
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[shVentas], { defval: null, raw: false });
-    let ok = 0; const errores = [];
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      try {
-        const cant = _parseMonto(r['CANTIDAD']);
-        const fecha = _parseFechaArg(r['FECHA']);
-        if (!cant || !fecha) continue;
-        await prisma.movimiento.create({ data: {
-          companyId: req.companyId, productoId: prod.id,
-          fecha, tipo: 'egreso', motivo: 'venta',
-          cantidad: cant,
-          precio: _parseMonto(r['PRECIO KG']),
-          total: _parseMonto(r['TOTAL $']),
-          observaciones: [r['DESTINO'] && `Destino: ${r['DESTINO']}`, r['TOTAL KG'] && `${r['TOTAL KG']} kg`].filter(Boolean).join(' · '),
-          userId: req.user?.id || null,
+
+    // 1) Decidir qué hojas procesar.
+    // 1a) Hojas cuyo nombre matchee con keywords típicas de ventas/cerdos
+    const KW_HOJA = /vent|cerdo|hacienda|salid|egreso|movim|lech|cap[oó]n|chancho|pyme/i;
+    let hojasAProcesar = wb.SheetNames.filter(n => KW_HOJA.test(n));
+    // 1b) Si no encontró por nombre, ir hoja por hoja y quedarse con las que tengan
+    //     al menos columnas Fecha y Cantidad (o equivalente).
+    if (hojasAProcesar.length === 0) {
+      for (const sh of wb.SheetNames) {
+        const rs = XLSX.utils.sheet_to_json(wb.Sheets[sh], { defval: null, raw: false });
+        if (rs.length > 0 && findKey(rs[0], 'fecha') && findKey(rs[0], 'cantidad', 'cabeza', 'cant')) {
+          hojasAProcesar.push(sh);
+        }
+      }
+    }
+    if (hojasAProcesar.length === 0) {
+      return res.status(400).json({ ok: false,
+        error: 'No se encontró ninguna hoja con datos de ventas de cerdos. Esperaba una hoja llamada "Ventas", "Cerdos", "Lechón", "Capón", etc., o una hoja cualquiera con columnas Fecha y Cantidad.',
+        diagnostico: { hojas_disponibles: wb.SheetNames } });
+    }
+
+    // 2) Lote de importación (para Deshacer después).
+    const lote = await _crearImportLote(req, 'cerdos-ventas');
+    const records = {};
+
+    let ok = 0; const errores = []; const diag = [];
+
+    // Cache de productos por categoría (Cerdos / Lechón / Capón / ...). Si la hoja
+    // se llama "Lechón" creamos producto "Lechones" categoría hacienda. Si no
+    // matchea ninguna categoría conocida, todo va a "Cerdos".
+    const prodCache = new Map();
+    async function getOrCreateProducto(nombre) {
+      const key = nombre.toLowerCase();
+      if (prodCache.has(key)) return prodCache.get(key);
+      let p = await prisma.producto.findFirst({
+        where: { companyId: req.companyId, nombre: { equals: nombre, mode: 'insensitive' } },
+      });
+      if (!p) {
+        p = await prisma.producto.create({ data: {
+          companyId: req.companyId, categoria: 'hacienda', nombre, unidad: 'cabezas',
         }});
-        ok++;
-      } catch (e) { errores.push({ fila: i+2, error: e.message }); }
+        _registrarRecord(records, 'Producto', p.id);
+      }
+      prodCache.set(key, p);
+      return p;
     }
-    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 50) });
+
+    function detectarProducto(nombreHoja) {
+      const n = _normalizar(nombreHoja);
+      if (n.includes('lech')) return 'Lechones';
+      if (n.includes('capon')) return 'Capones';
+      if (n.includes('chancho')) return 'Chanchos';
+      return 'Cerdos';
+    }
+
+    for (const sh of hojasAProcesar) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sh], { defval: null, raw: false });
+      if (rows.length === 0) { diag.push({ hoja: sh, filas: 0, mensaje: 'vacía' }); continue; }
+
+      const kFecha   = findKey(rows[0], 'fecha');
+      const kCant    = findKey(rows[0], 'cantidad', 'cabeza', 'cant');
+      const kPrecio  = findKey(rows[0], 'precio kg', 'precio kilo', 'precio unitario', 'precio');
+      const kTotalKg = findKey(rows[0], 'total kg', 'kilos totales', 'kg total', 'peso total', 'kilos', 'kg');
+      const kTotalIm = findKey(rows[0], 'total $', 'total pesos', 'importe total', 'importe', 'total');
+      const kDestino = findKey(rows[0], 'destino', 'cliente', 'comprador');
+      const kCateg   = findKey(rows[0], 'categoria', 'clase', 'tipo de animal');
+      const kObs     = findKey(rows[0], 'observac', 'comentario', 'detalle');
+
+      if (!kFecha || !kCant) {
+        diag.push({ hoja: sh, filas: rows.length,
+          mensaje: 'No se detectaron columnas Fecha y/o Cantidad — hoja saltada',
+          columnas: Object.keys(rows[0]) });
+        continue;
+      }
+
+      const nombreProd = detectarProducto(sh);
+      const prod = await getOrCreateProducto(nombreProd);
+
+      let okHoja = 0; let saltadas = 0;
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        try {
+          const cant = _parseMonto(r[kCant]);
+          const fecha = _parseFechaArg(r[kFecha]);
+          if (!cant || !fecha) { saltadas++; continue; }
+          const obs = [
+            kDestino && r[kDestino] && `Destino: ${r[kDestino]}`,
+            kTotalKg && r[kTotalKg] && `${r[kTotalKg]} kg`,
+            kCateg   && r[kCateg]   && `Categoría: ${r[kCateg]}`,
+            kObs     && r[kObs]     && String(r[kObs]),
+            `Hoja: ${sh}`,
+          ].filter(Boolean).join(' · ');
+          const mov = await prisma.movimiento.create({ data: {
+            companyId: req.companyId, productoId: prod.id,
+            fecha, tipo: 'egreso', motivo: 'venta',
+            cantidad: cant,
+            precio: kPrecio ? _parseMonto(r[kPrecio]) : null,
+            total: kTotalIm ? _parseMonto(r[kTotalIm]) : null,
+            observaciones: obs,
+            userId: req.user?.id || null,
+          }});
+          _registrarRecord(records, 'Movimiento', mov.id);
+          okHoja++;
+        } catch (e) { errores.push({ hoja: sh, fila: i+2, error: e.message }); }
+      }
+      ok += okHoja;
+      diag.push({ hoja: sh, filas_total: rows.length, importadas: okHoja, saltadas, producto: nombreProd,
+        columnas_detectadas: {
+          fecha: kFecha, cantidad: kCant, precio: kPrecio, totalKg: kTotalKg,
+          totalImporte: kTotalIm, destino: kDestino, categoria: kCateg,
+        } });
+    }
+
+    await _cerrarImportLote(lote, records, req.file.originalname);
+    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 50),
+      diagnostico: { hojas_disponibles: wb.SheetNames, hojas_procesadas: diag } });
   } catch (e) { next(e); }
 });
 
