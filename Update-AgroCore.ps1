@@ -119,13 +119,26 @@ if (-not $SkipBackup) {
 
 # 5. Detener AgroCore
 H1 "Deteniendo AgroCore..."
+# Si esta instalado como Windows Service (preferido), pararlo limpio
+$svc = Get-Service -Name 'AgroCore-Backend' -ErrorAction SilentlyContinue
+$svcInstalado = [bool]$svc
+if ($svcInstalado) {
+  Info "Deteniendo servicio AgroCore-Backend..."
+  try { Stop-Service -Name 'AgroCore-Backend' -Force -ErrorAction Stop } catch {
+    Warn "Stop-Service fallo: $($_.Exception.Message). Probando matar node a mano."
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force
+  }
+  Start-Sleep -Seconds 3
+  Ok "Servicio detenido."
+}
+# Por las dudas, matar cualquier node huerfano
 $nodeProcs = Get-Process -Name "node" -ErrorAction SilentlyContinue
 if ($nodeProcs) {
   $nodeProcs | Stop-Process -Force
   Start-Sleep -Seconds 2
   Ok "AgroCore detenido."
 } else {
-  Info "AgroCore no estaba corriendo."
+  Info "AgroCore no estaba corriendo (foreground)."
 }
 
 # 6. Pull de la ultima version
@@ -204,13 +217,26 @@ try {
 
 # 8. Reiniciar AgroCore
 H1 "Reiniciando AgroCore..."
-$vbs = Join-Path $InstallDir "INICIAR-AGROCORE.vbs"
-if (Test-Path $vbs) {
-  Start-Process "wscript.exe" -ArgumentList "`"$vbs`"" -WindowStyle Hidden
-  Start-Sleep -Seconds 3
-  Ok "AgroCore reiniciado."
+if ($svcInstalado) {
+  Info "Arrancando servicio AgroCore-Backend..."
+  try {
+    Start-Service -Name 'AgroCore-Backend' -ErrorAction Stop
+    Start-Sleep -Seconds 3
+    Ok "Servicio arrancado."
+  } catch {
+    Err "No se pudo arrancar el servicio: $($_.Exception.Message)"
+    Err "Revisa los logs en $InstallDir\logs\backend-err.log"
+  }
 } else {
-  Warn "No se encontro INICIAR-AGROCORE.vbs. Inicia AgroCore manualmente."
+  $vbs = Join-Path $InstallDir "INICIAR-AGROCORE.vbs"
+  if (Test-Path $vbs) {
+    Start-Process "wscript.exe" -ArgumentList "`"$vbs`"" -WindowStyle Hidden
+    Start-Sleep -Seconds 3
+    Ok "AgroCore reiniciado (modo legacy via VBS)."
+    Warn "Recomendado: instalar como servicio corriendo Instalar-Servicio-AgroCore.ps1 una sola vez."
+  } else {
+    Warn "No hay servicio instalado ni VBS launcher. Inicia AgroCore manualmente."
+  }
 }
 
 # 9. Verificar que vuelve a responder
