@@ -24,8 +24,8 @@ const app = express();
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.11';
-const AGROCORE_BUILD = new Date('2026-06-11').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.12';
+const AGROCORE_BUILD = new Date('2026-06-16').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -1739,13 +1739,19 @@ mountCrud({
 // Stock actual (calculado)
 app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
+    const depositoId = req.query.depositoId || null;
     const productos = await prisma.producto.findMany({
       where: { companyId: req.companyId, activo: true },
       orderBy: { nombre: 'asc' },
     });
+    // Filtramos los movimientos:
+    // - Los de la empresa activa SIEMPRE entran
+    // - Si filtran por depósito X, solo los movs de ese depósito
+    const movWhere = { companyId: req.companyId };
+    if (depositoId) movWhere.depositoId = depositoId;
     const movs = await prisma.movimiento.groupBy({
       by: ['productoId', 'tipo'],
-      where: { companyId: req.companyId },
+      where: movWhere,
       _sum: { cantidad: true },
     });
     const data = productos.map((p) => {
@@ -1755,6 +1761,55 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       return { ...p, existencia, bajoMinimo: existencia < Number(p.stockMinimo || 0) };
     });
     res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Stock desglosado por depósito: filas [{productoId, productoNombre, depositoId, depositoNombre, depositoCompartido, existencia}]
+// Útil para mostrar de un vistazo cuánto hay en cada lugar.
+app.get('/api/stock-por-deposito', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const productos = await prisma.producto.findMany({
+      where: { companyId: req.companyId, activo: true },
+      orderBy: { nombre: 'asc' },
+    });
+    // Depósitos: propios de la empresa + compartidos (companyId null)
+    const depositos = await prisma.deposito.findMany({
+      where: { OR: [{ companyId: req.companyId }, { companyId: null, compartido: true }] },
+      orderBy: { nombre: 'asc' },
+    });
+    const movs = await prisma.movimiento.groupBy({
+      by: ['productoId', 'tipo', 'depositoId'],
+      where: { companyId: req.companyId },
+      _sum: { cantidad: true },
+    });
+    const out = [];
+    for (const p of productos) {
+      // Por cada depósito
+      for (const d of depositos) {
+        const ing = movs.find(m => m.productoId === p.id && m.tipo === 'ingreso' && m.depositoId === d.id)?._sum?.cantidad || 0;
+        const egr = movs.find(m => m.productoId === p.id && m.tipo === 'egreso' && m.depositoId === d.id)?._sum?.cantidad || 0;
+        const existencia = Number(ing) - Number(egr);
+        if (existencia !== 0 || ing > 0 || egr > 0) {
+          out.push({
+            productoId: p.id, productoNombre: p.nombre, unidad: p.unidad,
+            depositoId: d.id, depositoNombre: d.nombre, depositoTipo: d.tipo, depositoCompartido: !!d.compartido,
+            existencia,
+          });
+        }
+      }
+      // Movimientos sin depósito asignado (sueltos)
+      const ingS = movs.find(m => m.productoId === p.id && m.tipo === 'ingreso' && m.depositoId === null)?._sum?.cantidad || 0;
+      const egrS = movs.find(m => m.productoId === p.id && m.tipo === 'egreso' && m.depositoId === null)?._sum?.cantidad || 0;
+      const existS = Number(ingS) - Number(egrS);
+      if (existS !== 0) {
+        out.push({
+          productoId: p.id, productoNombre: p.nombre, unidad: p.unidad,
+          depositoId: null, depositoNombre: '(sin depósito)', depositoTipo: null, depositoCompartido: false,
+          existencia: existS,
+        });
+      }
+    }
+    res.json({ ok: true, data: out });
   } catch (e) { next(e); }
 });
 
@@ -2553,7 +2608,8 @@ const viajeSchema = z.object({
   tipoCamion: z.string().nullable().optional(),
   cartaPorte: z.string().nullable().optional(),
   ctg: z.string().nullable().optional(),
-  cdp: z.string().nullable().optional(),
+  cdp: z.string().nullable().optional(),           // legacy, ya no se usa en UI
+  pagadorFlete: z.string().nullable().optional(),  // quien paga el flete
   km: z.number().nullable().optional(),
   tarifa: z.number().nullable().optional(),
   combustible: z.number().nullable().optional(),
@@ -3200,6 +3256,12 @@ mountCrud({
     descripcion: z.string().nullable().optional(),
     precioReferencia: z.number().nullable().optional(),
     tipoPrecio: z.enum(['por_hectarea', 'total']).nullable().optional(),
+    // Insumos típicos (Labor): [{ productoId, cantidad, unidad }] interpretado por hectárea
+    insumosDefault: z.array(z.object({
+      productoId: z.string(),
+      cantidad: z.number(),
+      unidad: z.string().nullable().optional(),
+    })).nullable().optional(),
     activo: z.boolean().optional(),
   }),
   orderBy: { nombre: 'asc' },
@@ -5273,6 +5335,135 @@ app.get('/api/admin/plantilla/:tipo', authMiddleware, requireSuperAdmin, async (
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="plantilla-${tipo}.xlsx"`);
+    res.end(buf);
+  } catch (e) { next(e); }
+});
+
+// === PLANTILLAS MODELO para las "Planillas Especiales" ===
+// Cada tipo de IMPORT_CLIENTE_TIPOS tiene una plantilla con UNA O VARIAS hojas.
+// Cada hoja: { nombre, headers, ejemplo (matriz de filas) }
+// Plus opcional: una hoja "Instrucciones" generada genéricamente.
+const PLANTILLAS_CLIENTE = {
+  cheques: {
+    descripcion: 'Cheques (propios y de terceros). Una hoja por estado.',
+    hojas: [
+      { nombre: 'Fisicos a tercero', headers: ['Banco', 'Numero', 'Monto', 'Fecha emision', 'Fecha pago', 'Beneficiario', 'Estado', 'Observaciones'],
+        ejemplo: [['Galicia', '00012345', 150000, '01/03/2026', '15/04/2026', 'Proveedor SA', 'emitido', 'pago de factura']] },
+      { nombre: 'E-Cheq propios', headers: ['Banco', 'Numero', 'Monto', 'Fecha emision', 'Fecha pago', 'Beneficiario', 'Estado', 'Observaciones'],
+        ejemplo: [['Santander', 'EC-00567', 220000, '02/03/2026', '20/05/2026', 'Otro Proveedor SRL', 'emitido', '']] },
+      { nombre: 'E-Cheq de terceros', headers: ['Banco', 'Numero', 'Monto', 'Fecha emision', 'Fecha pago', 'Librador', 'Estado', 'Observaciones'],
+        ejemplo: [['Macro', 'EC-99001', 300000, '01/02/2026', '10/04/2026', 'Cliente SA', 'en cartera', '']] },
+    ],
+  },
+  creditos: {
+    descripcion: 'Una hoja por banco con su plan de cuotas.',
+    hojas: [
+      { nombre: 'Galicia (ejemplo)', headers: ['Concepto', 'Capital', 'Tasa', 'Plazo (meses)', 'Fecha inicio', 'Observaciones'],
+        ejemplo: [['Credito UVA 2025', 5000000, 95, 36, '01/03/2026', 'garantia hipotecaria']] },
+      { nombre: 'Plan de cuotas (ejemplo)', headers: ['Cuota Nro', 'Fecha vencimiento', 'Capital', 'Interes', 'Total cuota', 'Estado (pendiente/abonada)'],
+        ejemplo: [[1, '01/04/2026', 138888, 75000, 213888, 'pendiente'], [2, '01/05/2026', 138888, 73000, 211888, 'pendiente']] },
+    ],
+  },
+  'cartas-porte': {
+    descripcion: 'Lista de cartas de porte para crear como Viajes.',
+    hojas: [
+      { nombre: 'Cartas de porte', headers: ['Fecha', 'CTG', 'Carta de Porte', 'Producto', 'Origen', 'Destino', 'Chofer', 'Patente', 'Peso neto (kg)', 'Tarifa $/ton', 'Observaciones'],
+        ejemplo: [['10/03/2026', 'CTG12345678', 'CP-001', 'Soja', 'Campo La Esperanza', 'Acopio San Pedro', 'Juan Perez', 'AC123XX', 30000, 4500, '']] },
+    ],
+  },
+  efectivo: {
+    descripcion: 'Una hoja por caja (nombre del dueño u oficina). Cada fila = un ingreso o egreso.',
+    hojas: [
+      { nombre: 'OFICINA', headers: ['Fecha', 'Concepto', 'Ingreso', 'Egreso', 'Observaciones'],
+        ejemplo: [['01/03/2026', 'cobro factura X', 250000, '', ''], ['02/03/2026', 'pago combustible', '', 80000, 'YPF Ruta 9']] },
+      { nombre: 'LUCAS', headers: ['Fecha', 'Concepto', 'Ingreso', 'Egreso', 'Observaciones'],
+        ejemplo: [['03/03/2026', 'retiro caja', '', 100000, 'gastos personales']] },
+    ],
+  },
+  'cerdos-ventas': {
+    descripcion: 'Ventas de cerdos. Una hoja por categoria o una sola hoja.',
+    hojas: [
+      { nombre: 'Ventas Cerdos', headers: ['Fecha', 'Cantidad (cabezas)', 'Categoria', 'Total KG', 'Precio KG', 'Total $', 'Destino', 'Observaciones'],
+        ejemplo: [['05/03/2026', 50, 'Capon', 5500, 1800, 9900000, 'Frigorifico Rio IV', '']] },
+    ],
+  },
+  transferencias: {
+    descripcion: 'Transferencias bancarias salientes. Una sola hoja con todas.',
+    hojas: [
+      { nombre: 'Todas', headers: ['Fecha real', 'Banco', 'Empresa', 'Tipo de cuenta', 'Monto', 'Detalle de transferencia', 'Quien la realizo', 'Observaciones'],
+        ejemplo: [['07/03/2026', 'Galicia', 'Mi Empresa SA', 'cta cte', 500000, 'Pago Acopio', 'Maria', '']] },
+    ],
+  },
+  'ctacte-saldos': {
+    descripcion: 'Saldos pendientes de Cuentas Corrientes (libres, sin factura asociada).',
+    hojas: [
+      { nombre: 'Resumen', headers: ['Nombre', 'Saldo', 'Prioridad (1-5)', 'Estado (pendiente/pagado)', 'Fecha de pago', 'Observaciones'],
+        ejemplo: [['Proveedor X SA', 350000, 1, 'pendiente', '30/04/2026', 'flete pendiente'], ['Cliente Y SRL', 120000, 3, 'pagado', '01/03/2026', '']] },
+    ],
+  },
+  'stock-hacienda': {
+    descripcion: 'Stock de hacienda por campo/Renspa. Una hoja por establecimiento.',
+    hojas: [
+      { nombre: 'Renspa 12345 (ejemplo)', headers: ['Campo', 'Renspa', 'Especie', 'Categoria', 'Stock real (cabezas)', 'Observaciones'],
+        ejemplo: [['La Esperanza', '12.345.6.78901/01', 'Bovino', 'Vaca', 250, ''], ['La Esperanza', '12.345.6.78901/01', 'Bovino', 'Ternero', 120, '']] },
+    ],
+  },
+  'hectareas-sembradas': {
+    descripcion: 'Hectareas sembradas por empresa. Una hoja por empresa.',
+    hojas: [
+      { nombre: 'Mi Empresa (ejemplo)', headers: ['Renspa', 'Campo', 'Cultivo', 'Has sembradas', 'Observaciones'],
+        ejemplo: [['12.345.6.78901/01', 'La Esperanza', 'Soja', 250, ''], ['12.345.6.78901/01', 'La Esperanza', 'Maiz', 80, '']] },
+    ],
+  },
+  'pyme-ventas': {
+    descripcion: 'Ventas de hacienda menor. Una hoja por categoria.',
+    hojas: [
+      { nombre: 'Lechon', headers: ['Fecha', 'Cantidad', 'Cliente', 'Precio unitario', 'Total', 'Pago (pago/no pago)', 'Observaciones'],
+        ejemplo: [['01/03/2026', 5, 'Carniceria del Centro', 60000, 300000, 'pago', '']] },
+      { nombre: 'Cordero', headers: ['Fecha', 'Cantidad', 'Cliente', 'Precio unitario', 'Total', 'Pago (pago/no pago)', 'Observaciones'],
+        ejemplo: [['02/03/2026', 3, 'Restaurant La Estancia', 80000, 240000, 'no pago', 'cobrar fin de mes']] },
+    ],
+  },
+  proveedores: {
+    descripcion: 'Catalogo de proveedores.',
+    hojas: [
+      { nombre: 'Proveedores', headers: ['Razon social', 'Nombre fantasia', 'CUIT', 'Telefono', 'Email', 'Direccion', 'Localidad', 'Provincia', 'Horarios', 'Observaciones'],
+        ejemplo: [['Acopio San Pedro SA', 'Acopio SP', '30-12345678-9', '03467-555000', 'ventas@acopiosp.com.ar', 'Ruta 9 km 250', 'San Pedro', 'Buenos Aires', 'L a V 8 a 17', '']] },
+    ],
+  },
+};
+
+// GET /api/admin/importar-cliente/plantilla/:tipo — genera Excel modelo
+app.get('/api/admin/importar-cliente/plantilla/:tipo', authMiddleware, async (req, res, next) => {
+  try {
+    const tipo = req.params.tipo;
+    const def = PLANTILLAS_CLIENTE[tipo];
+    if (!def) return res.status(404).json({ ok: false, error: 'Plantilla modelo no encontrada para ' + tipo });
+    const wb = XLSX.utils.book_new();
+    for (const hoja of def.hojas) {
+      const aoa = [hoja.headers, ...(hoja.ejemplo || [])];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = hoja.headers.map(() => ({ wch: 22 }));
+      XLSX.utils.book_append_sheet(wb, ws, hoja.nombre.slice(0, 31));
+    }
+    // Hoja de instrucciones
+    const wsInfo = XLSX.utils.aoa_to_sheet([
+      ['Plantilla modelo: ' + tipo],
+      [''],
+      [def.descripcion || ''],
+      [''],
+      ['Notas:'],
+      ['• Los nombres de las hojas son SUGERENCIAS — el importador detecta las hojas por palabras clave, podes usar otros nombres.'],
+      ['• Los nombres de las columnas son SUGERENCIAS — el importador detecta las columnas por palabras clave (mayusculas/acentos/espacios tolerantes).'],
+      ['• La primera fila de datos de cada hoja es un EJEMPLO. Borrala y empeza a cargar desde la fila 2.'],
+      ['• Guarda el archivo como .xlsx y subilo desde Configuracion > Importacion > Planillas Especiales.'],
+      ['• Despues de importar, podes revisar el resultado en el historial de importaciones y deshacer si hubo errores.'],
+    ]);
+    wsInfo['!cols'] = [{ wch: 110 }];
+    XLSX.utils.book_append_sheet(wb, wsInfo, 'Instrucciones');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="plantilla-modelo-${tipo}.xlsx"`);
     res.end(buf);
   } catch (e) { next(e); }
 });

@@ -671,7 +671,8 @@ model Viaje {
   tipoCamion      String?   // chasis, semi, bitren, jaula, tolva...
   cartaPorte      String?   // nº de carta de porte
   ctg             String?   // CTG (código de trazabilidad de granos) — separado de la CP
-  cdp             String?   // CDP (código si corresponde)
+  cdp             String?   // CDP — legacy, ya no se usa en UI (dejado para no perder datos viejos)
+  pagadorFlete    String?   // Quien paga el flete (ej. "Cliente", "Acopio", nombre del que paga)
   km              Float?
   tarifa          Float?    // $/ton acordada con el transporte
   combustible     Float?
@@ -859,6 +860,11 @@ model Catalogo {
   // el form de Labor avanzada (precio referencia + tipo). Sigue editable al cargar.
   precioReferencia Float?
   tipoPrecio       String?    // "por_hectarea" | "total" (sólo aplica si hay precioReferencia)
+  // Para catálogos de tipo "Labor": insumos típicos que se autopopulan al elegir
+  // la labor en una Labor Avanzada. Array JSON con [{ productoId, cantidad, unidad }].
+  // La cantidad se interpreta POR HECTÁREA (ej. Gasoil 5 lt/ha) y el sistema multiplica
+  // por las hectáreas aplicadas al crear el LaborInsumo.
+  insumosDefault   Json?
   activo          Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

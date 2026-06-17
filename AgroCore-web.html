@@ -503,18 +503,18 @@ const state = {
 };
 
 /* ============================================================
- * IdleLogout — cierra sesión automáticamente después de 30 min
+ * IdleLogout — cierra sesión automáticamente después de 2 horas
  * sin actividad. Se resetea con mouse, teclado, click o touch.
  * ============================================================ */
 const IdleLogout = (() => {
-  const TIMEOUT_MS = 30 * 60 * 1000; // 30 minutos
+  const TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 horas
   let timer = null;
   let lastActivity = Date.now();
   function check() {
     const elapsed = Date.now() - lastActivity;
     if (elapsed >= TIMEOUT_MS) {
       if (state.token) {
-        try { toast('Sesión cerrada por inactividad (30 min sin uso)'); } catch {}
+        try { toast('Sesión cerrada por inactividad (2 horas sin uso)'); } catch {}
         setTimeout(() => { try { logout(true); } catch {} }, 600);
       }
     } else {
@@ -1092,7 +1092,7 @@ async function boot() {
   }
   $('#view-login').classList.add('hidden');
   $('#view-app').classList.remove('hidden');
-  IdleLogout.start();   // arranca el watchdog de inactividad (30 min)
+  IdleLogout.start();   // arranca el watchdog de inactividad (2 hs)
   renderUserChip();
   renderCompanySelector();
   await applyCompanyTheme();
@@ -2272,6 +2272,27 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
+      titulo:'🚛 Viajes: filtros + pagador del flete + exportar a Excel',
+      desc:'La página de Viajes ahora tiene filtros completos arriba (rango de fechas Desde/Hasta, Producto, Origen, Estado, búsqueda libre). El listado muestra una columna nueva Pagador del flete. Botón Exportar a Excel arriba a la derecha que genera un xlsx con TODOS los datos de los viajes filtrados (26 columnas: origen/destino/producto/kg/tarifa/transportista/CUIT/chofer/patente/CP/CTG/pagador/gastos/estado/factura/observaciones). Útil para mandar al contador o filtrar por una empresa específica del grupo y reportar.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
+      titulo:'🧪 Insumos y labores: filtros por insumo / labor / campo + consolidado',
+      desc:'La página de Insumos y Labores ahora tiene 4 filtros arriba: Campaña, Campo, Insumo, Labor. Cuando filtrás por un insumo (ej. "Gasoil"), aparece un banner verde grande arriba con el CONSOLIDADO: cantidad de aplicaciones, hectáreas totales, total consumido del insumo (suma de unid/ha × ha de todas las aplicaciones) y costo total. Sirve para responder rápido a "cuánto Gasoil se usó en toda la campaña 2024/25" o "cuánto Atrazina en el campo La Esperanza este año". Además hay botón Exportar a Excel del filtrado.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
+      titulo:'⏱️ Sesión: 2 horas de inactividad antes de cerrarse',
+      desc:'Antes el sistema te deslogueaba después de 30 minutos sin actividad. Era poco para una jornada administrativa real. Ahora son 2 horas. Si dejás la pantalla abierta mientras atendés el teléfono o vas a buscar un papel, la sesión sigue viva.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
+      titulo:'📥 Plantillas modelo descargables para todas las Planillas Especiales',
+      desc:'Ahora cada importador de "Planillas Especiales" (cheques, créditos, cartas de porte, efectivo, transferencias, etc) tiene un botón "📥 Plantilla modelo" que descarga un Excel con los headers correctos, una fila de ejemplo y una hoja de instrucciones. Útil cuando todavía no tenés el formato histórico y querés empezar a cargar datos desde cero. La sección se renombró a "Planillas Especiales" y bajó al final de la página; arriba quedaron las plantillas estándar más simples. Los textos de cada importador se hicieron genéricos (sirven para cualquier cliente, no solo para casos específicos).' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
+      titulo:'📦 Stock con filtro por depósito + empresa en movimientos compartidos',
+      desc:'Stock ahora tiene un selector "Depósito" arriba del listado: si elegís uno, ves SOLO las existencias de ese depósito. Sin filtro, ves la existencia total consolidada (suma de todos los depósitos), como siempre. Movimientos también suma un selector de Depósito. Para depósitos compartidos entre empresas (🌐), cuando filtrás por uno, aparece una columna adicional "Empresa" que muestra qué empresa hizo cada movimiento — útil para Denise cuando un depósito (ej. la cerealera) recibe entregas de varias firmas del grupo.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
+      titulo:'🌱 Catálogo de Labores con insumos típicos auto-cargables',
+      desc:'En el catálogo de Labor ahora podés agregar uno o más insumos típicos con cantidad POR HECTÁREA (ej. Gasoil 5 lt/ha + Atrazina 2 lt/ha). Cuando después cargás una Labor Avanzada y elegís esa labor, el sistema autocarga esos insumos multiplicados por las hectáreas aplicadas, dejándolos editables fila por fila. Si la tabla de insumos no estaba vacía, no pisa lo que cargaste. Permite estandarizar las "recetas" de cada labor (pulverización, siembra, fertilización, etc) y ahorrar tiempo en cada carga.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
+      titulo:'🚛 Viajes: se eliminó el campo CDP y se agregó "Pagador del flete"',
+      desc:'En el form de Viajes salió el campo CDP (no se usaba) y entró "Pagador del flete": texto libre donde anotás quién paga el flete (Cliente, Acopio, nombre del que paga, etc). Los datos viejos con CDP no se borran, solo no se muestran en el form. El nuevo campo aparece junto a Carta de Porte y CTG bajo "Documentos y flete".' },
     { tag:'Tecnico', color:'bg-slate-100 text-slate-700 border-slate-300', fecha:'12/06/2026',
       titulo:'🛡️ Backend como Windows Service (corre oculto, arranca solo)',
       desc:'Hasta ahora el server de Peiretti corría en una ventana de PowerShell visible: si la cerrabas, se caía AgroCore. Se sumó Instalar-Servicio-AgroCore.ps1 (en C:\\AgroCore) que se corre UNA VEZ y deja el backend como servicio de Windows (AgroCore-Backend) usando NSSM. Ventajas: arranca solo en cada reboot, corre invisible en background, se reinicia automáticamente si crashea, y los logs van a C:\\AgroCore\\logs\\backend.log (con rotación cada 24hs o cada 10 MB). Update-AgroCore.ps1 ahora detecta si el servicio está instalado y lo usa para apagar/encender limpio (Stop-Service / Start-Service) en lugar de matar node a mano. Si todavía no instalaste el servicio, sigue funcionando con el método viejo (VBS launcher).' },
@@ -4312,15 +4333,19 @@ pages.stock = async function() {
   setHeader('Stock', 'Productos y existencias');
   if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('stock','Stock'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let rows=[];
-  try { const r = await api('/api/stock-actual'); rows = r.data || []; } catch (e) { return toast(e.message,'error'); }
+  state.stockFilter = state.stockFilter || { q:'', cat:'', estado:'', depositoId:'' };
+  const depFilter = state.stockFilter.depositoId || '';
+  let rows=[], depositos=[];
+  try {
+    const url = '/api/stock-actual' + (depFilter ? '?depositoId=' + encodeURIComponent(depFilter) : '');
+    const r = await api(url); rows = r.data || [];
+  } catch (e) { return toast(e.message,'error'); }
   try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
+  try { const d = await api('/api/depositos'); depositos = d.data || []; state.cache.depositos = depositos; } catch {}
 
   const cats = [...new Set(rows.map(r=>r.categoria).filter(Boolean))].sort();
   const bajoMin = rows.filter(p => p.bajoMinimo).length;
   const totalSKU = rows.length;
-
-  state.stockFilter = state.stockFilter || { q:'', cat:'', estado:'' };
 
   const render = () => {
     const q = (state.stockFilter.q||'').toLowerCase();
@@ -4374,22 +4399,29 @@ pages.stock = async function() {
     </div>
     <div class="kpi mb-3">
       <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-        <div class="md:col-span-5">
+        <div class="md:col-span-4">
           <label class="label">Buscar producto</label>
           <input id="st-q" class="input" placeholder="Nombre, código o ubicación..." value="${esc(state.stockFilter.q||'')}"/>
         </div>
         <div class="md:col-span-3">
+          <label class="label">Depósito</label>
+          <select id="st-dep" class="input">
+            <option value="">— Todos (consolidado) —</option>
+            ${depositos.map(d => `<option value="${esc(d.id)}" ${d.id===depFilter?'selected':''}>${esc(d.nombre)}${d.compartido?' 🌐':''}${d.tipo?' · '+esc(d.tipo):''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-2">
           <label class="label">Categoría</label>
           <select id="st-cat" class="input">
             <option value="">Todas</option>
             ${cats.map(c=>`<option ${c===state.stockFilter.cat?'selected':''}>${esc(c)}</option>`).join('')}
           </select>
         </div>
-        <div class="md:col-span-2">
+        <div class="md:col-span-1">
           <label class="label">Estado</label>
           <select id="st-estado" class="input">
             <option value="">Todos</option>
-            <option value="bajo" ${state.stockFilter.estado==='bajo'?'selected':''}>Bajo mínimo</option>
+            <option value="bajo" ${state.stockFilter.estado==='bajo'?'selected':''}>Bajo</option>
             <option value="ok"   ${state.stockFilter.estado==='ok'  ?'selected':''}>OK</option>
           </select>
         </div>
@@ -4398,14 +4430,16 @@ pages.stock = async function() {
           ${can('stock:create') ? `<button class="btn btn-primary flex-1" onclick="prodForm()">+ Nuevo</button>` : ''}
         </div>
       </div>
+      ${depFilter ? `<div class="text-xs text-blue-700 mt-2">📍 Mostrando existencias <b>solo del depósito seleccionado</b>. Quitá el filtro para ver el consolidado de todos los depósitos.</div>` : `<div class="text-xs text-slate-500 mt-2">💡 Sin filtro de depósito, ves la <b>existencia total consolidada</b> (suma de todos los depósitos).</div>`}
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="stock-table"></div></div>`;
   $('#st-q').oninput   = e => { state.stockFilter.q = e.target.value; render(); };
   $('#st-cat').onchange = e => { state.stockFilter.cat = e.target.value; render(); };
   $('#st-estado').onchange = e => { state.stockFilter.estado = e.target.value; render(); };
+  $('#st-dep').onchange = e => { state.stockFilter.depositoId = e.target.value; pages.stock(); }; // recarga con el filtro de back
   render();
 };
-function stockFiltrosLimpiar() { state.stockFilter = { q:'', cat:'', estado:'' }; pages.stock(); }
+function stockFiltrosLimpiar() { state.stockFilter = { q:'', cat:'', estado:'', depositoId:'' }; pages.stock(); }
 
 // === CONTROL DE STOCK (planilla de conteo físico) ===
 // Exporta un Excel con productos × depósitos y una columna vacía "conteo" para
@@ -4530,14 +4564,17 @@ pages.movimientos = async function() {
   setHeader('Movimientos', 'Entradas y salidas de stock');
   if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('movimientos','Movimientos'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let rows=[], prods=[];
+  let rows=[], prods=[], depositos=[];
   try {
-    const [r, p] = await Promise.all([api('/api/movimientos'), api('/api/productos')]);
+    const [r, p, d] = await Promise.all([api('/api/movimientos'), api('/api/productos'), api('/api/depositos')]);
     rows = r.data||[]; prods = p.data||[]; state.cache.productos = prods;
+    depositos = d.data || []; state.cache.depositos = depositos;
   } catch (e) { return toast(e.message,'error'); }
-  state.movFilter = state.movFilter || { q:'', cat:'', tipo:'', motivo:'', desde:'', hasta:'' };
+  state.movFilter = state.movFilter || { q:'', cat:'', tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
   const cats = [...new Set(prods.map(p=>p.categoria).filter(Boolean))].sort();
   const motivos = [...new Set(rows.map(m=>m.motivo).filter(Boolean))].sort();
+  // Set de depósitos compartidos (companyId null) para saber cuándo mostrar la empresa
+  const depCompartidosIds = new Set(depositos.filter(d => d.compartido).map(d => d.id));
 
   const render = () => {
     const f = state.movFilter;
@@ -4551,6 +4588,11 @@ pages.movimientos = async function() {
       if (f.motivo && m.motivo !== f.motivo) return false;
       if (f.desde && (m.fecha||'') < f.desde) return false;
       if (f.hasta && (m.fecha||'') > f.hasta+'T23:59:59') return false;
+      if (f.depositoId) {
+        // 'sin' = movimientos sin depósito; ID = movimientos de ese depósito
+        if (f.depositoId === 'sin' && m.depositoId) return false;
+        if (f.depositoId !== 'sin' && m.depositoId !== f.depositoId) return false;
+      }
       if (q) {
         return [m.producto?.nombre, m.motivo, m.referencia].some(v => (v||'').toLowerCase().includes(q));
       }
@@ -4567,10 +4609,13 @@ pages.movimientos = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">Δ Neto (u)</div><div class="text-2xl font-bold mt-1 ${(entradas-salidas)>=0?'text-emerald-700':'text-red-700'}">${fmtN(entradas-salidas)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Movimientos</div><div class="text-2xl font-bold mt-1">${filtered.length}</div></div>`;
 
+    // Si filtran por un depósito compartido, mostrar columna Empresa
+    const filtroEsCompartido = f.depositoId && depCompartidosIds.has(f.depositoId);
+    const empresasMap = (state.user?.companies || []).reduce((acc,c)=>{acc[c.id]=c.name; return acc;}, {});
     $('#mov-table').innerHTML = `
       <table class="data">
         <thead><tr>
-          <th>Fecha</th><th>Producto</th><th>Categoría</th><th>Tipo</th><th>Motivo</th>
+          <th>Fecha</th><th>Producto</th><th>Depósito</th>${filtroEsCompartido?'<th>Empresa</th>':''}<th>Tipo</th><th>Motivo</th>
           <th class="text-right">Cantidad</th><th class="text-right">Precio</th>
           <th class="text-right">Total</th><th>Referencia</th><th>Cargado por</th>
         </tr></thead>
@@ -4592,10 +4637,17 @@ pages.movimientos = async function() {
             const usrCell = m.user
               ? `<span class="text-xs text-slate-600" title="${esc(m.user.alias||'')}">${esc(m.user.nombre || '')}${m.user.apellido?' '+esc(m.user.apellido[0])+'.':''}</span>`
               : '<span class="text-xs text-slate-400">auto</span>';
+            const depCell = m.deposito
+              ? `<span class="text-xs text-slate-600">${esc(m.deposito.nombre)}${depCompartidosIds.has(m.depositoId)?' 🌐':''}</span>`
+              : '<span class="text-xs text-slate-400">—</span>';
+            const empCell = filtroEsCompartido
+              ? `<td><span class="text-xs text-slate-700">${esc(empresasMap[m.companyId] || '—')}</span></td>`
+              : '';
             return `<tr class="table-row">
               <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
-              <td>${esc(m.producto?.nombre || p?.nombre || '—')}</td>
-              <td>${p?.categoria?`<span class="badge badge-blue">${esc(p.categoria)}</span>`:'—'}</td>
+              <td>${esc(m.producto?.nombre || p?.nombre || '—')}${p?.categoria?` <span class="badge badge-blue text-[10px] ml-1">${esc(p.categoria)}</span>`:''}</td>
+              <td>${depCell}</td>
+              ${empCell}
               <td>${esIng?'<span class="badge badge-green">Ingreso</span>':'<span class="badge badge-red">Egreso</span>'}</td>
               <td>${esc(m.motivo||'—')}</td>
               <td class="text-right font-semibold ${esIng?'text-emerald-700':'text-red-700'}">${esIng?'+':'-'}${fmtN(m.cantidad)} ${esc(m.producto?.unidad||p?.unidad||'')}</td>
@@ -4604,7 +4656,7 @@ pages.movimientos = async function() {
               <td>${refCell}</td>
               <td>${usrCell}</td>
             </tr>`;
-          }).join('') || `<tr><td colspan="10" class="text-center text-slate-400 py-8">${rows.length?'Sin coincidencias con los filtros':'Sin movimientos'}</td></tr>`}
+          }).join('') || `<tr><td colspan="${filtroEsCompartido?11:10}" class="text-center text-slate-400 py-8">${rows.length?'Sin coincidencias con los filtros':'Sin movimientos'}</td></tr>`}
         </tbody>
       </table>`;
   };
@@ -4612,9 +4664,16 @@ pages.movimientos = async function() {
   $('#page-body').innerHTML = `
     <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
     <div class="kpi mb-3">
-      <div class="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
+      <div class="grid grid-cols-1 md:grid-cols-7 gap-2 items-end">
         <div><label class="label">Categoría</label>
           <select id="mv-cat" class="input"><option value="">Todas</option>${cats.map(c=>`<option ${c===state.movFilter.cat?'selected':''}>${esc(c)}</option>`).join('')}</select>
+        </div>
+        <div><label class="label">Depósito</label>
+          <select id="mv-deposito" class="input">
+            <option value="">Todos</option>
+            <option value="sin" ${state.movFilter.depositoId==='sin'?'selected':''}>(sin depósito)</option>
+            ${depositos.map(d => `<option value="${esc(d.id)}" ${d.id===state.movFilter.depositoId?'selected':''}>${esc(d.nombre)}${d.compartido?' 🌐':''}</option>`).join('')}
+          </select>
         </div>
         <div><label class="label">Tipo</label>
           <select id="mv-tipo" class="input">
@@ -4637,15 +4696,16 @@ pages.movimientos = async function() {
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="mov-table"></div></div>`;
 
-  ['q','cat','tipo','motivo','desde','hasta'].forEach(k => {
+  ['q','cat','deposito','tipo','motivo','desde','hasta'].forEach(k => {
     const el = $('#mv-'+k);
     if (!el) return;
     const evt = (el.tagName==='SELECT' || el.type==='date') ? 'change' : 'input';
-    el.addEventListener(evt, e => { state.movFilter[k] = e.target.value; render(); });
+    const stateKey = k === 'deposito' ? 'depositoId' : k;
+    el.addEventListener(evt, e => { state.movFilter[stateKey] = e.target.value; render(); });
   });
   render();
 };
-function movFiltrosLimpiar() { state.movFilter = { q:'', cat:'', tipo:'', motivo:'', desde:'', hasta:'' }; pages.movimientos(); }
+function movFiltrosLimpiar() { state.movFilter = { q:'', cat:'', tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' }; pages.movimientos(); }
 
 /* ----- REPORTE DE MARGEN (compras vs ventas por producto) ----- */
 pages.reporteMargen = async function() {
@@ -5467,46 +5527,30 @@ const IMPORT_TIPOS = [
   { id:'gastos-empleados',       label:'Gastos de empleados',     icon:'👷', desc:'Consolida los gastos por empleado (planilla). Se cargan en la planilla del empleado del mes según la fecha.' },
 ];
 
-// Importadores adaptados que LEEN el formato real del cliente (sin necesidad
-// de re-armar los datos en una plantilla nuestra). Cada uno tiene su propio
-// endpoint /api/admin/importar-cliente/<tipo>.
+// Planillas Especiales: importadores tolerantes que leen Excel con varias hojas,
+// nombres de columnas variables, etc. Pensados para administrativos que ya tienen
+// su propio formato y no quieren re-armar todo en una plantilla rígida.
+// Cada uno tiene su propio endpoint /api/admin/importar-cliente/<tipo>.
 const IMPORT_CLIENTE_TIPOS = [
-  { id:'cheques',         label:'CONTROL DE CHEQUES',     icon:'💳', desc:'Tres hojas: físicos a tercero, e-cheq a tercero, e-cheq emitidos. Se cargan como cheques con su estado.' },
-  { id:'creditos',        label:'CREDITOS BANCARIOS',     icon:'🏦', desc:'Una hoja por banco con plan de cuotas. Crea un crédito por hoja con sus cuotas (estado abonada/pendiente).' },
-  { id:'cartas-porte',    label:'Cartas de Porte',        icon:'🚛', desc:'Hoja "Cartas de Porte" con CTG, producto, chofer, destino, peso neto. Se cargan como Viajes.' },
-  { id:'efectivo',        label:'Control efectivo',       icon:'💵', desc:'Hojas DIARI0/OFICINA/LUCAS/LUCIANO. Cada fila se carga como ingreso o egreso en la caja del nombre de la hoja.' },
-  { id:'cerdos-ventas',   label:'CERDOS — VENTAS',        icon:'🐖', desc:'Acepta planillas "VENTAS CERDOS" (una hoja) o "PYME" (Lechón/Capón/Chancho en hojas separadas). Detecta columnas Fecha + Cantidad por palabras clave, agrega Precio, Total, Destino y Categoría si están. Crea un producto distinto por categoría (Lechones, Capones, etc).' },
-  { id:'transferencias',  label:'TRANSFERENCIAS bancarias', icon:'🔁', desc:'Hoja "Todas" con Fecha, Banco, Monto, Detalle, Empresa, Quien la realizó. Crea automáticamente la cuenta bancaria del banco si no existe y carga cada fila como movimiento bancario tipo transferencia saliente.' },
-  { id:'ctacte-saldos',   label:'CUENTAS CORRIENTES — saldos pendientes', icon:'📒', desc:'Hoja "Resumen" con Nombre, Saldo, Prioridad, Estado, Observaciones, Fecha de pago. Carga cada fila como cuenta corriente "libre" con haber=saldo. Las marcadas Pagado quedan saldadas, el resto quedan pendientes con vencimiento.' },
-  { id:'stock-hacienda',  label:'STOCK DE HACIENDA',       icon:'🐂', desc:'Una hoja por Renspa/campo, con Especie, Categoría, Stock real. Crea automáticamente el campo si no existe y carga el stock de hacienda por categoría. Si ya hay stock cargado, lo actualiza con el nuevo valor.' },
-  { id:'hectareas-sembradas', label:'HECTÁREAS SEMBRADAS', icon:'🌾', desc:'Una hoja por empresa (LLSP/El Pistrin/Peiretti Gerardo). Columnas: Renspa, Campo, Cultivo, Has sembradas. Por cada (campo, cultivo) crea un lote con sus hectáreas. Crea el campo si no existe y le asigna el Renspa. La empresa donde se carga es la activa del usuario (cambiá de empresa para cargar otra hoja).' },
-  { id:'pyme-ventas',     label:'PYME — Ventas hacienda menor', icon:'🐑', desc:'Excel de ventas de hacienda menor (Lechón, Cordero, Chivito, Cancha). Por cada fila crea el producto si no existe y un movimiento de venta. Si la fila dice "No pago", también suma a Cuentas Corrientes como deuda del cliente.' },
-  { id:'proveedores',     label:'PROVEEDORES (catálogo)', icon:'🏬', desc:'Hoja "Proveedores" del Excel de Cuentas Corrientes con Nombre, Teléfono, Mail, CUIT, Horarios. Carga cada uno como Proveedor en el sistema. Saltea los que ya existen (matching por razón social).' },
+  { id:'cheques',         label:'Control de cheques',     icon:'💳', desc:'Lista de cheques (propios y de terceros). Detecta hojas separadas por estado y normaliza fechas, montos y bancos. Carga cada uno con su estado.' },
+  { id:'creditos',        label:'Créditos bancarios',     icon:'🏦', desc:'Una hoja por banco con plan de cuotas. Crea un crédito por hoja con todas sus cuotas y marca cuáles están abonadas y cuáles pendientes.' },
+  { id:'cartas-porte',    label:'Cartas de porte',        icon:'🚛', desc:'Lista de cartas de porte con CTG, producto, chofer, destino y peso. Se cargan como Viajes en estado correspondiente.' },
+  { id:'efectivo',        label:'Control de efectivo',    icon:'💵', desc:'Una hoja por caja (típicamente por dueño u oficina). Cada fila es un ingreso o egreso de esa caja. Detecta el tipo por las columnas de débito/crédito.' },
+  { id:'cerdos-ventas',   label:'Ventas de cerdos',       icon:'🐖', desc:'Acepta una sola hoja de ventas o varias hojas separadas por categoría (Lechón/Capón/Chancho). Detecta columnas Fecha + Cantidad por palabras clave, agrega Precio, Total, Destino y Categoría si están. Crea un producto distinto por categoría.' },
+  { id:'transferencias',  label:'Transferencias bancarias', icon:'🔁', desc:'Hoja con todas las transferencias hechas: Fecha, Banco, Monto, Detalle, Empresa, Quién la realizó. Crea automáticamente la cuenta bancaria del banco si no existe y carga cada fila como movimiento bancario tipo transferencia.' },
+  { id:'ctacte-saldos',   label:'Saldos de Cuentas Corrientes', icon:'📒', desc:'Hoja con saldos abiertos de cuentas corrientes: Nombre, Saldo, Prioridad, Estado, Observaciones, Fecha de pago. Carga cada fila como cuenta corriente "libre". Las marcadas como pagadas quedan saldadas, el resto pendientes con vencimiento.' },
+  { id:'stock-hacienda',  label:'Stock de hacienda',       icon:'🐂', desc:'Una hoja por Renspa/campo, con Especie, Categoría y Stock real. Crea automáticamente el campo si no existe y carga el stock de hacienda por categoría. Si ya hay stock cargado, lo actualiza con el nuevo valor.' },
+  { id:'hectareas-sembradas', label:'Hectáreas sembradas', icon:'🌾', desc:'Una hoja por empresa con Renspa, Campo, Cultivo y Hectáreas sembradas. Por cada (campo, cultivo) crea un lote con sus hectáreas. Crea el campo si no existe y le asigna el Renspa. La empresa destino es la empresa activa del usuario (cambiá de empresa para cargar otra hoja).' },
+  { id:'pyme-ventas',     label:'PyME — Ventas hacienda menor', icon:'🐑', desc:'Excel de ventas de hacienda menor con varias categorías (Lechón, Cordero, Chivito, etc) en hojas separadas. Por cada fila crea el producto si no existe y un movimiento de venta. Si la fila marca "No pago", también suma a Cuentas Corrientes como deuda del cliente.' },
+  { id:'proveedores',     label:'Catálogo de proveedores', icon:'🏬', desc:'Listado de proveedores con Nombre, Teléfono, Mail, CUIT, Horarios. Carga cada uno como Proveedor en el sistema. Saltea los que ya existen (matching por razón social).' },
 ];
 
 function configRenderImportacion(body) {
   body.innerHTML = `
     <div id="import-historial-wrap" class="mb-4"></div>
-    <div class="bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-lg p-3 mb-4">
-      🎯 <b>Importación directa desde los Excel del cliente.</b> Estos importadores leen los archivos tal como vienen (formato histórico de planillas administrativas), sin necesidad de re-armar nada. Subí el archivo del cliente exactamente como lo tenés.
-    </div>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
-      ${IMPORT_CLIENTE_TIPOS.map(t => `
-        <div class="border border-amber-300 rounded-lg p-4 bg-amber-50/30">
-          <div class="flex items-start gap-3 mb-2">
-            <div class="text-2xl">${t.icon}</div>
-            <div class="flex-1 min-w-0">
-              <div class="font-semibold text-slate-800">${esc(t.label)}</div>
-              <div class="text-xs text-slate-600 mt-0.5">${esc(t.desc)}</div>
-            </div>
-          </div>
-          <button class="btn btn-primary text-xs w-full mt-2" onclick="importClientePlantilla('${t.id}')">📤 Importar archivo del cliente</button>
-          <input type="file" id="import-cliente-${t.id}" accept=".xlsx,.xls" class="hidden" onchange="importClienteSubir('${t.id}', this)"/>
-        </div>`).join('')}
-    </div>
 
     <div class="bg-blue-50 border border-blue-200 text-blue-900 text-sm rounded-lg p-3 mb-4">
-      📥 <b>Importación con plantilla estándar.</b> Para datos nuevos o cuando el archivo del cliente está muy desestructurado (gastos por persona, planillas con totales mezclados, etc.), descargá la plantilla de cada tipo, completala, y subila. El sistema reporta éxitos y errores fila por fila.
+      📥 <b>Importación con plantilla estándar.</b> Descargá la plantilla modelo del tipo de dato que quieras cargar, completala con tus datos, y subila. El sistema reporta éxitos y errores fila por fila.
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       ${IMPORT_TIPOS.map(t => `
@@ -5525,9 +5569,58 @@ function configRenderImportacion(body) {
           <input type="file" id="import-file-${t.id}" accept=".xlsx,.xls" class="hidden" onchange="importPlantillaSubirArchivo('${t.id}', this)"/>
         </div>`).join('')}
     </div>
-    <p class="text-[11px] text-slate-500 mt-4">💡 Tip: importá primero los <b>catálogos</b> (productos, clientes, proveedores, cuentas bancarias) y después los <b>movimientos</b> (cheques, saldos, stock inicial) — porque estos últimos referencian a los primeros.</p>`;
+    <p class="text-[11px] text-slate-500 mt-4">💡 Tip: importá primero los <b>catálogos</b> (productos, clientes, proveedores, cuentas bancarias) y después los <b>movimientos</b> (cheques, saldos, stock inicial) — porque estos últimos referencian a los primeros.</p>
+
+    <div class="mt-8 mb-3 flex items-center gap-3">
+      <div class="h-px flex-1 bg-slate-200"></div>
+      <div class="text-xs uppercase tracking-wider text-slate-500 font-semibold">📋 Planillas Especiales</div>
+      <div class="h-px flex-1 bg-slate-200"></div>
+    </div>
+    <div class="bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-lg p-3 mb-4">
+      🎯 Importadores tolerantes pensados para Excel administrativos con formato libre (varias hojas, nombres de columnas variables, totales mezclados). Detectan automáticamente las hojas y columnas por palabras clave. Si querés un punto de partida, descargá la <b>plantilla modelo</b> de cada tipo.
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+      ${IMPORT_CLIENTE_TIPOS.map(t => `
+        <div class="border border-amber-300 rounded-lg p-4 bg-amber-50/30">
+          <div class="flex items-start gap-3 mb-2">
+            <div class="text-2xl">${t.icon}</div>
+            <div class="flex-1 min-w-0">
+              <div class="font-semibold text-slate-800">${esc(t.label)}</div>
+              <div class="text-xs text-slate-600 mt-0.5">${esc(t.desc)}</div>
+            </div>
+          </div>
+          <div class="flex gap-2 mt-3">
+            <button class="btn btn-secondary text-xs flex-1" onclick="importClienteModeloDescargar('${t.id}')">📥 Plantilla modelo</button>
+            <button class="btn btn-primary text-xs flex-1" onclick="importClientePlantilla('${t.id}')">📤 Importar archivo</button>
+          </div>
+          <input type="file" id="import-cliente-${t.id}" accept=".xlsx,.xls" class="hidden" onchange="importClienteSubir('${t.id}', this)"/>
+        </div>`).join('')}
+    </div>`;
   // Cargar el historial de importaciones de la empresa actual
   importHistorialCargar();
+}
+
+// Descarga una plantilla MODELO (con headers y un par de filas de ejemplo) para
+// las "Planillas Especiales". El backend genera el Excel en /api/admin/importar-cliente/plantilla/:tipo
+async function importClienteModeloDescargar(tipo) {
+  try {
+    const r = await fetch(API_BASE + '/api/admin/importar-cliente/plantilla/' + encodeURIComponent(tipo), {
+      headers: { 'Authorization': 'Bearer ' + state.token, 'X-Company-Id': state.companyId },
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || ('Error ' + r.status));
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'plantilla-modelo-' + tipo + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+    toast('Plantilla modelo descargada', 'success');
+  } catch (e) {
+    toast(e.message || 'No pude generar la plantilla', 'error');
+  }
 }
 
 const TIPO_IMP_LABEL = {
@@ -9407,33 +9500,57 @@ pages.viajes = async function() {
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows=[];
   try { rows = await crudList('viajes'); } catch (e) { return toast(e.message,'error'); }
-
-  const totalKg     = rows.reduce((a,v)=>a+Number(v.cantidad||0),0);
-  const totalKgDesc = rows.reduce((a,v)=>a+Number(v.kgDescarga||0),0);
-  const totalDif    = rows.reduce((a,v)=>a+(Number(v.cantidad||0)-Number(v.kgDescarga||0)),0);
-  const pendientesPago = rows.filter(v=>v.estado==='facturado').length;
+  state.cache.viajes = rows;
 
   const canC = can('produccion:create')||can('logistica:create');
   const canU = can('produccion:update')||can('logistica:update');
   const canD = can('produccion:delete')||can('logistica:delete');
 
-  $('#page-body').innerHTML = `
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">Viajes</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
+  // Estado del filtro
+  state.viajeFilter = state.viajeFilter || { q:'', desde:'', hasta:'', producto:'', origen:'', estado:'' };
+
+  // Listas únicas para los selects (se calculan SIEMPRE sobre el total, no sobre el filtrado)
+  const productos = [...new Set(rows.map(v => (v.producto||'').trim()).filter(Boolean))].sort();
+  const origenes = [...new Set(rows.map(v => (v.origen||'').trim()).filter(Boolean))].sort();
+
+  function filtrar() {
+    const f = state.viajeFilter;
+    const q = (f.q || '').toLowerCase();
+    return rows.filter(v => {
+      if (f.desde) {
+        const d = (v.fecha || '').slice(0, 10);
+        if (d < f.desde) return false;
+      }
+      if (f.hasta) {
+        const d = (v.fecha || '').slice(0, 10);
+        if (d > f.hasta) return false;
+      }
+      if (f.producto && (v.producto || '').trim() !== f.producto) return false;
+      if (f.origen   && (v.origen   || '').trim() !== f.origen)   return false;
+      if (f.estado   && v.estado !== f.estado) return false;
+      if (q) {
+        return [v.origen, v.destino, v.producto, v.transportista, v.patente, v.cartaPorte, v.ctg, v.chofer, v.pagadorFlete]
+          .some(x => (x || '').toLowerCase().includes(q));
+      }
+      return true;
+    });
+  }
+
+  const render = () => {
+    const filtered = filtrar();
+    const totalKg     = filtered.reduce((a,v)=>a+Number(v.cantidad||0),0);
+    const totalKgDesc = filtered.reduce((a,v)=>a+Number(v.kgDescarga||0),0);
+    const pendientesPago = filtered.filter(v=>v.estado==='facturado').length;
+
+    $('#viajes-kpis').innerHTML = `
+      <div class="kpi"><div class="text-xs text-slate-500">Viajes</div><div class="text-2xl font-bold mt-1">${filtered.length}<span class="text-[11px] text-slate-400 ml-1">de ${rows.length}</span></div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Kg cargados</div><div class="text-xl font-bold mt-1">${fmtN(totalKg)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Kg descargados</div><div class="text-xl font-bold mt-1">${fmtN(totalKgDesc)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Faltan pagar (facturados)</div><div class="text-xl font-bold mt-1 ${pendientesPago?'text-amber-700':'text-slate-500'}">${pendientesPago}</div></div>
-    </div>
-    <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
-      <h3 class="font-semibold text-slate-800">Listado de viajes</h3>
-      <div class="flex flex-wrap gap-2">
-        <button class="btn btn-secondary" onclick="solicitarCamionForm()">🚛 Solicitar Camión Logística</button>
-        <button class="btn btn-secondary" onclick="verificarCtgsForm()" title="Consultar el estado de los CTGs en ARCA y completar los kg descargados">🔍 Verificar CTGs en ARCA</button>
-        ${canC?`<button class="btn btn-primary" onclick="viajeForm()">+ Nuevo viaje</button>`:''}
-      </div>
-    </div>
-    ${rows.length===0 ? '<div class="stub-card">Sin viajes cargados.</div>' : `
-    <div class="kpi p-0 overflow-hidden">
+      <div class="kpi"><div class="text-xs text-slate-500">Faltan pagar (facturados)</div><div class="text-xl font-bold mt-1 ${pendientesPago?'text-amber-700':'text-slate-500'}">${pendientesPago}</div></div>`;
+
+    $('#viajes-table').innerHTML = filtered.length === 0
+      ? '<div class="text-center text-slate-400 py-8">' + (rows.length ? 'Sin viajes que coincidan con los filtros' : 'Sin viajes cargados') + '</div>'
+      : `
       <div class="overflow-x-auto">
         <table class="data text-xs">
           <thead><tr>
@@ -9445,11 +9562,12 @@ pages.viajes = async function() {
             <th class="text-right">Dif.</th>
             <th class="text-right">Tarifa</th>
             <th>Camión / Patente</th>
+            <th>Pagador flete</th>
             <th>Estado</th>
             <th></th>
           </tr></thead>
           <tbody>
-            ${rows.map(v => {
+            ${filtered.map(v => {
               const dif = Number(v.cantidad||0) - Number(v.kgDescarga||0);
               const difTxt = (v.cantidad||v.kgDescarga) ? (dif===0?'0':(dif>0?`-${fmtN(dif)}`:`+${fmtN(-dif)}`)) : '—';
               const difCls = dif===0 ? 'text-slate-400' : (Math.abs(dif)>500 ? 'text-red-600' : 'text-amber-700');
@@ -9464,6 +9582,7 @@ pages.viajes = async function() {
                 <td class="text-right font-semibold ${difCls}">${difTxt}</td>
                 <td class="text-right">${v.tarifa?fmt$(v.tarifa)+'/t':'—'}</td>
                 <td>${esc(v.tipoCamion||'—')}${v.patente?` <span class="text-slate-400">${esc(v.patente)}</span>`:''}</td>
+                <td class="text-xs">${v.pagadorFlete?esc(v.pagadorFlete):'<span class="text-slate-400">—</span>'}</td>
                 <td>${viajeEstadoBadge(v.estado)}${factTxt?`<br><span class="text-[10px] text-slate-400">${esc(factTxt)}</span>`:''}</td>
                 <td class="text-right whitespace-nowrap">
                   ${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='viajeForm(${JSON.stringify(v.id)})'>✏️</button>`:''}
@@ -9477,9 +9596,147 @@ pages.viajes = async function() {
             }).join('')}
           </tbody>
         </table>
+      </div>`;
+  };
+
+  $('#page-body').innerHTML = `
+    <div id="viajes-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+
+    <div class="kpi mb-3">
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+        <div class="md:col-span-2">
+          <label class="label">Desde</label>
+          <input id="vj-desde" type="date" class="input" value="${esc(state.viajeFilter.desde||'')}"/>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Hasta</label>
+          <input id="vj-hasta" type="date" class="input" value="${esc(state.viajeFilter.hasta||'')}"/>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Producto</label>
+          <select id="vj-producto" class="input">
+            <option value="">Todos</option>
+            ${productos.map(p => `<option value="${esc(p)}" ${p===state.viajeFilter.producto?'selected':''}>${esc(p)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Origen</label>
+          <select id="vj-origen" class="input">
+            <option value="">Todos</option>
+            ${origenes.map(o => `<option value="${esc(o)}" ${o===state.viajeFilter.origen?'selected':''}>${esc(o)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Estado</label>
+          <select id="vj-estado" class="input">
+            <option value="">Todos</option>
+            ${Object.entries(VIAJE_ESTADOS).map(([k,v])=>`<option value="${k}" ${k===state.viajeFilter.estado?'selected':''}>${esc(v.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-2 flex gap-2">
+          <button class="btn btn-secondary flex-1" onclick="viajeFiltrosLimpiar()">Limpiar</button>
+        </div>
+        <div class="md:col-span-12">
+          <input id="vj-q" class="input" placeholder="Buscar por origen, destino, producto, transportista, chofer, patente, CP, CTG, pagador..." value="${esc(state.viajeFilter.q||'')}"/>
+        </div>
       </div>
-    </div>`}`;
+    </div>
+
+    <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
+      <h3 class="font-semibold text-slate-800">Listado de viajes</h3>
+      <div class="flex flex-wrap gap-2">
+        <button class="btn btn-secondary" onclick="viajesExportarExcel()">📥 Exportar Excel</button>
+        <button class="btn btn-secondary" onclick="solicitarCamionForm()">🚛 Solicitar Camión Logística</button>
+        <button class="btn btn-secondary" onclick="verificarCtgsForm()" title="Consultar el estado de los CTGs en ARCA y completar los kg descargados">🔍 Verificar CTGs en ARCA</button>
+        ${canC?`<button class="btn btn-primary" onclick="viajeForm()">+ Nuevo viaje</button>`:''}
+      </div>
+    </div>
+    <div class="kpi p-0 overflow-hidden"><div id="viajes-table"></div></div>`;
+
+  ['q','desde','hasta','producto','origen','estado'].forEach(k => {
+    const el = $('#vj-' + k);
+    if (!el) return;
+    const evt = (el.tagName === 'SELECT' || el.type === 'date') ? 'change' : 'input';
+    el.addEventListener(evt, e => { state.viajeFilter[k] = e.target.value; render(); });
+  });
+  render();
 };
+function viajeFiltrosLimpiar() {
+  state.viajeFilter = { q:'', desde:'', hasta:'', producto:'', origen:'', estado:'' };
+  pages.viajes();
+}
+
+// Exporta los viajes FILTRADOS a Excel usando SheetJS (XLSX está cargado por CDN para otros usos).
+// Si XLSX no está disponible globalmente, hace fallback a CSV.
+function viajesExportarExcel() {
+  const rows = state.cache.viajes || [];
+  // Reaplica los filtros con la lógica de pages.viajes
+  const f = state.viajeFilter || {};
+  const q = (f.q || '').toLowerCase();
+  const filtered = rows.filter(v => {
+    if (f.desde) { const d = (v.fecha || '').slice(0, 10); if (d < f.desde) return false; }
+    if (f.hasta) { const d = (v.fecha || '').slice(0, 10); if (d > f.hasta) return false; }
+    if (f.producto && (v.producto || '').trim() !== f.producto) return false;
+    if (f.origen && (v.origen || '').trim() !== f.origen) return false;
+    if (f.estado && v.estado !== f.estado) return false;
+    if (q) {
+      return [v.origen, v.destino, v.producto, v.transportista, v.patente, v.cartaPorte, v.ctg, v.chofer, v.pagadorFlete]
+        .some(x => (x || '').toLowerCase().includes(q));
+    }
+    return true;
+  });
+  if (filtered.length === 0) {
+    toast('No hay viajes que exportar con los filtros actuales', 'warn');
+    return;
+  }
+  const aoa = [[
+    'Fecha', 'Origen', 'Destino', 'Producto',
+    'Kg carga', 'Kg descarga', 'Diferencia',
+    'Tarifa $/t', 'Flete total',
+    'Transportista', 'CUIT transporte', 'Chofer', 'Patente', 'Acoplado', 'Tipo camión',
+    'Carta de porte', 'CTG', 'Pagador del flete',
+    'Combustible', 'Peajes', 'Comida', 'Varios', 'Total gastos',
+    'Estado', 'Factura compra', 'Observaciones',
+  ]];
+  for (const v of filtered) {
+    const fact = v.facturaCompra
+      ? `${v.facturaCompra.tipo} ${String(v.facturaCompra.puntoVenta).padStart(4,'0')}-${String(v.facturaCompra.numero).padStart(8,'0')}`
+      : '';
+    const dif = Number(v.cantidad||0) - Number(v.kgDescarga||0);
+    aoa.push([
+      v.fecha ? String(v.fecha).slice(0, 10) : '',
+      v.origen || '', v.destino || '', v.producto || '',
+      v.cantidad || 0, v.kgDescarga || 0, dif,
+      v.tarifa || 0, v.flete || 0,
+      v.transportista || '', v.transporteCuit || '', v.chofer || '', v.patente || '', v.patenteAcoplado || '', v.tipoCamion || '',
+      v.cartaPorte || '', v.ctg || '', v.pagadorFlete || '',
+      v.combustible || 0, v.peajes || 0, v.comida || 0, v.varios || 0, v.total || 0,
+      v.estado || '', fact, v.observaciones || '',
+    ]);
+  }
+  // Si XLSX está cargado, usar excel real; si no, fallback a CSV
+  if (typeof XLSX !== 'undefined' && XLSX.utils) {
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = aoa[0].map(() => ({ wch: 18 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Viajes');
+    const fecha = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `viajes-${fecha}.xlsx`);
+  } else {
+    // CSV fallback
+    const csv = aoa.map(r => r.map(c => {
+      const s = String(c == null ? '' : c);
+      return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(';')).join('\r\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `viajes-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+  toast(`Se exportaron ${filtered.length} viajes`, 'success');
+}
 
 function viajeForm(id=null) {
   const it = id ? (state.cache.viajes||[]).find(x=>x.id===id)||{} : {};
@@ -9528,12 +9785,13 @@ function viajeForm(id=null) {
         <div class="col-span-3 text-[11px] text-amber-800" id="f-dhint">${it.destinoTipo==='venta_directa'?'💡 Después de guardar este viaje, podés cargar la liquidación de cereal desde la lista de viajes (botón 🧾).':''}</div>
       </div>
 
-      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Documentos</h4>
+      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Documentos y flete</h4>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Carta de porte</label><input id="f-cp" class="input" value="${esc(it.cartaPorte||'')}" placeholder="Nº CP"/></div>
         <div><label class="label">CTG</label><input id="f-ctg" class="input" value="${esc(it.ctg||'')}" placeholder="Código CTG"/></div>
-        <div><label class="label">CDP</label><input id="f-cdp" class="input" value="${esc(it.cdp||'')}"/></div>
-        <div></div>
+        <div class="col-span-2"><label class="label">Pagador del flete</label>
+          <input id="f-pagador" class="input" value="${esc(it.pagadorFlete||'')}" placeholder="Quien paga el flete (ej. Cliente, Acopio, nombre)"/>
+        </div>
       </div>
 
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Transporte</h4>
@@ -9632,7 +9890,7 @@ async function viajeSave(id) {
     unidad:          $('#f-uni').value.trim() || null,
     cartaPorte:      $('#f-cp').value.trim() || null,
     ctg:             $('#f-ctg').value.trim() || null,
-    cdp:             $('#f-cdp').value.trim() || null,
+    pagadorFlete:    $('#f-pagador')?.value.trim() || null,
     km:              $('#f-km').value ? Number($('#f-km').value) : null,
     tarifa:          $('#f-tarifa').value ? Number($('#f-tarifa').value) : null,
     transportista:   $('#f-tr').value.trim() || null,
@@ -10730,10 +10988,11 @@ pages.insumos = async function() {
   setHeader('Insumos y labores', 'Aplicaciones por lote y campaña');
   if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('insumos','Insumos y labores'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let campanas=[], lotes=[], insumosCat=[], laboresCat=[], aplics=[];
+  let campanas=[], lotes=[], insumosCat=[], laboresCat=[], aplics=[], campos=[];
   try {
     campanas = (await api('/api/campanas')).data || [];
     lotes = (await api('/api/lotes')).data || [];
+    campos = (await api('/api/campos').catch(()=>({data:[]}))).data || [];
     const cats = (await api('/api/catalogos')).data || [];
     insumosCat = cats.filter(c => ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'].includes(c.tipo));
     laboresCat = cats.filter(c => c.tipo === 'Labor');
@@ -10743,29 +11002,133 @@ pages.insumos = async function() {
   state.cache.insumosCat = insumosCat; state.cache.laboresCat = laboresCat;
   state.cache.aplicaciones = aplics;
 
-  state.insFilter = state.insFilter || { campana:'' };
-  const campanasFiltradas = state.insFilter.campana
-    ? campanas.filter(c => c.id === state.insFilter.campana)
-    : campanas;
+  state.insFilter = state.insFilter || { campana:'', insumo:'', labor:'', campoId:'' };
+  const f = state.insFilter;
+
+  // Items únicos (de aplicaciones cargadas) para los filtros
+  const insumosUsados = [...new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.item||'').trim()).filter(Boolean))].sort();
+  const laboresUsadas = [...new Set(aplics.filter(a=>a.tipo==='labor' ).map(a=>(a.item||'').trim()).filter(Boolean))].sort();
+
+  // Filtramos aplicaciones por los criterios activos
+  const aplicsFiltradas = aplics.filter(a => {
+    if (f.insumo && a.tipo === 'insumo' && (a.item||'').trim() !== f.insumo) return false;
+    if (f.labor  && a.tipo === 'labor'  && (a.item||'').trim() !== f.labor)  return false;
+    // Si filtra por insumo, esconder labores; si filtra por labor, esconder insumos
+    if (f.insumo && !f.labor && a.tipo !== 'insumo') return false;
+    if (f.labor  && !f.insumo && a.tipo !== 'labor') return false;
+    if (f.campoId) {
+      const camp = campanas.find(c => c.id === a.campanaId);
+      const lote = camp ? lotes.find(l => l.id === camp.loteId) : null;
+      if (!lote || lote.campoId !== f.campoId) return false;
+    }
+    return true;
+  });
+  const idsCampanasFiltradas = new Set(aplicsFiltradas.map(a=>a.campanaId));
+
+  // Lista final de campañas a mostrar
+  let campanasFiltradas;
+  if (f.campana) {
+    campanasFiltradas = campanas.filter(c => c.id === f.campana);
+  } else if (f.insumo || f.labor || f.campoId) {
+    campanasFiltradas = campanas.filter(c => idsCampanasFiltradas.has(c.id));
+  } else {
+    campanasFiltradas = campanas;
+  }
+
+  // Totales consolidados (cuando el filtro es por insumo o labor)
+  const haDeApp = (a) => {
+    if (a.hectareasAplicadas != null) return Number(a.hectareasAplicadas);
+    const camp = campanas.find(c => c.id === a.campanaId);
+    const lote = camp ? lotes.find(l => l.id === camp.loteId) : null;
+    return Number(lote?.hectareas || 0);
+  };
+  // Si filtra por insumo: total unidades + total costo
+  const totUnid = aplicsFiltradas.filter(a=>a.tipo==='insumo').reduce((acc,a)=> acc + Number(a.unidadHa||0) * haDeApp(a), 0);
+  const totCosto = aplicsFiltradas.reduce((acc,a)=> acc + Number(a.costoHa||0) * haDeApp(a), 0);
+  const totHa = aplicsFiltradas.reduce((acc,a)=> acc + haDeApp(a), 0);
+
+  // Banner de totales cuando hay filtro activo de insumo o labor
+  const filtroActivo = !!(f.insumo || f.labor || f.campoId);
+  const labelFiltro = f.insumo ? `Insumo "${f.insumo}"` : f.labor ? `Labor "${f.labor}"` : f.campoId ? `Campo "${esc(campos.find(c=>c.id===f.campoId)?.nombre||'')}"` : '';
+  const bannerTotales = filtroActivo ? `
+    <div class="mb-4 rounded-xl overflow-hidden" style="background:linear-gradient(135deg,#14532d 0%,#166534 55%,#15803d 100%);box-shadow:0 6px 20px -8px rgba(20,83,45,.45)">
+      <div class="p-5">
+        <div class="text-xs font-bold uppercase tracking-wider mb-2" style="color:#bbf7d0">📊 Consolidado del filtro</div>
+        <div class="text-lg font-bold text-white mb-3">${labelFiltro}</div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="rounded-lg p-3" style="background:rgba(255,255,255,.12)">
+            <div class="text-[11px]" style="color:#bbf7d0">Aplicaciones</div>
+            <div class="text-2xl font-bold text-white">${aplicsFiltradas.length}</div>
+          </div>
+          <div class="rounded-lg p-3" style="background:rgba(255,255,255,.12)">
+            <div class="text-[11px]" style="color:#bbf7d0">Hectáreas (suma)</div>
+            <div class="text-2xl font-bold text-white">${fmtN(totHa)}</div>
+          </div>
+          ${f.insumo ? `
+            <div class="rounded-lg p-3" style="background:rgba(255,255,255,.12)">
+              <div class="text-[11px]" style="color:#bbf7d0">Total consumido</div>
+              <div class="text-2xl font-bold text-white">${fmtN(totUnid)}</div>
+              <div class="text-[10px] mt-0.5" style="color:#dcfce7">unidades del insumo (suma de unid/ha × ha)</div>
+            </div>` : ''}
+          <div class="rounded-lg p-3" style="background:rgba(255,255,255,.12)">
+            <div class="text-[11px]" style="color:#bbf7d0">Costo total</div>
+            <div class="text-2xl font-bold text-white">u$s ${fmtN(totCosto)}</div>
+          </div>
+        </div>
+      </div>
+    </div>` : '';
 
   $('#page-body').innerHTML = `
-    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <select id="ins-filtro" class="input w-auto">
-        <option value="">Todas las campañas</option>
-        ${campanas.map(c => `<option value="${c.id}" ${c.id===state.insFilter.campana?'selected':''}>${esc(c.cultivo||'')} ${c.lote?.nombre?'— '+esc(c.lote.nombre):''}</option>`).join('')}
-      </select>
-      <div class="flex gap-2">
-        <button class="btn btn-primary" onclick="aplicForm('insumo')">+ Insumo</button>
-        ${can('produccion:labor_simple:create')||can('produccion:create')?`<button class="btn btn-secondary" onclick="laborForm(false)">+ Labor</button>`:''}
-        ${can('produccion:labor_avanzada:create')||can('produccion:create')?`<button class="btn btn-secondary" onclick="laborForm(true)" title="Labor con cálculo de % para el empleado. La ganancia se suma a su planilla del mes automáticamente.">🛠️ Labor avanzada</button>`:''}
+    <div class="kpi mb-3">
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+        <div class="md:col-span-3">
+          <label class="label">Campaña</label>
+          <select id="ins-filtro" class="input">
+            <option value="">Todas</option>
+            ${campanas.map(c => `<option value="${c.id}" ${c.id===f.campana?'selected':''}>${esc(c.cultivo||'')} ${c.lote?.nombre?'— '+esc(c.lote.nombre):''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-3">
+          <label class="label">Campo</label>
+          <select id="ins-campo" class="input">
+            <option value="">Todos</option>
+            ${campos.map(c => `<option value="${esc(c.id)}" ${c.id===f.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-3">
+          <label class="label">Insumo</label>
+          <select id="ins-insumo" class="input">
+            <option value="">Todos</option>
+            ${insumosUsados.map(i => `<option value="${esc(i)}" ${i===f.insumo?'selected':''}>${esc(i)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-3">
+          <label class="label">Labor</label>
+          <select id="ins-labor" class="input">
+            <option value="">Todas</option>
+            ${laboresUsadas.map(l => `<option value="${esc(l)}" ${l===f.labor?'selected':''}>${esc(l)}</option>`).join('')}
+          </select>
+        </div>
       </div>
+      ${filtroActivo ? `<div class="mt-2 flex gap-2">
+        <button class="btn btn-secondary text-xs" onclick="insumosFiltrosLimpiar()">✕ Limpiar filtros</button>
+        <button class="btn btn-secondary text-xs" onclick="insumosExportarExcel()">📥 Exportar Excel</button>
+      </div>` : `<div class="mt-2"><button class="btn btn-secondary text-xs" onclick="insumosExportarExcel()">📥 Exportar Excel</button></div>`}
+    </div>
+
+    ${bannerTotales}
+
+    <div class="mb-4 flex items-center justify-end flex-wrap gap-2">
+      <button class="btn btn-primary" onclick="aplicForm('insumo')">+ Insumo</button>
+      ${can('produccion:labor_simple:create')||can('produccion:create')?`<button class="btn btn-secondary" onclick="laborForm(false)">+ Labor</button>`:''}
+      ${can('produccion:labor_avanzada:create')||can('produccion:create')?`<button class="btn btn-secondary" onclick="laborForm(true)" title="Labor con cálculo de % para el empleado. La ganancia se suma a su planilla del mes automáticamente.">🛠️ Labor avanzada</button>`:''}
     </div>
     <div id="ins-list" class="space-y-4">
       ${campanasFiltradas.length === 0
-        ? '<div class="stub-card">No hay campañas cargadas. Creá una primero en Campañas.</div>'
+        ? '<div class="stub-card">' + (filtroActivo ? 'No hay aplicaciones que coincidan con los filtros' : 'No hay campañas cargadas. Creá una primero en Campañas.') + '</div>'
         : campanasFiltradas.map(c => {
-            const insumosC = aplics.filter(a => a.campanaId === c.id && a.tipo === 'insumo');
-            const laboresC = aplics.filter(a => a.campanaId === c.id && a.tipo === 'labor');
+            const insumosC = aplicsFiltradas.filter(a => a.campanaId === c.id && a.tipo === 'insumo');
+            const laboresC = aplicsFiltradas.filter(a => a.campanaId === c.id && a.tipo === 'labor');
             const haLote = Number(c.lote?.hectareas || 0);
             // Cada aplicación tiene su propia cantidad de hectáreas; si está vacío (legacy) usamos el total del lote
             const haDe = (a) => Number(a.hectareasAplicadas ?? haLote);
@@ -10844,9 +11207,77 @@ pages.insumos = async function() {
           }).join('')}
     </div>`;
 
-  const filtroEl = $('#ins-filtro');
-  if (filtroEl) filtroEl.onchange = e => { state.insFilter.campana = e.target.value; pages.insumos(); };
+  const bindFilter = (sel, campo) => {
+    const el = document.getElementById(sel);
+    if (el) el.onchange = e => { state.insFilter[campo] = e.target.value; pages.insumos(); };
+  };
+  bindFilter('ins-filtro', 'campana');
+  bindFilter('ins-campo',  'campoId');
+  bindFilter('ins-insumo', 'insumo');
+  bindFilter('ins-labor',  'labor');
 };
+function insumosFiltrosLimpiar() {
+  state.insFilter = { campana:'', insumo:'', labor:'', campoId:'' };
+  pages.insumos();
+}
+function insumosExportarExcel() {
+  const aplics = state.cache.aplicaciones || [];
+  const campanas = state.cache.campanas || [];
+  const lotes = state.cache.lotes || [];
+  const f = state.insFilter || {};
+  const filt = aplics.filter(a => {
+    if (f.insumo && a.tipo === 'insumo' && (a.item||'').trim() !== f.insumo) return false;
+    if (f.labor  && a.tipo === 'labor'  && (a.item||'').trim() !== f.labor)  return false;
+    if (f.insumo && !f.labor && a.tipo !== 'insumo') return false;
+    if (f.labor  && !f.insumo && a.tipo !== 'labor') return false;
+    if (f.campana && a.campanaId !== f.campana) return false;
+    if (f.campoId) {
+      const camp = campanas.find(c => c.id === a.campanaId);
+      const lote = camp ? lotes.find(l => l.id === camp.loteId) : null;
+      if (!lote || lote.campoId !== f.campoId) return false;
+    }
+    return true;
+  });
+  if (filt.length === 0) { toast('No hay aplicaciones que exportar con los filtros actuales', 'warn'); return; }
+  const aoa = [['Fecha','Tipo','Item','Subtipo','Campaña','Cultivo','Lote','Campo','Ha aplicadas','Unid/ha','u$s/unid','u$s/ha','Costo total','Observaciones']];
+  for (const a of filt) {
+    const camp = campanas.find(c => c.id === a.campanaId);
+    const lote = camp ? lotes.find(l => l.id === camp.loteId) : null;
+    const haDe = a.hectareasAplicadas != null ? Number(a.hectareasAplicadas) : Number(lote?.hectareas || 0);
+    const costoTotal = Number(a.costoHa || 0) * haDe;
+    aoa.push([
+      a.fecha ? String(a.fecha).slice(0,10) : '',
+      a.tipo === 'insumo' ? 'Insumo' : 'Labor',
+      a.item || '', a.subtipo || '',
+      camp?.id ? `${camp.cultivo || ''} ${camp.estado ? '· '+camp.estado : ''}` : '',
+      camp?.cultivo || '',
+      lote?.nombre || '',
+      lote?.campo?.nombre || '',
+      haDe,
+      a.unidadHa || 0, a.precioUnit || 0, a.costoHa || 0, costoTotal,
+      a.observaciones || '',
+    ]);
+  }
+  if (typeof XLSX !== 'undefined' && XLSX.utils) {
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = aoa[0].map(() => ({ wch: 16 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Insumos-Labores');
+    XLSX.writeFile(wb, `insumos-labores-${new Date().toISOString().slice(0,10)}.xlsx`);
+  } else {
+    const csv = aoa.map(r => r.map(c => {
+      const s = String(c == null ? '' : c);
+      return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(';')).join('\r\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `insumos-labores-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+  toast(`Se exportaron ${filt.length} filas`, 'success');
+}
 
 function aplicForm(tipo) {
   const campanas = state.cache.campanas || [];
@@ -11072,6 +11503,38 @@ function laPickLabor() {
   }
   if (tpEl && cat.tipoPrecio && !tpEl.dataset.manual) {
     tpEl.value = cat.tipoPrecio;
+  }
+  // Autopopulate de insumos típicos del catálogo. Cantidad del catálogo es POR HECTÁREA
+  // y la multiplicamos por las hectáreas aplicadas. Sólo si la tabla de insumos
+  // está vacía o todas las filas están en blanco (no pisamos lo que el usuario cargó).
+  const insTabla = $('#la-ins');
+  const insumosDefault = Array.isArray(cat.insumosDefault) ? cat.insumosDefault : [];
+  if (insTabla && insumosDefault.length > 0) {
+    const filas = insTabla.querySelectorAll('tr[data-la]');
+    const todasVacias = Array.from(filas).every(tr => {
+      const sel = tr.querySelector('[data-laf="productoId"]');
+      const cant = tr.querySelector('[data-laf="cantidad"]');
+      return (!sel || !sel.value) && (!cant || !Number(cant.value));
+    });
+    if (filas.length === 0 || todasVacias) {
+      // Limpiar filas vacías existentes
+      filas.forEach(tr => tr.remove());
+      const ha = Number($('#la-ha')?.value || 0) || 1;
+      const productos = state.cache.productos || [];
+      for (const ins of insumosDefault) {
+        const prod = productos.find(p => p.id === ins.productoId);
+        laAddIns({
+          productoId: ins.productoId,
+          cantidad: Number((ins.cantidad * ha).toFixed(4)),
+          precioUnit: prod?.precioReferencia || 0,
+        });
+        // Seleccionar el producto en el select recién creado
+        const lastRow = insTabla.lastElementChild;
+        const sel = lastRow?.querySelector('[data-laf="productoId"]');
+        if (sel) sel.value = ins.productoId;
+      }
+      toast(`Se cargaron ${insumosDefault.length} insumo(s) típico(s) de la labor`, 'success');
+    }
   }
   // Marcamos como "tocados por catálogo" pero siguen libres para editar
   setTimeout(() => {
@@ -11331,6 +11794,10 @@ function catForm(id=null, tabId=null) {
   // Bloque extra para catálogo de Labor: precio referencia + tipo de precio.
   // Se usa en el form de Labor avanzada para pre-cargar (sigue editable).
   const showLaborFields = tipoActual === 'Labor';
+  // Insumos por defecto (cantidad/ha) — se autocargan en Labor Avanzada
+  const insumosDef = Array.isArray(it.insumosDefault) ? it.insumosDefault : [];
+  state.catInsumosDef = insumosDef.map(x => ({ ...x }));
+  const productosCatalogo = (state.cache.productos || []);
   const laborPriceBlock = `
     <div id="f-lpc-wrap" class="col-span-2 p-3 bg-blue-50 rounded-lg border border-blue-200" style="${showLaborFields?'':'display:none'}">
       <div class="text-xs text-blue-800 font-semibold mb-2">💰 Precio sugerido para esta labor</div>
@@ -11345,6 +11812,14 @@ function catForm(id=null, tabId=null) {
         <div><label class="label">Precio referencia ($)</label><input id="f-precio" type="number" step="0.01" class="input" value="${it.precioReferencia||''}" placeholder="Ej: 25000"/></div>
       </div>
       <div class="text-[11px] text-blue-700 mt-2">💡 Cuando cargues una "Labor avanzada" y elijas esta labor, este precio y tipo se cargan automáticamente y podés modificarlos.</div>
+    </div>
+    <div id="f-ldef-wrap" class="col-span-2 p-3 bg-emerald-50 rounded-lg border border-emerald-200" style="${showLaborFields?'':'display:none'}">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-xs text-emerald-800 font-semibold">🌱 Insumos típicos (por hectárea)</div>
+        <button type="button" class="btn btn-secondary text-xs" onclick="catInsumoAdd()">+ Insumo</button>
+      </div>
+      <div id="f-ldef-tabla"></div>
+      <div class="text-[11px] text-emerald-700 mt-2">💡 Estos insumos se cargan automáticamente cuando uses esta labor en "Labor avanzada" (multiplicados por las hectáreas aplicadas). Editables fila por fila después.</div>
     </div>`;
   openModal({
     title: id?`Editar ${tab.singular.toLowerCase()}`:`Nuevo ${tab.singular.toLowerCase()}`,
@@ -11367,11 +11842,61 @@ function catForm(id=null, tabId=null) {
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='catSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
+  // Render inicial de insumos típicos si es Labor
+  setTimeout(() => { if (tipoActual === 'Labor') catInsumosRender(); }, 0);
 }
 function catFormToggleLabor() {
   const tipo = $('#f-tipo').value;
-  const wrap = $('#f-lpc-wrap');
-  if (wrap) wrap.style.display = (tipo === 'Labor') ? '' : 'none';
+  const isLabor = tipo === 'Labor';
+  const wrap = $('#f-lpc-wrap');     if (wrap) wrap.style.display = isLabor ? '' : 'none';
+  const wrap2 = $('#f-ldef-wrap');   if (wrap2) wrap2.style.display = isLabor ? '' : 'none';
+  if (isLabor) catInsumosRender();
+}
+function catInsumosRender() {
+  const cont = document.getElementById('f-ldef-tabla');
+  if (!cont) return;
+  const arr = state.catInsumosDef || [];
+  const productos = (state.cache.productos || []);
+  if (arr.length === 0) {
+    cont.innerHTML = '<div class="text-xs text-slate-500 py-3 text-center">Sin insumos típicos cargados. Usá + Insumo para agregar.</div>';
+    return;
+  }
+  cont.innerHTML = `<table class="w-full text-sm">
+    <thead><tr class="text-[11px] text-slate-600">
+      <th class="text-left py-1">Insumo</th>
+      <th class="text-right py-1 w-28">Cantidad / ha</th>
+      <th class="text-left py-1 w-20">Unidad</th>
+      <th class="w-8"></th>
+    </tr></thead>
+    <tbody>
+      ${arr.map((x, idx) => `
+        <tr>
+          <td class="py-1 pr-2">
+            <select class="input text-xs" onchange="catInsumoSet(${idx},'productoId',this.value)">
+              <option value="">— Elegir —</option>
+              ${productos.map(p => `<option value="${esc(p.id)}" ${x.productoId===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?' ('+esc(p.unidad)+')':''}</option>`).join('')}
+            </select>
+          </td>
+          <td class="py-1 pr-2"><input type="number" step="0.0001" class="input text-xs text-right" value="${x.cantidad||''}" oninput="catInsumoSet(${idx},'cantidad',parseFloat(this.value)||0)"/></td>
+          <td class="py-1 pr-2"><input class="input text-xs" value="${esc(x.unidad||'')}" placeholder="lt, kg..." oninput="catInsumoSet(${idx},'unidad',this.value)"/></td>
+          <td class="py-1 text-center"><button type="button" class="btn btn-ghost text-red-600 text-xs" onclick="catInsumoDel(${idx})">✕</button></td>
+        </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+function catInsumoAdd() {
+  state.catInsumosDef = state.catInsumosDef || [];
+  state.catInsumosDef.push({ productoId: '', cantidad: 0, unidad: '' });
+  catInsumosRender();
+}
+function catInsumoDel(idx) {
+  if (!state.catInsumosDef) return;
+  state.catInsumosDef.splice(idx, 1);
+  catInsumosRender();
+}
+function catInsumoSet(idx, campo, valor) {
+  if (!state.catInsumosDef || !state.catInsumosDef[idx]) return;
+  state.catInsumosDef[idx][campo] = valor;
 }
 async function catSave(id) {
   const descEl = $('#f-desc');
@@ -11390,9 +11915,19 @@ async function catSave(id) {
     const pr = $('#f-precio')?.value;
     data.tipoPrecio = tp || null;
     data.precioReferencia = (pr !== '' && pr != null) ? Number(pr) : null;
+    // Insumos típicos: limpiar entradas sin productoId o cantidad <= 0
+    const insumos = (state.catInsumosDef || [])
+      .filter(x => x.productoId && Number(x.cantidad) > 0)
+      .map(x => ({
+        productoId: x.productoId,
+        cantidad: Number(x.cantidad),
+        unidad: (x.unidad || '').trim() || null,
+      }));
+    data.insumosDefault = insumos.length ? insumos : null;
   } else {
     data.tipoPrecio = null;
     data.precioReferencia = null;
+    data.insumosDefault = null;
   }
   if (!data.nombre) return toast('Nombre requerido','warn');
   try { await api('/api/catalogos'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});
