@@ -14,6 +14,16 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import XLSX from 'xlsx';
+// pdf-parse: usa import dinámico porque su index.js tiene un require interno raro;
+// se carga la primera vez que se llama al parser de facturas.
+let _pdfParse = null;
+async function getPdfParse() {
+  if (_pdfParse) return _pdfParse;
+  // pdf-parse exporta cjs; lo cargamos dinámicamente para evitar warnings de ESM.
+  const mod = await import('pdf-parse/lib/pdf-parse.js');
+  _pdfParse = mod.default || mod;
+  return _pdfParse;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = process.env.STATIC_DIR || path.resolve(__dirname, '..', '..');
@@ -24,7 +34,7 @@ const app = express();
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.12';
+const AGROCORE_VERSION = '0.7.13';
 const AGROCORE_BUILD = new Date('2026-06-16').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2589,6 +2599,90 @@ function emptyTotales() {
   };
 }
 
+// === Stock consolidado multi-empresa por depósito ===
+// Devuelve filas planas [{ companyId, companyName, productoId, productoNombre, productoCategoria,
+// unidad, depositoId, depositoNombre, depositoCompartido, existencia }]
+// El frontend filtra/agrupa según lo que el usuario seleccione.
+app.get('/api/resumen-multiempresa/stock', async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ ok: false, error: 'No autenticado' });
+    // Empresas accesibles (igual que el resumen general)
+    let empresas;
+    if (req.user.superAdmin) {
+      empresas = await prisma.company.findMany({ where: { activo: true }, select: { id: true, name: true, color: true } });
+    } else {
+      empresas = (req.user.userCompanies || []).map((uc) => ({
+        id: uc.companyId, name: uc.company.name, color: uc.company.color,
+      }));
+    }
+    if (!empresas.length) return res.json({ ok: true, data: { filas: [], empresas: [], depositos: [], productos: [] } });
+    const companyIds = empresas.map((e) => e.id);
+
+    // Productos: cada empresa tiene los suyos. Los traemos todos.
+    const productos = await prisma.producto.findMany({
+      where: { companyId: { in: companyIds }, activo: true },
+      select: { id: true, companyId: true, nombre: true, categoria: true, unidad: true },
+      orderBy: { nombre: 'asc' },
+    });
+    // Depósitos: los de cada empresa + los compartidos (companyId null).
+    const depositos = await prisma.deposito.findMany({
+      where: { OR: [{ companyId: { in: companyIds } }, { companyId: null, compartido: true }] },
+      select: { id: true, companyId: true, nombre: true, tipo: true, compartido: true },
+      orderBy: { nombre: 'asc' },
+    });
+    // Movimientos agregados por (productoId, tipo, depositoId, companyId)
+    const movs = await prisma.movimiento.groupBy({
+      by: ['productoId', 'tipo', 'depositoId', 'companyId'],
+      where: { companyId: { in: companyIds } },
+      _sum: { cantidad: true },
+    });
+
+    const empMap = new Map(empresas.map(e => [e.id, e]));
+    const depMap = new Map(depositos.map(d => [d.id, d]));
+    const filas = [];
+    // Una fila por cada combinación producto × depósito (incluyendo "sin depósito") con existencia distinta de 0.
+    for (const p of productos) {
+      const emp = empMap.get(p.companyId);
+      // Por cada depósito accesible (propio de la empresa o compartido)
+      const depsAccesibles = depositos.filter(d => d.companyId === p.companyId || (d.companyId === null && d.compartido));
+      for (const d of depsAccesibles) {
+        const ing = movs.find(m => m.productoId === p.id && m.tipo === 'ingreso' && m.depositoId === d.id && m.companyId === p.companyId)?._sum?.cantidad || 0;
+        const egr = movs.find(m => m.productoId === p.id && m.tipo === 'egreso' && m.depositoId === d.id && m.companyId === p.companyId)?._sum?.cantidad || 0;
+        const existencia = Number(ing) - Number(egr);
+        if (existencia !== 0 || ing > 0 || egr > 0) {
+          filas.push({
+            companyId: p.companyId, companyName: emp?.name || '?', companyColor: emp?.color || null,
+            productoId: p.id, productoNombre: p.nombre, productoCategoria: p.categoria, unidad: p.unidad,
+            depositoId: d.id, depositoNombre: d.nombre, depositoTipo: d.tipo, depositoCompartido: !!d.compartido,
+            existencia,
+          });
+        }
+      }
+      // Movimientos del producto sin depósito asignado (depositoId null)
+      const ingS = movs.find(m => m.productoId === p.id && m.tipo === 'ingreso' && m.depositoId === null && m.companyId === p.companyId)?._sum?.cantidad || 0;
+      const egrS = movs.find(m => m.productoId === p.id && m.tipo === 'egreso' && m.depositoId === null && m.companyId === p.companyId)?._sum?.cantidad || 0;
+      const existS = Number(ingS) - Number(egrS);
+      if (existS !== 0) {
+        filas.push({
+          companyId: p.companyId, companyName: emp?.name || '?', companyColor: emp?.color || null,
+          productoId: p.id, productoNombre: p.nombre, productoCategoria: p.categoria, unidad: p.unidad,
+          depositoId: null, depositoNombre: '(sin depósito)', depositoTipo: null, depositoCompartido: false,
+          existencia: existS,
+        });
+      }
+    }
+    res.json({
+      ok: true,
+      data: {
+        filas,
+        empresas: empresas.map(e => ({ id: e.id, name: e.name, color: e.color })),
+        depositos: depositos.map(d => ({ id: d.id, nombre: d.nombre, tipo: d.tipo, compartido: d.compartido, companyId: d.companyId })),
+        productos: [...new Set(productos.map(p => p.nombre))].sort(),
+      },
+    });
+  } catch (e) { next(e); }
+});
+
 // ---------- LOGISTICA / RRHH / CATALOGOS ----------
 // ---------- VIAJES (custom: con estado, factura vinculada y auto-settlement) ----------
 const viajeSchema = z.object({
@@ -4365,6 +4459,107 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
     );
     child.unref();
     res.json({ ok: true, mensaje: 'Actualización lanzada. El sistema va a reiniciarse en 30-90 segundos.' });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// PARSER DE PDF DE FACTURA ELECTRÓNICA ARCA (AFIP)
+// Extrae los datos del código QR (URL afip.gob.ar/fe/qr/?p=<base64>),
+// decodifica el JSON estándar de ARCA y devuelve los datos parseados
+// para autopoblar el form de carga de factura.
+// ============================================================
+const FACT_TIPO_AFIP = {
+  1: 'A', 6: 'B', 11: 'C', 51: 'M',         // Facturas
+  2: 'NDA', 7: 'NDB', 12: 'NDC',            // Notas de débito
+  3: 'NCA', 8: 'NCB', 13: 'NCC',            // Notas de crédito
+};
+app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo PDF' });
+    if (!/\.pdf$/i.test(req.file.originalname || '')) {
+      return res.status(400).json({ ok: false, error: 'El archivo debe ser un PDF' });
+    }
+    let texto = '';
+    try {
+      const pdfParse = await getPdfParse();
+      const data = await pdfParse(req.file.buffer);
+      texto = data.text || '';
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message });
+    }
+
+    // Buscar URL del QR de ARCA. Tolera variantes con/sin www.
+    const reQr = /https?:\/\/(?:www\.)?afip\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_-]+)/i;
+    const m = texto.match(reQr);
+    if (!m) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No se encontró el QR de ARCA en el PDF. Verificá que sea una factura electrónica con código QR.',
+        diagnostico: { textoBruto: texto.slice(0, 800) },
+      });
+    }
+
+    // Decode base64url → JSON
+    let qrData;
+    try {
+      let b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4 !== 0) b64 += '=';
+      const jsonStr = Buffer.from(b64, 'base64').toString('utf8');
+      qrData = JSON.parse(jsonStr);
+    } catch (e) {
+      return res.status(400).json({ ok: false, error: 'No pude decodificar el QR: ' + e.message });
+    }
+
+    // Mapear a la estructura del sistema
+    const tipoCmp = Number(qrData.tipoCmp || 0);
+    const resultado = {
+      // Datos del QR (oficiales)
+      cae: String(qrData.codAut || ''),
+      caeVencimiento: null, // ARCA no lo manda en el QR
+      fecha: qrData.fecha || null,
+      cuitEmisor: String(qrData.cuit || ''),
+      puntoVenta: Number(qrData.ptoVta || 0),
+      tipoCmpCodigo: tipoCmp,
+      tipoCmpLetra: FACT_TIPO_AFIP[tipoCmp] || 'B',
+      numero: Number(qrData.nroCmp || 0),
+      total: Number(qrData.importe || 0),
+      moneda: qrData.moneda || 'PES',
+      cotizacion: Number(qrData.ctz || 1),
+      tipoDocReceptor: Number(qrData.tipoDocRec || 0),
+      cuitReceptor: String(qrData.nroDocRec || ''),
+      tipoCodAut: String(qrData.tipoCodAut || ''),
+    };
+
+    // Enriquecer desde el texto del PDF (heurística): razón social y CUIT del emisor,
+    // razón social del receptor, neto/IVA. Esto es best effort, el QR es la fuente de verdad.
+    const lineas = texto.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+    // Razón social del emisor: suele estar en las primeras 8 líneas
+    const ignoreSiempre = /\b(FACTURA|ORIGINAL|DUPLICADO|COMPROBANTE|CAE|CUIT|FECHA|IVA RESPONSABLE)\b/i;
+    let razonSocialEmisor = null;
+    for (let i = 0; i < Math.min(10, lineas.length); i++) {
+      const l = lineas[i];
+      if (l.length > 5 && l.length < 80 && !ignoreSiempre.test(l) && !/^\d/.test(l)) {
+        razonSocialEmisor = l;
+        break;
+      }
+    }
+    resultado.razonSocialEmisorHeuristica = razonSocialEmisor;
+
+    // Buscar Neto Gravado / IVA / Subtotal en el texto
+    const reNum = /([\d.]+,\d{2})/g;
+    const matchEtiqueta = (etiqueta) => {
+      const re = new RegExp(etiqueta + '[^\n]*?([\\d.]+,\\d{2})', 'i');
+      const mm = texto.match(re);
+      if (!mm) return null;
+      return Number(mm[1].replace(/\./g, '').replace(',', '.'));
+    };
+    resultado.netoGravado = matchEtiqueta('Importe Neto Gravado|Subtotal') ?? null;
+    resultado.iva105 = matchEtiqueta('IVA 10,5') ?? null;
+    resultado.iva21 = matchEtiqueta('IVA 21') ?? null;
+    resultado.iva27 = matchEtiqueta('IVA 27') ?? null;
+
+    res.json({ ok: true, data: resultado, diagnostico: { lineas: lineas.slice(0, 20) } });
   } catch (e) { next(e); }
 });
 

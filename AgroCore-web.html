@@ -2272,6 +2272,18 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'16/06/2026',
+      titulo:'📄 Cargar factura de compra desde el PDF de ARCA',
+      desc:'En el form de "Cargar factura de compra" hay arriba un cartel azul con botón "Cargar desde PDF". Subís el PDF de una factura electronica argentina (sale tal como vienen de ARCA) y el sistema lee el codigo QR oficial de AFIP, decodifica el JSON Base64 y autopobla tipo, punto de venta, numero, fecha, total y CUIT del emisor (si el CUIT coincide con un proveedor del catalogo, lo selecciona solo). Tambien intenta detectar la razon social del emisor y los IVA del PDF. Despues solo revisas y agregas items si hace falta. Funciona con todas las facturas electronicas de Argentina con QR.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'16/06/2026',
+      titulo:'💸 Facturar y pagar transporte en un paso desde Viajes',
+      desc:'En el listado de Viajes hay un botón nuevo 💸 (junto a vincular factura y marcar pagado). Abre un modal que combina los dos pasos: registrar la factura de compra del transportista (con autopobla del proveedor por CUIT si esta cargado, y total precalculado como tarifa × kg / 1000), y pagar el flete con efectivo (caja), cheque (lista de cheques en cartera) o transferencia (cuenta bancaria). En una operacion crea la factura, la vincula al viaje, registra el pago en el método elegido y deja el viaje en estado "pagado".' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
+      titulo:'💳 Modal de Cobrar/Pagar: selectores reales de caja, cheque y banco',
+      desc:'Cuando elegís el método de pago en el modal multi-comprobante, ahora aparecen selectores con datos reales: Efectivo lista las cajas ya creadas (Lucas, Oficina, etc) con autocomplete; Cheque lista los cheques que están en cartera/emitidos/depositados con banco, número, monto y vencimiento (para pago: cheques propios o de terceros endosados; para cobro: cheques recibidos previamente cargados); Transferencia lista las cuentas bancarias activas con banco, tipo y titular.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'16/06/2026',
+      titulo:'📦 Stock por empresa y depósito en Resumen multi-empresa',
+      desc:'En Resumen multi-empresa hay un recuadro nuevo "📦 Stock por empresa y depósito" abajo de Cajas por empresa. Muestra todas las existencias desglosadas por empresa, producto, depósito y categoría con filtros de producto, empresa y depósito. Cuando filtrás por un producto específico, aparece un banner azul con el CONSOLIDADO (suma de existencias entre empresas/depósitos). Soporta depósitos compartidos entre empresas (🌐). Se nutre del endpoint nuevo /api/resumen-multiempresa/stock que agrupa los movimientos a nivel grupo.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/06/2026',
       titulo:'🚛 Viajes: filtros + pagador del flete + exportar a Excel',
       desc:'La página de Viajes ahora tiene filtros completos arriba (rango de fechas Desde/Hasta, Producto, Origen, Estado, búsqueda libre). El listado muestra una columna nueva Pagador del flete. Botón Exportar a Excel arriba a la derecha que genera un xlsx con TODOS los datos de los viajes filtrados (26 columnas: origen/destino/producto/kg/tarifa/transportista/CUIT/chofer/patente/CP/CTG/pagador/gastos/estado/factura/observaciones). Útil para mandar al contador o filtrar por una empresa específica del grupo y reportar.' },
@@ -3749,10 +3761,14 @@ async function crudList(resource, cacheKey) {
 pages.resumenGlobal = async function() {
   setHeader('Resumen multi-empresa', 'Vista consolidada de cheques, efectivo y flujo · seleccioná qué empresas incluir');
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando resumen...</div>`;
-  let rsp;
+  let rsp, stockRsp;
   try { rsp = await api('/api/resumen-multiempresa'); }
   catch (e) { return toast(e.message, 'error'); }
+  // Stock multi-empresa: lo cargamos en paralelo (no rompe si falla)
+  try { stockRsp = await api('/api/resumen-multiempresa/stock'); }
+  catch (e) { stockRsp = { data: { filas: [], empresas: [], depositos: [], productos: [] } }; }
   const data = rsp.data || { porEmpresa: [], totales: {} };
+  const stockData = stockRsp?.data || { filas: [], empresas: [], depositos: [], productos: [] };
   const todasLasEmpresas = data.porEmpresa || [];
 
   // Restaurar seleccion previa de empresas del localStorage. Por defecto: todas.
@@ -3770,6 +3786,11 @@ pages.resumenGlobal = async function() {
     seleccionadas = new Set(todasLasEmpresas.map(e => e.companyId));
   }
   let cajaFiltro = localStorage.getItem(CAJA_KEY) || '';
+  // Filtros del recuadro de stock multi-empresa
+  const STOCK_KEY = 'ac.resumenStockFilter';
+  let stockFiltro = (() => {
+    try { return JSON.parse(localStorage.getItem(STOCK_KEY) || '{}'); } catch { return {}; }
+  })();
 
   // Render se redibuja cada vez que el usuario marca/desmarca una empresa.
   const render = () => {
@@ -4023,6 +4044,140 @@ pages.resumenGlobal = async function() {
         </div>`;
       })()}
 
+      ${(() => {
+        // ===== Stock por empresa y depósito =====
+        // Filtra primero por las empresas seleccionadas en el header de arriba.
+        const filasOriginales = (stockData.filas || []).filter(f => seleccionadas.has(f.companyId));
+        if (filasOriginales.length === 0) {
+          return `
+          <div class="kpi p-0 overflow-hidden mt-4">
+            <div class="px-4 py-3 bg-slate-50 border-b">
+              <h3 class="font-semibold text-slate-800">📦 Stock por empresa y depósito</h3>
+              <div class="text-xs text-slate-500">Existencias de productos desglosadas por empresa y depósito.</div>
+            </div>
+            <div class="text-center text-slate-400 py-8 px-4">Las empresas seleccionadas no tienen stock cargado todavía.</div>
+          </div>`;
+        }
+        // Aplicar filtros propios del recuadro
+        const fProd = stockFiltro.producto || '';
+        const fDep = stockFiltro.depositoId || '';
+        const fEmp = stockFiltro.empresaId || '';
+        const filas = filasOriginales.filter(f => {
+          if (fProd && f.productoNombre !== fProd) return false;
+          if (fDep && f.depositoId !== fDep && !(fDep === 'sin' && f.depositoId === null)) return false;
+          if (fEmp && f.companyId !== fEmp) return false;
+          return true;
+        });
+        // Listas únicas para los selects (basadas en lo seleccionado arriba)
+        const productosUnicos = [...new Set(filasOriginales.map(f => f.productoNombre))].sort();
+        const depositosUnicos = filasOriginales.reduce((acc, f) => {
+          const key = f.depositoId || 'sin';
+          if (!acc.has(key)) acc.set(key, { id: f.depositoId, nombre: f.depositoNombre, compartido: f.depositoCompartido });
+          return acc;
+        }, new Map());
+        const empresasUnicas = filasOriginales.reduce((acc, f) => {
+          if (!acc.has(f.companyId)) acc.set(f.companyId, { id: f.companyId, name: f.companyName, color: f.companyColor });
+          return acc;
+        }, new Map());
+
+        // Total filtrado (cuando se filtra por producto, sumamos las existencias para mostrar el consolidado)
+        const totalConsolidado = filas.reduce((acc, f) => acc + Number(f.existencia || 0), 0);
+        const unidadConsolidada = (filas[0] && filas.every(f => f.unidad === filas[0].unidad)) ? filas[0].unidad : '';
+
+        // Filtro activo
+        const filtroActivo = !!(fProd || fDep || fEmp);
+        const labelFiltro = [
+          fProd ? `Producto: ${fProd}` : null,
+          fEmp ? `Empresa: ${empresasUnicas.get(fEmp)?.name || ''}` : null,
+          fDep ? `Depósito: ${depositosUnicos.get(fDep === 'sin' ? 'sin' : fDep)?.nombre || ''}` : null,
+        ].filter(Boolean).join(' · ');
+
+        return `
+        <div class="kpi p-0 overflow-hidden mt-4">
+          <div class="px-4 py-3 bg-slate-50 border-b">
+            <div class="flex flex-wrap items-end justify-between gap-3 mb-2">
+              <div>
+                <h3 class="font-semibold text-slate-800">📦 Stock por empresa y depósito</h3>
+                <div class="text-xs text-slate-500">Existencias por producto desglosadas por empresa y depósito. Filtros independientes de los de arriba.</div>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+              <div>
+                <label class="label">Producto</label>
+                <select id="stk-producto" class="input">
+                  <option value="">— Todos —</option>
+                  ${productosUnicos.map(p => `<option value="${esc(p)}" ${p===fProd?'selected':''}>${esc(p)}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label class="label">Empresa</label>
+                <select id="stk-empresa" class="input">
+                  <option value="">— Todas —</option>
+                  ${[...empresasUnicas.values()].map(e => `<option value="${esc(e.id)}" ${e.id===fEmp?'selected':''}>${esc(e.name)}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label class="label">Depósito</label>
+                <select id="stk-deposito" class="input">
+                  <option value="">— Todos —</option>
+                  ${[...depositosUnicos.values()].map(d => `<option value="${esc(d.id || 'sin')}" ${(d.id||'sin')===fDep?'selected':''}>${esc(d.nombre)}${d.compartido?' 🌐':''}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                ${filtroActivo ? `<button class="btn btn-secondary text-xs w-full" onclick="resumenStockLimpiar()">✕ Limpiar filtros</button>` : '<span></span>'}
+              </div>
+            </div>
+          </div>
+
+          ${(fProd && filas.length > 0) ? `
+            <div class="mx-4 mt-4 p-4 rounded-xl" style="background:linear-gradient(135deg,#1e40af 0%,#1d4ed8 100%);color:#fff">
+              <div class="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <div class="text-xs uppercase tracking-wider font-bold" style="color:#bfdbfe">Consolidado producto</div>
+                  <div class="text-2xl font-extrabold mt-0.5">${esc(fProd)}</div>
+                  <div class="text-xs mt-1" style="color:#dbeafe">${labelFiltro}</div>
+                </div>
+                <div class="text-right">
+                  <div class="text-3xl font-extrabold">${fmtN(totalConsolidado)} ${esc(unidadConsolidada)}</div>
+                  <div class="text-xs mt-1" style="color:#dbeafe">Sumando ${filas.length} ubicación${filas.length===1?'':'es'}</div>
+                </div>
+              </div>
+            </div>` : ''}
+
+          <table class="data">
+            <thead>
+              <tr>
+                <th>Empresa</th>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Depósito</th>
+                <th class="text-right">Existencia</th>
+                <th>Unidad</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filas.length === 0
+                ? `<tr><td colspan="6" class="text-center text-slate-400 py-6">${filtroActivo ? 'No hay stock que coincida con los filtros' : 'Sin existencias cargadas'}</td></tr>`
+                : filas.map(f => `
+                  <tr class="table-row">
+                    <td>
+                      <div class="flex items-center gap-2">
+                        ${f.companyColor ? `<span class="w-3 h-3 rounded-full" style="background:${esc(f.companyColor)}"></span>` : ''}
+                        <span>${esc(f.companyName)}</span>
+                      </div>
+                    </td>
+                    <td><b>${esc(f.productoNombre)}</b></td>
+                    <td>${f.productoCategoria?`<span class="badge badge-blue text-[10px]">${esc(f.productoCategoria)}</span>`:'—'}</td>
+                    <td class="text-xs">${esc(f.depositoNombre)}${f.depositoCompartido?' 🌐':''}</td>
+                    <td class="text-right font-semibold ${Number(f.existencia)<=0?'text-red-600':'text-emerald-700'}">${fmtN(f.existencia)}</td>
+                    <td class="text-xs text-slate-600">${esc(f.unidad||'—')}</td>
+                  </tr>`).join('')
+              }
+            </tbody>
+          </table>
+        </div>`;
+      })()}
+
       <div class="mt-3 text-xs text-slate-500">
         💡 Tu selección se guarda automáticamente para la próxima vez que entres. Esta vista <b>no mezcla</b> datos entre empresas: cada cheque, efectivo y flujo sigue asignado a la empresa donde se cargó. Solo agrupa los totales para que puedas verlos en conjunto.
       </div>`;
@@ -4031,6 +4186,13 @@ pages.resumenGlobal = async function() {
     setTimeout(() => {
       const sel = document.getElementById('caja-filtro');
       if (sel) sel.onchange = e => window.resumenSetCaja(e.target.value);
+      // Filtros del recuadro de stock
+      const stkProd = document.getElementById('stk-producto');
+      const stkEmp  = document.getElementById('stk-empresa');
+      const stkDep  = document.getElementById('stk-deposito');
+      if (stkProd) stkProd.onchange = e => window.resumenSetStock('producto',  e.target.value);
+      if (stkEmp)  stkEmp.onchange  = e => window.resumenSetStock('empresaId', e.target.value);
+      if (stkDep)  stkDep.onchange  = e => window.resumenSetStock('depositoId', e.target.value);
     }, 0);
   };
 
@@ -4050,6 +4212,16 @@ pages.resumenGlobal = async function() {
     cajaFiltro = nombre || '';
     if (cajaFiltro) localStorage.setItem(CAJA_KEY, cajaFiltro);
     else localStorage.removeItem(CAJA_KEY);
+    render();
+  };
+  window.resumenSetStock = (campo, valor) => {
+    stockFiltro[campo] = valor || '';
+    localStorage.setItem(STOCK_KEY, JSON.stringify(stockFiltro));
+    render();
+  };
+  window.resumenStockLimpiar = () => {
+    stockFiltro = {};
+    localStorage.removeItem(STOCK_KEY);
     render();
   };
 
@@ -7639,6 +7811,13 @@ async function compForm() {
   openModal({
     title:'Cargar factura de compra', size:'max-w-4xl',
     body: `
+      <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between gap-2 flex-wrap">
+        <div class="text-sm text-blue-900">📄 <b>¿Tenés el PDF de la factura?</b> Subilo y autocompletamos los datos a partir del QR de ARCA.</div>
+        <div class="flex gap-2 items-center">
+          <input id="f-pdf-file" type="file" accept=".pdf" class="hidden" onchange="compCargarDesdePDF(this)"/>
+          <button class="btn btn-primary text-xs" onclick="document.getElementById('f-pdf-file').click()">📄 Cargar desde PDF</button>
+        </div>
+      </div>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Tipo *</label>
           <select id="f-tipo" class="input">${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}</select>
@@ -7656,6 +7835,7 @@ async function compForm() {
           <select id="f-cc" class="input">${['Contado','Cta cte 15 días','Cta cte 30 días','Cta cte 60 días','Transferencia'].map(v=>`<option>${v}</option>`).join('')}</select>
         </div>
       </div>
+      <div id="f-pdf-msg" class="text-xs"></div>
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
           <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
@@ -7674,6 +7854,74 @@ async function compForm() {
   });
   setTimeout(() => { $('#fi-tbody').addEventListener('input', factRecalc); factRecalc(); }, 0);
 }
+// Sube el PDF al backend, decodifica el QR de ARCA y autopobla los campos del form.
+async function compCargarDesdePDF(input) {
+  const archivo = input?.files?.[0];
+  if (!archivo) return;
+  const msg = document.getElementById('f-pdf-msg');
+  if (msg) msg.innerHTML = '<span class="text-blue-700">⏳ Leyendo PDF y decodificando QR de ARCA...</span>';
+  try {
+    const fd = new FormData();
+    fd.append('archivo', archivo);
+    const r = await fetch(API_BASE + '/api/admin/parse-factura-pdf', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + state.token,
+        'X-Company-Id': state.companyId,
+      },
+      body: fd,
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      const detalle = j.diagnostico?.textoBruto ? '\n\nPrimeras líneas del PDF:\n' + j.diagnostico.textoBruto.slice(0, 300) : '';
+      throw new Error((j.error || 'Error ' + r.status) + detalle);
+    }
+    const d = j.data;
+    // Autopoblar campos
+    const setVal = (id, valor) => { const el = document.getElementById(id); if (el && valor != null && valor !== '') el.value = valor; };
+    setVal('f-tipo', d.tipoCmpLetra || 'A');
+    setVal('f-pv', d.puntoVenta || 1);
+    setVal('f-nro', d.numero || 1);
+    if (d.fecha) setVal('f-fec', d.fecha.slice(0, 10));
+    // Si hay CUIT del emisor, buscar proveedor existente con ese CUIT
+    if (d.cuitEmisor) {
+      const provs = state.cache.proveedores || [];
+      const cuitNorm = String(d.cuitEmisor).replace(/[-.\s]/g, '');
+      const match = provs.find(p => String(p.cuit || '').replace(/[-.\s]/g, '') === cuitNorm);
+      if (match) setVal('f-prov', match.id);
+    }
+    // Crear un único item con descripción "Importado de ARCA" + precio = neto
+    const tbody = document.getElementById('fi-tbody');
+    if (tbody && d.total) {
+      // Detectar IVA: si hay netoGravado, usarlo; si no, calcular del total con 21%
+      const neto = d.netoGravado || (d.total / 1.21);
+      const iva = d.iva21 ? 21 : d.iva105 ? 10.5 : d.iva27 ? 27 : 21;
+      // Pisar la primera fila con los datos
+      const fila = tbody.querySelector('tr[data-fi]');
+      if (fila) {
+        const desc = fila.querySelector('[data-f="descripcion"]');
+        const cant = fila.querySelector('[data-f="cantidad"]');
+        const pu   = fila.querySelector('[data-f="precioUnit"]');
+        const iv   = fila.querySelector('[data-f="alicuotaIva"]');
+        if (desc) desc.value = `Factura ${d.tipoCmpLetra || ''} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')}${d.razonSocialEmisorHeuristica ? ' — ' + d.razonSocialEmisorHeuristica : ''}`;
+        if (cant) cant.value = 1;
+        if (pu)   pu.value = neto.toFixed(2);
+        if (iv)   iv.value = iva;
+      }
+      factRecalc();
+    }
+    if (msg) {
+      const tipoStr = d.tipoCmpLetra ? `Factura ${d.tipoCmpLetra}` : 'Comprobante';
+      msg.innerHTML = `<span class="text-emerald-700">✅ ${tipoStr} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')} cargada desde el QR de ARCA${d.cuitEmisor?` · CUIT emisor ${d.cuitEmisor}`:''} · CAE ${d.cae||'?'} · Revisá los datos y agregá items si hace falta.</span>`;
+    }
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span class="text-red-700">❌ ${esc(e.message)}</span>`;
+    toast('No pude cargar el PDF: ' + e.message, 'error');
+  } finally {
+    input.value = ''; // reset para que se pueda subir el mismo archivo de nuevo si hace falta
+  }
+}
+
 async function compSave() {
   const items = $$('#fi-tbody tr[data-fi]').map(tr => ({
     productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
@@ -8877,6 +9125,19 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
   const lista = esPago ? (state.cache.proveedores || []) : (state.cache.clientes || []);
   if (!lista.length) return toast('No hay ' + (esPago ? 'proveedores' : 'clientes') + ' cargados.', 'warn');
 
+  // Pre-cargar datos para los selectores de método (cajas, cheques en cartera, cuentas bancarias)
+  try {
+    const [efRsp, chRsp, cbRsp] = await Promise.all([
+      api('/api/efectivo').catch(() => ({ data: [] })),
+      api('/api/cheques').catch(() => ({ data: [] })),
+      api('/api/banco-cuentas').catch(() => ({ data: [] })),
+    ]);
+    const cajas = [...new Set((efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean))].sort();
+    state.cache.efectivoCajas = cajas;
+    state.cache.cheques = chRsp.data || [];
+    state.cache.bancoCuentas = cbRsp.data || [];
+  } catch {}
+
   openModal({
     title: esPago ? '💸 Pagar a proveedor' : '💰 Cobrar de cliente', size: 'max-w-3xl',
     body: `
@@ -9007,17 +9268,44 @@ function pagoCobroMetodoCambio(modo) {
   const metodo = document.getElementById('pc-metodo').value;
   const cont = document.getElementById('pc-metodo-detalle');
   if (metodo === 'efectivo') {
-    cont.innerHTML = `<label class="label">Caja</label><input id="pc-caja" class="input" placeholder="Ej: Oficina, Caja Damián"/>`;
+    const cajas = state.cache.efectivoCajas || [];
+    cont.innerHTML = `<label class="label">${esPago ? 'Caja de la que sale el efectivo' : 'Caja donde ingresa el efectivo'}</label>
+      <input id="pc-caja" class="input" list="pc-caja-list" placeholder="Ej: Oficina, Caja Damián..."/>
+      <datalist id="pc-caja-list">${cajas.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+      ${cajas.length ? `<div class="text-[11px] text-slate-500 mt-1">Cajas existentes: ${cajas.map(c=>esc(c)).join(' · ')}</div>` : '<div class="text-[11px] text-slate-500 mt-1">No hay cajas previas. Escribí un nombre para crear una nueva.</div>'}`;
   } else if (metodo === 'cheque') {
-    // Para pago: cheque de terceros en cartera para endosar
-    // Para cobro: ya tendrías que crear el cheque primero — por simplicidad acá pedimos el ID
-    cont.innerHTML = `<label class="label">${esPago ? 'Cheque a endosar (ID, en cartera)' : 'ID del cheque recibido'}</label><input id="pc-cheque" class="input" placeholder="ID del cheque (búscalo en Tesorería → Cheques)"/>`;
+    // PAGO: cheques propios + cheques de terceros EN CARTERA (para endosar)
+    // COBRO: el cliente nos entrega cheques — los pre-cargamos a "en cartera"
+    const cheques = state.cache.cheques || [];
+    if (esPago) {
+      const enCartera = cheques.filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+      if (enCartera.length === 0) {
+        cont.innerHTML = `<div class="bg-amber-50 border border-amber-300 text-amber-900 text-sm rounded p-3">⚠️ No hay cheques en cartera disponibles para endosar/usar. Cargá uno en Tesorería → Cheques o usá otro método.</div>`;
+      } else {
+        cont.innerHTML = `<label class="label">Cheque a entregar</label>
+          <select id="pc-cheque" class="input">
+            <option value="">— Seleccionar —</option>
+            ${enCartera.map(c => `<option value="${esc(c.id)}" data-monto="${c.monto||0}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}${c.tipo==='electronico'?' 📱':' 📝'}${/emitido/i.test(c.estado||'')?' (propio)':' (terceros)'}</option>`).join('')}
+          </select>
+          <div class="text-[11px] text-slate-500 mt-1">${enCartera.length} cheque(s) disponible(s). Los propios son los emitidos por la empresa, los de terceros son endosos.</div>`;
+      }
+    } else {
+      // COBRO: el cliente entrega un cheque — opciones: usar uno ya cargado o crear nuevo
+      cont.innerHTML = `<div class="bg-blue-50 border border-blue-200 text-blue-900 text-sm rounded p-3">
+        💡 Recibís un cheque del cliente. Primero cargalo en Tesorería → Cheques (estado "en cartera"), después volvé acá y selecionálo abajo.
+        </div>
+        <label class="label">Cheque recibido</label>
+        <select id="pc-cheque" class="input">
+          <option value="">— Seleccionar —</option>
+          ${(cheques.filter(c=>/en cartera/i.test(c.estado||''))).map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}
+        </select>`;
+    }
   } else if (metodo === 'transferencia') {
-    const cuentas = state.cache.bancoCuentas || [];
-    cont.innerHTML = `<label class="label">Cuenta bancaria</label>
+    const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
+    cont.innerHTML = `<label class="label">${esPago ? 'Cuenta bancaria desde la que se transfiere' : 'Cuenta bancaria donde ingresa la transferencia'}</label>
       <select id="pc-banco" class="input">
         <option value="">— Seleccionar —</option>
-        ${cuentas.filter(c => c.activo).map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}
+        ${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.tipo?' · '+esc(c.tipo):''}${c.numero?' · '+esc(c.numero):''}${c.titular?' — '+esc(c.titular):''}</option>`).join('')}
       </select>
       ${!cuentas.length ? '<div class="text-xs text-amber-700 mt-1">No hay cuentas cargadas — cargá una en Tesorería → Bancos primero.</div>' : ''}`;
   } else if (metodo === 'intercompany') {
@@ -9587,9 +9875,10 @@ pages.viajes = async function() {
                 <td class="text-right whitespace-nowrap">
                   ${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='viajeForm(${JSON.stringify(v.id)})'>✏️</button>`:''}
                   ${canU?`<button class="btn btn-ghost text-xs" title="Vincular factura del transporte" onclick='viajeVincularForm(${JSON.stringify(v.id)})'>🔗</button>`:''}
+                  ${canU && v.estado!=='pagado' && can('finanzas:create')?`<button class="btn btn-ghost text-xs text-indigo-700" title="Cargar factura del transporte y pagar en un paso" onclick='viajeFacturarYPagarAbrir(${JSON.stringify(v.id)})'>💸</button>`:''}
                   ${v.destinoTipo==='cerealera' && v.depositoDestinoId && can('stock:entrega_cerealera:create')?`<button class="btn btn-ghost text-xs" title="Cargar entrega del cereal a la cerealera" onclick='viajeEntregaCereal(${JSON.stringify(v.id)})'>📤</button>`:''}
                   ${v.destinoTipo==='venta_directa' && can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-ghost text-xs" title="Cargar liquidación de venta del cereal" onclick='viajeLiquidacion(${JSON.stringify(v.id)})'>🧾</button>`:''}
-                  ${canU && v.estado!=='pagado'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar como pagado" onclick='viajeMarcarPagado(${JSON.stringify(v.id)})'>💵</button>`:''}
+                  ${canU && v.estado!=='pagado'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar como pagado (sin generar factura)" onclick='viajeMarcarPagado(${JSON.stringify(v.id)})'>💵</button>`:''}
                   ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='viajeDel(${JSON.stringify(v.id)})'>🗑️</button>`:''}
                 </td>
               </tr>`;
@@ -10143,6 +10432,196 @@ async function viajeVincularSave(viajeId) {
     toast(facId?'Viaje vinculado a la factura':'Vinculación quitada','success');
     closeModal(); delete state.cache.viajes; pages.viajes();
   } catch (e) { toast(e.message,'error'); }
+}
+
+// ============================================================
+// Modal "Facturar + Pagar viaje" (combinado): registra la factura del
+// transportista por el flete y la paga con efectivo / cheque / transferencia
+// en una sola operación.
+// ============================================================
+async function viajeFacturarYPagarAbrir(viajeId) {
+  const v = (state.cache.viajes || []).find(x => x.id === viajeId);
+  if (!v) return toast('Viaje no encontrado', 'error');
+  // Precargar contactos y datos para los selectores de método
+  try {
+    const [provRsp, efRsp, chRsp, cbRsp] = await Promise.all([
+      api('/api/proveedores').catch(() => ({ data: [] })),
+      api('/api/efectivo').catch(() => ({ data: [] })),
+      api('/api/cheques').catch(() => ({ data: [] })),
+      api('/api/banco-cuentas').catch(() => ({ data: [] })),
+    ]);
+    state.cache.proveedores = provRsp.data || [];
+    state.cache.efectivoCajas = [...new Set((efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean))].sort();
+    state.cache.cheques = chRsp.data || [];
+    state.cache.bancoCuentas = cbRsp.data || [];
+  } catch {}
+  const proveedores = state.cache.proveedores || [];
+  // Pre-calcular flete: tarifa × kg / 1000
+  const kg = Number(v.kgDescarga || v.cantidad || 0);
+  const tarifa = Number(v.tarifa || 0);
+  const fleteCalculado = (kg * tarifa) / 1000;
+  // Buscar proveedor existente por CUIT del transportista (si lo tiene)
+  const cuitNorm = String(v.transporteCuit || '').replace(/[-.\s]/g, '');
+  const provMatch = cuitNorm ? proveedores.find(p => String(p.cuit || '').replace(/[-.\s]/g, '') === cuitNorm) : null;
+  state._viajeFacPagar = { viajeId };
+
+  openModal({
+    title: '💸 Facturar y pagar transporte', size: 'max-w-3xl',
+    body: `
+      <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-3 mb-3 text-xs text-indigo-900">
+        🚛 Viaje del <b>${fmtDate(v.fecha)}</b> · ${esc(v.origen||'—')} → ${esc(v.destino||'—')} · ${esc(v.producto||'')} · ${kg ? fmtN(kg)+' kg' : 'sin kg'}${tarifa ? ' · tarifa $'+fmtN(tarifa)+'/t' : ''}
+      </div>
+
+      <h4 class="font-semibold text-slate-700 text-sm mb-2">1. Factura del transportista</h4>
+      <div class="grid grid-cols-4 gap-3 mb-3">
+        <div class="col-span-2">
+          <label class="label">Proveedor (transportista) *</label>
+          <select id="vfp-prov" class="input">
+            <option value="">— Elegir o crear desde Proveedores —</option>
+            ${proveedores.map(p => `<option value="${esc(p.id)}" ${p.id===provMatch?.id?'selected':''}>${esc(p.razonSocial)}${p.cuit?' · '+esc(p.cuit):''}</option>`).join('')}
+          </select>
+          ${v.transportista ? `<div class="text-[11px] text-slate-500 mt-1">Transportista del viaje: <b>${esc(v.transportista)}</b>${v.transporteCuit?' · CUIT '+esc(v.transporteCuit):''}${provMatch?' · <span class="text-emerald-700">✅ proveedor encontrado por CUIT</span>':''}</div>` : ''}
+        </div>
+        <div>
+          <label class="label">Tipo *</label>
+          <select id="vfp-tipo" class="input">${['A','B','C','E'].map(t => `<option>${t}</option>`).join('')}</select>
+        </div>
+        <div>
+          <label class="label">Fecha *</label>
+          <input type="date" id="vfp-fecha" class="input" value="${new Date().toISOString().slice(0,10)}"/>
+        </div>
+        <div>
+          <label class="label">Pto. venta *</label>
+          <input type="number" id="vfp-pv" class="input" value="1"/>
+        </div>
+        <div>
+          <label class="label">Número *</label>
+          <input type="number" id="vfp-nro" class="input" value="1"/>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Total flete (con IVA) *</label>
+          <input type="number" step="0.01" id="vfp-total" class="input" value="${fleteCalculado.toFixed(2)}"/>
+          <div class="text-[11px] text-slate-500 mt-1">Precarga = tarifa × kg / 1000. Editable.</div>
+        </div>
+      </div>
+
+      <h4 class="font-semibold text-slate-700 text-sm mb-2">2. Pago</h4>
+      <div class="mb-3">
+        <label class="label">Método de pago *</label>
+        <select id="vfp-metodo" class="input" onchange="viajeFacPagarMetodoCambio()">
+          <option value="efectivo">💵 Efectivo</option>
+          <option value="cheque">💳 Cheque (propio o de terceros endosado)</option>
+          <option value="transferencia">🏛️ Transferencia bancaria</option>
+        </select>
+      </div>
+      <div id="vfp-metodo-det" class="mb-3"></div>
+
+      <div>
+        <label class="label">Observaciones</label>
+        <input id="vfp-obs" class="input" placeholder="Opcional"/>
+      </div>`,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="viajeFacturarYPagarConfirmar()">💸 Facturar y pagar</button>`,
+  });
+  setTimeout(() => viajeFacPagarMetodoCambio(), 0);
+}
+function viajeFacPagarMetodoCambio() {
+  const metodo = document.getElementById('vfp-metodo')?.value;
+  const cont = document.getElementById('vfp-metodo-det');
+  if (!cont) return;
+  if (metodo === 'efectivo') {
+    const cajas = state.cache.efectivoCajas || [];
+    cont.innerHTML = `<label class="label">Caja de la que sale el efectivo</label>
+      <input id="vfp-caja" class="input" list="vfp-caja-list" placeholder="Ej: Oficina..."/>
+      <datalist id="vfp-caja-list">${cajas.map(c => `<option value="${esc(c)}">`).join('')}</datalist>`;
+  } else if (metodo === 'cheque') {
+    const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+    cont.innerHTML = cheques.length
+      ? `<label class="label">Cheque a entregar al transportista</label>
+         <select id="vfp-cheque" class="input">
+           <option value="">— Seleccionar —</option>
+           ${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}
+         </select>`
+      : `<div class="bg-amber-50 border border-amber-300 text-amber-900 text-sm rounded p-3">⚠️ No hay cheques disponibles en cartera. Cargá uno en Tesorería → Cheques o usá otro método.</div>`;
+  } else if (metodo === 'transferencia') {
+    const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
+    cont.innerHTML = `<label class="label">Cuenta bancaria desde la que se transfiere</label>
+      <select id="vfp-banco" class="input">
+        <option value="">— Seleccionar —</option>
+        ${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.tipo?' · '+esc(c.tipo):''}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}
+      </select>
+      ${!cuentas.length ? '<div class="text-xs text-amber-700 mt-1">No hay cuentas cargadas — cargá una en Tesorería → Bancos primero.</div>' : ''}`;
+  }
+}
+async function viajeFacturarYPagarConfirmar() {
+  const viajeId = state._viajeFacPagar?.viajeId;
+  if (!viajeId) return toast('Falta viaje', 'error');
+  const proveedorId = document.getElementById('vfp-prov').value;
+  const tipo = document.getElementById('vfp-tipo').value;
+  const pv = Number(document.getElementById('vfp-pv').value || 0);
+  const nro = Number(document.getElementById('vfp-nro').value || 0);
+  const fecha = document.getElementById('vfp-fecha').value;
+  const total = Number(document.getElementById('vfp-total').value || 0);
+  const metodo = document.getElementById('vfp-metodo').value;
+  const obs = document.getElementById('vfp-obs').value || null;
+  if (!proveedorId) return toast('Elegí un proveedor', 'warn');
+  if (!pv || !nro) return toast('Faltan punto de venta o número de factura', 'warn');
+  if (!total || total <= 0) return toast('El total tiene que ser mayor a 0', 'warn');
+
+  try {
+    // Paso 1: crear factura de compra con un item ítem único (flete del viaje)
+    const v = (state.cache.viajes || []).find(x => x.id === viajeId);
+    const desc = `Flete viaje ${fmtDate(v?.fecha || new Date())} · ${v?.origen||''} → ${v?.destino||''}${v?.cantidad?' · '+fmtN(v.cantidad)+' kg':''}`;
+    // Calcular neto suponiendo 21% IVA (en facturas A) o 0 (resto)
+    const aplIva = (tipo === 'A') ? 21 : 0;
+    const neto = aplIva ? +(total / (1 + aplIva/100)).toFixed(2) : total;
+    const facBody = {
+      tipo, puntoVenta: pv, numero: nro,
+      fecha: new Date(fecha).toISOString(),
+      proveedorId, condicionCompra: 'Contado',
+      observaciones: 'Flete viaje ' + viajeId,
+      items: [{ productoId: null, descripcion: desc, cantidad: 1, precioUnit: neto, alicuotaIva: aplIva }],
+    };
+    const facRsp = await api('/api/facturas-compra', { method: 'POST', body: JSON.stringify(facBody) });
+    const facturaId = facRsp.data?.id;
+    if (!facturaId) throw new Error('No se obtuvo el ID de la factura creada');
+
+    // Paso 2: vincular factura al viaje
+    await api('/api/viajes/' + viajeId, { method: 'PUT', body: JSON.stringify({ facturaCompraId: facturaId }) });
+
+    // Paso 3: pagar la factura recién creada
+    // Hay que conseguir el CtaCte que se generó por la factura. Buscamos el pendiente más reciente del proveedor.
+    const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=proveedor&contactoId=${encodeURIComponent(proveedorId)}`);
+    const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.haber||0) - total) < 0.01)
+      .sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
+    if (!pend.length) throw new Error('No encontré el comprobante recién generado para pagar');
+    const ctaCteId = pend[0].id;
+
+    const pagoBody = {
+      proveedorId,
+      comprobantes: [{ ctaCteId, importeAplicado: total }],
+      metodo,
+      monto: total,
+      fecha: new Date(fecha).toISOString(),
+      observaciones: 'Pago flete viaje ' + viajeId + (obs ? ' · ' + obs : ''),
+    };
+    if (metodo === 'efectivo')     pagoBody.cajaOrigen   = document.getElementById('vfp-caja')?.value || null;
+    if (metodo === 'cheque')       pagoBody.chequeId     = document.getElementById('vfp-cheque')?.value || null;
+    if (metodo === 'transferencia') pagoBody.bancoCuentaId = document.getElementById('vfp-banco')?.value || null;
+    if (metodo === 'cheque' && !pagoBody.chequeId) throw new Error('Elegí el cheque a entregar');
+    if (metodo === 'transferencia' && !pagoBody.bancoCuentaId) throw new Error('Elegí la cuenta bancaria');
+    await api('/api/pagos-proveedores', { method: 'POST', body: JSON.stringify(pagoBody) });
+
+    // Paso 4: marcar viaje como pagado
+    await api('/api/viajes/' + viajeId, { method: 'PUT', body: JSON.stringify({ estado: 'pagado' }) });
+
+    closeModal();
+    toast('✅ Flete facturado y pagado por ' + fmt$(total), 'success');
+    delete state.cache.viajes; pages.viajes();
+  } catch (e) {
+    toast(e.message || 'Error al facturar/pagar', 'error');
+  }
 }
 
 // ---- Solicitar Camión Logística por WhatsApp ----
