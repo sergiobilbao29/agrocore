@@ -2272,6 +2272,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'17/06/2026',
+      titulo:'🚨 Hotfix v0.7.14: pdf-parse 100% opcional + texto deposito compartido',
+      desc:'Dos cosas: (1) la dependencia pdf-parse paso de obligatoria a opcional. Si no se instala bien o falla la carga al iniciar el server, el backend arranca igual; solo el endpoint de parseo PDF devuelve 501 con instruccion clara para reinstalar. Asi un problema con esa libreria no tira toda la API. (2) Texto del checkbox "Compartido entre todas mis empresas" en el form de Deposito: la descripcion vieja ("util para una cerealera con varias razones sociales") confundia. Ahora dice claramente que es para INSUMOS DE USO COMUN (ej. Gasoil que comprás desde una empresa y consumis desde varias), descontando del mismo stock sin importar la empresa que carga el movimiento.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'16/06/2026',
       titulo:'📄 Cargar factura de compra desde el PDF de ARCA',
       desc:'En el form de "Cargar factura de compra" hay arriba un cartel azul con botón "Cargar desde PDF". Subís el PDF de una factura electronica argentina (sale tal como vienen de ARCA) y el sistema lee el codigo QR oficial de AFIP, decodifica el JSON Base64 y autopobla tipo, punto de venta, numero, fecha, total y CUIT del emisor (si el CUIT coincide con un proveedor del catalogo, lo selecciona solo). Tambien intenta detectar la razon social del emisor y los IVA del PDF. Despues solo revisas y agregas items si hace falta. Funciona con todas las facturas electronicas de Argentina con QR.' },
@@ -12953,7 +12956,7 @@ async function depoForm(id) {
         <input id="dp-comp" type="checkbox" class="mt-1" ${d.compartido?'checked':''}/>
         <label for="dp-comp" class="text-sm cursor-pointer">
           <span class="font-semibold">🌐 Compartido entre todas mis empresas</span>
-          <div class="text-[11px] text-slate-500 mt-0.5">Si lo activás, este depósito es visible y usable desde cualquiera de tus empresas (útil para una cerealera que usás con varias razones sociales). Si lo dejás desactivado, solo lo ve la empresa actual.</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">Si lo activás, este depósito es visible y usable desde cualquiera de tus empresas. Pensado para insumos de <b>uso común</b> (ej. Gasoil que comprás desde una empresa y consumís desde varias): el stock se descuenta del mismo depósito sin importar qué empresa carga el movimiento. Si lo dejás desactivado, el depósito y su stock son privados de la empresa actual.</div>
         </label>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>

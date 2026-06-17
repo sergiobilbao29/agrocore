@@ -14,15 +14,24 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import XLSX from 'xlsx';
-// pdf-parse: usa import dinámico porque su index.js tiene un require interno raro;
-// se carga la primera vez que se llama al parser de facturas.
+// pdf-parse: dependencia OPCIONAL. Si no está instalada o falla la carga, el
+// servidor arranca igual y el endpoint /api/admin/parse-factura-pdf devuelve 501.
+// Esto evita que un problema con esa lib tire toda la API.
 let _pdfParse = null;
+let _pdfParseTried = false;
+let _pdfParseErr = null;
 async function getPdfParse() {
   if (_pdfParse) return _pdfParse;
-  // pdf-parse exporta cjs; lo cargamos dinámicamente para evitar warnings de ESM.
-  const mod = await import('pdf-parse/lib/pdf-parse.js');
-  _pdfParse = mod.default || mod;
-  return _pdfParse;
+  if (_pdfParseTried) throw _pdfParseErr || new Error('pdf-parse no disponible');
+  _pdfParseTried = true;
+  try {
+    const mod = await import('pdf-parse/lib/pdf-parse.js');
+    _pdfParse = mod.default || mod;
+    return _pdfParse;
+  } catch (e) {
+    _pdfParseErr = new Error('pdf-parse no instalado o falló la carga: ' + e.message);
+    throw _pdfParseErr;
+  }
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,11 +40,16 @@ const STATIC_DIR = process.env.STATIC_DIR || path.resolve(__dirname, '..', '..')
 const prisma = new PrismaClient();
 const app = express();
 
+// Multer en memoria — para uploads chicos (Excel < 10MB, PDFs de factura, etc).
+// Se declara ACÁ ARRIBA porque varios endpoints lo usan al levantarse y JavaScript
+// no permite usar una const antes de su inicialización (TDZ).
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.13';
-const AGROCORE_BUILD = new Date('2026-06-16').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.14';
+const AGROCORE_BUILD = new Date('2026-06-17').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -4480,8 +4494,14 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       return res.status(400).json({ ok: false, error: 'El archivo debe ser un PDF' });
     }
     let texto = '';
+    let pdfParse;
     try {
-      const pdfParse = await getPdfParse();
+      pdfParse = await getPdfParse();
+    } catch (e) {
+      return res.status(501).json({ ok: false,
+        error: 'El parser de PDF no está disponible en este servidor (pdf-parse no instalado). Reinstalá las dependencias con: cd C:\\AgroCore\\backend; npm install pdf-parse. Mientras tanto, cargá la factura a mano.' });
+    }
+    try {
       const data = await pdfParse(req.file.buffer);
       texto = data.text || '';
     } catch (e) {
@@ -4985,8 +5005,8 @@ const requireSuperAdmin = (req, res, next) => {
   next();
 };
 
-// Multer en memoria — para uploads chicos (plantillas Excel < 10MB)
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+// (multer 'upload' ya está definido cerca del tope del archivo — usado por endpoints
+// de importación, parser PDF, etc. Mantenemos esta línea como referencia histórica.)
 
 // Multer aparte para restores: backup completo .sql puede ser de varios MB y
 // crecer con el uso del sistema. Usamos disco para no comer RAM.
