@@ -926,6 +926,7 @@ const MODULES = [
   { id:'flujoProyectado',label:'Flujo de Fondos',     icon:'🎯', perm:'finanzas:read',   section:'Tablero' },
   { id:'flujoCaja',     label:'Flujo de caja',        icon:'📈', perm:'finanzas:read',   section:'Tablero' },
   { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:null,              section:'Tablero' },
+  { id:'agenda',        label:'Agenda y recordatorios',icon:'📅', perm:'agenda:read',    section:'Tablero' },
 
   // ===== VENTAS — todo lo que entra =====
   { id:'clientes',      label:'Clientes',             icon:'👥', perm:'contactos:read',  section:'Ventas' },
@@ -2246,6 +2247,11 @@ pages.inicio = async function() {
   // Accesos directos configurables por el usuario (guardados en UserPreference.shortcuts).
   // Si el usuario nunca configuró nada, mostramos un set inicial razonable.
   const DEFAULT_SHORTCUTS = ['facturacion','compras','clientes','stock','flujoProyectado','bancos','viajes','dashboard'];
+  // Alertas de recordatorios (banner amarillo). Solo si tiene permiso.
+  let alertasReco = [];
+  if (can('agenda:read')) {
+    try { const ar = await api('/api/recordatorios/alertas'); alertasReco = ar.data || []; } catch {}
+  }
   if (!state.userShortcuts) {
     try {
       const r = await api('/api/me/preferences');
@@ -2306,6 +2312,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'20/06/2026',
+      titulo:'📅 Agenda y recordatorios con alertas en Inicio',
+      desc:'Nueva sección en Tablero → Agenda y recordatorios. Cargá fechas importantes (vacunación de hacienda, vencimiento de créditos, campañas, impuestos, lo que sea) con categoría, prioridad (alta/media/baja) y "Avisar N días antes" (default 15). Cuando faltan esos N días o menos, el recordatorio aparece arriba de Inicio en un banner amarillo. Podés repetir mensual o anual (típico vacunación cada año) — al marcarlo completado se reabre solo con la nueva fecha. KPIs arriba: vencidos / para hoy / próximos 30 días. Permiso "agenda:read/create/update/delete" en Roles para asignar a quien corresponda.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'20/06/2026',
+      titulo:'🛠️ Hotfix: edición de Depósitos no guardaba',
+      desc:'En Stock → Cerealeras / Depósitos, al abrir un depósito existente para editarlo, el botón "Guardar" no reaccionaba. Era el mismo problema de comillas que tuvimos en otros lados — JSON.stringify dentro del onclick del HTML rompía el botón. Solucionado. Ahora podés editar contactos, teléfonos, dirección y costos de cualquier depósito sin tener que darlo de baja y crearlo de nuevo.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'20/06/2026',
       titulo:'🛠️ Hotfix: Depósitos / Cerealeras no abría — ya está solucionado',
       desc:'La página Stock → Cerealeras / Depósitos se quedaba colgada en "Cargando..." por un endpoint duplicado que se nos coló en v0.7.13. Ya está corregido (el otro endpoint pasó a llamarse "/api/stock-por-deposito-flat") y la página vuelve a abrir normal con la separación por tipo (Cerealera vs Otros depósitos).' },
@@ -2715,6 +2727,36 @@ pages.inicio = async function() {
       </div>
       ${kpisHtml}
     </div>
+
+    ${alertasReco.length ? `
+      <div class="mb-6 bg-amber-50 border-l-4 border-amber-500 rounded-r-xl p-4">
+        <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl">⏰</span>
+            <h3 class="font-semibold text-amber-900">Tenés ${alertasReco.length} ${alertasReco.length===1?'recordatorio':'recordatorios'} a la vista</h3>
+          </div>
+          <button onclick="go('agenda')" class="text-xs text-amber-800 hover:underline font-medium">Ver agenda completa →</button>
+        </div>
+        <ul class="divide-y divide-amber-200 mt-2">
+          ${alertasReco.slice(0, 5).map(r => {
+            const dias = r.diasRestantes;
+            const cuando = dias === 0 ? 'HOY' : dias === 1 ? 'Mañana' : dias < 0 ? `Vencido hace ${Math.abs(dias)} días` : `En ${dias} días`;
+            const cuandoColor = dias < 0 ? 'text-rose-700' : dias <= 1 ? 'text-amber-800' : 'text-slate-700';
+            return `
+              <li class="py-2 flex items-center justify-between gap-2">
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs px-2 py-0.5 rounded-full border ${recoCatColor(r.categoria)}">${recoCatLabel(r.categoria)}</span>
+                    <span class="font-medium text-slate-800 truncate">${esc(r.titulo)}</span>
+                  </div>
+                  <div class="text-xs text-slate-500 mt-0.5">📅 ${fmtDate(r.fecha)} · <span class="${cuandoColor} font-medium">${cuando}</span></div>
+                </div>
+                ${can('agenda:update') ? `<button class="btn btn-xs btn-secondary flex-shrink-0" onclick="recoCompletar('${r.id}').then(()=>pages.inicio())" title="Marcar completado">✅</button>` : ''}
+              </li>`;
+          }).join('')}
+        </ul>
+        ${alertasReco.length > 5 ? `<div class="text-xs text-amber-700 mt-2">…y ${alertasReco.length - 5} más en la agenda.</div>` : ''}
+      </div>` : ''}
 
     <div class="mb-6">
       <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
@@ -13815,6 +13857,182 @@ async function arrDel(id) {
 
 /* ---------- CONTROL DE EFECTIVO ---------- */
 // ============================================================
+// AGENDA / RECORDATORIOS
+// ============================================================
+const RECO_CATS = {
+  vacunacion:  { label:'💉 Vacunación',     color:'bg-emerald-100 text-emerald-800 border-emerald-300' },
+  credito:     { label:'🏦 Crédito',        color:'bg-purple-100 text-purple-800 border-purple-300' },
+  vencimiento: { label:'⏰ Vencimiento',    color:'bg-rose-100 text-rose-800 border-rose-300' },
+  campania:    { label:'🌱 Campaña',        color:'bg-amber-100 text-amber-800 border-amber-300' },
+  impuesto:    { label:'📋 Impuesto',       color:'bg-blue-100 text-blue-800 border-blue-300' },
+  evento:      { label:'📌 Evento',         color:'bg-indigo-100 text-indigo-800 border-indigo-300' },
+  otro:        { label:'📝 Otro',           color:'bg-slate-100 text-slate-700 border-slate-300' },
+};
+function recoCatLabel(c) { return (RECO_CATS[c]||RECO_CATS.otro).label; }
+function recoCatColor(c) { return (RECO_CATS[c]||RECO_CATS.otro).color; }
+function recoDiasTexto(dias) {
+  if (dias === 0) return '⚠️ HOY';
+  if (dias === 1) return '⚠️ Mañana';
+  if (dias < 0)   return `🔴 Vencido hace ${Math.abs(dias)} días`;
+  if (dias <= 7)  return `⚠️ En ${dias} días`;
+  return `En ${dias} días`;
+}
+function recoFiltroEstado(v) { state._recoEstado = v; pages.agenda(); }
+
+pages.agenda = async function() {
+  setHeader('Agenda y recordatorios', 'Cargá fechas clave (vacunación, vencimiento de créditos, campañas) y recibí alertas en Inicio');
+  if (!can('agenda:read')) { $('#page-body').innerHTML = stubPage('agenda','Agenda'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  const estado = state._recoEstado || 'pendiente';
+  let recos = [];
+  try { const r = await api('/api/recordatorios?estado='+estado); recos = r.data || []; }
+  catch (e) { return toast(e.message,'error'); }
+
+  const grupos = {};
+  recos.forEach(r => {
+    const f = new Date(r.fecha);
+    const key = `${f.getFullYear()}-${String(f.getMonth()+1).padStart(2,'0')}`;
+    if (!grupos[key]) grupos[key] = { label: f.toLocaleDateString('es-AR',{month:'long', year:'numeric'}), items: [] };
+    grupos[key].items.push(r);
+  });
+  const grupoKeys = Object.keys(grupos).sort();
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const kpiVencidos = recos.filter(r => new Date(r.fecha) < today && !r.completado).length;
+  const kpiHoy = recos.filter(r => { const f=new Date(r.fecha); f.setHours(0,0,0,0); return f.getTime() === today.getTime() && !r.completado; }).length;
+  const kpiProx30 = recos.filter(r => { const f=new Date(r.fecha); const days = Math.round((f-today)/(86400000)); return days >= 0 && days <= 30 && !r.completado; }).length;
+
+  $('#page-body').innerHTML = `
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+      <div class="flex gap-2">
+        <button class="btn btn-sm ${estado==='pendiente'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('pendiente')">⏳ Pendientes</button>
+        <button class="btn btn-sm ${estado==='completado'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('completado')">✅ Completados</button>
+        <button class="btn btn-sm ${estado==='todos'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('todos')">📋 Todos</button>
+      </div>
+      ${can('agenda:create')?`<button class="btn btn-primary" onclick="recoForm()">+ Nuevo recordatorio</button>`:''}
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+      <div class="kpi-card border-rose-200 bg-rose-50"><div class="kpi-label">🔴 Vencidos</div><div class="kpi-value text-rose-700">${kpiVencidos}</div></div>
+      <div class="kpi-card border-amber-200 bg-amber-50"><div class="kpi-label">⚠️ Para hoy</div><div class="kpi-value text-amber-700">${kpiHoy}</div></div>
+      <div class="kpi-card border-emerald-200 bg-emerald-50"><div class="kpi-label">📅 Próximos 30 días</div><div class="kpi-value text-emerald-700">${kpiProx30}</div></div>
+    </div>
+    ${recos.length === 0
+      ? `<div class="bg-white border border-slate-200 rounded-lg p-8 text-center text-slate-500">
+           <div class="text-4xl mb-2">📅</div>
+           <div class="font-semibold mb-1">No hay recordatorios ${estado==='pendiente'?'pendientes':estado==='completado'?'completados':''}</div>
+           <div class="text-sm">${can('agenda:create')?'Hacé clic en <b>+ Nuevo recordatorio</b> para empezar.':''}</div>
+         </div>`
+      : grupoKeys.map(k => `
+          <div class="mb-4">
+            <h3 class="text-xs uppercase tracking-wide font-semibold text-slate-500 mb-2 mt-2">${grupos[k].label}</h3>
+            <div class="space-y-2">
+              ${grupos[k].items.map(r => {
+                const f = new Date(r.fecha); f.setHours(0,0,0,0);
+                const dias = Math.round((f - today)/86400000);
+                const vencido = dias < 0 && !r.completado;
+                const prioColor = r.prioridad === 'alta' ? 'border-l-4 border-rose-500' : r.prioridad === 'baja' ? 'border-l-4 border-slate-300' : 'border-l-4 border-amber-400';
+                return `
+                  <div class="bg-white border border-slate-200 ${prioColor} rounded-lg p-3 flex items-start gap-3 ${r.completado?'opacity-60':''}">
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-xs px-2 py-0.5 rounded-full border ${recoCatColor(r.categoria)}">${recoCatLabel(r.categoria)}</span>
+                        <span class="font-semibold ${r.completado?'line-through':''}">${esc(r.titulo)}</span>
+                        ${r.repetir && r.repetir!=='ninguno' ? `<span class="text-[10px] text-slate-500">🔁 ${r.repetir}</span>` : ''}
+                      </div>
+                      <div class="text-sm text-slate-600 mt-1">
+                        📅 ${fmtDate(r.fecha)}
+                        ${r.completado ? '<span class="text-emerald-600 font-medium">✅ Completado</span>' : `<span class="${vencido?'text-rose-600 font-medium':'text-slate-500'}">${recoDiasTexto(dias)}</span>`}
+                        ${!r.completado ? `<span class="text-slate-400 text-xs">· avisa ${r.avisarDiasAntes||15}d antes</span>` : ''}
+                      </div>
+                      ${r.descripcion ? `<div class="text-sm text-slate-500 mt-1 whitespace-pre-wrap">${esc(r.descripcion)}</div>` : ''}
+                    </div>
+                    <div class="flex gap-1">
+                      ${!r.completado && can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoCompletar('${r.id}')" title="Marcar como completado">✅</button>` : ''}
+                      ${can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoForm('${r.id}')" title="Editar">✏️</button>` : ''}
+                      ${can('agenda:delete') ? `<button class="btn btn-xs btn-secondary" onclick="recoDel('${r.id}')" title="Eliminar">🗑️</button>` : ''}
+                    </div>
+                  </div>`;
+              }).join('')}
+            </div>
+          </div>`).join('')
+    }
+  `;
+};
+
+async function recoForm(id) {
+  let r = { titulo:'', descripcion:'', fecha: new Date().toISOString().slice(0,10), categoria:'otro', prioridad:'media', avisarDiasAntes:15, repetir:'ninguno' };
+  if (id) {
+    try { const rsp = await api('/api/recordatorios?estado=todos'); const found = (rsp.data||[]).find(x => x.id === id);
+      if (found) { r = { ...found, fecha: new Date(found.fecha).toISOString().slice(0,10) }; }
+    } catch {}
+  }
+  openModal({
+    title: id ? '✏️ Editar recordatorio' : '📅 Nuevo recordatorio',
+    body: `
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Título *</label><input id="rc-tit" class="input" value="${esc(r.titulo)}" placeholder="Ej. Campaña vacunación antiaftosa"/></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Fecha *</label><input id="rc-fec" type="date" class="input" value="${r.fecha}"/></div>
+          <div><label class="label">Categoría</label>
+            <select id="rc-cat" class="input">
+              ${Object.entries(RECO_CATS).map(([k,v]) => `<option value="${k}" ${r.categoria===k?'selected':''}>${v.label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="label">Prioridad</label>
+            <select id="rc-pri" class="input">
+              <option value="alta"  ${r.prioridad==='alta'?'selected':''}>🔴 Alta</option>
+              <option value="media" ${r.prioridad==='media'?'selected':''}>🟡 Media</option>
+              <option value="baja"  ${r.prioridad==='baja'?'selected':''}>🟢 Baja</option>
+            </select>
+          </div>
+          <div><label class="label">Avisar días antes</label><input id="rc-dias" type="number" min="0" max="365" class="input" value="${r.avisarDiasAntes||15}"/></div>
+          <div><label class="label">Repetir</label>
+            <select id="rc-rep" class="input">
+              <option value="ninguno" ${r.repetir==='ninguno'?'selected':''}>No repetir</option>
+              <option value="mensual" ${r.repetir==='mensual'?'selected':''}>🔁 Mensual</option>
+              <option value="anual"   ${r.repetir==='anual'?'selected':''}>🔁 Anual</option>
+            </select>
+          </div>
+        </div>
+        <div><label class="label">Descripción / notas</label><textarea id="rc-desc" class="input" rows="3" placeholder="Ej. En el campo Los Álamos, lote 4. Llamar al veterinario Pablo el día antes.">${esc(r.descripcion||'')}</textarea></div>
+        <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2">
+          💡 <b>Cómo funciona la alerta:</b> el recordatorio aparece en el banner de <b>Inicio</b> a partir de N días antes de la fecha (el valor de "Avisar días antes"). Si elegís "Repetir", al marcarlo completado se reabre automáticamente para el próximo mes/año.
+        </div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="recoSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
+  });
+}
+async function recoSave(id) {
+  const data = {
+    titulo: $('#rc-tit').value.trim(),
+    descripcion: $('#rc-desc').value.trim() || null,
+    fecha: new Date($('#rc-fec').value).toISOString(),
+    categoria: $('#rc-cat').value,
+    prioridad: $('#rc-pri').value,
+    avisarDiasAntes: Number($('#rc-dias').value||15),
+    repetir: $('#rc-rep').value,
+  };
+  if (!data.titulo) return toast('Falta el título','warn');
+  try {
+    if (id) await api('/api/recordatorios/'+id, { method:'PUT', body: JSON.stringify(data) });
+    else    await api('/api/recordatorios',     { method:'POST', body: JSON.stringify(data) });
+    toast('Guardado','success'); closeModal(); pages.agenda();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function recoCompletar(id) {
+  try { await api('/api/recordatorios/'+id+'/completar', { method:'POST' }); toast('✅ Completado','success'); pages.agenda(); }
+  catch (e) { toast(e.message,'error'); }
+}
+async function recoDel(id) {
+  if (!confirm('¿Eliminar este recordatorio?')) return;
+  try { await api('/api/recordatorios/'+id, { method:'DELETE' }); toast('Eliminado','success'); pages.agenda(); }
+  catch (e) { toast(e.message,'error'); }
+}
+
+// ============================================================
 // MOVIMIENTOS DIARIOS — centro unificado de carga
 // Cualquier ingreso/egreso del día con cualquier método y categoría.
 // Internamente despacha al modelo correcto (Efectivo / BancoMovimiento / Cheque)
@@ -14627,7 +14845,7 @@ async function depoForm(id) {
         </label>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="depoSave(${isEdit?JSON.stringify(id):'null'})">💾 Guardar</button>`
+             <button class="btn btn-primary" onclick="depoSave(${isEdit?`'${id}'`:'null'})">💾 Guardar</button>`
   });
 }
 async function depoSave(id) {

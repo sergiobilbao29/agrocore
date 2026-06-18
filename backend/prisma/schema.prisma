@@ -70,6 +70,7 @@ model Company {
   intercoOrigen   IntercompanyMovimiento[] @relation("IntercoOrigen")
   intercoDestino  IntercompanyMovimiento[] @relation("IntercoDestino")
   bancoMovimientos BancoMovimiento[]
+  recordatorios   Recordatorio[]
 }
 
 model User {
@@ -1109,4 +1110,31 @@ model ImportLote {
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, fecha])
+}
+
+
+// Agenda / Recordatorios: fechas importantes con alerta opcional.
+// Ej. "Campaña vacunación antiaftosa", "Vence cuota crédito".
+// El campo avisarDiasAntes hace que aparezca en el banner de Inicio cuando
+// faltan ese N de días o menos.
+model Recordatorio {
+  id                String   @id @default(cuid())
+  companyId         String
+  titulo            String
+  descripcion       String?
+  fecha             DateTime
+  categoria         String   @default("otro")
+  prioridad         String   @default("media")
+  avisarDiasAntes   Int      @default(15)
+  completado        Boolean  @default(false)
+  completadoEn      DateTime?
+  relacionTipo      String?
+  relacionId        String?
+  repetir           String   @default("ninguno")
+  userIdCreador     String?
+
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, fecha])
+  @@index([companyId, completado, fecha])
 }

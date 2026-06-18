@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.24';
+const AGROCORE_VERSION = '0.7.25';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7361,6 +7361,105 @@ app.use((err, _req, res, _next) => {
   if (err.code === 'P2025') return res.status(404).json({ ok: false, error: 'No encontrado' });
   console.error('[ERROR]', err);
   res.status(err.status || 500).json({ ok: false, error: err.message || 'Error interno' });
+});
+
+// ============================================================
+// AGENDA / RECORDATORIOS
+// ============================================================
+app.get('/api/recordatorios', requireCompany, requirePermission('agenda:read'), async (req, res, next) => {
+  try {
+    const { estado = 'pendiente', desde, hasta } = req.query;
+    const where = { companyId: req.companyId };
+    if (estado === 'pendiente') where.completado = false;
+    else if (estado === 'completado') where.completado = true;
+    if (desde || hasta) {
+      where.fecha = {};
+      if (desde) where.fecha.gte = new Date(desde);
+      if (hasta) where.fecha.lte = new Date(hasta);
+    }
+    const data = await prisma.recordatorio.findMany({ where, orderBy: { fecha: 'asc' } });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/recordatorios/alertas', requireCompany, requirePermission('agenda:read'), async (req, res, next) => {
+  try {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const pendientes = await prisma.recordatorio.findMany({
+      where: { companyId: req.companyId, completado: false },
+      orderBy: { fecha: 'asc' },
+    });
+    const alertas = pendientes.filter(r => {
+      const f = new Date(r.fecha); f.setHours(0,0,0,0);
+      const diasRestantes = Math.round((f.getTime() - today.getTime()) / (1000*60*60*24));
+      return diasRestantes <= (r.avisarDiasAntes || 15);
+    }).map(r => {
+      const f = new Date(r.fecha); f.setHours(0,0,0,0);
+      const diasRestantes = Math.round((f.getTime() - today.getTime()) / (1000*60*60*24));
+      return { ...r, diasRestantes };
+    });
+    res.json({ ok: true, data: alertas });
+  } catch (e) { next(e); }
+});
+
+const recordatorioSchema = z.object({
+  titulo: z.string().min(1),
+  descripcion: z.string().nullable().optional(),
+  fecha: z.coerce.date(),
+  categoria: z.enum(['vacunacion','credito','vencimiento','campania','impuesto','evento','otro']).optional(),
+  prioridad: z.enum(['alta','media','baja']).optional(),
+  avisarDiasAntes: z.number().int().min(0).max(365).optional(),
+  relacionTipo: z.string().nullable().optional(),
+  relacionId: z.string().nullable().optional(),
+  repetir: z.enum(['ninguno','mensual','anual']).optional(),
+});
+
+app.post('/api/recordatorios', requireCompany, requirePermission('agenda:create'), async (req, res, next) => {
+  try {
+    const input = recordatorioSchema.parse(req.body);
+    const r = await prisma.recordatorio.create({
+      data: { ...input, companyId: req.companyId, userIdCreador: req.user?.id || null },
+    });
+    res.status(201).json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/recordatorios/:id', requireCompany, requirePermission('agenda:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.recordatorio.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const input = recordatorioSchema.partial().parse(req.body);
+    const r = await prisma.recordatorio.update({ where: { id: req.params.id }, data: input });
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/recordatorios/:id/completar', requireCompany, requirePermission('agenda:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.recordatorio.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    let nuevaFecha = null;
+    if (existing.repetir === 'mensual') {
+      nuevaFecha = new Date(existing.fecha);
+      nuevaFecha.setMonth(nuevaFecha.getMonth() + 1);
+    } else if (existing.repetir === 'anual') {
+      nuevaFecha = new Date(existing.fecha);
+      nuevaFecha.setFullYear(nuevaFecha.getFullYear() + 1);
+    }
+    const r = nuevaFecha
+      ? await prisma.recordatorio.update({ where: { id: req.params.id }, data: { fecha: nuevaFecha, completado: false, completadoEn: null } })
+      : await prisma.recordatorio.update({ where: { id: req.params.id }, data: { completado: true, completadoEn: new Date() } });
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/recordatorios/:id', requireCompany, requirePermission('agenda:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.recordatorio.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.recordatorio.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
 // ============================================================
