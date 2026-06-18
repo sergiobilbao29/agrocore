@@ -2313,6 +2313,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
+      titulo:'➕ Facturas: botón "+ Nuevo" al lado del dropdown para crear producto en el momento',
+      desc:'Al cargar una factura de compra o venta, al lado del selector de item del catálogo aparece un botón pequeño ➕ verde. Si el producto/insumo que necesitás no está en el catálogo, lo creás ahí mismo sin salir del form: nombre, unidad, tipo (Insumo / Cereal / Hacienda / Otro), y queda agregado al dropdown ya seleccionado para esa fila. Cantidad, precio e IVA que ya hayas tipeado se mantienen. Funciona en Compras, Ventas (interna) y Ventas (Cargar ARCA externa).' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
       titulo:'🧾 Facturas: el item del dropdown ahora trae TODOS los insumos del catálogo',
       desc:'Al cargar una factura de compra o venta, el selector de item del catálogo ahora muestra: (1) todos los Productos como antes; y (2) todos los items del catálogo de Insumos (los 17 que tenés cargados: 2,4-D, Atrazina, Glifosato Sulfosato, Glifosato Touchdown Max, etc) bajo el grupo "Insumos del catálogo". Si elegís uno del catálogo que aún no es Producto, el sistema lo crea automáticamente al guardar la factura — listo para tener stock. También: sacamos el "Stock: X kg" del label del dropdown (ahora sólo dice "Nombre (unidad)") para que sea más limpio. La validación de stock negativo en ventas sigue funcionando: si vendés más de lo que hay, te avisa qué falta y te pregunta si querés continuar igual (el stock queda en negativo).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/06/2026',
@@ -7830,11 +7833,14 @@ function factItemRow(i=0, it={}) {
   return `
     <tr data-fi>
       <td>
-        <select class="input text-sm" data-f="productoId" onchange="factItemPickProducto(this)">
-          <option value="">— Texto libre (sin stock) —</option>
-          ${optsProd}
-          ${optsCat ? `<optgroup label="Insumos del catálogo">${optsCat}</optgroup>` : ''}
-        </select>
+        <div class="flex gap-1">
+          <select class="input text-sm flex-1" data-f="productoId" onchange="factItemPickProducto(this)">
+            <option value="">— Texto libre (sin stock) —</option>
+            ${optsProd}
+            ${optsCat ? `<optgroup label="Insumos del catálogo">${optsCat}</optgroup>` : ''}
+          </select>
+          <button class="btn btn-secondary text-xs px-2" onclick="nuevoItemRapido(this)" title="Crear un producto/insumo nuevo">➕</button>
+        </div>
       </td>
       <td><input class="input text-sm" data-f="descripcion" value="${esc(it.descripcion||'')}" placeholder="Detalle del item"/></td>
       <td><input class="input text-sm w-24 text-right" type="number" step="0.01" data-f="cantidad" value="${it.cantidad||1}"/></td>
@@ -7867,6 +7873,76 @@ function factItemPickProducto(sel) {
   if (prc && (!prc.value || Number(prc.value) === 0) && opt.dataset.precio) prc.value = opt.dataset.precio;
   factRecalc();
 }
+// Modal rapido para crear un producto/insumo desde el form de factura.
+// Acepta nombre + unidad + categoria. Al guardar:
+//  - Si categoria='cereal' o 'hacienda' → se crea Producto (tabla Producto, con stock).
+//  - Si categoria='insumo' (o cualquier otro) → se crea catálogo Insumo (sin stock).
+// Tras guardar, refresca el cache, regenera la fila del dropdown y selecciona el item nuevo.
+function nuevoItemRapido(btn) {
+  const tr = btn.closest('tr');
+  if (!tr) return;
+  // Buscar el tbody contenedor: fi-tbody (interna), fei-tbody (externa) o fi-tbody (compras)
+  const tbody = tr.parentElement;
+  const tbodyId = tbody ? tbody.id : '';
+  const fila = Array.from(tbody.children).indexOf(tr);
+  openModal({
+    title: '➕ Crear producto/insumo nuevo',
+    body: `
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Nombre *</label><input id="ni-nombre" class="input" placeholder="Ej. Glifosato Sulfosato"/></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Unidad</label>
+            <input id="ni-unidad" class="input" placeholder="kg, L, t, cabezas..."/>
+          </div>
+          <div><label class="label">Tipo</label>
+            <select id="ni-tipo" class="input">
+              <option value="insumo" selected>🧪 Insumo (agroquímico, semilla, repuesto)</option>
+              <option value="cereal">🌾 Cereal / Grano</option>
+              <option value="hacienda">🐄 Hacienda</option>
+              <option value="otro">📦 Otro</option>
+            </select>
+          </div>
+        </div>
+        <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2">
+          💡 Si más adelante necesitás más campos del producto (precio referencia, descripción, etc), podés editarlo desde <b>Catálogos</b>. Acá creamos lo mínimo para que aparezca en la factura.
+        </div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="nuevoItemRapidoSave('${tbodyId}', ${fila})">💾 Crear y seleccionar</button>`
+  });
+}
+async function nuevoItemRapidoSave(tbodyId, filaIdx) {
+  const nombre = $('#ni-nombre').value.trim();
+  const unidad = $('#ni-unidad').value.trim();
+  const tipo   = $('#ni-tipo').value;
+  if (!nombre) return toast('Falta el nombre','warn');
+  try {
+    // Creamos un Producto directo: así arranca con stock 0 y queda disponible
+    // siempre. Lo categorizamos según el tipo elegido.
+    const data = { nombre, unidad: unidad || null, categoria: tipo, activo: true };
+    const r = await api('/api/productos', { method:'POST', body: JSON.stringify(data) });
+    const nuevoId = r.data?.id;
+    if (!nuevoId) throw new Error('No se devolvió ID del producto creado');
+    // Refrescar cache de productos
+    try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
+    toast('Producto creado','success'); closeModal();
+    // Regenerar fila del dropdown manteniendo cantidad/precio/iva ya tipeados
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) return;
+    const tr = tbody.children[filaIdx];
+    if (!tr) return;
+    const cant = Number(tr.querySelector('[data-f="cantidad"]')?.value || 1);
+    const prc  = Number(tr.querySelector('[data-f="precioUnit"]')?.value || 0);
+    const iva  = Number(tr.querySelector('[data-f="alicuotaIva"]')?.value || 21);
+    const isExterna = tbodyId === 'fei-tbody';
+    let nuevoHTML = factItemRow(0, { productoId: nuevoId, cantidad: cant, precioUnit: prc, alicuotaIva: iva });
+    if (isExterna) nuevoHTML = nuevoHTML.replace(/data-fi(?!=)/g,'data-fei').replace(/factRecalc\(\)/g,'factExtRecalc()');
+    tr.outerHTML = nuevoHTML;
+    // Recalcular totales
+    if (isExterna) { try { factExtRecalc(); } catch {} } else { try { factRecalc(); } catch {} }
+  } catch (e) { toast(e.message,'error'); }
+}
+
 function factRecalc() {
   let subtotal = 0, iva = 0;
   $$('#fi-tbody tr[data-fi]').forEach(tr => {
