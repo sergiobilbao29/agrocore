@@ -2272,6 +2272,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'18/06/2026',
+      titulo:'🐛 Bug fix v0.7.17: chips de filtros no respondían al click',
+      desc:'En el Resumen multi-empresa los chips de filtros (Caja, Empresa, Producto, Deposito) no se tildaban al click porque el atributo onclick tenia comillas dobles dentro de comillas dobles (JSON.stringify dentro de un atributo HTML). Reemplazado por data-attributes con listener delegado: ahora funcionan correctamente. Tambien se hicieron mas visibles los chips seleccionados (verde con borde mas grueso y check).' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'💸 Flujo de caja ahora muestra los movimientos del Control de Efectivo',
+      desc:'Antes la pagina "Flujo de caja" usaba un modelo separado (FlujoCaja) y por eso aparecia vacia aunque hubiera saldo en las cajas. Ahora lee directamente del Control de Efectivo (todas las cajas combinadas, excluyendo transferencias entre cajas que son neutras al saldo total). Los KPIs Entradas/Salidas/Saldo acumulado, los graficos por mes y el listado reflejan los ingresos y egresos reales. Para crear/editar movimientos hay que ir a Tesoreria → Control de Efectivo (el boton "+ Nuevo" redirige).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
       titulo:'📄 PDF: ahora trae descripcion del producto y crea proveedor solo',
       desc:'Al cargar el PDF de una factura, el sistema toma la linea "Producto / Servicio" como descripcion del item (antes ponia un texto generico), y la cantidad/unidad si se pueden detectar. Si el CUIT del emisor no coincide con ningun proveedor del catalogo, aparece un cartel amarillo con boton "+ Crear proveedor con estos datos" que crea el proveedor con razon social + CUIT en un click. Aunque no crees el proveedor, los datos del emisor (razon social, CUIT, CAE) quedan en observaciones de la factura.' },
@@ -3852,17 +3858,20 @@ pages.resumenGlobal = async function() {
       depositos: [...stockFiltro.depositos],
     }));
   }
-  // Helper de chips para filtros multi-select
-  function chipsHTML(items, selectedSet, onclickFnName) {
+  // Helper de chips para filtros multi-select.
+  // OJO: usamos data-attributes + listener delegado en vez de inline onclick para
+  // evitar problemas de escapado de comillas en el value (bug clásico con JSON.stringify
+  // dentro de un atributo HTML).
+  function chipsHTML(items, selectedSet, fnName) {
     if (!items || items.length === 0) return '<div class="text-xs text-slate-400 italic">Sin opciones</div>';
     return items.map(item => {
       const value = (typeof item === 'string') ? item : item.value;
       const label = (typeof item === 'string') ? item : item.label;
       const isSel = selectedSet.has(value);
       const cls = isSel
-        ? 'bg-emerald-600 text-white border-emerald-700'
+        ? 'bg-emerald-600 text-white border-emerald-700 font-semibold shadow-sm'
         : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50';
-      return `<button type="button" class="text-xs px-2 py-1 rounded-full border transition ${cls}" onclick="${onclickFnName}(${JSON.stringify(value)})">${esc(label)}${isSel?' ✓':''}</button>`;
+      return `<button type="button" class="resumen-chip text-xs px-3 py-1 rounded-full border-2 transition ${cls}" data-fn="${esc(fnName)}" data-value="${esc(value)}">${esc(label)}${isSel?' ✓':''}</button>`;
     }).join(' ');
   }
 
@@ -4312,6 +4321,22 @@ pages.resumenGlobal = async function() {
   };
 
   $('#page-body').innerHTML = `<div id="resumen-body"></div>`;
+  // Listener delegado para los chips de los filtros multi-select.
+  // Se enchufa una sola vez al body (el render rehace el HTML interior pero el listener
+  // sigue ahí porque está en el contenedor padre).
+  const bodyEl = document.getElementById('resumen-body');
+  if (bodyEl && !bodyEl._chipsBound) {
+    bodyEl.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('.resumen-chip');
+      if (!btn) return;
+      const fn = btn.dataset.fn;
+      const val = btn.dataset.value;
+      if (fn && typeof window[fn] === 'function') {
+        window[fn](val);
+      }
+    });
+    bodyEl._chipsBound = true;
+  }
   render();
 };
 
@@ -10046,12 +10071,27 @@ async function ccDel(id) {
  * FLUJO DE CAJA
  * ========================================================= */
 pages.flujoCaja = async function() {
-  setHeader('Flujo de caja', 'Ingresos y egresos proyectados/reales');
+  setHeader('Flujo de caja', 'Movimientos reales de las cajas de efectivo (entradas, salidas, saldo acumulado)');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('flujoCaja','Flujo de caja'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   destroyCharts();
-  let rows=[];
-  try { rows = await crudList('flujo-caja','flujoCaja'); } catch (e) { return toast(e.message,'error'); }
+  // Lee directamente del Control de Efectivo (modelo Efectivo).
+  // Las transferencias entre cajas NO afectan el saldo total (son neutras).
+  let efRows = [];
+  try { efRows = (await api('/api/efectivo')).data || []; } catch (e) { return toast(e.message,'error'); }
+  // Convertir cada movimiento de Efectivo a una fila normalizada para esta vista
+  const rows = efRows
+    .filter(e => e.tipo === 'ingreso' || e.tipo === 'egreso')   // excluir transferencias
+    .map(e => ({
+      id: e.id,
+      fecha: e.fecha,
+      concepto: e.concepto || '',
+      categoria: e.clasificacion === 'propio' ? 'Propio' : 'Empresa',
+      caja: e.caja || '(sin caja)',
+      monto: e.tipo === 'ingreso' ? Number(e.monto || 0) : -Number(e.monto || 0),
+      observaciones: e.observaciones || null,
+    }));
+
   const ordered = [...rows].sort((a,b)=> new Date(a.fecha) - new Date(b.fecha));
   let acc = 0;
   ordered.forEach(r => { acc += Number(r.monto||0); r._saldo = acc; });
@@ -10069,7 +10109,6 @@ pages.flujoCaja = async function() {
   const egrXMes = meses.map(m => rows.filter(r => (r.fecha||'').slice(0,7)===m.key && Number(r.monto)<0).reduce((a,r)=>a+Math.abs(Number(r.monto)),0));
   // Línea acumulada: saldo al final de cada mes
   const acumXMes = [];
-  let a2 = 0;
   meses.forEach(m => {
     const delta = rows.filter(r => (r.fecha||'').slice(0,7) <= m.key).reduce((a,r)=>a+Number(r.monto||0), 0);
     acumXMes.push(delta);
@@ -10112,9 +10151,10 @@ pages.flujoCaja = async function() {
         </div>
         <div class="flex gap-2">
           <button class="btn btn-secondary flex-1" onclick="fcFiltrosLimpiar()">Limpiar</button>
-          ${can('finanzas:create') ? `<button class="btn btn-primary flex-1" onclick="fcForm()">+ Nuevo</button>`:''}
+          ${can('finanzas:create') ? `<button class="btn btn-primary flex-1" onclick="go('efectivo')">+ Nuevo</button>`:''}
         </div>
       </div>
+      <div class="text-[11px] text-slate-500 mt-2">💡 Esta vista muestra los movimientos del Control de Efectivo (ingresos y egresos de las cajas). Las transferencias entre cajas no aparecen porque son neutras al saldo total. Para crear/editar/borrar movimientos andá a <b>Tesorería → Control de Efectivo</b>.</div>
     </div>
 
     <div class="kpi p-0 overflow-hidden">
