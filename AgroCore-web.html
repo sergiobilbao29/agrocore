@@ -2304,6 +2304,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/06/2026',
+      titulo:'📅 Dashboard: filtros de fecha + Snapshot a fecha (estado al cierre)',
+      desc:'Arriba del Dashboard ahora hay un bloque con 3 filtros: Desde / Hasta (para analizar un periodo) y Snapshot al (para ver estado al cierre de una fecha — ideal para el contador que pide "estado al 31/12"). Botones rapidos: Mes actual · Mes pasado · Año. La preferencia se guarda en el navegador. Los tabs Resumen general y Finanzas aplican los filtros: ingresos/egresos/cheques/cuentas corrientes se recalculan al periodo elegido. Los KPI cambian, los graficos cambian, los saldos se recalculan a la fecha. En modo Snapshot, "cheques vencidos" significa los que estaban vencidos al cierre, no los de hoy. Los tabs Stock / Producción / Patrimonio siguen mostrando estado actual (los iremos sumando al filtro en proximas versiones — son mas complejos porque requieren reconstruir el stock historico).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/06/2026',
       titulo:'⚡ Movimientos diarios ahora es un centro de operaciones completo',
       desc:'Sobre la pagina de Movimientos diarios se sumaron 5 botones grandes de Acciones rapidas: (1) 📝 Gasto/Ingreso simple — el form basico de antes; (2) 📥 Factura de compra — abre el form de Compras que ya tiene Cargar desde PDF, autocrea proveedor desde el CUIT del PDF, condicion Contado con pago integrado; (3) 📤 Factura de venta — idem pero para ventas con CAE de ARCA; (4) 💸 Pagar a proveedor — modal multi-comprobante para saldar facturas pendientes de Cta Cte con cualquier metodo (efectivo+caja, cheque en cartera, transferencia+cuenta, intercompany); (5) 💰 Cobrar de cliente — idem para cobros (con opcion de cargar cheque de tercero nuevo desde el modal). Desde una sola pagina haces TODO lo del dia a dia.' },
@@ -3169,10 +3172,54 @@ state.dashTab = state.dashTab || 'resumen';
 
 function dashSwitchTab(t) { state.dashTab = t; pages.dashboard(); }
 
+// Filtros globales del Dashboard
+function dashFiltroLimpiar() {
+  state.dashFilter = { desde: '', hasta: '', snapshot: '' };
+  try { localStorage.removeItem('ac.dashFilter'); } catch {}
+  pages.dashboard();
+}
+function dashFiltroPreset(preset) {
+  const hoy = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  let desde = '', hasta = '';
+  if (preset === 'mesActual') {
+    desde = fmt(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+    hasta = fmt(hoy);
+  } else if (preset === 'mesPasado') {
+    const m = hoy.getMonth() - 1;
+    desde = fmt(new Date(hoy.getFullYear(), m, 1));
+    hasta = fmt(new Date(hoy.getFullYear(), m + 1, 0)); // último día del mes
+  } else if (preset === 'anioActual') {
+    desde = fmt(new Date(hoy.getFullYear(), 0, 1));
+    hasta = fmt(hoy);
+  }
+  state.dashFilter = { desde, hasta, snapshot: '' };
+  try { localStorage.setItem('ac.dashFilter', JSON.stringify(state.dashFilter)); } catch {}
+  pages.dashboard();
+}
+// Devuelve true si la fecha de un item entra en el filtro activo del dashboard.
+// snapshot: fechaItem <= snapshot
+// desde/hasta: desde <= fechaItem <= hasta
+// sin filtros: siempre true
+function dashFechaEnFiltro(fechaItem) {
+  const f = state.dashFilter || {};
+  if (!fechaItem) return !(f.snapshot || f.desde || f.hasta);
+  const d = String(fechaItem).slice(0, 10);
+  if (f.snapshot) return d <= f.snapshot;
+  if (f.desde && d < f.desde) return false;
+  if (f.hasta && d > f.hasta) return false;
+  return true;
+}
+
 pages.dashboard = async function() {
   setHeader('Dashboard', 'Análisis operativo y financiero');
   if (!can('dashboard:read')) { $('#page-body').innerHTML = stubPage('dashboard','Dashboard'); return; }
   destroyCharts();
+  // Restaurar filtros guardados
+  if (!state.dashFilter) {
+    try { state.dashFilter = JSON.parse(localStorage.getItem('ac.dashFilter') || '{}'); }
+    catch { state.dashFilter = {}; }
+  }
 
   const tabsHtml = DASH_TABS.map(t => `
     <button class="dash-tab ${state.dashTab===t.id?'active':''}" onclick="dashSwitchTab('${t.id}')" type="button" title="${esc(t.label)} · ${esc(t.sub)}">
@@ -3243,7 +3290,63 @@ pages.dashboard = async function() {
       <span>Cliqueá cualquier solapa para cambiar el tipo de análisis</span>
     </div>
     <div class="dash-tabs">${tabsHtml}</div>
+
+    <!-- Filtros globales de fecha del Dashboard -->
+    <div class="kpi mb-3" style="background:linear-gradient(135deg,#f8fafc 0%,#f1f5f9 100%);border:1px solid #cbd5e1">
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+        <div class="md:col-span-3">
+          <label class="label">📅 Desde</label>
+          <input id="dash-desde" type="date" class="input" value="${esc(state.dashFilter?.desde||'')}"/>
+        </div>
+        <div class="md:col-span-3">
+          <label class="label">📅 Hasta</label>
+          <input id="dash-hasta" type="date" class="input" value="${esc(state.dashFilter?.hasta||'')}"/>
+        </div>
+        <div class="md:col-span-3">
+          <label class="label">📸 Snapshot al <span class="text-[10px] text-slate-500">(estado a esa fecha)</span></label>
+          <input id="dash-snap" type="date" class="input" value="${esc(state.dashFilter?.snapshot||'')}"/>
+        </div>
+        <div class="md:col-span-3 flex gap-2">
+          <button class="btn btn-secondary flex-1 text-xs" onclick="dashFiltroPreset('mesActual')">Mes actual</button>
+          <button class="btn btn-secondary flex-1 text-xs" onclick="dashFiltroPreset('mesPasado')">Mes pasado</button>
+          <button class="btn btn-secondary flex-1 text-xs" onclick="dashFiltroPreset('anioActual')">Año</button>
+        </div>
+        <div class="md:col-span-12 flex items-center justify-between flex-wrap gap-2">
+          <div class="text-xs text-slate-600">
+            ${(() => {
+              const f = state.dashFilter || {};
+              if (f.snapshot) return `📸 Mostrando estado <b>al ${fmtDate(f.snapshot)}</b> (movimientos hasta esa fecha · cuentas a cobrar/pagar pendientes a esa fecha · cheques no liquidados a esa fecha)`;
+              if (f.desde && f.hasta) return `📅 Mostrando datos entre <b>${fmtDate(f.desde)}</b> y <b>${fmtDate(f.hasta)}</b>`;
+              if (f.desde) return `📅 Mostrando datos desde <b>${fmtDate(f.desde)}</b>`;
+              if (f.hasta) return `📅 Mostrando datos hasta <b>${fmtDate(f.hasta)}</b>`;
+              return '💡 Sin filtro: se muestran todos los datos disponibles. Useá los filtros para análisis histórico o snapshot al cierre de un período.';
+            })()}
+          </div>
+          ${(state.dashFilter?.desde || state.dashFilter?.hasta || state.dashFilter?.snapshot) ? `<button class="btn btn-secondary text-xs" onclick="dashFiltroLimpiar()">✕ Limpiar filtros</button>` : ''}
+        </div>
+      </div>
+    </div>
+
     <div id="dash-content"><div class="text-slate-500 text-sm">Cargando datos…</div></div>`;
+  // Listeners
+  ['desde','hasta','snap'].forEach(k => {
+    const el = $('#dash-' + k);
+    if (!el) return;
+    el.onchange = e => {
+      state.dashFilter = state.dashFilter || {};
+      const key = (k === 'snap') ? 'snapshot' : k;
+      state.dashFilter[key] = e.target.value;
+      // Si pone snapshot, limpiamos desde/hasta para no mezclar conceptos
+      if (k === 'snap' && e.target.value) {
+        state.dashFilter.desde = '';
+        state.dashFilter.hasta = '';
+      } else if ((k === 'desde' || k === 'hasta') && e.target.value) {
+        state.dashFilter.snapshot = '';
+      }
+      try { localStorage.setItem('ac.dashFilter', JSON.stringify(state.dashFilter)); } catch {}
+      pages.dashboard();
+    };
+  });
 
   // Delegamos al renderer del tab
   const render = {
@@ -3264,25 +3367,55 @@ pages.dashboard = async function() {
 async function dashResumen() {
   const target = $('#dash-content');
 
-  let stockG=0, stockH=0, camps=[], prods=[], flujo=[], cheques=[], arr=[], ccs=[];
+  let stockG=0, stockH=0, camps=[], prods=[], flujo=[], cheques=[], arr=[], ccs=[], efectivos=[], bancoMovs=[];
+  // Cargas en paralelo
   try {
-    const s = await api('/api/stock-actual');
-    for (const p of (s.data||[])) {
+    const [sRsp, cRsp, efRsp, bmRsp, chRsp, arRsp, ccRsp] = await Promise.all([
+      api('/api/stock-actual').catch(()=>({data:[]})),
+      api('/api/campanas').catch(()=>({data:[]})),
+      api('/api/efectivo').catch(()=>({data:[]})),
+      api('/api/banco-movimientos').catch(()=>({data:[]})),
+      api('/api/cheques').catch(()=>({data:[]})),
+      api('/api/arrendamientos').catch(()=>({data:[]})),
+      api('/api/ctas-ctes').catch(()=>({data:[]})),
+    ]);
+    prods = sRsp.data || [];
+    for (const p of prods) {
       if (/cereal|grano/i.test(p.categoria)) stockG += Number(p.existencia||0);
       if (/hacienda|animal/i.test(p.categoria)) stockH += Number(p.existencia||0);
     }
-    prods = s.data || [];
+    camps = cRsp.data || [];
+    efectivos = efRsp.data || [];
+    bancoMovs = bmRsp.data || [];
+    cheques = chRsp.data || [];
+    arr = arRsp.data || [];
+    ccs = ccRsp.data || [];
   } catch {}
-  try { camps = (await api('/api/campanas')).data || []; } catch {}
-  try { flujo = (await api('/api/flujo-caja')).data || []; } catch {}
-  try { cheques = (await api('/api/cheques')).data || []; } catch {}
-  try { arr = (await api('/api/arrendamientos')).data || []; } catch {}
-  try { ccs = (await api('/api/ctas-ctes')).data || []; } catch {}
 
-  const hoy = new Date();
+  // Construir el "flujo" a partir de Efectivo + Banco-Movimientos (la fuente real ahora)
+  // y aplicar el filtro de fecha del Dashboard.
+  flujo = [];
+  for (const e of efectivos) {
+    if (e.tipo === 'transferencia') continue; // entre cajas, neutro
+    if (!dashFechaEnFiltro(e.fecha)) continue;
+    flujo.push({ fecha: e.fecha, monto: e.tipo === 'ingreso' ? Number(e.monto||0) : -Number(e.monto||0), categoria: e.clasificacion === 'propio' ? 'Personal' : 'Empresa' });
+  }
+  for (const m of bancoMovs) {
+    if (m.tipo !== 'transferencia_in' && m.tipo !== 'transferencia_out') continue;
+    if (!dashFechaEnFiltro(m.fecha)) continue;
+    flujo.push({ fecha: m.fecha, monto: m.tipo === 'transferencia_in' ? Number(m.monto||0) : -Number(m.monto||0), categoria: m.concepto?.slice(0,30) || 'Bancario' });
+  }
+
+  // Filtrar las otras colecciones por fecha del item
+  cheques = cheques.filter(c => dashFechaEnFiltro(c.fechaEmision || c.fechaPago));
+  arr = arr.filter(a => dashFechaEnFiltro(a.vencimiento || a.fecha));
+  ccs = ccs.filter(c => dashFechaEnFiltro(c.fecha));
+
+  // Fecha "anchor": cuando hay snapshot, usar esa como "hoy" para los cálculos basados en hoy
+  const hoy = state.dashFilter?.snapshot ? new Date(state.dashFilter.snapshot) : new Date();
   const hasEnCurso = camps.filter(c=>c.estado==='En curso' || c.estado==='activa').length;
 
-  // Agrupar flujo por mes (últimos 6 meses)
+  // Agrupar flujo por mes — los últimos 6 meses contados desde "hoy" o snapshot
   const meses = [];
   for (let i=5;i>=0;i--) {
     const d = new Date(hoy.getFullYear(), hoy.getMonth()-i, 1);
@@ -3290,8 +3423,9 @@ async function dashResumen() {
   }
   const ingXMes = meses.map(m => flujo.filter(f => (f.fecha||'').slice(0,7)===m.key && Number(f.monto)>0).reduce((a,f)=>a+Number(f.monto),0));
   const egrXMes = meses.map(m => flujo.filter(f => (f.fecha||'').slice(0,7)===m.key && Number(f.monto)<0).reduce((a,f)=>a+Math.abs(Number(f.monto)),0));
-  const ingresosTotales = ingXMes.reduce((a,b)=>a+b,0);
-  const egresosTotales = egrXMes.reduce((a,b)=>a+b,0);
+  // Si hay filtro activo, los totales son sobre TODO el flujo filtrado (no solo los 6 meses)
+  const ingresosTotales = flujo.filter(f => Number(f.monto) > 0).reduce((a,f) => a + Number(f.monto), 0);
+  const egresosTotales  = flujo.filter(f => Number(f.monto) < 0).reduce((a,f) => a + Math.abs(Number(f.monto)), 0);
   const flujoNeto = ingresosTotales - egresosTotales;
 
   // Categorías de egresos (doughnut)
@@ -3305,18 +3439,27 @@ async function dashResumen() {
   const catColors = ['#dc2626','#ea580c','#d97706','#ca8a04','#65a30d','#16a34a','#0d9488','#0284c7','#7c3aed','#c026d3'];
 
   // Cheques pendientes (en cartera o depositados, sin cobrar/rechazar todavía)
+  // Las alertas usan "hoy" que puede ser snapshot, lo que permite mirar el estado del
+  // pasado: "qué cheques estaban vencidos al 31/12/2025"
   const estadosPendientes = ['en cartera', 'emitido', 'depositado'];
   const chequesPend = cheques.filter(c => estadosPendientes.includes((c.estado||'').toLowerCase()) && c.fechaPago);
-  // Vencidos: ya pasó la fecha y siguen sin cobrar
   const chequesVencidos = chequesPend.filter(c => new Date(c.fechaPago) < hoy).length;
-  // A vencer en los próximos 15 días: alerta proactiva
   const hoy15 = new Date(hoy.getTime() + 15 * 24 * 60 * 60 * 1000);
   const chequesAVencer15 = chequesPend.filter(c => {
     const f = new Date(c.fechaPago);
     return f >= hoy && f <= hoy15;
   }).length;
   const arrPendientes = arr.filter(a => !a.pagado).length;
-  const saldoPorCobrar = ccs.filter(c => c.tipo==='cliente').reduce((a,c)=>a+Number(c.saldo||0),0);
+  // Saldo por cobrar / por pagar calculado desde las CtaCtes filtradas (debe - haber por cliente)
+  // Esto es robusto ante snapshot porque las CtaCtes ya quedaron filtradas por fecha arriba.
+  const saldoPorCobrar = (() => {
+    const porCli = {};
+    ccs.filter(c => c.contactoTipo === 'cliente').forEach(c => {
+      const k = c.contactoId || 'sin';
+      porCli[k] = (porCli[k] || 0) + Number(c.debe||0) - Number(c.haber||0);
+    });
+    return Object.values(porCli).filter(v => v > 0).reduce((a,v) => a + v, 0);
+  })();
   const bajoStock = prods.filter(p => p.bajoMinimo).length;
 
   target.innerHTML = `
@@ -3447,11 +3590,31 @@ async function dashResumen() {
 /* ==== TAB: Finanzas (ingresos vs egresos detallado + categorías ingreso/egreso) ==== */
 async function dashFinanzas() {
   const target = $('#dash-content');
-  let flujo=[], ccs=[];
-  try { flujo = (await api('/api/flujo-caja')).data || []; } catch {}
-  try { ccs = (await api('/api/ctas-ctes')).data || []; } catch {}
+  let flujo=[], ccs=[], efectivos=[], bancoMovs=[];
+  try {
+    const [efRsp, bmRsp, ccRsp] = await Promise.all([
+      api('/api/efectivo').catch(()=>({data:[]})),
+      api('/api/banco-movimientos').catch(()=>({data:[]})),
+      api('/api/ctas-ctes').catch(()=>({data:[]})),
+    ]);
+    efectivos = efRsp.data || [];
+    bancoMovs = bmRsp.data || [];
+    ccs = (ccRsp.data || []).filter(c => dashFechaEnFiltro(c.fecha));
+  } catch {}
+  // Flujo: Efectivo + Banco-movimientos filtrados por dashFechaEnFiltro
+  for (const e of efectivos) {
+    if (e.tipo === 'transferencia') continue;
+    if (!dashFechaEnFiltro(e.fecha)) continue;
+    flujo.push({ fecha: e.fecha, monto: e.tipo === 'ingreso' ? Number(e.monto||0) : -Number(e.monto||0), categoria: e.clasificacion === 'propio' ? 'Personal' : 'Empresa' });
+  }
+  for (const m of bancoMovs) {
+    if (m.tipo !== 'transferencia_in' && m.tipo !== 'transferencia_out') continue;
+    if (!dashFechaEnFiltro(m.fecha)) continue;
+    flujo.push({ fecha: m.fecha, monto: m.tipo === 'transferencia_in' ? Number(m.monto||0) : -Number(m.monto||0), categoria: m.concepto?.slice(0,30) || 'Bancario' });
+  }
 
-  const hoy = new Date();
+  // Fecha "anchor": snapshot o hoy
+  const hoy = state.dashFilter?.snapshot ? new Date(state.dashFilter.snapshot) : new Date();
   const meses = [];
   for (let i=11;i>=0;i--) {
     const d = new Date(hoy.getFullYear(), hoy.getMonth()-i, 1);
@@ -3477,8 +3640,17 @@ async function dashFinanzas() {
   });
   const catColors = ['#16a34a','#0d9488','#0284c7','#7c3aed','#c026d3','#ea580c','#dc2626','#d97706','#ca8a04','#65a30d'];
 
-  const saldoCli = ccs.filter(c=>c.tipo==='cliente').reduce((a,c)=>a+Number(c.saldo||0),0);
-  const saldoProv = ccs.filter(c=>c.tipo==='proveedor').reduce((a,c)=>a+Number(c.saldo||0),0);
+  // Saldo neto cliente/proveedor: sumar debe - haber por contacto, sumar los positivos como saldo a cobrar y negativos absolutos como saldo a pagar
+  const calcSaldo = (tipo) => {
+    const porId = {};
+    ccs.filter(c => c.contactoTipo === tipo).forEach(c => {
+      const k = c.contactoId || 'sin';
+      porId[k] = (porId[k] || 0) + Number(c.debe||0) - Number(c.haber||0);
+    });
+    return Object.values(porId).filter(v => v > 0).reduce((a,v) => a + v, 0);
+  };
+  const saldoCli = calcSaldo('cliente');
+  const saldoProv = calcSaldo('proveedor');
 
   target.innerHTML = `
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -3542,6 +3714,15 @@ async function dashFinanzas() {
       options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{ font:{size:11} } } } }
     });
   }
+}
+
+// Helper para mostrar un aviso uniforme en los tabs que aún no respetan el filtro global.
+function dashAvisoSinFiltro() {
+  const f = state.dashFilter || {};
+  if (!f.desde && !f.hasta && !f.snapshot) return '';
+  return `<div class="mb-3 p-2 rounded bg-amber-50 border border-amber-300 text-amber-900 text-xs">
+    💡 Este análisis muestra el estado <b>al día de hoy</b>, no respeta los filtros de fecha de arriba. Si necesitás snapshot histórico de stock/producción/patrimonio, decímelo y lo agregamos.
+  </div>`;
 }
 
 /* ==== TAB: Stock (distribución, bajo mínimo, top productos) ==== */
