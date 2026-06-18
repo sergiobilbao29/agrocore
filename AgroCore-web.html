@@ -1333,6 +1333,37 @@ function catByTipo(tipos) {
   return list.filter(c => arr.includes(c.tipo) && c.activo !== false)
              .sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
 }
+
+// Lista de Condiciones de pago. Si el catálogo tiene entradas, las devuelve;
+// si no, devuelve un default razonable (Contado + Cta cte 15/30/60).
+// El "codigo" del catálogo guarda los días numéricos (ej. "0", "15", "30").
+// Si no hay código pero el nombre tiene "N días", se parsea de ahí.
+function condicionesDePago() {
+  const cat = catByTipo('Condición de pago');
+  if (cat.length > 0) {
+    return cat.map(c => {
+      let dias = null;
+      if (c.codigo != null && c.codigo !== '') {
+        const n = parseInt(c.codigo, 10);
+        if (!isNaN(n) && n >= 0) dias = n;
+      }
+      if (dias == null) {
+        const s = (c.nombre || '').toLowerCase();
+        if (s.includes('contado')) dias = 0;
+        const m = s.match(/(\d+)\s*d[ií]as?/i);
+        if (m) dias = Number(m[1]);
+      }
+      return { nombre: c.nombre, dias };
+    });
+  }
+  // Defaults si no hay catálogo cargado todavía
+  return [
+    { nombre: 'Contado',          dias: 0 },
+    { nombre: 'Cta cte 15 días',  dias: 15 },
+    { nombre: 'Cta cte 30 días',  dias: 30 },
+    { nombre: 'Cta cte 60 días',  dias: 60 },
+  ];
+}
 // Genera un <select> poblado con items del catálogo. Parámetros opcionales:
 //   - parent: filtra por descripcion == parent (jerarquía: Ciudad→Provincia→País)
 //   - parentSelect: id del select padre; cuando ese select cambia, este se recarga
@@ -2272,6 +2303,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'18/06/2026',
+      titulo:'📅 Condiciones de pago editables + vencimiento automático en Flujo de Fondos',
+      desc:'Nuevo catálogo "Condiciones de pago" en Configuración → Catálogos. Podés agregar/editar/borrar tus condiciones (ej. "Cta cte 45 días", "Cta cte 90 días", "Contado anticipado") con su cantidad de días. Cuando emitís una factura de venta o compra y elegís una condición, la CtaCte que se genera queda con vencimiento = fecha factura + N días. Eso alimenta directamente el Flujo de Fondos como cuenta a cobrar/pagar en la fecha correcta. Si no cargás el catálogo, el sistema usa las 4 condiciones default de siempre (Contado / Cta cte 15/30/60). El campo Código del catálogo guarda los días (0 = Contado, 15, 30, 60, 90...).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
       titulo:'💳 Ventas Contado: cobro en el mismo paso (igual que Compras)',
       desc:'Cuando emitís una factura de venta (Facturación → + Nueva o "Cargar factura externa ARCA") y elegís condición Contado, aparece un cuadro azul con selector de Método: Efectivo (caja), Cheque de terceros recibido (lista de cheques en cartera), Transferencia (cuenta bancaria) o "Sin cobro" (queda pendiente). Al confirmar se autoriza/registra la factura Y se registra el cobro en una sola operación. Requiere cliente seleccionado.' },
@@ -7613,7 +7647,7 @@ async function factForm() {
         </div>
         <div class="col-span-2"><label class="label">Condición venta</label>
           <select id="f-cv" class="input">
-            ${['Contado','Cta cte 15 días','Cta cte 30 días','Cta cte 60 días'].map(v=>`<option>${v}</option>`).join('')}
+            ${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}">${esc(c.nombre)}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -7736,6 +7770,10 @@ async function factSave() {
   if (errores.length) {
     if (!confirm(`Atención — stock insuficiente:\n\n${errores.join('\n')}\n\nEl stock va a quedar en negativo. ¿Continuar igual?`)) return;
   }
+  const cvSel = $('#f-cv');
+  const cvOpt = cvSel?.options?.[cvSel.selectedIndex];
+  const cvDiasRaw = cvOpt?.dataset?.dias;
+  const condicionDias = (cvDiasRaw != null && cvDiasRaw !== '') ? Number(cvDiasRaw) : null;
   const data = {
     tipo: $('#f-tipo').value,
     puntoVenta: Number($('#f-pv').value||1),
@@ -7743,6 +7781,7 @@ async function factSave() {
     fecha: new Date($('#f-fec').value).toISOString(),
     clienteId: $('#f-cli').value || null,
     condicionVenta: $('#f-cv').value,
+    condicionDias,
     observaciones: $('#f-obs').value.trim()||null,
     items,
   };
@@ -7832,7 +7871,7 @@ async function factFormExterna() {
         </div>
         <div class="col-span-2"><label class="label">Condición venta</label>
           <select id="fe-cv" class="input">
-            ${['Contado','Cta cte 15 días','Cta cte 30 días','Cta cte 60 días'].map(v=>`<option>${v}</option>`).join('')}
+            ${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}">${esc(c.nombre)}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -8061,6 +8100,10 @@ async function factSaveExterna() {
   if (errores.length) {
     if (!confirm(`Atención — stock insuficiente para registrar la factura:\n\n${errores.join('\n')}\n\nEl stock va a quedar en negativo. ¿Continuar igual?`)) return;
   }
+  const cvSel = $('#fe-cv');
+  const cvOpt = cvSel?.options?.[cvSel.selectedIndex];
+  const cvDiasRaw = cvOpt?.dataset?.dias;
+  const condicionDias = (cvDiasRaw != null && cvDiasRaw !== '') ? Number(cvDiasRaw) : null;
   const data = {
     origen: 'arca_externa',
     tipo: $('#fe-tipo').value,
@@ -8069,6 +8112,7 @@ async function factSaveExterna() {
     fecha: new Date($('#fe-fec').value).toISOString(),
     clienteId: $('#fe-cli').value || null,
     condicionVenta: $('#fe-cv').value,
+    condicionDias,
     observaciones: $('#fe-obs').value.trim()||null,
     cae,
     caeVto: new Date(caeVto).toISOString(),
@@ -8276,7 +8320,7 @@ async function compForm() {
           </select>
         </div>
         <div class="col-span-2"><label class="label">Condición compra</label>
-          <select id="f-cc" class="input">${['Contado','Cta cte 15 días','Cta cte 30 días','Cta cte 60 días'].map(v=>`<option>${v}</option>`).join('')}</select>
+          <select id="f-cc" class="input">${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}">${esc(c.nombre)}</option>`).join('')}</select>
         </div>
       </div>
       <div id="f-pdf-msg" class="text-xs"></div>
@@ -8499,6 +8543,11 @@ async function compSave() {
   if (!items.length) return toast('Agregá al menos un item','warn');
   const proveedorId = $('#f-prov').value || null;
   const pdfData = state._compraPdfData || null;
+  // Extraer días del option seleccionado (data-dias del catálogo de Condición de pago)
+  const ccSel = $('#f-cc');
+  const ccOpt = ccSel?.options?.[ccSel.selectedIndex];
+  const ccDiasRaw = ccOpt?.dataset?.dias;
+  const condicionDias = (ccDiasRaw != null && ccDiasRaw !== '') ? Number(ccDiasRaw) : null;
   const data = {
     tipo: $('#f-tipo').value,
     puntoVenta: Number($('#f-pv').value||1),
@@ -8506,6 +8555,7 @@ async function compSave() {
     fecha: new Date($('#f-fec').value).toISOString(),
     proveedorId,
     condicionCompra: $('#f-cc').value,
+    condicionDias,
     observaciones: $('#f-obs').value.trim()||null,
     items,
   };
@@ -13084,6 +13134,7 @@ const CAT_TABS = [
   { id:'condIVA',  label:'Condición IVA',       icon:'🧾', tipos:['Condición IVA'],      singular:'Condición' },
   { id:'bancos',   label:'Bancos',              icon:'🏦', tipos:['Banco'],              singular:'Banco' },
   { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', tipos:['Caja'],               singular:'Caja' },
+  { id:'condPago', label:'Condiciones de pago', icon:'📅', tipos:['Condición de pago'],  singular:'Condición de pago' },
   { id:'paises',   label:'Países',              icon:'🌎', tipos:['País'],               singular:'País' },
   { id:'provs',    label:'Provincias',          icon:'🗾', tipos:['Provincia'],          singular:'Provincia' },
   { id:'ciudades', label:'Ciudades / Localidades',icon:'🏙️', tipos:['Ciudad'],           singular:'Ciudad' },
@@ -13264,6 +13315,14 @@ function catForm(id=null, tabId=null) {
       <div id="f-ldef-tabla"></div>
       <div class="text-[11px] text-emerald-700 mt-2">💡 Estos insumos se cargan automáticamente cuando uses esta labor en "Labor avanzada" (multiplicados por las hectáreas aplicadas). Editables fila por fila después.</div>
     </div>`;
+  // Para "Condición de pago" el campo "Código" se usa para los DÍAS (0 = Contado, 15, 30, 60...)
+  const esCondPago = tipoActual === 'Condición de pago';
+  const codLabel = esCondPago
+    ? '<label class="label">Días *</label><div class="text-[10px] text-slate-500 -mt-1 mb-1">0 = Contado · 15 = 15 días · etc</div>'
+    : '<label class="label">Código</label>';
+  const codInput = esCondPago
+    ? `<input id="f-cod" type="number" min="0" class="input" value="${esc(it.codigo||'')}" placeholder="Ej: 30"/>`
+    : `<input id="f-cod" class="input" value="${esc(it.codigo||'')}"/>`;
   openModal({
     title: id?`Editar ${tab.singular.toLowerCase()}`:`Nuevo ${tab.singular.toLowerCase()}`,
     body: `
@@ -13273,8 +13332,8 @@ function catForm(id=null, tabId=null) {
             ${sugeridos.map(t=>`<option ${t===tipoActual?'selected':''}>${esc(t)}</option>`).join('')}
           </select>
         </div>
-        <div><label class="label">Código</label><input id="f-cod" class="input" value="${esc(it.codigo||'')}"/></div>
-        <div class="col-span-2"><label class="label">Nombre *</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}"/></div>
+        <div>${codLabel}${codInput}</div>
+        <div class="col-span-2"><label class="label">Nombre *</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}" placeholder="${esCondPago?'Ej: Cta cte 45 días':''}"/></div>
         ${parentField}
         ${laborPriceBlock}
         <div class="col-span-2 flex items-center gap-2">

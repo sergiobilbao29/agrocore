@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.19';
+const AGROCORE_VERSION = '0.7.20';
 const AGROCORE_BUILD = new Date('2026-06-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2079,14 +2079,37 @@ async function borrarMovimientosDeFactura(tx, { companyId, refPrefix, facturaId 
 // Genera el movimiento de Cuenta Corriente al crear una factura. El campo
 // `referencia` (FAC-{id} o FACC-{id}) sirve de link inverso para poder
 // borrarlo si la factura se anula o elimina.
-async function crearCtaCteDesdeFactura(tx, { companyId, factura, contactoTipo, contactoId, refPrefix, motivo }) {
+// Extrae los días de una condición de pago: usa condicionDias si vino explícito,
+// si no, intenta parsear del texto (ej. "Cta cte 30 días" → 30, "Contado" → 0).
+function _condicionDiasFrom(cond, diasExpl) {
+  if (typeof diasExpl === 'number' && diasExpl >= 0) return diasExpl;
+  if (!cond) return null;
+  const s = String(cond).toLowerCase();
+  if (s.includes('contado')) return 0;
+  const m = s.match(/(\d+)\s*d[ií]as?/i);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+async function crearCtaCteDesdeFactura(tx, { companyId, factura, contactoTipo, contactoId, refPrefix, motivo, condicion, condicionDias }) {
   if (!contactoId) return; // sin cliente/proveedor registrado no hay cuenta corriente
   const compNum = `${String(factura.puntoVenta).padStart(4, '0')}-${String(factura.numero).padStart(8, '0')}`;
+  // Calcular vencimiento si la condición lo permite
+  const dias = _condicionDiasFrom(condicion, condicionDias);
+  let vencimiento = null;
+  if (dias != null && dias > 0) {
+    vencimiento = new Date(factura.fecha);
+    vencimiento.setDate(vencimiento.getDate() + dias);
+  } else if (dias === 0) {
+    // Contado: vencimiento = misma fecha de factura (a cobrar/pagar YA)
+    vencimiento = new Date(factura.fecha);
+  }
   await tx.ctaCte.create({
     data: {
       companyId,
       contactoTipo, contactoId,
       fecha: factura.fecha,
+      vencimiento,
       detalle: `${motivo} ${factura.tipo} ${compNum}`,
       debe: Number(factura.total) || 0,
       haber: 0,
@@ -2156,6 +2179,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       numero: z.number().int(),
       fecha: z.coerce.date(),
       condicionVenta: z.string().nullable().optional(),
+      condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo de Condiciones de pago
       observaciones: z.string().nullable().optional(),
       origen: z.enum(['agrocore', 'arca_externa']).optional().default('agrocore'),
       cae: z.string().optional(),
@@ -2206,6 +2230,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         companyId: req.companyId, factura: f,
         contactoTipo: 'cliente', contactoId: input.clienteId || null,
         refPrefix: 'FAC', motivo: 'Factura',
+        condicion: input.condicionVenta, condicionDias: input.condicionDias,
       });
       return f;
     });
@@ -2273,6 +2298,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       numero: z.number().int(),
       fecha: z.coerce.date(),
       condicionCompra: z.string().nullable().optional(),
+      condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
       // Datos del emisor cuando no hay proveedor en el catálogo (vienen del PDF)
@@ -2313,6 +2339,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
         companyId: req.companyId, factura: f,
         contactoTipo: 'proveedor', contactoId: input.proveedorId || null,
         refPrefix: 'FACC', motivo: 'Compra',
+        condicion: input.condicionCompra, condicionDias: input.condicionDias,
       });
       return f;
     });
