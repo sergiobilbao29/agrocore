@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.23';
-const AGROCORE_BUILD = new Date('2026-06-19').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.24';
+const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -1800,9 +1800,12 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
   } catch (e) { next(e); }
 });
 
-// Stock desglosado por depósito: filas [{productoId, productoNombre, depositoId, depositoNombre, depositoCompartido, existencia}]
-// Útil para mostrar de un vistazo cuánto hay en cada lugar.
-app.get('/api/stock-por-deposito', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+// Stock desglosado por depósito (filas planas) — para el Resumen multi-empresa.
+// OJO: este endpoint NO debe llamarse '/api/stock-por-deposito' porque hay otro
+// con esa ruta más abajo (línea ~3551) que devuelve formato distinto (con array
+// anidado de depósitos) usado por pages.cerealeras y otros. Express usa el
+// primero que matchee, así que aquí va con sufijo "-flat".
+app.get('/api/stock-por-deposito-flat', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     const productos = await prisma.producto.findMany({
       where: { companyId: req.companyId, activo: true },
@@ -2091,18 +2094,25 @@ function _condicionDiasFrom(cond, diasExpl) {
   return null;
 }
 
-async function crearCtaCteDesdeFactura(tx, { companyId, factura, contactoTipo, contactoId, refPrefix, motivo, condicion, condicionDias }) {
+async function crearCtaCteDesdeFactura(tx, { companyId, factura, contactoTipo, contactoId, refPrefix, motivo, condicion, condicionDias, vencimientoFecha }) {
   if (!contactoId) return; // sin cliente/proveedor registrado no hay cuenta corriente
   const compNum = `${String(factura.puntoVenta).padStart(4, '0')}-${String(factura.numero).padStart(8, '0')}`;
-  // Calcular vencimiento si la condición lo permite
-  const dias = _condicionDiasFrom(condicion, condicionDias);
   let vencimiento = null;
-  if (dias != null && dias > 0) {
-    vencimiento = new Date(factura.fecha);
-    vencimiento.setDate(vencimiento.getDate() + dias);
-  } else if (dias === 0) {
-    // Contado: vencimiento = misma fecha de factura (a cobrar/pagar YA)
-    vencimiento = new Date(factura.fecha);
+  // 1) Fecha fija (típico en agro: "pago en cosecha 2027") tiene prioridad
+  if (vencimientoFecha) {
+    const d = new Date(vencimientoFecha);
+    if (!isNaN(d.getTime())) vencimiento = d;
+  }
+  // 2) Si no hay fecha fija, calculamos con los días
+  if (!vencimiento) {
+    const dias = _condicionDiasFrom(condicion, condicionDias);
+    if (dias != null && dias > 0) {
+      vencimiento = new Date(factura.fecha);
+      vencimiento.setDate(vencimiento.getDate() + dias);
+    } else if (dias === 0) {
+      // Contado: vencimiento = misma fecha de factura
+      vencimiento = new Date(factura.fecha);
+    }
   }
   await tx.ctaCte.create({
     data: {
@@ -2180,6 +2190,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       fecha: z.coerce.date(),
       condicionVenta: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo de Condiciones de pago
+      vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
       observaciones: z.string().nullable().optional(),
       origen: z.enum(['agrocore', 'arca_externa']).optional().default('agrocore'),
       cae: z.string().optional(),
@@ -2231,6 +2242,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         contactoTipo: 'cliente', contactoId: input.clienteId || null,
         refPrefix: 'FAC', motivo: 'Factura',
         condicion: input.condicionVenta, condicionDias: input.condicionDias,
+        vencimientoFecha: input.vencimientoFecha || null,
       });
       return f;
     });
@@ -2299,6 +2311,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       fecha: z.coerce.date(),
       condicionCompra: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo
+      vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
       // Datos del emisor cuando no hay proveedor en el catálogo (vienen del PDF)
@@ -2340,6 +2353,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
         contactoTipo: 'proveedor', contactoId: input.proveedorId || null,
         refPrefix: 'FACC', motivo: 'Compra',
         condicion: input.condicionCompra, condicionDias: input.condicionDias,
+        vencimientoFecha: input.vencimientoFecha || null,
       });
       return f;
     });

@@ -1335,34 +1335,36 @@ function catByTipo(tipos) {
              .sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
 }
 
-// Lista de Condiciones de pago. Si el catálogo tiene entradas, las devuelve;
-// si no, devuelve un default razonable (Contado + Cta cte 15/30/60).
-// El "codigo" del catálogo guarda los días numéricos (ej. "0", "15", "30").
-// Si no hay código pero el nombre tiene "N días", se parsea de ahí.
+// Lista de Condiciones de pago. Soporta DOS modos:
+//   - Por días: el "codigo" del catálogo es un número (ej. "0", "15", "30", "360")
+//   - A fecha fija: el "codigo" empieza con "F:" seguido de fecha YYYY-MM-DD
+//                  (ej. "F:2027-05-01" para pago en mayo 2027 — cosecha)
+// Si no hay catálogo cargado, devuelve los 4 defaults clásicos.
 function condicionesDePago() {
   const cat = catByTipo('Condición de pago');
   if (cat.length > 0) {
     return cat.map(c => {
-      let dias = null;
-      if (c.codigo != null && c.codigo !== '') {
-        const n = parseInt(c.codigo, 10);
-        if (!isNaN(n) && n >= 0) dias = n;
-      }
-      if (dias == null) {
-        const s = (c.nombre || '').toLowerCase();
-        if (s.includes('contado')) dias = 0;
-        const m = s.match(/(\d+)\s*d[ií]as?/i);
-        if (m) dias = Number(m[1]);
-      }
-      return { nombre: c.nombre, dias };
+      const cod = String(c.codigo || '').trim();
+      // Fecha fija
+      const mF = cod.match(/^F:(\d{4}-\d{2}-\d{2})$/i);
+      if (mF) return { nombre: c.nombre, dias: null, fechaFija: mF[1] };
+      // Días numéricos
+      const n = parseInt(cod, 10);
+      if (!isNaN(n) && n >= 0) return { nombre: c.nombre, dias: n, fechaFija: null };
+      // Parseo defensivo del nombre
+      const s = (c.nombre || '').toLowerCase();
+      if (s.includes('contado')) return { nombre: c.nombre, dias: 0, fechaFija: null };
+      const mD = s.match(/(\d+)\s*d[ií]as?/i);
+      if (mD) return { nombre: c.nombre, dias: Number(mD[1]), fechaFija: null };
+      return { nombre: c.nombre, dias: null, fechaFija: null };
     });
   }
-  // Defaults si no hay catálogo cargado todavía
+  // Defaults
   return [
-    { nombre: 'Contado',          dias: 0 },
-    { nombre: 'Cta cte 15 días',  dias: 15 },
-    { nombre: 'Cta cte 30 días',  dias: 30 },
-    { nombre: 'Cta cte 60 días',  dias: 60 },
+    { nombre: 'Contado',          dias: 0,   fechaFija: null },
+    { nombre: 'Cta cte 15 días',  dias: 15,  fechaFija: null },
+    { nombre: 'Cta cte 30 días',  dias: 30,  fechaFija: null },
+    { nombre: 'Cta cte 60 días',  dias: 60,  fechaFija: null },
   ];
 }
 // Genera un <select> poblado con items del catálogo. Parámetros opcionales:
@@ -2304,6 +2306,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'20/06/2026',
+      titulo:'🛠️ Hotfix: Depósitos / Cerealeras no abría — ya está solucionado',
+      desc:'La página Stock → Cerealeras / Depósitos se quedaba colgada en "Cargando..." por un endpoint duplicado que se nos coló en v0.7.13. Ya está corregido (el otro endpoint pasó a llamarse "/api/stock-por-deposito-flat") y la página vuelve a abrir normal con la separación por tipo (Cerealera vs Otros depósitos).' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'20/06/2026',
+      titulo:'📆 Condiciones de pago a FECHA FIJA (típico cosecha 2027)',
+      desc:'En Configuración → Catálogos → Condiciones de pago ahora podés elegir entre DOS tipos de plazo: (1) "📅 Por días desde la factura" — como siempre: 0=Contado, 15, 30, 60, 360... y (2) "📆 Fecha fija de vencimiento" — para los casos típicos del agro donde se acuerda "pago en cosecha 2027" o "Mayo 2027" sin importar cuándo se emita la factura. Cuando creás una condición "a fecha fija", al usarla en una factura de venta o compra, la Cta Cte queda con vencimiento exactamente en esa fecha (sin importar la fecha de la factura). Eso impacta directo en el Flujo de Fondos: vas a ver el ingreso/egreso proyectado en el mes correcto (mayo/junio/julio 2027 — plena cosecha). Ejemplo: creá "Cosecha mayo 2027" (📆 fecha fija = 2027-05-01) y "Cosecha junio 2027" (= 2027-06-01); de ahí en adelante cargás facturas y ya sabés cuándo cae la plata. Las condiciones por días siguen funcionando como siempre (recomendado para pagos < 90 días).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/06/2026',
       titulo:'📅 Dashboard: filtros de fecha + Snapshot a fecha (estado al cierre)',
       desc:'Arriba del Dashboard ahora hay un bloque con 3 filtros: Desde / Hasta (para analizar un periodo) y Snapshot al (para ver estado al cierre de una fecha — ideal para el contador que pide "estado al 31/12"). Botones rapidos: Mes actual · Mes pasado · Año. La preferencia se guarda en el navegador. Los tabs Resumen general y Finanzas aplican los filtros: ingresos/egresos/cheques/cuentas corrientes se recalculan al periodo elegido. Los KPI cambian, los graficos cambian, los saldos se recalculan a la fecha. En modo Snapshot, "cheques vencidos" significa los que estaban vencidos al cierre, no los de hoy. Los tabs Stock / Producción / Patrimonio siguen mostrando estado actual (los iremos sumando al filtro en proximas versiones — son mas complejos porque requieren reconstruir el stock historico).' },
@@ -7835,7 +7843,7 @@ async function factForm() {
         </div>
         <div class="col-span-2"><label class="label">Condición venta</label>
           <select id="f-cv" class="input">
-            ${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}">${esc(c.nombre)}</option>`).join('')}
+            ${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}" data-fecha="${c.fechaFija||''}">${esc(c.nombre)}${c.fechaFija?` (vto ${fmtDate(c.fechaFija)})`:''}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -7961,7 +7969,9 @@ async function factSave() {
   const cvSel = $('#f-cv');
   const cvOpt = cvSel?.options?.[cvSel.selectedIndex];
   const cvDiasRaw = cvOpt?.dataset?.dias;
+  const cvFechaRaw = cvOpt?.dataset?.fecha || '';
   const condicionDias = (cvDiasRaw != null && cvDiasRaw !== '') ? Number(cvDiasRaw) : null;
+  const vencimientoFecha = cvFechaRaw || null;  // YYYY-MM-DD si la condición es "a fecha fija"
   const data = {
     tipo: $('#f-tipo').value,
     puntoVenta: Number($('#f-pv').value||1),
@@ -7970,6 +7980,7 @@ async function factSave() {
     clienteId: $('#f-cli').value || null,
     condicionVenta: $('#f-cv').value,
     condicionDias,
+    vencimientoFecha,
     observaciones: $('#f-obs').value.trim()||null,
     items,
   };
@@ -8059,7 +8070,7 @@ async function factFormExterna() {
         </div>
         <div class="col-span-2"><label class="label">Condición venta</label>
           <select id="fe-cv" class="input">
-            ${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}">${esc(c.nombre)}</option>`).join('')}
+            ${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}" data-fecha="${c.fechaFija||''}">${esc(c.nombre)}${c.fechaFija?` (vto ${fmtDate(c.fechaFija)})`:''}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -8291,7 +8302,9 @@ async function factSaveExterna() {
   const cvSel = $('#fe-cv');
   const cvOpt = cvSel?.options?.[cvSel.selectedIndex];
   const cvDiasRaw = cvOpt?.dataset?.dias;
+  const cvFechaRaw = cvOpt?.dataset?.fecha || '';
   const condicionDias = (cvDiasRaw != null && cvDiasRaw !== '') ? Number(cvDiasRaw) : null;
+  const vencimientoFecha = cvFechaRaw || null;
   const data = {
     origen: 'arca_externa',
     tipo: $('#fe-tipo').value,
@@ -8301,6 +8314,7 @@ async function factSaveExterna() {
     clienteId: $('#fe-cli').value || null,
     condicionVenta: $('#fe-cv').value,
     condicionDias,
+    vencimientoFecha,
     observaciones: $('#fe-obs').value.trim()||null,
     cae,
     caeVto: new Date(caeVto).toISOString(),
@@ -8508,7 +8522,7 @@ async function compForm() {
           </select>
         </div>
         <div class="col-span-2"><label class="label">Condición compra</label>
-          <select id="f-cc" class="input">${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}">${esc(c.nombre)}</option>`).join('')}</select>
+          <select id="f-cc" class="input">${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}" data-fecha="${c.fechaFija||''}">${esc(c.nombre)}${c.fechaFija?` (vto ${fmtDate(c.fechaFija)})`:''}</option>`).join('')}</select>
         </div>
       </div>
       <div id="f-pdf-msg" class="text-xs"></div>
@@ -8731,11 +8745,13 @@ async function compSave() {
   if (!items.length) return toast('Agregá al menos un item','warn');
   const proveedorId = $('#f-prov').value || null;
   const pdfData = state._compraPdfData || null;
-  // Extraer días del option seleccionado (data-dias del catálogo de Condición de pago)
+  // Extraer días + fecha fija del option seleccionado del catálogo de Condición de pago
   const ccSel = $('#f-cc');
   const ccOpt = ccSel?.options?.[ccSel.selectedIndex];
   const ccDiasRaw = ccOpt?.dataset?.dias;
+  const ccFechaRaw = ccOpt?.dataset?.fecha || '';
   const condicionDias = (ccDiasRaw != null && ccDiasRaw !== '') ? Number(ccDiasRaw) : null;
+  const vencimientoFecha = ccFechaRaw || null;
   const data = {
     tipo: $('#f-tipo').value,
     puntoVenta: Number($('#f-pv').value||1),
@@ -8744,6 +8760,7 @@ async function compSave() {
     proveedorId,
     condicionCompra: $('#f-cc').value,
     condicionDias,
+    vencimientoFecha,
     observaciones: $('#f-obs').value.trim()||null,
     items,
   };
@@ -13504,14 +13521,35 @@ function catForm(id=null, tabId=null) {
       <div id="f-ldef-tabla"></div>
       <div class="text-[11px] text-emerald-700 mt-2">💡 Estos insumos se cargan automáticamente cuando uses esta labor en "Labor avanzada" (multiplicados por las hectáreas aplicadas). Editables fila por fila después.</div>
     </div>`;
-  // Para "Condición de pago" el campo "Código" se usa para los DÍAS (0 = Contado, 15, 30, 60...)
+  // Para "Condición de pago" el campo "Código" guarda los DÍAS (0=Contado, 15, 30, 360...)
+  // o una FECHA FIJA con prefijo "F:" (ej. "F:2027-05-01" para pago en mayo 2027 — cosecha).
   const esCondPago = tipoActual === 'Condición de pago';
-  const codLabel = esCondPago
-    ? '<label class="label">Días *</label><div class="text-[10px] text-slate-500 -mt-1 mb-1">0 = Contado · 15 = 15 días · etc</div>'
-    : '<label class="label">Código</label>';
-  const codInput = esCondPago
-    ? `<input id="f-cod" type="number" min="0" class="input" value="${esc(it.codigo||'')}" placeholder="Ej: 30"/>`
-    : `<input id="f-cod" class="input" value="${esc(it.codigo||'')}"/>`;
+  const codActual = String(it.codigo || '').trim();
+  const esFechaFija = /^F:\d{4}-\d{2}-\d{2}$/i.test(codActual);
+  const fechaFijaVal = esFechaFija ? codActual.slice(2) : '';
+  const diasVal      = !esFechaFija ? codActual : '';
+  let codLabel, codInput;
+  if (esCondPago) {
+    codLabel = `<label class="label">Tipo de plazo *</label>
+      <select id="f-cod-tipo" class="input" onchange="catCondPagoToggle()">
+        <option value="dias"  ${esFechaFija?'':'selected'}>📅 Por días desde la factura</option>
+        <option value="fecha" ${esFechaFija?'selected':''}>📆 Fecha fija de vencimiento (ej. cosecha)</option>
+      </select>`;
+    codInput = `
+      <div id="f-cod-dias-wrap" style="${esFechaFija?'display:none':''}" class="mt-2">
+        <label class="label">Días</label>
+        <input id="f-cod-dias" type="number" min="0" class="input" value="${esc(diasVal)}" placeholder="Ej: 30 · 360 · 0=Contado"/>
+        <div class="text-[10px] text-slate-500 mt-1">0 = Contado · 15/30/60 = a 15/30/60 días · 360 = cosecha del año siguiente</div>
+      </div>
+      <div id="f-cod-fecha-wrap" style="${esFechaFija?'':'display:none'}" class="mt-2">
+        <label class="label">Vencimiento</label>
+        <input id="f-cod-fecha" type="date" class="input" value="${esc(fechaFijaVal)}"/>
+        <div class="text-[10px] text-slate-500 mt-1">Ideal para "Cosecha 2027" o cualquier fecha de pago acordada</div>
+      </div>`;
+  } else {
+    codLabel = '<label class="label">Código</label>';
+    codInput = `<input id="f-cod" class="input" value="${esc(it.codigo||'')}"/>`;
+  }
   openModal({
     title: id?`Editar ${tab.singular.toLowerCase()}`:`Nuevo ${tab.singular.toLowerCase()}`,
     body: `
@@ -13589,13 +13627,36 @@ function catInsumoSet(idx, campo, valor) {
   if (!state.catInsumosDef || !state.catInsumosDef[idx]) return;
   state.catInsumosDef[idx][campo] = valor;
 }
+function catCondPagoToggle() {
+  const t = $('#f-cod-tipo')?.value || 'dias';
+  const dWrap = $('#f-cod-dias-wrap');
+  const fWrap = $('#f-cod-fecha-wrap');
+  if (dWrap) dWrap.style.display = t === 'dias'  ? '' : 'none';
+  if (fWrap) fWrap.style.display = t === 'fecha' ? '' : 'none';
+}
 async function catSave(id) {
   const descEl = $('#f-desc');
   const descVal = descEl ? (descEl.tagName === 'SELECT' ? descEl.value : descEl.value.trim()) : null;
   const tipo = $('#f-tipo').value;
+  // Código: para Condición de pago se compone (días o "F:fecha"); para el resto, input plano.
+  let codigoVal = null;
+  if (tipo === 'Condición de pago') {
+    const t = $('#f-cod-tipo')?.value || 'dias';
+    if (t === 'fecha') {
+      const f = ($('#f-cod-fecha')?.value || '').trim();
+      if (!f) return toast('Indicá la fecha de vencimiento','warn');
+      codigoVal = 'F:' + f;
+    } else {
+      const d = ($('#f-cod-dias')?.value || '').trim();
+      if (d === '') return toast('Indicá los días (0 = Contado)','warn');
+      codigoVal = d;
+    }
+  } else {
+    codigoVal = $('#f-cod')?.value.trim() || null;
+  }
   const data = {
     tipo,
-    codigo: $('#f-cod').value.trim()||null,
+    codigo: codigoVal,
     nombre: $('#f-nom').value.trim(),
     descripcion: descVal || null,
     activo: $('#f-act').checked,
