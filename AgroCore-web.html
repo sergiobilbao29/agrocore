@@ -2312,6 +2312,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
+      titulo:'🧾 Facturas: el item del dropdown ahora trae TODOS los insumos del catálogo',
+      desc:'Al cargar una factura de compra o venta, el selector de item del catálogo ahora muestra: (1) todos los Productos como antes; y (2) todos los items del catálogo de Insumos (los 17 que tenés cargados: 2,4-D, Atrazina, Glifosato Sulfosato, Glifosato Touchdown Max, etc) bajo el grupo "Insumos del catálogo". Si elegís uno del catálogo que aún no es Producto, el sistema lo crea automáticamente al guardar la factura — listo para tener stock. También: sacamos el "Stock: X kg" del label del dropdown (ahora sólo dice "Nombre (unidad)") para que sea más limpio. La validación de stock negativo en ventas sigue funcionando: si vendés más de lo que hay, te avisa qué falta y te pregunta si querés continuar igual (el stock queda en negativo).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/06/2026',
       titulo:'🛠️ Hotfix: Agenda daba "Not found" — ya está solucionado',
       desc:'En v0.7.25/v0.7.26 los endpoints de Agenda quedaron declarados después del catch-all 404 de Express. Resultado: cualquier llamada a /api/recordatorios devolvía 404 ("Not found"). Movimos los endpoints al lugar correcto. Si actualizás a v0.7.27, la Agenda funciona normal.' },
@@ -7801,21 +7804,36 @@ pages.facturacion = async function() {
 };
 function factFiltrosLimpiar() { state.ventaFilter = { desde:'', hasta:'', clienteId:'', tipo:'' }; pages.facturacion(); }
 function factItemRow(i=0, it={}) {
+  // El dropdown muestra TODOS los items disponibles del catálogo:
+  //  1) Productos reales (con stock)
+  //  2) Catálogo "Insumo" (items definidos que aún no son Productos)
+  // El usuario sólo ve "Nombre (unidad)" — sin "Stock: X kg".
+  // Cuando elige un item del catálogo sin Producto correspondiente, el backend
+  // lo crea al guardar la factura.
   const prods = state.cache.productos || [];
+  const cats  = (state.cache.catalogos || []).filter(c => c.tipo === 'Insumo' && c.activo !== false);
   const stockMap = state.cache.stockMap || {};
   const pid = it.productoId || '';
-  const opts = prods.map(p => {
+  // Nombres de productos para no duplicar con los del catálogo
+  const nombresProd = new Set(prods.map(p => (p.nombre||'').toLowerCase().trim()));
+  const optsProd = prods.map(p => {
     const stock = stockMap[p.id];
-    const stockTxt = stock != null ? ` · Stock: ${fmtN(stock)} ${p.unidad||''}` : '';
-    const lbl = `${p.nombre} (${p.unidad || ''})${stockTxt}`;
-    return `<option value="${p.id}" data-stock="${stock!=null?stock:''}" data-precio="${p.precioReferencia||''}" data-unidad="${esc(p.unidad||'')}" data-nombre="${esc(p.nombre||'')}" ${p.id===pid?'selected':''}>${esc(lbl)}</option>`;
+    const lbl = `${p.nombre} (${p.unidad || ''})`;
+    return `<option value="${p.id}" data-stock="${stock!=null?stock:''}" data-precio="${p.precioReferencia||''}" data-unidad="${esc(p.unidad||'')}" data-nombre="${esc(p.nombre||'')}" data-cat="${esc(p.categoria||'')}" ${p.id===pid?'selected':''}>${esc(lbl)}</option>`;
+  }).join('');
+  const optsCat = cats.filter(c => !nombresProd.has((c.nombre||'').toLowerCase().trim())).map(c => {
+    // value vacío + data-nombre = al guardar el backend lo crea como Producto
+    const unidad = c.descripcion ? c.descripcion.replace(/\/.*$/, '').trim() : '';
+    const lbl = `${c.nombre}${unidad?` (${unidad})`:''}`;
+    return `<option value="" data-nombre="${esc(c.nombre)}" data-unidad="${esc(unidad)}" data-cat="insumo" data-from-catalogo="1">${esc(lbl)}</option>`;
   }).join('');
   return `
     <tr data-fi>
       <td>
         <select class="input text-sm" data-f="productoId" onchange="factItemPickProducto(this)">
           <option value="">— Texto libre (sin stock) —</option>
-          ${opts}
+          ${optsProd}
+          ${optsCat ? `<optgroup label="Insumos del catálogo">${optsCat}</optgroup>` : ''}
         </select>
       </td>
       <td><input class="input text-sm" data-f="descripcion" value="${esc(it.descripcion||'')}" placeholder="Detalle del item"/></td>
@@ -7834,7 +7852,13 @@ function factItemPickProducto(sel) {
   const tr = sel.closest('tr');
   if (!tr) return;
   const opt = sel.options[sel.selectedIndex];
-  if (!opt || !opt.value) return; // texto libre, no toca nada
+  if (!opt) return;
+  // Marcar en el TR los metadatos del item elegido para que se envíen al guardar
+  tr.dataset.productoNombre    = opt.dataset.nombre || '';
+  tr.dataset.productoUnidad    = opt.dataset.unidad || '';
+  tr.dataset.productoCategoria = opt.dataset.cat || '';
+  tr.dataset.fromCatalogo      = opt.dataset.fromCatalogo || '';
+  if (!opt.value && !opt.dataset.nombre) return; // texto libre puro
   const desc = tr.querySelector('[data-f="descripcion"]');
   const prc  = tr.querySelector('[data-f="precioUnit"]');
   const nombre = opt.dataset.nombre || '';
@@ -7992,6 +8016,9 @@ function ventMetodoCambio(prefix) {
 async function factSave() {
   const items = $$('#fi-tbody tr[data-fi]').map(tr => ({
     productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
+    productoNombre: tr.dataset.productoNombre || null,
+    productoUnidad: tr.dataset.productoUnidad || null,
+    productoCategoria: tr.dataset.productoCategoria || null,
     descripcion: tr.querySelector('[data-f="descripcion"]').value.trim(),
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),
@@ -8325,6 +8352,9 @@ async function factSaveExterna() {
   if (!nro) return toast('Falta el número de la factura.','warn');
   const items = $$('#fei-tbody tr[data-fei]').map(tr => ({
     productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
+    productoNombre: tr.dataset.productoNombre || null,
+    productoUnidad: tr.dataset.productoUnidad || null,
+    productoCategoria: tr.dataset.productoCategoria || null,
     descripcion: tr.querySelector('[data-f="descripcion"]').value.trim(),
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),
@@ -8786,6 +8816,9 @@ async function compCrearProveedorDesdePDF() {
 async function compSave() {
   const items = $$('#fi-tbody tr[data-fi]').map(tr => ({
     productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
+    productoNombre: tr.dataset.productoNombre || null,
+    productoUnidad: tr.dataset.productoUnidad || null,
+    productoCategoria: tr.dataset.productoCategoria || null,
     descripcion: tr.querySelector('[data-f="descripcion"]').value.trim(),
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),

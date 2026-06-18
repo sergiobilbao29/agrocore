@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.27';
+const AGROCORE_VERSION = '0.7.28';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2134,8 +2134,35 @@ async function borrarCtaCteDeFactura(tx, { companyId, refPrefix, facturaId }) {
   });
 }
 
+
+// Para items de factura que vienen sin productoId pero con productoNombre,
+// busca o crea el Producto en la empresa. Devuelve el productoId.
+async function _ensureProductoFromItem(tx, companyId, item) {
+  if (item.productoId) return item.productoId;
+  const nombre = (item.productoNombre || '').trim();
+  if (!nombre) return null;
+  const existing = await tx.producto.findFirst({
+    where: { companyId, nombre: { equals: nombre, mode: 'insensitive' } },
+  });
+  if (existing) return existing.id;
+  const creado = await tx.producto.create({ data: {
+    companyId,
+    nombre,
+    unidad: (item.productoUnidad || '').trim() || null,
+    categoria: (item.productoCategoria || 'insumo').trim().toLowerCase(),
+    activo: true,
+  }});
+  return creado.id;
+}
+
 const itemFacSchema = z.object({
   productoId: z.string().nullable().optional(),
+  // Si productoId es null pero vienen estos campos, el backend crea el Producto
+  // al vuelo (típico cuando el usuario carga un item del catálogo "Insumos"
+  // que aún no existe como Producto).
+  productoNombre: z.string().nullable().optional(),
+  productoUnidad: z.string().nullable().optional(),
+  productoCategoria: z.string().nullable().optional(),
   descripcion: z.string().min(1), cantidad: z.number(),
   precioUnit: z.number(), alicuotaIva: z.number().optional(),
 });
@@ -2207,7 +2234,6 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         return res.status(400).json({ ok: false, error: 'Falta la fecha de vencimiento del CAE.' });
       }
     }
-    const totales = calcFactura(input.items);
     const cae = input.origen === 'arca_externa'
       ? input.cae
       : Math.floor(1e13 + Math.random() * 9e13).toString();
@@ -2219,6 +2245,11 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
     }
     // Transaccion: crear factura + descontar stock con movimientos egreso.
     const factura = await prisma.$transaction(async (tx) => {
+      // Resolver productoIds desde nombre (crea Producto si no existe)
+      for (const it of input.items) {
+        it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
+      }
+      const totales = calcFactura(input.items);
       const f = await tx.factura.create({
         data: {
           companyId: req.companyId, clienteId: input.clienteId || null,
@@ -2329,9 +2360,13 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       ].filter(Boolean).join(' · ');
       input.observaciones = ext + (input.observaciones ? ' | ' + input.observaciones : '');
     }
-    const totales = calcFactura(input.items);
     // Transaccion: crear factura compra + sumar stock con movimientos ingreso.
     const factura = await prisma.$transaction(async (tx) => {
+      // Resolver productoIds desde nombre (crea Producto si no existe)
+      for (const it of input.items) {
+        it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
+      }
+      const totales = calcFactura(input.items);
       const f = await tx.facturaCompra.create({
         data: {
           companyId: req.companyId, proveedorId: input.proveedorId || null,
