@@ -923,7 +923,7 @@ const MODULES = [
 
   // ===== TABLERO — vistas rápidas y resúmenes =====
   { id:'dashboard',     label:'Dashboard',            icon:'📊', perm:'dashboard:read',  section:'Tablero' },
-  { id:'flujoProyectado',label:'Estado de situación', icon:'🎯', perm:'finanzas:read',   section:'Tablero' },
+  { id:'flujoProyectado',label:'Flujo de Fondos',     icon:'🎯', perm:'finanzas:read',   section:'Tablero' },
   { id:'flujoCaja',     label:'Flujo de caja',        icon:'📈', perm:'finanzas:read',   section:'Tablero' },
   { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:null,              section:'Tablero' },
 
@@ -2272,6 +2272,18 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'📄 PDF: ahora trae descripcion del producto y crea proveedor solo',
+      desc:'Al cargar el PDF de una factura, el sistema toma la linea "Producto / Servicio" como descripcion del item (antes ponia un texto generico), y la cantidad/unidad si se pueden detectar. Si el CUIT del emisor no coincide con ningun proveedor del catalogo, aparece un cartel amarillo con boton "+ Crear proveedor con estos datos" que crea el proveedor con razon social + CUIT en un click. Aunque no crees el proveedor, los datos del emisor (razon social, CUIT, CAE) quedan en observaciones de la factura.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'💳 Factura de compra Contado: pago en el mismo paso',
+      desc:'Cuando la condicion de compra es Contado, aparece un cuadro azul con selector de Metodo (Efectivo+caja, Cheque en cartera, Transferencia banco+cuenta). Al guardar se crea la factura Y se registra el pago en el metodo elegido en una operacion. Si el metodo queda en "Sin pago", la factura queda pendiente de pago.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'🏷️ Filtros multi-seleccion en Resumen multi-empresa',
+      desc:'Cajas por empresa: chips clickeables para tildar UNA O VARIAS cajas y UNA O VARIAS empresas a la vez. El banner verde del consolidado suma todo lo filtrado. Stock por empresa y deposito: idem, chips de producto, empresa y deposito multi-tildables. Los filtros se guardan en el navegador.' },
+    { tag:'Cambio', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'18/06/2026',
+      titulo:'📊 "Estado de situacion" → "Flujo de Fondos"',
+      desc:'Se renombro la pagina "Estado de situacion" a "Flujo de Fondos" — refleja mejor que la pagina muestra saldo actual + entradas y salidas FUTURAS de fondos ordenadas cronologicamente. La pagina "Flujo de Caja" queda con su nombre (movimientos historicos/reales de caja del periodo). Si en el futuro se quiere distinguir mejor, vemos. Sin cambios funcionales — solo el nombre.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
       titulo:'📄 Parser PDF de factura ARCA híbrido (QR + texto)',
       desc:'El parser ahora extrae los datos de la factura del PDF de dos maneras: si encuentra el QR de AFIP lo decodifica (fuente oficial); si no, parsea directamente el TEXTO del PDF buscando los campos típicos de una factura ARCA (Punto de Venta, Comp. Nro, CAE, Vto CAE, CUIT emisor/receptor, Razón Social, Importe Neto Gravado, IVA 21/10.5/27/5/2.5%, Importe Total, COD tipo). Probado con facturas reales — funciona con la mayoría de los PDFs aunque el QR no esté como texto.' },
@@ -3806,12 +3818,53 @@ pages.resumenGlobal = async function() {
   if (!seleccionadas || seleccionadas.size === 0) {
     seleccionadas = new Set(todasLasEmpresas.map(e => e.companyId));
   }
-  let cajaFiltro = localStorage.getItem(CAJA_KEY) || '';
-  // Filtros del recuadro de stock multi-empresa
+  // Filtro de cajas: ahora MULTI-SELECT (Set de nombres). Se carga del localStorage.
+  let cajasFiltro = (() => {
+    try {
+      const v = localStorage.getItem(CAJA_KEY);
+      if (!v) return new Set();
+      // Soportar el formato viejo (string único) y el nuevo (JSON array)
+      if (v.startsWith('[')) return new Set(JSON.parse(v));
+      return v ? new Set([v]) : new Set();
+    } catch { return new Set(); }
+  })();
+  // Filtro de empresas EN EL RECUADRO de Cajas por empresa (independiente del filtro global)
+  const CAJA_EMP_KEY = 'ac.resumenCajaEmpresas';
+  let cajaEmpresasFiltro = (() => {
+    try { return new Set(JSON.parse(localStorage.getItem(CAJA_EMP_KEY) || '[]')); } catch { return new Set(); }
+  })();
+  // Filtros del recuadro de stock multi-empresa (ahora MULTI cada uno: Sets)
   const STOCK_KEY = 'ac.resumenStockFilter';
   let stockFiltro = (() => {
-    try { return JSON.parse(localStorage.getItem(STOCK_KEY) || '{}'); } catch { return {}; }
+    try {
+      const raw = JSON.parse(localStorage.getItem(STOCK_KEY) || '{}');
+      return {
+        productos:  new Set(Array.isArray(raw.productos)  ? raw.productos  : (raw.producto  ? [raw.producto]  : [])),
+        empresas:   new Set(Array.isArray(raw.empresas)   ? raw.empresas   : (raw.empresaId ? [raw.empresaId] : [])),
+        depositos:  new Set(Array.isArray(raw.depositos)  ? raw.depositos  : (raw.depositoId? [raw.depositoId]: [])),
+      };
+    } catch { return { productos: new Set(), empresas: new Set(), depositos: new Set() }; }
   })();
+  function saveStockFiltro() {
+    localStorage.setItem(STOCK_KEY, JSON.stringify({
+      productos: [...stockFiltro.productos],
+      empresas:  [...stockFiltro.empresas],
+      depositos: [...stockFiltro.depositos],
+    }));
+  }
+  // Helper de chips para filtros multi-select
+  function chipsHTML(items, selectedSet, onclickFnName) {
+    if (!items || items.length === 0) return '<div class="text-xs text-slate-400 italic">Sin opciones</div>';
+    return items.map(item => {
+      const value = (typeof item === 'string') ? item : item.value;
+      const label = (typeof item === 'string') ? item : item.label;
+      const isSel = selectedSet.has(value);
+      const cls = isSel
+        ? 'bg-emerald-600 text-white border-emerald-700'
+        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50';
+      return `<button type="button" class="text-xs px-2 py-1 rounded-full border transition ${cls}" onclick="${onclickFnName}(${JSON.stringify(value)})">${esc(label)}${isSel?' ✓':''}</button>`;
+    }).join(' ');
+  }
 
   // Render se redibuja cada vez que el usuario marca/desmarca una empresa.
   const render = () => {
@@ -3959,16 +4012,25 @@ pages.resumenGlobal = async function() {
             });
           }
         }
-        // Lista única de nombres de caja para el selector (case-insensitive match)
+        // Listas únicas para los filtros chip
         const nombresUnicos = [...new Set(filas.map(f => f.caja))].sort((a,b)=>a.localeCompare(b,'es'));
-        const cf = cajaFiltro;
-        const cfLower = cf.toLowerCase();
-        const filasMostradas = cf ? filas.filter(f => f.caja.toLowerCase() === cfLower) : filas;
-        // Totales y consolidado de la caja filtrada
+        const empresasUnicasCajas = porEmp.map(e => ({ value: e.companyId, label: e.companyName }));
+        // Aplicar filtros
+        const filasMostradas = filas.filter(f => {
+          if (cajasFiltro.size > 0 && !cajasFiltro.has(f.caja)) return false;
+          if (cajaEmpresasFiltro.size > 0 && !cajaEmpresasFiltro.has(f.empresaId)) return false;
+          return true;
+        });
+        // Totales filtrados
         const totEmp = new Set(filasMostradas.map(f => f.empresaId));
         const totSaldo = filasMostradas.reduce((a,f)=>a+f.saldo,0);
         const totIngresos = filasMostradas.reduce((a,f)=>a+f.ingresos,0);
         const totEgresos = filasMostradas.reduce((a,f)=>a+f.egresos,0);
+        const algunFiltro = (cajasFiltro.size > 0) || (cajaEmpresasFiltro.size > 0);
+        const labelFiltro = [
+          cajasFiltro.size > 0  ? `Caja${cajasFiltro.size>1?'s':''}: ${[...cajasFiltro].map(esc).join(', ')}` : null,
+          cajaEmpresasFiltro.size > 0 ? `Empresa${cajaEmpresasFiltro.size>1?'s':''}: ${[...cajaEmpresasFiltro].map(id => esc(empresasUnicasCajas.find(e=>e.value===id)?.label||id)).join(', ')}` : null,
+        ].filter(Boolean).join(' · ');
 
         if (filas.length === 0) {
           return `
@@ -3983,30 +4045,33 @@ pages.resumenGlobal = async function() {
 
         return `
         <div class="kpi p-0 overflow-hidden mt-4">
-          <div class="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h3 class="font-semibold text-slate-800">💰 Cajas por empresa</h3>
-              <div class="text-xs text-slate-500">Las administrativas crean cajas por dueño (ej. "Lucas"). Filtrá para ver cuánto tiene cada dueño consolidado entre empresas.</div>
-            </div>
-            <div class="flex items-end gap-2">
+          <div class="px-4 py-3 bg-slate-50 border-b">
+            <div class="flex flex-wrap items-start justify-between gap-3 mb-3">
               <div>
-                <label class="label">Ver caja</label>
-                <select id="caja-filtro" class="input" style="min-width:200px">
-                  <option value="">— Todas las cajas —</option>
-                  ${nombresUnicos.map(n => `<option value="${esc(n)}" ${n===cf?'selected':''}>${esc(n)}</option>`).join('')}
-                </select>
+                <h3 class="font-semibold text-slate-800">💰 Cajas por empresa</h3>
+                <div class="text-xs text-slate-500">Las administrativas crean cajas por dueño (ej. "Lucas"). Tildá una o varias cajas y/o empresas para filtrar y ver el consolidado.</div>
               </div>
-              ${cf ? `<button class="btn btn-secondary" onclick="resumenSetCaja('')">✕ Limpiar</button>` : ''}
+              ${algunFiltro ? `<button class="btn btn-secondary text-xs" onclick="resumenLimpiarCajasFiltros()">✕ Limpiar filtros</button>` : ''}
+            </div>
+            <div class="space-y-2">
+              <div>
+                <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-600 mb-1">Ver caja${cajasFiltro.size>0?` (${cajasFiltro.size} seleccionada${cajasFiltro.size===1?'':'s'})`:''}</div>
+                <div class="flex flex-wrap gap-1.5">${chipsHTML(nombresUnicos, cajasFiltro, 'resumenToggleCaja')}</div>
+              </div>
+              <div>
+                <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-600 mb-1">Ver empresa${cajaEmpresasFiltro.size>0?` (${cajaEmpresasFiltro.size} seleccionada${cajaEmpresasFiltro.size===1?'':'s'})`:''}</div>
+                <div class="flex flex-wrap gap-1.5">${chipsHTML(empresasUnicasCajas, cajaEmpresasFiltro, 'resumenToggleCajaEmpresa')}</div>
+              </div>
             </div>
           </div>
 
-          ${cf ? `
+          ${algunFiltro ? `
             <div class="mx-4 mt-4 p-4 rounded-xl" style="background:linear-gradient(135deg,#065f46 0%,#047857 100%);color:#fff">
               <div class="flex items-center justify-between flex-wrap gap-2">
                 <div>
-                  <div class="text-xs uppercase tracking-wider font-bold" style="color:#a7f3d0">Consolidado caja</div>
-                  <div class="text-2xl font-extrabold mt-0.5">${esc(cf)}</div>
-                  <div class="text-xs mt-1" style="color:#d1fae5">Sumando ${totEmp.size} empresa${totEmp.size===1?'':'s'} · ${filasMostradas.length} caja${filasMostradas.length===1?'':'s'} con ese nombre</div>
+                  <div class="text-xs uppercase tracking-wider font-bold" style="color:#a7f3d0">Consolidado filtrado</div>
+                  <div class="text-lg font-extrabold mt-0.5">${labelFiltro}</div>
+                  <div class="text-xs mt-1" style="color:#d1fae5">Sumando ${totEmp.size} empresa${totEmp.size===1?'':'s'} · ${filasMostradas.length} caja${filasMostradas.length===1?'':'s'}</div>
                 </div>
                 <div class="text-right">
                   <div class="text-3xl font-extrabold ${totSaldo<0?'text-red-200':''}">${fmt$(totSaldo)}</div>
@@ -4031,7 +4096,7 @@ pages.resumenGlobal = async function() {
             </thead>
             <tbody>
               ${filasMostradas.length === 0
-                ? `<tr><td colspan="8" class="text-center text-slate-400 py-6">No hay coincidencias para "${esc(cf)}"</td></tr>`
+                ? `<tr><td colspan="8" class="text-center text-slate-400 py-6">No hay coincidencias con los filtros aplicados</td></tr>`
                 : filasMostradas.map(f => `
                   <tr class="table-row">
                     <td>
@@ -4052,7 +4117,7 @@ pages.resumenGlobal = async function() {
             </tbody>
             <tfoot>
               <tr class="font-bold bg-slate-50">
-                <td colspan="2">${cf ? `Total caja "${esc(cf)}"` : 'Total general'}</td>
+                <td colspan="2">${algunFiltro ? 'Total filtrado' : 'Total general'}</td>
                 <td class="text-right text-emerald-700">${fmt$(totIngresos)}</td>
                 <td class="text-right text-red-600">${fmt$(totEgresos)}</td>
                 <td></td>
@@ -4079,83 +4144,78 @@ pages.resumenGlobal = async function() {
             <div class="text-center text-slate-400 py-8 px-4">Las empresas seleccionadas no tienen stock cargado todavía.</div>
           </div>`;
         }
-        // Aplicar filtros propios del recuadro
-        const fProd = stockFiltro.producto || '';
-        const fDep = stockFiltro.depositoId || '';
-        const fEmp = stockFiltro.empresaId || '';
-        const filas = filasOriginales.filter(f => {
-          if (fProd && f.productoNombre !== fProd) return false;
-          if (fDep && f.depositoId !== fDep && !(fDep === 'sin' && f.depositoId === null)) return false;
-          if (fEmp && f.companyId !== fEmp) return false;
-          return true;
-        });
-        // Listas únicas para los selects (basadas en lo seleccionado arriba)
+        // Listas únicas (basadas en empresas seleccionadas arriba)
         const productosUnicos = [...new Set(filasOriginales.map(f => f.productoNombre))].sort();
         const depositosUnicos = filasOriginales.reduce((acc, f) => {
           const key = f.depositoId || 'sin';
-          if (!acc.has(key)) acc.set(key, { id: f.depositoId, nombre: f.depositoNombre, compartido: f.depositoCompartido });
+          if (!acc.has(key)) acc.set(key, { id: f.depositoId, key, nombre: f.depositoNombre, compartido: f.depositoCompartido });
           return acc;
         }, new Map());
-        const empresasUnicas = filasOriginales.reduce((acc, f) => {
+        const empresasUnicasStock = filasOriginales.reduce((acc, f) => {
           if (!acc.has(f.companyId)) acc.set(f.companyId, { id: f.companyId, name: f.companyName, color: f.companyColor });
           return acc;
         }, new Map());
 
-        // Total filtrado (cuando se filtra por producto, sumamos las existencias para mostrar el consolidado)
+        // Aplicar filtros multi
+        const fProds = stockFiltro.productos;
+        const fEmps  = stockFiltro.empresas;
+        const fDeps  = stockFiltro.depositos;
+        const filas = filasOriginales.filter(f => {
+          if (fProds.size > 0 && !fProds.has(f.productoNombre)) return false;
+          if (fEmps.size  > 0 && !fEmps.has(f.companyId)) return false;
+          if (fDeps.size  > 0) {
+            const k = f.depositoId || 'sin';
+            if (!fDeps.has(k)) return false;
+          }
+          return true;
+        });
+
         const totalConsolidado = filas.reduce((acc, f) => acc + Number(f.existencia || 0), 0);
         const unidadConsolidada = (filas[0] && filas.every(f => f.unidad === filas[0].unidad)) ? filas[0].unidad : '';
-
-        // Filtro activo
-        const filtroActivo = !!(fProd || fDep || fEmp);
+        const filtroActivo = (fProds.size + fEmps.size + fDeps.size) > 0;
         const labelFiltro = [
-          fProd ? `Producto: ${fProd}` : null,
-          fEmp ? `Empresa: ${empresasUnicas.get(fEmp)?.name || ''}` : null,
-          fDep ? `Depósito: ${depositosUnicos.get(fDep === 'sin' ? 'sin' : fDep)?.nombre || ''}` : null,
+          fProds.size > 0 ? `Producto${fProds.size>1?'s':''}: ${[...fProds].map(esc).join(', ')}` : null,
+          fEmps.size  > 0 ? `Empresa${fEmps.size>1?'s':''}: ${[...fEmps].map(id => esc(empresasUnicasStock.get(id)?.name || id)).join(', ')}` : null,
+          fDeps.size  > 0 ? `Depósito${fDeps.size>1?'s':''}: ${[...fDeps].map(k => esc(depositosUnicos.get(k)?.nombre || k)).join(', ')}` : null,
         ].filter(Boolean).join(' · ');
+
+        // Items para chips
+        const itemsProductos = productosUnicos;
+        const itemsEmpresas  = [...empresasUnicasStock.values()].map(e => ({ value: e.id, label: e.name }));
+        const itemsDepositos = [...depositosUnicos.values()].map(d => ({ value: d.key, label: d.nombre + (d.compartido?' 🌐':'') }));
 
         return `
         <div class="kpi p-0 overflow-hidden mt-4">
           <div class="px-4 py-3 bg-slate-50 border-b">
-            <div class="flex flex-wrap items-end justify-between gap-3 mb-2">
+            <div class="flex flex-wrap items-start justify-between gap-3 mb-3">
               <div>
                 <h3 class="font-semibold text-slate-800">📦 Stock por empresa y depósito</h3>
-                <div class="text-xs text-slate-500">Existencias por producto desglosadas por empresa y depósito. Filtros independientes de los de arriba.</div>
+                <div class="text-xs text-slate-500">Tildá uno o varios chips para filtrar. Sin filtros muestra el total consolidado.</div>
               </div>
+              ${filtroActivo ? `<button class="btn btn-secondary text-xs" onclick="resumenStockLimpiar()">✕ Limpiar filtros</button>` : ''}
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+            <div class="space-y-2">
               <div>
-                <label class="label">Producto</label>
-                <select id="stk-producto" class="input">
-                  <option value="">— Todos —</option>
-                  ${productosUnicos.map(p => `<option value="${esc(p)}" ${p===fProd?'selected':''}>${esc(p)}</option>`).join('')}
-                </select>
+                <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-600 mb-1">Producto${fProds.size>0?` (${fProds.size})`:''}</div>
+                <div class="flex flex-wrap gap-1.5">${chipsHTML(itemsProductos, fProds, 'resumenToggleStockProducto')}</div>
               </div>
               <div>
-                <label class="label">Empresa</label>
-                <select id="stk-empresa" class="input">
-                  <option value="">— Todas —</option>
-                  ${[...empresasUnicas.values()].map(e => `<option value="${esc(e.id)}" ${e.id===fEmp?'selected':''}>${esc(e.name)}</option>`).join('')}
-                </select>
+                <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-600 mb-1">Empresa${fEmps.size>0?` (${fEmps.size})`:''}</div>
+                <div class="flex flex-wrap gap-1.5">${chipsHTML(itemsEmpresas, fEmps, 'resumenToggleStockEmpresa')}</div>
               </div>
               <div>
-                <label class="label">Depósito</label>
-                <select id="stk-deposito" class="input">
-                  <option value="">— Todos —</option>
-                  ${[...depositosUnicos.values()].map(d => `<option value="${esc(d.id || 'sin')}" ${(d.id||'sin')===fDep?'selected':''}>${esc(d.nombre)}${d.compartido?' 🌐':''}</option>`).join('')}
-                </select>
-              </div>
-              <div>
-                ${filtroActivo ? `<button class="btn btn-secondary text-xs w-full" onclick="resumenStockLimpiar()">✕ Limpiar filtros</button>` : '<span></span>'}
+                <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-600 mb-1">Depósito${fDeps.size>0?` (${fDeps.size})`:''}</div>
+                <div class="flex flex-wrap gap-1.5">${chipsHTML(itemsDepositos, fDeps, 'resumenToggleStockDeposito')}</div>
               </div>
             </div>
           </div>
 
-          ${(fProd && filas.length > 0) ? `
+          ${(fProds.size > 0 && filas.length > 0) ? `
             <div class="mx-4 mt-4 p-4 rounded-xl" style="background:linear-gradient(135deg,#1e40af 0%,#1d4ed8 100%);color:#fff">
               <div class="flex items-center justify-between flex-wrap gap-2">
                 <div>
                   <div class="text-xs uppercase tracking-wider font-bold" style="color:#bfdbfe">Consolidado producto</div>
-                  <div class="text-2xl font-extrabold mt-0.5">${esc(fProd)}</div>
+                  <div class="text-lg font-extrabold mt-0.5">${[...fProds].map(esc).join(', ')}</div>
                   <div class="text-xs mt-1" style="color:#dbeafe">${labelFiltro}</div>
                 </div>
                 <div class="text-right">
@@ -4203,18 +4263,6 @@ pages.resumenGlobal = async function() {
         💡 Tu selección se guarda automáticamente para la próxima vez que entres. Esta vista <b>no mezcla</b> datos entre empresas: cada cheque, efectivo y flujo sigue asignado a la empresa donde se cargó. Solo agrupa los totales para que puedas verlos en conjunto.
       </div>`;
 
-    // Re-engancho el onchange del selector de caja despues de inyectar el HTML
-    setTimeout(() => {
-      const sel = document.getElementById('caja-filtro');
-      if (sel) sel.onchange = e => window.resumenSetCaja(e.target.value);
-      // Filtros del recuadro de stock
-      const stkProd = document.getElementById('stk-producto');
-      const stkEmp  = document.getElementById('stk-empresa');
-      const stkDep  = document.getElementById('stk-deposito');
-      if (stkProd) stkProd.onchange = e => window.resumenSetStock('producto',  e.target.value);
-      if (stkEmp)  stkEmp.onchange  = e => window.resumenSetStock('empresaId', e.target.value);
-      if (stkDep)  stkDep.onchange  = e => window.resumenSetStock('depositoId', e.target.value);
-    }, 0);
   };
 
   // Wrappers expuestos al onclick/onchange de los checkboxes.
@@ -4229,19 +4277,36 @@ pages.resumenGlobal = async function() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(seleccionadas)));
     render();
   };
-  window.resumenSetCaja = (nombre) => {
-    cajaFiltro = nombre || '';
-    if (cajaFiltro) localStorage.setItem(CAJA_KEY, cajaFiltro);
-    else localStorage.removeItem(CAJA_KEY);
+  // Toggle de un elemento en un Set (helper interno)
+  function toggleInSet(set, value) {
+    if (set.has(value)) set.delete(value); else set.add(value);
+  }
+  // Cajas por empresa
+  window.resumenToggleCaja = (nombre) => {
+    toggleInSet(cajasFiltro, nombre);
+    localStorage.setItem(CAJA_KEY, JSON.stringify([...cajasFiltro]));
     render();
   };
-  window.resumenSetStock = (campo, valor) => {
-    stockFiltro[campo] = valor || '';
-    localStorage.setItem(STOCK_KEY, JSON.stringify(stockFiltro));
+  window.resumenToggleCajaEmpresa = (empresaId) => {
+    toggleInSet(cajaEmpresasFiltro, empresaId);
+    localStorage.setItem(CAJA_EMP_KEY, JSON.stringify([...cajaEmpresasFiltro]));
     render();
   };
+  window.resumenLimpiarCajasFiltros = () => {
+    cajasFiltro = new Set();
+    cajaEmpresasFiltro = new Set();
+    localStorage.removeItem(CAJA_KEY);
+    localStorage.removeItem(CAJA_EMP_KEY);
+    render();
+  };
+  // Stock multi-empresa
+  window.resumenToggleStockProducto = (nombre) => { toggleInSet(stockFiltro.productos, nombre); saveStockFiltro(); render(); };
+  window.resumenToggleStockEmpresa  = (id)     => { toggleInSet(stockFiltro.empresas,  id);     saveStockFiltro(); render(); };
+  window.resumenToggleStockDeposito = (key)    => { toggleInSet(stockFiltro.depositos, key);    saveStockFiltro(); render(); };
   window.resumenStockLimpiar = () => {
-    stockFiltro = {};
+    stockFiltro.productos.clear();
+    stockFiltro.empresas.clear();
+    stockFiltro.depositos.clear();
     localStorage.removeItem(STOCK_KEY);
     render();
   };
@@ -6877,7 +6942,7 @@ const SUB_PERMS = [
     { key: 'finanzas:credito:create',            label: 'Cargar créditos bancarios' },
     { key: 'finanzas:credito:pagar',             label: 'Marcar cuotas de crédito como pagadas' },
     { key: 'finanzas:liquidacion_cereal:create', label: 'Cargar liquidaciones de cereal' },
-    { key: 'finanzas:flujo_proyectado:read',     label: 'Ver Estado de situación (flujo proyectado)' },
+    { key: 'finanzas:flujo_proyectado:read',     label: 'Ver Flujo de Fondos (flujo proyectado)' },
     { key: 'finanzas:intercompany',              label: 'Pagar/cobrar con recursos de otra firma del grupo (Intercompany)' },
   ], parent: 'finanzas' },
   // VENTAS — facturación externa ARCA
@@ -7869,11 +7934,78 @@ async function compForm() {
         </table>
       </div>
       <button class="btn btn-secondary text-sm" onclick="document.getElementById('fi-tbody').insertAdjacentHTML('beforeend', factItemRow()); factRecalc();">+ Agregar item</button>
+      <div id="comp-pago-wrap" class="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
+        <div class="text-xs font-semibold text-blue-900 mb-2">💳 Pago — Condición Contado (se registra junto con la factura)</div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="label">Método</label>
+            <select id="comp-met" class="input" onchange="compMetodoCambio()">
+              <option value="">— Sin pago (queda pendiente) —</option>
+              <option value="efectivo">💵 Efectivo</option>
+              <option value="cheque">💳 Cheque (propio o de terceros endosado)</option>
+              <option value="transferencia">🏛️ Transferencia bancaria</option>
+            </select>
+          </div>
+          <div id="comp-met-det"></div>
+        </div>
+        <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís método se crea la factura Y se registra el pago en una operación. Requiere que el proveedor esté seleccionado.</div>
+      </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="compSave()">💾 Registrar</button>`
   });
-  setTimeout(() => { $('#fi-tbody').addEventListener('input', factRecalc); factRecalc(); }, 0);
+  setTimeout(async () => {
+    $('#fi-tbody').addEventListener('input', factRecalc);
+    factRecalc();
+    // Pre-cargar datos para método de pago si todavía no están
+    if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
+      try {
+        const [efRsp, chRsp, cbRsp, catRsp] = await Promise.all([
+          api('/api/efectivo').catch(() => ({ data: [] })),
+          api('/api/cheques').catch(() => ({ data: [] })),
+          api('/api/banco-cuentas').catch(() => ({ data: [] })),
+          api('/api/catalogos').catch(() => ({ data: [] })),
+        ]);
+        const cajasCat  = (catRsp.data || []).filter(c => c.tipo === 'Caja' && c.activo !== false).map(c => c.nombre);
+        const cajasHist = (efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean);
+        state.cache.efectivoCajas = [...new Set([...cajasCat, ...cajasHist])].sort();
+        state.cache.cheques = chRsp.data || [];
+        state.cache.bancoCuentas = cbRsp.data || [];
+      } catch {}
+    }
+    // Toggle del bloque de pago según la condición
+    const cc = document.getElementById('f-cc');
+    if (cc) {
+      const toggle = () => {
+        const wrap = document.getElementById('comp-pago-wrap');
+        if (wrap) wrap.classList.toggle('hidden', cc.value !== 'Contado');
+      };
+      cc.addEventListener('change', toggle);
+      toggle();
+    }
+  }, 0);
+}
+function compMetodoCambio() {
+  const met = document.getElementById('comp-met')?.value;
+  const det = document.getElementById('comp-met-det');
+  if (!det) return;
+  if (!met) { det.innerHTML = ''; return; }
+  if (met === 'efectivo') {
+    const cajas = state.cache.efectivoCajas || [];
+    det.innerHTML = cajas.length
+      ? `<label class="label">Caja</label><select id="comp-caja" class="input"><option value="">— Elegir —</option>${cajas.map(c => `<option>${esc(c)}</option>`).join('')}</select>`
+      : `<label class="label">Caja</label><input id="comp-caja" class="input" placeholder="Nombre de caja"/>`;
+  } else if (met === 'cheque') {
+    const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+    det.innerHTML = cheques.length
+      ? `<label class="label">Cheque a entregar</label><select id="comp-cheque" class="input"><option value="">— Elegir —</option>${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)}</option>`).join('')}</select>`
+      : `<div class="text-xs text-amber-700">⚠️ Sin cheques disponibles.</div>`;
+  } else if (met === 'transferencia') {
+    const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
+    det.innerHTML = cuentas.length
+      ? `<label class="label">Cuenta bancaria</label><select id="comp-banco" class="input"><option value="">— Elegir —</option>${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select>`
+      : `<div class="text-xs text-amber-700">⚠️ Sin cuentas bancarias. Cargá una en Tesorería → Bancos.</div>`;
+  }
 }
 // Sube el PDF al backend, decodifica el QR de ARCA y autopobla los campos del form.
 async function compCargarDesdePDF(input) {
@@ -7898,42 +8030,63 @@ async function compCargarDesdePDF(input) {
       throw new Error((j.error || 'Error ' + r.status) + detalle);
     }
     const d = j.data;
+    // Guardar datos del PDF para enviarlos a backend al guardar (CUIT, razón social aunque no haya proveedor)
+    state._compraPdfData = d;
+
     // Autopoblar campos
     const setVal = (id, valor) => { const el = document.getElementById(id); if (el && valor != null && valor !== '') el.value = valor; };
     setVal('f-tipo', d.tipoCmpLetra || 'A');
     setVal('f-pv', d.puntoVenta || 1);
     setVal('f-nro', d.numero || 1);
     if (d.fecha) setVal('f-fec', d.fecha.slice(0, 10));
+
     // Si hay CUIT del emisor, buscar proveedor existente con ese CUIT
+    let provMatch = null;
     if (d.cuitEmisor) {
       const provs = state.cache.proveedores || [];
       const cuitNorm = String(d.cuitEmisor).replace(/[-.\s]/g, '');
-      const match = provs.find(p => String(p.cuit || '').replace(/[-.\s]/g, '') === cuitNorm);
-      if (match) setVal('f-prov', match.id);
+      provMatch = provs.find(p => String(p.cuit || '').replace(/[-.\s]/g, '') === cuitNorm);
+      if (provMatch) setVal('f-prov', provMatch.id);
     }
-    // Crear un único item con descripción "Importado de ARCA" + precio = neto
+
+    // Crear un único item con la descripción REAL del PDF (Producto/Servicio) o fallback
     const tbody = document.getElementById('fi-tbody');
     if (tbody && d.total) {
-      // Detectar IVA: si hay netoGravado, usarlo; si no, calcular del total con 21%
       const neto = d.netoGravado || (d.total / 1.21);
       const iva = d.iva21 ? 21 : d.iva105 ? 10.5 : d.iva27 ? 27 : 21;
-      // Pisar la primera fila con los datos
       const fila = tbody.querySelector('tr[data-fi]');
       if (fila) {
+        const sel  = fila.querySelector('[data-f="productoId"]');
         const desc = fila.querySelector('[data-f="descripcion"]');
         const cant = fila.querySelector('[data-f="cantidad"]');
         const pu   = fila.querySelector('[data-f="precioUnit"]');
         const iv   = fila.querySelector('[data-f="alicuotaIva"]');
-        if (desc) desc.value = `Factura ${d.tipoCmpLetra || ''} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')}${d.razonSocialEmisorHeuristica ? ' — ' + d.razonSocialEmisorHeuristica : ''}`;
-        if (cant) cant.value = 1;
-        if (pu)   pu.value = neto.toFixed(2);
+        // productoId vacío = sin stock (texto libre)
+        if (sel) sel.value = '';
+        if (desc) {
+          desc.value = d.descripcionItem
+            ? d.descripcionItem
+            : `Factura ${d.tipoCmpLetra || ''} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')}${d.razonSocialEmisor ? ' — ' + d.razonSocialEmisor : ''}`;
+        }
+        if (cant) cant.value = d.cantidadItem || 1;
+        if (pu)   pu.value = (d.cantidadItem ? (neto / d.cantidadItem) : neto).toFixed(2);
         if (iv)   iv.value = iva;
       }
       factRecalc();
     }
+
+    // Mensaje y, si no hay proveedor matcheado pero hay CUIT + razón social, ofrecer crearlo
     if (msg) {
       const tipoStr = d.tipoCmpLetra ? `Factura ${d.tipoCmpLetra}` : 'Comprobante';
-      msg.innerHTML = `<span class="text-emerald-700">✅ ${tipoStr} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')} cargada desde el QR de ARCA${d.cuitEmisor?` · CUIT emisor ${d.cuitEmisor}`:''} · CAE ${d.cae||'?'} · Revisá los datos y agregá items si hace falta.</span>`;
+      const fuente = d.fuente === 'QR_ARCA' ? 'QR de ARCA' : 'texto del PDF';
+      let html = `<span class="text-emerald-700">✅ ${tipoStr} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')} cargada desde el ${fuente}${d.cuitEmisor?` · CUIT emisor ${d.cuitEmisor}`:''}${d.razonSocialEmisor?` · ${esc(d.razonSocialEmisor)}`:''} · CAE ${d.cae||'?'}</span>`;
+      if (!provMatch && d.cuitEmisor && d.razonSocialEmisor) {
+        html += `<div class="mt-2 p-2 bg-amber-50 border border-amber-300 rounded text-amber-900">
+          ⚠️ El proveedor <b>${esc(d.razonSocialEmisor)}</b> (CUIT ${esc(d.cuitEmisor)}) no está en el catálogo.
+          <button type="button" class="btn btn-primary text-xs ml-2" onclick="compCrearProveedorDesdePDF()">+ Crear proveedor con estos datos</button>
+        </div>`;
+      }
+      msg.innerHTML = html;
     }
   } catch (e) {
     if (msg) msg.innerHTML = `<span class="text-red-700">❌ ${esc(e.message)}</span>`;
@@ -7941,6 +8094,40 @@ async function compCargarDesdePDF(input) {
   } finally {
     input.value = ''; // reset para que se pueda subir el mismo archivo de nuevo si hace falta
   }
+}
+
+// Crear proveedor "stub" usando los datos del PDF parseado
+async function compCrearProveedorDesdePDF() {
+  const d = state._compraPdfData;
+  if (!d) return toast('No hay datos del PDF','warn');
+  if (!d.razonSocialEmisor) return toast('El PDF no trae razón social','warn');
+  try {
+    const data = {
+      razonSocial: d.razonSocialEmisor,
+      cuit: d.cuitEmisor || null,
+      observaciones: 'Creado automáticamente desde PDF de factura ' + (d.tipoCmpLetra||'') + ' ' + (d.puntoVenta||'') + '-' + (d.numero||''),
+    };
+    const r = await api('/api/proveedores', { method:'POST', body: JSON.stringify(data) });
+    const nuevo = r.data;
+    state.cache.proveedores = [...(state.cache.proveedores || []), nuevo];
+    // Agregar al select y seleccionarlo
+    const sel = document.getElementById('f-prov');
+    if (sel) {
+      const opt = document.createElement('option');
+      opt.value = nuevo.id;
+      opt.textContent = `${nuevo.razonSocial}${nuevo.cuit?' ('+nuevo.cuit+')':''}`;
+      sel.appendChild(opt);
+      sel.value = nuevo.id;
+    }
+    toast('Proveedor creado y seleccionado','success');
+    // Limpiar el mensaje de aviso
+    const msg = document.getElementById('f-pdf-msg');
+    if (msg && msg.querySelector('.btn-primary')) {
+      // Quitar solo el cuadrito amarillo del aviso
+      const aviso = msg.querySelector('.bg-amber-50');
+      if (aviso) aviso.remove();
+    }
+  } catch (e) { toast(e.message,'error'); }
 }
 
 async function compSave() {
@@ -7952,19 +8139,61 @@ async function compSave() {
     alicuotaIva: Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
   })).filter(it => it.descripcion && it.cantidad > 0);
   if (!items.length) return toast('Agregá al menos un item','warn');
+  const proveedorId = $('#f-prov').value || null;
+  const pdfData = state._compraPdfData || null;
   const data = {
     tipo: $('#f-tipo').value,
     puntoVenta: Number($('#f-pv').value||1),
     numero: Number($('#f-nro').value||1),
     fecha: new Date($('#f-fec').value).toISOString(),
-    proveedorId: $('#f-prov').value || null,
+    proveedorId,
     condicionCompra: $('#f-cc').value,
     observaciones: $('#f-obs').value.trim()||null,
     items,
   };
-  try { await api('/api/facturas-compra', { method:'POST', body: JSON.stringify(data) });
+  // Si vino de PDF, incluir CUIT + razón social del emisor para mostrarlos aunque no haya proveedor
+  if (pdfData && (pdfData.cuitEmisor || pdfData.razonSocialEmisor)) {
+    data.emisorCuit = pdfData.cuitEmisor || null;
+    data.emisorRazonSocial = pdfData.razonSocialEmisor || null;
+    data.cae = pdfData.cae || null;
+  }
+  try {
+    const facRsp = await api('/api/facturas-compra', { method:'POST', body: JSON.stringify(data) });
+    const facturaId = facRsp.data?.id;
+
+    // Si condición = Contado y se eligió método, registrar el pago
+    const esContado = data.condicionCompra === 'Contado';
+    const metodoEl = document.getElementById('comp-met');
+    const metodo = metodoEl ? metodoEl.value : null;
+    if (facturaId && esContado && metodo && proveedorId) {
+      try {
+        // Buscar CtaCte recién creada por el monto total
+        const totalFactura = items.reduce((a,i) => a + Number(i.cantidad||0) * Number(i.precioUnit||0) * (1 + Number(i.alicuotaIva||0)/100), 0);
+        const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=proveedor&contactoId=${encodeURIComponent(proveedorId)}`);
+        const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.haber||0) - totalFactura) < 1)
+          .sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
+        if (pend.length) {
+          const ctaCteId = pend[0].id;
+          const pagoBody = {
+            proveedorId,
+            comprobantes: [{ ctaCteId, importeAplicado: totalFactura }],
+            metodo, monto: totalFactura,
+            fecha: data.fecha,
+            observaciones: 'Pago contado factura ' + data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0'),
+          };
+          if (metodo === 'efectivo')      pagoBody.cajaOrigen    = document.getElementById('comp-caja')?.value || null;
+          if (metodo === 'cheque')        pagoBody.chequeId      = document.getElementById('comp-cheque')?.value || null;
+          if (metodo === 'transferencia') pagoBody.bancoCuentaId = document.getElementById('comp-banco')?.value || null;
+          await api('/api/pagos-proveedores', { method:'POST', body: JSON.stringify(pagoBody) });
+        }
+      } catch (pErr) {
+        toast('Factura registrada pero hubo un problema con el pago: ' + pErr.message, 'warn');
+      }
+    }
+
     toast('Factura de compra registrada','success');
     delete state.cache.stockMap;
+    delete state._compraPdfData;
     closeModal(); pages.compras();
   } catch (e) { toast(e.message,'error'); }
 }
@@ -13806,8 +14035,8 @@ const FLUJO_CATS = [
 ];
 
 pages.flujoProyectado = async function() {
-  setHeader('Estado de situación', 'Saldo de hoy + lo que vas a cobrar/pagar — ordenado cronológicamente');
-  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('flujoProyectado','Estado de situación'); return; }
+  setHeader('Flujo de Fondos', 'Saldo de hoy + lo que vas a cobrar/pagar — ordenado cronológicamente');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('flujoProyectado','Flujo de Fondos'); return; }
   state.flujoDias = state.flujoDias || 180;
   state.flujoCatsOcultas = state.flujoCatsOcultas || {};
   // Empresas seleccionadas: por default la activa; permitir multi
@@ -14033,7 +14262,7 @@ async function flujoEmpresasModal() {
   const empresasUser = state.user?.companies || [];
   if (empresasUser.length <= 1) return;
   openModal({
-    title:'🌐 Empresas a incluir en el Estado de situación', size:'max-w-md',
+    title:'🌐 Empresas a incluir en el Flujo de Fondos', size:'max-w-md',
     body: `
       <div class="text-xs text-slate-500 mb-3">Marca las empresas cuyos datos querés ver consolidados en el reporte. Por default se muestra solo la empresa activa.</div>
       <div class="flex gap-2 mb-2 text-xs">

@@ -48,7 +48,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.15';
+const AGROCORE_VERSION = '0.7.16';
 const AGROCORE_BUILD = new Date('2026-06-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2263,8 +2263,21 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       condicionCompra: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
+      // Datos del emisor cuando no hay proveedor en el catálogo (vienen del PDF)
+      emisorCuit: z.string().nullable().optional(),
+      emisorRazonSocial: z.string().nullable().optional(),
+      cae: z.string().nullable().optional(),
     });
     const input = schema.parse(req.body);
+    // Si no hay proveedor pero sí datos del emisor (PDF), los preservamos en observaciones
+    if (!input.proveedorId && (input.emisorCuit || input.emisorRazonSocial)) {
+      const ext = [
+        input.emisorRazonSocial ? `Emisor: ${input.emisorRazonSocial}` : null,
+        input.emisorCuit ? `CUIT ${input.emisorCuit}` : null,
+        input.cae ? `CAE ${input.cae}` : null,
+      ].filter(Boolean).join(' · ');
+      input.observaciones = ext + (input.observaciones ? ' | ' + input.observaciones : '');
+    }
     const totales = calcFactura(input.items);
     // Transaccion: crear factura compra + sumar stock con movimientos ingreso.
     const factura = await prisma.$transaction(async (tx) => {
@@ -4651,10 +4664,35 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     const mRsR = texto.match(/Apellido\s+y\s+Nombre\s*\/\s*Raz[oó]n\s+Social\s*:?\s*([^\n]+)/i);
     if (mRsR) resultado.razonSocialReceptor = mRsR[1].trim().replace(/\s{2,}/g, ' ').slice(0, 120);
 
-    // Items: heurística simple. Buscar líneas tipo "<desc> <cantidad> <unidad> <precio> <bonif> <subtotal> <alic> <subtotal_iva>"
-    // En la factura Cargill el formato es: "29,05 toneladas 63000,00 0,00 1830150,00 21% 2214481,50"
-    // Por simplicidad NO extraemos items detallados; el frontend pone uno con la descripción genérica
-    // y el neto/IVA del comprobante. Esto cubre el 95% de los casos.
+    // === Descripción del item ===
+    // Heurística: buscar las líneas entre la cabecera "Código Producto / Servicio..." y
+    // las líneas de totales ("Importe Neto Gravado"). Tomar las líneas que tengan texto
+    // alfabético (no solo números) y concatenarlas en una sola descripción.
+    const lineas = texto.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    let descripcionItem = null;
+    const idxHdr = lineas.findIndex(l => /C[oó]digo\s+Producto\s*\/\s*Servicio|Producto\s*\/\s*Servicio/i.test(l));
+    const idxFin = lineas.findIndex(l => /Importe\s+Otros\s+Tributos|Importe\s+Neto\s+Gravado|Subtotal\s*:/i.test(l));
+    if (idxHdr >= 0 && idxFin > idxHdr) {
+      // Filtrar líneas que parezcan descripción (tienen letras) y no sean solo cabecera
+      const candidatas = lineas.slice(idxHdr + 1, idxFin).filter(l => {
+        if (l.length < 4) return false;
+        if (/^[\d.,%$\s\-]+$/.test(l)) return false; // solo números/símbolos
+        if (/^(Cantidad|U\.\s*medida|Precio|Bonif|Subtotal|Alicuota|IVA)$/i.test(l)) return false;
+        return /[A-Za-zÁÉÍÓÚáéíóúÑñ]{3,}/.test(l);
+      });
+      if (candidatas.length) descripcionItem = candidatas.join(' ').replace(/\s{2,}/g, ' ').slice(0, 400);
+    }
+    // Fallback: si no encontramos descripción, usar "Producto / Servicio: <razon social emisor> Factura X PV-NRO"
+    resultado.descripcionItem = descripcionItem;
+    // Cantidad y unidad: extraer del bloque del item (heurística simple)
+    if (idxHdr >= 0 && idxFin > idxHdr) {
+      const bloque = lineas.slice(idxHdr + 1, idxFin).join(' ');
+      const mCant = bloque.match(/(\d+(?:[.,]\d+)?)\s*(toneladas?|tn|kg|kilos?|litros?|lt|unidades?|u|m³|m3|m²|m2|hor[ao]s?|d[ií]as?|servicios?)/i);
+      if (mCant) {
+        resultado.cantidadItem = num(mCant[1]);
+        resultado.unidadItem = mCant[2];
+      }
+    }
 
     res.json({
       ok: true,
@@ -4663,7 +4701,7 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
         fuente: resultado.fuente,
         tieneQR: fuenteQr,
         cuitsDetectados: cuitsUnicos,
-        primerasLineas: texto.split(/\r?\n/).map(l=>l.trim()).filter(Boolean).slice(0, 25),
+        primerasLineas: lineas.slice(0, 25),
       },
     });
   } catch (e) { next(e); }
