@@ -48,8 +48,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.14';
-const AGROCORE_BUILD = new Date('2026-06-17').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.15';
+const AGROCORE_BUILD = new Date('2026-06-18').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -4508,78 +4508,164 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message });
     }
 
-    // Buscar URL del QR de ARCA. Tolera variantes con/sin www.
-    const reQr = /https?:\/\/(?:www\.)?afip\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_-]+)/i;
-    const m = texto.match(reQr);
-    if (!m) {
-      return res.status(400).json({
-        ok: false,
-        error: 'No se encontró el QR de ARCA en el PDF. Verificá que sea una factura electrónica con código QR.',
-        diagnostico: { textoBruto: texto.slice(0, 800) },
-      });
-    }
-
-    // Decode base64url → JSON
-    let qrData;
-    try {
-      let b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
-      while (b64.length % 4 !== 0) b64 += '=';
-      const jsonStr = Buffer.from(b64, 'base64').toString('utf8');
-      qrData = JSON.parse(jsonStr);
-    } catch (e) {
-      return res.status(400).json({ ok: false, error: 'No pude decodificar el QR: ' + e.message });
-    }
-
-    // Mapear a la estructura del sistema
-    const tipoCmp = Number(qrData.tipoCmp || 0);
-    const resultado = {
-      // Datos del QR (oficiales)
-      cae: String(qrData.codAut || ''),
-      caeVencimiento: null, // ARCA no lo manda en el QR
-      fecha: qrData.fecha || null,
-      cuitEmisor: String(qrData.cuit || ''),
-      puntoVenta: Number(qrData.ptoVta || 0),
-      tipoCmpCodigo: tipoCmp,
-      tipoCmpLetra: FACT_TIPO_AFIP[tipoCmp] || 'B',
-      numero: Number(qrData.nroCmp || 0),
-      total: Number(qrData.importe || 0),
-      moneda: qrData.moneda || 'PES',
-      cotizacion: Number(qrData.ctz || 1),
-      tipoDocReceptor: Number(qrData.tipoDocRec || 0),
-      cuitReceptor: String(qrData.nroDocRec || ''),
-      tipoCodAut: String(qrData.tipoCodAut || ''),
-    };
-
-    // Enriquecer desde el texto del PDF (heurística): razón social y CUIT del emisor,
-    // razón social del receptor, neto/IVA. Esto es best effort, el QR es la fuente de verdad.
-    const lineas = texto.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-
-    // Razón social del emisor: suele estar en las primeras 8 líneas
-    const ignoreSiempre = /\b(FACTURA|ORIGINAL|DUPLICADO|COMPROBANTE|CAE|CUIT|FECHA|IVA RESPONSABLE)\b/i;
-    let razonSocialEmisor = null;
-    for (let i = 0; i < Math.min(10, lineas.length); i++) {
-      const l = lineas[i];
-      if (l.length > 5 && l.length < 80 && !ignoreSiempre.test(l) && !/^\d/.test(l)) {
-        razonSocialEmisor = l;
-        break;
+    // === Helpers de parseo ===
+    const num = (s) => {
+      if (s == null || s === '') return null;
+      let n = String(s).replace(/[$\s]/g, '');
+      // Formato AR: "1.830.150,00" → "1830150.00"  | "1830150,00" → "1830150.00"
+      if (/,\d{1,2}$/.test(n)) {
+        n = n.replace(/\./g, '').replace(',', '.');
+      } else if (/\.\d{1,2}$/.test(n)) {
+        // formato US-like; sacar comas
+        n = n.replace(/,/g, '');
+      } else {
+        n = n.replace(/[,.]/g, '');
       }
-    }
-    resultado.razonSocialEmisorHeuristica = razonSocialEmisor;
-
-    // Buscar Neto Gravado / IVA / Subtotal en el texto
-    const reNum = /([\d.]+,\d{2})/g;
-    const matchEtiqueta = (etiqueta) => {
-      const re = new RegExp(etiqueta + '[^\n]*?([\\d.]+,\\d{2})', 'i');
+      const v = Number(n);
+      return isFinite(v) ? v : null;
+    };
+    const fechaArg = (s) => {
+      if (!s) return null;
+      const m = String(s).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+      if (!m) return null;
+      const dd = m[1].padStart(2, '0');
+      const mm = m[2].padStart(2, '0');
+      let yy = m[3]; if (yy.length === 2) yy = '20' + yy;
+      return `${yy}-${mm}-${dd}`;
+    };
+    const matchEtiqueta = (etiquetaRe) => {
+      // Envolvemos en grupo no capturante para que un '|' en la etiqueta no rompa el regex
+      const re = new RegExp('(?:' + etiquetaRe + ')[^\\n]*?(\\$\\s*)?([\\d.,]+)', 'i');
       const mm = texto.match(re);
       if (!mm) return null;
-      return Number(mm[1].replace(/\./g, '').replace(',', '.'));
+      return num(mm[2]);
     };
-    resultado.netoGravado = matchEtiqueta('Importe Neto Gravado|Subtotal') ?? null;
-    resultado.iva105 = matchEtiqueta('IVA 10,5') ?? null;
-    resultado.iva21 = matchEtiqueta('IVA 21') ?? null;
-    resultado.iva27 = matchEtiqueta('IVA 27') ?? null;
+    const matchSimple = (re) => { const mm = texto.match(re); return mm ? mm[1] : null; };
+    // CUITs: cualquier número de 11 dígitos (con o sin guiones)
+    const cuitsRaw = [...texto.matchAll(/\b(\d{2}[-]?\d{8}[-]?\d{1})\b/g)].map(m => m[1].replace(/-/g,''));
+    const cuitsUnicos = [...new Set(cuitsRaw)];
 
-    res.json({ ok: true, data: resultado, diagnostico: { lineas: lineas.slice(0, 20) } });
+    // Inicialización
+    let qrData = null;
+    let fuenteQr = false;
+
+    // === Intento 1: buscar QR de ARCA como texto en el PDF ===
+    const reQr = /https?:\/\/(?:www\.)?afip\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_-]+)/i;
+    const m = texto.match(reQr);
+    if (m) {
+      try {
+        let b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (b64.length % 4 !== 0) b64 += '=';
+        const jsonStr = Buffer.from(b64, 'base64').toString('utf8');
+        qrData = JSON.parse(jsonStr);
+        fuenteQr = true;
+      } catch (e) { /* sigue al parser de texto */ }
+    }
+
+    // === Resultado base (vacío) ===
+    const resultado = {
+      fuente: fuenteQr ? 'QR_ARCA' : 'TEXTO_PDF',
+      cae: null, caeVencimiento: null,
+      fecha: null,
+      cuitEmisor: null, razonSocialEmisor: null,
+      cuitReceptor: null, razonSocialReceptor: null,
+      puntoVenta: null, numero: null,
+      tipoCmpCodigo: null, tipoCmpLetra: null,
+      total: null, netoGravado: null,
+      iva21: null, iva105: null, iva27: null, iva25: null, iva5: null,
+      moneda: 'PES', cotizacion: 1,
+    };
+
+    // === Si vino del QR, llenar con los datos oficiales ===
+    if (fuenteQr && qrData) {
+      const tipoCmp = Number(qrData.tipoCmp || 0);
+      resultado.cae = String(qrData.codAut || '');
+      resultado.fecha = qrData.fecha || null;
+      resultado.cuitEmisor = String(qrData.cuit || '');
+      resultado.puntoVenta = Number(qrData.ptoVta || 0);
+      resultado.tipoCmpCodigo = tipoCmp;
+      resultado.tipoCmpLetra = FACT_TIPO_AFIP[tipoCmp] || 'B';
+      resultado.numero = Number(qrData.nroCmp || 0);
+      resultado.total = Number(qrData.importe || 0);
+      resultado.moneda = qrData.moneda || 'PES';
+      resultado.cotizacion = Number(qrData.ctz || 1);
+      resultado.cuitReceptor = String(qrData.nroDocRec || '');
+    }
+
+    // === Parser de TEXTO (siempre se ejecuta, complementa el QR y es el único método cuando el QR no está como texto) ===
+    // Punto de Venta + Número
+    const mPv = texto.match(/Punto\s+de\s+Venta\s*:?\s*0*(\d{1,5})/i);
+    if (mPv && !resultado.puntoVenta) resultado.puntoVenta = Number(mPv[1]);
+    const mNro = texto.match(/(?:Comp\.\s*Nro|Comprobante\s+Nro|N[°º]\s*Comp)\s*:?\s*0*(\d{1,8})/i);
+    if (mNro && !resultado.numero) resultado.numero = Number(mNro[1]);
+    // Fecha de emisión
+    const mFecha = texto.match(/Fecha\s+de\s+Emisi[oó]n\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+    if (mFecha && !resultado.fecha) resultado.fecha = fechaArg(mFecha[1]);
+    // CAE
+    const mCae = texto.match(/CAE\s*N?[°º]?\s*:?\s*(\d{10,16})/i);
+    if (mCae && !resultado.cae) resultado.cae = mCae[1];
+    const mCaeVto = texto.match(/(?:Vto|Vencimiento)\.?\s*de(?:l)?\s*CAE\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
+    if (mCaeVto) resultado.caeVencimiento = fechaArg(mCaeVto[1]);
+
+    // Tipo de comprobante (FACTURA A / B / C / E / M)
+    // 1) Por "COD. NN" (códigos AFIP: 01=FA, 06=FB, 11=FC, etc)
+    const mCod = texto.match(/COD\.\s*(\d{2})/i);
+    if (mCod && !resultado.tipoCmpLetra) {
+      const cod = Number(mCod[1]);
+      resultado.tipoCmpCodigo = cod;
+      resultado.tipoCmpLetra = FACT_TIPO_AFIP[cod] || resultado.tipoCmpLetra;
+    }
+    // 2) Por la letra A/B/C grande arriba del PDF (FACTURA A / FACTURA B / ...)
+    if (!resultado.tipoCmpLetra) {
+      const mLetra = texto.match(/\bFACTURA\s+([ABCEM])\b/i);
+      if (mLetra) resultado.tipoCmpLetra = mLetra[1].toUpperCase();
+    }
+    // Fallback final
+    if (!resultado.tipoCmpLetra) resultado.tipoCmpLetra = 'B';
+
+    // Importes (ARCA usa "1.830.150,00")
+    if (!resultado.total)        resultado.total        = matchEtiqueta('Importe\\s+Total');
+    if (!resultado.netoGravado)  resultado.netoGravado  = matchEtiqueta('Importe\\s+Neto\\s+Gravado|Subtotal');
+    resultado.iva21  = matchEtiqueta('IVA\\s*21\\s*%?') || resultado.iva21;
+    resultado.iva105 = matchEtiqueta('IVA\\s*10[.,]5\\s*%?') || resultado.iva105;
+    resultado.iva27  = matchEtiqueta('IVA\\s*27\\s*%?') || resultado.iva27;
+    resultado.iva25  = matchEtiqueta('IVA\\s*2[.,]5\\s*%?') || resultado.iva25;
+    resultado.iva5   = matchEtiqueta('IVA\\s*5\\s*%?') || resultado.iva5;
+
+    // CUIT emisor: el que aparece DESPUÉS de "CUIT:" (suelen ser 2: emisor primero, después receptor)
+    // Si el QR ya nos lo dio, usamos ese para identificar el otro como receptor.
+    const reCuitLine = /CUIT\s*:?\s*(\d{2}[-]?\d{8}[-]?\d{1})/g;
+    const cuitsEnContexto = [...texto.matchAll(reCuitLine)].map(m => m[1].replace(/-/g,''));
+    if (cuitsEnContexto.length >= 1 && !resultado.cuitEmisor) {
+      resultado.cuitEmisor = cuitsEnContexto[0];
+    }
+    if (cuitsEnContexto.length >= 2 && !resultado.cuitReceptor) {
+      // Receptor = el segundo CUIT que aparece bajo "CUIT:"
+      resultado.cuitReceptor = cuitsEnContexto.find(c => c !== resultado.cuitEmisor) || cuitsEnContexto[1];
+    }
+
+    // Razón social emisor: buscamos "Razón Social: NOMBRE" antes del CUIT emisor
+    const mRsE = texto.match(/Raz[oó]n\s+Social\s*:?\s*([^\n]+)/i);
+    if (mRsE) resultado.razonSocialEmisor = mRsE[1].trim().replace(/\s{2,}/g, ' ').slice(0, 120);
+    // Razón social receptor: a veces aparece como "Apellido y Nombre / Razón Social:"
+    const mRsR = texto.match(/Apellido\s+y\s+Nombre\s*\/\s*Raz[oó]n\s+Social\s*:?\s*([^\n]+)/i);
+    if (mRsR) resultado.razonSocialReceptor = mRsR[1].trim().replace(/\s{2,}/g, ' ').slice(0, 120);
+
+    // Items: heurística simple. Buscar líneas tipo "<desc> <cantidad> <unidad> <precio> <bonif> <subtotal> <alic> <subtotal_iva>"
+    // En la factura Cargill el formato es: "29,05 toneladas 63000,00 0,00 1830150,00 21% 2214481,50"
+    // Por simplicidad NO extraemos items detallados; el frontend pone uno con la descripción genérica
+    // y el neto/IVA del comprobante. Esto cubre el 95% de los casos.
+
+    res.json({
+      ok: true,
+      data: resultado,
+      diagnostico: {
+        fuente: resultado.fuente,
+        tieneQR: fuenteQr,
+        cuitsDetectados: cuitsUnicos,
+        primerasLineas: texto.split(/\r?\n/).map(l=>l.trim()).filter(Boolean).slice(0, 25),
+      },
+    });
   } catch (e) { next(e); }
 });
 

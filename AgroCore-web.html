@@ -2272,6 +2272,24 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'📄 Parser PDF de factura ARCA híbrido (QR + texto)',
+      desc:'El parser ahora extrae los datos de la factura del PDF de dos maneras: si encuentra el QR de AFIP lo decodifica (fuente oficial); si no, parsea directamente el TEXTO del PDF buscando los campos típicos de una factura ARCA (Punto de Venta, Comp. Nro, CAE, Vto CAE, CUIT emisor/receptor, Razón Social, Importe Neto Gravado, IVA 21/10.5/27/5/2.5%, Importe Total, COD tipo). Probado con facturas reales — funciona con la mayoría de los PDFs aunque el QR no esté como texto.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'💸 Modal Facturar+Pagar viaje: PDF + proveedor opcional + pago opcional',
+      desc:'El modal del viaje ahora tiene: (1) botón "Cargar desde PDF" que autopobla todos los campos desde el QR o texto del PDF de ARCA; (2) Proveedor opcional — si no está en el catálogo hay un botón "+ Crear nuevo proveedor" que abre un mini-form con razón social, CUIT, teléfono, email, rubro y lo deja seleccionado; (3) Checkbox "Pagar ahora" tildable — si lo destildás solo registra la factura vinculada al viaje (queda facturado pendiente de pago, podés pagarla después desde Cuentas a Pagar). El botón cambia entre "Facturar y pagar" y "Solo facturar".' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'💳 Movimiento manual de Cta Cte: con selector de método de pago',
+      desc:'Cuando creás un movimiento manual de Cuenta Corriente y marcás "Marcar como ya pagado/cobrado", ahora aparece un cuadro azul con el selector de Método: Efectivo (caja), Cheque (lista de cheques en cartera), Transferencia (cuenta bancaria) o solo registrar sin movimiento de recurso. Al guardar se crea la CtaCte como pagada Y se registra el movimiento del recurso correspondiente (egreso/ingreso en la caja, BancoMovimiento, etc) en una sola operación.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'💵 Pago con efectivo: dropdown de cajas existentes',
+      desc:'En todos los modales de pago/cobro, cuando elegís Efectivo, ahora aparece un dropdown con las cajas existentes (suma las del catálogo Cajas + las que ya tienen movimientos). Antes era un input texto libre que confundía. Si todavía no hay cajas creadas, sale un aviso amarillo recomendando crearlas en Catálogos → Cajas.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'💳 Cargar cheque de tercero directo desde la cobranza',
+      desc:'En el modal "Cobrar de cliente" cuando elegís método Cheque, ahora aparecen dos opciones: "Cargar nuevo cheque recibido" (modo por defecto) o "Elegir uno ya cargado". En modo nuevo cargás banco, número, monto, fecha de pago, CUIT librador, tipo (físico/e-cheq) directamente en el modal de cobro y se crea automáticamente en Tesorería → Cheques con estado "en cartera". Sin tener que ir a Tesorería primero.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
+      titulo:'🏛️ Cuentas bancarias: solo en Tesorería (sacamos la tab del catálogo)',
+      desc:'La tab "Cuentas bancarias" del Catálogo solo tenía nombre/descripción y confundía: las cuentas cargadas ahí no aparecían al pagar/cobrar por transferencia. Se sacó la tab del catálogo. Las cuentas bancarias reales (con banco, sucursal, tipo, moneda, número, CBU, alias, titular, saldo inicial) se cargan en Tesorería → Bancos y desde ahí aparecen automáticamente en los selectores de pago/cobro.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'17/06/2026',
       titulo:'🚨 Hotfix v0.7.14: pdf-parse 100% opcional + texto deposito compartido',
       desc:'Dos cosas: (1) la dependencia pdf-parse paso de obligatoria a opcional. Si no se instala bien o falla la carga al iniciar el server, el backend arranca igual; solo el endpoint de parseo PDF devuelve 501 con instruccion clara para reinstalar. Asi un problema con esa libreria no tira toda la API. (2) Texto del checkbox "Compartido entre todas mis empresas" en el form de Deposito: la descripcion vieja ("util para una cerealera con varias razones sociales") confundia. Ahora dice claramente que es para INSUMOS DE USO COMUN (ej. Gasoil que comprás desde una empresa y consumis desde varias), descontando del mismo stock sin importar la empresa que carga el movimiento.' },
@@ -9130,15 +9148,20 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
 
   // Pre-cargar datos para los selectores de método (cajas, cheques en cartera, cuentas bancarias)
   try {
-    const [efRsp, chRsp, cbRsp] = await Promise.all([
+    const [efRsp, chRsp, cbRsp, catRsp] = await Promise.all([
       api('/api/efectivo').catch(() => ({ data: [] })),
       api('/api/cheques').catch(() => ({ data: [] })),
       api('/api/banco-cuentas').catch(() => ({ data: [] })),
+      api('/api/catalogos').catch(() => ({ data: [] })),
     ]);
-    const cajas = [...new Set((efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean))].sort();
+    // Cajas: combinar catálogo (tipo='Caja') + las que ya tienen movimientos en Efectivo (legacy)
+    const cajasCat = (catRsp.data || []).filter(c => c.tipo === 'Caja' && c.activo !== false).map(c => c.nombre);
+    const cajasHist = (efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean);
+    const cajas = [...new Set([...cajasCat, ...cajasHist])].sort();
     state.cache.efectivoCajas = cajas;
     state.cache.cheques = chRsp.data || [];
     state.cache.bancoCuentas = cbRsp.data || [];
+    state.cache.catalogos = catRsp.data || [];
   } catch {}
 
   openModal({
@@ -9272,10 +9295,18 @@ function pagoCobroMetodoCambio(modo) {
   const cont = document.getElementById('pc-metodo-detalle');
   if (metodo === 'efectivo') {
     const cajas = state.cache.efectivoCajas || [];
-    cont.innerHTML = `<label class="label">${esPago ? 'Caja de la que sale el efectivo' : 'Caja donde ingresa el efectivo'}</label>
-      <input id="pc-caja" class="input" list="pc-caja-list" placeholder="Ej: Oficina, Caja Damián..."/>
-      <datalist id="pc-caja-list">${cajas.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
-      ${cajas.length ? `<div class="text-[11px] text-slate-500 mt-1">Cajas existentes: ${cajas.map(c=>esc(c)).join(' · ')}</div>` : '<div class="text-[11px] text-slate-500 mt-1">No hay cajas previas. Escribí un nombre para crear una nueva.</div>'}`;
+    if (cajas.length) {
+      cont.innerHTML = `<label class="label">${esPago ? 'Caja de la que sale el efectivo' : 'Caja donde ingresa el efectivo'} *</label>
+        <select id="pc-caja" class="input">
+          <option value="">— Elegir caja —</option>
+          ${cajas.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+        </select>
+        <div class="text-[11px] text-slate-500 mt-1">${cajas.length} caja(s) disponibles. Para agregar/editar: Configuración → Catálogos → Cajas (efectivo).</div>`;
+    } else {
+      cont.innerHTML = `<label class="label">${esPago ? 'Caja de la que sale el efectivo' : 'Caja donde ingresa el efectivo'}</label>
+        <input id="pc-caja" class="input" placeholder="Ej: Oficina, Caja Damián..."/>
+        <div class="text-[11px] text-amber-700 mt-1">⚠️ No hay cajas cargadas. Te recomendamos crear las cajas en Configuración → Catálogos → Cajas (efectivo) antes de pagar. Si escribís un nombre acá, queda registrado solo en este movimiento.</div>`;
+    }
   } else if (metodo === 'cheque') {
     // PAGO: cheques propios + cheques de terceros EN CARTERA (para endosar)
     // COBRO: el cliente nos entrega cheques — los pre-cargamos a "en cartera"
@@ -9293,15 +9324,42 @@ function pagoCobroMetodoCambio(modo) {
           <div class="text-[11px] text-slate-500 mt-1">${enCartera.length} cheque(s) disponible(s). Los propios son los emitidos por la empresa, los de terceros son endosos.</div>`;
       }
     } else {
-      // COBRO: el cliente entrega un cheque — opciones: usar uno ya cargado o crear nuevo
-      cont.innerHTML = `<div class="bg-blue-50 border border-blue-200 text-blue-900 text-sm rounded p-3">
-        💡 Recibís un cheque del cliente. Primero cargalo en Tesorería → Cheques (estado "en cartera"), después volvé acá y selecionálo abajo.
+      // COBRO: el cliente entrega un cheque. Por defecto cargar uno nuevo desde acá
+      // (lo que es el caso típico). Permitimos también usar uno ya en cartera.
+      const enCartera = cheques.filter(c => /en cartera/i.test(c.estado||''));
+      cont.innerHTML = `
+        <div class="flex gap-2 mb-2 text-xs">
+          <button type="button" class="btn btn-secondary text-xs flex-1" id="pc-ch-mode-nuevo" onclick="pcChequeModo('nuevo')">📝 Cargar nuevo cheque recibido</button>
+          <button type="button" class="btn btn-ghost text-xs flex-1" id="pc-ch-mode-existente" onclick="pcChequeModo('existente')">📋 Elegir uno ya cargado</button>
         </div>
-        <label class="label">Cheque recibido</label>
-        <select id="pc-cheque" class="input">
-          <option value="">— Seleccionar —</option>
-          ${(cheques.filter(c=>/en cartera/i.test(c.estado||''))).map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}
-        </select>`;
+        <div id="pc-cheque-nuevo">
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="label text-xs">Banco *</label>
+              <input id="pc-chn-banco" class="input" list="pc-chn-banco-list" placeholder="Ej: Galicia"/>
+              <datalist id="pc-chn-banco-list">${((state.cache.catalogos||[]).filter(c=>c.tipo==='Banco').map(c=>`<option value="${esc(c.nombre)}">`)).join('')}</datalist>
+            </div>
+            <div><label class="label text-xs">Número *</label><input id="pc-chn-numero" class="input" placeholder="Ej: 00012345"/></div>
+            <div><label class="label text-xs">Monto</label><input id="pc-chn-monto" type="number" step="0.01" class="input" placeholder="Auto: total a cobrar"/></div>
+            <div><label class="label text-xs">Fecha de pago *</label><input id="pc-chn-fpago" type="date" class="input"/></div>
+            <div><label class="label text-xs">CUIT librador</label><input id="pc-chn-cuit" class="input" placeholder="Opcional"/></div>
+            <div><label class="label text-xs">Librador</label><input id="pc-chn-librador" class="input" placeholder="Nombre del firmante"/></div>
+            <div class="col-span-2"><label class="label text-xs">Tipo</label>
+              <select id="pc-chn-tipo" class="input">
+                <option value="fisico">📝 Físico (papel)</option>
+                <option value="electronico">📱 E-cheq electrónico</option>
+              </select>
+            </div>
+          </div>
+          <div class="text-[11px] text-blue-700 mt-2">💡 Se va a crear automáticamente en Tesorería → Cheques con estado "en cartera" y vinculado a esta cobranza.</div>
+        </div>
+        <div id="pc-cheque-existente" class="hidden">
+          <label class="label">Cheque ya cargado en cartera</label>
+          <select id="pc-cheque" class="input">
+            <option value="">— Seleccionar —</option>
+            ${enCartera.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}
+          </select>
+          ${!enCartera.length ? '<div class="text-xs text-amber-700 mt-1">No hay cheques en cartera. Usá la opción "Cargar nuevo" arriba.</div>' : ''}
+        </div>`;
     }
   } else if (metodo === 'transferencia') {
     const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
@@ -9324,6 +9382,22 @@ function pagoCobroMetodoCambio(modo) {
         <option value="">— Seleccionar —</option>
         ${otrasEmpresas.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
       </select>`;
+  }
+}
+
+function pcChequeModo(modo) {
+  const wn = document.getElementById('pc-cheque-nuevo');
+  const we = document.getElementById('pc-cheque-existente');
+  const bn = document.getElementById('pc-ch-mode-nuevo');
+  const be = document.getElementById('pc-ch-mode-existente');
+  if (modo === 'nuevo') {
+    wn?.classList.remove('hidden'); we?.classList.add('hidden');
+    bn?.classList.replace('btn-ghost', 'btn-secondary');
+    be?.classList.replace('btn-secondary', 'btn-ghost');
+  } else {
+    wn?.classList.add('hidden'); we?.classList.remove('hidden');
+    bn?.classList.replace('btn-secondary', 'btn-ghost');
+    be?.classList.replace('btn-ghost', 'btn-secondary');
   }
 }
 
@@ -9355,8 +9429,43 @@ async function pagoCobroConfirmar(modo) {
     comprobantes, metodo, monto, fecha, observaciones: obs,
   };
   if (metodo === 'efectivo') body.cajaOrigen = document.getElementById('pc-caja')?.value || null;
-  if (metodo === 'cheque')   body.chequeId   = document.getElementById('pc-cheque')?.value || null;
   if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('pc-banco')?.value || null;
+  if (metodo === 'cheque') {
+    // En COBRO: si el usuario está cargando un cheque nuevo (modo por defecto), lo creamos primero
+    if (!esPago && document.getElementById('pc-cheque-nuevo') && !document.getElementById('pc-cheque-nuevo').classList.contains('hidden')) {
+      const banco = document.getElementById('pc-chn-banco')?.value.trim();
+      const numero = document.getElementById('pc-chn-numero')?.value.trim();
+      const fechaPago = document.getElementById('pc-chn-fpago')?.value;
+      const tipoCh = document.getElementById('pc-chn-tipo')?.value || 'fisico';
+      const montoCh = Number(document.getElementById('pc-chn-monto')?.value) || monto;
+      const cuit = document.getElementById('pc-chn-cuit')?.value.trim() || null;
+      const librador = document.getElementById('pc-chn-librador')?.value.trim() || null;
+      if (!banco)  return toast('Falta banco del cheque', 'warn');
+      if (!numero) return toast('Falta número del cheque', 'warn');
+      if (!fechaPago) return toast('Falta fecha de pago del cheque', 'warn');
+      try {
+        const cli = (state.cache.clientes || []).find(c => c.id === contactoId);
+        const chRsp = await api('/api/cheques', { method: 'POST', body: JSON.stringify({
+          tipo: tipoCh,
+          origen: 'tercero',                  // recibido del cliente
+          banco, numero,
+          monto: montoCh,
+          fechaPago: new Date(fechaPago).toISOString(),
+          fechaEmision: new Date(fecha).toISOString(),
+          librador: librador || (cli?.razonSocial || null),
+          cuitLibrador: cuit,
+          estado: 'en cartera',
+          observaciones: 'Recibido de ' + (cli?.razonSocial || 'cliente') + ' por cobranza',
+        })});
+        body.chequeId = chRsp.data?.id;
+        if (!body.chequeId) throw new Error('No se obtuvo el ID del cheque creado');
+      } catch (chErr) {
+        return toast('No pude crear el cheque: ' + chErr.message, 'error');
+      }
+    } else {
+      body.chequeId = document.getElementById('pc-cheque')?.value || null;
+    }
+  }
   if (metodo === 'intercompany') {
     const otraEmp = document.getElementById('pc-empresa-inter')?.value;
     if (!otraEmp) return toast('Seleccioná la firma del grupo', 'warn');
@@ -9444,11 +9553,25 @@ async function intercoVerMovs(empAId, empBId, empAName, empBName) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-function ccForm(id=null) {
+async function ccForm(id=null) {
   const it = id ? ((state.cache.ctasCtes||[]).find(x=>x.id===id)||{}) : {};
   if (id && it.contactoTipo && it.contactoTipo !== 'libre') {
     return toast('Los movimientos generados por facturas no se editan acá. Registrá un cobro/pago en su lugar.','warn');
   }
+  // Cargar datos para el selector de método (cajas, cheques, cuentas)
+  try {
+    const [efRsp, chRsp, cbRsp, catRsp] = await Promise.all([
+      api('/api/efectivo').catch(() => ({ data: [] })),
+      api('/api/cheques').catch(() => ({ data: [] })),
+      api('/api/banco-cuentas').catch(() => ({ data: [] })),
+      api('/api/catalogos').catch(() => ({ data: [] })),
+    ]);
+    const cajasCat  = (catRsp.data || []).filter(c => c.tipo === 'Caja' && c.activo !== false).map(c => c.nombre);
+    const cajasHist = (efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean);
+    state.cache.efectivoCajas = [...new Set([...cajasCat, ...cajasHist])].sort();
+    state.cache.cheques = chRsp.data || [];
+    state.cache.bancoCuentas = cbRsp.data || [];
+  } catch {}
   const clis = state.cache.clientes || [];
   const provs = state.cache.proveedores || [];
   const cats = ['Arrendamiento','Servicio','Impuesto','Otro'];
@@ -9505,9 +9628,25 @@ function ccForm(id=null) {
           </div>
           <div class="flex items-end pb-1">
             <label class="text-sm flex items-center gap-2">
-              <input id="f-pag" type="checkbox" ${it.pagado?'checked':''}/>
+              <input id="f-pag" type="checkbox" ${it.pagado?'checked':''} onchange="ccTogglePagadoFields()"/>
               <span>Marcar como ya pagado / cobrado</span>
             </label>
+          </div>
+        </div>
+
+        <div id="f-wrap-metodo" class="col-span-2 p-3 bg-blue-50 border border-blue-200 rounded-lg ${it.pagado?'':'hidden'}">
+          <div class="text-xs font-semibold text-blue-900 mb-2">💳 Método de pago / cobro (registra el movimiento del recurso)</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="label">Método</label>
+              <select id="f-met" class="input" onchange="ccMetodoCambio()">
+                <option value="efectivo">💵 Efectivo</option>
+                <option value="cheque">💳 Cheque</option>
+                <option value="transferencia">🏛️ Transferencia bancaria</option>
+                <option value="ninguno">— Solo registrar (sin movimiento de recurso) —</option>
+              </select>
+            </div>
+            <div id="f-met-det"></div>
           </div>
         </div>
         <div class="${tipo==='libre'?'hidden':''}" id="f-wrap-debe">
@@ -9541,6 +9680,41 @@ function ccTipoChange() {
     if (label) label.textContent = t==='cliente' ? 'Cliente' : 'Proveedor';
     const lst = t==='cliente' ? (state.cache.clientes||[]) : (state.cache.proveedores||[]);
     $('#f-contacto').innerHTML = lst.map(c=>`<option value="${c.id}">${esc(c.razonSocial)}</option>`).join('');
+  }
+}
+function ccTogglePagadoFields() {
+  const pag = $('#f-pag')?.checked;
+  const wrap = $('#f-wrap-metodo');
+  if (wrap) wrap.classList.toggle('hidden', !pag);
+  if (pag) ccMetodoCambio();
+}
+function ccMetodoCambio() {
+  const met = $('#f-met')?.value || 'efectivo';
+  const det = $('#f-met-det');
+  if (!det) return;
+  // Detectar dirección (cobro vs pago)
+  const dir = $('#f-dir')?.value || (Number($('#f-deb')?.value||0) > 0 ? 'cobrar' : 'pagar');
+  const esPago = dir === 'pagar';
+  if (met === 'efectivo') {
+    const cajas = state.cache.efectivoCajas || [];
+    det.innerHTML = cajas.length
+      ? `<label class="label">${esPago ? 'Caja de la que sale' : 'Caja donde ingresa'}</label>
+         <select id="f-met-caja" class="input"><option value="">— Elegir —</option>${cajas.map(c => `<option>${esc(c)}</option>`).join('')}</select>`
+      : `<label class="label">${esPago ? 'Caja' : 'Caja'}</label><input id="f-met-caja" class="input" placeholder="Nombre de caja"/>`;
+  } else if (met === 'cheque') {
+    const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+    det.innerHTML = cheques.length
+      ? `<label class="label">${esPago ? 'Cheque a entregar' : 'Cheque recibido (ya cargado en Tesorería)'}</label>
+         <select id="f-met-cheque" class="input"><option value="">— Elegir —</option>${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}</select>`
+      : `<div class="text-xs text-amber-700">⚠️ No hay cheques disponibles. Cargá uno en Tesorería → Cheques.</div>`;
+  } else if (met === 'transferencia') {
+    const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
+    det.innerHTML = cuentas.length
+      ? `<label class="label">${esPago ? 'Cuenta desde la que se transfiere' : 'Cuenta donde ingresa'}</label>
+         <select id="f-met-banco" class="input"><option value="">— Elegir —</option>${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select>`
+      : `<div class="text-xs text-amber-700">⚠️ No hay cuentas bancarias. Cargá una en Tesorería → Bancos.</div>`;
+  } else {
+    det.innerHTML = '<div class="text-xs text-slate-500">No se registra movimiento de recurso (solo se marca el CtaCte como pagado).</div>';
   }
 }
 async function ccSave(id) {
@@ -9577,7 +9751,51 @@ async function ccSave(id) {
   }
   if (!data.detalle) return toast('Detalle requerido','warn');
   try {
+    // 1) Crear/editar la CtaCte
     await api('/api/ctas-ctes'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});
+
+    // 2) Si es nuevo y se marcó como pagado/cobrado, registrar el movimiento del recurso
+    const metodoEl = document.getElementById('f-met');
+    const metodo = metodoEl ? metodoEl.value : 'ninguno';
+    if (!id && data.pagado && metodo && metodo !== 'ninguno') {
+      const esPago = (Number(data.haber || 0) > 0);
+      const monto = Number(data.haber || data.debe || 0);
+      const concepto = data.detalle + (data.nombreLibre ? ' — ' + data.nombreLibre : '');
+      try {
+        if (metodo === 'efectivo') {
+          const caja = document.getElementById('f-met-caja')?.value?.trim() || null;
+          await api('/api/efectivo', { method: 'POST', body: JSON.stringify({
+            fecha: data.fecha,
+            tipo: esPago ? 'egreso' : 'ingreso',
+            concepto, monto, caja,
+            clasificacion: 'empresa',
+            observaciones: data.referencia || null,
+          })});
+        } else if (metodo === 'transferencia') {
+          const cuentaId = document.getElementById('f-met-banco')?.value || null;
+          if (cuentaId) {
+            await api('/api/banco-movimientos', { method: 'POST', body: JSON.stringify({
+              cuentaId, fecha: data.fecha,
+              tipo: esPago ? 'transferencia_out' : 'transferencia_in',
+              concepto, monto,
+              contraparte: data.nombreLibre || null,
+              referencia: data.referencia || null,
+            })});
+          }
+        } else if (metodo === 'cheque') {
+          // Para cheque marcamos el cheque elegido como endosado/depositado (best effort)
+          const chequeId = document.getElementById('f-met-cheque')?.value || null;
+          if (chequeId) {
+            const nuevoEstado = esPago ? 'endosado' : 'depositado';
+            await api('/api/cheques/' + chequeId, { method: 'PUT', body: JSON.stringify({ estado: nuevoEstado })});
+          }
+        }
+      } catch (mErr) {
+        // El CtaCte ya quedó creado; avisamos que el movimiento del recurso no se pudo registrar
+        toast('CtaCte creada, pero hubo un problema registrando el movimiento de ' + metodo + ': ' + mErr.message, 'warn');
+      }
+    }
+
     toast(id?'Actualizado':'Movimiento creado','success'); closeModal();
     delete state.cache.ctasCtes; pages.ctasCtes();
   } catch (e) { toast(e.message,'error'); }
@@ -10447,16 +10665,20 @@ async function viajeFacturarYPagarAbrir(viajeId) {
   if (!v) return toast('Viaje no encontrado', 'error');
   // Precargar contactos y datos para los selectores de método
   try {
-    const [provRsp, efRsp, chRsp, cbRsp] = await Promise.all([
+    const [provRsp, efRsp, chRsp, cbRsp, catRsp] = await Promise.all([
       api('/api/proveedores').catch(() => ({ data: [] })),
       api('/api/efectivo').catch(() => ({ data: [] })),
       api('/api/cheques').catch(() => ({ data: [] })),
       api('/api/banco-cuentas').catch(() => ({ data: [] })),
+      api('/api/catalogos').catch(() => ({ data: [] })),
     ]);
     state.cache.proveedores = provRsp.data || [];
-    state.cache.efectivoCajas = [...new Set((efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean))].sort();
+    const cajasCat  = (catRsp.data || []).filter(c => c.tipo === 'Caja' && c.activo !== false).map(c => c.nombre);
+    const cajasHist = (efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean);
+    state.cache.efectivoCajas = [...new Set([...cajasCat, ...cajasHist])].sort();
     state.cache.cheques = chRsp.data || [];
     state.cache.bancoCuentas = cbRsp.data || [];
+    state.cache.catalogos = catRsp.data || [];
   } catch {}
   const proveedores = state.cache.proveedores || [];
   // Pre-calcular flete: tarifa × kg / 1000
@@ -10475,19 +10697,31 @@ async function viajeFacturarYPagarAbrir(viajeId) {
         🚛 Viaje del <b>${fmtDate(v.fecha)}</b> · ${esc(v.origen||'—')} → ${esc(v.destino||'—')} · ${esc(v.producto||'')} · ${kg ? fmtN(kg)+' kg' : 'sin kg'}${tarifa ? ' · tarifa $'+fmtN(tarifa)+'/t' : ''}
       </div>
 
+      <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between gap-2 flex-wrap">
+        <div class="text-sm text-blue-900">📄 <b>¿Tenés el PDF de la factura del transportista?</b> Subilo y autocompletamos todo desde el QR/texto de ARCA.</div>
+        <div class="flex gap-2 items-center">
+          <input id="vfp-pdf-file" type="file" accept=".pdf" class="hidden" onchange="viajeFacPagarCargarPDF(this)"/>
+          <button class="btn btn-primary text-xs" onclick="document.getElementById('vfp-pdf-file').click()">📄 Cargar desde PDF</button>
+        </div>
+      </div>
+      <div id="vfp-pdf-msg" class="text-xs mb-3"></div>
+
       <h4 class="font-semibold text-slate-700 text-sm mb-2">1. Factura del transportista</h4>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div class="col-span-2">
-          <label class="label">Proveedor (transportista) *</label>
+          <label class="label">Proveedor (transportista)</label>
           <select id="vfp-prov" class="input">
-            <option value="">— Elegir o crear desde Proveedores —</option>
+            <option value="">— (Opcional) Sin proveedor del catálogo —</option>
             ${proveedores.map(p => `<option value="${esc(p.id)}" ${p.id===provMatch?.id?'selected':''}>${esc(p.razonSocial)}${p.cuit?' · '+esc(p.cuit):''}</option>`).join('')}
           </select>
-          ${v.transportista ? `<div class="text-[11px] text-slate-500 mt-1">Transportista del viaje: <b>${esc(v.transportista)}</b>${v.transporteCuit?' · CUIT '+esc(v.transporteCuit):''}${provMatch?' · <span class="text-emerald-700">✅ proveedor encontrado por CUIT</span>':''}</div>` : ''}
+          <div class="text-[11px] text-slate-500 mt-1">
+            ${v.transportista ? `Transportista del viaje: <b>${esc(v.transportista)}</b>${v.transporteCuit?' · CUIT '+esc(v.transporteCuit):''}${provMatch?' · <span class="text-emerald-700">✅ encontrado</span>':''}` : 'Si no está en el catálogo, podés crear uno nuevo:'}
+            <button type="button" class="btn btn-ghost text-[11px] text-blue-700 underline ml-1" onclick="viajeFacPagarNuevoProveedor()">+ Crear nuevo proveedor</button>
+          </div>
         </div>
         <div>
           <label class="label">Tipo *</label>
-          <select id="vfp-tipo" class="input">${['A','B','C','E'].map(t => `<option>${t}</option>`).join('')}</select>
+          <select id="vfp-tipo" class="input">${['A','B','C','E','M'].map(t => `<option>${t}</option>`).join('')}</select>
         </div>
         <div>
           <label class="label">Fecha *</label>
@@ -10508,16 +10742,27 @@ async function viajeFacturarYPagarAbrir(viajeId) {
         </div>
       </div>
 
-      <h4 class="font-semibold text-slate-700 text-sm mb-2">2. Pago</h4>
-      <div class="mb-3">
-        <label class="label">Método de pago *</label>
-        <select id="vfp-metodo" class="input" onchange="viajeFacPagarMetodoCambio()">
-          <option value="efectivo">💵 Efectivo</option>
-          <option value="cheque">💳 Cheque (propio o de terceros endosado)</option>
-          <option value="transferencia">🏛️ Transferencia bancaria</option>
-        </select>
+      <h4 class="font-semibold text-slate-700 text-sm mb-2 flex items-center gap-2">
+        2. Pago
+        <label class="flex items-center gap-1 text-xs font-normal cursor-pointer">
+          <input type="checkbox" id="vfp-pagar-ahora" checked onchange="viajeFacPagarTogglePago()"/>
+          <span>Pagar ahora</span>
+        </label>
+      </h4>
+      <div id="vfp-pago-wrap">
+        <div class="mb-3">
+          <label class="label">Método de pago *</label>
+          <select id="vfp-metodo" class="input" onchange="viajeFacPagarMetodoCambio()">
+            <option value="efectivo">💵 Efectivo</option>
+            <option value="cheque">💳 Cheque (propio o de terceros endosado)</option>
+            <option value="transferencia">🏛️ Transferencia bancaria</option>
+          </select>
+        </div>
+        <div id="vfp-metodo-det" class="mb-3"></div>
       </div>
-      <div id="vfp-metodo-det" class="mb-3"></div>
+      <div id="vfp-pago-skip" class="hidden mb-3 p-3 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900">
+        ✏️ Solo se va a registrar la <b>factura del transportista</b> vinculada al viaje. Queda en estado "facturado" (pendiente de pago). Después podés pagarla desde Cuentas a Pagar o desde Viajes (botón 💵).
+      </div>
 
       <div>
         <label class="label">Observaciones</label>
@@ -10525,9 +10770,111 @@ async function viajeFacturarYPagarAbrir(viajeId) {
       </div>`,
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" onclick="viajeFacturarYPagarConfirmar()">💸 Facturar y pagar</button>`,
+      <button class="btn btn-primary" id="vfp-btn-confirmar" onclick="viajeFacturarYPagarConfirmar()">💸 Facturar y pagar</button>`,
   });
   setTimeout(() => viajeFacPagarMetodoCambio(), 0);
+}
+function viajeFacPagarTogglePago() {
+  const pagar = document.getElementById('vfp-pagar-ahora')?.checked;
+  const wrap  = document.getElementById('vfp-pago-wrap');
+  const skip  = document.getElementById('vfp-pago-skip');
+  const btn   = document.getElementById('vfp-btn-confirmar');
+  if (wrap) wrap.style.display = pagar ? '' : 'none';
+  if (skip) skip.classList.toggle('hidden', pagar);
+  if (btn)  btn.innerHTML = pagar ? '💸 Facturar y pagar' : '📄 Solo facturar (sin pagar)';
+}
+
+// Sube el PDF y autopobla los campos de la factura usando el parser de ARCA.
+async function viajeFacPagarCargarPDF(input) {
+  const archivo = input?.files?.[0];
+  if (!archivo) return;
+  const msg = document.getElementById('vfp-pdf-msg');
+  if (msg) msg.innerHTML = '<span class="text-blue-700">⏳ Leyendo PDF...</span>';
+  try {
+    const fd = new FormData();
+    fd.append('archivo', archivo);
+    const r = await fetch(API_BASE + '/api/admin/parse-factura-pdf', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + state.token, 'X-Company-Id': state.companyId },
+      body: fd,
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || 'Error ' + r.status);
+    const d = j.data;
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+    setVal('vfp-tipo', d.tipoCmpLetra || 'A');
+    setVal('vfp-pv',   d.puntoVenta || 1);
+    setVal('vfp-nro',  d.numero || 1);
+    if (d.fecha) setVal('vfp-fecha', d.fecha.slice(0, 10));
+    if (d.total) setVal('vfp-total', d.total.toFixed(2));
+    // Buscar proveedor por CUIT
+    if (d.cuitEmisor) {
+      const provs = state.cache.proveedores || [];
+      const cuitNorm = String(d.cuitEmisor).replace(/[-.\s]/g, '');
+      const match = provs.find(p => String(p.cuit || '').replace(/[-.\s]/g, '') === cuitNorm);
+      if (match) setVal('vfp-prov', match.id);
+    }
+    if (msg) msg.innerHTML = `<span class="text-emerald-700">✅ Cargado: ${d.tipoCmpLetra||'?'} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')} · ${d.razonSocialEmisor||''} · CAE ${d.cae||'?'}${d.fuente==='QR_ARCA'?' (fuente: QR)':' (fuente: texto del PDF)'}</span>`;
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span class="text-red-700">❌ ${esc(e.message)}</span>`;
+  } finally {
+    input.value = '';
+  }
+}
+
+// Abre un mini-form para crear un proveedor nuevo y dejarlo seleccionado.
+function viajeFacPagarNuevoProveedor() {
+  // Precargar campos con datos del transportista del viaje si están
+  const viajeId = state._viajeFacPagar?.viajeId;
+  const v = (state.cache.viajes || []).find(x => x.id === viajeId) || {};
+  const nombre = v.transportista || '';
+  const cuit = v.transporteCuit || '';
+  // Modal anidado simple
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-[200] flex items-center justify-center bg-black/40';
+  overlay.innerHTML = `
+    <div class="bg-white rounded-lg shadow-2xl w-full max-w-md p-5">
+      <div class="text-lg font-bold mb-3">+ Crear proveedor</div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Razón social *</label><input id="nvp-rs" class="input" value="${esc(nombre)}"/></div>
+        <div><label class="label">CUIT</label><input id="nvp-cuit" class="input" value="${esc(cuit)}"/></div>
+        <div><label class="label">Teléfono</label><input id="nvp-tel" class="input"/></div>
+        <div class="col-span-2"><label class="label">Email</label><input id="nvp-em" class="input"/></div>
+        <div class="col-span-2"><label class="label">Rubro</label><input id="nvp-rubro" class="input" value="Transporte"/></div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button class="btn btn-secondary" id="nvp-cancel">Cancelar</button>
+        <button class="btn btn-primary" id="nvp-save">💾 Crear</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#nvp-cancel').onclick = () => overlay.remove();
+  overlay.querySelector('#nvp-save').onclick = async () => {
+    const data = {
+      razonSocial: overlay.querySelector('#nvp-rs').value.trim(),
+      cuit: overlay.querySelector('#nvp-cuit').value.trim() || null,
+      telefono: overlay.querySelector('#nvp-tel').value.trim() || null,
+      email: overlay.querySelector('#nvp-em').value.trim() || null,
+      rubro: overlay.querySelector('#nvp-rubro').value.trim() || null,
+    };
+    if (!data.razonSocial) return toast('Falta razón social', 'warn');
+    try {
+      const r = await api('/api/proveedores', { method: 'POST', body: JSON.stringify(data) });
+      const nuevo = r.data;
+      state.cache.proveedores = [...(state.cache.proveedores || []), nuevo];
+      // Agregar opción al select principal y seleccionarla
+      const sel = document.getElementById('vfp-prov');
+      if (sel) {
+        const opt = document.createElement('option');
+        opt.value = nuevo.id;
+        opt.textContent = `${nuevo.razonSocial}${nuevo.cuit?' · '+nuevo.cuit:''}`;
+        sel.appendChild(opt);
+        sel.value = nuevo.id;
+      }
+      toast('Proveedor creado', 'success');
+      overlay.remove();
+    } catch (e) { toast(e.message, 'error'); }
+  };
 }
 function viajeFacPagarMetodoCambio() {
   const metodo = document.getElementById('vfp-metodo')?.value;
@@ -10535,9 +10882,17 @@ function viajeFacPagarMetodoCambio() {
   if (!cont) return;
   if (metodo === 'efectivo') {
     const cajas = state.cache.efectivoCajas || [];
-    cont.innerHTML = `<label class="label">Caja de la que sale el efectivo</label>
-      <input id="vfp-caja" class="input" list="vfp-caja-list" placeholder="Ej: Oficina..."/>
-      <datalist id="vfp-caja-list">${cajas.map(c => `<option value="${esc(c)}">`).join('')}</datalist>`;
+    if (cajas.length) {
+      cont.innerHTML = `<label class="label">Caja de la que sale el efectivo *</label>
+        <select id="vfp-caja" class="input">
+          <option value="">— Elegir caja —</option>
+          ${cajas.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+        </select>`;
+    } else {
+      cont.innerHTML = `<label class="label">Caja de la que sale el efectivo</label>
+        <input id="vfp-caja" class="input" placeholder="Ej: Oficina..."/>
+        <div class="text-[11px] text-amber-700 mt-1">⚠️ No hay cajas. Creálas en Configuración → Catálogos → Cajas.</div>`;
+    }
   } else if (metodo === 'cheque') {
     const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
     cont.innerHTML = cheques.length
@@ -10560,67 +10915,72 @@ function viajeFacPagarMetodoCambio() {
 async function viajeFacturarYPagarConfirmar() {
   const viajeId = state._viajeFacPagar?.viajeId;
   if (!viajeId) return toast('Falta viaje', 'error');
-  const proveedorId = document.getElementById('vfp-prov').value;
+  const proveedorId = document.getElementById('vfp-prov').value || null; // OPCIONAL
   const tipo = document.getElementById('vfp-tipo').value;
   const pv = Number(document.getElementById('vfp-pv').value || 0);
   const nro = Number(document.getElementById('vfp-nro').value || 0);
   const fecha = document.getElementById('vfp-fecha').value;
   const total = Number(document.getElementById('vfp-total').value || 0);
-  const metodo = document.getElementById('vfp-metodo').value;
   const obs = document.getElementById('vfp-obs').value || null;
-  if (!proveedorId) return toast('Elegí un proveedor', 'warn');
+  const pagarAhora = document.getElementById('vfp-pagar-ahora')?.checked;
   if (!pv || !nro) return toast('Faltan punto de venta o número de factura', 'warn');
   if (!total || total <= 0) return toast('El total tiene que ser mayor a 0', 'warn');
+  if (pagarAhora && !proveedorId) return toast('Para pagar ahora hace falta elegir un proveedor (o crear uno nuevo)', 'warn');
 
   try {
-    // Paso 1: crear factura de compra con un item ítem único (flete del viaje)
     const v = (state.cache.viajes || []).find(x => x.id === viajeId);
     const desc = `Flete viaje ${fmtDate(v?.fecha || new Date())} · ${v?.origen||''} → ${v?.destino||''}${v?.cantidad?' · '+fmtN(v.cantidad)+' kg':''}`;
-    // Calcular neto suponiendo 21% IVA (en facturas A) o 0 (resto)
     const aplIva = (tipo === 'A') ? 21 : 0;
     const neto = aplIva ? +(total / (1 + aplIva/100)).toFixed(2) : total;
+
+    // Paso 1: crear factura de compra (proveedor puede ser null)
     const facBody = {
       tipo, puntoVenta: pv, numero: nro,
       fecha: new Date(fecha).toISOString(),
-      proveedorId, condicionCompra: 'Contado',
-      observaciones: 'Flete viaje ' + viajeId,
+      proveedorId, condicionCompra: pagarAhora ? 'Contado' : 'Cta cte 30 días',
+      observaciones: 'Flete viaje ' + viajeId + (obs ? ' · ' + obs : ''),
       items: [{ productoId: null, descripcion: desc, cantidad: 1, precioUnit: neto, alicuotaIva: aplIva }],
     };
     const facRsp = await api('/api/facturas-compra', { method: 'POST', body: JSON.stringify(facBody) });
     const facturaId = facRsp.data?.id;
     if (!facturaId) throw new Error('No se obtuvo el ID de la factura creada');
 
-    // Paso 2: vincular factura al viaje
+    // Paso 2: vincular factura al viaje (estado pasa a "facturado" automáticamente por el derive del backend)
     await api('/api/viajes/' + viajeId, { method: 'PUT', body: JSON.stringify({ facturaCompraId: facturaId }) });
 
-    // Paso 3: pagar la factura recién creada
-    // Hay que conseguir el CtaCte que se generó por la factura. Buscamos el pendiente más reciente del proveedor.
-    const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=proveedor&contactoId=${encodeURIComponent(proveedorId)}`);
-    const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.haber||0) - total) < 0.01)
-      .sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
-    if (!pend.length) throw new Error('No encontré el comprobante recién generado para pagar');
-    const ctaCteId = pend[0].id;
+    // Paso 3: si pagarAhora == true, pagar la factura
+    if (pagarAhora) {
+      const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=proveedor&contactoId=${encodeURIComponent(proveedorId)}`);
+      const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.haber||0) - total) < 0.01)
+        .sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
+      if (!pend.length) throw new Error('Se creó la factura pero no encontré el comprobante recién generado para pagarlo. Pagalo a mano desde Cuentas a Pagar.');
+      const ctaCteId = pend[0].id;
 
-    const pagoBody = {
-      proveedorId,
-      comprobantes: [{ ctaCteId, importeAplicado: total }],
-      metodo,
-      monto: total,
-      fecha: new Date(fecha).toISOString(),
-      observaciones: 'Pago flete viaje ' + viajeId + (obs ? ' · ' + obs : ''),
-    };
-    if (metodo === 'efectivo')     pagoBody.cajaOrigen   = document.getElementById('vfp-caja')?.value || null;
-    if (metodo === 'cheque')       pagoBody.chequeId     = document.getElementById('vfp-cheque')?.value || null;
-    if (metodo === 'transferencia') pagoBody.bancoCuentaId = document.getElementById('vfp-banco')?.value || null;
-    if (metodo === 'cheque' && !pagoBody.chequeId) throw new Error('Elegí el cheque a entregar');
-    if (metodo === 'transferencia' && !pagoBody.bancoCuentaId) throw new Error('Elegí la cuenta bancaria');
-    await api('/api/pagos-proveedores', { method: 'POST', body: JSON.stringify(pagoBody) });
+      const metodo = document.getElementById('vfp-metodo').value;
+      const pagoBody = {
+        proveedorId,
+        comprobantes: [{ ctaCteId, importeAplicado: total }],
+        metodo, monto: total,
+        fecha: new Date(fecha).toISOString(),
+        observaciones: 'Pago flete viaje ' + viajeId + (obs ? ' · ' + obs : ''),
+      };
+      if (metodo === 'efectivo')      pagoBody.cajaOrigen    = document.getElementById('vfp-caja')?.value || null;
+      if (metodo === 'cheque')        pagoBody.chequeId      = document.getElementById('vfp-cheque')?.value || null;
+      if (metodo === 'transferencia') pagoBody.bancoCuentaId = document.getElementById('vfp-banco')?.value || null;
+      if (metodo === 'efectivo'      && !pagoBody.cajaOrigen)    throw new Error('Elegí la caja de efectivo');
+      if (metodo === 'cheque'        && !pagoBody.chequeId)      throw new Error('Elegí el cheque a entregar');
+      if (metodo === 'transferencia' && !pagoBody.bancoCuentaId) throw new Error('Elegí la cuenta bancaria');
+      await api('/api/pagos-proveedores', { method: 'POST', body: JSON.stringify(pagoBody) });
 
-    // Paso 4: marcar viaje como pagado
-    await api('/api/viajes/' + viajeId, { method: 'PUT', body: JSON.stringify({ estado: 'pagado' }) });
+      // Marcar viaje como pagado
+      await api('/api/viajes/' + viajeId, { method: 'PUT', body: JSON.stringify({ estado: 'pagado' }) });
+    }
 
     closeModal();
-    toast('✅ Flete facturado y pagado por ' + fmt$(total), 'success');
+    toast(pagarAhora
+      ? '✅ Flete facturado y pagado por ' + fmt$(total)
+      : '✅ Flete facturado (pendiente de pago) por ' + fmt$(total),
+      'success');
     delete state.cache.viajes; pages.viajes();
   } catch (e) {
     toast(e.message || 'Error al facturar/pagar', 'error');
@@ -12121,7 +12481,6 @@ const CAT_TABS = [
   { id:'unidades', label:'Unidades de medida',  icon:'📏', tipos:['Unidad de medida'],   singular:'Unidad' },
   { id:'condIVA',  label:'Condición IVA',       icon:'🧾', tipos:['Condición IVA'],      singular:'Condición' },
   { id:'bancos',   label:'Bancos',              icon:'🏦', tipos:['Banco'],              singular:'Banco' },
-  { id:'cuentas',  label:'Cuentas bancarias',   icon:'💳', tipos:['Cuenta bancaria'],    singular:'Cuenta' },
   { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', tipos:['Caja'],               singular:'Caja' },
   { id:'paises',   label:'Países',              icon:'🌎', tipos:['País'],               singular:'País' },
   { id:'provs',    label:'Provincias',          icon:'🗾', tipos:['Provincia'],          singular:'Provincia' },
