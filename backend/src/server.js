@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.20';
-const AGROCORE_BUILD = new Date('2026-06-18').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '0.7.21';
+const AGROCORE_BUILD = new Date('2026-06-19').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -4416,6 +4416,93 @@ const bancoMovSchema = z.object({
 // Crear movimiento bancario manual. Si es transferencia entre cuentas propias,
 // crea automáticamente el movimiento espejo (out → in) para que ambos saldos
 // queden consistentes.
+// ============================================================
+// MOVIMIENTOS DIARIOS — centro unificado para cargar cualquier gasto/ingreso
+// del día con cualquier método (efectivo / cheque / transferencia).
+//
+// El endpoint orquesta los modelos existentes según el método elegido:
+//   - efectivo      → crea Efectivo (ingreso o egreso) en la caja indicada
+//   - transferencia → crea BancoMovimiento (transferencia_in/out) en la cuenta
+//   - cheque        → marca el cheque elegido como endosado/depositado
+//
+// El "concepto" + "categoría" + "clasificación" (empresa/propio) se preservan
+// en el movimiento creado.
+// ============================================================
+app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      fecha: z.coerce.date(),
+      tipo: z.enum(['ingreso', 'egreso']),
+      concepto: z.string().min(1),
+      categoria: z.string().nullable().optional(),
+      clasificacion: z.string().nullable().optional(),   // "empresa" | "propio"
+      monto: z.number().positive(),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia']),
+      // Datos según método
+      caja: z.string().nullable().optional(),            // efectivo
+      chequeId: z.string().nullable().optional(),        // cheque (cheque existente)
+      bancoCuentaId: z.string().nullable().optional(),   // transferencia
+      // Contraparte opcional (texto libre) — solo descriptivo
+      contraparte: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const detalleObs = [
+      d.categoria ? `Categoría: ${d.categoria}` : null,
+      d.contraparte ? `Contraparte: ${d.contraparte}` : null,
+      d.observaciones,
+    ].filter(Boolean).join(' · ');
+    let resultado;
+
+    if (d.metodo === 'efectivo') {
+      resultado = await prisma.efectivo.create({
+        data: {
+          companyId: req.companyId,
+          fecha: d.fecha,
+          tipo: d.tipo,
+          concepto: d.concepto,
+          monto: d.monto,
+          caja: d.caja || null,
+          clasificacion: d.clasificacion || 'empresa',
+          observaciones: detalleObs || null,
+        },
+      });
+    } else if (d.metodo === 'transferencia') {
+      if (!d.bancoCuentaId) return res.status(400).json({ ok: false, error: 'Falta la cuenta bancaria' });
+      const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.bancoCuentaId, companyId: req.companyId } });
+      if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta bancaria no encontrada' });
+      resultado = await prisma.bancoMovimiento.create({
+        data: {
+          companyId: req.companyId,
+          cuentaId: d.bancoCuentaId,
+          fecha: d.fecha,
+          tipo: d.tipo === 'ingreso' ? 'transferencia_in' : 'transferencia_out',
+          concepto: d.concepto,
+          monto: d.monto,
+          contraparte: d.contraparte || null,
+          observaciones: detalleObs || null,
+          userId: req.user?.id || null,
+        },
+      });
+    } else if (d.metodo === 'cheque') {
+      if (!d.chequeId) return res.status(400).json({ ok: false, error: 'Falta el cheque' });
+      const ch = await prisma.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
+      if (!ch) return res.status(404).json({ ok: false, error: 'Cheque no encontrado' });
+      const nuevoEstado = d.tipo === 'egreso' ? 'endosado' : 'depositado';
+      resultado = await prisma.cheque.update({
+        where: { id: ch.id },
+        data: {
+          estado: nuevoEstado,
+          beneficiario: d.contraparte || ch.beneficiario,
+          observaciones: detalleObs || ch.observaciones,
+        },
+      });
+    }
+
+    res.status(201).json({ ok: true, data: { id: resultado?.id, metodo: d.metodo, tipo: d.tipo } });
+  } catch (e) { next(e); }
+});
+
 app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const d = bancoMovSchema.parse(req.body);

@@ -940,6 +940,7 @@ const MODULES = [
   { id:'libroIVA',      label:'Libro IVA',            icon:'📘', perm:'finanzas:read',   section:'Compras' },
 
   // ===== TESORERÍA — bancos, efectivo, cheques, créditos =====
+  { id:'movDiarios',    label:'Movimientos diarios',  icon:'📝', perm:'finanzas:create', section:'Tesorería' },
   { id:'bancos',        label:'Bancos',               icon:'🏛️', perm:'finanzas:read',   section:'Tesorería' },
   { id:'efectivo',      label:'Control de efectivo',  icon:'💵', perm:'finanzas:read',   section:'Tesorería' },
   { id:'cheques',       label:'Cheques',              icon:'💳', perm:'finanzas:read',   section:'Tesorería' },
@@ -2303,6 +2304,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/06/2026',
+      titulo:'📝 Movimientos diarios: centro unificado para gastos e ingresos del día',
+      desc:'Nueva pagina en Tesoreria → Movimientos diarios. Es el lugar UNICO donde cargas cualquier movimiento del dia a dia (compra de comida, gastos de taller, repuestos, combustible, sueldos, cobranzas puntuales, etc) con cualquier metodo de pago (efectivo+caja, cheque, transferencia+cuenta), categoria (Combustible, Taller, Comida, Sueldos, o lo que sea) y clasificacion (🏢 Empresa o 👤 Personal del dueño). Tambien podes anotar contraparte (texto libre) y observaciones. Por dentro el sistema crea automaticamente el movimiento correcto (Efectivo / BancoMovimiento / cambia estado de cheque) — vos no te preocupas. Listado con filtros (fecha, tipo, metodo, categoria, clasificacion, busqueda), KPI del mes (ingresos / egresos / neto) y total filtrado. Las categorias se pueden editar/agregar en Catalogos → Categorias de gasto.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'18/06/2026',
       titulo:'📅 Condiciones de pago editables + vencimiento automático en Flujo de Fondos',
       desc:'Nuevo catálogo "Condiciones de pago" en Configuración → Catálogos. Podés agregar/editar/borrar tus condiciones (ej. "Cta cte 45 días", "Cta cte 90 días", "Contado anticipado") con su cantidad de días. Cuando emitís una factura de venta o compra y elegís una condición, la CtaCte que se genera queda con vencimiento = fecha factura + N días. Eso alimenta directamente el Flujo de Fondos como cuenta a cobrar/pagar en la fecha correcta. Si no cargás el catálogo, el sistema usa las 4 condiciones default de siempre (Contado / Cta cte 15/30/60). El campo Código del catálogo guarda los días (0 = Contado, 15, 30, 60, 90...).' },
@@ -13135,6 +13139,7 @@ const CAT_TABS = [
   { id:'bancos',   label:'Bancos',              icon:'🏦', tipos:['Banco'],              singular:'Banco' },
   { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', tipos:['Caja'],               singular:'Caja' },
   { id:'condPago', label:'Condiciones de pago', icon:'📅', tipos:['Condición de pago'],  singular:'Condición de pago' },
+  { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
   { id:'paises',   label:'Países',              icon:'🌎', tipos:['País'],               singular:'País' },
   { id:'provs',    label:'Provincias',          icon:'🗾', tipos:['Provincia'],          singular:'Provincia' },
   { id:'ciudades', label:'Ciudades / Localidades',icon:'🏙️', tipos:['Ciudad'],           singular:'Ciudad' },
@@ -13564,6 +13569,359 @@ async function arrDel(id) {
 }
 
 /* ---------- CONTROL DE EFECTIVO ---------- */
+// ============================================================
+// MOVIMIENTOS DIARIOS — centro unificado de carga
+// Cualquier ingreso/egreso del día con cualquier método y categoría.
+// Internamente despacha al modelo correcto (Efectivo / BancoMovimiento / Cheque)
+// pero acá el usuario tiene UNA sola ventanilla.
+// ============================================================
+pages.movDiarios = async function() {
+  setHeader('Movimientos diarios', 'Cargá cualquier gasto o ingreso del día con cualquier método de pago');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('movDiarios','Movimientos diarios'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+
+  // Cargamos efectivo + banco-movimientos del último mes para mostrar listado unificado
+  const hoy = new Date();
+  const haceUnMes = new Date(hoy.getTime() - 30*24*60*60*1000).toISOString().slice(0,10);
+  let efRows = [], bancoMovs = [];
+  try {
+    const [efRsp, bmRsp, chRsp, cbRsp, catRsp] = await Promise.all([
+      api('/api/efectivo').catch(() => ({ data: [] })),
+      api('/api/banco-movimientos').catch(() => ({ data: [] })),
+      api('/api/cheques').catch(() => ({ data: [] })),
+      api('/api/banco-cuentas').catch(() => ({ data: [] })),
+      api('/api/catalogos').catch(() => ({ data: [] })),
+    ]);
+    efRows = efRsp.data || [];
+    bancoMovs = bmRsp.data || [];
+    const cajasCat  = (catRsp.data || []).filter(c => c.tipo === 'Caja' && c.activo !== false).map(c => c.nombre);
+    const cajasHist = efRows.map(e => (e.caja || '').trim()).filter(Boolean);
+    state.cache.efectivoCajas = [...new Set([...cajasCat, ...cajasHist])].sort();
+    state.cache.cheques = chRsp.data || [];
+    state.cache.bancoCuentas = cbRsp.data || [];
+    state.cache.catalogos = catRsp.data || [];
+  } catch (e) { return toast(e.message, 'error'); }
+
+  // Normalizar los movimientos en una sola lista
+  const cuentasMap = new Map((state.cache.bancoCuentas || []).map(c => [c.id, c]));
+  const filas = [];
+  for (const e of efRows) {
+    if (e.tipo === 'transferencia') continue; // las transferencias entre cajas no son gastos/ingresos
+    filas.push({
+      id: 'EF-' + e.id,
+      fecha: e.fecha,
+      tipo: e.tipo, // ingreso/egreso
+      concepto: e.concepto,
+      categoria: extraerCategoria(e.observaciones),
+      clasificacion: e.clasificacion || 'empresa',
+      monto: Number(e.monto || 0),
+      metodo: 'efectivo',
+      origen: e.caja || '(sin caja)',
+      observaciones: e.observaciones || '',
+    });
+  }
+  for (const m of bancoMovs) {
+    if (m.tipo !== 'transferencia_in' && m.tipo !== 'transferencia_out') continue;
+    const c = cuentasMap.get(m.cuentaId);
+    filas.push({
+      id: 'BM-' + m.id,
+      fecha: m.fecha,
+      tipo: m.tipo === 'transferencia_in' ? 'ingreso' : 'egreso',
+      concepto: m.concepto,
+      categoria: extraerCategoria(m.observaciones),
+      clasificacion: 'empresa',
+      monto: Number(m.monto || 0),
+      metodo: 'transferencia',
+      origen: c ? (c.banco + (c.numero ? ' · '+c.numero : '')) : 'Banco',
+      observaciones: m.observaciones || '',
+    });
+  }
+  filas.sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
+
+  // KPIs del mes
+  const mesActual = hoy.toISOString().slice(0,7);
+  const filasMes = filas.filter(f => (f.fecha||'').slice(0,7) === mesActual);
+  const ingresosMes = filasMes.filter(f => f.tipo === 'ingreso').reduce((a,f) => a + f.monto, 0);
+  const egresosMes  = filasMes.filter(f => f.tipo === 'egreso').reduce((a,f) => a + f.monto, 0);
+  const netoMes = ingresosMes - egresosMes;
+
+  // Categorías existentes para filtro
+  const categoriasUnicas = [...new Set(filas.map(f => f.categoria).filter(Boolean))].sort();
+
+  state.movDiariosFilter = state.movDiariosFilter || { q:'', tipo:'', metodo:'', categoria:'', clasif:'', desde:'', hasta:'' };
+
+  const render = () => {
+    const f = state.movDiariosFilter;
+    const q = (f.q || '').toLowerCase();
+    const filtered = filas.filter(r => {
+      if (f.tipo && r.tipo !== f.tipo) return false;
+      if (f.metodo && r.metodo !== f.metodo) return false;
+      if (f.categoria && r.categoria !== f.categoria) return false;
+      if (f.clasif && r.clasificacion !== f.clasif) return false;
+      if (f.desde && (r.fecha || '').slice(0,10) < f.desde) return false;
+      if (f.hasta && (r.fecha || '').slice(0,10) > f.hasta) return false;
+      if (q && ![r.concepto, r.categoria, r.origen, r.observaciones].some(x => (x||'').toLowerCase().includes(q))) return false;
+      return true;
+    });
+    const sumF = filtered.reduce((a,r) => a + (r.tipo==='ingreso' ? r.monto : -r.monto), 0);
+    const cant = filtered.length;
+    $('#md-tabla').innerHTML = filtered.length === 0
+      ? '<div class="text-center text-slate-400 py-8">' + (filas.length ? 'Sin coincidencias con los filtros' : 'Sin movimientos cargados. Usá "+ Nuevo movimiento" arriba.') + '</div>'
+      : `<table class="data text-sm">
+          <thead><tr>
+            <th>Fecha</th>
+            <th>Concepto</th>
+            <th>Categoría</th>
+            <th>Clasif.</th>
+            <th>Método</th>
+            <th>Caja / Cuenta</th>
+            <th class="text-right">Monto</th>
+          </tr></thead>
+          <tbody>
+            ${filtered.map(r => `
+              <tr class="table-row">
+                <td class="whitespace-nowrap">${fmtDate(r.fecha)}</td>
+                <td><b>${esc(r.concepto || '—')}</b>${r.observaciones && !r.observaciones.includes(r.concepto) ? `<div class="text-[11px] text-slate-500">${esc(r.observaciones)}</div>` : ''}</td>
+                <td>${r.categoria ? `<span class="badge badge-blue">${esc(r.categoria)}</span>` : '—'}</td>
+                <td>${r.clasificacion === 'propio'
+                    ? '<span class="badge badge-purple">Personal</span>'
+                    : '<span class="badge badge-green">Empresa</span>'}</td>
+                <td>${r.metodo === 'efectivo' ? '💵 Efectivo'
+                    : r.metodo === 'transferencia' ? '🏛️ Transferencia'
+                    : r.metodo === 'cheque' ? '💳 Cheque' : '—'}</td>
+                <td class="text-xs text-slate-600">${esc(r.origen)}</td>
+                <td class="text-right font-semibold ${r.tipo === 'ingreso' ? 'text-emerald-700' : 'text-red-700'}">${r.tipo === 'ingreso' ? '+' : '-'}${fmt$(r.monto)}</td>
+              </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr class="font-bold bg-slate-50">
+              <td colspan="6">Total filtrado (${cant} movimiento${cant===1?'':'s'})</td>
+              <td class="text-right ${sumF >= 0 ? 'text-emerald-700' : 'text-red-700'}">${sumF >= 0 ? '+' : ''}${fmt$(sumF)}</td>
+            </tr>
+          </tfoot>
+        </table>`;
+  };
+
+  $('#page-body').innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">📅 Mes actual</div><div class="text-lg font-bold mt-1">${hoy.toLocaleDateString('es-AR', { month:'long', year:'numeric' })}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">⬆️ Ingresos</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(ingresosMes)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">⬇️ Egresos</div><div class="text-xl font-bold mt-1 text-red-700">${fmt$(egresosMes)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">⚖️ Neto del mes</div><div class="text-xl font-bold mt-1 ${netoMes>=0?'text-emerald-700':'text-red-700'}">${netoMes>=0?'+':''}${fmt$(netoMes)}</div></div>
+    </div>
+
+    <div class="kpi mb-3">
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+        <div class="md:col-span-4">
+          <label class="label">Buscar</label>
+          <input id="md-q" class="input" placeholder="Concepto, categoría, observaciones..." value="${esc(state.movDiariosFilter.q||'')}"/>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Tipo</label>
+          <select id="md-tipo" class="input">
+            <option value="">Todos</option>
+            <option value="ingreso" ${state.movDiariosFilter.tipo==='ingreso'?'selected':''}>Ingreso</option>
+            <option value="egreso"  ${state.movDiariosFilter.tipo==='egreso' ?'selected':''}>Egreso</option>
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Método</label>
+          <select id="md-metodo" class="input">
+            <option value="">Todos</option>
+            <option value="efectivo"      ${state.movDiariosFilter.metodo==='efectivo'?'selected':''}>💵 Efectivo</option>
+            <option value="transferencia" ${state.movDiariosFilter.metodo==='transferencia'?'selected':''}>🏛️ Transferencia</option>
+            <option value="cheque"        ${state.movDiariosFilter.metodo==='cheque'?'selected':''}>💳 Cheque</option>
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Categoría</label>
+          <select id="md-categoria" class="input">
+            <option value="">Todas</option>
+            ${categoriasUnicas.map(c => `<option value="${esc(c)}" ${c===state.movDiariosFilter.categoria?'selected':''}>${esc(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Clasif.</label>
+          <select id="md-clasif" class="input">
+            <option value="">Todas</option>
+            <option value="empresa" ${state.movDiariosFilter.clasif==='empresa'?'selected':''}>🏢 Empresa</option>
+            <option value="propio"  ${state.movDiariosFilter.clasif==='propio'?'selected':''}>👤 Personal</option>
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Desde</label>
+          <input id="md-desde" type="date" class="input" value="${state.movDiariosFilter.desde||''}"/>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Hasta</label>
+          <input id="md-hasta" type="date" class="input" value="${state.movDiariosFilter.hasta||''}"/>
+        </div>
+        <div class="md:col-span-3 flex gap-2">
+          <button class="btn btn-secondary flex-1" onclick="movDiariosFiltrosLimpiar()">Limpiar</button>
+          ${can('finanzas:create') ? `<button class="btn btn-primary flex-1" onclick="movDiariosAbrir()">+ Nuevo movimiento</button>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div class="kpi p-0 overflow-hidden"><div id="md-tabla"></div></div>`;
+
+  ['q','tipo','metodo','categoria','clasif','desde','hasta'].forEach(k => {
+    const el = $('#md-' + k);
+    if (!el) return;
+    const ev = (el.tagName === 'SELECT' || el.type === 'date') ? 'change' : 'input';
+    el.addEventListener(ev, e => { state.movDiariosFilter[k] = e.target.value; render(); });
+  });
+  render();
+};
+
+// Parsea la categoría desde un campo de observaciones que pudimos haber serializado
+// como "Categoría: X · Otro: Y · ..."
+function extraerCategoria(obs) {
+  if (!obs) return null;
+  const m = String(obs).match(/Categor[ií]a:\s*([^·\n]+)/i);
+  if (!m) return null;
+  return m[1].trim();
+}
+function movDiariosFiltrosLimpiar() {
+  state.movDiariosFilter = { q:'', tipo:'', metodo:'', categoria:'', clasif:'', desde:'', hasta:'' };
+  pages.movDiarios();
+}
+// Modal para cargar un movimiento diario
+function movDiariosAbrir() {
+  // Categorías sugeridas: las del catálogo + las que ya se usaron
+  const catCats = (state.cache.catalogos || []).filter(c => c.tipo === 'Categoría de gasto' && c.activo !== false).map(c => c.nombre);
+  const sugeridas = [...new Set(['Combustible','Comida','Taller','Repuestos','Sueldos','Servicios','Impuestos','Honorarios','Insumos','Otros', ...catCats])].sort();
+  openModal({
+    title:'+ Nuevo movimiento diario', size:'max-w-2xl',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="label">Tipo *</label>
+          <div class="flex gap-2">
+            <label class="flex-1 cursor-pointer p-2 rounded border-2 border-red-300 bg-red-50 has-[:checked]:border-red-600 has-[:checked]:bg-red-100">
+              <input type="radio" name="md-tipo" value="egreso" class="hidden" checked/>
+              <div class="text-center font-semibold text-red-700">⬇️ Egreso (pago/gasto)</div>
+            </label>
+            <label class="flex-1 cursor-pointer p-2 rounded border-2 border-emerald-300 bg-emerald-50 has-[:checked]:border-emerald-600 has-[:checked]:bg-emerald-100">
+              <input type="radio" name="md-tipo" value="ingreso" class="hidden"/>
+              <div class="text-center font-semibold text-emerald-700">⬆️ Ingreso (cobro/venta)</div>
+            </label>
+          </div>
+        </div>
+        <div>
+          <label class="label">Fecha *</label>
+          <input id="md-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Concepto *</label>
+          <input id="md-concepto" class="input" placeholder="Ej: Almuerzo equipo · Repuestos taller · Combustible camioneta"/>
+        </div>
+        <div>
+          <label class="label">Categoría</label>
+          <input id="md-cat" class="input" list="md-cat-list" placeholder="Combustible, Taller, Comida..."/>
+          <datalist id="md-cat-list">${sugeridas.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+        </div>
+        <div>
+          <label class="label">Clasificación *</label>
+          <select id="md-clasif-sel" class="input">
+            <option value="empresa">🏢 Empresa</option>
+            <option value="propio">👤 Personal del dueño</option>
+          </select>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Monto *</label>
+          <input id="md-monto" type="number" step="0.01" min="0.01" class="input" placeholder="0.00"/>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Contraparte (opcional)</label>
+          <input id="md-contrap" class="input" placeholder="Nombre del proveedor/cliente o anotación libre"/>
+        </div>
+        <div class="col-span-2">
+          <label class="label">Método de pago *</label>
+          <select id="md-met" class="input" onchange="movDiariosMetodoCambio()">
+            <option value="efectivo">💵 Efectivo</option>
+            <option value="cheque">💳 Cheque</option>
+            <option value="transferencia">🏛️ Transferencia bancaria</option>
+          </select>
+        </div>
+        <div class="col-span-2" id="md-met-det"></div>
+        <div class="col-span-2">
+          <label class="label">Observaciones</label>
+          <textarea id="md-obs" class="input" rows="2" placeholder="Detalles adicionales..."></textarea>
+        </div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="movDiariosGuardar()">💾 Registrar</button>`
+  });
+  setTimeout(() => movDiariosMetodoCambio(), 0);
+}
+function movDiariosMetodoCambio() {
+  const met = document.getElementById('md-met').value;
+  const det = document.getElementById('md-met-det');
+  if (!det) return;
+  if (met === 'efectivo') {
+    const cajas = state.cache.efectivoCajas || [];
+    det.innerHTML = cajas.length
+      ? `<label class="label">Caja *</label>
+         <select id="md-caja" class="input">
+           <option value="">— Elegir caja —</option>
+           ${cajas.map(c => `<option>${esc(c)}</option>`).join('')}
+         </select>`
+      : `<label class="label">Caja</label>
+         <input id="md-caja" class="input" placeholder="Nombre de caja"/>
+         <div class="text-[11px] text-amber-700 mt-1">⚠️ Te recomendamos crear las cajas en Configuración → Catálogos → Cajas.</div>`;
+  } else if (met === 'transferencia') {
+    const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
+    det.innerHTML = cuentas.length
+      ? `<label class="label">Cuenta bancaria *</label>
+         <select id="md-banco" class="input">
+           <option value="">— Elegir cuenta —</option>
+           ${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}
+         </select>`
+      : `<div class="text-xs text-amber-700">⚠️ No hay cuentas bancarias. Cargá una en Tesorería → Bancos.</div>`;
+  } else if (met === 'cheque') {
+    const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+    det.innerHTML = cheques.length
+      ? `<label class="label">Cheque a usar *</label>
+         <select id="md-cheque" class="input">
+           <option value="">— Elegir —</option>
+           ${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}
+         </select>
+         <div class="text-[11px] text-slate-500 mt-1">💡 Si todavía no cargaste el cheque, hacelo en Tesorería → Cheques y volvé acá.</div>`
+      : `<div class="text-xs text-amber-700">⚠️ No hay cheques en cartera. Cargá uno en Tesorería → Cheques primero.</div>`;
+  }
+}
+async function movDiariosGuardar() {
+  const tipo = document.querySelector('input[name="md-tipo"]:checked')?.value || 'egreso';
+  const fecha = document.getElementById('md-fecha').value;
+  const concepto = document.getElementById('md-concepto').value.trim();
+  const monto = Number(document.getElementById('md-monto').value || 0);
+  const categoria = document.getElementById('md-cat').value.trim() || null;
+  const clasificacion = document.getElementById('md-clasif-sel').value;
+  const contraparte = document.getElementById('md-contrap').value.trim() || null;
+  const observaciones = document.getElementById('md-obs').value.trim() || null;
+  const metodo = document.getElementById('md-met').value;
+  if (!concepto) return toast('Falta el concepto', 'warn');
+  if (!monto || monto <= 0) return toast('El monto debe ser mayor a 0', 'warn');
+  if (!fecha) return toast('Falta la fecha', 'warn');
+  const body = {
+    fecha: new Date(fecha).toISOString(),
+    tipo, concepto, monto, categoria, clasificacion, contraparte, observaciones, metodo,
+  };
+  if (metodo === 'efectivo')      body.caja          = document.getElementById('md-caja')?.value?.trim() || null;
+  if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('md-banco')?.value || null;
+  if (metodo === 'cheque')        body.chequeId      = document.getElementById('md-cheque')?.value || null;
+  if (metodo === 'efectivo'      && !body.caja)          return toast('Elegí la caja', 'warn');
+  if (metodo === 'transferencia' && !body.bancoCuentaId) return toast('Elegí la cuenta bancaria', 'warn');
+  if (metodo === 'cheque'        && !body.chequeId)      return toast('Elegí el cheque', 'warn');
+  try {
+    await api('/api/movimientos-diarios', { method:'POST', body: JSON.stringify(body) });
+    toast('✅ Movimiento registrado', 'success');
+    closeModal();
+    pages.movDiarios();
+  } catch (e) { toast(e.message || 'Error al registrar', 'error'); }
+}
+
 pages.efectivo = async function() {
   setHeader('Control de efectivo', 'Cajas físicas, transferencias entre ellas y gastos por caja');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('efectivo','Control de efectivo'); return; }
