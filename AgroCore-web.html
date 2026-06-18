@@ -2304,6 +2304,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/06/2026',
+      titulo:'⚡ Movimientos diarios ahora es un centro de operaciones completo',
+      desc:'Sobre la pagina de Movimientos diarios se sumaron 5 botones grandes de Acciones rapidas: (1) 📝 Gasto/Ingreso simple — el form basico de antes; (2) 📥 Factura de compra — abre el form de Compras que ya tiene Cargar desde PDF, autocrea proveedor desde el CUIT del PDF, condicion Contado con pago integrado; (3) 📤 Factura de venta — idem pero para ventas con CAE de ARCA; (4) 💸 Pagar a proveedor — modal multi-comprobante para saldar facturas pendientes de Cta Cte con cualquier metodo (efectivo+caja, cheque en cartera, transferencia+cuenta, intercompany); (5) 💰 Cobrar de cliente — idem para cobros (con opcion de cargar cheque de tercero nuevo desde el modal). Desde una sola pagina haces TODO lo del dia a dia.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/06/2026',
       titulo:'📝 Movimientos diarios: centro unificado para gastos e ingresos del día',
       desc:'Nueva pagina en Tesoreria → Movimientos diarios. Es el lugar UNICO donde cargas cualquier movimiento del dia a dia (compra de comida, gastos de taller, repuestos, combustible, sueldos, cobranzas puntuales, etc) con cualquier metodo de pago (efectivo+caja, cheque, transferencia+cuenta), categoria (Combustible, Taller, Comida, Sueldos, o lo que sea) y clasificacion (🏢 Empresa o 👤 Personal del dueño). Tambien podes anotar contraparte (texto libre) y observaciones. Por dentro el sistema crea automaticamente el movimiento correcto (Efectivo / BancoMovimiento / cambia estado de cheque) — vos no te preocupas. Listado con filtros (fecha, tipo, metodo, categoria, clasificacion, busqueda), KPI del mes (ingresos / egresos / neto) y total filtrado. Las categorias se pueden editar/agregar en Catalogos → Categorias de gasto.' },
@@ -13708,6 +13711,50 @@ pages.movDiarios = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">⬆️ Ingresos</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(ingresosMes)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">⬇️ Egresos</div><div class="text-xl font-bold mt-1 text-red-700">${fmt$(egresosMes)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">⚖️ Neto del mes</div><div class="text-xl font-bold mt-1 ${netoMes>=0?'text-emerald-700':'text-red-700'}">${netoMes>=0?'+':''}${fmt$(netoMes)}</div></div>
+    </div>
+
+    <div class="mb-4">
+      <div class="text-xs uppercase tracking-wider font-bold text-slate-600 mb-2">⚡ Acciones rápidas</div>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <button class="md-action-btn group p-3 rounded-lg border-2 border-slate-300 bg-white hover:border-emerald-500 hover:bg-emerald-50 transition text-left"
+                onclick="movDiariosAbrir()">
+          <div class="text-2xl mb-1">📝</div>
+          <div class="font-semibold text-sm text-slate-800 group-hover:text-emerald-800">Gasto / Ingreso simple</div>
+          <div class="text-[11px] text-slate-500 group-hover:text-emerald-700 mt-0.5">Sin factura, sin contraparte registrada</div>
+        </button>
+
+        ${can('compras:create') ? `
+        <button class="md-action-btn group p-3 rounded-lg border-2 border-slate-300 bg-white hover:border-blue-500 hover:bg-blue-50 transition text-left"
+                onclick="compForm()">
+          <div class="text-2xl mb-1">📥</div>
+          <div class="font-semibold text-sm text-slate-800 group-hover:text-blue-800">Factura de compra</div>
+          <div class="text-[11px] text-slate-500 group-hover:text-blue-700 mt-0.5">Carga PDF de ARCA · paga ahora o despues</div>
+        </button>` : ''}
+
+        ${can('ventas:create') ? `
+        <button class="md-action-btn group p-3 rounded-lg border-2 border-slate-300 bg-white hover:border-indigo-500 hover:bg-indigo-50 transition text-left"
+                onclick="factFormExterna()">
+          <div class="text-2xl mb-1">📤</div>
+          <div class="font-semibold text-sm text-slate-800 group-hover:text-indigo-800">Factura de venta</div>
+          <div class="text-[11px] text-slate-500 group-hover:text-indigo-700 mt-0.5">Carga PDF · cobra ahora o despues</div>
+        </button>` : ''}
+
+        ${can('finanzas:create') ? `
+        <button class="md-action-btn group p-3 rounded-lg border-2 border-slate-300 bg-white hover:border-red-500 hover:bg-red-50 transition text-left"
+                onclick="pagoCobroAbrir('pago')">
+          <div class="text-2xl mb-1">💸</div>
+          <div class="font-semibold text-sm text-slate-800 group-hover:text-red-800">Pagar a proveedor</div>
+          <div class="text-[11px] text-slate-500 group-hover:text-red-700 mt-0.5">Multi-comprobante de Cta Cte pendiente</div>
+        </button>` : ''}
+
+        ${can('finanzas:create') ? `
+        <button class="md-action-btn group p-3 rounded-lg border-2 border-slate-300 bg-white hover:border-amber-500 hover:bg-amber-50 transition text-left"
+                onclick="pagoCobroAbrir('cobro')">
+          <div class="text-2xl mb-1">💰</div>
+          <div class="font-semibold text-sm text-slate-800 group-hover:text-amber-800">Cobrar de cliente</div>
+          <div class="text-[11px] text-slate-500 group-hover:text-amber-700 mt-0.5">Multi-comprobante de Cta Cte pendiente</div>
+        </button>` : ''}
+      </div>
     </div>
 
     <div class="kpi mb-3">
