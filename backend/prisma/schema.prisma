@@ -71,6 +71,7 @@ model Company {
   intercoDestino  IntercompanyMovimiento[] @relation("IntercoDestino")
   bancoMovimientos BancoMovimiento[]
   recordatorios   Recordatorio[]
+  recordatoriosOcultos RecordatorioOculto[]
 }
 
 model User {
@@ -1137,4 +1138,18 @@ model Recordatorio {
 
   @@index([companyId, fecha])
   @@index([companyId, completado, fecha])
+}
+
+
+model RecordatorioOculto {
+  id          String   @id @default(cuid())
+  companyId   String
+  refTipo     String   // "cuota_credito" | "cheque" | "ctacte"
+  refId       String
+  ocultadoEn  DateTime @default(now())
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, refTipo, refId])
+  @@index([companyId])
 }

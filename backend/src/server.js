@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.25';
+const AGROCORE_VERSION = '0.7.26';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7366,6 +7366,137 @@ app.use((err, _req, res, _next) => {
 // ============================================================
 // AGENDA / RECORDATORIOS
 // ============================================================
+// La Agenda muestra DOS tipos de recordatorios:
+//   1) Manuales: cargados por el usuario en la tabla "Recordatorio".
+//   2) Automáticos: extraídos al vuelo de CuotaCredito + Cheque + CtaCte.
+//      No se guardan en DB. Tienen id "auto:cuota:xxx" / "auto:cheque:xxx" /
+//      "auto:ctacte:xxx" y origen='auto'. Si el usuario quiere ocultarlos,
+//      guardamos un registro en RecordatorioOculto y dejan de aparecer.
+async function _construirRecordatoriosAuto(companyId, opts = {}) {
+  const horizonteDias = opts.horizonteDias != null ? opts.horizonteDias : 365; // hasta 1 año adelante por default
+  const incluirVencidos = opts.incluirVencidos !== false;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const limiteFuturo = new Date(today); limiteFuturo.setDate(limiteFuturo.getDate() + horizonteDias);
+
+  // Ocultos
+  const ocultos = await prisma.recordatorioOculto.findMany({ where: { companyId } });
+  const setOcultos = new Set(ocultos.map(o => `${o.refTipo}:${o.refId}`));
+
+  const items = [];
+
+  // 1) Cuotas de crédito pendientes
+  const cuotas = await prisma.cuotaCredito.findMany({
+    where: {
+      pagada: false,
+      credito: { companyId },
+      vencimiento: { lte: limiteFuturo },
+    },
+    include: { credito: true },
+    orderBy: { vencimiento: 'asc' },
+  });
+  for (const c of cuotas) {
+    if (setOcultos.has(`cuota_credito:${c.id}`)) continue;
+    const venc = new Date(c.vencimiento); venc.setHours(0,0,0,0);
+    if (!incluirVencidos && venc < today) continue;
+    items.push({
+      id: `auto:cuota:${c.id}`,
+      origen: 'auto',
+      autoTipo: 'cuota_credito',
+      autoRefId: c.id,
+      titulo: `Cuota ${c.numero} crédito ${c.credito.banco || c.credito.entidad || ''}`.trim(),
+      descripcion: `Importe: $${(c.importeTotal||0).toFixed(2)} · ${c.credito.descripcion || ''}`.trim(),
+      fecha: c.vencimiento,
+      categoria: 'credito',
+      prioridad: 'media',
+      avisarDiasAntes: 15,
+      completado: false,
+      repetir: 'ninguno',
+      relacionTipo: 'credito',
+      relacionId: c.creditoId,
+    });
+  }
+
+  // 2) Cheques propios con fecha de pago próxima (no cobrados/rechazados)
+  const cheques = await prisma.cheque.findMany({
+    where: {
+      companyId,
+      tipo: 'propio',
+      estado: { notIn: ['cobrado','rechazado'] },
+      fechaPago: { lte: limiteFuturo },
+    },
+    orderBy: { fechaPago: 'asc' },
+  });
+  for (const ch of cheques) {
+    if (setOcultos.has(`cheque:${ch.id}`)) continue;
+    const fp = new Date(ch.fechaPago); fp.setHours(0,0,0,0);
+    if (!incluirVencidos && fp < today) continue;
+    items.push({
+      id: `auto:cheque:${ch.id}`,
+      origen: 'auto',
+      autoTipo: 'cheque',
+      autoRefId: ch.id,
+      titulo: `Cheque propio Nro ${ch.nroCheque}${ch.banco?` (${ch.banco})`:''}`,
+      descripcion: `Beneficiario: ${ch.beneficiario||'-'} · $${(ch.monto||0).toFixed(2)}`,
+      fecha: ch.fechaPago,
+      categoria: 'vencimiento',
+      prioridad: 'media',
+      avisarDiasAntes: 7,
+      completado: false,
+      repetir: 'ninguno',
+      relacionTipo: 'cheque',
+      relacionId: ch.id,
+    });
+  }
+
+  // 3) CtaCte con vencimiento (facturas pendientes + libres) — debe > haber pagado
+  const ctas = await prisma.ctaCte.findMany({
+    where: {
+      companyId,
+      vencimiento: { not: null, lte: limiteFuturo },
+      pagado: false,
+    },
+    orderBy: { vencimiento: 'asc' },
+  });
+  // Cargar contactos para nombres
+  const clienteIds = [...new Set(ctas.filter(c => c.contactoTipo==='cliente' && c.contactoId).map(c => c.contactoId))];
+  const provIds    = [...new Set(ctas.filter(c => c.contactoTipo==='proveedor' && c.contactoId).map(c => c.contactoId))];
+  const [clientes, proveedores] = await Promise.all([
+    clienteIds.length ? prisma.cliente.findMany({ where: { id: { in: clienteIds } } }) : Promise.resolve([]),
+    provIds.length    ? prisma.proveedor.findMany({ where: { id: { in: provIds } } }) : Promise.resolve([]),
+  ]);
+  const mapCli = Object.fromEntries(clientes.map(x => [x.id, x.razonSocial || x.nombre || '']));
+  const mapPrv = Object.fromEntries(proveedores.map(x => [x.id, x.razonSocial || x.nombre || '']));
+  for (const c of ctas) {
+    if (setOcultos.has(`ctacte:${c.id}`)) continue;
+    const v = new Date(c.vencimiento); v.setHours(0,0,0,0);
+    if (!incluirVencidos && v < today) continue;
+    const monto = Math.max(c.debe || 0, c.haber || 0);
+    let contactoNombre = c.nombreLibre || '';
+    if (c.contactoTipo === 'cliente' && mapCli[c.contactoId]) contactoNombre = mapCli[c.contactoId];
+    else if (c.contactoTipo === 'proveedor' && mapPrv[c.contactoId]) contactoNombre = mapPrv[c.contactoId];
+    const esCobrar = c.contactoTipo === 'cliente' || (c.debe || 0) > 0 && c.contactoTipo !== 'proveedor';
+    const verbo = c.contactoTipo === 'proveedor' ? 'Pagar a' : c.contactoTipo === 'cliente' ? 'Cobrar de' : 'Vence';
+    items.push({
+      id: `auto:ctacte:${c.id}`,
+      origen: 'auto',
+      autoTipo: 'ctacte',
+      autoRefId: c.id,
+      titulo: `${verbo} ${contactoNombre || c.detalle}`.trim(),
+      descripcion: `${c.detalle} · $${monto.toFixed(2)}${c.categoria?` · ${c.categoria}`:''}`,
+      fecha: c.vencimiento,
+      categoria: 'vencimiento',
+      prioridad: 'media',
+      avisarDiasAntes: 15,
+      completado: false,
+      repetir: 'ninguno',
+      relacionTipo: 'ctacte',
+      relacionId: c.id,
+    });
+  }
+
+  return items;
+}
+
 app.get('/api/recordatorios', requireCompany, requirePermission('agenda:read'), async (req, res, next) => {
   try {
     const { estado = 'pendiente', desde, hasta } = req.query;
@@ -7377,19 +7508,39 @@ app.get('/api/recordatorios', requireCompany, requirePermission('agenda:read'), 
       if (desde) where.fecha.gte = new Date(desde);
       if (hasta) where.fecha.lte = new Date(hasta);
     }
-    const data = await prisma.recordatorio.findMany({ where, orderBy: { fecha: 'asc' } });
-    res.json({ ok: true, data });
+    const manuales = await prisma.recordatorio.findMany({ where, orderBy: { fecha: 'asc' } });
+    const manualesConOrigen = manuales.map(r => ({ ...r, origen: 'manual' }));
+    // Los completados no muestran automáticos (no aplica)
+    let autos = [];
+    if (estado !== 'completado') {
+      autos = await _construirRecordatoriosAuto(req.companyId, {});
+      if (desde || hasta) {
+        autos = autos.filter(a => {
+          const f = new Date(a.fecha);
+          if (desde && f < new Date(desde)) return false;
+          if (hasta && f > new Date(hasta)) return false;
+          return true;
+        });
+      }
+    }
+    const all = [...manualesConOrigen, ...autos].sort((a,b) => new Date(a.fecha) - new Date(b.fecha));
+    res.json({ ok: true, data: all });
   } catch (e) { next(e); }
 });
 
 app.get('/api/recordatorios/alertas', requireCompany, requirePermission('agenda:read'), async (req, res, next) => {
   try {
     const today = new Date(); today.setHours(0,0,0,0);
-    const pendientes = await prisma.recordatorio.findMany({
+    const manuales = await prisma.recordatorio.findMany({
       where: { companyId: req.companyId, completado: false },
       orderBy: { fecha: 'asc' },
     });
-    const alertas = pendientes.filter(r => {
+    const autos = await _construirRecordatoriosAuto(req.companyId, {});
+    const all = [
+      ...manuales.map(r => ({ ...r, origen: 'manual' })),
+      ...autos,
+    ];
+    const alertas = all.filter(r => {
       const f = new Date(r.fecha); f.setHours(0,0,0,0);
       const diasRestantes = Math.round((f.getTime() - today.getTime()) / (1000*60*60*24));
       return diasRestantes <= (r.avisarDiasAntes || 15);
@@ -7397,7 +7548,7 @@ app.get('/api/recordatorios/alertas', requireCompany, requirePermission('agenda:
       const f = new Date(r.fecha); f.setHours(0,0,0,0);
       const diasRestantes = Math.round((f.getTime() - today.getTime()) / (1000*60*60*24));
       return { ...r, diasRestantes };
-    });
+    }).sort((a,b) => a.diasRestantes - b.diasRestantes);
     res.json({ ok: true, data: alertas });
   } catch (e) { next(e); }
 });
@@ -7436,7 +7587,21 @@ app.put('/api/recordatorios/:id', requireCompany, requirePermission('agenda:upda
 
 app.post('/api/recordatorios/:id/completar', requireCompany, requirePermission('agenda:update'), async (req, res, next) => {
   try {
-    const existing = await prisma.recordatorio.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    const id = req.params.id;
+    // Auto-generado: lo ocultamos (el "completado real" se maneja en el módulo original)
+    if (id.startsWith('auto:')) {
+      const parts = id.split(':');
+      if (parts.length < 3) return res.status(400).json({ ok: false, error: 'ID inválido' });
+      const refTipo = parts[1] === 'cuota' ? 'cuota_credito' : parts[1];
+      const refId = parts.slice(2).join(':');
+      await prisma.recordatorioOculto.upsert({
+        where: { companyId_refTipo_refId: { companyId: req.companyId, refTipo, refId } },
+        create: { companyId: req.companyId, refTipo, refId },
+        update: { ocultadoEn: new Date() },
+      });
+      return res.json({ ok: true, oculto: true });
+    }
+    const existing = await prisma.recordatorio.findFirst({ where: { id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     let nuevaFecha = null;
     if (existing.repetir === 'mensual') {
@@ -7447,17 +7612,41 @@ app.post('/api/recordatorios/:id/completar', requireCompany, requirePermission('
       nuevaFecha.setFullYear(nuevaFecha.getFullYear() + 1);
     }
     const r = nuevaFecha
-      ? await prisma.recordatorio.update({ where: { id: req.params.id }, data: { fecha: nuevaFecha, completado: false, completadoEn: null } })
-      : await prisma.recordatorio.update({ where: { id: req.params.id }, data: { completado: true, completadoEn: new Date() } });
+      ? await prisma.recordatorio.update({ where: { id }, data: { fecha: nuevaFecha, completado: false, completadoEn: null } })
+      : await prisma.recordatorio.update({ where: { id }, data: { completado: true, completadoEn: new Date() } });
     res.json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
 
 app.delete('/api/recordatorios/:id', requireCompany, requirePermission('agenda:delete'), async (req, res, next) => {
   try {
-    const existing = await prisma.recordatorio.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    const id = req.params.id;
+    // Auto-generado: lo ocultamos (no borramos el origen)
+    if (id.startsWith('auto:')) {
+      const parts = id.split(':'); // auto:tipo:realId
+      if (parts.length < 3) return res.status(400).json({ ok: false, error: 'ID inválido' });
+      const refTipo = parts[1] === 'cuota' ? 'cuota_credito' : parts[1];
+      const refId = parts.slice(2).join(':');
+      await prisma.recordatorioOculto.upsert({
+        where: { companyId_refTipo_refId: { companyId: req.companyId, refTipo, refId } },
+        create: { companyId: req.companyId, refTipo, refId },
+        update: { ocultadoEn: new Date() },
+      });
+      return res.json({ ok: true, oculto: true });
+    }
+    const existing = await prisma.recordatorio.findFirst({ where: { id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
-    await prisma.recordatorio.delete({ where: { id: req.params.id } });
+    await prisma.recordatorio.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Restaurar un recordatorio automático previamente ocultado
+app.post('/api/recordatorios/restaurar-auto', requireCompany, requirePermission('agenda:update'), async (req, res, next) => {
+  try {
+    const { refTipo, refId } = req.body || {};
+    if (!refTipo || !refId) return res.status(400).json({ ok: false, error: 'Faltan refTipo y refId' });
+    await prisma.recordatorioOculto.deleteMany({ where: { companyId: req.companyId, refTipo, refId } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

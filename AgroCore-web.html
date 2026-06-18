@@ -2312,6 +2312,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
+      titulo:'🔗 Agenda: ahora trae automáticamente cuotas de crédito, cheques y vencimientos de Cta Cte',
+      desc:'Sin tener que cargar nada a mano, la Agenda muestra como recordatorios automáticos: (1) cada cuota pendiente de Créditos Bancarios con su fecha de vencimiento; (2) cada cheque propio en cartera con su fecha de pago; (3) cada partida de Cuenta Corriente (cliente / proveedor / libre) que tenga fecha de vencimiento y no esté pagada. Aparecen con un badge azul "🔗 Auto" para distinguirlos de los que cargás vos. Si no querés ver uno (ej. ya lo arreglaste por afuera), lo ocultás con 🗑️ — NO borra el registro original (la cuota, el cheque o la cta cte siguen intactos), sólo lo saca de la agenda. Si después querés que vuelva a aparecer, se puede restaurar. Cuando pagás efectivamente la cuota / cheque / cta cte desde su módulo, desaparece sola de la agenda.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'20/06/2026',
       titulo:'📅 Agenda y recordatorios con alertas en Inicio',
       desc:'Nueva sección en Tablero → Agenda y recordatorios. Cargá fechas importantes (vacunación de hacienda, vencimiento de créditos, campañas, impuestos, lo que sea) con categoría, prioridad (alta/media/baja) y "Avisar N días antes" (default 15). Cuando faltan esos N días o menos, el recordatorio aparece arriba de Inicio en un banner amarillo. Podés repetir mensual o anual (típico vacunación cada año) — al marcarlo completado se reabre solo con la nueva fecha. KPIs arriba: vencidos / para hoy / próximos 30 días. Permiso "agenda:read/create/update/delete" en Roles para asignar a quien corresponda.' },
@@ -2748,6 +2751,7 @@ pages.inicio = async function() {
                   <div class="flex items-center gap-2">
                     <span class="text-xs px-2 py-0.5 rounded-full border ${recoCatColor(r.categoria)}">${recoCatLabel(r.categoria)}</span>
                     <span class="font-medium text-slate-800 truncate">${esc(r.titulo)}</span>
+                    ${r.origen==='auto' ? `<span class="text-[10px] px-1 rounded bg-blue-100 text-blue-700 border border-blue-300">🔗</span>` : ''}
                   </div>
                   <div class="text-xs text-slate-500 mt-0.5">📅 ${fmtDate(r.fecha)} · <span class="${cuandoColor} font-medium">${cuando}</span></div>
                 </div>
@@ -13902,7 +13906,12 @@ pages.agenda = async function() {
   const kpiHoy = recos.filter(r => { const f=new Date(r.fecha); f.setHours(0,0,0,0); return f.getTime() === today.getTime() && !r.completado; }).length;
   const kpiProx30 = recos.filter(r => { const f=new Date(r.fecha); const days = Math.round((f-today)/(86400000)); return days >= 0 && days <= 30 && !r.completado; }).length;
 
+  const autoCount = recos.filter(r => r.origen === 'auto').length;
   $('#page-body').innerHTML = `
+    ${autoCount > 0 ? `
+      <div class="mb-3 bg-blue-50 border border-blue-200 rounded p-2 text-xs text-blue-800 flex items-center gap-2">
+        🔗 <span><b>${autoCount}</b> ${autoCount===1?'recordatorio fue cargado':'recordatorios fueron cargados'} automáticamente desde Créditos, Cheques y Cuentas Corrientes. Tienen badge <span class="px-1 rounded bg-blue-100 border border-blue-300">🔗 Auto</span>. Si no querés verlos, podés ocultarlos con 🗑️ (el registro original no se borra).</span>
+      </div>` : ''}
     <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
       <div class="flex gap-2">
         <button class="btn btn-sm ${estado==='pendiente'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('pendiente')">⏳ Pendientes</button>
@@ -13932,11 +13941,12 @@ pages.agenda = async function() {
                 const vencido = dias < 0 && !r.completado;
                 const prioColor = r.prioridad === 'alta' ? 'border-l-4 border-rose-500' : r.prioridad === 'baja' ? 'border-l-4 border-slate-300' : 'border-l-4 border-amber-400';
                 return `
-                  <div class="bg-white border border-slate-200 ${prioColor} rounded-lg p-3 flex items-start gap-3 ${r.completado?'opacity-60':''}">
+                  <div class="bg-white border border-slate-200 ${prioColor} rounded-lg p-3 flex items-start gap-3 ${r.completado?'opacity-60':''} ${r.origen==='auto'?'bg-blue-50/30':''}">
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2 flex-wrap">
                         <span class="text-xs px-2 py-0.5 rounded-full border ${recoCatColor(r.categoria)}">${recoCatLabel(r.categoria)}</span>
                         <span class="font-semibold ${r.completado?'line-through':''}">${esc(r.titulo)}</span>
+                        ${r.origen==='auto' ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 border border-blue-300" title="Generado automáticamente desde ${r.autoTipo==='cuota_credito'?'Créditos bancarios':r.autoTipo==='cheque'?'Cheques':'Cuentas corrientes'}">🔗 Auto</span>` : ''}
                         ${r.repetir && r.repetir!=='ninguno' ? `<span class="text-[10px] text-slate-500">🔁 ${r.repetir}</span>` : ''}
                       </div>
                       <div class="text-sm text-slate-600 mt-1">
@@ -13947,9 +13957,9 @@ pages.agenda = async function() {
                       ${r.descripcion ? `<div class="text-sm text-slate-500 mt-1 whitespace-pre-wrap">${esc(r.descripcion)}</div>` : ''}
                     </div>
                     <div class="flex gap-1">
-                      ${!r.completado && can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoCompletar('${r.id}')" title="Marcar como completado">✅</button>` : ''}
-                      ${can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoForm('${r.id}')" title="Editar">✏️</button>` : ''}
-                      ${can('agenda:delete') ? `<button class="btn btn-xs btn-secondary" onclick="recoDel('${r.id}')" title="Eliminar">🗑️</button>` : ''}
+                      ${!r.completado && can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoCompletar('${r.id}')" title="${r.origen==='auto'?'Ocultar de la agenda':'Marcar como completado'}">✅</button>` : ''}
+                      ${can('agenda:update') && r.origen!=='auto' ? `<button class="btn btn-xs btn-secondary" onclick="recoForm('${r.id}')" title="Editar">✏️</button>` : ''}
+                      ${can('agenda:delete') ? `<button class="btn btn-xs btn-secondary" onclick="recoDel('${r.id}')" title="${r.origen==='auto'?'Ocultar de la agenda':'Eliminar'}">🗑️</button>` : ''}
                     </div>
                   </div>`;
               }).join('')}
@@ -14027,8 +14037,12 @@ async function recoCompletar(id) {
   catch (e) { toast(e.message,'error'); }
 }
 async function recoDel(id) {
-  if (!confirm('¿Eliminar este recordatorio?')) return;
-  try { await api('/api/recordatorios/'+id, { method:'DELETE' }); toast('Eliminado','success'); pages.agenda(); }
+  const esAuto = String(id).startsWith('auto:');
+  const msg = esAuto
+    ? '¿Ocultar este recordatorio?\n\nEs un recordatorio automático (sale de Créditos, Cheques o Cuentas Corrientes). Sólo se va a OCULTAR de la agenda — el registro original no se borra. Podés restaurarlo desde el botón "🔗 Mostrar ocultos" arriba.'
+    : '¿Eliminar este recordatorio?';
+  if (!confirm(msg)) return;
+  try { await api('/api/recordatorios/'+id, { method:'DELETE' }); toast(esAuto?'Ocultado':'Eliminado','success'); pages.agenda(); }
   catch (e) { toast(e.message,'error'); }
 }
 
