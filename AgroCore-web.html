@@ -2312,6 +2312,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/06/2026',
+      titulo:'🛠️ Hotfix: faltaban Herbicidas/Insecticidas/Fertilizantes en el dropdown de factura',
+      desc:'En v0.7.28 el dropdown del item de factura solo sumaba los items del catálogo con tipo "Insumo", pero los items reales del catálogo "Insumos (items)" pueden tener tipo Herbicida, Insecticida, Fungicida, Fertilizante, Semilla o Coadyuvante. Por eso solo aparecía "Glifosato" pero no "Glifosato Sulfosato" ni "Glifosato Touchdown Max". Ahora el filtro incluye todos esos tipos, y el dropdown muestra el tipo al final del nombre para distinguir (ej. "Glifosato Sulfosato (L) · Herbicida").' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
       titulo:'➕ Facturas: botón "+ Nuevo" al lado del dropdown para crear producto en el momento',
       desc:'Al cargar una factura de compra o venta, al lado del selector de item del catálogo aparece un botón pequeño ➕ verde. Si el producto/insumo que necesitás no está en el catálogo, lo creás ahí mismo sin salir del form: nombre, unidad, tipo (Insumo / Cereal / Hacienda / Otro), y queda agregado al dropdown ya seleccionado para esa fila. Cantidad, precio e IVA que ya hayas tipeado se mantienen. Funciona en Compras, Ventas (interna) y Ventas (Cargar ARCA externa).' },
@@ -7814,7 +7817,10 @@ function factItemRow(i=0, it={}) {
   // Cuando elige un item del catálogo sin Producto correspondiente, el backend
   // lo crea al guardar la factura.
   const prods = state.cache.productos || [];
-  const cats  = (state.cache.catalogos || []).filter(c => c.tipo === 'Insumo' && c.activo !== false);
+  // Insumos del catálogo agrupan estos tipos en CAT_TABS (ver línea ~13495):
+  //   Herbicida, Insecticida, Fungicida, Fertilizante, Semilla, Coadyuvante, Insumo
+  const TIPOS_INSUMO = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'];
+  const cats  = (state.cache.catalogos || []).filter(c => TIPOS_INSUMO.includes(c.tipo) && c.activo !== false);
   const stockMap = state.cache.stockMap || {};
   const pid = it.productoId || '';
   // Nombres de productos para no duplicar con los del catálogo
@@ -7826,9 +7832,10 @@ function factItemRow(i=0, it={}) {
   }).join('');
   const optsCat = cats.filter(c => !nombresProd.has((c.nombre||'').toLowerCase().trim())).map(c => {
     // value vacío + data-nombre = al guardar el backend lo crea como Producto
-    const unidad = c.descripcion ? c.descripcion.replace(/\/.*$/, '').trim() : '';
-    const lbl = `${c.nombre}${unidad?` (${unidad})`:''}`;
-    return `<option value="" data-nombre="${esc(c.nombre)}" data-unidad="${esc(unidad)}" data-cat="insumo" data-from-catalogo="1">${esc(lbl)}</option>`;
+    // La unidad típica está en c.descripcion como "L/ha", "kg/ha" — sacamos la parte antes del "/"
+    const unidad = c.descripcion ? String(c.descripcion).split('/')[0].trim() : '';
+    const lbl = `${c.nombre}${unidad?` (${unidad})`:''} · ${c.tipo}`;
+    return `<option value="" data-nombre="${esc(c.nombre)}" data-unidad="${esc(unidad)}" data-cat="${esc((c.tipo||'insumo').toLowerCase())}" data-from-catalogo="1">${esc(lbl)}</option>`;
   }).join('');
   return `
     <tr data-fi>
@@ -7837,7 +7844,7 @@ function factItemRow(i=0, it={}) {
           <select class="input text-sm flex-1" data-f="productoId" onchange="factItemPickProducto(this)">
             <option value="">— Texto libre (sin stock) —</option>
             ${optsProd}
-            ${optsCat ? `<optgroup label="Insumos del catálogo">${optsCat}</optgroup>` : ''}
+            ${optsCat ? `<optgroup label="📚 Insumos del catálogo">${optsCat}</optgroup>` : ''}
           </select>
           <button class="btn btn-secondary text-xs px-2" onclick="nuevoItemRapido(this)" title="Crear un producto/insumo nuevo">➕</button>
         </div>
