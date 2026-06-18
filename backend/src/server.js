@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.26';
+const AGROCORE_VERSION = '0.7.27';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7348,21 +7348,6 @@ app.post('/api/admin/control-stock/importar', authMiddleware, requireCompany, re
   } catch (e) { next(e); }
 });
 
-app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found', path: req.path }));
-
-app.use((err, _req, res, _next) => {
-  if (err instanceof ZodError) {
-    return res.status(400).json({
-      ok: false, error: 'Datos invalidos',
-      issues: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
-    });
-  }
-  if (err.code === 'P2002') return res.status(409).json({ ok: false, error: 'Registro duplicado', fields: err.meta?.target });
-  if (err.code === 'P2025') return res.status(404).json({ ok: false, error: 'No encontrado' });
-  console.error('[ERROR]', err);
-  res.status(err.status || 500).json({ ok: false, error: err.message || 'Error interno' });
-});
-
 // ============================================================
 // AGENDA / RECORDATORIOS
 // ============================================================
@@ -7649,6 +7634,22 @@ app.post('/api/recordatorios/restaurar-auto', requireCompany, requirePermission(
     await prisma.recordatorioOculto.deleteMany({ where: { companyId: req.companyId, refTipo, refId } });
     res.json({ ok: true });
   } catch (e) { next(e); }
+});
+
+
+app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found', path: req.path }));
+
+app.use((err, _req, res, _next) => {
+  if (err instanceof ZodError) {
+    return res.status(400).json({
+      ok: false, error: 'Datos invalidos',
+      issues: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    });
+  }
+  if (err.code === 'P2002') return res.status(409).json({ ok: false, error: 'Registro duplicado', fields: err.meta?.target });
+  if (err.code === 'P2025') return res.status(404).json({ ok: false, error: 'No encontrado' });
+  console.error('[ERROR]', err);
+  res.status(err.status || 500).json({ ok: false, error: err.message || 'Error interno' });
 });
 
 // ============================================================

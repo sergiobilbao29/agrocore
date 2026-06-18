@@ -2312,6 +2312,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/06/2026',
+      titulo:'🛠️ Hotfix: Agenda daba "Not found" — ya está solucionado',
+      desc:'En v0.7.25/v0.7.26 los endpoints de Agenda quedaron declarados después del catch-all 404 de Express. Resultado: cualquier llamada a /api/recordatorios devolvía 404 ("Not found"). Movimos los endpoints al lugar correcto. Si actualizás a v0.7.27, la Agenda funciona normal.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
       titulo:'🔗 Agenda: ahora trae automáticamente cuotas de crédito, cheques y vencimientos de Cta Cte',
       desc:'Sin tener que cargar nada a mano, la Agenda muestra como recordatorios automáticos: (1) cada cuota pendiente de Créditos Bancarios con su fecha de vencimiento; (2) cada cheque propio en cartera con su fecha de pago; (3) cada partida de Cuenta Corriente (cliente / proveedor / libre) que tenga fecha de vencimiento y no esté pagada. Aparecen con un badge azul "🔗 Auto" para distinguirlos de los que cargás vos. Si no querés ver uno (ej. ya lo arreglaste por afuera), lo ocultás con 🗑️ — NO borra el registro original (la cuota, el cheque o la cta cte siguen intactos), sólo lo saca de la agenda. Si después querés que vuelva a aparecer, se puede restaurar. Cuando pagás efectivamente la cuota / cheque / cta cte desde su módulo, desaparece sola de la agenda.' },
