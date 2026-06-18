@@ -37,7 +37,19 @@ async function getPdfParse() {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = process.env.STATIC_DIR || path.resolve(__dirname, '..', '..');
 
-const prisma = new PrismaClient();
+// Prisma con pool más grande para soportar varios usuarios concurrentes sin timeouts.
+// Por defecto Prisma usa connection_limit=num_physical_cpus*2+1 (3 en máquinas chicas).
+// Lo subimos a 10 + pool_timeout 30s. Solo inyectamos los params si no están ya en la URL.
+function _buildDatabaseUrl() {
+  const base = process.env.DATABASE_URL || '';
+  if (!base) return base;
+  if (/connection_limit=/.test(base)) return base; // respetar lo que pusiste en .env
+  const sep = base.includes('?') ? '&' : '?';
+  return base + sep + 'connection_limit=10&pool_timeout=30';
+}
+const prisma = new PrismaClient({
+  datasources: { db: { url: _buildDatabaseUrl() } },
+});
 const app = express();
 
 // Multer en memoria — para uploads chicos (Excel < 10MB, PDFs de factura, etc).
@@ -48,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.17';
+const AGROCORE_VERSION = '0.7.18';
 const AGROCORE_BUILD = new Date('2026-06-18').toISOString().slice(0, 10);
 
 // ============================================================
