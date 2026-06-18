@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.30';
+const AGROCORE_VERSION = '0.7.31';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2145,11 +2145,14 @@ async function _ensureProductoFromItem(tx, companyId, item) {
     where: { companyId, nombre: { equals: nombre, mode: 'insensitive' } },
   });
   if (existing) return existing.id;
+  // Defaults: el schema exige unidad y categoria no nulos
+  const unidad    = (item.productoUnidad || '').trim() || 'unidad';
+  const categoria = (item.productoCategoria || 'insumos').trim().toLowerCase() || 'insumos';
   const creado = await tx.producto.create({ data: {
-    companyId,
+    company: { connect: { id: companyId } },
     nombre,
-    unidad: (item.productoUnidad || '').trim() || null,
-    categoria: (item.productoCategoria || 'insumo').trim().toLowerCase(),
+    unidad,
+    categoria,
     activo: true,
   }});
   return creado.id;

@@ -2313,6 +2313,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/06/2026',
+      titulo:'🛠️ Hotfix: error de Prisma al crear producto en factura + dropdown ahora es buscador',
+      desc:'Dos cosas en una versión: (1) Bug en el backend al crear un Producto al vuelo desde una factura — la columna unidad del schema es requerida pero le pasábamos null cuando el catálogo no traía unidad. Solucionado con default "unidad". Si ya te pasó, la factura no quedó guardada; reintentá ahora. (2) El selector del item de factura ya no es un <select> rígido sino un INPUT con sugerencias: escribí "glifo" y aparecen los 3 Glifosatos del catálogo, escribí "azu" y aparece Azufre, etc. Sigue ordenado por orden alfabético, mostrando primero los Productos con stock y luego los Insumos del catálogo agrupados por tipo (Herbicida, Fungicida, etc). Si escribís algo que no matchea ningún item, queda como texto libre como antes. El botón ➕ para crear producto sigue al lado del input.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/06/2026',
       titulo:'🛠️ Hotfix: faltaban Herbicidas/Insecticidas/Fertilizantes en el dropdown de factura',
       desc:'En v0.7.28 el dropdown del item de factura solo sumaba los items del catálogo con tipo "Insumo", pero los items reales del catálogo "Insumos (items)" pueden tener tipo Herbicida, Insecticida, Fungicida, Fertilizante, Semilla o Coadyuvante. Por eso solo aparecía "Glifosato" pero no "Glifosato Sulfosato" ni "Glifosato Touchdown Max". Ahora el filtro incluye todos esos tipos, y el dropdown muestra el tipo al final del nombre para distinguir (ej. "Glifosato Sulfosato (L) · Herbicida").' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
@@ -7809,44 +7812,69 @@ pages.facturacion = async function() {
   render();
 };
 function factFiltrosLimpiar() { state.ventaFilter = { desde:'', hasta:'', clienteId:'', tipo:'' }; pages.facturacion(); }
-function factItemRow(i=0, it={}) {
-  // El dropdown muestra TODOS los items disponibles del catálogo:
-  //  1) Productos reales (con stock)
-  //  2) Catálogo "Insumo" (items definidos que aún no son Productos)
-  // El usuario sólo ve "Nombre (unidad)" — sin "Stock: X kg".
-  // Cuando elige un item del catálogo sin Producto correspondiente, el backend
-  // lo crea al guardar la factura.
+// Lista plana de items elegibles en factura (Producto + Catálogo insumos).
+// Memoizado por número de productos/catalogos para no recomputar en cada fila.
+function _factItemsLista() {
   const prods = state.cache.productos || [];
-  // Insumos del catálogo agrupan estos tipos en CAT_TABS (ver línea ~13495):
-  //   Herbicida, Insecticida, Fungicida, Fertilizante, Semilla, Coadyuvante, Insumo
   const TIPOS_INSUMO = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'];
   const cats  = (state.cache.catalogos || []).filter(c => TIPOS_INSUMO.includes(c.tipo) && c.activo !== false);
-  const stockMap = state.cache.stockMap || {};
-  const pid = it.productoId || '';
-  // Nombres de productos para no duplicar con los del catálogo
   const nombresProd = new Set(prods.map(p => (p.nombre||'').toLowerCase().trim()));
-  const optsProd = prods.map(p => {
-    const stock = stockMap[p.id];
-    const lbl = `${p.nombre} (${p.unidad || ''})`;
-    return `<option value="${p.id}" data-stock="${stock!=null?stock:''}" data-precio="${p.precioReferencia||''}" data-unidad="${esc(p.unidad||'')}" data-nombre="${esc(p.nombre||'')}" data-cat="${esc(p.categoria||'')}" ${p.id===pid?'selected':''}>${esc(lbl)}</option>`;
-  }).join('');
-  const optsCat = cats.filter(c => !nombresProd.has((c.nombre||'').toLowerCase().trim())).map(c => {
-    // value vacío + data-nombre = al guardar el backend lo crea como Producto
-    // La unidad típica está en c.descripcion como "L/ha", "kg/ha" — sacamos la parte antes del "/"
-    const unidad = c.descripcion ? String(c.descripcion).split('/')[0].trim() : '';
-    const lbl = `${c.nombre}${unidad?` (${unidad})`:''} · ${c.tipo}`;
-    return `<option value="" data-nombre="${esc(c.nombre)}" data-unidad="${esc(unidad)}" data-cat="${esc((c.tipo||'insumo').toLowerCase())}" data-from-catalogo="1">${esc(lbl)}</option>`;
+  const items = [];
+  // 1) Productos (mostrar primero, alfabético)
+  prods.slice().sort((a,b) => (a.nombre||'').localeCompare(b.nombre||'')).forEach(p => {
+    items.push({
+      productoId: p.id,
+      nombre: p.nombre,
+      unidad: p.unidad || '',
+      categoria: p.categoria || '',
+      precio: p.precioReferencia || '',
+      fromCatalogo: false,
+    });
+  });
+  // 2) Catálogo insumos no duplicados con productos
+  cats
+    .filter(c => !nombresProd.has((c.nombre||'').toLowerCase().trim()))
+    .sort((a,b) => (a.tipo||'').localeCompare(b.tipo||'') || (a.nombre||'').localeCompare(b.nombre||''))
+    .forEach(c => {
+      const unidad = c.descripcion ? String(c.descripcion).split('/')[0].trim() : '';
+      items.push({
+        productoId: '',
+        nombre: c.nombre,
+        unidad,
+        categoria: (c.tipo||'insumo').toLowerCase(),
+        precio: '',
+        fromCatalogo: true,
+        tipoLabel: c.tipo,
+      });
+    });
+  return items;
+}
+
+function factItemRow(i=0, it={}) {
+  // Input con datalist HTML5: el usuario escribe y el navegador sugiere items.
+  // Al elegir uno, factItemPickProducto resuelve el productoId/nombre y
+  // autocompleta descripción y precio. Si no matchea ningún item, queda como
+  // "texto libre" (sin stock).
+  const lista = _factItemsLista();
+  const pid = it.productoId || '';
+  const sel = pid ? lista.find(x => x.productoId === pid) : null;
+  // dataset-id único para evitar colisiones cuando hay varias filas (Date.now + random)
+  const dsId = 'ds-' + (Date.now() % 100000) + '-' + Math.floor(Math.random()*1000);
+  const valor = sel ? (sel.nombre + (sel.unidad?` (${sel.unidad})`:'')) : '';
+  const options = lista.map(x => {
+    const cat = x.fromCatalogo ? ` — ${x.tipoLabel}` : '';
+    const lbl = `${x.nombre}${x.unidad?` (${x.unidad})`:''}${cat}`;
+    // Guardamos el productoId / metadatos en un data-attr del option
+    return `<option value="${esc(lbl)}" data-pid="${esc(x.productoId||'')}" data-nombre="${esc(x.nombre)}" data-unidad="${esc(x.unidad)}" data-cat="${esc(x.categoria)}" data-precio="${esc(String(x.precio||''))}" data-from-catalogo="${x.fromCatalogo?'1':''}"></option>`;
   }).join('');
   return `
-    <tr data-fi>
+    <tr data-fi data-producto-id="${esc(pid)}">
       <td>
         <div class="flex gap-1">
-          <select class="input text-sm flex-1" data-f="productoId" onchange="factItemPickProducto(this)">
-            <option value="">— Texto libre (sin stock) —</option>
-            ${optsProd}
-            ${optsCat ? `<optgroup label="📚 Insumos del catálogo">${optsCat}</optgroup>` : ''}
-          </select>
+          <input list="${dsId}" class="input text-sm flex-1" data-f="productoBuscador" placeholder="🔎 Escribí para buscar… (o nombre libre)" value="${esc(valor)}" oninput="factItemBuscarItem(this)" onchange="factItemBuscarItem(this)" autocomplete="off"/>
+          <datalist id="${dsId}">${options}</datalist>
           <button class="btn btn-secondary text-xs px-2" onclick="nuevoItemRapido(this)" title="Crear un producto/insumo nuevo">➕</button>
+          <input type="hidden" data-f="productoId" value="${esc(pid)}"/>
         </div>
       </td>
       <td><input class="input text-sm" data-f="descripcion" value="${esc(it.descripcion||'')}" placeholder="Detalle del item"/></td>
@@ -7861,25 +7889,44 @@ function factItemRow(i=0, it={}) {
 }
 // Cuando el usuario elige un producto del dropdown, autocompletamos descripcion
 // y precio sugerido (si el producto tiene precio de referencia cargado).
-function factItemPickProducto(sel) {
-  const tr = sel.closest('tr');
+// Cuando el usuario tipea en el buscador, intentamos matchear contra la lista.
+// Si el valor coincide EXACTO con el label de algún item del datalist, lo elegimos
+// (rellenamos productoId, descripcion, precio sugerido).
+// Si no coincide, queda como "texto libre".
+function factItemBuscarItem(inp) {
+  const tr = inp.closest('tr');
   if (!tr) return;
-  const opt = sel.options[sel.selectedIndex];
-  if (!opt) return;
-  // Marcar en el TR los metadatos del item elegido para que se envíen al guardar
-  tr.dataset.productoNombre    = opt.dataset.nombre || '';
-  tr.dataset.productoUnidad    = opt.dataset.unidad || '';
-  tr.dataset.productoCategoria = opt.dataset.cat || '';
-  tr.dataset.fromCatalogo      = opt.dataset.fromCatalogo || '';
-  if (!opt.value && !opt.dataset.nombre) return; // texto libre puro
+  const dsId = inp.getAttribute('list');
+  const ds = document.getElementById(dsId);
+  if (!ds) return;
+  const val = (inp.value || '').trim();
+  const hidProd = tr.querySelector('input[type="hidden"][data-f="productoId"]');
+  // Reset metadatos
+  tr.dataset.productoNombre = '';
+  tr.dataset.productoUnidad = '';
+  tr.dataset.productoCategoria = '';
+  tr.dataset.fromCatalogo = '';
+  if (hidProd) hidProd.value = '';
+  if (!val) { factRecalc(); return; }
+  // Buscar el option cuyo value coincide EXACTO (case-insensitive)
+  const opts = Array.from(ds.querySelectorAll('option'));
+  const match = opts.find(o => (o.value || '').toLowerCase() === val.toLowerCase());
+  if (!match) { factRecalc(); return; } // texto libre
+  tr.dataset.productoNombre    = match.dataset.nombre || '';
+  tr.dataset.productoUnidad    = match.dataset.unidad || '';
+  tr.dataset.productoCategoria = match.dataset.cat || '';
+  tr.dataset.fromCatalogo      = match.dataset.fromCatalogo || '';
+  if (hidProd) hidProd.value = match.dataset.pid || '';
   const desc = tr.querySelector('[data-f="descripcion"]');
   const prc  = tr.querySelector('[data-f="precioUnit"]');
-  const nombre = opt.dataset.nombre || '';
-  const unidad = opt.dataset.unidad || '';
+  const nombre = match.dataset.nombre || '';
+  const unidad = match.dataset.unidad || '';
   if (desc && !desc.value.trim()) desc.value = unidad ? `${nombre} (${unidad})` : nombre;
-  if (prc && (!prc.value || Number(prc.value) === 0) && opt.dataset.precio) prc.value = opt.dataset.precio;
+  if (prc && (!prc.value || Number(prc.value) === 0) && match.dataset.precio) prc.value = match.dataset.precio;
   factRecalc();
 }
+// Mantengo el nombre viejo por si alguna parte del código lo invoca todavía (legacy)
+function factItemPickProducto(sel) { /* legacy noop (reemplazado por factItemBuscarItem) */ }
 // Modal rapido para crear un producto/insumo desde el form de factura.
 // Acepta nombre + unidad + categoria. Al guardar:
 //  - Si categoria='cereal' o 'hacienda' → se crea Producto (tabla Producto, con stock).
