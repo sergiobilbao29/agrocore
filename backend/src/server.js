@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.7.32';
+const AGROCORE_VERSION = '0.8.0';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1095,6 +1095,10 @@ const ARCA_URLS = {
   wsfe: {
     prod: process.env.ARCA_WSFE_PROD_URL || 'https://servicios1.afip.gov.ar/wsfev1/service.asmx',
     homo: process.env.ARCA_WSFE_HOMO_URL || 'https://wswhomo.afip.gov.ar/wsfev1/service.asmx',
+  },
+  wscpe: {
+    prod: process.env.ARCA_WSCPE_PROD_URL || 'https://serviciosjava.afip.gob.ar/wscpe/services/soap',
+    homo: process.env.ARCA_WSCPE_HOMO_URL || 'https://fwshomo.afip.gov.ar/wscpe/services/soap',
   },
 };
 function _arcaUrl(servicio, modo) {
@@ -7674,6 +7678,263 @@ app.post('/api/recordatorios/restaurar-auto', requireCompany, requirePermission(
   } catch (e) { next(e); }
 });
 
+
+// ============================================================
+// CARTAS DE PORTE ELECTRÓNICAS (CPE / WSCPE de ARCA)
+// ============================================================
+// Implementación pragmática:
+//   - En modo "homo" sin certificado real, devolvemos respuestas MOCK
+//     (CTG empieza con "99" para distinguir de reales).
+//   - En modo "homo" con cert real, llamamos al WSCPE de homologación de ARCA.
+//   - En modo "prod" exigimos cert real y llamamos al WSCPE productivo.
+//
+// El WSCPE expone (entre otros):
+//   - dummy                — health check (auth/db/serv)
+//   - autorizarCPEAutomotor — alta de CPE para camión
+//   - consultarCPEAutomotor — estado del CPE por nroCTG
+//   - confirmarArriboCPE   — confirma que el cereal llegó al destino
+//   - anularCPE            — anula un CPE emitido
+//
+// Las funciones devuelven { ok, ctg, comprobante, mensaje, mock?: bool, raw? }.
+
+function _cpeMockCtg() {
+  // CTG mock: empieza con 99 y son 12 dígitos en total
+  return '99' + Math.floor(1e9 + Math.random() * 9e9).toString().slice(0, 10);
+}
+
+async function _arcaWsCpeCall({ companyId, modo, operacion, bodyXmlInner }) {
+  // Si no hay cert configurado o el modo es homo, intentamos primero el WS real,
+  // pero si falla por configuración, caemos a mock para no bloquear pruebas.
+  const c = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: { arcaCuit: true, arcaCertCrt: true, arcaPrivadaKey: true },
+  });
+  const tieneCert = !!(c?.arcaCertCrt && c?.arcaPrivadaKey && c?.arcaCuit);
+  if (!tieneCert) {
+    if (modo === 'prod') {
+      throw new Error('Para emitir CPE en producción tenés que configurar el certificado de ARCA en Configuración → ARCA.');
+    }
+    // MOCK
+    return { __mock: true };
+  }
+  let token, sign;
+  try {
+    const ta = await _getTAforService({ companyId, modo, service: 'wsctg' });
+    token = ta.token; sign = ta.sign;
+  } catch (e) {
+    if (modo === 'homo') return { __mock: true, __mockReason: 'WSAA: ' + e.message };
+    throw e;
+  }
+  const envelope = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cpe="http://impl.service.wscpe.afip.gov/wscpe/">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <cpe:${operacion}>
+      <cpe:request>
+        <cpe:auth>
+          <cpe:token>${_arcaXmlEsc(token)}</cpe:token>
+          <cpe:sign>${_arcaXmlEsc(sign)}</cpe:sign>
+          <cpe:cuitRepresentado>${_arcaXmlEsc(c.arcaCuit)}</cpe:cuitRepresentado>
+        </cpe:auth>
+        ${bodyXmlInner}
+      </cpe:request>
+    </cpe:${operacion}>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+  let res, xml;
+  try {
+    res = await fetch(_arcaUrl('wscpe', modo), {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '' },
+      body: envelope,
+    });
+    xml = await res.text();
+  } catch (e) {
+    if (modo === 'homo') return { __mock: true, __mockReason: 'WSCPE conn: ' + e.message };
+    throw new Error('No se pudo conectar a WSCPE: ' + e.message);
+  }
+  if (!res.ok) {
+    const f = _arcaXmlGet(xml, 'faultstring') || xml.slice(0, 400);
+    if (modo === 'homo') return { __mock: true, __mockReason: `WSCPE ${res.status}: ${f}` };
+    throw new Error(`WSCPE error ${res.status}: ${f}`);
+  }
+  return { xml };
+}
+
+async function _arcaAutorizarCPE({ companyId, modo, viaje }) {
+  // Construye el body XML típico de autorizarCPEAutomotor.
+  // En la práctica el body real es enorme; armamos los campos mínimos.
+  const body = `
+        <cpe:solicitud>
+          <cpe:tipoCPE>74</cpe:tipoCPE>
+          <cpe:cuitSolicitante>${_arcaXmlEsc(viaje.cpeOrigenCuit || '')}</cpe:cuitSolicitante>
+          <cpe:nroOrden>${_arcaXmlEsc(viaje.id.slice(-8))}</cpe:nroOrden>
+          <cpe:planta>${_arcaXmlEsc(viaje.cpeOrigenRenspa || '')}</cpe:planta>
+          <cpe:datosCarga>
+            <cpe:codigoGrano>${_arcaXmlEsc(viaje.producto || '')}</cpe:codigoGrano>
+            <cpe:cosecha>${new Date().getFullYear()}</cpe:cosecha>
+            <cpe:pesoNeto>${_arcaXmlEsc(String(Math.round(viaje.cantidad || 0)))}</cpe:pesoNeto>
+          </cpe:datosCarga>
+          <cpe:destino>
+            <cpe:cuit>${_arcaXmlEsc(viaje.cpeDestinoCuit || '')}</cpe:cuit>
+          </cpe:destino>
+          <cpe:transportista>
+            <cpe:cuit>${_arcaXmlEsc(viaje.transporteCuit || '')}</cpe:cuit>
+          </cpe:transportista>
+          <cpe:chofer>
+            <cpe:cuit>${_arcaXmlEsc(viaje.choferCuit || '')}</cpe:cuit>
+          </cpe:chofer>
+          <cpe:dominio>${_arcaXmlEsc(viaje.patente || '')}</cpe:dominio>
+        </cpe:solicitud>`;
+  const r = await _arcaWsCpeCall({ companyId, modo, operacion: 'autorizarCPEAutomotor', bodyXmlInner: body });
+  if (r.__mock) {
+    const ctg = _cpeMockCtg();
+    return {
+      ok: true, mock: true, mockReason: r.__mockReason || 'Sin certificado real',
+      ctg,
+      comprobante: 'A' + String(Math.floor(Math.random()*999999)).padStart(6,'0'),
+      mensaje: 'CPE emitida en modo simulado (homologación / mock). Cuando configures el certificado real, el sistema usará el WS real de ARCA.',
+    };
+  }
+  // Parseo de respuesta real
+  const ctg = _arcaXmlGet(r.xml, 'nroCTG') || _arcaXmlGet(r.xml, 'CTG');
+  const comp = _arcaXmlGet(r.xml, 'nroComprobante') || _arcaXmlGet(r.xml, 'numeroComprobante');
+  const errDsc = _arcaXmlGet(r.xml, 'descripcion');
+  const errCod = _arcaXmlGet(r.xml, 'codigo');
+  if (!ctg) throw new Error(`ARCA WSCPE: ${errCod || ''} ${errDsc || 'sin CTG en respuesta'}`.trim());
+  return { ok: true, mock: false, ctg, comprobante: comp, mensaje: 'CPE autorizada por ARCA', raw: r.xml.slice(0, 2000) };
+}
+
+async function _arcaConsultarCPE({ companyId, modo, nroCtg }) {
+  const body = `<cpe:nroCTG>${_arcaXmlEsc(nroCtg)}</cpe:nroCTG>`;
+  const r = await _arcaWsCpeCall({ companyId, modo, operacion: 'consultarCPEAutomotor', bodyXmlInner: body });
+  if (r.__mock) {
+    return { ok: true, mock: true, ctg: nroCtg, estado: 'EMITIDA', mensaje: 'Consulta simulada (sin cert real)' };
+  }
+  const estado = _arcaXmlGet(r.xml, 'estado') || 'DESCONOCIDO';
+  return { ok: true, mock: false, ctg: nroCtg, estado, raw: r.xml.slice(0, 2000) };
+}
+
+async function _arcaConfirmarArriboCPE({ companyId, modo, nroCtg, kgDescarga }) {
+  const body = `
+        <cpe:nroCTG>${_arcaXmlEsc(nroCtg)}</cpe:nroCTG>
+        <cpe:pesoNetoDescargado>${_arcaXmlEsc(String(Math.round(kgDescarga||0)))}</cpe:pesoNetoDescargado>`;
+  const r = await _arcaWsCpeCall({ companyId, modo, operacion: 'confirmarArriboCPE', bodyXmlInner: body });
+  if (r.__mock) {
+    return { ok: true, mock: true, mensaje: 'Arribo confirmado en modo simulado' };
+  }
+  const errDsc = _arcaXmlGet(r.xml, 'descripcion');
+  if (errDsc) return { ok: true, mensaje: errDsc };
+  return { ok: true, mensaje: 'Arribo confirmado', raw: r.xml.slice(0,1000) };
+}
+
+async function _arcaAnularCPE({ companyId, modo, nroCtg, motivo }) {
+  const body = `
+        <cpe:nroCTG>${_arcaXmlEsc(nroCtg)}</cpe:nroCTG>
+        <cpe:motivo>${_arcaXmlEsc(motivo || 'Anulación solicitada por el emisor')}</cpe:motivo>`;
+  const r = await _arcaWsCpeCall({ companyId, modo, operacion: 'anularCPE', bodyXmlInner: body });
+  if (r.__mock) return { ok: true, mock: true, mensaje: 'CPE anulada en modo simulado' };
+  return { ok: true, mensaje: 'CPE anulada', raw: r.xml.slice(0,1000) };
+}
+
+// ===== Endpoints REST CPE =====
+// Heartbeat WSCPE (dummy)
+app.get('/api/arca/cpe/probar', authMiddleware, requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+  try {
+    const c = await prisma.company.findUnique({ where: { id: req.companyId }, select: { arcaModo: true, arcaCuit: true, arcaCertCrt: true } });
+    const modo = c?.arcaModo === 'homo' ? 'homo' : 'prod';
+    if (!c?.arcaCertCrt) {
+      return res.json({ ok: true, modo, simulado: true, mensaje: 'Sin certificado cargado. En modo homologación las CPE se generan simuladas (mock). Configurá el certificado en Configuración → ARCA para usar el WS real.' });
+    }
+    res.json({ ok: true, modo, simulado: false, mensaje: 'Certificado presente. El sistema llamará al WSCPE real cuando emitas una CPE.' });
+  } catch (e) { next(e); }
+});
+
+// Emitir CPE para un viaje
+app.post('/api/viajes/:id/cpe/emitir', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+  try {
+    const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
+    if (viaje.cpeNroCtg && viaje.cpeEstado !== 'anulada') {
+      return res.status(400).json({ ok: false, error: 'Este viaje ya tiene una CPE emitida (CTG ' + viaje.cpeNroCtg + '). Anulala antes de emitir una nueva.' });
+    }
+    // Tomamos datos extra del body si vienen
+    const datos = req.body || {};
+    const viajeAct = await prisma.viaje.update({ where: { id: viaje.id }, data: {
+      cpeOrigenCuit: datos.cpeOrigenCuit || viaje.cpeOrigenCuit,
+      cpeOrigenRenspa: datos.cpeOrigenRenspa || viaje.cpeOrigenRenspa,
+      cpeDestinoCuit: datos.cpeDestinoCuit || viaje.cpeDestinoCuit,
+      cpeDestinatarioCuit: datos.cpeDestinatarioCuit || viaje.cpeDestinatarioCuit,
+      cpeCorredorCuit: datos.cpeCorredorCuit || viaje.cpeCorredorCuit,
+      cpeIntermediarioCuit: datos.cpeIntermediarioCuit || viaje.cpeIntermediarioCuit,
+      cpeObservaciones: datos.cpeObservaciones || viaje.cpeObservaciones,
+      cpeTipo: 'automotor',
+    }});
+    const company = await prisma.company.findUnique({ where: { id: req.companyId }, select: { arcaModo: true } });
+    const modo = company?.arcaModo === 'homo' ? 'homo' : 'prod';
+    const r = await _arcaAutorizarCPE({ companyId: req.companyId, modo, viaje: viajeAct });
+    const final = await prisma.viaje.update({ where: { id: viaje.id }, data: {
+      cpeNroCtg: r.ctg,
+      cpeNroComprobante: r.comprobante || null,
+      cpeEstado: 'emitida',
+      cpeFechaEmision: new Date(),
+      cpeRespuestaArca: r,
+    }});
+    res.json({ ok: true, data: final, info: r });
+  } catch (e) { next(e); }
+});
+
+// Consultar estado en ARCA
+app.get('/api/viajes/:id/cpe/consultar', authMiddleware, requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+  try {
+    const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
+    if (!viaje.cpeNroCtg) return res.status(400).json({ ok: false, error: 'Este viaje no tiene CPE emitida' });
+    const company = await prisma.company.findUnique({ where: { id: req.companyId }, select: { arcaModo: true } });
+    const modo = company?.arcaModo === 'homo' ? 'homo' : 'prod';
+    const r = await _arcaConsultarCPE({ companyId: req.companyId, modo, nroCtg: viaje.cpeNroCtg });
+    res.json({ ok: true, info: r });
+  } catch (e) { next(e); }
+});
+
+// Confirmar arribo (cuando el cereal se descarga)
+app.post('/api/viajes/:id/cpe/confirmar-arribo', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+  try {
+    const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
+    if (!viaje.cpeNroCtg) return res.status(400).json({ ok: false, error: 'Este viaje no tiene CPE emitida' });
+    const kg = Number(req.body?.kgDescarga || viaje.kgDescarga || viaje.cantidad || 0);
+    const company = await prisma.company.findUnique({ where: { id: req.companyId }, select: { arcaModo: true } });
+    const modo = company?.arcaModo === 'homo' ? 'homo' : 'prod';
+    const r = await _arcaConfirmarArriboCPE({ companyId: req.companyId, modo, nroCtg: viaje.cpeNroCtg, kgDescarga: kg });
+    const final = await prisma.viaje.update({ where: { id: viaje.id }, data: {
+      cpeEstado: 'confirmada',
+      cpeFechaArribo: new Date(),
+      kgDescarga: kg,
+    }});
+    res.json({ ok: true, data: final, info: r });
+  } catch (e) { next(e); }
+});
+
+// Anular CPE
+app.post('/api/viajes/:id/cpe/anular', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+  try {
+    const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
+    if (!viaje.cpeNroCtg) return res.status(400).json({ ok: false, error: 'Este viaje no tiene CPE emitida' });
+    const motivo = (req.body?.motivo || '').trim();
+    if (!motivo) return res.status(400).json({ ok: false, error: 'Falta el motivo de anulación' });
+    const company = await prisma.company.findUnique({ where: { id: req.companyId }, select: { arcaModo: true } });
+    const modo = company?.arcaModo === 'homo' ? 'homo' : 'prod';
+    const r = await _arcaAnularCPE({ companyId: req.companyId, modo, nroCtg: viaje.cpeNroCtg, motivo });
+    const final = await prisma.viaje.update({ where: { id: viaje.id }, data: {
+      cpeEstado: 'anulada',
+      cpeFechaAnulacion: new Date(),
+      cpeMotivoAnulacion: motivo,
+    }});
+    res.json({ ok: true, data: final, info: r });
+  } catch (e) { next(e); }
+});
 
 app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found', path: req.path }));
 

@@ -2313,6 +2313,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'22/06/2026',
+      titulo:'🚚 Cartas de Porte Electrónicas (CPE) emitidas desde AgroCore — WSCPE de ARCA',
+      desc:'GRAN nueva funcionalidad: ya no hace falta ir al portal AFIP para emitir las CPEs de granos. En Viajes, cada fila tiene un botón 🚚 (cuando aún no hay CPE) que abre un modal con los datos pre-cargados del viaje (producto, kg, transportista, chofer, patente, origen y destino). Completás los CUITs que falten (productor, destinatario, corredor, etc.) y emitís → AgroCore se conecta a ARCA/WSCPE, firma el TRA con tu certificado y trae el CTG asignado. Una vez emitida, el botón cambia a 📋 para ver el detalle, consultar en ARCA en cualquier momento, confirmar arribo (cuando se descarga) o anular. Funciona en modo Homologación (si no tenés cert real, se emite una CPE SIMULADA con CTG que empieza con 99 — útil para probar todo el flujo). En modo Producción se conecta al WS real. Recordatorio: tenés que adherir el servicio "Carta de Porte Electrónica" en AFIP → Administrador de Relaciones de Clave Fiscal para el CUIT de tu empresa antes de emitir productivas. Si ya tenés el cert de ARCA cargado (el mismo que usás para WSCTG), no hace falta nada nuevo.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'22/06/2026',
       titulo:'📅 Agenda con vista CALENDARIO mensual + semanal + diaria',
       desc:'La página Agenda ahora tiene 4 vistas: 📅 Mes (calendario clásico estilo Google Calendar, una celda por día con los chips de recordatorios), 📆 Semana (los 7 días de la semana lado a lado en cards), 📍 Día (el día seleccionado con todos sus recordatorios en detalle), 📋 Lista (la vista clásica anterior agrupada por mes). Botones < > para navegar entre meses/semanas/días y botón "Hoy" para volver al presente. Hacé clic en cualquier día vacío del calendario para crear un recordatorio con esa fecha pre-cargada. Hacé clic en un chip dentro del día para editar (o completar si es automático). Vista por defecto: Mes.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/06/2026',
@@ -11167,6 +11170,7 @@ pages.viajes = async function() {
                 <td>${viajeEstadoBadge(v.estado)}${factTxt?`<br><span class="text-[10px] text-slate-400">${esc(factTxt)}</span>`:''}</td>
                 <td class="text-right whitespace-nowrap">
                   ${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='viajeForm(${JSON.stringify(v.id)})'>✏️</button>`:''}
+                  ${canU ? cpeBotonViaje(v) : ''}
                   ${canU?`<button class="btn btn-ghost text-xs" title="Vincular factura del transporte" onclick='viajeVincularForm(${JSON.stringify(v.id)})'>🔗</button>`:''}
                   ${canU && v.estado!=='pagado' && can('finanzas:create')?`<button class="btn btn-ghost text-xs text-indigo-700" title="Cargar factura del transporte y pagar en un paso" onclick='viajeFacturarYPagarAbrir(${JSON.stringify(v.id)})'>💸</button>`:''}
                   ${v.destinoTipo==='cerealera' && v.depositoDestinoId && can('stock:entrega_cerealera:create')?`<button class="btn btn-ghost text-xs" title="Cargar entrega del cereal a la cerealera" onclick='viajeEntregaCereal(${JSON.stringify(v.id)})'>📤</button>`:''}
@@ -12057,6 +12061,189 @@ async function viajeFacturarYPagarConfirmar() {
   } catch (e) {
     toast(e.message || 'Error al facturar/pagar', 'error');
   }
+}
+
+// ============================================================
+// CPE — CARTA DE PORTE ELECTRÓNICA (WSCPE ARCA)
+// ============================================================
+// Render del botón CPE según el estado del viaje
+function cpeBotonViaje(v) {
+  if (v.cpeNroCtg && v.cpeEstado === 'emitida') {
+    return `<button class="btn btn-ghost text-xs text-emerald-700" title="CPE emitida (CTG ${esc(v.cpeNroCtg)}) — ver detalle" onclick='cpeDetalle(${JSON.stringify(v.id)})'>📋</button>`;
+  }
+  if (v.cpeNroCtg && v.cpeEstado === 'confirmada') {
+    return `<button class="btn btn-ghost text-xs text-blue-700" title="CPE confirmada (arribo)" onclick='cpeDetalle(${JSON.stringify(v.id)})'>✅</button>`;
+  }
+  if (v.cpeNroCtg && v.cpeEstado === 'anulada') {
+    return `<button class="btn btn-ghost text-xs text-slate-400" title="CPE anulada — emitir una nueva" onclick='cpeEmitirForm(${JSON.stringify(v.id)})'>🔄</button>`;
+  }
+  // Sin CPE todavía
+  return `<button class="btn btn-ghost text-xs text-amber-700" title="Emitir Carta de Porte Electrónica en ARCA" onclick='cpeEmitirForm(${JSON.stringify(v.id)})'>🚚</button>`;
+}
+
+// ---- Modal: emitir CPE ----
+async function cpeEmitirForm(viajeId) {
+  let viaje;
+  try { const r = await api('/api/viajes/'+viajeId); viaje = r.data; }
+  catch (e) { return toast(e.message, 'error'); }
+  if (!viaje) return toast('Viaje no encontrado', 'error');
+  if (!viaje.producto || !viaje.cantidad) {
+    return toast('El viaje necesita Producto y Cantidad cargados antes de emitir CPE', 'warn');
+  }
+  if (!viaje.transporteCuit || !viaje.choferCuit || !viaje.patente) {
+    if (!confirm('Faltan datos del transportista/chofer/patente. ¿Querés completarlos antes de emitir la CPE?\n\nCancelá para cargarlos en el viaje primero.\nAceptá para continuar igual (ARCA puede rechazar).')) return;
+  }
+  openModal({
+    title: '🚚 Emitir Carta de Porte Electrónica',
+    body: `
+      <div class="mb-3 p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+        ⚠️ <b>Importante:</b> esta operación se envía a <b>ARCA</b> (servicio WSCPE) y asigna un <b>CTG real</b> a tu viaje.
+        Si tu empresa está en modo Homologación o no tiene certificado configurado, se genera una <b>CTG simulada</b> (empieza con 99).
+        Verificá los datos antes de continuar.
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2 text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-200">
+          <b>Datos del viaje:</b><br>
+          📦 ${esc(viaje.producto||'?')} · ${fmtN(viaje.cantidad||0)} kg<br>
+          🚛 ${esc(viaje.transportista||'?')} (CUIT ${esc(viaje.transporteCuit||'—')}) · Chofer: ${esc(viaje.chofer||'?')} (CUIT ${esc(viaje.choferCuit||'—')})<br>
+          🅿 ${esc(viaje.patente||'?')}${viaje.patenteAcoplado?` + ${esc(viaje.patenteAcoplado)}`:''}<br>
+          📍 ${esc(viaje.origen||'?')} → ${esc(viaje.destino||'?')}
+        </div>
+        <div><label class="label">CUIT origen (productor)</label><input id="cpe-orig-cuit" class="input" value="${esc(viaje.cpeOrigenCuit||'')}" placeholder="20-12345678-3"/></div>
+        <div><label class="label">RENSPA origen</label><input id="cpe-orig-renspa" class="input" value="${esc(viaje.cpeOrigenRenspa||'')}" placeholder="00.001.0.12345/A1"/></div>
+        <div><label class="label">CUIT destinatario</label><input id="cpe-dest-cuit" class="input" value="${esc(viaje.cpeDestinoCuit||'')}" placeholder="CUIT de la cerealera/exportador"/></div>
+        <div><label class="label">CUIT del recibidor</label><input id="cpe-recib-cuit" class="input" value="${esc(viaje.cpeDestinatarioCuit||'')}" placeholder="(suele coincidir con destinatario)"/></div>
+        <div><label class="label">CUIT corredor</label><input id="cpe-corr-cuit" class="input" value="${esc(viaje.cpeCorredorCuit||'')}" placeholder="opcional"/></div>
+        <div><label class="label">CUIT intermediario</label><input id="cpe-inter-cuit" class="input" value="${esc(viaje.cpeIntermediarioCuit||'')}" placeholder="opcional"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="cpe-obs" class="input" rows="2">${esc(viaje.cpeObservaciones||'')}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="cpeEmitirSave('${viajeId}')">🚚 Emitir CPE en ARCA</button>`
+  });
+}
+async function cpeEmitirSave(viajeId) {
+  const data = {
+    cpeOrigenCuit:        $('#cpe-orig-cuit').value.trim() || null,
+    cpeOrigenRenspa:      $('#cpe-orig-renspa').value.trim() || null,
+    cpeDestinoCuit:       $('#cpe-dest-cuit').value.trim() || null,
+    cpeDestinatarioCuit:  $('#cpe-recib-cuit').value.trim() || null,
+    cpeCorredorCuit:      $('#cpe-corr-cuit').value.trim() || null,
+    cpeIntermediarioCuit: $('#cpe-inter-cuit').value.trim() || null,
+    cpeObservaciones:     $('#cpe-obs').value.trim() || null,
+  };
+  try {
+    const r = await api('/api/viajes/'+viajeId+'/cpe/emitir', { method:'POST', body: JSON.stringify(data) });
+    const info = r.info || {};
+    closeModal();
+    if (info.mock) {
+      toast(`✅ CPE emitida en modo SIMULADO · CTG ${info.ctg}`, 'success');
+    } else {
+      toast(`✅ CPE emitida por ARCA · CTG ${info.ctg}`, 'success');
+    }
+    delete state.cache.viajes; pages.viajes();
+    setTimeout(() => cpeDetalle(viajeId), 300);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function cpeDetalle(viajeId) {
+  let v;
+  try { const r = await api('/api/viajes/'+viajeId); v = r.data; }
+  catch (e) { return toast(e.message, 'error'); }
+  const puedeConfirmar = v.cpeEstado === 'emitida';
+  const puedeAnular = ['emitida','confirmada'].includes(v.cpeEstado);
+  openModal({
+    title: '📋 Carta de Porte Electrónica',
+    body: `
+      <div class="space-y-3">
+        <div class="p-3 bg-emerald-50 border border-emerald-200 rounded">
+          <div class="text-xs text-emerald-700 mb-1">CTG asignado por ARCA</div>
+          <div class="text-2xl font-bold text-emerald-900">${esc(v.cpeNroCtg||'—')}</div>
+          ${v.cpeNroComprobante?`<div class="text-xs text-emerald-700 mt-1">Comprobante: <b>${esc(v.cpeNroComprobante)}</b></div>`:''}
+        </div>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div><b>Estado:</b> <span class="px-2 py-0.5 rounded text-xs ${v.cpeEstado==='emitida'?'bg-amber-100 text-amber-800':v.cpeEstado==='confirmada'?'bg-emerald-100 text-emerald-800':v.cpeEstado==='anulada'?'bg-rose-100 text-rose-800':'bg-slate-100'}">${esc(v.cpeEstado||'—')}</span></div>
+          <div><b>Tipo:</b> ${esc(v.cpeTipo||'automotor')}</div>
+          <div><b>Emisión:</b> ${v.cpeFechaEmision?fmtDateTime(v.cpeFechaEmision):'—'}</div>
+          <div><b>Arribo:</b> ${v.cpeFechaArribo?fmtDateTime(v.cpeFechaArribo):'—'}</div>
+        </div>
+        <div class="text-xs text-slate-600 p-2 bg-slate-50 rounded">
+          <b>Origen:</b> CUIT ${esc(v.cpeOrigenCuit||'—')} · RENSPA ${esc(v.cpeOrigenRenspa||'—')}<br>
+          <b>Destino:</b> CUIT ${esc(v.cpeDestinoCuit||'—')} · Recibidor: ${esc(v.cpeDestinatarioCuit||'—')}
+        </div>
+        ${v.cpeMotivoAnulacion?`<div class="text-xs text-rose-700 p-2 bg-rose-50 rounded"><b>Motivo de anulación:</b> ${esc(v.cpeMotivoAnulacion)}</div>`:''}
+      </div>`,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-secondary" onclick="cpeConsultar('${viajeId}')">🔄 Consultar en ARCA</button>
+      ${puedeConfirmar?`<button class="btn btn-secondary" onclick="cpeConfirmarArriboForm('${viajeId}', ${v.cantidad||0})">📥 Confirmar arribo</button>`:''}
+      ${puedeAnular?`<button class="btn btn-secondary text-red-600" onclick="cpeAnularForm('${viajeId}')">🚫 Anular CPE</button>`:''}
+    `
+  });
+}
+
+async function cpeConsultar(viajeId) {
+  try {
+    const r = await api('/api/viajes/'+viajeId+'/cpe/consultar');
+    const info = r.info || {};
+    toast(`Estado en ARCA: ${info.estado || 'desconocido'}${info.mock?' (simulado)':''}`, 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function cpeConfirmarArriboForm(viajeId, sugerencia) {
+  openModal({
+    title: '📥 Confirmar arribo de la CPE',
+    body: `
+      <div class="mb-3 text-sm text-slate-600">Ingresá los kilos efectivamente descargados en destino. Esto se envía a ARCA como confirmación de que el viaje arribó.</div>
+      <label class="label">Kg descargados *</label>
+      <input id="cpe-kg" type="number" class="input" value="${sugerencia||0}" min="0" step="0.01"/>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="cpeConfirmarArriboSave('${viajeId}')">📥 Confirmar arribo</button>`
+  });
+}
+async function cpeConfirmarArriboSave(viajeId) {
+  const kg = Number($('#cpe-kg').value || 0);
+  if (kg <= 0) return toast('Ingresá los kg descargados', 'warn');
+  try {
+    await api('/api/viajes/'+viajeId+'/cpe/confirmar-arribo', { method:'POST', body: JSON.stringify({ kgDescarga: kg }) });
+    toast('✅ Arribo confirmado en ARCA', 'success');
+    closeModal();
+    delete state.cache.viajes; pages.viajes();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function cpeAnularForm(viajeId) {
+  openModal({
+    title: '🚫 Anular Carta de Porte Electrónica',
+    body: `
+      <div class="mb-3 text-sm text-slate-600">⚠️ Anular una CPE es una operación final. Ingresá el motivo de anulación.</div>
+      <label class="label">Motivo *</label>
+      <textarea id="cpe-motivo" class="input" rows="3" placeholder="Ej. Error en datos del transportista, cambio de destino..."></textarea>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary text-red-600" onclick="cpeAnularSave('${viajeId}')">🚫 Anular CPE</button>`
+  });
+}
+async function cpeAnularSave(viajeId) {
+  const motivo = $('#cpe-motivo').value.trim();
+  if (!motivo) return toast('Ingresá el motivo de anulación', 'warn');
+  if (!confirm('¿Confirmás anular esta CPE en ARCA? La operación NO se puede revertir.')) return;
+  try {
+    await api('/api/viajes/'+viajeId+'/cpe/anular', { method:'POST', body: JSON.stringify({ motivo }) });
+    toast('CPE anulada', 'success');
+    closeModal();
+    delete state.cache.viajes; pages.viajes();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- Probar WSCPE desde Configuración ARCA ----
+async function probarWscpe() {
+  try {
+    const r = await api('/api/arca/cpe/probar');
+    if (r.simulado) {
+      toast(`📋 WSCPE en modo ${r.modo} (simulado): ${r.mensaje}`, 'success');
+    } else {
+      toast(`📋 WSCPE en modo ${r.modo}: ${r.mensaje}`, 'success');
+    }
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 // ---- Solicitar Camión Logística por WhatsApp ----

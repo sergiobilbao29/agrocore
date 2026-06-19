@@ -691,6 +691,24 @@ model Viaje {
   destinoTipo         String?    // "cerealera" | "venta_directa" | "otro" (NULL = no aplica)
   depositoDestinoId   String?    // si va a cerealera, depósito destino del cereal
   liquidacionCerealId String?    // si ya se cargó la liquidación de venta, su id
+  // ---- Carta de Porte Electrónica (CPE / WSCPE de ARCA) ----
+  cpeTipo            String?    // "automotor" | "ferroviaria"
+  cpeNroCtg          String?    // nro CTG asignado por ARCA (12 dígitos)
+  cpeNroComprobante  String?    // nro de comprobante CPE
+  cpeEstado          String?    // pendiente_emision | emitida | confirmada | anulada
+  cpeFechaEmision    DateTime?
+  cpeFechaArribo     DateTime?
+  cpeFechaAnulacion  DateTime?
+  cpeMotivoAnulacion String?
+  cpePdfUrl          String?    // link a PDF si se descarga del WS
+  cpeObservaciones   String?
+  cpeRespuestaArca   Json?      // payload crudo de ARCA para debug
+  cpeOrigenCuit      String?    // CUIT productor / titular del origen
+  cpeOrigenRenspa    String?    // RENSPA del campo de origen
+  cpeDestinoCuit     String?    // CUIT destinatario (cerealera, exportador)
+  cpeDestinatarioCuit String?   // CUIT del recibidor del cereal
+  cpeCorredorCuit    String?
+  cpeIntermediarioCuit String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -703,6 +721,8 @@ model Viaje {
   @@index([estado])
   @@index([facturaCompraId])
   @@index([depositoDestinoId])
+  @@index([cpeNroCtg])
+  @@index([cpeEstado])
 }
 
 // ============================================================
