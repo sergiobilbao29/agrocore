@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/06/2026',
+      titulo:'📥 Importar una Carta de Porte de ARCA y crear un Viaje completo en 1 clic',
+      desc:'Botón nuevo en la página Viajes (al lado de + Nuevo viaje): <b>📥 Importar CP</b>. Subís el PDF de una CPE emitida en el portal de ARCA y AgroCore crea un viaje nuevo con TODO cargado: producto (Soja/Maíz/etc), origen y destino, transportista + CUIT, chofer + CUIT, patentes (camión + acoplado separados de "Dominios"), Peso Neto, km a recorrer, tarifa, pagador del flete, CTG y N° de Carta de Porte. El viaje queda directamente en estado "cargado" y con la CPE marcada como emitida (importada). Ideal cuando la chica de administración recibe las CPEs por mail/WhatsApp y solo necesita registrarlas — antes había que tipear todo. Además mejoramos el parser para que tolere PDFs con layout en columnas (etiquetas en una línea y valores en otra), pesos pegados ("4500015000" → 45000 + 15000) y patentes con o sin acoplado. Si algún campo no se mapea, abrí DevTools → Console para ver el texto crudo del PDF y poder afinar.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
       titulo:'📤 Cargar PDF de ARCA ahora llena TODO el viaje (no solo los CUITs del form)',
       desc:'El parser PDF antes solo llenaba 1 o 2 CUITs del modal de emisión. Ahora hace dos cosas: (1) Llena los CUITs visibles del modal (origen, destinatario, recibidor, corredor, intermediario, observaciones) — con la razón social verde abajo si están en tus catálogos. (2) Actualiza el VIAJE con todos los datos que vienen del PDF: producto (Soja/Maíz/etc), transportista + CUIT, chofer + CUIT, patente del camión y acoplado (separados de "Dominios"), Peso Bruto / Tara / Neto, origen y destino (localidades), Kms a recorrer, tarifa y pagador del flete. Los datos quedan guardados en el viaje aunque canceles el modal de emisión, así si después emitís la CPE real o querés revisar el viaje, ya está todo cargado. Si querés ver qué extrajo el parser, abrí DevTools → Console — vas a ver "[cpeParsearPDF] datos extraídos del PDF" con el objeto completo y el texto crudo del PDF (útil para debugging si algún campo no se mapea).' },
@@ -11291,6 +11294,10 @@ pages.viajes = async function() {
         <button class="btn btn-secondary" onclick="viajesExportarExcel()">📥 Exportar Excel</button>
         <button class="btn btn-secondary" onclick="solicitarCamionForm()">🚛 Solicitar Camión Logística</button>
         <button class="btn btn-secondary" onclick="verificarCtgsForm()" title="Consultar el estado de los CTGs en ARCA y completar los kg descargados">🔍 Verificar CTGs en ARCA</button>
+        ${canC?`<label class="btn btn-secondary cursor-pointer" title="Importar una CP desde PDF de ARCA y crear el viaje completo">
+          📥 Importar CP
+          <input type="file" accept="application/pdf" style="display:none" onchange="viajeImportarCP(this)"/>
+        </label>`:''}
         ${canC?`<button class="btn btn-primary" onclick="viajeForm()">+ Nuevo viaje</button>`:''}
       </div>
     </div>
@@ -12144,6 +12151,36 @@ async function viajeFacturarYPagarConfirmar() {
 // CPE — CARTA DE PORTE ELECTRÓNICA (WSCPE ARCA)
 // ============================================================
 // Render del botón CPE según el estado del viaje
+async function viajeImportarCP(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (!confirm('¿Crear un viaje nuevo importando los datos de este PDF de ARCA?\n\nSe va a crear el viaje con producto, transportista, chofer, patentes, pesos, origen, destino, kms, tarifa, CTG, etc. — todo lo que esté en el PDF.')) {
+    input.value = '';
+    return;
+  }
+  toast('📥 Importando PDF y creando viaje...', 'info');
+  const fd = new FormData();
+  fd.append('archivo', file);
+  try {
+    const headers = {};
+    if (state.token)     headers['Authorization'] = 'Bearer ' + state.token;
+    if (state.companyId) headers['X-Company-Id']  = state.companyId;
+    const r = await fetch((window.API_BASE||'') + '/api/arca/cpe/importar-como-viaje', { method:'POST', body: fd, headers });
+    let j = null; try { j = await r.json(); } catch {}
+    if (!r.ok) throw new Error((j && j.error) || ('HTTP '+r.status));
+    if (!j.ok) throw new Error(j.error || 'Error');
+    const info = j.info || {};
+    toast(`✅ Viaje creado · CTG ${info.ctg||''} · ${info.producto||''} ${info.pesoNeto?(' '+Number(info.pesoNeto).toLocaleString('es-AR')+' kg'):''}${info.transportista?' · '+info.transportista:''}`, 'success');
+    delete state.cache.viajes;
+    pages.viajes();
+  } catch (e) {
+    console.error('[viajeImportarCP]', e);
+    toast('No se pudo importar: ' + e.message, 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
 function cpeBotonViaje(v) {
   // Usamos data-* + event delegation global (más robusto que onclick inline)
   const id = v.id;

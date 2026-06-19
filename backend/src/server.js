@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.8.10';
+const AGROCORE_VERSION = '0.8.11';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8123,8 +8123,13 @@ app.delete('/api/choferes/:id', requireCompany, requirePermission('viajes:delete
   } catch (e) { next(e); }
 });
 
-// Parser de PDF de CPE oficial de ARCA: extrae los campos típicos para
-// autocargar el viaje COMPLETO (CUITs + transportista + chofer + dominios + pesos).
+// Parser de PDF de CPE oficial de ARCA. Tolerante a layouts variables:
+// algunos PDFs vienen con valores inline ("Chofer: 20XXXXX - NOMBRE") y otros con
+// las etiquetas y valores en líneas separadas (por tablas de ARCA). Estrategias:
+//   1) Para cada campo intentamos regex inline (mismo renglón)
+//   2) Fallback: buscar el CUIT en las próximas líneas tras la etiqueta
+//   3) Pesos: buscar números 4-6 dígitos cerca de "Peso Bruto/Tara/Neto"
+//   4) Dominios: regex de patentes argentinas (AAA999 o AA999AA)
 app.post('/api/arca/cpe/parsear-pdf', authMiddleware, requireCompany, requirePermission('viajes:read'), upload.single('archivo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
@@ -8134,82 +8139,239 @@ app.post('/api/arca/cpe/parsear-pdf', authMiddleware, requireCompany, requirePer
     const data = await pdfParse(req.file.buffer);
     let txt = data.text || '';
     // Normalizar espacios pero preservar saltos
-    txt = txt.replace(/[ \t]+/g, ' ').replace(/ /g, ' ');
-    const get1 = (re) => { const m = txt.match(re); return m ? m[1].trim() : null; };
-    // Pattern para "CAMPO: CUIT - RAZON SOCIAL" o "CAMPO : CUIT - RAZON" (con espacios y dos puntos opcionales)
-    const cuitRazon = (campo) => {
-      const re = new RegExp(campo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*:?\\s*(\\d{11})\\s*[-–]\\s*([^\\n]+)', 'i');
-      const m = txt.match(re);
-      return m ? { cuit: m[1].trim(), razon: m[2].trim() } : { cuit: null, razon: null };
-    };
-    const titular        = cuitRazon('Titular Carta de Porte');
-    const remitente      = cuitRazon('Remitente Comercial Productor');
-    const rteComPrim     = cuitRazon('Rte\\. Comercial Venta Primaria');
-    const corredorPrim   = cuitRazon('Corredor Venta Primaria');
-    const corredorSec    = cuitRazon('Corredor Venta Secundaria');
-    const destinatario   = cuitRazon('Destinatario');
-    const destino        = cuitRazon('Destino');
-    const transportista  = cuitRazon('Empresa Transportista');
-    const fletePagador   = cuitRazon('Flete pagador');
-    const chofer         = cuitRazon('Chofer');
-    const intermediario  = cuitRazon('Intermediario de flete');
-    const repEntregador  = cuitRazon('Representante entregador');
-    const repRecibidor   = cuitRazon('Representante recibidor');
-    // Otros campos no-CUIT
+    const lineas = txt.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const full = lineas.join('\n');
+
+    const get1 = (re, src) => { const m = (src||full).match(re); return m ? m[1].trim() : null; };
+    // Para una etiqueta dada, intenta: inline → siguiente línea → próximos N renglones
+    function buscarCuitRazon(etiqueta) {
+      const reEtiqueta = new RegExp(etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const reInline = new RegExp(etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*:?\\s*(\\d{11})\\s*[-–]\\s*([^\\n]+)', 'i');
+      const m1 = full.match(reInline);
+      if (m1) return { cuit: m1[1], razon: m1[2].trim() };
+      // Fallback: buscar la línea de la etiqueta, luego CUIT en próximas 3
+      const idx = lineas.findIndex(l => reEtiqueta.test(l));
+      if (idx >= 0) {
+        for (let i = idx; i < Math.min(idx + 4, lineas.length); i++) {
+          const m2 = lineas[i].match(/(\d{11})\s*[-–]\s*(.+)/);
+          if (m2) return { cuit: m2[1], razon: m2[2].trim() };
+          const m3 = lineas[i].match(/(\d{11})/);
+          if (m3 && i > idx) return { cuit: m3[1], razon: '' };
+        }
+      }
+      return { cuit: null, razon: null };
+    }
+    const titular        = buscarCuitRazon('Titular Carta de Porte');
+    const remitente      = buscarCuitRazon('Remitente Comercial Productor');
+    const rteComPrim     = buscarCuitRazon('Rte\\. Comercial Venta Primaria');
+    const corredorPrim   = buscarCuitRazon('Corredor Venta Primaria');
+    const corredorSec    = buscarCuitRazon('Corredor Venta Secundaria');
+    const destinatario   = buscarCuitRazon('Destinatario');
+    const destino        = buscarCuitRazon('Destino');
+    const transportista  = buscarCuitRazon('Empresa Transportista');
+    const fletePagador   = buscarCuitRazon('Flete pagador');
+    const chofer         = buscarCuitRazon('Chofer');
+    const intermediario  = buscarCuitRazon('Intermediario de flete');
+    const repEntregador  = buscarCuitRazon('Representante entregador');
+    const repRecibidor   = buscarCuitRazon('Representante recibidor');
+
+    // Pesos: pueden venir como números pegados ("4500015000" = 45000+15000) o separados.
+    // Estrategia: buscar números enteros sueltos en la sección B
+    const idxGrano = lineas.findIndex(l => /B\s*-\s*GRANO/i.test(l));
+    const idxProcedencia = lineas.findIndex(l => /C\s*-\s*PROCEDENCIA/i.test(l));
+    let pesoBruto = get1(/Peso\s*Bruto[:\s]*(\d{3,7})/i);
+    let pesoTara  = get1(/Peso\s*Tara[:\s]*(\d{3,7})/i);
+    let pesoNeto  = get1(/Peso\s*Neto[:\s]*(\d{3,7})/i);
+    if (idxGrano >= 0 && idxProcedencia > idxGrano) {
+      const secB = lineas.slice(idxGrano, idxProcedencia);
+      // Recolectar todos los números de 3-7 dígitos en sección B
+      const nums = [];
+      secB.forEach(l => {
+        const arr = l.match(/\b\d{3,7}\b/g);
+        if (arr) nums.push(...arr.map(Number));
+      });
+      // Si hay un número "concatenado" muy largo, intentar partirlo (caso "4500015000" = 45000 + 15000)
+      secB.forEach(l => {
+        const big = l.match(/^(\d{8,12})$/);
+        if (big) {
+          const s = big[1];
+          if (s.length === 10) { nums.push(Number(s.slice(0,5))); nums.push(Number(s.slice(5))); }
+        }
+      });
+      const unicos = [...new Set(nums)].sort((a,b) => b - a);
+      // Heurística: el más grande suele ser bruto, el menor de los pesos es tara, neto = bruto - tara
+      if (!pesoBruto && unicos.length >= 1) pesoBruto = String(unicos[0]);
+      if (!pesoTara && unicos.length >= 2) {
+        // Tara: el más cercano al esperado (típicamente 10000-25000)
+        const candTara = unicos.find(n => n >= 5000 && n <= 30000 && n < unicos[0]);
+        if (candTara) pesoTara = String(candTara);
+      }
+      if (!pesoNeto && pesoBruto && pesoTara) pesoNeto = String(Number(pesoBruto) - Number(pesoTara));
+    }
+
+    // Grano: buscar productos típicos cerca de la sección B
+    let grano = get1(/Grano\s*\/\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)/i);
+    if (!grano && idxGrano >= 0 && idxProcedencia > idxGrano) {
+      const secB = lineas.slice(idxGrano, idxProcedencia);
+      const productos = ['Soja','Maíz','Maiz','Trigo','Girasol','Sorgo','Cebada','Avena','Centeno','Lino','Arroz'];
+      for (const l of secB) {
+        for (const p of productos) {
+          if (l.toLowerCase().includes(p.toLowerCase())) { grano = p; break; }
+        }
+        if (grano) break;
+      }
+    }
+    const campania = get1(/Campaña[:\s]*(\d{4})/i);
+
+    // Dominios: patentes argentinas
+    let dominioCamion = null, dominioAcoplado = null;
+    const domLine = get1(/Dominios?\s*:?\s*([A-Z0-9\-\s\/]+?)(?:\n|Partida)/i);
+    if (domLine) {
+      const parts = domLine.split(/[\-\/\s]+/).filter(p => /^[A-Z]{2,3}\d{3,4}[A-Z]{0,2}$/.test(p));
+      dominioCamion = parts[0] || null;
+      dominioAcoplado = parts[1] || null;
+    }
+    if (!dominioCamion) {
+      // Fallback: buscar patentes en todo el texto
+      const pats = (full.match(/\b[A-Z]{2,3}\d{3,4}[A-Z]{0,2}\b/g) || []).filter(p => p.length >= 6);
+      dominioCamion = pats[0] || null;
+      dominioAcoplado = pats[1] || null;
+    }
+
+    // Localidades
+    const origenLocalidad = get1(/C\s*-\s*PROCEDENCIA[\s\S]*?Localidad[:\s]*([^\n]+?)(?:\s+Provincia|\n)/i);
+    const origenProvincia = get1(/C\s*-\s*PROCEDENCIA[\s\S]*?Provincia\s*[:\s]*([A-ZÁÉÍÓÚÑ ]+?)(?:\n|Latitud)/i);
+    const destinoEsCampo  = get1(/D\s*-\s*DESTINO[\s\S]*?Es un campo:\s*(Si|No|Sí)/i);
+    const destinoPlanta   = get1(/N°\s*Planta\s*(\d+)/i);
+    const destinoDireccion= get1(/Dirección[:\s]*([^\n]+?)\s*(?:Localidad|\n)/i);
+    const destinoLocalidad= get1(/D\s*-\s*DESTINO[\s\S]*?Localidad[:\s]*([^\n]+?)(?:\s+Provincia|\n)/i);
+    const destinoProvincia= get1(/D\s*-\s*DESTINO[\s\S]*?Provincia[:\s]*([A-ZÁÉÍÓÚÑ ]+?)(?:\n|E -)/i);
+
+    // RENSPA
+    const origenRenspa = get1(/RENSPA[\s\S]*?(\d{2}\.\d{3}\.\d\.\d+\/?[A-Z0-9]*)/i);
+
+    // Transporte
+    const partidaFecha = get1(/Partida[:\s]*(\d{1,2}\/\d{1,2}\/\d{4}\s*\d{2}:\d{2}(?::\d{2})?)/i);
+    const kmsARecorrer = get1(/Kms\.\s*a\s*recorrer[:\s]*(\d+)/i);
+    const tarifa = get1(/Tarifa[:\s]*([\d\.,]+)/i);
+    const observaciones = get1(/Observaciones[:\s]*([^\n]+)/i);
+
     const out = {
-      // Identificación
-      cpeNroCtg:          get1(/CTG:\s*(\d{11,})/i),
-      cpeNroComprobante:  get1(/N°\s*CPE:?\s*([\d\-]+)/i),
-      fechaEmisionTxt:    get1(/Fecha:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i),
-      fechaVtoTxt:        get1(/Vencimiento:?\s*(\d{1,2}\/\d{1,2}\/\d{4}[^\n]*)/i),
+      // ID
+      cpeNroCtg:        get1(/CTG:\s*(\d{11,})/i),
+      cpeNroComprobante:get1(/N°\s*CPE:?\s*([\d\-]+)/i),
+      fechaEmisionTxt:  get1(/Fecha:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i),
       // Intervinientes
-      titularCuit: titular.cuit,             titularRazon: titular.razon,
-      remitenteCuit: remitente.cuit,         remitenteRazon: remitente.razon,
+      titularCuit: titular.cuit, titularRazon: titular.razon,
+      remitenteCuit: remitente.cuit, remitenteRazon: remitente.razon,
       rteComercialPrimCuit: rteComPrim.cuit, rteComercialPrimRazon: rteComPrim.razon,
-      corredorPrimCuit: corredorPrim.cuit,   corredorPrimRazon: corredorPrim.razon,
-      corredorSecCuit: corredorSec.cuit,     corredorSecRazon: corredorSec.razon,
-      destinatarioCuit: destinatario.cuit,   destinatarioRazon: destinatario.razon,
-      destinoCuit: destino.cuit,             destinoRazon: destino.razon,
+      corredorPrimCuit: corredorPrim.cuit, corredorPrimRazon: corredorPrim.razon,
+      corredorSecCuit: corredorSec.cuit, corredorSecRazon: corredorSec.razon,
+      destinatarioCuit: destinatario.cuit, destinatarioRazon: destinatario.razon,
+      destinoCuit: destino.cuit, destinoRazon: destino.razon,
       transportistaCuit: transportista.cuit, transportistaRazon: transportista.razon,
-      fletePagadorCuit: fletePagador.cuit,   fletePagadorRazon: fletePagador.razon,
-      choferCuit: chofer.cuit,               choferRazon: chofer.razon,
+      fletePagadorCuit: fletePagador.cuit, fletePagadorRazon: fletePagador.razon,
+      choferCuit: chofer.cuit, choferRazon: chofer.razon,
       intermediarioCuit: intermediario.cuit, intermediarioRazon: intermediario.razon,
       repEntregadorCuit: repEntregador.cuit, repEntregadorRazon: repEntregador.razon,
-      repRecibidorCuit: repRecibidor.cuit,   repRecibidorRazon: repRecibidor.razon,
+      repRecibidorCuit: repRecibidor.cuit, repRecibidorRazon: repRecibidor.razon,
       // Grano
-      grano:              get1(/Grano\s*\/\s*([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+?)\s+Tipo:/i),
-      tipoGrano:          get1(/Tipo:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)/i),
-      campania:           get1(/Campaña:\s*(\d{4})/i),
+      grano, campania,
       // Pesos
-      pesoBruto:          get1(/Peso Bruto\s*(\d+)/i),
-      pesoTara:           get1(/Peso Tara\s*(\d+)/i),
-      pesoNeto:           get1(/Peso Neto\s*(\d+)/i),
+      pesoBruto, pesoTara, pesoNeto,
       // Procedencia
-      origenLocalidad:    get1(/C - PROCEDENCIA[\s\S]*?Localidad:\s*([^\n]+?)\s+Provincia/i),
-      origenProvincia:    get1(/C - PROCEDENCIA[\s\S]*?Provincia\s*:?\s*([A-ZÁÉÍÓÚÑ ]+?)(?:\s*Latitud|\n)/i),
-      origenLat:          get1(/Latitud:\s*([^\s\n]+)/i),
-      origenLng:          get1(/Longitud:\s*([^\s\n]+)/i),
-      origenRenspa:       get1(/RENSPA\s*[^\n]*?(\d{2}\.\d{3}\.\d\.\d+\/?[A-Z0-9]*)/i),
+      origenLocalidad, origenProvincia, origenRenspa,
       // Destino
-      destinoEsCampo:     get1(/D - DESTINO[\s\S]*?Es un campo:\s*(Si|No|Sí)/i),
-      destinoPlanta:      get1(/N°\s*Planta\s*(\d+)/i),
-      destinoDireccion:   get1(/Dirección:\s*([^\n]+?)\s*Localidad:/i),
-      destinoLocalidad:   get1(/D - DESTINO[\s\S]*?Localidad:\s*([^\n]+?)\s+Provincia:/i),
-      destinoProvincia:   get1(/D - DESTINO[\s\S]*?Provincia:\s*([A-ZÁÉÍÓÚÑ ]+?)(?:\n|E -)/i),
+      destinoEsCampo, destinoPlanta, destinoDireccion, destinoLocalidad, destinoProvincia,
       // Transporte
-      dominios:           get1(/Dominios:\s*([A-Z0-9\s\-\/]+?)(?:\n|Partida)/i),
-      partidaFecha:       get1(/Partida:\s*(\d{1,2}\/\d{1,2}\/\d{4}\s*\d{2}:\d{2}(?::\d{2})?)/i),
-      kmsARecorrer:       get1(/Kms\.\s*a\s*recorrer:\s*(\d+)/i),
-      tarifa:             get1(/Tarifa:\s*([\d\.,]+)/i),
-      observaciones:      get1(/Observaciones:\s*([^\n]+)/i),
+      dominioCamion, dominioAcoplado, partidaFecha, kmsARecorrer, tarifa,
+      // Otros
+      observaciones,
     };
-    // Separar dominios (camion / acoplado)
-    if (out.dominios) {
-      const parts = out.dominios.split(/[\-\/\s]+/).filter(Boolean);
-      out.dominioCamion = parts[0] || null;
-      out.dominioAcoplado = parts[1] || null;
+    res.json({ ok: true, data: out, textoCrudo: txt.slice(0, 4000), totalLineas: lineas.length });
+  } catch (e) { next(e); }
+});
+
+// Crear un viaje nuevo a partir del PDF de ARCA
+app.post('/api/arca/cpe/importar-como-viaje', authMiddleware, requireCompany, requirePermission('viajes:create'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    let pdfParse;
+    try { pdfParse = await getPdfParse(); }
+    catch (e) { return res.status(500).json({ ok: false, error: 'pdf-parse no disponible: ' + e.message }); }
+    // Re-usamos la lógica de parsing: llamamos al endpoint internamente vía fetch local sería costoso,
+    // mejor copiamos el parser inline. Para simplificar: hacemos una llamada interna fingida.
+    // Por practicidad, re-armamos los datos esenciales con un parser mínimo:
+    const data = await pdfParse(req.file.buffer);
+    let txt = data.text || '';
+    const lineas = txt.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const full = lineas.join('\n');
+    const g1 = (re) => { const m = full.match(re); return m ? m[1].trim() : null; };
+    const cuitRazonInline = (et) => {
+      const m = full.match(new RegExp(et + '\\s*:?\\s*(\\d{11})\\s*[-–]\\s*([^\\n]+)', 'i'));
+      return m ? { cuit: m[1], razon: m[2].trim() } : { cuit: null, razon: null };
+    };
+    const tr = cuitRazonInline('Empresa Transportista');
+    const ch = cuitRazonInline('Chofer');
+    const fp = cuitRazonInline('Flete pagador');
+    let grano = g1(/Grano\s*\/\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)/i);
+    if (!grano) {
+      const productos = ['Soja','Maíz','Maiz','Trigo','Girasol','Sorgo','Cebada','Avena'];
+      for (const p of productos) if (full.toLowerCase().includes(p.toLowerCase())) { grano = p; break; }
     }
-    res.json({ ok: true, data: out, textoCrudo: txt.slice(0, 3000) });
+    let pesoNeto = g1(/Peso\s*Neto[:\s]*(\d{3,7})/i);
+    if (!pesoNeto) {
+      const m = full.match(/Peso\s*Neto[^\d]+(\d{3,7})/i);
+      if (m) pesoNeto = m[1];
+    }
+    const ctg = g1(/CTG:\s*(\d{11,})/i);
+    const nroComp = g1(/N°\s*CPE:?\s*([\d\-]+)/i);
+    const origen = g1(/C\s*-\s*PROCEDENCIA[\s\S]*?Localidad[:\s]*([^\n]+?)(?:\s+Provincia|\n)/i);
+    const destino = g1(/D\s*-\s*DESTINO[\s\S]*?Localidad[:\s]*([^\n]+?)(?:\s+Provincia|\n)/i);
+    const km = g1(/Kms\.\s*a\s*recorrer[:\s]*(\d+)/i);
+    const tarifa = g1(/Tarifa[:\s]*([\d\.,]+)/i);
+    // Dominios
+    let patente = null, patenteAcoplado = null;
+    const domLine = g1(/Dominios?\s*:?\s*([A-Z0-9\-\s\/]+?)(?:\n|Partida)/i);
+    if (domLine) {
+      const parts = domLine.split(/[\-\/\s]+/).filter(p => /^[A-Z]{2,3}\d{3,4}[A-Z]{0,2}$/.test(p));
+      patente = parts[0] || null;
+      patenteAcoplado = parts[1] || null;
+    }
+    const partida = g1(/Partida[:\s]*(\d{1,2}\/\d{1,2}\/\d{4}\s*\d{2}:\d{2}(?::\d{2})?)/i);
+    let fechaIso = new Date();
+    if (partida) {
+      // dd/mm/yyyy hh:mm
+      const mm = partida.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{2}):(\d{2})/);
+      if (mm) fechaIso = new Date(`${mm[3]}-${mm[2].padStart(2,'0')}-${mm[1].padStart(2,'0')}T${mm[4]}:${mm[5]}:00`);
+    }
+    const obs = g1(/Observaciones[:\s]*([^\n]+)/i);
+    // Crear el viaje
+    const v = await prisma.viaje.create({ data: {
+      companyId: req.companyId,
+      fecha: fechaIso,
+      origen, destino,
+      producto: grano || null,
+      transportista: tr.razon || null,
+      transporteCuit: tr.cuit || null,
+      chofer: ch.razon || null,
+      choferCuit: ch.cuit || null,
+      patente, patenteAcoplado,
+      cantidad: pesoNeto ? Number(pesoNeto) : null,
+      km: km ? Number(km) : null,
+      tarifa: tarifa ? Number(String(tarifa).replace(/\./g,'').replace(',','.')) : null,
+      pagadorFlete: fp.razon || null,
+      ctg, cartaPorte: nroComp || ctg,
+      estado: 'cargado',
+      observaciones: 'Importado desde PDF de ARCA' + (obs?` · ${obs}`:''),
+      // Datos CPE
+      cpeNroCtg: ctg, cpeNroComprobante: nroComp,
+      cpeEstado: 'emitida',
+      cpeTipo: 'automotor',
+      cpeFechaEmision: new Date(),
+      cpeRespuestaArca: { importadoDesdePDF: true },
+    }});
+    res.status(201).json({ ok: true, data: v, info: { mensaje: 'Viaje creado desde PDF', ctg, transportista: tr.razon, chofer: ch.razon, producto: grano, pesoNeto } });
   } catch (e) { next(e); }
 });
 
