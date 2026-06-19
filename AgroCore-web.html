@@ -2316,6 +2316,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'23/06/2026',
+      titulo:'🛠️ Fix definitivo del botón Ver CPE + CTG/CP llenados automáticamente al emitir',
+      desc:'(1) El botón 📋 ver detalle de la CPE en el listado de viajes ahora usa <b>event delegation</b> en vez de onclick inline (cambio defensivo contra problemas de escape de strings y service workers viejos). Si igual no responde, abrí DevTools → Console y vas a ver el mensaje "[cpeDetalle] error: ..." con el motivo. (2) Cuando se emite una CPE, los campos <b>CTG</b> y <b>Carta de Porte</b> del viaje ahora se llenan automáticamente con los valores asignados por ARCA — antes solo se llenaba el campo CPE pero los campos clásicos del viaje quedaban vacíos. (3) Si todavía no te funciona el botón después de actualizar, hacé hard reload (Ctrl+Shift+R) o desregistrá el Service Worker desde DevTools → Application → Service Workers.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'23/06/2026',
       titulo:'🛠️ Fix botón ver detalle CPE + ahora podés Modificar o Eliminar la CPE',
       desc:'(1) Bug fix: el botón 📋 ver detalle de la CPE en el listado de viajes no respondía por un problema con JSON.stringify dentro del onclick (igual que tuvimos en otros lados). Solucionado. (2) En el modal de detalle CPE se sumaron 2 acciones: <b>✏️ Modificar</b> abre un form para corregir los CUITs (origen/destinatario/recibidor/corredor/intermediario), RENSPA y observaciones — útil cuando cargaste mal un dato y querés actualizarlo en tu registro de AgroCore. Importante: estos cambios NO se propagan a ARCA si la CPE ya fue emitida (para corregir en ARCA hay que anular y emitir de nuevo). (3) <b>🗑️ Eliminar registro</b> limpia los campos CPE del viaje en AgroCore — útil para CPEs simuladas (mock) que ya no necesitás, o si ya anulaste por afuera y querés que el viaje quede como si nunca hubiera tenido CPE. NO toca ARCA — para anular en ARCA usá el botón 🚫 Anular.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'23/06/2026',
@@ -12127,18 +12130,35 @@ async function viajeFacturarYPagarConfirmar() {
 // ============================================================
 // Render del botón CPE según el estado del viaje
 function cpeBotonViaje(v) {
+  // Usamos data-* + event delegation global (más robusto que onclick inline)
   const id = v.id;
   if (v.cpeNroCtg && v.cpeEstado === 'emitida') {
-    return `<button class="btn btn-ghost text-xs text-emerald-700" title="CPE emitida (CTG ${esc(v.cpeNroCtg)}) — ver detalle" onclick="cpeDetalle('${id}')">📋</button>`;
+    return `<button class="btn btn-ghost text-xs text-emerald-700" title="CPE emitida (CTG ${esc(v.cpeNroCtg)}) — ver detalle" data-cpe="detalle" data-id="${esc(id)}">📋</button>`;
   }
   if (v.cpeNroCtg && v.cpeEstado === 'confirmada') {
-    return `<button class="btn btn-ghost text-xs text-blue-700" title="CPE confirmada (arribo)" onclick="cpeDetalle('${id}')">✅</button>`;
+    return `<button class="btn btn-ghost text-xs text-blue-700" title="CPE confirmada (arribo)" data-cpe="detalle" data-id="${esc(id)}">✅</button>`;
   }
   if (v.cpeNroCtg && v.cpeEstado === 'anulada') {
-    return `<button class="btn btn-ghost text-xs text-slate-400" title="CPE anulada — emitir una nueva" onclick="cpeEmitirForm('${id}')">🔄</button>`;
+    return `<button class="btn btn-ghost text-xs text-slate-400" title="CPE anulada — emitir una nueva" data-cpe="emitir" data-id="${esc(id)}">🔄</button>`;
   }
-  // Sin CPE todavía
-  return `<button class="btn btn-ghost text-xs text-amber-700" title="Emitir Carta de Porte Electrónica en ARCA" onclick="cpeEmitirForm('${id}')">🚚</button>`;
+  return `<button class="btn btn-ghost text-xs text-amber-700" title="Emitir Carta de Porte Electrónica en ARCA" data-cpe="emitir" data-id="${esc(id)}">🚚</button>`;
+}
+
+// Event delegation global para los botones CPE — evita problemas con onclick inline
+// Se registra una sola vez al cargar el script (defensivo contra doble-registro).
+if (!window.__cpeDelegationRegistered) {
+  window.__cpeDelegationRegistered = true;
+  document.addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-cpe]');
+    if (!btn) return;
+    const accion = btn.getAttribute('data-cpe');
+    const id = btn.getAttribute('data-id');
+    if (!id) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (accion === 'detalle')   { return cpeDetalle(id); }
+    if (accion === 'emitir')    { return cpeEmitirForm(id); }
+  }, true);
 }
 
 // ---- Modal: emitir CPE ----
@@ -12208,9 +12228,19 @@ async function cpeEmitirSave(viajeId) {
 }
 
 async function cpeDetalle(viajeId) {
+  if (!viajeId) return toast('Falta el ID del viaje', 'error');
   let v;
-  try { const r = await api('/api/viajes/'+viajeId); v = r.data; }
-  catch (e) { return toast(e.message, 'error'); }
+  try {
+    const r = await api('/api/viajes/'+viajeId);
+    v = r.data;
+    if (!v) throw new Error('El backend devolvió un viaje vacío');
+  } catch (e) {
+    console.error('[cpeDetalle] error:', e);
+    return toast('No se pudo cargar el viaje: ' + e.message, 'error');
+  }
+  if (!v.cpeNroCtg) {
+    return toast('Este viaje todavía no tiene una CPE emitida. Hacé clic en 🚚 para emitirla.', 'warn');
+  }
   const puedeConfirmar = v.cpeEstado === 'emitida';
   const puedeAnular = ['emitida','confirmada'].includes(v.cpeEstado);
   openModal({

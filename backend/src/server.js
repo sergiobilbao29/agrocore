@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.8.4';
+const AGROCORE_VERSION = '0.8.5';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7919,6 +7919,9 @@ app.post('/api/viajes/:id/cpe/emitir', authMiddleware, requireCompany, requirePe
       cpeEstado: 'emitida',
       cpeFechaEmision: new Date(),
       cpeRespuestaArca: r,
+      // Espejamos en los campos legacy del Viaje para que aparezcan en el listado y exports
+      ctg: r.ctg,
+      cartaPorte: r.comprobante || viaje.cartaPorte || r.ctg,
     }});
     res.json({ ok: true, data: final, info: r });
   } catch (e) { next(e); }
