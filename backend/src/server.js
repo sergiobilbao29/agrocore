@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.8.0';
+const AGROCORE_VERSION = '0.8.1';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2841,7 +2841,14 @@ const viajeSchema = z.object({
   destinoTipo: z.enum(['cerealera','venta_directa','otro']).nullable().optional(),
   depositoDestinoId: z.string().nullable().optional(),
   liquidacionCerealId: z.string().nullable().optional(),
-});
+
+      kgTara:      z.coerce.number().nullable().optional(),
+      kgBruto:     z.coerce.number().nullable().optional(),
+      kgNeto:      z.coerce.number().nullable().optional(),
+      kgTaraDest:  z.coerce.number().nullable().optional(),
+      kgBrutoDest: z.coerce.number().nullable().optional(),
+      kgNetoDest:  z.coerce.number().nullable().optional(),
+    });
 
 // Deriva el estado del viaje a partir de sus datos. "pagado" es sticky (manual o
 // vía auto-settle); el resto se calcula desde el form salvo que el usuario lo

@@ -661,8 +661,15 @@ model Viaje {
   origen          String?
   destino         String?
   producto        String?   // carga: "Soja", "Maíz", "Girasol"...
-  cantidad        Float?    // kg cargados (al subir el camión)
-  kgDescarga      Float?    // kg efectivamente descargados
+  cantidad        Float?    // kg cargados (al subir el camión) — neto en origen
+  kgDescarga      Float?    // kg efectivamente descargados — neto en destino
+  // ---- Pesaje del camión (para Carta de Porte) ----
+  kgTara          Float?    // camión vacío en origen (antes de cargar)
+  kgBruto         Float?    // camión cargado en origen (peso total al salir)
+  kgNeto          Float?    // = kgBruto - kgTara (lo que pesa la carga al salir)
+  kgTaraDest      Float?    // camión vacío en destino (después de descargar)
+  kgBrutoDest     Float?    // camión cargado en destino (peso total al llegar)
+  kgNetoDest      Float?    // = kgBrutoDest - kgTaraDest (lo que pesó la carga al llegar)
   unidad          String?
   transportista   String?
   transporteCuit  String?   // CUIT del transporte

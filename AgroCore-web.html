@@ -2312,6 +2312,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/06/2026',
+      titulo:'⚖️ Viajes: pesaje + catálogo de Transportistas/Choferes/Camiones',
+      desc:'(1) Panel ⚖️ <b>Pesaje del camión</b> con Tara/Bruto/Neto en origen y destino (Neto = Bruto - Tara automático, sincroniza con Kg carga/descarga). (2) Los campos <b>Transportista</b>, <b>Chofer</b> y <b>Patente</b> son <b>buscadores con autocompletado</b>: tipeás y elegís uno guardado; el sistema autocompleta CUIT, patente del acoplado y tipo de camión. Botón 💾 al lado de cada uno para guardarlo en el catálogo. (3) Tres tabs nuevos en Catálogos: 🚛 Transportistas, 👤 Choferes, 🚚 Camiones. (4) Botón 🚚 <b>Probar WSCPE</b> en Configuración → ARCA.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'22/06/2026',
       titulo:'🚚 Cartas de Porte Electrónicas (CPE) emitidas desde AgroCore — WSCPE de ARCA',
       desc:'GRAN nueva funcionalidad: ya no hace falta ir al portal AFIP para emitir las CPEs de granos. En Viajes, cada fila tiene un botón 🚚 (cuando aún no hay CPE) que abre un modal con los datos pre-cargados del viaje (producto, kg, transportista, chofer, patente, origen y destino). Completás los CUITs que falten (productor, destinatario, corredor, etc.) y emitís → AgroCore se conecta a ARCA/WSCPE, firma el TRA con tu certificado y trae el CTG asignado. Una vez emitida, el botón cambia a 📋 para ver el detalle, consultar en ARCA en cualquier momento, confirmar arribo (cuando se descarga) o anular. Funciona en modo Homologación (si no tenés cert real, se emite una CPE SIMULADA con CTG que empieza con 99 — útil para probar todo el flujo). En modo Producción se conecta al WS real. Recordatorio: tenés que adherir el servicio "Carta de Porte Electrónica" en AFIP → Administrador de Relaciones de Clave Fiscal para el CUIT de tu empresa antes de emitir productivas. Si ya tenés el cert de ARCA cargado (el mismo que usás para WSCTG), no hace falta nada nuevo.' },
@@ -11078,6 +11081,30 @@ function viajeEstadoBadge(e) {
   return `<span class="badge ${m.cls}">${m.label}</span>`;
 }
 
+function viajeRecalcKgOri() {
+  const tara=Number(document.getElementById('f-tara')?.value||0);
+  const bruto=Number(document.getElementById('f-bruto')?.value||0);
+  const neto=bruto-tara;
+  const inpN=document.getElementById('f-neto');
+  if(inpN&&bruto>0&&tara>=0) inpN.value=neto>0?neto.toFixed(2):'';
+  const inpKg=document.getElementById('f-kg');
+  if(inpKg&&bruto>0&&neto>0){inpKg.value=neto.toFixed(2); if(typeof viajeRecalcDif==='function') viajeRecalcDif();}
+}
+function viajeRecalcKgDest() {
+  const tara=Number(document.getElementById('f-taraD')?.value||0);
+  const bruto=Number(document.getElementById('f-brutoD')?.value||0);
+  const neto=bruto-tara;
+  const inpN=document.getElementById('f-netoD');
+  if(inpN&&bruto>0&&tara>=0) inpN.value=neto>0?neto.toFixed(2):'';
+  const inpKgd=document.getElementById('f-kgd');
+  if(inpKgd&&bruto>0&&neto>0){inpKgd.value=neto.toFixed(2); if(typeof viajeRecalcDif==='function') viajeRecalcDif();}
+}
+function viajeAutoTransp(inp){const ds=document.getElementById('ds-transp');if(!ds)return;const v=(inp.value||'').trim().toLowerCase();const m=Array.from(ds.querySelectorAll('option')).find(o=>(o.dataset.nombre||'').toLowerCase()===v);if(!m)return;const c=document.getElementById('f-trcuit');if(c&&m.dataset.cuit)c.value=m.dataset.cuit;}
+function viajeAutoChofer(inp){const ds=document.getElementById('ds-chofer');if(!ds)return;const v=(inp.value||'').trim().toLowerCase();const m=Array.from(ds.querySelectorAll('option')).find(o=>(o.dataset.nombre||'').toLowerCase()===v);if(!m)return;const c=document.getElementById('f-chcuit');if(c&&m.dataset.cuit)c.value=m.dataset.cuit;}
+function viajeAutoCamion(inp){const ds=document.getElementById('ds-camion');if(!ds)return;const v=(inp.value||'').trim().toUpperCase();const m=Array.from(ds.querySelectorAll('option')).find(o=>(o.dataset.patente||'').toUpperCase()===v);if(!m)return;const a=document.getElementById('f-pata');if(a&&m.dataset.acoplado)a.value=m.dataset.acoplado;const t=document.getElementById('f-tipoc');if(t&&m.dataset.tipo)t.value=m.dataset.tipo;}
+async function viajeGuardarContacto(tipo){let data;if(tipo==='Transportista'){const n=document.getElementById('f-tr')?.value.trim();const c=document.getElementById('f-trcuit')?.value.trim();if(!n)return toast('Falta nombre','warn');data={tipo,nombre:n,codigo:c||null,descripcion:null,activo:true};}else if(tipo==='Chofer'){const n=document.getElementById('f-ch')?.value.trim();const c=document.getElementById('f-chcuit')?.value.trim();if(!n)return toast('Falta nombre','warn');data={tipo,nombre:n,codigo:c||null,descripcion:null,activo:true};}else if(tipo==='Camion'){const p=document.getElementById('f-pat')?.value.trim().toUpperCase();const a=document.getElementById('f-pata')?.value.trim().toUpperCase();const t=document.getElementById('f-tipoc')?.value.trim();if(!p)return toast('Falta patente','warn');data={tipo,nombre:p,codigo:a||null,descripcion:t||null,activo:true};}else return;try{const cats=(state.cache.catalogos||[]).filter(c=>c.tipo===tipo);const ex=cats.find(c=>(c.nombre||'').toLowerCase()===(data.nombre||'').toLowerCase());if(ex){await api('/api/catalogos/'+ex.id,{method:'PUT',body:JSON.stringify({...ex,codigo:data.codigo,descripcion:data.descripcion})});}else{await api('/api/catalogos',{method:'POST',body:JSON.stringify(data)});}await preloadCatalogos();toast('💾 '+(tipo==='Camion'?'Camión':tipo)+' guardado','success');}catch(e){toast(e.message,'error');}}
+function viajeDatalistsHTML(){const cats=state.cache.catalogos||[];const ts=cats.filter(c=>c.tipo==='Transportista'&&c.activo!==false);const ch=cats.filter(c=>c.tipo==='Chofer'&&c.activo!==false);const ca=cats.filter(c=>c.tipo==='Camion'&&c.activo!==false);return `<datalist id="ds-transp">${ts.map(t=>`<option value="${esc(t.nombre)}" data-nombre="${esc(t.nombre)}" data-cuit="${esc(t.codigo||'')}"></option>`).join('')}</datalist><datalist id="ds-chofer">${ch.map(t=>`<option value="${esc(t.nombre)}" data-nombre="${esc(t.nombre)}" data-cuit="${esc(t.codigo||'')}"></option>`).join('')}</datalist><datalist id="ds-camion">${ca.map(t=>`<option value="${esc(t.nombre)}" data-patente="${esc(t.nombre)}" data-acoplado="${esc(t.codigo||'')}" data-tipo="${esc(t.descripcion||'')}"></option>`).join('')}</datalist>`;}
+
 pages.viajes = async function() {
   setHeader('Viajes', 'Fletes, cartas de porte y kg transportados');
   if (!can('produccion:read') && !can('logistica:read')) { $('#page-body').innerHTML = stubPage('viajes','Viajes'); return; }
@@ -11332,6 +11359,7 @@ function viajeForm(id=null) {
     title: id?'Editar viaje':'Nuevo viaje', size:'max-w-4xl',
     body: `
       <p class="text-xs text-slate-500 mb-2">El <b>estado</b> del viaje se actualiza solo según los datos cargados (kg, factura, pago). Podés sobreescribirlo manualmente si hace falta.</p>
+      ${viajeDatalistsHTML()}
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5 mt-1">Viaje</h4>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${fechaStr}"/></div>
@@ -11350,6 +11378,19 @@ function viajeForm(id=null) {
         <div><label class="label">Kg descarga</label><input id="f-kgd" type="number" step="0.01" class="input" value="${it.kgDescarga||''}" oninput="viajeRecalcDif()"/></div>
         <div><label class="label">Diferencia</label><div id="f-dif" class="input bg-slate-50 font-semibold flex items-center">—</div></div>
         <div><label class="label">Unidad</label><input id="f-uni" class="input" value="${esc(it.unidad||'kg')}" placeholder="kg / tn"/></div>
+      </div>
+
+      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">⚖️ Pesaje del camión (para Carta de Porte)</h4>
+      <div class="grid grid-cols-3 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+        <div class="col-span-3 text-[11px] text-blue-800">📍 <b>Origen</b> — antes de cargar y al salir</div>
+        <div><label class="label">Tara (kg, vacío)</label><input id="f-tara" type="number" step="0.01" class="input" value="${it.kgTara||''}" oninput="viajeRecalcKgOri()"/></div>
+        <div><label class="label">Bruto (kg, cargado)</label><input id="f-bruto" type="number" step="0.01" class="input" value="${it.kgBruto||''}" oninput="viajeRecalcKgOri()"/></div>
+        <div><label class="label">Neto (kg)</label><input id="f-neto" type="number" step="0.01" class="input bg-emerald-50 font-semibold" value="${it.kgNeto||''}"/></div>
+        <div class="col-span-3 text-[11px] text-blue-800 mt-1">📍 <b>Destino</b> — al llegar y después de descargar (opcional)</div>
+        <div><label class="label">Tara destino</label><input id="f-taraD" type="number" step="0.01" class="input" value="${it.kgTaraDest||''}" oninput="viajeRecalcKgDest()"/></div>
+        <div><label class="label">Bruto destino</label><input id="f-brutoD" type="number" step="0.01" class="input" value="${it.kgBrutoDest||''}" oninput="viajeRecalcKgDest()"/></div>
+        <div><label class="label">Neto destino</label><input id="f-netoD" type="number" step="0.01" class="input bg-emerald-50 font-semibold" value="${it.kgNetoDest||''}"/></div>
+        <div class="col-span-3 text-[10px] text-slate-500">Neto = Bruto − Tara · sincroniza con Kg carga (origen) y Kg descarga (destino)</div>
       </div>
 
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Destino del cereal</h4>
@@ -11382,15 +11423,15 @@ function viajeForm(id=null) {
 
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Transporte</h4>
       <div class="grid grid-cols-4 gap-3 mb-3">
-        <div class="col-span-2"><label class="label">Transportista</label><input id="f-tr" class="input" value="${esc(it.transportista||'')}"/></div>
+        <div class="col-span-2"><label class="label">Transportista <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeGuardarContacto('Transportista')">💾 Guardar</button></label><input id="f-tr" list="ds-transp" autocomplete="off" oninput="viajeAutoTransp(this)" onchange="viajeAutoTransp(this)" class="input" value="${esc(it.transportista||'')}"/></div>
         <div class="col-span-2"><label class="label">CUIT transporte</label><input id="f-trcuit" class="input" value="${esc(it.transporteCuit||'')}" placeholder="20-12345678-9"/></div>
-        <div class="col-span-2"><label class="label">Chofer</label><input id="f-ch" class="input" value="${esc(it.chofer||'')}"/></div>
+        <div class="col-span-2"><label class="label">Chofer <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeGuardarContacto('Chofer')">💾 Guardar</button></label><input id="f-ch" list="ds-chofer" autocomplete="off" oninput="viajeAutoChofer(this)" onchange="viajeAutoChofer(this)" class="input" value="${esc(it.chofer||'')}"/></div>
         <div class="col-span-2"><label class="label">CUIT chofer</label><input id="f-chcuit" class="input" value="${esc(it.choferCuit||'')}"/></div>
         <div><label class="label">Tipo camión</label>
           <input id="f-tipoc" class="input" list="f-tipoc-list" value="${esc(it.tipoCamion||'')}" placeholder="Semi, bitren..."/>
           <datalist id="f-tipoc-list">${VIAJE_TIPOS_CAMION.map(t=>`<option value="${t}">`).join('')}</datalist>
         </div>
-        <div><label class="label">Patente camión</label><input id="f-pat" class="input" value="${esc(it.patente||'')}"/></div>
+        <div><label class="label">Patente <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeGuardarContacto('Camion')">💾</button></label><input id="f-pat" list="ds-camion" autocomplete="off" oninput="viajeAutoCamion(this)" onchange="viajeAutoCamion(this)" class="input" value="${esc(it.patente||'')}"/></div>
         <div><label class="label">Patente acoplado</label><input id="f-pata" class="input" value="${esc(it.patenteAcoplado||'')}"/></div>
         <div></div>
       </div>
@@ -11473,6 +11514,12 @@ async function viajeSave(id) {
     producto:        $('#f-prod').value.trim() || null,
     cantidad:        $('#f-kg').value  ? Number($('#f-kg').value)  : null,
     kgDescarga:      $('#f-kgd').value ? Number($('#f-kgd').value) : null,
+    kgTara:          $('#f-tara')?.value  ? Number($('#f-tara').value)  : null,
+    kgBruto:         $('#f-bruto')?.value ? Number($('#f-bruto').value) : null,
+    kgNeto:          $('#f-neto')?.value  ? Number($('#f-neto').value)  : null,
+    kgTaraDest:      $('#f-taraD')?.value  ? Number($('#f-taraD').value)  : null,
+    kgBrutoDest:     $('#f-brutoD')?.value ? Number($('#f-brutoD').value) : null,
+    kgNetoDest:      $('#f-netoD')?.value  ? Number($('#f-netoD').value)  : null,
     unidad:          $('#f-uni').value.trim() || null,
     cartaPorte:      $('#f-cp').value.trim() || null,
     ctg:             $('#f-ctg').value.trim() || null,
@@ -13741,6 +13788,9 @@ const CAT_TABS = [
   { id:'condIVA',  label:'Condición IVA',       icon:'🧾', tipos:['Condición IVA'],      singular:'Condición' },
   { id:'bancos',   label:'Bancos',              icon:'🏦', tipos:['Banco'],              singular:'Banco' },
   { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', tipos:['Caja'],               singular:'Caja' },
+  { id:'transps',  label:'Transportistas',       icon:'🚛', tipos:['Transportista'],      singular:'Transportista' },
+  { id:'choferes', label:'Choferes',             icon:'👤', tipos:['Chofer'],             singular:'Chofer' },
+  { id:'camiones', label:'Camiones',             icon:'🚚', tipos:['Camion'],             singular:'Camión' },
   { id:'condPago', label:'Condiciones de pago', icon:'📅', tipos:['Condición de pago'],  singular:'Condición de pago' },
   { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
   { id:'paises',   label:'Países',              icon:'🌎', tipos:['País'],               singular:'País' },
