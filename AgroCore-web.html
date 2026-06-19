@@ -2316,6 +2316,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
+      titulo:'📄 CPE con formato fiel a ARCA (logo + QR + layout) + Razón social auto desde CUIT',
+      desc:'Dos mejoras grandes: (1) El documento de la CPE ahora se ve <b>visualmente igual al PDF oficial de ARCA</b>: logo "ARCA" en azul oscuro grande arriba a la izquierda, recuadro QR a la derecha del título, tabla con bordes prolijos sin colores destacados (más formal/oficial), mismo orden y disposición de secciones A→G. Sirve para imprimir y entregar al chofer / policía / puerto. (2) Al tipear un CUIT en el form de Emitir CPE, el sistema busca automáticamente la <b>razón social</b> en tus Clientes, Proveedores, Transportistas, Choferes y Empresa actual, y la muestra en verde abajo del input. Si el CUIT no está en ninguna parte, te avisa para que lo cargues primero. En el documento final aparece "CUIT - Razón Social" como en ARCA. Tip: para tener TODOS los datos extra (planta, dirección, lat/long, kms), cargá la CPE en el portal de ARCA y subí el PDF con el botón 📤.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
       titulo:'📄 CPE con FORMATO REAL de ARCA + Cargar desde PDF',
       desc:'Dos cosas grandes: (1) El documento de la CPE ahora tiene el <b>formato exacto del PDF oficial de ARCA</b>: secciones A-INTERVINIENTES (titular, remitente, corredor, destinatario, transportista, chofer, intermediario), B-GRANO/ESPECIE (con declaración Conforme/Condicional y los 3 pesos Bruto/Tara/Neto), C-PROCEDENCIA (localidad, provincia, lat/long, RENSPA), D-DESTINO (planta, dirección, localidad, provincia), E-TRANSPORTE (dominios, partida, kms, tarifa), F-CONTINGENCIAS y G-DESCARGA (fecha arribo, pesos en destino, turno). Más la declaración jurada de plaguicidas, el historial post-confirmación y los espacios para firmas del perito y destinatario. (2) En el modal de Emitir CPE hay un botón nuevo arriba 📤 <b>Cargar PDF de ARCA</b>: si ya emitiste la CPE por el portal de ARCA, subís el PDF y el sistema parsea los CUITs, RENSPA, datos del transporte y observaciones para autollenar el viaje. Una vez completo lo emitís igual desde AgroCore o guardás los datos para tu registro.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'23/06/2026',
@@ -12202,13 +12205,36 @@ async function cpeEmitirForm(viajeId) {
           🅿 ${esc(viaje.patente||'?')}${viaje.patenteAcoplado?` + ${esc(viaje.patenteAcoplado)}`:''}<br>
           📍 ${esc(viaje.origen||'?')} → ${esc(viaje.destino||'?')}
         </div>
-        <div><label class="label">CUIT origen (productor)</label><input id="cpe-orig-cuit" class="input" value="${esc(viaje.cpeOrigenCuit||'')}" placeholder="20-12345678-3"/></div>
+        <div>
+          <label class="label">CUIT origen (productor)</label>
+          <input id="cpe-orig-cuit" class="input" value="${esc(viaje.cpeOrigenCuit||'')}" placeholder="20-12345678-3" oninput="cpeMostrarRazon('cpe-orig-cuit','cpe-orig-razon')"/>
+          <div id="cpe-orig-razon" class="text-[10px] text-emerald-700 mt-0.5"></div>
+        </div>
         <div><label class="label">RENSPA origen</label><input id="cpe-orig-renspa" class="input" value="${esc(viaje.cpeOrigenRenspa||'')}" placeholder="00.001.0.12345/A1"/></div>
-        <div><label class="label">CUIT destinatario</label><input id="cpe-dest-cuit" class="input" value="${esc(viaje.cpeDestinoCuit||'')}" placeholder="CUIT de la cerealera/exportador"/></div>
-        <div><label class="label">CUIT del recibidor</label><input id="cpe-recib-cuit" class="input" value="${esc(viaje.cpeDestinatarioCuit||'')}" placeholder="(suele coincidir con destinatario)"/></div>
-        <div><label class="label">CUIT corredor</label><input id="cpe-corr-cuit" class="input" value="${esc(viaje.cpeCorredorCuit||'')}" placeholder="opcional"/></div>
-        <div><label class="label">CUIT intermediario</label><input id="cpe-inter-cuit" class="input" value="${esc(viaje.cpeIntermediarioCuit||'')}" placeholder="opcional"/></div>
+        <div>
+          <label class="label">CUIT destinatario (cerealera/exportador)</label>
+          <input id="cpe-dest-cuit" class="input" value="${esc(viaje.cpeDestinoCuit||'')}" oninput="cpeMostrarRazon('cpe-dest-cuit','cpe-dest-razon')"/>
+          <div id="cpe-dest-razon" class="text-[10px] text-emerald-700 mt-0.5"></div>
+        </div>
+        <div>
+          <label class="label">CUIT del recibidor</label>
+          <input id="cpe-recib-cuit" class="input" value="${esc(viaje.cpeDestinatarioCuit||'')}" placeholder="(suele coincidir con destinatario)" oninput="cpeMostrarRazon('cpe-recib-cuit','cpe-recib-razon')"/>
+          <div id="cpe-recib-razon" class="text-[10px] text-emerald-700 mt-0.5"></div>
+        </div>
+        <div>
+          <label class="label">CUIT corredor</label>
+          <input id="cpe-corr-cuit" class="input" value="${esc(viaje.cpeCorredorCuit||'')}" placeholder="opcional" oninput="cpeMostrarRazon('cpe-corr-cuit','cpe-corr-razon')"/>
+          <div id="cpe-corr-razon" class="text-[10px] text-emerald-700 mt-0.5"></div>
+        </div>
+        <div>
+          <label class="label">CUIT intermediario</label>
+          <input id="cpe-inter-cuit" class="input" value="${esc(viaje.cpeIntermediarioCuit||'')}" placeholder="opcional" oninput="cpeMostrarRazon('cpe-inter-cuit','cpe-inter-razon')"/>
+          <div id="cpe-inter-razon" class="text-[10px] text-emerald-700 mt-0.5"></div>
+        </div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="cpe-obs" class="input" rows="2">${esc(viaje.cpeObservaciones||'')}</textarea></div>
+        <div class="col-span-2 text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2">
+          💡 <b>Auto-completado:</b> al tipear un CUIT, si la persona/empresa está cargada como Cliente, Proveedor, Transportista o Chofer, vas a ver la razón social en verde debajo. La CPE oficial se rellena con esos datos. Para que aparezcan TODOS los datos de ARCA (planta, dirección, etc), cargá la CPE en el portal y subila con el botón 📤 de arriba.
+        </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="cpeEmitirSave('${viajeId}')">🚚 Emitir CPE en ARCA</button>`
@@ -12238,6 +12264,30 @@ async function cpeEmitirSave(viajeId) {
     setTimeout(() => cpeAbrirVista(viajeId), 300);
     setTimeout(() => cpeDetalle(viajeId), 500);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// Busca la razón social asociada al CUIT en clientes/proveedores/transportistas/choferes/empresa
+function cpeBuscarRazonSocial(cuit) {
+  if (!cuit) return '';
+  const c = String(cuit).replace(/\D/g,'');
+  if (c.length < 8) return '';
+  const buscar = (lista, getC, getN) => {
+    const m = lista.find(x => String(getC(x)||'').replace(/\D/g,'') === c);
+    return m ? getN(m) : '';
+  };
+  let r = '';
+  r = buscar(state.cache.clientes || [],        x=>x.cuit, x=>x.razonSocial||x.nombre); if (r) return r;
+  r = buscar(state.cache.proveedores || [],     x=>x.cuit, x=>x.razonSocial||x.nombre); if (r) return r;
+  r = buscar(state.cache.transportistas || [],  x=>x.cuit, x=>x.nombre); if (r) return r;
+  r = buscar(state.cache.choferes || [],        x=>x.cuit, x=>x.nombre); if (r) return r;
+  r = buscar(state.user?.companies || [],       x=>x.cuit||x.arcaCuit, x=>x.razonSocial||x.name); if (r) return r;
+  return '';
+}
+function cpeMostrarRazon(inputId, outId) {
+  const inp = document.getElementById(inputId); const out = document.getElementById(outId);
+  if (!inp || !out) return;
+  const razon = cpeBuscarRazonSocial(inp.value);
+  out.innerHTML = razon ? `✅ <b>${esc(razon)}</b>` : (inp.value.replace(/\D/g,'').length>=11 ? '<span class="text-amber-600">⚠️ CUIT no encontrado en tus catálogos. Cargalo en Clientes/Proveedores/Transportistas para que se autocompleté el nombre.</span>' : '');
 }
 
 async function cpeParsearPDF(input, viajeId) {
@@ -12332,13 +12382,37 @@ async function cpeDetalle(viajeId) {
 // CPE — Vista oficial + Imprimir + Descargar + Mail + WhatsApp (v0.8.3)
 // ============================================================
 function _cpeHtmlOficial(v, empresa) {
-  // Formato basado en la CPE oficial de ARCA (CPE Automotor)
+  // Formato visualmente fiel al PDF oficial de ARCA (CPE Automotor)
   const fmtFecha = (d) => d ? new Date(d).toLocaleDateString('es-AR') : '';
   const fmtFechaHora = (d) => d ? new Date(d).toLocaleString('es-AR') : '';
   const fmtN_ = (n) => (Number(n)||0).toLocaleString('es-AR');
+  // Resolver razón social desde CUIT en los catálogos cargados
+  const cuitRazon = (cuit) => {
+    if (!cuit) return '';
+    const c = String(cuit).replace(/\D/g,'');
+    if (!c) return '';
+    const buscar = (lista, getC, getN) =>
+      lista.find(x => String(getC(x)||'').replace(/\D/g,'') === c);
+    const cli = (state.cache.clientes || []);
+    const prv = (state.cache.proveedores || []);
+    const trs = (state.cache.transportistas || []);
+    const cho = (state.cache.choferes || []);
+    const emp = (state.user?.companies || []);
+    let m;
+    if ((m = buscar(cli,    x=>x.cuit,     x=>x.razonSocial||x.nombre))) return m.razonSocial || m.nombre || '';
+    if ((m = buscar(prv,    x=>x.cuit,     x=>x.razonSocial||x.nombre))) return m.razonSocial || m.nombre || '';
+    if ((m = buscar(trs,    x=>x.cuit,     x=>x.nombre)))                return m.nombre || '';
+    if ((m = buscar(cho,    x=>x.cuit,     x=>x.nombre)))                return m.nombre || '';
+    if ((m = buscar(emp,    x=>x.cuit||x.arcaCuit, x=>x.razonSocial||x.name))) return m.razonSocial || m.name || '';
+    return '';
+  };
+  const cuitFmt = (cuit) => {
+    const razon = cuitRazon(cuit);
+    if (!cuit) return '';
+    return razon ? `${cuit} - ${razon}` : `${cuit}`;
+  };
   const empresaNombre = empresa?.razonSocial || empresa?.name || '';
   const empresaCuit   = empresa?.cuit || empresa?.arcaCuit || '';
-  const cuitNombre = (cuit, nombre) => (cuit||'') + (nombre?` - ${nombre}`:'') || '';
   const vencimiento = v.cpeFechaVencimiento ? new Date(v.cpeFechaVencimiento) :
     (v.cpeFechaEmision ? (function(){ const d = new Date(v.cpeFechaEmision); d.setDate(d.getDate()+30); return d; })() : null);
   return `
@@ -12346,38 +12420,63 @@ function _cpeHtmlOficial(v, empresa) {
 <title>Carta de Porte Electrónica — CTG ${v.cpeNroCtg||''}</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; font-size: 9pt; color: #1f2937; margin: 0; padding: 14px; background: #fff; }
-  .doc { max-width: 850px; margin: 0 auto; background: #fff; }
-  .header-top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1f2937; padding-bottom: 8px; margin-bottom: 4px; }
-  .header-top .left h1 { margin: 0; font-size: 14pt; font-weight: bold; }
-  .header-top .left .sub { font-size: 10pt; margin-top: 2px; }
-  .header-top .right { font-size: 9pt; }
-  .header-top .right table { border-collapse: collapse; }
-  .header-top .right td { padding: 2px 8px; }
-  .header-top .right td:first-child { text-align: right; font-weight: bold; }
-  .header-top .right td.ctg-val { color: #1e40af; font-weight: bold; font-size: 11pt; font-family: 'Courier New', monospace; }
-  .sec-label { background: #d1d5db; padding: 3px 6px; font-size: 9pt; font-weight: bold; color: #1f2937; margin-top: 6px; border: 1px solid #6b7280; }
-  .sec-body { padding: 6px 8px; border: 1px solid #6b7280; border-top: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #000; margin: 0; padding: 8mm; background: #fff; }
+  .doc { max-width: 195mm; margin: 0 auto; background: #fff; }
+  /* CABECERA */
+  .cab { display: grid; grid-template-columns: 130px 1fr 130px 220px; gap: 8px; align-items: center; padding-bottom: 8px; border-bottom: 1px solid #000; }
+  .cab .logo { font-family: 'Trebuchet MS', sans-serif; font-size: 36pt; font-weight: 900; color: #1e3a8a; letter-spacing: -2px; line-height: 1; }
+  .cab .titulo { font-size: 13pt; font-weight: bold; color: #000; }
+  .cab .titulo .sub { font-size: 12pt; font-weight: bold; margin-top: 2px; }
+  .cab .qr { width: 110px; height: 110px; border: 1px solid #000; display: flex; align-items: center; justify-content: center; font-size: 7pt; color: #6b7280; text-align: center; padding: 4px; background:
+    repeating-conic-gradient(#000 0% 25%, #fff 0% 50%) 50% / 14px 14px; opacity: 0.95; }
+  .cab .meta { font-size: 9pt; }
+  .cab .meta table { border-collapse: collapse; width: 100%; }
+  .cab .meta td { padding: 2px 4px; vertical-align: top; }
+  .cab .meta td.k { font-weight: bold; white-space: nowrap; }
+  .cab .meta td.v { text-align: right; font-weight: bold; }
+  .ctg-row td.v { font-size: 14pt; color: #000; }
+
+  /* ESTADOS */
+  .estado-row { padding: 4px 0; }
+  .tag { display: inline-block; padding: 2px 8px; font-size: 8pt; font-weight: bold; border: 1px solid; }
+  .est-emitida    { background: #fef3c7; color: #92400e; border-color: #f59e0b; }
+  .est-confirmada { background: #d1fae5; color: #065f46; border-color: #16a34a; }
+  .est-anulada    { background: #fee2e2; color: #991b1b; border-color: #dc2626; }
+  .mock-tag { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; margin-left: 4px; padding: 2px 8px; font-size: 8pt; font-weight: bold; display: inline-block; }
+
+  /* SECCIONES */
+  .sec { border: 1px solid #000; margin-top: 4px; }
+  .sec-label { background: #d1d5db; padding: 3px 6px; font-size: 9pt; font-weight: bold; color: #000; text-align: center; border-bottom: 1px solid #000; }
+  .sec-body { padding: 4px 8px; }
   .sec-body table { width: 100%; border-collapse: collapse; }
-  .sec-body td { padding: 2px 4px; vertical-align: top; font-size: 9pt; }
-  .sec-body td.k { color: #374151; font-weight: bold; white-space: nowrap; }
-  .sec-body td.v { border-bottom: 1px dotted #9ca3af; }
-  .estado-tag { display: inline-block; padding: 1px 6px; font-size: 8pt; font-weight: bold; color: #fff; background: #16a34a; }
-  .est-emitida { background: #d97706; }
-  .est-confirmada { background: #16a34a; }
-  .est-anulada { background: #dc2626; }
-  .mock-tag { display: inline-block; padding: 1px 6px; font-size: 8pt; font-weight: bold; background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; margin-left: 4px; }
-  .pesos-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 4px; }
-  .pesos-grid div { padding: 4px 8px; background: #f3f4f6; border: 1px solid #d1d5db; text-align: center; }
-  .pesos-grid div .l { font-size: 8pt; color: #6b7280; }
-  .pesos-grid div .v { font-size: 12pt; font-weight: bold; color: #1f2937; }
-  .pesos-grid div.neto { background: #dbeafe; }
-  .pesos-grid div.neto .v { color: #1e40af; }
-  .declaracion { margin-top: 18px; padding: 8px; border-top: 1px solid #9ca3af; font-size: 8pt; font-style: italic; color: #374151; }
+  .sec-body td { padding: 3px 4px; vertical-align: top; font-size: 9pt; }
+  .sec-body td.k { color: #000; font-weight: bold; white-space: nowrap; width: 1%; padding-right: 8px; }
+  .sec-body td.v { color: #000; }
+  .sec-body tr + tr td { border-top: 1px solid #e5e7eb; }
+  .sec-body td.empty { color: #9ca3af; }
+
+  /* DECLARACION CALIDAD + PESOS */
+  .calidad-row { display: grid; grid-template-columns: 200px 1fr; gap: 0; border: 1px solid #000; margin-top: 4px; }
+  .calidad-row .lbl { background: #f3f4f6; padding: 6px 8px; border-right: 1px solid #000; font-weight: bold; display: flex; align-items: center; }
+  .calidad-row .vals { padding: 4px 8px; }
+  .calidad-row .vals .row { display: flex; justify-content: space-between; padding: 2px 0; border-bottom: 1px solid #e5e7eb; }
+  .calidad-row .vals .row:last-child { border-bottom: 0; }
+  .pesos-line { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0; }
+  .pesos-line .cell { padding: 4px 8px; }
+  .pesos-line .cell .l { font-weight: bold; color: #000; }
+  .pesos-line .cell .v { display: inline-block; min-width: 60px; text-align: right; }
+
+  /* DECLARACION JURADA */
+  .declaracion { margin-top: 14px; padding: 8px 0; border-top: 1px solid #d1d5db; font-size: 8.5pt; font-style: italic; }
+  /* HISTORIAL */
+  .historial-cab { background: #d1d5db; padding: 3px 6px; font-size: 9pt; font-weight: bold; text-align: center; border: 1px solid #000; margin-top: 8px; }
+  .historial-body { border: 1px solid #000; border-top: 0; padding: 8px; font-size: 9pt; }
+  /* FIRMAS */
   .firmas { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 30px; }
-  .firma { text-align: center; border-top: 1px solid #1f2937; padding-top: 4px; font-size: 8pt; }
-  .pie { text-align: center; font-size: 7pt; color: #9ca3af; margin-top: 14px; }
-  .historial { font-size: 8pt; color: #6b7280; margin-top: 8px; padding: 4px; background: #f9fafb; border: 1px solid #e5e7eb; }
+  .firma { text-align: center; border-top: 1px solid #000; padding-top: 4px; font-size: 8.5pt; }
+  .pie { text-align: right; font-size: 8pt; color: #000; margin-top: 14px; }
+
+  /* IMPRESION */
   @media print {
     body { padding: 8mm; font-size: 8.5pt; }
     .no-print { display: none !important; }
@@ -12399,149 +12498,162 @@ function _cpeHtmlOficial(v, empresa) {
   <div style="height: 50px;" class="no-print"></div>
   <div class="doc">
 
-    <!-- ENCABEZADO -->
-    <div class="header-top">
-      <div class="left">
-        <h1>Carta de Porte Electrónica</h1>
+    <!-- CABECERA: LOGO + TÍTULO + QR + META -->
+    <div class="cab">
+      <div class="logo">ARCA</div>
+      <div class="titulo">
+        Carta de Porte Electrónica
         <div class="sub">${esc(v.cpeTipo==='ferroviaria'?'Ferroviaria':'Automotor')}</div>
         <div style="margin-top: 6px;">
-          <span class="estado-tag est-${(v.cpeEstado||'emitida').toLowerCase()}">${(v.cpeEstado||'emitida').toUpperCase()}</span>
+          <span class="tag est-${(v.cpeEstado||'emitida').toLowerCase()}">${(v.cpeEstado||'emitida').toUpperCase()}</span>
           ${v.cpeRespuestaArca?.mock ? '<span class="mock-tag">⚠️ SIMULADA — TEST</span>' : ''}
         </div>
       </div>
-      <div class="right">
+      <div class="qr" title="QR de verificación">QR<br>CPE</div>
+      <div class="meta">
         <table>
-          <tr><td>Fecha:</td><td>${fmtFecha(v.cpeFechaEmision)}</td></tr>
-          <tr><td>N° CPE:</td><td class="ctg-val">${esc(v.cpeNroComprobante||'—')}</td></tr>
-          <tr><td>CTG:</td><td class="ctg-val">${esc(v.cpeNroCtg||'—')}</td></tr>
-          ${vencimiento?`<tr><td>Vencimiento:</td><td>${fmtFechaHora(vencimiento)}</td></tr>`:''}
+          <tr><td class="k">Fecha:</td><td class="v">${fmtFecha(v.cpeFechaEmision)}</td></tr>
+          <tr><td class="k">N° CPE:</td><td class="v">${esc(v.cpeNroComprobante||'—')}</td></tr>
+          <tr class="ctg-row"><td class="k">CTG:</td><td class="v">${esc(v.cpeNroCtg||'—')}</td></tr>
+          ${vencimiento?`<tr><td class="k">Vencimiento:</td><td class="v">${fmtFechaHora(vencimiento)}</td></tr>`:''}
         </table>
       </div>
     </div>
 
     <!-- A - INTERVINIENTES -->
-    <div class="sec-label">A - INTERVINIENTES</div>
-    <div class="sec-body">
-      <table>
-        <tr><td class="k" width="30%">Titular Carta de Porte:</td><td class="v">${esc(cuitNombre(empresaCuit, empresaNombre))}</td></tr>
-        <tr><td class="k">Remitente Comercial Productor:</td><td class="v">${esc(v.cpeRemitenteProductor||'')}</td></tr>
-        <tr><td class="k">Rte. Comercial Venta Primaria:</td><td class="v">${esc(v.cpeRteComercialPrim||'')}</td></tr>
-        <tr><td class="k">Rte. Comercial Venta Secundaria:</td><td class="v">${esc(v.cpeRteComercialSec||'')}</td></tr>
-        <tr><td class="k">Mercado a Término:</td><td class="v">${esc(v.cpeMercadoTermino||'')}</td></tr>
-        <tr><td class="k">Corredor Venta Primaria:</td><td class="v">${esc(v.cpeCorredorPrim || v.cpeCorredorCuit || '')}</td></tr>
-        <tr><td class="k">Corredor Venta Secundaria:</td><td class="v">${esc(v.cpeCorredorSec||'')}</td></tr>
-        <tr><td class="k">Representante entregador:</td><td class="v">${esc(v.cpeRepEntregador||'')}</td></tr>
-        <tr><td class="k">Representante recibidor:</td><td class="v">${esc(v.cpeRepRecibidor||'')}</td></tr>
-        <tr><td class="k">Destinatario:</td><td class="v">${esc(v.cpeDestinatarioCuit||'')}</td></tr>
-        <tr><td class="k">Destino:</td><td class="v">${esc(v.cpeDestinoCuit||'')}</td></tr>
-        <tr><td class="k">Empresa Transportista:</td><td class="v">${esc(cuitNombre(v.transporteCuit, v.transportista))}</td></tr>
-        <tr><td class="k">Flete pagador:</td><td class="v">${esc(v.cpeFletePagador || v.pagadorFlete || '')}</td></tr>
-        <tr><td class="k">Chofer:</td><td class="v">${esc(cuitNombre(v.choferCuit, v.chofer))}</td></tr>
-        <tr><td class="k">Intermediario de flete:</td><td class="v">${esc(v.cpeIntermediarioCuit||'')}</td></tr>
-      </table>
+    <div class="sec">
+      <div class="sec-label">A - INTERVINIENTES</div>
+      <div class="sec-body">
+        <table>
+          <tr><td class="k">Titular Carta de Porte:</td><td class="v">${esc((empresaCuit||'') + (empresaNombre?` - ${empresaNombre}`:''))}</td></tr>
+          <tr><td class="k">Remitente Comercial Productor:</td><td class="v ${!v.cpeRemitenteProductor?'empty':''}">${esc(v.cpeRemitenteProductor||'')}</td></tr>
+          <tr><td class="k">Rte. Comercial Venta Primaria:</td><td class="v ${!v.cpeRteComercialPrim?'empty':''}">${esc(v.cpeRteComercialPrim||'')}</td></tr>
+          <tr><td class="k">Rte. Comercial Venta secundaria:</td><td class="v ${!v.cpeRteComercialSec?'empty':''}">${esc(v.cpeRteComercialSec||'')}</td></tr>
+          <tr><td class="k">Rte. Comercial Venta secundaria 2:</td><td class="v ${!v.cpeRteComercialSec2?'empty':''}">${esc(v.cpeRteComercialSec2||'')}</td></tr>
+          <tr><td class="k">Mercado a Término:</td><td class="v ${!v.cpeMercadoTermino?'empty':''}">${esc(v.cpeMercadoTermino||'')}</td></tr>
+          <tr><td class="k">Corredor Venta Primaria:</td><td class="v ${!v.cpeCorredorCuit?'empty':''}">${esc(cuitFmt(v.cpeCorredorCuit))}</td></tr>
+          <tr><td class="k">Corredor Venta Secundaria:</td><td class="v ${!v.cpeCorredorSec?'empty':''}">${esc(v.cpeCorredorSec||'')}</td></tr>
+          <tr><td class="k">Representante entregador:</td><td class="v ${!v.cpeRepEntregador?'empty':''}">${esc(v.cpeRepEntregador||'')}</td></tr>
+          <tr><td class="k">Representante recibidor:</td><td class="v ${!v.cpeRepRecibidor?'empty':''}">${esc(v.cpeRepRecibidor||'')}</td></tr>
+          <tr><td class="k">Destinatario:</td><td class="v ${!v.cpeDestinatarioCuit?'empty':''}">${esc(cuitFmt(v.cpeDestinatarioCuit))}</td></tr>
+          <tr><td class="k">Destino:</td><td class="v ${!v.cpeDestinoCuit?'empty':''}">${esc(cuitFmt(v.cpeDestinoCuit))}</td></tr>
+          <tr><td class="k">Empresa Transportista:</td><td class="v ${!v.transporteCuit?'empty':''}">${esc((v.transporteCuit||'') + (v.transportista?` - ${v.transportista}`:''))}</td></tr>
+          <tr><td class="k">Flete pagador:</td><td class="v ${!v.pagadorFlete && !v.cpeFletePagador?'empty':''}">${esc(v.cpeFletePagador||v.pagadorFlete||'')}</td></tr>
+          <tr><td class="k">Chofer:</td><td class="v ${!v.choferCuit?'empty':''}">${esc((v.choferCuit||'') + (v.chofer?` - ${v.chofer}`:''))}</td></tr>
+          <tr><td class="k">Intermediario de flete:</td><td class="v ${!v.cpeIntermediarioCuit?'empty':''}">${esc(v.cpeIntermediarioCuit||'')}</td></tr>
+        </table>
+      </div>
     </div>
 
-    <!-- B - GRANO/ESPECIE -->
-    <div class="sec-label">B - GRANO / ESPECIE</div>
-    <div class="sec-body">
-      <table>
-        <tr>
-          <td class="k">Grano / Especie:</td><td class="v" width="25%">${esc(v.producto||'')}</td>
-          <td class="k">Tipo:</td><td class="v" width="20%">${esc(v.cpeGranoTipo || v.producto || '')}</td>
-          <td class="k">Campaña:</td><td class="v" width="15%">${esc(v.cpeCampania || (new Date().getFullYear()+''+(new Date().getFullYear()+1).toString().slice(-2)))}</td>
-        </tr>
-      </table>
-      <div style="margin-top: 6px;">
-        <b>DECLARACIÓN DE CALIDAD:</b>
-        ${v.cpeCalidad === 'condicional' ? 'Conforme  /  <b>Condicional</b>' : '<b>Conforme</b>  /  Condicional'}
+    <!-- B - GRANO / ESPECIE -->
+    <div class="sec">
+      <div class="sec-label">B - GRANO / ESPECIE</div>
+      <div class="sec-body">
+        <table>
+          <tr>
+            <td class="k">Grano /</td><td class="v" width="25%">${esc(v.producto||'')}</td>
+            <td class="k">Tipo:</td><td class="v" width="20%">${esc(v.cpeGranoTipo || v.producto || '')}</td>
+            <td class="k">Campaña:</td><td class="v" width="15%">${esc(v.cpeCampania || (new Date().getFullYear()+''+(new Date().getFullYear()+1).toString().slice(-2)))}</td>
+          </tr>
+        </table>
       </div>
-      <div class="pesos-grid">
-        <div><div class="l">Peso Bruto</div><div class="v">${fmtN_(v.kgBruto)}</div></div>
-        <div><div class="l">Peso Tara</div><div class="v">${fmtN_(v.kgTara)}</div></div>
-        <div class="neto"><div class="l">Peso Neto</div><div class="v">${fmtN_(v.cantidad || v.kgNeto)}</div></div>
+      <div class="calidad-row">
+        <div class="lbl">DECLARACIÓN DE CALIDAD</div>
+        <div class="vals">
+          <div class="row"><span>${v.cpeCalidad === 'condicional' ? 'Conforme' : '<b>Conforme</b>'}</span><span><b>Peso Bruto</b> ${fmtN_(v.kgBruto)}</span><span><b>Peso Tara</b> ${fmtN_(v.kgTara)}</span></div>
+          <div class="row"><span>${v.cpeCalidad === 'condicional' ? '<b>Condicional</b>' : 'Condicional'}</span><span></span><span><b>Peso Neto</b> ${fmtN_(v.cantidad || v.kgNeto)}</span></div>
+        </div>
       </div>
-      ${v.cpeObservaciones ? `<div style="margin-top: 6px;"><b>Observaciones:</b> ${esc(v.cpeObservaciones)}</div>` : ''}
+      ${v.cpeObservaciones ? `<div class="sec-body" style="border-top: 1px solid #d1d5db;"><b>Observaciones:</b> ${esc(v.cpeObservaciones)}</div>` : ''}
     </div>
 
     <!-- C - PROCEDENCIA -->
-    <div class="sec-label">C - PROCEDENCIA</div>
-    <div class="sec-body">
-      <table>
-        <tr>
-          <td class="k">Es un campo:</td><td class="v" width="15%">${v.cpeOrigenEsCampo === false ? 'No' : 'Sí'}</td>
-          <td class="k">Localidad:</td><td class="v" width="25%">${esc(v.cpeOrigenLocalidad || v.origen || '')}</td>
-          <td class="k">Provincia:</td><td class="v" width="25%">${esc(v.cpeOrigenProvincia||'')}</td>
-        </tr>
-        <tr>
-          <td class="k">Latitud:</td><td class="v">${esc(v.cpeOrigenLat||'-')}</td>
-          <td class="k">Longitud:</td><td class="v">${esc(v.cpeOrigenLng||'-')}</td>
-          <td class="k">RENSPA:</td><td class="v">${esc(v.cpeOrigenRenspa||'-')}</td>
-        </tr>
-        ${v.cpeOrigenDescripcion?`<tr><td class="k">Descripción:</td><td class="v" colspan="5">${esc(v.cpeOrigenDescripcion)}</td></tr>`:''}
-      </table>
+    <div class="sec">
+      <div class="sec-label">C - PROCEDENCIA</div>
+      <div class="sec-body">
+        <table>
+          <tr>
+            <td class="k">Es un campo:</td><td class="v">${v.cpeOrigenEsCampo === false ? 'No' : 'Sí'}</td>
+            <td class="k">Localidad:</td><td class="v">${esc(v.cpeOrigenLocalidad || v.origen || '')}</td>
+            <td class="k">Provincia:</td><td class="v">${esc(v.cpeOrigenProvincia||'')}</td>
+          </tr>
+          <tr>
+            <td class="k">Latitud:</td><td class="v">${esc(v.cpeOrigenLat||'-')}</td>
+            <td class="k">Longitud:</td><td class="v">${esc(v.cpeOrigenLng||'-')}</td>
+            <td class="k">Descripción</td><td class="v">${esc(v.cpeOrigenDescripcion||'-')}</td>
+          </tr>
+          <tr>
+            <td class="k">RENSPA:</td><td class="v" colspan="5">${esc(v.cpeOrigenRenspa||'-')}</td>
+          </tr>
+        </table>
+      </div>
     </div>
 
     <!-- D - DESTINO DE LA MERCADERÍA -->
-    <div class="sec-label">D - DESTINO DE LA MERCADERÍA</div>
-    <div class="sec-body">
-      <table>
-        <tr>
-          <td class="k" width="15%">Es un campo:</td><td class="v" width="10%">${v.cpeDestinoEsCampo === true ? 'Sí' : 'No'}</td>
-          <td class="k" width="12%">N° Planta:</td><td class="v" width="13%">${esc(v.cpeDestinoPlanta||'')}</td>
-          <td class="k" width="12%">Dirección:</td><td class="v">${esc(v.cpeDestinoDireccion||'')}</td>
-        </tr>
-        <tr>
-          <td class="k">Localidad:</td><td class="v" colspan="2">${esc(v.cpeDestinoLocalidad || v.destino || '')}</td>
-          <td class="k">Provincia:</td><td class="v" colspan="2">${esc(v.cpeDestinoProvincia||'')}</td>
-        </tr>
-      </table>
+    <div class="sec">
+      <div class="sec-label">D - DESTINO DE LA MERCADERÍA</div>
+      <div class="sec-body">
+        <table>
+          <tr>
+            <td class="k">Es un campo:</td><td class="v">${v.cpeDestinoEsCampo === true ? 'Sí' : 'No'}</td>
+            <td class="k">N° Planta</td><td class="v">${esc(v.cpeDestinoPlanta||'')}</td>
+            <td class="k">Dirección:</td><td class="v">${esc(v.cpeDestinoDireccion||'')}</td>
+          </tr>
+          <tr>
+            <td class="k">Localidad:</td><td class="v" colspan="2">${esc(v.cpeDestinoLocalidad || v.destino || '')}</td>
+            <td class="k">Provincia:</td><td class="v" colspan="2">${esc(v.cpeDestinoProvincia||'')}</td>
+          </tr>
+        </table>
+      </div>
     </div>
 
     <!-- E - DATOS DEL TRANSPORTE -->
-    <div class="sec-label">E - DATOS DEL TRANSPORTE</div>
-    <div class="sec-body">
-      <table>
-        <tr><td class="k" width="20%">Dominios:</td><td class="v">${esc(v.patente||'')}${v.patenteAcoplado?` - ${esc(v.patenteAcoplado)}`:''}</td></tr>
-        <tr>
-          <td class="k">Partida:</td><td class="v" width="35%">${v.cpePartidaFecha ? fmtFechaHora(v.cpePartidaFecha) : fmtFechaHora(v.fecha)}</td>
-          <td class="k" width="15%">Kms. a recorrer:</td><td class="v" width="15%">${esc(v.cpeKms || v.km || '-')}</td>
-        </tr>
-        <tr><td class="k">Tarifa:</td><td class="v">${v.tarifa ? '$ ' + fmtN_(v.tarifa) + '/t' : '-'}</td></tr>
-      </table>
+    <div class="sec">
+      <div class="sec-label">E - DATOS DEL TRANSPORTE</div>
+      <div class="sec-body">
+        <table>
+          <tr><td class="k">Dominios:</td><td class="v" colspan="3">${esc(v.patente||'')}${v.patenteAcoplado?` - ${esc(v.patenteAcoplado)}`:''}</td></tr>
+          <tr>
+            <td class="k">Partida:</td><td class="v">${v.cpePartidaFecha ? fmtFechaHora(v.cpePartidaFecha) : fmtFechaHora(v.fecha)}</td>
+            <td class="k">Kms. a recorrer:</td><td class="v">${esc(v.cpeKms || v.km || '-')}</td>
+          </tr>
+          <tr><td class="k">Tarifa:</td><td class="v" colspan="3">${v.tarifa ? fmtN_(v.tarifa) : '-'}</td></tr>
+        </table>
+      </div>
     </div>
 
     <!-- F - CONTINGENCIAS -->
-    <div class="sec-label">F - CONTINGENCIAS</div>
-    <div class="sec-body">
-      <table>
-        <tr><td class="k" width="20%">Contingencia:</td><td class="v" width="30%">${esc(v.cpeContingencia||'-')}</td>
-            <td class="k" width="10%">Otro:</td><td class="v">${esc(v.cpeContingenciaOtro||'-')}</td></tr>
-        <tr><td class="k">Desactivación:</td><td class="v">${esc(v.cpeDesactivacion||'-')}</td>
-            <td class="k">Otro:</td><td class="v">${esc(v.cpeDesactivacionOtro||'-')}</td></tr>
-      </table>
+    <div class="sec">
+      <div class="sec-label">F - CONTINGENCIAS</div>
+      <div class="sec-body">
+        <table>
+          <tr><td class="k">Contingencia:</td><td class="v">${esc(v.cpeContingencia||'-')}</td><td class="k">Otro:</td><td class="v">${esc(v.cpeContingenciaOtro||'-')}</td></tr>
+          <tr><td class="k">Desactivación</td><td class="v">${esc(v.cpeDesactivacion||'-')}</td><td class="k">Otro:</td><td class="v">${esc(v.cpeDesactivacionOtro||'-')}</td></tr>
+        </table>
+      </div>
     </div>
 
     <!-- G - DESCARGA -->
-    <div class="sec-label">G - DESCARGA</div>
-    <div class="sec-body">
-      <table>
-        <tr>
-          <td class="k" width="15%">Fecha Arribo:</td><td class="v" width="20%">${v.cpeFechaArribo?fmtFecha(v.cpeFechaArribo):'-'}</td>
-          <td class="k" width="15%">Peso Bruto (kg):</td><td class="v">${fmtN_(v.kgBrutoDest)||'-'}</td>
-        </tr>
-        <tr>
-          <td class="k">Fecha Descarga:</td><td class="v">${v.cpeFechaArribo?fmtFecha(v.cpeFechaArribo):'-'}</td>
-          <td class="k">Peso Tara (kg):</td><td class="v">${fmtN_(v.kgTaraDest)||'-'}</td>
-        </tr>
-        <tr>
-          <td class="k">N° Turno:</td><td class="v">${esc(v.cpeNroTurno||'-')}</td>
-          <td class="k">Peso Neto (kg):</td><td class="v">${fmtN_(v.kgNetoDest || v.kgDescarga)||'-'}</td>
-        </tr>
-        <tr>
-          <td class="k">Localidad:</td><td class="v">${esc(v.cpeDestinoLocalidad || v.destino || '-')}</td>
-          <td class="k">Provincia:</td><td class="v">${esc(v.cpeDestinoProvincia || '-')}</td>
-        </tr>
-      </table>
+    <div class="sec">
+      <div class="sec-label">G - DESCARGA</div>
+      <div class="sec-body">
+        <table>
+          <tr>
+            <td class="k">Fecha Arribo:</td><td class="v">${v.cpeFechaArribo?fmtFecha(v.cpeFechaArribo):''}</td>
+            <td class="k">Peso Bruto (kg):</td><td class="v">${v.kgBrutoDest?fmtN_(v.kgBrutoDest):''}</td>
+          </tr>
+          <tr>
+            <td class="k">Fecha Descarga:</td><td class="v">${v.cpeFechaArribo?fmtFecha(v.cpeFechaArribo):''}</td>
+            <td class="k">Peso Tara (kg):</td><td class="v">${v.kgTaraDest?fmtN_(v.kgTaraDest):''}</td>
+            <td class="k">Localidad:</td><td class="v">${esc(v.cpeDestinoLocalidad || v.destino || '')}</td>
+          </tr>
+          <tr>
+            <td class="k">N° Turno:</td><td class="v">${esc(v.cpeNroTurno||'')}</td>
+            <td class="k">Peso Neto (kg):</td><td class="v">${(v.kgNetoDest||v.kgDescarga)?fmtN_(v.kgNetoDest||v.kgDescarga):''}</td>
+            <td class="k">Provincia:</td><td class="v">${esc(v.cpeDestinoProvincia||'')}</td>
+          </tr>
+        </table>
+      </div>
     </div>
 
     <!-- DECLARACIÓN JURADA -->
@@ -12551,13 +12663,11 @@ function _cpeHtmlOficial(v, empresa) {
     </div>
 
     <!-- HISTORIAL -->
-    <div class="sec-label" style="margin-top: 8px;">HISTORIAL DE CAMBIOS POST CONFIRMACIÓN</div>
-    <div class="sec-body">
-      <div style="font-size: 8pt; color: #6b7280;">
-        ${v.cpeEstado === 'anulada' ? `<b>Anulada</b> el ${fmtFechaHora(v.cpeFechaAnulacion)}${v.cpeMotivoAnulacion?` — Motivo: ${esc(v.cpeMotivoAnulacion)}`:''}` :
-          v.cpeEstado === 'confirmada' ? `Arribo confirmado el ${fmtFechaHora(v.cpeFechaArribo)}` :
-          'La CPE no cuenta con modificaciones efectuadas posterior a la confirmación definitiva.'}
-      </div>
+    <div class="historial-cab">HISTORIAL DE CAMBIOS POST CONFIRMACIÓN</div>
+    <div class="historial-body">
+      ${v.cpeEstado === 'anulada' ? `<b>Anulada</b> el ${fmtFechaHora(v.cpeFechaAnulacion)}${v.cpeMotivoAnulacion?` — Motivo: ${esc(v.cpeMotivoAnulacion)}`:''}` :
+        v.cpeEstado === 'confirmada' ? `Arribo confirmado el ${fmtFechaHora(v.cpeFechaArribo)}` :
+        'La CPE no cuenta con modificaciones efectuadas posterior a la confirmación definitiva.'}
     </div>
 
     <!-- FIRMAS -->
@@ -12566,9 +12676,7 @@ function _cpeHtmlOficial(v, empresa) {
       <div class="firma">Firma del Destinatario / Entregador &nbsp; N° Matrícula ___________</div>
     </div>
 
-    <div class="pie">
-      Documento generado por AgroCore · CTG ${esc(v.cpeNroCtg||'')} · 1 / 1
-    </div>
+    <div class="pie">1 / 1</div>
   </div>
 </body></html>`;
 }
