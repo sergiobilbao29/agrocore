@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.0.2';
+const AGROCORE_VERSION = '1.1.0';
 const AGROCORE_BUILD = new Date('2026-06-24').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2446,7 +2446,7 @@ mountCrud({
 // (o eliminar) el movimiento bancario asociado.
 //   Tercero depositado/cobrado → INGRESO en cuenta (cheque_cobrado)
 //   Propio   pagado/cobrado    → EGRESO en cuenta (cheque_pagado)
-// Si vuelve a "en cartera"/"emitido"/"anulado"/"rechazado": elimina el movimiento.
+// Si vuelve a "en_cartera"/"emitido"/"anulado"/"rechazado": elimina el movimiento.
 // ============================================================
 const CHEQUE_BANCO_ESTADOS_INGRESO = new Set(['depositado', 'cobrado']); // terceros
 const CHEQUE_BANCO_ESTADOS_EGRESO  = new Set(['pagado', 'cobrado']);     // propios
@@ -2614,7 +2614,7 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
     const companyIds = empresas.map((e) => e.id);
     const hoy = new Date();
     const hoy15 = new Date(hoy.getTime() + 15 * 24 * 60 * 60 * 1000);
-    const estadosPendientes = ['en cartera', 'emitido', 'depositado'];
+    const estadosPendientes = ['en_cartera', 'emitido', 'depositado'];
 
     // Traemos los registros relevantes de TODAS las empresas en una sola query c/u
     const [cheques, efectivos, flujos] = await Promise.all([
@@ -2996,6 +2996,8 @@ mountCrud({
     tipo: z.enum(['propio', 'externo']).optional(),
     cobraPorcentaje: z.boolean().optional(),
     porcentajeDefault: z.number().nullable().optional(),
+    localidad: z.string().nullable().optional(),
+    provincia: z.string().nullable().optional(),
   }),
   orderBy: { apellido: 'asc' },
   searchFields: ['nombre', 'apellido', 'dni', 'cuil', 'puesto'],
@@ -5790,7 +5792,7 @@ const PLANTILLAS = {
   },
   cheques: {
     headers: ['tipo*', 'formato', 'banco', 'nroCheque*', 'fechaEmision*', 'fechaPago*', 'monto*', 'beneficiario', 'librador', 'estado', 'observaciones'],
-    ejemplo: ['terceros', 'fisico', 'Banco Nación', 'A12345678', '2026-01-15', '2026-03-15', '500000', '', 'Juan Pérez', 'en cartera', ''],
+    ejemplo: ['terceros', 'fisico', 'Banco Nación', 'A12345678', '2026-01-15', '2026-03-15', '500000', '', 'Juan Pérez', 'en_cartera', ''],
     instrucciones: 'tipo: propio / terceros. formato: fisico / electronico. estado: en cartera / emitido / depositado / cobrado / pagado / rechazado. Fechas en formato YYYY-MM-DD.',
   },
   arrendamientos: {
@@ -5887,7 +5889,7 @@ const PLANTILLAS_CLIENTE = {
       { nombre: 'E-Cheq propios', headers: ['Banco', 'Numero', 'Monto', 'Fecha emision', 'Fecha pago', 'Beneficiario', 'Estado', 'Observaciones'],
         ejemplo: [['Santander', 'EC-00567', 220000, '02/03/2026', '20/05/2026', 'Otro Proveedor SRL', 'emitido', '']] },
       { nombre: 'E-Cheq de terceros', headers: ['Banco', 'Numero', 'Monto', 'Fecha emision', 'Fecha pago', 'Librador', 'Estado', 'Observaciones'],
-        ejemplo: [['Macro', 'EC-99001', 300000, '01/02/2026', '10/04/2026', 'Cliente SA', 'en cartera', '']] },
+        ejemplo: [['Macro', 'EC-99001', 300000, '01/02/2026', '10/04/2026', 'Cliente SA', 'en_cartera', '']] },
     ],
   },
   creditos: {
@@ -7853,7 +7855,7 @@ async function _arcaAnularCPE({ companyId, modo, nroCtg, motivo }) {
 
 // ===== Endpoints REST CPE =====
 // Heartbeat WSCPE (dummy)
-app.get('/api/arca/cpe/probar', authMiddleware, requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+app.get('/api/arca/cpe/probar', authMiddleware, requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
   try {
     const c = await prisma.company.findUnique({ where: { id: req.companyId }, select: { arcaModo: true, arcaCuit: true, arcaCertCrt: true } });
     const modo = c?.arcaModo === 'homo' ? 'homo' : 'prod';
@@ -7865,7 +7867,7 @@ app.get('/api/arca/cpe/probar', authMiddleware, requireCompany, requirePermissio
 });
 
 // Modificar datos CPE de un viaje (sólo los campos del módulo CPE — no toca el CTG ni el estado)
-app.put('/api/viajes/:id/cpe', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+app.put('/api/viajes/:id/cpe', authMiddleware, requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
     const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
@@ -7880,7 +7882,7 @@ app.put('/api/viajes/:id/cpe', authMiddleware, requireCompany, requirePermission
 
 // Eliminar la CPE del viaje en AgroCore (NO la anula en ARCA — si querés anular usá /anular).
 // Limpia todos los campos cpe* dejando el viaje sin CPE asociada.
-app.delete('/api/viajes/:id/cpe', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+app.delete('/api/viajes/:id/cpe', authMiddleware, requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
     const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
@@ -7894,7 +7896,7 @@ app.delete('/api/viajes/:id/cpe', authMiddleware, requireCompany, requirePermiss
 });
 
 // Emitir CPE para un viaje
-app.post('/api/viajes/:id/cpe/emitir', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+app.post('/api/viajes/:id/cpe/emitir', authMiddleware, requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
     const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
@@ -7931,7 +7933,7 @@ app.post('/api/viajes/:id/cpe/emitir', authMiddleware, requireCompany, requirePe
 });
 
 // Consultar estado en ARCA
-app.get('/api/viajes/:id/cpe/consultar', authMiddleware, requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+app.get('/api/viajes/:id/cpe/consultar', authMiddleware, requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
   try {
     const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
@@ -7944,7 +7946,7 @@ app.get('/api/viajes/:id/cpe/consultar', authMiddleware, requireCompany, require
 });
 
 // Confirmar arribo (cuando el cereal se descarga)
-app.post('/api/viajes/:id/cpe/confirmar-arribo', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+app.post('/api/viajes/:id/cpe/confirmar-arribo', authMiddleware, requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
     const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
@@ -7963,7 +7965,7 @@ app.post('/api/viajes/:id/cpe/confirmar-arribo', authMiddleware, requireCompany,
 });
 
 // Anular CPE
-app.post('/api/viajes/:id/cpe/anular', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+app.post('/api/viajes/:id/cpe/anular', authMiddleware, requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
     const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
@@ -8017,7 +8019,7 @@ const choferSchema = z.object({
 });
 
 // === Transportistas ===
-app.get('/api/transportistas', requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+app.get('/api/transportistas', requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
   try {
     const data = await prisma.transportista.findMany({
       where: { companyId: req.companyId },
@@ -8027,14 +8029,14 @@ app.get('/api/transportistas', requireCompany, requirePermission('viajes:read'),
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
-app.post('/api/transportistas', requireCompany, requirePermission('viajes:create'), async (req, res, next) => {
+app.post('/api/transportistas', requireCompany, requirePermission('logistica:create'), async (req, res, next) => {
   try {
     const input = transportistaSchema.parse(req.body);
     const r = await prisma.transportista.create({ data: { ...input, companyId: req.companyId } });
     res.status(201).json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
-app.put('/api/transportistas/:id', requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+app.put('/api/transportistas/:id', requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
     const existing = await prisma.transportista.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
@@ -8043,7 +8045,7 @@ app.put('/api/transportistas/:id', requireCompany, requirePermission('viajes:upd
     res.json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
-app.delete('/api/transportistas/:id', requireCompany, requirePermission('viajes:delete'), async (req, res, next) => {
+app.delete('/api/transportistas/:id', requireCompany, requirePermission('logistica:delete'), async (req, res, next) => {
   try {
     const existing = await prisma.transportista.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
@@ -8053,7 +8055,7 @@ app.delete('/api/transportistas/:id', requireCompany, requirePermission('viajes:
 });
 
 // === Camiones ===
-app.get('/api/camiones', requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+app.get('/api/camiones', requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
   try {
     const where = { companyId: req.companyId };
     if (req.query.transportistaId) where.transportistaId = String(req.query.transportistaId);
@@ -8064,14 +8066,14 @@ app.get('/api/camiones', requireCompany, requirePermission('viajes:read'), async
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
-app.post('/api/camiones', requireCompany, requirePermission('viajes:create'), async (req, res, next) => {
+app.post('/api/camiones', requireCompany, requirePermission('logistica:create'), async (req, res, next) => {
   try {
     const input = camionSchema.parse(req.body);
     const r = await prisma.camion.create({ data: { ...input, companyId: req.companyId } });
     res.status(201).json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
-app.put('/api/camiones/:id', requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+app.put('/api/camiones/:id', requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
     const existing = await prisma.camion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
@@ -8080,7 +8082,7 @@ app.put('/api/camiones/:id', requireCompany, requirePermission('viajes:update'),
     res.json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
-app.delete('/api/camiones/:id', requireCompany, requirePermission('viajes:delete'), async (req, res, next) => {
+app.delete('/api/camiones/:id', requireCompany, requirePermission('logistica:delete'), async (req, res, next) => {
   try {
     const existing = await prisma.camion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
@@ -8090,7 +8092,7 @@ app.delete('/api/camiones/:id', requireCompany, requirePermission('viajes:delete
 });
 
 // === Choferes ===
-app.get('/api/choferes', requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+app.get('/api/choferes', requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
   try {
     const where = { companyId: req.companyId };
     if (req.query.transportistaId) where.transportistaId = String(req.query.transportistaId);
@@ -8101,14 +8103,14 @@ app.get('/api/choferes', requireCompany, requirePermission('viajes:read'), async
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
-app.post('/api/choferes', requireCompany, requirePermission('viajes:create'), async (req, res, next) => {
+app.post('/api/choferes', requireCompany, requirePermission('logistica:create'), async (req, res, next) => {
   try {
     const input = choferSchema.parse(req.body);
     const r = await prisma.chofer.create({ data: { ...input, companyId: req.companyId } });
     res.status(201).json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
-app.put('/api/choferes/:id', requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+app.put('/api/choferes/:id', requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
     const existing = await prisma.chofer.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
@@ -8117,7 +8119,7 @@ app.put('/api/choferes/:id', requireCompany, requirePermission('viajes:update'),
     res.json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
-app.delete('/api/choferes/:id', requireCompany, requirePermission('viajes:delete'), async (req, res, next) => {
+app.delete('/api/choferes/:id', requireCompany, requirePermission('logistica:delete'), async (req, res, next) => {
   try {
     const existing = await prisma.chofer.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
@@ -8371,7 +8373,7 @@ function _parsearTextoCPE(txt) {
 //   2) Fallback: buscar el CUIT en las próximas líneas tras la etiqueta
 //   3) Pesos: buscar números 4-6 dígitos cerca de "Peso Bruto/Tara/Neto"
 //   4) Dominios: regex de patentes argentinas (AAA999 o AA999AA)
-app.post('/api/arca/cpe/parsear-pdf', authMiddleware, requireCompany, requirePermission('viajes:read'), upload.single('archivo'), async (req, res, next) => {
+app.post('/api/arca/cpe/parsear-pdf', authMiddleware, requireCompany, requirePermission('logistica:read'), upload.single('archivo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     let pdfParse;
@@ -8385,7 +8387,7 @@ app.post('/api/arca/cpe/parsear-pdf', authMiddleware, requireCompany, requirePer
 });
 
 // Crear un viaje nuevo a partir del PDF de ARCA — usa el mismo parser que parsear-pdf
-app.post('/api/arca/cpe/importar-como-viaje', authMiddleware, requireCompany, requirePermission('viajes:create'), upload.single('archivo'), async (req, res, next) => {
+app.post('/api/arca/cpe/importar-como-viaje', authMiddleware, requireCompany, requirePermission('logistica:create'), upload.single('archivo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     let pdfParse;

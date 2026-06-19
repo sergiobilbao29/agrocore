@@ -1703,7 +1703,7 @@ async function loadNotifs() {
   const hoy = new Date();
   try {
     const cheques = (await api('/api/cheques')).data || [];
-    const estadosPend = ['en cartera', 'emitido', 'depositado'];
+    const estadosPend = ['en_cartera', 'emitido', 'depositado'];
     const pend = cheques.filter(c => estadosPend.includes((c.estado||'').toLowerCase()) && c.fechaPago);
     const venc = pend.filter(c => new Date(c.fechaPago) < hoy);
     const hoy15 = new Date(hoy.getTime() + 15 * 24 * 60 * 60 * 1000);
@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Estable', color:'bg-purple-100 text-purple-800 border-purple-300', fecha:'25/06/2026',
+      titulo:'🛡️ v1.1.0 — Versión estable verificada: 6 bugs críticos arreglados',
+      desc:'Auditoría exhaustiva del código + arreglos: (1) Migración consolidada con campos del schema que faltaban (IntercompanyMovimiento, ImportLote, columnas pais/logoUrl/oculto/cuenta cheque/empresaContraparteId ctacte/localidad+provincia empleado/kgDescarga viaje, etc.) — instalaciones nuevas ya no van a fallar con "column does not exist". (2) Empleado ahora SÍ guarda localidad y provincia (antes el zod las silenciaba). (3) viajeSave ahora envía transportistaId/choferId/camionId — los contadores _count.viajes funcionan y se puede filtrar histórico por entidad. (4) Permisos unificados: todo el módulo de Logística (viajes, transportistas, choferes, camiones, CPE) usa logistica:* en vez de mezclar con viajes:* — el rol "operaciones" ahora puede usar todo Logística. (5) Cheques: estado normalizado a "en_cartera" (con subrayado) en backend, frontend y base de datos — antes había 2 versiones que rompían filtros. (6) Acreditar cheque desde CtaCte ahora llama al endpoint específico que genera el BancoMovimiento correspondiente, antes el saldo del banco quedaba desfasado.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
       titulo:'📋 v1.0.2: Campo de RENSPA + Titular + Observaciones en el form de Campo',
       desc:'Se agregaron 3 campos al form de Producción → Campos y lotes: (1) <b>RENSPA</b> (Registro Nacional Sanitario de Productores Agropecuarios) — campo dedicado, ya no hay que ponerlo en observaciones. (2) <b>Titular / propietario</b> — a nombre de quién está el campo, distinto de la titularidad (propio/arrendado/aparcería). (3) <b>Observaciones</b> — campo libre para notas. En el listado, las cards de campos ahora muestran también el titular y el RENSPA debajo de la titularidad. Si tenés campos cargados con el RENSPA en Observaciones (de viajes anteriores o importación), pasalos al campo nuevo editando el campo.' },
@@ -2455,7 +2458,7 @@ pages.inicio = async function() {
       desc:'En todos los modales de pago/cobro, cuando elegís Efectivo, ahora aparece un dropdown con las cajas existentes (suma las del catálogo Cajas + las que ya tienen movimientos). Antes era un input texto libre que confundía. Si todavía no hay cajas creadas, sale un aviso amarillo recomendando crearlas en Catálogos → Cajas.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
       titulo:'💳 Cargar cheque de tercero directo desde la cobranza',
-      desc:'En el modal "Cobrar de cliente" cuando elegís método Cheque, ahora aparecen dos opciones: "Cargar nuevo cheque recibido" (modo por defecto) o "Elegir uno ya cargado". En modo nuevo cargás banco, número, monto, fecha de pago, CUIT librador, tipo (físico/e-cheq) directamente en el modal de cobro y se crea automáticamente en Tesorería → Cheques con estado "en cartera". Sin tener que ir a Tesorería primero.' },
+      desc:'En el modal "Cobrar de cliente" cuando elegís método Cheque, ahora aparecen dos opciones: "Cargar nuevo cheque recibido" (modo por defecto) o "Elegir uno ya cargado". En modo nuevo cargás banco, número, monto, fecha de pago, CUIT librador, tipo (físico/e-cheq) directamente en el modal de cobro y se crea automáticamente en Tesorería → Cheques con estado "en_cartera". Sin tener que ir a Tesorería primero.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/06/2026',
       titulo:'🏛️ Cuentas bancarias: solo en Tesorería (sacamos la tab del catálogo)',
       desc:'La tab "Cuentas bancarias" del Catálogo solo tenía nombre/descripción y confundía: las cuentas cargadas ahí no aparecían al pagar/cobrar por transferencia. Se sacó la tab del catálogo. Las cuentas bancarias reales (con banco, sucursal, tipo, moneda, número, CBU, alias, titular, saldo inicial) se cargan en Tesorería → Bancos y desde ahí aparecen automáticamente en los selectores de pago/cobro.' },
@@ -2617,7 +2620,7 @@ pages.inicio = async function() {
       desc:'Nueva sección Finanzas → Bancos. Cargás cuentas bancarias (banco, sucursal, tipo cta cte / caja ahorro / USD, número, CBU, alias, titular, saldo de apertura) y todos los movimientos: depósitos, extracciones, transferencias entre cuentas propias, cheques cobrados o pagados, créditos acreditados, cuotas de crédito, comisiones, impuestos. Cada cuenta muestra su saldo en vivo y los totales por moneda (ARS y USD) arriba. Al entrar a una cuenta se ve el extracto con saldo corriente fila a fila y el usuario que cargó cada movimiento. Las transferencias entre cuentas propias generan automáticamente el movimiento espejo en la otra cuenta — si borrás uno, se borran los dos.' },
     { tag:'Nuevo',  color:'bg-green-100 text-green-800 border-green-300', fecha:'05/06/2026',
       titulo:'🔗 Cheques y créditos se integran con Bancos automáticamente',
-      desc:'Al marcar un cheque como depositado / cobrado (terceros) o pagado / cobrado (propio), un botón abre un modal donde elegís la cuenta bancaria — y el sistema genera solo el movimiento bancario asociado (ingreso o egreso) con el monto del cheque. Si después cambiás el estado o la cuenta, el movimiento se actualiza; si lo dejás en "en cartera", se elimina. Lo mismo pasa al marcar una cuota de crédito como pagada por transferencia o débito automático: si elegís la cuenta bancaria, queda registrado el egreso en el extracto. Trazabilidad completa sin doble carga.' },
+      desc:'Al marcar un cheque como depositado / cobrado (terceros) o pagado / cobrado (propio), un botón abre un modal donde elegís la cuenta bancaria — y el sistema genera solo el movimiento bancario asociado (ingreso o egreso) con el monto del cheque. Si después cambiás el estado o la cuenta, el movimiento se actualiza; si lo dejás en "en_cartera", se elimina. Lo mismo pasa al marcar una cuota de crédito como pagada por transferencia o débito automático: si elegís la cuenta bancaria, queda registrado el egreso en el extracto. Trazabilidad completa sin doble carga.' },
     { tag:'Nuevo',  color:'bg-green-100 text-green-800 border-green-300', fecha:'05/06/2026',
       titulo:'🌐 Depósitos compartidos entre empresas',
       desc:'En el formulario de Cerealeras / Depósitos hay un check nuevo "Compartido entre todas mis empresas". Si lo activás, el depósito es visible y usable desde cualquiera de las empresas que tengas asociadas — pensado para cerealeras o silos que uses con varias razones sociales del mismo grupo. Si lo dejás desactivado, sigue siendo privado a la empresa actual. En la lista aparece un badge "🌐 Compartido" para distinguir los dos casos.' },
@@ -2679,8 +2682,8 @@ pages.inicio = async function() {
       titulo:'💳 Cuentas corrientes ahora se alimentan de las facturas',
       desc:'Antes las facturas de venta y compra no generaban movimiento en Cuentas Corrientes y los saldos de clientes/proveedores quedaban en cero. Ahora cada factura suma automáticamente a la cuenta corriente del contacto. Cuentas Corrientes se reorganizó en dos vistas: "A cobrar" (clientes) y "A pagar" (proveedores), agrupado por contacto con su saldo. Se agregó un botón "Registrar cobro/pago" para descontar el saldo, y "Ver movimientos" para el detalle con saldo corriente.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300',    fecha:'21/05/2026',
-      titulo:'🧾 Cheques: físico/electrónico, estado "en cartera" y filtros',
-      desc:'El módulo de Cheques ahora permite distinguir cheques físicos de electrónicos (e-cheq), tiene el estado "en cartera" para los cheques recibidos disponibles para usar, filtro por estado, ordenamiento por fecha de pago (para ver cuáles vencen a 15/30/90 días) y una columna de observaciones visible en la lista. Un atajo "Ver disponibles" muestra de una los cheques en cartera.' },
+      titulo:'🧾 Cheques: físico/electrónico, estado "en_cartera" y filtros',
+      desc:'El módulo de Cheques ahora permite distinguir cheques físicos de electrónicos (e-cheq), tiene el estado "en_cartera" para los cheques recibidos disponibles para usar, filtro por estado, ordenamiento por fecha de pago (para ver cuáles vencen a 15/30/90 días) y una columna de observaciones visible en la lista. Un atajo "Ver disponibles" muestra de una los cheques en cartera.' },
     { tag:'Nuevo',  color:'bg-green-100 text-green-800 border-green-300', fecha:'21/05/2026',
       titulo:'📴 Modo offline para Producción (cargar sin señal)',
       desc:'Ahora podés cargar campos, lotes, campañas, insumos y labores SIN conexión — ideal para el celular en el campo. Los cambios se guardan en el dispositivo y se sincronizan solos cuando vuelve la señal. La app instalada en el celular abre aunque no tengas internet. Una barra abajo te avisa "Sin conexión · X cambios pendientes" y al reconectar se sincroniza todo con un aviso de confirmación.' },
@@ -3564,7 +3567,7 @@ async function dashResumen() {
   // Cheques pendientes (en cartera o depositados, sin cobrar/rechazar todavía)
   // Las alertas usan "hoy" que puede ser snapshot, lo que permite mirar el estado del
   // pasado: "qué cheques estaban vencidos al 31/12/2025"
-  const estadosPendientes = ['en cartera', 'emitido', 'depositado'];
+  const estadosPendientes = ['en_cartera', 'emitido', 'depositado'];
   const chequesPend = cheques.filter(c => estadosPendientes.includes((c.estado||'').toLowerCase()) && c.fechaPago);
   const chequesVencidos = chequesPend.filter(c => new Date(c.fechaPago) < hoy).length;
   const hoy15 = new Date(hoy.getTime() + 15 * 24 * 60 * 60 * 1000);
@@ -4062,7 +4065,7 @@ async function dashPatrimonio() {
   const saldoCaja = flujo.reduce((a,f)=>a + Number(f.monto||0), 0);
   const valorStock = prods.reduce((a,p)=>a + Number(p.existencia||0) * Number(p.precioReferencia||0), 0);
   const porCobrar = ccs.filter(c=>c.contactoTipo==='cliente').reduce((a,c)=>a+(Number(c.debe||0)-Number(c.haber||0)),0);
-  const chqEnCartera = cheques.filter(c=>c.tipo==='terceros' && ['en cartera','depositado'].includes((c.estado||'').toLowerCase())).reduce((a,c)=>a+Number(c.monto||0),0);
+  const chqEnCartera = cheques.filter(c=>c.tipo==='terceros' && ['en_cartera','depositado'].includes((c.estado||'').toLowerCase())).reduce((a,c)=>a+Number(c.monto||0),0);
   // Pasivos
   const porPagar = ccs.filter(c=>c.contactoTipo==='proveedor').reduce((a,c)=>a+(Number(c.debe||0)-Number(c.haber||0)),0);
   const chqEmitidos = cheques.filter(c=>c.tipo==='propio' && ['emitido','depositado'].includes((c.estado||'').toLowerCase())).reduce((a,c)=>a+Number(c.monto||0),0);
@@ -8194,7 +8197,7 @@ function ventMetodoCambio(prefix) {
     const cheques = (state.cache.cheques || []).filter(c => /en cartera/i.test(c.estado || ''));
     det.innerHTML = cheques.length
       ? `<label class="label">Cheque recibido (ya cargado en Tesorería)</label><select id="${prefix}-cheque" class="input"><option value="">— Elegir —</option>${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)}</option>`).join('')}</select>
-        <div class="text-[11px] text-amber-700 mt-1">💡 Si todavía no cargaste el cheque del cliente, cargalo primero en Tesorería → Cheques (estado "en cartera") y volvé.</div>`
+        <div class="text-[11px] text-amber-700 mt-1">💡 Si todavía no cargaste el cheque del cliente, cargalo primero en Tesorería → Cheques (estado "en_cartera") y volvé.</div>`
       : `<div class="text-xs text-amber-700">⚠️ Sin cheques en cartera. Cargá uno en Tesorería → Cheques.</div>`;
   } else if (met === 'transferencia') {
     const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
@@ -9399,13 +9402,13 @@ function fechaAMs(v) {
   return Number.isFinite(t) ? t : 0;
 }
 
-// Estados posibles de un cheque. "en cartera" = recibido y disponible para usar.
-const CHEQUE_ESTADOS = ['en cartera', 'emitido', 'depositado', 'cobrado', 'pagado', 'rechazado', 'anulado'];
+// Estados posibles de un cheque. "en_cartera" = recibido y disponible para usar.
+const CHEQUE_ESTADOS = ['en_cartera', 'emitido', 'depositado', 'cobrado', 'pagado', 'rechazado', 'anulado'];
 // Badge de color según el estado.
 function chequeBadge(estado) {
   const e = (estado || '').toLowerCase();
   const map = {
-    'en cartera': 'badge-green', 'emitido': 'badge-blue', 'depositado': 'badge-yellow',
+    'en_cartera': 'badge-green', 'emitido': 'badge-blue', 'depositado': 'badge-yellow',
     'cobrado': 'badge-gray', 'pagado': 'badge-gray', 'rechazado': 'badge-red', 'anulado': 'badge-gray',
   };
   return `<span class="badge ${map[e] || 'badge-gray'}">${esc(estado || '—')}</span>`;
@@ -9421,7 +9424,7 @@ pages.cheques = async function() {
   state.chequeFilter = state.chequeFilter || { estado:'', orden:'asc' };
   const total = rows.reduce((a,c)=>a+Number(c.monto||0),0);
   // Disponibles = cheques en cartera (recibidos, listos para usar)
-  const enCartera = rows.filter(c => (c.estado||'').toLowerCase() === 'en cartera');
+  const enCartera = rows.filter(c => (c.estado||'').toLowerCase() === 'en_cartera');
   const totalCartera = enCartera.reduce((a,c)=>a+Number(c.monto||0),0);
 
   const render = () => {
@@ -9502,7 +9505,7 @@ pages.cheques = async function() {
 };
 // Atajo: filtrar solo los cheques en cartera (disponibles para usar).
 function chqFiltroDisponibles() {
-  state.chequeFilter = { estado:'en cartera', orden:'asc' };
+  state.chequeFilter = { estado:'en_cartera', orden:'asc' };
   pages.cheques();
 }
 function chqToggleOrden() {
@@ -9511,8 +9514,8 @@ function chqToggleOrden() {
 }
 function chqForm(id=null) {
   const it = id ? (state.cache.cheques||[]).find(x=>x.id===id)||{} : {};
-  // Default de estado según tipo: cheque de terceros → "en cartera"; propio → "emitido".
-  const estadoDefault = it.estado || (it.tipo==='terceros' ? 'en cartera' : 'emitido');
+  // Default de estado según tipo: cheque de terceros → "en_cartera"; propio → "emitido".
+  const estadoDefault = it.estado || (it.tipo==='terceros' ? 'en_cartera' : 'emitido');
   openModal({
     title: id?'Editar cheque':'Nuevo cheque',
     body: `
@@ -9550,7 +9553,7 @@ function chqForm(id=null) {
   if (tipoEl && estEl && !id) {
     tipoEl.onchange = () => {
       if (estEl.dataset.manual) return;
-      estEl.value = tipoEl.value === 'terceros' ? 'en cartera' : 'emitido';
+      estEl.value = tipoEl.value === 'terceros' ? 'en_cartera' : 'emitido';
     };
     estEl.onchange = () => { estEl.dataset.manual = '1'; };
   }
@@ -10423,7 +10426,7 @@ function pagoCobroMetodoCambio(modo) {
     }
   } else if (metodo === 'cheque') {
     // PAGO: cheques propios + cheques de terceros EN CARTERA (para endosar)
-    // COBRO: el cliente nos entrega cheques — los pre-cargamos a "en cartera"
+    // COBRO: el cliente nos entrega cheques — los pre-cargamos a "en_cartera"
     const cheques = state.cache.cheques || [];
     if (esPago) {
       const enCartera = cheques.filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
@@ -10464,7 +10467,7 @@ function pagoCobroMetodoCambio(modo) {
               </select>
             </div>
           </div>
-          <div class="text-[11px] text-blue-700 mt-2">💡 Se va a crear automáticamente en Tesorería → Cheques con estado "en cartera" y vinculado a esta cobranza.</div>
+          <div class="text-[11px] text-blue-700 mt-2">💡 Se va a crear automáticamente en Tesorería → Cheques con estado "en_cartera" y vinculado a esta cobranza.</div>
         </div>
         <div id="pc-cheque-existente" class="hidden">
           <label class="label">Cheque ya cargado en cartera</label>
@@ -10568,7 +10571,7 @@ async function pagoCobroConfirmar(modo) {
           fechaEmision: new Date(fecha).toISOString(),
           librador: librador || (cli?.razonSocial || null),
           cuitLibrador: cuit,
-          estado: 'en cartera',
+          estado: 'en_cartera',
           observaciones: 'Recibido de ' + (cli?.razonSocial || 'cliente') + ' por cobranza',
         })});
         body.chequeId = chRsp.data?.id;
@@ -10897,11 +10900,12 @@ async function ccSave(id) {
             })});
           }
         } else if (metodo === 'cheque') {
-          // Para cheque marcamos el cheque elegido como endosado/depositado (best effort)
+          // Para cheque, usamos el endpoint específico /cambiar-estado que SÍ genera
+          // el BancoMovimiento correspondiente (acreditación / pago en banco).
           const chequeId = document.getElementById('f-met-cheque')?.value || null;
           if (chequeId) {
             const nuevoEstado = esPago ? 'endosado' : 'depositado';
-            await api('/api/cheques/' + chequeId, { method: 'PUT', body: JSON.stringify({ estado: nuevoEstado })});
+            await api('/api/cheques/' + chequeId + '/cambiar-estado', { method: 'POST', body: JSON.stringify({ estado: nuevoEstado, cuentaBancoId: null })});
           }
         }
       } catch (mErr) {
@@ -11597,6 +11601,9 @@ async function viajeSave(id) {
     observaciones:   $('#f-obs').value.trim() || null,
     destinoTipo:        $('#f-dtipo')?.value || null,
     depositoDestinoId:  $('#f-dtipo')?.value === 'cerealera' ? ($('#f-ddep')?.value || null) : null,
+    transportistaId: $('#v-trans')?.value || null,
+    choferId:        $('#v-chofer')?.value || null,
+    camionId:        $('#v-camion')?.value || null,
   };
   try {
     await api('/api/viajes'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});

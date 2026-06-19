@@ -776,6 +776,8 @@ model Empleado {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  localidad       String?
+  provincia       String?
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   movimientos     MovimientoEmpleado[]
   liquidaciones   LiquidacionSueldo[]
