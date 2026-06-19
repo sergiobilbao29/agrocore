@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'24/06/2026',
+      titulo:'🛠️ Hotfix: Cargar PDF de ARCA daba "Error 400 del parser"',
+      desc:'El upload del PDF se hacía con fetch directo y olvidaba agregar el header X-Company-Id que requiere el backend. Por eso devolvía 400 "Falta header X-Company-Id". Solucionado — ahora se mandan correctamente Authorization + X-Company-Id en el upload. Además el toast de error ahora muestra el mensaje exacto del backend (antes solo "Error 400") para diagnosticar más rápido si hay otro problema.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
       titulo:'📄 CPE con formato fiel a ARCA (logo + QR + layout) + Razón social auto desde CUIT',
       desc:'Dos mejoras grandes: (1) El documento de la CPE ahora se ve <b>visualmente igual al PDF oficial de ARCA</b>: logo "ARCA" en azul oscuro grande arriba a la izquierda, recuadro QR a la derecha del título, tabla con bordes prolijos sin colores destacados (más formal/oficial), mismo orden y disposición de secciones A→G. Sirve para imprimir y entregar al chofer / policía / puerto. (2) Al tipear un CUIT en el form de Emitir CPE, el sistema busca automáticamente la <b>razón social</b> en tus Clientes, Proveedores, Transportistas, Choferes y Empresa actual, y la muestra en verde abajo del input. Si el CUIT no está en ninguna parte, te avisa para que lo cargues primero. En el documento final aparece "CUIT - Razón Social" como en ARCA. Tip: para tener TODOS los datos extra (planta, dirección, lat/long, kms), cargá la CPE en el portal de ARCA y subí el PDF con el botón 📤.' },
@@ -12297,12 +12300,19 @@ async function cpeParsearPDF(input, viajeId) {
   const fd = new FormData();
   fd.append('archivo', file);
   try {
-    const url = '/api/arca/cpe/parsear-pdf';
-    const opts = state.token ? { method:'POST', body: fd, headers: { Authorization: 'Bearer ' + state.token } } : { method:'POST', body: fd };
-    const r = await fetch(url, opts);
-    if (!r.ok) throw new Error('Error ' + r.status + ' del parser');
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'Parser devolvió error');
+    const url = (window.API_BASE || '') + '/api/arca/cpe/parsear-pdf';
+    // Armamos los headers correctos. NO seteamos Content-Type — fetch lo hace solo con boundary.
+    const headers = {};
+    if (state.token)     headers['Authorization'] = 'Bearer ' + state.token;
+    if (state.companyId) headers['X-Company-Id']  = state.companyId;
+    const r = await fetch(url, { method:'POST', body: fd, headers });
+    let j = null;
+    try { j = await r.json(); } catch {}
+    if (!r.ok) {
+      const msg = (j && j.error) ? j.error : ('HTTP ' + r.status);
+      throw new Error(msg);
+    }
+    if (!j || !j.ok) throw new Error((j && j.error) || 'Parser devolvió error');
     const d = j.data || {};
     let count = 0;
     const setIf = (id, val) => { if (val && document.getElementById(id)) { document.getElementById(id).value = val; count++; } };
