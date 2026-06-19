@@ -2316,6 +2316,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'23/06/2026',
+      titulo:'🛠️ Hotfix: botón Ver CPE no abría por ReferenceError fmtDateTime',
+      desc:'El motivo real por el que el botón de Ver Carta de Porte del viaje no respondía era un error silencioso de JavaScript: la función fmtDateTime no existe en AgroCore (la función real es fmtDate). El error se atrapaba en el catch de la promesa y no aparecía toast. Lo cambiamos por new Date(...).toLocaleString("es-AR") directo, que muestra fecha + hora. Ahora el modal de detalle de la CPE abre normalmente.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'23/06/2026',
       titulo:'🛠️ Fix definitivo del botón Ver CPE + CTG/CP llenados automáticamente al emitir',
       desc:'(1) El botón 📋 ver detalle de la CPE en el listado de viajes ahora usa <b>event delegation</b> en vez de onclick inline (cambio defensivo contra problemas de escape de strings y service workers viejos). Si igual no responde, abrí DevTools → Console y vas a ver el mensaje "[cpeDetalle] error: ..." con el motivo. (2) Cuando se emite una CPE, los campos <b>CTG</b> y <b>Carta de Porte</b> del viaje ahora se llenan automáticamente con los valores asignados por ARCA — antes solo se llenaba el campo CPE pero los campos clásicos del viaje quedaban vacíos. (3) Si todavía no te funciona el botón después de actualizar, hacé hard reload (Ctrl+Shift+R) o desregistrá el Service Worker desde DevTools → Application → Service Workers.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'23/06/2026',
@@ -12255,8 +12258,8 @@ async function cpeDetalle(viajeId) {
         <div class="grid grid-cols-2 gap-3 text-sm">
           <div><b>Estado:</b> <span class="px-2 py-0.5 rounded text-xs ${v.cpeEstado==='emitida'?'bg-amber-100 text-amber-800':v.cpeEstado==='confirmada'?'bg-emerald-100 text-emerald-800':v.cpeEstado==='anulada'?'bg-rose-100 text-rose-800':'bg-slate-100'}">${esc(v.cpeEstado||'—')}</span></div>
           <div><b>Tipo:</b> ${esc(v.cpeTipo||'automotor')}</div>
-          <div><b>Emisión:</b> ${v.cpeFechaEmision?fmtDateTime(v.cpeFechaEmision):'—'}</div>
-          <div><b>Arribo:</b> ${v.cpeFechaArribo?fmtDateTime(v.cpeFechaArribo):'—'}</div>
+          <div><b>Emisión:</b> ${v.cpeFechaEmision?new Date(v.cpeFechaEmision).toLocaleString('es-AR'):'—'}</div>
+          <div><b>Arribo:</b> ${v.cpeFechaArribo?new Date(v.cpeFechaArribo).toLocaleString('es-AR'):'—'}</div>
         </div>
         <div class="text-xs text-slate-600 p-2 bg-slate-50 rounded">
           <b>Origen:</b> CUIT ${esc(v.cpeOrigenCuit||'—')} · RENSPA ${esc(v.cpeOrigenRenspa||'—')}<br>
