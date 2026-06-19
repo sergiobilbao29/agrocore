@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.1.0';
+const AGROCORE_VERSION = '1.1.1';
 const AGROCORE_BUILD = new Date('2026-06-24').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2855,6 +2855,19 @@ const viajeSchema = z.object({
       transportistaId: z.string().nullable().optional(),
       choferId:        z.string().nullable().optional(),
       camionId:        z.string().nullable().optional(),
+      cpeNroCtg:           z.string().nullable().optional(),
+      cpeNroComprobante:   z.string().nullable().optional(),
+      cpeEstado:           z.string().nullable().optional(),
+      cpeTipo:             z.string().nullable().optional(),
+      cpeFechaEmision:     z.coerce.date().nullable().optional(),
+      cpeFechaArribo:      z.coerce.date().nullable().optional(),
+      cpeObservaciones:    z.string().nullable().optional(),
+      cpeOrigenCuit:       z.string().nullable().optional(),
+      cpeOrigenRenspa:     z.string().nullable().optional(),
+      cpeDestinoCuit:      z.string().nullable().optional(),
+      cpeDestinatarioCuit: z.string().nullable().optional(),
+      cpeCorredorCuit:     z.string().nullable().optional(),
+      cpeIntermediarioCuit:z.string().nullable().optional(),
     });
 
 // Deriva el estado del viaje a partir de sus datos. "pagado" es sticky (manual o
@@ -3506,7 +3519,6 @@ mountCrud({
 // La web publica de marketing vive en <root>/web/index.html y se sirve en GET /
 // (ademas de /web). El sistema completo sigue en GET /app.
 const WEB_PUBLIC = path.join(STATIC_DIR, 'web');
-app.use('/web', express.static(WEB_PUBLIC));
 app.get('/', (req, res) => {
   // Subdominios de demo / produccion van directo al sistema.
   // La landing publica vive en agrocore.ar (Cloudflare Pages), no aca.
@@ -4382,7 +4394,7 @@ app.get('/api/flujo-proyectado/export', requireCompany, async (req, res, next) =
 // Tipos de movimiento: cuáles suman al saldo y cuáles restan.
 const BANCO_TIPOS_INGRESO = ['deposito', 'transferencia_in', 'cheque_cobrado', 'credito_acreditado', 'interes'];
 const BANCO_TIPOS_EGRESO  = ['extraccion', 'transferencia_out', 'cheque_pagado', 'cuota_credito', 'comision', 'impuesto'];
-const BANCO_TIPOS_TODOS   = [...BANCO_TIPOS_INGRESO, ...BANCO_TIPOS_EGRESO, 'otro'];
+const BANCO_TIPOS_TODOS   = [...BANCO_TIPOS_INGRESO, ...BANCO_TIPOS_EGRESO, 'otro', 'ajuste_in', 'ajuste_out'];
 
 const bancoCuentaSchema = z.object({
   banco: z.string().min(1),
@@ -4504,7 +4516,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
   try {
     const schema = z.object({
       fecha: z.coerce.date(),
-      tipo: z.enum(['ingreso', 'egreso']),
+      tipo: z.enum(['ingreso', 'egreso', 'ajuste_in', 'ajuste_out']),
       concepto: z.string().min(1),
       categoria: z.string().nullable().optional(),
       clasificacion: z.string().nullable().optional(),   // "empresa" | "propio"
@@ -8445,6 +8457,9 @@ app.post('/api/arca/cpe/importar-como-viaje', authMiddleware, requireCompany, re
   } catch (e) { next(e); }
 });
 
+
+// Estáticos finales (después de todos los /api/*)
+app.use('/web', express.static(WEB_PUBLIC));
 app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found', path: req.path }));
 
 app.use((err, _req, res, _next) => {

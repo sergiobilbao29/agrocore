@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/06/2026',
+      titulo:'🧹 v1.1.1 — Limpieza: 7 bugs menores + hardening defensivo',
+      desc:'Después de la v1.1.0 estable, atacamos los 7 bugs no críticos restantes: (1) <b>viajeSchema</b> ahora acepta los campos cpe* como defensa para que ediciones desde forms generales no pierdan datos. (2) <b>Cliente</b> y <b>Proveedor</b> ahora tienen el campo Observaciones en el form + Proveedor también tiene Nombre fantasía y Condición IVA (antes solo Cliente los tenía — Proveedor los soportaba en BD pero no se podían cargar). (3) <b>Depósitos</b>: el costo de estadía y secada ahora respeta cuando cargás "0" explícitamente (antes lo convertía a null). (4) <b>Bancos</b>: aceptamos tipos "ajuste_in" y "ajuste_out" para movimientos de ajuste manual de saldo. (5) <b>Estáticos</b> "/" y "/web" movidos al final del servidor (organización, evita conflictos con rutas /api/*). Con estos arreglos + los 6 críticos de v1.1.0 cerramos la auditoría exhaustiva — la versión queda lista para uso productivo intensivo.' },
     { tag:'Estable', color:'bg-purple-100 text-purple-800 border-purple-300', fecha:'25/06/2026',
       titulo:'🛡️ v1.1.0 — Versión estable verificada: 6 bugs críticos arreglados',
       desc:'Auditoría exhaustiva del código + arreglos: (1) Migración consolidada con campos del schema que faltaban (IntercompanyMovimiento, ImportLote, columnas pais/logoUrl/oculto/cuenta cheque/empresaContraparteId ctacte/localidad+provincia empleado/kgDescarga viaje, etc.) — instalaciones nuevas ya no van a fallar con "column does not exist". (2) Empleado ahora SÍ guarda localidad y provincia (antes el zod las silenciaba). (3) viajeSave ahora envía transportistaId/choferId/camionId — los contadores _count.viajes funcionan y se puede filtrar histórico por entidad. (4) Permisos unificados: todo el módulo de Logística (viajes, transportistas, choferes, camiones, CPE) usa logistica:* en vez de mezclar con viajes:* — el rol "operaciones" ahora puede usar todo Logística. (5) Cheques: estado normalizado a "en_cartera" (con subrayado) en backend, frontend y base de datos — antes había 2 versiones que rompían filtros. (6) Acreditar cheque desde CtaCte ahora llama al endpoint específico que genera el BancoMovimiento correspondiente, antes el saldo del banco quedaba desfasado.' },
@@ -4852,6 +4855,7 @@ function clienteForm(id=null) {
         <div class="col-span-2"><label class="label">País</label>${catSelect('f-pais', 'País', it.pais||'Argentina', { placeholder:'— Elegir país —' })}</div>
         <div><label class="label">Provincia</label>${catSelect('f-prov', 'Provincia', it.provincia||'', { placeholder:'— Elegir provincia —', parent: it.pais||'Argentina', parentSelect:'f-pais' })}</div>
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -4870,6 +4874,7 @@ async function clienteSave(id) {
     localidad: $('#f-loc').value || null,
     provincia: $('#f-prov').value || null,
     pais: $('#f-pais')?.value || null,
+    observaciones: $('#f-obs')?.value.trim() || null,
   };
   if (!data.razonSocial) return toast('Razón social requerida','warn');
   try {
@@ -4978,7 +4983,9 @@ function provForm(id=null) {
     body: `
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2"><label class="label">Razón social *</label><input id="f-rs" class="input" value="${esc(it.razonSocial||'')}" /></div>
+        <div><label class="label">Nombre fantasía</label><input id="f-nf" class="input" value="${esc(it.nombreFantasia||'')}" /></div>
         <div><label class="label">CUIT</label><input id="f-cuit" class="input" value="${esc(it.cuit||'')}" /></div>
+        <div><label class="label">Condición IVA</label>${catSelect('f-iva', 'Condición IVA', it.condIVA||'', { placeholder:'— Elegir —' })}</div>
         <div><label class="label">Rubro</label><input id="f-rub" class="input" value="${esc(it.rubro||'')}" /></div>
         <div><label class="label">Email</label><input id="f-em" class="input" value="${esc(it.email||'')}" /></div>
         <div><label class="label">Teléfono</label><input id="f-tel" class="input" value="${esc(it.telefono||'')}" /></div>
@@ -4986,6 +4993,7 @@ function provForm(id=null) {
         <div class="col-span-2"><label class="label">País</label>${catSelect('f-pais', 'País', it.pais||'Argentina', { placeholder:'— Elegir país —' })}</div>
         <div><label class="label">Provincia</label>${catSelect('f-prov', 'Provincia', it.provincia||'', { placeholder:'— Elegir provincia —', parent: it.pais||'Argentina', parentSelect:'f-pais' })}</div>
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='provSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
@@ -4994,12 +5002,15 @@ function provForm(id=null) {
 async function provSave(id) {
   const data = {
     razonSocial: $('#f-rs').value.trim(),
+    nombreFantasia: $('#f-nf')?.value.trim()||null,
     cuit: $('#f-cuit').value.trim()||null, rubro: $('#f-rub').value.trim()||null,
+    condIVA: $('#f-iva')?.value||null,
     email: $('#f-em').value.trim()||null, telefono: $('#f-tel').value.trim()||null,
     direccion: $('#f-dir').value.trim()||null,
     localidad: $('#f-loc')?.value||null,
     provincia: $('#f-prov')?.value||null,
     pais: $('#f-pais')?.value||null,
+    observaciones: $('#f-obs')?.value.trim()||null,
   };
   if (!data.razonSocial) return toast('Razón social requerida','warn');
   try { await api('/api/proveedores'+(id?'/'+id:''), { method: id?'PUT':'POST', body: JSON.stringify(data) });
@@ -16168,8 +16179,8 @@ async function depoSave(id) {
     direccion: $('#dp-dir').value.trim()||null,
     localidad: $('#dp-loc').value.trim()||null,
     provincia: $('#dp-prov').value.trim()||null,
-    costoEstadiaMes: Number($('#dp-est').value)||null,
-    costoSecadaTn: Number($('#dp-sec').value)||null,
+    costoEstadiaMes: $('#dp-est').value === '' ? null : Number($('#dp-est').value),
+    costoSecadaTn:   $('#dp-sec').value === '' ? null : Number($('#dp-sec').value),
     observaciones: $('#dp-obs').value.trim()||null,
     compartido: $('#dp-comp')?.checked || false,
   };
