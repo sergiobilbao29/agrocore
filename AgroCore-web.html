@@ -963,6 +963,9 @@ const MODULES = [
 
   // ===== LOGÍSTICA =====
   { id:'viajes',        label:'Viajes y fletes',      icon:'🚚', perm:'produccion:read', section:'Logística' },
+  { id:'transportistas',label:'Transportistas',       icon:'🚛', perm:'viajes:read',     section:'Logística' },
+  { id:'choferes',      label:'Choferes',             icon:'👤', perm:'viajes:read',     section:'Logística' },
+  { id:'camiones',      label:'Camiones',             icon:'🚚', perm:'viajes:read',     section:'Logística' },
 
   // ===== RRHH =====
   { id:'empleados',     label:'Empleados',            icon:'👷', perm:'finanzas:read',   section:'RRHH' },
@@ -2312,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Cambio', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'23/06/2026',
+      titulo:'🚛 Logística: Transportistas/Choferes/Camiones ahora son módulos propios (no catálogo)',
+      desc:'Reorganización GRANDE de la logística. Los Transportistas, Choferes y Camiones salieron del menú Catálogos y pasaron a ser <b>módulos propios en la sección Logística</b>, con sus propias páginas, datos completos y relaciones reales: (1) Un <b>Transportista</b> tiene <b>muchos Choferes</b> y <b>muchos Camiones</b>. (2) Un <b>Chofer</b> tiene un Transportista y un Camión asignado actualmente (puede cambiarlo). (3) Un <b>Camión</b> pertenece a un Transportista. En el form de Camión podés cargar marca/modelo/año/tipo/patente del acoplado. En el form de Chofer asignás transportista + camión que maneja. Al modificar la asignación, el sistema te deja persistir el cambio. Los datos viejos cargados en Catálogos hay que volver a cargarlos en los nuevos módulos (el catálogo plano no migra automático).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/06/2026',
       titulo:'⚖️ Viajes: pesaje + catálogo de Transportistas/Choferes/Camiones',
       desc:'(1) Panel ⚖️ <b>Pesaje del camión</b> con Tara/Bruto/Neto en origen y destino (Neto = Bruto - Tara automático, sincroniza con Kg carga/descarga). (2) Los campos <b>Transportista</b>, <b>Chofer</b> y <b>Patente</b> son <b>buscadores con autocompletado</b>: tipeás y elegís uno guardado; el sistema autocompleta CUIT, patente del acoplado y tipo de camión. Botón 💾 al lado de cada uno para guardarlo en el catálogo. (3) Tres tabs nuevos en Catálogos: 🚛 Transportistas, 👤 Choferes, 🚚 Camiones. (4) Botón 🚚 <b>Probar WSCPE</b> en Configuración → ARCA.' },
@@ -13788,9 +13794,6 @@ const CAT_TABS = [
   { id:'condIVA',  label:'Condición IVA',       icon:'🧾', tipos:['Condición IVA'],      singular:'Condición' },
   { id:'bancos',   label:'Bancos',              icon:'🏦', tipos:['Banco'],              singular:'Banco' },
   { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', tipos:['Caja'],               singular:'Caja' },
-  { id:'transps',  label:'Transportistas',       icon:'🚛', tipos:['Transportista'],      singular:'Transportista' },
-  { id:'choferes', label:'Choferes',             icon:'👤', tipos:['Chofer'],             singular:'Chofer' },
-  { id:'camiones', label:'Camiones',             icon:'🚚', tipos:['Camion'],             singular:'Camión' },
   { id:'condPago', label:'Condiciones de pago', icon:'📅', tipos:['Condición de pago'],  singular:'Condición de pago' },
   { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
   { id:'paises',   label:'Países',              icon:'🌎', tipos:['País'],               singular:'País' },
@@ -16458,6 +16461,363 @@ window.addEventListener('DOMContentLoaded', () => {
     logout(true);
   });
 });
+
+// ============================================================
+// LOGÍSTICA — Transportistas, Choferes, Camiones (v0.8.2)
+// ============================================================
+async function logiPreload() {
+  try {
+    const [t, c, m] = await Promise.all([
+      api('/api/transportistas').catch(()=>({data:[]})),
+      api('/api/choferes').catch(()=>({data:[]})),
+      api('/api/camiones').catch(()=>({data:[]})),
+    ]);
+    state.cache.transportistas = t.data || [];
+    state.cache.choferes = c.data || [];
+    state.cache.camiones = m.data || [];
+  } catch {}
+}
+
+// ---------- TRANSPORTISTAS ----------
+pages.transportistas = async function() {
+  setHeader('Transportistas', 'Empresas de transporte que mueven tu cereal');
+  if (!can('viajes:read')) { $('#page-body').innerHTML = stubPage('transportistas','Transportistas'); return; }
+  $('#page-body').innerHTML = '<div class="text-slate-500 text-sm">Cargando…</div>';
+  await logiPreload();
+  const data = state.cache.transportistas || [];
+  $('#page-body').innerHTML = `
+    <div class="flex justify-between items-center mb-3">
+      <div class="text-sm text-slate-500">${data.length} transportista${data.length===1?'':'s'} cargado${data.length===1?'':'s'}</div>
+      ${can('viajes:create')?`<button class="btn btn-primary" onclick="transpForm()">+ Nuevo transportista</button>`:''}
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+          <tr><th class="text-left p-2">Nombre</th><th class="text-left p-2">CUIT</th><th class="text-left p-2">Teléfono</th><th class="text-center p-2">Choferes</th><th class="text-center p-2">Camiones</th><th class="text-center p-2">Viajes</th><th></th></tr>
+        </thead>
+        <tbody>${data.length===0?`<tr><td colspan="7" class="text-center text-slate-500 p-4">No hay transportistas. Hacé clic en + Nuevo transportista para empezar.</td></tr>`:data.map(t=>`
+          <tr class="border-t border-slate-100 hover:bg-slate-50">
+            <td class="p-2 font-medium">${esc(t.nombre)}</td>
+            <td class="p-2 text-slate-600">${esc(t.cuit||'—')}</td>
+            <td class="p-2 text-slate-600">${esc(t.telefono||'—')}</td>
+            <td class="p-2 text-center">${t._count?.choferes||0}</td>
+            <td class="p-2 text-center">${t._count?.camiones||0}</td>
+            <td class="p-2 text-center">${t._count?.viajes||0}</td>
+            <td class="p-2 text-right whitespace-nowrap">
+              ${can('viajes:update')?`<button class="btn btn-ghost text-xs" onclick="transpForm('${t.id}')">✏️</button>`:''}
+              ${can('viajes:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick="transpDel('${t.id}')">🗑️</button>`:''}
+            </td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+};
+async function transpForm(id) {
+  await logiPreload();
+  const t = id ? (state.cache.transportistas||[]).find(x=>x.id===id) || {} : {};
+  openModal({
+    title: id?'✏️ Editar transportista':'➕ Nuevo transportista',
+    body: `
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Nombre / Razón social *</label><input id="tr-nom" class="input" value="${esc(t.nombre||'')}"/></div>
+        <div><label class="label">CUIT</label><input id="tr-cuit" class="input" value="${esc(t.cuit||'')}"/></div>
+        <div><label class="label">Teléfono</label><input id="tr-tel" class="input" value="${esc(t.telefono||'')}"/></div>
+        <div class="col-span-2"><label class="label">Email</label><input id="tr-mail" class="input" value="${esc(t.email||'')}"/></div>
+        <div class="col-span-2"><label class="label">Dirección</label><input id="tr-dir" class="input" value="${esc(t.direccion||'')}"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="tr-obs" class="input" rows="2">${esc(t.observaciones||'')}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="transpSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
+  });
+}
+async function transpSave(id) {
+  const data = {
+    nombre: $('#tr-nom').value.trim(),
+    cuit: $('#tr-cuit').value.trim()||null,
+    telefono: $('#tr-tel').value.trim()||null,
+    email: $('#tr-mail').value.trim()||null,
+    direccion: $('#tr-dir').value.trim()||null,
+    observaciones: $('#tr-obs').value.trim()||null,
+  };
+  if (!data.nombre) return toast('Nombre requerido','warn');
+  try {
+    if (id) await api('/api/transportistas/'+id,{method:'PUT',body:JSON.stringify(data)});
+    else    await api('/api/transportistas',{method:'POST',body:JSON.stringify(data)});
+    toast('Guardado','success'); closeModal();
+    delete state.cache.transportistas;
+    pages.transportistas();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function transpDel(id) {
+  if (!confirm('¿Eliminar este transportista? Los choferes y camiones asignados quedarán sin transportista.')) return;
+  try { await api('/api/transportistas/'+id,{method:'DELETE'}); toast('Eliminado','success'); delete state.cache.transportistas; pages.transportistas(); }
+  catch (e) { toast(e.message,'error'); }
+}
+
+// ---------- CAMIONES ----------
+pages.camiones = async function() {
+  setHeader('Camiones', 'Flota de camiones disponibles');
+  if (!can('viajes:read')) { $('#page-body').innerHTML = stubPage('camiones','Camiones'); return; }
+  $('#page-body').innerHTML = '<div class="text-slate-500 text-sm">Cargando…</div>';
+  await logiPreload();
+  const data = state.cache.camiones || [];
+  $('#page-body').innerHTML = `
+    <div class="flex justify-between items-center mb-3">
+      <div class="text-sm text-slate-500">${data.length} camión/es</div>
+      ${can('viajes:create')?`<button class="btn btn-primary" onclick="camForm()">+ Nuevo camión</button>`:''}
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+          <tr><th class="text-left p-2">Patente</th><th class="text-left p-2">Acoplado</th><th class="text-left p-2">Tipo</th><th class="text-left p-2">Marca/Modelo</th><th class="text-left p-2">Transportista</th><th class="text-center p-2">Viajes</th><th></th></tr>
+        </thead>
+        <tbody>${data.length===0?`<tr><td colspan="7" class="text-center text-slate-500 p-4">No hay camiones cargados.</td></tr>`:data.map(c=>`
+          <tr class="border-t border-slate-100 hover:bg-slate-50">
+            <td class="p-2 font-mono font-semibold">${esc(c.patente)}</td>
+            <td class="p-2 font-mono text-slate-600">${esc(c.patenteAcoplado||'—')}</td>
+            <td class="p-2">${esc(c.tipo||'—')}</td>
+            <td class="p-2 text-slate-600">${esc([c.marca,c.modelo,c.anio].filter(Boolean).join(' '))||'—'}</td>
+            <td class="p-2 text-slate-600">${esc(c.transportista?.nombre||'—')}</td>
+            <td class="p-2 text-center">${c._count?.viajes||0}</td>
+            <td class="p-2 text-right whitespace-nowrap">
+              ${can('viajes:update')?`<button class="btn btn-ghost text-xs" onclick="camForm('${c.id}')">✏️</button>`:''}
+              ${can('viajes:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick="camDel('${c.id}')">🗑️</button>`:''}
+            </td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+};
+async function camForm(id) {
+  await logiPreload();
+  const c = id ? (state.cache.camiones||[]).find(x=>x.id===id) || {} : {};
+  const transps = state.cache.transportistas || [];
+  openModal({
+    title: id?'✏️ Editar camión':'➕ Nuevo camión',
+    body: `
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Patente *</label><input id="cm-pat" class="input" value="${esc(c.patente||'')}" style="text-transform:uppercase"/></div>
+        <div><label class="label">Patente acoplado</label><input id="cm-pata" class="input" value="${esc(c.patenteAcoplado||'')}" style="text-transform:uppercase"/></div>
+        <div><label class="label">Tipo</label>
+          <input id="cm-tipo" list="cm-tipo-list" class="input" value="${esc(c.tipo||'')}" placeholder="Semi / Bitren / Chasis..."/>
+          <datalist id="cm-tipo-list"><option>Semi</option><option>Bitren</option><option>Chasis</option><option>Tolva</option><option>Jaula</option></datalist>
+        </div>
+        <div><label class="label">Año</label><input id="cm-anio" type="number" class="input" value="${c.anio||''}"/></div>
+        <div><label class="label">Marca</label><input id="cm-marca" class="input" value="${esc(c.marca||'')}"/></div>
+        <div><label class="label">Modelo</label><input id="cm-modelo" class="input" value="${esc(c.modelo||'')}"/></div>
+        <div class="col-span-2"><label class="label">Transportista</label>
+          <select id="cm-tr" class="input">
+            <option value="">— sin asignar —</option>
+            ${transps.map(t=>`<option value="${t.id}" ${c.transportistaId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="cm-obs" class="input" rows="2">${esc(c.observaciones||'')}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="camSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
+  });
+}
+async function camSave(id) {
+  const data = {
+    patente: $('#cm-pat').value.trim().toUpperCase(),
+    patenteAcoplado: $('#cm-pata').value.trim().toUpperCase()||null,
+    tipo: $('#cm-tipo').value.trim()||null,
+    marca: $('#cm-marca').value.trim()||null,
+    modelo: $('#cm-modelo').value.trim()||null,
+    anio: $('#cm-anio').value?Number($('#cm-anio').value):null,
+    transportistaId: $('#cm-tr').value||null,
+    observaciones: $('#cm-obs').value.trim()||null,
+  };
+  if (!data.patente) return toast('Patente requerida','warn');
+  try {
+    if (id) await api('/api/camiones/'+id,{method:'PUT',body:JSON.stringify(data)});
+    else    await api('/api/camiones',{method:'POST',body:JSON.stringify(data)});
+    toast('Guardado','success'); closeModal();
+    delete state.cache.camiones;
+    pages.camiones();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function camDel(id) {
+  if (!confirm('¿Eliminar este camión?')) return;
+  try { await api('/api/camiones/'+id,{method:'DELETE'}); toast('Eliminado','success'); delete state.cache.camiones; pages.camiones(); }
+  catch (e) { toast(e.message,'error'); }
+}
+
+// ---------- CHOFERES ----------
+pages.choferes = async function() {
+  setHeader('Choferes', 'Choferes con su transportista y camión asignado');
+  if (!can('viajes:read')) { $('#page-body').innerHTML = stubPage('choferes','Choferes'); return; }
+  $('#page-body').innerHTML = '<div class="text-slate-500 text-sm">Cargando…</div>';
+  await logiPreload();
+  const data = state.cache.choferes || [];
+  $('#page-body').innerHTML = `
+    <div class="flex justify-between items-center mb-3">
+      <div class="text-sm text-slate-500">${data.length} chofer/es</div>
+      ${can('viajes:create')?`<button class="btn btn-primary" onclick="choForm()">+ Nuevo chofer</button>`:''}
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+          <tr><th class="text-left p-2">Nombre</th><th class="text-left p-2">CUIT</th><th class="text-left p-2">Teléfono</th><th class="text-left p-2">Transportista</th><th class="text-left p-2">Camión actual</th><th class="text-center p-2">Viajes</th><th></th></tr>
+        </thead>
+        <tbody>${data.length===0?`<tr><td colspan="7" class="text-center text-slate-500 p-4">No hay choferes cargados.</td></tr>`:data.map(c=>`
+          <tr class="border-t border-slate-100 hover:bg-slate-50">
+            <td class="p-2 font-medium">${esc(c.nombre)}</td>
+            <td class="p-2 text-slate-600">${esc(c.cuit||'—')}</td>
+            <td class="p-2 text-slate-600">${esc(c.telefono||'—')}</td>
+            <td class="p-2 text-slate-600">${esc(c.transportista?.nombre||'—')}</td>
+            <td class="p-2 text-slate-600">${c.camion?`<span class="font-mono font-semibold">${esc(c.camion.patente)}</span>${c.camion.tipo?` <span class="text-xs text-slate-400">${esc(c.camion.tipo)}</span>`:''}`:'—'}</td>
+            <td class="p-2 text-center">${c._count?.viajes||0}</td>
+            <td class="p-2 text-right whitespace-nowrap">
+              ${can('viajes:update')?`<button class="btn btn-ghost text-xs" onclick="choForm('${c.id}')">✏️</button>`:''}
+              ${can('viajes:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick="choDel('${c.id}')">🗑️</button>`:''}
+            </td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+};
+async function choForm(id) {
+  await logiPreload();
+  const c = id ? (state.cache.choferes||[]).find(x=>x.id===id) || {} : {};
+  const transps = state.cache.transportistas || [];
+  const camiones = state.cache.camiones || [];
+  // Si hay transportista seleccionado, filtramos camiones a los suyos. Por ahora mostramos todos pero ordenados.
+  const camsOrdenados = [...camiones].sort((a,b)=>{
+    if (c.transportistaId) {
+      if (a.transportistaId===c.transportistaId && b.transportistaId!==c.transportistaId) return -1;
+      if (b.transportistaId===c.transportistaId && a.transportistaId!==c.transportistaId) return 1;
+    }
+    return (a.patente||'').localeCompare(b.patente||'');
+  });
+  openModal({
+    title: id?'✏️ Editar chofer':'➕ Nuevo chofer',
+    body: `
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Nombre completo *</label><input id="ch-nom" class="input" value="${esc(c.nombre||'')}"/></div>
+        <div><label class="label">CUIT</label><input id="ch-cuit" class="input" value="${esc(c.cuit||'')}"/></div>
+        <div><label class="label">Licencia</label><input id="ch-lic" class="input" value="${esc(c.licencia||'')}"/></div>
+        <div class="col-span-2"><label class="label">Teléfono</label><input id="ch-tel" class="input" value="${esc(c.telefono||'')}"/></div>
+        <div><label class="label">Transportista</label>
+          <select id="ch-tr" class="input" onchange="choTranspChange()">
+            <option value="">— sin asignar —</option>
+            ${transps.map(t=>`<option value="${t.id}" ${c.transportistaId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}
+          </select>
+        </div>
+        <div><label class="label">Camión asignado</label>
+          <select id="ch-cam" class="input">
+            <option value="">— sin asignar —</option>
+            ${camsOrdenados.map(cam=>`<option value="${cam.id}" data-tr="${esc(cam.transportistaId||'')}" ${c.camionId===cam.id?'selected':''}>${esc(cam.patente)}${cam.tipo?` (${esc(cam.tipo)})`:''}${cam.transportista?` · ${esc(cam.transportista.nombre)}`:''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ch-obs" class="input" rows="2">${esc(c.observaciones||'')}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="choSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
+  });
+}
+function choTranspChange() {
+  // Reordena los camiones del select para poner primero los del transportista elegido
+  const trId = $('#ch-tr').value;
+  const sel = $('#ch-cam');
+  if (!sel) return;
+  const opts = Array.from(sel.options).slice(1);
+  opts.sort((a,b)=>{
+    const aMatch = a.dataset.tr === trId ? 0 : 1;
+    const bMatch = b.dataset.tr === trId ? 0 : 1;
+    return aMatch - bMatch;
+  });
+  // Reinjectar
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— sin asignar —</option>' + opts.map(o => o.outerHTML).join('');
+  sel.value = cur;
+}
+async function choSave(id) {
+  const data = {
+    nombre: $('#ch-nom').value.trim(),
+    cuit: $('#ch-cuit').value.trim()||null,
+    licencia: $('#ch-lic').value.trim()||null,
+    telefono: $('#ch-tel').value.trim()||null,
+    transportistaId: $('#ch-tr').value||null,
+    camionId: $('#ch-cam').value||null,
+    observaciones: $('#ch-obs').value.trim()||null,
+  };
+  if (!data.nombre) return toast('Nombre requerido','warn');
+  try {
+    if (id) await api('/api/choferes/'+id,{method:'PUT',body:JSON.stringify(data)});
+    else    await api('/api/choferes',{method:'POST',body:JSON.stringify(data)});
+    toast('Guardado','success'); closeModal();
+    delete state.cache.choferes;
+    pages.choferes();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function choDel(id) {
+  if (!confirm('¿Eliminar este chofer?')) return;
+  try { await api('/api/choferes/'+id,{method:'DELETE'}); toast('Eliminado','success'); delete state.cache.choferes; pages.choferes(); }
+  catch (e) { toast(e.message,'error'); }
+}
+
+// ============================================================
+// Form Viaje — selects encadenados (Transportista → Chofer → Camión)
+// ============================================================
+async function viajeSelectsEncadenados() {
+  await logiPreload();
+}
+// Cuando se selecciona un transportista en el viaje, filtramos choferes/camiones
+function viajeOnTranspChange() {
+  const trId = $('#v-trans')?.value || '';
+  const transps = state.cache.transportistas || [];
+  const choferes = state.cache.choferes || [];
+  const camiones = state.cache.camiones || [];
+  const t = transps.find(x => x.id === trId);
+  // Cargar choferes filtrados
+  const selCho = $('#v-chofer');
+  if (selCho) {
+    const lista = trId ? choferes.filter(c => c.transportistaId === trId) : choferes;
+    const cur = selCho.value;
+    selCho.innerHTML = '<option value="">— elegir chofer —</option>' + lista.map(c => `<option value="${c.id}" data-cuit="${esc(c.cuit||'')}" data-camion="${esc(c.camionId||'')}">${esc(c.nombre)}${c.camion?` 🚚 ${esc(c.camion.patente)}`:''}</option>`).join('');
+    selCho.value = (lista.find(x=>x.id===cur))?cur:'';
+  }
+  // Cargar camiones filtrados
+  const selCam = $('#v-camion');
+  if (selCam) {
+    const lista = trId ? camiones.filter(c => c.transportistaId === trId) : camiones;
+    const cur = selCam.value;
+    selCam.innerHTML = '<option value="">— elegir camión —</option>' + lista.map(c => `<option value="${c.id}" data-pat="${esc(c.patente)}" data-pata="${esc(c.patenteAcoplado||'')}" data-tipo="${esc(c.tipo||'')}">${esc(c.patente)}${c.patenteAcoplado?` + ${esc(c.patenteAcoplado)}`:''}${c.tipo?` · ${esc(c.tipo)}`:''}</option>`).join('');
+    selCam.value = (lista.find(x=>x.id===cur))?cur:'';
+  }
+  // Autocompletar nombre + cuit transportista
+  if (t) {
+    const nomInp = $('#v-trans-nom'); if (nomInp) nomInp.value = t.nombre || '';
+    const cuitInp = $('#v-trans-cuit'); if (cuitInp) cuitInp.value = t.cuit || '';
+  }
+}
+// Cuando se selecciona un chofer, traemos su camión asignado y autocompletamos
+function viajeOnChoferChange() {
+  const chId = $('#v-chofer')?.value || '';
+  if (!chId) return;
+  const choferes = state.cache.choferes || [];
+  const camiones = state.cache.camiones || [];
+  const c = choferes.find(x => x.id === chId);
+  if (!c) return;
+  const nomInp = $('#v-chofer-nom'); if (nomInp) nomInp.value = c.nombre || '';
+  const cuitInp = $('#v-chofer-cuit'); if (cuitInp) cuitInp.value = c.cuit || '';
+  if (c.camionId) {
+    const selCam = $('#v-camion');
+    if (selCam) selCam.value = c.camionId;
+    const cam = camiones.find(x => x.id === c.camionId);
+    if (cam) {
+      const pInp = $('#v-cam-pat'); if (pInp) pInp.value = cam.patente || '';
+      const paInp = $('#v-cam-pata'); if (paInp) paInp.value = cam.patenteAcoplado || '';
+      const tInp = $('#v-cam-tipo'); if (tInp) tInp.value = cam.tipo || '';
+    }
+  }
+}
+function viajeOnCamionChange() {
+  const opt = $('#v-camion')?.selectedOptions?.[0];
+  if (!opt) return;
+  const pInp = $('#v-cam-pat'); if (pInp) pInp.value = opt.dataset.pat || '';
+  const paInp = $('#v-cam-pata'); if (paInp) paInp.value = opt.dataset.pata || '';
+  const tInp = $('#v-cam-tipo'); if (tInp) tInp.value = opt.dataset.tipo || '';
+}
+
 </script>
 </body>
 </html>

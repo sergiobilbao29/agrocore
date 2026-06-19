@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.8.1';
+const AGROCORE_VERSION = '0.8.2';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2848,6 +2848,10 @@ const viajeSchema = z.object({
       kgTaraDest:  z.coerce.number().nullable().optional(),
       kgBrutoDest: z.coerce.number().nullable().optional(),
       kgNetoDest:  z.coerce.number().nullable().optional(),
+    
+      transportistaId: z.string().nullable().optional(),
+      choferId:        z.string().nullable().optional(),
+      camionId:        z.string().nullable().optional(),
     });
 
 // Deriva el estado del viaje a partir de sus datos. "pagado" es sticky (manual o
@@ -7940,6 +7944,150 @@ app.post('/api/viajes/:id/cpe/anular', authMiddleware, requireCompany, requirePe
       cpeMotivoAnulacion: motivo,
     }});
     res.json({ ok: true, data: final, info: r });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// LOGÍSTICA — Transportistas, Choferes, Camiones (v0.8.2)
+// ============================================================
+const transportistaSchema = z.object({
+  nombre: z.string().min(1),
+  cuit: z.string().nullable().optional(),
+  telefono: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  direccion: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+  activo: z.boolean().optional(),
+});
+const camionSchema = z.object({
+  patente: z.string().min(1),
+  patenteAcoplado: z.string().nullable().optional(),
+  tipo: z.string().nullable().optional(),
+  marca: z.string().nullable().optional(),
+  modelo: z.string().nullable().optional(),
+  anio: z.coerce.number().int().nullable().optional(),
+  transportistaId: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+  activo: z.boolean().optional(),
+});
+const choferSchema = z.object({
+  nombre: z.string().min(1),
+  cuit: z.string().nullable().optional(),
+  licencia: z.string().nullable().optional(),
+  telefono: z.string().nullable().optional(),
+  transportistaId: z.string().nullable().optional(),
+  camionId: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+  activo: z.boolean().optional(),
+});
+
+// === Transportistas ===
+app.get('/api/transportistas', requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+  try {
+    const data = await prisma.transportista.findMany({
+      where: { companyId: req.companyId },
+      orderBy: { nombre: 'asc' },
+      include: { _count: { select: { choferes: true, camiones: true, viajes: true } } },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/transportistas', requireCompany, requirePermission('viajes:create'), async (req, res, next) => {
+  try {
+    const input = transportistaSchema.parse(req.body);
+    const r = await prisma.transportista.create({ data: { ...input, companyId: req.companyId } });
+    res.status(201).json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.put('/api/transportistas/:id', requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.transportista.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const input = transportistaSchema.partial().parse(req.body);
+    const r = await prisma.transportista.update({ where: { id: req.params.id }, data: input });
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.delete('/api/transportistas/:id', requireCompany, requirePermission('viajes:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.transportista.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.transportista.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// === Camiones ===
+app.get('/api/camiones', requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.transportistaId) where.transportistaId = String(req.query.transportistaId);
+    const data = await prisma.camion.findMany({
+      where, orderBy: { patente: 'asc' },
+      include: { transportista: true, _count: { select: { choferes: true, viajes: true } } },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/camiones', requireCompany, requirePermission('viajes:create'), async (req, res, next) => {
+  try {
+    const input = camionSchema.parse(req.body);
+    const r = await prisma.camion.create({ data: { ...input, companyId: req.companyId } });
+    res.status(201).json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.put('/api/camiones/:id', requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.camion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const input = camionSchema.partial().parse(req.body);
+    const r = await prisma.camion.update({ where: { id: req.params.id }, data: input });
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.delete('/api/camiones/:id', requireCompany, requirePermission('viajes:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.camion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.camion.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// === Choferes ===
+app.get('/api/choferes', requireCompany, requirePermission('viajes:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.transportistaId) where.transportistaId = String(req.query.transportistaId);
+    const data = await prisma.chofer.findMany({
+      where, orderBy: { nombre: 'asc' },
+      include: { transportista: true, camion: { include: { transportista: true } }, _count: { select: { viajes: true } } },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/choferes', requireCompany, requirePermission('viajes:create'), async (req, res, next) => {
+  try {
+    const input = choferSchema.parse(req.body);
+    const r = await prisma.chofer.create({ data: { ...input, companyId: req.companyId } });
+    res.status(201).json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.put('/api/choferes/:id', requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.chofer.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const input = choferSchema.partial().parse(req.body);
+    const r = await prisma.chofer.update({ where: { id: req.params.id }, data: input });
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.delete('/api/choferes/:id', requireCompany, requirePermission('viajes:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.chofer.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.chofer.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

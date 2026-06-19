@@ -72,6 +72,9 @@ model Company {
   bancoMovimientos BancoMovimiento[]
   recordatorios   Recordatorio[]
   recordatoriosOcultos RecordatorioOculto[]
+  transportistas  Transportista[]
+  choferes        Chofer[]
+  camiones        Camion[]
 }
 
 model User {
@@ -698,6 +701,10 @@ model Viaje {
   destinoTipo         String?    // "cerealera" | "venta_directa" | "otro" (NULL = no aplica)
   depositoDestinoId   String?    // si va a cerealera, depósito destino del cereal
   liquidacionCerealId String?    // si ya se cargó la liquidación de venta, su id
+  // ---- IDs relacionales (v0.8.2) ----
+  transportistaId String?
+  choferId        String?
+  camionId        String?
   // ---- Carta de Porte Electrónica (CPE / WSCPE de ARCA) ----
   cpeTipo            String?    // "automotor" | "ferroviaria"
   cpeNroCtg          String?    // nro CTG asignado por ARCA (12 dígitos)
@@ -722,6 +729,9 @@ model Viaje {
   company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   facturaCompra   FacturaCompra?  @relation(fields: [facturaCompraId], references: [id])
   depositoDestino Deposito?       @relation(fields: [depositoDestinoId], references: [id])
+  transportistaRel Transportista? @relation(fields: [transportistaId], references: [id])
+  choferRel        Chofer?        @relation(fields: [choferId], references: [id])
+  camionRel        Camion?        @relation(fields: [camionId], references: [id])
 
   @@index([companyId])
   @@index([fecha])
@@ -730,6 +740,9 @@ model Viaje {
   @@index([depositoDestinoId])
   @@index([cpeNroCtg])
   @@index([cpeEstado])
+  @@index([transportistaId])
+  @@index([choferId])
+  @@index([camionId])
 }
 
 // ============================================================
@@ -1179,4 +1192,85 @@ model RecordatorioOculto {
 
   @@unique([companyId, refTipo, refId])
   @@index([companyId])
+}
+
+
+// ============================================================
+// LOGÍSTICA — Transportistas, Choferes, Camiones (v0.8.2)
+// ============================================================
+// Relaciones:
+//   Transportista 1:N Chofer  (un transporte tiene varios choferes)
+//   Transportista 1:N Camion  (un transporte tiene varios camiones)
+//   Chofer N:1 Camion         (asignación actual — un chofer maneja un camión,
+//                              puede cambiar; se conserva por camionId en Chofer)
+// Todos los campos opcionales para no bloquear el alta rápida.
+model Transportista {
+  id            String   @id @default(cuid())
+  companyId     String
+  nombre        String
+  cuit          String?
+  telefono      String?
+  email         String?
+  direccion     String?
+  observaciones String?
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company  Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  choferes Chofer[]
+  camiones Camion[]
+  viajes   Viaje[]
+
+  @@index([companyId])
+  @@index([nombre])
+}
+
+model Camion {
+  id              String   @id @default(cuid())
+  companyId       String
+  patente         String
+  patenteAcoplado String?
+  tipo            String?    // chasis, semi, bitren, tolva, jaula, etc.
+  marca           String?
+  modelo          String?
+  anio            Int?
+  transportistaId String?
+  observaciones   String?
+  activo          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  transportista Transportista? @relation(fields: [transportistaId], references: [id], onDelete: SetNull)
+  choferes      Chofer[]
+  viajes        Viaje[]
+
+  @@index([companyId])
+  @@index([transportistaId])
+  @@index([patente])
+}
+
+model Chofer {
+  id              String   @id @default(cuid())
+  companyId       String
+  nombre          String
+  cuit            String?
+  licencia        String?
+  telefono        String?
+  transportistaId String?
+  camionId        String?    // camión que maneja ACTUALMENTE
+  observaciones   String?
+  activo          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  transportista Transportista? @relation(fields: [transportistaId], references: [id], onDelete: SetNull)
+  camion        Camion?        @relation(fields: [camionId], references: [id], onDelete: SetNull)
+  viajes        Viaje[]
+
+  @@index([companyId])
+  @@index([transportistaId])
+  @@index([camionId])
 }
