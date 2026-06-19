@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'23/06/2026',
+      titulo:'🛠️ Fix botón ver detalle CPE + ahora podés Modificar o Eliminar la CPE',
+      desc:'(1) Bug fix: el botón 📋 ver detalle de la CPE en el listado de viajes no respondía por un problema con JSON.stringify dentro del onclick (igual que tuvimos en otros lados). Solucionado. (2) En el modal de detalle CPE se sumaron 2 acciones: <b>✏️ Modificar</b> abre un form para corregir los CUITs (origen/destinatario/recibidor/corredor/intermediario), RENSPA y observaciones — útil cuando cargaste mal un dato y querés actualizarlo en tu registro de AgroCore. Importante: estos cambios NO se propagan a ARCA si la CPE ya fue emitida (para corregir en ARCA hay que anular y emitir de nuevo). (3) <b>🗑️ Eliminar registro</b> limpia los campos CPE del viaje en AgroCore — útil para CPEs simuladas (mock) que ya no necesitás, o si ya anulaste por afuera y querés que el viaje quede como si nunca hubiera tenido CPE. NO toca ARCA — para anular en ARCA usá el botón 🚫 Anular.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'23/06/2026',
       titulo:'📄 CPE imprimible con formato oficial ARCA + Mail + WhatsApp',
       desc:'Cuando emitís una CPE desde un viaje, ahora se abre automáticamente un <b>documento con formato oficial ARCA</b> (encabezado con CTG en grande, datos del titular / origen / destino / transportista / chofer / camión / carga, tara/bruto/neto, observaciones, firma y CTG verificable). Desde ese documento o desde el modal "📋 Detalle CPE" tenés 5 botones: <b>📄 Ver documento</b>, <b>🖨️ Imprimir</b>, <b>📥 PDF</b> (usa "Guardar como PDF" del navegador), <b>✉️ Mail</b> (abre tu cliente de mail con asunto/cuerpo pre-cargados) y <b>💬 WhatsApp</b> (abre WhatsApp Web con el resumen de la CPE listo para mandar al chofer o al destinatario). Funciona igual para CPEs simuladas que para reales — las simuladas tienen un sello "⚠️ SIMULADA — TEST" en la cabecera para no confundir.' },
@@ -12124,17 +12127,18 @@ async function viajeFacturarYPagarConfirmar() {
 // ============================================================
 // Render del botón CPE según el estado del viaje
 function cpeBotonViaje(v) {
+  const id = v.id;
   if (v.cpeNroCtg && v.cpeEstado === 'emitida') {
-    return `<button class="btn btn-ghost text-xs text-emerald-700" title="CPE emitida (CTG ${esc(v.cpeNroCtg)}) — ver detalle" onclick='cpeDetalle(${JSON.stringify(v.id)})'>📋</button>`;
+    return `<button class="btn btn-ghost text-xs text-emerald-700" title="CPE emitida (CTG ${esc(v.cpeNroCtg)}) — ver detalle" onclick="cpeDetalle('${id}')">📋</button>`;
   }
   if (v.cpeNroCtg && v.cpeEstado === 'confirmada') {
-    return `<button class="btn btn-ghost text-xs text-blue-700" title="CPE confirmada (arribo)" onclick='cpeDetalle(${JSON.stringify(v.id)})'>✅</button>`;
+    return `<button class="btn btn-ghost text-xs text-blue-700" title="CPE confirmada (arribo)" onclick="cpeDetalle('${id}')">✅</button>`;
   }
   if (v.cpeNroCtg && v.cpeEstado === 'anulada') {
-    return `<button class="btn btn-ghost text-xs text-slate-400" title="CPE anulada — emitir una nueva" onclick='cpeEmitirForm(${JSON.stringify(v.id)})'>🔄</button>`;
+    return `<button class="btn btn-ghost text-xs text-slate-400" title="CPE anulada — emitir una nueva" onclick="cpeEmitirForm('${id}')">🔄</button>`;
   }
   // Sin CPE todavía
-  return `<button class="btn btn-ghost text-xs text-amber-700" title="Emitir Carta de Porte Electrónica en ARCA" onclick='cpeEmitirForm(${JSON.stringify(v.id)})'>🚚</button>`;
+  return `<button class="btn btn-ghost text-xs text-amber-700" title="Emitir Carta de Porte Electrónica en ARCA" onclick="cpeEmitirForm('${id}')">🚚</button>`;
 }
 
 // ---- Modal: emitir CPE ----
@@ -12238,9 +12242,11 @@ async function cpeDetalle(viajeId) {
         <button class="btn btn-secondary" onclick="cpeEnviarMail('${viajeId}')">✉️ Mail</button>
         <button class="btn btn-secondary text-emerald-700" onclick="cpeEnviarWhatsApp('${viajeId}')">💬 WhatsApp</button>
         <div class="flex-1"></div>
+        <button class="btn btn-secondary text-xs" onclick="cpeModificarForm('${viajeId}')" title="Modificar CUITs / RENSPA / observaciones de la CPE">✏️ Modificar</button>
         <button class="btn btn-secondary text-xs" onclick="cpeConsultar('${viajeId}')">🔄 Consultar ARCA</button>
         ${puedeConfirmar?`<button class="btn btn-secondary text-xs" onclick="cpeConfirmarArriboForm('${viajeId}', ${v.cantidad||0})">📥 Arribo</button>`:''}
-        ${puedeAnular?`<button class="btn btn-secondary text-xs text-red-600" onclick="cpeAnularForm('${viajeId}')">🚫 Anular</button>`:''}
+        ${puedeAnular?`<button class="btn btn-secondary text-xs text-red-600" onclick="cpeAnularForm('${viajeId}')" title="Anular en ARCA">🚫 Anular en ARCA</button>`:''}
+        <button class="btn btn-secondary text-xs text-red-600" onclick="cpeEliminar('${viajeId}')" title="Eliminar el registro de la CPE en AgroCore (no toca ARCA)">🗑️ Eliminar registro</button>
         <button class="btn btn-secondary text-xs" onclick="closeModal()">Cerrar</button>
       </div>
     `
@@ -12531,6 +12537,71 @@ async function cpeEnviarWhatsApp(viajeId) {
     `_Generado con AgroCore_`
   );
   window.open(`https://wa.me/?text=${txt}`, '_blank');
+}
+
+async function cpeModificarForm(viajeId) {
+  let v;
+  try { const r = await api('/api/viajes/'+viajeId); v = r.data; }
+  catch (e) { return toast(e.message, 'error'); }
+  if (!v.cpeNroCtg) return toast('Este viaje no tiene CPE','warn');
+  openModal({
+    title: '✏️ Modificar datos de la CPE',
+    body: `
+      <div class="mb-3 p-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+        ⚠️ Estos cambios se guardan <b>solo en AgroCore</b>. Si la CPE ya está emitida en ARCA, las correcciones en CUITs/RENSPA no se propagan al WS — son sólo para tu registro. Si necesitás corregir algo en ARCA, primero anulá la CPE y emití una nueva.
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">CUIT origen</label><input id="cpem-orig-cuit" class="input" value="${esc(v.cpeOrigenCuit||'')}"/></div>
+        <div><label class="label">RENSPA origen</label><input id="cpem-orig-renspa" class="input" value="${esc(v.cpeOrigenRenspa||'')}"/></div>
+        <div><label class="label">CUIT destinatario</label><input id="cpem-dest-cuit" class="input" value="${esc(v.cpeDestinoCuit||'')}"/></div>
+        <div><label class="label">CUIT recibidor</label><input id="cpem-recib-cuit" class="input" value="${esc(v.cpeDestinatarioCuit||'')}"/></div>
+        <div><label class="label">CUIT corredor</label><input id="cpem-corr-cuit" class="input" value="${esc(v.cpeCorredorCuit||'')}"/></div>
+        <div><label class="label">CUIT intermediario</label><input id="cpem-inter-cuit" class="input" value="${esc(v.cpeIntermediarioCuit||'')}"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="cpem-obs" class="input" rows="2">${esc(v.cpeObservaciones||'')}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="cpeModificarSave('${viajeId}')">💾 Guardar cambios</button>`
+  });
+}
+async function cpeModificarSave(viajeId) {
+  const data = {
+    cpeOrigenCuit:        $('#cpem-orig-cuit').value.trim() || null,
+    cpeOrigenRenspa:      $('#cpem-orig-renspa').value.trim() || null,
+    cpeDestinoCuit:       $('#cpem-dest-cuit').value.trim() || null,
+    cpeDestinatarioCuit:  $('#cpem-recib-cuit').value.trim() || null,
+    cpeCorredorCuit:      $('#cpem-corr-cuit').value.trim() || null,
+    cpeIntermediarioCuit: $('#cpem-inter-cuit').value.trim() || null,
+    cpeObservaciones:     $('#cpem-obs').value.trim() || null,
+  };
+  try {
+    await api('/api/viajes/'+viajeId+'/cpe', { method:'PUT', body: JSON.stringify(data) });
+    toast('Datos actualizados','success'); closeModal();
+    delete state.cache.viajes; pages.viajes();
+    setTimeout(() => cpeDetalle(viajeId), 300);
+  } catch (e) { toast(e.message,'error'); }
+}
+
+async function cpeEliminar(viajeId) {
+  let v;
+  try { const r = await api('/api/viajes/'+viajeId); v = r.data; }
+  catch (e) { return toast(e.message, 'error'); }
+  if (!v.cpeNroCtg) return toast('Este viaje no tiene CPE','warn');
+  const ok = confirm(
+    `¿Eliminar el REGISTRO de esta CPE en AgroCore?\n\n` +
+    `CTG ${v.cpeNroCtg} · Estado: ${v.cpeEstado || '—'}\n\n` +
+    `IMPORTANTE: esta acción NO anula la CPE en ARCA. Si la CPE ya fue emitida y querés anularla en ARCA, primero usá el botón "🚫 Anular CPE".\n\n` +
+    `Esta opción es para casos donde:\n` +
+    `• La CPE simulada (mock) ya no la querés ver\n` +
+    `• Cargaste mal y necesitás empezar de cero\n` +
+    `• Ya anulaste afuera y querés limpiar el viaje\n\n` +
+    `¿Continuar?`
+  );
+  if (!ok) return;
+  try {
+    await api('/api/viajes/'+viajeId+'/cpe', { method:'DELETE' });
+    toast('Registro CPE eliminado','success'); closeModal();
+    delete state.cache.viajes; pages.viajes();
+  } catch (e) { toast(e.message,'error'); }
 }
 
 async function cpeConsultar(viajeId) {

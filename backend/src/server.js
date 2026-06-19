@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.8.3';
+const AGROCORE_VERSION = '0.8.4';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7858,6 +7858,35 @@ app.get('/api/arca/cpe/probar', authMiddleware, requireCompany, requirePermissio
       return res.json({ ok: true, modo, simulado: true, mensaje: 'Sin certificado cargado. En modo homologación las CPE se generan simuladas (mock). Configurá el certificado en Configuración → ARCA para usar el WS real.' });
     }
     res.json({ ok: true, modo, simulado: false, mensaje: 'Certificado presente. El sistema llamará al WSCPE real cuando emitas una CPE.' });
+  } catch (e) { next(e); }
+});
+
+// Modificar datos CPE de un viaje (sólo los campos del módulo CPE — no toca el CTG ni el estado)
+app.put('/api/viajes/:id/cpe', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+  try {
+    const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
+    const datos = req.body || {};
+    const ALLOW = ['cpeOrigenCuit','cpeOrigenRenspa','cpeDestinoCuit','cpeDestinatarioCuit','cpeCorredorCuit','cpeIntermediarioCuit','cpeObservaciones','cpeTipo'];
+    const update = {};
+    for (const k of ALLOW) if (datos[k] !== undefined) update[k] = datos[k] || null;
+    const r = await prisma.viaje.update({ where: { id: viaje.id }, data: update });
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+
+// Eliminar la CPE del viaje en AgroCore (NO la anula en ARCA — si querés anular usá /anular).
+// Limpia todos los campos cpe* dejando el viaje sin CPE asociada.
+app.delete('/api/viajes/:id/cpe', authMiddleware, requireCompany, requirePermission('viajes:update'), async (req, res, next) => {
+  try {
+    const viaje = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!viaje) return res.status(404).json({ ok: false, error: 'Viaje no encontrado' });
+    const r = await prisma.viaje.update({ where: { id: viaje.id }, data: {
+      cpeTipo: null, cpeNroCtg: null, cpeNroComprobante: null, cpeEstado: null,
+      cpeFechaEmision: null, cpeFechaArribo: null, cpeFechaAnulacion: null, cpeMotivoAnulacion: null,
+      cpePdfUrl: null, cpeRespuestaArca: null,
+    }});
+    res.json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
 
