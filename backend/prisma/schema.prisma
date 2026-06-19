@@ -158,6 +158,8 @@ model Campo {
   provincia       String?
   hectareas       Float    @default(0)
   propietario     String?
+  titularidad     String?   // "propio" | "arrendado" | "aparceria" | otro texto
+  ubicacion       String?   // referencia/dirección (ej. "Ruta 34 km 215")
   observaciones   String?
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
