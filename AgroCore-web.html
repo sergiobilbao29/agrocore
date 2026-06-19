@@ -2312,6 +2312,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'22/06/2026',
+      titulo:'📅 Agenda con vista CALENDARIO mensual + semanal + diaria',
+      desc:'La página Agenda ahora tiene 4 vistas: 📅 Mes (calendario clásico estilo Google Calendar, una celda por día con los chips de recordatorios), 📆 Semana (los 7 días de la semana lado a lado en cards), 📍 Día (el día seleccionado con todos sus recordatorios en detalle), 📋 Lista (la vista clásica anterior agrupada por mes). Botones < > para navegar entre meses/semanas/días y botón "Hoy" para volver al presente. Hacé clic en cualquier día vacío del calendario para crear un recordatorio con esa fecha pre-cargada. Hacé clic en un chip dentro del día para editar (o completar si es automático). Vista por defecto: Mes.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/06/2026',
       titulo:'🛠️ Hotfix: error de Prisma al crear producto en factura + dropdown ahora es buscador',
       desc:'Dos cosas en una versión: (1) Bug en el backend al crear un Producto al vuelo desde una factura — la columna unidad del schema es requerida pero le pasábamos null cuando el catálogo no traía unidad. Solucionado con default "unidad". Si ya te pasó, la factura no quedó guardada; reintentá ahora. (2) El selector del item de factura ya no es un <select> rígido sino un INPUT con sugerencias: escribí "glifo" y aparecen los 3 Glifosatos del catálogo, escribí "azu" y aparece Azufre, etc. Sigue ordenado por orden alfabético, mostrando primero los Productos con stock y luego los Insumos del catálogo agrupados por tipo (Herbicida, Fungicida, etc). Si escribís algo que no matchea ningún item, queda como texto libre como antes. El botón ➕ para crear producto sigue al lado del input.' },
@@ -14048,16 +14051,226 @@ function recoDiasTexto(dias) {
   return `En ${dias} días`;
 }
 function recoFiltroEstado(v) { state._recoEstado = v; pages.agenda(); }
+function recoVista(v) { state._recoVista = v; pages.agenda(); }
+function recoAvanzar(dias) {
+  const d = state._recoFecha ? new Date(state._recoFecha) : new Date();
+  d.setDate(d.getDate() + dias);
+  state._recoFecha = d.toISOString().slice(0,10);
+  pages.agenda();
+}
+function recoAvanzarMes(meses) {
+  const d = state._recoFecha ? new Date(state._recoFecha) : new Date();
+  d.setMonth(d.getMonth() + meses);
+  state._recoFecha = d.toISOString().slice(0,10);
+  pages.agenda();
+}
+function recoHoy() {
+  state._recoFecha = new Date().toISOString().slice(0,10);
+  pages.agenda();
+}
+function recoCrearEnFecha(yyyymmdd) {
+  // Pre-cargar el form con la fecha seleccionada
+  state._recoFechaPreCarga = yyyymmdd;
+  recoForm();
+}
 
 pages.agenda = async function() {
   setHeader('Agenda y recordatorios', 'Cargá fechas clave (vacunación, vencimiento de créditos, campañas) y recibí alertas en Inicio');
   if (!can('agenda:read')) { $('#page-body').innerHTML = stubPage('agenda','Agenda'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   const estado = state._recoEstado || 'pendiente';
+  const vista  = state._recoVista || 'mes';   // 'mes' | 'semana' | 'dia' | 'lista'
+  const refDate = state._recoFecha ? new Date(state._recoFecha) : new Date();
+  refDate.setHours(0,0,0,0);
   let recos = [];
   try { const r = await api('/api/recordatorios?estado='+estado); recos = r.data || []; }
   catch (e) { return toast(e.message,'error'); }
 
+  const today = new Date(); today.setHours(0,0,0,0);
+  const kpiVencidos = recos.filter(r => new Date(r.fecha) < today && !r.completado).length;
+  const kpiHoy = recos.filter(r => { const f=new Date(r.fecha); f.setHours(0,0,0,0); return f.getTime() === today.getTime() && !r.completado; }).length;
+  const kpiProx30 = recos.filter(r => { const f=new Date(r.fecha); const days = Math.round((f-today)/(86400000)); return days >= 0 && days <= 30 && !r.completado; }).length;
+
+  const autoCount = recos.filter(r => r.origen === 'auto').length;
+  // Render: la cabecera con KPIs, filtros, selector de vista y luego el cuerpo según vista
+  const tituloPeriodo = (() => {
+    if (vista === 'mes')    return refDate.toLocaleDateString('es-AR',{month:'long', year:'numeric'});
+    if (vista === 'semana') {
+      const inicio = new Date(refDate); inicio.setDate(inicio.getDate() - inicio.getDay()); // domingo
+      const fin = new Date(inicio); fin.setDate(fin.getDate() + 6);
+      return `${inicio.toLocaleDateString('es-AR',{day:'numeric',month:'short'})} – ${fin.toLocaleDateString('es-AR',{day:'numeric',month:'short',year:'numeric'})}`;
+    }
+    if (vista === 'dia')    return refDate.toLocaleDateString('es-AR',{weekday:'long', day:'numeric', month:'long', year:'numeric'});
+    return '';
+  })();
+  const pasoNombre = vista === 'mes' ? 'mes' : vista === 'semana' ? 'semana' : 'día';
+  $('#page-body').innerHTML = `
+    ${autoCount > 0 ? `
+      <div class="mb-3 bg-blue-50 border border-blue-200 rounded p-2 text-xs text-blue-800 flex items-center gap-2">
+        🔗 <span><b>${autoCount}</b> ${autoCount===1?'recordatorio fue cargado':'recordatorios fueron cargados'} automáticamente desde Créditos, Cheques y Cuentas Corrientes. Tienen badge <span class="px-1 rounded bg-blue-100 border border-blue-300">🔗 Auto</span>. Si no querés verlos, podés ocultarlos con 🗑️ (el registro original no se borra).</span>
+      </div>` : ''}
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+      <div class="kpi-card border-rose-200 bg-rose-50"><div class="kpi-label">🔴 Vencidos</div><div class="kpi-value text-rose-700">${kpiVencidos}</div></div>
+      <div class="kpi-card border-amber-200 bg-amber-50"><div class="kpi-label">⚠️ Para hoy</div><div class="kpi-value text-amber-700">${kpiHoy}</div></div>
+      <div class="kpi-card border-emerald-200 bg-emerald-50"><div class="kpi-label">📅 Próximos 30 días</div><div class="kpi-value text-emerald-700">${kpiProx30}</div></div>
+    </div>
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+      <div class="flex gap-1 flex-wrap">
+        <button class="btn btn-sm ${vista==='mes'?'btn-primary':'btn-secondary'}" onclick="recoVista('mes')">📅 Mes</button>
+        <button class="btn btn-sm ${vista==='semana'?'btn-primary':'btn-secondary'}" onclick="recoVista('semana')">📆 Semana</button>
+        <button class="btn btn-sm ${vista==='dia'?'btn-primary':'btn-secondary'}" onclick="recoVista('dia')">📍 Día</button>
+        <button class="btn btn-sm ${vista==='lista'?'btn-primary':'btn-secondary'}" onclick="recoVista('lista')">📋 Lista</button>
+      </div>
+      ${can('agenda:create')?`<button class="btn btn-primary" onclick="recoForm()">+ Nuevo recordatorio</button>`:''}
+    </div>
+    ${vista !== 'lista' ? `
+      <div class="flex items-center justify-between gap-2 mb-3 bg-white border border-slate-200 rounded-lg p-2">
+        <button class="btn btn-secondary text-sm" onclick="${vista==='mes'?'recoAvanzarMes(-1)':vista==='semana'?'recoAvanzar(-7)':'recoAvanzar(-1)'}">‹ ${pasoNombre} anterior</button>
+        <div class="flex items-center gap-2">
+          <button class="btn btn-secondary text-xs" onclick="recoHoy()">Hoy</button>
+          <span class="font-semibold capitalize">${tituloPeriodo}</span>
+        </div>
+        <button class="btn btn-secondary text-sm" onclick="${vista==='mes'?'recoAvanzarMes(1)':vista==='semana'?'recoAvanzar(7)':'recoAvanzar(1)'}">${pasoNombre} siguiente ›</button>
+      </div>
+    ` : `
+      <div class="flex gap-2 mb-3">
+        <button class="btn btn-sm ${estado==='pendiente'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('pendiente')">⏳ Pendientes</button>
+        <button class="btn btn-sm ${estado==='completado'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('completado')">✅ Completados</button>
+        <button class="btn btn-sm ${estado==='todos'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('todos')">📋 Todos</button>
+      </div>
+    `}
+    ${vista === 'mes'    ? recoRenderMes(refDate, recos, today)
+     : vista === 'semana'? recoRenderSemana(refDate, recos, today)
+     : vista === 'dia'   ? recoRenderDia(refDate, recos, today)
+     : recoRenderLista(recos, today, estado)}
+  `;
+};
+
+// ----- helpers de render por vista -----
+function recoSameDay(a, b) {
+  return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+}
+function recoItemsDelDia(recos, dia) {
+  const d = new Date(dia); d.setHours(0,0,0,0);
+  return recos.filter(r => recoSameDay(new Date(r.fecha), d));
+}
+function recoChipMini(r) {
+  // Mini chip para celdas de mes
+  const titulo = (r.titulo || '').length > 22 ? (r.titulo.slice(0,22) + '…') : r.titulo;
+  const color = r.origen === 'auto' ? 'bg-blue-100 text-blue-800 border-blue-300'
+              : r.prioridad === 'alta' ? 'bg-rose-100 text-rose-800 border-rose-300'
+              : r.prioridad === 'baja' ? 'bg-slate-100 text-slate-700 border-slate-300'
+              : 'bg-amber-100 text-amber-800 border-amber-300';
+  return `<div class="text-[10px] px-1.5 py-0.5 rounded border ${color} truncate cursor-pointer hover:opacity-80" onclick="event.stopPropagation(); ${r.origen!=='auto'?`recoForm('${r.id}')`:`recoCompletar('${r.id}')`}" title="${esc(r.titulo)}">${esc(recoCatLabel(r.categoria).slice(0,2))} ${esc(titulo)}</div>`;
+}
+function recoCardCompacta(r, today) {
+  const f = new Date(r.fecha); f.setHours(0,0,0,0);
+  const dias = Math.round((f - today)/86400000);
+  const vencido = dias < 0 && !r.completado;
+  const prioColor = r.prioridad === 'alta' ? 'border-l-4 border-rose-500' : r.prioridad === 'baja' ? 'border-l-4 border-slate-300' : 'border-l-4 border-amber-400';
+  return `
+    <div class="bg-white border border-slate-200 ${prioColor} rounded-lg p-2 flex items-start gap-2 ${r.completado?'opacity-60':''} ${r.origen==='auto'?'bg-blue-50/30':''}">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-[10px] px-1.5 py-0.5 rounded-full border ${recoCatColor(r.categoria)}">${recoCatLabel(r.categoria)}</span>
+          <span class="font-semibold text-sm ${r.completado?'line-through':''}">${esc(r.titulo)}</span>
+          ${r.origen==='auto' ? `<span class="text-[10px] px-1 rounded bg-blue-100 text-blue-700 border border-blue-300">🔗</span>` : ''}
+        </div>
+        <div class="text-xs text-slate-600">📅 ${fmtDate(r.fecha)} · ${r.completado ? '✅ Completado' : (vencido?`🔴 vencido hace ${Math.abs(dias)}d`: dias===0?'⚠️ HOY':dias===1?'⚠️ Mañana':`en ${dias}d`)}</div>
+        ${r.descripcion ? `<div class="text-xs text-slate-500 mt-0.5 line-clamp-2">${esc(r.descripcion)}</div>` : ''}
+      </div>
+      <div class="flex flex-col gap-1">
+        ${!r.completado && can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoCompletar('${r.id}')" title="${r.origen==='auto'?'Ocultar':'Completar'}">✅</button>` : ''}
+        ${can('agenda:update') && r.origen!=='auto' ? `<button class="btn btn-xs btn-secondary" onclick="recoForm('${r.id}')" title="Editar">✏️</button>` : ''}
+        ${can('agenda:delete') ? `<button class="btn btn-xs btn-secondary" onclick="recoDel('${r.id}')" title="${r.origen==='auto'?'Ocultar':'Eliminar'}">🗑️</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function recoRenderMes(refDate, recos, today) {
+  const year  = refDate.getFullYear();
+  const month = refDate.getMonth();
+  const primer = new Date(year, month, 1);
+  const ultimo = new Date(year, month+1, 0);
+  const inicio = new Date(primer); inicio.setDate(inicio.getDate() - inicio.getDay()); // arranca en domingo previo
+  const dias = [];
+  let cur = new Date(inicio);
+  while (cur <= ultimo || cur.getDay() !== 0) {
+    dias.push(new Date(cur));
+    cur.setDate(cur.getDate() + 1);
+    if (dias.length > 42) break; // safety
+  }
+  const semanas = [];
+  for (let i = 0; i < dias.length; i += 7) semanas.push(dias.slice(i, i+7));
+  const dn = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  return `
+    <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+      <div class="grid grid-cols-7 bg-slate-50 border-b border-slate-200">
+        ${dn.map(d => `<div class="px-2 py-1.5 text-[11px] font-semibold text-slate-600 text-center">${d}</div>`).join('')}
+      </div>
+      ${semanas.map(sem => `
+        <div class="grid grid-cols-7 border-b border-slate-100 last:border-b-0">
+          ${sem.map(d => {
+            const inMonth = d.getMonth() === month;
+            const isToday = recoSameDay(d, today);
+            const items = recoItemsDelDia(recos, d);
+            const ymd = d.toISOString().slice(0,10);
+            return `
+              <div class="min-h-[90px] border-r border-slate-100 last:border-r-0 p-1 cursor-pointer hover:bg-emerald-50/30 ${inMonth?'':'bg-slate-50/40 text-slate-400'} ${isToday?'bg-amber-50':''}"
+                   onclick="${can('agenda:create')?`recoCrearEnFecha('${ymd}')`:''}"
+                   title="${can('agenda:create')?'Crear recordatorio para este día':''}">
+                <div class="text-xs ${isToday?'font-bold text-amber-700':inMonth?'text-slate-600':'text-slate-400'}">${d.getDate()}</div>
+                <div class="space-y-0.5 mt-0.5">
+                  ${items.slice(0,3).map(r => recoChipMini(r)).join('')}
+                  ${items.length > 3 ? `<div class="text-[10px] text-slate-500 px-1">+${items.length-3} más</div>` : ''}
+                </div>
+              </div>`;
+          }).join('')}
+        </div>`).join('')}
+    </div>
+    <div class="text-[11px] text-slate-500 mt-2">💡 Clic en cualquier día vacío para crear un recordatorio en esa fecha. Clic en un chip para editar.</div>`;
+}
+
+function recoRenderSemana(refDate, recos, today) {
+  const inicio = new Date(refDate); inicio.setDate(inicio.getDate() - inicio.getDay()); // domingo
+  const dias = [];
+  for (let i = 0; i < 7; i++) { const d = new Date(inicio); d.setDate(d.getDate()+i); dias.push(d); }
+  return `
+    <div class="grid grid-cols-1 md:grid-cols-7 gap-2">
+      ${dias.map(d => {
+        const isToday = recoSameDay(d, today);
+        const items = recoItemsDelDia(recos, d);
+        const ymd = d.toISOString().slice(0,10);
+        return `
+          <div class="bg-white border ${isToday?'border-amber-400':'border-slate-200'} rounded-lg overflow-hidden">
+            <div class="px-2 py-1.5 ${isToday?'bg-amber-100':'bg-slate-50'} border-b border-slate-200 flex items-center justify-between cursor-pointer hover:opacity-80" onclick="${can('agenda:create')?`recoCrearEnFecha('${ymd}')`:''}">
+              <div class="text-[11px] font-semibold ${isToday?'text-amber-800':'text-slate-700'}">${d.toLocaleDateString('es-AR',{weekday:'short',day:'numeric',month:'short'})}</div>
+              ${can('agenda:create')?`<span class="text-xs text-slate-400">+</span>`:''}
+            </div>
+            <div class="p-1.5 space-y-1.5 min-h-[120px]">
+              ${items.length === 0 ? `<div class="text-[10px] text-slate-400 text-center py-2">—</div>` : items.map(r => recoCardCompacta(r, today)).join('')}
+            </div>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function recoRenderDia(refDate, recos, today) {
+  const items = recoItemsDelDia(recos, refDate);
+  const ymd = refDate.toISOString().slice(0,10);
+  if (items.length === 0) {
+    return `
+      <div class="bg-white border border-slate-200 rounded-lg p-8 text-center text-slate-500">
+        <div class="text-4xl mb-2">📅</div>
+        <div class="font-semibold mb-1">No hay recordatorios para este día</div>
+        ${can('agenda:create') ? `<button class="btn btn-primary mt-3" onclick="recoCrearEnFecha('${ymd}')">+ Crear recordatorio para ${refDate.toLocaleDateString('es-AR',{day:'numeric',month:'long'})}</button>` : ''}
+      </div>`;
+  }
+  return `<div class="space-y-2">${items.map(r => recoCardCompacta(r, today)).join('')}</div>`;
+}
+
+function recoRenderLista(recos, today, estado) {
+  // Vista lista clásica agrupada por mes
   const grupos = {};
   recos.forEach(r => {
     const f = new Date(r.fecha);
@@ -14066,77 +14279,24 @@ pages.agenda = async function() {
     grupos[key].items.push(r);
   });
   const grupoKeys = Object.keys(grupos).sort();
-
-  const today = new Date(); today.setHours(0,0,0,0);
-  const kpiVencidos = recos.filter(r => new Date(r.fecha) < today && !r.completado).length;
-  const kpiHoy = recos.filter(r => { const f=new Date(r.fecha); f.setHours(0,0,0,0); return f.getTime() === today.getTime() && !r.completado; }).length;
-  const kpiProx30 = recos.filter(r => { const f=new Date(r.fecha); const days = Math.round((f-today)/(86400000)); return days >= 0 && days <= 30 && !r.completado; }).length;
-
-  const autoCount = recos.filter(r => r.origen === 'auto').length;
-  $('#page-body').innerHTML = `
-    ${autoCount > 0 ? `
-      <div class="mb-3 bg-blue-50 border border-blue-200 rounded p-2 text-xs text-blue-800 flex items-center gap-2">
-        🔗 <span><b>${autoCount}</b> ${autoCount===1?'recordatorio fue cargado':'recordatorios fueron cargados'} automáticamente desde Créditos, Cheques y Cuentas Corrientes. Tienen badge <span class="px-1 rounded bg-blue-100 border border-blue-300">🔗 Auto</span>. Si no querés verlos, podés ocultarlos con 🗑️ (el registro original no se borra).</span>
-      </div>` : ''}
-    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-      <div class="flex gap-2">
-        <button class="btn btn-sm ${estado==='pendiente'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('pendiente')">⏳ Pendientes</button>
-        <button class="btn btn-sm ${estado==='completado'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('completado')">✅ Completados</button>
-        <button class="btn btn-sm ${estado==='todos'?'btn-primary':'btn-secondary'}" onclick="recoFiltroEstado('todos')">📋 Todos</button>
-      </div>
-      ${can('agenda:create')?`<button class="btn btn-primary" onclick="recoForm()">+ Nuevo recordatorio</button>`:''}
-    </div>
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-      <div class="kpi-card border-rose-200 bg-rose-50"><div class="kpi-label">🔴 Vencidos</div><div class="kpi-value text-rose-700">${kpiVencidos}</div></div>
-      <div class="kpi-card border-amber-200 bg-amber-50"><div class="kpi-label">⚠️ Para hoy</div><div class="kpi-value text-amber-700">${kpiHoy}</div></div>
-      <div class="kpi-card border-emerald-200 bg-emerald-50"><div class="kpi-label">📅 Próximos 30 días</div><div class="kpi-value text-emerald-700">${kpiProx30}</div></div>
-    </div>
-    ${recos.length === 0
-      ? `<div class="bg-white border border-slate-200 rounded-lg p-8 text-center text-slate-500">
-           <div class="text-4xl mb-2">📅</div>
-           <div class="font-semibold mb-1">No hay recordatorios ${estado==='pendiente'?'pendientes':estado==='completado'?'completados':''}</div>
-           <div class="text-sm">${can('agenda:create')?'Hacé clic en <b>+ Nuevo recordatorio</b> para empezar.':''}</div>
-         </div>`
-      : grupoKeys.map(k => `
-          <div class="mb-4">
-            <h3 class="text-xs uppercase tracking-wide font-semibold text-slate-500 mb-2 mt-2">${grupos[k].label}</h3>
-            <div class="space-y-2">
-              ${grupos[k].items.map(r => {
-                const f = new Date(r.fecha); f.setHours(0,0,0,0);
-                const dias = Math.round((f - today)/86400000);
-                const vencido = dias < 0 && !r.completado;
-                const prioColor = r.prioridad === 'alta' ? 'border-l-4 border-rose-500' : r.prioridad === 'baja' ? 'border-l-4 border-slate-300' : 'border-l-4 border-amber-400';
-                return `
-                  <div class="bg-white border border-slate-200 ${prioColor} rounded-lg p-3 flex items-start gap-3 ${r.completado?'opacity-60':''} ${r.origen==='auto'?'bg-blue-50/30':''}">
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-center gap-2 flex-wrap">
-                        <span class="text-xs px-2 py-0.5 rounded-full border ${recoCatColor(r.categoria)}">${recoCatLabel(r.categoria)}</span>
-                        <span class="font-semibold ${r.completado?'line-through':''}">${esc(r.titulo)}</span>
-                        ${r.origen==='auto' ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 border border-blue-300" title="Generado automáticamente desde ${r.autoTipo==='cuota_credito'?'Créditos bancarios':r.autoTipo==='cheque'?'Cheques':'Cuentas corrientes'}">🔗 Auto</span>` : ''}
-                        ${r.repetir && r.repetir!=='ninguno' ? `<span class="text-[10px] text-slate-500">🔁 ${r.repetir}</span>` : ''}
-                      </div>
-                      <div class="text-sm text-slate-600 mt-1">
-                        📅 ${fmtDate(r.fecha)}
-                        ${r.completado ? '<span class="text-emerald-600 font-medium">✅ Completado</span>' : `<span class="${vencido?'text-rose-600 font-medium':'text-slate-500'}">${recoDiasTexto(dias)}</span>`}
-                        ${!r.completado ? `<span class="text-slate-400 text-xs">· avisa ${r.avisarDiasAntes||15}d antes</span>` : ''}
-                      </div>
-                      ${r.descripcion ? `<div class="text-sm text-slate-500 mt-1 whitespace-pre-wrap">${esc(r.descripcion)}</div>` : ''}
-                    </div>
-                    <div class="flex gap-1">
-                      ${!r.completado && can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoCompletar('${r.id}')" title="${r.origen==='auto'?'Ocultar de la agenda':'Marcar como completado'}">✅</button>` : ''}
-                      ${can('agenda:update') && r.origen!=='auto' ? `<button class="btn btn-xs btn-secondary" onclick="recoForm('${r.id}')" title="Editar">✏️</button>` : ''}
-                      ${can('agenda:delete') ? `<button class="btn btn-xs btn-secondary" onclick="recoDel('${r.id}')" title="${r.origen==='auto'?'Ocultar de la agenda':'Eliminar'}">🗑️</button>` : ''}
-                    </div>
-                  </div>`;
-              }).join('')}
-            </div>
-          </div>`).join('')
-    }
-  `;
-};
+  if (recos.length === 0) {
+    return `<div class="bg-white border border-slate-200 rounded-lg p-8 text-center text-slate-500">
+      <div class="text-4xl mb-2">📅</div>
+      <div class="font-semibold mb-1">No hay recordatorios ${estado==='pendiente'?'pendientes':estado==='completado'?'completados':''}</div>
+      <div class="text-sm">${can('agenda:create')?'Hacé clic en <b>+ Nuevo recordatorio</b> para empezar.':''}</div>
+    </div>`;
+  }
+  return grupoKeys.map(k => `
+    <div class="mb-4">
+      <h3 class="text-xs uppercase tracking-wide font-semibold text-slate-500 mb-2 mt-2">${grupos[k].label}</h3>
+      <div class="space-y-2">${grupos[k].items.map(r => recoCardCompacta(r, today)).join('')}</div>
+    </div>`).join('');
+}
 
 async function recoForm(id) {
-  let r = { titulo:'', descripcion:'', fecha: new Date().toISOString().slice(0,10), categoria:'otro', prioridad:'media', avisarDiasAntes:15, repetir:'ninguno' };
+  const fechaDefault = state._recoFechaPreCarga || new Date().toISOString().slice(0,10);
+  state._recoFechaPreCarga = null;
+  let r = { titulo:'', descripcion:'', fecha: fechaDefault, categoria:'otro', prioridad:'media', avisarDiasAntes:15, repetir:'ninguno' };
   if (id) {
     try { const rsp = await api('/api/recordatorios?estado=todos'); const found = (rsp.data||[]).find(x => x.id === id);
       if (found) { r = { ...found, fecha: new Date(found.fecha).toISOString().slice(0,10) }; }
