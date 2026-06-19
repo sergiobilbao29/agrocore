@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/06/2026',
+      titulo:'🧹 v1.2.3 — Campos: limpieza de form + botón compartir ubicación al lado de editar',
+      desc:'Ajustes pedidos por la usuaria: (1) Sacamos el campo "Ubicación / referencia" duplicado del form de Campos (estaba apareciendo dos veces — quedó solo una). (2) El RENSPA puede ser solo Agrícola o Ganadero (no Mixto) — porque cada RENSPA es de un tipo único; si tu campo es mixto cargás 2 RENSPAs (uno por cada tipo). El tipo de explotación del CAMPO sí puede ser Mixta (agrícola + ganadera). (3) El botón 📱 de compartir ubicación por WhatsApp ahora está MUY visible: al lado de los botones ✏️ Editar y 🗑️ Eliminar, en el header de la card de cada campo (antes estaba escondido dentro del bloque de Titularidad).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'27/06/2026',
       titulo:'🚨 v1.2.2 — Hotfix: nombres de columna mal escritos en migración v1.1.0 (companyOrigenId vs empresaOrigenId)',
       desc:'La migración v1.1.0 consolidada creaba la tabla IntercompanyMovimiento con nombres de columnas equivocados ("companyOrigenId", "companyDestinoId", "concepto", "ctaCteOrigenRef") en vez de los que usa el schema.prisma ("empresaOrigenId", "empresaDestinoId", "motivo", "intercompanyRef"). En instalaciones donde la tabla ya existía (creada por un `db push` previo con los nombres correctos), `CREATE TABLE IF NOT EXISTS` la saltaba pero después `CREATE INDEX ... ON ("companyOrigenId", ...)` fallaba con "no existe la columna companyOrigenId" → Prisma marcaba toda la migración como failed → bloqueaba las siguientes. Fix: (1) Editamos la migración v1.1.0 para eliminar las CREATE TABLE de IntercompanyMovimiento + ImportLote (solo deja los ALTER ADD COLUMN que son seguros). (2) La v1.2.1 patch ahora crea esas dos tablas con los nombres correctos del schema (empresaOrigenId / motivo / intercompanyRef / etc.) y suma ALTER ADD COLUMN IF NOT EXISTS para columnas opcionales (proveedorId, clienteId, chequeId, bancoMovimientoId, efectivoId, observaciones, userId) por si la tabla ya existía parcial. (3) El error "column existe does not exist" en Campos/Lotes se resuelve solo al regenerar el Prisma client (`npx prisma generate`) con el schema actual que no tiene ese campo.' },
@@ -5628,6 +5631,7 @@ pages.campos = async function() {
               <div class="text-[11px] text-slate-500 mt-0.5">${esc(c.ubicacion||'—')} · ${fmtN(c.hectareas||0)} ha totales</div>
             </div>
             <div class="flex gap-1">
+              ${c.geolocalizacion?`<button class="btn btn-ghost text-base text-emerald-600 hover:text-emerald-800" onclick='campoCompartirUbicacionCard(${JSON.stringify(c.id)}, "${esc(c.geolocalizacion)}", ${JSON.stringify(c.nombre)})' title="📱 Compartir ubicación por WhatsApp">📱</button>`:''}
               ${can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campoForm(${JSON.stringify(c.id)})' title="Editar campo">✏️</button>`:''}
               ${can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='campoDel(${JSON.stringify(c.id)})' title="Eliminar campo">🗑️</button>`:''}
             </div>
@@ -5639,7 +5643,6 @@ pages.campos = async function() {
               ${c.tipoExplotacion?`<div class="text-[10px] mt-0.5">${c.tipoExplotacion==='agricola'?'🌾 Agrícola':c.tipoExplotacion==='ganadera'?'🐄 Ganadera':'🌾🐄 Mixta'}</div>`:''}
               ${c.propietario?`<div class="text-[10px] text-slate-500 mt-0.5">${esc(c.propietario)}</div>`:''}
               ${(Array.isArray(c.renspas) && c.renspas.length ? c.renspas : (c.renspa ? [{codigo:c.renspa,tipo:''}] : [])).map(r => `<div class="text-[10px] text-blue-700 mt-0.5">📋 ${esc(r.codigo)}${r.tipo?` <span class="text-slate-400">(${r.tipo})</span>`:''}</div>`).join('')}
-              ${c.geolocalizacion?`<button class="text-[10px] text-emerald-700 hover:underline mt-1" onclick='campoCompartirUbicacionCard(${JSON.stringify(c.id)}, "${esc(c.geolocalizacion)}", ${JSON.stringify(c.nombre)})' title="Compartir ubicación por WhatsApp">📱 Compartir ubicación</button>`:''}
             </div>
             <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Lotes</div><div class="font-bold">${lts.length} · ${fmtN(haLotes)} ha</div></div>
           </div>
@@ -5724,8 +5727,6 @@ function campoRenspaRowHTML(r, i) {
       <option value=""           ${!r.tipo?'selected':''}>— Tipo —</option>
       <option value="agricola"   ${r.tipo==='agricola'?'selected':''}>🌾 Agrícola</option>
       <option value="ganadera"   ${r.tipo==='ganadera'?'selected':''}>🐄 Ganadera</option>
-      <option value="mixto"      ${r.tipo==='mixto'?'selected':''}>🌾🐄 Mixto</option>
-      <option value="otro"       ${r.tipo==='otro'?'selected':''}>📝 Otro</option>
     </select>
     <button type="button" class="btn btn-ghost text-red-600 text-xs" onclick="this.closest('.renspa-row').remove()" title="Eliminar">×</button>
   </div>`;
@@ -5834,10 +5835,9 @@ function campoForm(id=null) {
               return arr.map((r,i) => campoRenspaRowHTML(r, i)).join('');
             })()}
           </div>
-          <div class="text-[10px] text-slate-500 mt-1">Si tu campo es mixto podés cargar 2 RENSPAs (uno para agrícola y otro para ganadera).</div>
+          <div class="text-[10px] text-slate-500 mt-1">Si tu campo es mixto podés cargar 2 RENSPAs (uno agrícola y otro ganadero).</div>
         </div>
 
-        <div class="col-span-2"><label class="label">Ubicación / referencia</label><input id="f-ub" class="input" value="${esc(it.ubicacion||'')}" placeholder="Ej: Ruta 34 km 215, zona La Criolla"/></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
