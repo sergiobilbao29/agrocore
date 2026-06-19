@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.8.9';
+const AGROCORE_VERSION = '0.8.10';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8124,7 +8124,7 @@ app.delete('/api/choferes/:id', requireCompany, requirePermission('viajes:delete
 });
 
 // Parser de PDF de CPE oficial de ARCA: extrae los campos típicos para
-// autocargar el viaje. Acepta multipart con un campo 'archivo' (PDF).
+// autocargar el viaje COMPLETO (CUITs + transportista + chofer + dominios + pesos).
 app.post('/api/arca/cpe/parsear-pdf', authMiddleware, requireCompany, requirePermission('viajes:read'), upload.single('archivo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
@@ -8132,53 +8132,84 @@ app.post('/api/arca/cpe/parsear-pdf', authMiddleware, requireCompany, requirePer
     try { pdfParse = await getPdfParse(); }
     catch (e) { return res.status(500).json({ ok: false, error: 'pdf-parse no disponible: ' + e.message }); }
     const data = await pdfParse(req.file.buffer);
-    const txt = data.text || '';
-    // Helpers de extracción
+    let txt = data.text || '';
+    // Normalizar espacios pero preservar saltos
+    txt = txt.replace(/[ \t]+/g, ' ').replace(/ /g, ' ');
     const get1 = (re) => { const m = txt.match(re); return m ? m[1].trim() : null; };
-    const cuit11 = '(\\d{11})';
-    // Estructura típica del PDF de ARCA (basada en CPE Automotor real)
-    const out = {
-      cpeNroCtg:           get1(/CTG:\s*(\d{11,})/i),
-      cpeNroComprobante:   get1(/N°\s*CPE:?\s*([\d\-]+)/i),
-      cpeFechaEmisionTxt:  get1(/Fecha:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i),
-      cpeFechaVtoTxt:      get1(/Vencimiento:?\s*(\d{1,2}\/\d{1,2}\/\d{4}[^\n]*)/i),
-      titularCuit:         get1(new RegExp('Titular Carta de Porte:?\\s*' + cuit11, 'i')),
-      titularRazon:        get1(/Titular Carta de Porte:?\s*\d{11}\s*-\s*([^\n]+)/i),
-      destinatarioCuit:    get1(new RegExp('Destinatario:?\\s*' + cuit11, 'i')),
-      destinatarioRazon:   get1(/Destinatario:?\s*\d{11}\s*-\s*([^\n]+)/i),
-      destinoCuit:         get1(new RegExp('Destino:?\\s*' + cuit11, 'i')),
-      transportistaCuit:   get1(new RegExp('Empresa Transportista:?\\s*' + cuit11, 'i')),
-      transportistaRazon:  get1(/Empresa Transportista:?\s*\d{11}\s*-\s*([^\n]+)/i),
-      fletePagadorCuit:    get1(new RegExp('Flete pagador\\s*:?\\s*' + cuit11, 'i')),
-      choferCuit:          get1(new RegExp('Chofer\\s*:?\\s*' + cuit11, 'i')),
-      choferNombre:        get1(/Chofer\s*:?\s*\d{11}\s*-\s*([^\n]+)/i),
-      corredorVentaPrimCuit: get1(new RegExp('Corredor Venta Primaria:?\\s*' + cuit11, 'i')),
-      rteComercialPrimCuit: get1(new RegExp('Rte\\. Comercial Venta Primaria:?\\s*' + cuit11, 'i')),
-      grano:               get1(/Grano\s*\/\s*([^T\n]+)\s+Tipo/i),
-      tipoGrano:           get1(/Tipo:\s*([^\sC]+)/i),
-      campania:            get1(/Campaña:\s*(\d{4})/i),
-      pesoBruto:           get1(/Peso Bruto\s*(\d+)/i),
-      pesoTara:            get1(/Peso Tara\s*(\d+)/i),
-      pesoNeto:            get1(/Peso Neto\s*(\d+)/i),
-      origenLocalidad:     get1(/Localidad:\s*([^P\n]+?)\s+Provincia/i),
-      origenProvincia:     get1(/Provincia\s+([^\n]+?)\s*Latitud/i),
-      destinoPlanta:       get1(/N°\s*Planta\s+(\d+)/i),
-      destinoDireccion:    get1(/Dirección:\s*([^\n]+?)\s*Localidad/i),
-      destinoLocalidad:    get1(/D - DESTINO[\s\S]*?Localidad:\s*([^P\n]+?)\s+Provincia/i),
-      destinoProvincia:    get1(/D - DESTINO[\s\S]*?Provincia:\s*([^\n]+?)\s*[A-Z]\s*-/i),
-      dominios:            get1(/Dominios:\s*([A-Z0-9\s\-\/]+?)(?:\s*Partida|\n)/i),
-      partidaFecha:        get1(/Partida:\s*(\d{1,2}\/\d{1,2}\/\d{4}\s*\d{2}:\d{2})/i),
-      kmsARecorrer:        get1(/Kms\.\s*a\s*recorrer:\s*(\d+)/i),
-      tarifa:              get1(/Tarifa:\s*([\d\.,]+)/i),
-      observaciones:       get1(/Observaciones:\s*([^\n]+)/i),
+    // Pattern para "CAMPO: CUIT - RAZON SOCIAL" o "CAMPO : CUIT - RAZON" (con espacios y dos puntos opcionales)
+    const cuitRazon = (campo) => {
+      const re = new RegExp(campo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*:?\\s*(\\d{11})\\s*[-–]\\s*([^\\n]+)', 'i');
+      const m = txt.match(re);
+      return m ? { cuit: m[1].trim(), razon: m[2].trim() } : { cuit: null, razon: null };
     };
-    // Separar dominios (camión y acoplado)
+    const titular        = cuitRazon('Titular Carta de Porte');
+    const remitente      = cuitRazon('Remitente Comercial Productor');
+    const rteComPrim     = cuitRazon('Rte\\. Comercial Venta Primaria');
+    const corredorPrim   = cuitRazon('Corredor Venta Primaria');
+    const corredorSec    = cuitRazon('Corredor Venta Secundaria');
+    const destinatario   = cuitRazon('Destinatario');
+    const destino        = cuitRazon('Destino');
+    const transportista  = cuitRazon('Empresa Transportista');
+    const fletePagador   = cuitRazon('Flete pagador');
+    const chofer         = cuitRazon('Chofer');
+    const intermediario  = cuitRazon('Intermediario de flete');
+    const repEntregador  = cuitRazon('Representante entregador');
+    const repRecibidor   = cuitRazon('Representante recibidor');
+    // Otros campos no-CUIT
+    const out = {
+      // Identificación
+      cpeNroCtg:          get1(/CTG:\s*(\d{11,})/i),
+      cpeNroComprobante:  get1(/N°\s*CPE:?\s*([\d\-]+)/i),
+      fechaEmisionTxt:    get1(/Fecha:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i),
+      fechaVtoTxt:        get1(/Vencimiento:?\s*(\d{1,2}\/\d{1,2}\/\d{4}[^\n]*)/i),
+      // Intervinientes
+      titularCuit: titular.cuit,             titularRazon: titular.razon,
+      remitenteCuit: remitente.cuit,         remitenteRazon: remitente.razon,
+      rteComercialPrimCuit: rteComPrim.cuit, rteComercialPrimRazon: rteComPrim.razon,
+      corredorPrimCuit: corredorPrim.cuit,   corredorPrimRazon: corredorPrim.razon,
+      corredorSecCuit: corredorSec.cuit,     corredorSecRazon: corredorSec.razon,
+      destinatarioCuit: destinatario.cuit,   destinatarioRazon: destinatario.razon,
+      destinoCuit: destino.cuit,             destinoRazon: destino.razon,
+      transportistaCuit: transportista.cuit, transportistaRazon: transportista.razon,
+      fletePagadorCuit: fletePagador.cuit,   fletePagadorRazon: fletePagador.razon,
+      choferCuit: chofer.cuit,               choferRazon: chofer.razon,
+      intermediarioCuit: intermediario.cuit, intermediarioRazon: intermediario.razon,
+      repEntregadorCuit: repEntregador.cuit, repEntregadorRazon: repEntregador.razon,
+      repRecibidorCuit: repRecibidor.cuit,   repRecibidorRazon: repRecibidor.razon,
+      // Grano
+      grano:              get1(/Grano\s*\/\s*([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+?)\s+Tipo:/i),
+      tipoGrano:          get1(/Tipo:\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)/i),
+      campania:           get1(/Campaña:\s*(\d{4})/i),
+      // Pesos
+      pesoBruto:          get1(/Peso Bruto\s*(\d+)/i),
+      pesoTara:           get1(/Peso Tara\s*(\d+)/i),
+      pesoNeto:           get1(/Peso Neto\s*(\d+)/i),
+      // Procedencia
+      origenLocalidad:    get1(/C - PROCEDENCIA[\s\S]*?Localidad:\s*([^\n]+?)\s+Provincia/i),
+      origenProvincia:    get1(/C - PROCEDENCIA[\s\S]*?Provincia\s*:?\s*([A-ZÁÉÍÓÚÑ ]+?)(?:\s*Latitud|\n)/i),
+      origenLat:          get1(/Latitud:\s*([^\s\n]+)/i),
+      origenLng:          get1(/Longitud:\s*([^\s\n]+)/i),
+      origenRenspa:       get1(/RENSPA\s*[^\n]*?(\d{2}\.\d{3}\.\d\.\d+\/?[A-Z0-9]*)/i),
+      // Destino
+      destinoEsCampo:     get1(/D - DESTINO[\s\S]*?Es un campo:\s*(Si|No|Sí)/i),
+      destinoPlanta:      get1(/N°\s*Planta\s*(\d+)/i),
+      destinoDireccion:   get1(/Dirección:\s*([^\n]+?)\s*Localidad:/i),
+      destinoLocalidad:   get1(/D - DESTINO[\s\S]*?Localidad:\s*([^\n]+?)\s+Provincia:/i),
+      destinoProvincia:   get1(/D - DESTINO[\s\S]*?Provincia:\s*([A-ZÁÉÍÓÚÑ ]+?)(?:\n|E -)/i),
+      // Transporte
+      dominios:           get1(/Dominios:\s*([A-Z0-9\s\-\/]+?)(?:\n|Partida)/i),
+      partidaFecha:       get1(/Partida:\s*(\d{1,2}\/\d{1,2}\/\d{4}\s*\d{2}:\d{2}(?::\d{2})?)/i),
+      kmsARecorrer:       get1(/Kms\.\s*a\s*recorrer:\s*(\d+)/i),
+      tarifa:             get1(/Tarifa:\s*([\d\.,]+)/i),
+      observaciones:      get1(/Observaciones:\s*([^\n]+)/i),
+    };
+    // Separar dominios (camion / acoplado)
     if (out.dominios) {
       const parts = out.dominios.split(/[\-\/\s]+/).filter(Boolean);
       out.dominioCamion = parts[0] || null;
       out.dominioAcoplado = parts[1] || null;
     }
-    res.json({ ok: true, data: out, textoCrudo: txt.slice(0, 2000) });
+    res.json({ ok: true, data: out, textoCrudo: txt.slice(0, 3000) });
   } catch (e) { next(e); }
 });
 

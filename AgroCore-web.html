@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
+      titulo:'📤 Cargar PDF de ARCA ahora llena TODO el viaje (no solo los CUITs del form)',
+      desc:'El parser PDF antes solo llenaba 1 o 2 CUITs del modal de emisión. Ahora hace dos cosas: (1) Llena los CUITs visibles del modal (origen, destinatario, recibidor, corredor, intermediario, observaciones) — con la razón social verde abajo si están en tus catálogos. (2) Actualiza el VIAJE con todos los datos que vienen del PDF: producto (Soja/Maíz/etc), transportista + CUIT, chofer + CUIT, patente del camión y acoplado (separados de "Dominios"), Peso Bruto / Tara / Neto, origen y destino (localidades), Kms a recorrer, tarifa y pagador del flete. Los datos quedan guardados en el viaje aunque canceles el modal de emisión, así si después emitís la CPE real o querés revisar el viaje, ya está todo cargado. Si querés ver qué extrajo el parser, abrí DevTools → Console — vas a ver "[cpeParsearPDF] datos extraídos del PDF" con el objeto completo y el texto crudo del PDF (útil para debugging si algún campo no se mapea).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'24/06/2026',
       titulo:'🛠️ Hotfix: Cargar PDF de ARCA daba "Error 400 del parser"',
       desc:'El upload del PDF se hacía con fetch directo y olvidaba agregar el header X-Company-Id que requiere el backend. Por eso devolvía 400 "Falta header X-Company-Id". Solucionado — ahora se mandan correctamente Authorization + X-Company-Id en el upload. Además el toast de error ahora muestra el mensaje exacto del backend (antes solo "Error 400") para diagnosticar más rápido si hay otro problema.' },
@@ -12301,31 +12304,72 @@ async function cpeParsearPDF(input, viajeId) {
   fd.append('archivo', file);
   try {
     const url = (window.API_BASE || '') + '/api/arca/cpe/parsear-pdf';
-    // Armamos los headers correctos. NO seteamos Content-Type — fetch lo hace solo con boundary.
     const headers = {};
     if (state.token)     headers['Authorization'] = 'Bearer ' + state.token;
     if (state.companyId) headers['X-Company-Id']  = state.companyId;
     const r = await fetch(url, { method:'POST', body: fd, headers });
     let j = null;
     try { j = await r.json(); } catch {}
-    if (!r.ok) {
-      const msg = (j && j.error) ? j.error : ('HTTP ' + r.status);
-      throw new Error(msg);
-    }
+    if (!r.ok) throw new Error((j && j.error) ? j.error : ('HTTP ' + r.status));
     if (!j || !j.ok) throw new Error((j && j.error) || 'Parser devolvió error');
     const d = j.data || {};
-    let count = 0;
-    const setIf = (id, val) => { if (val && document.getElementById(id)) { document.getElementById(id).value = val; count++; } };
-    setIf('cpe-orig-cuit', d.titularCuit);
-    setIf('cpe-orig-renspa', d.origenRenspa);
-    setIf('cpe-dest-cuit', d.destinoCuit);
-    setIf('cpe-recib-cuit', d.destinatarioCuit);
-    setIf('cpe-corr-cuit', d.corredorVentaPrimCuit);
-    if (d.observaciones) setIf('cpe-obs', d.observaciones);
-    // Mostrar resumen
-    toast(`✅ PDF parseado · ${count} campos completados. Revisá y emití.`, 'success');
-    // Guardar la data para posible uso futuro
+    console.log('[cpeParsearPDF] datos extraídos del PDF:', d);
+    console.log('[cpeParsearPDF] texto crudo (primeros 1000 chars):', (j.textoCrudo||'').slice(0,1000));
     state._cpePdfData = d;
+
+    // 1) Llenar los inputs del modal de emisión
+    let countModal = 0;
+    const setIf = (id, val) => { if (val && document.getElementById(id)) { document.getElementById(id).value = val; countModal++; } };
+    // Origen / Productor: usar remitente si existe, sino titular
+    setIf('cpe-orig-cuit',   d.remitenteCuit || d.titularCuit);
+    setIf('cpe-orig-renspa', d.origenRenspa);
+    setIf('cpe-dest-cuit',   d.destinoCuit || d.destinatarioCuit);
+    setIf('cpe-recib-cuit',  d.destinatarioCuit);
+    setIf('cpe-corr-cuit',   d.corredorPrimCuit);
+    setIf('cpe-inter-cuit',  d.intermediarioCuit);
+    if (d.observaciones) setIf('cpe-obs', d.observaciones);
+    // Refrescar razones sociales
+    ['cpe-orig-cuit','cpe-dest-cuit','cpe-recib-cuit','cpe-corr-cuit','cpe-inter-cuit'].forEach(id => {
+      const out = id.replace('-cuit','-razon');
+      try { cpeMostrarRazon(id, out); } catch {}
+    });
+
+    // 2) Actualizar el VIAJE con los datos detectados (transportista, chofer, patentes, pesos, producto)
+    if (viajeId) {
+      const viajeUpdate = {};
+      const setU = (key, val) => { if (val !== null && val !== undefined && val !== '') viajeUpdate[key] = val; };
+      if (d.transportistaRazon) setU('transportista', d.transportistaRazon);
+      if (d.transportistaCuit)  setU('transporteCuit', d.transportistaCuit);
+      if (d.choferRazon)        setU('chofer', d.choferRazon);
+      if (d.choferCuit)         setU('choferCuit', d.choferCuit);
+      if (d.dominioCamion)      setU('patente', d.dominioCamion);
+      if (d.dominioAcoplado)    setU('patenteAcoplado', d.dominioAcoplado);
+      if (d.grano)              setU('producto', d.grano);
+      if (d.pesoBruto)          setU('kgBruto', Number(d.pesoBruto));
+      if (d.pesoTara)           setU('kgTara', Number(d.pesoTara));
+      if (d.pesoNeto)           { setU('kgNeto', Number(d.pesoNeto)); setU('cantidad', Number(d.pesoNeto)); }
+      if (d.origenLocalidad)    setU('origen', d.origenLocalidad);
+      if (d.destinoLocalidad)   setU('destino', d.destinoLocalidad);
+      if (d.kmsARecorrer)       setU('km', Number(d.kmsARecorrer));
+      if (d.tarifa)             setU('tarifa', Number(String(d.tarifa).replace(/\./g,'').replace(',','.')));
+      if (d.fletePagadorRazon)  setU('pagadorFlete', d.fletePagadorRazon);
+      if (Object.keys(viajeUpdate).length) {
+        try {
+          await api('/api/viajes/'+viajeId, { method:'PUT', body: JSON.stringify(viajeUpdate) });
+          console.log('[cpeParsearPDF] viaje actualizado con', Object.keys(viajeUpdate).length, 'campos:', viajeUpdate);
+          // Invalidar cache para que la próxima vez se relean los datos
+          delete state.cache.viajes;
+          toast(`✅ PDF parseado · ${countModal} campos en form + ${Object.keys(viajeUpdate).length} datos guardados en el viaje (producto, transportista, chofer, patentes, pesos…)`, 'success');
+        } catch (e) {
+          console.warn('[cpeParsearPDF] no se pudo guardar en el viaje:', e);
+          toast(`✅ ${countModal} campos completados en el form. (No se pudo guardar en el viaje: ${e.message})`, 'success');
+        }
+      } else {
+        toast(`✅ PDF parseado · ${countModal} campos completados en el form.`, 'success');
+      }
+    } else {
+      toast(`✅ PDF parseado · ${countModal} campos completados.`, 'success');
+    }
   } catch (e) {
     console.error('[cpeParsearPDF]', e);
     toast('No se pudo parsear: ' + e.message, 'error');
