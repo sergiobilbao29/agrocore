@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
+      titulo:'📄 CPE con FORMATO REAL de ARCA + Cargar desde PDF',
+      desc:'Dos cosas grandes: (1) El documento de la CPE ahora tiene el <b>formato exacto del PDF oficial de ARCA</b>: secciones A-INTERVINIENTES (titular, remitente, corredor, destinatario, transportista, chofer, intermediario), B-GRANO/ESPECIE (con declaración Conforme/Condicional y los 3 pesos Bruto/Tara/Neto), C-PROCEDENCIA (localidad, provincia, lat/long, RENSPA), D-DESTINO (planta, dirección, localidad, provincia), E-TRANSPORTE (dominios, partida, kms, tarifa), F-CONTINGENCIAS y G-DESCARGA (fecha arribo, pesos en destino, turno). Más la declaración jurada de plaguicidas, el historial post-confirmación y los espacios para firmas del perito y destinatario. (2) En el modal de Emitir CPE hay un botón nuevo arriba 📤 <b>Cargar PDF de ARCA</b>: si ya emitiste la CPE por el portal de ARCA, subís el PDF y el sistema parsea los CUITs, RENSPA, datos del transporte y observaciones para autollenar el viaje. Una vez completo lo emitís igual desde AgroCore o guardás los datos para tu registro.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'23/06/2026',
       titulo:'🛠️ Hotfix: botón Ver CPE no abría por ReferenceError fmtDateTime',
       desc:'El motivo real por el que el botón de Ver Carta de Porte del viaje no respondía era un error silencioso de JavaScript: la función fmtDateTime no existe en AgroCore (la función real es fmtDate). El error se atrapaba en el catch de la promesa y no aparecía toast. Lo cambiamos por new Date(...).toLocaleString("es-AR") directo, que muestra fecha + hora. Ahora el modal de detalle de la CPE abre normalmente.' },
@@ -12179,6 +12182,13 @@ async function cpeEmitirForm(viajeId) {
   openModal({
     title: '🚚 Emitir Carta de Porte Electrónica',
     body: `
+      <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded text-xs flex items-center justify-between gap-2">
+        <span>📄 <b>¿Ya tenés la CPE generada en ARCA?</b> Subí el PDF y autocompletamos los datos.</span>
+        <label class="btn btn-primary text-xs cursor-pointer">
+          📤 Cargar PDF de ARCA
+          <input type="file" accept="application/pdf" style="display:none" onchange="cpeParsearPDF(this, '${viajeId}')"/>
+        </label>
+      </div>
       <div class="mb-3 p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
         ⚠️ <b>Importante:</b> esta operación se envía a <b>ARCA</b> (servicio WSCPE) y asigna un <b>CTG real</b> a tu viaje.
         Si tu empresa está en modo Homologación o no tiene certificado configurado, se genera una <b>CTG simulada</b> (empieza con 99).
@@ -12228,6 +12238,38 @@ async function cpeEmitirSave(viajeId) {
     setTimeout(() => cpeAbrirVista(viajeId), 300);
     setTimeout(() => cpeDetalle(viajeId), 500);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+async function cpeParsearPDF(input, viajeId) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  toast('📄 Analizando PDF de ARCA...', 'info');
+  const fd = new FormData();
+  fd.append('archivo', file);
+  try {
+    const url = '/api/arca/cpe/parsear-pdf';
+    const opts = state.token ? { method:'POST', body: fd, headers: { Authorization: 'Bearer ' + state.token } } : { method:'POST', body: fd };
+    const r = await fetch(url, opts);
+    if (!r.ok) throw new Error('Error ' + r.status + ' del parser');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'Parser devolvió error');
+    const d = j.data || {};
+    let count = 0;
+    const setIf = (id, val) => { if (val && document.getElementById(id)) { document.getElementById(id).value = val; count++; } };
+    setIf('cpe-orig-cuit', d.titularCuit);
+    setIf('cpe-orig-renspa', d.origenRenspa);
+    setIf('cpe-dest-cuit', d.destinoCuit);
+    setIf('cpe-recib-cuit', d.destinatarioCuit);
+    setIf('cpe-corr-cuit', d.corredorVentaPrimCuit);
+    if (d.observaciones) setIf('cpe-obs', d.observaciones);
+    // Mostrar resumen
+    toast(`✅ PDF parseado · ${count} campos completados. Revisá y emití.`, 'success');
+    // Guardar la data para posible uso futuro
+    state._cpePdfData = d;
+  } catch (e) {
+    console.error('[cpeParsearPDF]', e);
+    toast('No se pudo parsear: ' + e.message, 'error');
+  }
 }
 
 async function cpeDetalle(viajeId) {
@@ -12290,186 +12332,246 @@ async function cpeDetalle(viajeId) {
 // CPE — Vista oficial + Imprimir + Descargar + Mail + WhatsApp (v0.8.3)
 // ============================================================
 function _cpeHtmlOficial(v, empresa) {
-  // Genera HTML con formato similar al CTG oficial de ARCA
-  const fmt = (d) => d ? new Date(d).toLocaleDateString('es-AR') : '—';
+  // Formato basado en la CPE oficial de ARCA (CPE Automotor)
+  const fmtFecha = (d) => d ? new Date(d).toLocaleDateString('es-AR') : '';
+  const fmtFechaHora = (d) => d ? new Date(d).toLocaleString('es-AR') : '';
   const fmtN_ = (n) => (Number(n)||0).toLocaleString('es-AR');
   const empresaNombre = empresa?.razonSocial || empresa?.name || '';
   const empresaCuit   = empresa?.cuit || empresa?.arcaCuit || '';
+  const cuitNombre = (cuit, nombre) => (cuit||'') + (nombre?` - ${nombre}`:'') || '';
+  const vencimiento = v.cpeFechaVencimiento ? new Date(v.cpeFechaVencimiento) :
+    (v.cpeFechaEmision ? (function(){ const d = new Date(v.cpeFechaEmision); d.setDate(d.getDate()+30); return d; })() : null);
   return `
 <!doctype html><html lang="es"><head><meta charset="utf-8"/>
 <title>Carta de Porte Electrónica — CTG ${v.cpeNroCtg||''}</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: Arial, sans-serif; font-size: 11pt; color: #1f2937; margin: 0; padding: 20px; background: #fff; }
-  .doc { max-width: 820px; margin: 0 auto; background: #fff; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1d4ed8; padding-bottom: 12px; margin-bottom: 16px; }
-  .header .left { flex: 1; }
-  .header h1 { margin: 0; font-size: 20pt; color: #1e40af; letter-spacing: -0.5px; }
-  .header h2 { margin: 2px 0 0; font-size: 11pt; color: #6b7280; font-weight: normal; }
-  .header .right { text-align: right; }
-  .header .right .ctg-box { background: #1e40af; color: #fff; padding: 10px 16px; border-radius: 6px; }
-  .header .right .ctg-label { font-size: 9pt; opacity: 0.9; }
-  .header .right .ctg-val { font-size: 22pt; font-weight: bold; letter-spacing: 2px; font-family: 'Courier New', monospace; }
-  .header .right .small { font-size: 8pt; color: #6b7280; margin-top: 4px; }
-  .estado-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 9pt; font-weight: bold; text-transform: uppercase; }
-  .est-emitida { background: #fef3c7; color: #92400e; }
-  .est-confirmada { background: #d1fae5; color: #065f46; }
-  .est-anulada { background: #fee2e2; color: #991b1b; }
-  .sec { border: 1px solid #d1d5db; border-radius: 4px; margin-bottom: 10px; }
-  .sec-title { background: #f3f4f6; padding: 6px 10px; font-size: 10pt; font-weight: bold; color: #374151; border-bottom: 1px solid #d1d5db; text-transform: uppercase; letter-spacing: 0.5px; }
-  .sec-body { padding: 10px; }
-  .row { display: flex; flex-wrap: wrap; gap: 12px 20px; }
-  .field { flex: 1; min-width: 180px; }
-  .field .lbl { font-size: 8pt; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
-  .field .val { font-size: 11pt; color: #1f2937; padding: 2px 0; border-bottom: 1px dotted #d1d5db; min-height: 18px; }
-  .carga-big { display: flex; justify-content: space-around; align-items: center; padding: 14px; background: #f0f9ff; border-radius: 4px; margin-top: 8px; }
-  .carga-big .item { text-align: center; }
-  .carga-big .item .v { font-size: 18pt; font-weight: bold; color: #1e40af; }
-  .carga-big .item .l { font-size: 9pt; color: #6b7280; text-transform: uppercase; }
-  .footer { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 12px; border-top: 2px solid #e5e7eb; font-size: 9pt; color: #6b7280; }
-  .firma { width: 200px; text-align: center; border-top: 1px solid #1f2937; padding-top: 4px; font-size: 9pt; }
-  .codigo-barras { font-family: 'Libre Barcode 39', monospace; font-size: 32pt; letter-spacing: 0; }
+  body { font-family: Arial, sans-serif; font-size: 9pt; color: #1f2937; margin: 0; padding: 14px; background: #fff; }
+  .doc { max-width: 850px; margin: 0 auto; background: #fff; }
+  .header-top { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1f2937; padding-bottom: 8px; margin-bottom: 4px; }
+  .header-top .left h1 { margin: 0; font-size: 14pt; font-weight: bold; }
+  .header-top .left .sub { font-size: 10pt; margin-top: 2px; }
+  .header-top .right { font-size: 9pt; }
+  .header-top .right table { border-collapse: collapse; }
+  .header-top .right td { padding: 2px 8px; }
+  .header-top .right td:first-child { text-align: right; font-weight: bold; }
+  .header-top .right td.ctg-val { color: #1e40af; font-weight: bold; font-size: 11pt; font-family: 'Courier New', monospace; }
+  .sec-label { background: #d1d5db; padding: 3px 6px; font-size: 9pt; font-weight: bold; color: #1f2937; margin-top: 6px; border: 1px solid #6b7280; }
+  .sec-body { padding: 6px 8px; border: 1px solid #6b7280; border-top: 0; }
+  .sec-body table { width: 100%; border-collapse: collapse; }
+  .sec-body td { padding: 2px 4px; vertical-align: top; font-size: 9pt; }
+  .sec-body td.k { color: #374151; font-weight: bold; white-space: nowrap; }
+  .sec-body td.v { border-bottom: 1px dotted #9ca3af; }
+  .estado-tag { display: inline-block; padding: 1px 6px; font-size: 8pt; font-weight: bold; color: #fff; background: #16a34a; }
+  .est-emitida { background: #d97706; }
+  .est-confirmada { background: #16a34a; }
+  .est-anulada { background: #dc2626; }
+  .mock-tag { display: inline-block; padding: 1px 6px; font-size: 8pt; font-weight: bold; background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; margin-left: 4px; }
+  .pesos-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 4px; }
+  .pesos-grid div { padding: 4px 8px; background: #f3f4f6; border: 1px solid #d1d5db; text-align: center; }
+  .pesos-grid div .l { font-size: 8pt; color: #6b7280; }
+  .pesos-grid div .v { font-size: 12pt; font-weight: bold; color: #1f2937; }
+  .pesos-grid div.neto { background: #dbeafe; }
+  .pesos-grid div.neto .v { color: #1e40af; }
+  .declaracion { margin-top: 18px; padding: 8px; border-top: 1px solid #9ca3af; font-size: 8pt; font-style: italic; color: #374151; }
+  .firmas { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 30px; }
+  .firma { text-align: center; border-top: 1px solid #1f2937; padding-top: 4px; font-size: 8pt; }
+  .pie { text-align: center; font-size: 7pt; color: #9ca3af; margin-top: 14px; }
+  .historial { font-size: 8pt; color: #6b7280; margin-top: 8px; padding: 4px; background: #f9fafb; border: 1px solid #e5e7eb; }
   @media print {
-    body { padding: 0; }
+    body { padding: 8mm; font-size: 8.5pt; }
     .no-print { display: none !important; }
     .doc { max-width: none; }
-    @page { margin: 14mm; size: A4; }
+    @page { margin: 8mm; size: A4; }
   }
-  .toolbar { position: fixed; top: 0; left: 0; right: 0; background: #111827; color: #fff; padding: 8px 16px; display: flex; gap: 8px; z-index: 1000; }
+  .toolbar { position: fixed; top: 0; left: 0; right: 0; background: #111827; color: #fff; padding: 8px 16px; display: flex; gap: 8px; z-index: 1000; align-items: center; }
   .toolbar button { background: #1e40af; color: #fff; border: 0; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 10pt; }
   .toolbar button:hover { opacity: 0.9; }
-  .toolbar .sep { flex: 1; }
-  .toolbar .ttl { font-size: 11pt; font-weight: bold; padding: 6px 0; }
+  .toolbar .ttl { font-size: 11pt; font-weight: bold; padding: 6px 0; flex: 1; }
 </style>
 </head>
 <body>
   <div class="toolbar no-print">
     <div class="ttl">📋 Carta de Porte Electrónica</div>
-    <div class="sep"></div>
     <button onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>
-    <button onclick="window.close()">✖ Cerrar</button>
+    <button onclick="window.close()" style="background:#dc2626;">✖ Cerrar</button>
   </div>
   <div style="height: 50px;" class="no-print"></div>
   <div class="doc">
-    <div class="header">
+
+    <!-- ENCABEZADO -->
+    <div class="header-top">
       <div class="left">
-        <h1>ARCA — Carta de Porte Electrónica</h1>
-        <h2>Comprobante electrónico de transporte de granos · Servicio WSCPE</h2>
-        <div style="margin-top: 10px;">
-          <span class="estado-badge est-${(v.cpeEstado||'emitida').toLowerCase()}">${(v.cpeEstado||'emitida').toUpperCase()}</span>
-          ${v.cpeRespuestaArca?.mock ? '<span class="estado-badge" style="background:#fef3c7;color:#92400e;margin-left:6px;">⚠️ SIMULADA — TEST</span>' : ''}
+        <h1>Carta de Porte Electrónica</h1>
+        <div class="sub">${esc(v.cpeTipo==='ferroviaria'?'Ferroviaria':'Automotor')}</div>
+        <div style="margin-top: 6px;">
+          <span class="estado-tag est-${(v.cpeEstado||'emitida').toLowerCase()}">${(v.cpeEstado||'emitida').toUpperCase()}</span>
+          ${v.cpeRespuestaArca?.mock ? '<span class="mock-tag">⚠️ SIMULADA — TEST</span>' : ''}
         </div>
       </div>
       <div class="right">
-        <div class="ctg-box">
-          <div class="ctg-label">N° CTG</div>
-          <div class="ctg-val">${v.cpeNroCtg || '—'}</div>
-        </div>
-        ${v.cpeNroComprobante ? `<div class="small">Comprobante N° ${v.cpeNroComprobante}</div>` : ''}
-        <div class="small">Emisión: ${fmt(v.cpeFechaEmision)}</div>
+        <table>
+          <tr><td>Fecha:</td><td>${fmtFecha(v.cpeFechaEmision)}</td></tr>
+          <tr><td>N° CPE:</td><td class="ctg-val">${esc(v.cpeNroComprobante||'—')}</td></tr>
+          <tr><td>CTG:</td><td class="ctg-val">${esc(v.cpeNroCtg||'—')}</td></tr>
+          ${vencimiento?`<tr><td>Vencimiento:</td><td>${fmtFechaHora(vencimiento)}</td></tr>`:''}
+        </table>
       </div>
     </div>
 
-    <div class="sec">
-      <div class="sec-title">Titular de la Carta de Porte</div>
-      <div class="sec-body">
-        <div class="row">
-          <div class="field"><div class="lbl">Razón Social</div><div class="val">${empresaNombre}</div></div>
-          <div class="field"><div class="lbl">CUIT</div><div class="val">${empresaCuit}</div></div>
-        </div>
+    <!-- A - INTERVINIENTES -->
+    <div class="sec-label">A - INTERVINIENTES</div>
+    <div class="sec-body">
+      <table>
+        <tr><td class="k" width="30%">Titular Carta de Porte:</td><td class="v">${esc(cuitNombre(empresaCuit, empresaNombre))}</td></tr>
+        <tr><td class="k">Remitente Comercial Productor:</td><td class="v">${esc(v.cpeRemitenteProductor||'')}</td></tr>
+        <tr><td class="k">Rte. Comercial Venta Primaria:</td><td class="v">${esc(v.cpeRteComercialPrim||'')}</td></tr>
+        <tr><td class="k">Rte. Comercial Venta Secundaria:</td><td class="v">${esc(v.cpeRteComercialSec||'')}</td></tr>
+        <tr><td class="k">Mercado a Término:</td><td class="v">${esc(v.cpeMercadoTermino||'')}</td></tr>
+        <tr><td class="k">Corredor Venta Primaria:</td><td class="v">${esc(v.cpeCorredorPrim || v.cpeCorredorCuit || '')}</td></tr>
+        <tr><td class="k">Corredor Venta Secundaria:</td><td class="v">${esc(v.cpeCorredorSec||'')}</td></tr>
+        <tr><td class="k">Representante entregador:</td><td class="v">${esc(v.cpeRepEntregador||'')}</td></tr>
+        <tr><td class="k">Representante recibidor:</td><td class="v">${esc(v.cpeRepRecibidor||'')}</td></tr>
+        <tr><td class="k">Destinatario:</td><td class="v">${esc(v.cpeDestinatarioCuit||'')}</td></tr>
+        <tr><td class="k">Destino:</td><td class="v">${esc(v.cpeDestinoCuit||'')}</td></tr>
+        <tr><td class="k">Empresa Transportista:</td><td class="v">${esc(cuitNombre(v.transporteCuit, v.transportista))}</td></tr>
+        <tr><td class="k">Flete pagador:</td><td class="v">${esc(v.cpeFletePagador || v.pagadorFlete || '')}</td></tr>
+        <tr><td class="k">Chofer:</td><td class="v">${esc(cuitNombre(v.choferCuit, v.chofer))}</td></tr>
+        <tr><td class="k">Intermediario de flete:</td><td class="v">${esc(v.cpeIntermediarioCuit||'')}</td></tr>
+      </table>
+    </div>
+
+    <!-- B - GRANO/ESPECIE -->
+    <div class="sec-label">B - GRANO / ESPECIE</div>
+    <div class="sec-body">
+      <table>
+        <tr>
+          <td class="k">Grano / Especie:</td><td class="v" width="25%">${esc(v.producto||'')}</td>
+          <td class="k">Tipo:</td><td class="v" width="20%">${esc(v.cpeGranoTipo || v.producto || '')}</td>
+          <td class="k">Campaña:</td><td class="v" width="15%">${esc(v.cpeCampania || (new Date().getFullYear()+''+(new Date().getFullYear()+1).toString().slice(-2)))}</td>
+        </tr>
+      </table>
+      <div style="margin-top: 6px;">
+        <b>DECLARACIÓN DE CALIDAD:</b>
+        ${v.cpeCalidad === 'condicional' ? 'Conforme  /  <b>Condicional</b>' : '<b>Conforme</b>  /  Condicional'}
+      </div>
+      <div class="pesos-grid">
+        <div><div class="l">Peso Bruto</div><div class="v">${fmtN_(v.kgBruto)}</div></div>
+        <div><div class="l">Peso Tara</div><div class="v">${fmtN_(v.kgTara)}</div></div>
+        <div class="neto"><div class="l">Peso Neto</div><div class="v">${fmtN_(v.cantidad || v.kgNeto)}</div></div>
+      </div>
+      ${v.cpeObservaciones ? `<div style="margin-top: 6px;"><b>Observaciones:</b> ${esc(v.cpeObservaciones)}</div>` : ''}
+    </div>
+
+    <!-- C - PROCEDENCIA -->
+    <div class="sec-label">C - PROCEDENCIA</div>
+    <div class="sec-body">
+      <table>
+        <tr>
+          <td class="k">Es un campo:</td><td class="v" width="15%">${v.cpeOrigenEsCampo === false ? 'No' : 'Sí'}</td>
+          <td class="k">Localidad:</td><td class="v" width="25%">${esc(v.cpeOrigenLocalidad || v.origen || '')}</td>
+          <td class="k">Provincia:</td><td class="v" width="25%">${esc(v.cpeOrigenProvincia||'')}</td>
+        </tr>
+        <tr>
+          <td class="k">Latitud:</td><td class="v">${esc(v.cpeOrigenLat||'-')}</td>
+          <td class="k">Longitud:</td><td class="v">${esc(v.cpeOrigenLng||'-')}</td>
+          <td class="k">RENSPA:</td><td class="v">${esc(v.cpeOrigenRenspa||'-')}</td>
+        </tr>
+        ${v.cpeOrigenDescripcion?`<tr><td class="k">Descripción:</td><td class="v" colspan="5">${esc(v.cpeOrigenDescripcion)}</td></tr>`:''}
+      </table>
+    </div>
+
+    <!-- D - DESTINO DE LA MERCADERÍA -->
+    <div class="sec-label">D - DESTINO DE LA MERCADERÍA</div>
+    <div class="sec-body">
+      <table>
+        <tr>
+          <td class="k" width="15%">Es un campo:</td><td class="v" width="10%">${v.cpeDestinoEsCampo === true ? 'Sí' : 'No'}</td>
+          <td class="k" width="12%">N° Planta:</td><td class="v" width="13%">${esc(v.cpeDestinoPlanta||'')}</td>
+          <td class="k" width="12%">Dirección:</td><td class="v">${esc(v.cpeDestinoDireccion||'')}</td>
+        </tr>
+        <tr>
+          <td class="k">Localidad:</td><td class="v" colspan="2">${esc(v.cpeDestinoLocalidad || v.destino || '')}</td>
+          <td class="k">Provincia:</td><td class="v" colspan="2">${esc(v.cpeDestinoProvincia||'')}</td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- E - DATOS DEL TRANSPORTE -->
+    <div class="sec-label">E - DATOS DEL TRANSPORTE</div>
+    <div class="sec-body">
+      <table>
+        <tr><td class="k" width="20%">Dominios:</td><td class="v">${esc(v.patente||'')}${v.patenteAcoplado?` - ${esc(v.patenteAcoplado)}`:''}</td></tr>
+        <tr>
+          <td class="k">Partida:</td><td class="v" width="35%">${v.cpePartidaFecha ? fmtFechaHora(v.cpePartidaFecha) : fmtFechaHora(v.fecha)}</td>
+          <td class="k" width="15%">Kms. a recorrer:</td><td class="v" width="15%">${esc(v.cpeKms || v.km || '-')}</td>
+        </tr>
+        <tr><td class="k">Tarifa:</td><td class="v">${v.tarifa ? '$ ' + fmtN_(v.tarifa) + '/t' : '-'}</td></tr>
+      </table>
+    </div>
+
+    <!-- F - CONTINGENCIAS -->
+    <div class="sec-label">F - CONTINGENCIAS</div>
+    <div class="sec-body">
+      <table>
+        <tr><td class="k" width="20%">Contingencia:</td><td class="v" width="30%">${esc(v.cpeContingencia||'-')}</td>
+            <td class="k" width="10%">Otro:</td><td class="v">${esc(v.cpeContingenciaOtro||'-')}</td></tr>
+        <tr><td class="k">Desactivación:</td><td class="v">${esc(v.cpeDesactivacion||'-')}</td>
+            <td class="k">Otro:</td><td class="v">${esc(v.cpeDesactivacionOtro||'-')}</td></tr>
+      </table>
+    </div>
+
+    <!-- G - DESCARGA -->
+    <div class="sec-label">G - DESCARGA</div>
+    <div class="sec-body">
+      <table>
+        <tr>
+          <td class="k" width="15%">Fecha Arribo:</td><td class="v" width="20%">${v.cpeFechaArribo?fmtFecha(v.cpeFechaArribo):'-'}</td>
+          <td class="k" width="15%">Peso Bruto (kg):</td><td class="v">${fmtN_(v.kgBrutoDest)||'-'}</td>
+        </tr>
+        <tr>
+          <td class="k">Fecha Descarga:</td><td class="v">${v.cpeFechaArribo?fmtFecha(v.cpeFechaArribo):'-'}</td>
+          <td class="k">Peso Tara (kg):</td><td class="v">${fmtN_(v.kgTaraDest)||'-'}</td>
+        </tr>
+        <tr>
+          <td class="k">N° Turno:</td><td class="v">${esc(v.cpeNroTurno||'-')}</td>
+          <td class="k">Peso Neto (kg):</td><td class="v">${fmtN_(v.kgNetoDest || v.kgDescarga)||'-'}</td>
+        </tr>
+        <tr>
+          <td class="k">Localidad:</td><td class="v">${esc(v.cpeDestinoLocalidad || v.destino || '-')}</td>
+          <td class="k">Provincia:</td><td class="v">${esc(v.cpeDestinoProvincia || '-')}</td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- DECLARACIÓN JURADA -->
+    <div class="declaracion">
+      " Declaro bajo juramento que la presente carga no ha sido tratada con ningún plaguicida fumigante durante su carga o en
+      camión o vagón no autorizado dicho tratamiento durante su tránsito hasta su destino. "
+    </div>
+
+    <!-- HISTORIAL -->
+    <div class="sec-label" style="margin-top: 8px;">HISTORIAL DE CAMBIOS POST CONFIRMACIÓN</div>
+    <div class="sec-body">
+      <div style="font-size: 8pt; color: #6b7280;">
+        ${v.cpeEstado === 'anulada' ? `<b>Anulada</b> el ${fmtFechaHora(v.cpeFechaAnulacion)}${v.cpeMotivoAnulacion?` — Motivo: ${esc(v.cpeMotivoAnulacion)}`:''}` :
+          v.cpeEstado === 'confirmada' ? `Arribo confirmado el ${fmtFechaHora(v.cpeFechaArribo)}` :
+          'La CPE no cuenta con modificaciones efectuadas posterior a la confirmación definitiva.'}
       </div>
     </div>
 
-    <div class="sec">
-      <div class="sec-title">Origen / Productor</div>
-      <div class="sec-body">
-        <div class="row">
-          <div class="field"><div class="lbl">CUIT origen</div><div class="val">${v.cpeOrigenCuit || '—'}</div></div>
-          <div class="field"><div class="lbl">RENSPA</div><div class="val">${v.cpeOrigenRenspa || '—'}</div></div>
-          <div class="field"><div class="lbl">Localidad origen</div><div class="val">${v.origen || '—'}</div></div>
-        </div>
-      </div>
+    <!-- FIRMAS -->
+    <div class="firmas">
+      <div class="firma">Firma del Perito Recibidor &nbsp; N° Matrícula ___________</div>
+      <div class="firma">Firma del Destinatario / Entregador &nbsp; N° Matrícula ___________</div>
     </div>
 
-    <div class="sec">
-      <div class="sec-title">Destino / Destinatario</div>
-      <div class="sec-body">
-        <div class="row">
-          <div class="field"><div class="lbl">CUIT destinatario</div><div class="val">${v.cpeDestinoCuit || '—'}</div></div>
-          <div class="field"><div class="lbl">CUIT recibidor</div><div class="val">${v.cpeDestinatarioCuit || '—'}</div></div>
-          <div class="field"><div class="lbl">Localidad destino</div><div class="val">${v.destino || '—'}</div></div>
-        </div>
-        ${(v.cpeCorredorCuit || v.cpeIntermediarioCuit) ? `
-        <div class="row" style="margin-top: 10px;">
-          <div class="field"><div class="lbl">CUIT corredor</div><div class="val">${v.cpeCorredorCuit || '—'}</div></div>
-          <div class="field"><div class="lbl">CUIT intermediario</div><div class="val">${v.cpeIntermediarioCuit || '—'}</div></div>
-        </div>` : ''}
-      </div>
-    </div>
-
-    <div class="sec">
-      <div class="sec-title">Transportista y Chofer</div>
-      <div class="sec-body">
-        <div class="row">
-          <div class="field"><div class="lbl">Transportista</div><div class="val">${v.transportista || '—'}</div></div>
-          <div class="field"><div class="lbl">CUIT</div><div class="val">${v.transporteCuit || '—'}</div></div>
-        </div>
-        <div class="row" style="margin-top: 10px;">
-          <div class="field"><div class="lbl">Chofer</div><div class="val">${v.chofer || '—'}</div></div>
-          <div class="field"><div class="lbl">CUIT chofer</div><div class="val">${v.choferCuit || '—'}</div></div>
-        </div>
-        <div class="row" style="margin-top: 10px;">
-          <div class="field"><div class="lbl">Patente camión</div><div class="val" style="font-family: 'Courier New', monospace; font-weight: bold; font-size: 13pt;">${v.patente || '—'}</div></div>
-          <div class="field"><div class="lbl">Patente acoplado</div><div class="val" style="font-family: 'Courier New', monospace;">${v.patenteAcoplado || '—'}</div></div>
-          <div class="field"><div class="lbl">Tipo</div><div class="val">${v.tipoCamion || '—'}</div></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="sec">
-      <div class="sec-title">Datos de la carga</div>
-      <div class="sec-body">
-        <div class="row">
-          <div class="field"><div class="lbl">Producto</div><div class="val">${v.producto || '—'}</div></div>
-          <div class="field"><div class="lbl">Cosecha</div><div class="val">${v.cosecha || new Date().getFullYear()}</div></div>
-        </div>
-        <div class="carga-big">
-          <div class="item">
-            <div class="v">${fmtN_(v.kgTara)}</div>
-            <div class="l">Tara (kg)</div>
-          </div>
-          <div class="item">
-            <div class="v">${fmtN_(v.kgBruto)}</div>
-            <div class="l">Bruto (kg)</div>
-          </div>
-          <div class="item" style="background: #1e40af; color: #fff; padding: 8px 16px; border-radius: 4px;">
-            <div class="v" style="color: #fff;">${fmtN_(v.cantidad || v.kgNeto)}</div>
-            <div class="l" style="color: #dbeafe;">Neto (kg)</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    ${v.cpeObservaciones ? `
-    <div class="sec">
-      <div class="sec-title">Observaciones</div>
-      <div class="sec-body">${v.cpeObservaciones}</div>
-    </div>` : ''}
-
-    <div class="footer">
-      <div>
-        <div><b>Emisión:</b> ${fmt(v.cpeFechaEmision)}</div>
-        ${v.cpeFechaArribo ? `<div><b>Arribo confirmado:</b> ${fmt(v.cpeFechaArribo)}</div>` : ''}
-      </div>
-      <div class="firma">Firma del transportista / Chofer</div>
-    </div>
-    <div style="text-align: center; font-size: 8pt; color: #9ca3af; margin-top: 8px;">
-      Documento generado por AgroCore · CTG ${v.cpeNroCtg||''} · Verificable en wscpe.afip.gob.ar
+    <div class="pie">
+      Documento generado por AgroCore · CTG ${esc(v.cpeNroCtg||'')} · 1 / 1
     </div>
   </div>
 </body></html>`;
 }
-
 async function cpeAbrirVista(viajeId) {
   let v;
   try { const r = await api('/api/viajes/'+viajeId); v = r.data; }
