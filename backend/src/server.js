@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.1.1';
+const AGROCORE_VERSION = '1.2.0';
 const AGROCORE_BUILD = new Date('2026-06-24').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1895,6 +1895,12 @@ mountCrud({
     titularidad: z.string().nullable().optional(),
     ubicacion: z.string().nullable().optional(),
     renspa: z.string().nullable().optional(),
+    renspas: z.array(z.object({
+      codigo: z.string(),
+      tipo: z.enum(['agricola','ganadera','mixto','otro']).optional(),
+    })).nullable().optional(),
+    tipoExplotacion: z.enum(['agricola','ganadera','mixta']).nullable().optional(),
+    geolocalizacion: z.string().nullable().optional(),
     observaciones: z.string().nullable().optional(),
     activo: z.boolean().optional(),
   }),

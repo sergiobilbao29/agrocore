@@ -160,7 +160,10 @@ model Campo {
   propietario     String?
   titularidad     String?   // "propio" | "arrendado" | "aparceria" | otro texto
   ubicacion       String?   // referencia/dirección (ej. "Ruta 34 km 215")
-  renspa          String?   // RENSPA del campo (Registro Nacional Sanitario)
+  renspa          String?   // RENSPA principal (legacy/CPE) — usar 'renspas' para múltiples
+  renspas         Json?     // Array [{ codigo: "00.001...", tipo: "agricola"|"ganadera" }]
+  tipoExplotacion String?   // "agricola" | "ganadera" | "mixta"
+  geolocalizacion String?   // "lat,lng" o URL Maps (ej. https://maps.app.goo.gl/xxx)
   observaciones   String?
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())

@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'26/06/2026',
+      titulo:'🌾🐄 v1.2.0 — Campos: tipo de explotación + multi-RENSPA + geolocalización + compartir por WhatsApp',
+      desc:'Mejoras grandes al módulo Campos pensadas para uso real: (1) <b>Tipo de explotación</b> en el form: Agrícola / Ganadera / Mixta — se ve con icono en la card del listado. (2) <b>Múltiples RENSPAs</b>: ahora podés cargar varios RENSPAs por campo (típico cuando es mixto: uno agrícola y uno ganadero), cada uno con su tipo. Botón "+ Agregar RENSPA" arma la lista dinámica. (3) <b>Geolocalización</b>: input para coordenadas "lat,lng" o link de Google Maps. Botón 📍 para tomar tu ubicación actual (pide permiso al navegador), botón 🗺️ para abrir en Maps. (4) <b>📱 Compartir ubicación por WhatsApp</b>: tanto en el form como en la card del listado, abre WhatsApp Web con un mensaje pre-armado tipo "📍 Ubicación de Montenegro (LLSP): https://maps.app.goo.gl/xxx" y te deja <b>elegir el contacto destinatario</b> (mismo comportamiento que el botón Asesor). Ideal para mandarle la ubicación al chofer del camión, al ingeniero agrónomo o a quien sea.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/06/2026',
       titulo:'🧹 v1.1.1 — Limpieza: 7 bugs menores + hardening defensivo',
       desc:'Después de la v1.1.0 estable, atacamos los 7 bugs no críticos restantes: (1) <b>viajeSchema</b> ahora acepta los campos cpe* como defensa para que ediciones desde forms generales no pierdan datos. (2) <b>Cliente</b> y <b>Proveedor</b> ahora tienen el campo Observaciones en el form + Proveedor también tiene Nombre fantasía y Condición IVA (antes solo Cliente los tenía — Proveedor los soportaba en BD pero no se podían cargar). (3) <b>Depósitos</b>: el costo de estadía y secada ahora respeta cuando cargás "0" explícitamente (antes lo convertía a null). (4) <b>Bancos</b>: aceptamos tipos "ajuste_in" y "ajuste_out" para movimientos de ajuste manual de saldo. (5) <b>Estáticos</b> "/" y "/web" movidos al final del servidor (organización, evita conflictos con rutas /api/*). Con estos arreglos + los 6 críticos de v1.1.0 cerramos la auditoría exhaustiva — la versión queda lista para uso productivo intensivo.' },
@@ -5624,7 +5627,14 @@ pages.campos = async function() {
             </div>
           </div>
           <div class="grid grid-cols-2 gap-2 mt-3 text-xs">
-            <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Titularidad</div><div class="font-bold">${esc(c.titularidad||'—')}</div>${c.propietario?`<div class="text-[10px] text-slate-500 mt-0.5">${esc(c.propietario)}</div>`:''}${c.renspa?`<div class="text-[10px] text-blue-700 mt-0.5">📋 ${esc(c.renspa)}</div>`:''}</div>
+            <div class="bg-slate-50 rounded p-2">
+              <div class="text-slate-500">Titularidad</div>
+              <div class="font-bold">${esc(c.titularidad||'—')}</div>
+              ${c.tipoExplotacion?`<div class="text-[10px] mt-0.5">${c.tipoExplotacion==='agricola'?'🌾 Agrícola':c.tipoExplotacion==='ganadera'?'🐄 Ganadera':'🌾🐄 Mixta'}</div>`:''}
+              ${c.propietario?`<div class="text-[10px] text-slate-500 mt-0.5">${esc(c.propietario)}</div>`:''}
+              ${(Array.isArray(c.renspas) && c.renspas.length ? c.renspas : (c.renspa ? [{codigo:c.renspa,tipo:''}] : [])).map(r => `<div class="text-[10px] text-blue-700 mt-0.5">📋 ${esc(r.codigo)}${r.tipo?` <span class="text-slate-400">(${r.tipo})</span>`:''}</div>`).join('')}
+              ${c.geolocalizacion?`<button class="text-[10px] text-emerald-700 hover:underline mt-1" onclick='campoCompartirUbicacionCard(${JSON.stringify(c.id)}, "${esc(c.geolocalizacion)}", ${JSON.stringify(c.nombre)})' title="Compartir ubicación por WhatsApp">📱 Compartir ubicación</button>`:''}
+            </div>
             <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Lotes</div><div class="font-bold">${lts.length} · ${fmtN(haLotes)} ha</div></div>
           </div>
           <div class="mt-3 border-t pt-2">
@@ -5700,6 +5710,75 @@ async function campoDel(id) {
     delete state.cache.campos; delete state.cache.lotes; pages.campos();
   } catch (e) { toast(e.message,'error'); }
 }
+// === v1.2.0 Campos: tipo explotacion, multi-RENSPA, geolocalizacion, compartir WhatsApp ===
+function campoRenspaRowHTML(r, i) {
+  return `<div class="renspa-row flex gap-1 items-center">
+    <input class="input text-sm flex-1" data-renspa-cod placeholder="00.001.0.12345/A1" value="${esc(r.codigo||'')}"/>
+    <select class="input text-sm" data-renspa-tipo style="width:140px">
+      <option value=""           ${!r.tipo?'selected':''}>— Tipo —</option>
+      <option value="agricola"   ${r.tipo==='agricola'?'selected':''}>🌾 Agrícola</option>
+      <option value="ganadera"   ${r.tipo==='ganadera'?'selected':''}>🐄 Ganadera</option>
+      <option value="mixto"      ${r.tipo==='mixto'?'selected':''}>🌾🐄 Mixto</option>
+      <option value="otro"       ${r.tipo==='otro'?'selected':''}>📝 Otro</option>
+    </select>
+    <button type="button" class="btn btn-ghost text-red-600 text-xs" onclick="this.closest('.renspa-row').remove()" title="Eliminar">×</button>
+  </div>`;
+}
+function campoAgregarRenspa() {
+  const cont = document.getElementById('f-renspas-list');
+  if (!cont) return;
+  const div = document.createElement('div');
+  div.innerHTML = campoRenspaRowHTML({codigo:'',tipo:''}, cont.children.length);
+  cont.appendChild(div.firstElementChild);
+}
+function campoTomarUbicacion() {
+  if (!navigator.geolocation) return toast('Tu navegador no soporta geolocalización','warn');
+  toast('📍 Tomando ubicación…','info');
+  navigator.geolocation.getCurrentPosition(pos => {
+    const lat = pos.coords.latitude.toFixed(6);
+    const lng = pos.coords.longitude.toFixed(6);
+    const inp = document.getElementById('f-geo');
+    if (inp) inp.value = `${lat},${lng}`;
+    toast(`✅ Ubicación: ${lat}, ${lng}`,'success');
+  }, err => toast('No se pudo obtener la ubicación: '+err.message,'error'),
+     { enableHighAccuracy: true, timeout: 10000 });
+}
+function campoGeoUrl(geo) {
+  if (!geo) return '';
+  const g = String(geo).trim();
+  // Si ya es URL, devolver tal cual
+  if (/^https?:\/\//i.test(g)) return g;
+  // Si es "lat,lng", armar URL de Google Maps
+  if (/^-?\d+\.?\d*\s*,\s*-?\d+\.?\d*$/.test(g)) {
+    const [lat, lng] = g.split(',').map(x => x.trim());
+    return `https://www.google.com/maps?q=${lat},${lng}`;
+  }
+  // Texto libre: búsqueda en Maps
+  return `https://www.google.com/maps/search/${encodeURIComponent(g)}`;
+}
+async function campoCompartirUbicacion() {
+  const geo = document.getElementById('f-geo')?.value.trim();
+  const nombre = document.getElementById('f-nom')?.value.trim() || 'Campo';
+  if (!geo) {
+    if (!confirm('No hay geolocalización cargada. ¿Querés tomar tu ubicación actual primero?')) return;
+    campoTomarUbicacion();
+    return;
+  }
+  const url = campoGeoUrl(geo);
+  const empresa = state.user?.companies?.find(c => c.id === state.companyId)?.name || '';
+  const txt = encodeURIComponent(`📍 *Ubicación de ${nombre}*${empresa?` (${empresa})`:''}\n\n${url}\n\n_Compartido desde AgroCore_`);
+  // Abrir WhatsApp Web sin destinatario → deja elegir contacto
+  window.open(`https://web.whatsapp.com/send?text=${txt}`, '_blank');
+}
+
+function campoCompartirUbicacionCard(id, geo, nombre) {
+  if (!geo) return toast('Este campo no tiene geolocalización','warn');
+  const url = campoGeoUrl(geo);
+  const empresa = state.user?.companies?.find(c => c.id === state.companyId)?.name || '';
+  const txt = encodeURIComponent(`📍 *Ubicación de ${nombre||'Campo'}*${empresa?` (${empresa})`:''}\n\n${url}\n\n_Compartido desde AgroCore_`);
+  window.open(`https://web.whatsapp.com/send?text=${txt}`, '_blank');
+}
+
 function campoForm(id=null) {
   const it = id ? (state.cache.campos||[]).find(x=>x.id===id)||{} : {};
   openModal({
@@ -5714,10 +5793,45 @@ function campoForm(id=null) {
           </select>
         </div>
         <div class="col-span-2"><label class="label">Ubicación / referencia</label><input id="f-ub" class="input" value="${esc(it.ubicacion||'')}" placeholder="Ej: Ruta 34 km 215, zona La Criolla"/></div>
-        <div><label class="label">RENSPA</label><input id="f-renspa" class="input" value="${esc(it.renspa||'')}" placeholder="00.001.0.12345/A1"/></div>
         <div><label class="label">Titular / propietario</label><input id="f-prop" class="input" value="${esc(it.propietario||'')}" placeholder="A nombre de... (ej. Gerardo Peiretti)"/></div>
+        <div><label class="label">Tipo de explotación</label>
+          <select id="f-tipoexp" class="input">
+            <option value="" ${!it.tipoExplotacion?'selected':''}>— Sin especificar —</option>
+            <option value="agricola"  ${it.tipoExplotacion==='agricola'?'selected':''}>🌾 Agrícola (granos)</option>
+            <option value="ganadera"  ${it.tipoExplotacion==='ganadera'?'selected':''}>🐄 Ganadera (hacienda)</option>
+            <option value="mixta"     ${it.tipoExplotacion==='mixta'?'selected':''}>🌾🐄 Mixta (agrícola + ganadera)</option>
+          </select>
+        </div>
         <div><label class="label">Provincia</label>${catSelect('f-prov', 'Provincia', it.provincia||'', { placeholder:'— Elegir provincia —', parent: 'Argentina' })}</div>
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
+
+        <div class="col-span-2">
+          <label class="label flex items-center justify-between">
+            <span>📍 Geolocalización <span class="text-[10px] font-normal text-slate-500">(coordenadas "lat,lng" o link de Google Maps)</span></span>
+            <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="campoCompartirUbicacion()">📱 Compartir por WhatsApp</button>
+          </label>
+          <div class="flex gap-1">
+            <input id="f-geo" class="input flex-1" value="${esc(it.geolocalizacion||'')}" placeholder="-33.5012,-64.4587  ó  https://maps.app.goo.gl/xxx"/>
+            <button type="button" class="btn btn-secondary text-xs" onclick="campoTomarUbicacion()" title="Tomar mi ubicación actual">📍</button>
+            ${it.geolocalizacion ? `<button type="button" class="btn btn-secondary text-xs" onclick="window.open(campoGeoUrl('${esc(it.geolocalizacion)}'),'_blank')" title="Abrir en Google Maps">🗺️</button>` : ''}
+          </div>
+        </div>
+
+        <div class="col-span-2">
+          <label class="label flex items-center justify-between">
+            <span>📋 RENSPAs</span>
+            <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="campoAgregarRenspa()">+ Agregar RENSPA</button>
+          </label>
+          <div id="f-renspas-list" class="space-y-1.5">
+            ${(function(){
+              const arr = Array.isArray(it.renspas) && it.renspas.length ? it.renspas : (it.renspa ? [{codigo: it.renspa, tipo: ''}] : [{codigo:'', tipo:''}]);
+              return arr.map((r,i) => campoRenspaRowHTML(r, i)).join('');
+            })()}
+          </div>
+          <div class="text-[10px] text-slate-500 mt-1">Si tu campo es mixto podés cargar 2 RENSPAs (uno para agrícola y otro para ganadera).</div>
+        </div>
+
+        <div class="col-span-2"><label class="label">Ubicación / referencia</label><input id="f-ub" class="input" value="${esc(it.ubicacion||'')}" placeholder="Ej: Ruta 34 km 215, zona La Criolla"/></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -5725,13 +5839,24 @@ function campoForm(id=null) {
   });
 }
 async function campoSave(id) {
+  // Recolectar todos los RENSPAs cargados (con su tipo)
+  const renspas = $$('#f-renspas-list .renspa-row').map(row => ({
+    codigo: row.querySelector('[data-renspa-cod]')?.value.trim() || '',
+    tipo:   row.querySelector('[data-renspa-tipo]')?.value || '',
+  })).filter(r => r.codigo);
+  // RENSPA principal (legacy/CPE): tomamos el primero del array
+  const renspaPrincipal = renspas.length ? renspas[0].codigo : null;
+
   const data = {
     nombre: $('#f-nom').value.trim(),
     hectareas: Number($('#f-ha').value||0),
     titularidad: $('#f-tit').value||null,
     ubicacion: $('#f-ub').value.trim()||null,
-    renspa: $('#f-renspa')?.value.trim()||null,
+    renspa: renspaPrincipal,
+    renspas: renspas.length ? renspas : null,
     propietario: $('#f-prop')?.value.trim()||null,
+    tipoExplotacion: $('#f-tipoexp')?.value || null,
+    geolocalizacion: $('#f-geo')?.value.trim() || null,
     localidad: $('#f-loc')?.value || null,
     provincia: $('#f-prov')?.value || null,
     observaciones: $('#f-obs')?.value.trim()||null,
