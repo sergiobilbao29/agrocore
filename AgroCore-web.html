@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
+      titulo:'🎯 Parser PDF CPE ahora extrae casi TODO automáticamente',
+      desc:'Reescribimos el parser entendiendo el formato real que devuelve pdf-parse (con etiquetas y valores en columnas separadas, no inline). Ahora al importar un PDF de ARCA se extraen correctamente: CTG, número CPE, producto (Soja/Maíz/etc), pesos (Bruto/Tara/Neto separados aunque vengan pegados como "4500015000"), origen (Localidad + Provincia separadas aunque vengan pegadas), destino, dominios del camión y acoplado, km a recorrer, tarifa, transportista + CUIT, chofer + CUIT, observaciones. Para los CUITs de Destinatario / Destino / Corredor / Representantes se hace un mejor mapeo posicional (toma del orden estándar de la CPE). Resultado: importar un PDF ahora carga 14+ campos del viaje automáticamente, en vez de 4 como antes. Si igual algún campo no mapea bien, abrí F12 → Console y vas a ver "[viajeImportarCP]" con todo lo extraído.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/06/2026',
       titulo:'📥 Importar una Carta de Porte de ARCA y crear un Viaje completo en 1 clic',
       desc:'Botón nuevo en la página Viajes (al lado de + Nuevo viaje): <b>📥 Importar CP</b>. Subís el PDF de una CPE emitida en el portal de ARCA y AgroCore crea un viaje nuevo con TODO cargado: producto (Soja/Maíz/etc), origen y destino, transportista + CUIT, chofer + CUIT, patentes (camión + acoplado separados de "Dominios"), Peso Neto, km a recorrer, tarifa, pagador del flete, CTG y N° de Carta de Porte. El viaje queda directamente en estado "cargado" y con la CPE marcada como emitida (importada). Ideal cuando la chica de administración recibe las CPEs por mail/WhatsApp y solo necesita registrarlas — antes había que tipear todo. Además mejoramos el parser para que tolere PDFs con layout en columnas (etiquetas en una línea y valores en otra), pesos pegados ("4500015000" → 45000 + 15000) y patentes con o sin acoplado. Si algún campo no se mapea, abrí DevTools → Console para ver el texto crudo del PDF y poder afinar.' },
@@ -12170,7 +12173,7 @@ async function viajeImportarCP(input) {
     if (!r.ok) throw new Error((j && j.error) || ('HTTP '+r.status));
     if (!j.ok) throw new Error(j.error || 'Error');
     const info = j.info || {};
-    toast(`✅ Viaje creado · CTG ${info.ctg||''} · ${info.producto||''} ${info.pesoNeto?(' '+Number(info.pesoNeto).toLocaleString('es-AR')+' kg'):''}${info.transportista?' · '+info.transportista:''}`, 'success');
+    toast(`✅ Viaje creado · CTG ${info.ctg||''} · ${info.producto||''}${info.pesoNeto?(' '+Number(info.pesoNeto).toLocaleString('es-AR')+' kg'):''}${info.origen?' · '+info.origen+'→'+info.destino:''}${info.transportista?' · 🚛 '+info.transportista:''}${info.chofer?' · 👤 '+info.chofer:''}`, 'success');
     delete state.cache.viajes;
     pages.viajes();
   } catch (e) {

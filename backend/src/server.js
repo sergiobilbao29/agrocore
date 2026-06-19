@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.8.11';
+const AGROCORE_VERSION = '0.8.13';
 const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8123,6 +8123,223 @@ app.delete('/api/choferes/:id', requireCompany, requirePermission('viajes:delete
   } catch (e) { next(e); }
 });
 
+
+// Parser común de PDF CPE — extrae lo posible del texto desordenado que devuelve pdf-parse.
+// Estrategia: PRIMERO recolecta todos los CUITs+razones aparecidos (en orden) y
+// todas las etiquetas vacías. Después intenta mapear CUITs a etiquetas con
+// heurísticas y regex específicos para los formatos típicos de ARCA.
+function _parsearTextoCPE(txt) {
+  const PRODUCTOS = ['Soja','Maíz','Maiz','Trigo','Girasol','Sorgo','Cebada','Avena','Centeno','Lino','Arroz','Colza','Cártamo','Cartamo'];
+  const PROVS = ['BUENOS AIRES','CABA','CATAMARCA','CHACO','CHUBUT','CORDOBA','CÓRDOBA','CORRIENTES','ENTRE RIOS','ENTRE RÍOS','FORMOSA','JUJUY','LA PAMPA','LA RIOJA','MENDOZA','MISIONES','NEUQUEN','NEUQUÉN','RIO NEGRO','RÍO NEGRO','SALTA','SAN JUAN','SAN LUIS','SANTA CRUZ','SANTA FE','SANTIAGO DEL ESTERO','TIERRA DEL FUEGO','TUCUMAN','TUCUMÁN'];
+  const get = (re) => { const m = txt.match(re); return m ? m[1].trim() : null; };
+
+  // TODOS los pares CUIT-RAZON del texto, en orden de aparición
+  const todosCuits = [];
+  const reCuit = /(\d{11})\s*-\s*([A-ZÁÉÍÓÚÑa-záéíóúñ&\.\s,]+?)(?=\n|\s{2,}|[A-Z][a-z]+\s*:|$)/g;
+  let mm;
+  while ((mm = reCuit.exec(txt)) !== null) {
+    todosCuits.push({ cuit: mm[1], razon: mm[2].trim() });
+  }
+
+  // Helper: regex inline tradicional (cuando funciona)
+  const cuitRazonInline = (etiqueta) => {
+    const re = new RegExp(etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*:?\\s*(\\d{11})\\s*-\\s*([^\\n]+?)(?:\\n|$)', 'i');
+    const m = txt.match(re);
+    return m ? { cuit: m[1], razon: m[2].trim() } : { cuit: null, razon: null };
+  };
+
+  // Chofer y Transportista suelen venir inline o pegados — son los más confiables
+  const chofer        = cuitRazonInline('Chofer');
+  const transportista = cuitRazonInline('Empresa Transportista');
+
+  // Para los demás, los más comunes los buscamos por patrón.
+  // Estrategia mejorada: si una etiqueta es seguida (en el texto desordenado) o precedida
+  // por un CUIT cercano, intentamos asociar.
+  const destinatario   = cuitRazonInline('Destinatario');
+  const destino        = cuitRazonInline('Destino');
+  const fletePagador   = cuitRazonInline('Flete pagador');
+
+  // Grano: tomar el primer producto conocido cerca de "Grano"
+  let grano = null;
+  for (const p of PRODUCTOS) {
+    const re = new RegExp(p, 'i');
+    const m = txt.match(re);
+    if (m) {
+      // Verificar que esté en la sección B (entre B y C)
+      const idxP = m.index;
+      const idxB = txt.search(/B\s*-\s*GRANO/i);
+      const idxC = txt.search(/C\s*-\s*PROCEDENCIA/i);
+      if (idxB >= 0 && idxC > idxB && idxP > idxB && idxP < idxC) {
+        grano = p;
+        break;
+      }
+    }
+  }
+
+  // Tipo grano: mismo enfoque
+  const tipoGrano = grano;
+  const campania = get(/Campaña\s*:?\s*(\d{4})/i);
+
+  // PESOS — heurística:
+  // En el texto crudo pueden venir como "4500015000\n30000" donde 4500015000 = 45000 + 15000 (bruto + tara concatenados)
+  // o "Peso Bruto 45000 Peso Tara 15000"
+  let pesoBruto = get(/Peso\s*Bruto\s+(\d{3,7})/i);
+  let pesoTara  = get(/Peso\s*Tara\s+(\d{3,7})/i);
+  let pesoNeto  = get(/Peso\s*Neto\s+(\d{3,7})/i);
+  if (!pesoBruto || !pesoTara || !pesoNeto) {
+    // Buscar números aislados en sección B
+    const idxB = txt.search(/B\s*-\s*GRANO/i);
+    const idxC = txt.search(/C\s*-\s*PROCEDENCIA/i);
+    if (idxB >= 0 && idxC > idxB) {
+      const secB = txt.slice(idxB, idxC);
+      // Buscar número de 8-12 dígitos pegados (típico bruto+tara)
+      const grande = secB.match(/\b(\d{8,12})\b/);
+      let bruto2 = null, tara2 = null;
+      if (grande) {
+        const s = grande[1];
+        // Partir en 2 mitades si tiene número par de dígitos
+        if (s.length === 10) { bruto2 = s.slice(0,5); tara2 = s.slice(5); }
+        else if (s.length === 8) { bruto2 = s.slice(0,4); tara2 = s.slice(4); }
+      }
+      // Buscar números sueltos de 3-7 dígitos
+      const sueltos = (secB.match(/\b\d{3,7}\b/g) || []).map(Number).filter(n => n > 100 && n < 100000);
+      const unicos = [...new Set(sueltos)].sort((a,b) => b-a);
+      if (!pesoBruto && bruto2) pesoBruto = bruto2;
+      else if (!pesoBruto && unicos.length) pesoBruto = String(unicos[0]);
+      if (!pesoTara && tara2) pesoTara = tara2;
+      else if (!pesoTara && unicos.length >= 2) {
+        // Tara: el siguiente más alto que sea menor a bruto
+        const candTara = unicos.find(n => n < Number(pesoBruto));
+        if (candTara) pesoTara = String(candTara);
+      }
+      if (!pesoNeto && pesoBruto && pesoTara) {
+        pesoNeto = String(Number(pesoBruto) - Number(pesoTara));
+      } else if (!pesoNeto) {
+        // Buscar el número más pequeño que pueda ser neto (alrededor de 30000)
+        const candNeto = unicos.find(n => n >= 1000 && n <= 50000);
+        if (candNeto) pesoNeto = String(candNeto);
+      }
+    }
+  }
+
+  // LOCALIDADES y PROVINCIAS — heurística:
+  // "Localidad:ProvinciaACHIRASCORDOBA" → ACHIRAS + CORDOBA
+  let origenLocalidad = null, origenProvincia = null;
+  // Buscar provincia conocida en sección C y separar
+  const idxC = txt.search(/C\s*-\s*PROCEDENCIA/i);
+  const idxD = txt.search(/D\s*-\s*DESTINO/i);
+  if (idxC >= 0 && idxD > idxC) {
+    const secC = txt.slice(idxC, idxD);
+    // Intentar regex normal primero
+    let m1 = secC.match(/Localidad[:\s]+([A-ZÁÉÍÓÚÑ \-.]+?)\s+Provincia/i);
+    if (m1) origenLocalidad = m1[1].trim();
+    // Si está pegado "Localidad:ProvinciaACHIRASCORDOBA" — separar
+    if (!origenLocalidad) {
+      const pegado = secC.match(/Localidad:\s*Provincia([A-Z][A-Z\s]+?)(?=\s|$)/i);
+      if (pegado) {
+        // Buscar provincia conocida al final
+        for (const prov of PROVS) {
+          if (pegado[1].toUpperCase().endsWith(prov.toUpperCase())) {
+            origenLocalidad = pegado[1].slice(0, -prov.length).trim();
+            origenProvincia = prov;
+            break;
+          }
+        }
+        if (!origenLocalidad) origenLocalidad = pegado[1].trim();
+      }
+    }
+    if (!origenProvincia) {
+      for (const prov of PROVS) {
+        if (secC.toUpperCase().includes(prov.toUpperCase())) { origenProvincia = prov; break; }
+      }
+    }
+  }
+  const origenRenspa = get(/(\d{2}\.\d{3}\.\d\.\d{4,}\/?[A-Z0-9]*)/);
+
+  // Destino
+  let destinoEsCampo = null, destinoPlanta = null, destinoDireccion = null, destinoLocalidad = null, destinoProvincia = null;
+  if (idxD >= 0) {
+    const idxE = txt.search(/E\s*-\s*DATOS/i);
+    const secD = txt.slice(idxD, idxE > idxD ? idxE : txt.length);
+    destinoEsCampo = (secD.match(/Es un campo\s*:?\s*(Si|No|Sí)/i) || [])[1] || null;
+    destinoPlanta  = (secD.match(/N°\s*Planta\s*(\d+)/i) || [])[1] || null;
+    // Dirección puede venir suelta
+    const dir = secD.match(/Dirección[:\s]*([^\n]+)/i);
+    if (dir) destinoDireccion = dir[1].trim();
+    // Provincia
+    for (const prov of PROVS) {
+      if (secD.toUpperCase().includes(prov.toUpperCase())) { destinoProvincia = prov; break; }
+    }
+    // Localidad: buscar texto en mayúsculas que NO sea provincia
+    const localidades = secD.match(/^([A-ZÁÉÍÓÚÑ ]{4,})$/gm);
+    if (localidades) {
+      for (const l of localidades) {
+        const lt = l.trim();
+        if (!PROVS.some(p => p.toUpperCase() === lt.toUpperCase()) && lt !== 'No' && lt !== 'Si' && !/^\d/.test(lt)) {
+          destinoLocalidad = lt;
+          break;
+        }
+      }
+    }
+  }
+
+  // Dominios — buscar 2 patentes consecutivas EN CUALQUIER PARTE del texto
+  let dominioCamion = null, dominioAcoplado = null;
+  const mDom2 = txt.match(/([A-Z]{2,3}\s*\d{3,4}\s*[A-Z]{0,2})\s*[-–\/]\s*([A-Z]{2,3}\s*\d{3,4}\s*[A-Z]{0,2})/);
+  if (mDom2) {
+    dominioCamion = mDom2[1].replace(/\s+/g, '');
+    dominioAcoplado = mDom2[2].replace(/\s+/g, '');
+  } else {
+    const mDom1 = txt.match(/Dominios?\s*:?\s*\n*\s*([A-Z]{2,3}\s*\d{3,4}\s*[A-Z]{0,2})/i);
+    if (mDom1) dominioCamion = mDom1[1].replace(/\s+/g,'');
+  }
+
+  const partidaFecha = get(/(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?)/);
+  const kmsARecorrer = get(/Kms\.\s*a\s*recorrer\s*:?\s*(\d+)/i) || get(/Kms\.\s*a\s*recorrer:?\s*\n+\s*\d+\/\d+\/\d+\s+\d+:\d+\s*\n+(\d+)/i);
+  // Si no, intentar buscar el número antes de Tarifa
+  let km2 = kmsARecorrer;
+  if (!km2) {
+    const m = txt.match(/Partida[\s\S]{0,200}?\n(\d{1,4})\n+(\d+)\s*\n+Tarifa/);
+    if (m) km2 = m[1];
+  }
+  // La tarifa puede venir ANTES de la etiqueta "Tarifa:" (pdf-parse separa columnas)
+  // o DESPUÉS. Probamos ambos.
+  let tarifa = get(/Tarifa\s*:?\s*\n*\s*([\d][\d\.,]*)/i);
+  if (!tarifa) tarifa = get(/([\d][\d\.,]*)\s*\n+\s*Tarifa\s*:?/i);
+  const observaciones = get(/Observaciones\s*:?\s*([^\n]+)/i);
+
+  const cpeNroCtg = get(/CTG\s*:?\s*(\d{11,})/i);
+  const cpeNroComprobante = get(/(\d{5}-\d{8})/);  // formato típico 00000-00001055
+  const fechaEmisionTxt = get(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+  const fechaVtoTxt = null;
+
+  return {
+    cpeNroCtg, cpeNroComprobante, fechaEmisionTxt, fechaVtoTxt,
+    // CUITs por etiqueta (los confiables)
+    titularCuit: (todosCuits[0]||{}).cuit, titularRazon: (todosCuits[0]||{}).razon,
+    remitenteCuit: null, remitenteRazon: null,
+    rteComercialPrimCuit: (todosCuits[1]||{}).cuit, rteComercialPrimRazon: (todosCuits[1]||{}).razon,
+    corredorPrimCuit: null, corredorPrimRazon: null,
+    corredorSecCuit: (todosCuits[2]||{}).cuit, corredorSecRazon: (todosCuits[2]||{}).razon,
+    destinatarioCuit: destinatario.cuit || (todosCuits[4]||{}).cuit, destinatarioRazon: destinatario.razon || (todosCuits[4]||{}).razon,
+    destinoCuit: destino.cuit || (todosCuits[5]||{}).cuit, destinoRazon: destino.razon || (todosCuits[5]||{}).razon,
+    transportistaCuit: transportista.cuit || (todosCuits[6]||{}).cuit, transportistaRazon: transportista.razon || (todosCuits[6]||{}).razon,
+    fletePagadorCuit: fletePagador.cuit, fletePagadorRazon: fletePagador.razon,
+    choferCuit: chofer.cuit, choferRazon: chofer.razon,
+    intermediarioCuit: null, intermediarioRazon: null,
+    repEntregadorCuit: (todosCuits[3]||{}).cuit, repEntregadorRazon: (todosCuits[3]||{}).razon,
+    repRecibidorCuit: null, repRecibidorRazon: null,
+    grano, tipoGrano, campania,
+    pesoBruto, pesoTara, pesoNeto,
+    origenLocalidad, origenProvincia, origenRenspa,
+    destinoEsCampo, destinoPlanta, destinoDireccion, destinoLocalidad, destinoProvincia,
+    dominioCamion, dominioAcoplado,
+    partidaFecha, kmsARecorrer: km2, tarifa, observaciones,
+    // Debug: todos los CUITs encontrados, para mostrar al usuario
+    todosCuitsDetectados: todosCuits,
+  };
+}
+
 // Parser de PDF de CPE oficial de ARCA. Tolerante a layouts variables:
 // algunos PDFs vienen con valores inline ("Chofer: 20XXXXX - NOMBRE") y otros con
 // las etiquetas y valores en líneas separadas (por tablas de ARCA). Estrategias:
@@ -8137,241 +8354,68 @@ app.post('/api/arca/cpe/parsear-pdf', authMiddleware, requireCompany, requirePer
     try { pdfParse = await getPdfParse(); }
     catch (e) { return res.status(500).json({ ok: false, error: 'pdf-parse no disponible: ' + e.message }); }
     const data = await pdfParse(req.file.buffer);
-    let txt = data.text || '';
-    // Normalizar espacios pero preservar saltos
-    const lineas = txt.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
-    const full = lineas.join('\n');
-
-    const get1 = (re, src) => { const m = (src||full).match(re); return m ? m[1].trim() : null; };
-    // Para una etiqueta dada, intenta: inline → siguiente línea → próximos N renglones
-    function buscarCuitRazon(etiqueta) {
-      const reEtiqueta = new RegExp(etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      const reInline = new RegExp(etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*:?\\s*(\\d{11})\\s*[-–]\\s*([^\\n]+)', 'i');
-      const m1 = full.match(reInline);
-      if (m1) return { cuit: m1[1], razon: m1[2].trim() };
-      // Fallback: buscar la línea de la etiqueta, luego CUIT en próximas 3
-      const idx = lineas.findIndex(l => reEtiqueta.test(l));
-      if (idx >= 0) {
-        for (let i = idx; i < Math.min(idx + 4, lineas.length); i++) {
-          const m2 = lineas[i].match(/(\d{11})\s*[-–]\s*(.+)/);
-          if (m2) return { cuit: m2[1], razon: m2[2].trim() };
-          const m3 = lineas[i].match(/(\d{11})/);
-          if (m3 && i > idx) return { cuit: m3[1], razon: '' };
-        }
-      }
-      return { cuit: null, razon: null };
-    }
-    const titular        = buscarCuitRazon('Titular Carta de Porte');
-    const remitente      = buscarCuitRazon('Remitente Comercial Productor');
-    const rteComPrim     = buscarCuitRazon('Rte\\. Comercial Venta Primaria');
-    const corredorPrim   = buscarCuitRazon('Corredor Venta Primaria');
-    const corredorSec    = buscarCuitRazon('Corredor Venta Secundaria');
-    const destinatario   = buscarCuitRazon('Destinatario');
-    const destino        = buscarCuitRazon('Destino');
-    const transportista  = buscarCuitRazon('Empresa Transportista');
-    const fletePagador   = buscarCuitRazon('Flete pagador');
-    const chofer         = buscarCuitRazon('Chofer');
-    const intermediario  = buscarCuitRazon('Intermediario de flete');
-    const repEntregador  = buscarCuitRazon('Representante entregador');
-    const repRecibidor   = buscarCuitRazon('Representante recibidor');
-
-    // Pesos: pueden venir como números pegados ("4500015000" = 45000+15000) o separados.
-    // Estrategia: buscar números enteros sueltos en la sección B
-    const idxGrano = lineas.findIndex(l => /B\s*-\s*GRANO/i.test(l));
-    const idxProcedencia = lineas.findIndex(l => /C\s*-\s*PROCEDENCIA/i.test(l));
-    let pesoBruto = get1(/Peso\s*Bruto[:\s]*(\d{3,7})/i);
-    let pesoTara  = get1(/Peso\s*Tara[:\s]*(\d{3,7})/i);
-    let pesoNeto  = get1(/Peso\s*Neto[:\s]*(\d{3,7})/i);
-    if (idxGrano >= 0 && idxProcedencia > idxGrano) {
-      const secB = lineas.slice(idxGrano, idxProcedencia);
-      // Recolectar todos los números de 3-7 dígitos en sección B
-      const nums = [];
-      secB.forEach(l => {
-        const arr = l.match(/\b\d{3,7}\b/g);
-        if (arr) nums.push(...arr.map(Number));
-      });
-      // Si hay un número "concatenado" muy largo, intentar partirlo (caso "4500015000" = 45000 + 15000)
-      secB.forEach(l => {
-        const big = l.match(/^(\d{8,12})$/);
-        if (big) {
-          const s = big[1];
-          if (s.length === 10) { nums.push(Number(s.slice(0,5))); nums.push(Number(s.slice(5))); }
-        }
-      });
-      const unicos = [...new Set(nums)].sort((a,b) => b - a);
-      // Heurística: el más grande suele ser bruto, el menor de los pesos es tara, neto = bruto - tara
-      if (!pesoBruto && unicos.length >= 1) pesoBruto = String(unicos[0]);
-      if (!pesoTara && unicos.length >= 2) {
-        // Tara: el más cercano al esperado (típicamente 10000-25000)
-        const candTara = unicos.find(n => n >= 5000 && n <= 30000 && n < unicos[0]);
-        if (candTara) pesoTara = String(candTara);
-      }
-      if (!pesoNeto && pesoBruto && pesoTara) pesoNeto = String(Number(pesoBruto) - Number(pesoTara));
-    }
-
-    // Grano: buscar productos típicos cerca de la sección B
-    let grano = get1(/Grano\s*\/\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)/i);
-    if (!grano && idxGrano >= 0 && idxProcedencia > idxGrano) {
-      const secB = lineas.slice(idxGrano, idxProcedencia);
-      const productos = ['Soja','Maíz','Maiz','Trigo','Girasol','Sorgo','Cebada','Avena','Centeno','Lino','Arroz'];
-      for (const l of secB) {
-        for (const p of productos) {
-          if (l.toLowerCase().includes(p.toLowerCase())) { grano = p; break; }
-        }
-        if (grano) break;
-      }
-    }
-    const campania = get1(/Campaña[:\s]*(\d{4})/i);
-
-    // Dominios: patentes argentinas
-    let dominioCamion = null, dominioAcoplado = null;
-    const domLine = get1(/Dominios?\s*:?\s*([A-Z0-9\-\s\/]+?)(?:\n|Partida)/i);
-    if (domLine) {
-      const parts = domLine.split(/[\-\/\s]+/).filter(p => /^[A-Z]{2,3}\d{3,4}[A-Z]{0,2}$/.test(p));
-      dominioCamion = parts[0] || null;
-      dominioAcoplado = parts[1] || null;
-    }
-    if (!dominioCamion) {
-      // Fallback: buscar patentes en todo el texto
-      const pats = (full.match(/\b[A-Z]{2,3}\d{3,4}[A-Z]{0,2}\b/g) || []).filter(p => p.length >= 6);
-      dominioCamion = pats[0] || null;
-      dominioAcoplado = pats[1] || null;
-    }
-
-    // Localidades
-    const origenLocalidad = get1(/C\s*-\s*PROCEDENCIA[\s\S]*?Localidad[:\s]*([^\n]+?)(?:\s+Provincia|\n)/i);
-    const origenProvincia = get1(/C\s*-\s*PROCEDENCIA[\s\S]*?Provincia\s*[:\s]*([A-ZÁÉÍÓÚÑ ]+?)(?:\n|Latitud)/i);
-    const destinoEsCampo  = get1(/D\s*-\s*DESTINO[\s\S]*?Es un campo:\s*(Si|No|Sí)/i);
-    const destinoPlanta   = get1(/N°\s*Planta\s*(\d+)/i);
-    const destinoDireccion= get1(/Dirección[:\s]*([^\n]+?)\s*(?:Localidad|\n)/i);
-    const destinoLocalidad= get1(/D\s*-\s*DESTINO[\s\S]*?Localidad[:\s]*([^\n]+?)(?:\s+Provincia|\n)/i);
-    const destinoProvincia= get1(/D\s*-\s*DESTINO[\s\S]*?Provincia[:\s]*([A-ZÁÉÍÓÚÑ ]+?)(?:\n|E -)/i);
-
-    // RENSPA
-    const origenRenspa = get1(/RENSPA[\s\S]*?(\d{2}\.\d{3}\.\d\.\d+\/?[A-Z0-9]*)/i);
-
-    // Transporte
-    const partidaFecha = get1(/Partida[:\s]*(\d{1,2}\/\d{1,2}\/\d{4}\s*\d{2}:\d{2}(?::\d{2})?)/i);
-    const kmsARecorrer = get1(/Kms\.\s*a\s*recorrer[:\s]*(\d+)/i);
-    const tarifa = get1(/Tarifa[:\s]*([\d\.,]+)/i);
-    const observaciones = get1(/Observaciones[:\s]*([^\n]+)/i);
-
-    const out = {
-      // ID
-      cpeNroCtg:        get1(/CTG:\s*(\d{11,})/i),
-      cpeNroComprobante:get1(/N°\s*CPE:?\s*([\d\-]+)/i),
-      fechaEmisionTxt:  get1(/Fecha:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i),
-      // Intervinientes
-      titularCuit: titular.cuit, titularRazon: titular.razon,
-      remitenteCuit: remitente.cuit, remitenteRazon: remitente.razon,
-      rteComercialPrimCuit: rteComPrim.cuit, rteComercialPrimRazon: rteComPrim.razon,
-      corredorPrimCuit: corredorPrim.cuit, corredorPrimRazon: corredorPrim.razon,
-      corredorSecCuit: corredorSec.cuit, corredorSecRazon: corredorSec.razon,
-      destinatarioCuit: destinatario.cuit, destinatarioRazon: destinatario.razon,
-      destinoCuit: destino.cuit, destinoRazon: destino.razon,
-      transportistaCuit: transportista.cuit, transportistaRazon: transportista.razon,
-      fletePagadorCuit: fletePagador.cuit, fletePagadorRazon: fletePagador.razon,
-      choferCuit: chofer.cuit, choferRazon: chofer.razon,
-      intermediarioCuit: intermediario.cuit, intermediarioRazon: intermediario.razon,
-      repEntregadorCuit: repEntregador.cuit, repEntregadorRazon: repEntregador.razon,
-      repRecibidorCuit: repRecibidor.cuit, repRecibidorRazon: repRecibidor.razon,
-      // Grano
-      grano, campania,
-      // Pesos
-      pesoBruto, pesoTara, pesoNeto,
-      // Procedencia
-      origenLocalidad, origenProvincia, origenRenspa,
-      // Destino
-      destinoEsCampo, destinoPlanta, destinoDireccion, destinoLocalidad, destinoProvincia,
-      // Transporte
-      dominioCamion, dominioAcoplado, partidaFecha, kmsARecorrer, tarifa,
-      // Otros
-      observaciones,
-    };
-    res.json({ ok: true, data: out, textoCrudo: txt.slice(0, 4000), totalLineas: lineas.length });
+    const txt = data.text || '';
+    const out = _parsearTextoCPE(txt);
+    res.json({ ok: true, data: out, textoCrudo: txt.slice(0, 4000) });
   } catch (e) { next(e); }
 });
 
-// Crear un viaje nuevo a partir del PDF de ARCA
+// Crear un viaje nuevo a partir del PDF de ARCA — usa el mismo parser que parsear-pdf
 app.post('/api/arca/cpe/importar-como-viaje', authMiddleware, requireCompany, requirePermission('viajes:create'), upload.single('archivo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     let pdfParse;
     try { pdfParse = await getPdfParse(); }
     catch (e) { return res.status(500).json({ ok: false, error: 'pdf-parse no disponible: ' + e.message }); }
-    // Re-usamos la lógica de parsing: llamamos al endpoint internamente vía fetch local sería costoso,
-    // mejor copiamos el parser inline. Para simplificar: hacemos una llamada interna fingida.
-    // Por practicidad, re-armamos los datos esenciales con un parser mínimo:
     const data = await pdfParse(req.file.buffer);
-    let txt = data.text || '';
-    const lineas = txt.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
-    const full = lineas.join('\n');
-    const g1 = (re) => { const m = full.match(re); return m ? m[1].trim() : null; };
-    const cuitRazonInline = (et) => {
-      const m = full.match(new RegExp(et + '\\s*:?\\s*(\\d{11})\\s*[-–]\\s*([^\\n]+)', 'i'));
-      return m ? { cuit: m[1], razon: m[2].trim() } : { cuit: null, razon: null };
-    };
-    const tr = cuitRazonInline('Empresa Transportista');
-    const ch = cuitRazonInline('Chofer');
-    const fp = cuitRazonInline('Flete pagador');
-    let grano = g1(/Grano\s*\/\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)/i);
-    if (!grano) {
-      const productos = ['Soja','Maíz','Maiz','Trigo','Girasol','Sorgo','Cebada','Avena'];
-      for (const p of productos) if (full.toLowerCase().includes(p.toLowerCase())) { grano = p; break; }
-    }
-    let pesoNeto = g1(/Peso\s*Neto[:\s]*(\d{3,7})/i);
-    if (!pesoNeto) {
-      const m = full.match(/Peso\s*Neto[^\d]+(\d{3,7})/i);
-      if (m) pesoNeto = m[1];
-    }
-    const ctg = g1(/CTG:\s*(\d{11,})/i);
-    const nroComp = g1(/N°\s*CPE:?\s*([\d\-]+)/i);
-    const origen = g1(/C\s*-\s*PROCEDENCIA[\s\S]*?Localidad[:\s]*([^\n]+?)(?:\s+Provincia|\n)/i);
-    const destino = g1(/D\s*-\s*DESTINO[\s\S]*?Localidad[:\s]*([^\n]+?)(?:\s+Provincia|\n)/i);
-    const km = g1(/Kms\.\s*a\s*recorrer[:\s]*(\d+)/i);
-    const tarifa = g1(/Tarifa[:\s]*([\d\.,]+)/i);
-    // Dominios
-    let patente = null, patenteAcoplado = null;
-    const domLine = g1(/Dominios?\s*:?\s*([A-Z0-9\-\s\/]+?)(?:\n|Partida)/i);
-    if (domLine) {
-      const parts = domLine.split(/[\-\/\s]+/).filter(p => /^[A-Z]{2,3}\d{3,4}[A-Z]{0,2}$/.test(p));
-      patente = parts[0] || null;
-      patenteAcoplado = parts[1] || null;
-    }
-    const partida = g1(/Partida[:\s]*(\d{1,2}\/\d{1,2}\/\d{4}\s*\d{2}:\d{2}(?::\d{2})?)/i);
+    const txt = data.text || '';
+    const d = _parsearTextoCPE(txt);
+    // Fecha del viaje desde partida
     let fechaIso = new Date();
-    if (partida) {
-      // dd/mm/yyyy hh:mm
-      const mm = partida.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{2}):(\d{2})/);
+    if (d.partidaFecha) {
+      const mm = d.partidaFecha.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{2}):(\d{2})/);
       if (mm) fechaIso = new Date(`${mm[3]}-${mm[2].padStart(2,'0')}-${mm[1].padStart(2,'0')}T${mm[4]}:${mm[5]}:00`);
     }
-    const obs = g1(/Observaciones[:\s]*([^\n]+)/i);
-    // Crear el viaje
     const v = await prisma.viaje.create({ data: {
       companyId: req.companyId,
       fecha: fechaIso,
-      origen, destino,
-      producto: grano || null,
-      transportista: tr.razon || null,
-      transporteCuit: tr.cuit || null,
-      chofer: ch.razon || null,
-      choferCuit: ch.cuit || null,
-      patente, patenteAcoplado,
-      cantidad: pesoNeto ? Number(pesoNeto) : null,
-      km: km ? Number(km) : null,
-      tarifa: tarifa ? Number(String(tarifa).replace(/\./g,'').replace(',','.')) : null,
-      pagadorFlete: fp.razon || null,
-      ctg, cartaPorte: nroComp || ctg,
+      origen: d.origenLocalidad || null,
+      destino: d.destinoLocalidad || null,
+      producto: d.grano || null,
+      transportista: d.transportistaRazon || null,
+      transporteCuit: d.transportistaCuit || null,
+      chofer: d.choferRazon || null,
+      choferCuit: d.choferCuit || null,
+      patente: d.dominioCamion || null,
+      patenteAcoplado: d.dominioAcoplado || null,
+      cantidad: d.pesoNeto ? Number(d.pesoNeto) : null,
+      kgTara:  d.pesoTara  ? Number(d.pesoTara)  : null,
+      kgBruto: d.pesoBruto ? Number(d.pesoBruto) : null,
+      kgNeto:  d.pesoNeto  ? Number(d.pesoNeto)  : null,
+      km: d.kmsARecorrer ? Number(d.kmsARecorrer) : null,
+      tarifa: d.tarifa ? Number(String(d.tarifa).replace(/\./g,'').replace(',','.')) : null,
+      pagadorFlete: d.fletePagadorRazon || null,
+      ctg: d.cpeNroCtg || null,
+      cartaPorte: d.cpeNroComprobante || d.cpeNroCtg || null,
       estado: 'cargado',
-      observaciones: 'Importado desde PDF de ARCA' + (obs?` · ${obs}`:''),
-      // Datos CPE
-      cpeNroCtg: ctg, cpeNroComprobante: nroComp,
-      cpeEstado: 'emitida',
-      cpeTipo: 'automotor',
+      observaciones: 'Importado desde PDF de ARCA' + (d.observaciones?` · ${d.observaciones}`:''),
+      cpeNroCtg: d.cpeNroCtg, cpeNroComprobante: d.cpeNroComprobante,
+      cpeEstado: 'emitida', cpeTipo: 'automotor',
       cpeFechaEmision: new Date(),
-      cpeRespuestaArca: { importadoDesdePDF: true },
+      cpeOrigenCuit: d.titularCuit || null,
+      cpeOrigenRenspa: d.origenRenspa || null,
+      cpeDestinoCuit: d.destinoCuit || null,
+      cpeDestinatarioCuit: d.destinatarioCuit || null,
+      cpeCorredorCuit: d.corredorPrimCuit || null,
+      cpeIntermediarioCuit: d.intermediarioCuit || null,
+      cpeObservaciones: d.observaciones || null,
+      cpeRespuestaArca: { importadoDesdePDF: true, data: d },
     }});
-    res.status(201).json({ ok: true, data: v, info: { mensaje: 'Viaje creado desde PDF', ctg, transportista: tr.razon, chofer: ch.razon, producto: grano, pesoNeto } });
+    res.status(201).json({ ok: true, data: v, info: {
+      mensaje: 'Viaje creado desde PDF',
+      ctg: d.cpeNroCtg, transportista: d.transportistaRazon, chofer: d.choferRazon,
+      producto: d.grano, pesoNeto: d.pesoNeto, origen: d.origenLocalidad, destino: d.destinoLocalidad,
+    } });
   } catch (e) { next(e); }
 });
 
