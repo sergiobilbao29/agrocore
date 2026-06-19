@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '0.8.13';
-const AGROCORE_BUILD = new Date('2026-06-20').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '1.0.0';
+const AGROCORE_BUILD = new Date('2026-06-24').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -8124,120 +8124,149 @@ app.delete('/api/choferes/:id', requireCompany, requirePermission('viajes:delete
 });
 
 
-// Parser común de PDF CPE — extrae lo posible del texto desordenado que devuelve pdf-parse.
-// Estrategia: PRIMERO recolecta todos los CUITs+razones aparecidos (en orden) y
-// todas las etiquetas vacías. Después intenta mapear CUITs a etiquetas con
-// heurísticas y regex específicos para los formatos típicos de ARCA.
+// Parser común de PDF CPE — extrae los campos del texto desordenado que devuelve pdf-parse.
+// Estrategia v0.8.14:
+//   1) Recolectar todos los CUITs+razon del texto en orden de aparición.
+//   2) Para campos que vienen "inline" (etiqueta + valor en LA MISMA línea), regex específico.
+//   3) Para los demás, mapeo posicional: detectar las etiquetas presentes en el texto
+//      (en orden) y asignar el i-ésimo CUIT al i-ésimo campo no-vacío.
+//   4) Importante: NO buscar nada en catalogos. Devolver CUIT + Razón Social EXACTOS del PDF.
 function _parsearTextoCPE(txt) {
   const PRODUCTOS = ['Soja','Maíz','Maiz','Trigo','Girasol','Sorgo','Cebada','Avena','Centeno','Lino','Arroz','Colza','Cártamo','Cartamo'];
   const PROVS = ['BUENOS AIRES','CABA','CATAMARCA','CHACO','CHUBUT','CORDOBA','CÓRDOBA','CORRIENTES','ENTRE RIOS','ENTRE RÍOS','FORMOSA','JUJUY','LA PAMPA','LA RIOJA','MENDOZA','MISIONES','NEUQUEN','NEUQUÉN','RIO NEGRO','RÍO NEGRO','SALTA','SAN JUAN','SAN LUIS','SANTA CRUZ','SANTA FE','SANTIAGO DEL ESTERO','TIERRA DEL FUEGO','TUCUMAN','TUCUMÁN'];
   const get = (re) => { const m = txt.match(re); return m ? m[1].trim() : null; };
 
-  // TODOS los pares CUIT-RAZON del texto, en orden de aparición
+  // 1) TODOS los CUIT-RAZON en orden de aparición. Usamos un regex que captura la razón hasta el próximo separador claro.
   const todosCuits = [];
-  const reCuit = /(\d{11})\s*-\s*([A-ZÁÉÍÓÚÑa-záéíóúñ&\.\s,]+?)(?=\n|\s{2,}|[A-Z][a-z]+\s*:|$)/g;
+  const reCuit = /(\d{11})\s*-\s*([A-ZÁÉÍÓÚÑ&\.][A-ZÁÉÍÓÚÑa-záéíóúñ&\.\s,]+?)(?=\n|\s{2,}[A-Z][a-z]|Flete pagador|Chofer|Intermediario|Representante|Destinatario|Destino|Empresa|Corredor|Mercado|Rte\.|Remitente|Titular|A\s*-|B\s*-|$)/g;
   let mm;
   while ((mm = reCuit.exec(txt)) !== null) {
-    todosCuits.push({ cuit: mm[1], razon: mm[2].trim() });
+    let razon = mm[2].trim();
+    // Limpiar trailing words que sean etiquetas pegadas
+    razon = razon.replace(/(?:\s*Flete pagador|Chofer|Intermediario|Representante|Destinatario|Destino|Empresa Transportista|Corredor|Mercado a Término|Rte\.|Remitente|Titular).*$/i, '').trim();
+    todosCuits.push({ cuit: mm[1], razon });
   }
 
-  // Helper: regex inline tradicional (cuando funciona)
-  const cuitRazonInline = (etiqueta) => {
-    const re = new RegExp(etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*:?\\s*(\\d{11})\\s*-\\s*([^\\n]+?)(?:\\n|$)', 'i');
+  // 2) Inline ESTRICTO (sin cruzar newlines)
+  const cuitRazonInlineEstricto = (etiqueta) => {
+    const re = new RegExp(etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[ \\t]*:?[ \\t]*(\\d{11})[ \\t]*-[ \\t]*([^\\n]+)', 'i');
     const m = txt.match(re);
-    return m ? { cuit: m[1], razon: m[2].trim() } : { cuit: null, razon: null };
+    if (!m) return { cuit: null, razon: null };
+    let razon = m[2].trim();
+    razon = razon.replace(/(?:\s*Flete pagador|Chofer|Intermediario|Representante|Destinatario|Destino|Empresa Transportista|Corredor|Mercado a Término|Rte\.|Remitente|Titular).*$/i, '').trim();
+    return { cuit: m[1], razon };
   };
 
-  // Chofer y Transportista suelen venir inline o pegados — son los más confiables
-  const chofer        = cuitRazonInline('Chofer');
-  const transportista = cuitRazonInline('Empresa Transportista');
+  // El Chofer suele venir inline ("Chofer :20XXXX - NOMBRE")
+  const chofer = cuitRazonInlineEstricto('Chofer');
 
-  // Para los demás, los más comunes los buscamos por patrón.
-  // Estrategia mejorada: si una etiqueta es seguida (en el texto desordenado) o precedida
-  // por un CUIT cercano, intentamos asociar.
-  const destinatario   = cuitRazonInline('Destinatario');
-  const destino        = cuitRazonInline('Destino');
-  const fletePagador   = cuitRazonInline('Flete pagador');
+  // 3) Orden estándar de campos en la CPE oficial (en el orden visual del PDF)
+  // Para cada campo, identificamos si EXISTE en el texto y si tiene CUIT inline.
+  // ORDEN POSICIONAL: solo los campos que TÍPICAMENTE están con valor en una CPE
+  // de operación normal de granos (basado en el formato real de ARCA). Los demás
+  // (Remitente, Mercado a Término, Corredor Primaria, Rte Com Sec, etc.) suelen
+  // estar vacíos y NO se asignan por posición — si tienen valor, vienen inline
+  // (chofer típicamente). Esto evita el desfase cuando hay campos vacíos.
+  const CAMPOS_ORDEN = [
+    { key: 'titular',         et: 'Titular Carta de Porte' },
+    { key: 'rteComercialPrim',et: 'Rte. Comercial Venta Primaria' },
+    { key: 'corredorSec',     et: 'Corredor Venta Secundaria' },
+    { key: 'repEntregador',   et: 'Representante entregador' },
+    { key: 'destinatario',    et: 'Destinatario' },
+    { key: 'destino',         et: 'Destino' },
+    { key: 'transportista',   et: 'Empresa Transportista' },
+    { key: 'fletePagador',    et: 'Flete pagador' },
+  ];
 
-  // Grano: tomar el primer producto conocido cerca de "Grano"
-  let grano = null;
-  for (const p of PRODUCTOS) {
-    const re = new RegExp(p, 'i');
-    const m = txt.match(re);
-    if (m) {
-      // Verificar que esté en la sección B (entre B y C)
-      const idxP = m.index;
-      const idxB = txt.search(/B\s*-\s*GRANO/i);
-      const idxC = txt.search(/C\s*-\s*PROCEDENCIA/i);
-      if (idxB >= 0 && idxC > idxB && idxP > idxB && idxP < idxC) {
-        grano = p;
-        break;
-      }
+  // Para cada campo, intentar primero inline; si no, marcar como "necesita posicional"
+  const asignados = {};
+  const usadosCuits = new Set();
+  for (const c of CAMPOS_ORDEN) {
+    const r = cuitRazonInlineEstricto(c.et);
+    if (r.cuit) {
+      asignados[c.key] = r;
+      // Marcar este CUIT como ya usado para no asignarlo después por posicional
+      usadosCuits.add(r.cuit + '|' + r.razon);
     }
   }
 
-  // Tipo grano: mismo enfoque
+  // Para los que no se asignaron, mapeo posicional: tomar el siguiente CUIT no usado.
+  // Pero ojo, el orden de los CUITs en el texto SIGUE el orden de las etiquetas
+  // CON VALOR (en el orden estándar). Detectamos qué etiquetas existen en el texto:
+  const cuitsLibres = todosCuits.filter(c => !usadosCuits.has(c.cuit + '|' + c.razon));
+  let idx = 0;
+  for (const c of CAMPOS_ORDEN) {
+    if (asignados[c.key]) continue;
+    // ¿Existe la etiqueta en el texto?
+    const reEt = new RegExp(c.et.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    if (!reEt.test(txt)) continue;
+    // Asignar el siguiente CUIT libre
+    if (idx < cuitsLibres.length) {
+      asignados[c.key] = cuitsLibres[idx];
+      idx++;
+    } else {
+      asignados[c.key] = { cuit: null, razon: null };
+    }
+  }
+
+  // Helper para obtener el campo asignado
+  const A = (k) => asignados[k] || { cuit: null, razon: null };
+
+  // Grano: producto conocido cerca de la sección B
+  let grano = null;
+  const idxB = txt.search(/B\s*-\s*GRANO/i);
+  const idxC = txt.search(/C\s*-\s*PROCEDENCIA/i);
+  if (idxB >= 0 && idxC > idxB) {
+    const secB = txt.slice(idxB, idxC);
+    for (const p of PRODUCTOS) {
+      if (new RegExp('\\b' + p + '\\b', 'i').test(secB)) { grano = p; break; }
+    }
+  }
   const tipoGrano = grano;
   const campania = get(/Campaña\s*:?\s*(\d{4})/i);
 
-  // PESOS — heurística:
-  // En el texto crudo pueden venir como "4500015000\n30000" donde 4500015000 = 45000 + 15000 (bruto + tara concatenados)
-  // o "Peso Bruto 45000 Peso Tara 15000"
+  // Pesos
   let pesoBruto = get(/Peso\s*Bruto\s+(\d{3,7})/i);
   let pesoTara  = get(/Peso\s*Tara\s+(\d{3,7})/i);
   let pesoNeto  = get(/Peso\s*Neto\s+(\d{3,7})/i);
   if (!pesoBruto || !pesoTara || !pesoNeto) {
-    // Buscar números aislados en sección B
-    const idxB = txt.search(/B\s*-\s*GRANO/i);
-    const idxC = txt.search(/C\s*-\s*PROCEDENCIA/i);
     if (idxB >= 0 && idxC > idxB) {
       const secB = txt.slice(idxB, idxC);
-      // Buscar número de 8-12 dígitos pegados (típico bruto+tara)
       const grande = secB.match(/\b(\d{8,12})\b/);
       let bruto2 = null, tara2 = null;
       if (grande) {
         const s = grande[1];
-        // Partir en 2 mitades si tiene número par de dígitos
         if (s.length === 10) { bruto2 = s.slice(0,5); tara2 = s.slice(5); }
         else if (s.length === 8) { bruto2 = s.slice(0,4); tara2 = s.slice(4); }
       }
-      // Buscar números sueltos de 3-7 dígitos
       const sueltos = (secB.match(/\b\d{3,7}\b/g) || []).map(Number).filter(n => n > 100 && n < 100000);
       const unicos = [...new Set(sueltos)].sort((a,b) => b-a);
       if (!pesoBruto && bruto2) pesoBruto = bruto2;
       else if (!pesoBruto && unicos.length) pesoBruto = String(unicos[0]);
       if (!pesoTara && tara2) pesoTara = tara2;
       else if (!pesoTara && unicos.length >= 2) {
-        // Tara: el siguiente más alto que sea menor a bruto
         const candTara = unicos.find(n => n < Number(pesoBruto));
         if (candTara) pesoTara = String(candTara);
       }
       if (!pesoNeto && pesoBruto && pesoTara) {
         pesoNeto = String(Number(pesoBruto) - Number(pesoTara));
       } else if (!pesoNeto) {
-        // Buscar el número más pequeño que pueda ser neto (alrededor de 30000)
         const candNeto = unicos.find(n => n >= 1000 && n <= 50000);
         if (candNeto) pesoNeto = String(candNeto);
       }
     }
   }
 
-  // LOCALIDADES y PROVINCIAS — heurística:
-  // "Localidad:ProvinciaACHIRASCORDOBA" → ACHIRAS + CORDOBA
+  // Origen
   let origenLocalidad = null, origenProvincia = null;
-  // Buscar provincia conocida en sección C y separar
-  const idxC = txt.search(/C\s*-\s*PROCEDENCIA/i);
-  const idxD = txt.search(/D\s*-\s*DESTINO/i);
-  if (idxC >= 0 && idxD > idxC) {
-    const secC = txt.slice(idxC, idxD);
-    // Intentar regex normal primero
+  if (idxC >= 0) {
+    const idxD = txt.search(/D\s*-\s*DESTINO/i);
+    const secC = txt.slice(idxC, idxD > idxC ? idxD : txt.length);
     let m1 = secC.match(/Localidad[:\s]+([A-ZÁÉÍÓÚÑ \-.]+?)\s+Provincia/i);
     if (m1) origenLocalidad = m1[1].trim();
-    // Si está pegado "Localidad:ProvinciaACHIRASCORDOBA" — separar
     if (!origenLocalidad) {
       const pegado = secC.match(/Localidad:\s*Provincia([A-Z][A-Z\s]+?)(?=\s|$)/i);
       if (pegado) {
-        // Buscar provincia conocida al final
         for (const prov of PROVS) {
           if (pegado[1].toUpperCase().endsWith(prov.toUpperCase())) {
             origenLocalidad = pegado[1].slice(0, -prov.length).trim();
@@ -8258,19 +8287,17 @@ function _parsearTextoCPE(txt) {
 
   // Destino
   let destinoEsCampo = null, destinoPlanta = null, destinoDireccion = null, destinoLocalidad = null, destinoProvincia = null;
+  const idxD = txt.search(/D\s*-\s*DESTINO/i);
   if (idxD >= 0) {
     const idxE = txt.search(/E\s*-\s*DATOS/i);
     const secD = txt.slice(idxD, idxE > idxD ? idxE : txt.length);
     destinoEsCampo = (secD.match(/Es un campo\s*:?\s*(Si|No|Sí)/i) || [])[1] || null;
     destinoPlanta  = (secD.match(/N°\s*Planta\s*(\d+)/i) || [])[1] || null;
-    // Dirección puede venir suelta
     const dir = secD.match(/Dirección[:\s]*([^\n]+)/i);
     if (dir) destinoDireccion = dir[1].trim();
-    // Provincia
     for (const prov of PROVS) {
       if (secD.toUpperCase().includes(prov.toUpperCase())) { destinoProvincia = prov; break; }
     }
-    // Localidad: buscar texto en mayúsculas que NO sea provincia
     const localidades = secD.match(/^([A-ZÁÉÍÓÚÑ ]{4,})$/gm);
     if (localidades) {
       for (const l of localidades) {
@@ -8283,7 +8310,7 @@ function _parsearTextoCPE(txt) {
     }
   }
 
-  // Dominios — buscar 2 patentes consecutivas EN CUALQUIER PARTE del texto
+  // Dominios
   let dominioCamion = null, dominioAcoplado = null;
   const mDom2 = txt.match(/([A-Z]{2,3}\s*\d{3,4}\s*[A-Z]{0,2})\s*[-–\/]\s*([A-Z]{2,3}\s*\d{3,4}\s*[A-Z]{0,2})/);
   if (mDom2) {
@@ -8295,47 +8322,41 @@ function _parsearTextoCPE(txt) {
   }
 
   const partidaFecha = get(/(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?)/);
-  const kmsARecorrer = get(/Kms\.\s*a\s*recorrer\s*:?\s*(\d+)/i) || get(/Kms\.\s*a\s*recorrer:?\s*\n+\s*\d+\/\d+\/\d+\s+\d+:\d+\s*\n+(\d+)/i);
-  // Si no, intentar buscar el número antes de Tarifa
-  let km2 = kmsARecorrer;
-  if (!km2) {
-    const m = txt.match(/Partida[\s\S]{0,200}?\n(\d{1,4})\n+(\d+)\s*\n+Tarifa/);
-    if (m) km2 = m[1];
+  let kmsARecorrer = get(/Kms\.\s*a\s*recorrer\s*:?\s*(\d+)/i);
+  if (!kmsARecorrer) {
+    const m2 = txt.match(/Partida[\s\S]{0,200}?\n(\d{1,4})\n+(\d+)\s*\n+Tarifa/);
+    if (m2) kmsARecorrer = m2[1];
   }
-  // La tarifa puede venir ANTES de la etiqueta "Tarifa:" (pdf-parse separa columnas)
-  // o DESPUÉS. Probamos ambos.
+  // Tarifa: bidireccional (antes o después de "Tarifa:")
   let tarifa = get(/Tarifa\s*:?\s*\n*\s*([\d][\d\.,]*)/i);
   if (!tarifa) tarifa = get(/([\d][\d\.,]*)\s*\n+\s*Tarifa\s*:?/i);
   const observaciones = get(/Observaciones\s*:?\s*([^\n]+)/i);
 
   const cpeNroCtg = get(/CTG\s*:?\s*(\d{11,})/i);
-  const cpeNroComprobante = get(/(\d{5}-\d{8})/);  // formato típico 00000-00001055
+  const cpeNroComprobante = get(/(\d{5}-\d{8})/);
   const fechaEmisionTxt = get(/(\d{1,2}\/\d{1,2}\/\d{4})/);
-  const fechaVtoTxt = null;
 
   return {
-    cpeNroCtg, cpeNroComprobante, fechaEmisionTxt, fechaVtoTxt,
-    // CUITs por etiqueta (los confiables)
-    titularCuit: (todosCuits[0]||{}).cuit, titularRazon: (todosCuits[0]||{}).razon,
-    remitenteCuit: null, remitenteRazon: null,
-    rteComercialPrimCuit: (todosCuits[1]||{}).cuit, rteComercialPrimRazon: (todosCuits[1]||{}).razon,
-    corredorPrimCuit: null, corredorPrimRazon: null,
-    corredorSecCuit: (todosCuits[2]||{}).cuit, corredorSecRazon: (todosCuits[2]||{}).razon,
-    destinatarioCuit: destinatario.cuit || (todosCuits[4]||{}).cuit, destinatarioRazon: destinatario.razon || (todosCuits[4]||{}).razon,
-    destinoCuit: destino.cuit || (todosCuits[5]||{}).cuit, destinoRazon: destino.razon || (todosCuits[5]||{}).razon,
-    transportistaCuit: transportista.cuit || (todosCuits[6]||{}).cuit, transportistaRazon: transportista.razon || (todosCuits[6]||{}).razon,
-    fletePagadorCuit: fletePagador.cuit, fletePagadorRazon: fletePagador.razon,
-    choferCuit: chofer.cuit, choferRazon: chofer.razon,
-    intermediarioCuit: null, intermediarioRazon: null,
-    repEntregadorCuit: (todosCuits[3]||{}).cuit, repEntregadorRazon: (todosCuits[3]||{}).razon,
-    repRecibidorCuit: null, repRecibidorRazon: null,
+    cpeNroCtg, cpeNroComprobante, fechaEmisionTxt, fechaVtoTxt: null,
+    titularCuit: A('titular').cuit,                 titularRazon: A('titular').razon,
+    remitenteCuit: A('remitente').cuit,             remitenteRazon: A('remitente').razon,
+    rteComercialPrimCuit: A('rteComercialPrim').cuit, rteComercialPrimRazon: A('rteComercialPrim').razon,
+    corredorPrimCuit: A('corredorPrim').cuit,       corredorPrimRazon: A('corredorPrim').razon,
+    corredorSecCuit: A('corredorSec').cuit,         corredorSecRazon: A('corredorSec').razon,
+    destinatarioCuit: A('destinatario').cuit,       destinatarioRazon: A('destinatario').razon,
+    destinoCuit: A('destino').cuit,                 destinoRazon: A('destino').razon,
+    transportistaCuit: A('transportista').cuit,     transportistaRazon: A('transportista').razon,
+    fletePagadorCuit: A('fletePagador').cuit,       fletePagadorRazon: A('fletePagador').razon,
+    choferCuit: A('chofer').cuit || chofer.cuit,    choferRazon: A('chofer').razon || chofer.razon,
+    intermediarioCuit: A('intermediario').cuit,     intermediarioRazon: A('intermediario').razon,
+    repEntregadorCuit: A('repEntregador').cuit,     repEntregadorRazon: A('repEntregador').razon,
+    repRecibidorCuit: A('repRecibidor').cuit,       repRecibidorRazon: A('repRecibidor').razon,
     grano, tipoGrano, campania,
     pesoBruto, pesoTara, pesoNeto,
     origenLocalidad, origenProvincia, origenRenspa,
     destinoEsCampo, destinoPlanta, destinoDireccion, destinoLocalidad, destinoProvincia,
     dominioCamion, dominioAcoplado,
-    partidaFecha, kmsARecorrer: km2, tarifa, observaciones,
-    // Debug: todos los CUITs encontrados, para mostrar al usuario
+    partidaFecha, kmsARecorrer, tarifa, observaciones,
     todosCuitsDetectados: todosCuits,
   };
 }
