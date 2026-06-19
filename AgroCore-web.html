@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
+      titulo:'📋 v1.0.2: Campo de RENSPA + Titular + Observaciones en el form de Campo',
+      desc:'Se agregaron 3 campos al form de Producción → Campos y lotes: (1) <b>RENSPA</b> (Registro Nacional Sanitario de Productores Agropecuarios) — campo dedicado, ya no hay que ponerlo en observaciones. (2) <b>Titular / propietario</b> — a nombre de quién está el campo, distinto de la titularidad (propio/arrendado/aparcería). (3) <b>Observaciones</b> — campo libre para notas. En el listado, las cards de campos ahora muestran también el titular y el RENSPA debajo de la titularidad. Si tenés campos cargados con el RENSPA en Observaciones (de viajes anteriores o importación), pasalos al campo nuevo editando el campo.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'24/06/2026',
       titulo:'🛠️ Hotfix v1.0.1: Campos no guardaba titularidad ni ubicación/referencia',
       desc:'Al cargar un Campo en Producción, los datos de <b>Titularidad</b> (Propio/Arrendado/Aparcería) y <b>Ubicación/Referencia</b> no se guardaban silenciosamente. El form los enviaba pero el backend los ignoraba porque no estaban declarados en el schema. Agregamos las columnas a la base, hicimos la migración y el zod schema ahora los acepta. Si ya cargaste un campo y faltan esos datos, editalo y volvé a guardarlos — ahora sí se persisten.' },
@@ -5607,7 +5610,7 @@ pages.campos = async function() {
             </div>
           </div>
           <div class="grid grid-cols-2 gap-2 mt-3 text-xs">
-            <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Titularidad</div><div class="font-bold">${esc(c.titularidad||'—')}</div></div>
+            <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Titularidad</div><div class="font-bold">${esc(c.titularidad||'—')}</div>${c.propietario?`<div class="text-[10px] text-slate-500 mt-0.5">${esc(c.propietario)}</div>`:''}${c.renspa?`<div class="text-[10px] text-blue-700 mt-0.5">📋 ${esc(c.renspa)}</div>`:''}</div>
             <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Lotes</div><div class="font-bold">${lts.length} · ${fmtN(haLotes)} ha</div></div>
           </div>
           <div class="mt-3 border-t pt-2">
@@ -5697,8 +5700,11 @@ function campoForm(id=null) {
           </select>
         </div>
         <div class="col-span-2"><label class="label">Ubicación / referencia</label><input id="f-ub" class="input" value="${esc(it.ubicacion||'')}" placeholder="Ej: Ruta 34 km 215, zona La Criolla"/></div>
+        <div><label class="label">RENSPA</label><input id="f-renspa" class="input" value="${esc(it.renspa||'')}" placeholder="00.001.0.12345/A1"/></div>
+        <div><label class="label">Titular / propietario</label><input id="f-prop" class="input" value="${esc(it.propietario||'')}" placeholder="A nombre de... (ej. Gerardo Peiretti)"/></div>
         <div><label class="label">Provincia</label>${catSelect('f-prov', 'Provincia', it.provincia||'', { placeholder:'— Elegir provincia —', parent: 'Argentina' })}</div>
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='campoSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
@@ -5710,8 +5716,11 @@ async function campoSave(id) {
     hectareas: Number($('#f-ha').value||0),
     titularidad: $('#f-tit').value||null,
     ubicacion: $('#f-ub').value.trim()||null,
+    renspa: $('#f-renspa')?.value.trim()||null,
+    propietario: $('#f-prop')?.value.trim()||null,
     localidad: $('#f-loc')?.value || null,
     provincia: $('#f-prov')?.value || null,
+    observaciones: $('#f-obs')?.value.trim()||null,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
   try { await api('/api/campos'+(id?'/'+id:''),{ method: id?'PUT':'POST', body: JSON.stringify(data) });

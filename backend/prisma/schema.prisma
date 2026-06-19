@@ -160,6 +160,7 @@ model Campo {
   propietario     String?
   titularidad     String?   // "propio" | "arrendado" | "aparceria" | otro texto
   ubicacion       String?   // referencia/dirección (ej. "Ruta 34 km 215")
+  renspa          String?   // RENSPA del campo (Registro Nacional Sanitario)
   observaciones   String?
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
