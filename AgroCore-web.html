@@ -2316,6 +2316,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/06/2026',
+      titulo:'🎨 v1.2.4 — Campos: form reorganizado en secciones (Datos básicos / Titularidad / Ubicación / Trazabilidad / Notas)',
+      desc:'El form de Nuevo/Editar Campo ahora está organizado en 5 secciones con encabezados visuales para que sea más fácil de completar: (1) 📋 <b>Datos básicos</b>: Nombre + Superficie + Tipo de explotación. (2) 👤 <b>Titularidad</b>: Tipo (propio/arrendado/aparcería) + Titular/propietario. (3) 📍 <b>Ubicación</b>: Provincia + Localidad, Referencia/dirección, Geolocalización con botón "tomar mi ubicación" y "compartir por WhatsApp". (4) 📋 <b>Trazabilidad SENASA</b>: RENSPAs (uno o varios, cada uno agrícola o ganadero). (5) 📝 <b>Notas</b>: Observaciones. Cada sección tiene un divisor sutil y el orden sigue el flujo natural de carga de un campo.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/06/2026',
       titulo:'🧹 v1.2.3 — Campos: limpieza de form + botón compartir ubicación al lado de editar',
       desc:'Ajustes pedidos por la usuaria: (1) Sacamos el campo "Ubicación / referencia" duplicado del form de Campos (estaba apareciendo dos veces — quedó solo una). (2) El RENSPA puede ser solo Agrícola o Ganadero (no Mixto) — porque cada RENSPA es de un tipo único; si tu campo es mixto cargás 2 RENSPAs (uno por cada tipo). El tipo de explotación del CAMPO sí puede ser Mixta (agrícola + ganadera). (3) El botón 📱 de compartir ubicación por WhatsApp ahora está MUY visible: al lado de los botones ✏️ Editar y 🗑️ Eliminar, en el header de la card de cada campo (antes estaba escondido dentro del bloque de Titularidad).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'27/06/2026',
@@ -5788,19 +5791,19 @@ function campoCompartirUbicacionCard(id, geo, nombre) {
 
 function campoForm(id=null) {
   const it = id ? (state.cache.campos||[]).find(x=>x.id===id)||{} : {};
+  // Helper para encabezados de sección dentro del form
+  const sectionHeader = (icon, txt) => `<div class="col-span-2 flex items-center gap-2 mt-1 mb-0 pb-1 border-b border-slate-200">
+      <span class="text-sm">${icon}</span>
+      <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-600">${txt}</span>
+    </div>`;
   openModal({
     title: id?'Editar campo':'Nuevo campo',
     body: `
       <div class="grid grid-cols-2 gap-3">
-        <div class="col-span-2"><label class="label">Nombre *</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}" /></div>
+
+        ${sectionHeader('📋','Datos básicos')}
+        <div class="col-span-2"><label class="label">Nombre *</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}" placeholder="Ej: Chañarito"/></div>
         <div><label class="label">Superficie (ha) *</label><input id="f-ha" type="number" step="0.01" class="input" value="${it.hectareas||0}" /></div>
-        <div><label class="label">Titularidad</label>
-          <select id="f-tit" class="input">
-            ${['','propio','arrendado','aparceria'].map(v=>`<option ${v===(it.titularidad||'')?'selected':''}>${v}</option>`).join('')}
-          </select>
-        </div>
-        <div class="col-span-2"><label class="label">Ubicación / referencia</label><input id="f-ub" class="input" value="${esc(it.ubicacion||'')}" placeholder="Ej: Ruta 34 km 215, zona La Criolla"/></div>
-        <div><label class="label">Titular / propietario</label><input id="f-prop" class="input" value="${esc(it.propietario||'')}" placeholder="A nombre de... (ej. Gerardo Peiretti)"/></div>
         <div><label class="label">Tipo de explotación</label>
           <select id="f-tipoexp" class="input">
             <option value="" ${!it.tipoExplotacion?'selected':''}>— Sin especificar —</option>
@@ -5809,12 +5812,22 @@ function campoForm(id=null) {
             <option value="mixta"     ${it.tipoExplotacion==='mixta'?'selected':''}>🌾🐄 Mixta (agrícola + ganadera)</option>
           </select>
         </div>
+
+        ${sectionHeader('👤','Titularidad')}
+        <div><label class="label">Tipo</label>
+          <select id="f-tit" class="input">
+            ${['','propio','arrendado','aparceria'].map(v=>`<option ${v===(it.titularidad||'')?'selected':''}>${v}</option>`).join('')}
+          </select>
+        </div>
+        <div><label class="label">Titular / propietario</label><input id="f-prop" class="input" value="${esc(it.propietario||'')}" placeholder="A nombre de... (ej. Gerardo Peiretti)"/></div>
+
+        ${sectionHeader('📍','Ubicación')}
         <div><label class="label">Provincia</label>${catSelect('f-prov', 'Provincia', it.provincia||'', { placeholder:'— Elegir provincia —', parent: 'Argentina' })}</div>
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
-
+        <div class="col-span-2"><label class="label">Referencia / dirección</label><input id="f-ub" class="input" value="${esc(it.ubicacion||'')}" placeholder="Ej: Ruta 34 km 215, zona La Criolla"/></div>
         <div class="col-span-2">
           <label class="label flex items-center justify-between">
-            <span>📍 Geolocalización <span class="text-[10px] font-normal text-slate-500">(coordenadas "lat,lng" o link de Google Maps)</span></span>
+            <span>Geolocalización <span class="text-[10px] font-normal text-slate-500">(coordenadas "lat,lng" o link de Google Maps)</span></span>
             <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="campoCompartirUbicacion()">📱 Compartir por WhatsApp</button>
           </label>
           <div class="flex gap-1">
@@ -5824,9 +5837,10 @@ function campoForm(id=null) {
           </div>
         </div>
 
+        ${sectionHeader('📋','Trazabilidad SENASA')}
         <div class="col-span-2">
           <label class="label flex items-center justify-between">
-            <span>📋 RENSPAs</span>
+            <span>RENSPAs</span>
             <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="campoAgregarRenspa()">+ Agregar RENSPA</button>
           </label>
           <div id="f-renspas-list" class="space-y-1.5">
@@ -5838,7 +5852,9 @@ function campoForm(id=null) {
           <div class="text-[10px] text-slate-500 mt-1">Si tu campo es mixto podés cargar 2 RENSPAs (uno agrícola y otro ganadero).</div>
         </div>
 
-        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
+        ${sectionHeader('📝','Notas')}
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2" placeholder="Cualquier dato adicional del campo">${esc(it.observaciones||'')}</textarea></div>
+
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='campoSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
