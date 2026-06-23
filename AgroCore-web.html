@@ -2315,6 +2315,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'27/06/2026',
+      titulo:'🐄 v1.2.5 — Hacienda multi-especie + borrar cartas de porte en masa + compartir ubicación por WhatsApp desde el celular',
+      desc:'Tres pedidos de la usuaria de campo, en una. (1) <b>Hacienda — todas las categorías y todas las especies</b>: los selectores "+ Categoría" y el de movimientos usaban una lista fija de 8 categorías bovinas e ignoraban el catálogo cargado. Ahora toman <b>todas</b> las categorías de Catálogos → "Categorías de animales" (bovino, <b>porcino</b>, ovino, lo que sea), suman las que ya están en uso en cada campo, y la pantalla de Hacienda refresca el catálogo al abrir para que aparezcan al instante. (2) <b>Cartas de porte — borrar todas de una</b>: nuevo botón 🗑️ "Borrar todas" en Viajes (solo visible con permiso de borrado y si hay registros) con doble confirmación (hay que escribir BORRAR). Borra únicamente las de la empresa activa — ideal para limpiar lo importado por Excel y recargar de cero. Endpoint nuevo DELETE /api/viajes acotado a companyId. (3) <b>Compartir ubicación por WhatsApp desde el celular</b>: las funciones de compartir tenían fijo web.whatsapp.com, que en el teléfono mostraba el cartel "usá WhatsApp Web en la computadora". Ahora usan wa.me: en el celular abre la <b>app nativa</b> y deja elegir contacto; en la compu sigue igual.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/06/2026',
       titulo:'🎨 v1.2.4 — Campos: form reorganizado en secciones (Datos básicos / Titularidad / Ubicación / Trazabilidad / Notas)',
       desc:'El form de Nuevo/Editar Campo ahora está organizado en 5 secciones con encabezados visuales para que sea más fácil de completar: (1) 📋 <b>Datos básicos</b>: Nombre + Superficie + Tipo de explotación. (2) 👤 <b>Titularidad</b>: Tipo (propio/arrendado/aparcería) + Titular/propietario. (3) 📍 <b>Ubicación</b>: Provincia + Localidad, Referencia/dirección, Geolocalización con botón "tomar mi ubicación" y "compartir por WhatsApp". (4) 📋 <b>Trazabilidad SENASA</b>: RENSPAs (uno o varios, cada uno agrícola o ganadero). (5) 📝 <b>Notas</b>: Observaciones. Cada sección tiene un divisor sutil y el orden sigue el flujo natural de carga de un campo.' },
@@ -5776,17 +5779,21 @@ async function campoCompartirUbicacion() {
   }
   const url = campoGeoUrl(geo);
   const empresa = state.user?.companies?.find(c => c.id === state.companyId)?.name || '';
-  const txt = encodeURIComponent(`📍 *Ubicación de ${nombre}*${empresa?` (${empresa})`:''}\n\n${url}\n\n_Compartido desde AgroCore_`);
-  // Abrir WhatsApp Web sin destinatario → deja elegir contacto
-  window.open(`https://web.whatsapp.com/send?text=${txt}`, '_blank');
+  const mensaje = `📍 *Ubicación de ${nombre}*${empresa?` (${empresa})`:''}\n\n${url}\n\n_Compartido desde AgroCore_`;
+  // wa.me sin destinatario: en el celular abre la app nativa de WhatsApp y deja
+  // elegir el contacto; en la compu muestra "Continuar en WhatsApp Web". Antes
+  // usaba web.whatsapp.com, que en el celular mostraba el cartel "usá WhatsApp Web
+  // en la computadora" y no dejaba compartir desde el teléfono.
+  openWhatsApp('', mensaje);
 }
 
 function campoCompartirUbicacionCard(id, geo, nombre) {
   if (!geo) return toast('Este campo no tiene geolocalización','warn');
   const url = campoGeoUrl(geo);
   const empresa = state.user?.companies?.find(c => c.id === state.companyId)?.name || '';
-  const txt = encodeURIComponent(`📍 *Ubicación de ${nombre||'Campo'}*${empresa?` (${empresa})`:''}\n\n${url}\n\n_Compartido desde AgroCore_`);
-  window.open(`https://web.whatsapp.com/send?text=${txt}`, '_blank');
+  const mensaje = `📍 *Ubicación de ${nombre||'Campo'}*${empresa?` (${empresa})`:''}\n\n${url}\n\n_Compartido desde AgroCore_`;
+  // wa.me sin destinatario: en el celular abre la app nativa; en la compu, WhatsApp Web.
+  openWhatsApp('', mensaje);
 }
 
 function campoForm(id=null) {
@@ -9825,6 +9832,25 @@ async function chqAcreditarSave(id) {
  * Funciona en modo offline (la gente cuenta en el campo desde el celu).
  * ========================================================= */
 const HAC_CATEGORIAS = ['Vacas','Vaquillonas','Terneros','Terneras','Novillos','Novillitos','Toros','Crías'];
+// Categorías disponibles para los selectores de Hacienda.
+// Antes los selectores usaban SOLO la lista fija de arriba (bovinos), por eso
+// "no salían todas" las categorías cargadas en el catálogo y "solo aparecían
+// bovinos". Ahora toma TODAS las categorías del catálogo del usuario
+// (Catálogos → "Categorías de animales", cualquier especie: bovino, porcino,
+// ovino, etc.), suma las que ya están en uso en algún campo, y sólo cae a la
+// lista bovina por defecto cuando el catálogo todavía está vacío.
+function hacCategoriasDisponibles() {
+  const delCatalogo = (state.cache.catalogos || [])
+    .filter(c => c.tipo === 'Categoría animal' && c.activo !== false)
+    .map(c => c.nombre)
+    .filter(Boolean);
+  const enUso = ((state.cache.haciendaResumen?.filas) || [])
+    .map(f => f.categoria)
+    .filter(Boolean);
+  const base = delCatalogo.length ? delCatalogo : HAC_CATEGORIAS;
+  return Array.from(new Set([...base, ...enUso]))
+    .sort((a, b) => String(a).localeCompare(String(b), 'es'));
+}
 function hacTipoSigno(t){
   if (t==='nacimiento'||t==='compra'||t==='traslado_in') return 1;
   if (t==='muerte'||t==='venta'||t==='traslado_out') return -1;
@@ -9846,14 +9872,18 @@ pages.hacienda = async function() {
   let resumen = { campos: [], filas: [] };
   let movs = [];
   try {
-    const [r, m] = await Promise.all([
+    const [r, m, cat] = await Promise.all([
       api('/api/hacienda-resumen').catch(()=>({data:state.cache.haciendaResumen})),
       api('/api/hacienda-movimientos').catch(()=>({data:state.cache.haciendaMovs||[]})),
+      // Traemos los catálogos para que el selector "+ Categoría" muestre siempre
+      // las categorías de animales actualizadas (todas las especies).
+      api('/api/catalogos').catch(()=>({data:state.cache.catalogos||[]})),
     ]);
     resumen = r.data || resumen;
     movs    = m.data || [];
     state.cache.haciendaResumen = resumen;
     state.cache.haciendaMovs    = movs;
+    if (cat && cat.data) state.cache.catalogos = cat.data;
   } catch (e) { return toast(e.message,'error'); }
 
   const { campos = [], filas = [] } = resumen;
@@ -9968,7 +9998,7 @@ function hacCategoriaForm(campoId) {
         <div>
           <label class="label">Categoría *</label>
           <input id="h-cat" class="input" list="h-cat-list" placeholder="Ej: Vacas, Vaquillonas, Terneros..."/>
-          <datalist id="h-cat-list">${HAC_CATEGORIAS.map(c=>`<option value="${c}">`).join('')}</datalist>
+          <datalist id="h-cat-list">${hacCategoriasDisponibles().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
         </div>
         <div>
           <label class="label">Stock declarado en SENASA / ARCA</label>
@@ -10015,10 +10045,7 @@ async function hacDeclaradoSave(campoId, categoria) {
 
 function hacMovForm(campoIdInit=null, categoriaInit=null) {
   const campos = (state.cache.haciendaResumen?.campos)||[];
-  const todasCategorias = Array.from(new Set([
-    ...HAC_CATEGORIAS,
-    ...((state.cache.haciendaResumen?.filas)||[]).map(f=>f.categoria),
-  ])).sort();
+  const todasCategorias = hacCategoriasDisponibles();
   openModal({
     title: 'Nuevo movimiento de hacienda',
     body: `
@@ -11478,6 +11505,7 @@ pages.viajes = async function() {
           📥 Importar CP
           <input type="file" accept="application/pdf" style="display:none" onchange="viajeImportarCP(this)"/>
         </label>`:''}
+        ${canD && rows.length ? `<button class="btn btn-secondary text-red-600" onclick="viajesBorrarTodas()" title="Borrar TODAS las cartas de porte / viajes de esta empresa y volver a cargar de cero">🗑️ Borrar todas</button>`:''}
         ${canC?`<button class="btn btn-primary" onclick="viajeForm()">+ Nuevo viaje</button>`:''}
       </div>
     </div>
@@ -11772,6 +11800,22 @@ async function viajeDel(id) {
   if (!confirm('¿Borrar este viaje?')) return;
   try { await api('/api/viajes/'+id,{method:'DELETE'}); toast('Borrado','success'); delete state.cache.viajes; pages.viajes(); }
   catch (e) { toast(e.message,'error'); }
+}
+// Borra TODAS las cartas de porte / viajes de la empresa activa (para limpiar
+// lo importado por Excel y volver a cargar). Doble confirmación: primero un
+// aviso y después hay que escribir BORRAR. Sólo afecta a la empresa actual.
+async function viajesBorrarTodas() {
+  const cuantos = (state.cache.viajes || []).length;
+  const empresa = nombreEmpresaActiva();
+  if (!cuantos) return toast('No hay cartas de porte / viajes para borrar','info');
+  if (!confirm(`Vas a borrar TODAS las cartas de porte / viajes de "${empresa}" (${cuantos} en total).\n\nEsta acción no se puede deshacer. ¿Continuar?`)) return;
+  const txt = prompt('Para confirmar, escribí: BORRAR');
+  if ((txt || '').trim().toUpperCase() !== 'BORRAR') return toast('Cancelado','info');
+  try {
+    const r = await api('/api/viajes', { method:'DELETE' });
+    toast(`Se borraron ${r.deleted ?? cuantos} cartas de porte / viajes`,'success');
+    delete state.cache.viajes; pages.viajes();
+  } catch (e) { toast(e.message,'error'); }
 }
 async function viajeMarcarPagado(id) {
   if (!confirm('¿Marcar este viaje como pagado?')) return;

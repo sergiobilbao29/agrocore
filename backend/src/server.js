@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.2.4';
-const AGROCORE_BUILD = new Date('2026-06-24').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '1.2.5';
+const AGROCORE_BUILD = new Date('2026-06-27').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -2956,6 +2956,17 @@ app.delete('/api/viajes/:id', requireCompany, requirePermission('logistica:delet
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.viaje.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Borrado masivo de viajes / cartas de porte de la empresa activa.
+// Pensado para limpiar de una vez todo lo importado por Excel/CP y volver a
+// cargar de cero. SIEMPRE acotado a la empresa del usuario (companyId).
+// El frontend pide doble confirmación antes de llamar a este endpoint.
+app.delete('/api/viajes', requireCompany, requirePermission('logistica:delete'), async (req, res, next) => {
+  try {
+    const r = await prisma.viaje.deleteMany({ where: { companyId: req.companyId } });
+    res.json({ ok: true, deleted: r.count });
   } catch (e) { next(e); }
 });
 
