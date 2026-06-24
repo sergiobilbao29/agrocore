@@ -515,8 +515,12 @@ model Cheque {
   fechaEmision  DateTime
   fechaPago     DateTime
   monto         Float
-  beneficiario  String?
-  librador      String?
+  beneficiario  String?    // a quién fue (a quién se lo entregamos/endosamos)
+  librador      String?    // titular que libró el cheque
+  cuitTitular   String?    // CUIT del titular/librador del cheque
+  endosante     String?    // de quién nos vino (quién nos lo endosó/entregó)
+  fechaRecepcion DateTime? // cuándo lo recibimos (terceros)
+  enPoderDe     String?    // físicos: en poder de quién está (caja oficina, Luciano, Lucas, Flor...)
   estado        String     @default("en_cartera") // en_cartera, depositado, cobrado, endosado, rechazado
   observaciones String?
   createdAt     DateTime @default(now())

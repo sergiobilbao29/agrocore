@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.2.8';
-const AGROCORE_BUILD = new Date('2026-06-30').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '1.3.0';
+const AGROCORE_BUILD = new Date('2026-07-02').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -2440,11 +2440,15 @@ mountCrud({
     monto: z.number(),
     beneficiario: z.string().nullable().optional(),
     librador: z.string().nullable().optional(),
+    cuitTitular: z.string().nullable().optional(),
+    endosante: z.string().nullable().optional(),
+    fechaRecepcion: z.coerce.date().nullable().optional(),
+    enPoderDe: z.string().nullable().optional(),
     estado: z.string().optional(),
     observaciones: z.string().nullable().optional(),
   }),
   orderBy: { fechaPago: 'asc' },
-  searchFields: ['nroCheque', 'banco', 'beneficiario', 'librador'],
+  searchFields: ['nroCheque', 'banco', 'beneficiario', 'librador', 'endosante', 'enPoderDe'],
 });
 
 // ============================================================
@@ -2462,6 +2466,67 @@ function _chequeMovTipo(cheque) {
   if (cheque.tipo === 'propio'   && CHEQUE_BANCO_ESTADOS_EGRESO.has(cheque.estado))  return 'cheque_pagado';
   return null;
 }
+
+// ============================================================
+// ESTADOS DE CHEQUE configurables (reusa la tabla Catalogo, tipo "Estado de cheque").
+// Sin migracion. Se siembran los defaults la primera vez. La logica de negocio
+// sigue usando los codigos estables (en_cartera / emitido / endosado / depositado / ...).
+// ============================================================
+const CHEQUE_ESTADOS_DEFAULT = [
+  { codigo:'en_cartera', nombre:'En cartera' },
+  { codigo:'emitido',    nombre:'Emitido' },
+  { codigo:'endosado',   nombre:'Endosado / Entregado' },
+  { codigo:'depositado', nombre:'Depositado' },
+  { codigo:'cobrado',    nombre:'Cobrado' },
+  { codigo:'pagado',     nombre:'Pagado' },
+  { codigo:'rechazado',  nombre:'Rechazado' },
+  { codigo:'anulado',    nombre:'Anulado' },
+];
+async function seedChequeEstados(companyId) {
+  const n = await prisma.catalogo.count({ where: { companyId, tipo: 'Estado de cheque' } });
+  if (n > 0) return;
+  for (const e of CHEQUE_ESTADOS_DEFAULT) {
+    await prisma.catalogo.create({ data: { companyId, tipo: 'Estado de cheque', codigo: e.codigo, nombre: e.nombre } });
+  }
+}
+app.get('/api/cheque-estados', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    await seedChequeEstados(req.companyId);
+    const data = await prisma.catalogo.findMany({
+      where: { companyId: req.companyId, tipo: 'Estado de cheque', activo: true },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, codigo: true, nombre: true },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/cheque-estados', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const d = z.object({ nombre: z.string().min(1) }).parse(req.body);
+    let codigo = _slugCat(d.nombre);
+    const dup = await prisma.catalogo.findFirst({ where: { companyId: req.companyId, tipo: 'Estado de cheque', codigo } });
+    if (dup) codigo = codigo + '_' + Date.now().toString(36).slice(-4);
+    const r = await prisma.catalogo.create({ data: { companyId: req.companyId, tipo: 'Estado de cheque', codigo, nombre: d.nombre } });
+    res.status(201).json({ ok: true, data: { id: r.id, codigo: r.codigo, nombre: r.nombre } });
+  } catch (e) { next(e); }
+});
+app.put('/api/cheque-estados/:id', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.catalogo.findFirst({ where: { id: req.params.id, companyId: req.companyId, tipo: 'Estado de cheque' } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const d = z.object({ nombre: z.string().min(1) }).parse(req.body);
+    const r = await prisma.catalogo.update({ where: { id: existing.id }, data: { nombre: d.nombre } });
+    res.json({ ok: true, data: { id: r.id, codigo: r.codigo, nombre: r.nombre } });
+  } catch (e) { next(e); }
+});
+app.delete('/api/cheque-estados/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.catalogo.findFirst({ where: { id: req.params.id, companyId: req.companyId, tipo: 'Estado de cheque' } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.catalogo.delete({ where: { id: existing.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
 
 app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
   try {
@@ -4025,13 +4090,61 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
     const schema = z.object({
       banco: z.string().optional(),
       nroOperacion: z.string().nullable().optional(),
+      montoOriginal: z.number().positive().optional(),
+      tasaAnual: z.number().nullable().optional(),
+      cantCuotas: z.number().int().positive().optional(),
+      periodicidad: z.enum(['mensual', 'bimestral', 'trimestral', 'semestral']).optional(),
+      fechaPrimera: z.coerce.date().optional(),
       destino: z.string().nullable().optional(),
       estado: z.enum(['activo', 'cancelado', 'refinanciado']).optional(),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
-    const row = await prisma.credito.update({ where: { id: req.params.id }, data: d });
-    res.json({ ok: true, data: row });
+    // Valores efectivos del plan (lo que vino, o lo que ya tenía)
+    const merged = {
+      montoOriginal: d.montoOriginal ?? existing.montoOriginal,
+      tasaAnual:     d.tasaAnual !== undefined ? d.tasaAnual : existing.tasaAnual,
+      cantCuotas:    d.cantCuotas ?? existing.cantCuotas,
+      periodicidad:  d.periodicidad ?? existing.periodicidad,
+      fechaPrimera:  d.fechaPrimera ?? existing.fechaPrimera,
+    };
+    // ¿Cambió algo que afecte el plan de cuotas? → hay que regenerarlo.
+    const planCambio =
+      (d.montoOriginal !== undefined && d.montoOriginal !== existing.montoOriginal) ||
+      (d.tasaAnual     !== undefined && d.tasaAnual     !== existing.tasaAnual) ||
+      (d.cantCuotas    !== undefined && d.cantCuotas    !== existing.cantCuotas) ||
+      (d.periodicidad  !== undefined && d.periodicidad  !== existing.periodicidad) ||
+      (d.fechaPrimera  !== undefined && new Date(d.fechaPrimera).getTime() !== new Date(existing.fechaPrimera).getTime());
+    await prisma.$transaction(async (tx) => {
+      await tx.credito.update({
+        where: { id: existing.id },
+        data: {
+          banco:         d.banco ?? existing.banco,
+          nroOperacion:  d.nroOperacion !== undefined ? d.nroOperacion : existing.nroOperacion,
+          montoOriginal: merged.montoOriginal,
+          tasaAnual:     merged.tasaAnual,
+          cantCuotas:    merged.cantCuotas,
+          periodicidad:  merged.periodicidad,
+          fechaPrimera:  merged.fechaPrimera,
+          destino:       d.destino !== undefined ? d.destino : existing.destino,
+          estado:        d.estado ?? existing.estado,
+          observaciones: d.observaciones !== undefined ? d.observaciones : existing.observaciones,
+        },
+      });
+      if (planCambio) {
+        await tx.cuotaCredito.deleteMany({ where: { creditoId: existing.id } });
+        const cuotas = _calcularCuotasFrances({ monto: merged.montoOriginal, tasaAnual: merged.tasaAnual || 0, cantCuotas: merged.cantCuotas, periodicidad: merged.periodicidad });
+        const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[merged.periodicidad];
+        const cuotasData = cuotas.map(c => {
+          const venc = new Date(merged.fechaPrimera);
+          venc.setMonth(venc.getMonth() + (c.numero - 1) * monthsStep);
+          return { creditoId: existing.id, numero: c.numero, vencimiento: venc, importeCapital: c.capital, importeInteres: c.interes, importeOtros: 0, importeTotal: c.total };
+        });
+        await tx.cuotaCredito.createMany({ data: cuotasData });
+      }
+    });
+    const full = await prisma.credito.findUnique({ where: { id: existing.id }, include: { cuotas: { orderBy: { numero: 'asc' } } } });
+    res.json({ ok: true, data: full, planRegenerado: planCambio });
   } catch (e) { next(e); }
 });
 
@@ -4041,6 +4154,25 @@ app.delete('/api/creditos/:id', requireCompany, requirePermission('finanzas:dele
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.credito.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Marcar como pagadas todas las cuotas hasta el número N (para cargar créditos
+// viejos que ya vienen con varias cuotas pagas). No genera movimiento bancario.
+app.post('/api/creditos/:id/marcar-pagadas-hasta', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const credito = await prisma.credito.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!credito) return res.status(404).json({ ok: false, error: 'Crédito no encontrado' });
+    const d = z.object({
+      numero: z.coerce.number().int().min(0),
+      fechaPago: z.coerce.date().optional(),
+      medioPago: z.string().optional(),
+    }).parse(req.body || {});
+    const r = await prisma.cuotaCredito.updateMany({
+      where: { creditoId: credito.id, numero: { lte: d.numero }, pagada: false },
+      data: { pagada: true, fechaPago: d.fechaPago || new Date(), medioPago: d.medioPago || 'historico' },
+    });
+    res.json({ ok: true, marcadas: r.count });
   } catch (e) { next(e); }
 });
 
@@ -4624,9 +4756,9 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       categoria: z.string().nullable().optional(),
       clasificacion: z.string().nullable().optional(),   // "empresa" | "propio"
       monto: z.number().positive(),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo']),
       // Datos según método
-      caja: z.string().nullable().optional(),            // efectivo
+      caja: z.string().nullable().optional(),            // efectivo / externo (nombre del medio)
       chequeId: z.string().nullable().optional(),        // cheque (cheque existente)
       bancoCuentaId: z.string().nullable().optional(),   // transferencia
       // Contraparte opcional (texto libre) — solo descriptivo
@@ -4641,7 +4773,9 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
     ].filter(Boolean).join(' · ');
     let resultado;
 
-    if (d.metodo === 'efectivo') {
+    if (d.metodo === 'efectivo' || d.metodo === 'externo') {
+      // "externo" (billetera virtual / medio externo) se registra como una caja
+      // del módulo Efectivo (el nombre del medio es la caja). NO toca bancos.
       resultado = await prisma.efectivo.create({
         data: {
           companyId: req.companyId,
@@ -7613,7 +7747,40 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
       fecha: ch.fechaPago,
       categoria: 'vencimiento',
       prioridad: 'media',
-      avisarDiasAntes: 7,
+      avisarDiasAntes: 15,
+      completado: false,
+      repetir: 'ninguno',
+      relacionTipo: 'cheque',
+      relacionId: ch.id,
+    });
+  }
+
+  // 2b) Cheques pendientes de resolución: aviso 7 DÍAS DESPUÉS del vencimiento
+  //     para recordar revisar si finalmente se pagó o se rechazó.
+  const chequesRevisar = await prisma.cheque.findMany({
+    where: {
+      companyId,
+      estado: { notIn: ['cobrado', 'rechazado', 'anulado'] },
+      fechaPago: { lte: limiteFuturo },
+    },
+    orderBy: { fechaPago: 'asc' },
+  });
+  for (const ch of chequesRevisar) {
+    if (setOcultos.has(`cheque_revisar:${ch.id}`)) continue;
+    const fr = new Date(ch.fechaPago); fr.setDate(fr.getDate() + 7); fr.setHours(0, 0, 0, 0);
+    if (fr > limiteFuturo) continue;
+    if (!incluirVencidos && fr < today) continue;
+    items.push({
+      id: `auto:cheque_revisar:${ch.id}`,
+      origen: 'auto',
+      autoTipo: 'cheque_revisar',
+      autoRefId: ch.id,
+      titulo: `Revisar cheque Nº ${ch.nroCheque}${ch.banco ? ` (${ch.banco})` : ''}: ¿se pagó o se rechazó?`,
+      descripcion: `${ch.tipo === 'propio' ? 'Propio' : 'Terceros'} · venció ${new Date(ch.fechaPago).toLocaleDateString('es-AR')} · $${(ch.monto || 0).toFixed(2)}`,
+      fecha: fr.toISOString(),
+      categoria: 'vencimiento',
+      prioridad: 'alta',
+      avisarDiasAntes: 0,
       completado: false,
       repetir: 'ninguno',
       relacionTipo: 'cheque',

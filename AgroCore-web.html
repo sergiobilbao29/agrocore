@@ -2316,6 +2316,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
+      titulo:'🏦 v1.3.0 — Créditos: editar/eliminar + cargar cuotas ya pagadas · Calendario: alarmas editables',
+      desc:'(1) <b>Créditos bancarios</b>: ahora se pueden <b>editar</b> y <b>eliminar</b>. Si cambiás monto, tasa, cantidad de cuotas, periodicidad o fecha de la primera, se <b>regenera el plan</b> (avisa que se pierden las marcas de pago). Para cargar <b>créditos viejos que ya vienen con cuotas pagas</b>, hay un botón <b>"✅ Marcar pagadas hasta…"</b> que marca de una todas las cuotas hasta el número que indiques. (2) <b>Calendario</b>: ahora <b>todas las alarmas se pueden editar</b>, incluso las automáticas (de créditos, cheques y cuentas corrientes): al editar una automática se crea una alarma personalizada que reemplaza a la original.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'01/07/2026',
+      titulo:'💸 v1.2.9 — Tesorería: medios externos, estados de cheque configurables, más datos y filtros de cheque, editar cuentas',
+      desc:'Varias mejoras de Tesorería. (1) En <b>Movimientos diarios</b>, nuevo método de pago <b>💸 Billetera / medio externo</b>: registra el pago/cobro <b>sin tocar ninguna cuenta bancaria</b> (queda como una caja en Control de Efectivo y aparece en el flujo). La lista de medios se administra en <b>Configuración → Catálogos → Medios externos</b>. (2) En <b>Bancos</b>, cada cuenta tiene botones para <b>editar</b> (✏️) y <b>eliminar/desactivar</b> (🗑️). (3) <b>Cheques: estados configurables</b> (botón ⚙️ Estados: agregar, renombrar o quitar) + nuevo estado <b>Endosado / Entregado</b>. (4) <b>Cheques: más datos</b> — fecha de recepción, CUIT del titular, <b>endosante</b> (de quién vino) y beneficiario (a quién fue), y <b>en poder de</b> para los cheques físicos (caja oficina, Luciano, Lucas, Flor, etc.). (5) <b>Filtros de cheques</b> por banco, cuenta, número y tipo. (6) <b>Calendario</b>: además del aviso 15 días antes del vencimiento, ahora hay un aviso <b>7 días después</b> para recordar revisar si el cheque se pagó o se rechazó.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
       titulo:'🧾 v1.2.8 — Planilla de empleados: categorías configurables + "Días trabajados" + acceso más visible',
       desc:'Mejoras a la planilla de empleados. (1) Nueva categoría <b>Días trabajados</b> (cantidad de días × importe por día), igual que Horas. (2) Las <b>categorías ahora son configurables</b>: con el botón <b>⚙️ Categorías</b> (en la planilla o en el form de movimiento) podés <b>agregar</b> categorías propias y <b>eliminar</b> las que no uses. Cada categoría puede ser de <b>monto fijo</b> o de <b>cantidad × valor</b> con su unidad (ej. viajes, bolsas). Las categorías son por empresa y vienen precargadas con las de siempre. (3) <b>Acceso más visible a la planilla</b>: cada empleado de la nómina ahora tiene un botón <b>📋 Ver planilla</b> (y también aparece dentro de la pantalla de edición), para que no haya que adivinar que se entra haciendo clic en el nombre. El lápiz ✏️ queda solo para editar los datos del empleado.' },
@@ -9577,35 +9583,99 @@ function fechaAMs(v) {
   return Number.isFinite(t) ? t : 0;
 }
 
-// Estados posibles de un cheque. "en_cartera" = recibido y disponible para usar.
-const CHEQUE_ESTADOS = ['en_cartera', 'emitido', 'depositado', 'cobrado', 'pagado', 'rechazado', 'anulado'];
-// Badge de color según el estado.
+// Estados posibles de un cheque (FALLBACK; los reales son configurables y se
+// cargan en state.cache.chequeEstados). "en_cartera" = recibido y disponible.
+const CHEQUE_ESTADOS = ['en_cartera', 'emitido', 'endosado', 'depositado', 'cobrado', 'pagado', 'rechazado', 'anulado'];
+function chqEstadoLabelDefault(c){ return ({en_cartera:'En cartera',emitido:'Emitido',endosado:'Endosado / Entregado',depositado:'Depositado',cobrado:'Cobrado',pagado:'Pagado',rechazado:'Rechazado',anulado:'Anulado'})[c]||c; }
+// Lista de estados a mostrar (configurables si ya se cargaron, sino los fallback).
+function chqEstadosList(){
+  const c = state.cache.chequeEstados;
+  if (c && c.length) return c;
+  return CHEQUE_ESTADOS.map(codigo => ({ codigo, nombre: chqEstadoLabelDefault(codigo) }));
+}
+function chqEstadoNombre(codigo){
+  const f = (state.cache.chequeEstados||[]).find(x=>x.codigo===(codigo||'').toLowerCase());
+  return f ? f.nombre : chqEstadoLabelDefault((codigo||'').toLowerCase());
+}
+// Badge de color según el estado (muestra el nombre configurado).
 function chequeBadge(estado) {
   const e = (estado || '').toLowerCase();
   const map = {
-    'en_cartera': 'badge-green', 'emitido': 'badge-blue', 'depositado': 'badge-yellow',
+    'en_cartera': 'badge-green', 'emitido': 'badge-blue', 'endosado': 'badge-blue', 'depositado': 'badge-yellow',
     'cobrado': 'badge-gray', 'pagado': 'badge-gray', 'rechazado': 'badge-red', 'anulado': 'badge-gray',
   };
-  return `<span class="badge ${map[e] || 'badge-gray'}">${esc(estado || '—')}</span>`;
+  return `<span class="badge ${map[e] || 'badge-gray'}">${esc(estado ? chqEstadoNombre(e) : '—')}</span>`;
 }
 
+// --- Gestor de estados de cheque (agregar / renombrar / eliminar) ---
+async function chqEstadosManager(){
+  try { state.cache.chequeEstados = (await api('/api/cheque-estados')).data || []; } catch {}
+  const ests = state.cache.chequeEstados || [];
+  const fila = (e)=>`<tr class="border-t border-slate-100">
+    <td class="p-2">${esc(e.nombre)}</td>
+    <td class="p-2 text-slate-400 font-mono text-xs">${esc(e.codigo)}</td>
+    <td class="p-2 text-right whitespace-nowrap">
+      ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Renombrar" onclick='chqEstadoRename(${JSON.stringify(e.id)}, ${JSON.stringify(e.nombre)})'>✏️</button>`:''}
+      ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='chqEstadoDel(${JSON.stringify(e.id)})'>🗑️</button>`:''}
+    </td></tr>`;
+  openModal({
+    title:'⚙️ Estados de cheque', size:'max-w-xl',
+    body:`
+      ${can('finanzas:create')?`<div class="mb-3 flex gap-2 items-end p-3 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="flex-1"><label class="label">Nuevo estado</label><input id="ne-nom" class="input" placeholder="Ej: En gestión de cobro"/></div>
+        <button class="btn btn-primary text-sm" onclick="chqEstadoAdd()">+ Agregar</button>
+      </div>`:''}
+      <table class="w-full text-sm"><thead class="text-xs uppercase text-slate-500"><tr><th class="text-left p-2">Estado</th><th class="text-left p-2">Código</th><th></th></tr></thead>
+      <tbody>${ests.map(fila).join('')||'<tr><td colspan="3" class="p-3 text-center text-slate-400">Sin estados</td></tr>'}</tbody></table>
+      <p class="text-[11px] text-slate-500 mt-2">Ojo: quitar un estado que el sistema usa internamente (en cartera, emitido, endosado, depositado) puede afectar filtros y movimientos. Los cheques ya cargados con ese estado no se modifican.</p>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+async function chqEstadoAdd(){
+  const nombre=$('#ne-nom').value.trim();
+  if(!nombre) return toast('Poné un nombre','warn');
+  try{ await api('/api/cheque-estados',{method:'POST',body:JSON.stringify({nombre})}); delete state.cache.chequeEstados; toast('Estado agregado','success'); chqEstadosManager(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function chqEstadoRename(id, actual){
+  const nombre = prompt('Nuevo nombre del estado:', actual||'');
+  if (nombre===null) return;
+  if (!nombre.trim()) return toast('Nombre vacío','warn');
+  try{ await api('/api/cheque-estados/'+id,{method:'PUT',body:JSON.stringify({nombre:nombre.trim()})}); delete state.cache.chequeEstados; toast('Renombrado','success'); chqEstadosManager(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function chqEstadoDel(id){
+  if(!confirm('¿Eliminar este estado? Los cheques que ya lo tengan no se modifican.')) return;
+  try{ await api('/api/cheque-estados/'+id,{method:'DELETE'}); delete state.cache.chequeEstados; toast('Eliminado','success'); chqEstadosManager(); }
+  catch(e){ toast(e.message,'error'); }
+}
 pages.cheques = async function() {
   setHeader('Cheques', 'Propios y de terceros');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('cheques','Cheques'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows=[];
   try { rows = await crudList('cheques'); } catch (e) { return toast(e.message,'error'); }
+  try { state.cache.chequeEstados = (await api('/api/cheque-estados')).data || []; } catch { state.cache.chequeEstados = state.cache.chequeEstados || []; }
 
-  state.chequeFilter = state.chequeFilter || { estado:'', orden:'asc' };
+  state.chequeFilter = Object.assign({ estado:'', orden:'asc', tipo:'', banco:'', cuenta:'', numero:'' }, state.chequeFilter||{});
   const total = rows.reduce((a,c)=>a+Number(c.monto||0),0);
   // Disponibles = cheques en cartera (recibidos, listos para usar)
   const enCartera = rows.filter(c => (c.estado||'').toLowerCase() === 'en_cartera');
   const totalCartera = enCartera.reduce((a,c)=>a+Number(c.monto||0),0);
+  const bancosUnicos  = [...new Set(rows.map(c=>(c.banco||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
+  const cuentasUnicas = [...new Set(rows.map(c=>(c.cuenta||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
 
   const render = () => {
-    const fEstado = state.chequeFilter.estado;
-    const orden = state.chequeFilter.orden;
-    let filtered = rows.filter(c => !fEstado || (c.estado||'').toLowerCase() === fEstado);
+    const f = state.chequeFilter;
+    const orden = f.orden;
+    let filtered = rows.filter(c => {
+      if (f.estado && (c.estado||'').toLowerCase() !== f.estado) return false;
+      if (f.tipo   && c.tipo !== f.tipo) return false;
+      if (f.banco  && (c.banco||'') !== f.banco) return false;
+      if (f.cuenta && (c.cuenta||'') !== f.cuenta) return false;
+      if (f.numero && !((c.nroCheque||'').toLowerCase().includes(f.numero.toLowerCase()))) return false;
+      return true;
+    });
     // Ordenar por fecha de pago (parseo robusto, ver fechaAMs)
     filtered = filtered.slice().sort((a, b) => {
       const fa = fechaAMs(a.fechaPago), fb = fechaAMs(b.fechaPago);
@@ -9629,7 +9699,7 @@ pages.cheques = async function() {
               <td>${esc(c.banco||'—')}</td>
               <td>${fmtDate(c.fechaEmision)}</td>
               <td>${fmtDate(c.fechaPago)}</td>
-              <td>${esc(c.tipo==='propio' ? (c.beneficiario||'—') : (c.librador||'—'))}</td>
+              <td>${esc(c.tipo==='propio' ? (c.beneficiario||'—') : (c.librador||c.endosante||'—'))}${c.enPoderDe?`<br><span class="text-[10px] text-slate-400">📍 ${esc(c.enPoderDe)}</span>`:''}</td>
               <td class="text-right font-bold">${fmt$(c.monto)}</td>
               <td>${chequeBadge(c.estado)}</td>
               <td class="text-xs text-slate-500">${esc(c.observaciones||'—')}</td>
@@ -9652,13 +9722,39 @@ pages.cheques = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">Total administrado</div><div class="text-xl font-bold mt-1">${fmt$(total)}</div></div>
     </div>
     <div class="kpi mb-3">
-      <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-        <div class="md:col-span-5">
-          <label class="label">Filtrar por estado</label>
+      <div class="grid grid-cols-2 md:grid-cols-12 gap-2 items-end">
+        <div class="md:col-span-3">
+          <label class="label">Estado</label>
           <select id="chq-festado" class="input">
-            <option value="">Todos los estados</option>
-            ${CHEQUE_ESTADOS.map(e=>`<option value="${e}" ${e===state.chequeFilter.estado?'selected':''}>${e}</option>`).join('')}
+            <option value="">Todos</option>
+            ${chqEstadosList().map(e=>`<option value="${e.codigo}" ${e.codigo===state.chequeFilter.estado?'selected':''}>${esc(e.nombre)}</option>`).join('')}
           </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Tipo</label>
+          <select id="chq-ftipo" class="input">
+            <option value="">Todos</option>
+            <option value="propio" ${state.chequeFilter.tipo==='propio'?'selected':''}>Propio</option>
+            <option value="terceros" ${state.chequeFilter.tipo==='terceros'?'selected':''}>Terceros</option>
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Banco</label>
+          <select id="chq-fbanco" class="input">
+            <option value="">Todos</option>
+            ${bancosUnicos.map(b=>`<option value="${esc(b)}" ${b===state.chequeFilter.banco?'selected':''}>${esc(b)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Cuenta</label>
+          <select id="chq-fcuenta" class="input">
+            <option value="">Todas</option>
+            ${cuentasUnicas.map(b=>`<option value="${esc(b)}" ${b===state.chequeFilter.cuenta?'selected':''}>${esc(b)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-3">
+          <label class="label">Nº de cheque</label>
+          <input id="chq-fnum" class="input" value="${esc(state.chequeFilter.numero||'')}" placeholder="Buscar Nº..."/>
         </div>
         <div class="md:col-span-4">
           <label class="label">Orden por fecha de pago</label>
@@ -9667,14 +9763,19 @@ pages.cheques = async function() {
             <option value="desc" ${state.chequeFilter.orden==='desc'?'selected':''}>Más lejanos primero</option>
           </select>
         </div>
-        <div class="md:col-span-3 flex gap-2">
-          <button class="btn btn-secondary flex-1" onclick="chqFiltroDisponibles()">Ver disponibles</button>
-          ${can('finanzas:create') ? `<button class="btn btn-primary flex-1" onclick="chqForm()">+ Nuevo</button>`:''}
+        <div class="md:col-span-8 flex gap-2 justify-end flex-wrap">
+          <button class="btn btn-secondary" onclick="chqFiltroDisponibles()">Ver disponibles</button>
+          ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Agregar, renombrar o quitar estados de cheque" onclick="chqEstadosManager()">⚙️ Estados</button>`:''}
+          ${can('finanzas:create') ? `<button class="btn btn-primary" onclick="chqForm()">+ Nuevo</button>`:''}
         </div>
       </div>
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="cheques-tabla" class="overflow-x-auto"></div></div>`;
   $('#chq-festado').onchange = e => { state.chequeFilter.estado = e.target.value; render(); };
+  $('#chq-ftipo').onchange   = e => { state.chequeFilter.tipo = e.target.value; render(); };
+  $('#chq-fbanco').onchange  = e => { state.chequeFilter.banco = e.target.value; render(); };
+  $('#chq-fcuenta').onchange = e => { state.chequeFilter.cuenta = e.target.value; render(); };
+  $('#chq-fnum').oninput     = e => { state.chequeFilter.numero = e.target.value; render(); };
   $('#chq-forden').onchange  = e => { state.chequeFilter.orden = e.target.value; render(); };
   render();
 };
@@ -9686,6 +9787,12 @@ function chqFiltroDisponibles() {
 function chqToggleOrden() {
   state.chequeFilter.orden = state.chequeFilter.orden === 'asc' ? 'desc' : 'asc';
   pages.cheques();
+}
+// Opciones de "en poder de" para cheques físicos: cajas del catálogo + las ya usadas.
+function chqPoderOpciones(){
+  const cajas = catByTipo('Caja').map(c=>c.nombre).filter(Boolean);
+  const usados = (state.cache.cheques||[]).map(c=>c.enPoderDe).filter(Boolean);
+  return Array.from(new Set([...cajas, ...usados])).sort((a,b)=>String(a).localeCompare(String(b),'es'));
 }
 function chqForm(id=null) {
   const it = id ? (state.cache.cheques||[]).find(x=>x.id===id)||{} : {};
@@ -9708,7 +9815,7 @@ function chqForm(id=null) {
           </select>
         </div>
         <div><label class="label">Estado</label>
-          <select id="f-est" class="input">${CHEQUE_ESTADOS.map(e=>`<option ${e===estadoDefault?'selected':''}>${e}</option>`).join('')}</select>
+          <select id="f-est" class="input">${chqEstadosList().map(e=>`<option value="${e.codigo}" ${e.codigo===estadoDefault?'selected':''}>${esc(e.nombre)}</option>`).join('')}</select>
         </div>
         <div><label class="label">Nº de cheque *</label><input id="f-nro" class="input" value="${esc(it.nroCheque||'')}"/></div>
         <div><label class="label">Banco</label>${catSelect('f-bco', 'Banco', it.banco||'', { placeholder:'— Elegir o agregar desde Catálogos —' })}</div>
@@ -9716,8 +9823,15 @@ function chqForm(id=null) {
         <div><label class="label">Fecha emisión *</label><input id="f-fe" type="date" class="input" value="${it.fechaEmision?String(it.fechaEmision).slice(0,10):new Date().toISOString().slice(0,10)}"/></div>
         <div><label class="label">Fecha pago *</label><input id="f-fp" type="date" class="input" value="${it.fechaPago?String(it.fechaPago).slice(0,10):''}"/></div>
         <div><label class="label">Monto *</label><input id="f-mon" type="number" step="0.01" class="input" value="${it.monto||''}"/></div>
-        <div><label class="label">Beneficiario</label><input id="f-ben" class="input" value="${esc(it.beneficiario||'')}"/></div>
-        <div class="col-span-2"><label class="label">Librador (si es de terceros)</label><input id="f-lib" class="input" value="${esc(it.librador||'')}"/></div>
+        <div><label class="label">Beneficiario (a quién fue)</label><input id="f-ben" class="input" value="${esc(it.beneficiario||'')}" placeholder="A quién se lo entregamos"/></div>
+        <div><label class="label">Librador / titular</label><input id="f-lib" class="input" value="${esc(it.librador||'')}"/></div>
+        <div><label class="label">CUIT del titular</label><input id="f-cuit" class="input" value="${esc(it.cuitTitular||'')}" placeholder="20-12345678-9"/></div>
+        <div><label class="label">Endosante (de quién vino)</label><input id="f-endo" class="input" value="${esc(it.endosante||'')}" placeholder="Quién nos lo entregó / endosó"/></div>
+        <div><label class="label">Fecha de recepción</label><input id="f-frec" type="date" class="input" value="${it.fechaRecepcion?String(it.fechaRecepcion).slice(0,10):''}"/></div>
+        <div class="col-span-2"><label class="label">En poder de (cheque físico)</label>
+          <input id="f-poder" class="input" list="f-poder-list" value="${esc(it.enPoderDe||'')}" placeholder="Caja oficina, Luciano, Lucas, Flor..."/>
+          <datalist id="f-poder-list">${chqPoderOpciones().map(o=>`<option value="${esc(o)}">`).join('')}</datalist>
+        </div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2" placeholder="Ej: tener cuidado, confirmar fondos...">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -9746,6 +9860,10 @@ async function chqSave(id) {
     monto: Number($('#f-mon').value||0),
     beneficiario: $('#f-ben').value.trim()||null,
     librador: $('#f-lib').value.trim()||null,
+    cuitTitular: $('#f-cuit').value.trim()||null,
+    endosante: $('#f-endo').value.trim()||null,
+    fechaRecepcion: $('#f-frec').value ? new Date($('#f-frec').value).toISOString() : null,
+    enPoderDe: $('#f-poder').value.trim()||null,
     observaciones: $('#f-obs').value.trim()||null,
   };
   if (!data.nroCheque || !data.monto) return toast('Nº y monto requeridos','warn');
@@ -14892,6 +15010,7 @@ const CAT_TABS = [
   { id:'condIVA',  label:'Condición IVA',       icon:'🧾', tipos:['Condición IVA'],      singular:'Condición' },
   { id:'bancos',   label:'Bancos',              icon:'🏦', tipos:['Banco'],              singular:'Banco' },
   { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', tipos:['Caja'],               singular:'Caja' },
+  { id:'mediosExt',label:'Medios externos',     icon:'💸', tipos:['Medio externo'],      singular:'Medio externo' },
   { id:'condPago', label:'Condiciones de pago', icon:'📅', tipos:['Condición de pago'],  singular:'Condición de pago' },
   { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
   { id:'paises',   label:'Países',              icon:'🌎', tipos:['País'],               singular:'País' },
@@ -15499,7 +15618,7 @@ function recoChipMini(r) {
               : r.prioridad === 'alta' ? 'bg-rose-100 text-rose-800 border-rose-300'
               : r.prioridad === 'baja' ? 'bg-slate-100 text-slate-700 border-slate-300'
               : 'bg-amber-100 text-amber-800 border-amber-300';
-  return `<div class="text-[10px] px-1.5 py-0.5 rounded border ${color} truncate cursor-pointer hover:opacity-80" onclick="event.stopPropagation(); ${r.origen!=='auto'?`recoForm('${r.id}')`:`recoCompletar('${r.id}')`}" title="${esc(r.titulo)}">${esc(recoCatLabel(r.categoria).slice(0,2))} ${esc(titulo)}</div>`;
+  return `<div class="text-[10px] px-1.5 py-0.5 rounded border ${color} truncate cursor-pointer hover:opacity-80" onclick="event.stopPropagation(); recoForm('${r.id}')" title="${esc(r.titulo)}">${esc(recoCatLabel(r.categoria).slice(0,2))} ${esc(titulo)}</div>`;
 }
 function recoCardCompacta(r, today) {
   const f = new Date(r.fecha); f.setHours(0,0,0,0);
@@ -15519,7 +15638,7 @@ function recoCardCompacta(r, today) {
       </div>
       <div class="flex flex-col gap-1">
         ${!r.completado && can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoCompletar('${r.id}')" title="${r.origen==='auto'?'Ocultar':'Completar'}">✅</button>` : ''}
-        ${can('agenda:update') && r.origen!=='auto' ? `<button class="btn btn-xs btn-secondary" onclick="recoForm('${r.id}')" title="Editar">✏️</button>` : ''}
+        ${can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoForm('${r.id}')" title="${r.origen==='auto'?'Editar (crea una alarma personalizada y reemplaza la automática)':'Editar'}">✏️</button>` : ''}
         ${can('agenda:delete') ? `<button class="btn btn-xs btn-secondary" onclick="recoDel('${r.id}')" title="${r.origen==='auto'?'Ocultar':'Eliminar'}">🗑️</button>` : ''}
       </div>
     </div>`;
@@ -15690,10 +15809,17 @@ async function recoSave(id) {
     repetir: $('#rc-rep').value,
   };
   if (!data.titulo) return toast('Falta el título','warn');
+  const esAuto = String(id||'').startsWith('auto:');
   try {
-    if (id) await api('/api/recordatorios/'+id, { method:'PUT', body: JSON.stringify(data) });
-    else    await api('/api/recordatorios',     { method:'POST', body: JSON.stringify(data) });
-    toast('Guardado','success'); closeModal(); pages.agenda();
+    if (id && !esAuto) {
+      await api('/api/recordatorios/'+id, { method:'PUT', body: JSON.stringify(data) });
+    } else {
+      // Nuevo, o edición de una alarma AUTOMÁTICA: creamos un recordatorio manual.
+      await api('/api/recordatorios', { method:'POST', body: JSON.stringify(data) });
+      // Si veníamos de una auto, la ocultamos para que no quede duplicada.
+      if (esAuto) { try { await api('/api/recordatorios/'+id, { method:'DELETE' }); } catch {} }
+    }
+    toast(esAuto?'Alarma personalizada (reemplaza a la automática)':'Guardado','success'); closeModal(); pages.agenda();
   } catch (e) { toast(e.message,'error'); }
 }
 async function recoCompletar(id) {
@@ -16027,6 +16153,7 @@ function movDiariosAbrir() {
             <option value="efectivo">💵 Efectivo</option>
             <option value="cheque">💳 Cheque</option>
             <option value="transferencia">🏛️ Transferencia bancaria</option>
+            <option value="externo">💸 Billetera / medio externo</option>
           </select>
         </div>
         <div class="col-span-2" id="md-met-det"></div>
@@ -16064,6 +16191,18 @@ function movDiariosMetodoCambio() {
            ${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}
          </select>`
       : `<div class="text-xs text-amber-700">⚠️ No hay cuentas bancarias. Cargá una en Tesorería → Bancos.</div>`;
+  } else if (met === 'externo') {
+    const medios = catByTipo('Medio externo').map(m=>m.nombre).filter(Boolean);
+    det.innerHTML = medios.length
+      ? `<label class="label">Medio externo *</label>
+         <select id="md-medio" class="input">
+           <option value="">— Elegir medio —</option>
+           ${medios.map(m=>`<option>${esc(m)}</option>`).join('')}
+         </select>
+         <div class="text-[11px] text-slate-500 mt-1">💸 No impacta ninguna cuenta bancaria. Se registra como una caja en Control de Efectivo.</div>`
+      : `<label class="label">Medio externo</label>
+         <input id="md-medio" class="input" placeholder="Ej: Mercado Pago, Billetera XX"/>
+         <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargala en Configuración → Catálogos → Medios externos.</div>`;
   } else if (met === 'cheque') {
     const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
     det.innerHTML = cheques.length
@@ -16094,9 +16233,11 @@ async function movDiariosGuardar() {
     tipo, concepto, monto, categoria, clasificacion, contraparte, observaciones, metodo,
   };
   if (metodo === 'efectivo')      body.caja          = document.getElementById('md-caja')?.value?.trim() || null;
+  if (metodo === 'externo')       body.caja          = document.getElementById('md-medio')?.value?.trim() || null;
   if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('md-banco')?.value || null;
   if (metodo === 'cheque')        body.chequeId      = document.getElementById('md-cheque')?.value || null;
   if (metodo === 'efectivo'      && !body.caja)          return toast('Elegí la caja', 'warn');
+  if (metodo === 'externo'       && !body.caja)          return toast('Elegí o escribí el medio externo', 'warn');
   if (metodo === 'transferencia' && !body.bancoCuentaId) return toast('Elegí la cuenta bancaria', 'warn');
   if (metodo === 'cheque'        && !body.chequeId)      return toast('Elegí el cheque', 'warn');
   try {
@@ -16859,34 +17000,38 @@ pages.creditos = async function() {
       </table>
     </div>`;
 };
-async function credForm() {
+async function credForm(id=null) {
+  const it = id ? (state.cache.creditos||[]).find(x=>x.id===id)||{} : {};
+  const pagadas = id ? (it.cuotas||[]).filter(q=>q.pagada).length : 0;
   openModal({
-    title:'Nuevo crédito bancario', size:'max-w-3xl',
+    title: id?'Editar crédito bancario':'Nuevo crédito bancario', size:'max-w-3xl',
     body: `
       <div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mb-3">
-        💡 Al guardar, el sistema genera automáticamente todas las cuotas con sistema francés (cuota total constante). Después podés marcarlas como pagadas a medida que las vas pagando.
+        ${id
+          ? `✏️ Si cambiás <b>monto, tasa, cantidad de cuotas, periodicidad o fecha de la primera</b>, se <b>regenera el plan de cuotas</b>${pagadas?` y se pierden las ${pagadas} marca(s) de pago`:''}. Cambiar banco/destino/observaciones/estado no afecta el plan.`
+          : '💡 Al guardar, el sistema genera automáticamente todas las cuotas con sistema francés (cuota total constante). Después podés marcarlas como pagadas a medida que las vas pagando.'}
       </div>
       <div class="grid grid-cols-2 gap-3 mb-3">
-        <div><label class="label">Banco *</label><input id="cr-banco" class="input" placeholder="Banco Nación"/></div>
-        <div><label class="label">Nro operación</label><input id="cr-op" class="input"/></div>
-        <div><label class="label">Monto solicitado *</label><input id="cr-monto" type="number" step="0.01" class="input"/></div>
-        <div><label class="label">Tasa anual % (TNA)</label><input id="cr-tasa" type="number" step="0.01" class="input"/></div>
-        <div><label class="label">Cantidad de cuotas *</label><input id="cr-cant" type="number" class="input" value="12"/></div>
+        <div><label class="label">Banco *</label><input id="cr-banco" class="input" value="${esc(it.banco||'')}" placeholder="Banco Nación"/></div>
+        <div><label class="label">Nro operación</label><input id="cr-op" class="input" value="${esc(it.nroOperacion||'')}"/></div>
+        <div><label class="label">Monto solicitado *</label><input id="cr-monto" type="number" step="0.01" class="input" value="${it.montoOriginal||''}"/></div>
+        <div><label class="label">Tasa anual % (TNA)</label><input id="cr-tasa" type="number" step="0.01" class="input" value="${it.tasaAnual||''}"/></div>
+        <div><label class="label">Cantidad de cuotas *</label><input id="cr-cant" type="number" class="input" value="${it.cantCuotas||12}"/></div>
         <div><label class="label">Periodicidad *</label>
           <select id="cr-per" class="input">
-            <option value="mensual">Mensual</option><option value="bimestral">Bimestral</option>
-            <option value="trimestral">Trimestral</option><option value="semestral">Semestral</option>
+            ${['mensual','bimestral','trimestral','semestral'].map(p=>`<option value="${p}" ${(it.periodicidad||'mensual')===p?'selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('')}
           </select>
         </div>
-        <div><label class="label">Fecha primera cuota *</label><input id="cr-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
-        <div><label class="label">Destino</label><input id="cr-dest" class="input" placeholder="Capital de trabajo, cosechadora..."/></div>
+        <div><label class="label">Fecha primera cuota *</label><input id="cr-fec" type="date" class="input" value="${it.fechaPrimera?String(it.fechaPrimera).slice(0,10):new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">Destino</label><input id="cr-dest" class="input" value="${esc(it.destino||'')}" placeholder="Capital de trabajo, cosechadora..."/></div>
+        ${id?`<div><label class="label">Estado</label><select id="cr-est" class="input">${['activo','cancelado','refinanciado'].map(s=>`<option value="${s}" ${(it.estado||'activo')===s?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}</select></div>`:''}
       </div>
-      <div><label class="label">Observaciones</label><textarea id="cr-obs" class="input" rows="2"></textarea></div>`,
+      <div><label class="label">Observaciones</label><textarea id="cr-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="credSave()">💾 Generar crédito y plan</button>`
+             <button class="btn btn-primary" onclick="credSave(${id?`'${id}'`:'null'})">💾 ${id?'Guardar cambios':'Generar crédito y plan'}</button>`
   });
 }
-async function credSave() {
+async function credSave(id=null) {
   const data = {
     banco: $('#cr-banco').value.trim(),
     nroOperacion: $('#cr-op').value.trim()||null,
@@ -16898,12 +17043,30 @@ async function credSave() {
     destino: $('#cr-dest').value.trim()||null,
     observaciones: $('#cr-obs').value.trim()||null,
   };
+  if (id && $('#cr-est')) data.estado = $('#cr-est').value;
   if (!data.banco) return toast('Falta el banco','warn');
   if (!data.montoOriginal) return toast('Falta el monto','warn');
   if (!data.cantCuotas) return toast('Falta la cantidad de cuotas','warn');
   try {
-    await api('/api/creditos', { method:'POST', body: JSON.stringify(data) });
-    toast('Crédito creado con su plan de cuotas','success'); closeModal(); pages.creditos();
+    const r = await api('/api/creditos'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
+    toast(id ? (r.planRegenerado?'Crédito actualizado · plan de cuotas regenerado':'Crédito actualizado') : 'Crédito creado con su plan de cuotas','success');
+    closeModal(); delete state.cache.creditos; pages.creditos();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function credDel(id) {
+  if (!confirm('¿Eliminar este crédito y TODAS sus cuotas? No se puede deshacer.')) return;
+  try { await api('/api/creditos/'+id,{method:'DELETE'}); toast('Crédito eliminado','success'); closeModal(); delete state.cache.creditos; pages.creditos(); }
+  catch (e) { toast(e.message,'error'); }
+}
+async function credMarcarHasta(id, maxCuotas) {
+  const n = prompt('Marcar como PAGADAS las cuotas desde la 1 hasta la número… (ej: 6)', '');
+  if (n===null) return;
+  const numero = parseInt(n,10);
+  if (!(numero>=1 && numero<=maxCuotas)) return toast('Número de cuota inválido','warn');
+  if (!confirm(`Se marcarán como pagadas las cuotas 1 a ${numero}. ¿Continuar?`)) return;
+  try {
+    const r = await api('/api/creditos/'+id+'/marcar-pagadas-hasta',{method:'POST',body:JSON.stringify({numero})});
+    toast(`${r.marcadas||0} cuota(s) marcadas como pagadas`,'success'); closeModal(); delete state.cache.creditos; pages.creditos();
   } catch (e) { toast(e.message,'error'); }
 }
 async function credVer(id) {
@@ -16941,7 +17104,11 @@ async function credVer(id) {
             </tr>`).join('')}
         </tbody>
       </table>`,
-    footer: `<button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
+    footer: `
+      ${can('finanzas:update')?`<button class="btn btn-secondary" onclick='credMarcarHasta(${JSON.stringify(c.id)},${c.cantCuotas})' title="Cargar de una varias cuotas ya pagadas">✅ Marcar pagadas hasta…</button>`:''}
+      ${can('finanzas:update')?`<button class="btn btn-secondary" onclick='closeModal(); credForm(${JSON.stringify(c.id)})'>✏️ Editar</button>`:''}
+      ${can('finanzas:delete')?`<button class="btn btn-secondary text-red-600" onclick='credDel(${JSON.stringify(c.id)})'>🗑️ Eliminar</button>`:''}
+      <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
   });
 }
 async function cuotaPagar(credId, cuotaId) {
@@ -17332,7 +17499,11 @@ pages.bancos = async function() {
                 ${c.numero?` · ${esc(c.numero)}`:''}${c.alias?` · alias: ${esc(c.alias)}`:''}
               </div>
             </div>
-            <span class="badge ${c.moneda==='USD'?'badge-blue':'badge-green'} text-[10px]">${esc(c.moneda||'ARS')}</span>
+            <div class="flex items-center gap-1 flex-shrink-0">
+              <span class="badge ${c.moneda==='USD'?'badge-blue':'badge-green'} text-[10px]">${esc(c.moneda||'ARS')}</span>
+              ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar cuenta" onclick='event.stopPropagation(); bcoCuentaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
+              ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar / desactivar cuenta" onclick='event.stopPropagation(); bcoCuentaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
+            </div>
           </div>
           <div class="mt-2 flex items-baseline justify-between">
             <span class="text-xs text-slate-500">Saldo actual</span>
@@ -17407,6 +17578,11 @@ async function bcoCuentaSave(id) {
     else    await api('/api/banco-cuentas',     { method:'POST', body: JSON.stringify(data) });
     toast('Guardado','success'); closeModal(); pages.bancos();
   } catch (e) { toast(e.message,'error'); }
+}
+async function bcoCuentaDel(id) {
+  if (!confirm('¿Eliminar esta cuenta bancaria? Si tiene movimientos, se desactiva en vez de borrarse para no perder el historial.')) return;
+  try { await api('/api/banco-cuentas/'+id, { method:'DELETE' }); toast('Listo','success'); pages.bancos(); }
+  catch (e) { toast(e.message,'error'); }
 }
 
 // Vista detalle de una cuenta: muestra sus movimientos y permite cargar nuevos
