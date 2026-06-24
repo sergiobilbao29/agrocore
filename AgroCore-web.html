@@ -2316,6 +2316,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
+      titulo:'🧾 v1.2.8 — Planilla de empleados: categorías configurables + "Días trabajados" + acceso más visible',
+      desc:'Mejoras a la planilla de empleados. (1) Nueva categoría <b>Días trabajados</b> (cantidad de días × importe por día), igual que Horas. (2) Las <b>categorías ahora son configurables</b>: con el botón <b>⚙️ Categorías</b> (en la planilla o en el form de movimiento) podés <b>agregar</b> categorías propias y <b>eliminar</b> las que no uses. Cada categoría puede ser de <b>monto fijo</b> o de <b>cantidad × valor</b> con su unidad (ej. viajes, bolsas). Las categorías son por empresa y vienen precargadas con las de siempre. (3) <b>Acceso más visible a la planilla</b>: cada empleado de la nómina ahora tiene un botón <b>📋 Ver planilla</b> (y también aparece dentro de la pantalla de edición), para que no haya que adivinar que se entra haciendo clic en el nombre. El lápiz ✏️ queda solo para editar los datos del empleado.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
       titulo:'🚛 v1.2.7 — Acoplados como entidad propia: chasis y acoplado se eligen por separado en cada viaje',
       desc:'Pedido de Logística para quienes tienen flota propia y van rotando acoplados. (1) <b>Acoplados</b> ahora son una <b>entidad propia</b> (menú Logística → Acoplados), separada del chasis — antes el acoplado era un dato fijo dentro del camión. (2) En la <b>ficha del chofer</b> se puede definir su <b>chasis habitual</b> y su <b>acoplado habitual</b>. (3) Al <b>armar un viaje</b> elegís por separado: transportista, chofer, chasis y acoplado. Al elegir el chofer se completan automáticamente su chasis y acoplado habituales, pero podés <b>cambiarlos a mano</b> (cuando desenganchan y enganchan otro acoplado). (4) Las listas se <b>filtran por el transportista</b> elegido, con una opción "ver todos" para mezclar. Para transporte externo, podés seguir cargando todo a mano como antes. Los datos quedan vinculados (transportistaId / choferId / chasis / acoplado) y se siguen completando los campos de texto para la Carta de Porte.' },
@@ -13418,7 +13421,7 @@ pages.empleados = async function() {
       <h3 class="font-semibold text-slate-800">Nómina</h3>
       ${can('finanzas:create') || can('rrhh:create') ? `<button class="btn btn-primary" onclick="empleForm()">+ Nuevo empleado</button>`:''}
     </div>
-    <p class="text-xs text-slate-500 mb-2">Hacé clic en un empleado para abrir su planilla de gastos, ganancias y liquidación de sueldo.</p>
+    <p class="text-xs text-slate-500 mb-2">Tocá <b>📋 Ver planilla</b> (o hacé clic en la fila del empleado) para abrir su planilla de gastos, ganancias y liquidación de sueldo. El lápiz ✏️ es solo para editar sus datos.</p>
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
         <thead><tr><th></th><th>Apellido, Nombre</th><th>DNI</th><th>Puesto</th><th>Ingreso</th><th class="text-right">Sueldo</th><th>Estado</th><th></th></tr></thead>
@@ -13438,7 +13441,8 @@ pages.empleados = async function() {
               <td class="text-right">${e.sueldo?fmt$(e.sueldo):'—'}</td>
               <td>${e.activo!==false?'<span class="badge badge-green">Activo</span>':'<span class="badge badge-gray">Baja</span>'}</td>
               <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
-                ${can('finanzas:update')||can('rrhh:update')?`<button class="btn btn-ghost text-xs" onclick='empleForm(${JSON.stringify(e.id)})'>✏️</button>`:''}
+                <button class="btn btn-secondary text-xs" onclick='empleAbrir(${JSON.stringify(e.id)})' title="Abrir la planilla de gastos, ganancias y sueldo">📋 Ver planilla</button>
+                ${can('finanzas:update')||can('rrhh:update')?`<button class="btn btn-ghost text-xs" onclick='empleForm(${JSON.stringify(e.id)})' title="Editar datos del empleado">✏️</button>`:''}
                 ${can('finanzas:delete')||can('rrhh:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='empleDel(${JSON.stringify(e.id)})'>🗑️</button>`:''}
                 <span class="text-slate-300 ml-1">›</span>
               </td>
@@ -13507,6 +13511,7 @@ function empleForm(id=null) {
         <div class="text-[11px] text-slate-500 mt-2">💡 Si el empleado cobra % por labor: cada vez que cargues una labor con este empleado, el sistema calcula la ganancia (precio referencia × %) y la suma automáticamente a su planilla del mes.</div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             ${id?`<button class="btn btn-secondary" onclick='closeModal(); empleAbrir(${JSON.stringify(id)})' title="Ir a la planilla de gastos, ganancias y sueldo">📋 Ver planilla</button>`:''}
              <button class="btn btn-primary" onclick='empleSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
 }
@@ -13560,7 +13565,12 @@ async function empleDel(id) {
 const EMP_MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 function empMesLabel(p){ if(!p) return ''; const [y,m]=String(p).split('-'); return `${EMP_MESES[Number(m)-1]||m} ${y}`; }
 function empPeriodoHoy(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
-function empCatLabel(c){ return ({sueldo:'Sueldo',horas:'Horas',adelanto:'Adelanto',compra:'Compra personal',premio:'Premio / bono',descuento:'Descuento',otro:'Otro'})[c]||'Otro'; }
+function empCatLabel(c){
+  if (!c) return 'Otro';
+  const cat = (state.cache.catPlanilla||[]).find(x=>x.codigo===c);
+  if (cat) return cat.nombre;
+  return ({sueldo:'Sueldo',horas:'Horas trabajadas',dias:'Días trabajados',adelanto:'Adelanto',compra:'Compra personal',premio:'Premio / bono',descuento:'Descuento',otro_ing:'Otro ingreso',otro_gasto:'Otro gasto',otro:'Otro'})[c]||c;
+}
 
 // Abre la ficha de un empleado: trae sus movimientos y liquidaciones y la dibuja.
 // push=true cuando es una navegación real (clic en un empleado): empuja una
@@ -13581,6 +13591,7 @@ async function empleAbrir(id, push=true) {
     if (!emp) { toast('Empleado no encontrado','error'); return pages.empleados(); }
     movs = (await api('/api/empleados/'+id+'/movimientos')).data || [];
     liqs = (await api('/api/empleados/'+id+'/liquidaciones')).data || [];
+    state.cache.catPlanilla = (await api('/api/categorias-planilla').catch(()=>({data:state.cache.catPlanilla||[]}))).data || [];
   } catch (e) { return toast(e.message,'error'); }
   state.empFicha = { emp, movs, liqs };
   // Al abrir la ficha (navegación real) arrancamos en el mes más reciente con
@@ -13638,8 +13649,11 @@ function empFichaRender() {
     const montoCell = esGan
       ? `<span class="text-emerald-600 font-semibold">+${fmt$(m.monto)}</span>`
       : `<span class="text-red-600 font-semibold">-${fmt$(m.monto)}</span>`;
-    const detHoras = (m.categoria==='horas' && m.horas)
-      ? `<span class="text-[11px] text-slate-400 font-normal"> · ${m.horas} h × ${fmt$(m.valorHora||0)}</span>` : '';
+    const _qty = m.cantidad ?? m.horas;
+    const _rate = m.valorUnitario ?? m.valorHora;
+    const _uni = m.unidad || 'h';
+    const detHoras = (_qty && _rate != null)
+      ? `<span class="text-[11px] text-slate-400 font-normal"> · ${_qty} ${esc(_uni)} × ${fmt$(_rate||0)}</span>` : '';
     return `<tr class="hover:bg-slate-50">
       <td class="px-3 py-2 whitespace-nowrap text-slate-600">${m.fecha?fmtDate(m.fecha):'—'}</td>
       <td class="px-3 py-2">${esGan?'<span class="badge badge-green">Ganancia</span>':'<span class="badge badge-red">Gasto</span>'}</td>
@@ -13771,6 +13785,7 @@ function empFichaRender() {
       <div class="flex-1"></div>
       <button class="btn btn-secondary" onclick="empExportXLSX()" title="Descargar la planilla del mes en Excel">📊 Excel</button>
       <button class="btn btn-secondary" onclick="empReciboPDF()" title="Recibo imprimible para entregar al empleado">🖨️ Recibo PDF</button>
+      ${canC?`<button class="btn btn-secondary" onclick="empCatManager()" title="Agregar o eliminar categorías de la planilla">⚙️ Categorías</button>`:''}
       ${canC?`<button class="btn btn-primary" onclick="empMovForm()">+ Agregar movimiento</button>`:''}
     </div>
 
@@ -13801,12 +13816,18 @@ function empFichaRender() {
     ${histHtml}`;
 }
 
-// Opciones de categoría según el tipo de movimiento.
+// Opciones de categoría según el tipo de movimiento (desde las categorías
+// configurables de la empresa; con fallback a los defaults si aún no cargaron).
 function empMovCatOptions(tipo, sel){
-  const opts = tipo==='gasto'
-    ? [['adelanto','Adelanto de dinero'],['compra','Compra / cosa personal'],['descuento','Descuento'],['otro','Otro gasto']]
-    : [['horas','Horas trabajadas'],['sueldo','Sueldo'],['premio','Premio / bono'],['otro','Otro ingreso']];
-  return opts.map(([v,l])=>`<option value="${v}" ${v===sel?'selected':''}>${l}</option>`).join('');
+  const cats = (state.cache.catPlanilla||[]).filter(c=>c.mov===tipo && c.activo!==false)
+                 .sort((a,b)=>(a.orden||0)-(b.orden||0) || (a.nombre||'').localeCompare(b.nombre||''));
+  if (cats.length) {
+    return cats.map(c=>`<option value="${esc(c.codigo)}" data-modo="${esc(c.modo||'monto')}" data-unidad="${esc(c.unidad||'')}" ${c.codigo===sel?'selected':''}>${esc(c.nombre)}</option>`).join('');
+  }
+  const def = tipo==='gasto'
+    ? [['adelanto','Adelanto de dinero','monto',''],['compra','Compra / cosa personal','monto',''],['descuento','Descuento','monto',''],['otro_gasto','Otro gasto','monto','']]
+    : [['horas','Horas trabajadas','cant','horas'],['dias','Días trabajados','cant','días'],['sueldo','Sueldo','monto',''],['premio','Premio / bono','monto',''],['otro_ing','Otro ingreso','monto','']];
+  return def.map(([v,l,modo,uni])=>`<option value="${v}" data-modo="${modo}" data-unidad="${uni}" ${v===sel?'selected':''}>${l}</option>`).join('');
 }
 
 function empMovForm(movId=null){
@@ -13831,14 +13852,14 @@ function empMovForm(movId=null){
             <option value="gasto" ${tipo==='gasto'?'selected':''}>Gasto (le resta al sueldo)</option>
           </select>
         </div>
-        <div><label class="label">Categoría *</label>
+        <div><label class="label">Categoría * <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="empCatManager()">⚙️ Editar categorías</button></label>
           <select id="m-cat" class="input" onchange="empMovCatChange()">${empMovCatOptions(tipo,cat)}</select>
         </div>
         <div id="m-monto-wrap"><label class="label">Monto *</label><input id="m-monto" class="input" type="number" step="0.01" min="0" value="${it.monto||''}"/></div>
-        <div id="m-horas-wrap" class="col-span-2 grid grid-cols-3 gap-3" style="display:none">
-          <div><label class="label">Horas *</label><input id="m-horas" class="input" type="number" step="0.5" min="0" value="${it.horas||''}" oninput="empMovCalcHoras()"/></div>
-          <div><label class="label">Valor por hora *</label><input id="m-vh" class="input" type="number" step="0.01" min="0" value="${it.valorHora||''}" oninput="empMovCalcHoras()"/></div>
-          <div><label class="label">Total</label><div id="m-montoCalc" class="input bg-slate-50 font-semibold flex items-center">${fmt$((it.horas||0)*(it.valorHora||0))}</div></div>
+        <div id="m-cant-wrap" class="col-span-2 grid grid-cols-3 gap-3" style="display:none">
+          <div><label class="label"><span id="m-cant-lbl">Cantidad</span> *</label><input id="m-cant" class="input" type="number" step="0.5" min="0" value="${(it.cantidad ?? it.horas)||''}" oninput="empMovCalcCant()"/></div>
+          <div><label class="label">Valor por <span id="m-vu-lbl">unidad</span> *</label><input id="m-vu" class="input" type="number" step="0.01" min="0" value="${(it.valorUnitario ?? it.valorHora)||''}" oninput="empMovCalcCant()"/></div>
+          <div><label class="label">Total</label><div id="m-montoCalc" class="input bg-slate-50 font-semibold flex items-center">${fmt$(((it.cantidad ?? it.horas)||0)*((it.valorUnitario ?? it.valorHora)||0))}</div></div>
         </div>
         <div class="col-span-2"><label class="label">Concepto *</label><input id="m-con" class="input" value="${esc(it.concepto||'')}" placeholder="Ej: adelanto quincena, horas extra cosecha, zapatillas…"/></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="m-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
@@ -13854,29 +13875,49 @@ function empMovTipoChange(){
   empMovCatChange();
 }
 function empMovCatChange(){
-  const esHoras = $('#m-cat').value==='horas';
-  $('#m-horas-wrap').style.display = esHoras?'grid':'none';
-  $('#m-monto-wrap').style.display = esHoras?'none':'';
-  if (esHoras) empMovCalcHoras();
+  const sel = $('#m-cat'); if(!sel) return;
+  const opt = sel.selectedOptions?.[0];
+  const cod = sel.value || '';
+  const cat = (state.cache.catPlanilla||[]).find(c=>c.codigo===cod);
+  const modo = cat?.modo || opt?.dataset?.modo || ((cod==='horas'||cod==='dias')?'cant':'monto');
+  const unidad = cat?.unidad || opt?.dataset?.unidad || (cod==='dias'?'días':cod==='horas'?'horas':'unidad');
+  const esCant = modo==='cant';
+  $('#m-cant-wrap').style.display  = esCant?'grid':'none';
+  $('#m-monto-wrap').style.display = esCant?'none':'';
+  if (esCant) {
+    const cl=$('#m-cant-lbl'); if(cl) cl.textContent = 'Cantidad de '+unidad;
+    const vl=$('#m-vu-lbl');   if(vl) vl.textContent = unidad;
+    empMovCalcCant();
+  }
 }
-function empMovCalcHoras(){
-  const h=Number($('#m-horas').value||0), v=Number($('#m-vh').value||0);
-  const t=h*v;
-  $('#m-monto').value = t||'';
+function empMovCalcCant(){
+  const q=Number($('#m-cant')?.value||0), v=Number($('#m-vu')?.value||0);
+  const t=q*v;
+  const m=$('#m-monto'); if(m) m.value = t||'';
   if($('#m-montoCalc')) $('#m-montoCalc').textContent = fmt$(t);
 }
 async function empMovSave(movId){
   const empId = state.empFichaId;
   const tipo = $('#m-tipo').value;
-  const cat  = $('#m-cat').value;
+  const cod  = $('#m-cat').value;
+  const opt  = $('#m-cat').selectedOptions?.[0];
+  const catDef = (state.cache.catPlanilla||[]).find(c=>c.codigo===cod);
+  const esCant = (catDef?.modo || opt?.dataset?.modo) === 'cant';
+  const unidad = catDef?.unidad || opt?.dataset?.unidad || null;
+  const cantidad = esCant ? Number($('#m-cant').value||0) : null;
+  const valorUnitario = esCant ? Number($('#m-vu').value||0) : null;
   const data = {
     fecha: $('#m-fecha').value,
     tipo,
-    categoria: cat||null,
+    categoria: cod||null,
     concepto: $('#m-con').value.trim(),
     monto: Number($('#m-monto').value||0),
-    horas: cat==='horas' ? Number($('#m-horas').value||0) : null,
-    valorHora: cat==='horas' ? Number($('#m-vh').value||0) : null,
+    cantidad,
+    valorUnitario,
+    unidad: esCant ? unidad : null,
+    // legacy: si es la categoría 'horas', seguimos llenando horas/valorHora
+    horas: cod==='horas' ? cantidad : null,
+    valorHora: cod==='horas' ? valorUnitario : null,
     observaciones: $('#m-obs').value.trim()||null,
   };
   if (!data.fecha)    return toast('Fecha requerida','warn');
@@ -13889,6 +13930,47 @@ async function empMovSave(movId){
     state.empMes = (data.fecha||'').slice(0,7) || state.empMes;
     await empleAbrir(empId);
   } catch (e) { toast(e.message,'error'); }
+}
+// --- Gestor de categorías de planilla (agregar / eliminar) ---
+async function empCatManager(){
+  try { state.cache.catPlanilla = (await api('/api/categorias-planilla')).data || []; } catch {}
+  const cats = state.cache.catPlanilla||[];
+  const fila = (c)=>`<tr class="border-t border-slate-100">
+    <td class="p-2">${esc(c.nombre)}${c.especial?' <span class="text-[10px] text-slate-400">(especial)</span>':''}</td>
+    <td class="p-2 text-slate-500">${c.mov==='ganancia'?'Ganancia':'Gasto'}</td>
+    <td class="p-2 text-slate-500">${c.modo==='cant'?('cantidad × valor'+(c.unidad?` (${esc(c.unidad)})`:'')):'monto'}</td>
+    <td class="p-2 text-right">${can('rrhh:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='empCatDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}</td>
+  </tr>`;
+  openModal({
+    title:'⚙️ Categorías de la planilla', size:'max-w-2xl',
+    body:`
+      ${can('rrhh:create')?`<div class="mb-3 grid grid-cols-12 gap-2 items-end p-3 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="col-span-4"><label class="label">Nombre *</label><input id="nc-nom" class="input" placeholder="Ej: Viáticos"/></div>
+        <div class="col-span-3"><label class="label">Tipo</label><select id="nc-mov" class="input"><option value="ganancia">Ganancia</option><option value="gasto">Gasto</option></select></div>
+        <div class="col-span-3"><label class="label">Cálculo</label><select id="nc-modo" class="input" onchange="document.getElementById('nc-uni-wrap').style.display=this.value==='cant'?'':'none'"><option value="monto">Monto fijo</option><option value="cant">Cantidad × valor</option></select></div>
+        <div class="col-span-2" id="nc-uni-wrap" style="display:none"><label class="label">Unidad</label><input id="nc-uni" class="input" placeholder="días, viajes…"/></div>
+        <div class="col-span-12 text-right"><button class="btn btn-primary text-xs" onclick="empCatAdd()">+ Agregar categoría</button></div>
+      </div>`:''}
+      <div class="overflow-auto" style="max-height:50vh">
+      <table class="w-full text-sm"><thead class="text-xs uppercase text-slate-500 sticky top-0 bg-white"><tr><th class="text-left p-2">Nombre</th><th class="text-left p-2">Tipo</th><th class="text-left p-2">Cálculo</th><th></th></tr></thead>
+      <tbody>${cats.map(fila).join('')||'<tr><td colspan="4" class="p-3 text-center text-slate-400">Sin categorías</td></tr>'}</tbody></table>
+      </div>
+      <p class="text-[11px] text-slate-500 mt-2">Borrar una categoría no afecta los movimientos ya cargados.</p>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+async function empCatAdd(){
+  const nombre=$('#nc-nom').value.trim();
+  if(!nombre) return toast('Poné un nombre para la categoría','warn');
+  const modo=$('#nc-modo').value;
+  const data={ nombre, mov:$('#nc-mov').value, modo, unidad: modo==='cant'?($('#nc-uni').value.trim()||'unidad'):null };
+  try{ await api('/api/categorias-planilla',{method:'POST',body:JSON.stringify(data)}); delete state.cache.catPlanilla; toast('Categoría agregada','success'); empCatManager(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function empCatDel(id){
+  if(!confirm('¿Eliminar esta categoría? Los movimientos ya cargados no se tocan.')) return;
+  try{ await api('/api/categorias-planilla/'+id,{method:'DELETE'}); delete state.cache.catPlanilla; toast('Categoría eliminada','success'); empCatManager(); }
+  catch(e){ toast(e.message,'error'); }
 }
 async function empMovDel(movId){
   if(!confirm('¿Borrar este movimiento de la planilla?')) return;
@@ -14016,16 +14098,17 @@ function empExportXLSX(){
     [`Empleado: ${d.emp.apellido}, ${d.emp.nombre}`],
     [`Período: ${empMesLabel(d.mes)}`],
     [],
-    ['Fecha','Tipo','Categoría','Concepto','Horas','Valor hora','Monto','Observaciones'],
+    ['Fecha','Tipo','Categoría','Concepto','Cantidad','Unidad','Valor unit.','Monto','Observaciones'],
   ];
-  if (d.sueldoBase>0) aoa.push(['','Ganancia','Sueldo','Sueldo base','','',d.sueldoBase,'Automático (sueldo de la ficha)']);
+  if (d.sueldoBase>0) aoa.push(['','Ganancia','Sueldo','Sueldo base','','','',d.sueldoBase,'Automático (sueldo de la ficha)']);
   d.movsMes.forEach(m=>aoa.push([
     m.fecha?fmtDate(m.fecha):'',
     m.tipo==='ganancia'?'Ganancia':'Gasto',
     empCatLabel(m.categoria),
     m.concepto||'',
-    m.horas||'',
-    m.valorHora||'',
+    (m.cantidad ?? m.horas) || '',
+    m.unidad || (m.horas?'horas':''),
+    (m.valorUnitario ?? m.valorHora) || '',
     Number(m.monto||0),
     m.observaciones||'',
   ]));

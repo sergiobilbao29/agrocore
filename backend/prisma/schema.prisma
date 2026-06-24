@@ -76,6 +76,7 @@ model Company {
   choferes        Chofer[]
   camiones        Camion[]
   acoplados       Acoplado[]
+  categoriasPlanilla CategoriaPlanilla[]
 }
 
 model User {
@@ -806,8 +807,11 @@ model MovimientoEmpleado {
   tipo          String     // "ganancia" | "gasto"
   categoria     String?    // "sueldo" | "horas" | "adelanto" | "compra" | "premio" | "descuento" | "otro"
   concepto      String
-  horas         Float?     // si categoria = "horas"
-  valorHora     Float?     // si categoria = "horas"
+  horas         Float?     // legacy: si categoria = "horas" (se mantiene por compatibilidad)
+  valorHora     Float?     // legacy
+  cantidad      Float?     // cantidad para categorías "cantidad × valor" (días, viajes, etc.)
+  valorUnitario Float?     // valor por unidad para categorías "cantidad × valor"
+  unidad        String?    // etiqueta de unidad (ej. "días", "horas", "viajes")
   monto         Float
   liquidacionId String?    // si el movimiento ya quedó incluido en una liquidación
   observaciones String?
@@ -819,6 +823,29 @@ model MovimientoEmpleado {
   @@index([companyId])
   @@index([empleadoId])
   @@index([empleadoId, periodo])
+}
+
+// Categorías configurables de la planilla de empleados (ganancias/gastos).
+// modo="monto" => monto directo. modo="cant" => cantidad × valorUnitario
+// (ej. Horas trabajadas, Días trabajados, o categorías propias por unidad).
+model CategoriaPlanilla {
+  id        String   @id @default(cuid())
+  companyId String
+  nombre    String              // etiqueta visible (ej. "Días trabajados")
+  codigo    String              // slug estable, se guarda en MovimientoEmpleado.categoria
+  mov       String              // "ganancia" | "gasto"
+  modo      String   @default("monto")  // "monto" | "cant"
+  unidad    String?             // etiqueta de unidad si modo="cant" (ej. "días", "horas")
+  orden     Int      @default(0)
+  especial  Boolean  @default(false)  // built-in sugerida (horas/días) — informativo
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, codigo])
+  @@index([companyId])
 }
 
 // Liquidación de sueldo de un empleado para un mes (periodo YYYY-MM).

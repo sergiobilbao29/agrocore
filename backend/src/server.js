@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.2.7';
-const AGROCORE_BUILD = new Date('2026-06-29').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '1.2.8';
+const AGROCORE_BUILD = new Date('2026-06-30').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -3059,6 +3059,9 @@ const movEmpSchema = z.object({
   concepto: z.string().min(1),
   horas: z.number().nullable().optional(),
   valorHora: z.number().nullable().optional(),
+  cantidad: z.number().nullable().optional(),
+  valorUnitario: z.number().nullable().optional(),
+  unidad: z.string().nullable().optional(),
   monto: z.number(),
   observaciones: z.string().nullable().optional(),
 });
@@ -3093,6 +3096,9 @@ app.post('/api/empleados/:id/movimientos', requireCompany, requirePermission('rr
         concepto: d.concepto,
         horas: d.horas ?? null,
         valorHora: d.valorHora ?? null,
+        cantidad: d.cantidad ?? null,
+        valorUnitario: d.valorUnitario ?? null,
+        unidad: d.unidad ?? null,
         monto: d.monto,
         observaciones: d.observaciones || null,
       },
@@ -3130,6 +3136,85 @@ app.delete('/api/empleados/:id/movimientos/:movId', requireCompany, requirePermi
     });
     if (!existing) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado' });
     await prisma.movimientoEmpleado.delete({ where: { id: req.params.movId } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CATEGORÍAS DE PLANILLA (configurables por empresa)
+// modo "monto" = monto directo · modo "cant" = cantidad × valorUnitario.
+// ============================================================
+const CATEGORIAS_PLANILLA_DEFAULT = [
+  { codigo:'horas',      nombre:'Horas trabajadas',        mov:'ganancia', modo:'cant',  unidad:'horas', orden:1, especial:true },
+  { codigo:'dias',       nombre:'Días trabajados',         mov:'ganancia', modo:'cant',  unidad:'días',  orden:2, especial:true },
+  { codigo:'sueldo',     nombre:'Sueldo',                  mov:'ganancia', modo:'monto', unidad:null, orden:3, especial:false },
+  { codigo:'premio',     nombre:'Premio / bono',           mov:'ganancia', modo:'monto', unidad:null, orden:4, especial:false },
+  { codigo:'otro_ing',   nombre:'Otro ingreso',            mov:'ganancia', modo:'monto', unidad:null, orden:5, especial:false },
+  { codigo:'adelanto',   nombre:'Adelanto de dinero',      mov:'gasto',    modo:'monto', unidad:null, orden:1, especial:false },
+  { codigo:'compra',     nombre:'Compra / cosa personal',  mov:'gasto',    modo:'monto', unidad:null, orden:2, especial:false },
+  { codigo:'descuento',  nombre:'Descuento',               mov:'gasto',    modo:'monto', unidad:null, orden:3, especial:false },
+  { codigo:'otro_gasto', nombre:'Otro gasto',              mov:'gasto',    modo:'monto', unidad:null, orden:4, especial:false },
+];
+async function seedCategoriasPlanilla(companyId) {
+  const n = await prisma.categoriaPlanilla.count({ where: { companyId } });
+  if (n > 0) return;
+  await prisma.categoriaPlanilla.createMany({
+    data: CATEGORIAS_PLANILLA_DEFAULT.map(c => ({ ...c, companyId })),
+    skipDuplicates: true,
+  });
+}
+const _slugCat = (s) => String(s||'').toLowerCase()
+  .replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,40) || 'cat';
+const categoriaPlanillaSchema = z.object({
+  nombre: z.string().min(1),
+  mov: z.enum(['ganancia','gasto']),
+  modo: z.enum(['monto','cant']).optional(),
+  unidad: z.string().nullable().optional(),
+  orden: z.coerce.number().int().optional(),
+  activo: z.boolean().optional(),
+});
+app.get('/api/categorias-planilla', requireCompany, requirePermission('rrhh:read'), async (req, res, next) => {
+  try {
+    await seedCategoriasPlanilla(req.companyId);
+    const data = await prisma.categoriaPlanilla.findMany({
+      where: { companyId: req.companyId },
+      orderBy: [{ mov: 'asc' }, { orden: 'asc' }, { nombre: 'asc' }],
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/categorias-planilla', requireCompany, requirePermission('rrhh:create'), async (req, res, next) => {
+  try {
+    const d = categoriaPlanillaSchema.parse(req.body);
+    let codigo = _slugCat(d.nombre);
+    const dup = await prisma.categoriaPlanilla.findFirst({ where: { companyId: req.companyId, codigo } });
+    if (dup) codigo = codigo + '_' + Date.now().toString(36).slice(-4);
+    const r = await prisma.categoriaPlanilla.create({
+      data: {
+        companyId: req.companyId, nombre: d.nombre, codigo, mov: d.mov,
+        modo: d.modo || 'monto', unidad: d.modo === 'cant' ? (d.unidad || 'unidad') : null,
+        orden: d.orden ?? 99, especial: false,
+      },
+    });
+    res.status(201).json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.put('/api/categorias-planilla/:id', requireCompany, requirePermission('rrhh:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.categoriaPlanilla.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const d = categoriaPlanillaSchema.partial().parse(req.body);
+    const data = { ...d };
+    if (d.modo === 'monto') data.unidad = null;
+    const r = await prisma.categoriaPlanilla.update({ where: { id: req.params.id }, data });
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.delete('/api/categorias-planilla/:id', requireCompany, requirePermission('rrhh:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.categoriaPlanilla.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.categoriaPlanilla.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
