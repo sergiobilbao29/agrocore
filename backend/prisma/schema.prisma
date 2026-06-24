@@ -75,6 +75,7 @@ model Company {
   transportistas  Transportista[]
   choferes        Chofer[]
   camiones        Camion[]
+  acoplados       Acoplado[]
 }
 
 model User {
@@ -710,7 +711,8 @@ model Viaje {
   // ---- IDs relacionales (v0.8.2) ----
   transportistaId String?
   choferId        String?
-  camionId        String?
+  camionId        String?   // chasis
+  acopladoId      String?   // acoplado / batea (entidad propia, separada del chasis)
   // ---- Carta de Porte Electrónica (CPE / WSCPE de ARCA) ----
   cpeTipo            String?    // "automotor" | "ferroviaria"
   cpeNroCtg          String?    // nro CTG asignado por ARCA (12 dígitos)
@@ -738,6 +740,7 @@ model Viaje {
   transportistaRel Transportista? @relation(fields: [transportistaId], references: [id])
   choferRel        Chofer?        @relation(fields: [choferId], references: [id])
   camionRel        Camion?        @relation(fields: [camionId], references: [id])
+  acopladoRel      Acoplado?      @relation(fields: [acopladoId], references: [id])
 
   @@index([companyId])
   @@index([fecha])
@@ -749,6 +752,7 @@ model Viaje {
   @@index([transportistaId])
   @@index([choferId])
   @@index([camionId])
+  @@index([acopladoId])
 }
 
 // ============================================================
@@ -1228,6 +1232,7 @@ model Transportista {
   company  Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   choferes Chofer[]
   camiones Camion[]
+  acoplados Acoplado[]
   viajes   Viaje[]
 
   @@index([companyId])
@@ -1259,6 +1264,32 @@ model Camion {
   @@index([patente])
 }
 
+// Acoplado / batea — entidad propia, separada del chasis (Camion), para poder
+// combinar libremente chasis + acoplado en cada viaje (no quedan fijos).
+model Acoplado {
+  id              String   @id @default(cuid())
+  companyId       String
+  patente         String
+  tipo            String?    // batea, tolva, jaula, semi, playo, etc.
+  marca           String?
+  modelo          String?
+  anio            Int?
+  transportistaId String?
+  observaciones   String?
+  activo          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  transportista Transportista? @relation(fields: [transportistaId], references: [id], onDelete: SetNull)
+  choferes      Chofer[]
+  viajes        Viaje[]
+
+  @@index([companyId])
+  @@index([transportistaId])
+  @@index([patente])
+}
+
 model Chofer {
   id              String   @id @default(cuid())
   companyId       String
@@ -1267,7 +1298,8 @@ model Chofer {
   licencia        String?
   telefono        String?
   transportistaId String?
-  camionId        String?    // camión que maneja ACTUALMENTE
+  camionId        String?    // chasis que maneja HABITUALMENTE
+  acopladoId      String?    // acoplado HABITUAL (se sugiere por defecto al armar el viaje)
   observaciones   String?
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
@@ -1276,9 +1308,11 @@ model Chofer {
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   transportista Transportista? @relation(fields: [transportistaId], references: [id], onDelete: SetNull)
   camion        Camion?        @relation(fields: [camionId], references: [id], onDelete: SetNull)
+  acoplado      Acoplado?      @relation(fields: [acopladoId], references: [id], onDelete: SetNull)
   viajes        Viaje[]
 
   @@index([companyId])
   @@index([transportistaId])
   @@index([camionId])
+  @@index([acopladoId])
 }

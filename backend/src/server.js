@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.2.6';
-const AGROCORE_BUILD = new Date('2026-06-28').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '1.2.7';
+const AGROCORE_BUILD = new Date('2026-06-29').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -2861,6 +2861,7 @@ const viajeSchema = z.object({
       transportistaId: z.string().nullable().optional(),
       choferId:        z.string().nullable().optional(),
       camionId:        z.string().nullable().optional(),
+      acopladoId:      z.string().nullable().optional(),
       cpeNroCtg:           z.string().nullable().optional(),
       cpeNroComprobante:   z.string().nullable().optional(),
       cpeEstado:           z.string().nullable().optional(),
@@ -8057,7 +8058,19 @@ const choferSchema = z.object({
   licencia: z.string().nullable().optional(),
   telefono: z.string().nullable().optional(),
   transportistaId: z.string().nullable().optional(),
-  camionId: z.string().nullable().optional(),
+  camionId: z.string().nullable().optional(),       // chasis habitual
+  acopladoId: z.string().nullable().optional(),     // acoplado habitual
+  observaciones: z.string().nullable().optional(),
+  activo: z.boolean().optional(),
+});
+// Acoplado / batea (entidad propia, espejo de Camion)
+const acopladoSchema = z.object({
+  patente: z.string().min(1),
+  tipo: z.string().nullable().optional(),
+  marca: z.string().nullable().optional(),
+  modelo: z.string().nullable().optional(),
+  anio: z.coerce.number().int().nullable().optional(),
+  transportistaId: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
   activo: z.boolean().optional(),
 });
@@ -8135,6 +8148,43 @@ app.delete('/api/camiones/:id', requireCompany, requirePermission('logistica:del
   } catch (e) { next(e); }
 });
 
+// === Acoplados (espejo de Camiones) ===
+app.get('/api/acoplados', requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.transportistaId) where.transportistaId = String(req.query.transportistaId);
+    const data = await prisma.acoplado.findMany({
+      where, orderBy: { patente: 'asc' },
+      include: { transportista: true, _count: { select: { choferes: true, viajes: true } } },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/acoplados', requireCompany, requirePermission('logistica:create'), async (req, res, next) => {
+  try {
+    const input = acopladoSchema.parse(req.body);
+    const r = await prisma.acoplado.create({ data: { ...input, companyId: req.companyId } });
+    res.status(201).json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.put('/api/acoplados/:id', requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.acoplado.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const input = acopladoSchema.partial().parse(req.body);
+    const r = await prisma.acoplado.update({ where: { id: req.params.id }, data: input });
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.delete('/api/acoplados/:id', requireCompany, requirePermission('logistica:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.acoplado.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.acoplado.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 // === Choferes ===
 app.get('/api/choferes', requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
   try {
@@ -8142,7 +8192,7 @@ app.get('/api/choferes', requireCompany, requirePermission('logistica:read'), as
     if (req.query.transportistaId) where.transportistaId = String(req.query.transportistaId);
     const data = await prisma.chofer.findMany({
       where, orderBy: { nombre: 'asc' },
-      include: { transportista: true, camion: { include: { transportista: true } }, _count: { select: { viajes: true } } },
+      include: { transportista: true, camion: { include: { transportista: true } }, acoplado: true, _count: { select: { viajes: true } } },
     });
     res.json({ ok: true, data });
   } catch (e) { next(e); }

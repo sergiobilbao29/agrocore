@@ -965,7 +965,8 @@ const MODULES = [
   { id:'viajes',        label:'Viajes y fletes',      icon:'🚚', perm:'produccion:read', section:'Logística' },
   { id:'transportistas',label:'Transportistas',       icon:'🚛', perm:'viajes:read',     section:'Logística' },
   { id:'choferes',      label:'Choferes',             icon:'👤', perm:'viajes:read',     section:'Logística' },
-  { id:'camiones',      label:'Camiones',             icon:'🚚', perm:'viajes:read',     section:'Logística' },
+  { id:'camiones',      label:'Camiones (chasis)',    icon:'🚚', perm:'viajes:read',     section:'Logística' },
+  { id:'acoplados',     label:'Acoplados',            icon:'🚃', perm:'viajes:read',     section:'Logística' },
 
   // ===== RRHH =====
   { id:'empleados',     label:'Empleados',            icon:'👷', perm:'finanzas:read',   section:'RRHH' },
@@ -2315,9 +2316,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
+      titulo:'🚛 v1.2.7 — Acoplados como entidad propia: chasis y acoplado se eligen por separado en cada viaje',
+      desc:'Pedido de Logística para quienes tienen flota propia y van rotando acoplados. (1) <b>Acoplados</b> ahora son una <b>entidad propia</b> (menú Logística → Acoplados), separada del chasis — antes el acoplado era un dato fijo dentro del camión. (2) En la <b>ficha del chofer</b> se puede definir su <b>chasis habitual</b> y su <b>acoplado habitual</b>. (3) Al <b>armar un viaje</b> elegís por separado: transportista, chofer, chasis y acoplado. Al elegir el chofer se completan automáticamente su chasis y acoplado habituales, pero podés <b>cambiarlos a mano</b> (cuando desenganchan y enganchan otro acoplado). (4) Las listas se <b>filtran por el transportista</b> elegido, con una opción "ver todos" para mezclar. Para transporte externo, podés seguir cargando todo a mano como antes. Los datos quedan vinculados (transportistaId / choferId / chasis / acoplado) y se siguen completando los campos de texto para la Carta de Porte.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'28/06/2026',
-      titulo:'🔧 v1.2.6 — Actualizaciones "desde el sistema" conscientes de cada instancia (Demo / Peiretti / Borghi)',
-      desc:'Arreglo importante del botón "Verificar actualizaciones → Instalar". <b>Antes</b> ese botón corría siempre el actualizador apuntado a <code>C:\\AgroCore</code> (Demo) y, peor, mataba <b>todos</b> los procesos node de la máquina — así, tocar "Instalar" en Borghi terminaba actualizando Demo y tumbando las dos instancias a la vez. <b>Ahora</b> cada instancia se actualiza a sí misma: el backend le pasa al actualizador su propia carpeta (<code>InstallDir</code>), su puerto y el nombre de su servicio Windows, y el script detiene <b>solo</b> el node de ese puerto (no toca las otras instancias de la misma máquina). Para configurarlo, cada instancia define <code>AGROCORE_SERVICE</code> en su <code>.env</code> (Demo: vacío → arranca por VBS; Peiretti: <code>AgroCore-Backend</code>; Borghi: <code>AgroCore-Borghi</code>). Con esto, Borghi y cualquier cliente futuro pueden actualizarse desde el sistema sin pisar a Demo.' },
+      titulo:'🔧 v1.2.6 — Actualizaciones "desde el sistema" conscientes de cada instalación',
+      desc:'Arreglo importante del botón "Verificar actualizaciones → Instalar". <b>Antes</b> ese botón corría siempre el actualizador apuntado a una carpeta fija y, peor, mataba <b>todos</b> los procesos node de la máquina — así, en equipos con más de una instalación, actualizar una terminaba tocando otra y tumbando ambas a la vez. <b>Ahora</b> cada instalación se actualiza a sí misma: el backend le pasa al actualizador su propia carpeta, su puerto y el nombre de su servicio de Windows, y el script detiene <b>solo</b> el node de ese puerto (no toca otras instalaciones de la misma máquina). Cada instalación define su servicio en el <code>.env</code> mediante <code>AGROCORE_SERVICE</code>. Con esto, cualquier instalación puede actualizarse desde el sistema sin pisar a otra.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'27/06/2026',
       titulo:'🐄 v1.2.5 — Hacienda multi-especie + borrar cartas de porte en masa + compartir ubicación por WhatsApp desde el celular',
       desc:'Tres pedidos de la usuaria de campo, en una. (1) <b>Hacienda — todas las categorías y todas las especies</b>: los selectores "+ Categoría" y el de movimientos usaban una lista fija de 8 categorías bovinas e ignoraban el catálogo cargado. Ahora toman <b>todas</b> las categorías de Catálogos → "Categorías de animales" (bovino, <b>porcino</b>, ovino, lo que sea), suman las que ya están en uso en cada campo, y la pantalla de Hacienda refresca el catálogo al abrir para que aparezcan al instante. (2) <b>Cartas de porte — borrar todas de una</b>: nuevo botón 🗑️ "Borrar todas" en Viajes (solo visible con permiso de borrado y si hay registros) con doble confirmación (hay que escribir BORRAR). Borra únicamente las de la empresa activa — ideal para limpiar lo importado por Excel y recargar de cero. Endpoint nuevo DELETE /api/viajes acotado a companyId. (3) <b>Compartir ubicación por WhatsApp desde el celular</b>: las funciones de compartir tenían fijo web.whatsapp.com, que en el teléfono mostraba el cartel "usá WhatsApp Web en la computadora". Ahora usan wa.me: en el celular abre la <b>app nativa</b> y deja elegir contacto; en la compu sigue igual.' },
@@ -11670,6 +11674,25 @@ function viajeForm(id=null) {
       </div>
 
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Transporte</h4>
+      <div class="grid grid-cols-4 gap-3 mb-2 p-3 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="col-span-4 flex items-center justify-between">
+          <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-600">🚚 Elegir de la flota (propia)</span>
+          <label class="text-[11px] text-slate-600 flex items-center gap-1 cursor-pointer"><input type="checkbox" id="f-vertodos" onchange="viajeFlotaFiltrar()"> ver todos (no filtrar por transportista)</label>
+        </div>
+        <div><label class="label">Transportista</label>
+          <select id="f-trans-sel" class="input" onchange="viajeTranspSel()"><option value="">— elegir —</option></select>
+        </div>
+        <div><label class="label">Chofer</label>
+          <select id="f-chofer-sel" class="input" onchange="viajeChoferSel()"><option value="">— elegir —</option></select>
+        </div>
+        <div><label class="label">Chasis</label>
+          <select id="f-camion-sel" class="input" onchange="viajeChasisSel()"><option value="">— elegir —</option></select>
+        </div>
+        <div><label class="label">Acoplado</label>
+          <select id="f-acoplado-sel" class="input" onchange="viajeAcopladoSel()"><option value="">— elegir —</option></select>
+        </div>
+        <div class="col-span-4 text-[10px] text-slate-500">Al elegir el chofer se completan su chasis y acoplado habituales (editables). Para un transporte externo, dejá esto vacío y cargá los datos a mano abajo.</div>
+      </div>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Transportista <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeGuardarContacto('Transportista')">💾 Guardar</button></label><input id="f-tr" list="ds-transp" autocomplete="off" oninput="viajeAutoTransp(this)" onchange="viajeAutoTransp(this)" class="input" value="${esc(it.transportista||'')}"/></div>
         <div class="col-span-2"><label class="label">CUIT transporte</label><input id="f-trcuit" class="input" value="${esc(it.transporteCuit||'')}" placeholder="20-12345678-9"/></div>
@@ -11679,7 +11702,7 @@ function viajeForm(id=null) {
           <input id="f-tipoc" class="input" list="f-tipoc-list" value="${esc(it.tipoCamion||'')}" placeholder="Semi, bitren..."/>
           <datalist id="f-tipoc-list">${VIAJE_TIPOS_CAMION.map(t=>`<option value="${t}">`).join('')}</datalist>
         </div>
-        <div><label class="label">Patente <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeGuardarContacto('Camion')">💾</button></label><input id="f-pat" list="ds-camion" autocomplete="off" oninput="viajeAutoCamion(this)" onchange="viajeAutoCamion(this)" class="input" value="${esc(it.patente||'')}"/></div>
+        <div><label class="label">Patente chasis <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeGuardarContacto('Camion')">💾</button></label><input id="f-pat" list="ds-camion" autocomplete="off" oninput="viajeAutoCamion(this)" onchange="viajeAutoCamion(this)" class="input" value="${esc(it.patente||'')}"/></div>
         <div><label class="label">Patente acoplado</label><input id="f-pata" class="input" value="${esc(it.patenteAcoplado||'')}"/></div>
         <div></div>
       </div>
@@ -11728,6 +11751,63 @@ function viajeForm(id=null) {
       }
     } catch {}
   })();
+  viajeFlotaInit(it);
+}
+// --- Viaje: selects de flota (transportista / chofer / chasis / acoplado) ---
+async function viajeFlotaInit(it) {
+  await logiPreload();
+  const trSel = $('#f-trans-sel');
+  if (!trSel) return; // el modal pudo haberse cerrado
+  const transps = state.cache.transportistas || [];
+  trSel.innerHTML = '<option value="">— elegir —</option>' + transps.map(t=>`<option value="${t.id}">${esc(t.nombre)}</option>`).join('');
+  trSel.value = it?.transportistaId || '';
+  viajeFlotaFiltrar();
+  // Preseleccionar lo guardado SIN disparar onchange (no pisar los textos manuales)
+  if (it?.choferId)   { const e=$('#f-chofer-sel');   if(e) e.value = it.choferId; }
+  if (it?.camionId)   { const e=$('#f-camion-sel');   if(e) e.value = it.camionId; }
+  if (it?.acopladoId) { const e=$('#f-acoplado-sel'); if(e) e.value = it.acopladoId; }
+}
+function viajeFlotaFiltrar() {
+  const trId = $('#f-trans-sel')?.value || '';
+  const verTodos = $('#f-vertodos')?.checked;
+  const filtrar = (arr) => (trId && !verTodos) ? arr.filter(x => x.transportistaId === trId) : arr;
+  const choferes  = filtrar(state.cache.choferes  || []);
+  const camiones  = filtrar(state.cache.camiones  || []);
+  const acoplados = filtrar(state.cache.acoplados || []);
+  const rebuild = (sel, arr, fmt) => {
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— elegir —</option>' + arr.map(fmt).join('');
+    sel.value = arr.find(x=>x.id===cur) ? cur : '';
+  };
+  rebuild($('#f-chofer-sel'),   choferes,  c=>`<option value="${c.id}">${esc(c.nombre)}</option>`);
+  rebuild($('#f-camion-sel'),   camiones,  c=>`<option value="${c.id}" data-pat="${esc(c.patente)}" data-tipo="${esc(c.tipo||'')}">${esc(c.patente)}${c.tipo?` · ${esc(c.tipo)}`:''}</option>`);
+  rebuild($('#f-acoplado-sel'), acoplados, a=>`<option value="${a.id}" data-pat="${esc(a.patente)}" data-tipo="${esc(a.tipo||'')}">${esc(a.patente)}${a.tipo?` · ${esc(a.tipo)}`:''}</option>`);
+}
+function viajeTranspSel() {
+  const t = (state.cache.transportistas||[]).find(x=>x.id===($('#f-trans-sel')?.value||''));
+  if (t) { const n=$('#f-tr'); if(n) n.value=t.nombre||''; const c=$('#f-trcuit'); if(c&&t.cuit) c.value=t.cuit; }
+  viajeFlotaFiltrar();
+}
+function viajeChoferSel() {
+  const c = (state.cache.choferes||[]).find(x=>x.id===($('#f-chofer-sel')?.value||''));
+  if (!c) return;
+  const n=$('#f-ch'); if(n) n.value=c.nombre||'';
+  const cu=$('#f-chcuit'); if(cu) cu.value=c.cuit||'';
+  // Sugerir chasis y acoplado HABITUALES de la ficha del chofer (editables)
+  if (c.camionId)   { const s=$('#f-camion-sel');   if(s){ s.value=c.camionId;   viajeChasisSel(); } }
+  if (c.acopladoId) { const s=$('#f-acoplado-sel'); if(s){ s.value=c.acopladoId; viajeAcopladoSel(); } }
+}
+function viajeChasisSel() {
+  const opt = $('#f-camion-sel')?.selectedOptions?.[0];
+  if (!opt || !opt.value) return;
+  const p=$('#f-pat'); if(p) p.value=opt.dataset.pat||'';
+  const t=$('#f-tipoc'); if(t && opt.dataset.tipo) t.value=opt.dataset.tipo;
+}
+function viajeAcopladoSel() {
+  const opt = $('#f-acoplado-sel')?.selectedOptions?.[0];
+  if (!opt || !opt.value) return;
+  const p=$('#f-pata'); if(p) p.value=opt.dataset.pat||'';
 }
 function viajeDestTipo() {
   const t = $('#f-dtipo').value;
@@ -11790,9 +11870,10 @@ async function viajeSave(id) {
     observaciones:   $('#f-obs').value.trim() || null,
     destinoTipo:        $('#f-dtipo')?.value || null,
     depositoDestinoId:  $('#f-dtipo')?.value === 'cerealera' ? ($('#f-ddep')?.value || null) : null,
-    transportistaId: $('#v-trans')?.value || null,
-    choferId:        $('#v-chofer')?.value || null,
-    camionId:        $('#v-camion')?.value || null,
+    transportistaId: $('#f-trans-sel')?.value || null,
+    choferId:        $('#f-chofer-sel')?.value || null,
+    camionId:        $('#f-camion-sel')?.value || null,
+    acopladoId:      $('#f-acoplado-sel')?.value || null,
   };
   try {
     await api('/api/viajes'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});
@@ -17401,14 +17482,16 @@ window.addEventListener('DOMContentLoaded', () => {
 // ============================================================
 async function logiPreload() {
   try {
-    const [t, c, m] = await Promise.all([
+    const [t, c, m, a] = await Promise.all([
       api('/api/transportistas').catch(()=>({data:[]})),
       api('/api/choferes').catch(()=>({data:[]})),
       api('/api/camiones').catch(()=>({data:[]})),
+      api('/api/acoplados').catch(()=>({data:[]})),
     ]);
     state.cache.transportistas = t.data || [];
     state.cache.choferes = c.data || [];
     state.cache.camiones = m.data || [];
+    state.cache.acoplados = a.data || [];
   } catch {}
 }
 
@@ -17575,6 +17658,91 @@ async function camDel(id) {
   catch (e) { toast(e.message,'error'); }
 }
 
+// ---------- ACOPLADOS ----------
+pages.acoplados = async function() {
+  setHeader('Acoplados', 'Acoplados / bateas — se combinan libremente con los chasis en cada viaje');
+  if (!can('logistica:read') && !can('viajes:read')) { $('#page-body').innerHTML = stubPage('acoplados','Acoplados'); return; }
+  $('#page-body').innerHTML = '<div class="text-slate-500 text-sm">Cargando…</div>';
+  await logiPreload();
+  const data = state.cache.acoplados || [];
+  $('#page-body').innerHTML = `
+    <div class="flex justify-between items-center mb-3">
+      <div class="text-sm text-slate-500">${data.length} acoplado/s</div>
+      ${can('viajes:create')||can('logistica:create')?`<button class="btn btn-primary" onclick="acoForm()">+ Nuevo acoplado</button>`:''}
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
+          <tr><th class="text-left p-2">Patente</th><th class="text-left p-2">Tipo</th><th class="text-left p-2">Marca/Modelo</th><th class="text-left p-2">Transportista</th><th class="text-center p-2">Viajes</th><th></th></tr>
+        </thead>
+        <tbody>${data.length===0?`<tr><td colspan="6" class="text-center text-slate-500 p-4">No hay acoplados cargados.</td></tr>`:data.map(c=>`
+          <tr class="border-t border-slate-100 hover:bg-slate-50">
+            <td class="p-2 font-mono font-semibold">${esc(c.patente)}</td>
+            <td class="p-2">${esc(c.tipo||'—')}</td>
+            <td class="p-2 text-slate-600">${esc([c.marca,c.modelo,c.anio].filter(Boolean).join(' '))||'—'}</td>
+            <td class="p-2 text-slate-600">${esc(c.transportista?.nombre||'—')}</td>
+            <td class="p-2 text-center">${c._count?.viajes||0}</td>
+            <td class="p-2 text-right whitespace-nowrap">
+              ${can('viajes:update')||can('logistica:update')?`<button class="btn btn-ghost text-xs" onclick="acoForm('${c.id}')">✏️</button>`:''}
+              ${can('viajes:delete')||can('logistica:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick="acoDel('${c.id}')">🗑️</button>`:''}
+            </td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+};
+async function acoForm(id) {
+  await logiPreload();
+  const c = id ? (state.cache.acoplados||[]).find(x=>x.id===id) || {} : {};
+  const transps = state.cache.transportistas || [];
+  openModal({
+    title: id?'✏️ Editar acoplado':'➕ Nuevo acoplado',
+    body: `
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Patente *</label><input id="ac-pat" class="input" value="${esc(c.patente||'')}" style="text-transform:uppercase"/></div>
+        <div><label class="label">Tipo</label>
+          <input id="ac-tipo" list="ac-tipo-list" class="input" value="${esc(c.tipo||'')}" placeholder="Batea / Tolva / Jaula / Playo..."/>
+          <datalist id="ac-tipo-list"><option>Batea</option><option>Tolva</option><option>Jaula</option><option>Playo</option><option>Semi</option><option>Carretón</option></datalist>
+        </div>
+        <div><label class="label">Año</label><input id="ac-anio" type="number" class="input" value="${c.anio||''}"/></div>
+        <div><label class="label">Marca</label><input id="ac-marca" class="input" value="${esc(c.marca||'')}"/></div>
+        <div><label class="label">Modelo</label><input id="ac-modelo" class="input" value="${esc(c.modelo||'')}"/></div>
+        <div><label class="label">Transportista</label>
+          <select id="ac-tr" class="input">
+            <option value="">— sin asignar —</option>
+            ${transps.map(t=>`<option value="${t.id}" ${c.transportistaId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ac-obs" class="input" rows="2">${esc(c.observaciones||'')}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="acoSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
+  });
+}
+async function acoSave(id) {
+  const data = {
+    patente: $('#ac-pat').value.trim().toUpperCase(),
+    tipo: $('#ac-tipo').value.trim()||null,
+    marca: $('#ac-marca').value.trim()||null,
+    modelo: $('#ac-modelo').value.trim()||null,
+    anio: $('#ac-anio').value?Number($('#ac-anio').value):null,
+    transportistaId: $('#ac-tr').value||null,
+    observaciones: $('#ac-obs').value.trim()||null,
+  };
+  if (!data.patente) return toast('Patente requerida','warn');
+  try {
+    if (id) await api('/api/acoplados/'+id,{method:'PUT',body:JSON.stringify(data)});
+    else    await api('/api/acoplados',{method:'POST',body:JSON.stringify(data)});
+    toast('Guardado','success'); closeModal();
+    delete state.cache.acoplados;
+    pages.acoplados();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function acoDel(id) {
+  if (!confirm('¿Eliminar este acoplado?')) return;
+  try { await api('/api/acoplados/'+id,{method:'DELETE'}); toast('Eliminado','success'); delete state.cache.acoplados; pages.acoplados(); }
+  catch (e) { toast(e.message,'error'); }
+}
+
 // ---------- CHOFERES ----------
 pages.choferes = async function() {
   setHeader('Choferes', 'Choferes con su transportista y camión asignado');
@@ -17613,14 +17781,17 @@ async function choForm(id) {
   const c = id ? (state.cache.choferes||[]).find(x=>x.id===id) || {} : {};
   const transps = state.cache.transportistas || [];
   const camiones = state.cache.camiones || [];
-  // Si hay transportista seleccionado, filtramos camiones a los suyos. Por ahora mostramos todos pero ordenados.
-  const camsOrdenados = [...camiones].sort((a,b)=>{
+  const acoplados = state.cache.acoplados || [];
+  // Ordena poniendo primero los del transportista del chofer (si tiene)
+  const ordenarPorTransp = (arr) => [...arr].sort((a,b)=>{
     if (c.transportistaId) {
       if (a.transportistaId===c.transportistaId && b.transportistaId!==c.transportistaId) return -1;
       if (b.transportistaId===c.transportistaId && a.transportistaId!==c.transportistaId) return 1;
     }
     return (a.patente||'').localeCompare(b.patente||'');
   });
+  const camsOrdenados = ordenarPorTransp(camiones);
+  const acosOrdenados = ordenarPorTransp(acoplados);
   openModal({
     title: id?'✏️ Editar chofer':'➕ Nuevo chofer',
     body: `
@@ -17635,12 +17806,19 @@ async function choForm(id) {
             ${transps.map(t=>`<option value="${t.id}" ${c.transportistaId===t.id?'selected':''}>${esc(t.nombre)}</option>`).join('')}
           </select>
         </div>
-        <div><label class="label">Camión asignado</label>
+        <div><label class="label">Chasis habitual</label>
           <select id="ch-cam" class="input">
             <option value="">— sin asignar —</option>
             ${camsOrdenados.map(cam=>`<option value="${cam.id}" data-tr="${esc(cam.transportistaId||'')}" ${c.camionId===cam.id?'selected':''}>${esc(cam.patente)}${cam.tipo?` (${esc(cam.tipo)})`:''}${cam.transportista?` · ${esc(cam.transportista.nombre)}`:''}</option>`).join('')}
           </select>
         </div>
+        <div><label class="label">Acoplado habitual</label>
+          <select id="ch-aco" class="input">
+            <option value="">— sin asignar —</option>
+            ${acosOrdenados.map(a=>`<option value="${a.id}" data-tr="${esc(a.transportistaId||'')}" ${c.acopladoId===a.id?'selected':''}>${esc(a.patente)}${a.tipo?` (${esc(a.tipo)})`:''}${a.transportista?` · ${esc(a.transportista.nombre)}`:''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="col-span-2 text-[11px] text-slate-500 -mt-1">El chasis y acoplado habituales se sugieren por defecto al elegir este chofer en un viaje (siempre editables).</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ch-obs" class="input" rows="2">${esc(c.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -17671,6 +17849,7 @@ async function choSave(id) {
     telefono: $('#ch-tel').value.trim()||null,
     transportistaId: $('#ch-tr').value||null,
     camionId: $('#ch-cam').value||null,
+    acopladoId: $('#ch-aco').value||null,
     observaciones: $('#ch-obs').value.trim()||null,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
