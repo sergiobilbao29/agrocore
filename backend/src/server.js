@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.2.5';
-const AGROCORE_BUILD = new Date('2026-06-27').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '1.2.6';
+const AGROCORE_BUILD = new Date('2026-06-28').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -4688,23 +4688,38 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
     if (os.platform() !== 'win32') {
       return res.status(400).json({ ok: false, error: 'La actualización remota solo funciona en servidores Windows. En Linux ejecutá manualmente el script.' });
     }
-    const scriptPath = path.join('C:', 'AgroCore', 'Update-AgroCore.ps1');
+    // ---- Update CONSCIENTE DE LA INSTANCIA (v1.2.6) ----
+    // Cada instancia (Demo, Peiretti, Borghi) debe actualizarse A SI MISMA.
+    // Antes esto estaba hardcodeado a C:\AgroCore con InstallDir por defecto,
+    // asi que tocar "Instalar" en Borghi terminaba actualizando Demo y matando
+    // TODOS los node de la maquina. Ahora pasamos la carpeta, el puerto y el
+    // nombre de servicio de ESTA instancia, y el script opera solo sobre ella.
+    const installDir = STATIC_DIR;                       // raiz de ESTA instancia
+    const servicio   = (process.env.AGROCORE_SERVICE || '').trim(); // nombre del servicio Windows (vacio = VBS/npm)
+    // Update-AgroCore.ps1 propio de la instancia; si no tiene, caemos al de
+    // C:\AgroCore (el script actua sobre -InstallDir, no sobre donde vive).
+    let scriptPath = path.join(installDir, 'Update-AgroCore.ps1');
+    if (!fs.existsSync(scriptPath)) scriptPath = path.join('C:', 'AgroCore', 'Update-AgroCore.ps1');
     if (!fs.existsSync(scriptPath)) {
-      return res.status(500).json({ ok: false, error: 'No se encontró Update-AgroCore.ps1 en C:\\AgroCore' });
+      return res.status(500).json({ ok: false, error: 'No se encontró Update-AgroCore.ps1' });
     }
     // Lanzar como proceso totalmente desacoplado. Usamos un "wrapper" cmd que
     // a su vez llama a powershell para que cuando matemos node.exe no se mate
     // a sí mismo. Sin shell intermedio y stdio:ignore, sobrevive a la muerte
     // del proceso padre (Node).
     // (spawn ya está importado arriba con ESM; no usar require — el módulo es ESM)
+    const psArgs = [
+      '-WindowStyle', 'Hidden',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', scriptPath,
+      '-Unattended',
+      '-InstallDir', installDir,
+      '-Puerto', String(PORT),
+    ];
+    if (servicio) psArgs.push('-Servicio', servicio);
     const child = spawn(
       'cmd.exe',
-      ['/c', 'start', '""', '/b', 'powershell.exe',
-        '-WindowStyle', 'Hidden',
-        '-ExecutionPolicy', 'Bypass',
-        '-File', scriptPath,
-        '-Unattended',
-      ],
+      ['/c', 'start', '""', '/b', 'powershell.exe', ...psArgs],
       {
         detached: true,
         stdio: 'ignore',
@@ -4712,7 +4727,7 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
       }
     );
     child.unref();
-    res.json({ ok: true, mensaje: 'Actualización lanzada. El sistema va a reiniciarse en 30-90 segundos.' });
+    res.json({ ok: true, mensaje: `Actualización lanzada para ${process.env.AGROCORE_INSTANCIA || 'esta instancia'} (puerto ${PORT}). Se reinicia en 30-90 segundos.` });
   } catch (e) { next(e); }
 });
 

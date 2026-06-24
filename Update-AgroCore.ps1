@@ -11,8 +11,17 @@ param(
   [switch]$SkipBackup = $false,
   # Modo desatendido (lo lanza el sistema mismo desde el boton "Instalar
   # actualizacion ahora" en la web). NO espera Enter al terminar.
-  [switch]$Unattended = $false
+  [switch]$Unattended = $false,
+  # Puerto de ESTA instancia (Demo/Peiretti 3100, Borghi 3101). El backend lo
+  # pasa solo. Se usa para chequear la version y para matar SOLO el node de
+  # esta instancia (no los de otras instancias en la misma maquina).
+  [int]$Puerto = 3100,
+  # Nombre del servicio Windows de ESTA instancia (vacio = no hay servicio,
+  # se arranca por VBS/npm). Demo: (vacio). Peiretti: AgroCore-Backend. Borghi: AgroCore-Borghi.
+  [string]$Servicio = ""
 )
+# Nombre de servicio efectivo: si no vino por parametro, probamos el legacy.
+$svcName = if ($Servicio) { $Servicio } else { 'AgroCore-Backend' }
 
 function Pause-IfInteractive($prompt) {
   if (-not $Unattended) { Read-Host $prompt | Out-Null }
@@ -53,7 +62,7 @@ H1 "Verificando version disponible..."
 $currentVersion = "desconocida"
 $latestVersion  = "desconocida"
 try {
-  $r = Invoke-RestMethod -Uri "http://localhost:3100/api/system/version" -TimeoutSec 5
+  $r = Invoke-RestMethod -Uri "http://localhost:$Puerto/api/system/version" -TimeoutSec 5
   $currentVersion = $r.version
   Info "Version instalada: $currentVersion"
 } catch {
@@ -117,28 +126,28 @@ if (-not $SkipBackup) {
   } else { Warn "pg_dump no encontrado. Sin backup automatico." }
 }
 
-# 5. Detener AgroCore
-H1 "Deteniendo AgroCore..."
-# Si esta instalado como Windows Service (preferido), pararlo limpio
-$svc = Get-Service -Name 'AgroCore-Backend' -ErrorAction SilentlyContinue
+# 5. Detener AgroCore (SOLO esta instancia)
+H1 "Deteniendo AgroCore ($svcName / puerto $Puerto)..."
+$svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 $svcInstalado = [bool]$svc
 if ($svcInstalado) {
-  Info "Deteniendo servicio AgroCore-Backend..."
-  try { Stop-Service -Name 'AgroCore-Backend' -Force -ErrorAction Stop } catch {
-    Warn "Stop-Service fallo: $($_.Exception.Message). Probando matar node a mano."
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force
-  }
+  Info "Deteniendo servicio $svcName..."
+  try { Stop-Service -Name $svcName -Force -ErrorAction Stop; Ok "Servicio detenido." }
+  catch { Warn "Stop-Service fallo: $($_.Exception.Message)." }
   Start-Sleep -Seconds 3
-  Ok "Servicio detenido."
-}
-# Por las dudas, matar cualquier node huerfano
-$nodeProcs = Get-Process -Name "node" -ErrorAction SilentlyContinue
-if ($nodeProcs) {
-  $nodeProcs | Stop-Process -Force
-  Start-Sleep -Seconds 2
-  Ok "AgroCore detenido."
 } else {
-  Info "AgroCore no estaba corriendo (foreground)."
+  Info "No hay servicio '$svcName' (esta instancia se arranca por VBS/npm)."
+}
+# Matar SOLO el node que escucha en este puerto. NO tocamos los node de otras
+# instancias en la misma maquina (antes se mataban TODOS y se caia Demo+Borghi).
+$conns = Get-NetTCPConnection -LocalPort $Puerto -State Listen -ErrorAction SilentlyContinue
+if ($conns) {
+  $conns.OwningProcess | Select-Object -Unique | ForEach-Object {
+    try { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue; Ok "Node en :$Puerto detenido (PID $_)." } catch {}
+  }
+  Start-Sleep -Seconds 2
+} else {
+  Info "Nada escuchando en :$Puerto (ya estaba detenido)."
 }
 
 # 6. Pull de la ultima version
@@ -218,9 +227,9 @@ try {
 # 8. Reiniciar AgroCore
 H1 "Reiniciando AgroCore..."
 if ($svcInstalado) {
-  Info "Arrancando servicio AgroCore-Backend..."
+  Info "Arrancando servicio $svcName..."
   try {
-    Start-Service -Name 'AgroCore-Backend' -ErrorAction Stop
+    Start-Service -Name $svcName -ErrorAction Stop
     Start-Sleep -Seconds 3
     Ok "Servicio arrancado."
   } catch {
@@ -245,7 +254,7 @@ $timeout = 60
 $started = $false
 for ($i = 0; $i -lt $timeout; $i++) {
   try {
-    $r = Invoke-RestMethod -Uri "http://localhost:3100/api/system/version" -TimeoutSec 2 -ErrorAction Stop
+    $r = Invoke-RestMethod -Uri "http://localhost:$Puerto/api/system/version" -TimeoutSec 2 -ErrorAction Stop
     $started = $true
     Ok "Sistema respondiendo en version $($r.version)"
     break
@@ -261,5 +270,5 @@ if (-not $started) {
 
 H1 "[OK] Actualizacion completada"
 Ok "AgroCore actualizado a la ultima version."
-Info "Abri el navegador en http://localhost:3100 para verlo."
+Info "Abri el navegador en http://localhost:$Puerto para verlo."
 Pause-IfInteractive "Presiona Enter para salir"
