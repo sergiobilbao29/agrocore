@@ -2320,6 +2320,18 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'💱 v1.19.0 — Catálogo de Monedas en Catálogos (con cotización automática)',
+      desc:'Se agregó la pestaña <b>Monedas</b> en <b>Catálogos</b>: ves las monedas predefinidas (USD, EUR, granos) y podés <b>crear/editar/eliminar monedas propias</b> con su <b>fuente de cotización automática</b> (dólar oficial/mayorista/blue/MEP/CCL/cripto/tarjeta o pizarras) o manual; muestra la última cotización. En las <b>compras y ventas</b>, el selector de moneda ya sale de este catálogo y la cotización se sugiere con el valor del día (actualizado a diario). Aclaración: <b>"Medios externos"</b> es otra cosa (medios de pago tipo Mercado Pago/billeteras), no monedas.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'🧩 v1.18.0 — Columnas configurables en los listados + banco solo de catálogo',
+      desc:'Dos cosas: (1) En los listados de <b>Cheques</b> y <b>Viajes</b> agregamos el botón <b>⚙️ Columnas</b>: podés <b>mostrar/ocultar</b> columnas y <b>reordenarlas</b> con flechas; se guarda en tu navegador. Sumamos columnas que antes no se veían (en cheques: cuenta, recepción, endoso, CUIT titular; en viajes: chofer, carta de porte, CTG). También se puede <b>ordenar por cualquier columna</b> tocando su título. (2) En <b>Bancos</b>, al crear/editar una cuenta, el <b>banco se elige del catálogo</b> (ya no texto libre); los bancos se administran en Catálogos → Bancos.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
+      titulo:'🩹 v1.17.0 — Nueva cuenta bancaria sugiere los bancos del catálogo',
+      desc:'Al cargar/editar una <b>cuenta bancaria</b> en Bancos, el campo <b>Banco</b> ahora sugiere los <b>bancos del catálogo</b> (los podés elegir de la lista o escribir uno nuevo).' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
+      titulo:'🩹 v1.16.0 — Importar factura de compra desde PDF (incluso en dólares) mejorada',
+      desc:'Mejoré la lectura de facturas de compra desde PDF cuando el <b>QR no se puede decodificar</b> (muchas facturas de proveedores). Ahora del texto se extraen correctamente el <b>punto de venta y número</b> (formato 0002-00006490), el <b>tipo</b> (A/B/C aunque venga entre comillas), la <b>fecha</b>, y sobre todo la <b>moneda y la cotización</b> cuando la factura está en <b>dólares</b> (detecta U$S y el "TC: 1.461,50"), además del <b>total</b> en dólares y el <b>CUIT del emisor</b> correcto. Al cargar el PDF, el formulario queda con la moneda y cotización ya puestas.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
       titulo:'🩹 v1.15.0 — Cheques: la cuenta bancaria toma las cuentas reales de Bancos',
       desc:'Al cargar un cheque, el selector de <b>Cuenta bancaria</b> ahora lista las <b>cuentas reales cargadas en Tesorería → Bancos</b> (antes tomaba un catálogo aparte que quedaba vacío). Elegís el banco y aparecen sus cuentas (número y alias). El selector de acreditar/depositar cheque ya usaba las cuentas reales.' },
@@ -9852,6 +9864,43 @@ async function chqEstadoDel(id){
   try{ await api('/api/cheque-estados/'+id,{method:'DELETE'}); delete state.cache.chequeEstados; toast('Eliminado','success'); chqEstadosManager(); }
   catch(e){ toast(e.message,'error'); }
 }
+// ===== COLUMNAS CONFIGURABLES (genérico, persistido en el navegador) =====
+// Cada listado registra sus columnas en state._colDefs[key] = { cols, rerender }.
+function colGet(key, allCols){
+  let saved=null; try{ saved=JSON.parse(localStorage.getItem('ac.cols.'+key)||'null'); }catch{}
+  const allKeys = allCols.map(c=>c.key);
+  let order = (saved && Array.isArray(saved.order)) ? saved.order.filter(k=>allKeys.includes(k)) : allKeys.slice();
+  allKeys.forEach(k=>{ if(!order.includes(k)) order.push(k); });
+  const hidden = (saved && Array.isArray(saved.hidden)) ? saved.hidden.filter(k=>allKeys.includes(k)) : [];
+  return { order, hidden };
+}
+function colSet(key, cfg){ try{ localStorage.setItem('ac.cols.'+key, JSON.stringify(cfg)); }catch{} }
+function colVisibles(key, allCols){
+  const cfg = colGet(key, allCols);
+  const byKey = Object.fromEntries(allCols.map(c=>[c.key,c]));
+  return cfg.order.filter(k=>!cfg.hidden.includes(k)).map(k=>byKey[k]).filter(Boolean);
+}
+function colMenuBtn(key){ return `<button class="btn btn-secondary text-sm" onclick="colMenu('${key}')" title="Mostrar/ocultar y reordenar columnas">⚙️ Columnas</button>`; }
+function colMenu(key){
+  const def=(state._colDefs||{})[key]; if(!def) return;
+  const cfg=colGet(key, def.cols);
+  const byKey=Object.fromEntries(def.cols.map(c=>[c.key,c]));
+  const rows=cfg.order.map((k,i)=>{ const c=byKey[k]; if(!c) return ''; const vis=!cfg.hidden.includes(k);
+    return `<div class="flex items-center gap-2 py-1.5 border-b border-slate-100">
+      <input type="checkbox" ${vis?'checked':''} onchange="colToggle('${key}','${esc(k)}')"/>
+      <span class="flex-1 text-sm ${vis?'':'text-slate-400'}">${esc(c.label||k)}</span>
+      <button class="btn btn-ghost text-xs" ${i===0?'disabled':''} onclick="colMove('${key}','${esc(k)}',-1)">▲</button>
+      <button class="btn btn-ghost text-xs" ${i===cfg.order.length-1?'disabled':''} onclick="colMove('${key}','${esc(k)}',1)">▼</button>
+    </div>`; }).join('');
+  openModal({ title:'⚙️ Columnas del listado', size:'max-w-md',
+    body:`<div class="text-[11px] text-slate-500 mb-2">Tildá las columnas a mostrar y ordenálas con las flechas. Se guarda en este navegador.</div>${rows}
+      <div class="mt-3"><button class="btn btn-ghost text-xs text-slate-500" onclick="colReset('${key}')">↩️ Restablecer por defecto</button></div>`,
+    footer:`<button class="btn btn-primary" onclick="closeModal()">Listo</button>` });
+}
+function colToggle(key,k){ const def=state._colDefs[key]; const cfg=colGet(key,def.cols); const i=cfg.hidden.indexOf(k); if(i>=0)cfg.hidden.splice(i,1); else cfg.hidden.push(k); colSet(key,cfg); colMenu(key); def.rerender&&def.rerender(); }
+function colMove(key,k,dir){ const def=state._colDefs[key]; const cfg=colGet(key,def.cols); const i=cfg.order.indexOf(k); const j=i+dir; if(i<0||j<0||j>=cfg.order.length)return; const t=cfg.order[i];cfg.order[i]=cfg.order[j];cfg.order[j]=t; colSet(key,cfg); colMenu(key); def.rerender&&def.rerender(); }
+function colReset(key){ try{ localStorage.removeItem('ac.cols.'+key);}catch{} colMenu(key); const def=state._colDefs[key]; def&&def.rerender&&def.rerender(); }
+
 pages.cheques = async function() {
   setHeader('Cheques', 'Propios y de terceros');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('cheques','Cheques'); return; }
@@ -9869,22 +9918,26 @@ pages.cheques = async function() {
   const bancosUnicos  = [...new Set(rows.map(c=>(c.banco||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
   const cuentasUnicas = [...new Set(rows.map(c=>(c.cuenta||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
 
-  // Valor de una columna para ordenar.
-  const chqSortVal = (c, col) => {
-    switch (col) {
-      case 'tipo': return c.tipo||'';
-      case 'formato': return c.formato||'';
-      case 'nroCheque': return (c.nroCheque||'');
-      case 'banco': return (c.banco||'').toLowerCase();
-      case 'fechaEmision': return fechaAMs(c.fechaEmision);
-      case 'fechaPago': return fechaAMs(c.fechaPago);
-      case 'contraparte': return (c.tipo==='propio'?(c.beneficiario||''):(c.librador||c.endosante||'')).toLowerCase();
-      case 'monto': return Number(c.monto||0);
-      case 'estado': return (c.estado||'').toLowerCase();
-      case 'observaciones': return (c.observaciones||'').toLowerCase();
-      default: return '';
-    }
-  };
+  // Definición de columnas (configurables: mostrar/ocultar/reordenar) + cómo se ordenan y renderizan.
+  const chequeCols = [
+    { key:'tipo', label:'Tipo', sort:c=>c.tipo||'', render:c=> c.tipo==='propio'?'<span class="badge badge-yellow">Propio</span>':'<span class="badge badge-blue">Terceros</span>' },
+    { key:'formato', label:'Formato', sort:c=>c.formato||'', render:c=> c.formato==='electronico'?'<span class="badge badge-blue">💻 e-cheq</span>':(c.formato==='fisico'?'<span class="badge badge-gray">📄 Físico</span>':'—') },
+    { key:'nroCheque', label:'Nº', sort:c=>c.nroCheque||'', render:c=>`<span class="font-mono text-xs">${esc(c.nroCheque)}</span>` },
+    { key:'banco', label:'Banco', sort:c=>(c.banco||'').toLowerCase(), render:c=>esc(c.banco||'—') },
+    { key:'cuenta', label:'Cuenta', sort:c=>(c.cuenta||'').toLowerCase(), render:c=>esc(c.cuenta||'—') },
+    { key:'fechaEmision', label:'Emisión', sort:c=>fechaAMs(c.fechaEmision), render:c=>fmtDate(c.fechaEmision) },
+    { key:'fechaPago', label:'Pago', sort:c=>fechaAMs(c.fechaPago), render:c=>fmtDate(c.fechaPago) },
+    { key:'fechaRecepcion', label:'Recepción', sort:c=>fechaAMs(c.fechaRecepcion), render:c=>c.fechaRecepcion?fmtDate(c.fechaRecepcion):'—' },
+    { key:'fechaEndoso', label:'Endoso/Entrega', sort:c=>fechaAMs(c.fechaEndoso), render:c=>c.fechaEndoso?fmtDate(c.fechaEndoso):'—' },
+    { key:'contraparte', label:'Beneficiario / Librador', sort:c=>(c.tipo==='propio'?(c.beneficiario||''):(c.librador||c.endosante||'')).toLowerCase(), render:c=>`${esc(c.tipo==='propio'?(c.beneficiario||'—'):(c.librador||c.endosante||'—'))}${c.enPoderDe?`<br><span class="text-[10px] text-slate-400">📍 ${esc(c.enPoderDe)}</span>`:''}` },
+    { key:'cuitTitular', label:'CUIT titular', sort:c=>(c.cuitTitular||''), render:c=>esc(c.cuitTitular||'—') },
+    { key:'monto', label:'Monto', align:'text-right', sort:c=>Number(c.monto||0), render:c=>`<span class="font-bold">${fmt$(c.monto)}</span>` },
+    { key:'estado', label:'Estado', sort:c=>(c.estado||'').toLowerCase(), render:c=>chequeBadge(c.estado) },
+    { key:'observaciones', label:'Observaciones', sort:c=>(c.observaciones||'').toLowerCase(), render:c=>`<span class="text-xs text-slate-500">${esc(c.observaciones||'—')}</span>` },
+  ];
+  state._colDefs = state._colDefs || {};
+  state._colDefs['cheques'] = { cols: chequeCols, rerender: ()=>pages.cheques() };
+
   const render = () => {
     const f = state.chequeFilter;
     let filtered = rows.filter(c => {
@@ -9895,43 +9948,33 @@ pages.cheques = async function() {
       if (f.numero && !((c.nroCheque||'').toLowerCase().includes(f.numero.toLowerCase()))) return false;
       return true;
     });
+    const cols = colVisibles('cheques', chequeCols);
+    const byKey = Object.fromEntries(chequeCols.map(c=>[c.key,c]));
     // Orden por la columna elegida (clic en el encabezado: 1=asc, 2=desc).
-    if (f.sortCol) {
+    if (f.sortCol && byKey[f.sortCol]) {
+      const sv = byKey[f.sortCol].sort;
       filtered = filtered.slice().sort((a, b) => {
-        const va = chqSortVal(a, f.sortCol), vb = chqSortVal(b, f.sortCol);
+        const va = sv(a), vb = sv(b);
         let cmp = (typeof va === 'number' && typeof vb === 'number') ? (va - vb) : String(va).localeCompare(String(vb), 'es', { numeric:true });
         return f.sortDir === 'asc' ? cmp : -cmp;
       });
     }
     const arrow = (col) => f.sortCol===col ? (f.sortDir==='asc'?' ▲':' ▼') : '';
-    const th = (label, col, cls) => `<th class="cursor-pointer select-none ${cls||''}" onclick="chqSort('${col}')" title="Ordenar por ${esc(label)}">${label}${arrow(col)}</th>`;
+    const thHtml = cols.map(col => `<th class="cursor-pointer select-none ${col.align||''}" onclick="chqSort('${col.key}')" title="Ordenar por ${esc(col.label)}">${esc(col.label)}${arrow(col.key)}</th>`).join('');
     $('#cheques-tabla').innerHTML = `
       <table class="data">
-        <thead><tr>
-          ${th('Tipo','tipo')}${th('Formato','formato')}${th('Nº','nroCheque')}${th('Banco','banco')}${th('Emisión','fechaEmision')}
-          ${th('Pago','fechaPago')}
-          ${th('Beneficiario / Librador','contraparte')}${th('Monto','monto','text-right')}${th('Estado','estado')}${th('Observaciones','observaciones')}<th></th>
-        </tr></thead>
+        <thead><tr>${thHtml}<th></th></tr></thead>
         <tbody>
           ${filtered.map(c => `
             <tr class="table-row">
-              <td>${c.tipo==='propio'?'<span class="badge badge-yellow">Propio</span>':'<span class="badge badge-blue">Terceros</span>'}</td>
-              <td>${c.formato==='electronico'?'<span class="badge badge-blue">💻 e-cheq</span>':(c.formato==='fisico'?'<span class="badge badge-gray">📄 Físico</span>':'—')}</td>
-              <td class="font-mono text-xs">${esc(c.nroCheque)}</td>
-              <td>${esc(c.banco||'—')}</td>
-              <td>${fmtDate(c.fechaEmision)}</td>
-              <td>${fmtDate(c.fechaPago)}</td>
-              <td>${esc(c.tipo==='propio' ? (c.beneficiario||'—') : (c.librador||c.endosante||'—'))}${c.enPoderDe?`<br><span class="text-[10px] text-slate-400">📍 ${esc(c.enPoderDe)}</span>`:''}</td>
-              <td class="text-right font-bold">${fmt$(c.monto)}</td>
-              <td>${chequeBadge(c.estado)}</td>
-              <td class="text-xs text-slate-500">${esc(c.observaciones||'—')}</td>
+              ${cols.map(col=>`<td class="${col.align||''}">${col.render(c)}</td>`).join('')}
               <td class="text-right whitespace-nowrap">
                 ${can('finanzas:update') && _chqPuedeAcreditar(c) ?
                    `<button class="btn btn-ghost text-xs" title="${c.tipo==='propio'?'Marcar como pagado (sale de cuenta bancaria)':'Acreditar en banco (depositar / cobrar)'}" onclick='chqAcreditarForm(${JSON.stringify(c.id)})'>${c.tipo==='propio'?'💸':'💰'}</button>` : ''}
                 ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" onclick='chqForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
                 ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='chqDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
               </td>
-            </tr>`).join('') || `<tr><td colspan="11" class="text-center text-slate-400 py-8">${rows.length?'Sin cheques en este filtro':'Sin cheques'}</td></tr>`}
+            </tr>`).join('') || `<tr><td colspan="${cols.length+1}" class="text-center text-slate-400 py-8">${rows.length?'Sin cheques en este filtro':'Sin cheques'}</td></tr>`}
         </tbody>
       </table>`;
   };
@@ -9983,6 +10026,7 @@ pages.cheques = async function() {
         </div>
         <div class="md:col-span-8 flex gap-2 justify-end flex-wrap">
           <button class="btn btn-secondary" onclick="chqFiltroDisponibles()">Ver disponibles</button>
+          ${colMenuBtn('cheques')}
           ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Agregar, renombrar o quitar estados de cheque" onclick="chqEstadosManager()">⚙️ Estados</button>`:''}
           ${can('finanzas:create') ? `<button class="btn btn-primary" onclick="chqForm()">+ Nuevo</button>`:''}
         </div>
@@ -11110,6 +11154,40 @@ async function monedaNuevaGuardar(){
 async function monedaDel(id){
   if(!confirm('¿Eliminar esta moneda propia? Los comprobantes ya cargados con ella no se modifican.')) return;
   try{ await api('/api/catalogos/'+id,{method:'DELETE'}); toast('Eliminada','success'); delete state.cache.monedas; delete state.cache.cotizVivas; pages.cotizaciones(); }
+  catch(e){ toast(e.message,'error'); }
+}
+// ----- Monedas desde Catálogos (form completo) -----
+const _MONEDA_FUENTES = [['manual','Manual (la cargo a mano)'],['oficial','Dólar oficial'],['mayorista','Dólar mayorista'],['blue','Dólar blue'],['mep','Dólar MEP'],['contadoconliqui','Dólar CCL'],['cripto','Dólar cripto'],['tarjeta','Dólar tarjeta'],['soja','Pizarra soja'],['maiz','Pizarra maíz'],['trigo','Pizarra trigo'],['sorgo','Pizarra sorgo'],['girasol','Pizarra girasol']];
+function monedaCatForm(id=null){
+  const m = id ? (state.cache.catalogos||[]).find(x=>x.id===id)||{} : {};
+  openModal({ title: id?'Editar moneda':'Nueva moneda', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Código *</label><input id="mc-clave" class="input" value="${esc(m.codigo||'')}" placeholder="Ej: USD_CCL" ${id?'disabled':''}/></div>
+        <div><label class="label">Nombre *</label><input id="mc-label" class="input" value="${esc(m.nombre||'')}" placeholder="Ej: Dólar CCL"/></div>
+        <div><label class="label">Tipo</label><select id="mc-tipo" class="input"><option value="fiat" ${m.tipoPrecio!=='grano'?'selected':''}>Moneda (fiat)</option><option value="grano" ${m.tipoPrecio==='grano'?'selected':''}>Grano (toneladas)</option></select></div>
+        <div><label class="label">Fuente de cotización automática</label><select id="mc-fuente" class="input">${_MONEDA_FUENTES.map(([v,l])=>`<option value="${v}" ${(m.descripcion||'manual')===v?'selected':''}>${esc(l)}</option>`).join('')}</select></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Si elegís una fuente automática, la cotización se actualiza sola cada día. Con "Manual" la cargás en Tesorería → Cotizaciones.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="monedaCatSave(${id?`'${id}'`:'null'})">💾 Guardar</button>` });
+}
+async function monedaCatSave(id){
+  const clave=($('#mc-clave')?.value||'').trim().toUpperCase().replace(/\s+/g,'_');
+  const label=($('#mc-label').value||'').trim();
+  const tipo=$('#mc-tipo').value, fuente=$('#mc-fuente').value;
+  if(!id && !clave) return toast('Poné un código (ej: USD_CCL)','warn');
+  if(!label) return toast('Poné un nombre','warn');
+  const body={ tipo:'Moneda', nombre:label, descripcion:fuente, tipoPrecio:tipo };
+  if(!id) body.codigo=clave;
+  try{ await api('/api/catalogos'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
+    toast('Guardado','success'); delete state.cache.monedas; delete state.cache.cotizVivas; delete state.cache.catalogos;
+    closeModal(); state.catTab='monedas'; pages.catalogos(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function monedaCatDel(id){
+  if(!confirm('¿Eliminar esta moneda? Los comprobantes ya cargados con ella no se modifican.')) return;
+  try{ await api('/api/catalogos/'+id,{method:'DELETE'}); toast('Eliminada','success'); delete state.cache.monedas; delete state.cache.cotizVivas; delete state.cache.catalogos; pages.catalogos(); }
   catch(e){ toast(e.message,'error'); }
 }
 pages.ctasCobrar = async function() { state.ccTab = 'cobrar'; return pages.ctasCtes(); };
@@ -12488,8 +12566,28 @@ pages.viajes = async function() {
     });
   }
 
+  // Columnas configurables (mostrar/ocultar/reordenar) y ordenables por click.
+  const viajeCols = [
+    { key:'fecha', label:'Fecha', sort:v=>fechaAMs(v.fecha), render:v=>`<span class="whitespace-nowrap">${fmtDate(v.fecha)}</span>` },
+    { key:'ruta', label:'Origen → Destino', sort:v=>(v.origen||'').toLowerCase(), render:v=>`${esc(v.origen||'—')} <span class="text-slate-400">→</span> ${esc(v.destino||'—')}${v.destinoTipo==='cerealera'?` <span class="badge badge-yellow text-[10px]" title="Va a cerealera">🏭</span>`:v.destinoTipo==='venta_directa'?` <span class="badge badge-green text-[10px]" title="Venta directa">💰</span>`:''}` },
+    { key:'producto', label:'Producto', sort:v=>(v.producto||'').toLowerCase(), render:v=>`<b>${esc(v.producto||'—')}</b>` },
+    { key:'kgCarga', label:'Kg carga', align:'text-right', sort:v=>Number(v.cantidad||0), render:v=>v.cantidad?fmtN(v.cantidad):'—' },
+    { key:'kgDesc', label:'Kg desc.', align:'text-right', sort:v=>Number(v.kgDescarga||0), render:v=>v.kgDescarga?fmtN(v.kgDescarga):'—' },
+    { key:'dif', label:'Dif.', align:'text-right', sort:v=>Number(v.cantidad||0)-Number(v.kgDescarga||0), render:v=>{ const dif=Number(v.cantidad||0)-Number(v.kgDescarga||0); const t=(v.cantidad||v.kgDescarga)?(dif===0?'0':(dif>0?`-${fmtN(dif)}`:`+${fmtN(-dif)}`)):'—'; const cls=dif===0?'text-slate-400':(Math.abs(dif)>500?'text-red-600':'text-amber-700'); return `<span class="font-semibold ${cls}">${t}</span>`; } },
+    { key:'tarifa', label:'Tarifa', align:'text-right', sort:v=>Number(v.tarifa||0), render:v=>v.tarifa?fmt$(v.tarifa)+'/t':'—' },
+    { key:'camion', label:'Camión / Patente', sort:v=>(v.tipoCamion||'').toLowerCase(), render:v=>`${esc(v.tipoCamion||'—')}${v.patente?` <span class="text-slate-400">${esc(v.patente)}</span>`:''}` },
+    { key:'chofer', label:'Chofer', sort:v=>(v.chofer||'').toLowerCase(), render:v=>esc(v.chofer||'—') },
+    { key:'cartaPorte', label:'Carta de porte', sort:v=>(v.cartaPorte||'').toLowerCase(), render:v=>esc(v.cartaPorte||'—') },
+    { key:'ctg', label:'CTG', sort:v=>(v.ctg||'').toLowerCase(), render:v=>esc(v.ctg||'—') },
+    { key:'pagador', label:'Pagador flete', sort:v=>(v.pagadorFlete||'').toLowerCase(), render:v=>v.pagadorFlete?esc(v.pagadorFlete):'<span class="text-slate-400">—</span>' },
+    { key:'estado', label:'Estado', sort:v=>(v.estado||'').toLowerCase(), render:v=>{ const fact=v.facturaCompra; const factTxt=fact?`${fact.tipo} ${String(fact.puntoVenta).padStart(4,'0')}-${String(fact.numero).padStart(8,'0')}`:''; return `${viajeEstadoBadge(v.estado)}${factTxt?`<br><span class="text-[10px] text-slate-400">${esc(factTxt)}</span>`:''}`; } },
+  ];
+  state._colDefs = state._colDefs || {};
+  state._colDefs['viajes'] = { cols: viajeCols, rerender: ()=>pages.viajes() };
+  state.viajeSort = state.viajeSort || { col:null, dir:'asc' };
+
   const render = () => {
-    const filtered = filtrar();
+    let filtered = filtrar();
     const totalKg     = filtered.reduce((a,v)=>a+Number(v.cantidad||0),0);
     const totalKgDesc = filtered.reduce((a,v)=>a+Number(v.kgDescarga||0),0);
     const pendientesPago = filtered.filter(v=>v.estado==='facturado').length;
@@ -12500,42 +12598,25 @@ pages.viajes = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">Kg descargados</div><div class="text-xl font-bold mt-1">${fmtN(totalKgDesc)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Faltan pagar (facturados)</div><div class="text-xl font-bold mt-1 ${pendientesPago?'text-amber-700':'text-slate-500'}">${pendientesPago}</div></div>`;
 
+    const vcols = colVisibles('viajes', viajeCols);
+    const vByKey = Object.fromEntries(viajeCols.map(c=>[c.key,c]));
+    const vs = state.viajeSort;
+    if (vs.col && vByKey[vs.col]) {
+      const sv = vByKey[vs.col].sort;
+      filtered = filtered.slice().sort((a,b)=>{ const va=sv(a),vb=sv(b); let cmp=(typeof va==='number'&&typeof vb==='number')?(va-vb):String(va).localeCompare(String(vb),'es',{numeric:true}); return vs.dir==='asc'?cmp:-cmp; });
+    }
+    const vArrow = (k)=> vs.col===k ? (vs.dir==='asc'?' ▲':' ▼') : '';
+    const vThHtml = vcols.map(col=>`<th class="cursor-pointer select-none ${col.align||''}" onclick="viajeSort('${col.key}')" title="Ordenar por ${esc(col.label)}">${esc(col.label)}${vArrow(col.key)}</th>`).join('');
     $('#viajes-table').innerHTML = filtered.length === 0
       ? '<div class="text-center text-slate-400 py-8">' + (rows.length ? 'Sin viajes que coincidan con los filtros' : 'Sin viajes cargados') + '</div>'
       : `
       <div class="overflow-x-auto">
         <table class="data text-xs">
-          <thead><tr>
-            <th>Fecha</th>
-            <th>Origen → Destino</th>
-            <th>Producto</th>
-            <th class="text-right">Kg carga</th>
-            <th class="text-right">Kg desc.</th>
-            <th class="text-right">Dif.</th>
-            <th class="text-right">Tarifa</th>
-            <th>Camión / Patente</th>
-            <th>Pagador flete</th>
-            <th>Estado</th>
-            <th></th>
-          </tr></thead>
+          <thead><tr>${vThHtml}<th></th></tr></thead>
           <tbody>
             ${filtered.map(v => {
-              const dif = Number(v.cantidad||0) - Number(v.kgDescarga||0);
-              const difTxt = (v.cantidad||v.kgDescarga) ? (dif===0?'0':(dif>0?`-${fmtN(dif)}`:`+${fmtN(-dif)}`)) : '—';
-              const difCls = dif===0 ? 'text-slate-400' : (Math.abs(dif)>500 ? 'text-red-600' : 'text-amber-700');
-              const fact = v.facturaCompra;
-              const factTxt = fact ? `${fact.tipo} ${String(fact.puntoVenta).padStart(4,'0')}-${String(fact.numero).padStart(8,'0')}` : '';
               return `<tr class="table-row">
-                <td class="whitespace-nowrap">${fmtDate(v.fecha)}</td>
-                <td>${esc(v.origen||'—')} <span class="text-slate-400">→</span> ${esc(v.destino||'—')}${v.destinoTipo==='cerealera'?` <span class="badge badge-yellow text-[10px]" title="Va a cerealera">🏭</span>`:v.destinoTipo==='venta_directa'?` <span class="badge badge-green text-[10px]" title="Venta directa">💰</span>`:''}</td>
-                <td><b>${esc(v.producto||'—')}</b></td>
-                <td class="text-right">${v.cantidad?fmtN(v.cantidad):'—'}</td>
-                <td class="text-right">${v.kgDescarga?fmtN(v.kgDescarga):'—'}</td>
-                <td class="text-right font-semibold ${difCls}">${difTxt}</td>
-                <td class="text-right">${v.tarifa?fmt$(v.tarifa)+'/t':'—'}</td>
-                <td>${esc(v.tipoCamion||'—')}${v.patente?` <span class="text-slate-400">${esc(v.patente)}</span>`:''}</td>
-                <td class="text-xs">${v.pagadorFlete?esc(v.pagadorFlete):'<span class="text-slate-400">—</span>'}</td>
-                <td>${viajeEstadoBadge(v.estado)}${factTxt?`<br><span class="text-[10px] text-slate-400">${esc(factTxt)}</span>`:''}</td>
+                ${vcols.map(col=>`<td class="${col.align||''}">${col.render(v)}</td>`).join('')}
                 <td class="text-right whitespace-nowrap">
                   ${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='viajeForm(${JSON.stringify(v.id)})'>✏️</button>`:''}
                   ${canU ? cpeBotonViaje(v) : ''}
@@ -12599,6 +12680,7 @@ pages.viajes = async function() {
     <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
       <h3 class="font-semibold text-slate-800">Listado de viajes</h3>
       <div class="flex flex-wrap gap-2">
+        ${colMenuBtn('viajes')}
         <button class="btn btn-secondary" onclick="viajesExportarExcel()">📥 Exportar Excel</button>
         <button class="btn btn-secondary" onclick="solicitarCamionForm()">🚛 Solicitar Camión Logística</button>
         <button class="btn btn-secondary" onclick="verificarCtgsForm()" title="Consultar el estado de los CTGs en ARCA y completar los kg descargados">🔍 Verificar CTGs en ARCA</button>
@@ -12620,6 +12702,13 @@ pages.viajes = async function() {
   });
   render();
 };
+// Ordenar viajes por columna (1er clic ascendente, 2do descendente).
+function viajeSort(col) {
+  const s = state.viajeSort = state.viajeSort || { col:null, dir:'asc' };
+  if (s.col === col) s.dir = (s.dir === 'asc') ? 'desc' : 'asc';
+  else { s.col = col; s.dir = 'asc'; }
+  pages.viajes();
+}
 function viajeFiltrosLimpiar() {
   state.viajeFilter = { q:'', desde:'', hasta:'', producto:'', origen:'', estado:'' };
   pages.viajes();
@@ -15984,6 +16073,7 @@ const CAT_TABS = [
   { id:'bancos',   label:'Bancos',              icon:'🏦', tipos:['Banco'],              singular:'Banco' },
   { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', tipos:['Caja'],               singular:'Caja' },
   { id:'mediosExt',label:'Medios externos',     icon:'💸', tipos:['Medio externo'],      singular:'Medio externo' },
+  { id:'monedas',  label:'Monedas',             icon:'💱', tipos:['Moneda'],             singular:'Moneda' },
   { id:'condPago', label:'Condiciones de pago', icon:'📅', tipos:['Condición de pago'],  singular:'Condición de pago' },
   { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
   { id:'paises',   label:'Países',              icon:'🌎', tipos:['País'],               singular:'País' },
@@ -16005,20 +16095,28 @@ pages.catalogos = async function() {
   // sincroniza los productos de hacienda.
   let configAnimales=[];
   try { configAnimales=(await api('/api/categorias-hacienda')).data||[]; state.cache.catHacienda=configAnimales; } catch {}
+  // Monedas (predefinidas + propias) con su última cotización.
+  let monedasCat=[];
+  try { monedasCat = (await cargarMonedas(true)) || []; } catch {}
 
   const porTab = {};
   CAT_TABS.forEach(t => { porTab[t.id] = rows.filter(r => t.tipos.includes(r.tipo)); });
   porTab.categAn = configAnimales;
+  porTab.monedas = monedasCat;
 
   const tab = CAT_TABS.find(x=>x.id===state.catTab) || CAT_TABS[0];
   const esAnimales = tab.id==='categAn';
+  const esMonedas = tab.id==='monedas';
   const items = esAnimales
     ? configAnimales.slice().sort((a,b)=> (a.especie||'').localeCompare(b.especie||'') || (a.nombre||'').localeCompare(b.nombre||''))
+    : esMonedas
+    ? monedasCat.slice()
     : porTab[tab.id].sort((a,b)=> (a.nombre||'').localeCompare(b.nombre||''));
 
   // Dentro de una pestaña agrupamos por tipo real (útil en "Insumos" donde hay varios)
   const subgrupos = {};
   if (esAnimales) items.forEach(i => { (subgrupos[i.especie||'Otros'] = subgrupos[i.especie||'Otros'] || []).push(i); });
+  else if (esMonedas) { /* se renderiza aparte */ }
   else items.forEach(i => { (subgrupos[i.tipo] = subgrupos[i.tipo] || []).push(i); });
 
   // Sidebar vertical (desktop) + select desplegable (mobile)
@@ -16098,10 +16196,27 @@ pages.catalogos = async function() {
             <div class="text-[11px] md:text-xs text-slate-600">${items.length} ${items.length===1?'ítem cargado':'ítems cargados'} · disponibles en todo el sistema</div>
           </div>
           ${can('catalogos:create')||can('produccion:create')
-            ? `<button class="btn btn-primary text-sm whitespace-nowrap" onclick='${esAnimales?'hacCatForm(null,true)':`catForm(null,"${tab.id}")`}'>+ Nuevo ${esc(tab.singular)}</button>` : ''}
+            ? `<button class="btn btn-primary text-sm whitespace-nowrap" onclick='${esAnimales?'hacCatForm(null,true)':esMonedas?'monedaCatForm()':`catForm(null,"${tab.id}")`}'>+ Nuevo ${esc(tab.singular)}</button>` : ''}
         </div>
 
-        ${esAnimales ? `
+        ${esMonedas ? `
+          <div class="text-[11px] text-slate-500 mb-2">Las monedas <b>predefinidas</b> (USD, EUR, granos) ya vienen y se actualizan solas a diario. Podés crear <b>monedas propias</b> y elegir su fuente de cotización automática (dólar/pizarra) o dejarla manual. Estas monedas se usan en compras, ventas, cuenta corriente, pagos/cobros y flujo de fondos.</div>
+          <div class="kpi p-0 overflow-hidden mb-3">
+            <table class="data">
+              <thead><tr><th>Código</th><th>Nombre</th><th>Tipo</th><th>Fuente cotización</th><th class="text-right">Última (ARS)</th><th></th></tr></thead>
+              <tbody>
+                ${items.map(m=>`<tr class="table-row">
+                  <td class="font-mono text-xs">${esc(m.clave)}</td>
+                  <td class="font-semibold text-slate-800">${esc(m.label)}${m.custom?'':' <span class="badge badge-gray text-[9px]">predefinida</span>'}</td>
+                  <td class="text-slate-600">${m.tipo==='grano'?'Grano (tn)':'Moneda'}</td>
+                  <td><span class="badge ${m.fuente==='manual'?'badge-yellow':'badge-blue'}">${esc(m.fuente||'manual')}</span></td>
+                  <td class="text-right text-slate-600">${m.ultima!=null?fmt$(m.ultima):'—'}</td>
+                  <td class="text-right whitespace-nowrap">${m.custom?`${(can('catalogos:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs" onclick='monedaCatForm(${JSON.stringify(m.id)})'>✏️</button>`:''}${(can('catalogos:delete')||can('finanzas:delete'))?`<button class="btn btn-ghost text-xs text-red-600" onclick='monedaCatDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`:'<span class="text-[10px] text-slate-400">—</span>'}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : esAnimales ? `
           <div class="text-[11px] text-slate-500 mb-2">Cada categoría de animal es un <b>producto</b> usado en todo el sistema (Stock y Movimientos), con manejo de <b>cabezas + kg</b>. La especie, el rango de kg, el peso promedio y a qué categoría puede pasar se definen acá.</div>
           ${items.length===0
             ? `<div class="stub-card">No hay categorías de animales todavía. Usá "+ Nuevo" para crear una.</div>`
@@ -18599,7 +18714,10 @@ function bcoCuentaForm(id=null) {
     title: id?'Editar cuenta bancaria':'Nueva cuenta bancaria', size:'max-w-2xl',
     body: `
       <div class="grid grid-cols-3 gap-3 mb-3">
-        <div class="col-span-2"><label class="label">Banco *</label><input id="bc-banco" class="input" value="${esc(c.banco)}" placeholder="Banco Nación, Galicia, Provincia..."/></div>
+        <div class="col-span-2"><label class="label">Banco *</label>
+          ${(()=>{ const bancos=catByTipo('Banco').map(b=>b.nombre).filter(Boolean); const cur=c.banco||''; const opts=[...new Set(cur&&!bancos.includes(cur)?[cur,...bancos]:bancos)]; return `<select id="bc-banco" class="input"><option value="">— Elegir banco —</option>${opts.map(b=>`<option value="${esc(b)}" ${b===cur?'selected':''}>${esc(b)}</option>`).join('')}</select>`; })()}
+          <div class="text-[10px] text-slate-400 mt-1">Los bancos se administran en Catálogos → Bancos.</div>
+        </div>
         <div><label class="label">Sucursal</label><input id="bc-suc" class="input" value="${esc(c.sucursal||'')}"/></div>
         <div><label class="label">Tipo</label>
           <select id="bc-tipo" class="input">

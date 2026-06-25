@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.15.0';
+const AGROCORE_VERSION = '1.19.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5673,9 +5673,22 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     if (mPv && !resultado.puntoVenta) resultado.puntoVenta = Number(mPv[1]);
     const mNro = texto.match(/(?:Comp\.\s*Nro|Comprobante\s+Nro|N[°º]\s*Comp)\s*:?\s*0*(\d{1,8})/i);
     if (mNro && !resultado.numero) resultado.numero = Number(mNro[1]);
+    // Formato compacto "0002-00006490" (punto de venta - número) típico de muchos sistemas.
+    if (!resultado.puntoVenta || !resultado.numero) {
+      const mComp = texto.match(/(\d{4,5})\s*-\s*(\d{7,8})\b/);
+      if (mComp) {
+        if (!resultado.puntoVenta) resultado.puntoVenta = Number(mComp[1]);
+        if (!resultado.numero) resultado.numero = Number(mComp[2]);
+      }
+    }
     // Fecha de emisión
     const mFecha = texto.match(/Fecha\s+de\s+Emisi[oó]n\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
     if (mFecha && !resultado.fecha) resultado.fecha = fechaArg(mFecha[1]);
+    // Si no hay fecha etiquetada, tomamos la primera fecha del documento.
+    if (!resultado.fecha) {
+      const mF2 = texto.match(/\b(\d{1,2}[\/]\d{1,2}[\/]\d{4})\b/);
+      if (mF2) resultado.fecha = fechaArg(mF2[1]);
+    }
     // CAE
     const mCae = texto.match(/CAE\s*N?[°º]?\s*:?\s*(\d{10,16})/i);
     if (mCae && !resultado.cae) resultado.cae = mCae[1];
@@ -5690,13 +5703,29 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       resultado.tipoCmpCodigo = cod;
       resultado.tipoCmpLetra = FACT_TIPO_AFIP[cod] || resultado.tipoCmpLetra;
     }
-    // 2) Por la letra A/B/C grande arriba del PDF (FACTURA A / FACTURA B / ...)
+    // 2) Por la letra A/B/C arriba del PDF — admite comillas: FACTURA "A" / Factura A
     if (!resultado.tipoCmpLetra) {
-      const mLetra = texto.match(/\bFACTURA\s+([ABCEM])\b/i);
+      const mLetra = texto.match(/Factura\s*["'“”]?\s*([ABCEM])\b/i);
       if (mLetra) resultado.tipoCmpLetra = mLetra[1].toUpperCase();
     }
     // Fallback final
     if (!resultado.tipoCmpLetra) resultado.tipoCmpLetra = 'B';
+
+    // === Moneda extranjera (dólar) + cotización ===
+    // Detecta "U$S", "US$", "DÓLARES"; toma la cotización de "TC: 1.461,50" o "tipo de cambio".
+    const _arNum = (s) => Number(String(s).replace(/\./g, '').replace(',', '.'));
+    if (!resultado.moneda || resultado.moneda === 'PES') {
+      if (/U\$S|US\$|D[OÓ]LAR/i.test(texto)) {
+        resultado.moneda = 'DOL';
+        const mTc = texto.match(/TC\s*:?\s*([\d.]*\d,\d{1,4})/i) || texto.match(/tipo\s+de\s+cambio[^\d]{0,40}([\d.]*\d,\d{1,4})/i);
+        if (mTc) resultado.cotizacion = _arNum(mTc[1]);
+        // Total en dólares "U$S 137,82" si no lo tomamos de las etiquetas.
+        if (!resultado.total) {
+          const mTot = texto.match(/U\$S\s*([\d.]*\d,\d{2})/i) || texto.match(/US\$\s*([\d.]*\d,\d{2})/i);
+          if (mTot) resultado.total = _arNum(mTot[1]);
+        }
+      }
+    }
 
     // Importes (ARCA usa "1.830.150,00")
     if (!resultado.total)        resultado.total        = matchEtiqueta('Importe\\s+Total');
@@ -5709,7 +5738,7 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
 
     // CUIT emisor: el que aparece DESPUÉS de "CUIT:" (suelen ser 2: emisor primero, después receptor)
     // Si el QR ya nos lo dio, usamos ese para identificar el otro como receptor.
-    const reCuitLine = /CUIT\s*:?\s*(\d{2}[-]?\d{8}[-]?\d{1})/g;
+    const reCuitLine = /C\.?U\.?I\.?T\.?\s*:?\s*(\d{2}[-]?\d{8}[-]?\d{1})/gi;
     const cuitsEnContexto = [...texto.matchAll(reCuitLine)].map(m => m[1].replace(/-/g,''));
     if (cuitsEnContexto.length >= 1 && !resultado.cuitEmisor) {
       resultado.cuitEmisor = cuitsEnContexto[0];
