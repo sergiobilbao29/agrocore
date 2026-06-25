@@ -2316,6 +2316,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'04/07/2026',
+      titulo:'📈 v1.4.1 (Fase 2) — Hacienda: proyección de kilos y valorización para el banco (PDF)',
+      desc:'Segunda fase del módulo Hacienda: el <b>estado de situación / proyección</b> que pide el banco. Desde Hacienda → <b>📈 Proyección</b> elegís a cuántos <b>días</b> proyectar y un <b>precio por kg</b>, y el sistema arma una tabla por categoría con: cabezas, kg actuales, ganancia diaria (GMD, editable por categoría), <b>kg proyectados</b> a esa fecha (kg actuales + cabezas × GMD × días) y la <b>valorización</b> (kg × $/kg). Podés ajustar GMD y precio por cada categoría. Botón <b>🖨️ Exportar PDF</b> para presentar al banco. <i>Próxima fase: ventas por kilo (descarga de stock por cabezas + kg de balanza).</i>' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'03/07/2026',
       titulo:'🐄 v1.4.0 (Fase 1) — Hacienda: doble stock (cabezas + kilos), cambio de categoría y configuración de categorías',
       desc:'Primera fase del rediseño de Hacienda pensado para uso ganadero real. (1) <b>Doble stock</b>: cada categoría por campo tiene cabezas <b>y</b> un <b>peso promedio</b> (kg/cabeza) editable; el sistema muestra los <b>kg totales</b> estimados (cabezas × peso). SENASA sigue siendo en cabezas. (2) <b>Cambio de categoría</b> (reclasificación): nuevo tipo de movimiento que da de <b>baja</b> en la categoría origen y de <b>alta</b> en la destino (ej. Ternero → Novillito), validado por una <b>matriz de transición</b> para que no se pueda pasar cualquier cosa. (3) <b>Configuración de categorías</b> (⚙️ Categorías en Hacienda): por cada categoría definís <b>especie</b>, <b>rango de kg vivo</b>, <b>peso promedio</b>, <b>ganancia diaria</b> y <b>a qué categorías puede pasar</b>. Viene precargado con bovinos y porcinos (Ternero/Ternera/Novillito/Torito/Novillo/Toro/Vaquillona/Vaca y Lechón/Cachorro/Cachorra/Capón/Padrillo/Hembra/Cerda). (4) Los movimientos ahora aceptan <b>kilos de balanza</b>. <i>Próximas fases: proyección de kg para el banco (PDF) y ventas por kilo.</i>' },
@@ -10046,6 +10049,7 @@ pages.hacienda = async function() {
     <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
       <p class="text-xs text-slate-500 max-w-2xl">💡 El <b>real</b> se calcula sumando los movimientos. El <b>declarado</b> es lo registrado en ARCA / SENASA (siempre en cabezas). Los <b>kg</b> salen del peso promedio que cargás por categoría/campo.</p>
       <div class="flex gap-2">
+        <button class="btn btn-secondary" onclick="hacProyeccion()" title="Estado de situación y proyección de kg para presentar al banco">📈 Proyección</button>
         ${canU?`<button class="btn btn-secondary" onclick="hacCatManager()" title="Configurar categorías: especie, rango de kg y a qué categoría puede pasar">⚙️ Categorías</button>`:''}
         ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
       </div>
@@ -10383,6 +10387,127 @@ async function hacCatDel(id){
   if(!confirm('¿Eliminar esta categoría de la configuración? El stock y los movimientos ya cargados no se modifican.')) return;
   try{ await api('/api/categorias-hacienda/'+id,{method:'DELETE'}); delete state.cache.catHacienda; toast('Eliminada','success'); hacCatManager(); }
   catch(e){ toast(e.message,'error'); }
+}
+
+// ===== PROYECCIÓN DE HACIENDA (estado de situación para el banco) =====
+// Agrega el stock por categoría (cabezas + kg actuales) y proyecta kg a futuro
+// con la ganancia diaria (GMD) de cada categoría. Valoriza con un precio por kg.
+function hacProyDatos(){
+  const filas = (state.cache.haciendaResumen?.filas)||[];
+  const cfgByNom = {}; (state.cache.catHacienda||[]).forEach(c=>{ cfgByNom[c.nombre]=c; });
+  const agg = {};
+  filas.forEach(f=>{
+    const cab = Number(f.real||0);
+    if (cab<=0) return;
+    const cfg = cfgByNom[f.categoria];
+    if (!agg[f.categoria]) agg[f.categoria] = { categoria:f.categoria, especie:(cfg&&cfg.especie)||'—', cabezas:0, kgActuales:0, gmd:(cfg&&cfg.gmdDefault!=null)?cfg.gmdDefault:1, precio:0 };
+    agg[f.categoria].cabezas    += cab;
+    agg[f.categoria].kgActuales += Number(f.kilosReal||0);
+  });
+  return Object.values(agg).sort((a,b)=>String(a.especie).localeCompare(String(b.especie),'es')||String(a.categoria).localeCompare(String(b.categoria),'es'));
+}
+function hacProyeccion(){
+  const datos = hacProyDatos();
+  if (!datos.length) return toast('No hay stock con cabezas para proyectar. Cargá movimientos (y peso promedio para ver kg).','warn');
+  state._proy = { dias:90, precio:0, rows:datos };
+  openModal({
+    title:'📈 Proyección de hacienda (para el banco)', size:'max-w-5xl',
+    body: hacProyBody(),
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            <button class="btn btn-primary" onclick="hacProyPDF()">🖨️ Exportar PDF</button>`
+  });
+  setTimeout(hacProyCalc, 0);
+}
+function hacProyBody(){
+  const r = state._proy;
+  return `
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+      <div><label class="label">Proyectar a (días)</label><input id="pr-dias" type="number" min="0" class="input" value="${r.dias}" oninput="hacProyCalc()"/></div>
+      <div><label class="label">Precio por kg (aplicar a todas)</label><input id="pr-precio" type="number" min="0" step="0.01" class="input" placeholder="ej: 2500" oninput="hacProyAplicarPrecio()"/></div>
+      <div class="flex items-end"><div class="text-[11px] text-slate-500">Kg proyectados = kg actuales + (cabezas × GMD × días). Ajustá GMD y precio por categoría en la tabla.</div></div>
+    </div>
+    <div class="overflow-auto" style="max-height:50vh">
+    <table class="data text-sm w-full">
+      <thead><tr>
+        <th>Especie</th><th>Categoría</th><th class="text-right">Cabezas</th>
+        <th class="text-right">Kg actuales</th><th class="text-right">GMD</th>
+        <th class="text-right">Kg proyectados</th><th class="text-right">$/kg</th><th class="text-right">Valor proyectado</th>
+      </tr></thead>
+      <tbody>
+        ${r.rows.map((row,i)=>`<tr>
+          <td>${esc(row.especie)}</td><td><b>${esc(row.categoria)}</b></td>
+          <td class="text-right">${fmtN(row.cabezas)}</td>
+          <td class="text-right">${row.kgActuales?fmtN(Math.round(row.kgActuales)):'<span class="text-slate-300">sin peso</span>'}</td>
+          <td class="text-right"><input id="pr-gmd-${i}" type="number" step="0.01" min="0" class="input text-right" style="width:72px;padding:2px 6px" value="${row.gmd}" oninput="hacProyCalc()"/></td>
+          <td class="text-right font-semibold" id="pr-kgp-${i}">—</td>
+          <td class="text-right"><input id="pr-pre-${i}" type="number" step="0.01" min="0" class="input text-right" style="width:90px;padding:2px 6px" value="${row.precio||''}" oninput="hacProyCalc()"/></td>
+          <td class="text-right font-bold" id="pr-val-${i}">—</td>
+        </tr>`).join('')}
+      </tbody>
+      <tfoot><tr class="font-bold bg-slate-50">
+        <td colspan="2">TOTALES</td>
+        <td class="text-right" id="pr-tot-cab">—</td>
+        <td class="text-right" id="pr-tot-kga">—</td><td></td>
+        <td class="text-right" id="pr-tot-kgp">—</td><td></td>
+        <td class="text-right" id="pr-tot-val">—</td>
+      </tr></tfoot>
+    </table>
+    </div>`;
+}
+function hacProyAplicarPrecio(){
+  const p = $('#pr-precio').value;
+  (state._proy.rows||[]).forEach((row,i)=>{ const el=$('#pr-pre-'+i); if(el) el.value=p; });
+  hacProyCalc();
+}
+function hacProyCalc(){
+  const r = state._proy; if(!r) return;
+  const dias = Number($('#pr-dias')?.value||0); r.dias = dias;
+  let totCab=0, totKga=0, totKgp=0, totVal=0;
+  r.rows.forEach((row,i)=>{
+    const gmd = Number($('#pr-gmd-'+i)?.value||0);
+    const precio = Number($('#pr-pre-'+i)?.value||0);
+    row.gmd=gmd; row.precio=precio;
+    row.kgProy = row.kgActuales + row.cabezas*gmd*dias;
+    row.valor  = row.kgProy*precio;
+    const a=$('#pr-kgp-'+i); if(a) a.textContent = fmtN(Math.round(row.kgProy))+' kg';
+    const b=$('#pr-val-'+i); if(b) b.textContent = precio?fmt$(row.valor):'—';
+    totCab+=row.cabezas; totKga+=row.kgActuales; totKgp+=row.kgProy; totVal+=row.valor;
+  });
+  const set=(id,v)=>{ const e=$(id); if(e) e.textContent=v; };
+  set('#pr-tot-cab', fmtN(totCab));
+  set('#pr-tot-kga', fmtN(Math.round(totKga))+' kg');
+  set('#pr-tot-kgp', fmtN(Math.round(totKgp))+' kg');
+  set('#pr-tot-val', fmt$(totVal));
+  r._tot = { totCab, totKga, totKgp, totVal };
+}
+function hacProyPDF(){
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if (typeof jsPDFCtor==='undefined'){ toast('Esperá un momento, todavía se está cargando la librería de PDF…','warn'); return; }
+  hacProyCalc();
+  const r = state._proy; const t = r._tot||{};
+  const empresa = nombreEmpresaActiva();
+  const doc = new jsPDFCtor({orientation:'landscape',unit:'pt',format:'a4'});
+  const pageW = doc.internal.pageSize.getWidth();
+  let y=40;
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(empresa, pageW/2, y, {align:'center'}); y+=18;
+  doc.setFontSize(12); doc.text('Estado de situación de hacienda — Proyección', pageW/2, y, {align:'center'}); y+=15;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9);
+  doc.text(`Proyección a ${r.dias} días · emitido ${fmtDate(new Date())}`, pageW/2, y, {align:'center'}); y+=10;
+  const body = r.rows.map(row=>[row.especie,row.categoria,fmtN(row.cabezas),row.kgActuales?fmtN(Math.round(row.kgActuales)):'—',String(row.gmd),fmtN(Math.round(row.kgProy||0)),row.precio?fmt$(row.precio):'—',row.precio?fmt$(row.valor||0):'—']);
+  doc.autoTable({
+    head:[['Especie','Categoría','Cabezas','Kg actuales','GMD','Kg proyectados','$/kg','Valor proyectado']],
+    body,
+    foot:[['','TOTALES',fmtN(t.totCab||0),fmtN(Math.round(t.totKga||0)),'',fmtN(Math.round(t.totKgp||0)),'',fmt$(t.totVal||0)]],
+    startY:y+8,
+    styles:{fontSize:9,cellPadding:4},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255],halign:'center'},
+    footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
+    columnStyles:{2:{halign:'right'},3:{halign:'right'},4:{halign:'right'},5:{halign:'right'},6:{halign:'right'},7:{halign:'right'}},
+  });
+  let yy=doc.lastAutoTable.finalY+16;
+  doc.setFontSize(8); doc.setTextColor(120);
+  doc.text('Kg proyectados = Kg actuales + (Cabezas × GMD × días). Valorización informativa según el precio por kg ingresado. SENASA: stock en cabezas.', 40, yy);
+  doc.save(`proyeccion-hacienda-${new Date().toISOString().slice(0,10)}.pdf`);
 }
 
 /* =========================================================
