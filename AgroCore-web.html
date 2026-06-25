@@ -2316,6 +2316,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'03/07/2026',
+      titulo:'🐄 v1.4.0 (Fase 1) — Hacienda: doble stock (cabezas + kilos), cambio de categoría y configuración de categorías',
+      desc:'Primera fase del rediseño de Hacienda pensado para uso ganadero real. (1) <b>Doble stock</b>: cada categoría por campo tiene cabezas <b>y</b> un <b>peso promedio</b> (kg/cabeza) editable; el sistema muestra los <b>kg totales</b> estimados (cabezas × peso). SENASA sigue siendo en cabezas. (2) <b>Cambio de categoría</b> (reclasificación): nuevo tipo de movimiento que da de <b>baja</b> en la categoría origen y de <b>alta</b> en la destino (ej. Ternero → Novillito), validado por una <b>matriz de transición</b> para que no se pueda pasar cualquier cosa. (3) <b>Configuración de categorías</b> (⚙️ Categorías en Hacienda): por cada categoría definís <b>especie</b>, <b>rango de kg vivo</b>, <b>peso promedio</b>, <b>ganancia diaria</b> y <b>a qué categorías puede pasar</b>. Viene precargado con bovinos y porcinos (Ternero/Ternera/Novillito/Torito/Novillo/Toro/Vaquillona/Vaca y Lechón/Cachorro/Cachorra/Capón/Padrillo/Hembra/Cerda). (4) Los movimientos ahora aceptan <b>kilos de balanza</b>. <i>Próximas fases: proyección de kg para el banco (PDF) y ventas por kilo.</i>' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
       titulo:'🏦 v1.3.0 — Créditos: editar/eliminar + cargar cuotas ya pagadas · Calendario: alarmas editables',
       desc:'(1) <b>Créditos bancarios</b>: ahora se pueden <b>editar</b> y <b>eliminar</b>. Si cambiás monto, tasa, cantidad de cuotas, periodicidad o fecha de la primera, se <b>regenera el plan</b> (avisa que se pierden las marcas de pago). Para cargar <b>créditos viejos que ya vienen con cuotas pagas</b>, hay un botón <b>"✅ Marcar pagadas hasta…"</b> que marca de una todas las cuotas hasta el número que indiques. (2) <b>Calendario</b>: ahora <b>todas las alarmas se pueden editar</b>, incluso las automáticas (de créditos, cheques y cuentas corrientes): al editar una automática se crea una alarma personalizada que reemplaza a la original.' },
@@ -2950,7 +2953,7 @@ pages.inicio = async function() {
                     <div class="font-medium text-slate-800">${esc(n.titulo)}</div>
                     <span class="text-[10px] text-slate-400 ml-auto">${esc(n.fecha)}</span>
                   </div>
-                  <p class="text-xs text-slate-600 mt-1">${esc(n.desc)}</p>
+                  <p class="text-xs text-slate-600 mt-1">${n.desc}</p>
                 </div>
               </div>
             </li>`).join('')}
@@ -3258,7 +3261,7 @@ function verTodasNovedades() {
                     <div class="font-medium text-slate-800">${esc(n.titulo)}</div>
                     <span class="text-[10px] text-slate-400 ml-auto whitespace-nowrap">${esc(n.fecha)}</span>
                   </div>
-                  <p class="text-xs text-slate-600 mt-1">${esc(n.desc)}</p>
+                  <p class="text-xs text-slate-600 mt-1">${n.desc}</p>
                 </div>
               </div>
             </li>`).join('')}
@@ -9968,17 +9971,19 @@ const HAC_CATEGORIAS = ['Vacas','Vaquillonas','Terneros','Terneras','Novillos','
 // ovino, etc.), suma las que ya están en uso en algún campo, y sólo cae a la
 // lista bovina por defecto cuando el catálogo todavía está vacío.
 function hacCategoriasDisponibles() {
+  const delConfig = (state.cache.catHacienda || [])
+    .filter(c => c.activo !== false).map(c => c.nombre).filter(Boolean);
   const delCatalogo = (state.cache.catalogos || [])
     .filter(c => c.tipo === 'Categoría animal' && c.activo !== false)
-    .map(c => c.nombre)
-    .filter(Boolean);
+    .map(c => c.nombre).filter(Boolean);
   const enUso = ((state.cache.haciendaResumen?.filas) || [])
-    .map(f => f.categoria)
-    .filter(Boolean);
-  const base = delCatalogo.length ? delCatalogo : HAC_CATEGORIAS;
+    .map(f => f.categoria).filter(Boolean);
+  const base = delConfig.length ? delConfig : (delCatalogo.length ? delCatalogo : HAC_CATEGORIAS);
   return Array.from(new Set([...base, ...enUso]))
     .sort((a, b) => String(a).localeCompare(String(b), 'es'));
 }
+// Config de una categoría (especie, kg, transiciones) por nombre.
+function hacCatCfg(nombre){ return (state.cache.catHacienda||[]).find(c=>c.nombre===nombre) || null; }
 function hacTipoSigno(t){
   if (t==='nacimiento'||t==='compra'||t==='traslado_in') return 1;
   if (t==='muerte'||t==='venta'||t==='traslado_out') return -1;
@@ -9988,6 +9993,7 @@ function hacTipoLabel(t){
   const m={nacimiento:['Nacimiento','badge-green'],muerte:['Muerte','badge-red'],
     compra:['Compra','badge-green'],venta:['Venta','badge-red'],
     traslado_in:['Traslado entró','badge-blue'],traslado_out:['Traslado salió','badge-blue'],
+    cambio_categoria:['Cambio de categoría','badge-blue'],
     ajuste:['Ajuste / Conteo','badge-yellow']};
   const [l,c]=m[t]||[t,'badge-gray']; return `<span class="badge ${c}">${l}</span>`;
 }
@@ -10000,18 +10006,19 @@ pages.hacienda = async function() {
   let resumen = { campos: [], filas: [] };
   let movs = [];
   try {
-    const [r, m, cat] = await Promise.all([
+    const [r, m, cat, ch] = await Promise.all([
       api('/api/hacienda-resumen').catch(()=>({data:state.cache.haciendaResumen})),
       api('/api/hacienda-movimientos').catch(()=>({data:state.cache.haciendaMovs||[]})),
-      // Traemos los catálogos para que el selector "+ Categoría" muestre siempre
-      // las categorías de animales actualizadas (todas las especies).
       api('/api/catalogos').catch(()=>({data:state.cache.catalogos||[]})),
+      // Config de categorías (especie, kg, transiciones) — fuente principal de categorías.
+      api('/api/categorias-hacienda').catch(()=>({data:state.cache.catHacienda||[]})),
     ]);
     resumen = r.data || resumen;
     movs    = m.data || [];
     state.cache.haciendaResumen = resumen;
     state.cache.haciendaMovs    = movs;
     if (cat && cat.data) state.cache.catalogos = cat.data;
+    if (ch && ch.data) state.cache.catHacienda = ch.data;
   } catch (e) { return toast(e.message,'error'); }
 
   const { campos = [], filas = [] } = resumen;
@@ -10037,8 +10044,11 @@ pages.hacienda = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">Campos con diferencia</div><div class="text-2xl font-bold mt-1 ${camposConDif?'text-amber-700':'text-slate-500'}">${camposConDif}</div></div>
     </div>
     <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-      <p class="text-xs text-slate-500 max-w-2xl">💡 El <b>real</b> se calcula sumando los movimientos (nacimientos, muertes, compras, ventas, traslados, ajustes). El <b>declarado</b> lo cargás vos cuando lo registrás en ARCA / SENASA. La diferencia te avisa qué falta registrar.</p>
-      ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
+      <p class="text-xs text-slate-500 max-w-2xl">💡 El <b>real</b> se calcula sumando los movimientos. El <b>declarado</b> es lo registrado en ARCA / SENASA (siempre en cabezas). Los <b>kg</b> salen del peso promedio que cargás por categoría/campo.</p>
+      <div class="flex gap-2">
+        ${canU?`<button class="btn btn-secondary" onclick="hacCatManager()" title="Configurar categorías: especie, rango de kg y a qué categoría puede pasar">⚙️ Categorías</button>`:''}
+        ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
+      </div>
     </div>`;
 
   if (!campos.length) {
@@ -10065,9 +10075,10 @@ pages.hacienda = async function() {
             <table class="data">
               <thead><tr>
                 <th>Categoría</th>
-                <th class="text-right">Declarado (SENASA)</th>
-                <th class="text-right">Real (en campo)</th>
+                <th class="text-right">Declarado (cab.)</th>
+                <th class="text-right">Real (cab.)</th>
                 <th class="text-right">Diferencia</th>
+                <th class="text-right">Real (kg)</th>
                 <th></th>
               </tr></thead>
               <tbody>
@@ -10076,8 +10087,9 @@ pages.hacienda = async function() {
                   <td class="text-right">${fmtN(f.declarado)}</td>
                   <td class="text-right font-semibold">${fmtN(f.real)}</td>
                   <td class="text-right font-bold ${f.diferencia===0?'text-slate-400':(f.diferencia>0?'text-emerald-700':'text-red-600')}">${f.diferencia>0?'+':''}${fmtN(f.diferencia)}</td>
+                  <td class="text-right text-slate-600">${f.kilosReal!=null?fmtN(f.kilosReal)+' kg':'<span class="text-slate-300">— sin peso —</span>'}</td>
                   <td class="text-right whitespace-nowrap">
-                    ${canU?`<button class="btn btn-ghost text-xs" onclick='hacDeclaradoForm(${JSON.stringify(campoId)},${JSON.stringify(f.categoria)},${Number(f.declarado||0)})'>📋 Declarado</button>`:''}
+                    ${canU?`<button class="btn btn-ghost text-xs" onclick='hacDeclaradoForm(${JSON.stringify(campoId)},${JSON.stringify(f.categoria)},${Number(f.declarado||0)},${f.pesoPromedio!=null?f.pesoPromedio:'null'})'>📋 Declarado / kg</button>`:''}
                     ${canC?`<button class="btn btn-ghost text-xs" onclick='hacMovForm(${JSON.stringify(campoId)},${JSON.stringify(f.categoria)})'>+ Mov.</button>`:''}
                   </td>
                 </tr>`).join('')}
@@ -10125,38 +10137,58 @@ function hacCategoriaForm(campoId) {
       <div class="grid grid-cols-1 gap-3">
         <div>
           <label class="label">Categoría *</label>
-          <input id="h-cat" class="input" list="h-cat-list" placeholder="Ej: Vacas, Vaquillonas, Terneros..."/>
+          <input id="h-cat" class="input" list="h-cat-list" placeholder="Ej: Vacas, Vaquillonas, Terneros..." onchange="hacCatPesoSuggest()"/>
           <datalist id="h-cat-list">${hacCategoriasDisponibles().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
         </div>
-        <div>
-          <label class="label">Stock declarado en SENASA / ARCA</label>
-          <input id="h-decl" type="number" min="0" step="1" class="input" value="0"/>
-          <p class="text-xs text-slate-400 mt-1">Si todavía no lo cargaste en ARCA, dejalo en 0 y arrancá con los movimientos.</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="label">Stock declarado (cabezas)</label>
+            <input id="h-decl" type="number" min="0" step="1" class="input" value="0"/>
+          </div>
+          <div>
+            <label class="label">Peso promedio (kg/cab.)</label>
+            <input id="h-peso" type="number" min="0" step="0.1" class="input" placeholder="ej: 280"/>
+          </div>
         </div>
+        <p class="text-xs text-slate-400">El peso promedio se usa para estimar los kg totales y la proyección para el banco. Si elegís una categoría configurada, te sugerimos su peso.</p>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='hacCategoriaSave(${JSON.stringify(campoId)})'>Crear</button>`
   });
 }
+// Sugiere el peso promedio de la categoría elegida (desde la config) si el campo está vacío.
+function hacCatPesoSuggest() {
+  const cat = $('#h-cat')?.value.trim();
+  const cfg = hacCatCfg(cat);
+  const inp = $('#h-peso');
+  if (inp && !inp.value && cfg && cfg.pesoPromedio) inp.value = cfg.pesoPromedio;
+}
 async function hacCategoriaSave(campoId) {
   const categoria = $('#h-cat').value.trim();
   const declarado = Number($('#h-decl').value || 0);
+  const pesoPromedio = $('#h-peso').value ? Number($('#h-peso').value) : null;
   if (!categoria) return toast('Categoría requerida','warn');
   try {
-    await api('/api/hacienda-stock',{method:'POST',body:JSON.stringify({campoId,categoria,declarado})});
+    await api('/api/hacienda-stock',{method:'POST',body:JSON.stringify({campoId,categoria,declarado,pesoPromedio})});
     toast('Categoría agregada','success'); closeModal();
     delete state.cache.haciendaResumen; pages.hacienda();
   } catch(e) { toast(e.message,'error'); }
 }
 
-function hacDeclaradoForm(campoId, categoria, actual) {
+function hacDeclaradoForm(campoId, categoria, actual, peso) {
   openModal({
-    title: 'Stock declarado · ' + categoria,
+    title: 'Declarado / peso · ' + categoria,
     body: `
-      <p class="text-xs text-slate-500 mb-3">Cargá acá el número que tenés registrado en SENASA / ARCA para esta categoría en este campo.</p>
-      <div>
-        <label class="label">Cantidad declarada</label>
-        <input id="h-decl" type="number" min="0" step="1" class="input" value="${actual||0}"/>
+      <p class="text-xs text-slate-500 mb-3">Cabezas registradas en SENASA / ARCA y peso promedio por cabeza (para estimar kg).</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="label">Cantidad declarada (cabezas)</label>
+          <input id="h-decl" type="number" min="0" step="1" class="input" value="${actual||0}"/>
+        </div>
+        <div>
+          <label class="label">Peso promedio (kg/cab.)</label>
+          <input id="h-peso" type="number" min="0" step="0.1" class="input" value="${peso!=null?peso:''}" placeholder="ej: 280"/>
+        </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='hacDeclaradoSave(${JSON.stringify(campoId)},${JSON.stringify(categoria)})'>Guardar</button>`
@@ -10164,8 +10196,9 @@ function hacDeclaradoForm(campoId, categoria, actual) {
 }
 async function hacDeclaradoSave(campoId, categoria) {
   const declarado = Number($('#h-decl').value || 0);
+  const pesoPromedio = $('#h-peso').value ? Number($('#h-peso').value) : null;
   try {
-    await api('/api/hacienda-stock',{method:'POST',body:JSON.stringify({campoId,categoria,declarado})});
+    await api('/api/hacienda-stock',{method:'POST',body:JSON.stringify({campoId,categoria,declarado,pesoPromedio})});
     toast('Declarado actualizado','success'); closeModal();
     delete state.cache.haciendaResumen; pages.hacienda();
   } catch(e) { toast(e.message,'error'); }
@@ -10185,6 +10218,7 @@ function hacMovForm(campoIdInit=null, categoriaInit=null) {
             <option value="compra">🛒 Compra (entró)</option>
             <option value="venta">💸 Venta (salió)</option>
             <option value="traslado">🚚 Traslado entre campos</option>
+            <option value="cambio_categoria">🔄 Cambio de categoría</option>
             <option value="ajuste">⚖️ Ajuste / Conteo</option>
           </select>
         </div>
@@ -10196,11 +10230,16 @@ function hacMovForm(campoIdInit=null, categoriaInit=null) {
           <select id="h-campodest" class="input">${campos.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
         </div>
         <div class="col-span-2"><label class="label">Categoría *</label>
-          <input id="h-cat" class="input" list="h-cat-list2" value="${esc(categoriaInit||'')}" placeholder="Ej: Terneros"/>
+          <input id="h-cat" class="input" list="h-cat-list2" value="${esc(categoriaInit||'')}" placeholder="Ej: Terneros" onchange="hacMovDestRefresh()"/>
           <datalist id="h-cat-list2">${todasCategorias.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
         </div>
-        <div><label class="label">Cantidad *</label><input id="h-cant" type="number" step="1" class="input" placeholder="cabezas"/></div>
-        <div id="h-ajuste-hint" class="text-xs text-amber-700 pb-2 self-end" style="display:none">En ajuste podés poner negativo (ej: -2 si contaron 2 menos).</div>
+        <div class="col-span-2" id="h-catdest-wrap" style="display:none"><label class="label">Pasa a la categoría *</label>
+          <select id="h-catdest" class="input"><option value="">— elegir —</option></select>
+          <p class="text-[11px] text-slate-400 mt-1" id="h-catdest-hint"></p>
+        </div>
+        <div><label class="label">Cantidad (cabezas) *</label><input id="h-cant" type="number" step="1" class="input" placeholder="cabezas"/></div>
+        <div><label class="label">Kilos (balanza, opcional)</label><input id="h-kg" type="number" step="0.1" min="0" class="input" placeholder="kg totales"/></div>
+        <div id="h-ajuste-hint" class="text-xs text-amber-700 pb-2 self-end col-span-2" style="display:none">En ajuste podés poner negativo (ej: -2 si contaron 2 menos).</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="h-obs" class="input" rows="2"></textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -10210,9 +10249,27 @@ function hacMovForm(campoIdInit=null, categoriaInit=null) {
 }
 function hacMovTipoChange() {
   const t = $('#h-tipo').value;
+  const esCambio = t==='cambio_categoria';
   $('#h-campodest-wrap').style.display = t==='traslado'?'':'none';
+  $('#h-catdest-wrap').style.display   = esCambio?'':'none';
   $('#h-ajuste-hint').style.display    = t==='ajuste'?'':'none';
   $('#h-campo-lbl').textContent        = t==='traslado'?'Campo origen *':'Campo *';
+  if (esCambio) hacMovDestRefresh();
+}
+function hacMovDestRefresh() {
+  const cat = $('#h-cat')?.value.trim();
+  const sel = $('#h-catdest'); if(!sel) return;
+  const cfg = hacCatCfg(cat);
+  const trans = (cfg && Array.isArray(cfg.transiciones) && cfg.transiciones.length)
+    ? cfg.transiciones
+    : hacCategoriasDisponibles().filter(c=>c!==cat);
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— elegir —</option>' + trans.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value = trans.includes(cur)?cur:'';
+  const hint = $('#h-catdest-hint');
+  if (hint) hint.textContent = (cfg && cfg.transiciones && cfg.transiciones.length)
+    ? `"${cat}" puede pasar a: ${cfg.transiciones.join(', ')}.`
+    : 'Sin matriz configurada para esta categoría: se permiten todas. Podés definirla en ⚙️ Categorías.';
 }
 async function hacMovSave() {
   const tipo = $('#h-tipo').value;
@@ -10222,7 +10279,9 @@ async function hacMovSave() {
     fecha: new Date($('#h-fec').value).toISOString(),
     tipo,
     cantidad: Number($('#h-cant').value||0),
+    kilos: $('#h-kg')?.value ? Number($('#h-kg').value) : null,
     campoDestino: tipo==='traslado' ? $('#h-campodest').value : null,
+    categoriaDestino: tipo==='cambio_categoria' ? $('#h-catdest').value : null,
     observaciones: $('#h-obs').value.trim()||null,
   };
   if (!data.campoId)   return toast('Elegí el campo','warn');
@@ -10230,6 +10289,10 @@ async function hacMovSave() {
   if (!data.fecha)     return toast('Fecha requerida','warn');
   if (tipo==='traslado' && (!data.campoDestino || data.campoDestino===data.campoId))
     return toast('Elegí un campo destino distinto del origen','warn');
+  if (tipo==='cambio_categoria') {
+    if (!data.categoriaDestino) return toast('Elegí la categoría destino','warn');
+    if (data.categoriaDestino===data.categoria) return toast('La categoría origen y destino deben ser distintas','warn');
+  }
   if (!data.cantidad)                          return toast('Cantidad requerida','warn');
   if (tipo!=='ajuste' && data.cantidad<=0)     return toast('La cantidad debe ser positiva','warn');
   try {
@@ -10247,6 +10310,79 @@ async function hacMovDel(id) {
     delete state.cache.haciendaResumen; delete state.cache.haciendaMovs;
     pages.hacienda();
   } catch(e) { toast(e.message,'error'); }
+}
+// ----- Configuración de categorías de hacienda (especie, kg, transiciones) -----
+async function hacCatManager(){
+  try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {}
+  const cats = state.cache.catHacienda || [];
+  const fila = (c)=>`<tr class="border-t border-slate-100">
+    <td class="p-2 font-medium">${esc(c.nombre)}</td>
+    <td class="p-2 text-slate-500">${esc(c.especie||'—')}</td>
+    <td class="p-2 text-slate-500">${(c.kgMin!=null||c.kgMax!=null)?`${c.kgMin??'?'}–${c.kgMax??'?'} kg`:'—'}</td>
+    <td class="p-2 text-slate-500">${c.pesoPromedio!=null?c.pesoPromedio+' kg':'—'}</td>
+    <td class="p-2 text-slate-500 text-[11px]">${Array.isArray(c.transiciones)&&c.transiciones.length?esc(c.transiciones.join(' › ')):'—'}</td>
+    <td class="p-2 text-right whitespace-nowrap">
+      ${can('stock:update')?`<button class="btn btn-ghost text-xs" onclick='hacCatForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
+      ${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='hacCatDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
+    </td></tr>`;
+  openModal({
+    title:'⚙️ Categorías de hacienda', size:'max-w-3xl',
+    body:`
+      <div class="flex justify-between items-center mb-2 gap-2">
+        <p class="text-[11px] text-slate-500">Especie, rango de kg vivo y a qué categorías puede pasar (matriz para los cambios de categoría).</p>
+        ${can('stock:create')?`<button class="btn btn-primary text-xs flex-shrink-0" onclick="hacCatForm()">+ Nueva</button>`:''}
+      </div>
+      <div class="overflow-auto" style="max-height:55vh">
+      <table class="w-full text-sm"><thead class="text-xs uppercase text-slate-500 sticky top-0 bg-white"><tr><th class="text-left p-2">Categoría</th><th class="text-left p-2">Especie</th><th class="text-left p-2">Rango kg</th><th class="text-left p-2">Peso prom.</th><th class="text-left p-2">Puede pasar a</th><th></th></tr></thead>
+      <tbody>${cats.map(fila).join('')||'<tr><td colspan="6" class="p-3 text-center text-slate-400">Sin categorías configuradas</td></tr>'}</tbody></table>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+function hacCatForm(id=null){
+  const it = id ? (state.cache.catHacienda||[]).find(x=>x.id===id)||{} : {};
+  const todas = (state.cache.catHacienda||[]).map(c=>c.nombre).filter(n=>n && n!==it.nombre);
+  const trans = Array.isArray(it.transiciones)?it.transiciones:[];
+  openModal({
+    title: id?'Editar categoría':'Nueva categoría de hacienda', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Nombre *</label><input id="hc-nom" class="input" value="${esc(it.nombre||'')}" placeholder="Ej: Novillito"/></div>
+        <div><label class="label">Especie *</label><input id="hc-esp" class="input" list="hc-esp-list" value="${esc(it.especie||'')}" placeholder="Bovino / Porcino..."/>
+          <datalist id="hc-esp-list">${[...new Set((state.cache.catHacienda||[]).map(c=>c.especie).filter(Boolean).concat(['Bovino','Porcino','Ovino','Equino','Caprino']))].map(e=>`<option value="${esc(e)}">`).join('')}</datalist>
+        </div>
+        <div><label class="label">Kg mínimo</label><input id="hc-kgmin" type="number" step="0.1" class="input" value="${it.kgMin??''}"/></div>
+        <div><label class="label">Kg máximo</label><input id="hc-kgmax" type="number" step="0.1" class="input" value="${it.kgMax??''}"/></div>
+        <div><label class="label">Peso promedio (kg)</label><input id="hc-peso" type="number" step="0.1" class="input" value="${it.pesoPromedio??''}"/></div>
+        <div><label class="label">Ganancia diaria (kg/día)</label><input id="hc-gmd" type="number" step="0.01" class="input" value="${it.gmdDefault??''}" placeholder="ej: 0.8"/></div>
+        <div class="col-span-2"><label class="label">Puede pasar a (cambio de categoría)</label>
+          <select id="hc-trans" class="input" multiple size="5">${todas.map(n=>`<option value="${esc(n)}" ${trans.includes(n)?'selected':''}>${esc(n)}</option>`).join('')}</select>
+          <p class="text-[11px] text-slate-400 mt-1">Ctrl/Cmd + clic para elegir varias. Si no elegís ninguna, se permiten todas.</p>
+        </div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="hacCatSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
+  });
+}
+async function hacCatSave(id){
+  const data = {
+    nombre: $('#hc-nom').value.trim(),
+    especie: $('#hc-esp').value.trim(),
+    kgMin: $('#hc-kgmin').value?Number($('#hc-kgmin').value):null,
+    kgMax: $('#hc-kgmax').value?Number($('#hc-kgmax').value):null,
+    pesoPromedio: $('#hc-peso').value?Number($('#hc-peso').value):null,
+    gmdDefault: $('#hc-gmd').value?Number($('#hc-gmd').value):null,
+    transiciones: Array.from($('#hc-trans').selectedOptions).map(o=>o.value),
+  };
+  if (!data.nombre)  return toast('Falta el nombre','warn');
+  if (!data.especie) return toast('Falta la especie','warn');
+  try{ await api('/api/categorias-hacienda'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)}); delete state.cache.catHacienda; toast('Guardado','success'); hacCatManager(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function hacCatDel(id){
+  if(!confirm('¿Eliminar esta categoría de la configuración? El stock y los movimientos ya cargados no se modifican.')) return;
+  try{ await api('/api/categorias-hacienda/'+id,{method:'DELETE'}); delete state.cache.catHacienda; toast('Eliminada','success'); hacCatManager(); }
+  catch(e){ toast(e.message,'error'); }
 }
 
 /* =========================================================

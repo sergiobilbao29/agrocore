@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.3.0';
-const AGROCORE_BUILD = new Date('2026-07-02').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '1.4.0';
+const AGROCORE_BUILD = new Date('2026-07-03').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -3457,6 +3457,7 @@ const hacStockSchema = z.object({
   campoId: z.string(),
   categoria: z.string().min(1),
   declarado: z.number().int().nonnegative().optional(),
+  pesoPromedio: z.number().nonnegative().nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
 
@@ -3489,10 +3490,12 @@ app.post('/api/hacienda-stock', requireCompany, requirePermission('stock:create'
       where: { companyId_campoId_categoria: { companyId: req.companyId, campoId: d.campoId, categoria: d.categoria } },
       create: {
         companyId: req.companyId, campoId: d.campoId, categoria: d.categoria,
-        declarado: d.declarado || 0, observaciones: d.observaciones || null,
+        declarado: d.declarado || 0, pesoPromedio: d.pesoPromedio ?? null,
+        observaciones: d.observaciones || null,
       },
       update: {
         declarado: d.declarado ?? 0,
+        pesoPromedio: d.pesoPromedio !== undefined ? d.pesoPromedio : undefined,
         observaciones: d.observaciones ?? null,
       },
     });
@@ -3507,6 +3510,7 @@ app.put('/api/hacienda-stock/:id', requireCompany, requirePermission('stock:upda
     const d = hacStockSchema.partial().parse(req.body);
     const data = {};
     if (d.declarado !== undefined) data.declarado = d.declarado;
+    if (d.pesoPromedio !== undefined) data.pesoPromedio = d.pesoPromedio;
     if (d.observaciones !== undefined) data.observaciones = d.observaciones || null;
     const row = await prisma.haciendaStock.update({ where: { id: req.params.id }, data });
     res.json({ ok: true, data: row });
@@ -3523,13 +3527,15 @@ app.delete('/api/hacienda-stock/:id', requireCompany, requirePermission('stock:d
 });
 
 // Tipos de movimiento permitidos. El "signo" decide si suma o resta al real.
-const HAC_TIPOS = ['nacimiento','muerte','compra','venta','traslado','ajuste'];
+const HAC_TIPOS = ['nacimiento','muerte','compra','venta','traslado','ajuste','cambio_categoria'];
 const hacMovSchema = z.object({
   campoId: z.string(),
   categoria: z.string().min(1),
+  categoriaDestino: z.string().nullable().optional(),  // requerido si tipo='cambio_categoria'
   fecha: z.coerce.date(),
   tipo: z.enum(HAC_TIPOS),
-  cantidad: z.number().int(),  // permite negativo para ajuste; resto positivos
+  cantidad: z.number().int(),  // CABEZAS. permite negativo para ajuste; resto positivos
+  kilos: z.number().nonnegative().nullable().optional(),  // kg del movimiento (balanza)
   campoDestino: z.string().nullable().optional(),  // requerido si tipo='traslado'
   observaciones: z.string().nullable().optional(),
 });
@@ -3585,6 +3591,28 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
       return res.status(201).json({ ok: true, data: result });
     }
 
+    // Cambio de categoría (reclasificación): baja en origen, alta en destino,
+    // dentro del MISMO campo. Validado contra la matriz de transición.
+    if (d.tipo === 'cambio_categoria') {
+      if (!d.categoriaDestino) return res.status(400).json({ ok: false, error: 'Falta la categoría destino del cambio' });
+      if (d.categoriaDestino === d.categoria) return res.status(400).json({ ok: false, error: 'La categoría origen y destino deben ser distintas' });
+      if (d.cantidad <= 0) return res.status(400).json({ ok: false, error: 'La cantidad debe ser positiva' });
+      const cfg = await prisma.categoriaHaciendaConfig.findFirst({ where: { companyId: req.companyId, nombre: d.categoria } });
+      const trans = (cfg && Array.isArray(cfg.transiciones)) ? cfg.transiciones : null;
+      if (trans && trans.length && !trans.includes(d.categoriaDestino)) {
+        return res.status(400).json({ ok: false, error: `"${d.categoria}" no puede pasar a "${d.categoriaDestino}". Permitidas: ${trans.join(', ')}.` });
+      }
+      const row = await prisma.haciendaMovimiento.create({
+        data: {
+          companyId: req.companyId, campoId: d.campoId,
+          categoria: d.categoria, categoriaDestino: d.categoriaDestino,
+          fecha: d.fecha, tipo: 'cambio_categoria', cantidad: d.cantidad,
+          kilos: d.kilos ?? null, observaciones: d.observaciones || null,
+        },
+      });
+      return res.status(201).json({ ok: true, data: row });
+    }
+
     // Para los demás tipos: positivos salvo "ajuste" (puede ser +/-).
     if (d.tipo !== 'ajuste' && d.cantidad <= 0) {
       return res.status(400).json({ ok: false, error: 'La cantidad debe ser positiva' });
@@ -3593,6 +3621,7 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
       data: {
         companyId: req.companyId, campoId: d.campoId, categoria: d.categoria,
         fecha: d.fecha, tipo: d.tipo, cantidad: d.cantidad,
+        kilos: d.kilos ?? null,
         observaciones: d.observaciones || null,
       },
     });
@@ -3630,6 +3659,14 @@ app.get('/api/hacienda-resumen', requireCompany, requirePermission('stock:read')
       }
     };
     movs.forEach(m => {
+      if (m.tipo === 'cambio_categoria') {
+        // Baja en la categoría origen, alta en la destino (mismo campo).
+        const kOut = m.campoId + '::' + m.categoria;
+        const kIn  = m.campoId + '::' + (m.categoriaDestino || m.categoria);
+        real[kOut] = (real[kOut] || 0) - Number(m.cantidad || 0);
+        real[kIn]  = (real[kIn]  || 0) + Number(m.cantidad || 0);
+        return;
+      }
       const k = m.campoId + '::' + m.categoria;
       real[k] = (real[k] || 0) + signo(m);
     });
@@ -3643,11 +3680,15 @@ app.get('/api/hacienda-resumen', requireCompany, requirePermission('stock:read')
       const decl = stocks.find(s => s.campoId === campoId && s.categoria === categoria);
       const declarado = decl ? decl.declarado : 0;
       const r = real[k] || 0;
+      const pesoPromedio = decl?.pesoPromedio ?? null;
       return {
         campoId, categoria,
         stockId: decl ? decl.id : null,
         declarado, real: r,
         diferencia: r - declarado,
+        pesoPromedio,
+        kilosReal: pesoPromedio != null ? Math.round(r * pesoPromedio) : null,
+        kilosDeclarado: pesoPromedio != null ? Math.round(declarado * pesoPromedio) : null,
       };
     });
     res.json({
@@ -3657,6 +3698,78 @@ app.get('/api/hacienda-resumen', requireCompany, requirePermission('stock:read')
         filas: filas.sort((a, b) => a.campoId.localeCompare(b.campoId) || a.categoria.localeCompare(b.categoria, 'es')),
       },
     });
+  } catch (e) { next(e); }
+});
+
+// ---------- CONFIG DE CATEGORÍAS DE HACIENDA (especie, rango kg, transiciones) ----------
+const CAT_HACIENDA_DEFAULT = [
+  { especie:'Bovino',  nombre:'Ternero',           kgMin:120, kgMax:200, pesoPromedio:160, gmdDefault:0.7, transiciones:['Novillito','Torito'], orden:1 },
+  { especie:'Bovino',  nombre:'Novillito',         kgMin:201, kgMax:330, pesoPromedio:280, gmdDefault:0.8, transiciones:['Novillo'], orden:2 },
+  { especie:'Bovino',  nombre:'Torito',            kgMin:201, kgMax:380, pesoPromedio:300, gmdDefault:0.9, transiciones:['Toro'], orden:3 },
+  { especie:'Bovino',  nombre:'Novillo',           kgMin:331, kgMax:520, pesoPromedio:420, gmdDefault:0.8, transiciones:[], orden:4 },
+  { especie:'Bovino',  nombre:'Toro',              kgMin:450, kgMax:800, pesoPromedio:600, gmdDefault:0,   transiciones:[], orden:5 },
+  { especie:'Bovino',  nombre:'Ternera',           kgMin:120, kgMax:200, pesoPromedio:160, gmdDefault:0.6, transiciones:['Vaquillona'], orden:6 },
+  { especie:'Bovino',  nombre:'Vaquillona',        kgMin:201, kgMax:360, pesoPromedio:300, gmdDefault:0.6, transiciones:['Vaca'], orden:7 },
+  { especie:'Bovino',  nombre:'Vaca',              kgMin:350, kgMax:550, pesoPromedio:450, gmdDefault:0,   transiciones:[], orden:8 },
+  { especie:'Porcino', nombre:'Lechón',            kgMin:5,   kgMax:25,  pesoPromedio:15,  gmdDefault:0.4, transiciones:['Cachorro','Cachorra'], orden:9 },
+  { especie:'Porcino', nombre:'Cachorro',          kgMin:26,  kgMax:70,  pesoPromedio:50,  gmdDefault:0.6, transiciones:['Capón','Padrillo'], orden:10 },
+  { especie:'Porcino', nombre:'Cachorra',          kgMin:26,  kgMax:70,  pesoPromedio:50,  gmdDefault:0.6, transiciones:['Hembra sin servir','Cerda'], orden:11 },
+  { especie:'Porcino', nombre:'Capón',             kgMin:70,  kgMax:130, pesoPromedio:100, gmdDefault:0.7, transiciones:[], orden:12 },
+  { especie:'Porcino', nombre:'Padrillo',          kgMin:120, kgMax:300, pesoPromedio:200, gmdDefault:0,   transiciones:[], orden:13 },
+  { especie:'Porcino', nombre:'Hembra sin servir', kgMin:70,  kgMax:130, pesoPromedio:100, gmdDefault:0.5, transiciones:['Cerda'], orden:14 },
+  { especie:'Porcino', nombre:'Cerda',             kgMin:120, kgMax:280, pesoPromedio:200, gmdDefault:0,   transiciones:[], orden:15 },
+];
+async function seedCategoriasHacienda(companyId) {
+  const n = await prisma.categoriaHaciendaConfig.count({ where: { companyId } });
+  if (n > 0) return;
+  for (const c of CAT_HACIENDA_DEFAULT) {
+    await prisma.categoriaHaciendaConfig.create({ data: { ...c, companyId } });
+  }
+}
+const catHaciendaSchema = z.object({
+  especie: z.string().min(1),
+  nombre: z.string().min(1),
+  kgMin: z.number().nonnegative().nullable().optional(),
+  kgMax: z.number().nonnegative().nullable().optional(),
+  pesoPromedio: z.number().nonnegative().nullable().optional(),
+  gmdDefault: z.number().nonnegative().nullable().optional(),
+  transiciones: z.array(z.string()).nullable().optional(),
+  orden: z.coerce.number().int().optional(),
+  activo: z.boolean().optional(),
+});
+app.get('/api/categorias-hacienda', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    await seedCategoriasHacienda(req.companyId);
+    const data = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { nombre: 'asc' }] });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/categorias-hacienda', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = catHaciendaSchema.parse(req.body);
+    const row = await prisma.categoriaHaciendaConfig.create({ data: {
+      companyId: req.companyId, especie: d.especie, nombre: d.nombre,
+      kgMin: d.kgMin ?? null, kgMax: d.kgMax ?? null, pesoPromedio: d.pesoPromedio ?? null,
+      gmdDefault: d.gmdDefault ?? null, transiciones: d.transiciones ?? [], orden: d.orden ?? 99,
+    } });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.put('/api/categorias-hacienda/:id', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.categoriaHaciendaConfig.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const d = catHaciendaSchema.partial().parse(req.body);
+    const row = await prisma.categoriaHaciendaConfig.update({ where: { id: existing.id }, data: d });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.delete('/api/categorias-hacienda/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.categoriaHaciendaConfig.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.categoriaHaciendaConfig.delete({ where: { id: existing.id } });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

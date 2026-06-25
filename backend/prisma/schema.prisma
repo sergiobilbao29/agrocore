@@ -77,6 +77,7 @@ model Company {
   camiones        Camion[]
   acoplados       Acoplado[]
   categoriasPlanilla CategoriaPlanilla[]
+  categoriasHacienda CategoriaHaciendaConfig[]
 }
 
 model User {
@@ -895,7 +896,8 @@ model HaciendaStock {
   companyId     String
   campoId       String
   categoria     String     // "Vacas", "Vaquillonas", "Terneros", "Toros", "Novillos"...
-  declarado     Int       @default(0)   // lo registrado en SENASA / ARCA
+  declarado     Int       @default(0)   // lo registrado en SENASA / ARCA (CABEZAS)
+  pesoPromedio  Float?     // kg promedio por cabeza (editable) — para proyección y banco
   observaciones String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -913,10 +915,13 @@ model HaciendaMovimiento {
   companyId     String
   campoId       String
   categoria     String
+  categoriaDestino String?  // destino en "cambio_categoria" (ej. Ternero -> Novillito)
   fecha         DateTime
-  // "nacimiento" | "muerte" | "compra" | "venta" | "traslado_in" | "traslado_out" | "ajuste" | "conteo"
+  // "nacimiento" | "muerte" | "compra" | "venta" | "traslado_in" | "traslado_out"
+  // | "ajuste" | "conteo" | "cambio_categoria"
   tipo          String
-  cantidad      Int        // siempre positivo; el "tipo" decide si suma o resta al stock real
+  cantidad      Int        // CABEZAS; el "tipo" decide si suma o resta al stock real
+  kilos         Float?     // kg del movimiento (balanza en compra/venta, peso en otros)
   campoOrigen   String?    // campo origen en traslados
   campoDestino  String?    // campo destino en traslados
   observaciones String?
@@ -928,6 +933,30 @@ model HaciendaMovimiento {
   @@index([companyId])
   @@index([campoId, categoria])
   @@index([fecha])
+}
+
+// Configuración por categoría de hacienda (capa sobre las categorías de texto):
+// especie, rango de kg vivo, y a qué categorías puede pasar (matriz de transición
+// para los "cambios de categoría"). El stock sigue usando categoria como texto.
+model CategoriaHaciendaConfig {
+  id            String   @id @default(cuid())
+  companyId     String
+  especie       String              // "Bovino" | "Porcino" | "Ovino" | ...
+  nombre        String              // "Ternero", "Novillito", ... (igual que en el stock)
+  kgMin         Float?              // kg vivo mínimo típico
+  kgMax         Float?              // kg vivo máximo típico
+  pesoPromedio  Float?              // peso promedio por defecto al crear stock
+  gmdDefault    Float?              // ganancia media diaria por defecto (kg/día) — proyección
+  transiciones  Json?               // array de nombres de categorías a las que puede pasar
+  orden         Int      @default(0)
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, nombre])
+  @@index([companyId])
 }
 
 // ============================================================
