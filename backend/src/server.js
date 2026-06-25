@@ -61,7 +61,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
 const AGROCORE_VERSION = '1.5.0';
-const AGROCORE_BUILD = new Date('2026-07-05').toISOString().slice(0, 10);
+const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
