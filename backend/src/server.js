@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.11.0';
+const AGROCORE_VERSION = '1.12.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -324,6 +324,20 @@ async function snapshotCotizaciones(dolar, cereales) {
   [['soja','SOJA'],['maiz','MAIZ'],['trigo','TRIGO'],['sorgo','SORGO'],['girasol','GIRASOL']].forEach(([k,m])=>{
     if (cer(k)) filas.push({ moneda:m, valor:cer(k), fuente:(cereales && cereales.fuente) || 'BCR' });
   });
+  // Monedas propias del catálogo con fuente automática reconocida (dólar o grano).
+  try {
+    const customMon = await prisma.catalogo.findMany({ where: { tipo: 'Moneda', activo: true } });
+    const yaPuestas = new Set(filas.map(f => f.moneda));
+    for (const c of customMon) {
+      const clave = (c.codigo || c.nombre || '').trim();
+      const fuente = (c.descripcion || '').toLowerCase().trim();
+      if (!clave || yaPuestas.has(clave) || !fuente || fuente === 'manual') continue;
+      let val = 0;
+      if (dolar && dolar[fuente]) val = Number(dolar[fuente].venta || dolar[fuente].compra || 0);
+      else if (it[fuente]) val = Number(it[fuente] || 0);
+      if (val) { filas.push({ moneda: clave, valor: val, fuente }); yaPuestas.add(clave); }
+    }
+  } catch (e) { /* ignore */ }
   for (const f of filas) {
     try {
       await prisma.cotizacion.upsert({
@@ -351,8 +365,31 @@ async function getCotizacionARS(moneda, fecha, companyId) {
   return map[moneda] ? Number(map[moneda]) : null;
 }
 
-// Lista de monedas soportadas (para el frontend).
-app.get('/api/monedas', requireCompany, (_req, res) => { res.json({ ok: true, data: MONEDAS }); });
+// Fuente de cotización automática de cada moneda predefinida (clave de dolarapi o de granos).
+const MONEDA_FUENTE_BUILTIN = {
+  USD:'oficial', USD_MAYORISTA:'mayorista', USD_MEP:'mep', USD_BLUE:'blue', EUR:'euro',
+  SOJA:'soja', MAIZ:'maiz', TRIGO:'trigo', SORGO:'sorgo', GIRASOL:'girasol',
+};
+// Lista de monedas: predefinidas (MONEDAS) + propias del catálogo (tipo='Moneda'),
+// cada una con su última cotización conocida (para sugerir en formularios).
+app.get('/api/monedas', requireCompany, async (req, res, next) => {
+  try {
+    const custom = await prisma.catalogo.findMany({ where: { companyId: req.companyId, tipo: 'Moneda', activo: true } });
+    const customM = custom.map(c => {
+      const esGrano = (c.tipoPrecio === 'grano');
+      return { clave: (c.codigo || c.nombre || '').trim(), label: c.nombre, tipo: esGrano ? 'grano' : 'fiat',
+        simbolo: esGrano ? 'tn' : (c.precioReferencia ? String(c.precioReferencia) : '$'),
+        unidad: esGrano ? 'tn' : '', fuente: (c.descripcion || 'manual').trim(), custom: true, id: c.id };
+    }).filter(m => m.clave);
+    const builtIn = MONEDAS.map(m => ({ ...m, fuente: MONEDA_FUENTE_BUILTIN[m.clave] || 'manual', custom: false }));
+    const all = [...builtIn, ...customM.filter(cm => !builtIn.some(m => m.clave === cm.clave))];
+    const claves = all.map(m => m.clave).filter(k => k && k !== 'ARS');
+    const cots = await prisma.cotizacion.findMany({ where: { companyId: null, moneda: { in: claves } }, orderBy: { fecha: 'desc' } });
+    const ultima = {}; cots.forEach(c => { if (ultima[c.moneda] == null) ultima[c.moneda] = c.valor; });
+    all.forEach(m => { m.ultima = m.clave === 'ARS' ? 1 : (ultima[m.clave] ?? null); });
+    res.json({ ok: true, data: all });
+  } catch (e) { next(e); }
+});
 
 // Histórico de cotizaciones (carga manual / edición). Global por defecto.
 app.get('/api/cotizaciones-historico', requireCompany, async (req, res, next) => {

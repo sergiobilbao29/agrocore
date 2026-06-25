@@ -2321,6 +2321,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'💱 v1.12.0 — Catálogo de monedas editable (crear monedas propias + auto-cotización)',
+      desc:'Ahora podés <b>crear, editar y eliminar monedas propias</b> desde <b>Tesorería → Cotizaciones</b> (además de las predefinidas USD/EUR/granos). A cada moneda propia le ponés un <b>código</b>, un <b>nombre</b>, si es <b>moneda o grano</b>, y una <b>fuente de cotización automática</b> (dólar oficial/mayorista/blue/MEP/CCL/cripto/tarjeta o pizarra de soja/maíz/trigo/sorgo/girasol) — o la dejás en <b>manual</b> para cargarla a mano. Las monedas propias aparecen en toda la app: facturas de compra/venta, cuenta corriente, pagos/cobros y el flujo de fondos, y se actualizan solas cada día si tienen fuente automática.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'🎯 v1.11.0 — Fase 3: Flujo de fondos en ARS/USD con simulador de escenarios',
       desc:'El <b>Flujo de Fondos</b> ahora es multimoneda. Arriba tenés un <b>simulador</b>: elegís <b>ver en pesos o en dólares</b>, y podés ajustar el <b>dólar de proyección</b> y la <b>variación de granos (%)</b> para simular escenarios (ej: "dólar a $1.400 y soja +10%"). Todo el flujo se recalcula al instante, convirtiendo cada vencimiento futuro (facturas a pagar/cobrar en dólares, deudas en toneladas de grano, cheques, cuotas, arrendamientos) a la moneda elegida con la cotización de proyección. Se agregó una <b>tabla mensual</b> tipo estado de situación: Ingresos, Egresos, Saldo neto y <b>Acumulado</b> por mes — si el acumulado queda en rojo, ahí te quedás sin caja. Las deudas/cobros en moneda extranjera o en grano se valorizan correctamente (ya no se mezclan como si fueran pesos).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
@@ -8359,6 +8362,7 @@ function factRecalc() {
   $('#fi-tot').textContent = fmt$(total);
 }
 async function factForm() {
+  await cargarMonedas();
   const clientes = state.cache.clientes || [];
   const facturas = state.cache.facturas || [];
   const nextNro = (facturas[0]?.numero || 0) + 1;
@@ -8492,19 +8496,37 @@ function ventMetodoCambio(prefix) {
   }
 }
 // ===== MULTIMONEDA: helpers para los formularios de factura =====
+// Lista de respaldo (si todavía no se cargaron las del backend).
 const MONEDAS_FE = [['ARS','$ Pesos (ARS)'],['USD','US$ Dólar oficial'],['USD_MAYORISTA','US$ Dólar divisa (mayorista)'],['USD_MEP','US$ Dólar MEP'],['USD_BLUE','US$ Dólar blue'],['EUR','€ Euro'],['SOJA','🌱 Soja (tn)'],['MAIZ','🌽 Maíz (tn)'],['TRIGO','🌾 Trigo (tn)'],['SORGO','🌿 Sorgo (tn)'],['GIRASOL','🌻 Girasol (tn)']];
+// Carga la lista de monedas (predefinidas + propias del catálogo) desde el backend.
+async function cargarMonedas(force){
+  if (state.cache.monedas && !force) return state.cache.monedas;
+  try { state.cache.monedas = (await api('/api/monedas')).data || []; } catch { state.cache.monedas = null; }
+  return state.cache.monedas;
+}
+// Devuelve [[clave,label],...] para los selectores (usa las del backend o el respaldo).
+function monedasOpts(){
+  const m = state.cache.monedas;
+  if (m && m.length) return m.map(x => [x.clave, x.label]);
+  return MONEDAS_FE;
+}
+// Metadatos (tipo/símbolo) de una moneda por clave.
+function monedaMeta(clave){ return (state.cache.monedas||[]).find(x=>x.clave===clave) || null; }
 async function cargarCotizVivas(){
   if (state.cache.cotizVivas) return state.cache.cotizVivas;
+  await cargarMonedas();
   try { const r=await fetch(API_BASE+'/api/cotizaciones'); const j=await r.json(); const d=j.dolar||{}, c=(j.cereales&&j.cereales.items)||{};
-    state.cache.cotizVivas = { USD:d.oficial?.venta, USD_MAYORISTA:d.mayorista?.venta, USD_MEP:d.mep?.venta, USD_BLUE:d.blue?.venta, SOJA:c.soja, MAIZ:c.maiz, TRIGO:c.trigo, SORGO:c.sorgo, GIRASOL:c.girasol };
+    state.cache.cotizVivas = { USD:d.oficial?.venta, USD_MAYORISTA:d.mayorista?.venta, USD_MEP:d.mep?.venta, USD_BLUE:d.blue?.venta, EUR:d.euro?.venta, SOJA:c.soja, MAIZ:c.maiz, TRIGO:c.trigo, SORGO:c.sorgo, GIRASOL:c.girasol };
   } catch { state.cache.cotizVivas = {}; }
+  // Sumar la última cotización conocida de las monedas propias (y completar faltantes).
+  (state.cache.monedas||[]).forEach(m => { if (m.clave!=='ARS' && m.ultima!=null && state.cache.cotizVivas[m.clave]==null) state.cache.cotizVivas[m.clave] = m.ultima; });
   return state.cache.cotizVivas;
 }
 function monedaFieldHTML(pfx){
   return `
     <div><label class="label">Moneda</label>
       <select id="${pfx}-moneda" class="input" onchange="monedaCotizToggle('${pfx}')">
-        ${MONEDAS_FE.map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join('')}
+        ${monedasOpts().map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join('')}
       </select>
     </div>
     <div id="${pfx}-cotiz-wrap" style="display:none"><label class="label">Cotización (ARS por unidad)</label>
@@ -8617,6 +8639,7 @@ async function factSave() {
 // mantener la trazabilidad, mover CtaCte y descontar stock.
 // ============================================================
 async function factFormExterna() {
+  await cargarMonedas();
   const clientes = state.cache.clientes || [];
   if (!state.cache.productos) {
     try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
@@ -9087,6 +9110,7 @@ pages.compras = async function() {
 function compFiltrosLimpiar() { state.compraFilter = { desde:'', hasta:'', provId:'' }; pages.compras(); }
 async function compForm() {
   const provs = state.cache.proveedores || [];
+  await cargarMonedas();
   // Asegurar que productos + stock-actual esten en cache para el selector de items.
   if (!state.cache.productos) {
     try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
@@ -10908,13 +10932,14 @@ async function hacVincularSave(){
 // el tab. Permiten un futuro split sin tener que reescribir el contenido ahora.
 // Formatea un valor en su moneda (pesos con $, USD con US$, granos en toneladas).
 function monedaFmt(moneda, v){
+  if(!moneda||moneda==='ARS') return fmt$(v);
   const G={SOJA:'tn soja',MAIZ:'tn maíz',TRIGO:'tn trigo',SORGO:'tn sorgo',GIRASOL:'tn girasol'};
   const F={USD:'US$',USD_MAYORISTA:'US$ (div.)',USD_MEP:'US$ (MEP)',USD_BLUE:'US$ (blue)',EUR:'€'};
-  // cargarCotizVivas también mapea mayorista
-
-  if(!moneda||moneda==='ARS') return fmt$(v);
   if(G[moneda]) return fmtN(v)+' '+G[moneda];
-  return (F[moneda]||moneda)+' '+fmtN(v);
+  if(F[moneda]) return F[moneda]+' '+fmtN(v);
+  const meta=monedaMeta(moneda);
+  if(meta) return meta.tipo==='grano' ? (fmtN(v)+' tn '+(meta.label||moneda)) : ((meta.simbolo&&meta.simbolo!=='$'?meta.simbolo:moneda)+' '+fmtN(v));
+  return moneda+' '+fmtN(v);
 }
 // Celda de saldo por moneda: una línea por cada moneda con saldo distinto de cero.
 function ccSaldoCell(porMoneda){
@@ -10930,22 +10955,51 @@ pages.cotizaciones = async function() {
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let hist=[], vivas={};
   try {
-    delete state.cache.cotizVivas;
+    delete state.cache.cotizVivas; delete state.cache.monedas;
     vivas = await cargarCotizVivas();
     hist = (await api('/api/cotizaciones-historico')).data || [];
   } catch (e) { return toast(e.message,'error'); }
   const hoyStr = new Date().toISOString().slice(0,10);
-  const tiles = MONEDAS_FE.filter(([k])=>k!=='ARS').map(([k,l])=>{
-    const v = vivas[k];
-    return `<div class="kpi"><div class="text-xs text-slate-500">${esc(l)}</div><div class="text-xl font-bold mt-1">${v?fmt$(Math.round(v)):'<span class="text-slate-400">—</span>'}</div><div class="text-[10px] text-slate-400">ARS por unidad</div></div>`;
+  const monedas = (state.cache.monedas||[]).filter(m=>m.clave!=='ARS');
+  const opts = monedasOpts().filter(([k])=>k!=='ARS');
+  const tiles = monedas.map(m=>{
+    const v = vivas[m.clave];
+    return `<div class="kpi"><div class="text-xs text-slate-500">${esc(m.label)}${m.custom?' <span class="badge badge-blue text-[9px]">propia</span>':''}</div><div class="text-xl font-bold mt-1">${v?fmt$(Math.round(v)):'<span class="text-slate-400">—</span>'}</div><div class="text-[10px] text-slate-400">ARS por unidad${m.fuente&&m.fuente!=='manual'?' · '+esc(m.fuente):' · manual'}</div></div>`;
   }).join('');
+  const customM = monedas.filter(m=>m.custom);
   $('#page-body').innerHTML = `
-    <div class="text-[11px] text-slate-500 mb-3">Las cotizaciones en vivo salen de la Bolsa de Rosario (granos) y de las casas de cambio (dólar). Se guarda un <b>snapshot diario</b> para tener historia. Podés cargar/corregir un valor manual abajo (ej: Euro, o un dólar pactado).</div>
+    <div class="text-[11px] text-slate-500 mb-3">Las cotizaciones en vivo salen de la Bolsa de Rosario (granos) y de las casas de cambio (dólar). Se guarda un <b>snapshot diario</b> para tener historia. Podés cargar/corregir un valor manual abajo (ej: Euro, o un dólar pactado), y crear <b>monedas propias</b>.</div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">${tiles}</div>
+
+    <!-- Gestión de monedas propias -->
+    <div class="kpi mb-3">
+      <div class="font-semibold text-slate-700 mb-2 text-sm">💱 Monedas propias</div>
+      ${can('catalogos:create')||can('finanzas:create') ? `
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-2 items-end mb-2">
+        <div><label class="label">Código *</label><input id="mn-clave" class="input" placeholder="Ej: USD_CCL"/></div>
+        <div><label class="label">Nombre *</label><input id="mn-label" class="input" placeholder="Ej: Dólar CCL"/></div>
+        <div><label class="label">Tipo</label><select id="mn-tipo" class="input"><option value="fiat">Moneda (fiat)</option><option value="grano">Grano (toneladas)</option></select></div>
+        <div><label class="label">Fuente automática</label>
+          <select id="mn-fuente" class="input">
+            <option value="manual">Manual (la cargo a mano)</option>
+            <option value="oficial">Dólar oficial</option><option value="mayorista">Dólar mayorista</option>
+            <option value="blue">Dólar blue</option><option value="mep">Dólar MEP</option>
+            <option value="contadoconliqui">Dólar CCL</option><option value="cripto">Dólar cripto</option><option value="tarjeta">Dólar tarjeta</option>
+            <option value="soja">Pizarra soja</option><option value="maiz">Pizarra maíz</option><option value="trigo">Pizarra trigo</option><option value="sorgo">Pizarra sorgo</option><option value="girasol">Pizarra girasol</option>
+          </select>
+        </div>
+        <div><button class="btn btn-primary w-full" onclick="monedaNuevaGuardar()">➕ Agregar moneda</button></div>
+      </div>` : ''}
+      ${customM.length ? `<div class="overflow-x-auto"><table class="data"><thead><tr><th>Código</th><th>Nombre</th><th>Tipo</th><th>Fuente</th><th></th></tr></thead><tbody>
+        ${customM.map(m=>`<tr class="table-row"><td class="font-mono text-xs">${esc(m.clave)}</td><td>${esc(m.label)}</td><td>${m.tipo==='grano'?'Grano':'Moneda'}</td><td><span class="badge ${m.fuente==='manual'?'badge-yellow':'badge-gray'}">${esc(m.fuente||'manual')}</span></td>
+          <td class="text-right">${can('catalogos:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='monedaDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}</td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="text-xs text-slate-400">No hay monedas propias. Las predefinidas (USD, EUR, granos…) ya están disponibles.</div>'}
+    </div>
+
     <div class="kpi mb-3">
       <div class="font-semibold text-slate-700 mb-2 text-sm">➕ Cargar / corregir cotización (ARS por 1 unidad)</div>
       <div class="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
-        <div><label class="label">Moneda</label><select id="cz-mon" class="input">${MONEDAS_FE.filter(([k])=>k!=='ARS').map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join('')}</select></div>
+        <div><label class="label">Moneda</label><select id="cz-mon" class="input">${opts.map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join('')}</select></div>
         <div><label class="label">Fecha</label><input id="cz-fec" type="date" class="input" value="${hoyStr}"/></div>
         <div><label class="label">Valor (ARS)</label><input id="cz-val" type="number" step="0.01" class="input" placeholder="ej: 1200"/></div>
         <div>${can('finanzas:create')?`<button class="btn btn-primary w-full" onclick="cotizGuardar()">💾 Guardar</button>`:''}</div>
@@ -10957,7 +11011,7 @@ pages.cotizaciones = async function() {
         <tbody>
           ${hist.map(c=>`<tr class="table-row">
             <td>${fmtDate(c.fecha)}</td>
-            <td>${esc((MONEDAS_FE.find(m=>m[0]===c.moneda)||[,c.moneda])[1])}</td>
+            <td>${esc((monedasOpts().find(m=>m[0]===c.moneda)||[,c.moneda])[1])}</td>
             <td class="text-right font-semibold">${fmt$(c.valor)}</td>
             <td><span class="badge ${c.fuente==='manual'?'badge-yellow':'badge-gray'}">${esc(c.fuente||'—')}</span></td>
             <td class="text-right">${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='cotizDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}</td>
@@ -10976,6 +11030,23 @@ async function cotizGuardar(){
 async function cotizDel(id){
   if(!confirm('¿Borrar esta cotización del histórico?')) return;
   try{ await api('/api/cotizaciones-historico/'+id,{method:'DELETE'}); toast('Borrada','success'); pages.cotizaciones(); }
+  catch(e){ toast(e.message,'error'); }
+}
+// ----- Monedas propias (catálogo tipo 'Moneda') -----
+async function monedaNuevaGuardar(){
+  const clave=($('#mn-clave').value||'').trim().toUpperCase().replace(/\s+/g,'_');
+  const label=($('#mn-label').value||'').trim();
+  const tipo=$('#mn-tipo').value, fuente=$('#mn-fuente').value;
+  if(!clave) return toast('Poné un código (ej: USD_CCL)','warn');
+  if(!label) return toast('Poné un nombre','warn');
+  try{
+    await api('/api/catalogos',{method:'POST',body:JSON.stringify({ tipo:'Moneda', codigo:clave, nombre:label, descripcion:fuente, tipoPrecio:tipo })});
+    toast('Moneda creada','success'); delete state.cache.monedas; delete state.cache.cotizVivas; pages.cotizaciones();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function monedaDel(id){
+  if(!confirm('¿Eliminar esta moneda propia? Los comprobantes ya cargados con ella no se modifican.')) return;
+  try{ await api('/api/catalogos/'+id,{method:'DELETE'}); toast('Eliminada','success'); delete state.cache.monedas; delete state.cache.cotizVivas; pages.cotizaciones(); }
   catch(e){ toast(e.message,'error'); }
 }
 pages.ctasCobrar = async function() { state.ccTab = 'cobrar'; return pages.ctasCtes(); };
@@ -11813,6 +11884,7 @@ async function ccForm(id=null) {
   if (id && it.contactoTipo && it.contactoTipo !== 'libre') {
     return toast('Los movimientos generados por facturas no se editan acá. Registrá un cobro/pago en su lugar.','warn');
   }
+  await cargarMonedas();
   // Cargar datos para el selector de método (cajas, cheques, cuentas)
   try {
     const [efRsp, chRsp, cbRsp, catRsp] = await Promise.all([
@@ -11880,7 +11952,7 @@ async function ccForm(id=null) {
         <div class="col-span-2 grid grid-cols-2 gap-3">
           <div><label class="label">Moneda / objeto de la deuda</label>
             <select id="ccm-moneda" class="input" onchange="monedaCotizToggle('ccm')">
-              ${MONEDAS_FE.map(([k,l])=>`<option value="${k}" ${(it.moneda||'ARS')===k?'selected':''}>${esc(l)}</option>`).join('')}
+              ${monedasOpts().map(([k,l])=>`<option value="${k}" ${(it.moneda||'ARS')===k?'selected':''}>${esc(l)}</option>`).join('')}
             </select>
           </div>
           <div id="ccm-cotiz-wrap" style="display:${(it.moneda&&it.moneda!=='ARS')?'':'none'}"><label class="label">Cotización (ARS por unidad)</label>
