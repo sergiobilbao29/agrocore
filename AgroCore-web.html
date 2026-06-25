@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
+      titulo:'🩹 v1.20.0 — Cotizaciones: arreglado el error "Falta header X-Company-Id"',
+      desc:'La pantalla de <b>Cotizaciones</b> quedaba en "Cargando…" y mostraba "Falta header X-Company-Id". Como las cotizaciones son datos de mercado <b>globales</b>, el histórico y la lista de monedas ya no exigen el contexto de empresa, y la pantalla se muestra igual aunque alguna consulta falle.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'💱 v1.19.0 — Catálogo de Monedas en Catálogos (con cotización automática)',
       desc:'Se agregó la pestaña <b>Monedas</b> en <b>Catálogos</b>: ves las monedas predefinidas (USD, EUR, granos) y podés <b>crear/editar/eliminar monedas propias</b> con su <b>fuente de cotización automática</b> (dólar oficial/mayorista/blue/MEP/CCL/cripto/tarjeta o pizarras) o manual; muestra la última cotización. En las <b>compras y ventas</b>, el selector de moneda ya sale de este catálogo y la cotización se sugiere con el valor del día (actualizado a diario). Aclaración: <b>"Medios externos"</b> es otra cosa (medios de pago tipo Mercado Pago/billeteras), no monedas.' },
@@ -11061,11 +11064,9 @@ pages.cotizaciones = async function() {
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('cotizaciones','Cotizaciones'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let hist=[], vivas={};
-  try {
-    delete state.cache.cotizVivas; delete state.cache.monedas;
-    vivas = await cargarCotizVivas();
-    hist = (await api('/api/cotizaciones-historico')).data || [];
-  } catch (e) { return toast(e.message,'error'); }
+  delete state.cache.cotizVivas; delete state.cache.monedas;
+  try { vivas = await cargarCotizVivas(); } catch (e) { vivas = {}; }
+  try { hist = (await api('/api/cotizaciones-historico')).data || []; } catch (e) { toast(e.message,'warn'); }
   const hoyStr = new Date().toISOString().slice(0,10);
   const monedas = (state.cache.monedas||[]).filter(m=>m.clave!=='ARS');
   const opts = monedasOpts().filter(([k])=>k!=='ARS');

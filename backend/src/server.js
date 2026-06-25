@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.19.0';
+const AGROCORE_VERSION = '1.20.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -372,9 +372,9 @@ const MONEDA_FUENTE_BUILTIN = {
 };
 // Lista de monedas: predefinidas (MONEDAS) + propias del catálogo (tipo='Moneda'),
 // cada una con su última cotización conocida (para sugerir en formularios).
-app.get('/api/monedas', requireCompany, async (req, res, next) => {
+app.get('/api/monedas', authMiddleware, async (req, res, next) => {
   try {
-    const custom = await prisma.catalogo.findMany({ where: { companyId: req.companyId, tipo: 'Moneda', activo: true } });
+    const custom = req.companyId ? await prisma.catalogo.findMany({ where: { companyId: req.companyId, tipo: 'Moneda', activo: true } }) : [];
     const customM = custom.map(c => {
       const esGrano = (c.tipoPrecio === 'grano');
       return { clave: (c.codigo || c.nombre || '').trim(), label: c.nombre, tipo: esGrano ? 'grano' : 'fiat',
@@ -392,9 +392,9 @@ app.get('/api/monedas', requireCompany, async (req, res, next) => {
 });
 
 // Histórico de cotizaciones (carga manual / edición). Global por defecto.
-app.get('/api/cotizaciones-historico', requireCompany, async (req, res, next) => {
+app.get('/api/cotizaciones-historico', authMiddleware, async (req, res, next) => {
   try {
-    const where = {};
+    const where = { companyId: null };  // cotizaciones de mercado (globales)
     if (req.query.moneda) where.moneda = String(req.query.moneda);
     if (req.query.desde || req.query.hasta) {
       where.fecha = {};
