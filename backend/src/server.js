@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.9.0';
+const AGROCORE_VERSION = '1.9.1';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5721,11 +5721,17 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       chequeId: z.string().nullable().optional(),
       bancoCuentaId: z.string().nullable().optional(),
       empresaOrigenId: z.string().nullable().optional(),
+      monedaPago: z.string().nullable().optional(),     // moneda con la que se paga (default = la de la deuda)
+      cotizacionPago: z.number().positive().nullable().optional(), // ARS por unidad de monedaPago, al día del pago
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
-    if (Math.abs(sumaAplicada - d.monto) > 0.01) {
+    // d.monto = lo que efectivamente sale de caja/banco (en monedaPago). Si se paga
+    // en la MISMA moneda de la deuda, debe coincidir con la suma aplicada. Si se paga
+    // en otra moneda (ej: deuda USD, pago ARS), son magnitudes distintas y no se exige igualdad.
+    const _mismaMoneda = !d.monedaPago;
+    if (_mismaMoneda && Math.abs(sumaAplicada - d.monto) > 0.01) {
       return res.status(400).json({ ok: false, error: 'La suma de los comprobantes (' + sumaAplicada + ') no coincide con el monto pagado (' + d.monto + ')' });
     }
 
@@ -5750,28 +5756,57 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
 
     const result = await prisma.$transaction(async (tx) => {
       // 1. Marcar/disminuir las CtaCte pendientes del proveedor
+      // Convención del sistema: saldo = debe - haber. La factura de compra deja
+      // debe=total (le debemos). Pagar = contra-asiento con haber=importe.
+      let deudaArs = 0;        // valor contable (ARS) de la deuda que se está saldando
+      let deudaArsConocida = true;
+      let monedaDeuda = null;
       for (const c of d.comprobantes) {
         const cc = await tx.ctaCte.findFirst({ where: { id: c.ctaCteId, companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId } });
         if (!cc) throw new Error('Comprobante no encontrado: ' + c.ctaCteId);
-        const saldoPendiente = Number(cc.haber || 0) - Number(cc.debe || 0);
+        const saldoPendiente = Number(cc.debe || 0) - Number(cc.haber || 0);
         if (c.importeAplicado > saldoPendiente + 0.01) {
           throw new Error('Importe aplicado (' + c.importeAplicado + ') excede el saldo pendiente del comprobante (' + saldoPendiente + ')');
         }
-        // Marcar como pagado total/parcial: si paga todo, pagado=true. Sino, crear contra-asiento
-        // (un asiento debe=importe) que cierra el saldo.
+        monedaDeuda = cc.moneda || 'ARS';
+        const cotDeuda = (cc.moneda && cc.moneda !== 'ARS') ? (cc.cotizacion ?? null) : 1;
+        if (cotDeuda == null) deudaArsConocida = false; else deudaArs += c.importeAplicado * cotDeuda;
+        // Marcar como pagado si se cancela todo el saldo del comprobante.
         if (Math.abs(c.importeAplicado - saldoPendiente) < 0.01) {
           await tx.ctaCte.update({ where: { id: cc.id }, data: { pagado: true } });
         }
-        // Crear contra-asiento: debe = importeAplicado (estamos pagando)
+        // Contra-asiento: haber = importeAplicado (reduce debe-haber), en la moneda de la deuda.
         await tx.ctaCte.create({ data: {
           companyId: req.companyId,
           contactoTipo: 'proveedor', contactoId: d.proveedorId,
           fecha: d.fecha,
           detalle: 'Pago de ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
-          debe: c.importeAplicado,
+          moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
+          haber: c.importeAplicado,
           referencia: cc.referencia,
           observaciones: 'Pago via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
         }});
+      }
+      // Diferencia de cambio (ARS): si la deuda estaba en otra moneda y se pagó con
+      // una cotización distinta a la del comprobante, la contabilidad en pesos no cierra.
+      if (d.monedaPago && monedaDeuda && monedaDeuda !== 'ARS' && deudaArsConocida) {
+        const cotPago = d.monedaPago === 'ARS' ? 1 : (d.cotizacionPago || await getCotizacionARS(d.monedaPago, d.fecha, req.companyId));
+        if (cotPago) {
+          const pagoArs = d.monto * cotPago;
+          const difPnL = deudaArs - pagoArs; // pagamos menos pesos que el valor de la deuda => ganancia
+          if (Math.abs(difPnL) > 0.5) {
+            await tx.ctaCte.create({ data: {
+              companyId: req.companyId, contactoTipo: 'libre',
+              nombreLibre: 'Diferencia de cambio — ' + prov.razonSocial,
+              fecha: d.fecha, categoria: 'Diferencia de cambio', moneda: 'ARS', cotizacion: 1,
+              detalle: `Dif. de cambio por pago de deuda en ${monedaDeuda} (${difPnL >= 0 ? 'ganancia' : 'pérdida'})`,
+              debe: difPnL >= 0 ? difPnL : 0,
+              haber: difPnL < 0 ? -difPnL : 0,
+              pagado: true,
+              observaciones: `Deuda ${Math.round(deudaArs)} ARS · pagado ${Math.round(pagoArs)} ARS`,
+            }});
+          }
+        }
       }
 
       // 2. Registrar el movimiento del recurso usado
@@ -5863,11 +5898,13 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       chequeId: z.string().nullable().optional(),  // si recibimos un cheque NUEVO de terceros
       bancoCuentaId: z.string().nullable().optional(),
       empresaDestinoId: z.string().nullable().optional(),  // si el cliente paga a otra firma del grupo
+      monedaPago: z.string().nullable().optional(),
+      cotizacionPago: z.number().positive().nullable().optional(),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
-    if (Math.abs(sumaAplicada - d.monto) > 0.01) {
+    if (!d.monedaPago && Math.abs(sumaAplicada - d.monto) > 0.01) {
       return res.status(400).json({ ok: false, error: 'La suma de comprobantes no coincide con el monto cobrado' });
     }
     if (d.metodo === 'intercompany') {
@@ -5886,11 +5923,15 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
     if (!cli) return res.status(404).json({ ok: false, error: 'Cliente no encontrado' });
 
     const result = await prisma.$transaction(async (tx) => {
+      let deudaArs = 0, deudaArsConocida = true, monedaDeuda = null;
       for (const c of d.comprobantes) {
         const cc = await tx.ctaCte.findFirst({ where: { id: c.ctaCteId, companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId } });
         if (!cc) throw new Error('Comprobante no encontrado');
         const saldoPendiente = Number(cc.debe || 0) - Number(cc.haber || 0);
         if (c.importeAplicado > saldoPendiente + 0.01) throw new Error('Importe excede saldo pendiente');
+        monedaDeuda = cc.moneda || 'ARS';
+        const cotDeuda = (cc.moneda && cc.moneda !== 'ARS') ? (cc.cotizacion ?? null) : 1;
+        if (cotDeuda == null) deudaArsConocida = false; else deudaArs += c.importeAplicado * cotDeuda;
         if (Math.abs(c.importeAplicado - saldoPendiente) < 0.01) {
           await tx.ctaCte.update({ where: { id: cc.id }, data: { pagado: true } });
         }
@@ -5899,10 +5940,31 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           contactoTipo: 'cliente', contactoId: d.clienteId,
           fecha: d.fecha,
           detalle: 'Cobro de ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
+          moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
           haber: c.importeAplicado,
           referencia: cc.referencia,
           observaciones: 'Cobro via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
         }});
+      }
+      // Diferencia de cambio (ARS) al cobrar una deuda en otra moneda.
+      if (d.monedaPago && monedaDeuda && monedaDeuda !== 'ARS' && deudaArsConocida) {
+        const cotPago = d.monedaPago === 'ARS' ? 1 : (d.cotizacionPago || await getCotizacionARS(d.monedaPago, d.fecha, req.companyId));
+        if (cotPago) {
+          const cobroArs = d.monto * cotPago;
+          const difPnL = cobroArs - deudaArs; // cobramos más pesos que el valor de la deuda => ganancia
+          if (Math.abs(difPnL) > 0.5) {
+            await tx.ctaCte.create({ data: {
+              companyId: req.companyId, contactoTipo: 'libre',
+              nombreLibre: 'Diferencia de cambio — ' + cli.razonSocial,
+              fecha: d.fecha, categoria: 'Diferencia de cambio', moneda: 'ARS', cotizacion: 1,
+              detalle: `Dif. de cambio por cobro de deuda en ${monedaDeuda} (${difPnL >= 0 ? 'ganancia' : 'pérdida'})`,
+              debe: difPnL >= 0 ? difPnL : 0,
+              haber: difPnL < 0 ? -difPnL : 0,
+              pagado: true,
+              observaciones: `Deuda ${Math.round(deudaArs)} ARS · cobrado ${Math.round(cobroArs)} ARS`,
+            }});
+          }
+        }
       }
       // Registrar el recurso recibido
       if (d.metodo === 'cheque') {

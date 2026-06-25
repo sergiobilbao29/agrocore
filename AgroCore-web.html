@@ -2321,6 +2321,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'💵 v1.9.1 — Multimoneda (Fase 1b): pago/cobro en otra moneda + diferencia de cambio',
+      desc:'Se completa la Fase 1. Al <b>pagar o cobrar</b> una deuda en moneda extranjera (ej: una factura en US$ 10.000) podés hacerlo <b>en pesos a la cotización del día</b>: el sistema cancela la deuda en su moneda de origen y registra <b>automáticamente la diferencia de cambio</b> en pesos (ganancia o pérdida), que queda como asiento en Cuentas corrientes → Otros/Manuales. El diálogo de pago/cobro muestra el saldo en su moneda, te deja elegir la moneda y cotización del pago, y previsualiza la diferencia de cambio antes de confirmar. <b>Además</b> se corrigió un problema en el <b>pago a proveedores en cuenta corriente</b> (el saldo del comprobante se calculaba al revés y podía rechazar el pago): ahora usa la convención del resto del sistema (saldo = debe − haber).' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'💱 v1.9.0 — Multimoneda (Fase 1, base): facturas en USD/EUR/granos + cotizaciones',
       desc:'Arranca el soporte <b>multimoneda</b>. Nueva pantalla <b>Cotizaciones</b> (Tesorería) que muestra el dólar, euro y las pizarras de granos en vivo (Bolsa de Rosario) y guarda un <b>histórico diario</b>; podés además cargar/corregir valores a mano (ej: Euro o un dólar pactado). Al cargar una <b>factura de compra o venta</b> ahora elegís la <b>moneda</b> (Pesos, Dólar oficial/MEP/blue, Euro, o toneladas de Soja/Maíz/Trigo/Sorgo/Girasol) y la <b>cotización del día</b> (se sugiere sola y es editable). La <b>cuenta corriente</b> guarda la deuda en su <b>moneda de origen</b> (ej: US$ 10.000 o 50 tn de soja) y el saldo de cada cliente/proveedor se muestra <b>por moneda</b>, sin mezclar pesos con dólares ni con granos. <b>Próximo paso (Fase 1b):</b> el pago de una deuda en otra moneda con la cotización del día y el registro automático de la diferencia de cambio.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
@@ -11325,9 +11328,10 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
         </div>
       </div>
       <div id="pc-metodo-detalle" class="mb-3"></div>
+      <div id="pc-moneda-zone" class="mb-3"></div>
       <div class="bg-amber-50 border border-amber-300 rounded p-3 text-sm">
         <div class="flex justify-between mb-1"><span>Total tildado:</span><b id="pc-total-tildado">$ 0</b></div>
-        <div class="flex justify-between"><span>Total a ${esPago?'pagar':'cobrar'}:</span><input id="pc-total-pago" type="number" class="input text-right w-32 py-0 text-sm" value="0"/></div>
+        <div class="flex justify-between items-center"><span>Total a ${esPago?'pagar':'cobrar'}:</span><input id="pc-total-pago" type="number" class="input text-right w-32 py-0 text-sm" value="0" oninput="this.dataset.touched='1';pagoCobroRecalcular()"/></div>
         <div id="pc-diff" class="text-xs mt-2"></div>
       </div>
       <div>
@@ -11358,7 +11362,8 @@ async function pagoCobroCargarComprobantes(modo) {
     const tipo = esPago ? 'proveedor' : 'cliente';
     const r = await api(`/api/ctas-ctes/pendientes?tipo=${tipo}&contactoId=${contactoId}`);
     const items = (r.data || []).map(it => {
-      const saldoPendiente = esPago ? Number(it.haber || 0) - Number(it.debe || 0) : Number(it.debe || 0) - Number(it.haber || 0);
+      // Convención uniforme del sistema: saldo = debe - haber (clientes y proveedores).
+      const saldoPendiente = Number(it.debe || 0) - Number(it.haber || 0);
       return { ...it, saldoPendiente };
     }).filter(i => i.saldoPendiente > 0.01);
     state._pagoCobroData.comprobantes = items;
@@ -11379,10 +11384,10 @@ async function pagoCobroCargarComprobantes(modo) {
               <div class="text-[11px] text-slate-500">${fmtDate(it.fecha)}${it.referencia ? ' · '+esc(it.referencia) : ''}</div>
             </div>
             <div class="text-right">
-              <div class="text-[11px] text-slate-500">Saldo:</div>
-              <div class="font-bold">${fmt$(it.saldoPendiente)}</div>
+              <div class="text-[11px] text-slate-500">Saldo${(it.moneda&&it.moneda!=='ARS')?' ('+esc(it.moneda)+')':''}:</div>
+              <div class="font-bold">${monedaFmt(it.moneda, it.saldoPendiente)}</div>
             </div>
-            <input type="number" class="input text-right w-28 py-0 text-sm pc-importe" data-idx="${idx}" value="${it.saldoPendiente.toFixed(2)}" oninput="pagoCobroRecalcular()" min="0" step="0.01"/>
+            <input type="number" class="input text-right w-28 py-0 text-sm pc-importe" data-idx="${idx}" data-moneda="${esc(it.moneda||'ARS')}" value="${it.saldoPendiente.toFixed(2)}" oninput="pagoCobroRecalcular()" min="0" step="0.01"/>
           </div>`).join('')}
       </div>`;
     pagoCobroRecalcular();
@@ -11398,27 +11403,91 @@ function pagoCobroToggleTilde(idx, checked) {
 
 function pagoCobroRecalcular() {
   const d = state._pagoCobroData;
-  let totalTildado = 0;
+  const esPago = d.modo === 'pago';
+  let totalTildado = 0, deudaArs = 0, deudaArsOk = true;
+  const monedasSet = new Set();
   for (const idx in d.tildados) {
     if (!d.tildados[idx]) continue;
     const inp = document.querySelector(`.pc-importe[data-idx="${idx}"]`);
-    if (inp) totalTildado += Number(inp.value || 0);
+    if (!inp) continue;
+    const imp = Number(inp.value || 0);
+    totalTildado += imp;
+    const it = d.comprobantes[idx] || {};
+    const mo = it.moneda || 'ARS'; monedasSet.add(mo);
+    const cot = mo === 'ARS' ? 1 : (it.cotizacion ?? (state.cache.cotizVivas||{})[mo] ?? null);
+    if (cot == null) deudaArsOk = false; else deudaArs += imp * cot;
   }
-  document.getElementById('pc-total-tildado').textContent = fmt$(totalTildado);
-  // Si el usuario no tocó el total a pagar, lo emparejamos
+  const monedas = [...monedasSet];
+  const monedaDeuda = monedas[0] || 'ARS';
+  d._monedaDeuda = monedaDeuda; d._deudaArs = deudaArs;
+  document.getElementById('pc-total-tildado').textContent = monedaDeuda==='ARS' ? fmt$(totalTildado) : monedaFmt(monedaDeuda, totalTildado);
+
+  const zone = document.getElementById('pc-moneda-zone');
   const inpTotal = document.getElementById('pc-total-pago');
-  if (!inpTotal.dataset.touched) inpTotal.value = totalTildado.toFixed(2);
-  const totalPago = Number(inpTotal.value || 0);
   const diffEl = document.getElementById('pc-diff');
-  const diff = totalPago - totalTildado;
-  if (Math.abs(diff) < 0.01) {
-    diffEl.innerHTML = '<span class="text-emerald-700">✅ Total coincide con comprobantes tildados.</span>';
-  } else if (diff > 0) {
-    diffEl.innerHTML = `<span class="text-amber-700">⚠️ Estás pagando $${diff.toFixed(2)} más de lo tildado. Será una <b>entrega a cuenta</b> sin asignación específica (no implementado todavía — ajustá los comprobantes).</span>`;
-  } else {
-    diffEl.innerHTML = `<span class="text-red-700">❌ El total tildado supera al total a pagar por $${(-diff).toFixed(2)}. Bajá importes o destildá.</span>`;
+
+  if (monedas.length > 1) {
+    zone.innerHTML = `<div class="bg-red-50 border border-red-300 text-red-700 text-xs rounded p-2">⚠️ Tildaste comprobantes de distintas monedas (${monedas.join(', ')}). Registrá un ${esPago?'pago':'cobro'} por moneda.</div>`;
   }
-  inpTotal.addEventListener('input', () => { inpTotal.dataset.touched = '1'; pagoCobroRecalcular(); }, { once: true });
+
+  if (monedaDeuda === 'ARS') {
+    if (zone.innerHTML && monedas.length<=1) zone.innerHTML = '';
+    if (!inpTotal.dataset.touched) inpTotal.value = totalTildado.toFixed(2);
+    const totalPago = Number(inpTotal.value || 0);
+    const diff = totalPago - totalTildado;
+    d._monedaPago = null; d._cotizPago = null; d._montoPago = totalPago;
+    if (Math.abs(diff) < 0.01) diffEl.innerHTML = '<span class="text-emerald-700">✅ Total coincide con comprobantes tildados.</span>';
+    else if (diff > 0) diffEl.innerHTML = `<span class="text-amber-700">⚠️ Estás ${esPago?'pagando':'cobrando'} $${diff.toFixed(2)} más de lo tildado. Ajustá los comprobantes.</span>`;
+    else diffEl.innerHTML = `<span class="text-red-700">❌ El total tildado supera por $${(-diff).toFixed(2)}. Bajá importes o destildá.</span>`;
+    return;
+  }
+
+  // ----- Deuda en moneda extranjera / granos -----
+  if (monedas.length <= 1) {
+    const cur = (zone.dataset.moneda === monedaDeuda);
+    if (!cur) {
+      const liveCot = (state.cache.cotizVivas||{})[monedaDeuda];
+      zone.dataset.moneda = monedaDeuda;
+      zone.innerHTML = `
+        <div class="bg-sky-50 border border-sky-300 rounded p-3 text-sm space-y-2">
+          <div class="font-semibold text-sky-900">Deuda en ${esc(monedaDeuda)} — ${esPago?'pagás':'cobrás'} con:</div>
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="label">Moneda del ${esPago?'pago':'cobro'}</label>
+              <select id="pc-monpago" class="input" onchange="pagoCobroRecalcular()">
+                <option value="ARS">$ Pesos (ARS)</option>
+                <option value="${esc(monedaDeuda)}">${esc(monedaDeuda)} (misma)</option>
+              </select>
+            </div>
+            <div><label class="label">Cotización (ARS por ${esc(monedaDeuda)})</label>
+              <input id="pc-cotpago" type="number" step="0.01" class="input" value="${liveCot?Math.round(liveCot):''}" oninput="pagoCobroRecalcular()" placeholder="ARS por unidad"/>
+            </div>
+          </div>
+          <div id="pc-difcambio" class="text-xs"></div>
+        </div>`;
+    }
+    const monPago = document.getElementById('pc-monpago')?.value || 'ARS';
+    const cotPago = monPago==='ARS' ? (Number(document.getElementById('pc-cotpago')?.value||0) || (state.cache.cotizVivas||{})[monedaDeuda] || 0) : 1;
+    // ARS sugerido a pagar = deuda valuada a la cotización de hoy
+    const arsSugerido = monPago==='ARS' ? Math.round(totalTildado * cotPago) : totalTildado;
+    if (!inpTotal.dataset.touched) inpTotal.value = arsSugerido;
+    const montoPago = Number(inpTotal.value || 0);
+    d._monedaPago = monPago; d._cotizPago = monPago==='ARS'?cotPago:null; d._montoPago = montoPago;
+    const pagoArs = monPago==='ARS' ? montoPago : 0;
+    const difEl = document.getElementById('pc-difcambio');
+    if (difEl) {
+      if (monPago !== 'ARS') { difEl.innerHTML = `<span class="text-slate-500">Pago en la misma moneda: sin diferencia de cambio.</span>`; }
+      else if (!cotPago) { difEl.innerHTML = `<span class="text-amber-700">Cargá la cotización del día.</span>`; }
+      else if (!deudaArsOk) { difEl.innerHTML = `<span class="text-slate-500">Deuda sin cotización original: no se calcula diferencia.</span>`; }
+      else {
+        const difPnL = esPago ? (deudaArs - pagoArs) : (pagoArs - deudaArs);
+        const signo = difPnL >= 0 ? 'Ganancia' : 'Pérdida';
+        const col = difPnL >= 0 ? 'text-emerald-700' : 'text-red-700';
+        difEl.innerHTML = `Deuda original: <b>${fmt$(Math.round(deudaArs))}</b> · ${esPago?'pagás':'cobrás'}: <b>${fmt$(Math.round(pagoArs))}</b> · <span class="${col}">Dif. de cambio: ${signo} ${fmt$(Math.abs(Math.round(difPnL)))}</span>`;
+      }
+    }
+    document.getElementById('pc-total-tildado').textContent = monedaFmt(monedaDeuda, totalTildado);
+    diffEl.innerHTML = `<span class="text-slate-500">El importe de arriba es lo que sale en <b>${monPago==='ARS'?'pesos':monedaDeuda}</b>; la deuda se cancela por ${monedaFmt(monedaDeuda, totalTildado)}.</span>`;
+  }
 }
 
 function pagoCobroMetodoCambio(modo) {
@@ -11553,13 +11622,19 @@ async function pagoCobroConfirmar(modo) {
   if (!comprobantes.length) return toast('Tildá al menos un comprobante', 'warn');
   const monto = Number(document.getElementById('pc-total-pago').value || 0);
   if (monto <= 0) return toast('El monto debe ser mayor a 0', 'warn');
+  const monedaDeuda = d._monedaDeuda || 'ARS';
+  const monedaPago = (monedaDeuda !== 'ARS') ? (d._monedaPago || 'ARS') : null;
+  const pagaOtraMoneda = monedaPago && monedaPago !== monedaDeuda;
   const sumaComp = comprobantes.reduce((a,c) => a+c.importeAplicado, 0);
-  if (Math.abs(sumaComp - monto) > 0.01) return toast(`La suma de comprobantes (${fmt$(sumaComp)}) no coincide con el monto (${fmt$(monto)})`, 'error');
+  // Solo exigimos que el monto coincida con la suma cuando se paga en la misma moneda de la deuda.
+  if (!pagaOtraMoneda && Math.abs(sumaComp - monto) > 0.01)
+    return toast(`La suma de comprobantes (${monedaFmt(monedaDeuda,sumaComp)}) no coincide con el monto (${monedaFmt(monedaDeuda,monto)})`, 'error');
 
   const body = {
     [esPago ? 'proveedorId' : 'clienteId']: contactoId,
     comprobantes, metodo, monto, fecha, observaciones: obs,
   };
+  if (pagaOtraMoneda) { body.monedaPago = monedaPago; body.cotizacionPago = d._cotizPago || null; }
   if (metodo === 'efectivo') body.cajaOrigen = document.getElementById('pc-caja')?.value || null;
   if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('pc-banco')?.value || null;
   if (metodo === 'cheque') {
