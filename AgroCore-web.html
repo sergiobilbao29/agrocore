@@ -2321,6 +2321,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'🌾 v1.10.0 — Fase 2: Canje de cereal (deudas en toneladas + entrega de grano)',
+      desc:'Llega el <b>canje de cereal</b>. Ya podés tener <b>deudas u obligaciones en toneladas de grano</b> (una compra de insumos en moneda Soja/Maíz/Trigo, o un contrato cargado a mano en Cuentas corrientes con esa moneda): la deuda queda en <b>toneladas</b>, no en pesos. Para cancelarla, en <b>Pagar a proveedor</b> elegís el método <b>🌾 Entrega de cereal (canje)</b>: indicás qué cereal entregás de tu stock, de qué silo/cerealera sale y el <b>precio de pizarra del día</b>. Al confirmar, la deuda se cancela <b>tonelada por tonelada</b> (no hay diferencia de cambio porque la deuda era en grano) y se <b>descuenta el stock físico</b> del cereal, valorizado a la pizarra. Además, en el alta manual de Cuenta corriente ahora podés elegir la <b>moneda/objeto de la deuda</b> para cargar contratos de canje.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
+      titulo:'🩹 v1.9.2 — Multimoneda: pago completo, dólar divisa, factura en USD por PDF y fix multi-comprobante',
+      desc:'Varias mejoras sobre multimoneda: (1) <b>se arregló</b> que en <b>Pagar/Cobrar multi-comprobante</b> no aparecía el comprobante recién cargado (un problema de ruteo que devolvía "No encontrado"). (2) El botón <b>Registrar pago/cobro</b> de cada proveedor/cliente ahora abre el <b>diálogo completo</b> (con qué se paga: efectivo/transferencia/cheque, su caja/banco, y si pagás en pesos una deuda en dólares, la moneda y cotización del día para la conversión y la diferencia de cambio). (3) Se agregó el <b>Dólar divisa (mayorista)</b> a las monedas, con cotización automática diaria. (4) Al <b>cargar una factura de compra desde PDF</b>, si es en dólares (u otra moneda), ahora toma la <b>moneda y la cotización del QR de ARCA</b> y completa el formulario.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'💵 v1.9.1 — Multimoneda (Fase 1b): pago/cobro en otra moneda + diferencia de cambio',
       desc:'Se completa la Fase 1. Al <b>pagar o cobrar</b> una deuda en moneda extranjera (ej: una factura en US$ 10.000) podés hacerlo <b>en pesos a la cotización del día</b>: el sistema cancela la deuda en su moneda de origen y registra <b>automáticamente la diferencia de cambio</b> en pesos (ganancia o pérdida), que queda como asiento en Cuentas corrientes → Otros/Manuales. El diálogo de pago/cobro muestra el saldo en su moneda, te deja elegir la moneda y cotización del pago, y previsualiza la diferencia de cambio antes de confirmar. <b>Además</b> se corrigió un problema en el <b>pago a proveedores en cuenta corriente</b> (el saldo del comprobante se calculaba al revés y podía rechazar el pago): ahora usa la convención del resto del sistema (saldo = debe − haber).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
@@ -8483,11 +8489,11 @@ function ventMetodoCambio(prefix) {
   }
 }
 // ===== MULTIMONEDA: helpers para los formularios de factura =====
-const MONEDAS_FE = [['ARS','$ Pesos (ARS)'],['USD','US$ Dólar oficial'],['USD_MEP','US$ Dólar MEP'],['USD_BLUE','US$ Dólar blue'],['EUR','€ Euro'],['SOJA','🌱 Soja (tn)'],['MAIZ','🌽 Maíz (tn)'],['TRIGO','🌾 Trigo (tn)'],['SORGO','🌿 Sorgo (tn)'],['GIRASOL','🌻 Girasol (tn)']];
+const MONEDAS_FE = [['ARS','$ Pesos (ARS)'],['USD','US$ Dólar oficial'],['USD_MAYORISTA','US$ Dólar divisa (mayorista)'],['USD_MEP','US$ Dólar MEP'],['USD_BLUE','US$ Dólar blue'],['EUR','€ Euro'],['SOJA','🌱 Soja (tn)'],['MAIZ','🌽 Maíz (tn)'],['TRIGO','🌾 Trigo (tn)'],['SORGO','🌿 Sorgo (tn)'],['GIRASOL','🌻 Girasol (tn)']];
 async function cargarCotizVivas(){
   if (state.cache.cotizVivas) return state.cache.cotizVivas;
   try { const r=await fetch(API_BASE+'/api/cotizaciones'); const j=await r.json(); const d=j.dolar||{}, c=(j.cereales&&j.cereales.items)||{};
-    state.cache.cotizVivas = { USD:d.oficial?.venta, USD_MEP:d.mep?.venta, USD_BLUE:d.blue?.venta, SOJA:c.soja, MAIZ:c.maiz, TRIGO:c.trigo, SORGO:c.sorgo, GIRASOL:c.girasol };
+    state.cache.cotizVivas = { USD:d.oficial?.venta, USD_MAYORISTA:d.mayorista?.venta, USD_MEP:d.mep?.venta, USD_BLUE:d.blue?.venta, SOJA:c.soja, MAIZ:c.maiz, TRIGO:c.trigo, SORGO:c.sorgo, GIRASOL:c.girasol };
   } catch { state.cache.cotizVivas = {}; }
   return state.cache.cotizVivas;
 }
@@ -9234,6 +9240,17 @@ async function compCargarDesdePDF(input) {
     setVal('f-pv', d.puntoVenta || 1);
     setVal('f-nro', d.numero || 1);
     if (d.fecha) setVal('f-fec', d.fecha.slice(0, 10));
+    // Moneda + cotización desde el QR de ARCA (PES→ARS, DOL→USD, 060→EUR)
+    const _monMap = { PES:'ARS', DOL:'USD', '060':'EUR', EUR:'EUR', USD:'USD', ARS:'ARS' };
+    const _monApp = _monMap[String(d.moneda || 'PES').toUpperCase()] || 'ARS';
+    const _monSel = document.getElementById('fc-moneda');
+    if (_monSel) {
+      _monSel.value = _monApp;
+      const _w = document.getElementById('fc-cotiz-wrap'); if (_w) _w.style.display = _monApp === 'ARS' ? 'none' : '';
+      if (_monApp !== 'ARS' && Number(d.cotizacion) > 1) {
+        const _ci = document.getElementById('fc-cotiz'); if (_ci) { _ci.value = d.cotizacion; _ci.dataset.manual = '1'; }
+      }
+    }
 
     // Si hay CUIT del emisor, buscar proveedor existente con ese CUIT
     let provMatch = null;
@@ -10889,7 +10906,9 @@ async function hacVincularSave(){
 // Formatea un valor en su moneda (pesos con $, USD con US$, granos en toneladas).
 function monedaFmt(moneda, v){
   const G={SOJA:'tn soja',MAIZ:'tn maíz',TRIGO:'tn trigo',SORGO:'tn sorgo',GIRASOL:'tn girasol'};
-  const F={USD:'US$',USD_MEP:'US$ (MEP)',USD_BLUE:'US$ (blue)',EUR:'€'};
+  const F={USD:'US$',USD_MAYORISTA:'US$ (div.)',USD_MEP:'US$ (MEP)',USD_BLUE:'US$ (blue)',EUR:'€'};
+  // cargarCotizVivas también mapea mayorista
+
   if(!moneda||moneda==='ARS') return fmt$(v);
   if(G[moneda]) return fmtN(v)+' '+G[moneda];
   return (F[moneda]||moneda)+' '+fmtN(v);
@@ -11218,28 +11237,14 @@ function ccVerMovimientos(tipo, contactoId) {
   });
 }
 
-// Formulario para registrar un cobro (de cliente) o pago (a proveedor).
-function ccCobroPagoForm(tipo, contactoId) {
-  const data = state._ccData || {};
-  const grupos = tipo==='cliente' ? (data.clientesCC||[]) : (data.proveedoresCC||[]);
-  const g = grupos.find(x => x.contacto.id === contactoId);
-  if (!g) return;
-  const esCobro = tipo==='cliente';
-  openModal({
-    title: esCobro ? `Registrar cobro — ${g.contacto.razonSocial}` : `Registrar pago — ${g.contacto.razonSocial}`,
-    body: `
-      <div class="mb-3 p-3 bg-amber-50 rounded-lg text-sm">
-        Saldo actual: <b class="text-amber-700">${fmt$(g.saldo)}</b>
-      </div>
-      <div class="grid grid-cols-2 gap-3">
-        <div><label class="label">Fecha *</label><input id="f-cpfec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
-        <div><label class="label">Importe *</label><input id="f-cpmon" type="number" step="0.01" class="input" value="${g.saldo>0?g.saldo:''}"/></div>
-        <div class="col-span-2"><label class="label">Medio / Detalle</label><input id="f-cpdet" class="input" placeholder="${esCobro?'Ej: transferencia, efectivo, cheque...':'Ej: transferencia, cheque propio...'}"/></div>
-        <div class="col-span-2"><label class="label">Referencia</label><input id="f-cpref" class="input" placeholder="Nº recibo / comprobante (opcional)"/></div>
-      </div>`,
-    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="ccCobroPagoSave('${tipo}','${contactoId}')">${esCobro?'Registrar cobro':'Registrar pago'}</button>`
-  });
+// Registrar un cobro (cliente) o pago (proveedor): usamos el diálogo completo
+// multi-comprobante (con método, caja/banco/cheque, moneda y cotización del día),
+// preseleccionando el contacto. El form básico anterior quedó obsoleto.
+async function ccCobroPagoForm(tipo, contactoId) {
+  const modo = tipo === 'cliente' ? 'cobro' : 'pago';
+  await pagoCobroAbrir(modo);
+  const sel = document.getElementById('pc-contacto');
+  if (sel) { sel.value = contactoId; pagoCobroCargarComprobantes(modo); }
 }
 async function ccCobroPagoSave(tipo, contactoId) {
   const monto = Number($('#f-cpmon').value || 0);
@@ -11283,12 +11288,17 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
 
   // Pre-cargar datos para los selectores de método (cajas, cheques en cartera, cuentas bancarias)
   try {
-    const [efRsp, chRsp, cbRsp, catRsp] = await Promise.all([
+    const [efRsp, chRsp, cbRsp, catRsp, prRsp, dpRsp] = await Promise.all([
       api('/api/efectivo').catch(() => ({ data: [] })),
       api('/api/cheques').catch(() => ({ data: [] })),
       api('/api/banco-cuentas').catch(() => ({ data: [] })),
       api('/api/catalogos').catch(() => ({ data: [] })),
+      api('/api/productos').catch(() => ({ data: state.cache.productos||[] })),
+      api('/api/depositos').catch(() => ({ data: state.cache.depositos||[] })),
     ]);
+    state.cache.productos = prRsp.data || state.cache.productos || [];
+    state.cache.depositos = dpRsp.data || state.cache.depositos || [];
+    await cargarCotizVivas();
     // Cajas: combinar catálogo (tipo='Caja') + las que ya tienen movimientos en Efectivo (legacy)
     const cajasCat = (catRsp.data || []).filter(c => c.tipo === 'Caja' && c.activo !== false).map(c => c.nombre);
     const cajasHist = (efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean);
@@ -11323,6 +11333,7 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
             <option value="efectivo">💵 Efectivo</option>
             <option value="cheque">💳 Cheque${esPago?' propio o de terceros endosado':' (de terceros recibido)'}</option>
             <option value="transferencia">🏛️ Transferencia bancaria</option>
+            ${esPago ? `<option value="cereal">🌾 Entrega de cereal (canje)</option>` : ''}
             ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (recursos de otra firma)</option>` : ''}
           </select>
         </div>
@@ -11425,6 +11436,17 @@ function pagoCobroRecalcular() {
   const zone = document.getElementById('pc-moneda-zone');
   const inpTotal = document.getElementById('pc-total-pago');
   const diffEl = document.getElementById('pc-diff');
+
+  // Entrega de cereal: se paga en toneladas del propio grano (1:1, sin conversión).
+  if ((document.getElementById('pc-metodo')?.value) === 'cereal') {
+    zone.innerHTML = ''; zone.dataset.moneda = '';
+    if (!inpTotal.dataset.touched) inpTotal.value = totalTildado;
+    d._monedaPago = null; d._cotizPago = null; d._montoPago = Number(inpTotal.value || 0);
+    const piz = document.getElementById('pc-cereal-piz');
+    if (piz && !piz.dataset.touched) { const lv=(state.cache.cotizVivas||{})[monedaDeuda]; if(lv) piz.value=Math.round(lv); }
+    diffEl.innerHTML = `<span class="text-slate-500">Entregás <b>${monedaFmt(monedaDeuda, Number(inpTotal.value||0))}</b> de cereal para cancelar la deuda.</span>`;
+    return;
+  }
 
   if (monedas.length > 1) {
     zone.innerHTML = `<div class="bg-red-50 border border-red-300 text-red-700 text-xs rounded p-2">⚠️ Tildaste comprobantes de distintas monedas (${monedas.join(', ')}). Registrá un ${esPago?'pago':'cobro'} por moneda.</div>`;
@@ -11583,6 +11605,23 @@ function pagoCobroMetodoCambio(modo) {
         <option value="">— Seleccionar —</option>
         ${otrasEmpresas.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
       </select>`;
+  } else if (metodo === 'cereal') {
+    const cereales = (state.cache.productos||[]).filter(p => /gran|cereal/i.test(p.categoria||''));
+    const deps = (state.cache.depositos||[]);
+    const grano = state._pagoCobroData?._monedaDeuda;
+    const pizLive = (state.cache.cotizVivas||{})[grano];
+    cont.innerHTML = `
+      <div class="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900 mb-2">🌾 Entregás cereal de tu stock para cancelar la deuda en toneladas: se descuenta del silo y se valoriza a la pizarra del día. La deuda en toneladas se cancela 1:1 (no hay diferencia de cambio).</div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="label">Cereal a entregar *</label>
+          <select id="pc-cereal" class="input"><option value="">— Elegir —</option>${cereales.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join('')}</select>
+          ${!cereales.length?'<div class="text-[11px] text-amber-700 mt-1">No hay productos de categoría granos en el stock. Cargalos en Stock.</div>':''}
+        </div>
+        <div><label class="label">Depósito / Cerealera</label>
+          <select id="pc-cereal-dep" class="input"><option value="">— Opcional —</option>${deps.map(x=>`<option value="${esc(x.id)}">${esc(x.nombre)}</option>`).join('')}</select>
+        </div>
+        <div class="col-span-2"><label class="label">Precio pizarra (ARS por tn)</label><input id="pc-cereal-piz" type="number" step="0.01" class="input" value="${pizLive?Math.round(pizLive):''}" oninput="this.dataset.touched='1'" placeholder="ARS/tn del día"/></div>
+      </div>`;
   }
 }
 
@@ -11672,6 +11711,12 @@ async function pagoCobroConfirmar(modo) {
     } else {
       body.chequeId = document.getElementById('pc-cheque')?.value || null;
     }
+  }
+  if (metodo === 'cereal') {
+    body.cerealProductoId = document.getElementById('pc-cereal')?.value || null;
+    body.depositoId = document.getElementById('pc-cereal-dep')?.value || null;
+    body.precioPizarra = Number(document.getElementById('pc-cereal-piz')?.value || 0) || null;
+    if (!body.cerealProductoId) return toast('Elegí el cereal que entregás', 'warn');
   }
   if (metodo === 'intercompany') {
     const otraEmp = document.getElementById('pc-empresa-inter')?.value;
@@ -11826,7 +11871,18 @@ async function ccForm(id=null) {
         </div>
 
         <div class="col-span-2"><label class="label">Detalle *</label>
-          <input id="f-det" class="input" value="${esc(it.detalle||'')}" placeholder="Ej: Alquiler octubre 2026"/>
+          <input id="f-det" class="input" value="${esc(it.detalle||'')}" placeholder="Ej: Alquiler octubre 2026 · o Canje 50 tn soja"/>
+        </div>
+
+        <div class="col-span-2 grid grid-cols-2 gap-3">
+          <div><label class="label">Moneda / objeto de la deuda</label>
+            <select id="ccm-moneda" class="input" onchange="monedaCotizToggle('ccm')">
+              ${MONEDAS_FE.map(([k,l])=>`<option value="${k}" ${(it.moneda||'ARS')===k?'selected':''}>${esc(l)}</option>`).join('')}
+            </select>
+          </div>
+          <div id="ccm-cotiz-wrap" style="display:${(it.moneda&&it.moneda!=='ARS')?'':'none'}"><label class="label">Cotización (ARS por unidad)</label>
+            <input id="ccm-cotiz" type="number" step="0.01" class="input" value="${it.cotizacion||''}" oninput="this.dataset.manual='1'" placeholder="ARS por 1 unidad"/>
+          </div>
         </div>
 
         <div class="col-span-2 grid grid-cols-2 gap-3 ${tipo==='libre'?'':'hidden'}" id="f-wrap-monto">
@@ -11957,6 +12013,8 @@ async function ccSave(id) {
     };
   }
   if (!data.detalle) return toast('Detalle requerido','warn');
+  const _ccm = monedaCotizBody('ccm');
+  data.moneda = _ccm.moneda; data.cotizacion = _ccm.cotizacion;
   try {
     // 1) Crear/editar la CtaCte
     await api('/api/ctas-ctes'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});

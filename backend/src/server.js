@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.9.1';
+const AGROCORE_VERSION = '1.10.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -298,9 +298,10 @@ async function fetchCereales() {
 // valor de cada cotización = ARS por 1 unidad. ARS es la base (=1).
 const MONEDAS = [
   { clave:'ARS',     label:'Pesos (ARS)',    simbolo:'$',   tipo:'fiat',  unidad:'$'  },
-  { clave:'USD',     label:'Dólar oficial',  simbolo:'US$', tipo:'fiat',  unidad:'US$'},
-  { clave:'USD_MEP', label:'Dólar MEP',      simbolo:'US$', tipo:'fiat',  unidad:'US$'},
-  { clave:'USD_BLUE',label:'Dólar blue',     simbolo:'US$', tipo:'fiat',  unidad:'US$'},
+  { clave:'USD',          label:'Dólar oficial',   simbolo:'US$', tipo:'fiat',  unidad:'US$'},
+  { clave:'USD_MAYORISTA',label:'Dólar divisa (mayorista)', simbolo:'US$', tipo:'fiat', unidad:'US$'},
+  { clave:'USD_MEP',      label:'Dólar MEP',       simbolo:'US$', tipo:'fiat',  unidad:'US$'},
+  { clave:'USD_BLUE',     label:'Dólar blue',      simbolo:'US$', tipo:'fiat',  unidad:'US$'},
   { clave:'EUR',     label:'Euro',           simbolo:'€',   tipo:'fiat',  unidad:'€'  },
   { clave:'SOJA',    label:'Soja',           simbolo:'tn',  tipo:'grano', unidad:'tn' },
   { clave:'MAIZ',    label:'Maíz',           simbolo:'tn',  tipo:'grano', unidad:'tn' },
@@ -314,9 +315,10 @@ async function snapshotCotizaciones(dolar, cereales) {
   const fecha = _hoy0();
   const filas = [];
   const dv = (c) => (dolar && dolar[c]) ? Number(dolar[c].venta || dolar[c].compra || 0) : 0;
-  if (dv('oficial'))         filas.push({ moneda:'USD',      valor:dv('oficial'),         fuente:'dolarapi' });
-  if (dv('mep'))             filas.push({ moneda:'USD_MEP',  valor:dv('mep'),             fuente:'dolarapi' });
-  if (dv('blue'))            filas.push({ moneda:'USD_BLUE', valor:dv('blue'),            fuente:'dolarapi' });
+  if (dv('oficial'))         filas.push({ moneda:'USD',           valor:dv('oficial'),    fuente:'dolarapi' });
+  if (dv('mayorista'))       filas.push({ moneda:'USD_MAYORISTA', valor:dv('mayorista'),  fuente:'dolarapi' });
+  if (dv('mep'))             filas.push({ moneda:'USD_MEP',       valor:dv('mep'),        fuente:'dolarapi' });
+  if (dv('blue'))            filas.push({ moneda:'USD_BLUE',      valor:dv('blue'),       fuente:'dolarapi' });
   const it = (cereales && cereales.items) || {};
   const cer = (k) => Number(it[k] || 0);
   [['soja','SOJA'],['maiz','MAIZ'],['trigo','TRIGO'],['sorgo','SORGO'],['girasol','GIRASOL']].forEach(([k,m])=>{
@@ -2770,6 +2772,30 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
   } catch (e) { next(e); }
 });
 
+// IMPORTANTE: este endpoint va ANTES del mountCrud('ctas-ctes') porque el CRUD
+// registra GET /api/ctas-ctes/:id y, si quedara después, "pendientes" se tomaría
+// como un :id y devolvería "No encontrado".
+app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const tipo = String(req.query.tipo || ''); // 'cliente' | 'proveedor'
+    if (!['cliente', 'proveedor'].includes(tipo)) {
+      return res.status(400).json({ ok: false, error: 'tipo debe ser cliente o proveedor' });
+    }
+    const contactoId = req.query.contactoId || undefined;
+    const items = await prisma.ctaCte.findMany({
+      where: {
+        companyId: req.companyId,
+        contactoTipo: tipo,
+        ...(contactoId ? { contactoId } : {}),
+        pagado: false,
+        OR: [ { debe: { gt: 0 } }, { haber: { gt: 0 } } ],
+      },
+      orderBy: { fecha: 'asc' },
+    });
+    res.json({ ok: true, data: items });
+  } catch (e) { next(e); }
+});
+
 mountCrud({
   path: 'ctas-ctes', modelName: 'ctaCte', perm: 'finanzas',
   schema: z.object({
@@ -2780,6 +2806,8 @@ mountCrud({
     vencimiento: z.coerce.date().nullable().optional(),
     detalle: z.string().min(1),
     categoria: z.string().nullable().optional(),
+    moneda: z.string().nullable().optional(),
+    cotizacion: z.number().positive().nullable().optional(),
     debe: z.number().optional(),
     haber: z.number().optional(),
     pagado: z.boolean().optional(),
@@ -5665,31 +5693,6 @@ function _userTieneAcceso(req, companyId) {
 // === GET cuentas pendientes (clientes que nos deben / proveedores que les debemos) ===
 // Devuelve la lista de comprobantes pendientes filtrada por contactoTipo y opcionalmente
 // por contactoId. Util para armar el modal de pago / cobro masivo.
-app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
-  try {
-    const tipo = String(req.query.tipo || ''); // 'cliente' | 'proveedor'
-    if (!['cliente', 'proveedor'].includes(tipo)) {
-      return res.status(400).json({ ok: false, error: 'tipo debe ser cliente o proveedor' });
-    }
-    const contactoId = req.query.contactoId || undefined;
-    const items = await prisma.ctaCte.findMany({
-      where: {
-        companyId: req.companyId,
-        contactoTipo: tipo,
-        ...(contactoId ? { contactoId } : {}),
-        pagado: false,
-        // Solo donde haya saldo pendiente
-        OR: [
-          { debe: { gt: 0 } },   // cliente nos debe → cobramos
-          { haber: { gt: 0 } },  // les debemos → pagamos
-        ],
-      },
-      orderBy: { fecha: 'asc' },
-    });
-    res.json({ ok: true, data: items });
-  } catch (e) { next(e); }
-});
-
 // === POST registrar pago a proveedor (multi-comprobante + multi-metodo) ===
 // Body:
 //   proveedorId: ID del proveedor
@@ -5714,7 +5717,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
       })).min(1),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal']),
       monto: z.number().positive(),
       fecha: z.coerce.date(),
       cajaOrigen: z.string().nullable().optional(),
@@ -5723,6 +5726,10 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       empresaOrigenId: z.string().nullable().optional(),
       monedaPago: z.string().nullable().optional(),     // moneda con la que se paga (default = la de la deuda)
       cotizacionPago: z.number().positive().nullable().optional(), // ARS por unidad de monedaPago, al día del pago
+      // Entrega de cereal (canje): se paga una deuda en grano entregando ese grano.
+      cerealProductoId: z.string().nullable().optional(),  // producto cereal del stock que se entrega
+      depositoId: z.string().nullable().optional(),        // cerealera/silo de donde sale
+      precioPizarra: z.number().nonnegative().nullable().optional(), // ARS por tn al día de la entrega (valuación)
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
@@ -5834,6 +5841,25 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           caja: d.cajaOrigen || null,
           clasificacion: 'empresa',
           observaciones: d.observaciones || null,
+        }});
+      } else if (d.metodo === 'cereal') {
+        // Canje: entregamos grano para cancelar una deuda en toneladas.
+        // d.monto = toneladas entregadas (en la moneda/grano de la deuda).
+        if (!d.cerealProductoId) throw new Error('Elegí el cereal que se entrega');
+        const prod = await tx.producto.findFirst({ where: { id: d.cerealProductoId, companyId: req.companyId } });
+        if (!prod) throw new Error('Cereal no encontrado en el stock');
+        const pizarra = Number(d.precioPizarra || 0);
+        await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: prod.id,
+          fecha: d.fecha, tipo: 'egreso', motivo: 'entrega_canje',
+          cantidad: d.monto, // toneladas
+          precio: pizarra || null,
+          total: pizarra ? d.monto * pizarra : null,
+          contraparteId: d.proveedorId, contraparteTipo: 'proveedor',
+          referencia: 'CANJE',
+          depositoId: d.depositoId || null,
+          observaciones: `Entrega de cereal a ${prov.razonSocial} por canje${d.observaciones ? ' · ' + d.observaciones : ''}`,
+          userId: req.user?.id || null,
         }});
       } else if (d.metodo === 'intercompany') {
         // Crear los dos asientos espejo + IntercompanyMovimiento
