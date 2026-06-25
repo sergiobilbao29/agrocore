@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.8.0';
+const AGROCORE_VERSION = '1.9.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -294,6 +294,95 @@ async function fetchCereales() {
   return { fuente: 'Referencia', fecha: null, items: { ...CEREALES_REFERENCIA } };
 }
 
+// ===== MULTIMONEDA: monedas soportadas y cotizaciones históricas =====
+// valor de cada cotización = ARS por 1 unidad. ARS es la base (=1).
+const MONEDAS = [
+  { clave:'ARS',     label:'Pesos (ARS)',    simbolo:'$',   tipo:'fiat',  unidad:'$'  },
+  { clave:'USD',     label:'Dólar oficial',  simbolo:'US$', tipo:'fiat',  unidad:'US$'},
+  { clave:'USD_MEP', label:'Dólar MEP',      simbolo:'US$', tipo:'fiat',  unidad:'US$'},
+  { clave:'USD_BLUE',label:'Dólar blue',     simbolo:'US$', tipo:'fiat',  unidad:'US$'},
+  { clave:'EUR',     label:'Euro',           simbolo:'€',   tipo:'fiat',  unidad:'€'  },
+  { clave:'SOJA',    label:'Soja',           simbolo:'tn',  tipo:'grano', unidad:'tn' },
+  { clave:'MAIZ',    label:'Maíz',           simbolo:'tn',  tipo:'grano', unidad:'tn' },
+  { clave:'TRIGO',   label:'Trigo',          simbolo:'tn',  tipo:'grano', unidad:'tn' },
+  { clave:'SORGO',   label:'Sorgo',          simbolo:'tn',  tipo:'grano', unidad:'tn' },
+  { clave:'GIRASOL', label:'Girasol',        simbolo:'tn',  tipo:'grano', unidad:'tn' },
+];
+function _hoy0() { const d = new Date(); d.setHours(0,0,0,0); return d; }
+// Guarda el valor de hoy para cada moneda (global, companyId=null). Idempotente por día.
+async function snapshotCotizaciones(dolar, cereales) {
+  const fecha = _hoy0();
+  const filas = [];
+  const dv = (c) => (dolar && dolar[c]) ? Number(dolar[c].venta || dolar[c].compra || 0) : 0;
+  if (dv('oficial'))         filas.push({ moneda:'USD',      valor:dv('oficial'),         fuente:'dolarapi' });
+  if (dv('mep'))             filas.push({ moneda:'USD_MEP',  valor:dv('mep'),             fuente:'dolarapi' });
+  if (dv('blue'))            filas.push({ moneda:'USD_BLUE', valor:dv('blue'),            fuente:'dolarapi' });
+  const it = (cereales && cereales.items) || {};
+  const cer = (k) => Number(it[k] || 0);
+  [['soja','SOJA'],['maiz','MAIZ'],['trigo','TRIGO'],['sorgo','SORGO'],['girasol','GIRASOL']].forEach(([k,m])=>{
+    if (cer(k)) filas.push({ moneda:m, valor:cer(k), fuente:(cereales && cereales.fuente) || 'BCR' });
+  });
+  for (const f of filas) {
+    try {
+      await prisma.cotizacion.upsert({
+        where: { companyId_moneda_fecha: { companyId: null, moneda: f.moneda, fecha } },
+        update: { valor: f.valor, fuente: f.fuente },
+        create: { companyId: null, moneda: f.moneda, fecha, valor: f.valor, fuente: f.fuente },
+      });
+    } catch (e) { /* ignore */ }
+  }
+}
+// Devuelve ARS por 1 unidad de `moneda` a la `fecha` (la más reciente <= fecha).
+// ARS -> 1. Si no hay dato, intenta el cache vivo; si no, null.
+async function getCotizacionARS(moneda, fecha, companyId) {
+  if (!moneda || moneda === 'ARS') return 1;
+  const f = fecha ? new Date(fecha) : new Date();
+  const row = await prisma.cotizacion.findFirst({
+    where: { moneda, companyId: null, fecha: { lte: f } },
+    orderBy: [{ fecha: 'desc' }],
+  });
+  if (row) return row.valor;
+  // fallback al cache vivo
+  const d = _cotCache.dolar, c = _cotCache.cereales;
+  const map = { USD:d?.oficial?.venta, USD_MEP:d?.mep?.venta, USD_BLUE:d?.blue?.venta,
+    SOJA:c?.items?.soja, MAIZ:c?.items?.maiz, TRIGO:c?.items?.trigo, SORGO:c?.items?.sorgo, GIRASOL:c?.items?.girasol };
+  return map[moneda] ? Number(map[moneda]) : null;
+}
+
+// Lista de monedas soportadas (para el frontend).
+app.get('/api/monedas', requireCompany, (_req, res) => { res.json({ ok: true, data: MONEDAS }); });
+
+// Histórico de cotizaciones (carga manual / edición). Global por defecto.
+app.get('/api/cotizaciones-historico', requireCompany, async (req, res, next) => {
+  try {
+    const where = {};
+    if (req.query.moneda) where.moneda = String(req.query.moneda);
+    if (req.query.desde || req.query.hasta) {
+      where.fecha = {};
+      if (req.query.desde) where.fecha.gte = new Date(req.query.desde);
+      if (req.query.hasta) where.fecha.lte = new Date(req.query.hasta);
+    }
+    const data = await prisma.cotizacion.findMany({ where, orderBy: [{ fecha: 'desc' }, { moneda: 'asc' }], take: 500 });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/cotizaciones-historico', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const d = z.object({ moneda: z.string().min(1), fecha: z.coerce.date(), valor: z.number().positive() }).parse(req.body);
+    const fecha = new Date(d.fecha); fecha.setHours(0,0,0,0);
+    const row = await prisma.cotizacion.upsert({
+      where: { companyId_moneda_fecha: { companyId: null, moneda: d.moneda, fecha } },
+      update: { valor: d.valor, fuente: 'manual' },
+      create: { companyId: null, moneda: d.moneda, fecha, valor: d.valor, fuente: 'manual' },
+    });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.delete('/api/cotizaciones-historico/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try { await prisma.cotizacion.deleteMany({ where: { id: req.params.id } }); res.json({ ok: true }); }
+  catch (e) { next(e); }
+});
+
 app.get('/api/cotizaciones', async (_req, res) => {
   const now = Date.now();
   let dolar = _cotCache.dolar;
@@ -307,6 +396,8 @@ app.get('/api/cotizaciones', async (_req, res) => {
     const c = await fetchCereales();
     if (c) { _cotCache.cereales = c; _cotCache.cerealesTime = now; cereales = c; }
   }
+  // Guardamos un snapshot diario para tener historia (no bloquea la respuesta).
+  snapshotCotizaciones(dolar, cereales).catch(()=>{});
   res.json({
     ok: true,
     dolar,
@@ -2175,6 +2266,8 @@ function _condicionDiasFrom(cond, diasExpl) {
 
 async function crearCtaCteDesdeFactura(tx, { companyId, factura, contactoTipo, contactoId, refPrefix, motivo, condicion, condicionDias, vencimientoFecha }) {
   if (!contactoId) return; // sin cliente/proveedor registrado no hay cuenta corriente
+  const _moneda = factura.moneda || 'ARS';
+  const _cotiz = factura.cotizacion != null ? factura.cotizacion : (_moneda === 'ARS' ? 1 : null);
   const compNum = `${String(factura.puntoVenta).padStart(4, '0')}-${String(factura.numero).padStart(8, '0')}`;
   let vencimiento = null;
   // 1) Fecha fija (típico en agro: "pago en cosecha 2027") tiene prioridad
@@ -2200,6 +2293,8 @@ async function crearCtaCteDesdeFactura(tx, { companyId, factura, contactoTipo, c
       fecha: factura.fecha,
       vencimiento,
       detalle: `${motivo} ${factura.tipo} ${compNum}`,
+      moneda: _moneda,
+      cotizacion: _cotiz,
       debe: Number(factura.total) || 0,
       haber: 0,
       referencia: `${refPrefix}-${factura.id}`,
@@ -2303,6 +2398,8 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       condicionVenta: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo de Condiciones de pago
       vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
+      moneda: z.string().optional(),
+      cotizacion: z.number().positive().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       origen: z.enum(['agrocore', 'arca_externa']).optional().default('agrocore'),
       cae: z.string().optional(),
@@ -2335,11 +2432,14 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
       }
       const totales = calcFactura(input.items);
+      const _mon = input.moneda || 'ARS';
+      const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
       const f = await tx.factura.create({
         data: {
           companyId: req.companyId, clienteId: input.clienteId || null,
           tipo: input.tipo, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
           condicionVenta: input.condicionVenta, observaciones: input.observaciones,
+          moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
           cae, caeVto, estado: 'autorizada',
           origen: input.origen,
@@ -2428,6 +2528,8 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       condicionCompra: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo
       vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
+      moneda: z.string().optional(),
+      cotizacion: z.number().positive().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
       // Datos del emisor cuando no hay proveedor en el catálogo (vienen del PDF)
@@ -2452,11 +2554,14 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
         it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
       }
       const totales = calcFactura(input.items);
+      const _mon = input.moneda || 'ARS';
+      const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
       const f = await tx.facturaCompra.create({
         data: {
           companyId: req.companyId, proveedorId: input.proveedorId || null,
           tipo: input.tipo, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
           condicionCompra: input.condicionCompra, observaciones: input.observaciones,
+          moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
           items: { create: totales.items },
         },

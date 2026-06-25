@@ -414,9 +414,11 @@ model Factura {
   numero          Int
   fecha           DateTime
   condicionVenta  String?   // "contado", "cuenta_corriente"
-  subtotal        Float     @default(0)
-  iva             Float     @default(0)
-  total           Float     @default(0)
+  moneda          String    @default("ARS")  // ARS | USD | EUR | SOJA | MAIZ | TRIGO | ...
+  cotizacion      Float?    // ARS por 1 unidad de la moneda, al día de la factura
+  subtotal        Float     @default(0)       // en moneda origen
+  iva             Float     @default(0)        // en moneda origen
+  total           Float     @default(0)        // en moneda origen
   cae             String?
   caeVto          DateTime?
   estado          String    @default("pendiente") // pendiente, autorizada, anulada
@@ -468,9 +470,11 @@ model FacturaCompra {
   numero          Int
   fecha           DateTime
   condicionCompra String?
-  subtotal        Float     @default(0)
-  iva             Float     @default(0)
-  total           Float     @default(0)
+  moneda          String    @default("ARS")  // ARS | USD | EUR | SOJA | MAIZ | TRIGO | ...
+  cotizacion      Float?    // ARS por 1 unidad de la moneda, al día de la factura
+  subtotal        Float     @default(0)       // en moneda origen
+  iva             Float     @default(0)        // en moneda origen
+  total           Float     @default(0)        // en moneda origen
   observaciones   String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -551,8 +555,10 @@ model CtaCte {
   vencimiento     DateTime?  // fecha en que vence el pago/cobro (sobre todo para "libre": alquileres, impuestos, etc.)
   detalle         String
   categoria       String?    // categoría para libres: "Arrendamiento", "Servicio", "Impuesto", "Otro"
-  debe            Float     @default(0)
-  haber           Float     @default(0)
+  moneda          String    @default("ARS")  // moneda/objeto de la deuda: ARS | USD | EUR | SOJA | MAIZ | ...
+  cotizacion      Float?    // ARS por 1 unidad de la moneda, al día del comprobante (para contabilidad local)
+  debe            Float     @default(0)        // en moneda origen
+  haber           Float     @default(0)        // en moneda origen
   pagado          Boolean   @default(false)  // marca de saldado (solo se usa en libres)
   referencia      String?    // nro factura, recibo, etc.
   observaciones   String?
@@ -971,6 +977,25 @@ model CategoriaHaciendaConfig {
 
   @@unique([companyId, nombre])
   @@index([companyId])
+}
+
+// ============================================================
+// COTIZACIONES (histórico diario) — multimoneda y granos
+// valor = pesos ARS por 1 unidad de la moneda (1 USD, 1 EUR, 1 Tn de soja, etc.)
+// Es data de mercado compartida por todas las empresas (companyId opcional).
+// ============================================================
+model Cotizacion {
+  id          String   @id @default(cuid())
+  companyId   String?           // null = global (compartida); con valor = override de una empresa
+  fecha       DateTime          // día de la cotización (00:00)
+  moneda      String            // "USD" | "USD_BLUE" | "USD_MEP" | "EUR" | "SOJA" | "MAIZ" | "TRIGO" | "SORGO" | "GIRASOL"
+  valor       Float             // ARS por 1 unidad
+  fuente      String?           // "BCR" | "dolarapi" | "manual"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([companyId, moneda, fecha])
+  @@index([moneda, fecha])
 }
 
 // ============================================================
