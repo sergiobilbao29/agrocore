@@ -302,6 +302,7 @@ model Producto {
   unidad          String    // "tn", "kg", "lt", "cabezas", "unidad"
   stockMinimo     Float     @default(0)
   precioReferencia Float?
+  categoriaHacienda String?  // si categoria="hacienda": a qué categoría de hacienda corresponde (Ternero, Vaca…)
   observaciones   String?
   activo          Boolean   @default(true)
   createdAt       DateTime  @default(now())

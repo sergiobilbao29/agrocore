@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.6.0';
+const AGROCORE_VERSION = '1.7.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1747,6 +1747,7 @@ mountCrud({
     unidad: z.string().min(1),
     stockMinimo: z.number().optional(),
     precioReferencia: z.number().nullable().optional(),
+    categoriaHacienda: z.string().nullable().optional(),
     observaciones: z.string().nullable().optional(),
     activo: z.boolean().optional(),
   }),
@@ -1794,7 +1795,49 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       where: movWhere,
       _sum: { cantidad: true },
     });
+    // Productos de hacienda: su existencia NO sale de Movimiento sino que se
+    // nutre de los movimientos de hacienda (cabezas reales + kg estimados).
+    // Se vincula por el mapeo producto.categoriaHacienda (o el nombre si no hay).
+    let hacByCat = {};
+    if (productos.some(p => (p.categoria || '').toLowerCase() === 'hacienda')) {
+      const [hmovs, hstocks] = await Promise.all([
+        prisma.haciendaMovimiento.findMany({ where: { companyId: req.companyId } }),
+        prisma.haciendaStock.findMany({ where: { companyId: req.companyId } }),
+      ]);
+      const pesoBy = {};
+      hstocks.forEach(s => { if (s.pesoPromedio != null) pesoBy[s.campoId + '::' + s.categoria] = s.pesoPromedio; });
+      const signoH = (m) => {
+        switch (m.tipo) {
+          case 'nacimiento': case 'compra': case 'traslado_in': return Number(m.cantidad || 0);
+          case 'muerte': case 'venta': case 'traslado_out': return -Number(m.cantidad || 0);
+          case 'ajuste': return Number(m.cantidad || 0);
+          default: return 0;
+        }
+      };
+      const real = {};
+      hmovs.forEach(m => {
+        if (m.tipo === 'cambio_categoria') {
+          const kOut = m.campoId + '::' + m.categoria;
+          const kIn = m.campoId + '::' + (m.categoriaDestino || m.categoria);
+          real[kOut] = (real[kOut] || 0) - Number(m.cantidad || 0);
+          real[kIn] = (real[kIn] || 0) + Number(m.cantidad || 0);
+          return;
+        }
+        const k = m.campoId + '::' + m.categoria;
+        real[k] = (real[k] || 0) + signoH(m);
+      });
+      Object.keys(real).forEach(k => {
+        const [, cat] = k.split('::');
+        if (!hacByCat[cat]) hacByCat[cat] = { cabezas: 0, kilos: 0 };
+        hacByCat[cat].cabezas += real[k];
+        if (pesoBy[k] != null) hacByCat[cat].kilos += real[k] * pesoBy[k];
+      });
+    }
     const data = productos.map((p) => {
+      if ((p.categoria || '').toLowerCase() === 'hacienda') {
+        const h = hacByCat[p.categoriaHacienda || p.nombre] || { cabezas: 0, kilos: 0 };
+        return { ...p, existencia: h.cabezas, kilos: Math.round(h.kilos), esHacienda: true, bajoMinimo: h.cabezas < Number(p.stockMinimo || 0) };
+      }
       const ing = movs.find((m) => m.productoId === p.id && m.tipo === 'ingreso')?._sum?.cantidad || 0;
       const egr = movs.find((m) => m.productoId === p.id && m.tipo === 'egreso')?._sum?.cantidad || 0;
       const existencia = Number(ing) - Number(egr);
@@ -2074,7 +2117,7 @@ async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, moti
   const compNum = `${factura.tipo} ${String(factura.puntoVenta).padStart(4,'0')}-${String(factura.numero).padStart(8,'0')}`;
   // Detectar productos de HACIENDA: mueven el stock de hacienda (cabezas + kg),
   // no el stock de productos.
-  const prods = await tx.producto.findMany({ where: { companyId, id: { in: items.map(i => i.productoId) } }, select: { id: true, nombre: true, categoria: true } });
+  const prods = await tx.producto.findMany({ where: { companyId, id: { in: items.map(i => i.productoId) } }, select: { id: true, nombre: true, categoria: true, categoriaHacienda: true } });
   const prodById = Object.fromEntries(prods.map(p => [p.id, p]));
   const esHac = (it) => ((prodById[it.productoId]?.categoria) || '').toLowerCase() === 'hacienda';
   const itemsProd = items.filter(it => !esHac(it));
@@ -2093,7 +2136,7 @@ async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, moti
     const tipoMov = (tipo === 'egreso') ? 'venta' : 'compra';
     const kg = Number(it.cantidad) || null;
     await tx.haciendaMovimiento.create({ data: {
-      companyId, campoId: it.campoId, categoria: prodById[it.productoId]?.nombre || it.descripcion,
+      companyId, campoId: it.campoId, categoria: prodById[it.productoId]?.categoriaHacienda || prodById[it.productoId]?.nombre || it.descripcion,
       fecha: factura.fecha, tipo: tipoMov, cantidad: Math.round(Number(it.cabezas) || 0),
       kilos: kg, precioKg: Number(it.precioUnit) || null, total: Number(it.subtotal) || null,
       clienteId: contraparteTipo === 'cliente' ? (contraparteId || null) : null,

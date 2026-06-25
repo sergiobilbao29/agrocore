@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'📦 v1.7.0 — Stock de hacienda unificado en el módulo Stock (nutrido por los movimientos)',
+      desc:'El módulo <b>Stock</b> ahora muestra la existencia real de los productos de hacienda: las <b>cabezas y los kg</b> salen de los <b>movimientos de hacienda</b> (nacimientos, muertes, compras/ventas por factura, cambios de categoría, traslados), no del stock de producto. Para que calce, en cada producto con categoría <b>hacienda</b> se elige a qué <b>categoría de hacienda</b> corresponde (campo nuevo "🐄 Categoría de hacienda" en el alta/edición del producto). Los productos de hacienda sin vincular muestran un aviso <b>"⚠ sin vincular"</b>. En la fila de Stock, en vez de entrada/salida de producto, aparece un acceso directo a <b>🐄 Hacienda</b> para gestionarlos donde corresponde.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'🧾 v1.6.0 (Fase 4) — Hacienda: compras y ventas desde Facturación (comprobante fiscal / ARCA)',
       desc:'Ahora las <b>compras y ventas de hacienda se hacen desde Facturación</b>, como cualquier producto pero con el manejo de kg. Un <b>producto del catálogo con categoría "hacienda"</b> representa una categoría (Ternero, Novillito…); al ponerlo en un renglón de la factura aparecen <b>Campo</b> y <b>Cabezas</b> (la cantidad de la línea son los <b>kg</b> y el precio es <b>$/kg</b>). Al guardar la factura (venta o compra), el sistema <b>mueve el stock de hacienda</b> (baja/alta de cabezas + kg) en vez del stock de producto, y el cobro/cta cte/ARCA los maneja la factura. Al <b>anular/borrar</b> la factura, se revierte el movimiento de hacienda. Se <b>quitaron Compra y Venta de Hacienda → Movimientos</b> (van por Facturación) y se agregó <b>🔗 Vincular factura</b> para el caso de una factura que no movió el stock.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
@@ -5118,13 +5121,13 @@ pages.stock = async function() {
               <td><b>${esc(p.nombre)}</b>${p.codigo?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.codigo)}</div>`:''}</td>
               <td><span class="badge badge-blue">${esc(p.categoria)}</span></td>
               <td class="text-xs">${esc(p.ubicacion||'—')}</td>
-              <td class="text-right font-semibold ${Number(p.existencia)<=0?'text-red-600':(p.bajoMinimo?'text-amber-600':'text-emerald-700')}">${fmtN(p.existencia)}</td>
-              <td>${esc(p.unidad)}</td>
+              <td class="text-right font-semibold ${Number(p.existencia)<=0?'text-red-600':(p.bajoMinimo?'text-amber-600':'text-emerald-700')}">${fmtN(p.existencia)}${p.esHacienda&&p.kilos?`<div class="text-[11px] text-slate-500 font-normal">${fmtN(p.kilos)} kg</div>`:''}</td>
+              <td>${esc(p.unidad)}${p.esHacienda?`<div class="text-[10px] ${p.categoriaHacienda?'text-amber-700':'text-red-500'}">${p.categoriaHacienda?'🐄 '+esc(p.categoriaHacienda):'⚠ sin vincular'}</div>`:''}</td>
               <td class="text-right">${fmtN(p.stockMinimo)}</td>
               <td>${p.bajoMinimo?'<span class="badge badge-red">Bajo mínimo</span>':'<span class="badge badge-green">OK</span>'}</td>
               <td class="text-right whitespace-nowrap">
-                ${can('stock:create')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Nueva entrada" onclick='movEntrada(${JSON.stringify(p.id)})'>⬆️</button>`:''}
-                ${can('stock:create')?`<button class="btn btn-ghost text-xs text-red-600" title="Nueva salida" onclick='movSalida(${JSON.stringify(p.id)})'>⬇️</button>`:''}
+                ${p.esHacienda?`<button class="btn btn-ghost text-xs text-amber-700" title="Gestionar en Hacienda" onclick="go('hacienda')">🐄 Hacienda</button>`:`${can('stock:create')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Nueva entrada" onclick='movEntrada(${JSON.stringify(p.id)})'>⬆️</button>`:''}
+                ${can('stock:create')?`<button class="btn btn-ghost text-xs text-red-600" title="Nueva salida" onclick='movSalida(${JSON.stringify(p.id)})'>⬇️</button>`:''}`}
                 ${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='prodForm(${JSON.stringify(p.id)})'>✏️</button>`:''}
               </td>
             </tr>`).join('') || `<tr><td colspan="8" class="text-center text-slate-400 py-8">${rows.length?'Sin coincidencias':'Aún no hay productos'}</td></tr>`}
@@ -5269,20 +5272,30 @@ async function stockControlSubir(inp) {
 
 function movEntrada(prodId) { movForm(prodId, 'entrada'); }
 function movSalida(prodId) { movForm(prodId, 'salida'); }
-function prodForm(id=null) {
+async function prodForm(id=null) {
   const it = id ? (state.cache.productos||[]).find(x=>x.id===id) || {} : {};
+  if (!state.cache.catHacienda) { try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {} }
+  const cats = state.cache.catHacienda || [];
   openModal({
     title: id?'Editar producto':'Nuevo producto',
     body: `
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2"><label class="label">Nombre *</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}" /></div>
         <div><label class="label">Categoría *</label>
-          <select id="f-cat" class="input">
+          <select id="f-cat" class="input" onchange="_prodCatToggle()">
             <option value="">— Elegir —</option>
             ${['cereal','hacienda','insumo','herramienta','combustibles','otro'].map(v=>`<option ${v===(it.categoria||'')?'selected':''}>${v}</option>`).join('')}
           </select>
         </div>
         <div><label class="label">Unidad *</label>${catSelect('f-u', 'Unidad de medida', it.unidad||'kg', { placeholder:'kg / L / u / …' })}</div>
+        <div id="f-cathac-wrap" class="col-span-2 p-2 bg-amber-50 rounded border border-amber-200" style="display:${(it.categoria==='hacienda')?'block':'none'}">
+          <label class="label">🐄 Categoría de hacienda (vincula el stock con los movimientos)</label>
+          <select id="f-cathac" class="input">
+            <option value="">— sin vincular —</option>
+            ${cats.map(c=>`<option value="${esc(c.nombre)}" ${it.categoriaHacienda===c.nombre?'selected':''}>${esc(c.especie?c.especie+' · ':'')}${esc(c.nombre)}</option>`).join('')}
+          </select>
+          <div class="text-[11px] text-amber-700 mt-1">Las cabezas/kg que ves en Stock para este producto salen de los movimientos de hacienda de esta categoría.</div>
+        </div>
         <div><label class="label">Stock mínimo</label><input id="f-min" type="number" step="0.01" class="input" value="${it.stockMinimo||0}" /></div>
         <div><label class="label">Precio referencia</label><input id="f-pr" type="number" step="0.01" class="input" value="${it.precioReferencia||''}" /></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
@@ -5291,13 +5304,20 @@ function prodForm(id=null) {
              <button class="btn btn-primary" onclick='prodSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
 }
+function _prodCatToggle() {
+  const cat = $('#f-cat')?.value;
+  const w = $('#f-cathac-wrap'); if (w) w.style.display = (cat==='hacienda') ? 'block' : 'none';
+  const u = $('#f-u'); if (u && cat==='hacienda' && (!u.value || u.value==='kg')) u.value = 'cabezas';
+}
 async function prodSave(id) {
+  const cat = $('#f-cat').value;
   const data = {
     nombre: $('#f-nom').value.trim(),
-    categoria: $('#f-cat').value,
+    categoria: cat,
     unidad: $('#f-u').value.trim(),
     stockMinimo: Number($('#f-min').value||0),
     precioReferencia: $('#f-pr').value ? Number($('#f-pr').value) : null,
+    categoriaHacienda: (cat==='hacienda' && $('#f-cathac')?.value) ? $('#f-cathac').value : null,
     observaciones: $('#f-obs').value.trim()||null,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
