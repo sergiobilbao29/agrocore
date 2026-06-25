@@ -531,6 +531,7 @@ model Cheque {
   cuitTitular   String?    // CUIT del titular/librador del cheque
   endosante     String?    // de quién nos vino (quién nos lo endosó/entregó)
   fechaRecepcion DateTime? // cuándo lo recibimos (terceros)
+  fechaEndoso   DateTime?  // cuándo se endosó/entregó/depositó (salió de cartera)
   enPoderDe     String?    // físicos: en poder de quién está (caja oficina, Luciano, Lucas, Flor...)
   estado        String     @default("en_cartera") // en_cartera, depositado, cobrado, endosado, rechazado
   observaciones String?

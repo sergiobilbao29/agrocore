@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.13.0';
+const AGROCORE_VERSION = '1.15.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1932,8 +1932,18 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     // Se vincula por el mapeo producto.categoriaHacienda (o el nombre si no hay).
     let hacByCat = {};
     if (productos.some(p => (p.categoria || '').toLowerCase() === 'hacienda')) {
+      // Si se filtra por un depósito que representa un campo, la hacienda se limita
+      // a ese campo. Si el depósito NO es un campo (cerealera/silo), no hay hacienda.
+      let campoFiltro = null, soloEseCampo = false;
+      if (depositoId) {
+        const dep = await prisma.deposito.findFirst({ where: { id: depositoId }, select: { campoId: true } });
+        soloEseCampo = true;
+        campoFiltro = dep?.campoId || '__sin_campo__';
+      }
+      const hMovWhere = { companyId: req.companyId };
+      if (soloEseCampo) hMovWhere.campoId = campoFiltro;
       const [hmovs, hstocks] = await Promise.all([
-        prisma.haciendaMovimiento.findMany({ where: { companyId: req.companyId } }),
+        prisma.haciendaMovimiento.findMany({ where: hMovWhere }),
         prisma.haciendaStock.findMany({ where: { companyId: req.companyId } }),
       ]);
       const pesoBy = {};
@@ -2657,6 +2667,7 @@ mountCrud({
     cuitTitular: z.string().nullable().optional(),
     endosante: z.string().nullable().optional(),
     fechaRecepcion: z.coerce.date().nullable().optional(),
+    fechaEndoso: z.coerce.date().nullable().optional(),
     enPoderDe: z.string().nullable().optional(),
     estado: z.string().optional(),
     observaciones: z.string().nullable().optional(),
@@ -5899,7 +5910,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         if (!d.chequeId) throw new Error('Falta chequeId para pago con cheque');
         const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
         if (!ch) throw new Error('Cheque no encontrado');
-        await tx.cheque.update({ where: { id: ch.id }, data: { estado: 'endosado', beneficiario: prov.razonSocial } });
+        await tx.cheque.update({ where: { id: ch.id }, data: { estado: 'endosado', beneficiario: prov.razonSocial, fechaEndoso: d.fecha } });
       } else if (d.metodo === 'transferencia') {
         if (!d.bancoCuentaId) throw new Error('Falta bancoCuentaId para transferencia');
         await tx.bancoMovimiento.create({ data: {

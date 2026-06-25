@@ -2321,6 +2321,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
+      titulo:'🩹 v1.15.0 — Cheques: la cuenta bancaria toma las cuentas reales de Bancos',
+      desc:'Al cargar un cheque, el selector de <b>Cuenta bancaria</b> ahora lista las <b>cuentas reales cargadas en Tesorería → Bancos</b> (antes tomaba un catálogo aparte que quedaba vacío). Elegís el banco y aparecen sus cuentas (número y alias). El selector de acreditar/depositar cheque ya usaba las cuentas reales.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
+      titulo:'🩹 v1.14.0 — Stock de hacienda por campo, cheques: fecha de endoso, orden por columnas y filtro en cartera',
+      desc:'Varias cosas: (1) <b>Se arregló el filtro de Stock</b>: al elegir un depósito que es un campo, la hacienda muestra <b>solo las cabezas de ese campo</b> (antes aparecían en todos). Sin filtro de depósito, sigue mostrando el consolidado. (2) En <b>Cheques</b> se agregó el campo <b>Fecha de endoso / entrega</b> (cuándo salió de cartera), que se completa sola al pagar con el cheque. (3) En la lista de Cheques ahora podés <b>ordenar por cualquier columna</b> tocando su título (1 clic ascendente, 2 descendente) y por defecto se muestran los <b>cheques en cartera</b>.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
       titulo:'🩹 v1.13.0 — Fix Flujo de Fondos + créditos editar/eliminar + campos como depósitos',
       desc:'Tres cosas: (1) <b>Se arregló el Flujo de Fondos</b> que quedaba "Cargando…" y no abría (un error de formato de moneda). (2) En <b>Créditos bancarios</b> ahora cada crédito tiene botones de <b>✏️ Editar y 🗑️ Eliminar</b> directo en la lista (antes estaban solo dentro del detalle). (3) Los <b>campos pueden funcionar como depósitos</b>: al crear/editar un campo hay un tilde <b>"Este campo funciona como depósito"</b> y, al guardarlo, se crea un depósito con el nombre del campo (aparece en Stock, Movimientos y Hacienda). Los campos que <b>ya tenían hacienda cargada</b> se convierten y vinculan automáticamente a su depósito.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
@@ -9854,7 +9860,8 @@ pages.cheques = async function() {
   try { rows = await crudList('cheques'); } catch (e) { return toast(e.message,'error'); }
   try { state.cache.chequeEstados = (await api('/api/cheque-estados')).data || []; } catch { state.cache.chequeEstados = state.cache.chequeEstados || []; }
 
-  state.chequeFilter = Object.assign({ estado:'', orden:'asc', tipo:'', banco:'', cuenta:'', numero:'' }, state.chequeFilter||{});
+  // Por defecto mostramos los cheques EN CARTERA y sin orden fijo (se ordena por columna).
+  state.chequeFilter = Object.assign({ estado:'en_cartera', sortCol:null, sortDir:'asc', tipo:'', banco:'', cuenta:'', numero:'' }, state.chequeFilter||{});
   const total = rows.reduce((a,c)=>a+Number(c.monto||0),0);
   // Disponibles = cheques en cartera (recibidos, listos para usar)
   const enCartera = rows.filter(c => (c.estado||'').toLowerCase() === 'en_cartera');
@@ -9862,9 +9869,24 @@ pages.cheques = async function() {
   const bancosUnicos  = [...new Set(rows.map(c=>(c.banco||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
   const cuentasUnicas = [...new Set(rows.map(c=>(c.cuenta||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
 
+  // Valor de una columna para ordenar.
+  const chqSortVal = (c, col) => {
+    switch (col) {
+      case 'tipo': return c.tipo||'';
+      case 'formato': return c.formato||'';
+      case 'nroCheque': return (c.nroCheque||'');
+      case 'banco': return (c.banco||'').toLowerCase();
+      case 'fechaEmision': return fechaAMs(c.fechaEmision);
+      case 'fechaPago': return fechaAMs(c.fechaPago);
+      case 'contraparte': return (c.tipo==='propio'?(c.beneficiario||''):(c.librador||c.endosante||'')).toLowerCase();
+      case 'monto': return Number(c.monto||0);
+      case 'estado': return (c.estado||'').toLowerCase();
+      case 'observaciones': return (c.observaciones||'').toLowerCase();
+      default: return '';
+    }
+  };
   const render = () => {
     const f = state.chequeFilter;
-    const orden = f.orden;
     let filtered = rows.filter(c => {
       if (f.estado && (c.estado||'').toLowerCase() !== f.estado) return false;
       if (f.tipo   && c.tipo !== f.tipo) return false;
@@ -9873,19 +9895,22 @@ pages.cheques = async function() {
       if (f.numero && !((c.nroCheque||'').toLowerCase().includes(f.numero.toLowerCase()))) return false;
       return true;
     });
-    // Ordenar por fecha de pago (parseo robusto, ver fechaAMs)
-    filtered = filtered.slice().sort((a, b) => {
-      const fa = fechaAMs(a.fechaPago), fb = fechaAMs(b.fechaPago);
-      return orden === 'asc' ? fa - fb : fb - fa;
-    });
+    // Orden por la columna elegida (clic en el encabezado: 1=asc, 2=desc).
+    if (f.sortCol) {
+      filtered = filtered.slice().sort((a, b) => {
+        const va = chqSortVal(a, f.sortCol), vb = chqSortVal(b, f.sortCol);
+        let cmp = (typeof va === 'number' && typeof vb === 'number') ? (va - vb) : String(va).localeCompare(String(vb), 'es', { numeric:true });
+        return f.sortDir === 'asc' ? cmp : -cmp;
+      });
+    }
+    const arrow = (col) => f.sortCol===col ? (f.sortDir==='asc'?' ▲':' ▼') : '';
+    const th = (label, col, cls) => `<th class="cursor-pointer select-none ${cls||''}" onclick="chqSort('${col}')" title="Ordenar por ${esc(label)}">${label}${arrow(col)}</th>`;
     $('#cheques-tabla').innerHTML = `
       <table class="data">
         <thead><tr>
-          <th>Tipo</th><th>Formato</th><th>Nº</th><th>Banco</th><th>Emisión</th>
-          <th class="cursor-pointer" onclick="chqToggleOrden()" title="Ordenar por fecha de pago">
-            Pago ${orden==='asc'?'▲':'▼'}
-          </th>
-          <th>Beneficiario / Librador</th><th class="text-right">Monto</th><th>Estado</th><th>Observaciones</th><th></th>
+          ${th('Tipo','tipo')}${th('Formato','formato')}${th('Nº','nroCheque')}${th('Banco','banco')}${th('Emisión','fechaEmision')}
+          ${th('Pago','fechaPago')}
+          ${th('Beneficiario / Librador','contraparte')}${th('Monto','monto','text-right')}${th('Estado','estado')}${th('Observaciones','observaciones')}<th></th>
         </tr></thead>
         <tbody>
           ${filtered.map(c => `
@@ -9953,12 +9978,8 @@ pages.cheques = async function() {
           <label class="label">Nº de cheque</label>
           <input id="chq-fnum" class="input" value="${esc(state.chequeFilter.numero||'')}" placeholder="Buscar Nº..."/>
         </div>
-        <div class="md:col-span-4">
-          <label class="label">Orden por fecha de pago</label>
-          <select id="chq-forden" class="input">
-            <option value="asc" ${state.chequeFilter.orden==='asc'?'selected':''}>Más próximos primero</option>
-            <option value="desc" ${state.chequeFilter.orden==='desc'?'selected':''}>Más lejanos primero</option>
-          </select>
+        <div class="md:col-span-4 flex items-end">
+          <div class="text-[11px] text-slate-500">💡 Tocá el título de cualquier columna para ordenar (1 clic ascendente, 2 descendente).</div>
         </div>
         <div class="md:col-span-8 flex gap-2 justify-end flex-wrap">
           <button class="btn btn-secondary" onclick="chqFiltroDisponibles()">Ver disponibles</button>
@@ -9973,28 +9994,48 @@ pages.cheques = async function() {
   $('#chq-fbanco').onchange  = e => { state.chequeFilter.banco = e.target.value; render(); };
   $('#chq-fcuenta').onchange = e => { state.chequeFilter.cuenta = e.target.value; render(); };
   $('#chq-fnum').oninput     = e => { state.chequeFilter.numero = e.target.value; render(); };
-  $('#chq-forden').onchange  = e => { state.chequeFilter.orden = e.target.value; render(); };
   render();
 };
 // Atajo: filtrar solo los cheques en cartera (disponibles para usar).
 function chqFiltroDisponibles() {
-  state.chequeFilter = { estado:'en_cartera', orden:'asc' };
+  state.chequeFilter = { estado:'en_cartera', sortCol:null, sortDir:'asc' };
   pages.cheques();
 }
-function chqToggleOrden() {
-  state.chequeFilter.orden = state.chequeFilter.orden === 'asc' ? 'desc' : 'asc';
+// Ordenar por una columna: 1er clic ascendente, 2do descendente.
+function chqSort(col) {
+  const f = state.chequeFilter;
+  if (f.sortCol === col) f.sortDir = (f.sortDir === 'asc') ? 'desc' : 'asc';
+  else { f.sortCol = col; f.sortDir = 'asc'; }
   pages.cheques();
 }
+// Opciones del select de cuenta bancaria (cuentas reales de Bancos, filtradas por banco).
+function chqCuentaOptions(banco, sel){
+  const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false && (!banco || (c.banco||'') === banco));
+  let html = '<option value="">— Elegir —</option>';
+  html += cuentas.map(c => {
+    const v = c.numero || c.alias || c.id;
+    const lbl = `${c.numero||''}${c.alias?' · '+c.alias:''}${c.moneda&&c.moneda!=='ARS'?' ('+c.moneda+')':''}`.trim() || v;
+    return `<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(lbl)}</option>`;
+  }).join('');
+  // Si el cheque ya tenía un valor de cuenta que no está en la lista, lo conservamos.
+  if (sel && !cuentas.some(c => (c.numero||c.alias||c.id) === sel)) html += `<option value="${esc(sel)}" selected>${esc(sel)}</option>`;
+  return html;
+}
+function chqBancoChange(){ const b = $('#f-bco')?.value || ''; const sel = $('#f-cue'); if (sel) sel.innerHTML = chqCuentaOptions(b, ''); }
 // Opciones de "en poder de" para cheques físicos: cajas del catálogo + las ya usadas.
 function chqPoderOpciones(){
   const cajas = catByTipo('Caja').map(c=>c.nombre).filter(Boolean);
   const usados = (state.cache.cheques||[]).map(c=>c.enPoderDe).filter(Boolean);
   return Array.from(new Set([...cajas, ...usados])).sort((a,b)=>String(a).localeCompare(String(b),'es'));
 }
-function chqForm(id=null) {
+async function chqForm(id=null) {
   const it = id ? (state.cache.cheques||[]).find(x=>x.id===id)||{} : {};
   // Default de estado según tipo: cheque de terceros → "en_cartera"; propio → "emitido".
   const estadoDefault = it.estado || (it.tipo==='terceros' ? 'en_cartera' : 'emitido');
+  // Cargar las cuentas bancarias reales (creadas en Bancos) para los selectores.
+  if (!state.cache.bancoCuentas) { try { state.cache.bancoCuentas = (await api('/api/banco-cuentas')).data || []; } catch { state.cache.bancoCuentas = []; } }
+  const _bcoCuentas = state.cache.bancoCuentas || [];
+  const bancosChq = [...new Set([..._bcoCuentas.map(c=>c.banco), ...catByTipo('Banco').map(c=>c.nombre), it.banco].filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b),'es'));
   openModal({
     title: id?'Editar cheque':'Nuevo cheque',
     body: `
@@ -10015,8 +10056,16 @@ function chqForm(id=null) {
           <select id="f-est" class="input">${chqEstadosList().map(e=>`<option value="${e.codigo}" ${e.codigo===estadoDefault?'selected':''}>${esc(e.nombre)}</option>`).join('')}</select>
         </div>
         <div><label class="label">Nº de cheque *</label><input id="f-nro" class="input" value="${esc(it.nroCheque||'')}"/></div>
-        <div><label class="label">Banco</label>${catSelect('f-bco', 'Banco', it.banco||'', { placeholder:'— Elegir o agregar desde Catálogos —' })}</div>
-        <div><label class="label">Cuenta bancaria</label>${catSelect('f-cue', 'Cuenta bancaria', it.cuenta||'', { placeholder:'— Elegir —' })}</div>
+        <div><label class="label">Banco</label>
+          <select id="f-bco" class="input" onchange="chqBancoChange()">
+            <option value="">— Elegir —</option>
+            ${bancosChq.map(b=>`<option value="${esc(b)}" ${b===(it.banco||'')?'selected':''}>${esc(b)}</option>`).join('')}
+          </select>
+        </div>
+        <div><label class="label">Cuenta bancaria</label>
+          <select id="f-cue" class="input">${chqCuentaOptions(it.banco||'', it.cuenta||'')}</select>
+          <div class="text-[10px] text-slate-400 mt-1">Cuentas cargadas en Tesorería → Bancos del banco elegido (cheques propios).</div>
+        </div>
         <div><label class="label">Fecha emisión *</label><input id="f-fe" type="date" class="input" value="${it.fechaEmision?String(it.fechaEmision).slice(0,10):new Date().toISOString().slice(0,10)}"/></div>
         <div><label class="label">Fecha pago *</label><input id="f-fp" type="date" class="input" value="${it.fechaPago?String(it.fechaPago).slice(0,10):''}"/></div>
         <div><label class="label">Monto *</label><input id="f-mon" type="number" step="0.01" class="input" value="${it.monto||''}"/></div>
@@ -10025,6 +10074,7 @@ function chqForm(id=null) {
         <div><label class="label">CUIT del titular</label><input id="f-cuit" class="input" value="${esc(it.cuitTitular||'')}" placeholder="20-12345678-9"/></div>
         <div><label class="label">Endosante (de quién vino)</label><input id="f-endo" class="input" value="${esc(it.endosante||'')}" placeholder="Quién nos lo entregó / endosó"/></div>
         <div><label class="label">Fecha de recepción</label><input id="f-frec" type="date" class="input" value="${it.fechaRecepcion?String(it.fechaRecepcion).slice(0,10):''}"/></div>
+        <div><label class="label">Fecha de endoso / entrega</label><input id="f-fendo" type="date" class="input" value="${it.fechaEndoso?String(it.fechaEndoso).slice(0,10):''}"/><div class="text-[10px] text-slate-400 mt-1">Cuándo salió de cartera (endoso/entrega/depósito). Se completa sola al pagar con el cheque.</div></div>
         <div class="col-span-2"><label class="label">En poder de (cheque físico)</label>
           <input id="f-poder" class="input" list="f-poder-list" value="${esc(it.enPoderDe||'')}" placeholder="Caja oficina, Luciano, Lucas, Flor..."/>
           <datalist id="f-poder-list">${chqPoderOpciones().map(o=>`<option value="${esc(o)}">`).join('')}</datalist>
@@ -10060,6 +10110,7 @@ async function chqSave(id) {
     cuitTitular: $('#f-cuit').value.trim()||null,
     endosante: $('#f-endo').value.trim()||null,
     fechaRecepcion: $('#f-frec').value ? new Date($('#f-frec').value).toISOString() : null,
+    fechaEndoso: $('#f-fendo')?.value ? new Date($('#f-fendo').value).toISOString() : null,
     enPoderDe: $('#f-poder').value.trim()||null,
     observaciones: $('#f-obs').value.trim()||null,
   };
