@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.7.0';
+const AGROCORE_VERSION = '1.8.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1781,6 +1781,8 @@ mountCrud({
 app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     const depositoId = req.query.depositoId || null;
+    // Aseguramos que cada categoría de animal tenga su producto, para verlos todos en Stock.
+    try { await sincronizarProductosHacienda(req.companyId); } catch {}
     const productos = await prisma.producto.findMany({
       where: { companyId: req.companyId, activo: true },
       orderBy: { nombre: 'asc' },
@@ -3792,6 +3794,41 @@ app.put('/api/hacienda-movimientos/:id/rendimiento', requireCompany, requirePerm
   } catch (e) { next(e); }
 });
 
+// Edición general de un movimiento de hacienda (campos seguros). Para movimientos
+// "compuestos" (traslado, cambio de categoría) o ventas con cobro/factura, se pide
+// borrar y volver a cargar para no descuadrar dinero/contrapartes.
+app.put('/api/hacienda-movimientos/:id', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.haciendaMovimiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    if (['traslado_in', 'traslado_out', 'cambio_categoria'].includes(existing.tipo))
+      return res.status(400).json({ ok: false, error: 'Los traslados y cambios de categoría no se editan: borralo y volvé a cargarlo.' });
+    if (existing.facturaRef)
+      return res.status(400).json({ ok: false, error: 'Este movimiento vino de una factura. Editá la factura para cambiarlo.' });
+    if (existing.tipo === 'venta')
+      return res.status(400).json({ ok: false, error: 'Las ventas se ajustan desde su flujo (rendimiento) o se borran y recargan.' });
+    const d = z.object({
+      campoId: z.string().optional(),
+      categoria: z.string().min(1).optional(),
+      fecha: z.coerce.date().optional(),
+      cantidad: z.number().optional(),
+      kilos: z.number().nonnegative().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body || {});
+    if (d.cantidad != null && existing.tipo !== 'ajuste' && d.cantidad <= 0)
+      return res.status(400).json({ ok: false, error: 'La cantidad debe ser positiva' });
+    const row = await prisma.haciendaMovimiento.update({ where: { id: existing.id }, data: {
+      campoId: d.campoId ?? existing.campoId,
+      categoria: d.categoria ?? existing.categoria,
+      fecha: d.fecha ?? existing.fecha,
+      cantidad: d.cantidad != null ? Math.round(d.cantidad) : existing.cantidad,
+      kilos: d.kilos !== undefined ? d.kilos : existing.kilos,
+      observaciones: d.observaciones !== undefined ? d.observaciones : existing.observaciones,
+    } });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
 app.delete('/api/hacienda-movimientos/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
   try {
     const existing = await prisma.haciendaMovimiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
@@ -3897,6 +3934,61 @@ async function seedCategoriasHacienda(companyId) {
     await prisma.categoriaHaciendaConfig.create({ data: { ...c, companyId } });
   }
 }
+// Une las "Categorías de animales" del Catálogo (tipo 'Categoría animal') dentro
+// de la config de hacienda, para que TODAS las especies/categorías estén en un
+// solo lugar y aparezcan en movimientos, stock y proyección. Idempotente.
+async function mergeCatalogoAnimalesEnConfig(companyId) {
+  const cats = await prisma.catalogo.findMany({
+    where: { companyId, tipo: { in: ['Categoría animal', 'Categoria animal'] }, activo: true },
+  });
+  if (!cats.length) return;
+  const existentes = new Set((await prisma.categoriaHaciendaConfig.findMany({
+    where: { companyId }, select: { nombre: true },
+  })).map(c => (c.nombre || '').toLowerCase()));
+  for (const c of cats) {
+    const nombre = (c.nombre || '').trim();
+    if (!nombre || existentes.has(nombre.toLowerCase())) continue;
+    try {
+      await prisma.categoriaHaciendaConfig.create({ data: {
+        companyId, nombre, especie: (c.descripcion || '').trim() || 'Otro',
+        transiciones: [], orden: 99,
+      } });
+      existentes.add(nombre.toLowerCase());
+    } catch (e) { /* carrera / único: ignorar */ }
+  }
+}
+// Asegura que cada categoría de hacienda tenga un Producto del catálogo
+// (categoria='hacienda', unidad='cabezas') para unificarse en Stock/Movimientos.
+// Si ya hay un producto con el mismo nombre pero sin vincular, lo vincula.
+async function sincronizarProductosHacienda(companyId) {
+  const cats = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId, activo: true } });
+  if (!cats.length) return;
+  const prods = await prisma.producto.findMany({
+    where: { companyId, categoria: 'hacienda' },
+    select: { id: true, nombre: true, categoriaHacienda: true },
+  });
+  const byCatHac = new Set(prods.filter(p => p.categoriaHacienda).map(p => p.categoriaHacienda.toLowerCase()));
+  const byNombre = new Map(prods.map(p => [(p.nombre || '').toLowerCase(), p]));
+  for (const c of cats) {
+    const nombre = (c.nombre || '').trim();
+    if (!nombre || byCatHac.has(nombre.toLowerCase())) continue;
+    const nombreFull = `${(c.especie || '').trim()}${c.especie ? ' - ' : ''}${nombre}`;
+    // ¿Existe un producto homónimo sin vincular? -> vincularlo.
+    const match = byNombre.get(nombre.toLowerCase()) || byNombre.get(nombreFull.toLowerCase());
+    if (match) {
+      if (!match.categoriaHacienda) {
+        await prisma.producto.update({ where: { id: match.id }, data: { categoriaHacienda: nombre } });
+      }
+      byCatHac.add(nombre.toLowerCase());
+      continue;
+    }
+    await prisma.producto.create({ data: {
+      companyId, categoria: 'hacienda', nombre: nombreFull, unidad: 'cabezas',
+      stockMinimo: 0, categoriaHacienda: nombre, activo: true,
+    } });
+    byCatHac.add(nombre.toLowerCase());
+  }
+}
 const catHaciendaSchema = z.object({
   especie: z.string().min(1),
   nombre: z.string().min(1),
@@ -3911,7 +4003,9 @@ const catHaciendaSchema = z.object({
 app.get('/api/categorias-hacienda', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     await seedCategoriasHacienda(req.companyId);
-    const data = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { nombre: 'asc' }] });
+    await mergeCatalogoAnimalesEnConfig(req.companyId);
+    await sincronizarProductosHacienda(req.companyId);
+    const data = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { especie: 'asc' }, { nombre: 'asc' }] });
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });

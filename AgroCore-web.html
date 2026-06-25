@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'🐮 v1.8.0 — Animales unificados: una sola lista de categorías, productos y movimientos',
+      desc:'Unificación grande del manejo de animales. Las <b>especies y categorías</b> (todos los animales) se administran en un solo lugar: <b>Catálogo → Categorías de animales</b>, con especie, rango de kg, peso promedio y a qué categoría puede pasar (matriz). Cada categoría es además un <b>producto</b> usado en todo el sistema: se crea automáticamente y aparece en <b>Stock</b> con sus <b>cabezas + kg</b> reales. Los <b>movimientos de animales</b> (nacimiento, muerte, traslado, cambio de categoría, ajuste) ahora también se ven en <b>Movimientos de Stock</b> como un producto más, y se pueden <b>ver, editar y borrar</b> desde ahí o desde Hacienda. El módulo <b>Hacienda</b> queda como la vista por campo (declarado SENASA vs real) y sigue permitiendo cargar movimientos por campo. El selector de categoría en los movimientos ahora muestra <b>todas las especies y categorías</b> agrupadas.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'📦 v1.7.0 — Stock de hacienda unificado en el módulo Stock (nutrido por los movimientos)',
       desc:'El módulo <b>Stock</b> ahora muestra la existencia real de los productos de hacienda: las <b>cabezas y los kg</b> salen de los <b>movimientos de hacienda</b> (nacimientos, muertes, compras/ventas por factura, cambios de categoría, traslados), no del stock de producto. Para que calce, en cada producto con categoría <b>hacienda</b> se elige a qué <b>categoría de hacienda</b> corresponde (campo nuevo "🐄 Categoría de hacienda" en el alta/edición del producto). Los productos de hacienda sin vincular muestran un aviso <b>"⚠ sin vincular"</b>. En la fila de Stock, en vez de entrada/salida de producto, aparece un acceso directo a <b>🐄 Hacienda</b> para gestionarlos donde corresponde.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
@@ -5331,12 +5334,40 @@ pages.movimientos = async function() {
   setHeader('Movimientos', 'Entradas y salidas de stock');
   if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('movimientos','Movimientos'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let rows=[], prods=[], depositos=[];
+  let rows=[], prods=[], depositos=[], hacMovs=[], campos=[];
   try {
-    const [r, p, d] = await Promise.all([api('/api/movimientos'), api('/api/productos'), api('/api/depositos')]);
+    const [r, p, d, h, c] = await Promise.all([
+      api('/api/movimientos'), api('/api/productos'), api('/api/depositos'),
+      api('/api/hacienda-movimientos').catch(()=>({data:[]})),
+      api('/api/campos').catch(()=>({data:[]})),
+    ]);
     rows = r.data||[]; prods = p.data||[]; state.cache.productos = prods;
     depositos = d.data || []; state.cache.depositos = depositos;
+    hacMovs = h.data || []; campos = c.data || []; state.cache.campos = campos;
   } catch (e) { return toast(e.message,'error'); }
+  // Unificamos: los movimientos de animales se muestran como un producto más.
+  const _prodByCatHac = {}; prods.forEach(p=>{ if(p.categoriaHacienda) _prodByCatHac[p.categoriaHacienda]=p; });
+  const _campoById = {}; campos.forEach(c=>{ _campoById[c.id]=c.nombre; });
+  const _HAC_LBL = { nacimiento:'Nacimiento', muerte:'Muerte', compra:'Compra', venta:'Venta', traslado_in:'Traslado (entra)', traslado_out:'Traslado (sale)', ajuste:'Ajuste', conteo:'Conteo', cambio_categoria:'Cambio de categoría' };
+  const _hacRows = hacMovs.map(m => {
+    const prod = _prodByCatHac[m.categoria];
+    let tipo;
+    if (m.tipo==='cambio_categoria') tipo='egreso';
+    else if (m.tipo==='ajuste') tipo = Number(m.cantidad||0)>=0 ? 'ingreso':'egreso';
+    else tipo = ['nacimiento','compra','traslado_in'].includes(m.tipo) ? 'ingreso' : 'egreso';
+    let motivo = _HAC_LBL[m.tipo]||m.tipo;
+    if (m.tipo==='cambio_categoria' && m.categoriaDestino) motivo = `${m.categoria} → ${m.categoriaDestino}`;
+    return {
+      id:'hac-'+m.id, _hac:true, _hacId:m.id, _hacTipo:m.tipo,
+      fecha:m.fecha, productoId: prod?.id || null,
+      producto: { nombre: prod?.nombre || m.categoria, unidad:'cabezas', categoria:'hacienda' },
+      tipo, motivo, cantidad: Math.abs(Number(m.cantidad||0)), kilos: m.kilos,
+      precio: m.precioKg||null, total: m.total||null, referencia: m.facturaRef||'',
+      depositoId:null, deposito: _campoById[m.campoId] ? { nombre:'🐄 '+_campoById[m.campoId] } : null,
+      user:null,
+    };
+  });
+  rows = rows.concat(_hacRows).sort((a,b)=> String(b.fecha||'').localeCompare(String(a.fecha||'')));
   state.movFilter = state.movFilter || { q:'', cat:'', tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
   const cats = [...new Set(prods.map(p=>p.categoria).filter(Boolean))].sort();
   const motivos = [...new Set(rows.map(m=>m.motivo).filter(Boolean))].sort();
@@ -5349,8 +5380,8 @@ pages.movimientos = async function() {
     const filtered = rows.filter(m => {
       if (f.tipo && m.tipo !== f.tipo) return false;
       if (f.cat) {
-        const p = prods.find(x=>x.id===m.productoId);
-        if (!p || p.categoria !== f.cat) return false;
+        const pcat = m._hac ? 'hacienda' : (prods.find(x=>x.id===m.productoId)?.categoria);
+        if (pcat !== f.cat) return false;
       }
       if (f.motivo && m.motivo !== f.motivo) return false;
       if (f.desde && (m.fecha||'') < f.desde) return false;
@@ -5384,7 +5415,7 @@ pages.movimientos = async function() {
         <thead><tr>
           <th>Fecha</th><th>Producto</th><th>Depósito</th>${filtroEsCompartido?'<th>Empresa</th>':''}<th>Tipo</th><th>Motivo</th>
           <th class="text-right">Cantidad</th><th class="text-right">Precio</th>
-          <th class="text-right">Total</th><th>Referencia</th><th>Cargado por</th>
+          <th class="text-right">Total</th><th>Referencia</th><th>Cargado por</th><th></th>
         </tr></thead>
         <tbody>
           ${filtered.map(m => {
@@ -5410,20 +5441,25 @@ pages.movimientos = async function() {
             const empCell = filtroEsCompartido
               ? `<td><span class="text-xs text-slate-700">${esc(empresasMap[m.companyId] || '—')}</span></td>`
               : '';
+            const catBadge = m.producto?.categoria || p?.categoria;
+            const actCell = m._hac
+              ? `<td class="text-right whitespace-nowrap">${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='hacMovEditar(${JSON.stringify(m._hacId)},"mov")'>✏️</button>`:''}${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar movimiento" onclick='hacMovDel(${JSON.stringify(m._hacId)},"mov")'>🗑️</button>`:''}</td>`
+              : `<td class="text-center text-slate-300 text-xs">—</td>`;
             return `<tr class="table-row">
               <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
-              <td>${esc(m.producto?.nombre || p?.nombre || '—')}${p?.categoria?` <span class="badge badge-blue text-[10px] ml-1">${esc(p.categoria)}</span>`:''}</td>
+              <td>${esc(m.producto?.nombre || p?.nombre || '—')}${catBadge?` <span class="badge badge-blue text-[10px] ml-1">${esc(catBadge)}</span>`:''}</td>
               <td>${depCell}</td>
               ${empCell}
               <td>${esIng?'<span class="badge badge-green">Ingreso</span>':'<span class="badge badge-red">Egreso</span>'}</td>
               <td>${esc(m.motivo||'—')}</td>
-              <td class="text-right font-semibold ${esIng?'text-emerald-700':'text-red-700'}">${esIng?'+':'-'}${fmtN(m.cantidad)} ${esc(m.producto?.unidad||p?.unidad||'')}</td>
+              <td class="text-right font-semibold ${esIng?'text-emerald-700':'text-red-700'}">${esIng?'+':'-'}${fmtN(m.cantidad)} ${esc(m.producto?.unidad||p?.unidad||'')}${m._hac&&m.kilos?` <span class="text-[10px] text-slate-500 font-normal">(${fmtN(m.kilos)} kg)</span>`:''}</td>
               <td class="text-right text-xs">${m.precio?fmt$(m.precio):'—'}</td>
               <td class="text-right font-semibold">${m.total?fmt$(m.total):'—'}</td>
               <td>${refCell}</td>
               <td>${usrCell}</td>
+              ${actCell}
             </tr>`;
-          }).join('') || `<tr><td colspan="${filtroEsCompartido?11:10}" class="text-center text-slate-400 py-8">${rows.length?'Sin coincidencias con los filtros':'Sin movimientos'}</td></tr>`}
+          }).join('') || `<tr><td colspan="${filtroEsCompartido?12:11}" class="text-center text-slate-400 py-8">${rows.length?'Sin coincidencias con los filtros':'Sin movimientos'}</td></tr>`}
         </tbody>
       </table>`;
   };
@@ -5456,6 +5492,7 @@ pages.movimientos = async function() {
         <div><label class="label">Hasta</label><input id="mv-hasta" type="date" class="input" value="${state.movFilter.hasta}"/></div>
         <div class="flex gap-2">
           <button class="btn btn-secondary flex-1" onclick="movFiltrosLimpiar()">Limpiar</button>
+          ${can('stock:create') ? `<button class="btn btn-secondary flex-1" onclick="hacMovForm(null,null,'mov')" title="Nacimiento, muerte, traslado, cambio de categoría o ajuste de animales">🐄 Animales</button>` : ''}
           ${can('stock:create') ? `<button class="btn btn-primary flex-1" onclick="movForm()">+ Nuevo</button>` : ''}
         </div>
       </div>
@@ -10103,7 +10140,7 @@ pages.hacienda = async function() {
       <p class="text-xs text-slate-500 max-w-2xl">💡 El <b>real</b> se calcula sumando los movimientos. El <b>declarado</b> es lo de ARCA / SENASA (cabezas). Los <b>kg</b> salen del peso promedio por categoría/campo.</p>
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="hacProyeccion()" title="Estado de situación y proyección de kg para presentar al banco">📈 Proyección</button>
-        ${canU?`<button class="btn btn-secondary" onclick="hacCatManager()" title="Configurar categorías: especie, rango de kg y a qué categoría puede pasar">⚙️ Categorías</button>`:''}
+        ${canU?`<button class="btn btn-secondary" onclick="state.catTab='categAn';go('catalogos')" title="Las categorías de animales se configuran en Catálogo (especie, rango de kg, peso y a qué categoría puede pasar)">⚙️ Categorías (Catálogo)</button>`:''}
         ${canC?`<button class="btn btn-secondary" onclick="hacVincularFactura()" title="Vincular una factura ya cargada que no movió el stock de hacienda">🔗 Vincular factura</button>`:''}
         ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
       </div>
@@ -10190,7 +10227,7 @@ pages.hacienda = async function() {
                 <td>${hacTipoLabel(m.tipo)}</td>
                 <td class="text-right font-semibold ${color}">${txt}</td>
                 <td class="text-slate-500 text-xs">${esc(m.observaciones||'')}</td>
-                <td class="text-right">${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='hacMovDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}</td>
+                <td class="text-right whitespace-nowrap">${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='hacMovEditar(${JSON.stringify(m.id)},"hacienda")'>✏️</button>`:''}${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='hacMovDel(${JSON.stringify(m.id)},"hacienda")'>🗑️</button>`:''}</td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -10275,8 +10312,13 @@ async function hacDeclaradoSave(campoId, categoria) {
   } catch(e) { toast(e.message,'error'); }
 }
 
-function hacMovForm(campoIdInit=null, categoriaInit=null) {
-  const campos = (state.cache.haciendaResumen?.campos)||[];
+function _hacRefresh(){ if (state._hacCtx==='mov' && pages.movimientos) pages.movimientos(); else pages.hacienda(); }
+async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') {
+  state._hacCtx = ctx;
+  if (!state.cache.catHacienda || !state.cache.catHacienda.length) { try { state.cache.catHacienda=(await api('/api/categorias-hacienda')).data||[]; } catch {} }
+  let campos = (state.cache.haciendaResumen?.campos)||[];
+  if ((!campos || !campos.length) && state.cache.campos) campos = state.cache.campos;
+  if (!campos || !campos.length) { try { campos = state.cache.campos = (await api('/api/campos')).data||[]; } catch {} }
   const todasCategorias = hacCategoriasDisponibles();
   openModal({
     title: 'Nuevo movimiento de hacienda',
@@ -10299,8 +10341,9 @@ function hacMovForm(campoIdInit=null, categoriaInit=null) {
           <select id="h-campodest" class="input">${campos.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
         </div>
         <div class="col-span-2"><label class="label">Categoría *</label>
-          <input id="h-cat" class="input" list="h-cat-list2" value="${esc(categoriaInit||'')}" placeholder="Ej: Terneros" onchange="hacMovDestRefresh()"/>
-          <datalist id="h-cat-list2">${todasCategorias.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+          ${(()=>{ const cfgs=(state.cache.catHacienda||[]).filter(c=>c.activo!==false); const grupos={}; cfgs.forEach(c=>{ (grupos[c.especie||'Otros']=grupos[c.especie||'Otros']||[]).push(c.nombre); }); const tieneGrupos=Object.keys(grupos).length>0; return tieneGrupos
+            ? `<select id="h-cat" class="input" onchange="hacMovDestRefresh()"><option value="">— elegir —</option>${Object.entries(grupos).sort((a,b)=>a[0].localeCompare(b[0])).map(([esp,arr])=>`<optgroup label="${esc(esp)}">${arr.sort((x,y)=>x.localeCompare(y,'es')).map(n=>`<option value="${esc(n)}" ${n===categoriaInit?'selected':''}>${esc(n)}</option>`).join('')}</optgroup>`).join('')}</select>`
+            : `<input id="h-cat" class="input" list="h-cat-list2" value="${esc(categoriaInit||'')}" placeholder="Ej: Ternero" onchange="hacMovDestRefresh()"/><datalist id="h-cat-list2">${todasCategorias.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`; })()}
         </div>
         <div class="col-span-2" id="h-catdest-wrap" style="display:none"><label class="label">Pasa a la categoría *</label>
           <select id="h-catdest" class="input"><option value="">— elegir —</option></select>
@@ -10431,16 +10474,68 @@ async function hacMovSave() {
     await api('/api/hacienda-movimientos',{method:'POST',body:JSON.stringify(data)});
     toast('Movimiento registrado','success'); closeModal();
     delete state.cache.haciendaResumen; delete state.cache.haciendaMovs;
-    pages.hacienda();
+    _hacRefresh();
   } catch(e) { toast(e.message,'error'); }
 }
-async function hacMovDel(id) {
-  if (!confirm('¿Borrar este movimiento de hacienda? El stock real se va a recalcular.')) return;
+async function hacMovDel(id, ctx) {
+  if (ctx) state._hacCtx = ctx;
+  if (!confirm('¿Borrar este movimiento de animales? El stock real se va a recalcular.')) return;
   try {
     await api('/api/hacienda-movimientos/'+id,{method:'DELETE'});
     toast('Borrado','success');
     delete state.cache.haciendaResumen; delete state.cache.haciendaMovs;
-    pages.hacienda();
+    _hacRefresh();
+  } catch(e) { toast(e.message,'error'); }
+}
+// Edición de un movimiento de animales (campos seguros). Para traslados/cambios de
+// categoría/ventas/facturas el backend rechaza y se muestra el motivo.
+async function hacMovEditar(id, ctx='hacienda') {
+  state._hacCtx = ctx;
+  let mov = (state.cache.haciendaMovs||[]).find(x=>x.id===id);
+  if (!mov) { try { const r = await api('/api/hacienda-movimientos'); state.cache.haciendaMovs=r.data||[]; mov=(r.data||[]).find(x=>x.id===id); } catch {} }
+  if (!mov) return toast('No se encontró el movimiento','error');
+  if (['traslado_in','traslado_out','cambio_categoria'].includes(mov.tipo))
+    return toast('Los traslados y cambios de categoría no se editan: borralos y volvé a cargarlos.','warn');
+  if (mov.facturaRef) return toast('Este movimiento vino de una factura. Editá la factura.','warn');
+  if (mov.tipo==='venta') return toast('Las ventas se ajustan desde su flujo o se borran y recargan.','warn');
+  let campos = (state.cache.haciendaResumen?.campos)||state.cache.campos||[];
+  openModal({
+    title:'Editar movimiento de animales', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha *</label><input id="he-fec" type="date" class="input" value="${(mov.fecha||'').slice(0,10)}"/></div>
+        <div><label class="label">Campo *</label>
+          <select id="he-campo" class="input">${campos.map(c=>`<option value="${c.id}" ${c.id===mov.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select>
+        </div>
+        <div class="col-span-2"><label class="label">Categoría *</label>
+          <input id="he-cat" class="input" list="he-cat-list" value="${esc(mov.categoria||'')}"/>
+          <datalist id="he-cat-list">${hacCategoriasDisponibles().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+        </div>
+        <div><label class="label">Cantidad (cabezas) *</label><input id="he-cant" type="number" step="1" class="input" value="${mov.cantidad??''}"/></div>
+        <div><label class="label">Kilos (balanza)</label><input id="he-kg" type="number" step="0.1" min="0" class="input" value="${mov.kilos??''}"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="he-obs" class="input" rows="2">${esc(mov.observaciones||'')}</textarea></div>
+        ${mov.tipo==='ajuste'?'<div class="col-span-2 text-[11px] text-amber-700">En ajuste podés poner cantidad negativa.</div>':''}
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="hacMovEditarSave('${id}')">💾 Guardar</button>`
+  });
+}
+async function hacMovEditarSave(id) {
+  const data = {
+    campoId: $('#he-campo').value,
+    categoria: $('#he-cat').value.trim(),
+    fecha: new Date($('#he-fec').value).toISOString(),
+    cantidad: Number($('#he-cant').value||0),
+    kilos: $('#he-kg').value ? Number($('#he-kg').value) : null,
+    observaciones: $('#he-obs').value.trim()||null,
+  };
+  if (!data.campoId) return toast('Elegí el campo','warn');
+  if (!data.categoria) return toast('Categoría requerida','warn');
+  try {
+    await api('/api/hacienda-movimientos/'+id,{method:'PUT',body:JSON.stringify(data)});
+    toast('Actualizado','success'); closeModal();
+    delete state.cache.haciendaResumen; delete state.cache.haciendaMovs;
+    _hacRefresh();
   } catch(e) { toast(e.message,'error'); }
 }
 // ----- Configuración de categorías de hacienda (especie, kg, transiciones) -----
@@ -10471,17 +10566,19 @@ async function hacCatManager(){
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
   });
 }
-function hacCatForm(id=null){
+function hacCatForm(id=null, fromCatalogo=false){
   const it = id ? (state.cache.catHacienda||[]).find(x=>x.id===id)||{} : {};
   const todas = (state.cache.catHacienda||[]).map(c=>c.nombre).filter(n=>n && n!==it.nombre);
   const trans = Array.isArray(it.transiciones)?it.transiciones:[];
+  const especiesCat = (typeof catByTipo==='function'?catByTipo('Especie'):[]).map(x=>x.nombre).filter(Boolean);
+  const especies = [...new Set(especiesCat.concat((state.cache.catHacienda||[]).map(c=>c.especie).filter(Boolean)).concat(['Bovino','Porcino','Ovino','Equino','Caprino']))];
   openModal({
-    title: id?'Editar categoría':'Nueva categoría de hacienda', size:'max-w-lg',
+    title: id?'Editar categoría de animal':'Nueva categoría de animal', size:'max-w-lg',
     body:`
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Nombre *</label><input id="hc-nom" class="input" value="${esc(it.nombre||'')}" placeholder="Ej: Novillito"/></div>
-        <div><label class="label">Especie *</label><input id="hc-esp" class="input" list="hc-esp-list" value="${esc(it.especie||'')}" placeholder="Bovino / Porcino..."/>
-          <datalist id="hc-esp-list">${[...new Set((state.cache.catHacienda||[]).map(c=>c.especie).filter(Boolean).concat(['Bovino','Porcino','Ovino','Equino','Caprino']))].map(e=>`<option value="${esc(e)}">`).join('')}</datalist>
+        <div><label class="label">Especie *</label>
+          <select id="hc-esp" class="input">${especies.map(e=>`<option value="${esc(e)}" ${e===(it.especie||'')?'selected':''}>${esc(e)}</option>`).join('')}<option value="${esc(it.especie||'')}" ${especies.includes(it.especie)?'style="display:none"':''} ${it.especie&&!especies.includes(it.especie)?'selected':''}>${esc(it.especie||'')}</option></select>
         </div>
         <div><label class="label">Kg mínimo</label><input id="hc-kgmin" type="number" step="0.1" class="input" value="${it.kgMin??''}"/></div>
         <div><label class="label">Kg máximo</label><input id="hc-kgmax" type="number" step="0.1" class="input" value="${it.kgMax??''}"/></div>
@@ -10493,10 +10590,11 @@ function hacCatForm(id=null){
         </div>
       </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick="hacCatSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
+            <button class="btn btn-primary" onclick="hacCatSave(${id?`'${id}'`:'null'},${fromCatalogo?'true':'false'})">💾 Guardar</button>`
   });
 }
-async function hacCatSave(id){
+function _hacCatRefresh(fromCatalogo){ if (fromCatalogo && pages.catalogos) pages.catalogos(); else hacCatManager(); }
+async function hacCatSave(id, fromCatalogo=false){
   const data = {
     nombre: $('#hc-nom').value.trim(),
     especie: $('#hc-esp').value.trim(),
@@ -10508,12 +10606,12 @@ async function hacCatSave(id){
   };
   if (!data.nombre)  return toast('Falta el nombre','warn');
   if (!data.especie) return toast('Falta la especie','warn');
-  try{ await api('/api/categorias-hacienda'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)}); delete state.cache.catHacienda; toast('Guardado','success'); hacCatManager(); }
+  try{ await api('/api/categorias-hacienda'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)}); delete state.cache.catHacienda; delete state.cache.productos; toast('Guardado','success'); _hacCatRefresh(fromCatalogo); }
   catch(e){ toast(e.message,'error'); }
 }
-async function hacCatDel(id){
-  if(!confirm('¿Eliminar esta categoría de la configuración? El stock y los movimientos ya cargados no se modifican.')) return;
-  try{ await api('/api/categorias-hacienda/'+id,{method:'DELETE'}); delete state.cache.catHacienda; toast('Eliminada','success'); hacCatManager(); }
+async function hacCatDel(id, fromCatalogo=false){
+  if(!confirm('¿Eliminar esta categoría? El stock y los movimientos ya cargados no se modifican (el producto asociado queda, podés desactivarlo en Stock).')) return;
+  try{ await api('/api/categorias-hacienda/'+id,{method:'DELETE'}); delete state.cache.catHacienda; toast('Eliminada','success'); _hacCatRefresh(fromCatalogo); }
   catch(e){ toast(e.message,'error'); }
 }
 
@@ -15514,15 +15612,26 @@ pages.catalogos = async function() {
   let rows=[];
   try { rows = await crudList('catalogos'); } catch (e) { return toast(e.message,'error'); }
 
+  // "Categorías de animales" se gestiona con la config unificada de hacienda
+  // (especie + kg + peso + matriz). Al pedirla, el backend mergea el catálogo y
+  // sincroniza los productos de hacienda.
+  let configAnimales=[];
+  try { configAnimales=(await api('/api/categorias-hacienda')).data||[]; state.cache.catHacienda=configAnimales; } catch {}
+
   const porTab = {};
   CAT_TABS.forEach(t => { porTab[t.id] = rows.filter(r => t.tipos.includes(r.tipo)); });
+  porTab.categAn = configAnimales;
 
   const tab = CAT_TABS.find(x=>x.id===state.catTab) || CAT_TABS[0];
-  const items = porTab[tab.id].sort((a,b)=> (a.nombre||'').localeCompare(b.nombre||''));
+  const esAnimales = tab.id==='categAn';
+  const items = esAnimales
+    ? configAnimales.slice().sort((a,b)=> (a.especie||'').localeCompare(b.especie||'') || (a.nombre||'').localeCompare(b.nombre||''))
+    : porTab[tab.id].sort((a,b)=> (a.nombre||'').localeCompare(b.nombre||''));
 
   // Dentro de una pestaña agrupamos por tipo real (útil en "Insumos" donde hay varios)
   const subgrupos = {};
-  items.forEach(i => { (subgrupos[i.tipo] = subgrupos[i.tipo] || []).push(i); });
+  if (esAnimales) items.forEach(i => { (subgrupos[i.especie||'Otros'] = subgrupos[i.especie||'Otros'] || []).push(i); });
+  else items.forEach(i => { (subgrupos[i.tipo] = subgrupos[i.tipo] || []).push(i); });
 
   // Sidebar vertical (desktop) + select desplegable (mobile)
   const sideHtml = CAT_TABS.map(t => {
@@ -15601,10 +15710,38 @@ pages.catalogos = async function() {
             <div class="text-[11px] md:text-xs text-slate-600">${items.length} ${items.length===1?'ítem cargado':'ítems cargados'} · disponibles en todo el sistema</div>
           </div>
           ${can('catalogos:create')||can('produccion:create')
-            ? `<button class="btn btn-primary text-sm whitespace-nowrap" onclick='catForm(null,"${tab.id}")'>+ Nuevo ${esc(tab.singular)}</button>` : ''}
+            ? `<button class="btn btn-primary text-sm whitespace-nowrap" onclick='${esAnimales?'hacCatForm(null,true)':`catForm(null,"${tab.id}")`}'>+ Nuevo ${esc(tab.singular)}</button>` : ''}
         </div>
 
-        ${items.length===0
+        ${esAnimales ? `
+          <div class="text-[11px] text-slate-500 mb-2">Cada categoría de animal es un <b>producto</b> usado en todo el sistema (Stock y Movimientos), con manejo de <b>cabezas + kg</b>. La especie, el rango de kg, el peso promedio y a qué categoría puede pasar se definen acá.</div>
+          ${items.length===0
+            ? `<div class="stub-card">No hay categorías de animales todavía. Usá "+ Nuevo" para crear una.</div>`
+            : Object.entries(subgrupos).map(([especie, arr]) => `
+              <div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-3">${esc(especie)} · ${arr.length}</div>
+              <div class="kpi p-0 overflow-hidden mb-3">
+                <table class="data">
+                  <thead><tr>
+                    <th>Categoría</th><th>Rango kg</th><th class="text-right">Peso prom.</th>
+                    <th>Puede pasar a</th><th>Estado</th><th></th>
+                  </tr></thead>
+                  <tbody>
+                    ${arr.map(c => `
+                      <tr class="table-row">
+                        <td class="font-semibold text-slate-800">${esc(c.nombre)}</td>
+                        <td class="text-slate-600">${(c.kgMin!=null||c.kgMax!=null)?`${c.kgMin??'?'}–${c.kgMax??'?'} kg`:'—'}</td>
+                        <td class="text-right text-slate-600">${c.pesoPromedio!=null?fmtN(c.pesoPromedio)+' kg':'—'}</td>
+                        <td class="text-slate-500 text-[11px]">${Array.isArray(c.transiciones)&&c.transiciones.length?esc(c.transiciones.join(' › ')):'—'}</td>
+                        <td>${c.activo===false?'<span class="badge badge-gray">Inactivo</span>':'<span class="badge badge-green">Activo</span>'}</td>
+                        <td class="text-right whitespace-nowrap">
+                          ${can('stock:update')?`<button class="btn btn-ghost text-xs" onclick='hacCatForm(${JSON.stringify(c.id)},true)'>✏️</button>`:''}
+                          ${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='hacCatDel(${JSON.stringify(c.id)},true)'>🗑️</button>`:''}
+                        </td>
+                      </tr>`).join('')}
+                  </tbody>
+                </table>
+              </div>`).join('')}
+        ` : items.length===0
           ? `<div class="stub-card">No hay elementos en <b>${esc(tab.label)}</b> todavía. Usá "+ Nuevo" para crear uno.</div>`
           : Object.entries(subgrupos).map(([tipo, arr]) => `
               ${Object.keys(subgrupos).length > 1 ? `<div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-3">${esc(tipo)} · ${arr.length}</div>` : ''}
