@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.12.0';
+const AGROCORE_VERSION = '1.13.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2077,6 +2077,7 @@ mountCrud({
     tipoExplotacion: z.enum(['agricola','ganadera','mixta']).nullable().optional(),
     geolocalizacion: z.string().nullable().optional(),
     observaciones: z.string().nullable().optional(),
+    esDeposito: z.boolean().optional(),
     activo: z.boolean().optional(),
   }),
   orderBy: { nombre: 'asc' },
@@ -4295,8 +4296,37 @@ function _depositoWhere(req) {
   ] };
 }
 
+// Asegura que cada campo marcado "es depósito" (o con hacienda cargada) tenga su
+// Deposito tipo='campo' vinculado. Migra los campos existentes con hacienda. Idempotente.
+async function reconciliarCamposDeposito(companyId) {
+  // Campos con hacienda (stock o movimientos) -> deberían ser depósito.
+  const [stk, mov] = await Promise.all([
+    prisma.haciendaStock.findMany({ where: { companyId }, select: { campoId: true } }),
+    prisma.haciendaMovimiento.findMany({ where: { companyId }, select: { campoId: true } }),
+  ]);
+  const conHacienda = new Set([...stk, ...mov].map(x => x.campoId).filter(Boolean));
+  const campos = await prisma.campo.findMany({ where: { companyId, activo: true } });
+  const deps = await prisma.deposito.findMany({ where: { companyId, campoId: { not: null } }, select: { campoId: true } });
+  const yaDeposito = new Set(deps.map(d => d.campoId));
+  for (const c of campos) {
+    const debeSer = c.esDeposito || conHacienda.has(c.id);
+    if (!debeSer) continue;
+    if (!c.esDeposito) { try { await prisma.campo.update({ where: { id: c.id }, data: { esDeposito: true } }); } catch {} }
+    if (yaDeposito.has(c.id)) continue;
+    try {
+      await prisma.deposito.create({ data: {
+        companyId, compartido: false, nombre: c.nombre, tipo: 'campo', campoId: c.id,
+        localidad: c.localidad || null, provincia: c.provincia || null,
+        observaciones: 'Depósito del campo ' + c.nombre,
+      } });
+      yaDeposito.add(c.id);
+    } catch (e) { /* carrera: ignorar */ }
+  }
+}
+
 app.get('/api/depositos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
+    try { await reconciliarCamposDeposito(req.companyId); } catch {}
     const data = await prisma.deposito.findMany({
       where: _depositoWhere(req),
       orderBy: [{ activo: 'desc' }, { nombre: 'asc' }],

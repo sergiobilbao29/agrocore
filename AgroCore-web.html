@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
+      titulo:'🩹 v1.13.0 — Fix Flujo de Fondos + créditos editar/eliminar + campos como depósitos',
+      desc:'Tres cosas: (1) <b>Se arregló el Flujo de Fondos</b> que quedaba "Cargando…" y no abría (un error de formato de moneda). (2) En <b>Créditos bancarios</b> ahora cada crédito tiene botones de <b>✏️ Editar y 🗑️ Eliminar</b> directo en la lista (antes estaban solo dentro del detalle). (3) Los <b>campos pueden funcionar como depósitos</b>: al crear/editar un campo hay un tilde <b>"Este campo funciona como depósito"</b> y, al guardarlo, se crea un depósito con el nombre del campo (aparece en Stock, Movimientos y Hacienda). Los campos que <b>ya tenían hacienda cargada</b> se convierten y vinculan automáticamente a su depósito.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'💱 v1.12.0 — Catálogo de monedas editable (crear monedas propias + auto-cotización)',
       desc:'Ahora podés <b>crear, editar y eliminar monedas propias</b> desde <b>Tesorería → Cotizaciones</b> (además de las predefinidas USD/EUR/granos). A cada moneda propia le ponés un <b>código</b>, un <b>nombre</b>, si es <b>moneda o grano</b>, y una <b>fuente de cotización automática</b> (dólar oficial/mayorista/blue/MEP/CCL/cripto/tarjeta o pizarra de soja/maíz/trigo/sorgo/girasol) — o la dejás en <b>manual</b> para cargarla a mano. Las monedas propias aparecen en toda la app: facturas de compra/venta, cuenta corriente, pagos/cobros y el flujo de fondos, y se actualizan solas cada día si tienen fuente automática.' },
@@ -5969,6 +5972,12 @@ function campoForm(id=null) {
           <div class="text-[10px] text-slate-500 mt-1">Si tu campo es mixto podés cargar 2 RENSPAs (uno agrícola y otro ganadero).</div>
         </div>
 
+        ${sectionHeader('📦','Depósito / Silo')}
+        <div class="col-span-2">
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="f-esdep" ${it.esDeposito?'checked':''}/> <span>Este campo <b>funciona como depósito</b> (silo / galpón propio)</span></label>
+          <div class="text-[11px] text-slate-500 mt-1">Al tildarlo, se crea un depósito con el nombre del campo: vas a poder usarlo para guardar granos/insumos y para los movimientos de animales por campo. Aparece en Stock, Movimientos y Hacienda.</div>
+        </div>
+
         ${sectionHeader('📝','Notas')}
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2" placeholder="Cualquier dato adicional del campo">${esc(it.observaciones||'')}</textarea></div>
 
@@ -5999,11 +6008,14 @@ async function campoSave(id) {
     localidad: $('#f-loc')?.value || null,
     provincia: $('#f-prov')?.value || null,
     observaciones: $('#f-obs')?.value.trim()||null,
+    esDeposito: $('#f-esdep')?.checked || false,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
   try { await api('/api/campos'+(id?'/'+id:''),{ method: id?'PUT':'POST', body: JSON.stringify(data) });
-    toast(id?'Actualizado':'Creado','success'); closeModal();
     delete state.cache.campos; delete state.cache.lotes;
+    // Si es depósito, disparamos la creación/vinculación del depósito (y refrescamos cache).
+    if (data.esDeposito) { delete state.cache.depositos; try { await api('/api/depositos'); } catch {} }
+    toast(id?'Actualizado':'Creado','success'); closeModal();
     pages.campos();
   } catch (e) { toast(e.message,'error'); }
 }
@@ -17905,7 +17917,7 @@ pages.creditos = async function() {
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600">${rows.length} crédito${rows.length===1?'':'s'}</div>
-      ${can('finanzas:credito:create')?`<button class="btn btn-primary" onclick="credForm()">+ Nuevo crédito</button>`:''}
+      ${(can('finanzas:create')||can('finanzas:credito:create'))?`<button class="btn btn-primary" onclick="credForm()">+ Nuevo crédito</button>`:''}
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Créditos activos</div><div class="text-2xl font-bold mt-1">${activos.length}</div></div>
@@ -17943,7 +17955,11 @@ pages.creditos = async function() {
               <td>${r.cantCuotas} ${r.periodicidad==='mensual'?'mensuales':r.periodicidad}</td>
               <td>${fmtDate(r.fechaPrimera)}</td>
               <td>${r.estado==='activo'?'<span class="badge badge-green">Activo</span>':'<span class="badge badge-gray">'+esc(r.estado)+'</span>'}</td>
-              <td class="text-right"><button class="btn btn-ghost text-xs">👁️</button></td>
+              <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+                <button class="btn btn-ghost text-xs" title="Ver" onclick='credVer(${JSON.stringify(r.id)})'>👁️</button>
+                ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='credForm(${JSON.stringify(r.id)})'>✏️</button>`:''}
+                ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='credDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+              </td>
             </tr>`).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin créditos registrados.</td></tr>`}
         </tbody>
       </table>
@@ -18158,7 +18174,7 @@ pages.flujoProyectado = async function() {
     const base = (it.montoOrigen != null ? it.montoOrigen : it.importe) * _projCot(it.moneda || 'ARS');
     return state.flujoSim.cur === 'USD' ? base / ((Number(state.flujoSim.usd)) || 1) : base;
   };
-  const fmtCur = (v) => state.flujoSim.cur === 'USD' ? ('US$ ' + fmtN(Math.round(v||0))) : fmt$(Math.round(v||0));
+  const fmtCur = (v) => state.flujoSim.cur === 'USD' ? ('US$ ' + fmtN(Math.round(v||0))) : ('$ ' + fmtN(Math.round(v||0)));
   // Reexpresar los importes en la moneda elegida (con proyección)
   (data.items || []).forEach(it => { it.importe = _toDisp(it); });
   if (data.vencidos?.items) data.vencidos.items.forEach(it => { it.importe = _toDisp(it); });

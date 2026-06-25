@@ -168,6 +168,7 @@ model Campo {
   tipoExplotacion String?   // "agricola" | "ganadera" | "mixta"
   geolocalizacion String?   // "lat,lng" o URL Maps (ej. https://maps.app.goo.gl/xxx)
   observaciones   String?
+  esDeposito      Boolean  @default(false)  // si el campo funciona también como depósito (silo/galpón propio)
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -1053,6 +1054,7 @@ model Deposito {
   compartido      Boolean  @default(false)  // flag explícito; al ser true el companyId queda en NULL
   nombre          String   // ej: "Cerealera Vicentin Junín", "Silo Las Pampas", "Galpón Lote 3"
   tipo            String   // "campo" | "cerealera" | "otro"
+  campoId         String?  // si el depósito representa un Campo (tipo='campo'): vínculo al campo
   cuit            String?  // si es cerealera, su CUIT
   contacto        String?  // nombre del contacto comercial
   telefono        String?
