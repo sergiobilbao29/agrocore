@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'🧾 v1.6.0 (Fase 4) — Hacienda: compras y ventas desde Facturación (comprobante fiscal / ARCA)',
+      desc:'Ahora las <b>compras y ventas de hacienda se hacen desde Facturación</b>, como cualquier producto pero con el manejo de kg. Un <b>producto del catálogo con categoría "hacienda"</b> representa una categoría (Ternero, Novillito…); al ponerlo en un renglón de la factura aparecen <b>Campo</b> y <b>Cabezas</b> (la cantidad de la línea son los <b>kg</b> y el precio es <b>$/kg</b>). Al guardar la factura (venta o compra), el sistema <b>mueve el stock de hacienda</b> (baja/alta de cabezas + kg) en vez del stock de producto, y el cobro/cta cte/ARCA los maneja la factura. Al <b>anular/borrar</b> la factura, se revierte el movimiento de hacienda. Se <b>quitaron Compra y Venta de Hacienda → Movimientos</b> (van por Facturación) y se agregó <b>🔗 Vincular factura</b> para el caso de una factura que no movió el stock.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'💰 v1.5.0 (Fase 3) — Hacienda: ventas por kilo con registro del ingreso y modo "a rendimiento"',
       desc:'Cierre del módulo Hacienda: las <b>ventas por kilo</b>. En el movimiento <b>Venta</b> cargás cabezas, <b>kg de balanza</b> y <b>precio por kg</b> (el total se calcula solo y es editable). El sistema <b>descuenta el stock por cabezas</b> y <b>registra el ingreso</b> según el cobro elegido: <b>cuenta corriente</b> del cliente (queda "a cobrar"), <b>efectivo</b> (caja) o <b>banco</b>. Además, modo <b>"a rendimiento / al gancho"</b>: la venta descuenta el stock al momento y queda en <b>"Ventas a rendimiento pendientes"</b>; cuando llegan los kg/importe definitivos del frigorífico, los cerrás y ahí se registra el cobro. Al borrar una venta, se revierte automáticamente el ingreso que generó.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
@@ -7984,6 +7987,7 @@ pages.facturacion = async function() {
   let rows=[], clientes=[];
   try {
     const [f, c] = await Promise.all([api('/api/facturas'), api('/api/clientes')]);
+    if (!state.cache.campos) { try { state.cache.campos = (await api('/api/campos')).data || []; } catch {} }
     rows = f.data||[]; clientes = c.data||[]; state.cache.clientes = clientes;
   } catch (e) { return toast(e.message,'error'); }
   state.cache.facturas = rows;
@@ -8136,7 +8140,13 @@ function factItemRow(i=0, it={}) {
           <input type="hidden" data-f="productoId" value="${esc(pid)}"/>
         </div>
       </td>
-      <td><input class="input text-sm" data-f="descripcion" value="${esc(it.descripcion||'')}" placeholder="Detalle del item"/></td>
+      <td><input class="input text-sm" data-f="descripcion" value="${esc(it.descripcion||'')}" placeholder="Detalle del item"/>
+        <div class="hac-extra mt-1 flex gap-1" style="display:${(it.campoId||it.cabezas)?'flex':'none'}">
+          <select class="input text-xs flex-1" data-f="campoId"><option value="">Campo…</option>${(state.cache.campos||[]).map(c=>`<option value="${esc(c.id)}" ${it.campoId===c.id?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select>
+          <input class="input text-xs w-20 text-right" type="number" step="1" data-f="cabezas" value="${it.cabezas||''}" placeholder="cabezas"/>
+        </div>
+        <div class="hac-extra text-[10px] text-amber-700 mt-0.5" style="display:${(it.campoId||it.cabezas)?'block':'none'}">🐄 Hacienda: la <b>cantidad</b> es kg y el <b>precio</b> es $/kg.</div>
+      </td>
       <td><input class="input text-sm w-24 text-right" type="number" step="0.01" data-f="cantidad" value="${it.cantidad||1}"/></td>
       <td><input class="input text-sm w-28 text-right" type="number" step="0.01" data-f="precioUnit" value="${it.precioUnit||0}"/></td>
       <td><select class="input text-sm w-20" data-f="alicuotaIva">
@@ -8152,6 +8162,10 @@ function factItemRow(i=0, it={}) {
 // Si el valor coincide EXACTO con el label de algún item del datalist, lo elegimos
 // (rellenamos productoId, descripcion, precio sugerido).
 // Si no coincide, queda como "texto libre".
+function _facHacToggle(tr){
+  const esHac = ((tr.dataset.productoCategoria||'')).toLowerCase()==='hacienda';
+  tr.querySelectorAll('.hac-extra').forEach(e=>{ e.style.display = esHac ? '' : 'none'; });
+}
 function factItemBuscarItem(inp) {
   const tr = inp.closest('tr');
   if (!tr) return;
@@ -8166,16 +8180,17 @@ function factItemBuscarItem(inp) {
   tr.dataset.productoCategoria = '';
   tr.dataset.fromCatalogo = '';
   if (hidProd) hidProd.value = '';
-  if (!val) { factRecalc(); return; }
+  if (!val) { _facHacToggle(tr); factRecalc(); return; }
   // Buscar el option cuyo value coincide EXACTO (case-insensitive)
   const opts = Array.from(ds.querySelectorAll('option'));
   const match = opts.find(o => (o.value || '').toLowerCase() === val.toLowerCase());
-  if (!match) { factRecalc(); return; } // texto libre
+  if (!match) { _facHacToggle(tr); factRecalc(); return; } // texto libre
   tr.dataset.productoNombre    = match.dataset.nombre || '';
   tr.dataset.productoUnidad    = match.dataset.unidad || '';
   tr.dataset.productoCategoria = match.dataset.cat || '';
   tr.dataset.fromCatalogo      = match.dataset.fromCatalogo || '';
   if (hidProd) hidProd.value = match.dataset.pid || '';
+  _facHacToggle(tr);
   const desc = tr.querySelector('[data-f="descripcion"]');
   const prc  = tr.querySelector('[data-f="precioUnit"]');
   const nombre = match.dataset.nombre || '';
@@ -8412,6 +8427,8 @@ async function factSave() {
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),
     alicuotaIva: Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
+    campoId: tr.querySelector('[data-f="campoId"]')?.value || null,
+    cabezas: tr.querySelector('[data-f="cabezas"]')?.value ? Number(tr.querySelector('[data-f="cabezas"]').value) : null,
   })).filter(it => it.descripcion && it.cantidad > 0);
   if (!items.length) return toast('Agregá al menos un item','warn');
   // Validacion: si hay items con producto que excedan el stock, avisar.
@@ -8748,6 +8765,8 @@ async function factSaveExterna() {
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),
     alicuotaIva: Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
+    campoId: tr.querySelector('[data-f="campoId"]')?.value || null,
+    cabezas: tr.querySelector('[data-f="cabezas"]')?.value ? Number(tr.querySelector('[data-f="cabezas"]').value) : null,
   })).filter(it => it.descripcion && it.cantidad > 0);
   if (!items.length) return toast('Agregá al menos un item','warn');
   // Mismo control de stock que el form normal — la factura externa también
@@ -8873,6 +8892,7 @@ pages.compras = async function() {
   let rows=[], provs=[];
   try {
     const [f, p] = await Promise.all([api('/api/facturas-compra'), api('/api/proveedores')]);
+    if (!state.cache.campos) { try { state.cache.campos = (await api('/api/campos')).data || []; } catch {} }
     rows = f.data||[]; provs = p.data||[]; state.cache.proveedores = provs;
   } catch (e) { return toast(e.message,'error'); }
   state.cache.facturasCompra = rows;
@@ -9212,6 +9232,8 @@ async function compSave() {
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),
     alicuotaIva: Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
+    campoId: tr.querySelector('[data-f="campoId"]')?.value || null,
+    cabezas: tr.querySelector('[data-f="cabezas"]')?.value ? Number(tr.querySelector('[data-f="cabezas"]').value) : null,
   })).filter(it => it.descripcion && it.cantidad > 0);
   if (!items.length) return toast('Agregá al menos un item','warn');
   const proveedorId = $('#f-prov').value || null;
@@ -10062,6 +10084,7 @@ pages.hacienda = async function() {
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="hacProyeccion()" title="Estado de situación y proyección de kg para presentar al banco">📈 Proyección</button>
         ${canU?`<button class="btn btn-secondary" onclick="hacCatManager()" title="Configurar categorías: especie, rango de kg y a qué categoría puede pasar">⚙️ Categorías</button>`:''}
+        ${canC?`<button class="btn btn-secondary" onclick="hacVincularFactura()" title="Vincular una factura ya cargada que no movió el stock de hacienda">🔗 Vincular factura</button>`:''}
         ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
       </div>
     </div>`;
@@ -10243,8 +10266,6 @@ function hacMovForm(campoIdInit=null, categoriaInit=null) {
           <select id="h-tipo" class="input" onchange="hacMovTipoChange()">
             <option value="nacimiento">🐮 Nacimiento</option>
             <option value="muerte">💀 Muerte</option>
-            <option value="compra">🛒 Compra (entró)</option>
-            <option value="venta">💸 Venta (salió)</option>
             <option value="traslado">🚚 Traslado entre campos</option>
             <option value="cambio_categoria">🔄 Cambio de categoría</option>
             <option value="ajuste">⚖️ Ajuste / Conteo</option>
@@ -10643,6 +10664,54 @@ async function hacRendSave(movId){
   if(cobro==='banco' && !data.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn');
   try{ await api('/api/hacienda-movimientos/'+movId+'/rendimiento',{method:'PUT',body:JSON.stringify(data)});
     toast('Venta a rendimiento cerrada','success'); closeModal();
+    delete state.cache.haciendaResumen; delete state.cache.haciendaMovs; pages.hacienda(); }
+  catch(e){ toast(e.message,'error'); }
+}
+
+// ===== Vincular una factura ya cargada a un movimiento de hacienda (excepción) =====
+async function hacVincularFactura(){
+  let fv=[], fc=[];
+  try { fv=(await api('/api/facturas')).data||[]; } catch {}
+  try { fc=(await api('/api/facturas-compra')).data||[]; } catch {}
+  const cats = hacCategoriasDisponibles();
+  const campos = (state.cache.haciendaResumen?.campos)||[];
+  const num = f => `${f.tipo} ${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}`;
+  const optFact = [
+    ...fv.filter(f=>f.estado!=='anulada').map(f=>({ref:`VTA-${f.id}`, tipo:'venta',  lbl:`Venta · ${num(f)} · ${fmtDate(f.fecha)}`})),
+    ...fc.map(f=>({ref:`CPR-${f.id}`, tipo:'compra', lbl:`Compra · ${num(f)} · ${fmtDate(f.fecha)}`})),
+  ];
+  state._vincFact = optFact;
+  openModal({
+    title:'🔗 Vincular factura a hacienda', size:'max-w-lg',
+    body:`
+      <p class="text-xs text-slate-500 mb-3">Para una factura ya cargada que <b>no movió</b> el stock de hacienda. Crea el movimiento (NO vuelve a registrar el cobro, que ya lo hizo la factura).</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Factura *</label>
+          <select id="vf-fact" class="input"><option value="">— elegir —</option>${optFact.map((o,i)=>`<option value="${i}">${esc(o.lbl)}</option>`).join('')}</select>
+        </div>
+        <div><label class="label">Categoría *</label><input id="vf-cat" class="input" list="vf-cat-list"/><datalist id="vf-cat-list">${cats.map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
+        <div><label class="label">Campo *</label><select id="vf-campo" class="input">${campos.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('')||'<option value="">— sin campos —</option>'}</select></div>
+        <div><label class="label">Cabezas *</label><input id="vf-cab" type="number" step="1" class="input"/></div>
+        <div><label class="label">Kg</label><input id="vf-kg" type="number" step="0.1" class="input"/></div>
+        <div><label class="label">Precio por kg</label><input id="vf-pre" type="number" step="0.01" class="input"/></div>
+        <div><label class="label">Total</label><input id="vf-total" type="number" step="0.01" class="input"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="hacVincularSave()">🔗 Vincular y mover stock</button>`
+  });
+}
+async function hacVincularSave(){
+  const idx=$('#vf-fact').value; if(idx==='') return toast('Elegí la factura','warn');
+  const o=(state._vincFact||[])[Number(idx)]; if(!o) return toast('Factura inválida','warn');
+  const categoria=$('#vf-cat').value.trim(); if(!categoria) return toast('Categoría requerida','warn');
+  const campoId=$('#vf-campo').value; if(!campoId) return toast('Elegí el campo','warn');
+  const cab=Number($('#vf-cab').value||0); if(cab<=0) return toast('Cabezas requeridas','warn');
+  const data={ campoId, categoria, fecha:new Date().toISOString(), tipo:o.tipo, cantidad:cab,
+    kilos:$('#vf-kg').value?Number($('#vf-kg').value):null, precioKg:$('#vf-pre').value?Number($('#vf-pre').value):null,
+    total:$('#vf-total').value?Number($('#vf-total').value):null, facturaRef:o.ref,
+    modoVenta:o.tipo==='venta'?'directo':null, cobroTipo:'ninguno' };
+  try{ await api('/api/hacienda-movimientos',{method:'POST',body:JSON.stringify(data)});
+    toast('Movimiento vinculado a la factura','success'); closeModal();
     delete state.cache.haciendaResumen; delete state.cache.haciendaMovs; pages.hacienda(); }
   catch(e){ toast(e.message,'error'); }
 }

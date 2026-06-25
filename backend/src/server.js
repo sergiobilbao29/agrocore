@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.5.0';
+const AGROCORE_VERSION = '1.6.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2058,7 +2058,8 @@ function calcFactura(items) {
     const ivaImp = sub * (alic / 100);
     subtotal += sub; iva += ivaImp;
     return { productoId: it.productoId || null, descripcion: it.descripcion, cantidad: it.cantidad, precioUnit: it.precioUnit,
-             alicuotaIva: alic, subtotal: sub, ivaImporte: ivaImp, total: sub + ivaImp };
+             alicuotaIva: alic, subtotal: sub, ivaImporte: ivaImp, total: sub + ivaImp,
+             campoId: it.campoId || null, cabezas: (it.cabezas != null ? it.cabezas : null) };
   });
   return { items: det, subtotal, iva, total: subtotal + iva };
 }
@@ -2070,26 +2071,46 @@ async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, moti
   const items = (factura.items || []).filter(it => it.productoId);
   if (!items.length) return 0;
   const ref = `${refPrefix}-${factura.id}`;
-  const data = items.map(it => ({
-    companyId, productoId: it.productoId,
-    fecha: factura.fecha, tipo, motivo,
-    cantidad: Number(it.cantidad),
-    precio: Number(it.precioUnit) || null,
-    total: Number(it.subtotal) || null,
-    contraparteId: contraparteId || null,
-    contraparteTipo: contraparteTipo || null,
-    referencia: ref,
-    observaciones: `Generado automaticamente por ${motivo} ${factura.tipo} ${String(factura.puntoVenta).padStart(4,'0')}-${String(factura.numero).padStart(8,'0')}`,
-    userId: userId || null,
-  }));
-  await tx.movimiento.createMany({ data });
+  const compNum = `${factura.tipo} ${String(factura.puntoVenta).padStart(4,'0')}-${String(factura.numero).padStart(8,'0')}`;
+  // Detectar productos de HACIENDA: mueven el stock de hacienda (cabezas + kg),
+  // no el stock de productos.
+  const prods = await tx.producto.findMany({ where: { companyId, id: { in: items.map(i => i.productoId) } }, select: { id: true, nombre: true, categoria: true } });
+  const prodById = Object.fromEntries(prods.map(p => [p.id, p]));
+  const esHac = (it) => ((prodById[it.productoId]?.categoria) || '').toLowerCase() === 'hacienda';
+  const itemsProd = items.filter(it => !esHac(it));
+  const itemsHac  = items.filter(it => esHac(it) && it.campoId && Number(it.cabezas) > 0);
+  // 1) Stock de productos (todo lo que NO es hacienda)
+  if (itemsProd.length) {
+    await tx.movimiento.createMany({ data: itemsProd.map(it => ({
+      companyId, productoId: it.productoId, fecha: factura.fecha, tipo, motivo,
+      cantidad: Number(it.cantidad), precio: Number(it.precioUnit) || null, total: Number(it.subtotal) || null,
+      contraparteId: contraparteId || null, contraparteTipo: contraparteTipo || null, referencia: ref,
+      observaciones: `Generado automaticamente por ${motivo} ${compNum}`, userId: userId || null,
+    })) });
+  }
+  // 2) Stock de hacienda (la "cantidad" de la línea son los kg; las cabezas vienen aparte)
+  for (const it of itemsHac) {
+    const tipoMov = (tipo === 'egreso') ? 'venta' : 'compra';
+    const kg = Number(it.cantidad) || null;
+    await tx.haciendaMovimiento.create({ data: {
+      companyId, campoId: it.campoId, categoria: prodById[it.productoId]?.nombre || it.descripcion,
+      fecha: factura.fecha, tipo: tipoMov, cantidad: Math.round(Number(it.cabezas) || 0),
+      kilos: kg, precioKg: Number(it.precioUnit) || null, total: Number(it.subtotal) || null,
+      clienteId: contraparteTipo === 'cliente' ? (contraparteId || null) : null,
+      modoVenta: tipoMov === 'venta' ? 'directo' : null,
+      estadoRend: tipoMov === 'venta' ? 'cerrada' : null,
+      cobroTipo: 'ninguno', facturaRef: ref,
+      observaciones: `Generado por ${motivo} ${compNum}`,
+    }});
+  }
   return items.length;
 }
 
 async function borrarMovimientosDeFactura(tx, { companyId, refPrefix, facturaId }) {
-  return tx.movimiento.deleteMany({
-    where: { companyId, referencia: `${refPrefix}-${facturaId}` },
-  });
+  const ref = `${refPrefix}-${facturaId}`;
+  // Revertir también los movimientos de hacienda generados por la factura.
+  await tx.haciendaMovimiento.deleteMany({ where: { companyId, facturaRef: ref } });
+  return tx.movimiento.deleteMany({ where: { companyId, referencia: ref } });
 }
 
 // Genera el movimiento de Cuenta Corriente al crear una factura. El campo
@@ -2181,6 +2202,9 @@ const itemFacSchema = z.object({
   productoCategoria: z.string().nullable().optional(),
   descripcion: z.string().min(1), cantidad: z.number(),
   precioUnit: z.number(), alicuotaIva: z.number().optional(),
+  // Hacienda: campo del que sale/entra + cabezas (la "cantidad" de la línea son kg).
+  campoId: z.string().nullable().optional(),
+  cabezas: z.number().nullable().optional(),
 });
 
 app.get('/api/facturas', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
@@ -3545,6 +3569,7 @@ const hacMovSchema = z.object({
   cobroTipo: z.enum(['ctacte','efectivo','banco','ninguno']).nullable().optional(),
   caja: z.string().nullable().optional(),
   bancoCuentaId: z.string().nullable().optional(),
+  facturaRef: z.string().nullable().optional(),  // vincular a una factura ya cargada
   observaciones: z.string().nullable().optional(),
 });
 // Registra el ingreso de una venta de hacienda segun el medio de cobro.
@@ -3640,10 +3665,11 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
           precioKg: d.precioKg ?? null, total: total || null, clienteId: d.clienteId || null,
           modoVenta: esRend ? 'rendimiento' : 'directo',
           estadoRend: esRend ? 'pendiente' : 'cerrada',
-          cobroTipo: esRend ? null : (d.cobroTipo || 'ninguno'),
+          cobroTipo: esRend ? null : (d.facturaRef ? 'ninguno' : (d.cobroTipo || 'ninguno')),
+          facturaRef: d.facturaRef || null,
           observaciones: d.observaciones || null,
         }});
-        if (!esRend && d.cobroTipo && d.cobroTipo !== 'ninguno') {
+        if (!esRend && !d.facturaRef && d.cobroTipo && d.cobroTipo !== 'ninguno') {
           const links = await _ingresoVentaHacienda(tx, req, d, mov.id, total);
           if (links.efectivoId || links.bancoMovId) {
             await tx.haciendaMovimiento.update({ where: { id: mov.id }, data: { efectivoId: links.efectivoId, bancoMovId: links.bancoMovId } });
@@ -3684,7 +3710,7 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
       data: {
         companyId: req.companyId, campoId: d.campoId, categoria: d.categoria,
         fecha: d.fecha, tipo: d.tipo, cantidad: d.cantidad,
-        kilos: d.kilos ?? null,
+        kilos: d.kilos ?? null, facturaRef: d.facturaRef || null,
         observaciones: d.observaciones || null,
       },
     });

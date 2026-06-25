@@ -444,6 +444,8 @@ model FacturaItem {
   subtotal      Float
   ivaImporte    Float
   total         Float
+  campoId       String?           // hacienda: campo del que sale/entra
+  cabezas       Float?            // hacienda: cabezas (la cantidad de la línea son kg)
 
   factura       Factura  @relation(fields: [facturaId], references: [id], onDelete: Cascade)
   producto      Producto? @relation(fields: [productoId], references: [id])
@@ -493,6 +495,8 @@ model FacturaCompraItem {
   subtotal          Float
   ivaImporte        Float
   total             Float
+  campoId           String?       // hacienda: campo del que sale/entra
+  cabezas           Float?        // hacienda: cabezas (la cantidad de la línea son kg)
 
   facturaCompra     FacturaCompra @relation(fields: [facturaCompraId], references: [id], onDelete: Cascade)
   producto          Producto? @relation(fields: [productoId], references: [id])
@@ -930,6 +934,7 @@ model HaciendaMovimiento {
   cobroTipo     String?    // venta: "ctacte" | "efectivo" | "banco" | "ninguno"
   efectivoId    String?    // venta: link al ingreso en efectivo (para revertir)
   bancoMovId    String?    // venta: link al movimiento bancario (para revertir)
+  facturaRef    String?    // link a la factura que generó la compra/venta (para revertir)
   campoOrigen   String?    // campo origen en traslados
   campoDestino  String?    // campo destino en traslados
   observaciones String?
