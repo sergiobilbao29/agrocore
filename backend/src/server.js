@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.10.0';
+const AGROCORE_VERSION = '1.11.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4932,14 +4932,18 @@ async function _construirFlujoProyectado(req, opts = {}) {
     const debe = Number(c.debe || 0);
     const haber = Number(c.haber || 0);
     // Si el contacto NOS DEBE (debe > 0) es ingreso. Si NOSOTROS DEBEMOS (haber > 0) es egreso.
-    let tipo, importe;
-    if (debe > 0 && haber === 0) { tipo = 'ingreso'; importe = debe; }
-    else if (haber > 0 && debe === 0) { tipo = 'egreso'; importe = haber; }
+    let tipo, montoOrigen;
+    if (debe > 0 && haber === 0) { tipo = 'ingreso'; montoOrigen = debe; }
+    else if (haber > 0 && debe === 0) { tipo = 'egreso'; montoOrigen = haber; }
     else continue;
+    const moneda = c.moneda || 'ARS';
+    const cot = moneda === 'ARS' ? 1 : (c.cotizacion || 1);
     push(c.vencimiento, {
       tipo, categoria: 'cta_cte',
       concepto: c.detalle || c.nombreLibre || 'Cuenta corriente',
-      importe, ref: c.id,
+      importe: montoOrigen * cot,   // ARS-equivalente (para display por defecto)
+      moneda, montoOrigen,          // para reproyectar en otra moneda / simulador
+      ref: c.id,
       contacto: c.nombreLibre || c.contactoTipo || null,
       empresaId: c.companyId,
     });
@@ -5006,10 +5010,13 @@ async function _construirFlujoProyectado(req, opts = {}) {
     // con referencia a esta factura. Pero el modelo CtaCte no guarda facturaId,
     // así que por ahora SIEMPRE las metemos pero las marcamos con categoría
     // "factura" para que el usuario pueda filtrarlas si percibe duplicado.
+    const fMon = f.moneda || 'ARS';
+    const fCot = fMon === 'ARS' ? 1 : (f.cotizacion || 1);
     push(venc, {
       tipo: 'ingreso', categoria: 'factura',
       concepto: `Factura ${f.tipo}-${f.puntoVenta}-${f.numero} · ${f.cliente?.razonSocial || 'Cliente'}`,
-      importe: Number(f.total || 0), ref: f.id,
+      importe: Number(f.total || 0) * fCot, moneda: fMon, montoOrigen: Number(f.total || 0),
+      ref: f.id,
       contacto: f.cliente?.razonSocial || null,
       empresaId: f.companyId,
     });
@@ -5036,6 +5043,10 @@ async function _construirFlujoProyectado(req, opts = {}) {
       empresaId: v.companyId,
     });
   }
+
+  // === Normalizar moneda/montoOrigen para el simulador (los que no la traen son ARS) ===
+  const _normMon = (ev) => { if (ev.moneda == null) ev.moneda = 'ARS'; if (ev.montoOrigen == null) ev.montoOrigen = ev.importe; return ev; };
+  items.forEach(_normMon); vencidos.forEach(_normMon);
 
   // === Sort + totales ===
   items.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));

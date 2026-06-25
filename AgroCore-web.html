@@ -2321,6 +2321,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'🎯 v1.11.0 — Fase 3: Flujo de fondos en ARS/USD con simulador de escenarios',
+      desc:'El <b>Flujo de Fondos</b> ahora es multimoneda. Arriba tenés un <b>simulador</b>: elegís <b>ver en pesos o en dólares</b>, y podés ajustar el <b>dólar de proyección</b> y la <b>variación de granos (%)</b> para simular escenarios (ej: "dólar a $1.400 y soja +10%"). Todo el flujo se recalcula al instante, convirtiendo cada vencimiento futuro (facturas a pagar/cobrar en dólares, deudas en toneladas de grano, cheques, cuotas, arrendamientos) a la moneda elegida con la cotización de proyección. Se agregó una <b>tabla mensual</b> tipo estado de situación: Ingresos, Egresos, Saldo neto y <b>Acumulado</b> por mes — si el acumulado queda en rojo, ahí te quedás sin caja. Las deudas/cobros en moneda extranjera o en grano se valorizan correctamente (ya no se mezclan como si fueran pesos).' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'🌾 v1.10.0 — Fase 2: Canje de cereal (deudas en toneladas + entrega de grano)',
       desc:'Llega el <b>canje de cereal</b>. Ya podés tener <b>deudas u obligaciones en toneladas de grano</b> (una compra de insumos en moneda Soja/Maíz/Trigo, o un contrato cargado a mano en Cuentas corrientes con esa moneda): la deuda queda en <b>toneladas</b>, no en pesos. Para cancelarla, en <b>Pagar a proveedor</b> elegís el método <b>🌾 Entrega de cereal (canje)</b>: indicás qué cereal entregás de tu stock, de qué silo/cerealera sale y el <b>precio de pizarra del día</b>. Al confirmar, la deuda se cancela <b>tonelada por tonelada</b> (no hay diferencia de cambio porque la deuda era en grano) y se <b>descuenta el stock físico</b> del cereal, valorizado a la pizarra. Además, en el alta manual de Cuenta corriente ahora podés elegir la <b>moneda/objeto de la deuda</b> para cargar contratos de canje.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
@@ -18067,6 +18070,34 @@ pages.flujoProyectado = async function() {
   try { data = (await api('/api/flujo-proyectado?'+qs)).data; }
   catch (e) { return toast(e.message,'error'); }
 
+  // ===== Simulador multimoneda: convierte cada item a la moneda elegida con una
+  // cotización de proyección (USD) y una variación de granos (%). =====
+  state.flujoSim = state.flujoSim || { cur:'ARS', usd:0, granoPct:0 };
+  await cargarCotizVivas();
+  if (!state.flujoSim.usd) state.flujoSim.usd = Math.round((state.cache.cotizVivas?.USD) || 0) || 1000;
+  const _projCot = (mon) => {
+    if (!mon || mon === 'ARS') return 1;
+    if (/^USD/.test(mon)) return Number(state.flujoSim.usd) || 1;
+    if (mon === 'EUR') return (state.cache.cotizVivas?.EUR) || Number(state.flujoSim.usd) || 1;
+    const g = (state.cache.cotizVivas || {})[mon] || 0;
+    return g * (1 + (Number(state.flujoSim.granoPct) || 0) / 100);
+  };
+  const _toDisp = (it) => {
+    const base = (it.montoOrigen != null ? it.montoOrigen : it.importe) * _projCot(it.moneda || 'ARS');
+    return state.flujoSim.cur === 'USD' ? base / ((Number(state.flujoSim.usd)) || 1) : base;
+  };
+  const fmtCur = (v) => state.flujoSim.cur === 'USD' ? ('US$ ' + fmtN(Math.round(v||0))) : fmt$(Math.round(v||0));
+  // Reexpresar los importes en la moneda elegida (con proyección)
+  (data.items || []).forEach(it => { it.importe = _toDisp(it); });
+  if (data.vencidos?.items) data.vencidos.items.forEach(it => { it.importe = _toDisp(it); });
+  // Saldo inicial a la moneda elegida (en USD: pesos/cotiz + saldo en cuentas USD)
+  if (data.saldoInicial && state.flujoSim.cur === 'USD') {
+    const u = Number(state.flujoSim.usd) || 1;
+    data.saldoInicial = { ...data.saldoInicial, total: (data.saldoInicial.total || 0) / u + (data.saldoInicial.bancosUSD || 0), bancosUSD: 0 };
+  }
+  // A partir de acá, fmt$ dentro de esta página muestra la moneda elegida (US$ o $).
+  const fmt$ = fmtCur;
+
   const ICONS = Object.fromEntries(FLUJO_CATS.map(c => [c.id, c.icon]));
   const ahora = new Date();
 
@@ -18108,6 +18139,35 @@ pages.flujoProyectado = async function() {
         <span class="text-xs text-slate-500">${itemsFiltrados.length} eventos</span>
       </div>
     </div>
+
+    <!-- Simulador multimoneda -->
+    <div class="kpi mb-4 p-3" style="background:linear-gradient(135deg,#eef2ff,#f8fafc)">
+      <div class="flex items-center gap-3 flex-wrap text-sm">
+        <span class="font-semibold text-slate-700">🔮 Simulador · Ver en:</span>
+        <div class="flex gap-1">
+          <button class="btn btn-${state.flujoSim.cur==='ARS'?'primary':'secondary'} text-xs" onclick="flujoSimSet('cur','ARS')">$ Pesos</button>
+          <button class="btn btn-${state.flujoSim.cur==='USD'?'primary':'secondary'} text-xs" onclick="flujoSimSet('cur','USD')">US$ Dólares</button>
+        </div>
+        <label class="flex items-center gap-1 text-xs text-slate-600">Dólar proyección <input type="number" class="input py-0 w-24 text-sm" value="${state.flujoSim.usd}" onchange="flujoSimSet('usd',this.value)"/></label>
+        <label class="flex items-center gap-1 text-xs text-slate-600">Granos % <input type="number" step="1" class="input py-0 w-20 text-sm" value="${state.flujoSim.granoPct}" onchange="flujoSimSet('granoPct',this.value)"/></label>
+        <span class="text-[11px] text-slate-500">Simulá escenarios: cambiá el dólar (ej: $1.400) o la variación de granos (ej: +10%) y se recalcula todo el flujo.</span>
+      </div>
+    </div>
+
+    <!-- Tabla mensual (estado de situación proyectado) -->
+    ${meses.length ? `
+    <div class="kpi mb-4 p-0 overflow-x-auto">
+      <table class="data">
+        <thead><tr><th>Concepto / Mes</th>${meses.map(([mes])=>{const [y,mm]=mes.split('-');return `<th class="text-right capitalize">${new Date(Number(y),Number(mm)-1,1).toLocaleDateString('es-AR',{month:'short',year:'2-digit'})}</th>`;}).join('')}</tr></thead>
+        <tbody>
+          <tr><td class="font-semibold text-emerald-700">↗️ Ingresos</td>${meses.map(([,m])=>`<td class="text-right text-emerald-700">${fmt$(m.ingresos)}</td>`).join('')}</tr>
+          <tr><td class="font-semibold text-red-700">↘️ Egresos</td>${meses.map(([,m])=>`<td class="text-right text-red-700">- ${fmt$(m.egresos)}</td>`).join('')}</tr>
+          <tr class="border-t border-slate-200"><td class="font-bold">= Saldo neto</td>${meses.map(([,m])=>{const n=m.ingresos-m.egresos;return `<td class="text-right font-bold ${n>=0?'text-emerald-700':'text-red-700'}">${fmt$(n)}</td>`;}).join('')}</tr>
+          <tr class="bg-slate-50"><td class="font-bold">Σ Acumulado</td>${(()=>{let acc=data.saldoInicial?.total||0;return meses.map(([,m])=>{acc+=m.ingresos-m.egresos;return `<td class="text-right font-bold ${acc>=0?'text-emerald-700':'text-red-700'}">${fmt$(acc)}</td>`;}).join('');})()}</tr>
+        </tbody>
+      </table>
+      <div class="text-[11px] text-slate-500 px-3 py-2">El acumulado arranca del saldo de hoy (${fmt$(data.saldoInicial?.total||0)}) y suma el neto de cada mes. Si algún acumulado queda en rojo, ahí te quedás sin caja.</div>
+    </div>` : ''}
 
     <!-- VENCIDOS (idea 7) -->
     ${(vencidosFiltrados.length > 0) ? `
@@ -18269,6 +18329,11 @@ function flujoDibujarChart(serie) {
   ctx.fillText(ultimo.fecha, W-padR-60, H-4);
 }
 
+function flujoSimSet(k, v) {
+  state.flujoSim = state.flujoSim || { cur:'ARS', usd:0, granoPct:0 };
+  state.flujoSim[k] = (k === 'cur') ? v : Number(v);
+  pages.flujoProyectado();
+}
 function flujoToggleCategoria(catId) {
   state.flujoCatsOcultas[catId] = !state.flujoCatsOcultas[catId];
   pages.flujoProyectado();
