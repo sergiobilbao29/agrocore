@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.4.1';
-const AGROCORE_BUILD = new Date('2026-07-04').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '1.5.0';
+const AGROCORE_BUILD = new Date('2026-07-05').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -3537,8 +3537,43 @@ const hacMovSchema = z.object({
   cantidad: z.number().int(),  // CABEZAS. permite negativo para ajuste; resto positivos
   kilos: z.number().nonnegative().nullable().optional(),  // kg del movimiento (balanza)
   campoDestino: z.string().nullable().optional(),  // requerido si tipo='traslado'
+  // --- Venta de hacienda (tipo='venta') ---
+  precioKg: z.number().nonnegative().nullable().optional(),
+  total: z.number().nonnegative().nullable().optional(),
+  clienteId: z.string().nullable().optional(),
+  modoVenta: z.enum(['directo','rendimiento']).nullable().optional(),
+  cobroTipo: z.enum(['ctacte','efectivo','banco','ninguno']).nullable().optional(),
+  caja: z.string().nullable().optional(),
+  bancoCuentaId: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
+// Registra el ingreso de una venta de hacienda segun el medio de cobro.
+async function _ingresoVentaHacienda(tx, req, d, movId, total) {
+  const out = { efectivoId: null, bancoMovId: null };
+  if (!total || total <= 0) return out;
+  const detalle = `Venta hacienda: ${d.cantidad} cab. ${d.categoria}${d.kilos?` · ${d.kilos} kg`:''}`;
+  if (d.cobroTipo === 'ctacte') {
+    if (!d.clienteId) throw new Error('Elegí el cliente para la venta en cuenta corriente');
+    await tx.ctaCte.create({ data: {
+      companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId,
+      fecha: d.fecha, detalle, debe: total, haber: 0, referencia: `hacventa-${movId}`,
+    }});
+  } else if (d.cobroTipo === 'efectivo') {
+    const ef = await tx.efectivo.create({ data: {
+      companyId: req.companyId, fecha: d.fecha, tipo: 'ingreso', concepto: detalle,
+      monto: total, caja: d.caja || null, clasificacion: 'empresa',
+    }});
+    out.efectivoId = ef.id;
+  } else if (d.cobroTipo === 'banco') {
+    if (!d.bancoCuentaId) throw new Error('Elegí la cuenta bancaria de la venta');
+    const bm = await tx.bancoMovimiento.create({ data: {
+      companyId: req.companyId, cuentaId: d.bancoCuentaId, fecha: d.fecha,
+      tipo: 'transferencia_in', concepto: detalle, monto: total, userId: req.user?.id || null,
+    }});
+    out.bancoMovId = bm.id;
+  }
+  return out;
+}
 
 // Lista de movimientos de hacienda (puede filtrar por campo y/o categoría).
 app.get('/api/hacienda-movimientos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
@@ -3591,6 +3626,34 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
       return res.status(201).json({ ok: true, data: result });
     }
 
+    // Venta de hacienda: descuenta cabezas y registra el ingreso (cta cte / efectivo / banco).
+    // Si es "a rendimiento", descuenta el stock ahora y el ingreso queda pendiente
+    // hasta confirmar los kg/importe definitivos.
+    if (d.tipo === 'venta') {
+      if (d.cantidad <= 0) return res.status(400).json({ ok: false, error: 'La cantidad debe ser positiva' });
+      const total = (d.total != null ? d.total : ((d.kilos || 0) * (d.precioKg || 0))) || 0;
+      const esRend = d.modoVenta === 'rendimiento';
+      const result = await prisma.$transaction(async (tx) => {
+        const mov = await tx.haciendaMovimiento.create({ data: {
+          companyId: req.companyId, campoId: d.campoId, categoria: d.categoria,
+          fecha: d.fecha, tipo: 'venta', cantidad: d.cantidad, kilos: d.kilos ?? null,
+          precioKg: d.precioKg ?? null, total: total || null, clienteId: d.clienteId || null,
+          modoVenta: esRend ? 'rendimiento' : 'directo',
+          estadoRend: esRend ? 'pendiente' : 'cerrada',
+          cobroTipo: esRend ? null : (d.cobroTipo || 'ninguno'),
+          observaciones: d.observaciones || null,
+        }});
+        if (!esRend && d.cobroTipo && d.cobroTipo !== 'ninguno') {
+          const links = await _ingresoVentaHacienda(tx, req, d, mov.id, total);
+          if (links.efectivoId || links.bancoMovId) {
+            await tx.haciendaMovimiento.update({ where: { id: mov.id }, data: { efectivoId: links.efectivoId, bancoMovId: links.bancoMovId } });
+          }
+        }
+        return mov;
+      });
+      return res.status(201).json({ ok: true, data: result });
+    }
+
     // Cambio de categoría (reclasificación): baja en origen, alta en destino,
     // dentro del MISMO campo. Validado contra la matriz de transición.
     if (d.tipo === 'cambio_categoria') {
@@ -3629,11 +3692,50 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
   } catch (e) { next(e); }
 });
 
+// Confirmar el rendimiento de una venta "a rendimiento": kg/importe definitivos
+// y registro del ingreso (que estaba pendiente).
+app.put('/api/hacienda-movimientos/:id/rendimiento', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const mov = await prisma.haciendaMovimiento.findFirst({ where: { id: req.params.id, companyId: req.companyId, tipo: 'venta', modoVenta: 'rendimiento' } });
+    if (!mov) return res.status(404).json({ ok: false, error: 'Venta a rendimiento no encontrada' });
+    if (mov.estadoRend === 'cerrada') return res.status(400).json({ ok: false, error: 'Esta venta a rendimiento ya fue cerrada' });
+    const d = z.object({
+      kilos: z.number().nonnegative(),
+      precioKg: z.number().nonnegative().nullable().optional(),
+      total: z.number().nonnegative().nullable().optional(),
+      cobroTipo: z.enum(['ctacte','efectivo','banco','ninguno']).optional(),
+      clienteId: z.string().nullable().optional(),
+      caja: z.string().nullable().optional(),
+      bancoCuentaId: z.string().nullable().optional(),
+      fecha: z.coerce.date().optional(),
+    }).parse(req.body || {});
+    const total = (d.total != null ? d.total : (d.kilos * (d.precioKg || 0))) || 0;
+    const dd = { categoria: mov.categoria, cantidad: mov.cantidad, fecha: d.fecha || mov.fecha, kilos: d.kilos, cobroTipo: d.cobroTipo, clienteId: d.clienteId ?? mov.clienteId, caja: d.caja, bancoCuentaId: d.bancoCuentaId };
+    const result = await prisma.$transaction(async (tx) => {
+      const links = (d.cobroTipo && d.cobroTipo !== 'ninguno') ? await _ingresoVentaHacienda(tx, req, dd, mov.id, total) : { efectivoId: null, bancoMovId: null };
+      return tx.haciendaMovimiento.update({ where: { id: mov.id }, data: {
+        kilos: d.kilos, precioKg: d.precioKg ?? mov.precioKg, total: total || null,
+        clienteId: d.clienteId ?? mov.clienteId, cobroTipo: d.cobroTipo || 'ninguno',
+        estadoRend: 'cerrada', efectivoId: links.efectivoId, bancoMovId: links.bancoMovId,
+      }});
+    });
+    res.json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+
 app.delete('/api/hacienda-movimientos/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
   try {
     const existing = await prisma.haciendaMovimiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
-    await prisma.haciendaMovimiento.delete({ where: { id: req.params.id } });
+    await prisma.$transaction(async (tx) => {
+      // Si es una venta, revertir el ingreso que haya generado.
+      if (existing.tipo === 'venta') {
+        if (existing.efectivoId) await tx.efectivo.deleteMany({ where: { id: existing.efectivoId, companyId: req.companyId } });
+        if (existing.bancoMovId) await tx.bancoMovimiento.deleteMany({ where: { id: existing.bancoMovId, companyId: req.companyId } });
+        await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `hacventa-${existing.id}` } });
+      }
+      await tx.haciendaMovimiento.delete({ where: { id: existing.id } });
+    });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

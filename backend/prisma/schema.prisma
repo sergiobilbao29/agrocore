@@ -922,6 +922,14 @@ model HaciendaMovimiento {
   tipo          String
   cantidad      Int        // CABEZAS; el "tipo" decide si suma o resta al stock real
   kilos         Float?     // kg del movimiento (balanza en compra/venta, peso en otros)
+  precioKg      Float?     // venta: precio por kg
+  total         Float?     // venta: total (kg × precio, o manual)
+  clienteId     String?    // venta: cliente comprador
+  modoVenta     String?    // venta: "directo" | "rendimiento"
+  estadoRend    String?    // venta a rendimiento: "pendiente" | "cerrada"
+  cobroTipo     String?    // venta: "ctacte" | "efectivo" | "banco" | "ninguno"
+  efectivoId    String?    // venta: link al ingreso en efectivo (para revertir)
+  bancoMovId    String?    // venta: link al movimiento bancario (para revertir)
   campoOrigen   String?    // campo origen en traslados
   campoDestino  String?    // campo destino en traslados
   observaciones String?

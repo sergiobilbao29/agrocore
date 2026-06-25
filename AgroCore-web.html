@@ -237,6 +237,9 @@
     .modal-backdrop .col-span-4 { grid-column: span 1 / span 1 !important; }
   }
   table.data th{background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:10px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#64748b;font-weight:600;}
+  /* El encabezado debe alinearse igual que sus valores (numéricos a la derecha, etc.) */
+  table.data th.text-right{text-align:right;}
+  table.data th.text-center{text-align:center;}
   table.data td{padding:10px;border-bottom:1px solid #f1f5f9;font-size:13px;}
   .input{border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;font-size:14px;width:100%;}
   .input:focus{border-color:#15803d;box-shadow:0 0 0 3px rgba(21,128,61,.1);}
@@ -2316,6 +2319,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'05/07/2026',
+      titulo:'💰 v1.5.0 (Fase 3) — Hacienda: ventas por kilo con registro del ingreso y modo "a rendimiento"',
+      desc:'Cierre del módulo Hacienda: las <b>ventas por kilo</b>. En el movimiento <b>Venta</b> cargás cabezas, <b>kg de balanza</b> y <b>precio por kg</b> (el total se calcula solo y es editable). El sistema <b>descuenta el stock por cabezas</b> y <b>registra el ingreso</b> según el cobro elegido: <b>cuenta corriente</b> del cliente (queda "a cobrar"), <b>efectivo</b> (caja) o <b>banco</b>. Además, modo <b>"a rendimiento / al gancho"</b>: la venta descuenta el stock al momento y queda en <b>"Ventas a rendimiento pendientes"</b>; cuando llegan los kg/importe definitivos del frigorífico, los cerrás y ahí se registra el cobro. Al borrar una venta, se revierte automáticamente el ingreso que generó.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'04/07/2026',
+      titulo:'🩹 v1.4.2 — Alineación de encabezados con sus valores en tablas y PDFs',
+      desc:'Se corrigió la alineación de los encabezados de las tablas: las columnas numéricas (cabezas, kg, importes) ahora tienen el título alineado con su valor, en todas las tablas del sistema y también en los PDF generados (proyección de hacienda, recibos, listados). Antes el título quedaba a la izquierda/centro y el número a la derecha, lo que confundía a qué columna correspondía cada dato.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'04/07/2026',
       titulo:'📈 v1.4.1 (Fase 2) — Hacienda: proyección de kilos y valorización para el banco (PDF)',
       desc:'Segunda fase del módulo Hacienda: el <b>estado de situación / proyección</b> que pide el banco. Desde Hacienda → <b>📈 Proyección</b> elegís a cuántos <b>días</b> proyectar y un <b>precio por kg</b>, y el sistema arma una tabla por categoría con: cabezas, kg actuales, ganancia diaria (GMD, editable por categoría), <b>kg proyectados</b> a esa fecha (kg actuales + cabezas × GMD × días) y la <b>valorización</b> (kg × $/kg). Podés ajustar GMD y precio por cada categoría. Botón <b>🖨️ Exportar PDF</b> para presentar al banco. <i>Próxima fase: ventas por kilo (descarga de stock por cabezas + kg de balanza).</i>' },
@@ -9542,7 +9551,7 @@ function libroIVAExportPDF() {
     head, body, foot,
     startY: 80,
     styles: { fontSize: 7, cellPadding: 2, overflow: 'linebreak' },
-    headStyles: { fillColor: [21, 128, 61], textColor: [255,255,255], fontSize: 7, halign: 'center' },
+    headStyles: { fillColor: [21, 128, 61], textColor: [255,255,255], fontSize: 7, halign: 'left' },
     footStyles: { fillColor: [240, 253, 244], textColor: [20,83,45], fontStyle: 'bold' },
     columnStyles: {
       0: { cellWidth: 50 },
@@ -10009,12 +10018,13 @@ pages.hacienda = async function() {
   let resumen = { campos: [], filas: [] };
   let movs = [];
   try {
-    const [r, m, cat, ch] = await Promise.all([
+    const [r, m, cat, ch, cli] = await Promise.all([
       api('/api/hacienda-resumen').catch(()=>({data:state.cache.haciendaResumen})),
       api('/api/hacienda-movimientos').catch(()=>({data:state.cache.haciendaMovs||[]})),
       api('/api/catalogos').catch(()=>({data:state.cache.catalogos||[]})),
       // Config de categorías (especie, kg, transiciones) — fuente principal de categorías.
       api('/api/categorias-hacienda').catch(()=>({data:state.cache.catHacienda||[]})),
+      api('/api/clientes').catch(()=>({data:state.cache.clientes||[]})),
     ]);
     resumen = r.data || resumen;
     movs    = m.data || [];
@@ -10022,6 +10032,7 @@ pages.hacienda = async function() {
     state.cache.haciendaMovs    = movs;
     if (cat && cat.data) state.cache.catalogos = cat.data;
     if (ch && ch.data) state.cache.catHacienda = ch.data;
+    if (cli && cli.data) state.cache.clientes = cli.data;
   } catch (e) { return toast(e.message,'error'); }
 
   const { campos = [], filas = [] } = resumen;
@@ -10054,6 +10065,19 @@ pages.hacienda = async function() {
         ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
       </div>
     </div>`;
+
+  const ventasRendPend = (movs||[]).filter(m=>m.tipo==='venta' && m.modoVenta==='rendimiento' && m.estadoRend==='pendiente');
+  if (ventasRendPend.length) {
+    html += `<div class="kpi mb-4 bg-amber-50 border-amber-200">
+      <h3 class="text-sm font-bold text-amber-900 mb-2">⏳ Ventas a rendimiento pendientes de cerrar</h3>
+      <table class="data"><thead><tr><th>Fecha</th><th>Campo</th><th>Categoría</th><th class="text-right">Cabezas</th><th>Cliente</th><th></th></tr></thead><tbody>
+        ${ventasRendPend.map(m=>{ const cli=(state.cache.clientes||[]).find(c=>c.id===m.clienteId); const campo=camposMap.get(m.campoId); return `<tr class="table-row">
+          <td>${fmtDate(m.fecha)}</td><td>${esc(campo?campo.nombre:'—')}</td><td><b>${esc(m.categoria)}</b></td>
+          <td class="text-right">${fmtN(m.cantidad)}</td><td>${esc(cli?(cli.razonSocial||cli.nombre||'—'):'—')}</td>
+          <td class="text-right">${canU?`<button class="btn btn-secondary text-xs" onclick='hacRendConfirm(${JSON.stringify(m.id)})'>✅ Cerrar rendimiento</button>`:''}</td>
+        </tr>`; }).join('')}
+      </tbody></table></div>`;
+  }
 
   if (!campos.length) {
     html += `<div class="stub-card">Todavía no tenés campos cargados. Cargá tus campos en <b>Campos y lotes</b> y después volvé a esta sección.</div>`;
@@ -10241,8 +10265,32 @@ function hacMovForm(campoIdInit=null, categoriaInit=null) {
           <select id="h-catdest" class="input"><option value="">— elegir —</option></select>
           <p class="text-[11px] text-slate-400 mt-1" id="h-catdest-hint"></p>
         </div>
-        <div><label class="label">Cantidad (cabezas) *</label><input id="h-cant" type="number" step="1" class="input" placeholder="cabezas"/></div>
-        <div><label class="label">Kilos (balanza, opcional)</label><input id="h-kg" type="number" step="0.1" min="0" class="input" placeholder="kg totales"/></div>
+        <div><label class="label">Cantidad (cabezas) *</label><input id="h-cant" type="number" step="1" class="input" placeholder="cabezas" oninput="hacVentaCalc()"/></div>
+        <div><label class="label">Kilos (balanza)</label><input id="h-kg" type="number" step="0.1" min="0" class="input" placeholder="kg totales" oninput="hacVentaCalc()"/></div>
+        <div class="col-span-2 grid grid-cols-3 gap-3 p-3 bg-amber-50 rounded-lg border border-amber-200" id="h-venta-wrap" style="display:none">
+          <div class="col-span-3 text-[11px] font-semibold text-amber-900">💸 Datos de la venta (se factura por kg, se descuenta el stock por cabezas)</div>
+          <div><label class="label">Precio por kg</label><input id="h-precio" type="number" step="0.01" min="0" class="input" oninput="hacVentaCalc()"/></div>
+          <div><label class="label">Total</label><input id="h-total" type="number" step="0.01" min="0" class="input"/></div>
+          <div><label class="label">Modo</label>
+            <select id="h-modo" class="input" onchange="hacMovTipoChange()">
+              <option value="directo">Directo (kg de balanza)</option>
+              <option value="rendimiento">A rendimiento (kg después)</option>
+            </select>
+          </div>
+          <div class="col-span-2"><label class="label">Cliente</label>
+            <select id="h-cliente" class="input"><option value="">— sin cliente —</option>${(state.cache.clientes||[]).map(c=>`<option value="${esc(c.id)}">${esc(c.razonSocial||c.nombre||c.nombreFantasia||'')}</option>`).join('')}</select>
+          </div>
+          <div id="h-cobro-wrap"><label class="label">Cobro</label>
+            <select id="h-cobro" class="input" onchange="hacVentaCobroChange()">
+              <option value="ninguno">No registrar ahora</option>
+              <option value="ctacte">Cuenta corriente (a cobrar)</option>
+              <option value="efectivo">Efectivo</option>
+              <option value="banco">Banco</option>
+            </select>
+          </div>
+          <div class="col-span-3" id="h-cobro-det"></div>
+          <div class="col-span-3 text-[10px] text-slate-500" id="h-rend-hint" style="display:none">A rendimiento: ahora se descuenta el stock; los kg/importe definitivos y el cobro los cerrás después desde "Ventas a rendimiento pendientes".</div>
+        </div>
         <div id="h-ajuste-hint" class="text-xs text-amber-700 pb-2 self-end col-span-2" style="display:none">En ajuste podés poner negativo (ej: -2 si contaron 2 menos).</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="h-obs" class="input" rows="2"></textarea></div>
       </div>`,
@@ -10254,11 +10302,36 @@ function hacMovForm(campoIdInit=null, categoriaInit=null) {
 function hacMovTipoChange() {
   const t = $('#h-tipo').value;
   const esCambio = t==='cambio_categoria';
+  const esVenta = t==='venta';
   $('#h-campodest-wrap').style.display = t==='traslado'?'':'none';
   $('#h-catdest-wrap').style.display   = esCambio?'':'none';
+  const vw=$('#h-venta-wrap'); if(vw) vw.style.display = esVenta?'grid':'none';
   $('#h-ajuste-hint').style.display    = t==='ajuste'?'':'none';
   $('#h-campo-lbl').textContent        = t==='traslado'?'Campo origen *':'Campo *';
   if (esCambio) hacMovDestRefresh();
+  if (esVenta) {
+    const rend = $('#h-modo')?.value==='rendimiento';
+    const cw=$('#h-cobro-wrap'); if(cw) cw.style.display = rend?'none':'';
+    const cd=$('#h-cobro-det'); if(cd && rend) cd.innerHTML='';
+    const rh=$('#h-rend-hint'); if(rh) rh.style.display = rend?'':'none';
+    hacVentaCalc();
+  }
+}
+function hacVentaCalc(){
+  const kg=Number($('#h-kg')?.value||0), pr=Number($('#h-precio')?.value||0);
+  const t=$('#h-total'); if(t && (kg||pr)) t.value = (kg*pr)?(kg*pr).toFixed(2):'';
+}
+function hacVentaCobroChange(){
+  const c=$('#h-cobro')?.value; const det=$('#h-cobro-det'); if(!det) return;
+  if (c==='efectivo'){
+    const cajas=catByTipo('Caja').map(x=>x.nombre).filter(Boolean);
+    det.innerHTML = `<label class="label">Caja</label>${cajas.length?`<select id="h-cobro-caja" class="input"><option value="">— elegir —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select>`:`<input id="h-cobro-caja" class="input" placeholder="Nombre de caja"/>`}`;
+  } else if (c==='banco'){
+    const ctas=(state.cache.bancoCuentas||[]).filter(x=>x.activo!==false);
+    det.innerHTML = `<label class="label">Cuenta bancaria</label><select id="h-cobro-banco" class="input"><option value="">— elegir —</option>${ctas.map(x=>`<option value="${esc(x.id)}">${esc(x.banco)}${x.alias?' · '+esc(x.alias):''}</option>`).join('')}</select>${ctas.length?'':'<p class="text-[11px] text-amber-700 mt-1">No hay cuentas bancarias cargadas. Cargá una en Bancos o usá otro medio.</p>'}`;
+  } else if (c==='ctacte'){
+    det.innerHTML = `<p class="text-[11px] text-slate-500">Se registra como "a cobrar" en la cuenta corriente del cliente elegido arriba.</p>`;
+  } else det.innerHTML='';
 }
 function hacMovDestRefresh() {
   const cat = $('#h-cat')?.value.trim();
@@ -10299,6 +10372,20 @@ async function hacMovSave() {
   }
   if (!data.cantidad)                          return toast('Cantidad requerida','warn');
   if (tipo!=='ajuste' && data.cantidad<=0)     return toast('La cantidad debe ser positiva','warn');
+  if (tipo==='venta') {
+    data.precioKg = $('#h-precio').value?Number($('#h-precio').value):null;
+    data.total = $('#h-total').value?Number($('#h-total').value):null;
+    data.clienteId = $('#h-cliente').value||null;
+    data.modoVenta = $('#h-modo').value;
+    if (data.modoVenta!=='rendimiento') {
+      data.cobroTipo = $('#h-cobro').value;
+      if (data.cobroTipo==='efectivo') data.caja = $('#h-cobro-caja')?.value?.trim()||null;
+      if (data.cobroTipo==='banco')    data.bancoCuentaId = $('#h-cobro-banco')?.value||null;
+      if (data.cobroTipo==='ctacte' && !data.clienteId)     return toast('Elegí el cliente para la cuenta corriente','warn');
+      if (data.cobroTipo==='efectivo' && !data.caja)        return toast('Elegí la caja','warn');
+      if (data.cobroTipo==='banco' && !data.bancoCuentaId)  return toast('Elegí la cuenta bancaria','warn');
+    }
+  }
   try {
     await api('/api/hacienda-movimientos',{method:'POST',body:JSON.stringify(data)});
     toast('Movimiento registrado','success'); closeModal();
@@ -10500,7 +10587,7 @@ function hacProyPDF(){
     foot:[['','TOTALES',fmtN(t.totCab||0),fmtN(Math.round(t.totKga||0)),'',fmtN(Math.round(t.totKgp||0)),'',fmt$(t.totVal||0)]],
     startY:y+8,
     styles:{fontSize:9,cellPadding:4},
-    headStyles:{fillColor:[21,128,61],textColor:[255,255,255],halign:'center'},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255],halign:'left'},
     footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
     columnStyles:{2:{halign:'right'},3:{halign:'right'},4:{halign:'right'},5:{halign:'right'},6:{halign:'right'},7:{halign:'right'}},
   });
@@ -10508,6 +10595,56 @@ function hacProyPDF(){
   doc.setFontSize(8); doc.setTextColor(120);
   doc.text('Kg proyectados = Kg actuales + (Cabezas × GMD × días). Valorización informativa según el precio por kg ingresado. SENASA: stock en cabezas.', 40, yy);
   doc.save(`proyeccion-hacienda-${new Date().toISOString().slice(0,10)}.pdf`);
+}
+
+// ===== Cierre de ventas "a rendimiento" =====
+function hacRendConfirm(movId){
+  const m = (state.cache.haciendaMovs||[]).find(x=>x.id===movId); if(!m) return;
+  openModal({
+    title:'✅ Cerrar venta a rendimiento', size:'max-w-lg',
+    body:`
+      <p class="text-xs text-slate-500 mb-3">${fmtN(m.cantidad)} cab. de <b>${esc(m.categoria)}</b>. Cargá los kg y el importe definitivos (del frigorífico) y cómo se cobra.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Kg definitivos *</label><input id="rd-kg" type="number" step="0.1" min="0" class="input" value="${m.kilos||''}" oninput="hacRendCalc()"/></div>
+        <div><label class="label">Precio por kg</label><input id="rd-pre" type="number" step="0.01" min="0" class="input" value="${m.precioKg||''}" oninput="hacRendCalc()"/></div>
+        <div><label class="label">Total</label><input id="rd-total" type="number" step="0.01" min="0" class="input" value="${m.total||''}"/></div>
+        <div><label class="label">Cliente</label>
+          <select id="rd-cli" class="input"><option value="">— sin cliente —</option>${(state.cache.clientes||[]).map(c=>`<option value="${esc(c.id)}" ${c.id===m.clienteId?'selected':''}>${esc(c.razonSocial||c.nombre||'')}</option>`).join('')}</select>
+        </div>
+        <div><label class="label">Cobro</label>
+          <select id="rd-cobro" class="input" onchange="hacRendCobroChange()">
+            <option value="ninguno">No registrar ahora</option>
+            <option value="ctacte">Cuenta corriente (a cobrar)</option>
+            <option value="efectivo">Efectivo</option>
+            <option value="banco">Banco</option>
+          </select>
+        </div>
+        <div id="rd-cobro-det"></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='hacRendSave(${JSON.stringify(movId)})'>💾 Cerrar venta</button>`
+  });
+}
+function hacRendCalc(){ const kg=Number($('#rd-kg')?.value||0), pr=Number($('#rd-pre')?.value||0); const t=$('#rd-total'); if(t&&(kg||pr)) t.value=(kg*pr)?(kg*pr).toFixed(2):''; }
+function hacRendCobroChange(){
+  const c=$('#rd-cobro')?.value; const det=$('#rd-cobro-det'); if(!det) return;
+  if(c==='efectivo'){ const cajas=catByTipo('Caja').map(x=>x.nombre).filter(Boolean); det.innerHTML=`<label class="label">Caja</label>${cajas.length?`<select id="rd-caja" class="input"><option value="">— elegir —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select>`:`<input id="rd-caja" class="input" placeholder="Caja"/>`}`; }
+  else if(c==='banco'){ const ctas=(state.cache.bancoCuentas||[]).filter(x=>x.activo!==false); det.innerHTML=`<label class="label">Cuenta bancaria</label><select id="rd-banco" class="input"><option value="">— elegir —</option>${ctas.map(x=>`<option value="${esc(x.id)}">${esc(x.banco)}${x.alias?' · '+esc(x.alias):''}</option>`).join('')}</select>`; }
+  else det.innerHTML='';
+}
+async function hacRendSave(movId){
+  const cobro=$('#rd-cobro').value;
+  const data={ kilos:Number($('#rd-kg').value||0), precioKg:$('#rd-pre').value?Number($('#rd-pre').value):null, total:$('#rd-total').value?Number($('#rd-total').value):null, cobroTipo:cobro, clienteId:$('#rd-cli').value||null };
+  if(!data.kilos) return toast('Cargá los kg definitivos','warn');
+  if(cobro==='efectivo') data.caja=$('#rd-caja')?.value?.trim()||null;
+  if(cobro==='banco')    data.bancoCuentaId=$('#rd-banco')?.value||null;
+  if(cobro==='ctacte' && !data.clienteId)    return toast('Elegí el cliente','warn');
+  if(cobro==='efectivo' && !data.caja)       return toast('Elegí la caja','warn');
+  if(cobro==='banco' && !data.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn');
+  try{ await api('/api/hacienda-movimientos/'+movId+'/rendimiento',{method:'PUT',body:JSON.stringify(data)});
+    toast('Venta a rendimiento cerrada','success'); closeModal();
+    delete state.cache.haciendaResumen; delete state.cache.haciendaMovs; pages.hacienda(); }
+  catch(e){ toast(e.message,'error'); }
 }
 
 /* =========================================================
@@ -14567,7 +14704,7 @@ function empReciboPDF(){
     foot:[['','TOTALES',fmtMoney(d.totGan),fmtMoney(d.totGasto)]],
     startY:y,
     styles:{fontSize:9,cellPadding:4,overflow:'linebreak'},
-    headStyles:{fillColor:[21,128,61],textColor:[255,255,255],halign:'center'},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255],halign:'left'},
     footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
     columnStyles:{0:{cellWidth:64},2:{halign:'right',cellWidth:90},3:{halign:'right',cellWidth:90}},
   });
