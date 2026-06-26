@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'26/06/2026',
+      titulo:'🏦 v1.24.0 — Créditos en dólares/otra moneda + cuotas manuales + pago al TC del día',
+      desc:'Los <b>créditos bancarios</b> ahora pueden cargarse en <b>cualquier moneda</b> (dólar, euro, etc.), no solo en pesos. Al cargar un crédito en moneda extranjera ponés el <b>tipo de cambio del día que te lo habilitaron</b> y el sistema te muestra el <b>total en pesos que ingresó</b> (monto × TC). Además, el <b>plan de cuotas</b> ahora tiene dos modos: <b>Automático</b> (sistema francés, cuota constante, como antes) o <b>Manual</b>, donde <b>cargás vos cada cuota con su importe</b> — ideal para créditos cuyas cuotas son distintas (ej: dan U$S 70.000 y las cuotas son 10, 12, 15… mil hasta completar). Y a la hora de <b>pagar una cuota</b> de un crédito en moneda extranjera, ponés el <b>tipo de cambio del día del pago</b> y el sistema calcula y registra <b>cuánto es en pesos</b> (porque hasta el día que pagás no sabés el valor exacto). Si el pago sale de una cuenta bancaria, el egreso queda en pesos al TC que cargaste.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'🌐 v1.23.0 — Web, Manual y Presupuesto actualizados con todo lo nuevo',
       desc:'Se pusieron al día la <b>web (agrocore.ar)</b>, el <b>Manual de Usuario</b> y el <b>Presupuesto</b> con todas las funciones recientes: multimoneda, diferencia de cambio, canje de cereal, importación de facturas por PDF, hacienda integrada al stock, campos como depósitos, flujo de fondos en ARS/USD con simulador, cotizaciones con histórico y listados configurables.' },
@@ -18056,18 +18059,39 @@ async function liqMarcarCobrado(id) {
 /* =========================================================
  * CRÉDITOS BANCARIOS — préstamos con plan de cuotas + alertas
  * ========================================================= */
+// Símbolo corto de una moneda (para créditos). Grano = "tn".
+function credMonSym(clave){
+  if(!clave || clave==='ARS') return '$';
+  const m = monedaMeta(clave);
+  if(m && m.tipo==='grano') return 'tn';
+  if(/^USD/.test(clave)) return 'US$';
+  if(clave==='EUR') return '€';
+  return (m && m.simbolo) || clave;
+}
+// Formatea un importe en su moneda, ej "US$ 10.000" / "50 tn" / "$ 1.000".
+function fmtMon(clave, val){
+  const n = Number(val||0);
+  if(clave && clave!=='ARS' && monedaMeta(clave)?.tipo==='grano') return `${fmtN(n)} tn`;
+  return `${credMonSym(clave)} ${fmtN(n)}`;
+}
+// TC para valorizar en ARS una moneda (alta del crédito, o cotización viva, o 0).
+function credCotizAprox(cred){
+  if(!cred.moneda || cred.moneda==='ARS') return 1;
+  return Number(cred.cotizacionAlta) || Number((state.cache.cotizVivas||{})[cred.moneda]) || 0;
+}
 pages.creditos = async function() {
   setHeader('Créditos bancarios', 'Préstamos tomados con su plan de cuotas y vencimientos');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('creditos','Créditos'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  await cargarMonedas(); await cargarCotizVivas();
   let rows=[];
   try { rows = (await api('/api/creditos')).data||[]; } catch (e) { return toast(e.message,'error'); }
   state.cache.creditos = rows;
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const en30 = new Date(hoy); en30.setDate(en30.getDate()+30);
-  // KPIs
+  // KPIs — la deuda se valoriza a pesos (cada crédito en su moneda al TC de alta / del día)
   const activos = rows.filter(r => r.estado === 'activo');
-  const totalDeuda = activos.reduce((a, r) => a + r.cuotas.filter(c => !c.pagada).reduce((x, c) => x + Number(c.importeTotal||0), 0), 0);
+  const totalDeuda = activos.reduce((a, r) => a + credCotizAprox(r) * r.cuotas.filter(c => !c.pagada).reduce((x, c) => x + Number(c.importeTotal||0), 0), 0);
   const cuotasProx = activos.flatMap(r => r.cuotas.filter(c => !c.pagada && new Date(c.vencimiento) <= en30).map(c => ({ ...c, credito: r })))
     .sort((a, b) => new Date(a.vencimiento) - new Date(b.vencimiento));
   $('#page-body').innerHTML = `
@@ -18077,7 +18101,7 @@ pages.creditos = async function() {
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Créditos activos</div><div class="text-2xl font-bold mt-1">${activos.length}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Deuda pendiente total</div><div class="text-2xl font-bold mt-1 text-red-600">${fmt$(totalDeuda)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Deuda pendiente total (en $)</div><div class="text-2xl font-bold mt-1 text-red-600">${fmt$(totalDeuda)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Cuotas próximos 30 días</div><div class="text-2xl font-bold mt-1 text-amber-600">${cuotasProx.length}</div></div>
     </div>
     ${cuotasProx.length ? `
@@ -18091,7 +18115,7 @@ pages.creditos = async function() {
                 <td class="font-medium">${fmtDate(c.vencimiento)}</td>
                 <td>${esc(c.credito.banco)}${c.credito.nroOperacion?` · #${esc(c.credito.nroOperacion)}`:''}</td>
                 <td>${c.numero}/${c.credito.cantCuotas}</td>
-                <td class="text-right font-bold">${fmt$(c.importeTotal)}</td>
+                <td class="text-right font-bold">${fmtMon(c.credito.moneda, c.importeTotal)}</td>
                 <td class="text-right">${can('finanzas:update')?`<button class="btn btn-secondary text-xs" onclick='cuotaPagar(${JSON.stringify(c.credito.id)},${JSON.stringify(c.id)})'>💸 Marcar pagada</button>`:''}</td>
               </tr>`).join('')}
           </tbody>
@@ -18106,8 +18130,8 @@ pages.creditos = async function() {
               <td class="font-medium">${esc(r.banco)}</td>
               <td class="font-mono text-xs">${esc(r.nroOperacion||'—')}</td>
               <td>${esc(r.destino||'—')}</td>
-              <td class="text-right">${fmt$(r.montoOriginal)}</td>
-              <td>${r.tasaAnual?r.tasaAnual+'%':'—'}</td>
+              <td class="text-right">${fmtMon(r.moneda, r.montoOriginal)}${r.moneda&&r.moneda!=='ARS'&&r.cotizacionAlta?`<div class="text-[10px] text-slate-400">≈ ${fmt$(r.montoOriginal*r.cotizacionAlta)}</div>`:''}</td>
+              <td>${r.tasaAnual?r.tasaAnual+'%':'—'}${r.planManual?'<div class="text-[10px] text-slate-400">plan manual</div>':''}</td>
               <td>${r.cantCuotas} ${r.periodicidad==='mensual'?'mensuales':r.periodicidad}</td>
               <td>${fmtDate(r.fechaPrimera)}</td>
               <td>${r.estado==='activo'?'<span class="badge badge-green">Activo</span>':'<span class="badge badge-gray">'+esc(r.estado)+'</span>'}</td>
@@ -18124,18 +18148,27 @@ pages.creditos = async function() {
 async function credForm(id=null) {
   const it = id ? (state.cache.creditos||[]).find(x=>x.id===id)||{} : {};
   const pagadas = id ? (it.cuotas||[]).filter(q=>q.pagada).length : 0;
+  await cargarMonedas(); await cargarCotizVivas();
+  const curMon = it.moneda || 'ARS';
+  const monOpts = monedasOpts().map(([k,l])=>`<option value="${k}" ${k===curMon?'selected':''}>${esc(l)}</option>`).join('');
+  const esManual = !!it.planManual;
   openModal({
     title: id?'Editar crédito bancario':'Nuevo crédito bancario', size:'max-w-3xl',
     body: `
       <div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mb-3">
         ${id
-          ? `✏️ Si cambiás <b>monto, tasa, cantidad de cuotas, periodicidad o fecha de la primera</b>, se <b>regenera el plan de cuotas</b>${pagadas?` y se pierden las ${pagadas} marca(s) de pago`:''}. Cambiar banco/destino/observaciones/estado no afecta el plan.`
-          : '💡 Al guardar, el sistema genera automáticamente todas las cuotas con sistema francés (cuota total constante). Después podés marcarlas como pagadas a medida que las vas pagando.'}
+          ? `✏️ En <b>plan automático</b>, si cambiás monto, tasa, cantidad de cuotas, periodicidad o fecha de la primera se <b>regenera el plan</b>${pagadas?` y se pierden las ${pagadas} marca(s) de pago`:''}. En <b>plan manual</b>, el plan solo se regenera si tocás la tabla de cuotas. Banco, destino, moneda, estado y observaciones no afectan el plan.`
+          : '💡 Elegí el <b>plan de cuotas</b>: <b>automático</b> (sistema francés, cuota constante) o <b>manual</b> (cargás vos cada cuota con su importe — ideal cuando las cuotas son distintas, ej. 10, 12, 15… mil).'}
       </div>
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div><label class="label">Banco *</label><input id="cr-banco" class="input" value="${esc(it.banco||'')}" placeholder="Banco Nación"/></div>
         <div><label class="label">Nro operación</label><input id="cr-op" class="input" value="${esc(it.nroOperacion||'')}"/></div>
-        <div><label class="label">Monto solicitado *</label><input id="cr-monto" type="number" step="0.01" class="input" value="${it.montoOriginal||''}"/></div>
+        <div><label class="label">Monto del crédito *</label><input id="cr-monto" type="number" step="0.01" class="input" value="${it.montoOriginal||''}" oninput="credMonChange()"/></div>
+        <div><label class="label">Moneda *</label><select id="cr-moneda" class="input" onchange="credMonChange()">${monOpts}</select></div>
+        <div id="cr-ctz-wrap" style="display:none"><label class="label">TC del día que habilitaron (ARS por unidad)</label>
+          <input id="cr-ctz" type="number" step="0.01" class="input" value="${it.cotizacionAlta||''}" placeholder="ej: 1050" oninput="this.dataset.manual='1';credMonChange()"/>
+          <p class="text-[11px] text-slate-600 mt-1" id="cr-totpesos"></p>
+        </div>
         <div><label class="label">Tasa anual % (TNA)</label><input id="cr-tasa" type="number" step="0.01" class="input" value="${it.tasaAnual||''}"/></div>
         <div><label class="label">Cantidad de cuotas *</label><input id="cr-cant" type="number" class="input" value="${it.cantCuotas||12}"/></div>
         <div><label class="label">Periodicidad *</label>
@@ -18147,12 +18180,112 @@ async function credForm(id=null) {
         <div><label class="label">Destino</label><input id="cr-dest" class="input" value="${esc(it.destino||'')}" placeholder="Capital de trabajo, cosechadora..."/></div>
         ${id?`<div><label class="label">Estado</label><select id="cr-est" class="input">${['activo','cancelado','refinanciado'].map(s=>`<option value="${s}" ${(it.estado||'activo')===s?'selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}</select></div>`:''}
       </div>
+      <div class="mb-3">
+        <label class="label">Plan de cuotas</label>
+        <div class="flex flex-wrap gap-4 text-sm">
+          <label class="flex items-center gap-1"><input type="radio" name="cr-modo" value="auto" ${esManual?'':'checked'} onchange="credModoChange()"/> Automático (sistema francés)</label>
+          <label class="flex items-center gap-1"><input type="radio" name="cr-modo" value="manual" ${esManual?'checked':''} onchange="credModoChange()"/> Manual (cargo cada cuota)</label>
+        </div>
+      </div>
+      <div id="cr-manual-wrap" style="display:none" class="mb-3 border border-slate-200 rounded-lg p-3 bg-slate-50">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div class="text-sm font-semibold">Cuotas — cargá el importe de cada una</div>
+          <div class="flex gap-2">
+            <button type="button" class="btn btn-secondary text-xs" onclick="credManualGen()" title="Genera filas con las fechas según periodicidad y reparte el monto en partes iguales (después editás cada importe)">↻ Generar fechas</button>
+            <button type="button" class="btn btn-secondary text-xs" onclick="credManualAddRow()">+ Cuota</button>
+          </div>
+        </div>
+        <table class="data text-sm"><thead><tr><th>#</th><th>Vencimiento</th><th class="text-right">Importe (<span id="cr-man-mon">$</span>)</th><th></th></tr></thead>
+          <tbody id="cr-man-body"></tbody>
+        </table>
+        <div class="text-xs text-slate-600 mt-2" id="cr-man-sum"></div>
+      </div>
       <div><label class="label">Observaciones</label><textarea id="cr-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="credSave(${id?`'${id}'`:'null'})">💾 ${id?'Guardar cambios':'Generar crédito y plan'}</button>`
+             <button class="btn btn-primary" onclick="credSave(${id?`'${id}'`:'null'})">💾 ${id?'Guardar cambios':'Crear crédito'}</button>`
   });
+  credMonChange();
+  if (esManual && (it.cuotas||[]).length) {
+    it.cuotas.forEach(q => credManualAddRow({ vencimiento: String(q.vencimiento).slice(0,10), importeTotal: q.importeTotal }));
+  }
+  credModoChange();
+}
+// Toggle del campo de cotización y cálculo del total en pesos.
+function credMonChange(){
+  const mon = $('#cr-moneda')?.value || 'ARS';
+  const w = $('#cr-ctz-wrap'); if (w) w.style.display = mon==='ARS' ? 'none' : '';
+  const symEl = $('#cr-man-mon'); if (symEl) symEl.textContent = credMonSym(mon);
+  const ctz = $('#cr-ctz');
+  if (mon!=='ARS' && ctz && !ctz.dataset.manual){
+    const v = (state.cache.cotizVivas||{})[mon];
+    if (v && !ctz.value) ctz.value = Math.round(v);
+  }
+  const tot = $('#cr-totpesos');
+  if (tot){
+    const monto = Number($('#cr-monto')?.value||0);
+    const c = Number(ctz?.value||0);
+    tot.textContent = (mon!=='ARS' && monto && c) ? `Total en pesos ingresado ≈ ${fmt$(monto*c)}` : 'Cargá el TC para ver el total en pesos.';
+  }
+  if ($('#cr-man-body')?.children.length) credManualRecalc();
+}
+// Mostrar/ocultar la tabla de cuotas manuales.
+function credModoChange(){
+  const modo = (document.querySelector('input[name=cr-modo]:checked')||{}).value || 'auto';
+  const w = $('#cr-manual-wrap'); if (w) w.style.display = modo==='manual' ? '' : 'none';
+  if (modo==='manual' && !$('#cr-man-body')?.children.length) credManualGen();
+}
+function credManualRowHTML(n, fecha, importe){
+  return `<tr data-man>
+    <td class="text-center" data-n>${n}</td>
+    <td><input type="date" class="input text-sm" data-mf="fecha" value="${fecha||''}"/></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-mf="total" value="${importe!=null&&importe!==''?importe:''}" oninput="credManualRecalc()"/></td>
+    <td class="text-right"><button type="button" class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove();credManualRenum();credManualRecalc()">✕</button></td>
+  </tr>`;
+}
+function credManualAddRow(data){
+  const body = $('#cr-man-body'); if(!body) return;
+  const n = body.children.length + 1;
+  body.insertAdjacentHTML('beforeend', credManualRowHTML(n, data?.vencimiento||'', data?.importeTotal));
+  credManualRecalc();
+}
+function credManualRenum(){
+  $$('#cr-man-body tr[data-man]').forEach((tr,i)=>{ const c=tr.querySelector('[data-n]'); if(c) c.textContent=i+1; });
+}
+function credManualGen(){
+  const body = $('#cr-man-body'); if(!body) return;
+  const cant = Math.max(1, Number($('#cr-cant')?.value||0));
+  const monto = Number($('#cr-monto')?.value||0);
+  const per = $('#cr-per')?.value||'mensual';
+  const step = { mensual:1, bimestral:2, trimestral:3, semestral:6 }[per]||1;
+  const f0 = $('#cr-fec')?.value ? new Date($('#cr-fec').value+'T00:00:00') : new Date();
+  const cuotaBase = monto ? Math.round((monto/cant)*100)/100 : '';
+  body.innerHTML = '';
+  for(let i=0;i<cant;i++){
+    const f = new Date(f0); f.setMonth(f.getMonth()+i*step);
+    body.insertAdjacentHTML('beforeend', credManualRowHTML(i+1, f.toISOString().slice(0,10), cuotaBase));
+  }
+  credManualRecalc();
+}
+function credManualRecalc(){
+  const mon = $('#cr-moneda')?.value||'ARS';
+  const rows = $$('#cr-man-body tr[data-man]');
+  const suma = rows.reduce((a,tr)=> a + Number(tr.querySelector('[data-mf=total]')?.value||0), 0);
+  const monto = Number($('#cr-monto')?.value||0);
+  const el = $('#cr-man-sum'); if(!el) return;
+  const dif = monto - suma;
+  el.innerHTML = `Suma de cuotas: <b>${fmtMon(mon,suma)}</b> · Monto del crédito: ${fmtMon(mon,monto)}` +
+    (Math.abs(dif)>0.5 ? ` · <span class="text-amber-700">Diferencia: ${fmtMon(mon,dif)}</span>` : (monto? ' · <span class="text-green-700">✓ coincide</span>' : ''));
+}
+function credManualCollect(){
+  return $$('#cr-man-body tr[data-man]').map((tr,i)=>({
+    numero: i+1,
+    vencimiento: tr.querySelector('[data-mf=fecha]')?.value ? new Date(tr.querySelector('[data-mf=fecha]').value+'T00:00:00').toISOString() : null,
+    importeTotal: Number(tr.querySelector('[data-mf=total]')?.value||0),
+  })).filter(c=>c.vencimiento);
 }
 async function credSave(id=null) {
+  const modo = (document.querySelector('input[name=cr-modo]:checked')||{}).value || 'auto';
+  const mon = $('#cr-moneda').value || 'ARS';
   const data = {
     banco: $('#cr-banco').value.trim(),
     nroOperacion: $('#cr-op').value.trim()||null,
@@ -18160,14 +18293,24 @@ async function credSave(id=null) {
     tasaAnual: Number($('#cr-tasa').value)||null,
     cantCuotas: Number($('#cr-cant').value||0),
     periodicidad: $('#cr-per').value,
-    fechaPrimera: new Date($('#cr-fec').value).toISOString(),
+    fechaPrimera: new Date($('#cr-fec').value+'T00:00:00').toISOString(),
     destino: $('#cr-dest').value.trim()||null,
+    moneda: mon,
+    cotizacionAlta: (mon!=='ARS' && $('#cr-ctz')?.value) ? Number($('#cr-ctz').value) : null,
+    planManual: modo==='manual',
     observaciones: $('#cr-obs').value.trim()||null,
   };
   if (id && $('#cr-est')) data.estado = $('#cr-est').value;
   if (!data.banco) return toast('Falta el banco','warn');
   if (!data.montoOriginal) return toast('Falta el monto','warn');
-  if (!data.cantCuotas) return toast('Falta la cantidad de cuotas','warn');
+  if (modo==='manual') {
+    const cuotas = credManualCollect();
+    if (!cuotas.length) return toast('Cargá al menos una cuota (con fecha) en el plan manual','warn');
+    data.cuotas = cuotas;
+    data.cantCuotas = cuotas.length;
+  } else {
+    if (!data.cantCuotas) return toast('Falta la cantidad de cuotas','warn');
+  }
   try {
     const r = await api('/api/creditos'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
     toast(id ? (r.planRegenerado?'Crédito actualizado · plan de cuotas regenerado':'Crédito actualizado') : 'Crédito creado con su plan de cuotas','success');
@@ -18200,9 +18343,12 @@ async function credVer(id) {
     body: `
       <dl class="grid grid-cols-3 gap-x-4 gap-y-2 text-sm mb-4">
         <dt class="text-slate-500">Banco</dt><dd class="col-span-2"><b>${esc(c.banco)}</b></dd>
-        <dt class="text-slate-500">Monto original</dt><dd class="col-span-2">${fmt$(c.montoOriginal)}</dd>
+        <dt class="text-slate-500">Monto del crédito</dt><dd class="col-span-2"><b>${fmtMon(c.moneda, c.montoOriginal)}</b>${c.moneda&&c.moneda!=='ARS'?` <span class="text-slate-500">(${esc(c.moneda)})</span>`:''}</dd>
+        ${c.moneda&&c.moneda!=='ARS'?`
+        <dt class="text-slate-500">TC del día (alta)</dt><dd class="col-span-2">${c.cotizacionAlta?fmt$(c.cotizacionAlta)+' por unidad':'<span class="text-amber-600">no cargado</span>'}</dd>
+        <dt class="text-slate-500">Total en pesos ingresado</dt><dd class="col-span-2">${c.cotizacionAlta?fmt$(c.montoOriginal*c.cotizacionAlta):'—'}</dd>`:''}
         <dt class="text-slate-500">Tasa</dt><dd class="col-span-2">${c.tasaAnual?c.tasaAnual+'% TNA':'sin tasa'}</dd>
-        <dt class="text-slate-500">Plan</dt><dd class="col-span-2">${c.cantCuotas} cuotas ${c.periodicidad}es</dd>
+        <dt class="text-slate-500">Plan</dt><dd class="col-span-2">${c.cantCuotas} cuotas ${c.periodicidad}es · ${c.planManual?'<span class="badge badge-gray">manual</span>':'automático (francés)'}</dd>
         <dt class="text-slate-500">Destino</dt><dd class="col-span-2">${esc(c.destino||'—')}</dd>
       </dl>
       <div class="grid grid-cols-3 gap-3 mb-3">
@@ -18217,10 +18363,10 @@ async function credVer(id) {
             <tr>
               <td>${q.numero}</td>
               <td>${fmtDate(q.vencimiento)}</td>
-              <td class="text-right">${fmt$(q.importeCapital)}</td>
-              <td class="text-right">${fmt$(q.importeInteres)}</td>
-              <td class="text-right font-bold">${fmt$(q.importeTotal)}</td>
-              <td>${q.pagada?`<span class="badge badge-green">Pagada ${q.fechaPago?fmtDate(q.fechaPago):''}</span>`:'<span class="badge badge-yellow">Pendiente</span>'}</td>
+              <td class="text-right">${fmtMon(c.moneda, q.importeCapital)}</td>
+              <td class="text-right">${fmtMon(c.moneda, q.importeInteres)}</td>
+              <td class="text-right font-bold">${fmtMon(c.moneda, q.importeTotal)}</td>
+              <td>${q.pagada?`<span class="badge badge-green">Pagada ${q.fechaPago?fmtDate(q.fechaPago):''}</span>${(c.moneda&&c.moneda!=='ARS'&&q.importePagadoArs)?`<div class="text-[10px] text-slate-500">${fmt$(q.importePagadoArs)} @ ${fmtN(q.cotizacionPago||0)}</div>`:''}`:'<span class="badge badge-yellow">Pendiente</span>'}</td>
               <td class="text-right">${!q.pagada && can('finanzas:update')?`<button class="btn btn-secondary text-xs" onclick='cuotaPagar(${JSON.stringify(c.id)},${JSON.stringify(q.id)})'>💸 Pagar</button>`:''}</td>
             </tr>`).join('')}
         </tbody>
@@ -18232,16 +18378,32 @@ async function credVer(id) {
       <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
   });
 }
+let _cpCtx = null;
 async function cuotaPagar(credId, cuotaId) {
   // Cargamos cuentas bancarias (si no están cacheadas) para ofrecer destino
   let cuentas = state.cache.bancoCuentas;
   if (!cuentas) {
     try { cuentas = (await api('/api/banco-cuentas')).data || []; state.cache.bancoCuentas = cuentas; } catch { cuentas = []; }
   }
+  await cargarMonedas(); await cargarCotizVivas();
+  const cred = (state.cache.creditos||[]).find(x=>x.id===credId) || {};
+  const cuota = (cred.cuotas||[]).find(q=>q.id===cuotaId) || {};
+  const mon = cred.moneda || 'ARS';
+  const esExt = !!(mon && mon!=='ARS');
+  _cpCtx = { mon, total: Number(cuota.importeTotal||0) };
+  const tcSug = esExt ? (cred.cotizacionAlta || (state.cache.cotizVivas||{})[mon] || '') : '';
   openModal({
-    title:'💸 Marcar cuota como pagada', size:'max-w-md',
+    title:'💸 Pagar cuota'+(esExt?` · ${fmtMon(mon, cuota.importeTotal)}`:''), size:'max-w-md',
     body: `
       <div class="grid grid-cols-1 gap-3">
+        ${esExt?`
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs text-amber-900">
+          Cuota en <b>${esc(mon)}</b>: <b>${fmtMon(mon, cuota.importeTotal)}</b>. Poné el <b>tipo de cambio del día del pago</b> para saber cuánto es en pesos (el dólar varía hasta el día que pagás).
+        </div>
+        <div><label class="label">Tipo de cambio del día (ARS por unidad) *</label>
+          <input id="cp-tc" type="number" step="0.01" class="input" value="${tcSug||''}" oninput="cuotaPagarTcCalc()"/>
+          <div class="text-sm font-semibold mt-1 text-agro-800" id="cp-pesos"></div>
+        </div>`:''}
         <div><label class="label">Medio de pago *</label>
           <select id="cp-med" class="input" onchange="cuotaPagarToggle()">
             <option value="transferencia">Transferencia bancaria</option>
@@ -18255,7 +18417,7 @@ async function cuotaPagar(credId, cuotaId) {
             <option value="">— Sin registrar en banco —</option>
             ${cuentas.filter(c=>c.activo).map(c => `<option value="${c.id}">🏛️ ${esc(c.banco)}${c.alias?' · '+esc(c.alias):''} (saldo: ${fmt$(c.saldo)})</option>`).join('')}
           </select>
-          <div class="text-[11px] text-slate-500 mt-1">Si la elegís, se carga automáticamente el movimiento de egreso en esa cuenta.</div>
+          <div class="text-[11px] text-slate-500 mt-1">Si la elegís, se carga el movimiento de egreso en esa cuenta (siempre en pesos).</div>
         </div>
         <div><label class="label">Referencia (opcional)</label><input id="cp-ref" class="input" placeholder="Nro operación bancaria / cheque"/></div>
         <div><label class="label">Fecha de pago</label><input id="cp-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
@@ -18263,6 +18425,12 @@ async function cuotaPagar(credId, cuotaId) {
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='cuotaPagarConfirmar(${JSON.stringify(credId)},${JSON.stringify(cuotaId)})'>💸 Confirmar pago</button>`
   });
+  if (esExt) cuotaPagarTcCalc();
+}
+function cuotaPagarTcCalc(){
+  const el = $('#cp-pesos'); if(!el || !_cpCtx) return;
+  const tc = Number($('#cp-tc')?.value||0);
+  el.textContent = tc ? `A pagar en pesos: ${fmt$(_cpCtx.total*tc)}` : 'Cargá el tipo de cambio para ver el total en pesos.';
 }
 function cuotaPagarToggle() {
   const med = $('#cp-med').value;
@@ -18270,16 +18438,20 @@ function cuotaPagarToggle() {
   if (wrap) wrap.style.display = (med === 'transferencia' || med === 'debito_automatico') ? '' : 'none';
 }
 async function cuotaPagarConfirmar(credId, cuotaId) {
+  const esExt = !!(_cpCtx && _cpCtx.mon && _cpCtx.mon!=='ARS');
+  const tc = esExt ? Number($('#cp-tc')?.value||0) : null;
+  if (esExt && !tc) return toast('Cargá el tipo de cambio del día','warn');
   const data = {
     medioPago: $('#cp-med').value,
     referencia: $('#cp-ref').value.trim() || null,
-    fechaPago: $('#cp-fec').value ? new Date($('#cp-fec').value).toISOString() : undefined,
+    fechaPago: $('#cp-fec').value ? new Date($('#cp-fec').value+'T00:00:00').toISOString() : undefined,
     cuentaBancoId: $('#cp-cta')?.value || null,
+    cotizacionPago: esExt ? tc : null,
   };
   try {
-    await api('/api/creditos/'+credId+'/cuotas/'+cuotaId+'/pagar', { method:'PUT', body: JSON.stringify(data) });
-    toast('Cuota marcada como pagada' + (data.cuentaBancoId?' · movimiento bancario registrado':''),'success');
-    closeModal(); pages.creditos();
+    const r = await api('/api/creditos/'+credId+'/cuotas/'+cuotaId+'/pagar', { method:'PUT', body: JSON.stringify(data) });
+    toast('Cuota pagada' + (esExt && r.importePagadoArs ? ` · ${fmt$(r.importePagadoArs)}` : '') + (data.cuentaBancoId?' · registrado en banco':''),'success');
+    closeModal(); delete state.cache.creditos; pages.creditos();
   } catch (e) { toast(e.message,'error'); }
 }
 

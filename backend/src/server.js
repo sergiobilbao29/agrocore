@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.23.0';
+const AGROCORE_VERSION = '1.24.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -363,6 +363,16 @@ async function getCotizacionARS(moneda, fecha, companyId) {
   const map = { USD:d?.oficial?.venta, USD_MEP:d?.mep?.venta, USD_BLUE:d?.blue?.venta,
     SOJA:c?.items?.soja, MAIZ:c?.items?.maiz, TRIGO:c?.items?.trigo, SORGO:c?.items?.sorgo, GIRASOL:c?.items?.girasol };
   return map[moneda] ? Number(map[moneda]) : null;
+}
+
+// Texto corto de un importe en su moneda, ej: "US$ 10.000" / "50 tn (SOJA)" / "$ 1.000".
+function fmtMonedaTxt(moneda, valor) {
+  const n = Number(valor || 0);
+  const m = MONEDAS.find(x => x.clave === moneda);
+  if (!moneda || moneda === 'ARS') return `$ ${n.toLocaleString('es-AR')}`;
+  if (m && m.tipo === 'grano') return `${n.toLocaleString('es-AR')} tn (${moneda})`;
+  const sim = m ? m.simbolo : moneda;
+  return `${sim} ${n.toLocaleString('es-AR')}`;
 }
 
 // Fuente de cotización automática de cada moneda predefinida (clave de dolarapi o de granos).
@@ -4623,6 +4633,16 @@ app.get('/api/creditos/:id', requireCompany, requirePermission('finanzas:read'),
   } catch (e) { next(e); }
 });
 
+// Esquema de una cuota cargada a mano (plan manual).
+const _cuotaManualSchema = z.object({
+  numero: z.number().int().positive(),
+  vencimiento: z.coerce.date(),
+  importeCapital: z.number().nullable().optional(),
+  importeInteres: z.number().nullable().optional(),
+  importeOtros: z.number().nullable().optional(),
+  importeTotal: z.number().nonnegative(),
+});
+
 app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const schema = z.object({
@@ -4634,34 +4654,58 @@ app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), 
       periodicidad: z.enum(['mensual', 'bimestral', 'trimestral', 'semestral']).default('mensual'),
       fechaPrimera: z.coerce.date(),
       destino: z.string().nullable().optional(),
+      moneda: z.string().default('ARS'),
+      cotizacionAlta: z.number().positive().nullable().optional(),
+      planManual: z.boolean().default(false),
+      cuotas: z.array(_cuotaManualSchema).optional(),  // requerido si planManual
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
-    const cuotas = _calcularCuotasFrances({
-      monto: d.montoOriginal, tasaAnual: d.tasaAnual || 0,
-      cantCuotas: d.cantCuotas, periodicidad: d.periodicidad,
-    });
-    const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[d.periodicidad];
+    const usaManual = d.planManual && Array.isArray(d.cuotas) && d.cuotas.length > 0;
+    let cuotasData;
+    if (usaManual) {
+      // Plan manual: tomamos las cuotas tal cual las cargó el usuario.
+      cuotasData = d.cuotas
+        .slice()
+        .sort((a, b) => a.numero - b.numero)
+        .map((c, idx) => ({
+          numero: idx + 1, vencimiento: c.vencimiento,
+          importeCapital: Number(c.importeCapital || 0),
+          importeInteres: Number(c.importeInteres || 0),
+          importeOtros: Number(c.importeOtros || 0),
+          importeTotal: Number(c.importeTotal || 0),
+        }));
+    } else {
+      // Plan automático (sistema francés).
+      const cuotas = _calcularCuotasFrances({
+        monto: d.montoOriginal, tasaAnual: d.tasaAnual || 0,
+        cantCuotas: d.cantCuotas, periodicidad: d.periodicidad,
+      });
+      const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[d.periodicidad];
+      cuotasData = cuotas.map(c => {
+        const venc = new Date(d.fechaPrimera);
+        venc.setMonth(venc.getMonth() + (c.numero - 1) * monthsStep);
+        return {
+          numero: c.numero, vencimiento: venc,
+          importeCapital: c.capital, importeInteres: c.interes,
+          importeOtros: 0, importeTotal: c.total,
+        };
+      });
+    }
+    const cantCuotasEf = usaManual ? cuotasData.length : d.cantCuotas;
     const result = await prisma.$transaction(async (tx) => {
       const cred = await tx.credito.create({
         data: {
           companyId: req.companyId, banco: d.banco, nroOperacion: d.nroOperacion || null,
           montoOriginal: d.montoOriginal, tasaAnual: d.tasaAnual || null,
-          cantCuotas: d.cantCuotas, periodicidad: d.periodicidad,
+          cantCuotas: cantCuotasEf, periodicidad: d.periodicidad,
           fechaPrimera: d.fechaPrimera, destino: d.destino || null,
+          moneda: d.moneda || 'ARS', cotizacionAlta: d.cotizacionAlta || null,
+          planManual: !!usaManual,
           observaciones: d.observaciones || null,
         },
       });
-      const cuotasData = cuotas.map(c => {
-        const venc = new Date(d.fechaPrimera);
-        venc.setMonth(venc.getMonth() + (c.numero - 1) * monthsStep);
-        return {
-          creditoId: cred.id, numero: c.numero, vencimiento: venc,
-          importeCapital: c.capital, importeInteres: c.interes,
-          importeOtros: 0, importeTotal: c.total,
-        };
-      });
-      await tx.cuotaCredito.createMany({ data: cuotasData });
+      await tx.cuotaCredito.createMany({ data: cuotasData.map(c => ({ ...c, creditoId: cred.id })) });
       return cred;
     });
     const fullCred = await prisma.credito.findUnique({
@@ -4686,9 +4730,15 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
       fechaPrimera: z.coerce.date().optional(),
       destino: z.string().nullable().optional(),
       estado: z.enum(['activo', 'cancelado', 'refinanciado']).optional(),
+      moneda: z.string().optional(),
+      cotizacionAlta: z.number().positive().nullable().optional(),
+      planManual: z.boolean().optional(),
+      cuotas: z.array(_cuotaManualSchema).optional(),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
+    const planManualEf = d.planManual !== undefined ? d.planManual : existing.planManual;
+    const traeCuotasManual = planManualEf && Array.isArray(d.cuotas) && d.cuotas.length > 0;
     // Valores efectivos del plan (lo que vino, o lo que ya tenía)
     const merged = {
       montoOriginal: d.montoOriginal ?? existing.montoOriginal,
@@ -4697,13 +4747,17 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
       periodicidad:  d.periodicidad ?? existing.periodicidad,
       fechaPrimera:  d.fechaPrimera ?? existing.fechaPrimera,
     };
-    // ¿Cambió algo que afecte el plan de cuotas? → hay que regenerarlo.
-    const planCambio =
+    // Plan manual: se regenera SOLO si el usuario manda cuotas nuevas.
+    // Plan automático: se regenera si cambió monto/tasa/cantidad/periodicidad/fecha.
+    const planCambio = traeCuotasManual || (!planManualEf && (
       (d.montoOriginal !== undefined && d.montoOriginal !== existing.montoOriginal) ||
       (d.tasaAnual     !== undefined && d.tasaAnual     !== existing.tasaAnual) ||
       (d.cantCuotas    !== undefined && d.cantCuotas    !== existing.cantCuotas) ||
       (d.periodicidad  !== undefined && d.periodicidad  !== existing.periodicidad) ||
-      (d.fechaPrimera  !== undefined && new Date(d.fechaPrimera).getTime() !== new Date(existing.fechaPrimera).getTime());
+      (d.fechaPrimera  !== undefined && new Date(d.fechaPrimera).getTime() !== new Date(existing.fechaPrimera).getTime())
+    ));
+    let cantCuotasFinal = merged.cantCuotas;
+    if (traeCuotasManual) cantCuotasFinal = d.cuotas.length;
     await prisma.$transaction(async (tx) => {
       await tx.credito.update({
         where: { id: existing.id },
@@ -4712,23 +4766,35 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
           nroOperacion:  d.nroOperacion !== undefined ? d.nroOperacion : existing.nroOperacion,
           montoOriginal: merged.montoOriginal,
           tasaAnual:     merged.tasaAnual,
-          cantCuotas:    merged.cantCuotas,
+          cantCuotas:    cantCuotasFinal,
           periodicidad:  merged.periodicidad,
           fechaPrimera:  merged.fechaPrimera,
           destino:       d.destino !== undefined ? d.destino : existing.destino,
           estado:        d.estado ?? existing.estado,
+          moneda:        d.moneda ?? existing.moneda,
+          cotizacionAlta: d.cotizacionAlta !== undefined ? d.cotizacionAlta : existing.cotizacionAlta,
+          planManual:    planManualEf,
           observaciones: d.observaciones !== undefined ? d.observaciones : existing.observaciones,
         },
       });
       if (planCambio) {
         await tx.cuotaCredito.deleteMany({ where: { creditoId: existing.id } });
-        const cuotas = _calcularCuotasFrances({ monto: merged.montoOriginal, tasaAnual: merged.tasaAnual || 0, cantCuotas: merged.cantCuotas, periodicidad: merged.periodicidad });
-        const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[merged.periodicidad];
-        const cuotasData = cuotas.map(c => {
-          const venc = new Date(merged.fechaPrimera);
-          venc.setMonth(venc.getMonth() + (c.numero - 1) * monthsStep);
-          return { creditoId: existing.id, numero: c.numero, vencimiento: venc, importeCapital: c.capital, importeInteres: c.interes, importeOtros: 0, importeTotal: c.total };
-        });
+        let cuotasData;
+        if (traeCuotasManual) {
+          cuotasData = d.cuotas.slice().sort((a, b) => a.numero - b.numero).map((c, idx) => ({
+            creditoId: existing.id, numero: idx + 1, vencimiento: c.vencimiento,
+            importeCapital: Number(c.importeCapital || 0), importeInteres: Number(c.importeInteres || 0),
+            importeOtros: Number(c.importeOtros || 0), importeTotal: Number(c.importeTotal || 0),
+          }));
+        } else {
+          const cuotas = _calcularCuotasFrances({ monto: merged.montoOriginal, tasaAnual: merged.tasaAnual || 0, cantCuotas: merged.cantCuotas, periodicidad: merged.periodicidad });
+          const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[merged.periodicidad];
+          cuotasData = cuotas.map(c => {
+            const venc = new Date(merged.fechaPrimera);
+            venc.setMonth(venc.getMonth() + (c.numero - 1) * monthsStep);
+            return { creditoId: existing.id, numero: c.numero, vencimiento: venc, importeCapital: c.capital, importeInteres: c.interes, importeOtros: 0, importeTotal: c.total };
+          });
+        }
         await tx.cuotaCredito.createMany({ data: cuotasData });
       }
     });
@@ -4777,25 +4843,37 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
       referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       cuentaBancoId: z.string().nullable().optional(),    // si el pago salió de una cuenta bancaria
+      cotizacionPago: z.number().positive().nullable().optional(), // TC del día (créditos en moneda extranjera)
     });
     const d = schema.parse(req.body || {});
     const fechaPago = d.fechaPago || new Date();
+    // Importe en pesos: si el crédito es en otra moneda, la cuota (en su moneda) se
+    // convierte al TC del día que ingresa el usuario. En ARS, es el importe tal cual.
+    const esMonedaExt = credito.moneda && credito.moneda !== 'ARS';
+    const cotiz = esMonedaExt ? (d.cotizacionPago || credito.cotizacionAlta || 1) : 1;
+    const importeArs = Number(cuota.importeTotal || 0) * cotiz;
     const result = await prisma.$transaction(async (tx) => {
       const row = await tx.cuotaCredito.update({
         where: { id: req.params.cuotaId },
-        data: { pagada: true, fechaPago, medioPago: d.medioPago || null, referencia: d.referencia || null, observaciones: d.observaciones || null },
+        data: {
+          pagada: true, fechaPago, medioPago: d.medioPago || null,
+          referencia: d.referencia || null, observaciones: d.observaciones || null,
+          cotizacionPago: esMonedaExt ? cotiz : null,
+          importePagadoArs: importeArs,
+        },
       });
       // Si pagó por transferencia o débito automático y eligió cuenta bancaria,
-      // dejamos el movimiento en el extracto del banco.
+      // dejamos el movimiento en el extracto del banco (siempre en pesos).
       if ((d.medioPago === 'transferencia' || d.medioPago === 'debito_automatico') && d.cuentaBancoId) {
         const cuenta = await tx.bancoCuenta.findFirst({ where: { id: d.cuentaBancoId, companyId: req.companyId } });
         if (cuenta) {
+          const detMon = esMonedaExt ? ` (${fmtMonedaTxt(credito.moneda, cuota.importeTotal)} @ ${cotiz})` : '';
           await tx.bancoMovimiento.create({
             data: {
               companyId: req.companyId, cuentaId: d.cuentaBancoId,
               fecha: fechaPago, tipo: 'cuota_credito',
-              concepto: `Cuota ${cuota.numero} · ${credito.banco}${credito.nroOperacion ? ' #' + credito.nroOperacion : ''}`,
-              monto: Number(cuota.importeTotal || 0),
+              concepto: `Cuota ${cuota.numero} · ${credito.banco}${credito.nroOperacion ? ' #' + credito.nroOperacion : ''}${detMon}`,
+              monto: importeArs,
               contraparte: credito.banco, referencia: d.referencia || null,
               cuotaCreditoId: cuota.id, observaciones: d.observaciones || null,
               userId: req.user?.id || null,
@@ -4805,7 +4883,7 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
       }
       return row;
     });
-    res.json({ ok: true, data: result });
+    res.json({ ok: true, data: result, importePagadoArs: importeArs });
   } catch (e) { next(e); }
 });
 

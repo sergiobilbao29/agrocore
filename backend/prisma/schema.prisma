@@ -1147,6 +1147,9 @@ model Credito {
   fechaPrimera    DateTime                // fecha de la primer cuota
   destino         String?                 // ej: "compra cosechadora", "capital de trabajo"
   estado          String   @default("activo") // "activo" | "cancelado" | "refinanciado"
+  moneda          String   @default("ARS") // ARS | USD | USD_* | EUR | SOJA... (deuda en esa moneda)
+  cotizacionAlta  Float?                  // TC del día que habilitaron el crédito (ARS por unidad)
+  planManual      Boolean  @default(false) // si true, las cuotas se cargan a mano (no se regeneran por francés)
   observaciones   String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -1170,6 +1173,8 @@ model CuotaCredito {
   fechaPago       DateTime?
   medioPago       String?                  // "efectivo" | "cheque" | "transferencia" | "debito_automatico"
   referencia      String?                  // nro comprobante / cheque
+  cotizacionPago  Float?                   // TC usado el día del pago (ARS por unidad de la moneda del crédito)
+  importePagadoArs Float?                  // pesos efectivamente pagados (importeTotal * cotizacionPago)
   observaciones   String?
 
   credito         Credito  @relation(fields: [creditoId], references: [id], onDelete: Cascade)
