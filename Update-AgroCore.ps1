@@ -164,7 +164,22 @@ try {
     try {
       $gitOut = & git pull --ff-only 2>&1
       $gitOut | ForEach-Object { Write-Host "    $_" }
-      if ($LASTEXITCODE -ne 0) { Err "git pull fallo (exit code $LASTEXITCODE)"; exit 2 }
+      if ($LASTEXITCODE -ne 0) {
+        # Caso tipico en instancias cliente: hay cambios locales o el branch divergio,
+        # entonces 'pull --ff-only' falla y antes el update quedaba colgado. Como las
+        # instancias cliente NO deben tener cambios propios, forzamos la version publicada:
+        # fetch + reset --hard al remoto. (El backup de la base ya se hizo en el paso 4.)
+        Warn "git pull --ff-only fallo (exit $LASTEXITCODE). Forzando a la version publicada (reset --hard)..."
+        & git fetch origin 2>&1 | ForEach-Object { Write-Host "    $_" }
+        if ($LASTEXITCODE -ne 0) { Err "git fetch fallo (exit $LASTEXITCODE)"; exit 2 }
+        # Branch remoto por defecto: main (con fallback a master).
+        $branch = "main"
+        & git show-ref --verify --quiet refs/remotes/origin/main
+        if ($LASTEXITCODE -ne 0) { $branch = "master" }
+        & git reset --hard "origin/$branch" 2>&1 | ForEach-Object { Write-Host "    $_" }
+        if ($LASTEXITCODE -ne 0) { Err "git reset --hard fallo (exit $LASTEXITCODE)"; exit 2 }
+        Ok "Codigo forzado a origin/$branch."
+      }
       Info "Actualizando submodulos (web/img, manual, etc)..."
       $subOut = & git submodule update --init --recursive 2>&1
       $subOut | ForEach-Object { Write-Host "    $_" }

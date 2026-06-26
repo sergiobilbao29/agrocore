@@ -1256,7 +1256,7 @@ async function instalarActualizacionEjecutar(versionEsperada) {
 
   function intentar() {
     if (Date.now() - inicio > maxMs) {
-      if (stepEl()) stepEl().innerHTML = `<span class="text-red-700">⚠️ Timeout (5 minutos). El sistema no terminó de actualizarse. Probá recargar manualmente o revisá los logs en C:\\AgroCore\\backups\\</span>`;
+      if (stepEl()) stepEl().innerHTML = `<span class="text-red-700">⚠️ Timeout (5 minutos): el sistema no terminó de actualizarse (suele ser por cambios locales que bloquean el <code>git pull</code>).<br>En el servidor de esta instancia ejecutá:<br><code class="text-[11px]">powershell -ExecutionPolicy Bypass -File C:\\AgroCore\\Forzar-Actualizacion.ps1 -Servicio AgroCore-Backend -Puerto 3100</code><br>(ajustá Servicio/Puerto según la instancia) y después recargá con Ctrl+Shift+R.</span>`;
       const btn = document.getElementById('upd-close-btn');
       if (btn) { btn.disabled = false; btn.textContent = 'Cerrar'; btn.onclick = closeModal; }
       return;
@@ -2320,6 +2320,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
+      titulo:'🩹 v1.22.0 — Actualización a prueba de cuelgues (auto-recupera si el git pull falla)',
+      desc:'Algunas instancias quedaban colgadas en "Esperando reinicio…" al actualizar porque el <code>git pull</code> fallaba (cambios locales o divergencia). Ahora el actualizador, si el pull no entra, <b>fuerza automáticamente la versión publicada</b> (git reset --hard al remoto) y sigue. Se agregó además un script de recuperación <code>Forzar-Actualizacion.ps1</code> para destrabar a mano una instancia trabada, y el aviso de timeout indica el comando exacto a correr.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'🧾 v1.21.0 — Factura de compra en dólares por PDF (U$D) + monedas en un solo lugar + web/manual al día',
+      desc:'(1) La <b>importación de facturas de compra desde PDF</b> ahora reconoce facturas en dólares que usan <b>"U$D"</b> (además de U$S/US$/USD) y toma el total correctamente. (2) Las <b>monedas</b> se administran en un solo lugar: <b>Catálogos → Monedas</b>; en <b>Cotizaciones</b> quedan solo los valores (con un acceso directo al catálogo). (3) Se actualizaron la <b>web</b> y el <b>Manual de Usuario</b> con todo lo nuevo (multimoneda, canje de cereal, flujo de fondos con simulador, hacienda integrada, campos como depósitos y listados configurables).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
       titulo:'🩹 v1.20.0 — Cotizaciones: arreglado el error "Falta header X-Company-Id"',
       desc:'La pantalla de <b>Cotizaciones</b> quedaba en "Cargando…" y mostraba "Falta header X-Company-Id". Como las cotizaciones son datos de mercado <b>globales</b>, el histórico y la lista de monedas ya no exigen el contexto de empresa, y la pantalla se muestra igual aunque alguna consulta falle.' },
@@ -11079,29 +11085,9 @@ pages.cotizaciones = async function() {
     <div class="text-[11px] text-slate-500 mb-3">Las cotizaciones en vivo salen de la Bolsa de Rosario (granos) y de las casas de cambio (dólar). Se guarda un <b>snapshot diario</b> para tener historia. Podés cargar/corregir un valor manual abajo (ej: Euro, o un dólar pactado), y crear <b>monedas propias</b>.</div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">${tiles}</div>
 
-    <!-- Gestión de monedas propias -->
-    <div class="kpi mb-3">
-      <div class="font-semibold text-slate-700 mb-2 text-sm">💱 Monedas propias</div>
-      ${can('catalogos:create')||can('finanzas:create') ? `
-      <div class="grid grid-cols-1 md:grid-cols-5 gap-2 items-end mb-2">
-        <div><label class="label">Código *</label><input id="mn-clave" class="input" placeholder="Ej: USD_CCL"/></div>
-        <div><label class="label">Nombre *</label><input id="mn-label" class="input" placeholder="Ej: Dólar CCL"/></div>
-        <div><label class="label">Tipo</label><select id="mn-tipo" class="input"><option value="fiat">Moneda (fiat)</option><option value="grano">Grano (toneladas)</option></select></div>
-        <div><label class="label">Fuente automática</label>
-          <select id="mn-fuente" class="input">
-            <option value="manual">Manual (la cargo a mano)</option>
-            <option value="oficial">Dólar oficial</option><option value="mayorista">Dólar mayorista</option>
-            <option value="blue">Dólar blue</option><option value="mep">Dólar MEP</option>
-            <option value="contadoconliqui">Dólar CCL</option><option value="cripto">Dólar cripto</option><option value="tarjeta">Dólar tarjeta</option>
-            <option value="soja">Pizarra soja</option><option value="maiz">Pizarra maíz</option><option value="trigo">Pizarra trigo</option><option value="sorgo">Pizarra sorgo</option><option value="girasol">Pizarra girasol</option>
-          </select>
-        </div>
-        <div><button class="btn btn-primary w-full" onclick="monedaNuevaGuardar()">➕ Agregar moneda</button></div>
-      </div>` : ''}
-      ${customM.length ? `<div class="overflow-x-auto"><table class="data"><thead><tr><th>Código</th><th>Nombre</th><th>Tipo</th><th>Fuente</th><th></th></tr></thead><tbody>
-        ${customM.map(m=>`<tr class="table-row"><td class="font-mono text-xs">${esc(m.clave)}</td><td>${esc(m.label)}</td><td>${m.tipo==='grano'?'Grano':'Moneda'}</td><td><span class="badge ${m.fuente==='manual'?'badge-yellow':'badge-gray'}">${esc(m.fuente||'manual')}</span></td>
-          <td class="text-right">${can('catalogos:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='monedaDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}</td></tr>`).join('')}
-      </tbody></table></div>` : '<div class="text-xs text-slate-400">No hay monedas propias. Las predefinidas (USD, EUR, granos…) ya están disponibles.</div>'}
+    <div class="kpi mb-3 flex items-center justify-between gap-2 flex-wrap">
+      <div class="text-xs text-slate-500">💱 Las <b>monedas</b> (crear/editar propias) se administran en <b>Catálogos → Monedas</b>. Acá ves y cargás sus <b>valores</b>.</div>
+      ${(can('catalogos:read')||can('produccion:read'))?`<button class="btn btn-secondary text-sm" onclick="state.catTab='monedas';go('catalogos')">Ir a Catálogos → Monedas</button>`:''}
     </div>
 
     <div class="kpi mb-3">

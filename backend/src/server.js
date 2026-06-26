@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.20.0';
+const AGROCORE_VERSION = '1.22.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5715,13 +5715,14 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     // Detecta "U$S", "US$", "DÓLARES"; toma la cotización de "TC: 1.461,50" o "tipo de cambio".
     const _arNum = (s) => Number(String(s).replace(/\./g, '').replace(',', '.'));
     if (!resultado.moneda || resultado.moneda === 'PES') {
-      if (/U\$S|US\$|D[OÓ]LAR/i.test(texto)) {
+      // Dólar puede aparecer como U$S, US$, U$D, USD o "dólares".
+      if (/U\$[SD]|US\$|\bUSD\b|D[OÓ]LAR/i.test(texto)) {
         resultado.moneda = 'DOL';
         const mTc = texto.match(/TC\s*:?\s*([\d.]*\d,\d{1,4})/i) || texto.match(/tipo\s+de\s+cambio[^\d]{0,40}([\d.]*\d,\d{1,4})/i);
         if (mTc) resultado.cotizacion = _arNum(mTc[1]);
-        // Total en dólares "U$S 137,82" si no lo tomamos de las etiquetas.
+        // Total en dólares "U$S 137,82" / "U$D 10.645,58" / "TOTAL US$ ..." si no salió de las etiquetas.
         if (!resultado.total) {
-          const mTot = texto.match(/U\$S\s*([\d.]*\d,\d{2})/i) || texto.match(/US\$\s*([\d.]*\d,\d{2})/i);
+          const mTot = texto.match(/(?:U\$[SD]|US\$|USD)\s*([\d.]*\d,\d{2})/i);
           if (mTot) resultado.total = _arNum(mTot[1]);
         }
       }
