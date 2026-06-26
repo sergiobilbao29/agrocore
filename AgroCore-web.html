@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
+      titulo:'🌐 v1.23.0 — Web, Manual y Presupuesto actualizados con todo lo nuevo',
+      desc:'Se pusieron al día la <b>web (agrocore.ar)</b>, el <b>Manual de Usuario</b> y el <b>Presupuesto</b> con todas las funciones recientes: multimoneda, diferencia de cambio, canje de cereal, importación de facturas por PDF, hacienda integrada al stock, campos como depósitos, flujo de fondos en ARS/USD con simulador, cotizaciones con histórico y listados configurables.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
       titulo:'🩹 v1.22.0 — Actualización a prueba de cuelgues (auto-recupera si el git pull falla)',
       desc:'Algunas instancias quedaban colgadas en "Esperando reinicio…" al actualizar porque el <code>git pull</code> fallaba (cambios locales o divergencia). Ahora el actualizador, si el pull no entra, <b>fuerza automáticamente la versión publicada</b> (git reset --hard al remoto) y sigue. Se agregó además un script de recuperación <code>Forzar-Actualizacion.ps1</code> para destrabar a mano una instancia trabada, y el aviso de timeout indica el comando exacto a correr.' },
