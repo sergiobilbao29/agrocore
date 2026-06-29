@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'28/06/2026',
+      titulo:'🧪 v1.25.0 — Insumos: cargar varios de una sola vez por lote + un solo botón de Labor',
+      desc:'En <b>Insumos y labores</b> mejoramos la carga. Ahora <b>"+ Insumo" carga varios insumos de una</b>: elegís la campaña/lote y la fecha <b>una sola vez</b> y cargás todos los productos en una tabla (producto, tipo, unidades/ha, u$s/unidad, u$s/ha y hectáreas aplicadas por fila), sin tener que salir y volver a elegir el lote por cada insumo. Las hectáreas aplicadas se completan solas con las del lote (editables por fila). Además, <b>unificamos los botones de labor</b>: antes había "Labor" y "Labor avanzada"; ahora hay <b>un solo botón "+ Labor"</b> que abre el formulario completo (empleado responsable, insumos consumidos que descuentan stock y, si corresponde, el % de cobro del empleado que se suma a su planilla).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'26/06/2026',
       titulo:'🏦 v1.24.0 — Créditos en dólares/otra moneda + cuotas manuales + pago al TC del día',
       desc:'Los <b>créditos bancarios</b> ahora pueden cargarse en <b>cualquier moneda</b> (dólar, euro, etc.), no solo en pesos. Al cargar un crédito en moneda extranjera ponés el <b>tipo de cambio del día que te lo habilitaron</b> y el sistema te muestra el <b>total en pesos que ingresó</b> (monto × TC). Además, el <b>plan de cuotas</b> ahora tiene dos modos: <b>Automático</b> (sistema francés, cuota constante, como antes) o <b>Manual</b>, donde <b>cargás vos cada cuota con su importe</b> — ideal para créditos cuyas cuotas son distintas (ej: dan U$S 70.000 y las cuotas son 10, 12, 15… mil hasta completar). Y a la hora de <b>pagar una cuota</b> de un crédito en moneda extranjera, ponés el <b>tipo de cambio del día del pago</b> y el sistema calcula y registra <b>cuánto es en pesos</b> (porque hasta el día que pagás no sabés el valor exacto). Si el pago sale de una cuenta bancaria, el egreso queda en pesos al TC que cargaste.' },
@@ -15545,8 +15548,7 @@ pages.insumos = async function() {
 
     <div class="mb-4 flex items-center justify-end flex-wrap gap-2">
       <button class="btn btn-primary" onclick="aplicForm('insumo')">+ Insumo</button>
-      ${can('produccion:labor_simple:create')||can('produccion:create')?`<button class="btn btn-secondary" onclick="laborForm(false)">+ Labor</button>`:''}
-      ${can('produccion:labor_avanzada:create')||can('produccion:create')?`<button class="btn btn-secondary" onclick="laborForm(true)" title="Labor con cálculo de % para el empleado. La ganancia se suma a su planilla del mes automáticamente.">🛠️ Labor avanzada</button>`:''}
+      ${(can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:create'))?`<button class="btn btn-secondary" onclick="laborForm(true)" title="Cargar una labor: empleado responsable, insumos consumidos y, opcional, % de cobro del empleado (se suma a su planilla del mes).">+ Labor</button>`:''}
     </div>
     <div id="ins-list" class="space-y-4">
       ${campanasFiltradas.length === 0
@@ -15704,90 +15706,124 @@ function insumosExportarExcel() {
   toast(`Se exportaron ${filt.length} filas`, 'success');
 }
 
+// Subtipos de insumo (compartidos por las filas de la tabla).
+const INS_SUBTIPOS = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Otro'];
+// Formulario de carga de insumos: se elige la campaña/lote y la fecha UNA vez,
+// y se cargan VARIOS insumos en la misma pantalla (una fila por insumo).
 function aplicForm(tipo) {
   const campanas = state.cache.campanas || [];
   const insumosCat = state.cache.insumosCat || [];
-  const laboresCat = state.cache.laboresCat || [];
-  const opciones = tipo === 'insumo' ? insumosCat : laboresCat;
-  const subtipos = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Otro'];
+  if (!campanas.length) return toast('No hay campañas — cargá una primero.','warn');
   openModal({
-    title: tipo==='insumo'?'Nuevo insumo aplicado':'Nueva labor aplicada',
+    title: 'Cargar insumos al lote', size:'max-w-5xl',
     body: `
-      <div class="grid grid-cols-2 gap-3">
-        <div class="col-span-2"><label class="label">Campaña *</label>
-          <select id="f-camp" class="input">
+      <div class="grid grid-cols-3 gap-3 mb-3">
+        <div class="col-span-2"><label class="label">Campaña / Lote *</label>
+          <select id="f-camp" class="input" onchange="insCampChange()">
             ${campanas.map(c=>`<option value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}">${esc(c.cultivo||'')} — ${esc(c.lote?.nombre||'')} (${fmtN(c.lote?.hectareas||0)} ha)</option>`).join('')}
           </select>
         </div>
-        <div class="col-span-2"><label class="label">${tipo==='insumo'?'Producto':'Labor'} *</label>
-          <input id="f-item" class="input" list="f-catlist" value=""/>
-          <datalist id="f-catlist">${opciones.map(x=>`<option value="${esc(x.nombre)}">`).join('')}</datalist>
+        <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+      </div>
+      <div class="kpi p-0 overflow-hidden mb-2">
+        <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
+          <span class="text-sm font-medium text-slate-700">🧪 Insumos a cargar en este lote</span>
+          <button class="btn btn-secondary text-xs" onclick="insAddRow()">+ Agregar insumo</button>
         </div>
-        ${tipo==='insumo'?`
-        <div><label class="label">Tipo</label>
-          <select id="f-sub" class="input">${subtipos.map(s=>`<option>${s}</option>`).join('')}</select>
+        <div class="overflow-x-auto">
+          <table class="data text-sm">
+            <thead><tr>
+              <th>Producto *</th><th>Tipo</th>
+              <th class="text-right">Unid/ha</th><th class="text-right">u\$s/unidad</th>
+              <th class="text-right">u\$s/ha</th><th class="text-right">Ha aplic. *</th><th></th>
+            </tr></thead>
+            <tbody id="f-ins-body"></tbody>
+          </table>
         </div>
-        <div><label class="label">Unidades / ha</label><input id="f-uha" type="number" step="0.01" class="input"/></div>
-        <div><label class="label">u\$s / unidad</label><input id="f-pu" type="number" step="0.01" class="input"/></div>`:''}
-        <div><label class="label">u\$s / ha *</label><input id="f-cha" type="number" step="0.01" class="input"/></div>
-        <div>
-          <label class="label">Hectáreas aplicadas *</label>
-          <input id="f-ha-apl" type="number" step="0.01" class="input" placeholder="ej. 25.5"/>
-          <div class="text-[11px] text-slate-500 mt-1">Por defecto, hectáreas del lote. Cambialo si aplicaste solo en una parte (ej. el alrededor).</div>
-        </div>
-        <div><label class="label">Fecha</label><input id="f-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
-        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
-      </div>`,
+      </div>
+      <div class="text-[11px] text-slate-500 mb-1">Cargá todos los insumos del lote de una sola vez. Las hectáreas aplicadas vienen del lote; cambialas por fila si aplicaste solo en una parte. Cada insumo descuenta del stock al guardar.</div>
+      <datalist id="f-catlist">${insumosCat.map(x=>`<option value="${esc(x.nombre)}">`).join('')}</datalist>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="aplicSave('${tipo}')">Crear</button>`
+             <button class="btn btn-primary" onclick="aplicSaveMulti()">💾 Guardar insumos</button>`
   });
-
-  // Auto-completar hectáreas aplicadas con el total del lote (editable)
-  const camp = $('#f-camp');
-  const haApl = $('#f-ha-apl');
-  const setHaFromLote = () => {
-    if (!camp || !haApl) return;
-    const opt = camp.options[camp.selectedIndex];
-    const ha = Number(opt?.dataset?.ha || 0);
-    if (ha && !haApl.dataset.manual) haApl.value = ha;
-  };
-  if (camp) {
-    camp.onchange = setHaFromLote;
-    setHaFromLote();
-  }
-  if (haApl) haApl.oninput = () => { haApl.dataset.manual = '1'; };
-
-  // autocompletar costo/ha si hay unidad y precio
-  const cha = $('#f-cha'), uha = $('#f-uha'), pu = $('#f-pu');
-  const recalc = () => {
-    if (tipo==='insumo' && uha && pu && uha.value && pu.value && !cha.dataset.manual) {
-      cha.value = (Number(uha.value) * Number(pu.value)).toFixed(2);
-    }
-  };
-  if (uha) uha.oninput = recalc;
-  if (pu)  pu.oninput  = recalc;
-  if (cha) cha.oninput = () => { cha.dataset.manual = '1'; };
+  // Arrancamos con 3 filas vacías (se pueden agregar más).
+  insAddRow(); insAddRow(); insAddRow();
 }
-async function aplicSave(tipo) {
-  const data = {
-    campanaId: $('#f-camp').value,
-    tipo,
-    item: $('#f-item').value.trim(),
-    subtipo: tipo==='insumo' ? $('#f-sub')?.value || null : null,
-    unidadHa: tipo==='insumo' && $('#f-uha')?.value ? Number($('#f-uha').value) : null,
-    precioUnit: tipo==='insumo' && $('#f-pu')?.value ? Number($('#f-pu').value) : null,
-    costoHa: Number($('#f-cha').value || 0),
-    hectareasAplicadas: $('#f-ha-apl')?.value ? Number($('#f-ha-apl').value) : null,
-    fecha: $('#f-fec').value || null,
-    observaciones: $('#f-obs').value.trim() || null,
-  };
-  if (!data.campanaId) return toast('Campaña requerida','warn');
-  if (!data.item) return toast('Producto/Labor requerido','warn');
-  if (!data.hectareasAplicadas) return toast('Hectáreas aplicadas requeridas','warn');
+function insCampHa(){
+  const camp = $('#f-camp'); if (!camp) return 0;
+  const opt = camp.options[camp.selectedIndex];
+  return Number(opt?.dataset?.ha || 0);
+}
+function insRowHTML(){
+  return `<tr data-ins>
+    <td><input class="input text-sm" list="f-catlist" data-if="item" style="min-width:170px" placeholder="Producto"/></td>
+    <td><select class="input text-sm" data-if="sub">${INS_SUBTIPOS.map(s=>`<option>${s}</option>`).join('')}</select></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-if="uha" style="width:88px" oninput="insRowRecalc(this)"/></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-if="pu" style="width:100px" oninput="insRowRecalc(this)"/></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-if="cha" style="width:100px" oninput="this.dataset.manual='1'"/></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-if="ha" style="width:88px" placeholder="ha" oninput="this.dataset.manual='1'"/></td>
+    <td class="text-right"><button type="button" class="btn btn-ghost text-xs text-red-600" title="Quitar fila" onclick="this.closest('tr').remove()">✕</button></td>
+  </tr>`;
+}
+function insAddRow(){
+  const body = $('#f-ins-body'); if (!body) return;
+  body.insertAdjacentHTML('beforeend', insRowHTML());
+  const tr = body.lastElementChild;
+  const ha = insCampHa();
+  const haEl = tr.querySelector('[data-if="ha"]');
+  if (ha && haEl && !haEl.value) haEl.value = ha;
+}
+function insCampChange(){
+  const ha = insCampHa();
+  $$('#f-ins-body tr[data-ins]').forEach(tr=>{
+    const haEl = tr.querySelector('[data-if="ha"]');
+    if (haEl && !haEl.dataset.manual) haEl.value = ha || '';
+  });
+}
+function insRowRecalc(inp){
+  const tr = inp.closest('tr');
+  const uha = Number(tr.querySelector('[data-if="uha"]')?.value || 0);
+  const pu  = Number(tr.querySelector('[data-if="pu"]')?.value || 0);
+  const cha = tr.querySelector('[data-if="cha"]');
+  if (uha && pu && cha && !cha.dataset.manual) cha.value = (uha*pu).toFixed(2);
+}
+async function aplicSaveMulti(){
+  const campanaId = $('#f-camp')?.value;
+  const fecha = $('#f-fec')?.value || null;
+  if (!campanaId) return toast('Campaña requerida','warn');
+  const rows = $$('#f-ins-body tr[data-ins]');
+  const items = [];
+  for (const tr of rows){
+    const item = (tr.querySelector('[data-if="item"]')?.value || '').trim();
+    const cha  = Number(tr.querySelector('[data-if="cha"]')?.value || 0);
+    const ha   = Number(tr.querySelector('[data-if="ha"]')?.value || 0);
+    const uha  = tr.querySelector('[data-if="uha"]')?.value;
+    const pu   = tr.querySelector('[data-if="pu"]')?.value;
+    // Fila vacía (sin producto ni datos): la ignoramos.
+    if (!item && !cha && !ha && !uha && !pu) continue;
+    if (!item) return toast('Falta el producto en una de las filas','warn');
+    if (!ha)   return toast(`Falta "Ha aplic." en el insumo "${item}"`,'warn');
+    items.push({
+      campanaId, tipo:'insumo', item,
+      subtipo: tr.querySelector('[data-if="sub"]')?.value || null,
+      unidadHa: uha ? Number(uha) : null,
+      precioUnit: pu ? Number(pu) : null,
+      costoHa: cha || 0,
+      hectareasAplicadas: ha,
+      fecha,
+      observaciones: null,
+    });
+  }
+  if (!items.length) return toast('Cargá al menos un insumo','warn');
   try {
-    await api('/api/aplicaciones', { method:'POST', body: JSON.stringify(data) });
-    toast('Creado','success'); closeModal(); pages.insumos();
-  } catch (e) { toast(e.message,'error'); }
+    let ok = 0;
+    for (const it of items){ await api('/api/aplicaciones', { method:'POST', body: JSON.stringify(it) }); ok++; }
+    toast(`${ok} insumo${ok===1?'':'s'} cargado${ok===1?'':'s'}`,'success');
+    closeModal(); delete state.cache.aplicaciones; pages.insumos();
+  } catch (e) {
+    toast(`Hubo un error al cargar: ${e.message}. Revisá los que quedaron sin guardar.`,'error');
+    delete state.cache.aplicaciones; closeModal(); pages.insumos();
+  }
 }
 async function aplicDel(id) {
   if (!confirm('¿Eliminar?')) return;
@@ -15847,7 +15883,7 @@ async function laborForm(avanzada = false) {
         </div>
       </div>` : '';
   openModal({
-    title: avanzada ? '🛠️ Cargar labor avanzada' : 'Cargar labor', size:'max-w-4xl',
+    title: '🛠️ Cargar labor', size:'max-w-4xl',
     body: `
       <div class="grid grid-cols-3 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Campaña *</label>
