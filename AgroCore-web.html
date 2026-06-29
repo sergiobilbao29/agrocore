@@ -2320,6 +2320,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'29/06/2026',
+      titulo:'💵 v1.28.0 — Compras en dólares se ven en US$ + banco de créditos desde el catálogo',
+      desc:'(1) Las <b>facturas de compra en moneda extranjera</b> ahora se muestran con su <b>signo correcto (US$/$)</b> en el listado, el detalle y la pantalla de carga (incluida la importación por PDF), en vez de mostrar todo en pesos. Los KPIs de Compras se valorizan a pesos con la cotización de cada factura. (2) En <b>Créditos bancarios</b>, el banco ahora se <b>elige del catálogo de Bancos</b> (no texto libre). (3) Revisamos otros formularios para que usen los catálogos (banco en liquidación de sueldo, cultivo en lotes).' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
+      titulo:'🧰 v1.27.0 — Mejoras de carga: contrato de arrendamiento, ciclo del catálogo y carga de insumos por tipo',
+      desc:'Ajustes pedidos: (1) <b>Arrendamientos</b>: ahora tienen un <b>nombre de contrato</b> aparte del propietario. (2) <b>Ciclo</b>: se elige (vincula) desde el <b>catálogo de Ciclos</b> en la campaña, y el filtro de Insumos y labores muestra los ciclos del catálogo además de los usados. (3) <b>Insumos y labores</b>: al usar <b>+ Insumo / + Labor</b> con un filtro activo, ya viene <b>preseleccionada la campaña</b> del filtro. (4) <b>Carga de insumos</b>: primero elegís el <b>tipo</b> (herbicida, fertilizante, etc.) y la lista de productos muestra <b>solo los de ese tipo</b> según el catálogo.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
       titulo:'🌾 v1.26.0 — Costo de insumos, créditos con IVA/gastos, arrendamientos por quintales y más',
       desc:'Varias mejoras: (1) <b>Costo de insumos</b>: al cargar una compra se guarda el costo del producto y se <b>autocompleta</b> después en la carga de insumos (último costo de compra). (2) <b>Importación de PDF</b>: se corrigió la lectura del número de comprobante (ahora elige el que coincide con el punto de venta). (3) <b>Campañas</b>: se pueden marcar como <b>finalizadas</b>, y desde Insumos y labores cada campaña tiene botones para <b>cargar insumo/labor o editarla directamente</b>. (4) <b>Créditos</b>: campo opcional de <b>IVA sobre intereses</b> (se suma a cada cuota) y posibilidad de cargar <b>gastos a mano</b> al pagar una cuota. (5) <b>Arrendamientos</b>: nueva modalidad <b>en quintales</b> (qq/ha en blanco y en negro), con <b>cuotas</b> (cantidad, vencimiento y quintales de cada una) y <b>valuación a pizarra</b> en $ y US$. (6) <b>Proveedores</b>: el saldo ahora muestra el <b>signo de cada moneda</b> (US$/$), sin mezclar. (7) <b>Hacienda</b>: solo aparecen los campos de explotación <b>ganadera o mixta</b> (o los que ya tengan hacienda cargada).' },
@@ -5859,7 +5865,7 @@ function loteForm(id=null, campoId=null) {
         </div>
         <div><label class="label">Nombre *</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}"/></div>
         <div><label class="label">Hectáreas *</label><input id="f-ha" type="number" step="0.01" class="input" value="${it.hectareas||''}"/></div>
-        <div class="col-span-2"><label class="label">Cultivo actual</label><input id="f-cul" class="input" value="${esc(it.cultivoActual||'')}" placeholder="Ej: Soja 1ra"/></div>
+        <div class="col-span-2"><label class="label">Cultivo actual</label>${catSelect('f-cul','Cereal', it.cultivoActual||'', {placeholder:'— Elegir cultivo —'})}</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -8090,9 +8096,12 @@ function campanaForm(id=null) {
         <div><label class="label">Cultivo *</label>${catSelect('f-cul', 'Cereal', it.cultivo||'', {attr:'onchange="campNomSug()"'})}</div>
         <div><label class="label">Variedad</label><input id="f-var" class="input" value="${esc(it.variedad||'')}"/></div>
         <div><label class="label">Ciclo</label>
-          <input id="f-cic" class="input" list="f-cic-list" value="${esc(it.ciclo||'')}" placeholder="2026/2027" oninput="campNomSug()"/>
-          <datalist id="f-cic-list">${cicloOpts.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
-          <div class="text-[11px] text-slate-500 mt-1">Elegí uno o escribí uno nuevo. Se administran en Catálogos → Ciclos.</div>
+          <select id="f-cic" class="input" onchange="campNomSug()">
+            <option value="">— Elegir —</option>
+            ${cicloOpts.map(c=>`<option value="${esc(c)}" ${c===it.ciclo?'selected':''}>${esc(c)}</option>`).join('')}
+            ${(it.ciclo && !cicloOpts.includes(it.ciclo))?`<option value="${esc(it.ciclo)}" selected>${esc(it.ciclo)} (otro)</option>`:''}
+          </select>
+          <div class="text-[11px] text-slate-500 mt-1">Elegí el ciclo. Se administran en Catálogos → Ciclos.</div>
         </div>
         <div><label class="label">Hectáreas</label><input id="f-ha" type="number" step="0.01" class="input" value="${it.hectareas||''}"/></div>
         <div><label class="label">Fecha siembra</label><input id="f-fs" type="date" class="input" value="${it.fechaSiembra?String(it.fechaSiembra).slice(0,10):''}"/></div>
@@ -8456,18 +8465,23 @@ async function nuevoItemRapidoSave(tbodyId, filaIdx) {
 }
 
 function factRecalc() {
+  // Mostrar los importes en la moneda elegida (venta usa #f-moneda, compra #fc-moneda).
+  const sel = document.getElementById('fc-moneda') || document.getElementById('f-moneda');
+  const mon = sel ? sel.value : 'ARS';
+  const sym = (!mon || mon==='ARS') ? '$' : credMonSym(mon);
+  const fmtC = (v) => (sym==='$') ? fmt$(v) : (sym + fmt$(v).slice(1));
   let subtotal = 0, iva = 0;
   $$('#fi-tbody tr[data-fi]').forEach(tr => {
     const get = (f) => Number(tr.querySelector(`[data-f="${f}"]`).value || 0);
     const sub = get('cantidad') * get('precioUnit');
     const ivaImp = sub * (get('alicuotaIva') / 100);
-    tr.querySelector('[data-total]').textContent = fmt$(sub + ivaImp);
+    tr.querySelector('[data-total]').textContent = fmtC(sub + ivaImp);
     subtotal += sub; iva += ivaImp;
   });
   const total = subtotal + iva;
-  $('#fi-sub').textContent = fmt$(subtotal);
-  $('#fi-iva').textContent = fmt$(iva);
-  $('#fi-tot').textContent = fmt$(total);
+  $('#fi-sub').textContent = fmtC(subtotal);
+  $('#fi-iva').textContent = fmtC(iva);
+  $('#fi-tot').textContent = fmtC(total);
 }
 async function factForm() {
   await cargarMonedas();
@@ -8645,11 +8659,13 @@ function monedaFieldHTML(pfx){
 async function monedaCotizToggle(pfx){
   const sel=$('#'+pfx+'-moneda'); if(!sel) return; const m=sel.value;
   const w=$('#'+pfx+'-cotiz-wrap'); if(w) w.style.display = m==='ARS'?'none':'';
-  if(m==='ARS') return;
+  if(m==='ARS'){ if (typeof factRecalc === 'function' && document.getElementById('fi-tbody')) factRecalc(); return; }
   if(!state.cache.cotizVivas) await cargarCotizVivas();
   const v=(state.cache.cotizVivas||{})[m];
   const inp=$('#'+pfx+'-cotiz'); if(inp && !inp.dataset.manual && v) inp.value=Math.round(v);
   const h=$('#'+pfx+'-cotiz-hint'); if(h) h.textContent = v?`Sugerida hoy: ${fmtN(Math.round(v))} ARS · editable`:'Sin cotización de hoy: cargala manualmente.';
+  // Refrescar los importes del form para que muestren el signo de la moneda elegida.
+  if (typeof factRecalc === 'function' && document.getElementById('fi-tbody')) factRecalc();
 }
 function monedaCotizBody(pfx){
   const m=$('#'+pfx+'-moneda')?.value||'ARS';
@@ -9137,12 +9153,15 @@ pages.compras = async function() {
     if (!state.cache.campos) { try { state.cache.campos = (await api('/api/campos')).data || []; } catch {} }
     rows = f.data||[]; provs = p.data||[]; state.cache.proveedores = provs;
   } catch (e) { return toast(e.message,'error'); }
+  await cargarMonedas();
   state.cache.facturasCompra = rows;
   state.compraFilter = state.compraFilter || { desde:'', hasta:'', provId:'' };
   const mesActual = new Date().toISOString().slice(0,7);
-  const totalMes = rows.filter(f => (f.fecha||'').slice(0,7)===mesActual).reduce((a,f)=>a+Number(f.total||0),0);
-  const totalAcum = rows.reduce((a,f)=>a+Number(f.total||0),0);
-  const ivaAcum = rows.reduce((a,f)=>a+Number(f.iva||0),0);
+  // KPIs en pesos: las facturas en otra moneda se convierten con su cotización.
+  const aArs = (v, f) => Number(v||0) * ((f.moneda && f.moneda!=='ARS') ? Number(f.cotizacion||1) : 1);
+  const totalMes = rows.filter(f => (f.fecha||'').slice(0,7)===mesActual).reduce((a,f)=>a+aArs(f.total,f),0);
+  const totalAcum = rows.reduce((a,f)=>a+aArs(f.total,f),0);
+  const ivaAcum = rows.reduce((a,f)=>a+aArs(f.iva,f),0);
 
   const render = () => {
     const f = state.compraFilter;
@@ -9165,9 +9184,9 @@ pages.compras = async function() {
               </td>
               <td><b>${esc(f.proveedor?.razonSocial||'—')}</b></td>
               <td class="font-mono text-xs">${esc(f.proveedor?.cuit||'—')}</td>
-              <td class="text-right">${fmt$(f.subtotal)}</td>
-              <td class="text-right">${fmt$(f.iva)}</td>
-              <td class="text-right font-bold">${fmt$(f.total)}</td>
+              <td class="text-right">${fmtMon(f.moneda, f.subtotal)}</td>
+              <td class="text-right">${fmtMon(f.moneda, f.iva)}</td>
+              <td class="text-right font-bold">${fmtMon(f.moneda, f.total)}${f.moneda&&f.moneda!=='ARS'?`<div class="text-[10px] text-slate-400 font-normal">TC ${fmtN(f.cotizacion||0)}</div>`:''}</td>
               <td>${(f.items||[]).some(i=>i.productoId)?'<span class="badge badge-green text-[10px]">sí</span>':'<span class="text-slate-400 text-xs">no</span>'}</td>
               <td class="text-right whitespace-nowrap">
                 <button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(f.id)})'>👁️</button>
@@ -9577,6 +9596,7 @@ async function compVer(id) {
           <div><b>Fecha:</b> ${fmtDate(f.fecha)}</div>
           <div><b>CUIT:</b> <span class="font-mono">${esc(f.proveedor?.cuit||'—')}</span></div>
           <div><b>Condición:</b> ${esc(f.condicionCompra||'—')}</div>
+          ${f.moneda&&f.moneda!=='ARS'?`<div class="col-span-2"><b>Moneda:</b> ${esc(f.moneda)} · TC ${fmtN(f.cotizacion||0)} · ≈ ${fmt$(Number(f.total||0)*Number(f.cotizacion||1))}</div>`:''}
         </div>
         <table class="data">
           <thead><tr><th>Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P.U.</th><th class="text-right">IVA%</th><th class="text-right">Total</th></tr></thead>
@@ -9584,13 +9604,13 @@ async function compVer(id) {
             ${(f.items||[]).map(i=>{
               const prod = i.productoId ? (state.cache.productos||[]).find(p=>p.id===i.productoId) : null;
               const prodTxt = prod ? `<span class="badge badge-green text-[10px]">${esc(prod.nombre)}</span>` : '<span class="text-slate-400 text-xs">—</span>';
-              return `<tr><td>${prodTxt}</td><td>${esc(i.descripcion)}</td><td class="text-right">${fmtN(i.cantidad)}</td><td class="text-right">${fmt$(i.precioUnit)}</td><td class="text-right">${i.alicuotaIva}%</td><td class="text-right">${fmt$(i.total)}</td></tr>`;
+              return `<tr><td>${prodTxt}</td><td>${esc(i.descripcion)}</td><td class="text-right">${fmtN(i.cantidad)}</td><td class="text-right">${fmtMon(f.moneda, i.precioUnit)}</td><td class="text-right">${i.alicuotaIva}%</td><td class="text-right">${fmtMon(f.moneda, i.total)}</td></tr>`;
             }).join('')}
           </tbody>
           <tfoot>
-            <tr><td colspan="5" class="text-right">Subtotal</td><td class="text-right">${fmt$(f.subtotal)}</td></tr>
-            <tr><td colspan="5" class="text-right">IVA</td><td class="text-right">${fmt$(f.iva)}</td></tr>
-            <tr><td colspan="5" class="text-right font-bold">TOTAL</td><td class="text-right font-bold text-green-700">${fmt$(f.total)}</td></tr>
+            <tr><td colspan="5" class="text-right">Subtotal</td><td class="text-right">${fmtMon(f.moneda, f.subtotal)}</td></tr>
+            <tr><td colspan="5" class="text-right">IVA</td><td class="text-right">${fmtMon(f.moneda, f.iva)}</td></tr>
+            <tr><td colspan="5" class="text-right font-bold">TOTAL</td><td class="text-right font-bold text-green-700">${fmtMon(f.moneda, f.total)}</td></tr>
           </tfoot>
         </table>
         ${f.observaciones ? `<div class="mt-3 text-sm text-slate-600"><b>Observaciones:</b> ${esc(f.observaciones)}</div>` : ''}`,
@@ -15257,7 +15277,7 @@ function empLiqForm(periodo){
           </select>
         </div>
         <div id="lq-caja-wrap"><label class="label">Caja *</label>${catSelect('lq-caja','Caja','',{placeholder:'— Elegir caja —'})}</div>
-        <div id="lq-banco-wrap"><label class="label">Banco</label><input id="lq-banco" class="input" placeholder="Ej: Banco Nación"/></div>
+        <div id="lq-banco-wrap"><label class="label">Banco</label>${catSelect('lq-banco','Banco','',{placeholder:'— Elegir banco —'})}</div>
         <div id="lq-cheque-wrap"><label class="label">N° de cheque *</label><input id="lq-cheque" class="input"/></div>
         <div id="lq-ref-wrap"><label class="label">N° operación / comprobante</label><input id="lq-ref" class="input"/></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="lq-obs" class="input" rows="2"></textarea></div>
@@ -15494,6 +15514,7 @@ pages.insumos = async function() {
     lotes = (await api('/api/lotes')).data || [];
     campos = (await api('/api/campos').catch(()=>({data:[]}))).data || [];
     const cats = (await api('/api/catalogos')).data || [];
+    state.cache.catalogos = cats;
     insumosCat = cats.filter(c => ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'].includes(c.tipo));
     laboresCat = cats.filter(c => c.tipo === 'Labor');
     aplics = (await api('/api/aplicaciones').catch(()=>({data:[]}))).data || [];
@@ -15509,8 +15530,11 @@ pages.insumos = async function() {
   // Items únicos (de aplicaciones cargadas) para los filtros
   const insumosUsados = [...new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.item||'').trim()).filter(Boolean))].sort();
   const laboresUsadas = [...new Set(aplics.filter(a=>a.tipo==='labor' ).map(a=>(a.item||'').trim()).filter(Boolean))].sort();
-  // Ciclos disponibles (de las campañas)
-  const ciclosUsados = [...new Set(campanas.map(c=>(c.ciclo||'').trim()).filter(Boolean))].sort();
+  // Ciclos disponibles (catálogo Ciclo + los usados en campañas)
+  const ciclosUsados = [...new Set([
+    ...catByTipo('Ciclo').map(c=>c.nombre),
+    ...campanas.map(c=>(c.ciclo||'').trim()),
+  ].filter(Boolean))].sort();
   // Set de campañas que matchean el ciclo elegido (para filtrar aplicaciones)
   const cicloCampIds = f.ciclo ? new Set(campanas.filter(c=>(c.ciclo||'').trim()===f.ciclo).map(c=>c.id)) : null;
 
@@ -15541,6 +15565,8 @@ pages.insumos = async function() {
     campanasFiltradas = campanas;
   }
   if (f.ciclo) campanasFiltradas = campanasFiltradas.filter(c => (c.ciclo||'').trim() === f.ciclo);
+  // Campaña a preseleccionar al usar los botones generales (respeta el filtro activo).
+  const preselCamp = f.campana || (campanasFiltradas.length === 1 ? campanasFiltradas[0].id : '');
 
   // Totales consolidados (cuando el filtro es por insumo o labor)
   const haDeApp = (a) => {
@@ -15633,8 +15659,8 @@ pages.insumos = async function() {
     ${bannerTotales}
 
     <div class="mb-4 flex items-center justify-end flex-wrap gap-2">
-      <button class="btn btn-primary" onclick="aplicForm('insumo')">+ Insumo</button>
-      ${(can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:create'))?`<button class="btn btn-secondary" onclick="laborForm(true)" title="Cargar una labor: empleado responsable, insumos consumidos y, opcional, % de cobro del empleado (se suma a su planilla del mes).">+ Labor</button>`:''}
+      <button class="btn btn-primary" onclick="aplicForm('insumo',${JSON.stringify(preselCamp)})">+ Insumo</button>
+      ${(can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:create'))?`<button class="btn btn-secondary" onclick="laborForm(true,${JSON.stringify(preselCamp)})" title="Cargar una labor: empleado responsable, insumos consumidos y, opcional, % de cobro del empleado (se suma a su planilla del mes).">+ Labor</button>`:''}
     </div>
     <div id="ins-list" class="space-y-4">
       ${campanasFiltradas.length === 0
@@ -15806,6 +15832,22 @@ function insumosExportarExcel() {
 
 // Subtipos de insumo (compartidos por las filas de la tabla).
 const INS_SUBTIPOS = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Otro'];
+let _insRowSeq = 0;
+// Opciones de productos del catálogo filtradas por tipo de insumo elegido.
+function insDatalistOpts(tipo){
+  const cat = state.cache.insumosCat || [];
+  let items = cat.filter(c => c.tipo === tipo);
+  if (tipo === 'Otro') items = cat.filter(c => !['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante'].includes(c.tipo));
+  return items.map(c => `<option value="${esc(c.nombre)}">`).join('');
+}
+// Al cambiar el tipo, refrescamos la lista de productos de esa fila (solo los de ese tipo).
+function insTipoChange(sel){
+  const tr = sel.closest('tr');
+  const dl = tr.querySelector('datalist');
+  if (dl) dl.innerHTML = insDatalistOpts(sel.value);
+  const item = tr.querySelector('[data-if="item"]');
+  if (item) item.value = '';
+}
 // Formulario de carga de insumos: se elige la campaña/lote y la fecha UNA vez,
 // y se cargan VARIOS insumos en la misma pantalla (una fila por insumo).
 function aplicForm(tipo, campanaId) {
@@ -15833,7 +15875,7 @@ function aplicForm(tipo, campanaId) {
         <div class="overflow-x-auto">
           <table class="data text-sm">
             <thead><tr>
-              <th>Producto *</th><th>Tipo</th>
+              <th>Tipo *</th><th>Producto *</th>
               <th class="text-right">Unid/ha</th><th class="text-right">u\$s/unidad</th>
               <th class="text-right">u\$s/ha</th><th class="text-right">Ha aplic. *</th><th></th>
             </tr></thead>
@@ -15855,9 +15897,11 @@ function insCampHa(){
   return Number(opt?.dataset?.ha || 0);
 }
 function insRowHTML(){
+  const rid = ++_insRowSeq;
+  const tipo0 = INS_SUBTIPOS[0];
   return `<tr data-ins>
-    <td><input class="input text-sm" list="f-catlist" data-if="item" style="min-width:170px" placeholder="Producto" onchange="insItemPick(this)"/></td>
-    <td><select class="input text-sm" data-if="sub">${INS_SUBTIPOS.map(s=>`<option>${s}</option>`).join('')}</select></td>
+    <td><select class="input text-sm" data-if="sub" onchange="insTipoChange(this)">${INS_SUBTIPOS.map(s=>`<option ${s===tipo0?'selected':''}>${s}</option>`).join('')}</select></td>
+    <td><input class="input text-sm" list="ins-dl-${rid}" data-if="item" style="min-width:170px" placeholder="Producto" onchange="insItemPick(this)"/><datalist id="ins-dl-${rid}">${insDatalistOpts(tipo0)}</datalist></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-if="uha" style="width:88px" oninput="insRowRecalc(this)"/></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-if="pu" style="width:100px" oninput="insRowRecalc(this)"/></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-if="cha" style="width:100px" oninput="this.dataset.manual='1'"/></td>
@@ -16713,7 +16757,7 @@ pages.arrendamientos = async function() {
       <div class="overflow-x-auto">
         <table class="min-w-full text-sm">
           <thead class="bg-slate-50 text-slate-600"><tr>
-            <th class="text-left px-3 py-2">Propietario</th>
+            <th class="text-left px-3 py-2">Contrato / Propietario</th>
             <th class="text-left px-3 py-2">Campo</th>
             <th class="text-right px-3 py-2">Ha</th>
             <th class="text-right px-3 py-2">$/Ha</th>
@@ -16729,7 +16773,7 @@ pages.arrendamientos = async function() {
               const venc = r.vencimiento ? new Date(r.vencimiento).toLocaleDateString('es-AR') : '—';
               const vencido = r.vencimiento && !r.pagado && new Date(r.vencimiento) < new Date();
               return `<tr class="hover:bg-slate-50">
-                <td class="px-3 py-2 font-semibold text-slate-800">${esc(r.propietario)}</td>
+                <td class="px-3 py-2"><div class="font-semibold text-slate-800">${esc(r.nombre||r.propietario)}</div>${r.nombre?`<div class="text-[11px] text-slate-500">${esc(r.propietario)}</div>`:''}</td>
                 <td class="px-3 py-2 text-slate-600">${esc(campoName(r.campoId))}</td>
                 <td class="px-3 py-2 text-right">${Number(r.hectareas||0).toLocaleString('es-AR')}</td>
                 <td class="px-3 py-2 text-right">${info.porHa}</td>
@@ -16758,6 +16802,7 @@ async function arrForm(id=null) {
     title: id?'Editar arrendamiento':'Nuevo arrendamiento', size:'max-w-3xl',
     body: `
       <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Nombre del contrato</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}" placeholder="Ej: Campo Norte · Pérez 2026/27"/></div>
         <div class="col-span-2"><label class="label">Propietario *</label><input id="f-prop" class="input" value="${esc(it.propietario||'')}"/></div>
         <div class="col-span-2"><label class="label">Campo</label>
           <select id="f-campo" class="input">
@@ -16875,6 +16920,7 @@ function arrCuotasRecalc(){
 async function arrSave(id) {
   const modalidad = $('#f-modal').value;
   const data = {
+    nombre: $('#f-nom').value.trim() || null,
     propietario: $('#f-prop').value.trim(),
     campoId: $('#f-campo').value || null,
     hectareas: Number($('#f-ha').value || 0),
@@ -18464,6 +18510,7 @@ async function credForm(id=null) {
   const it = id ? (state.cache.creditos||[]).find(x=>x.id===id)||{} : {};
   const pagadas = id ? (it.cuotas||[]).filter(q=>q.pagada).length : 0;
   await cargarMonedas(); await cargarCotizVivas();
+  if (!state.cache.catalogos) { try { state.cache.catalogos = (await api('/api/catalogos')).data || []; } catch {} }
   const curMon = it.moneda || 'ARS';
   const monOpts = monedasOpts().map(([k,l])=>`<option value="${k}" ${k===curMon?'selected':''}>${esc(l)}</option>`).join('');
   const esManual = !!it.planManual;
@@ -18476,7 +18523,9 @@ async function credForm(id=null) {
           : '💡 Elegí el <b>plan de cuotas</b>: <b>automático</b> (sistema francés, cuota constante) o <b>manual</b> (cargás vos cada cuota con su importe — ideal cuando las cuotas son distintas, ej. 10, 12, 15… mil).'}
       </div>
       <div class="grid grid-cols-2 gap-3 mb-3">
-        <div><label class="label">Banco *</label><input id="cr-banco" class="input" value="${esc(it.banco||'')}" placeholder="Banco Nación"/></div>
+        <div><label class="label">Banco *</label>${catSelect('cr-banco','Banco', it.banco||'', {placeholder:'— Elegir banco —'})}
+          <div class="text-[11px] text-slate-500 mt-1">Se administran en Catálogos → Bancos.</div>
+        </div>
         <div><label class="label">Nro operación</label><input id="cr-op" class="input" value="${esc(it.nroOperacion||'')}"/></div>
         <div><label class="label">Monto del crédito *</label><input id="cr-monto" type="number" step="0.01" class="input" value="${it.montoOriginal||''}" oninput="credMonChange()"/></div>
         <div><label class="label">Moneda *</label><select id="cr-moneda" class="input" onchange="credMonChange()">${monOpts}</select></div>
