@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
+      titulo:'📊 v1.29.0 — Tablero multimoneda: elegí ver en pesos o por moneda',
+      desc:'El <b>Dashboard</b> tiene un nuevo selector arriba: <b>"En pesos (cotización de hoy)"</b> convierte todo a pesos con la cotización del día, o <b>"Multimoneda"</b> muestra cada importe en su moneda original (US$, granos, $). Aplica a las <b>cuentas por cobrar/por pagar</b> y al patrimonio, que antes mezclaban monedas. Los <b>arrendamientos en quintales</b> se valorizan a la pizarra del día. (El <b>Flujo de Fondos</b> ya tenía su propio simulador pesos/dólares.)' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'29/06/2026',
       titulo:'💵 v1.28.0 — Compras en dólares se ven en US$ + banco de créditos desde el catálogo',
       desc:'(1) Las <b>facturas de compra en moneda extranjera</b> ahora se muestran con su <b>signo correcto (US$/$)</b> en el listado, el detalle y la pantalla de carga (incluida la importación por PDF), en vez de mostrar todo en pesos. Los KPIs de Compras se valorizan a pesos con la cotización de cada factura. (2) En <b>Créditos bancarios</b>, el banco ahora se <b>elige del catálogo de Bancos</b> (no texto libre). (3) Revisamos otros formularios para que usen los catálogos (banco en liquidación de sueldo, cultivo en lotes).' },
@@ -3465,6 +3468,46 @@ function dashFechaEnFiltro(fechaItem) {
   return true;
 }
 
+// Modo de valorización del Tablero: 'ars' (todo a pesos al día) o 'multi' (cada moneda aparte).
+function dashMonedaModo(){ return (state.dashFilter && state.dashFilter.moneda) || 'ars'; }
+// Valoriza a PESOS un movimiento de cuenta corriente (debe-haber) a la cotización ACTUAL
+// (cotizaciones vivas); si no hay valor vivo, usa la cotización guardada del comprobante.
+function ccArs(c){
+  const v = Number(c.debe||0) - Number(c.haber||0);
+  if (!c.moneda || c.moneda === 'ARS') return v;
+  const cot = Number((state.cache.cotizVivas||{})[c.moneda] || 0) || Number(c.cotizacion || 0) || 0;
+  return v * cot;
+}
+// Saldo por moneda de un conjunto de cuentas corrientes (para el modo multimoneda).
+function ccPorMoneda(ccs, tipo){
+  const m = {};
+  ccs.filter(c => c.contactoTipo === tipo).forEach(c => {
+    const k = c.moneda || 'ARS';
+    m[k] = (m[k]||0) + (Number(c.debe||0) - Number(c.haber||0));
+  });
+  return m;
+}
+// Formatea un objeto {ARS:n, USD:n, SOJA:n} como "$ X · US$ Y · 50 tn".
+function fmtMulti(m, soloPositivos){
+  const parts = Object.entries(m)
+    .filter(([k,v]) => Math.abs(v) > 0.5 && (!soloPositivos || v > 0))
+    .map(([k,v]) => k === 'ARS' ? fmt$(v) : fmtMon(k, v));
+  return parts.length ? parts.join(' · ') : fmt$(0);
+}
+// Valoriza a PESOS lo pendiente de un arrendamiento (efectivo $/US$ o quintales a pizarra).
+function arrMontoArs(a){
+  if (a.pagado) return 0;
+  const esQq = a.modalidad === 'quintales' || (!a.modalidad && a.tipoPago === 'En especie');
+  if (esQq){
+    const cuotas = Array.isArray(a.cuotas) ? a.cuotas : [];
+    const qqHa = cuotas.length ? cuotas.reduce((s,c)=>s+Number(c.quintalesHa||0),0) : (Number(a.quintalesHaBlanco||0)+Number(a.quintalesHaNegro||0));
+    const piz = Number((state.cache.cotizVivas||{})[a.grano] || 0);
+    return qqHa * Number(a.hectareas||0) * 0.1 * piz;
+  }
+  let tot = Number(a.hectareas||0) * Number(a.importeHa||0);
+  if (a.moneda === 'USD') tot *= Number((state.cache.cotizVivas||{}).USD || 1);
+  return tot;
+}
 pages.dashboard = async function() {
   setHeader('Dashboard', 'Análisis operativo y financiero');
   if (!can('dashboard:read')) { $('#page-body').innerHTML = stubPage('dashboard','Dashboard'); return; }
@@ -3566,6 +3609,11 @@ pages.dashboard = async function() {
           <button class="btn btn-secondary flex-1 text-xs" onclick="dashFiltroPreset('anioActual')">Año</button>
         </div>
         <div class="md:col-span-12 flex items-center justify-between flex-wrap gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
+            <select id="dash-moneda" class="input" style="width:auto;padding:5px 8px;font-size:12px" title="Cómo mostrar los importes en otra moneda">
+              <option value="ars" ${dashMonedaModo()==='ars'?'selected':''}>💱 En pesos (cotización de hoy)</option>
+              <option value="multi" ${dashMonedaModo()==='multi'?'selected':''}>💱 Multimoneda (cada una en su moneda)</option>
+            </select>
           <div class="text-xs text-slate-600">
             ${(() => {
               const f = state.dashFilter || {};
@@ -3575,6 +3623,7 @@ pages.dashboard = async function() {
               if (f.hasta) return `📅 Mostrando datos hasta <b>${fmtDate(f.hasta)}</b>`;
               return '💡 Sin filtro: se muestran todos los datos disponibles. Useá los filtros para análisis histórico o snapshot al cierre de un período.';
             })()}
+          </div>
           </div>
           ${(state.dashFilter?.desde || state.dashFilter?.hasta || state.dashFilter?.snapshot) ? `<button class="btn btn-secondary text-xs" onclick="dashFiltroLimpiar()">✕ Limpiar filtros</button>` : ''}
         </div>
@@ -3601,6 +3650,14 @@ pages.dashboard = async function() {
       pages.dashboard();
     };
   });
+  // Selector de moneda del reporte (pesos al día / multimoneda)
+  const monEl = $('#dash-moneda');
+  if (monEl) monEl.onchange = e => {
+    state.dashFilter = state.dashFilter || {};
+    state.dashFilter.moneda = e.target.value;
+    try { localStorage.setItem('ac.dashFilter', JSON.stringify(state.dashFilter)); } catch {}
+    pages.dashboard();
+  };
 
   // Delegamos al renderer del tab
   const render = {
@@ -3645,6 +3702,7 @@ async function dashResumen() {
     arr = arRsp.data || [];
     ccs = ccRsp.data || [];
   } catch {}
+  await cargarCotizVivas();  // para valorizar cuentas en otra moneda a pesos del día
 
   // Construir el "flujo" a partir de Efectivo + Banco-Movimientos (la fuente real ahora)
   // y aplicar el filtro de fecha del Dashboard.
@@ -3710,7 +3768,7 @@ async function dashResumen() {
     const porCli = {};
     ccs.filter(c => c.contactoTipo === 'cliente').forEach(c => {
       const k = c.contactoId || 'sin';
-      porCli[k] = (porCli[k] || 0) + Number(c.debe||0) - Number(c.haber||0);
+      porCli[k] = (porCli[k] || 0) + ccArs(c);
     });
     return Object.values(porCli).filter(v => v > 0).reduce((a,v) => a + v, 0);
   })();
@@ -3721,7 +3779,7 @@ async function dashResumen() {
       <div class="kpi"><div class="text-xs text-slate-500">Campañas activas</div><div class="text-2xl font-bold text-green-700 mt-1">${hasEnCurso}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Stock granos</div><div class="text-xl font-bold mt-1">${fmtKg(stockG)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Stock hacienda</div><div class="text-xl font-bold mt-1">${fmtN(stockH)} cab.</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Cuentas por cobrar</div><div class="text-xl font-bold mt-1 text-amber-600">${fmt$(saldoPorCobrar)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Cuentas por cobrar</div><div class="${dashMonedaModo()==='multi'?'text-base':'text-xl'} font-bold mt-1 text-amber-600">${dashMonedaModo()==='multi'?fmtMulti(ccPorMoneda(ccs,'cliente'),true):fmt$(saldoPorCobrar)}</div></div>
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Ingresos 6m</div><div class="text-xl font-bold mt-1 text-emerald-600">${fmt$(ingresosTotales)}</div></div>
@@ -3855,6 +3913,7 @@ async function dashFinanzas() {
     bancoMovs = bmRsp.data || [];
     ccs = (ccRsp.data || []).filter(c => dashFechaEnFiltro(c.fecha));
   } catch {}
+  await cargarCotizVivas();  // para valorizar cuentas en otra moneda a pesos del día
   // Flujo: Efectivo + Banco-movimientos filtrados por dashFechaEnFiltro
   for (const e of efectivos) {
     if (e.tipo === 'transferencia') continue;
@@ -3899,7 +3958,7 @@ async function dashFinanzas() {
     const porId = {};
     ccs.filter(c => c.contactoTipo === tipo).forEach(c => {
       const k = c.contactoId || 'sin';
-      porId[k] = (porId[k] || 0) + Number(c.debe||0) - Number(c.haber||0);
+      porId[k] = (porId[k] || 0) + ccArs(c);
     });
     return Object.values(porId).filter(v => v > 0).reduce((a,v) => a + v, 0);
   };
@@ -3911,7 +3970,9 @@ async function dashFinanzas() {
       <div class="kpi"><div class="text-xs text-slate-500">Ingresos 12m</div><div class="text-xl font-bold mt-1 text-emerald-600">${fmt$(ingresosT)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Egresos 12m</div><div class="text-xl font-bold mt-1 text-red-600">${fmt$(egresosT)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Margen neto</div><div class="text-xl font-bold mt-1 ${margen>=0?'text-emerald-700':'text-red-700'}">${fmt$(margen)}<span class="text-[11px] ml-1 opacity-75">(${margenPct}%)</span></div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Saldo neto clientes/prov.</div><div class="text-xl font-bold mt-1 ${(saldoCli-saldoProv)>=0?'text-emerald-700':'text-red-700'}">${fmt$(saldoCli - saldoProv)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Saldo neto clientes/prov.</div>${dashMonedaModo()==='multi'
+        ? `<div class="text-[11px] leading-tight mt-1"><div>A cobrar: <b class="text-emerald-700">${fmtMulti(ccPorMoneda(ccs,'cliente'),true)}</b></div><div>A pagar: <b class="text-red-700">${fmtMulti(ccPorMoneda(ccs,'proveedor'),true)}</b></div></div>`
+        : `<div class="text-xl font-bold mt-1 ${(saldoCli-saldoProv)>=0?'text-emerald-700':'text-red-700'}">${fmt$(saldoCli - saldoProv)}</div>`}</div>
     </div>
 
     <div class="kpi mb-4">
@@ -4188,16 +4249,17 @@ async function dashPatrimonio() {
   try { prods = (await api('/api/stock-actual')).data || []; } catch {}
   try { cheques = (await api('/api/cheques')).data || []; } catch {}
   try { arr = (await api('/api/arrendamientos')).data || []; } catch {}
+  await cargarCotizVivas();  // para valorizar a pesos lo que está en otra moneda / quintales
 
-  // Activos
+  // Activos (todo valorizado a pesos)
   const saldoCaja = flujo.reduce((a,f)=>a + Number(f.monto||0), 0);
   const valorStock = prods.reduce((a,p)=>a + Number(p.existencia||0) * Number(p.precioReferencia||0), 0);
-  const porCobrar = ccs.filter(c=>c.contactoTipo==='cliente').reduce((a,c)=>a+(Number(c.debe||0)-Number(c.haber||0)),0);
+  const porCobrar = ccs.filter(c=>c.contactoTipo==='cliente').reduce((a,c)=>a+ccArs(c),0);
   const chqEnCartera = cheques.filter(c=>c.tipo==='terceros' && ['en_cartera','depositado'].includes((c.estado||'').toLowerCase())).reduce((a,c)=>a+Number(c.monto||0),0);
-  // Pasivos
-  const porPagar = ccs.filter(c=>c.contactoTipo==='proveedor').reduce((a,c)=>a+(Number(c.debe||0)-Number(c.haber||0)),0);
+  // Pasivos (todo valorizado a pesos)
+  const porPagar = ccs.filter(c=>c.contactoTipo==='proveedor').reduce((a,c)=>a+ccArs(c),0);
   const chqEmitidos = cheques.filter(c=>c.tipo==='propio' && ['emitido','depositado'].includes((c.estado||'').toLowerCase())).reduce((a,c)=>a+Number(c.monto||0),0);
-  const arrPendiente = arr.filter(a=>!a.pagado).reduce((a,x)=>a + Number(x.hectareas||0)*Number(x.importeHa||0), 0);
+  const arrPendiente = arr.reduce((a,x)=>a + arrMontoArs(x), 0);
 
   const activosT = saldoCaja + valorStock + porCobrar + chqEnCartera;
   const pasivosT = porPagar + chqEmitidos + arrPendiente;
@@ -4230,7 +4292,7 @@ async function dashPatrimonio() {
         <ul class="divide-y divide-slate-100 text-sm">
           <li class="py-2 flex justify-between"><span>💵 Saldo de caja</span><b>${fmt$(saldoCaja)}</b></li>
           <li class="py-2 flex justify-between"><span>📦 Valor en stock</span><b>${fmt$(valorStock)}</b></li>
-          <li class="py-2 flex justify-between"><span>💰 Por cobrar (clientes)</span><b>${fmt$(porCobrar)}</b></li>
+          <li class="py-2 flex justify-between gap-2"><span>💰 Por cobrar (clientes)</span><b class="text-right">${dashMonedaModo()==='multi'?fmtMulti(ccPorMoneda(ccs,'cliente'),true):fmt$(porCobrar)}</b></li>
           <li class="py-2 flex justify-between"><span>💳 Cheques en cartera</span><b>${fmt$(chqEnCartera)}</b></li>
           <li class="py-2 flex justify-between font-semibold border-t"><span>Total activos</span><b class="text-emerald-700">${fmt$(activosT)}</b></li>
         </ul>
@@ -4239,7 +4301,7 @@ async function dashPatrimonio() {
       <div class="kpi">
         <h3 class="font-semibold text-slate-800 mb-3">🔴 Composición de pasivos</h3>
         <ul class="divide-y divide-slate-100 text-sm">
-          <li class="py-2 flex justify-between"><span>🧾 Por pagar (proveedores)</span><b>${fmt$(porPagar)}</b></li>
+          <li class="py-2 flex justify-between gap-2"><span>🧾 Por pagar (proveedores)</span><b class="text-right">${dashMonedaModo()==='multi'?fmtMulti(ccPorMoneda(ccs,'proveedor'),true):fmt$(porPagar)}</b></li>
           <li class="py-2 flex justify-between"><span>💳 Cheques emitidos</span><b>${fmt$(chqEmitidos)}</b></li>
           <li class="py-2 flex justify-between"><span>🏞️ Arrendamientos pendientes</span><b>${fmt$(arrPendiente)}</b></li>
           <li class="py-2 flex justify-between font-semibold border-t"><span>Total pasivos</span><b class="text-red-700">${fmt$(pasivosT)}</b></li>
