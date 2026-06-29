@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.30.0';
+const AGROCORE_VERSION = '1.31.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2166,7 +2166,7 @@ app.get('/api/aplicaciones', requireCompany, requirePermission('produccion:read'
     const data = [
       ...ins.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'insumo',
         item: x.nombre, subtipo: x.unidad || null,
-        unidadHa: x.cantidad, precioUnit: null,
+        unidadHa: x.cantidad, precioUnit: x.precioUnit ?? null,
         costoHa: x.costo, hectareasAplicadas: x.hectareasAplicadas,
         fecha: x.fecha, observaciones: x.observaciones })),
       ...lab.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'labor',
@@ -2200,6 +2200,7 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
       const row = await prisma.insumoAplicado.create({
         data: { campanaId: d.campanaId, nombre: d.item, cantidad: d.unidadHa || 0,
           unidad: d.subtipo || 'u/ha', fecha, costo: d.costoHa || 0,
+          precioUnit: d.precioUnit ?? null,
           hectareasAplicadas: d.hectareasAplicadas ?? null,
           observaciones: d.observaciones || null },
       });
@@ -2212,6 +2213,49 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
       });
       return res.status(201).json({ ok: true, data: { ...row, tipo: 'labor' } });
     }
+  } catch (e) { next(e); }
+});
+// Editar una aplicación (insumo o labor) — para corregir un solo renglón sin borrar y recargar.
+app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    const schema = z.object({
+      item: z.string().min(1).optional(),
+      subtipo: z.string().nullable().optional(),
+      unidadHa: z.number().nullable().optional(),
+      precioUnit: z.number().nullable().optional(),
+      costoHa: z.number().nullable().optional(),
+      hectareasAplicadas: z.number().nullable().optional(),
+      fecha: z.coerce.date().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body || {});
+    const ins = await prisma.insumoAplicado.findFirst({ where: { id, campana: { companyId: req.companyId } } });
+    if (ins) {
+      const row = await prisma.insumoAplicado.update({ where: { id }, data: {
+        nombre: d.item ?? ins.nombre,
+        unidad: d.subtipo !== undefined ? (d.subtipo || 'u/ha') : ins.unidad,
+        cantidad: d.unidadHa !== undefined ? (d.unidadHa || 0) : ins.cantidad,
+        precioUnit: d.precioUnit !== undefined ? d.precioUnit : ins.precioUnit,
+        costo: d.costoHa !== undefined ? (d.costoHa || 0) : ins.costo,
+        hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : ins.hectareasAplicadas,
+        fecha: d.fecha || ins.fecha,
+        observaciones: d.observaciones !== undefined ? d.observaciones : ins.observaciones,
+      }});
+      return res.json({ ok: true, data: { ...row, tipo: 'insumo' } });
+    }
+    const lab = await prisma.laborAplicada.findFirst({ where: { id, campana: { companyId: req.companyId } } });
+    if (lab) {
+      const row = await prisma.laborAplicada.update({ where: { id }, data: {
+        tipo: d.item ?? lab.tipo,
+        costo: d.costoHa !== undefined ? (d.costoHa || 0) : lab.costo,
+        hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : lab.hectareasAplicadas,
+        fecha: d.fecha || lab.fecha,
+        observaciones: d.observaciones !== undefined ? d.observaciones : lab.observaciones,
+      }});
+      return res.json({ ok: true, data: { ...row, tipo: 'labor' } });
+    }
+    res.status(404).json({ ok: false, error: 'No encontrado' });
   } catch (e) { next(e); }
 });
 app.delete('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:delete'), async (req, res, next) => {

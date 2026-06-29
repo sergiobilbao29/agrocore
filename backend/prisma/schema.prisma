@@ -234,7 +234,8 @@ model InsumoAplicado {
   unidad              String
   hectareasAplicadas  Float?      // Hectareas reales donde se aplico (NULL = lote completo, legado)
   fecha               DateTime
-  costo               Float?
+  costo               Float?      // costo por hectarea (u$s/ha)
+  precioUnit          Float?      // costo por unidad (u$s/unidad) — para autocompletar/mostrar
   observaciones       String?
   createdAt           DateTime @default(now())
 
@@ -630,6 +631,7 @@ model Arrendamiento {
   id              String   @id @default(cuid())
   companyId       String
   campoId         String?
+  nombre          String?   // nombre del contrato/arrendamiento (ej "Campo Norte - Pérez")
   propietario     String
   hectareas       Float
   importeHa       Float?

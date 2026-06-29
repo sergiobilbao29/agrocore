@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'29/06/2026',
+      titulo:'🛠️ v1.31.0 — Insumos y labores: editar renglón, precios que se guardan y botones arreglados',
+      desc:'(1) Se arreglaron los botones generales <b>+ Insumo</b> y <b>+ Labor</b> de arriba (no abrían). (2) Ahora podés <b>editar un renglón</b> de insumo o labor (✏️) sin tener que borrarlo y volver a cargarlo. (3) Las <b>labores guardan su costo (u$s/ha)</b> y se ven en la pantalla general. (4) Los <b>insumos guardan el u$s/unidad</b> y, al elegir el producto, se <b>autocompleta el precio</b> con el último costo de compra (o el precio de referencia) — también en los insumos consumidos dentro de una labor.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
       titulo:'🏦 v1.30.0 — Créditos: periodicidad anual',
       desc:'En los créditos bancarios se sumó la periodicidad <b>Anual</b> (además de mensual, bimestral, trimestral y semestral), tanto para el plan automático (sistema francés) como para generar las fechas del plan manual.' },
@@ -15724,8 +15727,8 @@ pages.insumos = async function() {
     ${bannerTotales}
 
     <div class="mb-4 flex items-center justify-end flex-wrap gap-2">
-      <button class="btn btn-primary" onclick="aplicForm('insumo',${JSON.stringify(preselCamp)})">+ Insumo</button>
-      ${(can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:create'))?`<button class="btn btn-secondary" onclick="laborForm(true,${JSON.stringify(preselCamp)})" title="Cargar una labor: empleado responsable, insumos consumidos y, opcional, % de cobro del empleado (se suma a su planilla del mes).">+ Labor</button>`:''}
+      <button class="btn btn-primary" onclick='aplicForm("insumo",${JSON.stringify(preselCamp)})'>+ Insumo</button>
+      ${(can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:create'))?`<button class="btn btn-secondary" onclick='laborForm(true,${JSON.stringify(preselCamp)})' title="Cargar una labor: empleado responsable, insumos consumidos y, opcional, % de cobro del empleado.">+ Labor</button>`:''}
     </div>
     <div id="ins-list" class="space-y-4">
       ${campanasFiltradas.length === 0
@@ -15784,7 +15787,7 @@ pages.insumos = async function() {
                            <td class="text-right ${isParcial?'text-amber-600 font-semibold':''}" title="${isParcial?'Aplicación parcial (lote: '+haLote+' ha)':''}">${fmtN(ha)}${isParcial?' *':''}</td>
                            <td class="text-right font-semibold">${fmtN(total)}</td>
                            <td>${a.fecha?fmtDate(a.fecha):'—'}</td>
-                           <td class="text-right"><button class="btn btn-ghost text-xs" onclick='aplicDel(${JSON.stringify(a.id)})'>🗑️</button></td>
+                           <td class="text-right whitespace-nowrap">${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)})'>🗑️</button></td>
                          </tr>`;}).join('')}</tbody>
                      </table>`}
                 <div class="text-xs font-semibold text-slate-600 uppercase mt-4 mb-2 flex items-center justify-between">
@@ -15807,7 +15810,7 @@ pages.insumos = async function() {
                            <td class="text-right font-semibold">${fmtN(total)}</td>
                            <td>${a.fecha?fmtDate(a.fecha):'—'}</td>
                            <td class="text-xs">${esc(a.observaciones||'—')}</td>
-                           <td class="text-right"><button class="btn btn-ghost text-xs" onclick='aplicDel(${JSON.stringify(a.id)})'>🗑️</button></td>
+                           <td class="text-right whitespace-nowrap">${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)})'>🗑️</button></td>
                          </tr>`;}).join('')}</tbody>
                      </table>`}
                 ${(insumosC.some(a=>a.hectareasAplicadas != null && Number(a.hectareasAplicadas) < haLote) ||
@@ -16002,9 +16005,10 @@ function insItemPick(inp){
   const name = (inp.value||'').trim().toLowerCase();
   if (!name) return;
   const prod = (state.cache.productos||[]).find(p => (p.nombre||'').trim().toLowerCase() === name);
-  if (prod && prod.ultimoCostoCompra != null) {
+  const costo = prod ? (prod.ultimoCostoCompra ?? prod.precioReferencia ?? null) : null;
+  if (costo != null) {
     const pu = tr.querySelector('[data-if="pu"]');
-    if (pu && !pu.value) { pu.value = prod.ultimoCostoCompra; insRowRecalc(pu); }
+    if (pu && !pu.value) { pu.value = costo; insRowRecalc(pu); }
   }
 }
 async function aplicSaveMulti(){
@@ -16047,8 +16051,49 @@ async function aplicSaveMulti(){
 }
 async function aplicDel(id) {
   if (!confirm('¿Eliminar?')) return;
-  try { await api('/api/aplicaciones/'+id, { method:'DELETE' }); toast('Eliminado','success'); pages.insumos(); }
+  try { await api('/api/aplicaciones/'+id, { method:'DELETE' }); toast('Eliminado','success'); delete state.cache.aplicaciones; pages.insumos(); }
   catch (e) { toast(e.message,'error'); }
+}
+// Editar un solo renglón (insumo o labor) sin tener que borrarlo y recargarlo.
+function aplicEditForm(a){
+  const esIns = a.tipo === 'insumo';
+  openModal({
+    title: esIns ? 'Editar insumo' : 'Editar labor', size:'max-w-lg',
+    body: `
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">${esIns?'Producto':'Labor'} *</label><input id="ae-item" class="input" value="${esc(a.item||'')}"/></div>
+        ${esIns?`
+        <div><label class="label">Tipo</label><select id="ae-sub" class="input">${INS_SUBTIPOS.map(s=>`<option ${s===a.subtipo?'selected':''}>${s}</option>`).join('')}</select></div>
+        <div><label class="label">Unid/ha</label><input id="ae-uha" type="number" step="0.01" class="input" value="${a.unidadHa??''}"/></div>
+        <div><label class="label">u\$s/unidad</label><input id="ae-pu" type="number" step="0.01" class="input" value="${a.precioUnit??''}"/></div>`:''}
+        <div><label class="label">u\$s/ha</label><input id="ae-cha" type="number" step="0.01" class="input" value="${a.costoHa??''}"/></div>
+        <div><label class="label">Ha aplicadas</label><input id="ae-ha" type="number" step="0.01" class="input" value="${a.hectareasAplicadas??''}"/></div>
+        <div><label class="label">Fecha</label><input id="ae-fec" type="date" class="input" value="${a.fecha?String(a.fecha).slice(0,10):''}"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ae-obs" class="input" rows="2">${esc(a.observaciones||'')}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick='aplicEditSave(${JSON.stringify(a.id)},${esIns})'>💾 Guardar</button>`
+  });
+}
+async function aplicEditSave(id, esIns){
+  const num = (sel) => { const v = $(sel)?.value; return (v!==undefined && v!=='') ? Number(v) : null; };
+  const item = $('#ae-item').value.trim();
+  if (!item) return toast(esIns?'Falta el producto':'Falta la labor','warn');
+  const data = {
+    item,
+    costoHa: num('#ae-cha'),
+    hectareasAplicadas: num('#ae-ha'),
+    fecha: $('#ae-fec').value ? new Date($('#ae-fec').value+'T00:00:00').toISOString() : null,
+    observaciones: $('#ae-obs').value.trim() || null,
+  };
+  if (esIns){
+    data.subtipo = $('#ae-sub')?.value || null;
+    data.unidadHa = num('#ae-uha');
+    data.precioUnit = num('#ae-pu');
+  }
+  try { await api('/api/aplicaciones/'+id, { method:'PUT', body: JSON.stringify(data) });
+    toast('Actualizado','success'); closeModal(); delete state.cache.aplicaciones; pages.insumos();
+  } catch (e) { toast(e.message,'error'); }
 }
 
 /* =========================================================
@@ -16247,7 +16292,7 @@ function laPickLabor() {
 }
 function laAddIns(ins = { productoId:'', cantidad:0, precioUnit:0 }) {
   const productos = state.cache.productos || [];
-  const opts = productos.map(p => `<option value="${p.id}" data-prec="${p.precioReferencia||''}" data-uni="${esc(p.unidad||'')}">${esc(p.nombre)} (${esc(p.unidad||'')})</option>`).join('');
+  const opts = productos.map(p => `<option value="${p.id}" data-prec="${(p.ultimoCostoCompra ?? p.precioReferencia ?? '')}" data-uni="${esc(p.unidad||'')}">${esc(p.nombre)} (${esc(p.unidad||'')})</option>`).join('');
   const row = `<tr data-la>
     <td><select class="input text-sm" data-laf="productoId" onchange="laPickInsumo(this)"><option value="">— Elegí producto —</option>${opts}</select></td>
     <td><input class="input text-sm w-24 text-right" type="number" step="0.01" data-laf="cantidad" value="${ins.cantidad||0}" oninput="laRecalc()"/></td>
@@ -16263,7 +16308,7 @@ function laPickInsumo(sel) {
   if (!opt || !opt.value) return;
   const prec = opt.dataset.prec;
   const pu = tr.querySelector('[data-laf="precioUnit"]');
-  if (pu && !pu.value) pu.value = prec || 0;
+  if (pu && prec && (!pu.value || Number(pu.value) === 0)) pu.value = prec;
   laRecalc();
 }
 function laRecalc() {
@@ -16318,6 +16363,9 @@ async function laborSave() {
   })).filter(e => e.empleadoId);
   const pr = $('#la-pr')?.value ? Number($('#la-pr').value) : null;
   const tp = $('#la-tp')?.value || 'por_hectarea';
+  // Costo de la labor por hectárea (para que se vea en la pantalla general): si el precio
+  // de referencia es por hectárea, es el mismo; si es total, se divide por las hectáreas.
+  const costoHaLabor = (pr != null) ? (tp === 'por_hectarea' ? pr : (ha ? pr / ha : pr)) : null;
   const data = {
     campanaId: camp,
     tipo,
@@ -16326,6 +16374,7 @@ async function laborSave() {
     observaciones: $('#la-obs').value.trim() || null,
     precioReferencia: pr,
     tipoPrecio: pr != null ? tp : null,
+    costo: costoHaLabor,
     empleados,
     insumos,
   };
