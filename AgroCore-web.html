@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
+      titulo:'🌾 v1.26.0 — Costo de insumos, créditos con IVA/gastos, arrendamientos por quintales y más',
+      desc:'Varias mejoras: (1) <b>Costo de insumos</b>: al cargar una compra se guarda el costo del producto y se <b>autocompleta</b> después en la carga de insumos (último costo de compra). (2) <b>Importación de PDF</b>: se corrigió la lectura del número de comprobante (ahora elige el que coincide con el punto de venta). (3) <b>Campañas</b>: se pueden marcar como <b>finalizadas</b>, y desde Insumos y labores cada campaña tiene botones para <b>cargar insumo/labor o editarla directamente</b>. (4) <b>Créditos</b>: campo opcional de <b>IVA sobre intereses</b> (se suma a cada cuota) y posibilidad de cargar <b>gastos a mano</b> al pagar una cuota. (5) <b>Arrendamientos</b>: nueva modalidad <b>en quintales</b> (qq/ha en blanco y en negro), con <b>cuotas</b> (cantidad, vencimiento y quintales de cada una) y <b>valuación a pizarra</b> en $ y US$. (6) <b>Proveedores</b>: el saldo ahora muestra el <b>signo de cada moneda</b> (US$/$), sin mezclar. (7) <b>Hacienda</b>: solo aparecen los campos de explotación <b>ganadera o mixta</b> (o los que ya tengan hacienda cargada).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'28/06/2026',
       titulo:'🧪 v1.25.0 — Insumos: cargar varios de una sola vez por lote + un solo botón de Labor',
       desc:'En <b>Insumos y labores</b> mejoramos la carga. Ahora <b>"+ Insumo" carga varios insumos de una</b>: elegís la campaña/lote y la fecha <b>una sola vez</b> y cargás todos los productos en una tabla (producto, tipo, unidades/ha, u$s/unidad, u$s/ha y hectáreas aplicadas por fila), sin tener que salir y volver a elegir el lote por cada insumo. Las hectáreas aplicadas se completan solas con las del lote (editables por fila). Además, <b>unificamos los botones de labor</b>: antes había "Labor" y "Labor avanzada"; ahora hay <b>un solo botón "+ Labor"</b> que abre el formulario completo (empleado responsable, insumos consumidos que descuentan stock y, si corresponde, el % de cobro del empleado que se suma a su planilla).' },
@@ -5013,11 +5016,26 @@ pages.proveedores = async function() {
   let rows=[], ccs=[];
   try { rows = await crudList('proveedores'); } catch (e) { return toast(e.message,'error'); }
   try { ccs = (await api('/api/ctas-ctes')).data || []; } catch {}
-  const saldoDe = provId => ccs.filter(c => c.contactoTipo==='proveedor' && c.contactoId===provId).reduce((a,c)=>a+(Number(c.debe||0)-Number(c.haber||0)), 0);
+  await cargarMonedas();
+  // Saldo por proveedor, separado por moneda (no se mezclan pesos con dólares/granos).
+  const saldosDe = provId => {
+    const m = {};
+    ccs.filter(c => c.contactoTipo==='proveedor' && c.contactoId===provId).forEach(c => {
+      const k = c.moneda || 'ARS';
+      m[k] = (m[k]||0) + (Number(c.debe||0) - Number(c.haber||0));
+    });
+    return m;
+  };
+  const fmtSaldos = m => {
+    const p = Object.entries(m).filter(([k,v]) => Math.abs(v) > 0.005).map(([k,v]) => k==='ARS' ? fmt$(v) : fmtMon(k,v));
+    return p.length ? p.join(' · ') : '—';
+  };
+  const hayDeuda = m => Object.values(m).some(v => v > 0.005);
 
   state.provFilter = state.provFilter || { q:'', rubro:'' };
   const activos = rows.filter(r => r.activo !== false).length;
-  const totalSaldo = rows.reduce((a,r)=>a+saldoDe(r.id),0);
+  const totalSaldos = {};
+  rows.forEach(r => { const m = saldosDe(r.id); for (const [k,v] of Object.entries(m)) totalSaldos[k] = (totalSaldos[k]||0) + v; });
   const rubros = Array.from(new Set(rows.map(r => r.rubro).filter(Boolean))).sort();
 
   const render = () => {
@@ -5037,7 +5055,7 @@ pages.proveedores = async function() {
         </tr></thead>
         <tbody>
           ${filtered.map(p => {
-            const s = saldoDe(p.id);
+            const m = saldosDe(p.id);
             return `<tr class="table-row">
               <td><b>${esc(p.razonSocial)}</b></td>
               <td class="font-mono text-xs">${esc(p.cuit||'—')}</td>
@@ -5048,7 +5066,7 @@ pages.proveedores = async function() {
                 ${(!p.email && !p.telefono)?'—':''}
               </td>
               <td>${esc(p.localidad||'—')}</td>
-              <td class="text-right ${s>0?'text-red-600 font-semibold':''}">${s?fmt$(s):'—'}</td>
+              <td class="text-right ${hayDeuda(m)?'text-red-600 font-semibold':''}">${fmtSaldos(m)}</td>
               <td class="text-right whitespace-nowrap">
                 ${can('contactos:update') ? `<button class="btn btn-ghost text-xs" onclick='provForm(${JSON.stringify(p.id)})'>✏️</button>`:''}
                 ${can('contactos:delete') ? `<button class="btn btn-ghost text-xs text-red-600" onclick='provDel(${JSON.stringify(p.id)})'>🗑️</button>`:''}
@@ -5062,7 +5080,7 @@ pages.proveedores = async function() {
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Proveedores</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Activos</div><div class="text-2xl font-bold mt-1 text-emerald-600">${activos}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Saldo a pagar</div><div class="text-xl font-bold mt-1 ${totalSaldo>0?'text-red-600':'text-slate-700'}">${fmt$(totalSaldo)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Saldo a pagar</div><div class="text-xl font-bold mt-1 ${hayDeuda(totalSaldos)?'text-red-600':'text-slate-700'}">${fmtSaldos(totalSaldos)}</div></div>
     </div>
     <div class="kpi mb-3">
       <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
@@ -7957,6 +7975,13 @@ async function rolDel(id) {
 /* =========================================================
  * CAMPAÑAS
  * ========================================================= */
+// Etiqueta de una campaña: el nombre libre si tiene; si no, cultivo — lote.
+function campLabel(c){
+  if (!c) return '';
+  if (c.nombre) return c.nombre;
+  const lote = c.lote?.nombre ? ` — ${c.lote.nombre}` : '';
+  return (`${c.cultivo||''}${lote}`).trim() || 'Campaña';
+}
 pages.campanas = async function() {
   setHeader('Campañas', 'Ciclo productivo por lote');
   if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('campanas','Campañas'); return; }
@@ -7975,7 +8000,7 @@ pages.campanas = async function() {
   const totalHa = rows.reduce((a,c)=>a + Number(c.hectareas||0), 0);
 
   const estadoBadge = (e) => {
-    const c = e==='cosechada' ? 'badge-gray' : (e==='cosechando'||e==='En curso'||e==='activa') ? 'badge-yellow' : e==='sembrada' ? 'badge-green' : 'badge-blue';
+    const c = (e==='cosechada'||e==='finalizada') ? 'badge-gray' : (e==='cosechando'||e==='En curso'||e==='activa') ? 'badge-yellow' : e==='sembrada' ? 'badge-green' : 'badge-blue';
     return `<span class="badge ${c}">${esc(e||'planificada')}</span>`;
   };
   const cropIcon = (cultivo) => {
@@ -8012,8 +8037,8 @@ pages.campanas = async function() {
             <div class="flex items-center gap-2 min-w-0">
               <div class="text-3xl flex-shrink-0">${cropIcon(c.cultivo)}</div>
               <div class="min-w-0">
-                <div class="font-bold text-slate-800 text-base truncate">${esc(c.cultivo||'—')}</div>
-                <div class="text-xs text-slate-500 truncate">${esc(c.lote?.campo?.nombre||'')}${c.lote?.nombre?' · '+esc(c.lote.nombre):''}</div>
+                <div class="font-bold text-slate-800 text-base truncate">${esc(c.nombre || c.cultivo || '—')}</div>
+                <div class="text-xs text-slate-500 truncate">${c.nombre?esc(c.cultivo||'')+' · ':''}${esc(c.lote?.campo?.nombre||'')}${c.lote?.nombre?' · '+esc(c.lote.nombre):''}</div>
               </div>
             </div>
             <div class="flex items-center gap-1 flex-shrink-0">
@@ -8033,6 +8058,7 @@ pages.campanas = async function() {
           ${proj ? `<div class="text-xs text-slate-600 mt-2 bg-emerald-50 text-emerald-700 rounded p-1.5 text-center"><b>Proyección:</b> ${fmtN(proj)} kg totales</div>`:''}
           <div class="flex gap-1 mt-3 pt-2 border-t">
             <button class="btn btn-ghost text-xs flex-1" onclick="state.insFilter={campana:'${c.id}'}; go('insumos')">🧪 Insumos/Labores</button>
+            ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar finalizada" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅</button>`:''}
             ${can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
             ${can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='campanaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
           </div>
@@ -8043,20 +8069,31 @@ pages.campanas = async function() {
 function campanaForm(id=null) {
   const it = id ? (state.cache.campanas||[]).find(x=>x.id===id)||{} : {};
   const lotes = state.cache.lotes || [];
-  const estados = ['planificada','sembrada','cosechando','cosechada'];
+  const estados = ['planificada','sembrada','cosechando','cosechada','finalizada'];
+  const ciclosCat = catByTipo('Ciclo').map(c=>c.nombre);
+  const ciclosUsados = [...new Set((state.cache.campanas||[]).map(c=>c.ciclo).filter(Boolean))];
+  const cicloOpts = [...new Set([...ciclosCat, ...ciclosUsados])].sort();
   openModal({
     title: id?'Editar campaña':'Nueva campaña', size:'max-w-2xl',
     body: `
       <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Nombre de la campaña</label>
+          <input id="f-nom" class="input" value="${esc(it.nombre||'')}" data-touched="${it.nombre?'1':''}" oninput="this.dataset.touched='1'" placeholder="Ej: Campaña 2026/2027 Soja - El 29 Lote 2"/>
+          <div class="text-[11px] text-slate-500 mt-1">Ponele el nombre que quieras. Si lo dejás vacío, se arma solo con ciclo + cultivo + campo/lote.</div>
+        </div>
         <div class="col-span-2"><label class="label">Lote *</label>
-          <select id="f-lote" class="input">
+          <select id="f-lote" class="input" onchange="campNomSug()">
             <option value="">-- elegir lote --</option>
             ${lotes.map(l=>`<option value="${l.id}" ${l.id===it.loteId?'selected':''}>${esc(l.campo?.nombre||'')} · ${esc(l.nombre)}</option>`).join('')}
           </select>
         </div>
-        <div><label class="label">Cultivo *</label>${catSelect('f-cul', 'Cereal', it.cultivo||'')}</div>
+        <div><label class="label">Cultivo *</label>${catSelect('f-cul', 'Cereal', it.cultivo||'', {attr:'onchange="campNomSug()"'})}</div>
         <div><label class="label">Variedad</label><input id="f-var" class="input" value="${esc(it.variedad||'')}"/></div>
-        <div><label class="label">Ciclo</label><input id="f-cic" class="input" value="${esc(it.ciclo||'')}" placeholder="2025/26"/></div>
+        <div><label class="label">Ciclo</label>
+          <input id="f-cic" class="input" list="f-cic-list" value="${esc(it.ciclo||'')}" placeholder="2026/2027" oninput="campNomSug()"/>
+          <datalist id="f-cic-list">${cicloOpts.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+          <div class="text-[11px] text-slate-500 mt-1">Elegí uno o escribí uno nuevo. Se administran en Catálogos → Ciclos.</div>
+        </div>
         <div><label class="label">Hectáreas</label><input id="f-ha" type="number" step="0.01" class="input" value="${it.hectareas||''}"/></div>
         <div><label class="label">Fecha siembra</label><input id="f-fs" type="date" class="input" value="${it.fechaSiembra?String(it.fechaSiembra).slice(0,10):''}"/></div>
         <div><label class="label">Fecha cosecha</label><input id="f-fc" type="date" class="input" value="${it.fechaCosecha?String(it.fechaCosecha).slice(0,10):''}"/></div>
@@ -8071,9 +8108,23 @@ function campanaForm(id=null) {
              <button class="btn btn-primary" onclick='campanaSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
 }
+// Autosugerencia del nombre de la campaña (solo si el usuario no lo editó a mano).
+function campNomSug(){
+  const nom = $('#f-nom'); if (!nom || nom.dataset.touched) return;
+  const loteSel = $('#f-lote');
+  const loteTxt = (loteSel && loteSel.value) ? (loteSel.options[loteSel.selectedIndex]?.text || '').replace(' · ',' ') : '';
+  const cul = $('#f-cul')?.value || '';
+  const cic = $('#f-cic')?.value || '';
+  const partes = [];
+  if (cic) partes.push(cic);
+  if (cul) partes.push(cul);
+  if (loteTxt) partes.push(loteTxt);
+  nom.value = partes.length ? ('Campaña ' + partes.join(' - ')) : '';
+}
 async function campanaSave(id) {
   const data = {
     loteId: $('#f-lote').value,
+    nombre: $('#f-nom').value.trim()||null,
     cultivo: $('#f-cul').value.trim(),
     variedad: $('#f-var').value.trim()||null,
     ciclo: $('#f-cic').value.trim()||null,
@@ -8094,6 +8145,15 @@ async function campanaDel(id) {
   if (!confirm('¿Borrar esta campaña?')) return;
   try { await api('/api/campanas/'+id,{method:'DELETE'}); toast('Borrada','success'); pages.campanas(); }
   catch (e) { toast(e.message,'error'); }
+}
+async function campanaFinalizar(id) {
+  if (!confirm('¿Marcar esta campaña como finalizada?')) return;
+  try {
+    await api('/api/campanas/'+id,{method:'PUT',body:JSON.stringify({estado:'finalizada'})});
+    toast('Campaña finalizada','success');
+    delete state.cache.campanas;
+    (pages[state.currentPage] || pages.insumos)();
+  } catch (e) { toast(e.message,'error'); }
 }
 
 /* =========================================================
@@ -10330,7 +10390,19 @@ pages.hacienda = async function() {
     if (cli && cli.data) state.cache.clientes = cli.data;
   } catch (e) { return toast(e.message,'error'); }
 
-  const { campos = [], filas = [] } = resumen;
+  const { campos: _camposAll = [], filas: _filasAll = [] } = resumen;
+  // Mostrar solo campos de explotación ganadera o mixta (o los que ya tengan hacienda cargada,
+  // para no esconder datos existentes). Los campos puramente agrícolas no aparecen acá.
+  const _camposFull = (await api('/api/campos').catch(()=>({data:state.cache.campos||[]}))).data || [];
+  state.cache.campos = _camposFull;
+  const _tipoMap = new Map(_camposFull.map(c=>[c.id,(c.tipoExplotacion||'').toLowerCase()]));
+  const _conHacienda = new Set([
+    ..._filasAll.filter(f=>Number(f.declarado||0)||Number(f.real||0)).map(f=>f.campoId),
+    ...(movs||[]).map(m=>m.campoId),
+  ]);
+  const _permitCampo = (id)=>{ const t=_tipoMap.get(id); return t==='ganadera'||t==='mixta'||_conHacienda.has(id); };
+  const campos = _camposAll.filter(c=>_permitCampo(c.id));
+  const filas  = _filasAll.filter(f=>_permitCampo(f.campoId));
   const camposMap = new Map(campos.map(c=>[c.id, c]));
 
   // Totales globales y por campo
@@ -15425,17 +15497,22 @@ pages.insumos = async function() {
     insumosCat = cats.filter(c => ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'].includes(c.tipo));
     laboresCat = cats.filter(c => c.tipo === 'Labor');
     aplics = (await api('/api/aplicaciones').catch(()=>({data:[]}))).data || [];
+    state.cache.productos = (await api('/api/productos').catch(()=>({data:state.cache.productos||[]}))).data || [];
   } catch (e) { return toast(e.message,'error'); }
   state.cache.campanas = campanas; state.cache.lotes = lotes;
   state.cache.insumosCat = insumosCat; state.cache.laboresCat = laboresCat;
   state.cache.aplicaciones = aplics;
 
-  state.insFilter = state.insFilter || { campana:'', insumo:'', labor:'', campoId:'' };
+  state.insFilter = state.insFilter || { campana:'', insumo:'', labor:'', campoId:'', ciclo:'' };
   const f = state.insFilter;
 
   // Items únicos (de aplicaciones cargadas) para los filtros
   const insumosUsados = [...new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.item||'').trim()).filter(Boolean))].sort();
   const laboresUsadas = [...new Set(aplics.filter(a=>a.tipo==='labor' ).map(a=>(a.item||'').trim()).filter(Boolean))].sort();
+  // Ciclos disponibles (de las campañas)
+  const ciclosUsados = [...new Set(campanas.map(c=>(c.ciclo||'').trim()).filter(Boolean))].sort();
+  // Set de campañas que matchean el ciclo elegido (para filtrar aplicaciones)
+  const cicloCampIds = f.ciclo ? new Set(campanas.filter(c=>(c.ciclo||'').trim()===f.ciclo).map(c=>c.id)) : null;
 
   // Filtramos aplicaciones por los criterios activos
   const aplicsFiltradas = aplics.filter(a => {
@@ -15444,6 +15521,7 @@ pages.insumos = async function() {
     // Si filtra por insumo, esconder labores; si filtra por labor, esconder insumos
     if (f.insumo && !f.labor && a.tipo !== 'insumo') return false;
     if (f.labor  && !f.insumo && a.tipo !== 'labor') return false;
+    if (f.ciclo && cicloCampIds && !cicloCampIds.has(a.campanaId)) return false;
     if (f.campoId) {
       const camp = campanas.find(c => c.id === a.campanaId);
       const lote = camp ? lotes.find(l => l.id === camp.loteId) : null;
@@ -15462,6 +15540,7 @@ pages.insumos = async function() {
   } else {
     campanasFiltradas = campanas;
   }
+  if (f.ciclo) campanasFiltradas = campanasFiltradas.filter(c => (c.ciclo||'').trim() === f.ciclo);
 
   // Totales consolidados (cuando el filtro es por insumo o labor)
   const haDeApp = (a) => {
@@ -15476,8 +15555,8 @@ pages.insumos = async function() {
   const totHa = aplicsFiltradas.reduce((acc,a)=> acc + haDeApp(a), 0);
 
   // Banner de totales cuando hay filtro activo de insumo o labor
-  const filtroActivo = !!(f.insumo || f.labor || f.campoId);
-  const labelFiltro = f.insumo ? `Insumo "${f.insumo}"` : f.labor ? `Labor "${f.labor}"` : f.campoId ? `Campo "${esc(campos.find(c=>c.id===f.campoId)?.nombre||'')}"` : '';
+  const filtroActivo = !!(f.insumo || f.labor || f.campoId || f.ciclo);
+  const labelFiltro = f.insumo ? `Insumo "${f.insumo}"` : f.labor ? `Labor "${f.labor}"` : f.campoId ? `Campo "${esc(campos.find(c=>c.id===f.campoId)?.nombre||'')}"` : f.ciclo ? `Ciclo "${esc(f.ciclo)}"` : '';
   const bannerTotales = filtroActivo ? `
     <div class="mb-4 rounded-xl overflow-hidden" style="background:linear-gradient(135deg,#14532d 0%,#166534 55%,#15803d 100%);box-shadow:0 6px 20px -8px rgba(20,83,45,.45)">
       <div class="p-5">
@@ -15513,7 +15592,14 @@ pages.insumos = async function() {
           <label class="label">Campaña</label>
           <select id="ins-filtro" class="input">
             <option value="">Todas</option>
-            ${campanas.map(c => `<option value="${c.id}" ${c.id===f.campana?'selected':''}>${esc(c.cultivo||'')} ${c.lote?.nombre?'— '+esc(c.lote.nombre):''}</option>`).join('')}
+            ${campanas.map(c => `<option value="${c.id}" ${c.id===f.campana?'selected':''}>${esc(campLabel(c))}</option>`).join('')}
+          </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Ciclo</label>
+          <select id="ins-ciclo" class="input">
+            <option value="">Todos</option>
+            ${ciclosUsados.map(cic => `<option value="${esc(cic)}" ${cic===f.ciclo?'selected':''}>${esc(cic)}</option>`).join('')}
           </select>
         </div>
         <div class="md:col-span-3">
@@ -15523,14 +15609,14 @@ pages.insumos = async function() {
             ${campos.map(c => `<option value="${esc(c.id)}" ${c.id===f.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}
           </select>
         </div>
-        <div class="md:col-span-3">
+        <div class="md:col-span-2">
           <label class="label">Insumo</label>
           <select id="ins-insumo" class="input">
             <option value="">Todos</option>
             ${insumosUsados.map(i => `<option value="${esc(i)}" ${i===f.insumo?'selected':''}>${esc(i)}</option>`).join('')}
           </select>
         </div>
-        <div class="md:col-span-3">
+        <div class="md:col-span-2">
           <label class="label">Labor</label>
           <select id="ins-labor" class="input">
             <option value="">Todas</option>
@@ -15569,14 +15655,21 @@ pages.insumos = async function() {
             <div class="kpi p-0 overflow-hidden">
               <div class="px-4 py-3 bg-slate-50 border-b flex items-center justify-between">
                 <div>
-                  <div class="font-bold text-slate-800">${esc(c.cultivo||'—')} — ${esc(c.lote?.nombre||'sin lote')}</div>
-                  <div class="text-xs text-slate-500">${haLote} ha · ${esc(c.estado||'—')}</div>
+                  <div class="font-bold text-slate-800">${esc(campLabel(c))}</div>
+                  <div class="text-xs text-slate-500">${c.nombre?esc(c.cultivo||'')+' · ':''}${esc(c.lote?.nombre||'sin lote')} · ${haLote} ha · ${esc(c.estado||'—')}${c.ciclo?' · 📅 '+esc(c.ciclo):''}</div>
                 </div>
                 <div class="text-right text-xs">
                   <div class="text-slate-500">Costo real acumulado</div>
                   <div class="font-bold text-lg">u$s ${fmtN(costoInsTotal+costoLabTotal)}</div>
                 </div>
               </div>
+              ${(can('produccion:create')||can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:update'))?`
+              <div class="px-4 py-2 bg-white border-b flex flex-wrap gap-2">
+                ${can('produccion:create')?`<button class="btn btn-secondary text-xs" onclick='aplicForm("insumo",${JSON.stringify(c.id)})'>+ Insumo</button>`:''}
+                ${(can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:create'))?`<button class="btn btn-secondary text-xs" onclick='laborForm(true,${JSON.stringify(c.id)})'>+ Labor</button>`:''}
+                ${can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️ Editar campaña</button>`:''}
+                ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs text-emerald-700" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅ Finalizar</button>`:''}
+              </div>`:''}
               <div class="p-3 bg-white">
                 <div class="text-xs font-semibold text-slate-600 uppercase mb-2 flex items-center justify-between">
                   <span>🧪 Insumos (${insumosC.length})</span>
@@ -15639,12 +15732,13 @@ pages.insumos = async function() {
     if (el) el.onchange = e => { state.insFilter[campo] = e.target.value; pages.insumos(); };
   };
   bindFilter('ins-filtro', 'campana');
+  bindFilter('ins-ciclo',  'ciclo');
   bindFilter('ins-campo',  'campoId');
   bindFilter('ins-insumo', 'insumo');
   bindFilter('ins-labor',  'labor');
 };
 function insumosFiltrosLimpiar() {
-  state.insFilter = { campana:'', insumo:'', labor:'', campoId:'' };
+  state.insFilter = { campana:'', insumo:'', labor:'', campoId:'', ciclo:'' };
   pages.insumos();
 }
 function insumosExportarExcel() {
@@ -15658,6 +15752,10 @@ function insumosExportarExcel() {
     if (f.insumo && !f.labor && a.tipo !== 'insumo') return false;
     if (f.labor  && !f.insumo && a.tipo !== 'labor') return false;
     if (f.campana && a.campanaId !== f.campana) return false;
+    if (f.ciclo) {
+      const camp = campanas.find(c => c.id === a.campanaId);
+      if (!camp || (camp.ciclo||'').trim() !== f.ciclo) return false;
+    }
     if (f.campoId) {
       const camp = campanas.find(c => c.id === a.campanaId);
       const lote = camp ? lotes.find(l => l.id === camp.loteId) : null;
@@ -15710,9 +15808,11 @@ function insumosExportarExcel() {
 const INS_SUBTIPOS = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Otro'];
 // Formulario de carga de insumos: se elige la campaña/lote y la fecha UNA vez,
 // y se cargan VARIOS insumos en la misma pantalla (una fila por insumo).
-function aplicForm(tipo) {
+function aplicForm(tipo, campanaId) {
   const campanas = state.cache.campanas || [];
   const insumosCat = state.cache.insumosCat || [];
+  const prodsIns = (state.cache.productos || []).filter(p => ['insumos','granos','combustibles','repuestos','otros'].includes((p.categoria||'').toLowerCase()));
+  const itemNames = [...new Set([...insumosCat.map(x=>x.nombre), ...prodsIns.map(p=>p.nombre)].filter(Boolean))].sort();
   if (!campanas.length) return toast('No hay campañas — cargá una primero.','warn');
   openModal({
     title: 'Cargar insumos al lote', size:'max-w-5xl',
@@ -15720,7 +15820,7 @@ function aplicForm(tipo) {
       <div class="grid grid-cols-3 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Campaña / Lote *</label>
           <select id="f-camp" class="input" onchange="insCampChange()">
-            ${campanas.map(c=>`<option value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}">${esc(c.cultivo||'')} — ${esc(c.lote?.nombre||'')} (${fmtN(c.lote?.hectareas||0)} ha)</option>`).join('')}
+            ${campanas.map(c=>`<option value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}" ${c.id===campanaId?'selected':''}>${esc(campLabel(c))} (${fmtN(c.lote?.hectareas||0)} ha)</option>`).join('')}
           </select>
         </div>
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
@@ -15742,12 +15842,12 @@ function aplicForm(tipo) {
         </div>
       </div>
       <div class="text-[11px] text-slate-500 mb-1">Cargá todos los insumos del lote de una sola vez. Las hectáreas aplicadas vienen del lote; cambialas por fila si aplicaste solo en una parte. Cada insumo descuenta del stock al guardar.</div>
-      <datalist id="f-catlist">${insumosCat.map(x=>`<option value="${esc(x.nombre)}">`).join('')}</datalist>`,
+      <datalist id="f-catlist">${itemNames.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="aplicSaveMulti()">💾 Guardar insumos</button>`
   });
-  // Arrancamos con 3 filas vacías (se pueden agregar más).
-  insAddRow(); insAddRow(); insAddRow();
+  // Arrancamos con 1 fila; el usuario agrega las que necesite.
+  insAddRow();
 }
 function insCampHa(){
   const camp = $('#f-camp'); if (!camp) return 0;
@@ -15756,7 +15856,7 @@ function insCampHa(){
 }
 function insRowHTML(){
   return `<tr data-ins>
-    <td><input class="input text-sm" list="f-catlist" data-if="item" style="min-width:170px" placeholder="Producto"/></td>
+    <td><input class="input text-sm" list="f-catlist" data-if="item" style="min-width:170px" placeholder="Producto" onchange="insItemPick(this)"/></td>
     <td><select class="input text-sm" data-if="sub">${INS_SUBTIPOS.map(s=>`<option>${s}</option>`).join('')}</select></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-if="uha" style="width:88px" oninput="insRowRecalc(this)"/></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-if="pu" style="width:100px" oninput="insRowRecalc(this)"/></td>
@@ -15786,6 +15886,17 @@ function insRowRecalc(inp){
   const pu  = Number(tr.querySelector('[data-if="pu"]')?.value || 0);
   const cha = tr.querySelector('[data-if="cha"]');
   if (uha && pu && cha && !cha.dataset.manual) cha.value = (uha*pu).toFixed(2);
+}
+// Al elegir un producto, autocompletar el u$s/unidad con el costo de la última compra.
+function insItemPick(inp){
+  const tr = inp.closest('tr');
+  const name = (inp.value||'').trim().toLowerCase();
+  if (!name) return;
+  const prod = (state.cache.productos||[]).find(p => (p.nombre||'').trim().toLowerCase() === name);
+  if (prod && prod.ultimoCostoCompra != null) {
+    const pu = tr.querySelector('[data-if="pu"]');
+    if (pu && !pu.value) { pu.value = prod.ultimoCostoCompra; insRowRecalc(pu); }
+  }
 }
 async function aplicSaveMulti(){
   const campanaId = $('#f-camp')?.value;
@@ -15839,7 +15950,7 @@ async function aplicDel(id) {
  *  - precio referencia (por hectárea) + % cobro del empleado
  *  - la ganancia se carga sola en la planilla del mes
  * ========================================================= */
-async function laborForm(avanzada = false) {
+async function laborForm(avanzada = false, campanaId = null) {
   // Cargamos en paralelo lo necesario
   let campanas=[], empleados=[], productos=[], laboresCat=[];
   try {
@@ -15862,10 +15973,18 @@ async function laborForm(avanzada = false) {
   // (heredado del catálogo y del empleado), pero no pueda manipular el cálculo.
   const puedeEditarCobro = can('produccion:labor_avanzada:update') || can('produccion:update') || can('catalogos:update') || can('*:*');
   const lock = puedeEditarCobro ? '' : 'disabled title="Solo el responsable del catálogo o un usuario con permiso de modificación puede ajustar estos valores"';
-  const pctSection = avanzada ? `
+  // Opciones de empleados y lock (los usan las filas de la tabla de empleados).
+  _laEmpOptions = empleados.map(e=>`<option value="${e.id}" data-cobra="${e.cobraPorcentaje?'1':''}" data-pd="${e.porcentajeDefault||''}">${esc(e.apellido)}, ${esc(e.nombre)} ${e.tipo==='externo'?'🔧':'👤'}${e.cobraPorcentaje?` (cobra ${e.porcentajeDefault||0}%)`:''}</option>`).join('');
+  _laLock = lock;
+  // Sección de empleados: varios empleados pueden hacer la MISMA labor (ej. un lote
+  // sembrado entre 2). Precio + tipo son de la labor; cada empleado tiene sus ha y %.
+  const empleadosSection = `
       <div class="p-3 bg-blue-50 rounded-lg border border-blue-200 mb-3">
-        <div class="text-xs text-blue-800 font-semibold mb-2">💰 Cobro por porcentaje del empleado${!puedeEditarCobro?' <span class="text-[10px] text-blue-600 font-normal">(solo lectura — vienen del catálogo de la labor y del empleado)</span>':''}</div>
-        <div class="grid grid-cols-4 gap-3 items-end">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div class="text-xs text-blue-800 font-semibold">👷 Empleados que hicieron la labor${!puedeEditarCobro?' <span class="text-[10px] text-blue-600 font-normal">(precios/% solo lectura)</span>':''}</div>
+          <button type="button" class="btn btn-secondary text-xs" onclick="laAddEmp()">+ Empleado</button>
+        </div>
+        <div class="grid grid-cols-3 gap-3 items-end mb-3">
           <div><label class="label">Tipo precio</label>
             <select id="la-tp" class="input" onchange="laRecalc()" ${lock}>
               <option value="por_hectarea">Por hectárea</option>
@@ -15873,22 +15992,21 @@ async function laborForm(avanzada = false) {
             </select>
           </div>
           <div><label class="label">Precio referencia</label><input id="la-pr" type="number" step="0.01" class="input" oninput="laRecalc()" placeholder="$" ${lock}/></div>
-          <div><label class="label">% Empleado</label><input id="la-pct" type="number" step="0.01" min="0" max="100" class="input" oninput="laRecalc()" ${lock}/></div>
-          <div></div>
-          <div class="col-span-4 grid grid-cols-3 gap-2 text-xs mt-2">
-            <div class="p-2 bg-white rounded"><div class="text-slate-500">Base de cálculo</div><div id="la-r-base" class="font-bold">$ 0,00</div></div>
-            <div class="p-2 bg-white rounded"><div class="text-slate-500">Ganancia empleado</div><div id="la-r-gan" class="font-bold text-green-700">$ 0,00</div></div>
-            <div class="p-2 bg-white rounded"><div class="text-slate-500">Aparecerá en planilla</div><div id="la-r-mes" class="font-bold">—</div></div>
-          </div>
+          <div class="text-[11px] text-slate-500">El % de cada empleado se aplica sobre este precio (por ha × las ha que hizo, o el total de la labor). Si un empleado no cobra %, dejalo en blanco.</div>
         </div>
-      </div>` : '';
+        <table class="data text-sm">
+          <thead><tr><th>Empleado</th><th class="text-right">Ha que hizo</th><th class="text-right">%</th><th class="text-right">Ganancia</th><th></th></tr></thead>
+          <tbody id="la-emp-body"></tbody>
+        </table>
+        <div class="text-[11px] text-slate-600 mt-2" id="la-emp-foot">—</div>
+      </div>`;
   openModal({
     title: '🛠️ Cargar labor', size:'max-w-4xl',
     body: `
       <div class="grid grid-cols-3 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Campaña *</label>
           <select id="la-camp" class="input">
-            ${campanas.map(c=>`<option value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}">${esc(c.cultivo||'')} — ${esc(c.lote?.nombre||'')} (${fmtN(c.lote?.hectareas||0)} ha)</option>`).join('')}
+            ${campanas.map(c=>`<option value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}" ${c.id===campanaId?'selected':''}>${esc(campLabel(c))} (${fmtN(c.lote?.hectareas||0)} ha)</option>`).join('')}
           </select>
         </div>
         <div><label class="label">Fecha *</label><input id="la-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
@@ -15899,15 +16017,7 @@ async function laborForm(avanzada = false) {
         <div><label class="label">Hectáreas aplicadas *</label><input id="la-ha" type="number" step="0.01" class="input" oninput="laRecalc()"/></div>
       </div>
 
-      <div class="p-3 bg-slate-50 rounded-lg border border-slate-200 mb-3">
-        <div class="text-xs text-slate-700 font-semibold mb-2">👷 Empleado responsable</div>
-        <select id="la-emp" class="input" onchange="laPickEmpleado()">
-          <option value="">— Sin empleado / responsable de texto libre —</option>
-          ${empleados.map(e=>`<option value="${e.id}" data-cobra="${e.cobraPorcentaje?'1':''}" data-pd="${e.porcentajeDefault||''}" data-tipo="${e.tipo||'propio'}">${esc(e.apellido)}, ${esc(e.nombre)} ${e.tipo==='externo'?'🔧':'👤'} ${e.cobraPorcentaje?`(cobra ${e.porcentajeDefault||0}%)`:''}</option>`).join('')}
-        </select>
-      </div>
-
-      ${pctSection}
+      ${empleadosSection}
 
       <div class="kpi p-0 overflow-hidden mb-3">
         <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
@@ -15938,15 +16048,37 @@ async function laborForm(avanzada = false) {
     camp.onchange = setHa;
     haEl.oninput = () => { haEl.dataset.manual = '1'; laRecalc(); };
     setHa();
+    laAddEmp();   // arrancar con una fila de empleado
   }, 0);
 }
-function laPickEmpleado() {
-  const sel = $('#la-emp');
+// Variables de módulo usadas por las filas de empleados de la labor.
+let _laEmpOptions = '', _laLock = '';
+function laEmpRowHTML(){
+  return `<tr data-laemp>
+    <td><select class="input text-sm" data-le="emp" onchange="laPickEmpRow(this)">
+      <option value="">— Sin empleado —</option>
+      ${_laEmpOptions||''}
+    </select></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-le="ha" style="width:90px" placeholder="ha" oninput="laRecalc()"/></td>
+    <td><input type="number" step="0.01" min="0" max="100" class="input text-sm text-right" data-le="pct" style="width:75px" placeholder="%" oninput="laRecalc()" ${_laLock||''}/></td>
+    <td class="text-right font-semibold text-green-700" data-le-gan>$ 0</td>
+    <td class="text-right"><button type="button" class="btn btn-ghost text-xs text-red-600" title="Quitar" onclick="this.closest('tr').remove();laRecalc()">✕</button></td>
+  </tr>`;
+}
+function laAddEmp(){
+  const b = $('#la-emp-body'); if (!b) return;
+  b.insertAdjacentHTML('beforeend', laEmpRowHTML());
+  laRecalc();
+}
+function laPickEmpRow(sel){
+  const tr = sel.closest('tr');
   const opt = sel.options[sel.selectedIndex];
   const cobra = opt?.dataset?.cobra === '1';
   const pd = opt?.dataset?.pd;
-  if (cobra && pd) $('#la-pct').value = pd;
-  if (!cobra) $('#la-pct').value = '';
+  const pctEl = tr.querySelector('[data-le="pct"]');
+  if (pctEl){ if (cobra && pd && !pctEl.value) pctEl.value = pd; if (!cobra) pctEl.value = ''; }
+  const haEl = tr.querySelector('[data-le="ha"]');
+  if (haEl && !haEl.value){ const h = Number($('#la-ha')?.value || 0); if (h) haEl.value = h; }
   laRecalc();
 }
 // Cuando el usuario elige una labor del catálogo (datalist), buscamos el ítem
@@ -16026,22 +16158,29 @@ function laPickInsumo(sel) {
   laRecalc();
 }
 function laRecalc() {
-  const ha = Number($('#la-ha').value || 0);
-  // Bloque % cobro existe solo en modo avanzada; chequeamos antes de tocarlo.
-  const prEl = $('#la-pr'); const pctEl = $('#la-pct'); const tpEl = $('#la-tp');
-  if (prEl && pctEl) {
-    const pr = Number(prEl.value || 0);
-    const pct = Number(pctEl.value || 0);
-    const tp = tpEl ? tpEl.value : 'por_hectarea';
-    const base = tp === 'por_hectarea' ? (ha * pr) : pr;
-    const gan = base * (pct / 100);
-    const baseEl = $('#la-r-base'); if (baseEl) baseEl.textContent = fmt$(base);
-    const ganEl  = $('#la-r-gan');  if (ganEl)  ganEl.textContent = fmt$(gan);
-    const fec = $('#la-fec').value;
-    if (fec) {
-      const d = new Date(fec);
-      const mesEl = $('#la-r-mes'); if (mesEl) mesEl.textContent = d.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
-    }
+  const ha = Number($('#la-ha')?.value || 0);
+  const pr = Number($('#la-pr')?.value || 0);
+  const tp = $('#la-tp') ? $('#la-tp').value : 'por_hectarea';
+  // Ganancia por empleado (cada fila)
+  let totalGan = 0;
+  $$('#la-emp-body tr[data-laemp]').forEach(tr => {
+    const empId = tr.querySelector('[data-le="emp"]')?.value;
+    const rowHaRaw = tr.querySelector('[data-le="ha"]')?.value;
+    const pct = Number(tr.querySelector('[data-le="pct"]')?.value || 0);
+    const baseHa = (rowHaRaw !== '' && rowHaRaw != null) ? Number(rowHaRaw) : ha;
+    const base = tp === 'por_hectarea' ? (baseHa * pr) : pr;
+    const gan = (empId && pct) ? base * (pct / 100) : 0;
+    totalGan += gan;
+    const g = tr.querySelector('[data-le-gan]'); if (g) g.textContent = fmt$(gan);
+  });
+  const foot = $('#la-emp-foot');
+  if (foot) {
+    const fec = $('#la-fec')?.value;
+    let mes = '—';
+    if (fec) { const dd = new Date(fec); mes = dd.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' }); }
+    foot.innerHTML = totalGan > 0
+      ? `Ganancia total a planilla: <b class="text-green-700">${fmt$(totalGan)}</b> · aparecerá en la planilla de <b>${mes}</b>`
+      : 'Si algún empleado cobra %, cargá el precio referencia y su % para calcular la ganancia.';
   }
   // Totales por insumo (siempre)
   $$('#la-ins tr[data-la]').forEach(tr => {
@@ -16062,11 +16201,13 @@ async function laborSave() {
     cantidad: Number(tr.querySelector('[data-laf="cantidad"]').value || 0),
     precioUnit: Number(tr.querySelector('[data-laf="precioUnit"]').value || 0),
   })).filter(i => i.productoId && i.cantidad > 0);
-  const empId = $('#la-emp').value || null;
-  // Modo avanzada: se envían precio referencia + % (los inputs existen)
-  const avanzada = $('#la-mode').value === 'avanzada';
-  const pr = avanzada && $('#la-pr')?.value ? Number($('#la-pr').value) : null;
-  const pct = avanzada && $('#la-pct')?.value ? Number($('#la-pct').value) : null;
+  // Empleados que hicieron la labor (uno o varios)
+  const empleados = $$('#la-emp-body tr[data-laemp]').map(tr => ({
+    empleadoId: tr.querySelector('[data-le="emp"]')?.value || null,
+    hectareas: tr.querySelector('[data-le="ha"]')?.value ? Number(tr.querySelector('[data-le="ha"]').value) : null,
+    porcentaje: tr.querySelector('[data-le="pct"]')?.value ? Number(tr.querySelector('[data-le="pct"]').value) : null,
+  })).filter(e => e.empleadoId);
+  const pr = $('#la-pr')?.value ? Number($('#la-pr').value) : null;
   const tp = $('#la-tp')?.value || 'por_hectarea';
   const data = {
     campanaId: camp,
@@ -16074,15 +16215,15 @@ async function laborSave() {
     fecha: new Date($('#la-fec').value).toISOString(),
     hectareasAplicadas: ha,
     observaciones: $('#la-obs').value.trim() || null,
-    empleadoId: empId,
     precioReferencia: pr,
     tipoPrecio: pr != null ? tp : null,
-    porcentajeEmpleado: pct,
+    empleados,
     insumos,
   };
   try {
     await api('/api/labores-avanzada', { method:'POST', body: JSON.stringify(data) });
-    toast('Labor cargada' + (insumos.length?` · ${insumos.length} insumo${insumos.length===1?'':'s'} descontado${insumos.length===1?'':'s'} del stock`:''),'success');
+    const nEmp = empleados.length;
+    toast('Labor cargada' + (nEmp?` · ${nEmp} empleado${nEmp===1?'':'s'}`:'') + (insumos.length?` · ${insumos.length} insumo${insumos.length===1?'':'s'} del stock`:''),'success');
     closeModal();
     delete state.cache.stockMap;
     pages.insumos();
@@ -16092,6 +16233,7 @@ async function laborSave() {
 /* ---------- CATALOGOS (maestros) con pestañas ---------- */
 const CAT_TABS = [
   { id:'cereales', label:'Cereales / Granos',   icon:'🌾', tipos:['Cereal'],             singular:'Cereal' },
+  { id:'ciclos',   label:'Ciclos / Campañas',   icon:'📅', tipos:['Ciclo'],              singular:'Ciclo' },
   { id:'especies', label:'Especies de animales',icon:'🐄', tipos:['Especie'],            singular:'Especie' },
   { id:'categAn',  label:'Categorías de animales',icon:'🐂', tipos:['Categoría animal'], singular:'Categoría' },
   { id:'labores',  label:'Labores',             icon:'🚜', tipos:['Labor'],              singular:'Labor' },
@@ -16530,7 +16672,28 @@ pages.arrendamientos = async function() {
   try {
     [rows, campos] = await Promise.all([crudList('arrendamientos'), crudList('campos').catch(()=>[])]);
   } catch (e) { return toast(e.message,'error'); }
+  state.cache.campos = campos;
+  await cargarCotizVivas();
+  const _cv = state.cache.cotizVivas||{};
   const campoName = id => (campos.find(c=>c.id===id)||{}).nombre || '—';
+  // Detalle/valuación de un arrendamiento según su modalidad.
+  const arrInfo = (r) => {
+    const ha = Number(r.hectareas||0);
+    const esQq = (r.modalidad==='quintales') || (!r.modalidad && r.tipoPago==='En especie');
+    const esPct = (r.modalidad==='porcentaje') || (!r.modalidad && r.tipoPago==='Porcentual');
+    if (esQq) {
+      const cuotas = Array.isArray(r.cuotas)?r.cuotas:[];
+      const qqHa = cuotas.length ? cuotas.reduce((a,c)=>a+Number(c.quintalesHa||0),0) : (Number(r.quintalesHaBlanco||0)+Number(r.quintalesHaNegro||0));
+      const piz = Number(_cv[r.grano]||0);
+      const ars = qqHa*ha*0.1*piz;
+      const usd = Number(_cv.USD||0);
+      return { tipo:'quintales', porHa: `${fmtN(qqHa)} qq/ha${r.grano?' '+r.grano.toLowerCase():''}`, total: ars, totalTxt: ars?('≈ $ '+fmtN(Math.round(ars))+(usd?(' / US$ '+fmtN(Math.round(ars/usd))):'')):'—', tipoTxt:`En especie${cuotas.length?` · ${cuotas.length} cuota(s)`:''}` };
+    }
+    if (esPct) return { tipo:'porcentaje', porHa: r.importeHa?fmtN(r.importeHa)+'%':'—', total:0, totalTxt:'—', tipoTxt:'Porcentaje del rinde' };
+    const mon = r.moneda||'ARS';
+    const tot = ha*Number(r.importeHa||0);
+    return { tipo:'efectivo', porHa: r.importeHa?fmtMon(mon,r.importeHa):'—', total:tot, totalTxt: tot?fmtMon(mon,tot):'—', tipoTxt:'Efectivo' };
+  };
   const totalHa = rows.reduce((a,r)=>a + Number(r.hectareas||0), 0);
   const totalImp = rows.reduce((a,r)=>a + (Number(r.hectareas||0) * Number(r.importeHa||0)), 0);
   const pendientes = rows.filter(r=>!r.pagado).length;
@@ -16562,16 +16725,16 @@ pages.arrendamientos = async function() {
           </tr></thead>
           <tbody class="divide-y divide-slate-200">
             ${rows.map(r => {
-              const total = Number(r.hectareas||0) * Number(r.importeHa||0);
+              const info = arrInfo(r);
               const venc = r.vencimiento ? new Date(r.vencimiento).toLocaleDateString('es-AR') : '—';
               const vencido = r.vencimiento && !r.pagado && new Date(r.vencimiento) < new Date();
               return `<tr class="hover:bg-slate-50">
                 <td class="px-3 py-2 font-semibold text-slate-800">${esc(r.propietario)}</td>
                 <td class="px-3 py-2 text-slate-600">${esc(campoName(r.campoId))}</td>
                 <td class="px-3 py-2 text-right">${Number(r.hectareas||0).toLocaleString('es-AR')}</td>
-                <td class="px-3 py-2 text-right">${r.importeHa?'$'+Number(r.importeHa).toLocaleString('es-AR'):'—'}</td>
-                <td class="px-3 py-2 text-right font-semibold">${total?'$'+total.toLocaleString('es-AR',{maximumFractionDigits:0}):'—'}</td>
-                <td class="px-3 py-2 text-slate-600">${esc(r.tipoPago||'—')}</td>
+                <td class="px-3 py-2 text-right">${info.porHa}</td>
+                <td class="px-3 py-2 text-right font-semibold">${info.totalTxt}</td>
+                <td class="px-3 py-2 text-slate-600">${esc(info.tipoTxt)}</td>
                 <td class="px-3 py-2 ${vencido?'text-red-600 font-semibold':''}">${venc}</td>
                 <td class="px-3 py-2">${r.pagado?'<span class="badge badge-green">Pagado</span>':(vencido?'<span class="badge badge-red">Vencido</span>':'<span class="badge badge-yellow">Pendiente</span>')}</td>
                 <td class="px-3 py-2 text-right">
@@ -16584,12 +16747,15 @@ pages.arrendamientos = async function() {
         </table>
       </div>`}`;
 };
-function arrForm(id=null) {
-  const it = id ? (state.cache.arrendamientos||[]).find(x=>x.id===id)||{} : { pagado:false, tipoPago:'Fijo' };
+const ARR_GRANOS = ['SOJA','MAIZ','TRIGO','SORGO','GIRASOL'];
+async function arrForm(id=null) {
+  const it = id ? (state.cache.arrendamientos||[]).find(x=>x.id===id)||{} : { pagado:false };
   const campos = state.cache.campos||[];
+  await cargarCotizVivas();
   const vencStr = it.vencimiento ? new Date(it.vencimiento).toISOString().slice(0,10) : '';
+  const modalidad = it.modalidad || (it.tipoPago==='En especie'?'quintales':(it.tipoPago==='Porcentual'?'porcentaje':'efectivo'));
   openModal({
-    title: id?'Editar arrendamiento':'Nuevo arrendamiento',
+    title: id?'Editar arrendamiento':'Nuevo arrendamiento', size:'max-w-3xl',
     body: `
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2"><label class="label">Propietario *</label><input id="f-prop" class="input" value="${esc(it.propietario||'')}"/></div>
@@ -16599,35 +16765,148 @@ function arrForm(id=null) {
             ${campos.map(c=>`<option value="${c.id}" ${c.id===it.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}
           </select>
         </div>
-        <div><label class="label">Hectáreas *</label><input id="f-ha" class="input" type="number" step="0.01" value="${it.hectareas||''}"/></div>
-        <div><label class="label">Importe / Ha</label><input id="f-imp" class="input" type="number" step="0.01" value="${it.importeHa||''}"/></div>
-        <div><label class="label">Tipo de pago</label>
-          <select id="f-tpago" class="input">
-            ${['Fijo','En especie','Porcentual','Mixto','Otro'].map(t=>`<option ${t===it.tipoPago?'selected':''}>${t}</option>`).join('')}
+        <div><label class="label">Hectáreas *</label><input id="f-ha" class="input" type="number" step="0.01" value="${it.hectareas||''}" oninput="arrCuotasRecalc()"/></div>
+        <div><label class="label">Modalidad de pago</label>
+          <select id="f-modal" class="input" onchange="arrModalidadChange()">
+            <option value="efectivo" ${modalidad==='efectivo'?'selected':''}>Efectivo ($ / ha)</option>
+            <option value="quintales" ${modalidad==='quintales'?'selected':''}>Quintales de grano (en especie)</option>
+            <option value="porcentaje" ${modalidad==='porcentaje'?'selected':''}>Porcentaje del rinde</option>
           </select>
         </div>
-        <div><label class="label">Vencimiento</label><input id="f-venc" class="input" type="date" value="${vencStr}"/></div>
+
+        <div id="arr-efectivo" class="col-span-2 grid grid-cols-3 gap-3">
+          <div><label class="label">Importe / Ha</label><input id="f-imp" class="input" type="number" step="0.01" value="${modalidad==='efectivo'?(it.importeHa||''):''}"/></div>
+          <div><label class="label">Moneda</label>
+            <select id="f-moneda" class="input">
+              <option value="ARS" ${(it.moneda||'ARS')==='ARS'?'selected':''}>$ Pesos</option>
+              <option value="USD" ${it.moneda==='USD'?'selected':''}>US$ Dólares</option>
+            </select>
+          </div>
+          <div><label class="label">Vencimiento</label><input id="f-venc" class="input" type="date" value="${vencStr}"/></div>
+        </div>
+
+        <div id="arr-quintales" class="col-span-2" style="display:none">
+          <div class="grid grid-cols-3 gap-3">
+            <div><label class="label">Grano</label>
+              <select id="f-grano" class="input" onchange="arrCuotasRecalc()">
+                ${ARR_GRANOS.map(g=>`<option value="${g}" ${it.grano===g?'selected':''}>${g.charAt(0)+g.slice(1).toLowerCase()}</option>`).join('')}
+              </select>
+            </div>
+            <div><label class="label">qq/ha en blanco</label><input id="f-qqb" class="input" type="number" step="0.01" value="${it.quintalesHaBlanco??''}" oninput="arrCuotasRecalc()"/></div>
+            <div><label class="label">qq/ha en negro</label><input id="f-qqn" class="input" type="number" step="0.01" value="${it.quintalesHaNegro??''}" oninput="arrCuotasRecalc()"/></div>
+          </div>
+          <div class="mt-3 border border-slate-200 rounded-lg p-3 bg-slate-50">
+            <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <b class="text-sm">Cuotas (cuánto se paga y cuándo)</b>
+              <button type="button" class="btn btn-secondary text-xs" onclick="arrAddCuota()">+ Cuota</button>
+            </div>
+            <table class="data text-sm"><thead><tr><th>Etiqueta</th><th>Vencimiento</th><th class="text-right">qq/ha</th><th>Color</th><th class="text-right">Valor est.</th><th></th></tr></thead>
+              <tbody id="arr-cuotas-body"></tbody></table>
+            <div id="arr-cuotas-foot" class="text-[11px] text-slate-600 mt-2"></div>
+            <div class="text-[11px] text-slate-500 mt-1">El valor se estima a la pizarra de <b>hoy</b>; al vencer cada cuota se valoriza a la cotización de ese día. 1 qq = 0,1 tn.</div>
+          </div>
+        </div>
+
+        <div id="arr-porcentaje" class="col-span-2 grid grid-cols-2 gap-3" style="display:none">
+          <div><label class="label">% del rinde</label><input id="f-pct" class="input" type="number" step="0.01" value="${modalidad==='porcentaje'?(it.importeHa||''):''}"/></div>
+          <div><label class="label">Vencimiento</label><input id="f-venc2" class="input" type="date" value="${vencStr}"/></div>
+        </div>
+
         <div class="col-span-2 flex items-center gap-2">
           <input id="f-pag" type="checkbox" ${it.pagado?'checked':''}/>
-          <label for="f-pag">Pagado</label>
+          <label for="f-pag">Pagado (total del contrato)</label>
         </div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='arrSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
+  arrModalidadChange();
+  if (Array.isArray(it.cuotas) && it.cuotas.length) it.cuotas.forEach(c=>arrAddCuota(c));
+  else if (modalidad==='quintales') arrAddCuota();
+  arrCuotasRecalc();
+}
+function arrModalidadChange(){
+  const m = $('#f-modal')?.value || 'efectivo';
+  const ef=$('#arr-efectivo'), qq=$('#arr-quintales'), pc=$('#arr-porcentaje');
+  if(ef) ef.style.display = m==='efectivo'?'':'none';
+  if(qq) qq.style.display = m==='quintales'?'':'none';
+  if(pc) pc.style.display = m==='porcentaje'?'':'none';
+  if(m==='quintales' && $('#arr-cuotas-body') && !$('#arr-cuotas-body').children.length) arrAddCuota();
+}
+function arrCuotaRowHTML(c){
+  c=c||{};
+  return `<tr data-arrc>
+    <td><input class="input text-sm" data-ac="etiqueta" value="${esc(c.etiqueta||'')}" placeholder="Cuota / A cosecha" style="min-width:130px"/></td>
+    <td><input type="date" class="input text-sm" data-ac="venc" value="${c.vencimiento?String(c.vencimiento).slice(0,10):''}"/></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-ac="qq" style="width:80px" value="${c.quintalesHa!=null?c.quintalesHa:''}" oninput="arrCuotasRecalc()"/></td>
+    <td><select class="input text-sm" data-ac="color"><option value="blanco" ${c.color!=='negro'?'selected':''}>Blanco</option><option value="negro" ${c.color==='negro'?'selected':''}>Negro</option></select></td>
+    <td class="text-right text-xs" data-ac-val>—</td>
+    <td class="text-right"><button type="button" class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove();arrCuotasRecalc()">✕</button></td>
+  </tr>`;
+}
+function arrAddCuota(c){
+  const b=$('#arr-cuotas-body'); if(!b) return;
+  b.insertAdjacentHTML('beforeend', arrCuotaRowHTML(c));
+  arrCuotasRecalc();
+}
+function arrValorQq(qqHa){
+  const ha = Number($('#f-ha')?.value||0);
+  const g = $('#f-grano')?.value;
+  const piz = Number((state.cache.cotizVivas||{})[g]||0); // ARS por tonelada
+  const tn = Number(qqHa||0) * ha * 0.1;
+  return { tn, ars: tn*piz };
+}
+function arrCuotasRecalc(){
+  const usd = Number((state.cache.cotizVivas||{}).USD||0);
+  let totQq=0, totArs=0;
+  $$('#arr-cuotas-body tr[data-arrc]').forEach(tr=>{
+    const qq = Number(tr.querySelector('[data-ac="qq"]')?.value||0);
+    const v = arrValorQq(qq); totQq+=qq; totArs+=v.ars;
+    const cell = tr.querySelector('[data-ac-val]'); if(cell) cell.textContent = v.ars? ('$ '+fmtN(Math.round(v.ars))) : '—';
+  });
+  const foot=$('#arr-cuotas-foot'); if(!foot) return;
+  const qqb=Number($('#f-qqb')?.value||0), qqn=Number($('#f-qqn')?.value||0);
+  const objetivo = qqb+qqn;
+  const usdTxt = (usd && totArs)? ` · ≈ US$ ${fmtN(Math.round(totArs/usd))}` : '';
+  foot.innerHTML = `Suma cuotas: <b>${fmtN(totQq)} qq/ha</b>${objetivo?` (objetivo ${fmtN(objetivo)} qq/ha)`:''} · Valor estimado: <b>$ ${fmtN(Math.round(totArs))}</b>${usdTxt}` +
+    (objetivo && Math.abs(objetivo-totQq)>0.01 ? ` · <span class="text-amber-700">faltan ${fmtN(objetivo-totQq)} qq/ha por repartir</span>` : '');
 }
 async function arrSave(id) {
+  const modalidad = $('#f-modal').value;
   const data = {
     propietario: $('#f-prop').value.trim(),
     campoId: $('#f-campo').value || null,
     hectareas: Number($('#f-ha').value || 0),
-    importeHa: $('#f-imp').value ? Number($('#f-imp').value) : null,
-    tipoPago: $('#f-tpago').value || null,
-    vencimiento: $('#f-venc').value || null,
+    modalidad,
     pagado: $('#f-pag').checked,
     observaciones: $('#f-obs').value.trim() || null,
   };
+  if (modalidad==='efectivo') {
+    data.importeHa = $('#f-imp').value ? Number($('#f-imp').value) : null;
+    data.moneda = $('#f-moneda').value || 'ARS';
+    data.tipoPago = 'Fijo';
+    data.vencimiento = $('#f-venc').value || null;
+  } else if (modalidad==='quintales') {
+    data.grano = $('#f-grano').value || null;
+    data.quintalesHaBlanco = $('#f-qqb').value ? Number($('#f-qqb').value) : null;
+    data.quintalesHaNegro = $('#f-qqn').value ? Number($('#f-qqn').value) : null;
+    data.tipoPago = 'En especie';
+    const cuotas = $$('#arr-cuotas-body tr[data-arrc]').map(tr=>({
+      etiqueta: tr.querySelector('[data-ac="etiqueta"]').value.trim() || null,
+      vencimiento: tr.querySelector('[data-ac="venc"]').value || null,
+      quintalesHa: tr.querySelector('[data-ac="qq"]').value ? Number(tr.querySelector('[data-ac="qq"]').value) : null,
+      color: tr.querySelector('[data-ac="color"]').value || 'blanco',
+      pagado: false,
+    })).filter(c => c.vencimiento || c.quintalesHa);
+    data.cuotas = cuotas;
+    const vs = cuotas.map(c=>c.vencimiento).filter(Boolean).sort();
+    data.vencimiento = vs[0] || null;
+  } else {
+    data.importeHa = $('#f-pct').value ? Number($('#f-pct').value) : null;
+    data.tipoPago = 'Porcentual';
+    data.vencimiento = $('#f-venc2').value || null;
+  }
   if (!data.propietario) return toast('Propietario requerido','warn');
   if (!data.hectareas)   return toast('Hectáreas requeridas','warn');
   try { await api('/api/arrendamientos'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});
@@ -18206,6 +18485,9 @@ async function credForm(id=null) {
           <p class="text-[11px] text-slate-600 mt-1" id="cr-totpesos"></p>
         </div>
         <div><label class="label">Tasa anual % (TNA)</label><input id="cr-tasa" type="number" step="0.01" class="input" value="${it.tasaAnual||''}"/></div>
+        <div><label class="label">IVA sobre intereses (%)</label><input id="cr-iva" type="number" step="0.01" class="input" value="${it.ivaInteresPct||''}" placeholder="ej: 21"/>
+          <div class="text-[11px] text-slate-500 mt-1">Opcional. Suma el IVA del interés a cada cuota (plan automático).</div>
+        </div>
         <div><label class="label">Cantidad de cuotas *</label><input id="cr-cant" type="number" class="input" value="${it.cantCuotas||12}"/></div>
         <div><label class="label">Periodicidad *</label>
           <select id="cr-per" class="input">
@@ -18333,6 +18615,7 @@ async function credSave(id=null) {
     destino: $('#cr-dest').value.trim()||null,
     moneda: mon,
     cotizacionAlta: (mon!=='ARS' && $('#cr-ctz')?.value) ? Number($('#cr-ctz').value) : null,
+    ivaInteresPct: $('#cr-iva')?.value ? Number($('#cr-iva').value) : null,
     planManual: modo==='manual',
     observaciones: $('#cr-obs').value.trim()||null,
   };
@@ -18455,6 +18738,9 @@ async function cuotaPagar(credId, cuotaId) {
           </select>
           <div class="text-[11px] text-slate-500 mt-1">Si la elegís, se carga el movimiento de egreso en esa cuenta (siempre en pesos).</div>
         </div>
+        <div><label class="label">Gastos / IVA adicional (opcional, en $)</label><input id="cp-gastos" type="number" step="0.01" class="input" placeholder="0" oninput="cuotaPagarTcCalc()"/>
+          <div class="text-[11px] text-slate-500 mt-1">Gastos del crédito, IVA de intereses u otros que se cargan a mano al pagar.</div>
+        </div>
         <div><label class="label">Referencia (opcional)</label><input id="cp-ref" class="input" placeholder="Nro operación bancaria / cheque"/></div>
         <div><label class="label">Fecha de pago</label><input id="cp-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
       </div>`,
@@ -18466,7 +18752,8 @@ async function cuotaPagar(credId, cuotaId) {
 function cuotaPagarTcCalc(){
   const el = $('#cp-pesos'); if(!el || !_cpCtx) return;
   const tc = Number($('#cp-tc')?.value||0);
-  el.textContent = tc ? `A pagar en pesos: ${fmt$(_cpCtx.total*tc)}` : 'Cargá el tipo de cambio para ver el total en pesos.';
+  const gastos = Number($('#cp-gastos')?.value||0);
+  el.textContent = tc ? `A pagar en pesos: ${fmt$(_cpCtx.total*tc + gastos)}${gastos?` (incluye gastos ${fmt$(gastos)})`:''}` : 'Cargá el tipo de cambio para ver el total en pesos.';
 }
 function cuotaPagarToggle() {
   const med = $('#cp-med').value;
@@ -18483,6 +18770,7 @@ async function cuotaPagarConfirmar(credId, cuotaId) {
     fechaPago: $('#cp-fec').value ? new Date($('#cp-fec').value+'T00:00:00').toISOString() : undefined,
     cuentaBancoId: $('#cp-cta')?.value || null,
     cotizacionPago: esExt ? tc : null,
+    gastosExtra: $('#cp-gastos')?.value ? Number($('#cp-gastos').value) : null,
   };
   try {
     const r = await api('/api/creditos/'+credId+'/cuotas/'+cuotaId+'/pagar', { method:'PUT', body: JSON.stringify(data) });

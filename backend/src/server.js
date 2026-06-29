@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.25.0';
+const AGROCORE_VERSION = '1.26.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2230,6 +2230,7 @@ mountCrud({
   path: 'campanas', modelName: 'campana', perm: 'produccion',
   schema: z.object({
     loteId: z.string(),
+    nombre: z.string().nullable().optional(),
     cultivo: z.string().min(1),
     variedad: z.string().nullable().optional(),
     ciclo: z.string().nullable().optional(),
@@ -2242,7 +2243,7 @@ mountCrud({
     observaciones: z.string().nullable().optional(),
   }),
   include: { lote: { include: { campo: true } } },
-  searchFields: ['cultivo', 'variedad', 'ciclo'],
+  searchFields: ['nombre', 'cultivo', 'variedad', 'ciclo'],
 });
 
 // ---------- VENTAS (facturas con items + CAE simulado) ----------
@@ -2640,6 +2641,16 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
         condicion: input.condicionCompra, condicionDias: input.condicionDias,
         vencimientoFecha: input.vencimientoFecha || null,
       });
+      // Guardar el costo unitario de la última compra de cada producto (para
+      // autocompletarlo después en la carga de insumos y en la venta).
+      for (const it of input.items) {
+        if (it.productoId && it.precioUnit != null) {
+          await tx.producto.update({
+            where: { id: it.productoId },
+            data: { ultimoCostoCompra: Number(it.precioUnit), ultimoCostoMoneda: _mon },
+          });
+        }
+      }
       return f;
     });
     res.status(201).json({ ok: true, data: factura });
@@ -2887,6 +2898,18 @@ mountCrud({
     tipoPago: z.string().nullable().optional(),
     vencimiento: z.coerce.date().nullable().optional(),
     pagado: z.boolean().optional(),
+    modalidad: z.string().nullable().optional(),
+    grano: z.string().nullable().optional(),
+    quintalesHaBlanco: z.number().nullable().optional(),
+    quintalesHaNegro: z.number().nullable().optional(),
+    moneda: z.string().nullable().optional(),
+    cuotas: z.array(z.object({
+      etiqueta: z.string().nullable().optional(),
+      vencimiento: z.string().nullable().optional(),
+      quintalesHa: z.number().nullable().optional(),
+      color: z.string().nullable().optional(),
+      pagado: z.boolean().optional(),
+    })).nullable().optional(),
     observaciones: z.string().nullable().optional(),
   }),
   orderBy: { vencimiento: 'asc' },
@@ -4589,24 +4612,29 @@ app.put('/api/liquidaciones-cereal/:id/marcar-cobrado', requireCompany, requireP
 // Al crear un crédito se generan automáticamente las N cuotas con sus
 // fechas e importes (sistema francés simplificado: cuota total constante).
 // ============================================================
-function _calcularCuotasFrances({ monto, tasaAnual, cantCuotas, periodicidad }) {
+function _calcularCuotasFrances({ monto, tasaAnual, cantCuotas, periodicidad, ivaInteresPct }) {
   // tasa por período (mensual, bimestral, etc.)
   const factor = { mensual: 12, bimestral: 6, trimestral: 4, semestral: 2 }[periodicidad] || 12;
   const i = (tasaAnual || 0) / 100 / factor;
+  const ivaPct = Number(ivaInteresPct || 0) / 100;
   let cuotaTotal;
   if (i === 0) {
     cuotaTotal = monto / cantCuotas;
   } else {
     cuotaTotal = monto * (i * Math.pow(1 + i, cantCuotas)) / (Math.pow(1 + i, cantCuotas) - 1);
   }
-  // Generar el plan: cada cuota con capital + interés del saldo restante
+  // Generar el plan: cada cuota con capital + interés del saldo restante (+ IVA del interés)
   let saldo = monto;
   const cuotas = [];
   for (let n = 1; n <= cantCuotas; n++) {
     const interes = saldo * i;
     const capital = cuotaTotal - interes;
     saldo -= capital;
-    cuotas.push({ numero: n, capital: Math.max(capital, 0), interes: Math.max(interes, 0), total: cuotaTotal });
+    const otros = Math.max(interes, 0) * ivaPct; // IVA sobre el interés
+    cuotas.push({
+      numero: n, capital: Math.max(capital, 0), interes: Math.max(interes, 0),
+      otros, total: cuotaTotal + otros,
+    });
   }
   return cuotas;
 }
@@ -4657,6 +4685,7 @@ app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), 
       moneda: z.string().default('ARS'),
       cotizacionAlta: z.number().positive().nullable().optional(),
       planManual: z.boolean().default(false),
+      ivaInteresPct: z.number().nullable().optional(),
       cuotas: z.array(_cuotaManualSchema).optional(),  // requerido si planManual
       observaciones: z.string().nullable().optional(),
     });
@@ -4680,6 +4709,7 @@ app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), 
       const cuotas = _calcularCuotasFrances({
         monto: d.montoOriginal, tasaAnual: d.tasaAnual || 0,
         cantCuotas: d.cantCuotas, periodicidad: d.periodicidad,
+        ivaInteresPct: d.ivaInteresPct || 0,
       });
       const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[d.periodicidad];
       cuotasData = cuotas.map(c => {
@@ -4688,7 +4718,7 @@ app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), 
         return {
           numero: c.numero, vencimiento: venc,
           importeCapital: c.capital, importeInteres: c.interes,
-          importeOtros: 0, importeTotal: c.total,
+          importeOtros: c.otros || 0, importeTotal: c.total,
         };
       });
     }
@@ -4701,7 +4731,7 @@ app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), 
           cantCuotas: cantCuotasEf, periodicidad: d.periodicidad,
           fechaPrimera: d.fechaPrimera, destino: d.destino || null,
           moneda: d.moneda || 'ARS', cotizacionAlta: d.cotizacionAlta || null,
-          planManual: !!usaManual,
+          planManual: !!usaManual, ivaInteresPct: d.ivaInteresPct || null,
           observaciones: d.observaciones || null,
         },
       });
@@ -4733,6 +4763,7 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
       moneda: z.string().optional(),
       cotizacionAlta: z.number().positive().nullable().optional(),
       planManual: z.boolean().optional(),
+      ivaInteresPct: z.number().nullable().optional(),
       cuotas: z.array(_cuotaManualSchema).optional(),
       observaciones: z.string().nullable().optional(),
     });
@@ -4746,14 +4777,16 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
       cantCuotas:    d.cantCuotas ?? existing.cantCuotas,
       periodicidad:  d.periodicidad ?? existing.periodicidad,
       fechaPrimera:  d.fechaPrimera ?? existing.fechaPrimera,
+      ivaInteresPct: d.ivaInteresPct !== undefined ? d.ivaInteresPct : existing.ivaInteresPct,
     };
     // Plan manual: se regenera SOLO si el usuario manda cuotas nuevas.
-    // Plan automático: se regenera si cambió monto/tasa/cantidad/periodicidad/fecha.
+    // Plan automático: se regenera si cambió monto/tasa/cantidad/periodicidad/fecha/IVA.
     const planCambio = traeCuotasManual || (!planManualEf && (
       (d.montoOriginal !== undefined && d.montoOriginal !== existing.montoOriginal) ||
       (d.tasaAnual     !== undefined && d.tasaAnual     !== existing.tasaAnual) ||
       (d.cantCuotas    !== undefined && d.cantCuotas    !== existing.cantCuotas) ||
       (d.periodicidad  !== undefined && d.periodicidad  !== existing.periodicidad) ||
+      (d.ivaInteresPct !== undefined && d.ivaInteresPct !== existing.ivaInteresPct) ||
       (d.fechaPrimera  !== undefined && new Date(d.fechaPrimera).getTime() !== new Date(existing.fechaPrimera).getTime())
     ));
     let cantCuotasFinal = merged.cantCuotas;
@@ -4773,7 +4806,7 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
           estado:        d.estado ?? existing.estado,
           moneda:        d.moneda ?? existing.moneda,
           cotizacionAlta: d.cotizacionAlta !== undefined ? d.cotizacionAlta : existing.cotizacionAlta,
-          planManual:    planManualEf,
+          planManual:    planManualEf, ivaInteresPct: merged.ivaInteresPct,
           observaciones: d.observaciones !== undefined ? d.observaciones : existing.observaciones,
         },
       });
@@ -4787,12 +4820,12 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
             importeOtros: Number(c.importeOtros || 0), importeTotal: Number(c.importeTotal || 0),
           }));
         } else {
-          const cuotas = _calcularCuotasFrances({ monto: merged.montoOriginal, tasaAnual: merged.tasaAnual || 0, cantCuotas: merged.cantCuotas, periodicidad: merged.periodicidad });
+          const cuotas = _calcularCuotasFrances({ monto: merged.montoOriginal, tasaAnual: merged.tasaAnual || 0, cantCuotas: merged.cantCuotas, periodicidad: merged.periodicidad, ivaInteresPct: merged.ivaInteresPct || 0 });
           const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[merged.periodicidad];
           cuotasData = cuotas.map(c => {
             const venc = new Date(merged.fechaPrimera);
             venc.setMonth(venc.getMonth() + (c.numero - 1) * monthsStep);
-            return { creditoId: existing.id, numero: c.numero, vencimiento: venc, importeCapital: c.capital, importeInteres: c.interes, importeOtros: 0, importeTotal: c.total };
+            return { creditoId: existing.id, numero: c.numero, vencimiento: venc, importeCapital: c.capital, importeInteres: c.interes, importeOtros: c.otros || 0, importeTotal: c.total };
           });
         }
         await tx.cuotaCredito.createMany({ data: cuotasData });
@@ -4844,6 +4877,7 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
       observaciones: z.string().nullable().optional(),
       cuentaBancoId: z.string().nullable().optional(),    // si el pago salió de una cuenta bancaria
       cotizacionPago: z.number().positive().nullable().optional(), // TC del día (créditos en moneda extranjera)
+      gastosExtra: z.number().nullable().optional(),       // gastos/IVA adicional cargado a mano al pagar (en ARS)
     });
     const d = schema.parse(req.body || {});
     const fechaPago = d.fechaPago || new Date();
@@ -4851,7 +4885,8 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
     // convierte al TC del día que ingresa el usuario. En ARS, es el importe tal cual.
     const esMonedaExt = credito.moneda && credito.moneda !== 'ARS';
     const cotiz = esMonedaExt ? (d.cotizacionPago || credito.cotizacionAlta || 1) : 1;
-    const importeArs = Number(cuota.importeTotal || 0) * cotiz;
+    const gastosExtra = Number(d.gastosExtra || 0);
+    const importeArs = Number(cuota.importeTotal || 0) * cotiz + gastosExtra;
     const result = await prisma.$transaction(async (tx) => {
       const row = await tx.cuotaCredito.update({
         where: { id: req.params.cuotaId },
@@ -4868,11 +4903,12 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
         const cuenta = await tx.bancoCuenta.findFirst({ where: { id: d.cuentaBancoId, companyId: req.companyId } });
         if (cuenta) {
           const detMon = esMonedaExt ? ` (${fmtMonedaTxt(credito.moneda, cuota.importeTotal)} @ ${cotiz})` : '';
+          const detGastos = gastosExtra ? ` + gastos $${gastosExtra.toLocaleString('es-AR')}` : '';
           await tx.bancoMovimiento.create({
             data: {
               companyId: req.companyId, cuentaId: d.cuentaBancoId,
               fecha: fechaPago, tipo: 'cuota_credito',
-              concepto: `Cuota ${cuota.numero} · ${credito.banco}${credito.nroOperacion ? ' #' + credito.nroOperacion : ''}${detMon}`,
+              concepto: `Cuota ${cuota.numero} · ${credito.banco}${credito.nroOperacion ? ' #' + credito.nroOperacion : ''}${detMon}${detGastos}`,
               monto: importeArs,
               contraparte: credito.banco, referencia: d.referencia || null,
               cuotaCreditoId: cuota.id, observaciones: d.observaciones || null,
@@ -4911,38 +4947,60 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
       precioReferencia: z.number().nullable().optional(),
       tipoPrecio: z.enum(['por_hectarea', 'total']).nullable().optional(),
       porcentajeEmpleado: z.number().nullable().optional(),
+      // Varios empleados que hicieron la MISMA labor (ej. un lote sembrado entre 2).
+      // Cada uno con las hectáreas que hizo y su % de cobro. Si no se manda, se usa
+      // empleadoId/porcentajeEmpleado (compatibilidad con la versión anterior).
+      empleados: z.array(z.object({
+        empleadoId: z.string(),
+        hectareas: z.number().nullable().optional(),
+        porcentaje: z.number().nullable().optional(),
+      })).optional(),
       insumos: z.array(insumoItemSchema).default([]),
     });
     const d = schema.parse(req.body);
     const camp = await prisma.campana.findFirst({ where: { id: d.campanaId, companyId: req.companyId } });
     if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
-    // Cálculo de ganancia del empleado
-    let gananciaEmpleado = null;
-    let empleado = null;
-    if (d.empleadoId) {
-      empleado = await prisma.empleado.findFirst({ where: { id: d.empleadoId, companyId: req.companyId } });
-      if (!empleado) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
-      if (empleado.cobraPorcentaje && d.precioReferencia != null && d.porcentajeEmpleado != null) {
-        const base = d.tipoPrecio === 'por_hectarea'
-          ? (d.hectareasAplicadas || 0) * d.precioReferencia
-          : d.precioReferencia;
-        gananciaEmpleado = base * (d.porcentajeEmpleado / 100);
-      }
+
+    // Normalizamos la lista de empleados (nuevo formato array, o el viejo simple).
+    let listaEmp = [];
+    if (Array.isArray(d.empleados) && d.empleados.length) {
+      listaEmp = d.empleados.filter(e => e.empleadoId);
+    } else if (d.empleadoId) {
+      listaEmp = [{ empleadoId: d.empleadoId, hectareas: d.hectareasAplicadas ?? null, porcentaje: d.porcentajeEmpleado ?? null }];
     }
+    // Traemos los empleados y calculamos la ganancia de cada uno.
+    const baseDe = (haEmp) => d.tipoPrecio === 'por_hectarea'
+      ? Number(haEmp != null ? haEmp : (d.hectareasAplicadas || 0)) * Number(d.precioReferencia || 0)
+      : Number(d.precioReferencia || 0);
+    const empCalcs = [];
+    for (const e of listaEmp) {
+      const emp = await prisma.empleado.findFirst({ where: { id: e.empleadoId, companyId: req.companyId } });
+      if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
+      const pct = e.porcentaje != null ? e.porcentaje : (emp.porcentajeDefault ?? null);
+      let ganancia = null;
+      if (emp.cobraPorcentaje && d.precioReferencia != null && pct != null) {
+        ganancia = baseDe(e.hectareas) * (pct / 100);
+      }
+      empCalcs.push({ emp, hectareas: e.hectareas ?? null, porcentaje: pct, ganancia });
+    }
+    const gananciaTotal = empCalcs.reduce((a, c) => a + (c.ganancia || 0), 0) || null;
+    const responsable = empCalcs.length ? empCalcs.map(c => `${c.emp.nombre} ${c.emp.apellido}`).join(' + ') : null;
+    const primero = empCalcs[0] || null;
+
     const result = await prisma.$transaction(async (tx) => {
-      // 1) Crear la labor
+      // 1) Crear la labor (el primer empleado queda como referencia principal)
       const labor = await tx.laborAplicada.create({
         data: {
           campanaId: d.campanaId, tipo: d.tipo, fecha: d.fecha,
           hectareasAplicadas: d.hectareasAplicadas ?? null,
           costo: d.costo ?? null,
           observaciones: d.observaciones || null,
-          empleadoId: d.empleadoId || null,
+          empleadoId: primero ? primero.emp.id : null,
           precioReferencia: d.precioReferencia ?? null,
           tipoPrecio: d.tipoPrecio || null,
-          porcentajeEmpleado: d.porcentajeEmpleado ?? null,
-          gananciaEmpleado,
-          responsable: empleado ? `${empleado.nombre} ${empleado.apellido}` : null,
+          porcentajeEmpleado: primero ? (primero.porcentaje ?? null) : null,
+          gananciaEmpleado: gananciaTotal,
+          responsable,
         },
       });
       // 2) Insumos consumidos: por cada uno, crear LaborInsumo + movimiento de egreso
@@ -4969,19 +5027,26 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
           },
         });
       }
-      // 3) Ganancia del empleado: si aplica, crear MovimientoEmpleado en la planilla del mes
-      if (gananciaEmpleado != null && gananciaEmpleado > 0) {
-        const periodo = d.fecha.toISOString().slice(0, 7); // YYYY-MM
-        const movEmp = await tx.movimientoEmpleado.create({
-          data: {
-            companyId: req.companyId, empleadoId: d.empleadoId,
-            fecha: d.fecha, periodo, tipo: 'ganancia', categoria: 'labor',
-            concepto: `Labor ${d.tipo}${d.hectareasAplicadas ? ' · ' + d.hectareasAplicadas + ' ha' : ''} (${d.porcentajeEmpleado}%)`,
-            monto: gananciaEmpleado,
-            observaciones: `Generado automáticamente por labor ${labor.id}`,
-          },
-        });
-        await tx.laborAplicada.update({ where: { id: labor.id }, data: { movimientoEmpleadoId: movEmp.id } });
+      // 3) Ganancia: un MovimientoEmpleado por cada empleado que cobra %.
+      const periodo = d.fecha.toISOString().slice(0, 7); // YYYY-MM
+      let primerMovEmpId = null;
+      for (const c of empCalcs) {
+        if (c.ganancia != null && c.ganancia > 0) {
+          const haTxt = (c.hectareas != null ? c.hectareas : d.hectareasAplicadas);
+          const movEmp = await tx.movimientoEmpleado.create({
+            data: {
+              companyId: req.companyId, empleadoId: c.emp.id,
+              fecha: d.fecha, periodo, tipo: 'ganancia', categoria: 'labor',
+              concepto: `Labor ${d.tipo}${haTxt ? ' · ' + haTxt + ' ha' : ''} (${c.porcentaje}%)`,
+              monto: c.ganancia,
+              observaciones: `Generado automáticamente por labor ${labor.id}`,
+            },
+          });
+          if (!primerMovEmpId) primerMovEmpId = movEmp.id;
+        }
+      }
+      if (primerMovEmpId) {
+        await tx.laborAplicada.update({ where: { id: labor.id }, data: { movimientoEmpleadoId: primerMovEmpId } });
       }
       return labor;
     });
@@ -5752,11 +5817,16 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     const mNro = texto.match(/(?:Comp\.\s*Nro|Comprobante\s+Nro|N[°º]\s*Comp)\s*:?\s*0*(\d{1,8})/i);
     if (mNro && !resultado.numero) resultado.numero = Number(mNro[1]);
     // Formato compacto "0002-00006490" (punto de venta - número) típico de muchos sistemas.
+    // Puede haber varios números con ese formato en el PDF (CAI, IIBB, etc.). Si ya
+    // conocemos el punto de venta, elegimos el que coincida; si no, el primero.
     if (!resultado.puntoVenta || !resultado.numero) {
-      const mComp = texto.match(/(\d{4,5})\s*-\s*(\d{7,8})\b/);
-      if (mComp) {
-        if (!resultado.puntoVenta) resultado.puntoVenta = Number(mComp[1]);
-        if (!resultado.numero) resultado.numero = Number(mComp[2]);
+      const todos = [...texto.matchAll(/\b(\d{4,5})\s*-\s*(\d{7,8})\b/g)];
+      let elegido = null;
+      if (resultado.puntoVenta) elegido = todos.find(m => Number(m[1]) === Number(resultado.puntoVenta));
+      if (!elegido) elegido = todos[0];
+      if (elegido) {
+        if (!resultado.puntoVenta) resultado.puntoVenta = Number(elegido[1]);
+        if (!resultado.numero) resultado.numero = Number(elegido[2]);
       }
     }
     // Fecha de emisión

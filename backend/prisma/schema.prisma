@@ -202,6 +202,7 @@ model Campana {
   id              String   @id @default(cuid())
   companyId       String
   loteId          String
+  nombre          String?   // nombre libre, ej "Campaña 2026/27 Soja - El 29 Lote 2"
   cultivo         String
   variedad        String?
   ciclo           String?   // "2025/26"
@@ -303,6 +304,8 @@ model Producto {
   unidad          String    // "tn", "kg", "lt", "cabezas", "unidad"
   stockMinimo     Float     @default(0)
   precioReferencia Float?
+  ultimoCostoCompra Float?   // costo unitario de la última compra (para autocompletar)
+  ultimoCostoMoneda String?  // moneda de ese costo (ARS/USD/...)
   categoriaHacienda String?  // si categoria="hacienda": a qué categoría de hacienda corresponde (Ternero, Vaca…)
   observaciones   String?
   activo          Boolean   @default(true)
@@ -633,6 +636,12 @@ model Arrendamiento {
   tipoPago        String?   // "efectivo", "quintales", "%"
   vencimiento     DateTime?
   pagado          Boolean   @default(false)
+  modalidad       String?   // "efectivo" | "quintales" | "porcentaje"
+  grano           String?   // SOJA | MAIZ | TRIGO ... (para valuar los quintales a pizarra)
+  quintalesHaBlanco Float?  // qq/ha en blanco (facturado)
+  quintalesHaNegro  Float?  // qq/ha en negro (sin factura)
+  moneda          String?   // moneda de referencia del contrato (ARS/USD)
+  cuotas          Json?     // [{ etiqueta, vencimiento, quintalesHa, color('blanco'|'negro'), pagado }]
   observaciones   String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -1150,6 +1159,7 @@ model Credito {
   moneda          String   @default("ARS") // ARS | USD | USD_* | EUR | SOJA... (deuda en esa moneda)
   cotizacionAlta  Float?                  // TC del día que habilitaron el crédito (ARS por unidad)
   planManual      Boolean  @default(false) // si true, las cuotas se cargan a mano (no se regeneran por francés)
+  ivaInteresPct   Float?                  // IVA % sobre los intereses (se suma a cada cuota como "otros")
   observaciones   String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
