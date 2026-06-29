@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.29.0';
+const AGROCORE_VERSION = '1.30.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4615,7 +4615,7 @@ app.put('/api/liquidaciones-cereal/:id/marcar-cobrado', requireCompany, requireP
 // ============================================================
 function _calcularCuotasFrances({ monto, tasaAnual, cantCuotas, periodicidad, ivaInteresPct }) {
   // tasa por período (mensual, bimestral, etc.)
-  const factor = { mensual: 12, bimestral: 6, trimestral: 4, semestral: 2 }[periodicidad] || 12;
+  const factor = { mensual: 12, bimestral: 6, trimestral: 4, semestral: 2, anual: 1 }[periodicidad] || 12;
   const i = (tasaAnual || 0) / 100 / factor;
   const ivaPct = Number(ivaInteresPct || 0) / 100;
   let cuotaTotal;
@@ -4680,7 +4680,7 @@ app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), 
       montoOriginal: z.number().positive(),
       tasaAnual: z.number().nullable().optional(),
       cantCuotas: z.number().int().positive(),
-      periodicidad: z.enum(['mensual', 'bimestral', 'trimestral', 'semestral']).default('mensual'),
+      periodicidad: z.enum(['mensual', 'bimestral', 'trimestral', 'semestral', 'anual']).default('mensual'),
       fechaPrimera: z.coerce.date(),
       destino: z.string().nullable().optional(),
       moneda: z.string().default('ARS'),
@@ -4712,7 +4712,7 @@ app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), 
         cantCuotas: d.cantCuotas, periodicidad: d.periodicidad,
         ivaInteresPct: d.ivaInteresPct || 0,
       });
-      const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[d.periodicidad];
+      const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6, anual: 12 }[d.periodicidad];
       cuotasData = cuotas.map(c => {
         const venc = new Date(d.fechaPrimera);
         venc.setMonth(venc.getMonth() + (c.numero - 1) * monthsStep);
@@ -4757,7 +4757,7 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
       montoOriginal: z.number().positive().optional(),
       tasaAnual: z.number().nullable().optional(),
       cantCuotas: z.number().int().positive().optional(),
-      periodicidad: z.enum(['mensual', 'bimestral', 'trimestral', 'semestral']).optional(),
+      periodicidad: z.enum(['mensual', 'bimestral', 'trimestral', 'semestral', 'anual']).optional(),
       fechaPrimera: z.coerce.date().optional(),
       destino: z.string().nullable().optional(),
       estado: z.enum(['activo', 'cancelado', 'refinanciado']).optional(),
@@ -4822,7 +4822,7 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
           }));
         } else {
           const cuotas = _calcularCuotasFrances({ monto: merged.montoOriginal, tasaAnual: merged.tasaAnual || 0, cantCuotas: merged.cantCuotas, periodicidad: merged.periodicidad, ivaInteresPct: merged.ivaInteresPct || 0 });
-          const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6 }[merged.periodicidad];
+          const monthsStep = { mensual: 1, bimestral: 2, trimestral: 3, semestral: 6, anual: 12 }[merged.periodicidad];
           cuotasData = cuotas.map(c => {
             const venc = new Date(merged.fechaPrimera);
             venc.setMonth(venc.getMonth() + (c.numero - 1) * monthsStep);

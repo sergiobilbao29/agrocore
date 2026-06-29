@@ -2321,6 +2321,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
+      titulo:'🏦 v1.30.0 — Créditos: periodicidad anual',
+      desc:'En los créditos bancarios se sumó la periodicidad <b>Anual</b> (además de mensual, bimestral, trimestral y semestral), tanto para el plan automático (sistema francés) como para generar las fechas del plan manual.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
       titulo:'📊 v1.29.0 — Tablero multimoneda: elegí ver en pesos o por moneda',
       desc:'El <b>Dashboard</b> tiene un nuevo selector arriba: <b>"En pesos (cotización de hoy)"</b> convierte todo a pesos con la cotización del día, o <b>"Multimoneda"</b> muestra cada importe en su moneda original (US$, granos, $). Aplica a las <b>cuentas por cobrar/por pagar</b> y al patrimonio, que antes mezclaban monedas. Los <b>arrendamientos en quintales</b> se valorizan a la pizarra del día. (El <b>Flujo de Fondos</b> ya tenía su propio simulador pesos/dólares.)' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'29/06/2026',
@@ -18602,7 +18605,7 @@ async function credForm(id=null) {
         <div><label class="label">Cantidad de cuotas *</label><input id="cr-cant" type="number" class="input" value="${it.cantCuotas||12}"/></div>
         <div><label class="label">Periodicidad *</label>
           <select id="cr-per" class="input">
-            ${['mensual','bimestral','trimestral','semestral'].map(p=>`<option value="${p}" ${(it.periodicidad||'mensual')===p?'selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('')}
+            ${['mensual','bimestral','trimestral','semestral','anual'].map(p=>`<option value="${p}" ${(it.periodicidad||'mensual')===p?'selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`).join('')}
           </select>
         </div>
         <div><label class="label">Fecha primera cuota *</label><input id="cr-fec" type="date" class="input" value="${it.fechaPrimera?String(it.fechaPrimera).slice(0,10):new Date().toISOString().slice(0,10)}"/></div>
@@ -18685,7 +18688,7 @@ function credManualGen(){
   const cant = Math.max(1, Number($('#cr-cant')?.value||0));
   const monto = Number($('#cr-monto')?.value||0);
   const per = $('#cr-per')?.value||'mensual';
-  const step = { mensual:1, bimestral:2, trimestral:3, semestral:6 }[per]||1;
+  const step = { mensual:1, bimestral:2, trimestral:3, semestral:6, anual:12 }[per]||1;
   const f0 = $('#cr-fec')?.value ? new Date($('#cr-fec').value+'T00:00:00') : new Date();
   const cuotaBase = monto ? Math.round((monto/cant)*100)/100 : '';
   body.innerHTML = '';
