@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'30/06/2026',
+      titulo:'🛠️ v1.39.0 — El filtro de Categoría se cierra al aplicar',
+      desc:'En <b>Stock</b> y <b>Movimientos</b>, el desplegable de Categoría ahora se <b>cierra</b> al tocar “Aplicar” o “Todas”, y también al hacer clic fuera (antes quedaba abierto).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
       titulo:'📦 v1.38.0 — Los egresos de stock por uso de insumo se generan solos',
       desc:'Se quitó el botón “Generar egresos faltantes”. Ahora cada <b>aplicación de insumo</b> crea su <b>egreso en Movimientos de stock</b> automáticamente al guardar, y los usos que pudieran haber quedado sin egreso se regularizan solos al entrar a Insumos y labores.' },
@@ -5288,8 +5291,16 @@ function msWire(id, openKey, onLive, onApply, labelAll){
     const lbl = dd.querySelector('.ms-lbl');
     if (lbl) lbl.textContent = vals.length ? (vals.length+' seleccionada'+(vals.length>1?'s':'')) : (labelAll||'Todas');
   });
-  const ap = dd.querySelector('[data-ms-apply]'); if (ap) ap.onclick = ()=>{ state['_ms_'+openKey]=false; onApply(); };
-  const cl = dd.querySelector('[data-ms-clear]'); if (cl) cl.onclick = ()=>{ onLive([]); state['_ms_'+openKey]=false; onApply(); };
+  const ap = dd.querySelector('[data-ms-apply]'); if (ap) ap.onclick = ()=>{ state['_ms_'+openKey]=false; dd.open=false; onApply(); };
+  const cl = dd.querySelector('[data-ms-clear]'); if (cl) cl.onclick = ()=>{ onLive([]); state['_ms_'+openKey]=false; dd.open=false; onApply(); };
+  // Cerrar al hacer clic fuera del desplegable (el listener se auto-remueve al re-renderizar).
+  setTimeout(()=>{
+    const onDoc = (ev)=>{
+      if (!document.body.contains(dd)) { document.removeEventListener('click', onDoc); return; }
+      if (dd.open && !dd.contains(ev.target)) { dd.open=false; state['_ms_'+openKey]=false; }
+    };
+    document.addEventListener('click', onDoc);
+  }, 0);
 }
 
 pages.stock = async function() {
