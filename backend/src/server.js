@@ -2225,6 +2225,7 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
       unidadHa: z.number().nullable().optional(),
       precioUnit: z.number().nullable().optional(),
       costoHa: z.number().nullable().optional(),
+      monedaCosto: z.string().nullable().optional(),
       hectareasAplicadas: z.number().nullable().optional(),
       fecha: z.coerce.date().nullable().optional(),
       observaciones: z.string().nullable().optional(),
@@ -2249,6 +2250,7 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
       const row = await prisma.laborAplicada.update({ where: { id }, data: {
         tipo: d.item ?? lab.tipo,
         costo: d.costoHa !== undefined ? (d.costoHa || 0) : lab.costo,
+        monedaCosto: d.monedaCosto !== undefined ? (d.monedaCosto || 'USD') : lab.monedaCosto,
         hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : lab.hectareasAplicadas,
         fecha: d.fecha || lab.fecha,
         observaciones: d.observaciones !== undefined ? d.observaciones : lab.observaciones,

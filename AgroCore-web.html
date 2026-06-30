@@ -2322,7 +2322,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
       titulo:'💱 v1.32.0 — Costos de campaña en una sola moneda (elegís $ o u$s) + labores con su moneda',
-      desc:'En <b>Insumos y labores</b> ahora elegís arriba si querés ver los costos en <b>dólares o pesos</b>, y el sistema <b>convierte todo a esa moneda</b> (los insumos están en u$s y las labores en la moneda de su precio). El número por hectárea ahora es el <b>costo real por ha del lote</b> (total ÷ ha), no un promedio raro. En el <b>catálogo de Labores</b>, el precio de referencia se puede cargar en <b>la moneda que quieras</b> (ese precio se usa para la ganancia del empleado y para mostrar el gasto de la labor en la campaña), y la labor ya muestra su costo (antes quedaba en 0).' },
+      desc:'En <b>Insumos y labores</b> ahora elegís arriba si querés ver los costos en <b>dólares o pesos</b>, y el sistema <b>convierte todo a esa moneda</b> (los insumos están en u$s y las labores en la moneda de su precio). El número por hectárea ahora es el <b>costo real por ha del lote</b> (total ÷ ha), no un promedio raro. En el <b>catálogo de Labores</b>, el precio de referencia se puede cargar en <b>la moneda que quieras</b> (ese precio se usa para la ganancia del empleado y para mostrar el gasto de la labor en la campaña), y la labor ya muestra su costo (antes quedaba en 0). Al <b>editar una labor</b> se abre el <b>formulario completo de labor</b> (con precio, tipo y moneda), no el modal resumido.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'29/06/2026',
       titulo:'🛠️ v1.31.0 — Insumos y labores: editar renglón, precios que se guardan y botones arreglados',
       desc:'(1) Se arreglaron los botones generales <b>+ Insumo</b> y <b>+ Labor</b> de arriba (no abrían). (2) Ahora podés <b>editar un renglón</b> de insumo o labor (✏️) sin tener que borrarlo y volver a cargarlo. (3) Las <b>labores guardan su costo (u$s/ha)</b> y se ven en la pantalla general. (4) Los <b>insumos guardan el u$s/unidad</b> y, al elegir el producto, se <b>autocompleta el precio</b> con el último costo de compra (o el precio de referencia) — también en los insumos consumidos dentro de una labor.' },
@@ -16090,6 +16090,8 @@ async function aplicDel(id) {
 // Editar un solo renglón (insumo o labor) sin tener que borrarlo y recargarlo.
 function aplicEditForm(a){
   const esIns = a.tipo === 'insumo';
+  // Las labores se editan con el formulario completo de labor (no el modal resumido).
+  if (!esIns) { laborForm(true, a.campanaId, a); return; }
   openModal({
     title: esIns ? 'Editar insumo' : 'Editar labor', size:'max-w-lg',
     body: `
@@ -16137,7 +16139,8 @@ async function aplicEditSave(id, esIns){
  *  - precio referencia (por hectárea) + % cobro del empleado
  *  - la ganancia se carga sola en la planilla del mes
  * ========================================================= */
-async function laborForm(avanzada = false, campanaId = null) {
+async function laborForm(avanzada = false, campanaId = null, edit = null) {
+  const editMode = !!edit;
   // Cargamos en paralelo lo necesario
   let campanas=[], empleados=[], productos=[], laboresCat=[];
   try {
@@ -16168,8 +16171,8 @@ async function laborForm(avanzada = false, campanaId = null) {
   const empleadosSection = `
       <div class="p-3 bg-blue-50 rounded-lg border border-blue-200 mb-3">
         <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
-          <div class="text-xs text-blue-800 font-semibold">👷 Empleados que hicieron la labor${!puedeEditarCobro?' <span class="text-[10px] text-blue-600 font-normal">(precios/% solo lectura)</span>':''}</div>
-          <button type="button" class="btn btn-secondary text-xs" onclick="laAddEmp()">+ Empleado</button>
+          <div class="text-xs text-blue-800 font-semibold">💰 Precio / costo de la labor${!puedeEditarCobro?' <span class="text-[10px] text-blue-600 font-normal">(solo lectura)</span>':''}</div>
+          ${editMode?'':'<button type="button" class="btn btn-secondary text-xs" onclick="laAddEmp()">+ Empleado</button>'}
         </div>
         <div class="grid grid-cols-3 gap-3 items-end mb-2">
           <div><label class="label">Tipo precio</label>
@@ -16183,15 +16186,19 @@ async function laborForm(avanzada = false, campanaId = null) {
             <select id="la-mon" class="input" ${lock}>${monedasOpts().map(([k,l])=>`<option value="${k}" ${k==='ARS'?'selected':''}>${esc(l)}</option>`).join('')}</select>
           </div>
         </div>
+        ${editMode ? `
+        <div class="text-[11px] text-slate-500">Este es el precio/costo de la labor por hectárea (se muestra en la campaña en la moneda elegida). Para cambiar los <b>empleados</b> o los <b>insumos consumidos</b>, borrá la labor y volvé a cargarla.</div>
+        ` : `
         <div class="text-[11px] text-slate-500 mb-3">El % de cada empleado se aplica sobre el precio de referencia. La labor se valoriza en la moneda elegida (en la campaña se convierte a la moneda que elijas).</div>
         <table class="data text-sm">
           <thead><tr><th>Empleado</th><th class="text-right">Ha que hizo</th><th class="text-right">%</th><th class="text-right">Ganancia</th><th></th></tr></thead>
           <tbody id="la-emp-body"></tbody>
         </table>
         <div class="text-[11px] text-slate-600 mt-2" id="la-emp-foot">—</div>
+        `}
       </div>`;
   openModal({
-    title: '🛠️ Cargar labor', size:'max-w-4xl',
+    title: editMode ? '🛠️ Editar labor' : '🛠️ Cargar labor', size:'max-w-4xl',
     body: `
       <div class="grid grid-cols-3 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Campaña *</label>
@@ -16209,6 +16216,7 @@ async function laborForm(avanzada = false, campanaId = null) {
 
       ${empleadosSection}
 
+      ${editMode ? '' : `
       <div class="kpi p-0 overflow-hidden mb-3">
         <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <span class="text-sm font-medium text-slate-700">🧪 Insumos consumidos (descuentan del stock)</span>
@@ -16218,12 +16226,13 @@ async function laborForm(avanzada = false, campanaId = null) {
           <thead><tr><th>Producto</th><th class="text-right">Cantidad</th><th class="text-right">Precio unit.</th><th class="text-right">Total</th><th></th></tr></thead>
           <tbody id="la-ins"></tbody>
         </table>
-      </div>
+      </div>`}
 
       <div><label class="label">Observaciones</label><textarea id="la-obs" class="input" rows="2"></textarea></div>
-      <input type="hidden" id="la-mode" value="${avanzada?'avanzada':'simple'}"/>`,
+      <input type="hidden" id="la-mode" value="${avanzada?'avanzada':'simple'}"/>
+      <input type="hidden" id="la-editid" value="${edit?esc(edit.id):''}"/>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="laborSave()">💾 Cargar labor</button>`
+             <button class="btn btn-primary" onclick="laborSave()">💾 ${editMode?'Guardar cambios':'Cargar labor'}</button>`
   });
   // Setup inicial
   setTimeout(() => {
@@ -16237,8 +16246,20 @@ async function laborForm(avanzada = false, campanaId = null) {
     };
     camp.onchange = setHa;
     haEl.oninput = () => { haEl.dataset.manual = '1'; laRecalc(); };
-    setHa();
-    laAddEmp();   // arrancar con una fila de empleado
+    if (editMode) {
+      // Prefill con los datos de la labor existente.
+      if ($('#la-tipo')) $('#la-tipo').value = edit.item || '';
+      if (edit.fecha && $('#la-fec')) $('#la-fec').value = String(edit.fecha).slice(0,10);
+      if ($('#la-ha')) { $('#la-ha').value = edit.hectareasAplicadas ?? ''; $('#la-ha').dataset.manual = '1'; }
+      if ($('#la-pr')) $('#la-pr').value = edit.costoHa ?? '';   // costo por ha
+      if ($('#la-tp')) $('#la-tp').value = 'por_hectarea';
+      if ($('#la-mon') && edit.moneda) $('#la-mon').value = edit.moneda;
+      if ($('#la-obs')) $('#la-obs').value = edit.observaciones || '';
+      laRecalc();
+    } else {
+      setHa();
+      laAddEmp();   // arrancar con una fila de empleado
+    }
   }, 0);
 }
 // Variables de módulo usadas por las filas de empleados de la labor.
@@ -16390,6 +16411,26 @@ async function laborSave() {
   if (!camp) return toast('Falta la campaña','warn');
   if (!tipo) return toast('Falta el tipo de labor','warn');
   if (!ha) return toast('Faltan las hectáreas aplicadas','warn');
+  // Modo edición: actualiza la labor existente (precio/costo, ha, fecha, moneda, obs).
+  const editId = $('#la-editid')?.value || '';
+  if (editId) {
+    const pr = $('#la-pr')?.value ? Number($('#la-pr').value) : null;
+    const tp = $('#la-tp')?.value || 'por_hectarea';
+    const costoHa = (pr != null) ? (tp === 'por_hectarea' ? pr : (ha ? pr / ha : pr)) : null;
+    const data = {
+      item: tipo,
+      costoHa,
+      monedaCosto: $('#la-mon')?.value || 'ARS',
+      hectareasAplicadas: ha,
+      fecha: $('#la-fec').value ? new Date($('#la-fec').value+'T00:00:00').toISOString() : null,
+      observaciones: $('#la-obs').value.trim() || null,
+    };
+    try {
+      await api('/api/aplicaciones/'+editId, { method:'PUT', body: JSON.stringify(data) });
+      toast('Labor actualizada','success'); closeModal(); delete state.cache.aplicaciones; pages.insumos();
+    } catch (e) { toast(e.message,'error'); }
+    return;
+  }
   const insumos = $$('#la-ins tr[data-la]').map(tr => ({
     productoId: tr.querySelector('[data-laf="productoId"]').value,
     cantidad: Number(tr.querySelector('[data-laf="cantidad"]').value || 0),
