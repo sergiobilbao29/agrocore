@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
+      titulo:'📦 v1.38.0 — Los egresos de stock por uso de insumo se generan solos',
+      desc:'Se quitó el botón “Generar egresos faltantes”. Ahora cada <b>aplicación de insumo</b> crea su <b>egreso en Movimientos de stock</b> automáticamente al guardar, y los usos que pudieran haber quedado sin egreso se regularizan solos al entrar a Insumos y labores.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
       titulo:'📍 v1.37.0 — Al eliminar un insumo/labor, no salta arriba',
       desc:'En <b>Insumos y labores</b>, al <b>eliminar</b> un insumo o una labor la pantalla ya no salta al tope: vuelve a la <b>tarjeta del lote</b> donde estabas (igual que al cargar o editar).' },
@@ -15668,6 +15671,14 @@ pages.insumos = async function() {
   state.cache.campanas = campanas; state.cache.lotes = lotes;
   state.cache.insumosCat = insumosCat; state.cache.laboresCat = laboresCat;
   state.cache.aplicaciones = aplics;
+  // Una sola vez por sesión: genera en silencio los egresos de stock que pudieran faltar
+  // de aplicaciones de insumo cargadas antes (idempotente; los nuevos ya descuentan al guardar).
+  if (!state._egresosBackfilled && can('produccion:update')) {
+    state._egresosBackfilled = true;
+    api('/api/aplicaciones/backfill-stock', { method:'POST' })
+      .then(r => { if (r && r.generados) delete state.cache.stockMap; })
+      .catch(()=>{});
+  }
   await cargarCotizVivas();  // para convertir costos a la moneda elegida
   if (!state.insMoneda) { try { state.insMoneda = localStorage.getItem('ac.insMoneda') || 'USD'; } catch { state.insMoneda = 'USD'; } }
 
@@ -15816,7 +15827,6 @@ pages.insumos = async function() {
       <div class="mt-2 flex gap-2 flex-wrap">
         ${filtroActivo ? `<button class="btn btn-secondary text-xs" onclick="insumosFiltrosLimpiar()">✕ Limpiar filtros</button>` : ''}
         <button class="btn btn-secondary text-xs" onclick="insumosExportarExcel()">📥 Exportar Excel</button>
-        ${can('produccion:update') ? `<button class="btn btn-ghost text-xs" onclick="insumosBackfillStock()" title="Genera los egresos de stock de los insumos que se cargaron antes de que el uso descontara del inventario">🔄 Generar egresos faltantes</button>` : ''}
       </div>
     </div>
 
@@ -15965,17 +15975,6 @@ function insumosFiltrosLimpiar() {
 // Multi-selección de insumos: aplicar / limpiar la selección.
 function insMsApply(){ state._insDDOpen = false; pages.insumos(); }
 function insMsClear(){ state.insFilter.insumos = []; state._insDDOpen = false; pages.insumos(); }
-// Genera los egresos de stock que faltan para insumos cargados antes de la v1.34.0.
-async function insumosBackfillStock(){
-  if (!confirm('Se van a generar los movimientos de egreso de stock de los insumos ya cargados que todavía no descontaron del inventario. ¿Continuar?')) return;
-  try {
-    const r = await api('/api/aplicaciones/backfill-stock', { method:'POST' });
-    let msg = `Se generaron ${r.generados} egreso${r.generados===1?'':'s'} de stock`;
-    if (r.sinProducto) msg += ` · ${r.sinProducto} sin producto en inventario (no se descuenta)`;
-    toast(msg, r.generados ? 'success' : 'warn');
-    delete state.cache.stockMap; delete state.cache.aplicaciones; pages.insumos();
-  } catch (e) { toast(e.message,'error'); }
-}
 function insumosExportarExcel() {
   const aplics = state.cache.aplicaciones || [];
   const campanas = state.cache.campanas || [];
