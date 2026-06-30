@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
+      titulo:'🔄 v1.35.0 — Egresos de insumos ya cargados + cargar sin saltar arriba',
+      desc:'(1) Botón <b>“🔄 Generar egresos faltantes”</b> en Insumos y labores: genera de una vez los <b>egresos de stock</b> de todos los insumos que se habían cargado antes (los que coinciden con un producto del inventario). (2) Al <b>guardar</b> un insumo o una labor, la pantalla ya <b>no salta al tope</b>: vuelve a la <b>tarjeta del lote</b> donde estabas, para seguir cargando sin tener que buscarlo de nuevo. (3) En el filtro de Insumo, el botón “Ninguno” ahora se llama <b>“Todos”</b> (deselecciona y muestra todo).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'30/06/2026',
       titulo:'📦 v1.34.0 — El uso de insumos descuenta del stock + arreglos en Movimientos e Insumos',
       desc:'(1) Al <b>cargar un insumo</b> en un lote ahora se genera el <b>egreso de stock</b> correspondiente (unid/ha × ha), así el inventario refleja el consumo, no solo la compra. Al borrar o editar el insumo, el movimiento se ajusta o revierte solo. (2) Se arregló el <b>botón “+ Nuevo movimiento”</b> de Stock, que aparecía cortado. (3) La <b>fecha</b> que ponés al cargar un insumo o una labor ahora se <b>respeta</b> (antes podía quedar un día corrido por la zona horaria). (4) En <b>Insumos y labores</b>, el filtro de <b>Insumo</b> ahora es de <b>selección múltiple</b> (podés elegir varios a la vez).' },
@@ -15749,7 +15752,7 @@ pages.insumos = async function() {
                   <span>${esc(i)}</span>
                 </label>`).join('') : '<div class="text-xs text-slate-400 px-2 py-2">Sin insumos cargados</div>'}
               ${insumosUsados.length ? `<div class="flex gap-2 mt-1 pt-2 border-t border-slate-100">
-                <button type="button" class="btn btn-secondary text-xs flex-1" onclick="insMsClear()">Ninguno</button>
+                <button type="button" class="btn btn-secondary text-xs flex-1" onclick="insMsClear()">Todos</button>
                 <button type="button" class="btn btn-primary text-xs flex-1" onclick="insMsApply()">Aplicar</button>
               </div>` : ''}
             </div>
@@ -15763,10 +15766,11 @@ pages.insumos = async function() {
           </select>
         </div>
       </div>
-      ${filtroActivo ? `<div class="mt-2 flex gap-2">
-        <button class="btn btn-secondary text-xs" onclick="insumosFiltrosLimpiar()">✕ Limpiar filtros</button>
+      <div class="mt-2 flex gap-2 flex-wrap">
+        ${filtroActivo ? `<button class="btn btn-secondary text-xs" onclick="insumosFiltrosLimpiar()">✕ Limpiar filtros</button>` : ''}
         <button class="btn btn-secondary text-xs" onclick="insumosExportarExcel()">📥 Exportar Excel</button>
-      </div>` : `<div class="mt-2"><button class="btn btn-secondary text-xs" onclick="insumosExportarExcel()">📥 Exportar Excel</button></div>`}
+        ${can('produccion:update') ? `<button class="btn btn-ghost text-xs" onclick="insumosBackfillStock()" title="Genera los egresos de stock de los insumos que se cargaron antes de que el uso descontara del inventario">🔄 Generar egresos faltantes</button>` : ''}
+      </div>
     </div>
 
     ${bannerTotales}
@@ -15800,7 +15804,7 @@ pages.insumos = async function() {
             const costoLabPorHa = haLote ? costoLabTotal / haLote : 0;
             const sym = insSym();
             return `
-            <div class="kpi p-0 overflow-hidden">
+            <div class="kpi p-0 overflow-hidden" id="ins-camp-${c.id}">
               <div class="px-4 py-3 bg-slate-50 border-b flex items-center justify-between">
                 <div>
                   <div class="font-bold text-slate-800">${esc(campLabel(c))}</div>
@@ -15899,6 +15903,12 @@ pages.insumos = async function() {
   }
   const monEl = $('#ins-moneda');
   if (monEl) monEl.onchange = e => { state.insMoneda = e.target.value; try { localStorage.setItem('ac.insMoneda', state.insMoneda); } catch {} pages.insumos(); };
+  // Después de guardar un insumo/labor volvemos a la tarjeta donde estabas (no al tope).
+  if (state._insScrollTo) {
+    const target = document.getElementById('ins-camp-'+state._insScrollTo);
+    state._insScrollTo = null;
+    if (target) setTimeout(() => target.scrollIntoView({ behavior:'smooth', block:'start' }), 60);
+  }
 };
 function insumosFiltrosLimpiar() {
   state.insFilter = { campana:'', insumos:[], labor:'', campoId:'', ciclo:'' };
@@ -15908,6 +15918,17 @@ function insumosFiltrosLimpiar() {
 // Multi-selección de insumos: aplicar / limpiar la selección.
 function insMsApply(){ state._insDDOpen = false; pages.insumos(); }
 function insMsClear(){ state.insFilter.insumos = []; state._insDDOpen = false; pages.insumos(); }
+// Genera los egresos de stock que faltan para insumos cargados antes de la v1.34.0.
+async function insumosBackfillStock(){
+  if (!confirm('Se van a generar los movimientos de egreso de stock de los insumos ya cargados que todavía no descontaron del inventario. ¿Continuar?')) return;
+  try {
+    const r = await api('/api/aplicaciones/backfill-stock', { method:'POST' });
+    let msg = `Se generaron ${r.generados} egreso${r.generados===1?'':'s'} de stock`;
+    if (r.sinProducto) msg += ` · ${r.sinProducto} sin producto en inventario (no se descuenta)`;
+    toast(msg, r.generados ? 'success' : 'warn');
+    delete state.cache.stockMap; delete state.cache.aplicaciones; pages.insumos();
+  } catch (e) { toast(e.message,'error'); }
+}
 function insumosExportarExcel() {
   const aplics = state.cache.aplicaciones || [];
   const campanas = state.cache.campanas || [];
@@ -16123,9 +16144,11 @@ async function aplicSaveMulti(){
     let ok = 0;
     for (const it of items){ await api('/api/aplicaciones', { method:'POST', body: JSON.stringify(it) }); ok++; }
     toast(`${ok} insumo${ok===1?'':'s'} cargado${ok===1?'':'s'}`,'success');
+    state._insScrollTo = campanaId;
     closeModal(); delete state.cache.aplicaciones; delete state.cache.stockMap; pages.insumos();
   } catch (e) {
     toast(`Hubo un error al cargar: ${e.message}. Revisá los que quedaron sin guardar.`,'error');
+    state._insScrollTo = campanaId;
     delete state.cache.aplicaciones; closeModal(); pages.insumos();
   }
 }
@@ -16474,7 +16497,7 @@ async function laborSave() {
     };
     try {
       await api('/api/aplicaciones/'+editId, { method:'PUT', body: JSON.stringify(data) });
-      toast('Labor actualizada','success'); closeModal(); delete state.cache.aplicaciones; pages.insumos();
+      toast('Labor actualizada','success'); state._insScrollTo = camp; closeModal(); delete state.cache.aplicaciones; pages.insumos();
     } catch (e) { toast(e.message,'error'); }
     return;
   }
@@ -16511,6 +16534,7 @@ async function laborSave() {
     await api('/api/labores-avanzada', { method:'POST', body: JSON.stringify(data) });
     const nEmp = empleados.length;
     toast('Labor cargada' + (nEmp?` · ${nEmp} empleado${nEmp===1?'':'s'}`:'') + (insumos.length?` · ${insumos.length} insumo${insumos.length===1?'':'s'} del stock`:''),'success');
+    state._insScrollTo = camp;
     closeModal();
     delete state.cache.stockMap;
     pages.insumos();

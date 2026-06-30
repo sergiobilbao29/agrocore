@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.34.0';
+const AGROCORE_VERSION = '1.35.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2311,6 +2311,42 @@ app.delete('/api/aplicaciones/:id', requireCompany, requirePermission('produccio
     const lab = await prisma.laborAplicada.findFirst({ where: { id, campana: { companyId: req.companyId } } });
     if (lab) { await prisma.laborAplicada.delete({ where: { id } }); return res.json({ ok: true }); }
     res.status(404).json({ ok: false, error: 'No encontrado' });
+  } catch (e) { next(e); }
+});
+
+// Backfill: genera los egresos de stock que faltan para los insumos ya aplicados
+// (los cargados antes de que el uso descontara stock). Idempotente: solo procesa
+// los que no tienen movimiento vinculado y cuyo nombre coincide con un producto.
+app.post('/api/aplicaciones/backfill-stock', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const pendientes = await prisma.insumoAplicado.findMany({
+      where: { campana: { companyId: req.companyId }, movimientoId: null },
+    });
+    let generados = 0, sinProducto = 0, sinCantidad = 0;
+    for (const ins of pendientes) {
+      const cant = Number(ins.cantidad || 0) * Number(ins.hectareasAplicadas || 0);
+      if (!(cant > 0)) { sinCantidad++; continue; }
+      let prod = null;
+      if (ins.productoId) prod = await prisma.producto.findFirst({ where: { id: ins.productoId, companyId: req.companyId } });
+      if (!prod) prod = await prisma.producto.findFirst({ where: { companyId: req.companyId, nombre: { equals: ins.nombre, mode: 'insensitive' } } });
+      if (!prod) { sinProducto++; continue; }
+      await prisma.$transaction(async (tx) => {
+        const total = (ins.precioUnit || 0) * cant;
+        const mov = await tx.movimiento.create({
+          data: {
+            companyId: req.companyId, productoId: prod.id, depositoId: null,
+            fecha: ins.fecha, tipo: 'egreso', motivo: 'aplicacion',
+            cantidad: cant, precio: ins.precioUnit ?? null, total: total || null,
+            referencia: `INS-${ins.id.slice(-6).toUpperCase()}`,
+            observaciones: `Aplicado en lote (${ins.nombre})`,
+            userId: req.user?.id || null,
+          },
+        });
+        await tx.insumoAplicado.update({ where: { id: ins.id }, data: { productoId: prod.id, movimientoId: mov.id } });
+      });
+      generados++;
+    }
+    res.json({ ok: true, generados, sinProducto, sinCantidad, total: pendientes.length });
   } catch (e) { next(e); }
 });
 
