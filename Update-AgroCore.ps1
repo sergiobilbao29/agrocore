@@ -7,20 +7,39 @@
 # Backup automatico ANTES de tocar nada. Si algo falla, el .sql queda en C:\AgroCore\backups.
 # ============================================================
 param(
-  [string]$InstallDir = "C:\AgroCore",
+  # Si no se pasa, usa la carpeta donde esta ESTE script (asi cada copia actualiza
+  # su propia instalacion: C:\AgroCore, C:\AgroCore-Borghi, etc.)
+  [string]$InstallDir = "",
   [switch]$SkipBackup = $false,
   # Modo desatendido (lo lanza el sistema mismo desde el boton "Instalar
   # actualizacion ahora" en la web). NO espera Enter al terminar.
   [switch]$Unattended = $false,
-  # Puerto de ESTA instancia (Demo/Peiretti 3100, Borghi 3101). El backend lo
-  # pasa solo. Se usa para chequear la version y para matar SOLO el node de
-  # esta instancia (no los de otras instancias en la misma maquina).
-  [int]$Puerto = 3100,
-  # Nombre del servicio Windows de ESTA instancia (vacio = no hay servicio,
-  # se arranca por VBS/npm). Demo: (vacio). Peiretti: AgroCore-Backend. Borghi: AgroCore-Borghi.
+  # Puerto de ESTA instancia (Demo/Peiretti 3100, Borghi 3101). Si no se pasa, se
+  # lee del .env de la instalacion. Se usa para matar SOLO el node de esta instancia.
+  [int]$Puerto = 0,
+  # Nombre del servicio Windows de ESTA instancia (vacio = autodetectar por la carpeta).
+  # Demo: (vacio). Peiretti: AgroCore-Backend. Borghi: AgroCore-Borghi.
   [string]$Servicio = ""
 )
-# Nombre de servicio efectivo: si no vino por parametro, probamos el legacy.
+# --- Resolucion automatica de instancia (para que la copia de cada install se actualice a si misma) ---
+if (-not $InstallDir) { $InstallDir = if ($PSScriptRoot) { $PSScriptRoot } else { "C:\AgroCore" } }
+if (-not $Puerto -or $Puerto -eq 0) {
+  $envFile = Join-Path $InstallDir "backend\.env"
+  if (Test-Path $envFile) {
+    $m = Select-String -Path $envFile -Pattern '^\s*PORT\s*=\s*(\d+)' | Select-Object -First 1
+    if ($m) { $Puerto = [int]$m.Matches[0].Groups[1].Value }
+  }
+  if (-not $Puerto -or $Puerto -eq 0) { $Puerto = 3100 }
+}
+if (-not $Servicio) {
+  try {
+    $svc = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+           Where-Object { $_.PathName -like "*$InstallDir*" } | Select-Object -First 1
+    if ($svc) { $Servicio = $svc.Name }
+  } catch {}
+}
+Write-Host "[..] Instancia: $InstallDir  (puerto $Puerto, servicio $(if($Servicio){$Servicio}else{'-'}))" -ForegroundColor Gray
+# Nombre de servicio efectivo: si no vino por parametro ni autodeteccion, probamos el legacy.
 $svcName = if ($Servicio) { $Servicio } else { 'AgroCore-Backend' }
 
 function Pause-IfInteractive($prompt) {

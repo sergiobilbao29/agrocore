@@ -2321,6 +2321,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
+      titulo:'✏️ v1.33.0 — Editar labor con el formulario completo',
+      desc:'Al tocar el ✏️ de una labor en Insumos y labores ahora se abre el <b>formulario completo de labor</b> (con precio, tipo y moneda), no el modal resumido. (Si venías de la 1.32.0, esta versión asegura que el cambio baje a tu servidor.)' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
       titulo:'💱 v1.32.0 — Costos de campaña en una sola moneda (elegís $ o u$s) + labores con su moneda',
       desc:'En <b>Insumos y labores</b> ahora elegís arriba si querés ver los costos en <b>dólares o pesos</b>, y el sistema <b>convierte todo a esa moneda</b> (los insumos están en u$s y las labores en la moneda de su precio). El número por hectárea ahora es el <b>costo real por ha del lote</b> (total ÷ ha), no un promedio raro. En el <b>catálogo de Labores</b>, el precio de referencia se puede cargar en <b>la moneda que quieras</b> (ese precio se usa para la ganancia del empleado y para mostrar el gasto de la labor en la campaña), y la labor ya muestra su costo (antes quedaba en 0). Al <b>editar una labor</b> se abre el <b>formulario completo de labor</b> (con precio, tipo y moneda), no el modal resumido.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'29/06/2026',
