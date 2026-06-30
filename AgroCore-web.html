@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
+      titulo:'🎯 v1.41.0 — Filtro de Tipo ligado al catálogo + filtros unificados',
+      desc:'(1) El filtro <b>Tipo</b> de Insumos y labores ahora trae los tipos del <b>catálogo</b> y relaciona cada insumo con su tipo: si elegís “Herbicida”, ves solo los herbicidas. (2) Los filtros <b>Insumo</b> y <b>Tipo</b> usan el <b>mismo componente</b> que Stock y Movimientos (se cierran al “Aplicar”, al hacer clic afuera, y “Todas” destilda).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
       titulo:'☑️ v1.40.0 — Filtro por Tipo en Insumos y labores + arreglo del botón “Todas”',
       desc:'(1) En <b>Insumos y labores</b> se agregó el filtro <b>Tipo</b> (Herbicida, Coadyuvante, etc.) con selección múltiple, igual que el de Insumo. (2) Se arregló el botón <b>“Todas”</b> de los filtros multi-selección de Stock y Movimientos: ahora <b>destilda</b> todo correctamente (antes quedaban marcados los que tenías elegidos).' },
@@ -15710,8 +15713,16 @@ pages.insumos = async function() {
 
   // Items únicos (de aplicaciones cargadas) para los filtros
   const insumosUsados = [...new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.item||'').trim()).filter(Boolean))].sort();
-  // Tipos/categorías de insumo usados (Herbicida, Coadyuvante, etc. = subtipo de la aplicación)
-  const tiposUsados = [...new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.subtipo||'').trim()).filter(Boolean))].sort();
+  // Tipo de cada insumo según el CATÁLOGO (insumo del catálogo → su tipo Herbicida/Coadyuvante/etc.).
+  // Si no está en el catálogo, caemos al tipo que se guardó en la aplicación.
+  const insTipoMap = {}; insumosCat.forEach(c => { if (c.nombre) insTipoMap[c.nombre.trim().toLowerCase()] = (c.tipo||'').trim(); });
+  const tipoDeApp = (a) => insTipoMap[(a.item||'').trim().toLowerCase()] || (a.subtipo||'').trim();
+  // Opciones del filtro Tipo: las del catálogo (tipos de insumo) + los tipos realmente usados.
+  const tiposUsados = [...new Set([
+    ...catByTipo('Tipo de insumo').map(c=>c.nombre),
+    ...insumosCat.map(c=>c.tipo),
+    ...aplics.filter(a=>a.tipo==='insumo').map(a=>tipoDeApp(a)),
+  ].map(t=>(t||'').trim()).filter(Boolean))].sort();
   const laboresUsadas = [...new Set(aplics.filter(a=>a.tipo==='labor' ).map(a=>(a.item||'').trim()).filter(Boolean))].sort();
   // Ciclos disponibles (catálogo Ciclo + los usados en campañas)
   const ciclosUsados = [...new Set([
@@ -15725,7 +15736,7 @@ pages.insumos = async function() {
   const insFiltrando = f.insumos.length || f.tipos.length; // filtros que apuntan a insumos
   const aplicsFiltradas = aplics.filter(a => {
     if (f.insumos.length && a.tipo === 'insumo' && !f.insumos.includes((a.item||'').trim())) return false;
-    if (f.tipos.length && a.tipo === 'insumo' && !f.tipos.includes((a.subtipo||'').trim())) return false;
+    if (f.tipos.length && a.tipo === 'insumo' && !f.tipos.includes(tipoDeApp(a))) return false;
     if (f.labor  && a.tipo === 'labor'  && (a.item||'').trim() !== f.labor)  return false;
     // Si filtra por insumo/tipo, esconder labores; si filtra por labor, esconder insumos
     if (insFiltrando && !f.labor && a.tipo !== 'insumo') return false;
@@ -15826,23 +15837,7 @@ pages.insumos = async function() {
         </div>
         <div class="md:col-span-2">
           <label class="label">Insumo</label>
-          <details id="ins-insumo-dd" class="ac-ms" ${state._insDDOpen?'open':''} style="position:relative">
-            <summary class="input" style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:6px">
-              <span class="ins-ms-lbl truncate">${f.insumos.length ? (f.insumos.length+' seleccionado'+(f.insumos.length>1?'s':'')) : 'Todos'}</span>
-              <span style="color:#94a3b8">▾</span>
-            </summary>
-            <div style="position:absolute;z-index:40;left:0;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 10px 28px -8px rgba(0,0,0,.28);max-height:260px;overflow:auto;padding:6px">
-              ${insumosUsados.length ? insumosUsados.map(i => `
-                <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:13px;cursor:pointer;border-radius:7px" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background=''">
-                  <input type="checkbox" class="ins-ms-cb" value="${esc(i)}" ${f.insumos.includes(i)?'checked':''}/>
-                  <span>${esc(i)}</span>
-                </label>`).join('') : '<div class="text-xs text-slate-400 px-2 py-2">Sin insumos cargados</div>'}
-              ${insumosUsados.length ? `<div class="flex gap-2 mt-1 pt-2 border-t border-slate-100">
-                <button type="button" class="btn btn-secondary text-xs flex-1" onclick="insMsClear()">Todos</button>
-                <button type="button" class="btn btn-primary text-xs flex-1" onclick="insMsApply()">Aplicar</button>
-              </div>` : ''}
-            </div>
-          </details>
+          ${msHTML('ins-insumo', insumosUsados, f.insumos, 'insIns', 'Todos')}
         </div>
         <div class="md:col-span-2">
           <label class="label">Labor</label>
@@ -15973,21 +15968,9 @@ pages.insumos = async function() {
   bindFilter('ins-ciclo',  'ciclo');
   bindFilter('ins-campo',  'campoId');
   bindFilter('ins-labor',  'labor');
-  // Filtro de Tipo (categoría de insumo): multi-selección con el componente genérico.
-  msWire('ins-tipo', 'insTipo', vals => { state.insFilter.tipos = vals; }, () => pages.insumos(), 'Todos');
-  // Filtro de insumos: multi-selección con checkboxes.
-  const dd = document.getElementById('ins-insumo-dd');
-  if (dd) {
-    dd.addEventListener('toggle', () => { state._insDDOpen = dd.open; });
-    dd.querySelectorAll('.ins-ms-cb').forEach(cb => {
-      cb.onchange = () => {
-        const vals = [...dd.querySelectorAll('.ins-ms-cb:checked')].map(x => x.value);
-        state.insFilter.insumos = vals;
-        const lbl = dd.querySelector('.ins-ms-lbl');
-        if (lbl) lbl.textContent = vals.length ? (vals.length+' seleccionado'+(vals.length>1?'s':'')) : 'Todos';
-      };
-    });
-  }
+  // Filtros multi-selección (mismo componente que Stock/Movimientos).
+  msWire('ins-tipo',   'insTipo', vals => { state.insFilter.tipos   = vals; }, () => pages.insumos(), 'Todos');
+  msWire('ins-insumo', 'insIns',  vals => { state.insFilter.insumos = vals; }, () => pages.insumos(), 'Todos');
   const monEl = $('#ins-moneda');
   if (monEl) monEl.onchange = e => { state.insMoneda = e.target.value; try { localStorage.setItem('ac.insMoneda', state.insMoneda); } catch {} pages.insumos(); };
   // Después de guardar un insumo/labor volvemos a la tarjeta donde estabas (no al tope).
@@ -15999,12 +15982,9 @@ pages.insumos = async function() {
 };
 function insumosFiltrosLimpiar() {
   state.insFilter = { campana:'', insumos:[], tipos:[], labor:'', campoId:'', ciclo:'' };
-  state._insDDOpen = false; state._ms_insTipo = false;
+  state._ms_insIns = false; state._ms_insTipo = false;
   pages.insumos();
 }
-// Multi-selección de insumos: aplicar / limpiar la selección.
-function insMsApply(){ state._insDDOpen = false; pages.insumos(); }
-function insMsClear(){ state.insFilter.insumos = []; state._insDDOpen = false; pages.insumos(); }
 function insumosExportarExcel() {
   const aplics = state.cache.aplicaciones || [];
   const campanas = state.cache.campanas || [];
