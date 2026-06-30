@@ -1344,6 +1344,35 @@ function catByTipo(tipos) {
              .sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
 }
 
+// ---- Tipos de insumo (relación Insumo → Tipo de insumo desde el catálogo) ----
+// Un INSUMO del catálogo es una fila cuyo "tipo" es el nombre de un "Tipo de insumo".
+// Estos son los tipos heredados (compat) para no perder insumos cargados antes de
+// que el catálogo de Tipos de insumo manejara la lista.
+const LEGACY_INS_TIPOS = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'];
+// Nombres de los Tipos de insumo: los del catálogo "Tipo de insumo" + los heredados.
+function tiposInsumoNombres() {
+  const cats = state.cache.catalogos || [];
+  const fromCat = cats.filter(c => c.tipo === 'Tipo de insumo' && c.activo !== false)
+                      .map(c => (c.nombre||'').trim()).filter(Boolean);
+  return [...new Set([...fromCat, ...LEGACY_INS_TIPOS])];
+}
+// Tipos de insumo "elegibles" en formularios (preferimos el catálogo del usuario;
+// si está vacío, caemos a la lista estándar — sin el genérico "Insumo").
+function tiposInsumoElegibles(actual) {
+  const cats = state.cache.catalogos || [];
+  const fromCat = cats.filter(c => c.tipo === 'Tipo de insumo' && c.activo !== false)
+                      .map(c => (c.nombre||'').trim()).filter(Boolean);
+  let arr = fromCat.length ? fromCat : ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante'];
+  if (actual && !arr.includes(actual)) arr = [actual, ...arr];   // que el valor actual siempre aparezca
+  return [...new Set(arr)];
+}
+// Insumos del catálogo (filas cuyo tipo es un Tipo de insumo).
+function insumosDelCatalogo() {
+  const cats = state.cache.catalogos || [];
+  const tset = new Set(tiposInsumoNombres());
+  return cats.filter(c => tset.has(c.tipo));
+}
+
 // Lista de Condiciones de pago. Soporta DOS modos:
 //   - Por días: el "codigo" del catálogo es un número (ej. "0", "15", "30", "360")
 //   - A fecha fija: el "codigo" empieza con "F:" seguido de fecha YYYY-MM-DD
@@ -2320,6 +2349,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
+      titulo:'🔗 v1.42.0 — Insumos ligados a Tipos de insumo del catálogo',
+      desc:'Ahora cada <b>Insumo</b> del catálogo tiene su <b>Tipo de insumo</b> elegido del <b>catálogo de Tipos de insumo</b> (no de una lista fija). En <b>Insumos y labores</b>: el filtro <b>Tipo</b> trae los tipos del catálogo y, al elegir uno, el filtro <b>Insumo</b> muestra <b>solo los insumos de ese tipo</b> (cascada). El filtro <b>Labor</b> trae las labores del <b>catálogo de Labores</b>. Si todavía no cargaste Tipos de insumo, se usan los estándar (Herbicida, Insecticida, etc.) hasta que definas los tuyos.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
       titulo:'🎯 v1.41.0 — Filtro de Tipo ligado al catálogo + filtros unificados',
       desc:'(1) El filtro <b>Tipo</b> de Insumos y labores ahora trae los tipos del <b>catálogo</b> y relaciona cada insumo con su tipo: si elegís “Herbicida”, ves solo los herbicidas. (2) Los filtros <b>Insumo</b> y <b>Tipo</b> usan el <b>mismo componente</b> que Stock y Movimientos (se cierran al “Aplicar”, al hacer clic afuera, y “Todas” destilda).' },
@@ -15685,7 +15717,7 @@ pages.insumos = async function() {
     campos = (await api('/api/campos').catch(()=>({data:[]}))).data || [];
     const cats = (await api('/api/catalogos')).data || [];
     state.cache.catalogos = cats;
-    insumosCat = cats.filter(c => ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'].includes(c.tipo));
+    insumosCat = cats.filter(c => tiposInsumoNombres().includes(c.tipo));
     laboresCat = cats.filter(c => c.tipo === 'Labor');
     aplics = (await api('/api/aplicaciones').catch(()=>({data:[]}))).data || [];
     state.cache.productos = (await api('/api/productos').catch(()=>({data:state.cache.productos||[]}))).data || [];
@@ -15711,19 +15743,28 @@ pages.insumos = async function() {
   if (!Array.isArray(f.tipos)) f.tipos = [];
   delete f.insumo;
 
-  // Items únicos (de aplicaciones cargadas) para los filtros
-  const insumosUsados = [...new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.item||'').trim()).filter(Boolean))].sort();
-  // Tipo de cada insumo según el CATÁLOGO (insumo del catálogo → su tipo Herbicida/Coadyuvante/etc.).
+  // Tipo de cada insumo según el CATÁLOGO (insumo del catálogo → su Tipo de insumo).
   // Si no está en el catálogo, caemos al tipo que se guardó en la aplicación.
   const insTipoMap = {}; insumosCat.forEach(c => { if (c.nombre) insTipoMap[c.nombre.trim().toLowerCase()] = (c.tipo||'').trim(); });
   const tipoDeApp = (a) => insTipoMap[(a.item||'').trim().toLowerCase()] || (a.subtipo||'').trim();
-  // Opciones del filtro Tipo: las del catálogo (tipos de insumo) + los tipos realmente usados.
+  // Opciones del filtro Tipo: salen del catálogo de Tipos de insumo (+ los realmente usados).
   const tiposUsados = [...new Set([
     ...catByTipo('Tipo de insumo').map(c=>c.nombre),
     ...insumosCat.map(c=>c.tipo),
     ...aplics.filter(a=>a.tipo==='insumo').map(a=>tipoDeApp(a)),
   ].map(t=>(t||'').trim()).filter(Boolean))].sort();
-  const laboresUsadas = [...new Set(aplics.filter(a=>a.tipo==='labor' ).map(a=>(a.item||'').trim()).filter(Boolean))].sort();
+  // Opciones del filtro Insumo: salen del catálogo; si hay Tipo(s) elegido(s), CASCADEAN
+  // y solo muestran los insumos de esos tipos. Sumamos los usados que no estén en catálogo.
+  const insumosUsadosSet = new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.item||'').trim()).filter(Boolean));
+  const insumosUsados = [...new Set([
+    ...insumosCat.filter(c => !f.tipos.length || f.tipos.includes((c.tipo||'').trim())).map(c=>c.nombre),
+    ...[...insumosUsadosSet].filter(n => !f.tipos.length || f.tipos.includes(insTipoMap[n.trim().toLowerCase()] || '')),
+  ].map(n=>(n||'').trim()).filter(Boolean))].sort();
+  // Opciones del filtro Labor: salen del catálogo de Labores (+ las realmente usadas).
+  const laboresUsadas = [...new Set([
+    ...catByTipo('Labor').map(c=>c.nombre),
+    ...aplics.filter(a=>a.tipo==='labor').map(a=>(a.item||'').trim()),
+  ].map(l=>(l||'').trim()).filter(Boolean))].sort();
   // Ciclos disponibles (catálogo Ciclo + los usados en campañas)
   const ciclosUsados = [...new Set([
     ...catByTipo('Ciclo').map(c=>c.nombre),
@@ -15993,9 +16034,12 @@ function insumosExportarExcel() {
   const insArr = Array.isArray(f.insumos) ? f.insumos : (f.insumo ? [f.insumo] : []);
   const tipArr = Array.isArray(f.tipos) ? f.tipos : [];
   const insFiltrando = insArr.length || tipArr.length;
+  // Tipo de cada insumo según el catálogo (igual que en pantalla).
+  const _insTipoMap = {}; insumosDelCatalogo().forEach(c => { if (c.nombre) _insTipoMap[c.nombre.trim().toLowerCase()] = (c.tipo||'').trim(); });
+  const _tipoDe = (a) => _insTipoMap[(a.item||'').trim().toLowerCase()] || (a.subtipo||'').trim();
   const filt = aplics.filter(a => {
     if (insArr.length && a.tipo === 'insumo' && !insArr.includes((a.item||'').trim())) return false;
-    if (tipArr.length && a.tipo === 'insumo' && !tipArr.includes((a.subtipo||'').trim())) return false;
+    if (tipArr.length && a.tipo === 'insumo' && !tipArr.includes(_tipoDe(a))) return false;
     if (f.labor  && a.tipo === 'labor'  && (a.item||'').trim() !== f.labor)  return false;
     if (insFiltrando && !f.labor && a.tipo !== 'insumo') return false;
     if (f.labor  && !insFiltrando && a.tipo !== 'labor') return false;
@@ -16053,14 +16097,11 @@ function insumosExportarExcel() {
 }
 
 // Subtipos de insumo (compartidos por las filas de la tabla).
-const INS_SUBTIPOS = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Otro'];
 let _insRowSeq = 0;
-// Opciones de productos del catálogo filtradas por tipo de insumo elegido.
+// Opciones de insumos del catálogo filtradas por el Tipo de insumo elegido.
 function insDatalistOpts(tipo){
   const cat = state.cache.insumosCat || [];
-  let items = cat.filter(c => c.tipo === tipo);
-  if (tipo === 'Otro') items = cat.filter(c => !['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante'].includes(c.tipo));
-  return items.map(c => `<option value="${esc(c.nombre)}">`).join('');
+  return cat.filter(c => c.tipo === tipo).map(c => `<option value="${esc(c.nombre)}">`).join('');
 }
 // Al cambiar el tipo, refrescamos la lista de productos de esa fila (solo los de ese tipo).
 function insTipoChange(sel){
@@ -16120,9 +16161,10 @@ function insCampHa(){
 }
 function insRowHTML(){
   const rid = ++_insRowSeq;
-  const tipo0 = INS_SUBTIPOS[0];
+  const tipos = tiposInsumoElegibles();
+  const tipo0 = tipos[0];
   return `<tr data-ins>
-    <td><select class="input text-sm" data-if="sub" onchange="insTipoChange(this)">${INS_SUBTIPOS.map(s=>`<option ${s===tipo0?'selected':''}>${s}</option>`).join('')}</select></td>
+    <td><select class="input text-sm" data-if="sub" onchange="insTipoChange(this)">${tipos.map(s=>`<option ${s===tipo0?'selected':''}>${esc(s)}</option>`).join('')}</select></td>
     <td><input class="input text-sm" list="ins-dl-${rid}" data-if="item" style="min-width:170px" placeholder="Producto" onchange="insItemPick(this)"/><input type="hidden" data-if="pid"/><datalist id="ins-dl-${rid}">${insDatalistOpts(tipo0)}</datalist></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-if="uha" style="width:88px" oninput="insRowRecalc(this)"/></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-if="pu" style="width:100px" oninput="insRowRecalc(this)"/></td>
@@ -16231,7 +16273,7 @@ function aplicEditForm(a){
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2"><label class="label">${esIns?'Producto':'Labor'} *</label><input id="ae-item" class="input" value="${esc(a.item||'')}"/></div>
         ${esIns?`
-        <div><label class="label">Tipo</label><select id="ae-sub" class="input">${INS_SUBTIPOS.map(s=>`<option ${s===a.subtipo?'selected':''}>${s}</option>`).join('')}</select></div>
+        <div><label class="label">Tipo</label><select id="ae-sub" class="input">${tiposInsumoElegibles(a.subtipo).map(s=>`<option ${s===a.subtipo?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
         <div><label class="label">Unid/ha</label><input id="ae-uha" type="number" step="0.01" class="input" value="${a.unidadHa??''}"/></div>
         <div><label class="label">u\$s/unidad</label><input id="ae-pu" type="number" step="0.01" class="input" value="${a.precioUnit??''}"/></div>`:''}
         <div><label class="label">u\$s/ha</label><input id="ae-cha" type="number" step="0.01" class="input" value="${a.costoHa??''}"/></div>
@@ -16634,6 +16676,7 @@ pages.catalogos = async function() {
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows=[];
   try { rows = await crudList('catalogos'); } catch (e) { return toast(e.message,'error'); }
+  state.cache.catalogos = rows;  // para que tiposInsumoNombres()/catByTipo trabajen con datos frescos
 
   // "Categorías de animales" se gestiona con la config unificada de hacienda
   // (especie + kg + peso + matriz). Al pedirla, el backend mergea el catálogo y
@@ -16646,6 +16689,8 @@ pages.catalogos = async function() {
 
   const porTab = {};
   CAT_TABS.forEach(t => { porTab[t.id] = rows.filter(r => t.tipos.includes(r.tipo)); });
+  // La pestaña Insumos es dinámica: incluye toda fila cuyo tipo sea un "Tipo de insumo".
+  porTab.insumos = rows.filter(r => tiposInsumoNombres().includes(r.tipo));
   porTab.categAn = configAnimales;
   porTab.monedas = monedasCat;
 
@@ -16824,7 +16869,8 @@ function catSwitch(tabId) { state.catTab = tabId; pages.catalogos(); }
 function catForm(id=null, tabId=null) {
   const it = id ? (state.cache.catalogos||[]).find(x=>x.id===id)||{} : {};
   const tab = CAT_TABS.find(x=>x.id===(tabId||state.catTab)) || CAT_TABS[0];
-  const sugeridos = tab.tipos;
+  // En la pestaña Insumos, el "Tipo" se elige del catálogo de Tipos de insumo.
+  const sugeridos = tab.id === 'insumos' ? tiposInsumoElegibles(it.tipo) : tab.tipos;
   const tipoActual = it.tipo || sugeridos[0];
   // Campo "pertenece a" según el tipo geográfico
   let parentField = '';
