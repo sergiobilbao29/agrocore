@@ -2350,6 +2350,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
+      titulo:'🧹 v1.43.0 — Más campos tomados del catálogo (homogeneidad)',
+      desc:'Auditamos el sistema y vinculamos a sus catálogos varios campos que estaban como texto libre o lista fija: <b>Unidad</b> en el alta rápida de producto, <b>Categoría</b> de movimientos de caja y de cuenta corriente manual (catálogo Categoría de gasto), <b>Producto/grano</b> y <b>Unidad</b> en Viajes, y <b>Grano</b> en Arrendamientos (catálogo Cereal). Los valores ya cargados que no estén en el catálogo se conservan marcados como "(legado)".' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
       titulo:'🔗 v1.42.0 — Insumos ligados a Tipos de insumo del catálogo',
       desc:'Ahora cada <b>Insumo</b> del catálogo tiene su <b>Tipo de insumo</b> elegido del <b>catálogo de Tipos de insumo</b> (no de una lista fija). En <b>Insumos y labores</b>: el filtro <b>Tipo</b> trae los tipos del catálogo y, al elegir uno, el filtro <b>Insumo</b> muestra <b>solo los insumos de ese tipo</b> (cascada). El filtro <b>Labor</b> trae las labores del <b>catálogo de Labores</b>. Si todavía no cargaste Tipos de insumo, se usan los estándar (Herbicida, Insecticida, etc.) hasta que definas los tuyos.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
@@ -8599,7 +8602,7 @@ function nuevoItemRapido(btn) {
         <div><label class="label">Nombre *</label><input id="ni-nombre" class="input" placeholder="Ej. Glifosato Sulfosato"/></div>
         <div class="grid grid-cols-2 gap-3">
           <div><label class="label">Unidad</label>
-            <input id="ni-unidad" class="input" placeholder="kg, L, t, cabezas..."/>
+            ${catSelect('ni-unidad', 'Unidad de medida', '', { placeholder:'— Unidad —' })}
           </div>
           <div><label class="label">Tipo</label>
             <select id="ni-tipo" class="input">
@@ -11537,7 +11540,11 @@ pages.ctasCtes = async function() {
   if (tab === 'otros') {
     // Los "manuales / libres" tienen sus PROPIOS totales: alquileres, impuestos,
     // servicios, etc. NO se mezclan con clientes ni proveedores.
-    const cats = ['Arrendamiento','Servicio','Impuesto','Otro'];
+    // Categorías del filtro: catálogo "Categoría de gasto" + las realmente usadas.
+    const cats = [...new Set([
+      ...catByTipo('Categoría de gasto').map(c=>c.nombre),
+      ...libres.map(m=>(m.categoria||'').trim()),
+    ].filter(Boolean))].sort();
     state.ccLibreFilter = state.ccLibreFilter || { categoria:'', estado:'pendientes', direccion:'' };
     const lf = state.ccLibreFilter;
 
@@ -12354,8 +12361,7 @@ async function ccForm(id=null) {
           </div>
           <div>
             <label class="label">Categoría</label>
-            <input id="f-cat" class="input" list="f-cat-list" value="${esc(it.categoria||'')}" placeholder="Arrendamiento, Servicio, Impuesto..."/>
-            <datalist id="f-cat-list">${cats.map(c=>`<option value="${c}">`).join('')}</datalist>
+            ${catSelect('f-cat', 'Categoría de gasto', it.categoria||'', { placeholder:'— Categoría —' })}
           </div>
           <div><label class="label">Vencimiento</label><input id="f-venc" type="date" class="input" value="${vencStr}"/></div>
         </div>
@@ -12729,7 +12735,7 @@ function fcForm() {
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
         <div><label class="label">Categoría</label>
-          <select id="f-cat" class="input">${['','Ventas','Compras','Sueldos','Arrendamientos','Impuestos','Servicios','Bancos','Otros'].map(c=>`<option>${c}</option>`).join('')}</select>
+          ${catSelect('f-cat', 'Categoría de gasto', '', { placeholder:'— Categoría —' })}
         </div>
         <div class="col-span-2"><label class="label">Concepto *</label><input id="f-con" class="input"/></div>
         <div class="col-span-2"><label class="label">Monto * (positivo = ingreso, negativo = egreso)</label><input id="f-mon" type="number" step="0.01" class="input"/></div>
@@ -13072,7 +13078,7 @@ function viajeForm(id=null) {
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5 mt-1">Viaje</h4>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${fechaStr}"/></div>
-        <div><label class="label">Producto / Carga</label><input id="f-prod" class="input" value="${esc(it.producto||'')}" placeholder="Soja / Maíz / Girasol"/></div>
+        <div><label class="label">Producto / Carga</label>${catSelect('f-prod', 'Cereal', it.producto||'', { placeholder:'— Producto —' })}</div>
         <div class="col-span-2"></div>
         <div class="col-span-2"><label class="label">Origen</label><input id="f-ori" class="input" value="${esc(it.origen||'')}" placeholder="Ej: Sampacho, Córdoba"/></div>
         <div class="col-span-2"><label class="label">Destino</label><input id="f-des" class="input" value="${esc(it.destino||'')}" placeholder="Ej: Quequén, Buenos Aires"/></div>
@@ -13086,7 +13092,7 @@ function viajeForm(id=null) {
         <div><label class="label">Kg carga</label><input id="f-kg" type="number" step="0.01" class="input" value="${it.cantidad||''}" oninput="viajeRecalcDif()"/></div>
         <div><label class="label">Kg descarga</label><input id="f-kgd" type="number" step="0.01" class="input" value="${it.kgDescarga||''}" oninput="viajeRecalcDif()"/></div>
         <div><label class="label">Diferencia</label><div id="f-dif" class="input bg-slate-50 font-semibold flex items-center">—</div></div>
-        <div><label class="label">Unidad</label><input id="f-uni" class="input" value="${esc(it.unidad||'kg')}" placeholder="kg / tn"/></div>
+        <div><label class="label">Unidad</label>${catSelect('f-uni', 'Unidad de medida', it.unidad||'', { placeholder:'— Unidad —' })}</div>
       </div>
 
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">⚖️ Pesaje del camión (para Carta de Porte)</h4>
@@ -17214,9 +17220,7 @@ async function arrForm(id=null) {
         <div id="arr-quintales" class="col-span-2" style="display:none">
           <div class="grid grid-cols-3 gap-3">
             <div><label class="label">Grano</label>
-              <select id="f-grano" class="input" onchange="arrCuotasRecalc()">
-                ${ARR_GRANOS.map(g=>`<option value="${g}" ${it.grano===g?'selected':''}>${g.charAt(0)+g.slice(1).toLowerCase()}</option>`).join('')}
-              </select>
+              ${catSelect('f-grano', 'Cereal', it.grano||'', { placeholder:'— Grano —', attr:'onchange="arrCuotasRecalc()"' })}
             </div>
             <div><label class="label">qq/ha en blanco</label><input id="f-qqb" class="input" type="number" step="0.01" value="${it.quintalesHaBlanco??''}" oninput="arrCuotasRecalc()"/></div>
             <div><label class="label">qq/ha en negro</label><input id="f-qqn" class="input" type="number" step="0.01" value="${it.quintalesHaNegro??''}" oninput="arrCuotasRecalc()"/></div>
