@@ -252,7 +252,8 @@ model LaborAplicada {
   hectareasAplicadas  Float?     // Hectareas reales donde se aplico (NULL = lote completo, legado)
   fecha               DateTime
   responsable         String?    // texto libre (legado, sigue funcionando)
-  costo               Float?
+  costo               Float?     // costo por hectárea de la labor (en monedaCosto)
+  monedaCosto         String?    // moneda del costo/precio de la labor (ARS/USD/...) — default USD
   observaciones       String?
   // ---- Empleado responsable + cálculo de ganancia por % ----
   empleadoId          String?    // empleado externo / propio que realizó la labor
@@ -1026,6 +1027,7 @@ model Catalogo {
   // el form de Labor avanzada (precio referencia + tipo). Sigue editable al cargar.
   precioReferencia Float?
   tipoPrecio       String?    // "por_hectarea" | "total" (sólo aplica si hay precioReferencia)
+  monedaPrecio     String?    // moneda del precio de referencia (ARS/USD/...) — labores
   // Para catálogos de tipo "Labor": insumos típicos que se autopopulan al elegir
   // la labor en una Labor Avanzada. Array JSON con [{ productoId, cantidad, unidad }].
   // La cantidad se interpreta POR HECTÁREA (ej. Gasoil 5 lt/ha) y el sistema multiplica

@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.31.0';
+const AGROCORE_VERSION = '1.32.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2167,12 +2167,12 @@ app.get('/api/aplicaciones', requireCompany, requirePermission('produccion:read'
       ...ins.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'insumo',
         item: x.nombre, subtipo: x.unidad || null,
         unidadHa: x.cantidad, precioUnit: x.precioUnit ?? null,
-        costoHa: x.costo, hectareasAplicadas: x.hectareasAplicadas,
+        costoHa: x.costo, moneda: 'USD', hectareasAplicadas: x.hectareasAplicadas,
         fecha: x.fecha, observaciones: x.observaciones })),
       ...lab.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'labor',
         item: x.tipo, subtipo: null,
         unidadHa: null, precioUnit: null,
-        costoHa: x.costo, hectareasAplicadas: x.hectareasAplicadas,
+        costoHa: x.costo, moneda: x.monedaCosto || 'USD', hectareasAplicadas: x.hectareasAplicadas,
         fecha: x.fecha, observaciones: x.observaciones })),
     ];
     res.json({ ok: true, data });
@@ -4307,6 +4307,7 @@ mountCrud({
     descripcion: z.string().nullable().optional(),
     precioReferencia: z.number().nullable().optional(),
     tipoPrecio: z.enum(['por_hectarea', 'total']).nullable().optional(),
+    monedaPrecio: z.string().nullable().optional(),
     // Insumos típicos (Labor): [{ productoId, cantidad, unidad }] interpretado por hectárea
     insumosDefault: z.array(z.object({
       productoId: z.string(),
@@ -4987,6 +4988,7 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
       fecha: z.coerce.date(),
       hectareasAplicadas: z.number().nullable().optional(),
       costo: z.number().nullable().optional(),
+      monedaCosto: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       empleadoId: z.string().nullable().optional(),
       precioReferencia: z.number().nullable().optional(),
@@ -5039,6 +5041,7 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
           campanaId: d.campanaId, tipo: d.tipo, fecha: d.fecha,
           hectareasAplicadas: d.hectareasAplicadas ?? null,
           costo: d.costo ?? null,
+          monedaCosto: d.monedaCosto || 'USD',
           observaciones: d.observaciones || null,
           empleadoId: primero ? primero.emp.id : null,
           precioReferencia: d.precioReferencia ?? null,

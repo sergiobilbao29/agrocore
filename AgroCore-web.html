@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
+      titulo:'💱 v1.32.0 — Costos de campaña en una sola moneda (elegís $ o u$s) + labores con su moneda',
+      desc:'En <b>Insumos y labores</b> ahora elegís arriba si querés ver los costos en <b>dólares o pesos</b>, y el sistema <b>convierte todo a esa moneda</b> (los insumos están en u$s y las labores en la moneda de su precio). El número por hectárea ahora es el <b>costo real por ha del lote</b> (total ÷ ha), no un promedio raro. En el <b>catálogo de Labores</b>, el precio de referencia se puede cargar en <b>la moneda que quieras</b> (ese precio se usa para la ganancia del empleado y para mostrar el gasto de la labor en la campaña), y la labor ya muestra su costo (antes quedaba en 0).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'29/06/2026',
       titulo:'🛠️ v1.31.0 — Insumos y labores: editar renglón, precios que se guardan y botones arreglados',
       desc:'(1) Se arreglaron los botones generales <b>+ Insumo</b> y <b>+ Labor</b> de arriba (no abrían). (2) Ahora podés <b>editar un renglón</b> de insumo o labor (✏️) sin tener que borrarlo y volver a cargarlo. (3) Las <b>labores guardan su costo (u$s/ha)</b> y se ven en la pantalla general. (4) Los <b>insumos guardan el u$s/unidad</b> y, al elegir el producto, se <b>autocompleta el precio</b> con el último costo de compra (o el precio de referencia) — también en los insumos consumidos dentro de una labor.' },
@@ -15572,6 +15575,22 @@ function empReciboPDF(){
  * INSUMOS Y LABORES (catálogos)
  * ========================================================= */
 /* ---------- INSUMOS Y LABORES (por campaña / lote) ---------- */
+// Moneda en que se muestran los costos de campaña ('USD' o 'ARS'). Se puede elegir arriba.
+function insMonModo(){ return state.insMoneda || 'USD'; }
+function insSym(){ return insMonModo()==='ARS' ? '$' : 'u$s'; }
+// Convierte un importe desde su moneda nativa a la moneda elegida para mostrar.
+function insConv(monto, fromMon){
+  const cv = state.cache.cotizVivas || {};
+  const usd = Number(cv.USD||0);
+  const m = Number(monto||0);
+  const from = fromMon || 'USD';
+  let ars;
+  if (from === 'ARS') ars = m;
+  else if (from === 'USD') ars = m * usd;
+  else ars = m * Number(cv[from]||0);   // grano u otra moneda → ARS por pizarra/cotización
+  if (insMonModo() === 'ARS') return ars;
+  return usd > 0 ? ars / usd : (from === 'USD' ? m : 0);
+}
 pages.insumos = async function() {
   setHeader('Insumos y labores', 'Aplicaciones por lote y campaña');
   if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('insumos','Insumos y labores'); return; }
@@ -15591,6 +15610,8 @@ pages.insumos = async function() {
   state.cache.campanas = campanas; state.cache.lotes = lotes;
   state.cache.insumosCat = insumosCat; state.cache.laboresCat = laboresCat;
   state.cache.aplicaciones = aplics;
+  await cargarCotizVivas();  // para convertir costos a la moneda elegida
+  if (!state.insMoneda) { try { state.insMoneda = localStorage.getItem('ac.insMoneda') || 'USD'; } catch { state.insMoneda = 'USD'; } }
 
   state.insFilter = state.insFilter || { campana:'', insumo:'', labor:'', campoId:'', ciclo:'' };
   const f = state.insFilter;
@@ -15727,6 +15748,13 @@ pages.insumos = async function() {
     ${bannerTotales}
 
     <div class="mb-4 flex items-center justify-end flex-wrap gap-2">
+      <div class="mr-auto flex items-center gap-2">
+        <label class="text-xs text-slate-600 font-medium">💱 Ver costos en:</label>
+        <select id="ins-moneda" class="input" style="width:auto;padding:5px 8px;font-size:12px">
+          <option value="USD" ${insMonModo()==='USD'?'selected':''}>Dólares (u$s)</option>
+          <option value="ARS" ${insMonModo()==='ARS'?'selected':''}>Pesos ($)</option>
+        </select>
+      </div>
       <button class="btn btn-primary" onclick='aplicForm("insumo",${JSON.stringify(preselCamp)})'>+ Insumo</button>
       ${(can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:create'))?`<button class="btn btn-secondary" onclick='laborForm(true,${JSON.stringify(preselCamp)})' title="Cargar una labor: empleado responsable, insumos consumidos y, opcional, % de cobro del empleado.">+ Labor</button>`:''}
     </div>
@@ -15739,12 +15767,14 @@ pages.insumos = async function() {
             const haLote = Number(c.lote?.hectareas || 0);
             // Cada aplicación tiene su propia cantidad de hectáreas; si está vacío (legacy) usamos el total del lote
             const haDe = (a) => Number(a.hectareasAplicadas ?? haLote);
-            const costoInsTotal = insumosC.reduce((acc,x)=>acc + Number(x.costoHa||0) * haDe(x), 0);
-            const costoLabTotal = laboresC.reduce((acc,x)=>acc + Number(x.costoHa||0) * haDe(x), 0);
-            const haAplicadasInsumos = insumosC.reduce((acc,x)=>acc + haDe(x), 0);
-            const haAplicadasLabores = laboresC.reduce((acc,x)=>acc + haDe(x), 0);
-            const costoInsPorHa = haAplicadasInsumos ? costoInsTotal / haAplicadasInsumos : 0;
-            const costoLabPorHa = haAplicadasLabores ? costoLabTotal / haAplicadasLabores : 0;
+            // Total por ítem, convertido a la moneda elegida (insumos en USD, labores en su moneda).
+            const itemTotal = (a) => insConv(Number(a.costoHa||0) * haDe(a), a.moneda);
+            const costoInsTotal = insumosC.reduce((acc,x)=>acc + itemTotal(x), 0);
+            const costoLabTotal = laboresC.reduce((acc,x)=>acc + itemTotal(x), 0);
+            // Costo POR HECTÁREA del lote (no un promedio raro): total / hectáreas del lote.
+            const costoInsPorHa = haLote ? costoInsTotal / haLote : 0;
+            const costoLabPorHa = haLote ? costoLabTotal / haLote : 0;
+            const sym = insSym();
             return `
             <div class="kpi p-0 overflow-hidden">
               <div class="px-4 py-3 bg-slate-50 border-b flex items-center justify-between">
@@ -15754,7 +15784,8 @@ pages.insumos = async function() {
                 </div>
                 <div class="text-right text-xs">
                   <div class="text-slate-500">Costo real acumulado</div>
-                  <div class="font-bold text-lg">u$s ${fmtN(costoInsTotal+costoLabTotal)}</div>
+                  <div class="font-bold text-lg">${sym} ${fmtN(costoInsTotal+costoLabTotal)}</div>
+                  <div class="text-[11px] text-slate-500">${sym} ${fmtN(haLote?(costoInsTotal+costoLabTotal)/haLote:0)}/ha</div>
                 </div>
               </div>
               ${(can('produccion:create')||can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:update'))?`
@@ -15767,23 +15798,23 @@ pages.insumos = async function() {
               <div class="p-3 bg-white">
                 <div class="text-xs font-semibold text-slate-600 uppercase mb-2 flex items-center justify-between">
                   <span>🧪 Insumos (${insumosC.length})</span>
-                  <span class="text-emerald-700">u\$s ${fmtN(costoInsTotal)} · prom. ${fmtN(costoInsPorHa)}/ha</span>
+                  <span class="text-emerald-700">${sym} ${fmtN(costoInsTotal)} · ${fmtN(costoInsPorHa)}/ha</span>
                 </div>
                 ${insumosC.length === 0
                   ? '<div class="text-xs text-slate-400 italic py-2">Sin insumos cargados</div>'
                   : `<table class="data">
-                       <thead><tr><th>Item</th><th>Tipo</th><th class="text-right">Unid/ha</th><th class="text-right">u\$s/unid</th><th class="text-right">u\$s/ha</th><th class="text-right">Ha</th><th class="text-right">Total</th><th>Fecha</th><th></th></tr></thead>
+                       <thead><tr><th>Item</th><th>Tipo</th><th class="text-right">Unid/ha</th><th class="text-right">${sym}/unid</th><th class="text-right">${sym}/ha</th><th class="text-right">Ha</th><th class="text-right">Total</th><th>Fecha</th><th></th></tr></thead>
                        <tbody>${insumosC.map(a => {
                          const ha = haDe(a);
-                         const total = Number(a.costoHa||0) * ha;
+                         const total = itemTotal(a);
                          const isParcial = a.hectareasAplicadas != null && Number(a.hectareasAplicadas) < haLote;
                          return `
                          <tr class="table-row">
                            <td><b>${esc(a.item)}</b></td>
                            <td><span class="badge badge-blue">${esc(a.subtipo||'')}</span></td>
                            <td class="text-right">${fmtN(a.unidadHa||0)}</td>
-                           <td class="text-right">${fmtN(a.precioUnit||0)}</td>
-                           <td class="text-right">${fmtN(a.costoHa||0)}</td>
+                           <td class="text-right">${fmtN(insConv(a.precioUnit||0,'USD'))}</td>
+                           <td class="text-right">${fmtN(insConv(a.costoHa||0, a.moneda))}</td>
                            <td class="text-right ${isParcial?'text-amber-600 font-semibold':''}" title="${isParcial?'Aplicación parcial (lote: '+haLote+' ha)':''}">${fmtN(ha)}${isParcial?' *':''}</td>
                            <td class="text-right font-semibold">${fmtN(total)}</td>
                            <td>${a.fecha?fmtDate(a.fecha):'—'}</td>
@@ -15792,20 +15823,20 @@ pages.insumos = async function() {
                      </table>`}
                 <div class="text-xs font-semibold text-slate-600 uppercase mt-4 mb-2 flex items-center justify-between">
                   <span>🚜 Labores (${laboresC.length})</span>
-                  <span class="text-emerald-700">u\$s ${fmtN(costoLabTotal)} · prom. ${fmtN(costoLabPorHa)}/ha</span>
+                  <span class="text-emerald-700">${sym} ${fmtN(costoLabTotal)} · ${fmtN(costoLabPorHa)}/ha</span>
                 </div>
                 ${laboresC.length === 0
                   ? '<div class="text-xs text-slate-400 italic py-2">Sin labores cargadas</div>'
                   : `<table class="data">
-                       <thead><tr><th>Labor</th><th class="text-right">u\$s/ha</th><th class="text-right">Ha</th><th class="text-right">Total</th><th>Fecha</th><th>Observ.</th><th></th></tr></thead>
+                       <thead><tr><th>Labor</th><th class="text-right">${sym}/ha</th><th class="text-right">Ha</th><th class="text-right">Total</th><th>Fecha</th><th>Observ.</th><th></th></tr></thead>
                        <tbody>${laboresC.map(a => {
                          const ha = haDe(a);
-                         const total = Number(a.costoHa||0) * ha;
+                         const total = itemTotal(a);
                          const isParcial = a.hectareasAplicadas != null && Number(a.hectareasAplicadas) < haLote;
                          return `
                          <tr class="table-row">
                            <td><b>${esc(a.item)}</b></td>
-                           <td class="text-right">${fmtN(a.costoHa||0)}</td>
+                           <td class="text-right">${fmtN(insConv(a.costoHa||0, a.moneda))}</td>
                            <td class="text-right ${isParcial?'text-amber-600 font-semibold':''}" title="${isParcial?'Aplicación parcial (lote: '+haLote+' ha)':''}">${fmtN(ha)}${isParcial?' *':''}</td>
                            <td class="text-right font-semibold">${fmtN(total)}</td>
                            <td>${a.fecha?fmtDate(a.fecha):'—'}</td>
@@ -15830,6 +15861,8 @@ pages.insumos = async function() {
   bindFilter('ins-campo',  'campoId');
   bindFilter('ins-insumo', 'insumo');
   bindFilter('ins-labor',  'labor');
+  const monEl = $('#ins-moneda');
+  if (monEl) monEl.onchange = e => { state.insMoneda = e.target.value; try { localStorage.setItem('ac.insMoneda', state.insMoneda); } catch {} pages.insumos(); };
 };
 function insumosFiltrosLimpiar() {
   state.insFilter = { campana:'', insumo:'', labor:'', campoId:'', ciclo:'' };
@@ -16138,16 +16171,19 @@ async function laborForm(avanzada = false, campanaId = null) {
           <div class="text-xs text-blue-800 font-semibold">👷 Empleados que hicieron la labor${!puedeEditarCobro?' <span class="text-[10px] text-blue-600 font-normal">(precios/% solo lectura)</span>':''}</div>
           <button type="button" class="btn btn-secondary text-xs" onclick="laAddEmp()">+ Empleado</button>
         </div>
-        <div class="grid grid-cols-3 gap-3 items-end mb-3">
+        <div class="grid grid-cols-3 gap-3 items-end mb-2">
           <div><label class="label">Tipo precio</label>
             <select id="la-tp" class="input" onchange="laRecalc()" ${lock}>
               <option value="por_hectarea">Por hectárea</option>
               <option value="total">Total de la labor</option>
             </select>
           </div>
-          <div><label class="label">Precio referencia</label><input id="la-pr" type="number" step="0.01" class="input" oninput="laRecalc()" placeholder="$" ${lock}/></div>
-          <div class="text-[11px] text-slate-500">El % de cada empleado se aplica sobre este precio (por ha × las ha que hizo, o el total de la labor). Si un empleado no cobra %, dejalo en blanco.</div>
+          <div><label class="label">Precio referencia</label><input id="la-pr" type="number" step="0.01" class="input" oninput="laRecalc()" placeholder="precio" ${lock}/></div>
+          <div><label class="label">Moneda</label>
+            <select id="la-mon" class="input" ${lock}>${monedasOpts().map(([k,l])=>`<option value="${k}" ${k==='ARS'?'selected':''}>${esc(l)}</option>`).join('')}</select>
+          </div>
         </div>
+        <div class="text-[11px] text-slate-500 mb-3">El % de cada empleado se aplica sobre el precio de referencia. La labor se valoriza en la moneda elegida (en la campaña se convierte a la moneda que elijas).</div>
         <table class="data text-sm">
           <thead><tr><th>Empleado</th><th class="text-right">Ha que hizo</th><th class="text-right">%</th><th class="text-right">Ganancia</th><th></th></tr></thead>
           <tbody id="la-emp-body"></tbody>
@@ -16166,7 +16202,7 @@ async function laborForm(avanzada = false, campanaId = null) {
         <div><label class="label">Fecha *</label><input id="la-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
         <div><label class="label">Tipo de labor *</label>
           <input id="la-tipo" class="input" list="la-tiposcat" placeholder="Siembra, Pulverización, Cosecha..." oninput="laPickLabor()"/>
-          <datalist id="la-tiposcat">${laboresCat.map(x=>`<option value="${esc(x.nombre)}" data-precio="${x.precioReferencia||''}" data-tp="${x.tipoPrecio||''}">${esc(x.nombre)}${x.precioReferencia?` · $${x.precioReferencia} ${x.tipoPrecio==='total'?'(total)':'/ha'}`:''}</option>`).join('')}</datalist>
+          <datalist id="la-tiposcat">${laboresCat.map(x=>`<option value="${esc(x.nombre)}" data-precio="${x.precioReferencia||''}" data-tp="${x.tipoPrecio||''}" data-mon="${x.monedaPrecio||'ARS'}">${esc(x.nombre)}${x.precioReferencia?` · ${x.monedaPrecio==='USD'?'US$':'$'}${x.precioReferencia} ${x.tipoPrecio==='total'?'(total)':'/ha'}`:''}</option>`).join('')}</datalist>
         </div>
         <div><label class="label">Hectáreas aplicadas *</label><input id="la-ha" type="number" step="0.01" class="input" oninput="laRecalc()"/></div>
       </div>
@@ -16244,13 +16280,17 @@ function laPickLabor() {
   const cat = (state.cache.laboresCat || []).find(c => (c.nombre||'').trim().toLowerCase() === nombre);
   if (!cat) return;
   // Sólo precargamos si los campos existen (modo avanzada) y no fueron editados manualmente.
-  const prEl = $('#la-pr'); const tpEl = $('#la-tp');
+  const prEl = $('#la-pr'); const tpEl = $('#la-tp'); const monEl = $('#la-mon');
   if (prEl && cat.precioReferencia != null && !prEl.dataset.manual) {
     prEl.value = cat.precioReferencia;
   }
   if (tpEl && cat.tipoPrecio && !tpEl.dataset.manual) {
     tpEl.value = cat.tipoPrecio;
   }
+  if (monEl && cat.monedaPrecio && !monEl.dataset.manual) {
+    monEl.value = cat.monedaPrecio;
+  }
+  laRecalc();
   // Autopopulate de insumos típicos del catálogo. Cantidad del catálogo es POR HECTÁREA
   // y la multiplicamos por las hectáreas aplicadas. Sólo si la tabla de insumos
   // está vacía o todas las filas están en blanco (no pisamos lo que el usuario cargó).
@@ -16375,6 +16415,7 @@ async function laborSave() {
     precioReferencia: pr,
     tipoPrecio: pr != null ? tp : null,
     costo: costoHaLabor,
+    monedaCosto: $('#la-mon')?.value || 'ARS',
     empleados,
     insumos,
   };
@@ -16629,7 +16670,7 @@ function catForm(id=null, tabId=null) {
   const laborPriceBlock = `
     <div id="f-lpc-wrap" class="col-span-2 p-3 bg-blue-50 rounded-lg border border-blue-200" style="${showLaborFields?'':'display:none'}">
       <div class="text-xs text-blue-800 font-semibold mb-2">💰 Precio sugerido para esta labor</div>
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-3 gap-3">
         <div><label class="label">Tipo de precio</label>
           <select id="f-tpprecio" class="input">
             <option value="">— Sin precio sugerido —</option>
@@ -16637,9 +16678,12 @@ function catForm(id=null, tabId=null) {
             <option value="total" ${it.tipoPrecio==='total'?'selected':''}>Total de la labor</option>
           </select>
         </div>
-        <div><label class="label">Precio referencia ($)</label><input id="f-precio" type="number" step="0.01" class="input" value="${it.precioReferencia||''}" placeholder="Ej: 25000"/></div>
+        <div><label class="label">Precio referencia</label><input id="f-precio" type="number" step="0.01" class="input" value="${it.precioReferencia||''}" placeholder="Ej: 25000"/></div>
+        <div><label class="label">Moneda</label>
+          <select id="f-monprecio" class="input">${monedasOpts().map(([k,l])=>`<option value="${k}" ${(it.monedaPrecio||'ARS')===k?'selected':''}>${esc(l)}</option>`).join('')}</select>
+        </div>
       </div>
-      <div class="text-[11px] text-blue-700 mt-2">💡 Cuando cargues una "Labor avanzada" y elijas esta labor, este precio y tipo se cargan automáticamente y podés modificarlos.</div>
+      <div class="text-[11px] text-blue-700 mt-2">💡 Cuando cargues una "Labor avanzada" y elijas esta labor, este precio, tipo y moneda se cargan automáticamente y podés modificarlos. Se usa para la ganancia del empleado y para mostrar el gasto de la labor en la campaña.</div>
     </div>
     <div id="f-ldef-wrap" class="col-span-2 p-3 bg-emerald-50 rounded-lg border border-emerald-200" style="${showLaborFields?'':'display:none'}">
       <div class="flex items-center justify-between mb-2">
@@ -16795,6 +16839,7 @@ async function catSave(id) {
     const pr = $('#f-precio')?.value;
     data.tipoPrecio = tp || null;
     data.precioReferencia = (pr !== '' && pr != null) ? Number(pr) : null;
+    data.monedaPrecio = $('#f-monprecio')?.value || 'ARS';
     // Insumos típicos: limpiar entradas sin productoId o cantidad <= 0
     const insumos = (state.catInsumosDef || [])
       .filter(x => x.productoId && Number(x.cantidad) > 0)
@@ -16807,6 +16852,7 @@ async function catSave(id) {
   } else {
     data.tipoPrecio = null;
     data.precioReferencia = null;
+    data.monedaPrecio = null;
     data.insumosDefault = null;
   }
   if (!data.nombre) return toast('Nombre requerido','warn');
