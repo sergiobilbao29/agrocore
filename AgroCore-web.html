@@ -2321,6 +2321,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
+      titulo:'📍 v1.37.0 — Al eliminar un insumo/labor, no salta arriba',
+      desc:'En <b>Insumos y labores</b>, al <b>eliminar</b> un insumo o una labor la pantalla ya no salta al tope: vuelve a la <b>tarjeta del lote</b> donde estabas (igual que al cargar o editar).' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
+      titulo:'☑️ v1.36.0 — Filtro de Categoría multi-selección en Stock y Movimientos',
+      desc:'En <b>Stock</b> y en <b>Movimientos de stock</b>, el filtro de <b>Categoría</b> ahora es de <b>selección múltiple</b> (mismo desplegable con checkboxes que el de Insumos): podés ver, por ejemplo, insumos y combustibles a la vez. Botón <b>“Todas”</b> para limpiar la selección.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
       titulo:'🔄 v1.35.0 — Egresos de insumos ya cargados + cargar sin saltar arriba',
       desc:'(1) Botón <b>“🔄 Generar egresos faltantes”</b> en Insumos y labores: genera de una vez los <b>egresos de stock</b> de todos los insumos que se habían cargado antes (los que coinciden con un producto del inventario). (2) Al <b>guardar</b> un insumo o una labor, la pantalla ya <b>no salta al tope</b>: vuelve a la <b>tarjeta del lote</b> donde estabas, para seguir cargando sin tener que buscarlo de nuevo. (3) En el filtro de Insumo, el botón “Ninguno” ahora se llama <b>“Todos”</b> (deselecciona y muestra todo).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'30/06/2026',
@@ -5244,11 +5250,52 @@ async function provDel(id) {
 }
 
 /* ----- STOCK ----- */
+// ---- Multi-select genérico (desplegable con checkboxes) ----
+// id: identificador único en el DOM · items: opciones (strings) · selected: array elegido
+// openKey: clave en state para recordar si quedó abierto · labelAll: texto cuando no hay selección.
+function msHTML(id, items, selected, openKey, labelAll){
+  const sel = selected || []; const n = sel.length;
+  const open = state['_ms_'+openKey] ? 'open' : '';
+  return `<details id="ms-${id}" ${open} style="position:relative">
+    <summary class="input" style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:6px">
+      <span class="ms-lbl truncate">${n ? (n+' seleccionada'+(n>1?'s':'')) : (labelAll||'Todas')}</span>
+      <span style="color:#94a3b8">▾</span>
+    </summary>
+    <div style="position:absolute;z-index:40;left:0;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 10px 28px -8px rgba(0,0,0,.28);max-height:260px;overflow:auto;padding:6px">
+      ${(items||[]).length ? items.map(i=>`
+        <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:13px;cursor:pointer;border-radius:7px" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background=''">
+          <input type="checkbox" class="ms-cb" value="${esc(i)}" ${sel.includes(i)?'checked':''}/>
+          <span>${esc(i)}</span>
+        </label>`).join('') : '<div class="text-xs text-slate-400 px-2 py-2">Sin opciones</div>'}
+      ${(items||[]).length ? `<div class="flex gap-2 mt-1 pt-2 border-t border-slate-100">
+        <button type="button" class="btn btn-secondary text-xs flex-1" data-ms-clear>${labelAll||'Todas'}</button>
+        <button type="button" class="btn btn-primary text-xs flex-1" data-ms-apply>Aplicar</button>
+      </div>` : ''}
+    </div>
+  </details>`;
+}
+// Cablea el multi-select. onLive(vals): en cada tilde (sin re-render del filtro). onApply(): al aplicar/limpiar.
+function msWire(id, openKey, onLive, onApply, labelAll){
+  const dd = document.getElementById('ms-'+id);
+  if (!dd) return;
+  dd.addEventListener('toggle', ()=>{ state['_ms_'+openKey] = dd.open; });
+  const collect = ()=> [...dd.querySelectorAll('.ms-cb:checked')].map(x=>x.value);
+  dd.querySelectorAll('.ms-cb').forEach(cb=> cb.onchange = ()=>{
+    const vals = collect(); onLive(vals);
+    const lbl = dd.querySelector('.ms-lbl');
+    if (lbl) lbl.textContent = vals.length ? (vals.length+' seleccionada'+(vals.length>1?'s':'')) : (labelAll||'Todas');
+  });
+  const ap = dd.querySelector('[data-ms-apply]'); if (ap) ap.onclick = ()=>{ state['_ms_'+openKey]=false; onApply(); };
+  const cl = dd.querySelector('[data-ms-clear]'); if (cl) cl.onclick = ()=>{ onLive([]); state['_ms_'+openKey]=false; onApply(); };
+}
+
 pages.stock = async function() {
   setHeader('Stock', 'Productos y existencias');
   if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('stock','Stock'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  state.stockFilter = state.stockFilter || { q:'', cat:'', estado:'', depositoId:'' };
+  state.stockFilter = state.stockFilter || { q:'', cats:[], estado:'', depositoId:'' };
+  if (!Array.isArray(state.stockFilter.cats)) state.stockFilter.cats = state.stockFilter.cat ? [state.stockFilter.cat] : [];
+  delete state.stockFilter.cat;
   const depFilter = state.stockFilter.depositoId || '';
   let rows=[], depositos=[];
   try {
@@ -5264,10 +5311,10 @@ pages.stock = async function() {
 
   const render = () => {
     const q = (state.stockFilter.q||'').toLowerCase();
-    const cat = state.stockFilter.cat || '';
+    const catSel = state.stockFilter.cats || [];
     const estado = state.stockFilter.estado || '';
     const filtered = rows.filter(p => {
-      if (cat && p.categoria !== cat) return false;
+      if (catSel.length && !catSel.includes(p.categoria)) return false;
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
       if (!q) return true;
@@ -5327,10 +5374,7 @@ pages.stock = async function() {
         </div>
         <div class="md:col-span-2">
           <label class="label">Categoría</label>
-          <select id="st-cat" class="input">
-            <option value="">Todas</option>
-            ${cats.map(c=>`<option ${c===state.stockFilter.cat?'selected':''}>${esc(c)}</option>`).join('')}
-          </select>
+          ${msHTML('st-cat', cats, state.stockFilter.cats, 'stCat', 'Todas')}
         </div>
         <div class="md:col-span-1">
           <label class="label">Estado</label>
@@ -5349,12 +5393,12 @@ pages.stock = async function() {
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="stock-table"></div></div>`;
   $('#st-q').oninput   = e => { state.stockFilter.q = e.target.value; render(); };
-  $('#st-cat').onchange = e => { state.stockFilter.cat = e.target.value; render(); };
+  msWire('st-cat', 'stCat', vals => { state.stockFilter.cats = vals; render(); }, () => render(), 'Todas');
   $('#st-estado').onchange = e => { state.stockFilter.estado = e.target.value; render(); };
   $('#st-dep').onchange = e => { state.stockFilter.depositoId = e.target.value; pages.stock(); }; // recarga con el filtro de back
   render();
 };
-function stockFiltrosLimpiar() { state.stockFilter = { q:'', cat:'', estado:'', depositoId:'' }; pages.stock(); }
+function stockFiltrosLimpiar() { state.stockFilter = { q:'', cats:[], estado:'', depositoId:'' }; state._ms_stCat = false; pages.stock(); }
 
 // === CONTROL DE STOCK (planilla de conteo físico) ===
 // Exporta un Excel con productos × depósitos y una columna vacía "conteo" para
@@ -5530,7 +5574,9 @@ pages.movimientos = async function() {
     };
   });
   rows = rows.concat(_hacRows).sort((a,b)=> String(b.fecha||'').localeCompare(String(a.fecha||'')));
-  state.movFilter = state.movFilter || { q:'', cat:'', tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
+  state.movFilter = state.movFilter || { q:'', cats:[], tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
+  if (!Array.isArray(state.movFilter.cats)) state.movFilter.cats = state.movFilter.cat ? [state.movFilter.cat] : [];
+  delete state.movFilter.cat;
   const cats = [...new Set(prods.map(p=>p.categoria).filter(Boolean))].sort();
   const motivos = [...new Set(rows.map(m=>m.motivo).filter(Boolean))].sort();
   // Set de depósitos compartidos (companyId null) para saber cuándo mostrar la empresa
@@ -5541,9 +5587,9 @@ pages.movimientos = async function() {
     const q = (f.q||'').toLowerCase();
     const filtered = rows.filter(m => {
       if (f.tipo && m.tipo !== f.tipo) return false;
-      if (f.cat) {
+      if ((f.cats||[]).length) {
         const pcat = m._hac ? 'hacienda' : (prods.find(x=>x.id===m.productoId)?.categoria);
-        if (pcat !== f.cat) return false;
+        if (!f.cats.includes(pcat)) return false;
       }
       if (f.motivo && m.motivo !== f.motivo) return false;
       if (f.desde && (m.fecha||'') < f.desde) return false;
@@ -5631,7 +5677,7 @@ pages.movimientos = async function() {
     <div class="kpi mb-3">
       <div class="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
         <div><label class="label">Categoría</label>
-          <select id="mv-cat" class="input"><option value="">Todas</option>${cats.map(c=>`<option ${c===state.movFilter.cat?'selected':''}>${esc(c)}</option>`).join('')}</select>
+          ${msHTML('mv-cat', cats, state.movFilter.cats, 'mvCat', 'Todas')}
         </div>
         <div><label class="label">Depósito</label>
           <select id="mv-deposito" class="input">
@@ -5664,16 +5710,17 @@ pages.movimientos = async function() {
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="mov-table"></div></div>`;
 
-  ['q','cat','deposito','tipo','motivo','desde','hasta'].forEach(k => {
+  ['q','deposito','tipo','motivo','desde','hasta'].forEach(k => {
     const el = $('#mv-'+k);
     if (!el) return;
     const evt = (el.tagName==='SELECT' || el.type==='date') ? 'change' : 'input';
     const stateKey = k === 'deposito' ? 'depositoId' : k;
     el.addEventListener(evt, e => { state.movFilter[stateKey] = e.target.value; render(); });
   });
+  msWire('mv-cat', 'mvCat', vals => { state.movFilter.cats = vals; render(); }, () => render(), 'Todas');
   render();
 };
-function movFiltrosLimpiar() { state.movFilter = { q:'', cat:'', tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' }; pages.movimientos(); }
+function movFiltrosLimpiar() { state.movFilter = { q:'', cats:[], tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' }; state._ms_mvCat = false; pages.movimientos(); }
 
 /* ----- REPORTE DE MARGEN (compras vs ventas por producto) ----- */
 pages.reporteMargen = async function() {
@@ -15846,7 +15893,7 @@ pages.insumos = async function() {
                            <td class="text-right ${isParcial?'text-amber-600 font-semibold':''}" title="${isParcial?'Aplicación parcial (lote: '+haLote+' ha)':''}">${fmtN(ha)}${isParcial?' *':''}</td>
                            <td class="text-right font-semibold">${fmtN(total)}</td>
                            <td>${a.fecha?fmtDate(a.fecha):'—'}</td>
-                           <td class="text-right whitespace-nowrap">${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)})'>🗑️</button></td>
+                           <td class="text-right whitespace-nowrap">${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)},${JSON.stringify(a.campanaId)})'>🗑️</button></td>
                          </tr>`;}).join('')}</tbody>
                      </table>`}
                 <div class="text-xs font-semibold text-slate-600 uppercase mt-4 mb-2 flex items-center justify-between">
@@ -15869,7 +15916,7 @@ pages.insumos = async function() {
                            <td class="text-right font-semibold">${fmtN(total)}</td>
                            <td>${a.fecha?fmtDate(a.fecha):'—'}</td>
                            <td class="text-xs">${esc(a.observaciones||'—')}</td>
-                           <td class="text-right whitespace-nowrap">${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)})'>🗑️</button></td>
+                           <td class="text-right whitespace-nowrap">${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)},${JSON.stringify(a.campanaId)})'>🗑️</button></td>
                          </tr>`;}).join('')}</tbody>
                      </table>`}
                 ${(insumosC.some(a=>a.hectareasAplicadas != null && Number(a.hectareasAplicadas) < haLote) ||
@@ -16152,10 +16199,14 @@ async function aplicSaveMulti(){
     delete state.cache.aplicaciones; closeModal(); pages.insumos();
   }
 }
-async function aplicDel(id) {
+async function aplicDel(id, campanaId) {
   if (!confirm('¿Eliminar?')) return;
-  try { await api('/api/aplicaciones/'+id, { method:'DELETE' }); toast('Eliminado','success'); delete state.cache.aplicaciones; pages.insumos(); }
-  catch (e) { toast(e.message,'error'); }
+  try {
+    await api('/api/aplicaciones/'+id, { method:'DELETE' });
+    toast('Eliminado','success');
+    if (campanaId) state._insScrollTo = campanaId;
+    delete state.cache.aplicaciones; delete state.cache.stockMap; pages.insumos();
+  } catch (e) { toast(e.message,'error'); }
 }
 // Editar un solo renglón (insumo o labor) sin tener que borrarlo y recargarlo.
 function aplicEditForm(a){
