@@ -2320,6 +2320,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'30/06/2026',
+      titulo:'☑️ v1.40.0 — Filtro por Tipo en Insumos y labores + arreglo del botón “Todas”',
+      desc:'(1) En <b>Insumos y labores</b> se agregó el filtro <b>Tipo</b> (Herbicida, Coadyuvante, etc.) con selección múltiple, igual que el de Insumo. (2) Se arregló el botón <b>“Todas”</b> de los filtros multi-selección de Stock y Movimientos: ahora <b>destilda</b> todo correctamente (antes quedaban marcados los que tenías elegidos).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'30/06/2026',
       titulo:'🛠️ v1.39.0 — El filtro de Categoría se cierra al aplicar',
       desc:'En <b>Stock</b> y <b>Movimientos</b>, el desplegable de Categoría ahora se <b>cierra</b> al tocar “Aplicar” o “Todas”, y también al hacer clic fuera (antes quedaba abierto).' },
@@ -5292,7 +5295,12 @@ function msWire(id, openKey, onLive, onApply, labelAll){
     if (lbl) lbl.textContent = vals.length ? (vals.length+' seleccionada'+(vals.length>1?'s':'')) : (labelAll||'Todas');
   });
   const ap = dd.querySelector('[data-ms-apply]'); if (ap) ap.onclick = ()=>{ state['_ms_'+openKey]=false; dd.open=false; onApply(); };
-  const cl = dd.querySelector('[data-ms-clear]'); if (cl) cl.onclick = ()=>{ onLive([]); state['_ms_'+openKey]=false; dd.open=false; onApply(); };
+  const cl = dd.querySelector('[data-ms-clear]'); if (cl) cl.onclick = ()=>{
+    // Destildar también en el DOM (el render puede ser parcial y no reconstruir los checkboxes).
+    dd.querySelectorAll('.ms-cb').forEach(cb=> cb.checked = false);
+    const lbl = dd.querySelector('.ms-lbl'); if (lbl) lbl.textContent = labelAll||'Todas';
+    onLive([]); state['_ms_'+openKey]=false; dd.open=false; onApply();
+  };
   // Cerrar al hacer clic fuera del desplegable (el listener se auto-remueve al re-renderizar).
   setTimeout(()=>{
     const onDoc = (ev)=>{
@@ -15693,14 +15701,17 @@ pages.insumos = async function() {
   await cargarCotizVivas();  // para convertir costos a la moneda elegida
   if (!state.insMoneda) { try { state.insMoneda = localStorage.getItem('ac.insMoneda') || 'USD'; } catch { state.insMoneda = 'USD'; } }
 
-  state.insFilter = state.insFilter || { campana:'', insumos:[], labor:'', campoId:'', ciclo:'' };
+  state.insFilter = state.insFilter || { campana:'', insumos:[], tipos:[], labor:'', campoId:'', ciclo:'' };
   const f = state.insFilter;
   // El filtro de insumo pasó de uno solo (string) a multi-selección (array).
   if (!Array.isArray(f.insumos)) f.insumos = f.insumo ? [f.insumo] : [];
+  if (!Array.isArray(f.tipos)) f.tipos = [];
   delete f.insumo;
 
   // Items únicos (de aplicaciones cargadas) para los filtros
   const insumosUsados = [...new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.item||'').trim()).filter(Boolean))].sort();
+  // Tipos/categorías de insumo usados (Herbicida, Coadyuvante, etc. = subtipo de la aplicación)
+  const tiposUsados = [...new Set(aplics.filter(a=>a.tipo==='insumo').map(a=>(a.subtipo||'').trim()).filter(Boolean))].sort();
   const laboresUsadas = [...new Set(aplics.filter(a=>a.tipo==='labor' ).map(a=>(a.item||'').trim()).filter(Boolean))].sort();
   // Ciclos disponibles (catálogo Ciclo + los usados en campañas)
   const ciclosUsados = [...new Set([
@@ -15711,12 +15722,14 @@ pages.insumos = async function() {
   const cicloCampIds = f.ciclo ? new Set(campanas.filter(c=>(c.ciclo||'').trim()===f.ciclo).map(c=>c.id)) : null;
 
   // Filtramos aplicaciones por los criterios activos
+  const insFiltrando = f.insumos.length || f.tipos.length; // filtros que apuntan a insumos
   const aplicsFiltradas = aplics.filter(a => {
     if (f.insumos.length && a.tipo === 'insumo' && !f.insumos.includes((a.item||'').trim())) return false;
+    if (f.tipos.length && a.tipo === 'insumo' && !f.tipos.includes((a.subtipo||'').trim())) return false;
     if (f.labor  && a.tipo === 'labor'  && (a.item||'').trim() !== f.labor)  return false;
-    // Si filtra por insumo, esconder labores; si filtra por labor, esconder insumos
-    if (f.insumos.length && !f.labor && a.tipo !== 'insumo') return false;
-    if (f.labor  && !f.insumos.length && a.tipo !== 'labor') return false;
+    // Si filtra por insumo/tipo, esconder labores; si filtra por labor, esconder insumos
+    if (insFiltrando && !f.labor && a.tipo !== 'insumo') return false;
+    if (f.labor  && !insFiltrando && a.tipo !== 'labor') return false;
     if (f.ciclo && cicloCampIds && !cicloCampIds.has(a.campanaId)) return false;
     if (f.campoId) {
       const camp = campanas.find(c => c.id === a.campanaId);
@@ -15731,7 +15744,7 @@ pages.insumos = async function() {
   let campanasFiltradas;
   if (f.campana) {
     campanasFiltradas = campanas.filter(c => c.id === f.campana);
-  } else if (f.insumos.length || f.labor || f.campoId) {
+  } else if (f.insumos.length || f.tipos.length || f.labor || f.campoId) {
     campanasFiltradas = campanas.filter(c => idsCampanasFiltradas.has(c.id));
   } else {
     campanasFiltradas = campanas;
@@ -15753,8 +15766,8 @@ pages.insumos = async function() {
   const totHa = aplicsFiltradas.reduce((acc,a)=> acc + haDeApp(a), 0);
 
   // Banner de totales cuando hay filtro activo de insumo o labor
-  const filtroActivo = !!(f.insumos.length || f.labor || f.campoId || f.ciclo);
-  const labelFiltro = f.insumos.length ? `Insumo${f.insumos.length>1?'s':''}: ${f.insumos.map(esc).join(', ')}` : f.labor ? `Labor "${f.labor}"` : f.campoId ? `Campo "${esc(campos.find(c=>c.id===f.campoId)?.nombre||'')}"` : f.ciclo ? `Ciclo "${esc(f.ciclo)}"` : '';
+  const filtroActivo = !!(f.insumos.length || f.tipos.length || f.labor || f.campoId || f.ciclo);
+  const labelFiltro = f.insumos.length ? `Insumo${f.insumos.length>1?'s':''}: ${f.insumos.map(esc).join(', ')}` : f.tipos.length ? `Tipo${f.tipos.length>1?'s':''}: ${f.tipos.map(esc).join(', ')}` : f.labor ? `Labor "${f.labor}"` : f.campoId ? `Campo "${esc(campos.find(c=>c.id===f.campoId)?.nombre||'')}"` : f.ciclo ? `Ciclo "${esc(f.ciclo)}"` : '';
   const bannerTotales = filtroActivo ? `
     <div class="mb-4 rounded-xl overflow-hidden" style="background:linear-gradient(135deg,#14532d 0%,#166534 55%,#15803d 100%);box-shadow:0 6px 20px -8px rgba(20,83,45,.45)">
       <div class="p-5">
@@ -15769,11 +15782,11 @@ pages.insumos = async function() {
             <div class="text-[11px]" style="color:#bbf7d0">Hectáreas (suma)</div>
             <div class="text-2xl font-bold text-white">${fmtN(totHa)}</div>
           </div>
-          ${f.insumos.length ? `
+          ${(f.insumos.length || f.tipos.length) ? `
             <div class="rounded-lg p-3" style="background:rgba(255,255,255,.12)">
               <div class="text-[11px]" style="color:#bbf7d0">Total consumido</div>
               <div class="text-2xl font-bold text-white">${fmtN(totUnid)}</div>
-              <div class="text-[10px] mt-0.5" style="color:#dcfce7">unidades (suma de unid/ha × ha de los insumos elegidos)</div>
+              <div class="text-[10px] mt-0.5" style="color:#dcfce7">unidades (suma de unid/ha × ha de los insumos del filtro)</div>
             </div>` : ''}
           <div class="rounded-lg p-3" style="background:rgba(255,255,255,.12)">
             <div class="text-[11px]" style="color:#bbf7d0">Costo total</div>
@@ -15786,7 +15799,7 @@ pages.insumos = async function() {
   $('#page-body').innerHTML = `
     <div class="kpi mb-3">
       <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
-        <div class="md:col-span-3">
+        <div class="md:col-span-2">
           <label class="label">Campaña</label>
           <select id="ins-filtro" class="input">
             <option value="">Todas</option>
@@ -15800,12 +15813,16 @@ pages.insumos = async function() {
             ${ciclosUsados.map(cic => `<option value="${esc(cic)}" ${cic===f.ciclo?'selected':''}>${esc(cic)}</option>`).join('')}
           </select>
         </div>
-        <div class="md:col-span-3">
+        <div class="md:col-span-2">
           <label class="label">Campo</label>
           <select id="ins-campo" class="input">
             <option value="">Todos</option>
             ${campos.map(c => `<option value="${esc(c.id)}" ${c.id===f.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}
           </select>
+        </div>
+        <div class="md:col-span-2">
+          <label class="label">Tipo</label>
+          ${msHTML('ins-tipo', tiposUsados, f.tipos, 'insTipo', 'Todos')}
         </div>
         <div class="md:col-span-2">
           <label class="label">Insumo</label>
@@ -15956,6 +15973,8 @@ pages.insumos = async function() {
   bindFilter('ins-ciclo',  'ciclo');
   bindFilter('ins-campo',  'campoId');
   bindFilter('ins-labor',  'labor');
+  // Filtro de Tipo (categoría de insumo): multi-selección con el componente genérico.
+  msWire('ins-tipo', 'insTipo', vals => { state.insFilter.tipos = vals; }, () => pages.insumos(), 'Todos');
   // Filtro de insumos: multi-selección con checkboxes.
   const dd = document.getElementById('ins-insumo-dd');
   if (dd) {
@@ -15979,8 +15998,8 @@ pages.insumos = async function() {
   }
 };
 function insumosFiltrosLimpiar() {
-  state.insFilter = { campana:'', insumos:[], labor:'', campoId:'', ciclo:'' };
-  state._insDDOpen = false;
+  state.insFilter = { campana:'', insumos:[], tipos:[], labor:'', campoId:'', ciclo:'' };
+  state._insDDOpen = false; state._ms_insTipo = false;
   pages.insumos();
 }
 // Multi-selección de insumos: aplicar / limpiar la selección.
@@ -15992,11 +16011,14 @@ function insumosExportarExcel() {
   const lotes = state.cache.lotes || [];
   const f = state.insFilter || {};
   const insArr = Array.isArray(f.insumos) ? f.insumos : (f.insumo ? [f.insumo] : []);
+  const tipArr = Array.isArray(f.tipos) ? f.tipos : [];
+  const insFiltrando = insArr.length || tipArr.length;
   const filt = aplics.filter(a => {
     if (insArr.length && a.tipo === 'insumo' && !insArr.includes((a.item||'').trim())) return false;
+    if (tipArr.length && a.tipo === 'insumo' && !tipArr.includes((a.subtipo||'').trim())) return false;
     if (f.labor  && a.tipo === 'labor'  && (a.item||'').trim() !== f.labor)  return false;
-    if (insArr.length && !f.labor && a.tipo !== 'insumo') return false;
-    if (f.labor  && !insArr.length && a.tipo !== 'labor') return false;
+    if (insFiltrando && !f.labor && a.tipo !== 'insumo') return false;
+    if (f.labor  && !insFiltrando && a.tipo !== 'labor') return false;
     if (f.campana && a.campanaId !== f.campana) return false;
     if (f.ciclo) {
       const camp = campanas.find(c => c.id === a.campanaId);
