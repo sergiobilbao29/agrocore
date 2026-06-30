@@ -236,6 +236,7 @@ model InsumoAplicado {
   fecha               DateTime
   costo               Float?      // costo por hectarea (u$s/ha)
   precioUnit          Float?      // costo por unidad (u$s/unidad) — para autocompletar/mostrar
+  movimientoId        String?     // egreso de stock generado por el uso (para poder anular)
   observaciones       String?
   createdAt           DateTime @default(now())
 

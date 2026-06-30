@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.33.0';
+const AGROCORE_VERSION = '1.34.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2184,6 +2184,7 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
       campanaId: z.string(),
       tipo: z.enum(['insumo', 'labor']),
       item: z.string().min(1),
+      productoId: z.string().nullable().optional(),
       subtipo: z.string().nullable().optional(),
       unidadHa: z.number().nullable().optional(),
       precioUnit: z.number().nullable().optional(),
@@ -2197,12 +2198,37 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
     if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
     const fecha = d.fecha || new Date();
     if (d.tipo === 'insumo') {
-      const row = await prisma.insumoAplicado.create({
-        data: { campanaId: d.campanaId, nombre: d.item, cantidad: d.unidadHa || 0,
-          unidad: d.subtipo || 'u/ha', fecha, costo: d.costoHa || 0,
-          precioUnit: d.precioUnit ?? null,
-          hectareasAplicadas: d.hectareasAplicadas ?? null,
-          observaciones: d.observaciones || null },
+      // Resolvemos el producto para descontar del stock (por id, o por nombre como fallback).
+      let prod = null;
+      if (d.productoId) prod = await prisma.producto.findFirst({ where: { id: d.productoId, companyId: req.companyId } });
+      if (!prod) prod = await prisma.producto.findFirst({ where: { companyId: req.companyId, nombre: { equals: d.item, mode: 'insensitive' } } });
+      // Cantidad total consumida = unidades por ha × hectáreas aplicadas.
+      const cantConsumida = Number(d.unidadHa || 0) * Number(d.hectareasAplicadas || 0);
+      const row = await prisma.$transaction(async (tx) => {
+        const ins = await tx.insumoAplicado.create({
+          data: { campanaId: d.campanaId, productoId: prod?.id || null, nombre: d.item, cantidad: d.unidadHa || 0,
+            unidad: d.subtipo || 'u/ha', fecha, costo: d.costoHa || 0,
+            precioUnit: d.precioUnit ?? null,
+            hectareasAplicadas: d.hectareasAplicadas ?? null,
+            observaciones: d.observaciones || null },
+        });
+        // Si encontramos el producto y hay cantidad consumida, generamos el egreso de stock.
+        if (prod && cantConsumida > 0) {
+          const total = (d.precioUnit || 0) * cantConsumida;
+          const mov = await tx.movimiento.create({
+            data: {
+              companyId: req.companyId, productoId: prod.id, depositoId: null,
+              fecha, tipo: 'egreso', motivo: 'aplicacion',
+              cantidad: cantConsumida, precio: d.precioUnit ?? null, total: total || null,
+              referencia: `INS-${ins.id.slice(-6).toUpperCase()}`,
+              observaciones: `Aplicado en lote (${d.item})`,
+              userId: req.user?.id || null,
+            },
+          });
+          await tx.insumoAplicado.update({ where: { id: ins.id }, data: { movimientoId: mov.id } });
+          ins.movimientoId = mov.id;
+        }
+        return ins;
       });
       return res.status(201).json({ ok: true, data: { ...row, tipo: 'insumo' } });
     } else {
@@ -2243,6 +2269,15 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
         fecha: d.fecha || ins.fecha,
         observaciones: d.observaciones !== undefined ? d.observaciones : ins.observaciones,
       }});
+      // Si tiene un egreso de stock vinculado, lo ajustamos a la nueva cantidad/fecha/precio.
+      if (ins.movimientoId) {
+        const cant = Number(row.cantidad || 0) * Number(row.hectareasAplicadas || 0);
+        const total = Number(row.precioUnit || 0) * cant;
+        await prisma.movimiento.updateMany({
+          where: { id: ins.movimientoId, companyId: req.companyId },
+          data: { cantidad: cant, precio: row.precioUnit ?? null, total: total || null, fecha: row.fecha },
+        });
+      }
       return res.json({ ok: true, data: { ...row, tipo: 'insumo' } });
     }
     const lab = await prisma.laborAplicada.findFirst({ where: { id, campana: { companyId: req.companyId } } });
@@ -2265,7 +2300,14 @@ app.delete('/api/aplicaciones/:id', requireCompany, requirePermission('produccio
     const id = req.params.id;
     // Intentar borrar como insumo, si no existe probar como labor
     const ins = await prisma.insumoAplicado.findFirst({ where: { id, campana: { companyId: req.companyId } } });
-    if (ins) { await prisma.insumoAplicado.delete({ where: { id } }); return res.json({ ok: true }); }
+    if (ins) {
+      await prisma.$transaction(async (tx) => {
+        await tx.insumoAplicado.delete({ where: { id } });
+        // Revertir el egreso de stock generado por el uso.
+        if (ins.movimientoId) await tx.movimiento.deleteMany({ where: { id: ins.movimientoId, companyId: req.companyId } });
+      });
+      return res.json({ ok: true });
+    }
     const lab = await prisma.laborAplicada.findFirst({ where: { id, campana: { companyId: req.companyId } } });
     if (lab) { await prisma.laborAplicada.delete({ where: { id } }); return res.json({ ok: true }); }
     res.status(404).json({ ok: false, error: 'No encontrado' });
