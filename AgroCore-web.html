@@ -2350,6 +2350,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'01/07/2026',
+      titulo:'🔁 v1.48.0 — Editar transferencia interna actualiza también el espejo',
+      desc:'Al <b>editar un movimiento</b> que es una <b>transferencia interna</b> entre cuentas propias, el sistema te <b>pregunta</b> si querés actualizar también el <b>movimiento espejo</b> de la otra cuenta (monto, fecha, concepto y observaciones). Aceptar = las dos · Cancelar = solo este.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'01/07/2026',
       titulo:'🏦 v1.47.0 — Bancos: botón de movimientos + editar movimientos · CP: origen completo',
       desc:'(1) En <b>Bancos</b>, cada cuenta tiene ahora un botón <b>“📋 Ver / cargar movimientos”</b> bien visible. (2) Los <b>movimientos bancarios se pueden editar</b> (✏️ en cada fila). (3) Al importar una <b>Carta de Porte</b>, el <b>Origen</b> trae el nombre completo de la localidad (antes cortaba, ej. “CORONEL” en vez de “CORONEL MOLDES”).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'01/07/2026',
@@ -19842,7 +19845,9 @@ function bcoMovForm(id=null) {
         </div>`}
         <div class="col-span-3"><label class="label">Referencia</label><input id="bm-ref" class="input" placeholder="Nro de operación, recibo, etc." value="${m?esc(m.referencia||''):''}"/></div>
         <div class="col-span-3"><label class="label">Observaciones</label><textarea id="bm-obs" class="input" rows="2">${m?esc(m.observaciones||''):''}</textarea></div>
-        ${editMode?`<div class="col-span-3 text-[11px] text-amber-700">Al editar se modifica <b>solo este movimiento</b>. Si formaba parte de una transferencia interna, el movimiento espejo de la otra cuenta no se ajusta automáticamente.</div>`:''}
+        ${editMode && m && (m.tipo==='transferencia_in'||m.tipo==='transferencia_out') && m.cuentaContraId
+          ? `<div class="col-span-3 text-[11px] text-blue-700">💡 Este movimiento es una <b>transferencia interna</b>. Al guardar te vamos a preguntar si querés actualizar también el <b>movimiento espejo</b> de la otra cuenta.</div>`
+          : (editMode?`<div class="col-span-3 text-[11px] text-slate-500">Al editar se modifica solo este movimiento.</div>`:'')}
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='bcoMovSave(${id?JSON.stringify(id):"null"})'>💾 Guardar</button>`
@@ -19873,6 +19878,11 @@ async function bcoMovSave(id) {
     if (cta2) data.cuentaContraId = cta2;
     const caja = $('#bm-caja')?.value || null;
     if (caja) data.cajaEfectivo = caja;
+  } else {   // en edición: si es transferencia interna, preguntar si sincronizar el espejo
+    const m = (state.cache.bancoMovs||[]).find(x=>x.id===id);
+    if (m && (m.tipo==='transferencia_in'||m.tipo==='transferencia_out') && m.cuentaContraId) {
+      data.syncMirror = confirm('Este movimiento es una transferencia interna entre cuentas propias.\n\n¿Actualizar también el movimiento espejo de la otra cuenta con los mismos cambios?\n\nAceptar = actualizar las dos · Cancelar = solo este movimiento.');
+    }
   }
   if (!data.cuentaId) return toast('Falta la cuenta','warn');
   if (!data.concepto) return toast('Falta el concepto','warn');

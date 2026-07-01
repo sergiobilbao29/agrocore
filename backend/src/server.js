@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.47.0';
+const AGROCORE_VERSION = '1.48.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5776,8 +5776,32 @@ app.put('/api/banco-movimientos/:id', requireCompany, requirePermission('finanza
   try {
     const existing = await prisma.bancoMovimiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
-    const schema = bancoMovSchema.partial().extend({ conciliado: z.boolean().optional() });
-    const d = schema.parse(req.body);
+    const schema = bancoMovSchema.partial().extend({ conciliado: z.boolean().optional(), syncMirror: z.boolean().optional() });
+    const parsed = schema.parse(req.body);
+    // syncMirror y cajaEfectivo no son columnas del movimiento.
+    const { syncMirror, cajaEfectivo, ...d } = parsed;
+    const esTransfer = (existing.tipo === 'transferencia_in' || existing.tipo === 'transferencia_out') && existing.cuentaContraId;
+    if (esTransfer && syncMirror) {
+      // Actualiza también el movimiento espejo de la otra cuenta (mismos monto/fecha/concepto/obs).
+      const otroTipo = existing.tipo === 'transferencia_in' ? 'transferencia_out' : 'transferencia_in';
+      const result = await prisma.$transaction(async (tx) => {
+        const row = await tx.bancoMovimiento.update({ where: { id: req.params.id }, data: d });
+        await tx.bancoMovimiento.updateMany({
+          where: {
+            companyId: req.companyId, cuentaId: existing.cuentaContraId, cuentaContraId: existing.cuentaId,
+            tipo: otroTipo, fecha: existing.fecha, monto: existing.monto,
+          },
+          data: {
+            ...(d.fecha !== undefined ? { fecha: d.fecha } : {}),
+            ...(d.monto !== undefined ? { monto: d.monto } : {}),
+            ...(d.concepto !== undefined ? { concepto: d.concepto } : {}),
+            ...(d.observaciones !== undefined ? { observaciones: d.observaciones } : {}),
+          },
+        });
+        return row;
+      });
+      return res.json({ ok: true, data: result });
+    }
     const row = await prisma.bancoMovimiento.update({ where: { id: req.params.id }, data: d });
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
