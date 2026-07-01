@@ -2349,6 +2349,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'01/07/2026',
+      titulo:'🔁 v1.45.0 — Movimientos internos caja↔banco + columnas de Viajes + guardado de cuenta robusto',
+      desc:'(1) En <b>Bancos → cuenta → + Nuevo movimiento</b>, al elegir <b>Depósito</b> o <b>Extracción</b> ahora podés indicar una <b>caja de efectivo</b>: el depósito sale del efectivo de esa caja y la extracción entra, quedando registrado en las dos partes (la <b>transferencia entre cuentas bancarias propias</b> ya existía, con cuenta destino). (2) En <b>Viajes → Columnas</b> se agregaron todos los campos del viaje (flete total, transportista, CUIT, acoplado, combustible, peajes, comida, varios, total gastos, unidad, observaciones), <b>destildados</b> para que los sumes si los necesitás. (3) Se reforzó el <b>guardado de la cuenta bancaria</b> para que siempre dé una respuesta clara al Guardar.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'01/07/2026',
       titulo:'🏦 v1.44.0 — Fecha del saldo inicial de la cuenta bancaria',
       desc:'Se refuerza el guardado de la <b>fecha del saldo inicial</b> de las cuentas bancarias (migración que garantiza la columna en la base + guardado a prueba de zona horaria). Si al editar seguía volviendo la fecha vieja, actualizá y hacé un <b>refresco completo</b> del navegador (Ctrl+Shift+R).' },
@@ -10161,7 +10164,17 @@ function colGet(key, allCols){
   const allKeys = allCols.map(c=>c.key);
   let order = (saved && Array.isArray(saved.order)) ? saved.order.filter(k=>allKeys.includes(k)) : allKeys.slice();
   allKeys.forEach(k=>{ if(!order.includes(k)) order.push(k); });
-  const hidden = (saved && Array.isArray(saved.hidden)) ? saved.hidden.filter(k=>allKeys.includes(k)) : [];
+  let hidden;
+  if (saved && Array.isArray(saved.hidden)) {
+    hidden = saved.hidden.filter(k=>allKeys.includes(k));
+    // Columnas NUEVAS (no estaban en el orden guardado) marcadas como ocultas por defecto
+    // arrancan ocultas también para quien ya tenía su configuración guardada.
+    const savedOrder = (saved && Array.isArray(saved.order)) ? saved.order : [];
+    allCols.forEach(c => { if (c.defHidden && !savedOrder.includes(c.key) && !hidden.includes(c.key)) hidden.push(c.key); });
+  } else {
+    // Primera vez: ocultamos las marcadas como defHidden.
+    hidden = allCols.filter(c => c.defHidden).map(c => c.key);
+  }
   return { order, hidden };
 }
 function colSet(key, cfg){ try{ localStorage.setItem('ac.cols.'+key, JSON.stringify(cfg)); }catch{} }
@@ -12863,6 +12876,18 @@ pages.viajes = async function() {
     { key:'cartaPorte', label:'Carta de porte', sort:v=>(v.cartaPorte||'').toLowerCase(), render:v=>esc(v.cartaPorte||'—') },
     { key:'ctg', label:'CTG', sort:v=>(v.ctg||'').toLowerCase(), render:v=>esc(v.ctg||'—') },
     { key:'pagador', label:'Pagador flete', sort:v=>(v.pagadorFlete||'').toLowerCase(), render:v=>v.pagadorFlete?esc(v.pagadorFlete):'<span class="text-slate-400">—</span>' },
+    // --- Columnas adicionales (ocultas por defecto; el usuario las agrega si las necesita) ---
+    { key:'unidad', label:'Unidad', defHidden:true, sort:v=>(v.unidad||'').toLowerCase(), render:v=>esc(v.unidad||'—') },
+    { key:'flete', label:'Flete total', align:'text-right', defHidden:true, sort:v=>Number(v.flete||0), render:v=>v.flete?fmt$(v.flete):'<span class="text-slate-400">—</span>' },
+    { key:'transportista', label:'Transportista', defHidden:true, sort:v=>(v.transportista||'').toLowerCase(), render:v=>esc(v.transportista||'—') },
+    { key:'transporteCuit', label:'CUIT transporte', defHidden:true, sort:v=>(v.transporteCuit||'').toLowerCase(), render:v=>esc(v.transporteCuit||'—') },
+    { key:'acoplado', label:'Acoplado (patente)', defHidden:true, sort:v=>(v.patenteAcoplado||'').toLowerCase(), render:v=>esc(v.patenteAcoplado||'—') },
+    { key:'combustible', label:'Combustible', align:'text-right', defHidden:true, sort:v=>Number(v.combustible||0), render:v=>v.combustible?fmt$(v.combustible):'<span class="text-slate-400">—</span>' },
+    { key:'peajes', label:'Peajes', align:'text-right', defHidden:true, sort:v=>Number(v.peajes||0), render:v=>v.peajes?fmt$(v.peajes):'<span class="text-slate-400">—</span>' },
+    { key:'comida', label:'Comida', align:'text-right', defHidden:true, sort:v=>Number(v.comida||0), render:v=>v.comida?fmt$(v.comida):'<span class="text-slate-400">—</span>' },
+    { key:'varios', label:'Varios', align:'text-right', defHidden:true, sort:v=>Number(v.varios||0), render:v=>v.varios?fmt$(v.varios):'<span class="text-slate-400">—</span>' },
+    { key:'totalGastos', label:'Total gastos', align:'text-right', defHidden:true, sort:v=>Number(v.total||0), render:v=>v.total?fmt$(v.total):'<span class="text-slate-400">—</span>' },
+    { key:'obs', label:'Observaciones', defHidden:true, sort:v=>(v.observaciones||'').toLowerCase(), render:v=>v.observaciones?esc(v.observaciones):'<span class="text-slate-400">—</span>' },
     { key:'estado', label:'Estado', sort:v=>(v.estado||'').toLowerCase(), render:v=>{ const fact=v.facturaCompra; const factTxt=fact?`${fact.tipo} ${String(fact.puntoVenta).padStart(4,'0')}-${String(fact.numero).padStart(8,'0')}`:''; return `${viajeEstadoBadge(v.estado)}${factTxt?`<br><span class="text-[10px] text-slate-400">${esc(factTxt)}</span>`:''}`; } },
   ];
   state._colDefs = state._colDefs || {};
@@ -19677,27 +19702,35 @@ function bcoCuentaForm(id=null) {
   });
 }
 async function bcoCuentaSave(id) {
-  const data = {
-    banco: $('#bc-banco').value.trim(),
-    sucursal: $('#bc-suc').value.trim()||null,
-    tipo: $('#bc-tipo').value,
-    moneda: $('#bc-mon').value,
-    numero: $('#bc-nro').value.trim()||null,
-    cbu: $('#bc-cbu').value.trim()||null,
-    alias: $('#bc-alias').value.trim()||null,
-    titular: $('#bc-tit').value.trim()||null,
-    saldoInicial: Number($('#bc-sini').value)||0,
-    // Mediodía local: evita que la fecha se corra un día por la zona horaria.
-    fechaInicial: $('#bc-fini').value ? new Date($('#bc-fini').value+'T12:00:00').toISOString() : null,
-    observaciones: $('#bc-obs').value.trim()||null,
-    activo: $('#bc-act').checked,
-  };
+  // Lectura segura: si algún campo no está en el DOM, no rompemos el guardado.
+  const gv = (sel) => { const el = document.querySelector(sel); return el ? String(el.value ?? '') : ''; };
+  const gc = (sel) => { const el = document.querySelector(sel); return el ? !!el.checked : false; };
+  let data;
+  try {
+    const fec = gv('#bc-fini');
+    let fechaISO = null;
+    if (fec) { const d = new Date(fec + 'T12:00:00'); if (!isNaN(d)) fechaISO = d.toISOString(); }
+    data = {
+      banco: gv('#bc-banco').trim(),
+      sucursal: gv('#bc-suc').trim()||null,
+      tipo: gv('#bc-tipo'),
+      moneda: gv('#bc-mon'),
+      numero: gv('#bc-nro').trim()||null,
+      cbu: gv('#bc-cbu').trim()||null,
+      alias: gv('#bc-alias').trim()||null,
+      titular: gv('#bc-tit').trim()||null,
+      saldoInicial: Number(gv('#bc-sini'))||0,
+      fechaInicial: fechaISO,   // mediodía local: evita corrimientos por zona horaria
+      observaciones: gv('#bc-obs').trim()||null,
+      activo: gc('#bc-act'),
+    };
+  } catch (e) { return toast('Error al leer el formulario: '+(e.message||e),'error'); }
   if (!data.banco) return toast('Falta el banco','warn');
   try {
     if (id) await api('/api/banco-cuentas/'+id, { method:'PUT', body: JSON.stringify(data) });
     else    await api('/api/banco-cuentas',     { method:'POST', body: JSON.stringify(data) });
     toast('Guardado','success'); closeModal(); pages.bancos();
-  } catch (e) { toast(e.message,'error'); }
+  } catch (e) { toast('No se pudo guardar: '+(e.message||e),'error'); }
 }
 async function bcoCuentaDel(id) {
   if (!confirm('¿Eliminar esta cuenta bancaria? Si tiene movimientos, se desactiva en vez de borrarse para no perder el historial.')) return;
@@ -19785,16 +19818,23 @@ function bcoMovForm() {
           </select>
           <div class="text-[11px] text-slate-500 mt-1">Si elegís una cuenta destino, se crea automáticamente el movimiento espejo (entrada en la otra cuenta).</div>
         </div>
+        <div class="col-span-3" id="bm-caja-wrap" style="display:none">
+          <label class="label">Caja de efectivo (opcional)</label>
+          ${catSelect('bm-caja', 'Caja', '', { placeholder:'— Si no mueve efectivo, dejar vacío —' })}
+          <div class="text-[11px] text-slate-500 mt-1">Si elegís una caja, el <b>depósito</b> también <b>sale del efectivo</b> de esa caja (y la <b>extracción entra</b> a la caja). Queda registrado en las dos partes.</div>
+        </div>
         <div class="col-span-3"><label class="label">Referencia</label><input id="bm-ref" class="input" placeholder="Nro de operación, recibo, etc."/></div>
         <div class="col-span-3"><label class="label">Observaciones</label><textarea id="bm-obs" class="input" rows="2"></textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="bcoMovSave()">💾 Guardar</button>`
   });
+  bcoMovToggleTransfer();   // estado inicial de los bloques según el tipo por defecto
 }
 function bcoMovToggleTransfer() {
   const t = $('#bm-tipo').value;
-  $('#bm-transfer-wrap').style.display = (t === 'transferencia_in' || t === 'transferencia_out') ? '' : 'none';
+  const tw = $('#bm-transfer-wrap'); if (tw) tw.style.display = (t === 'transferencia_in' || t === 'transferencia_out') ? '' : 'none';
+  const cw = $('#bm-caja-wrap');     if (cw) cw.style.display = (t === 'deposito' || t === 'extraccion') ? '' : 'none';
 }
 async function bcoMovSave() {
   const data = {
@@ -19806,6 +19846,7 @@ async function bcoMovSave() {
     contraparte: $('#bm-contra').value.trim()||null,
     referencia: $('#bm-ref').value.trim()||null,
     cuentaContraId: $('#bm-cta2')?.value || null,
+    cajaEfectivo: $('#bm-caja')?.value || null,
     observaciones: $('#bm-obs').value.trim()||null,
   };
   if (!data.concepto) return toast('Falta el concepto','warn');

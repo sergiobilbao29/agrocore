@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.44.0';
+const AGROCORE_VERSION = '1.45.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5603,6 +5603,7 @@ const bancoMovSchema = z.object({
   contraparte: z.string().nullable().optional(),
   referencia: z.string().nullable().optional(),
   cuentaContraId: z.string().nullable().optional(),     // solo en transferencias internas
+  cajaEfectivo: z.string().nullable().optional(),       // depósito/extracción vinculado a una caja de efectivo
   chequeId: z.string().nullable().optional(),
   cuotaCreditoId: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
@@ -5734,8 +5735,38 @@ app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:c
       });
       return res.status(201).json({ ok: true, data: result });
     }
+    // Movimiento interno caja <-> banco: depósito de efectivo en la cuenta, o extracción a efectivo.
+    // Crea el movimiento bancario + su espejo en la caja de efectivo (una sola operación).
+    const esCajaBanco = (d.tipo === 'deposito' || d.tipo === 'extraccion') && d.cajaEfectivo;
+    if (esCajaBanco) {
+      const cuentaTxt = cuenta.banco + (cuenta.alias ? ' · ' + cuenta.alias : '');
+      const result = await prisma.$transaction(async (tx) => {
+        const bancoMov = await tx.bancoMovimiento.create({
+          data: {
+            companyId: req.companyId, cuentaId: d.cuentaId, fecha: d.fecha,
+            tipo: d.tipo, concepto: d.concepto, monto: d.monto,
+            contraparte: d.contraparte || ('Efectivo · ' + d.cajaEfectivo),
+            referencia: d.referencia || null, observaciones: d.observaciones || null,
+            userId: req.user?.id || null,
+          },
+        });
+        // Depósito en banco => SALE plata de la caja (egreso). Extracción => ENTRA a la caja (ingreso).
+        await tx.efectivo.create({
+          data: {
+            companyId: req.companyId, fecha: d.fecha,
+            tipo: d.tipo === 'deposito' ? 'egreso' : 'ingreso',
+            concepto: (d.tipo === 'deposito' ? 'Depósito en ' : 'Extracción de ') + cuentaTxt,
+            monto: d.monto, caja: d.cajaEfectivo, clasificacion: 'empresa',
+            observaciones: d.observaciones || null,
+          },
+        });
+        return bancoMov;
+      });
+      return res.status(201).json({ ok: true, data: result });
+    }
+    const { cajaEfectivo, ...rest } = d;   // cajaEfectivo no es columna del movimiento bancario
     const row = await prisma.bancoMovimiento.create({
-      data: { ...d, companyId: req.companyId, userId: req.user?.id || null },
+      data: { ...rest, companyId: req.companyId, userId: req.user?.id || null },
     });
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
