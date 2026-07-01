@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.45.0';
+const AGROCORE_VERSION = '1.47.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9615,25 +9615,31 @@ function _parsearTextoCPE(txt) {
   if (idxC >= 0) {
     const idxD = txt.search(/D\s*-\s*DESTINO/i);
     const secC = txt.slice(idxC, idxD > idxC ? idxD : txt.length);
-    let m1 = secC.match(/Localidad[:\s]+([A-ZÁÉÍÓÚÑ \-.]+?)\s+Provincia/i);
-    if (m1) origenLocalidad = m1[1].trim();
+    // Localidad de origen: TODO lo que sigue a "Localidad" hasta "Provincia" o fin de línea
+    // (captura nombres compuestos como "CORONEL MOLDES", no solo la primera palabra).
+    let m1 = secC.match(/Localidad\s*:?\s*([A-ZÁÉÍÓÚÑ0-9º°.\-][A-ZÁÉÍÓÚÑ0-9º°.\- ]*?)\s*(?:Provincia\b|Prov\.?\b|Renspa|C\.?P\.?\b|$)/im);
+    if (m1) origenLocalidad = m1[1].replace(/\s+/g, ' ').trim();
+    // Caso "Localidad:Provincia<VALOR>" pegado (sin localidad entre los dos rótulos)
     if (!origenLocalidad) {
-      const pegado = secC.match(/Localidad:\s*Provincia([A-Z][A-Z\s]+?)(?=\s|$)/i);
+      const pegado = secC.match(/Localidad:\s*Provincia\s*([A-ZÁÉÍÓÚÑ .\-]+)/i);
       if (pegado) {
+        let val = pegado[1].replace(/\s+/g, ' ').trim();
         for (const prov of PROVS) {
-          if (pegado[1].toUpperCase().endsWith(prov.toUpperCase())) {
-            origenLocalidad = pegado[1].slice(0, -prov.length).trim();
-            origenProvincia = prov;
-            break;
-          }
+          if (val.toUpperCase().endsWith(prov.toUpperCase())) { origenProvincia = prov; val = val.slice(0, -prov.length).trim(); break; }
         }
-        if (!origenLocalidad) origenLocalidad = pegado[1].trim();
+        origenLocalidad = val || null;
       }
     }
     if (!origenProvincia) {
       for (const prov of PROVS) {
         if (secC.toUpperCase().includes(prov.toUpperCase())) { origenProvincia = prov; break; }
       }
+    }
+    // Si la localidad quedó pegada a la provincia (ej "CORONEL MOLDES CORDOBA"), la separamos.
+    if (origenLocalidad && origenProvincia) {
+      const up = origenLocalidad.toUpperCase(), pu = origenProvincia.toUpperCase();
+      if (up === pu) origenLocalidad = null;
+      else if (up.endsWith(' ' + pu)) origenLocalidad = origenLocalidad.slice(0, -(pu.length + 1)).trim();
     }
   }
   const origenRenspa = get(/(\d{2}\.\d{3}\.\d\.\d{4,}\/?[A-Z0-9]*)/);
