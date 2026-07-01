@@ -2349,6 +2349,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'01/07/2026',
+      titulo:'🏦 v1.44.0 — Fecha del saldo inicial de la cuenta bancaria',
+      desc:'Se refuerza el guardado de la <b>fecha del saldo inicial</b> de las cuentas bancarias (migración que garantiza la columna en la base + guardado a prueba de zona horaria). Si al editar seguía volviendo la fecha vieja, actualizá y hacé un <b>refresco completo</b> del navegador (Ctrl+Shift+R).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/06/2026',
       titulo:'🧹 v1.43.0 — Más campos tomados del catálogo (homogeneidad)',
       desc:'Auditamos el sistema y vinculamos a sus catálogos varios campos que estaban como texto libre o lista fija: <b>Unidad</b> en el alta rápida de producto, <b>Categoría</b> de movimientos de caja y de cuenta corriente manual (catálogo Categoría de gasto), <b>Producto/grano</b> y <b>Unidad</b> en Viajes, y <b>Grano</b> en Arrendamientos (catálogo Cereal). Los valores ya cargados que no estén en el catálogo se conservan marcados como "(legado)".' },
@@ -19684,7 +19687,8 @@ async function bcoCuentaSave(id) {
     alias: $('#bc-alias').value.trim()||null,
     titular: $('#bc-tit').value.trim()||null,
     saldoInicial: Number($('#bc-sini').value)||0,
-    fechaInicial: $('#bc-fini').value ? new Date($('#bc-fini').value).toISOString() : null,
+    // Mediodía local: evita que la fecha se corra un día por la zona horaria.
+    fechaInicial: $('#bc-fini').value ? new Date($('#bc-fini').value+'T12:00:00').toISOString() : null,
     observaciones: $('#bc-obs').value.trim()||null,
     activo: $('#bc-act').checked,
   };

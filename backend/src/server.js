@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.43.0';
+const AGROCORE_VERSION = '1.44.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5556,6 +5556,11 @@ app.put('/api/banco-cuentas/:id', requireCompany, requirePermission('finanzas:up
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const d = bancoCuentaSchema.partial().parse(req.body);
     const row = await prisma.bancoCuenta.update({ where: { id: req.params.id }, data: d });
+    // Traza puntual para diagnosticar el guardado de la fecha del saldo inicial.
+    console.log('[banco-cuentas PUT]', req.params.id,
+      '| fechaInicial recibida:', req.body?.fechaInicial,
+      '| parseada:', d.fechaInicial,
+      '| guardada:', row.fechaInicial);
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
