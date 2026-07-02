@@ -2350,6 +2350,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
+      titulo:'💳 v1.59.0 — Cheques: Beneficiario y Librador separados + campos según el tipo',
+      desc:'En el listado de <b>Cheques</b>, "Beneficiario" y "Librador" ahora son <b>dos columnas separadas</b> (más una de "Endosante" que podés activar desde ⚙️ Columnas). Y al cargar un cheque, los campos que no corresponden al tipo se ponen <b>en gris</b>: en los de <b>terceros</b> se deshabilita la <b>cuenta bancaria</b> (es una cuenta nuestra, solo aplica a cheques propios); en los <b>propios</b> se deshabilitan <b>endosante</b> y <b>fecha de recepción</b>. Así no se cargan datos que no van.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
       titulo:'✏️🗑️ v1.58.0 — Editar y eliminar alertas desde el calendario multi-empresa',
       desc:'En la vista <b>"🏢 Todas las empresas"</b>, al abrir un evento ahora podés <b>editarlo</b> y <b>eliminarlo/ocultarlo</b> desde el mismo detalle, sin cambiar de empresa (se guarda en la empresa que corresponde). En las alertas <b>automáticas</b> (créditos, cheques, cuentas corrientes), "Editar / personalizar" crea una alarma propia que reemplaza a la automática, y "Ocultar" la saca del calendario sin borrar el registro original.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
@@ -10271,7 +10274,9 @@ pages.cheques = async function() {
     { key:'fechaPago', label:'Pago', sort:c=>fechaAMs(c.fechaPago), render:c=>fmtDate(c.fechaPago) },
     { key:'fechaRecepcion', label:'Recepción', sort:c=>fechaAMs(c.fechaRecepcion), render:c=>c.fechaRecepcion?fmtDate(c.fechaRecepcion):'—' },
     { key:'fechaEndoso', label:'Endoso/Entrega', sort:c=>fechaAMs(c.fechaEndoso), render:c=>c.fechaEndoso?fmtDate(c.fechaEndoso):'—' },
-    { key:'contraparte', label:'Beneficiario / Librador', sort:c=>(c.tipo==='propio'?(c.beneficiario||''):(c.librador||c.endosante||'')).toLowerCase(), render:c=>`${esc(c.tipo==='propio'?(c.beneficiario||'—'):(c.librador||c.endosante||'—'))}${c.enPoderDe?`<br><span class="text-[10px] text-slate-400">📍 ${esc(c.enPoderDe)}</span>`:''}` },
+    { key:'beneficiario', label:'Beneficiario', sort:c=>(c.beneficiario||'').toLowerCase(), render:c=>`${esc(c.beneficiario||'—')}${c.enPoderDe?`<br><span class="text-[10px] text-slate-400">📍 ${esc(c.enPoderDe)}</span>`:''}` },
+    { key:'librador', label:'Librador / titular', sort:c=>(c.librador||'').toLowerCase(), render:c=>esc(c.librador||'—') },
+    { key:'endosante', label:'Endosante', defHidden:true, sort:c=>(c.endosante||'').toLowerCase(), render:c=>esc(c.endosante||'—') },
     { key:'cuitTitular', label:'CUIT titular', sort:c=>(c.cuitTitular||''), render:c=>esc(c.cuitTitular||'—') },
     { key:'monto', label:'Monto', align:'text-right', sort:c=>Number(c.monto||0), render:c=>`<span class="font-bold">${fmt$(c.monto)}</span>` },
     { key:'estado', label:'Estado', sort:c=>(c.estado||'').toLowerCase(), render:c=>chequeBadge(c.estado) },
@@ -10414,6 +10419,25 @@ function chqPoderOpciones(){
   const usados = (state.cache.cheques||[]).map(c=>c.enPoderDe).filter(Boolean);
   return Array.from(new Set([...cajas, ...usados])).sort((a,b)=>String(a).localeCompare(String(b),'es'));
 }
+// Habilita/inhabilita (en gris) un campo del form de cheque, opcionalmente limpiándolo.
+function _chqCampo(id, habilitado, limpiar){
+  const el = document.getElementById(id); if(!el) return;
+  el.disabled = !habilitado;
+  el.classList.toggle('bg-slate-100', !habilitado);
+  el.classList.toggle('cursor-not-allowed', !habilitado);
+  const box = el.closest('div'); if(box) box.classList.toggle('opacity-50', !habilitado);
+  if(!habilitado && limpiar) el.value = '';
+}
+// Según el tipo de cheque, deja en gris los campos que no corresponden:
+//  - Cuenta bancaria: solo cheques PROPIOS (es una cuenta nuestra).
+//  - Endosante y Fecha de recepción: solo cheques de TERCEROS (los recibimos).
+function chqAplicarTipo(limpiar){
+  const tipo = document.getElementById('f-tipo')?.value || 'propio';
+  const esProp = tipo === 'propio';
+  _chqCampo('f-cue',  esProp,  limpiar);
+  _chqCampo('f-endo', !esProp, limpiar);
+  _chqCampo('f-frec', !esProp, limpiar);
+}
 async function chqForm(id=null) {
   const it = id ? (state.cache.cheques||[]).find(x=>x.id===id)||{} : {};
   // Default de estado según tipo: cheque de terceros → "en_cartera"; propio → "emitido".
@@ -10470,14 +10494,19 @@ async function chqForm(id=null) {
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='chqSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
-  // Al cambiar el tipo, ajustar el estado por defecto si el usuario no lo tocó.
+  // Estado inicial de los campos según el tipo (sin borrar datos existentes al editar).
+  chqAplicarTipo(false);
+  // Al cambiar el tipo: ajustar el estado por defecto (solo en alta) y grisar/limpiar
+  // los campos que no correspondan al nuevo tipo.
   const tipoEl = $('#f-tipo'), estEl = $('#f-est');
-  if (tipoEl && estEl && !id) {
+  if (tipoEl) {
     tipoEl.onchange = () => {
-      if (estEl.dataset.manual) return;
-      estEl.value = tipoEl.value === 'terceros' ? 'en_cartera' : 'emitido';
+      if (estEl && !estEl.dataset.manual && !id) {
+        estEl.value = tipoEl.value === 'terceros' ? 'en_cartera' : 'emitido';
+      }
+      chqAplicarTipo(true);
     };
-    estEl.onchange = () => { estEl.dataset.manual = '1'; };
+    if (estEl) estEl.onchange = () => { estEl.dataset.manual = '1'; };
   }
 }
 async function chqSave(id) {
@@ -10501,6 +10530,10 @@ async function chqSave(id) {
     observaciones: $('#f-obs').value.trim()||null,
   };
   if (!data.nroCheque || !data.monto) return toast('Nº y monto requeridos','warn');
+  // Coherencia por tipo: los cheques de terceros no llevan cuenta bancaria propia;
+  // los propios no llevan endosante ni fecha de recepción.
+  if (data.tipo === 'terceros') { data.cuenta = null; }
+  if (data.tipo === 'propio')   { data.endosante = null; data.fechaRecepcion = null; }
   try { await api('/api/cheques'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
     toast(id?'Actualizado':'Creado','success'); closeModal(); delete state.cache.cheques; pages.cheques();
   } catch (e) { toast(e.message,'error'); }
@@ -10541,7 +10574,7 @@ async function chqAcreditarForm(id) {
       <div class="bg-slate-50 border border-slate-200 p-3 rounded-lg mb-3 text-sm">
         <div class="font-medium text-slate-800">${esPropio?'Cheque propio':'Cheque de terceros'} #${esc(c.nroCheque)}</div>
         <div class="text-xs text-slate-500 mt-0.5">${esc(c.banco||'Sin banco')} · Pago: ${fmtDate(c.fechaPago)} · ${fmt$(c.monto)}</div>
-        ${esPropio?`<div class="text-xs text-slate-600 mt-1">Beneficiario: ${esc(c.beneficiario||'—')}</div>`:`<div class="text-xs text-slate-600 mt-1">Librador: ${esc(c.librador||'—')}</div>`}
+        ${(c.beneficiario||c.librador)?`<div class="text-xs text-slate-600 mt-1">${c.beneficiario?`Beneficiario: <b>${esc(c.beneficiario)}</b>`:''}${c.beneficiario&&c.librador?' · ':''}${c.librador?`Librador: <b>${esc(c.librador)}</b>`:''}</div>`:''}
       </div>
       <div class="grid grid-cols-1 gap-3">
         <div><label class="label">Nuevo estado *</label>
