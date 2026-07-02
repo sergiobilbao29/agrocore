@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.48.0';
+const AGROCORE_VERSION = '1.49.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5499,7 +5499,7 @@ app.get('/api/flujo-proyectado/export', requireCompany, async (req, res, next) =
 
 // Tipos de movimiento: cuáles suman al saldo y cuáles restan.
 const BANCO_TIPOS_INGRESO = ['deposito', 'transferencia_in', 'cheque_cobrado', 'credito_acreditado', 'interes'];
-const BANCO_TIPOS_EGRESO  = ['extraccion', 'transferencia_out', 'cheque_pagado', 'cuota_credito', 'comision', 'impuesto'];
+const BANCO_TIPOS_EGRESO  = ['extraccion', 'transferencia_out', 'cheque_pagado', 'cuota_credito', 'comision', 'impuesto', 'debito'];
 const BANCO_TIPOS_TODOS   = [...BANCO_TIPOS_INGRESO, ...BANCO_TIPOS_EGRESO, 'otro', 'ajuste_in', 'ajuste_out'];
 
 const bancoCuentaSchema = z.object({
@@ -5633,7 +5633,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       categoria: z.string().nullable().optional(),
       clasificacion: z.string().nullable().optional(),   // "empresa" | "propio"
       monto: z.number().positive(),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo']),
       // Datos según método
       caja: z.string().nullable().optional(),            // efectivo / externo (nombre del medio)
       chequeId: z.string().nullable().optional(),        // cheque (cheque existente)
@@ -5665,16 +5665,20 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
           observaciones: detalleObs || null,
         },
       });
-    } else if (d.metodo === 'transferencia') {
+    } else if (d.metodo === 'transferencia' || d.metodo === 'debito') {
       if (!d.bancoCuentaId) return res.status(400).json({ ok: false, error: 'Falta la cuenta bancaria' });
       const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.bancoCuentaId, companyId: req.companyId } });
       if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta bancaria no encontrada' });
+      // Débito bancario: egreso 'debito' (ej. pago de tarjeta/servicios); ingreso => depósito.
+      const tipoMov = d.metodo === 'debito'
+        ? (d.tipo === 'ingreso' ? 'deposito' : 'debito')
+        : (d.tipo === 'ingreso' ? 'transferencia_in' : 'transferencia_out');
       resultado = await prisma.bancoMovimiento.create({
         data: {
           companyId: req.companyId,
           cuentaId: d.bancoCuentaId,
           fecha: d.fecha,
-          tipo: d.tipo === 'ingreso' ? 'transferencia_in' : 'transferencia_out',
+          tipo: tipoMov,
           concepto: d.concepto,
           monto: d.monto,
           contraparte: d.contraparte || null,

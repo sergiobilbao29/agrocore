@@ -2350,6 +2350,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'01/07/2026',
+      titulo:'📒 v1.49.0 — Movimientos diarios: vista general + Débito bancario',
+      desc:'(1) <b>Movimientos diarios</b> ahora muestra <b>todos</b> los movimientos: efectivo/caja, transferencias entre cajas, y <b>todos</b> los movimientos bancarios (depósitos, extracciones, cheques, créditos, débitos, comisiones, impuestos) — que incluyen el impacto de pagos y cobros. (2) Se agregó el método <b>“Débito bancario”</b> al nuevo movimiento diario. (3) En <b>Bancos → cuenta → nuevo movimiento</b> se agregó el tipo <b>“Débito”</b> (para pago de tarjeta de crédito, servicios, etc.).' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'01/07/2026',
       titulo:'🔁 v1.48.0 — Editar transferencia interna actualiza también el espejo',
       desc:'Al <b>editar un movimiento</b> que es una <b>transferencia interna</b> entre cuentas propias, el sistema te <b>pregunta</b> si querés actualizar también el <b>movimiento espejo</b> de la otra cuenta (monto, fecha, concepto y observaciones). Aceptar = las dos · Cancelar = solo este.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'01/07/2026',
@@ -17776,12 +17779,12 @@ pages.movDiarios = async function() {
   const cuentasMap = new Map((state.cache.bancoCuentas || []).map(c => [c.id, c]));
   const filas = [];
   for (const e of efRows) {
-    if (e.tipo === 'transferencia') continue; // las transferencias entre cajas no son gastos/ingresos
+    const esTransf = e.tipo === 'transferencia';
     filas.push({
       id: 'EF-' + e.id,
       fecha: e.fecha,
-      tipo: e.tipo, // ingreso/egreso
-      concepto: e.concepto,
+      tipo: esTransf ? 'transferencia' : e.tipo, // ingreso/egreso/transferencia(neutro)
+      concepto: e.concepto + (esTransf && e.cajaDestino ? ` (→ ${e.cajaDestino})` : ''),
       categoria: extraerCategoria(e.observaciones),
       clasificacion: e.clasificacion || 'empresa',
       monto: Number(e.monto || 0),
@@ -17791,17 +17794,22 @@ pages.movDiarios = async function() {
     });
   }
   for (const m of bancoMovs) {
-    if (m.tipo !== 'transferencia_in' && m.tipo !== 'transferencia_out') continue;
+    // Todos los movimientos bancarios (depósitos, extracciones, transferencias, cheques,
+    // créditos, débitos, comisiones, impuestos, etc.), no solo transferencias.
+    const t = (typeof BANCO_TIPOS !== 'undefined' && BANCO_TIPOS[m.tipo]) ? BANCO_TIPOS[m.tipo] : { sign:0, lbl:m.tipo };
     const c = cuentasMap.get(m.cuentaId);
+    const metodo = (m.tipo === 'transferencia_in' || m.tipo === 'transferencia_out') ? 'transferencia'
+      : (m.tipo === 'cheque_cobrado' || m.tipo === 'cheque_pagado') ? 'cheque'
+      : (m.tipo === 'debito') ? 'debito' : 'banco';
     filas.push({
       id: 'BM-' + m.id,
       fecha: m.fecha,
-      tipo: m.tipo === 'transferencia_in' ? 'ingreso' : 'egreso',
+      tipo: t.sign > 0 ? 'ingreso' : (t.sign < 0 ? 'egreso' : 'otro'),
       concepto: m.concepto,
-      categoria: extraerCategoria(m.observaciones),
+      categoria: extraerCategoria(m.observaciones) || t.lbl,
       clasificacion: 'empresa',
       monto: Number(m.monto || 0),
-      metodo: 'transferencia',
+      metodo,
       origen: c ? (c.banco + (c.numero ? ' · '+c.numero : '')) : 'Banco',
       observaciones: m.observaciones || '',
     });
@@ -17833,7 +17841,7 @@ pages.movDiarios = async function() {
       if (q && ![r.concepto, r.categoria, r.origen, r.observaciones].some(x => (x||'').toLowerCase().includes(q))) return false;
       return true;
     });
-    const sumF = filtered.reduce((a,r) => a + (r.tipo==='ingreso' ? r.monto : -r.monto), 0);
+    const sumF = filtered.reduce((a,r) => a + (r.tipo==='ingreso' ? r.monto : (r.tipo==='egreso' ? -r.monto : 0)), 0);
     const cant = filtered.length;
     $('#md-tabla').innerHTML = filtered.length === 0
       ? '<div class="text-center text-slate-400 py-8">' + (filas.length ? 'Sin coincidencias con los filtros' : 'Sin movimientos cargados. Usá "+ Nuevo movimiento" arriba.') + '</div>'
@@ -17858,9 +17866,11 @@ pages.movDiarios = async function() {
                     : '<span class="badge badge-green">Empresa</span>'}</td>
                 <td>${r.metodo === 'efectivo' ? '💵 Efectivo'
                     : r.metodo === 'transferencia' ? '🏛️ Transferencia'
+                    : r.metodo === 'debito' ? '🏦 Débito'
+                    : r.metodo === 'banco' ? '🏛️ Banco'
                     : r.metodo === 'cheque' ? '💳 Cheque' : '—'}</td>
                 <td class="text-xs text-slate-600">${esc(r.origen)}</td>
-                <td class="text-right font-semibold ${r.tipo === 'ingreso' ? 'text-emerald-700' : 'text-red-700'}">${r.tipo === 'ingreso' ? '+' : '-'}${fmt$(r.monto)}</td>
+                <td class="text-right font-semibold ${r.tipo === 'ingreso' ? 'text-emerald-700' : (r.tipo === 'egreso' ? 'text-red-700' : 'text-slate-500')}">${r.tipo === 'ingreso' ? '+' : (r.tipo === 'egreso' ? '-' : '')}${fmt$(r.monto)}</td>
               </tr>`).join('')}
           </tbody>
           <tfoot>
@@ -17944,6 +17954,8 @@ pages.movDiarios = async function() {
             <option value="">Todos</option>
             <option value="efectivo"      ${state.movDiariosFilter.metodo==='efectivo'?'selected':''}>💵 Efectivo</option>
             <option value="transferencia" ${state.movDiariosFilter.metodo==='transferencia'?'selected':''}>🏛️ Transferencia</option>
+            <option value="debito"        ${state.movDiariosFilter.metodo==='debito'?'selected':''}>🏦 Débito</option>
+            <option value="banco"         ${state.movDiariosFilter.metodo==='banco'?'selected':''}>🏛️ Banco (otros)</option>
             <option value="cheque"        ${state.movDiariosFilter.metodo==='cheque'?'selected':''}>💳 Cheque</option>
           </select>
         </div>
@@ -18056,6 +18068,7 @@ function movDiariosAbrir() {
             <option value="efectivo">💵 Efectivo</option>
             <option value="cheque">💳 Cheque</option>
             <option value="transferencia">🏛️ Transferencia bancaria</option>
+            <option value="debito">🏦 Débito bancario</option>
             <option value="externo">💸 Billetera / medio externo</option>
           </select>
         </div>
@@ -18085,14 +18098,15 @@ function movDiariosMetodoCambio() {
       : `<label class="label">Caja</label>
          <input id="md-caja" class="input" placeholder="Nombre de caja"/>
          <div class="text-[11px] text-amber-700 mt-1">⚠️ Te recomendamos crear las cajas en Configuración → Catálogos → Cajas.</div>`;
-  } else if (met === 'transferencia') {
+  } else if (met === 'transferencia' || met === 'debito') {
     const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
+    const hint = met === 'debito' ? '<div class="text-[11px] text-slate-500 mt-1">🏦 Débito directo de la cuenta (ej. pago de tarjeta, servicios).</div>' : '';
     det.innerHTML = cuentas.length
       ? `<label class="label">Cuenta bancaria *</label>
          <select id="md-banco" class="input">
            <option value="">— Elegir cuenta —</option>
            ${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}
-         </select>`
+         </select>${hint}`
       : `<div class="text-xs text-amber-700">⚠️ No hay cuentas bancarias. Cargá una en Tesorería → Bancos.</div>`;
   } else if (met === 'externo') {
     const medios = catByTipo('Medio externo').map(m=>m.nombre).filter(Boolean);
@@ -18137,11 +18151,11 @@ async function movDiariosGuardar() {
   };
   if (metodo === 'efectivo')      body.caja          = document.getElementById('md-caja')?.value?.trim() || null;
   if (metodo === 'externo')       body.caja          = document.getElementById('md-medio')?.value?.trim() || null;
-  if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('md-banco')?.value || null;
+  if (metodo === 'transferencia' || metodo === 'debito') body.bancoCuentaId = document.getElementById('md-banco')?.value || null;
   if (metodo === 'cheque')        body.chequeId      = document.getElementById('md-cheque')?.value || null;
   if (metodo === 'efectivo'      && !body.caja)          return toast('Elegí la caja', 'warn');
   if (metodo === 'externo'       && !body.caja)          return toast('Elegí o escribí el medio externo', 'warn');
-  if (metodo === 'transferencia' && !body.bancoCuentaId) return toast('Elegí la cuenta bancaria', 'warn');
+  if ((metodo === 'transferencia' || metodo === 'debito') && !body.bancoCuentaId) return toast('Elegí la cuenta bancaria', 'warn');
   if (metodo === 'cheque'        && !body.chequeId)      return toast('Elegí el cheque', 'warn');
   try {
     await api('/api/movimientos-diarios', { method:'POST', body: JSON.stringify(body) });
@@ -19607,6 +19621,7 @@ async function flujoExportar() {
 const BANCO_TIPOS = {
   deposito:           { lbl:'Depósito',           sign:1, icon:'⬆️' },
   extraccion:         { lbl:'Extracción',          sign:-1, icon:'⬇️' },
+  debito:             { lbl:'Débito (tarjeta/servicio)', sign:-1, icon:'💳' },
   transferencia_in:   { lbl:'Transferencia in',   sign:1, icon:'↘️' },
   transferencia_out:  { lbl:'Transferencia out',  sign:-1, icon:'↗️' },
   cheque_cobrado:     { lbl:'Cheque cobrado',     sign:1, icon:'💳' },
