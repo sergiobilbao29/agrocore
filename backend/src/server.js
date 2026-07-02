@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.55.0';
+const AGROCORE_VERSION = '1.57.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8951,6 +8951,75 @@ app.get('/api/recordatorios/alertas', requireCompany, requirePermission('agenda:
       return { ...r, diasRestantes };
     }).sort((a,b) => a.diasRestantes - b.diasRestantes);
     res.json({ ok: true, data: alertas });
+  } catch (e) { next(e); }
+});
+
+// Calendario consolidado de TODAS las empresas del usuario (o todas si superAdmin).
+// Cada evento viene etiquetado con la empresa y un color estable, y se devuelve
+// una "leyenda" con el par empresa/color para pintar la UI. No usa requireCompany
+// porque es una vista transversal a varias empresas.
+const CAL_COLORES_EMPRESA = [
+  '#15803d', '#b45309', '#1d4ed8', '#7c3aed', '#be123c', '#0891b2',
+  '#ca8a04', '#4d7c0f', '#c026d3', '#0f766e', '#9f1239', '#4338ca',
+];
+app.get('/api/recordatorios/todas-empresas', async (req, res, next) => {
+  try {
+    const { estado = 'pendiente', desde, hasta } = req.query;
+
+    // Empresas accesibles: superAdmin ve todas las activas; el resto, solo
+    // aquellas donde su rol tiene permiso de agenda:read.
+    let empresas;
+    if (req.user.superAdmin) {
+      empresas = await prisma.company.findMany({ where: { activo: true }, orderBy: { name: 'asc' } });
+    } else {
+      empresas = (req.user.userCompanies || [])
+        .filter((uc) => hasPermission(uc.role?.permissions || [], 'agenda:read'))
+        .map((uc) => uc.company)
+        .filter(Boolean)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    }
+
+    const leyenda = empresas.map((emp, i) => ({
+      companyId: emp.id,
+      companyName: emp.name,
+      color: CAL_COLORES_EMPRESA[i % CAL_COLORES_EMPRESA.length],
+    }));
+    const colorDe = new Map(leyenda.map((l) => [l.companyId, l.color]));
+
+    const out = [];
+    for (const emp of empresas) {
+      const color = colorDe.get(emp.id);
+      // Manuales
+      const where = { companyId: emp.id };
+      if (estado === 'pendiente') where.completado = false;
+      else if (estado === 'completado') where.completado = true;
+      if (desde || hasta) {
+        where.fecha = {};
+        if (desde) where.fecha.gte = new Date(desde);
+        if (hasta) where.fecha.lte = new Date(hasta);
+      }
+      const manuales = await prisma.recordatorio.findMany({ where, orderBy: { fecha: 'asc' } });
+      for (const r of manuales) {
+        out.push({ ...r, origen: 'manual', companyId: emp.id, companyName: emp.name, companyColor: color });
+      }
+      // Automáticos (no aplican a "completado")
+      if (estado !== 'completado') {
+        let autos = await _construirRecordatoriosAuto(emp.id, {});
+        if (desde || hasta) {
+          autos = autos.filter((a) => {
+            const f = new Date(a.fecha);
+            if (desde && f < new Date(desde)) return false;
+            if (hasta && f > new Date(hasta)) return false;
+            return true;
+          });
+        }
+        for (const a of autos) {
+          out.push({ ...a, companyId: emp.id, companyName: emp.name, companyColor: color });
+        }
+      }
+    }
+    out.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+    res.json({ ok: true, data: out, empresas: leyenda });
   } catch (e) { next(e); }
 });
 

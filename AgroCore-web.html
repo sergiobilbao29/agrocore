@@ -2349,6 +2349,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
+      titulo:'🔗 v1.57.0 — Desde el calendario multi-empresa, ir al evento y editarlo',
+      desc:'En la vista <b>"🏢 Todas las empresas"</b> del calendario, al hacer clic en un evento se abre su detalle con dos acciones: <b>"Abrir cheque/crédito/cuenta corriente"</b> (te lleva directo al registro, <b>cambiando de empresa automáticamente</b> si es de otra), y <b>"Editar recordatorio"</b> (editás el evento sin salir del calendario; se guarda en la empresa que corresponde). Ejemplo: estás en la Empresa 1, ves el vencimiento de un cheque de la Empresa 2 y con un clic vas al cheque de la Empresa 2.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
+      titulo:'🏢 v1.56.0 — Calendario con los eventos de TODAS tus empresas',
+      desc:'En la <b>Agenda</b> hay un botón nuevo <b>"🏢 Todas las empresas"</b>: al activarlo ves en un solo calendario los recordatorios (manuales y automáticos) de todas las empresas a las que tenés acceso, cada una con su <b>color</b> y su <b>nombre</b>. Arriba aparece una leyenda con el color de cada empresa. En este modo la vista es de <b>solo lectura</b> (para editar un evento, cambiá a la empresa correspondiente desde el selector de arriba).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
       titulo:'⏳ v1.55.0 — Pantalla de carga con fondo blanco al abrir la app',
       desc:'La <b>pantalla que aparece mientras AgroCore abre</b> en el celular (splash de la PWA) ahora tiene <b>fondo blanco</b> con la hoja centrada, en vez del fondo verde oscuro. Si ya la tenías instalada, borrala y volvé a "Agregar a pantalla de inicio" para que tome el cambio.' },
@@ -17433,6 +17439,133 @@ function recoDiasTexto(dias) {
 }
 function recoFiltroEstado(v) { state._recoEstado = v; pages.agenda(); }
 function recoVista(v) { state._recoVista = v; pages.agenda(); }
+function recoToggleEmpresas() { state._recoTodasEmpresas = !state._recoTodasEmpresas; pages.agenda(); }
+
+// Módulo + función que abre el registro asociado a un recordatorio, y la lista
+// que la función necesita tener cargada en cache.
+const RECO_RELACION_DESTINO = {
+  cheque:  { modulo: 'cheques',  cache: 'cheques',  fn: 'chqForm', label: 'cheque'          },
+  credito: { modulo: 'creditos', cache: 'creditos', fn: 'credVer', label: 'crédito'         },
+  ctacte:  { modulo: 'ctasCtes', cache: 'ctasCtes', fn: 'ccForm',  label: 'cuenta corriente'},
+};
+
+// Visor de un evento en el modo "todas las empresas". Permite ir al registro
+// asociado (cambiando de empresa) y editar el recordatorio sin salir del calendario.
+function recoVerEvento(id) {
+  const r = (state._recoCache || []).find(x => String(x.id) === String(id));
+  if (!r) return;
+  const dest = RECO_RELACION_DESTINO[r.relacionTipo];
+  const esOtraEmpresa = r.companyId && r.companyId !== state.companyId;
+  const esManual = r.origen !== 'auto';
+  const botones = [];
+  if (dest && r.relacionId) {
+    botones.push(`<button class="btn btn-primary" onclick="recoIrAlRegistro('${r.id}')">🔗 Abrir ${dest.label}${r.companyName?` en ${esc(r.companyName)}`:''} →</button>`);
+  }
+  if (esManual) {
+    botones.push(`<button class="btn ${dest&&r.relacionId?'btn-secondary':'btn-primary'}" onclick="recoEditarEnLugar('${r.id}')">✏️ Editar recordatorio</button>`);
+  }
+  botones.push(`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`);
+  openModal({
+    title: '📅 ' + (r.titulo || 'Recordatorio'),
+    body: `
+      <div class="grid grid-cols-1 gap-2 text-sm">
+        ${r.companyName ? `<div class="flex items-center gap-2">
+          <span style="width:12px;height:12px;border-radius:9999px;background:${r.companyColor||'#64748b'};display:inline-block"></span>
+          <span class="font-semibold">${esc(r.companyName)}</span>
+          ${esOtraEmpresa ? `<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-300">otra empresa</span>` : ''}
+        </div>` : ''}
+        <div><span class="text-slate-500">Fecha:</span> ${fmtDate(r.fecha)}</div>
+        <div><span class="text-slate-500">Categoría:</span> ${esc(recoCatLabel(r.categoria))}</div>
+        ${r.prioridad ? `<div><span class="text-slate-500">Prioridad:</span> ${esc(r.prioridad)}</div>` : ''}
+        ${r.origen==='auto' ? `<div class="text-xs text-blue-700">🔗 Recordatorio automático (Créditos / Cheques / Cuentas corrientes)</div>` : ''}
+        ${r.descripcion ? `<div class="mt-1 text-slate-600 whitespace-pre-line">${esc(r.descripcion)}</div>` : ''}
+        ${dest && r.relacionId && esOtraEmpresa ? `<div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mt-1">Al abrir el ${dest.label}, el sistema cambia automáticamente a <b>${esc(r.companyName)}</b>.</div>` : ''}
+      </div>`,
+    footer: botones.join(' ')
+  });
+}
+
+// Va al registro asociado (cheque/crédito/cuenta corriente), cambiando de empresa
+// si hace falta, y abre su ficha para verlo/editarlo.
+async function recoIrAlRegistro(id) {
+  const r = (state._recoCache || []).find(x => String(x.id) === String(id));
+  if (!r) return;
+  const dest = RECO_RELACION_DESTINO[r.relacionTipo];
+  closeModal();
+  if (!dest || !r.relacionId) {
+    // Sin registro asociado: al menos llevar a la Agenda de esa empresa
+    state._recoTodasEmpresas = false;
+    return cambiarEmpresaYIr(r.companyId, 'agenda');
+  }
+  await cambiarEmpresaYIr(r.companyId, dest.modulo);
+  // Esperar a que la página destino cargue su lista en cache y abrir la ficha.
+  // Cortamos cuando la lista ya contiene el registro buscado (o al agotar el tiempo).
+  for (let i = 0; i < 40; i++) {
+    const lst = state.cache[dest.cache];
+    if (Array.isArray(lst) && lst.some(x => x.id === r.relacionId)) break;
+    await new Promise(res => setTimeout(res, 200));
+  }
+  try { await window[dest.fn](r.relacionId); }
+  catch (e) { /* si no aparece en la lista filtrada, queda abierto el módulo */ }
+}
+
+// Edita el recordatorio (manual) sin salir del calendario, guardando en su empresa
+// mediante el header X-Company-Id (no cambia el contexto general de la app).
+function recoEditarEnLugar(id) {
+  const r = (state._recoCache || []).find(x => String(x.id) === String(id));
+  if (!r) return;
+  const fecha = new Date(r.fecha).toISOString().slice(0,10);
+  openModal({
+    title: '✏️ Editar recordatorio' + (r.companyName ? ' · ' + esc(r.companyName) : ''),
+    body: `
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Título *</label><input id="rce-tit" class="input" value="${esc(r.titulo||'')}"/></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Fecha *</label><input id="rce-fec" type="date" class="input" value="${fecha}"/></div>
+          <div><label class="label">Categoría</label>
+            <select id="rce-cat" class="input">
+              ${Object.entries(RECO_CATS).map(([k,v]) => `<option value="${k}" ${r.categoria===k?'selected':''}>${v.label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Prioridad</label>
+            <select id="rce-pri" class="input">
+              <option value="alta"  ${r.prioridad==='alta'?'selected':''}>🔴 Alta</option>
+              <option value="media" ${r.prioridad==='media'?'selected':''}>🟡 Media</option>
+              <option value="baja"  ${r.prioridad==='baja'?'selected':''}>🟢 Baja</option>
+            </select>
+          </div>
+          <div><label class="label">Avisar días antes</label><input id="rce-dias" type="number" min="0" max="365" class="input" value="${r.avisarDiasAntes||15}"/></div>
+        </div>
+        <div><label class="label">Descripción / notas</label><textarea id="rce-desc" class="input" rows="3">${esc(r.descripcion||'')}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="recoSaveEnLugar('${r.id}','${r.companyId}')">💾 Guardar</button>`
+  });
+}
+async function recoSaveEnLugar(id, companyId) {
+  const data = {
+    titulo: $('#rce-tit').value.trim(),
+    descripcion: $('#rce-desc').value.trim() || null,
+    fecha: new Date($('#rce-fec').value).toISOString(),
+    categoria: $('#rce-cat').value,
+    prioridad: $('#rce-pri').value,
+    avisarDiasAntes: Number($('#rce-dias').value||15),
+  };
+  if (!data.titulo) return toast('Falta el título','warn');
+  const headers = { 'X-Company-Id': companyId };
+  try {
+    if (String(id).startsWith('auto:')) {
+      // Evento automático: creamos una alarma manual en esa empresa y ocultamos la auto
+      await api('/api/recordatorios', { method:'POST', body: JSON.stringify(data), headers });
+      try { await api('/api/recordatorios/'+id, { method:'DELETE', headers }); } catch {}
+    } else {
+      await api('/api/recordatorios/'+id, { method:'PUT', body: JSON.stringify(data), headers });
+    }
+    toast('Guardado','success'); closeModal(); pages.agenda();
+  } catch (e) { toast(e.message,'error'); }
+}
 function recoAvanzar(dias) {
   const d = state._recoFecha ? new Date(state._recoFecha) : new Date();
   d.setDate(d.getDate() + dias);
@@ -17463,9 +17596,17 @@ pages.agenda = async function() {
   const vista  = state._recoVista || 'mes';   // 'mes' | 'semana' | 'dia' | 'lista'
   const refDate = state._recoFecha ? new Date(state._recoFecha) : new Date();
   refDate.setHours(0,0,0,0);
-  let recos = [];
-  try { const r = await api('/api/recordatorios?estado='+estado); recos = r.data || []; }
-  catch (e) { return toast(e.message,'error'); }
+  const todasEmp = !!state._recoTodasEmpresas;
+  let recos = [], leyendaEmp = [];
+  try {
+    if (todasEmp) {
+      const r = await api('/api/recordatorios/todas-empresas?estado='+estado);
+      recos = r.data || []; leyendaEmp = r.empresas || [];
+    } else {
+      const r = await api('/api/recordatorios?estado='+estado); recos = r.data || [];
+    }
+  } catch (e) { return toast(e.message,'error'); }
+  state._recoCache = recos;   // para el visor de solo lectura en modo multi-empresa
 
   const today = new Date(); today.setHours(0,0,0,0);
   const kpiVencidos = recos.filter(r => new Date(r.fecha) < today && !r.completado).length;
@@ -17501,9 +17642,15 @@ pages.agenda = async function() {
         <button class="btn btn-sm ${vista==='semana'?'btn-primary':'btn-secondary'}" onclick="recoVista('semana')">📆 Semana</button>
         <button class="btn btn-sm ${vista==='dia'?'btn-primary':'btn-secondary'}" onclick="recoVista('dia')">📍 Día</button>
         <button class="btn btn-sm ${vista==='lista'?'btn-primary':'btn-secondary'}" onclick="recoVista('lista')">📋 Lista</button>
+        <button class="btn btn-sm ${todasEmp?'btn-primary':'btn-secondary'}" onclick="recoToggleEmpresas()" title="Ver los eventos de todas tus empresas, con un color por empresa">🏢 Todas las empresas</button>
       </div>
-      ${can('agenda:create')?`<button class="btn btn-primary" onclick="recoForm()">+ Nuevo recordatorio</button>`:''}
+      ${can('agenda:create') && !todasEmp ?`<button class="btn btn-primary" onclick="recoForm()">+ Nuevo recordatorio</button>`:''}
     </div>
+    ${todasEmp && leyendaEmp.length ? `
+      <div class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 bg-white border border-slate-200 rounded-lg p-2 text-xs">
+        <span class="text-slate-500 font-medium">Empresas:</span>
+        ${leyendaEmp.map(l => `<span class="inline-flex items-center gap-1"><span style="width:11px;height:11px;border-radius:9999px;background:${l.color};display:inline-block"></span>${esc(l.companyName)}</span>`).join('')}
+      </div>` : ''}
     ${vista !== 'lista' ? `
       <div class="flex items-center justify-between gap-2 mb-3 bg-white border border-slate-200 rounded-lg p-2">
         <button class="btn btn-secondary text-sm" onclick="${vista==='mes'?'recoAvanzarMes(-1)':vista==='semana'?'recoAvanzar(-7)':'recoAvanzar(-1)'}">‹ ${pasoNombre} anterior</button>
@@ -17538,6 +17685,10 @@ function recoItemsDelDia(recos, dia) {
 function recoChipMini(r) {
   // Mini chip para celdas de mes
   const titulo = (r.titulo || '').length > 22 ? (r.titulo.slice(0,22) + '…') : r.titulo;
+  // Modo "todas las empresas": color por empresa y visor de solo lectura
+  if (r.companyColor) {
+    return `<div class="text-[10px] px-1.5 py-0.5 rounded border truncate cursor-pointer hover:opacity-80" style="background:${r.companyColor}1a;border-color:${r.companyColor}66;border-left:3px solid ${r.companyColor}" onclick="event.stopPropagation(); recoVerEvento('${r.id}')" title="${esc(r.companyName||'')} — ${esc(r.titulo)}">${esc(recoCatLabel(r.categoria).slice(0,2))} ${esc(titulo)}</div>`;
+  }
   const color = r.origen === 'auto' ? 'bg-blue-100 text-blue-800 border-blue-300'
               : r.prioridad === 'alta' ? 'bg-rose-100 text-rose-800 border-rose-300'
               : r.prioridad === 'baja' ? 'bg-slate-100 text-slate-700 border-slate-300'
@@ -17549,10 +17700,14 @@ function recoCardCompacta(r, today) {
   const dias = Math.round((f - today)/86400000);
   const vencido = dias < 0 && !r.completado;
   const prioColor = r.prioridad === 'alta' ? 'border-l-4 border-rose-500' : r.prioridad === 'baja' ? 'border-l-4 border-slate-300' : 'border-l-4 border-amber-400';
+  const multiEmp = !!r.companyColor;
+  const cardStyle = multiEmp ? `style="border-left:4px solid ${r.companyColor}"` : '';
+  const cardBorde = multiEmp ? 'border border-slate-200' : `border border-slate-200 ${prioColor}`;
   return `
-    <div class="bg-white border border-slate-200 ${prioColor} rounded-lg p-2 flex items-start gap-2 ${r.completado?'opacity-60':''} ${r.origen==='auto'?'bg-blue-50/30':''}">
+    <div class="bg-white ${cardBorde} rounded-lg p-2 flex items-start gap-2 ${r.completado?'opacity-60':''} ${r.origen==='auto'?'bg-blue-50/30':''}" ${cardStyle}>
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
+          ${multiEmp ? `<span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium" style="background:${r.companyColor}1a;color:${r.companyColor};border:1px solid ${r.companyColor}66">🏢 ${esc(r.companyName||'')}</span>` : ''}
           <span class="text-[10px] px-1.5 py-0.5 rounded-full border ${recoCatColor(r.categoria)}">${recoCatLabel(r.categoria)}</span>
           <span class="font-semibold text-sm ${r.completado?'line-through':''}">${esc(r.titulo)}</span>
           ${r.origen==='auto' ? `<span class="text-[10px] px-1 rounded bg-blue-100 text-blue-700 border border-blue-300">🔗</span>` : ''}
@@ -17561,9 +17716,10 @@ function recoCardCompacta(r, today) {
         ${r.descripcion ? `<div class="text-xs text-slate-500 mt-0.5 line-clamp-2">${esc(r.descripcion)}</div>` : ''}
       </div>
       <div class="flex flex-col gap-1">
+        ${multiEmp ? `<button class="btn btn-xs btn-secondary" onclick="recoVerEvento('${r.id}')" title="Ver detalle">👁️</button>` : `
         ${!r.completado && can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoCompletar('${r.id}')" title="${r.origen==='auto'?'Ocultar':'Completar'}">✅</button>` : ''}
         ${can('agenda:update') ? `<button class="btn btn-xs btn-secondary" onclick="recoForm('${r.id}')" title="${r.origen==='auto'?'Editar (crea una alarma personalizada y reemplaza la automática)':'Editar'}">✏️</button>` : ''}
-        ${can('agenda:delete') ? `<button class="btn btn-xs btn-secondary" onclick="recoDel('${r.id}')" title="${r.origen==='auto'?'Ocultar':'Eliminar'}">🗑️</button>` : ''}
+        ${can('agenda:delete') ? `<button class="btn btn-xs btn-secondary" onclick="recoDel('${r.id}')" title="${r.origen==='auto'?'Ocultar':'Eliminar'}">🗑️</button>` : ''}`}
       </div>
     </div>`;
 }
