@@ -2350,6 +2350,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'01/07/2026',
+      titulo:'💱 v1.51.0 — Cada movimiento se muestra en su moneda (US$ / $)',
+      desc:'Las cuentas en <b>dólares</b> ahora muestran sus movimientos y saldo en <b>US$</b> (antes salían con signo $). En <b>Movimientos diarios</b> cada fila se ve en su moneda y el total se separa por moneda (ej. “$ … · US$ …”); las tarjetas del mes muestran solo los pesos.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'01/07/2026',
       titulo:'📒 v1.50.0 — Movimientos diarios muestra TODO lo que mueve plata + filtro de hoy',
       desc:'Se corrigió que Movimientos diarios mostraba <b>solo efectivo</b> (faltaba traer los movimientos bancarios). Ahora lista <b>todo lo que mueve valores</b>: efectivo/caja, transferencias, cheques cobrados/pagados, depósitos, extracciones, débitos, créditos, comisiones e impuestos — y el impacto de <b>compras y ventas de contado</b> (las de <b>cuenta corriente</b> no aparecen porque todavía no mueven plata). Además, por defecto el filtro viene puesto en <b>hoy</b>.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'01/07/2026',
@@ -17791,6 +17794,7 @@ pages.movDiarios = async function() {
       categoria: extraerCategoria(e.observaciones),
       clasificacion: e.clasificacion || 'empresa',
       monto: Number(e.monto || 0),
+      moneda: e.moneda || 'ARS',
       metodo: 'efectivo',
       origen: e.caja || '(sin caja)',
       observaciones: e.observaciones || '',
@@ -17812,6 +17816,7 @@ pages.movDiarios = async function() {
       categoria: extraerCategoria(m.observaciones) || t.lbl,
       clasificacion: 'empresa',
       monto: Number(m.monto || 0),
+      moneda: c ? (c.moneda || 'ARS') : 'ARS',
       metodo,
       origen: c ? (c.banco + (c.numero ? ' · '+c.numero : '')) : 'Banco',
       observaciones: m.observaciones || '',
@@ -17819,9 +17824,10 @@ pages.movDiarios = async function() {
   }
   filas.sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
 
-  // KPIs del mes
+  // KPIs del mes (solo en pesos; no se pueden mezclar $ con US$).
   const mesActual = hoy.toISOString().slice(0,7);
-  const filasMes = filas.filter(f => (f.fecha||'').slice(0,7) === mesActual);
+  const esArs = (f) => (f.moneda || 'ARS') === 'ARS';
+  const filasMes = filas.filter(f => (f.fecha||'').slice(0,7) === mesActual && esArs(f));
   const ingresosMes = filasMes.filter(f => f.tipo === 'ingreso').reduce((a,f) => a + f.monto, 0);
   const egresosMes  = filasMes.filter(f => f.tipo === 'egreso').reduce((a,f) => a + f.monto, 0);
   const netoMes = ingresosMes - egresosMes;
@@ -17846,7 +17852,16 @@ pages.movDiarios = async function() {
       if (q && ![r.concepto, r.categoria, r.origen, r.observaciones].some(x => (x||'').toLowerCase().includes(q))) return false;
       return true;
     });
-    const sumF = filtered.reduce((a,r) => a + (r.tipo==='ingreso' ? r.monto : (r.tipo==='egreso' ? -r.monto : 0)), 0);
+    // Totales por moneda (no se pueden sumar $ con US$).
+    const sumPorMon = {};
+    filtered.forEach(r => {
+      if (r.tipo !== 'ingreso' && r.tipo !== 'egreso') return;
+      const mon = r.moneda || 'ARS';
+      sumPorMon[mon] = (sumPorMon[mon] || 0) + (r.tipo === 'ingreso' ? r.monto : -r.monto);
+    });
+    const totalTxt = Object.keys(sumPorMon).length
+      ? Object.entries(sumPorMon).map(([mon,v]) => `<span class="${v>=0?'text-emerald-700':'text-red-700'}">${v>=0?'+':''}${fmtMon(mon, v)}</span>`).join(' · ')
+      : `<span class="text-slate-500">${fmtMon('ARS',0)}</span>`;
     const cant = filtered.length;
     $('#md-tabla').innerHTML = filtered.length === 0
       ? '<div class="text-center text-slate-400 py-8">' + (filas.length ? 'Sin coincidencias con los filtros' : 'Sin movimientos cargados. Usá "+ Nuevo movimiento" arriba.') + '</div>'
@@ -17875,13 +17890,13 @@ pages.movDiarios = async function() {
                     : r.metodo === 'banco' ? '🏛️ Banco'
                     : r.metodo === 'cheque' ? '💳 Cheque' : '—'}</td>
                 <td class="text-xs text-slate-600">${esc(r.origen)}</td>
-                <td class="text-right font-semibold ${r.tipo === 'ingreso' ? 'text-emerald-700' : (r.tipo === 'egreso' ? 'text-red-700' : 'text-slate-500')}">${r.tipo === 'ingreso' ? '+' : (r.tipo === 'egreso' ? '-' : '')}${fmt$(r.monto)}</td>
+                <td class="text-right font-semibold ${r.tipo === 'ingreso' ? 'text-emerald-700' : (r.tipo === 'egreso' ? 'text-red-700' : 'text-slate-500')}">${r.tipo === 'ingreso' ? '+' : (r.tipo === 'egreso' ? '-' : '')}${fmtMon(r.moneda, r.monto)}</td>
               </tr>`).join('')}
           </tbody>
           <tfoot>
             <tr class="font-bold bg-slate-50">
               <td colspan="6">Total filtrado (${cant} movimiento${cant===1?'':'s'})</td>
-              <td class="text-right ${sumF >= 0 ? 'text-emerald-700' : 'text-red-700'}">${sumF >= 0 ? '+' : ''}${fmt$(sumF)}</td>
+              <td class="text-right whitespace-nowrap">${totalTxt}</td>
             </tr>
           </tfoot>
         </table>`;
@@ -19811,8 +19826,8 @@ async function bcoVerMovs(cuentaId) {
               <td>${esc(m.concepto)}</td>
               <td class="text-xs text-slate-500">${esc(m.contraparte||'—')}</td>
               <td class="font-mono text-[11px]">${esc(m.referencia||'')}</td>
-              <td class="text-right font-semibold ${cls}">${signo} ${fmt$(m.monto)}</td>
-              <td class="text-right text-xs">${fmt$(m._saldoCorrido)}</td>
+              <td class="text-right font-semibold ${cls}">${signo} ${fmtMon(c.moneda, m.monto)}</td>
+              <td class="text-right text-xs">${fmtMon(c.moneda, m._saldoCorrido)}</td>
               <td class="text-xs text-slate-500">${m.user?esc((m.user.alias||m.user.nombre+' '+(m.user.apellido||''))):'—'}</td>
               <td class="text-right whitespace-nowrap">
                 ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='bcoMovForm(${JSON.stringify(m.id)})'>✏️</button>`:''}
