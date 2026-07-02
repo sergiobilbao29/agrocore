@@ -2349,6 +2349,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'01/07/2026',
+      titulo:'🧾 v1.53.0 — Al pagar con cheque se completan sus datos (endoso/entrega)',
+      desc:'Cuando usás un cheque para <b>pagar a un proveedor</b> o una compra, ahora el cheque queda con todos sus datos: si es <b>propio</b> pasa a <b>entregado</b>, si es de <b>terceros</b> a <b>endosado</b>, y se cargan <b>beneficiario</b> (el proveedor), <b>fecha de endoso/entrega</b> y <b>en poder de</b>. Vale para el pago a proveedor, el movimiento diario con cheque, y el cambio de estado manual desde Cheques.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'01/07/2026',
+      titulo:'📅 v1.52.0 — El filtro “hoy” usa la fecha local (no se adelanta un día)',
+      desc:'En Movimientos diarios, a la noche el filtro por defecto traía el día siguiente (usaba la fecha UTC). Ahora usa la <b>fecha local</b>, así “hoy” es realmente hoy.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'01/07/2026',
       titulo:'💱 v1.51.0 — Cada movimiento se muestra en su moneda (US$ / $)',
       desc:'Las cuentas en <b>dólares</b> ahora muestran sus movimientos y saldo en <b>US$</b> (antes salían con signo $). En <b>Movimientos diarios</b> cada fila se ve en su moneda y el total se separa por moneda (ej. “$ … · US$ …”); las tarjetas del mes muestran solo los pesos.' },
@@ -17761,6 +17767,9 @@ pages.movDiarios = async function() {
 
   // Cargamos efectivo + banco-movimientos del último mes para mostrar listado unificado
   const hoy = new Date();
+  // Fecha de HOY en hora LOCAL (no UTC): con toISOString() a la noche en Argentina (UTC-3)
+  // ya pasaba al día siguiente. Usamos los componentes locales.
+  const hoyLocal = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-${String(hoy.getDate()).padStart(2,'0')}`;
   const haceUnMes = new Date(hoy.getTime() - 30*24*60*60*1000).toISOString().slice(0,10);
   let efRows = [], bancoMovs = [];
   try {
@@ -17825,7 +17834,7 @@ pages.movDiarios = async function() {
   filas.sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
 
   // KPIs del mes (solo en pesos; no se pueden mezclar $ con US$).
-  const mesActual = hoy.toISOString().slice(0,7);
+  const mesActual = hoyLocal.slice(0,7);
   const esArs = (f) => (f.moneda || 'ARS') === 'ARS';
   const filasMes = filas.filter(f => (f.fecha||'').slice(0,7) === mesActual && esArs(f));
   const ingresosMes = filasMes.filter(f => f.tipo === 'ingreso').reduce((a,f) => a + f.monto, 0);
@@ -17835,7 +17844,7 @@ pages.movDiarios = async function() {
   // Categorías existentes para filtro
   const categoriasUnicas = [...new Set(filas.map(f => f.categoria).filter(Boolean))].sort();
 
-  const hoyStr = hoy.toISOString().slice(0,10);
+  const hoyStr = hoyLocal;
   // Por defecto muestra los movimientos de HOY (desde hoy, hasta hoy).
   state.movDiariosFilter = state.movDiariosFilter || { q:'', tipo:'', metodo:'', categoria:'', clasif:'', desde:hoyStr, hasta:hoyStr };
 

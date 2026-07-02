@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.51.0';
+const AGROCORE_VERSION = '1.53.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2915,7 +2915,11 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
       // 1) Actualizar estado del cheque
       const actualizado = await tx.cheque.update({
         where: { id: cheque.id },
-        data: { estado: d.estado },
+        data: {
+          estado: d.estado,
+          // Al endosar/entregar/depositar sale de cartera: registramos la fecha si no estaba.
+          ...(/endosad|entregad|deposit|pagad/i.test(d.estado) && !cheque.fechaEndoso ? { fechaEndoso: fechaMov } : {}),
+        },
       });
       // 2) Recalcular si debe haber movimiento bancario para este cheque
       const tipoMov = _chequeMovTipo(actualizado);
@@ -5704,12 +5708,17 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       if (!d.chequeId) return res.status(400).json({ ok: false, error: 'Falta el cheque' });
       const ch = await prisma.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
       if (!ch) return res.status(404).json({ ok: false, error: 'Cheque no encontrado' });
-      const nuevoEstado = d.tipo === 'egreso' ? 'endosado' : 'depositado';
+      // Egreso (pago con cheque): propio se entrega, tercero se endosa; sale de cartera.
+      // Ingreso (deposito de un cheque propio en cartera): queda depositado.
+      const esEgreso = d.tipo === 'egreso';
+      const nuevoEstado = esEgreso ? (ch.tipo === 'propio' ? 'entregado' : 'endosado') : 'depositado';
       resultado = await prisma.cheque.update({
         where: { id: ch.id },
         data: {
           estado: nuevoEstado,
           beneficiario: d.contraparte || ch.beneficiario,
+          fechaEndoso: esEgreso ? d.fecha : ch.fechaEndoso,
+          enPoderDe: esEgreso ? (d.contraparte || ch.enPoderDe) : ch.enPoderDe,
           observaciones: detalleObs || ch.observaciones,
         },
       });
@@ -6294,7 +6303,15 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         if (!d.chequeId) throw new Error('Falta chequeId para pago con cheque');
         const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
         if (!ch) throw new Error('Cheque no encontrado');
-        await tx.cheque.update({ where: { id: ch.id }, data: { estado: 'endosado', beneficiario: prov.razonSocial, fechaEndoso: d.fecha } });
+        // Propio: se ENTREGA al proveedor. Tercero: se ENDOSA. En ambos casos sale de cartera
+        // y se registran beneficiario, fecha de salida y en poder de quién queda (el proveedor).
+        await tx.cheque.update({ where: { id: ch.id }, data: {
+          estado: ch.tipo === 'propio' ? 'entregado' : 'endosado',
+          beneficiario: prov.razonSocial || ch.beneficiario,
+          fechaEndoso: d.fecha,
+          enPoderDe: prov.razonSocial || ch.enPoderDe,
+          observaciones: d.observaciones || ch.observaciones,
+        }});
       } else if (d.metodo === 'transferencia') {
         if (!d.bancoCuentaId) throw new Error('Falta bancoCuentaId para transferencia');
         await tx.bancoMovimiento.create({ data: {
