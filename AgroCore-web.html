@@ -2349,6 +2349,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
+      titulo:'✏️🗑️ v1.58.0 — Editar y eliminar alertas desde el calendario multi-empresa',
+      desc:'En la vista <b>"🏢 Todas las empresas"</b>, al abrir un evento ahora podés <b>editarlo</b> y <b>eliminarlo/ocultarlo</b> desde el mismo detalle, sin cambiar de empresa (se guarda en la empresa que corresponde). En las alertas <b>automáticas</b> (créditos, cheques, cuentas corrientes), "Editar / personalizar" crea una alarma propia que reemplaza a la automática, y "Ocultar" la saca del calendario sin borrar el registro original.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
       titulo:'🔗 v1.57.0 — Desde el calendario multi-empresa, ir al evento y editarlo',
       desc:'En la vista <b>"🏢 Todas las empresas"</b> del calendario, al hacer clic en un evento se abre su detalle con dos acciones: <b>"Abrir cheque/crédito/cuenta corriente"</b> (te lleva directo al registro, <b>cambiando de empresa automáticamente</b> si es de otra), y <b>"Editar recordatorio"</b> (editás el evento sin salir del calendario; se guarda en la empresa que corresponde). Ejemplo: estás en la Empresa 1, ves el vencimiento de un cheque de la Empresa 2 y con un clic vas al cheque de la Empresa 2.' },
@@ -17456,14 +17459,16 @@ function recoVerEvento(id) {
   if (!r) return;
   const dest = RECO_RELACION_DESTINO[r.relacionTipo];
   const esOtraEmpresa = r.companyId && r.companyId !== state.companyId;
-  const esManual = r.origen !== 'auto';
+  const esAuto = r.origen === 'auto';
   const botones = [];
   if (dest && r.relacionId) {
     botones.push(`<button class="btn btn-primary" onclick="recoIrAlRegistro('${r.id}')">🔗 Abrir ${dest.label}${r.companyName?` en ${esc(r.companyName)}`:''} →</button>`);
   }
-  if (esManual) {
-    botones.push(`<button class="btn ${dest&&r.relacionId?'btn-secondary':'btn-primary'}" onclick="recoEditarEnLugar('${r.id}')">✏️ Editar recordatorio</button>`);
-  }
+  // Editar: en manuales edita el recordatorio; en automáticos crea una alarma
+  // personalizada (manual) en esa empresa que reemplaza a la automática.
+  botones.push(`<button class="btn btn-secondary" onclick="recoEditarEnLugar('${r.id}')">✏️ ${esAuto ? 'Editar / personalizar' : 'Editar recordatorio'}</button>`);
+  // Eliminar (manual) u Ocultar (automática), guardando en la empresa que corresponde.
+  botones.push(`<button class="btn btn-secondary text-red-600" onclick="recoDelEnLugar('${r.id}','${r.companyId}')" title="${esAuto ? 'Ocultar esta alerta automática (no borra el registro original)' : 'Eliminar este recordatorio'}">🗑️ ${esAuto ? 'Ocultar' : 'Eliminar'}</button>`);
   botones.push(`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`);
   openModal({
     title: '📅 ' + (r.titulo || 'Recordatorio'),
@@ -17564,6 +17569,20 @@ async function recoSaveEnLugar(id, companyId) {
       await api('/api/recordatorios/'+id, { method:'PUT', body: JSON.stringify(data), headers });
     }
     toast('Guardado','success'); closeModal(); pages.agenda();
+  } catch (e) { toast(e.message,'error'); }
+}
+// Elimina (manual) u oculta (automática) la alerta desde el calendario multi-empresa,
+// guardando en la empresa que corresponde vía el header X-Company-Id.
+async function recoDelEnLugar(id, companyId) {
+  const esAuto = String(id).startsWith('auto:');
+  const msg = esAuto
+    ? '¿Ocultar esta alerta automática? El registro original (crédito / cheque / cuenta corriente) NO se borra.'
+    : '¿Eliminar este recordatorio? Esta acción no se puede deshacer.';
+  if (!confirm(msg)) return;
+  try {
+    await api('/api/recordatorios/'+id, { method:'DELETE', headers: { 'X-Company-Id': companyId } });
+    toast(esAuto ? 'Alerta ocultada' : 'Recordatorio eliminado','success');
+    closeModal(); pages.agenda();
   } catch (e) { toast(e.message,'error'); }
 }
 function recoAvanzar(dias) {
