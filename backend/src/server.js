@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.49.0';
+const AGROCORE_VERSION = '1.50.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5589,6 +5589,20 @@ app.get('/api/banco-cuentas/:id/movimientos', requireCompany, requirePermission(
     const data = await prisma.bancoMovimiento.findMany({
       where, orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }],
       include: { user: { select: { id: true, nombre: true, apellido: true, alias: true } }, cuentaContra: { select: { id: true, banco: true, alias: true } } },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Todos los movimientos bancarios de la empresa (para la vista general de Movimientos diarios).
+app.get('/api/banco-movimientos', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.desde) where.fecha = { ...where.fecha, gte: new Date(String(req.query.desde)) };
+    if (req.query.hasta) where.fecha = { ...where.fecha, lte: new Date(String(req.query.hasta)) };
+    const data = await prisma.bancoMovimiento.findMany({
+      where, orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }],
+      include: { user: { select: { id: true, nombre: true, apellido: true, alias: true } } },
     });
     res.json({ ok: true, data });
   } catch (e) { next(e); }

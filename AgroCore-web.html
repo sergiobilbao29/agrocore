@@ -2349,6 +2349,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'01/07/2026',
+      titulo:'📒 v1.50.0 — Movimientos diarios muestra TODO lo que mueve plata + filtro de hoy',
+      desc:'Se corrigió que Movimientos diarios mostraba <b>solo efectivo</b> (faltaba traer los movimientos bancarios). Ahora lista <b>todo lo que mueve valores</b>: efectivo/caja, transferencias, cheques cobrados/pagados, depósitos, extracciones, débitos, créditos, comisiones e impuestos — y el impacto de <b>compras y ventas de contado</b> (las de <b>cuenta corriente</b> no aparecen porque todavía no mueven plata). Además, por defecto el filtro viene puesto en <b>hoy</b>.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'01/07/2026',
       titulo:'📒 v1.49.0 — Movimientos diarios: vista general + Débito bancario',
       desc:'(1) <b>Movimientos diarios</b> ahora muestra <b>todos</b> los movimientos: efectivo/caja, transferencias entre cajas, y <b>todos</b> los movimientos bancarios (depósitos, extracciones, cheques, créditos, débitos, comisiones, impuestos) — que incluyen el impacto de pagos y cobros. (2) Se agregó el método <b>“Débito bancario”</b> al nuevo movimiento diario. (3) En <b>Bancos → cuenta → nuevo movimiento</b> se agregó el tipo <b>“Débito”</b> (para pago de tarjeta de crédito, servicios, etc.).' },
@@ -17826,7 +17829,9 @@ pages.movDiarios = async function() {
   // Categorías existentes para filtro
   const categoriasUnicas = [...new Set(filas.map(f => f.categoria).filter(Boolean))].sort();
 
-  state.movDiariosFilter = state.movDiariosFilter || { q:'', tipo:'', metodo:'', categoria:'', clasif:'', desde:'', hasta:'' };
+  const hoyStr = hoy.toISOString().slice(0,10);
+  // Por defecto muestra los movimientos de HOY (desde hoy, hasta hoy).
+  state.movDiariosFilter = state.movDiariosFilter || { q:'', tipo:'', metodo:'', categoria:'', clasif:'', desde:hoyStr, hasta:hoyStr };
 
   const render = () => {
     const f = state.movDiariosFilter;
