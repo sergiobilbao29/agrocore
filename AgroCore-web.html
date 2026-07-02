@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="theme-color" content="#15803d" />
 <link rel="icon" type="image/png" sizes="32x32" href="/web/img/favicon.png" />
-<link rel="apple-touch-icon" sizes="180x180" href="/web/img/apple-touch-icon.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/assets/apple-touch-icon.png" />
 <!-- PWA: instalable y con soporte offline -->
 <link rel="manifest" href="/manifest.webmanifest" />
 <meta name="mobile-web-app-capable" content="yes" />
@@ -2349,6 +2349,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
+      titulo:'📱 v1.54.0 — Ícono de la app con fondo blanco al instalarla en el celular',
+      desc:'Cuando instalás AgroCore en el celular (PWA), el ícono ahora se ve con <b>fondo blanco</b> y la hoja centrada (antes quedaba sobre un fondo negro). Si ya la tenías instalada, borrala y volvé a "Agregar a pantalla de inicio".' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'01/07/2026',
       titulo:'🧾 v1.53.0 — Al pagar con cheque se completan sus datos (endoso/entrega)',
       desc:'Cuando usás un cheque para <b>pagar a un proveedor</b> o una compra, ahora el cheque queda con todos sus datos: si es <b>propio</b> pasa a <b>entregado</b>, si es de <b>terceros</b> a <b>endosado</b>, y se cargan <b>beneficiario</b> (el proveedor), <b>fecha de endoso/entrega</b> y <b>en poder de</b>. Vale para el pago a proveedor, el movimiento diario con cheque, y el cambio de estado manual desde Cheques.' },

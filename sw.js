@@ -4,7 +4,7 @@
  * La lógica de datos offline (cola de cambios, caché de API) vive en el app,
  * usando IndexedDB. Este SW solo se encarga de que la app CARGUE sin señal.
  */
-const CACHE = 'agrocore-shell-v3';
+const CACHE = 'agrocore-shell-v4';
 
 // Recursos del app shell. /app es el HTML principal; los CDN se cachean
 // de forma oportunista en el fetch handler (no bloquean la instalación).
