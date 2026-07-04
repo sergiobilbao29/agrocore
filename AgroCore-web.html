@@ -1516,9 +1516,9 @@ async function switchCompany(id) {
   await preloadCatalogos();
   renderNav();
   const page = state.currentPage || 'inicio';
-  // Si la página actual quedó oculta por ser módulo ARCA en empresa informal, redirigir a Inicio
-  const visibles = new Set(MODULES.filter(m => !state.companyInformal || !['facturacion','libroIVA'].includes(m.id)).map(m=>m.id));
-  go(visibles.has(page) ? page : 'inicio');
+  // En empresa informal, Libro IVA no aplica: si estábamos ahí, ir a Inicio.
+  const bloqueada = state.companyInformal && page === 'libroIVA';
+  go(bloqueada ? 'inicio' : page);
   // Pre-cachear los datos de Producción de la empresa recién seleccionada.
   precacheOffline();
 }
@@ -1582,10 +1582,9 @@ function navExpandAll() {
 
 function renderNav() {
   const nav = $('#nav');
-  // Módulos ARCA (facturación legal + libros IVA) que se esconden si la empresa es "informal".
-  const modulosARCA = new Set(['facturacion','libroIVA']);
+  // En empresa "informal" (sin ARCA) NO se ocultan Facturación ni Libro IVA: quedan
+  // visibles pero con lo de ARCA grisado. Libro IVA se muestra bloqueado (no aplica).
   let items = MODULES.filter(m => {
-    if (state.companyInformal && modulosARCA.has(m.id)) return false;
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!m.perm) return true;
     return can(m.perm);
@@ -1629,12 +1628,22 @@ function renderNav() {
           <span>${esc(sec)}</span>
           <span class="ml-auto text-[9px] opacity-50">${ms.length}</span>
         </button>
-        ${isCollapsed ? '' : ms.map(i => `
+        ${isCollapsed ? '' : ms.map(i => {
+          const bloqInformal = state.companyInformal && i.id === 'libroIVA';
+          if (bloqInformal) return `
+          <button type="button" title="Esta empresa está configurada SIN ARCA: el Libro IVA no aplica." onclick="toast('El Libro IVA no aplica en una empresa SIN ARCA.','info')"
+                  class="sidebar-link w-full text-left pl-7 pr-4 py-1.5 flex items-center gap-2 opacity-40 cursor-not-allowed">
+            <span class="text-base w-5 text-center">${i.icon}</span>
+            <span class="truncate">${esc(i.label)}</span>
+            <span class="ml-auto text-[10px]">🔒</span>
+          </button>`;
+          return `
           <button type="button" onclick="go('${i.id}')"
                   class="sidebar-link w-full text-left pl-7 pr-4 py-1.5 flex items-center gap-2 ${state.currentPage===i.id?'active':''}">
             <span class="text-base w-5 text-center">${i.icon}</span>
             <span class="truncate">${esc(i.label)}</span>
-          </button>`).join('')}
+          </button>`;
+        }).join('')}
       </div>`;
   }).join('');
 
@@ -2349,6 +2358,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
+      titulo:'🏛️ v1.60.0 — Empresas SIN ARCA: lo de ARCA queda en gris',
+      desc:'Cuando la empresa activa está configurada <b>sin ARCA</b> (informal), todo lo relacionado a ARCA queda <b>grisado/bloqueado</b> en vez de mezclarse: la <b>solapa ARCA</b> en Configuración, el botón <b>"Cargar factura ARCA"</b> y el <b>Libro IVA</b> (con 🔒 en el menú y una pantalla que aclara que no aplica). <b>Facturación sigue disponible</b> para emitir comprobantes internos sin CAE.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
       titulo:'💳 v1.59.0 — Cheques: Beneficiario y Librador separados + campos según el tipo',
       desc:'En el listado de <b>Cheques</b>, "Beneficiario" y "Librador" ahora son <b>dos columnas separadas</b> (más una de "Endosante" que podés activar desde ⚙️ Columnas). Y al cargar un cheque, los campos que no corresponden al tipo se ponen <b>en gris</b>: en los de <b>terceros</b> se deshabilita la <b>cuenta bancaria</b> (es una cuenta nuestra, solo aplica a cheques propios); en los <b>propios</b> se deshabilitan <b>endosante</b> y <b>fecha de recepción</b>. Así no se cargan datos que no van.' },
@@ -6504,7 +6516,7 @@ async function empEliminar(id, nombre) {
 // solo se ven para Super Admin — son operaciones sensibles (backup, limpieza).
 const CONFIG_TABS = [
   { id:'config',      label:'⚙️ Configuración' },
-  { id:'arca',        label:'🏛️ ARCA' },
+  { id:'arca',        label:'🏛️ ARCA', arca:true },
   { id:'importacion', label:'📥 Importación', soloSuper:true },
   { id:'sistema',     label:'🛠️ Sistema',     soloSuper:true },
 ];
@@ -6530,11 +6542,17 @@ function configRenderTab() {
   const body = $('#config-body');
   if (!body) return;
   const esSuper = !!state.user?.superAdmin;
+  const informal = !!state.companyInformal;
+  // En empresa SIN ARCA no se puede entrar a la solapa ARCA: si estábamos ahí, volver a Configuración.
+  if (informal && state.configTab === 'arca') state.configTab = 'config';
   const visibles = CONFIG_TABS.filter(t => !t.soloSuper || esSuper);
   const tabsBar = $('#config-tabs');
   if (tabsBar) {
     tabsBar.innerHTML = visibles.map(t => {
       const activo = state.configTab === t.id;
+      if (t.arca && informal) {
+        return `<button disabled title="Esta empresa está configurada SIN ARCA. Activá ARCA desde Empresas para usar esta sección." class="px-5 py-2.5 text-sm font-semibold border-b-2 -mb-px text-slate-300 border-transparent cursor-not-allowed">${t.label} 🔒</button>`;
+      }
       return `<button onclick="configSwitchTab('${t.id}')" class="px-5 py-2.5 text-sm font-semibold transition border-b-2 -mb-px ${activo?'text-emerald-700 border-emerald-600 bg-white':'text-slate-500 border-transparent hover:text-slate-800 hover:border-slate-300'}">${t.label}</button>`;
     }).join('');
   }
@@ -8464,8 +8482,14 @@ pages.facturacion = async function() {
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600">${rows.length} comprobantes emitidos</div>
       <div class="flex gap-2 flex-wrap">
-        <button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>
-        ${(can('ventas:factura_externa:create') || can('ventas:create') || can('finanzas:create')) ? `<button class="btn btn-secondary" onclick="factFormExterna()" title="Cargar manualmente una factura ya emitida en el portal de ARCA">📥 Cargar factura ARCA</button>`:''}
+        ${informal
+          ? `<button class="btn btn-secondary opacity-40 cursor-not-allowed" disabled title="El Libro IVA no aplica en una empresa SIN ARCA.">📘 Libro IVA 🔒</button>`
+          : `<button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>`}
+        ${(can('ventas:factura_externa:create') || can('ventas:create') || can('finanzas:create'))
+          ? (informal
+              ? `<button class="btn btn-secondary opacity-40 cursor-not-allowed" disabled title="Solo para empresas con ARCA: registra una factura ya emitida en el portal de ARCA.">📥 Cargar factura ARCA 🔒</button>`
+              : `<button class="btn btn-secondary" onclick="factFormExterna()" title="Cargar manualmente una factura ya emitida en el portal de ARCA">📥 Cargar factura ARCA</button>`)
+          : ''}
         ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="factForm()">+ Emitir factura</button>`:''}
       </div>
     </div>
@@ -9861,6 +9885,14 @@ async function compVer(id) {
  * ========================================================= */
 pages.libroIVA = async function() {
   setHeader('Libro IVA', 'Ventas y compras mensuales');
+  if (state.companyInformal) {
+    $('#page-body').innerHTML = `<div class="max-w-xl mx-auto mt-10 bg-slate-50 border border-slate-200 rounded-xl p-6 text-center">
+      <div class="text-4xl mb-2">🔒</div>
+      <div class="text-lg font-semibold text-slate-700 mb-1">Libro IVA no disponible</div>
+      <div class="text-sm text-slate-500">Esta empresa está configurada <b>SIN ARCA</b> (informal), así que no lleva Libro IVA. Si necesitás facturación fiscal, activá ARCA desde <b>Administración → Empresas</b>.</div>
+    </div>`;
+    return;
+  }
   if (!can('finanzas:read') && !can('ventas:read') && !can('compras:read')) { $('#page-body').innerHTML = stubPage('libroIVA','Libro IVA'); return; }
   const now = new Date();
   state.libroIVA = state.libroIVA || { anio: now.getFullYear(), mes: now.getMonth()+1, tab: 'ventas' };
