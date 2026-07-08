@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.60.0';
+const AGROCORE_VERSION = '1.61.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6198,7 +6198,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       comprobantes: z.array(z.object({
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
-      })).min(1),
+      })).min(0),  // 0 = pago "a cuenta" (sin comprobante puntual)
       metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal']),
       monto: z.number().positive(),
       fecha: z.coerce.date(),
@@ -6220,7 +6220,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
     // en la MISMA moneda de la deuda, debe coincidir con la suma aplicada. Si se paga
     // en otra moneda (ej: deuda USD, pago ARS), son magnitudes distintas y no se exige igualdad.
     const _mismaMoneda = !d.monedaPago;
-    if (_mismaMoneda && Math.abs(sumaAplicada - d.monto) > 0.01) {
+    if (d.comprobantes.length && _mismaMoneda && Math.abs(sumaAplicada - d.monto) > 0.01) {
       return res.status(400).json({ ok: false, error: 'La suma de los comprobantes (' + sumaAplicada + ') no coincide con el monto pagado (' + d.monto + ')' });
     }
 
@@ -6274,6 +6274,19 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           haber: c.importeAplicado,
           referencia: cc.referencia,
           observaciones: 'Pago via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
+        }});
+      }
+      // Pago "a cuenta" (sin comprobantes): haber suelto en la cta cte del proveedor.
+      // Reduce el saldo y, si excede la deuda, deja saldo a favor.
+      if (d.comprobantes.length === 0) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId,
+          contactoTipo: 'proveedor', contactoId: d.proveedorId,
+          fecha: d.fecha,
+          detalle: 'Pago a cuenta',
+          moneda: d.monedaPago || 'ARS', cotizacion: d.cotizacionPago ?? null,
+          haber: d.monto,
+          observaciones: 'Pago a cuenta via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
         }});
       }
       // Diferencia de cambio (ARS): si la deuda estaba en otra moneda y se pagó con
@@ -6406,7 +6419,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       comprobantes: z.array(z.object({
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
-      })).min(1),
+      })).min(0),  // 0 = cobro "a cuenta" (sin comprobante puntual)
       metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany']),
       monto: z.number().positive(),
       fecha: z.coerce.date(),
@@ -6420,7 +6433,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
-    if (!d.monedaPago && Math.abs(sumaAplicada - d.monto) > 0.01) {
+    if (d.comprobantes.length && !d.monedaPago && Math.abs(sumaAplicada - d.monto) > 0.01) {
       return res.status(400).json({ ok: false, error: 'La suma de comprobantes no coincide con el monto cobrado' });
     }
     if (d.metodo === 'intercompany') {
@@ -6460,6 +6473,18 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           haber: c.importeAplicado,
           referencia: cc.referencia,
           observaciones: 'Cobro via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
+        }});
+      }
+      // Cobro "a cuenta" (sin comprobantes): haber suelto en la cta cte del cliente.
+      if (d.comprobantes.length === 0) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId,
+          contactoTipo: 'cliente', contactoId: d.clienteId,
+          fecha: d.fecha,
+          detalle: 'Cobro a cuenta',
+          moneda: d.monedaPago || 'ARS', cotizacion: d.cotizacionPago ?? null,
+          haber: d.monto,
+          observaciones: 'Cobro a cuenta via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
         }});
       }
       // Diferencia de cambio (ARS) al cobrar una deuda en otra moneda.

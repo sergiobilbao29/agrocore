@@ -2359,6 +2359,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
+      titulo:'💰 v1.61.0 — Cuentas corrientes: moneda correcta, pago a cuenta y menos ruido',
+      desc:'Tres ajustes en Cuentas corrientes: (1) las columnas <b>Facturado</b> y <b>Pagado</b> ahora se muestran en la <b>moneda de cada movimiento</b> (US$/$), igual que el saldo — antes salían siempre en pesos. (2) Al <b>pagar a un proveedor</b> o <b>cobrar a un cliente</b> ya podés hacerlo <b>sin tildar ninguna factura</b> (pago/cobro <b>a cuenta</b>) o pagar de más/parcial; el saldo se ajusta solo. (3) Se sacó el botón <b>"+ Movimiento manual"</b> de "A cobrar"/"A pagar" (esos movimientos se cargan en <b>Movimientos diarios</b>); sigue disponible en la solapa <b>"Otros / Manuales"</b> para alquileres, impuestos y deudas con vencimiento.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
       titulo:'🏛️ v1.60.0 — Empresas SIN ARCA: lo de ARCA queda en gris',
       desc:'Cuando la empresa activa está configurada <b>sin ARCA</b> (informal), todo lo relacionado a ARCA queda <b>grisado/bloqueado</b> en vez de mezclarse: la <b>solapa ARCA</b> en Configuración, el botón <b>"Cargar factura ARCA"</b> y el <b>Libro IVA</b> (con 🔒 en el menú y una pantalla que aclara que no aplica). <b>Facturación sigue disponible</b> para emitir comprobantes internos sin CAE.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
@@ -11608,10 +11611,15 @@ pages.ctasCtes = async function() {
     const movs = rows.filter(m => m.contactoTipo===tipo && m.contactoId===contacto.id);
     const debe = movs.reduce((a,m)=>a+Number(m.debe||0),0);
     const haber = movs.reduce((a,m)=>a+Number(m.haber||0),0);
-    // Saldo por moneda (no se pueden sumar USD + pesos + toneladas).
-    const porMoneda = {};
-    movs.forEach(m => { const mo=m.moneda||'ARS'; porMoneda[mo]=(porMoneda[mo]||0)+Number(m.debe||0)-Number(m.haber||0); });
-    return { contacto, movs, debe, haber, saldo: debe-haber, porMoneda, saldoArs: porMoneda.ARS||0 };
+    // Saldo, facturado y pagado por moneda (no se pueden sumar USD + pesos + toneladas).
+    const porMoneda = {}, debePorMoneda = {}, haberPorMoneda = {};
+    movs.forEach(m => {
+      const mo=m.moneda||'ARS';
+      porMoneda[mo]=(porMoneda[mo]||0)+Number(m.debe||0)-Number(m.haber||0);
+      debePorMoneda[mo]=(debePorMoneda[mo]||0)+Number(m.debe||0);
+      haberPorMoneda[mo]=(haberPorMoneda[mo]||0)+Number(m.haber||0);
+    });
+    return { contacto, movs, debe, haber, saldo: debe-haber, porMoneda, debePorMoneda, haberPorMoneda, saldoArs: porMoneda.ARS||0 };
   }).filter(g => g.movs.length > 0).sort((a,b)=>b.saldoArs-a.saldoArs);
 
   const clientesCC = agrupar('cliente', clis);
@@ -11651,7 +11659,7 @@ pages.ctasCtes = async function() {
       <div class="flex gap-2 items-center flex-wrap">
         ${can('finanzas:create') && (tab==='cobrar') ? `<button class="btn btn-primary" onclick="pagoCobroAbrir('cobro')">💰 Cobrar (multi-comprobante)</button>` : ''}
         ${can('finanzas:create') && (tab==='pagar') ? `<button class="btn btn-primary" onclick="pagoCobroAbrir('pago')">💸 Pagar (multi-comprobante)</button>` : ''}
-        ${can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ccForm()">+ Movimiento manual</button>`:''}
+        ${can('finanzas:create') && (tab==='otros') ? `<button class="btn btn-secondary" onclick="ccForm()">+ Movimiento manual</button>` : ''}
       </div>
     </div>
     <div id="cc-body"></div>`;
@@ -11800,8 +11808,8 @@ pages.ctasCtes = async function() {
               <tr class="table-row">
                 <td><b>${esc(g.contacto.razonSocial)}</b></td>
                 <td class="text-center text-slate-500">${g.movs.length}</td>
-                <td class="text-right">${fmt$(g.debe)}</td>
-                <td class="text-right text-emerald-700">${fmt$(g.haber)}</td>
+                <td class="text-right">${ccSaldoCell(g.debePorMoneda)}</td>
+                <td class="text-right text-emerald-700">${ccSaldoCell(g.haberPorMoneda)}</td>
                 <td class="text-right font-bold ${g.saldoArs>0?(tab==='cobrar'?'text-amber-600':'text-red-600'):'text-slate-400'}">${ccSaldoCell(g.porMoneda)}</td>
                 <td class="text-right whitespace-nowrap">
                   <button class="btn btn-ghost text-xs" onclick="ccVerMovimientos('${tipoActual}','${g.contacto.id}')">Ver movimientos</button>
@@ -11829,9 +11837,9 @@ function ccVerMovimientos(tipo, contactoId) {
     size: 'max-w-3xl',
     body: `
       <div class="mb-3 grid grid-cols-3 gap-2 text-center">
-        <div class="bg-slate-50 rounded p-2"><div class="text-[11px] text-slate-500">Facturado</div><div class="font-bold">${fmt$(g.debe)}</div></div>
-        <div class="bg-emerald-50 rounded p-2"><div class="text-[11px] text-slate-500">Cobrado/Pagado</div><div class="font-bold text-emerald-700">${fmt$(g.haber)}</div></div>
-        <div class="bg-amber-50 rounded p-2"><div class="text-[11px] text-slate-500">Saldo</div><div class="font-bold ${g.saldo>0?'text-amber-600':'text-slate-400'}">${fmt$(g.saldo)}</div></div>
+        <div class="bg-slate-50 rounded p-2"><div class="text-[11px] text-slate-500">Facturado</div><div class="font-bold">${ccSaldoCell(g.debePorMoneda)}</div></div>
+        <div class="bg-emerald-50 rounded p-2"><div class="text-[11px] text-slate-500">Cobrado/Pagado</div><div class="font-bold text-emerald-700">${ccSaldoCell(g.haberPorMoneda)}</div></div>
+        <div class="bg-amber-50 rounded p-2"><div class="text-[11px] text-slate-500">Saldo</div><div class="font-bold ${g.saldo>0?'text-amber-600':'text-slate-400'}">${ccSaldoCell(g.porMoneda)}</div></div>
       </div>
       <table class="data">
         <thead><tr><th>Fecha</th><th>Detalle</th><th class="text-right">Debe</th><th class="text-right">Haber</th><th class="text-right">Saldo</th></tr></thead>
@@ -11841,9 +11849,9 @@ function ccVerMovimientos(tipo, contactoId) {
             return `<tr class="table-row">
               <td>${fmtDate(m.fecha)}</td>
               <td>${esc(m.detalle||'—')}${m.referencia?` <span class="text-[10px] text-slate-400">(${esc(m.referencia)})</span>`:''}</td>
-              <td class="text-right">${m.debe?fmt$(m.debe):'—'}</td>
-              <td class="text-right text-emerald-700">${m.haber?fmt$(m.haber):'—'}</td>
-              <td class="text-right font-semibold">${fmt$(saldoAc)}</td>
+              <td class="text-right">${m.debe?monedaFmt(m.moneda||'ARS', m.debe):'—'}</td>
+              <td class="text-right text-emerald-700">${m.haber?monedaFmt(m.moneda||'ARS', m.haber):'—'}</td>
+              <td class="text-right font-semibold">${monedaFmt(m.moneda||'ARS', saldoAc)}</td>
             </tr>`;
           }).join('') || '<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin movimientos</td></tr>'}
         </tbody>
@@ -12274,15 +12282,15 @@ async function pagoCobroConfirmar(modo) {
     if (importe <= 0) continue;
     comprobantes.push({ ctaCteId: d.comprobantes[idx].id, importeAplicado: importe });
   }
-  if (!comprobantes.length) return toast('Tildá al menos un comprobante', 'warn');
+  // Sin comprobantes tildados = pago/cobro "a cuenta" (o a saldar deuda general). Se permite.
   const monto = Number(document.getElementById('pc-total-pago').value || 0);
-  if (monto <= 0) return toast('El monto debe ser mayor a 0', 'warn');
+  if (monto <= 0) return toast(comprobantes.length ? 'El monto debe ser mayor a 0' : 'Ingresá el monto a cuenta', 'warn');
   const monedaDeuda = d._monedaDeuda || 'ARS';
   const monedaPago = (monedaDeuda !== 'ARS') ? (d._monedaPago || 'ARS') : null;
   const pagaOtraMoneda = monedaPago && monedaPago !== monedaDeuda;
   const sumaComp = comprobantes.reduce((a,c) => a+c.importeAplicado, 0);
-  // Solo exigimos que el monto coincida con la suma cuando se paga en la misma moneda de la deuda.
-  if (!pagaOtraMoneda && Math.abs(sumaComp - monto) > 0.01)
+  // Solo exigimos que el monto coincida con la suma cuando hay comprobantes tildados y se paga en la misma moneda.
+  if (comprobantes.length && !pagaOtraMoneda && Math.abs(sumaComp - monto) > 0.01)
     return toast(`La suma de comprobantes (${monedaFmt(monedaDeuda,sumaComp)}) no coincide con el monto (${monedaFmt(monedaDeuda,monto)})`, 'error');
 
   const body = {
