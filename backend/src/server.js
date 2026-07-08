@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.61.0';
+const AGROCORE_VERSION = '1.62.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5642,6 +5642,42 @@ const bancoMovSchema = z.object({
 // El "concepto" + "categoría" + "clasificación" (empresa/propio) se preservan
 // en el movimiento creado.
 // ============================================================
+// Mueve el RECURSO de la firma que financia un movimiento Intercompany (la firma
+// "origen"): saca efectivo de una caja suya, endosa/entrega un cheque suyo, o hace
+// una transferencia_out de una cuenta bancaria suya. Se llama dentro de una tx.
+//   recurso: 'efectivo' | 'transferencia' | 'cheque' | 'deuda'(sin mover recurso)
+async function _intercompanyMoverRecurso(tx, o) {
+  const { empresaOrigenId, recurso, monto, fecha, concepto, observaciones, userId } = o;
+  if (recurso === 'efectivo') {
+    await tx.efectivo.create({ data: {
+      companyId: empresaOrigenId, fecha, tipo: 'egreso',
+      concepto, monto, caja: o.cajaOrigen || null,
+      clasificacion: 'empresa', observaciones: observaciones || null,
+    }});
+  } else if (recurso === 'transferencia') {
+    if (!o.bancoCuentaIdOrigen) throw new Error('Elegí la cuenta bancaria de la otra empresa');
+    const cta = await tx.bancoCuenta.findFirst({ where: { id: o.bancoCuentaIdOrigen, companyId: empresaOrigenId } });
+    if (!cta) throw new Error('Cuenta bancaria de la otra empresa no encontrada');
+    await tx.bancoMovimiento.create({ data: {
+      companyId: empresaOrigenId, cuentaId: o.bancoCuentaIdOrigen, fecha,
+      tipo: 'transferencia_out', concepto, monto,
+      contraparte: concepto, observaciones: observaciones || null, userId: userId || null,
+    }});
+  } else if (recurso === 'cheque') {
+    if (!o.chequeIdOrigen) throw new Error('Elegí el cheque de la otra empresa');
+    const ch = await tx.cheque.findFirst({ where: { id: o.chequeIdOrigen, companyId: empresaOrigenId } });
+    if (!ch) throw new Error('Cheque de la otra empresa no encontrado');
+    await tx.cheque.update({ where: { id: ch.id }, data: {
+      estado: ch.tipo === 'propio' ? 'entregado' : 'endosado',
+      fechaEndoso: fecha,
+      beneficiario: concepto || ch.beneficiario,
+      enPoderDe: concepto || ch.enPoderDe,
+      observaciones: observaciones || ch.observaciones,
+    }});
+  }
+  // 'deuda' (o vacío): no se mueve ningún recurso, queda solo la deuda intercompany.
+}
+
 app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const schema = z.object({
@@ -5651,11 +5687,17 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       categoria: z.string().nullable().optional(),
       clasificacion: z.string().nullable().optional(),   // "empresa" | "propio"
       monto: z.number().positive(),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'intercompany']),
       // Datos según método
       caja: z.string().nullable().optional(),            // efectivo / externo (nombre del medio)
       chequeId: z.string().nullable().optional(),        // cheque (cheque existente)
       bancoCuentaId: z.string().nullable().optional(),   // transferencia
+      // Intercompany: otra firma del grupo pone los fondos (solo para egresos).
+      empresaOrigenId: z.string().nullable().optional(),        // firma que financia
+      recursoIntercompany: z.enum(['efectivo','cheque','transferencia','deuda']).nullable().optional(),
+      cajaOrigen: z.string().nullable().optional(),             // caja de la otra firma (efectivo)
+      chequeIdOrigen: z.string().nullable().optional(),         // cheque de la otra firma
+      bancoCuentaIdOrigen: z.string().nullable().optional(),    // cuenta de la otra firma (transferencia)
       // Contraparte opcional (texto libre) — solo descriptivo
       contraparte: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
@@ -5721,6 +5763,48 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
           enPoderDe: esEgreso ? (d.contraparte || ch.enPoderDe) : ch.enPoderDe,
           observaciones: detalleObs || ch.observaciones,
         },
+      });
+    } else if (d.metodo === 'intercompany') {
+      // Gasto de esta empresa cubierto por otra firma del grupo. Solo egresos.
+      if (d.tipo !== 'egreso') return res.status(400).json({ ok: false, error: 'Intercompany solo aplica a egresos/gastos' });
+      if (!d.empresaOrigenId) return res.status(400).json({ ok: false, error: 'Elegí la firma del grupo que pone los fondos' });
+      if (d.empresaOrigenId === req.companyId) return res.status(400).json({ ok: false, error: 'La firma que financia no puede ser la misma' });
+      if (!_userTieneAcceso(req, d.empresaOrigenId)) return res.status(403).json({ ok: false, error: 'No tenés acceso a la firma que financia' });
+      const tienePerm = req.user.superAdmin || (req.user.userCompanies || []).some(uc =>
+        uc.companyId === req.companyId &&
+        ((uc.role?.permissions || []).includes('finanzas:intercompany') ||
+         (uc.role?.permissions || []).includes('finanzas:*') ||
+         (uc.role?.permissions || []).includes('*:*')));
+      if (!tienePerm) return res.status(403).json({ ok: false, error: 'No tenés permiso finanzas:intercompany' });
+      const recurso = d.recursoIntercompany || 'deuda';
+      resultado = await prisma.$transaction(async (tx) => {
+        const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
+        // Esta empresa (destino) queda debiendo a la otra: haber = monto.
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'intercompany',
+          empresaContraparteId: d.empresaOrigenId, intercompanyRef: interRef,
+          fecha: d.fecha, detalle: d.concepto + ' — cubierto por otra firma del grupo',
+          haber: d.monto, observaciones: detalleObs || null,
+        }});
+        // La firma origen queda con saldo a favor: debe = monto.
+        await tx.ctaCte.create({ data: {
+          companyId: d.empresaOrigenId, contactoTipo: 'intercompany',
+          empresaContraparteId: req.companyId, intercompanyRef: interRef,
+          fecha: d.fecha, detalle: 'Gasto pagado para otra firma del grupo: ' + d.concepto,
+          debe: d.monto, observaciones: detalleObs || null,
+        }});
+        await tx.intercompanyMovimiento.create({ data: {
+          fecha: d.fecha, empresaOrigenId: d.empresaOrigenId, empresaDestinoId: req.companyId,
+          monto: d.monto, motivo: d.concepto, intercompanyRef: interRef,
+          observaciones: detalleObs || null, userId: req.user?.id || null,
+        }});
+        // Mover el recurso REAL de la firma origen (su caja / cheque / banco).
+        await _intercompanyMoverRecurso(tx, {
+          empresaOrigenId: d.empresaOrigenId, recurso, monto: d.monto, fecha: d.fecha,
+          concepto: d.concepto, observaciones: detalleObs || null, userId: req.user?.id || null,
+          cajaOrigen: d.cajaOrigen, chequeIdOrigen: d.chequeIdOrigen, bancoCuentaIdOrigen: d.bancoCuentaIdOrigen,
+        });
+        return { intercompanyRef: interRef };
       });
     }
 
@@ -6206,6 +6290,11 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       chequeId: z.string().nullable().optional(),
       bancoCuentaId: z.string().nullable().optional(),
       empresaOrigenId: z.string().nullable().optional(),
+      // Intercompany: cómo pone los fondos la firma origen (mueve SU recurso).
+      recursoIntercompany: z.enum(['efectivo','cheque','transferencia','deuda']).nullable().optional(),
+      cajaInterco: z.string().nullable().optional(),            // caja de la firma origen (efectivo)
+      chequeIdInterco: z.string().nullable().optional(),        // cheque de la firma origen
+      bancoCuentaIdInterco: z.string().nullable().optional(),   // cuenta de la firma origen (transferencia)
       monedaPago: z.string().nullable().optional(),     // moneda con la que se paga (default = la de la deuda)
       cotizacionPago: z.number().positive().nullable().optional(), // ARS por unidad de monedaPago, al día del pago
       // Entrega de cereal (canje): se paga una deuda en grano entregando ese grano.
@@ -6401,6 +6490,13 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           observaciones: d.observaciones || null,
           userId: req.user?.id || null,
         }});
+        // Mover el recurso REAL de la firma origen (su caja / cheque / banco).
+        await _intercompanyMoverRecurso(tx, {
+          empresaOrigenId: d.empresaOrigenId, recurso: d.recursoIntercompany || 'deuda',
+          monto: d.monto, fecha: d.fecha, concepto: 'Pago a ' + prov.razonSocial,
+          observaciones: d.observaciones || null, userId: req.user?.id || null,
+          cajaOrigen: d.cajaInterco, chequeIdOrigen: d.chequeIdInterco, bancoCuentaIdOrigen: d.bancoCuentaIdInterco,
+        });
       }
 
       return { ok: true, comprobantesAplicados: d.comprobantes.length };

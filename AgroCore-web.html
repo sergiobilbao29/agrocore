@@ -2358,6 +2358,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
+      titulo:'🔄 v1.62.0 — Intercompany: pagar con el efectivo/cheque/banco de otra firma',
+      desc:'En <b>Movimientos diarios</b> hay un método nuevo <b>"Intercompany"</b>: al elegirlo, elegís qué <b>firma del grupo</b> pone los fondos y <b>cómo</b> — efectivo (elegís una <b>caja de esa otra empresa</b>), cheque (elegís un <b>cheque de esa firma</b>) o transferencia (una <b>cuenta de esa firma</b>). El sistema mueve el <b>recurso real</b> de la otra empresa (le baja la caja / le marca el cheque / le hace el egreso bancario) y deja registrada la <b>deuda entre las dos firmas</b> (se ve en Cuentas Intercompany). Además, el <b>pago a proveedor</b> por Intercompany ahora también mueve ese recurso de la otra firma.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
       titulo:'💰 v1.61.0 — Cuentas corrientes: moneda correcta, pago a cuenta y menos ruido',
       desc:'Tres ajustes en Cuentas corrientes: (1) las columnas <b>Facturado</b> y <b>Pagado</b> ahora se muestran en la <b>moneda de cada movimiento</b> (US$/$), igual que el saldo — antes salían siempre en pesos. (2) Al <b>pagar a un proveedor</b> o <b>cobrar a un cliente</b> ya podés hacerlo <b>sin tildar ninguna factura</b> (pago/cobro <b>a cuenta</b>) o pagar de más/parcial; el saldo se ajusta solo. (3) Se sacó el botón <b>"+ Movimiento manual"</b> de "A cobrar"/"A pagar" (esos movimientos se cargan en <b>Movimientos diarios</b>); sigue disponible en la solapa <b>"Otros / Manuales"</b> para alquileres, impuestos y deudas con vencimiento.' },
@@ -12217,18 +12220,21 @@ function pagoCobroMetodoCambio(modo) {
       </select>
       ${!cuentas.length ? '<div class="text-xs text-amber-700 mt-1">No hay cuentas cargadas — cargá una en Tesorería → Bancos primero.</div>' : ''}`;
   } else if (metodo === 'intercompany') {
-    const otrasEmpresas = (state.user?.companies || []).filter(c => c.id !== state.companyId);
-    cont.innerHTML = `
-      <div class="bg-indigo-50 border border-indigo-200 rounded p-2 text-xs text-indigo-900 mb-2">
-        🔄 <b>Intercompany:</b> ${esPago
-          ? 'Otra firma del grupo cubre este pago. Al confirmar, esta firma quedará con una <b>deuda interna</b> con la firma origen, y la firma origen tendrá un <b>saldo a favor</b>.'
-          : 'El cliente paga a otra firma del grupo. Al confirmar, esta firma quedará con un <b>saldo a favor</b> contra la firma destino, y la firma destino tendrá una <b>deuda interna</b>.'}
-      </div>
-      <label class="label">${esPago ? 'Firma del grupo que cubre el pago (origen)' : 'Firma del grupo que recibe los fondos (destino)'}</label>
-      <select id="pc-empresa-inter" class="input">
-        <option value="">— Seleccionar —</option>
-        ${otrasEmpresas.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
-      </select>`;
+    if (esPago) {
+      // Pago cubierto por otra firma: sub-form con recurso (mueve la caja/cheque/banco de esa firma).
+      cont.innerHTML = intercoSubform('pc');
+    } else {
+      const otrasEmpresas = (state.user?.companies || []).filter(c => c.id !== state.companyId);
+      cont.innerHTML = `
+        <div class="bg-indigo-50 border border-indigo-200 rounded p-2 text-xs text-indigo-900 mb-2">
+          🔄 <b>Intercompany:</b> el cliente paga a otra firma del grupo. Esta firma queda con un <b>saldo a favor</b> contra la firma destino, y la destino con una <b>deuda interna</b>.
+        </div>
+        <label class="label">Firma del grupo que recibe los fondos (destino)</label>
+        <select id="pc-empresa-inter" class="input">
+          <option value="">— Seleccionar —</option>
+          ${otrasEmpresas.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+        </select>`;
+    }
   } else if (metodo === 'cereal') {
     const cereales = (state.cache.productos||[]).filter(p => /gran|cereal/i.test(p.categoria||''));
     const deps = (state.cache.depositos||[]);
@@ -12343,10 +12349,22 @@ async function pagoCobroConfirmar(modo) {
     if (!body.cerealProductoId) return toast('Elegí el cereal que entregás', 'warn');
   }
   if (metodo === 'intercompany') {
-    const otraEmp = document.getElementById('pc-empresa-inter')?.value;
-    if (!otraEmp) return toast('Seleccioná la firma del grupo', 'warn');
-    if (esPago) body.empresaOrigenId = otraEmp;
-    else body.empresaDestinoId = otraEmp;
+    if (esPago) {
+      const ic = intercoLeerRecurso('pc');
+      if (!ic.empresaOrigenId) return toast('Elegí la firma que cubre el pago', 'warn');
+      if (ic.recurso === 'efectivo'      && !ic.caja)   return toast('Elegí la caja de esa firma', 'warn');
+      if (ic.recurso === 'cheque'        && !ic.cheque) return toast('Elegí el cheque de esa firma', 'warn');
+      if (ic.recurso === 'transferencia' && !ic.cuenta) return toast('Elegí la cuenta de esa firma', 'warn');
+      body.empresaOrigenId = ic.empresaOrigenId;
+      body.recursoIntercompany = ic.recurso;
+      body.cajaInterco = ic.caja;
+      body.chequeIdInterco = ic.cheque;
+      body.bancoCuentaIdInterco = ic.cuenta;
+    } else {
+      const otraEmp = document.getElementById('pc-empresa-inter')?.value;
+      if (!otraEmp) return toast('Seleccioná la firma del grupo', 'warn');
+      body.empresaDestinoId = otraEmp;
+    }
   }
   try {
     const url = esPago ? '/api/pagos-proveedores' : '/api/cobros-clientes';
@@ -18296,6 +18314,83 @@ function movDiariosFiltrosLimpiar() {
   pages.movDiarios();
 }
 // Modal para cargar un movimiento diario
+// ===== Intercompany: recursos de OTRA empresa del grupo =====
+// Trae (y cachea) cajas, cheques en cartera y cuentas bancarias de otra firma,
+// usando el header X-Company-Id de esa empresa (el usuario debe tener acceso).
+async function _fetchEmpresaRecursos(empId) {
+  state._intercoRec = state._intercoRec || {};
+  if (state._intercoRec[empId]) return state._intercoRec[empId];
+  const headers = { 'X-Company-Id': empId };
+  const [cats, chs, ctas] = await Promise.all([
+    api('/api/catalogos', { headers }).catch(()=>({data:[]})),
+    api('/api/cheques', { headers }).catch(()=>({data:[]})),
+    api('/api/banco-cuentas', { headers }).catch(()=>({data:[]})),
+  ]);
+  const r = {
+    cajas: (cats.data||[]).filter(c=>c.tipo==='Caja' && c.activo!==false).map(c=>c.nombre).filter(Boolean),
+    cheques: (chs.data||[]).filter(c=>/en cartera|emitido|depositado/i.test(c.estado||'')),
+    cuentas: (ctas.data||[]).filter(c=>c.activo!==false),
+  };
+  state._intercoRec[empId] = r;
+  return r;
+}
+// Sub-form reutilizable: elegir la firma que pone los fondos + cómo (recurso).
+// prefix: 'md' (movimientos diarios) o 'pc' (pago). Requiere >1 empresa.
+function intercoSubform(prefix) {
+  const otras = (state.user?.companies || []).filter(c => c.id !== state.companyId);
+  return `
+    <div class="bg-indigo-50 border border-indigo-200 rounded p-2 text-xs text-indigo-900 mb-2">
+      🔄 <b>Intercompany:</b> otra firma del grupo pone los fondos. Esta empresa le queda <b>debiendo</b> y se mueve el <b>recurso real</b> de la otra firma (su caja, cheque o banco).
+    </div>
+    <label class="label">Firma que pone los fondos *</label>
+    <select id="${prefix}-ic-emp" class="input" onchange="intercoRecursoCambio('${prefix}')">
+      <option value="">— Elegir empresa —</option>
+      ${otras.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+    </select>
+    <label class="label mt-2">Cómo pone los fondos *</label>
+    <select id="${prefix}-ic-rec" class="input" onchange="intercoRecursoCambio('${prefix}')">
+      <option value="deuda">📝 Solo deuda entre firmas (no mueve caja/banco)</option>
+      <option value="efectivo">💵 Efectivo (de una caja de esa firma)</option>
+      <option value="cheque">💳 Cheque de esa firma</option>
+      <option value="transferencia">🏛️ Transferencia de una cuenta de esa firma</option>
+    </select>
+    <div id="${prefix}-ic-det" class="mt-2"></div>`;
+}
+async function intercoRecursoCambio(prefix) {
+  const emp = document.getElementById(prefix+'-ic-emp')?.value;
+  const rec = document.getElementById(prefix+'-ic-rec')?.value;
+  const det = document.getElementById(prefix+'-ic-det');
+  if (!det) return;
+  if (!emp || rec === 'deuda') { det.innerHTML = ''; return; }
+  det.innerHTML = `<div class="text-xs text-slate-400">Cargando recursos de la empresa…</div>`;
+  let r; try { r = await _fetchEmpresaRecursos(emp); }
+  catch (e) { det.innerHTML = `<div class="text-xs text-red-600">No pude traer los recursos de esa empresa: ${esc(e.message||'')}</div>`; return; }
+  if (rec === 'efectivo') {
+    det.innerHTML = r.cajas.length
+      ? `<label class="label">Caja de esa firma *</label><select id="${prefix}-ic-caja" class="input"><option value="">— Elegir —</option>${r.cajas.map(c=>`<option>${esc(c)}</option>`).join('')}</select>`
+      : `<div class="text-xs text-amber-700">Esa empresa no tiene cajas cargadas.</div>`;
+  } else if (rec === 'cheque') {
+    det.innerHTML = r.cheques.length
+      ? `<label class="label">Cheque de esa firma *</label><select id="${prefix}-ic-cheque" class="input"><option value="">— Elegir —</option>${r.cheques.map(c=>`<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.nroCheque||c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'s/f'}</option>`).join('')}</select>`
+      : `<div class="text-xs text-amber-700">Esa empresa no tiene cheques en cartera.</div>`;
+  } else if (rec === 'transferencia') {
+    det.innerHTML = r.cuentas.length
+      ? `<label class="label">Cuenta de esa firma *</label><select id="${prefix}-ic-cta" class="input"><option value="">— Elegir —</option>${r.cuentas.map(c=>`<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}${c.titular?' — '+esc(c.titular):''}</option>`).join('')}</select>`
+      : `<div class="text-xs text-amber-700">Esa empresa no tiene cuentas bancarias.</div>`;
+  }
+}
+// Lee del sub-form intercompany el payload de recurso (para movimientos diarios/pagos).
+function intercoLeerRecurso(prefix) {
+  const empresaOrigenId = document.getElementById(prefix+'-ic-emp')?.value || null;
+  const recurso = document.getElementById(prefix+'-ic-rec')?.value || 'deuda';
+  return {
+    empresaOrigenId, recurso,
+    caja:   document.getElementById(prefix+'-ic-caja')?.value?.trim() || null,
+    cheque: document.getElementById(prefix+'-ic-cheque')?.value || null,
+    cuenta: document.getElementById(prefix+'-ic-cta')?.value || null,
+  };
+}
+
 function movDiariosAbrir() {
   // Categorías sugeridas: las del catálogo + las que ya se usaron
   const catCats = (state.cache.catalogos || []).filter(c => c.tipo === 'Categoría de gasto' && c.activo !== false).map(c => c.nombre);
@@ -18353,6 +18448,7 @@ function movDiariosAbrir() {
             <option value="transferencia">🏛️ Transferencia bancaria</option>
             <option value="debito">🏦 Débito bancario</option>
             <option value="externo">💸 Billetera / medio externo</option>
+            ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (otra firma paga)</option>` : ''}
           </select>
         </div>
         <div class="col-span-2" id="md-met-det"></div>
@@ -18413,6 +18509,8 @@ function movDiariosMetodoCambio() {
          </select>
          <div class="text-[11px] text-slate-500 mt-1">💡 Si todavía no cargaste el cheque, hacelo en Tesorería → Cheques y volvé acá.</div>`
       : `<div class="text-xs text-amber-700">⚠️ No hay cheques en cartera. Cargá uno en Tesorería → Cheques primero.</div>`;
+  } else if (met === 'intercompany') {
+    det.innerHTML = intercoSubform('md');
   }
 }
 async function movDiariosGuardar() {
@@ -18440,6 +18538,19 @@ async function movDiariosGuardar() {
   if (metodo === 'externo'       && !body.caja)          return toast('Elegí o escribí el medio externo', 'warn');
   if ((metodo === 'transferencia' || metodo === 'debito') && !body.bancoCuentaId) return toast('Elegí la cuenta bancaria', 'warn');
   if (metodo === 'cheque'        && !body.chequeId)      return toast('Elegí el cheque', 'warn');
+  if (metodo === 'intercompany') {
+    if (tipo !== 'egreso') return toast('Intercompany solo aplica a egresos/gastos', 'warn');
+    const ic = intercoLeerRecurso('md');
+    if (!ic.empresaOrigenId) return toast('Elegí la firma que pone los fondos', 'warn');
+    if (ic.recurso === 'efectivo'      && !ic.caja)   return toast('Elegí la caja de esa firma', 'warn');
+    if (ic.recurso === 'cheque'        && !ic.cheque) return toast('Elegí el cheque de esa firma', 'warn');
+    if (ic.recurso === 'transferencia' && !ic.cuenta) return toast('Elegí la cuenta de esa firma', 'warn');
+    body.empresaOrigenId = ic.empresaOrigenId;
+    body.recursoIntercompany = ic.recurso;
+    body.cajaOrigen = ic.caja;
+    body.chequeIdOrigen = ic.cheque;
+    body.bancoCuentaIdOrigen = ic.cuenta;
+  }
   try {
     await api('/api/movimientos-diarios', { method:'POST', body: JSON.stringify(body) });
     toast('✅ Movimiento registrado', 'success');
