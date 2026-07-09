@@ -1961,6 +1961,18 @@ async function renderCotizaciones() {
     }
   }
 
+  // 3) Kg Novillo (Cañuelas) — precio manual cargado en Cotizaciones, si existe.
+  try {
+    const mons = await cargarMonedas();
+    const kgn = (mons||[]).find(m=>m.clave==='KGN');
+    const kgnVal = (kgn && kgn.ultima!=null) ? kgn.ultima : (state.cache.cotizVivas||{}).KGN;
+    if (kgnVal!=null && Number(kgnVal)>0) {
+      const v = Number(kgnVal);
+      const t = trendOf('kgn', v);
+      datos.push({ ico:'🐂', lbl:'Kg Novillo', val:'$ '+v.toLocaleString('es-AR',{maximumFractionDigits:0})+'/kg', arrow:t.arrow, cls:t.cls });
+    }
+  } catch {}
+
   // Guardar los nuevos valores como "previos" para la próxima comparación.
   // Sólo pisamos si efectivamente obtuvimos datos (sino se perdería la referencia).
   if (Object.keys(nuevos).length) {
@@ -2358,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/07/2026',
+      titulo:'🐂 v1.68.0 — Arrendamientos: Kg Novillo, cuotas en todas las modalidades y pago de cuotas',
+      desc:'(1) Nueva "moneda" <b>Kg Novillo (Cañuelas)</b>: cargás su precio en <b>Tesorería → Cotizaciones</b> y queda disponible en todos los selectores y en el ticker. (2) En <b>Arrendamientos</b> se agregó la modalidad <b>Kg Novillo</b> y ahora podés cargar <b>cuotas</b> en <b>todas las modalidades</b> (efectivo, quintales y kg novillo) — la única sin cuotas es "Porcentaje del rinde". (3) <b>Pago de cuotas</b>: con el botón 📅 abrís las cuotas y pagás cada una con <b>efectivo, cheque, transferencia o débito</b>; el egreso queda registrado en <b>Movimientos diarios</b> (mueve la caja/cheque/banco real) y la cuota queda marcada como pagada. (4) El <b>Flujo de Fondos</b> ahora trae cada cuota de arrendamiento <b>valorizada</b> (quintales a pizarra, kg novillo a Cañuelas, efectivo por su moneda) en su fecha de vencimiento.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
       titulo:'🚚 v1.67.0 — Viajes a depósito propio cargan el stock automáticamente',
       desc:'En un viaje, si elegís destino <b>"📦 Otro"</b> y un <b>depósito propio</b> (silo/galpón), al quedar <b>descargado</b> los kg entran automáticamente al stock de ese depósito. Se actualiza solo si editás el viaje y se borra si lo eliminás. Las <b>cerealeras</b> siguen con su flujo de entrega de siempre (botón 📤), para no duplicar el stock.' },
@@ -8924,7 +8939,7 @@ function ventMetodoCambio(prefix) {
 }
 // ===== MULTIMONEDA: helpers para los formularios de factura =====
 // Lista de respaldo (si todavía no se cargaron las del backend).
-const MONEDAS_FE = [['ARS','$ Pesos (ARS)'],['USD','US$ Dólar oficial'],['USD_MAYORISTA','US$ Dólar divisa (mayorista)'],['USD_MEP','US$ Dólar MEP'],['USD_BLUE','US$ Dólar blue'],['EUR','€ Euro'],['SOJA','🌱 Soja (tn)'],['MAIZ','🌽 Maíz (tn)'],['TRIGO','🌾 Trigo (tn)'],['SORGO','🌿 Sorgo (tn)'],['GIRASOL','🌻 Girasol (tn)']];
+const MONEDAS_FE = [['ARS','$ Pesos (ARS)'],['USD','US$ Dólar oficial'],['USD_MAYORISTA','US$ Dólar divisa (mayorista)'],['USD_MEP','US$ Dólar MEP'],['USD_BLUE','US$ Dólar blue'],['EUR','€ Euro'],['SOJA','🌱 Soja (tn)'],['MAIZ','🌽 Maíz (tn)'],['TRIGO','🌾 Trigo (tn)'],['SORGO','🌿 Sorgo (tn)'],['GIRASOL','🌻 Girasol (tn)'],['KGN','🐂 Kg Novillo (Cañuelas)']];
 // Carga la lista de monedas (predefinidas + propias del catálogo) desde el backend.
 async function cargarMonedas(force){
   if (state.cache.monedas && !force) return state.cache.monedas;
@@ -11537,10 +11552,11 @@ function monedaFmt(moneda, v){
   if(!moneda||moneda==='ARS') return fmt$(v);
   const G={SOJA:'tn soja',MAIZ:'tn maíz',TRIGO:'tn trigo',SORGO:'tn sorgo',GIRASOL:'tn girasol'};
   const F={USD:'US$',USD_MAYORISTA:'US$ (div.)',USD_MEP:'US$ (MEP)',USD_BLUE:'US$ (blue)',EUR:'€'};
+  if(moneda==='KGN') return fmtN(v)+' kg novillo';
   if(G[moneda]) return fmtN(v)+' '+G[moneda];
   if(F[moneda]) return F[moneda]+' '+fmtN(v);
   const meta=monedaMeta(moneda);
-  if(meta) return meta.tipo==='grano' ? (fmtN(v)+' tn '+(meta.label||moneda)) : ((meta.simbolo&&meta.simbolo!=='$'?meta.simbolo:moneda)+' '+fmtN(v));
+  if(meta) return meta.tipo==='hacienda' ? (fmtN(v)+' kg novillo') : meta.tipo==='grano' ? (fmtN(v)+' tn '+(meta.label||moneda)) : ((meta.simbolo&&meta.simbolo!=='$'?meta.simbolo:moneda)+' '+fmtN(v));
   return moneda+' '+fmtN(v);
 }
 // Celda de saldo por moneda: una línea por cada moneda con saldo distinto de cero.
@@ -17036,7 +17052,7 @@ pages.catalogos = async function() {
                 ${items.map(m=>`<tr class="table-row">
                   <td class="font-mono text-xs">${esc(m.clave)}</td>
                   <td class="font-semibold text-slate-800">${esc(m.label)}${m.custom?'':' <span class="badge badge-gray text-[9px]">predefinida</span>'}</td>
-                  <td class="text-slate-600">${m.tipo==='grano'?'Grano (tn)':'Moneda'}</td>
+                  <td class="text-slate-600">${m.tipo==='grano'?'Grano (tn)':m.tipo==='hacienda'?'Hacienda (kg)':'Moneda'}</td>
                   <td><span class="badge ${m.fuente==='manual'?'badge-yellow':'badge-blue'}">${esc(m.fuente||'manual')}</span></td>
                   <td class="text-right text-slate-600">${m.ultima!=null?fmt$(m.ultima):'—'}</td>
                   <td class="text-right whitespace-nowrap">${m.custom?`${(can('catalogos:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs" onclick='monedaCatForm(${JSON.stringify(m.id)})'>✏️</button>`:''}${(can('catalogos:delete')||can('finanzas:delete'))?`<button class="btn btn-ghost text-xs text-red-600" onclick='monedaCatDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`:'<span class="text-[10px] text-slate-400">—</span>'}</td>
@@ -17342,18 +17358,31 @@ pages.arrendamientos = async function() {
   // Detalle/valuación de un arrendamiento según su modalidad.
   const arrInfo = (r) => {
     const ha = Number(r.hectareas||0);
-    const esQq = (r.modalidad==='quintales') || (!r.modalidad && r.tipoPago==='En especie');
-    const esPct = (r.modalidad==='porcentaje') || (!r.modalidad && r.tipoPago==='Porcentual');
-    if (esQq) {
-      const cuotas = Array.isArray(r.cuotas)?r.cuotas:[];
+    const usd = Number(_cv.USD||0);
+    const arsTxt = (ars)=> ars?('≈ $ '+fmtN(Math.round(ars))+(usd?(' / US$ '+fmtN(Math.round(ars/usd))):'')):'—';
+    const mod = r.modalidad || (r.tipoPago==='En especie'?'quintales':(r.tipoPago==='Porcentual'?'porcentaje':(r.tipoPago==='Kg Novillo'?'kgnovillo':'efectivo')));
+    const cuotas = Array.isArray(r.cuotas)?r.cuotas:[];
+    const cuoTxt = cuotas.length?` · ${cuotas.length} cuota(s)`:'';
+    if (mod==='quintales') {
       const qqHa = cuotas.length ? cuotas.reduce((a,c)=>a+Number(c.quintalesHa||0),0) : (Number(r.quintalesHaBlanco||0)+Number(r.quintalesHaNegro||0));
       const piz = Number(_cv[r.grano]||0);
       const ars = qqHa*ha*0.1*piz;
-      const usd = Number(_cv.USD||0);
-      return { tipo:'quintales', porHa: `${fmtN(qqHa)} qq/ha${r.grano?' '+r.grano.toLowerCase():''}`, total: ars, totalTxt: ars?('≈ $ '+fmtN(Math.round(ars))+(usd?(' / US$ '+fmtN(Math.round(ars/usd))):'')):'—', tipoTxt:`En especie${cuotas.length?` · ${cuotas.length} cuota(s)`:''}` };
+      return { tipo:'quintales', porHa: `${fmtN(qqHa)} qq/ha${r.grano?' '+r.grano.toLowerCase():''}`, total: ars, totalTxt: arsTxt(ars), tipoTxt:`En especie${cuoTxt}` };
     }
-    if (esPct) return { tipo:'porcentaje', porHa: r.importeHa?fmtN(r.importeHa)+'%':'—', total:0, totalTxt:'—', tipoTxt:'Porcentaje del rinde' };
+    if (mod==='porcentaje') return { tipo:'porcentaje', porHa: r.importeHa?fmtN(r.importeHa)+'%':'—', total:0, totalTxt:'—', tipoTxt:'Porcentaje del rinde' };
+    if (mod==='kgnovillo') {
+      const p = Number(_cv.KGN||0);
+      const totKg = cuotas.length ? cuotas.reduce((a,c)=>a+Number(c.kgNovillo||0),0) : (Number(r.kgNovilloHa||r.importeHa||0)*ha);
+      const ars = totKg*p;
+      return { tipo:'kgnovillo', porHa: r.kgNovilloHa?`${fmtN(r.kgNovilloHa)} kg nov./ha`:(totKg?`${fmtN(totKg)} kg nov.`:'—'), total:ars, totalTxt: arsTxt(ars), tipoTxt:`Kg Novillo${cuoTxt}` };
+    }
     const mon = r.moneda||'ARS';
+    const tc = mon==='ARS'?1:Number(_cv[mon]||0);
+    if (cuotas.length) {
+      const totMon = cuotas.reduce((a,c)=>a+Number(c.importe||0),0);
+      const ars = totMon*tc;
+      return { tipo:'efectivo', porHa: r.importeHa?fmtMon(mon,r.importeHa):'—', total:ars, totalTxt: fmtMon(mon,totMon)+(mon!=='ARS'&&ars?` (${arsTxt(ars)})`:''), tipoTxt:`Efectivo${cuoTxt}` };
+    }
     const tot = ha*Number(r.importeHa||0);
     return { tipo:'efectivo', porHa: r.importeHa?fmtMon(mon,r.importeHa):'—', total:tot, totalTxt: tot?fmtMon(mon,tot):'—', tipoTxt:'Efectivo' };
   };
@@ -17401,6 +17430,7 @@ pages.arrendamientos = async function() {
                 <td class="px-3 py-2 ${vencido?'text-red-600 font-semibold':''}">${venc}</td>
                 <td class="px-3 py-2">${r.pagado?'<span class="badge badge-green">Pagado</span>':(vencido?'<span class="badge badge-red">Vencido</span>':'<span class="badge badge-yellow">Pendiente</span>')}</td>
                 <td class="px-3 py-2 text-right">
+                  ${(Array.isArray(r.cuotas)&&r.cuotas.length)?`<button class="btn btn-ghost text-xs" title="Cuotas / pagos" onclick='arrCuotasModal(${JSON.stringify(r.id)})'>📅</button>`:''}
                   ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" onclick='arrForm(${JSON.stringify(r.id)})'>✏️</button>`:''}
                   ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='arrDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
                 </td>
@@ -17434,44 +17464,51 @@ async function arrForm(id=null) {
           <select id="f-modal" class="input" onchange="arrModalidadChange()">
             <option value="efectivo" ${modalidad==='efectivo'?'selected':''}>Efectivo ($ / ha)</option>
             <option value="quintales" ${modalidad==='quintales'?'selected':''}>Quintales de grano (en especie)</option>
+            <option value="kgnovillo" ${modalidad==='kgnovillo'?'selected':''}>Kg Novillo (precio Cañuelas)</option>
             <option value="porcentaje" ${modalidad==='porcentaje'?'selected':''}>Porcentaje del rinde</option>
           </select>
         </div>
 
         <div id="arr-efectivo" class="col-span-2 grid grid-cols-3 gap-3">
-          <div><label class="label">Importe / Ha</label><input id="f-imp" class="input" type="number" step="0.01" value="${modalidad==='efectivo'?(it.importeHa||''):''}"/></div>
+          <div><label class="label">Importe / Ha</label><input id="f-imp" class="input" type="number" step="0.01" value="${modalidad==='efectivo'?(it.importeHa||''):''}" oninput="arrCuotasRecalc()"/></div>
           <div><label class="label">Moneda</label>
-            <select id="f-moneda" class="input">
+            <select id="f-moneda" class="input" onchange="arrCuotasRecalc()">
               <option value="ARS" ${(it.moneda||'ARS')==='ARS'?'selected':''}>$ Pesos</option>
               <option value="USD" ${it.moneda==='USD'?'selected':''}>US$ Dólares</option>
             </select>
           </div>
-          <div><label class="label">Vencimiento</label><input id="f-venc" class="input" type="date" value="${vencStr}"/></div>
+          <div><label class="label">Vencimiento (pago único)</label><input id="f-venc" class="input" type="date" value="${vencStr}"/></div>
         </div>
 
-        <div id="arr-quintales" class="col-span-2" style="display:none">
-          <div class="grid grid-cols-3 gap-3">
-            <div><label class="label">Grano</label>
-              ${catSelect('f-grano', 'Cereal', it.grano||'', { placeholder:'— Grano —', attr:'onchange="arrCuotasRecalc()"' })}
-            </div>
-            <div><label class="label">qq/ha en blanco</label><input id="f-qqb" class="input" type="number" step="0.01" value="${it.quintalesHaBlanco??''}" oninput="arrCuotasRecalc()"/></div>
-            <div><label class="label">qq/ha en negro</label><input id="f-qqn" class="input" type="number" step="0.01" value="${it.quintalesHaNegro??''}" oninput="arrCuotasRecalc()"/></div>
+        <div id="arr-quintales" class="col-span-2 grid grid-cols-3 gap-3" style="display:none">
+          <div><label class="label">Grano</label>
+            ${catSelect('f-grano', 'Cereal', it.grano||'', { placeholder:'— Grano —', attr:'onchange="arrCuotasRecalc()"' })}
           </div>
-          <div class="mt-3 border border-slate-200 rounded-lg p-3 bg-slate-50">
-            <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
-              <b class="text-sm">Cuotas (cuánto se paga y cuándo)</b>
-              <button type="button" class="btn btn-secondary text-xs" onclick="arrAddCuota()">+ Cuota</button>
-            </div>
-            <table class="data text-sm"><thead><tr><th>Etiqueta</th><th>Vencimiento</th><th class="text-right">qq/ha</th><th>Color</th><th class="text-right">Valor est.</th><th></th></tr></thead>
-              <tbody id="arr-cuotas-body"></tbody></table>
-            <div id="arr-cuotas-foot" class="text-[11px] text-slate-600 mt-2"></div>
-            <div class="text-[11px] text-slate-500 mt-1">El valor se estima a la pizarra de <b>hoy</b>; al vencer cada cuota se valoriza a la cotización de ese día. 1 qq = 0,1 tn.</div>
-          </div>
+          <div><label class="label">qq/ha en blanco</label><input id="f-qqb" class="input" type="number" step="0.01" value="${it.quintalesHaBlanco??''}" oninput="arrCuotasRecalc()"/></div>
+          <div><label class="label">qq/ha en negro</label><input id="f-qqn" class="input" type="number" step="0.01" value="${it.quintalesHaNegro??''}" oninput="arrCuotasRecalc()"/></div>
+        </div>
+
+        <div id="arr-kgnovillo" class="col-span-2 grid grid-cols-2 gap-3" style="display:none">
+          <div><label class="label">Kg Novillo / Ha</label><input id="f-kgnha" class="input" type="number" step="0.01" value="${modalidad==='kgnovillo'?(it.kgNovilloHa||it.importeHa||''):''}" oninput="arrCuotasRecalc()"/><p class="text-[10px] text-slate-500 mt-1">Se valoriza al precio del Kg Novillo (Cañuelas) cargado en Cotizaciones.</p></div>
+          <div><label class="label">Vencimiento (pago único)</label><input id="f-venckgn" class="input" type="date" value="${vencStr}"/></div>
         </div>
 
         <div id="arr-porcentaje" class="col-span-2 grid grid-cols-2 gap-3" style="display:none">
           <div><label class="label">% del rinde</label><input id="f-pct" class="input" type="number" step="0.01" value="${modalidad==='porcentaje'?(it.importeHa||''):''}"/></div>
           <div><label class="label">Vencimiento</label><input id="f-venc2" class="input" type="date" value="${vencStr}"/></div>
+        </div>
+
+        <div id="arr-cuotas-wrap" class="col-span-2" style="display:none">
+          <div class="border border-slate-200 rounded-lg p-3 bg-slate-50">
+            <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <b class="text-sm">Cuotas (opcional · cuánto se paga y cuándo)</b>
+              <button type="button" class="btn btn-secondary text-xs" onclick="arrAddCuota()">+ Cuota</button>
+            </div>
+            <table class="data text-sm"><thead><tr><th>Etiqueta</th><th>Vencimiento</th><th class="text-right" id="arr-cuota-valhead">qq/ha</th><th>Color</th><th class="text-right">Valor est.</th><th></th></tr></thead>
+              <tbody id="arr-cuotas-body"></tbody></table>
+            <div id="arr-cuotas-foot" class="text-[11px] text-slate-600 mt-2"></div>
+            <div class="text-[11px] text-slate-500 mt-1">Si no cargás cuotas, el contrato se toma como pago único al vencimiento. El valor se estima a la cotización de <b>hoy</b>; al vencer cada cuota se valoriza a la del día. 1 qq = 0,1 tn.</div>
+          </div>
         </div>
 
         <div class="col-span-2 flex items-center gap-2">
@@ -17483,26 +17520,38 @@ async function arrForm(id=null) {
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='arrSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
-  arrModalidadChange();
   if (Array.isArray(it.cuotas) && it.cuotas.length) it.cuotas.forEach(c=>arrAddCuota(c));
   else if (modalidad==='quintales') arrAddCuota();
-  arrCuotasRecalc();
+  arrModalidadChange();
 }
+// Modalidad actual del form (para saber cómo interpretar las cuotas).
+function arrModalActual(){ return $('#f-modal')?.value || 'efectivo'; }
 function arrModalidadChange(){
-  const m = $('#f-modal')?.value || 'efectivo';
-  const ef=$('#arr-efectivo'), qq=$('#arr-quintales'), pc=$('#arr-porcentaje');
+  const m = arrModalActual();
+  const ef=$('#arr-efectivo'), qq=$('#arr-quintales'), kn=$('#arr-kgnovillo'), pc=$('#arr-porcentaje'), cw=$('#arr-cuotas-wrap');
   if(ef) ef.style.display = m==='efectivo'?'':'none';
   if(qq) qq.style.display = m==='quintales'?'':'none';
+  if(kn) kn.style.display = m==='kgnovillo'?'':'none';
   if(pc) pc.style.display = m==='porcentaje'?'':'none';
-  if(m==='quintales' && $('#arr-cuotas-body') && !$('#arr-cuotas-body').children.length) arrAddCuota();
+  // Cuotas para todas las modalidades menos "porcentaje".
+  if(cw) cw.style.display = (m==='porcentaje')?'none':'';
+  // Encabezado de la columna de valor según modalidad.
+  const vh=$('#arr-cuota-valhead');
+  if(vh) vh.textContent = m==='quintales'?'qq/ha' : m==='kgnovillo'?'Kg novillo' : 'Importe';
+  // Mostrar/ocultar la columna Color (solo tiene sentido en quintales).
+  document.querySelectorAll('#arr-cuotas-body [data-ac-colorcell]').forEach(td=>{ td.style.display = m==='quintales'?'':'none'; });
+  arrCuotasRecalc();
 }
 function arrCuotaRowHTML(c){
   c=c||{};
+  const val = c.quintalesHa!=null?c.quintalesHa : (c.kgNovillo!=null?c.kgNovillo : (c.importe!=null?c.importe:''));
+  const colorHide = arrModalActual()!=='quintales' ? 'style="display:none"' : '';
+  const pagBadge = c.pagado ? '<span class="badge badge-green text-[9px] ml-1">pagada</span>' : '';
   return `<tr data-arrc>
-    <td><input class="input text-sm" data-ac="etiqueta" value="${esc(c.etiqueta||'')}" placeholder="Cuota / A cosecha" style="min-width:130px"/></td>
+    <td><input class="input text-sm" data-ac="etiqueta" value="${esc(c.etiqueta||'')}" placeholder="Cuota / A cosecha" style="min-width:120px"/>${pagBadge}</td>
     <td><input type="date" class="input text-sm" data-ac="venc" value="${c.vencimiento?String(c.vencimiento).slice(0,10):''}"/></td>
-    <td><input type="number" step="0.01" class="input text-sm text-right" data-ac="qq" style="width:80px" value="${c.quintalesHa!=null?c.quintalesHa:''}" oninput="arrCuotasRecalc()"/></td>
-    <td><select class="input text-sm" data-ac="color"><option value="blanco" ${c.color!=='negro'?'selected':''}>Blanco</option><option value="negro" ${c.color==='negro'?'selected':''}>Negro</option></select></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-ac="val" style="width:90px" value="${val!==''&&val!=null?val:''}" oninput="arrCuotasRecalc()"/></td>
+    <td data-ac-colorcell ${colorHide}><select class="input text-sm" data-ac="color"><option value="blanco" ${c.color!=='negro'?'selected':''}>Blanco</option><option value="negro" ${c.color==='negro'?'selected':''}>Negro</option></select></td>
     <td class="text-right text-xs" data-ac-val>—</td>
     <td class="text-right"><button type="button" class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove();arrCuotasRecalc()">✕</button></td>
   </tr>`;
@@ -17512,27 +17561,36 @@ function arrAddCuota(c){
   b.insertAdjacentHTML('beforeend', arrCuotaRowHTML(c));
   arrCuotasRecalc();
 }
-function arrValorQq(qqHa){
+// Valoriza en ARS un valor de cuota según la modalidad activa.
+function arrValorCuota(val){
+  const m = arrModalActual();
+  const cv = state.cache.cotizVivas||{};
   const ha = Number($('#f-ha')?.value||0);
-  const g = $('#f-grano')?.value;
-  const piz = Number((state.cache.cotizVivas||{})[g]||0); // ARS por tonelada
-  const tn = Number(qqHa||0) * ha * 0.1;
-  return { tn, ars: tn*piz };
+  const n = Number(val||0);
+  if(m==='quintales'){ const g=$('#f-grano')?.value; const piz=Number(cv[g]||0); const tn=n*ha*0.1; return { ars: tn*piz, unidadTxt:'qq/ha' }; }
+  if(m==='kgnovillo'){ const p=Number(cv.KGN||0); return { ars: n*p, unidadTxt:'kg nov.' }; }
+  // efectivo: importe en la moneda elegida
+  const mon=$('#f-moneda')?.value||'ARS'; const tc = mon==='ARS'?1:Number(cv[mon]||0); return { ars: n*tc, unidadTxt: credMonSym(mon) };
 }
 function arrCuotasRecalc(){
-  const usd = Number((state.cache.cotizVivas||{}).USD||0);
-  let totQq=0, totArs=0;
+  const m = arrModalActual();
+  const cv = state.cache.cotizVivas||{};
+  const usd = Number(cv.USD||0);
+  let totVal=0, totArs=0;
   $$('#arr-cuotas-body tr[data-arrc]').forEach(tr=>{
-    const qq = Number(tr.querySelector('[data-ac="qq"]')?.value||0);
-    const v = arrValorQq(qq); totQq+=qq; totArs+=v.ars;
+    const val = Number(tr.querySelector('[data-ac="val"]')?.value||0);
+    const v = arrValorCuota(val); totVal+=val; totArs+=v.ars;
     const cell = tr.querySelector('[data-ac-val]'); if(cell) cell.textContent = v.ars? ('$ '+fmtN(Math.round(v.ars))) : '—';
   });
   const foot=$('#arr-cuotas-foot'); if(!foot) return;
-  const qqb=Number($('#f-qqb')?.value||0), qqn=Number($('#f-qqn')?.value||0);
-  const objetivo = qqb+qqn;
   const usdTxt = (usd && totArs)? ` · ≈ US$ ${fmtN(Math.round(totArs/usd))}` : '';
-  foot.innerHTML = `Suma cuotas: <b>${fmtN(totQq)} qq/ha</b>${objetivo?` (objetivo ${fmtN(objetivo)} qq/ha)`:''} · Valor estimado: <b>$ ${fmtN(Math.round(totArs))}</b>${usdTxt}` +
-    (objetivo && Math.abs(objetivo-totQq)>0.01 ? ` · <span class="text-amber-700">faltan ${fmtN(objetivo-totQq)} qq/ha por repartir</span>` : '');
+  let objTxt='';
+  if(m==='quintales'){
+    const objetivo = Number($('#f-qqb')?.value||0)+Number($('#f-qqn')?.value||0);
+    if(objetivo) objTxt = ` (objetivo ${fmtN(objetivo)} qq/ha)` + (Math.abs(objetivo-totVal)>0.01?` · <span class="text-amber-700">faltan ${fmtN(objetivo-totVal)} qq/ha por repartir</span>`:'');
+  }
+  const unidad = m==='quintales'?'qq/ha' : m==='kgnovillo'?'kg nov.' : 'importe';
+  foot.innerHTML = `Suma cuotas: <b>${fmtN(totVal)} ${unidad}</b>${objTxt} · Valor estimado: <b>$ ${fmtN(Math.round(totArs))}</b>${usdTxt}`;
 }
 async function arrSave(id) {
   const modalidad = $('#f-modal').value;
@@ -17545,26 +17603,45 @@ async function arrSave(id) {
     pagado: $('#f-pag').checked,
     observaciones: $('#f-obs').value.trim() || null,
   };
-  if (modalidad==='efectivo') {
-    data.importeHa = $('#f-imp').value ? Number($('#f-imp').value) : null;
-    data.moneda = $('#f-moneda').value || 'ARS';
-    data.tipoPago = 'Fijo';
-    data.vencimiento = $('#f-venc').value || null;
-  } else if (modalidad==='quintales') {
-    data.grano = $('#f-grano').value || null;
-    data.quintalesHaBlanco = $('#f-qqb').value ? Number($('#f-qqb').value) : null;
-    data.quintalesHaNegro = $('#f-qqn').value ? Number($('#f-qqn').value) : null;
-    data.tipoPago = 'En especie';
-    const cuotas = $$('#arr-cuotas-body tr[data-arrc]').map(tr=>({
+  // Recolecta las cuotas mapeando el valor genérico al campo de la modalidad.
+  const collectCuotas = (existentes) => $$('#arr-cuotas-body tr[data-arrc]').map((tr,i)=>{
+    const val = tr.querySelector('[data-ac="val"]').value ? Number(tr.querySelector('[data-ac="val"]').value) : null;
+    const c = {
       etiqueta: tr.querySelector('[data-ac="etiqueta"]').value.trim() || null,
       vencimiento: tr.querySelector('[data-ac="venc"]').value || null,
-      quintalesHa: tr.querySelector('[data-ac="qq"]').value ? Number(tr.querySelector('[data-ac="qq"]').value) : null,
-      color: tr.querySelector('[data-ac="color"]').value || 'blanco',
-      pagado: false,
-    })).filter(c => c.vencimiento || c.quintalesHa);
+      color: tr.querySelector('[data-ac="color"]')?.value || 'blanco',
+      pagado: !!(existentes && existentes[i] && existentes[i].pagado),
+      pago: (existentes && existentes[i] && existentes[i].pago) || null,
+    };
+    if (modalidad==='quintales') c.quintalesHa = val;
+    else if (modalidad==='kgnovillo') c.kgNovillo = val;
+    else c.importe = val;
+    return c;
+  }).filter(c => c.vencimiento || c.quintalesHa || c.kgNovillo || c.importe);
+
+  if (modalidad==='efectivo' || modalidad==='quintales' || modalidad==='kgnovillo') {
+    const prev = (id && Array.isArray((state.cache.arrendamientos||[]).find(x=>x.id===id)?.cuotas)) ? (state.cache.arrendamientos||[]).find(x=>x.id===id).cuotas : [];
+    const cuotas = collectCuotas(prev);
     data.cuotas = cuotas;
     const vs = cuotas.map(c=>c.vencimiento).filter(Boolean).sort();
-    data.vencimiento = vs[0] || null;
+    if (modalidad==='efectivo') {
+      data.importeHa = $('#f-imp').value ? Number($('#f-imp').value) : null;
+      data.moneda = $('#f-moneda').value || 'ARS';
+      data.tipoPago = 'Fijo';
+      data.vencimiento = vs[0] || $('#f-venc').value || null;
+    } else if (modalidad==='quintales') {
+      data.grano = $('#f-grano').value || null;
+      data.quintalesHaBlanco = $('#f-qqb').value ? Number($('#f-qqb').value) : null;
+      data.quintalesHaNegro = $('#f-qqn').value ? Number($('#f-qqn').value) : null;
+      data.tipoPago = 'En especie';
+      data.vencimiento = vs[0] || null;
+    } else { // kgnovillo
+      data.kgNovilloHa = $('#f-kgnha').value ? Number($('#f-kgnha').value) : null;
+      data.importeHa = data.kgNovilloHa;
+      data.moneda = 'KGN';
+      data.tipoPago = 'Kg Novillo';
+      data.vencimiento = vs[0] || $('#f-venckgn').value || null;
+    }
   } else {
     data.importeHa = $('#f-pct').value ? Number($('#f-pct').value) : null;
     data.tipoPago = 'Porcentual';
@@ -17580,6 +17657,125 @@ async function arrDel(id) {
   if (!confirm('¿Eliminar este arrendamiento?')) return;
   try { await api('/api/arrendamientos/'+id,{method:'DELETE'});
     toast('Eliminado','success'); delete state.cache.arrendamientos; pages.arrendamientos();
+  } catch (e) { toast(e.message,'error'); }
+}
+// Valoriza en ARS una cuota de un arrendamiento según su modalidad y las cotizaciones vivas.
+function arrCuotaValorArs(arr, c){
+  const cv = state.cache.cotizVivas||{};
+  const ha = Number(arr.hectareas||0);
+  const mod = arr.modalidad || (arr.tipoPago==='En especie'?'quintales':(arr.tipoPago==='Kg Novillo'?'kgnovillo':'efectivo'));
+  if(mod==='quintales') return Number(c.quintalesHa||0)*ha*0.1*Number(cv[arr.grano]||0);
+  if(mod==='kgnovillo') return Number(c.kgNovillo||0)*Number(cv.KGN||0);
+  const mon = arr.moneda||'ARS'; const tc = mon==='ARS'?1:Number(cv[mon]||0);
+  return Number(c.importe||0)*tc;
+}
+// Modal con las cuotas de un arrendamiento y botón de pago por cuota pendiente.
+async function arrCuotasModal(id){
+  const arr = (state.cache.arrendamientos||[]).find(x=>x.id===id);
+  if(!arr) return toast('Arrendamiento no encontrado','error');
+  await cargarCotizVivas();
+  const cuotas = Array.isArray(arr.cuotas)?arr.cuotas:[];
+  const rows = cuotas.map((c,i)=>{
+    const ars = arrCuotaValorArs(arr,c);
+    const venc = c.vencimiento? new Date(String(c.vencimiento).slice(0,10)+'T00:00:00').toLocaleDateString('es-AR') : '—';
+    const estado = c.pagado
+      ? `<span class="badge badge-green">Pagada</span>${c.pago?`<div class="text-[10px] text-slate-500">${esc(c.pago.metodo||'')} · ${c.pago.fecha?new Date(c.pago.fecha).toLocaleDateString('es-AR'):''}</div>`:''}`
+      : `<span class="badge badge-yellow">Pendiente</span>`;
+    const btn = (!c.pagado && can('finanzas:update'))
+      ? `<button class="btn btn-primary text-xs" onclick='arrPagarCuota(${JSON.stringify(id)},${i})'>💵 Pagar</button>` : '';
+    return `<tr>
+      <td class="px-2 py-1">${esc(c.etiqueta||('Cuota '+(i+1)))}</td>
+      <td class="px-2 py-1">${venc}</td>
+      <td class="px-2 py-1 text-right">${ars?fmt$(Math.round(ars)):'—'}</td>
+      <td class="px-2 py-1">${estado}</td>
+      <td class="px-2 py-1 text-right">${btn}</td>
+    </tr>`;
+  }).join('');
+  openModal({
+    title:`📅 Cuotas · ${esc(arr.nombre||arr.propietario)}`, size:'max-w-2xl',
+    body:`<div class="text-[11px] text-slate-500 mb-2">El valor se estima a la cotización de hoy. Al pagar, el egreso queda registrado en Movimientos diarios (caja/cheque/banco).</div>
+      <table class="min-w-full text-sm"><thead class="bg-slate-50 text-slate-600"><tr>
+        <th class="text-left px-2 py-1">Cuota</th><th class="text-left px-2 py-1">Vencimiento</th>
+        <th class="text-right px-2 py-1">Valor est.</th><th class="text-left px-2 py-1">Estado</th><th class="px-2 py-1"></th>
+      </tr></thead><tbody class="divide-y divide-slate-200">${rows||'<tr><td colspan="5" class="px-2 py-3 text-slate-500">Sin cuotas.</td></tr>'}</tbody></table>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+let _arrPagoCtx = null;
+// Form de pago de una cuota (método + recurso + monto en ARS).
+async function arrPagarCuota(id, idx){
+  const arr = (state.cache.arrendamientos||[]).find(x=>x.id===id);
+  if(!arr) return toast('Arrendamiento no encontrado','error');
+  const c = (arr.cuotas||[])[idx]; if(!c) return toast('Cuota no encontrada','error');
+  await cargarCotizVivas();
+  let cuentas = state.cache.bancoCuentas;
+  if(!cuentas){ try{ cuentas=(await api('/api/banco-cuentas')).data||[]; state.cache.bancoCuentas=cuentas; }catch{ cuentas=[]; } }
+  let cheques = state.cache.chequesCartera;
+  if(!cheques){ try{ cheques=(await api('/api/cheques')).data||[]; state.cache.chequesCartera=cheques; }catch{ cheques=[]; } }
+  const chDisp = (cheques||[]).filter(ch=>['en_cartera','pendiente','emitido'].includes(ch.estado||''));
+  const ars = Math.round(arrCuotaValorArs(arr,c));
+  _arrPagoCtx = { id, idx };
+  openModal({
+    title:`💵 Pagar cuota · ${esc(c.etiqueta||('Cuota '+(idx+1)))}`, size:'max-w-md',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div><label class="label">Monto a pagar (ARS) *</label><input id="ap-monto" type="number" step="0.01" class="input" value="${ars||''}"/>
+        <div class="text-[11px] text-slate-500 mt-1">Estimado a la cotización de hoy. Editá si el pago real difiere.</div></div>
+      <div><label class="label">Método de pago *</label>
+        <select id="ap-med" class="input" onchange="arrPagarCuotaToggle()">
+          <option value="efectivo">Efectivo</option>
+          <option value="cheque">Cheque (entregar/endosar)</option>
+          <option value="transferencia">Transferencia bancaria</option>
+          <option value="debito">Débito bancario</option>
+        </select>
+      </div>
+      <div id="ap-efectivo-wrap"><label class="label">Caja / medio (opcional)</label><input id="ap-caja" class="input" placeholder="Caja general"/></div>
+      <div id="ap-cheque-wrap" style="display:none"><label class="label">Cheque</label>
+        <select id="ap-cheque" class="input">
+          <option value="">— Elegí un cheque en cartera —</option>
+          ${chDisp.map(ch=>`<option value="${ch.id}">${ch.tipo==='propio'?'🧾 propio':'📩 tercero'} N° ${esc(ch.nroCheque||'')} · ${esc(ch.banco||'')} · ${fmt$(ch.monto||0)}</option>`).join('')}
+        </select>
+        ${chDisp.length?'':'<div class="text-[11px] text-amber-700 mt-1">No hay cheques en cartera.</div>'}
+      </div>
+      <div id="ap-banco-wrap" style="display:none"><label class="label">Cuenta bancaria</label>
+        <select id="ap-cta" class="input">
+          <option value="">— Elegí una cuenta —</option>
+          ${(cuentas||[]).filter(x=>x.activo).map(x=>`<option value="${x.id}">🏛️ ${esc(x.banco)}${x.alias?' · '+esc(x.alias):''} (saldo: ${fmt$(x.saldo)})</option>`).join('')}
+        </select>
+      </div>
+      <div><label class="label">Fecha de pago</label><input id="ap-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="arrPagarCuotaConfirmar()">💵 Confirmar pago</button>`
+  });
+  arrPagarCuotaToggle();
+}
+function arrPagarCuotaToggle(){
+  const m = $('#ap-med')?.value||'efectivo';
+  const ef=$('#ap-efectivo-wrap'), chq=$('#ap-cheque-wrap'), bco=$('#ap-banco-wrap');
+  if(ef) ef.style.display = m==='efectivo'?'':'none';
+  if(chq) chq.style.display = m==='cheque'?'':'none';
+  if(bco) bco.style.display = (m==='transferencia'||m==='debito')?'':'none';
+}
+async function arrPagarCuotaConfirmar(){
+  if(!_arrPagoCtx) return;
+  const { id, idx } = _arrPagoCtx;
+  const metodo = $('#ap-med').value;
+  const monto = Number($('#ap-monto').value||0);
+  if(!monto || monto<=0) return toast('Ingresá el monto a pagar','warn');
+  const data = { metodo, monto,
+    fecha: $('#ap-fec').value ? new Date($('#ap-fec').value+'T00:00:00').toISOString() : undefined,
+    caja: metodo==='efectivo' ? ($('#ap-caja').value.trim()||null) : null,
+    chequeId: metodo==='cheque' ? ($('#ap-cheque').value||null) : null,
+    bancoCuentaId: (metodo==='transferencia'||metodo==='debito') ? ($('#ap-cta').value||null) : null,
+  };
+  if(metodo==='cheque' && !data.chequeId) return toast('Elegí el cheque','warn');
+  if((metodo==='transferencia'||metodo==='debito') && !data.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn');
+  try {
+    await api('/api/arrendamientos/'+id+'/cuotas/'+idx+'/pagar',{method:'PUT',body:JSON.stringify(data)});
+    toast('Cuota pagada · registrada en Movimientos diarios','success');
+    closeModal();
+    delete state.cache.arrendamientos; delete state.cache.bancoCuentas; delete state.cache.chequesCartera;
+    pages.arrendamientos();
   } catch (e) { toast(e.message,'error'); }
 }
 
@@ -19331,6 +19527,7 @@ async function liqMarcarCobrado(id) {
 function credMonSym(clave){
   if(!clave || clave==='ARS') return '$';
   const m = monedaMeta(clave);
+  if(clave==='KGN' || (m && m.tipo==='hacienda')) return 'kg nov.';
   if(m && m.tipo==='grano') return 'tn';
   if(/^USD/.test(clave)) return 'US$';
   if(clave==='EUR') return '€';
@@ -19339,6 +19536,7 @@ function credMonSym(clave){
 // Formatea un importe en su moneda, ej "US$ 10.000" / "50 tn" / "$ 1.000".
 function fmtMon(clave, val){
   const n = Number(val||0);
+  if(clave==='KGN' || (clave && clave!=='ARS' && monedaMeta(clave)?.tipo==='hacienda')) return `${fmtN(n)} kg nov.`;
   if(clave && clave!=='ARS' && monedaMeta(clave)?.tipo==='grano') return `${fmtN(n)} tn`;
   return `${credMonSym(clave)} ${fmtN(n)}`;
 }

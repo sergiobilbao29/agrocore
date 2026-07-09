@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.67.0';
+const AGROCORE_VERSION = '1.68.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -308,6 +308,7 @@ const MONEDAS = [
   { clave:'TRIGO',   label:'Trigo',          simbolo:'tn',  tipo:'grano', unidad:'tn' },
   { clave:'SORGO',   label:'Sorgo',          simbolo:'tn',  tipo:'grano', unidad:'tn' },
   { clave:'GIRASOL', label:'Girasol',        simbolo:'tn',  tipo:'grano', unidad:'tn' },
+  { clave:'KGN',     label:'Kg Novillo (Cañuelas)', simbolo:'kg', tipo:'hacienda', unidad:'kg' },
 ];
 function _hoy0() { const d = new Date(); d.setHours(0,0,0,0); return d; }
 // Guarda el valor de hoy para cada moneda (global, companyId=null). Idempotente por día.
@@ -379,6 +380,7 @@ function fmtMonedaTxt(moneda, valor) {
 const MONEDA_FUENTE_BUILTIN = {
   USD:'oficial', USD_MAYORISTA:'mayorista', USD_MEP:'mep', USD_BLUE:'blue', EUR:'euro',
   SOJA:'soja', MAIZ:'maiz', TRIGO:'trigo', SORGO:'sorgo', GIRASOL:'girasol',
+  KGN:'manual',
 };
 // Lista de monedas: predefinidas (MONEDAS) + propias del catálogo (tipo='Moneda'),
 // cada una con su última cotización conocida (para sugerir en formularios).
@@ -3058,8 +3060,11 @@ mountCrud({
       etiqueta: z.string().nullable().optional(),
       vencimiento: z.string().nullable().optional(),
       quintalesHa: z.number().nullable().optional(),
+      kgNovillo: z.number().nullable().optional(),   // cuota en Kg Novillo (total)
+      importe: z.number().nullable().optional(),     // cuota en efectivo (moneda del contrato)
       color: z.string().nullable().optional(),
       pagado: z.boolean().optional(),
+      pago: z.any().nullable().optional(),           // datos del pago (método, fecha, monto)
     })).nullable().optional(),
     observaciones: z.string().nullable().optional(),
   }),
@@ -5133,6 +5138,81 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
   } catch (e) { next(e); }
 });
 
+// Mueve el recurso REAL (caja de efectivo / cheque / banco) de la empresa actual
+// para un pago diario. Deja el asiento en el módulo correspondiente, que es lo que
+// alimenta "Movimientos diarios". Devuelve el registro creado/actualizado.
+async function _moverRecursoPagoDiario(tx, req, o) {
+  const obs = o.observaciones || null;
+  if (o.metodo === 'efectivo' || o.metodo === 'externo') {
+    return tx.efectivo.create({ data: {
+      companyId: req.companyId, fecha: o.fecha, tipo: 'egreso', concepto: o.concepto,
+      monto: o.monto, caja: o.caja || null, clasificacion: o.clasificacion || 'empresa', observaciones: obs,
+    }});
+  }
+  if (o.metodo === 'transferencia' || o.metodo === 'debito') {
+    if (!o.bancoCuentaId) throw Object.assign(new Error('Falta la cuenta bancaria'), { status: 400 });
+    const cuenta = await tx.bancoCuenta.findFirst({ where: { id: o.bancoCuentaId, companyId: req.companyId } });
+    if (!cuenta) throw Object.assign(new Error('Cuenta bancaria no encontrada'), { status: 404 });
+    const tipoMov = o.metodo === 'debito' ? 'debito' : 'transferencia_out';
+    return tx.bancoMovimiento.create({ data: {
+      companyId: req.companyId, cuentaId: o.bancoCuentaId, fecha: o.fecha, tipo: tipoMov,
+      concepto: o.concepto, monto: o.monto, contraparte: o.contraparte || null, observaciones: obs,
+      userId: req.user?.id || null,
+    }});
+  }
+  if (o.metodo === 'cheque') {
+    if (!o.chequeId) throw Object.assign(new Error('Falta el cheque'), { status: 400 });
+    const ch = await tx.cheque.findFirst({ where: { id: o.chequeId, companyId: req.companyId } });
+    if (!ch) throw Object.assign(new Error('Cheque no encontrado'), { status: 404 });
+    const nuevoEstado = ch.tipo === 'propio' ? 'entregado' : 'endosado';
+    return tx.cheque.update({ where: { id: ch.id }, data: {
+      estado: nuevoEstado, beneficiario: o.contraparte || ch.beneficiario, fechaEndoso: o.fecha,
+      enPoderDe: o.contraparte || ch.enPoderDe, observaciones: obs || ch.observaciones,
+    }});
+  }
+  throw Object.assign(new Error('Método de pago inválido'), { status: 400 });
+}
+
+// Pagar una cuota de arrendamiento (por índice) con cualquier método. Marca la cuota
+// como pagada y refleja el egreso en Movimientos diarios (caja/cheque/banco).
+app.put('/api/arrendamientos/:id/cuotas/:idx/pagar', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const arr = await prisma.arrendamiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!arr) return res.status(404).json({ ok: false, error: 'Arrendamiento no encontrado' });
+    const idx = Number(req.params.idx);
+    const cuotas = Array.isArray(arr.cuotas) ? arr.cuotas.map(c => ({ ...c })) : [];
+    if (!cuotas[idx]) return res.status(404).json({ ok: false, error: 'Cuota no encontrada' });
+    if (cuotas[idx].pagado) return res.status(400).json({ ok: false, error: 'La cuota ya está pagada' });
+    const schema = z.object({
+      fecha: z.coerce.date().optional(),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo']),
+      monto: z.number().positive(),
+      caja: z.string().nullable().optional(),
+      chequeId: z.string().nullable().optional(),
+      bancoCuentaId: z.string().nullable().optional(),
+      contraparte: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body || {});
+    const fecha = d.fecha || new Date();
+    const concepto = `Arrendamiento ${arr.propietario}${cuotas[idx].etiqueta ? ' · ' + cuotas[idx].etiqueta : ''}`;
+    const result = await prisma.$transaction(async (tx) => {
+      await _moverRecursoPagoDiario(tx, req, {
+        metodo: d.metodo, monto: d.monto, fecha, concepto,
+        caja: d.caja, chequeId: d.chequeId, bancoCuentaId: d.bancoCuentaId,
+        contraparte: d.contraparte || arr.propietario, observaciones: d.observaciones,
+      });
+      cuotas[idx] = { ...cuotas[idx], pagado: true, pago: {
+        fecha, metodo: d.metodo, monto: d.monto,
+        caja: d.caja || null, chequeId: d.chequeId || null, bancoCuentaId: d.bancoCuentaId || null,
+      }};
+      const todasPagas = cuotas.length > 0 && cuotas.every(c => c.pagado);
+      return tx.arrendamiento.update({ where: { id: arr.id }, data: { cuotas, pagado: todasPagas ? true : arr.pagado } });
+    });
+    res.json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+
 // ============================================================
 // LABOR AVANZADA: carga una labor con insumos consumidos + empleado %
 // Diferencia con /api/aplicaciones: maneja stock real de insumos y crea
@@ -5418,19 +5498,46 @@ async function _construirFlujoProyectado(req, opts = {}) {
     });
   }
 
-  // 5) Arrendamientos
+  // 5) Arrendamientos (valoriza cuotas en especie / kg novillo / efectivo a la
+  //    última cotización conocida y proyecta cada cuota en su vencimiento).
+  const _cotRows = await prisma.cotizacion.findMany({ where: { companyId: null }, orderBy: { fecha: 'desc' } });
+  const _cotMap = {}; for (const cr of _cotRows) { if (_cotMap[cr.moneda] == null) _cotMap[cr.moneda] = Number(cr.valor || 0); }
+  const _arrCot = (mon) => (!mon || mon === 'ARS') ? 1 : Number(_cotMap[mon] || 0);
   const arrs = await prisma.arrendamiento.findMany({
-    where: { companyId: { in: companyIds }, vencimiento: { not: null }, pagado: false },
+    where: { companyId: { in: companyIds }, pagado: false },
     include: { campo: { select: { nombre: true } } },
   });
   for (const a of arrs) {
-    const importe = (Number(a.hectareas || 0) * Number(a.importeHa || 0)) || 0;
-    push(a.vencimiento, {
-      tipo: 'egreso', categoria: 'arrendamiento',
-      concepto: `Arrendamiento ${a.propietario}${a.campo?.nombre ? ' · ' + a.campo.nombre : ''}`,
-      importe, ref: a.id, contacto: a.propietario,
-      empresaId: a.companyId,
-    });
+    const mod = a.modalidad || (a.tipoPago === 'En especie' ? 'quintales' : (a.tipoPago === 'Porcentual' ? 'porcentaje' : (a.tipoPago === 'Kg Novillo' ? 'kgnovillo' : 'efectivo')));
+    if (mod === 'porcentaje') continue; // depende del rinde: no proyectable
+    const ha = Number(a.hectareas || 0);
+    const valQq  = (qqHa) => Number(qqHa || 0) * ha * 0.1 * _arrCot(a.grano);
+    const valKgn = (kg)   => Number(kg || 0) * _arrCot('KGN');
+    const valEf  = (imp)  => Number(imp || 0) * _arrCot(a.moneda || 'ARS');
+    const nombre = (extra) => `Arrendamiento ${a.propietario}${extra ? ' · ' + extra : ''}${a.campo?.nombre ? ' · ' + a.campo.nombre : ''}`;
+    const cuotasArr = Array.isArray(a.cuotas) ? a.cuotas.filter(c => !c.pagado) : [];
+    if (cuotasArr.length) {
+      for (const c of cuotasArr) {
+        if (!c.vencimiento) continue;
+        const importe = mod === 'quintales' ? valQq(c.quintalesHa) : mod === 'kgnovillo' ? valKgn(c.kgNovillo) : valEf(c.importe);
+        if (importe <= 0) continue;
+        push(c.vencimiento, {
+          tipo: 'egreso', categoria: 'arrendamiento',
+          concepto: nombre(c.etiqueta), importe, ref: a.id, contacto: a.propietario,
+          empresaId: a.companyId,
+        });
+      }
+    } else if (a.vencimiento) {
+      const importe = mod === 'quintales'
+        ? valQq(Number(a.quintalesHaBlanco || 0) + Number(a.quintalesHaNegro || 0))
+        : mod === 'kgnovillo' ? valKgn(Number(a.kgNovilloHa || a.importeHa || 0) * ha)
+        : valEf(Number(a.importeHa || 0) * ha);
+      if (importe > 0) push(a.vencimiento, {
+        tipo: 'egreso', categoria: 'arrendamiento',
+        concepto: nombre(), importe, ref: a.id, contacto: a.propietario,
+        empresaId: a.companyId,
+      });
+    }
   }
 
   // 6) Facturas de venta pendientes de cobro (cta corriente, no anuladas)
