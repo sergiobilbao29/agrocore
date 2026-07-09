@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/07/2026',
+      titulo:'🔗 v1.69.0 — Catálogo = maestro: Stock y facturas sincronizados + NC/ND de venta',
+      desc:'(1) <b>Catálogo como maestro</b>: en <b>Stock</b> y en el buscador de ítems de <b>Compras/Ventas</b> solo se muestran los artículos que están en el Catálogo; los productos que no están en el catálogo quedan <b>ocultos</b> (no se borran) y en Stock hay un check para "ver también los que no están en el catálogo". (2) <b>Liquidación de cereal</b>: el producto ahora se limita a <b>granos/cereales</b> (ya no aparecen animales ni insumos); lo mismo en "Entregar cereal a cerealera". (3) <b>Facturación (ventas)</b>: nuevo selector <b>Comprobante</b> con Factura, <b>Nota de Crédito</b> y <b>Nota de Débito</b>. La factura descuenta stock del depósito; la <b>NC reingresa</b> el stock al depósito y baja lo que te deben; la <b>ND suma</b> lo que te deben sin tocar stock. (4) <b>Movimientos de stock</b>: al entrar arranca <b>sin filtros</b> para no ocultar movimientos viejos (antes el filtro de depósito quedaba pegado). <b>Migración:</b> Factura.clase.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/07/2026',
       titulo:'🐂 v1.68.0 — Arrendamientos: Kg Novillo, cuotas en todas las modalidades y pago de cuotas',
       desc:'(1) Nueva "moneda" <b>Kg Novillo (Cañuelas)</b>: cargás su precio en <b>Tesorería → Cotizaciones</b> y queda disponible en todos los selectores y en el ticker. (2) En <b>Arrendamientos</b> se agregó la modalidad <b>Kg Novillo</b> y ahora podés cargar <b>cuotas</b> en <b>todas las modalidades</b> (efectivo, quintales y kg novillo) — la única sin cuotas es "Porcentaje del rinde". (3) <b>Pago de cuotas</b>: con el botón 📅 abrís las cuotas y pagás cada una con <b>efectivo, cheque, transferencia o débito</b>; el egreso queda registrado en <b>Movimientos diarios</b> (mueve la caja/cheque/banco real) y la cuota queda marcada como pagada. (4) El <b>Flujo de Fondos</b> ahora trae cada cuota de arrendamiento <b>valorizada</b> (quintales a pizarra, kg novillo a Cañuelas, efectivo por su moneda) en su fecha de vencimiento.' },
@@ -5460,16 +5463,24 @@ pages.stock = async function() {
   } catch (e) { return toast(e.message,'error'); }
   try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
   try { const d = await api('/api/depositos'); depositos = d.data || []; state.cache.depositos = depositos; } catch {}
+  try { const c = await api('/api/catalogos'); state.cache.catalogos = c.data || []; } catch {}
 
   const cats = [...new Set(rows.map(r=>r.categoria).filter(Boolean))].sort();
   const bajoMin = rows.filter(p => p.bajoMinimo).length;
   const totalSKU = rows.length;
 
+  const _sets = _catalogoArtSets();
+  const _hayCat = _sets.nombres.size || _sets.animales.size;
+  const ocultosCat = _hayCat ? rows.filter(p => !prodEnCatalogo(p, _sets)).length : 0;
   const render = () => {
     const q = (state.stockFilter.q||'').toLowerCase();
     const catSel = state.stockFilter.cats || [];
     const estado = state.stockFilter.estado || '';
+    const verFuera = !!state.stockFilter.verFueraCat;
     const filtered = rows.filter(p => {
+      // Catálogo = maestro: ocultamos los productos que no están en el catálogo
+      // (salvo que se active "ver fuera de catálogo"). No se borran, solo no se listan.
+      if (_hayCat && !verFuera && !prodEnCatalogo(p, _sets)) return false;
       if (catSel.length && !catSel.includes(p.categoria)) return false;
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
@@ -5546,11 +5557,13 @@ pages.stock = async function() {
         </div>
       </div>
       ${depFilter ? `<div class="text-xs text-blue-700 mt-2">📍 Mostrando existencias <b>solo del depósito seleccionado</b>. Quitá el filtro para ver el consolidado de todos los depósitos.</div>` : `<div class="text-xs text-slate-500 mt-2">💡 Sin filtro de depósito, ves la <b>existencia total consolidada</b> (suma de todos los depósitos).</div>`}
+      ${ocultosCat ? `<div class="text-xs text-amber-700 mt-2 flex items-center gap-2"><label class="inline-flex items-center gap-1 cursor-pointer"><input type="checkbox" id="st-verfuera" ${state.stockFilter.verFueraCat?'checked':''}/> Ver también <b>${ocultosCat}</b> producto(s) que no están en el Catálogo</label></div>` : ''}
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="stock-table"></div></div>`;
   $('#st-q').oninput   = e => { state.stockFilter.q = e.target.value; render(); };
   msWire('st-cat', 'stCat', vals => { state.stockFilter.cats = vals; render(); }, () => render(), 'Todas');
   $('#st-estado').onchange = e => { state.stockFilter.estado = e.target.value; render(); };
+  { const v=$('#st-verfuera'); if(v) v.onchange = e => { state.stockFilter.verFueraCat = e.target.checked; render(); }; }
   $('#st-dep').onchange = e => { state.stockFilter.depositoId = e.target.value; pages.stock(); }; // recarga con el filtro de back
   render();
 };
@@ -5730,7 +5743,9 @@ pages.movimientos = async function() {
     };
   });
   rows = rows.concat(_hacRows).sort((a,b)=> String(b.fecha||'').localeCompare(String(a.fecha||'')));
-  state.movFilter = state.movFilter || { q:'', cats:[], tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
+  // Arrancamos SIEMPRE sin filtros al entrar, para no ocultar movimientos viejos
+  // (antes el filtro de depósito quedaba "pegado" entre navegaciones).
+  state.movFilter = { q:'', cats:[], tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
   if (!Array.isArray(state.movFilter.cats)) state.movFilter.cats = state.movFilter.cat ? [state.movFilter.cat] : [];
   delete state.movFilter.cat;
   const cats = [...new Set(prods.map(p=>p.categoria).filter(Boolean))].sort();
@@ -8579,8 +8594,36 @@ pages.facturacion = async function() {
 function factFiltrosLimpiar() { state.ventaFilter = { desde:'', hasta:'', clienteId:'', tipo:'' }; pages.facturacion(); }
 // Lista plana de items elegibles en factura (Producto + Catálogo insumos).
 // Memoizado por número de productos/catalogos para no recomputar en cada fila.
+// Sets de nombres (normalizados) de los artículos del Catálogo (insumos +
+// cereales + categorías de animales). Sirven para saber qué productos están
+// "en el catálogo" y así ocultar los huérfanos (Catálogo = maestro).
+function _catalogoArtSets(){
+  const norm = s => String(s||'').trim().toLowerCase();
+  const cats = state.cache.catalogos || [];
+  const TIPOS_ART = new Set(['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo','Cereal']);
+  const nombres = new Set(), animales = new Set();
+  cats.forEach(c => {
+    if (c.activo===false) return;
+    if (TIPOS_ART.has(c.tipo)) nombres.add(norm(c.nombre));
+    else if (c.tipo==='Categoría animal' || c.tipo==='Categoria animal') animales.add(norm(c.nombre));
+  });
+  return { nombres, animales, norm };
+}
+// ¿El producto está representado en el Catálogo? (por nombre o, en hacienda, por categoría)
+function prodEnCatalogo(p, sets){
+  sets = sets || _catalogoArtSets();
+  const { nombres, animales, norm } = sets;
+  const n = norm(p.nombre);
+  if (nombres.has(n) || animales.has(n)) return true;
+  if ((p.categoria==='hacienda' || p.esHacienda) && p.categoriaHacienda && animales.has(norm(p.categoriaHacienda))) return true;
+  return false;
+}
 function _factItemsLista() {
-  const prods = state.cache.productos || [];
+  const sets = _catalogoArtSets();
+  const tieneCat = sets.nombres.size || sets.animales.size;
+  // Catálogo = maestro: si hay catálogo cargado, solo mostramos productos que
+  // estén en él (se ocultan los huérfanos). Si aún no hay catálogo, mostramos todo.
+  const prods = (state.cache.productos || []).filter(p => !tieneCat || prodEnCatalogo(p, sets));
   const TIPOS_INSUMO = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'];
   const cats  = (state.cache.catalogos || []).filter(c => TIPOS_INSUMO.includes(c.tipo) && c.activo !== false);
   const nombresProd = new Set(prods.map(p => (p.nombre||'').toLowerCase().trim()));
@@ -8814,9 +8857,16 @@ async function factForm() {
   if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
   const _depsVta = (state.cache.depositos || []).filter(d => d.activo !== false);
   openModal({
-    title:'Emitir factura', size:'max-w-6xl',
+    title:'Emitir comprobante', size:'max-w-6xl',
     body: `
-      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+      <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
+        <div><label class="label">Comprobante *</label>
+          <select id="f-clase" class="input" onchange="factClaseHint()">
+            <option value="factura">Factura</option>
+            <option value="nota_credito">Nota de Crédito</option>
+            <option value="nota_debito">Nota de Débito</option>
+          </select>
+        </div>
         <div><label class="label">Tipo *</label>
           <select id="f-tipo" class="input">
             ${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}
@@ -8844,6 +8894,7 @@ async function factForm() {
         </div>
         ${monedaFieldHTML('f')}
       </div>
+      <div id="f-clase-hint" class="text-xs mb-3"></div>
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
           <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
@@ -8883,6 +8934,7 @@ async function factForm() {
   setTimeout(async () => {
     $('#fi-tbody').addEventListener('input', factRecalc);
     factRecalc();
+    factClaseHint();
     // Pre-cargar datos para método si todavía no están
     if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
       try {
@@ -8911,6 +8963,22 @@ async function factForm() {
       toggle();
     }
   }, 0);
+}
+// Aviso del efecto de cada comprobante de venta sobre stock y cuenta corriente.
+function factClaseHint(){
+  const el = $('#f-clase-hint'); if(!el) return;
+  const c = $('#f-clase')?.value || 'factura';
+  const btn = document.querySelector('.modal-footer .btn-primary') || null;
+  if (c==='nota_credito'){
+    el.className='text-xs mb-3 text-emerald-700';
+    el.innerHTML='↩️ <b>Nota de Crédito</b>: reingresa el stock al depósito elegido y <b>baja</b> lo que el cliente te debe.';
+  } else if (c==='nota_debito'){
+    el.className='text-xs mb-3 text-amber-700';
+    el.innerHTML='➕ <b>Nota de Débito</b>: <b>suma</b> lo que el cliente te debe. No toca el stock.';
+  } else {
+    el.className='text-xs mb-3 text-slate-500';
+    el.innerHTML='🧾 <b>Factura</b>: descuenta el stock del depósito elegido y el cliente queda debiendo el total.';
+  }
 }
 // Reutilizable: cambia el detalle del método según la opción elegida
 // para los modales de factura de Venta (factForm y factFormExterna).
@@ -9007,12 +9075,14 @@ async function factSave() {
   if (!items.length) return toast('Agregá al menos un item','warn');
   // Validacion: si hay items con producto que excedan el stock, avisar.
   // Sumamos por producto en caso de que aparezca varias veces en la misma factura.
+  const _claseVta = $('#f-clase')?.value || 'factura';
   const stockMap = state.cache.stockMap || {};
   const prods = state.cache.productos || [];
   const totPorProd = {};
   items.forEach(it => { if (it.productoId) totPorProd[it.productoId] = (totPorProd[it.productoId]||0) + it.cantidad; });
   const errores = [];
-  Object.entries(totPorProd).forEach(([pid, cant]) => {
+  // La verificación de stock solo aplica a la Factura (que descuenta). La NC reingresa y la ND no toca stock.
+  if (_claseVta === 'factura') Object.entries(totPorProd).forEach(([pid, cant]) => {
     const stock = stockMap[pid];
     if (stock != null && cant > stock) {
       const prod = prods.find(p => p.id === pid);
@@ -9030,6 +9100,7 @@ async function factSave() {
   const vencimientoFecha = cvFechaRaw || null;  // YYYY-MM-DD si la condición es "a fecha fija"
   const data = {
     tipo: $('#f-tipo').value,
+    clase: $('#f-clase')?.value || 'factura',
     puntoVenta: Number($('#f-pv').value||1),
     numero: Number($('#f-nro').value||1),
     fecha: new Date($('#f-fec').value).toISOString(),
@@ -19284,7 +19355,7 @@ async function entregaCerealForm() {
   let productos=[], depos=[];
   try {
     const [p, d] = await Promise.all([api('/api/productos'), api('/api/depositos')]);
-    productos = (p.data||[]).filter(x => x.activo);
+    productos = (p.data||[]).filter(x => x.activo && /gran|cereal/i.test(x.categoria||''));
     depos = (d.data||[]).filter(x => x.activo && x.tipo === 'cerealera');
   } catch (e) { return toast(e.message,'error'); }
   if (!depos.length) return toast('Cargá primero una cerealera (botón "+ Nuevo depósito").','warn');
@@ -19382,10 +19453,12 @@ async function liqForm() {
   try {
     const [d, p, c] = await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes')]);
     depos = (d.data||[]).filter(x => x.activo && x.tipo === 'cerealera');
-    productos = (p.data||[]).filter(x => x.activo);
+    // Liquidación de cereal: solo granos/cereales (no animales ni insumos).
+    productos = (p.data||[]).filter(x => x.activo && /gran|cereal/i.test(x.categoria||''));
     clientes = c.data||[];
   } catch (e) { return toast(e.message,'error'); }
   if (!depos.length) return toast('Cargá primero una cerealera','warn');
+  if (!productos.length) return toast('No hay granos cargados. Cargá un cereal o registrá un viaje/compra de grano.','warn');
   openModal({
     title:'🧾 Nueva liquidación de cereal', size:'max-w-4xl',
     body: `

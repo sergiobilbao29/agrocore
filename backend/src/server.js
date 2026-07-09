@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.68.0';
+const AGROCORE_VERSION = '1.69.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2581,6 +2581,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
     const schema = z.object({
       clienteId: z.string().nullable().optional(),
       tipo: z.enum(['A', 'B', 'C', 'E']),
+      clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
       puntoVenta: z.number().int(),
       numero: z.number().int(),
       fecha: z.coerce.date(),
@@ -2624,10 +2625,11 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       const totales = calcFactura(input.items);
       const _mon = input.moneda || 'ARS';
       const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
+      const _clase = input.clase || 'factura';
       const f = await tx.factura.create({
         data: {
           companyId: req.companyId, clienteId: input.clienteId || null,
-          tipo: input.tipo, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
+          tipo: input.tipo, clase: _clase, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
           condicionVenta: input.condicionVenta, observaciones: input.observaciones,
           moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
@@ -2637,19 +2639,47 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         },
         include: { cliente: true, items: true },
       });
-      await crearMovimientosDesdeFactura(tx, {
-        companyId: req.companyId, factura: f, tipo: 'egreso', motivo: 'venta',
-        contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA',
-        userId: req.user?.id || null, depositoId: input.depositoId || null,
-      });
-      // Movimiento de cuenta corriente: el cliente queda debiendo el total.
-      await crearCtaCteDesdeFactura(tx, {
-        companyId: req.companyId, factura: f,
-        contactoTipo: 'cliente', contactoId: input.clienteId || null,
-        refPrefix: 'FAC', motivo: 'Factura',
-        condicion: input.condicionVenta, condicionDias: input.condicionDias,
-        vencimientoFecha: input.vencimientoFecha || null,
-      });
+      if (_clase === 'factura') {
+        // Factura de venta: sale stock (egreso) + el cliente queda debiendo (debe).
+        await crearMovimientosDesdeFactura(tx, {
+          companyId: req.companyId, factura: f, tipo: 'egreso', motivo: 'venta',
+          contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA',
+          userId: req.user?.id || null, depositoId: input.depositoId || null,
+        });
+        await crearCtaCteDesdeFactura(tx, {
+          companyId: req.companyId, factura: f,
+          contactoTipo: 'cliente', contactoId: input.clienteId || null,
+          refPrefix: 'FAC', motivo: 'Factura',
+          condicion: input.condicionVenta, condicionDias: input.condicionDias,
+          vencimientoFecha: input.vencimientoFecha || null,
+        });
+      } else if (_clase === 'nota_credito') {
+        // NC de venta = devolución: REINGRESA el stock al depósito elegido y BAJA
+        // lo que el cliente nos debe (haber).
+        await crearMovimientosDesdeFactura(tx, {
+          companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'devolucion_venta',
+          contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA',
+          userId: req.user?.id || null, depositoId: input.depositoId || null,
+        });
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'cliente', contactoId: input.clienteId || null,
+          fecha: input.fecha,
+          detalle: `Nota de crédito ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
+          moneda: _mon, cotizacion: _cot,
+          haber: totales.total, referencia: `FAC-${f.id}`,
+          observaciones: input.observaciones || null,
+        }});
+      } else {
+        // ND de venta: SUMA lo que el cliente nos debe (debe). No toca stock.
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'cliente', contactoId: input.clienteId || null,
+          fecha: input.fecha,
+          detalle: `Nota de débito ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
+          moneda: _mon, cotizacion: _cot,
+          debe: totales.total, referencia: `FAC-${f.id}`,
+          observaciones: input.observaciones || null,
+        }});
+      }
       return f;
     });
     res.status(201).json({ ok: true, data: factura });

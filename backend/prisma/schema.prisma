@@ -417,6 +417,7 @@ model Factura {
   companyId       String
   clienteId       String?
   tipo            String    // "A", "B", "C", "E"
+  clase           String    @default("factura")  // factura | nota_credito | nota_debito
   puntoVenta      Int
   numero          Int
   fecha           DateTime
