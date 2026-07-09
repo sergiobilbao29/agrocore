@@ -2371,6 +2371,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
+      titulo:'🌾 v1.72.0 — Arrendamientos: acceso desde la Agenda y valuación correcta de quintales',
+      desc:'(1) Desde la <b>Agenda</b>, al abrir el aviso de una cuota de arrendamiento ahora aparece el botón <b>"Abrir arrendamiento"</b> que te lleva directo a las cuotas del contrato (para verlas o pagarlas). (2) Se corrigió la <b>valuación en quintales</b>: el cereal se guardaba por nombre ("Soja") pero la pizarra usa la clave ("SOJA"), por eso salía <b>$0</b> en el Flujo de Fondos y en la Agenda. Ahora se normaliza y las cuotas en quintales se valorizan bien a la pizarra del día (Flujo, Agenda y listado de arrendamientos).' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
       titulo:'⛽ v1.71.0 — Los tipos de insumo nuevos (ej. Combustible y Lubricantes) ya aparecen en Compras y Ventas',
       desc:'Si creabas un <b>Tipo de insumo</b> nuevo (por ejemplo "Combustible y Lubricantes") y le cargabas ítems (Gas oil, Aceite, etc.), esos artículos <b>no aparecían</b> en el buscador de Compras/Ventas ni contaban como "en el catálogo" para el Stock, porque la lista de tipos estaba fija. Ahora se toma <b>dinámicamente del catálogo de Tipos de insumo</b>, así cualquier tipo que crees y sus ítems aparecen en todos lados.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
@@ -17447,7 +17450,7 @@ pages.arrendamientos = async function() {
     const cuoTxt = cuotas.length?` · ${cuotas.length} cuota(s)`:'';
     if (mod==='quintales') {
       const qqHa = cuotas.length ? cuotas.reduce((a,c)=>a+Number(c.quintalesHa||0),0) : (Number(r.quintalesHaBlanco||0)+Number(r.quintalesHaNegro||0));
-      const piz = Number(_cv[r.grano]||0);
+      const piz = Number(_cv[_claveGrano(r.grano)]||0);
       const ars = qqHa*ha*0.1*piz;
       return { tipo:'quintales', porHa: `${fmtN(qqHa)} qq/ha${r.grano?' '+r.grano.toLowerCase():''}`, total: ars, totalTxt: arsTxt(ars), tipoTxt:`En especie${cuoTxt}` };
     }
@@ -17523,6 +17526,9 @@ pages.arrendamientos = async function() {
       </div>`}`;
 };
 const ARR_GRANOS = ['SOJA','MAIZ','TRIGO','SORGO','GIRASOL'];
+// El grano del arrendamiento se guarda por NOMBRE ("Soja"); las cotizaciones
+// vivas usan la CLAVE ("SOJA"). Normalizamos para buscar la pizarra correcta.
+function _claveGrano(g){ return String(g||'').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
 async function arrForm(id=null) {
   const it = id ? (state.cache.arrendamientos||[]).find(x=>x.id===id)||{} : { pagado:false };
   const campos = state.cache.campos||[];
@@ -17649,7 +17655,7 @@ function arrValorCuota(val){
   const cv = state.cache.cotizVivas||{};
   const ha = Number($('#f-ha')?.value||0);
   const n = Number(val||0);
-  if(m==='quintales'){ const g=$('#f-grano')?.value; const piz=Number(cv[g]||0); const tn=n*ha*0.1; return { ars: tn*piz, unidadTxt:'qq/ha' }; }
+  if(m==='quintales'){ const g=$('#f-grano')?.value; const piz=Number(cv[_claveGrano(g)]||0); const tn=n*ha*0.1; return { ars: tn*piz, unidadTxt:'qq/ha' }; }
   if(m==='kgnovillo'){ const p=Number(cv.KGN||0); return { ars: n*p, unidadTxt:'kg nov.' }; }
   // efectivo: importe en la moneda elegida
   const mon=$('#f-moneda')?.value||'ARS'; const tc = mon==='ARS'?1:Number(cv[mon]||0); return { ars: n*tc, unidadTxt: credMonSym(mon) };
@@ -17746,7 +17752,7 @@ function arrCuotaValorArs(arr, c){
   const cv = state.cache.cotizVivas||{};
   const ha = Number(arr.hectareas||0);
   const mod = arr.modalidad || (arr.tipoPago==='En especie'?'quintales':(arr.tipoPago==='Kg Novillo'?'kgnovillo':'efectivo'));
-  if(mod==='quintales') return Number(c.quintalesHa||0)*ha*0.1*Number(cv[arr.grano]||0);
+  if(mod==='quintales') return Number(c.quintalesHa||0)*ha*0.1*Number(cv[_claveGrano(arr.grano)]||0);
   if(mod==='kgnovillo') return Number(c.kgNovillo||0)*Number(cv.KGN||0);
   const mon = arr.moneda||'ARS'; const tc = mon==='ARS'?1:Number(cv[mon]||0);
   return Number(c.importe||0)*tc;
@@ -17893,6 +17899,7 @@ const RECO_RELACION_DESTINO = {
   cheque:  { modulo: 'cheques',  cache: 'cheques',  fn: 'chqForm', label: 'cheque'          },
   credito: { modulo: 'creditos', cache: 'creditos', fn: 'credVer', label: 'crédito'         },
   ctacte:  { modulo: 'ctasCtes', cache: 'ctasCtes', fn: 'ccForm',  label: 'cuenta corriente'},
+  arrendamiento: { modulo: 'arrendamientos', cache: 'arrendamientos', fn: 'arrCuotasModal', label: 'arrendamiento' },
 };
 
 // Visor de un evento en el modo "todas las empresas". Permite ir al registro

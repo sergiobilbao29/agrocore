@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.71.0';
+const AGROCORE_VERSION = '1.72.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -312,6 +312,12 @@ const MONEDAS = [
 ];
 function _hoy0() { const d = new Date(); d.setHours(0,0,0,0); return d; }
 // Guarda el valor de hoy para cada moneda (global, companyId=null). Idempotente por día.
+// Normaliza el nombre de un grano a la clave de cotización (SOJA, MAIZ, ...).
+// El arrendamiento guarda el NOMBRE del cereal ("Soja", "Maíz") pero las
+// cotizaciones se guardan por clave en mayúsculas y sin acentos.
+function _claveGrano(g) {
+  return String(g || '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
 async function snapshotCotizaciones(dolar, cereales) {
   const fecha = _hoy0();
   const filas = [];
@@ -5541,7 +5547,7 @@ async function _construirFlujoProyectado(req, opts = {}) {
     const mod = a.modalidad || (a.tipoPago === 'En especie' ? 'quintales' : (a.tipoPago === 'Porcentual' ? 'porcentaje' : (a.tipoPago === 'Kg Novillo' ? 'kgnovillo' : 'efectivo')));
     if (mod === 'porcentaje') continue; // depende del rinde: no proyectable
     const ha = Number(a.hectareas || 0);
-    const valQq  = (qqHa) => Number(qqHa || 0) * ha * 0.1 * _arrCot(a.grano);
+    const valQq  = (qqHa) => Number(qqHa || 0) * ha * 0.1 * _arrCot(_claveGrano(a.grano));
     const valKgn = (kg)   => Number(kg || 0) * _arrCot('KGN');
     const valEf  = (imp)  => Number(imp || 0) * _arrCot(a.moneda || 'ARS');
     const nombre = (extra) => `Arrendamiento ${a.propietario}${extra ? ' · ' + extra : ''}${a.campo?.nombre ? ' · ' + a.campo.nombre : ''}`;
@@ -9308,7 +9314,7 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
     const ha = Number(a.hectareas || 0);
     const nombreBase = `${a.propietario || ''}${a.campo?.nombre ? ' · ' + a.campo.nombre : ''}`.trim();
     const descDe = (c) => {
-      if (mod === 'quintales') { const ars = Number(c.quintalesHa||0)*ha*0.1*_cotOf(a.grano); return `${Number(c.quintalesHa||0)} qq/ha${ars?` · ≈ $${Math.round(ars).toLocaleString('es-AR')}`:''}`; }
+      if (mod === 'quintales') { const ars = Number(c.quintalesHa||0)*ha*0.1*_cotOf(_claveGrano(a.grano)); return `${Number(c.quintalesHa||0)} qq/ha${ars?` · ≈ $${Math.round(ars).toLocaleString('es-AR')}`:''}`; }
       if (mod === 'kgnovillo') { const ars = Number(c.kgNovillo||0)*_cotOf('KGN'); return `${Number(c.kgNovillo||0)} kg novillo${ars?` · ≈ $${Math.round(ars).toLocaleString('es-AR')}`:''}`; }
       const ars = Number(c.importe||0)*_cotOf(a.moneda||'ARS'); return `$${Math.round(ars).toLocaleString('es-AR')}`;
     };
