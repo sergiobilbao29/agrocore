@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.64.0';
+const AGROCORE_VERSION = '1.65.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1569,7 +1569,8 @@ app.put('/api/roles/:id', async (req, res, next) => {
     if (!_esAdminEnAlguna(req)) return res.status(403).json({ ok: false, error: 'Solo Super Admin o Administradores pueden editar roles' });
     const existing = await prisma.role.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
-    if (existing.builtin) return res.status(400).json({ ok: false, error: 'Rol de sistema no editable' });
+    // Solo el rol Administrador (acceso total) no se puede modificar; el resto sí.
+    if (existing.key === 'admin') return res.status(400).json({ ok: false, error: 'El rol Administrador no se puede modificar (es el rol base de acceso total).' });
     const data = roleSchema.partial().parse(req.body);
     res.json({ ok: true, data: await prisma.role.update({ where: { id: req.params.id }, data }) });
   } catch (e) { next(e); }
@@ -4395,7 +4396,22 @@ app.delete('/api/categorias-hacienda/:id', requireCompany, requirePermission('st
   try {
     const existing = await prisma.categoriaHaciendaConfig.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
-    await prisma.categoriaHaciendaConfig.delete({ where: { id: existing.id } });
+    const nombre = (existing.nombre || '').trim();
+    // No permitir borrar una categoría EN USO (su producto de hacienda tiene movimientos de stock).
+    const prod = await prisma.producto.findFirst({
+      where: { companyId: req.companyId, categoria: 'hacienda', OR: [{ categoriaHacienda: nombre }, { nombre }] },
+      select: { id: true },
+    });
+    if (prod) {
+      const movs = await prisma.movimiento.count({ where: { companyId: req.companyId, productoId: prod.id } });
+      if (movs > 0) return res.status(400).json({ ok: false, error: `La categoría "${nombre}" está en uso (${movs} movimiento/s de stock). No se puede eliminar; podés desactivarla desde Stock.` });
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.categoriaHaciendaConfig.delete({ where: { id: existing.id } });
+      // Borrar también la entrada del Catálogo (tipo "Categoría animal") con el mismo
+      // nombre, para que el merge automático NO la vuelva a crear en el próximo refresco.
+      await tx.catalogo.deleteMany({ where: { companyId: req.companyId, tipo: { in: ['Categoría animal', 'Categoria animal'] }, nombre } });
+    });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -5302,9 +5318,16 @@ async function _construirFlujoProyectado(req, opts = {}) {
   for (const c of ctas) {
     const debe = Number(c.debe || 0);
     const haber = Number(c.haber || 0);
-    // Si el contacto NOS DEBE (debe > 0) es ingreso. Si NOSOTROS DEBEMOS (haber > 0) es egreso.
+    const saldo = debe - haber;
+    if (Math.abs(saldo) < 0.01) continue;
+    // El signo depende del TIPO de contacto:
+    //  - proveedor: saldo a favor de él (debe) = le vamos a PAGAR → egreso.
+    //  - cliente: saldo a su cargo (debe) = nos va a PAGAR → ingreso.
+    //  - libre/otros: debe = a cobrar (ingreso), haber = a pagar (egreso).
     let tipo, montoOrigen;
-    if (debe > 0 && haber === 0) { tipo = 'ingreso'; montoOrigen = debe; }
+    if (c.contactoTipo === 'proveedor') { tipo = saldo > 0 ? 'egreso' : 'ingreso'; montoOrigen = Math.abs(saldo); }
+    else if (c.contactoTipo === 'cliente') { tipo = saldo > 0 ? 'ingreso' : 'egreso'; montoOrigen = Math.abs(saldo); }
+    else if (debe > 0 && haber === 0) { tipo = 'ingreso'; montoOrigen = debe; }
     else if (haber > 0 && debe === 0) { tipo = 'egreso'; montoOrigen = haber; }
     else continue;
     const moneda = c.moneda || 'ARS';

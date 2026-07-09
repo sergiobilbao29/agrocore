@@ -2358,6 +2358,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
+      titulo:'🛠️ v1.65.0 — Varios ajustes: Roles, Agenda, Flujo de Fondos y categorías de animales',
+      desc:'(1) <b>Roles</b>: ahora solo el <b>Administrador</b> queda bloqueado; los demás roles de sistema (Contable, Operaciones, Lectura) se pueden editar. (2) <b>Agenda</b>: el botón <b>"Ir al registro"</b> (cheque/crédito/cuenta) ahora está siempre, no solo en la vista "Todas las empresas". (3) <b>Flujo de Fondos</b>: las <b>compras/deudas a proveedores ahora restan</b> (egreso) en vez de sumar. (4) <b>Catálogos</b>: se pueden <b>eliminar categorías de animales</b> que no se usan (antes volvían solas porque se recreaban desde el catálogo).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
       titulo:'🧾 v1.64.0 — Compras: Facturas, Notas de Crédito y Débito desde la misma pantalla',
       desc:'En "Cargar factura de compra" hay un selector nuevo de <b>Comprobante</b>: Factura, <b>Nota de Crédito</b> o <b>Nota de Débito</b>. Al cargar el PDF, el sistema <b>detecta</b> cuál es y lo selecciona solo, cargando todos los datos (tipo, PV, número, CAE, total) y el ítem como artículo manual. La contabilidad se ajusta sola: la <b>Nota de Crédito resta</b> deuda al proveedor y la <b>Nota de Débito la suma</b> (las notas no tocan el stock; si es una devolución, ajustá el stock a mano). Además se corrigió que en <b>Compras y Ventas no aparecían los artículos del catálogo</b> en el buscador de ítems.' },
@@ -8058,7 +8061,9 @@ pages.roles = async function() {
               </td>
               <td class="text-center"><span class="badge badge-green">${count}</span></td>
               <td class="text-right whitespace-nowrap">
-                <button class="btn btn-ghost text-xs" onclick='rolForm(${JSON.stringify(r.id)})' title="Editar">✏️</button>
+                ${r.key === 'admin'
+                  ? `<span class="text-xs text-slate-400" title="El rol Administrador no se puede modificar">🔒</span>`
+                  : `<button class="btn btn-ghost text-xs" onclick='rolForm(${JSON.stringify(r.id)})' title="Editar">✏️</button>`}
                 ${r.key === 'admin'
                   ? ''
                   : (!r.builtin || state.user.superAdmin
@@ -17614,14 +17619,16 @@ function recoVerEvento(id) {
 async function recoIrAlRegistro(id) {
   const r = (state._recoCache || []).find(x => String(x.id) === String(id));
   if (!r) return;
+  // En modo una-empresa los eventos automáticos no traen companyId: es la empresa activa.
+  const empId = r.companyId || state.companyId;
   const dest = RECO_RELACION_DESTINO[r.relacionTipo];
   closeModal();
   if (!dest || !r.relacionId) {
     // Sin registro asociado: al menos llevar a la Agenda de esa empresa
     state._recoTodasEmpresas = false;
-    return cambiarEmpresaYIr(r.companyId, 'agenda');
+    return cambiarEmpresaYIr(empId, 'agenda');
   }
-  await cambiarEmpresaYIr(r.companyId, dest.modulo);
+  await cambiarEmpresaYIr(empId, dest.modulo);
   // Esperar a que la página destino cargue su lista en cache y abrir la ficha.
   // Cortamos cuando la lista ya contiene el registro buscado (o al agotar el tiempo).
   for (let i = 0; i < 40; i++) {
@@ -18013,6 +18020,7 @@ async function recoForm(id) {
         </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             ${(id && r.relacionTipo && RECO_RELACION_DESTINO[r.relacionTipo] && r.relacionId) ? `<button class="btn btn-secondary" onclick="recoIrAlRegistro('${id}')" title="Abrir el registro que originó esta alerta">🔗 Ir al ${RECO_RELACION_DESTINO[r.relacionTipo].label}</button>` : ''}
              <button class="btn btn-primary" onclick="recoSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
   });
 }
