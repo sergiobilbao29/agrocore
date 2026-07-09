@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.65.0';
+const AGROCORE_VERSION = '1.66.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2388,7 +2388,7 @@ function calcFactura(items) {
 
 // Helpers para generar/borrar movimientos de stock asociados a facturas.
 // Usamos el campo `referencia` del Movimiento como link inverso: "VTA-{facturaId}" o "CPR-{facturaCompraId}".
-async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, motivo, contraparteId, contraparteTipo, refPrefix, userId }) {
+async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, motivo, contraparteId, contraparteTipo, refPrefix, userId, depositoId = null }) {
   // tipo = "ingreso" (compra) o "egreso" (venta)
   const items = (factura.items || []).filter(it => it.productoId);
   if (!items.length) return 0;
@@ -2407,6 +2407,7 @@ async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, moti
       companyId, productoId: it.productoId, fecha: factura.fecha, tipo, motivo,
       cantidad: Number(it.cantidad), precio: Number(it.precioUnit) || null, total: Number(it.subtotal) || null,
       contraparteId: contraparteId || null, contraparteTipo: contraparteTipo || null, referencia: ref,
+      depositoId: (it.depositoId || depositoId) || null,
       observaciones: `Generado automaticamente por ${motivo} ${compNum}`, userId: userId || null,
     })) });
   }
@@ -2586,6 +2587,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
+      depositoId: z.string().nullable().optional(),   // depósito de donde sale el stock vendido
       observaciones: z.string().nullable().optional(),
       origen: z.enum(['agrocore', 'arca_externa']).optional().default('agrocore'),
       cae: z.string().optional(),
@@ -2636,7 +2638,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       await crearMovimientosDesdeFactura(tx, {
         companyId: req.companyId, factura: f, tipo: 'egreso', motivo: 'venta',
         contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA',
-        userId: req.user?.id || null,
+        userId: req.user?.id || null, depositoId: input.depositoId || null,
       });
       // Movimiento de cuenta corriente: el cliente queda debiendo el total.
       await crearCtaCteDesdeFactura(tx, {
@@ -2717,6 +2719,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
+      depositoId: z.string().nullable().optional(),   // depósito destino del stock que entra
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
       // Datos del emisor cuando no hay proveedor en el catálogo (vienen del PDF)
@@ -2760,7 +2763,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
         await crearMovimientosDesdeFactura(tx, {
           companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'compra',
           contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'CPR',
-          userId: req.user?.id || null,
+          userId: req.user?.id || null, depositoId: input.depositoId || null,
         });
         await crearCtaCteDesdeFactura(tx, {
           companyId: req.companyId, factura: f,

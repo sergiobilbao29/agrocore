@@ -2358,6 +2358,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
+      titulo:'📦 v1.66.0 — Elegir el depósito del stock en movimientos, compras y ventas',
+      desc:'Ahora podés indicar a qué <b>depósito</b> entra o sale el stock: (1) en el <b>movimiento de stock manual</b> se agregó el selector de depósito; (2) en <b>Compras</b> elegís el depósito destino de lo que entra; (3) en <b>Ventas</b> elegís de qué depósito sale lo vendido. Por defecto queda "Campo / general". Así el stock por depósito queda bien imputado.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
       titulo:'🛠️ v1.65.0 — Varios ajustes: Roles, Agenda, Flujo de Fondos y categorías de animales',
       desc:'(1) <b>Roles</b>: ahora solo el <b>Administrador</b> queda bloqueado; los demás roles de sistema (Contable, Operaciones, Lectura) se pueden editar. (2) <b>Agenda</b>: el botón <b>"Ir al registro"</b> (cheque/crédito/cuenta) ahora está siempre, no solo en la vista "Todas las empresas". (3) <b>Flujo de Fondos</b>: las <b>compras/deudas a proveedores ahora restan</b> (egreso) en vez de sumar. (4) <b>Catálogos</b>: se pueden <b>eliminar categorías de animales</b> que no se usan (antes volvían solas porque se recreaban desde el catálogo).' },
@@ -5992,8 +5995,10 @@ pages.reporteMargen = async function() {
 };
 function margenOrdenar(campo) { state.margenSort = campo; pages.reporteMargen(); }
 function margenLimpiar() { state.margenFilter = { q:'', cat:'', soloVendidos:false }; pages.reporteMargen(); }
-function movForm(prodIdPreset=null, tipoPreset=null) {
+async function movForm(prodIdPreset=null, tipoPreset=null) {
   const prods = state.cache.productos || [];
+  if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
+  const deps = (state.cache.depositos || []).filter(d => d.activo !== false);
   openModal({
     title:'Nuevo movimiento',
     body: `
@@ -6007,6 +6012,13 @@ function movForm(prodIdPreset=null, tipoPreset=null) {
         </div>
         <div class="col-span-2"><label class="label">Producto *</label>
           <select id="f-prod" class="input">${prods.map(p=>`<option value="${p.id}" ${p.id===prodIdPreset?'selected':''}>${esc(p.nombre)} (${esc(p.unidad)})</option>`).join('')}</select>
+        </div>
+        <div class="col-span-2"><label class="label">Depósito</label>
+          <select id="f-deposito" class="input">
+            <option value="">🌱 Campo / general (sin depósito)</option>
+            ${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}${d.tipo?` · ${esc(d.tipo)}`:''}</option>`).join('')}
+          </select>
+          <div class="text-[10px] text-slate-400 mt-1">Elegí a qué depósito entra/sale el stock. "Campo / general" es el stock por defecto.</div>
         </div>
         <div class="col-span-2"><label class="label">Motivo *</label><input id="f-mot" class="input" placeholder="compra / venta / cosecha / consumo…" /></div>
         <div><label class="label">Cantidad *</label><input id="f-cant" type="number" step="0.01" class="input" /></div>
@@ -6029,6 +6041,7 @@ async function movSave() {
     precio,
     total: precio != null ? precio * cant : null,
     referencia: $('#f-ref').value.trim()||null,
+    depositoId: $('#f-deposito')?.value || null,
   };
   if (!data.productoId || !data.motivo || !data.cantidad) return toast('Completá los campos requeridos','warn');
   try { await api('/api/movimientos',{method:'POST',body:JSON.stringify(data)});
@@ -8780,10 +8793,12 @@ async function factForm() {
     (r.data||[]).forEach(p => map[p.id] = Number(p.existencia)||0);
     state.cache.stockMap = map;
   } catch {}
+  if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
+  const _depsVta = (state.cache.depositos || []).filter(d => d.activo !== false);
   openModal({
     title:'Emitir factura', size:'max-w-6xl',
     body: `
-      <div class="grid grid-cols-4 gap-3 mb-3">
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
         <div><label class="label">Tipo *</label>
           <select id="f-tipo" class="input">
             ${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}
@@ -8792,6 +8807,12 @@ async function factForm() {
         <div><label class="label">Pto. venta *</label><input id="f-pv" class="input" type="number" value="1"/></div>
         <div><label class="label">Número *</label><input id="f-nro" class="input" type="number" value="${nextNro}"/></div>
         <div><label class="label">Fecha *</label><input id="f-fec" class="input" type="date" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">Depósito (stock)</label>
+          <select id="f-deposito" class="input">
+            <option value="">🌱 Campo / general</option>
+            ${_depsVta.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}
+          </select>
+        </div>
         <div class="col-span-2"><label class="label">Cliente</label>
           <select id="f-cli" class="input">
             <option value="">-- Consumidor final --</option>
@@ -8995,6 +9016,7 @@ async function factSave() {
     numero: Number($('#f-nro').value||1),
     fecha: new Date($('#f-fec').value).toISOString(),
     clienteId: $('#f-cli').value || null,
+    depositoId: $('#f-deposito')?.value || null,
     condicionVenta: $('#f-cv').value,
     ...monedaCotizBody('f'),
     condicionDias,
@@ -9529,6 +9551,10 @@ async function compForm() {
   if (!state.cache.catalogos) {
     try { const c = await api('/api/catalogos'); state.cache.catalogos = c.data || []; } catch {}
   }
+  if (!state.cache.depositos) {
+    try { const dp = await api('/api/depositos'); state.cache.depositos = dp.data || []; } catch {}
+  }
+  const _depsComp = (state.cache.depositos || []).filter(d => d.activo !== false);
   try {
     const r = await api('/api/stock-actual');
     const map = {};
@@ -9569,6 +9595,13 @@ async function compForm() {
           <select id="f-cc" class="input">${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}" data-fecha="${c.fechaFija||''}">${esc(c.nombre)}${c.fechaFija?` (vto ${fmtDate(c.fechaFija)})`:''}</option>`).join('')}</select>
         </div>
         ${monedaFieldHTML('fc')}
+        <div class="col-span-2"><label class="label">Depósito destino (stock)</label>
+          <select id="f-deposito" class="input">
+            <option value="">🌱 Campo / general</option>
+            ${_depsComp.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}${d.tipo?` · ${esc(d.tipo)}`:''}</option>`).join('')}
+          </select>
+          <div class="text-[10px] text-slate-400 mt-1">A qué depósito entra el stock de esta compra.</div>
+        </div>
       </div>
       <div id="f-pdf-msg" class="text-xs"></div>
       <div class="kpi p-0 overflow-hidden mb-3">
@@ -9821,6 +9854,7 @@ async function compSave() {
   const data = {
     tipo: $('#f-tipo').value,
     clase: $('#f-clase')?.value || 'factura',
+    depositoId: $('#f-deposito')?.value || null,
     puntoVenta: Number($('#f-pv').value||1),
     numero: Number($('#f-nro').value||1),
     fecha: new Date($('#f-fec').value).toISOString(),
