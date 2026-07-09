@@ -2371,6 +2371,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
+      titulo:'⛽ v1.71.0 — Los tipos de insumo nuevos (ej. Combustible y Lubricantes) ya aparecen en Compras y Ventas',
+      desc:'Si creabas un <b>Tipo de insumo</b> nuevo (por ejemplo "Combustible y Lubricantes") y le cargabas ítems (Gas oil, Aceite, etc.), esos artículos <b>no aparecían</b> en el buscador de Compras/Ventas ni contaban como "en el catálogo" para el Stock, porque la lista de tipos estaba fija. Ahora se toma <b>dinámicamente del catálogo de Tipos de insumo</b>, así cualquier tipo que crees y sus ítems aparecen en todos lados.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
       titulo:'📅 v1.70.0 — Vencimientos de cuotas de arrendamiento en la Agenda y el Flujo de Fondos',
       desc:'Ahora los <b>vencimientos de las cuotas de arrendamiento</b> aparecen en la <b>Agenda</b> (una alerta por cada cuota no pagada, con su valor estimado) y en el <b>Flujo de Fondos</b>. En la Agenda se muestran <b>aunque falte más de un año</b> (los arrendamientos suelen ser a cosecha). En el Flujo agregamos el horizonte de <b>2 años</b> y, si todavía no cargaste la cotización (pizarra/Kg Novillo), la cuota igual se muestra en su fecha (con importe estimado a completar). Recordá cargar el precio en Tesorería → Cotizaciones para que valorice bien.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/07/2026',
@@ -8603,7 +8606,10 @@ function factFiltrosLimpiar() { state.ventaFilter = { desde:'', hasta:'', client
 function _catalogoArtSets(){
   const norm = s => String(s||'').trim().toLowerCase();
   const cats = state.cache.catalogos || [];
-  const TIPOS_ART = new Set(['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo','Cereal']);
+  // Tipos de artículo: los Tipos de insumo del catálogo (incluye los que crea el
+  // usuario, ej. "Combustible y Lubricantes") + Cereal. Así no se pierden insumos
+  // de tipos nuevos.
+  const TIPOS_ART = new Set([...tiposInsumoNombres(), 'Cereal']);
   const nombres = new Set(), animales = new Set();
   cats.forEach(c => {
     if (c.activo===false) return;
@@ -8627,8 +8633,10 @@ function _factItemsLista() {
   // Catálogo = maestro: si hay catálogo cargado, solo mostramos productos que
   // estén en él (se ocultan los huérfanos). Si aún no hay catálogo, mostramos todo.
   const prods = (state.cache.productos || []).filter(p => !tieneCat || prodEnCatalogo(p, sets));
-  const TIPOS_INSUMO = ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'];
-  const cats  = (state.cache.catalogos || []).filter(c => TIPOS_INSUMO.includes(c.tipo) && c.activo !== false);
+  // Insumos del catálogo por su Tipo de insumo (dinámico: incluye tipos nuevos
+  // como "Combustible y Lubricantes").
+  const tinsSet = new Set(tiposInsumoNombres());
+  const cats  = (state.cache.catalogos || []).filter(c => tinsSet.has(c.tipo) && c.activo !== false);
   const nombresProd = new Set(prods.map(p => (p.nombre||'').toLowerCase().trim()));
   const items = [];
   // 1) Productos (mostrar primero, alfabético)
