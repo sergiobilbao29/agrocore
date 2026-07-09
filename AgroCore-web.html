@@ -2359,6 +2359,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
+      titulo:'🚚 v1.67.0 — Viajes a depósito propio cargan el stock automáticamente',
+      desc:'En un viaje, si elegís destino <b>"📦 Otro"</b> y un <b>depósito propio</b> (silo/galpón), al quedar <b>descargado</b> los kg entran automáticamente al stock de ese depósito. Se actualiza solo si editás el viaje y se borra si lo eliminás. Las <b>cerealeras</b> siguen con su flujo de entrega de siempre (botón 📤), para no duplicar el stock.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
       titulo:'📦 v1.66.0 — Elegir el depósito del stock en movimientos, compras y ventas',
       desc:'Ahora podés indicar a qué <b>depósito</b> entra o sale el stock: (1) en el <b>movimiento de stock manual</b> se agregó el selector de depósito; (2) en <b>Compras</b> elegís el depósito destino de lo que entra; (3) en <b>Ventas</b> elegís de qué depósito sale lo vendido. Por defecto queda "Campo / general". Así el stock por depósito queda bien imputado.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/07/2026',
@@ -13426,16 +13429,16 @@ function viajeForm(id=null) {
   inputsTotal.forEach(i => { const el = $('#'+i); if (el) el.oninput = recalc; });
   recalc();
   viajeRecalcDif();
-  // Cargar cerealeras en el select de destino (sólo las activas y de tipo cerealera)
+  // Cargar depósitos en el select de destino (todos los activos: cerealeras y propios).
   (async () => {
     try {
       const r = await api('/api/depositos');
-      const cere = (r.data||[]).filter(x => x.activo && x.tipo === 'cerealera');
+      const deps = (r.data||[]).filter(x => x.activo);
       state.cache.depositos = r.data || [];
       const sel = $('#f-ddep');
       if (sel) {
-        sel.innerHTML = `<option value="">— Elegí la cerealera —</option>` +
-          cere.map(d => `<option value="${d.id}" ${it.depositoDestinoId===d.id?'selected':''}>🏭 ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
+        sel.innerHTML = `<option value="">— Elegí el depósito —</option>` +
+          deps.map(d => `<option value="${d.id}" ${it.depositoDestinoId===d.id?'selected':''}>${d.tipo==='cerealera'?'🏭':'📦'} ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
       }
     } catch {}
   })();
@@ -13501,9 +13504,13 @@ function viajeDestTipo() {
   const t = $('#f-dtipo').value;
   const wrap = $('#f-ddep-wrap');
   const hint = $('#f-dhint');
-  if (wrap) wrap.style.display = (t === 'cerealera') ? '' : 'none';
+  const lbl = wrap ? wrap.querySelector('label') : null;
+  const mostrarDep = (t === 'cerealera' || t === 'otro');
+  if (wrap) wrap.style.display = mostrarDep ? '' : 'none';
+  if (lbl) lbl.textContent = t === 'cerealera' ? 'Cerealera destino' : 'Depósito destino';
   if (hint) {
-    if (t === 'cerealera') hint.textContent = '💡 Al guardar el viaje, el cereal se descontará del campo y entrará al stock de la cerealera elegida (movimiento de entrega).';
+    if (t === 'cerealera') hint.textContent = '💡 Al descargar, los kg entran al stock de la cerealera elegida.';
+    else if (t === 'otro') hint.textContent = '💡 Al descargar, los kg entran al stock del depósito propio elegido.';
     else if (t === 'venta_directa') hint.textContent = '💡 Después de guardar, podés cargar la liquidación de cereal desde la lista de viajes (botón 🧾).';
     else hint.textContent = '';
   }
@@ -13557,7 +13564,7 @@ async function viajeSave(id) {
     estado:          $('#f-estado').value,
     observaciones:   $('#f-obs').value.trim() || null,
     destinoTipo:        $('#f-dtipo')?.value || null,
-    depositoDestinoId:  $('#f-dtipo')?.value === 'cerealera' ? ($('#f-ddep')?.value || null) : null,
+    depositoDestinoId:  ['cerealera','otro'].includes($('#f-dtipo')?.value) ? ($('#f-ddep')?.value || null) : null,
     transportistaId: $('#f-trans-sel')?.value || null,
     choferId:        $('#f-chofer-sel')?.value || null,
     camionId:        $('#f-camion-sel')?.value || null,

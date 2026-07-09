@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.66.0';
+const AGROCORE_VERSION = '1.67.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3415,6 +3415,44 @@ app.get('/api/viajes/:id', requireCompany, requirePermission('logistica:read'), 
   } catch (e) { next(e); }
 });
 
+// Resuelve (o crea) un Producto de granos por nombre, para los viajes.
+async function _ensureProductoGrano(tx, companyId, nombre) {
+  const n = (nombre || '').trim();
+  if (!n) return null;
+  const ex = await tx.producto.findFirst({ where: { companyId, nombre: { equals: n, mode: 'insensitive' } } });
+  if (ex) return ex.id;
+  const creado = await tx.producto.create({ data: {
+    company: { connect: { id: companyId } }, nombre: n, unidad: 'kg', categoria: 'granos', activo: true,
+  }});
+  return creado.id;
+}
+// Sincroniza el ingreso de stock generado por un viaje que descarga en un depósito.
+// Idempotente: borra el movimiento anterior del viaje (referencia VIAJE-<id>) y, si
+// corresponde (tiene depósito destino, kg descargados > 0 y está descargado/facturado/
+// pagado), crea un ingreso de los kg al depósito destino. Suma stock (el viaje ES la
+// entrada del grano; aplica a cualquier depósito, incluidas cerealeras).
+async function _sincronizarStockViaje(companyId, viaje) {
+  const ref = `VIAJE-${viaje.id}`;
+  const kg = Number(viaje.kgDescarga || viaje.kgNetoDest || viaje.cantidad || 0);
+  const grano = (viaje.producto || '').trim();
+  // Solo para depósitos PROPIOS (destino "otro"): las cerealeras ya cargan el stock
+  // por su propio flujo de "entrega" (📤), así que no lo duplicamos acá.
+  const debe = viaje.destinoTipo === 'otro' && !!viaje.depositoDestinoId && kg > 0 &&
+    ['descargado','facturado','pagado'].includes(viaje.estado || '') && !!grano;
+  await prisma.$transaction(async (tx) => {
+    await tx.movimiento.deleteMany({ where: { companyId, referencia: ref } });
+    if (!debe) return;
+    const productoId = await _ensureProductoGrano(tx, companyId, grano);
+    if (!productoId) return;
+    await tx.movimiento.create({ data: {
+      companyId, productoId, depositoId: viaje.depositoDestinoId,
+      fecha: viaje.fecha || new Date(), tipo: 'ingreso', motivo: 'viaje',
+      cantidad: kg, referencia: ref,
+      observaciones: `Ingreso de ${grano} por viaje${viaje.origen ? ' ' + viaje.origen : ''}${viaje.destino ? ' → ' + viaje.destino : ''}`,
+    }});
+  });
+}
+
 app.post('/api/viajes', requireCompany, requirePermission('logistica:create'), async (req, res, next) => {
   try {
     const d = viajeSchema.parse(req.body);
@@ -3427,6 +3465,7 @@ app.post('/api/viajes', requireCompany, requirePermission('logistica:create'), a
       data: { ...d, companyId: req.companyId, estado },
       include: { facturaCompra: { include: { proveedor: true } } },
     });
+    await _sincronizarStockViaje(req.companyId, row);
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -3447,6 +3486,7 @@ app.put('/api/viajes/:id', requireCompany, requirePermission('logistica:update')
       data: { ...d, estado },
       include: { facturaCompra: { include: { proveedor: true } } },
     });
+    await _sincronizarStockViaje(req.companyId, row);
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -3455,6 +3495,7 @@ app.delete('/api/viajes/:id', requireCompany, requirePermission('logistica:delet
   try {
     const existing = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'VIAJE-' + req.params.id } });
     await prisma.viaje.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -3466,6 +3507,7 @@ app.delete('/api/viajes/:id', requireCompany, requirePermission('logistica:delet
 // El frontend pide doble confirmación antes de llamar a este endpoint.
 app.delete('/api/viajes', requireCompany, requirePermission('logistica:delete'), async (req, res, next) => {
   try {
+    await prisma.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: { startsWith: 'VIAJE-' } } });
     const r = await prisma.viaje.deleteMany({ where: { companyId: req.companyId } });
     res.json({ ok: true, deleted: r.count });
   } catch (e) { next(e); }
@@ -3479,6 +3521,7 @@ app.post('/api/viajes/:id/estado', requireCompany, requirePermission('logistica:
     const existing = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const row = await prisma.viaje.update({ where: { id: req.params.id }, data: { estado } });
+    await _sincronizarStockViaje(req.companyId, row);
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
