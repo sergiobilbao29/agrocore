@@ -2358,6 +2358,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'02/07/2026',
+      titulo:'📄 v1.63.0 — "Cargar desde PDF" ahora lee Facturas C, Notas de Crédito/Débito y otros formatos',
+      desc:'Se arregló el lector de PDF de comprobantes de compra: (1) las <b>Facturas C</b> salían como "A" por un error al leer el código "COD. 011" (ahora detecta bien C); (2) el número salía vacío cuando el <b>Punto de Venta y el Número venían pegados</b> (formato de ARCA "Comprobante en línea") — ahora los separa; (3) reconoce <b>Notas de Crédito y Débito</b> y comprobantes de otros sistemas de gestión (formato "A 0005-00007755"); (4) el <b>CAE</b> se detecta aunque esté separado de su etiqueta. Además, si el PDF es una Nota de Crédito/Débito te lo avisa para que no la cargues como factura.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
       titulo:'🔄 v1.62.0 — Intercompany: pagar con el efectivo/cheque/banco de otra firma',
       desc:'En <b>Movimientos diarios</b> hay un método nuevo <b>"Intercompany"</b>: al elegirlo, elegís qué <b>firma del grupo</b> pone los fondos y <b>cómo</b> — efectivo (elegís una <b>caja de esa otra empresa</b>), cheque (elegís un <b>cheque de esa firma</b>) o transferencia (una <b>cuenta de esa firma</b>). El sistema mueve el <b>recurso real</b> de la otra empresa (le baja la caja / le marca el cheque / le hace el egreso bancario) y deja registrada la <b>deuda entre las dos firmas</b> (se ve en Cuentas Intercompany). Además, el <b>pago a proveedor</b> por Intercompany ahora también mueve ese recurso de la otra firma.' },
@@ -9710,9 +9713,13 @@ async function compCargarDesdePDF(input) {
 
     // Mensaje y, si no hay proveedor matcheado pero hay CUIT + razón social, ofrecer crearlo
     if (msg) {
-      const tipoStr = d.tipoCmpLetra ? `Factura ${d.tipoCmpLetra}` : 'Comprobante';
+      const _claseLbl = d.clase === 'nota_credito' ? 'Nota de Crédito' : d.clase === 'nota_debito' ? 'Nota de Débito' : d.clase === 'recibo' ? 'Recibo' : 'Factura';
+      const tipoStr = `${_claseLbl}${d.tipoCmpLetra ? ' ' + d.tipoCmpLetra : ''}`;
+      const avisoNC = (d.clase === 'nota_credito' || d.clase === 'nota_debito')
+        ? `<div class="mt-2 p-2 bg-amber-50 border border-amber-300 rounded text-amber-900 text-xs">⚠️ El PDF es una <b>${_claseLbl}</b>, no una factura. Se cargaron los datos, pero tené en cuenta que una Nota de Crédito <b>resta</b> deuda y una de Débito la <b>suma</b>. Ajustá el importe/registro según corresponda.</div>`
+        : '';
       const fuente = d.fuente === 'QR_ARCA' ? 'QR de ARCA' : 'texto del PDF';
-      let html = `<span class="text-emerald-700">✅ ${tipoStr} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')} cargada desde el ${fuente}${d.cuitEmisor?` · CUIT emisor ${d.cuitEmisor}`:''}${d.razonSocialEmisor?` · ${esc(d.razonSocialEmisor)}`:''} · CAE ${d.cae||'?'}</span>`;
+      let html = `<span class="text-emerald-700">✅ ${tipoStr} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')} cargada desde el ${fuente}${d.cuitEmisor?` · CUIT emisor ${d.cuitEmisor}`:''}${d.razonSocialEmisor?` · ${esc(d.razonSocialEmisor)}`:''} · CAE ${d.cae||'?'}</span>` + avisoNC;
       if (!provMatch && d.cuitEmisor && d.razonSocialEmisor) {
         html += `<div class="mt-2 p-2 bg-amber-50 border border-amber-300 rounded text-amber-900">
           ⚠️ El proveedor <b>${esc(d.razonSocialEmisor)}</b> (CUIT ${esc(d.cuitEmisor)}) no está en el catálogo.

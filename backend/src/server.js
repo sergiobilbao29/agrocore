@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.62.0';
+const AGROCORE_VERSION = '1.63.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6110,22 +6110,37 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     }
 
     // === Parser de TEXTO (siempre se ejecuta, complementa el QR y es el único método cuando el QR no está como texto) ===
-    // Punto de Venta + Número
-    const mPv = texto.match(/Punto\s+de\s+Venta\s*:?\s*0*(\d{1,5})/i);
+    // Punto de Venta + Número — soporta varios formatos de distintos sistemas.
+    const mPv = texto.match(/Punto\s+de\s+Venta\s*:?\s*0*(\d{1,5})(?!\d)/i);
     if (mPv && !resultado.puntoVenta) resultado.puntoVenta = Number(mPv[1]);
-    const mNro = texto.match(/(?:Comp\.\s*Nro|Comprobante\s+Nro|N[°º]\s*Comp)\s*:?\s*0*(\d{1,8})/i);
+    const mNro = texto.match(/(?:Comp\.\s*Nro|Comprobante\s+Nro|N[°º]\s*Comp)\s*:?\s*0*(\d{1,8})(?!\d)/i);
     if (mNro && !resultado.numero) resultado.numero = Number(mNro[1]);
-    // Formato compacto "0002-00006490" (punto de venta - número) típico de muchos sistemas.
-    // Puede haber varios números con ese formato en el PDF (CAI, IIBB, etc.). Si ya
-    // conocemos el punto de venta, elegimos el que coincida; si no, el primero.
+    // Compacto CON letra: "A 0005-00007755" / "A-0005-00022327" → letra + PV + Nro.
+    // (Muy común en Facturas y Notas de crédito/débito de sistemas de gestión.)
+    const mLetraNum = texto.match(/(?:^|[\s"'“”])([ABCEM])[\s-]+(\d{4,5})\s*-\s*(\d{7,8})\b/);
+    if (mLetraNum) {
+      if (!resultado.tipoCmpLetra) resultado.tipoCmpLetra = mLetraNum[1].toUpperCase();
+      if (!resultado.puntoVenta) resultado.puntoVenta = Number(mLetraNum[2]);
+      if (!resultado.numero) resultado.numero = Number(mLetraNum[3]);
+    }
+    // Compacto SIN letra: "0002-00006490". Puede haber varios (CAI, IIBB, etc.); si ya
+    // conocemos el PV elegimos el que coincida, si no el primero.
     if (!resultado.puntoVenta || !resultado.numero) {
       const todos = [...texto.matchAll(/\b(\d{4,5})\s*-\s*(\d{7,8})\b/g)];
-      let elegido = null;
-      if (resultado.puntoVenta) elegido = todos.find(m => Number(m[1]) === Number(resultado.puntoVenta));
+      let elegido = resultado.puntoVenta ? todos.find(m => Number(m[1]) === Number(resultado.puntoVenta)) : null;
       if (!elegido) elegido = todos[0];
       if (elegido) {
         if (!resultado.puntoVenta) resultado.puntoVenta = Number(elegido[1]);
         if (!resultado.numero) resultado.numero = Number(elegido[2]);
+      }
+    }
+    // AFIP "Comprobante en línea": PV(5) y Nro(8) concatenados sin guión → 13 dígitos
+    // ("0000100000105" = PV 00001 + Nro 00000105). Último recurso.
+    if (!resultado.puntoVenta || !resultado.numero) {
+      const m13 = texto.match(/\b(\d{5})(\d{8})\b/);
+      if (m13) {
+        if (!resultado.puntoVenta) resultado.puntoVenta = Number(m13[1]);
+        if (!resultado.numero) resultado.numero = Number(m13[2]);
       }
     }
     // Fecha de emisión
@@ -6136,26 +6151,55 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       const mF2 = texto.match(/\b(\d{1,2}[\/]\d{1,2}[\/]\d{4})\b/);
       if (mF2) resultado.fecha = fechaArg(mF2[1]);
     }
-    // CAE
+    // CAE — el número puede estar pegado a la etiqueta o suelto (el pdf-parse
+    // suele separar etiquetas de valores). El CAE de ARCA es siempre de 14 dígitos.
     const mCae = texto.match(/CAE\s*N?[°º]?\s*:?\s*(\d{10,16})/i);
     if (mCae && !resultado.cae) resultado.cae = mCae[1];
+    if (!resultado.cae) {
+      const m14 = texto.match(/\b(\d{14})\b/);   // CAE = 14 dígitos (no lo es CUIT=11 ni PV+Nro=13)
+      if (m14) resultado.cae = m14[1];
+    }
     const mCaeVto = texto.match(/(?:Vto|Vencimiento)\.?\s*de(?:l)?\s*CAE\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
     if (mCaeVto) resultado.caeVencimiento = fechaArg(mCaeVto[1]);
+    // Vto con mes en inglés ("Vto.:Jul 17 2026") típico de algunos sistemas.
+    if (!resultado.caeVencimiento) {
+      const _MESES_EN = { jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12' };
+      const mV = texto.match(/Vto\.?\s*:?\s*([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})/i);
+      if (mV) {
+        const mm = _MESES_EN[mV[1].toLowerCase()];
+        if (mm) resultado.caeVencimiento = `${mV[3]}-${mm}-${String(mV[2]).padStart(2,'0')}`;
+      }
+    }
 
-    // Tipo de comprobante (FACTURA A / B / C / E / M)
-    // 1) Por "COD. NN" (códigos AFIP: 01=FA, 06=FB, 11=FC, etc)
-    const mCod = texto.match(/COD\.\s*(\d{2})/i);
-    if (mCod && !resultado.tipoCmpLetra) {
+    // Tipo de comprobante: letra (A/B/C/E/M) + clase (factura / nota de crédito / débito).
+    // 1) Por código AFIP "COD. NNN" — OJO: "011" tiene 3 dígitos (antes se leía "01").
+    const mCod = texto.match(/COD\.\s*0*(\d{1,3})(?!\d)/i);
+    if (mCod) {
       const cod = Number(mCod[1]);
       resultado.tipoCmpCodigo = cod;
-      resultado.tipoCmpLetra = FACT_TIPO_AFIP[cod] || resultado.tipoCmpLetra;
+      const comb = FACT_TIPO_AFIP[cod] || '';   // 'A','C','NCA','NDB'...
+      if (!resultado.tipoCmpLetra && comb) resultado.tipoCmpLetra = (comb.replace(/^N[CD]/, '') || comb);
+      if (/^NC/.test(comb)) resultado.clase = 'nota_credito';
+      else if (/^ND/.test(comb)) resultado.clase = 'nota_debito';
     }
-    // 2) Por la letra A/B/C arriba del PDF — admite comillas: FACTURA "A" / Factura A
+    // 2) Clase por texto (si no vino del código).
+    if (!resultado.clase) {
+      if (/NOTA\s*(?:DE\s*)?CR[EÉ]DITO/i.test(texto)) resultado.clase = 'nota_credito';
+      else if (/NOTA\s*(?:DE\s*)?D[EÉ]BITO/i.test(texto)) resultado.clase = 'nota_debito';
+      else if (/\bRECIBO\b/i.test(texto)) resultado.clase = 'recibo';
+      else resultado.clase = 'factura';
+    }
+    // 3) Letra por texto: "FACTURA A", "NOTA DE CREDITO A", con o sin comillas.
     if (!resultado.tipoCmpLetra) {
-      const mLetra = texto.match(/Factura\s*["'“”]?\s*([ABCEM])\b/i);
+      const mLetra = texto.match(/(?:FACTURA|NOTA\s*(?:DE\s*)?CR[EÉ]DITO|NOTA\s*(?:DE\s*)?D[EÉ]BITO|RECIBO)\s*["'“”]?\s*([ABCEM])\b/i);
       if (mLetra) resultado.tipoCmpLetra = mLetra[1].toUpperCase();
     }
-    // Fallback final
+    // 4) Letra sola en su propio renglón cerca del inicio (ej. la "C" debajo de "FACTURA").
+    if (!resultado.tipoCmpLetra) {
+      const sola = texto.split(/\r?\n/).slice(0, 45).map(l => l.trim())
+        .find(l => /^["'“”]?[ABCEM]["'“”]?$/.test(l));
+      if (sola) resultado.tipoCmpLetra = sola.replace(/[^ABCEMabcem]/g, '').toUpperCase();
+    }
     if (!resultado.tipoCmpLetra) resultado.tipoCmpLetra = 'B';
 
     // === Moneda extranjera (dólar) + cotización ===
