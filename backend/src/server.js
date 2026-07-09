@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.69.0';
+const AGROCORE_VERSION = '1.70.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5549,8 +5549,12 @@ async function _construirFlujoProyectado(req, opts = {}) {
     if (cuotasArr.length) {
       for (const c of cuotasArr) {
         if (!c.vencimiento) continue;
+        // Cantidad cargada en la cuota (qq/ha, kg novillo o importe). Si es 0, la
+        // cuota está vacía y se saltea. Si tiene cantidad pero falta la cotización,
+        // igual se muestra el vencimiento (importe estimado 0 hasta cargar pizarra).
+        const raw = mod === 'quintales' ? Number(c.quintalesHa || 0) : mod === 'kgnovillo' ? Number(c.kgNovillo || 0) : Number(c.importe || 0);
+        if (raw <= 0) continue;
         const importe = mod === 'quintales' ? valQq(c.quintalesHa) : mod === 'kgnovillo' ? valKgn(c.kgNovillo) : valEf(c.importe);
-        if (importe <= 0) continue;
         push(c.vencimiento, {
           tipo: 'egreso', categoria: 'arrendamiento',
           concepto: nombre(c.etiqueta), importe, ref: a.id, contacto: a.propietario,
@@ -5558,11 +5562,15 @@ async function _construirFlujoProyectado(req, opts = {}) {
         });
       }
     } else if (a.vencimiento) {
+      const rawU = mod === 'quintales'
+        ? (Number(a.quintalesHaBlanco || 0) + Number(a.quintalesHaNegro || 0))
+        : mod === 'kgnovillo' ? Number(a.kgNovilloHa || a.importeHa || 0)
+        : Number(a.importeHa || 0);
       const importe = mod === 'quintales'
         ? valQq(Number(a.quintalesHaBlanco || 0) + Number(a.quintalesHaNegro || 0))
         : mod === 'kgnovillo' ? valKgn(Number(a.kgNovilloHa || a.importeHa || 0) * ha)
         : valEf(Number(a.importeHa || 0) * ha);
-      if (importe > 0) push(a.vencimiento, {
+      if (rawU > 0) push(a.vencimiento, {
         tipo: 'egreso', categoria: 'arrendamiento',
         concepto: nombre(), importe, ref: a.id, contacto: a.propietario,
         empresaId: a.companyId,
@@ -9282,6 +9290,52 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
       relacionTipo: 'ctacte',
       relacionId: c.id,
     });
+  }
+
+  // 4) Arrendamientos: vencimiento de cada cuota no pagada (o del contrato si no
+  //    tiene cuotas). Los arrendamientos NO se limitan al horizonte porque suelen
+  //    ser anuales (a cosecha), y el usuario quiere verlos aunque falte más de 1 año.
+  const arrends = await prisma.arrendamiento.findMany({
+    where: { companyId, pagado: false },
+    include: { campo: { select: { nombre: true } } },
+  });
+  const _cotRowsA = await prisma.cotizacion.findMany({ where: { companyId: null }, orderBy: { fecha: 'desc' } });
+  const _cotA = {}; for (const cr of _cotRowsA) { if (_cotA[cr.moneda] == null) _cotA[cr.moneda] = Number(cr.valor || 0); }
+  const _cotOf = (mon) => (!mon || mon === 'ARS') ? 1 : Number(_cotA[mon] || 0);
+  for (const a of arrends) {
+    const mod = a.modalidad || (a.tipoPago === 'En especie' ? 'quintales' : (a.tipoPago === 'Porcentual' ? 'porcentaje' : (a.tipoPago === 'Kg Novillo' ? 'kgnovillo' : 'efectivo')));
+    if (mod === 'porcentaje') continue; // depende del rinde
+    const ha = Number(a.hectareas || 0);
+    const nombreBase = `${a.propietario || ''}${a.campo?.nombre ? ' · ' + a.campo.nombre : ''}`.trim();
+    const descDe = (c) => {
+      if (mod === 'quintales') { const ars = Number(c.quintalesHa||0)*ha*0.1*_cotOf(a.grano); return `${Number(c.quintalesHa||0)} qq/ha${ars?` · ≈ $${Math.round(ars).toLocaleString('es-AR')}`:''}`; }
+      if (mod === 'kgnovillo') { const ars = Number(c.kgNovillo||0)*_cotOf('KGN'); return `${Number(c.kgNovillo||0)} kg novillo${ars?` · ≈ $${Math.round(ars).toLocaleString('es-AR')}`:''}`; }
+      const ars = Number(c.importe||0)*_cotOf(a.moneda||'ARS'); return `$${Math.round(ars).toLocaleString('es-AR')}`;
+    };
+    const empujar = (fechaISO, refId, etiqueta, desc) => {
+      if (!fechaISO) return;
+      if (setOcultos.has(`arrendamiento:${refId}`)) return;
+      const v = new Date(fechaISO); v.setHours(0,0,0,0);
+      if (!incluirVencidos && v < today) return;   // sin tope futuro: los arrendamientos siempre se muestran
+      items.push({
+        id: `auto:arrendamiento:${refId}`,
+        origen: 'auto', autoTipo: 'arrendamiento', autoRefId: refId,
+        titulo: `Arrendamiento ${nombreBase}${etiqueta ? ' · ' + etiqueta : ''}`.trim(),
+        descripcion: desc, fecha: fechaISO,
+        categoria: 'vencimiento', prioridad: 'media', avisarDiasAntes: 15,
+        completado: false, repetir: 'ninguno', relacionTipo: 'arrendamiento', relacionId: a.id,
+      });
+    };
+    const cuotasArr = Array.isArray(a.cuotas) ? a.cuotas : [];
+    const pend = cuotasArr.map((c, idx) => ({ c, idx })).filter(x => !x.c.pagado && x.c.vencimiento);
+    if (pend.length) {
+      for (const { c, idx } of pend) empujar(c.vencimiento, `${a.id}:${idx}`, c.etiqueta || `Cuota ${idx + 1}`, `Vence cuota · ${descDe(c)}`);
+    } else if (a.vencimiento && !cuotasArr.length) {
+      const desc = mod === 'efectivo'
+        ? `$${Math.round(ha * Number(a.importeHa || 0) * _cotOf(a.moneda || 'ARS')).toLocaleString('es-AR')}`
+        : 'Vencimiento de arrendamiento';
+      empujar(a.vencimiento, a.id, '', desc);
+    }
   }
 
   return items;

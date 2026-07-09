@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
+      titulo:'📅 v1.70.0 — Vencimientos de cuotas de arrendamiento en la Agenda y el Flujo de Fondos',
+      desc:'Ahora los <b>vencimientos de las cuotas de arrendamiento</b> aparecen en la <b>Agenda</b> (una alerta por cada cuota no pagada, con su valor estimado) y en el <b>Flujo de Fondos</b>. En la Agenda se muestran <b>aunque falte más de un año</b> (los arrendamientos suelen ser a cosecha). En el Flujo agregamos el horizonte de <b>2 años</b> y, si todavía no cargaste la cotización (pizarra/Kg Novillo), la cuota igual se muestra en su fecha (con importe estimado a completar). Recordá cargar el precio en Tesorería → Cotizaciones para que valorice bien.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/07/2026',
       titulo:'🔗 v1.69.0 — Catálogo = maestro: Stock y facturas sincronizados + NC/ND de venta',
       desc:'(1) <b>Catálogo como maestro</b>: en <b>Stock</b> y en el buscador de ítems de <b>Compras/Ventas</b> solo se muestran los artículos que están en el Catálogo; los productos que no están en el catálogo quedan <b>ocultos</b> (no se borran) y en Stock hay un check para "ver también los que no están en el catálogo". (2) <b>Liquidación de cereal</b>: el producto ahora se limita a <b>granos/cereales</b> (ya no aparecen animales ni insumos); lo mismo en "Entregar cereal a cerealera". (3) <b>Facturación (ventas)</b>: nuevo selector <b>Comprobante</b> con Factura, <b>Nota de Crédito</b> y <b>Nota de Débito</b>. La factura descuenta stock del depósito; la <b>NC reingresa</b> el stock al depósito y baja lo que te deben; la <b>ND suma</b> lo que te deben sin tocar stock. (4) <b>Movimientos de stock</b>: al entrar arranca <b>sin filtros</b> para no ocultar movimientos viejos (antes el filtro de depósito quedaba pegado). <b>Migración:</b> Factura.clase.' },
@@ -20098,7 +20101,7 @@ pages.flujoProyectado = async function() {
     <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
       <div class="flex gap-2 items-center flex-wrap">
         <span class="text-sm text-slate-600">Horizonte:</span>
-        ${[30,90,180,365].map(d => `<button class="btn btn-${state.flujoDias===d?'primary':'secondary'} text-xs" onclick="state.flujoDias=${d}; pages.flujoProyectado();">${d} días</button>`).join('')}
+        ${[[30,'30 días'],[90,'90 días'],[180,'180 días'],[365,'1 año'],[730,'2 años']].map(([d,lbl]) => `<button class="btn btn-${state.flujoDias===d?'primary':'secondary'} text-xs" onclick="state.flujoDias=${d}; pages.flujoProyectado();">${lbl}</button>`).join('')}
       </div>
       <div class="flex gap-2 items-center flex-wrap">
         ${empresasUser.length > 1 ? `<button class="btn btn-secondary text-xs" onclick="flujoEmpresasModal()">🌐 ${state.flujoEmpresas.length} de ${empresasUser.length} empresas</button>` : ''}
