@@ -2358,6 +2358,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'02/07/2026',
+      titulo:'🧾 v1.64.0 — Compras: Facturas, Notas de Crédito y Débito desde la misma pantalla',
+      desc:'En "Cargar factura de compra" hay un selector nuevo de <b>Comprobante</b>: Factura, <b>Nota de Crédito</b> o <b>Nota de Débito</b>. Al cargar el PDF, el sistema <b>detecta</b> cuál es y lo selecciona solo, cargando todos los datos (tipo, PV, número, CAE, total) y el ítem como artículo manual. La contabilidad se ajusta sola: la <b>Nota de Crédito resta</b> deuda al proveedor y la <b>Nota de Débito la suma</b> (las notas no tocan el stock; si es una devolución, ajustá el stock a mano). Además se corrigió que en <b>Compras y Ventas no aparecían los artículos del catálogo</b> en el buscador de ítems.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'02/07/2026',
       titulo:'📄 v1.63.0 — "Cargar desde PDF" ahora lee Facturas C, Notas de Crédito/Débito y otros formatos',
       desc:'Se arregló el lector de PDF de comprobantes de compra: (1) las <b>Facturas C</b> salían como "A" por un error al leer el código "COD. 011" (ahora detecta bien C); (2) el número salía vacío cuando el <b>Punto de Venta y el Número venían pegados</b> (formato de ARCA "Comprobante en línea") — ahora los separa; (3) reconoce <b>Notas de Crédito y Débito</b> y comprobantes de otros sistemas de gestión (formato "A 0005-00007755"); (4) el <b>CAE</b> se detecta aunque esté separado de su etiqueta. Además, si el PDF es una Nota de Crédito/Débito te lo avisa para que no la cargues como factura.' },
@@ -8758,9 +8761,12 @@ async function factForm() {
   const clientes = state.cache.clientes || [];
   const facturas = state.cache.facturas || [];
   const nextNro = (facturas[0]?.numero || 0) + 1;
-  // Asegurar que productos + stock-actual esten en cache para el selector de items.
+  // Asegurar que productos + catálogos + stock-actual esten en cache para el selector de items.
   if (!state.cache.productos) {
     try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
+  }
+  if (!state.cache.catalogos) {
+    try { const c = await api('/api/catalogos'); state.cache.catalogos = c.data || []; } catch {}
   }
   // Stock por producto (para mostrarlo en el dropdown y validar al vender).
   try {
@@ -9037,6 +9043,9 @@ async function factFormExterna() {
   const clientes = state.cache.clientes || [];
   if (!state.cache.productos) {
     try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
+  }
+  if (!state.cache.catalogos) {
+    try { const c = await api('/api/catalogos'); state.cache.catalogos = c.data || []; } catch {}
   }
   try {
     const r = await api('/api/stock-actual');
@@ -9508,9 +9517,12 @@ function compFiltrosLimpiar() { state.compraFilter = { desde:'', hasta:'', provI
 async function compForm() {
   const provs = state.cache.proveedores || [];
   await cargarMonedas();
-  // Asegurar que productos + stock-actual esten en cache para el selector de items.
+  // Asegurar que productos + catálogos + stock-actual esten en cache para el selector de items.
   if (!state.cache.productos) {
     try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
+  }
+  if (!state.cache.catalogos) {
+    try { const c = await api('/api/catalogos'); state.cache.catalogos = c.data || []; } catch {}
   }
   try {
     const r = await api('/api/stock-actual');
@@ -9528,7 +9540,14 @@ async function compForm() {
           <button class="btn btn-primary text-xs" onclick="document.getElementById('f-pdf-file').click()">📄 Cargar desde PDF</button>
         </div>
       </div>
-      <div class="grid grid-cols-4 gap-3 mb-3">
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+        <div><label class="label">Comprobante *</label>
+          <select id="f-clase" class="input">
+            <option value="factura">🧾 Factura</option>
+            <option value="nota_credito">↩️ Nota de Crédito</option>
+            <option value="nota_debito">↪️ Nota de Débito</option>
+          </select>
+        </div>
         <div><label class="label">Tipo *</label>
           <select id="f-tipo" class="input">${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}</select>
         </div>
@@ -9660,6 +9679,7 @@ async function compCargarDesdePDF(input) {
 
     // Autopoblar campos
     const setVal = (id, valor) => { const el = document.getElementById(id); if (el && valor != null && valor !== '') el.value = valor; };
+    setVal('f-clase', d.clase && ['factura','nota_credito','nota_debito'].includes(d.clase) ? d.clase : 'factura');
     setVal('f-tipo', d.tipoCmpLetra || 'A');
     setVal('f-pv', d.puntoVenta || 1);
     setVal('f-nro', d.numero || 1);
@@ -9795,6 +9815,7 @@ async function compSave() {
   const vencimientoFecha = ccFechaRaw || null;
   const data = {
     tipo: $('#f-tipo').value,
+    clase: $('#f-clase')?.value || 'factura',
     puntoVenta: Number($('#f-pv').value||1),
     numero: Number($('#f-nro').value||1),
     fecha: new Date($('#f-fec').value).toISOString(),

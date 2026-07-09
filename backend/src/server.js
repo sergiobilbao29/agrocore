@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.63.0';
+const AGROCORE_VERSION = '1.64.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2707,6 +2707,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
     const schema = z.object({
       proveedorId: z.string().nullable().optional(),
       tipo: z.enum(['A', 'B', 'C', 'E']),
+      clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
       puntoVenta: z.number().int(),
       numero: z.number().int(),
       fecha: z.coerce.date(),
@@ -2741,10 +2742,11 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       const totales = calcFactura(input.items);
       const _mon = input.moneda || 'ARS';
       const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
+      const _clase = input.clase || 'factura';
       const f = await tx.facturaCompra.create({
         data: {
           companyId: req.companyId, proveedorId: input.proveedorId || null,
-          tipo: input.tipo, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
+          tipo: input.tipo, clase: _clase, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
           condicionCompra: input.condicionCompra, observaciones: input.observaciones,
           moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
@@ -2752,19 +2754,35 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
         },
         include: { proveedor: true, items: true },
       });
-      await crearMovimientosDesdeFactura(tx, {
-        companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'compra',
-        contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'CPR',
-        userId: req.user?.id || null,
-      });
-      // Movimiento de cuenta corriente: le quedamos debiendo al proveedor.
-      await crearCtaCteDesdeFactura(tx, {
-        companyId: req.companyId, factura: f,
-        contactoTipo: 'proveedor', contactoId: input.proveedorId || null,
-        refPrefix: 'FACC', motivo: 'Compra',
-        condicion: input.condicionCompra, condicionDias: input.condicionDias,
-        vencimientoFecha: input.vencimientoFecha || null,
-      });
+      if (_clase === 'factura') {
+        // Factura: entra stock + le quedamos debiendo al proveedor (debe).
+        await crearMovimientosDesdeFactura(tx, {
+          companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'compra',
+          contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'CPR',
+          userId: req.user?.id || null,
+        });
+        await crearCtaCteDesdeFactura(tx, {
+          companyId: req.companyId, factura: f,
+          contactoTipo: 'proveedor', contactoId: input.proveedorId || null,
+          refPrefix: 'FACC', motivo: 'Compra',
+          condicion: input.condicionCompra, condicionDias: input.condicionDias,
+          vencimientoFecha: input.vencimientoFecha || null,
+        });
+      } else {
+        // Nota de crédito: reduce lo que le debemos (haber). Nota de débito: lo suma (debe).
+        // No tocan el stock por defecto (suelen ser ajustes de precio/gastos, no devolución
+        // de mercadería); si fuese una devolución, ajustá el stock a mano.
+        const esNC = _clase === 'nota_credito';
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'proveedor', contactoId: input.proveedorId || null,
+          fecha: input.fecha,
+          detalle: `${esNC ? 'Nota de crédito' : 'Nota de débito'} ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
+          moneda: _mon, cotizacion: _cot,
+          ...(esNC ? { haber: totales.total } : { debe: totales.total }),
+          referencia: 'FACC',
+          observaciones: input.observaciones || null,
+        }});
+      }
       // Guardar el costo unitario de la última compra de cada producto (para
       // autocompletarlo después en la carga de insumos y en la venta).
       for (const it of input.items) {
