@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.77.0';
+const AGROCORE_VERSION = '1.78.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5168,6 +5168,8 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
       referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       cuentaBancoId: z.string().nullable().optional(),    // si el pago salió de una cuenta bancaria
+      caja: z.string().nullable().optional(),             // caja de efectivo de donde sale el pago
+      chequeId: z.string().nullable().optional(),         // cheque con el que se paga
       cotizacionPago: z.number().positive().nullable().optional(), // TC del día (créditos en moneda extranjera)
       gastosExtra: z.number().nullable().optional(),       // gastos/IVA adicional cargado a mano al pagar (en ARS)
     });
@@ -5208,6 +5210,20 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
             },
           });
         }
+      }
+      // Pago en EFECTIVO: egreso de la caja elegida. Pago con CHEQUE: se entrega/endosa.
+      const concepto = `Cuota ${cuota.numero} · ${credito.banco || ''}${credito.nroOperacion ? ' #' + credito.nroOperacion : ''}`.trim();
+      if (d.medioPago === 'efectivo') {
+        await tx.efectivo.create({ data: {
+          companyId: req.companyId, fecha: fechaPago, tipo: 'egreso', concepto,
+          monto: importeArs, caja: d.caja || null, clasificacion: 'empresa', observaciones: d.observaciones || null,
+        }});
+      } else if (d.medioPago === 'cheque' && d.chequeId) {
+        const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
+        if (ch) await tx.cheque.update({ where: { id: ch.id }, data: {
+          estado: ch.tipo === 'propio' ? 'entregado' : 'endosado', fechaEndoso: fechaPago,
+          enPoderDe: credito.banco || ch.enPoderDe, observaciones: d.observaciones || ch.observaciones,
+        }});
       }
       return row;
     });

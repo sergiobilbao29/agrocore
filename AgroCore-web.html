@@ -2371,6 +2371,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/07/2026',
+      titulo:'💵 v1.78.0 — Pago de cuotas: elegir caja (efectivo) y cheque, en créditos y arrendamientos',
+      desc:'Al pagar una cuota de <b>crédito</b>, si elegís <b>Efectivo</b> ahora aparece el selector de <b>caja</b> y si elegís <b>Cheque</b> el selector de <b>cheque en cartera</b> — y el pago queda registrado (egreso de la caja / cheque entregado). En el pago de cuotas de <b>arrendamiento</b>, el efectivo ahora también se elige de una <b>lista de cajas</b> (antes era texto libre).' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/07/2026',
       titulo:'💱 v1.77.0 — La planilla de resultado económico ahora se puede ver en US$ o en Pesos',
       desc:'Agregamos un botón <b>US$ / $ Pesos</b> arriba de la planilla: cambia toda la planilla de moneda. En pesos, el precio del cereal se sugiere de la <b>pizarra del día en $/tn</b> (sin dividir por el dólar) y los costos en dólares (insumos) se pasan a pesos con el dólar del día; en US$ funciona como antes. La moneda elegida se guarda por campaña y también se respeta en el Excel y el PDF.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'10/07/2026',
@@ -18126,6 +18129,11 @@ async function arrPagarCuota(id, idx){
   let cheques = state.cache.chequesCartera;
   if(!cheques){ try{ cheques=(await api('/api/cheques')).data||[]; state.cache.chequesCartera=cheques; }catch{ cheques=[]; } }
   const chDisp = (cheques||[]).filter(ch=>['en_cartera','pendiente','emitido'].includes(ch.estado||''));
+  let cajas = state.cache.efectivoCajas;
+  if(!cajas){ try{ const [catR,efR]=await Promise.all([api('/api/catalogos').catch(()=>({data:state.cache.catalogos||[]})), api('/api/efectivo').catch(()=>({data:[]}))]);
+    const cc=(catR.data||[]).filter(x=>x.tipo==='Caja'&&x.activo!==false).map(x=>x.nombre);
+    const ch2=(efR.data||[]).map(e=>(e.caja||'').trim()).filter(Boolean);
+    cajas=[...new Set([...cc,...ch2])].sort(); state.cache.efectivoCajas=cajas; }catch{ cajas=[]; } }
   const ars = Math.round(arrCuotaValorArs(arr,c));
   _arrPagoCtx = { id, idx };
   openModal({
@@ -18141,7 +18149,9 @@ async function arrPagarCuota(id, idx){
           <option value="debito">Débito bancario</option>
         </select>
       </div>
-      <div id="ap-efectivo-wrap"><label class="label">Caja / medio (opcional)</label><input id="ap-caja" class="input" placeholder="Caja general"/></div>
+      <div id="ap-efectivo-wrap"><label class="label">Caja de la que sale el pago</label>
+        <select id="ap-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
+        ${cajas.length?'':'<div class="text-[11px] text-amber-700 mt-1">No hay cajas cargadas. Cargá una en Catálogos → Cajas.</div>'}</div>
       <div id="ap-cheque-wrap" style="display:none"><label class="label">Cheque</label>
         <select id="ap-cheque" class="input">
           <option value="">— Elegí un cheque en cartera —</option>
@@ -20274,6 +20284,15 @@ async function cuotaPagar(credId, cuotaId) {
   if (!cuentas) {
     try { cuentas = (await api('/api/banco-cuentas')).data || []; state.cache.bancoCuentas = cuentas; } catch { cuentas = []; }
   }
+  // Cajas de efectivo (catálogo + histórico) y cheques en cartera, para elegir origen del pago.
+  let cajas = state.cache.efectivoCajas;
+  if (!cajas) { try { const [catR, efR] = await Promise.all([api('/api/catalogos').catch(()=>({data:state.cache.catalogos||[]})), api('/api/efectivo').catch(()=>({data:[]}))]);
+    const cajasCat=(catR.data||[]).filter(c=>c.tipo==='Caja'&&c.activo!==false).map(c=>c.nombre);
+    const cajasHist=(efR.data||[]).map(e=>(e.caja||'').trim()).filter(Boolean);
+    cajas=[...new Set([...cajasCat,...cajasHist])].sort(); state.cache.efectivoCajas=cajas; } catch { cajas=[]; } }
+  let cheques = state.cache.chequesCartera;
+  if (!cheques) { try { cheques=(await api('/api/cheques')).data||[]; state.cache.chequesCartera=cheques; } catch { cheques=[]; } }
+  const chDisp=(cheques||[]).filter(ch=>['en_cartera','pendiente','emitido'].includes(ch.estado||''));
   await cargarMonedas(); await cargarCotizVivas();
   const cred = (state.cache.creditos||[]).find(x=>x.id===credId) || {};
   const cuota = (cred.cuotas||[]).find(q=>q.id===cuotaId) || {};
@@ -20308,6 +20327,14 @@ async function cuotaPagar(credId, cuotaId) {
           </select>
           <div class="text-[11px] text-slate-500 mt-1">Si la elegís, se carga el movimiento de egreso en esa cuenta (siempre en pesos).</div>
         </div>
+        <div id="cp-caja-wrap" style="display:none"><label class="label">Caja de la que sale el pago</label>
+          <select id="cp-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+          ${cajas.length?'':'<div class="text-[11px] text-amber-700 mt-1">No hay cajas cargadas. Cargá una en Catálogos → Cajas.</div>'}
+        </div>
+        <div id="cp-cheque-wrap" style="display:none"><label class="label">Cheque con el que se paga</label>
+          <select id="cp-cheque" class="input"><option value="">— Elegí un cheque en cartera —</option>${chDisp.map(ch=>`<option value="${ch.id}">${ch.tipo==='propio'?'🧾 propio':'📩 tercero'} N° ${esc(ch.nroCheque||'')} · ${esc(ch.banco||'')} · ${fmt$(ch.monto||0)}</option>`).join('')}</select>
+          ${chDisp.length?'':'<div class="text-[11px] text-amber-700 mt-1">No hay cheques en cartera. Cargá uno en Tesorería → Cheques.</div>'}
+        </div>
         <div><label class="label">Gastos / IVA adicional (opcional, en $)</label><input id="cp-gastos" type="number" step="0.01" class="input" placeholder="0" oninput="cuotaPagarTcCalc()"/>
           <div class="text-[11px] text-slate-500 mt-1">Gastos del crédito, IVA de intereses u otros que se cargan a mano al pagar.</div>
         </div>
@@ -20318,6 +20345,7 @@ async function cuotaPagar(credId, cuotaId) {
              <button class="btn btn-primary" onclick='cuotaPagarConfirmar(${JSON.stringify(credId)},${JSON.stringify(cuotaId)})'>💸 Confirmar pago</button>`
   });
   if (esExt) cuotaPagarTcCalc();
+  cuotaPagarToggle();
 }
 function cuotaPagarTcCalc(){
   const el = $('#cp-pesos'); if(!el || !_cpCtx) return;
@@ -20326,26 +20354,33 @@ function cuotaPagarTcCalc(){
   el.textContent = tc ? `A pagar en pesos: ${fmt$(_cpCtx.total*tc + gastos)}${gastos?` (incluye gastos ${fmt$(gastos)})`:''}` : 'Cargá el tipo de cambio para ver el total en pesos.';
 }
 function cuotaPagarToggle() {
-  const med = $('#cp-med').value;
-  const wrap = $('#cp-cta-wrap');
-  if (wrap) wrap.style.display = (med === 'transferencia' || med === 'debito_automatico') ? '' : 'none';
+  const med = $('#cp-med')?.value;
+  const show=(id,cond)=>{ const w=$(id); if(w) w.style.display=cond?'':'none'; };
+  show('#cp-cta-wrap', med==='transferencia'||med==='debito_automatico');
+  show('#cp-caja-wrap', med==='efectivo');
+  show('#cp-cheque-wrap', med==='cheque');
 }
 async function cuotaPagarConfirmar(credId, cuotaId) {
   const esExt = !!(_cpCtx && _cpCtx.mon && _cpCtx.mon!=='ARS');
   const tc = esExt ? Number($('#cp-tc')?.value||0) : null;
   if (esExt && !tc) return toast('Cargá el tipo de cambio del día','warn');
+  const med = $('#cp-med').value;
+  if (med==='cheque' && !$('#cp-cheque')?.value) return toast('Elegí el cheque','warn');
   const data = {
-    medioPago: $('#cp-med').value,
+    medioPago: med,
     referencia: $('#cp-ref').value.trim() || null,
     fechaPago: $('#cp-fec').value ? new Date($('#cp-fec').value+'T00:00:00').toISOString() : undefined,
-    cuentaBancoId: $('#cp-cta')?.value || null,
+    cuentaBancoId: (med==='transferencia'||med==='debito_automatico') ? ($('#cp-cta')?.value || null) : null,
+    caja: med==='efectivo' ? ($('#cp-caja')?.value || null) : null,
+    chequeId: med==='cheque' ? ($('#cp-cheque')?.value || null) : null,
     cotizacionPago: esExt ? tc : null,
     gastosExtra: $('#cp-gastos')?.value ? Number($('#cp-gastos').value) : null,
   };
   try {
     const r = await api('/api/creditos/'+credId+'/cuotas/'+cuotaId+'/pagar', { method:'PUT', body: JSON.stringify(data) });
-    toast('Cuota pagada' + (esExt && r.importePagadoArs ? ` · ${fmt$(r.importePagadoArs)}` : '') + (data.cuentaBancoId?' · registrado en banco':''),'success');
-    closeModal(); delete state.cache.creditos; pages.creditos();
+    const dest = data.cuentaBancoId?' · registrado en banco' : med==='efectivo'?' · registrado en caja' : med==='cheque'?' · cheque entregado' : '';
+    toast('Cuota pagada' + (esExt && r.importePagadoArs ? ` · ${fmt$(r.importePagadoArs)}` : '') + dest,'success');
+    closeModal(); delete state.cache.creditos; delete state.cache.chequesCartera; pages.creditos();
   } catch (e) { toast(e.message,'error'); }
 }
 
