@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.72.0';
+const AGROCORE_VERSION = '1.73.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -423,7 +423,7 @@ app.get('/api/cotizaciones-historico', authMiddleware, async (req, res, next) =>
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
-app.post('/api/cotizaciones-historico', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+app.post('/api/cotizaciones-historico', authMiddleware, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const d = z.object({ moneda: z.string().min(1), fecha: z.coerce.date(), valor: z.number().positive() }).parse(req.body);
     const fecha = new Date(d.fecha); fecha.setHours(0,0,0,0);
@@ -435,7 +435,7 @@ app.post('/api/cotizaciones-historico', requireCompany, requirePermission('finan
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
-app.delete('/api/cotizaciones-historico/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+app.delete('/api/cotizaciones-historico/:id', authMiddleware, requirePermission('finanzas:delete'), async (req, res, next) => {
   try { await prisma.cotizacion.deleteMany({ where: { id: req.params.id } }); res.json({ ok: true }); }
   catch (e) { next(e); }
 });

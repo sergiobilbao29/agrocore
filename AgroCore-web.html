@@ -2371,6 +2371,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
+      titulo:'🩹 v1.73.0 — Arreglado el error al guardar cotizaciones ("Falta header X-Company-Id")',
+      desc:'Al cargar/corregir una cotización (por ejemplo el precio del <b>Kg Novillo</b>) el sistema tiraba <b>"Falta header X-Company-Id"</b>. El endpoint de guardado quedaba sin la verificación de sesión por estar declarado antes del middleware general. Corregido: ahora guarda y borra cotizaciones sin problema (incluido el Super Admin).' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
       titulo:'🌾 v1.72.0 — Arrendamientos: acceso desde la Agenda y valuación correcta de quintales',
       desc:'(1) Desde la <b>Agenda</b>, al abrir el aviso de una cuota de arrendamiento ahora aparece el botón <b>"Abrir arrendamiento"</b> que te lleva directo a las cuotas del contrato (para verlas o pagarlas). (2) Se corrigió la <b>valuación en quintales</b>: el cereal se guardaba por nombre ("Soja") pero la pizarra usa la clave ("SOJA"), por eso salía <b>$0</b> en el Flujo de Fondos y en la Agenda. Ahora se normaliza y las cuotas en quintales se valorizan bien a la pizarra del día (Flujo, Agenda y listado de arrendamientos).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
