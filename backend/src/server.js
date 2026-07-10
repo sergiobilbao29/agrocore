@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.78.0';
+const AGROCORE_VERSION = '1.79.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3090,7 +3090,63 @@ app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas
       },
       orderBy: { fecha: 'asc' },
     });
-    res.json({ ok: true, data: items });
+    // Saldo a favor = pagos/cobros "a cuenta" todavía no aplicados a una factura.
+    // Son asientos de haber sueltos (sin referencia a comprobante, debe=0).
+    const saldoAFavor = items
+      .filter(x => !x.referencia && Number(x.debe || 0) === 0 && Number(x.haber || 0) > 0)
+      .reduce((a, x) => a + Number(x.haber || 0), 0);
+    res.json({ ok: true, data: items, saldoAFavor });
+  } catch (e) { next(e); }
+});
+
+// Aplica el "saldo a favor" (pagos/cobros a cuenta previos) a facturas pendientes.
+// No mueve plata nueva: transfiere el haber del crédito al comprobante (así la
+// factura queda saldada y el crédito se consume). Mantiene el saldo global igual.
+app.post('/api/ctas-ctes/aplicar-credito', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      contactoTipo: z.enum(['cliente', 'proveedor']),
+      contactoId: z.string().min(1),
+      aplicaciones: z.array(z.object({ ctaCteId: z.string().min(1), importe: z.number().positive() })).min(1),
+    }).parse(req.body);
+    const result = await prisma.$transaction(async (tx) => {
+      let aplicadoTotal = 0;
+      for (const ap of d.aplicaciones) {
+        const inv = await tx.ctaCte.findFirst({ where: { id: ap.ctaCteId, companyId: req.companyId, contactoTipo: d.contactoTipo, contactoId: d.contactoId } });
+        if (!inv) throw Object.assign(new Error('Comprobante no encontrado: ' + ap.ctaCteId), { status: 404 });
+        const saldoInv = Number(inv.debe || 0) - Number(inv.haber || 0);
+        if (saldoInv <= 0.01) continue; // ya saldado
+        const aAplicar = Math.min(ap.importe, saldoInv);
+        const monedaInv = inv.moneda || 'ARS';
+        // Créditos a cuenta disponibles en la MISMA moneda, más viejos primero.
+        const creditos = await tx.ctaCte.findMany({
+          where: { companyId: req.companyId, contactoTipo: d.contactoTipo, contactoId: d.contactoId, pagado: false, referencia: null, debe: 0, haber: { gt: 0 }, moneda: monedaInv },
+          orderBy: { fecha: 'asc' },
+        });
+        const disponible = creditos.reduce((a, c) => a + Number(c.haber || 0), 0);
+        if (aAplicar > disponible + 0.01) throw Object.assign(new Error(`No hay saldo a favor suficiente en ${monedaInv} (disponible ${disponible.toFixed(2)})`), { status: 400 });
+        // Consumir créditos FIFO.
+        let restante = aAplicar;
+        for (const cred of creditos) {
+          if (restante <= 0.01) break;
+          const tomar = Math.min(Number(cred.haber || 0), restante);
+          const nuevoHaber = Math.round((Number(cred.haber || 0) - tomar) * 100) / 100;
+          await tx.ctaCte.update({ where: { id: cred.id }, data: {
+            haber: nuevoHaber, pagado: nuevoHaber <= 0.01,
+            observaciones: (cred.observaciones ? cred.observaciones + ' · ' : '') + 'Aplicado a ' + (inv.detalle || inv.referencia || 'comprobante'),
+          }});
+          restante -= tomar;
+        }
+        // Aumentar el haber de la factura y saldarla si corresponde.
+        const invHaber = Math.round((Number(inv.haber || 0) + aAplicar) * 100) / 100;
+        await tx.ctaCte.update({ where: { id: inv.id }, data: {
+          haber: invHaber, pagado: (Number(inv.debe || 0) - invHaber) <= 0.01,
+        }});
+        aplicadoTotal += aAplicar;
+      }
+      return { aplicadoTotal: Math.round(aplicadoTotal * 100) / 100 };
+    });
+    res.json({ ok: true, ...result });
   } catch (e) { next(e); }
 });
 

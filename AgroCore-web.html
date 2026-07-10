@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/07/2026',
+      titulo:'🔗 v1.79.0 — Aplicar un pago/cobro "a cuenta" a la factura (saldo a favor)',
+      desc:'Cuando pagás o cobrás <b>a cuenta antes de que exista la factura</b>, ese dinero queda como <b>saldo a favor</b>. Ahora, al registrar el próximo pago/cobro y elegir el proveedor/cliente, aparece un aviso <b>"💰 Saldo a favor: $X"</b> con un botón <b>"🔗 Aplicar a lo tildado"</b>: tildás las facturas y el saldo a favor se les aplica (no mueve plata nueva), así esas facturas dejan de figurar como pendientes. Se puede aplicar total o parcialmente y respeta la moneda de cada comprobante.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/07/2026',
       titulo:'💵 v1.78.0 — Pago de cuotas: elegir caja (efectivo) y cheque, en créditos y arrendamientos',
       desc:'Al pagar una cuota de <b>crédito</b>, si elegís <b>Efectivo</b> ahora aparece el selector de <b>caja</b> y si elegís <b>Cheque</b> el selector de <b>cheque en cartera</b> — y el pago queda registrado (egreso de la caja / cheque entregado). En el pago de cuotas de <b>arrendamiento</b>, el efectivo ahora también se elige de una <b>lista de cajas</b> (antes era texto libre).' },
@@ -12216,12 +12219,21 @@ async function pagoCobroCargarComprobantes(modo) {
     }).filter(i => i.saldoPendiente > 0.01);
     state._pagoCobroData.comprobantes = items;
     state._pagoCobroData.tildados = {};
+    state._pagoCobroData.saldoAFavor = Number(r.saldoAFavor || 0);
+    state._pagoCobroData.contactoId = contactoId;
+    state._pagoCobroData.tipoContacto = tipo;
+    // Banner de saldo a favor: pagos/cobros "a cuenta" previos sin aplicar a una factura.
+    const _saf = Number(r.saldoAFavor || 0);
+    const _bannerSaf = _saf > 0.01 ? `<div class="bg-emerald-50 border border-emerald-300 rounded p-2 mb-2 text-xs flex items-center justify-between gap-2 flex-wrap">
+        <span>💰 <b>Saldo a favor:</b> ${fmt$(_saf)} de ${esPago?'pagos':'cobros'} a cuenta previos. Tildá las facturas y aplicalo (no mueve plata nueva).</span>
+        <button type="button" class="btn btn-secondary text-xs whitespace-nowrap" onclick="pagoCobroAplicarCredito('${modo}')">🔗 Aplicar a lo tildado</button>
+      </div>` : '';
     if (!items.length) {
-      cont.innerHTML = `<div class="text-sm text-slate-500 text-center py-6">No hay comprobantes pendientes para este ${esPago?'proveedor':'cliente'}.</div>`;
+      cont.innerHTML = _bannerSaf + `<div class="text-sm text-slate-500 text-center py-6">No hay comprobantes pendientes para este ${esPago?'proveedor':'cliente'}.</div>`;
       pagoCobroRecalcular();
       return;
     }
-    cont.innerHTML = `
+    cont.innerHTML = _bannerSaf + `
       <div class="text-xs text-slate-600 mb-2">${items.length} comprobante${items.length===1?'':'s'} pendiente${items.length===1?'':'s'}. Tildá los que estás pagando y ajustá el importe si es parcial.</div>
       <div class="space-y-1 max-h-64 overflow-y-auto">
         ${items.map((it, idx) => `
@@ -12247,6 +12259,29 @@ async function pagoCobroCargarComprobantes(modo) {
 function pagoCobroToggleTilde(idx, checked) {
   state._pagoCobroData.tildados[idx] = checked;
   pagoCobroRecalcular();
+}
+
+// Aplica el saldo a favor (pagos/cobros a cuenta previos) a las facturas tildadas.
+// No registra plata nueva: solo vincula el crédito con esas facturas.
+async function pagoCobroAplicarCredito(modo) {
+  const d = state._pagoCobroData;
+  const aplicaciones = [];
+  for (const idx in d.tildados) {
+    if (!d.tildados[idx]) continue;
+    const it = d.comprobantes[idx];
+    const inp = document.querySelector(`.pc-importe[data-idx="${idx}"]`);
+    const importe = Number(inp?.value || 0);
+    if (it && it.id && importe > 0) aplicaciones.push({ ctaCteId: it.id, importe });
+  }
+  if (!aplicaciones.length) return toast('Tildá al menos una factura para aplicarle el saldo a favor.', 'warn');
+  try {
+    const r = await api('/api/ctas-ctes/aplicar-credito', { method:'POST', body: JSON.stringify({
+      contactoTipo: d.tipoContacto, contactoId: d.contactoId, aplicaciones,
+    })});
+    toast('Saldo a favor aplicado' + (r.aplicadoTotal ? ` · ${fmt$(r.aplicadoTotal)}` : ''), 'success');
+    delete state.cache.ctasCtes;
+    await pagoCobroCargarComprobantes(modo);   // recargar: las facturas saldadas ya no salen pendientes
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function pagoCobroRecalcular() {
