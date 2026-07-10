@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.74.0';
+const AGROCORE_VERSION = '1.75.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1931,6 +1931,7 @@ mountCrud({
     referencia: z.string().nullable().optional(),
     observaciones: z.string().nullable().optional(),
     depositoId: z.string().nullable().optional(),
+    campanaId: z.string().nullable().optional(),   // campaña del grano (para rinde real)
   }),
   orderBy: { fecha: 'desc' },
   include: { producto: true, user: { select: { id: true, nombre: true, apellido: true, alias: true } }, deposito: { select: { id: true, nombre: true, tipo: true } } },
@@ -2386,9 +2387,36 @@ mountCrud({
     fechaCosecha: z.coerce.date().nullable().optional(),
     estado: z.string().optional(),
     observaciones: z.string().nullable().optional(),
+    planilla: z.any().nullable().optional(),   // planilla resultado económico (JSON)
   }),
   include: { lote: { include: { campo: true } } },
   searchFields: ['nombre', 'cultivo', 'variedad', 'ciclo'],
+});
+
+// Rinde REAL de una campaña: kg cosechados que salieron en viajes + los cargados
+// como ingreso de stock manual (motivo cosecha), con su desglose. rinde = tn/ha.
+app.get('/api/campanas/:id/rinde', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const camp = await prisma.campana.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { lote: true } });
+    if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    const hectareas = Number(camp.lote?.hectareas || camp.hectareas || 0);
+    const viajes = await prisma.viaje.findMany({ where: { companyId: req.companyId, campanaId: camp.id } });
+    const kgDeViaje = (v) => Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
+    const kgViajes = viajes.reduce((a, v) => a + kgDeViaje(v), 0);
+    // Ingresos de stock de esa campaña, excluyendo los auto-generados por un viaje
+    // (referencia VIAJE-...) para no duplicar con los viajes de arriba.
+    const movs = await prisma.movimiento.findMany({ where: { companyId: req.companyId, campanaId: camp.id, tipo: 'ingreso' } });
+    const movsCosecha = movs.filter(m => !String(m.referencia || '').startsWith('VIAJE-'));
+    const kgStock = movsCosecha.reduce((a, m) => a + Number(m.cantidad || 0), 0);
+    const kgTotal = kgViajes + kgStock;
+    const rindeTnHa = hectareas > 0 ? (kgTotal / 1000) / hectareas : 0;
+    res.json({ ok: true, data: {
+      hectareas, kgViajes, kgStock, kgTotal, rindeTnHa,
+      viajesCount: viajes.length, stockCount: movsCosecha.length,
+      detalleViajes: viajes.map(v => ({ id: v.id, fecha: v.fecha, destino: v.destino, producto: v.producto, kg: kgDeViaje(v) })),
+      detalleStock: movsCosecha.map(m => ({ id: m.id, fecha: m.fecha, motivo: m.motivo, referencia: m.referencia, kg: Number(m.cantidad || 0) })),
+    }});
+  } catch (e) { next(e); }
 });
 
 // ---------- VENTAS (facturas con items + CAE simulado) ----------
@@ -3374,6 +3402,7 @@ const viajeSchema = z.object({
   origen: z.string().nullable().optional(),
   destino: z.string().nullable().optional(),
   producto: z.string().nullable().optional(),
+  campanaId: z.string().nullable().optional(),    // campaña del grano (para rinde real)
   cantidad: z.number().nullable().optional(),     // kg carga
   kgDescarga: z.number().nullable().optional(),
   unidad: z.string().nullable().optional(),

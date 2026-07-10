@@ -213,6 +213,7 @@ model Campana {
   fechaCosecha    DateTime?
   estado          String    @default("planificada")  // planificada, en_curso, cosechada, cerrada
   observaciones   String?
+  planilla        Json?     // planilla resultado economico: costos fijos + parametros (precio, rinde, flete, comercializacion)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -340,6 +341,7 @@ model Movimiento {
   referencia    String?    // nro factura, remito, etc.
   observaciones String?
   depositoId    String?    // null = depósito "campo" (default) | id de depósito (cerealera, propio, etc.)
+  campanaId     String?    // campaña de la que sale/entra el grano (para rinde real)
   userId        String?    // usuario que registró el movimiento (auditoría)
   createdAt     DateTime @default(now())
 
@@ -353,6 +355,7 @@ model Movimiento {
   @@index([fecha])
   @@index([depositoId])
   @@index([userId])
+  @@index([campanaId])
 }
 
 // ============================================================
@@ -705,6 +708,7 @@ model Viaje {
   origen          String?
   destino         String?
   producto        String?   // carga: "Soja", "Maíz", "Girasol"...
+  campanaId       String?   // campaña de la que sale el grano (para rinde real)
   cantidad        Float?    // kg cargados (al subir el camión) — neto en origen
   kgDescarga      Float?    // kg efectivamente descargados — neto en destino
   // ---- Pesaje del camión (para Carta de Porte) ----
@@ -787,6 +791,7 @@ model Viaje {
   @@index([choferId])
   @@index([camionId])
   @@index([acopladoId])
+  @@index([campanaId])
 }
 
 // ============================================================

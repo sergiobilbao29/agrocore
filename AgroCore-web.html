@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/07/2026',
+      titulo:'📊 v1.75.0 — Planilla de resultado económico por campaña (con rinde de indiferencia) + campaña en viajes y stock',
+      desc:'Nueva <b>Planilla de resultado económico</b> por campaña (botón 📊 en <b>Campañas</b> y en <b>Insumos y Labores</b>). Suma automáticamente todos los <b>insumos y labores</b> (u$s/ha y u$s/lote), te deja cargar los <b>costos fijos</b> (arrendamiento, cosecha, seguro, agrónomo…) y los parámetros del resultado (precio, comercialización, flete, rinde). Calcula precio neto, ingreso bruto, resultado neto por ha y por campo, y el <b>RINDE DE INDIFERENCIA</b> (gastos/ha ÷ precio neto/tn). El <b>precio del cereal se sugiere de la pizarra del día</b> (en US$) y lo podés ajustar. Se guarda por campaña y se exporta a <b>Excel y PDF</b>. Además, ahora en los <b>viajes</b> y en los <b>movimientos de stock manual</b> podés indicar de qué <b>campaña</b> sale el grano, y la planilla calcula el <b>rinde real</b> (kg cosechados ÷ hectáreas). <b>Migración:</b> Campana.planilla + campanaId en Viaje y Movimiento.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
       titulo:'💾 v1.74.0 — Se guardan bien las cotizaciones (Kg Novillo y pizarras) y ya no quedan en $0',
       desc:'Guardar una cotización daba <b>"Argument companyId must not be null"</b>. Las cotizaciones son globales (sin empresa) y la base no permitía ese guardado por como estaba armado. Ahora se guardan correctamente. <b>Importante:</b> este mismo problema hacía que el <b>guardado diario automático</b> de las pizarras fallara en silencio, dejando la tabla vacía — por eso los arrendamientos en quintales salían en <b>$0</b>. Con esto, tanto la carga manual (Kg Novillo) como el snapshot diario ya persisten. Además, el <b>Flujo de Fondos y la Agenda</b> ahora usan la <b>cotización en vivo</b> como respaldo, así valorizan los quintales aunque la tabla todavía no tenga el dato del día.' },
@@ -6046,7 +6049,10 @@ function margenLimpiar() { state.margenFilter = { q:'', cat:'', soloVendidos:fal
 async function movForm(prodIdPreset=null, tipoPreset=null) {
   const prods = state.cache.productos || [];
   if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
+  if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
   const deps = (state.cache.depositos || []).filter(d => d.activo !== false);
+  const camps = state.cache.campanas || [];
+  const campLabel = (c) => c.nombre || `${c.cultivo||''}${c.lote?.nombre?' · '+c.lote.nombre:''}${c.ciclo?' · '+c.ciclo:''}`;
   openModal({
     title:'Nuevo movimiento',
     body: `
@@ -6069,6 +6075,13 @@ async function movForm(prodIdPreset=null, tipoPreset=null) {
           <div class="text-[10px] text-slate-400 mt-1">Elegí a qué depósito entra/sale el stock. "Campo / general" es el stock por defecto.</div>
         </div>
         <div class="col-span-2"><label class="label">Motivo *</label><input id="f-mot" class="input" placeholder="compra / venta / cosecha / consumo…" /></div>
+        <div class="col-span-2"><label class="label">Campaña (para grano cosechado)</label>
+          <select id="f-campana" class="input">
+            <option value="">— Sin campaña —</option>
+            ${camps.map(c=>`<option value="${esc(c.id)}">${esc(campLabel(c))}</option>`).join('')}
+          </select>
+          <div class="text-[10px] text-slate-400 mt-1">Si es un ingreso de cosecha, elegí la campaña para calcular el rinde real.</div>
+        </div>
         <div><label class="label">Cantidad *</label><input id="f-cant" type="number" step="0.01" class="input" /></div>
         <div><label class="label">Precio unitario</label><input id="f-pu" type="number" step="0.01" class="input" /></div>
         <div class="col-span-2"><label class="label">Referencia</label><input id="f-ref" class="input" placeholder="remito / factura / …"/></div>
@@ -6090,6 +6103,7 @@ async function movSave() {
     total: precio != null ? precio * cant : null,
     referencia: $('#f-ref').value.trim()||null,
     depositoId: $('#f-deposito')?.value || null,
+    campanaId: $('#f-campana')?.value || null,
   };
   if (!data.productoId || !data.motivo || !data.cantidad) return toast('Completá los campos requeridos','warn');
   try { await api('/api/movimientos',{method:'POST',body:JSON.stringify(data)});
@@ -8397,6 +8411,7 @@ pages.campanas = async function() {
           ${proj ? `<div class="text-xs text-slate-600 mt-2 bg-emerald-50 text-emerald-700 rounded p-1.5 text-center"><b>Proyección:</b> ${fmtN(proj)} kg totales</div>`:''}
           <div class="flex gap-1 mt-3 pt-2 border-t">
             <button class="btn btn-ghost text-xs flex-1" onclick="state.insFilter={campana:'${c.id}'}; go('insumos')">🧪 Insumos/Labores</button>
+            <button class="btn btn-ghost text-xs text-indigo-700" title="Planilla de resultado económico" onclick='campanaPlanilla(${JSON.stringify(c.id)})'>📊 Planilla</button>
             ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar finalizada" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅</button>`:''}
             ${can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
             ${can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='campanaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
@@ -13401,10 +13416,13 @@ function viajesExportarExcel() {
   toast(`Se exportaron ${filtered.length} viajes`, 'success');
 }
 
-function viajeForm(id=null) {
+async function viajeForm(id=null) {
   const it = id ? (state.cache.viajes||[]).find(x=>x.id===id)||{} : {};
   const fechaStr = it.fecha ? String(it.fecha).slice(0,10) : new Date().toISOString().slice(0,10);
   const estadoActual = it.estado || 'pendiente';
+  if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
+  const _camps = state.cache.campanas || [];
+  const _campLabel = (c) => c.nombre || `${c.cultivo||''}${c.lote?.nombre?' · '+c.lote.nombre:''}${c.ciclo?' · '+c.ciclo:''}`;
   openModal({
     title: id?'Editar viaje':'Nuevo viaje', size:'max-w-4xl',
     body: `
@@ -13414,7 +13432,12 @@ function viajeForm(id=null) {
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${fechaStr}"/></div>
         <div><label class="label">Producto / Carga</label>${catSelect('f-prod', 'Cereal', it.producto||'', { placeholder:'— Producto —' })}</div>
-        <div class="col-span-2"></div>
+        <div class="col-span-2"><label class="label">Campaña (para rinde real)</label>
+          <select id="f-campana" class="input">
+            <option value="">— Sin campaña —</option>
+            ${_camps.map(c=>`<option value="${esc(c.id)}" ${c.id===it.campanaId?'selected':''}>${esc(_campLabel(c))}</option>`).join('')}
+          </select>
+        </div>
         <div class="col-span-2"><label class="label">Origen</label><input id="f-ori" class="input" value="${esc(it.origen||'')}" placeholder="Ej: Sampacho, Córdoba"/></div>
         <div class="col-span-2"><label class="label">Destino</label><input id="f-des" class="input" value="${esc(it.destino||'')}" placeholder="Ej: Quequén, Buenos Aires"/></div>
         <div><label class="label">Km recorridos</label><input id="f-km" type="number" step="0.01" class="input" value="${it.km||''}"/></div>
@@ -13642,6 +13665,7 @@ async function viajeSave(id) {
     origen:          $('#f-ori').value.trim() || null,
     destino:         $('#f-des').value.trim() || null,
     producto:        $('#f-prod').value.trim() || null,
+    campanaId:       $('#f-campana')?.value || null,
     cantidad:        $('#f-kg').value  ? Number($('#f-kg').value)  : null,
     kgDescarga:      $('#f-kgd').value ? Number($('#f-kgd').value) : null,
     kgTara:          $('#f-tara')?.value  ? Number($('#f-tara').value)  : null,
@@ -16051,6 +16075,239 @@ function insConv(monto, fromMon){
   if (insMonModo() === 'ARS') return ars;
   return usd > 0 ? ars / usd : (from === 'USD' ? m : 0);
 }
+
+/* =========================================================
+ * PLANILLA RESULTADO ECONÓMICO POR CAMPAÑA
+ * ========================================================= */
+let _planillaCtx = null;
+function _plN2(x){ return Number(x||0).toLocaleString('es-AR',{maximumFractionDigits:2}); }
+function _plN0(x){ return Math.round(Number(x||0)).toLocaleString('es-AR'); }
+// Convierte un importe desde su moneda nativa a US$ (usando el dólar/pizarra del día).
+function _toUsd(monto, fromMon){
+  const cv = state.cache.cotizVivas||{}; const usd = Number(cv.USD||0);
+  const m = Number(monto||0); const from = fromMon||'USD';
+  if (from==='USD') return m;
+  const ars = from==='ARS' ? m : m*Number(cv[from]||0);
+  return usd>0 ? ars/usd : 0;
+}
+async function campanaPlanilla(id){
+  await cargarCotizVivas();
+  let camp=null, aplics=[], rinde=null;
+  try {
+    const cr = await api('/api/campanas/'+id).catch(async()=>({data:(await api('/api/campanas')).data?.find(x=>x.id===id)}));
+    camp = cr.data || (state.cache.campanas||[]).find(x=>x.id===id);
+    aplics = ((await api('/api/aplicaciones').catch(()=>({data:[]}))).data||[]).filter(a=>a.campanaId===id);
+    rinde = (await api('/api/campanas/'+id+'/rinde').catch(()=>({data:null}))).data;
+  } catch(e){ return toast(e.message,'error'); }
+  if (!camp) return toast('Campaña no encontrada','error');
+  const ha = Number(camp.lote?.hectareas || camp.hectareas || 0);
+  const cv = state.cache.cotizVivas||{};
+  const dolar = Number(cv.USD||0);
+  const granoClave = _claveGrano(camp.cultivo);
+  const pizarraArs = Number(cv[granoClave]||0);
+  const pizarraUsd = dolar>0 ? pizarraArs/dolar : 0;
+  const pl = (camp.planilla && typeof camp.planilla==='object') ? camp.planilla : {};
+  const costosFijos = Array.isArray(pl.costosFijos) && pl.costosFijos.length ? pl.costosFijos : [
+    {concepto:'Arrendamiento', modo:'ha', valor:''},
+    {concepto:'Cosecha', modo:'ha', valor:''},
+    {concepto:'Seguro', modo:'ha', valor:''},
+    {concepto:'Ing. Agrónomo', modo:'ha', valor:''},
+  ];
+  const precioBruto = pl.precioBrutoUsd!=null && pl.precioBrutoUsd!=='' ? pl.precioBrutoUsd : (pizarraUsd?Math.round(pizarraUsd*100)/100:'');
+  const gastosComerc = pl.gastosComercUsd ?? '';
+  const flete = pl.fleteUsd ?? '';
+  const rindeEst = pl.rindeEstimado ?? (camp.rindeEstimado ?? '');
+  // Aplicaciones (insumos + labores) → u$s/ha y u$s/lote
+  const appRows = aplics.map(a=>{
+    const haApp = Number(a.hectareasAplicadas ?? ha) || 0;
+    const loteUsd = _toUsd(a.costoHa, a.moneda) * haApp;
+    const haUsd = ha>0 ? loteUsd/ha : _toUsd(a.costoHa, a.moneda);
+    return { a, haApp, loteUsd, haUsd };
+  }).sort((x,y)=> new Date(x.a.fecha)-new Date(y.a.fecha));
+  const subApHa = appRows.reduce((s,r)=>s+r.haUsd,0);
+  const subApLote = appRows.reduce((s,r)=>s+r.loteUsd,0);
+  _planillaCtx = { id, camp, ha, appRows, subApHa, subApLote, dolar, granoClave, pizarraUsd, rinde, calc:null };
+
+  const appsHtml = appRows.length ? appRows.map(r=>{
+    const a=r.a; const f = a.fecha? new Date(a.fecha).toLocaleDateString('es-AR'):'';
+    const dosis = a.tipo==='insumo' ? `${a.unidadHa!=null?_plN2(a.unidadHa):''}${a.subtipo?' '+esc(a.subtipo):''}` : '';
+    const ud = a.tipo==='insumo' && a.precioUnit!=null ? 'u$s '+_plN2(a.precioUnit) : '';
+    return `<tr>
+      <td class="px-2 py-1 text-xs">${f}</td>
+      <td class="px-2 py-1">${a.tipo==='labor'?'🚜':'🧪'} ${esc(a.item||'')}</td>
+      <td class="px-2 py-1 text-xs text-slate-500">${dosis}</td>
+      <td class="px-2 py-1 text-xs text-slate-500 text-right">${ud}</td>
+      <td class="px-2 py-1 text-right">u$s ${_plN2(r.haUsd)}</td>
+      <td class="px-2 py-1 text-right">u$s ${_plN0(r.loteUsd)}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="px-2 py-3 text-slate-400 text-center text-sm">Sin insumos ni labores cargados en esta campaña.</td></tr>';
+
+  const rindeRealTxt = rinde && rinde.kgTotal ? `${_plN2(rinde.rindeTnHa)} tn/ha (${_plN0(rinde.kgTotal/1000)} tn · ${rinde.viajesCount} viaje(s) + ${rinde.stockCount} mov.)` : 'sin datos (cargá viajes o cosecha con esta campaña)';
+
+  openModal({
+    title:`📊 Resultado económico · ${esc(camp.nombre || (camp.cultivo+' '+(camp.lote?.nombre||'')))}`, size:'max-w-5xl',
+    body:`
+      <div class="text-xs text-slate-500 mb-2">Valores en <b>US$</b> · Superficie: <b>${_plN2(ha)} ha</b> · Cultivo: <b>${esc(camp.cultivo||'')}</b> · Pizarra ${esc(granoClave)} hoy: <b>${pizarraUsd?('u$s '+_plN2(pizarraUsd)+'/tn'):'—'}</b> (dólar $${_plN0(dolar)})</div>
+      <div class="border rounded-lg overflow-hidden mb-3">
+        <table class="min-w-full text-sm"><thead class="bg-slate-50 text-slate-600"><tr>
+          <th class="text-left px-2 py-1">Fecha</th><th class="text-left px-2 py-1">Insumo / Labor</th>
+          <th class="text-left px-2 py-1">Dosis/ha</th><th class="text-right px-2 py-1">u$s/ud</th>
+          <th class="text-right px-2 py-1">u$s/ha</th><th class="text-right px-2 py-1">u$s/lote</th>
+        </tr></thead><tbody class="divide-y divide-slate-100">${appsHtml}</tbody>
+        <tfoot class="bg-slate-50 font-semibold"><tr><td colspan="4" class="px-2 py-1 text-right">Subtotal insumos + labores</td>
+          <td class="px-2 py-1 text-right">u$s ${_plN2(subApHa)}</td><td class="px-2 py-1 text-right">u$s ${_plN0(subApLote)}</td></tr></tfoot></table>
+      </div>
+      <div class="flex items-center justify-between mb-1"><b class="text-sm">Costos fijos y de comercialización</b>
+        <button type="button" class="btn btn-secondary text-xs" onclick="_planillaAddCosto()">+ Costo</button></div>
+      <div class="border rounded-lg overflow-hidden mb-3">
+        <table class="min-w-full text-sm"><thead class="bg-slate-50 text-slate-600"><tr>
+          <th class="text-left px-2 py-1">Concepto</th><th class="text-left px-2 py-1">Modo</th><th class="text-right px-2 py-1">Valor</th>
+          <th class="text-right px-2 py-1">u$s/ha</th><th class="text-right px-2 py-1">u$s/lote</th><th class="px-2 py-1"></th>
+        </tr></thead><tbody id="pl-costos-body">${costosFijos.map(c=>_plCostoRow(c)).join('')}</tbody></table>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="border rounded-lg p-3 bg-slate-50">
+          <b class="text-sm block mb-2">Precio del cereal (US$/tn)</b>
+          <div class="grid grid-cols-2 gap-2 text-sm">
+            <label class="label">Precio bruto (pizarra/posición)</label><input id="pl-precio" type="number" step="0.01" class="input text-right" value="${precioBruto!==''?precioBruto:''}" oninput="_planillaCalc()"/>
+            <label class="label">Gastos comercialización</label><input id="pl-comerc" type="number" step="0.01" class="input text-right" value="${gastosComerc!==''?gastosComerc:''}" oninput="_planillaCalc()"/>
+            <label class="label">Flete</label><input id="pl-flete" type="number" step="0.01" class="input text-right" value="${flete!==''?flete:''}" oninput="_planillaCalc()"/>
+            <label class="label font-semibold">Precio neto</label><div id="pl-neto" class="text-right font-semibold pt-2">—</div>
+            <label class="label">Rinde estimado (tn/ha)</label><input id="pl-rinde" type="number" step="0.01" class="input text-right" value="${rindeEst!==''?rindeEst:''}" oninput="_planillaCalc()"/>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-2">Precio neto = bruto − comercialización − flete. El bruto se sugiere de la pizarra del día.</div>
+        </div>
+        <div class="border rounded-lg p-3">
+          <b class="text-sm block mb-2">Resultado</b>
+          <table class="min-w-full text-sm"><tbody class="divide-y divide-slate-100">
+            <tr><td class="py-1">Gastos totales / ha</td><td class="py-1 text-right font-semibold" id="pl-gastos-ha">—</td></tr>
+            <tr><td class="py-1">Gastos totales / lote</td><td class="py-1 text-right" id="pl-gastos-lote">—</td></tr>
+            <tr><td class="py-1">Ingreso bruto / ha (rinde est.)</td><td class="py-1 text-right" id="pl-ingbruto">—</td></tr>
+            <tr><td class="py-1">Resultado neto / ha</td><td class="py-1 text-right font-semibold" id="pl-resha">—</td></tr>
+            <tr><td class="py-1">Resultado neto campo</td><td class="py-1 text-right font-semibold" id="pl-rescampo">—</td></tr>
+            <tr class="bg-amber-50"><td class="py-1 font-semibold">🎯 Rinde de indiferencia</td><td class="py-1 text-right font-bold text-amber-700" id="pl-indif">—</td></tr>
+            <tr class="bg-emerald-50"><td class="py-1">Rinde real</td><td class="py-1 text-right text-emerald-700" id="pl-real">${rindeRealTxt.split(' ')[0]!=='sin'?('tn/ha '+_plN2(rinde?.rindeTnHa)):'—'}</td></tr>
+            <tr><td class="py-1">Resultado con rinde real / ha</td><td class="py-1 text-right" id="pl-resreal">—</td></tr>
+          </tbody></table>
+          <div class="text-[11px] text-slate-500 mt-2">Rinde real: ${esc(rindeRealTxt)}.</div>
+        </div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            <button class="btn btn-secondary" onclick="campanaPlanillaExcel()">📊 Excel</button>
+            <button class="btn btn-secondary" onclick="campanaPlanillaPDF()">📄 PDF</button>
+            ${can('produccion:update')?`<button class="btn btn-primary" onclick="campanaPlanillaGuardar('${id}')">💾 Guardar</button>`:''}`
+  });
+  _planillaCalc();
+}
+function _plCostoRow(c){
+  c=c||{};
+  return `<tr data-plc>
+    <td class="px-1 py-1"><input class="input text-sm" data-pc="concepto" value="${esc(c.concepto||'')}" placeholder="Concepto"/></td>
+    <td class="px-1 py-1"><select class="input text-sm" data-pc="modo" onchange="_planillaCalc()"><option value="ha" ${c.modo!=='total'?'selected':''}>u$s / ha</option><option value="total" ${c.modo==='total'?'selected':''}>u$s total</option></select></td>
+    <td class="px-1 py-1"><input type="number" step="0.01" class="input text-sm text-right" data-pc="valor" value="${c.valor!=null&&c.valor!==''?c.valor:''}" oninput="_planillaCalc()"/></td>
+    <td class="px-1 py-1 text-right text-xs" data-pc-ha>—</td>
+    <td class="px-1 py-1 text-right text-xs" data-pc-lote>—</td>
+    <td class="px-1 py-1 text-right"><button type="button" class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove();_planillaCalc()">✕</button></td>
+  </tr>`;
+}
+function _planillaAddCosto(){ const b=$('#pl-costos-body'); if(b){ b.insertAdjacentHTML('beforeend', _plCostoRow({})); _planillaCalc(); } }
+function _planillaCalc(){
+  const ctx=_planillaCtx; if(!ctx) return; const ha=ctx.ha;
+  let cfHa=0, cfLote=0; const costos=[];
+  $$('#pl-costos-body tr[data-plc]').forEach(tr=>{
+    const concepto=tr.querySelector('[data-pc="concepto"]').value.trim();
+    const modo=tr.querySelector('[data-pc="modo"]').value;
+    const val=Number(tr.querySelector('[data-pc="valor"]').value||0);
+    let vha, vlote;
+    if(modo==='total'){ vlote=val; vha= ha>0? val/ha:0; } else { vha=val; vlote=val*ha; }
+    tr.querySelector('[data-pc-ha]').textContent = vha? ('u$s '+_plN2(vha)):'—';
+    tr.querySelector('[data-pc-lote]').textContent = vlote? ('u$s '+_plN0(vlote)):'—';
+    cfHa+=vha; cfLote+=vlote; costos.push({concepto,modo,valor: tr.querySelector('[data-pc="valor"]').value?val:''});
+  });
+  const gastosHa = ctx.subApHa + cfHa, gastosLote = ctx.subApLote + cfLote;
+  const precioBruto=Number($('#pl-precio')?.value||0), comerc=Number($('#pl-comerc')?.value||0), flete=Number($('#pl-flete')?.value||0);
+  const precioNeto = precioBruto - comerc - flete;
+  const rindeEst=Number($('#pl-rinde')?.value||0);
+  const ingresoBruto = precioNeto*rindeEst;
+  const resultadoHa = ingresoBruto - gastosHa;
+  const resultadoCampo = resultadoHa*ha;
+  const rindeIndif = precioNeto>0 ? gastosHa/precioNeto : 0;
+  const rindeReal = ctx.rinde? Number(ctx.rinde.rindeTnHa||0):0;
+  const resultadoRealHa = (precioNeto*rindeReal) - gastosHa;
+  const set=(sel,txt)=>{ const el=$(sel); if(el) el.textContent=txt; };
+  set('#pl-neto', precioNeto? ('u$s '+_plN2(precioNeto)+'/tn'):'—');
+  set('#pl-gastos-ha', 'u$s '+_plN2(gastosHa)+'/ha');
+  set('#pl-gastos-lote', 'u$s '+_plN0(gastosLote));
+  set('#pl-ingbruto', rindeEst? ('u$s '+_plN2(ingresoBruto)):'—');
+  set('#pl-resha', rindeEst? ('u$s '+_plN2(resultadoHa)):'—');
+  set('#pl-rescampo', rindeEst? ('u$s '+_plN0(resultadoCampo)):'—');
+  set('#pl-indif', precioNeto>0? (_plN2(rindeIndif)+' tn/ha'):'—');
+  set('#pl-real', rindeReal? (_plN2(rindeReal)+' tn/ha'):'—');
+  set('#pl-resreal', (rindeReal&&precioNeto)? ('u$s '+_plN2(resultadoRealHa)+'/ha'):'—');
+  ctx.calc = { costos, cfHa, cfLote, gastosHa, gastosLote, precioBruto, comerc, flete, precioNeto, rindeEst, ingresoBruto, resultadoHa, resultadoCampo, rindeIndif, rindeReal, resultadoRealHa };
+}
+async function campanaPlanillaGuardar(id){
+  const ctx=_planillaCtx; if(!ctx) return; _planillaCalc(); const c=ctx.calc||{};
+  const planilla = { costosFijos: c.costos||[], precioBrutoUsd: $('#pl-precio')?.value?Number($('#pl-precio').value):null,
+    gastosComercUsd: $('#pl-comerc')?.value?Number($('#pl-comerc').value):null, fleteUsd: $('#pl-flete')?.value?Number($('#pl-flete').value):null,
+    rindeEstimado: $('#pl-rinde')?.value?Number($('#pl-rinde').value):null };
+  try { await api('/api/campanas/'+id,{method:'PUT',body:JSON.stringify({planilla})});
+    toast('Planilla guardada','success'); delete state.cache.campanas;
+  } catch(e){ toast(e.message,'error'); }
+}
+function _plRound2(x){ return Math.round(Number(x||0)*100)/100; }
+function campanaPlanillaExcel(){
+  const ctx=_planillaCtx; if(!ctx) return; _planillaCalc(); const c=ctx.calc||{}; const camp=ctx.camp; const ha=ctx.ha;
+  const aoa=[];
+  aoa.push(['Resultado económico — '+(camp.nombre||camp.cultivo||'')]);
+  aoa.push(['Cultivo', camp.cultivo||'', 'Lote', camp.lote?.nombre||'', 'Hectáreas', ha]);
+  aoa.push([]);
+  aoa.push(['Fecha','Insumo/Labor','Dosis/ha','u$s/ud','u$s/ha','u$s/lote']);
+  ctx.appRows.forEach(r=>{ const a=r.a; aoa.push([ a.fecha?new Date(a.fecha).toLocaleDateString('es-AR'):'', a.item||'', a.tipo==='insumo'?(a.unidadHa??''):'', a.tipo==='insumo'?(a.precioUnit??''):'', _plRound2(r.haUsd), _plRound2(r.loteUsd) ]); });
+  aoa.push(['','','','Subtotal', _plRound2(ctx.subApHa), _plRound2(ctx.subApLote)]);
+  aoa.push([]);
+  aoa.push(['Costo fijo','Modo','Valor','','u$s/ha','u$s/lote']);
+  (c.costos||[]).forEach(cf=>{ const val=Number(cf.valor||0); const vha=cf.modo==='total'?(ha>0?val/ha:0):val; const vlote=cf.modo==='total'?val:val*ha; aoa.push([cf.concepto||'', cf.modo==='total'?'u$s total':'u$s/ha', val,'', _plRound2(vha), _plRound2(vlote)]); });
+  aoa.push(['','','','TOTAL GASTOS', _plRound2(c.gastosHa), _plRound2(c.gastosLote)]);
+  aoa.push([]);
+  aoa.push(['Precio bruto (u$s/tn)', _plRound2(c.precioBruto)]);
+  aoa.push(['Gastos comercialización', _plRound2(c.comerc)]);
+  aoa.push(['Flete', _plRound2(c.flete)]);
+  aoa.push(['Precio neto (u$s/tn)', _plRound2(c.precioNeto)]);
+  aoa.push(['Rinde estimado (tn/ha)', _plRound2(c.rindeEst)]);
+  aoa.push(['Ingreso bruto (u$s/ha)', _plRound2(c.ingresoBruto)]);
+  aoa.push(['Resultado neto / ha', _plRound2(c.resultadoHa)]);
+  aoa.push(['Resultado neto campo', _plRound2(c.resultadoCampo)]);
+  aoa.push(['RINDE DE INDIFERENCIA (tn/ha)', _plRound2(c.rindeIndif)]);
+  aoa.push(['Rinde real (tn/ha)', _plRound2(c.rindeReal)]);
+  const fn=('Planilla_'+(camp.nombre||camp.cultivo||'campana')).replace(/[^\w]+/g,'_')+'.xlsx';
+  if (typeof XLSX==='undefined'){ const csv=aoa.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=fn.replace('.xlsx','.csv'); a.click(); return; }
+  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:24},{wch:20},{wch:12},{wch:12},{wch:12},{wch:14}];
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Resultado'); XLSX.writeFile(wb, fn);
+  toast('Excel descargado','success');
+}
+function campanaPlanillaPDF(){
+  const ctx=_planillaCtx; if(!ctx) return; _planillaCalc(); const c=ctx.calc||{}; const camp=ctx.camp; const ha=ctx.ha;
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF; if(!jsPDFCtor) return toast('No se pudo generar el PDF','error');
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  doc.setFontSize(14); doc.text('Resultado económico — '+(camp.nombre||camp.cultivo||''), 40, 40);
+  doc.setFontSize(9); doc.setTextColor(90);
+  doc.text(`Cultivo: ${camp.cultivo||''} · Lote: ${camp.lote?.nombre||''} · ${_plN2(ha)} ha · ${fmtDate(new Date())}`, 40, 56);
+  doc.setTextColor(0);
+  const appBody=ctx.appRows.map(r=>{ const a=r.a; return [ a.fecha?new Date(a.fecha).toLocaleDateString('es-AR'):'', a.item||'', a.tipo==='insumo'&&a.unidadHa!=null?_plN2(a.unidadHa):'', 'u$s '+_plN2(r.haUsd), 'u$s '+_plN0(r.loteUsd) ]; });
+  doc.autoTable({ startY:70, head:[['Fecha','Insumo/Labor','Dosis/ha','u$s/ha','u$s/lote']], body:appBody, foot:[['','','Subtotal','u$s '+_plN2(ctx.subApHa),'u$s '+_plN0(ctx.subApLote)]], styles:{fontSize:8}, headStyles:{fillColor:[22,101,52]}, columnStyles:{3:{halign:'right'},4:{halign:'right'}} });
+  const cfBody=(c.costos||[]).map(cf=>{ const val=Number(cf.valor||0); const vha=cf.modo==='total'?(ha>0?val/ha:0):val; const vlote=cf.modo==='total'?val:val*ha; return [cf.concepto||'', cf.modo==='total'?'u$s total':'u$s/ha','u$s '+_plN2(vha),'u$s '+_plN0(vlote)]; });
+  doc.autoTable({ startY:doc.lastAutoTable.finalY+12, head:[['Costo fijo','Modo','u$s/ha','u$s/lote']], body:cfBody, foot:[['TOTAL GASTOS','','u$s '+_plN2(c.gastosHa),'u$s '+_plN0(c.gastosLote)]], styles:{fontSize:8}, headStyles:{fillColor:[120,90,40]}, columnStyles:{2:{halign:'right'},3:{halign:'right'}} });
+  const resBody=[
+    ['Precio bruto (u$s/tn)', _plN2(c.precioBruto)], ['Gastos comercialización', _plN2(c.comerc)], ['Flete', _plN2(c.flete)],
+    ['Precio neto (u$s/tn)', _plN2(c.precioNeto)], ['Rinde estimado (tn/ha)', _plN2(c.rindeEst)], ['Ingreso bruto (u$s/ha)', _plN2(c.ingresoBruto)],
+    ['Resultado neto / ha', _plN2(c.resultadoHa)], ['Resultado neto campo', _plN0(c.resultadoCampo)],
+    ['RINDE DE INDIFERENCIA (tn/ha)', _plN2(c.rindeIndif)], ['Rinde real (tn/ha)', c.rindeReal?_plN2(c.rindeReal):'—'],
+  ];
+  doc.autoTable({ startY:doc.lastAutoTable.finalY+12, head:[['Resultado','Valor']], body:resBody, styles:{fontSize:9}, headStyles:{fillColor:[22,101,52]}, columnStyles:{1:{halign:'right'}} });
+  doc.save(('Planilla_'+(camp.nombre||camp.cultivo||'campana')).replace(/[^\w]+/g,'_')+'.pdf');
+  toast('PDF descargado','success');
+}
 pages.insumos = async function() {
   setHeader('Insumos y labores', 'Aplicaciones por lote y campaña');
   if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('insumos','Insumos y labores'); return; }
@@ -16286,6 +16543,7 @@ pages.insumos = async function() {
               <div class="px-4 py-2 bg-white border-b flex flex-wrap gap-2">
                 ${can('produccion:create')?`<button class="btn btn-secondary text-xs" onclick='aplicForm("insumo",${JSON.stringify(c.id)})'>+ Insumo</button>`:''}
                 ${(can('produccion:labor_simple:create')||can('produccion:labor_avanzada:create')||can('produccion:create'))?`<button class="btn btn-secondary text-xs" onclick='laborForm(true,${JSON.stringify(c.id)})'>+ Labor</button>`:''}
+                <button class="btn btn-secondary text-xs text-indigo-700" onclick='campanaPlanilla(${JSON.stringify(c.id)})'>📊 Planilla resultado económico</button>
                 ${can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️ Editar campaña</button>`:''}
                 ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs text-emerald-700" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅ Finalizar</button>`:''}
               </div>`:''}
