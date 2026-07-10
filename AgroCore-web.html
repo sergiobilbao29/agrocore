@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'10/07/2026',
+      titulo:'🧹 v1.76.0 — El Reporte de margen también respeta el Catálogo',
+      desc:'En el <b>Reporte de margen</b> seguían apareciendo productos que no están en el Catálogo. Ahora aplica el mismo criterio que Stock: muestra solo los artículos del catálogo y agrega un check para "ver también los que no están en el catálogo".' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/07/2026',
       titulo:'📊 v1.75.0 — Planilla de resultado económico por campaña (con rinde de indiferencia) + campaña en viajes y stock',
       desc:'Nueva <b>Planilla de resultado económico</b> por campaña (botón 📊 en <b>Campañas</b> y en <b>Insumos y Labores</b>). Suma automáticamente todos los <b>insumos y labores</b> (u$s/ha y u$s/lote), te deja cargar los <b>costos fijos</b> (arrendamiento, cosecha, seguro, agrónomo…) y los parámetros del resultado (precio, comercialización, flete, rinde). Calcula precio neto, ingreso bruto, resultado neto por ha y por campo, y el <b>RINDE DE INDIFERENCIA</b> (gastos/ha ÷ precio neto/tn). El <b>precio del cereal se sugiere de la pizarra del día</b> (en US$) y lo podés ajustar. Se guarda por campaña y se exporta a <b>Excel y PDF</b>. Además, ahora en los <b>viajes</b> y en los <b>movimientos de stock manual</b> podés indicar de qué <b>campaña</b> sale el grano, y la planilla calcula el <b>rinde real</b> (kg cosechados ÷ hectáreas). <b>Migración:</b> Campana.planilla + campanaId en Viaje y Movimiento.' },
@@ -5918,12 +5921,14 @@ pages.reporteMargen = async function() {
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Calculando...</div>`;
   let movs = [], prods = [], stockData = [];
   try {
-    const [m, p, s] = await Promise.all([
+    const [m, p, s, catz] = await Promise.all([
       api('/api/movimientos'),
       api('/api/productos'),
       api('/api/stock-actual'),
+      api('/api/catalogos').catch(()=>({data:state.cache.catalogos||[]})),
     ]);
     movs = m.data||[]; prods = p.data||[]; stockData = s.data||[];
+    state.cache.catalogos = catz.data || state.cache.catalogos || [];
   } catch (e) { return toast(e.message,'error'); }
   state.cache.productos = prods;
 
@@ -5965,11 +5970,16 @@ pages.reporteMargen = async function() {
   state.margenSort = state.margenSort || 'margenPct'; // por defecto ordenamos por % margen
   state.margenFilter = state.margenFilter || { q:'', cat:'', soloVendidos:false };
   const cats = [...new Set(prods.map(p=>p.categoria).filter(Boolean))].sort();
+  // Catálogo = maestro: ocultamos los productos que no están en el catálogo (con toggle).
+  const _mgSets = _catalogoArtSets();
+  const _mgHayCat = _mgSets.nombres.size || _mgSets.animales.size;
+  const ocultosCat = _mgHayCat ? filas.filter(p=>!prodEnCatalogo(p,_mgSets)).length : 0;
 
   const render = () => {
     const f = state.margenFilter;
     const q = (f.q||'').toLowerCase();
     let filtered = filas.filter(p => {
+      if (_mgHayCat && !f.verFueraCat && !prodEnCatalogo(p,_mgSets)) return false;
       if (f.cat && p.categoria !== f.cat) return false;
       if (f.soloVendidos && p.vendidoCant === 0) return false;
       if (q && !(p.nombre||'').toLowerCase().includes(q) && !(p.categoria||'').toLowerCase().includes(q)) return false;
@@ -6035,6 +6045,7 @@ pages.reporteMargen = async function() {
           <button class="btn btn-secondary" onclick="margenLimpiar()">Limpiar</button>
         </div>
       </div>
+      ${ocultosCat?`<div class="mt-2 text-xs text-amber-700"><label class="inline-flex items-center gap-1 cursor-pointer"><input type="checkbox" id="mg-verfuera" ${state.margenFilter.verFueraCat?'checked':''}/> Ver también <b>${ocultosCat}</b> producto(s) que no están en el Catálogo</label></div>`:''}
       <div class="mt-2 text-xs text-slate-500">📌 ${conMargen.length} de ${filas.length} productos tienen margen calculable (necesitan tener al menos 1 compra y 1 venta). Tocá los headers para ordenar.</div>
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="mg-table"></div></div>`;
@@ -6042,6 +6053,7 @@ pages.reporteMargen = async function() {
   $('#mg-q').addEventListener('input',  e => { state.margenFilter.q = e.target.value; render(); });
   $('#mg-cat').addEventListener('change', e => { state.margenFilter.cat = e.target.value; render(); });
   $('#mg-vend').addEventListener('change', e => { state.margenFilter.soloVendidos = e.target.checked; render(); });
+  { const v=$('#mg-verfuera'); if(v) v.addEventListener('change', e => { state.margenFilter.verFueraCat = e.target.checked; render(); }); }
   render();
 };
 function margenOrdenar(campo) { state.margenSort = campo; pages.reporteMargen(); }
