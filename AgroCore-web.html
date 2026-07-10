@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/07/2026',
+      titulo:'💱 v1.77.0 — La planilla de resultado económico ahora se puede ver en US$ o en Pesos',
+      desc:'Agregamos un botón <b>US$ / $ Pesos</b> arriba de la planilla: cambia toda la planilla de moneda. En pesos, el precio del cereal se sugiere de la <b>pizarra del día en $/tn</b> (sin dividir por el dólar) y los costos en dólares (insumos) se pasan a pesos con el dólar del día; en US$ funciona como antes. La moneda elegida se guarda por campaña y también se respeta en el Excel y el PDF.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'10/07/2026',
       titulo:'🧹 v1.76.0 — El Reporte de margen también respeta el Catálogo',
       desc:'En el <b>Reporte de margen</b> seguían apareciendo productos que no están en el Catálogo. Ahora aplica el mismo criterio que Stock: muestra solo los artículos del catálogo y agrega un check para "ver también los que no están en el catálogo".' },
@@ -16102,6 +16105,11 @@ function _toUsd(monto, fromMon){
   const ars = from==='ARS' ? m : m*Number(cv[from]||0);
   return usd>0 ? ars/usd : 0;
 }
+// Símbolo y factor (USD→moneda de la planilla) según US$ o $.
+function _plSym(){ return (_planillaCtx&&_planillaCtx.mon==='ARS')?'$':'u$s'; }
+function _plRate(){ return (_planillaCtx&&_planillaCtx.mon==='ARS')?(_planillaCtx.dolar||0):1; }
+function _plMoneyHa(usdVal){ const v=usdVal*_plRate(); return `${_plSym()} ${_planillaCtx.mon==='ARS'?_plN0(v):_plN2(v)}`; }
+function _plMoneyLote(usdVal){ return `${_plSym()} ${_plN0(usdVal*_plRate())}`; }
 async function campanaPlanilla(id){
   await cargarCotizVivas();
   let camp=null, aplics=[], rinde=null;
@@ -16119,73 +16127,83 @@ async function campanaPlanilla(id){
   const pizarraArs = Number(cv[granoClave]||0);
   const pizarraUsd = dolar>0 ? pizarraArs/dolar : 0;
   const pl = (camp.planilla && typeof camp.planilla==='object') ? camp.planilla : {};
+  const mon = pl.moneda==='ARS' ? 'ARS' : 'USD';
   const costosFijos = Array.isArray(pl.costosFijos) && pl.costosFijos.length ? pl.costosFijos : [
     {concepto:'Arrendamiento', modo:'ha', valor:''},
     {concepto:'Cosecha', modo:'ha', valor:''},
     {concepto:'Seguro', modo:'ha', valor:''},
     {concepto:'Ing. Agrónomo', modo:'ha', valor:''},
   ];
-  const precioBruto = pl.precioBrutoUsd!=null && pl.precioBrutoUsd!=='' ? pl.precioBrutoUsd : (pizarraUsd?Math.round(pizarraUsd*100)/100:'');
-  const gastosComerc = pl.gastosComercUsd ?? '';
-  const flete = pl.fleteUsd ?? '';
-  const rindeEst = pl.rindeEstimado ?? (camp.rindeEstimado ?? '');
-  // Aplicaciones (insumos + labores) → u$s/ha y u$s/lote
+  // Valores guardados (en la moneda guardada; compat con nombres viejos *Usd).
+  const savedPrecio = pl.precioBruto ?? pl.precioBrutoUsd ?? null;
+  const savedComerc = pl.gastosComerc ?? pl.gastosComercUsd ?? null;
+  const savedFlete  = pl.flete ?? pl.fleteUsd ?? null;
+  const savedRinde  = pl.rindeEstimado ?? (camp.rindeEstimado ?? null);
+  const precioSug = mon==='ARS' ? (pizarraArs?Math.round(pizarraArs):'') : (pizarraUsd?Math.round(pizarraUsd*100)/100:'');
+  // Aplicaciones (insumos + labores) → base en USD (se convierte al mostrar).
   const appRows = aplics.map(a=>{
     const haApp = Number(a.hectareasAplicadas ?? ha) || 0;
     const loteUsd = _toUsd(a.costoHa, a.moneda) * haApp;
     const haUsd = ha>0 ? loteUsd/ha : _toUsd(a.costoHa, a.moneda);
     return { a, haApp, loteUsd, haUsd };
   }).sort((x,y)=> new Date(x.a.fecha)-new Date(y.a.fecha));
-  const subApHa = appRows.reduce((s,r)=>s+r.haUsd,0);
-  const subApLote = appRows.reduce((s,r)=>s+r.loteUsd,0);
-  _planillaCtx = { id, camp, ha, appRows, subApHa, subApLote, dolar, granoClave, pizarraUsd, rinde, calc:null };
-
-  const appsHtml = appRows.length ? appRows.map(r=>{
-    const a=r.a; const f = a.fecha? new Date(a.fecha).toLocaleDateString('es-AR'):'';
+  const subApHaUsd = appRows.reduce((s,r)=>s+r.haUsd,0);
+  const subApLoteUsd = appRows.reduce((s,r)=>s+r.loteUsd,0);
+  _planillaCtx = { id, camp, ha, appRows, subApHaUsd, subApLoteUsd, dolar, granoClave, pizarraArs, pizarraUsd, rinde, mon,
+    form: { costos: costosFijos.map(c=>({...c})), precio: (savedPrecio!=null?savedPrecio:precioSug), comerc: (savedComerc??''), flete: (savedFlete??''), rinde: (savedRinde??'') }, calc:null };
+  _planillaRender();
+}
+function _planillaRender(){
+  const ctx=_planillaCtx; if(!ctx) return; const camp=ctx.camp; const ha=ctx.ha; const mon=ctx.mon; const sym=_plSym(); const f=ctx.form;
+  const appsHtml = ctx.appRows.length ? ctx.appRows.map(r=>{
+    const a=r.a; const ff = a.fecha? new Date(a.fecha).toLocaleDateString('es-AR'):'';
     const dosis = a.tipo==='insumo' ? `${a.unidadHa!=null?_plN2(a.unidadHa):''}${a.subtipo?' '+esc(a.subtipo):''}` : '';
-    const ud = a.tipo==='insumo' && a.precioUnit!=null ? 'u$s '+_plN2(a.precioUnit) : '';
+    const ud = a.tipo==='insumo' && a.precioUnit!=null ? _plMoneyHa(_toUsd(a.precioUnit,a.moneda)) : '';
     return `<tr>
-      <td class="px-2 py-1 text-xs">${f}</td>
+      <td class="px-2 py-1 text-xs">${ff}</td>
       <td class="px-2 py-1">${a.tipo==='labor'?'🚜':'🧪'} ${esc(a.item||'')}</td>
       <td class="px-2 py-1 text-xs text-slate-500">${dosis}</td>
       <td class="px-2 py-1 text-xs text-slate-500 text-right">${ud}</td>
-      <td class="px-2 py-1 text-right">u$s ${_plN2(r.haUsd)}</td>
-      <td class="px-2 py-1 text-right">u$s ${_plN0(r.loteUsd)}</td>
+      <td class="px-2 py-1 text-right">${_plMoneyHa(r.haUsd)}</td>
+      <td class="px-2 py-1 text-right">${_plMoneyLote(r.loteUsd)}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="6" class="px-2 py-3 text-slate-400 text-center text-sm">Sin insumos ni labores cargados en esta campaña.</td></tr>';
-
-  const rindeRealTxt = rinde && rinde.kgTotal ? `${_plN2(rinde.rindeTnHa)} tn/ha (${_plN0(rinde.kgTotal/1000)} tn · ${rinde.viajesCount} viaje(s) + ${rinde.stockCount} mov.)` : 'sin datos (cargá viajes o cosecha con esta campaña)';
-
-  openModal({
-    title:`📊 Resultado económico · ${esc(camp.nombre || (camp.cultivo+' '+(camp.lote?.nombre||'')))}`, size:'max-w-5xl',
-    body:`
-      <div class="text-xs text-slate-500 mb-2">Valores en <b>US$</b> · Superficie: <b>${_plN2(ha)} ha</b> · Cultivo: <b>${esc(camp.cultivo||'')}</b> · Pizarra ${esc(granoClave)} hoy: <b>${pizarraUsd?('u$s '+_plN2(pizarraUsd)+'/tn'):'—'}</b> (dólar $${_plN0(dolar)})</div>
+  const rindeRealTxt = ctx.rinde && ctx.rinde.kgTotal ? `${_plN2(ctx.rinde.rindeTnHa)} tn/ha (${_plN0(ctx.rinde.kgTotal/1000)} tn · ${ctx.rinde.viajesCount} viaje(s) + ${ctx.rinde.stockCount} mov.)` : 'sin datos (cargá viajes o cosecha con esta campaña)';
+  const pizTxt = mon==='ARS' ? (ctx.pizarraArs?('$ '+_plN0(ctx.pizarraArs)+'/tn'):'—') : (ctx.pizarraUsd?('u$s '+_plN2(ctx.pizarraUsd)+'/tn'):'—');
+  const html = `
+      <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div class="text-xs text-slate-500">Superficie: <b>${_plN2(ha)} ha</b> · Cultivo: <b>${esc(camp.cultivo||'')}</b> · Pizarra ${esc(ctx.granoClave)}: <b>${pizTxt}</b> · dólar $${_plN0(ctx.dolar)}</div>
+        <div class="flex gap-1"><span class="text-xs text-slate-500 self-center mr-1">Ver en:</span>
+          <button type="button" class="btn btn-${mon==='USD'?'primary':'secondary'} text-xs" onclick="_planillaSetMon('USD')">US$</button>
+          <button type="button" class="btn btn-${mon==='ARS'?'primary':'secondary'} text-xs" onclick="_planillaSetMon('ARS')">$ Pesos</button>
+        </div>
+      </div>
       <div class="border rounded-lg overflow-hidden mb-3">
         <table class="min-w-full text-sm"><thead class="bg-slate-50 text-slate-600"><tr>
           <th class="text-left px-2 py-1">Fecha</th><th class="text-left px-2 py-1">Insumo / Labor</th>
-          <th class="text-left px-2 py-1">Dosis/ha</th><th class="text-right px-2 py-1">u$s/ud</th>
-          <th class="text-right px-2 py-1">u$s/ha</th><th class="text-right px-2 py-1">u$s/lote</th>
+          <th class="text-left px-2 py-1">Dosis/ha</th><th class="text-right px-2 py-1">${sym}/ud</th>
+          <th class="text-right px-2 py-1">${sym}/ha</th><th class="text-right px-2 py-1">${sym}/lote</th>
         </tr></thead><tbody class="divide-y divide-slate-100">${appsHtml}</tbody>
         <tfoot class="bg-slate-50 font-semibold"><tr><td colspan="4" class="px-2 py-1 text-right">Subtotal insumos + labores</td>
-          <td class="px-2 py-1 text-right">u$s ${_plN2(subApHa)}</td><td class="px-2 py-1 text-right">u$s ${_plN0(subApLote)}</td></tr></tfoot></table>
+          <td class="px-2 py-1 text-right">${_plMoneyHa(ctx.subApHaUsd)}</td><td class="px-2 py-1 text-right">${_plMoneyLote(ctx.subApLoteUsd)}</td></tr></tfoot></table>
       </div>
-      <div class="flex items-center justify-between mb-1"><b class="text-sm">Costos fijos y de comercialización</b>
+      <div class="flex items-center justify-between mb-1"><b class="text-sm">Costos fijos y de comercialización (${sym})</b>
         <button type="button" class="btn btn-secondary text-xs" onclick="_planillaAddCosto()">+ Costo</button></div>
       <div class="border rounded-lg overflow-hidden mb-3">
         <table class="min-w-full text-sm"><thead class="bg-slate-50 text-slate-600"><tr>
-          <th class="text-left px-2 py-1">Concepto</th><th class="text-left px-2 py-1">Modo</th><th class="text-right px-2 py-1">Valor</th>
-          <th class="text-right px-2 py-1">u$s/ha</th><th class="text-right px-2 py-1">u$s/lote</th><th class="px-2 py-1"></th>
-        </tr></thead><tbody id="pl-costos-body">${costosFijos.map(c=>_plCostoRow(c)).join('')}</tbody></table>
+          <th class="text-left px-2 py-1">Concepto</th><th class="text-left px-2 py-1">Modo</th><th class="text-right px-2 py-1">Valor (${sym})</th>
+          <th class="text-right px-2 py-1">${sym}/ha</th><th class="text-right px-2 py-1">${sym}/lote</th><th class="px-2 py-1"></th>
+        </tr></thead><tbody id="pl-costos-body">${(f.costos||[]).map(c=>_plCostoRow(c)).join('')}</tbody></table>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="border rounded-lg p-3 bg-slate-50">
-          <b class="text-sm block mb-2">Precio del cereal (US$/tn)</b>
+          <b class="text-sm block mb-2">Precio del cereal (${sym}/tn)</b>
           <div class="grid grid-cols-2 gap-2 text-sm">
-            <label class="label">Precio bruto (pizarra/posición)</label><input id="pl-precio" type="number" step="0.01" class="input text-right" value="${precioBruto!==''?precioBruto:''}" oninput="_planillaCalc()"/>
-            <label class="label">Gastos comercialización</label><input id="pl-comerc" type="number" step="0.01" class="input text-right" value="${gastosComerc!==''?gastosComerc:''}" oninput="_planillaCalc()"/>
-            <label class="label">Flete</label><input id="pl-flete" type="number" step="0.01" class="input text-right" value="${flete!==''?flete:''}" oninput="_planillaCalc()"/>
+            <label class="label">Precio bruto (pizarra/posición)</label><input id="pl-precio" type="number" step="0.01" class="input text-right" value="${f.precio!==''&&f.precio!=null?f.precio:''}" oninput="_planillaCalc()"/>
+            <label class="label">Gastos comercialización</label><input id="pl-comerc" type="number" step="0.01" class="input text-right" value="${f.comerc!==''&&f.comerc!=null?f.comerc:''}" oninput="_planillaCalc()"/>
+            <label class="label">Flete</label><input id="pl-flete" type="number" step="0.01" class="input text-right" value="${f.flete!==''&&f.flete!=null?f.flete:''}" oninput="_planillaCalc()"/>
             <label class="label font-semibold">Precio neto</label><div id="pl-neto" class="text-right font-semibold pt-2">—</div>
-            <label class="label">Rinde estimado (tn/ha)</label><input id="pl-rinde" type="number" step="0.01" class="input text-right" value="${rindeEst!==''?rindeEst:''}" oninput="_planillaCalc()"/>
+            <label class="label">Rinde estimado (tn/ha)</label><input id="pl-rinde" type="number" step="0.01" class="input text-right" value="${f.rinde!==''&&f.rinde!=null?f.rinde:''}" oninput="_planillaCalc()"/>
           </div>
           <div class="text-[11px] text-slate-500 mt-2">Precio neto = bruto − comercialización − flete. El bruto se sugiere de la pizarra del día.</div>
         </div>
@@ -16198,24 +16216,49 @@ async function campanaPlanilla(id){
             <tr><td class="py-1">Resultado neto / ha</td><td class="py-1 text-right font-semibold" id="pl-resha">—</td></tr>
             <tr><td class="py-1">Resultado neto campo</td><td class="py-1 text-right font-semibold" id="pl-rescampo">—</td></tr>
             <tr class="bg-amber-50"><td class="py-1 font-semibold">🎯 Rinde de indiferencia</td><td class="py-1 text-right font-bold text-amber-700" id="pl-indif">—</td></tr>
-            <tr class="bg-emerald-50"><td class="py-1">Rinde real</td><td class="py-1 text-right text-emerald-700" id="pl-real">${rindeRealTxt.split(' ')[0]!=='sin'?('tn/ha '+_plN2(rinde?.rindeTnHa)):'—'}</td></tr>
+            <tr class="bg-emerald-50"><td class="py-1">Rinde real</td><td class="py-1 text-right text-emerald-700" id="pl-real">—</td></tr>
             <tr><td class="py-1">Resultado con rinde real / ha</td><td class="py-1 text-right" id="pl-resreal">—</td></tr>
           </tbody></table>
           <div class="text-[11px] text-slate-500 mt-2">Rinde real: ${esc(rindeRealTxt)}.</div>
         </div>
-      </div>`,
+      </div>`;
+  const root = document.getElementById('pl-root');
+  if (root) { root.innerHTML = html; }
+  else openModal({
+    title:`📊 Resultado económico · ${esc(camp.nombre || (camp.cultivo+' '+(camp.lote?.nombre||'')))}`, size:'max-w-5xl',
+    body:`<div id="pl-root">${html}</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
             <button class="btn btn-secondary" onclick="campanaPlanillaExcel()">📊 Excel</button>
             <button class="btn btn-secondary" onclick="campanaPlanillaPDF()">📄 PDF</button>
-            ${can('produccion:update')?`<button class="btn btn-primary" onclick="campanaPlanillaGuardar('${id}')">💾 Guardar</button>`:''}`
+            ${can('produccion:update')?`<button class="btn btn-primary" onclick="campanaPlanillaGuardar('${ctx.id}')">💾 Guardar</button>`:''}`
   });
   _planillaCalc();
 }
+function _plCollectForm(){
+  const costos=[];
+  $$('#pl-costos-body tr[data-plc]').forEach(tr=>{
+    costos.push({ concepto: tr.querySelector('[data-pc="concepto"]').value.trim(),
+      modo: tr.querySelector('[data-pc="modo"]').value,
+      valor: tr.querySelector('[data-pc="valor"]').value!==''? Number(tr.querySelector('[data-pc="valor"]').value):'' });
+  });
+  const num = sel => $(sel)?.value!==''&&$(sel)?.value!=null ? Number($(sel).value) : '';
+  return { costos, precio: num('#pl-precio'), comerc: num('#pl-comerc'), flete: num('#pl-flete'), rinde: num('#pl-rinde') };
+}
+// Cambia la moneda de la planilla convirtiendo los montos ingresados por el dólar.
+function _planillaSetMon(m){
+  const ctx=_planillaCtx; if(!ctx || ctx.mon===m) return;
+  const f=_plCollectForm(); const dolar=ctx.dolar||0;
+  const conv = (v)=>{ if(v===''||v==null) return v; return m==='ARS' ? Number(v)*dolar : (dolar>0?Number(v)/dolar:v); };
+  f.costos = f.costos.map(c=>({...c, valor: conv(c.valor)}));
+  f.precio = conv(f.precio); f.comerc = conv(f.comerc); f.flete = conv(f.flete);
+  ctx.mon = m; ctx.form = f;
+  _planillaRender();
+}
 function _plCostoRow(c){
-  c=c||{};
+  c=c||{}; const sym=_plSym();
   return `<tr data-plc>
     <td class="px-1 py-1"><input class="input text-sm" data-pc="concepto" value="${esc(c.concepto||'')}" placeholder="Concepto"/></td>
-    <td class="px-1 py-1"><select class="input text-sm" data-pc="modo" onchange="_planillaCalc()"><option value="ha" ${c.modo!=='total'?'selected':''}>u$s / ha</option><option value="total" ${c.modo==='total'?'selected':''}>u$s total</option></select></td>
+    <td class="px-1 py-1"><select class="input text-sm" data-pc="modo" onchange="_planillaCalc()"><option value="ha" ${c.modo!=='total'?'selected':''}>${sym} / ha</option><option value="total" ${c.modo==='total'?'selected':''}>${sym} total</option></select></td>
     <td class="px-1 py-1"><input type="number" step="0.01" class="input text-sm text-right" data-pc="valor" value="${c.valor!=null&&c.valor!==''?c.valor:''}" oninput="_planillaCalc()"/></td>
     <td class="px-1 py-1 text-right text-xs" data-pc-ha>—</td>
     <td class="px-1 py-1 text-right text-xs" data-pc-lote>—</td>
@@ -16224,19 +16267,21 @@ function _plCostoRow(c){
 }
 function _planillaAddCosto(){ const b=$('#pl-costos-body'); if(b){ b.insertAdjacentHTML('beforeend', _plCostoRow({})); _planillaCalc(); } }
 function _planillaCalc(){
-  const ctx=_planillaCtx; if(!ctx) return; const ha=ctx.ha;
+  const ctx=_planillaCtx; if(!ctx) return; const ha=ctx.ha; const mon=ctx.mon; const sym=_plSym(); const rate=_plRate();
+  const money=(v)=> `${sym} ${mon==='ARS'?_plN0(v):_plN2(v)}`;
   let cfHa=0, cfLote=0; const costos=[];
   $$('#pl-costos-body tr[data-plc]').forEach(tr=>{
     const concepto=tr.querySelector('[data-pc="concepto"]').value.trim();
     const modo=tr.querySelector('[data-pc="modo"]').value;
-    const val=Number(tr.querySelector('[data-pc="valor"]').value||0);
+    const raw=tr.querySelector('[data-pc="valor"]').value; const val=Number(raw||0);
     let vha, vlote;
     if(modo==='total'){ vlote=val; vha= ha>0? val/ha:0; } else { vha=val; vlote=val*ha; }
-    tr.querySelector('[data-pc-ha]').textContent = vha? ('u$s '+_plN2(vha)):'—';
-    tr.querySelector('[data-pc-lote]').textContent = vlote? ('u$s '+_plN0(vlote)):'—';
-    cfHa+=vha; cfLote+=vlote; costos.push({concepto,modo,valor: tr.querySelector('[data-pc="valor"]').value?val:''});
+    tr.querySelector('[data-pc-ha]').textContent = vha? money(vha):'—';
+    tr.querySelector('[data-pc-lote]').textContent = vlote? (`${sym} ${_plN0(vlote)}`):'—';
+    cfHa+=vha; cfLote+=vlote; costos.push({concepto,modo,valor: raw!==''?val:''});
   });
-  const gastosHa = ctx.subApHa + cfHa, gastosLote = ctx.subApLote + cfLote;
+  const subApHa = ctx.subApHaUsd*rate, subApLote = ctx.subApLoteUsd*rate;
+  const gastosHa = subApHa + cfHa, gastosLote = subApLote + cfLote;
   const precioBruto=Number($('#pl-precio')?.value||0), comerc=Number($('#pl-comerc')?.value||0), flete=Number($('#pl-flete')?.value||0);
   const precioNeto = precioBruto - comerc - flete;
   const rindeEst=Number($('#pl-rinde')?.value||0);
@@ -16247,22 +16292,24 @@ function _planillaCalc(){
   const rindeReal = ctx.rinde? Number(ctx.rinde.rindeTnHa||0):0;
   const resultadoRealHa = (precioNeto*rindeReal) - gastosHa;
   const set=(sel,txt)=>{ const el=$(sel); if(el) el.textContent=txt; };
-  set('#pl-neto', precioNeto? ('u$s '+_plN2(precioNeto)+'/tn'):'—');
-  set('#pl-gastos-ha', 'u$s '+_plN2(gastosHa)+'/ha');
-  set('#pl-gastos-lote', 'u$s '+_plN0(gastosLote));
-  set('#pl-ingbruto', rindeEst? ('u$s '+_plN2(ingresoBruto)):'—');
-  set('#pl-resha', rindeEst? ('u$s '+_plN2(resultadoHa)):'—');
-  set('#pl-rescampo', rindeEst? ('u$s '+_plN0(resultadoCampo)):'—');
+  set('#pl-neto', precioNeto? (money(precioNeto)+'/tn'):'—');
+  set('#pl-gastos-ha', money(gastosHa)+'/ha');
+  set('#pl-gastos-lote', `${sym} ${_plN0(gastosLote)}`);
+  set('#pl-ingbruto', rindeEst? money(ingresoBruto):'—');
+  set('#pl-resha', rindeEst? money(resultadoHa):'—');
+  set('#pl-rescampo', rindeEst? (`${sym} ${_plN0(resultadoCampo)}`):'—');
   set('#pl-indif', precioNeto>0? (_plN2(rindeIndif)+' tn/ha'):'—');
   set('#pl-real', rindeReal? (_plN2(rindeReal)+' tn/ha'):'—');
-  set('#pl-resreal', (rindeReal&&precioNeto)? ('u$s '+_plN2(resultadoRealHa)+'/ha'):'—');
-  ctx.calc = { costos, cfHa, cfLote, gastosHa, gastosLote, precioBruto, comerc, flete, precioNeto, rindeEst, ingresoBruto, resultadoHa, resultadoCampo, rindeIndif, rindeReal, resultadoRealHa };
+  set('#pl-resreal', (rindeReal&&precioNeto)? (money(resultadoRealHa)+'/ha'):'—');
+  ctx.calc = { mon, sym, costos, cfHa, cfLote, subApHa, subApLote, gastosHa, gastosLote, precioBruto, comerc, flete, precioNeto, rindeEst, ingresoBruto, resultadoHa, resultadoCampo, rindeIndif, rindeReal, resultadoRealHa };
 }
 async function campanaPlanillaGuardar(id){
-  const ctx=_planillaCtx; if(!ctx) return; _planillaCalc(); const c=ctx.calc||{};
-  const planilla = { costosFijos: c.costos||[], precioBrutoUsd: $('#pl-precio')?.value?Number($('#pl-precio').value):null,
-    gastosComercUsd: $('#pl-comerc')?.value?Number($('#pl-comerc').value):null, fleteUsd: $('#pl-flete')?.value?Number($('#pl-flete').value):null,
-    rindeEstimado: $('#pl-rinde')?.value?Number($('#pl-rinde').value):null };
+  const ctx=_planillaCtx; if(!ctx) return; _planillaCalc();
+  const planilla = { moneda: ctx.mon, costosFijos: (ctx.calc&&ctx.calc.costos)||[],
+    precioBruto: $('#pl-precio')?.value!==''?Number($('#pl-precio').value):null,
+    gastosComerc: $('#pl-comerc')?.value!==''?Number($('#pl-comerc').value):null,
+    flete: $('#pl-flete')?.value!==''?Number($('#pl-flete').value):null,
+    rindeEstimado: $('#pl-rinde')?.value!==''?Number($('#pl-rinde').value):null };
   try { await api('/api/campanas/'+id,{method:'PUT',body:JSON.stringify({planilla})});
     toast('Planilla guardada','success'); delete state.cache.campanas;
   } catch(e){ toast(e.message,'error'); }
@@ -16270,24 +16317,25 @@ async function campanaPlanillaGuardar(id){
 function _plRound2(x){ return Math.round(Number(x||0)*100)/100; }
 function campanaPlanillaExcel(){
   const ctx=_planillaCtx; if(!ctx) return; _planillaCalc(); const c=ctx.calc||{}; const camp=ctx.camp; const ha=ctx.ha;
+  const rate=_plRate(); const sym=_plSym();
   const aoa=[];
   aoa.push(['Resultado económico — '+(camp.nombre||camp.cultivo||'')]);
-  aoa.push(['Cultivo', camp.cultivo||'', 'Lote', camp.lote?.nombre||'', 'Hectáreas', ha]);
+  aoa.push(['Cultivo', camp.cultivo||'', 'Lote', camp.lote?.nombre||'', 'Hectáreas', ha, 'Moneda', sym]);
   aoa.push([]);
-  aoa.push(['Fecha','Insumo/Labor','Dosis/ha','u$s/ud','u$s/ha','u$s/lote']);
-  ctx.appRows.forEach(r=>{ const a=r.a; aoa.push([ a.fecha?new Date(a.fecha).toLocaleDateString('es-AR'):'', a.item||'', a.tipo==='insumo'?(a.unidadHa??''):'', a.tipo==='insumo'?(a.precioUnit??''):'', _plRound2(r.haUsd), _plRound2(r.loteUsd) ]); });
-  aoa.push(['','','','Subtotal', _plRound2(ctx.subApHa), _plRound2(ctx.subApLote)]);
+  aoa.push(['Fecha','Insumo/Labor','Dosis/ha',sym+'/ud',sym+'/ha',sym+'/lote']);
+  ctx.appRows.forEach(r=>{ const a=r.a; aoa.push([ a.fecha?new Date(a.fecha).toLocaleDateString('es-AR'):'', a.item||'', a.tipo==='insumo'?(a.unidadHa??''):'', a.tipo==='insumo'&&a.precioUnit!=null?_plRound2(_toUsd(a.precioUnit,a.moneda)*rate):'', _plRound2(r.haUsd*rate), _plRound2(r.loteUsd*rate) ]); });
+  aoa.push(['','','','Subtotal', _plRound2(c.subApHa), _plRound2(c.subApLote)]);
   aoa.push([]);
-  aoa.push(['Costo fijo','Modo','Valor','','u$s/ha','u$s/lote']);
-  (c.costos||[]).forEach(cf=>{ const val=Number(cf.valor||0); const vha=cf.modo==='total'?(ha>0?val/ha:0):val; const vlote=cf.modo==='total'?val:val*ha; aoa.push([cf.concepto||'', cf.modo==='total'?'u$s total':'u$s/ha', val,'', _plRound2(vha), _plRound2(vlote)]); });
+  aoa.push(['Costo fijo','Modo','Valor ('+sym+')','',sym+'/ha',sym+'/lote']);
+  (c.costos||[]).forEach(cf=>{ const val=Number(cf.valor||0); const vha=cf.modo==='total'?(ha>0?val/ha:0):val; const vlote=cf.modo==='total'?val:val*ha; aoa.push([cf.concepto||'', cf.modo==='total'?sym+' total':sym+'/ha', val,'', _plRound2(vha), _plRound2(vlote)]); });
   aoa.push(['','','','TOTAL GASTOS', _plRound2(c.gastosHa), _plRound2(c.gastosLote)]);
   aoa.push([]);
-  aoa.push(['Precio bruto (u$s/tn)', _plRound2(c.precioBruto)]);
+  aoa.push(['Precio bruto ('+sym+'/tn)', _plRound2(c.precioBruto)]);
   aoa.push(['Gastos comercialización', _plRound2(c.comerc)]);
   aoa.push(['Flete', _plRound2(c.flete)]);
-  aoa.push(['Precio neto (u$s/tn)', _plRound2(c.precioNeto)]);
+  aoa.push(['Precio neto ('+sym+'/tn)', _plRound2(c.precioNeto)]);
   aoa.push(['Rinde estimado (tn/ha)', _plRound2(c.rindeEst)]);
-  aoa.push(['Ingreso bruto (u$s/ha)', _plRound2(c.ingresoBruto)]);
+  aoa.push(['Ingreso bruto ('+sym+'/ha)', _plRound2(c.ingresoBruto)]);
   aoa.push(['Resultado neto / ha', _plRound2(c.resultadoHa)]);
   aoa.push(['Resultado neto campo', _plRound2(c.resultadoCampo)]);
   aoa.push(['RINDE DE INDIFERENCIA (tn/ha)', _plRound2(c.rindeIndif)]);
@@ -16300,19 +16348,20 @@ function campanaPlanillaExcel(){
 }
 function campanaPlanillaPDF(){
   const ctx=_planillaCtx; if(!ctx) return; _planillaCalc(); const c=ctx.calc||{}; const camp=ctx.camp; const ha=ctx.ha;
+  const rate=_plRate(); const sym=_plSym(); const money=(v)=>`${sym} ${ctx.mon==='ARS'?_plN0(v):_plN2(v)}`;
   const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF; if(!jsPDFCtor) return toast('No se pudo generar el PDF','error');
   const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
   doc.setFontSize(14); doc.text('Resultado económico — '+(camp.nombre||camp.cultivo||''), 40, 40);
   doc.setFontSize(9); doc.setTextColor(90);
-  doc.text(`Cultivo: ${camp.cultivo||''} · Lote: ${camp.lote?.nombre||''} · ${_plN2(ha)} ha · ${fmtDate(new Date())}`, 40, 56);
+  doc.text(`Cultivo: ${camp.cultivo||''} · Lote: ${camp.lote?.nombre||''} · ${_plN2(ha)} ha · Moneda: ${sym} · ${fmtDate(new Date())}`, 40, 56);
   doc.setTextColor(0);
-  const appBody=ctx.appRows.map(r=>{ const a=r.a; return [ a.fecha?new Date(a.fecha).toLocaleDateString('es-AR'):'', a.item||'', a.tipo==='insumo'&&a.unidadHa!=null?_plN2(a.unidadHa):'', 'u$s '+_plN2(r.haUsd), 'u$s '+_plN0(r.loteUsd) ]; });
-  doc.autoTable({ startY:70, head:[['Fecha','Insumo/Labor','Dosis/ha','u$s/ha','u$s/lote']], body:appBody, foot:[['','','Subtotal','u$s '+_plN2(ctx.subApHa),'u$s '+_plN0(ctx.subApLote)]], styles:{fontSize:8}, headStyles:{fillColor:[22,101,52]}, columnStyles:{3:{halign:'right'},4:{halign:'right'}} });
-  const cfBody=(c.costos||[]).map(cf=>{ const val=Number(cf.valor||0); const vha=cf.modo==='total'?(ha>0?val/ha:0):val; const vlote=cf.modo==='total'?val:val*ha; return [cf.concepto||'', cf.modo==='total'?'u$s total':'u$s/ha','u$s '+_plN2(vha),'u$s '+_plN0(vlote)]; });
-  doc.autoTable({ startY:doc.lastAutoTable.finalY+12, head:[['Costo fijo','Modo','u$s/ha','u$s/lote']], body:cfBody, foot:[['TOTAL GASTOS','','u$s '+_plN2(c.gastosHa),'u$s '+_plN0(c.gastosLote)]], styles:{fontSize:8}, headStyles:{fillColor:[120,90,40]}, columnStyles:{2:{halign:'right'},3:{halign:'right'}} });
+  const appBody=ctx.appRows.map(r=>{ const a=r.a; return [ a.fecha?new Date(a.fecha).toLocaleDateString('es-AR'):'', a.item||'', a.tipo==='insumo'&&a.unidadHa!=null?_plN2(a.unidadHa):'', money(r.haUsd*rate), money(r.loteUsd*rate) ]; });
+  doc.autoTable({ startY:70, head:[['Fecha','Insumo/Labor','Dosis/ha',sym+'/ha',sym+'/lote']], body:appBody, foot:[['','','Subtotal',money(c.subApHa),money(c.subApLote)]], styles:{fontSize:8}, headStyles:{fillColor:[22,101,52]}, columnStyles:{3:{halign:'right'},4:{halign:'right'}} });
+  const cfBody=(c.costos||[]).map(cf=>{ const val=Number(cf.valor||0); const vha=cf.modo==='total'?(ha>0?val/ha:0):val; const vlote=cf.modo==='total'?val:val*ha; return [cf.concepto||'', cf.modo==='total'?sym+' total':sym+'/ha',money(vha),money(vlote)]; });
+  doc.autoTable({ startY:doc.lastAutoTable.finalY+12, head:[['Costo fijo','Modo',sym+'/ha',sym+'/lote']], body:cfBody, foot:[['TOTAL GASTOS','',money(c.gastosHa),money(c.gastosLote)]], styles:{fontSize:8}, headStyles:{fillColor:[120,90,40]}, columnStyles:{2:{halign:'right'},3:{halign:'right'}} });
   const resBody=[
-    ['Precio bruto (u$s/tn)', _plN2(c.precioBruto)], ['Gastos comercialización', _plN2(c.comerc)], ['Flete', _plN2(c.flete)],
-    ['Precio neto (u$s/tn)', _plN2(c.precioNeto)], ['Rinde estimado (tn/ha)', _plN2(c.rindeEst)], ['Ingreso bruto (u$s/ha)', _plN2(c.ingresoBruto)],
+    ['Precio bruto ('+sym+'/tn)', _plN2(c.precioBruto)], ['Gastos comercialización', _plN2(c.comerc)], ['Flete', _plN2(c.flete)],
+    ['Precio neto ('+sym+'/tn)', _plN2(c.precioNeto)], ['Rinde estimado (tn/ha)', _plN2(c.rindeEst)], ['Ingreso bruto ('+sym+'/ha)', _plN2(c.ingresoBruto)],
     ['Resultado neto / ha', _plN2(c.resultadoHa)], ['Resultado neto campo', _plN0(c.resultadoCampo)],
     ['RINDE DE INDIFERENCIA (tn/ha)', _plN2(c.rindeIndif)], ['Rinde real (tn/ha)', c.rindeReal?_plN2(c.rindeReal):'—'],
   ];
