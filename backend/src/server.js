@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.73.0';
+const AGROCORE_VERSION = '1.74.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -347,13 +347,24 @@ async function snapshotCotizaciones(dolar, cereales) {
   } catch (e) { /* ignore */ }
   for (const f of filas) {
     try {
-      await prisma.cotizacion.upsert({
-        where: { companyId_moneda_fecha: { companyId: null, moneda: f.moneda, fecha } },
-        update: { valor: f.valor, fuente: f.fuente },
-        create: { companyId: null, moneda: f.moneda, fecha, valor: f.valor, fuente: f.fuente },
-      });
+      // Upsert manual: Prisma no admite null en el where de la unique compuesta.
+      const ex = await prisma.cotizacion.findFirst({ where: { companyId: null, moneda: f.moneda, fecha } });
+      if (ex) await prisma.cotizacion.update({ where: { id: ex.id }, data: { valor: f.valor, fuente: f.fuente } });
+      else await prisma.cotizacion.create({ data: { companyId: null, moneda: f.moneda, fecha, valor: f.valor, fuente: f.fuente } });
     } catch (e) { /* ignore */ }
   }
+}
+// Mapa de cotizaciones EN VIVO (cache del scraping de dólar/pizarras). Sirve como
+// respaldo cuando la tabla Cotizacion todavía no tiene la fila persistida.
+function _liveCotizMap() {
+  const m = {};
+  try {
+    const d = _cotCache.dolar || {}, c = (_cotCache.cereales && _cotCache.cereales.items) || {};
+    const set = (k, v) => { if (v != null && Number(v) > 0) m[k] = Number(v); };
+    set('USD', d.oficial?.venta); set('USD_MAYORISTA', d.mayorista?.venta); set('USD_MEP', d.mep?.venta); set('USD_BLUE', d.blue?.venta); set('EUR', d.euro?.venta);
+    set('SOJA', c.soja); set('MAIZ', c.maiz); set('TRIGO', c.trigo); set('SORGO', c.sorgo); set('GIRASOL', c.girasol);
+  } catch (e) { /* ignore */ }
+  return m;
 }
 // Devuelve ARS por 1 unidad de `moneda` a la `fecha` (la más reciente <= fecha).
 // ARS -> 1. Si no hay dato, intenta el cache vivo; si no, null.
@@ -427,11 +438,12 @@ app.post('/api/cotizaciones-historico', authMiddleware, requirePermission('finan
   try {
     const d = z.object({ moneda: z.string().min(1), fecha: z.coerce.date(), valor: z.number().positive() }).parse(req.body);
     const fecha = new Date(d.fecha); fecha.setHours(0,0,0,0);
-    const row = await prisma.cotizacion.upsert({
-      where: { companyId_moneda_fecha: { companyId: null, moneda: d.moneda, fecha } },
-      update: { valor: d.valor, fuente: 'manual' },
-      create: { companyId: null, moneda: d.moneda, fecha, valor: d.valor, fuente: 'manual' },
-    });
+    // Prisma no permite null en el where de una unique compuesta, así que hacemos
+    // el upsert a mano (las cotizaciones de mercado son globales: companyId = null).
+    const existing = await prisma.cotizacion.findFirst({ where: { companyId: null, moneda: d.moneda, fecha } });
+    const row = existing
+      ? await prisma.cotizacion.update({ where: { id: existing.id }, data: { valor: d.valor, fuente: 'manual' } })
+      : await prisma.cotizacion.create({ data: { companyId: null, moneda: d.moneda, fecha, valor: d.valor, fuente: 'manual' } });
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -5538,6 +5550,8 @@ async function _construirFlujoProyectado(req, opts = {}) {
   //    última cotización conocida y proyecta cada cuota en su vencimiento).
   const _cotRows = await prisma.cotizacion.findMany({ where: { companyId: null }, orderBy: { fecha: 'desc' } });
   const _cotMap = {}; for (const cr of _cotRows) { if (_cotMap[cr.moneda] == null) _cotMap[cr.moneda] = Number(cr.valor || 0); }
+  // Respaldo: si la tabla no tiene la cotización, usamos la del scraping en vivo.
+  for (const [k, v] of Object.entries(_liveCotizMap())) { if (_cotMap[k] == null || !_cotMap[k]) _cotMap[k] = v; }
   const _arrCot = (mon) => (!mon || mon === 'ARS') ? 1 : Number(_cotMap[mon] || 0);
   const arrs = await prisma.arrendamiento.findMany({
     where: { companyId: { in: companyIds }, pagado: false },
@@ -9307,6 +9321,7 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
   });
   const _cotRowsA = await prisma.cotizacion.findMany({ where: { companyId: null }, orderBy: { fecha: 'desc' } });
   const _cotA = {}; for (const cr of _cotRowsA) { if (_cotA[cr.moneda] == null) _cotA[cr.moneda] = Number(cr.valor || 0); }
+  for (const [k, v] of Object.entries(_liveCotizMap())) { if (_cotA[k] == null || !_cotA[k]) _cotA[k] = v; }
   const _cotOf = (mon) => (!mon || mon === 'ARS') ? 1 : Number(_cotA[mon] || 0);
   for (const a of arrends) {
     const mod = a.modalidad || (a.tipoPago === 'En especie' ? 'quintales' : (a.tipoPago === 'Porcentual' ? 'porcentaje' : (a.tipoPago === 'Kg Novillo' ? 'kgnovillo' : 'efectivo')));

@@ -2371,6 +2371,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
+      titulo:'💾 v1.74.0 — Se guardan bien las cotizaciones (Kg Novillo y pizarras) y ya no quedan en $0',
+      desc:'Guardar una cotización daba <b>"Argument companyId must not be null"</b>. Las cotizaciones son globales (sin empresa) y la base no permitía ese guardado por como estaba armado. Ahora se guardan correctamente. <b>Importante:</b> este mismo problema hacía que el <b>guardado diario automático</b> de las pizarras fallara en silencio, dejando la tabla vacía — por eso los arrendamientos en quintales salían en <b>$0</b>. Con esto, tanto la carga manual (Kg Novillo) como el snapshot diario ya persisten. Además, el <b>Flujo de Fondos y la Agenda</b> ahora usan la <b>cotización en vivo</b> como respaldo, así valorizan los quintales aunque la tabla todavía no tenga el dato del día.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
       titulo:'🩹 v1.73.0 — Arreglado el error al guardar cotizaciones ("Falta header X-Company-Id")',
       desc:'Al cargar/corregir una cotización (por ejemplo el precio del <b>Kg Novillo</b>) el sistema tiraba <b>"Falta header X-Company-Id"</b>. El endpoint de guardado quedaba sin la verificación de sesión por estar declarado antes del middleware general. Corregido: ahora guarda y borra cotizaciones sin problema (incluido el Super Admin).' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'09/07/2026',
