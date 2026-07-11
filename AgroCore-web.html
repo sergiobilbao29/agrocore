@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'11/07/2026',
+      titulo:'🧾 v1.85.0 — Notas de crédito como comprobante que resta al pagar/cobrar',
+      desc:'En <b>Pagar a proveedor</b> y <b>Cobrar de cliente</b>, las <b>notas de crédito</b> aparecen ahora como un comprobante más (en verde, con signo −). Al tildarlas se <b>descuentan del total</b>: el sistema suma las facturas y resta las NC, y queda para pagar/cobrar sólo el <b>neto</b>. Si una factura y una NC son por el mismo importe, el neto da $0 y podés <b>guardar la vinculación sin mover plata</b> (no pide caja ni banco). Reemplaza al botón anterior de “saldo a favor”.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'11/07/2026',
       titulo:'🧾 v1.84.0 — Las notas de crédito ahora se descuentan al pagar/cobrar',
       desc:'Cuando un proveedor o cliente tiene una <b>nota de crédito</b> cargada, ahora aparece como <b>Saldo a favor</b> en la pantalla de pago/cobro y se puede <b>aplicar a las facturas tildadas</b> con un clic (antes la NC bajaba el saldo en la cuenta corriente pero no se descontaba al pagar). Funciona igual que los pagos/cobros a cuenta: no mueve plata nueva, sólo cancela la deuda contra el crédito disponible, respetando la moneda.' },
@@ -12237,40 +12240,39 @@ async function pagoCobroCargarComprobantes(modo) {
   try {
     const tipo = esPago ? 'proveedor' : 'cliente';
     const r = await api(`/api/ctas-ctes/pendientes?tipo=${tipo}&contactoId=${contactoId}`);
+    // Cada asiento pendiente es una FACTURA (debe>0, suma) o una NOTA DE CRÉDITO /
+    // crédito a cuenta (haber puro, debe=0, resta). Los mostramos todos como
+    // comprobantes: al tildar una NC se descuenta del total a pagar.
     const items = (r.data || []).map(it => {
-      // Convención uniforme del sistema: saldo = debe - haber (clientes y proveedores).
-      const saldoPendiente = Number(it.debe || 0) - Number(it.haber || 0);
-      return { ...it, saldoPendiente };
+      const debe = Number(it.debe || 0), haber = Number(it.haber || 0);
+      const esCredito = debe <= 0.01 && haber > 0.01;
+      const saldoPendiente = esCredito ? (haber - debe) : (debe - haber);
+      return { ...it, esCredito, saldoPendiente };
     }).filter(i => i.saldoPendiente > 0.01);
     state._pagoCobroData.comprobantes = items;
     state._pagoCobroData.tildados = {};
     state._pagoCobroData.saldoAFavor = Number(r.saldoAFavor || 0);
     state._pagoCobroData.contactoId = contactoId;
     state._pagoCobroData.tipoContacto = tipo;
-    // Banner de saldo a favor: pagos/cobros "a cuenta" previos sin aplicar a una factura.
-    const _saf = Number(r.saldoAFavor || 0);
-    const _bannerSaf = _saf > 0.01 ? `<div class="bg-emerald-50 border border-emerald-300 rounded p-2 mb-2 text-xs flex items-center justify-between gap-2 flex-wrap">
-        <span>💰 <b>Saldo a favor:</b> ${fmt$(_saf)} (notas de crédito y ${esPago?'pagos':'cobros'} a cuenta previos). Tildá las facturas y aplicalo (no mueve plata nueva).</span>
-        <button type="button" class="btn btn-secondary text-xs whitespace-nowrap" onclick="pagoCobroAplicarCredito('${modo}')">🔗 Aplicar a lo tildado</button>
-      </div>` : '';
     if (!items.length) {
-      cont.innerHTML = _bannerSaf + `<div class="text-sm text-slate-500 text-center py-6">No hay comprobantes pendientes para este ${esPago?'proveedor':'cliente'}.</div>`;
+      cont.innerHTML = `<div class="text-sm text-slate-500 text-center py-6">No hay comprobantes pendientes para este ${esPago?'proveedor':'cliente'}.</div>`;
       pagoCobroRecalcular();
       return;
     }
-    cont.innerHTML = _bannerSaf + `
-      <div class="text-xs text-slate-600 mb-2">${items.length} comprobante${items.length===1?'':'s'} pendiente${items.length===1?'':'s'}. Tildá los que estás pagando y ajustá el importe si es parcial.</div>
+    const nFac = items.filter(i=>!i.esCredito).length, nNc = items.filter(i=>i.esCredito).length;
+    cont.innerHTML = `
+      <div class="text-xs text-slate-600 mb-2">${nFac} factura${nFac===1?'':'s'}${nNc?` y ${nNc} nota${nNc===1?'':'s'} de crédito`:''}. Tildá las facturas que ${esPago?'pagás':'cobrás'} y las notas de crédito que querés descontar. El total se calcula sumando facturas y restando NC.</div>
       <div class="space-y-1 max-h-64 overflow-y-auto">
         ${items.map((it, idx) => `
-          <div class="flex items-center gap-2 text-sm bg-white border border-slate-200 rounded p-2">
+          <div class="flex items-center gap-2 text-sm ${it.esCredito?'bg-emerald-50 border-emerald-300':'bg-white border-slate-200'} border rounded p-2">
             <input type="checkbox" class="pc-tilde" data-idx="${idx}" onchange="pagoCobroToggleTilde(${idx}, this.checked)"/>
             <div class="flex-1 min-w-0">
-              <div class="font-medium truncate">${esc(it.detalle || 'Comprobante')}</div>
+              <div class="font-medium truncate">${it.esCredito?'🧾 ':''}${esc(it.detalle || 'Comprobante')}${it.esCredito?' <span class="badge badge-green">NC / crédito</span>':''}</div>
               <div class="text-[11px] text-slate-500">${fmtDate(it.fecha)}${it.referencia ? ' · '+esc(it.referencia) : ''}</div>
             </div>
             <div class="text-right">
-              <div class="text-[11px] text-slate-500">Saldo${(it.moneda&&it.moneda!=='ARS')?' ('+esc(it.moneda)+')':''}:</div>
-              <div class="font-bold">${monedaFmt(it.moneda, it.saldoPendiente)}</div>
+              <div class="text-[11px] text-slate-500">${it.esCredito?'A favor':'Saldo'}${(it.moneda&&it.moneda!=='ARS')?' ('+esc(it.moneda)+')':''}:</div>
+              <div class="font-bold ${it.esCredito?'text-emerald-700':''}">${it.esCredito?'− ':''}${monedaFmt(it.moneda, it.saldoPendiente)}</div>
             </div>
             <input type="number" class="input text-right w-28 py-0 text-sm pc-importe" data-idx="${idx}" data-moneda="${esc(it.moneda||'ARS')}" value="${it.saldoPendiente.toFixed(2)}" oninput="pagoCobroRecalcular()" min="0" step="0.01"/>
           </div>`).join('')}
@@ -12319,11 +12321,12 @@ function pagoCobroRecalcular() {
     const inp = document.querySelector(`.pc-importe[data-idx="${idx}"]`);
     if (!inp) continue;
     const imp = Number(inp.value || 0);
-    totalTildado += imp;
     const it = d.comprobantes[idx] || {};
+    const sign = it.esCredito ? -1 : 1;   // las notas de crédito restan
+    totalTildado += sign * imp;
     const mo = it.moneda || 'ARS'; monedasSet.add(mo);
     const cot = mo === 'ARS' ? 1 : (it.cotizacion ?? (state.cache.cotizVivas||{})[mo] ?? null);
-    if (cot == null) deudaArsOk = false; else deudaArs += imp * cot;
+    if (cot == null) deudaArsOk = false; else deudaArs += sign * imp * cot;
   }
   const monedas = [...monedasSet];
   const monedaDeuda = monedas[0] || 'ARS';
@@ -12382,13 +12385,24 @@ function pagoCobroRecalcular() {
 
   if (monedaDeuda === 'ARS') {
     if (zone.innerHTML && monedas.length<=1) zone.innerHTML = '';
+    // Neto negativo: las notas de crédito superan a las facturas tildadas.
+    if (totalTildado < -0.01) {
+      if (!inpTotal.dataset.touched) inpTotal.value = '0.00';
+      d._monedaPago = null; d._cotizPago = null; d._montoPago = Number(inpTotal.value||0);
+      diffEl.innerHTML = `<span class="text-red-700">❌ Las notas de crédito superan por $${(-totalTildado).toFixed(2)} a las facturas tildadas. Destildá alguna NC o tildá más facturas.</span>`;
+      return;
+    }
     if (!inpTotal.dataset.touched) inpTotal.value = totalTildado.toFixed(2);
     const totalPago = Number(inpTotal.value || 0);
     const diff = totalPago - totalTildado;
     d._monedaPago = null; d._cotizPago = null; d._montoPago = totalPago;
-    if (Math.abs(diff) < 0.01) diffEl.innerHTML = '<span class="text-emerald-700">✅ Total coincide con comprobantes tildados.</span>';
-    else if (diff > 0) diffEl.innerHTML = `<span class="text-amber-700">⚠️ Estás ${esPago?'pagando':'cobrando'} $${diff.toFixed(2)} más de lo tildado. Ajustá los comprobantes.</span>`;
-    else diffEl.innerHTML = `<span class="text-red-700">❌ El total tildado supera por $${(-diff).toFixed(2)}. Bajá importes o destildá.</span>`;
+    // Neto 0: las NC cubren exactamente las facturas → sólo vinculación, sin plata.
+    if (totalTildado <= 0.01) {
+      diffEl.innerHTML = '<span class="text-emerald-700">🔗 Las notas de crédito cubren todo: se vincula sin mover plata (no hace falta caja/banco).</span>';
+    }
+    else if (Math.abs(diff) < 0.01) diffEl.innerHTML = '<span class="text-emerald-700">✅ Total (facturas − notas de crédito) listo para ' + (esPago?'pagar':'cobrar') + '.</span>';
+    else if (diff > 0) diffEl.innerHTML = `<span class="text-amber-700">⚠️ Estás ${esPago?'pagando':'cobrando'} $${diff.toFixed(2)} más que el neto. Ajustá los importes.</span>`;
+    else diffEl.innerHTML = `<span class="text-red-700">❌ El neto supera por $${(-diff).toFixed(2)} al monto. Bajá importes o destildá.</span>`;
     return;
   }
 
@@ -12580,33 +12594,40 @@ async function pagoCobroConfirmar(modo) {
   const fecha = document.getElementById('pc-fecha').value;
   const metodo = document.getElementById('pc-metodo').value;
   const obs = document.getElementById('pc-obs').value || null;
-  // Armar comprobantes
-  const comprobantes = [];
+  // Armar comprobantes (facturas, suman) y créditos (NC / a cuenta, restan).
+  const comprobantes = [], creditos = [];
   for (const idx in d.tildados) {
     if (!d.tildados[idx]) continue;
     const inp = document.querySelector(`.pc-importe[data-idx="${idx}"]`);
     const importe = Number(inp?.value || 0);
     if (importe <= 0) continue;
-    comprobantes.push({ ctaCteId: d.comprobantes[idx].id, importeAplicado: importe });
+    const it = d.comprobantes[idx];
+    if (it.esCredito) creditos.push({ ctaCteId: it.id, importeAplicado: importe });
+    else comprobantes.push({ ctaCteId: it.id, importeAplicado: importe });
   }
-  // Sin comprobantes tildados = pago/cobro "a cuenta" (o a saldar deuda general). Se permite.
+  if (creditos.length && !comprobantes.length) return toast('Tildá al menos una factura para aplicarle la nota de crédito.', 'warn');
+  // Sin comprobantes tildados = pago/cobro "a cuenta". Con NC que cubren todo, monto = 0 (solo vinculación).
   const monto = Number(document.getElementById('pc-total-pago').value || 0);
-  if (monto <= 0) return toast(comprobantes.length ? 'El monto debe ser mayor a 0' : 'Ingresá el monto a cuenta', 'warn');
+  if (monto <= 0 && !creditos.length) return toast(comprobantes.length ? 'El monto debe ser mayor a 0' : 'Ingresá el monto a cuenta', 'warn');
+  if (monto < -0.01) return toast('El monto no puede ser negativo', 'warn');
   const monedaDeuda = d._monedaDeuda || 'ARS';
   const esACuenta = comprobantes.length === 0;
   // A cuenta: la moneda se elige libremente. Con factura: pago en ARS o en la moneda de la deuda.
   const monedaPago = esACuenta ? (d._monedaPago || null) : ((monedaDeuda !== 'ARS') ? (d._monedaPago || 'ARS') : null);
   const pagaOtraMoneda = !esACuenta && monedaPago && monedaPago !== monedaDeuda;
   const sumaComp = comprobantes.reduce((a,c) => a+c.importeAplicado, 0);
-  // Solo exigimos que el monto coincida con la suma cuando hay comprobantes tildados y se paga en la misma moneda.
-  if (comprobantes.length && !pagaOtraMoneda && Math.abs(sumaComp - monto) > 0.01)
-    return toast(`La suma de comprobantes (${monedaFmt(monedaDeuda,sumaComp)}) no coincide con el monto (${monedaFmt(monedaDeuda,monto)})`, 'error');
+  const sumaCred = creditos.reduce((a,c) => a+c.importeAplicado, 0);
+  // El neto (facturas − NC) debe coincidir con el monto cuando se paga en la misma moneda.
+  if (comprobantes.length && !pagaOtraMoneda && Math.abs((sumaComp - sumaCred) - monto) > 0.01)
+    return toast(`El neto (facturas ${monedaFmt(monedaDeuda,sumaComp)} − NC ${monedaFmt(monedaDeuda,sumaCred)}) no coincide con el monto (${monedaFmt(monedaDeuda,monto)})`, 'error');
 
   const body = {
     [esPago ? 'proveedorId' : 'clienteId']: contactoId,
-    comprobantes, metodo, monto, fecha, observaciones: obs,
+    comprobantes, creditos, metodo, monto, fecha, observaciones: obs,
   };
   if (monedaPago && (esACuenta || pagaOtraMoneda)) { body.monedaPago = monedaPago; body.cotizacionPago = d._cotizPago || null; }
+  // Neto 0 (las NC cubren todo): es sólo vinculación, no se pide caja/banco/cheque.
+  if (monto > 0.01) {
   if (metodo === 'efectivo') body.cajaOrigen = document.getElementById('pc-caja')?.value || null;
   if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('pc-banco')?.value || null;
   if (metodo === 'cheque') {
@@ -12669,11 +12690,16 @@ async function pagoCobroConfirmar(modo) {
       body.empresaDestinoId = otraEmp;
     }
   }
+  } // fin "if (monto > 0.01)" — bloque de método sólo cuando sale/entra plata
   try {
     const url = esPago ? '/api/pagos-proveedores' : '/api/cobros-clientes';
     await api(url, { method: 'POST', body: JSON.stringify(body) });
     closeModal();
-    toast((esPago ? '💸 Pago' : '💰 Cobro') + ` registrado por ${fmt$(monto)} (${comprobantes.length} comprobante${comprobantes.length===1?'':'s'})`, 'success');
+    const _ncTxt = creditos.length ? ` · ${creditos.length} NC aplicada${creditos.length===1?'':'s'}` : '';
+    const _msg = monto > 0.01
+      ? (esPago ? '💸 Pago' : '💰 Cobro') + ` registrado por ${fmt$(monto)} (${comprobantes.length} comprobante${comprobantes.length===1?'':'s'}${_ncTxt})`
+      : `🔗 Notas de crédito vinculadas (${comprobantes.length} comprobante${comprobantes.length===1?'':'s'}${_ncTxt}) — sin movimiento de plata`;
+    toast(_msg, 'success');
     pages.ctasCtes();
   } catch (e) { toast(e.message || 'Error al registrar', 'error'); }
 }

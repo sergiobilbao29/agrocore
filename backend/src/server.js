@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.84.0';
+const AGROCORE_VERSION = '1.85.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6684,8 +6684,14 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
       })).min(0),  // 0 = pago "a cuenta" (sin comprobante puntual)
+      // Notas de crédito / créditos a cuenta que se aplican para reducir lo que
+      // se paga en efectivo. Cada uno es un haber puro (debe=0) de la cta cte.
+      creditos: z.array(z.object({
+        ctaCteId: z.string().min(1),
+        importeAplicado: z.number().positive(),
+      })).optional().default([]),
       metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal']),
-      monto: z.number().positive(),
+      monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo, sin plata)
       fecha: z.coerce.date(),
       cajaOrigen: z.string().nullable().optional(),
       chequeId: z.string().nullable().optional(),
@@ -6706,12 +6712,16 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
+    const sumaCreditos = d.creditos.reduce((a, c) => a + c.importeAplicado, 0);
     // d.monto = lo que efectivamente sale de caja/banco (en monedaPago). Si se paga
-    // en la MISMA moneda de la deuda, debe coincidir con la suma aplicada. Si se paga
-    // en otra moneda (ej: deuda USD, pago ARS), son magnitudes distintas y no se exige igualdad.
+    // en la MISMA moneda de la deuda, debe coincidir con (comprobantes − notas de crédito).
+    // Si se paga en otra moneda (ej: deuda USD, pago ARS) no se exige igualdad.
     const _mismaMoneda = !d.monedaPago;
-    if (d.comprobantes.length && _mismaMoneda && Math.abs(sumaAplicada - d.monto) > 0.01) {
-      return res.status(400).json({ ok: false, error: 'La suma de los comprobantes (' + sumaAplicada + ') no coincide con el monto pagado (' + d.monto + ')' });
+    if (d.comprobantes.length && _mismaMoneda && Math.abs((sumaAplicada - sumaCreditos) - d.monto) > 0.01) {
+      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + ') no coincide con el monto pagado (' + d.monto + ')' });
+    }
+    if (sumaCreditos > sumaAplicada + 0.01) {
+      return res.status(400).json({ ok: false, error: 'Las notas de crédito aplicadas (' + sumaCreditos.toFixed(2) + ') superan el total de comprobantes tildados (' + sumaAplicada.toFixed(2) + ')' });
     }
 
     // Validar Intercompany
@@ -6766,9 +6776,24 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           observaciones: 'Pago via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
         }});
       }
+      // Aplicar NOTAS DE CRÉDITO / créditos a cuenta tildados: consumen su haber
+      // (que ya reducía el saldo) para financiar parte de los comprobantes. Así el
+      // efectivo/banco sólo cubre el neto (comprobantes − notas de crédito).
+      for (const cr of d.creditos) {
+        const cc = await tx.ctaCte.findFirst({ where: { id: cr.ctaCteId, companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId } });
+        if (!cc) throw new Error('Nota de crédito no encontrada: ' + cr.ctaCteId);
+        const disponible = Number(cc.haber || 0) - Number(cc.debe || 0); // haber puro
+        if (disponible <= 0.01) throw new Error('El comprobante tildado como crédito no tiene saldo a favor');
+        if (cr.importeAplicado > disponible + 0.01) throw new Error('Importe de la nota de crédito (' + cr.importeAplicado + ') excede su saldo (' + disponible.toFixed(2) + ')');
+        const nuevoHaber = Math.round((Number(cc.haber || 0) - cr.importeAplicado) * 100) / 100;
+        await tx.ctaCte.update({ where: { id: cc.id }, data: {
+          haber: nuevoHaber, pagado: (nuevoHaber - Number(cc.debe || 0)) <= 0.01,
+          observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada a comprobantes el ' + new Date(d.fecha).toISOString().slice(0,10),
+        }});
+      }
       // Pago "a cuenta" (sin comprobantes): haber suelto en la cta cte del proveedor.
       // Reduce el saldo y, si excede la deuda, deja saldo a favor.
-      if (d.comprobantes.length === 0) {
+      if (d.comprobantes.length === 0 && d.monto > 0.01) {
         await tx.ctaCte.create({ data: {
           companyId: req.companyId,
           contactoTipo: 'proveedor', contactoId: d.proveedorId,
@@ -6801,7 +6826,9 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         }
       }
 
-      // 2. Registrar el movimiento del recurso usado
+      // 2. Registrar el movimiento del recurso usado — SOLO si sale plata. Si el
+      // neto es 0 (las notas de crédito cubren todo) es una simple vinculación.
+      if (d.monto > 0.01) {
       if (d.metodo === 'cheque') {
         if (!d.chequeId) throw new Error('Falta chequeId para pago con cheque');
         const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
@@ -6899,8 +6926,9 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           cajaOrigen: d.cajaInterco, chequeIdOrigen: d.chequeIdInterco, bancoCuentaIdOrigen: d.bancoCuentaIdInterco,
         });
       }
+      } // fin "if (d.monto > 0.01)"
 
-      return { ok: true, comprobantesAplicados: d.comprobantes.length };
+      return { ok: true, comprobantesAplicados: d.comprobantes.length, creditosAplicados: d.creditos.length };
     });
 
     res.json({ ok: true, ...result });
@@ -6917,8 +6945,13 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
       })).min(0),  // 0 = cobro "a cuenta" (sin comprobante puntual)
+      // Notas de crédito de venta / créditos a cuenta que reducen lo que se cobra.
+      creditos: z.array(z.object({
+        ctaCteId: z.string().min(1),
+        importeAplicado: z.number().positive(),
+      })).optional().default([]),
       metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany']),
-      monto: z.number().positive(),
+      monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo)
       fecha: z.coerce.date(),
       cajaDestino: z.string().nullable().optional(),
       chequeId: z.string().nullable().optional(),  // si recibimos un cheque NUEVO de terceros
@@ -6930,8 +6963,12 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
-    if (d.comprobantes.length && !d.monedaPago && Math.abs(sumaAplicada - d.monto) > 0.01) {
-      return res.status(400).json({ ok: false, error: 'La suma de comprobantes no coincide con el monto cobrado' });
+    const sumaCreditos = d.creditos.reduce((a, c) => a + c.importeAplicado, 0);
+    if (d.comprobantes.length && !d.monedaPago && Math.abs((sumaAplicada - sumaCreditos) - d.monto) > 0.01) {
+      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + ') no coincide con el monto cobrado (' + d.monto + ')' });
+    }
+    if (sumaCreditos > sumaAplicada + 0.01) {
+      return res.status(400).json({ ok: false, error: 'Las notas de crédito aplicadas superan el total de comprobantes tildados' });
     }
     if (d.metodo === 'intercompany') {
       if (!d.empresaDestinoId) return res.status(400).json({ ok: false, error: 'Falta empresaDestinoId para Intercompany' });
@@ -6972,8 +7009,22 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           observaciones: 'Cobro via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
         }});
       }
+      // Aplicar NOTAS DE CRÉDITO / créditos a cuenta tildados: consumen su haber
+      // para financiar parte de los comprobantes, así el recurso sólo cubre el neto.
+      for (const cr of d.creditos) {
+        const cc = await tx.ctaCte.findFirst({ where: { id: cr.ctaCteId, companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId } });
+        if (!cc) throw new Error('Nota de crédito no encontrada: ' + cr.ctaCteId);
+        const disponible = Number(cc.haber || 0) - Number(cc.debe || 0);
+        if (disponible <= 0.01) throw new Error('El comprobante tildado como crédito no tiene saldo a favor');
+        if (cr.importeAplicado > disponible + 0.01) throw new Error('Importe de la nota de crédito excede su saldo');
+        const nuevoHaber = Math.round((Number(cc.haber || 0) - cr.importeAplicado) * 100) / 100;
+        await tx.ctaCte.update({ where: { id: cc.id }, data: {
+          haber: nuevoHaber, pagado: (nuevoHaber - Number(cc.debe || 0)) <= 0.01,
+          observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada a comprobantes el ' + new Date(d.fecha).toISOString().slice(0,10),
+        }});
+      }
       // Cobro "a cuenta" (sin comprobantes): haber suelto en la cta cte del cliente.
-      if (d.comprobantes.length === 0) {
+      if (d.comprobantes.length === 0 && d.monto > 0.01) {
         await tx.ctaCte.create({ data: {
           companyId: req.companyId,
           contactoTipo: 'cliente', contactoId: d.clienteId,
@@ -7004,7 +7055,8 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           }
         }
       }
-      // Registrar el recurso recibido
+      // Registrar el recurso recibido — SOLO si entra plata. Neto 0 = vinculación.
+      if (d.monto > 0.01) {
       if (d.metodo === 'cheque') {
         // El cliente nos da un cheque de terceros → ya viene creado con chequeId
         if (!d.chequeId) throw new Error('Falta chequeId del cheque recibido');
@@ -7066,7 +7118,8 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           userId: req.user?.id || null,
         }});
       }
-      return { ok: true, comprobantesAplicados: d.comprobantes.length };
+      } // fin "if (d.monto > 0.01)"
+      return { ok: true, comprobantesAplicados: d.comprobantes.length, creditosAplicados: d.creditos.length };
     });
     res.json({ ok: true, ...result });
   } catch (e) { next(e); }
