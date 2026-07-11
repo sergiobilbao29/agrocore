@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'10/07/2026',
+      titulo:'💱 v1.80.0 — Pago/cobro a cuenta en cualquier moneda',
+      desc:'Cuando registrás un pago o cobro <b>a cuenta</b> (sin tildar una factura), ahora podés elegir la <b>moneda</b> (pesos, dólar, euro, granos, Kg Novillo…) igual que cuando hay facturas. Antes quedaba forzado a pesos. El saldo a favor se guarda en esa moneda y después se aplica a facturas de la misma moneda.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/07/2026',
       titulo:'🔗 v1.79.0 — Aplicar un pago/cobro "a cuenta" a la factura (saldo a favor)',
       desc:'Cuando pagás o cobrás <b>a cuenta antes de que exista la factura</b>, ese dinero queda como <b>saldo a favor</b>. Ahora, al registrar el próximo pago/cobro y elegir el proveedor/cliente, aparece un aviso <b>"💰 Saldo a favor: $X"</b> con un botón <b>"🔗 Aplicar a lo tildado"</b>: tildás las facturas y el saldo a favor se les aplica (no mueve plata nueva), así esas facturas dejan de figurar como pendientes. Se puede aplicar total o parcialmente y respeta la moneda de cada comprobante.' },
@@ -12320,6 +12323,37 @@ function pagoCobroRecalcular() {
     return;
   }
 
+  // Pago/cobro A CUENTA (sin comprobantes tildados): se puede elegir la moneda libremente.
+  if (monedasSet.size === 0 && metodo !== 'cereal') {
+    if (zone.dataset.acuenta !== '1') {
+      zone.dataset.acuenta = '1'; zone.dataset.moneda = '';
+      zone.innerHTML = `
+        <div class="bg-sky-50 border border-sky-300 rounded p-3 text-sm space-y-2">
+          <div class="font-semibold text-sky-900">${esPago?'Pago':'Cobro'} a cuenta (sin factura). Elegí la moneda:</div>
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="label">Moneda del ${esPago?'pago':'cobro'}</label>
+              <select id="pc-monpago-ac" class="input" onchange="pagoCobroRecalcular()">
+                ${MONEDAS_FE.map(([k,l])=>`<option value="${esc(k)}">${esc(l)}</option>`).join('')}
+              </select>
+            </div>
+            <div id="pc-cot-ac-wrap" style="display:none"><label class="label">Cotización (ARS por unidad)</label>
+              <input id="pc-cotpago-ac" type="number" step="0.01" class="input" placeholder="opcional" oninput="pagoCobroRecalcular()"/>
+            </div>
+          </div>
+        </div>`;
+    }
+    const monAc = document.getElementById('pc-monpago-ac')?.value || 'ARS';
+    const wrap = document.getElementById('pc-cot-ac-wrap'); if (wrap) wrap.style.display = monAc==='ARS'?'none':'';
+    const cotInp = document.getElementById('pc-cotpago-ac');
+    if (cotInp && !cotInp.value && monAc!=='ARS') { const lv=(state.cache.cotizVivas||{})[monAc]; if(lv) cotInp.value=Math.round(lv); }
+    const cotAc = monAc==='ARS' ? null : (Number(cotInp?.value||0) || (state.cache.cotizVivas||{})[monAc] || null);
+    const montoAc = Number(inpTotal.value||0);
+    d._monedaPago = monAc==='ARS' ? null : monAc; d._cotizPago = monAc==='ARS' ? null : cotAc; d._montoPago = montoAc; d._monedaDeuda = 'ARS';
+    diffEl.innerHTML = `<span class="text-slate-500">Queda como <b>saldo a favor</b>${monAc!=='ARS'?(' en '+esc(monAc)):''}. Después lo aplicás a las facturas.</span>`;
+    return;
+  }
+  zone.dataset.acuenta = '';   // salimos del modo "a cuenta"
+
   if (monedas.length > 1) {
     zone.innerHTML = `<div class="bg-red-50 border border-red-300 text-red-700 text-xs rounded p-2">⚠️ Tildaste comprobantes de distintas monedas (${monedas.join(', ')}). Registrá un ${esPago?'pago':'cobro'} por moneda.</div>`;
   }
@@ -12537,8 +12571,10 @@ async function pagoCobroConfirmar(modo) {
   const monto = Number(document.getElementById('pc-total-pago').value || 0);
   if (monto <= 0) return toast(comprobantes.length ? 'El monto debe ser mayor a 0' : 'Ingresá el monto a cuenta', 'warn');
   const monedaDeuda = d._monedaDeuda || 'ARS';
-  const monedaPago = (monedaDeuda !== 'ARS') ? (d._monedaPago || 'ARS') : null;
-  const pagaOtraMoneda = monedaPago && monedaPago !== monedaDeuda;
+  const esACuenta = comprobantes.length === 0;
+  // A cuenta: la moneda se elige libremente. Con factura: pago en ARS o en la moneda de la deuda.
+  const monedaPago = esACuenta ? (d._monedaPago || null) : ((monedaDeuda !== 'ARS') ? (d._monedaPago || 'ARS') : null);
+  const pagaOtraMoneda = !esACuenta && monedaPago && monedaPago !== monedaDeuda;
   const sumaComp = comprobantes.reduce((a,c) => a+c.importeAplicado, 0);
   // Solo exigimos que el monto coincida con la suma cuando hay comprobantes tildados y se paga en la misma moneda.
   if (comprobantes.length && !pagaOtraMoneda && Math.abs(sumaComp - monto) > 0.01)
@@ -12548,7 +12584,7 @@ async function pagoCobroConfirmar(modo) {
     [esPago ? 'proveedorId' : 'clienteId']: contactoId,
     comprobantes, metodo, monto, fecha, observaciones: obs,
   };
-  if (pagaOtraMoneda) { body.monedaPago = monedaPago; body.cotizacionPago = d._cotizPago || null; }
+  if (monedaPago && (esACuenta || pagaOtraMoneda)) { body.monedaPago = monedaPago; body.cotizacionPago = d._cotizPago || null; }
   if (metodo === 'efectivo') body.cajaOrigen = document.getElementById('pc-caja')?.value || null;
   if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('pc-banco')?.value || null;
   if (metodo === 'cheque') {
