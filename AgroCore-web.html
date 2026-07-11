@@ -2371,6 +2371,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'11/07/2026',
+      titulo:'🏷️ v1.86.0 — Compras y Ventas muestran si es Factura, NC o ND',
+      desc:'En los listados de <b>Compras</b> y <b>Facturación (ventas)</b>, cada comprobante ahora indica con una etiqueta si es <b>Factura</b>, <b>NC</b> (nota de crédito) o <b>ND</b> (nota de débito), al lado de la letra (A/B/C) y el número. Antes todos se veían igual.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'11/07/2026',
       titulo:'🧾 v1.85.0 — Notas de crédito como comprobante que resta al pagar/cobrar',
       desc:'En <b>Pagar a proveedor</b> y <b>Cobrar de cliente</b>, las <b>notas de crédito</b> aparecen ahora como un comprobante más (en verde, con signo −). Al tildarlas se <b>descuentan del total</b>: el sistema suma las facturas y resta las NC, y queda para pagar/cobrar sólo el <b>neto</b>. Si una factura y una NC son por el mismo importe, el neto da $0 y podés <b>guardar la vinculación sin mover plata</b> (no pide caja ni banco). Reemplaza al botón anterior de “saldo a favor”.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'11/07/2026',
@@ -8593,7 +8596,7 @@ pages.facturacion = async function() {
           ${filtered.map(f => `
             <tr class="table-row">
               <td>${fmtDate(f.fecha)}</td>
-              <td><span class="badge badge-blue">${esc(f.tipo)}</span> <span class="font-mono text-xs">${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}</span>${f.origen==='arca_externa'?` <span class="badge badge-yellow text-[10px]" title="Cargada manualmente desde ARCA">📥 ARCA ext.</span>`:''}</td>
+              <td>${f.clase==='nota_credito' ? '<span class="badge badge-yellow">NC</span> ' : f.clase==='nota_debito' ? '<span class="badge badge-red">ND</span> ' : ''}<span class="badge badge-blue">${esc(f.tipo)}</span> <span class="font-mono text-xs">${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}</span>${f.origen==='arca_externa'?` <span class="badge badge-yellow text-[10px]" title="Cargada manualmente desde ARCA">📥 ARCA ext.</span>`:''}</td>
               <td>${esc(f.cliente?.razonSocial||'Consumidor final')}</td>
               <td class="text-right">${fmt$(f.subtotal)}</td>
               <td class="text-right">${fmt$(f.iva)}</td>
@@ -9648,6 +9651,7 @@ pages.compras = async function() {
             <tr class="table-row">
               <td>${fmtDate(f.fecha)}</td>
               <td>
+                ${f.clase==='nota_credito' ? '<span class="badge badge-yellow">NC</span>' : f.clase==='nota_debito' ? '<span class="badge badge-red">ND</span>' : '<span class="badge badge-green">Factura</span>'}
                 <span class="badge badge-blue">${esc(f.tipo)}</span>
                 <span class="font-mono text-xs">${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}</span>
               </td>
