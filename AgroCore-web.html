@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/07/2026',
+      titulo:'✏️ v1.81.0 — Editar y eliminar movimientos desde Movimientos diarios',
+      desc:'Cada fila de <b>Movimientos diarios</b> tiene ahora botones para <b>editar (✏️)</b> y <b>eliminar (🗑️)</b>. Podés corregir fecha, concepto, monto y observaciones, o borrar el movimiento. El sistema rutea al registro correcto según sea de <b>caja (efectivo)</b> o de <b>banco</b>. Si el movimiento fue generado por otra operación (un pago, cheque, cuota o factura), al borrarlo se avisa que solo se elimina el registro de caja/banco — la operación de origen se ajusta aparte.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'10/07/2026',
       titulo:'💱 v1.80.0 — Pago/cobro a cuenta en cualquier moneda',
       desc:'Cuando registrás un pago o cobro <b>a cuenta</b> (sin tildar una factura), ahora podés elegir la <b>moneda</b> (pesos, dólar, euro, granos, Kg Novillo…) igual que cuando hay facturas. Antes quedaba forzado a pesos. El saldo a favor se guarda en esa moneda y después se aplica a facturas de la misma moneda.' },
@@ -18800,6 +18803,58 @@ async function recoDel(id) {
 // Internamente despacha al modelo correcto (Efectivo / BancoMovimiento / Cheque)
 // pero acá el usuario tiene UNA sola ventanilla.
 // ============================================================
+// Editar / eliminar un movimiento diario. Cada fila viene de Efectivo (EF-) o de
+// un movimiento bancario (BM-); ruteamos al endpoint que corresponde.
+function mdEditar(id){
+  const fila = (state._mdFilas||[]).find(f=>f.id===id); if(!fila) return toast('Movimiento no encontrado','error');
+  const raw = fila._raw || {};
+  const fechaStr = raw.fecha ? String(raw.fecha).slice(0,10) : '';
+  openModal({
+    title:'✏️ Editar movimiento', size:'max-w-md',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div class="text-[11px] text-slate-500">${fila._tabla==='efectivo'?('💵 Caja: '+esc(raw.caja||'—')):('🏛️ '+esc(fila.origen))} · ${esc(fila.metodo)}</div>
+      <div><label class="label">Fecha *</label><input id="md-e-fecha" type="date" class="input" value="${fechaStr}"/></div>
+      <div><label class="label">Concepto *</label><input id="md-e-con" class="input" value="${esc(raw.concepto||'')}"/></div>
+      <div><label class="label">Monto *</label><input id="md-e-mon" type="number" step="0.01" class="input" value="${raw.monto!=null?raw.monto:''}"/></div>
+      <div><label class="label">Observaciones</label><input id="md-e-obs" class="input" value="${esc(raw.observaciones||'')}"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="mdEditarGuardar('${esc(id)}')">Guardar</button>`
+  });
+}
+async function mdEditarGuardar(id){
+  const fila = (state._mdFilas||[]).find(f=>f.id===id); if(!fila) return;
+  const raw = fila._raw || {};
+  const fecha = $('#md-e-fecha').value, concepto = $('#md-e-con').value.trim();
+  const monto = Number($('#md-e-mon').value||0), obs = $('#md-e-obs').value.trim() || null;
+  if(!fecha || !concepto || !monto) return toast('Completá fecha, concepto y monto','warn');
+  try {
+    if (fila._tabla === 'efectivo') {
+      await api('/api/efectivo/'+raw.id, { method:'PUT', body: JSON.stringify({
+        fecha, tipo: raw.tipo, concepto, monto,
+        caja: raw.caja || null, cajaDestino: raw.cajaDestino || null,
+        clasificacion: raw.clasificacion || null, observaciones: obs,
+      })});
+    } else {
+      await api('/api/banco-movimientos/'+raw.id, { method:'PUT', body: JSON.stringify({ fecha, concepto, monto, observaciones: obs, syncMirror: true })});
+    }
+    toast('Movimiento actualizado','success'); closeModal(); pages.movDiarios();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function mdEliminar(id){
+  const fila = (state._mdFilas||[]).find(f=>f.id===id); if(!fila) return;
+  const raw = fila._raw || {};
+  const txt = ((fila.concepto||'')+' '+(fila.observaciones||'')).toLowerCase();
+  const auto = raw.cuotaCreditoId || /generado|cuota|pago|cobro|entrega|liquidac|arrendamiento|factura/.test(txt);
+  const msg = auto
+    ? '⚠️ Este movimiento parece generado por otra operación (pago, cheque, cuota, factura, etc.).\n\nSi lo borrás se elimina SOLO el registro de caja/banco, no la operación de origen (esa la tenés que ajustar aparte).\n\n¿Eliminar igual?'
+    : '¿Eliminar este movimiento?';
+  if(!confirm(msg)) return;
+  try {
+    await api((fila._tabla==='efectivo'?'/api/efectivo/':'/api/banco-movimientos/')+raw.id, { method:'DELETE' });
+    toast('Movimiento eliminado','success'); pages.movDiarios();
+  } catch (e) { toast(e.message,'error'); }
+}
 pages.movDiarios = async function() {
   setHeader('Movimientos diarios', 'Cargá cualquier gasto o ingreso del día con cualquier método de pago');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('movDiarios','Movimientos diarios'); return; }
@@ -18847,6 +18902,7 @@ pages.movDiarios = async function() {
       metodo: 'efectivo',
       origen: e.caja || '(sin caja)',
       observaciones: e.observaciones || '',
+      _raw: e, _tabla: 'efectivo',
     });
   }
   for (const m of bancoMovs) {
@@ -18869,9 +18925,11 @@ pages.movDiarios = async function() {
       metodo,
       origen: c ? (c.banco + (c.numero ? ' · '+c.numero : '')) : 'Banco',
       observaciones: m.observaciones || '',
+      _raw: m, _tabla: 'banco',
     });
   }
   filas.sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
+  state._mdFilas = filas;   // para editar/eliminar por fila (routeo por tabla origen)
 
   // KPIs del mes (solo en pesos; no se pueden mezclar $ con US$).
   const mesActual = hoyLocal.slice(0,7);
@@ -18923,6 +18981,7 @@ pages.movDiarios = async function() {
             <th>Método</th>
             <th>Caja / Cuenta</th>
             <th class="text-right">Monto</th>
+            <th></th>
           </tr></thead>
           <tbody>
             ${filtered.map(r => `
@@ -18940,12 +18999,17 @@ pages.movDiarios = async function() {
                     : r.metodo === 'cheque' ? '💳 Cheque' : '—'}</td>
                 <td class="text-xs text-slate-600">${esc(r.origen)}</td>
                 <td class="text-right font-semibold ${r.tipo === 'ingreso' ? 'text-emerald-700' : (r.tipo === 'egreso' ? 'text-red-700' : 'text-slate-500')}">${r.tipo === 'ingreso' ? '+' : (r.tipo === 'egreso' ? '-' : '')}${fmtMon(r.moneda, r.monto)}</td>
+                <td class="text-right whitespace-nowrap">
+                  ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick="mdEditar('${esc(r.id)}')">✏️</button>`:''}
+                  ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick="mdEliminar('${esc(r.id)}')">🗑️</button>`:''}
+                </td>
               </tr>`).join('')}
           </tbody>
           <tfoot>
             <tr class="font-bold bg-slate-50">
               <td colspan="6">Total filtrado (${cant} movimiento${cant===1?'':'s'})</td>
               <td class="text-right whitespace-nowrap">${totalTxt}</td>
+              <td></td>
             </tr>
           </tfoot>
         </table>`;
