@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'11/07/2026',
+      titulo:'🛠️ v1.82.0 — Editar abre la pantalla original + arreglo al pagar a proveedor',
+      desc:'Al <b>editar un movimiento</b> desde <b>Movimientos diarios</b>, ahora se abre la <b>misma pantalla con la que se cargó</b>: si es un gasto o ingreso simple, se abre el formulario completo de gasto/ingreso; si vino de un pago (a proveedor, cheque o cuota) o de banco, se abre la edición rápida del registro de caja/banco. Además se corrigió un error (<i>“metodo is not defined”</i>) que impedía registrar <b>pagos a proveedores</b>.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/07/2026',
       titulo:'✏️ v1.81.0 — Editar y eliminar movimientos desde Movimientos diarios',
       desc:'Cada fila de <b>Movimientos diarios</b> tiene ahora botones para <b>editar (✏️)</b> y <b>eliminar (🗑️)</b>. Podés corregir fecha, concepto, monto y observaciones, o borrar el movimiento. El sistema rutea al registro correcto según sea de <b>caja (efectivo)</b> o de <b>banco</b>. Si el movimiento fue generado por otra operación (un pago, cheque, cuota o factura), al borrarlo se avisa que solo se elimina el registro de caja/banco — la operación de origen se ajusta aparte.' },
@@ -12327,7 +12330,7 @@ function pagoCobroRecalcular() {
   }
 
   // Pago/cobro A CUENTA (sin comprobantes tildados): se puede elegir la moneda libremente.
-  if (monedasSet.size === 0 && metodo !== 'cereal') {
+  if (monedasSet.size === 0 && (document.getElementById('pc-metodo')?.value) !== 'cereal') {
     if (zone.dataset.acuenta !== '1') {
       zone.dataset.acuenta = '1'; zone.dataset.moneda = '';
       zone.innerHTML = `
@@ -18805,7 +18808,38 @@ async function recoDel(id) {
 // ============================================================
 // Editar / eliminar un movimiento diario. Cada fila viene de Efectivo (EF-) o de
 // un movimiento bancario (BM-); ruteamos al endpoint que corresponde.
+// Separa las observaciones estructuradas "Categoría: X · Contraparte: Y · resto".
+function mdParseObs(s){
+  const parts = String(s||'').split(' · ');
+  let categoria='', contraparte='', resto=[];
+  for (const p of parts){
+    if (/^Categoría:\s*/i.test(p)) categoria = p.replace(/^Categoría:\s*/i,'').trim();
+    else if (/^Contraparte:\s*/i.test(p)) contraparte = p.replace(/^Contraparte:\s*/i,'').trim();
+    else if (p.trim()) resto.push(p.trim());
+  }
+  return { categoria, contraparte, obs: resto.join(' · ') };
+}
+// ¿El movimiento salió de un pago/cobro o de otra operación ligada (cheque, cuota)?
+function mdEsPago(fila){
+  const c = (fila.concepto||'').trim(), o = fila.observaciones||'';
+  return /^(pago|cobro)\b/i.test(c) || /pago via|cobro via|a cuenta via|_credito|liquidac/i.test(o)
+      || !!(fila._raw && fila._raw.cuotaCreditoId) || fila.metodo === 'cheque';
+}
+// Botón editar: para un gasto/ingreso simple en efectivo abre el form completo;
+// para pagos/cobros/banco/cheque abre la edición rápida del registro de caja/banco.
 function mdEditar(id){
+  const fila = (state._mdFilas||[]).find(f=>f.id===id); if(!fila) return toast('Movimiento no encontrado','error');
+  const raw = fila._raw || {};
+  if (fila._tabla === 'efectivo' && !mdEsPago(fila)) {
+    const p = mdParseObs(raw.observaciones);
+    return movDiariosAbrir({ id: raw.id, tabla:'efectivo', tipo: raw.tipo || 'egreso',
+      fecha: raw.fecha ? String(raw.fecha).slice(0,10) : '', concepto: raw.concepto || '', monto: raw.monto ?? '',
+      categoria: p.categoria, contraparte: p.contraparte, obs: p.obs,
+      clasificacion: raw.clasificacion || 'empresa', metodo:'efectivo', caja: raw.caja || '' });
+  }
+  return mdEditarRapido(id);
+}
+function mdEditarRapido(id){
   const fila = (state._mdFilas||[]).find(f=>f.id===id); if(!fila) return toast('Movimiento no encontrado','error');
   const raw = fila._raw || {};
   const fechaStr = raw.fecha ? String(raw.fecha).slice(0,10) : '';
@@ -19223,12 +19257,12 @@ function intercoLeerRecurso(prefix) {
   };
 }
 
-function movDiariosAbrir() {
+function movDiariosAbrir(pre=null) {
   // Categorías sugeridas: las del catálogo + las que ya se usaron
   const catCats = (state.cache.catalogos || []).filter(c => c.tipo === 'Categoría de gasto' && c.activo !== false).map(c => c.nombre);
   const sugeridas = [...new Set(['Combustible','Comida','Taller','Repuestos','Sueldos','Servicios','Impuestos','Honorarios','Insumos','Otros', ...catCats])].sort();
   openModal({
-    title:'+ Nuevo movimiento diario', size:'max-w-2xl',
+    title: pre ? '✏️ Editar movimiento diario' : '+ Nuevo movimiento diario', size:'max-w-2xl',
     body:`
       <div class="grid grid-cols-2 gap-3">
         <div>
@@ -19290,9 +19324,22 @@ function movDiariosAbrir() {
         </div>
       </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick="movDiariosGuardar()">💾 Registrar</button>`
+            <button class="btn btn-primary" onclick="movDiariosGuardar()">${pre?'💾 Guardar cambios':'💾 Registrar'}</button>`
   });
-  setTimeout(() => movDiariosMetodoCambio(), 0);
+  state._mdEditRec = pre || null;
+  setTimeout(() => {
+    movDiariosMetodoCambio();
+    if (pre) {
+      // Modo edición: prellenar y bloquear el método (no se cambia efectivo↔banco).
+      const set=(sel,val)=>{ const el=$(sel); if(el) el.value=val; };
+      set('#md-fecha', pre.fecha||''); set('#md-concepto', pre.concepto||''); set('#md-monto', pre.monto??'');
+      set('#md-cat', pre.categoria||''); set('#md-clasif-sel', pre.clasificacion||'empresa');
+      set('#md-contrap', pre.contraparte||''); set('#md-obs', pre.obs||'');
+      const rTipo = document.querySelector(`input[name="md-tipo"][value="${pre.tipo||'egreso'}"]`); if(rTipo) rTipo.checked = true;
+      const met=$('#md-met'); if(met){ met.value = pre.metodo||'efectivo'; met.disabled = true; movDiariosMetodoCambio(); }
+      if ((pre.metodo||'efectivo')==='efectivo'){ setTimeout(()=>{ const cj=$('#md-caja'); if(cj) cj.value = pre.caja||''; }, 0); }
+    }
+  }, 0);
 }
 function movDiariosMetodoCambio() {
   const met = document.getElementById('md-met').value;
@@ -19382,6 +19429,20 @@ async function movDiariosGuardar() {
     body.cajaOrigen = ic.caja;
     body.chequeIdOrigen = ic.cheque;
     body.bancoCuentaIdOrigen = ic.cuenta;
+  }
+  // Modo edición (gasto/ingreso simple en efectivo): actualiza el registro directo.
+  if (state._mdEditRec) {
+    const rec = state._mdEditRec;
+    const obsFull = [categoria?('Categoría: '+categoria):null, contraparte?('Contraparte: '+contraparte):null, observaciones].filter(Boolean).join(' · ') || null;
+    try {
+      await api('/api/efectivo/'+rec.id, { method:'PUT', body: JSON.stringify({
+        fecha: new Date(fecha).toISOString(), tipo, concepto, monto,
+        caja: (body.caja || rec.caja || null), clasificacion, observaciones: obsFull,
+      })});
+      toast('✅ Movimiento actualizado', 'success');
+      state._mdEditRec = null; closeModal(); pages.movDiarios();
+    } catch (e) { toast(e.message || 'Error al guardar', 'error'); }
+    return;
   }
   try {
     await api('/api/movimientos-diarios', { method:'POST', body: JSON.stringify(body) });
