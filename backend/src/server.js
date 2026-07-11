@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.86.0';
+const AGROCORE_VERSION = '1.87.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3080,7 +3080,7 @@ app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas
       return res.status(400).json({ ok: false, error: 'tipo debe ser cliente o proveedor' });
     }
     const contactoId = req.query.contactoId || undefined;
-    const items = await prisma.ctaCte.findMany({
+    const itemsRaw = await prisma.ctaCte.findMany({
       where: {
         companyId: req.companyId,
         contactoTipo: tipo,
@@ -3090,6 +3090,10 @@ app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas
       },
       orderBy: { fecha: 'asc' },
     });
+    // Excluir los contra-asientos de un pago/cobro (detalle "Pago de…"/"Cobro de…").
+    // Son la contrapartida de un pago, no un comprobante a pagar ni un crédito a favor.
+    // (Los nuevos ya se guardan como pagado:true; esto cubre los viejos.)
+    const items = itemsRaw.filter(x => !/^(pago|cobro) de /i.test(x.detalle || ''));
     // Saldo a favor = créditos todavía no aplicados a una factura: pagos/cobros
     // "a cuenta" (referencia null) Y notas de crédito (referencia 'FACC'/'FAC-…').
     // Todos son asientos de haber puro (debe=0, haber>0). Una factura parcialmente
@@ -6750,6 +6754,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       let deudaArs = 0;        // valor contable (ARS) de la deuda que se está saldando
       let deudaArsConocida = true;
       let monedaDeuda = null;
+      let credRestante = sumaCreditos;   // notas de crédito a repartir entre las facturas (FIFO)
       for (const c of d.comprobantes) {
         const cc = await tx.ctaCte.findFirst({ where: { id: c.ctaCteId, companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId } });
         if (!cc) throw new Error('Comprobante no encontrado: ' + c.ctaCteId);
@@ -6760,36 +6765,53 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         monedaDeuda = cc.moneda || 'ARS';
         const cotDeuda = (cc.moneda && cc.moneda !== 'ARS') ? (cc.cotizacion ?? null) : 1;
         if (cotDeuda == null) deudaArsConocida = false; else deudaArs += c.importeAplicado * cotDeuda;
-        // Marcar como pagado si se cancela todo el saldo del comprobante.
+        // Parte de este comprobante cubierta por notas de crédito vs. por plata.
+        const credAplic = Math.min(credRestante, c.importeAplicado);
+        credRestante = Math.round((credRestante - credAplic) * 100) / 100;
+        const cashPortion = Math.round((c.importeAplicado - credAplic) * 100) / 100;
+        // Marcar como pagado si se cancela todo el saldo del comprobante (plata + NC).
         if (Math.abs(c.importeAplicado - saldoPendiente) < 0.01) {
           await tx.ctaCte.update({ where: { id: cc.id }, data: { pagado: true } });
         }
-        // Contra-asiento: haber = importeAplicado (reduce debe-haber), en la moneda de la deuda.
-        await tx.ctaCte.create({ data: {
-          companyId: req.companyId,
-          contactoTipo: 'proveedor', contactoId: d.proveedorId,
-          fecha: d.fecha,
-          detalle: 'Pago de ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
-          moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
-          haber: c.importeAplicado,
-          referencia: cc.referencia,
-          observaciones: 'Pago via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
-        }});
+        // Contra-asiento del PAGO (parte en plata). Fila aparte y SALDADA (pagado:true)
+        // para que no reaparezca como pendiente ni como saldo a favor. El comprobante
+        // original conserva su importe total. Si las NC cubren todo, no hay fila de pago.
+        if (cashPortion > 0.01) {
+          await tx.ctaCte.create({ data: {
+            companyId: req.companyId,
+            contactoTipo: 'proveedor', contactoId: d.proveedorId,
+            fecha: d.fecha,
+            detalle: 'Pago de ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
+            moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
+            haber: cashPortion,
+            referencia: cc.referencia, pagado: true,
+            observaciones: 'Pago via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
+          }});
+        }
       }
-      // Aplicar NOTAS DE CRÉDITO / créditos a cuenta tildados: consumen su haber
-      // (que ya reducía el saldo) para financiar parte de los comprobantes. Así el
-      // efectivo/banco sólo cubre el neto (comprobantes − notas de crédito).
+      // Aplicar NOTAS DE CRÉDITO / créditos a cuenta tildados. NO se toca su importe:
+      // el haber original queda visible en la cuenta. Se marca SALDADA (pagado) cuando
+      // se consume del todo; si es parcial, se reduce el haber para dejar el remanente.
       for (const cr of d.creditos) {
         const cc = await tx.ctaCte.findFirst({ where: { id: cr.ctaCteId, companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId } });
         if (!cc) throw new Error('Nota de crédito no encontrada: ' + cr.ctaCteId);
         const disponible = Number(cc.haber || 0) - Number(cc.debe || 0); // haber puro
         if (disponible <= 0.01) throw new Error('El comprobante tildado como crédito no tiene saldo a favor');
         if (cr.importeAplicado > disponible + 0.01) throw new Error('Importe de la nota de crédito (' + cr.importeAplicado + ') excede su saldo (' + disponible.toFixed(2) + ')');
-        const nuevoHaber = Math.round((Number(cc.haber || 0) - cr.importeAplicado) * 100) / 100;
-        await tx.ctaCte.update({ where: { id: cc.id }, data: {
-          haber: nuevoHaber, pagado: (nuevoHaber - Number(cc.debe || 0)) <= 0.01,
-          observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada a comprobantes el ' + new Date(d.fecha).toISOString().slice(0,10),
-        }});
+        const restante = Math.round((disponible - cr.importeAplicado) * 100) / 100;
+        if (restante <= 0.01) {
+          // Consumo total: dejamos el importe original y la marcamos saldada.
+          await tx.ctaCte.update({ where: { id: cc.id }, data: {
+            pagado: true,
+            observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada a comprobantes el ' + new Date(d.fecha).toISOString().slice(0,10),
+          }});
+        } else {
+          // Consumo parcial: reducimos el haber para que el remanente siga disponible.
+          await tx.ctaCte.update({ where: { id: cc.id }, data: {
+            haber: Math.round((Number(cc.haber || 0) - cr.importeAplicado) * 100) / 100,
+            observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada parcialmente el ' + new Date(d.fecha).toISOString().slice(0,10),
+          }});
+        }
       }
       // Pago "a cuenta" (sin comprobantes): haber suelto en la cta cte del proveedor.
       // Reduce el saldo y, si excede la deuda, deja saldo a favor.
@@ -6987,6 +7009,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
 
     const result = await prisma.$transaction(async (tx) => {
       let deudaArs = 0, deudaArsConocida = true, monedaDeuda = null;
+      let credRestante = sumaCreditos;   // notas de crédito a repartir entre las facturas (FIFO)
       for (const c of d.comprobantes) {
         const cc = await tx.ctaCte.findFirst({ where: { id: c.ctaCteId, companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId } });
         if (!cc) throw new Error('Comprobante no encontrado');
@@ -6995,33 +7018,46 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         monedaDeuda = cc.moneda || 'ARS';
         const cotDeuda = (cc.moneda && cc.moneda !== 'ARS') ? (cc.cotizacion ?? null) : 1;
         if (cotDeuda == null) deudaArsConocida = false; else deudaArs += c.importeAplicado * cotDeuda;
+        const credAplic = Math.min(credRestante, c.importeAplicado);
+        credRestante = Math.round((credRestante - credAplic) * 100) / 100;
+        const cashPortion = Math.round((c.importeAplicado - credAplic) * 100) / 100;
         if (Math.abs(c.importeAplicado - saldoPendiente) < 0.01) {
           await tx.ctaCte.update({ where: { id: cc.id }, data: { pagado: true } });
         }
-        await tx.ctaCte.create({ data: {
-          companyId: req.companyId,
-          contactoTipo: 'cliente', contactoId: d.clienteId,
-          fecha: d.fecha,
-          detalle: 'Cobro de ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
-          moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
-          haber: c.importeAplicado,
-          referencia: cc.referencia,
-          observaciones: 'Cobro via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
-        }});
+        // Contra-asiento del cobro (parte en plata). Fila aparte y SALDADA; el
+        // comprobante original conserva su importe total. Si las NC cubren todo, no hay fila.
+        if (cashPortion > 0.01) {
+          await tx.ctaCte.create({ data: {
+            companyId: req.companyId,
+            contactoTipo: 'cliente', contactoId: d.clienteId,
+            fecha: d.fecha,
+            detalle: 'Cobro de ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
+            moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
+            haber: cashPortion,
+            referencia: cc.referencia, pagado: true,
+            observaciones: 'Cobro via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
+          }});
+        }
       }
-      // Aplicar NOTAS DE CRÉDITO / créditos a cuenta tildados: consumen su haber
-      // para financiar parte de los comprobantes, así el recurso sólo cubre el neto.
+      // Aplicar NOTAS DE CRÉDITO / créditos a cuenta tildados (no se toca su importe).
       for (const cr of d.creditos) {
         const cc = await tx.ctaCte.findFirst({ where: { id: cr.ctaCteId, companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId } });
         if (!cc) throw new Error('Nota de crédito no encontrada: ' + cr.ctaCteId);
         const disponible = Number(cc.haber || 0) - Number(cc.debe || 0);
         if (disponible <= 0.01) throw new Error('El comprobante tildado como crédito no tiene saldo a favor');
         if (cr.importeAplicado > disponible + 0.01) throw new Error('Importe de la nota de crédito excede su saldo');
-        const nuevoHaber = Math.round((Number(cc.haber || 0) - cr.importeAplicado) * 100) / 100;
-        await tx.ctaCte.update({ where: { id: cc.id }, data: {
-          haber: nuevoHaber, pagado: (nuevoHaber - Number(cc.debe || 0)) <= 0.01,
-          observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada a comprobantes el ' + new Date(d.fecha).toISOString().slice(0,10),
-        }});
+        const restante = Math.round((disponible - cr.importeAplicado) * 100) / 100;
+        if (restante <= 0.01) {
+          await tx.ctaCte.update({ where: { id: cc.id }, data: {
+            pagado: true,
+            observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada a comprobantes el ' + new Date(d.fecha).toISOString().slice(0,10),
+          }});
+        } else {
+          await tx.ctaCte.update({ where: { id: cc.id }, data: {
+            haber: Math.round((Number(cc.haber || 0) - cr.importeAplicado) * 100) / 100,
+            observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada parcialmente el ' + new Date(d.fecha).toISOString().slice(0,10),
+          }});
+        }
       }
       // Cobro "a cuenta" (sin comprobantes): haber suelto en la cta cte del cliente.
       if (d.comprobantes.length === 0 && d.monto > 0.01) {

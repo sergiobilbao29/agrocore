@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'11/07/2026',
+      titulo:'📒 v1.87.0 — Cuenta corriente: cada comprobante con su importe total',
+      desc:'En el detalle de la cuenta corriente de un proveedor/cliente, cada <b>factura y nota de crédito</b> ahora conserva su <b>importe total</b> en su propia fila, y los <b>pagos/cobros aparecen como movimientos aparte</b> (ya no se “mezclan” dentro de la factura restando lo pagado). Además se corrigió que los contra-asientos de un pago aparecieran por error como “saldo a favor” al volver a pagar. <i>Nota: los movimientos que ya estaban cargados mezclados se mantienen como estaban; los nuevos salen prolijos.</i>' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'11/07/2026',
       titulo:'🏷️ v1.86.0 — Compras y Ventas muestran si es Factura, NC o ND',
       desc:'En los listados de <b>Compras</b> y <b>Facturación (ventas)</b>, cada comprobante ahora indica con una etiqueta si es <b>Factura</b>, <b>NC</b> (nota de crédito) o <b>ND</b> (nota de débito), al lado de la letra (A/B/C) y el número. Antes todos se veían igual.' },
