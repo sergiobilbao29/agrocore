@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.83.0';
+const AGROCORE_VERSION = '1.84.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3090,10 +3090,12 @@ app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas
       },
       orderBy: { fecha: 'asc' },
     });
-    // Saldo a favor = pagos/cobros "a cuenta" todavía no aplicados a una factura.
-    // Son asientos de haber sueltos (sin referencia a comprobante, debe=0).
+    // Saldo a favor = créditos todavía no aplicados a una factura: pagos/cobros
+    // "a cuenta" (referencia null) Y notas de crédito (referencia 'FACC'/'FAC-…').
+    // Todos son asientos de haber puro (debe=0, haber>0). Una factura parcialmente
+    // pagada tiene debe>0, así que no se cuenta acá.
     const saldoAFavor = items
-      .filter(x => !x.referencia && Number(x.debe || 0) === 0 && Number(x.haber || 0) > 0)
+      .filter(x => Number(x.debe || 0) === 0 && Number(x.haber || 0) > 0)
       .reduce((a, x) => a + Number(x.haber || 0), 0);
     res.json({ ok: true, data: items, saldoAFavor });
   } catch (e) { next(e); }
@@ -3118,9 +3120,11 @@ app.post('/api/ctas-ctes/aplicar-credito', requireCompany, requirePermission('fi
         if (saldoInv <= 0.01) continue; // ya saldado
         const aAplicar = Math.min(ap.importe, saldoInv);
         const monedaInv = inv.moneda || 'ARS';
-        // Créditos a cuenta disponibles en la MISMA moneda, más viejos primero.
+        // Créditos disponibles en la MISMA moneda, más viejos primero. Incluye
+        // pagos/cobros a cuenta (referencia null) Y notas de crédito (haber puro,
+        // debe=0). No incluye facturas parciales (esas tienen debe>0).
         const creditos = await tx.ctaCte.findMany({
-          where: { companyId: req.companyId, contactoTipo: d.contactoTipo, contactoId: d.contactoId, pagado: false, referencia: null, debe: 0, haber: { gt: 0 }, moneda: monedaInv },
+          where: { companyId: req.companyId, contactoTipo: d.contactoTipo, contactoId: d.contactoId, pagado: false, debe: 0, haber: { gt: 0 }, moneda: monedaInv },
           orderBy: { fecha: 'asc' },
         });
         const disponible = creditos.reduce((a, c) => a + Number(c.haber || 0), 0);

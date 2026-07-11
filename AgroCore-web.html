@@ -2371,6 +2371,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'11/07/2026',
+      titulo:'🧾 v1.84.0 — Las notas de crédito ahora se descuentan al pagar/cobrar',
+      desc:'Cuando un proveedor o cliente tiene una <b>nota de crédito</b> cargada, ahora aparece como <b>Saldo a favor</b> en la pantalla de pago/cobro y se puede <b>aplicar a las facturas tildadas</b> con un clic (antes la NC bajaba el saldo en la cuenta corriente pero no se descontaba al pagar). Funciona igual que los pagos/cobros a cuenta: no mueve plata nueva, sólo cancela la deuda contra el crédito disponible, respetando la moneda.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'11/07/2026',
       titulo:'🛠️ v1.83.0 — Pagar a proveedor sin pasar por Compras + editar gasto simple (efectivo y banco)',
       desc:'Dos arreglos en <b>Movimientos diarios</b>: (1) el botón <b>“Pagar a proveedor”</b> ya no tira <i>“No hay proveedores cargados”</i> cuando entrás directo a la pantalla — ahora carga los proveedores/clientes al momento. (2) Al <b>editar</b> un gasto/ingreso simple ahora se abre el <b>formulario completo</b> también cuando se pagó por <b>transferencia o débito</b> (antes solo con efectivo). Los pagos a proveedor, cuotas de crédito, arrendamientos y entregas de cereal siguen abriendo la edición rápida del registro de caja/banco.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'11/07/2026',
@@ -12247,7 +12250,7 @@ async function pagoCobroCargarComprobantes(modo) {
     // Banner de saldo a favor: pagos/cobros "a cuenta" previos sin aplicar a una factura.
     const _saf = Number(r.saldoAFavor || 0);
     const _bannerSaf = _saf > 0.01 ? `<div class="bg-emerald-50 border border-emerald-300 rounded p-2 mb-2 text-xs flex items-center justify-between gap-2 flex-wrap">
-        <span>💰 <b>Saldo a favor:</b> ${fmt$(_saf)} de ${esPago?'pagos':'cobros'} a cuenta previos. Tildá las facturas y aplicalo (no mueve plata nueva).</span>
+        <span>💰 <b>Saldo a favor:</b> ${fmt$(_saf)} (notas de crédito y ${esPago?'pagos':'cobros'} a cuenta previos). Tildá las facturas y aplicalo (no mueve plata nueva).</span>
         <button type="button" class="btn btn-secondary text-xs whitespace-nowrap" onclick="pagoCobroAplicarCredito('${modo}')">🔗 Aplicar a lo tildado</button>
       </div>` : '';
     if (!items.length) {
