@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/07/2026',
+      titulo:'🏭 v1.94.0 — Cerealera destino correcta + Activar/desactivar depósitos',
+      desc:'Dos correcciones. <b>(1)</b> En el viaje, cuando el destino es <b>“A cerealera”</b>, el selector ahora muestra <b>sólo las cerealeras</b> (antes listaba también los depósitos de campo). Si elegís destino “Otro”, muestra sólo tus depósitos propios. <b>(2)</b> En la edición de un <b>depósito/cerealera</b> se agregó la casilla <b>✅ Activo</b>: al borrar un depósito con movimientos queda inactivo (no se pierde el histórico), y ahora podés <b>volver a activarlo</b> desde ahí. Los depósitos inactivos no aparecen en los selectores.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'21/07/2026',
       titulo:'🌾 v1.93.0 — Viajes: el cereal puede salir de un depósito (silo/silobolsa)',
       desc:'En el viaje ahora elegís el <b>Origen del cereal</b>: <b>de una campaña</b> (trilla, como hasta ahora, para el rinde real) <b>o de un depósito</b> (silo/silobolsa donde venías acumulando el grano). Son <b>excluyentes</b>: si sale de una campaña no sale de un depósito y viceversa. Cuando el origen es un depósito, el viaje <b>descuenta el cereal del stock de ese depósito</b> y, según el destino, lo <b>ingresa en otro depósito o cerealera</b>, o lo saca por <b>venta directa</b> vinculando la <b>liquidación</b> (que ya queda pre-cargada con el depósito de origen). Así podés cargar primero el ingreso al silo y después mover ese stock acumulado con los viajes, sin depender de una campaña.' },
@@ -13831,10 +13834,7 @@ async function viajeForm(id=null) {
       const deps = (r.data||[]).filter(x => x.activo);
       state.cache.depositos = r.data || [];
       const sel = $('#f-ddep');
-      if (sel) {
-        sel.innerHTML = `<option value="">— Elegí el depósito —</option>` +
-          deps.map(d => `<option value="${d.id}" ${it.depositoDestinoId===d.id?'selected':''}>${d.tipo==='cerealera'?'🏭':'📦'} ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
-      }
+      if (sel) { sel.dataset.sel = it.depositoDestinoId || ''; viajeDDepRebuild(); }
       // Depósitos de ORIGEN (silos/silobolsas/campo, no cerealeras).
       const selO = $('#f-origdep');
       if (selO) {
@@ -13911,6 +13911,19 @@ function viajeOrigTipo() {
   if (t !== 'campana') { const s=$('#f-campana'); if (s) s.value=''; }
   if (t !== 'deposito') { const s=$('#f-origdep'); if (s) s.value=''; }
 }
+// Rebuild del select de depósito destino según el tipo: cerealera → sólo cerealeras,
+// otro → sólo depósitos propios (campo/otro). Respeta la selección previa (data-sel).
+function viajeDDepRebuild() {
+  const sel = document.getElementById('f-ddep'); if (!sel) return;
+  const tipo = document.getElementById('f-dtipo')?.value;
+  const want = sel.dataset.sel || '';
+  const deps = (state.cache.depositos||[]).filter(x => x.activo);
+  const list = tipo === 'cerealera' ? deps.filter(d => d.tipo === 'cerealera')
+                                     : deps.filter(d => d.tipo !== 'cerealera');
+  sel.innerHTML = `<option value="">— Elegí ${tipo==='cerealera'?'la cerealera':'el depósito'} —</option>` +
+    list.map(d => `<option value="${d.id}" ${want===d.id?'selected':''}>${d.tipo==='cerealera'?'🏭':'📦'} ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
+  if (!list.length) sel.insertAdjacentHTML('beforeend', `<option value="" disabled>${tipo==='cerealera'?'No hay cerealeras ACTIVAS — cargalas/activalas en Cerealeras y depósitos':'No hay depósitos propios activos'}</option>`);
+}
 function viajeDestTipo() {
   const t = $('#f-dtipo').value;
   const wrap = $('#f-ddep-wrap');
@@ -13919,6 +13932,7 @@ function viajeDestTipo() {
   const mostrarDep = (t === 'cerealera' || t === 'otro');
   if (wrap) wrap.style.display = mostrarDep ? '' : 'none';
   if (lbl) lbl.textContent = t === 'cerealera' ? 'Cerealera destino' : 'Depósito destino';
+  viajeDDepRebuild();
   if (hint) {
     if (t === 'cerealera') hint.textContent = '💡 Al descargar, los kg entran al stock de la cerealera elegida.';
     else if (t === 'otro') hint.textContent = '💡 Al descargar, los kg entran al stock del depósito propio elegido.';
@@ -20226,6 +20240,10 @@ async function depoForm(id) {
         <div><label class="label">Costo secada $/tn</label><input id="dp-sec" type="number" step="0.01" class="input" value="${d.costoSecadaTn||''}"/></div>
       </div>
       <div><label class="label">Observaciones</label><textarea id="dp-obs" class="input" rows="2">${esc(d.observaciones||'')}</textarea></div>
+      <div class="mt-3 p-3 bg-emerald-50 rounded-lg border border-emerald-200 flex items-center gap-2">
+        <input id="dp-activo" type="checkbox" ${d.activo!==false?'checked':''}/>
+        <label for="dp-activo" class="text-sm cursor-pointer"><span class="font-semibold">✅ Activo</span> <span class="text-[11px] text-slate-500">— si lo desmarcás, el depósito/cerealera no aparece en los selectores (viajes, entregas, movimientos), pero conserva su histórico.</span></label>
+      </div>
       <div class="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-start gap-2">
         <input id="dp-comp" type="checkbox" class="mt-1" ${d.compartido?'checked':''}/>
         <label for="dp-comp" class="text-sm cursor-pointer">
@@ -20252,6 +20270,7 @@ async function depoSave(id) {
     costoSecadaTn:   $('#dp-sec').value === '' ? null : Number($('#dp-sec').value),
     observaciones: $('#dp-obs').value.trim()||null,
     compartido: $('#dp-comp')?.checked || false,
+    activo: $('#dp-activo') ? $('#dp-activo').checked : true,
   };
   if (!data.nombre) return toast('Falta el nombre','warn');
   try {
