@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.87.0';
+const AGROCORE_VERSION = '1.88.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3534,6 +3534,113 @@ function deriveEstadoViaje(d, prev) {
   return 'pendiente';
 }
 
+// ============================================================
+// ALTA AUTOMÁTICA de catálogos de logística al guardar un viaje.
+// Si el transportista / chofer / camión / acoplado escritos en el viaje no
+// existen todavía en su catálogo, se crean solos y se devuelven sus IDs para
+// vincularlos al viaje. Además, cada transportista se da de alta también como
+// PROVEEDOR (rubro Transporte) para poder cargarle luego una factura de flete.
+// Es idempotente: si ya existen, sólo completa datos faltantes (CUIT).
+// Devuelve SOLO las claves que resolvió (no pisa vínculos con null).
+// ============================================================
+async function _asegurarProveedorTransportista(companyId, tr, counts) {
+  const nombre = (tr.nombre || '').trim();
+  if (!nombre) return null;
+  const cuit = (tr.cuit || '').replace(/[-.\s]/g, '');
+  let prov = null;
+  if (cuit) {
+    const provs = await prisma.proveedor.findMany({ where: { companyId }, select: { id: true, cuit: true, razonSocial: true } });
+    prov = provs.find(p => (p.cuit || '').replace(/[-.\s]/g, '') === cuit) || null;
+  }
+  if (!prov) prov = await prisma.proveedor.findFirst({ where: { companyId, razonSocial: { equals: nombre, mode: 'insensitive' } } });
+  if (!prov) {
+    prov = await prisma.proveedor.create({ data: {
+      companyId, razonSocial: nombre, cuit: tr.cuit || null,
+      telefono: tr.telefono || null, email: tr.email || null, direccion: tr.direccion || null,
+      rubro: 'Transporte', observaciones: 'Alta automática desde transportista (flete)',
+    }});
+    if (counts) counts.proveedores++;
+  }
+  return prov;
+}
+
+async function _autoAltaLogisticaViaje(companyId, d, counts) {
+  const out = {};
+  const norm = (s) => (s == null ? '' : String(s)).trim();
+  const up   = (s) => norm(s).toUpperCase();
+
+  // --- Transportista (por nombre) ---
+  let transportistaId = d.transportistaId || null;
+  const trNombre = norm(d.transportista);
+  let trRow = null;
+  if (!transportistaId && trNombre) {
+    trRow = await prisma.transportista.findFirst({ where: { companyId, nombre: { equals: trNombre, mode: 'insensitive' } } });
+    if (!trRow) {
+      trRow = await prisma.transportista.create({ data: { companyId, nombre: trNombre, cuit: norm(d.transporteCuit) || null } });
+      if (counts) counts.transportistas++;
+    } else if (norm(d.transporteCuit) && !trRow.cuit) {
+      trRow = await prisma.transportista.update({ where: { id: trRow.id }, data: { cuit: norm(d.transporteCuit) } });
+    }
+    transportistaId = trRow.id;
+  } else if (transportistaId) {
+    trRow = await prisma.transportista.findFirst({ where: { id: transportistaId, companyId } });
+  }
+  if (transportistaId) out.transportistaId = transportistaId;
+  // Proveedor espejo del transportista (para facturar el flete)
+  if (trRow) { try { await _asegurarProveedorTransportista(companyId, trRow, counts); } catch (_) {} }
+
+  // --- Camión (por patente del chasis) ---
+  let camionId = d.camionId || null;
+  const pat = up(d.patente);
+  if (!camionId && pat) {
+    let cam = await prisma.camion.findFirst({ where: { companyId, patente: { equals: pat, mode: 'insensitive' } } });
+    if (!cam) {
+      cam = await prisma.camion.create({ data: {
+        companyId, patente: pat,
+        patenteAcoplado: up(d.patenteAcoplado) || null,
+        tipo: norm(d.tipoCamion) || null,
+        transportistaId: transportistaId || null,
+      }});
+      if (counts) counts.camiones++;
+    }
+    camionId = cam.id;
+  }
+  if (camionId) out.camionId = camionId;
+
+  // --- Acoplado (por patente del acoplado) ---
+  let acopladoId = d.acopladoId || null;
+  const pata = up(d.patenteAcoplado);
+  if (!acopladoId && pata) {
+    let ac = await prisma.acoplado.findFirst({ where: { companyId, patente: { equals: pata, mode: 'insensitive' } } });
+    if (!ac) {
+      ac = await prisma.acoplado.create({ data: { companyId, patente: pata, transportistaId: transportistaId || null } });
+      if (counts) counts.acoplados++;
+    }
+    acopladoId = ac.id;
+  }
+  if (acopladoId) out.acopladoId = acopladoId;
+
+  // --- Chofer (por nombre) ---
+  let choferId = d.choferId || null;
+  const chNombre = norm(d.chofer);
+  if (!choferId && chNombre) {
+    let ch = await prisma.chofer.findFirst({ where: { companyId, nombre: { equals: chNombre, mode: 'insensitive' } } });
+    if (!ch) {
+      ch = await prisma.chofer.create({ data: {
+        companyId, nombre: chNombre, cuit: norm(d.choferCuit) || null,
+        transportistaId: transportistaId || null, camionId: camionId || null, acopladoId: acopladoId || null,
+      }});
+      if (counts) counts.choferes++;
+    } else if (norm(d.choferCuit) && !ch.cuit) {
+      ch = await prisma.chofer.update({ where: { id: ch.id }, data: { cuit: norm(d.choferCuit) } });
+    }
+    choferId = ch.id;
+  }
+  if (choferId) out.choferId = choferId;
+
+  return out;
+}
+
 app.get('/api/viajes', requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
   try {
     const where = { companyId: req.companyId };
@@ -3607,8 +3714,11 @@ app.post('/api/viajes', requireCompany, requirePermission('logistica:create'), a
       if (!f) return res.status(400).json({ ok: false, error: 'Factura de compra no válida' });
     }
     const estado = deriveEstadoViaje(d, null);
+    // Alta automática de transportista/chofer/camión/acoplado (+ proveedor) y vínculo por ID.
+    let autoIds = {};
+    try { autoIds = await _autoAltaLogisticaViaje(req.companyId, d); } catch (_) {}
     const row = await prisma.viaje.create({
-      data: { ...d, companyId: req.companyId, estado },
+      data: { ...d, ...autoIds, companyId: req.companyId, estado },
       include: { facturaCompra: { include: { proveedor: true } } },
     });
     await _sincronizarStockViaje(req.companyId, row);
@@ -3627,9 +3737,12 @@ app.put('/api/viajes/:id', requireCompany, requirePermission('logistica:update')
     }
     const merged = { ...existing, ...d };
     const estado = d.estado ?? deriveEstadoViaje(merged, existing);
+    // Alta automática de catálogos + vínculo por ID (usa los datos combinados).
+    let autoIds = {};
+    try { autoIds = await _autoAltaLogisticaViaje(req.companyId, merged); } catch (_) {}
     const row = await prisma.viaje.update({
       where: { id: req.params.id },
-      data: { ...d, estado },
+      data: { ...d, ...autoIds, estado },
       include: { facturaCompra: { include: { proveedor: true } } },
     });
     await _sincronizarStockViaje(req.companyId, row);
@@ -6699,6 +6812,18 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       fecha: z.coerce.date(),
       cajaOrigen: z.string().nullable().optional(),
       chequeId: z.string().nullable().optional(),
+      // Cheque PROPIO nuevo cargado en la misma pantalla del pago (sin darlo de
+      // alta antes en Tesorería). Se crea y se entrega al proveedor en un paso.
+      nuevoCheque: z.object({
+        formato: z.enum(['fisico', 'electronico']).optional().default('fisico'),
+        banco: z.string().nullable().optional(),
+        cuenta: z.string().nullable().optional(),
+        nroCheque: z.string().min(1),
+        fechaEmision: z.coerce.date().nullable().optional(),
+        fechaPago: z.coerce.date(),
+        monto: z.number().nullable().optional(),
+        librador: z.string().nullable().optional(),
+      }).nullable().optional(),
       bancoCuentaId: z.string().nullable().optional(),
       empresaOrigenId: z.string().nullable().optional(),
       // Intercompany: cómo pone los fondos la firma origen (mueve SU recurso).
@@ -6852,18 +6977,38 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       // neto es 0 (las notas de crédito cubren todo) es una simple vinculación.
       if (d.monto > 0.01) {
       if (d.metodo === 'cheque') {
-        if (!d.chequeId) throw new Error('Falta chequeId para pago con cheque');
-        const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
-        if (!ch) throw new Error('Cheque no encontrado');
-        // Propio: se ENTREGA al proveedor. Tercero: se ENDOSA. En ambos casos sale de cartera
-        // y se registran beneficiario, fecha de salida y en poder de quién queda (el proveedor).
-        await tx.cheque.update({ where: { id: ch.id }, data: {
-          estado: ch.tipo === 'propio' ? 'entregado' : 'endosado',
-          beneficiario: prov.razonSocial || ch.beneficiario,
-          fechaEndoso: d.fecha,
-          enPoderDe: prov.razonSocial || ch.enPoderDe,
-          observaciones: d.observaciones || ch.observaciones,
-        }});
+        if (!d.chequeId && !d.nuevoCheque) throw new Error('Falta el cheque para pago con cheque');
+        if (d.nuevoCheque) {
+          // Cheque PROPIO nuevo: se crea y se entrega al proveedor en un solo paso.
+          const nc = d.nuevoCheque;
+          await tx.cheque.create({ data: {
+            companyId: req.companyId,
+            tipo: 'propio', formato: nc.formato || 'fisico',
+            banco: nc.banco || null, cuenta: nc.cuenta || null,
+            nroCheque: nc.nroCheque,
+            fechaEmision: nc.fechaEmision || d.fecha,
+            fechaPago: nc.fechaPago,
+            monto: (nc.monto != null ? nc.monto : d.monto),
+            beneficiario: prov.razonSocial,
+            librador: nc.librador || null,
+            fechaEndoso: d.fecha,
+            enPoderDe: prov.razonSocial,
+            estado: 'entregado',
+            observaciones: d.observaciones || ('Cheque propio entregado a ' + prov.razonSocial),
+          }});
+        } else {
+          const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
+          if (!ch) throw new Error('Cheque no encontrado');
+          // Propio: se ENTREGA al proveedor. Tercero: se ENDOSA. En ambos casos sale de cartera
+          // y se registran beneficiario, fecha de salida y en poder de quién queda (el proveedor).
+          await tx.cheque.update({ where: { id: ch.id }, data: {
+            estado: ch.tipo === 'propio' ? 'entregado' : 'endosado',
+            beneficiario: prov.razonSocial || ch.beneficiario,
+            fechaEndoso: d.fecha,
+            enPoderDe: prov.razonSocial || ch.enPoderDe,
+            observaciones: d.observaciones || ch.observaciones,
+          }});
+        }
       } else if (d.metodo === 'transferencia') {
         if (!d.bancoCuentaId) throw new Error('Falta bancoCuentaId para transferencia');
         await tx.bancoMovimiento.create({ data: {
@@ -10259,6 +10404,38 @@ app.delete('/api/choferes/:id', requireCompany, requirePermission('logistica:del
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.chofer.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// === Importar catálogos desde los viajes ya cargados ===
+// Recorre los viajes históricos de la empresa y da de alta los transportistas,
+// choferes, camiones y acoplados (+ proveedores de flete) que todavía no estén
+// en el catálogo. También deja el viaje vinculado por ID. Idempotente.
+app.post('/api/logistica/importar-de-viajes', requireCompany, requirePermission('logistica:create'), async (req, res, next) => {
+  try {
+    const viajes = await prisma.viaje.findMany({
+      where: { companyId: req.companyId },
+      select: {
+        id: true, transportista: true, transporteCuit: true, chofer: true, choferCuit: true,
+        patente: true, patenteAcoplado: true, tipoCamion: true,
+        transportistaId: true, choferId: true, camionId: true, acopladoId: true,
+      },
+      orderBy: { fecha: 'asc' },
+    });
+    const counts = { transportistas: 0, choferes: 0, camiones: 0, acoplados: 0, proveedores: 0, viajesVinculados: 0 };
+    for (const v of viajes) {
+      const ids = await _autoAltaLogisticaViaje(req.companyId, v, counts);
+      // Vincular el viaje si algún ID quedó sin setear.
+      const patch = {};
+      for (const k of ['transportistaId', 'choferId', 'camionId', 'acopladoId']) {
+        if (ids[k] && !v[k]) patch[k] = ids[k];
+      }
+      if (Object.keys(patch).length) {
+        await prisma.viaje.update({ where: { id: v.id }, data: patch });
+        counts.viajesVinculados++;
+      }
+    }
+    res.json({ ok: true, revisados: viajes.length, ...counts });
   } catch (e) { next(e); }
 });
 
