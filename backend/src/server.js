@@ -3632,22 +3632,56 @@ async function _autoAltaLogisticaViaje(companyId, d, counts) {
   // --- Chofer (por nombre) ---
   let choferId = d.choferId || null;
   const chNombre = norm(d.chofer);
+  let chRow = null;
   if (!choferId && chNombre) {
-    let ch = await prisma.chofer.findFirst({ where: { companyId, nombre: { equals: chNombre, mode: 'insensitive' } } });
-    if (!ch) {
-      ch = await prisma.chofer.create({ data: {
+    chRow = await prisma.chofer.findFirst({ where: { companyId, nombre: { equals: chNombre, mode: 'insensitive' } } });
+    if (!chRow) {
+      chRow = await prisma.chofer.create({ data: {
         companyId, nombre: chNombre, cuit: norm(d.choferCuit) || null,
         transportistaId: transportistaId || null, camionId: camionId || null, acopladoId: acopladoId || null,
       }});
       if (counts) counts.choferes++;
-    } else if (norm(d.choferCuit) && !ch.cuit) {
-      ch = await prisma.chofer.update({ where: { id: ch.id }, data: { cuit: norm(d.choferCuit) } });
+    } else if (norm(d.choferCuit) && !chRow.cuit) {
+      chRow = await prisma.chofer.update({ where: { id: chRow.id }, data: { cuit: norm(d.choferCuit) } });
     }
-    choferId = ch.id;
+    choferId = chRow.id;
+  } else if (choferId) {
+    chRow = await prisma.chofer.findFirst({ where: { id: choferId, companyId } });
+  }
+  // Vincular el chofer con un EMPLEADO marcado como "chofer" (por CUIT o nombre),
+  // así la comisión configurada en la ficha del empleado se toma sola en el viaje.
+  if (chRow && !chRow.empleadoId) {
+    try {
+      const emp = await _matchEmpleadoChofer(companyId, chRow.nombre, norm(d.choferCuit) || chRow.cuit);
+      if (emp) chRow = await prisma.chofer.update({ where: { id: chRow.id }, data: { empleadoId: emp.id } });
+    } catch (_) {}
   }
   if (choferId) out.choferId = choferId;
 
   return out;
+}
+
+// Busca un empleado (marcado esChofer) que corresponda al chofer del viaje, por
+// CUIT/CUIL/DNI primero y por nombre (en cualquier orden) después.
+async function _matchEmpleadoChofer(companyId, nombreChofer, cuitChofer) {
+  const emps = await prisma.empleado.findMany({ where: { companyId, esChofer: true } });
+  if (!emps.length) return null;
+  const soloDig = (s) => (s || '').replace(/\D/g, '');
+  const cuitNorm = soloDig(cuitChofer);
+  // Si el chofer tiene CUIT, se vincula SOLO por CUIT (CUIL/DNI del empleado).
+  // El nombre varía mucho entre cargas, así que no se usa como respaldo en ese caso.
+  if (cuitNorm) {
+    return emps.find(e => soloDig(e.cuil) === cuitNorm || soloDig(e.dni) === cuitNorm) || null;
+  }
+  // Sólo si el chofer no trae CUIT, intentamos por nombre (en cualquier orden).
+  const norm = (s) => (s || '').toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ').trim();
+  const target = norm(nombreChofer);
+  if (!target) return null;
+  return emps.find(e => {
+    const a = norm(`${e.nombre} ${e.apellido}`);
+    const b = norm(`${e.apellido} ${e.nombre}`);
+    return a === target || b === target;
+  }) || null;
 }
 
 // ============================================================
@@ -3663,21 +3697,28 @@ async function _comisionChoferViaje(companyId, v) {
     if (!v || !v.id || !v.choferId) return;
     const ch = await prisma.chofer.findFirst({ where: { id: v.choferId, companyId } });
     const existing = await prisma.movimientoEmpleado.findFirst({ where: { companyId, viajeId: v.id, categoria: 'comision' } });
-    // Sin config de comisión → si había una vieja (no liquidada), la limpiamos.
-    if (!ch || !ch.empleadoId || !ch.comisionTipo || !ch.comisionValor) {
+    // Resolver la config de comisión: primero la del CHOFER; si no está, la del EMPLEADO vinculado.
+    const empId = ch?.empleadoId || null;
+    const emp = empId ? await prisma.empleado.findFirst({ where: { id: empId, companyId } }) : null;
+    let comTipo = ch?.comisionTipo || null;
+    let comVal  = (ch?.comisionValor != null) ? Number(ch.comisionValor) : null;
+    if ((!comTipo || !(comVal > 0)) && emp && emp.esChofer && emp.comisionViajeTipo && emp.comisionViajeValor) {
+      comTipo = emp.comisionViajeTipo;
+      comVal  = Number(emp.comisionViajeValor);
+    }
+    // Sin empleado o sin config válida → si había una comisión vieja (no liquidada), la limpiamos.
+    if (!ch || !empId || !emp || !comTipo || !(comVal > 0)) {
       if (existing && !existing.liquidacionId) await prisma.movimientoEmpleado.delete({ where: { id: existing.id } });
       return;
     }
-    const emp = await prisma.empleado.findFirst({ where: { id: ch.empleadoId, companyId } });
-    if (!emp) return;
     const kg = Number(v.kgDescarga || v.cantidad || 0);
     const tn = kg / 1000;
     const fleteBase = Number(v.total || v.flete || (v.tarifa ? v.tarifa * kg / 1000 : 0)) || 0;
-    const val = Number(ch.comisionValor);
+    const val = comVal;
     let monto = 0, cantidad = 1, unidad = 'viaje', valorUnitario = null, detalleCalc = '';
-    if (ch.comisionTipo === 'porcentaje')      { monto = fleteBase * val / 100; valorUnitario = null; detalleCalc = `${val}% de ${fleteBase.toFixed(2)}`; }
-    else if (ch.comisionTipo === 'monto_fijo') { monto = val; valorUnitario = val; detalleCalc = 'monto fijo por viaje'; }
-    else if (ch.comisionTipo === 'por_tn')     { monto = val * tn; cantidad = tn; unidad = 'tn'; valorUnitario = val; detalleCalc = `${val}/tn × ${tn.toFixed(2)} tn`; }
+    if (comTipo === 'porcentaje')      { monto = fleteBase * val / 100; valorUnitario = null; detalleCalc = `${val}% de ${fleteBase.toFixed(2)}`; }
+    else if (comTipo === 'monto_fijo') { monto = val; valorUnitario = val; detalleCalc = 'monto fijo por viaje'; }
+    else if (comTipo === 'por_tn')     { monto = val * tn; cantidad = tn; unidad = 'tn'; valorUnitario = val; detalleCalc = `${val}/tn × ${tn.toFixed(2)} tn`; }
     monto = Math.round(monto * 100) / 100;
     if (!(monto > 0)) {
       if (existing && !existing.liquidacionId) await prisma.movimientoEmpleado.delete({ where: { id: existing.id } });
@@ -3891,6 +3932,10 @@ mountCrud({
     tipo: z.enum(['propio', 'externo']).optional(),
     cobraPorcentaje: z.boolean().optional(),
     porcentajeDefault: z.number().nullable().optional(),
+    // Chofer de camión con comisión por viaje
+    esChofer: z.boolean().optional(),
+    comisionViajeTipo: z.enum(['porcentaje', 'monto_fijo', 'por_tn']).nullable().optional(),
+    comisionViajeValor: z.coerce.number().nullable().optional(),
     localidad: z.string().nullable().optional(),
     provincia: z.string().nullable().optional(),
   }),

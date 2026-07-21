@@ -819,6 +819,10 @@ model Empleado {
   tipo            String   @default("propio") // "propio" | "externo" (contratista, fasón, etc.)
   cobraPorcentaje Boolean  @default(false)    // si cobra % por labor realizada
   porcentajeDefault Float? // % por defecto sobre el precio de referencia de la labor
+  // ---- Empleado que es CHOFER de camión y cobra comisión por viaje ----
+  esChofer          Boolean @default(false)
+  comisionViajeTipo  String?  // "porcentaje" | "monto_fijo" | "por_tn"
+  comisionViajeValor Float?   // % del flete, monto fijo por viaje, o $/tn
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

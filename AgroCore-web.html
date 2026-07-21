@@ -2372,7 +2372,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'21/07/2026',
       titulo:'🚚 v1.89.0 — Transporte propio (sin proveedor) y comisión del chofer-empleado por viaje',
-      desc:'Tres ajustes sobre lo de Logística. <b>(1)</b> El botón <b>Importar de viajes</b> ahora verifica por <b>CUIT</b> antes de dar de alta, así no duplica transportistas por diferencias de tipeo en el nombre. <b>(2)</b> En el transportista hay una opción <b>🚚 Transporte propio</b> (camiones del dueño): al marcarla <b>no se crea como proveedor</b> (no se le carga factura de flete), y si ya se había creado el proveedor y no tiene facturas, se da de baja solo. <b>(3)</b> En el <b>chofer</b> podés indicar que <b>es un empleado</b> y configurar su <b>comisión por viaje</b> (% del flete, monto fijo, o $ por tonelada). Cada vez que se guarda un viaje con ese chofer, la comisión se <b>carga sola en la ficha del empleado</b> (en Movimientos, como ganancia); si editás el viaje se recalcula, y si ya quedó en una liquidación no se toca.' },
+      desc:'Tres ajustes sobre lo de Logística. <b>(1)</b> El botón <b>Importar de viajes</b> ahora verifica por <b>CUIT</b> antes de dar de alta, así no duplica transportistas por diferencias de tipeo en el nombre. <b>(2)</b> En el transportista hay una opción <b>🚚 Transporte propio</b> (camiones del dueño): al marcarla <b>no se crea como proveedor</b> (no se le carga factura de flete), y si ya se había creado el proveedor y no tiene facturas, se da de baja solo. <b>(3)</b> <b>Comisión del chofer-empleado por viaje</b> (% del flete, monto fijo, o $ por tonelada). Se configura en la <b>ficha del empleado</b> (tildando "🚚 Es chofer de camión") o directamente en el chofer. Cuando cargás o <b>importás un viaje (CP)</b>, el chofer se vincula solo al empleado por CUIT/CUIL o nombre, y la comisión se <b>carga sola en la planilla del empleado</b> (en Movimientos, como ganancia); si editás el viaje se recalcula, y si ya quedó en una liquidación no se toca.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'20/07/2026',
       titulo:'🚛 v1.88.0 — Viajes: alta automática de transportistas/choferes/camiones y pago del flete',
       desc:'Cinco mejoras en Logística. <b>(1)</b> Al guardar un viaje, el <b>transportista, chofer, camión y acoplado</b> que escribas se dan de alta solos en sus catálogos (si no existían) y quedan vinculados. <b>(2)</b> Cada transportista se crea además como <b>proveedor</b> (rubro Transporte) para poder cargarle después la <b>factura de compra del flete</b> desde Viajes o desde Compras. <b>(3)</b> En <b>Transportistas, Choferes, Camiones y Acoplados</b> hay un botón <b>📥 Importar de viajes</b> que recorre los viajes ya cargados y da de alta todo lo que falte (ideal para cargar los datos viejos de una). <b>(4)</b> El botón <b>💵 Marcar como pagado</b> del viaje ahora te deja <b>registrar el pago</b> (efectivo, cheque o transferencia) además de cambiar el estado. <b>(5)</b> Al <b>pagar a un proveedor con cheque propio</b> podés <b>cargar el cheque en la misma pantalla</b>, sin tener que darlo de alta antes en Tesorería.' },
@@ -15646,11 +15646,35 @@ function empleForm(id=null) {
           </div>
         </div>
         <div class="text-[11px] text-slate-500 mt-2">💡 Si el empleado cobra % por labor: cada vez que cargues una labor con este empleado, el sistema calcula la ganancia (precio referencia × %) y la suma automáticamente a su planilla del mes.</div>
+        <div class="grid grid-cols-3 gap-3 items-end mt-3 pt-3 border-t border-slate-200">
+          <div class="flex items-center gap-2 pb-2">
+            <input id="f-esch" type="checkbox" ${it.esChofer?'checked':''} onchange="emplToggleChofer()"/>
+            <label for="f-esch" class="text-sm">🚚 Es chofer de camión (comisión por viaje)</label>
+          </div>
+          <div><label class="label">Comisión</label>
+            <select id="f-chtipo" class="input" ${it.esChofer?'':'disabled'}>
+              <option value="">— Sin comisión —</option>
+              <option value="porcentaje" ${it.comisionViajeTipo==='porcentaje'?'selected':''}>% del flete</option>
+              <option value="monto_fijo" ${it.comisionViajeTipo==='monto_fijo'?'selected':''}>Monto fijo por viaje</option>
+              <option value="por_tn" ${it.comisionViajeTipo==='por_tn'?'selected':''}>$ por tonelada</option>
+            </select>
+          </div>
+          <div><label class="label">Valor</label>
+            <input id="f-chval" type="number" step="0.01" class="input" value="${it.comisionViajeValor!=null?it.comisionViajeValor:''}" placeholder="% / $ / $ por tn" ${it.esChofer?'':'disabled'}/>
+          </div>
+        </div>
+        <div class="text-[11px] text-slate-500 mt-2">🚚 Si marcás que es chofer: cuando cargues o importes un viaje (CP) con este chofer, la comisión se calcula y se carga sola en su planilla del mes. Se lo vincula por CUIT/CUIL o por nombre.</div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              ${id?`<button class="btn btn-secondary" onclick='closeModal(); empleAbrir(${JSON.stringify(id)})' title="Ir a la planilla de gastos, ganancias y sueldo">📋 Ver planilla</button>`:''}
              <button class="btn btn-primary" onclick='empleSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
+}
+function emplToggleChofer() {
+  const on = document.getElementById('f-esch')?.checked;
+  const t = document.getElementById('f-chtipo'); const v = document.getElementById('f-chval');
+  if (t) t.disabled = !on;
+  if (v) v.disabled = !on;
 }
 function emplePickFoto(inp) {
   const f = inp.files && inp.files[0];
@@ -15684,8 +15708,12 @@ async function empleSave(id) {
     tipo: $('#f-tipo')?.value || 'propio',
     cobraPorcentaje: $('#f-cp')?.checked || false,
     porcentajeDefault: $('#f-pd')?.value ? Number($('#f-pd').value) : null,
+    esChofer: $('#f-esch')?.checked || false,
+    comisionViajeTipo: ($('#f-esch')?.checked && $('#f-chtipo')?.value) ? $('#f-chtipo').value : null,
+    comisionViajeValor: ($('#f-esch')?.checked && $('#f-chval')?.value) ? Number($('#f-chval').value) : null,
   };
   if (!data.nombre || !data.apellido) return toast('Nombre y apellido requeridos','warn');
+  if (data.esChofer && data.comisionViajeTipo && !(data.comisionViajeValor>0)) return toast('Ingresá el valor de la comisión por viaje','warn');
   try { await api('/api/empleados'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});
     toast(id?'Actualizado':'Creado','success'); closeModal(); delete state.cache.empleados;
     // Si estábamos dentro de la ficha de un empleado, volvemos a ella; si no, a la nómina.
@@ -21806,11 +21834,20 @@ async function acoDel(id) {
 }
 
 // ---------- CHOFERES ----------
+function choComisionInfo(c) {
+  const emp = c.empleadoId ? (state.cache.empleados||[]).find(e=>e.id===c.empleadoId) : null;
+  let t = c.comisionTipo, v = c.comisionValor;
+  if ((!t || !v) && emp && emp.comisionViajeTipo && emp.comisionViajeValor) { t = emp.comisionViajeTipo; v = emp.comisionViajeValor; }
+  let txt = '';
+  if (t && v) txt = t==='porcentaje' ? `${v}% del flete` : (t==='monto_fijo' ? `${fmt$(v)}/viaje` : `${fmt$(v)}/tn`);
+  return { emp, txt };
+}
 pages.choferes = async function() {
   setHeader('Choferes', 'Choferes con su transportista y camión asignado');
   if (!can('viajes:read')) { $('#page-body').innerHTML = stubPage('choferes','Choferes'); return; }
   $('#page-body').innerHTML = '<div class="text-slate-500 text-sm">Cargando…</div>';
   await logiPreload();
+  if (!state.cache.empleados) { const r = await api('/api/empleados').catch(()=>({data:[]})); state.cache.empleados = r.data||[]; }
   const data = state.cache.choferes || [];
   $('#page-body').innerHTML = `
     <div class="flex justify-between items-center mb-3">
@@ -21823,15 +21860,16 @@ pages.choferes = async function() {
     <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
       <table class="w-full text-sm">
         <thead class="bg-slate-50 text-slate-600 text-xs uppercase">
-          <tr><th class="text-left p-2">Nombre</th><th class="text-left p-2">CUIT</th><th class="text-left p-2">Teléfono</th><th class="text-left p-2">Transportista</th><th class="text-left p-2">Camión actual</th><th class="text-center p-2">Viajes</th><th></th></tr>
+          <tr><th class="text-left p-2">Nombre</th><th class="text-left p-2">CUIT</th><th class="text-left p-2">Teléfono</th><th class="text-left p-2">Transportista</th><th class="text-left p-2">Camión actual</th><th class="text-left p-2">Empleado / comisión</th><th class="text-center p-2">Viajes</th><th></th></tr>
         </thead>
-        <tbody>${data.length===0?`<tr><td colspan="7" class="text-center text-slate-500 p-4">No hay choferes cargados.</td></tr>`:data.map(c=>`
+        <tbody>${data.length===0?`<tr><td colspan="8" class="text-center text-slate-500 p-4">No hay choferes cargados.</td></tr>`:data.map(c=>`
           <tr class="border-t border-slate-100 hover:bg-slate-50">
             <td class="p-2 font-medium">${esc(c.nombre)}</td>
             <td class="p-2 text-slate-600">${esc(c.cuit||'—')}</td>
             <td class="p-2 text-slate-600">${esc(c.telefono||'—')}</td>
             <td class="p-2 text-slate-600">${esc(c.transportista?.nombre||'—')}</td>
             <td class="p-2 text-slate-600">${c.camion?`<span class="font-mono font-semibold">${esc(c.camion.patente)}</span>${c.camion.tipo?` <span class="text-xs text-slate-400">${esc(c.camion.tipo)}</span>`:''}`:'—'}</td>
+            <td class="p-2 text-slate-600">${(()=>{const i=choComisionInfo(c);return i.emp?`👤 ${esc(((i.emp.apellido||'')+' '+(i.emp.nombre||'')).trim())}${i.txt?`<br><span class="text-[10px] text-emerald-700">💰 ${esc(i.txt)}</span>`:''}`:'—';})()}</td>
             <td class="p-2 text-center">${c._count?.viajes||0}</td>
             <td class="p-2 text-right whitespace-nowrap">
               ${can('viajes:update')?`<button class="btn btn-ghost text-xs" onclick="choForm('${c.id}')">✏️</button>`:''}
