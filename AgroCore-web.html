@@ -2371,6 +2371,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/07/2026',
+      titulo:'📊 v1.92.0 — Campañas: filtros + fix del botón Planilla',
+      desc:'Dos cosas en Campañas. <b>(1) Fix:</b> después de generar una planilla y exportarla, el botón <b>📊 Planilla</b> dejaba de responder al querer abrir otra. Ya quedó corregido: siempre abre la planilla de la campaña elegida. <b>(2) Filtros:</b> arriba de las campañas hay un panel de filtros con <b>multiselección</b> por <b>Ciclo/Campaña, Cultivo, Estado, Campo y Lote</b>. Los KPIs y el listado se actualizan según lo filtrado, y hay un botón para limpiar.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/07/2026',
       titulo:'🚛 v1.91.0 — Viajes: el "Flete total" se calcula (kg descarga × tarifa)',
       desc:'En el listado de Viajes, la columna <b>Flete total</b> ahora muestra el importe calculado: <b>kg de descarga × tarifa ($/tonelada)</b>. Si el viaje todavía no tiene kg de descarga, usa los kg cargados; y si cargaste un flete a mano, respeta ese valor. También sale calculado al exportar a Excel.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'21/07/2026',
@@ -8403,11 +8406,30 @@ pages.campanas = async function() {
   } catch (e) { return toast(e.message,'error'); }
   state.cache.campanas = rows;
 
-  // KPIs
-  const activas = rows.filter(c => c.estado==='sembrada' || c.estado==='cosechando' || c.estado==='activa' || c.estado==='En curso').length;
-  const planif = rows.filter(c => c.estado==='planificada' || !c.estado).length;
-  const cosech = rows.filter(c => c.estado==='cosechada').length;
-  const totalHa = rows.reduce((a,c)=>a + Number(c.hectareas||0), 0);
+  // ---- Filtros (multi-selección): Ciclo, Cultivo, Estado, Campo, Lote ----
+  state.campFilter = state.campFilter || { ciclos:[], cultivos:[], estados:[], campos:[], lotes:[] };
+  const cf = state.campFilter;
+  const uniq = (arr)=>[...new Set(arr.filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b),'es'));
+  const optCiclos   = uniq(rows.map(c=>c.ciclo));
+  const optCultivos = uniq(rows.map(c=>c.cultivo));
+  const optEstados  = uniq(rows.map(c=>c.estado||'planificada'));
+  const optCampos   = uniq(rows.map(c=>c.lote?.campo?.nombre));
+  const optLotes    = uniq(rows.map(c=>c.lote?.nombre));
+  const _inSel = (sel, val)=> !sel.length || sel.includes(val);
+  const filtered = rows.filter(c =>
+    _inSel(cf.ciclos, c.ciclo) &&
+    _inSel(cf.cultivos, c.cultivo) &&
+    _inSel(cf.estados, c.estado||'planificada') &&
+    _inSel(cf.campos, c.lote?.campo?.nombre) &&
+    _inSel(cf.lotes, c.lote?.nombre)
+  );
+  const hayFiltro = cf.ciclos.length || cf.cultivos.length || cf.estados.length || cf.campos.length || cf.lotes.length;
+
+  // KPIs (sobre lo filtrado)
+  const activas = filtered.filter(c => c.estado==='sembrada' || c.estado==='cosechando' || c.estado==='activa' || c.estado==='En curso').length;
+  const planif = filtered.filter(c => c.estado==='planificada' || !c.estado).length;
+  const cosech = filtered.filter(c => c.estado==='cosechada').length;
+  const totalHa = filtered.reduce((a,c)=>a + Number(c.hectareas||0), 0);
 
   const estadoBadge = (e) => {
     const c = (e==='cosechada'||e==='finalizada') ? 'badge-gray' : (e==='cosechando'||e==='En curso'||e==='activa') ? 'badge-yellow' : e==='sembrada' ? 'badge-green' : 'badge-blue';
@@ -8428,17 +8450,27 @@ pages.campanas = async function() {
 
   $('#page-body').innerHTML = `
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">Total campañas</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">${hayFiltro?'Campañas (filtro)':'Total campañas'}</div><div class="text-2xl font-bold mt-1">${filtered.length}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">En curso</div><div class="text-2xl font-bold mt-1 text-emerald-600">${activas}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Planificadas</div><div class="text-2xl font-bold mt-1 text-blue-600">${planif}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Hectáreas totales</div><div class="text-xl font-bold mt-1">${fmtN(totalHa)}</div></div>
     </div>
+    <div class="kpi mb-4">
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <div><label class="label text-xs">Ciclo / Campaña</label>${msHTML('camp-ciclo', optCiclos, cf.ciclos, 'campCiclo', 'Todos')}</div>
+        <div><label class="label text-xs">Cultivo</label>${msHTML('camp-cultivo', optCultivos, cf.cultivos, 'campCultivo', 'Todos')}</div>
+        <div><label class="label text-xs">Estado</label>${msHTML('camp-estado', optEstados, cf.estados, 'campEstado', 'Todos')}</div>
+        <div><label class="label text-xs">Campo</label>${msHTML('camp-campo', optCampos, cf.campos, 'campCampo', 'Todos')}</div>
+        <div><label class="label text-xs">Lote</label>${msHTML('camp-lote', optLotes, cf.lotes, 'campLote', 'Todos')}</div>
+      </div>
+      ${hayFiltro?`<div class="mt-2 text-right"><button class="btn btn-secondary text-xs" onclick="campanasFiltrosLimpiar()">✕ Limpiar filtros</button></div>`:''}
+    </div>
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <h3 class="font-semibold text-slate-800">${rows.length} ${rows.length===1?'campaña':'campañas'}</h3>
+      <h3 class="font-semibold text-slate-800">${filtered.length}${hayFiltro?` de ${rows.length}`:''} ${filtered.length===1?'campaña':'campañas'}</h3>
       ${can('produccion:create') ? `<button class="btn btn-primary" onclick="campanaForm()">+ Nueva campaña</button>`:''}
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      ${rows.map(c => {
+      ${filtered.map(c => {
         const rend = c.rindeReal || c.rindeEstimado || 0;
         const proj = rend * Number(c.hectareas||0);
         return `
@@ -8474,9 +8506,23 @@ pages.campanas = async function() {
             ${can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='campanaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
           </div>
         </div>`;
-      }).join('') || '<div class="stub-card col-span-full">Aún no hay campañas cargadas. Usá "Nueva campaña" para crear la primera.</div>'}
+      }).join('') || (hayFiltro
+        ? '<div class="stub-card col-span-full">No hay campañas que coincidan con los filtros. <button class="text-emerald-700 underline" onclick="campanasFiltrosLimpiar()">Limpiar filtros</button></div>'
+        : '<div class="stub-card col-span-full">Aún no hay campañas cargadas. Usá "Nueva campaña" para crear la primera.</div>')}
     </div>`;
+
+  // Cablear los filtros multi-selección (onLive guarda; onApply re-renderiza).
+  msWire('camp-ciclo',   'campCiclo',   v=>{ cf.ciclos=v; },   ()=>pages.campanas(), 'Todos');
+  msWire('camp-cultivo', 'campCultivo', v=>{ cf.cultivos=v; }, ()=>pages.campanas(), 'Todos');
+  msWire('camp-estado',  'campEstado',  v=>{ cf.estados=v; },  ()=>pages.campanas(), 'Todos');
+  msWire('camp-campo',   'campCampo',   v=>{ cf.campos=v; },   ()=>pages.campanas(), 'Todos');
+  msWire('camp-lote',    'campLote',    v=>{ cf.lotes=v; },    ()=>pages.campanas(), 'Todos');
 };
+function campanasFiltrosLimpiar(){
+  state.campFilter = { ciclos:[], cultivos:[], estados:[], campos:[], lotes:[] };
+  state._ms_campCiclo=false; state._ms_campCultivo=false; state._ms_campEstado=false; state._ms_campCampo=false; state._ms_campLote=false;
+  pages.campanas();
+}
 function campanaForm(id=null) {
   const it = id ? (state.cache.campanas||[]).find(x=>x.id===id)||{} : {};
   const lotes = state.cache.lotes || [];
@@ -16563,8 +16609,12 @@ function _planillaRender(){
           <div class="text-[11px] text-slate-500 mt-2">Rinde real: ${esc(rindeRealTxt)}.</div>
         </div>
       </div>`;
+  // Reutilizar el contenedor SOLO si el modal está realmente visible (re-render por
+  // cambio de moneda). Si el modal se cerró, el pl-root queda oculto en el DOM y hay
+  // que abrir uno nuevo — si no, la 2da planilla "no hacía nada".
+  const modalVisible = !document.getElementById('modal')?.classList.contains('hidden');
   const root = document.getElementById('pl-root');
-  if (root) { root.innerHTML = html; }
+  if (root && modalVisible) { root.innerHTML = html; }
   else openModal({
     title:`📊 Resultado económico · ${esc(camp.nombre || (camp.cultivo+' '+(camp.lote?.nombre||'')))}`, size:'max-w-5xl',
     body:`<div id="pl-root">${html}</div>`,
