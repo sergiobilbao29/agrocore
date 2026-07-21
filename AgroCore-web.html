@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'21/07/2026',
+      titulo:'🚚 v1.89.0 — Transporte propio (sin proveedor) y comisión del chofer-empleado por viaje',
+      desc:'Tres ajustes sobre lo de Logística. <b>(1)</b> El botón <b>Importar de viajes</b> ahora verifica por <b>CUIT</b> antes de dar de alta, así no duplica transportistas por diferencias de tipeo en el nombre. <b>(2)</b> En el transportista hay una opción <b>🚚 Transporte propio</b> (camiones del dueño): al marcarla <b>no se crea como proveedor</b> (no se le carga factura de flete), y si ya se había creado el proveedor y no tiene facturas, se da de baja solo. <b>(3)</b> En el <b>chofer</b> podés indicar que <b>es un empleado</b> y configurar su <b>comisión por viaje</b> (% del flete, monto fijo, o $ por tonelada). Cada vez que se guarda un viaje con ese chofer, la comisión se <b>carga sola en la ficha del empleado</b> (en Movimientos, como ganancia); si editás el viaje se recalcula, y si ya quedó en una liquidación no se toca.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'20/07/2026',
       titulo:'🚛 v1.88.0 — Viajes: alta automática de transportistas/choferes/camiones y pago del flete',
       desc:'Cinco mejoras en Logística. <b>(1)</b> Al guardar un viaje, el <b>transportista, chofer, camión y acoplado</b> que escribas se dan de alta solos en sus catálogos (si no existían) y quedan vinculados. <b>(2)</b> Cada transportista se crea además como <b>proveedor</b> (rubro Transporte) para poder cargarle después la <b>factura de compra del flete</b> desde Viajes o desde Compras. <b>(3)</b> En <b>Transportistas, Choferes, Camiones y Acoplados</b> hay un botón <b>📥 Importar de viajes</b> que recorre los viajes ya cargados y da de alta todo lo que falte (ideal para cargar los datos viejos de una). <b>(4)</b> El botón <b>💵 Marcar como pagado</b> del viaje ahora te deja <b>registrar el pago</b> (efectivo, cheque o transferencia) además de cambiar el estado. <b>(5)</b> Al <b>pagar a un proveedor con cheque propio</b> podés <b>cargar el cheque en la misma pantalla</b>, sin tener que darlo de alta antes en Tesorería.' },
@@ -21562,7 +21565,7 @@ pages.transportistas = async function() {
         </thead>
         <tbody>${data.length===0?`<tr><td colspan="7" class="text-center text-slate-500 p-4">No hay transportistas. Hacé clic en + Nuevo transportista para empezar.</td></tr>`:data.map(t=>`
           <tr class="border-t border-slate-100 hover:bg-slate-50">
-            <td class="p-2 font-medium">${esc(t.nombre)}</td>
+            <td class="p-2 font-medium">${esc(t.nombre)}${t.propio?' <span class="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded align-middle">PROPIO</span>':''}</td>
             <td class="p-2 text-slate-600">${esc(t.cuit||'—')}</td>
             <td class="p-2 text-slate-600">${esc(t.telefono||'—')}</td>
             <td class="p-2 text-center">${t._count?.choferes||0}</td>
@@ -21588,6 +21591,10 @@ async function transpForm(id) {
         <div><label class="label">Teléfono</label><input id="tr-tel" class="input" value="${esc(t.telefono||'')}"/></div>
         <div class="col-span-2"><label class="label">Email</label><input id="tr-mail" class="input" value="${esc(t.email||'')}"/></div>
         <div class="col-span-2"><label class="label">Dirección</label><input id="tr-dir" class="input" value="${esc(t.direccion||'')}"/></div>
+        <div class="col-span-2 bg-slate-50 border border-slate-200 rounded p-2">
+          <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" id="tr-propio" ${t.propio?'checked':''}/> <span>🚚 <b>Transporte propio</b> (camiones del dueño)</span></label>
+          <div class="text-[11px] text-slate-500 mt-1">Si lo marcás, <b>no</b> se crea como proveedor (no se le carga factura de flete). Los choferes pueden ser empleados que cobran comisión por viaje.</div>
+        </div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="tr-obs" class="input" rows="2">${esc(t.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -21601,6 +21608,7 @@ async function transpSave(id) {
     telefono: $('#tr-tel').value.trim()||null,
     email: $('#tr-mail').value.trim()||null,
     direccion: $('#tr-dir').value.trim()||null,
+    propio: $('#tr-propio')?.checked || false,
     observaciones: $('#tr-obs').value.trim()||null,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
@@ -21835,6 +21843,8 @@ pages.choferes = async function() {
 };
 async function choForm(id) {
   await logiPreload();
+  if (!state.cache.empleados) { const r = await api('/api/empleados').catch(()=>({data:[]})); state.cache.empleados = r.data||[]; }
+  const emps = (state.cache.empleados||[]).filter(e=>e.activo!==false);
   const c = id ? (state.cache.choferes||[]).find(x=>x.id===id) || {} : {};
   const transps = state.cache.transportistas || [];
   const camiones = state.cache.camiones || [];
@@ -21876,11 +21886,34 @@ async function choForm(id) {
           </select>
         </div>
         <div class="col-span-2 text-[11px] text-slate-500 -mt-1">El chasis y acoplado habituales se sugieren por defecto al elegir este chofer en un viaje (siempre editables).</div>
+        <div class="col-span-2 bg-emerald-50 border border-emerald-200 rounded p-2">
+          <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" id="ch-esemp" ${c.empleadoId?'checked':''} onchange="choEsEmpleadoToggle()"/> <span>👤 <b>Es empleado propio</b> y cobra comisión por viaje</span></label>
+          <div id="ch-emp-wrap" class="${c.empleadoId?'':'hidden'} mt-2 grid grid-cols-2 gap-2">
+            <div class="col-span-2"><label class="label text-xs">Empleado</label>
+              <select id="ch-emp" class="input"><option value="">— Elegir empleado —</option>${emps.map(e=>`<option value="${e.id}" ${c.empleadoId===e.id?'selected':''}>${esc(((e.apellido||'')+' '+(e.nombre||'')).trim())}</option>`).join('')}</select>
+              ${!emps.length?'<div class="text-[11px] text-amber-700 mt-1">No hay empleados cargados. Cargalos en RRHH → Empleados.</div>':''}
+            </div>
+            <div><label class="label text-xs">Comisión</label>
+              <select id="ch-comtipo" class="input">
+                <option value="">— Sin comisión —</option>
+                <option value="porcentaje" ${c.comisionTipo==='porcentaje'?'selected':''}>% del flete</option>
+                <option value="monto_fijo" ${c.comisionTipo==='monto_fijo'?'selected':''}>Monto fijo por viaje</option>
+                <option value="por_tn" ${c.comisionTipo==='por_tn'?'selected':''}>$ por tonelada</option>
+              </select>
+            </div>
+            <div><label class="label text-xs">Valor</label><input id="ch-comval" type="number" step="0.01" class="input" value="${c.comisionValor!=null?c.comisionValor:''}" placeholder="% / $ fijo / $ por tn"/></div>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-1">La comisión se carga sola en la ficha del empleado (Movimientos) cada vez que se guarda un viaje con este chofer.</div>
+        </div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ch-obs" class="input" rows="2">${esc(c.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="choSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
   });
+}
+function choEsEmpleadoToggle() {
+  const on = document.getElementById('ch-esemp')?.checked;
+  document.getElementById('ch-emp-wrap')?.classList.toggle('hidden', !on);
 }
 function choTranspChange() {
   // Reordena los camiones del select para poner primero los del transportista elegido
@@ -21909,7 +21942,13 @@ async function choSave(id) {
     acopladoId: $('#ch-aco').value||null,
     observaciones: $('#ch-obs').value.trim()||null,
   };
+  const esEmp = $('#ch-esemp')?.checked;
+  data.empleadoId   = esEmp ? ($('#ch-emp')?.value || null) : null;
+  data.comisionTipo = esEmp ? ($('#ch-comtipo')?.value || null) : null;
+  data.comisionValor= esEmp ? (parseFloat($('#ch-comval')?.value) || null) : null;
   if (!data.nombre) return toast('Nombre requerido','warn');
+  if (esEmp && data.comisionTipo && !data.empleadoId) return toast('Elegí el empleado para la comisión','warn');
+  if (esEmp && data.comisionTipo && !(data.comisionValor>0)) return toast('Ingresá el valor de la comisión','warn');
   try {
     if (id) await api('/api/choferes/'+id,{method:'PUT',body:JSON.stringify(data)});
     else    await api('/api/choferes',{method:'POST',body:JSON.stringify(data)});

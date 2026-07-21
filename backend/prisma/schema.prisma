@@ -852,6 +852,7 @@ model MovimientoEmpleado {
   unidad        String?    // etiqueta de unidad (ej. "días", "horas", "viajes")
   monto         Float
   liquidacionId String?    // si el movimiento ya quedó incluido en una liquidación
+  viajeId       String?    // si es una comisión auto-generada por un viaje (idempotencia)
   observaciones String?
   createdAt     DateTime @default(now())
 
@@ -1354,6 +1355,7 @@ model Transportista {
   email         String?
   direccion     String?
   observaciones String?
+  propio        Boolean  @default(false)  // camiones propios (dueño): NO se crea como proveedor
   activo        Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -1430,6 +1432,10 @@ model Chofer {
   camionId        String?    // chasis que maneja HABITUALMENTE
   acopladoId      String?    // acoplado HABITUAL (se sugiere por defecto al armar el viaje)
   observaciones   String?
+  // ---- Chofer que es EMPLEADO propio y cobra comisión por viaje ----
+  empleadoId      String?    // si el chofer es un empleado de la empresa (camión propio)
+  comisionTipo    String?    // "porcentaje" | "monto_fijo" | "por_tn"
+  comisionValor   Float?     // % del flete, monto fijo por viaje, o $/tn según comisionTipo
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

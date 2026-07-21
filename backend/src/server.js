@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.88.0';
+const AGROCORE_VERSION = '1.89.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3569,25 +3569,34 @@ async function _autoAltaLogisticaViaje(companyId, d, counts) {
   const norm = (s) => (s == null ? '' : String(s)).trim();
   const up   = (s) => norm(s).toUpperCase();
 
-  // --- Transportista (por nombre) ---
+  // --- Transportista (dedup por CUIT primero, después por nombre) ---
   let transportistaId = d.transportistaId || null;
   const trNombre = norm(d.transportista);
+  const trCuitNorm = norm(d.transporteCuit).replace(/[-.\s]/g, '');
   let trRow = null;
-  if (!transportistaId && trNombre) {
-    trRow = await prisma.transportista.findFirst({ where: { companyId, nombre: { equals: trNombre, mode: 'insensitive' } } });
-    if (!trRow) {
+  if (!transportistaId && (trNombre || trCuitNorm)) {
+    // 1) Buscar por CUIT (evita duplicar por diferencias de tipeo en el nombre).
+    if (trCuitNorm) {
+      const todos = await prisma.transportista.findMany({ where: { companyId }, select: { id: true, cuit: true } });
+      const hit = todos.find(t => (t.cuit || '').replace(/[-.\s]/g, '') === trCuitNorm);
+      if (hit) trRow = await prisma.transportista.findFirst({ where: { id: hit.id, companyId } });
+    }
+    // 2) Si no hay CUIT o no matcheó, buscar por nombre exacto (case-insensitive).
+    if (!trRow && trNombre) trRow = await prisma.transportista.findFirst({ where: { companyId, nombre: { equals: trNombre, mode: 'insensitive' } } });
+    // 3) Crear sólo si hay nombre.
+    if (!trRow && trNombre) {
       trRow = await prisma.transportista.create({ data: { companyId, nombre: trNombre, cuit: norm(d.transporteCuit) || null } });
       if (counts) counts.transportistas++;
-    } else if (norm(d.transporteCuit) && !trRow.cuit) {
+    } else if (trRow && norm(d.transporteCuit) && !trRow.cuit) {
       trRow = await prisma.transportista.update({ where: { id: trRow.id }, data: { cuit: norm(d.transporteCuit) } });
     }
-    transportistaId = trRow.id;
+    if (trRow) transportistaId = trRow.id;
   } else if (transportistaId) {
     trRow = await prisma.transportista.findFirst({ where: { id: transportistaId, companyId } });
   }
   if (transportistaId) out.transportistaId = transportistaId;
-  // Proveedor espejo del transportista (para facturar el flete)
-  if (trRow) { try { await _asegurarProveedorTransportista(companyId, trRow, counts); } catch (_) {} }
+  // Proveedor espejo del transportista (para facturar el flete) — NO si es transporte propio.
+  if (trRow && !trRow.propio) { try { await _asegurarProveedorTransportista(companyId, trRow, counts); } catch (_) {} }
 
   // --- Camión (por patente del chasis) ---
   let camionId = d.camionId || null;
@@ -3639,6 +3648,57 @@ async function _autoAltaLogisticaViaje(companyId, d, counts) {
   if (choferId) out.choferId = choferId;
 
   return out;
+}
+
+// ============================================================
+// COMISIÓN del chofer-EMPLEADO por el viaje (camión propio).
+// Si el chofer del viaje está vinculado a un empleado y tiene comisión
+// configurada, genera/actualiza un MovimientoEmpleado (tipo ganancia,
+// categoría "comision") en la ficha del empleado. Idempotente por viajeId:
+// se recalcula al editar el viaje y se borra si el monto queda en 0.
+// No toca la comisión si ya quedó incluida en una liquidación.
+// ============================================================
+async function _comisionChoferViaje(companyId, v) {
+  try {
+    if (!v || !v.id || !v.choferId) return;
+    const ch = await prisma.chofer.findFirst({ where: { id: v.choferId, companyId } });
+    const existing = await prisma.movimientoEmpleado.findFirst({ where: { companyId, viajeId: v.id, categoria: 'comision' } });
+    // Sin config de comisión → si había una vieja (no liquidada), la limpiamos.
+    if (!ch || !ch.empleadoId || !ch.comisionTipo || !ch.comisionValor) {
+      if (existing && !existing.liquidacionId) await prisma.movimientoEmpleado.delete({ where: { id: existing.id } });
+      return;
+    }
+    const emp = await prisma.empleado.findFirst({ where: { id: ch.empleadoId, companyId } });
+    if (!emp) return;
+    const kg = Number(v.kgDescarga || v.cantidad || 0);
+    const tn = kg / 1000;
+    const fleteBase = Number(v.total || v.flete || (v.tarifa ? v.tarifa * kg / 1000 : 0)) || 0;
+    const val = Number(ch.comisionValor);
+    let monto = 0, cantidad = 1, unidad = 'viaje', valorUnitario = null, detalleCalc = '';
+    if (ch.comisionTipo === 'porcentaje')      { monto = fleteBase * val / 100; valorUnitario = null; detalleCalc = `${val}% de ${fleteBase.toFixed(2)}`; }
+    else if (ch.comisionTipo === 'monto_fijo') { monto = val; valorUnitario = val; detalleCalc = 'monto fijo por viaje'; }
+    else if (ch.comisionTipo === 'por_tn')     { monto = val * tn; cantidad = tn; unidad = 'tn'; valorUnitario = val; detalleCalc = `${val}/tn × ${tn.toFixed(2)} tn`; }
+    monto = Math.round(monto * 100) / 100;
+    if (!(monto > 0)) {
+      if (existing && !existing.liquidacionId) await prisma.movimientoEmpleado.delete({ where: { id: existing.id } });
+      return;
+    }
+    const fecha = v.fecha ? new Date(v.fecha) : new Date();
+    const periodo = fecha.toISOString().slice(0, 7);
+    const concepto = `Comisión flete ${(v.origen || '').trim()}→${(v.destino || '').trim()}`.trim();
+    const data = {
+      companyId, empleadoId: emp.id, fecha, periodo,
+      tipo: 'ganancia', categoria: 'comision', concepto,
+      cantidad, valorUnitario, unidad, monto, viajeId: v.id,
+      observaciones: `Comisión automática del viaje · ${detalleCalc}`,
+    };
+    if (existing) {
+      if (existing.liquidacionId) return; // ya liquidada, no se toca
+      await prisma.movimientoEmpleado.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.movimientoEmpleado.create({ data });
+    }
+  } catch (_) { /* la comisión no debe romper el guardado del viaje */ }
 }
 
 app.get('/api/viajes', requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
@@ -3722,6 +3782,7 @@ app.post('/api/viajes', requireCompany, requirePermission('logistica:create'), a
       include: { facturaCompra: { include: { proveedor: true } } },
     });
     await _sincronizarStockViaje(req.companyId, row);
+    await _comisionChoferViaje(req.companyId, row);
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -3746,6 +3807,7 @@ app.put('/api/viajes/:id', requireCompany, requirePermission('logistica:update')
       include: { facturaCompra: { include: { proveedor: true } } },
     });
     await _sincronizarStockViaje(req.companyId, row);
+    await _comisionChoferViaje(req.companyId, row);
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -10224,6 +10286,7 @@ const transportistaSchema = z.object({
   email: z.string().nullable().optional(),
   direccion: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
+  propio: z.boolean().optional(),
   activo: z.boolean().optional(),
 });
 const camionSchema = z.object({
@@ -10245,6 +10308,9 @@ const choferSchema = z.object({
   transportistaId: z.string().nullable().optional(),
   camionId: z.string().nullable().optional(),       // chasis habitual
   acopladoId: z.string().nullable().optional(),     // acoplado habitual
+  empleadoId: z.string().nullable().optional(),     // si el chofer es empleado (camión propio)
+  comisionTipo: z.enum(['porcentaje', 'monto_fijo', 'por_tn']).nullable().optional(),
+  comisionValor: z.coerce.number().nullable().optional(),
   observaciones: z.string().nullable().optional(),
   activo: z.boolean().optional(),
 });
@@ -10284,6 +10350,27 @@ app.put('/api/transportistas/:id', requireCompany, requirePermission('logistica:
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const input = transportistaSchema.partial().parse(req.body);
     const r = await prisma.transportista.update({ where: { id: req.params.id }, data: input });
+    // Si pasó a ser transporte PROPIO, damos de baja el proveedor espejo auto-creado
+    // (sólo si no tiene facturas de compra cargadas, para no romper histórico).
+    if (input.propio === true) {
+      try {
+        const cuitNorm = (r.cuit || '').replace(/[-.\s]/g, '');
+        const provs = await prisma.proveedor.findMany({
+          where: { companyId: req.companyId, activo: true },
+          include: { _count: { select: { facturasCompra: true } } },
+        });
+        const prov = provs.find(p =>
+          (cuitNorm && (p.cuit || '').replace(/[-.\s]/g, '') === cuitNorm) ||
+          (p.razonSocial || '').trim().toLowerCase() === (r.nombre || '').trim().toLowerCase()
+        );
+        if (prov && (prov._count?.facturasCompra || 0) === 0) {
+          await prisma.proveedor.update({ where: { id: prov.id }, data: {
+            activo: false,
+            observaciones: (prov.observaciones ? prov.observaciones + ' · ' : '') + 'Dado de baja: el transportista pasó a ser transporte propio',
+          }});
+        }
+      } catch (_) {}
+    }
     res.json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
