@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.92.0';
+const AGROCORE_VERSION = '1.93.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3494,6 +3494,7 @@ const viajeSchema = z.object({
   observaciones: z.string().nullable().optional(),
   // Destino del cereal (registrar a dónde va para luego cargar la liquidación)
   destinoTipo: z.enum(['cerealera','venta_directa','otro']).nullable().optional(),
+  depositoOrigenId: z.string().nullable().optional(),   // silo/silobolsa de origen (excluye campaña)
   depositoDestinoId: z.string().nullable().optional(),
   liquidacionCerealId: z.string().nullable().optional(),
 
@@ -3787,23 +3788,41 @@ async function _ensureProductoGrano(tx, companyId, nombre) {
 // entrada del grano; aplica a cualquier depósito, incluidas cerealeras).
 async function _sincronizarStockViaje(companyId, viaje) {
   const ref = `VIAJE-${viaje.id}`;
-  const kg = Number(viaje.kgDescarga || viaje.kgNetoDest || viaje.cantidad || 0);
   const grano = (viaje.producto || '').trim();
-  // Solo para depósitos PROPIOS (destino "otro"): las cerealeras ya cargan el stock
-  // por su propio flujo de "entrega" (📤), así que no lo duplicamos acá.
-  const debe = viaje.destinoTipo === 'otro' && !!viaje.depositoDestinoId && kg > 0 &&
-    ['descargado','facturado','pagado'].includes(viaje.estado || '') && !!grano;
+  const estadoOk = ['cargado','descargado','facturado','pagado'].includes(viaje.estado || '');
+  const kgEntrada = Number(viaje.kgDescarga || viaje.kgNetoDest || viaje.cantidad || 0);
+  const kgSalida  = Number(viaje.cantidad || viaje.kgNeto || viaje.kgDescarga || 0);
+  const origen = !!viaje.depositoOrigenId;
+  // EGRESO del silo/silobolsa de origen (el cereal sale de ese depósito acumulado).
+  // La VENTA DIRECTA saca el stock vía la liquidación (no acá) para no duplicar.
+  const debeEgreso = origen && kgSalida > 0 && estadoOk && !!grano && viaje.destinoTipo !== 'venta_directa';
+  // INGRESO al depósito destino:
+  //  - destino "otro" (depósito propio): siempre (cualquier origen) — comportamiento previo.
+  //  - destino "cerealera": SÓLO si el cereal salió de un depósito (el viaje hace el movimiento
+  //    completo). Para viajes de campaña, la cerealera se carga con el botón 📤 (entrega).
+  const ingresoOtro       = viaje.destinoTipo === 'otro'      && !!viaje.depositoDestinoId && kgEntrada > 0 && estadoOk && !!grano;
+  const ingresoCerealera  = origen && viaje.destinoTipo === 'cerealera' && !!viaje.depositoDestinoId && kgEntrada > 0 && estadoOk && !!grano;
   await prisma.$transaction(async (tx) => {
     await tx.movimiento.deleteMany({ where: { companyId, referencia: ref } });
-    if (!debe) return;
+    if (!debeEgreso && !ingresoOtro && !ingresoCerealera) return;
     const productoId = await _ensureProductoGrano(tx, companyId, grano);
     if (!productoId) return;
-    await tx.movimiento.create({ data: {
-      companyId, productoId, depositoId: viaje.depositoDestinoId,
-      fecha: viaje.fecha || new Date(), tipo: 'ingreso', motivo: 'viaje',
-      cantidad: kg, referencia: ref,
-      observaciones: `Ingreso de ${grano} por viaje${viaje.origen ? ' ' + viaje.origen : ''}${viaje.destino ? ' → ' + viaje.destino : ''}`,
-    }});
+    if (debeEgreso) {
+      await tx.movimiento.create({ data: {
+        companyId, productoId, depositoId: viaje.depositoOrigenId,
+        fecha: viaje.fecha || new Date(), tipo: 'egreso', motivo: 'viaje',
+        cantidad: kgSalida, referencia: ref,
+        observaciones: `Salida de ${grano} del depósito por viaje${viaje.destino ? ' → ' + viaje.destino : ''}`,
+      }});
+    }
+    if (ingresoOtro || ingresoCerealera) {
+      await tx.movimiento.create({ data: {
+        companyId, productoId, depositoId: viaje.depositoDestinoId,
+        fecha: viaje.fecha || new Date(), tipo: 'ingreso', motivo: 'viaje',
+        cantidad: kgEntrada, referencia: ref,
+        observaciones: `Ingreso de ${grano} por viaje${viaje.origen ? ' ' + viaje.origen : ''}${viaje.destino ? ' → ' + viaje.destino : ''}`,
+      }});
+    }
   });
 }
 

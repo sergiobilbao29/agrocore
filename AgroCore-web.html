@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'21/07/2026',
+      titulo:'🌾 v1.93.0 — Viajes: el cereal puede salir de un depósito (silo/silobolsa)',
+      desc:'En el viaje ahora elegís el <b>Origen del cereal</b>: <b>de una campaña</b> (trilla, como hasta ahora, para el rinde real) <b>o de un depósito</b> (silo/silobolsa donde venías acumulando el grano). Son <b>excluyentes</b>: si sale de una campaña no sale de un depósito y viceversa. Cuando el origen es un depósito, el viaje <b>descuenta el cereal del stock de ese depósito</b> y, según el destino, lo <b>ingresa en otro depósito o cerealera</b>, o lo saca por <b>venta directa</b> vinculando la <b>liquidación</b> (que ya queda pre-cargada con el depósito de origen). Así podés cargar primero el ingreso al silo y después mover ese stock acumulado con los viajes, sin depender de una campaña.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/07/2026',
       titulo:'📊 v1.92.0 — Campañas: filtros + fix del botón Planilla',
       desc:'Dos cosas en Campañas. <b>(1) Fix:</b> después de generar una planilla y exportarla, el botón <b>📊 Planilla</b> dejaba de responder al querer abrir otra. Ya quedó corregido: siempre abre la planilla de la campaña elegida. <b>(2) Filtros:</b> arriba de las campañas hay un panel de filtros con <b>multiselección</b> por <b>Ciclo/Campaña, Cultivo, Estado, Campo y Lote</b>. Los KPIs y el listado se actualizan según lo filtrado, y hay un botón para limpiar.' },
@@ -13502,7 +13505,7 @@ pages.viajes = async function() {
                   ${canU ? cpeBotonViaje(v) : ''}
                   ${canU?`<button class="btn btn-ghost text-xs" title="Vincular factura del transporte" onclick='viajeVincularForm(${JSON.stringify(v.id)})'>🔗</button>`:''}
                   ${canU && v.estado!=='pagado' && can('finanzas:create')?`<button class="btn btn-ghost text-xs text-indigo-700" title="Cargar factura del transporte y pagar en un paso" onclick='viajeFacturarYPagarAbrir(${JSON.stringify(v.id)})'>💸</button>`:''}
-                  ${v.destinoTipo==='cerealera' && v.depositoDestinoId && can('stock:entrega_cerealera:create')?`<button class="btn btn-ghost text-xs" title="Cargar entrega del cereal a la cerealera" onclick='viajeEntregaCereal(${JSON.stringify(v.id)})'>📤</button>`:''}
+                  ${v.destinoTipo==='cerealera' && v.depositoDestinoId && !v.depositoOrigenId && can('stock:entrega_cerealera:create')?`<button class="btn btn-ghost text-xs" title="Cargar entrega del cereal a la cerealera" onclick='viajeEntregaCereal(${JSON.stringify(v.id)})'>📤</button>`:''}
                   ${v.destinoTipo==='venta_directa' && can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-ghost text-xs" title="Cargar liquidación de venta del cereal" onclick='viajeLiquidacion(${JSON.stringify(v.id)})'>🧾</button>`:''}
                   ${canU && v.estado!=='pagado'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar como pagado (sin generar factura)" onclick='viajeMarcarPagado(${JSON.stringify(v.id)})'>💵</button>`:''}
                   ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='viajeDel(${JSON.stringify(v.id)})'>🗑️</button>`:''}
@@ -13682,11 +13685,23 @@ async function viajeForm(id=null) {
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${fechaStr}"/></div>
         <div><label class="label">Producto / Carga</label>${catSelect('f-prod', 'Cereal', it.producto||'', { placeholder:'— Producto —' })}</div>
-        <div class="col-span-2"><label class="label">Campaña (para rinde real)</label>
-          <select id="f-campana" class="input">
-            <option value="">— Sin campaña —</option>
-            ${_camps.map(c=>`<option value="${esc(c.id)}" ${c.id===it.campanaId?'selected':''}>${esc(_campLabel(c))}</option>`).join('')}
+        <div class="col-span-2"><label class="label">Origen del cereal</label>
+          <select id="f-origtipo" class="input mb-2" onchange="viajeOrigTipo()">
+            <option value="" ${!it.campanaId && !it.depositoOrigenId ? 'selected':''}>— Sin especificar / texto libre —</option>
+            <option value="campana" ${it.campanaId?'selected':''}>🌾 De una campaña (trilla)</option>
+            <option value="deposito" ${it.depositoOrigenId?'selected':''}>🏬 De un depósito (silo/silobolsa acumulado)</option>
           </select>
+          <div id="f-origcamp-wrap" style="${it.campanaId?'':'display:none'}">
+            <select id="f-campana" class="input">
+              <option value="">— Sin campaña —</option>
+              ${_camps.map(c=>`<option value="${esc(c.id)}" ${c.id===it.campanaId?'selected':''}>${esc(_campLabel(c))}</option>`).join('')}
+            </select>
+            <div class="text-[10px] text-slate-500 mt-1">Se usa para el rinde real de la campaña.</div>
+          </div>
+          <div id="f-origdep-wrap" style="${it.depositoOrigenId?'':'display:none'}">
+            <select id="f-origdep" class="input"><option value="">— Elegí el depósito de origen —</option></select>
+            <div class="text-[10px] text-slate-500 mt-1">El cereal sale del stock de este depósito.</div>
+          </div>
         </div>
         <div class="col-span-2"><label class="label">Origen</label><input id="f-ori" class="input" value="${esc(it.origen||'')}" placeholder="Ej: Sampacho, Córdoba"/></div>
         <div class="col-span-2"><label class="label">Destino</label><input id="f-des" class="input" value="${esc(it.destino||'')}" placeholder="Ej: Quequén, Buenos Aires"/></div>
@@ -13820,6 +13835,13 @@ async function viajeForm(id=null) {
         sel.innerHTML = `<option value="">— Elegí el depósito —</option>` +
           deps.map(d => `<option value="${d.id}" ${it.depositoDestinoId===d.id?'selected':''}>${d.tipo==='cerealera'?'🏭':'📦'} ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
       }
+      // Depósitos de ORIGEN (silos/silobolsas/campo, no cerealeras).
+      const selO = $('#f-origdep');
+      if (selO) {
+        const depsOrig = deps.filter(d => d.tipo !== 'cerealera');
+        selO.innerHTML = `<option value="">— Elegí el depósito de origen —</option>` +
+          depsOrig.map(d => `<option value="${d.id}" ${it.depositoOrigenId===d.id?'selected':''}>📦 ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
+      }
     } catch {}
   })();
   viajeFlotaInit(it);
@@ -13880,6 +13902,15 @@ function viajeAcopladoSel() {
   if (!opt || !opt.value) return;
   const p=$('#f-pata'); if(p) p.value=opt.dataset.pat||'';
 }
+function viajeOrigTipo() {
+  const t = $('#f-origtipo')?.value;
+  const cw = $('#f-origcamp-wrap'); const dw = $('#f-origdep-wrap');
+  if (cw) cw.style.display = t === 'campana' ? '' : 'none';
+  if (dw) dw.style.display = t === 'deposito' ? '' : 'none';
+  // Limpiar el que no aplica para respetar la exclusión campaña ↔ depósito.
+  if (t !== 'campana') { const s=$('#f-campana'); if (s) s.value=''; }
+  if (t !== 'deposito') { const s=$('#f-origdep'); if (s) s.value=''; }
+}
 function viajeDestTipo() {
   const t = $('#f-dtipo').value;
   const wrap = $('#f-ddep-wrap');
@@ -13915,7 +13946,8 @@ async function viajeSave(id) {
     origen:          $('#f-ori').value.trim() || null,
     destino:         $('#f-des').value.trim() || null,
     producto:        $('#f-prod').value.trim() || null,
-    campanaId:       $('#f-campana')?.value || null,
+    campanaId:        ($('#f-origtipo')?.value === 'campana')  ? ($('#f-campana')?.value || null) : null,
+    depositoOrigenId: ($('#f-origtipo')?.value === 'deposito') ? ($('#f-origdep')?.value || null) : null,
     cantidad:        $('#f-kg').value  ? Number($('#f-kg').value)  : null,
     kgDescarga:      $('#f-kgd').value ? Number($('#f-kgd').value) : null,
     kgTara:          $('#f-tara')?.value  ? Number($('#f-tara').value)  : null,
@@ -14143,7 +14175,9 @@ async function viajeLiquidacion(viajeId) {
     if (kg) { $('#lq-brut').value = kg; }
     $('#lq-fec').value = String(v.fecha).slice(0, 10);
     $('#lq-nro').value = v.cartaPorte || '';
-    if (v.depositoDestinoId) { const sd = $('#lq-dep'); if (sd && [...sd.options].some(o=>o.value===v.depositoDestinoId)) sd.value = v.depositoDestinoId; }
+    // La liquidación saca el stock: si el cereal salió de un silo/silobolsa, ese es el depósito.
+    const depLiq = v.depositoOrigenId || v.depositoDestinoId;
+    if (depLiq) { const sd = $('#lq-dep'); if (sd && [...sd.options].some(o=>o.value===depLiq)) sd.value = depLiq; }
     $('#lq-obs').value = `Desde viaje ${v.ctg ? 'CTG ' + v.ctg : ''}`.trim();
     if (typeof liqRecalc === 'function') liqRecalc();
   }, 50);

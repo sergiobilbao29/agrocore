@@ -742,6 +742,8 @@ model Viaje {
   estado          String   @default("pendiente")
   facturaCompraId String?   // factura del transportista vinculada (lo que él nos cobra)
   observaciones   String?
+  // ---- Origen del cereal (cuando NO sale de una campaña sino de stock acumulado) ----
+  depositoOrigenId    String?    // silo/silobolsa/depósito de campo del que sale el cereal (excluye campanaId)
   // ---- Destino del cereal (cuando aplica) ----
   destinoTipo         String?    // "cerealera" | "venta_directa" | "otro" (NULL = no aplica)
   depositoDestinoId   String?    // si va a cerealera, depósito destino del cereal
