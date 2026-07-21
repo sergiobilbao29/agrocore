@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'21/07/2026',
+      titulo:'🚛 v1.95.0 — Viajes: columnas de Origen, Destino, Origen cereal y Destino cereal',
+      desc:'En el listado de Viajes, desde el botón <b>⚙ Columnas</b> podés activar cuatro columnas nuevas: <b>Origen</b> y <b>Destino</b> por separado (además de la combinada "Origen → Destino"), <b>Origen cereal</b> (la campaña 🌾 o el depósito/silo 🏬 de donde sale) y <b>Destino cereal</b> (cerealera 🏭, venta directa 💰 u otro depósito 📦, con su nombre). También salen en el <b>Exportar a Excel</b>.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/07/2026',
       titulo:'🏭 v1.94.0 — Cerealera destino correcta + Activar/desactivar depósitos',
       desc:'Dos correcciones. <b>(1)</b> En el viaje, cuando el destino es <b>“A cerealera”</b>, el selector ahora muestra <b>sólo las cerealeras</b> (antes listaba también los depósitos de campo). Si elegís destino “Otro”, muestra sólo tus depósitos propios. <b>(2)</b> En la edición de un <b>depósito/cerealera</b> se agregó la casilla <b>✅ Activo</b>: al borrar un depósito con movimientos queda inactivo (no se pierde el histórico), y ahora podés <b>volver a activarlo</b> desde ahí. Los depósitos inactivos no aparecen en los selectores.' },
@@ -13369,6 +13372,20 @@ function viajeFleteTotal(v) {
   const calc = (kg > 0 && tarifa > 0) ? (kg / 1000) * tarifa : 0;
   return calc || Number(v.flete || 0);
 }
+// Texto del ORIGEN del cereal: campaña (nombre) o depósito de origen (silo/silobolsa).
+function viajeOrigenCerealTxt(v) {
+  if (v.campanaId) { const c=(state.cache.campanas||[]).find(x=>x.id===v.campanaId); return '🌾 '+esc(c ? (c.nombre||c.cultivo||'Campaña') : 'Campaña'); }
+  if (v.depositoOrigenId) { const d=(state.cache.depositos||[]).find(x=>x.id===v.depositoOrigenId); return '🏬 '+esc(d ? d.nombre : 'Depósito'); }
+  return '<span class="text-slate-400">—</span>';
+}
+// Texto del DESTINO del cereal: cerealera / venta directa / otro depósito.
+function viajeDestinoCerealTxt(v) {
+  const dep = v.depositoDestinoId ? (state.cache.depositos||[]).find(x=>x.id===v.depositoDestinoId) : null;
+  if (v.destinoTipo==='cerealera')     return '🏭 '+esc(dep ? dep.nombre : 'Cerealera');
+  if (v.destinoTipo==='venta_directa') return '💰 Venta directa';
+  if (v.destinoTipo==='otro')          return '📦 '+esc(dep ? dep.nombre : 'Depósito');
+  return '<span class="text-slate-400">—</span>';
+}
 function viajeEstadoBadge(e) {
   const m = VIAJE_ESTADOS[e] || { label: e || '—', cls: 'badge-gray' };
   return `<span class="badge ${m.cls}">${m.label}</span>`;
@@ -13405,6 +13422,9 @@ pages.viajes = async function() {
   let rows=[];
   try { rows = await crudList('viajes'); } catch (e) { return toast(e.message,'error'); }
   state.cache.viajes = rows;
+  // Para las columnas "Origen/Destino cereal" necesitamos nombres de campañas y depósitos.
+  if (!state.cache.campanas)  { try { state.cache.campanas  = (await api('/api/campanas')).data  || []; } catch { state.cache.campanas = []; } }
+  if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
 
   const canC = can('produccion:create')||can('logistica:create');
   const canU = can('produccion:update')||can('logistica:update');
@@ -13444,6 +13464,10 @@ pages.viajes = async function() {
   const viajeCols = [
     { key:'fecha', label:'Fecha', sort:v=>fechaAMs(v.fecha), render:v=>`<span class="whitespace-nowrap">${fmtDate(v.fecha)}</span>` },
     { key:'ruta', label:'Origen → Destino', sort:v=>(v.origen||'').toLowerCase(), render:v=>`${esc(v.origen||'—')} <span class="text-slate-400">→</span> ${esc(v.destino||'—')}${v.destinoTipo==='cerealera'?` <span class="badge badge-yellow text-[10px]" title="Va a cerealera">🏭</span>`:v.destinoTipo==='venta_directa'?` <span class="badge badge-green text-[10px]" title="Venta directa">💰</span>`:''}` },
+    { key:'origen', label:'Origen', defHidden:true, sort:v=>(v.origen||'').toLowerCase(), render:v=>esc(v.origen||'—') },
+    { key:'destino', label:'Destino', defHidden:true, sort:v=>(v.destino||'').toLowerCase(), render:v=>esc(v.destino||'—') },
+    { key:'origenCereal', label:'Origen cereal', defHidden:true, sort:v=>viajeOrigenCerealTxt(v).toLowerCase(), render:v=>viajeOrigenCerealTxt(v) },
+    { key:'destinoCereal', label:'Destino cereal', defHidden:true, sort:v=>viajeDestinoCerealTxt(v).toLowerCase(), render:v=>viajeDestinoCerealTxt(v) },
     { key:'producto', label:'Producto', sort:v=>(v.producto||'').toLowerCase(), render:v=>`<b>${esc(v.producto||'—')}</b>` },
     { key:'kgCarga', label:'Kg carga', align:'text-right', sort:v=>Number(v.cantidad||0), render:v=>v.cantidad?fmtN(v.cantidad):'—' },
     { key:'kgDesc', label:'Kg desc.', align:'text-right', sort:v=>Number(v.kgDescarga||0), render:v=>v.kgDescarga?fmtN(v.kgDescarga):'—' },
@@ -13624,7 +13648,7 @@ function viajesExportarExcel() {
     return;
   }
   const aoa = [[
-    'Fecha', 'Origen', 'Destino', 'Producto',
+    'Fecha', 'Origen', 'Destino', 'Origen cereal', 'Destino cereal', 'Producto',
     'Kg carga', 'Kg descarga', 'Diferencia',
     'Tarifa $/t', 'Flete total',
     'Transportista', 'CUIT transporte', 'Chofer', 'Patente', 'Acoplado', 'Tipo camión',
@@ -13637,9 +13661,15 @@ function viajesExportarExcel() {
       ? `${v.facturaCompra.tipo} ${String(v.facturaCompra.puntoVenta).padStart(4,'0')}-${String(v.facturaCompra.numero).padStart(8,'0')}`
       : '';
     const dif = Number(v.cantidad||0) - Number(v.kgDescarga||0);
+    const _oc = v.campanaId ? ('Campaña: ' + (((state.cache.campanas||[]).find(x=>x.id===v.campanaId)||{}).nombre || ((state.cache.campanas||[]).find(x=>x.id===v.campanaId)||{}).cultivo || ''))
+              : v.depositoOrigenId ? ('Depósito: ' + (((state.cache.depositos||[]).find(x=>x.id===v.depositoOrigenId)||{}).nombre || '')) : '';
+    const _depD = v.depositoDestinoId ? ((state.cache.depositos||[]).find(x=>x.id===v.depositoDestinoId)||{}) : {};
+    const _dc = v.destinoTipo==='cerealera' ? ('Cerealera: ' + (_depD.nombre||''))
+              : v.destinoTipo==='venta_directa' ? 'Venta directa'
+              : v.destinoTipo==='otro' ? ('Depósito: ' + (_depD.nombre||'')) : '';
     aoa.push([
       v.fecha ? String(v.fecha).slice(0, 10) : '',
-      v.origen || '', v.destino || '', v.producto || '',
+      v.origen || '', v.destino || '', _oc, _dc, v.producto || '',
       v.cantidad || 0, v.kgDescarga || 0, dif,
       v.tarifa || 0, viajeFleteTotal(v),
       v.transportista || '', v.transporteCuit || '', v.chofer || '', v.patente || '', v.patenteAcoplado || '', v.tipoCamion || '',
