@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'21/07/2026',
+      titulo:'🚛 v1.91.0 — Viajes: el "Flete total" se calcula (kg descarga × tarifa)',
+      desc:'En el listado de Viajes, la columna <b>Flete total</b> ahora muestra el importe calculado: <b>kg de descarga × tarifa ($/tonelada)</b>. Si el viaje todavía no tiene kg de descarga, usa los kg cargados; y si cargaste un flete a mano, respeta ese valor. También sale calculado al exportar a Excel.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'21/07/2026',
       titulo:'👤 v1.90.0 — Comisión del chofer desde la ficha del empleado + vínculo por CUIT',
       desc:'Completa lo de la v1.89.0. Ahora la <b>comisión por viaje</b> se puede configurar directamente en la <b>ficha del empleado</b> (RRHH → Empleados → tildá "🚚 Es chofer de camión" y cargá % del flete / monto fijo / $ por tonelada). Cuando cargás o <b>importás un viaje (CP)</b>, el chofer se <b>vincula solo al empleado por CUIT</b> (CUIL/DNI) — el nombre solo se usa de respaldo si no viene CUIT, porque puede variar entre cargas — y la comisión se <b>carga sola en la planilla del empleado</b>. En la lista de <b>Choferes</b> se agregó la columna <b>“Empleado / comisión”</b> para ver de un vistazo a quién quedó vinculado cada chofer y cuánto cobra.' },
@@ -13306,6 +13309,14 @@ const VIAJE_ESTADOS = {
   facturado:  { label: 'Facturado',  cls: 'badge-blue' },
   pagado:     { label: 'Pagado',     cls: 'badge-green' },
 };
+// Flete total = kg de descarga (o cargados si no hay descarga) × tarifa ($/tonelada).
+// Si hay un flete cargado a mano en el viaje, se respeta ese valor.
+function viajeFleteTotal(v) {
+  const kg = Number(v.kgDescarga || v.cantidad || 0);
+  const tarifa = Number(v.tarifa || 0);
+  const calc = (kg > 0 && tarifa > 0) ? (kg / 1000) * tarifa : 0;
+  return calc || Number(v.flete || 0);
+}
 function viajeEstadoBadge(e) {
   const m = VIAJE_ESTADOS[e] || { label: e || '—', cls: 'badge-gray' };
   return `<span class="badge ${m.cls}">${m.label}</span>`;
@@ -13393,7 +13404,7 @@ pages.viajes = async function() {
     { key:'pagador', label:'Pagador flete', sort:v=>(v.pagadorFlete||'').toLowerCase(), render:v=>v.pagadorFlete?esc(v.pagadorFlete):'<span class="text-slate-400">—</span>' },
     // --- Columnas adicionales (ocultas por defecto; el usuario las agrega si las necesita) ---
     { key:'unidad', label:'Unidad', defHidden:true, sort:v=>(v.unidad||'').toLowerCase(), render:v=>esc(v.unidad||'—') },
-    { key:'flete', label:'Flete total', align:'text-right', defHidden:true, sort:v=>Number(v.flete||0), render:v=>v.flete?fmt$(v.flete):'<span class="text-slate-400">—</span>' },
+    { key:'flete', label:'Flete total', align:'text-right', defHidden:true, sort:v=>viajeFleteTotal(v), render:v=>{const f=viajeFleteTotal(v);return f>0?fmt$(f):'<span class="text-slate-400">—</span>';} },
     { key:'transportista', label:'Transportista', defHidden:true, sort:v=>(v.transportista||'').toLowerCase(), render:v=>esc(v.transportista||'—') },
     { key:'transporteCuit', label:'CUIT transporte', defHidden:true, sort:v=>(v.transporteCuit||'').toLowerCase(), render:v=>esc(v.transporteCuit||'—') },
     { key:'acoplado', label:'Acoplado (patente)', defHidden:true, sort:v=>(v.patenteAcoplado||'').toLowerCase(), render:v=>esc(v.patenteAcoplado||'—') },
@@ -13578,7 +13589,7 @@ function viajesExportarExcel() {
       v.fecha ? String(v.fecha).slice(0, 10) : '',
       v.origen || '', v.destino || '', v.producto || '',
       v.cantidad || 0, v.kgDescarga || 0, dif,
-      v.tarifa || 0, v.flete || 0,
+      v.tarifa || 0, viajeFleteTotal(v),
       v.transportista || '', v.transporteCuit || '', v.chofer || '', v.patente || '', v.patenteAcoplado || '', v.tipoCamion || '',
       v.cartaPorte || '', v.ctg || '', v.pagadorFlete || '',
       v.combustible || 0, v.peajes || 0, v.comida || 0, v.varios || 0, v.total || 0,
