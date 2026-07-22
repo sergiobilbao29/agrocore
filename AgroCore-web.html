@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'22/07/2026',
+      titulo:'🩹 v1.96.0 — Editar/eliminar movimientos de stock + fix cheque en cartera',
+      desc:'Dos cosas. <b>(1) Movimientos de stock:</b> ahora los movimientos <b>manuales</b> se pueden <b>editar (✏️) y eliminar (🗑️)</b> desde la lista de Movimientos. Los generados automáticamente (por facturas, viajes o liquidaciones) quedan bloqueados (🔒) para editarlos en su origen y no descuadrar. Los botones respetan los permisos por rol <b>Stock: modificar</b> y <b>Stock: eliminar</b> (se asignan en Administración → Roles). <b>(2) Fix cheque en cartera:</b> al pagar a un proveedor con cheque, los cheques <b>en cartera</b> (incluidos los e-cheq de terceros) no aparecían en la lista para usarlos, por una diferencia interna en el nombre del estado. Ya se corrigió en todos los selectores de cheque (pagos, cobros, flete, cuotas).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'21/07/2026',
       titulo:'🚛 v1.95.0 — Viajes: columnas de Origen, Destino, Origen cereal y Destino cereal',
       desc:'En el listado de Viajes, desde el botón <b>⚙ Columnas</b> podés activar cuatro columnas nuevas: <b>Origen</b> y <b>Destino</b> por separado (además de la combinada "Origen → Destino"), <b>Origen cereal</b> (la campaña 🌾 o el depósito/silo 🏬 de donde sale) y <b>Destino cereal</b> (cerealera 🏭, venta directa 💰 u otro depósito 📦, con su nombre). También salen en el <b>Exportar a Excel</b>.' },
@@ -5795,6 +5798,7 @@ pages.movimientos = async function() {
       api('/api/campos').catch(()=>({data:[]})),
     ]);
     rows = r.data||[]; prods = p.data||[]; state.cache.productos = prods;
+    state.cache.movimientos = rows;   // para editar/eliminar movimientos normales
     depositos = d.data || []; state.cache.depositos = depositos;
     hacMovs = h.data || []; campos = c.data || []; state.cache.campos = campos;
   } catch (e) { return toast(e.message,'error'); }
@@ -5899,9 +5903,13 @@ pages.movimientos = async function() {
               ? `<td><span class="text-xs text-slate-700">${esc(empresasMap[m.companyId] || '—')}</span></td>`
               : '';
             const catBadge = m.producto?.categoria || p?.categoria;
+            // Movimientos generados por facturas / viajes: se editan en su origen (no acá).
+            const esAuto = /^(VTA-|CPR-|VIAJE-|CANJE|LIQ-)/.test(m.referencia||'') || ['viaje','entrega_canje','liquidacion_cerealera','entrega_cerealera'].includes((m.motivo||'').toLowerCase());
             const actCell = m._hac
               ? `<td class="text-right whitespace-nowrap">${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='hacMovEditar(${JSON.stringify(m._hacId)},"mov")'>✏️</button>`:''}${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar movimiento" onclick='hacMovDel(${JSON.stringify(m._hacId)},"mov")'>🗑️</button>`:''}</td>`
-              : `<td class="text-center text-slate-300 text-xs">—</td>`;
+              : esAuto
+                ? `<td class="text-center text-slate-300 text-xs" title="Generado automáticamente — editá/eliminá en la factura o viaje de origen">🔒</td>`
+                : `<td class="text-right whitespace-nowrap">${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='movEditForm(${JSON.stringify(m.id)})'>✏️</button>`:''}${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar movimiento" onclick='movDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}${!can('stock:update')&&!can('stock:delete')?'<span class="text-slate-300">—</span>':''}</td>`;
             return `<tr class="table-row">
               <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
               <td>${esc(m.producto?.nombre || p?.nombre || '—')}${catBadge?` <span class="badge badge-blue text-[10px] ml-1">${esc(catBadge)}</span>`:''}</td>
@@ -6115,51 +6123,55 @@ pages.reporteMargen = async function() {
 };
 function margenOrdenar(campo) { state.margenSort = campo; pages.reporteMargen(); }
 function margenLimpiar() { state.margenFilter = { q:'', cat:'', soloVendidos:false }; pages.reporteMargen(); }
-async function movForm(prodIdPreset=null, tipoPreset=null) {
+async function movForm(prodIdPreset=null, tipoPreset=null, editMov=null) {
   const prods = state.cache.productos || [];
   if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
   if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
   const deps = (state.cache.depositos || []).filter(d => d.activo !== false);
   const camps = state.cache.campanas || [];
   const campLabel = (c) => c.nombre || `${c.cultivo||''}${c.lote?.nombre?' · '+c.lote.nombre:''}${c.ciclo?' · '+c.ciclo:''}`;
+  const ed = editMov || {};
+  const prodSel = ed.productoId || prodIdPreset;
+  const tipoSel = ed.tipo || tipoPreset;
+  const fechaSel = ed.fecha ? String(ed.fecha).slice(0,10) : new Date().toISOString().slice(0,10);
   openModal({
-    title:'Nuevo movimiento',
+    title: editMov ? '✏️ Editar movimiento' : 'Nuevo movimiento',
     body: `
       <div class="grid grid-cols-2 gap-3">
-        <div><label class="label">Fecha *</label><input id="f-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}" /></div>
+        <div><label class="label">Fecha *</label><input id="f-fecha" type="date" class="input" value="${fechaSel}" /></div>
         <div><label class="label">Tipo *</label>
           <select id="f-tipo" class="input">
-            <option value="ingreso" ${tipoPreset==='entrada'||tipoPreset==='ingreso'?'selected':''}>Ingreso</option>
-            <option value="egreso"  ${tipoPreset==='salida' ||tipoPreset==='egreso' ?'selected':''}>Egreso</option>
+            <option value="ingreso" ${tipoSel==='entrada'||tipoSel==='ingreso'?'selected':''}>Ingreso</option>
+            <option value="egreso"  ${tipoSel==='salida' ||tipoSel==='egreso' ?'selected':''}>Egreso</option>
           </select>
         </div>
         <div class="col-span-2"><label class="label">Producto *</label>
-          <select id="f-prod" class="input">${prods.map(p=>`<option value="${p.id}" ${p.id===prodIdPreset?'selected':''}>${esc(p.nombre)} (${esc(p.unidad)})</option>`).join('')}</select>
+          <select id="f-prod" class="input">${prods.map(p=>`<option value="${p.id}" ${p.id===prodSel?'selected':''}>${esc(p.nombre)} (${esc(p.unidad)})</option>`).join('')}</select>
         </div>
         <div class="col-span-2"><label class="label">Depósito</label>
           <select id="f-deposito" class="input">
-            <option value="">🌱 Campo / general (sin depósito)</option>
-            ${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}${d.tipo?` · ${esc(d.tipo)}`:''}</option>`).join('')}
+            <option value="" ${!ed.depositoId?'selected':''}>🌱 Campo / general (sin depósito)</option>
+            ${deps.map(d=>`<option value="${esc(d.id)}" ${d.id===ed.depositoId?'selected':''}>${esc(d.nombre)}${d.tipo?` · ${esc(d.tipo)}`:''}</option>`).join('')}
           </select>
           <div class="text-[10px] text-slate-400 mt-1">Elegí a qué depósito entra/sale el stock. "Campo / general" es el stock por defecto.</div>
         </div>
-        <div class="col-span-2"><label class="label">Motivo *</label><input id="f-mot" class="input" placeholder="compra / venta / cosecha / consumo…" /></div>
+        <div class="col-span-2"><label class="label">Motivo *</label><input id="f-mot" class="input" placeholder="compra / venta / cosecha / consumo…" value="${esc(ed.motivo||'')}" /></div>
         <div class="col-span-2"><label class="label">Campaña (para grano cosechado)</label>
           <select id="f-campana" class="input">
-            <option value="">— Sin campaña —</option>
-            ${camps.map(c=>`<option value="${esc(c.id)}">${esc(campLabel(c))}</option>`).join('')}
+            <option value="" ${!ed.campanaId?'selected':''}>— Sin campaña —</option>
+            ${camps.map(c=>`<option value="${esc(c.id)}" ${c.id===ed.campanaId?'selected':''}>${esc(campLabel(c))}</option>`).join('')}
           </select>
           <div class="text-[10px] text-slate-400 mt-1">Si es un ingreso de cosecha, elegí la campaña para calcular el rinde real.</div>
         </div>
-        <div><label class="label">Cantidad *</label><input id="f-cant" type="number" step="0.01" class="input" /></div>
-        <div><label class="label">Precio unitario</label><input id="f-pu" type="number" step="0.01" class="input" /></div>
-        <div class="col-span-2"><label class="label">Referencia</label><input id="f-ref" class="input" placeholder="remito / factura / …"/></div>
+        <div><label class="label">Cantidad *</label><input id="f-cant" type="number" step="0.01" class="input" value="${ed.cantidad!=null?ed.cantidad:''}" /></div>
+        <div><label class="label">Precio unitario</label><input id="f-pu" type="number" step="0.01" class="input" value="${ed.precio!=null?ed.precio:''}" /></div>
+        <div class="col-span-2"><label class="label">Referencia</label><input id="f-ref" class="input" placeholder="remito / factura / …" value="${esc(ed.referencia||'')}"/></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="movSave()">Crear</button>`
+             <button class="btn btn-primary" onclick="movSave(${editMov?`'${editMov.id}'`:'null'})">${editMov?'💾 Guardar':'Crear'}</button>`
   });
 }
-async function movSave() {
+async function movSave(editId=null) {
   const precio = $('#f-pu').value ? Number($('#f-pu').value) : null;
   const cant = Number($('#f-cant').value||0);
   const data = {
@@ -6175,8 +6187,22 @@ async function movSave() {
     campanaId: $('#f-campana')?.value || null,
   };
   if (!data.productoId || !data.motivo || !data.cantidad) return toast('Completá los campos requeridos','warn');
-  try { await api('/api/movimientos',{method:'POST',body:JSON.stringify(data)});
-    toast('Movimiento creado','success'); closeModal(); pages.movimientos();
+  try {
+    await api('/api/movimientos'+(editId?'/'+editId:''),{method:editId?'PUT':'POST',body:JSON.stringify(data)});
+    toast(editId?'Movimiento actualizado':'Movimiento creado','success'); closeModal();
+    delete state.cache.stockMap; pages.movimientos();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function movEditForm(id) {
+  const m = (state.cache.movimientos||[]).find(x=>x.id===id);
+  if (!m) return toast('Movimiento no encontrado','error');
+  await movForm(m.productoId, m.tipo, m);
+}
+async function movDel(id) {
+  if (!confirm('¿Eliminar este movimiento de stock? El stock del producto se recalcula.')) return;
+  try {
+    await api('/api/movimientos/'+id,{method:'DELETE'});
+    toast('Movimiento eliminado','success'); delete state.cache.stockMap; pages.movimientos();
   } catch (e) { toast(e.message,'error'); }
 }
 
@@ -9140,7 +9166,7 @@ function ventMetodoCambio(prefix) {
       ? `<label class="label">Caja donde ingresa</label><select id="${prefix}-caja" class="input"><option value="">— Elegir —</option>${cajas.map(c => `<option>${esc(c)}</option>`).join('')}</select>`
       : `<label class="label">Caja</label><input id="${prefix}-caja" class="input" placeholder="Nombre de caja"/>`;
   } else if (met === 'cheque') {
-    const cheques = (state.cache.cheques || []).filter(c => /en cartera/i.test(c.estado || ''));
+    const cheques = (state.cache.cheques || []).filter(c => /en[_ ]?cartera/i.test(c.estado || ''));
     det.innerHTML = cheques.length
       ? `<label class="label">Cheque recibido (ya cargado en Tesorería)</label><select id="${prefix}-cheque" class="input"><option value="">— Elegir —</option>${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)}</option>`).join('')}</select>
         <div class="text-[11px] text-amber-700 mt-1">💡 Si todavía no cargaste el cheque del cliente, cargalo primero en Tesorería → Cheques (estado "en_cartera") y volvé.</div>`
@@ -9915,7 +9941,7 @@ function compMetodoCambio() {
       ? `<label class="label">Caja</label><select id="comp-caja" class="input"><option value="">— Elegir —</option>${cajas.map(c => `<option>${esc(c)}</option>`).join('')}</select>`
       : `<label class="label">Caja</label><input id="comp-caja" class="input" placeholder="Nombre de caja"/>`;
   } else if (met === 'cheque') {
-    const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+    const cheques = (state.cache.cheques || []).filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado || ''));
     det.innerHTML = cheques.length
       ? `<label class="label">Cheque a entregar</label><select id="comp-cheque" class="input"><option value="">— Elegir —</option>${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)}</option>`).join('')}</select>`
       : `<div class="text-xs text-amber-700">⚠️ Sin cheques disponibles.</div>`;
@@ -12553,7 +12579,7 @@ function pagoCobroMetodoCambio(modo) {
     if (esPago) {
       // PAGO: usar un cheque en cartera (propio/terceros para endosar) O cargar un
       // cheque PROPIO nuevo acá mismo (sin darlo de alta antes en Tesorería).
-      const enCartera = cheques.filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+      const enCartera = cheques.filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado || ''));
       const defExistente = enCartera.length > 0;
       cont.innerHTML = `
         <div class="flex gap-2 mb-2 text-xs">
@@ -12589,7 +12615,7 @@ function pagoCobroMetodoCambio(modo) {
     } else {
       // COBRO: el cliente entrega un cheque. Por defecto cargar uno nuevo desde acá
       // (lo que es el caso típico). Permitimos también usar uno ya en cartera.
-      const enCartera = cheques.filter(c => /en cartera/i.test(c.estado||''));
+      const enCartera = cheques.filter(c => /en[_ ]?cartera/i.test(c.estado||''));
       cont.innerHTML = `
         <div class="flex gap-2 mb-2 text-xs">
           <button type="button" class="btn btn-secondary text-xs flex-1" id="pc-ch-mode-nuevo" onclick="pcChequeModo('nuevo')">📝 Cargar nuevo cheque recibido</button>
@@ -13050,7 +13076,7 @@ function ccMetodoCambio() {
          <select id="f-met-caja" class="input"><option value="">— Elegir —</option>${cajas.map(c => `<option>${esc(c)}</option>`).join('')}</select>`
       : `<label class="label">${esPago ? 'Caja' : 'Caja'}</label><input id="f-met-caja" class="input" placeholder="Nombre de caja"/>`;
   } else if (met === 'cheque') {
-    const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+    const cheques = (state.cache.cheques || []).filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado || ''));
     det.innerHTML = cheques.length
       ? `<label class="label">${esPago ? 'Cheque a entregar' : 'Cheque recibido (ya cargado en Tesorería)'}</label>
          <select id="f-met-cheque" class="input"><option value="">— Elegir —</option>${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}</select>`
@@ -14101,7 +14127,7 @@ function viajeMarcarPagadoMetodo() {
       <select id="vmp-banco" class="input"><option value="">— Seleccionar —</option>${cuentas.map(x=>`<option value="${esc(x.id)}">${esc(x.banco)}${x.numero?' · '+esc(x.numero):''}</option>`).join('')}</select>
       ${!cuentas.length?'<div class="text-xs text-amber-700 mt-1">No hay cuentas — cargá una en Tesorería → Bancos.</div>':''}`;
   } else if (m === 'cheque') {
-    const enCartera = (state.cache.cheques||[]).filter(x=>/en cartera|emitido|depositado/i.test(x.estado||''));
+    const enCartera = (state.cache.cheques||[]).filter(x=>/en[_ ]?cartera|emitido|depositado/i.test(x.estado||''));
     const defEx = enCartera.length>0;
     c.innerHTML = `
       <div class="flex gap-2 mb-2 text-xs">
@@ -14643,7 +14669,7 @@ function viajeFacPagarMetodoCambio() {
         <div class="text-[11px] text-amber-700 mt-1">⚠️ No hay cajas. Creálas en Configuración → Catálogos → Cajas.</div>`;
     }
   } else if (metodo === 'cheque') {
-    const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+    const cheques = (state.cache.cheques || []).filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado || ''));
     cont.innerHTML = cheques.length
       ? `<label class="label">Cheque a entregar al transportista</label>
          <select id="vfp-cheque" class="input">
@@ -19595,7 +19621,7 @@ async function _fetchEmpresaRecursos(empId) {
   ]);
   const r = {
     cajas: (cats.data||[]).filter(c=>c.tipo==='Caja' && c.activo!==false).map(c=>c.nombre).filter(Boolean),
-    cheques: (chs.data||[]).filter(c=>/en cartera|emitido|depositado/i.test(c.estado||'')),
+    cheques: (chs.data||[]).filter(c=>/en[_ ]?cartera|emitido|depositado/i.test(c.estado||'')),
     cuentas: (ctas.data||[]).filter(c=>c.activo!==false),
   };
   state._intercoRec[empId] = r;
@@ -19781,7 +19807,7 @@ function movDiariosMetodoCambio() {
          <input id="md-medio" class="input" placeholder="Ej: Mercado Pago, Billetera XX"/>
          <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargala en Configuración → Catálogos → Medios externos.</div>`;
   } else if (met === 'cheque') {
-    const cheques = (state.cache.cheques || []).filter(c => /en cartera|emitido|depositado/i.test(c.estado || ''));
+    const cheques = (state.cache.cheques || []).filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado || ''));
     det.innerHTML = cheques.length
       ? `<label class="label">Cheque a usar *</label>
          <select id="md-cheque" class="input">
