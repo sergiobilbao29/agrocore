@@ -2370,6 +2370,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'22/07/2026',
+      titulo:'📄 v1.98.0 — Orden de pago a proveedor (imprimir / PDF / WhatsApp / email)',
+      desc:'Al <b>registrar un pago a un proveedor</b>, se genera automáticamente una <b>Orden de Pago</b> con el membrete de la empresa, los datos del proveedor, los comprobantes saldados, la forma de pago (efectivo/cheque/transferencia con su detalle), el <b>importe en números y en letras</b> y las líneas de firma. Desde el documento podés <b>🖨️ imprimir</b>, <b>📄 descargar el PDF</b>, <b>💬 compartir por WhatsApp</b> o <b>✉️ enviar por email</b>. Ideal para adjuntar al comprobante o entregar al proveedor.' },
+    { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'22/07/2026',
+      titulo:'🛠️ v1.97.0 — Fix instalaciones nuevas: columna User.alias faltante',
+      desc:'Corrección de infraestructura: la columna <b>alias</b> del usuario estaba en el modelo pero <b>ninguna migración la creaba</b>, así que las <b>instalaciones nuevas</b> (servidores de clientes nuevos) quedaban con la tabla de usuarios incompleta y el login fallaba con error 500. Se agregó la migración que crea las columnas faltantes (idempotente: en las instalaciones existentes no cambia nada, ya las tenían). No afecta a los datos.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'22/07/2026',
       titulo:'🩹 v1.96.0 — Editar/eliminar movimientos de stock + fix cheque en cartera',
       desc:'Dos cosas. <b>(1) Movimientos de stock:</b> ahora los movimientos <b>manuales</b> se pueden <b>editar (✏️) y eliminar (🗑️)</b> desde la lista de Movimientos. Los generados automáticamente (por facturas, viajes o liquidaciones) quedan bloqueados (🔒) para editarlos en su origen y no descuadrar. Los botones respetan los permisos por rol <b>Stock: modificar</b> y <b>Stock: eliminar</b> (se asignan en Administración → Roles). <b>(2) Fix cheque en cartera:</b> al pagar a un proveedor con cheque, los cheques <b>en cartera</b> (incluidos los e-cheq de terceros) no aparecían en la lista para usarlos, por una diferencia interna en el nombre del estado. Ya se corrigió en todos los selectores de cheque (pagos, cobros, flete, cuotas).' },
@@ -12710,6 +12716,133 @@ function pcChequeModo(modo) {
   }
 }
 
+// ===== ORDEN DE PAGO — documento imprimible (imprimir / PDF / WhatsApp / email) =====
+function _opEmpresa(){
+  const c = (state.user?.companies||[]).find(x=>x.id===state.companyId) || {};
+  return { nombre: c.razonSocial || c.name || 'Empresa', cuit: c.cuit||'', direccion: c.direccion||'', logoUrl: c.logoUrl||'' };
+}
+function _numeroALetras(num){
+  num = Math.floor(Math.abs(Number(num)||0));
+  if (num===0) return 'CERO';
+  const U=['','UNO','DOS','TRES','CUATRO','CINCO','SEIS','SIETE','OCHO','NUEVE','DIEZ','ONCE','DOCE','TRECE','CATORCE','QUINCE','DIECISEIS','DIECISIETE','DIECIOCHO','DIECINUEVE','VEINTE'];
+  const D=['','','','TREINTA','CUARENTA','CINCUENTA','SESENTA','SETENTA','OCHENTA','NOVENTA'];
+  const C=['','CIENTO','DOSCIENTOS','TRESCIENTOS','CUATROCIENTOS','QUINIENTOS','SEISCIENTOS','SETECIENTOS','OCHOCIENTOS','NOVECIENTOS'];
+  const seccion=(n)=>{
+    if (n===100) return 'CIEN';
+    const c=Math.floor(n/100), dd=n%100, d=Math.floor(dd/10), u=dd%10;
+    let t = c?C[c]+' ':'';
+    if (dd<=20) t+=U[dd];
+    else if (dd<30) t+='VEINTI'+U[u];
+    else { t+=D[d]; if (u) t+=' Y '+U[u]; }
+    return t.trim();
+  };
+  const miles=(n)=>{ if (n<1000) return seccion(n); const m=Math.floor(n/1000), r=n%1000; let t=m===1?'MIL':seccion(m)+' MIL'; if (r) t+=' '+seccion(r); return t; };
+  const millones=(n)=>{ if (n<1000000) return miles(n); const m=Math.floor(n/1000000), r=n%1000000; let t=m===1?'UN MILLON':miles(m)+' MILLONES'; if (r) t+=' '+miles(r); return t; };
+  return millones(num);
+}
+function _opMetodoDetalle(op){
+  const m=op.metodo;
+  if (m==='efectivo') return 'Efectivo'+(op.caja?' · caja '+op.caja:'');
+  if (m==='transferencia') return 'Transferencia bancaria'+(op.bancoNombre?' · '+op.bancoNombre:'');
+  if (m==='cheque') return 'Cheque'+(op.chequeInfo?' · '+op.chequeInfo:'');
+  if (m==='cereal') return 'Entrega de cereal';
+  if (m==='intercompany') return 'Cubierto por otra firma del grupo';
+  return m||'—';
+}
+function _opTextoLetras(monto){
+  const cents=Math.round((Math.abs(monto)-Math.floor(Math.abs(monto)))*100);
+  return _numeroALetras(monto)+' PESOS'+(cents?(' CON '+String(cents).padStart(2,'0')+'/100'):'');
+}
+function _opHTML(op){
+  const emp=_opEmpresa();
+  const filas=(op.comprobantes||[]).map(c=>`<tr><td style="padding:6px 8px;border-bottom:1px solid #eee">${esc(c.detalle)}</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${fmt$(c.importe)}</td></tr>`).join('') || `<tr><td style="padding:6px 8px" colspan="2">Pago a cuenta</td></tr>`;
+  return `<div id="op-doc" style="font-family:Arial,Helvetica,sans-serif;color:#1e293b;max-width:720px;margin:0 auto;padding:8px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #15803d;padding-bottom:10px;margin-bottom:14px">
+      <div><div style="font-size:20px;font-weight:bold;color:#166534">${esc(emp.nombre)}</div>
+        ${emp.cuit?`<div style="font-size:12px;color:#64748b">CUIT: ${esc(emp.cuit)}</div>`:''}
+        ${emp.direccion?`<div style="font-size:12px;color:#64748b">${esc(emp.direccion)}</div>`:''}</div>
+      <div style="text-align:right"><div style="font-size:18px;font-weight:bold">ORDEN DE PAGO</div>
+        <div style="font-size:12px;color:#64748b">Fecha: ${fmtDate(op.fecha)}</div></div>
+    </div>
+    <table style="width:100%;font-size:13px;margin-bottom:12px">
+      <tr><td style="padding:3px 0;color:#64748b;width:120px">Proveedor:</td><td style="padding:3px 0;font-weight:bold">${esc(op.proveedor||'—')}</td></tr>
+      ${op.proveedorCuit?`<tr><td style="padding:3px 0;color:#64748b">CUIT:</td><td style="padding:3px 0">${esc(op.proveedorCuit)}</td></tr>`:''}
+      <tr><td style="padding:3px 0;color:#64748b">Forma de pago:</td><td style="padding:3px 0">${esc(_opMetodoDetalle(op))}</td></tr>
+    </table>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">
+      <thead><tr style="background:#f1f5f9"><th style="padding:6px 8px;text-align:left">Comprobante</th><th style="padding:6px 8px;text-align:right">Importe</th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table>
+    <div style="background:#166534;color:#fff;padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;font-size:15px;font-weight:bold;margin-bottom:8px">
+      <span>TOTAL PAGADO</span><span>${fmt$(op.monto)}</span></div>
+    <div style="font-size:12px;color:#334155;font-style:italic;margin-bottom:24px">Son: ${_opTextoLetras(op.monto)}.</div>
+    ${op.obs?`<div style="font-size:12px;color:#64748b;margin-bottom:24px">Observaciones: ${esc(op.obs)}</div>`:''}
+    <div style="display:flex;justify-content:space-between;margin-top:44px;font-size:12px">
+      <div style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Firma y aclaración (paga)</div></div>
+      <div style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Recibí conforme (proveedor)</div></div>
+    </div></div>`;
+}
+function ordenPagoAbrir(op){
+  state._opActual = op;
+  openModal({
+    title:'📄 Orden de pago', size:'max-w-3xl',
+    body:_opHTML(op),
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            <button class="btn btn-secondary" onclick="ordenPagoImprimir()">🖨️ Imprimir</button>
+            <button class="btn btn-secondary" onclick="ordenPagoPDF()">📄 PDF</button>
+            <button class="btn btn-secondary" onclick="ordenPagoWhatsApp()">💬 WhatsApp</button>
+            <button class="btn btn-primary" onclick="ordenPagoEmail()">✉️ Email</button>`
+  });
+}
+function ordenPagoImprimir(){
+  const cont=document.getElementById('op-doc'); if(!cont) return;
+  const w=window.open('','_blank','width=820,height=920'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write('<html><head><title>Orden de pago</title><meta charset="utf-8"></head><body style="margin:24px">'+cont.outerHTML+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>{ try{w.print();}catch(e){} }, 350);
+}
+function ordenPagoPDF(){
+  const op=state._opActual; if(!op) return;
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if(!jsPDFCtor) return toast('Todavía se está cargando la librería de PDF…','warn');
+  const emp=_opEmpresa();
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  const W=doc.internal.pageSize.getWidth(); let y=44;
+  doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.setTextColor(22,101,52);
+  doc.text(emp.nombre, 40, y); doc.setTextColor(0,0,0);
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text('ORDEN DE PAGO', W-40, y, {align:'right'}); y+=16;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90);
+  if(emp.cuit) doc.text('CUIT: '+emp.cuit, 40, y);
+  doc.text('Fecha: '+fmtDate(op.fecha), W-40, y, {align:'right'}); y+=20; doc.setTextColor(0,0,0);
+  doc.setFontSize(10);
+  doc.setFont('helvetica','bold'); doc.text('Proveedor:',40,y); doc.setFont('helvetica','normal'); doc.text(String(op.proveedor||'—'),110,y); y+=15;
+  doc.setFont('helvetica','bold'); doc.text('Forma de pago:',40,y); doc.setFont('helvetica','normal'); doc.text(_opMetodoDetalle(op),130,y);
+  doc.autoTable({ startY:y+8, head:[['Comprobante','Importe']],
+    body:(op.comprobantes||[]).length?op.comprobantes.map(c=>[c.detalle, fmt$(c.importe)]):[['Pago a cuenta', fmt$(op.monto)]],
+    styles:{fontSize:9}, headStyles:{fillColor:[22,101,52]}, columnStyles:{1:{halign:'right'}} });
+  let yy=doc.lastAutoTable.finalY+14;
+  doc.setFillColor(22,101,52); doc.rect(40,yy,W-80,28,'F');
+  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(12);
+  doc.text('TOTAL PAGADO', 54, yy+19); doc.text(fmt$(op.monto), W-54, yy+19, {align:'right'});
+  doc.setTextColor(0,0,0); yy+=40;
+  doc.setFont('helvetica','italic'); doc.setFontSize(9);
+  doc.text('Son: '+_opTextoLetras(op.monto)+'.', 40, yy); yy+=54;
+  doc.setDrawColor(150); doc.line(60,yy,240,yy); doc.line(W-240,yy,W-60,yy); yy+=12;
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  doc.text('Firma y aclaración (paga)',150,yy,{align:'center'}); doc.text('Recibí conforme (proveedor)',W-150,yy,{align:'center'});
+  doc.save('Orden-de-pago-'+String(op.proveedor||'prov').replace(/[^\w]+/g,'_')+'.pdf');
+}
+function _opTexto(op){
+  const emp=_opEmpresa();
+  const l=['ORDEN DE PAGO — '+emp.nombre, 'Fecha: '+fmtDate(op.fecha), 'Proveedor: '+(op.proveedor||'—'), 'Forma de pago: '+_opMetodoDetalle(op), ''];
+  (op.comprobantes||[]).forEach(c=>l.push('• '+c.detalle+': '+fmt$(c.importe)));
+  l.push('', 'TOTAL PAGADO: '+fmt$(op.monto)); if(op.obs) l.push('Obs: '+op.obs);
+  return l.join('\n');
+}
+function ordenPagoWhatsApp(){ const op=state._opActual; if(!op) return; window.open('https://wa.me/?text='+encodeURIComponent(_opTexto(op)),'_blank'); }
+function ordenPagoEmail(){ const op=state._opActual; if(!op) return;
+  window.location.href='mailto:'+(op.proveedorEmail||'')+'?subject='+encodeURIComponent('Orden de pago — '+(op.proveedor||''))+'&body='+encodeURIComponent(_opTexto(op)+'\n\n(Si descargaste el PDF, adjuntalo.)');
+}
+
 async function pagoCobroConfirmar(modo) {
   const esPago = modo === 'pago';
   const d = state._pagoCobroData;
@@ -12841,6 +12974,19 @@ async function pagoCobroConfirmar(modo) {
       : `🔗 Notas de crédito vinculadas (${comprobantes.length} comprobante${comprobantes.length===1?'':'s'}${_ncTxt}) — sin movimiento de plata`;
     toast(_msg, 'success');
     pages.ctasCtes();
+    // Orden de pago: sólo cuando fue un PAGO con salida de plata.
+    if (esPago && monto > 0.01) {
+      const prov = (state.cache.proveedores||[]).find(p=>p.id===contactoId) || {};
+      const opComps = comprobantes.map(c => {
+        const it = (d.comprobantes||[]).find(x=>x.id===c.ctaCteId) || {};
+        return { detalle: it.detalle || it.referencia || 'Comprobante', importe: c.importeAplicado };
+      });
+      const op = { proveedor: prov.razonSocial||'', proveedorCuit: prov.cuit||'', proveedorEmail: prov.email||'',
+                   fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', comprobantes: opComps };
+      if (metodo==='transferencia' && body.bancoCuentaId){ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===body.bancoCuentaId); if(b) op.bancoNombre=`${b.banco}${b.numero?' '+b.numero:''}`; }
+      if (metodo==='cheque'){ if(body.nuevoCheque) op.chequeInfo=`${body.nuevoCheque.banco||''} N° ${body.nuevoCheque.nroCheque||''}`; else if(body.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===body.chequeId); if(ch) op.chequeInfo=`${ch.banco||''} N° ${ch.numero||ch.nroCheque||''}`; } }
+      setTimeout(()=>ordenPagoAbrir(op), 150);
+    }
   } catch (e) { toast(e.message || 'Error al registrar', 'error'); }
 }
 

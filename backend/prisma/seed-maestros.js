@@ -354,10 +354,14 @@ async function upsertFirst(model, where, create) {
 async function main() {
   console.log('\n🌾 Cargando maestros y datos de ejemplo en AgroCore Demo...\n');
 
-  // 1) Obtener empresa demo
-  const empresa = await prisma.company.findFirst({ where: { name: 'AgroCore Demo' } });
+  // 1) Obtener la empresa destino. Por defecto la demo, pero se puede apuntar a
+  //    cualquier cliente con AGRO_CLIENTE="Nombre" (para cargar catálogos en una
+  //    instalación nueva). Si no encuentra ese nombre, usa la primera empresa.
+  const nombreEmpresa = (process.env.AGRO_CLIENTE || 'AgroCore Demo').trim();
+  const empresa = await prisma.company.findFirst({ where: { name: nombreEmpresa } })
+              || await prisma.company.findFirst();
   if (!empresa) {
-    console.error('❌ No encontré la empresa "AgroCore Demo". Corré antes: node prisma/seed.js');
+    console.error('❌ No encontré ninguna empresa. Creá una primero (seed-inicial).');
     process.exit(1);
   }
   const companyId = empresa.id;
@@ -372,6 +376,14 @@ async function main() {
     created ? catOk++ : catSkip++;
   }
   console.log(`   ${catOk} creados, ${catSkip} ya existían`);
+
+  // Modo "solo catálogos": para instalaciones NUEVAS de clientes reales, cargamos
+  // los maestros (cereales, unidades, labores, insumos, provincias, etc.) SIN los
+  // datos de ejemplo (productos demo, campos, viajes, cheques...).
+  if (process.env.AGRO_SOLO_CATALOGOS === '1') {
+    console.log('\n✅ Solo catálogos cargados (AGRO_SOLO_CATALOGOS=1).\n');
+    return;
+  }
 
   // 3) PRODUCTOS
   console.log('\n📦 Productos (stock)...');

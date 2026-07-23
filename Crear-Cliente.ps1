@@ -166,6 +166,11 @@ if (Test-Path $prismaBin) {
   cmd /c "`"$prismaBin`" generate 2>&1" | Out-Null
   cmd /c "`"$prismaBin`" migrate deploy 2>&1"
   $rcMig = $LASTEXITCODE
+  # db push: sincroniza el esquema real al del modelo Prisma. Cubre cualquier
+  # columna que las migraciones no hayan creado (histórico de db push en dev),
+  # asi la instalacion nueva queda 100% igual al schema y no falla el login/catalogos.
+  Write-Host "      Sincronizando esquema (prisma db push)..." -ForegroundColor Gray
+  cmd /c "`"$prismaBin`" db push --skip-generate --accept-data-loss 2>&1" | Out-Null
 } else {
   Write-Host "      [ERROR] No encuentro $prismaBin - copiá node_modules de Demo primero" -ForegroundColor Red
   $rcMig = 1
