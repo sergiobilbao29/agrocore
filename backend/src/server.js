@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '1.98.0';
+const AGROCORE_VERSION = '2.1.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -621,10 +621,17 @@ const loginSchema = z.object({
 
 async function serializeUser(u) {
   // Empresas donde el usuario tiene una membresía explícita.
+  const _coFiscal = (co) => ({
+    razonSocial: co.razonSocial || null, cuit: co.cuit || null,
+    domicilio: co.domicilio || null, localidad: co.localidad || null,
+    provincia: co.provincia || null, condIVA: co.condIVA || null,
+    email: co.email || null, telefono: co.telefono || null,
+  });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
     color: uc.company.color || null,
     logoUrl: uc.company.logoUrl || null,
+    ..._coFiscal(uc.company),
     roleLabel: uc.role.label,
     role: { key: uc.role.key, label: uc.role.label, permissions: uc.role.permissions },
   }));
@@ -642,6 +649,7 @@ async function serializeUser(u) {
       companies.push({
         id: co.id, name: co.name,
         color: co.color || null, logoUrl: co.logoUrl || null,
+        ..._coFiscal(co),
         roleLabel: 'Super Admin',
         role: superRole,
       });
@@ -785,6 +793,64 @@ app.put('/api/me/oculto', authMiddleware, async (req, res, next) => {
 });
 
 // ============================================================
+// MAILER — envío de comprobantes por email (Resend HTTP API)
+// Sin dependencias: usa fetch nativo (Node 18+). Se activa con las variables de
+// entorno RESEND_API_KEY y MAIL_FROM. Si no están, devuelve notConfigured y el
+// frontend cae al mailto tradicional. Remitente genérico de AgroCore que muestra
+// el nombre de la empresa; el reply-to apunta al email de la empresa.
+// ============================================================
+const MAIL_FROM = process.env.MAIL_FROM || 'no-reply@agrocore.ar';
+const MAIL_FROM_NAME = process.env.MAIL_FROM_NAME || 'AgroCore';
+function mailConfigurado() { return !!process.env.RESEND_API_KEY; }
+function _escHtml(s) { return String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c])); }
+async function enviarEmailResend({ to, subject, html, text, replyTo, fromName, attachments }) {
+  if (!process.env.RESEND_API_KEY) return { ok: false, notConfigured: true, error: 'Email no configurado (falta RESEND_API_KEY)' };
+  const cleanName = String(fromName || MAIL_FROM_NAME).replace(/[<>\r\n"]/g, '').trim() || MAIL_FROM_NAME;
+  const payload = {
+    from: `${cleanName} <${MAIL_FROM}>`,
+    to: Array.isArray(to) ? to : [to],
+    subject: subject || 'Comprobante',
+  };
+  if (html) payload.html = html;
+  if (text) payload.text = text;
+  if (replyTo) payload.reply_to = replyTo;
+  if (attachments && attachments.length) payload.attachments = attachments.map(a => ({ filename: a.filename, content: a.content }));
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: (j && (j.message || j.error)) || ('HTTP ' + r.status) };
+    return { ok: true, id: (j && j.id) || null };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+function _companyActiva(req) {
+  const uc = (req.user?.userCompanies || []).find(u => u.companyId === req.companyId);
+  return uc?.company || null;
+}
+
+// Formulario de contacto de la web pública (agrocore.ar). PÚBLICO (sin auth).
+app.post('/api/contact', async (req, res) => {
+  try {
+    const { nombre, email, telefono, empresa, mensaje } = req.body || {};
+    if (!nombre || !email || !mensaje) return res.status(400).json({ ok: false, error: 'Faltan datos' });
+    const to = process.env.MAIL_CONTACT_TO || 'hola@agrocore.ar';
+    const html = `<div style="font-family:Arial,sans-serif;font-size:14px">
+      <h3 style="color:#166534">Nueva consulta desde agrocore.ar</h3>
+      <p><b>Nombre:</b> ${_escHtml(nombre)}</p>
+      <p><b>Email:</b> ${_escHtml(email)}</p>
+      <p><b>Teléfono:</b> ${_escHtml(telefono || '-')}</p>
+      <p><b>Empresa:</b> ${_escHtml(empresa || '-')}</p>
+      <p><b>Mensaje:</b><br>${_escHtml(mensaje).replace(/\n/g, '<br>')}</p></div>`;
+    const r = await enviarEmailResend({ to, subject: `Consulta web — ${nombre}`, html, replyTo: email, fromName: 'AgroCore Web' });
+    if (!r.ok) return res.status(r.notConfigured ? 503 : 502).json({ ok: false, error: r.error });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ============================================================
 // ENDPOINTS PUBLICOS (sin auth) — version del sistema
 // Hay que declararlos ANTES del app.use('/api', authMiddleware) porque
 // si no quedan capturados por el middleware global y devuelven 401.
@@ -819,6 +885,111 @@ app.get('/api/system/demo-status', async (_req, res) => {
 // TODO LO SIGUIENTE REQUIERE AUTH
 // ============================================================
 app.use('/api', authMiddleware);
+
+// ============================================================
+// EMAIL / COMPROBANTES EMITIDOS (reimprimir / PDF / reenviar)
+// ============================================================
+app.get('/api/mail/estado', requireCompany, (req, res) => {
+  res.json({ ok: true, configurado: mailConfigurado(), from: MAIL_FROM });
+});
+
+// Envía un comprobante por email (PDF adjunto opcional). Remitente genérico de
+// AgroCore con el nombre de la empresa; reply-to = email de la empresa.
+app.post('/api/comprobantes/enviar', requireCompany, async (req, res) => {
+  try {
+    const schema = z.object({
+      to: z.string().email('Email de destino inválido'),
+      asunto: z.string().min(1),
+      mensaje: z.string().optional().default(''),
+      pdfBase64: z.string().optional().nullable(),
+      filename: z.string().optional().default('comprobante.pdf'),
+      tipo: z.string().optional(),
+      documentoId: z.string().optional().nullable(),
+    });
+    const d = schema.parse(req.body);
+    const company = _companyActiva(req);
+    const fromName = company?.razonSocial || company?.name || 'AgroCore';
+    const replyTo = company?.email || undefined;
+    const htmlMsg = _escHtml(d.mensaje || '').replace(/\n/g, '<br>');
+    const _dom = [company?.domicilio, company?.localidad].filter(Boolean).map(_escHtml).join(', ');
+    const _contacto = [
+      company?.telefono ? 'Tel: ' + _escHtml(company.telefono) : '',
+      company?.email ? 'Email: ' + _escHtml(company.email) : '',
+    ].filter(Boolean).join(' · ');
+    const html = `<div style="font-family:Arial,sans-serif;font-size:14px;color:#111">
+      ${htmlMsg || 'Adjuntamos el comprobante.'}
+      <hr style="border:none;border-top:1px solid #ddd;margin:16px 0">
+      <div style="font-size:12px;color:#444;line-height:1.5">
+        <div style="font-weight:bold">${_escHtml(fromName)}</div>
+        ${company?.cuit ? `<div>CUIT: ${_escHtml(company.cuit)}</div>` : ''}
+        ${_dom ? `<div>${_dom}</div>` : ''}
+        ${_contacto ? `<div>${_contacto}</div>` : ''}
+        <div style="color:#888;margin-top:8px">Ante cualquier consulta, comuníquese con nosotros por los datos de arriba.<br>Este correo se envió desde una dirección de solo envío (no-reply).</div>
+      </div>
+      <div style="font-size:11px;color:#bbb;margin-top:6px">Enviado con AgroCore</div></div>`;
+    const attachments = d.pdfBase64 ? [{ filename: d.filename, content: String(d.pdfBase64).replace(/^data:.*?base64,/, '') }] : [];
+    const r = await enviarEmailResend({ to: d.to, subject: d.asunto, html, text: d.mensaje, replyTo, fromName, attachments });
+    if (!r.ok) return res.status(200).json({ ok: false, notConfigured: !!r.notConfigured, error: r.error });
+    if (d.documentoId) {
+      try { await prisma.documentoEmitido.update({ where: { id: d.documentoId }, data: { emailEnviadoA: d.to, emailEnviadoEn: new Date() } }); } catch {}
+    }
+    res.json({ ok: true, id: r.id });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Persistir un comprobante emitido para poder reabrirlo/reimprimirlo/reenviarlo.
+app.post('/api/documentos', requireCompany, async (req, res) => {
+  try {
+    const schema = z.object({
+      tipo: z.string().min(1),
+      numero: z.string().optional().nullable(),
+      contactoTipo: z.string().optional().nullable(),
+      contactoId: z.string().optional().nullable(),
+      contactoNombre: z.string().optional().nullable(),
+      contactoEmail: z.string().optional().nullable(),
+      total: z.number().optional().nullable(),
+      moneda: z.string().optional().default('ARS'),
+      fecha: z.coerce.date().optional(),
+      datos: z.any(),
+    });
+    const d = schema.parse(req.body);
+    const doc = await prisma.documentoEmitido.create({ data: {
+      companyId: req.companyId, tipo: d.tipo, numero: d.numero || null,
+      fecha: d.fecha || new Date(),
+      contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
+      contactoNombre: d.contactoNombre || null, contactoEmail: d.contactoEmail || null,
+      total: d.total ?? null, moneda: d.moneda || 'ARS',
+      datos: d.datos ?? {}, createdById: req.user?.id || null,
+    }});
+    res.json({ ok: true, data: { id: doc.id } });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/documentos', requireCompany, async (req, res) => {
+  try {
+    const tipo = req.query.tipo ? String(req.query.tipo) : undefined;
+    const rows = await prisma.documentoEmitido.findMany({
+      where: { companyId: req.companyId, ...(tipo ? { tipo } : {}) },
+      orderBy: { fecha: 'desc' }, take: 500,
+      select: { id: true, tipo: true, numero: true, fecha: true, contactoNombre: true, contactoEmail: true, total: true, moneda: true, emailEnviadoA: true, emailEnviadoEn: true },
+    });
+    res.json({ ok: true, data: rows });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/documentos/:id', requireCompany, async (req, res) => {
+  try {
+    const doc = await prisma.documentoEmitido.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!doc) return res.status(404).json({ ok: false, error: 'Comprobante no encontrado' });
+    res.json({ ok: true, data: doc });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
 
 // ---------- SETTINGS (configuración global del sistema) ----------
 // Una sola fila id="global" en la tabla Setting. Cualquier usuario logueado
@@ -2744,6 +2915,25 @@ app.post('/api/facturas/:id/anular', requireCompany, requirePermission('ventas:u
       return tx.factura.update({ where: { id: req.params.id }, data: { estado: 'anulada' } });
     });
     res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Eliminar DEFINITIVAMENTE una factura de venta — solo si NO tiene CAE (no
+// autorizada por ARCA) y NO tiene cobros aplicados. Devuelve el stock.
+app.delete('/api/facturas/:id', requireCompany, requirePermission('ventas:delete'), async (req, res, next) => {
+  try {
+    const f = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!f) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    if (f.cae) return res.status(400).json({ ok: false, error: 'La factura tiene CAE (autorizada por ARCA). No se puede eliminar; usá Anular.' });
+    // ¿Tiene cobros aplicados? (contra-asientos haber con la misma referencia)
+    const cobros = await prisma.ctaCte.count({ where: { companyId: req.companyId, referencia: `FAC-${req.params.id}`, haber: { gt: 0.01 } } });
+    if (cobros > 0) return res.status(400).json({ ok: false, error: 'La factura tiene un cobro aplicado. Primero eliminá el pago/cobro y después la factura.' });
+    await prisma.$transaction(async (tx) => {
+      await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'VTA', facturaId: req.params.id });
+      await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FAC', facturaId: req.params.id });
+      await tx.factura.delete({ where: { id: req.params.id } }); // items caen por onDelete: Cascade
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

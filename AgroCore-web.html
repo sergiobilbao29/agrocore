@@ -2370,6 +2370,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'23/07/2026',
+      titulo:'🧾 v2.1.0 — Factura formato ARCA (x3), movimientos unificados y recibos de cobro',
+      desc:'<b>(1) Factura de venta con formato ARCA:</b> al emitir se muestra al instante con el diseño oficial (letra, emisor/receptor, ítems, totales por alícuota, CAE) y los botones <b>🖨️ Imprimir x3</b> (Original/Duplicado/Triplicado), <b>📄 PDF</b>, <b>💬 WhatsApp</b> y <b>✉️ Email</b>. Si una factura <b>no tiene CAE</b> se puede <b>eliminar</b> (devuelve el stock) siempre que no tenga un cobro aplicado. <b>(2) Compras y Facturación unificadas:</b> ahora cada pantalla muestra <b>todos los movimientos ordenados por fecha</b> con <b>filtro por tipo</b> — en Compras: facturas de compra + <b>Órdenes de Pago</b>; en Facturación: facturas + <b>Cobros</b>. Se quitó el menú separado de Órdenes de pago. <b>(3) Recibo de cobro:</b> al registrar un cobro se genera un recibo con imprimir/PDF/email/WhatsApp. <b>(4) Cuenta corriente:</b> desde el detalle de un proveedor o cliente hay un botón para ver y <b>reimprimir/reenviar</b> sus Órdenes de pago o Recibos.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'23/07/2026',
+      titulo:'✉️ v2.0.0 — Reenviar comprobantes por email + reimprimir Órdenes de Pago y Facturas',
+      desc:'Ahora los comprobantes se pueden <b>reimprimir, regenerar el PDF y enviar por email</b> cuando quieras, no solo al emitirlos. <b>(1) Órdenes de Pago:</b> nueva sección <b>Compras → Órdenes de pago</b> con el historial de todas las OP emitidas; desde ahí las reabrís, imprimís, bajás el PDF o las reenviás. <b>(2) Facturas de venta:</b> al ver una factura hay botones <b>🖨️ Imprimir</b>, <b>📄 PDF</b> y <b>✉️ Email</b> (documento con membrete, cliente, ítems, CAE y totales). <b>(3) Email automático:</b> el sistema manda el mail solo, con el PDF adjunto, desde una dirección de AgroCore que muestra el nombre de tu empresa; si el proveedor/cliente responde, le llega a tu casilla. Requiere una configuración inicial única (ver guía). Si el email no está configurado todavía, el botón abre tu correo como antes.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'23/07/2026',
+      titulo:'📄 v1.99.0 — Orden de Pago rediseñada (formato profesional)',
+      desc:'La <b>Orden de Pago</b> tiene un nuevo diseño formal, tipo comprobante de contabilidad: <b>encabezado en recuadros</b> (empresa a la izquierda, "ORDEN DE PAGO" con número, fecha y "ORIGINAL" a la derecha), <b>bloque de proveedor</b> completo (domicilio, localidad, I.V.A. y C.U.I.T.), la línea <b>"Este comprobante se aplica a"</b> con los comprobantes cancelados, una tabla <b>"Detalle de Cheques entregados"</b> (ID interno, librador, tipo, endosante, N° de cheque, N° de cuenta, fecha de vencimiento, banco e importe), una <b>caja de totales</b> (Total en Cheques / Efectivo / Transferencias / Regímenes / Total) y el <b>importe en letras</b>. Se refleja igual en el <b>PDF</b>, la impresión, el WhatsApp y el email.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'22/07/2026',
       titulo:'📄 v1.98.0 — Orden de pago a proveedor (imprimir / PDF / WhatsApp / email)',
       desc:'Al <b>registrar un pago a un proveedor</b>, se genera automáticamente una <b>Orden de Pago</b> con el membrete de la empresa, los datos del proveedor, los comprobantes saldados, la forma de pago (efectivo/cheque/transferencia con su detalle), el <b>importe en números y en letras</b> y las líneas de firma. Desde el documento podés <b>🖨️ imprimir</b>, <b>📄 descargar el PDF</b>, <b>💬 compartir por WhatsApp</b> o <b>✉️ enviar por email</b>. Ideal para adjuntar al comprobante o entregar al proveedor.' },
@@ -8669,47 +8678,62 @@ pages.facturacion = async function() {
     catch { return false; }
   })();
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let rows=[], clientes=[];
+  let rows=[], clientes=[], cobros=[];
   try {
-    const [f, c] = await Promise.all([api('/api/facturas'), api('/api/clientes')]);
+    const [f, c, cobR] = await Promise.all([api('/api/facturas'), api('/api/clientes'), api('/api/documentos?tipo=recibo_cobro').catch(()=>({data:[]}))]);
     if (!state.cache.campos) { try { state.cache.campos = (await api('/api/campos')).data || []; } catch {} }
-    rows = f.data||[]; clientes = c.data||[]; state.cache.clientes = clientes;
+    rows = f.data||[]; clientes = c.data||[]; cobros = cobR.data||[]; state.cache.clientes = clientes;
   } catch (e) { return toast(e.message,'error'); }
   state.cache.facturas = rows;
   state.ventaFilter = state.ventaFilter || { desde:'', hasta:'', clienteId:'', tipo:'' };
+  if (state.ventaFilter.tipo === undefined) state.ventaFilter.tipo = '';
   const mesActual = new Date().toISOString().slice(0,7);
   const totalMes = rows.filter(f => (f.fecha||'').slice(0,7)===mesActual && f.estado!=='anulada').reduce((a,f)=>a+Number(f.total||0),0);
   const totalAcum = rows.filter(f=>f.estado!=='anulada').reduce((a,f)=>a+Number(f.total||0),0);
   const ivaAcum = rows.filter(f=>f.estado!=='anulada').reduce((a,f)=>a+Number(f.iva||0),0);
 
   const render = () => {
-    const f = state.ventaFilter;
-    const filtered = rows.filter(r => {
-      if (f.desde && (r.fecha||'') < f.desde) return false;
-      if (f.hasta && (r.fecha||'') > f.hasta+'T23:59:59') return false;
-      if (f.clienteId && r.clienteId !== f.clienteId) return false;
-      if (f.tipo && r.tipo !== f.tipo) return false;
+    const ff = state.ventaFilter;
+    // Movimientos = facturas de venta (Factura/NC/ND) + cobros (recibos)
+    const movFact = rows.map(r => ({
+      kind:'factura', id:r.id, fecha:r.fecha, clienteId:r.clienteId,
+      clienteNombre:r.cliente?.razonSocial||'Consumidor final',
+      tipoKey: r.clase==='nota_credito'?'nc':(r.clase==='nota_debito'?'nd':'factura'),
+      letra:r.tipo, pv:r.puntoVenta, nro:r.numero, cae:r.cae, estado:r.estado, origen:r.origen, total:r.total,
+    }));
+    const movCob = cobros.map(o => ({
+      kind:'cobro', id:o.id, fecha:o.fecha, clienteId:o.contactoId,
+      clienteNombre:o.contactoNombre||'—', tipoKey:'cobro', total:o.total, numero:o.numero, enviado:!!o.emailEnviadoEn,
+    }));
+    let movs = movFact.concat(movCob).filter(m => {
+      if (ff.desde && (m.fecha||'') < ff.desde) return false;
+      if (ff.hasta && (m.fecha||'') > ff.hasta+'T23:59:59') return false;
+      if (ff.clienteId && m.clienteId !== ff.clienteId) return false;
+      if (ff.tipo && m.tipoKey !== ff.tipo) return false;
       return true;
     });
+    movs.sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
+    const badge = m => m.tipoKey==='nc'?'<span class="badge badge-yellow">NC</span>':m.tipoKey==='nd'?'<span class="badge badge-red">ND</span>':m.tipoKey==='cobro'?'<span class="badge badge-green">Cobro</span>':'<span class="badge badge-blue">Factura</span>';
     $('#fact-table').innerHTML = `
       <table class="data">
-        <thead><tr><th>Fecha</th><th>Comprob.</th><th>Cliente</th><th class="text-right">Neto</th><th class="text-right">IVA</th><th class="text-right">Total</th><th>CAE</th><th>Estado</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Comprobante</th><th>Cliente</th><th class="text-right">Total</th><th>Estado</th><th></th></tr></thead>
         <tbody>
-          ${filtered.map(f => `
+          ${movs.map(m => `
             <tr class="table-row">
-              <td>${fmtDate(f.fecha)}</td>
-              <td>${f.clase==='nota_credito' ? '<span class="badge badge-yellow">NC</span> ' : f.clase==='nota_debito' ? '<span class="badge badge-red">ND</span> ' : ''}<span class="badge badge-blue">${esc(f.tipo)}</span> <span class="font-mono text-xs">${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}</span>${f.origen==='arca_externa'?` <span class="badge badge-yellow text-[10px]" title="Cargada manualmente desde ARCA">📥 ARCA ext.</span>`:''}</td>
-              <td>${esc(f.cliente?.razonSocial||'Consumidor final')}</td>
-              <td class="text-right">${fmt$(f.subtotal)}</td>
-              <td class="text-right">${fmt$(f.iva)}</td>
-              <td class="text-right font-bold">${fmt$(f.total)}</td>
-              <td class="font-mono text-[10px]">${esc(f.cae||'—')}</td>
-              <td>${f.estado==='anulada'?'<span class="badge badge-red">Anulada</span>':'<span class="badge badge-green">Autorizada</span>'}</td>
+              <td>${fmtDate(m.fecha)}</td>
+              <td>${badge(m)}</td>
+              <td class="text-xs">${m.kind==='factura'
+                ? `<span class="badge badge-blue">${esc(m.letra)}</span> <span class="font-mono">${String(m.pv).padStart(4,'0')}-${String(m.nro).padStart(8,'0')}</span>${m.origen==='arca_externa'?` <span class="badge badge-yellow text-[10px]" title="Cargada manualmente desde ARCA">📥 ARCA ext.</span>`:''}`
+                : `<span class="text-slate-500">Recibo${m.numero?' '+esc(m.numero):''}</span>${m.enviado?' <span title="Enviado por email">✉️</span>':''}`}</td>
+              <td>${esc(m.clienteNombre)}</td>
+              <td class="text-right font-bold">${fmt$(m.total)}</td>
+              <td>${m.kind==='factura'?(m.estado==='anulada'?'<span class="badge badge-red">Anulada</span>':(m.cae?'<span class="badge badge-green">Autorizada</span>':'<span class="badge badge-yellow">Sin CAE</span>')):'<span class="badge badge-green">Cobrado</span>'}</td>
               <td class="text-right whitespace-nowrap">
-                <button class="btn btn-ghost text-xs" onclick='factVer(${JSON.stringify(f.id)})'>👁️</button>
-                ${f.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" onclick='factAnular(${JSON.stringify(f.id)})'>🚫</button>`:''}
+                ${m.kind==='factura'
+                  ? `<button class="btn btn-ghost text-xs" title="Ver comprobante" onclick='factVer(${JSON.stringify(m.id)})'>👁️</button>${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="${m.cae?'Anular':'Eliminar'}" onclick='${m.cae?`factAnular(${JSON.stringify(m.id)})`:`factVer(${JSON.stringify(m.id)})`}'>${m.cae?'🚫':'🗑️'}</button>`:''}`
+                  : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir recibo" onclick='reciboReabrir(${JSON.stringify(m.id)})'>🧾 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='reciboReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>`}
               </td>
-            </tr>`).join('') || '<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin comprobantes con esos filtros</td></tr>'}
+            </tr>`).join('') || '<tr><td colspan="7" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
         </tbody>
       </table>`;
   };
@@ -8748,8 +8772,7 @@ pages.facturacion = async function() {
         </div>
         <div><label class="label">Tipo</label>
           <select id="fv-tipo" class="input">
-            <option value="">Todos</option>
-            ${['A','B','C','E'].map(t=>`<option ${t===state.ventaFilter.tipo?'selected':''}>${t}</option>`).join('')}
+            ${[['','Todos'],['factura','Factura'],['nc','Nota de crédito'],['nd','Nota de débito'],['cobro','Cobro (recibo)']].map(([v,l])=>`<option value="${v}" ${v===state.ventaFilter.tipo?'selected':''}>${l}</option>`).join('')}
           </select>
         </div>
         <div class="flex gap-2">
@@ -9672,6 +9695,8 @@ async function factSaveExterna() {
       }
     }
     closeModal(); pages.facturacion();
+    // Mostrar la factura recién emitida con las opciones (imprimir/PDF/email/WhatsApp)
+    if (facturaId) setTimeout(()=>factVer(facturaId), 250);
   } catch (e) { toast(e.message,'error'); }
 }
 
@@ -9679,34 +9704,194 @@ async function factVer(id) {
   try {
     const r = await api('/api/facturas/'+id);
     const f = r.data;
+    state._factActual = f;
+    const sinCae = !f.cae;
     openModal({
-      title: `Factura ${f.tipo} ${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}`,
-      size:'max-w-2xl',
-      body: `
-        <div class="grid grid-cols-2 gap-3 text-sm mb-3">
-          <div><b>Cliente:</b> ${esc(f.cliente?.razonSocial||'Consumidor final')}</div>
-          <div><b>Fecha:</b> ${fmtDate(f.fecha)}</div>
-          <div><b>Condición:</b> ${esc(f.condicionVenta||'—')}</div>
-          <div><b>CAE:</b> <span class="font-mono">${esc(f.cae||'—')}</span></div>
-        </div>
-        <table class="data">
-          <thead><tr><th>Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P.U.</th><th class="text-right">IVA%</th><th class="text-right">Total</th></tr></thead>
-          <tbody>
-            ${(f.items||[]).map(i=>{
-              const prod = i.productoId ? (state.cache.productos||[]).find(p=>p.id===i.productoId) : null;
-              const prodTxt = prod ? `<span class="badge badge-green text-[10px]">${esc(prod.nombre)}</span>` : '<span class="text-slate-400 text-xs">—</span>';
-              return `<tr><td>${prodTxt}</td><td>${esc(i.descripcion)}</td><td class="text-right">${fmtN(i.cantidad)}</td><td class="text-right">${fmt$(i.precioUnit)}</td><td class="text-right">${i.alicuotaIva}%</td><td class="text-right">${fmt$(i.total)}</td></tr>`;
-            }).join('')}
-          </tbody>
-          <tfoot>
-            <tr><td colspan="5" class="text-right">Subtotal</td><td class="text-right">${fmt$(f.subtotal)}</td></tr>
-            <tr><td colspan="5" class="text-right">IVA</td><td class="text-right">${fmt$(f.iva)}</td></tr>
-            <tr><td colspan="5" class="text-right font-bold">TOTAL</td><td class="text-right font-bold text-green-700">${fmt$(f.total)}</td></tr>
-          </tfoot>
-        </table>`,
-      footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+      title: `${_factClaseTxt(f)} ${f.tipo} ${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}`,
+      size:'max-w-3xl',
+      body: _factDocHTML(f, 'ORIGINAL'),
+      footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+               <button class="btn btn-secondary" onclick="factImprimir()">🖨️ Imprimir x3</button>
+               <button class="btn btn-secondary" onclick="factPDF()">📄 PDF</button>
+               <button class="btn btn-secondary" onclick="factWhatsApp()">💬 WhatsApp</button>
+               <button class="btn btn-primary" onclick="factEmail()">✉️ Email</button>
+               ${sinCae && (can('ventas:delete')||can('ventas:update')) ? `<button class="btn btn-secondary text-red-600" onclick='factEliminar(${JSON.stringify(f.id)})'>🗑️ Eliminar</button>` : ''}`
     });
   } catch (e) { toast(e.message,'error'); }
+}
+
+/* ===== Factura de venta: documento imprimible / PDF / email ===== */
+function _factNroFmt(f){ return `${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}`; }
+function _factClienteEmail(f){
+  return f.cliente?.email || (state.cache.clientes||[]).find(c=>c.id===f.clienteId)?.email || '';
+}
+function _factLetra(f){ return (f.tipo||'B').replace(/^Factura\s*/i,'').trim()||'B'; }
+function _factCod(letra){ return letra==='A'?'01':letra==='B'?'06':letra==='C'?'11':'01'; }
+function _factClaseTxt(f){ return f.clase==='nota_credito'?'NOTA DE CRÉDITO':(f.clase==='nota_debito'?'NOTA DE DÉBITO':'FACTURA'); }
+function _factClienteTel(f){ return f.cliente?.telefono || (state.cache.clientes||[]).find(c=>c.id===f.clienteId)?.telefono || ''; }
+function _factCliente(f){ return f.cliente || (state.cache.clientes||[]).find(c=>c.id===f.clienteId) || {}; }
+function _factNeto(f){ return f.subtotal!=null ? Number(f.subtotal) : (f.items||[]).reduce((a,i)=>a+Number(i.total||0)/(1+Number(i.alicuotaIva||0)/100),0); }
+function _factIvaPorAlic(f){ const m={}; (f.items||[]).forEach(i=>{ const a=Number(i.alicuotaIva||0); const tot=Number(i.total||0); m[a]=(m[a]||0)+(tot-tot/(1+a/100)); }); return m; }
+// Una copia del comprobante con formato ARCA. copia = 'ORIGINAL'|'DUPLICADO'|'TRIPLICADO'
+function _factDocHTML(f, copia){
+  const emp=_opEmpresa(); const cli=_factCliente(f);
+  const letra=_factLetra(f); const ivaMap=_factIvaPorAlic(f); const neto=_factNeto(f);
+  const alics=[27,21,10.5,5,2.5,0];
+  const cliIva=_ivaLabel(cli.condicionIva||cli.condIVA) || 'Consumidor Final';
+  const items=(f.items||[]).map((i,idx)=>{ const a=Number(i.alicuotaIva||0); const tot=Number(i.total||0); const sub=tot/(1+a/100);
+    return `<tr>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px">${String(idx+1).padStart(2,'0')}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px">${esc(i.descripcion||'')}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">${fmtN(i.cantidad)}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px">${esc(i.productoUnidad||i.unidad||'unidad')}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">${fmtN(i.precioUnit,2)}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">0,00</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">${fmtN(sub,2)}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:center">${fmtN(a,a%1?1:0)}%</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">${fmtN(tot,2)}</td></tr>`; }).join('');
+  return `<div class="fact-copia" style="font-family:Arial,Helvetica,sans-serif;color:#000;font-size:11px;border:1px solid #000;margin:0 auto 12px;max-width:770px">
+    <div style="text-align:center;font-weight:bold;font-size:13px;border-bottom:1px solid #000;padding:3px">${copia||'ORIGINAL'}</div>
+    <table style="width:100%;border-collapse:collapse"><tr>
+      <td style="width:48%;border-right:1px solid #000;padding:8px 10px;vertical-align:top">
+        <div style="font-size:15px;font-weight:bold;text-align:center;margin-bottom:6px">${esc(emp.nombre)}</div>
+        <div><b>Razón Social:</b> ${esc(emp.nombre)}</div>
+        ${emp.direccion?`<div><b>Domicilio Comercial:</b> ${esc(emp.direccion)}${emp.localidad?' - '+esc(emp.localidad):''}</div>`:''}
+        <div><b>Condición frente al IVA:</b> ${esc(emp.iva||'IVA Responsable Inscripto')}</div>
+      </td>
+      <td style="width:52%;padding:0;vertical-align:top">
+        <table style="width:100%;border-collapse:collapse"><tr>
+          <td style="width:56px;text-align:center;border-bottom:1px solid #000;vertical-align:top;padding-top:4px">
+            <div style="font-size:26px;font-weight:bold;line-height:1">${esc(letra)}</div>
+            <div style="font-size:8px">COD. ${_factCod(letra)}</div></td>
+          <td style="border-bottom:1px solid #000;border-left:1px solid #000;padding:6px 10px;vertical-align:top">
+            <div style="font-size:16px;font-weight:bold">${_factClaseTxt(f)}</div>
+            <div><b>Punto de Venta:</b> ${String(f.puntoVenta).padStart(5,'0')}&nbsp;&nbsp;<b>Comp. Nro:</b> ${String(f.numero).padStart(8,'0')}</div>
+            <div><b>Fecha de Emisión:</b> ${fmtDate(f.fecha)}</div></td></tr>
+          <tr><td colspan="2" style="padding:6px 10px">
+            <div><b>CUIT:</b> ${esc(emp.cuit||'—')}</div>
+            <div><b>Condición frente al IVA:</b> ${esc(emp.iva||'IVA Responsable Inscripto')}</div></td></tr></table>
+      </td></tr></table>
+    <div style="border-top:1px solid #000;border-bottom:1px solid #000;padding:3px 10px"><b>Fecha de Vto. para el pago:</b> ${f.vencimientoFecha?fmtDate(f.vencimientoFecha):fmtDate(f.fecha)}</div>
+    <div style="padding:6px 10px;border-bottom:1px solid #000">
+      <table style="width:100%"><tr>
+        <td style="width:50%"><b>CUIT:</b> ${esc(cli.cuit||cli.documento||'—')}</td>
+        <td><b>Apellido y Nombre / Razón Social:</b> ${esc(cli.razonSocial||'Consumidor Final')}</td></tr>
+        <tr><td><b>Condición frente al IVA:</b> ${esc(cliIva)}</td>
+        <td><b>Domicilio:</b> ${esc(cli.direccion||cli.domicilio||'—')}${cli.localidad?' - '+esc(cli.localidad):''}</td></tr>
+        <tr><td><b>Condición de venta:</b> ${esc(f.condicionVenta||'—')}</td><td></td></tr></table>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:10px">
+      <thead><tr style="background:#e5e7eb">
+        <th style="border-bottom:1px solid #000;padding:3px 4px;text-align:left">Cód.</th>
+        <th style="border-bottom:1px solid #000;padding:3px 4px;text-align:left">Producto / Servicio</th>
+        <th style="border-bottom:1px solid #000;padding:3px 4px;text-align:right">Cantidad</th>
+        <th style="border-bottom:1px solid #000;padding:3px 4px">U. medida</th>
+        <th style="border-bottom:1px solid #000;padding:3px 4px;text-align:right">Precio Unit.</th>
+        <th style="border-bottom:1px solid #000;padding:3px 4px;text-align:right">% Bonif</th>
+        <th style="border-bottom:1px solid #000;padding:3px 4px;text-align:right">Subtotal</th>
+        <th style="border-bottom:1px solid #000;padding:3px 4px;text-align:center">Alíc. IVA</th>
+        <th style="border-bottom:1px solid #000;padding:3px 4px;text-align:right">Subtotal c/IVA</th></tr></thead>
+      <tbody>${items}</tbody>
+    </table>
+    <table style="width:100%;border-collapse:collapse;border-top:1px solid #000"><tr>
+      <td style="width:55%;vertical-align:bottom;padding:8px 10px"><div style="font-size:10px">Son: ${_opTextoLetras(f.total)}.</div></td>
+      <td style="width:45%;padding:6px 10px;font-size:10px">
+        <table style="width:100%">
+          <tr><td style="text-align:right">Importe Neto Gravado: $</td><td style="text-align:right;width:90px">${fmtN(neto,2)}</td></tr>
+          ${alics.map(a=>`<tr><td style="text-align:right">IVA ${fmtN(a,a%1?1:0)}%: $</td><td style="text-align:right">${fmtN(ivaMap[a]||0,2)}</td></tr>`).join('')}
+          <tr><td style="text-align:right">Importe Otros Tributos: $</td><td style="text-align:right">0,00</td></tr>
+          <tr><td style="text-align:right;font-weight:bold;border-top:1px solid #000">Importe Total: $</td><td style="text-align:right;font-weight:bold;border-top:1px solid #000">${fmtN(f.total,2)}</td></tr>
+        </table></td></tr></table>
+    <div style="border-top:1px solid #000;padding:6px 10px;font-size:10px;display:flex;justify-content:space-between">
+      <div>${f.cae?'<b>Comprobante Autorizado</b><br><span style="font-size:8px">Esta Agencia no se responsabiliza por los datos ingresados en el detalle de la operación</span>':'<b>Comprobante NO autorizado por ARCA</b>'}</div>
+      <div style="text-align:right">${f.cae?`<b>CAE N°:</b> ${esc(f.cae)}<br><b>Fecha de Vto. de CAE:</b> ${f.caeVto?fmtDate(f.caeVto):'—'}`:''}</div>
+    </div>
+  </div>`;
+}
+function _factPDFPage(doc, f, copia){
+  const emp=_opEmpresa(); const cli=_factCliente(f);
+  const letra=_factLetra(f); const ivaMap=_factIvaPorAlic(f); const neto=_factNeto(f);
+  const W=doc.internal.pageSize.getWidth(); const M=36; let y=42;
+  doc.setDrawColor(0); doc.setFont('helvetica','bold'); doc.setFontSize(11);
+  doc.text(copia, W/2, y, {align:'center'}); doc.setLineWidth(0.5); doc.line(M,y+4,W-M,y+4); y+=18;
+  const colX=M+(W-2*M)*0.5;
+  doc.setFontSize(12); doc.text(emp.nombre, (M+colX)/2, y, {align:'center'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); let ly=y+14;
+  doc.text('Razon Social: '+emp.nombre, M, ly); ly+=11;
+  if(emp.direccion){ doc.text('Domicilio: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), M, ly); ly+=11; }
+  doc.text('Cond. IVA: '+(emp.iva||'IVA Responsable Inscripto'), M, ly); ly+=11;
+  doc.setLineWidth(0.8); doc.rect(colX-14, y-8, 28, 26);
+  doc.setFont('helvetica','bold'); doc.setFontSize(18); doc.text(letra, colX, y+9, {align:'center'});
+  doc.setFontSize(6); doc.setFont('helvetica','normal'); doc.text('COD. '+_factCod(letra), colX, y+16, {align:'center'});
+  const rx=colX+24;
+  doc.setFont('helvetica','bold'); doc.setFontSize(12); doc.text(_factClaseTxt(f), rx, y+2);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  doc.text('Punto de Venta: '+String(f.puntoVenta).padStart(5,'0')+'   Comp. Nro: '+String(f.numero).padStart(8,'0'), rx, y+16);
+  doc.text('Fecha de Emision: '+fmtDate(f.fecha), rx, y+27);
+  doc.text('CUIT: '+(emp.cuit||'-'), rx, y+38);
+  y=Math.max(ly, y+48)+2; doc.setLineWidth(0.5); doc.line(M,y,W-M,y); y+=12;
+  doc.setFontSize(8);
+  doc.text('CUIT: '+(cli.cuit||cli.documento||'-'), M, y);
+  doc.text('Razon Social: '+(cli.razonSocial||'Consumidor Final'), M+200, y); y+=11;
+  doc.text('Cond. IVA: '+(_ivaLabel(cli.condicionIva||cli.condIVA)||'Consumidor Final'), M, y);
+  doc.text('Domicilio: '+((cli.direccion||cli.domicilio||'-'))+(cli.localidad?' - '+cli.localidad:''), M+200, y); y+=11;
+  doc.text('Cond. de venta: '+(f.condicionVenta||'-'), M, y); y+=4;
+  doc.autoTable({ startY:y+6,
+    head:[['Cod.','Producto / Servicio','Cant.','U. med.','P. Unit.','% Bon','Subtotal','Alic','Subt. c/IVA']],
+    body:(f.items||[]).map((i,idx)=>{ const a=Number(i.alicuotaIva||0); const tot=Number(i.total||0);
+      return [String(idx+1).padStart(2,'0'), i.descripcion||'', fmtN(i.cantidad), (i.productoUnidad||i.unidad||'unidad'), fmtN(i.precioUnit,2),'0,00', fmtN(tot/(1+a/100),2), fmtN(a,a%1?1:0)+'%', fmtN(tot,2)]; }),
+    styles:{fontSize:7,cellPadding:2}, headStyles:{fillColor:[229,231,235],textColor:20,fontSize:6.5},
+    columnStyles:{2:{halign:'right'},4:{halign:'right'},5:{halign:'right'},6:{halign:'right'},7:{halign:'center'},8:{halign:'right'}}, margin:{left:M,right:M} });
+  let ty=doc.lastAutoTable.finalY+12; const alics=[27,21,10.5,5,2.5,0];
+  const bx=W-M-200; doc.setFontSize(8);
+  const line=(lbl,val,bold)=>{ doc.setFont('helvetica',bold?'bold':'normal'); doc.text(lbl,bx,ty,{align:'right'}); doc.text(val,W-M,ty,{align:'right'}); ty+=11; };
+  line('Importe Neto Gravado: $', fmtN(neto,2));
+  alics.forEach(a=>line('IVA '+fmtN(a,a%1?1:0)+'%: $', fmtN(ivaMap[a]||0,2)));
+  line('Importe Otros Tributos: $', '0,00');
+  line('Importe Total: $', fmtN(f.total,2), true);
+  ty+=6; doc.setFont('helvetica','normal'); doc.setFontSize(7);
+  doc.text('Son: '+_opTextoLetras(f.total)+'.', M, ty); ty+=12;
+  doc.setFont('helvetica','bold'); doc.setFontSize(8);
+  if(f.cae){ doc.text('Comprobante Autorizado', M, ty); doc.text('CAE N: '+f.cae+(f.caeVto?'   Vto CAE: '+fmtDate(f.caeVto):''), W-M, ty, {align:'right'}); }
+  else { doc.text('Comprobante NO autorizado por ARCA', M, ty); }
+}
+function _factBuildPDF(f){
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if(!jsPDFCtor){ toast('Todavía se está cargando la librería de PDF…','warn'); return null; }
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  ['ORIGINAL','DUPLICADO','TRIPLICADO'].forEach((c,i)=>{ if(i>0) doc.addPage(); _factPDFPage(doc,f,c); });
+  return doc;
+}
+function _factFilename(f){ return 'Factura-'+_factNroFmt(f)+'.pdf'; }
+function factImprimir(){
+  const f=state._factActual; if(!f) return;
+  const html=['ORIGINAL','DUPLICADO','TRIPLICADO'].map((c,i)=>`<div style="${i<2?'page-break-after:always':''}">${_factDocHTML(f,c)}</div>`).join('');
+  const w=window.open('','_blank','width=840,height=980'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write('<html><head><title>Factura '+_factNroFmt(f)+'</title><meta charset="utf-8"></head><body style="margin:16px">'+html+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>{ try{w.print();}catch(e){} }, 400);
+}
+function factPDF(){ const f=state._factActual; if(!f) return; const doc=_factBuildPDF(f); if(!doc) return; doc.save(_factFilename(f)); }
+async function factEmail(){
+  const f=state._factActual; if(!f) return;
+  let to=_factClienteEmail(f);
+  if (!to) { to=(prompt('Email del cliente para enviar la factura:','')||'').trim(); if(!to) return; }
+  const doc=_factBuildPDF(f); const pdf=doc?_pdfDocToBase64(doc):null;
+  const emp=_opEmpresa();
+  const asunto=_factClaseTxt(f)+' '+_factNroFmt(f)+' — '+emp.nombre;
+  const mensaje='Estimados,\n\nAdjuntamos la factura '+_factNroFmt(f)+' por '+fmt$(f.total)+'.\n\nSaludos,\n'+emp.nombre;
+  const textoFallback=asunto+'\nCliente: '+(_factCliente(f).razonSocial||'')+'\nTotal: '+fmt$(f.total);
+  await enviarComprobanteEmail({ to, asunto, mensaje, pdfBase64:pdf, filename:_factFilename(f), tipo:'factura_venta', textoFallback });
+}
+function _factTexto(f){ const emp=_opEmpresa(); return _factClaseTxt(f)+' '+_factNroFmt(f)+' - '+emp.nombre+'\nCliente: '+(_factCliente(f).razonSocial||'')+'\nFecha: '+fmtDate(f.fecha)+'\nTotal: '+fmt$(f.total)+(f.cae?'\nCAE: '+f.cae:''); }
+function factWhatsApp(){ const f=state._factActual; if(!f) return;
+  const tel=(_factClienteTel(f)||'').replace(/[^0-9]/g,'');
+  const base=tel?('https://wa.me/'+(tel.startsWith('54')?tel:'549'+tel)):'https://wa.me/';
+  window.open(base+'?text='+encodeURIComponent(_factTexto(f)),'_blank'); }
+async function factEliminar(id){
+  const f=state._factActual; const fid=id||f?.id; if(!fid) return;
+  if(!confirm('¿Eliminar definitivamente esta factura sin CAE?\nSe devolverá el stock de los items. Esta acción no se puede deshacer.')) return;
+  try { await api('/api/facturas/'+fid,{method:'DELETE'}); toast('Factura eliminada','success'); delete state.cache.stockMap; closeModal(); pages.facturacion(); }
+  catch(e){ toast(e.message,'error'); }
 }
 async function factAnular(id) {
   if (!confirm('¿Anular esta factura? Si tenia items vinculados a productos, se devolveran al stock.')) return;
@@ -9718,18 +9903,19 @@ async function factAnular(id) {
  * COMPRAS
  * ========================================================= */
 pages.compras = async function() {
-  setHeader('Compras', 'Facturas de proveedores');
+  setHeader('Compras', 'Facturas de compra y pagos (órdenes de pago)');
   if (!can('finanzas:read') && !can('compras:read')) { $('#page-body').innerHTML = stubPage('compras','Compras'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let rows=[], provs=[];
+  let rows=[], provs=[], ops=[];
   try {
-    const [f, p] = await Promise.all([api('/api/facturas-compra'), api('/api/proveedores')]);
+    const [f, p, opsR] = await Promise.all([api('/api/facturas-compra'), api('/api/proveedores'), api('/api/documentos?tipo=orden_pago').catch(()=>({data:[]}))]);
     if (!state.cache.campos) { try { state.cache.campos = (await api('/api/campos')).data || []; } catch {} }
-    rows = f.data||[]; provs = p.data||[]; state.cache.proveedores = provs;
+    rows = f.data||[]; provs = p.data||[]; ops = opsR.data||[]; state.cache.proveedores = provs;
   } catch (e) { return toast(e.message,'error'); }
   await cargarMonedas();
   state.cache.facturasCompra = rows;
-  state.compraFilter = state.compraFilter || { desde:'', hasta:'', provId:'' };
+  state.compraFilter = state.compraFilter || { desde:'', hasta:'', provId:'', tipo:'' };
+  if (state.compraFilter.tipo === undefined) state.compraFilter.tipo = '';
   const mesActual = new Date().toISOString().slice(0,7);
   // KPIs en pesos: las facturas en otra moneda se convierten con su cotización.
   const aArs = (v, f) => Number(v||0) * ((f.moneda && f.moneda!=='ARS') ? Number(f.cotizacion||1) : 1);
@@ -9738,36 +9924,47 @@ pages.compras = async function() {
   const ivaAcum = rows.reduce((a,f)=>a+aArs(f.iva,f),0);
 
   const render = () => {
-    const f = state.compraFilter;
-    const filtered = rows.filter(r => {
-      if (f.desde && (r.fecha||'') < f.desde) return false;
-      if (f.hasta && (r.fecha||'') > f.hasta+'T23:59:59') return false;
-      if (f.provId && r.proveedorId !== f.provId) return false;
+    const ff = state.compraFilter;
+    // Movimientos = facturas de compra + pagos (órdenes de pago)
+    const movFacturas = rows.map(r => ({
+      kind:'factura', id:r.id, fecha:r.fecha, proveedorId:r.proveedorId,
+      proveedorNombre:r.proveedor?.razonSocial||'—',
+      tipoKey: r.clase==='nota_credito'?'nc':(r.clase==='nota_debito'?'nd':'factura'),
+      moneda:r.moneda, total:r.total, cotizacion:r.cotizacion,
+      comp:`${r.tipo} ${String(r.puntoVenta).padStart(4,'0')}-${String(r.numero).padStart(8,'0')}`,
+    }));
+    const movOps = ops.map(o => ({
+      kind:'op', id:o.id, fecha:o.fecha, proveedorId:o.contactoId,
+      proveedorNombre:o.contactoNombre||'—', tipoKey:'pago',
+      moneda:o.moneda||'ARS', total:o.total, comp:'Orden de pago'+(o.numero?' '+o.numero:''),
+      enviado:!!o.emailEnviadoEn,
+    }));
+    let movs = movFacturas.concat(movOps).filter(m => {
+      if (ff.desde && (m.fecha||'') < ff.desde) return false;
+      if (ff.hasta && (m.fecha||'') > ff.hasta+'T23:59:59') return false;
+      if (ff.provId && m.proveedorId !== ff.provId) return false;
+      if (ff.tipo && m.tipoKey !== ff.tipo) return false;
       return true;
     });
+    movs.sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
+    const badge = m => m.tipoKey==='nc'?'<span class="badge badge-yellow">NC</span>':m.tipoKey==='nd'?'<span class="badge badge-red">ND</span>':m.tipoKey==='pago'?'<span class="badge badge-blue">Pago OP</span>':'<span class="badge badge-green">Factura</span>';
     $('#comp-table').innerHTML = `
       <table class="data">
-        <thead><tr><th>Fecha</th><th>Comprob.</th><th>Proveedor</th><th>CUIT</th><th class="text-right">Neto</th><th class="text-right">IVA</th><th class="text-right">Total</th><th>Stock</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Comprobante</th><th>Proveedor</th><th class="text-right">Total</th><th></th></tr></thead>
         <tbody>
-          ${filtered.map(f => `
+          ${movs.map(m => `
             <tr class="table-row">
-              <td>${fmtDate(f.fecha)}</td>
-              <td>
-                ${f.clase==='nota_credito' ? '<span class="badge badge-yellow">NC</span>' : f.clase==='nota_debito' ? '<span class="badge badge-red">ND</span>' : '<span class="badge badge-green">Factura</span>'}
-                <span class="badge badge-blue">${esc(f.tipo)}</span>
-                <span class="font-mono text-xs">${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}</span>
-              </td>
-              <td><b>${esc(f.proveedor?.razonSocial||'—')}</b></td>
-              <td class="font-mono text-xs">${esc(f.proveedor?.cuit||'—')}</td>
-              <td class="text-right">${fmtMon(f.moneda, f.subtotal)}</td>
-              <td class="text-right">${fmtMon(f.moneda, f.iva)}</td>
-              <td class="text-right font-bold">${fmtMon(f.moneda, f.total)}${f.moneda&&f.moneda!=='ARS'?`<div class="text-[10px] text-slate-400 font-normal">TC ${fmtN(f.cotizacion||0)}</div>`:''}</td>
-              <td>${(f.items||[]).some(i=>i.productoId)?'<span class="badge badge-green text-[10px]">sí</span>':'<span class="text-slate-400 text-xs">no</span>'}</td>
+              <td>${fmtDate(m.fecha)}</td>
+              <td>${badge(m)}</td>
+              <td class="text-xs">${m.kind==='factura'?`<span class="font-mono">${esc(m.comp)}</span>`:`<span class="text-slate-500">${esc(m.comp)}</span>${m.enviado?' <span title="Enviado por email">✉️</span>':''}`}</td>
+              <td><b>${esc(m.proveedorNombre)}</b></td>
+              <td class="text-right font-bold">${fmtMon(m.moneda, m.total)}${m.moneda&&m.moneda!=='ARS'&&m.cotizacion?`<div class="text-[10px] text-slate-400 font-normal">TC ${fmtN(m.cotizacion||0)}</div>`:''}</td>
               <td class="text-right whitespace-nowrap">
-                <button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(f.id)})'>👁️</button>
-                ${can('compras:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='compDel(${JSON.stringify(f.id)})'>🗑️</button>`:''}
+                ${m.kind==='factura'
+                  ? `<button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(m.id)})'>👁️</button>${can('compras:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='compDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
+                  : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir orden de pago" onclick='ordenPagoReabrir(${JSON.stringify(m.id)})'>📄 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='ordenPagoReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>`}
               </td>
-            </tr>`).join('') || '<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin comprobantes con esos filtros</td></tr>'}
+            </tr>`).join('') || '<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
         </tbody>
       </table>`;
   };
@@ -9787,7 +9984,7 @@ pages.compras = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">IVA crédito fiscal</div><div class="text-2xl font-bold mt-1 text-blue-600">${fmt$(ivaAcum)}</div></div>
     </div>
     <div class="kpi mb-3">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
         <div><label class="label">Desde</label><input id="cm-desde" type="date" class="input" value="${state.compraFilter.desde||''}"/></div>
         <div><label class="label">Hasta</label><input id="cm-hasta" type="date" class="input" value="${state.compraFilter.hasta||''}"/></div>
         <div><label class="label">Proveedor</label>
@@ -9796,20 +9993,25 @@ pages.compras = async function() {
             ${provs.map(p=>`<option value="${p.id}" ${p.id===state.compraFilter.provId?'selected':''}>${esc(p.razonSocial)}</option>`).join('')}
           </select>
         </div>
+        <div><label class="label">Tipo</label>
+          <select id="cm-tipo" class="input">
+            ${[['','Todos'],['factura','Factura'],['nc','Nota de crédito'],['nd','Nota de débito'],['pago','Pago (OP)']].map(([v,l])=>`<option value="${v}" ${v===state.compraFilter.tipo?'selected':''}>${l}</option>`).join('')}
+          </select>
+        </div>
         <div class="flex gap-2">
           <button class="btn btn-secondary flex-1" onclick="compFiltrosLimpiar()">Limpiar</button>
         </div>
       </div>
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="comp-table"></div></div>`;
-  ['desde','hasta','prov'].forEach(k => {
+  ['desde','hasta','prov','tipo'].forEach(k => {
     const el = $('#cm-'+k); if (!el) return;
     const evt = (el.tagName==='SELECT' || el.type==='date') ? 'change' : 'input';
     el.addEventListener(evt, e => { state.compraFilter[k==='prov'?'provId':k] = e.target.value; render(); });
   });
   render();
 };
-function compFiltrosLimpiar() { state.compraFilter = { desde:'', hasta:'', provId:'' }; pages.compras(); }
+function compFiltrosLimpiar() { state.compraFilter = { desde:'', hasta:'', provId:'', tipo:'' }; pages.compras(); }
 async function compForm() {
   const provs = state.cache.proveedores || [];
   await cargarMonedas();
@@ -12197,8 +12399,30 @@ function ccVerMovimientos(tipo, contactoId) {
         </tbody>
       </table>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+             <button class="btn btn-secondary" onclick="ccDocumentos('${tipo}','${contactoId}')">${tipo==='cliente'?'🧾 Recibos':'📄 Órdenes de pago'}</button>
              ${can('finanzas:create') && g.saldo>0 ? `<button class="btn btn-primary" onclick="closeModal();ccCobroPagoForm('${tipo}','${contactoId}')">${tipo==='cliente'?'Registrar cobro':'Registrar pago'}</button>`:''}`
   });
+}
+// Lista de OP (proveedor) o recibos (cliente) guardados para este contacto, con reimprimir/PDF/email/WhatsApp.
+async function ccDocumentos(tipo, contactoId){
+  const docTipo = tipo==='cliente' ? 'recibo_cobro' : 'orden_pago';
+  const abrir = tipo==='cliente' ? 'reciboReabrir' : 'ordenPagoReabrir';
+  const titulo = tipo==='cliente' ? 'Recibos de cobro' : 'Órdenes de pago';
+  let docs=[];
+  try { docs = ((await api('/api/documentos?tipo='+docTipo)).data||[]).filter(d=>d.contactoId===contactoId); }
+  catch(e){ return toast(e.message,'error'); }
+  const filas = docs.map(d=>`<tr>
+      <td>${fmtDate(d.fecha)}</td>
+      <td>${d.numero?esc(d.numero):'<span class="text-slate-400">—</span>'}</td>
+      <td class="text-right font-bold">${fmt$(d.total)}</td>
+      <td class="text-center">${d.emailEnviadoEn?`<span class="badge badge-green text-[10px]" title="Enviado a ${esc(d.emailEnviadoA||'')}">✉️ Enviado</span>`:'<span class="text-slate-400 text-xs">—</span>'}</td>
+      <td class="text-right whitespace-nowrap">
+        <button class="btn btn-ghost text-xs text-green-700" onclick='${abrir}(${JSON.stringify(d.id)})'>📄 Abrir</button>
+        <button class="btn btn-ghost text-xs" onclick='${abrir}(${JSON.stringify(d.id)}, "email")'>✉️</button>
+      </td></tr>`).join('') || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin ${titulo.toLowerCase()} guardados para este contacto.</td></tr>`;
+  openModal({ title: titulo, size:'max-w-2xl',
+    body:`<table class="data"><thead><tr><th>Fecha</th><th>N°</th><th class="text-right">Importe</th><th class="text-center">Email</th><th></th></tr></thead><tbody>${filas}</tbody></table>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
 }
 
 // Registrar un cobro (cliente) o pago (proveedor): usamos el diálogo completo
@@ -12717,9 +12941,58 @@ function pcChequeModo(modo) {
 }
 
 // ===== ORDEN DE PAGO — documento imprimible (imprimir / PDF / WhatsApp / email) =====
+function _ivaLabel(v){ return ({RI:'Resp. Inscripto', Monotributo:'Monotributo', Exento:'Exento', ConsumidorFinal:'Consumidor Final'})[v] || v || ''; }
+// ===== Envío de comprobantes por email (Resend, automático) =====
+async function mailEstado(){
+  if (state._mailEstado !== undefined) return state._mailEstado;
+  try { const r = await api('/api/mail/estado'); state._mailEstado = !!r.configurado; }
+  catch { state._mailEstado = false; }
+  return state._mailEstado;
+}
+// Envía un comprobante con PDF adjunto. Si el email no está configurado en el
+// server (o falta destinatario), cae al mailto tradicional. pdfBase64 sin prefijo.
+async function enviarComprobanteEmail({ to, asunto, mensaje, pdfBase64, filename, tipo, documentoId, textoFallback }){
+  const dest = (to||'').trim();
+  const configurado = await mailEstado();
+  if (configurado && dest) {
+    try {
+      const r = await api('/api/comprobantes/enviar', { method:'POST', body: JSON.stringify({
+        to: dest, asunto: asunto||'Comprobante', mensaje: mensaje||'',
+        pdfBase64: pdfBase64||null, filename: filename||'comprobante.pdf', tipo: tipo||null, documentoId: documentoId||null
+      })});
+      if (r.ok) { toast('✉️ Email enviado a '+dest, 'success'); return true; }
+      if (!r.notConfigured) { toast('No se pudo enviar: '+(r.error||'error'), 'error'); return false; }
+      // notConfigured → cae al mailto
+    } catch(e){ toast('No se pudo enviar: '+e.message, 'error'); return false; }
+  }
+  const body = textoFallback || mensaje || '';
+  window.location.href = 'mailto:'+encodeURIComponent(dest)+'?subject='+encodeURIComponent(asunto||'')+'&body='+encodeURIComponent(body + (pdfBase64?'\n\n(Descargá el PDF adjunto y sumalo al correo.)':''));
+  return false;
+}
+function _pdfDocToBase64(doc){ try { return doc.output('datauristring').replace(/^data:.*?base64,/,''); } catch(e){ return null; } }
 function _opEmpresa(){
   const c = (state.user?.companies||[]).find(x=>x.id===state.companyId) || {};
-  return { nombre: c.razonSocial || c.name || 'Empresa', cuit: c.cuit||'', direccion: c.direccion||'', logoUrl: c.logoUrl||'' };
+  return { nombre: c.razonSocial || c.name || 'Empresa', cuit: c.cuit||'', direccion: c.domicilio||'',
+           localidad: c.localidad||'', iva: _ivaLabel(c.condIVA), email: c.email||'', logoUrl: c.logoUrl||'' };
+}
+// Filas de la tabla "Detalle de Cheques entregados" (modelo formal)
+function _opChequeRows(op){
+  const chs = op.cheques||[];
+  if(!chs.length) return '';
+  return chs.map(ch=>`<tr>
+      <td style="padding:5px 6px;border-bottom:1px solid #d1d5db;vertical-align:top">
+        <div>${esc(ch.idInterno||'—')}</div>
+        <div style="color:#475569">${esc(ch.librador||'—')}</div></td>
+      <td style="padding:5px 6px;border-bottom:1px solid #d1d5db;vertical-align:top">
+        <div>${esc(ch.tipo||'—')}</div>
+        <div style="color:#475569">${esc(ch.endosante||'')}</div></td>
+      <td style="padding:5px 6px;border-bottom:1px solid #d1d5db;vertical-align:top;font-family:monospace">${esc(ch.nroCheque||'—')}</td>
+      <td style="padding:5px 6px;border-bottom:1px solid #d1d5db;vertical-align:top;font-family:monospace">${esc(ch.nroCuenta||'—')}</td>
+      <td style="padding:5px 6px;border-bottom:1px solid #d1d5db;vertical-align:top">
+        <div>${ch.fechaVenc?fmtDate(ch.fechaVenc):'—'}</div>
+        <div style="color:#475569">${esc(ch.banco||'')}</div></td>
+      <td style="padding:5px 6px;border-bottom:1px solid #d1d5db;vertical-align:top;text-align:right;white-space:nowrap">${fmt$(ch.importe)}</td>
+    </tr>`).join('');
 }
 function _numeroALetras(num){
   num = Math.floor(Math.abs(Number(num)||0));
@@ -12755,32 +13028,84 @@ function _opTextoLetras(monto){
 }
 function _opHTML(op){
   const emp=_opEmpresa();
-  const filas=(op.comprobantes||[]).map(c=>`<tr><td style="padding:6px 8px;border-bottom:1px solid #eee">${esc(c.detalle)}</td><td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${fmt$(c.importe)}</td></tr>`).join('') || `<tr><td style="padding:6px 8px" colspan="2">Pago a cuenta</td></tr>`;
-  return `<div id="op-doc" style="font-family:Arial,Helvetica,sans-serif;color:#1e293b;max-width:720px;margin:0 auto;padding:8px">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #15803d;padding-bottom:10px;margin-bottom:14px">
-      <div><div style="font-size:20px;font-weight:bold;color:#166534">${esc(emp.nombre)}</div>
-        ${emp.cuit?`<div style="font-size:12px;color:#64748b">CUIT: ${esc(emp.cuit)}</div>`:''}
-        ${emp.direccion?`<div style="font-size:12px;color:#64748b">${esc(emp.direccion)}</div>`:''}</div>
-      <div style="text-align:right"><div style="font-size:18px;font-weight:bold">ORDEN DE PAGO</div>
-        <div style="font-size:12px;color:#64748b">Fecha: ${fmtDate(op.fecha)}</div></div>
+  const cheques=op.cheques||[];
+  const totalCh=op.totalCheques!=null?op.totalCheques:cheques.reduce((a,c)=>a+(Number(c.importe)||0),0);
+  const totalEf=op.totalEfectivo||0, totalTr=op.totalTransferencias||0;
+  const rets=op.retenciones||[];
+  const totalRet=rets.reduce((a,r)=>a+(Number(r.importe)||0),0);
+  const compsTxt=(op.comprobantes||[]).map(c=>esc(c.detalle)).join('  ·  ') || 'Pago a cuenta';
+  const bx='border:1px solid #334155;';
+  const th='padding:5px 6px;text-align:left;font-size:11px;border-bottom:2px solid #334155;';
+  const totRow=(lbl,val,bold)=>`<tr><td style="padding:3px 8px;text-align:right;${bold?'font-weight:bold':''}">${lbl}</td><td style="padding:3px 8px;text-align:right;white-space:nowrap;${bold?'font-weight:bold':''}">${val}</td></tr>`;
+  return `<div id="op-doc" style="font-family:Arial,Helvetica,sans-serif;color:#111827;max-width:760px;margin:0 auto;padding:6px;font-size:12px">
+    <!-- Encabezado en dos recuadros -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px"><tr>
+      <td style="width:62%;${bx}padding:8px 10px;vertical-align:top">
+        <div style="font-size:18px;font-weight:bold;text-align:center">${esc(emp.nombre)}</div>
+        ${emp.direccion?`<div style="font-size:11px"><b>Dirección:</b> ${esc(emp.direccion)}${emp.localidad?' - '+esc(emp.localidad):''}</div>`:''}
+        <div style="font-size:11px"><b>I.V.A.:</b> ${esc(emp.iva||'Resp. Inscripto')}${emp.cuit?`&nbsp;&nbsp;&nbsp;<b>C.U.I.T.:</b> ${esc(emp.cuit)}`:''}</div>
+      </td>
+      <td style="width:38%;${bx}border-left:none;padding:8px 10px;vertical-align:top">
+        <table style="width:100%;font-size:12px"><tr>
+          <td style="font-size:20px;font-weight:bold;line-height:1.05">ORDEN<br>DE<br>PAGO</td>
+          <td style="vertical-align:top;text-align:left">
+            ${op.numero?`<div><b>Número:</b> ${esc(op.numero)}</div>`:''}
+            <div><b>Fecha:</b> ${fmtDate(op.fecha)}</div>
+            <div style="font-weight:bold;margin-top:2px">ORIGINAL</div>
+          </td></tr></table>
+      </td></tr></table>
+    <!-- Proveedor -->
+    <table style="width:100%;border-collapse:collapse;font-size:12px;border-bottom:1px solid #94a3b8;padding-bottom:4px;margin-bottom:8px"><tr>
+      <td style="padding:2px 0;width:50%"><b>Proveedor:</b> ${esc(op.proveedor||'—')}</td>
+      <td style="padding:2px 0"><b>Localidad:</b> ${esc(op.proveedorLocalidad||'—')}</td></tr>
+      <tr><td style="padding:2px 0"><b>Domicilio:</b> ${esc(op.proveedorDomicilio||'—')}</td>
+      <td style="padding:2px 0"><b>I.V.A:</b> ${esc(op.proveedorIva||'Resp. Inscripto')}${op.proveedorCuit?`&nbsp;&nbsp;<b>C.U.I.T.:</b> ${esc(op.proveedorCuit)}`:''}</td></tr>
+    </table>
+    <!-- Aplica a -->
+    <div style="margin-bottom:10px">
+      <div style="font-weight:bold;font-size:12px">Este comprobante se aplica a:</div>
+      <div style="font-size:11px;color:#1f2937">Cancelación de comprobantes: ${compsTxt}</div>
+      <div style="font-size:11px;color:#475569;margin-top:2px">Forma de pago: ${esc(_opMetodoDetalle(op))}</div>
     </div>
-    <table style="width:100%;font-size:13px;margin-bottom:12px">
-      <tr><td style="padding:3px 0;color:#64748b;width:120px">Proveedor:</td><td style="padding:3px 0;font-weight:bold">${esc(op.proveedor||'—')}</td></tr>
-      ${op.proveedorCuit?`<tr><td style="padding:3px 0;color:#64748b">CUIT:</td><td style="padding:3px 0">${esc(op.proveedorCuit)}</td></tr>`:''}
-      <tr><td style="padding:3px 0;color:#64748b">Forma de pago:</td><td style="padding:3px 0">${esc(_opMetodoDetalle(op))}</td></tr>
-    </table>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">
-      <thead><tr style="background:#f1f5f9"><th style="padding:6px 8px;text-align:left">Comprobante</th><th style="padding:6px 8px;text-align:right">Importe</th></tr></thead>
-      <tbody>${filas}</tbody>
-    </table>
-    <div style="background:#166534;color:#fff;padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;font-size:15px;font-weight:bold;margin-bottom:8px">
-      <span>TOTAL PAGADO</span><span>${fmt$(op.monto)}</span></div>
-    <div style="font-size:12px;color:#334155;font-style:italic;margin-bottom:24px">Son: ${_opTextoLetras(op.monto)}.</div>
-    ${op.obs?`<div style="font-size:12px;color:#64748b;margin-bottom:24px">Observaciones: ${esc(op.obs)}</div>`:''}
-    <div style="display:flex;justify-content:space-between;margin-top:44px;font-size:12px">
-      <div style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Firma y aclaración (paga)</div></div>
-      <div style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Recibí conforme (proveedor)</div></div>
-    </div></div>`;
+    ${cheques.length?`<!-- Cheques -->
+    <div style="text-align:center;font-weight:bold;font-size:12px;margin-bottom:4px">Detalle de Cheques entregados</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px">
+      <thead><tr>
+        <th style="${th}">ID Interno<br>Librador</th>
+        <th style="${th}">Tipo Cheque<br>Endosante</th>
+        <th style="${th}">Nro. Cheque</th>
+        <th style="${th}">Nro. Cuenta</th>
+        <th style="${th}">Fecha Venc.<br>Banco</th>
+        <th style="${th}text-align:right">Importe</th></tr></thead>
+      <tbody>${_opChequeRows(op)}</tbody>
+    </table>`:''}
+    <!-- Totales + retenciones -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px"><tr>
+      <td style="width:55%;vertical-align:top;padding-right:12px">
+        <div style="font-size:11px;font-weight:bold;border-bottom:1px solid #94a3b8;padding-bottom:3px;margin-bottom:4px">Cantidad de Valores / Cheques: ${cheques.length}</div>
+        ${rets.length?`<div style="font-size:11px;font-weight:bold;margin-top:6px">Detalle de Retenciones Practicadas</div>
+        <table style="width:100%;font-size:11px;border-collapse:collapse">
+          ${rets.map(r=>`<tr><td style="padding:2px 0">${esc(r.detalle)}</td><td style="padding:2px 0;text-align:right">${fmtN(r.importe,2)}</td></tr>`).join('')}
+          <tr><td style="padding:3px 0;font-weight:bold;border-top:1px solid #94a3b8">Total Retenciones</td><td style="padding:3px 0;text-align:right;font-weight:bold;border-top:1px solid #94a3b8">${fmtN(totalRet,2)}</td></tr>
+        </table>`:''}
+      </td>
+      <td style="width:45%;vertical-align:top;${bx}padding:6px 4px">
+        <table style="width:100%;font-size:12px;border-collapse:collapse">
+          ${totRow('Total en Cheques:', fmt$(totalCh))}
+          ${totRow('Total en Efectivo:', fmt$(totalEf))}
+          ${totRow('Total en Transferencias:', fmt$(totalTr))}
+          ${totalRet?totRow('Total Regímenes:', fmtN(totalRet,2)):''}
+          <tr><td colspan="2" style="border-top:2px solid #334155;padding:0"></td></tr>
+          ${totRow('Total:', fmt$(op.monto), true)}
+        </table>
+      </td></tr></table>
+    <div style="font-size:11px;margin-bottom:20px"><b>La cantidad de Pesos:</b> ${_opTextoLetras(op.monto)}${'-'.repeat(20)}</div>
+    ${op.obs?`<div style="font-size:11px;color:#64748b;margin-bottom:16px">Observaciones: ${esc(op.obs)}</div>`:''}
+    <table style="width:100%;margin-top:36px;font-size:11px"><tr>
+      <td style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Firma y aclaración (paga)</div></td>
+      <td style="width:10%"></td>
+      <td style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Recibí conforme (proveedor)</div></td>
+    </tr></table></div>`;
 }
 function ordenPagoAbrir(op){
   state._opActual = op;
@@ -12800,48 +13125,220 @@ function ordenPagoImprimir(){
   w.document.write('<html><head><title>Orden de pago</title><meta charset="utf-8"></head><body style="margin:24px">'+cont.outerHTML+'</body></html>');
   w.document.close(); w.focus(); setTimeout(()=>{ try{w.print();}catch(e){} }, 350);
 }
+function _opBuildPDF(op){
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if(!jsPDFCtor){ toast('Todavía se está cargando la librería de PDF…','warn'); return null; }
+  const emp=_opEmpresa();
+  const cheques=op.cheques||[];
+  const totalCh=op.totalCheques!=null?op.totalCheques:cheques.reduce((a,c)=>a+(Number(c.importe)||0),0);
+  const rets=op.retenciones||[]; const totalRet=rets.reduce((a,r)=>a+(Number(r.importe)||0),0);
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  const W=doc.internal.pageSize.getWidth(); const M=40; let y=44;
+  // Recuadro empresa
+  doc.setDrawColor(51,65,85); doc.setLineWidth(0.8);
+  doc.rect(M,y,320,54); doc.rect(M+320,y,W-M-M-320,54);
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text(emp.nombre, M+160, y+16, {align:'center'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  if(emp.direccion) doc.text('Dirección: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), M+6, y+32);
+  doc.text('I.V.A.: '+(emp.iva||'Resp. Inscripto')+(emp.cuit?'   C.U.I.T.: '+emp.cuit:''), M+6, y+46);
+  // Recuadro ORDEN DE PAGO
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text('ORDEN', M+330, y+16); doc.text('DE PAGO', M+330, y+34);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  let ry=y+14;
+  if(op.numero){ doc.text('Número: '+op.numero, M+420, ry); ry+=12; }
+  doc.text('Fecha: '+fmtDate(op.fecha), M+420, ry); ry+=12;
+  doc.setFont('helvetica','bold'); doc.text('ORIGINAL', M+420, ry);
+  y+=70;
+  // Proveedor
+  doc.setFont('helvetica','normal'); doc.setFontSize(9);
+  doc.setFont('helvetica','bold'); doc.text('Proveedor: ',M,y); doc.setFont('helvetica','normal'); doc.text(String(op.proveedor||'—'), M+58, y);
+  doc.setFont('helvetica','bold'); doc.text('Localidad: ', M+300, y); doc.setFont('helvetica','normal'); doc.text(String(op.proveedorLocalidad||'—'), M+352, y); y+=13;
+  doc.setFont('helvetica','bold'); doc.text('Domicilio: ',M,y); doc.setFont('helvetica','normal'); doc.text(String(op.proveedorDomicilio||'—'), M+56, y);
+  doc.setFont('helvetica','bold'); doc.text('C.U.I.T.: ', M+300, y); doc.setFont('helvetica','normal'); doc.text(String(op.proveedorCuit||'—'), M+345, y); y+=16;
+  doc.setDrawColor(148,163,184); doc.setLineWidth(0.5); doc.line(M,y,W-M,y); y+=14;
+  // Aplica a
+  doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.text('Este comprobante se aplica a:', M, y); y+=12;
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  const compTxt='Cancelación de comprobantes: '+((op.comprobantes||[]).map(c=>c.detalle).join('  ·  ')||'Pago a cuenta');
+  doc.text(doc.splitTextToSize(compTxt, W-M-M), M, y); y+= (doc.splitTextToSize(compTxt, W-M-M).length*10)+4;
+  doc.text('Forma de pago: '+_opMetodoDetalle(op), M, y); y+=8;
+  // Cheques
+  if(cheques.length){
+    doc.autoTable({ startY:y+6,
+      head:[['ID Interno / Librador','Tipo / Endosante','Nro. Cheque','Nro. Cuenta','Fecha Venc. / Banco','Importe']],
+      body:cheques.map(ch=>[ (ch.idInterno||'—')+'\n'+(ch.librador||''), (ch.tipo||'—')+'\n'+(ch.endosante||''),
+        ch.nroCheque||'—', ch.nroCuenta||'—', (ch.fechaVenc?fmtDate(ch.fechaVenc):'—')+'\n'+(ch.banco||''), fmt$(ch.importe) ]),
+      styles:{fontSize:8,cellPadding:3}, headStyles:{fillColor:[51,65,85],fontSize:7}, columnStyles:{5:{halign:'right'}}, margin:{left:M,right:M} });
+    y=doc.lastAutoTable.finalY;
+  }
+  // Totales (caja derecha)
+  let ty=y+16; const bx=W-M-190;
+  doc.setDrawColor(51,65,85); doc.setLineWidth(0.8); doc.rect(bx,ty-12,190,68+(totalRet?14:0));
+  doc.setFont('helvetica','normal'); doc.setFontSize(9);
+  const tline=(lbl,val,bold)=>{ doc.setFont('helvetica',bold?'bold':'normal'); doc.text(lbl,bx+8,ty); doc.text(val,bx+182,ty,{align:'right'}); ty+=14; };
+  tline('Total en Cheques:', fmt$(totalCh));
+  tline('Total en Efectivo:', fmt$(op.totalEfectivo||0));
+  tline('Total en Transferencias:', fmt$(op.totalTransferencias||0));
+  if(totalRet) tline('Total Regímenes:', fmtN(totalRet,2));
+  doc.line(bx,ty-10,bx+190,ty-10);
+  tline('Total:', fmt$(op.monto), true);
+  // Cantidad de valores + retenciones (izquierda)
+  let ly=y+20; doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.text('Cantidad de Valores / Cheques: '+cheques.length, M, ly); ly+=6;
+  doc.setDrawColor(148,163,184); doc.line(M,ly,bx-16,ly); ly+=14;
+  if(rets.length){ doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.text('Detalle de Retenciones Practicadas',M,ly); ly+=12;
+    doc.setFont('helvetica','normal'); rets.forEach(r=>{ doc.text(String(r.detalle),M,ly); doc.text(fmtN(r.importe,2),bx-16,ly,{align:'right'}); ly+=11; });
+    doc.setFont('helvetica','bold'); doc.text('Total Retenciones',M,ly); doc.text(fmtN(totalRet,2),bx-16,ly,{align:'right'}); }
+  let yy=Math.max(ty,ly)+22;
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  doc.text('La cantidad de Pesos: '+_opTextoLetras(op.monto)+'------------------', M, yy); yy+=44;
+  doc.setDrawColor(150); doc.line(60,yy,240,yy); doc.line(W-240,yy,W-60,yy); yy+=12;
+  doc.setFontSize(8);
+  doc.text('Firma y aclaración (paga)',150,yy,{align:'center'}); doc.text('Recibí conforme (proveedor)',W-150,yy,{align:'center'});
+  return doc;
+}
+function _opFilename(op){ return 'Orden-de-pago-'+String(op.proveedor||'prov').replace(/[^\w]+/g,'_')+'.pdf'; }
 function ordenPagoPDF(){
   const op=state._opActual; if(!op) return;
-  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
-  if(!jsPDFCtor) return toast('Todavía se está cargando la librería de PDF…','warn');
-  const emp=_opEmpresa();
-  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
-  const W=doc.internal.pageSize.getWidth(); let y=44;
-  doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.setTextColor(22,101,52);
-  doc.text(emp.nombre, 40, y); doc.setTextColor(0,0,0);
-  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text('ORDEN DE PAGO', W-40, y, {align:'right'}); y+=16;
-  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(90);
-  if(emp.cuit) doc.text('CUIT: '+emp.cuit, 40, y);
-  doc.text('Fecha: '+fmtDate(op.fecha), W-40, y, {align:'right'}); y+=20; doc.setTextColor(0,0,0);
-  doc.setFontSize(10);
-  doc.setFont('helvetica','bold'); doc.text('Proveedor:',40,y); doc.setFont('helvetica','normal'); doc.text(String(op.proveedor||'—'),110,y); y+=15;
-  doc.setFont('helvetica','bold'); doc.text('Forma de pago:',40,y); doc.setFont('helvetica','normal'); doc.text(_opMetodoDetalle(op),130,y);
-  doc.autoTable({ startY:y+8, head:[['Comprobante','Importe']],
-    body:(op.comprobantes||[]).length?op.comprobantes.map(c=>[c.detalle, fmt$(c.importe)]):[['Pago a cuenta', fmt$(op.monto)]],
-    styles:{fontSize:9}, headStyles:{fillColor:[22,101,52]}, columnStyles:{1:{halign:'right'}} });
-  let yy=doc.lastAutoTable.finalY+14;
-  doc.setFillColor(22,101,52); doc.rect(40,yy,W-80,28,'F');
-  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(12);
-  doc.text('TOTAL PAGADO', 54, yy+19); doc.text(fmt$(op.monto), W-54, yy+19, {align:'right'});
-  doc.setTextColor(0,0,0); yy+=40;
-  doc.setFont('helvetica','italic'); doc.setFontSize(9);
-  doc.text('Son: '+_opTextoLetras(op.monto)+'.', 40, yy); yy+=54;
-  doc.setDrawColor(150); doc.line(60,yy,240,yy); doc.line(W-240,yy,W-60,yy); yy+=12;
-  doc.setFont('helvetica','normal'); doc.setFontSize(8);
-  doc.text('Firma y aclaración (paga)',150,yy,{align:'center'}); doc.text('Recibí conforme (proveedor)',W-150,yy,{align:'center'});
-  doc.save('Orden-de-pago-'+String(op.proveedor||'prov').replace(/[^\w]+/g,'_')+'.pdf');
+  const doc=_opBuildPDF(op); if(!doc) return;
+  doc.save(_opFilename(op));
 }
 function _opTexto(op){
   const emp=_opEmpresa();
-  const l=['ORDEN DE PAGO — '+emp.nombre, 'Fecha: '+fmtDate(op.fecha), 'Proveedor: '+(op.proveedor||'—'), 'Forma de pago: '+_opMetodoDetalle(op), ''];
-  (op.comprobantes||[]).forEach(c=>l.push('• '+c.detalle+': '+fmt$(c.importe)));
-  l.push('', 'TOTAL PAGADO: '+fmt$(op.monto)); if(op.obs) l.push('Obs: '+op.obs);
+  const l=['ORDEN DE PAGO — '+emp.nombre, (op.numero?'N°: '+op.numero+'  ':'')+'Fecha: '+fmtDate(op.fecha),
+           'Proveedor: '+(op.proveedor||'—')+(op.proveedorCuit?' (CUIT '+op.proveedorCuit+')':''), 'Forma de pago: '+_opMetodoDetalle(op), ''];
+  l.push('Se aplica a: '+((op.comprobantes||[]).map(c=>c.detalle).join(' · ')||'Pago a cuenta'));
+  if((op.cheques||[]).length){ l.push('', 'Cheques entregados:');
+    op.cheques.forEach(c=>l.push('• '+(c.banco||'')+' N° '+(c.nroCheque||'')+' - '+(c.fechaVenc?fmtDate(c.fechaVenc):'')+' - '+fmt$(c.importe))); }
+  l.push('', 'TOTAL: '+fmt$(op.monto), 'Son: '+_opTextoLetras(op.monto)+'.'); if(op.obs) l.push('Obs: '+op.obs);
   return l.join('\n');
 }
 function ordenPagoWhatsApp(){ const op=state._opActual; if(!op) return; window.open('https://wa.me/?text='+encodeURIComponent(_opTexto(op)),'_blank'); }
-function ordenPagoEmail(){ const op=state._opActual; if(!op) return;
-  window.location.href='mailto:'+(op.proveedorEmail||'')+'?subject='+encodeURIComponent('Orden de pago — '+(op.proveedor||''))+'&body='+encodeURIComponent(_opTexto(op)+'\n\n(Si descargaste el PDF, adjuntalo.)');
+async function ordenPagoEmail(){
+  const op=state._opActual; if(!op) return;
+  let to = op.proveedorEmail || '';
+  if (!to) { to = (prompt('Email del proveedor para enviar la orden de pago:','')||'').trim(); if(!to) return; }
+  const doc=_opBuildPDF(op); const pdf = doc ? _pdfDocToBase64(doc) : null;
+  const emp=_opEmpresa();
+  const asunto = 'Orden de pago — '+emp.nombre+(op.numero?' N° '+op.numero:'');
+  const mensaje = 'Estimados,\n\nAdjuntamos la orden de pago'+(op.numero?' N° '+op.numero:'')+' por '+fmt$(op.monto)+'.\n\nSaludos,\n'+emp.nombre;
+  await enviarComprobanteEmail({ to, asunto, mensaje, pdfBase64: pdf, filename: _opFilename(op), tipo:'orden_pago', documentoId: op._docId||null, textoFallback: _opTexto(op) });
 }
+
+/* ===== Historial de Órdenes de Pago (reimprimir / PDF / reenviar) ===== */
+pages.ordenesPago = async function(){
+  setHeader('Órdenes de pago', 'Comprobantes de pago emitidos — reimprimir, PDF o reenviar');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('ordenesPago','Órdenes de pago'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let rows=[];
+  try { rows = (await api('/api/documentos?tipo=orden_pago')).data || []; }
+  catch(e){ return toast(e.message,'error'); }
+  const filas = rows.map(d=>`<tr>
+      <td>${fmtDate(d.fecha)}</td>
+      <td>${d.numero?esc(d.numero):'<span class="text-slate-400">—</span>'}</td>
+      <td><b>${esc(d.contactoNombre||'—')}</b></td>
+      <td class="text-right">${fmt$(d.total)}</td>
+      <td class="text-center">${d.emailEnviadoEn?`<span class="badge badge-green text-[10px]" title="Enviado a ${esc(d.emailEnviadoA||'')} el ${fmtDate(d.emailEnviadoEn)}">✉️ Enviado</span>`:'<span class="text-slate-400 text-xs">—</span>'}</td>
+      <td class="text-right whitespace-nowrap">
+        <button class="btn btn-ghost text-xs text-green-700" onclick='ordenPagoReabrir(${JSON.stringify(d.id)})'>📄 Abrir</button>
+        <button class="btn btn-ghost text-xs" onclick='ordenPagoReabrir(${JSON.stringify(d.id)}, "email")'>✉️ Reenviar</button>
+      </td>
+    </tr>`).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-6">Todavía no hay órdenes de pago emitidas. Se guardan automáticamente al registrar un pago a proveedor.</td></tr>`;
+  $('#page-body').innerHTML = `
+    <div class="kpi overflow-x-auto">
+      <table class="data w-full">
+        <thead><tr><th>Fecha</th><th>Número</th><th>Proveedor</th><th class="text-right">Importe</th><th class="text-center">Email</th><th></th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>`;
+};
+async function ordenPagoReabrir(id, accion){
+  try {
+    const doc = (await api('/api/documentos/'+id)).data;
+    const op = doc.datos || {};
+    op._docId = doc.id;
+    if (accion === 'email') { state._opActual = op; return ordenPagoEmail(); }
+    ordenPagoAbrir(op);
+  } catch(e){ toast(e.message,'error'); }
+}
+
+/* ===== RECIBO DE COBRO — documento (imprimir/PDF/email/WhatsApp) ===== */
+function _recHTML(r){
+  const emp=_opEmpresa();
+  const comps=(r.comprobantes||[]).map(c=>esc(c.detalle)).join('  ·  ')||'Cobro a cuenta';
+  return `<div id="rec-doc" style="font-family:Arial,Helvetica,sans-serif;color:#111827;max-width:720px;margin:0 auto;padding:8px;font-size:12px">
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px"><tr>
+      <td style="width:62%;border:1px solid #334155;padding:8px 10px;vertical-align:top">
+        <div style="font-size:18px;font-weight:bold;text-align:center">${esc(emp.nombre)}</div>
+        ${emp.direccion?`<div style="font-size:11px"><b>Dirección:</b> ${esc(emp.direccion)}${emp.localidad?' - '+esc(emp.localidad):''}</div>`:''}
+        <div style="font-size:11px"><b>I.V.A.:</b> ${esc(emp.iva||'Resp. Inscripto')}${emp.cuit?`&nbsp;&nbsp;<b>C.U.I.T.:</b> ${esc(emp.cuit)}`:''}</div>
+      </td>
+      <td style="width:38%;border:1px solid #334155;border-left:none;padding:8px 10px;vertical-align:top">
+        <div style="font-size:20px;font-weight:bold">RECIBO</div>
+        ${r.numero?`<div><b>Número:</b> ${esc(r.numero)}</div>`:''}
+        <div><b>Fecha:</b> ${fmtDate(r.fecha)}</div>
+        <div style="font-weight:bold">ORIGINAL</div>
+      </td></tr></table>
+    <div style="border-bottom:1px solid #94a3b8;padding-bottom:4px;margin-bottom:8px;font-size:12px">
+      <div><b>Recibí de:</b> ${esc(r.cliente||'—')}${r.clienteCuit?` &nbsp; <b>C.U.I.T.:</b> ${esc(r.clienteCuit)}`:''}</div>
+    </div>
+    <div style="margin-bottom:10px;font-size:12px">
+      <div>La suma de <b>${fmt$(r.monto)}</b> — ${_opTextoLetras(r.monto)}.</div>
+      <div style="margin-top:4px"><b>En concepto de:</b> ${comps}</div>
+      <div style="margin-top:2px;color:#475569"><b>Forma de cobro:</b> ${esc(_opMetodoDetalle({metodo:r.metodo, bancoNombre:r.bancoNombre, chequeInfo:r.chequeInfo, caja:r.caja}))}</div>
+    </div>
+    <div style="background:#166534;color:#fff;padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;font-size:15px;font-weight:bold;margin-bottom:24px">
+      <span>TOTAL RECIBIDO</span><span>${fmt$(r.monto)}</span></div>
+    ${r.obs?`<div style="font-size:11px;color:#64748b;margin-bottom:16px">Observaciones: ${esc(r.obs)}</div>`:''}
+    <table style="width:100%;margin-top:36px;font-size:11px"><tr>
+      <td style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Firma y aclaración</div></td>
+      <td style="width:10%"></td>
+      <td style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Recibí conforme</div></td>
+    </tr></table></div>`;
+}
+function _recBuildPDF(r){
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if(!jsPDFCtor){ toast('Todavía se está cargando la librería de PDF…','warn'); return null; }
+  const emp=_opEmpresa();
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  const W=doc.internal.pageSize.getWidth(); const M=40; let y=44;
+  doc.setDrawColor(51,65,85); doc.setLineWidth(0.8); doc.rect(M,y,330,54); doc.rect(M+330,y,W-M-M-330,54);
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text(emp.nombre, M+165, y+16, {align:'center'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  if(emp.direccion) doc.text('Direccion: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), M+6, y+32);
+  doc.text('IVA: '+(emp.iva||'Resp. Inscripto')+(emp.cuit?'   CUIT: '+emp.cuit:''), M+6, y+46);
+  doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text('RECIBO', M+340, y+16);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8); let ry=y+30;
+  if(r.numero){ doc.text('Numero: '+r.numero, M+340, ry); ry+=11; }
+  doc.text('Fecha: '+fmtDate(r.fecha), M+340, ry);
+  y+=68; doc.setFontSize(9);
+  doc.setFont('helvetica','bold'); doc.text('Recibi de: ', M, y); doc.setFont('helvetica','normal'); doc.text(String(r.cliente||'-')+(r.clienteCuit?'  CUIT: '+r.clienteCuit:''), M+56, y); y+=16;
+  doc.setDrawColor(148,163,184); doc.setLineWidth(0.5); doc.line(M,y,W-M,y); y+=16;
+  doc.text('La suma de '+fmt$(r.monto)+' ('+_opTextoLetras(r.monto)+').', M, y, {maxWidth:W-2*M}); y+=16;
+  const comps='En concepto de: '+((r.comprobantes||[]).map(c=>c.detalle).join('  ·  ')||'Cobro a cuenta');
+  const compL=doc.splitTextToSize(comps, W-2*M); doc.text(compL, M, y); y+=compL.length*11+4;
+  doc.text('Forma de cobro: '+_opMetodoDetalle({metodo:r.metodo, bancoNombre:r.bancoNombre, chequeInfo:r.chequeInfo, caja:r.caja}), M, y); y+=18;
+  doc.setFillColor(22,101,52); doc.rect(M,y,W-2*M,26,'F'); doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(12);
+  doc.text('TOTAL RECIBIDO', M+12, y+17); doc.text(fmt$(r.monto), W-M-12, y+17, {align:'right'}); doc.setTextColor(0,0,0); y+=54;
+  doc.setDrawColor(150); doc.line(60,y,240,y); doc.line(W-240,y,W-60,y); y+=12; doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  doc.text('Firma y aclaracion',150,y,{align:'center'}); doc.text('Recibi conforme',W-150,y,{align:'center'});
+  return doc;
+}
+function _recFilename(r){ return 'Recibo-'+String(r.cliente||'cli').replace(/[^\w]+/g,'_')+'.pdf'; }
+function reciboAbrir(r){
+  state._recActual=r;
+  openModal({ title:'🧾 Recibo de cobro', size:'max-w-2xl', body:_recHTML(r),
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-secondary" onclick="reciboImprimir()">🖨️ Imprimir</button>
+      <button class="btn btn-secondary" onclick="reciboPDF()">📄 PDF</button>
+      <button class="btn btn-secondary" onclick="reciboWhatsApp()">💬 WhatsApp</button>
+      <button class="btn btn-primary" onclick="reciboEmail()">✉️ Email</button>` });
+}
+function reciboImprimir(){ const r=state._recActual; if(!r) return; const c=document.getElementById('rec-doc'); if(!c) return; const w=window.open('','_blank','width=820,height=920'); if(!w) return toast('Permití las ventanas emergentes','warn'); w.document.write('<html><head><title>Recibo</title><meta charset="utf-8"></head><body style="margin:24px">'+c.outerHTML+'</body></html>'); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},350); }
+function reciboPDF(){ const r=state._recActual; if(!r) return; const doc=_recBuildPDF(r); if(!doc) return; doc.save(_recFilename(r)); }
+function _recTexto(r){ const emp=_opEmpresa(); return 'RECIBO — '+emp.nombre+(r.numero?' N° '+r.numero:'')+'\nFecha: '+fmtDate(r.fecha)+'\nRecibí de: '+(r.cliente||'')+'\nSuma: '+fmt$(r.monto)+'\nConcepto: '+((r.comprobantes||[]).map(c=>c.detalle).join(' · ')||'Cobro a cuenta'); }
+function reciboWhatsApp(){ const r=state._recActual; if(!r) return; const tel=(r.clienteTel||'').replace(/[^0-9]/g,''); const base=tel?('https://wa.me/'+(tel.startsWith('54')?tel:'549'+tel)):'https://wa.me/'; window.open(base+'?text='+encodeURIComponent(_recTexto(r)),'_blank'); }
+async function reciboEmail(){ const r=state._recActual; if(!r) return; let to=r.clienteEmail||''; if(!to){ to=(prompt('Email del cliente:','')||'').trim(); if(!to) return; } const doc=_recBuildPDF(r); const pdf=doc?_pdfDocToBase64(doc):null; const emp=_opEmpresa(); const asunto='Recibo de cobro — '+emp.nombre+(r.numero?' N° '+r.numero:''); const mensaje='Estimados,\n\nAdjuntamos el recibo por '+fmt$(r.monto)+'.\n\nSaludos,\n'+emp.nombre; await enviarComprobanteEmail({ to, asunto, mensaje, pdfBase64:pdf, filename:_recFilename(r), tipo:'recibo_cobro', documentoId:r._docId||null, textoFallback:_recTexto(r) }); }
+async function reciboReabrir(id, accion){ try { const doc=(await api('/api/documentos/'+id)).data; const r=doc.datos||{}; r._docId=doc.id; if(accion==='email'){ state._recActual=r; return reciboEmail(); } reciboAbrir(r); } catch(e){ toast(e.message,'error'); } }
 
 async function pagoCobroConfirmar(modo) {
   const esPago = modo === 'pago';
@@ -12966,7 +13463,7 @@ async function pagoCobroConfirmar(modo) {
   } // fin "if (monto > 0.01)" — bloque de método sólo cuando sale/entra plata
   try {
     const url = esPago ? '/api/pagos-proveedores' : '/api/cobros-clientes';
-    await api(url, { method: 'POST', body: JSON.stringify(body) });
+    const _rsp = await api(url, { method: 'POST', body: JSON.stringify(body) });
     closeModal();
     const _ncTxt = creditos.length ? ` · ${creditos.length} NC aplicada${creditos.length===1?'':'s'}` : '';
     const _msg = monto > 0.01
@@ -12981,11 +13478,53 @@ async function pagoCobroConfirmar(modo) {
         const it = (d.comprobantes||[]).find(x=>x.id===c.ctaCteId) || {};
         return { detalle: it.detalle || it.referencia || 'Comprobante', importe: c.importeAplicado };
       });
-      const op = { proveedor: prov.razonSocial||'', proveedorCuit: prov.cuit||'', proveedorEmail: prov.email||'',
-                   fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', comprobantes: opComps };
+      const _tipoCh = t => t==='electronico' ? 'Electrónico' : (t==='echeq' ? 'e-Cheq' : 'Físico');
+      const op = { numero: _rsp?.data?.numero || null,
+                   proveedor: prov.razonSocial||'', proveedorCuit: prov.cuit||'', proveedorEmail: prov.email||'',
+                   proveedorDomicilio: prov.direccion||'', proveedorLocalidad: prov.localidad||'', proveedorIva: prov.condicionIva||prov.condicionIVA||'',
+                   fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'',
+                   comprobantes: opComps, cheques: [], retenciones: [],
+                   totalEfectivo: metodo==='efectivo'?monto:0, totalTransferencias: metodo==='transferencia'?monto:0, totalCheques: 0 };
       if (metodo==='transferencia' && body.bancoCuentaId){ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===body.bancoCuentaId); if(b) op.bancoNombre=`${b.banco}${b.numero?' '+b.numero:''}`; }
-      if (metodo==='cheque'){ if(body.nuevoCheque) op.chequeInfo=`${body.nuevoCheque.banco||''} N° ${body.nuevoCheque.nroCheque||''}`; else if(body.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===body.chequeId); if(ch) op.chequeInfo=`${ch.banco||''} N° ${ch.numero||ch.nroCheque||''}`; } }
+      if (metodo==='cheque'){
+        if (body.nuevoCheque){ // cheque propio nuevo → librador = la empresa
+          op.chequeInfo=`${body.nuevoCheque.banco||''} N° ${body.nuevoCheque.nroCheque||''}`;
+          op.cheques.push({ idInterno:'—', librador:_opEmpresa().nombre, tipo:_tipoCh(body.nuevoCheque.formato),
+            endosante:'', nroCheque:body.nuevoCheque.nroCheque||'', nroCuenta:'', fechaVenc:body.nuevoCheque.fechaPago,
+            banco:body.nuevoCheque.banco||'', importe:Number(body.nuevoCheque.monto)||monto });
+        } else if (body.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===body.chequeId)||{};
+          op.chequeInfo=`${ch.banco||''} N° ${ch.numero||ch.nroCheque||''}`;
+          op.cheques.push({ idInterno:ch.id?String(ch.id).slice(0,8):'—', librador:ch.librador||ch.origen||'', tipo:_tipoCh(ch.tipo),
+            endosante:ch.endosante||'', nroCheque:ch.numero||ch.nroCheque||'', nroCuenta:ch.numeroCuenta||ch.nroCuenta||'',
+            fechaVenc:ch.fechaPago, banco:ch.banco||'', importe:Number(ch.monto)||monto });
+        }
+        op.totalCheques = op.cheques.reduce((a,c)=>a+(Number(c.importe)||0),0);
+      }
+      // Guardar el comprobante para poder reabrirlo/reimprimirlo/reenviarlo desde el historial.
+      try {
+        const rDoc = await api('/api/documentos', { method:'POST', body: JSON.stringify({
+          tipo:'orden_pago', numero: op.numero||null, fecha,
+          contactoTipo:'proveedor', contactoId, contactoNombre: op.proveedor, contactoEmail: op.proveedorEmail||null,
+          total: monto, moneda:'ARS', datos: op,
+        })});
+        op._docId = rDoc?.data?.id || null;
+      } catch(e){ /* si falla el guardado, igual mostramos la OP */ }
       setTimeout(()=>ordenPagoAbrir(op), 150);
+    }
+    // Recibo de cobro: sólo cuando fue un COBRO con entrada de plata.
+    if (!esPago && monto > 0.01) {
+      const cli = (state.cache.clientes||[]).find(c=>c.id===contactoId) || {};
+      const recComps = comprobantes.map(c => { const it=(d.comprobantes||[]).find(x=>x.id===c.ctaCteId)||{}; return { detalle: it.detalle||it.referencia||'Comprobante', importe: c.importeAplicado }; });
+      const rec = { numero:_rsp?.data?.numero||null, cliente: cli.razonSocial||'', clienteCuit: cli.cuit||'', clienteEmail: cli.email||'', clienteTel: cli.telefono||'',
+        fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', comprobantes: recComps };
+      if (metodo==='transferencia' && body.bancoCuentaId){ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===body.bancoCuentaId); if(b) rec.bancoNombre=`${b.banco}${b.numero?' '+b.numero:''}`; }
+      if (metodo==='cheque' && body.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===body.chequeId); if(ch) rec.chequeInfo=`${ch.banco||''} N° ${ch.numero||ch.nroCheque||''}`; }
+      try {
+        const rd=await api('/api/documentos',{method:'POST',body:JSON.stringify({ tipo:'recibo_cobro', numero:rec.numero, fecha,
+          contactoTipo:'cliente', contactoId, contactoNombre:rec.cliente, contactoEmail:rec.clienteEmail||null, total:monto, moneda:'ARS', datos:rec })});
+        rec._docId=rd?.data?.id||null;
+      } catch(e){}
+      setTimeout(()=>reciboAbrir(rec), 150);
     }
   } catch (e) { toast(e.message || 'Error al registrar', 'error'); }
 }
