@@ -78,6 +78,50 @@ model Company {
   acoplados       Acoplado[]
   categoriasPlanilla CategoriaPlanilla[]
   categoriasHacienda CategoriaHaciendaConfig[]
+  documentosEmitidos DocumentoEmitido[]
+  secuencias         SecuenciaComprobante[]
+}
+
+// Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
+// El próximo número se toma y se incrementa de forma atómica al emitir, para que
+// nunca se dupliquen. Configurable por empresa (punto de venta + próximo número).
+model SecuenciaComprobante {
+  id            String   @id @default(cuid())
+  companyId     String
+  company       Company  @relation(fields: [companyId], references: [id])
+  tipo          String   // 'orden_pago' | 'recibo_cobro'
+  puntoVenta    Int      @default(1)
+  proximoNumero Int      @default(1)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([companyId, tipo, puntoVenta])
+}
+
+// Comprobantes ya emitidos que se pueden reimprimir / regenerar PDF / reenviar.
+// datos = snapshot JSON con todo lo necesario para re-renderizar el documento
+// (ej: el objeto "op" de una Orden de Pago). Evita reconstruirlo del libro mayor.
+model DocumentoEmitido {
+  id             String   @id @default(cuid())
+  companyId      String
+  company        Company  @relation(fields: [companyId], references: [id])
+  tipo           String   // 'orden_pago' | 'factura_venta' | ...
+  numero         String?
+  fecha          DateTime @default(now())
+  contactoTipo   String?  // 'proveedor' | 'cliente'
+  contactoId     String?
+  contactoNombre String?
+  contactoEmail  String?
+  total          Float?
+  moneda         String?  @default("ARS")
+  datos          Json     // snapshot para re-renderizar
+  emailEnviadoA  String?
+  emailEnviadoEn DateTime?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([companyId, tipo, fecha])
 }
 
 model User {

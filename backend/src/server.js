@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.2.0';
+const AGROCORE_VERSION = '2.3.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -975,15 +975,59 @@ app.post('/api/documentos', requireCompany, async (req, res) => {
       datos: z.any(),
     });
     const d = schema.parse(req.body);
-    const doc = await prisma.documentoEmitido.create({ data: {
-      companyId: req.companyId, tipo: d.tipo, numero: d.numero || null,
-      fecha: d.fecha || new Date(),
-      contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
-      contactoNombre: d.contactoNombre || null, contactoEmail: d.contactoEmail || null,
-      total: d.total ?? null, moneda: d.moneda || 'ARS',
-      datos: d.datos ?? {}, createdById: req.user?.id || null,
-    }});
-    res.json({ ok: true, data: { id: doc.id } });
+    let numeroFmt = d.numero || null;
+    // Numeración correlativa atómica para comprobantes internos (OP / Recibo).
+    const doc = await prisma.$transaction(async (tx) => {
+      if (COMPROBANTES_NUMERADOS.has(d.tipo) && !numeroFmt) {
+        let seq = await tx.secuenciaComprobante.findFirst({ where: { companyId: req.companyId, tipo: d.tipo } });
+        if (!seq) seq = await tx.secuenciaComprobante.create({ data: { companyId: req.companyId, tipo: d.tipo, puntoVenta: 1, proximoNumero: 1 } });
+        // UPDATE atómico (row lock) → dos pagos simultáneos nunca toman el mismo número.
+        const upd = await tx.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: { increment: 1 } } });
+        const numeroInt = upd.proximoNumero - 1;
+        numeroFmt = String(upd.puntoVenta).padStart(4, '0') + '-' + String(numeroInt).padStart(8, '0');
+      }
+      const datos = (d.datos && typeof d.datos === 'object' && !Array.isArray(d.datos)) ? { ...d.datos, numero: numeroFmt } : (d.datos ?? {});
+      return tx.documentoEmitido.create({ data: {
+        companyId: req.companyId, tipo: d.tipo, numero: numeroFmt,
+        fecha: d.fecha || new Date(),
+        contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
+        contactoNombre: d.contactoNombre || null, contactoEmail: d.contactoEmail || null,
+        total: d.total ?? null, moneda: d.moneda || 'ARS',
+        datos, createdById: req.user?.id || null,
+      }});
+    });
+    res.json({ ok: true, data: { id: doc.id, numero: numeroFmt } });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Tipos de comprobante interno que llevan numeración correlativa propia.
+const COMPROBANTES_NUMERADOS = new Set(['orden_pago', 'recibo_cobro']);
+
+// Configuración de numeración: próximo número + punto de venta por tipo.
+app.get('/api/numeradores', requireCompany, async (req, res) => {
+  try {
+    const tipos = ['orden_pago', 'recibo_cobro'];
+    const rows = await prisma.secuenciaComprobante.findMany({ where: { companyId: req.companyId, tipo: { in: tipos } } });
+    const byTipo = {}; rows.forEach(r => { byTipo[r.tipo] = r; });
+    const data = tipos.map(t => byTipo[t] || { tipo: t, puntoVenta: 1, proximoNumero: 1 });
+    res.json({ ok: true, data });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.put('/api/numeradores', requireCompany, requirePermission('finanzas:update'), async (req, res) => {
+  try {
+    const d = z.object({
+      tipo: z.enum(['orden_pago', 'recibo_cobro']),
+      puntoVenta: z.number().int().min(1).max(99999),
+      proximoNumero: z.number().int().min(1),
+    }).parse(req.body);
+    const seq = await prisma.secuenciaComprobante.findFirst({ where: { companyId: req.companyId, tipo: d.tipo } });
+    const row = seq
+      ? await prisma.secuenciaComprobante.update({ where: { id: seq.id }, data: { puntoVenta: d.puntoVenta, proximoNumero: d.proximoNumero } })
+      : await prisma.secuenciaComprobante.create({ data: { companyId: req.companyId, tipo: d.tipo, puntoVenta: d.puntoVenta, proximoNumero: d.proximoNumero } });
+    res.json({ ok: true, data: row });
   } catch (e) {
     if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
     res.status(500).json({ ok: false, error: e.message });
