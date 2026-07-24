@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.4.0';
+const AGROCORE_VERSION = '2.5.1';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -116,6 +116,15 @@ function requirePermission(perm) {
     }
     next();
   };
+}
+
+// Categorías de producto que el rol activo puede VER en Stock. Devuelve null cuando
+// no hay restricción (superAdmin o el rol no configuró categorías = ve todas).
+function stockCatsPermitidas(req) {
+  if (req.user?.superAdmin) return null;
+  const cats = req.membership?.role?.stockCategorias;
+  if (!Array.isArray(cats) || !cats.length) return null;
+  return new Set(cats.map(c => String(c).toLowerCase()));
 }
 
 // ============================================================
@@ -652,7 +661,7 @@ async function serializeUser(u) {
     logoUrl: uc.company.logoUrl || null,
     ..._coFiscal(uc.company),
     roleLabel: uc.role.label,
-    role: { key: uc.role.key, label: uc.role.label, permissions: uc.role.permissions },
+    role: { key: uc.role.key, label: uc.role.label, permissions: uc.role.permissions, stockCategorias: uc.role.stockCategorias || null },
   }));
 
   // Super Admin: además ve TODAS las empresas activas del sistema, con permisos
@@ -681,6 +690,8 @@ async function serializeUser(u) {
     fotoUrl: u.fotoUrl || null,
     superAdmin: u.superAdmin,
     oculto: u.oculto || false,
+    empleadoId: u.empleadoId || null,
+    choferId: u.choferId || null,
     companies,
     memberships: u.userCompanies.map((uc) => ({
       companyId: uc.companyId, companyName: uc.company.name,
@@ -1930,6 +1941,8 @@ const roleSchema = z.object({
   label: z.string().min(1),
   description: z.string().nullable().optional(),
   permissions: z.array(z.string()),
+  // Categorías de producto visibles en Stock (vacío/null = todas).
+  stockCategorias: z.array(z.string()).nullable().optional(),
 });
 
 app.get('/api/roles', async (_req, res, next) => {
@@ -2049,6 +2062,8 @@ app.get('/api/usuarios', async (req, res, next) => {
         fotoUrl: u.fotoUrl || null,
         activo: u.activo, superAdmin: u.superAdmin,
         oculto: u.oculto || false,
+        empleadoId: u.empleadoId || null,
+        choferId: u.choferId || null,
         memberships: u.userCompanies.map((uc) => ({
           companyId: uc.companyId, companyName: uc.company.name,
           roleId: uc.roleId, roleKey: uc.role.key, roleLabel: uc.role.label,
@@ -2070,6 +2085,8 @@ app.post('/api/usuarios', async (req, res, next) => {
       password: z.string().min(1),
       activo: z.boolean().optional(),
       superAdmin: z.boolean().optional(),
+      empleadoId: z.string().nullable().optional(),
+      choferId: z.string().nullable().optional(),
       memberships: z.array(z.object({ companyId: z.string(), roleId: z.string() })).optional(),
     });
     const input = schema.parse(req.body);
@@ -2083,6 +2100,8 @@ app.post('/api/usuarios', async (req, res, next) => {
         passwordHash: await bcrypt.hash(input.password, 10),
         activo: input.activo !== false,
         superAdmin: !!input.superAdmin && req.user.superAdmin,
+        empleadoId: input.empleadoId || null,
+        choferId: input.choferId || null,
         userCompanies: input.memberships ? { create: input.memberships } : undefined,
       },
     });
@@ -2100,6 +2119,8 @@ app.put('/api/usuarios/:id', async (req, res, next) => {
       fotoUrl: z.string().nullable().optional(),
       activo: z.boolean().optional(),
       superAdmin: z.boolean().optional(),
+      empleadoId: z.string().nullable().optional(),
+      choferId: z.string().nullable().optional(),
       memberships: z.array(z.object({ companyId: z.string(), roleId: z.string() })).optional(),
     });
     const input = schema.parse(req.body);
@@ -2218,11 +2239,15 @@ app.delete('/api/usuarios/:id', async (req, res, next) => {
 // ============================================================
 // FACTORIA CRUD GENERICA (empresa-scoped)
 // ============================================================
-function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc' }, include, searchFields = [], injectUserId = false }) {
+function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc' }, include, searchFields = [], injectUserId = false, readOpen = false }) {
   const full = `/api/${path}`;
   const model = () => prisma[modelName];
+  // readOpen = true → la LECTURA (GET) queda disponible para cualquier usuario de la
+  // empresa (datos maestros/referencia que casi todos los modulos necesitan leer,
+  // ej. Catalogos). La escritura sigue exigiendo el permiso del area.
+  const readGuard = readOpen ? ((req, res, next) => next()) : requirePermission(`${perm}:read`);
 
-  app.get(full, requireCompany, requirePermission(`${perm}:read`), async (req, res, next) => {
+  app.get(full, requireCompany, readGuard, async (req, res, next) => {
     try {
       const where = { companyId: req.companyId };
       const q = req.query.q?.toString().trim();
@@ -2233,7 +2258,7 @@ function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc
     } catch (e) { next(e); }
   });
 
-  app.get(`${full}/:id`, requireCompany, requirePermission(`${perm}:read`), async (req, res, next) => {
+  app.get(`${full}/:id`, requireCompany, readGuard, async (req, res, next) => {
     try {
       const row = await model().findFirst({ where: { id: req.params.id, companyId: req.companyId }, include });
       if (!row) return res.status(404).json({ ok: false, error: 'No encontrado' });
@@ -2314,8 +2339,13 @@ mountCrud({
 app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     const depositoId = req.query.depositoId || null;
-    // Aseguramos que cada categoría de animal tenga su producto, para verlos todos en Stock.
+    // Aseguramos que cada categoría de animal y cada insumo del catálogo tengan su
+    // producto, para verlos todos en Stock (existencia 0 hasta que se muevan).
     try { await sincronizarProductosHacienda(req.companyId); } catch {}
+    try { await sincronizarProductosInsumos(req.companyId); } catch {}
+    // Mapa nombre→tipo de insumo (Herbicida, Fertilizante, ...) para etiquetar cada fila.
+    let insTipoMap = {};
+    try { insTipoMap = await insumoNombreATipo(req.companyId); } catch {}
     const productos = await prisma.producto.findMany({
       where: { companyId: req.companyId, activo: true },
       orderBy: { nombre: 'asc' },
@@ -2386,9 +2416,15 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       const ing = movs.find((m) => m.productoId === p.id && m.tipo === 'ingreso')?._sum?.cantidad || 0;
       const egr = movs.find((m) => m.productoId === p.id && m.tipo === 'egreso')?._sum?.cantidad || 0;
       const existencia = Number(ing) - Number(egr);
-      return { ...p, existencia, bajoMinimo: existencia < Number(p.stockMinimo || 0) };
+      // Para insumos, etiquetamos con su tipo del catálogo (Herbicida, Fertilizante…).
+      const subtipo = (p.categoria || '').toLowerCase() === 'insumos'
+        ? (insTipoMap[(p.nombre || '').trim().toLowerCase()] || null) : null;
+      return { ...p, existencia, subtipo, bajoMinimo: existencia < Number(p.stockMinimo || 0) };
     });
-    res.json({ ok: true, data });
+    // Si el rol limita las categorías visibles de stock, filtramos.
+    const catsOk = stockCatsPermitidas(req);
+    const dataFiltrada = catsOk ? data.filter(p => catsOk.has((p.categoria || '').toLowerCase())) : data;
+    res.json({ ok: true, data: dataFiltrada });
   } catch (e) { next(e); }
 });
 
@@ -3648,6 +3684,10 @@ mountCrud({
 app.get('/api/resumen-multiempresa', async (req, res, next) => {
   try {
     if (!req.user) return res.status(401).json({ ok: false, error: 'No autenticado' });
+    // Requiere permiso "Reportes" (salvo superAdmin). Se controla en Roles.
+    if (!req.user.superAdmin && !hasPermission(req.membership?.role?.permissions || [], 'reportes:read')) {
+      return res.status(403).json({ ok: false, error: 'Permiso denegado', required: 'reportes:read' });
+    }
     // Si es superAdmin sin headers, listamos TODAS las empresas activas
     let empresas;
     if (req.user.superAdmin) {
@@ -3780,6 +3820,9 @@ function emptyTotales() {
 app.get('/api/resumen-multiempresa/stock', async (req, res, next) => {
   try {
     if (!req.user) return res.status(401).json({ ok: false, error: 'No autenticado' });
+    if (!req.user.superAdmin && !hasPermission(req.membership?.role?.permissions || [], 'reportes:read')) {
+      return res.status(403).json({ ok: false, error: 'Permiso denegado', required: 'reportes:read' });
+    }
     // Empresas accesibles (igual que el resumen general)
     let empresas;
     if (req.user.superAdmin) {
@@ -4565,13 +4608,19 @@ app.get('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('r
 const liqSchema = z.object({
   periodo: z.string().regex(/^\d{4}-\d{2}$/, 'Período inválido (YYYY-MM)'),
   fecha: z.coerce.date(),
-  medioPago: z.enum(['efectivo', 'cheque', 'transferencia']),
+  medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany']),
   caja: z.string().nullable().optional(),
   banco: z.string().nullable().optional(),
   nroCheque: z.string().nullable().optional(),
   referencia: z.string().nullable().optional(),
   incluirSueldoBase: z.boolean().optional(),
   observaciones: z.string().nullable().optional(),
+  // Intercompany: otra firma del grupo pone los fondos del sueldo.
+  empresaOrigenId: z.string().nullable().optional(),
+  recursoIntercompany: z.enum(['efectivo', 'cheque', 'transferencia', 'deuda']).nullable().optional(),
+  cajaOrigen: z.string().nullable().optional(),
+  chequeIdOrigen: z.string().nullable().optional(),
+  bancoCuentaIdOrigen: z.string().nullable().optional(),
 });
 
 // Liquidar el sueldo de un mes. Suma las ganancias (incluido el sueldo base del
@@ -4598,6 +4647,17 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
     if (d.medioPago === 'cheque' && !d.nroCheque) {
       return res.status(400).json({ ok: false, error: 'Ingresá el número de cheque' });
     }
+    if (d.medioPago === 'intercompany') {
+      if (!d.empresaOrigenId) return res.status(400).json({ ok: false, error: 'Elegí la firma del grupo que paga el sueldo' });
+      if (d.empresaOrigenId === req.companyId) return res.status(400).json({ ok: false, error: 'La firma que paga no puede ser la misma' });
+      if (!_userTieneAcceso(req, d.empresaOrigenId)) return res.status(403).json({ ok: false, error: 'No tenés acceso a la firma que paga' });
+      const tienePerm = req.user.superAdmin || (req.user.userCompanies || []).some(uc =>
+        uc.companyId === req.companyId &&
+        ((uc.role?.permissions || []).includes('finanzas:intercompany') ||
+         (uc.role?.permissions || []).includes('finanzas:*') ||
+         (uc.role?.permissions || []).includes('*:*')));
+      if (!tienePerm) return res.status(403).json({ ok: false, error: 'No tenés permiso finanzas:intercompany' });
+    }
 
     const movs = await prisma.movimientoEmpleado.findMany({
       where: { empleadoId: emp.id, companyId: req.companyId, periodo: d.periodo },
@@ -4615,6 +4675,41 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
     const liquidacion = await prisma.$transaction(async (tx) => {
       let efectivoId = null;
       let chequeId = null;
+      let intercompanyRef = null;
+
+      // Intercompany: otra firma del grupo paga el sueldo. Deja los asientos espejo
+      // y mueve el recurso REAL de la firma que financia (misma lógica que el pago
+      // a proveedor Intercompany).
+      if (neto > 0 && d.medioPago === 'intercompany') {
+        const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
+        const concepto = `Sueldo ${nombreCompleto} · ${d.periodo}`;
+        const obsIc = `Liquidación de sueldo ${d.periodo}${d.observaciones ? ' · ' + d.observaciones : ''} [ic:${interRef}]`;
+        // Esta empresa (destino) queda debiendo a la otra: haber = neto.
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'intercompany',
+          empresaContraparteId: d.empresaOrigenId, intercompanyRef: interRef,
+          fecha: d.fecha, detalle: concepto + ' — pagado por otra firma del grupo',
+          haber: neto, observaciones: obsIc,
+        }});
+        // La firma que paga queda con saldo a favor: debe = neto.
+        await tx.ctaCte.create({ data: {
+          companyId: d.empresaOrigenId, contactoTipo: 'intercompany',
+          empresaContraparteId: req.companyId, intercompanyRef: interRef,
+          fecha: d.fecha, detalle: 'Sueldo pagado para otra firma del grupo: ' + concepto,
+          debe: neto, observaciones: obsIc,
+        }});
+        await tx.intercompanyMovimiento.create({ data: {
+          fecha: d.fecha, empresaOrigenId: d.empresaOrigenId, empresaDestinoId: req.companyId,
+          monto: neto, motivo: concepto, intercompanyRef: interRef,
+          observaciones: obsIc, userId: req.user?.id || null,
+        }});
+        await _intercompanyMoverRecurso(tx, {
+          empresaOrigenId: d.empresaOrigenId, recurso: d.recursoIntercompany || 'deuda',
+          monto: neto, fecha: d.fecha, concepto, observaciones: obsIc, userId: req.user?.id || null,
+          cajaOrigen: d.cajaOrigen, chequeIdOrigen: d.chequeIdOrigen, bancoCuentaIdOrigen: d.bancoCuentaIdOrigen,
+        });
+        intercompanyRef = interRef;
+      }
 
       // Sólo generamos el pago en otros módulos si el neto es positivo.
       if (neto > 0 && d.medioPago === 'efectivo') {
@@ -4666,6 +4761,7 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
           referencia: d.referencia || null,
           efectivoId,
           chequeId,
+          intercompanyRef,
           observaciones: d.observaciones || null,
         },
       });
@@ -4700,6 +4796,26 @@ app.delete('/api/empleados/:id/liquidaciones/:liqId', requireCompany, requirePer
       }
       if (liq.chequeId) {
         await tx.cheque.deleteMany({ where: { id: liq.chequeId, companyId: req.companyId } });
+      }
+      // Reversa del pago Intercompany: se identifica por la referencia guardada.
+      if (liq.intercompanyRef) {
+        const ref = liq.intercompanyRef;
+        const tag = `[ic:${ref}]`;
+        // Deshacer los dos asientos espejo y el movimiento intercompany.
+        const im = await tx.intercompanyMovimiento.findFirst({ where: { intercompanyRef: ref } });
+        const empresaOrigenId = im?.empresaOrigenId || null;
+        await tx.ctaCte.deleteMany({ where: { intercompanyRef: ref } });
+        await tx.intercompanyMovimiento.deleteMany({ where: { intercompanyRef: ref } });
+        // Deshacer el recurso movido por la firma que pagó (se etiquetó con [ic:ref]).
+        if (empresaOrigenId) {
+          await tx.efectivo.deleteMany({ where: { companyId: empresaOrigenId, observaciones: { contains: tag } } });
+          await tx.bancoMovimiento.deleteMany({ where: { companyId: empresaOrigenId, observaciones: { contains: tag } } });
+          // Si se entregó/endosó un cheque de la otra firma, lo devolvemos a cartera.
+          await tx.cheque.updateMany({
+            where: { companyId: empresaOrigenId, observaciones: { contains: tag } },
+            data: { estado: 'en_cartera', fechaEndoso: null, enPoderDe: null },
+          });
+        }
       }
       await tx.movimientoEmpleado.updateMany({
         where: { liquidacionId: liq.id },
@@ -5185,6 +5301,44 @@ async function sincronizarProductosHacienda(companyId) {
     byCatHac.add(nombre.toLowerCase());
   }
 }
+// Tipos de insumo "de fábrica" + los que el usuario haya agregado en Catálogos → Tipos de insumo.
+// Debe coincidir con LEGACY_INS_TIPOS del frontend (AgroCore-web.html).
+const INSUMO_TIPOS_BASE = ['Herbicida', 'Insecticida', 'Fungicida', 'Fertilizante', 'Semilla', 'Coadyuvante', 'Insumo'];
+async function insumoTipoNombresSet(companyId) {
+  const extra = await prisma.catalogo.findMany({ where: { companyId, tipo: 'Tipo de insumo' }, select: { nombre: true } });
+  return new Set([...INSUMO_TIPOS_BASE, ...extra.map(e => e.nombre)].map(t => (t || '').trim()).filter(Boolean));
+}
+// Espeja el catálogo de insumos a la tabla de Productos para que TODOS los insumos
+// del catálogo aparezcan en Stock (con existencia 0 hasta que se muevan). Igual que
+// sincronizarProductosHacienda pero para insumos. Idempotente (no duplica por nombre).
+async function sincronizarProductosInsumos(companyId) {
+  const tipos = await insumoTipoNombresSet(companyId);
+  const items = await prisma.catalogo.findMany({ where: { companyId, activo: { not: false } } });
+  const insumoCat = items.filter(c => tipos.has((c.tipo || '').trim()));
+  if (!insumoCat.length) return;
+  const prods = await prisma.producto.findMany({ where: { companyId, categoria: 'insumos' }, select: { nombre: true } });
+  const have = new Set(prods.map(p => (p.nombre || '').trim().toLowerCase()));
+  for (const c of insumoCat) {
+    const nombre = (c.nombre || '').trim();
+    if (!nombre || have.has(nombre.toLowerCase())) continue;
+    await prisma.producto.create({ data: {
+      companyId, categoria: 'insumos', nombre, unidad: 'unidad',
+      stockMinimo: 0, activo: true,
+      precioReferencia: c.precioReferencia ?? null,
+      ultimoCostoMoneda: c.monedaPrecio ?? null,
+    } });
+    have.add(nombre.toLowerCase());
+  }
+}
+// Devuelve un mapa nombreInsumo(lowercase) -> tipo del catálogo, para etiquetar el
+// stock de insumos por su tipo (Herbicida, Fertilizante, etc.) sin guardar el dato.
+async function insumoNombreATipo(companyId) {
+  const tipos = await insumoTipoNombresSet(companyId);
+  const items = await prisma.catalogo.findMany({ where: { companyId }, select: { nombre: true, tipo: true } });
+  const map = {};
+  items.forEach(c => { if (tipos.has((c.tipo || '').trim()) && c.nombre) map[c.nombre.trim().toLowerCase()] = (c.tipo || '').trim(); });
+  return map;
+}
 const catHaciendaSchema = z.object({
   especie: z.string().min(1),
   nombre: z.string().min(1),
@@ -5269,6 +5423,11 @@ mountCrud({
   }),
   orderBy: { nombre: 'asc' },
   searchFields: ['nombre', 'codigo', 'tipo'],
+  // Los catalogos son datos maestros/referencia (cereales, labores, insumos,
+  // unidades, bancos, medios externos, etc.) que casi todos los modulos necesitan
+  // LEER. La lectura queda abierta a cualquier usuario de la empresa; crear/editar/
+  // borrar sigue exigiendo el permiso 'catalogos'.
+  readOpen: true,
 });
 
 // ============================================================
@@ -5651,10 +5810,11 @@ app.get('/api/creditos/:id', requireCompany, requirePermission('finanzas:read'),
   try {
     const data = await prisma.credito.findFirst({
       where: { id: req.params.id, companyId: req.companyId },
-      include: { cuotas: { orderBy: { numero: 'asc' } } },
+      include: { cuotas: { orderBy: { numero: 'asc' } }, entregasCereal: { orderBy: { fecha: 'desc' } } },
     });
     if (!data) return res.status(404).json({ ok: false, error: 'No encontrado' });
-    res.json({ ok: true, data });
+    const resumenCereal = esMonedaGranoCereal(data.moneda) ? _resumenCereal(data, data.entregasCereal) : null;
+    res.json({ ok: true, data: { ...data, esCereal: esMonedaGranoCereal(data.moneda), resumenCereal } });
   } catch (e) { next(e); }
 });
 
@@ -5933,6 +6093,172 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
       return row;
     });
     res.json({ ok: true, data: result, importePagadoArs: importeArs });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CRÉDITOS POR CEREAL — entregas parciales de grano (comprometido a entregar)
+// ============================================================
+const GRANO_MONEDAS = { SOJA: 'Soja', MAIZ: 'Maíz', TRIGO: 'Trigo', SORGO: 'Sorgo', GIRASOL: 'Girasol', CEBADA: 'Cebada', CENTENO: 'Centeno', AVENA: 'Avena' };
+function esMonedaGranoCereal(m) { return !!GRANO_MONEDAS[String(m || '').toUpperCase()]; }
+// Obligación total en toneladas de un crédito de cereal (suma de cuotas o el monto original).
+function _obligacionCerealTn(credito) {
+  const cuotas = credito.cuotas || [];
+  const sumCuotas = cuotas.reduce((a, c) => a + Number(c.importeTotal || 0), 0);
+  return sumCuotas > 0.001 ? sumCuotas : Number(credito.montoOriginal || 0);
+}
+// Fecha límite de entrega = vencimiento de la última cuota (o la primera si no hay).
+function _fechaLimiteCereal(credito) {
+  const cuotas = credito.cuotas || [];
+  if (cuotas.length) return cuotas.reduce((max, c) => (new Date(c.vencimiento) > new Date(max) ? c.vencimiento : max), cuotas[0].vencimiento);
+  return credito.fechaPrimera;
+}
+// Busca (o crea) el producto de grano del stock para la moneda-grano del crédito.
+async function _resolverProductoGrano(tx, companyId, moneda, productoIdPreferido) {
+  if (productoIdPreferido) {
+    const p = await tx.producto.findFirst({ where: { id: productoIdPreferido, companyId } });
+    if (p) return p;
+  }
+  const nombre = GRANO_MONEDAS[String(moneda || '').toUpperCase()] || null;
+  if (!nombre) return null;
+  let p = await tx.producto.findFirst({ where: { companyId, nombre: { equals: nombre, mode: 'insensitive' } } });
+  if (p) return p;
+  p = await tx.producto.create({ data: { companyId, categoria: 'granos', nombre, unidad: 'tn', stockMinimo: 0, activo: true } });
+  return p;
+}
+// Resumen de un crédito de cereal: obligación, entregado y pendiente (tn).
+function _resumenCereal(credito, entregas) {
+  const obligacion = _obligacionCerealTn(credito);
+  const entregado = (entregas || []).reduce((a, e) => a + Number(e.cantidad || 0), 0);
+  const pendiente = Math.max(0, Math.round((obligacion - entregado) * 1000) / 1000);
+  return { obligacion, entregado, pendiente, grano: GRANO_MONEDAS[String(credito.moneda || '').toUpperCase()] || credito.moneda, fechaLimite: _fechaLimiteCereal(credito) };
+}
+
+// Lista de entregas de un crédito.
+app.get('/api/creditos/:id/entregas', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const credito = await prisma.credito.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { cuotas: true } });
+    if (!credito) return res.status(404).json({ ok: false, error: 'Crédito no encontrado' });
+    const entregas = await prisma.entregaCereal.findMany({ where: { creditoId: credito.id, companyId: req.companyId }, orderBy: { fecha: 'desc' } });
+    res.json({ ok: true, data: entregas, resumen: _resumenCereal(credito, entregas) });
+  } catch (e) { next(e); }
+});
+
+// Registrar una entrega parcial de cereal contra el crédito.
+app.post('/api/creditos/:id/entregas', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      fecha: z.coerce.date(),
+      cantidad: z.number().positive(),        // toneladas
+      depositoId: z.string().nullable().optional(),
+      productoId: z.string().nullable().optional(),
+      viajeId: z.string().nullable().optional(),
+      precioPizarra: z.number().nonnegative().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+      permitirNegativo: z.boolean().optional(),
+    });
+    const d = schema.parse(req.body);
+    const credito = await prisma.credito.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { cuotas: { orderBy: { numero: 'asc' } } } });
+    if (!credito) return res.status(404).json({ ok: false, error: 'Crédito no encontrado' });
+    if (!esMonedaGranoCereal(credito.moneda)) return res.status(400).json({ ok: false, error: 'Este crédito no es en cereal (su moneda no es un grano).' });
+    const entregasPrev = await prisma.entregaCereal.findMany({ where: { creditoId: credito.id, companyId: req.companyId } });
+    const resumen = _resumenCereal(credito, entregasPrev);
+    if (d.cantidad > resumen.pendiente + 0.001) {
+      return res.status(400).json({ ok: false, error: `La entrega (${d.cantidad} tn) supera lo pendiente de entregar (${resumen.pendiente} tn).` });
+    }
+    const result = await prisma.$transaction(async (tx) => {
+      // 1) Egreso de stock del depósito que sale.
+      const prod = await _resolverProductoGrano(tx, req.companyId, credito.moneda, d.productoId);
+      let movimientoId = null;
+      if (prod) {
+        const mov = await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: prod.id,
+          fecha: d.fecha, tipo: 'egreso', motivo: 'entrega_credito',
+          cantidad: d.cantidad, precio: d.precioPizarra || null,
+          total: d.precioPizarra ? d.cantidad * d.precioPizarra : null,
+          referencia: 'CREDITO ' + (credito.nroOperacion || credito.banco || ''),
+          depositoId: d.depositoId || null,
+          observaciones: `Entrega de cereal a cuenta del crédito ${credito.banco || ''}${credito.nroOperacion ? ' #' + credito.nroOperacion : ''}${d.observaciones ? ' · ' + d.observaciones : ''}`,
+          userId: req.user?.id || null,
+        }});
+        movimientoId = mov.id;
+      }
+      // 2) Registrar la entrega.
+      const entrega = await tx.entregaCereal.create({ data: {
+        companyId: req.companyId, creditoId: credito.id,
+        fecha: d.fecha, cantidad: d.cantidad,
+        productoId: prod?.id || null, depositoId: d.depositoId || null,
+        viajeId: d.viajeId || null, movimientoId,
+        precioPizarra: d.precioPizarra || null, observaciones: d.observaciones || null,
+      }});
+      // 3) Marcar cuotas pagadas de forma acumulativa (pago parcial en grano).
+      const entregadoNew = resumen.entregado + d.cantidad;
+      let running = 0;
+      for (const c of credito.cuotas) {
+        running += Number(c.importeTotal || 0);
+        if (!c.pagada && running <= entregadoNew + 0.001) {
+          await tx.cuotaCredito.update({ where: { id: c.id }, data: { pagada: true, fechaPago: d.fecha, medioPago: 'entrega_cereal', observaciones: (c.observaciones ? c.observaciones + ' · ' : '') + 'Cubierta con entrega de cereal' } });
+        }
+      }
+      // 4) Si se completó la obligación, marcar el crédito cancelado.
+      if (entregadoNew >= resumen.obligacion - 0.001) {
+        await tx.credito.update({ where: { id: credito.id }, data: { estado: 'cancelado' } });
+      }
+      return entrega;
+    });
+    res.status(201).json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+
+// Revertir (borrar) una entrega de cereal: devuelve el stock y reabre las cuotas.
+app.delete('/api/creditos/:id/entregas/:eid', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const credito = await prisma.credito.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { cuotas: { orderBy: { numero: 'asc' } } } });
+    if (!credito) return res.status(404).json({ ok: false, error: 'Crédito no encontrado' });
+    const entrega = await prisma.entregaCereal.findFirst({ where: { id: req.params.eid, creditoId: credito.id, companyId: req.companyId } });
+    if (!entrega) return res.status(404).json({ ok: false, error: 'Entrega no encontrada' });
+    await prisma.$transaction(async (tx) => {
+      if (entrega.movimientoId) { await tx.movimiento.deleteMany({ where: { id: entrega.movimientoId, companyId: req.companyId } }); }
+      await tx.entregaCereal.delete({ where: { id: entrega.id } });
+      // Recalcular entregado y reabrir cuotas que ya no estén cubiertas.
+      const restantes = await tx.entregaCereal.findMany({ where: { creditoId: credito.id, companyId: req.companyId } });
+      const entregado = restantes.reduce((a, e) => a + Number(e.cantidad || 0), 0);
+      let running = 0;
+      for (const c of credito.cuotas) {
+        running += Number(c.importeTotal || 0);
+        if (c.pagada && c.medioPago === 'entrega_cereal' && running > entregado + 0.001) {
+          await tx.cuotaCredito.update({ where: { id: c.id }, data: { pagada: false, fechaPago: null, medioPago: null } });
+        }
+      }
+      if (credito.estado === 'cancelado') await tx.credito.update({ where: { id: credito.id }, data: { estado: 'activo' } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Resumen de compromisos de entrega de cereal (para avisos, Flujo de Fondos y Dashboard).
+app.get('/api/compromisos-cereal', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const creditos = await prisma.credito.findMany({
+      where: { companyId: req.companyId, estado: { not: 'cancelado' } },
+      include: { cuotas: true, entregasCereal: true },
+    });
+    const hoy = new Date();
+    const data = [];
+    for (const c of creditos) {
+      if (!esMonedaGranoCereal(c.moneda)) continue;
+      const r = _resumenCereal(c, c.entregasCereal);
+      if (r.pendiente <= 0.001) continue;
+      data.push({
+        creditoId: c.id, banco: c.banco, nroOperacion: c.nroOperacion || null,
+        moneda: c.moneda, grano: r.grano,
+        obligacion: r.obligacion, entregado: r.entregado, pendiente: r.pendiente,
+        fechaLimite: r.fechaLimite,
+        vencido: r.fechaLimite ? new Date(r.fechaLimite) < hoy : false,
+      });
+    }
+    const totalPendiente = data.reduce((a, x) => a + x.pendiente, 0);
+    res.json({ ok: true, data, totalPendiente });
   } catch (e) { next(e); }
 });
 
@@ -7335,7 +7661,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
       })).optional().default([]),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal', 'externo']),
       monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo, sin plata)
       fecha: z.coerce.date(),
       cajaOrigen: z.string().nullable().optional(),
@@ -7556,6 +7882,18 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           caja: d.cajaOrigen || null,
           clasificacion: 'empresa',
           observaciones: d.observaciones || null,
+        }});
+      } else if (d.metodo === 'externo') {
+        // Billetera / medio externo (Mercado Pago, etc.): no impacta banco, se
+        // registra como una "caja" en Control de Efectivo con el nombre del medio.
+        await tx.efectivo.create({ data: {
+          companyId: req.companyId,
+          fecha: d.fecha, tipo: 'egreso',
+          concepto: 'Pago a ' + prov.razonSocial,
+          monto: d.monto,
+          caja: d.cajaOrigen || 'Medio externo',
+          clasificacion: 'empresa',
+          observaciones: [(d.cajaOrigen ? 'Medio: ' + d.cajaOrigen : null), d.observaciones].filter(Boolean).join(' · ') || null,
         }});
       } else if (d.metodo === 'cereal') {
         // Canje: entregamos grano para cancelar una deuda en toneladas.

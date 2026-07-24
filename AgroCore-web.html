@@ -880,6 +880,16 @@ function currentMembership() {
   if (!state.user || !state.companyId) return null;
   return state.user.companies.find(c => c.id === state.companyId) || null;
 }
+// ¿El rol activo puede ver esta categoría de stock? (granos/insumos/hacienda/...)
+// Sin restricción configurada = ve todas.
+function puedeVerStockCat(cat) {
+  if (!state.user) return false;
+  if (state.user.superAdmin) return true;
+  const m = currentMembership();
+  const cats = m?.role?.stockCategorias;
+  if (!Array.isArray(cats) || !cats.length) return true;
+  return cats.map(c => String(c).toLowerCase()).includes(String(cat).toLowerCase());
+}
 function can(perm) {
   if (!state.user) return false;
   if (state.user.superAdmin) return true;
@@ -928,7 +938,7 @@ const MODULES = [
   { id:'dashboard',     label:'Dashboard',            icon:'📊', perm:'dashboard:read',  section:'Tablero' },
   { id:'flujoProyectado',label:'Flujo de Fondos',     icon:'🎯', perm:'finanzas:read',   section:'Tablero' },
   { id:'flujoCaja',     label:'Flujo de caja',        icon:'📈', perm:'finanzas:read',   section:'Tablero' },
-  { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:null,              section:'Tablero' },
+  { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:'reportes:read',   section:'Tablero' },
   { id:'agenda',        label:'Agenda y recordatorios',icon:'📅', perm:'agenda:read',    section:'Tablero' },
 
   // ===== VENTAS — todo lo que entra =====
@@ -1587,7 +1597,10 @@ function renderNav() {
   let items = MODULES.filter(m => {
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!m.perm) return true;
-    return can(m.perm);
+    if (!can(m.perm)) return false;
+    // Vista de stock limitada por rol: si el rol no ve "hacienda", ocultamos el módulo.
+    if (m.id === 'hacienda' && !puedeVerStockCat('hacienda')) return false;
+    return true;
   });
   // Aplicar buscador: si hay texto, filtra por nombre del módulo y abre todas las secciones que matchearon.
   const q = (state._navFilter || '').trim().toLowerCase();
@@ -1776,6 +1789,17 @@ async function loadNotifs() {
       const emps = (await api('/api/empleados')).data || [];
       const sinSeguro = emps.filter(e => e.activo !== false && !e.seguroActivo);
       if (sinSeguro.length) alertas.push({ icon:'🛡️', color:'text-red-600', titulo:`${sinSeguro.length} empleado${sinSeguro.length>1?'s':''} activo${sinSeguro.length>1?'s':''} sin seguro`, sub:sinSeguro.slice(0,3).map(e=>`${e.nombre} ${e.apellido||''}`.trim()).join(', ') + (sinSeguro.length>3?'...':'') + ' — dar de alta la ART', go:'empleados', ctr: sinSeguro.length });
+    }
+  } catch {}
+  try {
+    if (can('finanzas:read')) {
+      const cc = await api('/api/compromisos-cereal');
+      const comp = cc.data || [];
+      if (comp.length) {
+        const totTn = comp.reduce((a,c)=>a+Number(c.pendiente||0),0);
+        const vencidos = comp.filter(c=>c.vencido).length;
+        alertas.push({ icon:'🌾', color: vencidos?'text-red-600':'text-amber-600', titulo:`${fmtN(totTn)} tn de cereal comprometidas a entregar`, sub: comp.slice(0,3).map(c=>`${fmtN(c.pendiente)} tn ${c.grano}`).join(' · ') + (vencidos?` · ⚠ ${vencidos} vencido${vencidos>1?'s':''}`:''), go:'creditos', ctr: comp.length });
+      }
     }
   } catch {}
   return alertas;
@@ -2377,6 +2401,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/07/2026',
+      titulo:'🔄 v2.5.1 — Liquidación de sueldo pagable por Intercompany',
+      desc:'Al liquidar el sueldo de un empleado ahora podés elegir <b>Intercompany</b>: otra firma del grupo pone los fondos, igual que en el pago a proveedores. Esta empresa le queda debiendo (asiento entre firmas) y se mueve el <b>recurso real</b> de la otra firma (su caja, cheque o banco). Al anular la liquidación, se revierte todo automáticamente.' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/07/2026',
+      titulo:'🌾 v2.5.0 — Entregas parciales de cereal + vínculos de usuario + permisos por tipo de stock',
+      desc:'<b>Créditos por cereal:</b> ahora podés registrar <b>entregas parciales</b> de grano antes de la fecha límite; cada entrega descuenta el stock del depósito que sale y baja lo comprometido a entregar (pago parcial del crédito). También se puede entregar <b>desde el viaje del camión</b> (botón 🌾). Aparece un <b>aviso del compromiso</b> (X tn de X cereal con fecha límite) en <b>Movimientos de stock</b> y <b>Viajes</b>, y el cereal comprometido se suma al <b>Flujo de Fondos</b> y al <b>Dashboard</b>. <b>Usuarios:</b> se pueden <b>vincular con un empleado y un chofer</b>, así al cargar una labor o un viaje se sugiere su persona. <b>Roles:</b> se puede <b>limitar qué categorías de stock ve</b> cada rol (ej: Insumos sí, Hacienda no).' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'24/07/2026',
+      titulo:'🧾 v2.4.1 — Medio externo en compras · Stock con todos los insumos · Permisos',
+      desc:'<b>Compras:</b> al cargar una factura de compra en Contado ahora podés pagar con <b>💸 Billetera / medio externo</b> (catálogo Medios externos), igual que en ventas. <b>Stock:</b> ahora trae <b>todos los insumos del catálogo</b> (aparecen con existencia 0 hasta que se muevan) y cada fila muestra su <b>tipo</b> (Herbicida, Fertilizante, etc.). <b>Permisos:</b> se corrigió el error al entrar a <b>Insumos y labores</b> con roles que no administran catálogos (la lectura de catálogos quedó habilitada para todos). Y el <b>Resumen multi-empresa</b> ahora se puede habilitar/deshabilitar por rol (permiso “Reportes”).' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/07/2026',
       titulo:'💸 v2.4.0 — Cobrar la factura con billetera / medio externo',
       desc:'Al emitir una factura de venta en <b>Contado</b>, el selector de <b>Método</b> de cobro ahora incluye <b>💸 Billetera / medio externo</b> (Mercado Pago, Naranja X, etc.). La lista se toma de <b>Configuración → Catálogos → Medios externos</b>; si no cargaste ninguno, podés escribirlo a mano. El cobro no impacta ninguna cuenta bancaria: se registra como una caja con el nombre del medio en <b>Control de Efectivo</b>.' },
@@ -5606,7 +5639,7 @@ pages.stock = async function() {
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
       if (!q) return true;
-      return [p.nombre, p.categoria, p.codigo, p.ubicacion].some(v => (v||'').toLowerCase().includes(q));
+      return [p.nombre, p.categoria, p.subtipo, p.codigo, p.ubicacion].some(v => (v||'').toLowerCase().includes(q));
     });
     $('#stock-table').innerHTML = `
       <table class="data">
@@ -5619,7 +5652,7 @@ pages.stock = async function() {
           ${filtered.map(p => `
             <tr class="table-row">
               <td><b>${esc(p.nombre)}</b>${p.codigo?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.codigo)}</div>`:''}</td>
-              <td><span class="badge badge-blue">${esc(p.categoria)}</span></td>
+              <td><span class="badge badge-blue">${esc(p.categoria)}</span>${p.subtipo?`<div class="text-[10px] text-slate-500 mt-0.5">🧪 ${esc(p.subtipo)}</div>`:''}</td>
               <td class="text-xs">${esc(p.ubicacion||'—')}</td>
               <td class="text-right font-semibold ${Number(p.existencia)<=0?'text-red-600':(p.bajoMinimo?'text-amber-600':'text-emerald-700')}">${fmtN(p.existencia)}${p.esHacienda&&p.kilos?`<div class="text-[11px] text-slate-500 font-normal">${fmtN(p.kilos)} kg</div>`:''}</td>
               <td>${esc(p.unidad)}${p.esHacienda?`<div class="text-[10px] ${p.categoriaHacienda?'text-amber-700':'text-red-500'}">${p.categoriaHacienda?'🐄 '+esc(p.categoriaHacienda):'⚠ sin vincular'}</div>`:''}</td>
@@ -5970,6 +6003,7 @@ pages.movimientos = async function() {
   };
 
   $('#page-body').innerHTML = `
+    <div id="mov-cereal-banner"></div>
     <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
     <div class="kpi mb-3">
       <div class="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
@@ -6016,6 +6050,7 @@ pages.movimientos = async function() {
   });
   msWire('mv-cat', 'mvCat', vals => { state.movFilter.cats = vals; render(); }, () => render(), 'Todas');
   render();
+  if (can('finanzas:read')) renderCompromisoCerealBanner('mov-cereal-banner');
 };
 function movFiltrosLimpiar() { state.movFilter = { q:'', cats:[], tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' }; state._ms_mvCat = false; pages.movimientos(); }
 
@@ -8011,6 +8046,10 @@ async function usuForm(id=null) {
   const list = state.cache.usuarios || [];
   const it = id ? list.find(x=>x.id===id)||{} : {};
   const mByComp = new Map((it.memberships||[]).map(m => [m.companyId, m.roleId]));
+  // Empleados y choferes de la empresa activa (para vincular la persona del usuario).
+  let empleados = [], choferes = [];
+  try { empleados = (await api('/api/empleados')).data || []; } catch {}
+  try { choferes = (await api('/api/choferes')).data || []; } catch {}
   const ini = `${(it.nombre||'?').slice(0,1)}${(it.apellido||'').slice(0,1)||''}`.toUpperCase();
 
   openModal({
@@ -8073,6 +8112,24 @@ async function usuForm(id=null) {
             </tbody>
           </table>
         </div>
+      </div>
+      <div class="mt-4 border-t pt-3">
+        <div class="font-semibold text-slate-800 mb-1">👤 Persona vinculada <span class="text-[11px] text-slate-400 font-normal">(opcional)</span></div>
+        <div class="text-xs text-slate-500 mb-2">Si vinculás al usuario con un empleado y/o chofer, al cargar una <b>labor</b> o un <b>viaje</b> se sugiere su persona automáticamente. (Empleados/choferes de la empresa activa.)</div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Empleado</label>
+            <select id="f-empleado" class="input">
+              <option value="">— Sin vincular —</option>
+              ${empleados.map(e=>`<option value="${esc(e.id)}" ${it.empleadoId===e.id?'selected':''}>${esc(`${e.nombre||''} ${e.apellido||''}`.trim())}${e.puesto?' · '+esc(e.puesto):''}</option>`).join('')}
+            </select>
+          </div>
+          <div><label class="label">Chofer</label>
+            <select id="f-chofer" class="input">
+              <option value="">— Sin vincular —</option>
+              ${choferes.map(c=>`<option value="${esc(c.id)}" ${it.choferId===c.id?'selected':''}>${esc(c.nombre||'')}${c.cuit?' · '+esc(c.cuit):''}</option>`).join('')}
+            </select>
+          </div>
+        </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='usuSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
@@ -8106,6 +8163,8 @@ async function usuSave(id) {
     alias: $('#f-alias')?.value.trim() || null,
     apellido: $('#f-ape').value.trim()||null,
     fotoUrl: $('#u-fotoUrl')?.value || null,
+    empleadoId: $('#f-empleado')?.value || null,
+    choferId: $('#f-chofer')?.value || null,
     memberships: mems,
   };
   if ($('#f-super')) body.superAdmin = $('#f-super').checked;
@@ -8187,12 +8246,12 @@ const PERM_AREAS = {
   contactos: 'Contactos', finanzas: 'Tesorería / Finanzas', usuarios: 'Usuarios',
   roles: 'Roles', empresas: 'Empresas', catalogos: 'Catálogos',
   logistica: 'Logística', ventas: 'Ventas / Facturación',
-  compras: 'Compras', rrhh: 'RRHH',
+  compras: 'Compras', rrhh: 'RRHH', reportes: 'Reportes',
 };
 // Agrupación visual de áreas por sección del menú (las claves técnicas siguen
 // siendo las mismas — esto solo afecta cómo se ven en el form de Roles).
 const PERM_AREA_GROUPS = [
-  { title:'📊 Tablero',          areas:['dashboard'] },
+  { title:'📊 Tablero',          areas:['dashboard','reportes'] },
   { title:'💼 Ventas',           areas:['ventas','contactos'] },
   { title:'🛒 Compras',          areas:['compras'] },
   { title:'🏛️ Tesorería',        areas:['finanzas'] },
@@ -8209,7 +8268,7 @@ const PERM_AREA_GROUPS = [
 function moduleAreaForPerms(modId) {
   const MAP = {
     inicio: null,           // siempre visible
-    resumenGlobal: null,    // siempre visible
+    resumenGlobal: 'reportes', // controlable por permiso "Reportes"
     configuracion: null,    // siempre visible
     dashboard: 'dashboard',
     flujoCaja: 'finanzas',
@@ -8438,11 +8497,24 @@ function rolForm(id=null) {
                 </label>`).join('')}
             </div>
           </div>`).join('')}
+      </div>
+      <div class="label mt-3">Categorías de stock que puede ver</div>
+      <div class="border rounded-lg p-3 bg-slate-50">
+        <p class="text-[11px] text-slate-500 mb-2">💡 Si <b>no marcás ninguna</b>, el rol ve <b>todo</b> el stock. Si marcás algunas, en Stock solo verá esas (ej: Insumos sí, Hacienda no).</p>
+        <div class="grid grid-cols-3 gap-1">
+          ${STOCK_CATS.map(([val,lbl]) => `
+            <label class="flex items-center gap-2 text-sm py-1">
+              <input type="checkbox" class="rol-stockcat" value="${esc(val)}" ${(it.stockCategorias||[]).includes(val)?'checked':''}/>
+              <span>${esc(lbl)}</span>
+            </label>`).join('')}
+        </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='rolSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
 }
+// Categorías de producto para el permiso de "vista de stock" por rol.
+const STOCK_CATS = [['granos','🌾 Granos'],['insumos','🧪 Insumos'],['hacienda','🐄 Hacienda'],['repuestos','🔩 Repuestos'],['combustibles','⛽ Combustibles'],['otros','📦 Otros']];
 // === Helpers para los checkboxes de la grilla de Roles ===
 // Cuando dos módulos comparten área (ej Facturación y Ctas Corrientes → finanzas),
 // sus checkboxes representan la misma perm — al marcar uno, propagamos el estado
@@ -8481,11 +8553,13 @@ async function rolSave(id) {
   const perms = $$('input[data-perm]:checked').map(i => i.dataset.perm);
   // Deduplicar (los checkboxes sincronizados generan duplicados)
   const uniq = [...new Set(perms)];
+  const stockCats = $$('.rol-stockcat:checked').map(i => i.value);
   const data = {
     key: $('#f-key').value.trim(),
     label: $('#f-lbl').value.trim(),
     description: $('#f-desc').value.trim()||null,
     permissions: uniq,
+    stockCategorias: stockCats.length ? stockCats : null,
   };
   if (!data.key || !data.label) return toast('Clave y etiqueta son requeridas','warn');
   try { await api('/api/roles'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
@@ -10265,6 +10339,7 @@ async function compForm() {
               <option value="efectivo">💵 Efectivo</option>
               <option value="cheque">💳 Cheque (propio o de terceros endosado)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
+              <option value="externo">💸 Billetera / medio externo</option>
             </select>
           </div>
           <div id="comp-met-det"></div>
@@ -10326,6 +10401,15 @@ function compMetodoCambio() {
     det.innerHTML = cuentas.length
       ? `<label class="label">Cuenta bancaria</label><select id="comp-banco" class="input"><option value="">— Elegir —</option>${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select>`
       : `<div class="text-xs text-amber-700">⚠️ Sin cuentas bancarias. Cargá una en Tesorería → Bancos.</div>`;
+  } else if (met === 'externo') {
+    const medios = (typeof catByTipo==='function' ? catByTipo('Medio externo') : []).map(m=>m.nombre).filter(Boolean);
+    det.innerHTML = medios.length
+      ? `<label class="label">Medio externo de donde sale</label>
+         <select id="comp-medio" class="input"><option value="">— Elegir medio —</option>${medios.map(m=>`<option>${esc(m)}</option>`).join('')}</select>
+         <div class="text-[11px] text-slate-500 mt-1">💸 No impacta ninguna cuenta bancaria. Se registra como una caja en Control de Efectivo.</div>`
+      : `<label class="label">Medio externo</label>
+         <input id="comp-medio" class="input" placeholder="Ej: Mercado Pago, Billetera XX"/>
+         <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargala en Configuración → Catálogos → Medios externos.</div>`;
   }
 }
 // Sube el PDF al backend, decodifica el QR de ARCA y autopobla los campos del form.
@@ -10538,6 +10622,7 @@ async function compSave() {
           if (metodo === 'efectivo')      pagoBody.cajaOrigen    = document.getElementById('comp-caja')?.value || null;
           if (metodo === 'cheque')        pagoBody.chequeId      = document.getElementById('comp-cheque')?.value || null;
           if (metodo === 'transferencia') pagoBody.bancoCuentaId = document.getElementById('comp-banco')?.value || null;
+          if (metodo === 'externo')       pagoBody.cajaOrigen    = document.getElementById('comp-medio')?.value || null;
           await api('/api/pagos-proveedores', { method:'POST', body: JSON.stringify(pagoBody) });
         }
       } catch (pErr) {
@@ -14446,6 +14531,7 @@ pages.viajes = async function() {
                   ${canU?`<button class="btn btn-ghost text-xs" title="Vincular factura del transporte" onclick='viajeVincularForm(${JSON.stringify(v.id)})'>🔗</button>`:''}
                   ${canU && v.estado!=='pagado' && can('finanzas:create')?`<button class="btn btn-ghost text-xs text-indigo-700" title="Cargar factura del transporte y pagar en un paso" onclick='viajeFacturarYPagarAbrir(${JSON.stringify(v.id)})'>💸</button>`:''}
                   ${v.destinoTipo==='cerealera' && v.depositoDestinoId && !v.depositoOrigenId && can('stock:entrega_cerealera:create')?`<button class="btn btn-ghost text-xs" title="Cargar entrega del cereal a la cerealera" onclick='viajeEntregaCereal(${JSON.stringify(v.id)})'>📤</button>`:''}
+                  ${v.depositoOrigenId && can('finanzas:update')?`<button class="btn btn-ghost text-xs text-amber-700" title="Entregar este cereal a cuenta de un crédito" onclick='viajeEntregaCredito(${JSON.stringify(v.id)})'>🌾</button>`:''}
                   ${v.destinoTipo==='venta_directa' && can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-ghost text-xs" title="Cargar liquidación de venta del cereal" onclick='viajeLiquidacion(${JSON.stringify(v.id)})'>🧾</button>`:''}
                   ${canU && v.estado!=='pagado'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar como pagado (sin generar factura)" onclick='viajeMarcarPagado(${JSON.stringify(v.id)})'>💵</button>`:''}
                   ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='viajeDel(${JSON.stringify(v.id)})'>🗑️</button>`:''}
@@ -14458,6 +14544,7 @@ pages.viajes = async function() {
   };
 
   $('#page-body').innerHTML = `
+    <div id="viajes-cereal-banner"></div>
     <div id="viajes-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
 
     <div class="kpi mb-3">
@@ -14524,6 +14611,7 @@ pages.viajes = async function() {
     el.addEventListener(evt, e => { state.viajeFilter[k] = e.target.value; render(); });
   });
   render();
+  if (can('finanzas:read')) renderCompromisoCerealBanner('viajes-cereal-banner');
 };
 // Ordenar viajes por columna (1er clic ascendente, 2do descendente).
 function viajeSort(col) {
@@ -14802,6 +14890,11 @@ async function viajeFlotaInit(it) {
   if (it?.choferId)   { const e=$('#f-chofer-sel');   if(e) e.value = it.choferId; }
   if (it?.camionId)   { const e=$('#f-camion-sel');   if(e) e.value = it.camionId; }
   if (it?.acopladoId) { const e=$('#f-acoplado-sel'); if(e) e.value = it.acopladoId; }
+  // Viaje NUEVO: si el usuario está vinculado a un chofer, lo sugerimos por defecto.
+  if (!it?.id && !it?.choferId && state.user?.choferId) {
+    const e=$('#f-chofer-sel');
+    if (e && [...e.options].some(o=>o.value===state.user.choferId)) { e.value = state.user.choferId; if (typeof viajeChoferCambio==='function') try{ viajeChoferCambio(); }catch{} }
+  }
 }
 function viajeFlotaFiltrar() {
   const trId = $('#f-trans-sel')?.value || '';
@@ -16922,6 +17015,7 @@ function empFichaRender() {
   if (liq) {
     const detalle = liq.medioPago==='efectivo' ? `Efectivo · caja ${esc(liq.caja||'—')}`
       : liq.medioPago==='cheque' ? `Cheque propio N° ${esc(liq.nroCheque||'—')}${liq.banco?` · ${esc(liq.banco)}`:''}`
+      : liq.medioPago==='intercompany' ? `🔄 Intercompany (pagó otra firma del grupo)`
       : `Transferencia${liq.banco?` · ${esc(liq.banco)}`:''}${liq.referencia?` · ${esc(liq.referencia)}`:''}`;
     cajaLiq = `<div class="kpi" style="background:linear-gradient(135deg,#047857,#065f46);border:none;">
       <div class="flex items-center justify-between flex-wrap gap-2">
@@ -17255,12 +17349,14 @@ function empLiqForm(periodo){
             <option value="efectivo">Efectivo en caja</option>
             <option value="cheque">Cheque propio</option>
             <option value="transferencia">Transferencia bancaria</option>
+            ${(state.user?.companies||[]).length > 1 ? `<option value="intercompany">🔄 Intercompany (otra firma paga)</option>` : ''}
           </select>
         </div>
         <div id="lq-caja-wrap"><label class="label">Caja *</label>${catSelect('lq-caja','Caja','',{placeholder:'— Elegir caja —'})}</div>
         <div id="lq-banco-wrap"><label class="label">Banco</label>${catSelect('lq-banco','Banco','',{placeholder:'— Elegir banco —'})}</div>
         <div id="lq-cheque-wrap"><label class="label">N° de cheque *</label><input id="lq-cheque" class="input"/></div>
         <div id="lq-ref-wrap"><label class="label">N° operación / comprobante</label><input id="lq-ref" class="input"/></div>
+        <div id="lq-interco-wrap" class="col-span-2"></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="lq-obs" class="input" rows="2"></textarea></div>
       </div>
       <p id="lq-hint" class="text-xs text-slate-500 mt-2"></p>
@@ -17273,14 +17369,22 @@ function empLiqForm(periodo){
 function empLiqMedioChange(){
   const medio=$('#lq-medio').value;
   const show=(id,v)=>{ const el=$('#'+id); if(el) el.style.display=v?'':'none'; };
+  const esInterco = medio==='intercompany';
   show('lq-caja-wrap',   medio==='efectivo');
-  show('lq-banco-wrap',  medio!=='efectivo');
+  show('lq-banco-wrap',  medio!=='efectivo' && !esInterco);
   show('lq-cheque-wrap', medio==='cheque');
   show('lq-ref-wrap',    medio==='transferencia');
+  const icWrap = $('#lq-interco-wrap');
+  if (icWrap) {
+    icWrap.style.display = esInterco ? '' : 'none';
+    if (esInterco && !icWrap.dataset.built) { icWrap.innerHTML = intercoSubform('lq'); icWrap.dataset.built = '1'; }
+  }
   $('#lq-hint').textContent = medio==='efectivo'
     ? 'Se va a registrar un egreso por el neto en la caja elegida de Control de Efectivo.'
     : medio==='cheque'
     ? 'Se va a generar un cheque propio en cartera a nombre del empleado.'
+    : esInterco
+    ? 'Otra firma del grupo paga el sueldo: esta empresa le queda debiendo y se mueve el recurso real de la otra firma.'
     : 'Sólo queda registrada la transferencia; no afecta otros módulos.';
 }
 async function empLiqSave(periodo){
@@ -17299,6 +17403,18 @@ async function empLiqSave(periodo){
   if(!data.fecha) return toast('Fecha de pago requerida','warn');
   if(medio==='efectivo'&&!data.caja) return toast('Elegí la caja de la que sale el pago','warn');
   if(medio==='cheque'&&!data.nroCheque) return toast('Ingresá el número de cheque','warn');
+  if(medio==='intercompany'){
+    const ic = intercoLeerRecurso('lq');
+    if(!ic.empresaOrigenId) return toast('Elegí la firma que paga el sueldo','warn');
+    if(ic.recurso==='efectivo' && !ic.caja) return toast('Elegí la caja de la otra firma','warn');
+    if(ic.recurso==='cheque' && !ic.cheque) return toast('Elegí el cheque de la otra firma','warn');
+    if(ic.recurso==='transferencia' && !ic.cuenta) return toast('Elegí la cuenta de la otra firma','warn');
+    data.empresaOrigenId = ic.empresaOrigenId;
+    data.recursoIntercompany = ic.recurso;
+    data.cajaOrigen = ic.caja;
+    data.chequeIdOrigen = ic.cheque;
+    data.bancoCuentaIdOrigen = ic.cuenta;
+  }
   try{
     await api('/api/empleados/'+empId+'/liquidaciones',{method:'POST',body:JSON.stringify(data)});
     toast('Sueldo liquidado','success'); closeModal();
@@ -17456,6 +17572,7 @@ function empReciboPDF(){
   if (d.liq){
     const medio = d.liq.medioPago==='efectivo' ? ('Efectivo · caja '+(d.liq.caja||'—'))
       : d.liq.medioPago==='cheque' ? ('Cheque propio N° '+(d.liq.nroCheque||'—')+(d.liq.banco?' · '+d.liq.banco:''))
+      : d.liq.medioPago==='intercompany' ? 'Intercompany (pago de otra firma del grupo)'
       : ('Transferencia bancaria'+(d.liq.banco?' · '+d.liq.banco:'')+(d.liq.referencia?' · '+d.liq.referencia:''));
     doc.text('Forma de pago: '+medio, 40, yy); yy+=14;
     doc.text('Fecha de pago: '+(d.liq.fecha?fmtDate(d.liq.fecha):'—'), 40, yy); yy+=14;
@@ -18513,6 +18630,11 @@ async function laborForm(avanzada = false, campanaId = null, edit = null) {
     } else {
       setHa();
       laAddEmp();   // arrancar con una fila de empleado
+      // Si el usuario está vinculado a un empleado, lo sugerimos en la primera fila.
+      if (state.user?.empleadoId) {
+        const sel = document.querySelector('#la-emp-body [data-le="emp"]');
+        if (sel && [...sel.options].some(o=>o.value===state.user.empleadoId)) { sel.value = state.user.empleadoId; if (typeof laPickEmpRow==='function') try{ laPickEmpRow(sel); }catch{} }
+      }
     }
   }, 0);
 }
@@ -21826,13 +21948,156 @@ async function credVer(id) {
               <td class="text-right">${!q.pagada && can('finanzas:update')?`<button class="btn btn-secondary text-xs" onclick='cuotaPagar(${JSON.stringify(c.id)},${JSON.stringify(q.id)})'>💸 Pagar</button>`:''}</td>
             </tr>`).join('')}
         </tbody>
-      </table>`,
+      </table>
+      ${esMonedaGrano(c.moneda) ? `<div id="cred-cereal-panel" class="mt-4"><div class="text-sm text-slate-400">Cargando compromiso de entrega…</div></div>` : ''}`,
     footer: `
       ${can('finanzas:update')?`<button class="btn btn-secondary" onclick='credMarcarHasta(${JSON.stringify(c.id)},${c.cantCuotas})' title="Cargar de una varias cuotas ya pagadas">✅ Marcar pagadas hasta…</button>`:''}
       ${can('finanzas:update')?`<button class="btn btn-secondary" onclick='closeModal(); credForm(${JSON.stringify(c.id)})'>✏️ Editar</button>`:''}
       ${can('finanzas:delete')?`<button class="btn btn-secondary text-red-600" onclick='credDel(${JSON.stringify(c.id)})'>🗑️ Eliminar</button>`:''}
       <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
   });
+  if (esMonedaGrano(c.moneda)) setTimeout(() => credCerealRender(c.id), 0);
+}
+// ---- Créditos por cereal: compromiso de entrega + entregas parciales ----
+const _GRANOS_MON = { SOJA:'Soja', MAIZ:'Maíz', TRIGO:'Trigo', SORGO:'Sorgo', GIRASOL:'Girasol', CEBADA:'Cebada', CENTENO:'Centeno', AVENA:'Avena' };
+function esMonedaGrano(m){ return !!_GRANOS_MON[String(m||'').toUpperCase()]; }
+function granoLabel(m){ return _GRANOS_MON[String(m||'').toUpperCase()] || m; }
+async function credCerealRender(credId){
+  const panel = document.getElementById('cred-cereal-panel');
+  if (!panel) return;
+  let entregas = [], resumen = null;
+  try { const r = await api('/api/creditos/'+credId+'/entregas'); entregas = r.data||[]; resumen = r.resumen||null; } catch(e){ panel.innerHTML = `<div class="text-xs text-red-600">No se pudo cargar: ${esc(e.message)}</div>`; return; }
+  if (!resumen) { panel.innerHTML=''; return; }
+  const vencido = resumen.fechaLimite && new Date(resumen.fechaLimite) < new Date();
+  panel.innerHTML = `
+    <div class="rounded-lg border border-amber-300 bg-amber-50 p-3">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-semibold text-amber-900">🌾 Compromiso de entrega de ${esc(granoLabel(resumen.grano))}</div>
+        ${can('finanzas:update') && resumen.pendiente>0.001 ? `<button class="btn btn-primary text-xs" onclick='entregaCerealForm(${JSON.stringify(credId)})'>➕ Registrar entrega</button>`:''}
+      </div>
+      <div class="grid grid-cols-4 gap-2 text-center mb-2">
+        <div class="kpi"><div class="text-[11px] text-slate-500">Comprometido</div><div class="text-lg font-bold">${fmtN(resumen.obligacion)} tn</div></div>
+        <div class="kpi"><div class="text-[11px] text-slate-500">Entregado</div><div class="text-lg font-bold text-green-700">${fmtN(resumen.entregado)} tn</div></div>
+        <div class="kpi"><div class="text-[11px] text-slate-500">Pendiente</div><div class="text-lg font-bold text-amber-700">${fmtN(resumen.pendiente)} tn</div></div>
+        <div class="kpi"><div class="text-[11px] text-slate-500">Fecha límite</div><div class="text-sm font-bold ${vencido?'text-red-600':''}">${resumen.fechaLimite?fmtDate(resumen.fechaLimite):'—'}${vencido?' ⚠️':''}</div></div>
+      </div>
+      ${entregas.length ? `<table class="data text-sm"><thead><tr><th>Fecha</th><th class="text-right">Cantidad</th><th>Depósito</th><th></th></tr></thead><tbody>
+        ${entregas.map(e=>`<tr>
+          <td>${fmtDate(e.fecha)}</td>
+          <td class="text-right font-semibold">${fmtN(e.cantidad)} tn</td>
+          <td class="text-xs">${esc(depoNombre(e.depositoId)||'—')}</td>
+          <td class="text-right">${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Deshacer entrega" onclick='entregaCerealBorrar(${JSON.stringify(credId)},${JSON.stringify(e.id)})'>✕</button>`:''}</td>
+        </tr>`).join('')}
+      </tbody></table>` : `<div class="text-xs text-slate-500">Todavía no se registraron entregas.</div>`}
+    </div>`;
+}
+function depoNombre(id){ if(!id) return ''; const d=(state.cache.depositos||[]).find(x=>x.id===id); return d?d.nombre:''; }
+// Aviso informativo de compromisos de entrega de cereal (se inyecta en Movimientos y Viajes).
+async function renderCompromisoCerealBanner(containerId){
+  const el = document.getElementById(containerId); if(!el) return;
+  let items = [];
+  try { const r = await api('/api/compromisos-cereal'); items = r.data||[]; } catch { return; }
+  if (!items.length){ el.innerHTML=''; return; }
+  el.innerHTML = `<div class="rounded-lg border border-amber-300 bg-amber-50 p-3 mb-3">
+    <div class="font-semibold text-amber-900 mb-1">🌾 Compromisos de entrega de cereal</div>
+    <div class="text-sm text-amber-900 space-y-0.5">
+      ${items.map(c=>{ const v=c.vencido; return `<div>• <b>${fmtN(c.pendiente)} tn</b> de <b>${esc(granoLabel(c.grano))}</b> pendientes — crédito ${esc(c.banco||'')}${c.nroOperacion?' #'+esc(c.nroOperacion):''} · límite <span class="${v?'text-red-600 font-semibold':''}">${c.fechaLimite?fmtDate(c.fechaLimite):'—'}${v?' ⚠ vencido':''}</span></div>`; }).join('')}
+    </div>
+  </div>`;
+}
+async function entregaCerealForm(credId){
+  let depositos = state.cache.depositos;
+  if (!depositos) { try { depositos=(await api('/api/depositos')).data||[]; state.cache.depositos=depositos; } catch { depositos=[]; } }
+  const hoy = new Date().toISOString().slice(0,10);
+  openModal({
+    title:'🌾 Registrar entrega de cereal', size:'max-w-md',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div><label class="label">Fecha *</label><input id="ec-fec" type="date" class="input" value="${hoy}"/></div>
+      <div><label class="label">Cantidad entregada (toneladas) *</label><input id="ec-cant" type="number" step="0.01" min="0.01" class="input" placeholder="0.00"/></div>
+      <div><label class="label">Depósito de donde sale *</label>
+        <select id="ec-dep" class="input"><option value="">— Elegir depósito —</option>${(depositos||[]).map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}${d.tipo?' · '+esc(d.tipo):''}</option>`).join('')}</select>
+        <div class="text-[11px] text-slate-500 mt-1">Descuenta el grano del stock de ese depósito.</div>
+      </div>
+      <div><label class="label">Precio pizarra (ARS/tn) <span class="text-[10px] text-slate-400">opcional, informativo</span></label><input id="ec-piz" type="number" step="0.01" class="input" placeholder="0.00"/></div>
+      <div><label class="label">Observaciones</label><input id="ec-obs" class="input"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='entregaCerealGuardar(${JSON.stringify(credId)})'>💾 Registrar entrega</button>`
+  });
+}
+async function entregaCerealGuardar(credId){
+  const cant = Number(document.getElementById('ec-cant')?.value||0);
+  const fecha = document.getElementById('ec-fec')?.value;
+  if (!cant || cant<=0) return toast('Ingresá la cantidad en toneladas','warn');
+  if (!fecha) return toast('Falta la fecha','warn');
+  const body = {
+    fecha: new Date(fecha).toISOString(),
+    cantidad: cant,
+    depositoId: document.getElementById('ec-dep')?.value || null,
+    precioPizarra: document.getElementById('ec-piz')?.value ? Number(document.getElementById('ec-piz').value) : null,
+    observaciones: document.getElementById('ec-obs')?.value.trim() || null,
+  };
+  try {
+    await api('/api/creditos/'+credId+'/entregas', { method:'POST', body: JSON.stringify(body) });
+    toast('Entrega registrada','success');
+    delete state.cache.creditos; delete state.cache.stockMap;
+    closeModal();
+    // Refrescar el detalle: recargamos créditos y reabrimos.
+    try { state.cache.creditos = (await api('/api/creditos')).data||[]; } catch {}
+    credVer(credId);
+  } catch(e){ toast(e.message,'error'); }
+}
+async function entregaCerealBorrar(credId, eid){
+  if (!confirm('¿Deshacer esta entrega? Se devuelve el grano al stock y se reabren las cuotas cubiertas.')) return;
+  try {
+    await api('/api/creditos/'+credId+'/entregas/'+eid, { method:'DELETE' });
+    toast('Entrega deshecha','success');
+    delete state.cache.creditos; delete state.cache.stockMap;
+    try { state.cache.creditos = (await api('/api/creditos')).data||[]; } catch {}
+    closeModal(); credVer(credId);
+  } catch(e){ toast(e.message,'error'); }
+}
+// Entregar el cereal de un VIAJE a cuenta de un crédito (genera el pago parcial).
+async function viajeEntregaCredito(viajeId){
+  const v = (state.cache.viajes||[]).find(x=>x.id===viajeId); if(!v) return;
+  let comp = [];
+  try { comp = (await api('/api/compromisos-cereal')).data||[]; } catch {}
+  if (!comp.length) return toast('No hay créditos de cereal con entregas pendientes','warn');
+  if (!state.cache.depositos) { try { state.cache.depositos=(await api('/api/depositos')).data||[]; } catch {} }
+  const kg = Number(v.kgDescarga||v.kgNetoDest||v.kgNeto||v.cantidad||0);
+  const tnSug = kg ? Math.round(kg/1000*100)/100 : '';
+  openModal({
+    title:'🌾 Entregar cereal del viaje a un crédito', size:'max-w-md',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div class="text-xs text-slate-500">Viaje del ${fmtDate(v.fecha)} · ${esc(v.producto||'')} · sale de <b>${esc(depoNombre(v.depositoOrigenId)||'depósito')}</b></div>
+      <div><label class="label">Crédito de cereal *</label>
+        <select id="vec-cred" class="input">${comp.map(c=>`<option value="${esc(c.creditoId)}">${esc(c.banco)}${c.nroOperacion?' #'+esc(c.nroOperacion):''} · ${esc(granoLabel(c.grano))} · pend. ${fmtN(c.pendiente)} tn</option>`).join('')}</select>
+      </div>
+      <div><label class="label">Cantidad a entregar (toneladas) *</label><input id="vec-cant" type="number" step="0.01" class="input" value="${tnSug}"/></div>
+      <div><label class="label">Fecha</label><input id="vec-fec" type="date" class="input" value="${String(v.fecha||new Date().toISOString()).slice(0,10)}"/></div>
+      <div class="text-[11px] text-slate-500">Descuenta el grano del depósito de origen del viaje y aplica el pago parcial al crédito.</div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='viajeEntregaCreditoGuardar(${JSON.stringify(viajeId)})'>💾 Registrar entrega</button>`
+  });
+}
+async function viajeEntregaCreditoGuardar(viajeId){
+  const v = (state.cache.viajes||[]).find(x=>x.id===viajeId)||{};
+  const credId = document.getElementById('vec-cred')?.value;
+  const cant = Number(document.getElementById('vec-cant')?.value||0);
+  const fec = document.getElementById('vec-fec')?.value;
+  if (!credId) return toast('Elegí el crédito','warn');
+  if (!cant || cant<=0) return toast('Ingresá la cantidad','warn');
+  try {
+    await api('/api/creditos/'+credId+'/entregas', { method:'POST', body: JSON.stringify({
+      fecha: new Date(fec).toISOString(), cantidad: cant,
+      depositoId: v.depositoOrigenId||null, viajeId,
+      observaciones: 'Entrega desde viaje '+(v.cartaPorte?('CP '+v.cartaPorte):fmtDate(v.fecha)),
+    })});
+    toast('Entrega registrada y pago parcial aplicado','success');
+    delete state.cache.creditos; delete state.cache.stockMap;
+    closeModal(); pages.viajes();
+  } catch(e){ toast(e.message,'error'); }
 }
 let _cpCtx = null;
 async function cuotaPagar(credId, cuotaId) {
@@ -22029,6 +22294,7 @@ pages.flujoProyectado = async function() {
   const empresasUser = state.user?.companies || [];
 
   $('#page-body').innerHTML = `
+    <div id="flujo-cereal-banner"></div>
     <!-- Toolbar: horizonte + empresas + exportar -->
     <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
       <div class="flex gap-2 items-center flex-wrap">
@@ -22172,6 +22438,7 @@ pages.flujoProyectado = async function() {
   if (data.serieAcumulada && data.serieAcumulada.length > 1) {
     flujoDibujarChart(data.serieAcumulada);
   }
+  renderCompromisoCerealBanner('flujo-cereal-banner');
 };
 
 // Dibuja el gráfico de saldo acumulado usando una librería liviana inline (SVG).

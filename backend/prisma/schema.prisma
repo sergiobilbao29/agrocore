@@ -80,6 +80,7 @@ model Company {
   categoriasHacienda CategoriaHaciendaConfig[]
   documentosEmitidos DocumentoEmitido[]
   secuencias         SecuenciaComprobante[]
+  entregasCereal     EntregaCereal[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -139,6 +140,12 @@ model User {
   // mantenedor del sistema tenga un acceso de emergencia que nadie pueda borrar.
   // Solo el propio user puede toggleear este flag desde su perfil.
   oculto          Boolean  @default(false)
+  // ---- Vínculo con la persona (para autoasignar lo que carga) ----
+  // Si el usuario está vinculado a un empleado y/o chofer, al cargar una labor o
+  // un viaje se sugiere su persona por defecto. Son IDs sueltos (sin FK) porque
+  // empleado/chofer viven por empresa y el usuario puede estar en varias.
+  empleadoId      String?
+  choferId        String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -170,6 +177,9 @@ model Role {
   description     String?
   // Permisos serializados como JSON: array de strings tipo "produccion:*", "stock:read"
   permissions     Json
+  // Categorías de producto que este rol puede VER en Stock (["insumos","granos",
+  // "hacienda","repuestos","combustibles","otros"]). Vacío/null = ve todas.
+  stockCategorias Json?
   builtin         Boolean  @default(false)  // roles de sistema no borrables
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -962,6 +972,7 @@ model LiquidacionSueldo {
   referencia     String?    // nro de operación / comprobante de transferencia
   efectivoId     String?    // id del egreso generado en Control de Efectivo
   chequeId       String?    // id del cheque propio generado
+  intercompanyRef String?   // si el pago fue Intercompany, ref para revertir el asiento
   observaciones  String?
   createdAt      DateTime @default(now())
 
@@ -1233,6 +1244,7 @@ model Credito {
 
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   cuotas          CuotaCredito[]
+  entregasCereal  EntregaCereal[]
 
   @@index([companyId])
 }
@@ -1258,6 +1270,30 @@ model CuotaCredito {
 
   @@index([creditoId])
   @@index([vencimiento])
+}
+
+// Entrega parcial de cereal contra un crédito tomado en grano (comprometido a
+// entregar). Cada entrega descuenta stock del depósito que sale y baja lo
+// pendiente de entregar del crédito (pago parcial en toneladas).
+model EntregaCereal {
+  id              String   @id @default(cuid())
+  companyId       String
+  creditoId       String
+  fecha           DateTime
+  cantidad        Float                     // toneladas entregadas
+  productoId      String?                   // producto (grano) del stock que sale
+  depositoId      String?                   // silo/silobolsa/cerealera de donde sale
+  viajeId         String?                   // si la entrega se hizo desde un viaje de camión
+  movimientoId    String?                   // egreso de stock generado (para poder revertir)
+  precioPizarra   Float?                    // ARS/tn del día (valuación informativa)
+  observaciones   String?
+  createdAt       DateTime @default(now())
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  credito         Credito  @relation(fields: [creditoId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([creditoId])
 }
 
 // ============================================================
