@@ -874,6 +874,10 @@ model Empleado {
 
   localidad       String?
   provincia       String?
+  // ---- Seguro / ART ----
+  aseguradora     String?  // nombre de la aseguradora / ART
+  aseguradoraTel  String?  // teléfono de emergencia de la aseguradora
+  seguroActivo    Boolean  @default(false)
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   movimientos     MovimientoEmpleado[]
   liquidaciones   LiquidacionSueldo[]

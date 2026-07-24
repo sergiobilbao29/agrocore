@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.3.1';
+const AGROCORE_VERSION = '2.4.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4355,6 +4355,10 @@ mountCrud({
     comisionViajeValor: z.coerce.number().nullable().optional(),
     localidad: z.string().nullable().optional(),
     provincia: z.string().nullable().optional(),
+    // Seguro / ART
+    aseguradora: z.string().nullable().optional(),
+    aseguradoraTel: z.string().nullable().optional(),
+    seguroActivo: z.boolean().optional(),
   }),
   orderBy: { apellido: 'asc' },
   searchFields: ['nombre', 'apellido', 'dni', 'cuil', 'puesto'],
@@ -7641,7 +7645,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
       })).optional().default([]),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'intercompany']),
       monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo)
       fecha: z.coerce.date(),
       cajaDestino: z.string().nullable().optional(),
@@ -7784,6 +7788,18 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           caja: d.cajaDestino || null,
           clasificacion: 'empresa',
           observaciones: d.observaciones || null,
+        }});
+      } else if (d.metodo === 'externo') {
+        // Billetera / medio externo (Mercado Pago, etc.): no impacta banco, se
+        // registra como una "caja" en Control de Efectivo con el nombre del medio.
+        await tx.efectivo.create({ data: {
+          companyId: req.companyId,
+          fecha: d.fecha, tipo: 'ingreso',
+          concepto: 'Cobro de ' + cli.razonSocial,
+          monto: d.monto,
+          caja: d.cajaDestino || 'Medio externo',
+          clasificacion: 'empresa',
+          observaciones: [(d.cajaDestino ? 'Medio: ' + d.cajaDestino : null), d.observaciones].filter(Boolean).join(' · ') || null,
         }});
       } else if (d.metodo === 'intercompany') {
         // El cliente le paga a otra firma del grupo (firma destino). El cobro

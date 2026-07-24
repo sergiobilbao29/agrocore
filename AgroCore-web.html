@@ -1771,6 +1771,13 @@ async function loadNotifs() {
     const porCobrar = ccs.filter(c => c.tipo === 'cliente').reduce((a,c)=>a+Number(c.saldo||0),0);
     if (porCobrar > 0) alertas.push({ icon:'💰', color:'text-amber-600', titulo:`Saldo por cobrar: ${fmt$(porCobrar)}`, sub:'Clientes con saldo pendiente', go:'ctasCtes', ctr: 1 });
   } catch {}
+  try {
+    if (can('rrhh')) {
+      const emps = (await api('/api/empleados')).data || [];
+      const sinSeguro = emps.filter(e => e.activo !== false && !e.seguroActivo);
+      if (sinSeguro.length) alertas.push({ icon:'🛡️', color:'text-red-600', titulo:`${sinSeguro.length} empleado${sinSeguro.length>1?'s':''} activo${sinSeguro.length>1?'s':''} sin seguro`, sub:sinSeguro.slice(0,3).map(e=>`${e.nombre} ${e.apellido||''}`.trim()).join(', ') + (sinSeguro.length>3?'...':'') + ' — dar de alta la ART', go:'empleados', ctr: sinSeguro.length });
+    }
+  } catch {}
   return alertas;
 }
 
@@ -2370,6 +2377,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/07/2026',
+      titulo:'💸 v2.4.0 — Cobrar la factura con billetera / medio externo',
+      desc:'Al emitir una factura de venta en <b>Contado</b>, el selector de <b>Método</b> de cobro ahora incluye <b>💸 Billetera / medio externo</b> (Mercado Pago, Naranja X, etc.). La lista se toma de <b>Configuración → Catálogos → Medios externos</b>; si no cargaste ninguno, podés escribirlo a mano. El cobro no impacta ninguna cuenta bancaria: se registra como una caja con el nombre del medio en <b>Control de Efectivo</b>.' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/07/2026',
+      titulo:'🛡️ v2.4.0 — Seguro / ART de los empleados',
+      desc:'En la ficha de cada empleado ahora cargás la <b>aseguradora</b> (nombre y <b>teléfono de emergencia</b>) y un tilde de <b>seguro activo</b>. Cuando das de <b>baja</b> a un empleado, el seguro se marca inactivo automáticamente. Al volver a darlo de <b>alta</b>, el sistema te <b>avisa</b> que debés reactivar la ART (podés continuar igual). Mientras haya empleados activos <b>sin seguro</b>, aparece una <b>alerta</b> en el panel de notificaciones.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/07/2026',
       titulo:'🔢 v2.3.1 — Numeración correlativa también para Facturas, NC y ND',
       desc:'La numeración correlativa ahora también cubre <b>Facturas, Notas de Crédito y Notas de Débito</b>, con soporte de <b>varios puntos de venta a la vez</b>. Al emitir se <b>sugiere el próximo número</b> según el punto de venta y el tipo elegido, y el sistema <b>rechaza números duplicados</b>. En las facturas autorizadas por <b>ARCA</b> el número y el CAE los sigue asignando ARCA; esta numeración es útil sobre todo para las <b>cargas manuales</b>. Se configura en <b>Configuración → Numeración de comprobantes</b>: agregás cada tipo y punto de venta con su próximo número, y los editás/borrás cuando quieras.' },
@@ -9206,6 +9219,7 @@ async function factForm() {
               <option value="efectivo">💵 Efectivo</option>
               <option value="cheque">💳 Cheque (de terceros recibido)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
+              <option value="externo">💸 Billetera / medio externo</option>
             </select>
           </div>
           <div id="vent-met-det"></div>
@@ -9307,6 +9321,15 @@ function ventMetodoCambio(prefix) {
     det.innerHTML = cuentas.length
       ? `<label class="label">Cuenta bancaria donde ingresa</label><select id="${prefix}-banco" class="input"><option value="">— Elegir —</option>${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select>`
       : `<div class="text-xs text-amber-700">⚠️ Sin cuentas bancarias. Cargá una en Tesorería → Bancos.</div>`;
+  } else if (met === 'externo') {
+    const medios = (typeof catByTipo==='function' ? catByTipo('Medio externo') : []).map(m=>m.nombre).filter(Boolean);
+    det.innerHTML = medios.length
+      ? `<label class="label">Medio externo donde ingresa</label>
+         <select id="${prefix}-medio" class="input"><option value="">— Elegir medio —</option>${medios.map(m=>`<option>${esc(m)}</option>`).join('')}</select>
+         <div class="text-[11px] text-slate-500 mt-1">💸 No impacta ninguna cuenta bancaria. Se registra como una caja en Control de Efectivo.</div>`
+      : `<label class="label">Medio externo</label>
+         <input id="${prefix}-medio" class="input" placeholder="Ej: Mercado Pago, Billetera XX"/>
+         <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargala en Configuración → Catálogos → Medios externos.</div>`;
   }
 }
 // ===== MULTIMONEDA: helpers para los formularios de factura =====
@@ -9440,9 +9463,10 @@ async function factSave() {
             fecha: data.fecha,
             observaciones: 'Cobro contado factura ' + data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0'),
           };
-          if (metodo === 'efectivo')      cobroBody.cajaOrigen    = document.getElementById('vent-caja')?.value || null;
+          if (metodo === 'efectivo')      cobroBody.cajaDestino   = document.getElementById('vent-caja')?.value || null;
           if (metodo === 'cheque')        cobroBody.chequeId      = document.getElementById('vent-cheque')?.value || null;
           if (metodo === 'transferencia') cobroBody.bancoCuentaId = document.getElementById('vent-banco')?.value || null;
+          if (metodo === 'externo')       cobroBody.cajaDestino   = document.getElementById('vent-medio')?.value || null;
           await api('/api/cobros-clientes', { method:'POST', body: JSON.stringify(cobroBody) });
         }
       } catch (pErr) {
@@ -9542,6 +9566,7 @@ async function factFormExterna() {
               <option value="efectivo">💵 Efectivo</option>
               <option value="cheque">💳 Cheque (de terceros recibido)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
+              <option value="externo">💸 Billetera / medio externo</option>
             </select>
           </div>
           <div id="vente-met-det"></div>
@@ -9787,9 +9812,10 @@ async function factSaveExterna() {
             fecha: data.fecha,
             observaciones: 'Cobro contado factura externa ' + data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0'),
           };
-          if (metodo === 'efectivo')      cobroBody.cajaOrigen    = document.getElementById('vente-caja')?.value || null;
+          if (metodo === 'efectivo')      cobroBody.cajaDestino   = document.getElementById('vente-caja')?.value || null;
           if (metodo === 'cheque')        cobroBody.chequeId      = document.getElementById('vente-cheque')?.value || null;
           if (metodo === 'transferencia') cobroBody.bancoCuentaId = document.getElementById('vente-banco')?.value || null;
+          if (metodo === 'externo')       cobroBody.cajaDestino   = document.getElementById('vente-medio')?.value || null;
           await api('/api/cobros-clientes', { method:'POST', body: JSON.stringify(cobroBody) });
         }
       } catch (pErr) {
@@ -16649,9 +16675,21 @@ function empleForm(id=null) {
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
         <div class="col-span-2 flex items-center gap-2">
-          <input id="f-act" type="checkbox" ${it.activo!==false?'checked':''}/>
+          <input id="f-act" type="checkbox" ${it.activo!==false?'checked':''} data-prev="${it.activo===false?'0':'1'}" onchange="emplToggleActivo()"/>
           <label for="f-act">Activo</label>
         </div>
+      </div>
+      <div class="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
+        <div class="text-xs text-slate-600 font-semibold mb-2">🛡️ Seguro / ART</div>
+        <div class="grid grid-cols-3 gap-3 items-end">
+          <div><label class="label">Aseguradora</label><input id="f-aseg" class="input" value="${esc(it.aseguradora||'')}" placeholder="Ej: La Segunda ART"/></div>
+          <div><label class="label">Tel. de emergencia</label><input id="f-asegtel" class="input" value="${esc(it.aseguradoraTel||'')}" placeholder="Ej: 0800-333-1234"/></div>
+          <div class="flex items-center gap-2 pb-2">
+            <input id="f-seg" type="checkbox" ${it.seguroActivo?'checked':''} ${it.activo===false?'disabled':''}/>
+            <label for="f-seg" class="text-sm">Seguro activo</label>
+          </div>
+        </div>
+        <div class="text-[11px] text-slate-500 mt-2">💡 Al dar de baja al empleado, el seguro se marca inactivo automáticamente. Al volver a darlo de alta, acordate de reactivar el seguro con la aseguradora.</div>
       </div>
       <div class="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
         <div class="text-xs text-slate-600 font-semibold mb-2">⚙️ Tipo de empleado y forma de cobro</div>
@@ -16701,6 +16739,24 @@ function emplToggleChofer() {
   if (t) t.disabled = !on;
   if (v) v.disabled = !on;
 }
+function emplToggleActivo() {
+  const act = document.getElementById('f-act');
+  const seg = document.getElementById('f-seg');
+  if (!act || !seg) return;
+  const prev = act.getAttribute('data-prev') === '1';
+  if (!act.checked) {
+    // Baja del empleado -> se baja el seguro automáticamente
+    seg.checked = false;
+    seg.disabled = true;
+  } else {
+    seg.disabled = false;
+    // Re-alta (venía inactivo) y sin seguro activo -> avisar que debe darlo de alta
+    if (!prev && !seg.checked) {
+      alert('⚠️ El empleado vuelve a estar activo, pero el SEGURO figura inactivo.\n\nRecordá dar de alta el seguro/ART con la aseguradora antes de que retome tareas.\n\nPodés continuar igual: quedará avisado en las alertas del sistema hasta que marques el seguro como activo.');
+    }
+  }
+  act.setAttribute('data-prev', act.checked ? '1' : '0');
+}
 function emplePickFoto(inp) {
   const f = inp.files && inp.files[0];
   if (!f) return;
@@ -16730,6 +16786,9 @@ async function empleSave(id) {
     observaciones: $('#f-obs').value.trim()||null,
     fotoUrl: $('#f-fotoUrl')?.value || null,
     activo: $('#f-act').checked,
+    aseguradora: $('#f-aseg')?.value.trim() || null,
+    aseguradoraTel: $('#f-asegtel')?.value.trim() || null,
+    seguroActivo: $('#f-act').checked ? ($('#f-seg')?.checked || false) : false,
     tipo: $('#f-tipo')?.value || 'propio',
     cobraPorcentaje: $('#f-cp')?.checked || false,
     porcentajeDefault: $('#f-pd')?.value ? Number($('#f-pd').value) : null,
