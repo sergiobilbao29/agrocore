@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.1.2';
+const AGROCORE_VERSION = '2.2.0';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1008,6 +1008,115 @@ app.get('/api/documentos/:id', requireCompany, async (req, res) => {
     if (!doc) return res.status(404).json({ ok: false, error: 'Comprobante no encontrado' });
     res.json({ ok: true, data: doc });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Método del pago a partir de las observaciones ("Pago via efectivo/cheque/...").
+function _metodoDeObs(obs) { const m = /Pago via\s+([a-záéíóú]+)/i.exec(obs || ''); return m ? m[1].toLowerCase() : 'efectivo'; }
+// Intenta ubicar el movimiento de recurso (caja/banco/cheque) de un pago viejo,
+// para poder revertirlo después. Devuelve {tipo,id} sólo si hay UN único match.
+async function _matchRecursoPago(companyId, metodo, prov, monto, fecha) {
+  const d0 = new Date(fecha); d0.setHours(0,0,0,0); const d1 = new Date(d0); d1.setDate(d1.getDate()+1);
+  const near = { gte: d0, lt: d1 }; const aprox = { gte: monto - 1, lte: monto + 1 };
+  const nom = prov.razonSocial || '';
+  try {
+    if (metodo === 'efectivo') { const r = await prisma.efectivo.findMany({ where: { companyId, tipo:'egreso', concepto: 'Pago a ' + nom, monto: aprox, fecha: near } }); if (r.length === 1) return { tipo:'efectivo', id:r[0].id }; }
+    else if (metodo === 'transferencia') { const r = await prisma.bancoMovimiento.findMany({ where: { companyId, tipo:'transferencia_out', concepto: 'Pago a ' + nom, monto: aprox, fecha: near } }); if (r.length === 1) return { tipo:'banco', id:r[0].id }; }
+    else if (metodo === 'cheque') { const r = await prisma.cheque.findMany({ where: { companyId, monto: aprox, estado: { in:['entregado','endosado'] }, OR:[{ enPoderDe: nom }, { beneficiario: nom }] } }); if (r.length === 1) return { tipo:'cheque', id:r[0].id, chTipo:r[0].tipo }; }
+  } catch (e) { /* si falla el match, se revisa a mano */ }
+  return null;
+}
+
+// Reconstruye las Órdenes de Pago de pagos ANTERIORES (cargados antes de que
+// existiera el documento de OP) a partir de la cuenta corriente, para que
+// aparezcan y se puedan reimprimir/enviar/deshacer. Idempotente.
+app.post('/api/documentos/backfill-op', requireCompany, requirePermission('finanzas:create'), async (req, res) => {
+  try {
+    const companyId = req.companyId;
+    const pagos = await prisma.ctaCte.findMany({
+      where: { companyId, contactoTipo:'proveedor', haber:{ gt:0.01 },
+               OR:[{ detalle:{ startsWith:'Pago de' } }, { detalle:'Pago a cuenta' }] },
+      orderBy: { fecha:'asc' },
+    });
+    const docs = await prisma.documentoEmitido.findMany({ where: { companyId, tipo:'orden_pago' }, select:{ datos:true } });
+    const cubiertos = new Set();
+    for (const d of docs) { const id = d.datos && d.datos._ccPagoId; if (id) cubiertos.add(id); }
+    const provs = await prisma.proveedor.findMany({ where: { companyId } });
+    const provMap = new Map(provs.map(p => [p.id, p]));
+    let creados = 0;
+    for (const row of pagos) {
+      if (cubiertos.has(row.id)) continue;
+      const prov = provMap.get(row.contactoId) || {};
+      const metodo = _metodoDeObs(row.observaciones);
+      const monto = Number(row.haber || 0);
+      const detalleComp = (row.detalle || '').replace(/^Pago de\s*/i, '') || 'Pago a cuenta';
+      const link = await _matchRecursoPago(companyId, metodo, prov, monto, row.fecha);
+      const op = {
+        numero: null, proveedor: prov.razonSocial || '', proveedorCuit: prov.cuit || '', proveedorEmail: prov.email || '',
+        proveedorDomicilio: prov.direccion || '', proveedorLocalidad: prov.localidad || '', proveedorIva: prov.condicionIva || prov.condicionIVA || '',
+        fecha: row.fecha, metodo, monto, obs: null,
+        comprobantes: [{ detalle: detalleComp, importe: monto }], cheques: [], retenciones: [],
+        totalEfectivo: metodo === 'efectivo' ? monto : 0, totalTransferencias: metodo === 'transferencia' ? monto : 0, totalCheques: metodo === 'cheque' ? monto : 0,
+        _ccPagoId: row.id, _referencia: row.referencia || null, _backfill: true, _link: link,
+      };
+      await prisma.documentoEmitido.create({ data: {
+        companyId, tipo:'orden_pago', numero:null, fecha: row.fecha,
+        contactoTipo:'proveedor', contactoId: row.contactoId, contactoNombre: prov.razonSocial || null, contactoEmail: prov.email || null,
+        total: monto, moneda: row.moneda || 'ARS', datos: op, createdById: req.user?.id || null,
+      }});
+      creados++;
+    }
+    res.json({ ok:true, creados, total: pagos.length });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// Deshacer un pago (revertir una OP): repone la deuda del proveedor y revierte el
+// movimiento de caja/banco/cheque, y borra el comprobante. Transaccional.
+app.post('/api/documentos/:id/revertir', requireCompany, requirePermission('finanzas:delete'), async (req, res) => {
+  try {
+    const doc = await prisma.documentoEmitido.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!doc) return res.status(404).json({ ok:false, error:'OP no encontrada' });
+    if (doc.tipo !== 'orden_pago') return res.status(400).json({ ok:false, error:'Solo se puede deshacer una Orden de Pago' });
+    const op = doc.datos || {};
+    const companyId = req.companyId;
+    // Ubicar el recurso si no vino linkeado (OP nuevas).
+    let link = op._link;
+    if (!link && op.metodo && Number(doc.total||0) > 0.01) {
+      link = await _matchRecursoPago(companyId, op.metodo, { razonSocial: doc.contactoNombre }, Number(doc.total||0), doc.fecha);
+    }
+    const warns = [];
+    await prisma.$transaction(async (tx) => {
+      // 1) Cuenta corriente: borrar la fila de pago y reponer la deuda.
+      if (op._ccPagoId) {
+        const pagoRow = await tx.ctaCte.findFirst({ where: { id: op._ccPagoId, companyId } });
+        if (pagoRow) {
+          await tx.ctaCte.delete({ where: { id: pagoRow.id } });
+          if (pagoRow.referencia) await tx.ctaCte.updateMany({ where: { companyId, contactoTipo:'proveedor', contactoId: doc.contactoId, referencia: pagoRow.referencia, debe:{ gt:0 } }, data:{ pagado:false } });
+        } else warns.push('El movimiento de cuenta corriente ya no existía.');
+      } else {
+        const cand = await tx.ctaCte.findMany({ where: { companyId, contactoTipo:'proveedor', contactoId: doc.contactoId, detalle:{ startsWith:'Pago de' }, haber:{ gt:0 } } });
+        const target = cand.filter(r => Math.abs(new Date(r.fecha) - new Date(doc.fecha)) < 86400000 && Math.abs(Number(r.haber) - Number(doc.total||0)) < 1);
+        for (const r of target) { await tx.ctaCte.delete({ where: { id: r.id } }); if (r.referencia) await tx.ctaCte.updateMany({ where: { companyId, referencia: r.referencia, debe:{ gt:0 } }, data:{ pagado:false } }); }
+        if (!target.length) warns.push('No pude identificar el movimiento de cuenta corriente; revisalo manualmente.');
+      }
+      // 2) Recurso (caja/banco/cheque).
+      if (link && link.tipo === 'efectivo') { await tx.efectivo.deleteMany({ where: { id: link.id, companyId } }); }
+      else if (link && link.tipo === 'banco') { await tx.bancoMovimiento.deleteMany({ where: { id: link.id, companyId } }); }
+      else if (link && link.tipo === 'cheque') {
+        const ch = await tx.cheque.findFirst({ where: { id: link.id, companyId } });
+        if (ch) {
+          // Vuelve a cartera (sin entrega). Si era un cheque propio creado en el
+          // mismo pago, queda en cartera sin usar: se puede borrar desde Tesorería.
+          await tx.cheque.update({ where: { id: ch.id }, data: { estado:'en_cartera', enPoderDe:null, fechaEndoso:null, beneficiario:null } });
+          if (ch.tipo === 'propio') warns.push('El cheque propio volvió a cartera. Si se había creado sólo para este pago, borralo desde Tesorería → Cheques.');
+        }
+      } else if (op.metodo && !['intercompany','cereal'].includes(op.metodo) && Number(doc.total||0) > 0.01) {
+        warns.push('No pude ubicar el movimiento de ' + op.metodo + ' de forma unívoca; revisá Tesorería y ajustalo a mano si corresponde.');
+      }
+      // 3) Borrar el comprobante de OP.
+      await tx.documentoEmitido.delete({ where: { id: doc.id } });
+    });
+    res.json({ ok:true, warnings: warns });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
 // ---------- SETTINGS (configuración global del sistema) ----------

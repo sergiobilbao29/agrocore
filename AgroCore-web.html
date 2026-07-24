@@ -2370,6 +2370,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/07/2026',
+      titulo:'🔄 v2.2.0 — Recuperar OP anteriores y deshacer un pago',
+      desc:'Dos cosas para las Órdenes de Pago. <b>(1) Recuperar OP anteriores:</b> en <b>Compras</b> hay un botón <b>“🔄 Recuperar OP anteriores”</b> que reconstruye las órdenes de pago de los pagos cargados <b>antes</b> de que existiera el comprobante de OP. Así aparecen en el listado de Compras y en la cuenta corriente, y se pueden <b>reimprimir, generar PDF, enviar por email o WhatsApp</b> como las nuevas. <b>(2) Deshacer un pago:</b> desde una OP ahora hay <b>“🗑️ Deshacer pago”</b>: repone la deuda del proveedor (vuelve a quedar pendiente) y <b>revierte el movimiento de caja, banco o cheque</b> (el cheque vuelve a cartera), y borra el comprobante. Pide confirmación y avisa si algún movimiento hay que revisarlo a mano. Requiere permiso <b>Finanzas: eliminar</b>.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'23/07/2026',
       titulo:'🖨️ v2.1.1 — Factura y Orden de Pago ocupan la hoja A4 completa',
       desc:'Se ajustó el diseño de impresión y PDF para que la <b>Factura</b> (formato ARCA) y la <b>Orden de Pago</b> ocupen <b>toda la hoja A4</b> con marco completo: encabezado arriba, detalle en el centro y los <b>totales y el pie (CAE / firmas / importe en letras) anclados al final de la hoja</b>, tal como los comprobantes reales. Aplica a imprimir y a descargar PDF.' },
@@ -10016,6 +10019,7 @@ pages.compras = async function() {
       <div class="text-sm text-slate-600">${rows.length} facturas de compra registradas</div>
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>
+        ${can('finanzas:create') ? `<button class="btn btn-secondary" onclick="comprasBackfillOP()" title="Reconstruye las Órdenes de Pago de pagos anteriores para que aparezcan y se puedan reimprimir/enviar">🔄 Recuperar OP anteriores</button>`:''}
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="compForm()">+ Nueva factura de compra</button>`:''}
       </div>
     </div>
@@ -13158,7 +13162,8 @@ function ordenPagoAbrir(op){
             <button class="btn btn-secondary" onclick="ordenPagoImprimir()">🖨️ Imprimir</button>
             <button class="btn btn-secondary" onclick="ordenPagoPDF()">📄 PDF</button>
             <button class="btn btn-secondary" onclick="ordenPagoWhatsApp()">💬 WhatsApp</button>
-            <button class="btn btn-primary" onclick="ordenPagoEmail()">✉️ Email</button>`
+            <button class="btn btn-secondary" onclick="ordenPagoEmail()">✉️ Email</button>
+            ${op._docId && can('finanzas:delete') ? `<button class="btn btn-secondary text-red-600" onclick='ordenPagoRevertir(${JSON.stringify(op._docId)})'>🗑️ Deshacer pago</button>` : ''}`
   });
 }
 function ordenPagoImprimir(){
@@ -13311,6 +13316,26 @@ async function ordenPagoReabrir(id, accion){
     op._docId = doc.id;
     if (accion === 'email') { state._opActual = op; return ordenPagoEmail(); }
     ordenPagoAbrir(op);
+  } catch(e){ toast(e.message,'error'); }
+}
+// Reconstruir OP de pagos anteriores (para que aparezcan y se puedan reimprimir/enviar/deshacer).
+async function comprasBackfillOP(){
+  if(!confirm('Vamos a reconstruir las Órdenes de Pago de pagos anteriores (los que se cargaron antes de esta función) para que aparezcan en Compras y se puedan reimprimir, enviar o deshacer.\n\n¿Continuar?')) return;
+  try {
+    const r = await api('/api/documentos/backfill-op', { method:'POST' });
+    toast(r.creados ? (r.creados+' órdenes de pago recuperadas') : 'No había OP anteriores para recuperar', 'success');
+    delete state.cache.ctasCtes; pages.compras();
+  } catch(e){ toast(e.message,'error'); }
+}
+// Deshacer un pago (revertir una OP): repone la deuda y revierte caja/banco/cheque.
+async function ordenPagoRevertir(docId){
+  if(!confirm('¿Deshacer este pago?\n\nLa deuda del proveedor vuelve a quedar PENDIENTE y se revierte el movimiento de caja/banco/cheque. Esta acción no se puede deshacer.')) return;
+  try {
+    const r = await api('/api/documentos/'+docId+'/revertir', { method:'POST' });
+    toast('Pago deshecho — la deuda quedó pendiente de nuevo', 'success');
+    if (r.warnings && r.warnings.length) alert('Atención:\n\n• ' + r.warnings.join('\n• '));
+    delete state.cache.ctasCtes; delete state.cache.cheques; closeModal();
+    setTimeout(()=>location.reload(), 700);
   } catch(e){ toast(e.message,'error'); }
 }
 
