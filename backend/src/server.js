@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.1.1';
+const AGROCORE_VERSION = '2.1.2';
 const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
 
 // ============================================================
@@ -476,6 +476,25 @@ app.get('/api/cotizaciones', async (_req, res) => {
       cereales: _cotCache.cerealesTime ? new Date(_cotCache.cerealesTime).toISOString() : null,
     },
   });
+});
+
+// Histórico de cotizaciones de mercado (PÚBLICO) — para gráficos de tendencia en la web.
+// Devuelve las últimas N jornadas guardadas (snapshot diario, companyId=null) por moneda.
+app.get('/api/cotizaciones/historico', async (req, res) => {
+  try {
+    const monedas = req.query.moneda
+      ? String(req.query.moneda).split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+      : ['SOJA','MAIZ','TRIGO','SORGO','GIRASOL','USD','USD_BLUE'];
+    const dias = Math.min(Math.max(Number(req.query.dias) || 60, 7), 180);
+    const desde = new Date(); desde.setDate(desde.getDate() - dias); desde.setHours(0,0,0,0);
+    const rows = await prisma.cotizacion.findMany({
+      where: { companyId: null, moneda: { in: monedas }, fecha: { gte: desde } },
+      orderBy: { fecha: 'asc' }, select: { moneda: true, fecha: true, valor: true },
+    });
+    const series = {};
+    for (const r of rows) { (series[r.moneda] = series[r.moneda] || []).push({ fecha: r.fecha, valor: r.valor }); }
+    res.json({ ok: true, series });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // ============================================================
