@@ -1003,35 +1003,63 @@ app.post('/api/documentos', requireCompany, async (req, res) => {
   }
 });
 
-// Tipos de comprobante interno que llevan numeración correlativa propia.
+// Tipos de comprobante interno que toman número correlativo al persistir el documento.
 const COMPROBANTES_NUMERADOS = new Set(['orden_pago', 'recibo_cobro']);
+// Clave de secuencia de una factura/NC/ND de venta según su clase y letra.
+function _seqTipoFactura(clase, letra) {
+  const c = clase === 'nota_credito' ? 'nc' : (clase === 'nota_debito' ? 'nd' : 'factura');
+  return 'venta_' + c + '_' + (letra || 'A');
+}
+function _labelComp(clase, letra) {
+  const c = clase === 'nota_credito' ? 'Nota de crédito' : (clase === 'nota_debito' ? 'Nota de débito' : 'Factura');
+  return c + ' ' + letra;
+}
+// Adelanta la secuencia (companyId, tipo, puntoVenta) a numero+1 si venía atrás.
+async function _avanzarSecuencia(tx, companyId, tipo, puntoVenta, numero) {
+  const prox = Number(numero) + 1;
+  const seq = await tx.secuenciaComprobante.findFirst({ where: { companyId, tipo, puntoVenta } });
+  if (!seq) await tx.secuenciaComprobante.create({ data: { companyId, tipo, puntoVenta, proximoNumero: prox } });
+  else if (seq.proximoNumero < prox) await tx.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: prox } });
+}
 
-// Configuración de numeración: próximo número + punto de venta por tipo.
+// Configuración de numeración (soporta múltiples puntos de venta y tipos).
 app.get('/api/numeradores', requireCompany, async (req, res) => {
   try {
-    const tipos = ['orden_pago', 'recibo_cobro'];
-    const rows = await prisma.secuenciaComprobante.findMany({ where: { companyId: req.companyId, tipo: { in: tipos } } });
-    const byTipo = {}; rows.forEach(r => { byTipo[r.tipo] = r; });
-    const data = tipos.map(t => byTipo[t] || { tipo: t, puntoVenta: 1, proximoNumero: 1 });
+    const rows = await prisma.secuenciaComprobante.findMany({ where: { companyId: req.companyId }, orderBy: [{ tipo:'asc' }, { puntoVenta:'asc' }] });
+    const data = rows.map(r => ({ id:r.id, tipo:r.tipo, puntoVenta:r.puntoVenta, proximoNumero:r.proximoNumero }));
+    for (const t of ['recibo_cobro','orden_pago']) if (!data.some(d => d.tipo === t)) data.unshift({ id:null, tipo:t, puntoVenta:1, proximoNumero:1 });
     res.json({ ok: true, data });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+// Próximo número (sin incrementar) para sugerir en el formulario de factura.
+app.get('/api/numeradores/proximo', requireCompany, async (req, res) => {
+  try {
+    const tipo = String(req.query.tipo || ''); const pv = Number(req.query.puntoVenta || 1);
+    if (!tipo) return res.json({ ok:true, proximoNumero:1, puntoVenta:pv });
+    const seq = await prisma.secuenciaComprobante.findFirst({ where: { companyId: req.companyId, tipo, puntoVenta: pv } });
+    res.json({ ok:true, proximoNumero: seq ? seq.proximoNumero : 1, puntoVenta: pv });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 app.put('/api/numeradores', requireCompany, requirePermission('finanzas:update'), async (req, res) => {
   try {
     const d = z.object({
-      tipo: z.enum(['orden_pago', 'recibo_cobro']),
+      tipo: z.string().min(1),
       puntoVenta: z.number().int().min(1).max(99999),
       proximoNumero: z.number().int().min(1),
     }).parse(req.body);
-    const seq = await prisma.secuenciaComprobante.findFirst({ where: { companyId: req.companyId, tipo: d.tipo } });
+    const seq = await prisma.secuenciaComprobante.findFirst({ where: { companyId: req.companyId, tipo: d.tipo, puntoVenta: d.puntoVenta } });
     const row = seq
-      ? await prisma.secuenciaComprobante.update({ where: { id: seq.id }, data: { puntoVenta: d.puntoVenta, proximoNumero: d.proximoNumero } })
+      ? await prisma.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: d.proximoNumero } })
       : await prisma.secuenciaComprobante.create({ data: { companyId: req.companyId, tipo: d.tipo, puntoVenta: d.puntoVenta, proximoNumero: d.proximoNumero } });
     res.json({ ok: true, data: row });
   } catch (e) {
     if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+app.delete('/api/numeradores/:id', requireCompany, requirePermission('finanzas:update'), async (req, res) => {
+  try { await prisma.secuenciaComprobante.deleteMany({ where: { id: req.params.id, companyId: req.companyId } }); res.json({ ok:true }); }
+  catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
 app.get('/api/documentos', requireCompany, async (req, res) => {
@@ -2987,6 +3015,12 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       items: z.array(itemFacSchema).min(1),
     });
     const input = schema.parse(req.body);
+    // Evitar numeración duplicada: mismo comprobante (tipo+clase+PV+número) ya emitido.
+    {
+      const _clase0 = input.clase || 'factura';
+      const dup = await prisma.factura.findFirst({ where: { companyId: req.companyId, tipo: input.tipo, clase: _clase0, puntoVenta: input.puntoVenta, numero: input.numero, estado: { not: 'anulada' } } });
+      if (dup) return res.status(400).json({ ok: false, error: `Ya existe ${_labelComp(_clase0, input.tipo)} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}. Cambiá el número.` });
+    }
     // Si dicen que la factura ya está en ARCA, exigimos CAE + vto reales.
     if (input.origen === 'arca_externa') {
       if (!input.cae || !/^\d{14}$/.test(input.cae)) {
@@ -3028,6 +3062,8 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         },
         include: { cliente: true, items: true },
       });
+      // Mantener la numeración correlativa al día (para la próxima carga manual).
+      await _avanzarSecuencia(tx, req.companyId, _seqTipoFactura(_clase, input.tipo), input.puntoVenta, input.numero);
       if (_clase === 'factura') {
         // Factura de venta: sale stock (egreso) + el cliente queda debiendo (debe).
         await crearMovimientosDesdeFactura(tx, {

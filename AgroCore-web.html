@@ -2371,8 +2371,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/07/2026',
-      titulo:'🔢 v2.3.0 — Numeración correlativa de Órdenes de Pago y Recibos',
-      desc:'Las <b>Órdenes de Pago</b> y los <b>Recibos de cobro</b> ahora llevan <b>numeración correlativa propia</b> (como las facturas): al emitir, el sistema toma el próximo número y le suma 1 automáticamente, <b>sin duplicados</b> (es a prueba de dos pagos simultáneos). En <b>Configuración → Numeración de comprobantes</b> podés fijar el <b>punto de venta</b> y el <b>próximo número</b> de cada tipo, para arrancar desde donde vos quieras o continuar tu numeración anterior. El número aparece en el comprobante impreso, el PDF y el email.' },
+      titulo:'🔢 v2.3.0 — Numeración correlativa de comprobantes (OP, Recibos y Facturas)',
+      desc:'Las <b>Órdenes de Pago</b> y <b>Recibos de cobro</b> ahora llevan <b>numeración correlativa propia</b>: al emitir, el sistema toma el próximo número y le suma 1 automáticamente, <b>sin duplicados</b> (a prueba de dos pagos simultáneos). Para <b>Facturas, NC y ND</b> se agregó lo mismo con soporte de <b>varios puntos de venta a la vez</b>: al emitir se sugiere el próximo número por punto de venta y el sistema <b>rechaza números duplicados</b>. En las facturas autorizadas por <b>ARCA</b> el número y CAE los sigue asignando ARCA; esta numeración es útil sobre todo para las <b>cargas manuales</b>. Todo se configura en <b>Configuración → Numeración de comprobantes</b> (agregás cada tipo y punto de venta con su próximo número).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/07/2026',
       titulo:'🔄 v2.2.0 — Recuperar OP anteriores y deshacer un pago',
       desc:'Dos cosas para las Órdenes de Pago. <b>(1) Recuperar OP anteriores:</b> en <b>Compras</b> hay un botón <b>“🔄 Recuperar OP anteriores”</b> que reconstruye las órdenes de pago de los pagos cargados <b>antes</b> de que existiera el comprobante de OP. Así aparecen en el listado de Compras y en la cuenta corriente, y se pueden <b>reimprimir, generar PDF, enviar por email o WhatsApp</b> como las nuevas. <b>(2) Deshacer un pago:</b> desde una OP ahora hay <b>“🗑️ Deshacer pago”</b>: repone la deuda del proveedor (vuelve a quedar pendiente) y <b>revierte el movimiento de caja, banco o cheque</b> (el cheque vuelve a cartera), y borra el comprobante. Pide confirmación y avisa si algún movimiento hay que revisarlo a mano. Requiere permiso <b>Finanzas: eliminar</b>.' },
@@ -6808,39 +6808,76 @@ function configRenderConfig(body) {
     </div>` : ''}
     <div class="kpi mb-4">
       <h4 class="font-semibold text-slate-800 mb-1">🔢 Numeración de comprobantes</h4>
-      <p class="text-xs text-slate-500 mb-3">Numeración correlativa de <b>Órdenes de Pago</b> y <b>Recibos de cobro</b> (esta empresa). Al emitir, el sistema toma el próximo número y suma 1 automáticamente, sin duplicados.</p>
+      <p class="text-xs text-slate-500 mb-3">Numeración correlativa por <b>punto de venta</b> de <b>Órdenes de Pago</b>, <b>Recibos</b> y <b>Facturas / NC / ND</b> (esta empresa). Al emitir, el sistema toma el próximo número y suma 1, sin duplicados. Podés tener <b>varios puntos de venta</b> a la vez. En las facturas de ARCA el número/CAE lo asigna ARCA; esta numeración se usa para las <b>cargas manuales</b> y para sugerir el próximo número.</p>
       <div id="num-config" class="text-sm text-slate-500">Cargando…</div>
     </div>`;
   numeradoresRender();
 }
+const NUM_TIPOS = {
+  orden_pago:'Orden de pago', recibo_cobro:'Recibo de cobro',
+  venta_factura_A:'Factura A', venta_factura_B:'Factura B', venta_factura_C:'Factura C', venta_factura_E:'Factura E',
+  venta_nc_A:'Nota de crédito A', venta_nc_B:'Nota de crédito B', venta_nc_C:'Nota de crédito C',
+  venta_nd_A:'Nota de débito A', venta_nd_B:'Nota de débito B', venta_nd_C:'Nota de débito C',
+};
 async function numeradoresRender() {
   const cont = document.getElementById('num-config'); if (!cont) return;
   let data = [];
   try { data = (await api('/api/numeradores')).data || []; }
   catch (e) { cont.innerHTML = '<span class="text-red-600 text-xs">' + esc(e.message) + '</span>'; return; }
-  const label = { orden_pago:'Orden de pago', recibo_cobro:'Recibo de cobro' };
   const editable = can('finanzas:update');
-  const ro = editable ? '' : 'disabled';
-  cont.innerHTML = data.map(n => `
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 items-end mb-3 pb-3 border-b border-slate-100">
-      <div class="font-semibold text-slate-700 col-span-2 md:col-span-1">${label[n.tipo] || n.tipo}</div>
-      <div><label class="label">Punto de venta</label><input id="num-pv-${n.tipo}" type="number" min="1" class="input" value="${n.puntoVenta}" ${ro}/></div>
-      <div><label class="label">Próximo número</label><input id="num-nro-${n.tipo}" type="number" min="1" class="input" value="${n.proximoNumero}" ${ro}/></div>
-      <div class="text-xs text-slate-400">Próximo: <span class="font-mono">${String(n.puntoVenta).padStart(4,'0')}-${String(n.proximoNumero).padStart(8,'0')}</span></div>
-    </div>`).join('') + (editable
-      ? `<div class="flex justify-end"><button class="btn btn-primary" onclick="numeradoresGuardar()">💾 Guardar numeración</button></div>`
-      : '<p class="text-xs text-slate-400">Necesitás permiso <b>Finanzas: modificar</b> para editar la numeración.</p>');
+  const lbl = t => NUM_TIPOS[t] || t;
+  const filas = data.map(n => `
+    <tr data-tipo="${esc(n.tipo)}">
+      <td class="py-1.5 pr-3 font-semibold text-slate-700">${esc(lbl(n.tipo))}</td>
+      <td class="py-1.5 pr-3"><input class="input num-pv" type="number" min="1" value="${n.puntoVenta}" style="width:90px" disabled title="Para otro punto de venta, agregá una fila nueva abajo"/></td>
+      <td class="py-1.5 pr-3"><input class="input num-nro" type="number" min="1" value="${n.proximoNumero}" style="width:120px" ${editable?'':'disabled'}/></td>
+      <td class="py-1.5 pr-3 text-xs text-slate-400 font-mono">${String(n.puntoVenta).padStart(4,'0')}-${String(n.proximoNumero).padStart(8,'0')}</td>
+      <td class="py-1.5 text-right">${editable && n.id ? `<button class="btn btn-ghost text-red-600 text-xs" title="Borrar" onclick='numeradorBorrar(${JSON.stringify(n.id)})'>🗑️</button>` : ''}</td>
+    </tr>`).join('');
+  const opciones = Object.entries(NUM_TIPOS).map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+  cont.innerHTML = `
+    <div class="overflow-x-auto"><table class="w-full text-sm">
+      <thead><tr class="text-left text-[11px] uppercase text-slate-400 border-b border-slate-100">
+        <th class="py-1.5 pr-3">Comprobante</th><th class="py-1.5 pr-3">Pto. venta</th><th class="py-1.5 pr-3">Próximo número</th><th class="py-1.5 pr-3">Próximo</th><th></th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table></div>
+    ${editable ? `
+    <div class="mt-4 pt-3 border-t border-slate-100">
+      <div class="text-xs font-semibold text-slate-600 mb-2">➕ Agregar comprobante / punto de venta</div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
+        <div><label class="label">Comprobante</label><select id="num-add-tipo" class="input">${opciones}</select></div>
+        <div><label class="label">Punto de venta</label><input id="num-add-pv" type="number" min="1" class="input" value="1"/></div>
+        <div><label class="label">Próximo número</label><input id="num-add-nro" type="number" min="1" class="input" value="1"/></div>
+        <div><button class="btn btn-secondary w-full" onclick="numeradorAgregar()">+ Agregar</button></div>
+      </div>
+    </div>
+    <div class="flex justify-end mt-4"><button class="btn btn-primary" onclick="numeradoresGuardar()">💾 Guardar numeración</button></div>`
+    : '<p class="text-xs text-slate-400 mt-2">Necesitás permiso <b>Finanzas: modificar</b> para editar la numeración.</p>'}`;
 }
 async function numeradoresGuardar() {
   try {
-    for (const t of ['orden_pago','recibo_cobro']) {
-      const pv = Number(document.getElementById('num-pv-'+t)?.value || 1);
-      const nro = Number(document.getElementById('num-nro-'+t)?.value || 1);
+    for (const tr of document.querySelectorAll('#num-config tbody tr')) {
+      const tipo = tr.dataset.tipo;
+      const pv = Number(tr.querySelector('.num-pv')?.value || 1);
+      const nro = Number(tr.querySelector('.num-nro')?.value || 1);
       if (pv < 1 || nro < 1) return toast('El punto de venta y el número deben ser 1 o mayor', 'warn');
-      await api('/api/numeradores', { method:'PUT', body: JSON.stringify({ tipo:t, puntoVenta:pv, proximoNumero:nro }) });
+      await api('/api/numeradores', { method:'PUT', body: JSON.stringify({ tipo, puntoVenta:pv, proximoNumero:nro }) });
     }
     toast('Numeración guardada', 'success'); numeradoresRender();
   } catch (e) { toast(e.message, 'error'); }
+}
+async function numeradorAgregar() {
+  const tipo = document.getElementById('num-add-tipo')?.value;
+  const pv = Number(document.getElementById('num-add-pv')?.value || 1);
+  const nro = Number(document.getElementById('num-add-nro')?.value || 1);
+  if (!tipo || pv < 1 || nro < 1) return toast('Completá los datos', 'warn');
+  try { await api('/api/numeradores', { method:'PUT', body: JSON.stringify({ tipo, puntoVenta:pv, proximoNumero:nro }) }); toast('Agregado', 'success'); numeradoresRender(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+async function numeradorBorrar(id) {
+  if (!confirm('¿Borrar esta numeración? (no afecta comprobantes ya emitidos)')) return;
+  try { await api('/api/numeradores/'+id, { method:'DELETE' }); toast('Borrado', 'success'); numeradoresRender(); }
+  catch (e) { toast(e.message, 'error'); }
 }
 async function configSave() {
   const data = {
@@ -9107,18 +9144,18 @@ async function factForm() {
     body: `
       <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
         <div><label class="label">Comprobante *</label>
-          <select id="f-clase" class="input" onchange="factClaseHint()">
+          <select id="f-clase" class="input" onchange="factClaseHint(); factSugerirNro()">
             <option value="factura">Factura</option>
             <option value="nota_credito">Nota de Crédito</option>
             <option value="nota_debito">Nota de Débito</option>
           </select>
         </div>
         <div><label class="label">Tipo *</label>
-          <select id="f-tipo" class="input">
+          <select id="f-tipo" class="input" onchange="factSugerirNro()">
             ${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}
           </select>
         </div>
-        <div><label class="label">Pto. venta *</label><input id="f-pv" class="input" type="number" value="1"/></div>
+        <div><label class="label">Pto. venta *</label><input id="f-pv" class="input" type="number" value="1" oninput="factSugerirNro()"/></div>
         <div><label class="label">Número *</label><input id="f-nro" class="input" type="number" value="${nextNro}"/></div>
         <div><label class="label">Fecha *</label><input id="f-fec" class="input" type="date" value="${new Date().toISOString().slice(0,10)}"/></div>
         <div><label class="label">Depósito (stock)</label>
@@ -9176,6 +9213,7 @@ async function factForm() {
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="factSave()">💾 Autorizar</button>`
   });
+  factSugerirNro();
   // listeners
   setTimeout(async () => {
     $('#fi-tbody').addEventListener('input', factRecalc);
@@ -9209,6 +9247,23 @@ async function factForm() {
       toggle();
     }
   }, 0);
+}
+// Clave de secuencia de una factura/NC/ND según clase y letra (espeja al backend).
+function _seqTipoFacturaJS(clase, letra){
+  const c = clase==='nota_credito'?'nc':(clase==='nota_debito'?'nd':'factura');
+  return 'venta_'+c+'_'+(letra||'A');
+}
+// Sugerir el próximo número correlativo según Punto de venta + tipo de comprobante.
+async function factSugerirNro(){
+  const nro = document.getElementById('f-nro'); if(!nro) return;
+  const clase = document.getElementById('f-clase')?.value || 'factura';
+  const letra = document.getElementById('f-tipo')?.value || 'A';
+  const pv = Number(document.getElementById('f-pv')?.value || 1);
+  const tipo = _seqTipoFacturaJS(clase, letra);
+  try {
+    const r = await api('/api/numeradores/proximo?tipo='+encodeURIComponent(tipo)+'&puntoVenta='+pv);
+    if (r && r.proximoNumero) nro.value = r.proximoNumero;
+  } catch(e){ /* si falla, deja el valor actual */ }
 }
 // Aviso del efecto de cada comprobante de venta sobre stock y cuenta corriente.
 function factClaseHint(){
