@@ -1354,6 +1354,27 @@ function catByTipo(tipos) {
              .sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
 }
 
+// ---- Tarjetas de crédito (medio de pago "solo etiqueta"; se cargan en Bancos) ----
+// Se guardan como catálogo tipo 'Tarjeta de crédito'. Pagar con tarjeta registra el
+// gasto como una caja de Control de Efectivo con el nombre de la tarjeta (no toca bancos).
+const TARJETA_CAT_TIPO = 'Tarjeta de crédito';
+function tarjetasCred() { return catByTipo(TARJETA_CAT_TIPO).map(c => (c.nombre||'').trim()).filter(Boolean); }
+// Set de nombres de tarjeta, para reconocer un efectivo pagado con tarjeta.
+function tarjetasCredSet() { return new Set(tarjetasCred()); }
+// Opción del <select> de método (misma etiqueta en todo el sistema).
+const TARJETA_OPT = '<option value="tarjeta">💳 Tarjeta de crédito</option>';
+// Picker reutilizable: lista las tarjetas cargadas; si no hay, deja escribir a mano.
+function tarjetaPicker(id) {
+  const t = tarjetasCred();
+  return t.length
+    ? `<label class="label">Tarjeta de crédito</label>
+       <select id="${id}" class="input"><option value="">— Elegir tarjeta —</option>${t.map(m=>`<option>${esc(m)}</option>`).join('')}</select>
+       <div class="text-[11px] text-slate-500 mt-1">💳 Registra el gasto a nombre de la tarjeta. No impacta cuentas bancarias.</div>`
+    : `<label class="label">Tarjeta de crédito</label>
+       <input id="${id}" class="input" placeholder="Ej: Visa Santander"/>
+       <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargá tus tarjetas en Tesorería → Bancos → 💳 Tarjetas.</div>`;
+}
+
 // ---- Tipos de insumo (relación Insumo → Tipo de insumo desde el catálogo) ----
 // Un INSUMO del catálogo es una fila cuyo "tipo" es el nombre de un "Tipo de insumo".
 // Estos son los tipos heredados (compat) para no perder insumos cargados antes de
@@ -2401,6 +2422,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-violet-100 text-violet-800 border-violet-300', fecha:'27/07/2026',
+      titulo:'💳 v2.6.0 — Pagar con tarjeta de crédito en todo el sistema',
+      desc:'Ahora podés <b>pagar con tarjeta de crédito</b> en toda la app: Movimientos diarios, Pagos/Cobros a proveedor y cliente, Compras y Ventas, Liquidación de sueldos, cuotas de Crédito y Arrendamiento, y viajes. Primero cargá tus tarjetas en <b>Tesorería → Bancos → 💳 Tarjetas de crédito</b> y después elegilas como método de pago. Es una <b>etiqueta simple</b>: el gasto se registra como una caja en Control de Efectivo con el nombre de la tarjeta (no impacta cuentas bancarias). En Movimientos diarios se muestran con el ícono 💳 y podés filtrar por “Tarjeta”. Además, en Movimientos diarios se sacó la <b>categoría duplicada</b> del subtítulo del concepto (ya se ve en su columna).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/07/2026',
       titulo:'🔄 v2.5.1 — Liquidación de sueldo pagable por Intercompany',
       desc:'Al liquidar el sueldo de un empleado ahora podés elegir <b>Intercompany</b>: otra firma del grupo pone los fondos, igual que en el pago a proveedores. Esta empresa le queda debiendo (asiento entre firmas) y se mueve el <b>recurso real</b> de la otra firma (su caja, cheque o banco). Al anular la liquidación, se revierte todo automáticamente.' },
@@ -9294,6 +9318,7 @@ async function factForm() {
               <option value="cheque">💳 Cheque (de terceros recibido)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
               <option value="externo">💸 Billetera / medio externo</option>
+              ${TARJETA_OPT}
             </select>
           </div>
           <div id="vent-met-det"></div>
@@ -9404,6 +9429,8 @@ function ventMetodoCambio(prefix) {
       : `<label class="label">Medio externo</label>
          <input id="${prefix}-medio" class="input" placeholder="Ej: Mercado Pago, Billetera XX"/>
          <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargala en Configuración → Catálogos → Medios externos.</div>`;
+  } else if (met === 'tarjeta') {
+    det.innerHTML = tarjetaPicker(prefix+'-tarjeta');
   }
 }
 // ===== MULTIMONEDA: helpers para los formularios de factura =====
@@ -9541,6 +9568,7 @@ async function factSave() {
           if (metodo === 'cheque')        cobroBody.chequeId      = document.getElementById('vent-cheque')?.value || null;
           if (metodo === 'transferencia') cobroBody.bancoCuentaId = document.getElementById('vent-banco')?.value || null;
           if (metodo === 'externo')       cobroBody.cajaDestino   = document.getElementById('vent-medio')?.value || null;
+          if (metodo === 'tarjeta')       cobroBody.cajaDestino   = document.getElementById('vent-tarjeta')?.value || null;
           await api('/api/cobros-clientes', { method:'POST', body: JSON.stringify(cobroBody) });
         }
       } catch (pErr) {
@@ -9641,6 +9669,7 @@ async function factFormExterna() {
               <option value="cheque">💳 Cheque (de terceros recibido)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
               <option value="externo">💸 Billetera / medio externo</option>
+              ${TARJETA_OPT}
             </select>
           </div>
           <div id="vente-met-det"></div>
@@ -9890,6 +9919,7 @@ async function factSaveExterna() {
           if (metodo === 'cheque')        cobroBody.chequeId      = document.getElementById('vente-cheque')?.value || null;
           if (metodo === 'transferencia') cobroBody.bancoCuentaId = document.getElementById('vente-banco')?.value || null;
           if (metodo === 'externo')       cobroBody.cajaDestino   = document.getElementById('vente-medio')?.value || null;
+          if (metodo === 'tarjeta')       cobroBody.cajaDestino   = document.getElementById('vente-tarjeta')?.value || null;
           await api('/api/cobros-clientes', { method:'POST', body: JSON.stringify(cobroBody) });
         }
       } catch (pErr) {
@@ -10340,6 +10370,7 @@ async function compForm() {
               <option value="cheque">💳 Cheque (propio o de terceros endosado)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
               <option value="externo">💸 Billetera / medio externo</option>
+              ${TARJETA_OPT}
             </select>
           </div>
           <div id="comp-met-det"></div>
@@ -10410,6 +10441,8 @@ function compMetodoCambio() {
       : `<label class="label">Medio externo</label>
          <input id="comp-medio" class="input" placeholder="Ej: Mercado Pago, Billetera XX"/>
          <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargala en Configuración → Catálogos → Medios externos.</div>`;
+  } else if (met === 'tarjeta') {
+    det.innerHTML = tarjetaPicker('comp-tarjeta');
   }
 }
 // Sube el PDF al backend, decodifica el QR de ARCA y autopobla los campos del form.
@@ -10623,6 +10656,7 @@ async function compSave() {
           if (metodo === 'cheque')        pagoBody.chequeId      = document.getElementById('comp-cheque')?.value || null;
           if (metodo === 'transferencia') pagoBody.bancoCuentaId = document.getElementById('comp-banco')?.value || null;
           if (metodo === 'externo')       pagoBody.cajaOrigen    = document.getElementById('comp-medio')?.value || null;
+          if (metodo === 'tarjeta')       pagoBody.cajaOrigen    = document.getElementById('comp-tarjeta')?.value || null;
           await api('/api/pagos-proveedores', { method:'POST', body: JSON.stringify(pagoBody) });
         }
       } catch (pErr) {
@@ -12784,6 +12818,7 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
             <option value="efectivo">💵 Efectivo</option>
             <option value="cheque">💳 Cheque${esPago?' propio o de terceros endosado':' (de terceros recibido)'}</option>
             <option value="transferencia">🏛️ Transferencia bancaria</option>
+            ${TARJETA_OPT}
             ${esPago ? `<option value="cereal">🌾 Entrega de cereal (canje)</option>` : ''}
             ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (recursos de otra firma)</option>` : ''}
           </select>
@@ -13141,6 +13176,8 @@ function pagoCobroMetodoCambio(modo) {
         ${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.tipo?' · '+esc(c.tipo):''}${c.numero?' · '+esc(c.numero):''}${c.titular?' — '+esc(c.titular):''}</option>`).join('')}
       </select>
       ${!cuentas.length ? '<div class="text-xs text-amber-700 mt-1">No hay cuentas cargadas — cargá una en Tesorería → Bancos primero.</div>' : ''}`;
+  } else if (metodo === 'tarjeta') {
+    cont.innerHTML = tarjetaPicker('pc-tarjeta');
   } else if (metodo === 'intercompany') {
     if (esPago) {
       // Pago cubierto por otra firma: sub-form con recurso (mueve la caja/cheque/banco de esa firma).
@@ -13668,6 +13705,11 @@ async function pagoCobroConfirmar(modo) {
   // Neto 0 (las NC cubren todo): es sólo vinculación, no se pide caja/banco/cheque.
   if (monto > 0.01) {
   if (metodo === 'efectivo') body.cajaOrigen = document.getElementById('pc-caja')?.value || null;
+  if (metodo === 'tarjeta') {
+    const _tj = document.getElementById('pc-tarjeta')?.value || null;
+    if (!_tj) return toast('Elegí la tarjeta de crédito', 'warn');
+    body[esPago ? 'cajaOrigen' : 'cajaDestino'] = _tj;
+  }
   if (metodo === 'transferencia') body.bancoCuentaId = document.getElementById('pc-banco')?.value || null;
   if (metodo === 'cheque') {
     const _chNuevoVisible = document.getElementById('pc-cheque-nuevo') && !document.getElementById('pc-cheque-nuevo').classList.contains('hidden');
@@ -13989,6 +14031,7 @@ async function ccForm(id=null) {
                 <option value="efectivo">💵 Efectivo</option>
                 <option value="cheque">💳 Cheque</option>
                 <option value="transferencia">🏛️ Transferencia bancaria</option>
+                ${TARJETA_OPT}
                 <option value="ninguno">— Solo registrar (sin movimiento de recurso) —</option>
               </select>
             </div>
@@ -14059,6 +14102,8 @@ function ccMetodoCambio() {
       ? `<label class="label">${esPago ? 'Cuenta desde la que se transfiere' : 'Cuenta donde ingresa'}</label>
          <select id="f-met-banco" class="input"><option value="">— Elegir —</option>${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select>`
       : `<div class="text-xs text-amber-700">⚠️ No hay cuentas bancarias. Cargá una en Tesorería → Bancos.</div>`;
+  } else if (met === 'tarjeta') {
+    det.innerHTML = tarjetaPicker('f-met-tarjeta');
   } else {
     det.innerHTML = '<div class="text-xs text-slate-500">No se registra movimiento de recurso (solo se marca el CtaCte como pagado).</div>';
   }
@@ -14110,14 +14155,16 @@ async function ccSave(id) {
       const monto = Number(data.haber || data.debe || 0);
       const concepto = data.detalle + (data.nombreLibre ? ' — ' + data.nombreLibre : '');
       try {
-        if (metodo === 'efectivo') {
-          const caja = document.getElementById('f-met-caja')?.value?.trim() || null;
+        if (metodo === 'efectivo' || metodo === 'tarjeta') {
+          const caja = (metodo === 'tarjeta'
+            ? document.getElementById('f-met-tarjeta')?.value?.trim()
+            : document.getElementById('f-met-caja')?.value?.trim()) || null;
           await api('/api/efectivo', { method: 'POST', body: JSON.stringify({
             fecha: data.fecha,
             tipo: esPago ? 'egreso' : 'ingreso',
             concepto, monto, caja,
             clasificacion: 'empresa',
-            observaciones: data.referencia || null,
+            observaciones: [(metodo === 'tarjeta' && caja ? 'Tarjeta: ' + caja : null), data.referencia].filter(Boolean).join(' · ') || null,
           })});
         } else if (metodo === 'transferencia') {
           const cuentaId = document.getElementById('f-met-banco')?.value || null;
@@ -15083,6 +15130,7 @@ async function viajeMarcarPagado(id) {
           <option value="efectivo">💵 Efectivo</option>
           <option value="cheque">💳 Cheque</option>
           <option value="transferencia">🏛️ Transferencia</option>
+          <option value="tarjeta">💳 Tarjeta de crédito</option>
         </select>
       </div>
       <div id="vmp-det" class="mb-3"></div>
@@ -15106,6 +15154,8 @@ function viajeMarcarPagadoMetodo() {
     c.innerHTML = `<label class="label">Cuenta bancaria *</label>
       <select id="vmp-banco" class="input"><option value="">— Seleccionar —</option>${cuentas.map(x=>`<option value="${esc(x.id)}">${esc(x.banco)}${x.numero?' · '+esc(x.numero):''}</option>`).join('')}</select>
       ${!cuentas.length?'<div class="text-xs text-amber-700 mt-1">No hay cuentas — cargá una en Tesorería → Bancos.</div>':''}`;
+  } else if (m === 'tarjeta') {
+    c.innerHTML = tarjetaPicker('vmp-tarjeta');
   } else if (m === 'cheque') {
     const enCartera = (state.cache.cheques||[]).filter(x=>/en[_ ]?cartera|emitido|depositado/i.test(x.estado||''));
     const defEx = enCartera.length>0;
@@ -15166,6 +15216,7 @@ async function viajeMarcarPagadoConfirmar(id) {
     const body = { proveedorId: prov.id, comprobantes, creditos: [], metodo, monto,
       fecha: new Date(fecha).toISOString(), observaciones: 'Pago flete viaje ' + id + (obs?' · '+obs:'') };
     if (metodo==='efectivo') body.cajaOrigen = document.getElementById('vmp-caja')?.value || null;
+    if (metodo==='tarjeta') { body.cajaOrigen = document.getElementById('vmp-tarjeta')?.value?.trim() || null; if(!body.cajaOrigen) return toast('Elegí la tarjeta de crédito','warn'); }
     if (metodo==='transferencia') { body.bancoCuentaId = document.getElementById('vmp-banco')?.value || null; if(!body.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn'); }
     if (metodo==='cheque') {
       const nuevoVis = document.getElementById('vmp-ch-nu') && !document.getElementById('vmp-ch-nu').classList.contains('hidden');
@@ -15511,6 +15562,7 @@ async function viajeFacturarYPagarAbrir(viajeId) {
             <option value="efectivo">💵 Efectivo</option>
             <option value="cheque">💳 Cheque (propio o de terceros endosado)</option>
             <option value="transferencia">🏛️ Transferencia bancaria</option>
+            ${TARJETA_OPT}
           </select>
         </div>
         <div id="vfp-metodo-det" class="mb-3"></div>
@@ -15665,6 +15717,8 @@ function viajeFacPagarMetodoCambio() {
         ${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.banco)}${c.tipo?' · '+esc(c.tipo):''}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}
       </select>
       ${!cuentas.length ? '<div class="text-xs text-amber-700 mt-1">No hay cuentas cargadas — cargá una en Tesorería → Bancos primero.</div>' : ''}`;
+  } else if (metodo === 'tarjeta') {
+    cont.innerHTML = tarjetaPicker('vfp-tarjeta');
   }
 }
 async function viajeFacturarYPagarConfirmar() {
@@ -15720,6 +15774,7 @@ async function viajeFacturarYPagarConfirmar() {
         observaciones: 'Pago flete viaje ' + viajeId + (obs ? ' · ' + obs : ''),
       };
       if (metodo === 'efectivo')      pagoBody.cajaOrigen    = document.getElementById('vfp-caja')?.value || null;
+      if (metodo === 'tarjeta')       pagoBody.cajaOrigen    = document.getElementById('vfp-tarjeta')?.value?.trim() || null;
       if (metodo === 'cheque')        pagoBody.chequeId      = document.getElementById('vfp-cheque')?.value || null;
       if (metodo === 'transferencia') pagoBody.bancoCuentaId = document.getElementById('vfp-banco')?.value || null;
       if (metodo === 'efectivo'      && !pagoBody.cajaOrigen)    throw new Error('Elegí la caja de efectivo');
@@ -17349,10 +17404,12 @@ function empLiqForm(periodo){
             <option value="efectivo">Efectivo en caja</option>
             <option value="cheque">Cheque propio</option>
             <option value="transferencia">Transferencia bancaria</option>
+            <option value="tarjeta">💳 Tarjeta de crédito</option>
             ${(state.user?.companies||[]).length > 1 ? `<option value="intercompany">🔄 Intercompany (otra firma paga)</option>` : ''}
           </select>
         </div>
         <div id="lq-caja-wrap"><label class="label">Caja *</label>${catSelect('lq-caja','Caja','',{placeholder:'— Elegir caja —'})}</div>
+        <div id="lq-tarjeta-wrap">${tarjetaPicker('lq-tarjeta')}</div>
         <div id="lq-banco-wrap"><label class="label">Banco</label>${catSelect('lq-banco','Banco','',{placeholder:'— Elegir banco —'})}</div>
         <div id="lq-cheque-wrap"><label class="label">N° de cheque *</label><input id="lq-cheque" class="input"/></div>
         <div id="lq-ref-wrap"><label class="label">N° operación / comprobante</label><input id="lq-ref" class="input"/></div>
@@ -17371,7 +17428,8 @@ function empLiqMedioChange(){
   const show=(id,v)=>{ const el=$('#'+id); if(el) el.style.display=v?'':'none'; };
   const esInterco = medio==='intercompany';
   show('lq-caja-wrap',   medio==='efectivo');
-  show('lq-banco-wrap',  medio!=='efectivo' && !esInterco);
+  show('lq-tarjeta-wrap',medio==='tarjeta');
+  show('lq-banco-wrap',  medio!=='efectivo' && medio!=='tarjeta' && !esInterco);
   show('lq-cheque-wrap', medio==='cheque');
   show('lq-ref-wrap',    medio==='transferencia');
   const icWrap = $('#lq-interco-wrap');
@@ -17381,6 +17439,8 @@ function empLiqMedioChange(){
   }
   $('#lq-hint').textContent = medio==='efectivo'
     ? 'Se va a registrar un egreso por el neto en la caja elegida de Control de Efectivo.'
+    : medio==='tarjeta'
+    ? 'Se registra el pago a nombre de la tarjeta (como una caja en Control de Efectivo). No impacta cuentas bancarias.'
     : medio==='cheque'
     ? 'Se va a generar un cheque propio en cartera a nombre del empleado.'
     : esInterco
@@ -17394,14 +17454,15 @@ async function empLiqSave(periodo){
     periodo,
     fecha:$('#lq-fecha').value,
     medioPago:medio,
-    caja: medio==='efectivo' ? ($('#lq-caja').value||null) : null,
-    banco: medio!=='efectivo' ? ($('#lq-banco').value.trim()||null) : null,
+    caja: medio==='efectivo' ? ($('#lq-caja').value||null) : (medio==='tarjeta' ? ($('#lq-tarjeta')?.value?.trim()||null) : null),
+    banco: (medio!=='efectivo' && medio!=='tarjeta') ? ($('#lq-banco').value.trim()||null) : null,
     nroCheque: medio==='cheque' ? ($('#lq-cheque').value.trim()||null) : null,
     referencia: medio==='transferencia' ? ($('#lq-ref').value.trim()||null) : null,
     observaciones: $('#lq-obs').value.trim()||null,
   };
   if(!data.fecha) return toast('Fecha de pago requerida','warn');
   if(medio==='efectivo'&&!data.caja) return toast('Elegí la caja de la que sale el pago','warn');
+  if(medio==='tarjeta'&&!data.caja) return toast('Elegí la tarjeta de crédito','warn');
   if(medio==='cheque'&&!data.nroCheque) return toast('Ingresá el número de cheque','warn');
   if(medio==='intercompany'){
     const ic = intercoLeerRecurso('lq');
@@ -19681,11 +19742,13 @@ async function arrPagarCuota(id, idx){
           <option value="cheque">Cheque (entregar/endosar)</option>
           <option value="transferencia">Transferencia bancaria</option>
           <option value="debito">Débito bancario</option>
+          <option value="tarjeta">💳 Tarjeta de crédito</option>
         </select>
       </div>
       <div id="ap-efectivo-wrap"><label class="label">Caja de la que sale el pago</label>
         <select id="ap-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
         ${cajas.length?'':'<div class="text-[11px] text-amber-700 mt-1">No hay cajas cargadas. Cargá una en Catálogos → Cajas.</div>'}</div>
+      <div id="ap-tarjeta-wrap" style="display:none">${tarjetaPicker('ap-tarjeta')}</div>
       <div id="ap-cheque-wrap" style="display:none"><label class="label">Cheque</label>
         <select id="ap-cheque" class="input">
           <option value="">— Elegí un cheque en cartera —</option>
@@ -19708,10 +19771,11 @@ async function arrPagarCuota(id, idx){
 }
 function arrPagarCuotaToggle(){
   const m = $('#ap-med')?.value||'efectivo';
-  const ef=$('#ap-efectivo-wrap'), chq=$('#ap-cheque-wrap'), bco=$('#ap-banco-wrap');
+  const ef=$('#ap-efectivo-wrap'), chq=$('#ap-cheque-wrap'), bco=$('#ap-banco-wrap'), tj=$('#ap-tarjeta-wrap');
   if(ef) ef.style.display = m==='efectivo'?'':'none';
   if(chq) chq.style.display = m==='cheque'?'':'none';
   if(bco) bco.style.display = (m==='transferencia'||m==='debito')?'':'none';
+  if(tj) tj.style.display = m==='tarjeta'?'':'none';
 }
 async function arrPagarCuotaConfirmar(){
   if(!_arrPagoCtx) return;
@@ -19721,10 +19785,11 @@ async function arrPagarCuotaConfirmar(){
   if(!monto || monto<=0) return toast('Ingresá el monto a pagar','warn');
   const data = { metodo, monto,
     fecha: $('#ap-fec').value ? new Date($('#ap-fec').value+'T00:00:00').toISOString() : undefined,
-    caja: metodo==='efectivo' ? ($('#ap-caja').value.trim()||null) : null,
+    caja: metodo==='efectivo' ? ($('#ap-caja').value.trim()||null) : (metodo==='tarjeta' ? ($('#ap-tarjeta')?.value?.trim()||null) : null),
     chequeId: metodo==='cheque' ? ($('#ap-cheque').value||null) : null,
     bancoCuentaId: (metodo==='transferencia'||metodo==='debito') ? ($('#ap-cta').value||null) : null,
   };
+  if(metodo==='tarjeta' && !data.caja) return toast('Elegí la tarjeta de crédito','warn');
   if(metodo==='cheque' && !data.chequeId) return toast('Elegí el cheque','warn');
   if((metodo==='transferencia'||metodo==='debito') && !data.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn');
   try {
@@ -20390,6 +20455,7 @@ pages.movDiarios = async function() {
 
   // Normalizar los movimientos en una sola lista
   const cuentasMap = new Map((state.cache.bancoCuentas || []).map(c => [c.id, c]));
+  const _tarjSet = tarjetasCredSet();   // cajas que en realidad son tarjetas de crédito
   const filas = [];
   for (const e of efRows) {
     const esTransf = e.tipo === 'transferencia';
@@ -20402,7 +20468,7 @@ pages.movDiarios = async function() {
       clasificacion: e.clasificacion || 'empresa',
       monto: Number(e.monto || 0),
       moneda: e.moneda || 'ARS',
-      metodo: 'efectivo',
+      metodo: (e.caja && _tarjSet.has(e.caja.trim())) ? 'tarjeta' : 'efectivo',
       origen: e.caja || '(sin caja)',
       observaciones: e.observaciones || '',
       _raw: e, _tabla: 'efectivo',
@@ -20490,12 +20556,17 @@ pages.movDiarios = async function() {
             ${filtered.map(r => `
               <tr class="table-row">
                 <td class="whitespace-nowrap">${fmtDate(r.fecha)}</td>
-                <td><b>${esc(r.concepto || '—')}</b>${r.observaciones && !r.observaciones.includes(r.concepto) ? `<div class="text-[11px] text-slate-500">${esc(r.observaciones)}</div>` : ''}</td>
+                <td><b>${esc(r.concepto || '—')}</b>${(() => {
+                    // La categoría ya se muestra en su propia columna: la sacamos del subtítulo.
+                    const obsSub = (r.observaciones || '').split(' · ').filter(p => !/^Categor[ií]a:/i.test(p.trim())).join(' · ');
+                    return obsSub && !obsSub.includes(r.concepto) ? `<div class="text-[11px] text-slate-500">${esc(obsSub)}</div>` : '';
+                  })()}</td>
                 <td>${r.categoria ? `<span class="badge badge-blue">${esc(r.categoria)}</span>` : '—'}</td>
                 <td>${r.clasificacion === 'propio'
                     ? '<span class="badge badge-purple">Personal</span>'
                     : '<span class="badge badge-green">Empresa</span>'}</td>
                 <td>${r.metodo === 'efectivo' ? '💵 Efectivo'
+                    : r.metodo === 'tarjeta' ? '💳 Tarjeta'
                     : r.metodo === 'transferencia' ? '🏛️ Transferencia'
                     : r.metodo === 'debito' ? '🏦 Débito'
                     : r.metodo === 'banco' ? '🏛️ Banco'
@@ -20589,6 +20660,7 @@ pages.movDiarios = async function() {
           <select id="md-metodo" class="input">
             <option value="">Todos</option>
             <option value="efectivo"      ${state.movDiariosFilter.metodo==='efectivo'?'selected':''}>💵 Efectivo</option>
+            <option value="tarjeta"       ${state.movDiariosFilter.metodo==='tarjeta'?'selected':''}>💳 Tarjeta</option>
             <option value="transferencia" ${state.movDiariosFilter.metodo==='transferencia'?'selected':''}>🏛️ Transferencia</option>
             <option value="debito"        ${state.movDiariosFilter.metodo==='debito'?'selected':''}>🏦 Débito</option>
             <option value="banco"         ${state.movDiariosFilter.metodo==='banco'?'selected':''}>🏛️ Banco (otros)</option>
@@ -20783,6 +20855,7 @@ function movDiariosAbrir(pre=null) {
             <option value="transferencia">🏛️ Transferencia bancaria</option>
             <option value="debito">🏦 Débito bancario</option>
             <option value="externo">💸 Billetera / medio externo</option>
+            ${TARJETA_OPT}
             ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (otra firma paga)</option>` : ''}
           </select>
         </div>
@@ -20807,6 +20880,7 @@ function movDiariosAbrir(pre=null) {
       const rTipo = document.querySelector(`input[name="md-tipo"][value="${pre.tipo||'egreso'}"]`); if(rTipo) rTipo.checked = true;
       const met=$('#md-met'); if(met){ met.value = pre.metodo||'efectivo'; met.disabled = true; movDiariosMetodoCambio(); }
       if ((pre.metodo||'efectivo')==='efectivo'){ setTimeout(()=>{ const cj=$('#md-caja'); if(cj) cj.value = pre.caja||''; }, 0); }
+      else if (pre.metodo==='tarjeta'){ setTimeout(()=>{ const tj=$('#md-tarjeta'); if(tj) tj.value = pre.caja||''; }, 0); }
       else if (pre.metodo==='transferencia' || pre.metodo==='debito'){ setTimeout(()=>{ const bk=$('#md-banco'); if(bk) bk.value = pre.bancoCuentaId||''; }, 0); }
     }
   }, 0);
@@ -20848,6 +20922,8 @@ function movDiariosMetodoCambio() {
       : `<label class="label">Medio externo</label>
          <input id="md-medio" class="input" placeholder="Ej: Mercado Pago, Billetera XX"/>
          <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargala en Configuración → Catálogos → Medios externos.</div>`;
+  } else if (met === 'tarjeta') {
+    det.innerHTML = tarjetaPicker('md-tarjeta');
   } else if (met === 'cheque') {
     const cheques = (state.cache.cheques || []).filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado || ''));
     det.innerHTML = cheques.length
@@ -20881,10 +20957,12 @@ async function movDiariosGuardar() {
   };
   if (metodo === 'efectivo')      body.caja          = document.getElementById('md-caja')?.value?.trim() || null;
   if (metodo === 'externo')       body.caja          = document.getElementById('md-medio')?.value?.trim() || null;
+  if (metodo === 'tarjeta')       body.caja          = document.getElementById('md-tarjeta')?.value?.trim() || null;
   if (metodo === 'transferencia' || metodo === 'debito') body.bancoCuentaId = document.getElementById('md-banco')?.value || null;
   if (metodo === 'cheque')        body.chequeId      = document.getElementById('md-cheque')?.value || null;
   if (metodo === 'efectivo'      && !body.caja)          return toast('Elegí la caja', 'warn');
   if (metodo === 'externo'       && !body.caja)          return toast('Elegí o escribí el medio externo', 'warn');
+  if (metodo === 'tarjeta'       && !body.caja)          return toast('Elegí la tarjeta de crédito', 'warn');
   if ((metodo === 'transferencia' || metodo === 'debito') && !body.bancoCuentaId) return toast('Elegí la cuenta bancaria', 'warn');
   if (metodo === 'cheque'        && !body.chequeId)      return toast('Elegí el cheque', 'warn');
   if (metodo === 'intercompany') {
@@ -22140,8 +22218,10 @@ async function cuotaPagar(credId, cuotaId) {
             <option value="debito_automatico">Débito automático</option>
             <option value="efectivo">Efectivo</option>
             <option value="cheque">Cheque</option>
+            <option value="tarjeta">💳 Tarjeta de crédito</option>
           </select>
         </div>
+        <div id="cp-tarjeta-wrap" style="display:none">${tarjetaPicker('cp-tarjeta')}</div>
         <div id="cp-cta-wrap"><label class="label">Cuenta bancaria de la que sale el pago</label>
           <select id="cp-cta" class="input">
             <option value="">— Sin registrar en banco —</option>
@@ -22181,6 +22261,7 @@ function cuotaPagarToggle() {
   show('#cp-cta-wrap', med==='transferencia'||med==='debito_automatico');
   show('#cp-caja-wrap', med==='efectivo');
   show('#cp-cheque-wrap', med==='cheque');
+  show('#cp-tarjeta-wrap', med==='tarjeta');
 }
 async function cuotaPagarConfirmar(credId, cuotaId) {
   const esExt = !!(_cpCtx && _cpCtx.mon && _cpCtx.mon!=='ARS');
@@ -22188,12 +22269,13 @@ async function cuotaPagarConfirmar(credId, cuotaId) {
   if (esExt && !tc) return toast('Cargá el tipo de cambio del día','warn');
   const med = $('#cp-med').value;
   if (med==='cheque' && !$('#cp-cheque')?.value) return toast('Elegí el cheque','warn');
+  if (med==='tarjeta' && !$('#cp-tarjeta')?.value?.trim()) return toast('Elegí la tarjeta de crédito','warn');
   const data = {
     medioPago: med,
     referencia: $('#cp-ref').value.trim() || null,
     fechaPago: $('#cp-fec').value ? new Date($('#cp-fec').value+'T00:00:00').toISOString() : undefined,
     cuentaBancoId: (med==='transferencia'||med==='debito_automatico') ? ($('#cp-cta')?.value || null) : null,
-    caja: med==='efectivo' ? ($('#cp-caja')?.value || null) : null,
+    caja: med==='efectivo' ? ($('#cp-caja')?.value || null) : (med==='tarjeta' ? ($('#cp-tarjeta')?.value?.trim() || null) : null),
     chequeId: med==='cheque' ? ($('#cp-cheque')?.value || null) : null,
     cotizacionPago: esExt ? tc : null,
     gastosExtra: $('#cp-gastos')?.value ? Number($('#cp-gastos').value) : null,
@@ -22585,6 +22667,8 @@ pages.bancos = async function() {
   let cuentas = [];
   try { cuentas = (await api('/api/banco-cuentas')).data || []; } catch (e) { return toast(e.message,'error'); }
   state.cache.bancoCuentas = cuentas;
+  // Traemos catálogos para el ABM de Tarjetas de crédito (se guardan como catálogo).
+  try { state.cache.catalogos = (await api('/api/catalogos')).data || state.cache.catalogos || []; } catch {}
   const totalARS = cuentas.filter(c => c.moneda === 'ARS' && c.activo).reduce((a, c) => a + Number(c.saldo||0), 0);
   const totalUSD = cuentas.filter(c => c.moneda === 'USD' && c.activo).reduce((a, c) => a + Number(c.saldo||0), 0);
   $('#page-body').innerHTML = `
@@ -22623,8 +22707,72 @@ pages.bancos = async function() {
             <button class="btn btn-secondary text-xs" onclick='event.stopPropagation(); bcoVerMovs(${JSON.stringify(c.id)})'>📋 Ver / cargar movimientos</button>
           </div>
         </div>`).join('') || `<div class="kpi col-span-2 text-center text-slate-400 py-8">Sin cuentas bancarias. Cargá la primera con el botón "+ Nueva cuenta".</div>`}
-    </div>`;
+    </div>
+    ${bcoTarjetasSection()}`;
 };
+
+// Sección "Tarjetas de crédito" dentro de Bancos. Las tarjetas se guardan como
+// catálogo (tipo 'Tarjeta de crédito') y sirven como medio de pago en todo el sistema.
+function bcoTarjetasSection() {
+  const tarjetas = catByTipo(TARJETA_CAT_TIPO);
+  return `
+    <div class="mt-6">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <div>
+          <div class="font-bold text-slate-800">💳 Tarjetas de crédito</div>
+          <div class="text-[11px] text-slate-500">Cargá tus tarjetas para poder pagar con ellas en todo el sistema. Es solo una etiqueta del pago (no lleva saldo ni resumen).</div>
+        </div>
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="tarjetaForm()">+ Nueva tarjeta</button>`:''}
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+        ${tarjetas.map(t => `
+          <div class="kpi flex items-start justify-between gap-2">
+            <div class="min-w-0">
+              <div class="font-semibold text-slate-800 truncate">💳 ${esc(t.nombre)}</div>
+              ${t.descripcion?`<div class="text-[11px] text-slate-500 mt-0.5">${esc(t.descripcion)}</div>`:''}
+            </div>
+            <div class="flex items-center gap-1 flex-shrink-0">
+              ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar tarjeta" onclick='tarjetaForm(${JSON.stringify(t.id)})'>✏️</button>`:''}
+              ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar tarjeta" onclick='tarjetaDel(${JSON.stringify(t.id)})'>🗑️</button>`:''}
+            </div>
+          </div>`).join('') || `<div class="kpi md:col-span-3 text-center text-slate-400 py-6 text-sm">Sin tarjetas cargadas. Agregá la primera con "+ Nueva tarjeta".</div>`}
+      </div>
+    </div>`;
+}
+function tarjetaForm(id=null) {
+  let t = { nombre:'', descripcion:'' };
+  if (id) { const cur = (state.cache.catalogos||[]).find(x => x.id === id); if (cur) t = { ...t, ...cur }; }
+  openModal({
+    title: id?'Editar tarjeta de crédito':'Nueva tarjeta de crédito', size:'max-w-md',
+    body: `
+      <div><label class="label">Nombre de la tarjeta *</label>
+        <input id="tj-nombre" class="input" value="${esc(t.nombre||'')}" placeholder="Ej: Visa Santander, Naranja X..."/>
+      </div>
+      <div class="mt-3"><label class="label">Detalle (opcional)</label>
+        <input id="tj-desc" class="input" value="${esc(t.descripcion||'')}" placeholder="Ej: termina en 1234 · titular Juan Pérez"/>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-3">💡 Al pagar con tarjeta, el gasto se registra como una caja en Control de Efectivo con el nombre de la tarjeta. No impacta cuentas bancarias.</div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick='tarjetaSave(${id?JSON.stringify(id):"null"})'>💾 Guardar</button>`
+  });
+}
+async function tarjetaSave(id) {
+  const nombre = ($('#tj-nombre')?.value||'').trim();
+  const descripcion = ($('#tj-desc')?.value||'').trim() || null;
+  if (!nombre) return toast('Poné el nombre de la tarjeta','warn');
+  const data = { tipo: TARJETA_CAT_TIPO, nombre, descripcion, activo: true };
+  try {
+    if (id) await api('/api/catalogos/'+id, { method:'PUT', body: JSON.stringify(data) });
+    else    await api('/api/catalogos',     { method:'POST', body: JSON.stringify(data) });
+    delete state.cache.catalogos;
+    toast('Tarjeta guardada','success'); closeModal(); pages.bancos();
+  } catch (e) { toast('No se pudo guardar: '+(e.message||e),'error'); }
+}
+async function tarjetaDel(id) {
+  if (!confirm('¿Eliminar esta tarjeta? Los pagos ya registrados con ella no se modifican.')) return;
+  try { await api('/api/catalogos/'+id, { method:'DELETE' }); delete state.cache.catalogos; toast('Tarjeta eliminada','success'); pages.bancos(); }
+  catch (e) { toast(e.message,'error'); }
+}
 
 function bcoCuentaForm(id=null) {
   let c = { banco:'', sucursal:'', tipo:'cta_cte', moneda:'ARS', numero:'', cbu:'', alias:'', titular:'', saldoInicial:0, observaciones:'', activo:true };

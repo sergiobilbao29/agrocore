@@ -60,8 +60,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.5.1';
-const AGROCORE_BUILD = new Date('2026-06-25').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.6.0';
+const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -4608,7 +4608,7 @@ app.get('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('r
 const liqSchema = z.object({
   periodo: z.string().regex(/^\d{4}-\d{2}$/, 'Período inválido (YYYY-MM)'),
   fecha: z.coerce.date(),
-  medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany']),
+  medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'tarjeta', 'intercompany']),
   caja: z.string().nullable().optional(),
   banco: z.string().nullable().optional(),
   nroCheque: z.string().nullable().optional(),
@@ -4641,8 +4641,8 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
       return res.status(409).json({ ok: false, error: 'Ya existe una liquidación para ese mes. Anulala primero si querés rehacerla.' });
     }
 
-    if (d.medioPago === 'efectivo' && !d.caja) {
-      return res.status(400).json({ ok: false, error: 'Elegí la caja de la que sale el pago en efectivo' });
+    if ((d.medioPago === 'efectivo' || d.medioPago === 'tarjeta') && !d.caja) {
+      return res.status(400).json({ ok: false, error: d.medioPago === 'tarjeta' ? 'Elegí la tarjeta con la que se paga' : 'Elegí la caja de la que sale el pago en efectivo' });
     }
     if (d.medioPago === 'cheque' && !d.nroCheque) {
       return res.status(400).json({ ok: false, error: 'Ingresá el número de cheque' });
@@ -4712,7 +4712,7 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
       }
 
       // Sólo generamos el pago en otros módulos si el neto es positivo.
-      if (neto > 0 && d.medioPago === 'efectivo') {
+      if (neto > 0 && (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta')) {
         const ef = await tx.efectivo.create({
           data: {
             companyId: req.companyId,
@@ -4722,7 +4722,7 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
             monto: neto,
             caja: d.caja,
             clasificacion: 'empresa',
-            observaciones: `Liquidación de sueldo ${d.periodo}`,
+            observaciones: `Liquidación de sueldo ${d.periodo}` + (d.medioPago === 'tarjeta' ? ' · Tarjeta: ' + d.caja : ''),
           },
         });
         efectivoId = ef.id;
@@ -4755,8 +4755,8 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
           totalGastos,
           neto,
           medioPago: d.medioPago,
-          caja: d.medioPago === 'efectivo' ? d.caja : null,
-          banco: d.medioPago !== 'efectivo' ? (d.banco || null) : null,
+          caja: (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta') ? d.caja : null,
+          banco: (d.medioPago !== 'efectivo' && d.medioPago !== 'tarjeta') ? (d.banco || null) : null,
           nroCheque: d.medioPago === 'cheque' ? d.nroCheque : null,
           referencia: d.referencia || null,
           efectivoId,
@@ -6029,7 +6029,7 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
     if (!cuota) return res.status(404).json({ ok: false, error: 'Cuota no encontrada' });
     const schema = z.object({
       fechaPago: z.coerce.date().optional(),
-      medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'debito_automatico']).optional(),
+      medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'debito_automatico', 'tarjeta']).optional(),
       referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       cuentaBancoId: z.string().nullable().optional(),    // si el pago salió de una cuenta bancaria
@@ -6078,10 +6078,11 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
       }
       // Pago en EFECTIVO: egreso de la caja elegida. Pago con CHEQUE: se entrega/endosa.
       const concepto = `Cuota ${cuota.numero} · ${credito.banco || ''}${credito.nroOperacion ? ' #' + credito.nroOperacion : ''}`.trim();
-      if (d.medioPago === 'efectivo') {
+      if (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta') {
         await tx.efectivo.create({ data: {
           companyId: req.companyId, fecha: fechaPago, tipo: 'egreso', concepto,
-          monto: importeArs, caja: d.caja || null, clasificacion: 'empresa', observaciones: d.observaciones || null,
+          monto: importeArs, caja: d.caja || null, clasificacion: 'empresa',
+          observaciones: [(d.medioPago === 'tarjeta' && d.caja ? 'Tarjeta: ' + d.caja : null), d.observaciones].filter(Boolean).join(' · ') || null,
         }});
       } else if (d.medioPago === 'cheque' && d.chequeId) {
         const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
@@ -6267,7 +6268,9 @@ app.get('/api/compromisos-cereal', requireCompany, requirePermission('finanzas:r
 // alimenta "Movimientos diarios". Devuelve el registro creado/actualizado.
 async function _moverRecursoPagoDiario(tx, req, o) {
   const obs = o.observaciones || null;
-  if (o.metodo === 'efectivo' || o.metodo === 'externo') {
+  if (o.metodo === 'efectivo' || o.metodo === 'externo' || o.metodo === 'tarjeta') {
+    // "tarjeta" (tarjeta de crédito, solo etiqueta) y "externo" (billetera) se
+    // registran como una caja del módulo Efectivo con su nombre. NO tocan bancos.
     return tx.efectivo.create({ data: {
       companyId: req.companyId, fecha: o.fecha, tipo: 'egreso', concepto: o.concepto,
       monto: o.monto, caja: o.caja || null, clasificacion: o.clasificacion || 'empresa', observaciones: obs,
@@ -6309,7 +6312,7 @@ app.put('/api/arrendamientos/:id/cuotas/:idx/pagar', requireCompany, requirePerm
     if (cuotas[idx].pagado) return res.status(400).json({ ok: false, error: 'La cuota ya está pagada' });
     const schema = z.object({
       fecha: z.coerce.date().optional(),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta']),
       monto: z.number().positive(),
       caja: z.string().nullable().optional(),
       chequeId: z.string().nullable().optional(),
@@ -7015,7 +7018,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       categoria: z.string().nullable().optional(),
       clasificacion: z.string().nullable().optional(),   // "empresa" | "propio"
       monto: z.number().positive(),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'intercompany']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta', 'intercompany']),
       // Datos según método
       caja: z.string().nullable().optional(),            // efectivo / externo (nombre del medio)
       chequeId: z.string().nullable().optional(),        // cheque (cheque existente)
@@ -7038,9 +7041,9 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
     ].filter(Boolean).join(' · ');
     let resultado;
 
-    if (d.metodo === 'efectivo' || d.metodo === 'externo') {
-      // "externo" (billetera virtual / medio externo) se registra como una caja
-      // del módulo Efectivo (el nombre del medio es la caja). NO toca bancos.
+    if (d.metodo === 'efectivo' || d.metodo === 'externo' || d.metodo === 'tarjeta') {
+      // "externo" (billetera virtual) y "tarjeta" (tarjeta de crédito, solo etiqueta)
+      // se registran como una caja del módulo Efectivo (el nombre es la caja). NO tocan bancos.
       resultado = await prisma.efectivo.create({
         data: {
           companyId: req.companyId,
@@ -7661,7 +7664,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
       })).optional().default([]),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal', 'externo']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal', 'externo', 'tarjeta']),
       monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo, sin plata)
       fecha: z.coerce.date(),
       cajaOrigen: z.string().nullable().optional(),
@@ -7883,17 +7886,19 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           clasificacion: 'empresa',
           observaciones: d.observaciones || null,
         }});
-      } else if (d.metodo === 'externo') {
-        // Billetera / medio externo (Mercado Pago, etc.): no impacta banco, se
-        // registra como una "caja" en Control de Efectivo con el nombre del medio.
+      } else if (d.metodo === 'externo' || d.metodo === 'tarjeta') {
+        // Billetera / medio externo (Mercado Pago, etc.) o Tarjeta de crédito (solo
+        // etiqueta): no impacta banco, se registra como una "caja" en Control de
+        // Efectivo con el nombre del medio/tarjeta.
+        const esTarjeta = d.metodo === 'tarjeta';
         await tx.efectivo.create({ data: {
           companyId: req.companyId,
           fecha: d.fecha, tipo: 'egreso',
           concepto: 'Pago a ' + prov.razonSocial,
           monto: d.monto,
-          caja: d.cajaOrigen || 'Medio externo',
+          caja: d.cajaOrigen || (esTarjeta ? 'Tarjeta de crédito' : 'Medio externo'),
           clasificacion: 'empresa',
-          observaciones: [(d.cajaOrigen ? 'Medio: ' + d.cajaOrigen : null), d.observaciones].filter(Boolean).join(' · ') || null,
+          observaciones: [(d.cajaOrigen ? (esTarjeta ? 'Tarjeta: ' : 'Medio: ') + d.cajaOrigen : null), d.observaciones].filter(Boolean).join(' · ') || null,
         }});
       } else if (d.metodo === 'cereal') {
         // Canje: entregamos grano para cancelar una deuda en toneladas.
@@ -7983,7 +7988,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
       })).optional().default([]),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'intercompany']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'tarjeta', 'intercompany']),
       monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo)
       fecha: z.coerce.date(),
       cajaDestino: z.string().nullable().optional(),
@@ -8127,17 +8132,18 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           clasificacion: 'empresa',
           observaciones: d.observaciones || null,
         }});
-      } else if (d.metodo === 'externo') {
-        // Billetera / medio externo (Mercado Pago, etc.): no impacta banco, se
-        // registra como una "caja" en Control de Efectivo con el nombre del medio.
+      } else if (d.metodo === 'externo' || d.metodo === 'tarjeta') {
+        // Billetera / medio externo o Tarjeta de crédito (solo etiqueta): no impacta
+        // banco, se registra como una "caja" en Control de Efectivo con su nombre.
+        const esTarjeta = d.metodo === 'tarjeta';
         await tx.efectivo.create({ data: {
           companyId: req.companyId,
           fecha: d.fecha, tipo: 'ingreso',
           concepto: 'Cobro de ' + cli.razonSocial,
           monto: d.monto,
-          caja: d.cajaDestino || 'Medio externo',
+          caja: d.cajaDestino || (esTarjeta ? 'Tarjeta de crédito' : 'Medio externo'),
           clasificacion: 'empresa',
-          observaciones: [(d.cajaDestino ? 'Medio: ' + d.cajaDestino : null), d.observaciones].filter(Boolean).join(' · ') || null,
+          observaciones: [(d.cajaDestino ? (esTarjeta ? 'Tarjeta: ' : 'Medio: ') + d.cajaDestino : null), d.observaciones].filter(Boolean).join(' · ') || null,
         }});
       } else if (d.metodo === 'intercompany') {
         // El cliente le paga a otra firma del grupo (firma destino). El cobro
