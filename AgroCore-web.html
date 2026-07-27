@@ -1374,6 +1374,25 @@ function tarjetaPicker(id) {
        <input id="${id}" class="input" placeholder="Ej: Visa Santander"/>
        <div class="text-[11px] text-amber-700 mt-1">⚠️ Para tener una lista fija, cargá tus tarjetas en Tesorería → Bancos → 💳 Tarjetas.</div>`;
 }
+// Marcas emisoras sugeridas para las tarjetas de crédito.
+const TARJETA_MARCAS = ['Visa','Mastercard','American Express','Cabal','Naranja X','Maestro','Tuya','Otra'];
+// Los datos extra de la tarjeta (número, titular, vencimiento, marca) se guardan
+// como JSON en el campo 'descripcion' del catálogo (sin migración de base).
+function tarjetaMeta(cat) {
+  if (!cat) return {};
+  try { const o = JSON.parse(cat.descripcion || ''); return (o && typeof o === 'object') ? o : {}; }
+  catch { return cat.descripcion ? { titular: cat.descripcion } : {}; }
+}
+// Enmascara el número mostrando solo los últimos 4 dígitos.
+function tarjetaNumMask(num) {
+  const d = String(num || '').replace(/\D/g, '');
+  return d ? '•••• ' + d.slice(-4) : '';
+}
+// Resumen legible para mostrar en la tarjeta de Bancos.
+function tarjetaResumen(cat) {
+  const m = tarjetaMeta(cat);
+  return [(m.banco ? '🏛️ ' + m.banco : ''), m.marca, tarjetaNumMask(m.numero), m.titular, (m.vence ? 'Vence ' + m.vence : '')].filter(Boolean).join(' · ');
+}
 
 // ---- Tipos de insumo (relación Insumo → Tipo de insumo desde el catálogo) ----
 // Un INSUMO del catálogo es una fila cuyo "tipo" es el nombre de un "Tipo de insumo".
@@ -2424,7 +2443,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Nuevo', color:'bg-violet-100 text-violet-800 border-violet-300', fecha:'27/07/2026',
       titulo:'💳 v2.6.0 — Pagar con tarjeta de crédito en todo el sistema',
-      desc:'Ahora podés <b>pagar con tarjeta de crédito</b> en toda la app: Movimientos diarios, Pagos/Cobros a proveedor y cliente, Compras y Ventas, Liquidación de sueldos, cuotas de Crédito y Arrendamiento, y viajes. Primero cargá tus tarjetas en <b>Tesorería → Bancos → 💳 Tarjetas de crédito</b> y después elegilas como método de pago. Es una <b>etiqueta simple</b>: el gasto se registra como una caja en Control de Efectivo con el nombre de la tarjeta (no impacta cuentas bancarias). En Movimientos diarios se muestran con el ícono 💳 y podés filtrar por “Tarjeta”. Además, en Movimientos diarios se sacó la <b>categoría duplicada</b> del subtítulo del concepto (ya se ve en su columna).' },
+      desc:'Ahora podés <b>pagar con tarjeta de crédito</b> en toda la app: Movimientos diarios, Pagos/Cobros a proveedor y cliente, Compras y Ventas, Liquidación de sueldos, cuotas de Crédito y Arrendamiento, y viajes. Primero cargá tus tarjetas en <b>Tesorería → Bancos → 💳 Tarjetas de crédito</b> (con marca emisora, número, titular y vencimiento; el número se muestra enmascarado) y después elegilas como método de pago. Es una <b>etiqueta simple</b>: el gasto se registra como una caja en Control de Efectivo con el nombre de la tarjeta (no impacta cuentas bancarias). Cada tarjeta se puede asociar a un <b>banco</b> y se puede <b>abrir para ver sus movimientos</b> igual que una cuenta bancaria, con su saldo gastado acumulado. <b>Pagar la tarjeta:</b> desde un nuevo movimiento de la cuenta bancaria, con tipo <b>Débito (tarjeta/servicio)</b>, podés elegir una tarjeta de ese banco y en un paso se genera el <b>débito en la cuenta</b> y el <b>pago en la tarjeta</b> (baja su saldo gastado). En Movimientos diarios se muestran con el ícono 💳 y podés filtrar por “Tarjeta”. Los <b>movimientos de una cuenta bancaria o de una tarjeta</b> ahora tienen <b>filtro por fecha (desde/hasta)</b>, que trae por defecto el <b>último mes</b>. Además, en Movimientos diarios se sacó la <b>categoría duplicada</b> del subtítulo del concepto (ya se ve en su columna).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/07/2026',
       titulo:'🔄 v2.5.1 — Liquidación de sueldo pagable por Intercompany',
       desc:'Al liquidar el sueldo de un empleado ahora podés elegir <b>Intercompany</b>: otra firma del grupo pone los fondos, igual que en el pago a proveedores. Esta empresa le queda debiendo (asiento entre firmas) y se mueve el <b>recurso real</b> de la otra firma (su caja, cheque o banco). Al anular la liquidación, se revierte todo automáticamente.' },
@@ -22726,40 +22745,70 @@ function bcoTarjetasSection() {
       </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
         ${tarjetas.map(t => `
-          <div class="kpi flex items-start justify-between gap-2">
-            <div class="min-w-0">
-              <div class="font-semibold text-slate-800 truncate">💳 ${esc(t.nombre)}</div>
-              ${t.descripcion?`<div class="text-[11px] text-slate-500 mt-0.5">${esc(t.descripcion)}</div>`:''}
+          <div class="kpi cursor-pointer hover:shadow-md transition" onclick='tarjetaVerMovs(${JSON.stringify(t.id)})'>
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <div class="font-semibold text-slate-800 truncate">💳 ${esc(t.nombre)}</div>
+                ${(()=>{ const r=tarjetaResumen(t); return r?`<div class="text-[11px] text-slate-500 mt-0.5">${esc(r)}</div>`:''; })()}
+              </div>
+              <div class="flex items-center gap-1 flex-shrink-0">
+                ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar tarjeta" onclick='event.stopPropagation(); tarjetaForm(${JSON.stringify(t.id)})'>✏️</button>`:''}
+                ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar tarjeta" onclick='event.stopPropagation(); tarjetaDel(${JSON.stringify(t.id)})'>🗑️</button>`:''}
+              </div>
             </div>
-            <div class="flex items-center gap-1 flex-shrink-0">
-              ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar tarjeta" onclick='tarjetaForm(${JSON.stringify(t.id)})'>✏️</button>`:''}
-              ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar tarjeta" onclick='tarjetaDel(${JSON.stringify(t.id)})'>🗑️</button>`:''}
+            <div class="mt-3 pt-2 border-t border-slate-100 flex justify-end">
+              <button class="btn btn-secondary text-xs" onclick='event.stopPropagation(); tarjetaVerMovs(${JSON.stringify(t.id)})'>📋 Ver movimientos</button>
             </div>
           </div>`).join('') || `<div class="kpi md:col-span-3 text-center text-slate-400 py-6 text-sm">Sin tarjetas cargadas. Agregá la primera con "+ Nueva tarjeta".</div>`}
       </div>
     </div>`;
 }
 function tarjetaForm(id=null) {
-  let t = { nombre:'', descripcion:'' };
+  let t = { nombre:'' };
   if (id) { const cur = (state.cache.catalogos||[]).find(x => x.id === id); if (cur) t = { ...t, ...cur }; }
+  const m = tarjetaMeta(t);
   openModal({
-    title: id?'Editar tarjeta de crédito':'Nueva tarjeta de crédito', size:'max-w-md',
+    title: id?'Editar tarjeta de crédito':'Nueva tarjeta de crédito', size:'max-w-lg',
     body: `
       <div><label class="label">Nombre de la tarjeta *</label>
         <input id="tj-nombre" class="input" value="${esc(t.nombre||'')}" placeholder="Ej: Visa Santander, Naranja X..."/>
+        <div class="text-[10px] text-slate-400 mt-1">Es la etiqueta con la que vas a elegir la tarjeta al pagar.</div>
       </div>
-      <div class="mt-3"><label class="label">Detalle (opcional)</label>
-        <input id="tj-desc" class="input" value="${esc(t.descripcion||'')}" placeholder="Ej: termina en 1234 · titular Juan Pérez"/>
+      <div class="grid grid-cols-2 gap-3 mt-3">
+        <div class="col-span-2"><label class="label">Banco emisor</label>
+          ${(()=>{ const bancos=catByTipo('Banco').map(b=>b.nombre).filter(Boolean); const cur=m.banco||''; const opts=[...new Set(cur&&!bancos.includes(cur)?[cur,...bancos]:bancos)]; return `<select id="tj-banco" class="input"><option value="">— Sin banco / elegir —</option>${opts.map(b=>`<option value="${esc(b)}" ${b===cur?'selected':''}>${esc(b)}</option>`).join('')}</select>`; })()}
+          <div class="text-[10px] text-slate-400 mt-1">Sirve para pagar la tarjeta desde la cuenta bancaria de ese banco (débito).</div>
+        </div>
+        <div><label class="label">Marca emisora</label>
+          ${(()=>{ const cur=m.marca||''; const opts=[...new Set(cur&&!TARJETA_MARCAS.includes(cur)?[cur,...TARJETA_MARCAS]:TARJETA_MARCAS)]; return `<select id="tj-marca" class="input"><option value="">— Elegir —</option>${opts.map(x=>`<option value="${esc(x)}" ${x===cur?'selected':''}>${esc(x)}</option>`).join('')}</select>`; })()}
+        </div>
+        <div><label class="label">Fecha de caducidad</label>
+          <input id="tj-vence" class="input" value="${esc(m.vence||'')}" placeholder="MM/AA" maxlength="7"/>
+        </div>
+        <div class="col-span-2"><label class="label">Número de la tarjeta</label>
+          <input id="tj-numero" class="input font-mono" value="${esc(m.numero||'')}" placeholder="0000 0000 0000 0000" inputmode="numeric"/>
+        </div>
+        <div class="col-span-2"><label class="label">Nombre del titular</label>
+          <input id="tj-titular" class="input" value="${esc(m.titular||'')}" placeholder="Como figura en la tarjeta"/>
+        </div>
       </div>
-      <div class="text-[11px] text-slate-500 mt-3">💡 Al pagar con tarjeta, el gasto se registra como una caja en Control de Efectivo con el nombre de la tarjeta. No impacta cuentas bancarias.</div>`,
+      <div class="text-[11px] text-slate-500 mt-3">💡 Al pagar con tarjeta, el gasto se registra como una caja en Control de Efectivo con el nombre de la tarjeta. No impacta cuentas bancarias. En la lista se muestra el número enmascarado (solo los últimos 4).</div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='tarjetaSave(${id?JSON.stringify(id):"null"})'>💾 Guardar</button>`
   });
 }
 async function tarjetaSave(id) {
   const nombre = ($('#tj-nombre')?.value||'').trim();
-  const descripcion = ($('#tj-desc')?.value||'').trim() || null;
   if (!nombre) return toast('Poné el nombre de la tarjeta','warn');
+  const meta = {
+    banco:   ($('#tj-banco')?.value||'').trim() || null,
+    marca:   ($('#tj-marca')?.value||'').trim() || null,
+    numero:  ($('#tj-numero')?.value||'').trim() || null,
+    titular: ($('#tj-titular')?.value||'').trim() || null,
+    vence:   ($('#tj-vence')?.value||'').trim() || null,
+  };
+  const tieneDatos = meta.banco || meta.marca || meta.numero || meta.titular || meta.vence;
+  const descripcion = tieneDatos ? JSON.stringify(meta) : null;
   const data = { tipo: TARJETA_CAT_TIPO, nombre, descripcion, activo: true };
   try {
     if (id) await api('/api/catalogos/'+id, { method:'PUT', body: JSON.stringify(data) });
@@ -22858,6 +22907,24 @@ async function bcoCuentaDel(id) {
 }
 
 // Vista detalle de una cuenta: muestra sus movimientos y permite cargar nuevos
+// Rango por defecto de los listados de movimientos: el ÚLTIMO MES (hoy - 1 mes → hoy).
+function _ultimoMesRango() {
+  const hoy = new Date();
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const desde = new Date(hoy); desde.setMonth(desde.getMonth()-1);
+  return { desde: fmt(desde), hasta: fmt(hoy) };
+}
+// Barra de filtro por fecha (desde/hasta) reutilizable. aplicarFn/limpiarFn: nombres de funciones globales.
+function movFiltroFechaBar(prefix, f, aplicarFn, limpiarFn) {
+  return `
+    <div class="kpi mb-3 flex items-end gap-2 flex-wrap">
+      <div><label class="label text-xs">Desde</label><input id="${prefix}-desde" type="date" class="input" value="${f.desde||''}" onchange="${aplicarFn}()"/></div>
+      <div><label class="label text-xs">Hasta</label><input id="${prefix}-hasta" type="date" class="input" value="${f.hasta||''}" onchange="${aplicarFn}()"/></div>
+      <button class="btn btn-secondary" onclick="${aplicarFn}()">Filtrar</button>
+      <button class="btn btn-ghost text-xs" onclick="${limpiarFn}()" title="Volver al último mes">↺ Último mes</button>
+    </div>`;
+}
+
 async function bcoVerMovs(cuentaId) {
   state.bancoCuentaId = cuentaId;
   const c = (state.cache.bancoCuentas||[]).find(x => x.id === cuentaId);
@@ -22867,7 +22934,7 @@ async function bcoVerMovs(cuentaId) {
   let movs = [];
   try { movs = (await api('/api/banco-cuentas/'+cuentaId+'/movimientos')).data || []; } catch (e) { return toast(e.message,'error'); }
   state.cache.bancoMovs = movs;   // para poder editar un movimiento sin re-pedirlo
-  // Recalculamos saldo corriente fila a fila (de más viejo a más nuevo)
+  // Recalculamos saldo corriente fila a fila (de más viejo a más nuevo, sobre TODO el historial)
   let running = Number(c.saldoInicial || 0);
   const movsAsc = [...movs].sort((a,b) => new Date(a.fecha) - new Date(b.fecha) || a.createdAt.localeCompare(b.createdAt));
   movsAsc.forEach(m => {
@@ -22877,6 +22944,25 @@ async function bcoVerMovs(cuentaId) {
   });
   // Mostramos de más nuevo a más viejo
   movs.sort((a,b) => new Date(b.fecha) - new Date(a.fecha) || b.createdAt.localeCompare(a.createdAt));
+  state._bcoMovsAll = movs;
+  state._bcoMovFilter = state._bcoMovFilter || _ultimoMesRango();
+  bcoMovRender();
+}
+function bcoMovAplicarFiltro() {
+  state._bcoMovFilter = { desde: $('#bmf-desde')?.value || '', hasta: $('#bmf-hasta')?.value || '' };
+  bcoMovRender();
+}
+function bcoMovLimpiarFiltro() { state._bcoMovFilter = _ultimoMesRango(); bcoMovRender(); }
+function bcoMovRender() {
+  const c = (state.cache.bancoCuentas||[]).find(x => x.id === state.bancoCuentaId);
+  if (!c) return;
+  const f = state._bcoMovFilter || _ultimoMesRango();
+  const movs = (state._bcoMovsAll||[]).filter(m => {
+    const d = (m.fecha||'').slice(0,10);
+    if (f.desde && d < f.desde) return false;
+    if (f.hasta && d > f.hasta) return false;
+    return true;
+  });
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <button class="btn btn-secondary" onclick="pages.bancos()">← Volver a Bancos</button>
@@ -22884,6 +22970,7 @@ async function bcoVerMovs(cuentaId) {
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoMovForm()">+ Nuevo movimiento</button>`:''}
       </div>
     </div>
+    ${movFiltroFechaBar('bmf', f, 'bcoMovAplicarFiltro', 'bcoMovLimpiarFiltro')}
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
         <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Contraparte</th><th>Ref.</th><th class="text-right">Monto</th><th class="text-right">Saldo</th><th>Cargado por</th><th></th></tr></thead>
@@ -22906,10 +22993,94 @@ async function bcoVerMovs(cuentaId) {
                 ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='bcoMovDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}
               </td>
             </tr>`;
-          }).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin movimientos en esta cuenta. Cargá el primero.</td></tr>`}
+          }).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin movimientos en el rango elegido. Ampliá las fechas o cargá el primero.</td></tr>`}
         </tbody>
+        <tfoot><tr class="font-semibold bg-slate-50"><td colspan="9" class="text-xs text-slate-600">${movs.length} movimiento${movs.length===1?'':'s'} en el rango${f.desde?' · desde '+fmtDate(f.desde):''}${f.hasta?' hasta '+fmtDate(f.hasta):''}</td></tr></tfoot>
       </table>
     </div>`;
+}
+
+// ===== Movimientos de una TARJETA de crédito (funciona como una cuenta) =====
+// Los pagos con tarjeta se guardan como movimientos de Efectivo con caja = nombre de la
+// tarjeta. Acá los listamos y mostramos el saldo gastado acumulado (deuda) + filtro de fecha.
+async function tarjetaVerMovs(cardId) {
+  const card = (state.cache.catalogos||[]).find(x => x.id === cardId && x.tipo === TARJETA_CAT_TIPO);
+  if (!card) return toast('Tarjeta no encontrada','error');
+  state._tjCardId = cardId; state._tjCardNombre = card.nombre;
+  const rr = tarjetaResumen(card);
+  setHeader(`💳 ${card.nombre}`, rr || 'Movimientos de la tarjeta');
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando movimientos…</div>`;
+  let ef = [];
+  try { ef = (await api('/api/efectivo')).data || []; } catch (e) { return toast(e.message,'error'); }
+  // Solo los movimientos cuya caja es esta tarjeta.
+  let movs = ef.filter(e => (e.caja||'').trim() === (card.nombre||'').trim());
+  // Saldo gastado acumulado (deuda): egreso suma, ingreso/pago resta. De más viejo a más nuevo.
+  let acum = 0;
+  [...movs].sort((a,b) => new Date(a.fecha) - new Date(b.fecha) || (a.createdAt||'').localeCompare(b.createdAt||''))
+    .forEach(m => { acum += (m.tipo === 'ingreso' ? -1 : 1) * Number(m.monto || 0); m._acum = acum; });
+  movs.sort((a,b) => new Date(b.fecha) - new Date(a.fecha) || (b.createdAt||'').localeCompare(a.createdAt||''));
+  state._tjMovsAll = movs;
+  state._tjMovFilter = state._tjMovFilter || _ultimoMesRango();
+  tarjetaMovRender();
+}
+function tarjetaMovAplicarFiltro() {
+  state._tjMovFilter = { desde: $('#tjf-desde')?.value || '', hasta: $('#tjf-hasta')?.value || '' };
+  tarjetaMovRender();
+}
+function tarjetaMovLimpiarFiltro() { state._tjMovFilter = _ultimoMesRango(); tarjetaMovRender(); }
+function tarjetaMovRender() {
+  const f = state._tjMovFilter || _ultimoMesRango();
+  const all = state._tjMovsAll || [];
+  const movs = all.filter(m => {
+    const d = (m.fecha||'').slice(0,10);
+    if (f.desde && d < f.desde) return false;
+    if (f.hasta && d > f.hasta) return false;
+    return true;
+  });
+  const gastado = movs.filter(m=>m.tipo!=='ingreso').reduce((a,m)=>a+Number(m.monto||0),0);
+  const pagos   = movs.filter(m=>m.tipo==='ingreso').reduce((a,m)=>a+Number(m.monto||0),0);
+  const totalGastadoTarjeta = (all[0] && all[0]._acum!=null) ? all[0]._acum : 0;
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <button class="btn btn-secondary" onclick="pages.bancos()">← Volver a Bancos</button>
+      <div class="text-xs text-slate-500">💳 La tarjeta no impacta cuentas bancarias. El “saldo gastado” es lo cargado a la tarjeta menos los pagos/reintegros registrados.</div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Gastado en el rango</div><div class="text-xl font-bold mt-1 text-red-700">${fmt$(gastado)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Pagos/reintegros en el rango</div><div class="text-xl font-bold mt-1 text-green-700">${fmt$(pagos)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Saldo gastado acumulado</div><div class="text-xl font-bold mt-1 ${totalGastadoTarjeta>=0?'text-slate-800':'text-green-700'}">${fmt$(totalGastadoTarjeta)}</div></div>
+    </div>
+    ${movFiltroFechaBar('tjf', f, 'tarjetaMovAplicarFiltro', 'tarjetaMovLimpiarFiltro')}
+    <div class="kpi p-0 overflow-hidden">
+      <table class="data">
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th class="text-right">Monto</th><th class="text-right">Saldo gastado</th><th></th></tr></thead>
+        <tbody>
+          ${movs.map(m => {
+            const esPago = m.tipo === 'ingreso';
+            const obs = (m.observaciones||'').split(' · ').filter(p=>!/^Categor[ií]a:/i.test(p.trim())&&!/^Tarjeta:/i.test(p.trim())).join(' · ');
+            return `<tr class="table-row">
+              <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
+              <td><span class="text-xs">${esPago?'⬆️ Pago/reintegro':'💳 Gasto'}</span></td>
+              <td><b>${esc(m.concepto||'—')}</b>${obs?`<div class="text-[11px] text-slate-500">${esc(obs)}</div>`:''}</td>
+              <td class="text-right font-semibold ${esPago?'text-green-700':'text-red-700'}">${esPago?'−':'+'} ${fmtMon(m.moneda||'ARS', m.monto)}</td>
+              <td class="text-right text-xs">${fmtMon('ARS', m._acum)}</td>
+              <td class="text-right whitespace-nowrap">
+                ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar movimiento" onclick='tarjetaMovDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}
+              </td>
+            </tr>`;
+          }).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin movimientos en el rango elegido. Pagá algo con esta tarjeta o ampliá las fechas.</td></tr>`}
+        </tbody>
+        <tfoot><tr class="font-semibold bg-slate-50"><td colspan="6" class="text-xs text-slate-600">${movs.length} movimiento${movs.length===1?'':'s'} en el rango${f.desde?' · desde '+fmtDate(f.desde):''}${f.hasta?' hasta '+fmtDate(f.hasta):''}</td></tr></tfoot>
+      </table>
+    </div>`;
+}
+async function tarjetaMovDel(id) {
+  if (!confirm('¿Eliminar este movimiento de la tarjeta?')) return;
+  try {
+    await api('/api/efectivo/'+id, { method:'DELETE' });
+    toast('Movimiento eliminado','success');
+    tarjetaVerMovs(state._tjCardId);
+  } catch (e) { toast(e.message,'error'); }
 }
 
 function bcoMovForm(id=null) {
@@ -22923,7 +23094,7 @@ function bcoMovForm(id=null) {
     body: `
       <div class="grid grid-cols-3 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Cuenta *</label>
-          <select id="bm-cta" class="input">
+          <select id="bm-cta" class="input" onchange="bcoMovTarjetasRender()">
             ${cuentas.filter(c=>c.activo || c.id===selCuenta).map(c => `<option value="${c.id}" ${c.id===selCuenta?'selected':''}>🏛️ ${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('')}
           </select>
         </div>
@@ -22949,6 +23120,9 @@ function bcoMovForm(id=null) {
           <label class="label">Caja de efectivo (opcional)</label>
           ${catSelect('bm-caja', 'Caja', '', { placeholder:'— Si no mueve efectivo, dejar vacío —' })}
           <div class="text-[11px] text-slate-500 mt-1">Si elegís una caja, el <b>depósito</b> también <b>sale del efectivo</b> de esa caja (y la <b>extracción entra</b> a la caja). Queda registrado en las dos partes.</div>
+        </div>
+        <div class="col-span-3" id="bm-tarjeta-wrap" style="display:none">
+          <div id="bm-tarjeta-inner"></div>
         </div>`}
         <div class="col-span-3"><label class="label">Referencia</label><input id="bm-ref" class="input" placeholder="Nro de operación, recibo, etc." value="${m?esc(m.referencia||''):''}"/></div>
         <div class="col-span-3"><label class="label">Observaciones</label><textarea id="bm-obs" class="input" rows="2">${m?esc(m.observaciones||''):''}</textarea></div>
@@ -22966,6 +23140,27 @@ function bcoMovToggleTransfer() {
   const t = el.value;
   const tw = $('#bm-transfer-wrap'); if (tw) tw.style.display = (t === 'transferencia_in' || t === 'transferencia_out') ? '' : 'none';
   const cw = $('#bm-caja-wrap');     if (cw) cw.style.display = (t === 'deposito' || t === 'extraccion') ? '' : 'none';
+  const jw = $('#bm-tarjeta-wrap');  if (jw) { jw.style.display = (t === 'debito') ? '' : 'none'; if (t === 'debito') bcoMovTarjetasRender(); }
+}
+// Arma el selector de tarjetas del banco de la cuenta elegida (para pagar la tarjeta con un débito).
+function bcoMovTarjetasRender() {
+  const cont = $('#bm-tarjeta-inner'); if (!cont) return;
+  const ctaId = $('#bm-cta')?.value;
+  const cta = (state.cache.bancoCuentas||[]).find(c => c.id === ctaId);
+  const bancoCta = (cta?.banco || '').trim().toLowerCase();
+  const cards = catByTipo(TARJETA_CAT_TIPO).filter(t => {
+    const b = (tarjetaMeta(t).banco || '').trim().toLowerCase();
+    return b && b === bancoCta;
+  });
+  cont.innerHTML = `
+    <label class="label">Pago de tarjeta de crédito (opcional)</label>
+    <select id="bm-tarjeta" class="input">
+      <option value="">— Débito común (no es pago de tarjeta) —</option>
+      ${cards.map(t => `<option value="${esc(t.nombre)}">💳 ${esc(t.nombre)}</option>`).join('')}
+    </select>
+    ${cards.length
+      ? `<div class="text-[11px] text-slate-500 mt-1">💳 Si elegís una tarjeta, además del débito en la cuenta se registra el <b>pago en la tarjeta</b> (baja su saldo gastado).</div>`
+      : `<div class="text-[11px] text-amber-700 mt-1">No hay tarjetas de <b>${esc(cta?.banco||'este banco')}</b>. Cargá la tarjeta en Bancos → Tarjetas y asignale este banco para poder pagarla desde acá.</div>`}`;
 }
 async function bcoMovSave(id) {
   const gv = (sel) => { const el = document.querySelector(sel); return el ? String(el.value ?? '') : ''; };
@@ -22991,13 +23186,34 @@ async function bcoMovSave(id) {
       data.syncMirror = confirm('Este movimiento es una transferencia interna entre cuentas propias.\n\n¿Actualizar también el movimiento espejo de la otra cuenta con los mismos cambios?\n\nAceptar = actualizar las dos · Cancelar = solo este movimiento.');
     }
   }
+  // Pago de tarjeta: solo en alta y cuando el tipo es "débito (tarjeta/servicio)".
+  const tjPago = (!id && data.tipo === 'debito') ? ($('#bm-tarjeta')?.value || null) : null;
+  if (tjPago) {
+    // El débito en la cuenta ES el pago de la tarjeta: reflejamos la contraparte.
+    if (!data.contraparte) data.contraparte = 'Tarjeta ' + tjPago;
+    data.observaciones = [data.observaciones, 'Pago de tarjeta ' + tjPago].filter(Boolean).join(' · ');
+  }
   if (!data.cuentaId) return toast('Falta la cuenta','warn');
   if (!data.concepto) return toast('Falta el concepto','warn');
   if (!data.monto || data.monto <= 0) return toast('El monto debe ser positivo','warn');
   try {
     if (id) await api('/api/banco-movimientos/'+id, { method:'PUT', body: JSON.stringify(data) });
     else    await api('/api/banco-movimientos',     { method:'POST', body: JSON.stringify(data) });
-    toast(id?'Movimiento actualizado':'Movimiento registrado','success');
+    // Registrar el PAGO en la tarjeta (ingreso a su "caja" → baja el saldo gastado).
+    if (tjPago) {
+      const cta = (state.cache.bancoCuentas||[]).find(c => c.id === data.cuentaId);
+      try {
+        await api('/api/efectivo', { method:'POST', body: JSON.stringify({
+          fecha: data.fecha, tipo: 'ingreso',
+          concepto: 'Pago de tarjeta ' + tjPago + (cta?(' desde '+cta.banco):''),
+          monto: data.monto, caja: tjPago, clasificacion: 'empresa',
+          observaciones: 'Pago de tarjeta con débito en ' + (cta?cta.banco:'la cuenta') + (data.referencia?(' · '+data.referencia):''),
+        })});
+      } catch (e2) {
+        toast('El débito se registró, pero no pude registrar el pago en la tarjeta: ' + (e2.message||e2), 'warn');
+      }
+    }
+    toast(id ? 'Movimiento actualizado' : (tjPago ? '💳 Débito registrado y tarjeta pagada' : 'Movimiento registrado'), 'success');
     closeModal();
     if (state.bancoCuentaId) bcoVerMovs(state.bancoCuentaId);
     else pages.bancos();
