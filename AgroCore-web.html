@@ -2441,6 +2441,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/07/2026',
+      titulo:'🗂️ v2.7.0 — Buscador de artículos por categoría en Compras y Ventas',
+      desc:'En la carga de <b>Compras</b> y <b>Ventas</b>, arriba de la tabla de items ahora hay un <b>filtro por categoría</b> (Todos · Insumos · Cereales · Hacienda · Servicios · Otros): elegís la familia y en cada renglón el buscador te sugiere solo esos artículos (o escribís las primeras letras). Se terminó la lista gigante mezclada. Además, el <b>“+ Crear producto nuevo”</b> se rediseñó: ahora pide <b>Nombre → Categoría → Unidad → IVA</b> (con el IVA aplicado al renglón), más claro y ordenado. Es el primer paso hacia el maestro único de Artículos + categorías jerárquicas.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/07/2026',
       titulo:'🎨 v2.6.1 — Colores de los gráficos más distinguibles',
       desc:'Ajustamos la paleta de los gráficos del <b>Dashboard</b> (composición de activos y pasivos, y egresos por categoría) para que los colores se <b>distingan bien</b> entre sí. Antes, tonos parecidos (rojo y naranja) se confundían en las porciones chicas.' },
@@ -9077,29 +9080,54 @@ function _factItemsLista() {
   return items;
 }
 
+// Familias de alto nivel para el filtro de artículos en Compras/Ventas.
+const FACT_FAMILIAS = ['Todos','Insumos','Cereales','Hacienda','Servicios','Otros'];
+function _tinsSetLower(){ try { return new Set(tiposInsumoNombres().map(x=>(x||'').toLowerCase().trim())); } catch { return new Set(); } }
+// Mapea la categoría de un artículo a su familia (para agrupar en el buscador).
+function _familiaArticulo(cat) {
+  const c = (cat||'').toLowerCase().trim();
+  if (!c) return 'Otros';
+  if (['granos','grano','cereales','cereal'].includes(c)) return 'Cereales';
+  if (c === 'hacienda') return 'Hacienda';
+  if (['servicios','servicio','labor','labores','flete','fletes'].includes(c)) return 'Servicios';
+  if (['insumos','insumo','combustibles','combustible'].includes(c) || _tinsSetLower().has(c)) return 'Insumos';
+  return 'Otros';
+}
+// Barra de filtro por familia + datalist compartido de la factura (Compras/Ventas).
+function factCatFilterBar() {
+  return `
+    <div class="flex items-center gap-2 flex-wrap mb-2 text-xs">
+      <span class="text-slate-500">🗂️ Categoría:</span>
+      <select id="fi-cat" class="input w-auto py-1 text-xs" onchange="factRenderDatalist()">
+        ${FACT_FAMILIAS.map(f=>`<option value="${f}">${f}</option>`).join('')}
+      </select>
+      <span class="text-slate-400">Elegí una familia y luego escribí en cada fila para buscar dentro de ella.</span>
+    </div>
+    <datalist id="fi-datalist"></datalist>`;
+}
+// Rellena el datalist compartido según la familia elegida.
+function factRenderDatalist() {
+  const dl = document.getElementById('fi-datalist'); if (!dl) return;
+  const fam = document.getElementById('fi-cat')?.value || 'Todos';
+  const lista = _factItemsLista().filter(x => fam === 'Todos' || _familiaArticulo(x.categoria) === fam);
+  dl.innerHTML = lista.map(x => {
+    const cat = x.fromCatalogo ? ` — ${x.tipoLabel}` : '';
+    const lbl = `${x.nombre}${x.unidad?` (${x.unidad})`:''}${cat}`;
+    return `<option value="${esc(lbl)}" data-pid="${esc(x.productoId||'')}" data-nombre="${esc(x.nombre)}" data-unidad="${esc(x.unidad)}" data-cat="${esc(x.categoria)}" data-precio="${esc(String(x.precio||''))}" data-from-catalogo="${x.fromCatalogo?'1':''}"></option>`;
+  }).join('');
+}
 function factItemRow(i=0, it={}) {
-  // Input con datalist HTML5: el usuario escribe y el navegador sugiere items.
-  // Al elegir uno, factItemPickProducto resuelve el productoId/nombre y
-  // autocompleta descripción y precio. Si no matchea ningún item, queda como
-  // "texto libre" (sin stock).
+  // Input con datalist HTML5 COMPARTIDO (fi-datalist): el usuario escribe y el
+  // navegador sugiere items de la familia elegida en el filtro de arriba.
   const lista = _factItemsLista();
   const pid = it.productoId || '';
   const sel = pid ? lista.find(x => x.productoId === pid) : null;
-  // dataset-id único para evitar colisiones cuando hay varias filas (Date.now + random)
-  const dsId = 'ds-' + (Date.now() % 100000) + '-' + Math.floor(Math.random()*1000);
   const valor = sel ? (sel.nombre + (sel.unidad?` (${sel.unidad})`:'')) : '';
-  const options = lista.map(x => {
-    const cat = x.fromCatalogo ? ` — ${x.tipoLabel}` : '';
-    const lbl = `${x.nombre}${x.unidad?` (${x.unidad})`:''}${cat}`;
-    // Guardamos el productoId / metadatos en un data-attr del option
-    return `<option value="${esc(lbl)}" data-pid="${esc(x.productoId||'')}" data-nombre="${esc(x.nombre)}" data-unidad="${esc(x.unidad)}" data-cat="${esc(x.categoria)}" data-precio="${esc(String(x.precio||''))}" data-from-catalogo="${x.fromCatalogo?'1':''}"></option>`;
-  }).join('');
   return `
     <tr data-fi data-producto-id="${esc(pid)}">
       <td>
         <div class="flex gap-1">
-          <input list="${dsId}" class="input text-sm flex-1" data-f="productoBuscador" placeholder="🔎 Escribí para buscar… (o nombre libre)" value="${esc(valor)}" oninput="factItemBuscarItem(this)" onchange="factItemBuscarItem(this)" autocomplete="off"/>
-          <datalist id="${dsId}">${options}</datalist>
+          <input list="fi-datalist" class="input text-sm flex-1" data-f="productoBuscador" placeholder="🔎 Escribí para buscar… (o nombre libre)" value="${esc(valor)}" oninput="factItemBuscarItem(this)" onchange="factItemBuscarItem(this)" autocomplete="off"/>
           <button class="btn btn-secondary text-xs px-2" onclick="nuevoItemRapido(this)" title="Crear un producto/insumo nuevo">➕</button>
           <input type="hidden" data-f="productoId" value="${esc(pid)}"/>
         </div>
@@ -9186,17 +9214,23 @@ function nuevoItemRapido(btn) {
           <div><label class="label">Unidad</label>
             ${catSelect('ni-unidad', 'Unidad de medida', '', { placeholder:'— Unidad —' })}
           </div>
-          <div><label class="label">Tipo</label>
+          <div><label class="label">Categoría *</label>
             <select id="ni-tipo" class="input">
-              <option value="insumo" selected>🧪 Insumo (agroquímico, semilla, repuesto)</option>
-              <option value="cereal">🌾 Cereal / Grano</option>
+              <option value="insumos" selected>🧪 Insumos (agroquímico, semilla, repuesto, combustible)</option>
+              <option value="granos">🌾 Cereales / Granos</option>
               <option value="hacienda">🐄 Hacienda</option>
-              <option value="otro">📦 Otro</option>
+              <option value="servicios">🚜 Servicios / Labores (no descuenta stock)</option>
+              <option value="otros">📦 Otros</option>
             </select>
           </div>
         </div>
+        <div><label class="label">IVA del renglón</label>
+          <select id="ni-iva" class="input">
+            ${[21,10.5,27,0].map(a=>`<option value="${a}" ${a===21?'selected':''}>${a}%</option>`).join('')}
+          </select>
+        </div>
         <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2">
-          💡 Si más adelante necesitás más campos del producto (precio referencia, descripción, etc), podés editarlo desde <b>Catálogos</b>. Acá creamos lo mínimo para que aparezca en la factura.
+          💡 Creamos lo mínimo para que aparezca en la factura (nombre, categoría y unidad). El IVA se aplica a este renglón. Más adelante vas a poder editar el resto del artículo desde <b>Catálogos</b>.
         </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -9206,7 +9240,8 @@ function nuevoItemRapido(btn) {
 async function nuevoItemRapidoSave(tbodyId, filaIdx) {
   const nombre = $('#ni-nombre').value.trim();
   const unidad = $('#ni-unidad').value.trim();
-  const tipo   = $('#ni-tipo').value;
+  const tipo   = $('#ni-tipo').value;   // ya es la categoría canónica (insumos/granos/hacienda/servicios/otros)
+  const ivaSel = $('#ni-iva') ? Number($('#ni-iva').value) : null;
   if (!nombre) return toast('Falta el nombre','warn');
   try {
     // Creamos un Producto directo: así arranca con stock 0 y queda disponible
@@ -9225,11 +9260,12 @@ async function nuevoItemRapidoSave(tbodyId, filaIdx) {
     if (!tr) return;
     const cant = Number(tr.querySelector('[data-f="cantidad"]')?.value || 1);
     const prc  = Number(tr.querySelector('[data-f="precioUnit"]')?.value || 0);
-    const iva  = Number(tr.querySelector('[data-f="alicuotaIva"]')?.value || 21);
+    const iva  = (ivaSel != null && !isNaN(ivaSel)) ? ivaSel : Number(tr.querySelector('[data-f="alicuotaIva"]')?.value || 21);
     const isExterna = tbodyId === 'fei-tbody';
     let nuevoHTML = factItemRow(0, { productoId: nuevoId, cantidad: cant, precioUnit: prc, alicuotaIva: iva });
     if (isExterna) nuevoHTML = nuevoHTML.replace(/data-fi(?!=)/g,'data-fei').replace(/factRecalc\(\)/g,'factExtRecalc()');
     tr.outerHTML = nuevoHTML;
+    try { factRenderDatalist(); } catch {}   // que el nuevo producto aparezca en el buscador
     // Recalcular totales
     if (isExterna) { try { factExtRecalc(); } catch {} } else { try { factRecalc(); } catch {} }
   } catch (e) { toast(e.message,'error'); }
@@ -9314,6 +9350,7 @@ async function factForm() {
         ${monedaFieldHTML('f')}
       </div>
       <div id="f-clase-hint" class="text-xs mb-3"></div>
+      ${factCatFilterBar()}
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
           <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
@@ -9356,6 +9393,7 @@ async function factForm() {
   setTimeout(async () => {
     $('#fi-tbody').addEventListener('input', factRecalc);
     factRecalc();
+    factRenderDatalist();
     factClaseHint();
     // Pre-cargar datos para método si todavía no están
     if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
@@ -9665,6 +9703,7 @@ async function factFormExterna() {
         <div><label class="label">Vto. CAE *</label><input id="fe-caevto" class="input" type="date" value="${caeVtoSug.toISOString().slice(0,10)}"/></div>
         <div class="col-span-2 text-xs text-slate-500">Estos dos datos los devolvió ARCA cuando emitiste la factura. Buscalos en el comprobante PDF descargado del portal.</div>
       </div>
+      ${factCatFilterBar()}
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
           <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
@@ -9705,6 +9744,7 @@ async function factFormExterna() {
   setTimeout(async () => {
     $('#fei-tbody').addEventListener('input', factExtRecalc);
     factExtRecalc();
+    factRenderDatalist();
     // Pre-cargar datos para método
     if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
       try {
@@ -10369,6 +10409,7 @@ async function compForm() {
         </div>
       </div>
       <div id="f-pdf-msg" class="text-xs"></div>
+      ${factCatFilterBar()}
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
           <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
@@ -10406,6 +10447,7 @@ async function compForm() {
   setTimeout(async () => {
     $('#fi-tbody').addEventListener('input', factRecalc);
     factRecalc();
+    factRenderDatalist();
     // Pre-cargar datos para método de pago si todavía no están
     if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
       try {
