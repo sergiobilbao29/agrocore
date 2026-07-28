@@ -2481,7 +2481,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🌱 v2.11.0 — Convertir grano en semilla propia + reubicar categorías',
-      desc:'Nuevo en <b>Stock</b>: <b>🌱 Convertir grano a semilla</b> aparta una cantidad de tu <b>grano cosechado</b> (Cereales / Granos) y la pasa a <b>semilla</b> (Insumo) para resembrar — una salida del grano + una entrada en la semilla, <b>sin duplicar stock</b>. Es de <b>una sola vía</b> (la semilla va curada y no vuelve a grano). El <b>grano entregado en una Cerealera solo se puede vender</b> (Ventas o Liquidación de cereal): no se puede convertir ni sacar/consumir manualmente desde ese depósito. El grano que está en el campo/depósitos propios sí se usa para <b>consumo</b> (alimentar hacienda) o conversión a semilla. También sumamos <b>🔀 Reubicar categoría</b>: cambiar la categoría/familia de <b>varios artículos a la vez</b> (ej. mover una semilla que quedó en Insumos a Cereales / Granos).' },
+      desc:'Nuevo en <b>Stock</b>: <b>🌱 Convertir grano a semilla</b> aparta una cantidad de tu <b>grano cosechado</b> (Cereales / Granos) y la pasa a <b>semilla</b> (Insumo) para resembrar — una salida del grano + una entrada en la semilla, <b>sin duplicar stock</b>. Es de <b>una sola vía</b> (la semilla va curada y no vuelve a grano). El <b>grano entregado en una Cerealera solo se puede vender</b> (Ventas o Liquidación de cereal): no se puede convertir ni sacar/consumir manualmente desde ese depósito. El grano que está en el campo/depósitos propios sí se usa para <b>consumo</b> (alimentar hacienda) o conversión a semilla. También sumamos <b>🔀 Reubicar categoría</b>: cambiar la categoría/familia de <b>varios artículos a la vez</b> (ej. mover una semilla que quedó en Insumos a Cereales / Granos). <b>Arreglo:</b> al cargar un <b>insumo en una labor</b>, el buscador ahora respeta el catálogo (solo artículos, agrupados por categoría, sin animales de hacienda).' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'📊 v2.10.3 — Dashboard: el stock de granos (soja, maíz…) ya se ve bien',
       desc:'<b>Corregido:</b> el KPI <b>Stock granos</b> del Inicio y del Dashboard no sumaba los productos cargados como <b>"granos"</b> (solo tomaba los marcados como "cereal"). Ahora cuenta cualquier producto de la categoría <b>Cereales / Granos</b> (soja, maíz, trigo, etc.), lo determine por su categoría o por el árbol. También se unificó el criterio de <b>Hacienda</b> en los tableros.' },
@@ -19308,8 +19308,16 @@ function laPickLabor() {
   laRecalc();
 }
 function laAddIns(ins = { productoId:'', cantidad:0, precioUnit:0 }) {
-  const productos = state.cache.productos || [];
-  const opts = productos.map(p => `<option value="${p.id}" data-prec="${(p.ultimoCostoCompra ?? p.precioReferencia ?? '')}" data-uni="${esc(p.unidad||'')}">${esc(p.nombre)} (${esc(p.unidad||'')})</option>`).join('');
+  // Solo artículos del catálogo, SIN hacienda (los animales no son insumos de una labor),
+  // agrupados por su categoría del árbol (Insumos, Cereales / Granos para semilla propia, etc.).
+  const _sets = _catalogoArtSets();
+  const productos = (state.cache.productos || []).filter(p =>
+    !(p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda') && prodEnCatalogo(p, _sets));
+  const groups = {};
+  productos.forEach(p => { const g = prodCategoriaRaiz(p) || 'Otros'; (groups[g] = groups[g] || []).push(p); });
+  const optHtml = (p) => `<option value="${p.id}" ${p.id===ins.productoId?'selected':''} data-prec="${(p.ultimoCostoCompra ?? p.precioReferencia ?? '')}" data-uni="${esc(p.unidad||'')}">${esc(p.nombre)} (${esc(p.unidad||'')})</option>`;
+  const opts = Object.keys(groups).sort((a,b)=>a.localeCompare(b)).map(g =>
+    `<optgroup label="${esc(g)}">${groups[g].slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).map(optHtml).join('')}</optgroup>`).join('');
   const row = `<tr data-la>
     <td><select class="input text-sm" data-laf="productoId" onchange="laPickInsumo(this)"><option value="">— Elegí producto —</option>${opts}</select></td>
     <td><input class="input text-sm w-24 text-right" type="number" step="0.01" data-laf="cantidad" value="${ins.cantidad||0}" oninput="laRecalc()"/></td>
