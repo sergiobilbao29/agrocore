@@ -2479,6 +2479,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
+      titulo:'🔄 v2.11.0 — Traspaso entre artículos (grano → semilla propia) + reubicar categorías',
+      desc:'Nuevo en <b>Stock</b>: <b>🔄 Traspaso entre artículos</b> pasa una cantidad de un artículo a otro (una salida del origen + una entrada en el destino) <b>sin duplicar stock</b> — ideal para el grano propio que guardás y al año siguiente usás como <b>semilla</b> para resembrar, o para pasarlo a <b>alimento de hacienda</b>. Y <b>🔀 Reubicar categoría</b> te deja cambiar la categoría/familia de <b>varios artículos a la vez</b> (ej. mover una semilla que quedó en Insumos a Cereales / Granos). El grano cosechado sigue viviendo en Cereales / Granos (cuenta como stock de grano); el traspaso te arma la porción que apartás para sembrar.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'📊 v2.10.3 — Dashboard: el stock de granos (soja, maíz…) ya se ve bien',
       desc:'<b>Corregido:</b> el KPI <b>Stock granos</b> del Inicio y del Dashboard no sumaba los productos cargados como <b>"granos"</b> (solo tomaba los marcados como "cereal"). Ahora cuenta cualquier producto de la categoría <b>Cereales / Granos</b> (soja, maíz, trigo, etc.), lo determine por su categoría o por el árbol. También se unificó el criterio de <b>Hacienda</b> en los tableros.' },
@@ -5816,6 +5819,8 @@ pages.stock = async function() {
     <div class="mb-4 flex items-center justify-end gap-2 flex-wrap">
       <button class="btn btn-secondary text-sm" onclick="go('reporteMargen')">💹 Reporte de margen</button>
       <button class="btn btn-secondary text-sm" onclick="go('movimientos')">🔁 Ir a Movimientos</button>
+      ${can('stock:create')?`<button class="btn btn-secondary text-sm" onclick="traspasoForm()" title="Pasar cantidad de un artículo a otro (ej. grano cosechado → semilla propia) sin duplicar stock">🔄 Traspaso entre artículos</button>`:''}
+      ${can('stock:update')?`<button class="btn btn-secondary text-sm" onclick="reubicarForm()" title="Cambiar la categoría/familia de varios artículos a la vez">🔀 Reubicar categoría</button>`:''}
       ${can('stock:read')?`<button class="btn btn-secondary text-sm" onclick="stockControlMenu()" title="Exportar planilla para conteo físico e importar el conteo">📋 Control de stock</button>`:''}
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -5871,6 +5876,83 @@ pages.stock = async function() {
   render();
 };
 function stockFiltrosLimpiar() { state.stockFilter = { q:'', cats:[], fam:'', estado:'', depositoId:'' }; state._ms_stCat = false; pages.stock(); }
+
+// === TRASPASO / CONVERSIÓN entre artículos ===
+// Pasa una cantidad de un artículo a otro (salida del origen + entrada en el destino).
+// Ej: Soja (grano cosechado) → Soja (semilla propia) para resembrar, sin duplicar stock.
+function traspasoForm() {
+  const prods = (state.cache.productos||[]).filter(p => !(p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda'));
+  if (prods.length < 2) return toast('Necesitás al menos 2 artículos para un traspaso.','warn');
+  const deps = (state.cache.depositos||[]).filter(d => d.activo!==false);
+  const opts = prods.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join('');
+  openModal({
+    title:'🔄 Traspaso entre artículos', size:'max-w-lg',
+    body:`
+      <div class="text-[12px] text-slate-600 mb-3">Pasás una cantidad de un artículo a otro: se genera una <b>salida</b> del origen y una <b>entrada</b> en el destino. El stock total no se duplica. Ej: <b>Soja (grano)</b> → <b>Soja (semilla propia)</b> para resembrar, o grano → alimento de hacienda.</div>
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Artículo origen *</label><select id="tr-orig" class="input">${opts}</select></div>
+        <div><label class="label">Artículo destino *</label><select id="tr-dest" class="input">${opts}</select>
+          <div class="text-[10px] text-slate-400 mt-1">¿No existe el destino? Crealo primero en Stock → + Nuevo (ej. "Soja semilla" en Insumos).</div></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Cantidad *</label><input id="tr-cant" type="number" step="0.01" class="input" placeholder="0"/></div>
+          <div><label class="label">Fecha *</label><input id="tr-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        </div>
+        <div><label class="label">Depósito</label><select id="tr-dep" class="input"><option value="">🌱 Campo / general</option>${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}</select></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="traspasoSave()">💾 Registrar traspaso</button>`
+  });
+}
+async function traspasoSave() {
+  const orig=$('#tr-orig').value, dest=$('#tr-dest').value;
+  const cant=Number($('#tr-cant').value||0), fecha=$('#tr-fec').value, dep=$('#tr-dep')?.value||null;
+  if (!orig || !dest) return toast('Elegí origen y destino','warn');
+  if (orig===dest) return toast('El origen y el destino no pueden ser el mismo artículo','warn');
+  if (!(cant>0)) return toast('La cantidad debe ser mayor a 0','warn');
+  if (!fecha) return toast('Falta la fecha','warn');
+  const fechaIso=new Date(fecha+'T12:00:00').toISOString();
+  const nomOrig=(state.cache.productos||[]).find(p=>p.id===orig)?.nombre||'';
+  const nomDest=(state.cache.productos||[]).find(p=>p.id===dest)?.nombre||'';
+  try {
+    await api('/api/movimientos',{method:'POST',body:JSON.stringify({ productoId:orig, fecha:fechaIso, tipo:'egreso', motivo:'traspaso', cantidad:cant, depositoId:dep, referencia:'Traspaso → '+nomDest })});
+    await api('/api/movimientos',{method:'POST',body:JSON.stringify({ productoId:dest, fecha:fechaIso, tipo:'ingreso', motivo:'traspaso', cantidad:cant, depositoId:dep, referencia:'Traspaso ← '+nomOrig })});
+    toast('Traspaso registrado','success'); closeModal(); pages.stock();
+  } catch(e){ toast(e.message,'error'); }
+}
+
+// === REUBICAR artículos en lote (cambiar categoría/familia de varios a la vez) ===
+function reubicarForm() {
+  const prods = (state.cache.productos||[]).filter(p => !(p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda')).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  if (!prods.length) return toast('No hay artículos para reubicar.','warn');
+  openModal({
+    title:'🔀 Reubicar categoría / familia', size:'max-w-2xl',
+    body:`
+      <div class="text-[12px] text-slate-600 mb-2">Tildá los artículos y elegí a qué <b>categoría/familia</b> pasarlos. Ej: mover una semilla que quedó en Insumos a <b>Cereales / Granos</b>.</div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div><label class="label">Categoría / Familia destino *</label><select id="rb-fam" class="input">${catArtTreeOptions('', { rootLabel:'— Elegir categoría o familia —' })}</select></div>
+        <div class="flex items-end"><input id="rb-q" class="input" placeholder="🔎 Filtrar lista..." oninput="reubicarFiltrar()"/></div>
+      </div>
+      <div class="kpi p-0 overflow-hidden" style="max-height:340px;overflow:auto">
+        <table class="data text-sm"><thead><tr><th style="width:32px"></th><th>Artículo</th><th>Categoría actual</th></tr></thead>
+          <tbody id="rb-body">${prods.map(p=>{ const fam=p.categoriaArticuloId?_catNodo(p.categoriaArticuloId):null; return `<tr class="table-row" data-nom="${esc((p.nombre||'').toLowerCase())}"><td><input type="checkbox" class="rb-chk" value="${esc(p.id)}"/></td><td>${esc(p.nombre)}</td><td>${fam?`<span class="badge badge-blue text-[11px]">${esc(fam.nombre)}</span>`:`<span class="text-slate-500">${esc(p.categoria||'—')}</span>`}</td></tr>`; }).join('')}</tbody>
+        </table>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="reubicarSave()">💾 Reubicar seleccionados</button>`
+  });
+}
+function reubicarFiltrar() { const q=($('#rb-q')?.value||'').toLowerCase(); $$('#rb-body tr').forEach(tr=>{ tr.style.display = (!q || (tr.getAttribute('data-nom')||'').includes(q))?'':'none'; }); }
+async function reubicarSave() {
+  const famId=$('#rb-fam')?.value||'';
+  if (!famId) return toast('Elegí la categoría/familia destino','warn');
+  const ids=$$('#rb-body .rb-chk:checked').map(c=>c.value);
+  if (!ids.length) return toast('Tildá al menos un artículo','warn');
+  const flat=_flatCatDeArbol(famId);
+  let ok=0;
+  for (const id of ids) { try { await api('/api/productos/'+id,{method:'PUT',body:JSON.stringify({ categoriaArticuloId:famId, categoria:flat })}); ok++; } catch {} }
+  delete state.cache.productos;
+  toast(`Reubicados: ${ok} de ${ids.length}`,'success'); closeModal(); pages.stock();
+}
 
 // === CONTROL DE STOCK (planilla de conteo físico) ===
 // Exporta un Excel con productos × depósitos y una columna vacía "conteo" para
@@ -18789,7 +18871,7 @@ function insTipoChange(sel){
 function aplicForm(tipo, campanaId) {
   const campanas = state.cache.campanas || [];
   const insumosCat = state.cache.insumosCat || [];
-  const prodsIns = (state.cache.productos || []).filter(p => ['insumos','granos','combustibles','repuestos','otros'].includes((p.categoria||'').toLowerCase()));
+  const prodsIns = (state.cache.productos || []).filter(p => ['insumo','insumos','cereal','cereales','grano','granos','combustible','combustibles','herramienta','repuesto','repuestos','otro','otros'].includes((p.categoria||'').toLowerCase()));
   const itemNames = [...new Set([...insumosCat.map(x=>x.nombre), ...prodsIns.map(p=>p.nombre)].filter(Boolean))].sort();
   if (!campanas.length) return toast('No hay campañas — cargá una primero.','warn');
   openModal({
