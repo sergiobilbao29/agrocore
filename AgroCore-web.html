@@ -2466,6 +2466,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
+      titulo:'🗂️ v2.9.8 — Catálogos reflejan el árbol de Categorías (Repuestos incluido) + eliminar artículos',
+      desc:'El menú de <b>Catálogos</b> ahora muestra <b>exactamente las mismas categorías</b> que definís en <b>Categorías y Familias</b>: si creás una categoría propia (ej. <b>Repuestos</b>), aparece sola como pestaña y ahí ves/creás/editás/<b>eliminás</b> sus artículos. Se quitó el título “Clasificación y Familias” y se renombraron las pestañas para que coincidan (Insumos, Hacienda, Servicios y Labores). En <b>Stock</b> y <b>Movimientos</b> la columna/filtro <b>Categoría</b> ahora usa la <b>categoría raíz del árbol</b> (Insumos, Repuestos, Hacienda…), no las viejas etiquetas planas. Los artículos de prueba se pueden <b>eliminar</b> (o desactivar si tienen movimientos) desde la pestaña de su categoría.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'🛠️ v2.9.7 — Arreglos: alta de artículo desde la compra + artículos por familia visibles',
       desc:'<b>Corregido:</b> al crear un artículo nuevo desde una factura de compra ya <b>no se cierra la compra</b> (se abre en una ventana aparte) y el artículo <b>aparece</b> en Stock y en el buscador. Ahora <b>cualquier producto clasificado por familia se ve</b> (incluye categorías propias como <b>Repuestos</b>: cargalos desde Stock → “+ Nuevo” o desde una compra, eligiendo la familia). En <b>Stock</b> y <b>Movimientos</b> el nombre de hacienda ya no repite la especie (“Vaca” en vez de “Bovino - Vaca”), y en Movimientos la columna Familia muestra la especie real (Bovino), no “Hacienda”.' },
@@ -5723,8 +5726,11 @@ pages.stock = async function() {
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
   // Mapa nombre de categoría de hacienda -> especie (para mostrar la familia en Stock).
   const _hacEspMap = {}; (state.cache.catHacienda||[]).forEach(c => { _hacEspMap[(c.nombre||'').toLowerCase().trim()] = c.especie; });
+  // La CATEGORÍA que se muestra/filtra es la raíz del árbol de Categorías y Familias.
+  const _pmap = {}; (state.cache.productos||[]).forEach(x => { _pmap[x.id] = x; });
+  const catRaizStock = p => prodCategoriaRaiz({ ...p, categoriaArticuloId: (p.categoriaArticuloId ?? _pmap[p.id]?.categoriaArticuloId) });
 
-  const cats = [...new Set(rows.map(r=>r.categoria).filter(Boolean))].sort();
+  const cats = [...new Set(rows.map(catRaizStock).filter(Boolean))].sort();
   const bajoMin = rows.filter(p => p.bajoMinimo).length;
   const totalSKU = rows.length;
 
@@ -5740,7 +5746,7 @@ pages.stock = async function() {
       // Catálogo = maestro: ocultamos los productos que no están en el catálogo
       // (salvo que se active "ver fuera de catálogo"). No se borran, solo no se listan.
       if (_hayCat && !verFuera && !prodEnCatalogo(p, _sets)) return false;
-      if (catSel.length && !catSel.includes(p.categoria)) return false;
+      if (catSel.length && !catSel.includes(catRaizStock(p))) return false;
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
       if (!q) return true;
@@ -5757,7 +5763,7 @@ pages.stock = async function() {
           ${filtered.map(p => `
             <tr class="table-row">
               <td><b>${esc(p.esHacienda ? (p.categoriaHacienda || (p.nombre||'').split(' - ').pop().trim()) : p.nombre)}</b>${p.codigo?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.codigo)}</div>`:''}</td>
-              <td><span class="badge badge-blue">${esc(p.categoria)}</span>${(() => {
+              <td><span class="badge badge-blue">${esc(catRaizStock(p))}</span>${(() => {
                 if (p.esHacienda) {
                   const esp = _hacEspMap[(p.categoriaHacienda||p.nombre||'').toLowerCase().trim()];
                   if (esp) { const raiz = _especieRaizHac(esp); const sub = raiz + (raiz.toLowerCase()!==esp.toLowerCase()?' · '+esp:''); return `<div class="text-[10px] text-slate-500 mt-0.5">🐄 ${esc(sub)}</div>`; }
@@ -5964,11 +5970,15 @@ function _catArtTreeOptions_old(selectedId) {
   });
   return html;
 }
-async function prodForm(id=null) {
+async function prodForm(id=null, opts={}) {
   const it = id ? (state.cache.productos||[]).find(x=>x.id===id) || {} : {};
   if (!state.cache.catHacienda) { try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {} }
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
   const cats = state.cache.catHacienda || [];
+  state._prodAfter = opts.after || null;
+  // Al crear desde una categoría del árbol (ej. Repuestos) preseleccionamos esa categoría/familia.
+  const presetCat = (!id && opts.presetCatId) ? opts.presetCatId : (it.categoriaArticuloId||'');
+  const flatDefault = it.categoria || (!id && opts.presetCatId ? 'otro' : '');
   openModal({
     title: id?'Editar producto':'Nuevo producto',
     body: `
@@ -5977,7 +5987,7 @@ async function prodForm(id=null) {
         <div><label class="label">Categoría *</label>
           <select id="f-cat" class="input" onchange="_prodCatToggle()">
             <option value="">— Elegir —</option>
-            ${['cereal','hacienda','insumo','herramienta','combustibles','otro'].map(v=>`<option ${v===(it.categoria||'')?'selected':''}>${v}</option>`).join('')}
+            ${['cereal','hacienda','insumo','herramienta','combustibles','otro'].map(v=>`<option ${v===flatDefault?'selected':''}>${v}</option>`).join('')}
           </select>
         </div>
         <div><label class="label">Unidad *</label>${catSelect('f-u', 'Unidad de medida', it.unidad||'kg', { placeholder:'kg / L / u / …' })}</div>
@@ -5993,7 +6003,7 @@ async function prodForm(id=null) {
         <div><label class="label">Precio referencia</label><input id="f-pr" type="number" step="0.01" class="input" value="${it.precioReferencia||''}" /></div>
         <div class="col-span-2 border-t border-slate-200 pt-2 mt-1 text-[11px] font-semibold text-slate-500">🗂️ Datos de artículo (opcionales)</div>
         <div><label class="label">Categoría (árbol)</label>
-          <select id="f-catart" class="input">${catArtTreeOptions(it.categoriaArticuloId||'')}</select>
+          <select id="f-catart" class="input">${catArtTreeOptions(presetCat||'')}</select>
           <div class="text-[10px] text-slate-400 mt-1">Se administra en Categorías y Familias.</div>
         </div>
         <div><label class="label">Tipo de artículo</label>
@@ -6038,8 +6048,28 @@ async function prodSave(id) {
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
   try { await api('/api/productos'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
-    toast(id?'Actualizado':'Creado','success'); closeModal(); delete state.cache.productos; pages.stock();
+    toast(id?'Actualizado':'Creado','success'); closeModal(); delete state.cache.productos;
+    const after = state._prodAfter; state._prodAfter = null;
+    if (after==='catalogos') pages.catalogos(); else pages.stock();
   } catch (e) { toast(e.message,'error'); }
+}
+// Eliminar un producto/artículo del maestro (sirve para limpiar artículos de prueba o
+// categorías propias como Repuestos). Si tiene movimientos asociados el borrado físico
+// falla; en ese caso ofrecemos desactivarlo para que deje de aparecer.
+async function prodDel(id, nombre) {
+  if (!id) return;
+  if (!confirm(`¿Eliminar el artículo "${nombre||''}"?`)) return;
+  try {
+    await api('/api/productos/'+id, { method:'DELETE' });
+    toast('Artículo eliminado','success'); delete state.cache.productos; pages.catalogos();
+  } catch (e) {
+    // Casi siempre falla por tener movimientos/compras asociados (FK).
+    if (confirm('No se pudo eliminar (probablemente tiene movimientos o compras asociados).\n\n¿Querés DESACTIVARLO para que deje de aparecer en Stock, buscadores y catálogos?')) {
+      try { await api('/api/productos/'+id, { method:'PUT', body: JSON.stringify({ activo:false }) });
+        toast('Artículo desactivado','success'); delete state.cache.productos; pages.catalogos();
+      } catch (e2) { toast(e2.message,'error'); }
+    }
+  }
 }
 
 /* ----- MOVIMIENTOS ----- */
@@ -6089,7 +6119,7 @@ pages.movimientos = async function() {
   state.movFilter = { q:'', cats:[], tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
   if (!Array.isArray(state.movFilter.cats)) state.movFilter.cats = state.movFilter.cat ? [state.movFilter.cat] : [];
   delete state.movFilter.cat;
-  const cats = [...new Set(prods.map(p=>p.categoria).filter(Boolean))].sort();
+  const cats = [...new Set(prods.map(prodCategoriaRaiz).filter(Boolean))].sort();
   const motivos = [...new Set(rows.map(m=>m.motivo).filter(Boolean))].sort();
   // Set de depósitos compartidos (companyId null) para saber cuándo mostrar la empresa
   const depCompartidosIds = new Set(depositos.filter(d => d.compartido).map(d => d.id));
@@ -6100,7 +6130,7 @@ pages.movimientos = async function() {
     const filtered = rows.filter(m => {
       if (f.tipo && m.tipo !== f.tipo) return false;
       if ((f.cats||[]).length) {
-        const pcat = m._hac ? 'hacienda' : (prods.find(x=>x.id===m.productoId)?.categoria);
+        const pcat = m._hac ? 'Hacienda' : prodCategoriaRaiz(prods.find(x=>x.id===m.productoId));
         if (!f.cats.includes(pcat)) return false;
       }
       if (f.motivo && m.motivo !== f.motivo) return false;
@@ -19171,20 +19201,32 @@ async function laborSave() {
 /* ---------- CATALOGOS (maestros) con pestañas ---------- */
 // Grupos del menú de Catálogos (v2.9.0 — reorganización profesional). Cada tab
 // tiene un campo "g" que lo ubica en su grupo. No se elimina ninguna función.
+// Helpers de árbol compartidos (Catálogos / Stock / Movimientos) — la CATEGORÍA de un
+// producto es la RAÍZ de su rama en el árbol de Categorías y Familias.
+function _catNodo(id){ return (state.cache.categoriasArt||[]).find(c=>c.id===id)||null; }
+function _catRaizNodo(caId){ let c=_catNodo(caId); if(!c) return null; let i=0; while(c.padreId){ const p=_catNodo(c.padreId); if(!p||++i>30) break; c=p; } return c; }
+// Nombre de la categoría raíz del árbol para un producto (unifica Stock/Movimientos/Catálogos).
+function prodCategoriaRaiz(p){
+  if (!p) return '';
+  const r = p.categoriaArticuloId ? _catRaizNodo(p.categoriaArticuloId) : null;
+  if (r) return r.nombre;
+  if (p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda') return 'Hacienda';
+  const map = { insumo:'Insumos', cereal:'Cereales / Granos', combustibles:'Otros', herramienta:'Repuestos', otro:'Otros', otros:'Otros' };
+  return map[(p.categoria||'').toLowerCase()] || (p.categoria||'—');
+}
 const CAT_GRUPOS = [
   { id:'prod', label:'Productos y Servicios' },
-  { id:'clas', label:'Clasificación y Familias' },
   { id:'unid', label:'Unidades y Monedas' },
   { id:'fisc', label:'Tablas Fiscales / Admin' },
   { id:'ubic', label:'Ubicaciones' },
 ];
 const CAT_TABS = [
   { id:'cereales', label:'Cereales / Granos',   icon:'🌾', g:'prod', tipos:['Cereal'],             singular:'Cereal' },
-  { id:'insumos',  label:'Insumos (items)',     icon:'🥫', g:'prod', tipos:['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'], singular:'Insumo' },
-  { id:'labores',  label:'Labores',             icon:'🚜', g:'prod', tipos:['Labor'],              singular:'Labor' },
-  { id:'categAn',  label:'Animales',             icon:'🐂', g:'clas', tipos:['Categoría animal'], singular:'Animal' },
-  { id:'ciclos',   label:'Ciclos / Campañas',   icon:'📅', g:'clas', tipos:['Ciclo'],              singular:'Ciclo' },
-  { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', g:'clas', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
+  { id:'insumos',  label:'Insumos',             icon:'🥫', g:'prod', tipos:['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'], singular:'Insumo' },
+  { id:'labores',  label:'Servicios y Labores', icon:'🚜', g:'prod', tipos:['Labor'],              singular:'Labor' },
+  { id:'categAn',  label:'Hacienda',            icon:'🐂', g:'prod', tipos:['Categoría animal'], singular:'Animal' },
+  { id:'ciclos',   label:'Ciclos / Campañas',   icon:'📅', g:'fisc', tipos:['Ciclo'],              singular:'Ciclo' },
+  { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', g:'fisc', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
   { id:'unidades', label:'Unidades de medida',  icon:'📏', g:'unid', tipos:['Unidad de medida'],   singular:'Unidad' },
   { id:'monedas',  label:'Monedas',             icon:'💱', g:'unid', tipos:['Moneda'],             singular:'Moneda' },
   { id:'condIVA',  label:'Condición IVA',       icon:'🧾', g:'fisc', tipos:['Condición IVA'],      singular:'Condición' },
@@ -19354,34 +19396,66 @@ pages.catalogos = async function() {
   let monedasCat=[];
   try { monedasCat = (await cargarMonedas(true)) || []; } catch {}
 
+  // Árbol de Categorías y productos: el menú de "Productos y Servicios" refleja EXACTAMENTE
+  // las categorías raíz del árbol (Categorías y Familias). Las agro conocidas usan su
+  // pestaña especializada; las categorías propias (Repuestos, Otros, etc.) listan sus
+  // productos del maestro.
+  try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {}
+  const arbol = state.cache.categoriasArt || [];
+  let prods = [];
+  try { prods = await crudList('productos'); state.cache.productos = prods; } catch {}
+  const _norm = s => (s||'').toLowerCase().replace(/\s+/g,' ').trim();
+  const ROOT2TAB = { 'cereales / granos':'cereales', 'cereales':'cereales', 'insumos':'insumos', 'servicios y labores':'labores', 'labores':'labores', 'hacienda':'categAn', 'animales':'categAn' };
+  const staticProd = CAT_TABS.filter(t => t.g==='prod');
+  const roots = arbol.filter(c => !c.padreId && c.activo!==false)
+                     .sort((a,b)=> (a.orden||0)-(b.orden||0) || (a.nombre||'').localeCompare(b.nombre||''));
+  const prodTabs = []; const usados = new Set();
+  roots.forEach(r => {
+    const mapId = ROOT2TAB[_norm(r.nombre)];
+    if (mapId) { const st = staticProd.find(t=>t.id===mapId); if (st && !usados.has(st.id)) { prodTabs.push(st); usados.add(st.id); } }
+    else prodTabs.push({ id:'pc_'+r.id, label:r.nombre, icon:r.icono||'📦', g:'prod', esProdCat:true, catId:r.id, singular:'Artículo', tipos:[] });
+  });
+  staticProd.forEach(t => { if (!usados.has(t.id)) prodTabs.push(t); });
+  state._catProdTabs = prodTabs.filter(t => t.esProdCat).map(t => t.id);
+  const TABS = [...prodTabs, ...CAT_TABS.filter(t => t.g!=='prod')];
+  // Categoría raíz de cada producto (para agrupar en las pestañas propias).
+  const _bucket = p => { const r = p.categoriaArticuloId ? _catRaizNodo(p.categoriaArticuloId) : null; return r ? r.id : '__sin__'; };
+  const otrosTab = prodTabs.find(t => t.esProdCat && _norm(t.label)==='otros');
+
   const porTab = {};
-  CAT_TABS.forEach(t => { porTab[t.id] = rows.filter(r => t.tipos.includes(r.tipo)); });
+  TABS.forEach(t => {
+    if (t.esProdCat) {
+      porTab[t.id] = prods.filter(p => { const b=_bucket(p); return b===t.catId || (b==='__sin__' && otrosTab && otrosTab.id===t.id); });
+    } else porTab[t.id] = rows.filter(r => t.tipos.includes(r.tipo));
+  });
   // La pestaña Insumos es dinámica: incluye toda fila cuyo tipo sea un "Tipo de insumo".
   porTab.insumos = rows.filter(r => tiposInsumoNombres().includes(r.tipo));
   porTab.categAn = configAnimales;
   porTab.monedas = monedasCat;
 
-  const tab = CAT_TABS.find(x=>x.id===state.catTab) || CAT_TABS[0];
+  if (!TABS.find(t => t.id===state.catTab)) state.catTab = TABS[0].id;
+  const tab = TABS.find(x=>x.id===state.catTab) || TABS[0];
   const esAnimales = tab.id==='categAn';
   const esMonedas = tab.id==='monedas';
+  const esProdCat = !!tab.esProdCat;
   const items = esAnimales
     ? configAnimales.slice().sort((a,b)=> (a.especie||'').localeCompare(b.especie||'') || (a.nombre||'').localeCompare(b.nombre||''))
     : esMonedas
     ? monedasCat.slice()
-    : porTab[tab.id].sort((a,b)=> (a.nombre||'').localeCompare(b.nombre||''));
+    : (porTab[tab.id]||[]).slice().sort((a,b)=> (a.nombre||'').localeCompare(b.nombre||''));
 
   // Dentro de una pestaña agrupamos por tipo real (útil en "Insumos" donde hay varios)
   const subgrupos = {};
   if (esAnimales) items.forEach(i => { (subgrupos[i.especie||'Otros'] = subgrupos[i.especie||'Otros'] || []).push(i); });
-  else if (esMonedas) { /* se renderiza aparte */ }
+  else if (esMonedas || esProdCat) { /* se renderiza aparte */ }
   else items.forEach(i => { (subgrupos[i.tipo] = subgrupos[i.tipo] || []).push(i); });
 
   // Sidebar vertical (desktop) + select desplegable (mobile), AGRUPADOS por familia.
   const sideHtml = CAT_GRUPOS.map(gr => {
-    const tabsG = CAT_TABS.filter(t => t.g === gr.id);
+    const tabsG = TABS.filter(t => t.g === gr.id);
     if (!tabsG.length) return '';
     const btns = tabsG.map(t => {
-      const n = porTab[t.id].length;
+      const n = (porTab[t.id]||[]).length;
       const active = state.catTab === t.id;
       return `<button class="cat-side-item ${active?'active':''}" onclick="catSwitch('${t.id}')" title="${esc(t.label)}">
                 <span class="cat-side-ico">${t.icon||'📚'}</span>
@@ -19395,10 +19469,10 @@ pages.catalogos = async function() {
   const selectHtml = `
     <select class="cat-select" onchange="catSwitch(this.value)">
       ${CAT_GRUPOS.map(gr => {
-        const tabsG = CAT_TABS.filter(t => t.g === gr.id);
+        const tabsG = TABS.filter(t => t.g === gr.id);
         if (!tabsG.length) return '';
         return `<optgroup label="${esc(gr.label)}">${tabsG.map(t => {
-          const n = porTab[t.id].length;
+          const n = (porTab[t.id]||[]).length;
           return `<option value="${t.id}" ${state.catTab===t.id?'selected':''}>${t.icon} ${esc(t.label)} (${n})</option>`;
         }).join('')}</optgroup>`;
       }).join('')}
@@ -19470,11 +19544,33 @@ pages.catalogos = async function() {
             <div class="font-bold text-slate-800 text-base md:text-lg">${esc(tab.label)}</div>
             <div class="text-[11px] md:text-xs text-slate-600">${items.length} ${items.length===1?'ítem cargado':'ítems cargados'} · disponibles en todo el sistema</div>
           </div>
-          ${can('catalogos:create')||can('produccion:create')
-            ? `<button class="btn btn-primary text-sm whitespace-nowrap" onclick='${esAnimales?'hacCatForm(null,true)':esMonedas?'monedaCatForm()':`catForm(null,"${tab.id}")`}'>+ Nuevo ${esc(tab.singular)}</button>` : ''}
+          ${(esProdCat ? (can('stock:create')) : (can('catalogos:create')||can('produccion:create')))
+            ? `<button class="btn btn-primary text-sm whitespace-nowrap" onclick='${esAnimales?'hacCatForm(null,true)':esMonedas?'monedaCatForm()':esProdCat?`prodForm(null,{presetCatId:"${tab.catId}",after:"catalogos"})`:`catForm(null,"${tab.id}")`}'>+ Nuevo ${esc(tab.singular)}</button>` : ''}
         </div>
 
-        ${esMonedas ? `
+        ${esProdCat ? `
+          <div class="text-[11px] text-slate-500 mb-2">Artículos de la categoría <b>${esc(tab.label)}</b> del árbol. Se usan en compras, ventas y stock. Podés crear, editar o eliminar desde acá.</div>
+          ${items.length===0
+            ? `<div class="stub-card">No hay artículos en <b>${esc(tab.label)}</b> todavía. Usá "+ Nuevo" para crear uno${otrosTab&&otrosTab.id===tab.id?', o vinculá artículos existentes a una familia desde Categorías y Familias':''}.</div>`
+            : `<div class="kpi p-0 overflow-hidden mb-3">
+                <table class="data">
+                  <thead><tr><th>Artículo</th><th>Familia</th><th>Unidad</th><th>Estado</th><th></th></tr></thead>
+                  <tbody>
+                    ${items.map(p => { const fam=p.categoriaArticuloId?_catNodo(p.categoriaArticuloId):null; return `
+                      <tr class="table-row">
+                        <td class="font-semibold text-slate-800">${esc(p.nombre)}${p.sku?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.sku)}</div>`:''}</td>
+                        <td>${fam?`<span class="badge badge-blue text-[11px]">${esc(fam.nombre)}</span>`:'<span class="text-slate-300">—</span>'}</td>
+                        <td class="text-slate-600">${esc(p.unidad||'—')}</td>
+                        <td>${p.activo===false?'<span class="badge badge-gray">Inactivo</span>':'<span class="badge badge-green">Activo</span>'}</td>
+                        <td class="text-right whitespace-nowrap">
+                          ${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='prodForm(${JSON.stringify(p.id)},{after:"catalogos"})'>✏️</button>`:''}
+                          ${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='prodDel(${JSON.stringify(p.id)},${JSON.stringify(p.nombre)})'>🗑️</button>`:''}
+                        </td>
+                      </tr>`; }).join('')}
+                  </tbody>
+                </table>
+              </div>`}
+        ` : esMonedas ? `
           <div class="text-[11px] text-slate-500 mb-2">Las monedas <b>predefinidas</b> (USD, EUR, granos) ya vienen y se actualizan solas a diario. Podés crear <b>monedas propias</b> y elegir su fuente de cotización automática (dólar/pizarra) o dejarla manual. Estas monedas se usan en compras, ventas, cuenta corriente, pagos/cobros y flujo de fondos.</div>
           <div class="kpi p-0 overflow-hidden mb-3">
             <table class="data">
