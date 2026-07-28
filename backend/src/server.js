@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.9.2';
+const AGROCORE_VERSION = '2.9.3';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2378,14 +2378,17 @@ app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('
     // (Tipos de insumo y Especies), así el árbol refleja su clasificación existente.
     const cats = await prisma.catalogo.findMany({ where: { companyId: req.companyId, activo: true } });
     const uniqOrd = (arr) => [...new Set(arr.map(x => (x || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-    const tipos = uniqOrd(cats.filter(c => c.tipo === 'Tipo de insumo').map(c => c.nombre));
+    // Semillas es su propia categoría (no una familia de Insumos). Curasemilla sí es insumo.
+    const esSemilla = (n) => /^semillas?$/i.test((n || '').trim());
+    const tipos = uniqOrd(cats.filter(c => c.tipo === 'Tipo de insumo').map(c => c.nombre)).filter(n => !esSemilla(n));
     const especies = uniqOrd(cats.filter(c => c.tipo === 'Especie').map(c => c.nombre));
-    const insumosHijos  = tipos.length    ? tipos    : ['Herbicidas', 'Insecticidas', 'Fungicidas', 'Fertilizantes', 'Semillas', 'Coadyuvantes', 'Combustibles y Lubricantes'];
+    const insumosHijos  = tipos.length    ? tipos    : ['Herbicidas', 'Insecticidas', 'Fungicidas', 'Fertilizantes', 'Coadyuvantes', 'Combustibles y Lubricantes'];
     const haciendaHijos = especies.length ? especies : ['Bovinos', 'Ovinos', 'Caprinos', 'Equinos', 'Porcinos'];
 
     // Categoría (raíz) -> Familias (hijos). Producto/Item queda en el 3er nivel (catálogo).
     const arbol = [
       { nombre: 'Insumos', icono: '🌱', hijos: insumosHijos },
+      { nombre: 'Semillas', icono: '🌱', hijos: [] },
       { nombre: 'Cereales / Granos', icono: '🌾', hijos: ['Fina', 'Gruesa'] },
       { nombre: 'Hacienda', icono: '🐄', hijos: haciendaHijos },
       { nombre: 'Servicios y Labores', icono: '🚜', hijos: ['De Campaña', 'De Animales', 'Externos'] },

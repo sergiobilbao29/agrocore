@@ -2443,6 +2443,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
+      titulo:'🐄 v2.9.3 — Animales por Familia + Semillas como categoría propia',
+      desc:'En el catálogo de <b>Animales</b> se sacó el campo "Especie" y se reemplazó por <b>Familia</b> (que sale del árbol de Hacienda: Bovinos, Ovinos…, y podés anidar razas como subfamilia). Se sigue guardando internamente para que la matriz de kg/peso funcione igual. Además, al <b>regenerar el árbol</b>, <b>Semillas</b> ahora es una <b>categoría propia</b> (ya no una familia de Insumos). Así se completa la unificación: insumos, labores, animales y cereales se clasifican por el árbol de Categorías y Familias.' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🌳 v2.9.2 — Árbol de categorías totalmente editable (sin límite de niveles)',
       desc:'Ahora armás el <b>árbol que quieras</b>: Categoría → Familia → Subfamilia… con la profundidad que necesites (ej. Hacienda → Bovinos → Angus). Podés colgar cada nodo de cualquier otro. En <b>Catálogo</b>, el ítem final elige su Familia del árbol completo (anidado). Además, en <b>Insumos</b> y <b>Labores</b> se sacó el campo "Tipo" (era redundante): la <b>Familia</b> es la clasificación (en Insumos, el tipo se deriva solo de la familia). Y renombramos la pestaña "Categorías de animales" a <b>Animales</b>.' },
     { tag:'Mejora', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/07/2026',
@@ -12146,25 +12149,42 @@ async function hacCatManager(){
         ${can('stock:create')?`<button class="btn btn-primary text-xs flex-shrink-0" onclick="hacCatForm()">+ Nueva</button>`:''}
       </div>
       <div class="overflow-auto" style="max-height:55vh">
-      <table class="w-full text-sm"><thead class="text-xs uppercase text-slate-500 sticky top-0 bg-white"><tr><th class="text-left p-2">Categoría</th><th class="text-left p-2">Especie</th><th class="text-left p-2">Rango kg</th><th class="text-left p-2">Peso prom.</th><th class="text-left p-2">Puede pasar a</th><th></th></tr></thead>
+      <table class="w-full text-sm"><thead class="text-xs uppercase text-slate-500 sticky top-0 bg-white"><tr><th class="text-left p-2">Animal</th><th class="text-left p-2">Familia</th><th class="text-left p-2">Rango kg</th><th class="text-left p-2">Peso prom.</th><th class="text-left p-2">Puede pasar a</th><th></th></tr></thead>
       <tbody>${cats.map(fila).join('')||'<tr><td colspan="6" class="p-3 text-center text-slate-400">Sin categorías configuradas</td></tr>'}</tbody></table>
       </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
   });
 }
-function hacCatForm(id=null, fromCatalogo=false){
+async function hacCatForm(id=null, fromCatalogo=false){
   const it = id ? (state.cache.catHacienda||[]).find(x=>x.id===id)||{} : {};
   const todas = (state.cache.catHacienda||[]).map(c=>c.nombre).filter(n=>n && n!==it.nombre);
   const trans = Array.isArray(it.transiciones)?it.transiciones:[];
-  const especiesCat = (typeof catByTipo==='function'?catByTipo('Especie'):[]).map(x=>x.nombre).filter(Boolean);
-  const especies = [...new Set(especiesCat.concat((state.cache.catHacienda||[]).map(c=>c.especie).filter(Boolean)).concat(['Bovino','Porcino','Ovino','Equino','Caprino']))];
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
+  // Las FAMILIAS de Hacienda (del árbol) reemplazan al viejo campo "Especie".
+  const arb = state.cache.categoriasArt || [];
+  const hacRoot = arb.find(c=>!c.padreId && (c.nombre||'').toLowerCase()==='hacienda');
+  let famOpts = '';
+  const walkFam = (pid, depth) => {
+    arb.filter(c=>c.padreId===pid).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||'')).forEach(n=>{
+      const pad = '   '.repeat(depth) + (depth>0?'↳ ':'');
+      famOpts += `<option value="${esc(n.nombre)}" ${n.nombre===(it.especie||'')?'selected':''}>${pad}${esc(n.nombre)}</option>`;
+      walkFam(n.id, depth+1);
+    });
+  };
+  if (hacRoot) walkFam(hacRoot.id, 0);
+  if (!famOpts) { // fallback si el árbol no tiene familias de Hacienda todavía
+    const esp = [...new Set(((typeof catByTipo==='function'?catByTipo('Especie'):[]).map(x=>x.nombre)).concat(['Bovino','Porcino','Ovino','Equino','Caprino']).filter(Boolean))];
+    famOpts = esp.map(e=>`<option value="${esc(e)}" ${e===(it.especie||'')?'selected':''}>${esc(e)}</option>`).join('');
+  }
+  if (it.especie && famOpts.indexOf('value="'+it.especie+'"') === -1) famOpts = `<option value="${esc(it.especie)}" selected>${esc(it.especie)} (actual)</option>` + famOpts;
   openModal({
-    title: id?'Editar categoría de animal':'Nueva categoría de animal', size:'max-w-lg',
+    title: id?'Editar animal':'Nuevo animal', size:'max-w-lg',
     body:`
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Nombre *</label><input id="hc-nom" class="input" value="${esc(it.nombre||'')}" placeholder="Ej: Novillito"/></div>
-        <div><label class="label">Especie *</label>
-          <select id="hc-esp" class="input">${especies.map(e=>`<option value="${esc(e)}" ${e===(it.especie||'')?'selected':''}>${esc(e)}</option>`).join('')}<option value="${esc(it.especie||'')}" ${especies.includes(it.especie)?'style="display:none"':''} ${it.especie&&!especies.includes(it.especie)?'selected':''}>${esc(it.especie||'')}</option></select>
+        <div><label class="label">Familia *</label>
+          <select id="hc-esp" class="input">${famOpts}</select>
+          <div class="text-[10px] text-slate-400 mt-1">Se administra en Categorías y Familias (Hacienda → Bovinos, Ovinos…).</div>
         </div>
         <div><label class="label">Kg mínimo</label><input id="hc-kgmin" type="number" step="0.1" class="input" value="${it.kgMin??''}"/></div>
         <div><label class="label">Kg máximo</label><input id="hc-kgmax" type="number" step="0.1" class="input" value="${it.kgMax??''}"/></div>
@@ -12191,7 +12211,7 @@ async function hacCatSave(id, fromCatalogo=false){
     transiciones: Array.from($('#hc-trans').selectedOptions).map(o=>o.value),
   };
   if (!data.nombre)  return toast('Falta el nombre','warn');
-  if (!data.especie) return toast('Falta la especie','warn');
+  if (!data.especie) return toast('Falta la familia','warn');
   try{ await api('/api/categorias-hacienda'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)}); delete state.cache.catHacienda; delete state.cache.productos; toast('Guardado','success'); _hacCatRefresh(fromCatalogo); }
   catch(e){ toast(e.message,'error'); }
 }
