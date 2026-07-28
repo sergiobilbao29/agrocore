@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.11.0';
+const AGROCORE_VERSION = '2.11.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9288,7 +9288,19 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
         try {
           const nro = r['Columna 1'] || r['Numero'];
           if (!nro) continue;
-          const estadoTxt = _normalizar(r['Destino del cheque'] || r['Estado'] || '');
+          // Estado: priorizamos el ESTADO FINAL del cheque endosado (Rechazado/Caducado)
+          // y si no, el destino (Endosado/Depositado/Vendido). Así no se pierden los
+          // rechazados/caducados.
+          const dest = _normalizar(r['Destino del cheque'] || '');
+          const fin  = _normalizar(r['Estado del cheque endosado'] || '');
+          const est0 = _normalizar(r['Estado'] || '');
+          let estadoCh;
+          if (fin.includes('rechaz') || est0.includes('rechaz')) estadoCh = 'rechazado';
+          else if (fin.includes('caduc') || est0.includes('caduc') || dest.includes('caduc')) estadoCh = 'rechazado';
+          else if (dest.includes('endosad')) estadoCh = 'endosado';
+          else if (dest.includes('depositad')) estadoCh = 'depositado';
+          else if (dest.includes('vendido') || dest.includes('cobrad') || dest.includes('pagad') || fin.includes('pagad') || fin.includes('cobrad')) estadoCh = 'cobrado';
+          else estadoCh = 'en_cartera';
           await prisma.cheque.create({ data: {
             companyId: req.companyId,
             tipo: 'terceros',
@@ -9300,11 +9312,16 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
             monto: _parseMonto(r['Importe']) || 0,
             librador: r['Titular'] || null,
             beneficiario: r['A quien se endoso'] || null,
-            estado: estadoTxt.includes('endosad') ? 'endosado'
-                  : estadoTxt.includes('depositad') ? 'depositado'
-                  : estadoTxt.includes('cobrad') || estadoTxt.includes('pagad') ? 'cobrado'
-                  : 'en_cartera',
-            observaciones: [r['empresa'] && `Empresa: ${r['empresa']}`, r['Endosante'] && `Endosante: ${r['Endosante']}`, r['Fecha del movimiento del endoso'] && `Endoso: ${r['Fecha del movimiento del endoso']}`].filter(Boolean).join(' · ') || null,
+            estado: estadoCh,
+            observaciones: [
+              r['empresa'] && `Empresa: ${r['empresa']}`,
+              r['Cuit titular'] && `CUIT: ${r['Cuit titular']}`,
+              r['Endosante'] && `Endosante: ${r['Endosante']}`,
+              r['Destino del cheque'] && `Destino: ${r['Destino del cheque']}`,
+              r['A quien se endoso'] && `A: ${r['A quien se endoso']}`,
+              r['Fecha del movimiento del endoso'] && `Endoso: ${r['Fecha del movimiento del endoso']}`,
+              r['Estado del cheque endosado'] && `Estado endoso: ${r['Estado del cheque endosado']}`,
+            ].filter(Boolean).join(' · ') || null,
           }});
           ok++;
         } catch (e) { errores.push({ hoja: sh2, fila: i+2, error: e.message }); }
@@ -9330,7 +9347,7 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
             monto: _parseMonto(r['Importe']) || 0,
             beneficiario: r['Beneficiario'] || null,
             estado: _normalizar(r['Estado'] || '').includes('pagad') ? 'pagado' : 'emitido',
-            observaciones: r['empresa'] ? `Empresa: ${r['empresa']}` : null,
+            observaciones: [r['empresa'] && `Empresa: ${r['empresa']}`, (r['Cuit']||r['Cuit Beneficiario']) && `CUIT: ${r['Cuit']||r['Cuit Beneficiario']}`].filter(Boolean).join(' · ') || null,
           }});
           ok++;
         } catch (e) { errores.push({ hoja: sh3, fila: i+2, error: e.message }); }
