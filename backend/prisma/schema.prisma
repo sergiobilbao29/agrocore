@@ -44,6 +44,7 @@ model Company {
   userCompanies   UserCompany[]
   campos          Campo[]
   productos       Producto[]
+  categoriasArticulo CategoriaArticulo[]
   movimientos     Movimiento[]
   clientes        Cliente[]
   proveedores     Proveedor[]
@@ -370,7 +371,15 @@ model Producto {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  // v2.8.0 - Atributos de articulo (estandar ERP). Opcionales / aditivos.
+  sku             String?
+  codigoBarras    String?
+  ivaDefault      Float?
+  tipoArticulo    String?
+  categoriaArticuloId String?
+
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  categoriaArticulo CategoriaArticulo? @relation(fields: [categoriaArticuloId], references: [id], onDelete: SetNull)
   movimientos     Movimiento[]
   insumosAplicados InsumoAplicado[]
   itemsFactura    FacturaItem[]
@@ -378,6 +387,30 @@ model Producto {
 
   @@index([companyId])
   @@index([categoria])
+  @@index([categoriaArticuloId])
+}
+
+// v2.8.0 - Arbol de categorias/familias de articulos (padre/hijo), editable por
+// empresa. Agrupa Productos de forma jerarquica y multi-rubro. No reemplaza al
+// campo Producto.categoria (compat); lo complementa.
+model CategoriaArticulo {
+  id        String   @id @default(cuid())
+  companyId String
+  nombre    String
+  padreId   String?
+  icono     String?
+  orden     Int      @default(0)
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  padre     CategoriaArticulo?  @relation("CategoriaArticuloArbol", fields: [padreId], references: [id], onDelete: SetNull)
+  hijos     CategoriaArticulo[] @relation("CategoriaArticuloArbol")
+  productos Producto[]
+
+  @@index([companyId])
+  @@index([padreId])
 }
 
 model Movimiento {

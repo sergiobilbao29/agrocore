@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.7.0';
+const AGROCORE_VERSION = '2.8.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2307,9 +2307,108 @@ mountCrud({
     categoriaHacienda: z.string().nullable().optional(),
     observaciones: z.string().nullable().optional(),
     activo: z.boolean().optional(),
+    // v2.8.0 — atributos de artículo (estándar ERP)
+    sku: z.string().nullable().optional(),
+    codigoBarras: z.string().nullable().optional(),
+    ivaDefault: z.number().nullable().optional(),
+    tipoArticulo: z.string().nullable().optional(),
+    categoriaArticuloId: z.string().nullable().optional(),
   }),
   orderBy: { nombre: 'asc' },
-  searchFields: ['nombre', 'categoria'],
+  searchFields: ['nombre', 'categoria', 'sku', 'codigoBarras'],
+});
+
+// ============================================================
+// v2.8.0 — Árbol de CATEGORÍAS/FAMILIAS de artículos (padre/hijo), editable por
+// empresa. CRUD estándar + endpoint de siembra (crea el árbol agro por defecto
+// y mapea los productos existentes por su categoría plana).
+// ============================================================
+mountCrud({
+  path: 'categorias-articulo', modelName: 'categoriaArticulo', perm: 'catalogos',
+  schema: z.object({
+    nombre: z.string().min(1),
+    padreId: z.string().nullable().optional(),
+    icono: z.string().nullable().optional(),
+    orden: z.number().int().optional(),
+    activo: z.boolean().optional(),
+  }),
+  orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+  searchFields: ['nombre'],
+  readOpen: true,   // leer abierto a cualquier usuario; crear/editar/borrar requiere 'catalogos'
+});
+
+// Al borrar un nodo, dejamos a sus hijos como raíz y desvinculamos los productos
+// (no hay FK en la base; lo hacemos a mano para no dejar referencias colgadas).
+app.post('/api/categorias-articulo/:id/preparar-borrado', requireCompany, requirePermission('catalogos:delete'), async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    await prisma.$transaction([
+      prisma.categoriaArticulo.updateMany({ where: { companyId: req.companyId, padreId: id }, data: { padreId: null } }),
+      prisma.producto.updateMany({ where: { companyId: req.companyId, categoriaArticuloId: id }, data: { categoriaArticuloId: null } }),
+    ]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Mapea la categoría plana de un producto a la familia madre del árbol.
+function _familiaMadreDeCategoria(cat) {
+  const c = (cat || '').toLowerCase().trim();
+  if (['granos', 'grano', 'cereales', 'cereal'].includes(c)) return 'Cereales / Granos';
+  if (c === 'hacienda') return 'Hacienda';
+  if (['servicios', 'servicio', 'labor', 'labores', 'flete', 'fletes'].includes(c)) return 'Servicios y Labores';
+  if (['insumos', 'insumo', 'combustibles', 'combustible'].includes(c)) return 'Insumos';
+  return 'Otros';
+}
+function _tipoArticuloDeCategoria(cat) {
+  const c = (cat || '').toLowerCase().trim();
+  if (['granos', 'grano', 'cereales', 'cereal'].includes(c)) return 'cereal';
+  if (['servicios', 'servicio', 'labor', 'labores', 'flete', 'fletes'].includes(c)) return 'servicio';
+  return 'stockeable';
+}
+
+// Siembra el árbol agro por defecto para una empresa (solo si está vacío) y
+// mapea los productos existentes a su familia madre + les setea el tipo de artículo.
+app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('catalogos:create'), async (req, res, next) => {
+  try {
+    const yaHay = await prisma.categoriaArticulo.count({ where: { companyId: req.companyId } });
+    if (yaHay > 0) return res.json({ ok: true, sembrado: false, total: yaHay });
+    // Árbol por defecto (agro). Editable después por el usuario.
+    const arbol = [
+      { nombre: 'Insumos', icono: '🌱', hijos: ['Fitosanitarios', 'Fertilizantes', 'Semillas', 'Combustibles y Lubricantes'] },
+      { nombre: 'Cereales / Granos', icono: '🌾', hijos: ['Cereales de Verano', 'Cereales de Invierno'] },
+      { nombre: 'Hacienda', icono: '🐄', hijos: ['Bovinos', 'Otros animales'] },
+      { nombre: 'Servicios y Labores', icono: '🚜', hijos: ['Siembra', 'Pulverización', 'Cosecha', 'Fletes'] },
+      { nombre: 'Otros', icono: '📦', hijos: [] },
+    ];
+    const madres = {};
+    await prisma.$transaction(async (tx) => {
+      let orden = 0;
+      for (const fam of arbol) {
+        const madre = await tx.categoriaArticulo.create({ data: {
+          companyId: req.companyId, nombre: fam.nombre, icono: fam.icono, orden: orden++, activo: true,
+        }});
+        madres[fam.nombre] = madre.id;
+        let ordenHijo = 0;
+        for (const hijo of fam.hijos) {
+          await tx.categoriaArticulo.create({ data: {
+            companyId: req.companyId, nombre: hijo, padreId: madre.id, orden: ordenHijo++, activo: true,
+          }});
+        }
+      }
+      // Mapear productos existentes a su familia madre + tipo de artículo.
+      const prods = await tx.producto.findMany({ where: { companyId: req.companyId } });
+      for (const p of prods) {
+        const madreNombre = _familiaMadreDeCategoria(p.categoria);
+        const madreId = madres[madreNombre] || madres['Otros'];
+        await tx.producto.update({ where: { id: p.id }, data: {
+          categoriaArticuloId: p.categoriaArticuloId || madreId,
+          tipoArticulo: p.tipoArticulo || _tipoArticuloDeCategoria(p.categoria),
+        }});
+      }
+    });
+    const total = await prisma.categoriaArticulo.count({ where: { companyId: req.companyId } });
+    res.json({ ok: true, sembrado: true, total });
+  } catch (e) { next(e); }
 });
 
 mountCrud({

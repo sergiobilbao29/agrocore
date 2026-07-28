@@ -987,6 +987,7 @@ const MODULES = [
 
   // ===== ADMINISTRACIÓN =====
   { id:'catalogos',     label:'Catálogos',            icon:'📚', perm:'produccion:read', section:'Administración' },
+  { id:'categoriasArt', label:'Categorías y Familias', icon:'🗂️', perm:'produccion:read', section:'Administración' },
   { id:'usuarios',      label:'Usuarios',             icon:'👤', perm:'*',               section:'Administración' },
   { id:'roles',         label:'Roles y permisos',     icon:'🔐', perm:'*',               section:'Administración' },
   { id:'empresas',      label:'Empresas',             icon:'🏢', perm:'*',               section:'Administración' },
@@ -2441,6 +2442,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/07/2026',
+      titulo:'🗂️ v2.8.0 — Árbol de Categorías y Familias + atributos de artículo',
+      desc:'Nueva sección <b>Administración → Categorías y Familias</b>: un <b>árbol editable</b> de categorías (familia madre → subcategorías) que podés adaptar a tu rubro. La primera vez se crea solo con un árbol agro por defecto (Insumos, Cereales, Hacienda, Servicios, Otros) y <b>mapea tus productos existentes</b> a su familia. Además, la ficha de <b>Producto</b> ahora tiene los campos del estándar ERP: <b>Categoría del árbol, Tipo de artículo (Stockeable/Cereal/Servicio), SKU/código interno, código de barras e IVA por defecto</b>. Todo es opcional y aditivo: la categoría "vieja" de cada producto sigue funcionando igual. (Incluye migración de base de datos, sin borrar nada.)' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/07/2026',
       titulo:'🗂️ v2.7.0 — Buscador de artículos por categoría en Compras y Ventas',
       desc:'En la carga de <b>Compras</b> y <b>Ventas</b>, arriba de la tabla de items ahora hay un <b>filtro por categoría</b> (Todos · Insumos · Cereales · Hacienda · Servicios · Otros): elegís la familia y en cada renglón el buscador te sugiere solo esos artículos (o escribís las primeras letras). Se terminó la lista gigante mezclada. Además, el <b>“+ Crear producto nuevo”</b> se rediseñó: ahora pide <b>Nombre → Categoría → Unidad → IVA</b> (con el IVA aplicado al renglón), más claro y ordenado. Es el primer paso hacia el maestro único de Artículos + categorías jerárquicas.' },
@@ -5853,9 +5857,22 @@ async function stockControlSubir(inp) {
 
 function movEntrada(prodId) { movForm(prodId, 'entrada'); }
 function movSalida(prodId) { movForm(prodId, 'salida'); }
+// Opciones del árbol de categorías (raíces + hijos indentados) para un <select>.
+function catArtTreeOptions(selectedId) {
+  const cats = state.cache.categoriasArt || [];
+  const raices = cats.filter(c=>!c.padreId).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
+  let html = '<option value="">— Sin categoría del árbol —</option>';
+  raices.forEach(r => {
+    html += `<option value="${esc(r.id)}" ${r.id===selectedId?'selected':''}>${r.icono?esc(r.icono)+' ':''}${esc(r.nombre)}</option>`;
+    cats.filter(h=>h.padreId===r.id).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''))
+      .forEach(h => { html += `<option value="${esc(h.id)}" ${h.id===selectedId?'selected':''}>  ↳ ${esc(h.nombre)}</option>`; });
+  });
+  return html;
+}
 async function prodForm(id=null) {
   const it = id ? (state.cache.productos||[]).find(x=>x.id===id) || {} : {};
   if (!state.cache.catHacienda) { try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {} }
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
   const cats = state.cache.catHacienda || [];
   openModal({
     title: id?'Editar producto':'Nuevo producto',
@@ -5879,6 +5896,23 @@ async function prodForm(id=null) {
         </div>
         <div><label class="label">Stock mínimo</label><input id="f-min" type="number" step="0.01" class="input" value="${it.stockMinimo||0}" /></div>
         <div><label class="label">Precio referencia</label><input id="f-pr" type="number" step="0.01" class="input" value="${it.precioReferencia||''}" /></div>
+        <div class="col-span-2 border-t border-slate-200 pt-2 mt-1 text-[11px] font-semibold text-slate-500">🗂️ Datos de artículo (opcionales)</div>
+        <div><label class="label">Categoría (árbol)</label>
+          <select id="f-catart" class="input">${catArtTreeOptions(it.categoriaArticuloId||'')}</select>
+          <div class="text-[10px] text-slate-400 mt-1">Se administra en Categorías y Familias.</div>
+        </div>
+        <div><label class="label">Tipo de artículo</label>
+          <select id="f-tipoart" class="input">
+            ${[['','— Sin definir —'],['stockeable','📦 Stockeable (descuenta stock)'],['cereal','🌾 Cereal / Grano'],['servicio','🚜 Servicio / Labor (no descuenta stock)']].map(([v,l])=>`<option value="${v}" ${(it.tipoArticulo||'')===v?'selected':''}>${l}</option>`).join('')}
+          </select>
+        </div>
+        <div><label class="label">SKU / Código interno</label><input id="f-sku" class="input" value="${esc(it.sku||'')}" placeholder="Opcional"/></div>
+        <div><label class="label">Código de barras</label><input id="f-ean" class="input font-mono" value="${esc(it.codigoBarras||'')}" placeholder="EAN / opcional"/></div>
+        <div><label class="label">IVA por defecto</label>
+          <select id="f-ivadef" class="input">
+            ${[['','— Sin definir —'],['21','21%'],['10.5','10.5%'],['27','27%'],['0','0% / Exento']].map(([v,l])=>`<option value="${v}" ${String(it.ivaDefault??'')===v?'selected':''}>${l}</option>`).join('')}
+          </select>
+        </div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -5900,6 +5934,12 @@ async function prodSave(id) {
     precioReferencia: $('#f-pr').value ? Number($('#f-pr').value) : null,
     categoriaHacienda: (cat==='hacienda' && $('#f-cathac')?.value) ? $('#f-cathac').value : null,
     observaciones: $('#f-obs').value.trim()||null,
+    // v2.8.0 — atributos de artículo
+    categoriaArticuloId: $('#f-catart')?.value || null,
+    tipoArticulo: $('#f-tipoart')?.value || null,
+    sku: $('#f-sku')?.value.trim() || null,
+    codigoBarras: $('#f-ean')?.value.trim() || null,
+    ivaDefault: ($('#f-ivadef')?.value !== '' && $('#f-ivadef')?.value != null) ? Number($('#f-ivadef').value) : null,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
   try { await api('/api/productos'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
@@ -18995,6 +19035,125 @@ const CAT_TABS = [
 ];
 // Si la tab cacheada ya no existe (ej. se quitó "otros"), caer al primero válido
 if (!state.catTab || !CAT_TABS.find(t => t.id === state.catTab)) state.catTab = 'cereales';
+
+// ============================================================
+// v2.8.0 — CATEGORÍAS Y FAMILIAS (árbol de artículos, padre/hijo)
+// ============================================================
+pages.categoriasArt = async function() {
+  setHeader('Categorías y Familias', 'Organizá tus productos y servicios en un árbol de categorías (familia madre → subcategorías). Sirve para el agro o cualquier rubro.');
+  if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('categoriasArt','Categorías y Familias'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let cats = [];
+  try { cats = (await api('/api/categorias-articulo')).data || []; } catch (e) { return toast(e.message,'error'); }
+  // Auto-sembrar el árbol agro por defecto la primera vez (si el usuario puede crear).
+  if (!cats.length && can('catalogos:create')) {
+    try {
+      await api('/api/categorias-articulo/sembrar', { method:'POST', body: JSON.stringify({}) });
+      cats = (await api('/api/categorias-articulo')).data || [];
+      toast('Árbol de categorías inicializado','success');
+    } catch (e) { /* si falla, mostramos vacío */ }
+  }
+  state.cache.categoriasArt = cats;
+  catArtRender();
+};
+function catArtRender() {
+  const cats = state.cache.categoriasArt || [];
+  const raices = cats.filter(c => !c.padreId).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
+  const hijosDe = (id) => cats.filter(c => c.padreId === id).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
+  const puedeEditar = can('catalogos:update'), puedeCrear = can('catalogos:create'), puedeBorrar = can('catalogos:delete');
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${cats.length} categoría${cats.length===1?'':'s'} · ${raices.length} familia${raices.length===1?'':'s'} madre</div>
+      ${puedeCrear?`<button class="btn btn-primary" onclick="catArtForm(null, null)">+ Nueva familia</button>`:''}
+    </div>
+    <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mb-3">
+      💡 Estas categorías agrupan los artículos del maestro de Productos. Podés asignar la categoría de cada producto desde su ficha (Catálogos → Productos o al crearlo). El campo de categoría "vieja" sigue funcionando.
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      ${raices.map(r => {
+        const hijos = hijosDe(r.id);
+        return `<div class="kpi">
+          <div class="flex items-start justify-between gap-2">
+            <div class="font-bold text-slate-800">${r.icono?esc(r.icono)+' ':''}${esc(r.nombre)}${r.activo===false?' <span class="badge badge-gray text-[10px]">inactiva</span>':''}</div>
+            <div class="flex items-center gap-1 flex-shrink-0">
+              ${puedeCrear?`<button class="btn btn-ghost text-xs" title="Agregar subcategoría" onclick='catArtForm(null, ${JSON.stringify(r.id)})'>➕</button>`:''}
+              ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar" onclick='catArtForm(${JSON.stringify(r.id)}, null)'>✏️</button>`:''}
+              ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='catArtDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+            </div>
+          </div>
+          <div class="mt-2 pl-2 border-l-2 border-slate-100 space-y-1">
+            ${hijos.map(h => `<div class="flex items-center justify-between text-sm">
+              <span class="text-slate-700">${h.icono?esc(h.icono)+' ':'• '}${esc(h.nombre)}${h.activo===false?' <span class="badge badge-gray text-[10px]">inactiva</span>':''}</span>
+              <span class="flex items-center gap-1">
+                ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar" onclick='catArtForm(${JSON.stringify(h.id)}, null)'>✏️</button>`:''}
+                ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='catArtDel(${JSON.stringify(h.id)})'>🗑️</button>`:''}
+              </span>
+            </div>`).join('') || `<div class="text-[11px] text-slate-400">Sin subcategorías. ${puedeCrear?'Usá ➕ para agregar.':''}</div>`}
+          </div>
+        </div>`;
+      }).join('') || `<div class="kpi md:col-span-2 text-center text-slate-400 py-8">Sin categorías. Creá la primera familia con "+ Nueva familia".</div>`}
+    </div>`;
+}
+function catArtForm(id=null, padreIdDefault=null) {
+  const cats = state.cache.categoriasArt || [];
+  let c = { nombre:'', padreId: padreIdDefault, icono:'', activo:true, orden:0 };
+  if (id) { const cur = cats.find(x => x.id === id); if (cur) c = { ...c, ...cur }; }
+  // Padres posibles: las familias raíz (excepto el propio nodo, para no ciclar).
+  const raices = cats.filter(x => !x.padreId && x.id !== id);
+  openModal({
+    title: id?'Editar categoría':'Nueva categoría', size:'max-w-md',
+    body: `
+      <div><label class="label">Nombre *</label><input id="ca-nombre" class="input" value="${esc(c.nombre||'')}" placeholder="Ej: Fitosanitarios, Bovinos, Herramientas…"/></div>
+      <div class="mt-3"><label class="label">Depende de (familia madre)</label>
+        <select id="ca-padre" class="input">
+          <option value="">— Es una familia madre (raíz) —</option>
+          ${raices.map(r=>`<option value="${esc(r.id)}" ${c.padreId===r.id?'selected':''}>${r.icono?esc(r.icono)+' ':''}${esc(r.nombre)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mt-3">
+        <div><label class="label">Ícono (emoji)</label><input id="ca-icono" class="input" value="${esc(c.icono||'')}" maxlength="4" placeholder="Ej: 🌱"/></div>
+        <div><label class="label">Orden</label><input id="ca-orden" type="number" class="input" value="${c.orden||0}"/></div>
+      </div>
+      <div class="mt-3 flex items-center gap-2">
+        <input id="ca-act" type="checkbox" ${c.activo!==false?'checked':''}/>
+        <label for="ca-act">Activa</label>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick='catArtSave(${id?JSON.stringify(id):"null"})'>💾 Guardar</button>`
+  });
+}
+async function catArtSave(id) {
+  const nombre = ($('#ca-nombre')?.value||'').trim();
+  if (!nombre) return toast('Poné el nombre','warn');
+  const data = {
+    nombre,
+    padreId: $('#ca-padre')?.value || null,
+    icono: ($('#ca-icono')?.value||'').trim() || null,
+    orden: Number($('#ca-orden')?.value) || 0,
+    activo: $('#ca-act') ? !!$('#ca-act').checked : true,
+  };
+  try {
+    if (id) await api('/api/categorias-articulo/'+id, { method:'PUT', body: JSON.stringify(data) });
+    else    await api('/api/categorias-articulo',     { method:'POST', body: JSON.stringify(data) });
+    delete state.cache.categoriasArt;
+    toast('Guardado','success'); closeModal(); pages.categoriasArt();
+  } catch (e) { toast('No se pudo guardar: '+(e.message||e),'error'); }
+}
+async function catArtDel(id) {
+  const cats = state.cache.categoriasArt || [];
+  const tieneHijos = cats.some(c => c.padreId === id);
+  const msg = tieneHijos
+    ? '¿Eliminar esta familia? Sus subcategorías quedan como familias sueltas (no se borran) y los productos que la usaban quedan sin categoría de árbol.'
+    : '¿Eliminar esta categoría? Los productos que la usaban quedan sin categoría de árbol (no se borran).';
+  if (!confirm(msg)) return;
+  try {
+    // Primero desvinculamos hijos y productos (no hay FK en la base), luego borramos.
+    try { await api('/api/categorias-articulo/'+id+'/preparar-borrado', { method:'POST', body: JSON.stringify({}) }); } catch {}
+    await api('/api/categorias-articulo/'+id, { method:'DELETE' });
+    delete state.cache.categoriasArt;
+    toast('Eliminada','success'); pages.categoriasArt();
+  } catch (e) { toast(e.message,'error'); }
+}
 
 pages.catalogos = async function() {
   setHeader('Catálogos', 'Maestros del sistema: cereales, animales, labores, insumos, unidades…');
