@@ -2443,6 +2443,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
+      titulo:'🐄 v2.9.6 — Hacienda por familia (Angus bajo Bovino) + Stock unificado',
+      desc:'En los <b>movimientos de Hacienda</b>, las subfamilias (razas) ahora aparecen <b>anidadas bajo su especie</b> (ej. Angus queda dentro de Bovino, no como grupo aparte). Y en <b>Stock</b> la hacienda se muestra con el mismo criterio que los insumos: la <b>familia</b> (especie · raza) va como subtítulo debajo de la categoría, prolijo y unificado.' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'🧹 v2.9.5 — Menú de catálogos más limpio + alta rápida por familia + columna en Stock',
       desc:'Se sacaron del menú de Catálogos las pestañas <b>Especies de animales</b> y <b>Tipos de insumo</b> (esa clasificación ahora vive en el árbol de <b>Categorías y Familias</b>; los datos no se pierden). Al <b>crear un producto/insumo desde una compra</b> ahora elegís directamente la <b>Familia del árbol</b> (ej. Insumos → Herbicida): se crea en el catálogo y se agrega el renglón. Y en <b>Movimientos de stock</b> se agregó una columna <b>Familia</b> (separada del nombre); el filtro por categoría ya estaba disponible arriba.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
@@ -5689,6 +5692,10 @@ pages.stock = async function() {
   try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
   try { const d = await api('/api/depositos'); depositos = d.data || []; state.cache.depositos = depositos; } catch {}
   try { const c = await api('/api/catalogos'); state.cache.catalogos = c.data || []; } catch {}
+  if (!state.cache.catHacienda) { try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {} }
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
+  // Mapa nombre de categoría de hacienda -> especie (para mostrar la familia en Stock).
+  const _hacEspMap = {}; (state.cache.catHacienda||[]).forEach(c => { _hacEspMap[(c.nombre||'').toLowerCase().trim()] = c.especie; });
 
   const cats = [...new Set(rows.map(r=>r.categoria).filter(Boolean))].sort();
   const bajoMin = rows.filter(p => p.bajoMinimo).length;
@@ -5723,7 +5730,14 @@ pages.stock = async function() {
           ${filtered.map(p => `
             <tr class="table-row">
               <td><b>${esc(p.nombre)}</b>${p.codigo?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.codigo)}</div>`:''}</td>
-              <td><span class="badge badge-blue">${esc(p.categoria)}</span>${p.subtipo?`<div class="text-[10px] text-slate-500 mt-0.5">🧪 ${esc(p.subtipo)}</div>`:''}</td>
+              <td><span class="badge badge-blue">${esc(p.categoria)}</span>${(() => {
+                if (p.esHacienda) {
+                  const esp = _hacEspMap[(p.categoriaHacienda||p.nombre||'').toLowerCase().trim()];
+                  if (esp) { const raiz = _especieRaizHac(esp); const sub = raiz + (raiz.toLowerCase()!==esp.toLowerCase()?' · '+esp:''); return `<div class="text-[10px] text-slate-500 mt-0.5">🐄 ${esc(sub)}</div>`; }
+                  return '';
+                }
+                return p.subtipo?`<div class="text-[10px] text-slate-500 mt-0.5">🧪 ${esc(p.subtipo)}</div>`:'';
+              })()}</td>
               <td class="text-xs">${esc(p.ubicacion||'—')}</td>
               <td class="text-right font-semibold ${Number(p.existencia)<=0?'text-red-600':(p.bajoMinimo?'text-amber-600':'text-emerald-700')}">${fmtN(p.existencia)}${p.esHacienda&&p.kilos?`<div class="text-[11px] text-slate-500 font-normal">${fmtN(p.kilos)} kg</div>`:''}</td>
               <td>${esc(p.unidad)}${p.esHacienda?`<div class="text-[10px] ${p.categoriaHacienda?'text-amber-700':'text-red-500'}">${p.categoriaHacienda?'🐄 '+esc(p.categoriaHacienda):'⚠ sin vincular'}</div>`:''}</td>
@@ -5876,6 +5890,17 @@ async function stockControlSubir(inp) {
 function movEntrada(prodId) { movForm(prodId, 'entrada'); }
 function movSalida(prodId) { movForm(prodId, 'salida'); }
 // Opciones del árbol de categorías (raíces + hijos indentados) para un <select>.
+// Especie/familia RAÍZ de una hacienda: sube por el árbol hasta el hijo directo de
+// "Hacienda" (ej: Angus -> Bovino). Si no está en el árbol, devuelve el mismo nombre.
+function _especieRaizHac(especie) {
+  const arb = state.cache.categoriasArt || [];
+  const hacRoot = arb.find(c => !c.padreId && (c.nombre||'').toLowerCase() === 'hacienda');
+  if (!hacRoot) return especie || 'Otros';
+  let n = arb.find(c => (c.nombre||'').toLowerCase().trim() === (especie||'').toLowerCase().trim());
+  if (!n) return especie || 'Otros';
+  let g = 0; while (n && n.padreId && n.padreId !== hacRoot.id && g++ < 20) n = arb.find(c => c.id === n.padreId);
+  return (n && n.padreId === hacRoot.id) ? n.nombre : (especie || 'Otros');
+}
 // Ruta jerárquica de un nodo del árbol: "Categoria > Familia > Subfamilia".
 function catArtRuta(id) {
   const cats = state.cache.categoriasArt || [];
@@ -11941,6 +11966,7 @@ async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') 
   if ((!campos || !campos.length) && state.cache.campos) campos = state.cache.campos;
   if (!campos || !campos.length) { try { campos = state.cache.campos = (await api('/api/campos')).data||[]; } catch {} }
   const todasCategorias = hacCategoriasDisponibles();
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
   openModal({
     title: 'Nuevo movimiento de hacienda',
     body: `
@@ -11962,8 +11988,8 @@ async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') 
           <select id="h-campodest" class="input">${campos.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
         </div>
         <div class="col-span-2"><label class="label">Categoría *</label>
-          ${(()=>{ const cfgs=(state.cache.catHacienda||[]).filter(c=>c.activo!==false); const grupos={}; cfgs.forEach(c=>{ (grupos[c.especie||'Otros']=grupos[c.especie||'Otros']||[]).push(c.nombre); }); const tieneGrupos=Object.keys(grupos).length>0; return tieneGrupos
-            ? `<select id="h-cat" class="input" onchange="hacMovDestRefresh()"><option value="">— elegir —</option>${Object.entries(grupos).sort((a,b)=>a[0].localeCompare(b[0])).map(([esp,arr])=>`<optgroup label="${esc(esp)}">${arr.sort((x,y)=>x.localeCompare(y,'es')).map(n=>`<option value="${esc(n)}" ${n===categoriaInit?'selected':''}>${esc(n)}</option>`).join('')}</optgroup>`).join('')}</select>`
+          ${(()=>{ const cfgs=(state.cache.catHacienda||[]).filter(c=>c.activo!==false); const grupos={}; cfgs.forEach(c=>{ const raiz=_especieRaizHac(c.especie||'Otros'); (grupos[raiz]=grupos[raiz]||[]).push(c); }); const tieneGrupos=Object.keys(grupos).length>0; return tieneGrupos
+            ? `<select id="h-cat" class="input" onchange="hacMovDestRefresh()"><option value="">— elegir —</option>${Object.entries(grupos).sort((a,b)=>a[0].localeCompare(b[0])).map(([esp,arr])=>`<optgroup label="${esc(esp)}">${arr.sort((x,y)=>(x.nombre||'').localeCompare(y.nombre||'','es')).map(c=>{ const sub=(c.especie&&c.especie.toLowerCase().trim()!==esp.toLowerCase().trim())?' · '+c.especie:''; return `<option value="${esc(c.nombre)}" ${c.nombre===categoriaInit?'selected':''}>${esc(c.nombre)}${esc(sub)}</option>`; }).join('')}</optgroup>`).join('')}</select>`
             : `<input id="h-cat" class="input" list="h-cat-list2" value="${esc(categoriaInit||'')}" placeholder="Ej: Ternero" onchange="hacMovDestRefresh()"/><datalist id="h-cat-list2">${todasCategorias.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`; })()}
         </div>
         <div class="col-span-2" id="h-catdest-wrap" style="display:none"><label class="label">Pasa a la categoría *</label>
