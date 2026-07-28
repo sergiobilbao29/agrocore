@@ -969,6 +969,7 @@ const MODULES = [
   { id:'campos',        label:'Campos y lotes',       icon:'🗺️', perm:'produccion:read', section:'Producción' },
   { id:'campanas',      label:'Campañas',             icon:'🌱', perm:'produccion:read', section:'Producción' },
   { id:'insumos',       label:'Insumos y labores',    icon:'🧪', perm:'produccion:read', section:'Producción' },
+  { id:'serviciosTerceros', label:'Servicios a terceros', icon:'🤝', perm:'produccion:read', section:'Producción' },
   { id:'reporteMargen', label:'Reporte de margen',    icon:'💹', perm:'stock:read',      section:'Producción' },
 
   // ===== STOCK Y DEPÓSITOS =====
@@ -2481,6 +2482,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
+      titulo:'🤝 v2.12.0 — Labores a terceros: cobrás el servicio con factura y le cargás el % al empleado',
+      desc:'Nueva sección <b>Producción → Servicios a terceros</b>. Al cargar una <b>Labor</b> podés tildar <b>“🤝 Servicio a terceros”</b> y elegir el <b>cliente</b> (la campaña queda opcional). La labor se registra igual que siempre —con sus <b>insumos</b> (ej. gasoil) que descuentan stock y el <b>% de ganancia del empleado</b>— pero ese porcentaje se calcula <b>solo sobre el precio de la labor</b>, no sobre los insumos que se le cobran al cliente. Desde la lista de servicios, el botón <b>🧾 Facturar</b> abre la factura de venta <b>ya cargada</b> con el cliente, la línea de la labor y los insumos como líneas aparte; al autorizarla, el servicio queda marcado como <b>facturado</b> y vinculado a esa factura.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'🔒 v2.11.2 — Las apps de clientes no se indexan en Google (privacidad)',
       desc:'Cada instancia del sistema (la de cada empresa) ahora le dice a los buscadores que <b>no la indexen</b>: agrega un <b>robots.txt</b> que bloquea el rastreo y una marca <b>noindex</b> en la app. Así los datos privados de cada cliente no aparecen en Google. La web pública (agrocore.ar) sigue indexándose normal.' },
@@ -9731,7 +9735,7 @@ function factRecalc() {
   $('#fi-iva').textContent = fmtC(iva);
   $('#fi-tot').textContent = fmtC(total);
 }
-async function factForm() {
+async function factForm(prefill = null) {
   await cargarMonedas();
   const clientes = state.cache.clientes || [];
   const facturas = state.cache.facturas || [];
@@ -9825,7 +9829,8 @@ async function factForm() {
         </div>
         <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís método se autoriza la factura Y se registra el cobro. Requiere que el cliente esté seleccionado (no consumidor final).</div>
       </div>
-      <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>`,
+      <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
+      <input type="hidden" id="f-labor-servicio" value="${esc(prefill?.laborServicioId||'')}"/>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="factSave()">💾 Autorizar</button>`
   });
@@ -9863,6 +9868,18 @@ async function factForm() {
       };
       cv.addEventListener('change', toggle);
       toggle();
+    }
+    // Prefill (ej. Facturar una labor a terceros): cliente + items ya cargados.
+    if (prefill) {
+      if (prefill.clienteId && $('#f-cli')) {
+        const opt = [...$('#f-cli').options].find(o => o.value === prefill.clienteId);
+        if (opt) $('#f-cli').value = prefill.clienteId;
+      }
+      if (Array.isArray(prefill.items) && prefill.items.length) {
+        $('#fi-tbody').innerHTML = prefill.items.map((it,i)=>factItemRow(i,it)).join('');
+      }
+      if (prefill.observaciones && $('#f-obs')) $('#f-obs').value = prefill.observaciones;
+      factRecalc();
     }
   }, 0);
 }
@@ -10041,6 +10058,7 @@ async function factSave() {
     condicionDias,
     vencimientoFecha,
     observaciones: $('#f-obs').value.trim()||null,
+    laborServicioId: $('#f-labor-servicio')?.value || null,
     items,
   };
   try {
@@ -19098,24 +19116,36 @@ async function aplicEditSave(id, esIns){
  *  - precio referencia (por hectárea) + % cobro del empleado
  *  - la ganancia se carga sola en la planilla del mes
  * ========================================================= */
+function laServicioToggle() {
+  const on = !!$('#la-servicio')?.checked;
+  const wrap = $('#la-cli-wrap');
+  if (wrap) wrap.classList.toggle('hidden', !on);
+  const lbl = $('#la-camp-lbl');
+  if (lbl) lbl.textContent = on ? 'Campaña (opcional)' : 'Campaña *';
+  // Si es servicio, por defecto no exigimos campaña: dejamos "Ninguna" si no eligió otra.
+  const camp = $('#la-camp');
+  if (on && camp && !camp.value) camp.value = '';
+}
 async function laborForm(avanzada = false, campanaId = null, edit = null) {
   const editMode = !!edit;
   // Cargamos en paralelo lo necesario
   let campanas=[], empleados=[], productos=[], laboresCat=[];
   try {
-    const [c, e, p] = await Promise.all([
+    const [c, e, p, cl] = await Promise.all([
       state.cache.campanas ? Promise.resolve({data: state.cache.campanas}) : api('/api/campanas'),
       api('/api/empleados'),
       api('/api/productos'),
+      api('/api/clientes').catch(()=>({data: state.cache.clientes||[]})),
     ]);
     campanas = c.data || [];
     empleados = (e.data || []).filter(x => x.activo !== false);
     productos = (p.data || []).filter(x => x.activo !== false);
+    state.cache.clientes = (cl.data || state.cache.clientes || []).filter(x => x.activo !== false);
     state.cache.empleados = empleados;
     state.cache.productos = productos;
     laboresCat = state.cache.laboresCat || [];
   } catch (err) { return toast(err.message, 'error'); }
-  if (!campanas.length) return toast('No hay campañas activas — cargá una primero.','warn');
+  // (Sin campañas igual se puede cargar un SERVICIO a terceros; la campaña es opcional.)
   // Bloque % cobro empleado: solo en modo avanzada.
   // Si el usuario NO tiene permiso de modificación sobre catálogos / labores,
   // bloqueamos los campos precio + tipo + % para que solo vea lo que cobra
@@ -19159,9 +19189,25 @@ async function laborForm(avanzada = false, campanaId = null, edit = null) {
   openModal({
     title: editMode ? '🛠️ Editar labor' : '🛠️ Cargar labor', size:'max-w-4xl',
     body: `
+      ${editMode ? '' : `
+      <div class="p-3 mb-3 bg-amber-50 rounded-lg border border-amber-200">
+        <label class="flex items-center gap-2 cursor-pointer text-sm font-semibold text-amber-900">
+          <input type="checkbox" id="la-servicio" onchange="laServicioToggle()" ${edit?.esServicio?'checked':''}/>
+          🤝 Servicio a terceros (labor facturable a un cliente)
+        </label>
+        <div id="la-cli-wrap" class="mt-2 hidden">
+          <label class="label">Cliente *</label>
+          <select id="la-cli" class="input">
+            <option value="">— Elegí el cliente —</option>
+            ${(state.cache.clientes||[]).map(c=>`<option value="${c.id}">${esc(c.nombre||c.razonSocial||'')}${c.cuit?` · ${esc(c.cuit)}`:''}</option>`).join('')}
+          </select>
+          <div class="text-[11px] text-amber-700 mt-1">El % del empleado se calcula solo sobre el precio de la labor. Los insumos (ej. Gasoil) se le cobran al cliente pero no generan % para el empleado. Después vas a poder facturar desde la labor.</div>
+        </div>
+      </div>`}
       <div class="grid grid-cols-3 gap-3 mb-3">
-        <div class="col-span-2"><label class="label">Campaña *</label>
+        <div class="col-span-2"><label class="label" id="la-camp-lbl">Campaña *</label>
           <select id="la-camp" class="input">
+            <option value="">— Ninguna (servicio a terceros) —</option>
             ${campanas.map(c=>`<option value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}" ${c.id===campanaId?'selected':''}>${esc(campLabel(c))} (${fmtN(c.lote?.hectareas||0)} ha)</option>`).join('')}
           </select>
         </div>
@@ -19380,7 +19426,11 @@ async function laborSave() {
   const camp = $('#la-camp').value;
   const tipo = $('#la-tipo').value.trim();
   const ha = Number($('#la-ha').value || 0);
-  if (!camp) return toast('Falta la campaña','warn');
+  const esServicio = !!$('#la-servicio')?.checked;
+  const clienteId = esServicio ? ($('#la-cli')?.value || '') : '';
+  if (esServicio) {
+    if (!clienteId) return toast('Elegí el cliente del servicio','warn');
+  } else if (!camp) return toast('Falta la campaña','warn');
   if (!tipo) return toast('Falta el tipo de labor','warn');
   if (!ha) return toast('Faltan las hectáreas aplicadas','warn');
   // Modo edición: actualiza la labor existente (precio/costo, ha, fecha, moneda, obs).
@@ -19420,7 +19470,9 @@ async function laborSave() {
   // de referencia es por hectárea, es el mismo; si es total, se divide por las hectáreas.
   const costoHaLabor = (pr != null) ? (tp === 'por_hectarea' ? pr : (ha ? pr / ha : pr)) : null;
   const data = {
-    campanaId: camp,
+    campanaId: camp || null,
+    esServicio,
+    clienteId: esServicio ? clienteId : null,
     tipo,
     fecha: $('#la-fec').value ? new Date($('#la-fec').value+'T12:00:00').toISOString() : new Date().toISOString(),
     hectareasAplicadas: ha,
@@ -19435,12 +19487,73 @@ async function laborSave() {
   try {
     await api('/api/labores-avanzada', { method:'POST', body: JSON.stringify(data) });
     const nEmp = empleados.length;
-    toast('Labor cargada' + (nEmp?` · ${nEmp} empleado${nEmp===1?'':'s'}`:'') + (insumos.length?` · ${insumos.length} insumo${insumos.length===1?'':'s'} del stock`:''),'success');
+    toast('Labor cargada' + (esServicio?' · 🤝 servicio a terceros':'') + (nEmp?` · ${nEmp} empleado${nEmp===1?'':'s'}`:'') + (insumos.length?` · ${insumos.length} insumo${insumos.length===1?'':'s'} del stock`:''),'success');
     state._insScrollTo = camp;
     closeModal();
     delete state.cache.stockMap;
-    pages.insumos();
+    if (esServicio) { delete state.cache.laboresServicio; (pages.serviciosTerceros ? pages.serviciosTerceros() : pages.insumos()); }
+    else pages.insumos();
   } catch (e) { toast(e.message,'error'); }
+}
+
+// ============================================================
+// SERVICIOS A TERCEROS (v2.12.0): labores que un empleado hace a un cliente,
+// se facturan y le generan % de ganancia al empleado (sobre la labor, no los insumos).
+// ============================================================
+pages.serviciosTerceros = async function() {
+  setHeader('Servicios a terceros', 'Labores realizadas a clientes: cobralas con factura y cargá el % de ganancia al empleado.');
+  if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('serviciosTerceros','Servicios a terceros'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let labs = [];
+  try { labs = (await api('/api/labores-servicio')).data || []; }
+  catch (e) { $('#page-body').innerHTML = `<div class="text-red-600 text-sm">${esc(e.message)}</div>`; return; }
+  state.cache.laboresServicio = labs;
+  const sym = m => m==='USD'?'US$':(m==='ARS'?'$':(m+' '));
+  const pend = labs.filter(l=>!l.facturado).length;
+  const rows = labs.map(l => {
+    const insTot = (l.insumos||[]).reduce((a,i)=>a+Number(i.total||0),0);
+    const insTxt = (l.insumos||[]).length ? `${l.insumos.length} · ${sym(l.moneda)}${fmtN(insTot)}` : '—';
+    const estado = l.facturado
+      ? `<span class="badge badge-green">✔ Facturada ${l.factura?`${l.factura.tipo} ${String(l.factura.puntoVenta).padStart(4,'0')}-${String(l.factura.numero).padStart(8,'0')}`:''}</span>`
+      : (can('ventas:create') ? `<button class="btn btn-primary text-xs" onclick='facturarServicio(${JSON.stringify(l.id)})'>🧾 Facturar</button>` : `<span class="badge badge-yellow">Pendiente</span>`);
+    return `<tr class="table-row">
+      <td>${fmtDate(l.fecha)}</td>
+      <td class="font-medium">${esc(l.clienteNombre)}</td>
+      <td>${esc(l.tipo)}${l.hectareasAplicadas?` <span class="text-[11px] text-slate-400">· ${fmtN(l.hectareasAplicadas)} ha</span>`:''}</td>
+      <td class="text-right font-semibold">${sym(l.moneda)}${fmtN(l.precioLabor||0)}</td>
+      <td class="text-right text-slate-500">${insTxt}</td>
+      <td>${l.responsable?esc(l.responsable):'—'}</td>
+      <td class="text-right">${l.gananciaEmpleado!=null?`${sym(l.moneda)}${fmtN(l.gananciaEmpleado)}`:'—'}</td>
+      <td class="text-right">${estado}</td>
+    </tr>`;
+  }).join('');
+  $('#page-body').innerHTML = `
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <div class="text-[11px] text-slate-500">💡 El <b>precio de la labor</b> es lo que cobrás por el servicio; el <b>% del empleado</b> se calcula solo sobre ese precio (no sobre insumos como el gasoil). Al facturar, se cargan la labor y los insumos como líneas de la factura.${pend?` <b>${pend}</b> sin facturar.`:''}</div>
+      ${can('produccion:create')?`<button class="btn btn-primary text-sm" onclick="laborForm(true, null, null); setTimeout(()=>{ const c=document.getElementById('la-servicio'); if(c){ c.checked=true; laServicioToggle(); } },50)">🤝 Nuevo servicio</button>`:''}
+    </div>
+    <div class="kpi p-0 overflow-hidden">
+      <table class="data">
+        <thead><tr><th>Fecha</th><th>Cliente</th><th>Labor</th><th class="text-right">Precio labor</th><th class="text-right">Insumos</th><th>Empleado</th><th class="text-right">Ganancia empl.</th><th class="text-right">Factura</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" class="text-center text-slate-400 py-8">Todavía no cargaste servicios a terceros. Usá “🤝 Nuevo servicio” o marcá “Servicio a terceros” al cargar una labor.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+};
+// Abrir la facturación prellenada desde una labor a terceros (labor + insumos como líneas).
+async function facturarServicio(id) {
+  const l = (state.cache.laboresServicio||[]).find(x=>x.id===id);
+  if (!l) return toast('Labor no encontrada','error');
+  if (l.facturado) return toast('Esta labor ya fue facturada','warn');
+  if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data||[]; } catch {} }
+  const items = [{
+    descripcion: `Labor: ${l.tipo}${l.hectareasAplicadas?` · ${fmtN(l.hectareasAplicadas)} ha`:''}`,
+    cantidad: 1, precioUnit: Number(l.precioLabor||0), alicuotaIva: 21,
+  }];
+  (l.insumos||[]).forEach(i => items.push({
+    descripcion: i.nombre + (i.unidad?` (${i.unidad})`:''),
+    cantidad: Number(i.cantidad||1), precioUnit: Number(i.precioUnit||0), alicuotaIva: 21,
+  }));
+  factForm({ clienteId: l.clienteId, items, laborServicioId: l.id, observaciones: `Servicio a terceros — ${l.tipo}` });
 }
 
 /* ---------- CATALOGOS (maestros) con pestañas ---------- */

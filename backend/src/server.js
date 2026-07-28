@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.11.2';
+const AGROCORE_VERSION = '2.12.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3272,6 +3272,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       origen: z.enum(['agrocore', 'arca_externa']).optional().default('agrocore'),
       cae: z.string().optional(),
       caeVto: z.coerce.date().optional(),
+      laborServicioId: z.string().nullable().optional(),   // si la factura sale de una labor a terceros, la vinculamos
       items: z.array(itemFacSchema).min(1),
     });
     const input = schema.parse(req.body);
@@ -3364,6 +3365,14 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
           debe: totales.total, referencia: `FAC-${f.id}`,
           observaciones: input.observaciones || null,
         }});
+      }
+      // Vincular la labor a terceros con esta factura (queda "facturada").
+      // LaborAplicada no tiene companyId; validamos la pertenencia por el cliente.
+      if (input.laborServicioId) {
+        const lab = await tx.laborAplicada.findFirst({ where: { id: input.laborServicioId, esServicio: true }, include: { cliente: true } }).catch(()=>null);
+        if (lab && lab.cliente && lab.cliente.companyId === req.companyId) {
+          await tx.laborAplicada.update({ where: { id: lab.id }, data: { facturaId: f.id } });
+        }
       }
       return f;
     });
@@ -6579,7 +6588,9 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
       observaciones: z.string().nullable().optional(),
     });
     const schema = z.object({
-      campanaId: z.string(),
+      campanaId: z.string().nullable().optional(),
+      esServicio: z.boolean().optional(),        // labor realizada a un tercero (facturable)
+      clienteId: z.string().nullable().optional(),
       tipo: z.string().min(1),
       fecha: z.coerce.date(),
       hectareasAplicadas: z.number().nullable().optional(),
@@ -6601,8 +6612,18 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
       insumos: z.array(insumoItemSchema).default([]),
     });
     const d = schema.parse(req.body);
-    const camp = await prisma.campana.findFirst({ where: { id: d.campanaId, companyId: req.companyId } });
-    if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    // Servicio a terceros: requiere cliente; la campaña es opcional (labor sin campo propio).
+    if (d.esServicio) {
+      if (!d.clienteId) return res.status(400).json({ ok: false, error: 'Elegí el cliente del servicio' });
+      const cli = await prisma.cliente.findFirst({ where: { id: d.clienteId, companyId: req.companyId } });
+      if (!cli) return res.status(404).json({ ok: false, error: 'Cliente no encontrado' });
+    }
+    if (d.campanaId) {
+      const camp = await prisma.campana.findFirst({ where: { id: d.campanaId, companyId: req.companyId } });
+      if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    } else if (!d.esServicio) {
+      return res.status(400).json({ ok: false, error: 'Falta la campaña' });
+    }
 
     // Normalizamos la lista de empleados (nuevo formato array, o el viejo simple).
     let listaEmp = [];
@@ -6634,7 +6655,10 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
       // 1) Crear la labor (el primer empleado queda como referencia principal)
       const labor = await tx.laborAplicada.create({
         data: {
-          campanaId: d.campanaId, tipo: d.tipo, fecha: d.fecha,
+          campanaId: d.campanaId || null,
+          esServicio: d.esServicio || false,
+          clienteId: d.esServicio ? (d.clienteId || null) : null,
+          tipo: d.tipo, fecha: d.fecha,
           hectareasAplicadas: d.hectareasAplicadas ?? null,
           costo: d.costo ?? null,
           monedaCosto: d.monedaCosto || 'USD',
@@ -6695,6 +6719,65 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
       return labor;
     });
     res.status(201).json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// SERVICIOS A TERCEROS: labores facturables realizadas a un cliente.
+// (Son LaborAplicada con esServicio=true y campanaId null.)
+// ============================================================
+app.get('/api/labores-servicio', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    // Scope por empresa vía el cliente (LaborAplicada no tiene companyId propio).
+    const labs = await prisma.laborAplicada.findMany({
+      where: { esServicio: true, cliente: { companyId: req.companyId } },
+      orderBy: { fecha: 'desc' },
+      include: {
+        cliente: true,
+        empleado: true,
+        insumos: { include: { producto: true } },
+      },
+    });
+    // Resolvemos las facturas vinculadas (para saber cuáles ya se facturaron).
+    const facIds = labs.map(l => l.facturaId).filter(Boolean);
+    const facs = facIds.length
+      ? await prisma.factura.findMany({ where: { id: { in: facIds }, companyId: req.companyId } })
+      : [];
+    const facById = Object.fromEntries(facs.map(f => [f.id, f]));
+    const data = labs.map(l => {
+      const fac = l.facturaId ? facById[l.facturaId] : null;
+      return {
+        id: l.id,
+        fecha: l.fecha,
+        tipo: l.tipo,
+        clienteId: l.clienteId,
+        clienteNombre: l.cliente?.nombre || l.cliente?.razonSocial || '—',
+        hectareasAplicadas: l.hectareasAplicadas,
+        precioReferencia: l.precioReferencia,
+        tipoPrecio: l.tipoPrecio,
+        costo: l.costo,
+        moneda: l.monedaCosto || 'ARS',
+        responsable: l.responsable,
+        gananciaEmpleado: l.gananciaEmpleado,
+        observaciones: l.observaciones,
+        // Precio total de la labor cobrado al cliente (sin insumos).
+        precioLabor: l.tipoPrecio === 'por_hectarea'
+          ? Number(l.precioReferencia || 0) * Number(l.hectareasAplicadas || 0)
+          : Number(l.precioReferencia || 0),
+        insumos: l.insumos.map(i => ({
+          id: i.id, productoId: i.productoId,
+          nombre: i.producto?.nombre || '—', unidad: i.unidad,
+          cantidad: i.cantidad, precioUnit: i.precioUnit, total: i.total,
+        })),
+        facturaId: l.facturaId || null,
+        facturado: !!fac,
+        factura: fac ? {
+          id: fac.id, tipo: fac.tipo, puntoVenta: fac.puntoVenta,
+          numero: fac.numero, total: fac.total, estado: fac.estado,
+        } : null,
+      };
+    });
+    res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
 

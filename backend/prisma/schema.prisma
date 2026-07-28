@@ -305,7 +305,11 @@ model InsumoAplicado {
 
 model LaborAplicada {
   id                  String   @id @default(cuid())
-  campanaId           String
+  campanaId           String?    // opcional: null cuando es un SERVICIO a un tercero
+  // ---- Servicio a terceros (labor facturable a un cliente) ----
+  esServicio          Boolean  @default(false)   // true = labor realizada a un tercero (se factura)
+  clienteId           String?                     // cliente al que se le presta el servicio
+  facturaId           String?                     // factura de venta generada por el servicio
   tipo                String     // "siembra", "pulverizacion", "cosecha", etc.
   hectareasAplicadas  Float?     // Hectareas reales donde se aplico (NULL = lote completo, legado)
   fecha               DateTime
@@ -323,12 +327,14 @@ model LaborAplicada {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @default(now()) @updatedAt
 
-  campana     Campana  @relation(fields: [campanaId], references: [id], onDelete: Cascade)
+  campana     Campana?  @relation(fields: [campanaId], references: [id], onDelete: Cascade)
+  cliente     Cliente?  @relation(fields: [clienteId], references: [id])
   empleado    Empleado? @relation(fields: [empleadoId], references: [id])
   insumos     LaborInsumo[]
 
   @@index([campanaId])
   @@index([empleadoId])
+  @@index([clienteId])
 }
 
 // Insumos consumidos al ejecutar una labor (siembra: semilla + curasemilla;
@@ -492,6 +498,7 @@ model Cliente {
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   facturas        Factura[]
+  laboresServicio LaborAplicada[]
 
   @@index([companyId])
 }
