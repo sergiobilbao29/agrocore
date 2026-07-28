@@ -2088,6 +2088,30 @@ function openModal({ title, body, footer, size='max-w-2xl' }) {
 }
 function closeModal() { $('#modal').classList.add('hidden'); }
 
+// Segundo modal (se muestra ENCIMA del principal, sin reemplazarlo). Se usa para el
+// alta rápida de productos dentro de una factura, para no perder el form de la compra.
+function openModal2({ title, body, footer, size='max-w-lg' }) {
+  let m = document.getElementById('modal2');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal2';
+    m.className = 'fixed inset-0 z-[80] flex items-center justify-center p-4';
+    m.innerHTML = `<div class="absolute inset-0 bg-black/40" onclick="closeModal2()"></div>
+      <div id="modal2-box" class="relative bg-white rounded-xl shadow-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200"><h3 id="modal2-title" class="font-semibold text-slate-800"></h3><button onclick="closeModal2()" class="text-slate-400 hover:text-slate-600 text-xl leading-none">&times;</button></div>
+        <div id="modal2-body" class="p-5 overflow-auto"></div>
+        <div id="modal2-footer" class="px-5 py-3 border-t border-slate-200 flex justify-end gap-2"></div>
+      </div>`;
+    document.body.appendChild(m);
+  }
+  document.getElementById('modal2-box').className = `relative bg-white rounded-xl shadow-2xl w-full ${size} max-h-[90vh] overflow-hidden flex flex-col fade-in`;
+  document.getElementById('modal2-title').textContent = title || '';
+  document.getElementById('modal2-body').innerHTML = body || '';
+  document.getElementById('modal2-footer').innerHTML = footer || '';
+  m.style.display = 'flex';
+}
+function closeModal2() { const m = document.getElementById('modal2'); if (m) m.style.display = 'none'; }
+
 async function openMiCuenta() {
   $('#user-menu').classList.add('hidden');
   const u = state.user;
@@ -2442,6 +2466,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
+      titulo:'🛠️ v2.9.7 — Arreglos: alta de artículo desde la compra + artículos por familia visibles',
+      desc:'<b>Corregido:</b> al crear un artículo nuevo desde una factura de compra ya <b>no se cierra la compra</b> (se abre en una ventana aparte) y el artículo <b>aparece</b> en Stock y en el buscador. Ahora <b>cualquier producto clasificado por familia se ve</b> (incluye categorías propias como <b>Repuestos</b>: cargalos desde Stock → “+ Nuevo” o desde una compra, eligiendo la familia). En <b>Stock</b> y <b>Movimientos</b> el nombre de hacienda ya no repite la especie (“Vaca” en vez de “Bovino - Vaca”), y en Movimientos la columna Familia muestra la especie real (Bovino), no “Hacienda”.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'🐄 v2.9.6 — Hacienda por familia (Angus bajo Bovino) + Stock unificado',
       desc:'En los <b>movimientos de Hacienda</b>, las subfamilias (razas) ahora aparecen <b>anidadas bajo su especie</b> (ej. Angus queda dentro de Bovino, no como grupo aparte). Y en <b>Stock</b> la hacienda se muestra con el mismo criterio que los insumos: la <b>familia</b> (especie · raza) va como subtítulo debajo de la categoría, prolijo y unificado.' },
@@ -5729,7 +5756,7 @@ pages.stock = async function() {
         <tbody>
           ${filtered.map(p => `
             <tr class="table-row">
-              <td><b>${esc(p.nombre)}</b>${p.codigo?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.codigo)}</div>`:''}</td>
+              <td><b>${esc(p.esHacienda ? (p.categoriaHacienda || (p.nombre||'').split(' - ').pop().trim()) : p.nombre)}</b>${p.codigo?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.codigo)}</div>`:''}</td>
               <td><span class="badge badge-blue">${esc(p.categoria)}</span>${(() => {
                 if (p.esHacienda) {
                   const esp = _hacEspMap[(p.categoriaHacienda||p.nombre||'').toLowerCase().trim()];
@@ -6029,6 +6056,7 @@ pages.movimientos = async function() {
     ]);
     rows = r.data||[]; prods = p.data||[]; state.cache.productos = prods;
     if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
+    if (!state.cache.catHacienda) { try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {} }
     state.cache.movimientos = rows;   // para editar/eliminar movimientos normales
     depositos = d.data || []; state.cache.depositos = depositos;
     hacMovs = h.data || []; campos = c.data || []; state.cache.campos = campos;
@@ -6143,8 +6171,19 @@ pages.movimientos = async function() {
                 : `<td class="text-right whitespace-nowrap">${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='movEditForm(${JSON.stringify(m.id)})'>✏️</button>`:''}${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar movimiento" onclick='movDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}${!can('stock:update')&&!can('stock:delete')?'<span class="text-slate-300">—</span>':''}</td>`;
             return `<tr class="table-row">
               <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
-              <td>${esc(m.producto?.nombre || p?.nombre || '—')}</td>
-              <td>${(() => { const cid=p?.categoriaArticuloId; let fam=null; if(cid){ const n=(state.cache.categoriasArt||[]).find(x=>x.id===cid); if(n) fam=n.nombre; } fam = fam || catBadge; return fam?`<span class="badge badge-blue text-[10px]">${esc(fam)}</span>`:'<span class="text-slate-300">—</span>'; })()}</td>
+              <td>${(() => { const esHac = m._hac || (m.producto?.categoria==='hacienda') || (p?.categoria==='hacienda'); const nom = m.producto?.nombre || p?.nombre || '—'; return esc(esHac ? (p?.categoriaHacienda || nom.split(' - ').pop().trim()) : nom); })()}</td>
+              <td>${(() => {
+                const esHac = m._hac || (m.producto?.categoria==='hacienda') || (p?.categoria==='hacienda');
+                if (esHac) {
+                  const catAnimal = p?.categoriaHacienda || (m.producto?.nombre||p?.nombre||'').split(' - ').pop().trim();
+                  const cfg = (state.cache.catHacienda||[]).find(c=>(c.nombre||'').toLowerCase().trim()===String(catAnimal||'').toLowerCase().trim());
+                  const esp = cfg ? cfg.especie : null;
+                  const fam = esp ? (_especieRaizHac(esp) + (_especieRaizHac(esp).toLowerCase()!==esp.toLowerCase()?' · '+esp:'')) : 'Hacienda';
+                  return `<span class="badge badge-blue text-[10px]">🐄 ${esc(fam)}</span>`;
+                }
+                const cid=p?.categoriaArticuloId; let fam=null; if(cid){ const n=(state.cache.categoriasArt||[]).find(x=>x.id===cid); if(n) fam=n.nombre; } fam = fam || catBadge;
+                return fam?`<span class="badge badge-blue text-[10px]">${esc(fam)}</span>`:'<span class="text-slate-300">—</span>';
+              })()}</td>
               <td>${depCell}</td>
               ${empCell}
               <td>${esIng?'<span class="badge badge-green">Ingreso</span>':'<span class="badge badge-red">Egreso</span>'}</td>
@@ -9143,6 +9182,10 @@ function _catalogoArtSets(){
 function prodEnCatalogo(p, sets){
   sets = sets || _catalogoArtSets();
   const { nombres, animales, norm } = sets;
+  // v2.9.7: si el producto está clasificado en el árbol (tiene familia), cuenta como
+  // "en catálogo" — así los artículos nuevos y de categorías propias (ej. Repuestos)
+  // aparecen en Stock y en el buscador de Compras/Ventas.
+  if (p.categoriaArticuloId) return true;
   const n = norm(p.nombre);
   if (nombres.has(n) || animales.has(n)) return true;
   if ((p.categoria==='hacienda' || p.esHacienda) && p.categoriaHacienda && animales.has(norm(p.categoriaHacienda))) return true;
@@ -9332,7 +9375,7 @@ async function nuevoItemRapido(btn) {
   const tbodyId = tbody ? tbody.id : '';
   const fila = Array.from(tbody.children).indexOf(tr);
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
-  openModal({
+  openModal2({
     title: '➕ Crear producto/insumo nuevo',
     body: `
       <div class="grid grid-cols-1 gap-3">
@@ -9355,7 +9398,7 @@ async function nuevoItemRapido(btn) {
           💡 Creamos lo mínimo para que aparezca en la factura (nombre, familia y unidad) y se agrega al Catálogo. El IVA se aplica a este renglón.
         </div>
       </div>`,
-    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+    footer: `<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button>
              <button class="btn btn-primary" onclick="nuevoItemRapidoSave('${tbodyId}', ${fila})">💾 Crear y seleccionar</button>`
   });
 }
@@ -9365,6 +9408,7 @@ async function nuevoItemRapidoSave(tbodyId, filaIdx) {
   const famId  = $('#ni-fam') ? ($('#ni-fam').value || null) : null;   // nodo del árbol elegido
   const ivaSel = $('#ni-iva') ? Number($('#ni-iva').value) : null;
   if (!nombre) return toast('Falta el nombre','warn');
+  if (!famId)  return toast('Elegí la categoría o familia','warn');
   // Derivar la categoría plana (compat) desde la raíz de la familia elegida.
   const arb = state.cache.categoriasArt || [];
   const nodo = famId ? arb.find(n=>n.id===famId) : null;
@@ -9383,7 +9427,7 @@ async function nuevoItemRapidoSave(tbodyId, filaIdx) {
     if (!nuevoId) throw new Error('No se devolvió ID del producto creado');
     // Refrescar cache de productos
     try { const p = await api('/api/productos'); state.cache.productos = p.data || []; } catch {}
-    toast('Producto creado','success'); closeModal();
+    toast('Producto creado','success'); closeModal2();
     // Regenerar fila del dropdown manteniendo cantidad/precio/iva ya tipeados
     const tbody = document.getElementById(tbodyId);
     if (!tbody) return;
