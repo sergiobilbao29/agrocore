@@ -988,7 +988,7 @@ const MODULES = [
   // ===== ADMINISTRACIÓN =====
   { id:'catalogos',     label:'Catálogos',            icon:'📚', perm:'produccion:read', section:'Administración' },
   { id:'categoriasArt', label:'Categorías y Familias', icon:'🗂️', perm:'produccion:read', section:'Administración' },
-  { id:'catGastos',     label:'Categorías de Gasto',   icon:'🏷️', perm:'finanzas:read',    section:'Administración' },
+  { id:'catGastos',     label:'Categorías de Gastos',  icon:'🏷️', perm:'finanzas:read',    section:'Administración' },
   { id:'usuarios',      label:'Usuarios',             icon:'👤', perm:'*',               section:'Administración' },
   { id:'roles',         label:'Roles y permisos',     icon:'🔐', perm:'*',               section:'Administración' },
   { id:'empresas',      label:'Empresas',             icon:'🏢', perm:'*',               section:'Administración' },
@@ -1411,10 +1411,22 @@ function tiposInsumoNombres() {
 // Tipos de insumo "elegibles" en formularios (preferimos el catálogo del usuario;
 // si está vacío, caemos a la lista estándar — sin el genérico "Insumo").
 function tiposInsumoElegibles(actual) {
-  const cats = state.cache.catalogos || [];
-  const fromCat = cats.filter(c => c.tipo === 'Tipo de insumo' && c.activo !== false)
-                      .map(c => (c.nombre||'').trim()).filter(Boolean);
-  let arr = fromCat.length ? fromCat : ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante'];
+  // Preferimos las FAMILIAS bajo la raíz "Insumos" del árbol de Categorías y Familias
+  // (así se mantiene sincronizado con lo que edita el usuario). Si el árbol no está
+  // disponible, caemos al catálogo de Tipos de insumo y luego a la lista estándar.
+  const arb = state.cache.categoriasArt || [];
+  const rootIns = arb.find(c => !c.padreId && /^insumos?$/i.test((c.nombre||'').trim()));
+  let arr = [];
+  if (rootIns) {
+    arr = arb.filter(c => c.padreId === rootIns.id && c.activo !== false)
+             .sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''))
+             .map(c => (c.nombre||'').trim()).filter(Boolean);
+  }
+  if (!arr.length) {
+    const cats = state.cache.catalogos || [];
+    arr = cats.filter(c => c.tipo === 'Tipo de insumo' && c.activo !== false).map(c => (c.nombre||'').trim()).filter(Boolean);
+  }
+  if (!arr.length) arr = ['Herbicida','Insecticida','Fungicida','Fertilizante','Coadyuvante'];
   if (actual && !arr.includes(actual)) arr = [actual, ...arr];   // que el valor actual siempre aparezca
   return [...new Set(arr)];
 }
@@ -2467,6 +2479,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
+      titulo:'🧭 v2.10.1 — Todo sincronizado con Categorías y Familias (catálogos, compras, ventas, stock)',
+      desc:'Todo lo que use categorías/familias ahora sale del <b>árbol de Categorías y Familias</b>: <b>Catálogos</b> muestra cada categoría <b>dividida por familia</b> (con subfamilias adentro; lo que no tiene familia va a <b>Sin Familia</b>). En <b>Compras</b> y <b>Ventas</b>, y en <b>Insumos/Labores</b>, los filtros/tipos ya no traen las listas viejas: se sincronizan con el árbol. Al cargar un <b>nuevo movimiento de stock</b>, podés filtrar por <b>Categoría</b> y <b>Familia</b> y <b>escribir para buscar</b> el producto; la hacienda se muestra sin el prefijo de especie (ej. "Vaca" en vez de "Bovino - Vaca"). Se agregó <b>filtro por Familia</b> en Stock y en Movimientos de stock. Además se quitó la pestaña "Categorías de gasto" de Catálogos (ahora es su propia sección, <b>Categorías de Gastos</b>).' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🏷️ v2.10.0 — Categorías de Gasto en árbol (Categoría → Familia) para Movimientos Diarios',
       desc:'Nuevo <b>árbol de Categorías de Gasto</b> (en Administración → Categorías de Gasto), igual que Categorías y Familias pero para gastos: armás <b>Categoría → Familia → subfamilias</b> a gusto. En <b>Movimientos Diarios</b>, la vieja lista fija se reemplazó por elegir <b>Categoría</b> y <b>Familia</b> del árbol (obligatorio); el <b>Concepto</b> y la <b>Contraparte</b> (quién cobra) siguen libres. En el resumen podés filtrar por la <b>Categoría</b> (te junta todas sus familias) y buscar por concepto. La primera vez, el árbol se siembra solo e <b>importa</b> las categorías de gasto que ya venías usando. <b>Arreglo:</b> al editar un movimiento bancario ahora sí se guarda el cambio de <b>Empresa ↔ Personal del dueño</b>.' },
@@ -5751,6 +5766,7 @@ pages.stock = async function() {
       // (salvo que se active "ver fuera de catálogo"). No se borran, solo no se listan.
       if (_hayCat && !verFuera && !prodEnCatalogo(p, _sets)) return false;
       if (catSel.length && !catSel.includes(catRaizStock(p))) return false;
+      if (state.stockFilter.fam) { const caId = _pmap[p.id]?.categoriaArticuloId ?? p.categoriaArticuloId; if (!_catCadena(caId).includes(state.stockFilter.fam)) return false; }
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
       if (!q) return true;
@@ -5819,6 +5835,10 @@ pages.stock = async function() {
           <label class="label">Categoría</label>
           ${msHTML('st-cat', cats, state.stockFilter.cats, 'stCat', 'Todas')}
         </div>
+        <div class="md:col-span-2">
+          <label class="label">Familia</label>
+          <select id="st-fam" class="input">${catArtTreeOptions(state.stockFilter.fam||'', { rootLabel:'— Todas las familias —' })}</select>
+        </div>
         <div class="md:col-span-1">
           <label class="label">Estado</label>
           <select id="st-estado" class="input">
@@ -5838,12 +5858,13 @@ pages.stock = async function() {
     <div class="kpi p-0 overflow-hidden"><div id="stock-table"></div></div>`;
   $('#st-q').oninput   = e => { state.stockFilter.q = e.target.value; render(); };
   msWire('st-cat', 'stCat', vals => { state.stockFilter.cats = vals; render(); }, () => render(), 'Todas');
+  { const fe=$('#st-fam'); if(fe) fe.onchange = e => { state.stockFilter.fam = e.target.value; render(); }; }
   $('#st-estado').onchange = e => { state.stockFilter.estado = e.target.value; render(); };
   { const v=$('#st-verfuera'); if(v) v.onchange = e => { state.stockFilter.verFueraCat = e.target.checked; render(); }; }
   $('#st-dep').onchange = e => { state.stockFilter.depositoId = e.target.value; pages.stock(); }; // recarga con el filtro de back
   render();
 };
-function stockFiltrosLimpiar() { state.stockFilter = { q:'', cats:[], estado:'', depositoId:'' }; state._ms_stCat = false; pages.stock(); }
+function stockFiltrosLimpiar() { state.stockFilter = { q:'', cats:[], fam:'', estado:'', depositoId:'' }; state._ms_stCat = false; pages.stock(); }
 
 // === CONTROL DE STOCK (planilla de conteo físico) ===
 // Exporta un Excel con productos × depósitos y una columna vacía "conteo" para
@@ -6130,7 +6151,7 @@ pages.movimientos = async function() {
   rows = rows.concat(_hacRows).sort((a,b)=> String(b.fecha||'').localeCompare(String(a.fecha||'')));
   // Arrancamos SIEMPRE sin filtros al entrar, para no ocultar movimientos viejos
   // (antes el filtro de depósito quedaba "pegado" entre navegaciones).
-  state.movFilter = { q:'', cats:[], tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
+  state.movFilter = { q:'', cats:[], fam:'', tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' };
   if (!Array.isArray(state.movFilter.cats)) state.movFilter.cats = state.movFilter.cat ? [state.movFilter.cat] : [];
   delete state.movFilter.cat;
   const cats = [...new Set(prods.map(prodCategoriaRaiz).filter(Boolean))].sort();
@@ -6147,6 +6168,7 @@ pages.movimientos = async function() {
         const pcat = m._hac ? 'Hacienda' : prodCategoriaRaiz(prods.find(x=>x.id===m.productoId));
         if (!f.cats.includes(pcat)) return false;
       }
+      if (f.fam) { const pp = prods.find(x=>x.id===m.productoId); if (!_catCadena(pp?.categoriaArticuloId).includes(f.fam)) return false; }
       if (f.motivo && m.motivo !== f.motivo) return false;
       if (f.desde && (m.fecha||'') < f.desde) return false;
       if (f.hasta && (m.fecha||'') > f.hasta+'T23:59:59') return false;
@@ -6252,6 +6274,9 @@ pages.movimientos = async function() {
         <div><label class="label">Categoría</label>
           ${msHTML('mv-cat', cats, state.movFilter.cats, 'mvCat', 'Todas')}
         </div>
+        <div><label class="label">Familia</label>
+          <select id="mv-fam" class="input">${catArtTreeOptions(state.movFilter.fam||'', { rootLabel:'— Todas las familias —' })}</select>
+        </div>
         <div><label class="label">Depósito</label>
           <select id="mv-deposito" class="input">
             <option value="">Todos</option>
@@ -6291,10 +6316,11 @@ pages.movimientos = async function() {
     el.addEventListener(evt, e => { state.movFilter[stateKey] = e.target.value; render(); });
   });
   msWire('mv-cat', 'mvCat', vals => { state.movFilter.cats = vals; render(); }, () => render(), 'Todas');
+  { const fe=$('#mv-fam'); if(fe) fe.onchange = e => { state.movFilter.fam = e.target.value; render(); }; }
   render();
   if (can('finanzas:read')) renderCompromisoCerealBanner('mov-cereal-banner');
 };
-function movFiltrosLimpiar() { state.movFilter = { q:'', cats:[], tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' }; state._ms_mvCat = false; pages.movimientos(); }
+function movFiltrosLimpiar() { state.movFilter = { q:'', cats:[], fam:'', tipo:'', motivo:'', desde:'', hasta:'', depositoId:'' }; state._ms_mvCat = false; pages.movimientos(); }
 
 /* ----- REPORTE DE MARGEN (compras vs ventas por producto) ----- */
 pages.reporteMargen = async function() {
@@ -6444,6 +6470,8 @@ async function movForm(prodIdPreset=null, tipoPreset=null, editMov=null) {
   const prods = state.cache.productos || [];
   if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
   if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
+  const _rootsMov = (state.cache.categoriasArt||[]).filter(c => !c.padreId && c.activo!==false).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
   const deps = (state.cache.depositos || []).filter(d => d.activo !== false);
   const camps = state.cache.campanas || [];
   const campLabel = (c) => c.nombre || `${c.cultivo||''}${c.lote?.nombre?' · '+c.lote.nombre:''}${c.ciclo?' · '+c.ciclo:''}`;
@@ -6463,7 +6491,16 @@ async function movForm(prodIdPreset=null, tipoPreset=null, editMov=null) {
           </select>
         </div>
         <div class="col-span-2"><label class="label">Producto *</label>
-          <select id="f-prod" class="input">${prods.map(p=>`<option value="${p.id}" ${p.id===prodSel?'selected':''}>${esc(p.nombre)} (${esc(p.unidad)})</option>`).join('')}</select>
+          <div class="grid grid-cols-2 gap-2 mb-1">
+            <select id="f-prod-cat" class="input text-sm py-1" onchange="movProdFilterCat()">
+              <option value="">📂 Toda categoría</option>
+              ${_rootsMov.map(r=>`<option value="${esc(r.nombre)}">${r.icono?esc(r.icono)+' ':''}${esc(r.nombre)}</option>`).join('')}
+            </select>
+            <div id="f-prod-fam-wrap"><select id="f-prod-fam" class="input text-sm py-1" disabled><option value="">— Toda familia —</option></select></div>
+          </div>
+          <input id="f-prod-q" class="input text-sm mb-1" placeholder="🔎 Escribí para buscar el producto..." oninput="movProdRefresh()"/>
+          <select id="f-prod" class="input" size="7"></select>
+          <input type="hidden" id="f-prod-preset" value="${esc(prodSel||'')}"/>
         </div>
         <div class="col-span-2"><label class="label">Depósito</label>
           <select id="f-deposito" class="input">
@@ -6487,6 +6524,47 @@ async function movForm(prodIdPreset=null, tipoPreset=null, editMov=null) {
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="movSave(${editMov?`'${editMov.id}'`:'null'})">${editMov?'💾 Guardar':'Crear'}</button>`
   });
+  // Poblar la lista de productos (filtrable por categoría/familia y buscador).
+  setTimeout(() => { const pre = $('#f-prod-preset')?.value || ''; movProdRefresh(pre); }, 0);
+}
+// Nombre del producto SIN el prefijo de especie para hacienda (ej. "Vaca" en vez de "Bovino - Vaca").
+function _movProdNombre(p) {
+  return (p && (p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda'))
+    ? (p.categoriaHacienda || (p.nombre||'').split(' - ').pop().trim())
+    : (p ? p.nombre : '');
+}
+// Cadena de ids de categoría desde el nodo hasta la raíz (para filtrar por familia/subfamilia).
+function _catCadena(caId) { const out=[]; let c=_catNodo(caId), g=0; while(c && g++<30){ out.push(c.id); c=c.padreId?_catNodo(c.padreId):null; } return out; }
+function _movProdList() {
+  const prods = state.cache.productos || [];
+  const cat = document.getElementById('f-prod-cat')?.value || '';
+  const fam = document.getElementById('f-prod-fam')?.value || '';
+  const q = (document.getElementById('f-prod-q')?.value || '').toLowerCase().trim();
+  return prods.filter(p => {
+    if (cat && prodCategoriaRaiz(p) !== cat) return false;
+    if (fam && !_catCadena(p.categoriaArticuloId).includes(fam)) return false;
+    if (q) { const nom = _movProdNombre(p).toLowerCase(); if (!nom.includes(q) && !(p.nombre||'').toLowerCase().includes(q)) return false; }
+    return true;
+  }).sort((a,b)=>_movProdNombre(a).localeCompare(_movProdNombre(b)));
+}
+function movProdRefresh(preselect) {
+  const sel = document.getElementById('f-prod'); if (!sel) return;
+  const cur = (typeof preselect==='string' && preselect) ? preselect : sel.value;
+  const list = _movProdList();
+  sel.innerHTML = list.map(p => `<option value="${esc(p.id)}">${esc(_movProdNombre(p))} (${esc(p.unidad||'')})</option>`).join('')
+    || '<option value="">— Sin productos con ese filtro —</option>';
+  if (cur && list.some(p => p.id === cur)) sel.value = cur;
+}
+function movProdFilterCat() {
+  const catName = document.getElementById('f-prod-cat')?.value || '';
+  const root = (state.cache.categoriasArt||[]).find(c => !c.padreId && (c.nombre||'') === catName);
+  const wrap = document.getElementById('f-prod-fam-wrap');
+  if (wrap) {
+    wrap.innerHTML = root
+      ? `<select id="f-prod-fam" class="input text-sm py-1" onchange="movProdRefresh()">${catArtTreeOptions('', { startPadreId: root.id, rootLabel:'— Toda familia —' })}</select>`
+      : `<select id="f-prod-fam" class="input text-sm py-1" disabled><option value="">— Toda familia —</option></select>`;
+  }
+  movProdRefresh();
 }
 async function movSave(editId=null) {
   const precio = $('#f-pu').value ? Number($('#f-pu').value) : null;
@@ -9287,13 +9365,23 @@ function _factItemsLista() {
       if (it.productoId && prodById[it.productoId]) caId = prodById[it.productoId].categoriaArticuloId;
       else if (it.fromCatalogo) { const c = catByNom[(it.nombre||'').toLowerCase().trim()]; caId = c && c.categoriaArticuloId; }
       if (caId) it.familia = famName(caId);
+      // Categoría RAÍZ del árbol (para el filtro de categoría, sincronizado con Categorías y Familias).
+      it.familiaRaiz = prodCategoriaRaiz({ categoria: it.categoria, categoriaArticuloId: caId });
     });
+  } else {
+    items.forEach(it => { it.familiaRaiz = prodCategoriaRaiz({ categoria: it.categoria }); });
   }
   return items;
 }
 
-// Familias de alto nivel para el filtro de artículos en Compras/Ventas.
-const FACT_FAMILIAS = ['Todos','Insumos','Cereales','Hacienda','Servicios','Otros'];
+// Categorías (raíces del árbol) para el filtro de artículos en Compras/Ventas.
+// Se sincroniza con Categorías y Familias; si el árbol no está, cae a la lista clásica.
+function factFamilias() {
+  const roots = (state.cache.categoriasArt || []).filter(c => !c.padreId && c.activo !== false)
+    .sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''))
+    .map(c => (c.nombre||'').trim()).filter(Boolean);
+  return ['Todos', ...(roots.length ? roots : ['Insumos','Cereales / Granos','Hacienda','Servicios y Labores','Otros'])];
+}
 function _tinsSetLower(){ try { return new Set(tiposInsumoNombres().map(x=>(x||'').toLowerCase().trim())); } catch { return new Set(); } }
 // Mapea la categoría de un artículo a su familia (para agrupar en el buscador).
 function _familiaArticulo(cat) {
@@ -9311,7 +9399,7 @@ function factCatFilterBar() {
     <div class="flex items-center gap-2 flex-wrap mb-2 text-xs">
       <span class="text-slate-500">🗂️ Categoría:</span>
       <select id="fi-cat" class="input w-auto py-1 text-xs" onchange="factRenderDatalist()">
-        ${FACT_FAMILIAS.map(f=>`<option value="${f}">${f}</option>`).join('')}
+        ${factFamilias().map(f=>`<option value="${esc(f)}">${esc(f)}</option>`).join('')}
       </select>
       <span class="text-slate-400">Elegí una familia y luego escribí en cada fila para buscar dentro de ella.</span>
     </div>
@@ -9321,7 +9409,7 @@ function factCatFilterBar() {
 function factRenderDatalist() {
   const dl = document.getElementById('fi-datalist'); if (!dl) return;
   const fam = document.getElementById('fi-cat')?.value || 'Todos';
-  const lista = _factItemsLista().filter(x => fam === 'Todos' || _familiaArticulo(x.categoria) === fam);
+  const lista = _factItemsLista().filter(x => fam === 'Todos' || (x.familiaRaiz || prodCategoriaRaiz({categoria:x.categoria})) === fam);
   dl.innerHTML = lista.map(x => {
     const famTxt = x.familia || x.tipoLabel || '';
     const cat = famTxt ? ` — ${famTxt}` : '';
@@ -18277,6 +18365,7 @@ pages.insumos = async function() {
     campos = (await api('/api/campos').catch(()=>({data:[]}))).data || [];
     const cats = (await api('/api/catalogos')).data || [];
     state.cache.catalogos = cats;
+    try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {}
     insumosCat = cats.filter(c => tiposInsumoNombres().includes(c.tipo));
     laboresCat = cats.filter(c => c.tipo === 'Labor');
     aplics = (await api('/api/aplicaciones').catch(()=>({data:[]}))).data || [];
@@ -19240,7 +19329,6 @@ const CAT_TABS = [
   { id:'labores',  label:'Servicios y Labores', icon:'🚜', g:'prod', tipos:['Labor'],              singular:'Labor' },
   { id:'categAn',  label:'Hacienda',            icon:'🐂', g:'prod', tipos:['Categoría animal'], singular:'Animal' },
   { id:'ciclos',   label:'Ciclos / Campañas',   icon:'📅', g:'fisc', tipos:['Ciclo'],              singular:'Ciclo' },
-  { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', g:'fisc', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
   { id:'unidades', label:'Unidades de medida',  icon:'📏', g:'unid', tipos:['Unidad de medida'],   singular:'Unidad' },
   { id:'monedas',  label:'Monedas',             icon:'💱', g:'unid', tipos:['Moneda'],             singular:'Moneda' },
   { id:'condIVA',  label:'Condición IVA',       icon:'🧾', g:'fisc', tipos:['Condición IVA'],      singular:'Condición' },
@@ -19421,7 +19509,7 @@ function catGastoTreeOptions(selectedId, opts) {
   return html;
 }
 pages.catGastos = async function() {
-  setHeader('Categorías de Gasto', 'Organizá tus gastos en un árbol (Categoría → Familia → Subfamilia). Se usan al cargar Movimientos Diarios.');
+  setHeader('Categorías de Gastos', 'Organizá tus gastos en un árbol (Categoría → Familia → Subfamilia). Se usan al cargar Movimientos Diarios.');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('catGastos','Categorías de Gasto'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let cats = [];
@@ -19613,6 +19701,22 @@ pages.catalogos = async function() {
   else if (esMonedas || esProdCat) { /* se renderiza aparte */ }
   else items.forEach(i => { (subgrupos[i.tipo] = subgrupos[i.tipo] || []).push(i); });
 
+  // Agrupación por FAMILIA para TODAS las pestañas de productos (raíz → familia; las
+  // subfamilias caen dentro de su familia madre; lo que no tiene familia va a "Sin Familia").
+  let _rootIdTab = null;
+  if (esProdCat) _rootIdTab = tab.catId;
+  else if (CATTAB_ROOT[tab.id]) { const rn=_norm(CATTAB_ROOT[tab.id]); const rnode = arbol.find(c=>!c.padreId && _norm(c.nombre)===rn); _rootIdTab = rnode ? rnode.id : null; }
+  const _familiaDeItem = (caId) => {
+    if (!caId || !_rootIdTab) return null;
+    let c=_catNodo(caId), g=0;
+    while (c && g++<30) { if (c.padreId===_rootIdTab) return c; if (c.id===_rootIdTab) return null; c = c.padreId ? _catNodo(c.padreId) : null; }
+    return null;
+  };
+  const agrupaFamilia = esProdCat || !!_rootIdTab;
+  const subgruposFam = {};
+  if (agrupaFamilia) items.forEach(i => { const fam=_familiaDeItem(i.categoriaArticuloId); const k=fam?fam.nombre:'Sin Familia'; (subgruposFam[k]=subgruposFam[k]||[]).push(i); });
+  const _famKeys = Object.keys(subgruposFam).sort((a,b)=> a==='Sin Familia'?1 : (b==='Sin Familia'?-1 : a.localeCompare(b)));
+
   // Sidebar vertical (desktop) + select desplegable (mobile), AGRUPADOS por familia.
   const sideHtml = CAT_GRUPOS.map(gr => {
     const tabsG = TABS.filter(t => t.g === gr.id);
@@ -19715,11 +19819,13 @@ pages.catalogos = async function() {
           <div class="text-[11px] text-slate-500 mb-2">Artículos de la categoría <b>${esc(tab.label)}</b> del árbol. Se usan en compras, ventas y stock. Podés crear, editar o eliminar desde acá.</div>
           ${items.length===0
             ? `<div class="stub-card">No hay artículos en <b>${esc(tab.label)}</b> todavía. Usá "+ Nuevo" para crear uno${otrosTab&&otrosTab.id===tab.id?', o vinculá artículos existentes a una familia desde Categorías y Familias':''}.</div>`
-            : `<div class="kpi p-0 overflow-hidden mb-3">
+            : _famKeys.map(fk => { const arr=subgruposFam[fk]; return `
+              <div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-3">${fk==='Sin Familia'?'📦 ':''}${esc(fk)} · ${arr.length}</div>
+              <div class="kpi p-0 overflow-hidden mb-3">
                 <table class="data">
                   <thead><tr><th>Artículo</th><th>Familia</th><th>Unidad</th><th>Estado</th><th></th></tr></thead>
                   <tbody>
-                    ${items.map(p => { const fam=p.categoriaArticuloId?_catNodo(p.categoriaArticuloId):null; return `
+                    ${arr.map(p => { const fam=p.categoriaArticuloId?_catNodo(p.categoriaArticuloId):null; return `
                       <tr class="table-row">
                         <td class="font-semibold text-slate-800">${esc(p.nombre)}${p.sku?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.sku)}</div>`:''}</td>
                         <td>${fam?`<span class="badge badge-blue text-[11px]">${esc(fam.nombre)}</span>`:'<span class="text-slate-300">—</span>'}</td>
@@ -19732,7 +19838,7 @@ pages.catalogos = async function() {
                       </tr>`; }).join('')}
                   </tbody>
                 </table>
-              </div>`}
+              </div>`; }).join('')}
         ` : esMonedas ? `
           <div class="text-[11px] text-slate-500 mb-2">Las monedas <b>predefinidas</b> (USD, EUR, granos) ya vienen y se actualizan solas a diario. Podés crear <b>monedas propias</b> y elegir su fuente de cotización automática (dólar/pizarra) o dejarla manual. Estas monedas se usan en compras, ventas, cuenta corriente, pagos/cobros y flujo de fondos.</div>
           <div class="kpi p-0 overflow-hidden mb-3">
@@ -19780,14 +19886,14 @@ pages.catalogos = async function() {
               </div>`).join('')}
         ` : items.length===0
           ? `<div class="stub-card">No hay elementos en <b>${esc(tab.label)}</b> todavía. Usá "+ Nuevo" para crear uno.</div>`
-          : Object.entries(subgrupos).map(([tipo, arr]) => `
-              ${Object.keys(subgrupos).length > 1 ? `<div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-3">${esc(tipo)} · ${arr.length}</div>` : ''}
+          : (agrupaFamilia ? _famKeys.map(fk => [fk, subgruposFam[fk]]) : Object.entries(subgrupos)).map(([grp, arr]) => `
+              ${(agrupaFamilia || Object.keys(subgrupos).length > 1) ? `<div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-3">${grp==='Sin Familia'?'📦 ':''}${esc(grp)} · ${arr.length}</div>` : ''}
               <div class="kpi p-0 overflow-hidden mb-3">
                 <table class="data">
                   <thead><tr>
                     <th>Nombre</th>
                     <th>Código</th>
-                    <th>${tipo==='Ciudad'?'Provincia':tipo==='Provincia'?'País':'Descripción'}</th>
+                    <th>${grp==='Ciudad'?'Provincia':grp==='Provincia'?'País':'Descripción'}</th>
                     <th>Estado</th>
                     <th></th>
                   </tr></thead>
@@ -19796,7 +19902,7 @@ pages.catalogos = async function() {
                       <tr class="table-row">
                         <td class="font-semibold text-slate-800">${esc(i.nombre)}</td>
                         <td class="text-slate-600">${esc(i.codigo||'—')}</td>
-                        <td class="text-slate-600">${tipo==='Ciudad'||tipo==='Provincia' ? (i.descripcion?`<span class="badge badge-blue">📍 ${esc(i.descripcion)}</span>`:'—') : tipo==='Labor' ? (i.precioReferencia?`<span class="badge badge-yellow text-[11px]">$ ${fmtN(i.precioReferencia)} ${i.tipoPrecio==='total'?'(total)':'/ ha'}</span>${i.descripcion?' · '+esc(i.descripcion):''}`:esc(i.descripcion||'')) : esc(i.descripcion||'')}</td>
+                        <td class="text-slate-600">${i.tipo==='Ciudad'||i.tipo==='Provincia' ? (i.descripcion?`<span class="badge badge-blue">📍 ${esc(i.descripcion)}</span>`:'—') : i.tipo==='Labor' ? (i.precioReferencia?`<span class="badge badge-yellow text-[11px]">$ ${fmtN(i.precioReferencia)} ${i.tipoPrecio==='total'?'(total)':'/ ha'}</span>${i.descripcion?' · '+esc(i.descripcion):''}`:esc(i.descripcion||'')) : esc(i.descripcion||'')}</td>
                         <td>${i.activo===false?'<span class="badge badge-gray">Inactivo</span>':'<span class="badge badge-green">Activo</span>'}</td>
                         <td class="text-right whitespace-nowrap">
                           ${can('catalogos:update')||can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='catForm(${JSON.stringify(i.id)},"${tab.id}")'>✏️</button>`:''}
