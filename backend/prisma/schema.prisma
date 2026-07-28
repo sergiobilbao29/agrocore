@@ -45,6 +45,7 @@ model Company {
   campos          Campo[]
   productos       Producto[]
   categoriasArticulo CategoriaArticulo[]
+  categoriasGasto CategoriaGasto[]
   movimientos     Movimiento[]
   clientes        Cliente[]
   proveedores     Proveedor[]
@@ -409,6 +410,27 @@ model CategoriaArticulo {
   hijos     CategoriaArticulo[] @relation("CategoriaArticuloArbol")
   productos Producto[]
   catalogos Catalogo[]
+
+  @@index([companyId])
+  @@index([padreId])
+}
+
+// Árbol de categorías de GASTO (para Movimientos Diarios). Mismo patrón padre/hijo
+// que CategoriaArticulo, pero independiente (no se mezcla con artículos).
+model CategoriaGasto {
+  id        String   @id @default(cuid())
+  companyId String
+  nombre    String
+  padreId   String?
+  icono     String?
+  orden     Int      @default(0)
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  padre     CategoriaGasto?  @relation("CategoriaGastoArbol", fields: [padreId], references: [id], onDelete: SetNull)
+  hijos     CategoriaGasto[] @relation("CategoriaGastoArbol")
 
   @@index([companyId])
   @@index([padreId])

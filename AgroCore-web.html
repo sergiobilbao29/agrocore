@@ -988,6 +988,7 @@ const MODULES = [
   // ===== ADMINISTRACIÓN =====
   { id:'catalogos',     label:'Catálogos',            icon:'📚', perm:'produccion:read', section:'Administración' },
   { id:'categoriasArt', label:'Categorías y Familias', icon:'🗂️', perm:'produccion:read', section:'Administración' },
+  { id:'catGastos',     label:'Categorías de Gasto',   icon:'🏷️', perm:'finanzas:read',    section:'Administración' },
   { id:'usuarios',      label:'Usuarios',             icon:'👤', perm:'*',               section:'Administración' },
   { id:'roles',         label:'Roles y permisos',     icon:'🔐', perm:'*',               section:'Administración' },
   { id:'empresas',      label:'Empresas',             icon:'🏢', perm:'*',               section:'Administración' },
@@ -2466,6 +2467,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
+      titulo:'🏷️ v2.10.0 — Categorías de Gasto en árbol (Categoría → Familia) para Movimientos Diarios',
+      desc:'Nuevo <b>árbol de Categorías de Gasto</b> (en Administración → Categorías de Gasto), igual que Categorías y Familias pero para gastos: armás <b>Categoría → Familia → subfamilias</b> a gusto. En <b>Movimientos Diarios</b>, la vieja lista fija se reemplazó por elegir <b>Categoría</b> y <b>Familia</b> del árbol (obligatorio); el <b>Concepto</b> y la <b>Contraparte</b> (quién cobra) siguen libres. En el resumen podés filtrar por la <b>Categoría</b> (te junta todas sus familias) y buscar por concepto. La primera vez, el árbol se siembra solo e <b>importa</b> las categorías de gasto que ya venías usando. <b>Arreglo:</b> al editar un movimiento bancario ahora sí se guarda el cambio de <b>Empresa ↔ Personal del dueño</b>.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'🗂️ v2.9.8 — Catálogos reflejan el árbol de Categorías (Repuestos incluido) + eliminar artículos',
       desc:'El menú de <b>Catálogos</b> ahora muestra <b>exactamente las mismas categorías</b> que definís en <b>Categorías y Familias</b>: si creás una categoría propia (ej. <b>Repuestos</b>), aparece sola como pestaña y ahí ves/creás/editás/<b>eliminás</b> sus artículos. Se quitó el título “Clasificación y Familias” y se renombraron las pestañas para que coincidan (Insumos, Hacienda, Servicios y Labores). En <b>Stock</b> y <b>Movimientos</b> la columna/filtro <b>Categoría</b> ahora usa la <b>categoría raíz del árbol</b> (Insumos, Repuestos, Hacienda…), no las viejas etiquetas planas. Los artículos de prueba se pueden <b>eliminar</b> (o desactivar si tienen movimientos) desde la pestaña de su categoría. Además, el alta/edición de producto ahora tiene <b>una sola Categoría</b> (la del árbol): se eliminó el selector viejo de categorías planas.' },
@@ -19389,6 +19393,155 @@ async function catArtDel(id) {
   } catch (e) { toast(e.message,'error'); }
 }
 
+// ============================================================
+// CATEGORÍAS DE GASTO — árbol padre/hijo (para Movimientos Diarios). Mismo manejo
+// que Categorías y Familias de artículos, pero independiente y para gastos.
+// ============================================================
+function catGastoRuta(id) {
+  const cats = state.cache.categoriasGasto || [];
+  const parts = []; let cur = cats.find(c=>c.id===id); let guard=0;
+  while (cur && guard++ < 20) { parts.unshift(cur.nombre); cur = cur.padreId ? cats.find(c=>c.id===cur.padreId) : null; }
+  return parts.join(' > ');
+}
+function catGastoTreeOptions(selectedId, opts) {
+  opts = opts || {};
+  const cats = state.cache.categoriasGasto || [];
+  const skip = new Set();
+  if (opts.excludeId) { const collect=(id)=>{ skip.add(id); cats.filter(c=>c.padreId===id).forEach(ch=>collect(ch.id)); }; collect(opts.excludeId); }
+  let html = '<option value="">'+ esc(opts.rootLabel || '(sin categoría)') +'</option>';
+  const walk = (padreId, depth) => {
+    cats.filter(c => c.padreId === padreId).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||'')).forEach(n => {
+      if (skip.has(n.id)) return;
+      const pad = '   '.repeat(depth) + (depth>0 ? '↳ ' : '');
+      html += '<option value="'+esc(n.id)+'" '+(n.id===selectedId?'selected':'')+'>'+pad+(n.icono?esc(n.icono)+' ':'')+esc(n.nombre)+'</option>';
+      walk(n.id, depth+1);
+    });
+  };
+  walk(opts.startPadreId !== undefined ? opts.startPadreId : null, 0);
+  return html;
+}
+pages.catGastos = async function() {
+  setHeader('Categorías de Gasto', 'Organizá tus gastos en un árbol (Categoría → Familia → Subfamilia). Se usan al cargar Movimientos Diarios.');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('catGastos','Categorías de Gasto'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let cats = [];
+  try { cats = (await api('/api/categorias-gasto')).data || []; } catch (e) { return toast(e.message,'error'); }
+  if (!cats.length && can('finanzas:create')) {
+    try {
+      await api('/api/categorias-gasto/sembrar', { method:'POST', body: JSON.stringify({}) });
+      cats = (await api('/api/categorias-gasto')).data || [];
+      toast('Árbol de gastos inicializado','success');
+    } catch (e) { /* si falla, mostramos vacío */ }
+  }
+  state.cache.categoriasGasto = cats;
+  catGastoRender();
+};
+function catGastoRender() {
+  const cats = state.cache.categoriasGasto || [];
+  const raices = cats.filter(c => !c.padreId).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
+  const hijosDe = (id) => cats.filter(c => c.padreId === id).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
+  const nFamilias = cats.filter(c => c.padreId).length;
+  const puedeEditar = can('finanzas:update'), puedeCrear = can('finanzas:create'), puedeBorrar = can('finanzas:delete');
+  const nodo = (n, depth) => {
+    const hijos = hijosDe(n.id);
+    const esRaiz = depth === 0;
+    const acciones = `<span class="flex items-center gap-1 flex-shrink-0">
+      ${puedeCrear?`<button class="btn btn-ghost text-xs" title="Agregar sub-familia" onclick='catGastoForm(null, ${JSON.stringify(n.id)})'>➕${esRaiz?' Familia':''}</button>`:''}
+      ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar" onclick='catGastoForm(${JSON.stringify(n.id)}, null)'>✏️</button>`:''}
+      ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='catGastoDel(${JSON.stringify(n.id)})'>🗑️</button>`:''}
+    </span>`;
+    const fila = `<div class="flex items-center justify-between gap-2 ${esRaiz?'font-bold text-slate-800':'text-sm text-slate-700'}">
+      <span>${esRaiz?'':'↳ '}${n.icono?esc(n.icono)+' ':''}${esc(n.nombre)}${n.activo===false?' <span class="badge badge-gray text-[10px]">inactiva</span>':''}</span>
+      ${acciones}
+    </div>`;
+    const hijosHtml = hijos.length
+      ? `<div class="mt-1 pl-3 border-l-2 border-slate-100 space-y-1">${hijos.map(h=>nodo(h, depth+1)).join('')}</div>`
+      : (esRaiz ? `<div class="mt-1 pl-3 text-[11px] text-slate-400">Sin familias. Usá ➕ Familia para agregar.</div>` : '');
+    return esRaiz ? `<div class="kpi">${fila}${hijosHtml}</div>` : `<div>${fila}${hijosHtml}</div>`;
+  };
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${raices.length} categoría${raices.length===1?'':'s'} · ${nFamilias} familia${nFamilias===1?'':'s'}</div>
+      <div class="flex gap-2">
+        ${puedeCrear?`<button class="btn btn-secondary text-xs" title="Regenerar el árbol sugerido (reemplaza el actual)" onclick="catGastoRegenerar()">↺ Regenerar sugerido</button>`:''}
+        ${puedeCrear?`<button class="btn btn-primary" onclick="catGastoForm(null, null)">+ Nueva categoría</button>`:''}
+      </div>
+    </div>
+    <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mb-3">
+      💡 <b>Categoría</b> (ej. Gastos familiares) → <b>Familia</b> (ej. Alimentación, Impuestos) → podés anidar sub-familias. En <b>Movimientos Diarios</b> elegís la Categoría y la Familia; el concepto y la contraparte (quién cobra) van libres en cada movimiento.
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      ${raices.map(r => nodo(r, 0)).join('') || `<div class="kpi md:col-span-2 text-center text-slate-400 py-8">Sin categorías. Creá la primera con "+ Nueva categoría".</div>`}
+    </div>`;
+}
+async function catGastoRegenerar() {
+  if (!confirm('Regenerar reemplaza TODAS las categorías de gasto actuales por el árbol por defecto (Empresa, Gastos familiares, Otros) e importa las que ya usaste. ¿Continuar?')) return;
+  try {
+    const r = await api('/api/categorias-gasto/sembrar?force=1', { method:'POST', body: JSON.stringify({ force:true }) });
+    delete state.cache.categoriasGasto;
+    toast('Árbol regenerado ('+(r.total||0)+' nodos)','success');
+    pages.catGastos();
+  } catch (e) { toast('No se pudo regenerar: '+(e.message||e),'error'); }
+}
+function catGastoForm(id=null, padreIdDefault=null) {
+  const cats = state.cache.categoriasGasto || [];
+  let c = { nombre:'', padreId: padreIdDefault, icono:'', activo:true, orden:0 };
+  if (id) { const cur = cats.find(x => x.id === id); if (cur) c = { ...c, ...cur }; }
+  const esFamilia = !!c.padreId;
+  openModal({
+    title: (id?'Editar ':'Nueva ') + (esFamilia?'familia':'categoría'), size:'max-w-md',
+    body: `
+      <div><label class="label">Nombre *</label><input id="cg-nombre" class="input" value="${esc(c.nombre||'')}" placeholder="${esFamilia?'Ej: Impuestos, Sueldos, Alimentación…':'Ej: Empresa, Gastos familiares…'}"/></div>
+      <div class="mt-3"><label class="label">Depende de</label>
+        <select id="cg-padre" class="input">
+          ${catGastoTreeOptions(c.padreId, { excludeId: id, rootLabel:'— Ninguna: es una Categoría principal —' })}
+        </select>
+        <div class="text-[10px] text-slate-400 mt-1">Elegí de qué nodo cuelga (podés anidar cuantos niveles quieras). Si dejás "Ninguna", es una <b>Categoría</b> principal.</div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mt-3">
+        <div><label class="label">Ícono (emoji)</label><input id="cg-icono" class="input" value="${esc(c.icono||'')}" maxlength="4" placeholder="Ej: 🏢"/></div>
+        <div><label class="label">Orden</label><input id="cg-orden" type="number" class="input" value="${c.orden||0}"/></div>
+      </div>
+      <div class="mt-3 flex items-center gap-2">
+        <input id="cg-act" type="checkbox" ${c.activo!==false?'checked':''}/>
+        <label for="cg-act">Activa</label>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick='catGastoSave(${id?JSON.stringify(id):"null"})'>💾 Guardar</button>`
+  });
+}
+async function catGastoSave(id) {
+  const nombre = ($('#cg-nombre')?.value||'').trim();
+  if (!nombre) return toast('Poné el nombre','warn');
+  const data = {
+    nombre,
+    padreId: $('#cg-padre')?.value || null,
+    icono: ($('#cg-icono')?.value||'').trim() || null,
+    orden: Number($('#cg-orden')?.value) || 0,
+    activo: $('#cg-act') ? !!$('#cg-act').checked : true,
+  };
+  try {
+    if (id) await api('/api/categorias-gasto/'+id, { method:'PUT', body: JSON.stringify(data) });
+    else    await api('/api/categorias-gasto',     { method:'POST', body: JSON.stringify(data) });
+    delete state.cache.categoriasGasto;
+    toast('Guardado','success'); closeModal(); pages.catGastos();
+  } catch (e) { toast('No se pudo guardar: '+(e.message||e),'error'); }
+}
+async function catGastoDel(id) {
+  const cats = state.cache.categoriasGasto || [];
+  const tieneHijos = cats.some(c => c.padreId === id);
+  const msg = tieneHijos
+    ? '¿Eliminar esta categoría? Sus familias quedan como categorías sueltas (no se borran).'
+    : '¿Eliminar esta categoría/familia de gasto?';
+  if (!confirm(msg)) return;
+  try {
+    try { await api('/api/categorias-gasto/'+id+'/preparar-borrado', { method:'POST', body: JSON.stringify({}) }); } catch {}
+    await api('/api/categorias-gasto/'+id, { method:'DELETE' });
+    delete state.cache.categoriasGasto;
+    toast('Eliminada','success'); pages.catGastos();
+  } catch (e) { toast(e.message,'error'); }
+}
+
 pages.catalogos = async function() {
   setHeader('Catálogos', 'Maestros del sistema: cereales, animales, labores, insumos, unidades…');
   if (!can('produccion:read') && !can('catalogos:read')) { $('#page-body').innerHTML = stubPage('catalogos','Catálogos'); return; }
@@ -19656,7 +19809,11 @@ pages.catalogos = async function() {
       </div>
     </div>`;
 };
-function catSwitch(tabId) { state.catTab = tabId; pages.catalogos(); }
+function catSwitch(tabId) {
+  // "Categorías de gasto" ahora es un árbol editable (Categoría → Familia), en su propia página.
+  if (tabId === 'catGasto') { if (typeof go==='function') return go('catGastos'); state.route='catGastos'; return pages.catGastos(); }
+  state.catTab = tabId; pages.catalogos();
+}
 // Qué categoría raíz del árbol corresponde a cada pestaña del catálogo (para elegir Familia).
 const CATTAB_ROOT = { cereales:'Cereales / Granos', insumos:'Insumos', labores:'Servicios y Labores', categAn:'Hacienda' };
 async function catForm(id=null, tabId=null) {
@@ -21080,8 +21237,10 @@ pages.movDiarios = async function() {
   const egresosMes  = filasMes.filter(f => f.tipo === 'egreso').reduce((a,f) => a + f.monto, 0);
   const netoMes = ingresosMes - egresosMes;
 
-  // Categorías existentes para filtro
-  const categoriasUnicas = [...new Set(filas.map(f => f.categoria).filter(Boolean))].sort();
+  // Categorías existentes para filtro: usamos la CATEGORÍA raíz (antes de " / ") para
+  // poder filtrar "Gastos familiares" y ver todas sus familias juntas.
+  const _raizCat = c => String(c||'').split('/')[0].trim();
+  const categoriasUnicas = [...new Set(filas.map(f => _raizCat(f.categoria)).filter(Boolean))].sort();
 
   const hoyStr = hoyLocal;
   // Por defecto muestra los movimientos de HOY (desde hoy, hasta hoy).
@@ -21093,7 +21252,7 @@ pages.movDiarios = async function() {
     const filtered = filas.filter(r => {
       if (f.tipo && r.tipo !== f.tipo) return false;
       if (f.metodo && r.metodo !== f.metodo) return false;
-      if (f.categoria && r.categoria !== f.categoria) return false;
+      if (f.categoria && _raizCat(r.categoria) !== f.categoria) return false;
       if (f.clasif && r.clasificacion !== f.clasif) return false;
       if (f.desde && (r.fecha || '').slice(0,10) < f.desde) return false;
       if (f.hasta && (r.fecha || '').slice(0,10) > f.hasta) return false;
@@ -21370,10 +21529,13 @@ function intercoLeerRecurso(prefix) {
   };
 }
 
-function movDiariosAbrir(pre=null) {
-  // Categorías sugeridas: las del catálogo + las que ya se usaron
-  const catCats = (state.cache.catalogos || []).filter(c => c.tipo === 'Categoría de gasto' && c.activo !== false).map(c => c.nombre);
-  const sugeridas = [...new Set(['Combustible','Comida','Taller','Repuestos','Sueldos','Servicios','Impuestos','Honorarios','Insumos','Otros', ...catCats])].sort();
+async function movDiariosAbrir(pre=null) {
+  // Categoría/Familia salen del árbol de Categorías de Gasto (editable en Administración).
+  if (!state.cache.categoriasGasto) { try { state.cache.categoriasGasto = (await api('/api/categorias-gasto')).data || []; } catch { state.cache.categoriasGasto = []; } }
+  if (!(state.cache.categoriasGasto||[]).length && can('finanzas:create')) {
+    try { await api('/api/categorias-gasto/sembrar', { method:'POST', body: JSON.stringify({}) }); state.cache.categoriasGasto = (await api('/api/categorias-gasto')).data || []; } catch {}
+  }
+  const rootsG = (state.cache.categoriasGasto||[]).filter(c => !c.padreId).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
   openModal({
     title: pre ? '✏️ Editar movimiento diario' : '+ Nuevo movimiento diario', size:'max-w-2xl',
     body:`
@@ -21400,11 +21562,18 @@ function movDiariosAbrir(pre=null) {
           <input id="md-concepto" class="input" placeholder="Ej: Almuerzo equipo · Repuestos taller · Combustible camioneta"/>
         </div>
         <div>
-          <label class="label">Categoría</label>
-          <input id="md-cat" class="input" list="md-cat-list" placeholder="Combustible, Taller, Comida..."/>
-          <datalist id="md-cat-list">${sugeridas.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+          <label class="label">Categoría *</label>
+          <select id="md-cat-root" class="input" onchange="movDiariosFamRefresh()">
+            <option value="">— Elegir categoría —</option>
+            ${rootsG.map(r => `<option value="${esc(r.id)}">${r.icono?esc(r.icono)+' ':''}${esc(r.nombre)}</option>`).join('')}
+          </select>
+          ${rootsG.length ? '' : `<div class="text-[10px] text-amber-700 mt-1">No hay categorías de gasto. Creá el árbol en Administración → Categorías de Gasto.</div>`}
         </div>
-        <div>
+        <div id="md-fam-wrap">
+          <label class="label">Familia</label>
+          <select id="md-cat-fam" class="input" disabled><option value="">— Elegí primero la categoría —</option></select>
+        </div>
+        <div class="col-span-2">
           <label class="label">Clasificación *</label>
           <select id="md-clasif-sel" class="input">
             <option value="empresa">🏢 Empresa</option>
@@ -21447,7 +21616,7 @@ function movDiariosAbrir(pre=null) {
       // Modo edición: prellenar y bloquear el método (no se cambia efectivo↔banco).
       const set=(sel,val)=>{ const el=$(sel); if(el) el.value=val; };
       set('#md-fecha', pre.fecha||''); set('#md-concepto', pre.concepto||''); set('#md-monto', pre.monto??'');
-      set('#md-cat', pre.categoria||''); set('#md-clasif-sel', pre.clasificacion||'empresa');
+      movDiariosCatPrefill(pre.categoria); set('#md-clasif-sel', pre.clasificacion||'empresa');
       set('#md-contrap', pre.contraparte||''); set('#md-obs', pre.obs||'');
       const rTipo = document.querySelector(`input[name="md-tipo"][value="${pre.tipo||'egreso'}"]`); if(rTipo) rTipo.checked = true;
       const met=$('#md-met'); if(met){ met.value = pre.metodo||'efectivo'; met.disabled = true; movDiariosMetodoCambio(); }
@@ -21456,6 +21625,35 @@ function movDiariosAbrir(pre=null) {
       else if (pre.metodo==='transferencia' || pre.metodo==='debito'){ setTimeout(()=>{ const bk=$('#md-banco'); if(bk) bk.value = pre.bancoCuentaId||''; }, 0); }
     }
   }, 0);
+}
+// Recarga el select de Familia según la Categoría (raíz) elegida, con sus sub-familias anidadas.
+function movDiariosFamRefresh(selFamId) {
+  const rootId = document.getElementById('md-cat-root')?.value || '';
+  const wrap = document.getElementById('md-fam-wrap'); if (!wrap) return;
+  if (!rootId) { wrap.innerHTML = `<label class="label">Familia</label><select id="md-cat-fam" class="input" disabled><option value="">— Elegí primero la categoría —</option></select>`; return; }
+  const cats = state.cache.categoriasGasto || [];
+  const hayHijos = cats.some(c => c.padreId === rootId);
+  wrap.innerHTML = `<label class="label">Familia${hayHijos?'':' (sin familias)'}</label>
+    <select id="md-cat-fam" class="input">${catGastoTreeOptions(selFamId||'', { startPadreId: rootId, rootLabel: hayHijos?'— Elegir familia —':'— (sin familias) —' })}</select>`;
+}
+// Prefill de Categoría/Familia al editar, tolerando el formato viejo (texto libre).
+function movDiariosCatPrefill(catStr) {
+  const cats = state.cache.categoriasGasto || [];
+  const raw = String(catStr||'').trim(); if (!raw) { movDiariosFamRefresh(''); return; }
+  const parts = raw.split('/').map(s=>s.trim()).filter(Boolean);
+  const rootName = parts[0]||'', famName = parts[1]||'';
+  const norm = s => (s||'').toLowerCase().trim();
+  let root = cats.find(c => !c.padreId && norm(c.nombre)===norm(rootName));
+  // Formato viejo (una sola palabra que en realidad era una familia): la enganchamos a su raíz.
+  if (!root && parts.length===1) {
+    const fam = cats.find(c => c.padreId && norm(c.nombre)===norm(rootName));
+    if (fam) { let r=fam, g=0; while (r.padreId && g++<20) { const p=cats.find(x=>x.id===r.padreId); if(!p) break; r=p; }
+      const rs=document.getElementById('md-cat-root'); if(rs) rs.value=r.id; movDiariosFamRefresh(fam.id); return; }
+  }
+  const rs = document.getElementById('md-cat-root'); if (rs && root) rs.value = root.id;
+  let famId = '';
+  if (root && famName) { const fam = cats.find(c => c.padreId && norm(c.nombre)===norm(famName)); if (fam) famId = fam.id; }
+  movDiariosFamRefresh(famId);
 }
 function movDiariosMetodoCambio() {
   const met = document.getElementById('md-met').value;
@@ -21515,12 +21713,19 @@ async function movDiariosGuardar() {
   const fecha = document.getElementById('md-fecha').value;
   const concepto = document.getElementById('md-concepto').value.trim();
   const monto = Number(document.getElementById('md-monto').value || 0);
-  const categoria = document.getElementById('md-cat').value.trim() || null;
+  // Categoría/Familia salen del árbol de gastos. Guardamos "Categoría / Familia" (o solo Categoría).
+  const _catsG = state.cache.categoriasGasto || [];
+  const _rootId = document.getElementById('md-cat-root')?.value || '';
+  const _famId  = document.getElementById('md-cat-fam')?.value || '';
+  const _rootNom = _catsG.find(c => c.id === _rootId)?.nombre || '';
+  const _famNom  = _catsG.find(c => c.id === _famId)?.nombre || '';
+  const categoria = _famNom ? (_rootNom + ' / ' + _famNom) : (_rootNom || null);
   const clasificacion = document.getElementById('md-clasif-sel').value;
   const contraparte = document.getElementById('md-contrap').value.trim() || null;
   const observaciones = document.getElementById('md-obs').value.trim() || null;
   const metodo = document.getElementById('md-met').value;
   if (!concepto) return toast('Falta el concepto', 'warn');
+  if (!_rootNom) return toast('Elegí la categoría del gasto', 'warn');
   if (!monto || monto <= 0) return toast('El monto debe ser mayor a 0', 'warn');
   if (!fecha) return toast('Falta la fecha', 'warn');
   const body = {
@@ -21559,7 +21764,7 @@ async function movDiariosGuardar() {
       if (rec.tabla === 'banco') {
         await api('/api/banco-movimientos/'+rec.id, { method:'PUT', body: JSON.stringify({
           fecha: new Date(fecha).toISOString(), concepto, monto,
-          contraparte: contraparte || null, observaciones: obsFull, syncMirror: true,
+          contraparte: contraparte || null, clasificacion, observaciones: obsFull, syncMirror: true,
         })});
       } else {
         await api('/api/efectivo/'+rec.id, { method:'PUT', body: JSON.stringify({

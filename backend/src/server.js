@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.9.8';
+const AGROCORE_VERSION = '2.10.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2462,6 +2462,67 @@ app.post('/api/categorias-articulo/vincular', requireCompany, requirePermission(
       }
     });
     res.json({ ok: true, catalogos: cats, productos: prods });
+  } catch (e) { next(e); }
+});
+
+// ---------- CATEGORÍAS DE GASTO (árbol padre/hijo, para Movimientos Diarios) ----------
+mountCrud({
+  path: 'categorias-gasto', modelName: 'categoriaGasto', perm: 'finanzas',
+  schema: z.object({
+    nombre: z.string().min(1),
+    padreId: z.string().nullable().optional(),
+    icono: z.string().nullable().optional(),
+    orden: z.number().int().optional(),
+    activo: z.boolean().optional(),
+  }),
+  orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+  searchFields: ['nombre'],
+  readOpen: true,   // leer abierto; crear/editar/borrar requiere 'finanzas'
+});
+
+// Al borrar un nodo del árbol de gastos, sus hijos quedan como raíz (sin dato colgado).
+app.post('/api/categorias-gasto/:id/preparar-borrado', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    await prisma.categoriaGasto.updateMany({ where: { companyId: req.companyId, padreId: req.params.id }, data: { padreId: null } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Siembra el árbol de gastos por defecto (solo si está vacío) e importa las categorías
+// de gasto ya usadas (catálogo 'Categoría de gasto') como familias dentro de 'Empresa'.
+app.post('/api/categorias-gasto/sembrar', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const force = req.query.force === '1' || req.body?.force === true;
+    const yaHay = await prisma.categoriaGasto.count({ where: { companyId: req.companyId } });
+    if (yaHay > 0 && !force) return res.json({ ok: true, sembrado: false, total: yaHay });
+
+    // Categorías de gasto ya usadas (del catálogo) -> se migran como familias de "Empresa".
+    const cats = await prisma.catalogo.findMany({ where: { companyId: req.companyId, tipo: 'Categoría de gasto', activo: true } });
+    const usadas = [...new Set(cats.map(c => (c.nombre || '').trim()).filter(Boolean))];
+    const empresaBase = ['Combustible', 'Insumos', 'Repuestos', 'Servicios', 'Impuestos', 'Honorarios', 'Sueldos', 'Fletes', 'Taller'];
+    const empresaHijos = [...new Set([...empresaBase, ...usadas])].sort((a, b) => a.localeCompare(b));
+    const arbol = [
+      { nombre: 'Empresa', icono: '🏢', hijos: empresaHijos },
+      { nombre: 'Gastos familiares', icono: '🏠', hijos: ['Alimentación', 'Impuestos y tasas', 'Educación', 'Salud', 'Servicios del hogar', 'Otros'] },
+      { nombre: 'Otros', icono: '📦', hijos: [] },
+    ];
+    await prisma.$transaction(async (tx) => {
+      if (force) await tx.categoriaGasto.deleteMany({ where: { companyId: req.companyId } });
+      let orden = 0;
+      for (const cat of arbol) {
+        const madre = await tx.categoriaGasto.create({ data: {
+          companyId: req.companyId, nombre: cat.nombre, icono: cat.icono, orden: orden++, activo: true,
+        }});
+        let ordenHijo = 0;
+        for (const hijo of cat.hijos) {
+          await tx.categoriaGasto.create({ data: {
+            companyId: req.companyId, nombre: hijo, padreId: madre.id, orden: ordenHijo++, activo: true,
+          }});
+        }
+      }
+    });
+    const total = await prisma.categoriaGasto.count({ where: { companyId: req.companyId } });
+    res.json({ ok: true, sembrado: true, total, regenerado: force });
   } catch (e) { next(e); }
 });
 
