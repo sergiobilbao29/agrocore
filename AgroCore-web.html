@@ -2442,6 +2442,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
+      titulo:'🧹 v2.9.5 — Menú de catálogos más limpio + alta rápida por familia + columna en Stock',
+      desc:'Se sacaron del menú de Catálogos las pestañas <b>Especies de animales</b> y <b>Tipos de insumo</b> (esa clasificación ahora vive en el árbol de <b>Categorías y Familias</b>; los datos no se pierden). Al <b>crear un producto/insumo desde una compra</b> ahora elegís directamente la <b>Familia del árbol</b> (ej. Insumos → Herbicida): se crea en el catálogo y se agrega el renglón. Y en <b>Movimientos de stock</b> se agregó una columna <b>Familia</b> (separada del nombre); el filtro por categoría ya estaba disponible arriba.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🔗 v2.9.4 — Vincular ítems a su familia + buscador con familias',
       desc:'Botón <b>🔗 Vincular ítems</b> en Categorías y Familias: engancha lo ya cargado (Herbicidas, Fertilizantes, animales…) a la <b>familia con su mismo nombre</b>, sin tener que regenerar (ej: todos los herbicidas quedan en la familia Herbicidas). El <b>regenerar</b> también los vincula. Se sacó la categoría <b>Semillas</b> (era lo mismo que Cereales / Granos). Y en el <b>buscador de Compras y Ventas</b> cada producto muestra su <b>familia</b> del árbol (ej. "Atrazina — Herbicida").' },
@@ -6000,6 +6003,7 @@ pages.movimientos = async function() {
       api('/api/campos').catch(()=>({data:[]})),
     ]);
     rows = r.data||[]; prods = p.data||[]; state.cache.productos = prods;
+    if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     state.cache.movimientos = rows;   // para editar/eliminar movimientos normales
     depositos = d.data || []; state.cache.depositos = depositos;
     hacMovs = h.data || []; campos = c.data || []; state.cache.campos = campos;
@@ -6076,7 +6080,7 @@ pages.movimientos = async function() {
     $('#mov-table').innerHTML = `
       <table class="data">
         <thead><tr>
-          <th>Fecha</th><th>Producto</th><th>Depósito</th>${filtroEsCompartido?'<th>Empresa</th>':''}<th>Tipo</th><th>Motivo</th>
+          <th>Fecha</th><th>Producto</th><th>Familia</th><th>Depósito</th>${filtroEsCompartido?'<th>Empresa</th>':''}<th>Tipo</th><th>Motivo</th>
           <th class="text-right">Cantidad</th><th class="text-right">Precio</th>
           <th class="text-right">Total</th><th>Referencia</th><th>Cargado por</th><th></th>
         </tr></thead>
@@ -6114,7 +6118,8 @@ pages.movimientos = async function() {
                 : `<td class="text-right whitespace-nowrap">${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='movEditForm(${JSON.stringify(m.id)})'>✏️</button>`:''}${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar movimiento" onclick='movDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}${!can('stock:update')&&!can('stock:delete')?'<span class="text-slate-300">—</span>':''}</td>`;
             return `<tr class="table-row">
               <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
-              <td>${esc(m.producto?.nombre || p?.nombre || '—')}${catBadge?` <span class="badge badge-blue text-[10px] ml-1">${esc(catBadge)}</span>`:''}</td>
+              <td>${esc(m.producto?.nombre || p?.nombre || '—')}</td>
+              <td>${(() => { const cid=p?.categoriaArticuloId; let fam=null; if(cid){ const n=(state.cache.categoriasArt||[]).find(x=>x.id===cid); if(n) fam=n.nombre; } fam = fam || catBadge; return fam?`<span class="badge badge-blue text-[10px]">${esc(fam)}</span>`:'<span class="text-slate-300">—</span>'; })()}</td>
               <td>${depCell}</td>
               ${empCell}
               <td>${esIng?'<span class="badge badge-green">Ingreso</span>':'<span class="badge badge-red">Egreso</span>'}</td>
@@ -6126,7 +6131,7 @@ pages.movimientos = async function() {
               <td>${usrCell}</td>
               ${actCell}
             </tr>`;
-          }).join('') || `<tr><td colspan="${filtroEsCompartido?12:11}" class="text-center text-slate-400 py-8">${rows.length?'Sin coincidencias con los filtros':'Sin movimientos'}</td></tr>`}
+          }).join('') || `<tr><td colspan="${filtroEsCompartido?13:12}" class="text-center text-slate-400 py-8">${rows.length?'Sin coincidencias con los filtros':'Sin movimientos'}</td></tr>`}
         </tbody>
       </table>`;
   };
@@ -9294,39 +9299,35 @@ function factItemPickProducto(sel) { /* legacy noop (reemplazado por factItemBus
 //  - Si categoria='cereal' o 'hacienda' → se crea Producto (tabla Producto, con stock).
 //  - Si categoria='insumo' (o cualquier otro) → se crea catálogo Insumo (sin stock).
 // Tras guardar, refresca el cache, regenera la fila del dropdown y selecciona el item nuevo.
-function nuevoItemRapido(btn) {
+async function nuevoItemRapido(btn) {
   const tr = btn.closest('tr');
   if (!tr) return;
   // Buscar el tbody contenedor: fi-tbody (interna), fei-tbody (externa) o fi-tbody (compras)
   const tbody = tr.parentElement;
   const tbodyId = tbody ? tbody.id : '';
   const fila = Array.from(tbody.children).indexOf(tr);
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
   openModal({
     title: '➕ Crear producto/insumo nuevo',
     body: `
       <div class="grid grid-cols-1 gap-3">
         <div><label class="label">Nombre *</label><input id="ni-nombre" class="input" placeholder="Ej. Glifosato Sulfosato"/></div>
+        <div><label class="label">Categoría / Familia *</label>
+          <select id="ni-fam" class="input">${catArtTreeOptions('', { rootLabel:'— Elegir categoría o familia —' })}</select>
+          <div class="text-[10px] text-slate-400 mt-1">Elegí la familia (ej. Insumos → Herbicida). Se administra en Categorías y Familias.</div>
+        </div>
         <div class="grid grid-cols-2 gap-3">
           <div><label class="label">Unidad</label>
             ${catSelect('ni-unidad', 'Unidad de medida', '', { placeholder:'— Unidad —' })}
           </div>
-          <div><label class="label">Categoría *</label>
-            <select id="ni-tipo" class="input">
-              <option value="insumos" selected>🧪 Insumos (agroquímico, semilla, repuesto, combustible)</option>
-              <option value="granos">🌾 Cereales / Granos</option>
-              <option value="hacienda">🐄 Hacienda</option>
-              <option value="servicios">🚜 Servicios / Labores (no descuenta stock)</option>
-              <option value="otros">📦 Otros</option>
+          <div><label class="label">IVA del renglón</label>
+            <select id="ni-iva" class="input">
+              ${[21,10.5,27,0].map(a=>`<option value="${a}" ${a===21?'selected':''}>${a}%</option>`).join('')}
             </select>
           </div>
         </div>
-        <div><label class="label">IVA del renglón</label>
-          <select id="ni-iva" class="input">
-            ${[21,10.5,27,0].map(a=>`<option value="${a}" ${a===21?'selected':''}>${a}%</option>`).join('')}
-          </select>
-        </div>
         <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2">
-          💡 Creamos lo mínimo para que aparezca en la factura (nombre, categoría y unidad). El IVA se aplica a este renglón. Más adelante vas a poder editar el resto del artículo desde <b>Catálogos</b>.
+          💡 Creamos lo mínimo para que aparezca en la factura (nombre, familia y unidad) y se agrega al Catálogo. El IVA se aplica a este renglón.
         </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -9336,13 +9337,22 @@ function nuevoItemRapido(btn) {
 async function nuevoItemRapidoSave(tbodyId, filaIdx) {
   const nombre = $('#ni-nombre').value.trim();
   const unidad = $('#ni-unidad').value.trim();
-  const tipo   = $('#ni-tipo').value;   // ya es la categoría canónica (insumos/granos/hacienda/servicios/otros)
+  const famId  = $('#ni-fam') ? ($('#ni-fam').value || null) : null;   // nodo del árbol elegido
   const ivaSel = $('#ni-iva') ? Number($('#ni-iva').value) : null;
   if (!nombre) return toast('Falta el nombre','warn');
+  // Derivar la categoría plana (compat) desde la raíz de la familia elegida.
+  const arb = state.cache.categoriasArt || [];
+  const nodo = famId ? arb.find(n=>n.id===famId) : null;
+  let root = nodo, g=0; while (root && root.padreId && g++<20) root = arb.find(n=>n.id===root.padreId);
+  const rootNom = (root?.nombre||'').toLowerCase();
+  const tipo = rootNom.startsWith('insumo') ? 'insumos'
+    : (rootNom.startsWith('cereal')||rootNom.includes('grano')) ? 'granos'
+    : rootNom.startsWith('hacienda') ? 'hacienda'
+    : (rootNom.includes('servicio')||rootNom.includes('labor')) ? 'servicios' : 'otros';
   try {
-    // Creamos un Producto directo: así arranca con stock 0 y queda disponible
-    // siempre. Lo categorizamos según el tipo elegido.
-    const data = { nombre, unidad: unidad || null, categoria: tipo, activo: true };
+    // Creamos un Producto directo: arranca con stock 0 y queda disponible. Lo
+    // categorizamos por la familia elegida (categoria plana + familia del árbol).
+    const data = { nombre, unidad: unidad || null, categoria: tipo, categoriaArticuloId: famId, ivaDefault: (ivaSel!=null&&!isNaN(ivaSel))?ivaSel:null, activo: true };
     const r = await api('/api/productos', { method:'POST', body: JSON.stringify(data) });
     const nuevoId = r.data?.id;
     if (!nuevoId) throw new Error('No se devolvió ID del producto creado');
@@ -19102,9 +19112,7 @@ const CAT_TABS = [
   { id:'cereales', label:'Cereales / Granos',   icon:'🌾', g:'prod', tipos:['Cereal'],             singular:'Cereal' },
   { id:'insumos',  label:'Insumos (items)',     icon:'🥫', g:'prod', tipos:['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'], singular:'Insumo' },
   { id:'labores',  label:'Labores',             icon:'🚜', g:'prod', tipos:['Labor'],              singular:'Labor' },
-  { id:'especies', label:'Especies de animales',icon:'🐄', g:'clas', tipos:['Especie'],            singular:'Especie' },
   { id:'categAn',  label:'Animales',             icon:'🐂', g:'clas', tipos:['Categoría animal'], singular:'Animal' },
-  { id:'tiposIns', label:'Tipos de insumo',     icon:'🧪', g:'clas', tipos:['Tipo de insumo'],     singular:'Tipo' },
   { id:'ciclos',   label:'Ciclos / Campañas',   icon:'📅', g:'clas', tipos:['Ciclo'],              singular:'Ciclo' },
   { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', g:'clas', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
   { id:'unidades', label:'Unidades de medida',  icon:'📏', g:'unid', tipos:['Unidad de medida'],   singular:'Unidad' },
