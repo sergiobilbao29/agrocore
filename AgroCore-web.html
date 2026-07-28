@@ -2442,6 +2442,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/07/2026',
+      titulo:'📚 v2.9.0 — Menú de Catálogos reorganizado por familias',
+      desc:'El menú de <b>Catálogos</b> pasó de una lista larga y plana a estar <b>agrupado por familias</b>: Productos y Servicios · Clasificación y Familias · Unidades y Monedas · Tablas Fiscales/Admin · Ubicaciones. Es más fácil encontrar cada maestro. No se quitó ninguna función, solo se reordenó. Arriba quedó un acceso directo a <b>Categorías y Familias</b> (el árbol).' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/07/2026',
       titulo:'🗂️ v2.8.0 — Árbol de Categorías y Familias + atributos de artículo',
       desc:'Nueva sección <b>Administración → Categorías y Familias</b>: un <b>árbol editable</b> de categorías (familia madre → subcategorías) que podés adaptar a tu rubro. La primera vez se crea solo con un árbol agro por defecto (Insumos, Cereales, Hacienda, Servicios, Otros) y <b>mapea tus productos existentes</b> a su familia. Además, la ficha de <b>Producto</b> ahora tiene los campos del estándar ERP: <b>Categoría del árbol, Tipo de artículo (Stockeable/Cereal/Servicio), SKU/código interno, código de barras e IVA por defecto</b>. Todo es opcional y aditivo: la categoría "vieja" de cada producto sigue funcionando igual. (Incluye migración de base de datos, sin borrar nada.)' },
@@ -19013,25 +19016,34 @@ async function laborSave() {
 }
 
 /* ---------- CATALOGOS (maestros) con pestañas ---------- */
+// Grupos del menú de Catálogos (v2.9.0 — reorganización profesional). Cada tab
+// tiene un campo "g" que lo ubica en su grupo. No se elimina ninguna función.
+const CAT_GRUPOS = [
+  { id:'prod', label:'Productos y Servicios' },
+  { id:'clas', label:'Clasificación y Familias' },
+  { id:'unid', label:'Unidades y Monedas' },
+  { id:'fisc', label:'Tablas Fiscales / Admin' },
+  { id:'ubic', label:'Ubicaciones' },
+];
 const CAT_TABS = [
-  { id:'cereales', label:'Cereales / Granos',   icon:'🌾', tipos:['Cereal'],             singular:'Cereal' },
-  { id:'ciclos',   label:'Ciclos / Campañas',   icon:'📅', tipos:['Ciclo'],              singular:'Ciclo' },
-  { id:'especies', label:'Especies de animales',icon:'🐄', tipos:['Especie'],            singular:'Especie' },
-  { id:'categAn',  label:'Categorías de animales',icon:'🐂', tipos:['Categoría animal'], singular:'Categoría' },
-  { id:'labores',  label:'Labores',             icon:'🚜', tipos:['Labor'],              singular:'Labor' },
-  { id:'tiposIns', label:'Tipos de insumo',     icon:'🧪', tipos:['Tipo de insumo'],     singular:'Tipo' },
-  { id:'insumos',  label:'Insumos (items)',     icon:'🥫', tipos:['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'], singular:'Insumo' },
-  { id:'unidades', label:'Unidades de medida',  icon:'📏', tipos:['Unidad de medida'],   singular:'Unidad' },
-  { id:'condIVA',  label:'Condición IVA',       icon:'🧾', tipos:['Condición IVA'],      singular:'Condición' },
-  { id:'bancos',   label:'Bancos',              icon:'🏦', tipos:['Banco'],              singular:'Banco' },
-  { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', tipos:['Caja'],               singular:'Caja' },
-  { id:'mediosExt',label:'Medios externos',     icon:'💸', tipos:['Medio externo'],      singular:'Medio externo' },
-  { id:'monedas',  label:'Monedas',             icon:'💱', tipos:['Moneda'],             singular:'Moneda' },
-  { id:'condPago', label:'Condiciones de pago', icon:'📅', tipos:['Condición de pago'],  singular:'Condición de pago' },
-  { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
-  { id:'paises',   label:'Países',              icon:'🌎', tipos:['País'],               singular:'País' },
-  { id:'provs',    label:'Provincias',          icon:'🗾', tipos:['Provincia'],          singular:'Provincia' },
-  { id:'ciudades', label:'Ciudades / Localidades',icon:'🏙️', tipos:['Ciudad'],           singular:'Ciudad' },
+  { id:'cereales', label:'Cereales / Granos',   icon:'🌾', g:'prod', tipos:['Cereal'],             singular:'Cereal' },
+  { id:'insumos',  label:'Insumos (items)',     icon:'🥫', g:'prod', tipos:['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'], singular:'Insumo' },
+  { id:'labores',  label:'Labores',             icon:'🚜', g:'prod', tipos:['Labor'],              singular:'Labor' },
+  { id:'especies', label:'Especies de animales',icon:'🐄', g:'clas', tipos:['Especie'],            singular:'Especie' },
+  { id:'categAn',  label:'Categorías de animales',icon:'🐂', g:'clas', tipos:['Categoría animal'], singular:'Categoría' },
+  { id:'tiposIns', label:'Tipos de insumo',     icon:'🧪', g:'clas', tipos:['Tipo de insumo'],     singular:'Tipo' },
+  { id:'ciclos',   label:'Ciclos / Campañas',   icon:'📅', g:'clas', tipos:['Ciclo'],              singular:'Ciclo' },
+  { id:'catGasto', label:'Categorías de gasto', icon:'🏷️', g:'clas', tipos:['Categoría de gasto'],  singular:'Categoría de gasto' },
+  { id:'unidades', label:'Unidades de medida',  icon:'📏', g:'unid', tipos:['Unidad de medida'],   singular:'Unidad' },
+  { id:'monedas',  label:'Monedas',             icon:'💱', g:'unid', tipos:['Moneda'],             singular:'Moneda' },
+  { id:'condIVA',  label:'Condición IVA',       icon:'🧾', g:'fisc', tipos:['Condición IVA'],      singular:'Condición' },
+  { id:'condPago', label:'Condiciones de pago', icon:'📅', g:'fisc', tipos:['Condición de pago'],  singular:'Condición de pago' },
+  { id:'bancos',   label:'Bancos',              icon:'🏦', g:'fisc', tipos:['Banco'],              singular:'Banco' },
+  { id:'cajas',    label:'Cajas (efectivo)',    icon:'💵', g:'fisc', tipos:['Caja'],               singular:'Caja' },
+  { id:'mediosExt',label:'Medios externos',     icon:'💸', g:'fisc', tipos:['Medio externo'],      singular:'Medio externo' },
+  { id:'paises',   label:'Países',              icon:'🌎', g:'ubic', tipos:['País'],               singular:'País' },
+  { id:'provs',    label:'Provincias',          icon:'🗾', g:'ubic', tipos:['Provincia'],          singular:'Provincia' },
+  { id:'ciudades', label:'Ciudades / Localidades',icon:'🏙️', g:'ubic', tipos:['Ciudad'],           singular:'Ciudad' },
 ];
 // Si la tab cacheada ya no existe (ej. se quitó "otros"), caer al primero válido
 if (!state.catTab || !CAT_TABS.find(t => t.id === state.catTab)) state.catTab = 'cereales';
@@ -19194,22 +19206,31 @@ pages.catalogos = async function() {
   else if (esMonedas) { /* se renderiza aparte */ }
   else items.forEach(i => { (subgrupos[i.tipo] = subgrupos[i.tipo] || []).push(i); });
 
-  // Sidebar vertical (desktop) + select desplegable (mobile)
-  const sideHtml = CAT_TABS.map(t => {
-    const n = porTab[t.id].length;
-    const active = state.catTab === t.id;
-    return `<button class="cat-side-item ${active?'active':''}" onclick="catSwitch('${t.id}')" title="${esc(t.label)}">
-              <span class="cat-side-ico">${t.icon||'📚'}</span>
-              <span class="cat-side-label">${esc(t.label)}</span>
-              <span class="cat-side-n">${n}</span>
-            </button>`;
+  // Sidebar vertical (desktop) + select desplegable (mobile), AGRUPADOS por familia.
+  const sideHtml = CAT_GRUPOS.map(gr => {
+    const tabsG = CAT_TABS.filter(t => t.g === gr.id);
+    if (!tabsG.length) return '';
+    const btns = tabsG.map(t => {
+      const n = porTab[t.id].length;
+      const active = state.catTab === t.id;
+      return `<button class="cat-side-item ${active?'active':''}" onclick="catSwitch('${t.id}')" title="${esc(t.label)}">
+                <span class="cat-side-ico">${t.icon||'📚'}</span>
+                <span class="cat-side-label">${esc(t.label)}</span>
+                <span class="cat-side-n">${n}</span>
+              </button>`;
+    }).join('');
+    return `<div class="cat-side-group">${esc(gr.label)}</div>${btns}`;
   }).join('');
 
   const selectHtml = `
     <select class="cat-select" onchange="catSwitch(this.value)">
-      ${CAT_TABS.map(t => {
-        const n = porTab[t.id].length;
-        return `<option value="${t.id}" ${state.catTab===t.id?'selected':''}>${t.icon} ${esc(t.label)} (${n})</option>`;
+      ${CAT_GRUPOS.map(gr => {
+        const tabsG = CAT_TABS.filter(t => t.g === gr.id);
+        if (!tabsG.length) return '';
+        return `<optgroup label="${esc(gr.label)}">${tabsG.map(t => {
+          const n = porTab[t.id].length;
+          return `<option value="${t.id}" ${state.catTab===t.id?'selected':''}>${t.icon} ${esc(t.label)} (${n})</option>`;
+        }).join('')}</optgroup>`;
       }).join('')}
     </select>`;
 
@@ -19225,6 +19246,11 @@ pages.catalogos = async function() {
         background:#fff; border:1.5px solid #e2e8f0; border-radius:12px;
         color:#0f172a; appearance:auto;
       }}
+      .cat-side-group{
+        font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+        color:#94a3b8; padding:10px 12px 4px; margin-top:2px;
+      }
+      .cat-side-group:first-child{ margin-top:0; }
       .cat-side-item{
         display:flex; align-items:center; gap:10px; width:100%;
         padding:10px 12px; border-radius:8px; font-size:13.5px;
@@ -19255,6 +19281,10 @@ pages.catalogos = async function() {
       }
     </style>
 
+    <div class="mb-3 flex items-center justify-between flex-wrap gap-2 text-xs bg-slate-50 border border-slate-200 rounded-lg p-2">
+      <span class="text-slate-500">🗂️ Los maestros están agrupados por familia. Para el <b>árbol de categorías</b> de tus productos, entrá a</span>
+      <button class="btn btn-secondary text-xs" onclick="go('categoriasArt')">🗂️ Categorías y Familias →</button>
+    </div>
     <div class="cat-wrap">
       <!-- Sidebar desktop -->
       <nav class="cat-side">${sideHtml}</nav>
