@@ -2,6 +2,8 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="googlebot" content="noindex, nofollow" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta name="theme-color" content="#15803d" />
 <link rel="icon" type="image/png" sizes="32x32" href="/web/img/favicon.png" />
@@ -2479,6 +2481,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
+      titulo:'🔒 v2.11.2 — Las apps de clientes no se indexan en Google (privacidad)',
+      desc:'Cada instancia del sistema (la de cada empresa) ahora le dice a los buscadores que <b>no la indexen</b>: agrega un <b>robots.txt</b> que bloquea el rastreo y una marca <b>noindex</b> en la app. Así los datos privados de cada cliente no aparecen en Google. La web pública (agrocore.ar) sigue indexándose normal.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'💳 v2.11.1 — Importación de cheques: capta rechazados/caducados y la cadena de endoso',
       desc:'El importador de <b>Control de cheques</b> (echeq de terceros) ahora toma el <b>estado final</b> del cheque: si figura <b>Rechazado</b> o <b>Caducado</b> lo carga como rechazado (antes quedaban como endosado). Además guarda en las observaciones toda la <b>cadena de endoso</b> (CUIT del titular, endosante, a quién se endosó, fecha y estado del endoso). Los cheques emitidos suman el CUIT del beneficiario.' },

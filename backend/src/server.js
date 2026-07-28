@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.11.1';
+const AGROCORE_VERSION = '2.11.2';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -76,8 +76,18 @@ app.use(express.json({ limit: '10mb' }));
 // Servir el HTML del frontend desde el mismo dominio (C:\AgroCore\AgroCore-web.html)
 // accesible como GET /app. Al vivir todo bajo la misma URL, se elimina CORS y se
 // puede exponer a internet con un único túnel de Cloudflare.
-app.get('/app', (_req, res) => res.sendFile(path.join(STATIC_DIR, 'AgroCore-web.html')));
+app.get('/app', (_req, res) => { res.set('X-Robots-Tag', 'noindex, nofollow'); res.sendFile(path.join(STATIC_DIR, 'AgroCore-web.html')); });
 app.use('/assets', express.static(path.join(STATIC_DIR, 'assets'), { fallthrough: true }));
+
+// Las instancias de clientes (bocco., peiretti., llsp., gerardo., npi., demo, etc.) son
+// PRIVADAS: no deben indexarse en buscadores. Bloqueamos todo el crawling (robots.txt)
+// y marcamos noindex por header en cualquier respuesta.
+app.get('/robots.txt', (_req, res) => {
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send('User-agent: *\nDisallow: /\n');
+});
+app.use((_req, res, next) => { res.set('X-Robots-Tag', 'noindex, nofollow'); next(); });
 
 // PWA: service worker y manifest (para que el app funcione offline).
 // El SW se sirve desde la raíz para tener scope sobre todo el sitio.
@@ -9273,7 +9283,7 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
             estado: _normalizar(r['Estado'] || '').includes('depositad') ? 'depositado'
                   : _normalizar(r['Estado'] || '').includes('cobrad') ? 'cobrado'
                   : 'en_cartera',
-            observaciones: [r['Origen'] && `Origen: ${r['Origen']}`, r['Destino'] && `Destino: ${r['Destino']}`, r['Quien lo recibe '] && `Recibido por: ${r['Quien lo recibe ']}`].filter(Boolean).join(' · ') || null,
+            observaciones: [(r['CUIT Titular']||r['Cuit Titular']) && `CUIT: ${r['CUIT Titular']||r['Cuit Titular']}`, r['Origen'] && `Origen: ${r['Origen']}`, r['Destino'] && `Destino: ${r['Destino']}`, r['Quien lo recibe '] && `Recibido por: ${r['Quien lo recibe ']}`].filter(Boolean).join(' · ') || null,
           }});
           ok++;
         } catch (e) { errores.push({ hoja: sh1, fila: i+2, error: e.message }); }
@@ -9295,7 +9305,8 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
           const fin  = _normalizar(r['Estado del cheque endosado'] || '');
           const est0 = _normalizar(r['Estado'] || '');
           let estadoCh;
-          if (fin.includes('rechaz') || est0.includes('rechaz')) estadoCh = 'rechazado';
+          if (fin.includes('rechaz') || fin.includes('echazad') || est0.includes('rechaz') || dest.includes('rechaz')) estadoCh = 'rechazado';
+          else if (fin.includes('anulad') || dest.includes('anulad') || est0.includes('anulad')) estadoCh = 'rechazado';
           else if (fin.includes('caduc') || est0.includes('caduc') || dest.includes('caduc')) estadoCh = 'rechazado';
           else if (dest.includes('endosad')) estadoCh = 'endosado';
           else if (dest.includes('depositad')) estadoCh = 'depositado';
