@@ -2447,8 +2447,8 @@ pages.inicio = async function() {
       const s = await api('/api/stock-actual');
       stockOK = true;
       for (const p of (s.data || [])) {
-        if (/cereal/i.test(p.categoria)) stockG += Number(p.existencia || 0);
-        if (/hacienda/i.test(p.categoria)) stockH += Number(p.existencia || 0);
+        if (prodCategoriaRaiz(p) === 'Cereales / Granos' || /cereal|grano/i.test(p.categoria)) stockG += Number(p.existencia || 0);
+        if (prodCategoriaRaiz(p) === 'Hacienda' || /hacienda|animal/i.test(p.categoria)) stockH += Number(p.existencia || 0);
       }
     } catch {}
     try {
@@ -2479,6 +2479,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
+      titulo:'📊 v2.10.3 — Dashboard: el stock de granos (soja, maíz…) ya se ve bien',
+      desc:'<b>Corregido:</b> el KPI <b>Stock granos</b> del Inicio y del Dashboard no sumaba los productos cargados como <b>"granos"</b> (solo tomaba los marcados como "cereal"). Ahora cuenta cualquier producto de la categoría <b>Cereales / Granos</b> (soja, maíz, trigo, etc.), lo determine por su categoría o por el árbol. También se unificó el criterio de <b>Hacienda</b> en los tableros.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'🐄 v2.10.2 — Hacienda: filtro por familia y Stock solo con lo del catálogo',
       desc:'<b>Corregido:</b> el filtro por <b>Familia</b> (ej. Bovino) en <b>Stock</b> y <b>Movimientos de stock</b> ahora sí trae los animales (antes la familia de hacienda no se resolvía porque el producto no la guarda; ahora se toma de la config de Hacienda). Y en <b>Stock</b> ya <b>no aparecen animales de especies que no tenés</b> en el catálogo de Hacienda: se muestran únicamente las categorías vigentes (ej. si solo tenés Bovino, no salen ovinos/porcinos viejos).' },
@@ -4142,8 +4145,8 @@ async function dashResumen() {
     ]);
     prods = sRsp.data || [];
     for (const p of prods) {
-      if (/cereal|grano/i.test(p.categoria)) stockG += Number(p.existencia||0);
-      if (/hacienda|animal/i.test(p.categoria)) stockH += Number(p.existencia||0);
+      if (prodCategoriaRaiz(p) === 'Cereales / Granos' || /cereal|grano/i.test(p.categoria)) stockG += Number(p.existencia||0);
+      if (prodCategoriaRaiz(p) === 'Hacienda' || /hacienda|animal/i.test(p.categoria)) stockH += Number(p.existencia||0);
     }
     camps = cRsp.data || [];
     efectivos = efRsp.data || [];
@@ -19334,7 +19337,12 @@ function prodCategoriaRaiz(p){
   const r = p.categoriaArticuloId ? _catRaizNodo(p.categoriaArticuloId) : null;
   if (r) return r.nombre;
   if (p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda') return 'Hacienda';
-  const map = { insumo:'Insumos', cereal:'Cereales / Granos', combustibles:'Otros', herramienta:'Repuestos', otro:'Otros', otros:'Otros' };
+  const map = {
+    insumo:'Insumos', insumos:'Insumos', combustibles:'Otros', combustible:'Otros',
+    cereal:'Cereales / Granos', cereales:'Cereales / Granos', grano:'Cereales / Granos', granos:'Cereales / Granos',
+    servicio:'Servicios y Labores', servicios:'Servicios y Labores', labor:'Servicios y Labores', labores:'Servicios y Labores', flete:'Servicios y Labores', fletes:'Servicios y Labores',
+    herramienta:'Repuestos', repuesto:'Repuestos', repuestos:'Repuestos', otro:'Otros', otros:'Otros',
+  };
   return map[(p.categoria||'').toLowerCase()] || (p.categoria||'—');
 }
 const CAT_GRUPOS = [
