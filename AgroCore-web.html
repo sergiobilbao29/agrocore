@@ -2479,6 +2479,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
+      titulo:'🐄 v2.10.2 — Hacienda: filtro por familia y Stock solo con lo del catálogo',
+      desc:'<b>Corregido:</b> el filtro por <b>Familia</b> (ej. Bovino) en <b>Stock</b> y <b>Movimientos de stock</b> ahora sí trae los animales (antes la familia de hacienda no se resolvía porque el producto no la guarda; ahora se toma de la config de Hacienda). Y en <b>Stock</b> ya <b>no aparecen animales de especies que no tenés</b> en el catálogo de Hacienda: se muestran únicamente las categorías vigentes (ej. si solo tenés Bovino, no salen ovinos/porcinos viejos).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'🧭 v2.10.1 — Todo sincronizado con Categorías y Familias (catálogos, compras, ventas, stock)',
       desc:'Todo lo que use categorías/familias ahora sale del <b>árbol de Categorías y Familias</b>: <b>Catálogos</b> muestra cada categoría <b>dividida por familia</b> (con subfamilias adentro; lo que no tiene familia va a <b>Sin Familia</b>). En <b>Compras</b> y <b>Ventas</b>, y en <b>Insumos/Labores</b>, los filtros/tipos ya no traen las listas viejas: se sincronizan con el árbol. Al cargar un <b>nuevo movimiento de stock</b>, podés filtrar por <b>Categoría</b> y <b>Familia</b> y <b>escribir para buscar</b> el producto; la hacienda se muestra sin el prefijo de especie (ej. "Vaca" en vez de "Bovino - Vaca"). Se agregó <b>filtro por Familia</b> en Stock y en Movimientos de stock. Además se quitó la pestaña "Categorías de gasto" de Catálogos (ahora es su propia sección, <b>Categorías de Gastos</b>).' },
@@ -5766,7 +5769,7 @@ pages.stock = async function() {
       // (salvo que se active "ver fuera de catálogo"). No se borran, solo no se listan.
       if (_hayCat && !verFuera && !prodEnCatalogo(p, _sets)) return false;
       if (catSel.length && !catSel.includes(catRaizStock(p))) return false;
-      if (state.stockFilter.fam) { const caId = _pmap[p.id]?.categoriaArticuloId ?? p.categoriaArticuloId; if (!_catCadena(caId).includes(state.stockFilter.fam)) return false; }
+      if (state.stockFilter.fam) { const caId = _prodCaId(_pmap[p.id]) || _prodCaId(p); if (!_catCadena(caId).includes(state.stockFilter.fam)) return false; }
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
       if (!q) return true;
@@ -6168,7 +6171,7 @@ pages.movimientos = async function() {
         const pcat = m._hac ? 'Hacienda' : prodCategoriaRaiz(prods.find(x=>x.id===m.productoId));
         if (!f.cats.includes(pcat)) return false;
       }
-      if (f.fam) { const pp = prods.find(x=>x.id===m.productoId); if (!_catCadena(pp?.categoriaArticuloId).includes(f.fam)) return false; }
+      if (f.fam) { const pp = prods.find(x=>x.id===m.productoId); const caId = _prodCaId(pp) || (m._hac ? _prodCaId({categoria:'hacienda', categoriaHacienda:(m.producto?.categoriaHacienda|| (m.producto?.nombre||'').split(' - ').pop().trim())}) : null); if (!_catCadena(caId).includes(f.fam)) return false; }
       if (f.motivo && m.motivo !== f.motivo) return false;
       if (f.desde && (m.fecha||'') < f.desde) return false;
       if (f.hasta && (m.fecha||'') > f.hasta+'T23:59:59') return false;
@@ -6542,7 +6545,7 @@ function _movProdList() {
   const q = (document.getElementById('f-prod-q')?.value || '').toLowerCase().trim();
   return prods.filter(p => {
     if (cat && prodCategoriaRaiz(p) !== cat) return false;
-    if (fam && !_catCadena(p.categoriaArticuloId).includes(fam)) return false;
+    if (fam && !_catCadena(_prodCaId(p)).includes(fam)) return false;
     if (q) { const nom = _movProdNombre(p).toLowerCase(); if (!nom.includes(q) && !(p.nombre||'').toLowerCase().includes(q)) return false; }
     return true;
   }).sort((a,b)=>_movProdNombre(a).localeCompare(_movProdNombre(b)));
@@ -9298,7 +9301,24 @@ function _catalogoArtSets(){
     if (TIPOS_ART.has(c.tipo)) nombres.add(norm(c.nombre));
     else if (c.tipo==='Categoría animal' || c.tipo==='Categoria animal') animales.add(norm(c.nombre));
   });
+  // Las categorías de animales VIGENTES son las de la config de Hacienda (catHacienda).
+  // Si está cargada, ES la fuente autoritativa (así no se muestran animales de especies
+  // que el usuario ya no tiene, ej. quedó solo Bovino). El catálogo viejo queda de respaldo.
+  const hac = state.cache.catHacienda || [];
+  if (hac.length) { animales.clear(); hac.forEach(c => { if (c.activo!==false) animales.add(norm(c.nombre)); }); }
   return { nombres, animales, norm };
+}
+// Categoría del árbol EFECTIVA de un producto: para hacienda (que no guarda
+// categoriaArticuloId en el producto) la tomamos de la config de Hacienda por su categoría.
+function _prodCaId(p) {
+  if (!p) return null;
+  if (p.categoriaArticuloId) return p.categoriaArticuloId;
+  if (p.categoria==='hacienda' || p.esHacienda) {
+    const nm = String(p.categoriaHacienda || (p.nombre||'').split(' - ').pop().trim()).toLowerCase();
+    const cfg = (state.cache.catHacienda||[]).find(c => String(c.nombre||'').toLowerCase().trim()===nm);
+    if (cfg && cfg.categoriaArticuloId) return cfg.categoriaArticuloId;
+  }
+  return null;
 }
 // ¿El producto está representado en el Catálogo? (por nombre o, en hacienda, por categoría)
 function prodEnCatalogo(p, sets){
