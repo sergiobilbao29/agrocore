@@ -2443,6 +2443,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
+      titulo:'🔗 v2.9.4 — Vincular ítems a su familia + buscador con familias',
+      desc:'Botón <b>🔗 Vincular ítems</b> en Categorías y Familias: engancha lo ya cargado (Herbicidas, Fertilizantes, animales…) a la <b>familia con su mismo nombre</b>, sin tener que regenerar (ej: todos los herbicidas quedan en la familia Herbicidas). El <b>regenerar</b> también los vincula. Se sacó la categoría <b>Semillas</b> (era lo mismo que Cereales / Granos). Y en el <b>buscador de Compras y Ventas</b> cada producto muestra su <b>familia</b> del árbol (ej. "Atrazina — Herbicida").' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🐄 v2.9.3 — Animales por Familia + Semillas como categoría propia',
       desc:'En el catálogo de <b>Animales</b> se sacó el campo "Especie" y se reemplazó por <b>Familia</b> (que sale del árbol de Hacienda: Bovinos, Ovinos…, y podés anidar razas como subfamilia). Se sigue guardando internamente para que la matriz de kg/peso funcione igual. Además, al <b>regenerar el árbol</b>, <b>Semillas</b> ahora es una <b>categoría propia</b> (ya no una familia de Insumos). Así se completa la unificación: insumos, labores, animales y cereales se clasifican por el árbol de Categorías y Familias.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
@@ -9154,6 +9157,21 @@ function _factItemsLista() {
         tipoLabel: c.tipo,
       });
     });
+  // Enriquecer con la FAMILIA del árbol (si está cargado): muestra la familia real
+  // de cada ítem en el buscador (ej. "Herbicida"), tomada del árbol de Categorías.
+  const arb = state.cache.categoriasArt || [];
+  if (arb.length) {
+    const byId = {}; arb.forEach(n => byId[n.id] = n);
+    const famName = (id) => byId[id] ? byId[id].nombre : '';
+    const prodById = {}; (state.cache.productos||[]).forEach(p => prodById[p.id] = p);
+    const catByNom = {}; (state.cache.catalogos||[]).forEach(c => { const k=(c.nombre||'').toLowerCase().trim(); if (!catByNom[k]) catByNom[k]=c; });
+    items.forEach(it => {
+      let caId = null;
+      if (it.productoId && prodById[it.productoId]) caId = prodById[it.productoId].categoriaArticuloId;
+      else if (it.fromCatalogo) { const c = catByNom[(it.nombre||'').toLowerCase().trim()]; caId = c && c.categoriaArticuloId; }
+      if (caId) it.familia = famName(caId);
+    });
+  }
   return items;
 }
 
@@ -9188,7 +9206,8 @@ function factRenderDatalist() {
   const fam = document.getElementById('fi-cat')?.value || 'Todos';
   const lista = _factItemsLista().filter(x => fam === 'Todos' || _familiaArticulo(x.categoria) === fam);
   dl.innerHTML = lista.map(x => {
-    const cat = x.fromCatalogo ? ` — ${x.tipoLabel}` : '';
+    const famTxt = x.familia || x.tipoLabel || '';
+    const cat = famTxt ? ` — ${famTxt}` : '';
     const lbl = `${x.nombre}${x.unidad?` (${x.unidad})`:''}${cat}`;
     return `<option value="${esc(lbl)}" data-pid="${esc(x.productoId||'')}" data-nombre="${esc(x.nombre)}" data-unidad="${esc(x.unidad)}" data-cat="${esc(x.categoria)}" data-precio="${esc(String(x.precio||''))}" data-from-catalogo="${x.fromCatalogo?'1':''}"></option>`;
   }).join('');
@@ -9470,6 +9489,7 @@ async function factForm() {
   setTimeout(async () => {
     $('#fi-tbody').addEventListener('input', factRecalc);
     factRecalc();
+    if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     factRenderDatalist();
     factClaseHint();
     // Pre-cargar datos para método si todavía no están
@@ -9821,6 +9841,7 @@ async function factFormExterna() {
   setTimeout(async () => {
     $('#fei-tbody').addEventListener('input', factExtRecalc);
     factExtRecalc();
+    if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     factRenderDatalist();
     // Pre-cargar datos para método
     if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
@@ -10524,6 +10545,7 @@ async function compForm() {
   setTimeout(async () => {
     $('#fi-tbody').addEventListener('input', factRecalc);
     factRecalc();
+    if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     factRenderDatalist();
     // Pre-cargar datos para método de pago si todavía no están
     if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
@@ -19147,6 +19169,7 @@ function catArtRender() {
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600">${raices.length} categoría${raices.length===1?'':'s'} · ${nFamilias} familia${nFamilias===1?'':'s'}</div>
       <div class="flex gap-2">
+        ${puedeCrear?`<button class="btn btn-secondary text-xs" title="Vincula los ítems ya cargados (Herbicidas, animales, etc.) a su familia por nombre. No borra nada." onclick="catArtVincular()">🔗 Vincular ítems</button>`:''}
         ${puedeCrear?`<button class="btn btn-secondary text-xs" title="Regenerar el árbol sugerido (reemplaza el actual)" onclick="catArtRegenerar()">↺ Regenerar sugerido</button>`:''}
         ${puedeCrear?`<button class="btn btn-primary" onclick="catArtForm(null, null)">+ Nueva categoría</button>`:''}
       </div>
@@ -19157,6 +19180,13 @@ function catArtRender() {
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       ${raices.map(r => nodo(r, 0)).join('') || `<div class="kpi md:col-span-2 text-center text-slate-400 py-8">Sin categorías. Creá la primera con "+ Nueva categoría".</div>`}
     </div>`;
+}
+async function catArtVincular() {
+  try {
+    const r = await api('/api/categorias-articulo/vincular', { method:'POST', body: JSON.stringify({}) });
+    delete state.cache.catalogos; delete state.cache.productos;
+    toast(`Vinculados: ${r.catalogos||0} ítems del catálogo y ${r.productos||0} productos`,'success');
+  } catch (e) { toast('No se pudo vincular: '+(e.message||e),'error'); }
 }
 async function catArtRegenerar() {
   if (!confirm('Regenerar el árbol sugerido reemplaza TODAS las categorías y familias actuales por el árbol por defecto (Insumos, Cereales, Hacienda, Servicios, Otros) y sus familias tomadas de tus catálogos (Tipos de insumo y Especies).\n\nLos productos/ítems quedan sin familia asignada (después la reasignás). ¿Continuar?')) return;

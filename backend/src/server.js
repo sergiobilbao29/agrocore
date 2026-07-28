@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.9.3';
+const AGROCORE_VERSION = '2.9.4';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2388,7 +2388,6 @@ app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('
     // Categoría (raíz) -> Familias (hijos). Producto/Item queda en el 3er nivel (catálogo).
     const arbol = [
       { nombre: 'Insumos', icono: '🌱', hijos: insumosHijos },
-      { nombre: 'Semillas', icono: '🌱', hijos: [] },
       { nombre: 'Cereales / Granos', icono: '🌾', hijos: ['Fina', 'Gruesa'] },
       { nombre: 'Hacienda', icono: '🐄', hijos: haciendaHijos },
       { nombre: 'Servicios y Labores', icono: '🚜', hijos: ['De Campaña', 'De Animales', 'Externos'] },
@@ -2425,9 +2424,44 @@ app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('
           tipoArticulo: p.tipoArticulo || _tipoArticuloDeCategoria(p.categoria),
         }});
       }
+      // Vincular items del catálogo (Herbicida, Fertilizante, Bovino...) a la familia
+      // del árbol que tenga ese mismo nombre (su "tipo" o especie).
+      const nodos = await tx.categoriaArticulo.findMany({ where: { companyId: req.companyId } });
+      const byName = {}; nodos.forEach(n => { byName[(n.nombre||'').trim().toLowerCase()] = n.id; });
+      const items = await tx.catalogo.findMany({ where: { companyId: req.companyId } });
+      for (const it of items) {
+        const fid = byName[(it.tipo||'').trim().toLowerCase()];
+        if (fid) { try { await tx.catalogo.update({ where: { id: it.id }, data: { categoriaArticuloId: fid } }); } catch {} }
+      }
     });
     const total = await prisma.categoriaArticulo.count({ where: { companyId: req.companyId } });
     res.json({ ok: true, sembrado: true, total, regenerado: force });
+  } catch (e) { next(e); }
+});
+
+// Vincula los items del catálogo y los productos a las familias del árbol SIN
+// recrear el árbol (backfill no destructivo). Ideal para enganchar lo ya cargado.
+app.post('/api/categorias-articulo/vincular', requireCompany, requirePermission('catalogos:create'), async (req, res, next) => {
+  try {
+    const nodos = await prisma.categoriaArticulo.findMany({ where: { companyId: req.companyId } });
+    if (!nodos.length) return res.json({ ok: true, catalogos: 0, productos: 0, sinArbol: true });
+    const byName = {}; nodos.forEach(n => { byName[(n.nombre||'').trim().toLowerCase()] = n.id; });
+    const roots = {}; nodos.filter(n => !n.padreId).forEach(n => { roots[(n.nombre||'').trim().toLowerCase()] = n.id; });
+    let cats = 0, prods = 0;
+    await prisma.$transaction(async (tx) => {
+      const items = await tx.catalogo.findMany({ where: { companyId: req.companyId } });
+      for (const it of items) {
+        if (it.categoriaArticuloId) continue;
+        const fid = byName[(it.tipo||'').trim().toLowerCase()];
+        if (fid) { await tx.catalogo.update({ where: { id: it.id }, data: { categoriaArticuloId: fid } }); cats++; }
+      }
+      const productos = await tx.producto.findMany({ where: { companyId: req.companyId, categoriaArticuloId: null } });
+      for (const p of productos) {
+        const madreId = roots[_familiaMadreDeCategoria(p.categoria).trim().toLowerCase()] || roots['otros'];
+        if (madreId) { await tx.producto.update({ where: { id: p.id }, data: { categoriaArticuloId: madreId, tipoArticulo: p.tipoArticulo || _tipoArticuloDeCategoria(p.categoria) } }); prods++; }
+      }
+    });
+    res.json({ ok: true, catalogos: cats, productos: prods });
   } catch (e) { next(e); }
 });
 
