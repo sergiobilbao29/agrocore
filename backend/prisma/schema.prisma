@@ -408,6 +408,7 @@ model CategoriaArticulo {
   padre     CategoriaArticulo?  @relation("CategoriaArticuloArbol", fields: [padreId], references: [id], onDelete: SetNull)
   hijos     CategoriaArticulo[] @relation("CategoriaArticuloArbol")
   productos Producto[]
+  catalogos Catalogo[]
 
   @@index([companyId])
   @@index([padreId])
@@ -1140,14 +1141,19 @@ model Catalogo {
   // La cantidad se interpreta POR HECTÁREA (ej. Gasoil 5 lt/ha) y el sistema multiplica
   // por las hectáreas aplicadas al crear el LaborInsumo.
   insumosDefault   Json?
+  // v2.9.1 — Familia del árbol (CategoriaArticulo) a la que pertenece este item del
+  // catálogo (ej: un Cereal -> Fina/Gruesa, un Insumo -> Fertilizantes). Opcional.
+  categoriaArticuloId String?
   activo          Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  categoriaArticulo CategoriaArticulo? @relation(fields: [categoriaArticuloId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, tipo, codigo])
   @@index([companyId, tipo])
+  @@index([categoriaArticuloId])
 }
 
 // ============================================================

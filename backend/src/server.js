@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.9.0';
+const AGROCORE_VERSION = '2.9.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2370,18 +2370,35 @@ function _tipoArticuloDeCategoria(cat) {
 // mapea los productos existentes a su familia madre + les setea el tipo de artículo.
 app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('catalogos:create'), async (req, res, next) => {
   try {
+    const force = req.query.force === '1' || req.body?.force === true;
     const yaHay = await prisma.categoriaArticulo.count({ where: { companyId: req.companyId } });
-    if (yaHay > 0) return res.json({ ok: true, sembrado: false, total: yaHay });
-    // Árbol por defecto (agro). Editable después por el usuario.
+    if (yaHay > 0 && !force) return res.json({ ok: true, sembrado: false, total: yaHay });
+
+    // Las FAMILIAS de Insumos y Hacienda salen de los catálogos reales de la empresa
+    // (Tipos de insumo y Especies), así el árbol refleja su clasificación existente.
+    const cats = await prisma.catalogo.findMany({ where: { companyId: req.companyId, activo: true } });
+    const uniqOrd = (arr) => [...new Set(arr.map(x => (x || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const tipos = uniqOrd(cats.filter(c => c.tipo === 'Tipo de insumo').map(c => c.nombre));
+    const especies = uniqOrd(cats.filter(c => c.tipo === 'Especie').map(c => c.nombre));
+    const insumosHijos  = tipos.length    ? tipos    : ['Herbicidas', 'Insecticidas', 'Fungicidas', 'Fertilizantes', 'Semillas', 'Coadyuvantes', 'Combustibles y Lubricantes'];
+    const haciendaHijos = especies.length ? especies : ['Bovinos', 'Ovinos', 'Caprinos', 'Equinos', 'Porcinos'];
+
+    // Categoría (raíz) -> Familias (hijos). Producto/Item queda en el 3er nivel (catálogo).
     const arbol = [
-      { nombre: 'Insumos', icono: '🌱', hijos: ['Fitosanitarios', 'Fertilizantes', 'Semillas', 'Combustibles y Lubricantes'] },
-      { nombre: 'Cereales / Granos', icono: '🌾', hijos: ['Cereales de Verano', 'Cereales de Invierno'] },
-      { nombre: 'Hacienda', icono: '🐄', hijos: ['Bovinos', 'Otros animales'] },
-      { nombre: 'Servicios y Labores', icono: '🚜', hijos: ['Siembra', 'Pulverización', 'Cosecha', 'Fletes'] },
+      { nombre: 'Insumos', icono: '🌱', hijos: insumosHijos },
+      { nombre: 'Cereales / Granos', icono: '🌾', hijos: ['Fina', 'Gruesa'] },
+      { nombre: 'Hacienda', icono: '🐄', hijos: haciendaHijos },
+      { nombre: 'Servicios y Labores', icono: '🚜', hijos: ['De Campaña', 'De Animales', 'Externos'] },
       { nombre: 'Otros', icono: '📦', hijos: [] },
     ];
     const madres = {};
     await prisma.$transaction(async (tx) => {
+      if (force) {
+        // Regenerar: desvinculamos productos y catálogos, y borramos el árbol previo.
+        await tx.producto.updateMany({ where: { companyId: req.companyId }, data: { categoriaArticuloId: null } });
+        try { await tx.catalogo.updateMany({ where: { companyId: req.companyId }, data: { categoriaArticuloId: null } }); } catch {}
+        await tx.categoriaArticulo.deleteMany({ where: { companyId: req.companyId } });
+      }
       let orden = 0;
       for (const fam of arbol) {
         const madre = await tx.categoriaArticulo.create({ data: {
@@ -2395,7 +2412,7 @@ app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('
           }});
         }
       }
-      // Mapear productos existentes a su familia madre + tipo de artículo.
+      // Mapear productos existentes a su categoría madre + tipo de artículo.
       const prods = await tx.producto.findMany({ where: { companyId: req.companyId } });
       for (const p of prods) {
         const madreNombre = _familiaMadreDeCategoria(p.categoria);
@@ -2407,7 +2424,7 @@ app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('
       }
     });
     const total = await prisma.categoriaArticulo.count({ where: { companyId: req.companyId } });
-    res.json({ ok: true, sembrado: true, total });
+    res.json({ ok: true, sembrado: true, total, regenerado: force });
   } catch (e) { next(e); }
 });
 
@@ -5518,6 +5535,7 @@ mountCrud({
       cantidad: z.number(),
       unidad: z.string().nullable().optional(),
     })).nullable().optional(),
+    categoriaArticuloId: z.string().nullable().optional(),   // v2.9.1 — familia del árbol
     activo: z.boolean().optional(),
   }),
   orderBy: { nombre: 'asc' },

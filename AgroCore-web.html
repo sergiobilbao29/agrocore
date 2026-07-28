@@ -2442,6 +2442,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/07/2026',
+      titulo:'🗂️ v2.9.1 — Categorías y Familias más clara (Categoría → Familia → Producto)',
+      desc:'Aclaramos el árbol para que siga el modelo <b>Categoría → Familia → Producto</b>: los nodos raíz son <b>Categorías</b> (Insumos, Hacienda, Cereales…) y sus hijos son <b>Familias</b> (Fertilizantes, Vacunos, Fina/Gruesa…). Botones y textos coherentes (+ Nueva categoría / ➕ Familia). Las familias sugeridas ahora salen de tus catálogos reales: <b>Insumos</b> toma los Tipos de insumo y <b>Hacienda</b> las Especies. Hay un botón <b>↺ Regenerar sugerido</b> para rearmar el árbol. Y lo más pedido: en <b>Catálogos</b> (Cereales, Insumos, Labores, Categorías de animales) ahora podés <b>elegir la Familia</b> de cada ítem (ej: un cereal → Fina/Gruesa). (Incluye una pequeña migración aditiva.)' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/07/2026',
       titulo:'📚 v2.9.0 — Menú de Catálogos reorganizado por familias',
       desc:'El menú de <b>Catálogos</b> pasó de una lista larga y plana a estar <b>agrupado por familias</b>: Productos y Servicios · Clasificación y Familias · Unidades y Monedas · Tablas Fiscales/Admin · Ubicaciones. Es más fácil encontrar cada maestro. No se quitó ninguna función, solo se reordenó. Arriba quedó un acceso directo a <b>Categorías y Familias</b> (el árbol).' },
@@ -19072,14 +19075,18 @@ function catArtRender() {
   const cats = state.cache.categoriasArt || [];
   const raices = cats.filter(c => !c.padreId).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
   const hijosDe = (id) => cats.filter(c => c.padreId === id).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
+  const nFamilias = cats.filter(c => c.padreId).length;
   const puedeEditar = can('catalogos:update'), puedeCrear = can('catalogos:create'), puedeBorrar = can('catalogos:delete');
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <div class="text-sm text-slate-600">${cats.length} categoría${cats.length===1?'':'s'} · ${raices.length} familia${raices.length===1?'':'s'} madre</div>
-      ${puedeCrear?`<button class="btn btn-primary" onclick="catArtForm(null, null)">+ Nueva familia</button>`:''}
+      <div class="text-sm text-slate-600">${raices.length} categoría${raices.length===1?'':'s'} · ${nFamilias} familia${nFamilias===1?'':'s'}</div>
+      <div class="flex gap-2">
+        ${puedeCrear?`<button class="btn btn-secondary text-xs" title="Regenerar el árbol sugerido (reemplaza el actual)" onclick="catArtRegenerar()">↺ Regenerar sugerido</button>`:''}
+        ${puedeCrear?`<button class="btn btn-primary" onclick="catArtForm(null, null)">+ Nueva categoría</button>`:''}
+      </div>
     </div>
     <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mb-3">
-      💡 Estas categorías agrupan los artículos del maestro de Productos. Podés asignar la categoría de cada producto desde su ficha (Catálogos → Productos o al crearlo). El campo de categoría "vieja" sigue funcionando.
+      💡 Estructura de 3 niveles: <b>Categoría</b> (ej. Hacienda) → <b>Familia</b> (ej. Vacunos) → <b>Producto/ítem</b> (ej. Vaca, que vive en Catálogos). Acá manejás las Categorías y sus Familias; la Familia de cada ítem se elige en Catálogos.
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       ${raices.map(r => {
@@ -19088,39 +19095,51 @@ function catArtRender() {
           <div class="flex items-start justify-between gap-2">
             <div class="font-bold text-slate-800">${r.icono?esc(r.icono)+' ':''}${esc(r.nombre)}${r.activo===false?' <span class="badge badge-gray text-[10px]">inactiva</span>':''}</div>
             <div class="flex items-center gap-1 flex-shrink-0">
-              ${puedeCrear?`<button class="btn btn-ghost text-xs" title="Agregar subcategoría" onclick='catArtForm(null, ${JSON.stringify(r.id)})'>➕</button>`:''}
-              ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar" onclick='catArtForm(${JSON.stringify(r.id)}, null)'>✏️</button>`:''}
-              ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='catArtDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+              ${puedeCrear?`<button class="btn btn-ghost text-xs" title="Agregar familia a esta categoría" onclick='catArtForm(null, ${JSON.stringify(r.id)})'>➕ Familia</button>`:''}
+              ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar categoría" onclick='catArtForm(${JSON.stringify(r.id)}, null)'>✏️</button>`:''}
+              ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar categoría" onclick='catArtDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
             </div>
           </div>
-          <div class="mt-2 pl-2 border-l-2 border-slate-100 space-y-1">
+          <div class="text-[10px] text-slate-400 mt-0.5">Familias:</div>
+          <div class="mt-1 pl-2 border-l-2 border-slate-100 space-y-1">
             ${hijos.map(h => `<div class="flex items-center justify-between text-sm">
               <span class="text-slate-700">${h.icono?esc(h.icono)+' ':'• '}${esc(h.nombre)}${h.activo===false?' <span class="badge badge-gray text-[10px]">inactiva</span>':''}</span>
               <span class="flex items-center gap-1">
-                ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar" onclick='catArtForm(${JSON.stringify(h.id)}, null)'>✏️</button>`:''}
-                ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='catArtDel(${JSON.stringify(h.id)})'>🗑️</button>`:''}
+                ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar familia" onclick='catArtForm(${JSON.stringify(h.id)}, null)'>✏️</button>`:''}
+                ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar familia" onclick='catArtDel(${JSON.stringify(h.id)})'>🗑️</button>`:''}
               </span>
-            </div>`).join('') || `<div class="text-[11px] text-slate-400">Sin subcategorías. ${puedeCrear?'Usá ➕ para agregar.':''}</div>`}
+            </div>`).join('') || `<div class="text-[11px] text-slate-400">Sin familias. Usá ➕ Familia para agregar.</div>`}
           </div>
         </div>`;
-      }).join('') || `<div class="kpi md:col-span-2 text-center text-slate-400 py-8">Sin categorías. Creá la primera familia con "+ Nueva familia".</div>`}
+      }).join('') || `<div class="kpi md:col-span-2 text-center text-slate-400 py-8">Sin categorías. Creá la primera con "+ Nueva categoría".</div>`}
     </div>`;
+}
+async function catArtRegenerar() {
+  if (!confirm('Regenerar el árbol sugerido reemplaza TODAS las categorías y familias actuales por el árbol por defecto (Insumos, Cereales, Hacienda, Servicios, Otros) y sus familias tomadas de tus catálogos (Tipos de insumo y Especies).\n\nLos productos/ítems quedan sin familia asignada (después la reasignás). ¿Continuar?')) return;
+  try {
+    const r = await api('/api/categorias-articulo/sembrar?force=1', { method:'POST', body: JSON.stringify({ force:true }) });
+    delete state.cache.categoriasArt;
+    toast('Árbol regenerado ('+(r.total||0)+' nodos)','success');
+    pages.categoriasArt();
+  } catch (e) { toast('No se pudo regenerar: '+(e.message||e),'error'); }
 }
 function catArtForm(id=null, padreIdDefault=null) {
   const cats = state.cache.categoriasArt || [];
   let c = { nombre:'', padreId: padreIdDefault, icono:'', activo:true, orden:0 };
   if (id) { const cur = cats.find(x => x.id === id); if (cur) c = { ...c, ...cur }; }
-  // Padres posibles: las familias raíz (excepto el propio nodo, para no ciclar).
+  // Categorías padre posibles: los nodos raíz (excepto el propio, para no ciclar).
   const raices = cats.filter(x => !x.padreId && x.id !== id);
+  const esFamilia = !!c.padreId;   // tiene padre => es una Familia; si no => es una Categoría
   openModal({
-    title: id?'Editar categoría':'Nueva categoría', size:'max-w-md',
+    title: (id?'Editar ':'Nueva ') + (esFamilia?'familia':'categoría'), size:'max-w-md',
     body: `
-      <div><label class="label">Nombre *</label><input id="ca-nombre" class="input" value="${esc(c.nombre||'')}" placeholder="Ej: Fitosanitarios, Bovinos, Herramientas…"/></div>
-      <div class="mt-3"><label class="label">Depende de (familia madre)</label>
+      <div><label class="label">Nombre *</label><input id="ca-nombre" class="input" value="${esc(c.nombre||'')}" placeholder="${esFamilia?'Ej: Fertilizantes, Vacunos, Fina…':'Ej: Insumos, Hacienda, Repuestos…'}"/></div>
+      <div class="mt-3"><label class="label">Categoría a la que pertenece</label>
         <select id="ca-padre" class="input">
-          <option value="">— Es una familia madre (raíz) —</option>
+          <option value="" ${!c.padreId?'selected':''}>— Ninguna: es una Categoría (nivel principal) —</option>
           ${raices.map(r=>`<option value="${esc(r.id)}" ${c.padreId===r.id?'selected':''}>${r.icono?esc(r.icono)+' ':''}${esc(r.nombre)}</option>`).join('')}
         </select>
+        <div class="text-[10px] text-slate-400 mt-1">Si elegís una categoría, este nodo es una <b>Familia</b> dentro de ella. Si dejás "Ninguna", es una <b>Categoría</b> principal.</div>
       </div>
       <div class="grid grid-cols-2 gap-3 mt-3">
         <div><label class="label">Ícono (emoji)</label><input id="ca-icono" class="input" value="${esc(c.icono||'')}" maxlength="4" placeholder="Ej: 🌱"/></div>
@@ -19155,8 +19174,8 @@ async function catArtDel(id) {
   const cats = state.cache.categoriasArt || [];
   const tieneHijos = cats.some(c => c.padreId === id);
   const msg = tieneHijos
-    ? '¿Eliminar esta familia? Sus subcategorías quedan como familias sueltas (no se borran) y los productos que la usaban quedan sin categoría de árbol.'
-    : '¿Eliminar esta categoría? Los productos que la usaban quedan sin categoría de árbol (no se borran).';
+    ? '¿Eliminar esta categoría? Sus familias quedan como categorías sueltas (no se borran) y los ítems que la usaban quedan sin familia asignada.'
+    : '¿Eliminar? Los ítems/productos que la usaban quedan sin familia asignada (no se borran).';
   if (!confirm(msg)) return;
   try {
     // Primero desvinculamos hijos y productos (no hay FK en la base), luego borramos.
@@ -19381,9 +19400,27 @@ pages.catalogos = async function() {
     </div>`;
 };
 function catSwitch(tabId) { state.catTab = tabId; pages.catalogos(); }
-function catForm(id=null, tabId=null) {
+// Qué categoría raíz del árbol corresponde a cada pestaña del catálogo (para elegir Familia).
+const CATTAB_ROOT = { cereales:'Cereales / Granos', insumos:'Insumos', labores:'Servicios y Labores', categAn:'Hacienda' };
+async function catForm(id=null, tabId=null) {
   const it = id ? (state.cache.catalogos||[]).find(x=>x.id===id)||{} : {};
   const tab = CAT_TABS.find(x=>x.id===(tabId||state.catTab)) || CAT_TABS[0];
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
+  // Selector de Familia (del árbol) para las pestañas que corresponden a una categoría raíz.
+  let familiaField = '';
+  const rootNombre = CATTAB_ROOT[tab.id];
+  if (rootNombre) {
+    const catsArb = state.cache.categoriasArt || [];
+    const root = catsArb.find(c => !c.padreId && (c.nombre||'').toLowerCase() === rootNombre.toLowerCase());
+    const familias = root ? catsArb.filter(c => c.padreId === root.id).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||'')) : [];
+    familiaField = `<div class="col-span-2"><label class="label">Familia <span class="text-slate-400 font-normal">(de ${esc(rootNombre)})</span></label>
+      <select id="f-familia" class="input">
+        <option value="">— Sin familia —</option>
+        ${familias.map(f=>`<option value="${esc(f.id)}" ${it.categoriaArticuloId===f.id?'selected':''}>${f.icono?esc(f.icono)+' ':''}${esc(f.nombre)}</option>`).join('')}
+      </select>
+      ${familias.length?'':'<div class="text-[10px] text-amber-700 mt-1">No hay familias en esta categoría. Cargalas en Administración → Categorías y Familias.</div>'}
+    </div>`;
+  }
   // En la pestaña Insumos, el "Tipo" se elige del catálogo de Tipos de insumo.
   const sugeridos = tab.id === 'insumos' ? tiposInsumoElegibles(it.tipo) : tab.tipos;
   const tipoActual = it.tipo || sugeridos[0];
@@ -19469,6 +19506,7 @@ function catForm(id=null, tabId=null) {
         </div>
         <div>${codLabel}${codInput}</div>
         <div class="col-span-2"><label class="label">Nombre *</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}" placeholder="${esCondPago?'Ej: Cta cte 45 días':''}"/></div>
+        ${familiaField}
         ${parentField}
         ${laborPriceBlock}
         <div class="col-span-2 flex items-center gap-2">
@@ -19569,6 +19607,9 @@ async function catSave(id) {
     descripcion: descVal || null,
     activo: $('#f-act').checked,
   };
+  // Familia del árbol (si la pestaña la ofrece).
+  const famEl = $('#f-familia');
+  if (famEl) data.categoriaArticuloId = famEl.value || null;
   // Catálogo de Labor: precio sugerido + tipo (opcional). Para otros tipos no aplica.
   if (tipo === 'Labor') {
     const tp = $('#f-tpprecio')?.value || '';
