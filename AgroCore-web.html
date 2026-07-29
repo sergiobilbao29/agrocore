@@ -2506,6 +2506,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'29/07/2026',
+      titulo:'📄 v2.14.2 — "Cargar desde PDF": lee bien las Facturas C de Monotributo',
+      desc:'Corregido el lector de facturas de compra por PDF para los comprobantes de <b>ARCA "comprobante en línea"</b> (típicos de Monotributo), cuyo texto viene desordenado. Antes tomaba el <b>CUIT del cliente como si fuera el del proveedor</b>, ponía <b>"Domicilio:"</b> como razón social y dejaba el <b>importe en $0</b>. Ahora usa el nombre del archivo de ARCA (CUIT del emisor, tipo, punto de venta y número) como fuente confiable, identifica bien proveedor vs. cliente, toma la razón social correcta y recupera el <b>importe total</b>. Probado con una Factura C real.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'29/07/2026',
       titulo:'🌾 v2.14.1 — Los cereales del catálogo ya aparecen en Stock',
       desc:'Ahora cada <b>cereal / grano</b> cargado en el Catálogo aparece automáticamente en <b>Stock</b> con existencia 0 (igual que ya pasaba con Insumos y Hacienda), aunque todavía no tenga movimientos. Así los ves y los podés filtrar por categoría y familia sin tener que cargarlos a mano. <b>Recordá:</b> en el filtro de Stock, “Cereales / Granos” es la <b>Categoría</b> (elegila en el desplegable Categoría); las <b>familias</b> son las de adentro (ej. “Gruesa”).' },

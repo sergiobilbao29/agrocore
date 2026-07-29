@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.14.1';
+const AGROCORE_VERSION = '2.14.2';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7874,6 +7874,26 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       resultado.cuitReceptor = String(qrData.nroDocRec || '');
     }
 
+    // === Nombre de archivo ARCA: {cuitEmisor}_{tipoCod}_{ptoVta}_{nro}.pdf ===
+    // Es una fuente MUY confiable (el QR es aún mejor). El texto de los PDF de ARCA
+    // "comprobante en línea" viene desordenado, así que esto evita confundir emisor
+    // con receptor y perder PV/número. No pisa lo que ya trajo el QR.
+    const fnMatch = String(req.file.originalname || '').match(/(\d{11})[_-](\d{2,3})[_-](\d{4,5})[_-](\d{7,8})/);
+    if (fnMatch && !fuenteQr) {
+      resultado.cuitEmisor = fnMatch[1];
+      const tipoFn = Number(fnMatch[2]);
+      if (tipoFn) {
+        resultado.tipoCmpCodigo = tipoFn;
+        // Solo si es una letra simple (Factura A/B/C/M). Para NC/ND ("NCC"/"NDA")
+        // dejamos que el resto del parseo defina letra y clase.
+        if (FACT_TIPO_AFIP[tipoFn] && FACT_TIPO_AFIP[tipoFn].length === 1) {
+          resultado.tipoCmpLetra = FACT_TIPO_AFIP[tipoFn];
+        }
+      }
+      resultado.puntoVenta = Number(fnMatch[3]);
+      resultado.numero = Number(fnMatch[4]);
+    }
+
     // === Parser de TEXTO (siempre se ejecuta, complementa el QR y es el único método cuando el QR no está como texto) ===
     // Punto de Venta + Número — soporta varios formatos de distintos sistemas.
     const mPv = texto.match(/Punto\s+de\s+Venta\s*:?\s*0*(\d{1,5})(?!\d)/i);
@@ -7987,30 +8007,51 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     // Importes (ARCA usa "1.830.150,00")
     if (!resultado.total)        resultado.total        = matchEtiqueta('Importe\\s+Total');
     if (!resultado.netoGravado)  resultado.netoGravado  = matchEtiqueta('Importe\\s+Neto\\s+Gravado|Subtotal');
+    // Respaldo: si el texto viene desordenado (ARCA online) y no encontramos el total
+    // junto a su etiqueta, tomamos el MAYOR monto con formato "$/,00" del comprobante
+    // (el Importe Total casi siempre es el más grande).
+    if (!resultado.total) {
+      const montos = [...texto.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2})/g)]
+        .map(mm => num(mm[1])).filter(v => v && v > 0);
+      if (montos.length) resultado.total = Math.max(...montos);
+    }
+    // En Factura C (Monotributo) no hay IVA discriminado: neto = total.
+    if (!resultado.netoGravado && resultado.total && (resultado.tipoCmpLetra === 'C')) {
+      resultado.netoGravado = resultado.total;
+    }
     resultado.iva21  = matchEtiqueta('IVA\\s*21\\s*%?') || resultado.iva21;
     resultado.iva105 = matchEtiqueta('IVA\\s*10[.,]5\\s*%?') || resultado.iva105;
     resultado.iva27  = matchEtiqueta('IVA\\s*27\\s*%?') || resultado.iva27;
     resultado.iva25  = matchEtiqueta('IVA\\s*2[.,]5\\s*%?') || resultado.iva25;
     resultado.iva5   = matchEtiqueta('IVA\\s*5\\s*%?') || resultado.iva5;
 
-    // CUIT emisor: el que aparece DESPUÉS de "CUIT:" (suelen ser 2: emisor primero, después receptor)
-    // Si el QR ya nos lo dio, usamos ese para identificar el otro como receptor.
+    // CUIT emisor / receptor. Los CUIT con etiqueta "CUIT:" suelen ser del receptor
+    // (en el bloque del comprador). El emisor viene del nombre de archivo / QR; si no,
+    // tomamos el primer "CUIT:" del texto. El receptor es un "CUIT:" distinto del emisor.
     const reCuitLine = /C\.?U\.?I\.?T\.?\s*:?\s*(\d{2}[-]?\d{8}[-]?\d{1})/gi;
     const cuitsEnContexto = [...texto.matchAll(reCuitLine)].map(m => m[1].replace(/-/g,''));
-    if (cuitsEnContexto.length >= 1 && !resultado.cuitEmisor) {
+    if (!resultado.cuitEmisor && cuitsEnContexto.length >= 1) {
       resultado.cuitEmisor = cuitsEnContexto[0];
     }
-    if (cuitsEnContexto.length >= 2 && !resultado.cuitReceptor) {
-      // Receptor = el segundo CUIT que aparece bajo "CUIT:"
-      resultado.cuitReceptor = cuitsEnContexto.find(c => c !== resultado.cuitEmisor) || cuitsEnContexto[1];
+    if (!resultado.cuitReceptor) {
+      resultado.cuitReceptor = cuitsEnContexto.find(c => c !== resultado.cuitEmisor) || null;
     }
 
-    // Razón social emisor: buscamos "Razón Social: NOMBRE" antes del CUIT emisor
-    const mRsE = texto.match(/Raz[oó]n\s+Social\s*:?\s*([^\n]+)/i);
-    if (mRsE) resultado.razonSocialEmisor = mRsE[1].trim().replace(/\s{2,}/g, ' ').slice(0, 120);
-    // Razón social receptor: a veces aparece como "Apellido y Nombre / Razón Social:"
-    const mRsR = texto.match(/Apellido\s+y\s+Nombre\s*\/\s*Raz[oó]n\s+Social\s*:?\s*([^\n]+)/i);
-    if (mRsR) resultado.razonSocialReceptor = mRsR[1].trim().replace(/\s{2,}/g, ' ').slice(0, 120);
+    // Razón social emisor. OJO: el texto de los PDF de ARCA viene desordenado, así que
+    // NO usamos "\s*" (saltaría a la etiqueta siguiente, ej. "Domicilio:"). Primero
+    // probamos el nombre suelto que aparece bajo ORIGINAL/DUPLICADO (formato ARCA online).
+    const _esEtiqueta = (s) => /^(Domicilio|Condici[oó]n|C\.?U\.?I\.?T|Apellido|Ingresos|Fecha|Punto|Comp|Per[ií]odo|Raz[oó]n|IVA|COD)\b/i.test(s || '');
+    let rsE = null;
+    const mEmiName = texto.match(/(?:ORIGINAL|DUPLICADO)\s*\n\s*([A-ZÁÉÍÓÚÑ0-9][^\n]{2,80})/);
+    if (mEmiName && !_esEtiqueta(mEmiName[1])) rsE = mEmiName[1].trim();
+    if (!rsE) {
+      const mRsE = texto.match(/Raz[oó]n\s+Social\s*:[ \t]*([^\n]+)/i);
+      if (mRsE && !_esEtiqueta(mRsE[1])) rsE = mRsE[1].trim();
+    }
+    if (rsE) resultado.razonSocialEmisor = rsE.replace(/\s{2,}/g, ' ').slice(0, 120);
+    // Razón social receptor (solo en la misma línea; si no, queda null).
+    const mRsR = texto.match(/Apellido\s+y\s+Nombre\s*\/\s*Raz[oó]n\s+Social\s*:[ \t]*([^\n]+)/i);
+    if (mRsR && !_esEtiqueta(mRsR[1])) resultado.razonSocialReceptor = mRsR[1].trim().replace(/\s{2,}/g, ' ').slice(0, 120);
 
     // === Descripción del item ===
     // Heurística: buscar las líneas entre la cabecera "Código Producto / Servicio..." y
