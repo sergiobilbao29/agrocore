@@ -2482,6 +2482,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
+      titulo:'🏢 v2.13.0 — Copiar configuración entre empresas + roles más claros + arreglos',
+      desc:'<b>Copiar entre empresas</b> (Configuración → Copiar / Configurar plantilla): ahora podés elegir <b>qué</b> transferir a otras empresas — <b>Catálogos</b>, el árbol de <b>Categorías y Familias</b> y/o el de <b>Categorías de Gastos</b> — cada uno opcional. Los árboles se copian respetando la jerarquía y sin duplicar lo que ya exista. La empresa plantilla también siembra los dos árboles al crear una empresa nueva. <b>Roles y permisos</b>: se rediseñó el editor para mostrar <b>una fila por permiso real</b> (con la lista de pantallas que abre), así se termina el problema de que al tildar “Ver Stock” se marcaban solas Movimientos, Cerealeras, Hacienda y Reporte de margen. Se quitó “Cargar labor simple” (ya no existe) y las <b>categorías de stock visibles</b> por rol ahora salen de <b>Categorías y Familias</b> (se actualizan solas). <b>Cuentas a cobrar/pagar</b>: los totales de arriba ahora <b>incluyen la moneda extranjera</b> valorizada a su TC (antes una deuda en dólares no sumaba). <b>Arreglo:</b> la pantalla de <b>Servicios a terceros</b> ya no da error al listar.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'🧾 v2.12.1 — Órdenes de pago: se ven bien por proveedor y el e-cheq deja de decir "Físico"',
       desc:'Tres arreglos en las <b>Órdenes de Pago</b>: (1) en el detalle de cheques entregados, un <b>e-cheq</b> ahora figura como <b>Electrónico</b> (antes decía siempre "Físico"). (2) En <b>Compras</b>, al filtrar por <b>proveedor</b>, ahora también aparece la <b>Orden de Pago</b> de ese proveedor (antes solo traía las facturas). (3) En <b>Cuentas a pagar</b>, el botón <b>Órdenes de pago</b> del proveedor ahora lista sus OP (antes decía "sin órdenes" aunque existieran). Para las OP <b>ya emitidas antes</b> de esta versión, sumamos en <b>Compras</b> el botón <b>🩹 Corregir tipo de cheque en OP</b>: recupera el formato real de cada cheque y arregla los que decían "Físico".' },
@@ -7920,10 +7923,10 @@ function configRenderSistema(body) {
 
       <!-- Catálogos compartidos -->
       <div class="border border-amber-300 rounded-lg p-4 bg-amber-50">
-        <h3 class="font-bold text-amber-900 mb-1">📋 Catálogos genéricos compartidos entre empresas</h3>
-        <p class="text-sm text-amber-800 mb-3">Cuando creás una empresa nueva, los catálogos arrancan vacíos. Acá podés <b>copiar los catálogos de una empresa "plantilla" a todas las demás</b> de una sola vez (productos, cultivos, conceptos de tesorería, labores, etc.). Quedan excluidos por default <b>Bancos</b> y <b>Cajas</b>, que tienen sentido cargar individualmente por empresa.</p>
+        <h3 class="font-bold text-amber-900 mb-1">📋 Copiar configuración entre empresas</h3>
+        <p class="text-sm text-amber-800 mb-3">Cuando creás una empresa nueva, arranca vacía. Acá podés <b>copiar la configuración de una empresa "plantilla" a las demás</b> de una sola vez, eligiendo qué transferir: <b>Catálogos</b> (productos, cultivos, conceptos, labores…), el árbol de <b>Categorías y Familias</b> y el árbol de <b>Categorías de Gastos</b>. En los catálogos quedan excluidos por default <b>Bancos</b> y <b>Cajas</b>, que conviene cargar por empresa.</p>
         <div class="bg-amber-100 border border-amber-300 text-amber-900 text-xs rounded p-2 mb-3">
-          💡 Adicionalmente podés designar una <b>"empresa plantilla"</b>: cuando se cree una nueva empresa, el sistema le copia automáticamente los catálogos de la plantilla. Así Denise puede crear las próximas empresas sin tener que cargar los catálogos a mano cada vez.
+          💡 Adicionalmente podés designar una <b>"empresa plantilla"</b>: cuando se cree una nueva empresa, el sistema le copia automáticamente los catálogos y los dos árboles de categorías de la plantilla. Así se pueden crear las próximas empresas sin cargar todo a mano cada vez.
         </div>
         <button class="btn btn-primary" style="background:#b45309;border-color:#b45309" onclick="catalogosCompartirAbrir()">📋 Copiar / Configurar plantilla…</button>
       </div>
@@ -8314,6 +8317,7 @@ async function catalogosCompartirAbrir() {
   try {
     const r = await api('/api/empresas');
     empresas = r.data || [];
+    state.cache.empresas = empresas;
     const t = await api('/api/admin/empresa-plantilla');
     templateId = t.templateCompanyId || null;
   } catch (e) { return toast(e.message || 'Error al cargar datos', 'error'); }
@@ -8322,9 +8326,9 @@ async function catalogosCompartirAbrir() {
   const empOriginDefault = templateId || state.companyId || empresas[0].id;
 
   openModal({
-    title: '📋 Compartir catálogos genéricos entre empresas', size: 'max-w-2xl',
+    title: '📋 Copiar configuración entre empresas', size: 'max-w-2xl',
     body: `
-      <div class="text-xs text-slate-600 mb-3">Copia los catálogos genéricos (productos, cultivos, conceptos de tesorería, labores, etc.) de una empresa "plantilla" a las demás empresas. <b>Bancos</b> y <b>Cajas</b> se excluyen por default porque suelen ser propios de cada empresa.</div>
+      <div class="text-xs text-slate-600 mb-3">Copia la configuración de una empresa "plantilla" a las demás: <b>Catálogos</b> (productos, cultivos, conceptos, labores, etc.), el árbol de <b>Categorías y Familias</b> y el árbol de <b>Categorías de Gastos</b>. Elegí qué transferir. Nada se sobreescribe: lo que ya existe en la destino se respeta.</div>
 
       <div class="border border-slate-200 rounded-lg p-3 mb-3 bg-slate-50">
         <label class="label">Empresa origen (plantilla)</label>
@@ -8333,8 +8337,26 @@ async function catalogosCompartirAbrir() {
         </select>
         <label class="flex items-center gap-2 text-xs text-slate-700 mt-2 cursor-pointer">
           <input id="cc-set-template" type="checkbox" ${templateId ? 'checked' : ''}/>
-          <span>Designar esta empresa como <b>plantilla predeterminada</b>: cuando se cree una nueva empresa, sus catálogos se copian de acá automáticamente.</span>
+          <span>Designar esta empresa como <b>plantilla predeterminada</b>: cuando se cree una nueva empresa, se le copian automáticamente los catálogos y los dos árboles de categorías de acá.</span>
         </label>
+      </div>
+
+      <div class="border border-slate-200 rounded-lg p-3 mb-3">
+        <label class="label">¿Qué copiar?</label>
+        <div class="grid grid-cols-1 gap-1">
+          <label class="flex items-center gap-2 text-sm p-1.5 hover:bg-slate-50 rounded cursor-pointer">
+            <input type="checkbox" class="cc-incluir" value="catalogos" checked onchange="ccToggleExcl()"/>
+            📚 <b>Catálogos</b> <span class="text-[11px] text-slate-500">(productos, cultivos, conceptos, labores, unidades, monedas, condiciones…)</span>
+          </label>
+          <label class="flex items-center gap-2 text-sm p-1.5 hover:bg-slate-50 rounded cursor-pointer">
+            <input type="checkbox" class="cc-incluir" value="categoriasArt" checked/>
+            🗂️ <b>Categorías y Familias</b> <span class="text-[11px] text-slate-500">(el árbol completo de categorías de artículos)</span>
+          </label>
+          <label class="flex items-center gap-2 text-sm p-1.5 hover:bg-slate-50 rounded cursor-pointer">
+            <input type="checkbox" class="cc-incluir" value="categoriasGasto" checked/>
+            🏷️ <b>Categorías de Gastos</b> <span class="text-[11px] text-slate-500">(el árbol de categorías para Movimientos Diarios)</span>
+          </label>
+        </div>
       </div>
 
       <div class="border border-slate-200 rounded-lg p-3 mb-3">
@@ -8353,9 +8375,9 @@ async function catalogosCompartirAbrir() {
         </div>
       </div>
 
-      <div class="border border-slate-200 rounded-lg p-3 mb-3">
-        <label class="label">Tipos a EXCLUIR (no copiar)</label>
-        <div class="text-xs text-slate-500 mb-2">Los catálogos de estos tipos NO se copian — quedan vacíos en las empresas destino y se cargan a mano por empresa.</div>
+      <div class="border border-slate-200 rounded-lg p-3 mb-3" id="cc-excl-box">
+        <label class="label">Tipos de catálogo a EXCLUIR (no copiar)</label>
+        <div class="text-xs text-slate-500 mb-2">Los catálogos de estos tipos NO se copian — quedan vacíos en las empresas destino y se cargan a mano por empresa. (Solo aplica si copiás Catálogos.)</div>
         <div class="grid grid-cols-2 gap-2">
           <label class="flex items-center gap-2 text-sm p-2 hover:bg-slate-50 rounded cursor-pointer">
             <input type="checkbox" class="cc-exclude" value="Banco" checked/>
@@ -8374,53 +8396,62 @@ async function catalogosCompartirAbrir() {
   });
 }
 
+// Habilita/deshabilita la sección "Tipos a EXCLUIR" según si se copian catálogos.
+function ccToggleExcl() {
+  const on = !!document.querySelector('.cc-incluir[value="catalogos"]')?.checked;
+  const box = document.getElementById('cc-excl-box');
+  if (box) { box.style.opacity = on ? '1' : '0.4'; box.style.pointerEvents = on ? 'auto' : 'none'; }
+}
 async function catalogosCompartirEjecutar() {
   const sourceCompanyId = document.getElementById('cc-origen').value;
   const setTemplate = document.getElementById('cc-set-template').checked;
   const targetCompanyIds = Array.from(document.querySelectorAll('.cc-target:checked'))
     .map(c => c.dataset.id).filter(id => id !== sourceCompanyId);
   const excludeTipos = Array.from(document.querySelectorAll('.cc-exclude:checked')).map(c => c.value);
+  const incSel = Array.from(document.querySelectorAll('.cc-incluir:checked')).map(c => c.value);
+  const incluir = {
+    catalogos: incSel.includes('catalogos'),
+    categoriasArt: incSel.includes('categoriasArt'),
+    categoriasGasto: incSel.includes('categoriasGasto'),
+  };
 
   if (!targetCompanyIds.length) return toast('Marcá al menos una empresa destino distinta de la origen', 'warn');
+  if (!incSel.length) return toast('Elegí al menos una cosa para copiar', 'warn');
 
-  if (!confirm(`¿Copiar catálogos de la empresa origen a ${targetCompanyIds.length} empresa(s)?\n\nSe excluyen los tipos: ${excludeTipos.join(', ') || '(ninguno)'}\n\nLos catálogos duplicados (mismo tipo + mismo nombre) NO se sobreescriben.`)) return;
+  const queTxt = [incluir.catalogos?'Catálogos':null, incluir.categoriasArt?'Categorías y Familias':null, incluir.categoriasGasto?'Categorías de Gastos':null].filter(Boolean).join(' + ');
+  if (!confirm(`¿Copiar (${queTxt}) de la empresa origen a ${targetCompanyIds.length} empresa(s)?\n\n${incluir.catalogos?`Catálogos excluidos: ${excludeTipos.join(', ') || '(ninguno)'}\n\n`:''}Lo que ya exista en la destino NO se sobreescribe ni se duplica.`)) return;
 
   try {
-    // Designar plantilla si se tildó
     if (setTemplate) {
       try {
         await api('/api/admin/empresa-plantilla', { method: 'PUT', body: JSON.stringify({ companyId: sourceCompanyId }) });
       } catch (e) {
         toast('No se pudo designar plantilla: ' + e.message, 'warn');
       }
-    } else {
-      // Si está destildado y antes había una plantilla, no la quitamos automáticamente
-      // (el usuario puede destildar sin querer; mejor mantener silencio)
     }
-    // Copiar
     const r = await api('/api/admin/copiar-catalogos', {
       method: 'POST',
-      body: JSON.stringify({ sourceCompanyId, targetCompanyIds, excludeTipos }),
+      body: JSON.stringify({ sourceCompanyId, targetCompanyIds, excludeTipos, incluir }),
     });
     closeModal();
-    const errs = (r.resultados || []).filter(x => x.error);
+    const empName = id => (state.cache.empresas||[]).find(e=>e.id===id)?.name || id;
     openModal({
-      title: '✅ Catálogos copiados', size: 'max-w-md',
+      title: '✅ Configuración copiada', size: 'max-w-md',
       body: `
         <div class="text-sm text-slate-700 mb-3">
-          Se copiaron <b>${r.total}</b> registros de catálogos en total a ${r.resultados.length} empresa(s).
+          Copiado a ${r.resultados.length} empresa(s): <b>${r.total||0}</b> catálogos${(r.totalCategoriasArt||r.totalCategoriasGasto)?`, <b>${r.totalCategoriasArt||0}</b> categorías de artículos, <b>${r.totalCategoriasGasto||0}</b> categorías de gasto`:''}.
         </div>
         ${r.resultados.length ? `
           <div class="text-xs text-slate-600 bg-slate-50 border rounded p-2 max-h-48 overflow-y-auto">
-            ${r.resultados.map(x => `<div>• ${esc(x.companyId)} → ${x.copiados} ${x.error ? `<span class="text-red-600">— ${esc(x.error)}</span>` : 'copiados'}</div>`).join('')}
+            ${r.resultados.map(x => `<div>• ${esc(empName(x.companyId))} → ${x.copiados||0} cat.${(x.categoriasArt||x.categoriasGasto)?` · ${x.categoriasArt||0} c.art · ${x.categoriasGasto||0} c.gasto`:''} ${x.error ? `<span class="text-red-600">— ${esc(x.error)}</span>` : ''}</div>`).join('')}
           </div>` : ''}
         <div class="text-[11px] text-slate-500 mt-3">
-          💡 Si una empresa destino dice 0 copiados, es porque ya tenía esos catálogos (no se duplican).
+          💡 Si una empresa destino dice 0, es porque ya tenía esa configuración (no se duplica).
         </div>`,
       footer: `<button class="btn btn-primary" onclick="closeModal()">Listo</button>`,
     });
   } catch (e) {
-    toast(e.message || 'Error al copiar catálogos', 'error');
+    toast(e.message || 'Error al copiar', 'error');
   }
 }
 
@@ -8689,19 +8720,19 @@ const PERM_AREAS = {
   dashboard: 'Dashboard', produccion: 'Producción', stock: 'Stock',
   contactos: 'Contactos', finanzas: 'Tesorería / Finanzas', usuarios: 'Usuarios',
   roles: 'Roles', empresas: 'Empresas', catalogos: 'Catálogos',
-  logistica: 'Logística', ventas: 'Ventas / Facturación',
-  compras: 'Compras', rrhh: 'RRHH', reportes: 'Reportes',
+  logistica: 'Logística', viajes: 'Logística / Viajes', ventas: 'Ventas / Facturación',
+  compras: 'Compras', rrhh: 'RRHH', reportes: 'Reportes', agenda: 'Agenda',
 };
 // Agrupación visual de áreas por sección del menú (las claves técnicas siguen
 // siendo las mismas — esto solo afecta cómo se ven en el form de Roles).
 const PERM_AREA_GROUPS = [
-  { title:'📊 Tablero',          areas:['dashboard','reportes'] },
+  { title:'📊 Tablero',          areas:['dashboard','reportes','agenda'] },
   { title:'💼 Ventas',           areas:['ventas','contactos'] },
   { title:'🛒 Compras',          areas:['compras'] },
   { title:'🏛️ Tesorería',        areas:['finanzas'] },
   { title:'🌱 Producción',       areas:['produccion'] },
   { title:'📦 Stock',            areas:['stock'] },
-  { title:'🚚 Logística / RRHH', areas:['logistica','rrhh'] },
+  { title:'🚚 Logística / RRHH', areas:['logistica','viajes','rrhh'] },
   { title:'🔐 Administración',   areas:['catalogos','usuarios','roles','empresas'] },
 ];
 
@@ -8756,9 +8787,8 @@ const PERM_ACTIONS = {
 const SUB_PERMS = [
   // PRODUCCIÓN — labores
   { group: 'Producción · Labores', items: [
-    { key: 'produccion:labor_simple:create',  label: 'Cargar labor simple' },
-    { key: 'produccion:labor_avanzada:create',label: 'Cargar labor avanzada (con % cobro empleado)' },
-    { key: 'produccion:labor_avanzada:update',label: 'Modificar precios y % en labor avanzada' },
+    { key: 'produccion:labor_avanzada:create',label: 'Cargar labores (con % cobro empleado y servicio a terceros)' },
+    { key: 'produccion:labor_avanzada:update',label: 'Modificar precios y % en labores' },
   ], parent: 'produccion' },
   // STOCK — cerealeras
   { group: 'Stock · Cerealeras y depósitos', items: [
@@ -8860,10 +8890,25 @@ pages.roles = async function() {
       </table>
     </div>`;
 };
-function rolForm(id=null) {
+async function rolForm(id=null) {
   const it = id ? (state.cache.roles||[]).find(x=>x.id===id)||{} : {};
   const actions = ['read','create','update','delete'];
   const perms = new Set(it.permissions||[]);
+  // Árbol de Categorías y Familias (para las categorías de stock visibles por rol).
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch { state.cache.categoriasArt = []; } }
+  // Raíces del árbol = categorías macro. Se combinan con las clásicas por compatibilidad.
+  const _raices = (state.cache.categoriasArt||[]).filter(c => !c.padreId);
+  const _catStockOpts = (() => {
+    const out = []; const vistos = new Set();
+    _raices.forEach(r => { const v = String(r.nombre||'').toLowerCase().trim(); if (v && !vistos.has(v)) { vistos.add(v); out.push([v, r.nombre]); } });
+    // Sumar las clásicas que no estén ya representadas (por si el árbol está vacío).
+    STOCK_CATS.forEach(([v,l]) => { if (!vistos.has(v)) { vistos.add(v); out.push([v,l]); } });
+    return out;
+  })();
+  // Áreas de permiso derivadas del permiso REAL de cada módulo (m.perm = "area:accion").
+  const _areaDeMod = m => (m.perm && m.perm.includes(':')) ? m.perm.split(':')[0] : null;
+  const _modsPorArea = {};
+  MODULES.forEach(m => { const a = _areaDeMod(m); if (!a) return; (_modsPorArea[a] = _modsPorArea[a] || []).push(m); });
   openModal({
     title: id?'Editar rol':'Nuevo rol', size:'max-w-3xl',
     body: `
@@ -8878,45 +8923,35 @@ function rolForm(id=null) {
           <input type="checkbox" data-perm="*:*" ${perms.has('*:*')?'checked':''}/>
           <span>🔓 Acceso total (todos los permisos)</span>
         </label>
-        ${MENU_SECTIONS.map(sec => {
-          // Lista de módulos del menú que pertenecen a esta sección y tienen permiso controlable
-          const mods = MODULES.filter(m => m.section === sec && moduleAreaForPerms(m.id));
-          if (!mods.length) return '';
-          // Conjunto único de áreas técnicas usadas en este grupo (para el "Todo el grupo")
-          const areasGrupo = [...new Set(mods.map(m => moduleAreaForPerms(m.id)))];
-          // Detectar si ya están TODOS los :* marcados en este grupo
-          const todoGrupoMarcado = areasGrupo.every(a => perms.has(a + ':*'));
-          // Ícono por sección (mapa explícito — sigue el mismo orden del menú)
-          const SEC_ICONS = {
-            'Tablero':'📊', 'Ventas':'💼', 'Compras':'🛒', 'Tesorería':'🏛️',
-            'Producción':'🌱', 'Stock y depósitos':'📦', 'Logística':'🚚',
-            'RRHH':'👷', 'Administración':'🔐',
-          };
-          const iconoGrupo = SEC_ICONS[sec] || '📌';
+        ${PERM_AREA_GROUPS.map(grupo => {
+          // Áreas del grupo que realmente tienen módulos controlables.
+          const areas = grupo.areas.filter(a => (_modsPorArea[a] || []).length);
+          if (!areas.length) return '';
+          const todoGrupoMarcado = areas.every(a => perms.has(a + ':*'));
           return `
             <div class="mb-3">
               <div class="flex items-center justify-between mb-1.5 pb-1 border-b border-slate-100">
-                <div class="text-xs font-bold text-slate-700">${esc(iconoGrupo)} ${esc(sec)}</div>
+                <div class="text-xs font-bold text-slate-700">${esc(grupo.title)}</div>
                 <label class="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer hover:text-slate-800">
-                  <input type="checkbox" data-perm-grupo="${areasGrupo.join(',')}" ${todoGrupoMarcado?'checked':''} onchange="rolPermGrupo(this)"/>
+                  <input type="checkbox" data-perm-grupo="${areas.join(',')}" ${todoGrupoMarcado?'checked':''} onchange="rolPermGrupo(this)"/>
                   <span>Todo el grupo</span>
                 </label>
               </div>
               <table class="data">
                 <thead><tr>
-                  <th class="text-xs">Módulo</th>
+                  <th class="text-xs">Permiso</th>
                   ${actions.map(a => `<th class="text-center text-xs">${PERM_ACTIONS[a]||a}</th>`).join('')}
                   <th class="text-center text-xs">Todo</th>
                 </tr></thead>
                 <tbody>
-                  ${mods.map(m => {
-                    const a = moduleAreaForPerms(m.id);
-                    // Hint cuando otro módulo del mismo grupo comparte el área (perm compartido)
-                    const hermanos = mods.filter(x => x.id !== m.id && moduleAreaForPerms(x.id) === a);
-                    const hint = hermanos.length ? ` <span class="text-[10px] text-amber-600" title="Comparte permiso con: ${hermanos.map(h=>h.label).join(', ')}">⚭</span>` : '';
+                  ${areas.map(a => {
+                    // Una fila por permiso REAL. El subtítulo lista las pantallas que abre.
+                    const mods = _modsPorArea[a] || [];
+                    const label = PERM_AREAS[a] || a;
+                    const sub = mods.map(m => m.label).join(', ');
                     return `
                       <tr>
-                        <td class="text-sm">${m.icon} <b>${esc(m.label)}</b>${hint}</td>
+                        <td class="text-sm"><b>${esc(label)}</b><div class="text-[10px] text-slate-400 leading-tight">${esc(sub)}</div></td>
                         ${actions.map(ac => `<td class="text-center"><input type="checkbox" data-perm="${a}:${ac}" ${perms.has(a+':'+ac)?'checked':''} onchange="rolPermSync(this)"/></td>`).join('')}
                         <td class="text-center"><input type="checkbox" data-perm="${a}:*" ${perms.has(a+':*')?'checked':''} onchange="rolPermSync(this)"/></td>
                       </tr>`;
@@ -8925,7 +8960,7 @@ function rolForm(id=null) {
               </table>
             </div>`;
         }).join('')}
-        <div class="text-[10px] text-slate-500 mt-2 italic">⚭ = módulos que comparten el mismo permiso técnico. Marcar uno marca a los dos.</div>
+        <div class="text-[10px] text-slate-500 mt-2 italic">Cada fila es un permiso real del sistema; abajo del nombre están las pantallas que habilita. Marcá <b>Ver / Crear / Editar / Eliminar</b> según lo que quieras permitir.</div>
       </div>
       <div class="label">Permisos finos (opcionales — restringen aún más dentro de un área)</div>
       <div class="border rounded-lg p-3 max-h-72 overflow-y-auto bg-slate-50">
@@ -8944,11 +8979,11 @@ function rolForm(id=null) {
       </div>
       <div class="label mt-3">Categorías de stock que puede ver</div>
       <div class="border rounded-lg p-3 bg-slate-50">
-        <p class="text-[11px] text-slate-500 mb-2">💡 Si <b>no marcás ninguna</b>, el rol ve <b>todo</b> el stock. Si marcás algunas, en Stock solo verá esas (ej: Insumos sí, Hacienda no).</p>
+        <p class="text-[11px] text-slate-500 mb-2">💡 Si <b>no marcás ninguna</b>, el rol ve <b>todo</b> el stock. Si marcás algunas, en Stock solo verá esas (ej: Insumos sí, Hacienda no). La lista sale de <b>Categorías y Familias</b>, así que se actualiza sola cuando agregás o cambiás categorías.</p>
         <div class="grid grid-cols-3 gap-1">
-          ${STOCK_CATS.map(([val,lbl]) => `
+          ${_catStockOpts.map(([val,lbl]) => `
             <label class="flex items-center gap-2 text-sm py-1">
-              <input type="checkbox" class="rol-stockcat" value="${esc(val)}" ${(it.stockCategorias||[]).includes(val)?'checked':''}/>
+              <input type="checkbox" class="rol-stockcat" value="${esc(val)}" ${(it.stockCategorias||[]).map(x=>String(x).toLowerCase()).includes(String(val).toLowerCase())?'checked':''}/>
               <span>${esc(lbl)}</span>
             </label>`).join('')}
         </div>
@@ -12980,6 +13015,11 @@ pages.ctasCtes = async function() {
     rows = r.data||[]; clis = c.data||[]; provs = p.data||[];
     state.cache.ctasCtes = rows; state.cache.clientes = clis; state.cache.proveedores = provs;
   } catch (e) { return toast(e.message,'error'); }
+  // Cotizaciones vivas (fallback para valorizar en ARS los saldos en otra moneda).
+  let _cotVivas = {};
+  try { _cotVivas = await cargarCotizVivas(); } catch { _cotVivas = state.cache.cotizVivas || {}; }
+  // ARS por unidad de una moneda: primero la cotización guardada en el movimiento, si no la viva.
+  const _cotizAars = (m) => { const mo=m.moneda||'ARS'; if(mo==='ARS') return 1; return Number(m.cotizacion) || Number(_cotVivas[mo]) || 0; };
 
   state.ccTab = state.ccTab || 'cobrar';
 
@@ -12996,14 +13036,18 @@ pages.ctasCtes = async function() {
       debePorMoneda[mo]=(debePorMoneda[mo]||0)+Number(m.debe||0);
       haberPorMoneda[mo]=(haberPorMoneda[mo]||0)+Number(m.haber||0);
     });
-    return { contacto, movs, debe, haber, saldo: debe-haber, porMoneda, debePorMoneda, haberPorMoneda, saldoArs: porMoneda.ARS||0 };
-  }).filter(g => g.movs.length > 0).sort((a,b)=>b.saldoArs-a.saldoArs);
+    // Saldo total valorizado en ARS (incluye USD u otras monedas a su TC).
+    const saldoArsEq = movs.reduce((a,m)=>a+((Number(m.debe||0)-Number(m.haber||0))*_cotizAars(m)),0);
+    return { contacto, movs, debe, haber, saldo: debe-haber, porMoneda, debePorMoneda, haberPorMoneda, saldoArs: porMoneda.ARS||0, saldoArsEq };
+  }).filter(g => g.movs.length > 0).sort((a,b)=>b.saldoArsEq-a.saldoArsEq);
 
   const clientesCC = agrupar('cliente', clis);
   const proveedoresCC = agrupar('proveedor', provs);
   const libres = rows.filter(m => m.contactoTipo==='libre' || (!m.contactoTipo));
-  const totalCobrar = clientesCC.reduce((a,g)=>a+(g.porMoneda.ARS||0),0);
-  const totalPagar  = proveedoresCC.reduce((a,g)=>a+(g.porMoneda.ARS||0),0);
+  const totalCobrar = clientesCC.reduce((a,g)=>a+(g.saldoArsEq||0),0);
+  const totalPagar  = proveedoresCC.reduce((a,g)=>a+(g.saldoArsEq||0),0);
+  // ¿Hay saldos en moneda extranjera? Para aclarar que el total está valorizado.
+  const _hayMEx = [...clientesCC, ...proveedoresCC].some(g => Object.keys(g.porMoneda||{}).some(mo => mo!=='ARS' && Math.abs(g.porMoneda[mo])>0.01));
 
   // Guardado en state para que los modales (movimientos, cobro/pago) lo lean.
   state._ccData = { clientesCC, proveedoresCC, libres };
@@ -13021,10 +13065,12 @@ pages.ctasCtes = async function() {
       <div class="kpi" style="background:linear-gradient(135deg,#dcfce7 0%,#f0fdf4 100%)">
         <div class="text-xs text-slate-500">💰 Total a cobrar (clientes)</div>
         <div class="text-2xl font-bold mt-1 text-emerald-700">${fmt$(totalCobrar)}</div>
+        ${_hayMEx?'<div class="text-[10px] text-slate-400 mt-0.5">incluye moneda extranjera valorizada a su TC</div>':''}
       </div>
       <div class="kpi" style="background:linear-gradient(135deg,#fee2e2 0%,#fef2f2 100%)">
         <div class="text-xs text-slate-500">📤 Total a pagar (proveedores)</div>
         <div class="text-2xl font-bold mt-1 text-red-600">${fmt$(totalPagar)}</div>
+        ${_hayMEx?'<div class="text-[10px] text-slate-400 mt-0.5">incluye moneda extranjera valorizada a su TC</div>':''}
       </div>
     </div>
     <div class="flex items-center justify-between flex-wrap gap-2 mb-3">

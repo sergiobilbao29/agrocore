@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.12.1';
+const AGROCORE_VERSION = '2.13.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1389,10 +1389,45 @@ async function _copiarCatalogos(sourceCompanyId, targetCompanyId, excludeTipos =
   return nuevos.length;
 }
 
+// Helper: copia un ÁRBOL padre/hijo (CategoriaArticulo o CategoriaGasto) de una
+// empresa a otra preservando la jerarquía. Idempotente: no duplica un nodo si el
+// destino ya tiene uno con el mismo nombre bajo el mismo padre. Devuelve # creados.
+async function _copiarArbol(model, sourceCompanyId, targetCompanyId) {
+  const src = await prisma[model].findMany({ where: { companyId: sourceCompanyId } });
+  if (!src.length) return 0;
+  const tgt = await prisma[model].findMany({ where: { companyId: targetCompanyId } });
+  const key = (padreId, nombre) => `${padreId || ''}|${String(nombre || '').toLowerCase().trim()}`;
+  const tgtByKey = new Map(tgt.map(n => [key(n.padreId, n.nombre), n.id]));
+  const byId = new Map(src.map(n => [n.id, n]));
+  // Ordenar por profundidad para crear los padres antes que los hijos.
+  const depth = (n) => { let d = 0, c = n; const seen = new Set(); while (c && c.padreId && !seen.has(c.id)) { seen.add(c.id); c = byId.get(c.padreId); d++; if (d > 50) break; } return d; };
+  const ordered = [...src].sort((a, b) => depth(a) - depth(b));
+  const idMap = new Map();  // id origen -> id destino
+  let creados = 0;
+  for (const n of ordered) {
+    const tgtPadre = n.padreId ? (idMap.get(n.padreId) || null) : null;
+    const k = key(tgtPadre, n.nombre);
+    let existing = tgtByKey.get(k);
+    if (!existing) {
+      const nuevo = await prisma[model].create({ data: {
+        companyId: targetCompanyId, nombre: n.nombre, padreId: tgtPadre,
+        icono: n.icono, orden: n.orden, activo: n.activo,
+      }});
+      existing = nuevo.id; tgtByKey.set(k, existing); creados++;
+    }
+    idMap.set(n.id, existing);
+  }
+  return creados;
+}
+
 async function _autoSembrarCatalogosDesdeTemplate(newCompanyId) {
   const templateId = await _findTemplateCompany(newCompanyId);
   if (!templateId) return 0;
-  return _copiarCatalogos(templateId, newCompanyId);
+  const cat = await _copiarCatalogos(templateId, newCompanyId);
+  // La empresa plantilla también siembra los árboles de Categorías y Familias y de Gastos.
+  try { await _copiarArbol('categoriaArticulo', templateId, newCompanyId); } catch {}
+  try { await _copiarArbol('categoriaGasto', templateId, newCompanyId); } catch {}
+  return cat;
 }
 
 // === COPIAR CATALOGOS de una empresa origen a una o varias destino ===
@@ -1409,9 +1444,17 @@ app.post('/api/admin/copiar-catalogos', authMiddleware, async (req, res, next) =
       sourceCompanyId: z.string().min(1),
       targetCompanyIds: z.union([z.array(z.string()), z.literal('all')]),
       excludeTipos: z.array(z.string()).optional(),
+      // Qué copiar (opcional). Si no viene, por compatibilidad copia solo catálogos.
+      incluir: z.object({
+        catalogos: z.boolean().optional(),
+        categoriasArt: z.boolean().optional(),
+        categoriasGasto: z.boolean().optional(),
+      }).optional(),
     });
     const d = schema.parse(req.body || {});
     const exclude = (d.excludeTipos && d.excludeTipos.length ? d.excludeTipos : ['Banco', 'Caja']).map(t => t.toLowerCase());
+    // Por defecto (sin "incluir") copia catálogos, como antes.
+    const inc = d.incluir || { catalogos: true };
 
     // Resolver lista de empresas destino
     let targetIds;
@@ -1429,17 +1472,19 @@ app.post('/api/admin/copiar-catalogos', authMiddleware, async (req, res, next) =
         mensaje: 'No hay empresas destino para procesar.' });
     }
     const resultados = [];
-    let total = 0;
+    let total = 0, totalCatArt = 0, totalCatGasto = 0;
     for (const tid of targetIds) {
       try {
-        const copiados = await _copiarCatalogos(d.sourceCompanyId, tid, exclude);
-        resultados.push({ companyId: tid, copiados, error: null });
-        total += copiados;
+        const copiados   = inc.catalogos      ? await _copiarCatalogos(d.sourceCompanyId, tid, exclude) : 0;
+        const catArt     = inc.categoriasArt   ? await _copiarArbol('categoriaArticulo', d.sourceCompanyId, tid) : 0;
+        const catGasto   = inc.categoriasGasto ? await _copiarArbol('categoriaGasto', d.sourceCompanyId, tid) : 0;
+        resultados.push({ companyId: tid, copiados, categoriasArt: catArt, categoriasGasto: catGasto, error: null });
+        total += copiados; totalCatArt += catArt; totalCatGasto += catGasto;
       } catch (e) {
-        resultados.push({ companyId: tid, copiados: 0, error: String(e.message || e) });
+        resultados.push({ companyId: tid, copiados: 0, categoriasArt: 0, categoriasGasto: 0, error: String(e.message || e) });
       }
     }
-    res.json({ ok: true, resultados, total, excludeTipos: exclude });
+    res.json({ ok: true, resultados, total, totalCategoriasArt: totalCatArt, totalCategoriasGasto: totalCatGasto, excludeTipos: exclude, incluir: inc });
   } catch (e) { next(e); }
 });
 
@@ -6784,9 +6829,15 @@ app.get('/api/labores-servicio', requireCompany, requirePermission('produccion:r
       include: {
         cliente: true,
         empleado: true,
-        insumos: { include: { producto: true } },
+        insumos: true,   // LaborInsumo no tiene relación 'producto'; resolvemos el nombre aparte
       },
     });
+    // Nombres de los productos consumidos (sin relación en el modelo).
+    const prodIds = [...new Set(labs.flatMap(l => l.insumos.map(i => i.productoId)).filter(Boolean))];
+    const prods = prodIds.length
+      ? await prisma.producto.findMany({ where: { id: { in: prodIds }, companyId: req.companyId }, select: { id: true, nombre: true } })
+      : [];
+    const prodNombre = Object.fromEntries(prods.map(p => [p.id, p.nombre]));
     // Resolvemos las facturas vinculadas (para saber cuáles ya se facturaron).
     const facIds = labs.map(l => l.facturaId).filter(Boolean);
     const facs = facIds.length
@@ -6815,7 +6866,7 @@ app.get('/api/labores-servicio', requireCompany, requirePermission('produccion:r
           : Number(l.precioReferencia || 0),
         insumos: l.insumos.map(i => ({
           id: i.id, productoId: i.productoId,
-          nombre: i.producto?.nombre || '—', unidad: i.unidad,
+          nombre: prodNombre[i.productoId] || '—', unidad: i.unidad,
           cantidad: i.cantidad, precioUnit: i.precioUnit, total: i.total,
         })),
         facturaId: l.facturaId || null,
