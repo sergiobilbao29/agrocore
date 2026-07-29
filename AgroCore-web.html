@@ -2484,7 +2484,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'🧾 v2.12.1 — Órdenes de pago: se ven bien por proveedor y el e-cheq deja de decir "Físico"',
-      desc:'Tres arreglos en las <b>Órdenes de Pago</b>: (1) en el detalle de cheques entregados, un <b>e-cheq</b> ahora figura como <b>Electrónico</b> (antes decía siempre "Físico"). (2) En <b>Compras</b>, al filtrar por <b>proveedor</b>, ahora también aparece la <b>Orden de Pago</b> de ese proveedor (antes solo traía las facturas). (3) En <b>Cuentas a pagar</b>, el botón <b>Órdenes de pago</b> del proveedor ahora lista sus OP (antes decía "sin órdenes" aunque existieran). Nota: las OP <b>ya emitidas antes</b> de esta versión pueden seguir mostrando "Físico" en su detalle porque el dato quedó guardado; las nuevas salen correctas.' },
+      desc:'Tres arreglos en las <b>Órdenes de Pago</b>: (1) en el detalle de cheques entregados, un <b>e-cheq</b> ahora figura como <b>Electrónico</b> (antes decía siempre "Físico"). (2) En <b>Compras</b>, al filtrar por <b>proveedor</b>, ahora también aparece la <b>Orden de Pago</b> de ese proveedor (antes solo traía las facturas). (3) En <b>Cuentas a pagar</b>, el botón <b>Órdenes de pago</b> del proveedor ahora lista sus OP (antes decía "sin órdenes" aunque existieran). Para las OP <b>ya emitidas antes</b> de esta versión, sumamos en <b>Compras</b> el botón <b>🩹 Corregir tipo de cheque en OP</b>: recupera el formato real de cada cheque y arregla los que decían "Físico".' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🤝 v2.12.0 — Labores a terceros: cobrás el servicio con factura y le cargás el % al empleado',
       desc:'Nueva sección <b>Producción → Servicios a terceros</b>. Al cargar una <b>Labor</b> podés tildar <b>“🤝 Servicio a terceros”</b> y elegir el <b>cliente</b> (la campaña queda opcional). La labor se registra igual que siempre —con sus <b>insumos</b> (ej. gasoil) que descuentan stock y el <b>% de ganancia del empleado</b>— pero ese porcentaje se calcula <b>solo sobre el precio de la labor</b>, no sobre los insumos que se le cobran al cliente. Desde la lista de servicios, el botón <b>🧾 Facturar</b> abre la factura de venta <b>ya cargada</b> con el cliente, la línea de la labor y los insumos como líneas aparte; al autorizarla, el servicio queda marcado como <b>facturado</b> y vinculado a esa factura.' },
@@ -10772,6 +10772,7 @@ pages.compras = async function() {
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>
         ${can('finanzas:create') ? `<button class="btn btn-secondary" onclick="comprasBackfillOP()" title="Reconstruye las Órdenes de Pago de pagos anteriores para que aparezcan y se puedan reimprimir/enviar">🔄 Recuperar OP anteriores</button>`:''}
+        ${can('finanzas:update') ? `<button class="btn btn-secondary" onclick="comprasFixChequeTipo()" title="Corrige el tipo de cheque (Físico/Electrónico) de las OP ya emitidas">🩹 Corregir tipo de cheque en OP</button>`:''}
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="compForm()">+ Nueva factura de compra</button>`:''}
       </div>
     </div>
@@ -14116,6 +14117,14 @@ async function comprasBackfillOP(){
     const r = await api('/api/documentos/backfill-op', { method:'POST' });
     toast(r.creados ? (r.creados+' órdenes de pago recuperadas') : 'No había OP anteriores para recuperar', 'success');
     delete state.cache.ctasCtes; pages.compras();
+  } catch(e){ toast(e.message,'error'); }
+}
+// Corrige el "Tipo Cheque" (Físico/Electrónico) de las OP ya emitidas antes del arreglo.
+async function comprasFixChequeTipo(){
+  if(!confirm('Vamos a corregir el "Tipo Cheque" de las Órdenes de Pago ya emitidas: los e-cheq que figuraban como "Físico" pasarán a "Electrónico" (se recupera el formato real de cada cheque).\n\n¿Continuar?')) return;
+  try {
+    const r = await api('/api/documentos/fix-cheque-tipo', { method:'POST' });
+    toast(r.docsCorregidos ? (r.docsCorregidos+' OP corregidas · '+r.chequesCorregidos+' cheque(s)') : 'No había OP para corregir (o ya estaban bien)', 'success');
   } catch(e){ toast(e.message,'error'); }
 }
 // Deshacer un pago (revertir una OP): repone la deuda y revierte caja/banco/cheque.

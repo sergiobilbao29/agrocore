@@ -1212,6 +1212,55 @@ app.post('/api/documentos/:id/revertir', requireCompany, requirePermission('fina
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+// Corrige el "Tipo Cheque" guardado en las Órdenes de Pago YA EMITIDAS. Antes se
+// guardaba el tipo propio/terceros (que caía en "Físico") en lugar del formato
+// real del cheque. Recupera el formato buscando el cheque original (por id o por
+// número + banco) y reescribe el texto a Electrónico/Físico. Idempotente.
+app.post('/api/documentos/fix-cheque-tipo', requireCompany, requirePermission('finanzas:update'), async (req, res) => {
+  try {
+    const companyId = req.companyId;
+    const _label = f => f === 'electronico' ? 'Electrónico' : (f === 'fisico' ? 'Físico' : null);
+    const docs = await prisma.documentoEmitido.findMany({ where: { companyId, tipo: 'orden_pago' } });
+    const cheques = await prisma.cheque.findMany({ where: { companyId }, select: { id: true, formato: true, nroCheque: true, banco: true } });
+    // Índices para ubicar el cheque original.
+    const porId = new Map(cheques.map(c => [c.id, c]));
+    const porNumBanco = new Map();
+    for (const c of cheques) {
+      const k = `${(c.nroCheque || '').trim()}|${(c.banco || '').trim().toLowerCase()}`;
+      if (!porNumBanco.has(k)) porNumBanco.set(k, c);
+    }
+    const buscarFormato = (ch) => {
+      // 1) idInterno guarda los primeros 8 caracteres del id del cheque.
+      const idp = (ch.idInterno || '').trim();
+      if (idp && idp !== '—') {
+        const hit = cheques.find(c => c.id.startsWith(idp));
+        if (hit) return hit.formato;
+      }
+      // 2) por número + banco.
+      const k = `${(ch.nroCheque || '').toString().trim()}|${(ch.banco || '').trim().toLowerCase()}`;
+      const hit2 = porNumBanco.get(k);
+      if (hit2) return hit2.formato;
+      return null;
+    };
+    let docsFix = 0, chequesFix = 0;
+    for (const doc of docs) {
+      const datos = doc.datos;
+      if (!datos || !Array.isArray(datos.cheques) || !datos.cheques.length) continue;
+      let cambio = false;
+      for (const ch of datos.cheques) {
+        const fmt = buscarFormato(ch);
+        const nuevo = _label(fmt);
+        if (nuevo && ch.tipo !== nuevo) { ch.tipo = nuevo; cambio = true; chequesFix++; }
+      }
+      if (cambio) {
+        await prisma.documentoEmitido.update({ where: { id: doc.id }, data: { datos } });
+        docsFix++;
+      }
+    }
+    res.json({ ok: true, docsCorregidos: docsFix, chequesCorregidos: chequesFix, totalOP: docs.length });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // ---------- SETTINGS (configuración global del sistema) ----------
 // Una sola fila id="global" en la tabla Setting. Cualquier usuario logueado
 // puede leerla (los teléfonos se usan para los links de WhatsApp). Solo el
