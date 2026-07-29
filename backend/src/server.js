@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.14.0';
+const AGROCORE_VERSION = '2.14.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2661,6 +2661,7 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     // producto, para verlos todos en Stock (existencia 0 hasta que se muevan).
     try { await sincronizarProductosHacienda(req.companyId); } catch {}
     try { await sincronizarProductosInsumos(req.companyId); } catch {}
+    try { await sincronizarProductosCereales(req.companyId); } catch {}
     // Mapa nombre→tipo de insumo (Herbicida, Fertilizante, ...) para etiquetar cada fila.
     let insTipoMap = {};
     try { insTipoMap = await insumoNombreATipo(req.companyId); } catch {}
@@ -5651,6 +5652,29 @@ async function sincronizarProductosInsumos(companyId) {
     await prisma.producto.create({ data: {
       companyId, categoria: 'insumos', nombre, unidad: 'unidad',
       stockMinimo: 0, activo: true,
+      precioReferencia: c.precioReferencia ?? null,
+      ultimoCostoMoneda: c.monedaPrecio ?? null,
+    } });
+    have.add(nombre.toLowerCase());
+  }
+}
+// Igual que los insumos, pero para CEREALES / GRANOS: cada cereal del catálogo se
+// materializa como producto de stock (existencia 0 hasta que se mueva), para verlos
+// todos en Stock. Idempotente (no duplica por nombre). Copia la categoría del árbol.
+const CEREAL_TIPOS = new Set(['cereal', 'cereales', 'grano', 'granos']);
+async function sincronizarProductosCereales(companyId) {
+  const items = (await prisma.catalogo.findMany({ where: { companyId, activo: { not: false } } }))
+    .filter(c => CEREAL_TIPOS.has((c.tipo || '').trim().toLowerCase()));
+  if (!items.length) return;
+  const prods = await prisma.producto.findMany({ where: { companyId, categoria: 'cereales' }, select: { nombre: true } });
+  const have = new Set(prods.map(p => (p.nombre || '').trim().toLowerCase()));
+  for (const c of items) {
+    const nombre = (c.nombre || '').trim();
+    if (!nombre || have.has(nombre.toLowerCase())) continue;
+    await prisma.producto.create({ data: {
+      companyId, categoria: 'cereales', nombre, unidad: 'kg',
+      stockMinimo: 0, activo: true,
+      categoriaArticuloId: c.categoriaArticuloId ?? null,
       precioReferencia: c.precioReferencia ?? null,
       ultimoCostoMoneda: c.monedaPrecio ?? null,
     } });
