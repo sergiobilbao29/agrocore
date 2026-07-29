@@ -6852,6 +6852,8 @@ app.get('/api/labores-servicio', requireCompany, requirePermission('produccion:r
         tipo: l.tipo,
         clienteId: l.clienteId,
         clienteNombre: l.cliente?.nombre || l.cliente?.razonSocial || '—',
+        empleadoId: l.empleadoId || null,
+        empleadoNombre: l.empleado ? `${l.empleado.apellido || ''}, ${l.empleado.nombre || ''}`.replace(/^,\s*/, '').trim() : null,
         hectareasAplicadas: l.hectareasAplicadas,
         precioReferencia: l.precioReferencia,
         tipoPrecio: l.tipoPrecio,

@@ -892,6 +892,18 @@ function puedeVerStockCat(cat) {
   if (!Array.isArray(cats) || !cats.length) return true;
   return cats.map(c => String(c).toLowerCase()).includes(String(cat).toLowerCase());
 }
+// ¿El rol activo puede VER este módulo del menú? Modelo de visibilidad granular:
+// si el rol tiene al menos un flag "menu:<id>", entra en modo lista blanca y solo
+// ve los módulos marcados. Sin ningún flag → se rige por el permiso de área (legado).
+function puedeVerModulo(mod) {
+  if (!state.user) return false;
+  if (state.user.superAdmin) return true;
+  const m = currentMembership();
+  const perms = m?.role?.permissions || [];
+  const flags = perms.filter(p => p.startsWith('menu:'));
+  if (flags.length) return flags.includes('menu:' + mod.id);
+  return true; // sin lista blanca: la visibilidad depende del permiso de área
+}
 function can(perm) {
   if (!state.user) return false;
   if (state.user.superAdmin) return true;
@@ -901,6 +913,17 @@ function can(perm) {
   if (perms.includes('*:*') || perms.includes('*')) return true;
   if (!perm) return true;
   if (perms.includes(perm)) return true;
+  // Lista blanca de menú: un flag "menu:<id>" habilita la LECTURA del área de ese módulo
+  // (para que la pantalla abra). Las acciones (crear/editar/eliminar) siguen por área.
+  if (perm.endsWith(':read')) {
+    const area = perm.split(':')[0];
+    const ok = perms.some(p => {
+      if (!p.startsWith('menu:')) return false;
+      const mod = (typeof MODULES !== 'undefined') ? MODULES.find(x => x.id === p.slice(5)) : null;
+      return mod && mod.perm && mod.perm.split(':')[0] === area;
+    });
+    if (ok) return true;
+  }
   // ---- Sub-permisos opt-in ----
   // Si el perm pedido es un sub-permiso (3 niveles) y el rol tiene el "padre"
   // del área (area:action), lo dejamos pasar — salvo que el rol haya marcado
@@ -1652,8 +1675,9 @@ function renderNav() {
   // En empresa "informal" (sin ARCA) NO se ocultan Facturación ni Libro IVA: quedan
   // visibles pero con lo de ARCA grisado. Libro IVA se muestra bloqueado (no aplica).
   let items = MODULES.filter(m => {
+    if (!m.perm) return true;   // Inicio y similares: siempre visibles
+    if (!puedeVerModulo(m)) return false;   // lista blanca de menú por rol
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
-    if (!m.perm) return true;
     if (!can(m.perm)) return false;
     // Vista de stock limitada por rol: si el rol no ve "hacienda", ocultamos el módulo.
     if (m.id === 'hacienda' && !puedeVerStockCat('hacienda')) return false;
@@ -2440,7 +2464,7 @@ pages.inicio = async function() {
   const atajos = state.userShortcuts
     .map(sid => MODULES.find(m => m.id === sid))
     .filter(Boolean)
-    .filter(m => !m.perm || m.perm === '*' || can(m.perm))
+    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m))
     .map(m => ({ id: m.id, label: m.label, sub: m.section, icon: m.icon }));
 
   const puedeVerKPIs = can('dashboard:read');
@@ -2483,8 +2507,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
-      titulo:'🏢 v2.13.0 — Copiar configuración entre empresas + roles más claros + arreglos',
-      desc:'<b>Copiar entre empresas</b> (Configuración → Copiar / Configurar plantilla): ahora podés elegir <b>qué</b> transferir a otras empresas — <b>Catálogos</b>, el árbol de <b>Categorías y Familias</b> y/o el de <b>Categorías de Gastos</b> — cada uno opcional. Los árboles se copian respetando la jerarquía y sin duplicar lo que ya exista. La empresa plantilla también siembra los dos árboles al crear una empresa nueva. <b>Roles y permisos</b>: se rediseñó el editor para mostrar <b>una fila por permiso real</b> (con la lista de pantallas que abre), así se termina el problema de que al tildar “Ver Stock” se marcaban solas Movimientos, Cerealeras, Hacienda y Reporte de margen. Se quitó “Cargar labor simple” (ya no existe) y las <b>categorías de stock visibles</b> por rol ahora salen de <b>Categorías y Familias</b> (se actualizan solas). <b>Cuentas a cobrar/pagar</b>: los totales de arriba ahora <b>incluyen la moneda extranjera</b> valorizada a su TC (antes una deuda en dólares no sumaba). <b>Arreglo:</b> la pantalla de <b>Servicios a terceros</b> ya no da error al listar.' },
+      titulo:'🏢 v2.13.0 — Copiar configuración entre empresas + permisos por pantalla + arreglos',
+      desc:'<b>Copiar entre empresas</b> (Configuración → Copiar / Configurar plantilla): ahora podés elegir <b>qué</b> transferir a otras empresas — <b>Catálogos</b>, el árbol de <b>Categorías y Familias</b> y/o el de <b>Categorías de Gastos</b> — cada uno opcional. Los árboles se copian respetando la jerarquía y sin duplicar lo que ya exista. La empresa plantilla también siembra los dos árboles al crear una empresa nueva. <b>Roles y permisos</b>: ahora podés elegir <b>pantalla por pantalla</b> qué ve cada rol — se lista <b>cada ítem del menú de la izquierda, uno por uno</b>, y marcás exactamente los que querés (ej: ver Stock pero no Hacienda). Aparte quedan los permisos de acciones (Crear / Editar / Eliminar) por área. Se quitó “Cargar labor simple”. Las <b>categorías de stock visibles</b> por rol ahora salen <b>solo</b> de <b>Categorías y Familias</b> (sin duplicados) y se actualizan solas. <b>Cuentas a cobrar/pagar</b>: los totales de arriba ahora <b>incluyen la moneda extranjera</b> valorizada a su TC (antes una deuda en dólares no sumaba). <b>Servicios a terceros:</b> ya no da error al listar; el botón <b>Nuevo servicio</b> abre la labor ya marcada como servicio; y se agregaron <b>filtros</b> por cliente, labor, empleado y fecha desde/hasta.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'🧾 v2.12.1 — Órdenes de pago: se ven bien por proveedor y el e-cheq deja de decir "Físico"',
       desc:'Tres arreglos en las <b>Órdenes de Pago</b>: (1) en el detalle de cheques entregados, un <b>e-cheq</b> ahora figura como <b>Electrónico</b> (antes decía siempre "Físico"). (2) En <b>Compras</b>, al filtrar por <b>proveedor</b>, ahora también aparece la <b>Orden de Pago</b> de ese proveedor (antes solo traía las facturas). (3) En <b>Cuentas a pagar</b>, el botón <b>Órdenes de pago</b> del proveedor ahora lista sus OP (antes decía "sin órdenes" aunque existieran). Para las OP <b>ya emitidas antes</b> de esta versión, sumamos en <b>Compras</b> el botón <b>🩹 Corregir tipo de cheque en OP</b>: recupera el formato real de cada cheque y arregla los que decían "Físico".' },
@@ -3743,8 +3767,9 @@ function shortcutsForm() {
   // Agrupar MODULES por sección respetando el orden y filtrando por permisos
   const visibles = MODULES.filter(m => {
     if (m.id === 'inicio') return false;   // Inicio no se pinea (ya estás ahí)
-    if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!m.perm) return true;
+    if (!puedeVerModulo(m)) return false;
+    if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     return can(m.perm);
   });
   const bySec = {};
@@ -8822,6 +8847,11 @@ SUB_PERMS.forEach(g => g.items.forEach(it => { SUB_PERM_INDEX[it.key] = g; }));
 // Convierte "dashboard:read" en "Dashboard: Ver" para mostrar al usuario.
 function permLabel(perm) {
   if (perm === '*:*' || perm === '*') return 'Acceso total';
+  // Visibilidad de un módulo del menú.
+  if (String(perm).startsWith('menu:')) {
+    const mod = MODULES.find(m => m.id === perm.slice(5));
+    return 'Ve: ' + (mod ? mod.label : perm.slice(5));
+  }
   // Si es un sub-permiso conocido, devolvemos su etiqueta legible.
   for (const g of SUB_PERMS) {
     const it = g.items.find(x => x.key === perm);
@@ -8900,15 +8930,20 @@ async function rolForm(id=null) {
   const _raices = (state.cache.categoriasArt||[]).filter(c => !c.padreId);
   const _catStockOpts = (() => {
     const out = []; const vistos = new Set();
+    // SOLO las categorías macro del árbol (raíces de Categorías y Familias).
     _raices.forEach(r => { const v = String(r.nombre||'').toLowerCase().trim(); if (v && !vistos.has(v)) { vistos.add(v); out.push([v, r.nombre]); } });
-    // Sumar las clásicas que no estén ya representadas (por si el árbol está vacío).
-    STOCK_CATS.forEach(([v,l]) => { if (!vistos.has(v)) { vistos.add(v); out.push([v,l]); } });
+    // Si el árbol todavía está vacío, caemos a las clásicas para no dejar la lista sin nada.
+    if (!out.length) STOCK_CATS.forEach(([v,l]) => out.push([v,l]));
     return out;
   })();
   // Áreas de permiso derivadas del permiso REAL de cada módulo (m.perm = "area:accion").
   const _areaDeMod = m => (m.perm && m.perm.includes(':')) ? m.perm.split(':')[0] : null;
   const _modsPorArea = {};
   MODULES.forEach(m => { const a = _areaDeMod(m); if (!a) return; (_modsPorArea[a] = _modsPorArea[a] || []).push(m); });
+  // Menú del rol: cada ítem del menú de la izquierda, 1x1, agrupado por su sección.
+  const _menuPorSeccion = {};
+  MODULES.forEach(m => { if (!m.perm || !m.section) return; (_menuPorSeccion[m.section] = _menuPorSeccion[m.section] || []).push(m); });
+  const _todosMenu = MODULES.filter(m => m.perm && m.section);
   openModal({
     title: id?'Editar rol':'Nuevo rol', size:'max-w-3xl',
     body: `
@@ -8917,12 +8952,35 @@ async function rolForm(id=null) {
         <div><label class="label">Etiqueta *</label><input id="f-lbl" class="input" value="${esc(it.label||'')}" /></div>
         <div class="col-span-2"><label class="label">Descripción</label><input id="f-desc" class="input" value="${esc(it.description||'')}" /></div>
       </div>
-      <div class="label">Permisos por proceso administrativo</div>
       <div class="border rounded-lg p-3 max-h-96 overflow-y-auto mb-3">
         <label class="flex items-center gap-2 mb-3 font-semibold pb-2 border-b border-slate-200">
           <input type="checkbox" data-perm="*:*" ${perms.has('*:*')?'checked':''}/>
           <span>🔓 Acceso total (todos los permisos)</span>
         </label>
+
+        <div class="text-sm font-bold text-slate-800 mb-1">👁️ Pantallas del menú que puede ver</div>
+        <div class="text-[11px] text-slate-500 mb-2">Marcá <b>exactamente</b> las pantallas del menú de la izquierda que este rol ve. Si no marcás <b>ninguna</b>, la visibilidad se rige por los permisos por área de más abajo (comportamiento clásico).</div>
+        <label class="flex items-center gap-2 mb-2 text-xs text-slate-700 cursor-pointer">
+          <input type="checkbox" onchange="rolMenuTodos(this)" ${_todosMenu.length && _todosMenu.every(m=>perms.has('menu:'+m.id))?'checked':''}/>
+          <b>Ver todo el menú</b>
+        </label>
+        ${MENU_SECTIONS.filter(s => (_menuPorSeccion[s]||[]).length).map(sec => `
+          <div class="mb-2">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-0.5 mb-1">
+              <div class="text-xs font-bold text-slate-700">${esc(sec)}</div>
+              <label class="flex items-center gap-1 text-[10px] text-slate-500 cursor-pointer"><input type="checkbox" onchange="rolMenuSeccion(this)" data-sec-mods="${_menuPorSeccion[sec].map(m=>'menu:'+m.id).join(',')}" ${_menuPorSeccion[sec].every(m=>perms.has('menu:'+m.id))?'checked':''}/> toda la sección</label>
+            </div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
+              ${_menuPorSeccion[sec].map(m => `
+                <label class="flex items-center gap-2 text-sm py-0.5">
+                  <input type="checkbox" class="rol-menu" data-perm="menu:${m.id}" ${perms.has('menu:'+m.id)?'checked':''}/>
+                  <span>${m.icon} ${esc(m.label)}</span>
+                </label>`).join('')}
+            </div>
+          </div>`).join('')}
+
+        <div class="text-sm font-bold text-slate-800 mt-4 mb-1 pt-3 border-t border-slate-200">🔧 Permisos por área (Ver / Crear / Editar / Eliminar)</div>
+        <div class="text-[11px] text-slate-500 mb-2">Definen qué <b>acciones</b> puede hacer. El check <b>Ver</b> de un área solo importa si arriba <b>no</b> marcaste pantallas puntuales.</div>
         ${PERM_AREA_GROUPS.map(grupo => {
           // Áreas del grupo que realmente tienen módulos controlables.
           const areas = grupo.areas.filter(a => (_modsPorArea[a] || []).length);
@@ -9026,6 +9084,16 @@ function rolPermRefreshGrupos() {
     });
     g.checked = todos;
   });
+}
+// "Ver todo el menú": marca/desmarca todos los ítems de menú del rol.
+function rolMenuTodos(el) {
+  $$('input.rol-menu').forEach(x => { x.checked = el.checked; });
+  $$('input[data-sec-mods]').forEach(x => { x.checked = el.checked; });
+}
+// Toggle "toda la sección" del menú.
+function rolMenuSeccion(el) {
+  const keys = (el.dataset.secMods || '').split(',').filter(Boolean);
+  keys.forEach(k => { const cb = document.querySelector('input.rol-menu[data-perm="'+k+'"]'); if (cb) cb.checked = el.checked; });
 }
 
 async function rolSave(id) {
@@ -19184,7 +19252,7 @@ function laServicioToggle() {
   const camp = $('#la-camp');
   if (on && camp && !camp.value) camp.value = '';
 }
-async function laborForm(avanzada = false, campanaId = null, edit = null) {
+async function laborForm(avanzada = false, campanaId = null, edit = null, servicio = false) {
   const editMode = !!edit;
   // Cargamos en paralelo lo necesario
   let campanas=[], empleados=[], productos=[], laboresCat=[];
@@ -19327,6 +19395,8 @@ async function laborForm(avanzada = false, campanaId = null, edit = null) {
         const sel = document.querySelector('#la-emp-body [data-le="emp"]');
         if (sel && [...sel.options].some(o=>o.value===state.user.empleadoId)) { sel.value = state.user.empleadoId; if (typeof laPickEmpRow==='function') try{ laPickEmpRow(sel); }catch{} }
       }
+      // Si viene desde Servicios a terceros, arranca ya marcado como servicio.
+      if (servicio) { const c = $('#la-servicio'); if (c) { c.checked = true; laServicioToggle(); } }
     }
   }, 0);
 }
@@ -19567,36 +19637,79 @@ pages.serviciosTerceros = async function() {
   catch (e) { $('#page-body').innerHTML = `<div class="text-red-600 text-sm">${esc(e.message)}</div>`; return; }
   state.cache.laboresServicio = labs;
   const sym = m => m==='USD'?'US$':(m==='ARS'?'$':(m+' '));
-  const pend = labs.filter(l=>!l.facturado).length;
-  const rows = labs.map(l => {
-    const insTot = (l.insumos||[]).reduce((a,i)=>a+Number(i.total||0),0);
-    const insTxt = (l.insumos||[]).length ? `${l.insumos.length} · ${sym(l.moneda)}${fmtN(insTot)}` : '—';
-    const estado = l.facturado
-      ? `<span class="badge badge-green">✔ Facturada ${l.factura?`${l.factura.tipo} ${String(l.factura.puntoVenta).padStart(4,'0')}-${String(l.factura.numero).padStart(8,'0')}`:''}</span>`
-      : (can('ventas:create') ? `<button class="btn btn-primary text-xs" onclick='facturarServicio(${JSON.stringify(l.id)})'>🧾 Facturar</button>` : `<span class="badge badge-yellow">Pendiente</span>`);
-    return `<tr class="table-row">
-      <td>${fmtDate(l.fecha)}</td>
-      <td class="font-medium">${esc(l.clienteNombre)}</td>
-      <td>${esc(l.tipo)}${l.hectareasAplicadas?` <span class="text-[11px] text-slate-400">· ${fmtN(l.hectareasAplicadas)} ha</span>`:''}</td>
-      <td class="text-right font-semibold">${sym(l.moneda)}${fmtN(l.precioLabor||0)}</td>
-      <td class="text-right text-slate-500">${insTxt}</td>
-      <td>${l.responsable?esc(l.responsable):'—'}</td>
-      <td class="text-right">${l.gananciaEmpleado!=null?`${sym(l.moneda)}${fmtN(l.gananciaEmpleado)}`:'—'}</td>
-      <td class="text-right">${estado}</td>
-    </tr>`;
-  }).join('');
+  state.servFilter = state.servFilter || { cliente:'', tipo:'', empleado:'', desde:'', hasta:'' };
+  // Opciones únicas para los filtros (salen de las labores existentes).
+  const clientesOpt = [...new Map(labs.filter(l=>l.clienteId).map(l=>[l.clienteId, l.clienteNombre])).entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1])));
+  const tiposOpt = [...new Set(labs.map(l=>l.tipo).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const emplOpt = [...new Map(labs.filter(l=>l.empleadoId).map(l=>[l.empleadoId, l.empleadoNombre||'—'])).entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1])));
+
+  const render = () => {
+    const f = state.servFilter;
+    const fil = labs.filter(l => {
+      if (f.cliente && l.clienteId !== f.cliente) return false;
+      if (f.tipo && l.tipo !== f.tipo) return false;
+      if (f.empleado && l.empleadoId !== f.empleado) return false;
+      const d = String(l.fecha||'').slice(0,10);
+      if (f.desde && d < f.desde) return false;
+      if (f.hasta && d > f.hasta) return false;
+      return true;
+    });
+    const pend = fil.filter(l=>!l.facturado).length;
+    const rows = fil.map(l => {
+      const insTot = (l.insumos||[]).reduce((a,i)=>a+Number(i.total||0),0);
+      const insTxt = (l.insumos||[]).length ? `${l.insumos.length} · ${sym(l.moneda)}${fmtN(insTot)}` : '—';
+      const estado = l.facturado
+        ? `<span class="badge badge-green">✔ Facturada ${l.factura?`${l.factura.tipo} ${String(l.factura.puntoVenta).padStart(4,'0')}-${String(l.factura.numero).padStart(8,'0')}`:''}</span>`
+        : (can('ventas:create') ? `<button class="btn btn-primary text-xs" onclick='facturarServicio(${JSON.stringify(l.id)})'>🧾 Facturar</button>` : `<span class="badge badge-yellow">Pendiente</span>`);
+      return `<tr class="table-row">
+        <td>${fmtDate(l.fecha)}</td>
+        <td class="font-medium">${esc(l.clienteNombre)}</td>
+        <td>${esc(l.tipo)}${l.hectareasAplicadas?` <span class="text-[11px] text-slate-400">· ${fmtN(l.hectareasAplicadas)} ha</span>`:''}</td>
+        <td class="text-right font-semibold">${sym(l.moneda)}${fmtN(l.precioLabor||0)}</td>
+        <td class="text-right text-slate-500">${insTxt}</td>
+        <td>${l.responsable?esc(l.responsable):(l.empleadoNombre?esc(l.empleadoNombre):'—')}</td>
+        <td class="text-right">${l.gananciaEmpleado!=null?`${sym(l.moneda)}${fmtN(l.gananciaEmpleado)}`:'—'}</td>
+        <td class="text-right">${estado}</td>
+      </tr>`;
+    }).join('');
+    $('#serv-tbody').innerHTML = rows || `<tr><td colspan="8" class="text-center text-slate-400 py-8">${labs.length? 'No hay servicios con esos filtros.' : 'Todavía no cargaste servicios a terceros. Usá “🤝 Nuevo servicio” o marcá “Servicio a terceros” al cargar una labor.'}</td></tr>`;
+    const c = $('#serv-count'); if (c) c.textContent = `${fil.length} servicio${fil.length===1?'':'s'}${pend?` · ${pend} sin facturar`:''}`;
+  };
+
   $('#page-body').innerHTML = `
     <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <div class="text-[11px] text-slate-500">💡 El <b>precio de la labor</b> es lo que cobrás por el servicio; el <b>% del empleado</b> se calcula solo sobre ese precio (no sobre insumos como el gasoil). Al facturar, se cargan la labor y los insumos como líneas de la factura.${pend?` <b>${pend}</b> sin facturar.`:''}</div>
-      ${can('produccion:create')?`<button class="btn btn-primary text-sm" onclick="laborForm(true, null, null); setTimeout(()=>{ const c=document.getElementById('la-servicio'); if(c){ c.checked=true; laServicioToggle(); } },50)">🤝 Nuevo servicio</button>`:''}
+      <div class="text-[11px] text-slate-500">💡 El <b>precio de la labor</b> es lo que cobrás por el servicio; el <b>% del empleado</b> se calcula solo sobre ese precio (no sobre insumos como el gasoil). Al facturar, se cargan la labor y los insumos como líneas de la factura.</div>
+      ${can('produccion:create')?`<button class="btn btn-primary text-sm" onclick="laborForm(true, null, null, true)">🤝 Nuevo servicio</button>`:''}
+    </div>
+    <div class="kpi mb-3">
+      <div class="grid grid-cols-2 md:grid-cols-6 gap-2 items-end">
+        <div><label class="label">Cliente</label>
+          <select id="sf-cli" class="input"><option value="">Todos</option>${clientesOpt.map(([id,n])=>`<option value="${esc(id)}" ${state.servFilter.cliente===id?'selected':''}>${esc(n)}</option>`).join('')}</select>
+        </div>
+        <div><label class="label">Labor</label>
+          <select id="sf-tipo" class="input"><option value="">Todas</option>${tiposOpt.map(t=>`<option value="${esc(t)}" ${state.servFilter.tipo===t?'selected':''}>${esc(t)}</option>`).join('')}</select>
+        </div>
+        <div><label class="label">Empleado</label>
+          <select id="sf-emp" class="input"><option value="">Todos</option>${emplOpt.map(([id,n])=>`<option value="${esc(id)}" ${state.servFilter.empleado===id?'selected':''}>${esc(n)}</option>`).join('')}</select>
+        </div>
+        <div><label class="label">Desde</label><input id="sf-desde" type="date" class="input" value="${esc(state.servFilter.desde||'')}"/></div>
+        <div><label class="label">Hasta</label><input id="sf-hasta" type="date" class="input" value="${esc(state.servFilter.hasta||'')}"/></div>
+        <div><button class="btn btn-secondary w-full" onclick="servFiltrosLimpiar()">Limpiar</button></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2" id="serv-count"></div>
     </div>
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
         <thead><tr><th>Fecha</th><th>Cliente</th><th>Labor</th><th class="text-right">Precio labor</th><th class="text-right">Insumos</th><th>Empleado</th><th class="text-right">Ganancia empl.</th><th class="text-right">Factura</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="8" class="text-center text-slate-400 py-8">Todavía no cargaste servicios a terceros. Usá “🤝 Nuevo servicio” o marcá “Servicio a terceros” al cargar una labor.</td></tr>'}</tbody>
+        <tbody id="serv-tbody"></tbody>
       </table>
     </div>`;
+  const bind = (id, key, evt) => { const el=$('#'+id); if(el) el.addEventListener(evt, e=>{ state.servFilter[key]=e.target.value; render(); }); };
+  bind('sf-cli','cliente','change'); bind('sf-tipo','tipo','change'); bind('sf-emp','empleado','change');
+  bind('sf-desde','desde','change'); bind('sf-hasta','hasta','change');
+  render();
 };
+function servFiltrosLimpiar() { state.servFilter = { cliente:'', tipo:'', empleado:'', desde:'', hasta:'' }; pages.serviciosTerceros(); }
 // Abrir la facturación prellenada desde una labor a terceros (labor + insumos como líneas).
 async function facturarServicio(id) {
   const l = (state.cache.laboresServicio||[]).find(x=>x.id===id);
