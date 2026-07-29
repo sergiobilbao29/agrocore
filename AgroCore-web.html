@@ -2507,8 +2507,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
-      titulo:'🏢 v2.13.0 — Copiar configuración entre empresas + permisos por pantalla + arreglos',
-      desc:'<b>Copiar entre empresas</b> (Configuración → Copiar / Configurar plantilla): ahora podés elegir <b>qué</b> transferir a otras empresas — <b>Catálogos</b>, el árbol de <b>Categorías y Familias</b> y/o el de <b>Categorías de Gastos</b> — cada uno opcional. Los árboles se copian respetando la jerarquía y sin duplicar lo que ya exista. La empresa plantilla también siembra los dos árboles al crear una empresa nueva. <b>Roles y permisos</b>: ahora podés elegir <b>pantalla por pantalla</b> qué ve cada rol — se lista <b>cada ítem del menú de la izquierda, uno por uno</b>, y marcás exactamente los que querés (ej: ver Stock pero no Hacienda). Aparte quedan los permisos de acciones (Crear / Editar / Eliminar) por área. Se quitó “Cargar labor simple”. Las <b>categorías de stock visibles</b> por rol ahora salen <b>solo</b> de <b>Categorías y Familias</b> (sin duplicados) y se actualizan solas. <b>Cuentas a cobrar/pagar</b>: los totales de arriba ahora <b>incluyen la moneda extranjera</b> valorizada a su TC (antes una deuda en dólares no sumaba). <b>Servicios a terceros:</b> ya no da error al listar; el botón <b>Nuevo servicio</b> abre la labor ya marcada como servicio; y se agregaron <b>filtros</b> por cliente, labor, empleado y fecha desde/hasta.' },
+      titulo:'🏢 v2.14.0 — Copiar configuración entre empresas + permisos por pantalla + arreglos',
+      desc:'<b>Copiar entre empresas</b> (Configuración → Copiar / Configurar plantilla): ahora podés elegir <b>qué</b> transferir a otras empresas — <b>Catálogos</b>, el árbol de <b>Categorías y Familias</b> y/o el de <b>Categorías de Gastos</b> — cada uno opcional. Los árboles se copian respetando la jerarquía y sin duplicar lo que ya exista. La empresa plantilla también siembra los dos árboles al crear una empresa nueva. <b>Roles y permisos</b>: ahora podés elegir <b>pantalla por pantalla</b> qué ve cada rol — se lista <b>cada ítem del menú de la izquierda, uno por uno</b>, y marcás exactamente los que querés (ej: ver Stock pero no Hacienda). Aparte quedan los permisos de acciones (Crear / Editar / Eliminar) por área. Se quitó “Cargar labor simple”. Las <b>categorías de stock visibles</b> por rol ahora salen <b>solo</b> de <b>Categorías y Familias</b> (sin duplicados) y se actualizan solas. <b>Cuentas a cobrar/pagar</b>: los totales de arriba ahora <b>incluyen la moneda extranjera</b> valorizada a su TC (antes una deuda en dólares no sumaba). <b>Servicios a terceros:</b> ya no da error al listar; el botón <b>Nuevo servicio</b> abre la labor ya marcada como servicio; y se agregaron <b>filtros</b> por cliente, labor, empleado y fecha desde/hasta. <b>Dashboard → Stock:</b> los gráficos de <b>SKUs y valor por categoría</b> ahora agrupan por las categorías reales de <b>Categorías y Familias</b> (antes mostraban las etiquetas viejas sueltas como “insumo”, “cereal”, “herbicida”).' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'🧾 v2.12.1 — Órdenes de pago: se ven bien por proveedor y el e-cheq deja de decir "Físico"',
       desc:'Tres arreglos en las <b>Órdenes de Pago</b>: (1) en el detalle de cheques entregados, un <b>e-cheq</b> ahora figura como <b>Electrónico</b> (antes decía siempre "Físico"). (2) En <b>Compras</b>, al filtrar por <b>proveedor</b>, ahora también aparece la <b>Orden de Pago</b> de ese proveedor (antes solo traía las facturas). (3) En <b>Cuentas a pagar</b>, el botón <b>Órdenes de pago</b> del proveedor ahora lista sus OP (antes decía "sin órdenes" aunque existieran). Para las OP <b>ya emitidas antes</b> de esta versión, sumamos en <b>Compras</b> el botón <b>🩹 Corregir tipo de cheque en OP</b>: recupera el formato real de cada cheque y arregla los que decían "Físico".' },
@@ -4543,12 +4543,15 @@ function dashAvisoSinFiltro() {
 async function dashStockAnal() {
   const target = $('#dash-content');
   let prods = [], movs = [];
+  // El árbol de Categorías y Familias es la fuente de verdad de la categoría.
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch { state.cache.categoriasArt = []; } }
   try { prods = (await api('/api/stock-actual')).data || []; } catch {}
   try { movs = (await api('/api/movimientos')).data || []; } catch {}
 
   const porCat = {}, valorPorCat = {};
   prods.forEach(p => {
-    const c = p.categoria || 'sin categoría';
+    // Categoría = raíz del árbol (Categorías y Familias), no la etiqueta plana vieja.
+    const c = prodCategoriaRaiz(p) || 'Sin categoría';
     porCat[c] = (porCat[c]||0) + 1;
     const val = Number(p.existencia||0) * Number(p.precioReferencia || 0);
     valorPorCat[c] = (valorPorCat[c]||0) + val;
