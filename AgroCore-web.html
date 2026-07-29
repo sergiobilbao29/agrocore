@@ -2482,6 +2482,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
+      titulo:'🧾 v2.12.1 — Órdenes de pago: se ven bien por proveedor y el e-cheq deja de decir "Físico"',
+      desc:'Tres arreglos en las <b>Órdenes de Pago</b>: (1) en el detalle de cheques entregados, un <b>e-cheq</b> ahora figura como <b>Electrónico</b> (antes decía siempre "Físico"). (2) En <b>Compras</b>, al filtrar por <b>proveedor</b>, ahora también aparece la <b>Orden de Pago</b> de ese proveedor (antes solo traía las facturas). (3) En <b>Cuentas a pagar</b>, el botón <b>Órdenes de pago</b> del proveedor ahora lista sus OP (antes decía "sin órdenes" aunque existieran). Nota: las OP <b>ya emitidas antes</b> de esta versión pueden seguir mostrando "Físico" en su detalle porque el dato quedó guardado; las nuevas salen correctas.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🤝 v2.12.0 — Labores a terceros: cobrás el servicio con factura y le cargás el % al empleado',
       desc:'Nueva sección <b>Producción → Servicios a terceros</b>. Al cargar una <b>Labor</b> podés tildar <b>“🤝 Servicio a terceros”</b> y elegir el <b>cliente</b> (la campaña queda opcional). La labor se registra igual que siempre —con sus <b>insumos</b> (ej. gasoil) que descuentan stock y el <b>% de ganancia del empleado</b>— pero ese porcentaje se calcula <b>solo sobre el precio de la labor</b>, no sobre los insumos que se le cobran al cliente. Desde la lista de servicios, el botón <b>🧾 Facturar</b> abre la factura de venta <b>ya cargada</b> con el cliente, la línea de la labor y los insumos como líneas aparte; al autorizarla, el servicio queda marcado como <b>facturado</b> y vinculado a esa factura.' },
@@ -14365,7 +14368,7 @@ async function pagoCobroConfirmar(modo) {
             banco:body.nuevoCheque.banco||'', importe:Number(body.nuevoCheque.monto)||monto });
         } else if (body.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===body.chequeId)||{};
           op.chequeInfo=`${ch.banco||''} N° ${ch.numero||ch.nroCheque||''}`;
-          op.cheques.push({ idInterno:ch.id?String(ch.id).slice(0,8):'—', librador:ch.librador||ch.origen||'', tipo:_tipoCh(ch.tipo),
+          op.cheques.push({ idInterno:ch.id?String(ch.id).slice(0,8):'—', librador:ch.librador||ch.origen||'', tipo:_tipoCh(ch.formato||ch.tipoFormato),
             endosante:ch.endosante||'', nroCheque:ch.numero||ch.nroCheque||'', nroCuenta:ch.numeroCuenta||ch.nroCuenta||'',
             fechaVenc:ch.fechaPago, banco:ch.banco||'', importe:Number(ch.monto)||monto });
         }

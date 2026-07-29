@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.12.0';
+const AGROCORE_VERSION = '2.12.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1089,7 +1089,7 @@ app.get('/api/documentos', requireCompany, async (req, res) => {
     const rows = await prisma.documentoEmitido.findMany({
       where: { companyId: req.companyId, ...(tipo ? { tipo } : {}) },
       orderBy: { fecha: 'desc' }, take: 500,
-      select: { id: true, tipo: true, numero: true, fecha: true, contactoNombre: true, contactoEmail: true, total: true, moneda: true, emailEnviadoA: true, emailEnviadoEn: true },
+      select: { id: true, tipo: true, numero: true, fecha: true, contactoTipo: true, contactoId: true, contactoNombre: true, contactoEmail: true, total: true, moneda: true, emailEnviadoA: true, emailEnviadoEn: true },
     });
     res.json({ ok: true, data: rows });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
