@@ -2507,8 +2507,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'29/07/2026',
-      titulo:'🔁 v2.14.4 — Extracciones y depósitos: se ven, pero no cuentan como gasto/ingreso',
-      desc:'Cuando movés plata <b>del banco a la caja</b> (extracción) o <b>de la caja al banco</b> (depósito), esa plata <b>no sale de la empresa</b>, solo cambia de lugar. Ahora el sistema muestra las dos patas del movimiento (el egreso de la cuenta bancaria y el ingreso en la caja) para que sepas dónde está el dinero, pero <b>ya no las suma</b> en los totales de Ingresos/Egresos ni en el Dashboard. Antes inflaban esos totales. Así los números reflejan solo la plata que realmente entra o sale de la empresa.' },
+      titulo:'🔁 v2.15.0 — Movimientos internos (banco↔caja y entre cuentas) no cuentan como gasto/ingreso',
+      desc:'Cuando movés plata <b>del banco a la caja</b> (extracción), <b>de la caja al banco</b> (depósito) o <b>de una cuenta bancaria a otra propia</b> (transferencia entre cuentas, ej. para cubrir un descubierto), esa plata <b>no sale de la empresa</b>, solo cambia de lugar. Ahora el sistema <b>muestra las dos patas</b> del movimiento (el egreso de una cuenta y el ingreso en la otra, con un cartelito “🔁 interno · no suma”) para que sepas dónde está el dinero, pero <b>ya no las suma</b> en los totales de Ingresos/Egresos ni en el Dashboard. Antes inflaban esos totales. Ojo: una transferencia que es un <b>pago o cobro real a un tercero</b> sí cuenta (esas no van entre cuentas propias). Así los números reflejan solo la plata que realmente entra o sale de la empresa.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'29/07/2026',
       titulo:'📊 v2.14.3 — Dashboard: los egresos ahora coinciden con Movimientos Diarios',
       desc:'Corregido el cálculo de <b>Egresos</b> del Dashboard: antes solo contaba efectivo y transferencias, y se olvidaba de los <b>cheques pagados, débitos, cuotas de crédito, comisiones e impuestos</b>. Por eso no coincidía con el total de <b>Movimientos Diarios</b>. Ahora cuenta <b>todos</b> los egresos (incluidos los personales del dueño, porque salen de los activos de la empresa) y los números cierran en las dos pantallas. Además: el Dashboard ahora muestra <b>Cuentas por pagar</b> además de por cobrar (así ves lo que le debés a proveedores, ej. una factura de compra recién cargada), y las etiquetas dejan de decir “6m” cuando el número es de todo el período.' },
@@ -4228,7 +4228,7 @@ async function dashResumen() {
     // TODOS los tipos de movimiento bancario (igual que Movimientos Diarios): cheques
     // pagados, débitos, cuotas de crédito, comisiones, impuestos, extracciones, etc.,
     // no solo transferencias. El signo lo da BANCO_TIPOS. 'otro' (sign 0) queda neutro.
-    if (m.tipo === 'extraccion' || m.tipo === 'deposito') continue; // interno banco↔caja: neutro
+    if (m.tipo === 'extraccion' || m.tipo === 'deposito' || m.cuentaContraId) continue; // interno banco↔caja o entre cuentas propias: neutro
     if (!dashFechaEnFiltro(m.fecha)) continue;
     const bt = (typeof BANCO_TIPOS !== 'undefined' && BANCO_TIPOS[m.tipo]) ? BANCO_TIPOS[m.tipo] : null;
     const sign = bt ? bt.sign : 0;
@@ -4455,7 +4455,7 @@ async function dashFinanzas() {
     // TODOS los tipos de movimiento bancario (igual que Movimientos Diarios): cheques
     // pagados, débitos, cuotas de crédito, comisiones, impuestos, extracciones, etc.,
     // no solo transferencias. El signo lo da BANCO_TIPOS. 'otro' (sign 0) queda neutro.
-    if (m.tipo === 'extraccion' || m.tipo === 'deposito') continue; // interno banco↔caja: neutro
+    if (m.tipo === 'extraccion' || m.tipo === 'deposito' || m.cuentaContraId) continue; // interno banco↔caja o entre cuentas propias: neutro
     if (!dashFechaEnFiltro(m.fecha)) continue;
     const bt = (typeof BANCO_TIPOS !== 'undefined' && BANCO_TIPOS[m.tipo]) ? BANCO_TIPOS[m.tipo] : null;
     const sign = bt ? bt.sign : 0;
@@ -21804,8 +21804,11 @@ pages.movDiarios = async function() {
       metodo,
       origen: c ? (c.banco + (c.numero ? ' · '+c.numero : '')) : 'Banco',
       observaciones: m.observaciones || '',
-      // Extracción/depósito = movimiento interno banco↔caja: se muestra pero NO suma en totales.
-      _interno: (m.tipo === 'extraccion' || m.tipo === 'deposito'),
+      // Movimiento interno (NO suma en totales, pero se muestra):
+      //  - extracción/depósito = banco↔caja
+      //  - transferencia entre DOS cuentas propias (tiene cuentaContraId). Un pago/cobro
+      //    real a un tercero por transferencia NO tiene cuentaContraId, así que sí suma.
+      _interno: (m.tipo === 'extraccion' || m.tipo === 'deposito' || !!m.cuentaContraId),
       _raw: m, _tabla: 'banco',
     });
   }
@@ -21848,6 +21851,7 @@ pages.movDiarios = async function() {
     const sumPorMon = {};
     filtered.forEach(r => {
       if (r.tipo !== 'ingreso' && r.tipo !== 'egreso') return;
+      if (r._interno) return; // movimientos internos (banco↔caja / entre cuentas propias) no suman
       const mon = r.moneda || 'ARS';
       sumPorMon[mon] = (sumPorMon[mon] || 0) + (r.tipo === 'ingreso' ? r.monto : -r.monto);
     });
@@ -21888,7 +21892,7 @@ pages.movDiarios = async function() {
                     : r.metodo === 'banco' ? '🏛️ Banco'
                     : r.metodo === 'cheque' ? '💳 Cheque' : '—'}</td>
                 <td class="text-xs text-slate-600">${esc(r.origen)}</td>
-                <td class="text-right font-semibold ${r.tipo === 'ingreso' ? 'text-emerald-700' : (r.tipo === 'egreso' ? 'text-red-700' : 'text-slate-500')}">${r.tipo === 'ingreso' ? '+' : (r.tipo === 'egreso' ? '-' : '')}${fmtMon(r.moneda, r.monto)}</td>
+                <td class="text-right font-semibold ${r.tipo === 'ingreso' ? 'text-emerald-700' : (r.tipo === 'egreso' ? 'text-red-700' : 'text-slate-500')}">${r.tipo === 'ingreso' ? '+' : (r.tipo === 'egreso' ? '-' : '')}${fmtMon(r.moneda, r.monto)}${r._interno ? '<div class="text-[10px] text-slate-400 font-normal">🔁 interno · no suma</div>' : ''}</td>
                 <td class="text-right whitespace-nowrap">
                   ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick="mdEditar('${esc(r.id)}')">✏️</button>`:''}
                   ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick="mdEliminar('${esc(r.id)}')">🗑️</button>`:''}
