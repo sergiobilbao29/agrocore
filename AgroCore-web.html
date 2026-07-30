@@ -2506,6 +2506,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'29/07/2026',
+      titulo:'🔁 v2.14.4 — Extracciones y depósitos: se ven, pero no cuentan como gasto/ingreso',
+      desc:'Cuando movés plata <b>del banco a la caja</b> (extracción) o <b>de la caja al banco</b> (depósito), esa plata <b>no sale de la empresa</b>, solo cambia de lugar. Ahora el sistema muestra las dos patas del movimiento (el egreso de la cuenta bancaria y el ingreso en la caja) para que sepas dónde está el dinero, pero <b>ya no las suma</b> en los totales de Ingresos/Egresos ni en el Dashboard. Antes inflaban esos totales. Así los números reflejan solo la plata que realmente entra o sale de la empresa.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'29/07/2026',
+      titulo:'📊 v2.14.3 — Dashboard: los egresos ahora coinciden con Movimientos Diarios',
+      desc:'Corregido el cálculo de <b>Egresos</b> del Dashboard: antes solo contaba efectivo y transferencias, y se olvidaba de los <b>cheques pagados, débitos, cuotas de crédito, comisiones e impuestos</b>. Por eso no coincidía con el total de <b>Movimientos Diarios</b>. Ahora cuenta <b>todos</b> los egresos (incluidos los personales del dueño, porque salen de los activos de la empresa) y los números cierran en las dos pantallas. Además: el Dashboard ahora muestra <b>Cuentas por pagar</b> además de por cobrar (así ves lo que le debés a proveedores, ej. una factura de compra recién cargada), y las etiquetas dejan de decir “6m” cuando el número es de todo el período.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'29/07/2026',
       titulo:'📄 v2.14.2 — "Cargar desde PDF": lee bien las Facturas C de Monotributo',
       desc:'Corregido el lector de facturas de compra por PDF para los comprobantes de <b>ARCA "comprobante en línea"</b> (típicos de Monotributo), cuyo texto viene desordenado. Antes tomaba el <b>CUIT del cliente como si fuera el del proveedor</b>, ponía <b>"Domicilio:"</b> como razón social y dejaba el <b>importe en $0</b>. Ahora usa el nombre del archivo de ARCA (CUIT del emisor, tipo, punto de venta y número) como fuente confiable, identifica bien proveedor vs. cliente, toma la razón social correcta y recupera el <b>importe total</b>. Probado con una Factura C real.' },
@@ -4214,13 +4220,20 @@ async function dashResumen() {
   flujo = [];
   for (const e of efectivos) {
     if (e.tipo === 'transferencia') continue; // entre cajas, neutro
+    if (/^(Extracci[oó]n de |Dep[oó]sito en )/i.test(e.concepto || '')) continue; // pata en caja de un movimiento interno banco↔caja: neutro
     if (!dashFechaEnFiltro(e.fecha)) continue;
     flujo.push({ fecha: e.fecha, monto: e.tipo === 'ingreso' ? Number(e.monto||0) : -Number(e.monto||0), categoria: e.clasificacion === 'propio' ? 'Personal' : 'Empresa' });
   }
   for (const m of bancoMovs) {
-    if (m.tipo !== 'transferencia_in' && m.tipo !== 'transferencia_out') continue;
+    // TODOS los tipos de movimiento bancario (igual que Movimientos Diarios): cheques
+    // pagados, débitos, cuotas de crédito, comisiones, impuestos, extracciones, etc.,
+    // no solo transferencias. El signo lo da BANCO_TIPOS. 'otro' (sign 0) queda neutro.
+    if (m.tipo === 'extraccion' || m.tipo === 'deposito') continue; // interno banco↔caja: neutro
     if (!dashFechaEnFiltro(m.fecha)) continue;
-    flujo.push({ fecha: m.fecha, monto: m.tipo === 'transferencia_in' ? Number(m.monto||0) : -Number(m.monto||0), categoria: m.concepto?.slice(0,30) || 'Bancario' });
+    const bt = (typeof BANCO_TIPOS !== 'undefined' && BANCO_TIPOS[m.tipo]) ? BANCO_TIPOS[m.tipo] : null;
+    const sign = bt ? bt.sign : 0;
+    if (!sign) continue;
+    flujo.push({ fecha: m.fecha, monto: Number(m.monto||0) * sign, categoria: (bt && bt.lbl) || (m.concepto ? m.concepto.slice(0,30) : 'Bancario') });
   }
 
   // Filtrar las otras colecciones por fecha del item
@@ -4277,6 +4290,16 @@ async function dashResumen() {
     });
     return Object.values(porCli).filter(v => v > 0).reduce((a,v) => a + v, 0);
   })();
+  // Deuda a proveedores (lo que la empresa DEBE). Incluye facturas de compra en cuenta
+  // corriente aún no pagadas (ej. la factura de un proveedor recién cargada).
+  const saldoPorPagar = (() => {
+    const porProv = {};
+    ccs.filter(c => c.contactoTipo === 'proveedor').forEach(c => {
+      const k = c.contactoId || 'sin';
+      porProv[k] = (porProv[k] || 0) + ccArs(c);
+    });
+    return Object.values(porProv).filter(v => v > 0).reduce((a,v) => a + v, 0);
+  })();
   const bajoStock = prods.filter(p => p.bajoMinimo).length;
 
   target.innerHTML = `
@@ -4284,12 +4307,15 @@ async function dashResumen() {
       <div class="kpi"><div class="text-xs text-slate-500">Campañas activas</div><div class="text-2xl font-bold text-green-700 mt-1">${hasEnCurso}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Stock granos</div><div class="text-xl font-bold mt-1">${fmtKg(stockG)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Stock hacienda</div><div class="text-xl font-bold mt-1">${fmtN(stockH)} cab.</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Cuentas por cobrar</div><div class="${dashMonedaModo()==='multi'?'text-base':'text-xl'} font-bold mt-1 text-amber-600">${dashMonedaModo()==='multi'?fmtMulti(ccPorMoneda(ccs,'cliente'),true):fmt$(saldoPorCobrar)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Cuentas por cobrar / pagar</div>
+        <div class="${dashMonedaModo()==='multi'?'text-base':'text-xl'} font-bold mt-1 text-amber-600">${dashMonedaModo()==='multi'?fmtMulti(ccPorMoneda(ccs,'cliente'),true):fmt$(saldoPorCobrar)}</div>
+        <div class="text-[11px] text-slate-500 mt-0.5">A pagar: <span class="text-red-600 font-semibold">${dashMonedaModo()==='multi'?fmtMulti(ccPorMoneda(ccs,'proveedor'),true):fmt$(saldoPorPagar)}</span></div>
+      </div>
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">Ingresos 6m</div><div class="text-xl font-bold mt-1 text-emerald-600">${fmt$(ingresosTotales)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Egresos 6m</div><div class="text-xl font-bold mt-1 text-red-600">${fmt$(egresosTotales)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Flujo neto 6m</div><div class="text-xl font-bold mt-1 ${flujoNeto>=0?'text-emerald-700':'text-red-700'}">${fmt$(flujoNeto)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Ingresos ${state._dashPeriodoLbl||'del período'}</div><div class="text-xl font-bold mt-1 text-emerald-600">${fmt$(ingresosTotales)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Egresos ${state._dashPeriodoLbl||'del período'}</div><div class="text-xl font-bold mt-1 text-red-600">${fmt$(egresosTotales)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Flujo neto ${state._dashPeriodoLbl||'del período'}</div><div class="text-xl font-bold mt-1 ${flujoNeto>=0?'text-emerald-700':'text-red-700'}">${fmt$(flujoNeto)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Productos bajo mínimo</div><div class="text-2xl font-bold mt-1 ${bajoStock>0?'text-amber-600':'text-emerald-600'}">${bajoStock}</div></div>
     </div>
 
@@ -4426,9 +4452,15 @@ async function dashFinanzas() {
     flujo.push({ fecha: e.fecha, monto: e.tipo === 'ingreso' ? Number(e.monto||0) : -Number(e.monto||0), categoria: e.clasificacion === 'propio' ? 'Personal' : 'Empresa' });
   }
   for (const m of bancoMovs) {
-    if (m.tipo !== 'transferencia_in' && m.tipo !== 'transferencia_out') continue;
+    // TODOS los tipos de movimiento bancario (igual que Movimientos Diarios): cheques
+    // pagados, débitos, cuotas de crédito, comisiones, impuestos, extracciones, etc.,
+    // no solo transferencias. El signo lo da BANCO_TIPOS. 'otro' (sign 0) queda neutro.
+    if (m.tipo === 'extraccion' || m.tipo === 'deposito') continue; // interno banco↔caja: neutro
     if (!dashFechaEnFiltro(m.fecha)) continue;
-    flujo.push({ fecha: m.fecha, monto: m.tipo === 'transferencia_in' ? Number(m.monto||0) : -Number(m.monto||0), categoria: m.concepto?.slice(0,30) || 'Bancario' });
+    const bt = (typeof BANCO_TIPOS !== 'undefined' && BANCO_TIPOS[m.tipo]) ? BANCO_TIPOS[m.tipo] : null;
+    const sign = bt ? bt.sign : 0;
+    if (!sign) continue;
+    flujo.push({ fecha: m.fecha, monto: Number(m.monto||0) * sign, categoria: (bt && bt.lbl) || (m.concepto ? m.concepto.slice(0,30) : 'Bancario') });
   }
 
   // Fecha "anchor": snapshot o hoy
@@ -21746,6 +21778,9 @@ pages.movDiarios = async function() {
       metodo: (e.caja && _tarjSet.has(e.caja.trim())) ? 'tarjeta' : 'efectivo',
       origen: e.caja || '(sin caja)',
       observaciones: e.observaciones || '',
+      // Pata en caja de un movimiento interno banco↔caja (extracción/depósito): se muestra
+      // pero NO suma en los totales (la plata sigue en la empresa, solo cambió de lugar).
+      _interno: /^(Extracci[oó]n de |Dep[oó]sito en )/i.test(e.concepto || ''),
       _raw: e, _tabla: 'efectivo',
     });
   }
@@ -21769,6 +21804,8 @@ pages.movDiarios = async function() {
       metodo,
       origen: c ? (c.banco + (c.numero ? ' · '+c.numero : '')) : 'Banco',
       observaciones: m.observaciones || '',
+      // Extracción/depósito = movimiento interno banco↔caja: se muestra pero NO suma en totales.
+      _interno: (m.tipo === 'extraccion' || m.tipo === 'deposito'),
       _raw: m, _tabla: 'banco',
     });
   }
@@ -21778,7 +21815,9 @@ pages.movDiarios = async function() {
   // KPIs del mes (solo en pesos; no se pueden mezclar $ con US$).
   const mesActual = hoyLocal.slice(0,7);
   const esArs = (f) => (f.moneda || 'ARS') === 'ARS';
-  const filasMes = filas.filter(f => (f.fecha||'').slice(0,7) === mesActual && esArs(f));
+  // Los movimientos internos banco↔caja (extracción/depósito) NO suman en los totales:
+  // la plata no salió de la empresa, solo cambió de lugar (banco → caja o viceversa).
+  const filasMes = filas.filter(f => (f.fecha||'').slice(0,7) === mesActual && esArs(f) && !f._interno);
   const ingresosMes = filasMes.filter(f => f.tipo === 'ingreso').reduce((a,f) => a + f.monto, 0);
   const egresosMes  = filasMes.filter(f => f.tipo === 'egreso').reduce((a,f) => a + f.monto, 0);
   const netoMes = ingresosMes - egresosMes;
