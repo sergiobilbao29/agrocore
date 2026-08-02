@@ -2506,6 +2506,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'31/07/2026',
+      titulo:'✏️ v2.16.1 — Editar facturas de compra + ajustes del import de ARCA',
+      desc:'Ahora se puede <b>editar una factura de compra</b> (botón ✏️ en la lista o desde el detalle). Al guardar, el sistema revierte y recrea el stock y la cuenta a pagar con los datos nuevos. Es la forma de <b>cargarle los ítems a las compras importadas de ARCA</b> para que <b>nutran el stock</b>: abrís la compra, reemplazás la línea general por los productos reales (cantidad + IVA) y esos ítems ingresan al depósito. No se puede editar una compra que ya tenga un <b>pago aplicado</b> (primero hay que deshacer el pago). Además: en el import de ARCA el botón <b>“Listo”</b> ahora cierra la ventana, y se quitaron de Compras los botones viejos “Recuperar OP anteriores” y “Corregir tipo de cheque en OP” (eran arreglos puntuales que ya no hacen falta).' },
     { tag:'Novedad', color:'bg-green-100 text-green-800 border-green-300', fecha:'31/07/2026',
       titulo:'📥 v2.16.0 — Importar compras desde ARCA (Mis Comprobantes → Recibidos)',
       desc:'Se terminó cargar a mano cada factura de compra. En <b>Compras → 📥 Importar de ARCA</b> subís el Excel que bajás de <b>ARCA → Mis Comprobantes → Recibidos</b> y el sistema crea una <b>factura de compra por cada comprobante</b>: da de alta el <b>proveedor por CUIT</b> (si no existe), reconstruye el <b>IVA discriminado por alícuota</b>, arma la <b>cuenta a pagar</b> y lo suma al <b>Libro IVA Compras</b>. <b>No duplica</b>: los comprobantes ya cargados se saltean (por proveedor + tipo + punto de venta + número). Al terminar te muestra un resumen con creados / duplicados / omitidos / errores. <b>Importante:</b> ARCA no incluye los renglones/productos (solo el total de cada comprobante), así que para las compras que <b>nutren el stock del depósito</b> abrís la compra y le cargás los ítems (esos sí mueven stock).' },
@@ -10905,7 +10908,7 @@ pages.compras = async function() {
               <td class="text-right font-bold">${fmtMon(m.moneda, m.total)}${m.moneda&&m.moneda!=='ARS'&&m.cotizacion?`<div class="text-[10px] text-slate-400 font-normal">TC ${fmtN(m.cotizacion||0)}</div>`:''}</td>
               <td class="text-right whitespace-nowrap">
                 ${m.kind==='factura'
-                  ? `<button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(m.id)})'>👁️</button>${can('compras:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='compDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
+                  ? `<button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(m.id)})'>👁️</button>${can('compras:update')||can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='compEditar(${JSON.stringify(m.id)})'>✏️</button>`:''}${can('compras:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='compDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
                   : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir orden de pago" onclick='ordenPagoReabrir(${JSON.stringify(m.id)})'>📄 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='ordenPagoReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>`}
               </td>
             </tr>`).join('') || '<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
@@ -10918,8 +10921,6 @@ pages.compras = async function() {
       <div class="text-sm text-slate-600">${rows.length} facturas de compra registradas</div>
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>
-        ${can('finanzas:create') ? `<button class="btn btn-secondary" onclick="comprasBackfillOP()" title="Reconstruye las Órdenes de Pago de pagos anteriores para que aparezcan y se puedan reimprimir/enviar">🔄 Recuperar OP anteriores</button>`:''}
-        ${can('finanzas:update') ? `<button class="btn btn-secondary" onclick="comprasFixChequeTipo()" title="Corrige el tipo de cheque (Físico/Electrónico) de las OP ya emitidas">🩹 Corregir tipo de cheque en OP</button>`:''}
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="compImportArca()" title="Importar comprobantes de compra desde el Excel de ARCA → Mis Comprobantes → Recibidos">📥 Importar de ARCA</button>`:''}
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="compForm()">+ Nueva factura de compra</button>`:''}
       </div>
@@ -11015,13 +11016,14 @@ async function compImportArcaRun(){
         <thead><tr><th>Estado</th><th>Comprobante</th><th>Proveedor</th><th class="text-right">Total</th><th>Detalle</th></tr></thead>
         <tbody>${det.map(d=>`<tr><td>${bdg(d.estado)}</td><td class="text-xs font-mono">${esc(d.ref||'')}</td><td class="text-xs">${esc(d.proveedor||'')}</td><td class="text-right text-xs">${d.total!=null?fmt$(d.total):''}</td><td class="text-xs text-slate-500">${esc(d.motivo||'')}</td></tr>`).join('')}</tbody>
       </table></div>`;
-    if(btn){ btn.textContent='Listo'; btn.disabled=true; }
+    if(btn){ btn.textContent='Listo'; btn.disabled=false; btn.onclick=closeModal; }
     toast(`Importadas ${s.creados||0} compras · ${s.duplicados||0} duplicadas`, 'success');
     delete state.cache.facturasCompra; delete state.cache.ctasCtes; delete state.cache.stockMap;
     pages.compras();
   } catch(e){ toast(e.message,'error'); if(btn){ btn.disabled=false; btn.textContent='Importar'; } }
 }
-async function compForm() {
+async function compForm(pre) {
+  state._compEdit = (pre && pre.id) ? pre.id : null;
   const provs = state.cache.proveedores || [];
   await cargarMonedas();
   // Asegurar que productos + catálogos + stock-actual esten en cache para el selector de items.
@@ -11042,7 +11044,7 @@ async function compForm() {
     state.cache.stockMap = map;
   } catch {}
   openModal({
-    title:'Cargar factura de compra', size:'max-w-6xl',
+    title: state._compEdit ? 'Editar factura de compra' : 'Cargar factura de compra', size:'max-w-6xl',
     body: `
       <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between gap-2 flex-wrap">
         <div class="text-sm text-blue-900">📄 <b>¿Tenés el PDF de la factura?</b> Subilo y autocompletamos los datos a partir del QR de ARCA.</div>
@@ -11088,7 +11090,7 @@ async function compForm() {
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
           <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
-          <tbody id="fi-tbody">${factItemRow(0,{cantidad:1,precioUnit:0,alicuotaIva:21})}</tbody>
+          <tbody id="fi-tbody">${(pre && pre.items && pre.items.length) ? pre.items.map((it,i)=>factItemRow(i,it)).join('') : factItemRow(0,{cantidad:1,precioUnit:0,alicuotaIva:21})}</tbody>
           <tfoot>
             <tr><td colspan="5" class="text-right">Subtotal</td><td class="text-right" id="fi-sub">$ 0,00</td><td></td></tr>
             <tr><td colspan="5" class="text-right">IVA</td><td class="text-right" id="fi-iva">$ 0,00</td><td></td></tr>
@@ -11117,9 +11119,17 @@ async function compForm() {
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="compSave()">💾 Registrar</button>`
+             <button class="btn btn-primary" onclick="compSave()">💾 ${state._compEdit?'Guardar cambios':'Registrar'}</button>`
   });
   setTimeout(async () => {
+    if (pre) {
+      const sv=(id,v)=>{ const el=document.getElementById(id); if(el&&v!=null&&v!=='') el.value=v; };
+      sv('f-clase', pre.clase||'factura'); sv('f-tipo', pre.tipo); sv('f-pv', pre.puntoVenta); sv('f-nro', pre.numero);
+      if(pre.fecha) sv('f-fec', String(pre.fecha).slice(0,10));
+      sv('f-prov', pre.proveedorId||''); sv('f-obs', pre.observaciones||'');
+      const _m=document.getElementById('fc-moneda');
+      if(_m&&pre.moneda){ _m.value=pre.moneda; const _w=document.getElementById('fc-cotiz-wrap'); if(_w)_w.style.display=(pre.moneda==='ARS')?'none':''; const _c=document.getElementById('fc-cotiz'); if(_c&&pre.cotizacion){ _c.value=pre.cotizacion; _c.dataset.manual='1'; } }
+    }
     $('#fi-tbody').addEventListener('input', factRecalc);
     factRecalc();
     if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
@@ -11369,6 +11379,13 @@ async function compSave() {
     data.cae = pdfData.cae || null;
   }
   try {
+    if (state._compEdit) {
+      await api('/api/facturas-compra/'+state._compEdit, { method:'PUT', body: JSON.stringify(data) });
+      toast('Compra actualizada','success');
+      state._compEdit = null;
+      delete state.cache.stockMap; delete state.cache.ctasCtes; delete state._compraPdfData;
+      closeModal(); pages.compras(); return;
+    }
     const facRsp = await api('/api/facturas-compra', { method:'POST', body: JSON.stringify(data) });
     const facturaId = facRsp.data?.id;
 
@@ -11415,6 +11432,10 @@ async function compDel(id) {
   try { await api('/api/facturas-compra/'+id,{method:'DELETE'}); toast('Borrada','success'); delete state.cache.stockMap; pages.compras(); }
   catch (e) { toast(e.message,'error'); }
 }
+async function compEditar(id) {
+  try { const r = await api('/api/facturas-compra/'+id); await compForm(r.data); }
+  catch (e) { toast(e.message,'error'); }
+}
 async function compVer(id) {
   try {
     const r = await api('/api/facturas-compra/'+id);
@@ -11445,8 +11466,9 @@ async function compVer(id) {
             <tr><td colspan="5" class="text-right font-bold">TOTAL</td><td class="text-right font-bold text-green-700">${fmtMon(f.moneda, f.total)}</td></tr>
           </tfoot>
         </table>
-        ${f.observaciones ? `<div class="mt-3 text-sm text-slate-600"><b>Observaciones:</b> ${esc(f.observaciones)}</div>` : ''}`,
-      footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+        ${f.observaciones ? `<div class="mt-3 text-sm text-slate-600"><b>Observaciones:</b> ${esc(f.observaciones)}</div>` : ''}
+        <div class="mt-3 text-xs text-slate-500">💡 Para que una compra <b>nutra el stock</b>, editala y cargale los productos (cantidad + IVA). Esos ítems ingresan al depósito.</div>`,
+      footer: `${can('compras:update')||can('finanzas:update')?`<button class="btn btn-primary" onclick="closeModal(); compEditar(${JSON.stringify(f.id)})">✏️ Editar</button>`:''}<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
     });
   } catch (e) { toast(e.message,'error'); }
 }

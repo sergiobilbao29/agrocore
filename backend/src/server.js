@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.16.0';
+const AGROCORE_VERSION = '2.16.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3757,6 +3757,75 @@ app.post('/api/facturas-compra/import-arca', requireCompany, requirePermission('
       }
     }
     res.json({ ok:true, resumen, detalle });
+  } catch (e) { next(e); }
+});
+
+// EDITAR factura de compra: revierte (stock + cta cte + items) y la recrea.
+// Bloquea si la compra ya tiene un pago aplicado (hay que deshacerlo primero).
+app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      proveedorId: z.string().nullable().optional(),
+      tipo: z.enum(['A', 'B', 'C', 'E']),
+      clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
+      puntoVenta: z.number().int(),
+      numero: z.number().int(),
+      fecha: z.coerce.date(),
+      condicionCompra: z.string().nullable().optional(),
+      condicionDias: z.number().int().min(0).nullable().optional(),
+      vencimientoFecha: z.coerce.date().nullable().optional(),
+      moneda: z.string().optional(),
+      cotizacion: z.number().positive().nullable().optional(),
+      depositoId: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+      items: z.array(itemFacSchema).min(1),
+      emisorCuit: z.string().nullable().optional(),
+      emisorRazonSocial: z.string().nullable().optional(),
+      cae: z.string().nullable().optional(),
+    });
+    const input = schema.parse(req.body);
+    const existing = await prisma.facturaCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    const ccRow = await prisma.ctaCte.findFirst({ where: { companyId: req.companyId, referencia: `FACC-${req.params.id}` } });
+    if (ccRow && ccRow.pagado) return res.status(400).json({ ok: false, error: 'No se puede editar: la compra tiene un pago aplicado. Primero deshacé el pago (Orden de pago → Deshacer pago).' });
+    if (!input.proveedorId && (input.emisorCuit || input.emisorRazonSocial)) {
+      const ext = [ input.emisorRazonSocial ? `Emisor: ${input.emisorRazonSocial}` : null, input.emisorCuit ? `CUIT ${input.emisorCuit}` : null, input.cae ? `CAE ${input.cae}` : null ].filter(Boolean).join(' · ');
+      input.observaciones = ext + (input.observaciones ? ' | ' + input.observaciones : '');
+    }
+    const factura = await prisma.$transaction(async (tx) => {
+      for (const it of input.items) it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
+      const totales = calcFactura(input.items);
+      const _mon = input.moneda || 'ARS';
+      const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
+      const _clase = input.clase || 'factura';
+      // revertir lo anterior
+      await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'CPR', facturaId: req.params.id });
+      await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FACC', facturaId: req.params.id });
+      await tx.facturaCompraItem.deleteMany({ where: { facturaCompraId: req.params.id } });
+      const f = await tx.facturaCompra.update({
+        where: { id: req.params.id },
+        data: {
+          proveedorId: input.proveedorId || null, tipo: input.tipo, clase: _clase,
+          puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
+          condicionCompra: input.condicionCompra, observaciones: input.observaciones,
+          moneda: _mon, cotizacion: _cot, subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
+          items: { create: totales.items },
+        },
+        include: { proveedor: true, items: true },
+      });
+      if (_clase === 'factura') {
+        await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'compra', contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'CPR', userId: req.user?.id || null, depositoId: input.depositoId || null });
+        await crearCtaCteDesdeFactura(tx, { companyId: req.companyId, factura: f, contactoTipo: 'proveedor', contactoId: input.proveedorId || null, refPrefix: 'FACC', motivo: 'Compra', condicion: input.condicionCompra, condicionDias: input.condicionDias, vencimientoFecha: input.vencimientoFecha || null });
+      } else {
+        const esNC = _clase === 'nota_credito';
+        await tx.ctaCte.create({ data: { companyId: req.companyId, contactoTipo: 'proveedor', contactoId: input.proveedorId || null, fecha: input.fecha,
+          detalle: `${esNC ? 'Nota de crédito' : 'Nota de débito'} ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
+          moneda: _mon, cotizacion: _cot, ...(esNC ? { haber: totales.total } : { debe: totales.total }), referencia: 'FACC', observaciones: input.observaciones || null }});
+      }
+      for (const it of input.items) { if (it.productoId && it.precioUnit != null) { await tx.producto.update({ where: { id: it.productoId }, data: { ultimoCostoCompra: Number(it.precioUnit), ultimoCostoMoneda: _mon } }); } }
+      return f;
+    });
+    res.json({ ok: true, data: factura });
   } catch (e) { next(e); }
 });
 
