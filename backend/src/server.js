@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.15.0';
+const AGROCORE_VERSION = '2.16.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3640,6 +3640,123 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       return f;
     });
     res.status(201).json({ ok: true, data: factura });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// IMPORTAR "Mis Comprobantes → Recibidos" de ARCA (Excel).
+// El frontend parsea el .xlsx a una matriz (array de filas) y la manda acá.
+// Creamos una FacturaCompra por comprobante: alta de proveedor por CUIT,
+// IVA reconstruido por alícuota y cuenta a pagar. Deduplica por el índice
+// único (companyId, proveedorId, tipo, puntoVenta, numero). NO carga renglones
+// de stock (ARCA no los provee): los ítems se agregan después a mano.
+// ============================================================
+const ARCA_TIPO_MAP = {
+  1:['A','factura'], 2:['A','nota_debito'], 3:['A','nota_credito'],
+  6:['B','factura'], 7:['B','nota_debito'], 8:['B','nota_credito'],
+  11:['C','factura'], 12:['C','nota_debito'], 13:['C','nota_credito'],
+  51:['M','factura'], 52:['M','nota_debito'], 53:['M','nota_credito'],
+  19:['E','factura'], 20:['E','nota_debito'], 21:['E','nota_credito'],
+};
+function _normHdr(s){ return String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\./g,'').replace(/\s+/g,' ').trim(); }
+function _arcaNum(v){ if(v==null) return 0; let s=String(v).trim(); if(!s) return 0;
+  if(s.includes(',')&&s.includes('.')) s=s.replace(/\./g,'').replace(',','.'); else if(s.includes(',')) s=s.replace(',','.');
+  const n=Number(s.replace(/[^0-9.\-]/g,'')); return isFinite(n)?n:0; }
+function _arcaFecha(v){ if(v instanceof Date) return v; const s=String(v==null?'':v).trim();
+  let m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m){ let y=+m[3]; if(y<100)y+=2000; return new Date(y,+m[2]-1,+m[1]); }
+  m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const d=new Date(s); return isNaN(d)?null:d; }
+
+app.post('/api/facturas-compra/import-arca', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const matrix = req.body?.matrix;
+    if (!Array.isArray(matrix) || !matrix.length) return res.status(400).json({ ok:false, error:'No se recibieron filas del Excel.' });
+    // Ubicar la fila de encabezados (la que tiene "Fecha" e "Imp. Total")
+    let hdrIdx = -1;
+    for (let i=0;i<Math.min(matrix.length,10);i++){ const cells=(matrix[i]||[]).map(_normHdr); if(cells.includes('fecha') && cells.some(c=>c==='imp total')){ hdrIdx=i; break; } }
+    if (hdrIdx<0) return res.status(400).json({ ok:false, error:'No encontré la fila de encabezados de "Mis Comprobantes". ¿Es el Excel correcto?' });
+    const H = {}; (matrix[hdrIdx]||[]).forEach((h,i)=>{ H[_normHdr(h)] = i; });
+    const col = (name)=> H[name] != null ? H[name] : -1;
+    const get = (row,name)=>{ const i=col(name); return i>=0 ? row[i] : undefined; };
+    const company = await prisma.company.findUnique({ where:{ id:req.companyId }, select:{ arcaCuit:true } });
+    const propioCuit = String(company?.arcaCuit||'').replace(/\D/g,'');
+
+    const resumen = { creados:0, duplicados:0, omitidos:0, errores:0 };
+    const detalle = [];
+    const vistos = new Set();
+
+    for (let r=hdrIdx+1; r<matrix.length; r++){
+      const row = matrix[r]; if(!row || !row.length) continue;
+      const fechaRaw = get(row,'fecha'); if(fechaRaw==null || String(fechaRaw).trim()==='') continue;
+      try {
+        const fecha = _arcaFecha(fechaRaw);
+        const tipoCod = parseInt(String(get(row,'tipo')||'').match(/\d+/)?.[0] || '0', 10);
+        const map = ARCA_TIPO_MAP[tipoCod];
+        const pv = parseInt(String(get(row,'punto de venta')||'0').replace(/\D/g,'')||'0',10);
+        const numero = parseInt(String(get(row,'numero desde')||'0').replace(/\D/g,'')||'0',10);
+        const cae = String(get(row,'cod autorizacion')||'').trim();
+        const cuitEmisor = String(get(row,'nro doc emisor')||'').replace(/\D/g,'');
+        const razon = String(get(row,'denominacion emisor')||'').trim();
+        if(!map){ resumen.omitidos++; detalle.push({ fila:r+1, estado:'omitido', motivo:`Tipo ${tipoCod} no soportado`, ref:`${pv}-${numero}` }); continue; }
+        if(propioCuit && cuitEmisor===propioCuit){ resumen.omitidos++; detalle.push({ fila:r+1, estado:'omitido', motivo:'El emisor sos vos (comprobante emitido)', ref:`${pv}-${numero}` }); continue; }
+        const [letra, clase] = map;
+        // dedupe dentro del archivo
+        const key = `${cuitEmisor}|${letra}|${pv}|${numero}`;
+        if(vistos.has(key)){ resumen.duplicados++; detalle.push({ fila:r+1, estado:'duplicado', motivo:'Repetido en el archivo', ref:`${letra} ${pv}-${numero}`, proveedor:razon }); continue; }
+        vistos.add(key);
+        // Moneda
+        const monRaw = String(get(row,'moneda')||'').toUpperCase();
+        const esUsd = /US|U\$|D[OÓ]LAR|USD/.test(monRaw);
+        const moneda = esUsd ? 'USD' : 'ARS';
+        const cotiz = moneda==='ARS' ? 1 : (_arcaNum(get(row,'tipo cambio'))||null);
+        // Montos por alícuota
+        const impTotal = _arcaNum(get(row,'imp total'));
+        const totalIva = _arcaNum(get(row,'total iva'));
+        const noGrav = _arcaNum(get(row,'neto no gravado')) + _arcaNum(get(row,'op exentas')) + _arcaNum(get(row,'neto grav iva 0%'));
+        const otros = _arcaNum(get(row,'otros tributos'));
+        const alics = [[2.5,'neto grav iva 2,5%'],[5,'neto grav iva 5%'],[10.5,'neto grav iva 10,5%'],[21,'neto grav iva 21%'],[27,'neto grav iva 27%']];
+        const items = [];
+        for(const [a,cn] of alics){ const neto=_arcaNum(get(row,cn)); if(neto>0.005) items.push({ descripcion:`Neto gravado ${a}%`, cantidad:1, precioUnit:neto, alicuotaIva:a }); }
+        if(noGrav>0.005) items.push({ descripcion:'No gravado / exento', cantidad:1, precioUnit:noGrav, alicuotaIva:0 });
+        if(otros>0.005) items.push({ descripcion:'Otros tributos / percepciones', cantidad:1, precioUnit:otros, alicuotaIva:0 });
+        if(!items.length){ items.push({ descripcion:'Importe total (comprobante ARCA)', cantidad:1, precioUnit:impTotal, alicuotaIva:0 }); }
+
+        const creada = await prisma.$transaction(async (tx)=>{
+          // Proveedor por CUIT (o razón social)
+          let prov = cuitEmisor ? await tx.proveedor.findFirst({ where:{ companyId:req.companyId, cuit:cuitEmisor } }) : null;
+          if(!prov && razon) prov = await tx.proveedor.findFirst({ where:{ companyId:req.companyId, razonSocial:{ equals:razon, mode:'insensitive' } } });
+          if(!prov) prov = await tx.proveedor.create({ data:{ companyId:req.companyId, razonSocial: razon || `Proveedor ${cuitEmisor||''}`.trim(), cuit: cuitEmisor||null } });
+          else if(cuitEmisor && !prov.cuit) await tx.proveedor.update({ where:{ id:prov.id }, data:{ cuit:cuitEmisor } });
+          // dedupe contra la base (índice único companyId+proveedorId+tipo+pv+numero)
+          const dup = await tx.facturaCompra.findFirst({ where:{ companyId:req.companyId, proveedorId:prov.id, tipo:letra, puntoVenta:pv, numero } });
+          if(dup) return { _dup:true, proveedor: prov.razonSocial };
+          // Ajuste para que subtotal+iva = Imp. Total exacto
+          let calc = calcFactura(items);
+          const dif = impTotal - calc.total;
+          if(Math.abs(dif) > 0.5){ items.push({ descripcion:'Ajuste (redondeo ARCA)', cantidad:1, precioUnit:dif, alicuotaIva:0 }); calc = calcFactura(items); }
+          const obs = `Importado de Mis Comprobantes (ARCA)${cae?` · CAE ${cae}`:''}`;
+          const f = await tx.facturaCompra.create({ data:{
+            companyId:req.companyId, proveedorId:prov.id, tipo:letra, clase, puntoVenta:pv, numero, fecha,
+            moneda, cotizacion:cotiz, observaciones:obs,
+            subtotal:calc.subtotal, iva:calc.iva, total:calc.total,
+            items:{ create: calc.items },
+          }, include:{ items:true } });
+          if(clase==='factura'){
+            await crearCtaCteDesdeFactura(tx, { companyId:req.companyId, factura:f, contactoTipo:'proveedor', contactoId:prov.id, refPrefix:'FACC', motivo:'Compra' });
+          } else {
+            const esNC = clase==='nota_credito';
+            await tx.ctaCte.create({ data:{ companyId:req.companyId, contactoTipo:'proveedor', contactoId:prov.id, fecha,
+              detalle:`${esNC?'Nota de crédito':'Nota de débito'} ${letra} ${String(pv).padStart(4,'0')}-${String(numero).padStart(8,'0')}`,
+              moneda, cotizacion:cotiz, ...(esNC?{haber:f.total}:{debe:f.total}), referencia:'FACC', observaciones:obs }});
+          }
+          return { _dup:false, proveedor: prov.razonSocial, total:f.total };
+        });
+        if(creada._dup){ resumen.duplicados++; detalle.push({ fila:r+1, estado:'duplicado', motivo:'Ya existía en el sistema', ref:`${letra} ${pv}-${numero}`, proveedor:creada.proveedor }); }
+        else { resumen.creados++; detalle.push({ fila:r+1, estado:'creado', ref:`${letra} ${pv}-${numero}`, proveedor:creada.proveedor, total:creada.total }); }
+      } catch(eRow){
+        resumen.errores++; detalle.push({ fila:r+1, estado:'error', motivo:String(eRow.message||eRow).slice(0,160) });
+      }
+    }
+    res.json({ ok:true, resumen, detalle });
   } catch (e) { next(e); }
 });
 

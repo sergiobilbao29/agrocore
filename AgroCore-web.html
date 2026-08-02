@@ -2506,6 +2506,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-green-100 text-green-800 border-green-300', fecha:'31/07/2026',
+      titulo:'📥 v2.16.0 — Importar compras desde ARCA (Mis Comprobantes → Recibidos)',
+      desc:'Se terminó cargar a mano cada factura de compra. En <b>Compras → 📥 Importar de ARCA</b> subís el Excel que bajás de <b>ARCA → Mis Comprobantes → Recibidos</b> y el sistema crea una <b>factura de compra por cada comprobante</b>: da de alta el <b>proveedor por CUIT</b> (si no existe), reconstruye el <b>IVA discriminado por alícuota</b>, arma la <b>cuenta a pagar</b> y lo suma al <b>Libro IVA Compras</b>. <b>No duplica</b>: los comprobantes ya cargados se saltean (por proveedor + tipo + punto de venta + número). Al terminar te muestra un resumen con creados / duplicados / omitidos / errores. <b>Importante:</b> ARCA no incluye los renglones/productos (solo el total de cada comprobante), así que para las compras que <b>nutren el stock del depósito</b> abrís la compra y le cargás los ítems (esos sí mueven stock).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'29/07/2026',
       titulo:'🔁 v2.15.0 — Movimientos internos (banco↔caja y entre cuentas) no cuentan como gasto/ingreso',
       desc:'Cuando movés plata <b>del banco a la caja</b> (extracción), <b>de la caja al banco</b> (depósito) o <b>de una cuenta bancaria a otra propia</b> (transferencia entre cuentas, ej. para cubrir un descubierto), esa plata <b>no sale de la empresa</b>, solo cambia de lugar. Ahora el sistema <b>muestra las dos patas</b> del movimiento (el egreso de una cuenta y el ingreso en la otra, con un cartelito “🔁 interno · no suma”) para que sepas dónde está el dinero, pero <b>ya no las suma</b> en los totales de Ingresos/Egresos ni en el Dashboard. Antes inflaban esos totales. Ojo: una transferencia que es un <b>pago o cobro real a un tercero</b> sí cuenta (esas no van entre cuentas propias). Así los números reflejan solo la plata que realmente entra o sale de la empresa.' },
@@ -10917,6 +10920,7 @@ pages.compras = async function() {
         <button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>
         ${can('finanzas:create') ? `<button class="btn btn-secondary" onclick="comprasBackfillOP()" title="Reconstruye las Órdenes de Pago de pagos anteriores para que aparezcan y se puedan reimprimir/enviar">🔄 Recuperar OP anteriores</button>`:''}
         ${can('finanzas:update') ? `<button class="btn btn-secondary" onclick="comprasFixChequeTipo()" title="Corrige el tipo de cheque (Físico/Electrónico) de las OP ya emitidas">🩹 Corregir tipo de cheque en OP</button>`:''}
+        ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="compImportArca()" title="Importar comprobantes de compra desde el Excel de ARCA → Mis Comprobantes → Recibidos">📥 Importar de ARCA</button>`:''}
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="compForm()">+ Nueva factura de compra</button>`:''}
       </div>
     </div>
@@ -10955,6 +10959,68 @@ pages.compras = async function() {
   render();
 };
 function compFiltrosLimpiar() { state.compraFilter = { desde:'', hasta:'', provId:'', tipo:'' }; pages.compras(); }
+
+// ── Importar "Mis Comprobantes → Recibidos" (ARCA) ────────────────────────────
+function compImportArca(){
+  openModal({
+    title:'📥 Importar de ARCA — Mis Comprobantes (Recibidos)',
+    size:'max-w-3xl',
+    body:`
+      <div class="text-sm text-slate-600 space-y-2">
+        <p>Subí el Excel que bajás de <b>ARCA → Mis Comprobantes → Recibidos</b>. Se crea una <b>factura de compra por cada comprobante</b> (alta del proveedor por CUIT, IVA discriminado y cuenta a pagar) y se <b>saltean los que ya estén cargados</b>.</p>
+        <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">⚠️ ARCA no incluye los renglones/productos, solo el total de cada comprobante. Para las compras que <b>nutren stock</b>, después abrí la compra y cargale los ítems.</p>
+        <input id="arca-file" type="file" accept=".xlsx,.xls" class="input"/>
+        <div id="arca-status" class="text-sm mt-1"></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            <button id="arca-btn" class="btn btn-primary" disabled onclick="compImportArcaRun()">Importar</button>`
+  });
+  state._arcaMatrix = null;
+  const inp = document.getElementById('arca-file');
+  inp.addEventListener('change', e => {
+    const file = e.target.files[0]; if(!file) return;
+    const rd = new FileReader();
+    rd.onload = ev => {
+      try {
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type:'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const m = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+        state._arcaMatrix = m;
+        let n=0, seen=false;
+        for(const row of m){ const c=(row||[]).map(x=>String(x).toLowerCase().trim()); if(!seen){ if(c.includes('fecha')) seen=true; continue; } if(row && String(row[0]||'').trim()) n++; }
+        document.getElementById('arca-status').innerHTML = seen
+          ? `<span class="text-green-700">✓ Detecté <b>${n}</b> comprobantes en el archivo.</span>`
+          : `<span class="text-red-600">No parece el Excel de Mis Comprobantes (no encuentro la fila de encabezados).</span>`;
+        document.getElementById('arca-btn').disabled = !seen || n===0;
+      } catch(err){ document.getElementById('arca-status').innerHTML = `<span class="text-red-600">No pude leer el archivo: ${esc(err.message)}</span>`; }
+    };
+    rd.readAsArrayBuffer(file);
+  });
+}
+async function compImportArcaRun(){
+  if(!state._arcaMatrix) return;
+  const btn = document.getElementById('arca-btn'); if(btn){ btn.disabled=true; btn.textContent='Importando…'; }
+  try {
+    const r = await api('/api/facturas-compra/import-arca', { method:'POST', body: JSON.stringify({ matrix: state._arcaMatrix }) });
+    const s = r.resumen||{}; const det = r.detalle||[];
+    const bdg = e => e==='creado'?'<span class="badge badge-green">creado</span>':e==='duplicado'?'<span class="badge badge-yellow">duplicado</span>':e==='omitido'?'<span class="badge badge-blue">omitido</span>':'<span class="badge badge-red">error</span>';
+    document.getElementById('arca-status').innerHTML = `
+      <div class="grid grid-cols-4 gap-2 my-2 text-center">
+        <div class="kpi"><div class="text-xs text-slate-500">Creados</div><div class="text-xl font-bold text-green-700">${s.creados||0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Duplicados</div><div class="text-xl font-bold text-amber-600">${s.duplicados||0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Omitidos</div><div class="text-xl font-bold text-blue-600">${s.omitidos||0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Errores</div><div class="text-xl font-bold text-red-600">${s.errores||0}</div></div>
+      </div>
+      <div class="max-h-64 overflow-auto border rounded"><table class="data">
+        <thead><tr><th>Estado</th><th>Comprobante</th><th>Proveedor</th><th class="text-right">Total</th><th>Detalle</th></tr></thead>
+        <tbody>${det.map(d=>`<tr><td>${bdg(d.estado)}</td><td class="text-xs font-mono">${esc(d.ref||'')}</td><td class="text-xs">${esc(d.proveedor||'')}</td><td class="text-right text-xs">${d.total!=null?fmt$(d.total):''}</td><td class="text-xs text-slate-500">${esc(d.motivo||'')}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    if(btn){ btn.textContent='Listo'; btn.disabled=true; }
+    toast(`Importadas ${s.creados||0} compras · ${s.duplicados||0} duplicadas`, 'success');
+    delete state.cache.facturasCompra; delete state.cache.ctasCtes; delete state.cache.stockMap;
+    pages.compras();
+  } catch(e){ toast(e.message,'error'); if(btn){ btn.disabled=false; btn.textContent='Importar'; } }
+}
 async function compForm() {
   const provs = state.cache.proveedores || [];
   await cargarMonedas();
