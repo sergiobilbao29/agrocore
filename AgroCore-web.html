@@ -2508,8 +2508,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'03/08/2026',
-      titulo:'🧾 v2.23.0 — Cargar factura ya emitida en ARCA, dentro del alta',
-      desc:'Se sacó el botón suelto <b>“Cargar factura ARCA”</b> de la barra de Facturación. Ahora esa opción vive <b>dentro de la carga de la factura</b> (igual que en Compras): al tocar <b>“+ Emitir factura”</b>, arriba del formulario aparece un aviso <b>“¿Esta factura ya fue emitida en ARCA?”</b> con el botón para cargarla con su <b>CAE real</b> (a mano o desde el PDF). Queda todo en un mismo lugar y más ordenado. El botón <b>📤 Importar de ARCA</b> (Excel de Mis Comprobantes) sigue igual.' },
+      titulo:'🧾 v2.24.0 — Factura de venta: emitir o cargar de ARCA en una sola pantalla',
+      desc:'Se unificó la carga de la factura de venta en <b>una sola pantalla</b> (como en Compras): se sacó el botón suelto <b>“Cargar factura ARCA”</b> de la barra. Ahora, al tocar <b>“+ Emitir factura”</b>, dentro del mismo formulario hay una casilla <b>“Esta factura ya fue emitida en ARCA”</b>; al tildarla se despliegan ahí mismo el <b>lector de PDF</b> (autocompleta CAE, número, cliente y total) y los campos de <b>CAE real</b>, sin saltar a otra ventana. Si no la tildás, funciona como siempre y el sistema genera el CAE simulado. El botón cambia solo entre <b>Autorizar</b> y <b>Registrar (ARCA externa)</b>. El botón <b>📤 Importar de ARCA</b> (Excel de Mis Comprobantes) sigue igual.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'📊 v2.22.0 — Historial de campañas: comparador por lote',
       desc:'Nueva pantalla <b>Producción → Historial de campañas</b>, ahora como un <b>comparador</b>: elegís un <b>campo y lote</b> y ves sus campañas <b>una al lado de la otra</b>. Arriba, un <b>Resumen de rendimiento histórico</b> con una tarjeta por campaña (rinde, costo y margen, con 🏆 para el de mejor margen). Abajo, una <b>tabla comparativa detallada</b> por columnas (una por campaña) con: <b>información general</b> (cultivo/variedad, siembra, cosecha), <b>estructura de costos por hectárea</b> abierta por rubro (semillas y curasemillas, herbicidas y barbecho, fertilizantes, fungicidas/insecticidas, labores, cosecha), el <b>costo directo total/ha</b>, y los <b>resultados económicos</b> (rinde obtenido, precio promedio, ingreso bruto, <b>rinde de indiferencia</b> y <b>margen bruto/ha</b>). Se puede ver en <b>US$ o en Pesos</b> por hectárea y elegir cuántas campañas comparar (últimas 3/4/5/6 o todas). <b>Exporta a Excel y PDF</b>. Los costos salen de los insumos y labores cargados; el precio y el rinde, de la <b>Planilla de resultado económico</b> de cada campaña (si no la cargaste, el precio se estima con la pizarra del cultivo y el rinde con el estimado). También se agregó el campo <b>Análisis de suelo</b> (texto libre) en la campaña.' },
@@ -10211,9 +10211,26 @@ async function factForm(prefill = null) {
     title: state._factEdit ? 'Editar comprobante de venta' : 'Emitir comprobante', size:'max-w-6xl',
     body: `
       ${(!state._factEdit && !state._factInformal && (can('ventas:factura_externa:create') || can('ventas:create') || can('finanzas:create'))) ? `
-      <div class="flex items-center justify-between gap-2 flex-wrap bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-3">
-        <div class="text-xs text-amber-900">📥 ¿Esta factura <b>ya fue emitida en ARCA</b> (por el contador o un socio)? Cargala con su <b>CAE real</b> en vez de emitirla.</div>
-        <button type="button" class="btn btn-secondary text-xs" onclick="closeModal(); factFormExterna();">📥 Cargar factura ya emitida en ARCA</button>
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-3">
+        <label class="flex items-center gap-2 cursor-pointer text-sm text-amber-900">
+          <input type="checkbox" id="f-externa" class="w-4 h-4" onchange="factExternaToggle()"/>
+          <span>📥 Esta factura <b>ya fue emitida en ARCA</b> (por el contador o un socio) — cargarla con su <b>CAE real</b> en vez de emitirla</span>
+        </label>
+        <div id="f-externa-box" class="hidden mt-2 pt-2 border-t border-amber-200">
+          <div class="flex items-center justify-between gap-2 flex-wrap mb-2">
+            <div class="text-xs text-slate-600">📄 ¿Tenés el PDF de la factura? Subilo y autocompletamos los datos (CAE, número, cliente, total) desde el QR o el texto.</div>
+            <div>
+              <input id="f-pdf-file" type="file" accept=".pdf" class="hidden" onchange="factPdfCargar(this)"/>
+              <button type="button" class="btn btn-primary text-xs" onclick="document.getElementById('f-pdf-file').click()">📄 Cargar desde PDF</button>
+            </div>
+          </div>
+          <div id="f-pdf-msg" class="text-xs mb-2"></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="label">CAE (14 dígitos) *</label><input id="f-cae" class="input font-mono" maxlength="14" placeholder="74221833442104" pattern="\\d{14}"/></div>
+            <div><label class="label">Vto. CAE *</label><input id="f-caevto" class="input" type="date"/></div>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-1">El CAE y su vencimiento los devolvió ARCA cuando se emitió la factura (están en el PDF). El sistema NO la reenvía a ARCA: solo registra el comprobante ya emitido.</div>
+        </div>
       </div>`:''}
       <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
         <div><label class="label">Comprobante *</label>
@@ -10265,7 +10282,7 @@ async function factForm(prefill = null) {
       </div>
       <div class="flex items-center justify-between">
         <button class="btn btn-secondary text-sm" onclick="document.getElementById('fi-tbody').insertAdjacentHTML('beforeend', factItemRow()); factRecalc();">+ Agregar item</button>
-        <div class="text-xs text-slate-500">💡 El CAE se genera simulado al autorizar</div>
+        <div id="f-cae-hint" class="text-xs text-slate-500">💡 El CAE se genera simulado al autorizar</div>
       </div>
       <div id="vent-cobro-wrap" class="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
         <div class="text-xs font-semibold text-blue-900 mb-2">💰 Cobro — Condición Contado (se registra junto con la factura)</div>
@@ -10288,7 +10305,7 @@ async function factForm(prefill = null) {
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
       <input type="hidden" id="f-labor-servicio" value="${esc(prefill?.laborServicioId||'')}"/>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="factSave()">💾 ${state._factEdit?'Guardar cambios':'Autorizar'}</button>`
+             <button id="f-save-btn" class="btn btn-primary" onclick="factSave()">💾 ${state._factEdit?'Guardar cambios':'Autorizar'}</button>`
   });
   if (!state._factEdit) factSugerirNro();
   // listeners
@@ -10470,7 +10487,101 @@ function monedaCotizBody(pfx){
   const m=$('#'+pfx+'-moneda')?.value||'ARS';
   return { moneda:m, cotizacion:(m!=='ARS' && $('#'+pfx+'-cotiz')?.value)?Number($('#'+pfx+'-cotiz').value):null };
 }
+// Alterna el modo "factura ya emitida en ARCA" dentro del MISMO formulario de
+// emisión: muestra/oculta el lector de PDF + los campos de CAE, cambia el texto
+// del botón y del cartel. No hay salto a otra pantalla.
+function factExternaToggle(){
+  const on = document.getElementById('f-externa')?.checked;
+  const box = document.getElementById('f-externa-box');
+  if (box) box.classList.toggle('hidden', !on);
+  const btn = document.getElementById('f-save-btn');
+  if (btn) btn.innerHTML = on ? '📥 Registrar (ARCA externa)' : '💾 Autorizar';
+  const hint = document.getElementById('f-cae-hint');
+  if (hint) hint.textContent = on ? '📥 Se registra la factura ya emitida con su CAE real (no se reenvía a ARCA)' : '💡 El CAE se genera simulado al autorizar';
+  // Sugerir vencimiento del CAE (hoy + 10 días) la primera vez que se activa.
+  if (on) {
+    const v = document.getElementById('f-caevto');
+    if (v && !v.value) { const d = new Date(); d.setDate(d.getDate()+10); v.value = d.toISOString().slice(0,10); }
+  }
+}
+// Sube el PDF de ARCA y autopobla los campos del MISMO formulario de venta.
+async function factPdfCargar(input){
+  const archivo = input?.files?.[0];
+  if (!archivo) return;
+  // Activar el modo "ya emitida" si no estaba
+  const chk = document.getElementById('f-externa');
+  if (chk && !chk.checked) { chk.checked = true; factExternaToggle(); }
+  const msg = document.getElementById('f-pdf-msg');
+  if (msg) msg.innerHTML = '<span class="text-blue-700">⏳ Leyendo PDF y decodificando datos de ARCA…</span>';
+  try {
+    const fd = new FormData(); fd.append('archivo', archivo);
+    const r = await fetch(API_BASE + '/api/admin/parse-factura-pdf', {
+      method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd,
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || 'Error '+r.status);
+    const d = j.data; state._ventaPdfData = d;
+    const setVal = (id,v)=>{ const el=document.getElementById(id); if(el && v!=null && v!=='') el.value=v; };
+    setVal('f-tipo', d.tipoCmpLetra || 'A');
+    setVal('f-pv',   d.puntoVenta || 1);
+    setVal('f-nro',  d.numero || 1);
+    if (d.fecha) setVal('f-fec', d.fecha.slice(0,10));
+    if (d.cae)   setVal('f-cae', d.cae);
+    if (d.caeVencimiento) setVal('f-caevto', d.caeVencimiento.slice(0,10));
+    let cliMatch = null;
+    if (d.cuitReceptor) {
+      const cuitNorm = String(d.cuitReceptor).replace(/[-.\s]/g,'');
+      cliMatch = (state.cache.clientes||[]).find(c => String(c.cuit||'').replace(/[-.\s]/g,'') === cuitNorm);
+      if (cliMatch) setVal('f-cli', cliMatch.id);
+    }
+    const tbody = document.getElementById('fi-tbody');
+    if (tbody && d.total) {
+      const neto = d.netoGravado || (d.total/1.21);
+      const iva = d.iva21 ? 21 : d.iva105 ? 10.5 : d.iva27 ? 27 : 21;
+      const fila = tbody.querySelector('tr[data-fi]');
+      if (fila) {
+        const sel=fila.querySelector('[data-f="productoId"]'), desc=fila.querySelector('[data-f="descripcion"]');
+        const cant=fila.querySelector('[data-f="cantidad"]'), pu=fila.querySelector('[data-f="precioUnit"]'), iv=fila.querySelector('[data-f="alicuotaIva"]');
+        if (sel) sel.value='';
+        if (desc) desc.value = d.descripcionItem || `Factura ${d.tipoCmpLetra||''} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')}${d.razonSocialReceptor?' — '+d.razonSocialReceptor:''}`;
+        if (cant) cant.value = d.cantidadItem || 1;
+        if (pu)   pu.value = (d.cantidadItem ? (neto/d.cantidadItem) : neto).toFixed(2);
+        if (iv)   iv.value = iva;
+      }
+      factRecalc();
+    }
+    if (msg) {
+      const fuente = d.fuente==='QR_ARCA' ? 'QR de ARCA' : 'texto del PDF';
+      let html = `<span class="text-emerald-700">✅ Factura ${d.tipoCmpLetra||'?'} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')} cargada desde el ${fuente}${d.cuitReceptor?` · CUIT receptor ${d.cuitReceptor}`:''}${d.razonSocialReceptor?` · ${esc(d.razonSocialReceptor)}`:''} · CAE ${d.cae||'?'}</span>`;
+      if (!cliMatch && d.cuitReceptor && d.razonSocialReceptor) {
+        html += `<div class="mt-2 p-2 bg-amber-50 border border-amber-300 rounded text-amber-900">⚠️ El cliente <b>${esc(d.razonSocialReceptor)}</b> (CUIT ${esc(d.cuitReceptor)}) no está en el catálogo.
+          <button type="button" class="btn btn-primary text-xs ml-2" onclick="factCrearClienteDesdePDF()">+ Crear cliente con estos datos</button></div>`;
+      }
+      msg.innerHTML = html;
+    }
+  } catch(e) {
+    if (msg) msg.innerHTML = `<span class="text-red-700">❌ ${esc(e.message)}</span>`;
+    toast('No pude cargar el PDF: '+e.message,'error');
+  } finally { input.value=''; }
+}
+async function factCrearClienteDesdePDF(){
+  const d = state._ventaPdfData;
+  if (!d || !d.razonSocialReceptor) return toast('No hay datos del receptor en el PDF','warn');
+  try {
+    const r = await api('/api/clientes', { method:'POST', body: JSON.stringify({
+      razonSocial: d.razonSocialReceptor, cuit: d.cuitReceptor || null,
+      observaciones: 'Creado automáticamente desde PDF de factura '+(d.tipoCmpLetra||'')+' '+(d.puntoVenta||'')+'-'+(d.numero||''),
+    })});
+    const nuevo = r.data;
+    state.cache.clientes = [...(state.cache.clientes||[]), nuevo];
+    const sel = document.getElementById('f-cli');
+    if (sel) { const opt=document.createElement('option'); opt.value=nuevo.id; opt.textContent=`${nuevo.razonSocial}${nuevo.cuit?' ('+nuevo.cuit+')':''}`; sel.appendChild(opt); sel.value=nuevo.id; }
+    toast('Cliente creado y seleccionado','success');
+    const msg = document.getElementById('f-pdf-msg'); const aviso = msg?.querySelector('.bg-amber-50'); if (aviso) aviso.remove();
+  } catch(e){ toast(e.message,'error'); }
+}
 async function factSave() {
+  const externa = !!document.getElementById('f-externa')?.checked;
   const items = $$('#fi-tbody tr[data-fi]').map(tr => ({
     productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
     productoNombre: tr.dataset.productoNombre || null,
@@ -10525,6 +10636,16 @@ async function factSave() {
     laborServicioId: $('#f-labor-servicio')?.value || null,
     items,
   };
+  // Modo "ya emitida en ARCA": se registra con su CAE real (no se reenvía a ARCA).
+  if (externa) {
+    const cae = ($('#f-cae')?.value||'').trim();
+    if (!/^\d{14}$/.test(cae)) return toast('CAE inválido — tiene que tener exactamente 14 dígitos.','warn');
+    const caeVto = $('#f-caevto')?.value;
+    if (!caeVto) return toast('Falta el vencimiento del CAE.','warn');
+    data.origen = 'arca_externa';
+    data.cae = cae;
+    data.caeVto = new Date(caeVto).toISOString();
+  }
   try {
     if (state._factEdit) {
       await api('/api/facturas/'+state._factEdit, { method:'PUT', body: JSON.stringify(data) });
@@ -10535,7 +10656,7 @@ async function factSave() {
     }
     const r = await api('/api/facturas', { method:'POST', body: JSON.stringify(data) });
     const facturaId = r.data?.id;
-    toast('Factura autorizada · CAE '+r.data.cae,'success');
+    toast((externa?'Factura ARCA registrada':'Factura autorizada')+' · CAE '+r.data.cae,'success');
     delete state.cache.stockMap;
 
     // Si condición Contado + método elegido, registrar el cobro
