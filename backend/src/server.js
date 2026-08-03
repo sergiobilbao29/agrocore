@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.16.1';
+const AGROCORE_VERSION = '2.17.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3475,6 +3475,97 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
   } catch (e) { next(e); }
 });
 
+// ============================================================
+// IMPORTAR "Mis Comprobantes -> Emitidos" de ARCA (Excel).
+// Crea una Factura (venta) por comprobante: alta de cliente por CUIT (receptor),
+// IVA por alicuota y cuenta a COBRAR. Marca origen 'arca_externa' + estado
+// 'autorizada' con el CAE real. Deduplica por (companyId, tipo, PV, numero).
+// NO mueve stock (ARCA no trae renglones); son ventas ya emitidas.
+// ============================================================
+app.post('/api/facturas/import-arca', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const matrix = req.body?.matrix;
+    if (!Array.isArray(matrix) || !matrix.length) return res.status(400).json({ ok:false, error:'No se recibieron filas del Excel.' });
+    let hdrIdx = -1;
+    for (let i=0;i<Math.min(matrix.length,10);i++){ const cells=(matrix[i]||[]).map(_normHdr); if(cells.includes('fecha') && cells.some(c=>c==='imp total')){ hdrIdx=i; break; } }
+    if (hdrIdx<0) return res.status(400).json({ ok:false, error:'No encontré la fila de encabezados de "Mis Comprobantes". ¿Es el Excel correcto?' });
+    const H = {}; (matrix[hdrIdx]||[]).forEach((h,i)=>{ H[_normHdr(h)] = i; });
+    const get = (row,name)=>{ const i = H[name]; return i!=null ? row[i] : undefined; };
+
+    const resumen = { creados:0, duplicados:0, omitidos:0, errores:0 };
+    const detalle = [];
+    const vistos = new Set();
+
+    for (let r=hdrIdx+1; r<matrix.length; r++){
+      const row = matrix[r]; if(!row || !row.length) continue;
+      const fechaRaw = get(row,'fecha'); if(fechaRaw==null || String(fechaRaw).trim()==='') continue;
+      try {
+        const fecha = _arcaFecha(fechaRaw);
+        const tipoCod = parseInt(String(get(row,'tipo')||'').match(/\d+/)?.[0] || '0', 10);
+        const map = ARCA_TIPO_MAP[tipoCod];
+        const pv = parseInt(String(get(row,'punto de venta')||'0').replace(/\D/g,'')||'0',10);
+        const numero = parseInt(String(get(row,'numero desde')||'0').replace(/\D/g,'')||'0',10);
+        const cae = String(get(row,'cod autorizacion')||'').trim();
+        const tipoDocRec = String(get(row,'tipo doc receptor')||'').toUpperCase();
+        const docReceptor = String(get(row,'nro doc receptor')||'').replace(/\D/g,'');
+        const razon = String(get(row,'denominacion receptor')||'').trim();
+        if(!map){ resumen.omitidos++; detalle.push({ fila:r+1, estado:'omitido', motivo:`Tipo ${tipoCod} no soportado`, ref:`${pv}-${numero}` }); continue; }
+        const [letra, clase] = map;
+        const key = `${letra}|${pv}|${numero}`;
+        if(vistos.has(key)){ resumen.duplicados++; detalle.push({ fila:r+1, estado:'duplicado', motivo:'Repetido en el archivo', ref:`${letra} ${pv}-${numero}`, proveedor:razon }); continue; }
+        vistos.add(key);
+        const monRaw = String(get(row,'moneda')||'').toUpperCase();
+        const esUsd = /US|U\$|D[OÓ]LAR|USD/.test(monRaw);
+        const moneda = esUsd ? 'USD' : 'ARS';
+        const cotiz = moneda==='ARS' ? 1 : (_arcaNum(get(row,'tipo cambio'))||null);
+        const impTotal = _arcaNum(get(row,'imp total'));
+        const noGrav = _arcaNum(get(row,'neto no gravado')) + _arcaNum(get(row,'op exentas')) + _arcaNum(get(row,'neto grav iva 0%'));
+        const otros = _arcaNum(get(row,'otros tributos'));
+        const alics = [[2.5,'neto grav iva 2,5%'],[5,'neto grav iva 5%'],[10.5,'neto grav iva 10,5%'],[21,'neto grav iva 21%'],[27,'neto grav iva 27%']];
+        const items = [];
+        for(const [a,cn] of alics){ const neto=_arcaNum(get(row,cn)); if(neto>0.005) items.push({ descripcion:`Neto gravado ${a}%`, cantidad:1, precioUnit:neto, alicuotaIva:a }); }
+        if(noGrav>0.005) items.push({ descripcion:'No gravado / exento', cantidad:1, precioUnit:noGrav, alicuotaIva:0 });
+        if(otros>0.005) items.push({ descripcion:'Otros tributos / percepciones', cantidad:1, precioUnit:otros, alicuotaIva:0 });
+        if(!items.length){ items.push({ descripcion:'Importe total (comprobante ARCA)', cantidad:1, precioUnit:impTotal, alicuotaIva:0 }); }
+
+        const creada = await prisma.$transaction(async (tx)=>{
+          const dup = await tx.factura.findFirst({ where:{ companyId:req.companyId, tipo:letra, clase, puntoVenta:pv, numero, estado:{ not:'anulada' } } });
+          if(dup) return { _dup:true, cliente: razon };
+          // Cliente por CUIT (receptor) o razon social. Puede quedar null (consumidor final).
+          let cli = null;
+          if(docReceptor && tipoDocRec==='CUIT') cli = await tx.cliente.findFirst({ where:{ companyId:req.companyId, cuit:docReceptor } });
+          if(!cli && razon) cli = await tx.cliente.findFirst({ where:{ companyId:req.companyId, razonSocial:{ equals:razon, mode:'insensitive' } } });
+          if(!cli && (razon || (docReceptor && tipoDocRec==='CUIT'))) cli = await tx.cliente.create({ data:{ companyId:req.companyId, razonSocial: razon || `Cliente ${docReceptor||''}`.trim(), cuit:(tipoDocRec==='CUIT'?docReceptor:null)||null } });
+          let calc = calcFactura(items);
+          const dif = impTotal - calc.total;
+          if(Math.abs(dif) > 0.5){ items.push({ descripcion:'Ajuste (redondeo ARCA)', cantidad:1, precioUnit:dif, alicuotaIva:0 }); calc = calcFactura(items); }
+          const obs = `Importada de Mis Comprobantes (ARCA)${cae?` · CAE ${cae}`:''}`;
+          const f = await tx.factura.create({ data:{
+            companyId:req.companyId, clienteId: cli?cli.id:null, tipo:letra, clase, puntoVenta:pv, numero, fecha,
+            moneda, cotizacion:cotiz, observaciones:obs, subtotal:calc.subtotal, iva:calc.iva, total:calc.total,
+            cae: cae||null, caeVto:null, estado:'autorizada', origen:'arca_externa',
+            items:{ create: calc.items },
+          }, include:{ items:true } });
+          if(clase==='factura'){
+            await crearCtaCteDesdeFactura(tx, { companyId:req.companyId, factura:f, contactoTipo:'cliente', contactoId: cli?cli.id:null, refPrefix:'FAC', motivo:'Factura' });
+          } else if (cli) {
+            const esNC = clase==='nota_credito';
+            await tx.ctaCte.create({ data:{ companyId:req.companyId, contactoTipo:'cliente', contactoId:cli.id, fecha,
+              detalle:`${esNC?'Nota de crédito':'Nota de débito'} ${letra} ${String(pv).padStart(4,'0')}-${String(numero).padStart(8,'0')}`,
+              moneda, cotizacion:cotiz, ...(esNC?{haber:f.total}:{debe:f.total}), referencia:`FAC-${f.id}`, observaciones:obs }});
+          }
+          return { _dup:false, cliente: cli?cli.razonSocial:(razon||'Consumidor final'), total:f.total };
+        });
+        if(creada._dup){ resumen.duplicados++; detalle.push({ fila:r+1, estado:'duplicado', motivo:'Ya existía en el sistema', ref:`${letra} ${pv}-${numero}`, proveedor:creada.cliente }); }
+        else { resumen.creados++; detalle.push({ fila:r+1, estado:'creado', ref:`${letra} ${pv}-${numero}`, proveedor:creada.cliente, total:creada.total }); }
+      } catch(eRow){
+        resumen.errores++; detalle.push({ fila:r+1, estado:'error', motivo:String(eRow.message||eRow).slice(0,160) });
+      }
+    }
+    res.json({ ok:true, resumen, detalle });
+  } catch (e) { next(e); }
+});
+
 app.post('/api/facturas/:id/anular', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
   try {
     const existing = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
@@ -3515,9 +3606,27 @@ app.get('/api/facturas-compra', requireCompany, requirePermission('compras:read'
     const { desde, hasta } = req.query;
     const where = { companyId: req.companyId };
     if (desde || hasta) { where.fecha = {}; if (desde) where.fecha.gte = new Date(desde); if (hasta) where.fecha.lte = new Date(hasta); }
-    res.json({ ok: true, data: await prisma.facturaCompra.findMany({ where, orderBy: { fecha: 'desc' }, include: { proveedor: true, items: true } }) });
+    const facturas = await prisma.facturaCompra.findMany({ where, orderBy: { fecha: 'desc' }, include: { proveedor: true, items: true } });
+    // Marcar cuáles ya tienen un pago aplicado (para no permitir editarlas).
+    const pagos = await prisma.ctaCte.findMany({
+      where: { companyId: req.companyId, contactoTipo: 'proveedor', referencia: { startsWith: 'FACC-' }, OR: [{ haber: { gt: 0.01 } }, { pagado: true }] },
+      select: { referencia: true },
+    });
+    const pagadas = new Set(pagos.map(p => String(p.referencia || '').replace(/^FACC-/, '')));
+    res.json({ ok: true, data: facturas.map(f => ({ ...f, pagada: pagadas.has(f.id) })) });
   } catch (e) { next(e); }
 });
+
+// Helper: ¿la factura de compra tiene un pago aplicado (OP)? Un pago crea una
+// fila en la cuenta con haber>0 y referencia FACC-<id>, y marca pagado=true si
+// cubre todo. Detecta pagos totales y parciales.
+async function _compraTienePago(companyId, facturaId) {
+  const row = await prisma.ctaCte.findFirst({
+    where: { companyId, contactoTipo: 'proveedor', referencia: `FACC-${facturaId}`, OR: [{ haber: { gt: 0.01 } }, { pagado: true }] },
+    select: { id: true },
+  });
+  return !!row;
+}
 
 app.get('/api/facturas-compra/libroIva/:anio/:mes', requireCompany, requirePermission('compras:read'), async (req, res, next) => {
   try {
@@ -3541,7 +3650,8 @@ app.get('/api/facturas-compra/:id', requireCompany, requirePermission('compras:r
       include: { proveedor: true, items: true },
     });
     if (!row) return res.status(404).json({ ok: false, error: 'No encontrada' });
-    res.json({ ok: true, data: row });
+    const pagada = await _compraTienePago(req.companyId, row.id);
+    res.json({ ok: true, data: { ...row, pagada } });
   } catch (e) { next(e); }
 });
 
@@ -3786,8 +3896,7 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
     const input = schema.parse(req.body);
     const existing = await prisma.facturaCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
-    const ccRow = await prisma.ctaCte.findFirst({ where: { companyId: req.companyId, referencia: `FACC-${req.params.id}` } });
-    if (ccRow && ccRow.pagado) return res.status(400).json({ ok: false, error: 'No se puede editar: la compra tiene un pago aplicado. Primero deshacé el pago (Orden de pago → Deshacer pago).' });
+    if (await _compraTienePago(req.companyId, req.params.id)) return res.status(400).json({ ok: false, error: 'No se puede editar: la compra tiene un pago aplicado (OP). Primero deshacé el pago desde la Orden de pago.' });
     if (!input.proveedorId && (input.emisorCuit || input.emisorRazonSocial)) {
       const ext = [ input.emisorRazonSocial ? `Emisor: ${input.emisorRazonSocial}` : null, input.emisorCuit ? `CUIT ${input.emisorCuit}` : null, input.cae ? `CAE ${input.cae}` : null ].filter(Boolean).join(' · ');
       input.observaciones = ext + (input.observaciones ? ' | ' + input.observaciones : '');
@@ -3801,6 +3910,12 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       // revertir lo anterior
       await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'CPR', facturaId: req.params.id });
       await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FACC', facturaId: req.params.id });
+      // Las NC/ND guardan su cta cte con referencia 'FACC' (sin id): la ubicamos por su detalle
+      // para no dejar una fila huérfana al editar.
+      if (existing.clase !== 'factura') {
+        const num = `${existing.tipo} ${String(existing.puntoVenta).padStart(4,'0')}-${String(existing.numero).padStart(8,'0')}`;
+        await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, contactoTipo: 'proveedor', contactoId: existing.proveedorId, referencia: 'FACC', detalle: { in: [`Nota de crédito ${num}`, `Nota de débito ${num}`] } } });
+      }
       await tx.facturaCompraItem.deleteMany({ where: { facturaCompraId: req.params.id } });
       const f = await tx.facturaCompra.update({
         where: { id: req.params.id },

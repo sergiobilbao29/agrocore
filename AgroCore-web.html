@@ -2506,6 +2506,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-green-100 text-green-800 border-green-300', fecha:'03/08/2026',
+      titulo:'📤 v2.17.0 — Importar ventas desde ARCA (Mis Comprobantes → Emitidos)',
+      desc:'Igual que la importación de compras, ahora en <b>Facturación → 📤 Importar de ARCA</b> subís el Excel de <b>ARCA → Mis Comprobantes → Emitidos</b> y el sistema crea una <b>factura de venta por cada comprobante</b>: da de alta el <b>cliente por CUIT</b> del receptor, reconstruye el <b>IVA por alícuota</b>, arma la <b>cuenta a cobrar</b> y lo suma al <b>Libro IVA Ventas</b>, con el <b>CAE real</b> y marca "ARCA ext.". <b>No duplica</b> (por tipo + punto de venta + número) y muestra el resumen creados / duplicados / omitidos / errores. Como son ventas ya emitidas y ARCA no manda los renglones, <b>no mueve stock</b>: sirve para completar el historial de ventas, cuentas a cobrar y el Libro IVA.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'31/07/2026',
       titulo:'✏️ v2.16.1 — Editar facturas de compra + ajustes del import de ARCA',
       desc:'Ahora se puede <b>editar una factura de compra</b> (botón ✏️ en la lista o desde el detalle). Al guardar, el sistema revierte y recrea el stock y la cuenta a pagar con los datos nuevos. Es la forma de <b>cargarle los ítems a las compras importadas de ARCA</b> para que <b>nutran el stock</b>: abrís la compra, reemplazás la línea general por los productos reales (cantidad + IVA) y esos ítems ingresan al depósito. No se puede editar una compra que ya tenga un <b>pago aplicado</b> (primero hay que deshacer el pago). Además: en el import de ARCA el botón <b>“Listo”</b> ahora cierra la ventana, y se quitaron de Compras los botones viejos “Recuperar OP anteriores” y “Corregir tipo de cheque en OP” (eran arreglos puntuales que ya no hacen falta).' },
@@ -9516,6 +9519,7 @@ pages.facturacion = async function() {
               ? `<button class="btn btn-secondary opacity-40 cursor-not-allowed" disabled title="Solo para empresas con ARCA: registra una factura ya emitida en el portal de ARCA.">📥 Cargar factura ARCA 🔒</button>`
               : `<button class="btn btn-secondary" onclick="factFormExterna()" title="Cargar manualmente una factura ya emitida en el portal de ARCA">📥 Cargar factura ARCA</button>`)
           : ''}
+        ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ventaImportArca()" title="Importar comprobantes de venta desde el Excel de ARCA → Mis Comprobantes → Emitidos">📤 Importar de ARCA</button>`:''}
         ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="factForm()">+ Emitir factura</button>`:''}
       </div>
     </div>
@@ -10874,7 +10878,7 @@ pages.compras = async function() {
     const ff = state.compraFilter;
     // Movimientos = facturas de compra + pagos (órdenes de pago)
     const movFacturas = rows.map(r => ({
-      kind:'factura', id:r.id, fecha:r.fecha, proveedorId:r.proveedorId,
+      kind:'factura', id:r.id, fecha:r.fecha, proveedorId:r.proveedorId, pagada:r.pagada,
       proveedorNombre:r.proveedor?.razonSocial||'—',
       tipoKey: r.clase==='nota_credito'?'nc':(r.clase==='nota_debito'?'nd':'factura'),
       moneda:r.moneda, total:r.total, cotizacion:r.cotizacion,
@@ -10908,7 +10912,7 @@ pages.compras = async function() {
               <td class="text-right font-bold">${fmtMon(m.moneda, m.total)}${m.moneda&&m.moneda!=='ARS'&&m.cotizacion?`<div class="text-[10px] text-slate-400 font-normal">TC ${fmtN(m.cotizacion||0)}</div>`:''}</td>
               <td class="text-right whitespace-nowrap">
                 ${m.kind==='factura'
-                  ? `<button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(m.id)})'>👁️</button>${can('compras:update')||can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='compEditar(${JSON.stringify(m.id)})'>✏️</button>`:''}${can('compras:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='compDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
+                  ? `<button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(m.id)})'>👁️</button>${(can('compras:update')||can('finanzas:update')) ? (m.pagada ? `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un pago aplicado (OP). Deshacé el pago primero.">🔒</span>` : `<button class="btn btn-ghost text-xs" title="Editar" onclick='compEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${can('compras:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='compDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
                   : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir orden de pago" onclick='ordenPagoReabrir(${JSON.stringify(m.id)})'>📄 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='ordenPagoReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>`}
               </td>
             </tr>`).join('') || '<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
@@ -11020,6 +11024,68 @@ async function compImportArcaRun(){
     toast(`Importadas ${s.creados||0} compras · ${s.duplicados||0} duplicadas`, 'success');
     delete state.cache.facturasCompra; delete state.cache.ctasCtes; delete state.cache.stockMap;
     pages.compras();
+  } catch(e){ toast(e.message,'error'); if(btn){ btn.disabled=false; btn.textContent='Importar'; } }
+}
+
+// ── Importar "Mis Comprobantes → Emitidos" (ARCA) — ventas ────────────────────
+function ventaImportArca(){
+  openModal({
+    title:'📤 Importar de ARCA — Mis Comprobantes (Emitidos)',
+    size:'max-w-3xl',
+    body:`
+      <div class="text-sm text-slate-600 space-y-2">
+        <p>Subí el Excel que bajás de <b>ARCA → Mis Comprobantes → Emitidos</b>. Se crea una <b>factura de venta por cada comprobante</b> (alta del cliente por CUIT del receptor, IVA discriminado, cuenta a cobrar y Libro IVA Ventas), con el <b>CAE real</b> y marca "ARCA ext.". Se <b>saltean los que ya estén cargados</b>.</p>
+        <p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">⚠️ ARCA no incluye los renglones/productos ni mueve stock (son ventas ya emitidas). Sirve para completar el historial de ventas, cuentas a cobrar y el Libro IVA.</p>
+        <input id="arcav-file" type="file" accept=".xlsx,.xls" class="input"/>
+        <div id="arcav-status" class="text-sm mt-1"></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            <button id="arcav-btn" class="btn btn-primary" disabled onclick="ventaImportArcaRun()">Importar</button>`
+  });
+  state._arcavMatrix = null;
+  const inp = document.getElementById('arcav-file');
+  inp.addEventListener('change', e => {
+    const file = e.target.files[0]; if(!file) return;
+    const rd = new FileReader();
+    rd.onload = ev => {
+      try {
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type:'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const m = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+        state._arcavMatrix = m;
+        let n=0, seen=false;
+        for(const row of m){ const c=(row||[]).map(x=>String(x).toLowerCase().trim()); if(!seen){ if(c.includes('fecha')) seen=true; continue; } if(row && String(row[0]||'').trim()) n++; }
+        document.getElementById('arcav-status').innerHTML = seen
+          ? `<span class="text-green-700">✓ Detecté <b>${n}</b> comprobantes en el archivo.</span>`
+          : `<span class="text-red-600">No parece el Excel de Mis Comprobantes (no encuentro la fila de encabezados).</span>`;
+        document.getElementById('arcav-btn').disabled = !seen || n===0;
+      } catch(err){ document.getElementById('arcav-status').innerHTML = `<span class="text-red-600">No pude leer el archivo: ${esc(err.message)}</span>`; }
+    };
+    rd.readAsArrayBuffer(file);
+  });
+}
+async function ventaImportArcaRun(){
+  if(!state._arcavMatrix) return;
+  const btn = document.getElementById('arcav-btn'); if(btn){ btn.disabled=true; btn.textContent='Importando…'; }
+  try {
+    const r = await api('/api/facturas/import-arca', { method:'POST', body: JSON.stringify({ matrix: state._arcavMatrix }) });
+    const s = r.resumen||{}; const det = r.detalle||[];
+    const bdg = e => e==='creado'?'<span class="badge badge-green">creado</span>':e==='duplicado'?'<span class="badge badge-yellow">duplicado</span>':e==='omitido'?'<span class="badge badge-blue">omitido</span>':'<span class="badge badge-red">error</span>';
+    document.getElementById('arcav-status').innerHTML = `
+      <div class="grid grid-cols-4 gap-2 my-2 text-center">
+        <div class="kpi"><div class="text-xs text-slate-500">Creados</div><div class="text-xl font-bold text-green-700">${s.creados||0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Duplicados</div><div class="text-xl font-bold text-amber-600">${s.duplicados||0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Omitidos</div><div class="text-xl font-bold text-blue-600">${s.omitidos||0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Errores</div><div class="text-xl font-bold text-red-600">${s.errores||0}</div></div>
+      </div>
+      <div class="max-h-64 overflow-auto border rounded"><table class="data">
+        <thead><tr><th>Estado</th><th>Comprobante</th><th>Cliente</th><th class="text-right">Total</th><th>Detalle</th></tr></thead>
+        <tbody>${det.map(d=>`<tr><td>${bdg(d.estado)}</td><td class="text-xs font-mono">${esc(d.ref||'')}</td><td class="text-xs">${esc(d.proveedor||'')}</td><td class="text-right text-xs">${d.total!=null?fmt$(d.total):''}</td><td class="text-xs text-slate-500">${esc(d.motivo||'')}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+    if(btn){ btn.textContent='Listo'; btn.disabled=false; btn.onclick=closeModal; }
+    toast(`Importadas ${s.creados||0} ventas · ${s.duplicados||0} duplicadas`, 'success');
+    delete state.cache.facturas; delete state.cache.ctasCtes;
+    pages.facturacion();
   } catch(e){ toast(e.message,'error'); if(btn){ btn.disabled=false; btn.textContent='Importar'; } }
 }
 async function compForm(pre) {
@@ -11433,8 +11499,11 @@ async function compDel(id) {
   catch (e) { toast(e.message,'error'); }
 }
 async function compEditar(id) {
-  try { const r = await api('/api/facturas-compra/'+id); await compForm(r.data); }
-  catch (e) { toast(e.message,'error'); }
+  try {
+    const r = await api('/api/facturas-compra/'+id);
+    if (r.data && r.data.pagada) { toast('No se puede editar: la compra tiene un pago aplicado (OP). Deshacé el pago primero.','warn'); return; }
+    await compForm(r.data);
+  } catch (e) { toast(e.message,'error'); }
 }
 async function compVer(id) {
   try {
@@ -11468,7 +11537,7 @@ async function compVer(id) {
         </table>
         ${f.observaciones ? `<div class="mt-3 text-sm text-slate-600"><b>Observaciones:</b> ${esc(f.observaciones)}</div>` : ''}
         <div class="mt-3 text-xs text-slate-500">💡 Para que una compra <b>nutra el stock</b>, editala y cargale los productos (cantidad + IVA). Esos ítems ingresan al depósito.</div>`,
-      footer: `${can('compras:update')||can('finanzas:update')?`<button class="btn btn-primary" onclick="closeModal(); compEditar(${JSON.stringify(f.id)})">✏️ Editar</button>`:''}<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+      footer: `${(can('compras:update')||can('finanzas:update')) ? (f.pagada ? `<span class="text-xs text-slate-400 mr-auto">🔒 Con pago aplicado — no editable</span>` : `<button class="btn btn-primary" onclick="closeModal(); compEditar(${JSON.stringify(f.id)})">✏️ Editar</button>`) : ''}<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
     });
   } catch (e) { toast(e.message,'error'); }
 }
