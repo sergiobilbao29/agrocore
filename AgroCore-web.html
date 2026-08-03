@@ -2507,6 +2507,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'03/08/2026',
+      titulo:'🧾 v2.23.0 — Cargar factura ya emitida en ARCA, dentro del alta',
+      desc:'Se sacó el botón suelto <b>“Cargar factura ARCA”</b> de la barra de Facturación. Ahora esa opción vive <b>dentro de la carga de la factura</b> (igual que en Compras): al tocar <b>“+ Emitir factura”</b>, arriba del formulario aparece un aviso <b>“¿Esta factura ya fue emitida en ARCA?”</b> con el botón para cargarla con su <b>CAE real</b> (a mano o desde el PDF). Queda todo en un mismo lugar y más ordenado. El botón <b>📤 Importar de ARCA</b> (Excel de Mis Comprobantes) sigue igual.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'📊 v2.22.0 — Historial de campañas: comparador por lote',
       desc:'Nueva pantalla <b>Producción → Historial de campañas</b>, ahora como un <b>comparador</b>: elegís un <b>campo y lote</b> y ves sus campañas <b>una al lado de la otra</b>. Arriba, un <b>Resumen de rendimiento histórico</b> con una tarjeta por campaña (rinde, costo y margen, con 🏆 para el de mejor margen). Abajo, una <b>tabla comparativa detallada</b> por columnas (una por campaña) con: <b>información general</b> (cultivo/variedad, siembra, cosecha), <b>estructura de costos por hectárea</b> abierta por rubro (semillas y curasemillas, herbicidas y barbecho, fertilizantes, fungicidas/insecticidas, labores, cosecha), el <b>costo directo total/ha</b>, y los <b>resultados económicos</b> (rinde obtenido, precio promedio, ingreso bruto, <b>rinde de indiferencia</b> y <b>margen bruto/ha</b>). Se puede ver en <b>US$ o en Pesos</b> por hectárea y elegir cuántas campañas comparar (últimas 3/4/5/6 o todas). <b>Exporta a Excel y PDF</b>. Los costos salen de los insumos y labores cargados; el precio y el rinde, de la <b>Planilla de resultado económico</b> de cada campaña (si no la cargaste, el precio se estima con la pizarra del cultivo y el rinde con el estimado). También se agregó el campo <b>Análisis de suelo</b> (texto libre) en la campaña.' },
@@ -9800,6 +9803,7 @@ pages.facturacion = async function() {
       </table>`;
   };
 
+  state._factInformal = informal;
   $('#page-body').innerHTML = `
     ${informal ? `<div class="bg-amber-50 border border-amber-200 text-amber-900 text-sm rounded-lg p-3 mb-4">⚠️ Empresa marcada como <b>informal</b>. Las facturas que emitas aquí son internas y no se envían a ARCA.</div>`:''}
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
@@ -9808,11 +9812,6 @@ pages.facturacion = async function() {
         ${informal
           ? `<button class="btn btn-secondary opacity-40 cursor-not-allowed" disabled title="El Libro IVA no aplica en una empresa SIN ARCA.">📘 Libro IVA 🔒</button>`
           : `<button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>`}
-        ${(can('ventas:factura_externa:create') || can('ventas:create') || can('finanzas:create'))
-          ? (informal
-              ? `<button class="btn btn-secondary opacity-40 cursor-not-allowed" disabled title="Solo para empresas con ARCA: registra una factura ya emitida en el portal de ARCA.">📥 Cargar factura ARCA 🔒</button>`
-              : `<button class="btn btn-secondary" onclick="factFormExterna()" title="Cargar manualmente una factura ya emitida en el portal de ARCA">📥 Cargar factura ARCA</button>`)
-          : ''}
         ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ventaImportArca()" title="Importar comprobantes de venta desde el Excel de ARCA → Mis Comprobantes → Emitidos">📤 Importar de ARCA</button>`:''}
         ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="factForm()">+ Emitir factura</button>`:''}
       </div>
@@ -10211,6 +10210,11 @@ async function factForm(prefill = null) {
   openModal({
     title: state._factEdit ? 'Editar comprobante de venta' : 'Emitir comprobante', size:'max-w-6xl',
     body: `
+      ${(!state._factEdit && !state._factInformal && (can('ventas:factura_externa:create') || can('ventas:create') || can('finanzas:create'))) ? `
+      <div class="flex items-center justify-between gap-2 flex-wrap bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-3">
+        <div class="text-xs text-amber-900">📥 ¿Esta factura <b>ya fue emitida en ARCA</b> (por el contador o un socio)? Cargala con su <b>CAE real</b> en vez de emitirla.</div>
+        <button type="button" class="btn btn-secondary text-xs" onclick="closeModal(); factFormExterna();">📥 Cargar factura ya emitida en ARCA</button>
+      </div>`:''}
       <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
         <div><label class="label">Comprobante *</label>
           <select id="f-clase" class="input" onchange="factClaseHint(); factSugerirNro()">
@@ -22508,10 +22512,10 @@ pages.movDiarios = async function() {
 
         ${can('ventas:create') ? `
         <button class="md-action-btn group p-3 rounded-lg border-2 border-slate-300 bg-white hover:border-indigo-500 hover:bg-indigo-50 transition text-left"
-                onclick="factFormExterna()">
+                onclick="factForm()">
           <div class="text-2xl mb-1">📤</div>
           <div class="font-semibold text-sm text-slate-800 group-hover:text-indigo-800">Factura de venta</div>
-          <div class="text-[11px] text-slate-500 group-hover:text-indigo-700 mt-0.5">Carga PDF · cobra ahora o despues</div>
+          <div class="text-[11px] text-slate-500 group-hover:text-indigo-700 mt-0.5">Emití o cargá una factura ya emitida en ARCA</div>
         </button>` : ''}
 
         ${can('finanzas:create') ? `
