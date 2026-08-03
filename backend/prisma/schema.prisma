@@ -67,6 +67,7 @@ model Company {
   campanas        Campana[]
   depositos       Deposito[]
   liquidacionesCereal LiquidacionCereal[]
+  liquidacionesHacienda LiquidacionHacienda[]
   creditos        Credito[]
   bancoCuentas    BancoCuenta[]
   importLotes     ImportLote[]
@@ -235,6 +236,7 @@ model Campo {
   arrendamientos  Arrendamiento[]
   haciendaStocks  HaciendaStock[]
   haciendaMovs    HaciendaMovimiento[]
+  liquidacionesHacienda LiquidacionHacienda[]
 
   @@index([companyId])
 }
@@ -1152,6 +1154,68 @@ model CategoriaHaciendaConfig {
 
   @@unique([companyId, nombre])
   @@index([companyId])
+}
+
+// ============================================================
+// LIQUIDACIÓN DE HACIENDA: comprobante (Liquidación de compra por faena/venta)
+// que emite el consignatario/frigorífico por la venta de animales del productor.
+// Entra como una VENTA: descuenta cabezas del stock real (movimiento de venta) y
+// del declarado SENASA por campo/categoría, y arma la cuenta a cobrar por el neto.
+// El comprobante ya trae su CAE (emitido por el comprador) — no se reenvía a ARCA.
+// ============================================================
+model LiquidacionHacienda {
+  id             String   @id @default(cuid())
+  companyId      String
+  campoId        String
+  clienteId      String?
+  fecha          DateTime
+  numero         String?      // N° del comprobante (ej. 00003-00001366)
+  cae            String?
+  caeVto         DateTime?
+  emisorNombre   String?      // consignatario / frigorífico que emite
+  emisorCuit     String?
+  receptorNombre String?      // establecimiento faenador / comprador
+  receptorCuit   String?
+  brutoTotal     Float    @default(0)   // suma de $ bruto de los renglones
+  ivaBruto       Float    @default(0)
+  gastosTotal    Float    @default(0)   // comisión y otros gastos
+  ivaGastos      Float    @default(0)
+  neto           Float    @default(0)   // Importe Neto a cobrar (del comprobante)
+  gastos         Json?                  // [{concepto, base, porcentaje, importe, alicuota, iva}]
+  cobrado        Boolean  @default(false)
+  fechaCobroEst  DateTime?
+  observaciones  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campo          Campo    @relation(fields: [campoId], references: [id], onDelete: Cascade)
+  renglones      LiquidacionHaciendaRenglon[]
+
+  @@index([companyId])
+  @@index([campoId])
+}
+
+model LiquidacionHaciendaRenglon {
+  id             String   @id @default(cuid())
+  liquidacionId  String
+  especie        String?      // "Bovino" | "Porcino" | ...
+  categoria      String       // categoría del sistema (Vaquillona, Novillo, ...)
+  categoriaTexto String?      // texto crudo del PDF
+  raza           String?      // Aberdeen Angus, etc.
+  tropa          String?
+  cabezas        Int      @default(0)
+  kilos          Float    @default(0)
+  precioKg       Float    @default(0)
+  bruto          Float    @default(0)
+  alicuotaIva    Float    @default(10.5)
+  iva            Float    @default(0)
+  haciendaMovId  String?      // movimiento de venta generado (para revertir)
+  createdAt      DateTime @default(now())
+
+  liquidacion    LiquidacionHacienda @relation(fields: [liquidacionId], references: [id], onDelete: Cascade)
+
+  @@index([liquidacionId])
 }
 
 // ============================================================

@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.24.0';
+const AGROCORE_VERSION = '2.25.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6638,6 +6638,160 @@ app.put('/api/liquidaciones-cereal/:id/marcar-cobrado', requireCompany, requireP
 });
 
 // ============================================================
+// LIQUIDACIÓN DE HACIENDA: entra como VENTA. Por cada renglón descuenta cabezas
+// del stock real (movimiento de venta) y, si se pide, del declarado SENASA del
+// campo/categoría. Arma la cuenta a cobrar por el neto. No toca el Libro IVA.
+// ============================================================
+app.get('/api/liquidaciones-hacienda', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const data = await prisma.liquidacionHacienda.findMany({
+      where: { companyId: req.companyId },
+      orderBy: { fecha: 'desc' },
+      include: { renglones: true, campo: { select: { id: true, nombre: true } } },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.get('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const data = await prisma.liquidacionHacienda.findFirst({
+      where: { id: req.params.id, companyId: req.companyId },
+      include: { renglones: true, campo: { select: { id: true, nombre: true } } },
+    });
+    if (!data) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/liquidaciones-hacienda', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const rengSchema = z.object({
+      especie: z.string().nullable().optional(),
+      categoria: z.string().min(1),
+      categoriaTexto: z.string().nullable().optional(),
+      raza: z.string().nullable().optional(),
+      tropa: z.string().nullable().optional(),
+      cabezas: z.coerce.number().int().min(1),
+      kilos: z.coerce.number().nonnegative().default(0),
+      precioKg: z.coerce.number().nonnegative().default(0),
+      bruto: z.coerce.number().nonnegative().nullable().optional(),
+      alicuotaIva: z.coerce.number().nonnegative().default(10.5),
+      iva: z.coerce.number().nonnegative().nullable().optional(),
+    });
+    const schema = z.object({
+      campoId: z.string(),
+      clienteId: z.string().nullable().optional(),
+      fecha: z.coerce.date(),
+      numero: z.string().nullable().optional(),
+      cae: z.string().nullable().optional(),
+      caeVto: z.coerce.date().nullable().optional(),
+      emisorNombre: z.string().nullable().optional(),
+      emisorCuit: z.string().nullable().optional(),
+      receptorNombre: z.string().nullable().optional(),
+      receptorCuit: z.string().nullable().optional(),
+      gastosTotal: z.coerce.number().default(0),
+      ivaGastos: z.coerce.number().default(0),
+      neto: z.coerce.number(),
+      fechaCobroEst: z.coerce.date().nullable().optional(),
+      descontarSenasa: z.boolean().default(true),
+      observaciones: z.string().nullable().optional(),
+      renglones: z.array(rengSchema).min(1),
+    });
+    const d = schema.parse(req.body);
+    const campo = await _verifyCampo(req, d.campoId);
+    if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
+
+    const rows = d.renglones.map(r => {
+      const bruto = (r.bruto != null && r.bruto > 0) ? r.bruto : (r.kilos * r.precioKg);
+      const iva = (r.iva != null) ? r.iva : Math.round(bruto * r.alicuotaIva) / 100;
+      return { ...r, bruto: Math.round(bruto * 100) / 100, iva: Math.round(iva * 100) / 100 };
+    });
+    const brutoTotal = rows.reduce((a, r) => a + r.bruto, 0);
+    const ivaBruto = rows.reduce((a, r) => a + r.iva, 0);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const liq = await tx.liquidacionHacienda.create({
+        data: {
+          companyId: req.companyId, campoId: d.campoId, clienteId: d.clienteId || null,
+          fecha: d.fecha, numero: d.numero || null, cae: d.cae || null, caeVto: d.caeVto || null,
+          emisorNombre: d.emisorNombre || null, emisorCuit: d.emisorCuit || null,
+          receptorNombre: d.receptorNombre || null, receptorCuit: d.receptorCuit || null,
+          brutoTotal: Math.round(brutoTotal * 100) / 100, ivaBruto: Math.round(ivaBruto * 100) / 100,
+          gastosTotal: d.gastosTotal || 0, ivaGastos: d.ivaGastos || 0, neto: d.neto,
+          fechaCobroEst: d.fechaCobroEst || null, observaciones: d.observaciones || null,
+        },
+      });
+      for (const r of rows) {
+        // 1) Movimiento de venta → descuenta el stock REAL (cabezas + kg)
+        const mov = await tx.haciendaMovimiento.create({
+          data: {
+            companyId: req.companyId, campoId: d.campoId, categoria: r.categoria,
+            fecha: d.fecha, tipo: 'venta', cantidad: r.cabezas, kilos: r.kilos || null,
+            precioKg: r.precioKg || null, total: r.bruto || null, clienteId: d.clienteId || null,
+            modoVenta: 'directo', estadoRend: 'cerrada', cobroTipo: 'ninguno',
+            facturaRef: `LIQHAC-${liq.id}`,
+            observaciones: `Liquidación hacienda ${d.numero || ''}`.trim(),
+          },
+        });
+        await tx.liquidacionHaciendaRenglon.create({
+          data: {
+            liquidacionId: liq.id, especie: r.especie || null, categoria: r.categoria,
+            categoriaTexto: r.categoriaTexto || null, raza: r.raza || null, tropa: r.tropa || null,
+            cabezas: r.cabezas, kilos: r.kilos || 0, precioKg: r.precioKg || 0,
+            bruto: r.bruto || 0, alicuotaIva: r.alicuotaIva, iva: r.iva || 0, haciendaMovId: mov.id,
+          },
+        });
+        // 2) Descontar el declarado SENASA del campo/categoría
+        if (d.descontarSenasa) {
+          const st = await tx.haciendaStock.findFirst({ where: { companyId: req.companyId, campoId: d.campoId, categoria: r.categoria } });
+          if (st) {
+            await tx.haciendaStock.update({ where: { id: st.id }, data: { declarado: Math.max(0, (st.declarado || 0) - r.cabezas) } });
+          }
+        }
+      }
+      // 3) Cuenta a cobrar por el neto (si hay cliente)
+      if (d.clienteId) {
+        await tx.ctaCte.create({
+          data: {
+            companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId,
+            fecha: d.fecha, detalle: `Liquidación hacienda ${d.numero || ''}`.trim(),
+            referencia: `LIQHAC-${liq.id}`, debe: d.neto, haber: 0,
+            vencimiento: d.fechaCobroEst || null, categoria: 'liquidacion_hacienda',
+          },
+        });
+      }
+      return liq;
+    });
+    const full = await prisma.liquidacionHacienda.findUnique({ where: { id: result.id }, include: { renglones: true } });
+    res.status(201).json({ ok: true, data: full });
+  } catch (e) { next(e); }
+});
+app.put('/api/liquidaciones-hacienda/:id/marcar-cobrado', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const liq = await prisma.liquidacionHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!liq) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    const row = await prisma.liquidacionHacienda.update({ where: { id: liq.id }, data: { cobrado: !liq.cobrado } });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.delete('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission('ventas:delete'), async (req, res, next) => {
+  try {
+    const liq = await prisma.liquidacionHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { renglones: true } });
+    if (!liq) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    await prisma.$transaction(async (tx) => {
+      // Revertir: devolver el declarado SENASA y borrar los movimientos de venta.
+      for (const r of liq.renglones) {
+        const st = await tx.haciendaStock.findFirst({ where: { companyId: req.companyId, campoId: liq.campoId, categoria: r.categoria } });
+        if (st) await tx.haciendaStock.update({ where: { id: st.id }, data: { declarado: (st.declarado || 0) + r.cabezas } });
+      }
+      await tx.haciendaMovimiento.deleteMany({ where: { companyId: req.companyId, facturaRef: `LIQHAC-${liq.id}` } });
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `LIQHAC-${liq.id}` } });
+      await tx.liquidacionHacienda.delete({ where: { id: liq.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
 // CRÉDITOS BANCARIOS + cuotas
 // Al crear un crédito se generan automáticamente las N cuotas con sus
 // fechas e importes (sistema francés simplificado: cuota total constante).
@@ -8617,6 +8771,124 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
         primerasLineas: lineas.slice(0, 25),
       },
     });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// PARSER de LIQUIDACIÓN DE HACIENDA (Liquidación de compra por faena/venta).
+// Extrae header (número, fecha, CAE, emisor/receptor), los renglones de
+// animales (categoría/raza, kg, precio, bruto, IVA) detectando el tipo de
+// animal, y el Importe Neto. Los números por renglón vienen concatenados en el
+// texto del PDF; se separan usando la restricción cantidad × precio ≈ bruto.
+// ============================================================
+// Detecta la categoría del sistema a partir del texto "Categoría / Raza".
+function _detectCategoriaHacienda(txt) {
+  const x = (txt || '').toLowerCase();
+  const map = [
+    ['novillito','Novillito'], ['vaquillona','Vaquillona'], ['novillo','Novillo'],
+    ['torito','Torito'], ['ternera','Ternera'], ['ternero','Ternero'],
+    ['vaquilla','Vaquillona'], ['vaca','Vaca'], ['toro','Toro'], ['buey','Buey'],
+    ['lechon','Lechón'], ['lechón','Lechón'], ['capon','Capón'], ['capón','Capón'],
+    ['cachorra','Cachorra'], ['cachorro','Cachorro'], ['cerda','Cerda'], ['padrillo','Padrillo'],
+    ['oveja','Oveja'], ['cordero','Cordero'], ['carnero','Carnero'], ['capon ovino','Capón'],
+  ];
+  for (const [k, v] of map) { if (x.includes(k)) return v; }
+  return null;
+}
+app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCompany, upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo PDF' });
+    if (!/\.pdf$/i.test(req.file.originalname || '')) return res.status(400).json({ ok: false, error: 'El archivo debe ser un PDF' });
+    let pdfParse;
+    try { pdfParse = await getPdfParse(); }
+    catch (e) { return res.status(501).json({ ok: false, error: 'El parser de PDF no está disponible (pdf-parse no instalado). Cargá la liquidación a mano.' }); }
+    let texto = '';
+    try { texto = (await pdfParse(req.file.buffer)).text || ''; }
+    catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
+
+    const num = (s) => {
+      if (s == null || s === '') return null;
+      let n = String(s).replace(/[$\s]/g, '');
+      if (/,\d{1,2}$/.test(n)) n = n.replace(/\./g, '').replace(',', '.');
+      else if (/\.\d{1,2}$/.test(n)) n = n.replace(/,/g, '');
+      else n = n.replace(/[,.]/g, '');
+      const v = Number(n); return isFinite(v) ? v : null;
+    };
+    const fechaArg = (s) => {
+      if (!s) return null;
+      const m = String(s).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+      if (!m) return null;
+      let yy = m[3]; if (yy.length === 2) yy = '20' + yy;
+      return `${yy}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    };
+    // Separa "cantidad(int) precio(money) bruto(money)" pegados, usando cant*precio≈bruto.
+    const parse3 = (s) => {
+      const decs = [...s.matchAll(/\.\d{2}/g)];
+      if (decs.length < 2) return { cantidad: null, precio: null, bruto: num(s) };
+      const dFirst = decs[0].index, dLast = decs[decs.length - 1].index;
+      const bruto = num(s.slice(dFirst + 3, dLast) + s.slice(dLast, dLast + 3));
+      const pre = s.slice(0, dFirst), preDec = s.slice(dFirst + 1, dFirst + 3);
+      const digits = pre.replace(/[^\d]/g, '');
+      let best = null;
+      for (let cut = 1; cut < digits.length; cut++) {
+        const cant = Number(digits.slice(0, cut)), precio = Number(digits.slice(cut) + '.' + preDec);
+        if (!precio) continue;
+        const err = Math.abs(cant * precio - bruto) / (bruto || 1);
+        if (best === null || err < best.err) best = { cant, precio, err };
+      }
+      if (best && best.err < 0.03) return { cantidad: best.cant, precio: best.precio, bruto };
+      return { cantidad: null, precio: null, bruto };
+    };
+
+    const numero = (texto.match(/N°\s*([\d]{2,5}-[\d]{4,8})/) || [])[1] || null;
+    const fecha = fechaArg((texto.match(/([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})\s*Fecha/) || [])[1]) || fechaArg((texto.match(/Fecha[:\s]*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i) || [])[1]);
+    const cae = (texto.match(/CAE[^0-9]{0,8}(\d{14})/i) || [])[1] || null;
+    const caeVto = fechaArg((texto.match(/Vto\.?\s*de\s*CAE[:\s]*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i) || [])[1]);
+    const emisorCuit = (texto.match(/(\d{11})CUIT:/) || [])[1] || null;
+    const emisorNombre = (texto.match(/\n([A-ZÁÉÍÓÚÑ][^\n]*?S\.?\s?R\.?\s?L\.?|[A-ZÁÉÍÓÚÑ][^\n]*?S\.?\s?A\.?)\n/) || [])[1] || null;
+    const recM = texto.match(/Receptor[\s\S]{0,60}?(\d{11})CUIT:([^\n]+?)Nombre/i);
+    const receptorCuit = recM ? recM[1] : null;
+    const receptorNombre = recM ? recM[2].trim() : null;
+
+    // Renglones
+    const secStart = texto.indexOf('$ Bruto% IVA$ IVA');
+    const secEnd = texto.indexOf('Importe Bruto:');
+    const sec = secStart >= 0 ? texto.slice(secStart, secEnd > secStart ? secEnd : undefined) : texto;
+    const re = /(\d+)Kg\.?\s*Vivo([\d.,]+)/g;
+    let m, last = 0; const renglones = [];
+    while ((m = re.exec(sec))) {
+      const chunk = sec.slice(last, m.index); last = re.lastIndex;
+      let raw = m[2];
+      const alic = num((raw.match(/(\d{1,2}\.\d{2})$/) || [])[1]) || 10.5;
+      raw = raw.replace(/(\d{1,2}\.\d{2})$/, '');
+      const p = parse3(raw);
+      const em = chunk.match(/(Bovino|Porcino|Ovino|Equino|Caprino)[\s\S]*/i);
+      const catTexto = (em ? em[0] : chunk).replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      renglones.push({
+        especie: (chunk.match(/(Bovino|Porcino|Ovino|Equino|Caprino)/i) || [])[1] || null,
+        categoriaTexto: catTexto || null,
+        raza: (catTexto.match(/\/\s*(.+)$/) || [])[1] || null,
+        categoria: _detectCategoriaHacienda(catTexto),
+        tropa: m[1] || null,
+        cabezas: null,   // no se puede leer confiable del PDF: lo confirma el usuario
+        kilos: p.cantidad, precioKg: p.precio, bruto: p.bruto,
+        alicuotaIva: alic, iva: p.bruto ? Math.round(p.bruto * alic) / 100 : null,
+      });
+    }
+    const brutoTotal = renglones.reduce((a, r) => a + (r.bruto || 0), 0);
+    const ivaBruto = renglones.reduce((a, r) => a + (r.iva || 0), 0);
+    // Importe Neto: el mayor valor de la zona de totales (bruto + iva + gastos).
+    const totZona = texto.slice(secEnd >= 0 ? secEnd : 0);
+    const vals = [...totZona.matchAll(/(\d{1,3}(?:,\d{3})+\.\d{2})/g)].map(x => num(x[1])).filter(Boolean);
+    const neto = vals.length ? Math.max(...vals) : null;
+    // Gastos e impuestos (informativo): neto - bruto - iva (si el neto es mayor).
+    const gastosMasIva = (neto != null) ? Math.max(0, Math.round((neto - brutoTotal - ivaBruto) * 100) / 100) : 0;
+
+    res.json({ ok: true, data: {
+      numero, fecha, cae, caeVto, emisorCuit, emisorNombre, receptorCuit, receptorNombre,
+      renglones, brutoTotal: Math.round(brutoTotal * 100) / 100, ivaBruto: Math.round(ivaBruto * 100) / 100,
+      gastosMasIva, neto,
+    }});
   } catch (e) { next(e); }
 });
 
