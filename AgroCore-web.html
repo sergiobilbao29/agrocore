@@ -2508,8 +2508,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
-      titulo:'📖 v2.21.0 — Historial de campañas por campo y lote',
-      desc:'Nueva pantalla <b>Producción → Historial de campañas</b>: un recorrido por <b>campo y lote</b> con el detalle de <b>cada campaña</b> que se hizo ahí. Por ejemplo, en <b>Montenegro · Lote 3</b> vas viendo, campaña por campaña, qué se sembró (ej. <b>Soja</b> ciclo 2025/26), la <b>variedad</b>, el <b>rinde</b> (estimado y real), la <b>fecha de siembra y de cosecha</b>, el <b>análisis de suelo</b> y <b>todos los insumos aplicados</b> — los <b>fertilizantes</b> quedan resaltados 🌱 — más las <b>labores</b> y las <b>observaciones</b>. Se filtra por campo, lote, cultivo o ciclo. El <b>análisis de suelo</b> es un campo nuevo de texto libre en la campaña (Producción → Campañas → editar): escribís lo que quieras (laboratorio, MO %, P, N, pH, recomendaciones…) y se ve acá. Los insumos/labores y fertilizantes salen de lo que ya cargás en <b>Insumos y labores</b>.' },
+      titulo:'📊 v2.21.0 — Historial de campañas: comparador por lote',
+      desc:'Nueva pantalla <b>Producción → Historial de campañas</b>, ahora como un <b>comparador</b>: elegís un <b>campo y lote</b> y ves sus campañas <b>una al lado de la otra</b>. Arriba, un <b>Resumen de rendimiento histórico</b> con una tarjeta por campaña (rinde, costo y margen, con 🏆 para el de mejor margen). Abajo, una <b>tabla comparativa detallada</b> por columnas (una por campaña) con: <b>información general</b> (cultivo/variedad, siembra, cosecha), <b>estructura de costos por hectárea</b> abierta por rubro (semillas y curasemillas, herbicidas y barbecho, fertilizantes, fungicidas/insecticidas, labores, cosecha), el <b>costo directo total/ha</b>, y los <b>resultados económicos</b> (rinde obtenido, precio promedio, ingreso bruto, <b>rinde de indiferencia</b> y <b>margen bruto/ha</b>). Se puede ver en <b>US$ o en Pesos</b> por hectárea y elegir cuántas campañas comparar (últimas 3/4/5/6 o todas). <b>Exporta a Excel y PDF</b>. Los costos salen de los insumos y labores cargados; el precio y el rinde, de la <b>Planilla de resultado económico</b> de cada campaña (si no la cargaste, el precio se estima con la pizarra del cultivo y el rinde con el estimado). También se agregó el campo <b>Análisis de suelo</b> (texto libre) en la campaña.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'👕 v2.20.0 — Control de ropa entregada a cada empleado',
       desc:'En la <b>planilla de cada empleado</b> (RRHH → Empleados → 📋 Ver planilla) hay una nueva sección <b>“👕 Ropa / indumentaria entregada”</b>. Registrás <b>cuándo</b> se le entregó, <b>qué prenda</b> (con una lista sugerida: remera, camisa, pantalón, campera, botas de seguridad, guantes, etc., o lo que escribas), el <b>talle</b>, la <b>cantidad</b> (ej. 2 remeras) y una <b>observación</b> (reposición, entrega de ingreso…). Queda el <b>historial completo</b> de todo lo que se le fue dando, con total de prendas, y se puede <b>editar</b> ✏️ o <b>eliminar</b> 🗑️ cada registro. Respeta los permisos de RRHH.' },
@@ -9459,165 +9459,274 @@ async function campanaFinalizar(id) {
  * —incluidos fertilizantes—, labores y observaciones).
  * ========================================================= */
 pages.historialCampanas = async function() {
-  setHeader('Historial de campañas', 'Todo lo que se hizo en cada lote, campaña por campaña');
+  setHeader('Historial de campañas', 'Comparador de campañas por lote');
   if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('historialCampanas','Historial de campañas'); return; }
-  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando historial…</div>`;
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando comparador…</div>`;
   let campanas=[], aplics=[], cats=[];
   try {
+    await cargarCotizVivas();
     campanas = (await api('/api/campanas')).data || [];
     aplics   = (await api('/api/aplicaciones').catch(()=>({data:[]}))).data || [];
     cats     = (await api('/api/catalogos').catch(()=>({data:state.cache.catalogos||[]}))).data || [];
   } catch (e) { return toast(e.message,'error'); }
   state.cache.campanas = campanas; state.cache.catalogos = cats;
 
-  // Mapa insumo(nombre) -> tipo (del catálogo) para detectar fertilizantes.
+  const cv = state.cache.cotizVivas || {};
+  const dolar = Number(cv.USD||0);
+
+  // Mapa insumo(nombre) -> tipo (del catálogo) para clasificar por familia.
   const insumosCat = cats.filter(c => tiposInsumoNombres().includes(c.tipo));
   const insTipoMap = {}; insumosCat.forEach(c => { if (c.nombre) insTipoMap[c.nombre.trim().toLowerCase()] = (c.tipo||'').trim(); });
   const tipoDeApp = (a) => insTipoMap[(a.item||'').trim().toLowerCase()] || (a.subtipo||'').trim();
-  const esFertil  = (a) => /fertiliz/i.test(tipoDeApp(a)||'');
-
-  // Aplicaciones agrupadas por campaña
   const aplicsPorCamp = {};
   aplics.forEach(a => { (aplicsPorCamp[a.campanaId] = aplicsPorCamp[a.campanaId] || []).push(a); });
 
-  // Filtros
-  state.histFilter = state.histFilter || { campoId:'', loteId:'', cultivo:'', ciclo:'' };
-  const hf = state.histFilter;
-  const campos  = [...new Map(campanas.map(c=>[c.lote?.campo?.id, c.lote?.campo]).filter(([id])=>id)).values()]
-                    .sort((a,b)=>(a?.nombre||'').localeCompare(b?.nombre||''));
-  const lotesAll = [...new Map(campanas.map(c=>[c.lote?.id, c.lote]).filter(([id])=>id)).values()];
-  const lotesOpt = lotesAll.filter(l => !hf.campoId || l?.campo?.id===hf.campoId)
-                    .sort((a,b)=>(a?.nombre||'').localeCompare(b?.nombre||''));
-  const cultivos = [...new Set(campanas.map(c=>(c.cultivo||'').trim()).filter(Boolean))].sort();
-  const ciclos   = [...new Set(campanas.map(c=>(c.ciclo||'').trim()).filter(Boolean))].sort();
+  // Campos y lotes que tienen campañas
+  const campos = [...new Map(campanas.map(c=>[c.lote?.campo?.id, c.lote?.campo]).filter(([id])=>id)).values()]
+                   .sort((a,b)=>(a?.nombre||'').localeCompare(b?.nombre||''));
+  // Filtro
+  state.compHistF = state.compHistF || { campoId:'', loteId:'', ultimas:4, moneda:'USD' };
+  const cf = state.compHistF;
+  if (cf.campoId && !campos.some(c=>c?.id===cf.campoId)) cf.campoId='';
+  if (!cf.campoId && campos.length) cf.campoId = campos[0].id;
+  const lotesCampo = [...new Map(campanas.filter(c=>c.lote?.campo?.id===cf.campoId).map(c=>[c.lote?.id, c.lote]).filter(([id])=>id)).values()]
+                       .sort((a,b)=>(a?.nombre||'').localeCompare(b?.nombre||''));
+  if (cf.loteId && !lotesCampo.some(l=>l?.id===cf.loteId)) cf.loteId='';
+  if (!cf.loteId && lotesCampo.length) cf.loteId = lotesCampo[0].id;
+  const lote = lotesCampo.find(l=>l?.id===cf.loteId) || null;
+  const campo = campos.find(c=>c?.id===cf.campoId) || null;
 
-  // Aplico filtros
-  let camps = campanas.filter(c => {
-    if (hf.campoId && c.lote?.campo?.id !== hf.campoId) return false;
-    if (hf.loteId  && c.lote?.id !== hf.loteId) return false;
-    if (hf.cultivo && (c.cultivo||'').trim() !== hf.cultivo) return false;
-    if (hf.ciclo   && (c.ciclo||'').trim() !== hf.ciclo) return false;
-    return true;
+  const moneda = cf.moneda==='ARS' ? 'ARS' : 'USD';
+  const rate = (moneda==='ARS' && dolar>0) ? dolar : 1;
+  const sym  = moneda==='ARS' ? '$' : 'u$s';
+  const M = (usdHa)=> usdHa? `${sym} ${moneda==='ARS'?_plN0(usdHa*rate):_plN2(usdHa*rate)}` : '—';
+
+  // Campañas del lote, ordenadas por ciclo/siembra ascendente
+  const ordAsc = (a,b)=> String(a.ciclo||'').localeCompare(String(b.ciclo||'')) ||
+                         (new Date(a.fechaSiembra||a.createdAt||0) - new Date(b.fechaSiembra||b.createdAt||0));
+  let campsLote = campanas.filter(c=>c.lote?.id===cf.loteId).sort(ordAsc);
+  const totalLote = campsLote.length;
+  if (cf.ultimas!=='all') { const n=Number(cf.ultimas)||4; if (campsLote.length>n) campsLote = campsLote.slice(-n); }
+
+  const FAMS = [
+    ['semillas','🌰 Semillas y Curasemillas'],
+    ['herbicidas','🧪 Herbicidas y Barbecho'],
+    ['fertilizantes','🌱 Fertilizantes'],
+    ['fungicidas','🐛 Fungicidas / Insecticidas'],
+    ['labores','🚜 Labores (Siembra/Fumig.)'],
+    ['cosecha','🌾 Cosecha'],
+  ];
+  const famDe = (tipo)=>{ const t=(tipo||'').toLowerCase();
+    if(/semilla|curasemilla/.test(t)) return 'semillas';
+    if(/fertiliz/.test(t)) return 'fertilizantes';
+    if(/fungicida|insecticida/.test(t)) return 'fungicidas';
+    if(/herbicida|barbecho|coadyuvante/.test(t)) return 'herbicidas';
+    return 'otros'; };
+  const _claveG = (typeof _claveGrano==='function') ? _claveGrano : ((x)=>String(x||'').toLowerCase());
+
+  // Calcular métricas por campaña
+  const datos = campsLote.map(c => {
+    const ha = Number(c.lote?.hectareas || c.hectareas || 0);
+    const fam = { semillas:0, herbicidas:0, fertilizantes:0, fungicidas:0, labores:0, cosecha:0, otros:0 };
+    (aplicsPorCamp[c.id]||[]).forEach(a=>{
+      const haApp = Number(a.hectareasAplicadas ?? ha) || 0;
+      const perHa = ha>0 ? (_toUsd(a.costoHa, a.moneda)*haApp)/ha : _toUsd(a.costoHa, a.moneda);
+      let f;
+      if (a.tipo==='labor') f = /cosecha/i.test(a.item||'') ? 'cosecha' : 'labores';
+      else f = famDe(tipoDeApp(a));
+      fam[f] += perHa;
+    });
+    const pl = (c.planilla && typeof c.planilla==='object') ? c.planilla : {};
+    const plMon = pl.moneda==='ARS' ? 'ARS' : 'USD';
+    // Cosecha: si no vino de una labor, tomarla del costo fijo "Cosecha" de la planilla
+    if (!fam.cosecha) (pl.costosFijos||[]).forEach(cfx=>{
+      if (/cosecha/i.test(cfx.concepto||'') && cfx.valor!=='' && cfx.valor!=null){
+        const val=_toUsd(Number(cfx.valor), plMon);
+        fam.cosecha += cfx.modo==='total' ? (ha>0?val/ha:0) : val;
+      }
+    });
+    const costoTotal = FAMS.reduce((s,[k])=>s+fam[k],0) + fam.otros;
+    // Precio neto USD/tn: de la planilla si está, si no de la pizarra actual del cultivo
+    let precioNetoUsdTn;
+    if (pl.precioBruto!=null && pl.precioBruto!==''){
+      precioNetoUsdTn = _toUsd(Number(pl.precioBruto),plMon) - _toUsd(Number(pl.gastosComerc||0),plMon) - _toUsd(Number(pl.flete||0),plMon);
+    } else {
+      const pizArs = Number(cv[_claveG(c.cultivo)]||0);
+      precioNetoUsdTn = dolar>0 ? pizArs/dolar : 0;
+    }
+    const precioQq = precioNetoUsdTn/10;               // USD por quintal
+    const enCurso = !['cosechada','finalizada','cerrada'].includes(c.estado||'');
+    const rindeKg = enCurso ? (c.rindeEstimado ?? c.rindeReal) : (c.rindeReal ?? c.rindeEstimado);
+    const rindeQq = rindeKg ? Number(rindeKg)/100 : 0;  // qq/ha
+    const ingreso = rindeQq * precioQq;                 // USD/ha
+    const margen  = ingreso - costoTotal;               // USD/ha
+    const rindeIndif = precioQq>0 ? costoTotal/precioQq : 0;
+    return { c, ha, fam, costoTotal, precioQq, rindeQq, ingreso, margen, rindeIndif, enCurso, precioEstimado: !(pl.precioBruto!=null&&pl.precioBruto!=='') };
   });
+  const hayOtros = datos.some(d=>d.fam.otros>0.005);
+  const bestMargen = datos.length ? Math.max(...datos.map(d=>d.margen)) : null;
+  state._compHist = { datos, moneda, sym, rate, FAMS, hayOtros, campo, lote };
 
-  // Agrupo por campo -> lote
-  const porCampo = {};
-  camps.forEach(c => {
-    const campo = c.lote?.campo; const campoId = campo?.id || '_';
-    const lote = c.lote; const loteId = lote?.id || '_';
-    porCampo[campoId] = porCampo[campoId] || { campo, lotes:{} };
-    porCampo[campoId].lotes[loteId] = porCampo[campoId].lotes[loteId] || { lote, camps:[] };
-    porCampo[campoId].lotes[loteId].camps.push(c);
-  });
-  // Orden: por ciclo desc (los más nuevos arriba), luego fecha de siembra
-  const ordCamp = (a,b) => String(b.ciclo||'').localeCompare(String(a.ciclo||'')) ||
-                           (new Date(b.fechaSiembra||b.createdAt||0) - new Date(a.fechaSiembra||a.createdAt||0));
-
-  const ESTADO_BADGE = {
-    planificada:'badge-gray', sembrada:'badge-blue', cosechando:'badge-yellow',
-    cosechada:'badge-green', finalizada:'badge-green', en_curso:'badge-blue', cerrada:'badge-gray'
+  const nc = datos.length;
+  const colW = 'min-w-[150px]';
+  const badgeEstado = (c)=>{
+    const cl = (c.estado==='cosechada'||c.estado==='finalizada') ? 'badge-gray'
+      : (c.estado==='cosechando') ? 'badge-yellow' : c.estado==='sembrada' ? 'badge-green' : 'badge-blue';
+    return `<span class="badge ${cl} text-[10px]">${esc(c.estado||'planificada')}</span>`;
   };
+  const cropIcon = (cultivo)=>{ const k=(cultivo||'').toLowerCase();
+    if(/soja/.test(k))return'🌱'; if(/maíz|maiz/.test(k))return'🌽'; if(/trigo/.test(k))return'🌾';
+    if(/sorgo/.test(k))return'🌿'; if(/girasol/.test(k))return'🌻'; if(/cebada/.test(k))return'🍺'; return'🌾'; };
 
-  const cardCampana = (c) => {
-    const aps = (aplicsPorCamp[c.id]||[]).slice().sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
-    const insumos = aps.filter(a=>a.tipo==='insumo');
-    const labores = aps.filter(a=>a.tipo==='labor');
-    const fertils = insumos.filter(esFertil);
-    const insumosHtml = insumos.length ? `
-      <div class="overflow-x-auto mt-1">
-        <table class="min-w-full text-xs">
-          <thead class="text-slate-500"><tr>
-            <th class="text-left py-1 pr-3">Insumo</th><th class="text-left py-1 pr-3">Tipo</th>
-            <th class="text-right py-1 pr-3">Dosis/ha</th><th class="text-right py-1 pr-3">Ha</th>
-            <th class="text-left py-1 pr-3">Fecha</th></tr></thead>
-          <tbody>${insumos.map(a=>{
-            const fert=esFertil(a);
-            return `<tr class="${fert?'bg-emerald-50/70':''}">
-              <td class="py-1 pr-3 font-medium text-slate-700">${fert?'🌱 ':''}${esc(a.item||'')}</td>
-              <td class="py-1 pr-3 text-slate-500">${esc(tipoDeApp(a)||'—')}</td>
-              <td class="py-1 pr-3 text-right">${a.unidadHa!=null?esc(String(a.unidadHa)):'—'}${a.subtipo?' '+esc(a.subtipo):''}</td>
-              <td class="py-1 pr-3 text-right">${a.hectareasAplicadas!=null?esc(String(a.hectareasAplicadas)):'—'}</td>
-              <td class="py-1 pr-3 text-slate-500">${a.fecha?fmtDate(a.fecha):'—'}</td>
-            </tr>`;}).join('')}</tbody>
-        </table>
-      </div>` : `<div class="text-xs text-slate-400">Sin insumos cargados.</div>`;
-    const laboresHtml = labores.length
-      ? `<div class="text-xs text-slate-600 mt-1">${labores.map(a=>`<span class="badge badge-gray mr-1 mb-1 inline-block">${esc(a.item||'')}${a.fecha?` · ${fmtDate(a.fecha)}`:''}</span>`).join('')}</div>`
-      : `<div class="text-xs text-slate-400">Sin labores cargadas.</div>`;
-    const dato = (lbl,val) => val ? `<div><span class="text-[11px] text-slate-400 block">${lbl}</span><span class="text-sm text-slate-700 font-medium">${val}</span></div>` : '';
-    return `<div class="border border-slate-200 rounded-lg p-4 mb-3 bg-white">
-      <div class="flex items-start justify-between flex-wrap gap-2 mb-2">
-        <div>
-          <div class="font-bold text-slate-800">${esc(c.nombre || (c.cultivo+' '+(c.ciclo||'')))}</div>
-          <div class="text-xs text-slate-500">${esc(c.cultivo||'')}${c.variedad?` · ${esc(c.variedad)}`:''}${c.ciclo?` · Ciclo ${esc(c.ciclo)}`:''}</div>
-        </div>
-        <span class="badge ${ESTADO_BADGE[c.estado]||'badge-gray'}">${esc(c.estado||'—')}</span>
+  // ---- Tarjetas resumen ----
+  const resumenCards = datos.map((d,i)=>{
+    const c=d.c; const best = bestMargen!=null && Math.abs(d.margen-bestMargen)<1e-6 && d.margen>0;
+    return `<div class="rounded-xl p-4 border ${best?'border-emerald-400 bg-emerald-50/60 shadow':'border-slate-200 bg-white'} shadow-sm">
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-bold text-slate-800 text-sm">${cropIcon(c.cultivo)} ${esc(c.ciclo||c.cultivo||'—')}</div>
+        ${best?'<span title="Mejor margen">🏆</span>':''}
       </div>
-      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 mb-3">
-        ${dato('Hectáreas', c.hectareas?esc(String(c.hectareas))+' ha':'')}
-        ${dato('Siembra', c.fechaSiembra?fmtDate(c.fechaSiembra):'')}
-        ${dato('Cosecha', c.fechaCosecha?fmtDate(c.fechaCosecha):'')}
-        ${dato('Rinde estimado', c.rindeEstimado?esc(String(c.rindeEstimado))+' kg/ha':'')}
-        ${dato('Rinde real', c.rindeReal?esc(String(c.rindeReal))+' kg/ha':'')}
-        ${dato('Fertilizantes', fertils.length?fertils.length+' aplicación'+(fertils.length===1?'':'es'):'')}
+      <div class="text-xs text-slate-500 mb-2 truncate">${esc(c.cultivo||'')}${c.variedad?' · '+esc(c.variedad):''}${d.enCurso?' · <span class="text-blue-600">en curso</span>':''}</div>
+      <div class="space-y-1 text-sm">
+        <div class="flex justify-between"><span class="text-slate-500">Rinde</span><span class="font-semibold">${d.rindeQq?_plN0(d.rindeQq)+' qq/ha':'—'}${d.enCurso&&d.rindeQq?' <span class="text-[10px] text-slate-400">est.</span>':''}</span></div>
+        <div class="flex justify-between"><span class="text-slate-500">Costo</span><span class="font-semibold">${M(d.costoTotal)}<span class="text-[10px] text-slate-400">/ha</span></span></div>
+        <div class="flex justify-between items-center border-t pt-1 mt-1"><span class="text-slate-600 font-medium">Margen</span>
+          <span class="font-bold ${d.margen>=0?'text-emerald-600':'text-red-600'}">${d.margen>=0?'+':''}${M(Math.abs(d.margen)).replace('—','0')}${best?' 🟢':''}</span></div>
       </div>
-      ${c.analisisSuelo?`<div class="mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
-        <div class="text-[11px] font-semibold text-amber-800 mb-0.5">🧪 Análisis de suelo</div>
-        <div class="text-sm text-slate-700 whitespace-pre-wrap">${esc(c.analisisSuelo)}</div></div>`:''}
-      <div class="grid md:grid-cols-2 gap-4">
-        <div><div class="text-xs font-semibold text-slate-600 mb-1">Insumos aplicados</div>${insumosHtml}</div>
-        <div><div class="text-xs font-semibold text-slate-600 mb-1">Labores</div>${laboresHtml}</div>
-      </div>
-      ${c.observaciones?`<div class="mt-3 text-xs text-slate-500"><span class="font-semibold text-slate-600">Observaciones:</span> ${esc(c.observaciones)}</div>`:''}
-      ${can('produccion:update')?`<div class="mt-3 text-right"><button class="btn btn-ghost text-xs" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️ Editar campaña</button></div>`:''}
     </div>`;
-  };
+  }).join('');
 
-  const camposOrden = Object.values(porCampo).sort((a,b)=>(a.campo?.nombre||'').localeCompare(b.campo?.nombre||''));
-  let cuerpo = '';
-  if (!camps.length) {
-    cuerpo = `<div class="text-center text-slate-400 py-12">No hay campañas con esos filtros. Cargá campañas en <b>Producción → Campañas</b>.</div>`;
-  } else {
-    cuerpo = camposOrden.map(g => {
-      const lotesOrden = Object.values(g.lotes).sort((a,b)=>(a.lote?.nombre||'').localeCompare(b.lote?.nombre||''));
-      return `<div class="mb-6">
-        <h2 class="text-base font-bold text-slate-800 flex items-center gap-2 mb-2">🗺️ ${esc(g.campo?.nombre||'(sin campo)')}
-          <span class="text-xs font-normal text-slate-400">${g.campo?.hectareas?esc(String(g.campo.hectareas))+' ha':''}</span></h2>
-        ${lotesOrden.map(lg => `
-          <div class="mb-4 pl-1 border-l-2 border-emerald-200">
-            <h3 class="text-sm font-semibold text-emerald-800 mb-2 pl-3">📍 Lote ${esc(lg.lote?.nombre||'(sin lote)')}
-              <span class="text-xs font-normal text-slate-400">${lg.lote?.hectareas?esc(String(lg.lote.hectareas))+' ha':''} · ${lg.camps.length} campaña${lg.camps.length===1?'':'s'}</span></h3>
-            <div class="pl-3">${lg.camps.slice().sort(ordCamp).map(cardCampana).join('')}</div>
-          </div>`).join('')}
-      </div>`;
-    }).join('');
-  }
+  // ---- Tabla comparativa ----
+  const th = `<th class="text-left px-3 py-2 sticky left-0 bg-slate-800 text-white z-10 min-w-[210px]">CONCEPTO / VARIABLE</th>` +
+    datos.map(d=>`<th class="px-3 py-2 text-center ${colW} ${d.enCurso?'bg-blue-900':'bg-slate-700'} text-white">
+      <div class="font-bold">${esc(d.c.ciclo||'—')}</div>
+      <div class="text-[10px] font-normal opacity-80 mt-0.5">${d.enCurso?'En curso':''}</div></th>`).join('');
+  const grpRow = (txt)=>`<tr><td colspan="${nc+1}" class="px-3 py-1.5 bg-emerald-50 text-emerald-800 font-bold text-xs uppercase tracking-wide sticky left-0">${txt}</td></tr>`;
+  const genRow = (lbl, fn, cls)=>`<tr class="border-t border-slate-100 hover:bg-slate-50">
+    <td class="px-3 py-1.5 text-slate-600 sticky left-0 bg-white z-10 ${cls||''}">${lbl}</td>
+    ${datos.map(d=>`<td class="px-3 py-1.5 text-center ${cls||''}">${fn(d)}</td>`).join('')}</tr>`;
+  const famRow = ([k,lbl])=>`<tr class="border-t border-slate-50 hover:bg-slate-50">
+    <td class="px-3 py-1.5 text-slate-600 sticky left-0 bg-white z-10">${lbl}</td>
+    ${datos.map(d=>`<td class="px-3 py-1.5 text-right tabular-nums ${d.fam[k]?'text-slate-700':'text-slate-300'}">${d.fam[k]?M(d.fam[k]):'—'}</td>`).join('')}</tr>`;
+  const fD=(x)=>x?fmtDate(x):'—';
 
-  const selFiltro = (id,val,opts,ph) => `<select id="${id}" class="input" onchange="histSetFiltro('${id}',this.value)">
-    <option value="">${ph}</option>
-    ${opts.map(o=>`<option value="${esc(o.v)}" ${o.v===val?'selected':''}>${esc(o.l)}</option>`).join('')}</select>`;
+  const tabla = `
+    <div class="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+      <table class="text-sm border-collapse w-full bg-white">
+        <thead class="text-xs"><tr>${th}</tr></thead>
+        <tbody>
+          ${grpRow('📋 Información general')}
+          ${genRow('Cultivo / Variedad', d=>`<span class="font-medium text-slate-700">${esc(d.c.cultivo||'—')}</span>${d.c.variedad?`<div class="text-[11px] text-slate-400">${esc(d.c.variedad)}</div>`:''}`)}
+          ${genRow('Fecha de siembra', d=>fD(d.c.fechaSiembra))}
+          ${genRow('Fecha de cosecha', d=>fD(d.c.fechaCosecha))}
+          ${grpRow('💰 Estructura de costos ('+sym+'/ha)')}
+          ${FAMS.map(famRow).join('')}
+          ${hayOtros?famRow(['otros','• Otros insumos']):''}
+          <tr class="border-t-2 border-slate-300 bg-slate-50 font-bold">
+            <td class="px-3 py-2 sticky left-0 bg-slate-50 z-10">💵 COSTO DIRECTO TOTAL / HA</td>
+            ${datos.map(d=>`<td class="px-3 py-2 text-right tabular-nums text-slate-800">${M(d.costoTotal)}</td>`).join('')}
+          </tr>
+          ${grpRow('📊 Resultados económicos')}
+          ${genRow('Rinde obtenido (qq/ha)', d=>`<span class="font-medium">${d.rindeQq?_plN2(d.rindeQq):'—'}</span>${d.enCurso&&d.rindeQq?' <span class="text-[10px] text-slate-400">est.</span>':''}`)}
+          ${genRow('Precio promedio ('+sym+'/qq)', d=>`${d.precioQq?(sym+' '+_plN2(d.precioQq*rate)):'—'}${d.precioEstimado&&d.precioQq?' <span class="text-[10px] text-slate-400">pizarra</span>':''}`)}
+          ${genRow('Ingreso bruto ('+sym+'/ha)', d=>M(d.ingreso))}
+          ${genRow('Rinde de indiferencia (qq/ha)', d=>`<span class="text-amber-700 font-semibold">${d.rindeIndif?_plN2(d.rindeIndif):'—'}</span>`)}
+          <tr class="border-t-2 border-slate-300 bg-emerald-50/60 font-bold">
+            <td class="px-3 py-2 sticky left-0 bg-emerald-50 z-10">📈 MARGEN BRUTO / HA</td>
+            ${datos.map(d=>`<td class="px-3 py-2 text-right tabular-nums ${d.margen>=0?'text-emerald-700':'text-red-600'}">${d.margen>=0?'+':''}${M(Math.abs(d.margen)).replace('—','0')}</td>`).join('')}
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+
+  const selCampo = `<select class="input" onchange="compHistSet('campoId',this.value)">
+    ${campos.map(c=>`<option value="${c.id}" ${c.id===cf.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select>`;
+  const selLote = `<select class="input" onchange="compHistSet('loteId',this.value)">
+    ${lotesCampo.map(l=>`<option value="${l.id}" ${l.id===cf.loteId?'selected':''}>${esc(l.nombre)}${l.hectareas?` (${_plN0(l.hectareas)} ha)`:''}</option>`).join('')}
+    ${lotesCampo.length?'':'<option value="">— sin lotes —</option>'}</select>`;
+  const selUlt = `<select class="input" onchange="compHistSet('ultimas',this.value)">
+    ${[['3','Últimas 3'],['4','Últimas 4'],['5','Últimas 5'],['6','Últimas 6'],['all','Todas']].map(([v,l])=>`<option value="${v}" ${String(cf.ultimas)===v?'selected':''}>${l}</option>`).join('')}</select>`;
+  const selMon = `<select class="input" onchange="compHistSet('moneda',this.value)">
+    <option value="USD" ${moneda==='USD'?'selected':''}>USD / ha</option>
+    <option value="ARS" ${moneda==='ARS'?'selected':''}>Pesos / ha</option></select>`;
 
   $('#page-body').innerHTML = `
-    <div class="flex flex-wrap items-end gap-3 mb-4">
-      <div><label class="label">Campo</label>${selFiltro('h-campo',hf.campoId,campos.map(c=>({v:c.id,l:c.nombre})),'Todos los campos')}</div>
-      <div><label class="label">Lote</label>${selFiltro('h-lote',hf.loteId,lotesOpt.map(l=>({v:l.id,l:(l.campo?.nombre?l.campo.nombre+' · ':'')+l.nombre})),'Todos los lotes')}</div>
-      <div><label class="label">Cultivo</label>${selFiltro('h-cul',hf.cultivo,cultivos.map(c=>({v:c,l:c})),'Todos')}</div>
-      <div><label class="label">Ciclo/Campaña</label>${selFiltro('h-cic',hf.ciclo,ciclos.map(c=>({v:c,l:c})),'Todos')}</div>
-      ${(hf.campoId||hf.loteId||hf.cultivo||hf.ciclo)?`<button class="btn btn-ghost text-sm" onclick="histLimpiar()">✕ Limpiar</button>`:''}
-      <div class="flex-1"></div>
-      <div class="text-sm text-slate-500">${camps.length} campaña${camps.length===1?'':'s'} · ${camposOrden.length} campo${camposOrden.length===1?'':'s'}</div>
+    <div class="kpi mb-4">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div><label class="label text-xs">🗺️ Campo</label>${selCampo}</div>
+        <div><label class="label text-xs">📍 Lote</label>${selLote}</div>
+        <div><label class="label text-xs">📅 Campañas</label>${selUlt}</div>
+        <div><label class="label text-xs">💲 Moneda</label>${selMon}</div>
+      </div>
     </div>
-    ${cuerpo}`;
+    ${!datos.length ? `<div class="stub-card">Este lote todavía no tiene campañas cargadas. Cargalas en <b>Producción → Campañas</b>.</div>` : `
+    <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+      <h3 class="font-bold text-slate-800">📊 Resumen de rendimiento histórico
+        <span class="text-xs font-normal text-slate-400">· ${esc(campo?.nombre||'')} · Lote ${esc(lote?.nombre||'')}${lote?.hectareas?` · ${_plN0(lote.hectareas)} ha`:''} · ${nc} de ${totalLote} campaña${totalLote===1?'':'s'}</span></h3>
+      <div class="flex gap-2">
+        <button class="btn btn-secondary text-xs" onclick="compHistExcel()">📊 Excel</button>
+        <button class="btn btn-secondary text-xs" onclick="compHistPDF()">📄 PDF</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-5">${resumenCards}</div>
+    <h3 class="font-bold text-slate-800 mb-2">📋 Tabla comparativa detallada por campaña</h3>
+    ${tabla}
+    <p class="text-[11px] text-slate-400 mt-3">Los costos salen de los insumos y labores cargados en <b>Insumos y labores</b>. El precio y el rinde de cada campaña se toman de su <b>Planilla de resultado económico</b>; si una campaña no la tiene cargada, el precio se estima con la <b>pizarra actual</b> del cultivo (marcado “pizarra”) y el rinde con el estimado. Para las campañas en curso se usa el rinde estimado.</p>
+    `}`;
 };
-function histSetFiltro(id,val){
-  const map={ 'h-campo':'campoId','h-lote':'loteId','h-cul':'cultivo','h-cic':'ciclo' };
-  const k=map[id]; if(!k) return;
-  state.histFilter = state.histFilter || {};
-  state.histFilter[k]=val;
-  if (id==='h-campo') state.histFilter.loteId=''; // resetear lote al cambiar campo
+function compHistSet(key,val){
+  state.compHistF = state.compHistF || {};
+  state.compHistF[key] = val;
+  if (key==='campoId') state.compHistF.loteId = '';
   pages.historialCampanas();
 }
-function histLimpiar(){ state.histFilter={campoId:'',loteId:'',cultivo:'',ciclo:''}; pages.historialCampanas(); }
+function _compHistMatrix(){
+  const h=state._compHist; if(!h||!h.datos.length) return null;
+  const {datos,sym,rate,FAMS,hayOtros,campo,lote}=h;
+  const head=['Concepto', ...datos.map(d=>d.c.ciclo||d.c.cultivo||'—')];
+  const rows=[];
+  const R2=(x)=>Math.round(Number(x||0)*100)/100;
+  rows.push(['Cultivo', ...datos.map(d=>d.c.cultivo||'')]);
+  rows.push(['Variedad', ...datos.map(d=>d.c.variedad||'')]);
+  rows.push(['Fecha siembra', ...datos.map(d=>d.c.fechaSiembra?fmtDate(d.c.fechaSiembra):'')]);
+  rows.push(['Fecha cosecha', ...datos.map(d=>d.c.fechaCosecha?fmtDate(d.c.fechaCosecha):'')]);
+  FAMS.forEach(([k,lbl])=>rows.push([lbl.replace(/^[^ ]+ /,'')+' ('+sym+'/ha)', ...datos.map(d=>R2(d.fam[k]*rate))]));
+  if(hayOtros) rows.push(['Otros insumos ('+sym+'/ha)', ...datos.map(d=>R2(d.fam.otros*rate))]);
+  rows.push(['COSTO DIRECTO TOTAL ('+sym+'/ha)', ...datos.map(d=>R2(d.costoTotal*rate))]);
+  rows.push(['Rinde obtenido (qq/ha)', ...datos.map(d=>R2(d.rindeQq))]);
+  rows.push(['Precio promedio ('+sym+'/qq)', ...datos.map(d=>R2(d.precioQq*rate))]);
+  rows.push(['Ingreso bruto ('+sym+'/ha)', ...datos.map(d=>R2(d.ingreso*rate))]);
+  rows.push(['Rinde indiferencia (qq/ha)', ...datos.map(d=>R2(d.rindeIndif))]);
+  rows.push(['MARGEN BRUTO ('+sym+'/ha)', ...datos.map(d=>R2(d.margen*rate))]);
+  return {head,rows,campo,lote,sym};
+}
+function compHistExcel(){
+  const m=_compHistMatrix(); if(!m) return toast('Sin datos para exportar','warn');
+  const aoa=[['Comparador de campañas — '+(m.campo?.nombre||'')+' · Lote '+(m.lote?.nombre||'')], [], m.head, ...m.rows];
+  const fn=('Comparador_'+(m.campo?.nombre||'')+'_'+(m.lote?.nombre||'')).replace(/[^\w]+/g,'_')+'.xlsx';
+  if (typeof XLSX==='undefined'){ const csv=aoa.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=fn.replace('.xlsx','.csv'); a.click(); return; }
+  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:30}, ...m.head.slice(1).map(()=>({wch:16}))];
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Comparador'); XLSX.writeFile(wb, fn);
+  toast('Excel descargado','success');
+}
+function compHistPDF(){
+  const m=_compHistMatrix(); if(!m) return toast('Sin datos para exportar','warn');
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF; if(!jsPDFCtor) return toast('No se pudo generar el PDF','error');
+  const doc=new jsPDFCtor({orientation:'landscape',unit:'pt',format:'a4'});
+  doc.setFontSize(14); doc.text('Comparador de campañas', 40, 40);
+  doc.setFontSize(9); doc.setTextColor(90);
+  doc.text(`${m.campo?.nombre||''} · Lote ${m.lote?.nombre||''} · Moneda: ${m.sym} · ${fmtDate(new Date())}`, 40, 56);
+  doc.setTextColor(0);
+  const fmtCell=(v)=> typeof v==='number' ? v.toLocaleString('es-AR',{maximumFractionDigits:2}) : String(v??'');
+  const body=m.rows.map(r=>r.map((v,i)=>i===0?String(v):fmtCell(v)));
+  doc.autoTable({ startY:70, head:[m.head], body,
+    styles:{fontSize:8, cellPadding:3}, headStyles:{fillColor:[30,41,59],textColor:[255,255,255]},
+    columnStyles:{0:{cellWidth:150, fontStyle:'bold'}},
+    didParseCell:(data)=>{ if(data.section==='body'){ if(data.column.index>0) data.cell.styles.halign='right';
+      const label=body[data.row.index][0]||''; if(/TOTAL|MARGEN/.test(label)){ data.cell.styles.fontStyle='bold'; data.cell.styles.fillColor=[236,253,245]; } } } });
+  doc.save(('Comparador_'+(m.campo?.nombre||'')+'_'+(m.lote?.nombre||'')).replace(/[^\w]+/g,'_')+'.pdf');
+  toast('PDF descargado','success');
+}
 
 /* =========================================================
  * FACTURACIÓN (ventas) — estilo ARCA
