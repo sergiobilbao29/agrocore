@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.19.0';
+const AGROCORE_VERSION = '2.20.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3144,6 +3144,7 @@ mountCrud({
     fechaCosecha: z.coerce.date().nullable().optional(),
     estado: z.string().optional(),
     observaciones: z.string().nullable().optional(),
+    analisisSuelo: z.string().nullable().optional(),
     planilla: z.any().nullable().optional(),   // planilla resultado económico (JSON)
   }),
   include: { lote: { include: { campo: true } } },
@@ -5281,6 +5282,83 @@ app.delete('/api/empleados/:id/movimientos/:movId', requireCompany, requirePermi
     });
     if (!existing) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado' });
     await prisma.movimientoEmpleado.delete({ where: { id: req.params.movId } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------- ENTREGA DE ROPA / INDUMENTARIA DE TRABAJO ----------
+// Historial simple por empleado: cuándo se le entregó, qué prenda, talle,
+// cuánta cantidad y una observación. No mueve stock, es un registro/control.
+const entregaRopaSchema = z.object({
+  fecha: z.coerce.date(),
+  prenda: z.string().min(1),
+  talle: z.string().nullable().optional(),
+  cantidad: z.coerce.number().int().min(1).optional(),
+  observaciones: z.string().nullable().optional(),
+});
+
+// Listar las entregas de ropa de un empleado (todas, más nuevas primero).
+app.get('/api/empleados/:id/ropa', requireCompany, requirePermission('rrhh:read'), async (req, res, next) => {
+  try {
+    const emp = await getEmpleadoScoped(req);
+    if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
+    const data = await prisma.entregaRopa.findMany({
+      where: { empleadoId: emp.id, companyId: req.companyId },
+      orderBy: { fecha: 'desc' },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Registrar una entrega de ropa.
+app.post('/api/empleados/:id/ropa', requireCompany, requirePermission('rrhh:create'), async (req, res, next) => {
+  try {
+    const emp = await getEmpleadoScoped(req);
+    if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
+    const d = entregaRopaSchema.parse(req.body);
+    const row = await prisma.entregaRopa.create({
+      data: {
+        companyId: req.companyId,
+        empleadoId: emp.id,
+        fecha: d.fecha,
+        prenda: d.prenda,
+        talle: d.talle || null,
+        cantidad: d.cantidad ?? 1,
+        observaciones: d.observaciones || null,
+      },
+    });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Editar una entrega de ropa.
+app.put('/api/empleados/:id/ropa/:ropaId', requireCompany, requirePermission('rrhh:update'), async (req, res, next) => {
+  try {
+    const emp = await getEmpleadoScoped(req);
+    if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
+    const existing = await prisma.entregaRopa.findFirst({
+      where: { id: req.params.ropaId, empleadoId: emp.id, companyId: req.companyId },
+    });
+    if (!existing) return res.status(404).json({ ok: false, error: 'Entrega no encontrada' });
+    const d = entregaRopaSchema.partial().parse(req.body);
+    const data = { ...d };
+    if (d.talle !== undefined) data.talle = d.talle || null;
+    if (d.observaciones !== undefined) data.observaciones = d.observaciones || null;
+    const row = await prisma.entregaRopa.update({ where: { id: req.params.ropaId }, data });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Borrar una entrega de ropa.
+app.delete('/api/empleados/:id/ropa/:ropaId', requireCompany, requirePermission('rrhh:delete'), async (req, res, next) => {
+  try {
+    const emp = await getEmpleadoScoped(req);
+    if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
+    const existing = await prisma.entregaRopa.findFirst({
+      where: { id: req.params.ropaId, empleadoId: emp.id, companyId: req.companyId },
+    });
+    if (!existing) return res.status(404).json({ ok: false, error: 'Entrega no encontrada' });
+    await prisma.entregaRopa.delete({ where: { id: req.params.ropaId } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

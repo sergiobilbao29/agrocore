@@ -2506,6 +2506,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
+      titulo:'👕 v2.20.0 — Control de ropa entregada a cada empleado',
+      desc:'En la <b>planilla de cada empleado</b> (RRHH → Empleados → 📋 Ver planilla) hay una nueva sección <b>“👕 Ropa / indumentaria entregada”</b>. Registrás <b>cuándo</b> se le entregó, <b>qué prenda</b> (con una lista sugerida: remera, camisa, pantalón, campera, botas de seguridad, guantes, etc., o lo que escribas), el <b>talle</b>, la <b>cantidad</b> (ej. 2 remeras) y una <b>observación</b> (reposición, entrega de ingreso…). Queda el <b>historial completo</b> de todo lo que se le fue dando, con total de prendas, y se puede <b>editar</b> ✏️ o <b>eliminar</b> 🗑️ cada registro. Respeta los permisos de RRHH.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
       titulo:'🔒 v2.19.0 — No se borra nada que tenga movimientos o pagos',
       desc:'Antes se podía eliminar, por ejemplo, un <b>proveedor con comprobantes cargados</b> y se borraban también sus comprobantes (en cascada). Ahora el sistema <b>bloquea la eliminación</b> cuando el registro tiene datos asociados, con un aviso que dice qué lo está frenando: <b>Proveedores y Clientes</b> con facturas o movimientos de cuenta corriente; <b>Insumos/Productos</b> con movimientos de stock; <b>Cheques</b> ya usados (fuera de cartera) o con movimiento bancario; <b>Facturas de compra y de venta</b> con un pago/cobro aplicado; <b>Viajes</b> facturados o pagados; <b>Créditos</b> con cuotas pagadas; <b>Arrendamientos</b> con cuotas pagadas; y las <b>Categorías de hacienda</b> en uso. Para eliminarlos, primero hay que deshacer el pago o quitar/reasignar esos registros. Así no se pierden datos por accidente.' },
@@ -9389,6 +9392,7 @@ function campanaForm(id=null) {
         <div><label class="label">Estado</label>
           <select id="f-est" class="input">${estados.map(e=>`<option ${e===(it.estado||'planificada')?'selected':''}>${e}</option>`).join('')}</select>
         </div>
+        <div class="col-span-2"><label class="label">🧪 Análisis de suelo</label><textarea id="f-suelo" class="input" rows="3" placeholder="Escribí lo que quieras: fecha del análisis, laboratorio, MO %, P, N, pH, recomendaciones… Se ve en el Historial de campañas.">${esc(it.analisisSuelo||'')}</textarea></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -9422,6 +9426,7 @@ async function campanaSave(id) {
     rindeReal: $('#f-rr').value ? Number($('#f-rr').value) : null,
     estado: $('#f-est').value,
     observaciones: $('#f-obs').value.trim()||null,
+    analisisSuelo: $('#f-suelo').value.trim()||null,
   };
   if (!data.loteId || !data.cultivo) return toast('Lote y cultivo son requeridos','warn');
   try { await api('/api/campanas'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
@@ -17889,7 +17894,7 @@ async function empleAbrir(id, push=true) {
   }
   setHeader('Planilla de empleado', 'Gastos, ganancias y liquidación de sueldo');
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando planilla…</div>`;
-  let emp, movs=[], liqs=[];
+  let emp, movs=[], liqs=[], ropa=[];
   try {
     if (!state.cache.empleados) await crudList('empleados');
     emp = (state.cache.empleados||[]).find(x=>x.id===id);
@@ -17897,9 +17902,10 @@ async function empleAbrir(id, push=true) {
     if (!emp) { toast('Empleado no encontrado','error'); return pages.empleados(); }
     movs = (await api('/api/empleados/'+id+'/movimientos')).data || [];
     liqs = (await api('/api/empleados/'+id+'/liquidaciones')).data || [];
+    ropa = (await api('/api/empleados/'+id+'/ropa').catch(()=>({data:[]}))).data || [];
     state.cache.catPlanilla = (await api('/api/categorias-planilla').catch(()=>({data:state.cache.catPlanilla||[]}))).data || [];
   } catch (e) { return toast(e.message,'error'); }
-  state.empFicha = { emp, movs, liqs };
+  state.empFicha = { emp, movs, liqs, ropa };
   // Al abrir la ficha (navegación real) arrancamos en el mes más reciente con
   // datos; en los re-render internos respetamos el mes que el usuario eligió.
   if (push) {
@@ -17913,7 +17919,7 @@ function empSetMes(p){ state.empMes = p || empPeriodoHoy(); empFichaRender(); }
 
 function empFichaRender() {
   if (!state.empFicha) return;
-  const { emp, movs, liqs } = state.empFicha;
+  const { emp, movs, liqs, ropa } = state.empFicha;
   const empId = emp.id;
 
   if (!state.empMes) state.empMes = empPeriodoHoy();
@@ -18063,6 +18069,42 @@ function empFichaRender() {
       </div>
     </div>`;
 
+  // --- Ropa / indumentaria entregada (historial completo, no por mes) ---
+  const ropaList = (ropa||[]).slice().sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+  const totalPrendas = ropaList.reduce((a,r)=>a+Number(r.cantidad||1),0);
+  const ropaFilas = ropaList.length ? ropaList.map(r=>`<tr class="hover:bg-slate-50">
+      <td class="px-3 py-2 whitespace-nowrap text-slate-600">${r.fecha?fmtDate(r.fecha):'—'}</td>
+      <td class="px-3 py-2 font-semibold text-slate-800">${esc(r.prenda||'')}</td>
+      <td class="px-3 py-2 text-slate-600">${r.talle?esc(r.talle):'—'}</td>
+      <td class="px-3 py-2 text-right font-semibold text-slate-800">${Number(r.cantidad||1)}</td>
+      <td class="px-3 py-2 text-slate-500 text-xs">${r.observaciones?esc(r.observaciones):''}</td>
+      <td class="px-3 py-2 text-right whitespace-nowrap">
+        ${canU?`<button class="btn btn-ghost text-xs" onclick='empRopaForm(${JSON.stringify(r.id)})'>✏️</button>`:''}
+        ${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='empRopaDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+      </td>
+    </tr>`).join('')
+    : `<tr><td colspan="6" class="text-center text-slate-400 py-6">Todavía no se registró ropa entregada. Usá “+ Registrar entrega”.</td></tr>`;
+  const ropaHtml = `
+    <div class="mt-6">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h3 class="font-semibold text-slate-800">👕 Ropa / indumentaria entregada${totalPrendas?` <span class="text-xs font-normal text-slate-400">(${totalPrendas} prenda${totalPrendas===1?'':'s'} en total)</span>`:''}</h3>
+        ${canC?`<button class="btn btn-secondary text-xs" onclick="empRopaForm()">+ Registrar entrega</button>`:''}
+      </div>
+      <div class="overflow-x-auto border border-slate-200 rounded-lg">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600"><tr>
+            <th class="text-left px-3 py-2">Fecha</th>
+            <th class="text-left px-3 py-2">Prenda</th>
+            <th class="text-left px-3 py-2">Talle</th>
+            <th class="text-right px-3 py-2">Cantidad</th>
+            <th class="text-left px-3 py-2">Observaciones</th>
+            <th class="px-3 py-2"></th>
+          </tr></thead>
+          <tbody class="divide-y divide-slate-200">${ropaFilas}</tbody>
+        </table>
+      </div>
+    </div>`;
+
   $('#page-body').innerHTML = `
     <button class="btn btn-ghost text-sm mb-3" onclick="empleVolver()">← Volver a la nómina</button>
 
@@ -18120,7 +18162,8 @@ function empFichaRender() {
     ${cajaLiq}
     ${liq?`<p class="text-xs text-slate-400 mt-2">La liquidación es una foto del momento en que se hizo. Si cargás más movimientos en este mes, anulá y volvé a liquidar para reflejarlos.</p>`:''}
     ${resumenAnioHtml}
-    ${histHtml}`;
+    ${histHtml}
+    ${ropaHtml}`;
 }
 
 // Opciones de categoría según el tipo de movimiento (desde las categorías
@@ -18284,6 +18327,56 @@ async function empMovDel(movId){
   const empId=state.empFichaId;
   try{
     await api('/api/empleados/'+empId+'/movimientos/'+movId,{method:'DELETE'});
+    toast('Borrado','success'); await empleAbrir(empId);
+  }catch(e){ toast(e.message,'error'); }
+}
+
+// --- Ropa / indumentaria entregada ---
+const ROPA_SUGERIDAS = ['Remera','Camisa','Pantalón','Campera','Buzo','Mameluco','Botas de seguridad','Zapatillas de seguridad','Guantes','Gorra','Antiparras','Casco','Protector auditivo','Impermeable / piloto','Poncho de agua','Faja'];
+function empRopaForm(ropaId=null){
+  const list=(state.empFicha&&state.empFicha.ropa)||[];
+  const it=ropaId?(list.find(r=>r.id===ropaId)||{}):{};
+  const fechaStr=it.fecha?new Date(it.fecha).toISOString().slice(0,10):new Date().toISOString().slice(0,10);
+  openModal({
+    title: ropaId?'Editar entrega de ropa':'Registrar entrega de ropa',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha *</label><input id="rp-fecha" class="input" type="date" value="${fechaStr}"/></div>
+        <div><label class="label">Cantidad *</label><input id="rp-cant" class="input" type="number" min="1" step="1" value="${it.cantidad||1}"/></div>
+        <div><label class="label">Prenda *</label>
+          <input id="rp-prenda" class="input" list="rp-prendas" value="${esc(it.prenda||'')}" placeholder="Ej: Remera, Botas de seguridad…"/>
+          <datalist id="rp-prendas">${ROPA_SUGERIDAS.map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
+        </div>
+        <div><label class="label">Talle</label><input id="rp-talle" class="input" value="${esc(it.talle||'')}" placeholder="Ej: M, 42, XL"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="rp-obs" class="input" rows="2" placeholder="Ej: reposición por desgaste, entrega de ingreso…">${esc(it.observaciones||'')}</textarea></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='empRopaSave(${JSON.stringify(ropaId)})'>${ropaId?'Guardar':'Registrar'}</button>`
+  });
+}
+async function empRopaSave(ropaId){
+  const empId=state.empFichaId;
+  const prenda=($('#rp-prenda').value||'').trim();
+  if(!prenda) return toast('Ingresá la prenda','error');
+  const data={
+    fecha:$('#rp-fecha').value,
+    prenda,
+    talle:($('#rp-talle').value||'').trim()||null,
+    cantidad:Math.max(1,parseInt($('#rp-cant').value||'1',10)||1),
+    observaciones:($('#rp-obs').value||'').trim()||null,
+  };
+  try{
+    await api('/api/empleados/'+empId+'/ropa'+(ropaId?'/'+ropaId:''),
+      {method:ropaId?'PUT':'POST',body:JSON.stringify(data)});
+    toast(ropaId?'Entrega actualizada':'Entrega registrada','success');
+    closeModal(); await empleAbrir(empId);
+  }catch(e){ toast(e.message,'error'); }
+}
+async function empRopaDel(ropaId){
+  if(!confirm('¿Borrar este registro de entrega de ropa?')) return;
+  const empId=state.empFichaId;
+  try{
+    await api('/api/empleados/'+empId+'/ropa/'+ropaId,{method:'DELETE'});
     toast('Borrado','success'); await empleAbrir(empId);
   }catch(e){ toast(e.message,'error'); }
 }

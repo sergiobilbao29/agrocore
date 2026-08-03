@@ -60,6 +60,7 @@ model Company {
   empleados       Empleado[]
   movsEmpleado    MovimientoEmpleado[]
   liquidaciones   LiquidacionSueldo[]
+  entregasRopa    EntregaRopa[]
   haciendaStocks  HaciendaStock[]
   haciendaMovs    HaciendaMovimiento[]
   catalogos       Catalogo[]
@@ -269,6 +270,7 @@ model Campana {
   fechaCosecha    DateTime?
   estado          String    @default("planificada")  // planificada, en_curso, cosechada, cerrada
   observaciones   String?
+  analisisSuelo   String?   // texto libre: analisis de suelo del lote para esa campana (se ve en el Historial)
   planilla        Json?     // planilla resultado economico: costos fijos + parametros (precio, rinde, flete, comercializacion)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -955,6 +957,7 @@ model Empleado {
   movimientos     MovimientoEmpleado[]
   liquidaciones   LiquidacionSueldo[]
   labores         LaborAplicada[]
+  entregasRopa    EntregaRopa[]
 
   @@index([companyId])
 }
@@ -1012,6 +1015,27 @@ model CategoriaPlanilla {
 
   @@unique([companyId, codigo])
   @@index([companyId])
+}
+
+// Registro de entrega de ropa / indumentaria de trabajo a un empleado.
+// Historial simple: cuándo, qué prenda, talle, cuánto y una observación.
+model EntregaRopa {
+  id            String   @id @default(cuid())
+  companyId     String
+  empleadoId    String
+  fecha         DateTime
+  prenda        String     // ej. "Remera", "Pantalón", "Botas de seguridad"
+  talle         String?    // ej. "M", "42", "XL"
+  cantidad      Int      @default(1)
+  observaciones String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  empleado      Empleado  @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([empleadoId])
 }
 
 // Liquidación de sueldo de un empleado para un mes (periodo YYYY-MM).
