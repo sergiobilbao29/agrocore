@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.18.0';
+const AGROCORE_VERSION = '2.18.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3575,8 +3575,8 @@ app.post('/api/facturas/import-arca', requireCompany, requirePermission('ventas:
     const get = (row,name)=>{ const i = H[name]; return i!=null ? row[i] : undefined; };
     // Control de CUIT: si el nombre del archivo trae un CUIT distinto al de la
     // empresa activa, cortamos para no cargar ventas en la empresa equivocada.
-    const company = await prisma.company.findUnique({ where:{ id:req.companyId }, select:{ arcaCuit:true } });
-    const propioCuit = String(company?.arcaCuit||'').replace(/\D/g,'');
+    const company = await prisma.company.findUnique({ where:{ id:req.companyId }, select:{ cuit:true, arcaCuit:true } });
+    const propioCuit = String(company?.cuit || company?.arcaCuit || '').replace(/\D/g,'');
     const archivoCuit = String(req.body?.archivoCuit||'').replace(/\D/g,'');
     if (propioCuit && archivoCuit && archivoCuit !== propioCuit) {
       return res.status(400).json({ ok:false, error:`El Excel es del CUIT ${archivoCuit}, pero la empresa activa tiene CUIT ${propioCuit}. Cambiá de empresa o revisá el archivo.` });
@@ -3877,8 +3877,8 @@ app.post('/api/facturas-compra/import-arca', requireCompany, requirePermission('
     const H = {}; (matrix[hdrIdx]||[]).forEach((h,i)=>{ H[_normHdr(h)] = i; });
     const col = (name)=> H[name] != null ? H[name] : -1;
     const get = (row,name)=>{ const i=col(name); return i>=0 ? row[i] : undefined; };
-    const company = await prisma.company.findUnique({ where:{ id:req.companyId }, select:{ arcaCuit:true } });
-    const propioCuit = String(company?.arcaCuit||'').replace(/\D/g,'');
+    const company = await prisma.company.findUnique({ where:{ id:req.companyId }, select:{ cuit:true, arcaCuit:true } });
+    const propioCuit = String(company?.cuit || company?.arcaCuit || '').replace(/\D/g,'');
     // Control de CUIT: el Excel de ARCA se baja por CUIT. Si el nombre del archivo
     // trae un CUIT distinto al de la empresa activa, cortamos para no mezclar empresas.
     const archivoCuit = String(req.body?.archivoCuit||'').replace(/\D/g,'');

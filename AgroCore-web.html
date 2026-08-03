@@ -2506,6 +2506,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
+      titulo:'🛡️ v2.18.1 — El control de CUIT al importar ahora sí bloquea',
+      desc:'El control de CUIT de la v2.18.0 comparaba contra el CUIT del <b>certificado de ARCA</b>, que en muchas empresas (por ejemplo Demo) está vacío, así que no llegaba a rechazar el archivo. Ahora compara contra el <b>CUIT fiscal de la empresa</b> (el que ves en Empresas → editar) y, si no hay, contra el de ARCA. Si subís un Excel de Mis Comprobantes de otro CUIT, <b>corta el import con el aviso</b> — tanto en compras como en ventas.' },
     { tag:'Novedad', color:'bg-green-100 text-green-800 border-green-300', fecha:'03/08/2026',
       titulo:'✏️ v2.18.0 — Editar facturas de venta + control de CUIT al importar',
       desc:'Dos cosas. <b>(1) Editar facturas de venta:</b> botón ✏️ en Facturación y en el detalle, igual que en Compras. Al guardar, revierte y recrea el stock y la cuenta a cobrar con los datos nuevos (preservando el CAE y la marca ARCA). Es la forma de <b>cargarle los artículos a las ventas importadas</b> para que <b>muevan stock</b>. <b>Una vez que la factura tiene un cobro aplicado, queda bloqueada</b> (🔒): hay que eliminar el cobro para poder editarla (lo mismo aplica en Compras con los pagos). <b>(2) Control de CUIT al importar:</b> las importaciones de Mis Comprobantes (recibidos y emitidos) ahora <b>verifican que el CUIT del archivo sea el de la empresa activa</b>; si no coincide, cortan el import con un aviso. En recibidos, además, se <b>omiten las filas cuyo receptor sea otro CUIT</b>. Así, con varias empresas creadas, no se cargan comprobantes en la empresa equivocada.' },
