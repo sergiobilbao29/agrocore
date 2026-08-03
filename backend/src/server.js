@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.18.1';
+const AGROCORE_VERSION = '2.19.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2343,7 +2343,7 @@ app.delete('/api/usuarios/:id', async (req, res, next) => {
 // ============================================================
 // FACTORIA CRUD GENERICA (empresa-scoped)
 // ============================================================
-function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc' }, include, searchFields = [], injectUserId = false, readOpen = false }) {
+function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc' }, include, searchFields = [], injectUserId = false, readOpen = false, dependencias = [], bloquearSi = null }) {
   const full = `/api/${path}`;
   const model = () => prisma[modelName];
   // readOpen = true → la LECTURA (GET) queda disponible para cualquier usuario de la
@@ -2393,10 +2393,30 @@ function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc
     try {
       const existing = await model().findFirst({ where: { id: req.params.id, companyId: req.companyId } });
       if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+      // Bloqueo por estado del propio registro (ej. cheque ya usado, arrendamiento con cuotas pagadas).
+      if (typeof bloquearSi === 'function') {
+        const motivo = await bloquearSi(existing, req);
+        if (motivo) return res.status(400).json({ ok: false, error: `No se puede eliminar: ${motivo}.` });
+      }
+      // Bloqueo por dependencias (registros hijos que quedarían huérfanos o se borrarían).
+      const bloq = await _contarDependencias(req.companyId, req.params.id, dependencias);
+      if (bloq.length) return res.status(400).json({ ok: false, error: `No se puede eliminar porque tiene ${bloq.join(' · ')}. Primero eliminá o reasigná esos registros.` });
       await model().delete({ where: { id: req.params.id } });
       res.json({ ok: true });
     } catch (e) { next(e); }
   });
+}
+
+// Cuenta registros dependientes. `deps` = [{ model, where:(id)=>({...}), label, sinCompany }].
+// Devuelve un array de strings "N label" para los que tengan al menos 1.
+async function _contarDependencias(companyId, id, deps) {
+  const out = [];
+  for (const d of (deps || [])) {
+    const where = d.sinCompany ? d.where(id) : { companyId, ...d.where(id) };
+    const n = await prisma[d.model].count({ where });
+    if (n > 0) out.push(`${n} ${d.label}`);
+  }
+  return out;
 }
 
 // ---------- STOCK ----------
@@ -2420,6 +2440,9 @@ mountCrud({
   }),
   orderBy: { nombre: 'asc' },
   searchFields: ['nombre', 'categoria', 'sku', 'codigoBarras'],
+  dependencias: [
+    { model: 'movimiento', where: (id) => ({ productoId: id }), label: 'movimientos de stock' },
+  ],
 });
 
 // ============================================================
@@ -2818,12 +2841,20 @@ mountCrud({
   path: 'clientes', modelName: 'cliente', perm: 'contactos',
   schema: clienteSchema, orderBy: { razonSocial: 'asc' },
   searchFields: ['razonSocial', 'nombreFantasia', 'cuit'],
+  dependencias: [
+    { model: 'factura', where: (id) => ({ clienteId: id }), label: 'facturas de venta' },
+    { model: 'ctaCte', where: (id) => ({ contactoTipo: 'cliente', contactoId: id }), label: 'movimientos de cuenta corriente' },
+  ],
 });
 mountCrud({
   path: 'proveedores', modelName: 'proveedor', perm: 'contactos',
   schema: clienteSchema.extend({ rubro: z.string().nullable().optional() }),
   orderBy: { razonSocial: 'asc' },
   searchFields: ['razonSocial', 'nombreFantasia', 'cuit', 'rubro'],
+  dependencias: [
+    { model: 'facturaCompra', where: (id) => ({ proveedorId: id }), label: 'facturas de compra' },
+    { model: 'ctaCte', where: (id) => ({ contactoTipo: 'proveedor', contactoId: id }), label: 'movimientos de cuenta corriente' },
+  ],
 });
 
 // ---------- PRODUCCION ----------
@@ -4048,6 +4079,7 @@ app.delete('/api/facturas-compra/:id', requireCompany, requirePermission('compra
   try {
     const existing = await prisma.facturaCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    if (await _compraTienePago(req.companyId, req.params.id)) return res.status(400).json({ ok: false, error: 'No se puede eliminar: la compra tiene un pago aplicado (OP). Primero deshacé el pago desde la Orden de pago.' });
     // Borrar movimientos de stock y de cuenta corriente ANTES de borrar la factura.
     await prisma.$transaction(async (tx) => {
       await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'CPR', facturaId: req.params.id });
@@ -4082,6 +4114,10 @@ mountCrud({
   }),
   orderBy: { fechaPago: 'asc' },
   searchFields: ['nroCheque', 'banco', 'beneficiario', 'librador', 'endosante', 'enPoderDe'],
+  bloquearSi: (ch) => (ch.estado && ch.estado !== 'en_cartera') ? `el cheque ya fue usado (estado: ${ch.estado}). Volvelo a cartera si querés eliminarlo` : null,
+  dependencias: [
+    { model: 'bancoMovimiento', where: (id) => ({ chequeId: id }), label: 'movimientos bancarios vinculados' },
+  ],
 });
 
 // ============================================================
@@ -4373,6 +4409,12 @@ mountCrud({
   }),
   orderBy: { vencimiento: 'asc' },
   searchFields: ['propietario','nombre'],
+  bloquearSi: (a) => {
+    const cs = Array.isArray(a.cuotas) ? a.cuotas : [];
+    if (cs.some(c => c && c.pagado)) return 'tiene cuotas pagadas. Deshacé esos pagos primero';
+    if (a.pagado) return 'está marcado como pagado';
+    return null;
+  },
 });
 
 mountCrud({
@@ -5046,6 +5088,7 @@ app.delete('/api/viajes/:id', requireCompany, requirePermission('logistica:delet
   try {
     const existing = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    if (existing.facturaCompraId || ['facturado','pagado'].includes(existing.estado)) return res.status(400).json({ ok: false, error: `No se puede eliminar: el viaje está ${existing.estado==='pagado'?'pagado':'facturado'} (vinculado a la factura del transportista). Deshacé el pago o desvinculá la factura primero.` });
     await prisma.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'VIAJE-' + req.params.id } });
     await prisma.viaje.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
@@ -6750,6 +6793,8 @@ app.delete('/api/creditos/:id', requireCompany, requirePermission('finanzas:dele
   try {
     const existing = await prisma.credito.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const cuotasPagadas = await prisma.cuotaCredito.count({ where: { creditoId: req.params.id, pagada: true } });
+    if (cuotasPagadas > 0) return res.status(400).json({ ok: false, error: `No se puede eliminar: el crédito tiene ${cuotasPagadas} cuota(s) pagada(s). Deshacé esos pagos primero.` });
     await prisma.credito.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }

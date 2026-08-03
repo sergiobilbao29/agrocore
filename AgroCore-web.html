@@ -2507,6 +2507,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
+      titulo:'🔒 v2.19.0 — No se borra nada que tenga movimientos o pagos',
+      desc:'Antes se podía eliminar, por ejemplo, un <b>proveedor con comprobantes cargados</b> y se borraban también sus comprobantes (en cascada). Ahora el sistema <b>bloquea la eliminación</b> cuando el registro tiene datos asociados, con un aviso que dice qué lo está frenando: <b>Proveedores y Clientes</b> con facturas o movimientos de cuenta corriente; <b>Insumos/Productos</b> con movimientos de stock; <b>Cheques</b> ya usados (fuera de cartera) o con movimiento bancario; <b>Facturas de compra y de venta</b> con un pago/cobro aplicado; <b>Viajes</b> facturados o pagados; <b>Créditos</b> con cuotas pagadas; <b>Arrendamientos</b> con cuotas pagadas; y las <b>Categorías de hacienda</b> en uso. Para eliminarlos, primero hay que deshacer el pago o quitar/reasignar esos registros. Así no se pierden datos por accidente.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
       titulo:'🛡️ v2.18.1 — El control de CUIT al importar ahora sí bloquea',
       desc:'El control de CUIT de la v2.18.0 comparaba contra el CUIT del <b>certificado de ARCA</b>, que en muchas empresas (por ejemplo Demo) está vacío, así que no llegaba a rechazar el archivo. Ahora compara contra el <b>CUIT fiscal de la empresa</b> (el que ves en Empresas → editar) y, si no hay, contra el de ARCA. Si subís un Excel de Mis Comprobantes de otro CUIT, <b>corta el import con el aviso</b> — tanto en compras como en ventas.' },
     { tag:'Novedad', color:'bg-green-100 text-green-800 border-green-300', fecha:'03/08/2026',
