@@ -2507,6 +2507,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-green-100 text-green-800 border-green-300', fecha:'03/08/2026',
+      titulo:'✏️ v2.18.0 — Editar facturas de venta + control de CUIT al importar',
+      desc:'Dos cosas. <b>(1) Editar facturas de venta:</b> botón ✏️ en Facturación y en el detalle, igual que en Compras. Al guardar, revierte y recrea el stock y la cuenta a cobrar con los datos nuevos (preservando el CAE y la marca ARCA). Es la forma de <b>cargarle los artículos a las ventas importadas</b> para que <b>muevan stock</b>. <b>Una vez que la factura tiene un cobro aplicado, queda bloqueada</b> (🔒): hay que eliminar el cobro para poder editarla (lo mismo aplica en Compras con los pagos). <b>(2) Control de CUIT al importar:</b> las importaciones de Mis Comprobantes (recibidos y emitidos) ahora <b>verifican que el CUIT del archivo sea el de la empresa activa</b>; si no coincide, cortan el import con un aviso. En recibidos, además, se <b>omiten las filas cuyo receptor sea otro CUIT</b>. Así, con varias empresas creadas, no se cargan comprobantes en la empresa equivocada.' },
+    { tag:'Novedad', color:'bg-green-100 text-green-800 border-green-300', fecha:'03/08/2026',
       titulo:'📤 v2.17.0 — Importar ventas desde ARCA (Mis Comprobantes → Emitidos)',
       desc:'Igual que la importación de compras, ahora en <b>Facturación → 📤 Importar de ARCA</b> subís el Excel de <b>ARCA → Mis Comprobantes → Emitidos</b> y el sistema crea una <b>factura de venta por cada comprobante</b>: da de alta el <b>cliente por CUIT</b> del receptor, reconstruye el <b>IVA por alícuota</b>, arma la <b>cuenta a cobrar</b> y lo suma al <b>Libro IVA Ventas</b>, con el <b>CAE real</b> y marca "ARCA ext.". <b>No duplica</b> (por tipo + punto de venta + número) y muestra el resumen creados / duplicados / omitidos / errores. Como son ventas ya emitidas y ARCA no manda los renglones, <b>no mueve stock</b>: sirve para completar el historial de ventas, cuentas a cobrar y el Libro IVA.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'31/07/2026',
@@ -9467,7 +9470,7 @@ pages.facturacion = async function() {
       kind:'factura', id:r.id, fecha:r.fecha, clienteId:r.clienteId,
       clienteNombre:r.cliente?.razonSocial||'Consumidor final',
       tipoKey: r.clase==='nota_credito'?'nc':(r.clase==='nota_debito'?'nd':'factura'),
-      letra:r.tipo, pv:r.puntoVenta, nro:r.numero, cae:r.cae, estado:r.estado, origen:r.origen, total:r.total,
+      letra:r.tipo, pv:r.puntoVenta, nro:r.numero, cae:r.cae, estado:r.estado, origen:r.origen, total:r.total, pagada:r.pagada,
     }));
     const movCob = cobros.map(o => ({
       kind:'cobro', id:o.id, fecha:o.fecha, clienteId:o.contactoId,
@@ -9498,7 +9501,7 @@ pages.facturacion = async function() {
               <td>${m.kind==='factura'?(m.estado==='anulada'?'<span class="badge badge-red">Anulada</span>':(m.cae?'<span class="badge badge-green">Autorizada</span>':'<span class="badge badge-yellow">Sin CAE</span>')):'<span class="badge badge-green">Cobrado</span>'}</td>
               <td class="text-right whitespace-nowrap">
                 ${m.kind==='factura'
-                  ? `<button class="btn btn-ghost text-xs" title="Ver comprobante" onclick='factVer(${JSON.stringify(m.id)})'>👁️</button>${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="${m.cae?'Anular':'Eliminar'}" onclick='${m.cae?`factAnular(${JSON.stringify(m.id)})`:`factVer(${JSON.stringify(m.id)})`}'>${m.cae?'🚫':'🗑️'}</button>`:''}`
+                  ? `<button class="btn btn-ghost text-xs" title="Ver comprobante" onclick='factVer(${JSON.stringify(m.id)})'>👁️</button>${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) ? (m.pagada ? `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un cobro aplicado. Eliminá el cobro primero.">🔒</span>` : `<button class="btn btn-ghost text-xs" title="Editar" onclick='factEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="${m.cae?'Anular':'Eliminar'}" onclick='${m.cae?`factAnular(${JSON.stringify(m.id)})`:`factVer(${JSON.stringify(m.id)})`}'>${m.cae?'🚫':'🗑️'}</button>`:''}`
                   : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir recibo" onclick='reciboReabrir(${JSON.stringify(m.id)})'>🧾 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='reciboReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>`}
               </td>
             </tr>`).join('') || '<tr><td colspan="7" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
@@ -9893,6 +9896,7 @@ function factRecalc() {
   $('#fi-tot').textContent = fmtC(total);
 }
 async function factForm(prefill = null) {
+  state._factEdit = (prefill && prefill._editId) ? prefill._editId : null;
   await cargarMonedas();
   const clientes = state.cache.clientes || [];
   const facturas = state.cache.facturas || [];
@@ -9914,7 +9918,7 @@ async function factForm(prefill = null) {
   if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
   const _depsVta = (state.cache.depositos || []).filter(d => d.activo !== false);
   openModal({
-    title:'Emitir comprobante', size:'max-w-6xl',
+    title: state._factEdit ? 'Editar comprobante de venta' : 'Emitir comprobante', size:'max-w-6xl',
     body: `
       <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
         <div><label class="label">Comprobante *</label>
@@ -9989,9 +9993,9 @@ async function factForm(prefill = null) {
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
       <input type="hidden" id="f-labor-servicio" value="${esc(prefill?.laborServicioId||'')}"/>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="factSave()">💾 Autorizar</button>`
+             <button class="btn btn-primary" onclick="factSave()">💾 ${state._factEdit?'Guardar cambios':'Autorizar'}</button>`
   });
-  factSugerirNro();
+  if (!state._factEdit) factSugerirNro();
   // listeners
   setTimeout(async () => {
     $('#fi-tbody').addEventListener('input', factRecalc);
@@ -10026,12 +10030,19 @@ async function factForm(prefill = null) {
       cv.addEventListener('change', toggle);
       toggle();
     }
-    // Prefill (ej. Facturar una labor a terceros): cliente + items ya cargados.
+    // Prefill: (a) Facturar una labor a terceros; (b) editar una factura existente.
     if (prefill) {
+      const sv=(id,v)=>{ const el=document.getElementById(id); if(el&&v!=null&&v!=='') el.value=v; };
+      if (prefill.clase){ sv('f-clase', prefill.clase); factClaseHint(); }
+      if (prefill.tipo) sv('f-tipo', prefill.tipo);
+      if (prefill.puntoVenta!=null) sv('f-pv', prefill.puntoVenta);
+      if (prefill.numero!=null) sv('f-nro', prefill.numero);
+      if (prefill.fecha) sv('f-fec', String(prefill.fecha).slice(0,10));
       if (prefill.clienteId && $('#f-cli')) {
         const opt = [...$('#f-cli').options].find(o => o.value === prefill.clienteId);
         if (opt) $('#f-cli').value = prefill.clienteId;
       }
+      if (prefill.moneda){ const _m=document.getElementById('f-moneda'); if(_m){ _m.value=prefill.moneda; const _w=document.getElementById('f-cotiz-wrap'); if(_w)_w.style.display=(prefill.moneda==='ARS')?'none':''; const _c=document.getElementById('f-cotiz'); if(_c&&prefill.cotizacion){ _c.value=prefill.cotizacion; _c.dataset.manual='1'; } } }
       if (Array.isArray(prefill.items) && prefill.items.length) {
         $('#fi-tbody').innerHTML = prefill.items.map((it,i)=>factItemRow(i,it)).join('');
       }
@@ -10047,6 +10058,7 @@ function _seqTipoFacturaJS(clase, letra){
 }
 // Sugerir el próximo número correlativo según Punto de venta + tipo de comprobante.
 async function factSugerirNro(){
+  if (state._factEdit) return;
   const nro = document.getElementById('f-nro'); if(!nro) return;
   const clase = document.getElementById('f-clase')?.value || 'factura';
   const letra = document.getElementById('f-tipo')?.value || 'A';
@@ -10219,6 +10231,13 @@ async function factSave() {
     items,
   };
   try {
+    if (state._factEdit) {
+      await api('/api/facturas/'+state._factEdit, { method:'PUT', body: JSON.stringify(data) });
+      toast('Factura actualizada','success');
+      state._factEdit = null;
+      delete state.cache.stockMap; delete state.cache.facturas; delete state.cache.ctasCtes;
+      closeModal(); pages.facturacion(); return;
+    }
     const r = await api('/api/facturas', { method:'POST', body: JSON.stringify(data) });
     const facturaId = r.data?.id;
     toast('Factura autorizada · CAE '+r.data.cae,'success');
@@ -10261,6 +10280,19 @@ async function factSave() {
 // en el portal de ARCA — entra al sistema con su CAE real para
 // mantener la trazabilidad, mover CtaCte y descontar stock.
 // ============================================================
+async function factEditar(id) {
+  try {
+    const r = await api('/api/facturas/'+id);
+    const f = r.data;
+    if (f && f.pagada) { toast('No se puede editar: la factura tiene un cobro aplicado. Eliminá el cobro primero.','warn'); return; }
+    if (f && f.estado === 'anulada') { toast('La factura está anulada — no se puede editar.','warn'); return; }
+    await factForm({
+      _editId: f.id, clase: f.clase, tipo: f.tipo, puntoVenta: f.puntoVenta, numero: f.numero, fecha: f.fecha,
+      clienteId: f.clienteId, moneda: f.moneda, cotizacion: f.cotizacion, observaciones: f.observaciones,
+      items: (f.items||[]).map(it => ({ productoId: it.productoId||null, descripcion: it.descripcion, cantidad: it.cantidad, precioUnit: it.precioUnit, alicuotaIva: it.alicuotaIva, campoId: it.campoId||null, cabezas: it.cabezas })),
+    });
+  } catch (e) { toast(e.message,'error'); }
+}
 async function factFormExterna() {
   await cargarMonedas();
   const clientes = state.cache.clientes || [];
@@ -10627,6 +10659,7 @@ async function factVer(id) {
                <button class="btn btn-secondary" onclick="factPDF()">📄 PDF</button>
                <button class="btn btn-secondary" onclick="factWhatsApp()">💬 WhatsApp</button>
                <button class="btn btn-primary" onclick="factEmail()">✉️ Email</button>
+               ${f.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) && !f.pagada ? `<button class="btn btn-secondary" onclick="closeModal(); factEditar(${JSON.stringify(f.id)})">✏️ Editar</button>` : ''}
                ${sinCae && (can('ventas:delete')||can('ventas:update')) ? `<button class="btn btn-secondary text-red-600" onclick='factEliminar(${JSON.stringify(f.id)})'>🗑️ Eliminar</button>` : ''}`
     });
   } catch (e) { toast(e.message,'error'); }
@@ -10991,6 +11024,7 @@ function compImportArca(){
         const ws = wb.Sheets[wb.SheetNames[0]];
         const m = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
         state._arcaMatrix = m;
+        state._arcaCuit = (String(file.name||'').match(/(\d{11})/)||[])[1] || '';
         let n=0, seen=false;
         for(const row of m){ const c=(row||[]).map(x=>String(x).toLowerCase().trim()); if(!seen){ if(c.includes('fecha')) seen=true; continue; } if(row && String(row[0]||'').trim()) n++; }
         document.getElementById('arca-status').innerHTML = seen
@@ -11006,7 +11040,7 @@ async function compImportArcaRun(){
   if(!state._arcaMatrix) return;
   const btn = document.getElementById('arca-btn'); if(btn){ btn.disabled=true; btn.textContent='Importando…'; }
   try {
-    const r = await api('/api/facturas-compra/import-arca', { method:'POST', body: JSON.stringify({ matrix: state._arcaMatrix }) });
+    const r = await api('/api/facturas-compra/import-arca', { method:'POST', body: JSON.stringify({ matrix: state._arcaMatrix, archivoCuit: state._arcaCuit||'' }) });
     const s = r.resumen||{}; const det = r.detalle||[];
     const bdg = e => e==='creado'?'<span class="badge badge-green">creado</span>':e==='duplicado'?'<span class="badge badge-yellow">duplicado</span>':e==='omitido'?'<span class="badge badge-blue">omitido</span>':'<span class="badge badge-red">error</span>';
     document.getElementById('arca-status').innerHTML = `
@@ -11053,6 +11087,7 @@ function ventaImportArca(){
         const ws = wb.Sheets[wb.SheetNames[0]];
         const m = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
         state._arcavMatrix = m;
+        state._arcavCuit = (String(file.name||'').match(/(\d{11})/)||[])[1] || '';
         let n=0, seen=false;
         for(const row of m){ const c=(row||[]).map(x=>String(x).toLowerCase().trim()); if(!seen){ if(c.includes('fecha')) seen=true; continue; } if(row && String(row[0]||'').trim()) n++; }
         document.getElementById('arcav-status').innerHTML = seen
@@ -11068,7 +11103,7 @@ async function ventaImportArcaRun(){
   if(!state._arcavMatrix) return;
   const btn = document.getElementById('arcav-btn'); if(btn){ btn.disabled=true; btn.textContent='Importando…'; }
   try {
-    const r = await api('/api/facturas/import-arca', { method:'POST', body: JSON.stringify({ matrix: state._arcavMatrix }) });
+    const r = await api('/api/facturas/import-arca', { method:'POST', body: JSON.stringify({ matrix: state._arcavMatrix, archivoCuit: state._arcavCuit||'' }) });
     const s = r.resumen||{}; const det = r.detalle||[];
     const bdg = e => e==='creado'?'<span class="badge badge-green">creado</span>':e==='duplicado'?'<span class="badge badge-yellow">duplicado</span>':e==='omitido'?'<span class="badge badge-blue">omitido</span>':'<span class="badge badge-red">error</span>';
     document.getElementById('arcav-status').innerHTML = `

@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.17.0';
+const AGROCORE_VERSION = '2.18.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3313,9 +3313,27 @@ app.get('/api/facturas', requireCompany, requirePermission('ventas:read'), async
     const { desde, hasta } = req.query;
     const where = { companyId: req.companyId };
     if (desde || hasta) { where.fecha = {}; if (desde) where.fecha.gte = new Date(desde); if (hasta) where.fecha.lte = new Date(hasta); }
-    res.json({ ok: true, data: await prisma.factura.findMany({ where, orderBy: { fecha: 'desc' }, include: { cliente: true, items: true } }) });
+    const facturas = await prisma.factura.findMany({ where, orderBy: { fecha: 'desc' }, include: { cliente: true, items: true } });
+    // Marcar cuáles ya tienen un cobro aplicado (para no permitir editarlas).
+    const cobros = await prisma.ctaCte.findMany({
+      where: { companyId: req.companyId, contactoTipo: 'cliente', referencia: { startsWith: 'FAC-' }, OR: [{ detalle: { startsWith: 'Cobro de' } }, { pagado: true }] },
+      select: { referencia: true },
+    });
+    const pagadas = new Set(cobros.map(p => String(p.referencia || '').replace(/^FAC-/, '')));
+    res.json({ ok: true, data: facturas.map(f => ({ ...f, pagada: pagadas.has(f.id) })) });
   } catch (e) { next(e); }
 });
+
+// Helper: ¿la factura de venta tiene un cobro aplicado? Un cobro crea un
+// contra-asiento con detalle "Cobro de ..." y referencia FAC-<id>, y marca
+// pagado=true si cubre todo. Detecta cobros totales y parciales.
+async function _ventaTienePago(companyId, facturaId) {
+  const row = await prisma.ctaCte.findFirst({
+    where: { companyId, contactoTipo: 'cliente', referencia: `FAC-${facturaId}`, OR: [{ detalle: { startsWith: 'Cobro de' } }, { pagado: true }] },
+    select: { id: true },
+  });
+  return !!row;
+}
 
 app.get('/api/facturas/libroIva/:anio/:mes', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
   try {
@@ -3339,7 +3357,71 @@ app.get('/api/facturas/:id', requireCompany, requirePermission('ventas:read'), a
       include: { cliente: true, items: true },
     });
     if (!row) return res.status(404).json({ ok: false, error: 'No encontrada' });
-    res.json({ ok: true, data: row });
+    const pagada = await _ventaTienePago(req.companyId, row.id);
+    res.json({ ok: true, data: { ...row, pagada } });
+  } catch (e) { next(e); }
+});
+
+// EDITAR factura de venta: revierte (stock + cta cte + items) y la recrea,
+// preservando CAE / vto / origen / estado. Bloquea si ya tiene un cobro aplicado.
+app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      clienteId: z.string().nullable().optional(),
+      tipo: z.enum(['A', 'B', 'C', 'E']),
+      clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
+      puntoVenta: z.number().int(),
+      numero: z.number().int(),
+      fecha: z.coerce.date(),
+      condicionVenta: z.string().nullable().optional(),
+      condicionDias: z.number().int().min(0).nullable().optional(),
+      vencimientoFecha: z.coerce.date().nullable().optional(),
+      moneda: z.string().optional(),
+      cotizacion: z.number().positive().nullable().optional(),
+      depositoId: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+      items: z.array(itemFacSchema).min(1),
+    });
+    const input = schema.parse(req.body);
+    const existing = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    if (await _ventaTienePago(req.companyId, req.params.id)) return res.status(400).json({ ok: false, error: 'No se puede editar: la factura tiene un cobro aplicado. Primero eliminá el cobro (Recibo → deshacer) y después editá.' });
+    const factura = await prisma.$transaction(async (tx) => {
+      for (const it of input.items) it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
+      const totales = calcFactura(input.items);
+      const _mon = input.moneda || existing.moneda || 'ARS';
+      const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
+      const _clase = input.clase || 'factura';
+      await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'VTA', facturaId: req.params.id });
+      await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FAC', facturaId: req.params.id });
+      await tx.facturaItem.deleteMany({ where: { facturaId: req.params.id } });
+      const f = await tx.factura.update({
+        where: { id: req.params.id },
+        data: {
+          clienteId: input.clienteId || null, tipo: input.tipo, clase: _clase,
+          puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
+          condicionVenta: input.condicionVenta, observaciones: input.observaciones,
+          moneda: _mon, cotizacion: _cot, subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
+          items: { create: totales.items },
+        },
+        include: { cliente: true, items: true },
+      });
+      if (_clase === 'factura') {
+        await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'egreso', motivo: 'venta', contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA', userId: req.user?.id || null, depositoId: input.depositoId || null });
+        await crearCtaCteDesdeFactura(tx, { companyId: req.companyId, factura: f, contactoTipo: 'cliente', contactoId: input.clienteId || null, refPrefix: 'FAC', motivo: 'Factura', condicion: input.condicionVenta, condicionDias: input.condicionDias, vencimientoFecha: input.vencimientoFecha || null });
+      } else if (_clase === 'nota_credito') {
+        await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'devolucion_venta', contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA', userId: req.user?.id || null, depositoId: input.depositoId || null });
+        await tx.ctaCte.create({ data: { companyId: req.companyId, contactoTipo: 'cliente', contactoId: input.clienteId || null, fecha: input.fecha,
+          detalle: `Nota de crédito ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
+          moneda: _mon, cotizacion: _cot, haber: totales.total, referencia: `FAC-${f.id}`, observaciones: input.observaciones || null }});
+      } else {
+        await tx.ctaCte.create({ data: { companyId: req.companyId, contactoTipo: 'cliente', contactoId: input.clienteId || null, fecha: input.fecha,
+          detalle: `Nota de débito ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
+          moneda: _mon, cotizacion: _cot, debe: totales.total, referencia: `FAC-${f.id}`, observaciones: input.observaciones || null }});
+      }
+      return f;
+    });
+    res.json({ ok: true, data: factura });
   } catch (e) { next(e); }
 });
 
@@ -3491,6 +3573,14 @@ app.post('/api/facturas/import-arca', requireCompany, requirePermission('ventas:
     if (hdrIdx<0) return res.status(400).json({ ok:false, error:'No encontré la fila de encabezados de "Mis Comprobantes". ¿Es el Excel correcto?' });
     const H = {}; (matrix[hdrIdx]||[]).forEach((h,i)=>{ H[_normHdr(h)] = i; });
     const get = (row,name)=>{ const i = H[name]; return i!=null ? row[i] : undefined; };
+    // Control de CUIT: si el nombre del archivo trae un CUIT distinto al de la
+    // empresa activa, cortamos para no cargar ventas en la empresa equivocada.
+    const company = await prisma.company.findUnique({ where:{ id:req.companyId }, select:{ arcaCuit:true } });
+    const propioCuit = String(company?.arcaCuit||'').replace(/\D/g,'');
+    const archivoCuit = String(req.body?.archivoCuit||'').replace(/\D/g,'');
+    if (propioCuit && archivoCuit && archivoCuit !== propioCuit) {
+      return res.status(400).json({ ok:false, error:`El Excel es del CUIT ${archivoCuit}, pero la empresa activa tiene CUIT ${propioCuit}. Cambiá de empresa o revisá el archivo.` });
+    }
 
     const resumen = { creados:0, duplicados:0, omitidos:0, errores:0 };
     const detalle = [];
@@ -3789,6 +3879,12 @@ app.post('/api/facturas-compra/import-arca', requireCompany, requirePermission('
     const get = (row,name)=>{ const i=col(name); return i>=0 ? row[i] : undefined; };
     const company = await prisma.company.findUnique({ where:{ id:req.companyId }, select:{ arcaCuit:true } });
     const propioCuit = String(company?.arcaCuit||'').replace(/\D/g,'');
+    // Control de CUIT: el Excel de ARCA se baja por CUIT. Si el nombre del archivo
+    // trae un CUIT distinto al de la empresa activa, cortamos para no mezclar empresas.
+    const archivoCuit = String(req.body?.archivoCuit||'').replace(/\D/g,'');
+    if (propioCuit && archivoCuit && archivoCuit !== propioCuit) {
+      return res.status(400).json({ ok:false, error:`El Excel es del CUIT ${archivoCuit}, pero la empresa activa tiene CUIT ${propioCuit}. Cambiá de empresa o revisá el archivo.` });
+    }
 
     const resumen = { creados:0, duplicados:0, omitidos:0, errores:0 };
     const detalle = [];
@@ -3808,6 +3904,10 @@ app.post('/api/facturas-compra/import-arca', requireCompany, requirePermission('
         const razon = String(get(row,'denominacion emisor')||'').trim();
         if(!map){ resumen.omitidos++; detalle.push({ fila:r+1, estado:'omitido', motivo:`Tipo ${tipoCod} no soportado`, ref:`${pv}-${numero}` }); continue; }
         if(propioCuit && cuitEmisor===propioCuit){ resumen.omitidos++; detalle.push({ fila:r+1, estado:'omitido', motivo:'El emisor sos vos (comprobante emitido)', ref:`${pv}-${numero}` }); continue; }
+        // El receptor de un comprobante recibido tiene que ser esta empresa.
+        const docRec = String(get(row,'nro doc receptor')||'').replace(/\D/g,'');
+        const tipoRec = String(get(row,'tipo doc receptor')||'').toUpperCase();
+        if(propioCuit && tipoRec==='CUIT' && docRec.length===11 && docRec!==propioCuit){ resumen.omitidos++; detalle.push({ fila:r+1, estado:'omitido', motivo:'El receptor es otro CUIT (no es esta empresa)', ref:`${pv}-${numero}` }); continue; }
         const [letra, clase] = map;
         // dedupe dentro del archivo
         const key = `${cuitEmisor}|${letra}|${pv}|${numero}`;
