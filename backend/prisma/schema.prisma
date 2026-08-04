@@ -70,6 +70,7 @@ model Company {
   liquidacionesHacienda LiquidacionHacienda[]
   mensajes        Mensaje[]
   chatEstados     ChatEstado[]
+  pushSubs        PushSubscription[]
   creditos        Credito[]
   bancoCuentas    BancoCuenta[]
   importLotes     ImportLote[]
@@ -1276,6 +1277,21 @@ model ChatEstado {
 
   @@unique([companyId, userId])
   @@index([companyId])
+}
+
+// Suscripción de notificaciones push (Web Push) por usuario/dispositivo.
+model PushSubscription {
+  id         String   @id @default(cuid())
+  companyId  String
+  userId     String
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  createdAt  DateTime @default(now())
+
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, userId])
 }
 
 // ============================================================

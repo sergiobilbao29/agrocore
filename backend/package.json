@@ -30,6 +30,7 @@
     "prisma": "^6.1.0"
   },
   "optionalDependencies": {
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "web-push": "^3.6.7"
   }
 }

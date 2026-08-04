@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.28.0';
+const AGROCORE_VERSION = '2.29.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6865,6 +6865,62 @@ async function _logMensaje(companyId, canal, userId, rol, autorNombre, texto, me
   return prisma.mensaje.create({ data: { companyId, canal, userId, rol, autorNombre: autorNombre || null, texto, meta: meta || undefined } });
 }
 
+// ---------- WEB PUSH (notificaciones aunque la app esté cerrada) ----------
+// web-push es dependencia OPCIONAL: si no está instalada, las notificaciones push
+// simplemente no se envían (el aviso en la app + sonido siguen funcionando).
+let _webpush = null, _webpushTried = false, _vapid = null;
+async function _getWebpush() {
+  if (_webpush) return _webpush;
+  if (_webpushTried) return null;
+  _webpushTried = true;
+  try { const m = await import('web-push'); _webpush = m.default || m; } catch { _webpush = null; }
+  return _webpush;
+}
+async function _getVapid() {
+  if (_vapid) return _vapid;
+  const wp = await _getWebpush(); if (!wp) return null;
+  let row = await prisma.setting.findUnique({ where: { id: 'push_vapid' } }).catch(() => null);
+  if (row?.data?.publicKey && row?.data?.privateKey) { _vapid = row.data; }
+  else {
+    const keys = wp.generateVAPIDKeys();
+    _vapid = { publicKey: keys.publicKey, privateKey: keys.privateKey };
+    await prisma.setting.upsert({ where: { id: 'push_vapid' }, create: { id: 'push_vapid', data: _vapid }, update: { data: _vapid } }).catch(() => {});
+  }
+  try { wp.setVapidDetails('mailto:soporte@agrocore.ar', _vapid.publicKey, _vapid.privateKey); } catch {}
+  return _vapid;
+}
+// Envía una notificación push a todos los usuarios de la empresa (menos el emisor).
+async function _pushAMiembros(companyId, exceptUserId, payload) {
+  try {
+    const wp = await _getWebpush(); if (!wp) return;
+    const v = await _getVapid(); if (!v) return;
+    const subs = await prisma.pushSubscription.findMany({ where: { companyId, userId: { not: exceptUserId } } });
+    const body = JSON.stringify(payload);
+    await Promise.all(subs.map(async (s) => {
+      try { await wp.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body); }
+      catch (e) { if (e?.statusCode === 404 || e?.statusCode === 410) { await prisma.pushSubscription.delete({ where: { id: s.id } }).catch(() => {}); } }
+    }));
+  } catch {}
+}
+app.get('/api/push/vapid-public', requireCompany, async (req, res, next) => {
+  try { const v = await _getVapid(); res.json({ ok: true, data: { publicKey: v?.publicKey || null } }); } catch (e) { next(e); }
+});
+app.post('/api/push/subscribe', requireCompany, async (req, res, next) => {
+  try {
+    const s = req.body?.subscription || req.body;
+    if (!s?.endpoint || !s?.keys?.p256dh || !s?.keys?.auth) return res.status(400).json({ ok: false, error: 'Suscripción inválida' });
+    const row = await prisma.pushSubscription.upsert({
+      where: { endpoint: s.endpoint },
+      create: { companyId: req.companyId, userId: req.user.id, endpoint: s.endpoint, p256dh: s.keys.p256dh, auth: s.keys.auth },
+      update: { companyId: req.companyId, userId: req.user.id, p256dh: s.keys.p256dh, auth: s.keys.auth },
+    });
+    res.status(201).json({ ok: true, data: { id: row.id } });
+  } catch (e) { next(e); }
+});
+app.post('/api/push/unsubscribe', requireCompany, async (req, res, next) => {
+  try { const ep = req.body?.endpoint; if (ep) await prisma.pushSubscription.deleteMany({ where: { endpoint: ep, userId: req.user.id } }); res.json({ ok: true }); } catch (e) { next(e); }
+});
+
 // --- Chat de equipo (canal general) ---
 app.get('/api/mensajes', requireCompany, async (req, res, next) => {
   try {
@@ -6880,10 +6936,13 @@ app.post('/api/mensajes', requireCompany, async (req, res, next) => {
     const texto = String(req.body?.texto || '').trim();
     const fotoUrl = req.body?.fotoUrl || null;
     if (!texto && !fotoUrl) return res.status(400).json({ ok: false, error: 'Mensaje vacío' });
+    const autor = _nombreUser(req.user);
     const row = await prisma.mensaje.create({ data: {
       companyId: req.companyId, canal: 'general', userId: req.user.id, rol: 'user',
-      autorNombre: _nombreUser(req.user), texto: texto || '📷 Foto', fotoUrl: fotoUrl || null,
+      autorNombre: autor, texto: texto || '📷 Foto', fotoUrl: fotoUrl || null,
     }});
+    // Aviso push a los demás miembros (no bloquea la respuesta).
+    _pushAMiembros(req.companyId, req.user.id, { title: '💬 '+autor, body: (texto||'📷 Foto').slice(0,140), url: '/app#mensajes', tag: 'chat-'+req.companyId });
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
 });

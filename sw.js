@@ -4,7 +4,7 @@
  * La lógica de datos offline (cola de cambios, caché de API) vive en el app,
  * usando IndexedDB. Este SW solo se encarga de que la app CARGUE sin señal.
  */
-const CACHE = 'agrocore-shell-v5';
+const CACHE = 'agrocore-shell-v6';
 
 // Recursos del app shell. /app es el HTML principal; los CDN se cachean
 // de forma oportunista en el fetch handler (no bloquean la instalación).
@@ -74,4 +74,33 @@ self.addEventListener('fetch', (event) => {
 // Permite que el app fuerce la activación de una versión nueva del SW.
 self.addEventListener('message', (event) => {
   if (event.data === 'skipWaiting') self.skipWaiting();
+});
+
+// ---- Notificaciones push (funciona con la app cerrada) ----
+self.addEventListener('push', (event) => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch { try { d = { body: event.data.text() }; } catch {} }
+  const title = d.title || 'AgroCore';
+  const opts = {
+    body: d.body || '',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    tag: d.tag || 'agrocore',
+    renotify: true,
+    vibrate: [120, 60, 120],
+    data: { url: d.url || '/app' },
+  };
+  event.waitUntil(self.registration.showNotification(title, opts));
+});
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/app';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((cs) => {
+      for (const c of cs) {
+        if (c.url.includes('/app')) { c.focus(); if (c.navigate && url.includes('#')) { try { c.navigate(url); } catch {} } return; }
+      }
+      return self.clients.openWindow(url);
+    })
+  );
 });
