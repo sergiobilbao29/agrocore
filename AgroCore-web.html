@@ -399,6 +399,12 @@
           <div id="global-search-results" class="hidden absolute top-full mt-1 right-0 w-96 max-w-[90vw] max-h-[60vh] overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-2xl z-40"></div>
         </div>
         <div class="relative">
+          <button onclick="abrirAsistente()" class="btn btn-ghost relative p-1" title="Asistente — preguntá cómo se hace algo o cargá cosas por vos" id="asist-btn">
+            <span class="text-xl leading-none">🤖</span>
+            <span id="asist-badge" class="hidden absolute -top-0.5 -right-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded-full min-w-[16px] h-[16px] px-1 flex items-center justify-center">0</span>
+          </button>
+        </div>
+        <div class="relative">
           <button onclick="toggleNotifs(event)" class="btn btn-ghost relative p-1" title="Notificaciones" id="notifs-btn">
             <span class="text-xl leading-none">🔔</span>
             <span id="notifs-badge" class="hidden absolute -top-0.5 -right-0.5 bg-red-600 text-white text-[10px] font-bold rounded-full min-w-[16px] h-[16px] px-1 flex items-center justify-center">0</span>
@@ -2518,6 +2524,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/08/2026',
+      titulo:'🤖 v2.35.0 — Botón del Asistente siempre a mano',
+      desc:'Sumamos un botón <b>🤖 Asistente</b> arriba a la derecha, <b>al lado de la campanita 🔔</b>, para que puedas abrirlo desde cualquier pantalla y consultarlo cuando quieras. Tocás el 🤖 y entrás directo al asistente: preguntale cómo se hace algo o contale qué hiciste y lo carga por vos.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'04/08/2026',
       titulo:'💬 v2.34.0 — El asistente ahora saluda y conversa',
       desc:'El asistente 🤖 ahora entiende <b>saludos y charla básica</b>: si le escribís <i>"Hola"</i>, <i>"buenas"</i> o <i>"gracias"</i>, te responde y te <b>guía</b> para que le hagas tu consulta. Si no sabés por dónde empezar, escribí <b>"ayuda"</b> y te muestra un <b>menú</b> con todo lo que puede hacer (cargar hacienda/labores/recordatorios por vos y explicarte cómo se hace cada cosa). Además, cuando no entiende algo, el mensaje ahora es más amable y te ofrece alternativas en vez de solo decir "no entendí".' },
@@ -6988,6 +6997,8 @@ pages.mensajes = async function(){
   state._mensajesPoll = setInterval(()=>{ if (state.currentPage==='mensajes') chatReload(); else { clearInterval(state._mensajesPoll); state._mensajesPoll=null; } }, 5000);
 };
 function mensajesSel(key){ state.mensajesConv=key; state._asistProp=null; pages.mensajes(); }
+// Abre directo el Asistente (desde el botón del header).
+function abrirAsistente(){ state.mensajesConv='asistente'; state._asistProp=null; go('mensajes'); }
 // Manda un aviso de prueba a este dispositivo (activa avisos primero si hace falta).
 async function probarAviso(){
   try {
