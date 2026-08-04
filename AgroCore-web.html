@@ -2518,6 +2518,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'04/08/2026',
+      titulo:'💬 v2.34.0 — El asistente ahora saluda y conversa',
+      desc:'El asistente 🤖 ahora entiende <b>saludos y charla básica</b>: si le escribís <i>"Hola"</i>, <i>"buenas"</i> o <i>"gracias"</i>, te responde y te <b>guía</b> para que le hagas tu consulta. Si no sabés por dónde empezar, escribí <b>"ayuda"</b> y te muestra un <b>menú</b> con todo lo que puede hacer (cargar hacienda/labores/recordatorios por vos y explicarte cómo se hace cada cosa). Además, cuando no entiende algo, el mensaje ahora es más amable y te ofrece alternativas en vez de solo decir "no entendí".' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/08/2026',
       titulo:'🧠 v2.33.0 — El asistente ahora te enseña a usar el sistema',
       desc:'Le incorporamos <b>el manual de usuario</b> al asistente 🤖. Ahora podés <b>preguntarle cómo se hace algo</b> y te responde el <b>paso a paso</b> — por ejemplo: <i>"¿cómo cargo un cheque de tercero?"</i>, <i>"¿cómo hago una compra?"</i>, <i>"¿cómo emito una factura?"</i>, <i>"¿cómo importo mis comprobantes?"</i>, <i>"¿cómo cargo una liquidación de hacienda?"</i>. Además de explicarte, te <b>lleva directo a la pantalla</b> correcta con un botón, y para lo que puede cargar solo (hacienda, labores, recordatorios) se ofrece a <b>hacerlo por vos</b> con un ejemplo listo para tocar. Cubre cheques, compras, ventas/ARCA, pagos y cobros, hacienda, insumos, labores, campañas, stock, arrendamientos, créditos, cotizaciones, viajes, empleados/ropa, mapa de lotes, grupos y más. <i>Entiende preguntas claras; si más adelante querés que interprete cualquier redacción libre, se le puede conectar la IA.</i>' },

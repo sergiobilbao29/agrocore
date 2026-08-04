@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.33.0';
+const AGROCORE_VERSION = '2.34.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6883,7 +6883,7 @@ function _interpretarMensaje(texto, ctx) {
     return { accion: 'labor', params: { campanaId: camp.id, loteNombre: lote.nombre, campoNombre: campo?.nombre || '', tipo: tlab, responsable: resp },
       resumen: `🚜 Labor de ${tlab} en lote ${lote.nombre}${camp.cultivo ? ` (${camp.cultivo}${camp.ciclo ? ' ' + camp.ciclo : ''})` : ''}${resp ? ` · ${resp}` : ''}` };
   }
-  return { error: 'No entendí 🤔. Probá: "nacieron 5 terneros en Montenegro", "murió 1 vaca en El 29", "compré 10 novillos en X", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8". También podés preguntarme *cómo se hace algo*, ej: "¿cómo cargo un cheque de tercero?".' };
+  return { error: 'Uh, esa no la entendí del todo 🤔. Pero tranqui, te ayudo igual.\n\nContame qué hiciste — ej: "nacieron 5 terneros en Montenegro", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8".\nO preguntame cómo se hace algo — ej: "¿cómo cargo un cheque de tercero?".\n\n💡 Escribí "ayuda" y te muestro todo lo que puedo hacer.' };
 }
 
 // ============================================================
@@ -7113,6 +7113,32 @@ function _buscarAyuda(texto){
     if (score > bestScore){ bestScore = score; best = e; }
   }
   return bestScore > 0 ? best : null;
+}
+// Charla básica: saludos, agradecimientos y despedidas. Devuelve texto o null.
+function _saludoRespuesta(texto){
+  const t = _sinAcentos(texto).trim().replace(/[!¡?¿.,]/g,'');
+  const palabras = t.split(/\s+/).length;
+  // Saludos (solo si el mensaje es corto y arranca saludando; si además pregunta algo, lo maneja la ayuda)
+  if (palabras <= 4 && /^(hola|holis|holaa+|buenas|buen dia|buenos dias|buenas tardes|buenas noches|hey|que tal|como estas|como andas|como va|todo bien|que hace|saludos)\b/.test(t)){
+    return '¡Hola! 👋 Soy el asistente de AgroCore. Puedo *cargar cosas por vos* (hacienda, labores, recordatorios) o *explicarte cómo se hace algo* en el sistema.\n\nProbá:\n• Contame qué hiciste — ej: "nacieron 5 terneros en Montenegro"\n• O preguntame — ej: "¿cómo hago una compra?"\n\nEscribí "ayuda" y te muestro todo lo que puedo hacer. ¿Con qué te doy una mano?';
+  }
+  // Agradecimientos
+  if (palabras <= 4 && /^(gracias|muchas gracias|genial|perfecto|barbaro|buenisimo|joya|excelente|de diez|copado)\b/.test(t)){
+    return '¡De nada! 😊 Cuando quieras, contame qué hiciste o preguntame cómo se hace algo.';
+  }
+  // Despedidas / confirmaciones cortas
+  if (palabras <= 3 && /^(chau|adios|nos vemos|hasta luego|hasta mañana|listo|ok|okay|oka|dale|buenas noches)\b/.test(t)){
+    return '¡Listo! Cuando quieras seguimos. 👋';
+  }
+  return null;
+}
+// ¿Pide ayuda general / no sabe qué hacer?
+function _esPedidoAyudaGeneral(t){
+  return /\b(que podes hacer|que sabes hacer|que puedo hacer|para que servis|para que sos|^ayuda$|necesito ayuda|dame una mano|ayudame|opciones|menu|no se que hacer|no se como usar|no entiendo nada|como te uso|como funcionas)\b/.test(t) || t.trim()==='ayuda';
+}
+// Menú de capacidades del asistente.
+function _menuAyuda(){
+  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Hacienda → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?"\n• "¿cómo hago una compra o una venta?"\n• "¿cómo importo mis comprobantes?"\n• "¿cómo cargo una liquidación de hacienda?"\n\nEscribí tu consulta y arrancamos 💪';
 }
 // Arma el texto de la respuesta de ayuda (paso a paso).
 function _textoAyuda(e){
@@ -7366,8 +7392,19 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     if (!texto) return res.status(400).json({ ok: false, error: 'Escribí algo' });
     await _logMensaje(req.companyId, 'asistente', req.user.id, 'user', _nombreUser(req.user), texto);
     const ctx = await _ctxAsistente(req.companyId);
-    // 1) Si es una PREGUNTA de "cómo se hace", respondemos con la ayuda del manual.
     const _tn = _sinAcentos(texto);
+    // 0) Charla básica (saludos, gracias, chau) y pedido de ayuda general.
+    const _sal = _saludoRespuesta(texto);
+    if (_sal) {
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', _sal, { status: 'ayuda', charla: true });
+      return res.json({ ok: true, status: 'ayuda', mensaje: _sal, data: m });
+    }
+    if (_esPedidoAyudaGeneral(_tn)) {
+      const msg = _menuAyuda();
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', menu: true });
+      return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: m });
+    }
+    // 1) Si es una PREGUNTA de "cómo se hace", respondemos con la ayuda del manual.
     if (_esPregunta(_tn)) {
       const e = _buscarAyuda(texto);
       if (e) {
