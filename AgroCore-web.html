@@ -965,6 +965,7 @@ const MODULES = [
   { id:'flujoCaja',     label:'Flujo de caja',        icon:'📈', perm:'finanzas:read',   section:'Tablero' },
   { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:'reportes:read',   section:'Tablero' },
   { id:'agenda',        label:'Agenda y recordatorios',icon:'📅', perm:'agenda:read',    section:'Tablero' },
+  { id:'mensajes',      label:'Mensajes y asistente', icon:'💬', section:'Tablero' },
 
   // ===== VENTAS — todo lo que entra =====
   { id:'clientes',      label:'Clientes',             icon:'👥', perm:'contactos:read',  section:'Ventas' },
@@ -1734,11 +1735,12 @@ function renderNav() {
             <span class="truncate">${esc(i.label)}</span>
             <span class="ml-auto text-[10px]">🔒</span>
           </button>`;
+          const badge = (i.id==='mensajes' && state._chatNoLeidos) ? `<span class="ml-auto text-[10px] font-bold bg-red-500 text-white rounded-full px-1.5 py-0.5 min-w-[18px] text-center">${state._chatNoLeidos>99?'99+':state._chatNoLeidos}</span>` : '';
           return `
           <button type="button" onclick="go('${i.id}')"
                   class="sidebar-link w-full text-left pl-7 pr-4 py-1.5 flex items-center gap-2 ${state.currentPage===i.id?'active':''}">
             <span class="text-base w-5 text-center">${i.icon}</span>
-            <span class="truncate">${esc(i.label)}</span>
+            <span class="truncate">${esc(i.label)}</span>${badge}
           </button>`;
         }).join('')}
       </div>`;
@@ -1773,6 +1775,7 @@ function renderNav() {
       try { nuevo.setSelectionRange(pos, pos); } catch {}
     }
   }
+  if (typeof startChatPoll === 'function') startChatPoll();  // arranca el contador de mensajes no leídos
 }
 
 function setHeader(title, sub) {
@@ -2509,6 +2512,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
+      titulo:'💬 v2.27.0 — Mensajes del equipo + Asistente de carga',
+      desc:'Nuevo módulo <b>Mensajes y asistente</b> (arriba, en Tablero), pensado para el celular. Tiene dos solapas: <b>👥 Equipo</b> — un chat interno entre los usuarios de la empresa (dueño ↔ empleados), con aviso de <b>no leídos</b> en el menú; y <b>🤖 Asistente</b> — escribís o <b>dictás por voz 🎤</b> lo que hiciste y el sistema lo carga por vos. Por ejemplo: <i>"nacieron 5 terneros en Montenegro"</i>, <i>"murió 1 vaca en El 29"</i>, <i>"compré 10 novillos en El 29"</i> o <i>"recordar vacunar el 15/8"</i> → te muestra qué va a registrar y con <b>Confirmar</b> queda cargado (movimiento de hacienda o recordatorio). Todo <b>dentro de AgroCore</b>, sin apps externas, usando el login y los permisos que ya tenés. Por ahora el asistente entiende frases claras (nacimiento/muerte/compra de hacienda y recordatorios); más adelante se le puede sumar IA para que entienda cualquier frase y más tipos de carga.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'🛰️ v2.26.0 — Mapa de lotes con colores de rinde',
       desc:'Nueva pantalla <b>Producción → Mapa de lotes</b>: un mapa (satélite o calle) donde cada lote se pinta según su <b>rinde</b> — <b>verde</b> (alto), <b>amarillo</b> (medio), <b>rojo</b> (bajo) y <b>gris</b> si no hay dato. El color sale del rinde de la <b>última campaña</b> de cada lote, y podés filtrar por <b>campo</b> y por <b>ciclo/campaña</b> para comparar años. A la derecha hay una lista de lotes con su rinde. Para ver la <b>forma real</b> de cada lote podés <b>dibujar el contorno</b> sobre el mapa (✏️) o <b>importar un KML/GeoJSON</b> (📁) de Google Earth o de tu asesor; si un lote todavía no tiene contorno, se muestra un marcador en su punto (o en el del campo). El mapa necesita conexión a internet.' },
@@ -6828,6 +6834,113 @@ async function movDel(id) {
     await api('/api/movimientos/'+id,{method:'DELETE'});
     toast('Movimiento eliminado','success'); delete state.cache.stockMap; pages.movimientos();
   } catch (e) { toast(e.message,'error'); }
+}
+
+/* ============================================================
+ * MENSAJES (chat de equipo) + ASISTENTE de carga
+ * ============================================================ */
+function startChatPoll(){
+  if (state._chatPollStarted) return; state._chatPollStarted = true;
+  const tick = async ()=>{
+    if (!state.user || !state.companyId) return;
+    try { const r = await api('/api/mensajes/no-leidos'); const n = r.data?.noLeidos||0;
+      if (n !== state._chatNoLeidos){ state._chatNoLeidos = n; renderNav(); } } catch {}
+  };
+  tick(); setInterval(tick, 20000);
+}
+let _chatVozRec = null;
+function chatVoz(inputId){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return toast('Tu navegador no soporta dictado por voz. Escribí el mensaje.','warn');
+  if (_chatVozRec){ try{ _chatVozRec.stop(); }catch{} _chatVozRec=null; return; }
+  const rec = new SR(); _chatVozRec = rec;
+  rec.lang = 'es-AR'; rec.interimResults = false; rec.maxAlternatives = 1;
+  const btn = document.getElementById(inputId==='chat-input'?'chat-voz':'chat-voz-a');
+  if (btn) btn.textContent = '🔴';
+  rec.onresult = (e)=>{ const txt = e.results[0][0].transcript; const inp = document.getElementById(inputId); if (inp){ inp.value = (inp.value?inp.value+' ':'')+txt; inp.focus(); } };
+  rec.onerror = ()=> toast('No pude captar el audio. Probá de nuevo.','warn');
+  rec.onend = ()=>{ _chatVozRec=null; if (btn) btn.textContent='🎤'; };
+  try { rec.start(); } catch { _chatVozRec=null; }
+}
+pages.mensajes = async function(){
+  setHeader('Mensajes y asistente', 'Chat del equipo y carga rápida por asistente');
+  state.mensajesTab = state.mensajesTab || 'general';
+  const tab = state.mensajesTab;
+  $('#page-body').innerHTML = `
+    <div class="flex gap-2 mb-3">
+      <button class="btn ${tab==='general'?'btn-primary':'btn-secondary'}" onclick="mensajesTab('general')">👥 Equipo</button>
+      <button class="btn ${tab==='asistente'?'btn-primary':'btn-secondary'}" onclick="mensajesTab('asistente')">🤖 Asistente</button>
+    </div>
+    ${tab==='asistente'?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
+      Escribí o dictá 🎤 lo que hiciste y lo cargo por vos. Ejemplos: <i>"nacieron 5 terneros en Montenegro"</i> · <i>"murió 1 vaca en El 29"</i> · <i>"compré 10 novillos en El 29"</i> · <i>"recordar vacunar el 15/8"</i>.</div>`:''}
+    <div id="chat-msgs" style="height:58vh;min-height:340px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
+    <div id="chat-confirm"></div>
+    <div class="flex gap-2 items-end">
+      <button class="btn btn-secondary" id="${tab==='general'?'chat-voz':'chat-voz-a'}" onclick="chatVoz('${tab==='general'?'chat-input':'chat-input-a'}')" title="Dictar por voz">🎤</button>
+      <textarea id="${tab==='general'?'chat-input':'chat-input-a'}" class="input flex-1" rows="1" placeholder="${tab==='general'?'Escribí un mensaje al equipo…':'Contame qué hiciste…'}" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault(); ${tab==='general'?'chatEnviar()':'chatAsistente()'};}"></textarea>
+      <button class="btn btn-primary" onclick="${tab==='general'?'chatEnviar()':'chatAsistente()'}">${tab==='general'?'Enviar':'Cargar'}</button>
+    </div>`;
+  if (tab==='general'){ try{ await api('/api/mensajes/marcar-leido',{method:'POST'}); state._chatNoLeidos=0; renderNav(); }catch{} }
+  await chatReload();
+  // polling mientras estás en la página
+  if (state._mensajesPoll) clearInterval(state._mensajesPoll);
+  state._mensajesPoll = setInterval(()=>{ if (state.currentPage==='mensajes') chatReload(); else { clearInterval(state._mensajesPoll); state._mensajesPoll=null; } }, 5000);
+};
+function mensajesTab(t){ state.mensajesTab=t; state._asistProp=null; pages.mensajes(); }
+async function chatReload(){
+  const cont = document.getElementById('chat-msgs'); if (!cont) return;
+  const tab = state.mensajesTab||'general';
+  let msgs=[];
+  try { msgs = (await api('/api/mensajes?canal='+tab)).data || []; } catch { return; }
+  const yo = state.user?.id;
+  cont.innerHTML = msgs.map(m=>{
+    if (tab==='asistente' && m.rol==='assistant'){
+      return `<div class="self-start max-w-[85%] bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm px-3 py-2 text-sm">🤖 ${esc(m.texto)}</div>`;
+    }
+    const mine = m.userId===yo && m.rol!=='assistant';
+    const hora = m.createdAt? new Date(m.createdAt).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}):'';
+    return `<div class="max-w-[85%] ${mine?'self-end bg-emerald-600 text-white rounded-tr-sm':'self-start bg-white border border-slate-200 text-slate-800 rounded-tl-sm'} rounded-2xl px-3 py-2 text-sm">
+      ${(!mine && tab==='general')?`<div class="text-[11px] font-semibold ${mine?'text-emerald-100':'text-emerald-700'} mb-0.5">${esc(m.autorNombre||'—')}</div>`:''}
+      <div>${esc(m.texto)}</div>
+      <div class="text-[10px] ${mine?'text-emerald-100':'text-slate-400'} text-right mt-0.5">${hora}</div>
+    </div>`;
+  }).join('') || `<div class="text-center text-slate-400 text-sm m-auto">${tab==='asistente'?'Escribí o dictá lo que hiciste y lo cargo por vos.':'Sin mensajes todavía. ¡Escribí el primero!'}</div>`;
+  cont.scrollTop = cont.scrollHeight;
+}
+async function chatEnviar(){
+  const inp = document.getElementById('chat-input'); const txt = (inp?.value||'').trim();
+  if (!txt) return;
+  inp.value='';
+  try { await api('/api/mensajes',{method:'POST',body:JSON.stringify({texto:txt})}); await chatReload(); }
+  catch(e){ toast(e.message,'error'); inp.value=txt; }
+}
+async function chatAsistente(){
+  const inp = document.getElementById('chat-input-a'); const txt = (inp?.value||'').trim();
+  if (!txt) return;
+  inp.value='';
+  try {
+    const r = await api('/api/asistente',{method:'POST',body:JSON.stringify({texto:txt})});
+    await chatReload();
+    const box = document.getElementById('chat-confirm');
+    if (r.status==='propuesta' && box){
+      state._asistProp = { accion:r.accion, params:r.params };
+      box.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2 flex items-center justify-between gap-2 flex-wrap">
+        <div class="text-sm text-amber-900">${esc(r.resumen)}</div>
+        <div class="flex gap-2">
+          <button class="btn btn-secondary text-xs" onclick="chatAsistCancelar()">Cancelar</button>
+          <button class="btn btn-primary text-xs" onclick="chatAsistConfirmar()">✅ Confirmar</button>
+        </div></div>`;
+    } else if (box){ box.innerHTML=''; }
+  } catch(e){ toast(e.message,'error'); inp.value=txt; }
+}
+function chatAsistCancelar(){ state._asistProp=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
+async function chatAsistConfirmar(){
+  const p = state._asistProp; if (!p) return;
+  const b=document.getElementById('chat-confirm'); if(b) b.innerHTML='';
+  state._asistProp=null;
+  try { await api('/api/asistente/confirmar',{method:'POST',body:JSON.stringify(p)}); await chatReload();
+    delete state.cache.haciendaResumen; toast('Cargado','success'); }
+  catch(e){ toast(e.message,'error'); await chatReload(); }
 }
 
 /* ============================================================

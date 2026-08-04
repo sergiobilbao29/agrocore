@@ -68,6 +68,8 @@ model Company {
   depositos       Deposito[]
   liquidacionesCereal LiquidacionCereal[]
   liquidacionesHacienda LiquidacionHacienda[]
+  mensajes        Mensaje[]
+  chatEstados     ChatEstado[]
   creditos        Credito[]
   bancoCuentas    BancoCuenta[]
   importLotes     ImportLote[]
@@ -1237,6 +1239,43 @@ model Cotizacion {
 
   @@unique([companyId, moneda, fecha])
   @@index([moneda, fecha])
+}
+
+// ============================================================
+// MENSAJERÍA INTERNA + ASISTENTE
+// canal="general": chat de equipo (todos los usuarios de la empresa).
+// canal="asistente": hilo privado de cada usuario con el asistente de carga.
+// ============================================================
+model Mensaje {
+  id          String   @id @default(cuid())
+  companyId   String
+  canal       String     // "general" | "asistente"
+  userId      String     // autor (o dueño del hilo, en el asistente)
+  rol         String   @default("user")  // "user" | "assistant"
+  autorNombre String?
+  texto       String
+  fotoUrl     String?
+  meta        Json?      // acción propuesta/ejecutada por el asistente
+  createdAt   DateTime @default(now())
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, canal])
+  @@index([companyId, canal, userId])
+  @@index([createdAt])
+}
+
+model ChatEstado {
+  id              String   @id @default(cuid())
+  companyId       String
+  userId          String
+  lastReadGeneral DateTime?
+  updatedAt       DateTime @updatedAt
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@index([companyId])
 }
 
 // ============================================================

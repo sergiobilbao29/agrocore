@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.26.0';
+const AGROCORE_VERSION = '2.27.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6790,6 +6790,153 @@ app.delete('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission(
       await tx.liquidacionHacienda.delete({ where: { id: liq.id } });
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// MENSAJERÍA INTERNA + ASISTENTE DE CARGA
+// Chat de equipo (canal general) + asistente que interpreta frases y carga.
+// ============================================================
+const _permOk = (req, p) => req.user?.superAdmin || hasPermission(req.membership?.role?.permissions || [], p);
+const _sinAcentos = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const _nombreUser = (u) => [u?.nombre, u?.apellido].filter(Boolean).join(' ') || u?.alias || u?.email || 'Usuario';
+
+// Contexto (campos + categorías de hacienda) para interpretar.
+async function _ctxAsistente(companyId) {
+  const [campos, catHac] = await Promise.all([
+    prisma.campo.findMany({ where: { companyId }, select: { id: true, nombre: true } }),
+    prisma.categoriaHaciendaConfig.findMany({ where: { companyId }, select: { nombre: true } }).catch(() => []),
+  ]);
+  return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean) };
+}
+// Intérprete por reglas (sin IA). Devuelve { accion, params, resumen } o { error }.
+function _interpretarMensaje(texto, ctx) {
+  const t = _sinAcentos(texto);
+  const nMatch = t.match(/\b(\d+)\b/);
+  const numero = nMatch ? parseInt(nMatch[1], 10) : null;
+  let campo = ctx.campos.find(c => c.nombre && t.includes(_sinAcentos(c.nombre)));
+  if (!campo && ctx.campos.length === 1) campo = ctx.campos[0];
+  // Recordatorio / agenda
+  if (/\b(recorda|recordar|recordame|acorda|acordate|avisa|avisame|recuerda|agenda|agendar)\b/.test(t)) {
+    let fecha = new Date(); fecha.setHours(9, 0, 0, 0);
+    if (/manana/.test(t)) fecha.setDate(fecha.getDate() + 1);
+    const dm = t.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+    if (dm) { let y = dm[3] ? parseInt(dm[3], 10) : fecha.getFullYear(); if (y < 100) y += 2000; fecha = new Date(y, parseInt(dm[2], 10) - 1, parseInt(dm[1], 10), 9, 0, 0); }
+    let titulo = texto.replace(/^\s*(recorda(r|me|te)?|acorda(r|te)?|avisa(r|me)?|recuerda|agenda(r)?)\s*/i, '')
+      .replace(/\bel\b|\bla\b|\bpara\b|\bque\b/gi, ' ')
+      .replace(/\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?/g, '')
+      .replace(/\bmanana\b|\bmañana\b|\bhoy\b/gi, '').replace(/\s{2,}/g, ' ').trim();
+    if (!titulo) titulo = texto.trim();
+    return { accion: 'recordatorio', params: { titulo, fecha: fecha.toISOString() },
+      resumen: `📅 Recordatorio: "${titulo}" para el ${fecha.toLocaleDateString('es-AR')}` };
+  }
+  // Hacienda: nacimiento / muerte / compra
+  let tipo = null;
+  if (/\bnaci|\bpari|\bnacieron|\bnacio|\bparieron|\bpario/.test(t)) tipo = 'nacimiento';
+  else if (/\bmuri|\bmuert|\bmurio|\bmurieron|\bperdi|\bperdieron/.test(t)) tipo = 'muerte';
+  else if (/\bcompr/.test(t)) tipo = 'compra';
+  if (tipo) {
+    const cat = ctx.categorias.find(c => t.includes(_sinAcentos(c)))
+      || ctx.categorias.find(c => t.includes(_sinAcentos(c).replace(/a$|o$/, '')));
+    if (!numero) return { error: 'No entendí la cantidad. Ej: "nacieron 5 terneros en Montenegro".' };
+    if (!cat) return { error: `No reconocí la categoría de animal. Las que tenés: ${ctx.categorias.join(', ') || '(cargá categorías de hacienda primero)'}.` };
+    if (!campo) return { error: 'No reconocí el campo. Decí en qué campo, ej: "en Montenegro".' };
+    const lbl = tipo === 'nacimiento' ? 'Nacimiento' : tipo === 'muerte' ? 'Muerte' : 'Compra';
+    return { accion: 'hacienda_mov', params: { campoId: campo.id, campoNombre: campo.nombre, categoria: cat, tipo, cantidad: numero },
+      resumen: `🐄 ${lbl} de ${numero} ${cat} en ${campo.nombre}` };
+  }
+  return { error: 'No entendí 🤔. Probá: "nacieron 5 terneros en Montenegro", "murió 1 vaca en El 29", "compré 10 novillos en X" o "recordar vacunar el 15/8".' };
+}
+async function _logMensaje(companyId, canal, userId, rol, autorNombre, texto, meta) {
+  return prisma.mensaje.create({ data: { companyId, canal, userId, rol, autorNombre: autorNombre || null, texto, meta: meta || undefined } });
+}
+
+// --- Chat de equipo (canal general) ---
+app.get('/api/mensajes', requireCompany, async (req, res, next) => {
+  try {
+    const canal = req.query.canal === 'asistente' ? 'asistente' : 'general';
+    const where = { companyId: req.companyId, canal };
+    if (canal === 'asistente') where.userId = req.user.id;   // hilo privado del usuario
+    const data = await prisma.mensaje.findMany({ where, orderBy: { createdAt: 'asc' }, take: 300 });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/mensajes', requireCompany, async (req, res, next) => {
+  try {
+    const texto = String(req.body?.texto || '').trim();
+    const fotoUrl = req.body?.fotoUrl || null;
+    if (!texto && !fotoUrl) return res.status(400).json({ ok: false, error: 'Mensaje vacío' });
+    const row = await prisma.mensaje.create({ data: {
+      companyId: req.companyId, canal: 'general', userId: req.user.id, rol: 'user',
+      autorNombre: _nombreUser(req.user), texto: texto || '📷 Foto', fotoUrl: fotoUrl || null,
+    }});
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.get('/api/mensajes/no-leidos', requireCompany, async (req, res, next) => {
+  try {
+    const est = await prisma.chatEstado.findFirst({ where: { companyId: req.companyId, userId: req.user.id } });
+    const desde = est?.lastReadGeneral || new Date(0);
+    const n = await prisma.mensaje.count({ where: { companyId: req.companyId, canal: 'general', createdAt: { gt: desde }, userId: { not: req.user.id } } });
+    res.json({ ok: true, data: { noLeidos: n } });
+  } catch (e) { next(e); }
+});
+app.post('/api/mensajes/marcar-leido', requireCompany, async (req, res, next) => {
+  try {
+    await prisma.chatEstado.upsert({
+      where: { companyId_userId: { companyId: req.companyId, userId: req.user.id } },
+      create: { companyId: req.companyId, userId: req.user.id, lastReadGeneral: new Date() },
+      update: { lastReadGeneral: new Date() },
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// --- Asistente: interpretar (no ejecuta) ---
+app.post('/api/asistente', requireCompany, async (req, res, next) => {
+  try {
+    const texto = String(req.body?.texto || '').trim();
+    if (!texto) return res.status(400).json({ ok: false, error: 'Escribí algo' });
+    await _logMensaje(req.companyId, 'asistente', req.user.id, 'user', _nombreUser(req.user), texto);
+    const ctx = await _ctxAsistente(req.companyId);
+    const r = _interpretarMensaje(texto, ctx);
+    if (r.error) {
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.error, { status: 'ayuda' });
+      return res.json({ ok: true, status: 'ayuda', mensaje: r.error, data: m });
+    }
+    const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente',
+      `Voy a registrar: ${r.resumen}. ¿Confirmás?`, { status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen });
+    res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, data: m });
+  } catch (e) { next(e); }
+});
+// --- Asistente: confirmar (ejecuta la acción propuesta) ---
+app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
+  try {
+    const { accion, params } = req.body || {};
+    if (!accion || !params) return res.status(400).json({ ok: false, error: 'Falta la acción a confirmar' });
+    let resumen = '';
+    if (accion === 'hacienda_mov') {
+      if (!_permOk(req, 'stock:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para cargar movimientos de hacienda.' });
+      const campo = await prisma.campo.findFirst({ where: { id: params.campoId, companyId: req.companyId } });
+      if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
+      await prisma.haciendaMovimiento.create({ data: {
+        companyId: req.companyId, campoId: params.campoId, categoria: params.categoria,
+        fecha: new Date(), tipo: params.tipo, cantidad: parseInt(params.cantidad, 10) || 0,
+        observaciones: 'Cargado por el asistente',
+      }});
+      resumen = `✅ Registrado: ${params.tipo} de ${params.cantidad} ${params.categoria} en ${campo.nombre}.`;
+    } else if (accion === 'recordatorio') {
+      if (!_permOk(req, 'agenda:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para crear recordatorios.' });
+      await prisma.recordatorio.create({ data: {
+        companyId: req.companyId, userIdCreador: req.user.id,
+        titulo: params.titulo, fecha: new Date(params.fecha), categoria: 'otro', prioridad: 'media',
+      }});
+      resumen = `✅ Recordatorio creado: "${params.titulo}".`;
+    } else {
+      return res.status(400).json({ ok: false, error: 'Acción no soportada' });
+    }
+    const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', resumen, { status: 'hecho', accion });
+    res.json({ ok: true, mensaje: resumen, data: m });
   } catch (e) { next(e); }
 });
 
