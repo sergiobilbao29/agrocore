@@ -2513,6 +2513,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
+      titulo:'👪 v2.30.0 — Grupos de mensajes',
+      desc:'Ahora en <b>Mensajes y asistente</b> podés crear <b>grupos</b> para hablar solo con algunos integrantes (ej. <i>Administración</i>, <i>Dueños</i>, <i>Operarios</i>) en vez de escribirle a toda la empresa. Arriba tenés los botones de cada conversación: <b>👥 Equipo</b> (todos), tus <b>👪 grupos</b> y <b>🤖 Asistente</b>. Con <b>➕ Grupo</b> lo creás eligiendo el nombre y tildando los integrantes; con <b>⚙️</b> lo editás o eliminás (solo el creador o un administrador). Cada conversación tiene su propio contador de <b>no leídos</b> y sus <b>avisos con sonido/push</b> van solo a los integrantes del grupo.' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'🔔 v2.29.0 — Avisos de mensajes con sonido (celular y PC) + fix del mapa',
       desc:'Ahora los mensajes del equipo <b>avisan de verdad</b>: cuando te llega uno suena un <b>sonido</b> y aparece una <b>notificación</b> en el celular o la PC — <b>incluso con la app cerrada</b> (notificaciones push). Para activarlas, entrá a <b>Mensajes y asistente</b> y tocá <b>🔔 Activar avisos</b> (el navegador te va a pedir permiso una vez, por dispositivo). Funciona en Chrome de Android y PC; en iPhone hay que <b>instalar la app</b> en la pantalla de inicio primero. <b>Mapa de lotes:</b> se corrigió el <b>marcador del campo</b> — ahora ubica el establecimiento con su geolocalización (acepta coordenadas o link de Google Maps) y, si ningún campo/lote tiene ubicación cargada, te avisa con un acceso directo para cargarla. <b>Próximamente:</b> grupos de mensajes (para separar administrativos, dueños, operarios, etc.).' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
@@ -6888,6 +6891,7 @@ function startChatPoll(){
     if (!state.user || !state.companyId) return;
     try {
       const r = await api('/api/mensajes/no-leidos'); const n = r.data?.noLeidos||0;
+      state._chatPorCanal = r.data?.porCanal || {};
       const prev = state._chatNoLeidos;
       if (prev!=null && n>prev){   // llegaron mensajes nuevos
         chatBeep();
@@ -6922,57 +6926,76 @@ function chatVoz(inputId){
   try { rec.start(); } catch { _chatVozRec=null; }
 }
 pages.mensajes = async function(){
-  setHeader('Mensajes y asistente', 'Chat del equipo y carga rápida por asistente');
-  state.mensajesTab = state.mensajesTab || 'general';
-  const tab = state.mensajesTab;
+  setHeader('Mensajes y asistente', 'Chat del equipo, grupos y asistente');
+  const conv = state.mensajesConv = state.mensajesConv || 'general';
+  // Cargar grupos y usuarios de la empresa (para el selector y para crear grupos).
+  try { state.cache.grupos = (await api('/api/grupos').catch(()=>({data:[]}))).data || []; } catch { state.cache.grupos = state.cache.grupos||[]; }
+  try { if (!state.cache.companyUsers) state.cache.companyUsers = (await api('/api/company-users').catch(()=>({data:[]}))).data || []; } catch {}
+  const grupos = state.cache.grupos || [];
+  // Si la conversación seleccionada es un grupo que ya no existe, volver a general.
+  if (conv.startsWith('grupo:') && !grupos.some(g=>('grupo:'+g.id)===conv)) { state.mensajesConv='general'; }
+  const cur = state.mensajesConv;
+  const esAsistente = cur==='asistente';
+  const grupoActual = cur.startsWith('grupo:') ? grupos.find(g=>('grupo:'+g.id)===cur) : null;
+  const puedeEditarGrupo = grupoActual && (state.user?.superAdmin || grupoActual.creadoPor===state.user?.id || can('usuarios:*'));
+  const pc = state._chatPorCanal || {};
+  const chip = (key,label)=>{ const activo=key===cur; const n=pc[key]||0;
+    return `<button class="btn ${activo?'btn-primary':'btn-secondary'} text-sm relative" onclick="mensajesSel('${key}')">${label}${(!activo&&n)?` <span class="ml-1 text-[10px] font-bold bg-red-500 text-white rounded-full px-1.5">${n>99?'99+':n}</span>`:''}</button>`; };
+  const chips = [ chip('general','👥 Equipo') ]
+    .concat(grupos.map(g=>chip('grupo:'+g.id, '👪 '+esc(g.nombre))))
+    .concat([ chip('asistente','🤖 Asistente') ]).join(' ');
+
   $('#page-body').innerHTML = `
     <div class="flex gap-2 mb-3 flex-wrap items-center">
-      <button class="btn ${tab==='general'?'btn-primary':'btn-secondary'}" onclick="mensajesTab('general')">👥 Equipo</button>
-      <button class="btn ${tab==='asistente'?'btn-primary':'btn-secondary'}" onclick="mensajesTab('asistente')">🤖 Asistente</button>
+      ${chips}
+      <button class="btn btn-ghost text-sm" onclick="grupoNuevo()" title="Crear un grupo con algunos integrantes">➕ Grupo</button>
+      ${puedeEditarGrupo?`<button class="btn btn-ghost text-sm" onclick="grupoEditar('${grupoActual.id}')" title="Editar o eliminar este grupo">⚙️</button>`:''}
       <div class="flex-1"></div>
       <button class="btn btn-secondary text-xs" onclick="activarAvisos(false)" title="Recibir notificaciones con sonido en este dispositivo, incluso con la app cerrada">🔔 Activar avisos</button>
     </div>
-    ${tab==='asistente'?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
-      Escribí o dictá 🎤 lo que hiciste y lo cargo por vos. Ejemplos: <i>"nacieron 5 terneros en Montenegro"</i> · <i>"murió 1 vaca en El 29"</i> · <i>"compré 10 novillos en El 29"</i> · <i>"recordar vacunar el 15/8"</i>.</div>`:''}
-    <div id="chat-msgs" style="height:58vh;min-height:340px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
+    ${esAsistente?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
+      Escribí o dictá 🎤 lo que hiciste y lo cargo por vos. Ejemplos: <i>"nacieron 5 terneros en Montenegro"</i> · <i>"murió 1 vaca en El 29"</i> · <i>"compré 10 novillos en El 29"</i> · <i>"recordar vacunar el 15/8"</i>.</div>`
+     : grupoActual?`<div class="text-xs text-slate-500 mb-2">👪 <b>${esc(grupoActual.nombre)}</b> · ${(grupoActual.miembros||[]).length} integrante${(grupoActual.miembros||[]).length===1?'':'s'}</div>`:''}
+    <div id="chat-msgs" style="height:56vh;min-height:320px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
     <div id="chat-confirm"></div>
     <div class="flex gap-2 items-end">
-      <button class="btn btn-secondary" id="${tab==='general'?'chat-voz':'chat-voz-a'}" onclick="chatVoz('${tab==='general'?'chat-input':'chat-input-a'}')" title="Dictar por voz">🎤</button>
-      <textarea id="${tab==='general'?'chat-input':'chat-input-a'}" class="input flex-1" rows="1" placeholder="${tab==='general'?'Escribí un mensaje al equipo…':'Contame qué hiciste…'}" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault(); ${tab==='general'?'chatEnviar()':'chatAsistente()'};}"></textarea>
-      <button class="btn btn-primary" onclick="${tab==='general'?'chatEnviar()':'chatAsistente()'}">${tab==='general'?'Enviar':'Cargar'}</button>
+      <button class="btn btn-secondary" id="${esAsistente?'chat-voz-a':'chat-voz'}" onclick="chatVoz('${esAsistente?'chat-input-a':'chat-input'}')" title="Dictar por voz">🎤</button>
+      <textarea id="${esAsistente?'chat-input-a':'chat-input'}" class="input flex-1" rows="1" placeholder="${esAsistente?'Contame qué hiciste…':(grupoActual?('Mensaje a '+esc(grupoActual.nombre)+'…'):'Escribí un mensaje al equipo…')}" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault(); ${esAsistente?'chatAsistente()':'chatEnviar()'};}"></textarea>
+      <button class="btn btn-primary" onclick="${esAsistente?'chatAsistente()':'chatEnviar()'}">${esAsistente?'Cargar':'Enviar'}</button>
     </div>`;
-  if (tab==='general'){ try{ await api('/api/mensajes/marcar-leido',{method:'POST'}); state._chatNoLeidos=0; renderNav(); }catch{} }
+  if (!esAsistente){ try{ await api('/api/mensajes/marcar-leido',{method:'POST',body:JSON.stringify({canal:cur})}); if(state._chatPorCanal) state._chatPorCanal[cur]=0; chatRecalcTotal(); }catch{} }
   await chatReload();
-  // polling mientras estás en la página
   if (state._mensajesPoll) clearInterval(state._mensajesPoll);
   state._mensajesPoll = setInterval(()=>{ if (state.currentPage==='mensajes') chatReload(); else { clearInterval(state._mensajesPoll); state._mensajesPoll=null; } }, 5000);
 };
-function mensajesTab(t){ state.mensajesTab=t; state._asistProp=null; pages.mensajes(); }
+function mensajesSel(key){ state.mensajesConv=key; state._asistProp=null; pages.mensajes(); }
+function chatRecalcTotal(){ const pc=state._chatPorCanal||{}; state._chatNoLeidos=Object.values(pc).reduce((a,n)=>a+(Number(n)||0),0); renderNav(); }
 async function chatReload(){
   const cont = document.getElementById('chat-msgs'); if (!cont) return;
-  const tab = state.mensajesTab||'general';
+  const conv = state.mensajesConv||'general';
+  const esAsistente = conv==='asistente';
   let msgs=[];
-  try { msgs = (await api('/api/mensajes?canal='+tab)).data || []; } catch { return; }
+  try { msgs = (await api('/api/mensajes?canal='+encodeURIComponent(conv))).data || []; } catch { return; }
   const yo = state.user?.id;
   cont.innerHTML = msgs.map(m=>{
-    if (tab==='asistente' && m.rol==='assistant'){
+    if (esAsistente && m.rol==='assistant'){
       return `<div class="self-start max-w-[85%] bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm px-3 py-2 text-sm">🤖 ${esc(m.texto)}</div>`;
     }
     const mine = m.userId===yo && m.rol!=='assistant';
     const hora = m.createdAt? new Date(m.createdAt).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}):'';
     return `<div class="max-w-[85%] ${mine?'self-end bg-emerald-600 text-white rounded-tr-sm':'self-start bg-white border border-slate-200 text-slate-800 rounded-tl-sm'} rounded-2xl px-3 py-2 text-sm">
-      ${(!mine && tab==='general')?`<div class="text-[11px] font-semibold ${mine?'text-emerald-100':'text-emerald-700'} mb-0.5">${esc(m.autorNombre||'—')}</div>`:''}
+      ${(!mine && !esAsistente)?`<div class="text-[11px] font-semibold text-emerald-700 mb-0.5">${esc(m.autorNombre||'—')}</div>`:''}
       <div>${esc(m.texto)}</div>
       <div class="text-[10px] ${mine?'text-emerald-100':'text-slate-400'} text-right mt-0.5">${hora}</div>
     </div>`;
-  }).join('') || `<div class="text-center text-slate-400 text-sm m-auto">${tab==='asistente'?'Escribí o dictá lo que hiciste y lo cargo por vos.':'Sin mensajes todavía. ¡Escribí el primero!'}</div>`;
+  }).join('') || `<div class="text-center text-slate-400 text-sm m-auto">${esAsistente?'Escribí o dictá lo que hiciste y lo cargo por vos.':'Sin mensajes todavía. ¡Escribí el primero!'}</div>`;
   cont.scrollTop = cont.scrollHeight;
 }
 async function chatEnviar(){
   const inp = document.getElementById('chat-input'); const txt = (inp?.value||'').trim();
   if (!txt) return;
   inp.value='';
-  try { await api('/api/mensajes',{method:'POST',body:JSON.stringify({texto:txt})}); await chatReload(); }
+  try { await api('/api/mensajes',{method:'POST',body:JSON.stringify({texto:txt, canal: state.mensajesConv||'general'})}); await chatReload(); }
   catch(e){ toast(e.message,'error'); inp.value=txt; }
 }
 async function chatAsistente(){
@@ -7038,6 +7061,50 @@ async function chatAsistConfirmar(){
   try { await api('/api/asistente/confirmar',{method:'POST',body:JSON.stringify(p)}); await chatReload();
     delete state.cache.haciendaResumen; toast('Cargado','success'); }
   catch(e){ toast(e.message,'error'); await chatReload(); }
+}
+
+// --- Grupos de mensajería ---
+function grupoNuevo(){ grupoForm(null); }
+function grupoEditar(id){ const g=(state.cache.grupos||[]).find(x=>x.id===id); grupoForm(g||null); }
+function grupoForm(g){
+  const users = state.cache.companyUsers||[];
+  const sel = new Set((g?.miembros||[]).map(String));
+  if (!users.length){ toast('No pude cargar los usuarios de la empresa.','warn'); return; }
+  openModal({
+    title: g?'Editar grupo':'Nuevo grupo de mensajes', size:'max-w-lg',
+    body:`
+      <div class="mb-3"><label class="label">Nombre del grupo *</label>
+        <input id="grp-nom" class="input" value="${esc(g?.nombre||'')}" placeholder="Ej: Administración, Dueños, Operarios…"/></div>
+      <label class="label">Integrantes</label>
+      <div class="border border-slate-200 rounded-lg p-2 max-h-64 overflow-y-auto">
+        ${users.map(u=>`<label class="flex items-center gap-2 py-1 text-sm">
+          <input type="checkbox" class="grp-m w-4 h-4" value="${u.id}" ${sel.has(String(u.id))?'checked':''} ${u.id===state.user?.id?'checked disabled':''}/>
+          <span>${esc(u.nombre)}${u.id===state.user?.id?' <span class="text-[10px] text-slate-400">(vos)</span>':''}</span>
+        </label>`).join('')}
+      </div>
+      <div class="text-[11px] text-slate-500 mt-1">Vos siempre quedás en el grupo. Los miembros ven los mensajes y reciben los avisos.</div>`,
+    footer:`${g?`<button class="btn btn-ghost text-red-600 mr-auto" onclick='grupoEliminar(${JSON.stringify(g.id)})'>🗑️ Eliminar</button>`:''}
+            <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='grupoGuardar(${JSON.stringify(g?.id||null)})'>${g?'Guardar':'Crear grupo'}</button>`
+  });
+}
+async function grupoGuardar(id){
+  const nombre = ($('#grp-nom').value||'').trim();
+  if (!nombre) return toast('Poné un nombre','warn');
+  const miembros = [...document.querySelectorAll('.grp-m:checked')].map(c=>c.value);
+  try {
+    const r = await api('/api/grupos'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify({ nombre, miembros }) });
+    toast(id?'Grupo actualizado':'Grupo creado','success');
+    closeModal();
+    state.cache.grupos = null;
+    if (!id && r.data?.id) state.mensajesConv = 'grupo:'+r.data.id;
+    pages.mensajes();
+  } catch(e){ toast(e.message,'error'); }
+}
+async function grupoEliminar(id){
+  if (!confirm('¿Eliminar este grupo y todos sus mensajes?')) return;
+  try { await api('/api/grupos/'+id,{method:'DELETE'}); toast('Grupo eliminado','success'); closeModal(); state.cache.grupos=null; state.mensajesConv='general'; pages.mensajes(); }
+  catch(e){ toast(e.message,'error'); }
 }
 
 /* ============================================================

@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.29.0';
+const AGROCORE_VERSION = '2.30.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6902,6 +6902,20 @@ async function _pushAMiembros(companyId, exceptUserId, payload) {
     }));
   } catch {}
 }
+// Envía push a una lista específica de usuarios (para grupos).
+async function _pushAUsuarios(companyId, userIds, payload) {
+  try {
+    if (!userIds || !userIds.length) return;
+    const wp = await _getWebpush(); if (!wp) return;
+    const v = await _getVapid(); if (!v) return;
+    const subs = await prisma.pushSubscription.findMany({ where: { companyId, userId: { in: userIds.map(String) } } });
+    const body = JSON.stringify(payload);
+    await Promise.all(subs.map(async (s) => {
+      try { await wp.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body); }
+      catch (e) { if (e?.statusCode === 404 || e?.statusCode === 410) { await prisma.pushSubscription.delete({ where: { id: s.id } }).catch(() => {}); } }
+    }));
+  } catch {}
+}
 app.get('/api/push/vapid-public', requireCompany, async (req, res, next) => {
   try { const v = await _getVapid(); res.json({ ok: true, data: { publicKey: v?.publicKey || null } }); } catch (e) { next(e); }
 });
@@ -6921,45 +6935,145 @@ app.post('/api/push/unsubscribe', requireCompany, async (req, res, next) => {
   try { const ep = req.body?.endpoint; if (ep) await prisma.pushSubscription.deleteMany({ where: { endpoint: ep, userId: req.user.id } }); res.json({ ok: true }); } catch (e) { next(e); }
 });
 
-// --- Chat de equipo (canal general) ---
+// Usuarios de la empresa (lista liviana para armar grupos / mostrar autores).
+// Accesible a cualquier miembro (no requiere permiso de administrar usuarios).
+app.get('/api/company-users', requireCompany, async (req, res, next) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { activo: true, oculto: false, userCompanies: { some: { companyId: req.companyId } } },
+      select: { id: true, nombre: true, apellido: true, alias: true, email: true },
+      orderBy: [{ apellido: 'asc' }, { nombre: 'asc' }],
+    });
+    res.json({ ok: true, data: users.map(u => ({ id: u.id, nombre: _nombreUser(u) })) });
+  } catch (e) { next(e); }
+});
+
+// --- Grupos de mensajería ---
+function _grupoMiembros(g){ return Array.isArray(g?.miembros) ? g.miembros.map(String) : []; }
+async function _gruposDeUsuario(companyId, userId){
+  const all = await prisma.mensajeGrupo.findMany({ where: { companyId }, orderBy: { nombre: 'asc' } });
+  return all.filter(g => _grupoMiembros(g).includes(String(userId)));
+}
+app.get('/api/grupos', requireCompany, async (req, res, next) => {
+  try {
+    const all = await prisma.mensajeGrupo.findMany({ where: { companyId: req.companyId }, orderBy: { nombre: 'asc' } });
+    const admin = req.user.superAdmin || _permOk(req, 'usuarios:*');
+    const data = admin ? all : all.filter(g => _grupoMiembros(g).includes(String(req.user.id)));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/grupos', requireCompany, async (req, res, next) => {
+  try {
+    const nombre = String(req.body?.nombre || '').trim();
+    if (!nombre) return res.status(400).json({ ok: false, error: 'Poné un nombre al grupo' });
+    let miembros = Array.isArray(req.body?.miembros) ? req.body.miembros.map(String) : [];
+    if (!miembros.includes(String(req.user.id))) miembros.push(String(req.user.id)); // el creador siempre es miembro
+    const g = await prisma.mensajeGrupo.create({ data: { companyId: req.companyId, nombre, miembros, creadoPor: req.user.id } });
+    res.status(201).json({ ok: true, data: g });
+  } catch (e) { next(e); }
+});
+app.put('/api/grupos/:id', requireCompany, async (req, res, next) => {
+  try {
+    const g = await prisma.mensajeGrupo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!g) return res.status(404).json({ ok: false, error: 'Grupo no encontrado' });
+    if (!(req.user.superAdmin || g.creadoPor === req.user.id || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo el creador o un administrador puede editar el grupo' });
+    const data = {};
+    if (req.body?.nombre != null) data.nombre = String(req.body.nombre).trim();
+    if (Array.isArray(req.body?.miembros)) { let m = req.body.miembros.map(String); if (g.creadoPor && !m.includes(String(g.creadoPor))) m.push(String(g.creadoPor)); data.miembros = m; }
+    const row = await prisma.mensajeGrupo.update({ where: { id: g.id }, data });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.delete('/api/grupos/:id', requireCompany, async (req, res, next) => {
+  try {
+    const g = await prisma.mensajeGrupo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!g) return res.status(404).json({ ok: false, error: 'Grupo no encontrado' });
+    if (!(req.user.superAdmin || g.creadoPor === req.user.id || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo el creador o un administrador puede eliminar el grupo' });
+    await prisma.mensaje.deleteMany({ where: { companyId: req.companyId, canal: 'grupo:' + g.id } });
+    await prisma.mensajeGrupo.delete({ where: { id: g.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Valida el canal pedido y (para grupos) la pertenencia. Devuelve {canal, grupo} o null.
+async function _canalValido(req, canalRaw){
+  const canal = String(canalRaw || 'general');
+  if (canal === 'general' || canal === 'asistente') return { canal };
+  if (canal.startsWith('grupo:')){
+    const g = await prisma.mensajeGrupo.findFirst({ where: { id: canal.slice(6), companyId: req.companyId } });
+    if (!g) return null;
+    const ok = req.user.superAdmin || _grupoMiembros(g).includes(String(req.user.id));
+    return ok ? { canal, grupo: g } : null;
+  }
+  return null;
+}
+
+// --- Chat (canal general, grupo:<id> o asistente) ---
 app.get('/api/mensajes', requireCompany, async (req, res, next) => {
   try {
-    const canal = req.query.canal === 'asistente' ? 'asistente' : 'general';
-    const where = { companyId: req.companyId, canal };
-    if (canal === 'asistente') where.userId = req.user.id;   // hilo privado del usuario
+    const v = await _canalValido(req, req.query.canal);
+    if (!v) return res.status(403).json({ ok: false, error: 'No tenés acceso a esa conversación' });
+    const where = { companyId: req.companyId, canal: v.canal };
+    if (v.canal === 'asistente') where.userId = req.user.id;   // hilo privado del usuario
     const data = await prisma.mensaje.findMany({ where, orderBy: { createdAt: 'asc' }, take: 300 });
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
 app.post('/api/mensajes', requireCompany, async (req, res, next) => {
   try {
+    const v = await _canalValido(req, req.body?.canal || 'general');
+    if (!v || v.canal === 'asistente') return res.status(403).json({ ok: false, error: 'No tenés acceso a esa conversación' });
     const texto = String(req.body?.texto || '').trim();
     const fotoUrl = req.body?.fotoUrl || null;
     if (!texto && !fotoUrl) return res.status(400).json({ ok: false, error: 'Mensaje vacío' });
     const autor = _nombreUser(req.user);
     const row = await prisma.mensaje.create({ data: {
-      companyId: req.companyId, canal: 'general', userId: req.user.id, rol: 'user',
+      companyId: req.companyId, canal: v.canal, userId: req.user.id, rol: 'user',
       autorNombre: autor, texto: texto || '📷 Foto', fotoUrl: fotoUrl || null,
     }});
-    // Aviso push a los demás miembros (no bloquea la respuesta).
-    _pushAMiembros(req.companyId, req.user.id, { title: '💬 '+autor, body: (texto||'📷 Foto').slice(0,140), url: '/app#mensajes', tag: 'chat-'+req.companyId });
+    // Aviso push a los demás participantes.
+    const titulo = v.grupo ? `💬 ${autor} · ${v.grupo.nombre}` : `💬 ${autor}`;
+    if (v.grupo){
+      const dest = _grupoMiembros(v.grupo).filter(id => id !== String(req.user.id));
+      _pushAUsuarios(req.companyId, dest, { title: titulo, body: (texto||'📷 Foto').slice(0,140), url: '/app#mensajes', tag: 'chat-'+v.canal });
+    } else {
+      _pushAMiembros(req.companyId, req.user.id, { title: titulo, body: (texto||'📷 Foto').slice(0,140), url: '/app#mensajes', tag: 'chat-'+req.companyId });
+    }
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
 app.get('/api/mensajes/no-leidos', requireCompany, async (req, res, next) => {
   try {
     const est = await prisma.chatEstado.findFirst({ where: { companyId: req.companyId, userId: req.user.id } });
-    const desde = est?.lastReadGeneral || new Date(0);
-    const n = await prisma.mensaje.count({ where: { companyId: req.companyId, canal: 'general', createdAt: { gt: desde }, userId: { not: req.user.id } } });
-    res.json({ ok: true, data: { noLeidos: n } });
+    const lr = (est?.lastRead && typeof est.lastRead === 'object') ? est.lastRead : {};
+    const desdeDe = (canal) => new Date(lr[canal] || (canal === 'general' ? (est?.lastReadGeneral || 0) : 0));
+    const porCanal = {};
+    let total = 0;
+    // general
+    porCanal.general = await prisma.mensaje.count({ where: { companyId: req.companyId, canal: 'general', createdAt: { gt: desdeDe('general') }, userId: { not: req.user.id } } });
+    total += porCanal.general;
+    // grupos del usuario
+    const grupos = await _gruposDeUsuario(req.companyId, req.user.id);
+    for (const g of grupos){
+      const c = 'grupo:' + g.id;
+      const n = await prisma.mensaje.count({ where: { companyId: req.companyId, canal: c, createdAt: { gt: desdeDe(c) }, userId: { not: req.user.id } } });
+      porCanal[c] = n; total += n;
+    }
+    res.json({ ok: true, data: { noLeidos: total, porCanal } });
   } catch (e) { next(e); }
 });
 app.post('/api/mensajes/marcar-leido', requireCompany, async (req, res, next) => {
   try {
+    const canal = String(req.body?.canal || 'general');
+    const est = await prisma.chatEstado.findFirst({ where: { companyId: req.companyId, userId: req.user.id } });
+    const lr = (est?.lastRead && typeof est.lastRead === 'object') ? { ...est.lastRead } : {};
+    lr[canal] = new Date().toISOString();
+    const data = { lastRead: lr };
+    if (canal === 'general') data.lastReadGeneral = new Date();
     await prisma.chatEstado.upsert({
       where: { companyId_userId: { companyId: req.companyId, userId: req.user.id } },
-      create: { companyId: req.companyId, userId: req.user.id, lastReadGeneral: new Date() },
-      update: { lastReadGeneral: new Date() },
+      create: { companyId: req.companyId, userId: req.user.id, lastRead: lr, lastReadGeneral: canal === 'general' ? new Date() : null },
+      update: data,
     });
     res.json({ ok: true });
   } catch (e) { next(e); }

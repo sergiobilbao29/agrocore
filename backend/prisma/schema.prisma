@@ -71,6 +71,7 @@ model Company {
   mensajes        Mensaje[]
   chatEstados     ChatEstado[]
   pushSubs        PushSubscription[]
+  mensajeGrupos   MensajeGrupo[]
   creditos        Credito[]
   bancoCuentas    BancoCuenta[]
   importLotes     ImportLote[]
@@ -1271,11 +1272,28 @@ model ChatEstado {
   companyId       String
   userId          String
   lastReadGeneral DateTime?
+  lastRead        Json?     // { "general": iso, "grupo:<id>": iso } — lectura por conversación
   updatedAt       DateTime @updatedAt
 
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, userId])
+  @@index([companyId])
+}
+
+// Grupo de mensajería: subconjunto de usuarios de la empresa (ej. Administración,
+// Dueños, Operarios). Los mensajes del grupo usan canal="grupo:<id>".
+model MensajeGrupo {
+  id         String   @id @default(cuid())
+  companyId  String
+  nombre     String
+  miembros   Json      // array de userIds (incluye al creador)
+  creadoPor  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
   @@index([companyId])
 }
 
