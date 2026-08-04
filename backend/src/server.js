@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.30.0';
+const AGROCORE_VERSION = '2.31.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6934,6 +6934,24 @@ app.post('/api/push/subscribe', requireCompany, async (req, res, next) => {
 app.post('/api/push/unsubscribe', requireCompany, async (req, res, next) => {
   try { const ep = req.body?.endpoint; if (ep) await prisma.pushSubscription.deleteMany({ where: { endpoint: ep, userId: req.user.id } }); res.json({ ok: true }); } catch (e) { next(e); }
 });
+// Envía un aviso de PRUEBA al propio usuario (para verificar que el push llega).
+app.post('/api/push/test', requireCompany, async (req, res, next) => {
+  try {
+    const wp = await _getWebpush();
+    if (!wp) return res.json({ ok: false, error: 'El servidor no tiene web-push instalado.' });
+    const v = await _getVapid();
+    if (!v) return res.json({ ok: false, error: 'No hay claves de push configuradas.' });
+    const subs = await prisma.pushSubscription.findMany({ where: { companyId: req.companyId, userId: req.user.id } });
+    if (!subs.length) return res.json({ ok: false, error: 'Este dispositivo no tiene los avisos activados.' });
+    const body = JSON.stringify({ title: '🔔 AgroCore', body: 'Aviso de prueba: las notificaciones están funcionando ✅', url: '/app#/mensajes', tag: 'agrocore-test' });
+    let enviados = 0;
+    await Promise.all(subs.map(async (s) => {
+      try { await wp.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body); enviados++; }
+      catch (e) { if (e?.statusCode === 404 || e?.statusCode === 410) { await prisma.pushSubscription.delete({ where: { id: s.id } }).catch(() => {}); } }
+    }));
+    res.json({ ok: enviados > 0, enviados, error: enviados ? null : 'No se pudo entregar el aviso (revisá permisos/servidor).' });
+  } catch (e) { next(e); }
+});
 
 // Usuarios de la empresa (lista liviana para armar grupos / mostrar autores).
 // Accesible a cualquier miembro (no requiere permiso de administrar usuarios).
@@ -7033,11 +7051,12 @@ app.post('/api/mensajes', requireCompany, async (req, res, next) => {
     }});
     // Aviso push a los demás participantes.
     const titulo = v.grupo ? `💬 ${autor} · ${v.grupo.nombre}` : `💬 ${autor}`;
+    const payload = { title: titulo, body: (texto||'📷 Foto').slice(0,140), url: '/app#/mensajes', canal: v.canal, tag: 'chat-'+v.canal };
     if (v.grupo){
       const dest = _grupoMiembros(v.grupo).filter(id => id !== String(req.user.id));
-      _pushAUsuarios(req.companyId, dest, { title: titulo, body: (texto||'📷 Foto').slice(0,140), url: '/app#mensajes', tag: 'chat-'+v.canal });
+      _pushAUsuarios(req.companyId, dest, payload);
     } else {
-      _pushAMiembros(req.companyId, req.user.id, { title: titulo, body: (texto||'📷 Foto').slice(0,140), url: '/app#mensajes', tag: 'chat-'+req.companyId });
+      _pushAMiembros(req.companyId, req.user.id, payload);
     }
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }

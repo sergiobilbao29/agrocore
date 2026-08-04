@@ -838,6 +838,12 @@ async function precacheOffline() {
 // --- Arranque del modo offline ---
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
+  // Cuando tocás una notificación push, el SW nos avisa a qué sección ir.
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'navegar' && e.data.page && state.user) {
+      try { go(e.data.page); } catch {}
+    }
+  });
 }
 window.addEventListener('online', async () => {
   updateOfflineBar();
@@ -2512,6 +2518,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
+      titulo:'🔔 v2.31.0 — Notificaciones: tocar abre el mensaje + botón de prueba',
+      desc:'Ajustes sobre los avisos de mensajería. (1) Al <b>tocar la notificación</b> en el celular ahora <b>abre directo la sección Mensajes</b> dentro de AgroCore. (2) Se agregó un botón <b>🧪 Probar</b> en Mensajes para mandarte un aviso de prueba y confirmar que llega (incluso con la pantalla apagada o la app en segundo plano). <b>Importante sobre los avisos con la app cerrada:</b> para que lleguen sí o sí (pantalla apagada / app cerrada) hay que tocar <b>🔔 Activar avisos</b> una vez en cada dispositivo — eso registra el <b>push real</b>, que es el que despierta el teléfono. Si solo tenés la app abierta sin activar los avisos, el aviso aparece cuando la pantalla está encendida; con los avisos activados llega siempre. En iPhone hay que <b>instalar la app</b> en la pantalla de inicio para que funcione el push.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'👪 v2.30.0 — Grupos de mensajes',
       desc:'Ahora en <b>Mensajes y asistente</b> podés crear <b>grupos</b> para hablar solo con algunos integrantes (ej. <i>Administración</i>, <i>Dueños</i>, <i>Operarios</i>) en vez de escribirle a toda la empresa. Arriba tenés los botones de cada conversación: <b>👥 Equipo</b> (todos), tus <b>👪 grupos</b> y <b>🤖 Asistente</b>. Con <b>➕ Grupo</b> lo creás eligiendo el nombre y tildando los integrantes; con <b>⚙️</b> lo editás o eliminás (solo el creador o un administrador). Cada conversación tiene su propio contador de <b>no leídos</b> y sus <b>avisos con sonido/push</b> van solo a los integrantes del grupo.' },
@@ -6952,6 +6961,7 @@ pages.mensajes = async function(){
       ${puedeEditarGrupo?`<button class="btn btn-ghost text-sm" onclick="grupoEditar('${grupoActual.id}')" title="Editar o eliminar este grupo">⚙️</button>`:''}
       <div class="flex-1"></div>
       <button class="btn btn-secondary text-xs" onclick="activarAvisos(false)" title="Recibir notificaciones con sonido en este dispositivo, incluso con la app cerrada">🔔 Activar avisos</button>
+      <button class="btn btn-ghost text-xs" onclick="probarAviso()" title="Enviar un aviso de prueba a este dispositivo">🧪 Probar</button>
     </div>
     ${esAsistente?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
       Escribí o dictá 🎤 lo que hiciste y lo cargo por vos. Ejemplos: <i>"nacieron 5 terneros en Montenegro"</i> · <i>"murió 1 vaca en El 29"</i> · <i>"compré 10 novillos en El 29"</i> · <i>"recordar vacunar el 15/8"</i>.</div>`
@@ -6969,6 +6979,15 @@ pages.mensajes = async function(){
   state._mensajesPoll = setInterval(()=>{ if (state.currentPage==='mensajes') chatReload(); else { clearInterval(state._mensajesPoll); state._mensajesPoll=null; } }, 5000);
 };
 function mensajesSel(key){ state.mensajesConv=key; state._asistProp=null; pages.mensajes(); }
+// Manda un aviso de prueba a este dispositivo (activa avisos primero si hace falta).
+async function probarAviso(){
+  try {
+    if (!state._pushOn){ await activarAvisos(false); }
+    const r = await api('/api/push/test',{method:'POST'});
+    if (r.ok) toast('📨 Aviso de prueba enviado. Debería llegar en unos segundos (probá con la app en segundo plano o la pantalla apagada).','success');
+    else toast(r.error||'No se pudo enviar el aviso de prueba.','warn');
+  } catch(e){ toast(e.message,'error'); }
+}
 function chatRecalcTotal(){ const pc=state._chatPorCanal||{}; state._chatNoLeidos=Object.values(pc).reduce((a,n)=>a+(Number(n)||0),0); renderNav(); }
 async function chatReload(){
   const cont = document.getElementById('chat-msgs'); if (!cont) return;

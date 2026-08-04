@@ -94,11 +94,17 @@ self.addEventListener('push', (event) => {
 });
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/app';
+  const url = (event.notification.data && event.notification.data.url) || '/app#/mensajes';
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((cs) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (cs) => {
       for (const c of cs) {
-        if (c.url.includes('/app')) { c.focus(); if (c.navigate && url.includes('#')) { try { c.navigate(url); } catch {} } return; }
+        if (c.url.includes('/app')) {
+          try { await c.focus(); } catch {}
+          // Le pedimos al app abierto que navegue a Mensajes (SPA con hash router).
+          try { c.postMessage({ type: 'navegar', page: 'mensajes' }); } catch {}
+          if (c.navigate) { try { await c.navigate(url); } catch {} }
+          return;
+        }
       }
       return self.clients.openWindow(url);
     })
