@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.32.0';
+const AGROCORE_VERSION = '2.33.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6883,8 +6883,245 @@ function _interpretarMensaje(texto, ctx) {
     return { accion: 'labor', params: { campanaId: camp.id, loteNombre: lote.nombre, campoNombre: campo?.nombre || '', tipo: tlab, responsable: resp },
       resumen: `🚜 Labor de ${tlab} en lote ${lote.nombre}${camp.cultivo ? ` (${camp.cultivo}${camp.ciclo ? ' ' + camp.ciclo : ''})` : ''}${resp ? ` · ${resp}` : ''}` };
   }
-  return { error: 'No entendí 🤔. Probá: "nacieron 5 terneros en Montenegro", "murió 1 vaca en El 29", "compré 10 novillos en X", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8".' };
+  return { error: 'No entendí 🤔. Probá: "nacieron 5 terneros en Montenegro", "murió 1 vaca en El 29", "compré 10 novillos en X", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8". También podés preguntarme *cómo se hace algo*, ej: "¿cómo cargo un cheque de tercero?".' };
 }
+
+// ============================================================
+//  BASE DE AYUDA DEL ASISTENTE  (manual incorporado, sin IA)
+//  Cuando el usuario PREGUNTA cómo hacer algo, el bot responde el
+//  paso a paso y ofrece abrir la pantalla correcta (atajo). Para lo
+//  que el bot puede cargar solo (hacienda, labor, recordatorio) además
+//  ofrece hacerlo pidiendo los datos con un ejemplo.
+// ============================================================
+const _AYUDA_KB = [
+  { id:'cheque_tercero', terms:['cheque de tercero','cheque tercero','cheques de tercero','cheque recibido','me dieron un cheque','cobre un cheque','endosar','endoso','cheque que me','cheque ajeno'],
+    titulo:'Cargar un cheque de tercero',
+    pasos:[
+      'Entrá a Bancos → Cheques y tocá "Nuevo cheque".',
+      'Elegí el tipo "Tercero" (cheque que recibiste). Se habilitan los campos que aplican.',
+      'Completá banco, número, importe, fecha de emisión y fecha de pago (cobro).',
+      'Cargá el Librador (quién firmó el cheque) y el CUIT del titular; en "En poder de" queda tu empresa.',
+      'Si lo endosás a un proveedor, después usalo como medio de pago en la Orden de Pago.',
+      'Guardá: el cheque queda en cartera y el sistema te avisa 7 días después para revisar cobro/rechazo.'],
+    atajo:{ page:'cheques', label:'Abrir Cheques' } },
+  { id:'cheque_propio', terms:['cheque propio','cheque mio','emitir cheque','librar un cheque','pago con cheque','cheque de mi cuenta','chequera'],
+    titulo:'Emitir un cheque propio',
+    pasos:[
+      'Podés emitirlo desde Bancos → Cheques → "Nuevo cheque", tipo "Propio".',
+      'O directamente al pagar: en Cuentas a pagar generás la Orden de Pago y elegís "Cheque propio" como medio.',
+      'Completá cuenta bancaria, número, importe y fecha de pago (diferido si corresponde).',
+      'Al guardar queda registrado el egreso y el cheque en tu chequera.'],
+    atajo:{ page:'cheques', label:'Abrir Cheques' } },
+  { id:'compra', terms:['compra','cargar una compra','factura de compra','comprobante recibido','factura de proveedor','registrar compra','gasto con factura'],
+    titulo:'Cargar una compra / factura de proveedor',
+    pasos:[
+      'Entrá a Compras → "Nueva compra".',
+      'Elegí el proveedor (si no existe, lo creás ahí mismo) y la fecha.',
+      'Cargá los renglones (producto/servicio, cantidad, precio) y el IVA; la moneda puede ser $ o US$.',
+      'Guardá: genera la cuenta a pagar y, si es un insumo/artículo, suma el stock.',
+      'Tip: si tenés el PDF o el Excel de "Mis Comprobantes" de ARCA, usá Importar y se carga solo.'],
+    atajo:{ page:'compras', label:'Abrir Compras' } },
+  { id:'importar', terms:['importar','importar comprobantes','mis comprobantes','importar pdf','importar excel','importar factura','subir comprobante','importar de arca','importar archivo'],
+    titulo:'Importar comprobantes (PDF / Excel de ARCA)',
+    pasos:[
+      'Para comprobantes RECIBIDOS: Compras → "Importar" y subí el Excel de "Mis Comprobantes Recibidos" de ARCA.',
+      'El sistema hace un preview, evita duplicados (por CUIT y número) y da de alta la compra y el proveedor.',
+      'Para una factura suelta en PDF podés importarla desde la misma pantalla de compra.',
+      'Revisá el preview y confirmá; podés corregir antes de importar.'],
+    atajo:{ page:'compras', label:'Abrir Compras' } },
+  { id:'venta', terms:['venta','vender','factura de venta','emitir factura','facturar','factura arca','cae','comprobante de venta','nota de credito','nota de debito'],
+    titulo:'Emitir una factura de venta (ARCA)',
+    pasos:[
+      'Entrá a Facturación → "Nueva venta".',
+      'Elegí el cliente, la fecha y cargá los renglones (producto, cantidad, precio, IVA).',
+      'Todo en una sola pantalla: al emitir se arma el comprobante ARCA por triplicado y el PDF.',
+      'Se abre solo para imprimir/descargar y podés enviarlo por WhatsApp o email.',
+      'Genera la cuenta a cobrar y descuenta stock. Las NC reingresan stock; las ND no.'],
+    atajo:{ page:'facturacion', label:'Abrir Facturación' } },
+  { id:'pago_proveedor', terms:['pagar','pago a proveedor','orden de pago','pagar una factura','cancelar deuda','pagar cuenta','como pago'],
+    titulo:'Pagar a un proveedor (Orden de Pago)',
+    pasos:[
+      'Entrá a Cuentas a pagar y buscá al proveedor / la factura.',
+      'Tocá "Pagar" y elegí el medio: efectivo, transferencia, cheque propio, cheque de tercero (endoso), tarjeta o entrega de cereal.',
+      'Podés cargar el cheque en la misma pantalla del pago.',
+      'Se genera la Orden de Pago (imprimible / PDF / WhatsApp / email) con retenciones e importe en letras.'],
+    atajo:{ page:'ctasPagar', label:'Abrir Cuentas a pagar' } },
+  { id:'cobro', terms:['cobrar','cobro','cobrar una factura','recibir un pago','cuenta a cobrar','recibo','como cobro'],
+    titulo:'Cobrar a un cliente',
+    pasos:[
+      'Entrá a Cuentas a cobrar y buscá al cliente / la factura.',
+      'Tocá "Cobrar" y elegí el medio (efectivo, transferencia, cheque de tercero, etc.).',
+      'Si el cliente tiene saldo a favor, el sistema te lo ofrece para aplicar.',
+      'Se registra el recibo y baja la deuda.'],
+    atajo:{ page:'ctasCobrar', label:'Abrir Cuentas a cobrar' } },
+  { id:'hacienda', terms:['hacienda','nacimiento','ternero','ternero nacido','murio','muerte de animal','compra de hacienda','movimiento de hacienda','cambio de categoria','cargar animales','stock ganadero','vacas','novillos'],
+    titulo:'Cargar un movimiento de hacienda',
+    pasos:[
+      'Entrá a Hacienda, elegí el campo y tocá "Nuevo movimiento".',
+      'Elegí el tipo (nacimiento, muerte, compra, venta, cambio de categoría) y la categoría del animal.',
+      'Cargá la cantidad de cabezas (y kg/precio si es compra).',
+      'Guardá: actualiza el stock ganadero real y el de SENASA.'],
+    atajo:{ page:'hacienda', label:'Abrir Hacienda' },
+    ejemplo:'nacieron 5 terneros en Montenegro' },
+  { id:'liq_hacienda', terms:['liquidacion de hacienda','liquidacion hacienda','liquidacion del frigorifico','venta de hacienda','remate','consignatario','liquidacion de venta de animales'],
+    titulo:'Cargar una liquidación de hacienda',
+    pasos:[
+      'Entrá a Liquidaciones de hacienda → "Importar PDF" (del frigorífico/consignatario) o cargala a mano.',
+      'El sistema lee los renglones y detecta la categoría de cada animal.',
+      'Confirmá: descuenta el stock real y el de SENASA y genera la cuenta a cobrar.'],
+    atajo:{ page:'liquidacionesHacienda', label:'Abrir Liquidaciones de hacienda' } },
+  { id:'liq_cereal', terms:['liquidacion de cereal','liquidacion de granos','liquidacion cerealera','venta de granos','1116','entrega de cereal'],
+    titulo:'Liquidación de cereal',
+    pasos:[
+      'Entrá a Liquidaciones (cereal) y cargá la liquidación de la cerealera.',
+      'Solo aparecen los granos del catálogo.',
+      'Se registra el ingreso y el movimiento de stock a pizarra.'],
+    atajo:{ page:'liquidaciones', label:'Abrir Liquidaciones' } },
+  { id:'labor', terms:['labor','cosecha','siembra','pulverizacion','fumigacion','fertilizacion','laboreo','aplicacion','trabajo en el lote','tarea en el campo'],
+    titulo:'Cargar una labor en un lote',
+    pasos:[
+      'Entrá a Campañas, elegí la campaña del lote y tocá "+ Labor".',
+      'Elegí el tipo (cosecha, siembra, pulverización, fertilización, laboreo) y la fecha.',
+      'Podés sumar los empleados que la hicieron y, en el modo avanzado, los insumos usados.',
+      'Guardá: queda en el historial de la campaña.'],
+    atajo:{ page:'campanas', label:'Abrir Campañas' },
+    ejemplo:'cosecha en el lote 1 de Campo Prueba' },
+  { id:'insumo', terms:['insumo','aplicar insumo','uso de insumo','cargar insumo','semilla','fertilizante','agroquimico a un lote','gastar insumo'],
+    titulo:'Cargar el uso de un insumo en un lote',
+    pasos:[
+      'Entrá a Insumos y tocá "+ Insumo" (respeta los filtros de campaña/ciclo activos).',
+      'Elegí primero el tipo y después el producto; cargá cantidad y fecha de aplicación.',
+      'Podés cargar varios insumos por lote sin salir.',
+      'Guardá: descuenta el stock (salida) con la fecha de aplicación.'],
+    atajo:{ page:'insumos', label:'Abrir Insumos' } },
+  { id:'stock', terms:['stock','movimiento de stock','ajuste de stock','ingreso de stock','traspaso','conversion','deposito','silo','silobolsa','existencias'],
+    titulo:'Mover o ajustar stock',
+    pasos:[
+      'Entrá a Stock para ver existencias por artículo y depósito.',
+      'Tocá "Nuevo movimiento" y usá el buscador con filtro por categoría/familia.',
+      'Elegí ingreso, salida, traspaso entre depósitos o conversión (ej: grano ↔ semilla).',
+      'Guardá: queda registrado en Movimientos.'],
+    atajo:{ page:'stock', label:'Abrir Stock' } },
+  { id:'arrendamiento', terms:['arrendamiento','alquiler de campo','contrato de arrendamiento','pagar arrendamiento','quintales','kg novillo'],
+    titulo:'Cargar / pagar un arrendamiento',
+    pasos:[
+      'Entrá a Arrendamientos → "Nuevo contrato" y ponele nombre.',
+      'Elegí la modalidad (quintales fijos, % , Kg Novillo, etc.), especie y valuación.',
+      'Se generan las cuotas; pagalas con cualquier medio y quedan en Movimientos diarios.'],
+    atajo:{ page:'arrendamientos', label:'Abrir Arrendamientos' } },
+  { id:'credito', terms:['credito','prestamo','credito bancario','cuota de credito','financiacion','plan de cuotas'],
+    titulo:'Cargar un crédito bancario',
+    pasos:[
+      'Entrá a Créditos → "Nuevo crédito".',
+      'Elegí el banco (del catálogo), monto, moneda y tipo de cambio, tasa y cantidad de cuotas (o plan manual).',
+      'El sistema arma el plan de cuotas (capital + interés + IVA del interés).',
+      'Pagá cada cuota con el medio que quieras; podés editar y cargar cuotas ya pagadas.'],
+    atajo:{ page:'creditos', label:'Abrir Créditos' } },
+  { id:'cotizacion', terms:['cotizacion','dolar','tipo de cambio','valor del dolar','moneda','cambio'],
+    titulo:'Ver / cargar cotizaciones',
+    pasos:[
+      'Entrá a Cotizaciones: el sistema toma un snapshot diario del dólar.',
+      'Podés cargar o corregir una cotización histórica.',
+      'Las facturas y cuentas en US$ usan esa cotización; al cobrar/pagar en $ calcula la diferencia de cambio.'],
+    atajo:{ page:'cotizaciones', label:'Abrir Cotizaciones' } },
+  { id:'recordatorio', terms:['recordatorio','recordar','agenda','calendario','alarma','aviso','tarea pendiente','vencimiento'],
+    titulo:'Crear un recordatorio / agenda',
+    pasos:[
+      'Entrá a Agenda y tocá "Nuevo" para cargar un recordatorio con fecha.',
+      'Podés ver el calendario de todas las empresas juntas.',
+      'También te aviso yo: decime la frase y lo agendo.'],
+    atajo:{ page:'agenda', label:'Abrir Agenda' },
+    ejemplo:'recordar vacunar el 15/8' },
+  { id:'empleados', terms:['empleado','empleados','planilla','sueldo','jornal','ropa','entrega de ropa','indumentaria','movimiento de empleado','personal','recibo de sueldo'],
+    titulo:'Empleados, planilla y entrega de ropa',
+    pasos:[
+      'Entrá a Empleados para ver el legajo y la planilla de cada uno.',
+      'Cargá movimientos (adelantos, jornales, descuentos) eligiendo la categoría; algunos usan cantidad × valor.',
+      'Para la ropa/indumentaria cargá el movimiento con la categoría correspondiente; queda en la planilla.',
+      'Podés exportar la planilla a PDF/Excel.'],
+    atajo:{ page:'empleados', label:'Abrir Empleados' } },
+  { id:'viajes', terms:['viaje','flete','transporte','camion','chofer','acoplado','carta de porte','transportista'],
+    titulo:'Cargar un viaje / flete',
+    pasos:[
+      'Entrá a Viajes → "Nuevo viaje".',
+      'Elegí origen (campo o depósito/silo), destino, producto y cantidad; podés asociarlo a una campaña.',
+      'Al guardar se dan de alta solos el transportista, chofer, camión y acoplado si son nuevos.',
+      'Marcá "Pagado" para registrar el pago y, si aplica, la comisión del chofer-empleado.'],
+    atajo:{ page:'viajes', label:'Abrir Viajes' } },
+  { id:'mensajes', terms:['mensaje','chat','grupo','grupos','mensajeria','avisos','notificaciones','asistente','equipo','comunicar'],
+    titulo:'Mensajes, grupos y avisos',
+    pasos:[
+      'En Mensajes tenés el chat del Equipo, tus Grupos y el Asistente (yo).',
+      'Creá un grupo con "➕ Grupo" y elegí los integrantes (cada uno solo ve sus grupos).',
+      'Tocá "🔔 Activar avisos" una vez por dispositivo para recibir notificaciones con sonido, incluso con la app cerrada.',
+      'Usá "🧪 Probar" para verificar que te llegan.'],
+    atajo:{ page:'mensajes', label:'Abrir Mensajes' } },
+  { id:'mapa', terms:['mapa','geolocalizacion','ubicacion de campos','mapa de lotes','rinde en el mapa','ubicar campo','coordenadas'],
+    titulo:'Mapa de lotes con rindes',
+    pasos:[
+      'Entrá a Mapa de campos para ver tus campos ubicados en el mapa.',
+      'Cargá la ubicación de cada campo (coordenadas o link de Google Maps) en Campos.',
+      'Podés dibujar el contorno de un lote a mano.',
+      'Los lotes se colorean según el rinde de la campaña.'],
+    atajo:{ page:'mapaCampos', label:'Abrir Mapa de campos' } },
+  { id:'historial', terms:['historial','comparar campañas','comparador','campañas anteriores','evolucion','resultado de campañas'],
+    titulo:'Historial y comparador de campañas',
+    pasos:[
+      'Entrá a Historial de campañas para ver todas las campañas y sus resultados.',
+      'Elegí varias para compararlas (rinde, costos, margen).',
+      'Sirve para decidir qué lote/cultivo rindió mejor.'],
+    atajo:{ page:'historialCampanas', label:'Abrir Historial de campañas' } },
+  { id:'campana', terms:['campaña','nueva campaña','sembrar un lote','crear campaña','cultivo','ciclo'],
+    titulo:'Crear una campaña',
+    pasos:[
+      'Entrá a Campañas → "Nueva".',
+      'Ponele un nombre libre, elegí el lote, el cultivo y el ciclo.',
+      'Después le cargás insumos, labores y la planilla de resultado económico.'],
+    atajo:{ page:'campanas', label:'Abrir Campañas' } },
+  { id:'clientes_prov', terms:['cliente','clientes','proveedor','proveedores','alta de cliente','alta de proveedor','contacto'],
+    titulo:'Alta de clientes y proveedores',
+    pasos:[
+      'Entrá a Clientes o Proveedores y tocá "Nuevo".',
+      'Cargá razón social, CUIT y condición de IVA.',
+      'También se crean solos cuando cargás una compra/venta o un viaje.'],
+    atajo:{ page:'clientes', label:'Abrir Clientes' } },
+  { id:'movdiarios', terms:['movimiento diario','caja','ingreso de dinero','egreso','gasto sin factura','movimientos diarios','plata','efectivo'],
+    titulo:'Movimientos diarios (caja/banco)',
+    pasos:[
+      'Entrá a Movimientos diarios y tocá "Nuevo".',
+      'Elegí ingreso o egreso, el medio (efectivo, banco, tarjeta) y la Categoría + Familia del árbol de gastos.',
+      'Podés marcarlo como intercompany si es entre tus empresas.'],
+    atajo:{ page:'movDiarios', label:'Abrir Movimientos diarios' } },
+  { id:'usuarios', terms:['usuario','usuarios','permiso','permisos','rol','roles','dar acceso','alta de usuario','contraseña'],
+    titulo:'Usuarios, roles y permisos',
+    pasos:[
+      'Entrá a Usuarios para dar de alta a alguien y asignarle empresa(s) y rol.',
+      'En Roles definís qué puede ver/hacer cada rol (incluso limitar el stock por tipo de producto).',
+      'Podés vincular un usuario con su Empleado/Chofer.'],
+    atajo:{ page:'usuarios', label:'Abrir Usuarios' } },
+];
+function _esPregunta(t){
+  return /(^|\s)(como|donde|cuando|cual|cuales|que es|para que|se puede|puedo|podes|podés|puedes|necesito|quiero saber|me explicas|explicame|ayuda|no se como|no entiendo|donde cargo|donde se|donde esta)\b/.test(t) || /\?/.test(t);
+}
+// Busca la mejor entrada de ayuda por coincidencia de términos. Devuelve entry o null.
+function _buscarAyuda(texto){
+  const t = _sinAcentos(texto);
+  let best = null, bestScore = 0;
+  for (const e of _AYUDA_KB){
+    let score = 0;
+    for (const term of e.terms){ if (t.includes(_sinAcentos(term))) score += term.length; }
+    if (score > bestScore){ bestScore = score; best = e; }
+  }
+  return bestScore > 0 ? best : null;
+}
+// Arma el texto de la respuesta de ayuda (paso a paso).
+function _textoAyuda(e){
+  const pasos = e.pasos.map((p,i)=>`${i+1}. ${p}`).join('\n');
+  let msg = `📖 ${e.titulo}\n${pasos}`;
+  if (e.ejemplo) msg += `\n\n💡 Si querés, lo hago yo: decime por ejemplo "${e.ejemplo}".`;
+  return msg;
+}
+
 async function _logMensaje(companyId, canal, userId, rol, autorNombre, texto, meta) {
   return prisma.mensaje.create({ data: { companyId, canal, userId, rol, autorNombre: autorNombre || null, texto, meta: meta || undefined } });
 }
@@ -7129,8 +7366,25 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     if (!texto) return res.status(400).json({ ok: false, error: 'Escribí algo' });
     await _logMensaje(req.companyId, 'asistente', req.user.id, 'user', _nombreUser(req.user), texto);
     const ctx = await _ctxAsistente(req.companyId);
+    // 1) Si es una PREGUNTA de "cómo se hace", respondemos con la ayuda del manual.
+    const _tn = _sinAcentos(texto);
+    if (_esPregunta(_tn)) {
+      const e = _buscarAyuda(texto);
+      if (e) {
+        const msg = _textoAyuda(e);
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', ayudaId: e.id });
+        return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, ejemplo: e.ejemplo || null, titulo: e.titulo, data: m });
+      }
+    }
     const r = _interpretarMensaje(texto, ctx);
     if (r.error) {
+      // 2) Fallback: si no entendí el comando, intento ofrecer ayuda del manual.
+      const e = _buscarAyuda(texto);
+      if (e) {
+        const msg = _textoAyuda(e);
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', ayudaId: e.id });
+        return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, ejemplo: e.ejemplo || null, titulo: e.titulo, data: m });
+      }
       const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.error, { status: 'ayuda' });
       return res.json({ ok: true, status: 'ayuda', mensaje: r.error, data: m });
     }

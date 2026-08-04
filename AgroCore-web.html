@@ -2518,6 +2518,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/08/2026',
+      titulo:'🧠 v2.33.0 — El asistente ahora te enseña a usar el sistema',
+      desc:'Le incorporamos <b>el manual de usuario</b> al asistente 🤖. Ahora podés <b>preguntarle cómo se hace algo</b> y te responde el <b>paso a paso</b> — por ejemplo: <i>"¿cómo cargo un cheque de tercero?"</i>, <i>"¿cómo hago una compra?"</i>, <i>"¿cómo emito una factura?"</i>, <i>"¿cómo importo mis comprobantes?"</i>, <i>"¿cómo cargo una liquidación de hacienda?"</i>. Además de explicarte, te <b>lleva directo a la pantalla</b> correcta con un botón, y para lo que puede cargar solo (hacienda, labores, recordatorios) se ofrece a <b>hacerlo por vos</b> con un ejemplo listo para tocar. Cubre cheques, compras, ventas/ARCA, pagos y cobros, hacienda, insumos, labores, campañas, stock, arrendamientos, créditos, cotizaciones, viajes, empleados/ropa, mapa de lotes, grupos y más. <i>Entiende preguntas claras; si más adelante querés que interprete cualquier redacción libre, se le puede conectar la IA.</i>' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'03/08/2026',
       titulo:'🤖 v2.32.0 — Asistente entiende labores + quién cargó + grupos privados',
       desc:'Varios ajustes. (1) El <b>asistente</b> ahora también entiende <b>labores</b>: ej. <i>"la empleada Pereira terminó la cosecha del lote 1 de Campo Prueba"</i> o <i>"pulverización en el lote 3"</i> → registra la labor en la campaña de ese lote (detecta cosecha, siembra, pulverización, fertilización, laboreo y el responsable si lo nombrás). (2) Todo lo que carga el asistente ahora <b>guarda quién lo ordenó/cargó</b> (queda en las observaciones del movimiento y en el mensaje de confirmación). (3) <b>Grupos:</b> un usuario ahora <b>solo ve los grupos donde está</b> — los grupos ajenos ya no aparecen (solo el Super Admin ve todos). (4) El botón <b>🧪 Probar</b> de avisos avisa mejor si el servidor todavía no está actualizado. <i>Nota: el asistente entiende frases claras; para que entienda cualquier redacción libre, más adelante se le puede conectar la IA.</i>' },
@@ -6967,7 +6970,7 @@ pages.mensajes = async function(){
       <button class="btn btn-ghost text-xs" onclick="probarAviso()" title="Enviar un aviso de prueba a este dispositivo">🧪 Probar</button>
     </div>
     ${esAsistente?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
-      Escribí o dictá 🎤 lo que hiciste y lo cargo por vos. Ejemplos: <i>"nacieron 5 terneros en Montenegro"</i> · <i>"murió 1 vaca en El 29"</i> · <i>"compré 10 novillos en El 29"</i> · <i>"recordar vacunar el 15/8"</i>.</div>`
+      Preguntame <b>cómo se hace algo</b> y te explico paso a paso (ej: <i>"¿cómo cargo un cheque de tercero?"</i>, <i>"¿cómo hago una compra?"</i>) — te llevo directo a la pantalla. O contame <b>qué hiciste</b> y lo cargo por vos: <i>"nacieron 5 terneros en Montenegro"</i> · <i>"cosecha en el lote 1 de Campo Prueba"</i> · <i>"recordar vacunar el 15/8"</i>.</div>`
      : grupoActual?`<div class="text-xs text-slate-500 mb-2">👪 <b>${esc(grupoActual.nombre)}</b> · ${(grupoActual.miembros||[]).length} integrante${(grupoActual.miembros||[]).length===1?'':'s'}</div>`:''}
     <div id="chat-msgs" style="height:56vh;min-height:320px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
     <div id="chat-confirm"></div>
@@ -7004,7 +7007,7 @@ async function chatReload(){
   const yo = state.user?.id;
   cont.innerHTML = msgs.map(m=>{
     if (esAsistente && m.rol==='assistant'){
-      return `<div class="self-start max-w-[85%] bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm px-3 py-2 text-sm">🤖 ${esc(m.texto)}</div>`;
+      return `<div class="self-start max-w-[85%] bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm px-3 py-2 text-sm whitespace-pre-line">🤖 ${esc(m.texto)}</div>`;
     }
     const mine = m.userId===yo && m.rol!=='assistant';
     const hora = m.createdAt? new Date(m.createdAt).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}):'';
@@ -7063,9 +7066,19 @@ async function chatAsistente(){
           <button class="btn btn-secondary text-xs" onclick="chatAsistCancelar()">Cancelar</button>
           <button class="btn btn-primary text-xs" onclick="chatAsistConfirmar()">✅ Confirmar</button>
         </div></div>`;
+    } else if (r.status==='ayuda' && box && (r.atajo || r.ejemplo)){
+      // Respuesta de "cómo se hace": ofrecemos abrir la pantalla y/o hacerlo nosotros.
+      const btns = [];
+      if (r.atajo && r.atajo.page) btns.push(`<button class="btn btn-primary text-xs" onclick="asistAbrir('${r.atajo.page}')">➡️ ${esc(r.atajo.label||'Abrir')}</button>`);
+      if (r.ejemplo) btns.push(`<button class="btn btn-secondary text-xs" onclick="asistEjemplo(${JSON.stringify(r.ejemplo).replace(/"/g,'&quot;')})">🤖 Lo hago yo</button>`);
+      box.innerHTML = `<div class="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2">
+        <div class="text-xs text-blue-900 mb-2">${esc(r.titulo||'Te muestro cómo')} — ¿querés que te lleve directo${r.ejemplo?' o lo cargo yo':''}?</div>
+        <div class="flex gap-2 justify-end flex-wrap">${btns.join('')}</div></div>`;
     } else if (box){ box.innerHTML=''; }
   } catch(e){ toast(e.message,'error'); inp.value=txt; }
 }
+function asistAbrir(page){ const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; go(page); }
+function asistEjemplo(frase){ const inp=document.getElementById('chat-input-a'); if(inp){ inp.value=frase; inp.focus(); } const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; chatAsistente(); }
 function chatAsistCancelar(){ state._asistProp=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
 async function chatAsistConfirmar(){
   const p = state._asistProp; if (!p) return;
