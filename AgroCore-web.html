@@ -2512,6 +2512,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
+      titulo:'🩹 v2.28.0 — Ajustes del mapa y del asistente',
+      desc:'Varios arreglos sobre lo nuevo. <b>Mapa de lotes:</b> (1) ahora el <b>campo se marca en el mapa</b> con su geolocalización (📍), aunque los lotes no tengan contorno; (2) el botón <b>Dibujar contorno</b> funciona con un dibujo a mano (tocás las esquinas y "Listo") sin depender de librerías externas — se acabó el error de "sin internet". <b>Asistente:</b> (3) al confirmar una carga de hacienda podés <b>corregir el campo, la categoría, las cabezas y (en compras) los kg y el $/kg</b> antes de guardar; (4) en una <b>compra</b> ahora toma los <b>kg y el precio</b> si los decís (ej. "compré 10 terneros de 80 kg a 2000 por kg") y lo guarda en el movimiento — y te recuerda que la factura y el proveedor se cargan en Compras; (5) mejores mensajes cuando el <b>dictado por voz</b> falla (en algunos navegadores como Brave el dictado no está disponible; escribí el mensaje o usá Chrome). <b>Stock:</b> (6) se quitó la columna <b>Ubicación</b> que quedaba siempre vacía.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'💬 v2.27.0 — Mensajes del equipo + Asistente de carga',
       desc:'Nuevo módulo <b>Mensajes y asistente</b> (arriba, en Tablero), pensado para el celular. Tiene dos solapas: <b>👥 Equipo</b> — un chat interno entre los usuarios de la empresa (dueño ↔ empleados), con aviso de <b>no leídos</b> en el menú; y <b>🤖 Asistente</b> — escribís o <b>dictás por voz 🎤</b> lo que hiciste y el sistema lo carga por vos. Por ejemplo: <i>"nacieron 5 terneros en Montenegro"</i>, <i>"murió 1 vaca en El 29"</i>, <i>"compré 10 novillos en El 29"</i> o <i>"recordar vacunar el 15/8"</i> → te muestra qué va a registrar y con <b>Confirmar</b> queda cargado (movimiento de hacienda o recordatorio). Todo <b>dentro de AgroCore</b>, sin apps externas, usando el login y los permisos que ya tenés. Por ahora el asistente entiende frases claras (nacimiento/muerte/compra de hacienda y recordatorios); más adelante se le puede sumar IA para que entienda cualquier frase y más tipos de carga.' },
@@ -5910,7 +5913,7 @@ pages.stock = async function() {
     $('#stock-table').innerHTML = `
       <table class="data">
         <thead><tr>
-          <th>Producto</th><th>Categoría</th><th>Ubicación</th>
+          <th>Producto</th><th>Categoría</th>
           <th class="text-right">Existencia</th><th>Unidad</th>
           <th class="text-right">Mínimo</th><th>Estado</th><th></th>
         </tr></thead>
@@ -5926,7 +5929,6 @@ pages.stock = async function() {
                 }
                 return p.subtipo?`<div class="text-[10px] text-slate-500 mt-0.5">🧪 ${esc(p.subtipo)}</div>`:'';
               })()}</td>
-              <td class="text-xs">${esc(p.ubicacion||'—')}</td>
               <td class="text-right font-semibold ${Number(p.existencia)<=0?'text-red-600':(p.bajoMinimo?'text-amber-600':'text-emerald-700')}">${fmtN(p.existencia)}${p.esHacienda&&p.kilos?`<div class="text-[11px] text-slate-500 font-normal">${fmtN(p.kilos)} kg</div>`:''}</td>
               <td>${esc(p.unidad)}${p.esHacienda?`<div class="text-[10px] ${p.categoriaHacienda?'text-amber-700':'text-red-500'}">${p.categoriaHacienda?'🐄 '+esc(p.categoriaHacienda):'⚠ sin vincular'}</div>`:''}</td>
               <td class="text-right">${fmtN(p.stockMinimo)}</td>
@@ -6858,7 +6860,13 @@ function chatVoz(inputId){
   const btn = document.getElementById(inputId==='chat-input'?'chat-voz':'chat-voz-a');
   if (btn) btn.textContent = '🔴';
   rec.onresult = (e)=>{ const txt = e.results[0][0].transcript; const inp = document.getElementById(inputId); if (inp){ inp.value = (inp.value?inp.value+' ':'')+txt; inp.focus(); } };
-  rec.onerror = ()=> toast('No pude captar el audio. Probá de nuevo.','warn');
+  rec.onerror = (e)=>{
+    const err = e?.error||'';
+    if (err==='not-allowed'||err==='service-not-allowed') toast('Tenés que permitir el micrófono para dictar. Revisá los permisos del navegador.','warn');
+    else if (err==='no-speech') toast('No te escuché. Probá de nuevo, más cerca del micrófono.','warn');
+    else if (err==='network') toast('El dictado por voz no está disponible en este navegador (probá con Chrome). Igual podés escribir el mensaje.','warn');
+    else if (err!=='aborted') toast('No pude captar el audio. Escribí el mensaje o probá con Chrome.','warn');
+  };
   rec.onend = ()=>{ _chatVozRec=null; if (btn) btn.textContent='🎤'; };
   try { rec.start(); } catch { _chatVozRec=null; }
 }
@@ -6924,9 +6932,33 @@ async function chatAsistente(){
     const box = document.getElementById('chat-confirm');
     if (r.status==='propuesta' && box){
       state._asistProp = { accion:r.accion, params:r.params };
-      box.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2 flex items-center justify-between gap-2 flex-wrap">
-        <div class="text-sm text-amber-900">${esc(r.resumen)}</div>
-        <div class="flex gap-2">
+      let editor = `<div class="text-sm text-amber-900">${esc(r.resumen)}</div>`;
+      if (r.accion==='hacienda_mov'){
+        // Traer campos y categorías para poder corregir antes de confirmar.
+        try {
+          if (!state.cache.campos) state.cache.campos = (await api('/api/campos')).data||[];
+          if (!state.cache.catHacienda) state.cache.catHacienda = (await api('/api/categorias-hacienda').catch(()=>({data:[]}))).data||[];
+          if (!state.cache.catalogos) state.cache.catalogos = (await api('/api/catalogos').catch(()=>({data:[]}))).data||[];
+        } catch {}
+        const campos = state.cache.campos||[]; const cats = hacCategoriasDisponibles();
+        const p = r.params;
+        editor = `<div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+          <div><label class="label text-[11px]">Tipo</label>
+            <select id="ast-tipo" class="input text-sm">
+              ${[['nacimiento','Nacimiento'],['muerte','Muerte'],['compra','Compra']].map(([v,l])=>`<option value="${v}" ${v===p.tipo?'selected':''}>${l}</option>`).join('')}
+            </select></div>
+          <div><label class="label text-[11px]">Categoría</label>
+            <select id="ast-cat" class="input text-sm">${cats.map(c=>`<option value="${esc(c)}" ${c===p.categoria?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+          <div><label class="label text-[11px]">Cabezas</label><input id="ast-cant" class="input text-sm" type="number" min="1" value="${p.cantidad||''}"/></div>
+          <div><label class="label text-[11px]">Campo</label>
+            <select id="ast-campo" class="input text-sm">${campos.map(c=>`<option value="${c.id}" ${c.id===p.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
+          ${(p.kilos||p.precioKg||p.tipo==='compra')?`<div><label class="label text-[11px]">Kg totales</label><input id="ast-kilos" class="input text-sm" type="number" step="0.01" value="${p.kilos||''}"/></div>
+          <div><label class="label text-[11px]">$/kg</label><input id="ast-precio" class="input text-sm" type="number" step="0.01" value="${p.precioKg||''}"/></div>`:''}
+        </div>`;
+      }
+      box.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
+        ${editor}
+        <div class="flex gap-2 justify-end mt-2">
           <button class="btn btn-secondary text-xs" onclick="chatAsistCancelar()">Cancelar</button>
           <button class="btn btn-primary text-xs" onclick="chatAsistConfirmar()">✅ Confirmar</button>
         </div></div>`;
@@ -6936,6 +6968,18 @@ async function chatAsistente(){
 function chatAsistCancelar(){ state._asistProp=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
 async function chatAsistConfirmar(){
   const p = state._asistProp; if (!p) return;
+  // Tomar correcciones del editor (si es hacienda).
+  if (p.accion==='hacienda_mov'){
+    const gv=(id)=>document.getElementById(id)?.value;
+    const campos = state.cache.campos||[];
+    if (gv('ast-tipo')) p.params.tipo = gv('ast-tipo');
+    if (gv('ast-cat')) p.params.categoria = gv('ast-cat');
+    if (gv('ast-cant')) p.params.cantidad = parseInt(gv('ast-cant'),10)||p.params.cantidad;
+    if (gv('ast-campo')){ p.params.campoId = gv('ast-campo'); const c=campos.find(x=>x.id===p.params.campoId); if(c)p.params.campoNombre=c.nombre; }
+    const kil=gv('ast-kilos'), pre=gv('ast-precio');
+    p.params.kilos = kil?Number(kil):null; p.params.precioKg = pre?Number(pre):null;
+    if (p.params.kilos && p.params.precioKg) p.params.total = Math.round(p.params.kilos*p.params.precioKg*100)/100;
+  }
   const b=document.getElementById('chat-confirm'); if(b) b.innerHTML='';
   state._asistProp=null;
   try { await api('/api/asistente/confirmar',{method:'POST',body:JSON.stringify(p)}); await chatReload();
@@ -6951,11 +6995,9 @@ function ensureLeaflet(){
   if (window.L && window.L.map) return Promise.resolve();
   if (_leafletLoading) return _leafletLoading;
   _leafletLoading = new Promise((resolve, reject) => {
-    const css = (href)=>{ const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; document.head.appendChild(l); };
-    css('https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css');
-    css('https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css');
+    const l=document.createElement('link'); l.rel='stylesheet'; l.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.appendChild(l);
     const s1=document.createElement('script'); s1.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
-    s1.onload=()=>{ const s2=document.createElement('script'); s2.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.min.js'; s2.onload=()=>resolve(); s2.onerror=()=>resolve(); document.head.appendChild(s2); };
+    s1.onload=()=>resolve();
     s1.onerror=()=>reject(new Error('No se pudo cargar el mapa (sin internet).'));
     document.head.appendChild(s1);
   });
@@ -7098,6 +7140,18 @@ pages.mapaCampos = async function(){
       }
     }
   });
+  // Marcadores de campo: ubican el establecimiento aunque los lotes no tengan contorno.
+  const camposMostrar = campos.filter(c => !mf.campoId || c.id===mf.campoId);
+  camposMostrar.forEach(c=>{
+    const pt = mapaParsePunto(c.geolocalizacion);
+    if (pt){
+      L.circleMarker(pt, { radius:8, color:'#065f46', weight:2, fillColor:'#10b981', fillOpacity:0.95 })
+        .bindTooltip('📍 '+(c.nombre||''), { direction:'top' })
+        .bindPopup(`📍 <b>${esc(c.nombre||'')}</b>${c.localidad?`<br>${esc(c.localidad)}${c.provincia?', '+esc(c.provincia):''}`:''}`)
+        .addTo(map);
+      bounds.push(pt);
+    }
+  });
   if (bounds.length){ try{ map.fitBounds(L.latLngBounds(bounds).pad(0.15)); }catch{ map.setView(bounds[0],13); } }
   else { map.setView([-33.5,-64.4], 6); } // centro aprox Argentina agrícola
 };
@@ -7109,23 +7163,52 @@ function mapaFocus(loteId){
   else if (lay.getLatLng){ map.setView(lay.getLatLng(), 15); }
   lay.openPopup && lay.openPopup();
 }
-// Dibujar / editar el contorno de un lote sobre el mapa.
+// Dibujar / editar el contorno de un lote sobre el mapa — dibujo manual con
+// clics (no depende de librerías externas, así anda siempre que cargue el mapa).
 function mapaDibujar(loteId){
   const L=window.L, map=state._mapaObj;
-  if (!map || !L.Draw){ return toast('El editor de contornos no está disponible (sin internet).','warn'); }
-  toast('Dibujá el contorno del lote: hacé clic en cada vértice y cerralo en el primer punto.','info');
-  const drawer = new L.Draw.Polygon(map, { shapeOptions:{ color:'#2563eb', weight:2 } });
-  drawer.enable();
-  const onCreated = async (e)=>{
-    map.off(L.Draw.Event.CREATED, onCreated);
-    const gj = e.layer.toGeoJSON();  // Feature Polygon
-    try {
-      await api('/api/lotes/'+loteId, { method:'PUT', body: JSON.stringify({ geojson: gj }) });
-      toast('Contorno guardado','success');
-      delete state.cache.lotes; pages.mapaCampos();
-    } catch(err){ toast(err.message,'error'); }
-  };
-  map.on(L.Draw.Event.CREATED, onCreated);
+  if (!map){ return toast('El mapa todavía no cargó.','warn'); }
+  mapaDrawCancel();
+  const st = state._draw = { loteId, pts:[], layer:null, verts:[] };
+  if (map.doubleClickZoom) map.doubleClickZoom.disable();
+  toast('Tocá cada esquina del lote sobre el mapa. Cuando termines, tocá "✅ Listo".','info');
+  const cont = document.getElementById('mapa');
+  if (cont && !document.getElementById('draw-ctrl')){
+    cont.insertAdjacentHTML('beforeend', `<div id="draw-ctrl" style="position:absolute;z-index:1000;left:50%;transform:translateX(-50%);bottom:14px;background:#fff;border:1px solid #cbd5e1;border-radius:10px;padding:6px 8px;box-shadow:0 3px 10px rgba(0,0,0,.18);display:flex;gap:6px;align-items:center">
+      <span style="font-size:12px;color:#334155">Dibujando contorno</span>
+      <button class="btn btn-primary text-xs" onclick="mapaDrawFinish()">✅ Listo</button>
+      <button class="btn btn-secondary text-xs" onclick="mapaDrawUndo()">↩︎ Deshacer</button>
+      <button class="btn btn-ghost text-xs text-red-600" onclick="mapaDrawCancel()">Cancelar</button></div>`);
+  }
+  st.onClick = (e)=>{ st.pts.push(e.latlng); mapaDrawRedraw(); };
+  st.onDbl = ()=> mapaDrawFinish();
+  map.on('click', st.onClick); map.on('dblclick', st.onDbl);
+}
+function mapaDrawRedraw(){
+  const L=window.L, map=state._mapaObj, st=state._draw; if(!st||!map) return;
+  if (st.layer){ try{ map.removeLayer(st.layer); }catch{} st.layer=null; }
+  (st.verts||[]).forEach(m=>{ try{ map.removeLayer(m); }catch{} }); st.verts=[];
+  if (st.pts.length>=3) st.layer = L.polygon(st.pts, { color:'#2563eb', weight:2, fillOpacity:0.25 }).addTo(map);
+  else if (st.pts.length===2) st.layer = L.polyline(st.pts, { color:'#2563eb', weight:2 }).addTo(map);
+  st.pts.forEach(p=>{ st.verts.push(L.circleMarker(p,{ radius:4, color:'#2563eb', fillColor:'#fff', fillOpacity:1, weight:2 }).addTo(map)); });
+}
+function mapaDrawUndo(){ const st=state._draw; if(!st) return; st.pts.pop(); mapaDrawRedraw(); }
+function mapaDrawCancel(){
+  const map=state._mapaObj, st=state._draw;
+  const c=document.getElementById('draw-ctrl'); if(c) c.remove();
+  if (st && map){ if(st.layer){try{map.removeLayer(st.layer)}catch{}} (st.verts||[]).forEach(m=>{try{map.removeLayer(m)}catch{}});
+    map.off('click', st.onClick); map.off('dblclick', st.onDbl); if(map.doubleClickZoom) map.doubleClickZoom.enable(); }
+  state._draw=null;
+}
+async function mapaDrawFinish(){
+  const st=state._draw; if(!st) return;
+  if (st.pts.length<3){ toast('Marcá al menos 3 esquinas.','warn'); return; }
+  const ring = st.pts.map(p=>[p.lng, p.lat]); ring.push(ring[0]);
+  const gj = { type:'Feature', properties:{}, geometry:{ type:'Polygon', coordinates:[ring] } };
+  const loteId = st.loteId; mapaDrawCancel();
+  try { await api('/api/lotes/'+loteId, { method:'PUT', body: JSON.stringify({ geojson: gj }) });
+    toast('Contorno guardado','success'); delete state.cache.lotes; pages.mapaCampos(); }
+  catch(e){ toast(e.message,'error'); }
 }
 // Importar contorno desde archivo KML o GeoJSON.
 function mapaImportar(loteId){

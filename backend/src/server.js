@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.27.0';
+const AGROCORE_VERSION = '2.28.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6842,8 +6842,22 @@ function _interpretarMensaje(texto, ctx) {
     if (!cat) return { error: `No reconocí la categoría de animal. Las que tenés: ${ctx.categorias.join(', ') || '(cargá categorías de hacienda primero)'}.` };
     if (!campo) return { error: 'No reconocí el campo. Decí en qué campo, ej: "en Montenegro".' };
     const lbl = tipo === 'nacimiento' ? 'Nacimiento' : tipo === 'muerte' ? 'Muerte' : 'Compra';
-    return { accion: 'hacienda_mov', params: { campoId: campo.id, campoNombre: campo.nombre, categoria: cat, tipo, cantidad: numero },
-      resumen: `🐄 ${lbl} de ${numero} ${cat} en ${campo.nombre}` };
+    const params = { campoId: campo.id, campoNombre: campo.nombre, categoria: cat, tipo, cantidad: numero };
+    // En compras: intentar capturar kg por cabeza y precio por kg.
+    if (tipo === 'compra') {
+      const kgCab = (t.match(/de\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?|kgs|hg|kilogramos)\b/) || t.match(/(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?|kgs|hg|kilogramos)\s*(?:cada|c\/u|por\s*cabeza|aprox)/))?.[1];
+      const pkg = (t.match(/(\d+(?:[.,]\d+)?)\s*(?:pesos|\$)?\s*(?:por|el|x|\/)\s*(?:kg|kilo)/))?.[1];
+      const _n = (s) => s ? Number(String(s).replace(/\./g, '').replace(',', '.')) : null;
+      const kgUno = _n(kgCab), precioKg = _n(pkg);
+      if (kgUno) params.kilos = Math.round(kgUno * numero * 100) / 100;
+      if (precioKg) params.precioKg = precioKg;
+      if (params.kilos && precioKg) params.total = Math.round(params.kilos * precioKg * 100) / 100;
+    }
+    let extra = '';
+    if (tipo === 'compra' && (params.kilos || params.precioKg)) {
+      extra = ` (${params.kilos ? params.kilos + ' kg' : ''}${params.kilos && params.precioKg ? ' · ' : ''}${params.precioKg ? '$' + params.precioKg + '/kg' : ''})`;
+    }
+    return { accion: 'hacienda_mov', params, resumen: `🐄 ${lbl} de ${numero} ${cat} en ${campo.nombre}${extra}` };
   }
   return { error: 'No entendí 🤔. Probá: "nacieron 5 terneros en Montenegro", "murió 1 vaca en El 29", "compré 10 novillos en X" o "recordar vacunar el 15/8".' };
 }
@@ -6919,12 +6933,18 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
       if (!_permOk(req, 'stock:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para cargar movimientos de hacienda.' });
       const campo = await prisma.campo.findFirst({ where: { id: params.campoId, companyId: req.companyId } });
       if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
+      const kilos = params.kilos != null ? Number(params.kilos) : null;
+      const precioKg = params.precioKg != null ? Number(params.precioKg) : null;
+      const total = params.total != null ? Number(params.total) : ((kilos && precioKg) ? Math.round(kilos * precioKg * 100) / 100 : null);
       await prisma.haciendaMovimiento.create({ data: {
         companyId: req.companyId, campoId: params.campoId, categoria: params.categoria,
         fecha: new Date(), tipo: params.tipo, cantidad: parseInt(params.cantidad, 10) || 0,
+        kilos: kilos || null, precioKg: precioKg || null, total: total || null,
         observaciones: 'Cargado por el asistente',
       }});
-      resumen = `✅ Registrado: ${params.tipo} de ${params.cantidad} ${params.categoria} en ${campo.nombre}.`;
+      resumen = `✅ Registrado: ${params.tipo} de ${params.cantidad} ${params.categoria} en ${campo.nombre}`
+        + (kilos ? ` · ${kilos} kg` : '') + (precioKg ? ` · $${precioKg}/kg` : '') + '.';
+      if (params.tipo === 'compra') resumen += ' 💡 Registré el stock. Si querés la factura y el proveedor, cargalos en Compras.';
     } else if (accion === 'recordatorio') {
       if (!_permOk(req, 'agenda:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para crear recordatorios.' });
       await prisma.recordatorio.create({ data: {
