@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.31.0';
+const AGROCORE_VERSION = '2.32.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6801,13 +6801,15 @@ const _permOk = (req, p) => req.user?.superAdmin || hasPermission(req.membership
 const _sinAcentos = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const _nombreUser = (u) => [u?.nombre, u?.apellido].filter(Boolean).join(' ') || u?.alias || u?.email || 'Usuario';
 
-// Contexto (campos + categorías de hacienda) para interpretar.
+// Contexto (campos + categorías + lotes + campañas) para interpretar.
 async function _ctxAsistente(companyId) {
-  const [campos, catHac] = await Promise.all([
+  const [campos, catHac, lotes, campanas] = await Promise.all([
     prisma.campo.findMany({ where: { companyId }, select: { id: true, nombre: true } }),
     prisma.categoriaHaciendaConfig.findMany({ where: { companyId }, select: { nombre: true } }).catch(() => []),
+    prisma.lote.findMany({ where: { campo: { companyId } }, select: { id: true, nombre: true, campoId: true } }).catch(() => []),
+    prisma.campana.findMany({ where: { companyId }, select: { id: true, loteId: true, cultivo: true, ciclo: true, fechaSiembra: true, createdAt: true } }).catch(() => []),
   ]);
-  return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean) };
+  return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean), lotes: lotes || [], campanas: campanas || [] };
 }
 // Intérprete por reglas (sin IA). Devuelve { accion, params, resumen } o { error }.
 function _interpretarMensaje(texto, ctx) {
@@ -6859,7 +6861,29 @@ function _interpretarMensaje(texto, ctx) {
     }
     return { accion: 'hacienda_mov', params, resumen: `🐄 ${lbl} de ${numero} ${cat} en ${campo.nombre}${extra}` };
   }
-  return { error: 'No entendí 🤔. Probá: "nacieron 5 terneros en Montenegro", "murió 1 vaca en El 29", "compré 10 novillos en X" o "recordar vacunar el 15/8".' };
+  // Labor en un lote (cosecha, siembra, pulverización, etc.)
+  if (/\blabor|cosech|siembr|sembr|pulveriz|fumig|fertiliz|aplicaci|rastr|arad|laboreo|disquead|siembr/.test(t)) {
+    let tlab = 'Labor';
+    if (/cosech/.test(t)) tlab = 'Cosecha';
+    else if (/siembr|sembr/.test(t)) tlab = 'Siembra';
+    else if (/pulveriz|fumig/.test(t)) tlab = 'Pulverización';
+    else if (/fertiliz/.test(t)) tlab = 'Fertilización';
+    else if (/rastr|arad|laboreo|disquead/.test(t)) tlab = 'Laboreo';
+    const loteM = t.match(/lote\s+([a-z0-9]+)/);
+    let lote = null;
+    if (loteM) lote = ctx.lotes.find(l => _sinAcentos(l.nombre) === loteM[1] && (!campo || l.campoId === campo.id))
+                   || ctx.lotes.find(l => _sinAcentos(l.nombre) === loteM[1]);
+    if (!lote && campo) { const ls = ctx.lotes.filter(l => l.campoId === campo.id); if (ls.length === 1) lote = ls[0]; }
+    if (!lote) return { error: 'No reconocí el lote. Ej: "cosecha en el lote 3 de Montenegro".' };
+    const camps = ctx.campanas.filter(c => c.loteId === lote.id)
+      .sort((a, b) => String(b.ciclo || '').localeCompare(String(a.ciclo || '')) || (new Date(b.fechaSiembra || b.createdAt || 0) - new Date(a.fechaSiembra || a.createdAt || 0)));
+    const camp = camps[0];
+    if (!camp) return { error: `El lote ${lote.nombre} no tiene campaña cargada. Creala en Campañas y volvé a intentar.` };
+    const resp = (texto.match(/emplead[oa]\s+(?:de\s+)?([A-ZÁÉÍÓÚ][\wáéíóúñ]+)/i) || texto.match(/\b(?:la|el)\s+([A-ZÁÉÍÓÚ][\wáéíóúñ]+)\s+(?:termin|hizo|realiz|aplic)/i) || [])[1] || null;
+    return { accion: 'labor', params: { campanaId: camp.id, loteNombre: lote.nombre, campoNombre: campo?.nombre || '', tipo: tlab, responsable: resp },
+      resumen: `🚜 Labor de ${tlab} en lote ${lote.nombre}${camp.cultivo ? ` (${camp.cultivo}${camp.ciclo ? ' ' + camp.ciclo : ''})` : ''}${resp ? ` · ${resp}` : ''}` };
+  }
+  return { error: 'No entendí 🤔. Probá: "nacieron 5 terneros en Montenegro", "murió 1 vaca en El 29", "compré 10 novillos en X", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8".' };
 }
 async function _logMensaje(companyId, canal, userId, rol, autorNombre, texto, meta) {
   return prisma.mensaje.create({ data: { companyId, canal, userId, rol, autorNombre: autorNombre || null, texto, meta: meta || undefined } });
@@ -6975,8 +6999,8 @@ async function _gruposDeUsuario(companyId, userId){
 app.get('/api/grupos', requireCompany, async (req, res, next) => {
   try {
     const all = await prisma.mensajeGrupo.findMany({ where: { companyId: req.companyId }, orderBy: { nombre: 'asc' } });
-    const admin = req.user.superAdmin || _permOk(req, 'usuarios:*');
-    const data = admin ? all : all.filter(g => _grupoMiembros(g).includes(String(req.user.id)));
+    // Solo el Super Admin ve todos los grupos; el resto ve únicamente los suyos.
+    const data = req.user.superAdmin ? all : all.filter(g => _grupoMiembros(g).includes(String(req.user.id)));
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
@@ -7121,6 +7145,7 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
     const { accion, params } = req.body || {};
     if (!accion || !params) return res.status(400).json({ ok: false, error: 'Falta la acción a confirmar' });
     let resumen = '';
+    const quien = _nombreUser(req.user);
     if (accion === 'hacienda_mov') {
       if (!_permOk(req, 'stock:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para cargar movimientos de hacienda.' });
       const campo = await prisma.campo.findFirst({ where: { id: params.campoId, companyId: req.companyId } });
@@ -7132,18 +7157,29 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
         companyId: req.companyId, campoId: params.campoId, categoria: params.categoria,
         fecha: new Date(), tipo: params.tipo, cantidad: parseInt(params.cantidad, 10) || 0,
         kilos: kilos || null, precioKg: precioKg || null, total: total || null,
-        observaciones: 'Cargado por el asistente',
+        observaciones: `Cargado por ${quien} (asistente)`,
       }});
       resumen = `✅ Registrado: ${params.tipo} de ${params.cantidad} ${params.categoria} en ${campo.nombre}`
-        + (kilos ? ` · ${kilos} kg` : '') + (precioKg ? ` · $${precioKg}/kg` : '') + '.';
+        + (kilos ? ` · ${kilos} kg` : '') + (precioKg ? ` · $${precioKg}/kg` : '') + ` · lo cargó ${quien}.`;
       if (params.tipo === 'compra') resumen += ' 💡 Registré el stock. Si querés la factura y el proveedor, cargalos en Compras.';
+    } else if (accion === 'labor') {
+      if (!_permOk(req, 'produccion:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para cargar labores.' });
+      const camp = await prisma.campana.findFirst({ where: { id: params.campanaId, companyId: req.companyId } });
+      if (!camp) return res.status(400).json({ ok: false, error: 'Campaña no válida' });
+      await prisma.laborAplicada.create({ data: {
+        campanaId: params.campanaId, tipo: params.tipo, fecha: new Date(),
+        responsable: params.responsable || null, esServicio: false,
+        observaciones: `Cargado por ${quien} (asistente)`,
+      }});
+      resumen = `✅ Registrada labor de ${params.tipo} en lote ${params.loteNombre||''}${params.responsable?` · responsable ${params.responsable}`:''} · lo cargó ${quien}.`;
     } else if (accion === 'recordatorio') {
       if (!_permOk(req, 'agenda:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para crear recordatorios.' });
       await prisma.recordatorio.create({ data: {
         companyId: req.companyId, userIdCreador: req.user.id,
         titulo: params.titulo, fecha: new Date(params.fecha), categoria: 'otro', prioridad: 'media',
+        descripcion: `Cargado por ${quien} (asistente)`,
       }});
-      resumen = `✅ Recordatorio creado: "${params.titulo}".`;
+      resumen = `✅ Recordatorio creado: "${params.titulo}" · lo cargó ${quien}.`;
     } else {
       return res.status(400).json({ ok: false, error: 'Acción no soportada' });
     }

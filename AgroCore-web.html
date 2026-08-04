@@ -2518,6 +2518,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'03/08/2026',
+      titulo:'🤖 v2.32.0 — Asistente entiende labores + quién cargó + grupos privados',
+      desc:'Varios ajustes. (1) El <b>asistente</b> ahora también entiende <b>labores</b>: ej. <i>"la empleada Pereira terminó la cosecha del lote 1 de Campo Prueba"</i> o <i>"pulverización en el lote 3"</i> → registra la labor en la campaña de ese lote (detecta cosecha, siembra, pulverización, fertilización, laboreo y el responsable si lo nombrás). (2) Todo lo que carga el asistente ahora <b>guarda quién lo ordenó/cargó</b> (queda en las observaciones del movimiento y en el mensaje de confirmación). (3) <b>Grupos:</b> un usuario ahora <b>solo ve los grupos donde está</b> — los grupos ajenos ya no aparecen (solo el Super Admin ve todos). (4) El botón <b>🧪 Probar</b> de avisos avisa mejor si el servidor todavía no está actualizado. <i>Nota: el asistente entiende frases claras; para que entienda cualquier redacción libre, más adelante se le puede conectar la IA.</i>' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
       titulo:'🔔 v2.31.0 — Notificaciones: tocar abre el mensaje + botón de prueba',
       desc:'Ajustes sobre los avisos de mensajería. (1) Al <b>tocar la notificación</b> en el celular ahora <b>abre directo la sección Mensajes</b> dentro de AgroCore. (2) Se agregó un botón <b>🧪 Probar</b> en Mensajes para mandarte un aviso de prueba y confirmar que llega (incluso con la pantalla apagada o la app en segundo plano). <b>Importante sobre los avisos con la app cerrada:</b> para que lleguen sí o sí (pantalla apagada / app cerrada) hay que tocar <b>🔔 Activar avisos</b> una vez en cada dispositivo — eso registra el <b>push real</b>, que es el que despierta el teléfono. Si solo tenés la app abierta sin activar los avisos, el aviso aparece cuando la pantalla está encendida; con los avisos activados llega siempre. En iPhone hay que <b>instalar la app</b> en la pantalla de inicio para que funcione el push.' },
@@ -6986,7 +6989,10 @@ async function probarAviso(){
     const r = await api('/api/push/test',{method:'POST'});
     if (r.ok) toast('📨 Aviso de prueba enviado. Debería llegar en unos segundos (probá con la app en segundo plano o la pantalla apagada).','success');
     else toast(r.error||'No se pudo enviar el aviso de prueba.','warn');
-  } catch(e){ toast(e.message,'error'); }
+  } catch(e){
+    if (e.status===404) toast('El servidor todavía no tiene esta función. Actualizá AgroCore (Update-AgroCore) y reiniciá el servicio.','warn');
+    else toast(e.message,'error');
+  }
 }
 function chatRecalcTotal(){ const pc=state._chatPorCanal||{}; state._chatNoLeidos=Object.values(pc).reduce((a,n)=>a+(Number(n)||0),0); renderNav(); }
 async function chatReload(){
