@@ -247,6 +247,8 @@ model Lote {
   nombre          String
   hectareas       Float    @default(0)
   observaciones   String?
+  geojson         Json?     // contorno del lote (GeoJSON Polygon/MultiPolygon) para el mapa
+  centro          String?   // "lat,lng" punto representativo (si no hay polígono)
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

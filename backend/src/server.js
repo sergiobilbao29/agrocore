@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.25.0';
+const AGROCORE_VERSION = '2.26.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2890,6 +2890,8 @@ const loteSchema = z.object({
   nombre: z.string().min(1),
   hectareas: z.number().optional(),
   observaciones: z.string().nullable().optional(),
+  geojson: z.any().nullable().optional(),   // contorno GeoJSON para el mapa
+  centro: z.string().nullable().optional(), // "lat,lng"
   activo: z.boolean().optional(),
 });
 
