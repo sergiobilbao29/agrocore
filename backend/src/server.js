@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.39.0';
+const AGROCORE_VERSION = '2.40.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9693,8 +9693,10 @@ async function _gruposDuplicados(companyId) {
   const stat = {};
   movs.forEach(m => { const s = stat[m.productoId] || (stat[m.productoId] = { ing: 0, egr: 0, cnt: 0 }); if (m.tipo === 'ingreso') s.ing += Number(m._sum.cantidad || 0); else if (m.tipo === 'egreso') s.egr += Number(m._sum.cantidad || 0); s.cnt += m._count._all; });
   const norm = (s) => _sinAcentos(s).replace(/\s+/g, ' ').trim();
+  // Raíz de categoría normalizada (case/acentos/espacios) para no fallar por "insumos" vs "Insumos".
+  const rootCat = (s) => _sinAcentos(s).replace(/[\s._-]+/g, '');
   const groups = {};
-  prods.forEach(p => { const k = (p.categoria || '') + '|' + norm(p.nombre); (groups[k] || (groups[k] = [])).push({ ...p, existencia: (stat[p.id]?.ing || 0) - (stat[p.id]?.egr || 0), movs: stat[p.id]?.cnt || 0 }); });
+  prods.forEach(p => { const k = rootCat(p.categoria) + '|' + norm(p.nombre); (groups[k] || (groups[k] = [])).push({ ...p, existencia: (stat[p.id]?.ing || 0) - (stat[p.id]?.egr || 0), movs: stat[p.id]?.cnt || 0 }); });
   const dups = [];
   for (const k in groups) {
     const arr = groups[k]; if (arr.length < 2) continue;

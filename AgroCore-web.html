@@ -2525,6 +2525,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
+      titulo:'🧹 v2.40.0 — Depurar duplicados: ahora sí los detecta',
+      desc:'El depurador de duplicados no encontraba algunos casos porque el mismo producto tenía la categoría guardada distinta (por ej. "insumos" vs "Insumos" al asignarle la familia). Ahora <b>compara ignorando mayúsculas/acentos</b>, así detecta esos 2,4-D, Atrazina, etc. y los une en el del Catálogo moviendo stock, movimientos y unidad. <i>Nota: si el mismo nombre aparece en secciones distintas (ej. "Barra" en Servicios y Labores vs Insumos) no se unen automáticamente, porque pueden ser cosas distintas — decime si querés unir también esos casos.</i>' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🧹 v2.39.0 — Depurar productos duplicados en Stock',
       desc:'Si en Stock te aparecía el mismo artículo <b>dos veces</b> (por ejemplo uno en "Insumos" y otro en "Insumos / Herbicida"), ahora en <b>Stock → 🧹 Depurar duplicados</b> los detecta y los <b>une en uno solo</b>: conserva el que está en el <b>Catálogo</b> (con su familia) y le <b>mueve el stock, los movimientos y la unidad</b> del otro, borrando el duplicado. No se pierde ningún movimiento. Además, el asistente ya no vuelve a crear un insumo si ya existe uno con ese nombre.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/08/2026',
