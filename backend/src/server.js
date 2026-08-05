@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.35.0';
+const AGROCORE_VERSION = '2.36.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6811,6 +6811,68 @@ async function _ctxAsistente(companyId) {
   ]);
   return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean), lotes: lotes || [], campanas: campanas || [] };
 }
+// CONSULTAS de solo lectura (stock, animales, lotes, campañas). Devuelve texto o null.
+async function _consultaAsistente(texto, companyId, ctx) {
+  const t = _sinAcentos(texto);
+  // Si es un "cómo se hace" o un comando de carga, no es una consulta: que lo maneje otro.
+  if (/\b(como|crear|cargar|carga|cargo|nueva|nuevo|agregar|dar de alta|registr|anota|recorda|acorda)\b/.test(t)) return null;
+  const esConsulta = /\b(cuanto|cuanta|cuantos|cuantas|stock|mostrame|mostra|listame|lista|decime|hay|tengo|ver|consulta|cuales|queda|quedan|existencia|rodeo)\b/.test(t) || /\?/.test(t);
+  if (!esConsulta) return null;
+  let campo = ctx.campos.find(c => c.nombre && t.includes(_sinAcentos(c.nombre)));
+
+  // --- LOTES --- (no si preguntan por animales "del lote X")
+  if (/\blotes?\b/.test(t) && !/\b(animal|animales|hacienda|vacas?|novillos?|terneros?|toros?|cabezas?|rodeo)\b/.test(t)) {
+    let lotes = ctx.lotes; if (campo) lotes = lotes.filter(l => l.campoId === campo.id);
+    if (!lotes.length) return `No tengo lotes cargados${campo ? ` en ${campo.nombre}` : ''}. Cargalos en "Campos y lotes".`;
+    return `🗺️ ${lotes.length} lote${lotes.length === 1 ? '' : 's'}${campo ? ` en ${campo.nombre}` : ''}: ${lotes.map(l => l.nombre).join(', ')}.`;
+  }
+  // --- CAMPAÑAS ---
+  if (/\bcampan/.test(t)) {
+    const camps = ctx.campanas;
+    if (!camps.length) return 'No tenés campañas cargadas todavía. Creá una en "Campañas".';
+    const lista = camps.slice(0, 20).map(c => { const lote = ctx.lotes.find(l => l.id === c.loteId); return `${c.cultivo || 'campaña'}${c.ciclo ? ' ' + c.ciclo : ''}${lote ? ' (lote ' + lote.nombre + ')' : ''}`; }).join('; ');
+    return `🌱 ${camps.length} campaña${camps.length === 1 ? '' : 's'}: ${lista}.`;
+  }
+  // --- STOCK de un producto ---
+  if (/\bstock\b/.test(t) || (/\b(cuanto|cuanta|cuantos|cuantas|queda|quedan)\b/.test(t) && /\bde\b/.test(t) && !/\banimal|hacienda|vaca|novillo|ternero|toro|cabeza/.test(t))) {
+    const m = texto.match(/\bde\s+([A-Za-zÁÉÍÓÚÑ0-9\s]+?)[\?\.!]*$/i);
+    let termino = m ? m[1].trim().replace(/\b(stock|producto|insumo|queda|quedan)\b/gi, '').trim() : null;
+    if (!termino) return null; // sin producto puntual → que responda la ayuda del manual
+    const tnorm = _sinAcentos(termino);
+    const prods = await prisma.producto.findMany({ where: { companyId, activo: true }, select: { id: true, nombre: true, unidad: true, categoria: true, categoriaHacienda: true } });
+    const match = prods.filter(p => { const pn = _sinAcentos(p.nombre); return pn.includes(tnorm) || tnorm.includes(pn); });
+    if (!match.length) return `No encontré un producto que se llame "${termino}". Fijate el nombre exacto en Stock.`;
+    const answers = [];
+    for (const p of match.slice(0, 6)) {
+      let ex = 0;
+      if ((p.categoria || '').toLowerCase() === 'hacienda') {
+        const hmovs = await prisma.haciendaMovimiento.findMany({ where: { companyId }, select: { tipo: true, cantidad: true, categoria: true, categoriaDestino: true } });
+        const cat = p.categoriaHacienda || p.nombre;
+        hmovs.forEach(mv => { if (mv.tipo === 'cambio_categoria') { if (mv.categoria === cat) ex -= Number(mv.cantidad || 0); if ((mv.categoriaDestino || mv.categoria) === cat) ex += Number(mv.cantidad || 0); return; } if (mv.categoria !== cat) return; ex += (['nacimiento', 'compra', 'traslado_in', 'ajuste'].includes(mv.tipo) ? 1 : -1) * Number(mv.cantidad || 0); });
+      } else {
+        const g = await prisma.movimiento.groupBy({ by: ['tipo'], where: { companyId, productoId: p.id }, _sum: { cantidad: true } });
+        const ing = g.find(x => x.tipo === 'ingreso')?._sum?.cantidad || 0;
+        const egr = g.find(x => x.tipo === 'egreso')?._sum?.cantidad || 0;
+        ex = Number(ing) - Number(egr);
+      }
+      answers.push(`${Math.round(ex * 100) / 100} ${p.unidad || 'u'} de ${p.nombre}`);
+    }
+    return `📦 Stock: ${answers.join(' · ')}.`;
+  }
+  // --- ANIMALES / HACIENDA ---
+  if (/\b(animal|animales|hacienda|vacas?|novillos?|terneros?|vaquillon|toros?|cabezas?|rodeo)\b/.test(t)) {
+    const where = { companyId }; if (campo) where.campoId = campo.id;
+    const hmovs = await prisma.haciendaMovimiento.findMany({ where, select: { tipo: true, cantidad: true, categoria: true, categoriaDestino: true } });
+    if (!hmovs.length) return `No tengo movimientos de hacienda cargados${campo ? ` en ${campo.nombre}` : ''}.`;
+    const byCat = {};
+    hmovs.forEach(mv => { if (mv.tipo === 'cambio_categoria') { byCat[mv.categoria] = (byCat[mv.categoria] || 0) - Number(mv.cantidad || 0); const d = mv.categoriaDestino || mv.categoria; byCat[d] = (byCat[d] || 0) + Number(mv.cantidad || 0); return; } const s = ['nacimiento', 'compra', 'traslado_in', 'ajuste'].includes(mv.tipo) ? 1 : -1; byCat[mv.categoria] = (byCat[mv.categoria] || 0) + s * Number(mv.cantidad || 0); });
+    const items = Object.entries(byCat).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+    const total = items.reduce((a, [, n]) => a + n, 0);
+    if (!total) return `No hay animales en existencia${campo ? ` en ${campo.nombre}` : ''} según los movimientos cargados.`;
+    return `🐄 ${campo ? `En ${campo.nombre} hay` : 'En total hay'} ${total} animal${total === 1 ? '' : 'es'}: ${items.map(([c, n]) => `${n} ${c}`).join(', ')}.`;
+  }
+  return null;
+}
 // Intérprete por reglas (sin IA). Devuelve { accion, params, resumen } o { error }.
 function _interpretarMensaje(texto, ctx) {
   const t = _sinAcentos(texto);
@@ -6862,11 +6924,11 @@ function _interpretarMensaje(texto, ctx) {
     return { accion: 'hacienda_mov', params, resumen: `🐄 ${lbl} de ${numero} ${cat} en ${campo.nombre}${extra}` };
   }
   // Labor en un lote (cosecha, siembra, pulverización, etc.)
-  if (/\blabor|cosech|siembr|sembr|pulveriz|fumig|fertiliz|aplicaci|rastr|arad|laboreo|disquead|siembr/.test(t)) {
+  if (/\blabor|cosech|siembr|sembr|pulveriz|fumig|fertiliz|aplic|rastr|arad|laboreo|disquead/.test(t)) {
     let tlab = 'Labor';
     if (/cosech/.test(t)) tlab = 'Cosecha';
     else if (/siembr|sembr/.test(t)) tlab = 'Siembra';
-    else if (/pulveriz|fumig/.test(t)) tlab = 'Pulverización';
+    else if (/pulveriz|fumig|aplic/.test(t)) tlab = 'Pulverización';
     else if (/fertiliz/.test(t)) tlab = 'Fertilización';
     else if (/rastr|arad|laboreo|disquead/.test(t)) tlab = 'Laboreo';
     const loteM = t.match(/lote\s+([a-z0-9]+)/);
@@ -6880,8 +6942,11 @@ function _interpretarMensaje(texto, ctx) {
     const camp = camps[0];
     if (!camp) return { error: `El lote ${lote.nombre} no tiene campaña cargada. Creala en Campañas y volvé a intentar.` };
     const resp = (texto.match(/emplead[oa]\s+(?:de\s+)?([A-ZÁÉÍÓÚ][\wáéíóúñ]+)/i) || texto.match(/\b(?:la|el)\s+([A-ZÁÉÍÓÚ][\wáéíóúñ]+)\s+(?:termin|hizo|realiz|aplic)/i) || [])[1] || null;
-    return { accion: 'labor', params: { campanaId: camp.id, loteNombre: lote.nombre, campoNombre: campo?.nombre || '', tipo: tlab, responsable: resp },
-      resumen: `🚜 Labor de ${tlab} en lote ${lote.nombre}${camp.cultivo ? ` (${camp.cultivo}${camp.ciclo ? ' ' + camp.ciclo : ''})` : ''}${resp ? ` · ${resp}` : ''}` };
+    // Insumo aplicado (ej: "120 litros de Glifosato")
+    const insM = texto.match(/(\d+(?:[.,]\d+)?)\s*(litros?|lts?|lt|kg|kilos?|kgs|cc|ml|bolsas?|dosis|gr|gramos?)\b\s*(?:de\s+)?([A-Za-zÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑ0-9\s.]*?)(?:\s+en\b|\s+al\b|\s+sobre\b|[.,]|$)/i);
+    const insumo = insM ? `${insM[1]} ${insM[2]} de ${insM[3].trim()}` : null;
+    return { accion: 'labor', params: { campanaId: camp.id, loteNombre: lote.nombre, campoNombre: campo?.nombre || '', tipo: tlab, responsable: resp, insumo },
+      resumen: `🚜 Labor de ${tlab} en lote ${lote.nombre}${camp.cultivo ? ` (${camp.cultivo}${camp.ciclo ? ' ' + camp.ciclo : ''})` : ''}${insumo ? ` · ${insumo}` : ''}${resp ? ` · ${resp}` : ''}` };
   }
   return { error: 'Uh, esa no la entendí del todo 🤔. Pero tranqui, te ayudo igual.\n\nContame qué hiciste — ej: "nacieron 5 terneros en Montenegro", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8".\nO preguntame cómo se hace algo — ej: "¿cómo cargo un cheque de tercero?".\n\n💡 Escribí "ayuda" y te muestro todo lo que puedo hacer.' };
 }
@@ -7404,6 +7469,14 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', menu: true });
       return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: m });
     }
+    // 0.5) CONSULTAS de solo lectura (stock, animales, lotes, campañas).
+    try {
+      const _c = await _consultaAsistente(texto, req.companyId, ctx);
+      if (_c) {
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', _c, { status: 'ayuda', consulta: true });
+        return res.json({ ok: true, status: 'ayuda', mensaje: _c, data: m });
+      }
+    } catch (e) {}
     // 1) Si es una PREGUNTA de "cómo se hace", respondemos con la ayuda del manual.
     if (_esPregunta(_tn)) {
       const e = _buscarAyuda(texto);
@@ -7460,9 +7533,9 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
       await prisma.laborAplicada.create({ data: {
         campanaId: params.campanaId, tipo: params.tipo, fecha: new Date(),
         responsable: params.responsable || null, esServicio: false,
-        observaciones: `Cargado por ${quien} (asistente)`,
+        observaciones: `Cargado por ${quien} (asistente)${params.insumo ? ` · Insumo: ${params.insumo}` : ''}`,
       }});
-      resumen = `✅ Registrada labor de ${params.tipo} en lote ${params.loteNombre||''}${params.responsable?` · responsable ${params.responsable}`:''} · lo cargó ${quien}.`;
+      resumen = `✅ Registrada labor de ${params.tipo} en lote ${params.loteNombre||''}${params.insumo?` · ${params.insumo}`:''}${params.responsable?` · responsable ${params.responsable}`:''} · lo cargó ${quien}. 💡 El insumo queda anotado; si querés descontarlo del stock, cargalo en Insumos.`;
     } else if (accion === 'recordatorio') {
       if (!_permOk(req, 'agenda:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para crear recordatorios.' });
       await prisma.recordatorio.create({ data: {
@@ -9552,13 +9625,25 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
       const p = parse3(raw);
       const em = chunk.match(/(Bovino|Porcino|Ovino|Equino|Caprino)[\s\S]*/i);
       const catTexto = (em ? em[0] : chunk).replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      // m[1] trae N° Tropa + Cabezas PEGADOS (ej "390748" = tropa 39074 + 8 cabezas).
+      // Los separamos usando los kilos: el corte cuyo peso/cabeza sea plausible.
+      let tropa = m[1] || null, cabezas = null;
+      const _kg = p.cantidad;
+      if (_kg && m[1] && m[1].length >= 2) {
+        const cands = [];
+        for (const nd of [1, 2]) {
+          if (m[1].length > nd) { const cab = parseInt(m[1].slice(-nd), 10); if (cab > 0) cands.push({ cab, tropa: m[1].slice(0, -nd), w: _kg / cab }); }
+        }
+        const enRango = cands.filter(c => c.w >= 60 && c.w <= 900); // peso/cabeza típico (bovino/ovino/porcino)
+        if (enRango[0]) { cabezas = enRango[0].cab; tropa = enRango[0].tropa; }
+      }
       renglones.push({
         especie: (chunk.match(/(Bovino|Porcino|Ovino|Equino|Caprino)/i) || [])[1] || null,
         categoriaTexto: catTexto || null,
         raza: (catTexto.match(/\/\s*(.+)$/) || [])[1] || null,
         categoria: _detectCategoriaHacienda(catTexto),
-        tropa: m[1] || null,
-        cabezas: null,   // no se puede leer confiable del PDF: lo confirma el usuario
+        tropa,
+        cabezas,   // autodetectado desde los kilos; el usuario lo puede corregir
         kilos: p.cantidad, precioKg: p.precio, bruto: p.bruto,
         alicuotaIva: alic, iva: p.bruto ? Math.round(p.bruto * alic) / 100 : null,
       });

@@ -2524,6 +2524,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/08/2026',
+      titulo:'🧠 v2.36.0 — El asistente ahora CONSULTA tus datos y entiende aplicaciones',
+      desc:'El asistente 🤖 dio un salto grande. Ahora también <b>responde consultas</b> sobre tu establecimiento, sin que abras ninguna pantalla: <i>"¿cuánto stock queda de Atrazina?"</i>, <i>"mostrame los animales"</i> (o los de un campo), <i>"¿qué lotes tengo?"</i>, <i>"¿qué campañas tengo?"</i>. Además entiende <b>aplicaciones de insumo</b>: <i>"aplicá 120 litros de Glifosato en el lote 1"</i> registra la labor y anota el producto. Se suma a lo que ya hacía: cargar hacienda/labores/recordatorios, explicarte cómo se hace cada cosa y llevarte a la pantalla. <i>Entiende frases claras; para lenguaje 100% libre, más adelante se le puede conectar la IA.</i>' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'05/08/2026',
+      titulo:'🐄 Importar liquidaciones de hacienda — ahora detecta las cabezas',
+      desc:'Al importar el PDF de una <b>liquidación de compra directa</b> de hacienda, el sistema ahora <b>autocompleta las cabezas</b> y separa bien el N° de tropa (antes quedaban para cargar a mano). Se mantiene todo lo demás: categoría, kilos, precio, IVA y neto.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/08/2026',
       titulo:'🤖 v2.35.0 — Botón del Asistente siempre a mano',
       desc:'Sumamos un botón <b>🤖 Asistente</b> arriba a la derecha, <b>al lado de la campanita 🔔</b>, para que puedas abrirlo desde cualquier pantalla y consultarlo cuando quieras. Tocás el 🤖 y entrás directo al asistente: preguntale cómo se hace algo o contale qué hiciste y lo carga por vos.' },
@@ -6982,7 +6988,7 @@ pages.mensajes = async function(){
       <button class="btn btn-ghost text-xs" onclick="probarAviso()" title="Enviar un aviso de prueba a este dispositivo">🧪 Probar</button>
     </div>
     ${esAsistente?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
-      Preguntame <b>cómo se hace algo</b> y te explico paso a paso (ej: <i>"¿cómo cargo un cheque de tercero?"</i>, <i>"¿cómo hago una compra?"</i>) — te llevo directo a la pantalla. O contame <b>qué hiciste</b> y lo cargo por vos: <i>"nacieron 5 terneros en Montenegro"</i> · <i>"cosecha en el lote 1 de Campo Prueba"</i> · <i>"recordar vacunar el 15/8"</i>.</div>`
+      <b>3 cosas</b> puedo hacer: <b>(1) Consultar</b> tus datos — <i>"¿cuánto stock queda de Atrazina?"</i> · <i>"mostrame los animales"</i> · <i>"¿qué lotes tengo?"</i> · <i>"¿qué campañas tengo?"</i>. <b>(2) Cargar</b> por vos — <i>"nacieron 5 terneros en Montenegro"</i> · <i>"aplicá 120 litros de Glifosato en el lote 1"</i> · <i>"recordar vacunar el 15/8"</i>. <b>(3) Explicarte cómo se hace</b> — <i>"¿cómo cargo un cheque de tercero?"</i> y te llevo a la pantalla. Escribí o dictá 🎤.</div>`
      : grupoActual?`<div class="text-xs text-slate-500 mb-2">👪 <b>${esc(grupoActual.nombre)}</b> · ${(grupoActual.miembros||[]).length} integrante${(grupoActual.miembros||[]).length===1?'':'s'}</div>`:''}
     <div id="chat-msgs" style="height:56vh;min-height:320px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
     <div id="chat-confirm"></div>
