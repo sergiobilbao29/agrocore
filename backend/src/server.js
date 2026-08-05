@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.42.0';
+const AGROCORE_VERSION = '2.43.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2688,6 +2688,14 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     // Mapa nombre→tipo de insumo (Herbicida, Fertilizante, ...) para etiquetar cada fila.
     let insTipoMap = {};
     try { insTipoMap = await insumoNombreATipo(req.companyId); } catch {}
+    // Respaldo: nombre de la familia del arbol (solo nodos hijos = familias como Herbicida).
+    // Asi Stock muestra la familia aunque el catalogo no matchee por nombre exacto.
+    const _famNodo = {};
+    try {
+      const _nodos = await prisma.categoriaArticulo.findMany({ where: { companyId: req.companyId }, select: { id: true, nombre: true, padreId: true } });
+      _nodos.forEach(n => { if (n.padreId) _famNodo[n.id] = n.nombre; });
+    } catch {}
+    const _nrmNombre = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim();
     const productos = await prisma.producto.findMany({
       where: { companyId: req.companyId, activo: true },
       orderBy: { nombre: 'asc' },
@@ -2760,7 +2768,7 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       const existencia = Number(ing) - Number(egr);
       // Para insumos, etiquetamos con su tipo del catálogo (Herbicida, Fertilizante…).
       const subtipo = (p.categoria || '').toLowerCase() === 'insumos'
-        ? (insTipoMap[(p.nombre || '').trim().toLowerCase()] || null) : null;
+        ? (insTipoMap[_nrmNombre(p.nombre)] || (p.categoriaArticuloId ? _famNodo[p.categoriaArticuloId] : null) || null) : null;
       return { ...p, existencia, subtipo, bajoMinimo: existencia < Number(p.stockMinimo || 0) };
     });
     // Si el rol limita las categorías visibles de stock, filtramos.
@@ -6213,10 +6221,11 @@ async function sincronizarProductosCereales(companyId) {
 // Devuelve un mapa nombreInsumo(lowercase) -> tipo del catálogo, para etiquetar el
 // stock de insumos por su tipo (Herbicida, Fertilizante, etc.) sin guardar el dato.
 async function insumoNombreATipo(companyId) {
+  const nrm = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim();
   const tipos = await insumoTipoNombresSet(companyId);
   const items = await prisma.catalogo.findMany({ where: { companyId }, select: { nombre: true, tipo: true } });
   const map = {};
-  items.forEach(c => { if (tipos.has((c.tipo || '').trim()) && c.nombre) map[c.nombre.trim().toLowerCase()] = (c.tipo || '').trim(); });
+  items.forEach(c => { if (tipos.has((c.tipo || '').trim()) && c.nombre) map[nrm(c.nombre)] = (c.tipo || '').trim(); });
   return map;
 }
 const catHaciendaSchema = z.object({

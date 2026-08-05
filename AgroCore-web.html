@@ -2525,6 +2525,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
+      titulo:'🏷️ v2.43.0 — La familia ahora se ve en la lista de Stock',
+      desc:'En v2.42.0 la familia quedaba bien guardada, pero la <b>lista de Stock</b> la mostraba desde otra fuente (el nombre del Catálogo) y algunos insumos como 2,4-D seguían apareciendo sin la etiqueta 🧪 Herbicida. Ahora la columna Familia de Stock <b>también toma la familia del árbol</b> (Categorías y Familias) como respaldo y compara los nombres sin importar acentos/mayúsculas. Con esto la etiqueta de familia aparece de forma consistente para todos los insumos.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🏷️ v2.42.0 — La familia en Stock queda consistente con el Catálogo',
       desc:'Después de unir duplicados, algunos productos mostraban la <b>familia</b> equivocada o sin familia en Stock (ej. 2,4-D aparecía como "Insumos" sin la etiqueta 🏷️ Herbicida), aunque en el Catálogo estaba bien. Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>corrige la familia de cada producto tomándola del Catálogo</b> (Herbicida, Fungicida, Fertilizante, etc.). Corré una vez el botón y la columna Familia va a quedar prolija y consistente para todos.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
