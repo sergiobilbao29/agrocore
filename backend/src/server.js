@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.37.0';
+const AGROCORE_VERSION = '2.38.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9583,6 +9583,105 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
 // animal, y el Importe Neto. Los números por renglón vienen concatenados en el
 // texto del PDF; se separan usando la restricción cantidad × precio ≈ bruto.
 // ============================================================
+// ---- LIQUIDACIÓN PRIMARIA DE GRANOS (cereal): parser + import ----
+function _parseLiquidacionCereal(t) {
+  t = t || '';
+  const num = (s) => { if (s == null || s === '') return null; let n = String(s).replace(/[$\s]/g, ''); if (/,\d{1,2}$/.test(n)) n = n.replace(/\./g, '').replace(',', '.'); else if (/\.\d{1,2}$/.test(n)) n = n.replace(/,/g, ''); else n = n.replace(/[,.]/g, ''); const v = Number(n); return isFinite(v) ? v : null; };
+  const fechaArg = (s) => { if (!s) return null; const m = String(s).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/); if (!m) return null; let y = m[3]; if (y.length === 2) y = '20' + y; return `${y}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`; };
+  const coe = (t.match(/C\.O\.E\.:\s*(\d+)/) || [])[1] || null;
+  const fecha = fechaArg((t.match(/Fecha:\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{4})/) || [])[1] || (t.match(/([0-3]?\d[\/\-][01]?\d[\/\-]\d{4}),/) || [])[1]);
+  // Comprador (nuestro cliente): usa "C.U.I.T.:" con puntos; el corredor usa "CUIT:" sin puntos.
+  const cuitIdx = t.search(/C\.U\.I\.T\.:\s*\d{11}/);
+  const compradorCuit = (t.match(/C\.U\.I\.T\.:\s*(\d{11})/) || [])[1] || null;
+  let compradorNombre = null;
+  if (cuitIdx >= 0) { const rs = [...t.slice(0, cuitIdx).matchAll(/Razón Social:\s*(.+)/g)]; if (rs.length) compradorNombre = rs[rs.length - 1][1].trim(); }
+  const gm = t.match(/(\d{1,2})\s*-\s*(MA[IÍ]Z|SOJA|MAN[IÍ][A-Z ]*|TRIGO|SORGO|GIRASOL|CEBADA|CENTENO|AVENA|ALPISTE|LINO|POROTO[A-Z ]*)/i);
+  const granoNombre = gm ? gm[2].trim().toUpperCase().replace(/\s+/g, ' ') : null;
+  const op = t.match(/([\d.,]+)\s*Kg\$([\d.,]+?\.\d{2})\$([\d.,]+?\.\d{2})(\d{1,2}(?:\.\d{1,2})?)\$([\d.,]+?\.\d{2})\$([\d.,]+?\.\d{2})/);
+  let cantidadKg = null, precioKg = null, subtotal = null, alic = null, iva = null, cIva = null;
+  if (op) { cantidadKg = num(op[1]); precioKg = num(op[2]); subtotal = num(op[3]); alic = num(op[4]); iva = num(op[5]); cIva = num(op[6]); }
+  const deducciones = num((t.match(/([\d][\d.,]*)\s*Total Deducciones:/) || t.match(/Total Deducciones:\s*\$?\s*([\d.,]+)/) || [])[1]) || 0;
+  let retenciones = num((t.match(/Total Retenciones Afip:\s*\$?\s*([\d.,]+)/) || [])[1]);
+  if (retenciones == null) { const rz = t.slice(Math.max(0, t.indexOf('RETENCIONES'))); const rr = [...rz.matchAll(/\d{1,2}%\$\s*([\d.,]+)/g)].map(x => num(x[1])).filter(Boolean); retenciones = rr.reduce((a, b) => a + b, 0); }
+  // Neto = "Importe Neto a Pagar" (preferido) o cIva - deducciones - retenciones.
+  let neto = null; const li = t.search(/Importe\s+Neto\s+a\s+Pagar/i);
+  if (li >= 0 && cIva) { const w = t.slice(Math.max(0, li - 120), li + 120); const cand = [...w.matchAll(/([\d][\d.,]*\.\d{2})/g)].map(x => num(x[1])).filter(v => v && v < cIva * 0.999 && v > cIva * 0.4); if (cand.length) neto = Math.max(...cand); }
+  if (neto == null && cIva != null) neto = Math.round((cIva - deducciones - (retenciones || 0)) * 100) / 100;
+  return { numero: coe, fecha, compradorNombre, compradorCuit, granoNombre, cantidadKg, precioKg, subtotal, alicuotaIva: alic, iva, operacionCIva: cIva, deducciones, retenciones: retenciones || 0, neto };
+}
+app.post('/api/admin/parse-liquidacion-cereal-pdf', authMiddleware, requireCompany, upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo PDF' });
+    if (!/\.pdf$/i.test(req.file.originalname || '')) return res.status(400).json({ ok: false, error: 'El archivo debe ser un PDF' });
+    let pdfParse; try { pdfParse = await getPdfParse(); } catch { return res.status(501).json({ ok: false, error: 'El parser de PDF no está disponible. Cargá la liquidación a mano.' }); }
+    let texto = ''; try { texto = (await pdfParse(req.file.buffer)).text || ''; } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
+    if (!/LIQUIDACI[ÓO]N\s+PRIMARIA\s+DE\s+GRANOS/i.test(texto)) return res.status(400).json({ ok: false, error: 'No parece una Liquidación Primaria de Granos. Verificá el PDF.' });
+    const data = _parseLiquidacionCereal(texto);
+    const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, activo: true, categoria: 'cereales' }, select: { id: true, nombre: true } });
+    let productoId = null;
+    if (data.granoNombre) { const _g = _sinAcentos(data.granoNombre.split(' ')[0]); const pm = prods.find(p => _sinAcentos(p.nombre).includes(_g) || _g.includes(_sinAcentos(p.nombre))); productoId = pm?.id || null; }
+    let clienteId = null, clienteNombre = null;
+    if (data.compradorCuit) { const cl = await prisma.cliente.findFirst({ where: { companyId: req.companyId, cuit: data.compradorCuit } }); if (cl) { clienteId = cl.id; clienteNombre = cl.razonSocial; } }
+    res.json({ ok: true, data: { ...data, productoId, clienteId, clienteNombre } });
+  } catch (e) { next(e); }
+});
+app.post('/api/liquidaciones-cereal/importar', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      depositoId: z.string().min(1),
+      productoId: z.string().min(1),
+      clienteId: z.string().nullable().optional(),
+      clienteNuevo: z.object({ razonSocial: z.string().min(1), cuit: z.string().nullable().optional() }).nullable().optional(),
+      fecha: z.coerce.date(),
+      numero: z.string().nullable().optional(),
+      cantidadKg: z.number().positive(),
+      precioKg: z.number().nonnegative().nullable().optional(),
+      operacionCIva: z.number().nonnegative().nullable().optional(),
+      deducciones: z.number().nonnegative().default(0),
+      retenciones: z.number().nonnegative().default(0),
+      neto: z.number(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const result = await prisma.$transaction(async (tx) => {
+      // Cliente: dedupe por CUIT o alta.
+      let clienteId = d.clienteId || null;
+      if (!clienteId && d.clienteNuevo) {
+        let cl = d.clienteNuevo.cuit ? await tx.cliente.findFirst({ where: { companyId: req.companyId, cuit: d.clienteNuevo.cuit } }) : null;
+        if (!cl) cl = await tx.cliente.create({ data: { companyId: req.companyId, razonSocial: d.clienteNuevo.razonSocial, cuit: d.clienteNuevo.cuit || null, condIVA: 'RI', activo: true } });
+        clienteId = cl.id;
+      }
+      const kilosNetos = d.cantidadKg;
+      const precioPorTn = d.precioKg != null ? d.precioKg * 1000 : (d.operacionCIva && kilosNetos ? d.operacionCIva / (kilosNetos / 1000) : 0);
+      const bruto = d.operacionCIva != null ? d.operacionCIva : d.neto;
+      const liq = await tx.liquidacionCereal.create({ data: {
+        companyId: req.companyId, depositoId: d.depositoId, productoId: d.productoId, clienteId: clienteId || null,
+        fecha: d.fecha, numero: d.numero || null,
+        kilosBrutos: d.cantidadKg, porcMerma: 0, kilosNetos,
+        precioPorTn, bruto, totalDescuentos: d.deducciones, totalImpuestos: d.retenciones, neto: d.neto,
+        observaciones: d.observaciones || `Importada de LPG${d.numero ? ' C.O.E. ' + d.numero : ''}`,
+      }});
+      // Egreso de stock del depósito (kilos a toneladas).
+      await tx.movimiento.create({ data: {
+        companyId: req.companyId, productoId: d.productoId, depositoId: d.depositoId,
+        fecha: d.fecha, tipo: 'egreso', motivo: 'liquidacion_cerealera',
+        cantidad: kilosNetos / 1000, precio: precioPorTn, total: bruto,
+        referencia: d.numero || null, observaciones: `Liquidación cereal (import) — neto ${d.neto.toFixed(2)}`,
+        userId: req.user?.id || null,
+      }});
+      // Deuda del cliente (cuenta a cobrar) por el neto.
+      if (clienteId) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'cliente', contactoId: clienteId, fecha: d.fecha,
+          detalle: `Liquidación cereal ${d.numero || ''}`.trim(), referencia: `LIQ-${liq.id.slice(-6).toUpperCase()}`,
+          debe: d.neto, haber: 0, categoria: 'liquidacion_cereal',
+        }});
+      }
+      return { liq, clienteId };
+    });
+    res.status(201).json({ ok: true, data: result.liq, clienteCreado: !d.clienteId && !!result.clienteId });
+  } catch (e) { next(e); }
+});
 // Detecta la categoría del sistema a partir del texto "Categoría / Raza".
 function _detectCategoriaHacienda(txt) {
   const x = (txt || '').toLowerCase();

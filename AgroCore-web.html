@@ -2525,6 +2525,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/08/2026',
+      titulo:'🌾 v2.38.0 — Importar liquidaciones de cereal (PDF) con un clic',
+      desc:'En <b>Liquidaciones de cereal</b> ahora tenés <b>📥 Importar de PDF</b>. Subís la <b>Liquidación Primaria de Granos</b> y el sistema lee comprador, CUIT, grano, kilos, precio, IVA, deducciones, retenciones y el <b>neto a pagar</b>. Revisás todo en una vista previa editable (elegís el depósito y confirmás el monto) y al importar: <b>descuenta los kg del stock del depósito</b> y <b>genera la cuenta a cobrar</b> del comprador. Si el comprador no existe como cliente, lo <b>da de alta solo</b> (dedupe por CUIT).' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/08/2026',
       titulo:'📦 v2.37.0 — El asistente descuenta stock y da de alta insumos nuevos',
       desc:'Cuando le decís una <b>aplicación</b> (ej: <i>"aplicá 120 litros de Glifosato en el lote 1"</i>), el asistente 🤖 ahora te pregunta si querés <b>descontarlo del stock</b> y, si el insumo <b>no está en el catálogo</b>, te ofrece <b>agregarlo eligiendo la familia</b> (Herbicida, Fertilizante, Semilla, etc.) y hace el movimiento de egreso automáticamente. Todo desde el chat, sin abrir Stock ni Catálogos.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/08/2026',
@@ -24245,7 +24248,10 @@ pages.liquidaciones = async function() {
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600">${rows.length} liquidación${rows.length===1?'':'es'}</div>
-      ${can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-primary" onclick="liqForm()">+ Nueva liquidación</button>`:''}
+      <div class="flex gap-2">
+        ${can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-secondary" onclick="liqCerealImportar()" title="Subir el PDF de la Liquidación Primaria de Granos">📥 Importar de PDF</button>`:''}
+        ${can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-primary" onclick="liqForm()">+ Nueva liquidación</button>`:''}
+      </div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Liquidaciones</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
@@ -24272,6 +24278,87 @@ pages.liquidaciones = async function() {
       </table>
     </div>`;
 };
+// ---- Importar Liquidación Primaria de Granos (PDF) ----
+function liqCerealImportar(){
+  openModal({ title:'📥 Importar liquidación de cereal (PDF)', size:'max-w-lg',
+    body:`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mb-3">Subí el PDF de la <b>Liquidación Primaria de Granos</b>. Vas a poder revisar y corregir todo antes de confirmar. Al confirmar: descuenta el stock del depósito y genera la cuenta a cobrar del comprador.</div>
+      <input id="lqc-pdf" type="file" accept="application/pdf" class="input"/>
+      <div id="lqc-pdf-msg" class="text-sm mt-2"></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="liqCerealImportRun()">Leer PDF</button>` });
+}
+async function liqCerealImportRun(){
+  const f=document.getElementById('lqc-pdf')?.files?.[0]; const msg=document.getElementById('lqc-pdf-msg');
+  if(!f){ if(msg) msg.innerHTML='<span class="text-red-700">Elegí un PDF.</span>'; return; }
+  if(msg) msg.innerHTML='<span class="text-blue-700">⏳ Leyendo PDF…</span>';
+  try{
+    const fd=new FormData(); fd.append('archivo', f);
+    const r=await fetch(API_BASE+'/api/admin/parse-liquidacion-cereal-pdf', { method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body:fd });
+    const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||'Error '+r.status);
+    closeModal(); liqCerealPreview(j.data);
+  }catch(e){ if(msg) msg.innerHTML=`<span class="text-red-700">❌ ${esc(e.message)}</span>`; }
+}
+async function liqCerealPreview(p){
+  let depos=[], prods=[], clientes=[];
+  try{
+    const [d,pr,cl]=await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes')]);
+    depos=(d.data||[]).filter(x=>x.activo && x.tipo==='cerealera');
+    prods=(pr.data||[]).filter(x=>x.activo && /gran|cereal/i.test(x.categoria||''));
+    clientes=cl.data||[];
+  }catch(e){ return toast(e.message,'error'); }
+  state._lqcData=p;
+  const cliMatch = p.clienteId || (p.compradorCuit ? (clientes.find(c=>String(c.cuit||'').replace(/\D/g,'')===String(p.compradorCuit).replace(/\D/g,''))||{}).id : '') || '';
+  const hoy=(p.fecha||new Date().toISOString().slice(0,10));
+  openModal({ title:'📥 Revisar liquidación antes de importar', size:'max-w-2xl',
+    body:`
+      <div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2 mb-3">Revisá y corregí lo que haga falta. El <b>Neto</b> es lo que se va a registrar como deuda a cobrar — verificalo contra el PDF (Importe Neto a Pagar).</div>
+      <div class="grid grid-cols-2 gap-3 text-sm">
+        <div><label class="label">N° / C.O.E.</label><input id="lqc-num" class="input" value="${esc(p.numero||'')}"/></div>
+        <div><label class="label">Fecha *</label><input id="lqc-fec" type="date" class="input" value="${esc(hoy)}"/></div>
+        <div class="col-span-2"><label class="label">Depósito (de dónde sale el grano) *</label>
+          <select id="lqc-dep" class="input"><option value="">— elegí la cerealera/depósito —</option>${depos.map(x=>`<option value="${x.id}">🏭 ${esc(x.nombre)}${x.localidad?' · '+esc(x.localidad):''}</option>`).join('')}</select></div>
+        <div class="col-span-2"><label class="label">Producto (grano) *  ${p.granoNombre?`<span class="text-slate-400">— PDF: ${esc(p.granoNombre)}</span>`:''}</label>
+          <select id="lqc-prod" class="input"><option value="">— elegí el cereal —</option>${prods.map(x=>`<option value="${x.id}" ${x.id===p.productoId?'selected':''}>${esc(x.nombre)} (${esc(x.unidad)})</option>`).join('')}</select></div>
+        <div><label class="label">Cantidad (kg) *</label><input id="lqc-kg" type="number" step="0.01" class="input" value="${p.cantidadKg||''}"/></div>
+        <div><label class="label">Precio/kg</label><input id="lqc-pk" type="number" step="0.0001" class="input" value="${p.precioKg||''}"/></div>
+        <div class="col-span-2 border-t pt-2 mt-1">
+          <label class="label">Comprador (cliente que nos debe) *</label>
+          <select id="lqc-cli" class="input" onchange="document.getElementById('lqc-cli-new').classList.toggle('hidden', this.value!=='__new__')">
+            <option value="">— elegí —</option>
+            ${clientes.map(c=>`<option value="${c.id}" ${c.id===cliMatch?'selected':''}>${esc(c.razonSocial)}${c.cuit?' · '+esc(c.cuit):''}</option>`).join('')}
+            <option value="__new__" ${!cliMatch&&p.compradorNombre?'selected':''}>➕ Crear: ${esc(p.compradorNombre||'nuevo cliente')}</option>
+          </select>
+          <div id="lqc-cli-new" class="${(!cliMatch&&p.compradorNombre)?'':'hidden'} grid grid-cols-2 gap-2 mt-2">
+            <input id="lqc-cli-rs" class="input text-sm" placeholder="Razón social" value="${esc(p.compradorNombre||'')}"/>
+            <input id="lqc-cli-cuit" class="input text-sm" placeholder="CUIT" value="${esc(p.compradorCuit||'')}"/>
+          </div>
+        </div>
+        <div class="col-span-2 bg-slate-50 rounded p-2 text-xs text-slate-500">Operación c/IVA: ${p.operacionCIva?fmt$(p.operacionCIva):'—'} · Deducciones: ${fmt$(p.deducciones||0)} · Retenciones: ${fmt$(p.retenciones||0)}</div>
+        <div class="col-span-2"><label class="label">Neto a cobrar (deuda del cliente) *</label><input id="lqc-neto" type="number" step="0.01" class="input font-bold" value="${p.neto||''}"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="liqCerealImportConfirmar()">✅ Importar</button>` });
+}
+async function liqCerealImportConfirmar(){
+  const p=state._lqcData||{};
+  const depositoId=$('#lqc-dep').value, productoId=$('#lqc-prod').value;
+  const cantidadKg=Number($('#lqc-kg').value||0), neto=Number($('#lqc-neto').value||0);
+  if(!depositoId) return toast('Elegí el depósito','warn');
+  if(!productoId) return toast('Elegí el producto (grano)','warn');
+  if(!cantidadKg||cantidadKg<=0) return toast('Cantidad en kg debe ser > 0','warn');
+  const cliSel=$('#lqc-cli').value;
+  const body={ depositoId, productoId, fecha:new Date($('#lqc-fec').value||p.fecha).toISOString(),
+    numero:$('#lqc-num').value.trim()||null, cantidadKg, precioKg:Number($('#lqc-pk').value||0)||null,
+    operacionCIva:p.operacionCIva||null, deducciones:Number(p.deducciones||0), retenciones:Number(p.retenciones||0), neto };
+  if(cliSel==='__new__'){ const rs=$('#lqc-cli-rs').value.trim(); if(!rs) return toast('Poné la razón social del cliente','warn'); body.clienteNuevo={ razonSocial:rs, cuit:$('#lqc-cli-cuit').value.trim()||null }; }
+  else if(cliSel){ body.clienteId=cliSel; }
+  else return toast('Elegí o creá el comprador (cliente)','warn');
+  try{
+    const r=await api('/api/liquidaciones-cereal/importar',{ method:'POST', body:JSON.stringify(body) });
+    toast('Liquidación importada'+(r.clienteCreado?' · cliente creado':'')+' · stock descontado y deuda generada','success');
+    closeModal(); pages.liquidaciones();
+  }catch(e){ toast(e.message,'error'); }
+}
 async function liqForm() {
   let depos=[], productos=[], clientes=[];
   try {
