@@ -2524,6 +2524,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
+      titulo:'🧹 v2.39.0 — Depurar productos duplicados en Stock',
+      desc:'Si en Stock te aparecía el mismo artículo <b>dos veces</b> (por ejemplo uno en "Insumos" y otro en "Insumos / Herbicida"), ahora en <b>Stock → 🧹 Depurar duplicados</b> los detecta y los <b>une en uno solo</b>: conserva el que está en el <b>Catálogo</b> (con su familia) y le <b>mueve el stock, los movimientos y la unidad</b> del otro, borrando el duplicado. No se pierde ningún movimiento. Además, el asistente ya no vuelve a crear un insumo si ya existe uno con ese nombre.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/08/2026',
       titulo:'🌾 v2.38.0 — Importar liquidaciones de cereal (PDF) con un clic',
       desc:'En <b>Liquidaciones de cereal</b> ahora tenés <b>📥 Importar de PDF</b>. Subís la <b>Liquidación Primaria de Granos</b> y el sistema lee comprador, CUIT, grano, kilos, precio, IVA, deducciones, retenciones y el <b>neto a pagar</b>. Revisás todo en una vista previa editable (elegís el depósito y confirmás el monto) y al importar: <b>descuenta los kg del stock del depósito</b> y <b>genera la cuenta a cobrar</b> del comprador. Si el comprador no existe como cliente, lo <b>da de alta solo</b> (dedupe por CUIT).' },
@@ -5995,6 +5998,7 @@ pages.stock = async function() {
       ${can('stock:create')?`<button class="btn btn-secondary text-sm" onclick="traspasoForm()" title="Convertir parte de tu grano cosechado en semilla propia (insumo) para resembrar. Una sola vía: grano → semilla.">🌱 Convertir grano a semilla</button>`:''}
       ${can('stock:update')?`<button class="btn btn-secondary text-sm" onclick="reubicarForm()" title="Cambiar la categoría/familia de varios artículos a la vez">🔀 Reubicar categoría</button>`:''}
       ${can('stock:read')?`<button class="btn btn-secondary text-sm" onclick="stockControlMenu()" title="Exportar planilla para conteo físico e importar el conteo">📋 Control de stock</button>`:''}
+      ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="depurarDuplicados()" title="Detectar y unir productos duplicados (mismo nombre) conservando el que tiene stock">🧹 Depurar duplicados</button>`:''}
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Total SKU</div><div class="text-2xl font-bold mt-1">${totalSKU}</div></div>
@@ -6381,6 +6385,34 @@ async function prodDel(id, nombre) {
 }
 
 /* ----- MOVIMIENTOS ----- */
+// ---- Depurar productos duplicados en Stock ----
+async function depurarDuplicados(){
+  let grupos=[];
+  try{ grupos=(await api('/api/admin/stock/duplicados')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  if(!grupos.length) return toast('No encontré productos duplicados. Todo en orden ✅','success');
+  const body = grupos.map(g=>`
+    <div class="border border-slate-200 rounded-lg p-2 mb-2">
+      <div class="font-semibold text-agro-900 text-sm mb-1">${esc(g.nombre)} <span class="text-slate-400 font-normal">· ${esc(g.categoria)}</span></div>
+      ${g.items.map(it=>`<div class="flex justify-between text-xs ${it.esCanonico?'text-emerald-700 font-semibold':'text-slate-400 line-through'}">
+        <span>${it.esCanonico?'✅ Conservar':'🗑️ Borrar'} · ${esc(it.unidad||'')}${it.familia?' · con familia':''}</span>
+        <span>existencia ${fmtN(it.existencia)} · ${it.movs} mov.</span></div>`).join('')}
+    </div>`).join('');
+  openModal({ title:`🧹 Depurar duplicados (${grupos.length} grupo${grupos.length===1?'':'s'})`, size:'max-w-2xl',
+    body:`<div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2 mb-3">Voy a <b>unir</b> cada grupo en un solo producto: conservo el que está en el <b>Catálogo</b> (✅, con su familia) y le <b>muevo el stock, los movimientos y la unidad</b> del otro. Después borro el duplicado. No se pierde ningún movimiento.</div>
+      <div style="max-height:50vh;overflow:auto">${body}</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="depurarDuplicadosRun()">🧹 Unir y limpiar</button>` });
+}
+async function depurarDuplicadosRun(){
+  try{
+    const r=await api('/api/admin/stock/depurar-duplicados',{method:'POST'});
+    const d=r.data||{};
+    closeModal();
+    toast(`Listo: ${d.fusionados} grupo(s) unido(s), ${d.eliminados} duplicado(s) eliminado(s)${(d.errores&&d.errores.length)?` · ${d.errores.length} con referencias no se pudieron`:''}`,'success');
+    if(d.errores&&d.errores.length) console.warn('Depurar duplicados — pendientes:',d.errores);
+    pages.stock();
+  }catch(e){ toast(e.message,'error'); }
+}
 pages.movimientos = async function() {
   setHeader('Movimientos', 'Entradas y salidas de stock');
   if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('movimientos','Movimientos'); return; }

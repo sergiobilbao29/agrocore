@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.38.0';
+const AGROCORE_VERSION = '2.39.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7558,6 +7558,8 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
           let prod = params.insumoProductoId
             ? await prisma.producto.findFirst({ where: { id: params.insumoProductoId, companyId: req.companyId } })
             : null;
+          // Evitar duplicados: si ya existe un insumo con ese nombre, usarlo en vez de crear otro.
+          if (!prod) prod = await prisma.producto.findFirst({ where: { companyId: req.companyId, categoria: 'insumos', activo: true, nombre: { equals: params.insumoNombre, mode: 'insensitive' } } });
           if (!prod && params.crearInsumo) {
             const fam = String(params.insumoFamilia || 'Insumo').trim();
             try { await prisma.catalogo.create({ data: { companyId: req.companyId, tipo: fam, nombre: params.insumoNombre } }); } catch {}
@@ -9680,6 +9682,67 @@ app.post('/api/liquidaciones-cereal/importar', requireCompany, requirePermission
       return { liq, clienteId };
     });
     res.status(201).json({ ok: true, data: result.liq, clienteCreado: !d.clienteId && !!result.clienteId });
+  } catch (e) { next(e); }
+});
+// ---- Depurar productos DUPLICADOS en Stock (mismo nombre + categoría) ----
+// Conserva el producto con stock (y su unidad), le hereda la familia del duplicado,
+// reasigna referencias y borra el/los duplicados vacíos.
+async function _gruposDuplicados(companyId) {
+  const prods = await prisma.producto.findMany({ where: { companyId, activo: true }, select: { id: true, nombre: true, categoria: true, unidad: true, categoriaArticuloId: true, sku: true, codigoBarras: true, precioReferencia: true, updatedAt: true } });
+  const movs = await prisma.movimiento.groupBy({ by: ['productoId', 'tipo'], where: { companyId }, _sum: { cantidad: true }, _count: { _all: true } });
+  const stat = {};
+  movs.forEach(m => { const s = stat[m.productoId] || (stat[m.productoId] = { ing: 0, egr: 0, cnt: 0 }); if (m.tipo === 'ingreso') s.ing += Number(m._sum.cantidad || 0); else if (m.tipo === 'egreso') s.egr += Number(m._sum.cantidad || 0); s.cnt += m._count._all; });
+  const norm = (s) => _sinAcentos(s).replace(/\s+/g, ' ').trim();
+  const groups = {};
+  prods.forEach(p => { const k = (p.categoria || '') + '|' + norm(p.nombre); (groups[k] || (groups[k] = [])).push({ ...p, existencia: (stat[p.id]?.ing || 0) - (stat[p.id]?.egr || 0), movs: stat[p.id]?.cnt || 0 }); });
+  const dups = [];
+  for (const k in groups) {
+    const arr = groups[k]; if (arr.length < 2) continue;
+    // Canónico = el que está en el Catálogo (tiene familia). Luego más reciente / con código.
+    // El stock, movimientos y la unidad se MUEVEN a ese.
+    const rank = (p) => [(p.categoriaArticuloId ? 1 : 0), (p.sku || p.codigoBarras ? 1 : 0), new Date(p.updatedAt).getTime(), p.movs];
+    arr.sort((a, b) => { const ra = rank(a), rb = rank(b); for (let i = 0; i < ra.length; i++) { if (rb[i] !== ra[i]) return rb[i] - ra[i]; } return 0; });
+    dups.push({ categoria: arr[0].categoria, nombre: arr[0].nombre, canonicalId: arr[0].id, items: arr.map(p => ({ id: p.id, nombre: p.nombre, unidad: p.unidad, familia: !!p.categoriaArticuloId, existencia: Math.round(p.existencia * 100) / 100, movs: p.movs, esCanonico: p.id === arr[0].id })) });
+  }
+  return dups;
+}
+app.get('/api/admin/stock/duplicados', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try { res.json({ ok: true, data: await _gruposDuplicados(req.companyId) }); } catch (e) { next(e); }
+});
+app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador puede depurar duplicados.' });
+    const grupos = await _gruposDuplicados(req.companyId);
+    let fusionados = 0, eliminados = 0; const errores = [];
+    for (const g of grupos) {
+      try {
+        await prisma.$transaction(async (tx) => {
+          const can = await tx.producto.findUnique({ where: { id: g.canonicalId } });
+          for (const it of g.items) {
+            if (it.id === g.canonicalId) continue;
+            const dup = await tx.producto.findUnique({ where: { id: it.id } });
+            await tx.movimiento.updateMany({ where: { productoId: it.id }, data: { productoId: g.canonicalId } });
+            await tx.insumoAplicado.updateMany({ where: { productoId: it.id }, data: { productoId: g.canonicalId } });
+            await tx.facturaItem.updateMany({ where: { productoId: it.id }, data: { productoId: g.canonicalId } });
+            await tx.facturaCompraItem.updateMany({ where: { productoId: it.id }, data: { productoId: g.canonicalId } });
+            try { await tx.liquidacionCereal.updateMany({ where: { productoId: it.id }, data: { productoId: g.canonicalId } }); } catch {}
+            const upd = {};
+            if (!can.categoriaArticuloId && dup.categoriaArticuloId) upd.categoriaArticuloId = dup.categoriaArticuloId;
+            if (!can.sku && dup.sku) upd.sku = dup.sku;
+            if (!can.codigoBarras && dup.codigoBarras) upd.codigoBarras = dup.codigoBarras;
+            if (can.precioReferencia == null && dup.precioReferencia != null) upd.precioReferencia = dup.precioReferencia;
+            // Heredar la unidad "real" del que se borra si el canónico tiene una genérica.
+            if (/(unidad|^u$)/i.test(can.unidad || '') && dup.unidad && !/(unidad|^u$)/i.test(dup.unidad)) upd.unidad = dup.unidad;
+            if (dup.ultimoCostoCompra != null && can.ultimoCostoCompra == null) { upd.ultimoCostoCompra = dup.ultimoCostoCompra; upd.ultimoCostoMoneda = dup.ultimoCostoMoneda || null; }
+            if (Object.keys(upd).length) { await tx.producto.update({ where: { id: g.canonicalId }, data: upd }); Object.assign(can, upd); }
+            await tx.producto.delete({ where: { id: it.id } });
+            eliminados++;
+          }
+        });
+        fusionados++;
+      } catch (e) { errores.push(`${g.nombre}: ${e.message}`); }
+    }
+    res.json({ ok: true, data: { grupos: grupos.length, fusionados, eliminados, errores } });
   } catch (e) { next(e); }
 });
 // Detecta la categoría del sistema a partir del texto "Categoría / Raza".
