@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.40.0';
+const AGROCORE_VERSION = '2.41.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6168,18 +6168,22 @@ async function sincronizarProductosInsumos(companyId) {
   const items = await prisma.catalogo.findMany({ where: { companyId, activo: { not: false } } });
   const insumoCat = items.filter(c => tipos.has((c.tipo || '').trim()));
   if (!insumoCat.length) return;
-  const prods = await prisma.producto.findMany({ where: { companyId, categoria: 'insumos' }, select: { nombre: true } });
-  const have = new Set(prods.map(p => (p.nombre || '').trim().toLowerCase()));
+  // Chequeamos contra TODOS los productos activos por nombre normalizado (no solo
+  // categoria='insumos' exacta) para NO crear duplicados si la categoría quedó
+  // guardada distinta (insumos vs Insumos, o con familia asignada).
+  const nrm = (s) => _sinAcentos(s).replace(/\s+/g, ' ').trim();
+  const prods = await prisma.producto.findMany({ where: { companyId, activo: true }, select: { nombre: true } });
+  const have = new Set(prods.map(p => nrm(p.nombre)));
   for (const c of insumoCat) {
     const nombre = (c.nombre || '').trim();
-    if (!nombre || have.has(nombre.toLowerCase())) continue;
+    if (!nombre || have.has(nrm(nombre))) continue;
     await prisma.producto.create({ data: {
       companyId, categoria: 'insumos', nombre, unidad: 'unidad',
       stockMinimo: 0, activo: true,
       precioReferencia: c.precioReferencia ?? null,
       ultimoCostoMoneda: c.monedaPrecio ?? null,
     } });
-    have.add(nombre.toLowerCase());
+    have.add(nrm(nombre));
   }
 }
 // Igual que los insumos, pero para CEREALES / GRANOS: cada cereal del catálogo se
@@ -6190,11 +6194,12 @@ async function sincronizarProductosCereales(companyId) {
   const items = (await prisma.catalogo.findMany({ where: { companyId, activo: { not: false } } }))
     .filter(c => CEREAL_TIPOS.has((c.tipo || '').trim().toLowerCase()));
   if (!items.length) return;
-  const prods = await prisma.producto.findMany({ where: { companyId, categoria: 'cereales' }, select: { nombre: true } });
-  const have = new Set(prods.map(p => (p.nombre || '').trim().toLowerCase()));
+  const nrm = (s) => _sinAcentos(s).replace(/\s+/g, ' ').trim();
+  const prods = await prisma.producto.findMany({ where: { companyId, activo: true }, select: { nombre: true } });
+  const have = new Set(prods.map(p => nrm(p.nombre)));
   for (const c of items) {
     const nombre = (c.nombre || '').trim();
-    if (!nombre || have.has(nombre.toLowerCase())) continue;
+    if (!nombre || have.has(nrm(nombre))) continue;
     await prisma.producto.create({ data: {
       companyId, categoria: 'cereales', nombre, unidad: 'kg',
       stockMinimo: 0, activo: true,
@@ -6202,7 +6207,7 @@ async function sincronizarProductosCereales(companyId) {
       precioReferencia: c.precioReferencia ?? null,
       ultimoCostoMoneda: c.monedaPrecio ?? null,
     } });
-    have.add(nombre.toLowerCase());
+    have.add(nrm(nombre));
   }
 }
 // Devuelve un mapa nombreInsumo(lowercase) -> tipo del catálogo, para etiquetar el
@@ -9693,10 +9698,10 @@ async function _gruposDuplicados(companyId) {
   const stat = {};
   movs.forEach(m => { const s = stat[m.productoId] || (stat[m.productoId] = { ing: 0, egr: 0, cnt: 0 }); if (m.tipo === 'ingreso') s.ing += Number(m._sum.cantidad || 0); else if (m.tipo === 'egreso') s.egr += Number(m._sum.cantidad || 0); s.cnt += m._count._all; });
   const norm = (s) => _sinAcentos(s).replace(/\s+/g, ' ').trim();
-  // Raíz de categoría normalizada (case/acentos/espacios) para no fallar por "insumos" vs "Insumos".
-  const rootCat = (s) => _sinAcentos(s).replace(/[\s._-]+/g, '');
+  // Agrupamos SOLO por nombre normalizado: así detecta el mismo producto aunque la
+  // categoría/familia haya quedado guardada distinta (insumos vs Insumos vs Herbicida).
   const groups = {};
-  prods.forEach(p => { const k = rootCat(p.categoria) + '|' + norm(p.nombre); (groups[k] || (groups[k] = [])).push({ ...p, existencia: (stat[p.id]?.ing || 0) - (stat[p.id]?.egr || 0), movs: stat[p.id]?.cnt || 0 }); });
+  prods.forEach(p => { const k = norm(p.nombre); if (!k) return; (groups[k] || (groups[k] = [])).push({ ...p, existencia: (stat[p.id]?.ing || 0) - (stat[p.id]?.egr || 0), movs: stat[p.id]?.cnt || 0 }); });
   const dups = [];
   for (const k in groups) {
     const arr = groups[k]; if (arr.length < 2) continue;
@@ -9704,7 +9709,7 @@ async function _gruposDuplicados(companyId) {
     // El stock, movimientos y la unidad se MUEVEN a ese.
     const rank = (p) => [(p.categoriaArticuloId ? 1 : 0), (p.sku || p.codigoBarras ? 1 : 0), new Date(p.updatedAt).getTime(), p.movs];
     arr.sort((a, b) => { const ra = rank(a), rb = rank(b); for (let i = 0; i < ra.length; i++) { if (rb[i] !== ra[i]) return rb[i] - ra[i]; } return 0; });
-    dups.push({ categoria: arr[0].categoria, nombre: arr[0].nombre, canonicalId: arr[0].id, items: arr.map(p => ({ id: p.id, nombre: p.nombre, unidad: p.unidad, familia: !!p.categoriaArticuloId, existencia: Math.round(p.existencia * 100) / 100, movs: p.movs, esCanonico: p.id === arr[0].id })) });
+    dups.push({ categoria: arr[0].categoria, nombre: arr[0].nombre, canonicalId: arr[0].id, items: arr.map(p => ({ id: p.id, nombre: p.nombre, categoria: p.categoria, unidad: p.unidad, familia: !!p.categoriaArticuloId, existencia: Math.round(p.existencia * 100) / 100, movs: p.movs, esCanonico: p.id === arr[0].id })) });
   }
   return dups;
 }

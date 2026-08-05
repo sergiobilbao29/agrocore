@@ -2525,6 +2525,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
+      titulo:'🧹 v2.41.0 — Duplicados: detección por nombre + no se vuelven a generar',
+      desc:'Dos arreglos importantes de stock: (1) el depurador ahora agrupa <b>por nombre</b>, así detecta el mismo producto aunque tenga la categoría/familia guardada distinta (2,4-D, Atrazina, etc.). (2) La <b>causa raíz</b>: la sincronización catálogo→stock recreaba el producto cuando la categoría había cambiado — por eso "Reubicar categoría" generaba otro en cero. Ahora compara por nombre normalizado contra todos los productos y <b>ya no duplica</b>. Corré una vez "🧹 Depurar duplicados" para limpiar los que quedaron.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🧹 v2.40.0 — Depurar duplicados: ahora sí los detecta',
       desc:'El depurador de duplicados no encontraba algunos casos porque el mismo producto tenía la categoría guardada distinta (por ej. "insumos" vs "Insumos" al asignarle la familia). Ahora <b>compara ignorando mayúsculas/acentos</b>, así detecta esos 2,4-D, Atrazina, etc. y los une en el del Catálogo moviendo stock, movimientos y unidad. <i>Nota: si el mismo nombre aparece en secciones distintas (ej. "Barra" en Servicios y Labores vs Insumos) no se unen automáticamente, porque pueden ser cosas distintas — decime si querés unir también esos casos.</i>' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
@@ -6397,7 +6400,7 @@ async function depurarDuplicados(){
     <div class="border border-slate-200 rounded-lg p-2 mb-2">
       <div class="font-semibold text-agro-900 text-sm mb-1">${esc(g.nombre)} <span class="text-slate-400 font-normal">· ${esc(g.categoria)}</span></div>
       ${g.items.map(it=>`<div class="flex justify-between text-xs ${it.esCanonico?'text-emerald-700 font-semibold':'text-slate-400 line-through'}">
-        <span>${it.esCanonico?'✅ Conservar':'🗑️ Borrar'} · ${esc(it.unidad||'')}${it.familia?' · con familia':''}</span>
+        <span>${it.esCanonico?'✅ Conservar':'🗑️ Borrar'} · ${esc(it.categoria||'')}${it.familia?' 🏷️':''} · ${esc(it.unidad||'')}</span>
         <span>existencia ${fmtN(it.existencia)} · ${it.movs} mov.</span></div>`).join('')}
     </div>`).join('');
   openModal({ title:`🧹 Depurar duplicados (${grupos.length} grupo${grupos.length===1?'':'s'})`, size:'max-w-2xl',
