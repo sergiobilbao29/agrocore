@@ -2525,6 +2525,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
+      titulo:'🏷️ v2.42.0 — La familia en Stock queda consistente con el Catálogo',
+      desc:'Después de unir duplicados, algunos productos mostraban la <b>familia</b> equivocada o sin familia en Stock (ej. 2,4-D aparecía como "Insumos" sin la etiqueta 🏷️ Herbicida), aunque en el Catálogo estaba bien. Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>corrige la familia de cada producto tomándola del Catálogo</b> (Herbicida, Fungicida, Fertilizante, etc.). Corré una vez el botón y la columna Familia va a quedar prolija y consistente para todos.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🧹 v2.41.0 — Duplicados: detección por nombre + no se vuelven a generar',
       desc:'Dos arreglos importantes de stock: (1) el depurador ahora agrupa <b>por nombre</b>, así detecta el mismo producto aunque tenga la categoría/familia guardada distinta (2,4-D, Atrazina, etc.). (2) La <b>causa raíz</b>: la sincronización catálogo→stock recreaba el producto cuando la categoría había cambiado — por eso "Reubicar categoría" generaba otro en cero. Ahora compara por nombre normalizado contra todos los productos y <b>ya no duplica</b>. Corré una vez "🧹 Depurar duplicados" para limpiar los que quedaron.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
@@ -6393,9 +6396,10 @@ async function prodDel(id, nombre) {
 /* ----- MOVIMIENTOS ----- */
 // ---- Depurar productos duplicados en Stock ----
 async function depurarDuplicados(){
-  let grupos=[];
-  try{ grupos=(await api('/api/admin/stock/duplicados')).data||[]; }catch(e){ return toast(e.message,'error'); }
-  if(!grupos.length) return toast('No encontré productos duplicados. Todo en orden ✅','success');
+  let grupos=[], familias=0;
+  try{ const r=await api('/api/admin/stock/duplicados'); grupos=r.data||[]; familias=r.familias||0; }catch(e){ return toast(e.message,'error'); }
+  if(!grupos.length && !familias) return toast('No hay duplicados ni familias para corregir. Todo en orden ✅','success');
+  const notaFam = familias>0 ? `<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2 mb-2">🏷️ Además, a <b>${familias}</b> producto${familias===1?'':'s'} se le${familias===1?'':'s'} va a <b>corregir la familia</b> según el Catálogo (Herbicida, Fungicida, Fertilizante, etc.).</div>` : '';
   const body = grupos.map(g=>`
     <div class="border border-slate-200 rounded-lg p-2 mb-2">
       <div class="font-semibold text-agro-900 text-sm mb-1">${esc(g.nombre)} <span class="text-slate-400 font-normal">· ${esc(g.categoria)}</span></div>
@@ -6403,11 +6407,12 @@ async function depurarDuplicados(){
         <span>${it.esCanonico?'✅ Conservar':'🗑️ Borrar'} · ${esc(it.categoria||'')}${it.familia?' 🏷️':''} · ${esc(it.unidad||'')}</span>
         <span>existencia ${fmtN(it.existencia)} · ${it.movs} mov.</span></div>`).join('')}
     </div>`).join('');
-  openModal({ title:`🧹 Depurar duplicados (${grupos.length} grupo${grupos.length===1?'':'s'})`, size:'max-w-2xl',
-    body:`<div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2 mb-3">Voy a <b>unir</b> cada grupo en un solo producto: conservo el que está en el <b>Catálogo</b> (✅, con su familia) y le <b>muevo el stock, los movimientos y la unidad</b> del otro. Después borro el duplicado. No se pierde ningún movimiento.</div>
-      <div style="max-height:50vh;overflow:auto">${body}</div>`,
+  openModal({ title:`🧹 Ordenar Stock${grupos.length?` · ${grupos.length} duplicado${grupos.length===1?'':'s'}`:''}`, size:'max-w-2xl',
+    body:`${grupos.length?`<div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2 mb-2">Voy a <b>unir</b> cada grupo en un solo producto: conservo el que está en el <b>Catálogo</b> (✅, con su familia) y le <b>muevo el stock, los movimientos y la unidad</b> del otro. Después borro el duplicado. No se pierde ningún movimiento.</div>`:''}
+      ${notaFam}
+      <div style="max-height:50vh;overflow:auto">${body || (familias?'<div class="text-slate-500 text-sm">No hay duplicados; solo se corregirán las familias.</div>':'')}</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick="depurarDuplicadosRun()">🧹 Unir y limpiar</button>` });
+            <button class="btn btn-primary" onclick="depurarDuplicadosRun()">🧹 Aplicar</button>` });
 }
 async function depurarDuplicadosRun(){
   try{

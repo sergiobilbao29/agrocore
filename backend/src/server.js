@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.41.0';
+const AGROCORE_VERSION = '2.42.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9713,8 +9713,32 @@ async function _gruposDuplicados(companyId) {
   }
   return dups;
 }
+// Alinea la FAMILIA (categoriaArticuloId) de cada producto con la que define su ítem
+// del Catálogo (su "tipo": Herbicida, Fungicida, etc.). Devuelve la cantidad a corregir;
+// si apply=true, la aplica. Así Stock muestra la familia consistente con el Catálogo.
+async function _repararFamiliasDesdeCatalogo(companyId, apply) {
+  const nrm = (s) => _sinAcentos(s).replace(/\s+/g, ' ').trim();
+  const [nodos, items, prods] = await Promise.all([
+    prisma.categoriaArticulo.findMany({ where: { companyId }, select: { id: true, nombre: true } }),
+    prisma.catalogo.findMany({ where: { companyId }, select: { nombre: true, tipo: true, categoriaArticuloId: true } }),
+    prisma.producto.findMany({ where: { companyId, activo: true }, select: { id: true, nombre: true, categoriaArticuloId: true } }),
+  ]);
+  const byName = {}; nodos.forEach(n => { byName[nrm(n.nombre)] = n.id; });
+  const famByProd = {};
+  items.forEach(it => { const fid = it.categoriaArticuloId || byName[nrm(it.tipo)]; if (fid) famByProd[nrm(it.nombre)] = fid; });
+  let cnt = 0;
+  for (const p of prods) {
+    const fid = famByProd[nrm(p.nombre)];
+    if (fid && p.categoriaArticuloId !== fid) { cnt++; if (apply) await prisma.producto.update({ where: { id: p.id }, data: { categoriaArticuloId: fid } }); }
+  }
+  return cnt;
+}
 app.get('/api/admin/stock/duplicados', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
-  try { res.json({ ok: true, data: await _gruposDuplicados(req.companyId) }); } catch (e) { next(e); }
+  try {
+    const grupos = await _gruposDuplicados(req.companyId);
+    let familias = 0; try { familias = await _repararFamiliasDesdeCatalogo(req.companyId, false); } catch {}
+    res.json({ ok: true, data: grupos, familias });
+  } catch (e) { next(e); }
 });
 app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
@@ -9749,7 +9773,8 @@ app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermissio
         fusionados++;
       } catch (e) { errores.push(`${g.nombre}: ${e.message}`); }
     }
-    res.json({ ok: true, data: { grupos: grupos.length, fusionados, eliminados, errores } });
+    let familias = 0; try { familias = await _repararFamiliasDesdeCatalogo(req.companyId, true); } catch {}
+    res.json({ ok: true, data: { grupos: grupos.length, fusionados, eliminados, familias, errores } });
   } catch (e) { next(e); }
 });
 // Detecta la categoría del sistema a partir del texto "Categoría / Raza".
