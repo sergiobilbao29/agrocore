@@ -2525,6 +2525,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/08/2026',
+      titulo:'📦 v2.37.0 — El asistente descuenta stock y da de alta insumos nuevos',
+      desc:'Cuando le decís una <b>aplicación</b> (ej: <i>"aplicá 120 litros de Glifosato en el lote 1"</i>), el asistente 🤖 ahora te pregunta si querés <b>descontarlo del stock</b> y, si el insumo <b>no está en el catálogo</b>, te ofrece <b>agregarlo eligiendo la familia</b> (Herbicida, Fertilizante, Semilla, etc.) y hace el movimiento de egreso automáticamente. Todo desde el chat, sin abrir Stock ni Catálogos.' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/08/2026',
       titulo:'🧠 v2.36.0 — El asistente ahora CONSULTA tus datos y entiende aplicaciones',
       desc:'El asistente 🤖 dio un salto grande. Ahora también <b>responde consultas</b> sobre tu establecimiento, sin que abras ninguna pantalla: <i>"¿cuánto stock queda de Atrazina?"</i>, <i>"mostrame los animales"</i> (o los de un campo), <i>"¿qué lotes tengo?"</i>, <i>"¿qué campañas tengo?"</i>. Además entiende <b>aplicaciones de insumo</b>: <i>"aplicá 120 litros de Glifosato en el lote 1"</i> registra la labor y anota el producto. Se suma a lo que ya hacía: cargar hacienda/labores/recordatorios, explicarte cómo se hace cada cosa y llevarte a la pantalla. <i>Entiende frases claras; para lenguaje 100% libre, más adelante se le puede conectar la IA.</i>' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'05/08/2026',
@@ -7080,6 +7083,23 @@ async function chatAsistente(){
           <div><label class="label text-[11px]">$/kg</label><input id="ast-precio" class="input text-sm" type="number" step="0.01" value="${p.precioKg||''}"/></div>`:''}
         </div>`;
       }
+      else if (r.accion==='labor' && r.params.insumo){
+        const p = r.params;
+        const fams = (r.familias && r.familias.length) ? r.familias : ['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'];
+        const cant = `${p.insumoCantidad!=null?p.insumoCantidad:''} ${esc(p.insumoUnidad||'')}`.trim();
+        let stockUi;
+        if (p.insumoExiste){
+          stockUi = `<label class="flex items-center gap-2 text-sm mt-1"><input type="checkbox" id="ast-descontar" class="w-4 h-4" checked/> Descontar <b>${cant}</b> de <b>${esc(p.insumoNombre)}</b> del stock</label>`;
+        } else {
+          stockUi = `<div class="bg-amber-100 border border-amber-300 rounded p-2 text-xs text-amber-900 mt-1 mb-1">El insumo <b>${esc(p.insumoNombre)}</b> no está en el catálogo.</div>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" id="ast-crear" class="w-4 h-4" checked onchange="var s=document.getElementById('ast-fam'); if(s) s.disabled=!this.checked;"/> Agregarlo al catálogo · familia
+              <select id="ast-fam" class="input text-sm ml-1" style="width:auto">${fams.map(f=>`<option>${esc(f)}</option>`).join('')}</select>
+            </label>
+            <label class="flex items-center gap-2 text-sm mt-1"><input type="checkbox" id="ast-descontar" class="w-4 h-4" checked/> Descontar <b>${cant}</b> del stock</label>`;
+        }
+        editor = `<div class="text-sm text-amber-900">${esc(r.resumen)}</div>${stockUi}`;
+      }
       box.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
         ${editor}
         <div class="flex gap-2 justify-end mt-2">
@@ -7113,6 +7133,13 @@ async function chatAsistConfirmar(){
     const kil=gv('ast-kilos'), pre=gv('ast-precio');
     p.params.kilos = kil?Number(kil):null; p.params.precioKg = pre?Number(pre):null;
     if (p.params.kilos && p.params.precioKg) p.params.total = Math.round(p.params.kilos*p.params.precioKg*100)/100;
+  }
+  // Labor con insumo: opciones de stock (descontar / crear en catálogo).
+  if (p.accion==='labor' && p.params.insumo){
+    const desc=document.getElementById('ast-descontar'), crear=document.getElementById('ast-crear'), fam=document.getElementById('ast-fam');
+    p.params.descontarStock = desc ? desc.checked : false;
+    p.params.crearInsumo = crear ? crear.checked : false;
+    if (fam && !fam.disabled) p.params.insumoFamilia = fam.value;
   }
   const b=document.getElementById('chat-confirm'); if(b) b.innerHTML='';
   state._asistProp=null;

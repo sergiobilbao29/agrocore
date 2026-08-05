@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.36.0';
+const AGROCORE_VERSION = '2.37.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6944,8 +6944,11 @@ function _interpretarMensaje(texto, ctx) {
     const resp = (texto.match(/emplead[oa]\s+(?:de\s+)?([A-ZÁÉÍÓÚ][\wáéíóúñ]+)/i) || texto.match(/\b(?:la|el)\s+([A-ZÁÉÍÓÚ][\wáéíóúñ]+)\s+(?:termin|hizo|realiz|aplic)/i) || [])[1] || null;
     // Insumo aplicado (ej: "120 litros de Glifosato")
     const insM = texto.match(/(\d+(?:[.,]\d+)?)\s*(litros?|lts?|lt|kg|kilos?|kgs|cc|ml|bolsas?|dosis|gr|gramos?)\b\s*(?:de\s+)?([A-Za-zÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑ0-9\s.]*?)(?:\s+en\b|\s+al\b|\s+sobre\b|[.,]|$)/i);
-    const insumo = insM ? `${insM[1]} ${insM[2]} de ${insM[3].trim()}` : null;
-    return { accion: 'labor', params: { campanaId: camp.id, loteNombre: lote.nombre, campoNombre: campo?.nombre || '', tipo: tlab, responsable: resp, insumo },
+    const insumoNombre = insM ? insM[3].trim() : null;
+    const insumoCantidad = insM ? Number(String(insM[1]).replace(',', '.')) : null;
+    const insumoUnidad = insM ? insM[2].toLowerCase() : null;
+    const insumo = insM ? `${insM[1]} ${insM[2]} de ${insumoNombre}` : null;
+    return { accion: 'labor', params: { campanaId: camp.id, loteNombre: lote.nombre, campoNombre: campo?.nombre || '', tipo: tlab, responsable: resp, insumo, insumoNombre, insumoCantidad, insumoUnidad },
       resumen: `🚜 Labor de ${tlab} en lote ${lote.nombre}${camp.cultivo ? ` (${camp.cultivo}${camp.ciclo ? ' ' + camp.ciclo : ''})` : ''}${insumo ? ` · ${insumo}` : ''}${resp ? ` · ${resp}` : ''}` };
   }
   return { error: 'Uh, esa no la entendí del todo 🤔. Pero tranqui, te ayudo igual.\n\nContame qué hiciste — ej: "nacieron 5 terneros en Montenegro", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8".\nO preguntame cómo se hace algo — ej: "¿cómo cargo un cheque de tercero?".\n\n💡 Escribí "ayuda" y te muestro todo lo que puedo hacer.' };
@@ -7498,9 +7501,22 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.error, { status: 'ayuda' });
       return res.json({ ok: true, status: 'ayuda', mensaje: r.error, data: m });
     }
+    // Si la labor trae un insumo, buscamos el producto en el catálogo y, si no está,
+    // ofrecemos crearlo eligiendo la familia (tipo de insumo).
+    let familias = null;
+    if (r.accion === 'labor' && r.params.insumoNombre) {
+      const _n = _sinAcentos(r.params.insumoNombre);
+      const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, activo: true, categoria: 'insumos' }, select: { id: true, nombre: true, unidad: true } });
+      const prod = prods.find(p => _sinAcentos(p.nombre) === _n) || prods.find(p => { const pn = _sinAcentos(p.nombre); return pn.includes(_n) || _n.includes(pn); });
+      r.params.insumoProductoId = prod?.id || null;
+      r.params.insumoExiste = !!prod;
+      if (prod && prod.unidad) r.params.insumoUnidad = prod.unidad;
+      if (prod) r.params.insumoNombre = prod.nombre; // usar el nombre exacto del catálogo
+      if (!prod) { try { familias = [...await insumoTipoNombresSet(req.companyId)]; } catch { familias = INSUMO_TIPOS_BASE; } }
+    }
     const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente',
       `Voy a registrar: ${r.resumen}. ¿Confirmás?`, { status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen });
-    res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, data: m });
+    res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, familias, data: m });
   } catch (e) { next(e); }
 });
 // --- Asistente: confirmar (ejecuta la acción propuesta) ---
@@ -7535,7 +7551,32 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
         responsable: params.responsable || null, esServicio: false,
         observaciones: `Cargado por ${quien} (asistente)${params.insumo ? ` · Insumo: ${params.insumo}` : ''}`,
       }});
-      resumen = `✅ Registrada labor de ${params.tipo} en lote ${params.loteNombre||''}${params.insumo?` · ${params.insumo}`:''}${params.responsable?` · responsable ${params.responsable}`:''} · lo cargó ${quien}. 💡 El insumo queda anotado; si querés descontarlo del stock, cargalo en Insumos.`;
+      let extraStock = '';
+      // Insumo: crear en el catálogo si hace falta y/o descontar del stock (según lo que eligió el usuario).
+      if (params.insumoNombre && (params.descontarStock || params.crearInsumo)) {
+        if (_permOk(req, 'stock:create')) {
+          let prod = params.insumoProductoId
+            ? await prisma.producto.findFirst({ where: { id: params.insumoProductoId, companyId: req.companyId } })
+            : null;
+          if (!prod && params.crearInsumo) {
+            const fam = String(params.insumoFamilia || 'Insumo').trim();
+            try { await prisma.catalogo.create({ data: { companyId: req.companyId, tipo: fam, nombre: params.insumoNombre } }); } catch {}
+            prod = await prisma.producto.create({ data: { companyId: req.companyId, categoria: 'insumos', nombre: params.insumoNombre, unidad: params.insumoUnidad || 'unidad', stockMinimo: 0, activo: true } });
+            extraStock += ` · ➕ "${params.insumoNombre}" agregado al catálogo (${fam})`;
+          }
+          if (prod && params.descontarStock && Number(params.insumoCantidad) > 0) {
+            await prisma.movimiento.create({ data: {
+              companyId: req.companyId, productoId: prod.id, depositoId: null,
+              fecha: new Date(), tipo: 'egreso', motivo: 'aplicacion',
+              cantidad: Number(params.insumoCantidad),
+              observaciones: `Aplicación en lote ${params.loteNombre || ''} (asistente · ${quien})`,
+              userId: req.user?.id || null,
+            }});
+            extraStock += ` · 📦 descontado del stock (${params.insumoCantidad} ${params.insumoUnidad || ''})`;
+          }
+        } else { extraStock += ' · (sin permiso de stock: el insumo quedó solo anotado)'; }
+      }
+      resumen = `✅ Registrada labor de ${params.tipo} en lote ${params.loteNombre||''}${params.insumo?` · ${params.insumo}`:''}${params.responsable?` · responsable ${params.responsable}`:''}${extraStock} · lo cargó ${quien}.`;
     } else if (accion === 'recordatorio') {
       if (!_permOk(req, 'agenda:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para crear recordatorios.' });
       await prisma.recordatorio.create({ data: {
