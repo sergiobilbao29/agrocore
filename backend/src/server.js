@@ -6687,7 +6687,7 @@ app.get('/api/entregas-grano', requireCompany, requirePermission('stock:read'), 
     const [viajes, links, liqs, depos] = await Promise.all([
       prisma.viaje.findMany({ where: { companyId: req.companyId, destinoTipo: { in: ['cerealera','venta_directa'] } }, orderBy: { fecha: 'desc' } }),
       prisma.viajeLiquidacion.findMany({ where: { companyId: req.companyId } }),
-      prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId }, select: { id: true, numero: true, neto: true, cobrado: true } }),
+      prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId }, select: { id: true, numero: true, neto: true, cobrado: true, kilosNetos: true } }),
       prisma.deposito.findMany({ where: { OR: [{ companyId: req.companyId }, { companyId: null, compartido: true }] }, select: { id: true, nombre: true } }),
     ]);
     const liqById = {}; liqs.forEach(l => liqById[l.id] = l);
@@ -6702,7 +6702,7 @@ app.get('/api/entregas-grano', requireCompany, requirePermission('stock:read'), 
         destinoTipo: v.destinoTipo, destino: v.destino || null, depositoId: v.depositoDestinoId || null,
         cerealera: v.depositoDestinoId ? (depoN[v.depositoDestinoId] || null) : null,
         kilos: _kgViaje(v), campanaId: v.campanaId || null, estado,
-        liquidaciones: ls.map(k => ({ id: k.liquidacionId, numero: liqById[k.liquidacionId]?.numero || null, neto: liqById[k.liquidacionId]?.neto || 0, cobrado: !!liqById[k.liquidacionId]?.cobrado })),
+        liquidaciones: ls.map(k => ({ id: k.liquidacionId, numero: liqById[k.liquidacionId]?.numero || null, neto: liqById[k.liquidacionId]?.neto || 0, cobrado: !!liqById[k.liquidacionId]?.cobrado, kilos: liqById[k.liquidacionId]?.kilosNetos || 0 })),
       };
     });
     res.json({ ok: true, data });

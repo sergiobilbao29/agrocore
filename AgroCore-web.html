@@ -2543,7 +2543,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/08/2026',
       titulo:'🌾 v2.45.0 — Posición de granos: chau planilla de Excel',
-      desc:'Nueva pantalla <b>Stock → Posición de granos</b> para dejar de llevar el Excel de entregas y liquidaciones. Toma automáticamente <b>cada viaje con Carta de Porte</b> cuyo destino sea una <b>cerealera</b> (grano guardado) o <b>venta directa</b>, y te deja <b>vincular o importar la liquidación del PDF</b> — puede ser en varias partes (ideal para AGD, que liquida una parte, la secada y el IVA por separado). El tablero muestra por especie: <b>Entregado, Liquidado y A liquidar</b>, con el <b>precio del día</b> para valorizar lo pendiente. El stock lo sigue moviendo el viaje; la liquidación fija el precio y genera la cuenta a cobrar. Además, en <b>Viajes</b> el campo <b>Producto / Carga</b> pasó a ser un <b>desplegable de granos del catálogo</b> (Cereales / Granos) en vez de texto libre, para que la especie coincida siempre con la liquidación.' },
+      desc:'Nueva pantalla <b>Stock → Posición de granos</b> para dejar de llevar el Excel de entregas y liquidaciones. Toma automáticamente <b>cada viaje con Carta de Porte</b> cuyo destino sea una <b>cerealera</b> (grano guardado) o <b>venta directa</b>, y te deja <b>vincular o importar la liquidación del PDF</b> — puede ser en varias partes (ideal para AGD, que liquida una parte, la secada y el IVA por separado). El tablero muestra por especie: <b>Entregado, Liquidado y A liquidar</b>, con el <b>precio del día</b> para valorizar lo pendiente. El stock lo sigue moviendo el viaje; la liquidación fija el precio y genera la cuenta a cobrar. Tiene <b>filtros</b> (fecha desde/hasta, cerealera/destino, especie y estado) que resumen el tablero y la lista. Además, en <b>Viajes</b> el campo <b>Producto / Carga</b> pasó a ser un <b>desplegable de granos del catálogo</b> (Cereales / Granos) en vez de texto libre, para que la especie coincida siempre con la liquidación.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🗑️ v2.44.0 — Stock limpia los animales que ya no están en el Catálogo',
       desc:'Si sacaste una especie del Catálogo de Hacienda (por ej. quedó solo Bovino), en Stock seguían apareciendo los animales viejos (Cabra, Chivo, Cordero, etc.). Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>elimina los artículos de Hacienda que ya no están en el Catálogo</b>. Los que tengan movimientos se <b>desactivan</b> (no se pierde el historial) y los que no tienen nada se borran. Además, Stock ya no los muestra aunque tengan familia asignada.' },
@@ -24452,73 +24452,116 @@ pages.posicionGranos = async function(){
   setHeader('Posición de granos', 'Viajes con carta de porte, liquidaciones y saldo a liquidar');
   if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('posicionGranos','Posición de granos'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let pos={porEspecie:[]}, entregas=[];
+  let pos={porEspecie:[],precios:{}}, entregas=[];
   try{
     const [p,e]=await Promise.all([api('/api/posicion-granos'), api('/api/entregas-grano')]);
     pos=(p.data)||pos; entregas=e.data||[];
   }catch(err){ return toast(err.message,'error'); }
   state._pgEntregas=entregas;
-  const totEntreg=pos.porEspecie.reduce((a,r)=>a+r.entregado,0);
-  const totLiq=pos.porEspecie.reduce((a,r)=>a+r.liquidado,0);
-  const totALiq=pos.porEspecie.reduce((a,r)=>a+r.aLiquidar,0);
-  const totValor=pos.porEspecie.reduce((a,r)=>a+(r.valorALiquidar||0),0);
+  state._pgFiltro=state._pgFiltro||{ desde:'', hasta:'', cerealera:'', especie:'', estado:'' };
+  const precios=pos.precios||{};
+  const monedaDe=(n)=>{ const x=(n||'').toUpperCase().replace(/[\u00C1\u00C0\u00C4\u00C2]/g,'A').replace(/[\u00CD\u00CC\u00CF\u00CE]/g,'I').replace(/[\u00C9\u00C8]/g,'E').replace(/[\u00D3\u00D2]/g,'O').replace(/[\u00DA\u00D9]/g,'U'); if(/SOJA/.test(x))return'SOJA'; if(/MAIZ/.test(x))return'MAIZ'; if(/TRIGO/.test(x))return'TRIGO'; if(/SORGO/.test(x))return'SORGO'; if(/GIRASOL/.test(x))return'GIRASOL'; return null; };
   const badgeEstado=(s)=> s==='liquidada'?'<span class="badge badge-green">Liquidada</span>':(s==='parcial'?'<span class="badge badge-blue">Parcial</span>':'<span class="badge badge-yellow">Pendiente</span>');
   const fmtKg=(k)=>`${fmtN(Math.round(k))} kg`;
   const tipoLbl=(t)=> t==='venta_directa'?'Venta directa':(t==='cerealera'?'Cerealera':'—');
-  const pendientes = entregas.filter(e=>e.estado==='pendiente').length;
+  const destinoDe=(e)=> e.cerealera||e.destino||'(sin destino)';
+  const cerealeras=[...new Set(entregas.map(destinoDe))].filter(x=>x&&x!=='(sin destino)').sort();
+  const especies=[...new Set(entregas.map(e=>e.especie).filter(Boolean))].sort();
+  const render=()=>{
+    const f=state._pgFiltro;
+    const desde=f.desde?new Date(f.desde+'T00:00:00'):null;
+    const hasta=f.hasta?new Date(f.hasta+'T23:59:59'):null;
+    const filtradas=entregas.filter(e=>{
+      const fe=new Date(e.fecha);
+      if(desde && fe<desde) return false;
+      if(hasta && fe>hasta) return false;
+      if(f.cerealera && destinoDe(e)!==f.cerealera) return false;
+      if(f.especie && e.especie!==f.especie) return false;
+      if(f.estado && e.estado!==f.estado) return false;
+      return true;
+    });
+    const activo = !!(f.desde||f.hasta||f.cerealera||f.especie||f.estado);
+    // Tablero: si NO hay filtros, uso la posición global del backend (incluye liquidaciones
+    // sin viaje). Si hay filtros, lo recalculo desde las entregas filtradas.
+    let filas;
+    if(!activo){ filas=pos.porEspecie; }
+    else{
+      const acc={};
+      filtradas.forEach(e=>{ const k=e.especie||'(sin especie)'; const r=acc[k]||(acc[k]={especie:k,entregado:0,liquidado:0,aCobrar:0}); r.entregado+=Number(e.kilos||0); (e.liquidaciones||[]).forEach(l=>{ r.liquidado+=Number(l.kilos||0); if(!l.cobrado) r.aCobrar+=Number(l.neto||0); }); });
+      filas=Object.values(acc).map(r=>{ const mon=monedaDe(r.especie); const aLiq=r.entregado-r.liquidado; const pt=mon?(precios[mon]||null):null; return { especie:r.especie, entregado:r.entregado, liquidado:r.liquidado, aLiquidar:aLiq, precioTn:pt, valorALiquidar:pt!=null?Math.round(aLiq*pt/1000):null, aCobrar:r.aCobrar }; });
+    }
+    const totEntreg=filas.reduce((a,r)=>a+r.entregado,0);
+    const totLiq=filas.reduce((a,r)=>a+r.liquidado,0);
+    const totALiq=filas.reduce((a,r)=>a+r.aLiquidar,0);
+    const totValor=filas.reduce((a,r)=>a+(r.valorALiquidar||0),0);
+    const pendientes=filtradas.filter(e=>e.estado==='pendiente').length;
+    $('#pg-kpis').innerHTML=`
+      <div class="kpi"><div class="text-xs text-slate-500">Entregado</div><div class="text-xl font-bold mt-1">${fmtKg(totEntreg)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Liquidado</div><div class="text-xl font-bold mt-1">${fmtKg(totLiq)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">A liquidar</div><div class="text-xl font-bold mt-1 text-amber-600">${fmtKg(totALiq)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">$ a liquidar (pizarra)</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(totValor)}</div></div>`;
+    $('#pg-especie').innerHTML=filas.map(r=>`<tr class="table-row">
+        <td><b>${esc(r.especie)}</b></td>
+        <td class="text-right">${fmtKg(r.entregado)}</td>
+        <td class="text-right">${fmtKg(r.liquidado)}</td>
+        <td class="text-right font-semibold ${r.aLiquidar>0?'text-amber-600':''}">${fmtKg(r.aLiquidar)}</td>
+        <td class="text-right">${r.precioTn!=null?fmt$(r.precioTn):'—'}</td>
+        <td class="text-right font-semibold text-emerald-700">${r.valorALiquidar!=null?fmt$(r.valorALiquidar):'—'}</td>
+        <td class="text-right ${r.aCobrar>0?'text-amber-600':''}">${fmt$(r.aCobrar||0)}</td>
+      </tr>`).join('') || `<tr><td colspan="7" class="text-center text-slate-400 py-6">Sin datos para el filtro.</td></tr>`;
+    $('#pg-count').textContent=`${filtradas.length} entrega${filtradas.length===1?'':'s'} (viajes con CP) · ${pendientes} sin liquidar`;
+    $('#pg-entregas').innerHTML=filtradas.map(e=>`<tr class="table-row">
+        <td>${fmtDate(e.fecha)}</td>
+        <td class="font-mono">${esc(e.cpe||'—')}</td>
+        <td>${esc(e.especie||'—')}</td>
+        <td>${esc(destinoDe(e))}</td>
+        <td>${tipoLbl(e.destinoTipo)}</td>
+        <td class="text-right">${fmtKg(e.kilos)}</td>
+        <td>${badgeEstado(e.estado)}${(e.liquidaciones&&e.liquidaciones.length)?`<div class="text-[10px] text-slate-500 mt-0.5">Liq: ${e.liquidaciones.map(l=>esc(l.numero||'s/n')).join(', ')}</div>`:''}</td>
+        <td class="text-right whitespace-nowrap">
+          ${can('ventas:update')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Vincular / importar liquidación" onclick='pgVincular(${JSON.stringify(e.id)})'>🔗 Liquidar</button>`:''}
+          <button class="btn btn-ghost text-xs" title="Abrir el viaje" onclick="go('viajes')">✏️</button>
+        </td>
+      </tr>`).join('') || `<tr><td colspan="8" class="text-center text-slate-400 py-8">Sin entregas para el filtro.</td></tr>`;
+  };
+  window.pgSetFiltro=(k,v)=>{ state._pgFiltro[k]=v; render(); };
+  window.pgLimpiarFiltro=()=>{ state._pgFiltro={ desde:'', hasta:'', cerealera:'', especie:'', estado:'' }; pages.posicionGranos(); };
+  const f=state._pgFiltro;
   $('#page-body').innerHTML = `
-    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <div class="text-sm text-slate-600">${entregas.length} entrega${entregas.length===1?'':'s'} (viajes con CP) · ${pendientes} sin liquidar</div>
+    <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600" id="pg-count"></div>
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="go('viajes')" title="Cargar un viaje / carta de porte">🚚 Ir a Viajes</button>
         <button class="btn btn-secondary" onclick="go('liquidaciones')" title="Ver / importar liquidaciones">🧾 Liquidaciones</button>
       </div>
     </div>
-    <div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2 mb-4">Cada <b>viaje con carta de porte</b> cuyo destino sea una <b>cerealera</b> o <b>venta directa</b> aparece acá para seguirlo y vincularle la liquidación. El stock ya lo mueve el viaje; la liquidación fija el precio y genera la cuenta a cobrar.</div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">Entregado</div><div class="text-xl font-bold mt-1">${fmtKg(totEntreg)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Liquidado</div><div class="text-xl font-bold mt-1">${fmtKg(totLiq)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">A liquidar</div><div class="text-xl font-bold mt-1 text-amber-600">${fmtKg(totALiq)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">$ a liquidar (pizarra)</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(totValor)}</div></div>
+    <div class="kpi p-3 mb-4">
+      <div class="grid grid-cols-2 md:grid-cols-6 gap-2 items-end text-sm">
+        <div><label class="label">Desde</label><input id="pg-f-desde" type="date" class="input" value="${esc(f.desde)}" onchange="pgSetFiltro('desde',this.value)"/></div>
+        <div><label class="label">Hasta</label><input id="pg-f-hasta" type="date" class="input" value="${esc(f.hasta)}" onchange="pgSetFiltro('hasta',this.value)"/></div>
+        <div><label class="label">Cerealera / destino</label><select id="pg-f-cer" class="input" onchange="pgSetFiltro('cerealera',this.value)"><option value="">Todas</option>${cerealeras.map(c=>`<option value="${esc(c)}" ${c===f.cerealera?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+        <div><label class="label">Especie</label><select id="pg-f-esp" class="input" onchange="pgSetFiltro('especie',this.value)"><option value="">Todas</option>${especies.map(s=>`<option value="${esc(s)}" ${s===f.especie?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
+        <div><label class="label">Estado</label><select id="pg-f-est" class="input" onchange="pgSetFiltro('estado',this.value)"><option value="">Todos</option><option value="pendiente" ${f.estado==='pendiente'?'selected':''}>Pendiente</option><option value="liquidada" ${f.estado==='liquidada'?'selected':''}>Liquidada</option></select></div>
+        <div><button class="btn btn-secondary w-full" onclick="pgLimpiarFiltro()">Limpiar</button></div>
+      </div>
     </div>
+    <div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2 mb-4">Cada <b>viaje con carta de porte</b> cuyo destino sea una <b>cerealera</b> o <b>venta directa</b> aparece acá para seguirlo y vincularle la liquidación. El stock ya lo mueve el viaje; la liquidación fija el precio y genera la cuenta a cobrar.</div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" id="pg-kpis"></div>
     <div class="kpi p-0 overflow-hidden mb-4">
       <div class="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50 border-b">POSICIÓN POR ESPECIE</div>
       <table class="data">
         <thead><tr><th>Especie</th><th class="text-right">Entregado</th><th class="text-right">Liquidado</th><th class="text-right">A liquidar</th><th class="text-right">Precio del día ($/tn)</th><th class="text-right">$ a liquidar</th><th class="text-right">Pend. de cobro</th></tr></thead>
-        <tbody>
-          ${pos.porEspecie.map(r=>`<tr class="table-row">
-            <td><b>${esc(r.especie)}</b></td>
-            <td class="text-right">${fmtKg(r.entregado)}</td>
-            <td class="text-right">${fmtKg(r.liquidado)}</td>
-            <td class="text-right font-semibold ${r.aLiquidar>0?'text-amber-600':''}">${fmtKg(r.aLiquidar)}</td>
-            <td class="text-right">${r.precioTn!=null?fmt$(r.precioTn):'—'}</td>
-            <td class="text-right font-semibold text-emerald-700">${r.valorALiquidar!=null?fmt$(r.valorALiquidar):'—'}</td>
-            <td class="text-right ${r.aCobrar>0?'text-amber-600':''}">${fmt$(r.aCobrar||0)}</td>
-          </tr>`).join('') || `<tr><td colspan="7" class="text-center text-slate-400 py-6">Todavía no hay viajes con destino cerealera o venta directa.</td></tr>`}
-        </tbody>
+        <tbody id="pg-especie"></tbody>
       </table>
     </div>
     <div class="kpi p-0 overflow-hidden">
       <div class="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50 border-b">ENTREGAS (VIAJES CON CARTA DE PORTE)</div>
       <table class="data">
         <thead><tr><th>Fecha</th><th>CP</th><th>Especie</th><th>Destino</th><th>Tipo</th><th class="text-right">Kg</th><th>Estado</th><th></th></tr></thead>
-        <tbody>
-          ${entregas.map(e=>`<tr class="table-row">
-            <td>${fmtDate(e.fecha)}</td>
-            <td class="font-mono">${esc(e.cpe||'—')}</td>
-            <td>${esc(e.especie||'—')}</td>
-            <td>${esc(e.cerealera||e.destino||'—')}</td>
-            <td>${tipoLbl(e.destinoTipo)}</td>
-            <td class="text-right">${fmtKg(e.kilos)}</td>
-            <td>${badgeEstado(e.estado)}${(e.liquidaciones&&e.liquidaciones.length)?`<div class="text-[10px] text-slate-500 mt-0.5">Liq: ${e.liquidaciones.map(l=>esc(l.numero||'s/n')).join(', ')}</div>`:''}</td>
-            <td class="text-right whitespace-nowrap">
-              ${can('ventas:update')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Vincular / importar liquidación" onclick='pgVincular(${JSON.stringify(e.id)})'>🔗 Liquidar</button>`:''}
-              <button class="btn btn-ghost text-xs" title="Abrir el viaje" onclick="go('viajes')">✏️</button>
-            </td>
-          </tr>`).join('') || `<tr><td colspan="8" class="text-center text-slate-400 py-8">Sin entregas. Cargá un viaje con carta de porte y destino cerealera o venta directa.</td></tr>`}
-        </tbody>
+        <tbody id="pg-entregas"></tbody>
       </table>
     </div>`;
+  render();
 };
 async function pgVincular(viajeId){
   const ent=(state._pgEntregas||[]).find(x=>x.id===viajeId); if(!ent) return;
