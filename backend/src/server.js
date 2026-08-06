@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.43.0';
+const AGROCORE_VERSION = '2.44.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9746,9 +9746,41 @@ app.get('/api/admin/stock/duplicados', requireCompany, requirePermission('stock:
   try {
     const grupos = await _gruposDuplicados(req.companyId);
     let familias = 0; try { familias = await _repararFamiliasDesdeCatalogo(req.companyId, false); } catch {}
-    res.json({ ok: true, data: grupos, familias });
+    let huerfanos = 0; try { huerfanos = (await _limpiarHaciendaHuerfana(req.companyId, false)).del; } catch {}
+    res.json({ ok: true, data: grupos, familias, huerfanos });
   } catch (e) { next(e); }
 });
+// Elimina productos de HACIENDA cuya categoria de animal ya no existe en el catalogo
+// de Hacienda (catHaciendaConfig). Ej: quedo solo Bovino y sobran Cabra, Chivo, etc.
+// Si el producto tiene movimientos/referencias se DESACTIVA (no se pierde historial);
+// si no tiene nada, se BORRA. En preview (apply=false) solo cuenta los que se borrarian.
+async function _limpiarHaciendaHuerfana(companyId, apply) {
+  const nrm = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim();
+  const cats = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId, activo: true }, select: { nombre: true } });
+  const vivos = new Set(cats.map(c => nrm(c.nombre)));
+  if (!vivos.size) return { del: 0, off: 0 }; // sin catalogo de hacienda no hay referencia autoritativa
+  const prods = await prisma.producto.findMany({ where: { companyId, categoria: 'hacienda' }, select: { id: true, nombre: true, categoriaHacienda: true } });
+  let del = 0, off = 0;
+  for (const p of prods) {
+    const key = nrm(p.categoriaHacienda || (p.nombre || '').split(' - ').pop());
+    if (vivos.has(key)) continue; // sigue en el catalogo de Hacienda -> se queda
+    if (!apply) { del++; continue; }
+    const [nm, ia, fi, fci] = await Promise.all([
+      prisma.movimiento.count({ where: { productoId: p.id } }),
+      prisma.insumoAplicado.count({ where: { productoId: p.id } }),
+      prisma.facturaItem.count({ where: { productoId: p.id } }),
+      prisma.facturaCompraItem.count({ where: { productoId: p.id } }),
+    ]);
+    let hm = 0; try { hm = await prisma.haciendaMovimiento.count({ where: { companyId, categoria: p.categoriaHacienda || p.nombre } }); } catch {}
+    if (nm + ia + fi + fci + hm === 0) {
+      try { await prisma.producto.delete({ where: { id: p.id } }); del++; }
+      catch { try { await prisma.producto.update({ where: { id: p.id }, data: { activo: false } }); off++; } catch {} }
+    } else {
+      try { await prisma.producto.update({ where: { id: p.id }, data: { activo: false } }); off++; } catch {}
+    }
+  }
+  return { del, off };
+}
 app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
     if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador puede depurar duplicados.' });
@@ -9783,7 +9815,8 @@ app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermissio
       } catch (e) { errores.push(`${g.nombre}: ${e.message}`); }
     }
     let familias = 0; try { familias = await _repararFamiliasDesdeCatalogo(req.companyId, true); } catch {}
-    res.json({ ok: true, data: { grupos: grupos.length, fusionados, eliminados, familias, errores } });
+    let huerfanos = { del: 0, off: 0 }; try { huerfanos = await _limpiarHaciendaHuerfana(req.companyId, true); } catch {}
+    res.json({ ok: true, data: { grupos: grupos.length, fusionados, eliminados, familias, huerfanos: huerfanos.del + huerfanos.off, huerfanosDel: huerfanos.del, huerfanosOff: huerfanos.off, errores } });
   } catch (e) { next(e); }
 });
 // Detecta la categoría del sistema a partir del texto "Categoría / Raza".

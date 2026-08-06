@@ -2525,6 +2525,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
+      titulo:'🗑️ v2.44.0 — Stock limpia los animales que ya no están en el Catálogo',
+      desc:'Si sacaste una especie del Catálogo de Hacienda (por ej. quedó solo Bovino), en Stock seguían apareciendo los animales viejos (Cabra, Chivo, Cordero, etc.). Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>elimina los artículos de Hacienda que ya no están en el Catálogo</b>. Los que tengan movimientos se <b>desactivan</b> (no se pierde el historial) y los que no tienen nada se borran. Además, Stock ya no los muestra aunque tengan familia asignada.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🏷️ v2.43.0 — La familia ahora se ve en la lista de Stock',
       desc:'En v2.42.0 la familia quedaba bien guardada, pero la <b>lista de Stock</b> la mostraba desde otra fuente (el nombre del Catálogo) y algunos insumos como 2,4-D seguían apareciendo sin la etiqueta 🧪 Herbicida. Ahora la columna Familia de Stock <b>también toma la familia del árbol</b> (Categorías y Familias) como respaldo y compara los nombres sin importar acentos/mayúsculas. Con esto la etiqueta de familia aparece de forma consistente para todos los insumos.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
@@ -6399,10 +6402,11 @@ async function prodDel(id, nombre) {
 /* ----- MOVIMIENTOS ----- */
 // ---- Depurar productos duplicados en Stock ----
 async function depurarDuplicados(){
-  let grupos=[], familias=0;
-  try{ const r=await api('/api/admin/stock/duplicados'); grupos=r.data||[]; familias=r.familias||0; }catch(e){ return toast(e.message,'error'); }
-  if(!grupos.length && !familias) return toast('No hay duplicados ni familias para corregir. Todo en orden ✅','success');
+  let grupos=[], familias=0, huerfanos=0;
+  try{ const r=await api('/api/admin/stock/duplicados'); grupos=r.data||[]; familias=r.familias||0; huerfanos=r.huerfanos||0; }catch(e){ return toast(e.message,'error'); }
+  if(!grupos.length && !familias && !huerfanos) return toast('No hay duplicados, familias ni artículos huérfanos para limpiar. Todo en orden ✅','success');
   const notaFam = familias>0 ? `<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2 mb-2">🏷️ Además, a <b>${familias}</b> producto${familias===1?'':'s'} se le${familias===1?'':'s'} va a <b>corregir la familia</b> según el Catálogo (Herbicida, Fungicida, Fertilizante, etc.).</div>` : '';
+  const notaHuerf = huerfanos>0 ? `<div class="bg-red-50 border border-red-200 text-red-900 text-xs rounded-lg p-2 mb-2">🗑️ Además, se van a <b>eliminar ${huerfanos}</b> artículo${huerfanos===1?'':'s'} de <b>Hacienda</b> que ya no están en el Catálogo (ej. Cabra, Chivo). Los que tengan movimientos se desactivan en vez de borrarse, para no perder el historial.</div>` : '';
   const body = grupos.map(g=>`
     <div class="border border-slate-200 rounded-lg p-2 mb-2">
       <div class="font-semibold text-agro-900 text-sm mb-1">${esc(g.nombre)} <span class="text-slate-400 font-normal">· ${esc(g.categoria)}</span></div>
@@ -6413,7 +6417,8 @@ async function depurarDuplicados(){
   openModal({ title:`🧹 Ordenar Stock${grupos.length?` · ${grupos.length} duplicado${grupos.length===1?'':'s'}`:''}`, size:'max-w-2xl',
     body:`${grupos.length?`<div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2 mb-2">Voy a <b>unir</b> cada grupo en un solo producto: conservo el que está en el <b>Catálogo</b> (✅, con su familia) y le <b>muevo el stock, los movimientos y la unidad</b> del otro. Después borro el duplicado. No se pierde ningún movimiento.</div>`:''}
       ${notaFam}
-      <div style="max-height:50vh;overflow:auto">${body || (familias?'<div class="text-slate-500 text-sm">No hay duplicados; solo se corregirán las familias.</div>':'')}</div>`,
+      ${notaHuerf}
+      <div style="max-height:50vh;overflow:auto">${body || ((familias||huerfanos)?'<div class="text-slate-500 text-sm">No hay duplicados; se corregirán familias y/o se limpiarán huérfanos.</div>':'')}</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="depurarDuplicadosRun()">🧹 Aplicar</button>` });
 }
@@ -6422,7 +6427,10 @@ async function depurarDuplicadosRun(){
     const r=await api('/api/admin/stock/depurar-duplicados',{method:'POST'});
     const d=r.data||{};
     closeModal();
-    toast(`Listo: ${d.fusionados} grupo(s) unido(s), ${d.eliminados} duplicado(s) eliminado(s)${(d.errores&&d.errores.length)?` · ${d.errores.length} con referencias no se pudieron`:''}`,'success');
+    const partes=[`${d.fusionados} grupo(s) unido(s)`,`${d.eliminados} duplicado(s) eliminado(s)`];
+    if(d.familias)partes.push(`${d.familias} familia(s) corregida(s)`);
+    if(d.huerfanos)partes.push(`${d.huerfanos} huérfano(s) de hacienda limpiado(s)`);
+    toast(`Listo: ${partes.join(', ')}${(d.errores&&d.errores.length)?` · ${d.errores.length} con referencias no se pudieron`:''}`,'success');
     if(d.errores&&d.errores.length) console.warn('Depurar duplicados — pendientes:',d.errores);
     pages.stock();
   }catch(e){ toast(e.message,'error'); }
@@ -10593,13 +10601,18 @@ function _prodCaId(p) {
 function prodEnCatalogo(p, sets){
   sets = sets || _catalogoArtSets();
   const { nombres, animales, norm } = sets;
+  // Hacienda: SOLO vale si su categoría de animal sigue vigente en el catálogo de
+  // Hacienda. Así no se cuelan animales de especies que el usuario ya no tiene
+  // (ej. quedó solo Bovino y sobran Cabra, Chivo). No alcanza con tener familia.
+  if (p.categoria==='hacienda' || p.esHacienda) {
+    return !!(p.categoriaHacienda && animales.has(norm(p.categoriaHacienda)));
+  }
   // v2.9.7: si el producto está clasificado en el árbol (tiene familia), cuenta como
   // "en catálogo" — así los artículos nuevos y de categorías propias (ej. Repuestos)
   // aparecen en Stock y en el buscador de Compras/Ventas.
   if (p.categoriaArticuloId) return true;
   const n = norm(p.nombre);
   if (nombres.has(n) || animales.has(n)) return true;
-  if ((p.categoria==='hacienda' || p.esHacienda) && p.categoriaHacienda && animales.has(norm(p.categoriaHacienda))) return true;
   return false;
 }
 function _factItemsLista() {
