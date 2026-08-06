@@ -89,6 +89,7 @@ model Company {
   documentosEmitidos DocumentoEmitido[]
   secuencias         SecuenciaComprobante[]
   entregasCereal     EntregaCereal[]
+  viajeLiquidacion   ViajeLiquidacion[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -908,6 +909,7 @@ model Viaje {
   choferRel        Chofer?        @relation(fields: [choferId], references: [id])
   camionRel        Camion?        @relation(fields: [camionId], references: [id])
   acopladoRel      Acoplado?      @relation(fields: [acopladoId], references: [id])
+  liquidacionLinks ViajeLiquidacion[]
 
   @@index([companyId])
   @@index([fecha])
@@ -1430,6 +1432,7 @@ model LiquidacionCereal {
   company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   deposito         Deposito @relation(fields: [depositoId], references: [id])
   conceptos        LiquidacionCerealConcepto[]
+  viajeLinks       ViajeLiquidacion[]
 
   @@index([companyId])
   @@index([depositoId])
@@ -1771,4 +1774,27 @@ model Chofer {
   @@index([transportistaId])
   @@index([camionId])
   @@index([acopladoId])
+}
+
+// ============================================================
+// POSICION DE GRANOS: las ENTREGAS son los VIAJES (con Carta de Porte y destino
+// cerealera o venta directa). El viaje ya mueve el stock (ingreso a la cerealera
+// o egreso en venta directa). Aca solo agregamos el vinculo N:M viaje <-> liquidacion,
+// para que AGD pueda liquidar un viaje en varias partes o una liquidacion junte varias CP.
+// ============================================================
+model ViajeLiquidacion {
+  id             String   @id @default(cuid())
+  companyId      String
+  viajeId        String
+  liquidacionId  String
+  kilosAplicados Float    @default(0)
+  createdAt      DateTime @default(now())
+
+  company        Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  viaje          Viaje             @relation(fields: [viajeId], references: [id], onDelete: Cascade)
+  liquidacion    LiquidacionCereal @relation(fields: [liquidacionId], references: [id], onDelete: Cascade)
+
+  @@unique([viajeId, liquidacionId])
+  @@index([companyId])
+  @@index([liquidacionId])
 }

@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.44.0';
+const AGROCORE_VERSION = '2.45.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6589,6 +6589,7 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
       conceptos: z.array(concSchema).default([]),
       fechaCobroEst: z.coerce.date().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      viajeIds: z.array(z.string()).nullable().optional(),
     });
     const d = schema.parse(req.body);
     const kilosNetos = d.kilosBrutos * (1 - d.porcMerma / 100);
@@ -6638,6 +6639,15 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
           },
         });
       }
+      if (d.viajeIds && d.viajeIds.length) {
+        for (const vid of d.viajeIds) {
+          const v = await tx.viaje.findFirst({ where: { id: vid, companyId: req.companyId } });
+          if (!v) continue;
+          const kv = Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
+          try { await tx.viajeLiquidacion.create({ data: { companyId: req.companyId, viajeId: vid, liquidacionId: liq.id, kilosAplicados: kv } }); } catch {}
+          if (!v.liquidacionCerealId) { try { await tx.viaje.update({ where: { id: vid }, data: { liquidacionCerealId: liq.id } }); } catch {} }
+        }
+      }
       return liq;
     });
     res.status(201).json({ ok: true, data: result });
@@ -6650,6 +6660,110 @@ app.put('/api/liquidaciones-cereal/:id/marcar-cobrado', requireCompany, requireP
     if (!liq) return res.status(404).json({ ok: false, error: 'No encontrada' });
     const row = await prisma.liquidacionCereal.update({ where: { id: req.params.id }, data: { cobrado: true } });
     res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// POSICIÓN DE GRANOS: las ENTREGAS son los VIAJES con Carta de Porte cuyo destino es
+// una cerealera (grano guardado) o venta directa. El viaje ya mueve el stock; acá
+// llevamos el seguimiento y el vínculo con la(s) liquidación(es). Saldo = entregado - liquidado.
+// ============================================================
+function _especieMoneda(nombre) {
+  const x = _sinAcentos(nombre || '').toUpperCase();
+  if (/SOJA/.test(x)) return 'SOJA';
+  if (/MAIZ/.test(x)) return 'MAIZ';
+  if (/TRIGO/.test(x)) return 'TRIGO';
+  if (/SORGO/.test(x)) return 'SORGO';
+  if (/GIRASOL/.test(x)) return 'GIRASOL';
+  return null;
+}
+function _kgViaje(v){ return Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0); }
+function _cpViaje(v){ return v.cartaPorte || v.cpeNroComprobante || v.cpeNroCtg || null; }
+function _viajeEsEntrega(v){ return (v.destinoTipo === 'cerealera' || v.destinoTipo === 'venta_directa') && _kgViaje(v) > 0; }
+
+// Lista de entregas (viajes con CP a cerealera / venta directa) con estado + liquidaciones vinculadas.
+app.get('/api/entregas-grano', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const [viajes, links, liqs, depos] = await Promise.all([
+      prisma.viaje.findMany({ where: { companyId: req.companyId, destinoTipo: { in: ['cerealera','venta_directa'] } }, orderBy: { fecha: 'desc' } }),
+      prisma.viajeLiquidacion.findMany({ where: { companyId: req.companyId } }),
+      prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId }, select: { id: true, numero: true, neto: true, cobrado: true } }),
+      prisma.deposito.findMany({ where: { OR: [{ companyId: req.companyId }, { companyId: null, compartido: true }] }, select: { id: true, nombre: true } }),
+    ]);
+    const liqById = {}; liqs.forEach(l => liqById[l.id] = l);
+    const depoN = {}; depos.forEach(d => depoN[d.id] = d.nombre);
+    const linksByV = {}; links.forEach(k => { (linksByV[k.viajeId] = linksByV[k.viajeId] || []).push(k); });
+    const data = viajes.filter(_viajeEsEntrega).map(v => {
+      const ls = (linksByV[v.id] || []).slice();
+      if (v.liquidacionCerealId && !ls.find(k => k.liquidacionId === v.liquidacionCerealId)) ls.push({ liquidacionId: v.liquidacionCerealId, kilosAplicados: 0 });
+      const estado = ls.length ? 'liquidada' : 'pendiente';
+      return {
+        id: v.id, fecha: v.fecha, cpe: _cpViaje(v), especie: v.producto || null,
+        destinoTipo: v.destinoTipo, destino: v.destino || null, depositoId: v.depositoDestinoId || null,
+        cerealera: v.depositoDestinoId ? (depoN[v.depositoDestinoId] || null) : null,
+        kilos: _kgViaje(v), campanaId: v.campanaId || null, estado,
+        liquidaciones: ls.map(k => ({ id: k.liquidacionId, numero: liqById[k.liquidacionId]?.numero || null, neto: liqById[k.liquidacionId]?.neto || 0, cobrado: !!liqById[k.liquidacionId]?.cobrado })),
+      };
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+// Vincular / desvincular una liquidación con uno o varios viajes (CP).
+app.post('/api/posicion-granos/vincular', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const schema = z.object({ liquidacionId: z.string(), viajeIds: z.array(z.string()).default([]) });
+    const d = schema.parse(req.body);
+    const liq = await prisma.liquidacionCereal.findFirst({ where: { id: d.liquidacionId, companyId: req.companyId } });
+    if (!liq) return res.status(404).json({ ok: false, error: 'Liquidación no encontrada' });
+    let n = 0;
+    for (const vid of d.viajeIds) {
+      const v = await prisma.viaje.findFirst({ where: { id: vid, companyId: req.companyId } });
+      if (!v) continue;
+      try { await prisma.viajeLiquidacion.create({ data: { companyId: req.companyId, viajeId: vid, liquidacionId: d.liquidacionId, kilosAplicados: _kgViaje(v) } }); n++; } catch {}
+      if (!v.liquidacionCerealId) { try { await prisma.viaje.update({ where: { id: vid }, data: { liquidacionCerealId: d.liquidacionId } }); } catch {} }
+    }
+    res.json({ ok: true, data: { vinculadas: n } });
+  } catch (e) { next(e); }
+});
+app.delete('/api/posicion-granos/vincular', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const { liquidacionId, viajeId } = req.query;
+    if (!liquidacionId || !viajeId) return res.status(400).json({ ok: false, error: 'Faltan parámetros' });
+    await prisma.viajeLiquidacion.deleteMany({ where: { companyId: req.companyId, liquidacionId: String(liquidacionId), viajeId: String(viajeId) } });
+    await prisma.viaje.updateMany({ where: { id: String(viajeId), companyId: req.companyId, liquidacionCerealId: String(liquidacionId) }, data: { liquidacionCerealId: null } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// Tablero de posición: por especie → entregado (viajes), liquidado (liquidaciones), a liquidar + $ pizarra.
+app.get('/api/posicion-granos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const [viajes, liqs, prods] = await Promise.all([
+      prisma.viaje.findMany({ where: { companyId: req.companyId, destinoTipo: { in: ['cerealera','venta_directa'] } }, select: { producto: true, kgDescarga: true, kgNetoDest: true, kgNeto: true, cantidad: true, destinoTipo: true } }),
+      prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId }, select: { productoId: true, kilosNetos: true, neto: true, cobrado: true } }),
+      prisma.producto.findMany({ where: { companyId: req.companyId }, select: { id: true, nombre: true } }),
+    ]);
+    const prodNombre = {}; prods.forEach(p => prodNombre[p.id] = p.nombre);
+    const norm = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const acc = {};
+    const bump = (label) => { const k = norm(label); return acc[k] || (acc[k] = { especie: label || '(sin especie)', entregado: 0, liquidado: 0, aCobrar: 0 }); };
+    viajes.forEach(v => { if (!_viajeEsEntrega(v)) return; bump(v.producto).entregado += _kgViaje(v); });
+    liqs.forEach(l => { const r = bump(prodNombre[l.productoId] || ''); r.liquidado += Number(l.kilosNetos || 0); if (!l.cobrado) r.aCobrar += Number(l.neto || 0); });
+    const monedas = [...new Set(Object.values(acc).map(r => _especieMoneda(r.especie)).filter(Boolean))];
+    const precios = {};
+    for (const m of monedas) { try { precios[m] = await getCotizacionARS(m, new Date(), req.companyId); } catch { precios[m] = null; } }
+    const porEspecie = Object.values(acc).map(r => {
+      const mon = _especieMoneda(r.especie);
+      const aLiquidar = r.entregado - r.liquidado;
+      const precioTn = mon ? (precios[mon] || null) : null;
+      return {
+        especie: r.especie,
+        entregado: Math.round(r.entregado * 1000) / 1000, liquidado: Math.round(r.liquidado * 1000) / 1000,
+        aLiquidar: Math.round(aLiquidar * 1000) / 1000, precioTn,
+        valorALiquidar: precioTn != null ? Math.round(aLiquidar * precioTn / 1000) : null,
+        aCobrar: Math.round(r.aCobrar * 100) / 100,
+      };
+    }).filter(r => r.entregado || r.liquidado);
+    res.json({ ok: true, data: { porEspecie, precios } });
   } catch (e) { next(e); }
 });
 
@@ -9657,6 +9771,7 @@ app.post('/api/liquidaciones-cereal/importar', requireCompany, requirePermission
       retenciones: z.number().nonnegative().default(0),
       neto: z.number(),
       observaciones: z.string().nullable().optional(),
+      viajeIds: z.array(z.string()).nullable().optional(),
     });
     const d = schema.parse(req.body);
     const result = await prisma.$transaction(async (tx) => {
@@ -9692,6 +9807,16 @@ app.post('/api/liquidaciones-cereal/importar', requireCompany, requirePermission
           detalle: `Liquidación cereal ${d.numero || ''}`.trim(), referencia: `LIQ-${liq.id.slice(-6).toUpperCase()}`,
           debe: d.neto, haber: 0, categoria: 'liquidacion_cereal',
         }});
+      }
+      // Vincular con los viajes (CP) seleccionados — posición de granos.
+      if (d.viajeIds && d.viajeIds.length) {
+        for (const vid of d.viajeIds) {
+          const v = await tx.viaje.findFirst({ where: { id: vid, companyId: req.companyId } });
+          if (!v) continue;
+          const kv = Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
+          try { await tx.viajeLiquidacion.create({ data: { companyId: req.companyId, viajeId: vid, liquidacionId: liq.id, kilosAplicados: kv } }); } catch {}
+          if (!v.liquidacionCerealId) { try { await tx.viaje.update({ where: { id: vid }, data: { liquidacionCerealId: liq.id } }); } catch {} }
+        }
       }
       return { liq, clienteId };
     });

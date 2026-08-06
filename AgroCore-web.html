@@ -1015,6 +1015,7 @@ const MODULES = [
   { id:'stock',         label:'Stock',                icon:'📦', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'movimientos',   label:'Movimientos',          icon:'🔁', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'cerealeras',    label:'Cerealeras / Depósitos',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'hacienda',      label:'Hacienda',             icon:'🐄', perm:'stock:read',      section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA =====
@@ -1532,6 +1533,22 @@ function catSelect(id, tipos, selected='', opts={}) {
   return `<select id="${id}" class="${cls}" ${extraAttr}${dataAttr}>
     <option value="">${placeholder}</option>
     ${filtered.map(i => `<option value="${esc(i.nombre)}" ${i.nombre===selected?'selected':''}>${esc(i.nombre)}</option>`).join('')}
+    ${(selected && !hasSel) ? `<option value="${esc(selected)}" selected>${esc(selected)} (legado)</option>` : ''}
+  </select>`;
+}
+
+// Select de GRANOS (Cereales / Granos) desde los productos reales del catálogo — mismo
+// origen que usa la liquidación y Posición de granos, para que el nombre matchee siempre.
+function granoSelect(id, selected='', opts={}) {
+  const placeholder = opts.placeholder || '— Grano —';
+  const granos = (state.cache.productos||[])
+    .filter(p => p.activo!==false && (typeof _esProdGrano==='function' ? _esProdGrano(p) : /cereal|grano/i.test(p.categoria||'')))
+    .map(p => p.nombre).filter(Boolean);
+  const uniq = [...new Set(granos)].sort((a,b)=>a.localeCompare(b));
+  const hasSel = selected && uniq.includes(selected);
+  return `<select id="${id}" class="input">
+    <option value="">${placeholder}</option>
+    ${uniq.map(n=>`<option value="${esc(n)}" ${n===selected?'selected':''}>${esc(n)}</option>`).join('')}
     ${(selected && !hasSel) ? `<option value="${esc(selected)}" selected>${esc(selected)} (legado)</option>` : ''}
   </select>`;
 }
@@ -2524,6 +2541,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/08/2026',
+      titulo:'🌾 v2.45.0 — Posición de granos: chau planilla de Excel',
+      desc:'Nueva pantalla <b>Stock → Posición de granos</b> para dejar de llevar el Excel de entregas y liquidaciones. Toma automáticamente <b>cada viaje con Carta de Porte</b> cuyo destino sea una <b>cerealera</b> (grano guardado) o <b>venta directa</b>, y te deja <b>vincular o importar la liquidación del PDF</b> — puede ser en varias partes (ideal para AGD, que liquida una parte, la secada y el IVA por separado). El tablero muestra por especie: <b>Entregado, Liquidado y A liquidar</b>, con el <b>precio del día</b> para valorizar lo pendiente. El stock lo sigue moviendo el viaje; la liquidación fija el precio y genera la cuenta a cobrar. Además, en <b>Viajes</b> el campo <b>Producto / Carga</b> pasó a ser un <b>desplegable de granos del catálogo</b> (Cereales / Granos) en vez de texto libre, para que la especie coincida siempre con la liquidación.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🗑️ v2.44.0 — Stock limpia los animales que ya no están en el Catálogo',
       desc:'Si sacaste una especie del Catálogo de Hacienda (por ej. quedó solo Bovino), en Stock seguían apareciendo los animales viejos (Cabra, Chivo, Cordero, etc.). Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>elimina los artículos de Hacienda que ya no están en el Catálogo</b>. Los que tengan movimientos se <b>desactivan</b> (no se pierde el historial) y los que no tienen nada se borran. Además, Stock ya no los muestra aunque tengan familia asignada.' },
@@ -16788,6 +16808,7 @@ async function viajeForm(id=null) {
   const fechaStr = it.fecha ? String(it.fecha).slice(0,10) : new Date().toISOString().slice(0,10);
   const estadoActual = it.estado || 'pendiente';
   if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
+  if (!state.cache.productos) { try { state.cache.productos = (await api('/api/productos')).data || []; } catch { state.cache.productos = []; } }
   const _camps = state.cache.campanas || [];
   const _campLabel = (c) => c.nombre || `${c.cultivo||''}${c.lote?.nombre?' · '+c.lote.nombre:''}${c.ciclo?' · '+c.ciclo:''}`;
   openModal({
@@ -16798,7 +16819,7 @@ async function viajeForm(id=null) {
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5 mt-1">Viaje</h4>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${fechaStr}"/></div>
-        <div><label class="label">Producto / Carga</label>${catSelect('f-prod', 'Cereal', it.producto||'', { placeholder:'— Producto —' })}</div>
+        <div><label class="label">Producto / Carga (grano)</label>${granoSelect('f-prod', it.producto||'', { placeholder:'— Grano —' })}</div>
         <div class="col-span-2"><label class="label">Origen del cereal</label>
           <select id="f-origtipo" class="input mb-2" onchange="viajeOrigTipo()">
             <option value="" ${!it.campanaId && !it.depositoOrigenId ? 'selected':''}>— Sin especificar / texto libre —</option>
@@ -24412,12 +24433,123 @@ async function liqCerealImportConfirmar(){
   if(cliSel==='__new__'){ const rs=$('#lqc-cli-rs').value.trim(); if(!rs) return toast('Poné la razón social del cliente','warn'); body.clienteNuevo={ razonSocial:rs, cuit:$('#lqc-cli-cuit').value.trim()||null }; }
   else if(cliSel){ body.clienteId=cliSel; }
   else return toast('Elegí o creá el comprador (cliente)','warn');
+  // Si venimos desde Posición de granos, vinculamos la liquidación con el viaje (CP).
+  const linkEnt = state._pgLinkEntrega || null;
+  if(linkEnt) body.viajeIds=[linkEnt];
   try{
     const r=await api('/api/liquidaciones-cereal/importar',{ method:'POST', body:JSON.stringify(body) });
-    toast('Liquidación importada'+(r.clienteCreado?' · cliente creado':'')+' · stock descontado y deuda generada','success');
-    closeModal(); pages.liquidaciones();
+    toast('Liquidación importada'+(r.clienteCreado?' · cliente creado':'')+' · stock descontado y deuda generada'+(linkEnt?' · vinculada a la entrega':''),'success');
+    closeModal(); const volver=state._pgVolver; state._pgLinkEntrega=null; state._pgVolver=null;
+    if(volver) pages.posicionGranos(); else pages.liquidaciones();
   }catch(e){ toast(e.message,'error'); }
 }
+// ============================================================
+// ============================================================
+// POSICIÓN DE GRANOS: las entregas son los VIAJES (con CP a cerealera o venta directa).
+// Tablero por especie + vínculo con liquidaciones.
+// ============================================================
+pages.posicionGranos = async function(){
+  setHeader('Posición de granos', 'Viajes con carta de porte, liquidaciones y saldo a liquidar');
+  if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('posicionGranos','Posición de granos'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let pos={porEspecie:[]}, entregas=[];
+  try{
+    const [p,e]=await Promise.all([api('/api/posicion-granos'), api('/api/entregas-grano')]);
+    pos=(p.data)||pos; entregas=e.data||[];
+  }catch(err){ return toast(err.message,'error'); }
+  state._pgEntregas=entregas;
+  const totEntreg=pos.porEspecie.reduce((a,r)=>a+r.entregado,0);
+  const totLiq=pos.porEspecie.reduce((a,r)=>a+r.liquidado,0);
+  const totALiq=pos.porEspecie.reduce((a,r)=>a+r.aLiquidar,0);
+  const totValor=pos.porEspecie.reduce((a,r)=>a+(r.valorALiquidar||0),0);
+  const badgeEstado=(s)=> s==='liquidada'?'<span class="badge badge-green">Liquidada</span>':(s==='parcial'?'<span class="badge badge-blue">Parcial</span>':'<span class="badge badge-yellow">Pendiente</span>');
+  const fmtKg=(k)=>`${fmtN(Math.round(k))} kg`;
+  const tipoLbl=(t)=> t==='venta_directa'?'Venta directa':(t==='cerealera'?'Cerealera':'—');
+  const pendientes = entregas.filter(e=>e.estado==='pendiente').length;
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${entregas.length} entrega${entregas.length===1?'':'s'} (viajes con CP) · ${pendientes} sin liquidar</div>
+      <div class="flex gap-2">
+        <button class="btn btn-secondary" onclick="go('viajes')" title="Cargar un viaje / carta de porte">🚚 Ir a Viajes</button>
+        <button class="btn btn-secondary" onclick="go('liquidaciones')" title="Ver / importar liquidaciones">🧾 Liquidaciones</button>
+      </div>
+    </div>
+    <div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2 mb-4">Cada <b>viaje con carta de porte</b> cuyo destino sea una <b>cerealera</b> o <b>venta directa</b> aparece acá para seguirlo y vincularle la liquidación. El stock ya lo mueve el viaje; la liquidación fija el precio y genera la cuenta a cobrar.</div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Entregado</div><div class="text-xl font-bold mt-1">${fmtKg(totEntreg)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Liquidado</div><div class="text-xl font-bold mt-1">${fmtKg(totLiq)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">A liquidar</div><div class="text-xl font-bold mt-1 text-amber-600">${fmtKg(totALiq)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">$ a liquidar (pizarra)</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(totValor)}</div></div>
+    </div>
+    <div class="kpi p-0 overflow-hidden mb-4">
+      <div class="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50 border-b">POSICIÓN POR ESPECIE</div>
+      <table class="data">
+        <thead><tr><th>Especie</th><th class="text-right">Entregado</th><th class="text-right">Liquidado</th><th class="text-right">A liquidar</th><th class="text-right">Precio del día ($/tn)</th><th class="text-right">$ a liquidar</th><th class="text-right">Pend. de cobro</th></tr></thead>
+        <tbody>
+          ${pos.porEspecie.map(r=>`<tr class="table-row">
+            <td><b>${esc(r.especie)}</b></td>
+            <td class="text-right">${fmtKg(r.entregado)}</td>
+            <td class="text-right">${fmtKg(r.liquidado)}</td>
+            <td class="text-right font-semibold ${r.aLiquidar>0?'text-amber-600':''}">${fmtKg(r.aLiquidar)}</td>
+            <td class="text-right">${r.precioTn!=null?fmt$(r.precioTn):'—'}</td>
+            <td class="text-right font-semibold text-emerald-700">${r.valorALiquidar!=null?fmt$(r.valorALiquidar):'—'}</td>
+            <td class="text-right ${r.aCobrar>0?'text-amber-600':''}">${fmt$(r.aCobrar||0)}</td>
+          </tr>`).join('') || `<tr><td colspan="7" class="text-center text-slate-400 py-6">Todavía no hay viajes con destino cerealera o venta directa.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div class="kpi p-0 overflow-hidden">
+      <div class="px-3 py-2 text-xs font-semibold text-slate-500 bg-slate-50 border-b">ENTREGAS (VIAJES CON CARTA DE PORTE)</div>
+      <table class="data">
+        <thead><tr><th>Fecha</th><th>CP</th><th>Especie</th><th>Destino</th><th>Tipo</th><th class="text-right">Kg</th><th>Estado</th><th></th></tr></thead>
+        <tbody>
+          ${entregas.map(e=>`<tr class="table-row">
+            <td>${fmtDate(e.fecha)}</td>
+            <td class="font-mono">${esc(e.cpe||'—')}</td>
+            <td>${esc(e.especie||'—')}</td>
+            <td>${esc(e.cerealera||e.destino||'—')}</td>
+            <td>${tipoLbl(e.destinoTipo)}</td>
+            <td class="text-right">${fmtKg(e.kilos)}</td>
+            <td>${badgeEstado(e.estado)}${(e.liquidaciones&&e.liquidaciones.length)?`<div class="text-[10px] text-slate-500 mt-0.5">Liq: ${e.liquidaciones.map(l=>esc(l.numero||'s/n')).join(', ')}</div>`:''}</td>
+            <td class="text-right whitespace-nowrap">
+              ${can('ventas:update')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Vincular / importar liquidación" onclick='pgVincular(${JSON.stringify(e.id)})'>🔗 Liquidar</button>`:''}
+              <button class="btn btn-ghost text-xs" title="Abrir el viaje" onclick="go('viajes')">✏️</button>
+            </td>
+          </tr>`).join('') || `<tr><td colspan="8" class="text-center text-slate-400 py-8">Sin entregas. Cargá un viaje con carta de porte y destino cerealera o venta directa.</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+};
+async function pgVincular(viajeId){
+  const ent=(state._pgEntregas||[]).find(x=>x.id===viajeId); if(!ent) return;
+  let liqs=[];
+  try{ liqs=(await api('/api/liquidaciones-cereal')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  const yaLink=new Set((ent.liquidaciones||[]).map(l=>l.id));
+  const disponibles=liqs.filter(l=>!yaLink.has(l.id));
+  openModal({ title:'🔗 Liquidar entrega'+(ent.cpe?` · CP ${esc(ent.cpe)}`:''), size:'max-w-2xl',
+    body:`
+      <div class="text-xs text-slate-600 mb-2">${esc(ent.especie||'')} · ${fmtN(Math.round(ent.kilos))} kg · ${esc(ent.cerealera||ent.destino||'')}. Vinculá una o varias liquidaciones (AGD puede liquidar en partes), o importá una nueva del PDF.</div>
+      ${(ent.liquidaciones&&ent.liquidaciones.length)?`<div class="mb-2 text-xs">Vinculadas: ${ent.liquidaciones.map(l=>`<span class="badge badge-green">${esc(l.numero||'s/n')} <a href="#" onclick="pgDesvincular('${viajeId}','${l.id}');return false" class="text-red-600 ml-1">✕</a></span>`).join(' ')}</div>`:''}
+      <div class="kpi p-0 overflow-hidden mb-3" style="max-height:38vh;overflow:auto">
+        <table class="data text-sm"><thead><tr><th style="width:32px"></th><th>Fecha</th><th>Nro</th><th class="text-right">Kg</th><th class="text-right">Neto</th><th>Estado</th></tr></thead>
+          <tbody>${disponibles.map(l=>`<tr class="table-row"><td><input type="checkbox" class="pg-lk" value="${l.id}"/></td><td>${fmtDate(l.fecha)}</td><td>${esc(l.numero||'—')}</td><td class="text-right">${fmtN(l.kilosNetos)}</td><td class="text-right">${fmt$(l.neto)}</td><td>${l.cobrado?'<span class="badge badge-green">Cobrada</span>':'<span class="badge badge-yellow">Pend.</span>'}</td></tr>`).join('')||`<tr><td colspan="6" class="text-center text-slate-400 py-4">No hay liquidaciones sin vincular. Importá una del PDF.</td></tr>`}</tbody>
+        </table>
+      </div>
+      <button class="btn btn-secondary w-full" onclick="pgImportarParaEntrega('${viajeId}')">📥 Importar liquidación de PDF y vincular</button>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button><button class="btn btn-primary" onclick="pgVincularSave('${viajeId}')">🔗 Vincular seleccionadas</button>` });
+}
+async function pgVincularSave(viajeId){
+  const ids=$$('.pg-lk:checked').map(c=>c.value);
+  if(!ids.length) return toast('Tildá al menos una liquidación','warn');
+  try{ for(const lid of ids){ await api('/api/posicion-granos/vincular',{ method:'POST', body:JSON.stringify({ liquidacionId:lid, viajeIds:[viajeId] }) }); }
+    toast('Vinculado','success'); closeModal(); pages.posicionGranos();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function pgDesvincular(viajeId,liqId){
+  try{ await api('/api/posicion-granos/vincular?liquidacionId='+encodeURIComponent(liqId)+'&viajeId='+encodeURIComponent(viajeId),{ method:'DELETE' }); toast('Desvinculada','success'); closeModal(); pages.posicionGranos(); }
+  catch(e){ toast(e.message,'error'); }
+}
+function pgImportarParaEntrega(viajeId){ state._pgLinkEntrega=viajeId; state._pgVolver=true; closeModal(); liqCerealImportar(); }
 async function liqForm() {
   let depos=[], productos=[], clientes=[];
   try {
