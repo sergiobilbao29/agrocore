@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.52.1';
+const AGROCORE_VERSION = '2.52.2';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1349,8 +1349,8 @@ async function _iaNormalizar(texto, ctx, ia) {
       'Sos un normalizador de AgroCore (gestión agropecuaria argentina). Reescribí el mensaje del usuario a UNA sola frase corta y clara en español rioplatense, usando EXACTAMENTE uno de estos moldes:',
       '- Gasto: "gasté <monto> en <concepto>"  · Ingreso: "ingresó <monto> por <concepto>"',
       '- Pago: "pagá <monto> a <proveedor>"  · Cobro: "cobrale <monto> a <cliente>"',
-      '- Hacienda: "nacieron|murieron|compré <cantidad> <categoria> en <campo>"',
-      '- Labor: "cosecha|siembra|pulverización|fertilización|laboreo en el lote <lote> de <campo> [con <cantidad> <unidad> de <insumo>]"',
+      '- Hacienda: "nacieron 5 terneros en <campo>" / "murieron 2 vacas en <campo>" / "compré 10 novillos en <campo>"',
+      '- Labor: "pulverización en el lote <lote> de <campo>" (o cosecha/siembra/fertilización/laboreo). Si hay un insumo aplicado, agregalo al final así: "... con 120 litros de glifosato".',
       '- Recordatorio: "recordar <texto> el DD/MM"',
       '- Consultas: "cuánto stock queda de <producto>", "cuánto tengo a cobrar", "cuánto debo", "cómo estoy", "cuánta plata tengo en caja", "cuánto cereal me falta liquidar", "qué campos tengo", "qué lotes tengo", "qué campañas tengo", "mostrame los animales".',
       'Usá los nombres reales de este contexto cuando correspondan (elegí el más parecido):',
@@ -1359,7 +1359,7 @@ async function _iaNormalizar(texto, ctx, ia) {
       `Categorías de animales: ${cats || '(ninguna)'}`,
       `Clientes: ${clientes || '(ninguno)'}`,
       `Proveedores: ${proveedores || '(ninguno)'}`,
-      'Si el mensaje no corresponde a ninguna acción/consulta, respondé exactamente NONE. Respondé SOLO la frase (o NONE), sin comillas ni explicaciones.',
+      'Si el mensaje no corresponde a ninguna acción/consulta, respondé exactamente NONE. Respondé SOLO la frase (o NONE), sin comillas, sin corchetes [], sin llaves {}, sin paréntesis ni explicaciones.',
     ].join('\n');
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 9000);
@@ -1373,6 +1373,8 @@ async function _iaNormalizar(texto, ctx, ia) {
     if (!r.ok) { console.warn('IA normalizar HTTP', r.status); return null; }
     const j = await r.json();
     let out = (j?.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
+    // Defensa: si el modelo dejó corchetes/llaves, los quitamos pero conservamos el texto interno.
+    out = out.replace(/[\[\]{}]/g, ' ').replace(/\s{2,}/g, ' ').trim();
     if (!out || /^none$/i.test(out)) return null;
     return out;
   } catch (e) { if (e.name !== 'AbortError') console.warn('IA normalizar error:', e.message); return null; }
@@ -7319,17 +7321,24 @@ function _interpretarMensaje(texto, ctx) {
     return { accion: 'hacienda_mov', params, resumen: `🐄 ${lbl} de ${numero} ${cat} en ${campo.nombre}${extra}` };
   }
   // Labor en un lote (cosecha, siembra, pulverización, etc.)
-  if (/\blabor|cosech|siembr|sembr|pulveriz|fumig|fertiliz|aplic|rastr|arad|laboreo|disquead/.test(t)) {
+  if (/\blabor|cosech|siembr|sembr|pulveriz|fumig|fertiliz|aplic|apliqu|rastr|arad|laboreo|disquead/.test(t)) {
     let tlab = 'Labor';
     if (/cosech/.test(t)) tlab = 'Cosecha';
     else if (/siembr|sembr/.test(t)) tlab = 'Siembra';
-    else if (/pulveriz|fumig|aplic/.test(t)) tlab = 'Pulverización';
+    else if (/pulveriz|fumig|aplic|apliqu/.test(t)) tlab = 'Pulverización';
     else if (/fertiliz/.test(t)) tlab = 'Fertilización';
     else if (/rastr|arad|laboreo|disquead/.test(t)) tlab = 'Laboreo';
     const loteM = t.match(/lote\s+([a-z0-9]+)/);
     let lote = null;
-    if (loteM) lote = ctx.lotes.find(l => _sinAcentos(l.nombre) === loteM[1] && (!campo || l.campoId === campo.id))
-                   || ctx.lotes.find(l => _sinAcentos(l.nombre) === loteM[1]);
+    if (loteM) {
+      const tok = loteM[1];                              // ej: "3"
+      const nl = (s) => _sinAcentos(s).replace(/^lote\s+/, '').trim(); // "Lote 3" -> "3"
+      const cand = ctx.lotes.filter(l => !campo || l.campoId === campo.id);
+      lote = cand.find(l => nl(l.nombre) === tok)                       // "3" o "Lote 3"
+          || cand.find(l => _sinAcentos(l.nombre) === 'lote ' + tok)    // nombre exacto "lote 3"
+          || cand.find(l => _sinAcentos(l.nombre).split(/\s+/).includes(tok)) // "Lote 3 Norte"
+          || ctx.lotes.find(l => nl(l.nombre) === tok);                 // sin filtrar por campo
+    }
     if (!lote && campo) { const ls = ctx.lotes.filter(l => l.campoId === campo.id); if (ls.length === 1) lote = ls[0]; }
     if (!lote) return { error: 'No reconocí el lote. Ej: "cosecha en el lote 3 de Montenegro".' };
     const camps = ctx.campanas.filter(c => c.loteId === lote.id)
