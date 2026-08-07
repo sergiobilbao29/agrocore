@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.55.0';
+const AGROCORE_VERSION = '2.55.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10519,7 +10519,7 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
     };
 
     const numero = (texto.match(/N°\s*([\d]{2,5}-[\d]{4,8})/) || [])[1]
-      || ((texto.match(/\b(\d{4,5})\s*-\s*(\d{6,8})\b/) || []).slice(1).join('-') || null);  // ej "00013 - 00000087"
+      || ((texto.match(/(\d{4,5})\s*-\s*(\d{6,8})/) || []).slice(1).join('-') || null);  // ej "00013 - 00000087"
     const fecha = fechaArg((texto.match(/([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})\s*Fecha/) || [])[1]) || fechaArg((texto.match(/Fecha[:\s]*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i) || [])[1]);
     // CAE: en algunos templates el nro va ANTES del rótulo "CAE N°" (ej. LIVORNO), en otros después.
     const cae = (texto.match(/(\d{14})\s*CAE\s*N/i) || [])[1] || (texto.match(/CAE\s*N[^0-9]{0,8}(\d{14})/i) || [])[1] || (texto.match(/CAE[^0-9]{0,8}(\d{14})/i) || [])[1] || null;
@@ -10535,6 +10535,7 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
     //  (B) invertido (ej. LIVORNO): importes ANTES, cabezas justo DESPUÉS de "Kg. Vivo",
     //      y la categoría/raza en la línea SIGUIENTE. Se detecta por el encabezado.
     const invertido = /\$ ?IVA[\s\S]{0,60}Cabezas[\s\S]{0,12}Categor/i.test(texto);
+    const secEnd = texto.indexOf('Importe Bruto:');   // usado también abajo para el Importe Neto
     const renglones = [];
     if (invertido) {
       // Ej: "149,940.0010.501,428,000.005,100.00280Kg. Vivo20\nPorcina Lechones Livianos"
@@ -10567,7 +10568,6 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
       }
     } else {
       const secStart = texto.indexOf('$ Bruto% IVA$ IVA');
-      const secEnd = texto.indexOf('Importe Bruto:');
       const sec = secStart >= 0 ? texto.slice(secStart, secEnd > secStart ? secEnd : undefined) : texto;
       const re = /(\d+)Kg\.?\s*Vivo([\d.,]+)/g;
       let m, last = 0;
