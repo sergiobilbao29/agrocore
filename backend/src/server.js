@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.56.0';
+const AGROCORE_VERSION = '2.57.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1378,6 +1378,47 @@ async function _iaNormalizar(texto, ctx, ia) {
     if (!out || /^none$/i.test(out)) return null;
     return out;
   } catch (e) { if (e.name !== 'AbortError') console.warn('IA normalizar error:', e.message); return null; }
+}
+
+// Analiza un documento (PDF o imagen/foto) con OpenAI y lo clasifica: factura de compra,
+// liquidación (cereal/animales), orden de trabajo/labor, gasto/ticket, cheque, etc.
+// Devuelve { tipo, resumen, datos } o null. Usa visión para imágenes (gpt-4o-mini).
+async function _iaAnalizarDocumento({ buffer, mime, filename, textoPdf }, ia) {
+  const cfg = ia || await _iaConfig();
+  if (!cfg.apiKey) return null;
+  const sys = [
+    'Sos un clasificador de documentos de una empresa agropecuaria argentina. Mirá el documento y respondé SOLO un JSON con esta forma:',
+    '{ "tipo": "...", "resumen": "...", "datos": { ... } }',
+    'tipo debe ser UNO de: factura_compra, liquidacion_cereal, liquidacion_animales, orden_trabajo, gasto, cheque, otro.',
+    '- factura_compra: factura/remito de un proveedor (nos venden algo). datos: proveedor, cuit, numero, fecha, total, moneda.',
+    '- liquidacion_cereal: liquidación primaria de granos / venta de cereal. datos: comprador, numero, fecha, grano, neto.',
+    '- liquidacion_animales: liquidación de compra directa/faena de hacienda (porcinos/bovinos). datos: comprador, numero, fecha, categoria, cabezas, neto.',
+    '- orden_trabajo: orden de trabajo/laboreo/aplicación a campo. datos: establecimiento, lote, cultivo, labor, hectareas, contratista, fecha, tarifa.',
+    '- gasto: ticket o comprobante de un gasto chico (panadería, combustible, ferretería...). datos: concepto, monto, fecha.',
+    '- cheque: un cheque bancario. datos: banco, numero, importe, fecha, beneficiario.',
+    'Usá números sin símbolos ni separadores de miles (ej 1234.50). Si un dato no está, omitilo. Respondé SOLO el JSON, sin texto extra.',
+  ].join('\n');
+  const userContent = [];
+  if (textoPdf) userContent.push({ type: 'text', text: 'Documento (texto extraído del PDF):\n' + textoPdf.slice(0, 6000) });
+  else {
+    userContent.push({ type: 'text', text: 'Analizá esta imagen de un documento y clasificalo.' });
+    userContent.push({ type: 'image_url', image_url: { url: `data:${mime || 'image/jpeg'};base64,${buffer.toString('base64')}` } });
+  }
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', temperature: 0, max_tokens: 500, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: sys }, { role: 'user', content: userContent }] }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(to);
+    if (!r.ok) { console.warn('IA analizar HTTP', r.status); return null; }
+    const j = await r.json();
+    let out = (j?.choices?.[0]?.message?.content || '').trim();
+    try { return JSON.parse(out); } catch { return null; }
+  } catch (e) { clearTimeout(to); if (e.name !== 'AbortError') console.warn('IA analizar error:', e.message); return null; }
 }
 
 // ---------- EMPRESAS ----------
@@ -8300,6 +8341,64 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, familias,
       companyId: accionCid || null, empresas: multiEmpresa ? empresas : null, empresaFija,
       ...extra, data: m });
+  } catch (e) { next(e); }
+});
+// --- Asistente: analizar un archivo (PDF/foto) y proponer la acción correspondiente ---
+// Reconoce facturas de compra, liquidaciones (cereal/animales), órdenes de trabajo (labor),
+// tickets/gastos y cheques. Devuelve una "frase" para reprocesar con el flujo normal del bot
+// (gasto/labor → confirmación) o un "atajo" a la pantalla que corresponde.
+app.post('/api/asistente/analizar-archivo', requireCompany, upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const ia = await _iaConfig();
+    if (!ia.enabled) {
+      return res.json({ ok: true, status: 'ayuda', mensaje: '📎 Para leer archivos/fotos necesito la IA activada. Un administrador puede prenderla en Configuración → 🤖 Asistente IA.' });
+    }
+    const mime = req.file.mimetype || '';
+    const isPdf = /pdf$/i.test(mime) || /\.pdf$/i.test(req.file.originalname || '');
+    const isImg = /^image\//i.test(mime) || /\.(jpe?g|png|webp|heic)$/i.test(req.file.originalname || '');
+    if (!isPdf && !isImg) return res.status(400).json({ ok: false, error: 'Formato no soportado. Subí un PDF o una foto (JPG/PNG).' });
+    let textoPdf = null;
+    if (isPdf) {
+      try { const pdfParse = await getPdfParse(); textoPdf = (await pdfParse(req.file.buffer)).text || ''; } catch { textoPdf = ''; }
+    }
+    const doc = await _iaAnalizarDocumento({ buffer: req.file.buffer, mime, filename: req.file.originalname, textoPdf }, ia);
+    if (!doc || !doc.tipo) {
+      const msg = 'No pude reconocer el documento 🤔. Probá con una foto más nítida o cargalo a mano.';
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', archivo: true });
+      return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: m });
+    }
+    const d = doc.datos || {};
+    const nOr = (v) => { const n = Number(String(v == null ? '' : v).replace(/[^\d.-]/g, '')); return isFinite(n) && n > 0 ? n : null; };
+    let frase = null, atajo = null, mensaje = doc.resumen || 'Documento analizado.';
+    if (doc.tipo === 'gasto') {
+      const monto = nOr(d.monto); const concepto = (d.concepto || 'gasto').toString().slice(0, 60);
+      frase = monto ? `gasté ${monto} en ${concepto}` : null;
+      mensaje = `🧾 Parece un gasto${d.concepto ? ` de ${d.concepto}` : ''}${monto ? ` por $${monto.toLocaleString('es-AR')}` : ''}.`;
+    } else if (doc.tipo === 'orden_trabajo') {
+      const labor = (d.labor || 'labor').toString(); const lote = d.lote ? String(d.lote) : null; const campo = (d.establecimiento || d.campo) ? String(d.establecimiento || d.campo) : null;
+      if (lote && campo) frase = `${labor} en el lote ${lote} de ${campo}`;
+      else if (lote) frase = `${labor} en el lote ${lote}`;
+      const det = [d.establecimiento && `establecimiento ${d.establecimiento}`, d.lote && `lote ${d.lote}`, d.cultivo && `cultivo ${d.cultivo}`, d.hectareas && `${d.hectareas} ha`, d.contratista && `contratista ${d.contratista}`].filter(Boolean).join(' · ');
+      mensaje = `🚜 Es una orden de trabajo (${labor})${det ? '. ' + det : ''}. Te propongo cargar la labor; completá lo que falte.`;
+      if (!frase) atajo = { page: 'produccion', label: 'Abrir Producción' };
+    } else if (doc.tipo === 'factura_compra') {
+      atajo = { page: 'compras', label: 'Abrir Compras' };
+      mensaje = `📄 Es una factura de compra${d.proveedor ? ` de ${d.proveedor}` : ''}${nOr(d.total) ? ` por $${nOr(d.total).toLocaleString('es-AR')}` : ''}. Te llevo a Compras — con "Importar PDF" se carga casi sola.`;
+    } else if (doc.tipo === 'liquidacion_cereal') {
+      atajo = { page: 'liquidaciones', label: 'Abrir Liquidaciones de cereal' };
+      mensaje = `🌾 Es una liquidación de cereal${d.grano ? ` (${d.grano})` : ''}. Te llevo para importarla.`;
+    } else if (doc.tipo === 'liquidacion_animales') {
+      atajo = { page: 'liquidacionesHacienda', label: 'Abrir Liquidaciones de animales' };
+      mensaje = `🐄 Es una liquidación de animales${d.categoria ? ` (${d.categoria})` : ''}. Te llevo para importarla.`;
+    } else if (doc.tipo === 'cheque') {
+      atajo = { page: 'cheques', label: 'Abrir Cheques' };
+      mensaje = `🧾 Es un cheque${d.banco ? ` del ${d.banco}` : ''}${nOr(d.importe) ? ` por $${nOr(d.importe).toLocaleString('es-AR')}` : ''}. Cargalo en Cheques.`;
+    } else {
+      mensaje = doc.resumen || 'No pude asociarlo a una acción. Cargalo a mano en la pantalla correspondiente.';
+    }
+    await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', mensaje, { status: 'ayuda', archivo: true, tipo: doc.tipo });
+    res.json({ ok: true, tipo: doc.tipo, resumen: doc.resumen || null, frase, atajo, mensaje });
   } catch (e) { next(e); }
 });
 // --- Asistente: confirmar (ejecuta la acción propuesta) ---

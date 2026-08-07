@@ -2542,6 +2542,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
+      titulo:'📎 v2.57.0 — El asistente lee archivos y fotos (y abre la cámara)',
+      desc:'En el chat del asistente hay dos botones nuevos: <b>📎 Adjuntar</b> (PDF o imagen) y <b>📷 Foto</b> (abre la cámara del celular). El bot <b>reconoce el documento</b> y propone la acción: <b>factura de compra</b> → Compras; <b>liquidación</b> de cereal/animales → su importación; <b>ticket/gasto</b> → arma el movimiento diario para confirmar; <b>orden de trabajo</b> → propone la labor y te pide lo que falte; <b>cheque</b> → Cheques. Requiere la <b>IA activada</b> (Configuración → 🤖 Asistente IA).' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
       titulo:'✏️ v2.56.0 — Editar y filtrar liquidaciones (cereal y animales)',
       desc:'Ahora podés <b>editar</b> una liquidación de <b>cereal</b> o de <b>animales</b>: se corrige lo que necesites y el sistema <b>reajusta solo</b> el stock, el SENASA y la cuenta a cobrar. Si la liquidación ya está <b>cobrada</b>, primero hay que deshacer el cobro. También sumamos <b>eliminar</b> (revierte todo) y <b>filtros</b> en las dos listas: por <b>fecha desde/hasta</b>, <b>comprador</b>, <b>grano/categoría</b> y <b>estado</b> (cobrada / pendiente).' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'07/08/2026',
@@ -7186,6 +7189,11 @@ pages.mensajes = async function(){
         <option value="hombre" ${_ttsVoz()==='hombre'?'selected':''}>👨 Hombre</option>
       </select>`:''}
       <button class="btn btn-secondary" id="${esAsistente?'chat-voz-a':'chat-voz'}" onclick="chatVoz('${esAsistente?'chat-input-a':'chat-input'}')" title="Dictar por voz">🎤</button>
+      ${esAsistente?`
+      <input type="file" id="ast-file" accept="application/pdf,image/*" class="hidden" onchange="astAnalizarArchivo(this.files&&this.files[0]); this.value='';"/>
+      <input type="file" id="ast-cam" accept="image/*" capture="environment" class="hidden" onchange="astAnalizarArchivo(this.files&&this.files[0]); this.value='';"/>
+      <button class="btn btn-secondary" title="Adjuntar factura, liquidación, orden de trabajo, ticket, cheque…" onclick="document.getElementById('ast-file').click()">📎</button>
+      <button class="btn btn-secondary" title="Sacar una foto" onclick="document.getElementById('ast-cam').click()">📷</button>`:''}
       <textarea id="${esAsistente?'chat-input-a':'chat-input'}" class="input flex-1" rows="1" placeholder="${esAsistente?'Contame qué hiciste…':(grupoActual?('Mensaje a '+esc(grupoActual.nombre)+'…'):'Escribí un mensaje al equipo…')}" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault(); ${esAsistente?'chatAsistente()':'chatEnviar()'};}"></textarea>
       <button class="btn btn-primary" onclick="${esAsistente?'chatAsistente()':'chatEnviar()'}">${esAsistente?'Cargar':'Enviar'}</button>
     </div>`;
@@ -7392,6 +7400,31 @@ async function chatAsistente(){
 }
 function asistAbrir(page){ const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; go(page); }
 function asistEjemplo(frase){ const inp=document.getElementById('chat-input-a'); if(inp){ inp.value=frase; inp.focus(); } const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; chatAsistente(); }
+// Adjuntar/foto: sube el archivo, la IA lo reconoce y propone la acción (gasto/labor → confirmación;
+// factura/liquidación/cheque → botón para abrir la pantalla).
+async function astAnalizarArchivo(file){
+  if(!file) return;
+  if(file.size > 10*1024*1024) return toast('El archivo es muy grande (máx 10 MB).','warn');
+  const box=document.getElementById('chat-confirm');
+  if(box) box.innerHTML=`<div class="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2 text-xs text-blue-800">📎 Analizando <b>${esc(file.name)}</b>… puede tardar unos segundos.</div>`;
+  try{
+    const fd=new FormData(); fd.append('archivo', file);
+    const r=await fetch(API_BASE+'/api/asistente/analizar-archivo',{ method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd });
+    const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||'Error '+r.status);
+    await chatReload(); { const c=document.getElementById('chat-msgs'); if(c) c.scrollTop=c.scrollHeight; }
+    if(j.frase){
+      const inp=document.getElementById('chat-input-a'); if(inp) inp.value=j.frase;
+      if(box) box.innerHTML='';
+      chatAsistente();   // reprocesa por el flujo normal → propuesta con confirmación
+    } else {
+      _ttsHablar(j.mensaje||'');
+      if(box){
+        const btn = (j.atajo&&j.atajo.page) ? `<button class="btn btn-primary text-xs" onclick="asistAbrir('${j.atajo.page}')">➡️ ${esc(j.atajo.label||'Abrir')}</button>` : '';
+        box.innerHTML = `<div class="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2"><div class="text-xs text-blue-900 mb-2">${esc(j.mensaje||'Documento analizado.')}</div><div class="flex justify-end">${btn}</div></div>`;
+      }
+    }
+  }catch(e){ if(box) box.innerHTML=''; toast('No pude analizar el archivo: '+e.message,'error'); }
+}
 function chatAsistCancelar(){ state._asistProp=null; state._astPendiente=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
 // Consulta multi-empresa: el usuario eligió una empresa (o "todas") → re-enviamos la pregunta.
 function astConsultaEmpresa(cid){
