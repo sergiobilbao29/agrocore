@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.54.0';
+const AGROCORE_VERSION = '2.55.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10518,9 +10518,11 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
       return { cantidad: null, precio: null, bruto };
     };
 
-    const numero = (texto.match(/N°\s*([\d]{2,5}-[\d]{4,8})/) || [])[1] || null;
+    const numero = (texto.match(/N°\s*([\d]{2,5}-[\d]{4,8})/) || [])[1]
+      || ((texto.match(/\b(\d{4,5})\s*-\s*(\d{6,8})\b/) || []).slice(1).join('-') || null);  // ej "00013 - 00000087"
     const fecha = fechaArg((texto.match(/([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})\s*Fecha/) || [])[1]) || fechaArg((texto.match(/Fecha[:\s]*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i) || [])[1]);
-    const cae = (texto.match(/CAE[^0-9]{0,8}(\d{14})/i) || [])[1] || null;
+    // CAE: en algunos templates el nro va ANTES del rótulo "CAE N°" (ej. LIVORNO), en otros después.
+    const cae = (texto.match(/(\d{14})\s*CAE\s*N/i) || [])[1] || (texto.match(/CAE\s*N[^0-9]{0,8}(\d{14})/i) || [])[1] || (texto.match(/CAE[^0-9]{0,8}(\d{14})/i) || [])[1] || null;
     const caeVto = fechaArg((texto.match(/Vto\.?\s*de\s*CAE[:\s]*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i) || [])[1]);
     const emisorCuit = (texto.match(/(\d{11})CUIT:/) || [])[1] || null;
     const emisorNombre = (texto.match(/\n([A-ZÁÉÍÓÚÑ][^\n]*?S\.?\s?R\.?\s?L\.?|[A-ZÁÉÍÓÚÑ][^\n]*?S\.?\s?A\.?)\n/) || [])[1] || null;
@@ -10528,42 +10530,78 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
     const receptorCuit = recM ? recM[1] : null;
     const receptorNombre = recM ? recM[2].trim() : null;
 
-    // Renglones
-    const secStart = texto.indexOf('$ Bruto% IVA$ IVA');
-    const secEnd = texto.indexOf('Importe Bruto:');
-    const sec = secStart >= 0 ? texto.slice(secStart, secEnd > secStart ? secEnd : undefined) : texto;
-    const re = /(\d+)Kg\.?\s*Vivo([\d.,]+)/g;
-    let m, last = 0; const renglones = [];
-    while ((m = re.exec(sec))) {
-      const chunk = sec.slice(last, m.index); last = re.lastIndex;
-      let raw = m[2];
-      const alic = num((raw.match(/(\d{1,2}\.\d{2})$/) || [])[1]) || 10.5;
-      raw = raw.replace(/(\d{1,2}\.\d{2})$/, '');
-      const p = parse3(raw);
-      const em = chunk.match(/(Bovino|Porcino|Ovino|Equino|Caprino)[\s\S]*/i);
-      const catTexto = (em ? em[0] : chunk).replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
-      // m[1] trae N° Tropa + Cabezas PEGADOS (ej "390748" = tropa 39074 + 8 cabezas).
-      // Los separamos usando los kilos: el corte cuyo peso/cabeza sea plausible.
-      let tropa = m[1] || null, cabezas = null;
-      const _kg = p.cantidad;
-      if (_kg && m[1] && m[1].length >= 2) {
-        const cands = [];
-        for (const nd of [1, 2]) {
-          if (m[1].length > nd) { const cab = parseInt(m[1].slice(-nd), 10); if (cab > 0) cands.push({ cab, tropa: m[1].slice(0, -nd), w: _kg / cab }); }
-        }
-        const enRango = cands.filter(c => c.w >= 60 && c.w <= 900); // peso/cabeza típico (bovino/ovino/porcino)
-        if (enRango[0]) { cabezas = enRango[0].cab; tropa = enRango[0].tropa; }
+    // Renglones. Hay DOS formatos de columnas en las liquidaciones:
+    //  (A) clásico: la categoría va ANTES y los importes DESPUÉS de "Kg. Vivo".
+    //  (B) invertido (ej. LIVORNO): importes ANTES, cabezas justo DESPUÉS de "Kg. Vivo",
+    //      y la categoría/raza en la línea SIGUIENTE. Se detecta por el encabezado.
+    const invertido = /\$ ?IVA[\s\S]{0,60}Cabezas[\s\S]{0,12}Categor/i.test(texto);
+    const renglones = [];
+    if (invertido) {
+      // Ej: "149,940.0010.501,428,000.005,100.00280Kg. Vivo20\nPorcina Lechones Livianos"
+      //   antes de "Kg. Vivo": $IVA %IVA $Bruto $UM(precio) Cantidad(kg)  ·  después: Cabezas  ·  línea sig.: categoría
+      const MONEY = /\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2}/g;
+      const reInv = /([\d.,]{6,})Kg\.?\s*Vivo(\d{1,4})\s*\n([^\n]+)/g;
+      let mm;
+      while ((mm = reInv.exec(texto))) {
+        const blob = mm[1];
+        const cabezas = parseInt(mm[2], 10) || null;
+        const catTexto = mm[3].replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        const toks = blob.match(MONEY) || [];
+        const vals = toks.map(num).filter(v => v != null);
+        // cantidad (kg) = entero pegado DESPUÉS del último importe
+        let kilos = null;
+        if (toks.length) { const lastTok = toks[toks.length - 1]; const idx = blob.lastIndexOf(lastTok); const tail = blob.slice(idx + lastTok.length).replace(/[^\d]/g, ''); kilos = tail ? parseInt(tail, 10) : null; }
+        const bruto = vals.length ? Math.max(...vals) : null;               // $ Bruto = el mayor
+        const precioKg = vals.length ? vals[vals.length - 1] : null;        // $ UM = el último importe
+        const alic = vals.find(v => v > 0 && v <= 30) || 10.5;              // % IVA (alicuota chica)
+        renglones.push({
+          especie: (catTexto.match(/(Bovin|Porcin|Ovin|Equin|Caprin)[oa]?/i) || [])[0] || null,
+          categoriaTexto: catTexto || null,
+          raza: (catTexto.match(/\/\s*(.+)$/) || [])[1] || null,
+          categoria: _detectCategoriaHacienda(catTexto),
+          tropa: null,
+          cabezas,
+          kilos, precioKg, bruto,
+          alicuotaIva: alic, iva: bruto ? Math.round(bruto * alic) / 100 : null,
+        });
       }
-      renglones.push({
-        especie: (chunk.match(/(Bovino|Porcino|Ovino|Equino|Caprino)/i) || [])[1] || null,
-        categoriaTexto: catTexto || null,
-        raza: (catTexto.match(/\/\s*(.+)$/) || [])[1] || null,
-        categoria: _detectCategoriaHacienda(catTexto),
-        tropa,
-        cabezas,   // autodetectado desde los kilos; el usuario lo puede corregir
-        kilos: p.cantidad, precioKg: p.precio, bruto: p.bruto,
-        alicuotaIva: alic, iva: p.bruto ? Math.round(p.bruto * alic) / 100 : null,
-      });
+    } else {
+      const secStart = texto.indexOf('$ Bruto% IVA$ IVA');
+      const secEnd = texto.indexOf('Importe Bruto:');
+      const sec = secStart >= 0 ? texto.slice(secStart, secEnd > secStart ? secEnd : undefined) : texto;
+      const re = /(\d+)Kg\.?\s*Vivo([\d.,]+)/g;
+      let m, last = 0;
+      while ((m = re.exec(sec))) {
+        const chunk = sec.slice(last, m.index); last = re.lastIndex;
+        let raw = m[2];
+        const alic = num((raw.match(/(\d{1,2}\.\d{2})$/) || [])[1]) || 10.5;
+        raw = raw.replace(/(\d{1,2}\.\d{2})$/, '');
+        const p = parse3(raw);
+        const em = chunk.match(/(Bovino|Porcino|Ovino|Equino|Caprino)[\s\S]*/i);
+        const catTexto = (em ? em[0] : chunk).replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        // m[1] trae N° Tropa + Cabezas PEGADOS (ej "390748" = tropa 39074 + 8 cabezas).
+        // Los separamos usando los kilos: el corte cuyo peso/cabeza sea plausible.
+        let tropa = m[1] || null, cabezas = null;
+        const _kg = p.cantidad;
+        if (_kg && m[1] && m[1].length >= 2) {
+          const cands = [];
+          for (const nd of [1, 2]) {
+            if (m[1].length > nd) { const cab = parseInt(m[1].slice(-nd), 10); if (cab > 0) cands.push({ cab, tropa: m[1].slice(0, -nd), w: _kg / cab }); }
+          }
+          const enRango = cands.filter(c => c.w >= 60 && c.w <= 900); // peso/cabeza típico (bovino/ovino/porcino)
+          if (enRango[0]) { cabezas = enRango[0].cab; tropa = enRango[0].tropa; }
+        }
+        renglones.push({
+          especie: (chunk.match(/(Bovino|Porcino|Ovino|Equino|Caprino)/i) || [])[1] || null,
+          categoriaTexto: catTexto || null,
+          raza: (catTexto.match(/\/\s*(.+)$/) || [])[1] || null,
+          categoria: _detectCategoriaHacienda(catTexto),
+          tropa,
+          cabezas,   // autodetectado desde los kilos; el usuario lo puede corregir
+          kilos: p.cantidad, precioKg: p.precio, bruto: p.bruto,
+          alicuotaIva: alic, iva: p.bruto ? Math.round(p.bruto * alic) / 100 : null,
+        });
+      }
     }
     const brutoTotal = renglones.reduce((a, r) => a + (r.bruto || 0), 0);
     const ivaBruto = renglones.reduce((a, r) => a + (r.iva || 0), 0);
