@@ -2541,6 +2541,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'06/08/2026',
+      titulo:'🤖 v2.47.0 — Asistente: consultas de plata, carga guiada, mejor voz y fix de fecha',
+      desc:'El asistente ahora <b>responde consultas</b> de plata: <i>"¿cuánto tengo a cobrar?"</i>, <i>"¿cuánto debo?"</i>, <i>"¿cómo estoy?"</i> (estado patrimonial aproximado), <i>"¿cuánta plata tengo en caja?"</i> y <i>"¿cuánto cereal me falta liquidar?"</i>. Además <b>pide los datos que faltan</b>: si le decís <i>"pagué la luz"</i> sin monto, te pregunta <i>"¿de cuánto fue?"</i> y con tu respuesta completa la carga. La <b>voz suena más natural</b> (elige la mejor voz en español del dispositivo, más pausada) y ya <b>no dice "dólares"</b> cuando son pesos. Y se corrigió que un gasto cargado por el bot a la noche <b>aparezca en el día correcto</b> en Movimientos diarios.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/08/2026',
       titulo:'🤖 v2.46.0 — El asistente carga gastos del día y habla en voz alta',
       desc:'El asistente ahora entiende <b>gastos del día</b> en lenguaje natural: escribí o dictá <i>"hoy fui a la panadería y gasté 5000 pesos"</i> y te arma el <b>movimiento diario</b> (monto, concepto, categoría, caja y si es de la empresa o personal) para que <b>revises y confirmes</b> antes de guardar. Entiende montos como "5 mil", "$12.500", "3000 pesos". Además, con el botón <b>🔊</b> el asistente <b>te lee sus respuestas en voz alta</b> (ideal para usarlo desde el celular en el campo). Se suma a lo que ya hacía: cargar hacienda, labores y recordatorios, consultar tus datos y explicarte cómo se hace cada cosa.' },
@@ -7043,22 +7046,42 @@ function chatVoz(inputId){
 }
 // --- Voz de salida (Text-to-Speech): el asistente lee en voz alta su respuesta ---
 function _ttsActivo(){ if (state._ttsOn===undefined){ try{ state._ttsOn = localStorage.getItem('agro_tts')!=='0'; }catch{ state._ttsOn=true; } } return state._ttsOn; }
+// Elige la voz en español más natural disponible (Google / Natural / Online priman).
+function _ttsMejorVoz(){
+  const vs = (window.speechSynthesis.getVoices && window.speechSynthesis.getVoices()) || [];
+  const es = vs.filter(v=>/^es(-|_|$)/i.test(v.lang)||/spanish|español/i.test(v.name));
+  if (!es.length) return null;
+  const score = (v)=>{ let s=0; const n=(v.name||'').toLowerCase(), l=(v.lang||'').toLowerCase();
+    if (/google/.test(n)) s+=6; if (/natural|neural|online/.test(n)) s+=5; if (/premium|enhanced/.test(n)) s+=3;
+    if (/es-ar|es_419|es-419|es-mx|es-us/.test(l)) s+=3; else if (/es-es/.test(l)) s+=1;
+    if (/microsoft/.test(n)) s+=1; if (/helena|sabina|elvira|paulina|dalia|jorge|raul|lucia|laura/.test(n)) s+=1;
+    return s; };
+  return es.sort((a,b)=>score(b)-score(a))[0];
+}
 function _ttsHablar(texto){
   try {
     if (!_ttsActivo() || !('speechSynthesis' in window) || !texto) return;
-    // Limpiar emojis, markdown y viñetas para que suene natural.
+    // Convertir símbolos de plata a palabras (si no, "$5.000" se lee "5000 dólares").
     let t = String(texto)
+      .replace(/US\$\s?/g, ' dólares ').replace(/U\$S\s?/g, ' dólares ')
+      .replace(/\$\s?/g, ' pesos ')
       .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu, ' ')
       .replace(/[*_`#>•]/g, ' ').replace(/\s{2,}/g, ' ').trim();
     if (!t) return;
-    if (t.length > 320) t = t.slice(0, 320);
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(t);
-    u.lang = 'es-AR'; u.rate = 1.02; u.pitch = 1.0;
-    const vs = window.speechSynthesis.getVoices() || [];
-    const v = vs.find(x=>/es[-_]AR/i.test(x.lang)) || vs.find(x=>/^es/i.test(x.lang));
-    if (v) u.voice = v;
-    window.speechSynthesis.speak(u);
+    if (t.length > 350) t = t.slice(0, 350);
+    const hablar = ()=>{
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(t);
+      const v = _ttsMejorVoz();
+      u.lang = (v && v.lang) || 'es-AR'; u.rate = 0.95; u.pitch = 1.05; u.volume = 1;
+      if (v) u.voice = v;
+      window.speechSynthesis.speak(u);
+    };
+    // Las voces pueden cargar async la primera vez.
+    if (!(window.speechSynthesis.getVoices()||[]).length){
+      window.speechSynthesis.onvoiceschanged = ()=>{ window.speechSynthesis.onvoiceschanged=null; hablar(); };
+      setTimeout(hablar, 250);
+    } else hablar();
   } catch {}
 }
 function chatTtsToggle(){
@@ -7162,11 +7185,14 @@ async function chatAsistente(){
   if (!txt) return;
   inp.value='';
   try {
-    const r = await api('/api/asistente',{method:'POST',body:JSON.stringify({texto:txt})});
+    const r = await api('/api/asistente',{method:'POST',body:JSON.stringify({texto:txt, pendiente: state._astPendiente||null})});
     await chatReload();
     // Voz: leer la respuesta del asistente.
     _ttsHablar(r.status==='propuesta' ? ((r.resumen||'')+'. ¿Confirmás?') : (r.mensaje||''));
     const box = document.getElementById('chat-confirm');
+    // Carga a medias: falta un dato → lo guardamos para el próximo mensaje.
+    if (r.status==='faltante'){ state._astPendiente = { accion:r.accion, faltante:r.faltante, params:r.params }; if(box) box.innerHTML=''; return; }
+    state._astPendiente = null;
     if (r.status==='propuesta' && box){
       state._asistProp = { accion:r.accion, params:r.params };
       let editor = `<div class="text-sm text-amber-900">${esc(r.resumen)}</div>`;
@@ -7254,7 +7280,7 @@ async function chatAsistente(){
 }
 function asistAbrir(page){ const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; go(page); }
 function asistEjemplo(frase){ const inp=document.getElementById('chat-input-a'); if(inp){ inp.value=frase; inp.focus(); } const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; chatAsistente(); }
-function chatAsistCancelar(){ state._asistProp=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
+function chatAsistCancelar(){ state._asistProp=null; state._astPendiente=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
 async function chatAsistConfirmar(){
   const p = state._asistProp; if (!p) return;
   // Tomar correcciones del editor (si es hacienda).
@@ -7286,10 +7312,12 @@ async function chatAsistConfirmar(){
     p.params.caja = (gv('ast-g-caja')?.value||'') || null;
     p.params.clasificacion = gv('ast-g-clasif')?.value || 'empresa';
     p.params.tipo = gv('ast-g-tipo')?.value || 'egreso';
+    // Fecha = HOY local (evita que a la noche caiga al día siguiente en UTC y no aparezca en "hoy").
+    const _n=new Date(); p.params.fecha = `${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,'0')}-${String(_n.getDate()).padStart(2,'0')}`;
     if (!p.params.monto || p.params.monto<=0) return toast('El monto debe ser mayor a 0','warn');
   }
   const b=document.getElementById('chat-confirm'); if(b) b.innerHTML='';
-  state._asistProp=null;
+  state._asistProp=null; state._astPendiente=null;
   try { const rc = await api('/api/asistente/confirmar',{method:'POST',body:JSON.stringify(p)}); await chatReload();
     delete state.cache.haciendaResumen; delete state.cache.efectivo; toast('Cargado','success'); _ttsHablar(rc?.mensaje||'Listo, lo cargué.'); }
   catch(e){ toast(e.message,'error'); await chatReload(); }

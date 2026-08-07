@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.46.0';
+const AGROCORE_VERSION = '2.47.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6947,6 +6947,60 @@ async function _consultaAsistente(texto, companyId, ctx) {
   const t = _sinAcentos(texto);
   // Si es un "cómo se hace" o un comando de carga, no es una consulta: que lo maneje otro.
   if (/\b(como|crear|cargar|carga|cargo|nueva|nuevo|agregar|dar de alta|registr|anota|recorda|acorda)\b/.test(t)) return null;
+  // --- CONSULTAS FINANCIERAS: a cobrar / a pagar / estado patrimonial / plata en caja ---
+  const _fmtAr = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+  const _factorARS = async (moneda, cot) => moneda === 'ARS' || !moneda ? 1 : (Number(cot) || (await getCotizacionARS(moneda, new Date(), companyId)) || 0);
+  const _saldoCtaCte = async (contactoTipo) => {
+    const rows = await prisma.ctaCte.findMany({ where: { companyId, contactoTipo }, select: { debe: true, haber: true, moneda: true, cotizacion: true } });
+    let ars = 0; const otras = {};
+    for (const r of rows) {
+      const neto = (Number(r.debe || 0) - Number(r.haber || 0)) * (contactoTipo === 'proveedor' ? -1 : 1);
+      const mon = r.moneda || 'ARS';
+      if (mon === 'ARS') ars += neto;
+      else { const f = await _factorARS(mon, r.cotizacion); if (f) ars += neto * f; otras[mon] = (otras[mon] || 0) + neto; }
+    }
+    return { ars, otras };
+  };
+  const _plataCaja = async () => {
+    const ef = await prisma.efectivo.findMany({ where: { companyId }, select: { tipo: true, monto: true } });
+    return ef.reduce((a, e) => a + (e.tipo === 'ingreso' ? 1 : e.tipo === 'egreso' ? -1 : 0) * Number(e.monto || 0), 0);
+  };
+  if (/\b(a cobrar|me deben|por cobrar|cuentas a cobrar|cta cte cliente)\b/.test(t)) {
+    const s = await _saldoCtaCte('cliente');
+    const ex = Object.entries(s.otras).filter(([, n]) => Math.abs(n) > 0.01).map(([m, n]) => `${Math.round(n).toLocaleString('es-AR')} ${m}`);
+    return `💰 Te deben (a cobrar): ${_fmtAr(s.ars)}${ex.length ? ` · incluye ${ex.join(', ')}` : ''}. Lo ves en Cuentas a cobrar.`;
+  }
+  if (/\b(a pagar|debo|por pagar|cuentas a pagar|le debo|les debo)\b/.test(t)) {
+    const s = await _saldoCtaCte('proveedor');
+    const ex = Object.entries(s.otras).filter(([, n]) => Math.abs(n) > 0.01).map(([m, n]) => `${Math.round(n).toLocaleString('es-AR')} ${m}`);
+    return `📤 Debés (a pagar): ${_fmtAr(s.ars)}${ex.length ? ` · incluye ${ex.join(', ')}` : ''}. Lo ves en Cuentas a pagar.`;
+  }
+  if (/\b(estado patrimonial|patrimonio|como estoy|como ando|situacion|resumen financiero|como voy)\b/.test(t)) {
+    const [cob, pag, caja] = [await _saldoCtaCte('cliente'), await _saldoCtaCte('proveedor'), await _plataCaja()];
+    const neto = caja + cob.ars - pag.ars;
+    return `📊 Estado (aprox., en pesos):\n• Plata en caja: ${_fmtAr(caja)}\n• A cobrar: ${_fmtAr(cob.ars)}\n• A pagar: ${_fmtAr(pag.ars)}\n• Neto estimado: ${_fmtAr(neto)}\n(No incluye bancos ni el valor del stock/hacienda. Para el detalle: Dashboard y Estado de situación.)`;
+  }
+  if (/\b(plata en caja|efectivo|cuanta plata|caja|en la caja)\b/.test(t) && !/cobrar|pagar/.test(t)) {
+    const caja = await _plataCaja();
+    return `💵 Plata en caja (efectivo): ${_fmtAr(caja)}. Lo ves en Control de efectivo.`;
+  }
+  // --- CEREAL: a liquidar / comprometido a entregar ---
+  if (/\b(cereal|grano|granos|soja|maiz|maíz|trigo|sorgo|girasol)\b/.test(t) && /\b(comprometid|entregar|liquidar|a liquidar|posicion|posición|falta)\b/.test(t)) {
+    const [viajes, liqs, prods] = await Promise.all([
+      prisma.viaje.findMany({ where: { companyId, destinoTipo: { in: ['cerealera', 'venta_directa'] } }, select: { producto: true, kgDescarga: true, kgNetoDest: true, kgNeto: true, cantidad: true } }),
+      prisma.liquidacionCereal.findMany({ where: { companyId }, select: { productoId: true, kilosNetos: true } }),
+      prisma.producto.findMany({ where: { companyId }, select: { id: true, nombre: true } }),
+    ]);
+    const pn = {}; prods.forEach(p => pn[p.id] = p.nombre);
+    const nrm = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const acc = {};
+    viajes.forEach(v => { const k = nrm(v.producto); if (!k) return; (acc[k] = acc[k] || { nombre: v.producto, ent: 0, liq: 0 }).ent += Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0); });
+    liqs.forEach(l => { const k = nrm(pn[l.productoId]); if (!k) return; (acc[k] = acc[k] || { nombre: pn[l.productoId], ent: 0, liq: 0 }).liq += Number(l.kilosNetos || 0); });
+    const items = Object.values(acc).map(r => ({ ...r, aliq: r.ent - r.liq })).filter(r => Math.abs(r.aliq) > 1);
+    if (!items.length) return 'No tenés grano pendiente de liquidar según los viajes y liquidaciones cargados.';
+    const total = items.reduce((a, r) => a + r.aliq, 0);
+    return `🌾 A liquidar (entregado sin liquidar): ${items.map(r => `${Math.round(r.aliq).toLocaleString('es-AR')} kg de ${r.nombre}`).join(' · ')}. Total: ${Math.round(total).toLocaleString('es-AR')} kg. Detalle en Posición de granos.`;
+  }
   const esConsulta = /\b(cuanto|cuanta|cuantos|cuantas|stock|mostrame|mostra|listame|lista|decime|hay|tengo|ver|consulta|cuales|queda|quedan|existencia|rodeo)\b/.test(t) || /\?/.test(t);
   if (!esConsulta) return null;
   let campo = ctx.campos.find(c => c.nombre && t.includes(_sinAcentos(c.nombre)));
@@ -7082,15 +7136,19 @@ function _interpretarMensaje(texto, ctx) {
     const esIngreso = /\b(cobre|cobramos|cobrar|ingrese|ingresamos|entro|entraron|me pagaron|recibi|recibimos)\b/.test(t);
     if ((esGasto || esIngreso) && !/\?/.test(texto)) {
       const monto = _parseMontoPesos(texto);
-      if (monto && monto > 0) {
-        const concepto = _parseConceptoGasto(texto);
-        const categoria = _matchCategoriaGasto(texto, ctx);
-        const clasif = /\b(personal|propio|mio|mia|dueno|casa|familia)\b/.test(t) ? 'propio' : 'empresa';
-        const tipoMov = esIngreso && !esGasto ? 'ingreso' : 'egreso';
-        const signo = tipoMov === 'ingreso' ? '💰 Ingreso' : '💸 Gasto';
-        return { accion: 'gasto', params: { tipo: tipoMov, monto, concepto, categoria: categoria || null, clasificacion: clasif, metodo: 'efectivo', caja: null },
-          resumen: `${signo} diario: $${monto.toLocaleString('es-AR')} · ${concepto}${categoria ? ` · ${categoria}` : ''}${clasif === 'propio' ? ' · 👤 personal' : ''}` };
+      const concepto = _parseConceptoGasto(texto);
+      const categoria = _matchCategoriaGasto(texto, ctx);
+      const clasif = /\b(personal|propio|mio|mia|dueno|casa|familia)\b/.test(t) ? 'propio' : 'empresa';
+      const tipoMov = esIngreso && !esGasto ? 'ingreso' : 'egreso';
+      const base = { tipo: tipoMov, monto: monto || null, concepto, categoria: categoria || null, clasificacion: clasif, metodo: 'efectivo', caja: null };
+      if (!monto || monto <= 0) {
+        // Falta el monto: pedimos ese dato (conversación de varios turnos).
+        return { accion: 'gasto', faltante: 'monto', params: base,
+          pregunta: `Dale 👍. ¿De cuánto fue ${tipoMov === 'ingreso' ? 'el ingreso' : 'el gasto'}? Decime el monto en pesos (ej: 5000).` };
       }
+      const signo = tipoMov === 'ingreso' ? '💰 Ingreso' : '💸 Gasto';
+      return { accion: 'gasto', params: base,
+        resumen: `${signo} diario: $${monto.toLocaleString('es-AR')} · ${concepto}${categoria ? ` · ${categoria}` : ''}${clasif === 'propio' ? ' · 👤 personal' : ''}` };
     }
   }
   // Hacienda: nacimiento / muerte / compra
@@ -7151,6 +7209,29 @@ function _interpretarMensaje(texto, ctx) {
       resumen: `🚜 Labor de ${tlab} en lote ${lote.nombre}${camp.cultivo ? ` (${camp.cultivo}${camp.ciclo ? ' ' + camp.ciclo : ''})` : ''}${insumo ? ` · ${insumo}` : ''}${resp ? ` · ${resp}` : ''}` };
   }
   return { error: 'Uh, esa no la entendí del todo 🤔. Pero tranqui, te ayudo igual.\n\nContame qué hiciste — ej: "nacieron 5 terneros en Montenegro", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8".\nO preguntame cómo se hace algo — ej: "¿cómo cargo un cheque de tercero?".\n\n💡 Escribí "ayuda" y te muestro todo lo que puedo hacer.' };
+}
+// Continúa una carga que quedó a medias (multi-turno): toma el dato que faltaba del
+// último mensaje y completa la acción, o vuelve a pedirlo. Devuelve {accion,params,resumen}
+// (listo para confirmar), {accion,faltante,pregunta,params} (falta otro dato) o null.
+function _completarPendiente(texto, pendiente, ctx) {
+  if (!pendiente || !pendiente.accion) return null;
+  // "cancelar / dejá / no" → cancelar la carga pendiente.
+  if (/\b(cancela|cancelar|deja|dejalo|no importa|olvidalo|nada)\b/.test(_sinAcentos(texto))) {
+    return { cancelado: true, mensaje: 'Listo, cancelé eso. ¿Querés cargar otra cosa?' };
+  }
+  if (pendiente.accion === 'gasto') {
+    const p = { ...(pendiente.params || {}) };
+    if (pendiente.faltante === 'monto') {
+      const monto = _parseMontoPesos(texto);
+      if (!monto || monto <= 0) return { accion: 'gasto', faltante: 'monto', params: p, pregunta: 'No te agarré el monto 🤔. Decime solo el número en pesos, ej: 5000.' };
+      p.monto = monto;
+      const c2 = _parseConceptoGasto(texto);
+      if ((!p.concepto || p.concepto === 'Gasto vario') && c2 && c2 !== 'Gasto vario') p.concepto = c2;
+      const signo = p.tipo === 'ingreso' ? '💰 Ingreso' : '💸 Gasto';
+      return { accion: 'gasto', params: p, resumen: `${signo} diario: $${monto.toLocaleString('es-AR')} · ${p.concepto || ''}${p.categoria ? ` · ${p.categoria}` : ''}` };
+    }
+  }
+  return null;
 }
 
 // ============================================================
@@ -7660,6 +7741,25 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     await _logMensaje(req.companyId, 'asistente', req.user.id, 'user', _nombreUser(req.user), texto);
     const ctx = await _ctxAsistente(req.companyId);
     const _tn = _sinAcentos(texto);
+    // 0-bis) Si hay una carga a medias (multi-turno), primero intentamos completarla.
+    const pendiente = req.body?.pendiente || null;
+    let readyPend = null;
+    if (pendiente) {
+      const rp = _completarPendiente(texto, pendiente, ctx);
+      if (rp) {
+        if (rp.cancelado) {
+          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', rp.mensaje, { status: 'ayuda' });
+          return res.json({ ok: true, status: 'ayuda', mensaje: rp.mensaje, data: m });
+        }
+        if (rp.faltante) {
+          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', rp.pregunta, { status: 'faltante', accion: rp.accion, faltante: rp.faltante, params: rp.params });
+          return res.json({ ok: true, status: 'faltante', accion: rp.accion, faltante: rp.faltante, params: rp.params, mensaje: rp.pregunta, data: m });
+        }
+        readyPend = rp; // acción completa → sigue al armado de la propuesta
+      }
+    }
+    if (!readyPend) {
+    const _tnUnused = 0;
     // 0) Charla básica (saludos, gracias, chau) y pedido de ayuda general.
     const _sal = _saludoRespuesta(texto);
     if (_sal) {
@@ -7688,7 +7788,13 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, ejemplo: e.ejemplo || null, titulo: e.titulo, data: m });
       }
     }
-    const r = _interpretarMensaje(texto, ctx);
+    } // fin if(!readyPend)
+    const r = readyPend || _interpretarMensaje(texto, ctx);
+    // Falta un dato para completar la carga (ej: el monto del gasto) → lo pedimos.
+    if (r.faltante) {
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.pregunta, { status: 'faltante', accion: r.accion, faltante: r.faltante, params: r.params });
+      return res.json({ ok: true, status: 'faltante', accion: r.accion, faltante: r.faltante, params: r.params, mensaje: r.pregunta, data: m });
+    }
     if (r.error) {
       // 2) Fallback: si no entendí el comando, intento ofrecer ayuda del manual.
       const e = _buscarAyuda(texto);
@@ -7790,7 +7896,7 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
         `Cargado por ${quien} (asistente)`,
       ].filter(Boolean).join(' · ');
       await prisma.efectivo.create({ data: {
-        companyId: req.companyId, fecha: new Date(), tipo: tipoMov,
+        companyId: req.companyId, fecha: params.fecha ? new Date(params.fecha) : new Date(), tipo: tipoMov,
         concepto: params.concepto || (tipoMov === 'ingreso' ? 'Ingreso' : 'Gasto vario'),
         monto, caja: params.caja || null, clasificacion: params.clasificacion || 'empresa',
         observaciones: detalleObs || null,
