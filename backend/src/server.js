@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.53.0';
+const AGROCORE_VERSION = '2.54.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1349,7 +1349,7 @@ async function _iaNormalizar(texto, ctx, ia) {
       'Sos un normalizador de AgroCore (gestión agropecuaria argentina). Reescribí el mensaje del usuario a UNA sola frase corta y clara en español rioplatense, usando EXACTAMENTE uno de estos moldes:',
       '- Gasto: "gasté <monto> en <concepto>"  · Ingreso: "ingresó <monto> por <concepto>"',
       '- Pago: "pagá <monto> a <proveedor>"  · Cobro: "cobrale <monto> a <cliente>"',
-      '- Hacienda: "nacieron 5 terneros en <campo>" / "murieron 2 vacas en <campo>" / "compré 10 novillos en <campo>"',
+      '- Animales: "nacieron 5 terneros en <campo>" / "murieron 2 vacas en <campo>" / "compré 10 novillos en <campo>"',
       '- Labor: "pulverización en el lote <lote> de <campo>" (o cosecha/siembra/fertilización/laboreo). Si hay un insumo aplicado, agregalo al final así: "... con 120 litros de glifosato".',
       '- Recordatorio: "recordar <texto> el DD/MM"',
       '- Consultas: "cuánto stock queda de <producto>", "cuánto tengo a cobrar", "cuánto debo", "cómo estoy", "cuánta plata tengo en caja", "cuánto cereal me falta liquidar", "qué campos tengo", "qué lotes tengo", "qué campañas tengo", "mostrame los animales".',
@@ -2576,7 +2576,7 @@ app.post('/api/categorias-articulo/:id/preparar-borrado', requireCompany, requir
 function _familiaMadreDeCategoria(cat) {
   const c = (cat || '').toLowerCase().trim();
   if (['granos', 'grano', 'cereales', 'cereal'].includes(c)) return 'Cereales / Granos';
-  if (c === 'hacienda') return 'Hacienda';
+  if (c === 'hacienda') return 'Animales';
   if (['servicios', 'servicio', 'labor', 'labores', 'flete', 'fletes'].includes(c)) return 'Servicios y Labores';
   if (['insumos', 'insumo', 'combustibles', 'combustible'].includes(c)) return 'Insumos';
   return 'Otros';
@@ -2596,7 +2596,7 @@ app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('
     const yaHay = await prisma.categoriaArticulo.count({ where: { companyId: req.companyId } });
     if (yaHay > 0 && !force) return res.json({ ok: true, sembrado: false, total: yaHay });
 
-    // Las FAMILIAS de Insumos y Hacienda salen de los catálogos reales de la empresa
+    // Las FAMILIAS de Insumos y Animales salen de los catálogos reales de la empresa
     // (Tipos de insumo y Especies), así el árbol refleja su clasificación existente.
     const cats = await prisma.catalogo.findMany({ where: { companyId: req.companyId, activo: true } });
     const uniqOrd = (arr) => [...new Set(arr.map(x => (x || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
@@ -2611,7 +2611,7 @@ app.post('/api/categorias-articulo/sembrar', requireCompany, requirePermission('
     const arbol = [
       { nombre: 'Insumos', icono: '🌱', hijos: insumosHijos },
       { nombre: 'Cereales / Granos', icono: '🌾', hijos: ['Fina', 'Gruesa'] },
-      { nombre: 'Hacienda', icono: '🐄', hijos: haciendaHijos },
+      { nombre: 'Animales', icono: '🐄', hijos: haciendaHijos },
       { nombre: 'Servicios y Labores', icono: '🚜', hijos: ['De Campaña', 'De Animales', 'Externos'] },
       { nombre: 'Otros', icono: '📦', hijos: [] },
     ];
@@ -2806,7 +2806,7 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       _sum: { cantidad: true },
     });
     // Productos de hacienda: su existencia NO sale de Movimiento sino que se
-    // nutre de los movimientos de hacienda (cabezas reales + kg estimados).
+    // nutre de los movimientos de animales (cabezas reales + kg estimados).
     // Se vincula por el mapeo producto.categoriaHacienda (o el nombre si no hay).
     let hacByCat = {};
     if (productos.some(p => (p.categoria || '').toLowerCase() === 'hacienda')) {
@@ -3305,7 +3305,7 @@ async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, moti
   if (!items.length) return 0;
   const ref = `${refPrefix}-${factura.id}`;
   const compNum = `${factura.tipo} ${String(factura.puntoVenta).padStart(4,'0')}-${String(factura.numero).padStart(8,'0')}`;
-  // Detectar productos de HACIENDA: mueven el stock de hacienda (cabezas + kg),
+  // Detectar productos de HACIENDA: mueven el stock de animales (cabezas + kg),
   // no el stock de productos.
   const prods = await tx.producto.findMany({ where: { companyId, id: { in: items.map(i => i.productoId) } }, select: { id: true, nombre: true, categoria: true, categoriaHacienda: true } });
   const prodById = Object.fromEntries(prods.map(p => [p.id, p]));
@@ -3322,7 +3322,7 @@ async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, moti
       observaciones: `Generado automaticamente por ${motivo} ${compNum}`, userId: userId || null,
     })) });
   }
-  // 2) Stock de hacienda (la "cantidad" de la línea son los kg; las cabezas vienen aparte)
+  // 2) Stock de animales (la "cantidad" de la línea son los kg; las cabezas vienen aparte)
   for (const it of itemsHac) {
     const tipoMov = (tipo === 'egreso') ? 'venta' : 'compra';
     const kg = Number(it.cantidad) || null;
@@ -3342,7 +3342,7 @@ async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, moti
 
 async function borrarMovimientosDeFactura(tx, { companyId, refPrefix, facturaId }) {
   const ref = `${refPrefix}-${facturaId}`;
-  // Revertir también los movimientos de hacienda generados por la factura.
+  // Revertir también los movimientos de animales generados por la factura.
   await tx.haciendaMovimiento.deleteMany({ where: { companyId, facturaRef: ref } });
   return tx.movimiento.deleteMany({ where: { companyId, referencia: ref } });
 }
@@ -3440,7 +3440,7 @@ const itemFacSchema = z.object({
   productoCategoria: z.string().nullable().optional(),
   descripcion: z.string().min(1), cantidad: z.number(),
   precioUnit: z.number(), alicuotaIva: z.number().optional(),
-  // Hacienda: campo del que sale/entra + cabezas (la "cantidad" de la línea son kg).
+  // Animales: campo del que sale/entra + cabezas (la "cantidad" de la línea son kg).
   campoId: z.string().nullable().optional(),
   cabezas: z.number().nullable().optional(),
 });
@@ -5940,7 +5940,7 @@ async function _ingresoVentaHacienda(tx, req, d, movId, total) {
   return out;
 }
 
-// Lista de movimientos de hacienda (puede filtrar por campo y/o categoría).
+// Lista de movimientos de animales (puede filtrar por campo y/o categoría).
 app.get('/api/hacienda-movimientos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     const where = { companyId: req.companyId };
@@ -6089,7 +6089,7 @@ app.put('/api/hacienda-movimientos/:id/rendimiento', requireCompany, requirePerm
   } catch (e) { next(e); }
 });
 
-// Edición general de un movimiento de hacienda (campos seguros). Para movimientos
+// Edición general de un movimiento de animales (campos seguros). Para movimientos
 // "compuestos" (traslado, cambio de categoría) o ventas con cobro/factura, se pide
 // borrar y volver a cargar para no descuadrar dinero/contrapartes.
 app.put('/api/hacienda-movimientos/:id', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
@@ -6252,7 +6252,7 @@ async function mergeCatalogoAnimalesEnConfig(companyId) {
     } catch (e) { /* carrera / único: ignorar */ }
   }
 }
-// Asegura que cada categoría de hacienda tenga un Producto del catálogo
+// Asegura que cada categoría de animales tenga un Producto del catálogo
 // (categoria='hacienda', unidad='cabezas') para unificarse en Stock/Movimientos.
 // Si ya hay un producto con el mismo nombre pero sin vincular, lo vincula.
 async function sincronizarProductosHacienda(companyId) {
@@ -7233,7 +7233,7 @@ async function _consultaAsistente(texto, companyId, ctx, req) {
   if (/\b(animal|animales|hacienda|vacas?|novillos?|terneros?|vaquillon|toros?|cabezas?|rodeo)\b/.test(t)) {
     const where = { companyId }; if (campo) where.campoId = campo.id;
     const hmovs = await prisma.haciendaMovimiento.findMany({ where, select: { tipo: true, cantidad: true, categoria: true, categoriaDestino: true } });
-    if (!hmovs.length) return `No tengo movimientos de hacienda cargados${campo ? ` en ${campo.nombre}` : ''}.`;
+    if (!hmovs.length) return `No tengo movimientos de animales cargados${campo ? ` en ${campo.nombre}` : ''}.`;
     const byCat = {};
     hmovs.forEach(mv => { if (mv.tipo === 'cambio_categoria') { byCat[mv.categoria] = (byCat[mv.categoria] || 0) - Number(mv.cantidad || 0); const d = mv.categoriaDestino || mv.categoria; byCat[d] = (byCat[d] || 0) + Number(mv.cantidad || 0); return; } const s = ['nacimiento', 'compra', 'traslado_in', 'ajuste'].includes(mv.tipo) ? 1 : -1; byCat[mv.categoria] = (byCat[mv.categoria] || 0) + s * Number(mv.cantidad || 0); });
     const items = Object.entries(byCat).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
@@ -7359,7 +7359,7 @@ function _interpretarMensaje(texto, ctx) {
         resumen: `${signo} diario: $${monto.toLocaleString('es-AR')} · ${concepto}${categoria ? ` · ${categoria}` : ''}${clasif === 'propio' ? ' · 👤 personal' : ''}` };
     }
   }
-  // Hacienda: nacimiento / muerte / compra
+  // Animales: nacimiento / muerte / compra
   let tipo = null;
   if (/\bnaci|\bpari|\bnacieron|\bnacio|\bparieron|\bpario/.test(t)) tipo = 'nacimiento';
   else if (/\bmuri|\bmuert|\bmurio|\bmurieron|\bperdi|\bperdieron/.test(t)) tipo = 'muerte';
@@ -7368,7 +7368,7 @@ function _interpretarMensaje(texto, ctx) {
     const cat = ctx.categorias.find(c => t.includes(_sinAcentos(c)))
       || ctx.categorias.find(c => t.includes(_sinAcentos(c).replace(/a$|o$/, '')));
     if (!numero) return { error: 'No entendí la cantidad. Ej: "nacieron 5 terneros en Montenegro".' };
-    if (!cat) return { error: `No reconocí la categoría de animal. Las que tenés: ${ctx.categorias.join(', ') || '(cargá categorías de hacienda primero)'}.` };
+    if (!cat) return { error: `No reconocí la categoría de animal. Las que tenés: ${ctx.categorias.join(', ') || '(cargá categorías de animales primero)'}.` };
     if (!campo) return { error: 'No reconocí el campo. Decí en qué campo, ej: "en Montenegro".' };
     const lbl = tipo === 'nacimiento' ? 'Nacimiento' : tipo === 'muerte' ? 'Muerte' : 'Compra';
     const params = { campoId: campo.id, campoNombre: campo.nombre, categoria: cat, tipo, cantidad: numero };
@@ -7524,22 +7524,22 @@ const _AYUDA_KB = [
       'Si el cliente tiene saldo a favor, el sistema te lo ofrece para aplicar.',
       'Se registra el recibo y baja la deuda.'],
     atajo:{ page:'ctasCobrar', label:'Abrir Cuentas a cobrar' } },
-  { id:'hacienda', terms:['hacienda','nacimiento','ternero','ternero nacido','murio','muerte de animal','compra de hacienda','movimiento de hacienda','cambio de categoria','cargar animales','stock ganadero','vacas','novillos'],
-    titulo:'Cargar un movimiento de hacienda',
+  { id:'hacienda', terms:['hacienda','nacimiento','ternero','ternero nacido','murio','muerte de animal','compra de hacienda','movimiento de animales','cambio de categoria','cargar animales','stock ganadero','vacas','novillos'],
+    titulo:'Cargar un movimiento de animales',
     pasos:[
-      'Entrá a Hacienda, elegí el campo y tocá "Nuevo movimiento".',
+      'Entrá a Animales, elegí el campo y tocá "Nuevo movimiento".',
       'Elegí el tipo (nacimiento, muerte, compra, venta, cambio de categoría) y la categoría del animal.',
       'Cargá la cantidad de cabezas (y kg/precio si es compra).',
       'Guardá: actualiza el stock ganadero real y el de SENASA.'],
-    atajo:{ page:'hacienda', label:'Abrir Hacienda' },
+    atajo:{ page:'hacienda', label:'Abrir Animales' },
     ejemplo:'nacieron 5 terneros en Montenegro' },
   { id:'liq_hacienda', terms:['liquidacion de hacienda','liquidacion hacienda','liquidacion del frigorifico','venta de hacienda','remate','consignatario','liquidacion de venta de animales'],
-    titulo:'Cargar una liquidación de hacienda',
+    titulo:'Cargar una liquidación de animales',
     pasos:[
-      'Entrá a Liquidaciones de hacienda → "Importar PDF" (del frigorífico/consignatario) o cargala a mano.',
+      'Entrá a Liquidaciones de animales → "Importar PDF" (del frigorífico/consignatario) o cargala a mano.',
       'El sistema lee los renglones y detecta la categoría de cada animal.',
       'Confirmá: descuenta el stock real y el de SENASA y genera la cuenta a cobrar.'],
-    atajo:{ page:'liquidacionesHacienda', label:'Abrir Liquidaciones de hacienda' } },
+    atajo:{ page:'liquidacionesHacienda', label:'Abrir Liquidaciones de animales' } },
   { id:'liq_cereal', terms:['liquidacion de cereal','liquidacion de granos','liquidacion cerealera','venta de granos','1116','entrega de cereal'],
     titulo:'Liquidación de cereal',
     pasos:[
@@ -7708,7 +7708,7 @@ function _esPedidoAyudaGeneral(t){
 }
 // Menú de capacidades del asistente.
 function _menuAyuda(){
-  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Hacienda → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?"\n• "¿cómo hago una compra o una venta?"\n• "¿cómo importo mis comprobantes?"\n• "¿cómo cargo una liquidación de hacienda?"\n\nEscribí tu consulta y arrancamos 💪';
+  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?"\n• "¿cómo hago una compra o una venta?"\n• "¿cómo importo mis comprobantes?"\n• "¿cómo cargo una liquidación de animales?"\n\nEscribí tu consulta y arrancamos 💪';
 }
 // Arma el texto de la respuesta de ayuda (paso a paso).
 function _textoAyuda(e){
@@ -8150,7 +8150,7 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
     let resumen = '';
     const quien = _nombreUser(req.user);
     if (accion === 'hacienda_mov') {
-      if (!_permOk(req, 'stock:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para cargar movimientos de hacienda.' });
+      if (!_permOk(req, 'stock:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para cargar movimientos de animales.' });
       const campo = await prisma.campo.findFirst({ where: { id: params.campoId, companyId: req.companyId } });
       if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
       const kilos = params.kilos != null ? Number(params.kilos) : null;
@@ -10391,7 +10391,7 @@ app.get('/api/admin/stock/duplicados', requireCompany, requirePermission('stock:
   } catch (e) { next(e); }
 });
 // Elimina productos de HACIENDA cuya categoria de animal ya no existe en el catalogo
-// de Hacienda (catHaciendaConfig). Ej: quedo solo Bovino y sobran Cabra, Chivo, etc.
+// de Animales (catHaciendaConfig). Ej: quedo solo Bovino y sobran Cabra, Chivo, etc.
 // Si el producto tiene movimientos/referencias se DESACTIVA (no se pierde historial);
 // si no tiene nada, se BORRA. En preview (apply=false) solo cuenta los que se borrarian.
 async function _limpiarHaciendaHuerfana(companyId, apply) {
@@ -10403,7 +10403,7 @@ async function _limpiarHaciendaHuerfana(companyId, apply) {
   let del = 0, off = 0;
   for (const p of prods) {
     const key = nrm(p.categoriaHacienda || (p.nombre || '').split(' - ').pop());
-    if (vivos.has(key)) continue; // sigue en el catalogo de Hacienda -> se queda
+    if (vivos.has(key)) continue; // sigue en el catalogo de Animales -> se queda
     if (!apply) { del++; continue; }
     const [nm, ia, fi, fci] = await Promise.all([
       prisma.movimiento.count({ where: { productoId: p.id } }),
@@ -11865,7 +11865,7 @@ const PLANTILLAS_CLIENTE = {
     ],
   },
   'stock-hacienda': {
-    descripcion: 'Stock de hacienda por campo/Renspa. Una hoja por establecimiento.',
+    descripcion: 'Stock de animales por campo/Renspa. Una hoja por establecimiento.',
     hojas: [
       { nombre: 'Renspa 12345 (ejemplo)', headers: ['Campo', 'Renspa', 'Especie', 'Categoria', 'Stock real (cabezas)', 'Observaciones'],
         ejemplo: [['La Esperanza', '12.345.6.78901/01', 'Bovino', 'Vaca', 250, ''], ['La Esperanza', '12.345.6.78901/01', 'Bovino', 'Ternero', 120, '']] },
@@ -11879,7 +11879,7 @@ const PLANTILLAS_CLIENTE = {
     ],
   },
   'pyme-ventas': {
-    descripcion: 'Ventas de hacienda menor. Una hoja por categoria.',
+    descripcion: 'Ventas de animales menor. Una hoja por categoria.',
     hojas: [
       { nombre: 'Lechon', headers: ['Fecha', 'Cantidad', 'Cliente', 'Precio unitario', 'Total', 'Pago (pago/no pago)', 'Observaciones'],
         ejemplo: [['01/03/2026', 5, 'Carniceria del Centro', 60000, 300000, 'pago', '']] },

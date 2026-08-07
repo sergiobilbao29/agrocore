@@ -983,7 +983,7 @@ const MODULES = [
   { id:'clientes',      label:'Clientes',             icon:'👥', perm:'contactos:read',  section:'Ventas' },
   { id:'facturacion',   label:'Facturación',          icon:'🧮', perm:'finanzas:read',   section:'Ventas' },
   { id:'liquidaciones', label:'Liquidaciones cereal', icon:'🧾', perm:'ventas:read',     section:'Ventas' },
-  { id:'liquidacionesHacienda', label:'Liquidaciones hacienda', icon:'🐄', perm:'ventas:read', section:'Ventas' },
+  { id:'liquidacionesHacienda', label:'Liquidaciones animales', icon:'🐄', perm:'ventas:read', section:'Ventas' },
   { id:'ctasCobrar',    label:'Cuentas a cobrar',     icon:'💰', perm:'finanzas:read',   section:'Ventas' },
 
   // ===== COMPRAS — todo lo que sale =====
@@ -1016,7 +1016,7 @@ const MODULES = [
   { id:'movimientos',   label:'Movimientos',          icon:'🔁', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'cerealeras',    label:'Cerealeras / Depósitos',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
-  { id:'hacienda',      label:'Hacienda',             icon:'🐄', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'hacienda',      label:'Animales',             icon:'🐄', perm:'stock:read',      section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA =====
   { id:'viajes',        label:'Viajes y fletes',      icon:'🚚', perm:'produccion:read', section:'Logística' },
@@ -2510,7 +2510,7 @@ pages.inicio = async function() {
       stockOK = true;
       for (const p of (s.data || [])) {
         if (prodCategoriaRaiz(p) === 'Cereales / Granos' || /cereal|grano/i.test(p.categoria)) stockG += Number(p.existencia || 0);
-        if (prodCategoriaRaiz(p) === 'Hacienda' || /hacienda|animal/i.test(p.categoria)) stockH += Number(p.existencia || 0);
+        if (prodCategoriaRaiz(p) === 'Animales' || /hacienda|animal/i.test(p.categoria)) stockH += Number(p.existencia || 0);
       }
     } catch {}
     try {
@@ -2541,6 +2541,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'07/08/2026',
+      titulo:'🐄 v2.54.0 — "Hacienda" ahora se llama "Animales"',
+      desc:'Cambiamos el nombre en toda la interfaz: donde antes decía <b>Hacienda</b> ahora dice <b>Animales</b> (menú, títulos, catálogos, liquidaciones, movimientos, importadores, etc.). Es solo un cambio de nombre a la vista — los datos, movimientos y stock de animales siguen igual.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
       titulo:'🏢 v2.53.0 — Bot general multi-empresa + viajes desde varios depósitos',
       desc:'El <b>asistente</b> ahora es <b>general</b>: ves el mismo chat desde cualquier empresa, y al cargar un movimiento te <b>pregunta en qué empresa</b> guardarlo (en pago/cobro la toma del contacto). Las <b>consultas</b> (a cobrar, plata en caja, etc.) te dejan elegir una empresa o <b>todas</b> juntas. En el chat, si estás leyendo mensajes viejos ya <b>no salta</b> al último. Y en <b>Viajes</b>, un viaje con CP puede <b>sacar cereal de varios depósitos</b>, indicando cuántos Kg de cada uno (la suma debe dar los Kg del viaje).' },
@@ -2573,7 +2576,7 @@ pages.inicio = async function() {
       desc:'Nueva pantalla <b>Stock → Posición de granos</b> para dejar de llevar el Excel de entregas y liquidaciones. Toma automáticamente <b>cada viaje con Carta de Porte</b> cuyo destino sea una <b>cerealera</b> (grano guardado) o <b>venta directa</b>, y te deja <b>vincular o importar la liquidación del PDF</b> — puede ser en varias partes (ideal para AGD, que liquida una parte, la secada y el IVA por separado). El tablero muestra por especie: <b>Entregado, Liquidado y A liquidar</b>, con el <b>precio del día</b> para valorizar lo pendiente. El stock lo sigue moviendo el viaje; la liquidación fija el precio y genera la cuenta a cobrar. Tiene <b>filtros</b> (fecha desde/hasta, cerealera/destino, especie y estado) que resumen el tablero y la lista. Además, en <b>Viajes</b> el campo <b>Producto / Carga</b> pasó a ser un <b>desplegable de granos del catálogo</b> (Cereales / Granos) en vez de texto libre, para que la especie coincida siempre con la liquidación.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🗑️ v2.44.0 — Stock limpia los animales que ya no están en el Catálogo',
-      desc:'Si sacaste una especie del Catálogo de Hacienda (por ej. quedó solo Bovino), en Stock seguían apareciendo los animales viejos (Cabra, Chivo, Cordero, etc.). Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>elimina los artículos de Hacienda que ya no están en el Catálogo</b>. Los que tengan movimientos se <b>desactivan</b> (no se pierde el historial) y los que no tienen nada se borran. Además, Stock ya no los muestra aunque tengan familia asignada.' },
+      desc:'Si sacaste una especie del Catálogo de Animales (por ej. quedó solo Bovino), en Stock seguían apareciendo los animales viejos (Cabra, Chivo, Cordero, etc.). Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>elimina los artículos de Animales que ya no están en el Catálogo</b>. Los que tengan movimientos se <b>desactivan</b> (no se pierde el historial) y los que no tienen nada se borran. Además, Stock ya no los muestra aunque tengan familia asignada.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
       titulo:'🏷️ v2.43.0 — La familia ahora se ve en la lista de Stock',
       desc:'En v2.42.0 la familia quedaba bien guardada, pero la <b>lista de Stock</b> la mostraba desde otra fuente (el nombre del Catálogo) y algunos insumos como 2,4-D seguían apareciendo sin la etiqueta 🧪 Herbicida. Ahora la columna Familia de Stock <b>también toma la familia del árbol</b> (Categorías y Familias) como respaldo y compara los nombres sin importar acentos/mayúsculas. Con esto la etiqueta de familia aparece de forma consistente para todos los insumos.' },
@@ -2599,7 +2602,7 @@ pages.inicio = async function() {
       titulo:'🧠 v2.36.0 — El asistente ahora CONSULTA tus datos y entiende aplicaciones',
       desc:'El asistente 🤖 dio un salto grande. Ahora también <b>responde consultas</b> sobre tu establecimiento, sin que abras ninguna pantalla: <i>"¿cuánto stock queda de Atrazina?"</i>, <i>"mostrame los animales"</i> (o los de un campo), <i>"¿qué lotes tengo?"</i>, <i>"¿qué campañas tengo?"</i>. Además entiende <b>aplicaciones de insumo</b>: <i>"aplicá 120 litros de Glifosato en el lote 1"</i> registra la labor y anota el producto. Se suma a lo que ya hacía: cargar hacienda/labores/recordatorios, explicarte cómo se hace cada cosa y llevarte a la pantalla. <i>Entiende frases claras; para lenguaje 100% libre, más adelante se le puede conectar la IA.</i>' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'05/08/2026',
-      titulo:'🐄 Importar liquidaciones de hacienda — ahora detecta las cabezas',
+      titulo:'🐄 Importar liquidaciones de animales — ahora detecta las cabezas',
       desc:'Al importar el PDF de una <b>liquidación de compra directa</b> de hacienda, el sistema ahora <b>autocompleta las cabezas</b> y separa bien el N° de tropa (antes quedaban para cargar a mano). Se mantiene todo lo demás: categoría, kilos, precio, IVA y neto.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/08/2026',
       titulo:'🤖 v2.35.0 — Botón del Asistente siempre a mano',
@@ -2609,7 +2612,7 @@ pages.inicio = async function() {
       desc:'El asistente 🤖 ahora entiende <b>saludos y charla básica</b>: si le escribís <i>"Hola"</i>, <i>"buenas"</i> o <i>"gracias"</i>, te responde y te <b>guía</b> para que le hagas tu consulta. Si no sabés por dónde empezar, escribí <b>"ayuda"</b> y te muestra un <b>menú</b> con todo lo que puede hacer (cargar hacienda/labores/recordatorios por vos y explicarte cómo se hace cada cosa). Además, cuando no entiende algo, el mensaje ahora es más amable y te ofrece alternativas en vez de solo decir "no entendí".' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/08/2026',
       titulo:'🧠 v2.33.0 — El asistente ahora te enseña a usar el sistema',
-      desc:'Le incorporamos <b>el manual de usuario</b> al asistente 🤖. Ahora podés <b>preguntarle cómo se hace algo</b> y te responde el <b>paso a paso</b> — por ejemplo: <i>"¿cómo cargo un cheque de tercero?"</i>, <i>"¿cómo hago una compra?"</i>, <i>"¿cómo emito una factura?"</i>, <i>"¿cómo importo mis comprobantes?"</i>, <i>"¿cómo cargo una liquidación de hacienda?"</i>. Además de explicarte, te <b>lleva directo a la pantalla</b> correcta con un botón, y para lo que puede cargar solo (hacienda, labores, recordatorios) se ofrece a <b>hacerlo por vos</b> con un ejemplo listo para tocar. Cubre cheques, compras, ventas/ARCA, pagos y cobros, hacienda, insumos, labores, campañas, stock, arrendamientos, créditos, cotizaciones, viajes, empleados/ropa, mapa de lotes, grupos y más. <i>Entiende preguntas claras; si más adelante querés que interprete cualquier redacción libre, se le puede conectar la IA.</i>' },
+      desc:'Le incorporamos <b>el manual de usuario</b> al asistente 🤖. Ahora podés <b>preguntarle cómo se hace algo</b> y te responde el <b>paso a paso</b> — por ejemplo: <i>"¿cómo cargo un cheque de tercero?"</i>, <i>"¿cómo hago una compra?"</i>, <i>"¿cómo emito una factura?"</i>, <i>"¿cómo importo mis comprobantes?"</i>, <i>"¿cómo cargo una liquidación de animales?"</i>. Además de explicarte, te <b>lleva directo a la pantalla</b> correcta con un botón, y para lo que puede cargar solo (hacienda, labores, recordatorios) se ofrece a <b>hacerlo por vos</b> con un ejemplo listo para tocar. Cubre cheques, compras, ventas/ARCA, pagos y cobros, hacienda, insumos, labores, campañas, stock, arrendamientos, créditos, cotizaciones, viajes, empleados/ropa, mapa de lotes, grupos y más. <i>Entiende preguntas claras; si más adelante querés que interprete cualquier redacción libre, se le puede conectar la IA.</i>' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'03/08/2026',
       titulo:'🤖 v2.32.0 — Asistente entiende labores + quién cargó + grupos privados',
       desc:'Varios ajustes. (1) El <b>asistente</b> ahora también entiende <b>labores</b>: ej. <i>"la empleada Pereira terminó la cosecha del lote 1 de Campo Prueba"</i> o <i>"pulverización en el lote 3"</i> → registra la labor en la campaña de ese lote (detecta cosecha, siembra, pulverización, fertilización, laboreo y el responsable si lo nombrás). (2) Todo lo que carga el asistente ahora <b>guarda quién lo ordenó/cargó</b> (queda en las observaciones del movimiento y en el mensaje de confirmación). (3) <b>Grupos:</b> un usuario ahora <b>solo ve los grupos donde está</b> — los grupos ajenos ya no aparecen (solo el Super Admin ve todos). (4) El botón <b>🧪 Probar</b> de avisos avisa mejor si el servidor todavía no está actualizado. <i>Nota: el asistente entiende frases claras; para que entienda cualquier redacción libre, más adelante se le puede conectar la IA.</i>' },
@@ -2627,13 +2630,13 @@ pages.inicio = async function() {
       desc:'Varios arreglos sobre lo nuevo. <b>Mapa de lotes:</b> (1) ahora el <b>campo se marca en el mapa</b> con su geolocalización (📍), aunque los lotes no tengan contorno; (2) el botón <b>Dibujar contorno</b> funciona con un dibujo a mano (tocás las esquinas y "Listo") sin depender de librerías externas — se acabó el error de "sin internet". <b>Asistente:</b> (3) al confirmar una carga de hacienda podés <b>corregir el campo, la categoría, las cabezas y (en compras) los kg y el $/kg</b> antes de guardar; (4) en una <b>compra</b> ahora toma los <b>kg y el precio</b> si los decís (ej. "compré 10 terneros de 80 kg a 2000 por kg") y lo guarda en el movimiento — y te recuerda que la factura y el proveedor se cargan en Compras; (5) mejores mensajes cuando el <b>dictado por voz</b> falla (en algunos navegadores como Brave el dictado no está disponible; escribí el mensaje o usá Chrome). <b>Stock:</b> (6) se quitó la columna <b>Ubicación</b> que quedaba siempre vacía.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'💬 v2.27.0 — Mensajes del equipo + Asistente de carga',
-      desc:'Nuevo módulo <b>Mensajes y asistente</b> (arriba, en Tablero), pensado para el celular. Tiene dos solapas: <b>👥 Equipo</b> — un chat interno entre los usuarios de la empresa (dueño ↔ empleados), con aviso de <b>no leídos</b> en el menú; y <b>🤖 Asistente</b> — escribís o <b>dictás por voz 🎤</b> lo que hiciste y el sistema lo carga por vos. Por ejemplo: <i>"nacieron 5 terneros en Montenegro"</i>, <i>"murió 1 vaca en El 29"</i>, <i>"compré 10 novillos en El 29"</i> o <i>"recordar vacunar el 15/8"</i> → te muestra qué va a registrar y con <b>Confirmar</b> queda cargado (movimiento de hacienda o recordatorio). Todo <b>dentro de AgroCore</b>, sin apps externas, usando el login y los permisos que ya tenés. Por ahora el asistente entiende frases claras (nacimiento/muerte/compra de hacienda y recordatorios); más adelante se le puede sumar IA para que entienda cualquier frase y más tipos de carga.' },
+      desc:'Nuevo módulo <b>Mensajes y asistente</b> (arriba, en Tablero), pensado para el celular. Tiene dos solapas: <b>👥 Equipo</b> — un chat interno entre los usuarios de la empresa (dueño ↔ empleados), con aviso de <b>no leídos</b> en el menú; y <b>🤖 Asistente</b> — escribís o <b>dictás por voz 🎤</b> lo que hiciste y el sistema lo carga por vos. Por ejemplo: <i>"nacieron 5 terneros en Montenegro"</i>, <i>"murió 1 vaca en El 29"</i>, <i>"compré 10 novillos en El 29"</i> o <i>"recordar vacunar el 15/8"</i> → te muestra qué va a registrar y con <b>Confirmar</b> queda cargado (movimiento de animales o recordatorio). Todo <b>dentro de AgroCore</b>, sin apps externas, usando el login y los permisos que ya tenés. Por ahora el asistente entiende frases claras (nacimiento/muerte/compra de hacienda y recordatorios); más adelante se le puede sumar IA para que entienda cualquier frase y más tipos de carga.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
       titulo:'🛰️ v2.26.0 — Mapa de lotes con colores de rinde',
       desc:'Nueva pantalla <b>Producción → Mapa de lotes</b>: un mapa (satélite o calle) donde cada lote se pinta según su <b>rinde</b> — <b>verde</b> (alto), <b>amarillo</b> (medio), <b>rojo</b> (bajo) y <b>gris</b> si no hay dato. El color sale del rinde de la <b>última campaña</b> de cada lote, y podés filtrar por <b>campo</b> y por <b>ciclo/campaña</b> para comparar años. A la derecha hay una lista de lotes con su rinde. Para ver la <b>forma real</b> de cada lote podés <b>dibujar el contorno</b> sobre el mapa (✏️) o <b>importar un KML/GeoJSON</b> (📁) de Google Earth o de tu asesor; si un lote todavía no tiene contorno, se muestra un marcador en su punto (o en el del campo). El mapa necesita conexión a internet.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/08/2026',
-      titulo:'🐄 v2.25.0 — Liquidaciones de hacienda (con importación de PDF)',
-      desc:'Nueva pantalla <b>Ventas → Liquidaciones hacienda</b> para registrar la venta de animales (faena / consignación), igual que la liquidación de cereal pero para hacienda. Entra como una <b>venta</b>: por cada renglón <b>descuenta las cabezas del stock real</b> (movimiento de venta) y también del <b>declarado SENASA</b> del campo/categoría, y arma la <b>cuenta a cobrar</b> por el neto. Podés <b>📥 Importar de PDF</b>: subís la liquidación y el sistema <b>detecta el tipo de animal</b> (Vaquillona, Novillo, etc.), los kg, el precio, el bruto, el neto y el CAE, y te abre el formulario para que <b>confirmes el campo y la categoría</b> de cada renglón y las cabezas antes de guardar. También se puede cargar a mano. Al eliminar una liquidación se <b>revierte todo</b> (stock, SENASA y cuenta a cobrar). No toca el Libro IVA (la liquidación ya trae su CAE del comprador).' },
+      titulo:'🐄 v2.25.0 — Liquidaciones de animales (con importación de PDF)',
+      desc:'Nueva pantalla <b>Ventas → Liquidaciones animales</b> para registrar la venta de animales (faena / consignación), igual que la liquidación de cereal pero para hacienda. Entra como una <b>venta</b>: por cada renglón <b>descuenta las cabezas del stock real</b> (movimiento de venta) y también del <b>declarado SENASA</b> del campo/categoría, y arma la <b>cuenta a cobrar</b> por el neto. Podés <b>📥 Importar de PDF</b>: subís la liquidación y el sistema <b>detecta el tipo de animal</b> (Vaquillona, Novillo, etc.), los kg, el precio, el bruto, el neto y el CAE, y te abre el formulario para que <b>confirmes el campo y la categoría</b> de cada renglón y las cabezas antes de guardar. También se puede cargar a mano. Al eliminar una liquidación se <b>revierte todo</b> (stock, SENASA y cuenta a cobrar). No toca el Libro IVA (la liquidación ya trae su CAE del comprador).' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'03/08/2026',
       titulo:'🧾 v2.24.0 — Factura de venta: emitir o cargar de ARCA en una sola pantalla',
       desc:'Se unificó la carga de la factura de venta en <b>una sola pantalla</b> (como en Compras): se sacó el botón suelto <b>“Cargar factura ARCA”</b> de la barra. Ahora, al tocar <b>“+ Emitir factura”</b>, dentro del mismo formulario hay una casilla <b>“Esta factura ya fue emitida en ARCA”</b>; al tildarla se despliegan ahí mismo el <b>lector de PDF</b> (autocompleta CAE, número, cliente y total) y los campos de <b>CAE real</b>, sin saltar a otra ventana. Si no la tildás, funciona como siempre y el sistema genera el CAE simulado. El botón cambia solo entre <b>Autorizar</b> y <b>Registrar (ARCA externa)</b>. El botón <b>📤 Importar de ARCA</b> (Excel de Mis Comprobantes) sigue igual.' },
@@ -2645,7 +2648,7 @@ pages.inicio = async function() {
       desc:'En la <b>planilla de cada empleado</b> (RRHH → Empleados → 📋 Ver planilla) hay una nueva sección <b>“👕 Ropa / indumentaria entregada”</b>. Registrás <b>cuándo</b> se le entregó, <b>qué prenda</b> (con una lista sugerida: remera, camisa, pantalón, campera, botas de seguridad, guantes, etc., o lo que escribas), el <b>talle</b>, la <b>cantidad</b> (ej. 2 remeras) y una <b>observación</b> (reposición, entrega de ingreso…). Queda el <b>historial completo</b> de todo lo que se le fue dando, con total de prendas, y se puede <b>editar</b> ✏️ o <b>eliminar</b> 🗑️ cada registro. Respeta los permisos de RRHH.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
       titulo:'🔒 v2.19.0 — No se borra nada que tenga movimientos o pagos',
-      desc:'Antes se podía eliminar, por ejemplo, un <b>proveedor con comprobantes cargados</b> y se borraban también sus comprobantes (en cascada). Ahora el sistema <b>bloquea la eliminación</b> cuando el registro tiene datos asociados, con un aviso que dice qué lo está frenando: <b>Proveedores y Clientes</b> con facturas o movimientos de cuenta corriente; <b>Insumos/Productos</b> con movimientos de stock; <b>Cheques</b> ya usados (fuera de cartera) o con movimiento bancario; <b>Facturas de compra y de venta</b> con un pago/cobro aplicado; <b>Viajes</b> facturados o pagados; <b>Créditos</b> con cuotas pagadas; <b>Arrendamientos</b> con cuotas pagadas; y las <b>Categorías de hacienda</b> en uso. Para eliminarlos, primero hay que deshacer el pago o quitar/reasignar esos registros. Así no se pierden datos por accidente.' },
+      desc:'Antes se podía eliminar, por ejemplo, un <b>proveedor con comprobantes cargados</b> y se borraban también sus comprobantes (en cascada). Ahora el sistema <b>bloquea la eliminación</b> cuando el registro tiene datos asociados, con un aviso que dice qué lo está frenando: <b>Proveedores y Clientes</b> con facturas o movimientos de cuenta corriente; <b>Insumos/Productos</b> con movimientos de stock; <b>Cheques</b> ya usados (fuera de cartera) o con movimiento bancario; <b>Facturas de compra y de venta</b> con un pago/cobro aplicado; <b>Viajes</b> facturados o pagados; <b>Créditos</b> con cuotas pagadas; <b>Arrendamientos</b> con cuotas pagadas; y las <b>Categorías de animales</b> en uso. Para eliminarlos, primero hay que deshacer el pago o quitar/reasignar esos registros. Así no se pierden datos por accidente.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/08/2026',
       titulo:'🛡️ v2.18.1 — El control de CUIT al importar ahora sí bloquea',
       desc:'El control de CUIT de la v2.18.0 comparaba contra el CUIT del <b>certificado de ARCA</b>, que en muchas empresas (por ejemplo Demo) está vacío, así que no llegaba a rechazar el archivo. Ahora compara contra el <b>CUIT fiscal de la empresa</b> (el que ves en Empresas → editar) y, si no hay, contra el de ARCA. Si subís un Excel de Mis Comprobantes de otro CUIT, <b>corta el import con el aviso</b> — tanto en compras como en ventas.' },
@@ -2672,10 +2675,10 @@ pages.inicio = async function() {
       desc:'Corregido el lector de facturas de compra por PDF para los comprobantes de <b>ARCA "comprobante en línea"</b> (típicos de Monotributo), cuyo texto viene desordenado. Antes tomaba el <b>CUIT del cliente como si fuera el del proveedor</b>, ponía <b>"Domicilio:"</b> como razón social y dejaba el <b>importe en $0</b>. Ahora usa el nombre del archivo de ARCA (CUIT del emisor, tipo, punto de venta y número) como fuente confiable, identifica bien proveedor vs. cliente, toma la razón social correcta y recupera el <b>importe total</b>. Probado con una Factura C real.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'29/07/2026',
       titulo:'🌾 v2.14.1 — Los cereales del catálogo ya aparecen en Stock',
-      desc:'Ahora cada <b>cereal / grano</b> cargado en el Catálogo aparece automáticamente en <b>Stock</b> con existencia 0 (igual que ya pasaba con Insumos y Hacienda), aunque todavía no tenga movimientos. Así los ves y los podés filtrar por categoría y familia sin tener que cargarlos a mano. <b>Recordá:</b> en el filtro de Stock, “Cereales / Granos” es la <b>Categoría</b> (elegila en el desplegable Categoría); las <b>familias</b> son las de adentro (ej. “Gruesa”).' },
+      desc:'Ahora cada <b>cereal / grano</b> cargado en el Catálogo aparece automáticamente en <b>Stock</b> con existencia 0 (igual que ya pasaba con Insumos y Animales), aunque todavía no tenga movimientos. Así los ves y los podés filtrar por categoría y familia sin tener que cargarlos a mano. <b>Recordá:</b> en el filtro de Stock, “Cereales / Granos” es la <b>Categoría</b> (elegila en el desplegable Categoría); las <b>familias</b> son las de adentro (ej. “Gruesa”).' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🏢 v2.14.0 — Copiar configuración entre empresas + permisos por pantalla + arreglos',
-      desc:'<b>Copiar entre empresas</b> (Configuración → Copiar / Configurar plantilla): ahora podés elegir <b>qué</b> transferir a otras empresas — <b>Catálogos</b>, el árbol de <b>Categorías y Familias</b> y/o el de <b>Categorías de Gastos</b> — cada uno opcional. Los árboles se copian respetando la jerarquía y sin duplicar lo que ya exista. La empresa plantilla también siembra los dos árboles al crear una empresa nueva. <b>Roles y permisos</b>: ahora podés elegir <b>pantalla por pantalla</b> qué ve cada rol — se lista <b>cada ítem del menú de la izquierda, uno por uno</b>, y marcás exactamente los que querés (ej: ver Stock pero no Hacienda). Aparte quedan los permisos de acciones (Crear / Editar / Eliminar) por área. Se quitó “Cargar labor simple”. Las <b>categorías de stock visibles</b> por rol ahora salen <b>solo</b> de <b>Categorías y Familias</b> (sin duplicados) y se actualizan solas. <b>Cuentas a cobrar/pagar</b>: los totales de arriba ahora <b>incluyen la moneda extranjera</b> valorizada a su TC (antes una deuda en dólares no sumaba). <b>Servicios a terceros:</b> ya no da error al listar; el botón <b>Nuevo servicio</b> abre la labor ya marcada como servicio; y se agregaron <b>filtros</b> por cliente, labor, empleado y fecha desde/hasta. <b>Dashboard → Stock:</b> los gráficos de <b>SKUs y valor por categoría</b> ahora agrupan por las categorías reales de <b>Categorías y Familias</b> (antes mostraban las etiquetas viejas sueltas como “insumo”, “cereal”, “herbicida”).' },
+      desc:'<b>Copiar entre empresas</b> (Configuración → Copiar / Configurar plantilla): ahora podés elegir <b>qué</b> transferir a otras empresas — <b>Catálogos</b>, el árbol de <b>Categorías y Familias</b> y/o el de <b>Categorías de Gastos</b> — cada uno opcional. Los árboles se copian respetando la jerarquía y sin duplicar lo que ya exista. La empresa plantilla también siembra los dos árboles al crear una empresa nueva. <b>Roles y permisos</b>: ahora podés elegir <b>pantalla por pantalla</b> qué ve cada rol — se lista <b>cada ítem del menú de la izquierda, uno por uno</b>, y marcás exactamente los que querés (ej: ver Stock pero no Animales). Aparte quedan los permisos de acciones (Crear / Editar / Eliminar) por área. Se quitó “Cargar labor simple”. Las <b>categorías de stock visibles</b> por rol ahora salen <b>solo</b> de <b>Categorías y Familias</b> (sin duplicados) y se actualizan solas. <b>Cuentas a cobrar/pagar</b>: los totales de arriba ahora <b>incluyen la moneda extranjera</b> valorizada a su TC (antes una deuda en dólares no sumaba). <b>Servicios a terceros:</b> ya no da error al listar; el botón <b>Nuevo servicio</b> abre la labor ya marcada como servicio; y se agregaron <b>filtros</b> por cliente, labor, empleado y fecha desde/hasta. <b>Dashboard → Stock:</b> los gráficos de <b>SKUs y valor por categoría</b> ahora agrupan por las categorías reales de <b>Categorías y Familias</b> (antes mostraban las etiquetas viejas sueltas como “insumo”, “cereal”, “herbicida”).' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'🧾 v2.12.1 — Órdenes de pago: se ven bien por proveedor y el e-cheq deja de decir "Físico"',
       desc:'Tres arreglos en las <b>Órdenes de Pago</b>: (1) en el detalle de cheques entregados, un <b>e-cheq</b> ahora figura como <b>Electrónico</b> (antes decía siempre "Físico"). (2) En <b>Compras</b>, al filtrar por <b>proveedor</b>, ahora también aparece la <b>Orden de Pago</b> de ese proveedor (antes solo traía las facturas). (3) En <b>Cuentas a pagar</b>, el botón <b>Órdenes de pago</b> del proveedor ahora lista sus OP (antes decía "sin órdenes" aunque existieran). Para las OP <b>ya emitidas antes</b> de esta versión, sumamos en <b>Compras</b> el botón <b>🩹 Corregir tipo de cheque en OP</b>: recupera el formato real de cada cheque y arregla los que decían "Físico".' },
@@ -2693,10 +2696,10 @@ pages.inicio = async function() {
       desc:'Nuevo en <b>Stock</b>: <b>🌱 Convertir grano a semilla</b> aparta una cantidad de tu <b>grano cosechado</b> (Cereales / Granos) y la pasa a <b>semilla</b> (Insumo) para resembrar — una salida del grano + una entrada en la semilla, <b>sin duplicar stock</b>. Es de <b>una sola vía</b> (la semilla va curada y no vuelve a grano). El <b>grano entregado en una Cerealera solo se puede vender</b> (Ventas o Liquidación de cereal): no se puede convertir ni sacar/consumir manualmente desde ese depósito. El grano que está en el campo/depósitos propios sí se usa para <b>consumo</b> (alimentar hacienda) o conversión a semilla. También sumamos <b>🔀 Reubicar categoría</b>: cambiar la categoría/familia de <b>varios artículos a la vez</b> (ej. mover una semilla que quedó en Insumos a Cereales / Granos). <b>Arreglo:</b> al cargar un <b>insumo en una labor</b>, el buscador ahora respeta el catálogo (solo artículos, agrupados por categoría, sin animales de hacienda).' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'📊 v2.10.3 — Dashboard: el stock de granos (soja, maíz…) ya se ve bien',
-      desc:'<b>Corregido:</b> el KPI <b>Stock granos</b> del Inicio y del Dashboard no sumaba los productos cargados como <b>"granos"</b> (solo tomaba los marcados como "cereal"). Ahora cuenta cualquier producto de la categoría <b>Cereales / Granos</b> (soja, maíz, trigo, etc.), lo determine por su categoría o por el árbol. También se unificó el criterio de <b>Hacienda</b> en los tableros.' },
+      desc:'<b>Corregido:</b> el KPI <b>Stock granos</b> del Inicio y del Dashboard no sumaba los productos cargados como <b>"granos"</b> (solo tomaba los marcados como "cereal"). Ahora cuenta cualquier producto de la categoría <b>Cereales / Granos</b> (soja, maíz, trigo, etc.), lo determine por su categoría o por el árbol. También se unificó el criterio de <b>Animales</b> en los tableros.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
-      titulo:'🐄 v2.10.2 — Hacienda: filtro por familia y Stock solo con lo del catálogo',
-      desc:'<b>Corregido:</b> el filtro por <b>Familia</b> (ej. Bovino) en <b>Stock</b> y <b>Movimientos de stock</b> ahora sí trae los animales (antes la familia de hacienda no se resolvía porque el producto no la guarda; ahora se toma de la config de Hacienda). Y en <b>Stock</b> ya <b>no aparecen animales de especies que no tenés</b> en el catálogo de Hacienda: se muestran únicamente las categorías vigentes (ej. si solo tenés Bovino, no salen ovinos/porcinos viejos).' },
+      titulo:'🐄 v2.10.2 — Animales: filtro por familia y Stock solo con lo del catálogo',
+      desc:'<b>Corregido:</b> el filtro por <b>Familia</b> (ej. Bovino) en <b>Stock</b> y <b>Movimientos de stock</b> ahora sí trae los animales (antes la familia de hacienda no se resolvía porque el producto no la guarda; ahora se toma de la config de Animales). Y en <b>Stock</b> ya <b>no aparecen animales de especies que no tenés</b> en el catálogo de Animales: se muestran únicamente las categorías vigentes (ej. si solo tenés Bovino, no salen ovinos/porcinos viejos).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'🧭 v2.10.1 — Todo sincronizado con Categorías y Familias (catálogos, compras, ventas, stock)',
       desc:'Todo lo que use categorías/familias ahora sale del <b>árbol de Categorías y Familias</b>: <b>Catálogos</b> muestra cada categoría <b>dividida por familia</b> (con subfamilias adentro; lo que no tiene familia va a <b>Sin Familia</b>). En <b>Compras</b> y <b>Ventas</b>, y en <b>Insumos/Labores</b>, los filtros/tipos ya no traen las listas viejas: se sincronizan con el árbol. Al cargar un <b>nuevo movimiento de stock</b>, podés filtrar por <b>Categoría</b> y <b>Familia</b> y <b>escribir para buscar</b> el producto; la hacienda se muestra sin el prefijo de especie (ej. "Vaca" en vez de "Bovino - Vaca"). Se agregó <b>filtro por Familia</b> en Stock y en Movimientos de stock. Además se quitó la pestaña "Categorías de gasto" de Catálogos (ahora es su propia sección, <b>Categorías de Gastos</b>).' },
@@ -2705,13 +2708,13 @@ pages.inicio = async function() {
       desc:'Nuevo <b>árbol de Categorías de Gasto</b> (en Administración → Categorías de Gasto), igual que Categorías y Familias pero para gastos: armás <b>Categoría → Familia → subfamilias</b> a gusto. En <b>Movimientos Diarios</b>, la vieja lista fija se reemplazó por elegir <b>Categoría</b> y <b>Familia</b> del árbol (obligatorio); el <b>Concepto</b> y la <b>Contraparte</b> (quién cobra) siguen libres. En el resumen podés filtrar por la <b>Categoría</b> (te junta todas sus familias) y buscar por concepto. La primera vez, el árbol se siembra solo e <b>importa</b> las categorías de gasto que ya venías usando. <b>Arreglo:</b> al editar un movimiento bancario ahora sí se guarda el cambio de <b>Empresa ↔ Personal del dueño</b>.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'🗂️ v2.9.8 — Catálogos reflejan el árbol de Categorías (Repuestos incluido) + eliminar artículos',
-      desc:'El menú de <b>Catálogos</b> ahora muestra <b>exactamente las mismas categorías</b> que definís en <b>Categorías y Familias</b>: si creás una categoría propia (ej. <b>Repuestos</b>), aparece sola como pestaña y ahí ves/creás/editás/<b>eliminás</b> sus artículos. Se quitó el título “Clasificación y Familias” y se renombraron las pestañas para que coincidan (Insumos, Hacienda, Servicios y Labores). En <b>Stock</b> y <b>Movimientos</b> la columna/filtro <b>Categoría</b> ahora usa la <b>categoría raíz del árbol</b> (Insumos, Repuestos, Hacienda…), no las viejas etiquetas planas. Los artículos de prueba se pueden <b>eliminar</b> (o desactivar si tienen movimientos) desde la pestaña de su categoría. Además, el alta/edición de producto ahora tiene <b>una sola Categoría</b> (la del árbol): se eliminó el selector viejo de categorías planas.' },
+      desc:'El menú de <b>Catálogos</b> ahora muestra <b>exactamente las mismas categorías</b> que definís en <b>Categorías y Familias</b>: si creás una categoría propia (ej. <b>Repuestos</b>), aparece sola como pestaña y ahí ves/creás/editás/<b>eliminás</b> sus artículos. Se quitó el título “Clasificación y Familias” y se renombraron las pestañas para que coincidan (Insumos, Animales, Servicios y Labores). En <b>Stock</b> y <b>Movimientos</b> la columna/filtro <b>Categoría</b> ahora usa la <b>categoría raíz del árbol</b> (Insumos, Repuestos, Animales…), no las viejas etiquetas planas. Los artículos de prueba se pueden <b>eliminar</b> (o desactivar si tienen movimientos) desde la pestaña de su categoría. Además, el alta/edición de producto ahora tiene <b>una sola Categoría</b> (la del árbol): se eliminó el selector viejo de categorías planas.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/07/2026',
       titulo:'🛠️ v2.9.7 — Arreglos: alta de artículo desde la compra + artículos por familia visibles',
-      desc:'<b>Corregido:</b> al crear un artículo nuevo desde una factura de compra ya <b>no se cierra la compra</b> (se abre en una ventana aparte) y el artículo <b>aparece</b> en Stock y en el buscador. Ahora <b>cualquier producto clasificado por familia se ve</b> (incluye categorías propias como <b>Repuestos</b>: cargalos desde Stock → “+ Nuevo” o desde una compra, eligiendo la familia). En <b>Stock</b> y <b>Movimientos</b> el nombre de hacienda ya no repite la especie (“Vaca” en vez de “Bovino - Vaca”), y en Movimientos la columna Familia muestra la especie real (Bovino), no “Hacienda”.' },
+      desc:'<b>Corregido:</b> al crear un artículo nuevo desde una factura de compra ya <b>no se cierra la compra</b> (se abre en una ventana aparte) y el artículo <b>aparece</b> en Stock y en el buscador. Ahora <b>cualquier producto clasificado por familia se ve</b> (incluye categorías propias como <b>Repuestos</b>: cargalos desde Stock → “+ Nuevo” o desde una compra, eligiendo la familia). En <b>Stock</b> y <b>Movimientos</b> el nombre de hacienda ya no repite la especie (“Vaca” en vez de “Bovino - Vaca”), y en Movimientos la columna Familia muestra la especie real (Bovino), no “Animales”.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
-      titulo:'🐄 v2.9.6 — Hacienda por familia (Angus bajo Bovino) + Stock unificado',
-      desc:'En los <b>movimientos de Hacienda</b>, las subfamilias (razas) ahora aparecen <b>anidadas bajo su especie</b> (ej. Angus queda dentro de Bovino, no como grupo aparte). Y en <b>Stock</b> la hacienda se muestra con el mismo criterio que los insumos: la <b>familia</b> (especie · raza) va como subtítulo debajo de la categoría, prolijo y unificado.' },
+      titulo:'🐄 v2.9.6 — Animales por familia (Angus bajo Bovino) + Stock unificado',
+      desc:'En los <b>movimientos de Animales</b>, las subfamilias (razas) ahora aparecen <b>anidadas bajo su especie</b> (ej. Angus queda dentro de Bovino, no como grupo aparte). Y en <b>Stock</b> la hacienda se muestra con el mismo criterio que los insumos: la <b>familia</b> (especie · raza) va como subtítulo debajo de la categoría, prolijo y unificado.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/07/2026',
       titulo:'🧹 v2.9.5 — Menú de catálogos más limpio + alta rápida por familia + columna en Stock',
       desc:'Se sacaron del menú de Catálogos las pestañas <b>Especies de animales</b> y <b>Tipos de insumo</b> (esa clasificación ahora vive en el árbol de <b>Categorías y Familias</b>; los datos no se pierden). Al <b>crear un producto/insumo desde una compra</b> ahora elegís directamente la <b>Familia del árbol</b> (ej. Insumos → Herbicida): se crea en el catálogo y se agrega el renglón. Y en <b>Movimientos de stock</b> se agregó una columna <b>Familia</b> (separada del nombre); el filtro por categoría ya estaba disponible arriba.' },
@@ -2720,22 +2723,22 @@ pages.inicio = async function() {
       desc:'Botón <b>🔗 Vincular ítems</b> en Categorías y Familias: engancha lo ya cargado (Herbicidas, Fertilizantes, animales…) a la <b>familia con su mismo nombre</b>, sin tener que regenerar (ej: todos los herbicidas quedan en la familia Herbicidas). El <b>regenerar</b> también los vincula. Se sacó la categoría <b>Semillas</b> (era lo mismo que Cereales / Granos). Y en el <b>buscador de Compras y Ventas</b> cada producto muestra su <b>familia</b> del árbol (ej. "Atrazina — Herbicida").' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🐄 v2.9.3 — Animales por Familia + Semillas como categoría propia',
-      desc:'En el catálogo de <b>Animales</b> se sacó el campo "Especie" y se reemplazó por <b>Familia</b> (que sale del árbol de Hacienda: Bovinos, Ovinos…, y podés anidar razas como subfamilia). Se sigue guardando internamente para que la matriz de kg/peso funcione igual. Además, al <b>regenerar el árbol</b>, <b>Semillas</b> ahora es una <b>categoría propia</b> (ya no una familia de Insumos). Así se completa la unificación: insumos, labores, animales y cereales se clasifican por el árbol de Categorías y Familias.' },
+      desc:'En el catálogo de <b>Animales</b> se sacó el campo "Especie" y se reemplazó por <b>Familia</b> (que sale del árbol de Animales: Bovinos, Ovinos…, y podés anidar razas como subfamilia). Se sigue guardando internamente para que la matriz de kg/peso funcione igual. Además, al <b>regenerar el árbol</b>, <b>Semillas</b> ahora es una <b>categoría propia</b> (ya no una familia de Insumos). Así se completa la unificación: insumos, labores, animales y cereales se clasifican por el árbol de Categorías y Familias.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/07/2026',
       titulo:'🌳 v2.9.2 — Árbol de categorías totalmente editable (sin límite de niveles)',
-      desc:'Ahora armás el <b>árbol que quieras</b>: Categoría → Familia → Subfamilia… con la profundidad que necesites (ej. Hacienda → Bovinos → Angus). Podés colgar cada nodo de cualquier otro. En <b>Catálogo</b>, el ítem final elige su Familia del árbol completo (anidado). Además, en <b>Insumos</b> y <b>Labores</b> se sacó el campo "Tipo" (era redundante): la <b>Familia</b> es la clasificación (en Insumos, el tipo se deriva solo de la familia). Y renombramos la pestaña "Categorías de animales" a <b>Animales</b>.' },
+      desc:'Ahora armás el <b>árbol que quieras</b>: Categoría → Familia → Subfamilia… con la profundidad que necesites (ej. Animales → Bovinos → Angus). Podés colgar cada nodo de cualquier otro. En <b>Catálogo</b>, el ítem final elige su Familia del árbol completo (anidado). Además, en <b>Insumos</b> y <b>Labores</b> se sacó el campo "Tipo" (era redundante): la <b>Familia</b> es la clasificación (en Insumos, el tipo se deriva solo de la familia). Y renombramos la pestaña "Categorías de animales" a <b>Animales</b>.' },
     { tag:'Mejora', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/07/2026',
       titulo:'🗂️ v2.9.1 — Categorías y Familias más clara (Categoría → Familia → Producto)',
-      desc:'Aclaramos el árbol para que siga el modelo <b>Categoría → Familia → Producto</b>: los nodos raíz son <b>Categorías</b> (Insumos, Hacienda, Cereales…) y sus hijos son <b>Familias</b> (Fertilizantes, Vacunos, Fina/Gruesa…). Botones y textos coherentes (+ Nueva categoría / ➕ Familia). Las familias sugeridas ahora salen de tus catálogos reales: <b>Insumos</b> toma los Tipos de insumo y <b>Hacienda</b> las Especies. Hay un botón <b>↺ Regenerar sugerido</b> para rearmar el árbol. Y lo más pedido: en <b>Catálogos</b> (Cereales, Insumos, Labores, Categorías de animales) ahora podés <b>elegir la Familia</b> de cada ítem (ej: un cereal → Fina/Gruesa). (Incluye una pequeña migración aditiva.)' },
+      desc:'Aclaramos el árbol para que siga el modelo <b>Categoría → Familia → Producto</b>: los nodos raíz son <b>Categorías</b> (Insumos, Animales, Cereales…) y sus hijos son <b>Familias</b> (Fertilizantes, Vacunos, Fina/Gruesa…). Botones y textos coherentes (+ Nueva categoría / ➕ Familia). Las familias sugeridas ahora salen de tus catálogos reales: <b>Insumos</b> toma los Tipos de insumo y <b>Animales</b> las Especies. Hay un botón <b>↺ Regenerar sugerido</b> para rearmar el árbol. Y lo más pedido: en <b>Catálogos</b> (Cereales, Insumos, Labores, Categorías de animales) ahora podés <b>elegir la Familia</b> de cada ítem (ej: un cereal → Fina/Gruesa). (Incluye una pequeña migración aditiva.)' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/07/2026',
       titulo:'📚 v2.9.0 — Menú de Catálogos reorganizado por familias',
       desc:'El menú de <b>Catálogos</b> pasó de una lista larga y plana a estar <b>agrupado por familias</b>: Productos y Servicios · Clasificación y Familias · Unidades y Monedas · Tablas Fiscales/Admin · Ubicaciones. Es más fácil encontrar cada maestro. No se quitó ninguna función, solo se reordenó. Arriba quedó un acceso directo a <b>Categorías y Familias</b> (el árbol).' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/07/2026',
       titulo:'🗂️ v2.8.0 — Árbol de Categorías y Familias + atributos de artículo',
-      desc:'Nueva sección <b>Administración → Categorías y Familias</b>: un <b>árbol editable</b> de categorías (familia madre → subcategorías) que podés adaptar a tu rubro. La primera vez se crea solo con un árbol agro por defecto (Insumos, Cereales, Hacienda, Servicios, Otros) y <b>mapea tus productos existentes</b> a su familia. Además, la ficha de <b>Producto</b> ahora tiene los campos del estándar ERP: <b>Categoría del árbol, Tipo de artículo (Stockeable/Cereal/Servicio), SKU/código interno, código de barras e IVA por defecto</b>. Todo es opcional y aditivo: la categoría "vieja" de cada producto sigue funcionando igual. (Incluye migración de base de datos, sin borrar nada.)' },
+      desc:'Nueva sección <b>Administración → Categorías y Familias</b>: un <b>árbol editable</b> de categorías (familia madre → subcategorías) que podés adaptar a tu rubro. La primera vez se crea solo con un árbol agro por defecto (Insumos, Cereales, Animales, Servicios, Otros) y <b>mapea tus productos existentes</b> a su familia. Además, la ficha de <b>Producto</b> ahora tiene los campos del estándar ERP: <b>Categoría del árbol, Tipo de artículo (Stockeable/Cereal/Servicio), SKU/código interno, código de barras e IVA por defecto</b>. Todo es opcional y aditivo: la categoría "vieja" de cada producto sigue funcionando igual. (Incluye migración de base de datos, sin borrar nada.)' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/07/2026',
       titulo:'🗂️ v2.7.0 — Buscador de artículos por categoría en Compras y Ventas',
-      desc:'En la carga de <b>Compras</b> y <b>Ventas</b>, arriba de la tabla de items ahora hay un <b>filtro por categoría</b> (Todos · Insumos · Cereales · Hacienda · Servicios · Otros): elegís la familia y en cada renglón el buscador te sugiere solo esos artículos (o escribís las primeras letras). Se terminó la lista gigante mezclada. Además, el <b>“+ Crear producto nuevo”</b> se rediseñó: ahora pide <b>Nombre → Categoría → Unidad → IVA</b> (con el IVA aplicado al renglón), más claro y ordenado. Es el primer paso hacia el maestro único de Artículos + categorías jerárquicas.' },
+      desc:'En la carga de <b>Compras</b> y <b>Ventas</b>, arriba de la tabla de items ahora hay un <b>filtro por categoría</b> (Todos · Insumos · Cereales · Animales · Servicios · Otros): elegís la familia y en cada renglón el buscador te sugiere solo esos artículos (o escribís las primeras letras). Se terminó la lista gigante mezclada. Además, el <b>“+ Crear producto nuevo”</b> se rediseñó: ahora pide <b>Nombre → Categoría → Unidad → IVA</b> (con el IVA aplicado al renglón), más claro y ordenado. Es el primer paso hacia el maestro único de Artículos + categorías jerárquicas.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/07/2026',
       titulo:'🎨 v2.6.1 — Colores de los gráficos más distinguibles',
       desc:'Ajustamos la paleta de los gráficos del <b>Dashboard</b> (composición de activos y pasivos, y egresos por categoría) para que los colores se <b>distingan bien</b> entre sí. Antes, tonos parecidos (rojo y naranja) se confundían en las porciones chicas.' },
@@ -2747,7 +2750,7 @@ pages.inicio = async function() {
       desc:'Al liquidar el sueldo de un empleado ahora podés elegir <b>Intercompany</b>: otra firma del grupo pone los fondos, igual que en el pago a proveedores. Esta empresa le queda debiendo (asiento entre firmas) y se mueve el <b>recurso real</b> de la otra firma (su caja, cheque o banco). Al anular la liquidación, se revierte todo automáticamente.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/07/2026',
       titulo:'🌾 v2.5.0 — Entregas parciales de cereal + vínculos de usuario + permisos por tipo de stock',
-      desc:'<b>Créditos por cereal:</b> ahora podés registrar <b>entregas parciales</b> de grano antes de la fecha límite; cada entrega descuenta el stock del depósito que sale y baja lo comprometido a entregar (pago parcial del crédito). También se puede entregar <b>desde el viaje del camión</b> (botón 🌾). Aparece un <b>aviso del compromiso</b> (X tn de X cereal con fecha límite) en <b>Movimientos de stock</b> y <b>Viajes</b>, y el cereal comprometido se suma al <b>Flujo de Fondos</b> y al <b>Dashboard</b>. <b>Usuarios:</b> se pueden <b>vincular con un empleado y un chofer</b>, así al cargar una labor o un viaje se sugiere su persona. <b>Roles:</b> se puede <b>limitar qué categorías de stock ve</b> cada rol (ej: Insumos sí, Hacienda no).' },
+      desc:'<b>Créditos por cereal:</b> ahora podés registrar <b>entregas parciales</b> de grano antes de la fecha límite; cada entrega descuenta el stock del depósito que sale y baja lo comprometido a entregar (pago parcial del crédito). También se puede entregar <b>desde el viaje del camión</b> (botón 🌾). Aparece un <b>aviso del compromiso</b> (X tn de X cereal con fecha límite) en <b>Movimientos de stock</b> y <b>Viajes</b>, y el cereal comprometido se suma al <b>Flujo de Fondos</b> y al <b>Dashboard</b>. <b>Usuarios:</b> se pueden <b>vincular con un empleado y un chofer</b>, así al cargar una labor o un viaje se sugiere su persona. <b>Roles:</b> se puede <b>limitar qué categorías de stock ve</b> cada rol (ej: Insumos sí, Animales no).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'24/07/2026',
       titulo:'🧾 v2.4.1 — Medio externo en compras · Stock con todos los insumos · Permisos',
       desc:'<b>Compras:</b> al cargar una factura de compra en Contado ahora podés pagar con <b>💸 Billetera / medio externo</b> (catálogo Medios externos), igual que en ventas. <b>Stock:</b> ahora trae <b>todos los insumos del catálogo</b> (aparecen con existencia 0 hasta que se muevan) y cada fila muestra su <b>tipo</b> (Herbicida, Fertilizante, etc.). <b>Permisos:</b> se corrigió el error al entrar a <b>Insumos y labores</b> con roles que no administran catálogos (la lectura de catálogos quedó habilitada para todos). Y el <b>Resumen multi-empresa</b> ahora se puede habilitar/deshabilitar por rol (permiso “Reportes”).' },
@@ -2996,7 +2999,7 @@ pages.inicio = async function() {
       desc:'Ajustes pedidos: (1) <b>Arrendamientos</b>: ahora tienen un <b>nombre de contrato</b> aparte del propietario. (2) <b>Ciclo</b>: se elige (vincula) desde el <b>catálogo de Ciclos</b> en la campaña, y el filtro de Insumos y labores muestra los ciclos del catálogo además de los usados. (3) <b>Insumos y labores</b>: al usar <b>+ Insumo / + Labor</b> con un filtro activo, ya viene <b>preseleccionada la campaña</b> del filtro. (4) <b>Carga de insumos</b>: primero elegís el <b>tipo</b> (herbicida, fertilizante, etc.) y la lista de productos muestra <b>solo los de ese tipo</b> según el catálogo.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'29/06/2026',
       titulo:'🌾 v1.26.0 — Costo de insumos, créditos con IVA/gastos, arrendamientos por quintales y más',
-      desc:'Varias mejoras: (1) <b>Costo de insumos</b>: al cargar una compra se guarda el costo del producto y se <b>autocompleta</b> después en la carga de insumos (último costo de compra). (2) <b>Importación de PDF</b>: se corrigió la lectura del número de comprobante (ahora elige el que coincide con el punto de venta). (3) <b>Campañas</b>: se pueden marcar como <b>finalizadas</b>, y desde Insumos y labores cada campaña tiene botones para <b>cargar insumo/labor o editarla directamente</b>. (4) <b>Créditos</b>: campo opcional de <b>IVA sobre intereses</b> (se suma a cada cuota) y posibilidad de cargar <b>gastos a mano</b> al pagar una cuota. (5) <b>Arrendamientos</b>: nueva modalidad <b>en quintales</b> (qq/ha en blanco y en negro), con <b>cuotas</b> (cantidad, vencimiento y quintales de cada una) y <b>valuación a pizarra</b> en $ y US$. (6) <b>Proveedores</b>: el saldo ahora muestra el <b>signo de cada moneda</b> (US$/$), sin mezclar. (7) <b>Hacienda</b>: solo aparecen los campos de explotación <b>ganadera o mixta</b> (o los que ya tengan hacienda cargada).' },
+      desc:'Varias mejoras: (1) <b>Costo de insumos</b>: al cargar una compra se guarda el costo del producto y se <b>autocompleta</b> después en la carga de insumos (último costo de compra). (2) <b>Importación de PDF</b>: se corrigió la lectura del número de comprobante (ahora elige el que coincide con el punto de venta). (3) <b>Campañas</b>: se pueden marcar como <b>finalizadas</b>, y desde Insumos y labores cada campaña tiene botones para <b>cargar insumo/labor o editarla directamente</b>. (4) <b>Créditos</b>: campo opcional de <b>IVA sobre intereses</b> (se suma a cada cuota) y posibilidad de cargar <b>gastos a mano</b> al pagar una cuota. (5) <b>Arrendamientos</b>: nueva modalidad <b>en quintales</b> (qq/ha en blanco y en negro), con <b>cuotas</b> (cantidad, vencimiento y quintales de cada una) y <b>valuación a pizarra</b> en $ y US$. (6) <b>Proveedores</b>: el saldo ahora muestra el <b>signo de cada moneda</b> (US$/$), sin mezclar. (7) <b>Animales</b>: solo aparecen los campos de explotación <b>ganadera o mixta</b> (o los que ya tengan hacienda cargada).' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'28/06/2026',
       titulo:'🧪 v1.25.0 — Insumos: cargar varios de una sola vez por lote + un solo botón de Labor',
       desc:'En <b>Insumos y labores</b> mejoramos la carga. Ahora <b>"+ Insumo" carga varios insumos de una</b>: elegís la campaña/lote y la fecha <b>una sola vez</b> y cargás todos los productos en una tabla (producto, tipo, unidades/ha, u$s/unidad, u$s/ha y hectáreas aplicadas por fila), sin tener que salir y volver a elegir el lote por cada insumo. Las hectáreas aplicadas se completan solas con las del lote (editables por fila). Además, <b>unificamos los botones de labor</b>: antes había "Labor" y "Labor avanzada"; ahora hay <b>un solo botón "+ Labor"</b> que abre el formulario completo (empleado responsable, insumos consumidos que descuentan stock y, si corresponde, el % de cobro del empleado que se suma a su planilla).' },
@@ -3031,11 +3034,11 @@ pages.inicio = async function() {
       titulo:'🩹 v1.15.0 — Cheques: la cuenta bancaria toma las cuentas reales de Bancos',
       desc:'Al cargar un cheque, el selector de <b>Cuenta bancaria</b> ahora lista las <b>cuentas reales cargadas en Tesorería → Bancos</b> (antes tomaba un catálogo aparte que quedaba vacío). Elegís el banco y aparecen sus cuentas (número y alias). El selector de acreditar/depositar cheque ya usaba las cuentas reales.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
-      titulo:'🩹 v1.14.0 — Stock de hacienda por campo, cheques: fecha de endoso, orden por columnas y filtro en cartera',
+      titulo:'🩹 v1.14.0 — Stock de animales por campo, cheques: fecha de endoso, orden por columnas y filtro en cartera',
       desc:'Varias cosas: (1) <b>Se arregló el filtro de Stock</b>: al elegir un depósito que es un campo, la hacienda muestra <b>solo las cabezas de ese campo</b> (antes aparecían en todos). Sin filtro de depósito, sigue mostrando el consolidado. (2) En <b>Cheques</b> se agregó el campo <b>Fecha de endoso / entrega</b> (cuándo salió de cartera), que se completa sola al pagar con el cheque. (3) En la lista de Cheques ahora podés <b>ordenar por cualquier columna</b> tocando su título (1 clic ascendente, 2 descendente) y por defecto se muestran los <b>cheques en cartera</b>.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
       titulo:'🩹 v1.13.0 — Fix Flujo de Fondos + créditos editar/eliminar + campos como depósitos',
-      desc:'Tres cosas: (1) <b>Se arregló el Flujo de Fondos</b> que quedaba "Cargando…" y no abría (un error de formato de moneda). (2) En <b>Créditos bancarios</b> ahora cada crédito tiene botones de <b>✏️ Editar y 🗑️ Eliminar</b> directo en la lista (antes estaban solo dentro del detalle). (3) Los <b>campos pueden funcionar como depósitos</b>: al crear/editar un campo hay un tilde <b>"Este campo funciona como depósito"</b> y, al guardarlo, se crea un depósito con el nombre del campo (aparece en Stock, Movimientos y Hacienda). Los campos que <b>ya tenían hacienda cargada</b> se convierten y vinculan automáticamente a su depósito.' },
+      desc:'Tres cosas: (1) <b>Se arregló el Flujo de Fondos</b> que quedaba "Cargando…" y no abría (un error de formato de moneda). (2) En <b>Créditos bancarios</b> ahora cada crédito tiene botones de <b>✏️ Editar y 🗑️ Eliminar</b> directo en la lista (antes estaban solo dentro del detalle). (3) Los <b>campos pueden funcionar como depósitos</b>: al crear/editar un campo hay un tilde <b>"Este campo funciona como depósito"</b> y, al guardarlo, se crea un depósito con el nombre del campo (aparece en Stock, Movimientos y Animales). Los campos que <b>ya tenían hacienda cargada</b> se convierten y vinculan automáticamente a su depósito.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'💱 v1.12.0 — Catálogo de monedas editable (crear monedas propias + auto-cotización)',
       desc:'Ahora podés <b>crear, editar y eliminar monedas propias</b> desde <b>Tesorería → Cotizaciones</b> (además de las predefinidas USD/EUR/granos). A cada moneda propia le ponés un <b>código</b>, un <b>nombre</b>, si es <b>moneda o grano</b>, y una <b>fuente de cotización automática</b> (dólar oficial/mayorista/blue/MEP/CCL/cripto/tarjeta o pizarra de soja/maíz/trigo/sorgo/girasol) — o la dejás en <b>manual</b> para cargarla a mano. Las monedas propias aparecen en toda la app: facturas de compra/venta, cuenta corriente, pagos/cobros y el flujo de fondos, y se actualizan solas cada día si tienen fuente automática.' },
@@ -3056,25 +3059,25 @@ pages.inicio = async function() {
       desc:'Arranca el soporte <b>multimoneda</b>. Nueva pantalla <b>Cotizaciones</b> (Tesorería) que muestra el dólar, euro y las pizarras de granos en vivo (Bolsa de Rosario) y guarda un <b>histórico diario</b>; podés además cargar/corregir valores a mano (ej: Euro o un dólar pactado). Al cargar una <b>factura de compra o venta</b> ahora elegís la <b>moneda</b> (Pesos, Dólar oficial/MEP/blue, Euro, o toneladas de Soja/Maíz/Trigo/Sorgo/Girasol) y la <b>cotización del día</b> (se sugiere sola y es editable). La <b>cuenta corriente</b> guarda la deuda en su <b>moneda de origen</b> (ej: US$ 10.000 o 50 tn de soja) y el saldo de cada cliente/proveedor se muestra <b>por moneda</b>, sin mezclar pesos con dólares ni con granos. <b>Próximo paso (Fase 1b):</b> el pago de una deuda en otra moneda con la cotización del día y el registro automático de la diferencia de cambio.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'🐮 v1.8.0 — Animales unificados: una sola lista de categorías, productos y movimientos',
-      desc:'Unificación grande del manejo de animales. Las <b>especies y categorías</b> (todos los animales) se administran en un solo lugar: <b>Catálogo → Categorías de animales</b>, con especie, rango de kg, peso promedio y a qué categoría puede pasar (matriz). Cada categoría es además un <b>producto</b> usado en todo el sistema: se crea automáticamente y aparece en <b>Stock</b> con sus <b>cabezas + kg</b> reales. Los <b>movimientos de animales</b> (nacimiento, muerte, traslado, cambio de categoría, ajuste) ahora también se ven en <b>Movimientos de Stock</b> como un producto más, y se pueden <b>ver, editar y borrar</b> desde ahí o desde Hacienda. El módulo <b>Hacienda</b> queda como la vista por campo (declarado SENASA vs real) y sigue permitiendo cargar movimientos por campo. El selector de categoría en los movimientos ahora muestra <b>todas las especies y categorías</b> agrupadas.' },
+      desc:'Unificación grande del manejo de animales. Las <b>especies y categorías</b> (todos los animales) se administran en un solo lugar: <b>Catálogo → Categorías de animales</b>, con especie, rango de kg, peso promedio y a qué categoría puede pasar (matriz). Cada categoría es además un <b>producto</b> usado en todo el sistema: se crea automáticamente y aparece en <b>Stock</b> con sus <b>cabezas + kg</b> reales. Los <b>movimientos de animales</b> (nacimiento, muerte, traslado, cambio de categoría, ajuste) ahora también se ven en <b>Movimientos de Stock</b> como un producto más, y se pueden <b>ver, editar y borrar</b> desde ahí o desde Animales. El módulo <b>Animales</b> queda como la vista por campo (declarado SENASA vs real) y sigue permitiendo cargar movimientos por campo. El selector de categoría en los movimientos ahora muestra <b>todas las especies y categorías</b> agrupadas.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
-      titulo:'📦 v1.7.0 — Stock de hacienda unificado en el módulo Stock (nutrido por los movimientos)',
-      desc:'El módulo <b>Stock</b> ahora muestra la existencia real de los productos de hacienda: las <b>cabezas y los kg</b> salen de los <b>movimientos de hacienda</b> (nacimientos, muertes, compras/ventas por factura, cambios de categoría, traslados), no del stock de producto. Para que calce, en cada producto con categoría <b>hacienda</b> se elige a qué <b>categoría de hacienda</b> corresponde (campo nuevo "🐄 Categoría de hacienda" en el alta/edición del producto). Los productos de hacienda sin vincular muestran un aviso <b>"⚠ sin vincular"</b>. En la fila de Stock, en vez de entrada/salida de producto, aparece un acceso directo a <b>🐄 Hacienda</b> para gestionarlos donde corresponde.' },
+      titulo:'📦 v1.7.0 — Stock de animales unificado en el módulo Stock (nutrido por los movimientos)',
+      desc:'El módulo <b>Stock</b> ahora muestra la existencia real de los productos de hacienda: las <b>cabezas y los kg</b> salen de los <b>movimientos de animales</b> (nacimientos, muertes, compras/ventas por factura, cambios de categoría, traslados), no del stock de producto. Para que calce, en cada producto con categoría <b>hacienda</b> se elige a qué <b>categoría de animales</b> corresponde (campo nuevo "🐄 Categoría de animales" en el alta/edición del producto). Los productos de hacienda sin vincular muestran un aviso <b>"⚠ sin vincular"</b>. En la fila de Stock, en vez de entrada/salida de producto, aparece un acceso directo a <b>🐄 Animales</b> para gestionarlos donde corresponde.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
-      titulo:'🧾 v1.6.0 (Fase 4) — Hacienda: compras y ventas desde Facturación (comprobante fiscal / ARCA)',
-      desc:'Ahora las <b>compras y ventas de hacienda se hacen desde Facturación</b>, como cualquier producto pero con el manejo de kg. Un <b>producto del catálogo con categoría "hacienda"</b> representa una categoría (Ternero, Novillito…); al ponerlo en un renglón de la factura aparecen <b>Campo</b> y <b>Cabezas</b> (la cantidad de la línea son los <b>kg</b> y el precio es <b>$/kg</b>). Al guardar la factura (venta o compra), el sistema <b>mueve el stock de hacienda</b> (baja/alta de cabezas + kg) en vez del stock de producto, y el cobro/cta cte/ARCA los maneja la factura. Al <b>anular/borrar</b> la factura, se revierte el movimiento de hacienda. Se <b>quitaron Compra y Venta de Hacienda → Movimientos</b> (van por Facturación) y se agregó <b>🔗 Vincular factura</b> para el caso de una factura que no movió el stock.' },
+      titulo:'🧾 v1.6.0 (Fase 4) — Animales: compras y ventas desde Facturación (comprobante fiscal / ARCA)',
+      desc:'Ahora las <b>compras y ventas de hacienda se hacen desde Facturación</b>, como cualquier producto pero con el manejo de kg. Un <b>producto del catálogo con categoría "hacienda"</b> representa una categoría (Ternero, Novillito…); al ponerlo en un renglón de la factura aparecen <b>Campo</b> y <b>Cabezas</b> (la cantidad de la línea son los <b>kg</b> y el precio es <b>$/kg</b>). Al guardar la factura (venta o compra), el sistema <b>mueve el stock de animales</b> (baja/alta de cabezas + kg) en vez del stock de producto, y el cobro/cta cte/ARCA los maneja la factura. Al <b>anular/borrar</b> la factura, se revierte el movimiento de animales. Se <b>quitaron Compra y Venta de Animales → Movimientos</b> (van por Facturación) y se agregó <b>🔗 Vincular factura</b> para el caso de una factura que no movió el stock.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
-      titulo:'💰 v1.5.0 (Fase 3) — Hacienda: ventas por kilo con registro del ingreso y modo "a rendimiento"',
-      desc:'Cierre del módulo Hacienda: las <b>ventas por kilo</b>. En el movimiento <b>Venta</b> cargás cabezas, <b>kg de balanza</b> y <b>precio por kg</b> (el total se calcula solo y es editable). El sistema <b>descuenta el stock por cabezas</b> y <b>registra el ingreso</b> según el cobro elegido: <b>cuenta corriente</b> del cliente (queda "a cobrar"), <b>efectivo</b> (caja) o <b>banco</b>. Además, modo <b>"a rendimiento / al gancho"</b>: la venta descuenta el stock al momento y queda en <b>"Ventas a rendimiento pendientes"</b>; cuando llegan los kg/importe definitivos del frigorífico, los cerrás y ahí se registra el cobro. Al borrar una venta, se revierte automáticamente el ingreso que generó.' },
+      titulo:'💰 v1.5.0 (Fase 3) — Animales: ventas por kilo con registro del ingreso y modo "a rendimiento"',
+      desc:'Cierre del módulo Animales: las <b>ventas por kilo</b>. En el movimiento <b>Venta</b> cargás cabezas, <b>kg de balanza</b> y <b>precio por kg</b> (el total se calcula solo y es editable). El sistema <b>descuenta el stock por cabezas</b> y <b>registra el ingreso</b> según el cobro elegido: <b>cuenta corriente</b> del cliente (queda "a cobrar"), <b>efectivo</b> (caja) o <b>banco</b>. Además, modo <b>"a rendimiento / al gancho"</b>: la venta descuenta el stock al momento y queda en <b>"Ventas a rendimiento pendientes"</b>; cuando llegan los kg/importe definitivos del frigorífico, los cerrás y ahí se registra el cobro. Al borrar una venta, se revierte automáticamente el ingreso que generó.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
       titulo:'🩹 v1.4.2 — Alineación de encabezados con sus valores en tablas y PDFs',
       desc:'Se corrigió la alineación de los encabezados de las tablas: las columnas numéricas (cabezas, kg, importes) ahora tienen el título alineado con su valor, en todas las tablas del sistema y también en los PDF generados (proyección de hacienda, recibos, listados). Antes el título quedaba a la izquierda/centro y el número a la derecha, lo que confundía a qué columna correspondía cada dato.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
-      titulo:'📈 v1.4.1 (Fase 2) — Hacienda: proyección de kilos y valorización para el banco (PDF)',
-      desc:'Segunda fase del módulo Hacienda: el <b>estado de situación / proyección</b> que pide el banco. Desde Hacienda → <b>📈 Proyección</b> elegís a cuántos <b>días</b> proyectar y un <b>precio por kg</b>, y el sistema arma una tabla por categoría con: cabezas, kg actuales, ganancia diaria (GMD, editable por categoría), <b>kg proyectados</b> a esa fecha (kg actuales + cabezas × GMD × días) y la <b>valorización</b> (kg × $/kg). Podés ajustar GMD y precio por cada categoría. Botón <b>🖨️ Exportar PDF</b> para presentar al banco. <i>Próxima fase: ventas por kilo (descarga de stock por cabezas + kg de balanza).</i>' },
+      titulo:'📈 v1.4.1 (Fase 2) — Animales: proyección de kilos y valorización para el banco (PDF)',
+      desc:'Segunda fase del módulo Animales: el <b>estado de situación / proyección</b> que pide el banco. Desde Animales → <b>📈 Proyección</b> elegís a cuántos <b>días</b> proyectar y un <b>precio por kg</b>, y el sistema arma una tabla por categoría con: cabezas, kg actuales, ganancia diaria (GMD, editable por categoría), <b>kg proyectados</b> a esa fecha (kg actuales + cabezas × GMD × días) y la <b>valorización</b> (kg × $/kg). Podés ajustar GMD y precio por cada categoría. Botón <b>🖨️ Exportar PDF</b> para presentar al banco. <i>Próxima fase: ventas por kilo (descarga de stock por cabezas + kg de balanza).</i>' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
-      titulo:'🐄 v1.4.0 (Fase 1) — Hacienda: doble stock (cabezas + kilos), cambio de categoría y configuración de categorías',
-      desc:'Primera fase del rediseño de Hacienda pensado para uso ganadero real. (1) <b>Doble stock</b>: cada categoría por campo tiene cabezas <b>y</b> un <b>peso promedio</b> (kg/cabeza) editable; el sistema muestra los <b>kg totales</b> estimados (cabezas × peso). SENASA sigue siendo en cabezas. (2) <b>Cambio de categoría</b> (reclasificación): nuevo tipo de movimiento que da de <b>baja</b> en la categoría origen y de <b>alta</b> en la destino (ej. Ternero → Novillito), validado por una <b>matriz de transición</b> para que no se pueda pasar cualquier cosa. (3) <b>Configuración de categorías</b> (⚙️ Categorías en Hacienda): por cada categoría definís <b>especie</b>, <b>rango de kg vivo</b>, <b>peso promedio</b>, <b>ganancia diaria</b> y <b>a qué categorías puede pasar</b>. Viene precargado con bovinos y porcinos (Ternero/Ternera/Novillito/Torito/Novillo/Toro/Vaquillona/Vaca y Lechón/Cachorro/Cachorra/Capón/Padrillo/Hembra/Cerda). (4) Los movimientos ahora aceptan <b>kilos de balanza</b>. <i>Próximas fases: proyección de kg para el banco (PDF) y ventas por kilo.</i>' },
+      titulo:'🐄 v1.4.0 (Fase 1) — Animales: doble stock (cabezas + kilos), cambio de categoría y configuración de categorías',
+      desc:'Primera fase del rediseño de Animales pensado para uso ganadero real. (1) <b>Doble stock</b>: cada categoría por campo tiene cabezas <b>y</b> un <b>peso promedio</b> (kg/cabeza) editable; el sistema muestra los <b>kg totales</b> estimados (cabezas × peso). SENASA sigue siendo en cabezas. (2) <b>Cambio de categoría</b> (reclasificación): nuevo tipo de movimiento que da de <b>baja</b> en la categoría origen y de <b>alta</b> en la destino (ej. Ternero → Novillito), validado por una <b>matriz de transición</b> para que no se pueda pasar cualquier cosa. (3) <b>Configuración de categorías</b> (⚙️ Categorías en Animales): por cada categoría definís <b>especie</b>, <b>rango de kg vivo</b>, <b>peso promedio</b>, <b>ganancia diaria</b> y <b>a qué categorías puede pasar</b>. Viene precargado con bovinos y porcinos (Ternero/Ternera/Novillito/Torito/Novillo/Toro/Vaquillona/Vaca y Lechón/Cachorro/Cachorra/Capón/Padrillo/Hembra/Cerda). (4) Los movimientos ahora aceptan <b>kilos de balanza</b>. <i>Próximas fases: proyección de kg para el banco (PDF) y ventas por kilo.</i>' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'25/06/2026',
       titulo:'🏦 v1.3.0 — Créditos: editar/eliminar + cargar cuotas ya pagadas · Calendario: alarmas editables',
       desc:'(1) <b>Créditos bancarios</b>: ahora se pueden <b>editar</b> y <b>eliminar</b>. Si cambiás monto, tasa, cantidad de cuotas, periodicidad o fecha de la primera, se <b>regenera el plan</b> (avisa que se pierden las marcas de pago). Para cargar <b>créditos viejos que ya vienen con cuotas pagas</b>, hay un botón <b>"✅ Marcar pagadas hasta…"</b> que marca de una todas las cuotas hasta el número que indiques. (2) <b>Calendario</b>: ahora <b>todas las alarmas se pueden editar</b>, incluso las automáticas (de créditos, cheques y cuentas corrientes): al editar una automática se crea una alarma personalizada que reemplaza a la original.' },
@@ -3091,8 +3094,8 @@ pages.inicio = async function() {
       titulo:'🔧 v1.2.6 — Actualizaciones "desde el sistema" conscientes de cada instalación',
       desc:'Arreglo importante del botón "Verificar actualizaciones → Instalar". <b>Antes</b> ese botón corría siempre el actualizador apuntado a una carpeta fija y, peor, mataba <b>todos</b> los procesos node de la máquina — así, en equipos con más de una instalación, actualizar una terminaba tocando otra y tumbando ambas a la vez. <b>Ahora</b> cada instalación se actualiza a sí misma: el backend le pasa al actualizador su propia carpeta, su puerto y el nombre de su servicio de Windows, y el script detiene <b>solo</b> el node de ese puerto (no toca otras instalaciones de la misma máquina). Cada instalación define su servicio en el <code>.env</code> mediante <code>AGROCORE_SERVICE</code>. Con esto, cualquier instalación puede actualizarse desde el sistema sin pisar a otra.' },
     { tag:'Fix', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'25/06/2026',
-      titulo:'🐄 v1.2.5 — Hacienda multi-especie + borrar cartas de porte en masa + compartir ubicación por WhatsApp desde el celular',
-      desc:'Tres pedidos de la usuaria de campo, en una. (1) <b>Hacienda — todas las categorías y todas las especies</b>: los selectores "+ Categoría" y el de movimientos usaban una lista fija de 8 categorías bovinas e ignoraban el catálogo cargado. Ahora toman <b>todas</b> las categorías de Catálogos → "Categorías de animales" (bovino, <b>porcino</b>, ovino, lo que sea), suman las que ya están en uso en cada campo, y la pantalla de Hacienda refresca el catálogo al abrir para que aparezcan al instante. (2) <b>Cartas de porte — borrar todas de una</b>: nuevo botón 🗑️ "Borrar todas" en Viajes (solo visible con permiso de borrado y si hay registros) con doble confirmación (hay que escribir BORRAR). Borra únicamente las de la empresa activa — ideal para limpiar lo importado por Excel y recargar de cero. Endpoint nuevo DELETE /api/viajes acotado a companyId. (3) <b>Compartir ubicación por WhatsApp desde el celular</b>: las funciones de compartir tenían fijo web.whatsapp.com, que en el teléfono mostraba el cartel "usá WhatsApp Web en la computadora". Ahora usan wa.me: en el celular abre la <b>app nativa</b> y deja elegir contacto; en la compu sigue igual.' },
+      titulo:'🐄 v1.2.5 — Animales multi-especie + borrar cartas de porte en masa + compartir ubicación por WhatsApp desde el celular',
+      desc:'Tres pedidos de la usuaria de campo, en una. (1) <b>Animales — todas las categorías y todas las especies</b>: los selectores "+ Categoría" y el de movimientos usaban una lista fija de 8 categorías bovinas e ignoraban el catálogo cargado. Ahora toman <b>todas</b> las categorías de Catálogos → "Categorías de animales" (bovino, <b>porcino</b>, ovino, lo que sea), suman las que ya están en uso en cada campo, y la pantalla de Animales refresca el catálogo al abrir para que aparezcan al instante. (2) <b>Cartas de porte — borrar todas de una</b>: nuevo botón 🗑️ "Borrar todas" en Viajes (solo visible con permiso de borrado y si hay registros) con doble confirmación (hay que escribir BORRAR). Borra únicamente las de la empresa activa — ideal para limpiar lo importado por Excel y recargar de cero. Endpoint nuevo DELETE /api/viajes acotado a companyId. (3) <b>Compartir ubicación por WhatsApp desde el celular</b>: las funciones de compartir tenían fijo web.whatsapp.com, que en el teléfono mostraba el cartel "usá WhatsApp Web en la computadora". Ahora usan wa.me: en el celular abre la <b>app nativa</b> y deja elegir contacto; en la compu sigue igual.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/06/2026',
       titulo:'🎨 v1.2.4 — Campos: form reorganizado en secciones (Datos básicos / Titularidad / Ubicación / Trazabilidad / Notas)',
       desc:'El form de Nuevo/Editar Campo ahora está organizado en 5 secciones con encabezados visuales para que sea más fácil de completar: (1) 📋 <b>Datos básicos</b>: Nombre + Superficie + Tipo de explotación. (2) 👤 <b>Titularidad</b>: Tipo (propio/arrendado/aparcería) + Titular/propietario. (3) 📍 <b>Ubicación</b>: Provincia + Localidad, Referencia/dirección, Geolocalización con botón "tomar mi ubicación" y "compartir por WhatsApp". (4) 📋 <b>Trazabilidad SENASA</b>: RENSPAs (uno o varios, cada uno agrícola o ganadero). (5) 📝 <b>Notas</b>: Observaciones. Cada sección tiene un divisor sutil y el orden sigue el flujo natural de carga de un campo.' },
@@ -3122,7 +3125,7 @@ pages.inicio = async function() {
       desc:'Al cargar un Campo en Producción, los datos de <b>Titularidad</b> (Propio/Arrendado/Aparcería) y <b>Ubicación/Referencia</b> no se guardaban silenciosamente. El form los enviaba pero el backend los ignoraba porque no estaban declarados en el schema. Agregamos las columnas a la base, hicimos la migración y el zod schema ahora los acepta. Si ya cargaste un campo y faltan esos datos, editalo y volvé a guardarlos — ahora sí se persisten.' },
     { tag:'Estable', color:'bg-purple-100 text-purple-800 border-purple-300', fecha:'24/06/2026',
       titulo:'🚀 AgroCore v1.0.0 — versión ESTABLE',
-      desc:'¡Corte de versión estable! AgroCore llega a v1.0 con todas las funciones principales en producción: ✅ Multi-empresa con permisos granulares · ✅ Facturación (venta/compra) con CAE de ARCA + cargar PDF · ✅ Cuentas Corrientes con vencimiento + condiciones de pago por fecha fija (cosecha) · ✅ Tesorería completa (bancos, cheques, créditos, efectivo, intercompany) · ✅ Flujo de caja + Flujo de fondos proyectado · ✅ Resumen multi-empresa consolidado · ✅ Producción (campos, lotes, campañas, insumos, labores) · ✅ Stock por depósito + cerealeras + liquidaciones de cereal · ✅ Hacienda (planilla, movimientos, liquidaciones) · ✅ Logística con modelo relacional (Transportistas / Choferes / Camiones) · ✅ CPE (Carta de Porte Electrónica) emitir + imprimir formato ARCA + descargar + mail + WhatsApp · ✅ Importar CP desde PDF de ARCA (parser que extrae CTG, grano, pesos, dominios, transportista, chofer, kms, tarifa, intervinientes) · ✅ Agenda con vista calendario y alertas en Inicio · ✅ Backup/Restore + import desde Excel · ✅ PWA instalable + service worker offline. ¡Gracias por todo el feedback que llevó a este corte! 🌾' },
+      desc:'¡Corte de versión estable! AgroCore llega a v1.0 con todas las funciones principales en producción: ✅ Multi-empresa con permisos granulares · ✅ Facturación (venta/compra) con CAE de ARCA + cargar PDF · ✅ Cuentas Corrientes con vencimiento + condiciones de pago por fecha fija (cosecha) · ✅ Tesorería completa (bancos, cheques, créditos, efectivo, intercompany) · ✅ Flujo de caja + Flujo de fondos proyectado · ✅ Resumen multi-empresa consolidado · ✅ Producción (campos, lotes, campañas, insumos, labores) · ✅ Stock por depósito + cerealeras + liquidaciones de cereal · ✅ Animales (planilla, movimientos, liquidaciones) · ✅ Logística con modelo relacional (Transportistas / Choferes / Camiones) · ✅ CPE (Carta de Porte Electrónica) emitir + imprimir formato ARCA + descargar + mail + WhatsApp · ✅ Importar CP desde PDF de ARCA (parser que extrae CTG, grano, pesos, dominios, transportista, chofer, kms, tarifa, intervinientes) · ✅ Agenda con vista calendario y alertas en Inicio · ✅ Backup/Restore + import desde Excel · ✅ PWA instalable + service worker offline. ¡Gracias por todo el feedback que llevó a este corte! 🌾' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/06/2026',
       titulo:'🎯 Parser PDF CPE ahora extrae casi TODO automáticamente',
       desc:'Reescribimos el parser entendiendo el formato real que devuelve pdf-parse (con etiquetas y valores en columnas separadas, no inline). Ahora al importar un PDF de ARCA se extraen correctamente: CTG, número CPE, producto (Soja/Maíz/etc), pesos (Bruto/Tara/Neto separados aunque vengan pegados como "4500015000"), origen (Localidad + Provincia separadas aunque vengan pegadas), destino, dominios del camión y acoplado, km a recorrer, tarifa, transportista + CUIT, chofer + CUIT, observaciones. Para los CUITs de Destinatario / Destino / Corredor / Representantes se hace un mejor mapeo posicional (toma del orden estándar de la CPE). Resultado: importar un PDF ahora carga 14+ campos del viaje automáticamente, en vez de 4 como antes. Si igual algún campo no mapea bien, abrí F12 → Console y vas a ver "[viajeImportarCP]" con todo lo extraído.' },
@@ -3173,7 +3176,7 @@ pages.inicio = async function() {
       desc:'En v0.7.28 el dropdown del item de factura solo sumaba los items del catálogo con tipo "Insumo", pero los items reales del catálogo "Insumos (items)" pueden tener tipo Herbicida, Insecticida, Fungicida, Fertilizante, Semilla o Coadyuvante. Por eso solo aparecía "Glifosato" pero no "Glifosato Sulfosato" ni "Glifosato Touchdown Max". Ahora el filtro incluye todos esos tipos, y el dropdown muestra el tipo al final del nombre para distinguir (ej. "Glifosato Sulfosato (L) · Herbicida").' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
       titulo:'➕ Facturas: botón "+ Nuevo" al lado del dropdown para crear producto en el momento',
-      desc:'Al cargar una factura de compra o venta, al lado del selector de item del catálogo aparece un botón pequeño ➕ verde. Si el producto/insumo que necesitás no está en el catálogo, lo creás ahí mismo sin salir del form: nombre, unidad, tipo (Insumo / Cereal / Hacienda / Otro), y queda agregado al dropdown ya seleccionado para esa fila. Cantidad, precio e IVA que ya hayas tipeado se mantienen. Funciona en Compras, Ventas (interna) y Ventas (Cargar ARCA externa).' },
+      desc:'Al cargar una factura de compra o venta, al lado del selector de item del catálogo aparece un botón pequeño ➕ verde. Si el producto/insumo que necesitás no está en el catálogo, lo creás ahí mismo sin salir del form: nombre, unidad, tipo (Insumo / Cereal / Animales / Otro), y queda agregado al dropdown ya seleccionado para esa fila. Cantidad, precio e IVA que ya hayas tipeado se mantienen. Funciona en Compras, Ventas (interna) y Ventas (Cargar ARCA externa).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/06/2026',
       titulo:'🧾 Facturas: el item del dropdown ahora trae TODOS los insumos del catálogo',
       desc:'Al cargar una factura de compra o venta, el selector de item del catálogo ahora muestra: (1) todos los Productos como antes; y (2) todos los items del catálogo de Insumos (los 17 que tenés cargados: 2,4-D, Atrazina, Glifosato Sulfosato, Glifosato Touchdown Max, etc) bajo el grupo "Insumos del catálogo". Si elegís uno del catálogo que aún no es Producto, el sistema lo crea automáticamente al guardar la factura — listo para tener stock. También: sacamos el "Stock: X kg" del label del dropdown (ahora sólo dice "Nombre (unidad)") para que sea más limpio. La validación de stock negativo en ventas sigue funcionando: si vendés más de lo que hay, te avisa qué falta y te pregunta si querés continuar igual (el stock queda en negativo).' },
@@ -3335,7 +3338,7 @@ pages.inicio = async function() {
       desc:'En Configuración → Sistema hay una sección nueva "📋 Catálogos genéricos compartidos entre empresas". Sirve para dos cosas: (1) copiar de una sola vez los catálogos genéricos (productos, cultivos, conceptos, labores, etc.) de una empresa "plantilla" a todas las demás. Útil cuando creaste varias empresas y los catálogos arrancaron vacíos. (2) Designar una empresa como "plantilla predeterminada": de ahora en adelante, cada vez que se cree una empresa nueva, el sistema le copia automáticamente los catálogos de la plantilla. Por default se EXCLUYEN los catálogos de Bancos y Cajas (que tienen sentido cargar individualmente por empresa). Los catálogos duplicados no se sobreescriben — solo se agregan los que faltaban.' },
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'10/06/2026',
       titulo:'📥 3 importadores nuevos para Excels del cliente (segunda tanda)',
-      desc:'Configuración → Importación suma 3 importadores más: (1) HECTÁREAS SEMBRADAS — una hoja por empresa, lee Renspa+Campo+Cultivo+Has y crea un lote por cultivo (con forward-fill del Renspa entre filas en blanco). (2) PYME — Ventas hacienda menor (Lechón, Cordero, Chivito, Cancha) — por cada fila crea producto y movimiento de venta, y si la fila está "No pago" suma a Cuentas Corrientes. (3) PROVEEDORES — lee la hoja "Proveedores" del Excel de Cuentas Corrientes y carga el catálogo de proveedores (nombre, CUIT, teléfono, email, horarios). Salta los que ya existían matcheando por razón social.' },
+      desc:'Configuración → Importación suma 3 importadores más: (1) HECTÁREAS SEMBRADAS — una hoja por empresa, lee Renspa+Campo+Cultivo+Has y crea un lote por cultivo (con forward-fill del Renspa entre filas en blanco). (2) PYME — Ventas animales menor (Lechón, Cordero, Chivito, Cancha) — por cada fila crea producto y movimiento de venta, y si la fila está "No pago" suma a Cuentas Corrientes. (3) PROVEEDORES — lee la hoja "Proveedores" del Excel de Cuentas Corrientes y carga el catálogo de proveedores (nombre, CUIT, teléfono, email, horarios). Salta los que ya existían matcheando por razón social.' },
     { tag:'Nuevo', color:'bg-green-100 text-green-800 border-green-300', fecha:'10/06/2026',
       titulo:'↩️ Historial de importaciones + botón Deshacer',
       desc:'Configuración → Importación ahora muestra arriba un panel con las últimas 50 importaciones realizadas (fecha, tipo, archivo, quién la hizo, cuántos registros, estado). Cada importación activa tiene un botón "↩️ Deshacer" que borra todos los registros que esa importación había creado. Si Denise sube un Excel mal y ve que importó 200 transferencias con un detalle equivocado, hace clic en Deshacer y vuelve atrás en 1 segundo. Las importaciones que UPDATEAN un registro existente (como stocks que ya estaban cargados) NO se restauran al valor previo — solo se borran los registros nuevos creados por la importación.' },
@@ -3463,8 +3466,8 @@ pages.inicio = async function() {
       titulo:'⚙️ Configuración + WhatsApp Asesor / Logística + Viajes completo',
       desc:'Nueva sección Administración → Configuración para cargar los contactos del sistema (asesor comercial, logística camiones, contador). Arriba del ticker de cotizaciones aparece un botón verde 💬 Asesor que abre WhatsApp con el corredor de granos para consultar precios. En Viajes se sumó un botón 🚛 Solicitar Camión Logística que arma una plantilla completa de WhatsApp (cereal, origen, destino, distancia, tarifa, fecha, cantidad de camiones, tipo, etc.) y la envía al transportista configurado. El formulario de viajes ahora tiene todos los datos operativos: kg carga + kg descarga con diferencia automática, CTG separado de la carta de porte, tarifa $/ton, CUIT del transporte y del chofer, patente del acoplado, tipo de camión. Cada viaje tiene estado (pendiente → cargado → descargado → facturado → pagado) que el sistema actualiza solo al cargar kg, vincular la factura del transportista, o registrar el pago en cuentas corrientes.' },
     { tag:'Nuevo',  color:'bg-green-100 text-green-800 border-green-300', fecha:'26/05/2026',
-      titulo:'🐄 Hacienda: stock por campo, declarado (SENASA) vs real',
-      desc:'Nueva sección Hacienda para llevar el ganado por campo. Cada campo muestra sus categorías (Vacas, Vaquillonas, Terneros, Toros, etc.) con el stock declarado en SENASA / ARCA, el stock real (calculado a partir de los movimientos cargados) y la diferencia, que les recuerda qué falta registrar en ARCA. Los movimientos incluyen nacimiento, muerte, compra, venta, traslado entre campos y ajuste / conteo. Funciona en modo offline: la gente del campo puede cargar nacimientos y muertes desde el celular sin señal, y se sincroniza solo cuando vuelve internet.' },
+      titulo:'🐄 Animales: stock por campo, declarado (SENASA) vs real',
+      desc:'Nueva sección Animales para llevar el ganado por campo. Cada campo muestra sus categorías (Vacas, Vaquillonas, Terneros, Toros, etc.) con el stock declarado en SENASA / ARCA, el stock real (calculado a partir de los movimientos cargados) y la diferencia, que les recuerda qué falta registrar en ARCA. Los movimientos incluyen nacimiento, muerte, compra, venta, traslado entre campos y ajuste / conteo. Funciona en modo offline: la gente del campo puede cargar nacimientos y muertes desde el celular sin señal, y se sincroniza solo cuando vuelve internet.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300',   fecha:'26/05/2026',
       titulo:'📋 Cuentas Corrientes: manuales con vencimiento y totales separados',
       desc:'El tab "Otros / Manuales" en Cuentas Corrientes ahora tiene sus propios totales de "a cobrar" y "a pagar" (no se mezclan con clientes ni proveedores). Cada movimiento manual tiene fecha de vencimiento, categoría (Arrendamiento, Servicio, Impuesto, Otro…) y marca de pagado / pendiente. Aparece una alerta de los que vencen en los próximos 15 días y los vencidos, con badges de colores. Filtros por categoría, estado y dirección. Ideal para alquileres, impuestos y servicios que vencen mes a mes.' },
@@ -4359,7 +4362,7 @@ async function dashResumen() {
     prods = sRsp.data || [];
     for (const p of prods) {
       if (prodCategoriaRaiz(p) === 'Cereales / Granos' || /cereal|grano/i.test(p.categoria)) stockG += Number(p.existencia||0);
-      if (prodCategoriaRaiz(p) === 'Hacienda' || /hacienda|animal/i.test(p.categoria)) stockH += Number(p.existencia||0);
+      if (prodCategoriaRaiz(p) === 'Animales' || /hacienda|animal/i.test(p.categoria)) stockH += Number(p.existencia||0);
     }
     camps = cRsp.data || [];
     efectivos = efRsp.data || [];
@@ -4461,7 +4464,7 @@ async function dashResumen() {
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Campañas activas</div><div class="text-2xl font-bold text-green-700 mt-1">${hasEnCurso}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Stock granos</div><div class="text-xl font-bold mt-1">${fmtKg(stockG)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Stock hacienda</div><div class="text-xl font-bold mt-1">${fmtN(stockH)} cab.</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Stock animales</div><div class="text-xl font-bold mt-1">${fmtN(stockH)} cab.</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Cuentas por cobrar / pagar</div>
         <div class="${dashMonedaModo()==='multi'?'text-base':'text-xl'} font-bold mt-1 text-amber-600">${dashMonedaModo()==='multi'?fmtMulti(ccPorMoneda(ccs,'cliente'),true):fmt$(saldoPorCobrar)}</div>
         <div class="text-[11px] text-slate-500 mt-0.5">A pagar: <span class="text-red-600 font-semibold">${dashMonedaModo()==='multi'?fmtMulti(ccPorMoneda(ccs,'proveedor'),true):fmt$(saldoPorPagar)}</span></div>
@@ -5991,7 +5994,7 @@ pages.stock = async function() {
   try { const c = await api('/api/catalogos'); state.cache.catalogos = c.data || []; } catch {}
   if (!state.cache.catHacienda) { try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {} }
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
-  // Mapa nombre de categoría de hacienda -> especie (para mostrar la familia en Stock).
+  // Mapa nombre de categoría de animales -> especie (para mostrar la familia en Stock).
   const _hacEspMap = {}; (state.cache.catHacienda||[]).forEach(c => { _hacEspMap[(c.nombre||'').toLowerCase().trim()] = c.especie; });
   // La CATEGORÍA que se muestra/filtra es la raíz del árbol de Categorías y Familias.
   const _pmap = {}; (state.cache.productos||[]).forEach(x => { _pmap[x.id] = x; });
@@ -6044,7 +6047,7 @@ pages.stock = async function() {
               <td class="text-right">${fmtN(p.stockMinimo)}</td>
               <td>${p.bajoMinimo?'<span class="badge badge-red">Bajo mínimo</span>':'<span class="badge badge-green">OK</span>'}</td>
               <td class="text-right whitespace-nowrap">
-                ${p.esHacienda?`<button class="btn btn-ghost text-xs text-amber-700" title="Gestionar en Hacienda" onclick="go('hacienda')">🐄 Hacienda</button>`:`${can('stock:create')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Nueva entrada" onclick='movEntrada(${JSON.stringify(p.id)})'>⬆️</button>`:''}
+                ${p.esHacienda?`<button class="btn btn-ghost text-xs text-amber-700" title="Gestionar en Animales" onclick="go('hacienda')">🐄 Animales</button>`:`${can('stock:create')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Nueva entrada" onclick='movEntrada(${JSON.stringify(p.id)})'>⬆️</button>`:''}
                 ${can('stock:create')?`<button class="btn btn-ghost text-xs text-red-600" title="Nueva salida" onclick='movSalida(${JSON.stringify(p.id)})'>⬇️</button>`:''}`}
                 ${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='prodForm(${JSON.stringify(p.id)})'>✏️</button>`:''}
               </td>
@@ -6288,7 +6291,7 @@ function movEntrada(prodId) { movForm(prodId, 'entrada'); }
 function movSalida(prodId) { movForm(prodId, 'salida'); }
 // Opciones del árbol de categorías (raíces + hijos indentados) para un <select>.
 // Especie/familia RAÍZ de una hacienda: sube por el árbol hasta el hijo directo de
-// "Hacienda" (ej: Angus -> Bovino). Si no está en el árbol, devuelve el mismo nombre.
+// "Animales" (ej: Angus -> Bovino). Si no está en el árbol, devuelve el mismo nombre.
 function _especieRaizHac(especie) {
   const arb = state.cache.categoriasArt || [];
   const hacRoot = arb.find(c => !c.padreId && (c.nombre||'').toLowerCase() === 'hacienda');
@@ -6355,12 +6358,12 @@ async function prodForm(id=null, opts={}) {
         </div>
         <div><label class="label">Unidad *</label>${catSelect('f-u', 'Unidad de medida', it.unidad||'kg', { placeholder:'kg / L / u / …' })}</div>
         <div id="f-cathac-wrap" class="col-span-2 p-2 bg-amber-50 rounded border border-amber-200" style="display:${(it.categoria==='hacienda')?'block':'none'}">
-          <label class="label">🐄 Categoría de hacienda (vincula el stock con los movimientos)</label>
+          <label class="label">🐄 Categoría de animales (vincula el stock con los movimientos)</label>
           <select id="f-cathac" class="input">
             <option value="">— sin vincular —</option>
             ${cats.map(c=>`<option value="${esc(c.nombre)}" ${it.categoriaHacienda===c.nombre?'selected':''}>${esc(c.especie?c.especie+' · ':'')}${esc(c.nombre)}</option>`).join('')}
           </select>
-          <div class="text-[11px] text-amber-700 mt-1">Las cabezas/kg que ves en Stock para este producto salen de los movimientos de hacienda de esta categoría.</div>
+          <div class="text-[11px] text-amber-700 mt-1">Las cabezas/kg que ves en Stock para este producto salen de los movimientos de animales de esta categoría.</div>
         </div>
         <div><label class="label">Stock mínimo</label><input id="f-min" type="number" step="0.01" class="input" value="${it.stockMinimo||0}" /></div>
         <div><label class="label">Precio referencia</label><input id="f-pr" type="number" step="0.01" class="input" value="${it.precioReferencia||''}" /></div>
@@ -6453,7 +6456,7 @@ async function depurarDuplicados(){
   try{ const r=await api('/api/admin/stock/duplicados'); grupos=r.data||[]; familias=r.familias||0; huerfanos=r.huerfanos||0; }catch(e){ return toast(e.message,'error'); }
   if(!grupos.length && !familias && !huerfanos) return toast('No hay duplicados, familias ni artículos huérfanos para limpiar. Todo en orden ✅','success');
   const notaFam = familias>0 ? `<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2 mb-2">🏷️ Además, a <b>${familias}</b> producto${familias===1?'':'s'} se le${familias===1?'':'s'} va a <b>corregir la familia</b> según el Catálogo (Herbicida, Fungicida, Fertilizante, etc.).</div>` : '';
-  const notaHuerf = huerfanos>0 ? `<div class="bg-red-50 border border-red-200 text-red-900 text-xs rounded-lg p-2 mb-2">🗑️ Además, se van a <b>eliminar ${huerfanos}</b> artículo${huerfanos===1?'':'s'} de <b>Hacienda</b> que ya no están en el Catálogo (ej. Cabra, Chivo). Los que tengan movimientos se desactivan en vez de borrarse, para no perder el historial.</div>` : '';
+  const notaHuerf = huerfanos>0 ? `<div class="bg-red-50 border border-red-200 text-red-900 text-xs rounded-lg p-2 mb-2">🗑️ Además, se van a <b>eliminar ${huerfanos}</b> artículo${huerfanos===1?'':'s'} de <b>Animales</b> que ya no están en el Catálogo (ej. Cabra, Chivo). Los que tengan movimientos se desactivan en vez de borrarse, para no perder el historial.</div>` : '';
   const body = grupos.map(g=>`
     <div class="border border-slate-200 rounded-lg p-2 mb-2">
       <div class="font-semibold text-agro-900 text-sm mb-1">${esc(g.nombre)} <span class="text-slate-400 font-normal">· ${esc(g.categoria)}</span></div>
@@ -6539,7 +6542,7 @@ pages.movimientos = async function() {
     const filtered = rows.filter(m => {
       if (f.tipo && m.tipo !== f.tipo) return false;
       if ((f.cats||[]).length) {
-        const pcat = m._hac ? 'Hacienda' : prodCategoriaRaiz(prods.find(x=>x.id===m.productoId));
+        const pcat = m._hac ? 'Animales' : prodCategoriaRaiz(prods.find(x=>x.id===m.productoId));
         if (!f.cats.includes(pcat)) return false;
       }
       if (f.fam) { const pp = prods.find(x=>x.id===m.productoId); const caId = _prodCaId(pp) || (m._hac ? _prodCaId({categoria:'hacienda', categoriaHacienda:(m.producto?.categoriaHacienda|| (m.producto?.nombre||'').split(' - ').pop().trim())}) : null); if (!_catCadena(caId).includes(f.fam)) return false; }
@@ -6618,7 +6621,7 @@ pages.movimientos = async function() {
                   const catAnimal = p?.categoriaHacienda || (m.producto?.nombre||p?.nombre||'').split(' - ').pop().trim();
                   const cfg = (state.cache.catHacienda||[]).find(c=>(c.nombre||'').toLowerCase().trim()===String(catAnimal||'').toLowerCase().trim());
                   const esp = cfg ? cfg.especie : null;
-                  const fam = esp ? (_especieRaizHac(esp) + (_especieRaizHac(esp).toLowerCase()!==esp.toLowerCase()?' · '+esp:'')) : 'Hacienda';
+                  const fam = esp ? (_especieRaizHac(esp) + (_especieRaizHac(esp).toLowerCase()!==esp.toLowerCase()?' · '+esp:'')) : 'Animales';
                   return `<span class="badge badge-blue text-[10px]">🐄 ${esc(fam)}</span>`;
                 }
                 const cid=p?.categoriaArticuloId; let fam=null; if(cid){ const n=(state.cache.categoriasArt||[]).find(x=>x.id===cid); if(n) fam=n.nombre; } fam = fam || catBadge;
@@ -8005,7 +8008,7 @@ function campoForm(id=null) {
           <select id="f-tipoexp" class="input">
             <option value="" ${!it.tipoExplotacion?'selected':''}>— Sin especificar —</option>
             <option value="agricola"  ${it.tipoExplotacion==='agricola'?'selected':''}>🌾 Agrícola (granos)</option>
-            <option value="ganadera"  ${it.tipoExplotacion==='ganadera'?'selected':''}>🐄 Ganadera (hacienda)</option>
+            <option value="ganadera"  ${it.tipoExplotacion==='ganadera'?'selected':''}>🐄 Ganadera (animales)</option>
             <option value="mixta"     ${it.tipoExplotacion==='mixta'?'selected':''}>🌾🐄 Mixta (agrícola + ganadera)</option>
           </select>
         </div>
@@ -8052,7 +8055,7 @@ function campoForm(id=null) {
         ${sectionHeader('📦','Depósito / Silo')}
         <div class="col-span-2">
           <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="f-esdep" ${it.esDeposito?'checked':''}/> <span>Este campo <b>funciona como depósito</b> (silo / galpón propio)</span></label>
-          <div class="text-[11px] text-slate-500 mt-1">Al tildarlo, se crea un depósito con el nombre del campo: vas a poder usarlo para guardar granos/insumos y para los movimientos de animales por campo. Aparece en Stock, Movimientos y Hacienda.</div>
+          <div class="text-[11px] text-slate-500 mt-1">Al tildarlo, se crea un depósito con el nombre del campo: vas a poder usarlo para guardar granos/insumos y para los movimientos de animales por campo. Aparece en Stock, Movimientos y Animales.</div>
         </div>
 
         ${sectionHeader('📝','Notas')}
@@ -8254,7 +8257,7 @@ async function empEliminar(id, nombre) {
       const force = confirm(
         `${msg}\n\n` +
         `¿Forzar el borrado de TODA la empresa?\n\n` +
-        `⚠️ ATENCIÓN: esto borra absolutamente todo lo cargado en esta empresa (clientes, facturas, cheques, cuentas corrientes, movimientos, bancos, campos, lotes, empleados, viajes, hacienda, todo). Operación IRREVERSIBLE.\n\n` +
+        `⚠️ ATENCIÓN: esto borra absolutamente todo lo cargado en esta empresa (clientes, facturas, cheques, cuentas corrientes, movimientos, bancos, campos, lotes, empleados, viajes, animales, todo). Operación IRREVERSIBLE.\n\n` +
         `Si tenés dudas, cancelá y hacé un Backup primero (Configuración → Sistema).`
       );
       if (!force) return;
@@ -8745,9 +8748,9 @@ const IMPORT_CLIENTE_TIPOS = [
   { id:'cerdos-ventas',   label:'Ventas de cerdos',       icon:'🐖', desc:'Acepta una sola hoja de ventas o varias hojas separadas por categoría (Lechón/Capón/Chancho). Detecta columnas Fecha + Cantidad por palabras clave, agrega Precio, Total, Destino y Categoría si están. Crea un producto distinto por categoría.' },
   { id:'transferencias',  label:'Transferencias bancarias', icon:'🔁', desc:'Hoja con todas las transferencias hechas: Fecha, Banco, Monto, Detalle, Empresa, Quién la realizó. Crea automáticamente la cuenta bancaria del banco si no existe y carga cada fila como movimiento bancario tipo transferencia.' },
   { id:'ctacte-saldos',   label:'Saldos de Cuentas Corrientes', icon:'📒', desc:'Hoja con saldos abiertos de cuentas corrientes: Nombre, Saldo, Prioridad, Estado, Observaciones, Fecha de pago. Carga cada fila como cuenta corriente "libre". Las marcadas como pagadas quedan saldadas, el resto pendientes con vencimiento.' },
-  { id:'stock-hacienda',  label:'Stock de hacienda',       icon:'🐂', desc:'Una hoja por Renspa/campo, con Especie, Categoría y Stock real. Crea automáticamente el campo si no existe y carga el stock de hacienda por categoría. Si ya hay stock cargado, lo actualiza con el nuevo valor.' },
+  { id:'stock-hacienda',  label:'Stock de animales',       icon:'🐂', desc:'Una hoja por Renspa/campo, con Especie, Categoría y Stock real. Crea automáticamente el campo si no existe y carga el stock de animales por categoría. Si ya hay stock cargado, lo actualiza con el nuevo valor.' },
   { id:'hectareas-sembradas', label:'Hectáreas sembradas', icon:'🌾', desc:'Una hoja por empresa con Renspa, Campo, Cultivo y Hectáreas sembradas. Por cada (campo, cultivo) crea un lote con sus hectáreas. Crea el campo si no existe y le asigna el Renspa. La empresa destino es la empresa activa del usuario (cambiá de empresa para cargar otra hoja).' },
-  { id:'pyme-ventas',     label:'PyME — Ventas hacienda menor', icon:'🐑', desc:'Excel de ventas de hacienda menor con varias categorías (Lechón, Cordero, Chivito, etc) en hojas separadas. Por cada fila crea el producto si no existe y un movimiento de venta. Si la fila marca "No pago", también suma a Cuentas Corrientes como deuda del cliente.' },
+  { id:'pyme-ventas',     label:'PyME — Ventas animales menor', icon:'🐑', desc:'Excel de ventas de animales menor con varias categorías (Lechón, Cordero, Chivito, etc) en hojas separadas. Por cada fila crea el producto si no existe y un movimiento de venta. Si la fila marca "No pago", también suma a Cuentas Corrientes como deuda del cliente.' },
   { id:'proveedores',     label:'Catálogo de proveedores', icon:'🏬', desc:'Listado de proveedores con Nombre, Teléfono, Mail, CUIT, Horarios. Carga cada uno como Proveedor en el sistema. Saltea los que ya existen (matching por razón social).' },
 ];
 
@@ -8832,9 +8835,9 @@ async function importClienteModeloDescargar(tipo) {
 const TIPO_IMP_LABEL = {
   transferencias: '🔁 Transferencias bancarias',
   'ctacte-saldos': '📒 Cuentas corrientes — saldos pendientes',
-  'stock-hacienda': '🐂 Stock de hacienda',
+  'stock-hacienda': '🐂 Stock de animales',
   'hectareas-sembradas': '🌾 Hectáreas sembradas',
-  'pyme-ventas': '🐑 PyME — Ventas hacienda menor',
+  'pyme-ventas': '🐑 PyME — Ventas animales menor',
   proveedores: '🏬 Proveedores (catálogo)',
   cheques: '💳 Control de cheques',
   creditos: '🏦 Créditos bancarios',
@@ -9243,7 +9246,7 @@ function sistemaLimpiarEmpresa() {
         <li>Créditos bancarios y sus cuotas</li>
         <li>Liquidaciones de cereal</li>
         <li>Arrendamientos · Viajes</li>
-        <li>Movimientos de hacienda</li>
+        <li>Movimientos de animales</li>
         <li>Planillas de empleados</li>
       </ul>
       <div class="text-sm font-semibold text-slate-800 mb-2">Adicional (opcional):</div>
@@ -10147,7 +10150,7 @@ async function rolForm(id=null) {
       </div>
       <div class="label mt-3">Categorías de stock que puede ver</div>
       <div class="border rounded-lg p-3 bg-slate-50">
-        <p class="text-[11px] text-slate-500 mb-2">💡 Si <b>no marcás ninguna</b>, el rol ve <b>todo</b> el stock. Si marcás algunas, en Stock solo verá esas (ej: Insumos sí, Hacienda no). La lista sale de <b>Categorías y Familias</b>, así que se actualiza sola cuando agregás o cambiás categorías.</p>
+        <p class="text-[11px] text-slate-500 mb-2">💡 Si <b>no marcás ninguna</b>, el rol ve <b>todo</b> el stock. Si marcás algunas, en Stock solo verá esas (ej: Insumos sí, Animales no). La lista sale de <b>Categorías y Familias</b>, así que se actualiza sola cuando agregás o cambiás categorías.</p>
         <div class="grid grid-cols-3 gap-1">
           ${_catStockOpts.map(([val,lbl]) => `
             <label class="flex items-center gap-2 text-sm py-1">
@@ -10161,7 +10164,7 @@ async function rolForm(id=null) {
   });
 }
 // Categorías de producto para el permiso de "vista de stock" por rol.
-const STOCK_CATS = [['granos','🌾 Granos'],['insumos','🧪 Insumos'],['hacienda','🐄 Hacienda'],['repuestos','🔩 Repuestos'],['combustibles','⛽ Combustibles'],['otros','📦 Otros']];
+const STOCK_CATS = [['granos','🌾 Granos'],['insumos','🧪 Insumos'],['hacienda','🐄 Animales'],['repuestos','🔩 Repuestos'],['combustibles','⛽ Combustibles'],['otros','📦 Otros']];
 // === Helpers para los checkboxes de la grilla de Roles ===
 // Cuando dos módulos comparten área (ej Facturación y Ctas Corrientes → finanzas),
 // sus checkboxes representan la misma perm — al marcar uno, propagamos el estado
@@ -10910,7 +10913,7 @@ function _catalogoArtSets(){
     if (TIPOS_ART.has(c.tipo)) nombres.add(norm(c.nombre));
     else if (c.tipo==='Categoría animal' || c.tipo==='Categoria animal') animales.add(norm(c.nombre));
   });
-  // Las categorías de animales VIGENTES son las de la config de Hacienda (catHacienda).
+  // Las categorías de animales VIGENTES son las de la config de Animales (catHacienda).
   // Si está cargada, ES la fuente autoritativa (así no se muestran animales de especies
   // que el usuario ya no tiene, ej. quedó solo Bovino). El catálogo viejo queda de respaldo.
   const hac = state.cache.catHacienda || [];
@@ -10918,7 +10921,7 @@ function _catalogoArtSets(){
   return { nombres, animales, norm };
 }
 // Categoría del árbol EFECTIVA de un producto: para hacienda (que no guarda
-// categoriaArticuloId en el producto) la tomamos de la config de Hacienda por su categoría.
+// categoriaArticuloId en el producto) la tomamos de la config de Animales por su categoría.
 function _prodCaId(p) {
   if (!p) return null;
   if (p.categoriaArticuloId) return p.categoriaArticuloId;
@@ -10933,8 +10936,8 @@ function _prodCaId(p) {
 function prodEnCatalogo(p, sets){
   sets = sets || _catalogoArtSets();
   const { nombres, animales, norm } = sets;
-  // Hacienda: SOLO vale si su categoría de animal sigue vigente en el catálogo de
-  // Hacienda. Así no se cuelan animales de especies que el usuario ya no tiene
+  // Animales: SOLO vale si su categoría de animal sigue vigente en el catálogo de
+  // Animales. Así no se cuelan animales de especies que el usuario ya no tiene
   // (ej. quedó solo Bovino y sobran Cabra, Chivo). No alcanza con tener familia.
   if (p.categoria==='hacienda' || p.esHacienda) {
     return !!(p.categoriaHacienda && animales.has(norm(p.categoriaHacienda)));
@@ -11014,7 +11017,7 @@ function factFamilias() {
   const roots = (state.cache.categoriasArt || []).filter(c => !c.padreId && c.activo !== false)
     .sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''))
     .map(c => (c.nombre||'').trim()).filter(Boolean);
-  return ['Todos', ...(roots.length ? roots : ['Insumos','Cereales / Granos','Hacienda','Servicios y Labores','Otros'])];
+  return ['Todos', ...(roots.length ? roots : ['Insumos','Cereales / Granos','Animales','Servicios y Labores','Otros'])];
 }
 function _tinsSetLower(){ try { return new Set(tiposInsumoNombres().map(x=>(x||'').toLowerCase().trim())); } catch { return new Set(); } }
 // Mapea la categoría de un artículo a su familia (para agrupar en el buscador).
@@ -11022,7 +11025,7 @@ function _familiaArticulo(cat) {
   const c = (cat||'').toLowerCase().trim();
   if (!c) return 'Otros';
   if (['granos','grano','cereales','cereal'].includes(c)) return 'Cereales';
-  if (c === 'hacienda') return 'Hacienda';
+  if (c === 'hacienda') return 'Animales';
   if (['servicios','servicio','labor','labores','flete','fletes'].includes(c)) return 'Servicios';
   if (['insumos','insumo','combustibles','combustible'].includes(c) || _tinsSetLower().has(c)) return 'Insumos';
   return 'Otros';
@@ -13818,7 +13821,7 @@ async function chqAcreditarSave(id) {
  * Funciona en modo offline (la gente cuenta en el campo desde el celu).
  * ========================================================= */
 const HAC_CATEGORIAS = ['Vacas','Vaquillonas','Terneros','Terneras','Novillos','Novillitos','Toros','Crías'];
-// Categorías disponibles para los selectores de Hacienda.
+// Categorías disponibles para los selectores de Animales.
 // Antes los selectores usaban SOLO la lista fija de arriba (bovinos), por eso
 // "no salían todas" las categorías cargadas en el catálogo y "solo aparecían
 // bovinos". Ahora toma TODAS las categorías del catálogo del usuario
@@ -13854,8 +13857,8 @@ function hacTipoLabel(t){
 }
 
 pages.hacienda = async function() {
-  setHeader('Hacienda', 'Stock por campo · declarado (SENASA) vs real');
-  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('hacienda','Hacienda'); return; }
+  setHeader('Animales', 'Stock por campo · declarado (SENASA) vs real');
+  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('hacienda','Animales'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
 
   let resumen = { campos: [], filas: [] };
@@ -13917,7 +13920,7 @@ pages.hacienda = async function() {
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="hacProyeccion()" title="Estado de situación y proyección de kg para presentar al banco">📈 Proyección</button>
         ${canU?`<button class="btn btn-secondary" onclick="state.catTab='categAn';go('catalogos')" title="Las categorías de animales se configuran en Catálogo (especie, rango de kg, peso y a qué categoría puede pasar)">⚙️ Categorías (Catálogo)</button>`:''}
-        ${canC?`<button class="btn btn-secondary" onclick="hacVincularFactura()" title="Vincular una factura ya cargada que no movió el stock de hacienda">🔗 Vincular factura</button>`:''}
+        ${canC?`<button class="btn btn-secondary" onclick="hacVincularFactura()" title="Vincular una factura ya cargada que no movió el stock de animales">🔗 Vincular factura</button>`:''}
         ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
       </div>
     </div>`;
@@ -14098,7 +14101,7 @@ async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') 
   const todasCategorias = hacCategoriasDisponibles();
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
   openModal({
-    title: 'Nuevo movimiento de hacienda',
+    title: 'Nuevo movimiento de animales',
     body: `
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Tipo *</label>
@@ -14315,7 +14318,7 @@ async function hacMovEditarSave(id) {
     _hacRefresh();
   } catch(e) { toast(e.message,'error'); }
 }
-// ----- Configuración de categorías de hacienda (especie, kg, transiciones) -----
+// ----- Configuración de categorías de animales (especie, kg, transiciones) -----
 async function hacCatManager(){
   try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {}
   const cats = state.cache.catHacienda || [];
@@ -14330,7 +14333,7 @@ async function hacCatManager(){
       ${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='hacCatDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
     </td></tr>`;
   openModal({
-    title:'⚙️ Categorías de hacienda', size:'max-w-3xl',
+    title:'⚙️ Categorías de animales', size:'max-w-3xl',
     body:`
       <div class="flex justify-between items-center mb-2 gap-2">
         <p class="text-[11px] text-slate-500">Especie, rango de kg vivo y a qué categorías puede pasar (matriz para los cambios de categoría).</p>
@@ -14348,7 +14351,7 @@ async function hacCatForm(id=null, fromCatalogo=false){
   const todas = (state.cache.catHacienda||[]).map(c=>c.nombre).filter(n=>n && n!==it.nombre);
   const trans = Array.isArray(it.transiciones)?it.transiciones:[];
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
-  // Las FAMILIAS de Hacienda (del árbol) reemplazan al viejo campo "Especie".
+  // Las FAMILIAS de Animales (del árbol) reemplazan al viejo campo "Especie".
   const arb = state.cache.categoriasArt || [];
   const hacRoot = arb.find(c=>!c.padreId && (c.nombre||'').toLowerCase()==='hacienda');
   let famOpts = '';
@@ -14360,7 +14363,7 @@ async function hacCatForm(id=null, fromCatalogo=false){
     });
   };
   if (hacRoot) walkFam(hacRoot.id, 0);
-  if (!famOpts) { // fallback si el árbol no tiene familias de Hacienda todavía
+  if (!famOpts) { // fallback si el árbol no tiene familias de Animales todavía
     const esp = [...new Set(((typeof catByTipo==='function'?catByTipo('Especie'):[]).map(x=>x.nombre)).concat(['Bovino','Porcino','Ovino','Equino','Caprino']).filter(Boolean))];
     famOpts = esp.map(e=>`<option value="${esc(e)}" ${e===(it.especie||'')?'selected':''}>${esc(e)}</option>`).join('');
   }
@@ -14372,7 +14375,7 @@ async function hacCatForm(id=null, fromCatalogo=false){
         <div><label class="label">Nombre *</label><input id="hc-nom" class="input" value="${esc(it.nombre||'')}" placeholder="Ej: Novillito"/></div>
         <div><label class="label">Familia *</label>
           <select id="hc-esp" class="input">${famOpts}</select>
-          <div class="text-[10px] text-slate-400 mt-1">Se administra en Categorías y Familias (Hacienda → Bovinos, Ovinos…).</div>
+          <div class="text-[10px] text-slate-400 mt-1">Se administra en Categorías y Familias (Animales → Bovinos, Ovinos…).</div>
         </div>
         <div><label class="label">Kg mínimo</label><input id="hc-kgmin" type="number" step="0.1" class="input" value="${it.kgMin??''}"/></div>
         <div><label class="label">Kg máximo</label><input id="hc-kgmax" type="number" step="0.1" class="input" value="${it.kgMax??''}"/></div>
@@ -14431,7 +14434,7 @@ function hacProyeccion(){
   if (!datos.length) return toast('No hay stock con cabezas para proyectar. Cargá movimientos (y peso promedio para ver kg).','warn');
   state._proy = { dias:90, precio:0, rows:datos };
   openModal({
-    title:'📈 Proyección de hacienda (para el banco)', size:'max-w-5xl',
+    title:'📈 Proyección de animales (para el banco)', size:'max-w-5xl',
     body: hacProyBody(),
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
             <button class="btn btn-primary" onclick="hacProyPDF()">🖨️ Exportar PDF</button>`
@@ -14580,7 +14583,7 @@ async function hacRendSave(movId){
   catch(e){ toast(e.message,'error'); }
 }
 
-// ===== Vincular una factura ya cargada a un movimiento de hacienda (excepción) =====
+// ===== Vincular una factura ya cargada a un movimiento de animales (excepción) =====
 async function hacVincularFactura(){
   let fv=[], fc=[];
   try { fv=(await api('/api/facturas')).data||[]; } catch {}
@@ -14594,9 +14597,9 @@ async function hacVincularFactura(){
   ];
   state._vincFact = optFact;
   openModal({
-    title:'🔗 Vincular factura a hacienda', size:'max-w-lg',
+    title:'🔗 Vincular factura a animales', size:'max-w-lg',
     body:`
-      <p class="text-xs text-slate-500 mb-3">Para una factura ya cargada que <b>no movió</b> el stock de hacienda. Crea el movimiento (NO vuelve a registrar el cobro, que ya lo hizo la factura).</p>
+      <p class="text-xs text-slate-500 mb-3">Para una factura ya cargada que <b>no movió</b> el stock de animales. Crea el movimiento (NO vuelve a registrar el cobro, que ya lo hizo la factura).</p>
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2"><label class="label">Factura *</label>
           <select id="vf-fact" class="input"><option value="">— elegir —</option>${optFact.map((o,i)=>`<option value="${i}">${esc(o.lbl)}</option>`).join('')}</select>
@@ -21582,7 +21585,7 @@ function prodCategoriaRaiz(p){
   if (!p) return '';
   const r = p.categoriaArticuloId ? _catRaizNodo(p.categoriaArticuloId) : null;
   if (r) return r.nombre;
-  if (p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda') return 'Hacienda';
+  if (p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda') return 'Animales';
   const map = {
     insumo:'Insumos', insumos:'Insumos', combustibles:'Otros', combustible:'Otros',
     cereal:'Cereales / Granos', cereales:'Cereales / Granos', grano:'Cereales / Granos', granos:'Cereales / Granos',
@@ -21601,7 +21604,7 @@ const CAT_TABS = [
   { id:'cereales', label:'Cereales / Granos',   icon:'🌾', g:'prod', tipos:['Cereal'],             singular:'Cereal' },
   { id:'insumos',  label:'Insumos',             icon:'🥫', g:'prod', tipos:['Herbicida','Insecticida','Fungicida','Fertilizante','Semilla','Coadyuvante','Insumo'], singular:'Insumo' },
   { id:'labores',  label:'Servicios y Labores', icon:'🚜', g:'prod', tipos:['Labor'],              singular:'Labor' },
-  { id:'categAn',  label:'Hacienda',            icon:'🐂', g:'prod', tipos:['Categoría animal'], singular:'Animal' },
+  { id:'categAn',  label:'Animales',            icon:'🐂', g:'prod', tipos:['Categoría animal'], singular:'Animal' },
   { id:'ciclos',   label:'Ciclos / Campañas',   icon:'📅', g:'fisc', tipos:['Ciclo'],              singular:'Ciclo' },
   { id:'unidades', label:'Unidades de medida',  icon:'📏', g:'unid', tipos:['Unidad de medida'],   singular:'Unidad' },
   { id:'monedas',  label:'Monedas',             icon:'💱', g:'unid', tipos:['Moneda'],             singular:'Moneda' },
@@ -21671,7 +21674,7 @@ function catArtRender() {
       </div>
     </div>
     <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mb-3">
-      💡 Estructura de 3 niveles: <b>Categoría</b> (ej. Hacienda) → <b>Familia</b> (ej. Vacunos) → <b>Producto/ítem</b> (ej. Vaca, que vive en Catálogos). Acá manejás las Categorías y sus Familias; la Familia de cada ítem se elige en Catálogos.
+      💡 Estructura de 3 niveles: <b>Categoría</b> (ej. Animales) → <b>Familia</b> (ej. Vacunos) → <b>Producto/ítem</b> (ej. Vaca, que vive en Catálogos). Acá manejás las Categorías y sus Familias; la Familia de cada ítem se elige en Catálogos.
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       ${raices.map(r => nodo(r, 0)).join('') || `<div class="kpi md:col-span-2 text-center text-slate-400 py-8">Sin categorías. Creá la primera con "+ Nueva categoría".</div>`}
@@ -21685,7 +21688,7 @@ async function catArtVincular() {
   } catch (e) { toast('No se pudo vincular: '+(e.message||e),'error'); }
 }
 async function catArtRegenerar() {
-  if (!confirm('Regenerar el árbol sugerido reemplaza TODAS las categorías y familias actuales por el árbol por defecto (Insumos, Cereales, Hacienda, Servicios, Otros) y sus familias tomadas de tus catálogos (Tipos de insumo y Especies).\n\nLos productos/ítems quedan sin familia asignada (después la reasignás). ¿Continuar?')) return;
+  if (!confirm('Regenerar el árbol sugerido reemplaza TODAS las categorías y familias actuales por el árbol por defecto (Insumos, Cereales, Animales, Servicios, Otros) y sus familias tomadas de tus catálogos (Tipos de insumo y Especies).\n\nLos productos/ítems quedan sin familia asignada (después la reasignás). ¿Continuar?')) return;
   try {
     const r = await api('/api/categorias-articulo/sembrar?force=1', { method:'POST', body: JSON.stringify({ force:true }) });
     delete state.cache.categoriasArt;
@@ -21703,7 +21706,7 @@ function catArtForm(id=null, padreIdDefault=null) {
   openModal({
     title: (id?'Editar ':'Nueva ') + (esFamilia?'familia':'categoría'), size:'max-w-md',
     body: `
-      <div><label class="label">Nombre *</label><input id="ca-nombre" class="input" value="${esc(c.nombre||'')}" placeholder="${esFamilia?'Ej: Fertilizantes, Vacunos, Fina…':'Ej: Insumos, Hacienda, Repuestos…'}"/></div>
+      <div><label class="label">Nombre *</label><input id="ca-nombre" class="input" value="${esc(c.nombre||'')}" placeholder="${esFamilia?'Ej: Fertilizantes, Vacunos, Fina…':'Ej: Insumos, Animales, Repuestos…'}"/></div>
       <div class="mt-3"><label class="label">Depende de</label>
         <select id="ca-padre" class="input">
           ${catArtTreeOptions(c.padreId, { excludeId: id, rootLabel:'— Ninguna: es una Categoría principal —' })}
@@ -21979,7 +21982,7 @@ pages.catalogos = async function() {
   // subfamilias caen dentro de su familia madre; lo que no tiene familia va a "Sin Familia").
   let _rootIdTab = null;
   if (esProdCat) _rootIdTab = tab.catId;
-  else if (CATTAB_ROOT[tab.id]) { const rn=_norm(CATTAB_ROOT[tab.id]); const rnode = arbol.find(c=>!c.padreId && _norm(c.nombre)===rn); _rootIdTab = rnode ? rnode.id : null; }
+  else if (CATTAB_ROOT[tab.id]) { const rn=_norm(CATTAB_ROOT[tab.id]); const alias = (tab.id==='categAn') ? [rn,'hacienda'] : [rn]; const rnode = arbol.find(c=>!c.padreId && alias.includes(_norm(c.nombre))); _rootIdTab = rnode ? rnode.id : null; }
   const _familiaDeItem = (caId) => {
     if (!caId || !_rootIdTab) return null;
     let c=_catNodo(caId), g=0;
@@ -22122,7 +22125,7 @@ pages.catalogos = async function() {
                 ${items.map(m=>`<tr class="table-row">
                   <td class="font-mono text-xs">${esc(m.clave)}</td>
                   <td class="font-semibold text-slate-800">${esc(m.label)}${m.custom?'':' <span class="badge badge-gray text-[9px]">predefinida</span>'}</td>
-                  <td class="text-slate-600">${m.tipo==='grano'?'Grano (tn)':m.tipo==='hacienda'?'Hacienda (kg)':'Moneda'}</td>
+                  <td class="text-slate-600">${m.tipo==='grano'?'Grano (tn)':m.tipo==='hacienda'?'Animales (kg)':'Moneda'}</td>
                   <td><span class="badge ${m.fuente==='manual'?'badge-yellow':'badge-blue'}">${esc(m.fuente||'manual')}</span></td>
                   <td class="text-right text-slate-600">${m.ultima!=null?fmt$(m.ultima):'—'}</td>
                   <td class="text-right whitespace-nowrap">${m.custom?`${(can('catalogos:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs" onclick='monedaCatForm(${JSON.stringify(m.id)})'>✏️</button>`:''}${(can('catalogos:delete')||can('finanzas:delete'))?`<button class="btn btn-ghost text-xs text-red-600" onclick='monedaCatDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`:'<span class="text-[10px] text-slate-400">—</span>'}</td>
@@ -22195,7 +22198,7 @@ function catSwitch(tabId) {
   state.catTab = tabId; pages.catalogos();
 }
 // Qué categoría raíz del árbol corresponde a cada pestaña del catálogo (para elegir Familia).
-const CATTAB_ROOT = { cereales:'Cereales / Granos', insumos:'Insumos', labores:'Servicios y Labores', categAn:'Hacienda' };
+const CATTAB_ROOT = { cereales:'Cereales / Granos', insumos:'Insumos', labores:'Servicios y Labores', categAn:'Animales' };
 async function catForm(id=null, tabId=null) {
   const it = id ? (state.cache.catalogos||[]).find(x=>x.id===id)||{} : {};
   const tab = CAT_TABS.find(x=>x.id===(tabId||state.catTab)) || CAT_TABS[0];
@@ -25113,8 +25116,8 @@ async function liqMarcarCobrado(id) {
  * LIQUIDACIONES DE HACIENDA — venta que descuenta stock real + SENASA
  * ========================================================= */
 pages.liquidacionesHacienda = async function() {
-  setHeader('Liquidaciones de hacienda', 'Venta de animales (faena/consignación) — descuenta stock real y SENASA');
-  if (!can('ventas:read')) { $('#page-body').innerHTML = stubPage('liquidacionesHacienda','Liquidaciones hacienda'); return; }
+  setHeader('Liquidaciones de animales', 'Venta de animales (faena/consignación) — descuenta stock real y SENASA');
+  if (!can('ventas:read')) { $('#page-body').innerHTML = stubPage('liquidacionesHacienda','Liquidaciones animales'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows = [];
   try { rows = (await api('/api/liquidaciones-hacienda')).data || []; } catch (e) { return toast(e.message,'error'); }
@@ -25156,7 +25159,7 @@ pages.liquidacionesHacienda = async function() {
 // Modal para subir el PDF y autocompletar el formulario.
 function liqHacImportar(){
   openModal({
-    title:'📥 Importar liquidación de hacienda (PDF)', size:'max-w-lg',
+    title:'📥 Importar liquidación de animales (PDF)', size:'max-w-lg',
     body:`
       <div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mb-3">
         Subí el PDF de la <b>liquidación de compra / faena</b>. El sistema detecta el <b>tipo de animal</b>, los kg, el precio, el neto y el CAE, y abre el formulario para que confirmes el <b>campo</b> y la <b>categoría</b> de cada renglón antes de guardar.
@@ -25219,7 +25222,7 @@ async function liqHacForm(prefill=null){
   </tr>`;
 
   openModal({
-    title: prefill?'📥 Confirmar liquidación de hacienda':'🐄 Nueva liquidación de hacienda', size:'max-w-5xl',
+    title: prefill?'📥 Confirmar liquidación de animales':'🐄 Nueva liquidación de animales', size:'max-w-5xl',
     body:`
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Campo (de dónde salen los animales) *</label>
@@ -25330,7 +25333,7 @@ async function liqHacVer(id){
   try {
     const l=(await api('/api/liquidaciones-hacienda/'+id)).data;
     openModal({
-      title:`Liquidación hacienda ${l.numero||'#'+l.id.slice(-6)}`, size:'max-w-3xl',
+      title:`Liquidación animales ${l.numero||'#'+l.id.slice(-6)}`, size:'max-w-3xl',
       body:`
         <dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mb-3">
           <dt class="text-slate-500">Campo</dt><dd>${esc(l.campo?.nombre||'—')}</dd>
