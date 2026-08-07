@@ -2541,6 +2541,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
+      titulo:'🏢 v2.53.0 — Bot general multi-empresa + viajes desde varios depósitos',
+      desc:'El <b>asistente</b> ahora es <b>general</b>: ves el mismo chat desde cualquier empresa, y al cargar un movimiento te <b>pregunta en qué empresa</b> guardarlo (en pago/cobro la toma del contacto). Las <b>consultas</b> (a cobrar, plata en caja, etc.) te dejan elegir una empresa o <b>todas</b> juntas. En el chat, si estás leyendo mensajes viejos ya <b>no salta</b> al último. Y en <b>Viajes</b>, un viaje con CP puede <b>sacar cereal de varios depósitos</b>, indicando cuántos Kg de cada uno (la suma debe dar los Kg del viaje).' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'07/08/2026',
       titulo:'🚜 v2.52.2 — El asistente entiende mejor las labores',
       desc:'Ahora entiende <i>"apliqué / aplique 120 litros de glifosato en el lote 3"</i> (antes esa forma del verbo se le escapaba) y reconoce el lote aunque se llame <b>"Lote 3"</b> y vos escribas solo <b>"lote 3"</b>. Además la IA de respaldo devuelve frases más limpias.' },
@@ -7205,6 +7208,14 @@ async function chatReload(){
   let msgs=[];
   try { msgs = (await api('/api/mensajes?canal='+encodeURIComponent(conv))).data || []; } catch { return; }
   const yo = state.user?.id;
+  // Antes de re-dibujar, recordamos si el usuario estaba mirando el fondo (últimos mensajes).
+  // Si está leyendo mensajes viejos (scroll arriba), NO lo mandamos al fondo: respetamos su posición.
+  const prevBottomGap = cont.scrollHeight - cont.scrollTop - cont.clientHeight;
+  const nearBottom = prevBottomGap < 120;
+  const prevScrollTop = cont.scrollTop;
+  const prevScrollHeight = cont.scrollHeight;
+  const forceBottom = cont.dataset.conv !== conv; // al cambiar de conversación sí vamos al fondo
+  cont.dataset.conv = conv;
   cont.innerHTML = msgs.map(m=>{
     if (esAsistente && m.rol==='assistant'){
       return `<div class="self-start max-w-[85%] bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm px-3 py-2 text-sm whitespace-pre-line">🤖 ${esc(m.texto)}</div>`;
@@ -7217,13 +7228,18 @@ async function chatReload(){
       <div class="text-[10px] ${mine?'text-emerald-100':'text-slate-400'} text-right mt-0.5">${hora}</div>
     </div>`;
   }).join('') || `<div class="text-center text-slate-400 text-sm m-auto">${esAsistente?'Escribí o dictá lo que hiciste y lo cargo por vos.':'Sin mensajes todavía. ¡Escribí el primero!'}</div>`;
-  cont.scrollTop = cont.scrollHeight;
+  if (forceBottom || nearBottom) {
+    cont.scrollTop = cont.scrollHeight;         // al fondo (conversación nueva o ya estaba abajo)
+  } else {
+    // Estaba leyendo arriba: mantenemos su vista aunque hayan entrado mensajes nuevos.
+    cont.scrollTop = prevScrollTop + (cont.scrollHeight - prevScrollHeight);
+  }
 }
 async function chatEnviar(){
   const inp = document.getElementById('chat-input'); const txt = (inp?.value||'').trim();
   if (!txt) return;
   inp.value='';
-  try { await api('/api/mensajes',{method:'POST',body:JSON.stringify({texto:txt, canal: state.mensajesConv||'general'})}); await chatReload(); }
+  try { await api('/api/mensajes',{method:'POST',body:JSON.stringify({texto:txt, canal: state.mensajesConv||'general'})}); await chatReload(); const c=document.getElementById('chat-msgs'); if(c) c.scrollTop=c.scrollHeight; }
   catch(e){ toast(e.message,'error'); inp.value=txt; }
 }
 async function chatAsistente(){
@@ -7231,16 +7247,27 @@ async function chatAsistente(){
   if (!txt) return;
   inp.value='';
   try {
-    const r = await api('/api/asistente',{method:'POST',body:JSON.stringify({texto:txt, pendiente: state._astPendiente||null})});
+    const r = await api('/api/asistente',{method:'POST',body:JSON.stringify({texto:txt, pendiente: state._astPendiente||null, empresaScope: state._astEmpresaScope||null})});
+    state._astEmpresaScope = null;
     await chatReload();
+    { const c=document.getElementById('chat-msgs'); if(c) c.scrollTop=c.scrollHeight; }
     // Voz: leer la respuesta del asistente.
     _ttsHablar(r.status==='propuesta' ? ((r.resumen||'')+'. ¿Confirmás?') : (r.mensaje||''));
     const box = document.getElementById('chat-confirm');
     // Carga a medias: falta un dato → lo guardamos para el próximo mensaje.
     if (r.status==='faltante'){ state._astPendiente = { accion:r.accion, faltante:r.faltante, params:r.params }; if(box) box.innerHTML=''; return; }
     state._astPendiente = null;
+    // Multi-empresa: el bot pregunta de qué empresa quiere el dato (consulta).
+    if (r.status==='empresa' && box){
+      const emp = r.empresas||[];
+      state._astConsultaTexto = r.texto || txt;
+      const btns = emp.map(e=>`<button class="btn btn-secondary text-xs" onclick="astConsultaEmpresa('${e.id}')">🏢 ${esc(e.name)}</button>`).join('')
+        + `<button class="btn btn-primary text-xs" onclick="astConsultaEmpresa('todas')">📊 Todas</button>`;
+      box.innerHTML = `<div class="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2"><div class="text-xs text-blue-900 mb-2">¿De qué empresa querés el dato?</div><div class="flex gap-2 justify-end flex-wrap">${btns}</div></div>`;
+      return;
+    }
     if (r.status==='propuesta' && box){
-      state._asistProp = { accion:r.accion, params:r.params };
+      state._asistProp = { accion:r.accion, params:r.params, companyId:r.companyId||null, empresas:r.empresas||null, empresaFija:!!r.empresaFija };
       let editor = `<div class="text-sm text-amber-900">${esc(r.resumen)}</div>`;
       if (r.accion==='hacienda_mov'){
         // Traer campos y categorías para poder corregir antes de confirmar.
@@ -7323,7 +7350,21 @@ async function chatAsistente(){
           </div>
           <div class="text-[11px] text-slate-500 mt-1">Es un ${esCobro?'cobro':'pago'} <b>a cuenta</b> (baja el saldo del ${esCobro?'cliente':'proveedor'}). Para aplicarlo a facturas puntuales, usá Cuentas a ${esCobro?'cobrar':'pagar'}.</div>`;
       }
+      // Selector de EMPRESA donde cargar (solo si el usuario tiene varias).
+      let empSel = '';
+      if (r.empresas && r.empresas.length){
+        const cur = r.companyId || state.companyId;
+        const opts = r.empresas.map(e=>`<option value="${e.id}" ${e.id===cur?'selected':''}>${esc(e.name)}</option>`).join('');
+        const fija = r.empresaFija && r.companyId;
+        const nomFija = fija ? (r.empresas.find(e=>e.id===r.companyId)?.name||'') : '';
+        empSel = `<div class="mb-2"><label class="label text-[11px]">Empresa donde cargar</label>`
+          + (fija
+              ? `<div class="input text-sm bg-slate-50">🏢 ${esc(nomFija)}</div><input type="hidden" id="ast-empresa" value="${esc(r.companyId)}"/><div class="text-[10px] text-slate-500 mt-0.5">Determinada por el dato (contacto/campo). </div>`
+              : `<select id="ast-empresa" class="input text-sm">${opts}</select>`)
+          + `</div>`;
+      }
       box.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
+        ${empSel}
         ${editor}
         <div class="flex gap-2 justify-end mt-2">
           <button class="btn btn-secondary text-xs" onclick="chatAsistCancelar()">Cancelar</button>
@@ -7343,6 +7384,13 @@ async function chatAsistente(){
 function asistAbrir(page){ const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; go(page); }
 function asistEjemplo(frase){ const inp=document.getElementById('chat-input-a'); if(inp){ inp.value=frase; inp.focus(); } const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; chatAsistente(); }
 function chatAsistCancelar(){ state._asistProp=null; state._astPendiente=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
+// Consulta multi-empresa: el usuario eligió una empresa (o "todas") → re-enviamos la pregunta.
+function astConsultaEmpresa(cid){
+  const b=document.getElementById('chat-confirm'); if(b) b.innerHTML='';
+  state._astEmpresaScope = cid;
+  const inp=document.getElementById('chat-input-a'); if(inp) inp.value = state._astConsultaTexto||'';
+  chatAsistente();
+}
 function astPcMetodo(){
   const m=document.getElementById('ast-pc-met')?.value;
   const cw=document.getElementById('ast-pc-caja-wrap'), bw=document.getElementById('ast-pc-banco-wrap');
@@ -7351,6 +7399,9 @@ function astPcMetodo(){
 }
 async function chatAsistConfirmar(){
   const p = state._asistProp; if (!p) return;
+  // Empresa donde cargar (si el usuario tiene varias). Default: la del dato o la activa.
+  const cidSel = document.getElementById('ast-empresa')?.value || p.companyId || state.companyId;
+  const optsEmp = (cidSel && cidSel!==state.companyId) ? { headers:{ 'X-Company-Id': cidSel } } : {};
   // Pago a proveedor / Cobro a cliente (a cuenta): usa los endpoints reales ya probados.
   if (p.accion==='pago' || p.accion==='cobro'){
     const gv=(id)=>document.getElementById(id);
@@ -7365,7 +7416,7 @@ async function chatAsistConfirmar(){
     if(met==='transferencia'){ const bk=gv('ast-pc-banco')?.value||''; if(!bk) return toast('Elegí la cuenta bancaria','warn'); body.bancoCuentaId=bk; }
     const bx=document.getElementById('chat-confirm'); if(bx) bx.innerHTML=''; state._asistProp=null; state._astPendiente=null;
     try{
-      await api(url,{method:'POST',body:JSON.stringify(body)});
+      await api(url,{method:'POST',body:JSON.stringify(body), ...optsEmp});
       const msg=`✅ ${p.accion==='cobro'?'Cobro':'Pago'} registrado: $${monto.toLocaleString('es-AR')} · ${p.params.contactoNombre||''} (a cuenta).`;
       delete state.cache.efectivo; await chatReload(); toast('Registrado','success'); _ttsHablar(msg);
     }catch(e){ toast(e.message,'error'); await chatReload(); }
@@ -7406,7 +7457,8 @@ async function chatAsistConfirmar(){
   }
   const b=document.getElementById('chat-confirm'); if(b) b.innerHTML='';
   state._asistProp=null; state._astPendiente=null;
-  try { const rc = await api('/api/asistente/confirmar',{method:'POST',body:JSON.stringify(p)}); await chatReload();
+  const bodyConf = { accion:p.accion, params:p.params, companyId: cidSel||null };
+  try { const rc = await api('/api/asistente/confirmar',{method:'POST',body:JSON.stringify(bodyConf)}); await chatReload();
     delete state.cache.haciendaResumen; delete state.cache.efectivo; toast('Cargado','success'); _ttsHablar(rc?.mensaje||'Listo, lo cargué.'); }
   catch(e){ toast(e.message,'error'); await chatReload(); }
 }
@@ -16734,6 +16786,7 @@ function viajeFleteTotal(v) {
 function viajeOrigenCerealTxt(v) {
   if (v.campanaId) { const c=(state.cache.campanas||[]).find(x=>x.id===v.campanaId); return '🌾 '+esc(c ? (c.nombre||c.cultivo||'Campaña') : 'Campaña'); }
   if (v.depositoOrigenId) { const d=(state.cache.depositos||[]).find(x=>x.id===v.depositoOrigenId); return '🏬 '+esc(d ? d.nombre : 'Depósito'); }
+  if (Array.isArray(v.origenDepositos) && v.origenDepositos.length) return '🏬🏬 '+v.origenDepositos.length+' depósitos';
   return '<span class="text-slate-400">—</span>';
 }
 // Texto del DESTINO del cereal: cerealera / venta directa / otro depósito.
@@ -17085,6 +17138,7 @@ async function viajeForm(id=null) {
             <option value="" ${!it.campanaId && !it.depositoOrigenId ? 'selected':''}>— Sin especificar / texto libre —</option>
             <option value="campana" ${it.campanaId?'selected':''}>🌾 De una campaña (trilla)</option>
             <option value="deposito" ${it.depositoOrigenId?'selected':''}>🏬 De un depósito (silo/silobolsa acumulado)</option>
+            <option value="multidep" ${(it.origenDepositos&&it.origenDepositos.length)?'selected':''}>🏬🏬 De varios depósitos (Kg de cada uno)</option>
           </select>
           <div id="f-origcamp-wrap" style="${it.campanaId?'':'display:none'}">
             <select id="f-campana" class="input">
@@ -17096,6 +17150,14 @@ async function viajeForm(id=null) {
           <div id="f-origdep-wrap" style="${it.depositoOrigenId?'':'display:none'}">
             <select id="f-origdep" class="input"><option value="">— Elegí el depósito de origen —</option></select>
             <div class="text-[10px] text-slate-500 mt-1">El cereal sale del stock de este depósito.</div>
+          </div>
+          <div id="f-origmulti-wrap" style="${(it.origenDepositos&&it.origenDepositos.length)?'':'display:none'}">
+            <div id="f-origmulti-rows"></div>
+            <div class="flex items-center justify-between mt-1">
+              <button type="button" class="btn btn-ghost text-xs text-emerald-700" onclick="viajeAddOrigRow()">+ Agregar depósito</button>
+              <div id="f-origmulti-sum" class="text-[11px] text-slate-500"></div>
+            </div>
+            <div class="text-[10px] text-slate-500">El cereal sale de cada depósito por los Kg indicados. La suma debe dar los Kg del viaje.</div>
           </div>
         </div>
         <div class="col-span-2"><label class="label">Origen</label><input id="f-ori" class="input" value="${esc(it.origen||'')}" placeholder="Ej: Sampacho, Córdoba"/></div>
@@ -17228,12 +17290,17 @@ async function viajeForm(id=null) {
       const sel = $('#f-ddep');
       if (sel) { sel.dataset.sel = it.depositoDestinoId || ''; viajeDDepRebuild(); }
       // Depósitos de ORIGEN (silos/silobolsas/campo, no cerealeras).
+      const depsOrig = deps.filter(d => d.tipo !== 'cerealera');
+      state._viajeDepsOrig = depsOrig;   // reusado por las filas de "varios depósitos"
       const selO = $('#f-origdep');
       if (selO) {
-        const depsOrig = deps.filter(d => d.tipo !== 'cerealera');
         selO.innerHTML = `<option value="">— Elegí el depósito de origen —</option>` +
           depsOrig.map(d => `<option value="${d.id}" ${it.depositoOrigenId===d.id?'selected':''}>📦 ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
       }
+      // Filas de "varios depósitos": las precargadas del viaje, o una vacía para empezar.
+      const rows = (it.origenDepositos && it.origenDepositos.length) ? it.origenDepositos : [];
+      const cont = $('#f-origmulti-rows');
+      if (cont) { cont.innerHTML=''; if (rows.length) rows.forEach(o=>viajeAddOrigRow(o.depositoId, o.kg)); else viajeAddOrigRow(); viajeOrigSum(); }
     } catch {}
   })();
   viajeFlotaInit(it);
@@ -17301,12 +17368,37 @@ function viajeAcopladoSel() {
 }
 function viajeOrigTipo() {
   const t = $('#f-origtipo')?.value;
-  const cw = $('#f-origcamp-wrap'); const dw = $('#f-origdep-wrap');
+  const cw = $('#f-origcamp-wrap'); const dw = $('#f-origdep-wrap'); const mw = $('#f-origmulti-wrap');
   if (cw) cw.style.display = t === 'campana' ? '' : 'none';
   if (dw) dw.style.display = t === 'deposito' ? '' : 'none';
-  // Limpiar el que no aplica para respetar la exclusión campaña ↔ depósito.
+  if (mw) mw.style.display = t === 'multidep' ? '' : 'none';
+  // Limpiar el que no aplica para respetar la exclusión campaña ↔ depósito ↔ varios.
   if (t !== 'campana') { const s=$('#f-campana'); if (s) s.value=''; }
   if (t !== 'deposito') { const s=$('#f-origdep'); if (s) s.value=''; }
+  if (t === 'multidep') viajeOrigSum();
+}
+// Fila de un depósito de origen (para "varios depósitos"): select + Kg + quitar.
+function viajeOrigRowOpts(selected) {
+  const deps = state._viajeDepsOrig || [];
+  return `<option value="">— Depósito —</option>` +
+    deps.map(d => `<option value="${d.id}" ${selected===d.id?'selected':''}>📦 ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
+}
+function viajeAddOrigRow(depositoId='', kg='') {
+  const cont = document.getElementById('f-origmulti-rows'); if (!cont) return;
+  const div = document.createElement('div');
+  div.className = 'flex gap-2 mb-1 vj-origrow';
+  div.innerHTML = `<select class="input vj-od-dep">${viajeOrigRowOpts(depositoId)}</select>
+    <input type="number" step="0.01" class="input vj-od-kg" style="max-width:120px" placeholder="Kg" value="${kg!=null&&kg!==''?kg:''}" oninput="viajeOrigSum()"/>
+    <button type="button" class="btn btn-ghost text-red-600 px-2" title="Quitar" onclick="this.closest('.vj-origrow').remove(); viajeOrigSum();">✕</button>`;
+  cont.appendChild(div);
+}
+// Muestra la suma de Kg por depósito vs los Kg del viaje (y avisa si no cuadra).
+function viajeOrigSum() {
+  const sumEl = document.getElementById('f-origmulti-sum'); if (!sumEl) return;
+  let suma = 0; document.querySelectorAll('#f-origmulti-rows .vj-od-kg').forEach(i => suma += Number(i.value||0));
+  const total = Number($('#f-kg')?.value || $('#f-neto')?.value || 0);
+  const ok = total>0 && Math.abs(suma-total) <= 1;
+  sumEl.innerHTML = `Suma: <b>${fmtN(suma)}</b> kg` + (total>0 ? ` / viaje: <b>${fmtN(total)}</b> kg ${ok?'<span class="text-emerald-600">✓</span>':'<span class="text-red-600">✗ no coincide</span>'}` : '');
 }
 // Rebuild del select de depósito destino según el tipo: cerealera → sólo cerealeras,
 // otro → sólo depósitos propios (campo/otro). Respeta la selección previa (data-sel).
@@ -17347,7 +17439,25 @@ function viajeRecalcDif() {
   el.textContent = (dif>=0?'':'+') + fmtN(Math.abs(dif)) + ' kg' + (dif>0?' menos':(dif<0?' más':''));
   el.className = 'input bg-slate-50 font-semibold flex items-center ' + (dif===0?'text-slate-500':(Math.abs(dif)>500?'text-red-600':'text-amber-700'));
 }
+// Lee las filas de "varios depósitos" a [{depositoId, kg}] (descarta filas vacías).
+function viajeReadOrigRows() {
+  const rows = [];
+  document.querySelectorAll('#f-origmulti-rows .vj-origrow').forEach(r => {
+    const depositoId = r.querySelector('.vj-od-dep')?.value || '';
+    const kg = Number(r.querySelector('.vj-od-kg')?.value || 0);
+    if (depositoId && kg > 0) rows.push({ depositoId, kg });
+  });
+  return rows;
+}
 async function viajeSave(id) {
+  // Validación de "varios depósitos": debe cuadrar con los Kg del viaje.
+  if ($('#f-origtipo')?.value === 'multidep') {
+    const rows = viajeReadOrigRows();
+    if (!rows.length) return toast('Agregá al menos un depósito con Kg.','warn');
+    const total = Number($('#f-kg')?.value || $('#f-neto')?.value || 0);
+    const suma = rows.reduce((a,o)=>a+o.kg,0);
+    if (total>0 && Math.abs(suma-total) > 1) return toast(`La suma de Kg por depósito (${fmtN(suma)}) debe ser igual a los Kg del viaje (${fmtN(total)}).`,'warn');
+  }
   const comb = Number($('#f-comb').value||0);
   const pea  = Number($('#f-pea').value ||0);
   const com  = Number($('#f-com').value ||0);
@@ -17359,6 +17469,7 @@ async function viajeSave(id) {
     producto:        $('#f-prod').value.trim() || null,
     campanaId:        ($('#f-origtipo')?.value === 'campana')  ? ($('#f-campana')?.value || null) : null,
     depositoOrigenId: ($('#f-origtipo')?.value === 'deposito') ? ($('#f-origdep')?.value || null) : null,
+    origenDepositos:  ($('#f-origtipo')?.value === 'multidep') ? viajeReadOrigRows() : null,
     cantidad:        $('#f-kg').value  ? Number($('#f-kg').value)  : null,
     kgDescarga:      $('#f-kgd').value ? Number($('#f-kgd').value) : null,
     kgTara:          $('#f-tara')?.value  ? Number($('#f-tara').value)  : null,

@@ -872,6 +872,7 @@ model Viaje {
   observaciones   String?
   // ---- Origen del cereal (cuando NO sale de una campaña sino de stock acumulado) ----
   depositoOrigenId    String?    // silo/silobolsa/depósito de campo del que sale el cereal (excluye campanaId)
+  origenDepositos     Json?      // carga desde VARIOS depósitos: [{ depositoId, kg }] (suma = kg del viaje). Si está, reemplaza a depositoOrigenId para el egreso de stock.
   // ---- Destino del cereal (cuando aplica) ----
   destinoTipo         String?    // "cerealera" | "venta_directa" | "otro" (NULL = no aplica)
   depositoDestinoId   String?    // si va a cerealera, depósito destino del cereal

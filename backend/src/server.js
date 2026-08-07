@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.52.2';
+const AGROCORE_VERSION = '2.53.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4813,6 +4813,7 @@ const viajeSchema = z.object({
   // Destino del cereal (registrar a dónde va para luego cargar la liquidación)
   destinoTipo: z.enum(['cerealera','venta_directa','otro']).nullable().optional(),
   depositoOrigenId: z.string().nullable().optional(),   // silo/silobolsa de origen (excluye campaña)
+  origenDepositos: z.array(z.object({ depositoId: z.string(), kg: z.coerce.number() })).nullable().optional(), // carga desde varios depósitos
   depositoDestinoId: z.string().nullable().optional(),
   liquidacionCerealId: z.string().nullable().optional(),
 
@@ -5110,7 +5111,9 @@ async function _sincronizarStockViaje(companyId, viaje) {
   const estadoOk = ['cargado','descargado','facturado','pagado'].includes(viaje.estado || '');
   const kgEntrada = Number(viaje.kgDescarga || viaje.kgNetoDest || viaje.cantidad || 0);
   const kgSalida  = Number(viaje.cantidad || viaje.kgNeto || viaje.kgDescarga || 0);
-  const origen = !!viaje.depositoOrigenId;
+  // Origen: un solo depósito (depositoOrigenId) o VARIOS (origenDepositos: [{depositoId,kg}]).
+  const multiOrig = Array.isArray(viaje.origenDepositos) ? viaje.origenDepositos.filter(o => o && o.depositoId && Number(o.kg) > 0) : [];
+  const origen = !!viaje.depositoOrigenId || multiOrig.length > 0;
   // EGRESO del silo/silobolsa de origen (el cereal sale de ese depósito acumulado).
   // La VENTA DIRECTA saca el stock vía la liquidación (no acá) para no duplicar.
   const debeEgreso = origen && kgSalida > 0 && estadoOk && !!grano && viaje.destinoTipo !== 'venta_directa';
@@ -5126,12 +5129,24 @@ async function _sincronizarStockViaje(companyId, viaje) {
     const productoId = await _ensureProductoGrano(tx, companyId, grano);
     if (!productoId) return;
     if (debeEgreso) {
-      await tx.movimiento.create({ data: {
-        companyId, productoId, depositoId: viaje.depositoOrigenId,
-        fecha: viaje.fecha || new Date(), tipo: 'egreso', motivo: 'viaje',
-        cantidad: kgSalida, referencia: ref,
-        observaciones: `Salida de ${grano} del depósito por viaje${viaje.destino ? ' → ' + viaje.destino : ''}`,
-      }});
+      if (multiOrig.length > 0) {
+        // Egreso por cada depósito de origen con sus kg.
+        for (const o of multiOrig) {
+          await tx.movimiento.create({ data: {
+            companyId, productoId, depositoId: o.depositoId,
+            fecha: viaje.fecha || new Date(), tipo: 'egreso', motivo: 'viaje',
+            cantidad: Number(o.kg), referencia: ref,
+            observaciones: `Salida de ${grano} del depósito por viaje${viaje.destino ? ' → ' + viaje.destino : ''}`,
+          }});
+        }
+      } else {
+        await tx.movimiento.create({ data: {
+          companyId, productoId, depositoId: viaje.depositoOrigenId,
+          fecha: viaje.fecha || new Date(), tipo: 'egreso', motivo: 'viaje',
+          cantidad: kgSalida, referencia: ref,
+          observaciones: `Salida de ${grano} del depósito por viaje${viaje.destino ? ' → ' + viaje.destino : ''}`,
+        }});
+      }
     }
     if (ingresoOtro || ingresoCerealera) {
       await tx.movimiento.create({ data: {
@@ -5144,9 +5159,21 @@ async function _sincronizarStockViaje(companyId, viaje) {
   });
 }
 
+// Valida que, si el viaje sale de varios depósitos, la suma de kg cuadre con los kg del viaje.
+function _chkOrigenDepositos(v) {
+  const arr = Array.isArray(v.origenDepositos) ? v.origenDepositos.filter(o => o && o.depositoId) : [];
+  if (!arr.length) return null;
+  if (arr.some(o => !(Number(o.kg) > 0))) return 'Cada depósito de origen debe tener kg mayores a 0.';
+  const total = Number(v.cantidad || v.kgNeto || 0);
+  const suma = arr.reduce((a, o) => a + Number(o.kg || 0), 0);
+  if (total > 0 && Math.abs(suma - total) > 1) return `La suma de kg por depósito (${Math.round(suma).toLocaleString('es-AR')}) debe ser igual a los kg del viaje (${Math.round(total).toLocaleString('es-AR')}).`;
+  return null;
+}
+
 app.post('/api/viajes', requireCompany, requirePermission('logistica:create'), async (req, res, next) => {
   try {
     const d = viajeSchema.parse(req.body);
+    { const eD = _chkOrigenDepositos(d); if (eD) return res.status(400).json({ ok: false, error: eD }); }
     if (d.facturaCompraId) {
       const f = await prisma.facturaCompra.findFirst({ where: { id: d.facturaCompraId, companyId: req.companyId } });
       if (!f) return res.status(400).json({ ok: false, error: 'Factura de compra no válida' });
@@ -5175,6 +5202,7 @@ app.put('/api/viajes/:id', requireCompany, requirePermission('logistica:update')
       if (!f) return res.status(400).json({ ok: false, error: 'Factura de compra no válida' });
     }
     const merged = { ...existing, ...d };
+    { const eD = _chkOrigenDepositos(merged); if (eD) return res.status(400).json({ ok: false, error: eD }); }
     const estado = d.estado ?? deriveEstadoViaje(merged, existing);
     // Alta automática de catálogos + vínculo por ID (usa los datos combinados).
     let autoIds = {};
@@ -7042,6 +7070,46 @@ async function _ctxAsistente(companyId) {
   const cajas = [...new Set((efectivos || []).map(e => (e.caja || '').trim()).filter(Boolean))];
   return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean), lotes: lotes || [], campanas: campanas || [], categoriasGasto: catGasto || [], cajas, proveedores: proveedores || [], clientes: clientes || [], bancos: bancos || [] };
 }
+// Empresas a las que el usuario tiene acceso (para el bot general multi-empresa).
+async function _empresasDeUsuario(req) {
+  if (req.user?.superAdmin) {
+    const all = await prisma.company.findMany({ where: { activo: { not: false } }, select: { id: true, name: true }, orderBy: { name: 'asc' } });
+    return all.map(c => ({ id: c.id, name: c.name }));
+  }
+  return (req.user?.userCompanies || []).map(uc => ({ id: uc.companyId, name: uc.company?.name || 'Empresa' }));
+}
+// Contexto del asistente COMBINADO de varias empresas: cada entidad-objeto queda
+// etiquetada con _cid/_cnombre para saber de qué empresa es (y decidir dónde cargar).
+async function _ctxAsistenteMulti(companies) {
+  const base = { campos: [], categorias: [], lotes: [], campanas: [], categoriasGasto: [], cajas: [], proveedores: [], clientes: [], bancos: [] };
+  for (const co of companies) {
+    let c; try { c = await _ctxAsistente(co.id); } catch { continue; }
+    const tag = (arr) => (arr || []).map(x => (x && typeof x === 'object') ? { ...x, _cid: co.id, _cnombre: co.name } : x);
+    base.campos.push(...tag(c.campos));
+    base.lotes.push(...tag(c.lotes));
+    base.campanas.push(...tag(c.campanas));
+    base.proveedores.push(...tag(c.proveedores));
+    base.clientes.push(...tag(c.clientes));
+    base.bancos.push(...tag(c.bancos));
+    base.categoriasGasto.push(...tag(c.categoriasGasto));
+    for (const s of (c.categorias || [])) if (!base.categorias.includes(s)) base.categorias.push(s);
+    for (const s of (c.cajas || [])) if (!base.cajas.includes(s)) base.cajas.push(s);
+  }
+  return base;
+}
+// Dada una acción interpretada, deduce a qué empresa pertenece (por la entidad matcheada).
+// Devuelve companyId o null (null = ambiguo → hay que preguntar, ej: gasto/recordatorio).
+function _cidDeAccion(r, ctx) {
+  if (!r || !r.params) return null;
+  const byId = (arr, id) => (arr || []).find(x => x && x.id === id);
+  if (r.accion === 'hacienda_mov' && r.params.campoId) return byId(ctx.campos, r.params.campoId)?._cid || null;
+  if (r.accion === 'labor' && r.params.campanaId) return byId(ctx.campanas, r.params.campanaId)?._cid || null;
+  if ((r.accion === 'pago' || r.accion === 'cobro') && r.params.contactoId) {
+    const arr = r.accion === 'cobro' ? ctx.clientes : ctx.proveedores;
+    return byId(arr, r.params.contactoId)?._cid || null;
+  }
+  return null;
+}
 // CONSULTAS de solo lectura (stock, animales, lotes, campañas). Devuelve texto o null.
 // req: para chequear permisos — la info sensible (plata) no se muestra sin finanzas:read.
 async function _consultaAsistente(texto, companyId, ctx, req) {
@@ -7820,8 +7888,11 @@ app.get('/api/mensajes', requireCompany, async (req, res, next) => {
   try {
     const v = await _canalValido(req, req.query.canal);
     if (!v) return res.status(403).json({ ok: false, error: 'No tenés acceso a esa conversación' });
-    const where = { companyId: req.companyId, canal: v.canal };
-    if (v.canal === 'asistente') where.userId = req.user.id;   // hilo privado del usuario
+    // El ASISTENTE es un hilo GENERAL del usuario: se ve igual desde cualquier empresa
+    // (no filtramos por companyId). El resto de canales sí es por empresa.
+    const where = v.canal === 'asistente'
+      ? { canal: 'asistente', userId: req.user.id }
+      : { companyId: req.companyId, canal: v.canal };
     const data = await prisma.mensaje.findMany({ where, orderBy: { createdAt: 'asc' }, take: 300 });
     res.json({ ok: true, data });
   } catch (e) { next(e); }
@@ -7893,7 +7964,14 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     const texto = String(req.body?.texto || '').trim();
     if (!texto) return res.status(400).json({ ok: false, error: 'Escribí algo' });
     await _logMensaje(req.companyId, 'asistente', req.user.id, 'user', _nombreUser(req.user), texto);
-    const ctx = await _ctxAsistente(req.companyId);
+    // Bot GENERAL multi-empresa: si el usuario tiene más de una empresa, interpretamos con el
+    // contexto combinado (así reconoce clientes/campos de cualquier empresa) y luego decidimos
+    // en cuál cargar. Con una sola empresa, todo sigue igual que antes.
+    const empresas = await _empresasDeUsuario(req);
+    const multiEmpresa = (empresas || []).length > 1;
+    const ctxActiva = await _ctxAsistente(req.companyId);
+    const ctx = multiEmpresa ? await _ctxAsistenteMulti(empresas) : ctxActiva;
+    const empresaScope = req.body?.empresaScope || null; // null | <companyId> | 'todas'
     const _tn = _sinAcentos(texto);
     // 0-bis) Si hay una carga a medias (multi-turno), primero intentamos completarla.
     const pendiente = req.body?.pendiente || null;
@@ -7925,12 +8003,40 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', menu: true });
       return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: m });
     }
-    // 0.5) CONSULTAS de solo lectura (stock, animales, lotes, campañas).
+    // 0.5) CONSULTAS de solo lectura (stock, animales, lotes, campañas, plata).
+    //      Con multi-empresa preguntamos de qué empresa (o todas). Siempre usamos el
+    //      contexto POR empresa (no el combinado) para que las cuentas den bien.
     try {
-      const _c = await _consultaAsistente(texto, req.companyId, ctx, req);
-      if (_c) {
-        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', _c, { status: 'ayuda', consulta: true });
-        return res.json({ ok: true, status: 'ayuda', mensaje: _c, data: m });
+      if (multiEmpresa && empresaScope === 'todas') {
+        const partes = [];
+        for (const co of empresas) {
+          const mem = (req.user.userCompanies || []).find(uc => uc.companyId === co.id);
+          const rq = { user: req.user, companyId: co.id, membership: mem || null };
+          let cc; try { cc = await _ctxAsistente(co.id); } catch { cc = ctxActiva; }
+          const a = await _consultaAsistente(texto, co.id, cc, rq).catch(() => null);
+          if (a) partes.push(`🏢 ${co.name}:\n${a}`);
+        }
+        if (partes.length) {
+          const msg = partes.join('\n\n');
+          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', consulta: true });
+          return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: m });
+        }
+      } else {
+        const cid = (empresaScope && empresaScope !== 'todas') ? empresaScope : req.companyId;
+        const mem = (req.user.userCompanies || []).find(uc => uc.companyId === cid) || req.membership;
+        const rq = (cid === req.companyId) ? req : { user: req.user, companyId: cid, membership: mem || null };
+        let cc = ctxActiva; if (cid !== req.companyId) { try { cc = await _ctxAsistente(cid); } catch { cc = ctxActiva; } }
+        const _c = await _consultaAsistente(texto, cid, cc, rq);
+        if (_c) {
+          // Es una consulta. Si hay varias empresas y el usuario no eligió, preguntamos.
+          if (multiEmpresa && !empresaScope) {
+            const msg = '¿De qué empresa querés el dato? Elegí abajo 👇';
+            const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'empresa', modo: 'consulta' });
+            return res.json({ ok: true, status: 'empresa', modo: 'consulta', texto, empresas, mensaje: msg, data: m });
+          }
+          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', _c, { status: 'ayuda', consulta: true });
+          return res.json({ ok: true, status: 'ayuda', mensaje: _c, data: m });
+        }
       }
     } catch (e) {}
     // 0.7) FACTURAS: por seguridad (IVA discriminado, Libro IVA y CAE de ARCA) el bot NO las
@@ -7994,25 +8100,37 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.error, { status: 'ayuda' });
       return res.json({ ok: true, status: 'ayuda', mensaje: r.error, data: m });
     }
+    // Empresa donde se cargará: deducida de la entidad matcheada (campo/campaña/contacto).
+    // Si es ambigua (gasto/recordatorio), queda null y el frontend muestra el selector.
+    const accionCid = _cidDeAccion(r, ctx) || (multiEmpresa ? null : req.companyId);
+    const cidParaCatalogo = accionCid || req.companyId;
     // Si la labor trae un insumo, buscamos el producto en el catálogo y, si no está,
     // ofrecemos crearlo eligiendo la familia (tipo de insumo).
     let familias = null;
     if (r.accion === 'labor' && r.params.insumoNombre) {
       const _n = _sinAcentos(r.params.insumoNombre);
-      const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, activo: true, categoria: 'insumos' }, select: { id: true, nombre: true, unidad: true } });
+      const prods = await prisma.producto.findMany({ where: { companyId: cidParaCatalogo, activo: true, categoria: 'insumos' }, select: { id: true, nombre: true, unidad: true } });
       const prod = prods.find(p => _sinAcentos(p.nombre) === _n) || prods.find(p => { const pn = _sinAcentos(p.nombre); return pn.includes(_n) || _n.includes(pn); });
       r.params.insumoProductoId = prod?.id || null;
       r.params.insumoExiste = !!prod;
       if (prod && prod.unidad) r.params.insumoUnidad = prod.unidad;
       if (prod) r.params.insumoNombre = prod.nombre; // usar el nombre exacto del catálogo
-      if (!prod) { try { familias = [...await insumoTipoNombresSet(req.companyId)]; } catch { familias = INSUMO_TIPOS_BASE; } }
+      if (!prod) { try { familias = [...await insumoTipoNombresSet(cidParaCatalogo)]; } catch { familias = INSUMO_TIPOS_BASE; } }
     }
     const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente',
       `Voy a registrar: ${r.resumen}. ¿Confirmás?`, { status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen });
     const extra = {};
-    if (r.accion === 'gasto') { extra.categoriasGasto = ctx.categoriasGasto || []; extra.cajas = ctx.cajas || []; }
-    if (r.accion === 'pago' || r.accion === 'cobro') { extra.cajas = ctx.cajas || []; extra.bancos = ctx.bancos || []; }
-    res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, familias, ...extra, data: m });
+    // Listas para el editor, tomadas de la empresa que corresponda (la del contacto en
+    // pago/cobro; la activa para gasto, que igual puede cambiarse en el selector).
+    const ctxExtra = (accionCid && accionCid !== req.companyId) ? await _ctxAsistente(accionCid) : ctxActiva;
+    if (r.accion === 'gasto') { extra.categoriasGasto = ctxActiva.categoriasGasto || []; extra.cajas = ctxActiva.cajas || []; }
+    if (r.accion === 'pago' || r.accion === 'cobro') { extra.cajas = ctxExtra.cajas || []; extra.bancos = ctxExtra.bancos || []; }
+    // Empresa: para acciones con entidad (pago/cobro/hacienda/labor) queda fija en la del
+    // dato; para gasto/recordatorio es ambigua y el usuario la elige en el selector.
+    const empresaFija = ['pago', 'cobro', 'hacienda_mov', 'labor'].includes(r.accion) && !!accionCid;
+    res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, familias,
+      companyId: accionCid || null, empresas: multiEmpresa ? empresas : null, empresaFija,
+      ...extra, data: m });
   } catch (e) { next(e); }
 });
 // --- Asistente: confirmar (ejecuta la acción propuesta) ---
@@ -8020,6 +8138,15 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
   try {
     const { accion, params } = req.body || {};
     if (!accion || !params) return res.status(400).json({ ok: false, error: 'Falta la acción a confirmar' });
+    // Empresa donde se carga: la que eligió el usuario en el bot (puede ser distinta de la activa).
+    // Reasignamos req.companyId/membership para que TODO el flujo (y los permisos) apunten a ella.
+    const targetCid = req.body?.companyId || req.companyId;
+    if (targetCid !== req.companyId) {
+      const mem = (req.user.userCompanies || []).find(uc => uc.companyId === targetCid);
+      if (!mem && !req.user.superAdmin) return res.status(403).json({ ok: false, error: 'No tenés acceso a esa empresa.' });
+      req.companyId = targetCid;
+      req.membership = mem || null;
+    }
     let resumen = '';
     const quien = _nombreUser(req.user);
     if (accion === 'hacienda_mov') {
