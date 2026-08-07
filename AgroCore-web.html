@@ -2541,6 +2541,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
+      titulo:'✏️ v2.56.0 — Editar y filtrar liquidaciones (cereal y animales)',
+      desc:'Ahora podés <b>editar</b> una liquidación de <b>cereal</b> o de <b>animales</b>: se corrige lo que necesites y el sistema <b>reajusta solo</b> el stock, el SENASA y la cuenta a cobrar. Si la liquidación ya está <b>cobrada</b>, primero hay que deshacer el cobro. También sumamos <b>eliminar</b> (revierte todo) y <b>filtros</b> en las dos listas: por <b>fecha desde/hasta</b>, <b>comprador</b>, <b>grano/categoría</b> y <b>estado</b> (cobrada / pendiente).' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'07/08/2026',
       titulo:'📥 v2.55.1 — Importar liquidaciones de animales: nuevo formato',
       desc:'El importador de PDF de <b>Liquidaciones de animales</b> ahora también entiende las <b>Liquidaciones de Compra Directa</b> (ej. frigoríficos como LIVORNO, con porcinos): detecta bien el <b>número, fecha, CAE, categoría (Lechón/Capón), cabezas, kilos, precio, bruto e IVA</b> aunque la liquidación traiga las columnas en otro orden. Los formatos anteriores siguen funcionando igual.' },
@@ -24698,43 +24701,95 @@ pages.liquidaciones = async function() {
   setHeader('Liquidaciones de cereal', 'Cuando vendés el grano que tenías en una cerealera');
   if (!can('ventas:read')) { $('#page-body').innerHTML = stubPage('liquidaciones','Liquidaciones'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let rows = [];
-  try { rows = (await api('/api/liquidaciones-cereal')).data || []; } catch (e) { return toast(e.message,'error'); }
-  const total = rows.reduce((a, r) => a + Number(r.neto||0), 0);
-  const pendiente = rows.filter(r => !r.cobrado).reduce((a, r) => a + Number(r.neto||0), 0);
+  let rows = [], clientes = [], productos = [];
+  try {
+    const [lq, cl, pr] = await Promise.all([api('/api/liquidaciones-cereal'), api('/api/clientes').catch(()=>({data:[]})), api('/api/productos').catch(()=>({data:[]}))]);
+    rows = lq.data || []; clientes = cl.data || []; productos = pr.data || [];
+  } catch (e) { return toast(e.message,'error'); }
+  state._liqCerRows = rows;
+  state._liqCerCli = Object.fromEntries(clientes.map(c=>[c.id, c.razonSocial]));
+  state._liqCerProd = Object.fromEntries(productos.map(p=>[p.id, p.nombre]));
+  if (!state.liqCerFilter) state.liqCerFilter = { desde:'', hasta:'', cliente:'', producto:'', estado:'' };
+  const comps = [...new Set(rows.map(r=>r.clienteId).filter(Boolean))].map(id=>({id, n: state._liqCerCli[id]||'(cliente)'}));
+  const granos = [...new Set(rows.map(r=>r.productoId).filter(Boolean))].map(id=>({id, n: state._liqCerProd[id]||'(grano)'}));
+  const f = state.liqCerFilter;
   $('#page-body').innerHTML = `
-    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <div class="text-sm text-slate-600">${rows.length} liquidación${rows.length===1?'':'es'}</div>
+    <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600" id="liqcer-count"></div>
       <div class="flex gap-2">
         ${can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-secondary" onclick="liqCerealImportar()" title="Subir el PDF de la Liquidación Primaria de Granos">📥 Importar de PDF</button>`:''}
         ${can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-primary" onclick="liqForm()">+ Nueva liquidación</button>`:''}
       </div>
     </div>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">Liquidaciones</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Total neto histórico</div><div class="text-2xl font-bold mt-1">${fmt$(total)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Pendiente de cobro</div><div class="text-2xl font-bold mt-1 text-amber-600">${fmt$(pendiente)}</div></div>
+    <div class="kpi p-2 mb-3 grid grid-cols-2 md:grid-cols-5 gap-2 items-end">
+      <div><label class="label text-[11px]">Desde</label><input type="date" id="lqcf-d" class="input text-sm" value="${f.desde}" onchange="liqCerFiltroSet()"/></div>
+      <div><label class="label text-[11px]">Hasta</label><input type="date" id="lqcf-h" class="input text-sm" value="${f.hasta}" onchange="liqCerFiltroSet()"/></div>
+      <div><label class="label text-[11px]">Comprador</label><select id="lqcf-cli" class="input text-sm" onchange="liqCerFiltroSet()"><option value="">Todos</option>${comps.map(c=>`<option value="${c.id}" ${f.cliente===c.id?'selected':''}>${esc(c.n)}</option>`).join('')}</select></div>
+      <div><label class="label text-[11px]">Grano</label><select id="lqcf-prod" class="input text-sm" onchange="liqCerFiltroSet()"><option value="">Todos</option>${granos.map(g=>`<option value="${g.id}" ${f.producto===g.id?'selected':''}>${esc(g.n)}</option>`).join('')}</select></div>
+      <div><label class="label text-[11px]">Estado</label><select id="lqcf-est" class="input text-sm" onchange="liqCerFiltroSet()"><option value="">Todos</option><option value="pendiente" ${f.estado==='pendiente'?'selected':''}>Pendiente</option><option value="cobrada" ${f.estado==='cobrada'?'selected':''}>Cobrada</option></select></div>
     </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4" id="liqcer-kpis"></div>
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
-        <thead><tr><th>Fecha</th><th>Nro</th><th>Cerealera</th><th class="text-right">Kg netos</th><th class="text-right">$/tn</th><th class="text-right">Bruto</th><th class="text-right">Neto</th><th>Cobro est.</th><th>Estado</th></tr></thead>
-        <tbody>
-          ${rows.map(r => `
-            <tr class="table-row" onclick='liqVer(${JSON.stringify(r.id)})' style="cursor:pointer">
-              <td>${fmtDate(r.fecha)}</td>
-              <td>${esc(r.numero||'—')}</td>
-              <td>${esc(r.deposito?.nombre||'—')}</td>
-              <td class="text-right">${fmtN(r.kilosNetos)}</td>
-              <td class="text-right">${fmt$(r.precioPorTn)}</td>
-              <td class="text-right">${fmt$(r.bruto)}</td>
-              <td class="text-right font-bold text-green-700">${fmt$(r.neto)}</td>
-              <td>${r.fechaCobroEst?fmtDate(r.fechaCobroEst):'—'}</td>
-              <td>${r.cobrado?'<span class="badge badge-green">Cobrada</span>':'<span class="badge badge-yellow">Pendiente</span>'}</td>
-            </tr>`).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin liquidaciones. La primera se carga cuando vendas el cereal de una cerealera.</td></tr>`}
-        </tbody>
+        <thead><tr><th>Fecha</th><th>Nro</th><th>Cerealera</th><th>Comprador</th><th class="text-right">Kg netos</th><th class="text-right">$/tn</th><th class="text-right">Neto</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="liqcer-tbody"></tbody>
       </table>
     </div>`;
+  liqCerRender();
 };
+function liqCerFiltroSet() {
+  state.liqCerFilter = {
+    desde: $('#lqcf-d')?.value||'', hasta: $('#lqcf-h')?.value||'',
+    cliente: $('#lqcf-cli')?.value||'', producto: $('#lqcf-prod')?.value||'', estado: $('#lqcf-est')?.value||'',
+  };
+  liqCerRender();
+}
+function liqCerRender() {
+  const f = state.liqCerFilter || {}; const rows = state._liqCerRows || [];
+  const fil = rows.filter(r => {
+    const d = (r.fecha||'').slice(0,10);
+    if (f.desde && d < f.desde) return false;
+    if (f.hasta && d > f.hasta) return false;
+    if (f.cliente && r.clienteId !== f.cliente) return false;
+    if (f.producto && r.productoId !== f.producto) return false;
+    if (f.estado === 'cobrada' && !r.cobrado) return false;
+    if (f.estado === 'pendiente' && r.cobrado) return false;
+    return true;
+  });
+  const total = fil.reduce((a,r)=>a+Number(r.neto||0),0);
+  const pend = fil.filter(r=>!r.cobrado).reduce((a,r)=>a+Number(r.neto||0),0);
+  const cnt=$('#liqcer-count'); if(cnt) cnt.textContent = `${fil.length} de ${rows.length} liquidación${rows.length===1?'':'es'}`;
+  const k=$('#liqcer-kpis'); if(k) k.innerHTML = `
+    <div class="kpi"><div class="text-xs text-slate-500">Liquidaciones (filtro)</div><div class="text-2xl font-bold mt-1">${fil.length}</div></div>
+    <div class="kpi"><div class="text-xs text-slate-500">Total neto</div><div class="text-2xl font-bold mt-1">${fmt$(total)}</div></div>
+    <div class="kpi"><div class="text-xs text-slate-500">Pendiente de cobro</div><div class="text-2xl font-bold mt-1 text-amber-600">${fmt$(pend)}</div></div>`;
+  const canU = can('ventas:update'), canD = can('ventas:delete');
+  const tb=$('#liqcer-tbody'); if(!tb) return;
+  tb.innerHTML = fil.map(r => `
+    <tr class="table-row" onclick='liqVer(${JSON.stringify(r.id)})' style="cursor:pointer">
+      <td>${fmtDate(r.fecha)}</td>
+      <td>${esc(r.numero||'—')}</td>
+      <td>${esc(r.deposito?.nombre||'—')}</td>
+      <td>${esc(state._liqCerCli[r.clienteId]||'—')}</td>
+      <td class="text-right">${fmtN(r.kilosNetos)}</td>
+      <td class="text-right">${fmt$(r.precioPorTn)}</td>
+      <td class="text-right font-bold text-green-700">${fmt$(r.neto)}</td>
+      <td>${r.cobrado?'<span class="badge badge-green">Cobrada</span>':'<span class="badge badge-yellow">Pendiente</span>'}</td>
+      <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+        ${canU&&!r.cobrado?`<button class="btn btn-ghost text-xs" title="Editar" onclick='liqCerEditar(${JSON.stringify(r.id)})'>✏️</button>`:''}
+        ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='liqCerEliminar(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+      </td>
+    </tr>`).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin liquidaciones que coincidan con el filtro.</td></tr>`;
+}
+async function liqCerEditar(id) {
+  try { const r = await api('/api/liquidaciones-cereal/'+id); liqForm(r.data); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function liqCerEliminar(id) {
+  if (!confirm('¿Eliminar esta liquidación de cereal? Se revierte el stock y la cuenta a cobrar.')) return;
+  try { await api('/api/liquidaciones-cereal/'+id, { method:'DELETE' }); toast('Liquidación eliminada','success'); pages.liquidaciones(); }
+  catch(e){ toast(e.message,'error'); }
+}
 // ---- Importar Liquidación Primaria de Granos (PDF) ----
 function liqCerealImportar(){
   openModal({ title:'📥 Importar liquidación de cereal (PDF)', size:'max-w-lg',
@@ -24970,7 +25025,9 @@ async function pgDesvincular(viajeId,liqId){
   catch(e){ toast(e.message,'error'); }
 }
 function pgImportarParaEntrega(viajeId){ state._pgLinkEntrega=viajeId; state._pgVolver=true; closeModal(); liqCerealImportar(); }
-async function liqForm() {
+async function liqForm(edit=null) {
+  const ed = edit || {};
+  state._liqEditId = ed.id || null;
   let depos=[], productos=[], clientes=[];
   try {
     const [d, p, c] = await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes')]);
@@ -24981,28 +25038,29 @@ async function liqForm() {
   } catch (e) { return toast(e.message,'error'); }
   if (!depos.length) return toast('Cargá primero una cerealera','warn');
   if (!productos.length) return toast('No hay granos cargados. Cargá un cereal o registrá un viaje/compra de grano.','warn');
+  const _fec = ed.fecha ? new Date(ed.fecha).toISOString().slice(0,10) : new Date().toISOString().slice(0,10);
   openModal({
-    title:'🧾 Nueva liquidación de cereal', size:'max-w-4xl',
+    title: state._liqEditId ? '✏️ Editar liquidación de cereal' : '🧾 Nueva liquidación de cereal', size:'max-w-4xl',
     body: `
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Cerealera *</label>
-          <select id="lq-dep" class="input">${depos.map(d=>`<option value="${d.id}">${esc(d.nombre)}</option>`).join('')}</select>
+          <select id="lq-dep" class="input">${depos.map(d=>`<option value="${d.id}" ${d.id===ed.depositoId?'selected':''}>${esc(d.nombre)}</option>`).join('')}</select>
         </div>
-        <div><label class="label">Fecha *</label><input id="lq-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
-        <div><label class="label">Nro liquidación</label><input id="lq-nro" class="input"/></div>
+        <div><label class="label">Fecha *</label><input id="lq-fec" type="date" class="input" value="${_fec}"/></div>
+        <div><label class="label">Nro liquidación</label><input id="lq-nro" class="input" value="${esc(ed.numero||'')}"/></div>
         <div class="col-span-2"><label class="label">Producto *</label>
-          <select id="lq-prod" class="input">${productos.map(p=>`<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select>
+          <select id="lq-prod" class="input">${productos.map(p=>`<option value="${p.id}" ${p.id===ed.productoId?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select>
         </div>
         <div class="col-span-2"><label class="label">Cliente comprador</label>
-          <select id="lq-cli" class="input"><option value="">— Sin cliente / interno —</option>${clientes.map(c=>`<option value="${c.id}">${esc(c.razonSocial)}</option>`).join('')}</select>
+          <select id="lq-cli" class="input"><option value="">— Sin cliente / interno —</option>${clientes.map(c=>`<option value="${c.id}" ${c.id===ed.clienteId?'selected':''}>${esc(c.razonSocial)}</option>`).join('')}</select>
         </div>
       </div>
       <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
         <div class="col-span-4 text-xs text-blue-800 font-medium">⚖️ Cálculo del bruto</div>
-        <div><label class="label">Kilos brutos *</label><input id="lq-brut" type="number" step="0.01" class="input" oninput="liqRecalc()"/></div>
-        <div><label class="label">% Merma</label><input id="lq-merma" type="number" step="0.01" class="input" value="0" oninput="liqRecalc()"/></div>
+        <div><label class="label">Kilos brutos *</label><input id="lq-brut" type="number" step="0.01" class="input" value="${ed.kilosBrutos!=null?ed.kilosBrutos:''}" oninput="liqRecalc()"/></div>
+        <div><label class="label">% Merma</label><input id="lq-merma" type="number" step="0.01" class="input" value="${ed.porcMerma!=null?ed.porcMerma:0}" oninput="liqRecalc()"/></div>
         <div><label class="label">Kg netos (calc.)</label><input id="lq-net" class="input bg-slate-100" readonly/></div>
-        <div><label class="label">Precio $/tn *</label><input id="lq-prec" type="number" step="0.01" class="input" oninput="liqRecalc()"/></div>
+        <div><label class="label">Precio $/tn *</label><input id="lq-prec" type="number" step="0.01" class="input" value="${ed.precioPorTn!=null?ed.precioPorTn:''}" oninput="liqRecalc()"/></div>
       </div>
       <div class="kpi p-0 overflow-hidden mb-3">
         <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
@@ -25021,13 +25079,17 @@ async function liqForm() {
         <div><label class="label text-xs">NETO A COBRAR</label><div id="lq-r-neto" class="text-lg font-bold text-green-700">$ 0,00</div></div>
       </div>
       <div class="grid grid-cols-2 gap-3">
-        <div><label class="label">Fecha estimada de cobro</label><input id="lq-cobro" type="date" class="input"/></div>
-        <div><label class="label">Observaciones</label><input id="lq-obs" class="input"/></div>
+        <div><label class="label">Fecha estimada de cobro</label><input id="lq-cobro" type="date" class="input" value="${ed.fechaCobroEst?new Date(ed.fechaCobroEst).toISOString().slice(0,10):''}"/></div>
+        <div><label class="label">Observaciones</label><input id="lq-obs" class="input" value="${esc(ed.observaciones||'')}"/></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="liqSave()">💾 Registrar liquidación</button>`
+             <button class="btn btn-primary" onclick="liqSave()">💾 ${state._liqEditId?'Guardar cambios':'Registrar liquidación'}</button>`
   });
-  setTimeout(() => { liqAddConc({ tipo:'descuento', concepto:'Flete', importe:0 }); liqRecalc(); }, 0);
+  setTimeout(() => {
+    const cs = (ed.conceptos && ed.conceptos.length) ? ed.conceptos : (state._liqEditId ? [] : [{ tipo:'descuento', concepto:'Flete', importe:0 }]);
+    cs.forEach(c => liqAddConc(c));
+    liqRecalc();
+  }, 0);
 }
 function liqAddConc(c = { tipo:'descuento', concepto:'', importe:0 }) {
   const row = `<tr data-lc>
@@ -25078,8 +25140,14 @@ async function liqSave() {
   };
   if (!data.kilosBrutos || !data.precioPorTn) return toast('Cargá kilos y precio','warn');
   try {
-    await api('/api/liquidaciones-cereal', { method:'POST', body: JSON.stringify(data) });
-    toast('Liquidación registrada','success'); closeModal(); pages.liquidaciones();
+    if (state._liqEditId) {
+      await api('/api/liquidaciones-cereal/'+state._liqEditId, { method:'PUT', body: JSON.stringify(data) });
+      toast('Liquidación actualizada','success');
+    } else {
+      await api('/api/liquidaciones-cereal', { method:'POST', body: JSON.stringify(data) });
+      toast('Liquidación registrada','success');
+    }
+    state._liqEditId = null; closeModal(); pages.liquidaciones();
   } catch (e) { toast(e.message,'error'); }
 }
 async function liqVer(id) {
@@ -25124,40 +25192,88 @@ pages.liquidacionesHacienda = async function() {
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows = [];
   try { rows = (await api('/api/liquidaciones-hacienda')).data || []; } catch (e) { return toast(e.message,'error'); }
-  const total = rows.reduce((a,r)=>a+Number(r.neto||0),0);
-  const pend  = rows.filter(r=>!r.cobrado).reduce((a,r)=>a+Number(r.neto||0),0);
-  const cabezas = rows.reduce((a,r)=>a+(r.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0),0);
+  state._liqHacRows = rows;
+  if (!state.liqHacFilter) state.liqHacFilter = { desde:'', hasta:'', comprador:'', categoria:'', estado:'' };
   const canC = can('ventas:create')||can('finanzas:create');
+  const compradores = [...new Set(rows.map(r=>(r.receptorNombre||r.emisorNombre||'').trim()).filter(Boolean))];
+  const categs = [...new Set(rows.flatMap(r=>(r.renglones||[]).map(x=>x.categoria).filter(Boolean)))];
+  const f = state.liqHacFilter;
   $('#page-body').innerHTML = `
-    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <div class="text-sm text-slate-600">${rows.length} liquidación${rows.length===1?'':'es'}</div>
+    <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600" id="liqhac-count"></div>
       <div class="flex gap-2">
         ${canC?`<button class="btn btn-secondary" onclick="liqHacImportar()" title="Subir el PDF de la liquidación y autocompletar">📥 Importar de PDF</button>`:''}
         ${canC?`<button class="btn btn-primary" onclick="liqHacForm()">+ Nueva liquidación</button>`:''}
       </div>
     </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">Liquidaciones</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Cabezas vendidas</div><div class="text-2xl font-bold mt-1">${fmtN(cabezas)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Total neto</div><div class="text-2xl font-bold mt-1">${fmt$(total)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Pendiente de cobro</div><div class="text-2xl font-bold mt-1 text-amber-600">${fmt$(pend)}</div></div>
+    <div class="kpi p-2 mb-3 grid grid-cols-2 md:grid-cols-5 gap-2 items-end">
+      <div><label class="label text-[11px]">Desde</label><input type="date" id="lqhf-d" class="input text-sm" value="${f.desde}" onchange="liqHacFiltroSet()"/></div>
+      <div><label class="label text-[11px]">Hasta</label><input type="date" id="lqhf-h" class="input text-sm" value="${f.hasta}" onchange="liqHacFiltroSet()"/></div>
+      <div><label class="label text-[11px]">Comprador</label><select id="lqhf-comp" class="input text-sm" onchange="liqHacFiltroSet()"><option value="">Todos</option>${compradores.map(c=>`<option value="${esc(c)}" ${f.comprador===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+      <div><label class="label text-[11px]">Categoría</label><select id="lqhf-cat" class="input text-sm" onchange="liqHacFiltroSet()"><option value="">Todas</option>${categs.map(c=>`<option value="${esc(c)}" ${f.categoria===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+      <div><label class="label text-[11px]">Estado</label><select id="lqhf-est" class="input text-sm" onchange="liqHacFiltroSet()"><option value="">Todos</option><option value="pendiente" ${f.estado==='pendiente'?'selected':''}>Pendiente</option><option value="cobrada" ${f.estado==='cobrada'?'selected':''}>Cobrada</option></select></div>
     </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" id="liqhac-kpis"></div>
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
-        <thead><tr><th>Fecha</th><th>Nro</th><th>Campo</th><th>Comprador</th><th class="text-right">Cabezas</th><th class="text-right">Kg</th><th class="text-right">Neto</th><th>Estado</th></tr></thead>
-        <tbody>
-          ${rows.map(r=>{ const cab=(r.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0); const kg=(r.renglones||[]).reduce((s,x)=>s+Number(x.kilos||0),0);
-            return `<tr class="table-row" onclick='liqHacVer(${JSON.stringify(r.id)})' style="cursor:pointer">
-              <td>${fmtDate(r.fecha)}</td><td>${esc(r.numero||'—')}</td>
-              <td>${esc(r.campo?.nombre||'—')}</td><td>${esc(r.receptorNombre||r.emisorNombre||'—')}</td>
-              <td class="text-right">${fmtN(cab)}</td><td class="text-right">${fmtN(kg)}</td>
-              <td class="text-right font-bold text-green-700">${fmt$(r.neto)}</td>
-              <td>${r.cobrado?'<span class="badge badge-green">Cobrada</span>':'<span class="badge badge-yellow">Pendiente</span>'}</td>
-            </tr>`;}).join('') || `<tr><td colspan="8" class="text-center text-slate-400 py-8">Sin liquidaciones. Usá "Importar de PDF" o "Nueva liquidación".</td></tr>`}
-        </tbody>
+        <thead><tr><th>Fecha</th><th>Nro</th><th>Campo</th><th>Comprador</th><th class="text-right">Cabezas</th><th class="text-right">Kg</th><th class="text-right">Neto</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="liqhac-tbody"></tbody>
       </table>
     </div>`;
+  liqHacRender();
 };
+function liqHacFiltroSet() {
+  state.liqHacFilter = {
+    desde: $('#lqhf-d')?.value||'', hasta: $('#lqhf-h')?.value||'',
+    comprador: $('#lqhf-comp')?.value||'', categoria: $('#lqhf-cat')?.value||'', estado: $('#lqhf-est')?.value||'',
+  };
+  liqHacRender();
+}
+function liqHacRender() {
+  const f = state.liqHacFilter || {}; const rows = state._liqHacRows || [];
+  const fil = rows.filter(r => {
+    const d = (r.fecha||'').slice(0,10);
+    if (f.desde && d < f.desde) return false;
+    if (f.hasta && d > f.hasta) return false;
+    if (f.comprador && (r.receptorNombre||r.emisorNombre||'').trim() !== f.comprador) return false;
+    if (f.categoria && !(r.renglones||[]).some(x=>x.categoria===f.categoria)) return false;
+    if (f.estado === 'cobrada' && !r.cobrado) return false;
+    if (f.estado === 'pendiente' && r.cobrado) return false;
+    return true;
+  });
+  const total = fil.reduce((a,r)=>a+Number(r.neto||0),0);
+  const pend  = fil.filter(r=>!r.cobrado).reduce((a,r)=>a+Number(r.neto||0),0);
+  const cabezas = fil.reduce((a,r)=>a+(r.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0),0);
+  const cnt=$('#liqhac-count'); if(cnt) cnt.textContent = `${fil.length} de ${rows.length} liquidación${rows.length===1?'':'es'}`;
+  const k=$('#liqhac-kpis'); if(k) k.innerHTML = `
+    <div class="kpi"><div class="text-xs text-slate-500">Liquidaciones (filtro)</div><div class="text-2xl font-bold mt-1">${fil.length}</div></div>
+    <div class="kpi"><div class="text-xs text-slate-500">Cabezas</div><div class="text-2xl font-bold mt-1">${fmtN(cabezas)}</div></div>
+    <div class="kpi"><div class="text-xs text-slate-500">Total neto</div><div class="text-2xl font-bold mt-1">${fmt$(total)}</div></div>
+    <div class="kpi"><div class="text-xs text-slate-500">Pendiente de cobro</div><div class="text-2xl font-bold mt-1 text-amber-600">${fmt$(pend)}</div></div>`;
+  const canU = can('ventas:update'), canD = can('ventas:delete');
+  const tb=$('#liqhac-tbody'); if(!tb) return;
+  tb.innerHTML = fil.map(r=>{ const cab=(r.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0); const kg=(r.renglones||[]).reduce((s,x)=>s+Number(x.kilos||0),0);
+    return `<tr class="table-row" onclick='liqHacVer(${JSON.stringify(r.id)})' style="cursor:pointer">
+      <td>${fmtDate(r.fecha)}</td><td>${esc(r.numero||'—')}</td>
+      <td>${esc(r.campo?.nombre||'—')}</td><td>${esc(r.receptorNombre||r.emisorNombre||'—')}</td>
+      <td class="text-right">${fmtN(cab)}</td><td class="text-right">${fmtN(kg)}</td>
+      <td class="text-right font-bold text-green-700">${fmt$(r.neto)}</td>
+      <td>${r.cobrado?'<span class="badge badge-green">Cobrada</span>':'<span class="badge badge-yellow">Pendiente</span>'}</td>
+      <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+        ${canU&&!r.cobrado?`<button class="btn btn-ghost text-xs" title="Editar" onclick='liqHacEditar(${JSON.stringify(r.id)})'>✏️</button>`:''}
+        ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='liqHacEliminar(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+      </td>
+    </tr>`;}).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin liquidaciones que coincidan con el filtro.</td></tr>`;
+}
+async function liqHacEditar(id) {
+  try { const r = await api('/api/liquidaciones-hacienda/'+id); const l = r.data; liqHacForm({ ...l, _editId: l.id, gastosMasIva: l.gastosTotal }); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function liqHacEliminar(id) {
+  if (!confirm('¿Eliminar esta liquidación de animales? Se revierte el stock, el SENASA y la cuenta a cobrar.')) return;
+  try { await api('/api/liquidaciones-hacienda/'+id, { method:'DELETE' }); toast('Liquidación eliminada','success'); delete state.cache.haciendaResumen; pages.liquidacionesHacienda(); }
+  catch(e){ toast(e.message,'error'); }
+}
 
 // Modal para subir el PDF y autocompletar el formulario.
 function liqHacImportar(){
@@ -25203,11 +25319,12 @@ async function liqHacForm(prefill=null){
   const cats = hacCategoriasDisponibles();
   const hoy = new Date().toISOString().slice(0,10);
   const p = prefill || {};
+  state._lqhEditId = p._editId || null;
   const rengs = (p.renglones && p.renglones.length) ? p.renglones : [{ categoria:'', cabezas:'', kilos:'', precioKg:'', alicuotaIva:10.5, categoriaTexto:'' }];
-  // Buscar cliente por CUIT del emisor/receptor del PDF
-  let cliSug = '';
+  // Cliente: en edición viene por id; si no, se busca por CUIT del emisor/receptor del PDF
+  let cliSug = p.clienteId || '';
   const cuitBusca = (p.emisorCuit||'').replace(/\D/g,'');
-  if (cuitBusca) { const m = clientes.find(c=>String(c.cuit||'').replace(/\D/g,'')===cuitBusca); if (m) cliSug = m.id; }
+  if (!cliSug && cuitBusca) { const m = clientes.find(c=>String(c.cuit||'').replace(/\D/g,'')===cuitBusca); if (m) cliSug = m.id; }
   state._lqhData = p;
 
   const catOpts = (sel)=>`<option value="">— elegir —</option>`+cats.map(c=>`<option value="${esc(c)}" ${c===sel?'selected':''}>${esc(c)}</option>`).join('');
@@ -25225,11 +25342,11 @@ async function liqHacForm(prefill=null){
   </tr>`;
 
   openModal({
-    title: prefill?'📥 Confirmar liquidación de animales':'🐄 Nueva liquidación de animales', size:'max-w-5xl',
+    title: state._lqhEditId?'✏️ Editar liquidación de animales':(prefill?'📥 Confirmar liquidación de animales':'🐄 Nueva liquidación de animales'), size:'max-w-5xl',
     body:`
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Campo (de dónde salen los animales) *</label>
-          <select id="lqh-campo" class="input">${campos.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
+          <select id="lqh-campo" class="input">${campos.map(c=>`<option value="${c.id}" ${c.id===p.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select>
         </div>
         <div><label class="label">Fecha *</label><input id="lqh-fec" type="date" class="input" value="${p.fecha?String(p.fecha).slice(0,10):hoy}"/></div>
         <div><label class="label">N° comprobante</label><input id="lqh-nro" class="input" value="${esc(p.numero||'')}"/></div>
@@ -25257,7 +25374,7 @@ async function liqHacForm(prefill=null){
         <div><label class="label text-xs">NETO A COBRAR *</label><input id="lqh-neto" type="number" step="0.01" class="input text-right font-bold text-green-700" value="${p.neto!=null?p.neto:''}"/></div>
       </div>
       <div class="grid grid-cols-2 gap-3 items-center">
-        <div><label class="label">Fecha estimada de cobro</label><input id="lqh-cobro" type="date" class="input" value="${p.caeVto?String(p.caeVto).slice(0,10):''}"/></div>
+        <div><label class="label">Fecha estimada de cobro</label><input id="lqh-cobro" type="date" class="input" value="${p.fechaCobroEst?String(p.fechaCobroEst).slice(0,10):(p.caeVto?String(p.caeVto).slice(0,10):'')}"/></div>
         <label class="flex items-center gap-2 text-sm mt-5"><input type="checkbox" id="lqh-senasa" class="w-4 h-4" checked/> <span>Descontar también del <b>declarado SENASA</b> del campo</span></label>
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="lqh-obs" class="input" rows="2">${esc(p.observaciones||'')}</textarea></div>`,
@@ -25327,9 +25444,14 @@ async function liqHacSave(){
   if (!data.campoId) return toast('Elegí el campo','warn');
   if (!data.neto) return toast('Cargá el neto a cobrar','warn');
   try {
-    await api('/api/liquidaciones-hacienda',{method:'POST',body:JSON.stringify(data)});
-    toast('Liquidación de hacienda guardada · stock y SENASA descontados','success');
-    closeModal(); delete state.cache.haciendaResumen; pages.liquidacionesHacienda();
+    if (state._lqhEditId) {
+      await api('/api/liquidaciones-hacienda/'+state._lqhEditId,{method:'PUT',body:JSON.stringify(data)});
+      toast('Liquidación de animales actualizada','success');
+    } else {
+      await api('/api/liquidaciones-hacienda',{method:'POST',body:JSON.stringify(data)});
+      toast('Liquidación de animales guardada · stock y SENASA descontados','success');
+    }
+    state._lqhEditId = null; closeModal(); delete state.cache.haciendaResumen; pages.liquidacionesHacienda();
   } catch(e){ toast(e.message,'error'); }
 }
 async function liqHacVer(id){

@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.55.1';
+const AGROCORE_VERSION = '2.56.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6742,8 +6742,8 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
           fecha: d.fecha, tipo: 'egreso', motivo: 'liquidacion_cerealera',
           cantidad: kilosNetos / 1000,    // a toneladas
           precio: d.precioPorTn, total: bruto,
-          referencia: d.numero || null,
-          observaciones: `Liquidación cereal — neto ${neto.toFixed(2)}`,
+          referencia: `LIQCER-${liq.id}`,
+          observaciones: `Liquidación cereal ${d.numero || ''} — neto ${neto.toFixed(2)}`.replace(/\s+—/, ' —'),
           userId: req.user?.id || null,
         },
       });
@@ -6754,7 +6754,7 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
             companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId,
             fecha: d.fecha,
             detalle: `Liquidación cereal ${d.numero || ''}`.trim(),
-            referencia: `LIQ-${liq.id.slice(-6).toUpperCase()}`,
+            referencia: `LIQCER-${liq.id}`,
             debe: neto,           // el cliente nos debe el neto a cobrar
             haber: 0,
             vencimiento: d.fechaCobroEst || null,
@@ -6783,6 +6783,92 @@ app.put('/api/liquidaciones-cereal/:id/marcar-cobrado', requireCompany, requireP
     if (!liq) return res.status(404).json({ ok: false, error: 'No encontrada' });
     const row = await prisma.liquidacionCereal.update({ where: { id: req.params.id }, data: { cobrado: true } });
     res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+// Revierte los efectos de una liquidación de cereal (stock, cta cte, vínculos de viajes).
+async function _revertirLiqCereal(tx, companyId, liq) {
+  const refs = [`LIQCER-${liq.id}`, `LIQ-${liq.id.slice(-6).toUpperCase()}`];
+  // Egreso de stock (nuevo formato por referencia; legacy por numero+producto+deposito)
+  await tx.movimiento.deleteMany({ where: { companyId, referencia: { in: refs } } });
+  if (liq.numero) await tx.movimiento.deleteMany({ where: { companyId, motivo: 'liquidacion_cerealera', referencia: liq.numero, productoId: liq.productoId, depositoId: liq.depositoId } });
+  // Cuenta a cobrar
+  await tx.ctaCte.deleteMany({ where: { companyId, referencia: { in: refs } } });
+}
+// Quita los vínculos de viajes (posición de granos) de una liquidación de cereal.
+async function _desvincularViajesLiqCereal(tx, companyId, liqId) {
+  await tx.viajeLiquidacion.deleteMany({ where: { companyId, liquidacionId: liqId } }).catch(() => {});
+  await tx.viaje.updateMany({ where: { companyId, liquidacionCerealId: liqId }, data: { liquidacionCerealId: null } }).catch(() => {});
+}
+app.delete('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('ventas:delete'), async (req, res, next) => {
+  try {
+    const liq = await prisma.liquidacionCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!liq) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    await prisma.$transaction(async (tx) => {
+      await _revertirLiqCereal(tx, req.companyId, liq);
+      await _desvincularViajesLiqCereal(tx, req.companyId, liq.id);
+      await tx.liquidacionCereal.delete({ where: { id: liq.id } });  // conceptos caen por cascada
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// EDITAR una liquidación de cereal: revierte y reaplica. Se BLOQUEA si ya está cobrada.
+app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.liquidacionCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    if (existing.cobrado) return res.status(400).json({ ok: false, error: 'La liquidación está marcada como cobrada. Deshacé el cobro antes de editarla.' });
+    const concSchema = z.object({ tipo: z.enum(['descuento', 'impuesto']), concepto: z.string().min(1), importe: z.number(), porcentaje: z.number().nullable().optional() });
+    const schema = z.object({
+      depositoId: z.string(), productoId: z.string(), clienteId: z.string().nullable().optional(),
+      fecha: z.coerce.date(), numero: z.string().nullable().optional(),
+      kilosBrutos: z.number().nonnegative(), porcMerma: z.number().min(0).max(100).default(0),
+      precioPorTn: z.number().nonnegative(), conceptos: z.array(concSchema).default([]),
+      fechaCobroEst: z.coerce.date().nullable().optional(), observaciones: z.string().nullable().optional(),
+      viajeIds: z.array(z.string()).nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const kilosNetos = d.kilosBrutos * (1 - d.porcMerma / 100);
+    const bruto = (kilosNetos / 1000) * d.precioPorTn;
+    let totalDescuentos = 0, totalImpuestos = 0;
+    d.conceptos.forEach(c => { if (c.tipo === 'descuento') totalDescuentos += c.importe; else totalImpuestos += c.importe; });
+    const neto = bruto - totalDescuentos - totalImpuestos;
+    await prisma.$transaction(async (tx) => {
+      await _revertirLiqCereal(tx, req.companyId, existing);
+      await tx.liquidacionCerealConcepto.deleteMany({ where: { liquidacionId: existing.id } });
+      await tx.liquidacionCereal.update({ where: { id: existing.id }, data: {
+        depositoId: d.depositoId, productoId: d.productoId, clienteId: d.clienteId || null,
+        fecha: d.fecha, numero: d.numero || null, kilosBrutos: d.kilosBrutos, porcMerma: d.porcMerma,
+        kilosNetos, precioPorTn: d.precioPorTn, bruto, totalDescuentos, totalImpuestos, neto,
+        fechaCobroEst: d.fechaCobroEst || null, observaciones: d.observaciones || null,
+        conceptos: { create: d.conceptos.map(c => ({ tipo: c.tipo, concepto: c.concepto, importe: c.importe, porcentaje: c.porcentaje ?? null })) },
+      }});
+      await tx.movimiento.create({ data: {
+        companyId: req.companyId, productoId: d.productoId, depositoId: d.depositoId, fecha: d.fecha,
+        tipo: 'egreso', motivo: 'liquidacion_cerealera', cantidad: kilosNetos / 1000, precio: d.precioPorTn, total: bruto,
+        referencia: `LIQCER-${existing.id}`, observaciones: `Liquidación cereal ${d.numero || ''} — neto ${neto.toFixed(2)}`.replace(/\s+—/, ' —'),
+        userId: req.user?.id || null,
+      }});
+      if (d.clienteId) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId, fecha: d.fecha,
+          detalle: `Liquidación cereal ${d.numero || ''}`.trim(), referencia: `LIQCER-${existing.id}`,
+          debe: neto, haber: 0, vencimiento: d.fechaCobroEst || null, categoria: 'liquidacion_cereal',
+        }});
+      }
+      // Vínculos con viajes: solo se tocan si el body los trae (la edición manual no los reenvía → se preservan).
+      if (Array.isArray(d.viajeIds)) {
+        await _desvincularViajesLiqCereal(tx, req.companyId, existing.id);
+        for (const vid of d.viajeIds) {
+          const v = await tx.viaje.findFirst({ where: { id: vid, companyId: req.companyId } });
+          if (!v) continue;
+          const kv = Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
+          try { await tx.viajeLiquidacion.create({ data: { companyId: req.companyId, viajeId: vid, liquidacionId: existing.id, kilosAplicados: kv } }); } catch {}
+          if (!v.liquidacionCerealId) { try { await tx.viaje.update({ where: { id: vid }, data: { liquidacionCerealId: existing.id } }); } catch {} }
+        }
+      }
+    });
+    const full = await prisma.liquidacionCereal.findUnique({ where: { id: existing.id }, include: { deposito: true, conceptos: true } });
+    res.json({ ok: true, data: full });
   } catch (e) { next(e); }
 });
 
@@ -7041,6 +7127,89 @@ app.delete('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission(
       await tx.liquidacionHacienda.delete({ where: { id: liq.id } });
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// EDITAR una liquidación de animales: revierte todo (stock/SENASA/cta cte) y lo vuelve a
+// aplicar con los datos nuevos, manteniendo el mismo id. Se BLOQUEA si ya está cobrada.
+app.put('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.liquidacionHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { renglones: true } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    if (existing.cobrado) return res.status(400).json({ ok: false, error: 'La liquidación está marcada como cobrada. Deshacé el cobro (Marcar como no cobrada) antes de editarla.' });
+    const rengSchema = z.object({
+      especie: z.string().nullable().optional(), categoria: z.string().min(1),
+      categoriaTexto: z.string().nullable().optional(), raza: z.string().nullable().optional(),
+      tropa: z.string().nullable().optional(), cabezas: z.coerce.number().int().min(1),
+      kilos: z.coerce.number().nonnegative().default(0), precioKg: z.coerce.number().nonnegative().default(0),
+      bruto: z.coerce.number().nonnegative().nullable().optional(), alicuotaIva: z.coerce.number().nonnegative().default(10.5),
+      iva: z.coerce.number().nonnegative().nullable().optional(),
+    });
+    const schema = z.object({
+      campoId: z.string(), clienteId: z.string().nullable().optional(), fecha: z.coerce.date(),
+      numero: z.string().nullable().optional(), cae: z.string().nullable().optional(), caeVto: z.coerce.date().nullable().optional(),
+      emisorNombre: z.string().nullable().optional(), emisorCuit: z.string().nullable().optional(),
+      receptorNombre: z.string().nullable().optional(), receptorCuit: z.string().nullable().optional(),
+      gastosTotal: z.coerce.number().default(0), ivaGastos: z.coerce.number().default(0), neto: z.coerce.number(),
+      fechaCobroEst: z.coerce.date().nullable().optional(), descontarSenasa: z.boolean().default(true),
+      observaciones: z.string().nullable().optional(), renglones: z.array(rengSchema).min(1),
+    });
+    const d = schema.parse(req.body);
+    const campo = await _verifyCampo(req, d.campoId);
+    if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
+    const rows = d.renglones.map(r => {
+      const bruto = (r.bruto != null && r.bruto > 0) ? r.bruto : (r.kilos * r.precioKg);
+      const iva = (r.iva != null) ? r.iva : Math.round(bruto * r.alicuotaIva) / 100;
+      return { ...r, bruto: Math.round(bruto * 100) / 100, iva: Math.round(iva * 100) / 100 };
+    });
+    const brutoTotal = rows.reduce((a, r) => a + r.bruto, 0);
+    const ivaBruto = rows.reduce((a, r) => a + r.iva, 0);
+    await prisma.$transaction(async (tx) => {
+      // 1) REVERTIR lo anterior
+      for (const r of existing.renglones) {
+        const st = await tx.haciendaStock.findFirst({ where: { companyId: req.companyId, campoId: existing.campoId, categoria: r.categoria } });
+        if (st) await tx.haciendaStock.update({ where: { id: st.id }, data: { declarado: (st.declarado || 0) + r.cabezas } });
+      }
+      await tx.haciendaMovimiento.deleteMany({ where: { companyId: req.companyId, facturaRef: `LIQHAC-${existing.id}` } });
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `LIQHAC-${existing.id}` } });
+      await tx.liquidacionHaciendaRenglon.deleteMany({ where: { liquidacionId: existing.id } });
+      // 2) ACTUALIZAR cabecera
+      await tx.liquidacionHacienda.update({ where: { id: existing.id }, data: {
+        campoId: d.campoId, clienteId: d.clienteId || null, fecha: d.fecha, numero: d.numero || null,
+        cae: d.cae || null, caeVto: d.caeVto || null, emisorNombre: d.emisorNombre || null, emisorCuit: d.emisorCuit || null,
+        receptorNombre: d.receptorNombre || null, receptorCuit: d.receptorCuit || null,
+        brutoTotal: Math.round(brutoTotal * 100) / 100, ivaBruto: Math.round(ivaBruto * 100) / 100,
+        gastosTotal: d.gastosTotal || 0, ivaGastos: d.ivaGastos || 0, neto: d.neto,
+        fechaCobroEst: d.fechaCobroEst || null, observaciones: d.observaciones || null,
+      }});
+      // 3) REAPLICAR con los datos nuevos
+      for (const r of rows) {
+        const mov = await tx.haciendaMovimiento.create({ data: {
+          companyId: req.companyId, campoId: d.campoId, categoria: r.categoria, fecha: d.fecha, tipo: 'venta',
+          cantidad: r.cabezas, kilos: r.kilos || null, precioKg: r.precioKg || null, total: r.bruto || null,
+          clienteId: d.clienteId || null, modoVenta: 'directo', estadoRend: 'cerrada', cobroTipo: 'ninguno',
+          facturaRef: `LIQHAC-${existing.id}`, observaciones: `Liquidación animales ${d.numero || ''}`.trim(),
+        }});
+        await tx.liquidacionHaciendaRenglon.create({ data: {
+          liquidacionId: existing.id, especie: r.especie || null, categoria: r.categoria,
+          categoriaTexto: r.categoriaTexto || null, raza: r.raza || null, tropa: r.tropa || null,
+          cabezas: r.cabezas, kilos: r.kilos || 0, precioKg: r.precioKg || 0,
+          bruto: r.bruto || 0, alicuotaIva: r.alicuotaIva, iva: r.iva || 0, haciendaMovId: mov.id,
+        }});
+        if (d.descontarSenasa) {
+          const st = await tx.haciendaStock.findFirst({ where: { companyId: req.companyId, campoId: d.campoId, categoria: r.categoria } });
+          if (st) await tx.haciendaStock.update({ where: { id: st.id }, data: { declarado: Math.max(0, (st.declarado || 0) - r.cabezas) } });
+        }
+      }
+      if (d.clienteId) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId, fecha: d.fecha,
+          detalle: `Liquidación animales ${d.numero || ''}`.trim(), referencia: `LIQHAC-${existing.id}`,
+          debe: d.neto, haber: 0, vencimiento: d.fechaCobroEst || null, categoria: 'liquidacion_hacienda',
+        }});
+      }
+    });
+    const full = await prisma.liquidacionHacienda.findUnique({ where: { id: existing.id }, include: { renglones: true } });
+    res.json({ ok: true, data: full });
   } catch (e) { next(e); }
 });
 
