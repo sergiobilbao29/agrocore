@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.52.0';
+const AGROCORE_VERSION = '2.52.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1321,11 +1321,15 @@ app.put('/api/ia-config', async (req, res, next) => {
 app.post('/api/ia-config/probar', async (req, res, next) => {
   try {
     if (!req.user?.superAdmin) return res.status(403).json({ ok: false, error: 'Solo Super Admin' });
+    // Permite probar la key que el usuario acaba de escribir en el campo (aun sin Guardar).
     const ia = await _iaConfig();
-    if (!ia.apiKey) return res.status(400).json({ ok: false, error: 'Falta la API key de OpenAI.' });
+    const keyProbar = String(req.body?.apiKey || '').trim() || ia.apiKey;
+    const modelProbar = String(req.body?.model || '').trim() || ia.model;
+    if (!keyProbar) return res.status(400).json({ ok: false, error: 'Falta la API key de OpenAI.' });
+    const iaTest = { enabled: true, apiKey: keyProbar, model: modelProbar };
     const ctx = await _ctxAsistente(req.companyId);
     const frase = String(req.body?.texto || 'apliqué 120 litros de glifosato en el lote 3').trim();
-    const norm = await _iaNormalizar(frase, ctx, ia);
+    const norm = await _iaNormalizar(frase, ctx, iaTest);
     res.json({ ok: true, entrada: frase, normalizado: norm || '(la IA no la asoció a ninguna acción)' });
   } catch (e) { res.status(502).json({ ok: false, error: 'No pude conectar con OpenAI: ' + (e.message || e) }); }
 });

@@ -8337,9 +8337,15 @@ async function configIABorrarKey() {
 }
 async function configIAProbar() {
   const msg = document.getElementById('ia-msg');
+  const apiKey = (document.getElementById('ia-key')?.value||'').trim();
+  const model = document.getElementById('ia-model')?.value || 'gpt-4o-mini';
+  if (!apiKey && !(state._iaCfg && state._iaCfg.tieneKey)) {
+    if (msg) msg.innerHTML = '<span class="text-amber-700">Escribí primero la API key en el campo de arriba.</span>';
+    return;
+  }
   if (msg) msg.innerHTML = '<span class="text-blue-700">⏳ Probando con OpenAI…</span>';
   try {
-    const r = await api('/api/ia-config/probar', { method:'POST', body: JSON.stringify({ texto:'apliqué 120 litros de glifosato en el lote 3' }) });
+    const r = await api('/api/ia-config/probar', { method:'POST', body: JSON.stringify({ texto:'apliqué 120 litros de glifosato en el lote 3', apiKey, model }) });
     if (msg) msg.innerHTML = `<div class="bg-slate-50 border border-slate-200 rounded p-2 text-xs"><b>Prueba OK ✓</b><br>Entrada: <i>${esc(r.entrada)}</i><br>La IA lo entendió como: <b>${esc(r.normalizado)}</b></div>`;
   } catch(e){ if (msg) msg.innerHTML = `<span class="text-red-600">❌ ${esc(e.message)}. Revisá la key y que tengas saldo/tope en OpenAI.</span>`; }
 }
