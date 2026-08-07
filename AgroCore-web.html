@@ -2542,6 +2542,15 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'06/08/2026',
+      titulo:'🔊 v2.50.0 — Voz elegible (hombre/mujer) y consultas con permiso',
+      desc:'La voz del asistente ahora es <b>más suave y natural</b> y podés <b>elegir voz de mujer 👩 o de hombre 👨</b> (o apagarla) desde el selector en el chat del asistente. Toma la mejor voz en español instalada en el dispositivo (en Chrome/Android suenan muy bien). Además, por seguridad, la <b>información sensible</b> (cuánto hay a cobrar/a pagar, estado patrimonial, plata en caja) <b>solo se la responde a usuarios con permiso de Finanzas</b>; a los demás les avisa que no tienen acceso.' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'06/08/2026',
+      titulo:'🤖 v2.49.0 — El asistente te guía con las facturas',
+      desc:'Si le pedís <i>"cargá una factura de compra de la ferretería"</i> o <i>"hacer una factura de venta a Don Juan"</i>, el asistente lo entiende y te <b>lleva directo a la pantalla correcta</b> (Compras o Facturación) con el paso a paso. <b>Por seguridad no emite las facturas por chat</b> — sobre todo las de venta, que llevan CAE de ARCA — porque tienen IVA discriminado y van al Libro IVA. Para las de compra te recuerda que con <b>Importar el PDF/Excel de ARCA</b> se cargan casi solas. Los gastos, cobros y pagos del día sí los sigue cargando el bot directamente.' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/08/2026',
+      titulo:'🤖 v2.48.0 — El asistente registra cobros y pagos a cuenta',
+      desc:'Ahora le podés decir <i>"cobrale 50000 a Don Juan"</i> o <i>"pagá 30000 a la ferretería"</i> y el asistente <b>reconoce al cliente/proveedor</b>, te pregunta el <b>método</b> (efectivo con caja, transferencia o billetera) y registra el <b>cobro/pago a cuenta</b> (baja el saldo de la cuenta corriente y mueve la plata real). Si falta el monto, te lo pregunta. Para aplicar el pago a facturas puntuales seguís usando Cuentas a cobrar/pagar. Usa los mismos circuitos ya probados del sistema.' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'06/08/2026',
       titulo:'🤖 v2.47.0 — Asistente: consultas de plata, carga guiada, mejor voz y fix de fecha',
       desc:'El asistente ahora <b>responde consultas</b> de plata: <i>"¿cuánto tengo a cobrar?"</i>, <i>"¿cuánto debo?"</i>, <i>"¿cómo estoy?"</i> (estado patrimonial aproximado), <i>"¿cuánta plata tengo en caja?"</i> y <i>"¿cuánto cereal me falta liquidar?"</i>. Además <b>pide los datos que faltan</b>: si le decís <i>"pagué la luz"</i> sin monto, te pregunta <i>"¿de cuánto fue?"</i> y con tu respuesta completa la carga. La <b>voz suena más natural</b> (elige la mejor voz en español del dispositivo, más pausada) y ya <b>no dice "dólares"</b> cuando son pesos. Y se corrigió que un gasto cargado por el bot a la noche <b>aparezca en el día correcto</b> en Movimientos diarios.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/08/2026',
@@ -7045,18 +7054,39 @@ function chatVoz(inputId){
   try { rec.start(); } catch { _chatVozRec=null; }
 }
 // --- Voz de salida (Text-to-Speech): el asistente lee en voz alta su respuesta ---
-function _ttsActivo(){ if (state._ttsOn===undefined){ try{ state._ttsOn = localStorage.getItem('agro_tts')!=='0'; }catch{ state._ttsOn=true; } } return state._ttsOn; }
-// Elige la voz en español más natural disponible (Google / Natural / Online priman).
-function _ttsMejorVoz(){
+// Preferencia guardada: 'off' | 'mujer' | 'hombre' (default 'mujer').
+function _ttsVoz(){
+  if (state._ttsVoz===undefined){
+    try{
+      let v = localStorage.getItem('agro_tts_voz');
+      if (!v){ v = (localStorage.getItem('agro_tts')==='0') ? 'off' : 'mujer'; }  // compat con la config vieja
+      state._ttsVoz = v;
+    }catch{ state._ttsVoz='mujer'; }
+  }
+  return state._ttsVoz;
+}
+function _ttsActivo(){ return _ttsVoz()!=='off'; }
+// Nombres típicos de voces en español por género (heurística, el navegador no lo expone).
+const _VOZ_MUJER = /(mujer|female|f\b|m[oó]nica|paulina|helena|sabina|elvira|dalia|laura|lucia|luc[ií]a|marisol|isabela|salom[eé]|sof[ií]a|catalina|camila|ang(e|é)lica|paloma|ver[oó]nica|google espa)/i;
+const _VOZ_HOMBRE = /(hombre|male|\bm\b|jorge|diego|pablo|ra[uú]l|enrique|miguel|carlos|andr[eé]s|dario|dar[ií]o|liberto|alvaro|[aá]lvaro|gonzalo|lucas)/i;
+// Elige la mejor voz en español para el género pedido (Google / Natural / Online priman).
+function _ttsMejorVoz(genero){
   const vs = (window.speechSynthesis.getVoices && window.speechSynthesis.getVoices()) || [];
   const es = vs.filter(v=>/^es(-|_|$)/i.test(v.lang)||/spanish|español/i.test(v.name));
   if (!es.length) return null;
+  const reGen = genero==='hombre' ? _VOZ_HOMBRE : _VOZ_MUJER;
+  const reOtro = genero==='hombre' ? _VOZ_MUJER : _VOZ_HOMBRE;
   const score = (v)=>{ let s=0; const n=(v.name||'').toLowerCase(), l=(v.lang||'').toLowerCase();
-    if (/google/.test(n)) s+=6; if (/natural|neural|online/.test(n)) s+=5; if (/premium|enhanced/.test(n)) s+=3;
-    if (/es-ar|es_419|es-419|es-mx|es-us/.test(l)) s+=3; else if (/es-es/.test(l)) s+=1;
-    if (/microsoft/.test(n)) s+=1; if (/helena|sabina|elvira|paulina|dalia|jorge|raul|lucia|laura/.test(n)) s+=1;
+    // Calidad: voces neuronales/online suenan mucho más humanas.
+    if (/natural|neural|online/.test(n)) s+=8; if (/google/.test(n)) s+=6; if (/premium|enhanced|siri/.test(n)) s+=5;
+    // Región rioplatense/latina primero.
+    if (/es-ar|es_ar|es-419|es_419|es-mx|es-us/.test(l)) s+=3; else if (/es-es/.test(l)) s+=1;
+    // Género pedido.
+    if (reGen.test(n)) s+=6; if (reOtro.test(n)) s-=6;
     return s; };
-  return es.sort((a,b)=>score(b)-score(a))[0];
+  const ord = es.slice().sort((a,b)=>score(b)-score(a));
+  // Preferimos una que coincida con el género; si ninguna coincide, la mejor disponible.
+  return ord.find(v=>reGen.test((v.name||'').toLowerCase())) || ord[0];
 }
 function _ttsHablar(texto){
   try {
@@ -7069,27 +7099,30 @@ function _ttsHablar(texto){
       .replace(/[*_`#>•]/g, ' ').replace(/\s{2,}/g, ' ').trim();
     if (!t) return;
     if (t.length > 350) t = t.slice(0, 350);
+    const genero = _ttsVoz()==='hombre' ? 'hombre' : 'mujer';
     const hablar = ()=>{
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(t);
-      const v = _ttsMejorVoz();
-      u.lang = (v && v.lang) || 'es-AR'; u.rate = 0.95; u.pitch = 1.05; u.volume = 1;
+      const v = _ttsMejorVoz(genero);
+      u.lang = (v && v.lang) || 'es-AR';
+      // Más suave y humana: ritmo pausado y tono acorde al género.
+      u.rate = 0.9; u.pitch = genero==='hombre' ? 0.9 : 1.08; u.volume = 1;
       if (v) u.voice = v;
       window.speechSynthesis.speak(u);
     };
-    // Las voces pueden cargar async la primera vez.
     if (!(window.speechSynthesis.getVoices()||[]).length){
       window.speechSynthesis.onvoiceschanged = ()=>{ window.speechSynthesis.onvoiceschanged=null; hablar(); };
       setTimeout(hablar, 250);
     } else hablar();
   } catch {}
 }
-function chatTtsToggle(){
-  state._ttsOn = !_ttsActivo();
-  try{ localStorage.setItem('agro_tts', state._ttsOn?'1':'0'); }catch{}
-  if (!state._ttsOn){ try{ window.speechSynthesis.cancel(); }catch{} }
-  const b=document.getElementById('chat-tts'); if(b){ b.textContent = state._ttsOn?'🔊':'🔇'; b.title = state._ttsOn?'Voz activada — toca para silenciar':'Voz silenciada — toca para activar'; }
-  toast(state._ttsOn?'🔊 El asistente va a leer sus respuestas en voz alta.':'🔇 Voz desactivada.','info');
+// Cambia la voz del asistente: 'off' | 'mujer' | 'hombre'. Guarda la preferencia.
+function chatTtsSet(v){
+  state._ttsVoz = v;
+  try{ localStorage.setItem('agro_tts_voz', v); }catch{}
+  try{ window.speechSynthesis.cancel(); }catch{}
+  if (v!=='off'){ _ttsHablar(v==='hombre' ? 'Listo, ahora te hablo con voz de hombre.' : 'Listo, ahora te hablo con voz de mujer.'); }
+  else toast('🔇 Voz desactivada.','info');
 }
 pages.mensajes = async function(){
   setHeader('Mensajes y asistente', 'Chat del equipo, grupos y asistente');
@@ -7121,12 +7154,16 @@ pages.mensajes = async function(){
       <button class="btn btn-ghost text-xs" onclick="probarAviso()" title="Enviar un aviso de prueba a este dispositivo">🧪 Probar</button>
     </div>
     ${esAsistente?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
-      <b>3 cosas</b> puedo hacer: <b>(1) Consultar</b> tus datos — <i>"¿cuánto stock queda de Atrazina?"</i> · <i>"mostrame los animales"</i>. <b>(2) Cargar</b> por vos — <i>"hoy fui a la panadería y gasté 5000 pesos"</i> · <i>"nacieron 5 terneros en Montenegro"</i> · <i>"aplicá 120 litros de Glifosato en el lote 1"</i> · <i>"recordar vacunar el 15/8"</i>. <b>(3) Explicarte cómo se hace</b> — <i>"¿cómo cargo un cheque de tercero?"</i>. Escribí o dictá 🎤, y con 🔊 te leo las respuestas en voz alta.</div>`
+      <b>3 cosas</b> puedo hacer: <b>(1) Consultar</b> tus datos — <i>"¿cuánto stock queda de Atrazina?"</i> · <i>"mostrame los animales"</i>. <b>(2) Cargar</b> por vos — <i>"hoy fui a la panadería y gasté 5000 pesos"</i> · <i>"nacieron 5 terneros en Montenegro"</i> · <i>"aplicá 120 litros de Glifosato en el lote 1"</i> · <i>"recordar vacunar el 15/8"</i>. <b>(3) Explicarte cómo se hace</b> — <i>"¿cómo cargo un cheque de tercero?"</i>. Escribí o dictá 🎤, y elegí la <b>voz</b> (👩 mujer / 👨 hombre) para que te lea las respuestas.</div>`
      : grupoActual?`<div class="text-xs text-slate-500 mb-2">👪 <b>${esc(grupoActual.nombre)}</b> · ${(grupoActual.miembros||[]).length} integrante${(grupoActual.miembros||[]).length===1?'':'s'}</div>`:''}
     <div id="chat-msgs" style="height:56vh;min-height:320px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
     <div id="chat-confirm"></div>
     <div class="flex gap-2 items-end">
-      ${esAsistente?`<button class="btn btn-secondary" id="chat-tts" onclick="chatTtsToggle()" title="${_ttsActivo()?'Voz activada — toca para silenciar':'Voz silenciada — toca para activar'}">${_ttsActivo()?'🔊':'🔇'}</button>`:''}
+      ${esAsistente?`<select id="chat-tts" class="btn btn-secondary" style="padding-right:1.6rem" title="Voz del asistente" onchange="chatTtsSet(this.value)">
+        <option value="off" ${_ttsVoz()==='off'?'selected':''}>🔇 Sin voz</option>
+        <option value="mujer" ${_ttsVoz()==='mujer'?'selected':''}>👩 Mujer</option>
+        <option value="hombre" ${_ttsVoz()==='hombre'?'selected':''}>👨 Hombre</option>
+      </select>`:''}
       <button class="btn btn-secondary" id="${esAsistente?'chat-voz-a':'chat-voz'}" onclick="chatVoz('${esAsistente?'chat-input-a':'chat-input'}')" title="Dictar por voz">🎤</button>
       <textarea id="${esAsistente?'chat-input-a':'chat-input'}" class="input flex-1" rows="1" placeholder="${esAsistente?'Contame qué hiciste…':(grupoActual?('Mensaje a '+esc(grupoActual.nombre)+'…'):'Escribí un mensaje al equipo…')}" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault(); ${esAsistente?'chatAsistente()':'chatEnviar()'};}"></textarea>
       <button class="btn btn-primary" onclick="${esAsistente?'chatAsistente()':'chatEnviar()'}">${esAsistente?'Cargar':'Enviar'}</button>
@@ -7261,6 +7298,22 @@ async function chatAsistente(){
             <div><label class="label text-[11px]">Tipo</label><select id="ast-g-tipo" class="input text-sm"><option value="egreso" ${p.tipo!=='ingreso'?'selected':''}>Gasto (egreso)</option><option value="ingreso" ${p.tipo==='ingreso'?'selected':''}>Ingreso</option></select></div>
           </div>`;
       }
+      else if (r.accion==='pago' || r.accion==='cobro'){
+        const p = r.params;
+        const esCobro = r.accion==='cobro';
+        const cajas = r.cajas || [];
+        const bancos = r.bancos || [];
+        const cajaOpts = ['<option value="">— elegí la caja —</option>'].concat(cajas.map(cj=>`<option value="${esc(cj)}" ${p.caja===cj?'selected':''}>${esc(cj)}</option>`)).join('');
+        const bancoOpts = ['<option value="">— elegí la cuenta —</option>'].concat(bancos.map(b=>`<option value="${esc(b.id)}">${esc(b.banco)}${b.alias?' · '+esc(b.alias):''}</option>`)).join('');
+        editor = `<div class="text-sm text-amber-900 mb-1">${esCobro?'💰 Cobro de':'📤 Pago a'} <b>${esc(p.contactoNombre||'')}</b> — a cuenta. Revisá y confirmá:</div>
+          <div class="grid grid-cols-2 gap-2 text-sm">
+            <div><label class="label text-[11px]">Monto $</label><input id="ast-pc-monto" class="input text-sm" type="number" step="0.01" value="${p.monto||''}"/></div>
+            <div><label class="label text-[11px]">Método</label><select id="ast-pc-met" class="input text-sm" onchange="astPcMetodo()"><option value="efectivo">💵 Efectivo</option><option value="transferencia">🏛️ Transferencia</option><option value="externo">💸 Billetera / externo</option></select></div>
+            <div class="col-span-2" id="ast-pc-caja-wrap"><label class="label text-[11px]">Caja</label><select id="ast-pc-caja" class="input text-sm">${cajaOpts}</select></div>
+            <div class="col-span-2 hidden" id="ast-pc-banco-wrap"><label class="label text-[11px]">Cuenta bancaria</label><select id="ast-pc-banco" class="input text-sm">${bancoOpts}</select></div>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-1">Es un ${esCobro?'cobro':'pago'} <b>a cuenta</b> (baja el saldo del ${esCobro?'cliente':'proveedor'}). Para aplicarlo a facturas puntuales, usá Cuentas a ${esCobro?'cobrar':'pagar'}.</div>`;
+      }
       box.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
         ${editor}
         <div class="flex gap-2 justify-end mt-2">
@@ -7281,8 +7334,34 @@ async function chatAsistente(){
 function asistAbrir(page){ const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; go(page); }
 function asistEjemplo(frase){ const inp=document.getElementById('chat-input-a'); if(inp){ inp.value=frase; inp.focus(); } const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; chatAsistente(); }
 function chatAsistCancelar(){ state._asistProp=null; state._astPendiente=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
+function astPcMetodo(){
+  const m=document.getElementById('ast-pc-met')?.value;
+  const cw=document.getElementById('ast-pc-caja-wrap'), bw=document.getElementById('ast-pc-banco-wrap');
+  if(!cw||!bw) return; const banco=(m==='transferencia');
+  bw.classList.toggle('hidden',!banco); cw.classList.toggle('hidden',banco);
+}
 async function chatAsistConfirmar(){
   const p = state._asistProp; if (!p) return;
+  // Pago a proveedor / Cobro a cliente (a cuenta): usa los endpoints reales ya probados.
+  if (p.accion==='pago' || p.accion==='cobro'){
+    const gv=(id)=>document.getElementById(id);
+    const monto=Number(gv('ast-pc-monto')?.value||0);
+    if(!monto||monto<=0) return toast('El monto debe ser mayor a 0','warn');
+    const met=gv('ast-pc-met')?.value||'efectivo';
+    const fecha=new Date().toISOString();
+    let url, body;
+    if(p.accion==='pago'){ url='/api/pagos-proveedores'; body={ proveedorId:p.params.contactoId, comprobantes:[], metodo:met, monto, fecha }; }
+    else { url='/api/cobros-clientes'; body={ clienteId:p.params.contactoId, comprobantes:[], metodo:met, monto, fecha }; }
+    if(met==='efectivo'||met==='externo'){ const caja=gv('ast-pc-caja')?.value||''; if(!caja) return toast('Elegí la caja / medio','warn'); if(p.accion==='pago') body.cajaOrigen=caja; else body.cajaDestino=caja; }
+    if(met==='transferencia'){ const bk=gv('ast-pc-banco')?.value||''; if(!bk) return toast('Elegí la cuenta bancaria','warn'); body.bancoCuentaId=bk; }
+    const bx=document.getElementById('chat-confirm'); if(bx) bx.innerHTML=''; state._asistProp=null; state._astPendiente=null;
+    try{
+      await api(url,{method:'POST',body:JSON.stringify(body)});
+      const msg=`✅ ${p.accion==='cobro'?'Cobro':'Pago'} registrado: $${monto.toLocaleString('es-AR')} · ${p.params.contactoNombre||''} (a cuenta).`;
+      delete state.cache.efectivo; await chatReload(); toast('Registrado','success'); _ttsHablar(msg);
+    }catch(e){ toast(e.message,'error'); await chatReload(); }
+    return;
+  }
   // Tomar correcciones del editor (si es hacienda).
   if (p.accion==='hacienda_mov'){
     const gv=(id)=>document.getElementById(id)?.value;

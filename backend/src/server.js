@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.47.0';
+const AGROCORE_VERSION = '2.50.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6939,12 +6939,23 @@ async function _ctxAsistente(companyId) {
     prisma.categoriaGasto.findMany({ where: { companyId }, select: { id: true, nombre: true, padreId: true } }).catch(() => []),
     prisma.efectivo.findMany({ where: { companyId, caja: { not: null } }, select: { caja: true }, distinct: ['caja'], take: 50 }).catch(() => []),
   ]);
+  const [proveedores, clientes, bancos] = await Promise.all([
+    prisma.proveedor.findMany({ where: { companyId, activo: { not: false } }, select: { id: true, razonSocial: true, nombreFantasia: true } }).catch(() => []),
+    prisma.cliente.findMany({ where: { companyId, activo: { not: false } }, select: { id: true, razonSocial: true, nombreFantasia: true } }).catch(() => []),
+    prisma.bancoCuenta.findMany({ where: { companyId, activo: { not: false } }, select: { id: true, banco: true, alias: true } }).catch(() => []),
+  ]);
   const cajas = [...new Set((efectivos || []).map(e => (e.caja || '').trim()).filter(Boolean))];
-  return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean), lotes: lotes || [], campanas: campanas || [], categoriasGasto: catGasto || [], cajas };
+  return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean), lotes: lotes || [], campanas: campanas || [], categoriasGasto: catGasto || [], cajas, proveedores: proveedores || [], clientes: clientes || [], bancos: bancos || [] };
 }
 // CONSULTAS de solo lectura (stock, animales, lotes, campañas). Devuelve texto o null.
-async function _consultaAsistente(texto, companyId, ctx) {
+// req: para chequear permisos — la info sensible (plata) no se muestra sin finanzas:read.
+async function _consultaAsistente(texto, companyId, ctx, req) {
   const t = _sinAcentos(texto);
+  const _puede = (p) => !req || req.user?.superAdmin || _permOk(req, p);
+  const puedeFin = _puede('finanzas:read');
+  const puedeStock = _puede('stock:read');
+  const puedeProd = _puede('produccion:read');
+  const _sinPermiso = (que) => `🔒 Con tu usuario no puedo mostrarte ${que}. Pedile a un administrador que te dé el permiso.`;
   // Si es un "cómo se hace" o un comando de carga, no es una consulta: que lo maneje otro.
   if (/\b(como|crear|cargar|carga|cargo|nueva|nuevo|agregar|dar de alta|registr|anota|recorda|acorda)\b/.test(t)) return null;
   // --- CONSULTAS FINANCIERAS: a cobrar / a pagar / estado patrimonial / plata en caja ---
@@ -6966,21 +6977,25 @@ async function _consultaAsistente(texto, companyId, ctx) {
     return ef.reduce((a, e) => a + (e.tipo === 'ingreso' ? 1 : e.tipo === 'egreso' ? -1 : 0) * Number(e.monto || 0), 0);
   };
   if (/\b(a cobrar|me deben|por cobrar|cuentas a cobrar|cta cte cliente)\b/.test(t)) {
+    if (!puedeFin) return _sinPermiso('la información de cuentas a cobrar');
     const s = await _saldoCtaCte('cliente');
     const ex = Object.entries(s.otras).filter(([, n]) => Math.abs(n) > 0.01).map(([m, n]) => `${Math.round(n).toLocaleString('es-AR')} ${m}`);
     return `💰 Te deben (a cobrar): ${_fmtAr(s.ars)}${ex.length ? ` · incluye ${ex.join(', ')}` : ''}. Lo ves en Cuentas a cobrar.`;
   }
   if (/\b(a pagar|debo|por pagar|cuentas a pagar|le debo|les debo)\b/.test(t)) {
+    if (!puedeFin) return _sinPermiso('la información de cuentas a pagar');
     const s = await _saldoCtaCte('proveedor');
     const ex = Object.entries(s.otras).filter(([, n]) => Math.abs(n) > 0.01).map(([m, n]) => `${Math.round(n).toLocaleString('es-AR')} ${m}`);
     return `📤 Debés (a pagar): ${_fmtAr(s.ars)}${ex.length ? ` · incluye ${ex.join(', ')}` : ''}. Lo ves en Cuentas a pagar.`;
   }
   if (/\b(estado patrimonial|patrimonio|como estoy|como ando|situacion|resumen financiero|como voy)\b/.test(t)) {
+    if (!puedeFin) return _sinPermiso('el estado patrimonial');
     const [cob, pag, caja] = [await _saldoCtaCte('cliente'), await _saldoCtaCte('proveedor'), await _plataCaja()];
     const neto = caja + cob.ars - pag.ars;
     return `📊 Estado (aprox., en pesos):\n• Plata en caja: ${_fmtAr(caja)}\n• A cobrar: ${_fmtAr(cob.ars)}\n• A pagar: ${_fmtAr(pag.ars)}\n• Neto estimado: ${_fmtAr(neto)}\n(No incluye bancos ni el valor del stock/hacienda. Para el detalle: Dashboard y Estado de situación.)`;
   }
   if (/\b(plata en caja|efectivo|cuanta plata|caja|en la caja)\b/.test(t) && !/cobrar|pagar/.test(t)) {
+    if (!puedeFin) return _sinPermiso('la plata en caja');
     const caja = await _plataCaja();
     return `💵 Plata en caja (efectivo): ${_fmtAr(caja)}. Lo ves en Control de efectivo.`;
   }
@@ -7125,6 +7140,29 @@ function _interpretarMensaje(texto, ctx) {
     return { accion: 'recordatorio', params: { titulo, fecha: fecha.toISOString() },
       resumen: `📅 Recordatorio: "${titulo}" para el ${fecha.toLocaleDateString('es-AR')}` };
   }
+  // --- PAGO A PROVEEDOR / COBRO A CLIENTE (a cuenta) ---
+  // Solo si el nombre del contacto (proveedor/cliente) aparece en la frase; si no,
+  // se cae a Gasto/Ingreso simple (ej: "pagué la luz").
+  {
+    const esPagoV = /\b(pagar|pagale|pagales|pague|pagamos|abonar|abonale|abone|le pague|les pague)\b/.test(t);
+    const esCobroV = /\b(cobrar|cobrale|cobre|cobramos|me pagaron|me pago|recibi de|recibimos de)\b/.test(t);
+    if (esPagoV || esCobroV) {
+      const lista = esCobroV && !esPagoV ? (ctx.clientes || []) : (ctx.proveedores || []);
+      const nrm = (s) => _sinAcentos(s || '');
+      const toks = t.split(/[^a-z0-9]+/).filter(w => w.length >= 4);
+      const match = lista.find(c => { const rs = nrm(c.razonSocial); return rs && (t.includes(rs) || nrm(c.nombreFantasia).length >= 4 && t.includes(nrm(c.nombreFantasia))); })
+        || lista.find(c => { const words = (nrm(c.razonSocial).split(/\s+/).filter(w => w.length >= 5)); return words.some(w => toks.includes(w)); });
+      if (match) {
+        const accion = (esCobroV && !esPagoV) ? 'cobro' : 'pago';
+        const monto = _parseMontoPesos(texto);
+        const base = { accion, contactoId: match.id, contactoNombre: match.razonSocial, monto: monto || null, metodo: 'efectivo', caja: null, bancoCuentaId: null };
+        if (!monto || monto <= 0) {
+          return { accion, faltante: 'monto', params: base, pregunta: `¿De cuánto es ${accion === 'cobro' ? 'el cobro de' : 'el pago a'} ${match.razonSocial}? Decime el monto en pesos.` };
+        }
+        return { accion, params: base, resumen: `${accion === 'cobro' ? '💰 Cobro de' : '📤 Pago a'} ${match.razonSocial}: $${monto.toLocaleString('es-AR')} (a cuenta)` };
+      }
+    }
+  }
   // --- GASTO / PAGO DIARIO (movimiento de caja) ---
   // Verbos de gasto. "compr..." solo cuenta como gasto si NO menciona una categoría de animal
   // (así "compré 5 vacas" sigue yendo a hacienda y "compré pan por 5000" es un gasto).
@@ -7230,6 +7268,13 @@ function _completarPendiente(texto, pendiente, ctx) {
       const signo = p.tipo === 'ingreso' ? '💰 Ingreso' : '💸 Gasto';
       return { accion: 'gasto', params: p, resumen: `${signo} diario: $${monto.toLocaleString('es-AR')} · ${p.concepto || ''}${p.categoria ? ` · ${p.categoria}` : ''}` };
     }
+  }
+  if ((pendiente.accion === 'pago' || pendiente.accion === 'cobro') && pendiente.faltante === 'monto') {
+    const p = { ...(pendiente.params || {}) };
+    const monto = _parseMontoPesos(texto);
+    if (!monto || monto <= 0) return { accion: pendiente.accion, faltante: 'monto', params: p, pregunta: 'No te agarré el monto 🤔. Decime solo el número en pesos, ej: 30000.' };
+    p.monto = monto;
+    return { accion: pendiente.accion, params: p, resumen: `${pendiente.accion === 'cobro' ? '💰 Cobro de' : '📤 Pago a'} ${p.contactoNombre || ''}: $${monto.toLocaleString('es-AR')} (a cuenta)` };
   }
   return null;
 }
@@ -7773,12 +7818,26 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     }
     // 0.5) CONSULTAS de solo lectura (stock, animales, lotes, campañas).
     try {
-      const _c = await _consultaAsistente(texto, req.companyId, ctx);
+      const _c = await _consultaAsistente(texto, req.companyId, ctx, req);
       if (_c) {
         const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', _c, { status: 'ayuda', consulta: true });
         return res.json({ ok: true, status: 'ayuda', mensaje: _c, data: m });
       }
     } catch (e) {}
+    // 0.7) FACTURAS: por seguridad (IVA discriminado, Libro IVA y CAE de ARCA) el bot NO las
+    //      emite/crea; reconoce la intención, lo explica y te lleva a la pantalla correcta.
+    if (/\bfactur/.test(_tn) && /\b(compra|venta|vender|emitir|proveedor|cliente|cargar|carga|hacer|nueva|nuevo|registrar)\b/.test(_tn)) {
+      const esVenta = /\b(venta|vender|emitir|cliente)\b/.test(_tn) && !/\b(compra|proveedor|recib)\b/.test(_tn);
+      const e = _buscarAyuda(esVenta ? 'emitir factura de venta' : 'cargar una compra factura de compra');
+      if (e) {
+        const intro = esVenta
+          ? 'Las facturas de venta con CAE se emiten desde Facturación (por seguridad no las emito yo). Te llevo y las revisás/emitís ahí.'
+          : 'Las facturas de compra se cargan en Compras (con ítems e IVA). Si tenés el PDF o el Excel de ARCA, con "Importar" se carga casi solo. Te llevo.';
+        const msg = intro + '\n\n' + _textoAyuda(e);
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', ayudaId: e.id });
+        return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, titulo: e.titulo, data: m });
+      }
+    }
     // 1) Si es una PREGUNTA de "cómo se hace", respondemos con la ayuda del manual.
     if (_esPregunta(_tn)) {
       const e = _buscarAyuda(texto);
@@ -7823,6 +7882,7 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       `Voy a registrar: ${r.resumen}. ¿Confirmás?`, { status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen });
     const extra = {};
     if (r.accion === 'gasto') { extra.categoriasGasto = ctx.categoriasGasto || []; extra.cajas = ctx.cajas || []; }
+    if (r.accion === 'pago' || r.accion === 'cobro') { extra.cajas = ctx.cajas || []; extra.bancos = ctx.bancos || []; }
     res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, familias, ...extra, data: m });
   } catch (e) { next(e); }
 });
