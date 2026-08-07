@@ -2542,6 +2542,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/08/2026',
+      titulo:'🤖 v2.46.0 — El asistente carga gastos del día y habla en voz alta',
+      desc:'El asistente ahora entiende <b>gastos del día</b> en lenguaje natural: escribí o dictá <i>"hoy fui a la panadería y gasté 5000 pesos"</i> y te arma el <b>movimiento diario</b> (monto, concepto, categoría, caja y si es de la empresa o personal) para que <b>revises y confirmes</b> antes de guardar. Entiende montos como "5 mil", "$12.500", "3000 pesos". Además, con el botón <b>🔊</b> el asistente <b>te lee sus respuestas en voz alta</b> (ideal para usarlo desde el celular en el campo). Se suma a lo que ya hacía: cargar hacienda, labores y recordatorios, consultar tus datos y explicarte cómo se hace cada cosa.' },
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/08/2026',
       titulo:'🌾 v2.45.0 — Posición de granos: chau planilla de Excel',
       desc:'Nueva pantalla <b>Stock → Posición de granos</b> para dejar de llevar el Excel de entregas y liquidaciones. Toma automáticamente <b>cada viaje con Carta de Porte</b> cuyo destino sea una <b>cerealera</b> (grano guardado) o <b>venta directa</b>, y te deja <b>vincular o importar la liquidación del PDF</b> — puede ser en varias partes (ideal para AGD, que liquida una parte, la secada y el IVA por separado). El tablero muestra por especie: <b>Entregado, Liquidado y A liquidar</b>, con el <b>precio del día</b> para valorizar lo pendiente. El stock lo sigue moviendo el viaje; la liquidación fija el precio y genera la cuenta a cobrar. Tiene <b>filtros</b> (fecha desde/hasta, cerealera/destino, especie y estado) que resumen el tablero y la lista. Además, en <b>Viajes</b> el campo <b>Producto / Carga</b> pasó a ser un <b>desplegable de granos del catálogo</b> (Cereales / Granos) en vez de texto libre, para que la especie coincida siempre con la liquidación.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'05/08/2026',
@@ -7038,6 +7041,33 @@ function chatVoz(inputId){
   rec.onend = ()=>{ _chatVozRec=null; if (btn) btn.textContent='🎤'; };
   try { rec.start(); } catch { _chatVozRec=null; }
 }
+// --- Voz de salida (Text-to-Speech): el asistente lee en voz alta su respuesta ---
+function _ttsActivo(){ if (state._ttsOn===undefined){ try{ state._ttsOn = localStorage.getItem('agro_tts')!=='0'; }catch{ state._ttsOn=true; } } return state._ttsOn; }
+function _ttsHablar(texto){
+  try {
+    if (!_ttsActivo() || !('speechSynthesis' in window) || !texto) return;
+    // Limpiar emojis, markdown y viñetas para que suene natural.
+    let t = String(texto)
+      .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu, ' ')
+      .replace(/[*_`#>•]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    if (!t) return;
+    if (t.length > 320) t = t.slice(0, 320);
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang = 'es-AR'; u.rate = 1.02; u.pitch = 1.0;
+    const vs = window.speechSynthesis.getVoices() || [];
+    const v = vs.find(x=>/es[-_]AR/i.test(x.lang)) || vs.find(x=>/^es/i.test(x.lang));
+    if (v) u.voice = v;
+    window.speechSynthesis.speak(u);
+  } catch {}
+}
+function chatTtsToggle(){
+  state._ttsOn = !_ttsActivo();
+  try{ localStorage.setItem('agro_tts', state._ttsOn?'1':'0'); }catch{}
+  if (!state._ttsOn){ try{ window.speechSynthesis.cancel(); }catch{} }
+  const b=document.getElementById('chat-tts'); if(b){ b.textContent = state._ttsOn?'🔊':'🔇'; b.title = state._ttsOn?'Voz activada — toca para silenciar':'Voz silenciada — toca para activar'; }
+  toast(state._ttsOn?'🔊 El asistente va a leer sus respuestas en voz alta.':'🔇 Voz desactivada.','info');
+}
 pages.mensajes = async function(){
   setHeader('Mensajes y asistente', 'Chat del equipo, grupos y asistente');
   const conv = state.mensajesConv = state.mensajesConv || 'general';
@@ -7068,11 +7098,12 @@ pages.mensajes = async function(){
       <button class="btn btn-ghost text-xs" onclick="probarAviso()" title="Enviar un aviso de prueba a este dispositivo">🧪 Probar</button>
     </div>
     ${esAsistente?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
-      <b>3 cosas</b> puedo hacer: <b>(1) Consultar</b> tus datos — <i>"¿cuánto stock queda de Atrazina?"</i> · <i>"mostrame los animales"</i> · <i>"¿qué lotes tengo?"</i> · <i>"¿qué campañas tengo?"</i>. <b>(2) Cargar</b> por vos — <i>"nacieron 5 terneros en Montenegro"</i> · <i>"aplicá 120 litros de Glifosato en el lote 1"</i> · <i>"recordar vacunar el 15/8"</i>. <b>(3) Explicarte cómo se hace</b> — <i>"¿cómo cargo un cheque de tercero?"</i> y te llevo a la pantalla. Escribí o dictá 🎤.</div>`
+      <b>3 cosas</b> puedo hacer: <b>(1) Consultar</b> tus datos — <i>"¿cuánto stock queda de Atrazina?"</i> · <i>"mostrame los animales"</i>. <b>(2) Cargar</b> por vos — <i>"hoy fui a la panadería y gasté 5000 pesos"</i> · <i>"nacieron 5 terneros en Montenegro"</i> · <i>"aplicá 120 litros de Glifosato en el lote 1"</i> · <i>"recordar vacunar el 15/8"</i>. <b>(3) Explicarte cómo se hace</b> — <i>"¿cómo cargo un cheque de tercero?"</i>. Escribí o dictá 🎤, y con 🔊 te leo las respuestas en voz alta.</div>`
      : grupoActual?`<div class="text-xs text-slate-500 mb-2">👪 <b>${esc(grupoActual.nombre)}</b> · ${(grupoActual.miembros||[]).length} integrante${(grupoActual.miembros||[]).length===1?'':'s'}</div>`:''}
     <div id="chat-msgs" style="height:56vh;min-height:320px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
     <div id="chat-confirm"></div>
     <div class="flex gap-2 items-end">
+      ${esAsistente?`<button class="btn btn-secondary" id="chat-tts" onclick="chatTtsToggle()" title="${_ttsActivo()?'Voz activada — toca para silenciar':'Voz silenciada — toca para activar'}">${_ttsActivo()?'🔊':'🔇'}</button>`:''}
       <button class="btn btn-secondary" id="${esAsistente?'chat-voz-a':'chat-voz'}" onclick="chatVoz('${esAsistente?'chat-input-a':'chat-input'}')" title="Dictar por voz">🎤</button>
       <textarea id="${esAsistente?'chat-input-a':'chat-input'}" class="input flex-1" rows="1" placeholder="${esAsistente?'Contame qué hiciste…':(grupoActual?('Mensaje a '+esc(grupoActual.nombre)+'…'):'Escribí un mensaje al equipo…')}" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault(); ${esAsistente?'chatAsistente()':'chatEnviar()'};}"></textarea>
       <button class="btn btn-primary" onclick="${esAsistente?'chatAsistente()':'chatEnviar()'}">${esAsistente?'Cargar':'Enviar'}</button>
@@ -7133,6 +7164,8 @@ async function chatAsistente(){
   try {
     const r = await api('/api/asistente',{method:'POST',body:JSON.stringify({texto:txt})});
     await chatReload();
+    // Voz: leer la respuesta del asistente.
+    _ttsHablar(r.status==='propuesta' ? ((r.resumen||'')+'. ¿Confirmás?') : (r.mensaje||''));
     const box = document.getElementById('chat-confirm');
     if (r.status==='propuesta' && box){
       state._asistProp = { accion:r.accion, params:r.params };
@@ -7177,6 +7210,31 @@ async function chatAsistente(){
         }
         editor = `<div class="text-sm text-amber-900">${esc(r.resumen)}</div>${stockUi}`;
       }
+      else if (r.accion==='gasto'){
+        const p = r.params;
+        const cats = r.categoriasGasto || [];
+        const roots = cats.filter(c=>!c.padreId);
+        const catActual = p.categoria || '';
+        const catOpts = ['<option value="">— Sin categoría —</option>']
+          .concat(roots.map(rt=>{
+            const hijos = cats.filter(c=>c.padreId===rt.id);
+            const self = `<option value="${esc(rt.nombre)}" ${catActual===rt.nombre?'selected':''}>${esc(rt.nombre)}</option>`;
+            const kids = hijos.map(h=>{ const full=`${rt.nombre} / ${h.nombre}`; return `<option value="${esc(full)}" ${catActual===full?'selected':''}>&nbsp;&nbsp;↳ ${esc(h.nombre)}</option>`; }).join('');
+            return self+kids;
+          })).join('');
+        const cajas = r.cajas || [];
+        const cajaOpts = ['<option value="">— Sin caja / general —</option>']
+          .concat(cajas.map(cj=>`<option value="${esc(cj)}" ${p.caja===cj?'selected':''}>${esc(cj)}</option>`)).join('');
+        editor = `<div class="text-sm text-amber-900 mb-1">${p.tipo==='ingreso'?'💰 Ingreso':'💸 Gasto'} diario — revisá y confirmá:</div>
+          <div class="grid grid-cols-2 gap-2 text-sm">
+            <div><label class="label text-[11px]">Monto $</label><input id="ast-g-monto" class="input text-sm" type="number" step="0.01" value="${p.monto||''}"/></div>
+            <div><label class="label text-[11px]">Concepto</label><input id="ast-g-concepto" class="input text-sm" value="${esc(p.concepto||'')}"/></div>
+            <div><label class="label text-[11px]">Categoría</label><select id="ast-g-cat" class="input text-sm">${catOpts}</select></div>
+            <div><label class="label text-[11px]">Caja</label><select id="ast-g-caja" class="input text-sm">${cajaOpts}</select></div>
+            <div><label class="label text-[11px]">Clasificación</label><select id="ast-g-clasif" class="input text-sm"><option value="empresa" ${p.clasificacion!=='propio'?'selected':''}>🏢 Empresa</option><option value="propio" ${p.clasificacion==='propio'?'selected':''}>👤 Personal</option></select></div>
+            <div><label class="label text-[11px]">Tipo</label><select id="ast-g-tipo" class="input text-sm"><option value="egreso" ${p.tipo!=='ingreso'?'selected':''}>Gasto (egreso)</option><option value="ingreso" ${p.tipo==='ingreso'?'selected':''}>Ingreso</option></select></div>
+          </div>`;
+      }
       box.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-2">
         ${editor}
         <div class="flex gap-2 justify-end mt-2">
@@ -7218,10 +7276,22 @@ async function chatAsistConfirmar(){
     p.params.crearInsumo = crear ? crear.checked : false;
     if (fam && !fam.disabled) p.params.insumoFamilia = fam.value;
   }
+  // Gasto diario: tomar correcciones del editor.
+  if (p.accion==='gasto'){
+    const gv=(id)=>document.getElementById(id);
+    const mnt = Number(gv('ast-g-monto')?.value||0);
+    if (mnt>0) p.params.monto = mnt;
+    p.params.concepto = (gv('ast-g-concepto')?.value||'').trim() || p.params.concepto;
+    p.params.categoria = (gv('ast-g-cat')?.value||'') || null;
+    p.params.caja = (gv('ast-g-caja')?.value||'') || null;
+    p.params.clasificacion = gv('ast-g-clasif')?.value || 'empresa';
+    p.params.tipo = gv('ast-g-tipo')?.value || 'egreso';
+    if (!p.params.monto || p.params.monto<=0) return toast('El monto debe ser mayor a 0','warn');
+  }
   const b=document.getElementById('chat-confirm'); if(b) b.innerHTML='';
   state._asistProp=null;
-  try { await api('/api/asistente/confirmar',{method:'POST',body:JSON.stringify(p)}); await chatReload();
-    delete state.cache.haciendaResumen; toast('Cargado','success'); }
+  try { const rc = await api('/api/asistente/confirmar',{method:'POST',body:JSON.stringify(p)}); await chatReload();
+    delete state.cache.haciendaResumen; delete state.cache.efectivo; toast('Cargado','success'); _ttsHablar(rc?.mensaje||'Listo, lo cargué.'); }
   catch(e){ toast(e.message,'error'); await chatReload(); }
 }
 

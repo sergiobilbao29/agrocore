@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.45.0';
+const AGROCORE_VERSION = '2.46.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6931,13 +6931,16 @@ const _nombreUser = (u) => [u?.nombre, u?.apellido].filter(Boolean).join(' ') ||
 
 // Contexto (campos + categorías + lotes + campañas) para interpretar.
 async function _ctxAsistente(companyId) {
-  const [campos, catHac, lotes, campanas] = await Promise.all([
+  const [campos, catHac, lotes, campanas, catGasto, efectivos] = await Promise.all([
     prisma.campo.findMany({ where: { companyId }, select: { id: true, nombre: true } }),
     prisma.categoriaHaciendaConfig.findMany({ where: { companyId }, select: { nombre: true } }).catch(() => []),
     prisma.lote.findMany({ where: { campo: { companyId } }, select: { id: true, nombre: true, campoId: true } }).catch(() => []),
     prisma.campana.findMany({ where: { companyId }, select: { id: true, loteId: true, cultivo: true, ciclo: true, fechaSiembra: true, createdAt: true } }).catch(() => []),
+    prisma.categoriaGasto.findMany({ where: { companyId }, select: { id: true, nombre: true, padreId: true } }).catch(() => []),
+    prisma.efectivo.findMany({ where: { companyId, caja: { not: null } }, select: { caja: true }, distinct: ['caja'], take: 50 }).catch(() => []),
   ]);
-  return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean), lotes: lotes || [], campanas: campanas || [] };
+  const cajas = [...new Set((efectivos || []).map(e => (e.caja || '').trim()).filter(Boolean))];
+  return { campos, categorias: (catHac || []).map(c => c.nombre).filter(Boolean), lotes: lotes || [], campanas: campanas || [], categoriasGasto: catGasto || [], cajas };
 }
 // CONSULTAS de solo lectura (stock, animales, lotes, campañas). Devuelve texto o null.
 async function _consultaAsistente(texto, companyId, ctx) {
@@ -7001,6 +7004,52 @@ async function _consultaAsistente(texto, companyId, ctx) {
   }
   return null;
 }
+// Parsea un monto en pesos de una frase: "5000", "$5.000", "5 mil", "5.000,50", "5000 pesos".
+function _parseMontoPesos(texto) {
+  const t = _sinAcentos(String(texto || '')).toLowerCase();
+  const mil = t.match(/(\d+(?:[.,]\d+)?)\s*mil\b/);
+  if (mil) return Math.round(parseFloat(mil[1].replace(/\./g, '').replace(',', '.')) * 1000);
+  const cands = [];
+  const re = /(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/g;
+  let m;
+  while ((m = re.exec(t))) {
+    const raw = m[1];
+    const val = parseFloat(raw.replace(/\./g, '').replace(',', '.'));
+    if (!isNaN(val) && val > 0) {
+      const antes = t.slice(Math.max(0, m.index - 2), m.index);
+      const despues = t.slice(m.index + raw.length, m.index + raw.length + 12);
+      const ctxDinero = /\$/.test(antes) || /\s*(pes|mango|luca|\$)/.test(despues);
+      cands.push({ val, ctxDinero });
+    }
+  }
+  if (!cands.length) return null;
+  const conCtx = cands.find(c => c.ctxDinero);
+  return Math.round((conCtx || cands.sort((a, b) => b.val - a.val)[0]).val);
+}
+// Extrae un concepto de un gasto: "fui a la panaderia" -> Panaderia; "gaste X en nafta" -> Nafta.
+function _parseConceptoGasto(texto) {
+  const t = ' ' + String(texto || '').trim() + ' ';
+  const limpiar = (s) => (s || '')
+    .replace(/\b(pesos?|mil|mangos?|lucas?|hoy|ayer|recien|hace un rato|un rato)\b/gi, '')
+    .replace(/\$?\s*\d[\d.,]*/g, '')
+    .replace(/\s{2,}/g, ' ').replace(/[.,;]+$/, '').trim();
+  let m = t.match(/\bfui\s+a\s+(?:el|la|los|las)?\s*([a-záéíóúñ0-9 ]{3,40}?)(?:\s+(?:y|,|\.|por|para|con)|\s*$)/i)
+    || t.match(/\b(?:en|de|para)\s+(?:el|la|los|las|un|una)?\s*([a-záéíóúñ0-9 ]{3,40}?)(?:\s+(?:por|y|,|\.|gaste|gasto|pague|pagamos|abone)|\s*$)/i)
+    || t.match(/\bcompr(?:e|amos|é|o)\s+(?:el|la|los|las|un|una|unos|unas)?\s*([a-záéíóúñ0-9 ]{3,40}?)(?:\s+(?:por|en|a|y|,|\.)|\s*$)/i);
+  let c = limpiar(m ? m[1] : '');
+  if (!c || c.length < 2) c = 'Gasto vario';
+  return c.charAt(0).toUpperCase() + c.slice(1);
+}
+// Intenta encontrar una categoría de gasto (raíz o familia) nombrada en la frase.
+function _matchCategoriaGasto(texto, ctx) {
+  const t = _sinAcentos(texto);
+  const cats = ctx.categoriasGasto || [];
+  const byId = {}; cats.forEach(c => byId[c.id] = c);
+  const hit = cats.find(c => c.nombre && t.includes(_sinAcentos(c.nombre)) && _sinAcentos(c.nombre).length >= 4);
+  if (!hit) return null;
+  if (hit.padreId && byId[hit.padreId]) return `${byId[hit.padreId].nombre} / ${hit.nombre}`;
+  return hit.nombre;
+}
 // Intérprete por reglas (sin IA). Devuelve { accion, params, resumen } o { error }.
 function _interpretarMensaje(texto, ctx) {
   const t = _sinAcentos(texto);
@@ -7021,6 +7070,28 @@ function _interpretarMensaje(texto, ctx) {
     if (!titulo) titulo = texto.trim();
     return { accion: 'recordatorio', params: { titulo, fecha: fecha.toISOString() },
       resumen: `📅 Recordatorio: "${titulo}" para el ${fecha.toLocaleDateString('es-AR')}` };
+  }
+  // --- GASTO / PAGO DIARIO (movimiento de caja) ---
+  // Verbos de gasto. "compr..." solo cuenta como gasto si NO menciona una categoría de animal
+  // (así "compré 5 vacas" sigue yendo a hacienda y "compré pan por 5000" es un gasto).
+  {
+    const hayAnimal = (ctx.categorias || []).some(c => t.includes(_sinAcentos(c)))
+      || /\b(vaca|vacas|novillo|ternero|ternera|toro|vaquillona|cabeza|cabezas|hacienda|animal|animales)\b/.test(t);
+    const esGasto = /\b(gaste|gastamos|gasto|gastar|pague|pagamos|page|pagar|abone|abonamos|desembolse)\b/.test(t)
+      || (/\bcompr(e|amos|é|o|ar)?\b/.test(t) && !hayAnimal);
+    const esIngreso = /\b(cobre|cobramos|cobrar|ingrese|ingresamos|entro|entraron|me pagaron|recibi|recibimos)\b/.test(t);
+    if ((esGasto || esIngreso) && !/\?/.test(texto)) {
+      const monto = _parseMontoPesos(texto);
+      if (monto && monto > 0) {
+        const concepto = _parseConceptoGasto(texto);
+        const categoria = _matchCategoriaGasto(texto, ctx);
+        const clasif = /\b(personal|propio|mio|mia|dueno|casa|familia)\b/.test(t) ? 'propio' : 'empresa';
+        const tipoMov = esIngreso && !esGasto ? 'ingreso' : 'egreso';
+        const signo = tipoMov === 'ingreso' ? '💰 Ingreso' : '💸 Gasto';
+        return { accion: 'gasto', params: { tipo: tipoMov, monto, concepto, categoria: categoria || null, clasificacion: clasif, metodo: 'efectivo', caja: null },
+          resumen: `${signo} diario: $${monto.toLocaleString('es-AR')} · ${concepto}${categoria ? ` · ${categoria}` : ''}${clasif === 'propio' ? ' · 👤 personal' : ''}` };
+      }
+    }
   }
   // Hacienda: nacimiento / muerte / compra
   let tipo = null;
@@ -7316,7 +7387,7 @@ function _saludoRespuesta(texto){
   const palabras = t.split(/\s+/).length;
   // Saludos (solo si el mensaje es corto y arranca saludando; si además pregunta algo, lo maneja la ayuda)
   if (palabras <= 4 && /^(hola|holis|holaa+|buenas|buen dia|buenos dias|buenas tardes|buenas noches|hey|que tal|como estas|como andas|como va|todo bien|que hace|saludos)\b/.test(t)){
-    return '¡Hola! 👋 Soy el asistente de AgroCore. Puedo *cargar cosas por vos* (hacienda, labores, recordatorios) o *explicarte cómo se hace algo* en el sistema.\n\nProbá:\n• Contame qué hiciste — ej: "nacieron 5 terneros en Montenegro"\n• O preguntame — ej: "¿cómo hago una compra?"\n\nEscribí "ayuda" y te muestro todo lo que puedo hacer. ¿Con qué te doy una mano?';
+    return '¡Hola! 👋 Soy el asistente de AgroCore. Puedo *cargar cosas por vos* (gastos del día, hacienda, labores, recordatorios) o *explicarte cómo se hace algo* en el sistema.\n\nProbá:\n• Un gasto — ej: "hoy fui a la panadería y gasté 5000 pesos"\n• Contame qué hiciste — ej: "nacieron 5 terneros en Montenegro"\n• O preguntame — ej: "¿cómo hago una compra?"\n\nEscribí "ayuda" y te muestro todo lo que puedo hacer. ¿Con qué te doy una mano?';
   }
   // Agradecimientos
   if (palabras <= 4 && /^(gracias|muchas gracias|genial|perfecto|barbaro|buenisimo|joya|excelente|de diez|copado)\b/.test(t)){
@@ -7644,7 +7715,9 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     }
     const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente',
       `Voy a registrar: ${r.resumen}. ¿Confirmás?`, { status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen });
-    res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, familias, data: m });
+    const extra = {};
+    if (r.accion === 'gasto') { extra.categoriasGasto = ctx.categoriasGasto || []; extra.cajas = ctx.cajas || []; }
+    res.json({ ok: true, status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen, familias, ...extra, data: m });
   } catch (e) { next(e); }
 });
 // --- Asistente: confirmar (ejecuta la acción propuesta) ---
@@ -7707,6 +7780,26 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
         } else { extraStock += ' · (sin permiso de stock: el insumo quedó solo anotado)'; }
       }
       resumen = `✅ Registrada labor de ${params.tipo} en lote ${params.loteNombre||''}${params.insumo?` · ${params.insumo}`:''}${params.responsable?` · responsable ${params.responsable}`:''}${extraStock} · lo cargó ${quien}.`;
+    } else if (accion === 'gasto') {
+      if (!_permOk(req, 'finanzas:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para cargar movimientos de caja.' });
+      const monto = Number(params.monto);
+      if (!monto || monto <= 0) return res.status(400).json({ ok: false, error: 'El monto debe ser mayor a 0.' });
+      const tipoMov = params.tipo === 'ingreso' ? 'ingreso' : 'egreso';
+      const detalleObs = [
+        params.categoria ? `Categoría: ${params.categoria}` : null,
+        `Cargado por ${quien} (asistente)`,
+      ].filter(Boolean).join(' · ');
+      await prisma.efectivo.create({ data: {
+        companyId: req.companyId, fecha: new Date(), tipo: tipoMov,
+        concepto: params.concepto || (tipoMov === 'ingreso' ? 'Ingreso' : 'Gasto vario'),
+        monto, caja: params.caja || null, clasificacion: params.clasificacion || 'empresa',
+        observaciones: detalleObs || null,
+      }});
+      const signo = tipoMov === 'ingreso' ? '💰 Ingreso' : '💸 Gasto';
+      resumen = `✅ ${signo} registrado: $${monto.toLocaleString('es-AR')} · ${params.concepto || ''}`
+        + (params.categoria ? ` · ${params.categoria}` : '')
+        + (params.caja ? ` · caja ${params.caja}` : '')
+        + ` · lo cargó ${quien}. Lo ves en Movimientos diarios.`;
     } else if (accion === 'recordatorio') {
       if (!_permOk(req, 'agenda:create')) return res.status(403).json({ ok: false, error: 'No tenés permiso para crear recordatorios.' });
       await prisma.recordatorio.create({ data: {
