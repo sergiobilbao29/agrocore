@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.50.0';
+const AGROCORE_VERSION = '2.52.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1284,6 +1284,95 @@ app.put('/api/settings', async (req, res, next) => {
     res.json({ ok: true, data: row.data });
   } catch (e) { next(e); }
 });
+
+// ---------- ASISTENTE IA (OpenAI) ----------
+// Config global guardada en Setting 'ia': { enabled, apiKey, model }. La API key NUNCA
+// se devuelve completa al frontend (solo enmascarada). Fallback a env OPENAI_API_KEY.
+async function _iaConfig() {
+  let cfg = {};
+  try { cfg = (await prisma.setting.findUnique({ where: { id: 'ia' } }))?.data || {}; } catch {}
+  const apiKey = (cfg.apiKey || process.env.OPENAI_API_KEY || '').trim();
+  return { enabled: !!cfg.enabled && !!apiKey, apiKey, model: cfg.model || 'gpt-4o-mini' };
+}
+app.get('/api/ia-config', async (req, res, next) => {
+  try {
+    if (!req.user?.superAdmin) return res.status(403).json({ ok: false, error: 'Solo Super Admin' });
+    const cfg = (await prisma.setting.findUnique({ where: { id: 'ia' } }))?.data || {};
+    const key = (cfg.apiKey || '').trim();
+    res.json({ ok: true, data: { enabled: !!cfg.enabled, model: cfg.model || 'gpt-4o-mini', tieneKey: !!key, keyMask: key ? ('sk-…' + key.slice(-4)) : '' } });
+  } catch (e) { next(e); }
+});
+app.put('/api/ia-config', async (req, res, next) => {
+  try {
+    if (!req.user?.superAdmin) return res.status(403).json({ ok: false, error: 'Solo Super Admin puede configurar la IA' });
+    const prev = (await prisma.setting.findUnique({ where: { id: 'ia' } }))?.data || {};
+    const b = req.body || {};
+    const data = {
+      enabled: b.enabled != null ? !!b.enabled : !!prev.enabled,
+      model: (b.model || prev.model || 'gpt-4o-mini').trim(),
+      // Solo actualiza la key si mandan una nueva no vacía; si mandan "" y borrarKey, la borra.
+      apiKey: (typeof b.apiKey === 'string' && b.apiKey.trim()) ? b.apiKey.trim() : (b.borrarKey ? '' : (prev.apiKey || '')),
+    };
+    await prisma.setting.upsert({ where: { id: 'ia' }, create: { id: 'ia', data }, update: { data } });
+    res.json({ ok: true, data: { enabled: data.enabled, model: data.model, tieneKey: !!data.apiKey } });
+  } catch (e) { next(e); }
+});
+// Prueba rápida de la IA (superAdmin): normaliza una frase de ejemplo.
+app.post('/api/ia-config/probar', async (req, res, next) => {
+  try {
+    if (!req.user?.superAdmin) return res.status(403).json({ ok: false, error: 'Solo Super Admin' });
+    const ia = await _iaConfig();
+    if (!ia.apiKey) return res.status(400).json({ ok: false, error: 'Falta la API key de OpenAI.' });
+    const ctx = await _ctxAsistente(req.companyId);
+    const frase = String(req.body?.texto || 'apliqué 120 litros de glifosato en el lote 3').trim();
+    const norm = await _iaNormalizar(frase, ctx, ia);
+    res.json({ ok: true, entrada: frase, normalizado: norm || '(la IA no la asoció a ninguna acción)' });
+  } catch (e) { res.status(502).json({ ok: false, error: 'No pude conectar con OpenAI: ' + (e.message || e) }); }
+});
+// Usa OpenAI para REESCRIBIR el mensaje libre a un "molde" que las reglas ya entienden.
+// No ejecuta nada: solo normaliza. Devuelve la frase o null. Barato y con timeout.
+async function _iaNormalizar(texto, ctx, ia) {
+  try {
+    const cfg = ia || await _iaConfig();
+    if (!cfg.apiKey) return null;
+    const lista = (arr, f, n = 60) => (arr || []).slice(0, n).map(f).filter(Boolean).join(', ');
+    const campos = lista(ctx.campos, c => c.nombre);
+    const lotes = lista(ctx.lotes, l => l.nombre);
+    const cats = lista(ctx.categorias, c => c);
+    const clientes = lista(ctx.clientes, c => c.razonSocial, 40);
+    const proveedores = lista(ctx.proveedores, p => p.razonSocial, 40);
+    const sys = [
+      'Sos un normalizador de AgroCore (gestión agropecuaria argentina). Reescribí el mensaje del usuario a UNA sola frase corta y clara en español rioplatense, usando EXACTAMENTE uno de estos moldes:',
+      '- Gasto: "gasté <monto> en <concepto>"  · Ingreso: "ingresó <monto> por <concepto>"',
+      '- Pago: "pagá <monto> a <proveedor>"  · Cobro: "cobrale <monto> a <cliente>"',
+      '- Hacienda: "nacieron|murieron|compré <cantidad> <categoria> en <campo>"',
+      '- Labor: "cosecha|siembra|pulverización|fertilización|laboreo en el lote <lote> de <campo> [con <cantidad> <unidad> de <insumo>]"',
+      '- Recordatorio: "recordar <texto> el DD/MM"',
+      '- Consultas: "cuánto stock queda de <producto>", "cuánto tengo a cobrar", "cuánto debo", "cómo estoy", "cuánta plata tengo en caja", "cuánto cereal me falta liquidar", "qué campos tengo", "qué lotes tengo", "qué campañas tengo", "mostrame los animales".',
+      'Usá los nombres reales de este contexto cuando correspondan (elegí el más parecido):',
+      `Campos: ${campos || '(ninguno)'}`,
+      `Lotes: ${lotes || '(ninguno)'}`,
+      `Categorías de animales: ${cats || '(ninguna)'}`,
+      `Clientes: ${clientes || '(ninguno)'}`,
+      `Proveedores: ${proveedores || '(ninguno)'}`,
+      'Si el mensaje no corresponde a ninguna acción/consulta, respondé exactamente NONE. Respondé SOLO la frase (o NONE), sin comillas ni explicaciones.',
+    ].join('\n');
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 9000);
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', temperature: 0, max_tokens: 80, messages: [{ role: 'system', content: sys }, { role: 'user', content: String(texto || '').slice(0, 500) }] }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(to);
+    if (!r.ok) { console.warn('IA normalizar HTTP', r.status); return null; }
+    const j = await r.json();
+    let out = (j?.choices?.[0]?.message?.content || '').trim().replace(/^["']|["']$/g, '');
+    if (!out || /^none$/i.test(out)) return null;
+    return out;
+  } catch (e) { if (e.name !== 'AbortError') console.warn('IA normalizar error:', e.message); return null; }
+}
 
 // ---------- EMPRESAS ----------
 const empresaSchema = z.object({
@@ -6956,8 +7045,9 @@ async function _consultaAsistente(texto, companyId, ctx, req) {
   const puedeStock = _puede('stock:read');
   const puedeProd = _puede('produccion:read');
   const _sinPermiso = (que) => `🔒 Con tu usuario no puedo mostrarte ${que}. Pedile a un administrador que te dé el permiso.`;
-  // Si es un "cómo se hace" o un comando de carga, no es una consulta: que lo maneje otro.
-  if (/\b(como|crear|cargar|carga|cargo|nueva|nuevo|agregar|dar de alta|registr|anota|recorda|acorda)\b/.test(t)) return null;
+  // Si es un comando de carga, no es una consulta: que lo maneje otro. (No excluimos "como"
+  // para que "¿cómo estoy?" / "¿cómo ando?" caigan en el estado patrimonial de abajo.)
+  if (/\b(crear|cargar|carga|cargo|nueva|nuevo|agregar|dar de alta|anota|recorda|acorda)\b/.test(t)) return null;
   // --- CONSULTAS FINANCIERAS: a cobrar / a pagar / estado patrimonial / plata en caja ---
   const _fmtAr = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
   const _factorARS = async (moneda, cot) => moneda === 'ARS' || !moneda ? 1 : (Number(cot) || (await getCotizacionARS(moneda, new Date(), companyId)) || 0);
@@ -7020,6 +7110,12 @@ async function _consultaAsistente(texto, companyId, ctx, req) {
   if (!esConsulta) return null;
   let campo = ctx.campos.find(c => c.nombre && t.includes(_sinAcentos(c.nombre)));
 
+  // --- CAMPOS --- ("cuántos campos tengo")
+  if (/\bcampos?\b/.test(t) && !/\b(campan|lote|animal|hacienda|prueba)\b/.test(t)) {
+    const cs = ctx.campos || [];
+    if (!cs.length) return 'No tenés campos cargados. Cargalos en "Campos y lotes".';
+    return `🌾 Tenés ${cs.length} campo${cs.length === 1 ? '' : 's'}: ${cs.map(c => c.nombre).join(', ')}.`;
+  }
   // --- LOTES --- (no si preguntan por animales "del lote X")
   if (/\blotes?\b/.test(t) && !/\b(animal|animales|hacienda|vacas?|novillos?|terneros?|toros?|cabezas?|rodeo)\b/.test(t)) {
     let lotes = ctx.lotes; if (campo) lotes = lotes.filter(l => l.campoId === campo.id);
@@ -7246,7 +7342,7 @@ function _interpretarMensaje(texto, ctx) {
     return { accion: 'labor', params: { campanaId: camp.id, loteNombre: lote.nombre, campoNombre: campo?.nombre || '', tipo: tlab, responsable: resp, insumo, insumoNombre, insumoCantidad, insumoUnidad },
       resumen: `🚜 Labor de ${tlab} en lote ${lote.nombre}${camp.cultivo ? ` (${camp.cultivo}${camp.ciclo ? ' ' + camp.ciclo : ''})` : ''}${insumo ? ` · ${insumo}` : ''}${resp ? ` · ${resp}` : ''}` };
   }
-  return { error: 'Uh, esa no la entendí del todo 🤔. Pero tranqui, te ayudo igual.\n\nContame qué hiciste — ej: "nacieron 5 terneros en Montenegro", "cosecha en el lote 1 de Campo Prueba" o "recordar vacunar el 15/8".\nO preguntame cómo se hace algo — ej: "¿cómo cargo un cheque de tercero?".\n\n💡 Escribí "ayuda" y te muestro todo lo que puedo hacer.' };
+  return { error: 'Perdón, esa no la entendí 🤔. Escribí "ayuda" para ver todo lo que puedo hacer, o probá con algo como "gasté 5000 en nafta".' };
 }
 // Continúa una carga que quedó a medias (multi-turno): toma el dato que faltaba del
 // último mensaje y completa la acción, o vuelve a pedirlo. Devuelve {accion,params,resumen}
@@ -7848,7 +7944,27 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       }
     }
     } // fin if(!readyPend)
-    const r = readyPend || _interpretarMensaje(texto, ctx);
+    let r = readyPend || _interpretarMensaje(texto, ctx);
+    // 1.5) IA de RESPALDO: si las reglas no entendieron y la IA está activada, le pedimos
+    //      que reescriba el mensaje a un molde conocido y volvemos a procesarlo. La IA no
+    //      ejecuta nada: todo pasa igual por la confirmación.
+    if (!readyPend && r.error) {
+      const ia = await _iaConfig();
+      if (ia.enabled) {
+        const norm = await _iaNormalizar(texto, ctx, ia);
+        if (norm) {
+          try {
+            const c2 = await _consultaAsistente(norm, req.companyId, ctx, req);
+            if (c2) {
+              const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', c2, { status: 'ayuda', consulta: true, ia: true });
+              return res.json({ ok: true, status: 'ayuda', mensaje: c2, data: m });
+            }
+          } catch {}
+          const r2 = _interpretarMensaje(norm, ctx);
+          if (!r2.error) r = r2;  // la IA lo entendió → seguimos con el flujo normal (con confirmación)
+        }
+      }
+    }
     // Falta un dato para completar la carga (ej: el monto del gasto) → lo pedimos.
     if (r.faltante) {
       const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.pregunta, { status: 'faltante', accion: r.accion, faltante: r.faltante, params: r.params });

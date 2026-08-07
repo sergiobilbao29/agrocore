@@ -2541,6 +2541,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
+      titulo:'🧠 v2.52.0 — Asistente con IA (OpenAI) de respaldo',
+      desc:'Cuando el asistente no entiende una frase con sus reglas, ahora puede pedirle a la <b>IA</b> que la interprete y seguir con la carga habitual. <b>La IA nunca ejecuta nada por su cuenta</b>: solo ayuda a entender, y todo sigue pidiéndote confirmación. Se activa desde <b>Configuración → 🤖 Asistente IA</b> (solo Super Admin) cargando tu API key de OpenAI. Las facturas y el CAE de ARCA quedan siempre fuera de la IA.' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'06/08/2026',
+      titulo:'🤖 v2.51.0 — Asistente: respuesta más corta y entiende más',
+      desc:'Cuando el asistente no entiende, ahora contesta <b>corto</b> (una línea) en vez del texto largo. Además entiende <i>"¿cómo estoy?"</i> (te da el estado), <i>"¿cuántos campos tengo?"</i> y frases con "registrado" que antes caían en "no entendí".' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'06/08/2026',
       titulo:'🔊 v2.50.0 — Voz elegible (hombre/mujer) y consultas con permiso',
       desc:'La voz del asistente ahora es <b>más suave y natural</b> y podés <b>elegir voz de mujer 👩 o de hombre 👨</b> (o apagarla) desde el selector en el chat del asistente. Toma la mejor voz en español instalada en el dispositivo (en Chrome/Android suenan muy bien). Además, por seguridad, la <b>información sensible</b> (cuánto hay a cobrar/a pagar, estado patrimonial, plata en caja) <b>solo se la responde a usuarios con permiso de Finanzas</b>; a los demás les avisa que no tienen acceso.' },
@@ -8224,6 +8230,7 @@ async function empEliminar(id, nombre) {
 const CONFIG_TABS = [
   { id:'config',      label:'⚙️ Configuración' },
   { id:'arca',        label:'🏛️ ARCA', arca:true },
+  { id:'ia',          label:'🤖 Asistente IA', soloSuper:true },
   { id:'importacion', label:'📥 Importación', soloSuper:true },
   { id:'sistema',     label:'🛠️ Sistema',     soloSuper:true },
 ];
@@ -8264,11 +8271,78 @@ function configRenderTab() {
     }).join('');
   }
   if (state.configTab === 'arca')        return configRenderArca(body);
+  if (state.configTab === 'ia')          return configRenderIA(body);
   if (state.configTab === 'importacion') return configRenderImportacion(body);
   if (state.configTab === 'sistema')     return configRenderSistema(body);
   return configRenderConfig(body);
 }
 
+/* ---- Tab Asistente IA (OpenAI) — solo Super Admin ---- */
+async function configRenderIA(body) {
+  body.innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let cfg = { enabled:false, model:'gpt-4o-mini', tieneKey:false, keyMask:'' };
+  try { cfg = (await api('/api/ia-config')).data || cfg; } catch(e){ body.innerHTML = `<div class="text-red-600 text-sm">${esc(e.message)}</div>`; return; }
+  state._iaCfg = cfg;
+  body.innerHTML = `
+    <div class="max-w-2xl">
+      <h3 class="text-lg font-bold text-slate-800 mb-1">🤖 Asistente con IA (OpenAI)</h3>
+      <p class="text-sm text-slate-600 mb-4">Cuando el asistente no entiende una frase con sus reglas, le pide a la IA que la interprete. <b>La IA no ejecuta nada</b>: solo ayuda a entender; todo sigue pidiendo tu confirmación. Las <b>facturas y el CAE de ARCA</b> quedan siempre fuera de la IA.</p>
+
+      <label class="flex items-center gap-2 p-3 rounded-lg border-2 border-slate-200 has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50 cursor-pointer mb-4">
+        <input type="checkbox" id="ia-enabled" class="w-5 h-5" ${cfg.enabled?'checked':''}/>
+        <span class="font-semibold text-slate-700">Activar IA de respaldo en el asistente</span>
+      </label>
+
+      <div class="mb-3">
+        <label class="label">API key de OpenAI</label>
+        <input id="ia-key" type="password" class="input" autocomplete="off" placeholder="${cfg.tieneKey?('Ya hay una key guardada ('+esc(cfg.keyMask)+') — dejá vacío para conservarla'):'Pegá tu key: empieza con sk-...'}"/>
+        <div class="text-[11px] text-slate-500 mt-1">La key se guarda en tu servidor y <b>nunca</b> se muestra completa. ${cfg.tieneKey?'<span class="text-emerald-700">✓ Hay una key cargada.</span>':'<span class="text-amber-700">Todavía no hay key.</span>'}</div>
+      </div>
+
+      <div class="mb-4">
+        <label class="label">Modelo</label>
+        <select id="ia-model" class="input" style="max-width:280px">
+          ${['gpt-4o-mini','gpt-4.1-mini','gpt-4o'].map(m=>`<option value="${m}" ${cfg.model===m?'selected':''}>${m}${m==='gpt-4o-mini'?' (recomendado · más barato)':''}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="flex gap-2 flex-wrap">
+        <button class="btn btn-primary" onclick="configIAGuardar()">💾 Guardar</button>
+        <button class="btn btn-secondary" onclick="configIAProbar()">🧪 Probar</button>
+        ${cfg.tieneKey?`<button class="btn btn-ghost text-red-600" onclick="configIABorrarKey()">🗑️ Borrar key</button>`:''}
+      </div>
+      <div id="ia-msg" class="text-sm mt-3"></div>
+
+      <div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mt-4">
+        💡 Sacá tu API key en <b>platform.openai.com</b> → API keys. Poné un <b>tope de gasto</b> en Settings → Limits (ej. US$10/mes). El costo es de centavos: cada mensaje ronda US$0,0004.
+      </div>
+    </div>`;
+}
+async function configIAGuardar() {
+  const enabled = document.getElementById('ia-enabled')?.checked;
+  const apiKey = (document.getElementById('ia-key')?.value||'').trim();
+  const model = document.getElementById('ia-model')?.value || 'gpt-4o-mini';
+  const msg = document.getElementById('ia-msg');
+  try {
+    const r = await api('/api/ia-config', { method:'PUT', body: JSON.stringify({ enabled, model, apiKey }) });
+    if (msg) msg.innerHTML = '<span class="text-emerald-700 font-medium">✓ Guardado.</span>';
+    toast('Configuración de IA guardada','success');
+    configRenderTab();
+  } catch(e){ if (msg) msg.innerHTML = `<span class="text-red-600">❌ ${esc(e.message)}</span>`; }
+}
+async function configIABorrarKey() {
+  if (!confirm('¿Borrar la API key guardada? El asistente dejará de usar la IA hasta que cargues otra.')) return;
+  try { await api('/api/ia-config', { method:'PUT', body: JSON.stringify({ borrarKey:true, enabled:false }) }); toast('Key borrada','success'); configRenderTab(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function configIAProbar() {
+  const msg = document.getElementById('ia-msg');
+  if (msg) msg.innerHTML = '<span class="text-blue-700">⏳ Probando con OpenAI…</span>';
+  try {
+    const r = await api('/api/ia-config/probar', { method:'POST', body: JSON.stringify({ texto:'apliqué 120 litros de glifosato en el lote 3' }) });
+    if (msg) msg.innerHTML = `<div class="bg-slate-50 border border-slate-200 rounded p-2 text-xs"><b>Prueba OK ✓</b><br>Entrada: <i>${esc(r.entrada)}</i><br>La IA lo entendió como: <b>${esc(r.normalizado)}</b></div>`;
+  } catch(e){ if (msg) msg.innerHTML = `<span class="text-red-600">❌ ${esc(e.message)}. Revisá la key y que tengas saldo/tope en OpenAI.</span>`; }
+}
 /* ---- Tab Configuración: contactos globales (Asesor / Logística / Contador) ---- */
 function configRenderConfig(body) {
   const s = state.settings || {};
