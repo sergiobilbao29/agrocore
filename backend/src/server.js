@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.57.0';
+const AGROCORE_VERSION = '2.57.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8384,13 +8384,13 @@ app.post('/api/asistente/analizar-archivo', requireCompany, upload.single('archi
       if (!frase) atajo = { page: 'produccion', label: 'Abrir Producción' };
     } else if (doc.tipo === 'factura_compra') {
       atajo = { page: 'compras', label: 'Abrir Compras' };
-      mensaje = `📄 Es una factura de compra${d.proveedor ? ` de ${d.proveedor}` : ''}${nOr(d.total) ? ` por $${nOr(d.total).toLocaleString('es-AR')}` : ''}. Te llevo a Compras — con "Importar PDF" se carga casi sola.`;
+      mensaje = `📄 Es una factura de compra${d.proveedor ? ` de ${d.proveedor}` : ''}${nOr(d.total) ? ` por $${nOr(d.total).toLocaleString('es-AR')}` : ''}. Te abro la carga ya completada; revisá y confirmá.`;
     } else if (doc.tipo === 'liquidacion_cereal') {
       atajo = { page: 'liquidaciones', label: 'Abrir Liquidaciones de cereal' };
-      mensaje = `🌾 Es una liquidación de cereal${d.grano ? ` (${d.grano})` : ''}. Te llevo para importarla.`;
+      mensaje = `🌾 Es una liquidación de cereal${d.grano ? ` (${d.grano})` : ''}. Te abro el formulario ya cargado; completá lo que falte y confirmá.`;
     } else if (doc.tipo === 'liquidacion_animales') {
       atajo = { page: 'liquidacionesHacienda', label: 'Abrir Liquidaciones de animales' };
-      mensaje = `🐄 Es una liquidación de animales${d.categoria ? ` (${d.categoria})` : ''}. Te llevo para importarla.`;
+      mensaje = `🐄 Es una liquidación de animales${d.categoria ? ` (${d.categoria})` : ''}. Te abro el formulario ya cargado; confirmá el campo y la categoría y guardá.`;
     } else if (doc.tipo === 'cheque') {
       atajo = { page: 'cheques', label: 'Abrir Cheques' };
       mensaje = `🧾 Es un cheque${d.banco ? ` del ${d.banco}` : ''}${nOr(d.importe) ? ` por $${nOr(d.importe).toLocaleString('es-AR')}` : ''}. Cargalo en Cheques.`;

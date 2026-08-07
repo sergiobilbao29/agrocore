@@ -2542,8 +2542,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
-      titulo:'📎 v2.57.0 — El asistente lee archivos y fotos (y abre la cámara)',
-      desc:'En el chat del asistente hay dos botones nuevos: <b>📎 Adjuntar</b> (PDF o imagen) y <b>📷 Foto</b> (abre la cámara del celular). El bot <b>reconoce el documento</b> y propone la acción: <b>factura de compra</b> → Compras; <b>liquidación</b> de cereal/animales → su importación; <b>ticket/gasto</b> → arma el movimiento diario para confirmar; <b>orden de trabajo</b> → propone la labor y te pide lo que falte; <b>cheque</b> → Cheques. Requiere la <b>IA activada</b> (Configuración → 🤖 Asistente IA).' },
+      titulo:'📎 v2.57.1 — El asistente lee archivos/fotos y abre la carga ya completada',
+      desc:'En el chat del asistente hay dos botones: <b>📎 Adjuntar</b> (PDF o imagen) y <b>📷 Foto</b> (cámara del celular). El bot <b>reconoce el documento y te abre el formulario ya cargado</b> para que completes lo que falte y confirmes: <b>liquidación</b> de cereal/animales, <b>factura de compra</b> (con los datos del QR de ARCA), <b>ticket/gasto</b> (movimiento diario) y <b>orden de trabajo</b> (labor). El <b>cheque</b> te lleva a su pantalla. Requiere la <b>IA activada</b> (Configuración → 🤖 Asistente IA).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
       titulo:'✏️ v2.56.0 — Editar y filtrar liquidaciones (cereal y animales)',
       desc:'Ahora podés <b>editar</b> una liquidación de <b>cereal</b> o de <b>animales</b>: se corrige lo que necesites y el sistema <b>reajusta solo</b> el stock, el SENASA y la cuenta a cobrar. Si la liquidación ya está <b>cobrada</b>, primero hay que deshacer el cobro. También sumamos <b>eliminar</b> (revierte todo) y <b>filtros</b> en las dos listas: por <b>fecha desde/hasta</b>, <b>comprador</b>, <b>grano/categoría</b> y <b>estado</b> (cobrada / pendiente).' },
@@ -7416,14 +7416,41 @@ async function astAnalizarArchivo(file){
       const inp=document.getElementById('chat-input-a'); if(inp) inp.value=j.frase;
       if(box) box.innerHTML='';
       chatAsistente();   // reprocesa por el flujo normal → propuesta con confirmación
-    } else {
+      return;
+    }
+    // Documentos importables: abrimos el formulario YA CARGADO (pide lo que falte y guarda al confirmar).
+    if (['liquidacion_animales','liquidacion_cereal','factura_compra'].includes(j.tipo)) {
       _ttsHablar(j.mensaje||'');
-      if(box){
-        const btn = (j.atajo&&j.atajo.page) ? `<button class="btn btn-primary text-xs" onclick="asistAbrir('${j.atajo.page}')">➡️ ${esc(j.atajo.label||'Abrir')}</button>` : '';
-        box.innerHTML = `<div class="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2"><div class="text-xs text-blue-900 mb-2">${esc(j.mensaje||'Documento analizado.')}</div><div class="flex justify-end">${btn}</div></div>`;
-      }
+      const ok = await _astAbrirImportador(file, j.tipo, box);
+      if (ok) return;
+      // Si el importador falló (ej. es una foto y no un PDF), caemos al botón de la pantalla.
+    }
+    _ttsHablar(j.mensaje||'');
+    if(box){
+      const btn = (j.atajo&&j.atajo.page) ? `<button class="btn btn-primary text-xs" onclick="asistAbrir('${j.atajo.page}')">➡️ ${esc(j.atajo.label||'Abrir')}</button>` : '';
+      box.innerHTML = `<div class="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2"><div class="text-xs text-blue-900 mb-2">${esc(j.mensaje||'Documento analizado.')}</div><div class="flex justify-end">${btn}</div></div>`;
     }
   }catch(e){ if(box) box.innerHTML=''; toast('No pude analizar el archivo: '+e.message,'error'); }
+}
+// Abre el importador correcto ya cargado con el archivo. Devuelve true si abrió el form.
+async function _astAbrirImportador(file, tipo, box){
+  // Factura de compra: abrimos el form de compra y le damos el PDF (decodifica QR de ARCA).
+  if (tipo==='factura_compra'){
+    if(box) box.innerHTML='';
+    try { compForm(); setTimeout(()=>{ try{ compCargarDesdePDF({ files:[file] }); }catch(_){} }, 400); return true; } catch(_){ return false; }
+  }
+  const ep = tipo==='liquidacion_animales' ? '/api/admin/parse-liquidacion-hacienda-pdf'
+           : tipo==='liquidacion_cereal'   ? '/api/admin/parse-liquidacion-cereal-pdf' : null;
+  if (!ep) return false;
+  try {
+    const fd=new FormData(); fd.append('archivo', file);
+    const r=await fetch(API_BASE+ep,{ method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd });
+    const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||'Error '+r.status);
+    if(box) box.innerHTML='';
+    if (tipo==='liquidacion_animales') liqHacForm(j.data);
+    else if (tipo==='liquidacion_cereal') liqCerealPreview(j.data);
+    return true;
+  } catch(e){ return false; }
 }
 function chatAsistCancelar(){ state._asistProp=null; state._astPendiente=null; const b=document.getElementById('chat-confirm'); if(b) b.innerHTML=''; }
 // Consulta multi-empresa: el usuario eligió una empresa (o "todas") → re-enviamos la pregunta.
