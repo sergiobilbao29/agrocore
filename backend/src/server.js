@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.59.0';
+const AGROCORE_VERSION = '2.60.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8025,6 +8025,22 @@ async function _pushAUsuarios(companyId, userIds, payload) {
     }));
   } catch {}
 }
+// Push del chat COMPARTIDO entre empresas: junta suscripciones de todas las empresas
+// del usuario y deduplica por endpoint (un usuario puede estar suscripto en varias).
+async function _pushChat(cids, whereExtra, payload) {
+  try {
+    const wp = await _getWebpush(); if (!wp) return;
+    const v = await _getVapid(); if (!v) return;
+    const subs = await prisma.pushSubscription.findMany({ where: { companyId: { in: cids }, ...whereExtra } });
+    const vistos = new Set();
+    const body = JSON.stringify(payload);
+    await Promise.all(subs.map(async (s) => {
+      if (vistos.has(s.endpoint)) return; vistos.add(s.endpoint);
+      try { await wp.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body); }
+      catch (e) { if (e?.statusCode === 404 || e?.statusCode === 410) { await prisma.pushSubscription.delete({ where: { id: s.id } }).catch(() => {}); } }
+    }));
+  } catch {}
+}
 app.get('/api/push/vapid-public', requireCompany, async (req, res, next) => {
   try { const v = await _getVapid(); res.json({ ok: true, data: { publicKey: v?.publicKey || null } }); } catch (e) { next(e); }
 });
@@ -8077,13 +8093,24 @@ app.get('/api/company-users', requireCompany, async (req, res, next) => {
 
 // --- Grupos de mensajería ---
 function _grupoMiembros(g){ return Array.isArray(g?.miembros) ? g.miembros.map(String) : []; }
-async function _gruposDeUsuario(companyId, userId){
-  const all = await prisma.mensajeGrupo.findMany({ where: { companyId }, orderBy: { nombre: 'asc' } });
+// La MENSAJERIA (chat general y grupos) NO se diferencia por empresa: es un espacio
+// compartido entre TODAS las empresas del usuario (igual que el asistente). Estos ids
+// son el conjunto de empresas del usuario, para leer/escribir mensajes y grupos sin
+// importar cuál esté activa.
+async function _cidsChat(req){
+  const es = await _empresasDeUsuario(req);
+  const ids = (es || []).map(e => e.id);
+  return ids.length ? ids : [req.companyId];
+}
+async function _gruposDeUsuario(cids, userId){
+  const arr = Array.isArray(cids) ? cids : [cids];
+  const all = await prisma.mensajeGrupo.findMany({ where: { companyId: { in: arr } }, orderBy: { nombre: 'asc' } });
   return all.filter(g => _grupoMiembros(g).includes(String(userId)));
 }
 app.get('/api/grupos', requireCompany, async (req, res, next) => {
   try {
-    const all = await prisma.mensajeGrupo.findMany({ where: { companyId: req.companyId }, orderBy: { nombre: 'asc' } });
+    const cids = await _cidsChat(req);   // grupos compartidos entre todas las empresas del usuario
+    const all = await prisma.mensajeGrupo.findMany({ where: { companyId: { in: cids } }, orderBy: { nombre: 'asc' } });
     // Solo el Super Admin ve todos los grupos; el resto ve únicamente los suyos.
     const data = req.user.superAdmin ? all : all.filter(g => _grupoMiembros(g).includes(String(req.user.id)));
     res.json({ ok: true, data });
@@ -8101,7 +8128,8 @@ app.post('/api/grupos', requireCompany, async (req, res, next) => {
 });
 app.put('/api/grupos/:id', requireCompany, async (req, res, next) => {
   try {
-    const g = await prisma.mensajeGrupo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    const cids = await _cidsChat(req);
+    const g = await prisma.mensajeGrupo.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!g) return res.status(404).json({ ok: false, error: 'Grupo no encontrado' });
     if (!(req.user.superAdmin || g.creadoPor === req.user.id || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo el creador o un administrador puede editar el grupo' });
     const data = {};
@@ -8113,10 +8141,11 @@ app.put('/api/grupos/:id', requireCompany, async (req, res, next) => {
 });
 app.delete('/api/grupos/:id', requireCompany, async (req, res, next) => {
   try {
-    const g = await prisma.mensajeGrupo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    const cids = await _cidsChat(req);
+    const g = await prisma.mensajeGrupo.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!g) return res.status(404).json({ ok: false, error: 'Grupo no encontrado' });
     if (!(req.user.superAdmin || g.creadoPor === req.user.id || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo el creador o un administrador puede eliminar el grupo' });
-    await prisma.mensaje.deleteMany({ where: { companyId: req.companyId, canal: 'grupo:' + g.id } });
+    await prisma.mensaje.deleteMany({ where: { companyId: { in: cids }, canal: 'grupo:' + g.id } });
     await prisma.mensajeGrupo.delete({ where: { id: g.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -8127,7 +8156,8 @@ async function _canalValido(req, canalRaw){
   const canal = String(canalRaw || 'general');
   if (canal === 'general' || canal === 'asistente') return { canal };
   if (canal.startsWith('grupo:')){
-    const g = await prisma.mensajeGrupo.findFirst({ where: { id: canal.slice(6), companyId: req.companyId } });
+    const cids = await _cidsChat(req);   // grupo compartido entre las empresas del usuario
+    const g = await prisma.mensajeGrupo.findFirst({ where: { id: canal.slice(6), companyId: { in: cids } } });
     if (!g) return null;
     const ok = req.user.superAdmin || _grupoMiembros(g).includes(String(req.user.id));
     return ok ? { canal, grupo: g } : null;
@@ -8140,11 +8170,13 @@ app.get('/api/mensajes', requireCompany, async (req, res, next) => {
   try {
     const v = await _canalValido(req, req.query.canal);
     if (!v) return res.status(403).json({ ok: false, error: 'No tenés acceso a esa conversación' });
-    // El ASISTENTE es un hilo GENERAL del usuario: se ve igual desde cualquier empresa
-    // (no filtramos por companyId). El resto de canales sí es por empresa.
+    // El ASISTENTE es un hilo GENERAL del usuario (por userId). El chat GENERAL y los
+    // GRUPOS también son COMPARTIDOS entre todas las empresas del usuario: se ven igual
+    // desde cualquier empresa (no se diferencian por empresa).
+    const cids = await _cidsChat(req);
     const where = v.canal === 'asistente'
       ? { canal: 'asistente', userId: req.user.id }
-      : { companyId: req.companyId, canal: v.canal };
+      : { companyId: { in: cids }, canal: v.canal };
     const data = await prisma.mensaje.findMany({ where, orderBy: { createdAt: 'asc' }, take: 300 });
     res.json({ ok: true, data });
   } catch (e) { next(e); }
@@ -8161,33 +8193,44 @@ app.post('/api/mensajes', requireCompany, async (req, res, next) => {
       companyId: req.companyId, canal: v.canal, userId: req.user.id, rol: 'user',
       autorNombre: autor, texto: texto || '📷 Foto', fotoUrl: fotoUrl || null,
     }});
-    // Aviso push a los demás participantes.
+    // Aviso push a los demás participantes (chat compartido: en TODAS las empresas del usuario).
+    const cids = await _cidsChat(req);
     const titulo = v.grupo ? `💬 ${autor} · ${v.grupo.nombre}` : `💬 ${autor}`;
     const payload = { title: titulo, body: (texto||'📷 Foto').slice(0,140), url: '/app#/mensajes', canal: v.canal, tag: 'chat-'+v.canal };
     if (v.grupo){
       const dest = _grupoMiembros(v.grupo).filter(id => id !== String(req.user.id));
-      _pushAUsuarios(req.companyId, dest, payload);
+      _pushChat(cids, { userId: { in: dest.map(String) } }, payload);
     } else {
-      _pushAMiembros(req.companyId, req.user.id, payload);
+      _pushChat(cids, { userId: { not: req.user.id } }, payload);
     }
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
 app.get('/api/mensajes/no-leidos', requireCompany, async (req, res, next) => {
   try {
-    const est = await prisma.chatEstado.findFirst({ where: { companyId: req.companyId, userId: req.user.id } });
-    const lr = (est?.lastRead && typeof est.lastRead === 'object') ? est.lastRead : {};
-    const desdeDe = (canal) => new Date(lr[canal] || (canal === 'general' ? (est?.lastReadGeneral || 0) : 0));
+    // Chat compartido entre empresas: leemos el "leído" del usuario en TODAS sus empresas
+    // y tomamos el más reciente por canal (así, si leyó desde otra empresa, no cuenta de nuevo).
+    const cids = await _cidsChat(req);
+    const estados = await prisma.chatEstado.findMany({ where: { companyId: { in: cids }, userId: req.user.id } });
+    const desdeDe = (canal) => {
+      let mx = 0;
+      for (const est of estados) {
+        const lr = (est?.lastRead && typeof est.lastRead === 'object') ? est.lastRead : {};
+        const v = lr[canal] || (canal === 'general' ? (est?.lastReadGeneral || 0) : 0);
+        const t = new Date(v).getTime(); if (t > mx) mx = t;
+      }
+      return new Date(mx);
+    };
     const porCanal = {};
     let total = 0;
     // general
-    porCanal.general = await prisma.mensaje.count({ where: { companyId: req.companyId, canal: 'general', createdAt: { gt: desdeDe('general') }, userId: { not: req.user.id } } });
+    porCanal.general = await prisma.mensaje.count({ where: { companyId: { in: cids }, canal: 'general', createdAt: { gt: desdeDe('general') }, userId: { not: req.user.id } } });
     total += porCanal.general;
-    // grupos del usuario
-    const grupos = await _gruposDeUsuario(req.companyId, req.user.id);
+    // grupos del usuario (en cualquiera de sus empresas)
+    const grupos = await _gruposDeUsuario(cids, req.user.id);
     for (const g of grupos){
       const c = 'grupo:' + g.id;
-      const n = await prisma.mensaje.count({ where: { companyId: req.companyId, canal: c, createdAt: { gt: desdeDe(c) }, userId: { not: req.user.id } } });
+      const n = await prisma.mensaje.count({ where: { companyId: { in: cids }, canal: c, createdAt: { gt: desdeDe(c) }, userId: { not: req.user.id } } });
       porCanal[c] = n; total += n;
     }
     res.json({ ok: true, data: { noLeidos: total, porCanal } });

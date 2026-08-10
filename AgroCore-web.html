@@ -2541,6 +2541,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'10/08/2026',
+      titulo:'💬 v2.60.0 — La mensajería y los grupos ahora son compartidos entre empresas',
+      desc:'El <b>chat del equipo</b> y los <b>grupos</b> dejan de separarse por empresa: son un <b>único espacio compartido</b> entre todas tus empresas (igual que el asistente). Ves los mismos mensajes y grupos sin importar en qué empresa estés parado, y los avisos llegan a todos los participantes.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/08/2026',
       titulo:'🏦 v2.59.0 — Anular cartas de porte, depositar cheques y conciliación bancaria',
       desc:'Tres novedades: <b>1) Anular una carta de porte</b>: en Viajes, el botón 🚫 <b>Anula</b> la CP (queda marcada como "Anulada") y <b>revierte todos sus movimientos</b> (stock y comisión de chofer); se puede <b>reactivar</b> con ↩️. <b>2) Depositar cheques de terceros</b>: en la cuenta bancaria, botón <b>🏦 Depositar cheque</b> para elegir un cheque en cartera y registrarlo (pasa a "depositado" y suma al saldo). <b>3) Conciliación bancaria mensual</b>: botón <b>✅ Conciliar mes</b>; al confirmar un mes de una cuenta, <b>sus movimientos quedan bloqueados</b> (no se editan ni borran) hasta reabrir la conciliación.' },
