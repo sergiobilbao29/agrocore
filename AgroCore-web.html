@@ -2541,6 +2541,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/08/2026',
+      titulo:'🏦 v2.59.0 — Anular cartas de porte, depositar cheques y conciliación bancaria',
+      desc:'Tres novedades: <b>1) Anular una carta de porte</b>: en Viajes, el botón 🚫 <b>Anula</b> la CP (queda marcada como "Anulada") y <b>revierte todos sus movimientos</b> (stock y comisión de chofer); se puede <b>reactivar</b> con ↩️. <b>2) Depositar cheques de terceros</b>: en la cuenta bancaria, botón <b>🏦 Depositar cheque</b> para elegir un cheque en cartera y registrarlo (pasa a "depositado" y suma al saldo). <b>3) Conciliación bancaria mensual</b>: botón <b>✅ Conciliar mes</b>; al confirmar un mes de una cuenta, <b>sus movimientos quedan bloqueados</b> (no se editan ni borran) hasta reabrir la conciliación.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'10/08/2026',
       titulo:'📅 v2.58.0 — Fecha en el chat y "Volver a la nómina" arreglado',
       desc:'En el <b>chat del equipo</b> ahora aparece un <b>separador con el día</b> (Hoy / Ayer / fecha) entre los mensajes, para saber de cuándo es cada uno. Además, en la <b>planilla de empleados</b>, si cargás varios movimientos seguidos y tocás <b>Volver a la nómina</b>, ahora vuelve de una sola vez (antes había que tocarlo una vez por cada movimiento cargado).' },
@@ -16864,6 +16867,7 @@ const VIAJE_ESTADOS = {
   descargado: { label: 'Descargado', cls: 'badge-yellow' },
   facturado:  { label: 'Facturado',  cls: 'badge-blue' },
   pagado:     { label: 'Pagado',     cls: 'badge-green' },
+  anulada:    { label: '🚫 Anulada', cls: 'badge-red' },
 };
 // Flete total = kg de descarga (o cargados si no hay descarga) × tarifa ($/tonelada).
 // Si hay un flete cargado a mano en el viaje, se respeta ese valor.
@@ -17037,7 +17041,9 @@ pages.viajes = async function() {
                   ${v.destinoTipo==='cerealera' && v.depositoDestinoId && !v.depositoOrigenId && can('stock:entrega_cerealera:create')?`<button class="btn btn-ghost text-xs" title="Cargar entrega del cereal a la cerealera" onclick='viajeEntregaCereal(${JSON.stringify(v.id)})'>📤</button>`:''}
                   ${v.depositoOrigenId && can('finanzas:update')?`<button class="btn btn-ghost text-xs text-amber-700" title="Entregar este cereal a cuenta de un crédito" onclick='viajeEntregaCredito(${JSON.stringify(v.id)})'>🌾</button>`:''}
                   ${v.destinoTipo==='venta_directa' && can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-ghost text-xs" title="Cargar liquidación de venta del cereal" onclick='viajeLiquidacion(${JSON.stringify(v.id)})'>🧾</button>`:''}
-                  ${canU && v.estado!=='pagado'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar como pagado (sin generar factura)" onclick='viajeMarcarPagado(${JSON.stringify(v.id)})'>💵</button>`:''}
+                  ${canU && v.estado!=='pagado' && v.estado!=='anulada'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar como pagado (sin generar factura)" onclick='viajeMarcarPagado(${JSON.stringify(v.id)})'>💵</button>`:''}
+                  ${canU && v.estado!=='anulada' && v.estado!=='pagado'?`<button class="btn btn-ghost text-xs text-orange-600" title="Anular esta carta de porte (revierte sus movimientos, queda como Anulada)" onclick='viajeAnular(${JSON.stringify(v.id)})'>🚫</button>`:''}
+                  ${canU && v.estado==='anulada'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Reactivar esta carta de porte" onclick='viajeReactivar(${JSON.stringify(v.id)})'>↩️</button>`:''}
                   ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='viajeDel(${JSON.stringify(v.id)})'>🗑️</button>`:''}
                 </td>
               </tr>`;
@@ -17604,6 +17610,18 @@ async function viajeSave(id) {
 async function viajeDel(id) {
   if (!confirm('¿Borrar este viaje?')) return;
   try { await api('/api/viajes/'+id,{method:'DELETE'}); toast('Borrado','success'); delete state.cache.viajes; pages.viajes(); }
+  catch (e) { toast(e.message,'error'); }
+}
+// Anular una carta de porte: no se borra, queda "Anulada" y se revierten sus
+// movimientos (stock y comisión de chofer). Se puede reactivar después.
+async function viajeAnular(id) {
+  if (!confirm('¿Anular esta carta de porte?\n\nSe revierten los movimientos de stock y la comisión de chofer que haya generado. Queda como "Anulada" y la podés reactivar más tarde.')) return;
+  try { await api('/api/viajes/'+id+'/anular',{method:'POST'}); toast('Carta de porte anulada','success'); delete state.cache.viajes; pages.viajes(); }
+  catch (e) { toast(e.message,'error'); }
+}
+async function viajeReactivar(id) {
+  if (!confirm('¿Reactivar esta carta de porte? Se vuelven a generar sus movimientos de stock y la comisión de chofer.')) return;
+  try { await api('/api/viajes/'+id+'/reactivar',{method:'POST'}); toast('Carta de porte reactivada','success'); delete state.cache.viajes; pages.viajes(); }
   catch (e) { toast(e.message,'error'); }
 }
 // Borra TODAS las cartas de porte / viajes de la empresa activa (para limpiar
@@ -26781,6 +26799,9 @@ async function bcoVerMovs(cuentaId) {
   let movs = [];
   try { movs = (await api('/api/banco-cuentas/'+cuentaId+'/movimientos')).data || []; } catch (e) { return toast(e.message,'error'); }
   state.cache.bancoMovs = movs;   // para poder editar un movimiento sin re-pedirlo
+  // Conciliaciones de esta cuenta (meses bloqueados).
+  try { state._bcoConcil = (await api('/api/conciliaciones?cuentaId='+cuentaId)).data || []; } catch { state._bcoConcil = []; }
+  state._bcoConcilSet = new Set((state._bcoConcil||[]).map(x => x.periodo));
   // Recalculamos saldo corriente fila a fila (de más viejo a más nuevo, sobre TODO el historial)
   let running = Number(c.saldoInicial || 0);
   const movsAsc = [...movs].sort((a,b) => new Date(a.fecha) - new Date(b.fecha) || a.createdAt.localeCompare(b.createdAt));
@@ -26813,10 +26834,13 @@ function bcoMovRender() {
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <button class="btn btn-secondary" onclick="pages.bancos()">← Volver a Bancos</button>
-      <div class="flex gap-2">
+      <div class="flex gap-2 flex-wrap">
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoDepositarCheque()">🏦 Depositar cheque</button>`:''}
+        ${can('finanzas:update')?`<button class="btn btn-secondary" onclick="bcoConciliarForm()">✅ Conciliar mes</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoMovForm()">+ Nuevo movimiento</button>`:''}
       </div>
     </div>
+    ${bcoConcilPanel()}
     ${movFiltroFechaBar('bmf', f, 'bcoMovAplicarFiltro', 'bcoMovLimpiarFiltro')}
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
@@ -26826,7 +26850,8 @@ function bcoMovRender() {
             const t = BANCO_TIPOS[m.tipo] || { lbl:m.tipo, sign:0, icon:'•' };
             const cls = t.sign > 0 ? 'text-green-700' : t.sign < 0 ? 'text-red-700' : 'text-slate-600';
             const signo = t.sign > 0 ? '+' : t.sign < 0 ? '−' : '';
-            return `<tr class="table-row">
+            const bloqueado = (state._bcoConcilSet||new Set()).has((m.fecha||'').slice(0,7));
+            return `<tr class="table-row ${bloqueado?'bg-slate-50/60':''}">
               <td>${fmtDate(m.fecha)}</td>
               <td><span class="text-xs">${t.icon} ${esc(t.lbl)}</span></td>
               <td>${esc(m.concepto)}</td>
@@ -26836,8 +26861,10 @@ function bcoMovRender() {
               <td class="text-right text-xs">${fmtMon(c.moneda, m._saldoCorrido)}</td>
               <td class="text-xs text-slate-500">${m.user?esc((m.user.alias||m.user.nombre+' '+(m.user.apellido||''))):'—'}</td>
               <td class="text-right whitespace-nowrap">
-                ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='bcoMovForm(${JSON.stringify(m.id)})'>✏️</button>`:''}
-                ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='bcoMovDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}
+                ${bloqueado
+                  ? `<span class="text-xs text-slate-400" title="Mes conciliado — no editable. Reabrí la conciliación para modificarlo.">🔒</span>`
+                  : `${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='bcoMovForm(${JSON.stringify(m.id)})'>✏️</button>`:''}
+                     ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='bcoMovDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`}
               </td>
             </tr>`;
           }).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin movimientos en el rango elegido. Ampliá las fechas o cargá el primero.</td></tr>`}
@@ -26845,6 +26872,111 @@ function bcoMovRender() {
         <tfoot><tr class="font-semibold bg-slate-50"><td colspan="9" class="text-xs text-slate-600">${movs.length} movimiento${movs.length===1?'':'s'} en el rango${f.desde?' · desde '+fmtDate(f.desde):''}${f.hasta?' hasta '+fmtDate(f.hasta):''}</td></tr></tfoot>
       </table>
     </div>`;
+}
+
+// Panel con los meses ya conciliados (bloqueados) de la cuenta actual + reabrir.
+function bcoConcilPanel() {
+  const cs = state._bcoConcil || [];
+  if (!cs.length) return '';
+  const c = (state.cache.bancoCuentas||[]).find(x => x.id === state.bancoCuentaId);
+  const mon = c ? c.moneda : 'ARS';
+  return `<div class="kpi mb-3 py-2">
+    <div class="flex items-center gap-2 flex-wrap text-xs">
+      <span class="font-semibold text-slate-600">🔒 Meses conciliados:</span>
+      ${cs.slice().sort((a,b)=>b.periodo.localeCompare(a.periodo)).map(x => `
+        <span class="badge badge-gray inline-flex items-center gap-1">
+          ${esc(x.periodo)}${x.saldoExtracto!=null?` · extracto ${fmtMon(mon,x.saldoExtracto)}`:''}
+          ${can('finanzas:update')?`<button class="text-slate-400 hover:text-red-600" title="Reabrir este mes (desbloquear)" onclick='bcoReabrirConcil(${JSON.stringify(x.id)}, ${JSON.stringify(x.periodo)})'>✕</button>`:''}
+        </span>`).join('')}
+    </div>
+  </div>`;
+}
+
+// Depositar un cheque de terceros (en cartera) en esta cuenta bancaria.
+// Reusa cambiar-estado: el cheque pasa a "depositado" y genera el ingreso.
+async function bcoDepositarCheque() {
+  const cuentaId = state.bancoCuentaId;
+  const c = (state.cache.bancoCuentas||[]).find(x => x.id === cuentaId);
+  if (!c) return;
+  let cheques = [];
+  try { cheques = (await api('/api/cheques')).data || []; } catch (e) { return toast(e.message,'error'); }
+  const enCartera = cheques.filter(ch => ch.tipo === 'terceros' && ch.estado === 'en_cartera');
+  if (!enCartera.length) return toast('No hay cheques de terceros en cartera para depositar.','warn');
+  const hoy = new Date().toISOString().slice(0,10);
+  const opts = enCartera.map(ch => `<option value="${esc(ch.id)}">#${esc(ch.nroCheque||'')} · ${esc(ch.banco||'')} · ${fmt$(ch.monto)} · vence ${fmtDate(ch.fechaPago)}${ch.librador?' · '+esc(ch.librador):''}</option>`).join('');
+  openModal({
+    title:'🏦 Depositar cheque de terceros', size:'max-w-lg',
+    body:`
+      <div class="text-xs text-slate-500 mb-2">Se deposita en <b>${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</b>. El cheque pasa a <b>depositado</b> y suma al saldo. Después lo podés marcar "cobrado" cuando acredite.</div>
+      <div><label class="label">Cheque en cartera *</label>
+        <select id="dep-cheque" class="input">${opts}</select>
+      </div>
+      <div class="mt-3"><label class="label">Fecha del depósito *</label>
+        <input id="dep-fecha" type="date" class="input" value="${hoy}"/>
+      </div>
+      <div class="mt-3"><label class="label">Referencia (opcional)</label>
+        <input id="dep-ref" class="input" placeholder="Nº de boleta de depósito"/>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="bcoDepositarChequeSave()">🏦 Depositar</button>`
+  });
+}
+async function bcoDepositarChequeSave() {
+  const chequeId = $('#dep-cheque')?.value;
+  const fecha = $('#dep-fecha')?.value;
+  if (!chequeId) return toast('Elegí un cheque','warn');
+  if (!fecha) return toast('Poné la fecha del depósito','warn');
+  try {
+    await api('/api/cheques/'+chequeId+'/cambiar-estado', { method:'POST', body: JSON.stringify({
+      estado:'depositado', cuentaBancoId: state.bancoCuentaId, fecha, referencia: ($('#dep-ref')?.value||'').trim()||null
+    })});
+    toast('Cheque depositado','success'); closeModal();
+    try { state.cache.bancoCuentas = (await api('/api/banco-cuentas')).data || state.cache.bancoCuentas; } catch {}
+    bcoVerMovs(state.bancoCuentaId);
+  } catch (e) { toast(e.message,'error'); }
+}
+
+// Conciliar un mes de esta cuenta → bloquea sus movimientos hasta reabrir.
+function bcoConciliarForm() {
+  const c = (state.cache.bancoCuentas||[]).find(x => x.id === state.bancoCuentaId);
+  if (!c) return;
+  const f = state._bcoMovFilter || {};
+  const periodo = (f.hasta || f.desde || new Date().toISOString().slice(0,10)).slice(0,7);
+  openModal({
+    title:'✅ Conciliar mes', size:'max-w-lg',
+    body:`
+      <div class="text-xs text-slate-500 mb-2">Al confirmar, los movimientos de <b>${esc(c.banco)}</b> de ese mes quedan <b>bloqueados</b> (no se crean, editan ni borran) hasta que reabras la conciliación.</div>
+      <div><label class="label">Mes a conciliar *</label>
+        <input id="con-periodo" type="month" class="input" value="${esc(periodo)}"/>
+      </div>
+      <div class="mt-3"><label class="label">Saldo del extracto bancario (opcional)</label>
+        <input id="con-saldo" type="number" step="0.01" class="input" placeholder="Saldo que figura en el resumen del banco"/>
+        <div class="text-[10px] text-slate-400 mt-1">Se guarda junto al saldo que calcula el sistema, para dejar la comparación registrada.</div>
+      </div>
+      <div class="mt-3"><label class="label">Observaciones (opcional)</label>
+        <input id="con-obs" class="input"/>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="bcoConciliarSave()">✅ Conciliar y bloquear</button>`
+  });
+}
+async function bcoConciliarSave() {
+  const periodo = $('#con-periodo')?.value;
+  if (!periodo) return toast('Elegí el mes','warn');
+  const saldoTxt = ($('#con-saldo')?.value||'').trim();
+  const body = { cuentaId: state.bancoCuentaId, periodo,
+    saldoExtracto: saldoTxt===''?null:Number(saldoTxt),
+    observaciones: ($('#con-obs')?.value||'').trim()||null };
+  try {
+    await api('/api/conciliaciones', { method:'POST', body: JSON.stringify(body) });
+    toast('Mes conciliado y bloqueado','success'); closeModal();
+    bcoVerMovs(state.bancoCuentaId);
+  } catch (e) { toast(e.message,'error'); }
+}
+async function bcoReabrirConcil(id, periodo) {
+  if (!confirm(`¿Reabrir la conciliación de ${periodo}? Los movimientos de ese mes vuelven a ser editables.`)) return;
+  try { await api('/api/conciliaciones/'+id, { method:'DELETE' }); toast('Conciliación reabierta','success'); bcoVerMovs(state.bancoCuentaId); }
+  catch (e) { toast(e.message,'error'); }
 }
 
 // ===== Movimientos de una TARJETA de crédito (funciona como una cuenta) =====

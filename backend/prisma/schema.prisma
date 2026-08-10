@@ -90,6 +90,7 @@ model Company {
   secuencias         SecuenciaComprobante[]
   entregasCereal     EntregaCereal[]
   viajeLiquidacion   ViajeLiquidacion[]
+  conciliaciones     ConciliacionBancaria[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -1557,6 +1558,7 @@ model BancoCuenta {
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   movimientos     BancoMovimiento[]
   transferIn      BancoMovimiento[] @relation("BancoTransferOrigen")
+  conciliaciones  ConciliacionBancaria[]
 
   @@index([companyId])
   @@index([banco])
@@ -1594,6 +1596,30 @@ model BancoMovimiento {
   @@index([tipo])
   @@index([chequeId])
   @@index([cuotaCreditoId])
+}
+
+// Conciliacion bancaria mensual, por cuenta. Cuando se confirma un periodo
+// (YYYY-MM) para una cuenta, los movimientos bancarios de esa cuenta en ese mes
+// quedan bloqueados (no se pueden crear/editar/borrar) hasta reabrir la
+// conciliacion. saldoExtracto = saldo del resumen del banco; saldoSistema =
+// saldo calculado por AgroCore al cerrar (para dejar la foto).
+model ConciliacionBancaria {
+  id            String   @id @default(cuid())
+  companyId     String
+  cuentaId      String
+  periodo       String     // "YYYY-MM"
+  fecha         DateTime @default(now())   // fecha de cierre/confirmacion
+  saldoExtracto Float?     // saldo declarado del resumen bancario
+  saldoSistema  Float?     // saldo calculado por el sistema al cerrar
+  observaciones String?
+  userId        String?
+  createdAt     DateTime @default(now())
+
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cuenta        BancoCuenta @relation(fields: [cuentaId], references: [id], onDelete: Cascade)
+
+  @@unique([cuentaId, periodo])
+  @@index([companyId])
 }
 
 // Historial de importaciones — cada importacion crea un lote para poder

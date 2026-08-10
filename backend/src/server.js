@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.58.0';
+const AGROCORE_VERSION = '2.59.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3304,7 +3304,7 @@ app.get('/api/campanas/:id/rinde', requireCompany, requirePermission('produccion
     const camp = await prisma.campana.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { lote: true } });
     if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
     const hectareas = Number(camp.lote?.hectareas || camp.hectareas || 0);
-    const viajes = await prisma.viaje.findMany({ where: { companyId: req.companyId, campanaId: camp.id } });
+    const viajes = await prisma.viaje.findMany({ where: { companyId: req.companyId, campanaId: camp.id, estado: { not: 'anulada' } } });
     const kgDeViaje = (v) => Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
     const kgViajes = viajes.reduce((a, v) => a + kgDeViaje(v), 0);
     // Ingresos de stock de esa campaña, excluyendo los auto-generados por un viaje
@@ -4357,6 +4357,11 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
     });
     const d = schema.parse(req.body || {});
     const fechaMov = d.fecha || cheque.fechaPago || new Date();
+    // Si el depósito/pago del cheque cae en un mes ya conciliado de esa cuenta, se bloquea.
+    if (d.cuentaBancoId) {
+      const bloq = await _conciliacionBloqueo(req.companyId, d.cuentaBancoId, fechaMov);
+      if (bloq) return res.status(400).json({ ok: false, error: `El mes ${bloq.periodo} de esa cuenta está conciliado. Reabrí la conciliación para depositar/registrar el cheque en ese mes.` });
+    }
     const result = await prisma.$transaction(async (tx) => {
       // 1) Actualizar estado del cheque
       const actualizado = await tx.cheque.update({
@@ -4848,7 +4853,7 @@ const viajeSchema = z.object({
   varios: z.number().nullable().optional(),
   total: z.number().nullable().optional(),
   flete: z.number().nullable().optional(),
-  estado: z.enum(['pendiente','cargado','descargado','facturado','pagado']).optional(),
+  estado: z.enum(['pendiente','cargado','descargado','facturado','pagado','anulada']).optional(),
   facturaCompraId: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
   // Destino del cereal (registrar a dónde va para luego cargar la liquidación)
@@ -4888,6 +4893,7 @@ const viajeSchema = z.object({
 // vía auto-settle); el resto se calcula desde el form salvo que el usuario lo
 // fuerce explícitamente.
 function deriveEstadoViaje(d, prev) {
+  if (prev && prev.estado === 'anulada') return 'anulada';   // una CP anulada no se re-activa al editar
   if (prev && prev.estado === 'pagado') return 'pagado';
   if (d.facturaCompraId)                return 'facturado';
   if (Number(d.kgDescarga || 0) > 0)    return 'descargado';
@@ -5282,11 +5288,47 @@ app.delete('/api/viajes', requireCompany, requirePermission('logistica:delete'),
   } catch (e) { next(e); }
 });
 
+// Anular una carta de porte / viaje: NO se borra, queda con estado "anulada" y
+// se revierten los movimientos que generó (egreso/ingreso de stock y la comisión
+// de chofer). Se puede reactivar después. Si está pagado o facturado, primero
+// hay que deshacer el pago/factura del transportista.
+app.post('/api/viajes/:id/anular', requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    if (existing.estado === 'anulada') return res.json({ ok: true, data: existing });
+    if (existing.facturaCompraId || ['facturado','pagado'].includes(existing.estado)) {
+      return res.status(400).json({ ok: false, error: `No se puede anular: el viaje está ${existing.estado==='pagado'?'pagado':'facturado'} (vinculado a la factura del transportista). Deshacé el pago o desvinculá la factura primero.` });
+    }
+    const row = await prisma.viaje.update({ where: { id: req.params.id }, data: { estado: 'anulada' } });
+    // Revierte stock: con estado "anulada", _sincronizarStockViaje borra los movimientos VIAJE-*.
+    await _sincronizarStockViaje(req.companyId, row);
+    // Revierte la comisión de chofer generada por el viaje (si no quedó ya liquidada).
+    await prisma.movimientoEmpleado.deleteMany({ where: { companyId: req.companyId, viajeId: row.id, categoria: 'comision', liquidacionId: null } });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Reactivar una CP anulada: recalcula su estado según los datos y vuelve a
+// generar los movimientos de stock y la comisión de chofer.
+app.post('/api/viajes/:id/reactivar', requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    if (existing.estado !== 'anulada') return res.json({ ok: true, data: existing });
+    const estado = deriveEstadoViaje(existing, null);   // prev=null: recomputa limpio (no arrastra "anulada")
+    const row = await prisma.viaje.update({ where: { id: req.params.id }, data: { estado } });
+    await _sincronizarStockViaje(req.companyId, row);
+    await _comisionChoferViaje(req.companyId, row);
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
 // Cambio manual de estado (sobre todo para forzar "pagado" sin esperar al
 // hook automático del cobro/pago).
 app.post('/api/viajes/:id/estado', requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
-    const { estado } = z.object({ estado: z.enum(['pendiente','cargado','descargado','facturado','pagado']) }).parse(req.body);
+    const { estado } = z.object({ estado: z.enum(['pendiente','cargado','descargado','facturado','pagado','anulada']) }).parse(req.body);
     const existing = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const row = await prisma.viaje.update({ where: { id: req.params.id }, data: { estado } });
@@ -6935,7 +6977,7 @@ function _viajeEsEntrega(v){ return (v.destinoTipo === 'cerealera' || v.destinoT
 app.get('/api/entregas-grano', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     const [viajes, links, liqs, depos] = await Promise.all([
-      prisma.viaje.findMany({ where: { companyId: req.companyId, destinoTipo: { in: ['cerealera','venta_directa'] } }, orderBy: { fecha: 'desc' } }),
+      prisma.viaje.findMany({ where: { companyId: req.companyId, destinoTipo: { in: ['cerealera','venta_directa'] }, estado: { not: 'anulada' } }, orderBy: { fecha: 'desc' } }),
       prisma.viajeLiquidacion.findMany({ where: { companyId: req.companyId } }),
       prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId }, select: { id: true, numero: true, neto: true, cobrado: true, kilosNetos: true } }),
       prisma.deposito.findMany({ where: { OR: [{ companyId: req.companyId }, { companyId: null, compartido: true }] }, select: { id: true, nombre: true } }),
@@ -6988,7 +7030,7 @@ app.delete('/api/posicion-granos/vincular', requireCompany, requirePermission('v
 app.get('/api/posicion-granos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     const [viajes, liqs, prods] = await Promise.all([
-      prisma.viaje.findMany({ where: { companyId: req.companyId, destinoTipo: { in: ['cerealera','venta_directa'] } }, select: { producto: true, kgDescarga: true, kgNetoDest: true, kgNeto: true, cantidad: true, destinoTipo: true } }),
+      prisma.viaje.findMany({ where: { companyId: req.companyId, destinoTipo: { in: ['cerealera','venta_directa'] }, estado: { not: 'anulada' } }, select: { producto: true, kgDescarga: true, kgNetoDest: true, kgNeto: true, cantidad: true, destinoTipo: true } }),
       prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId }, select: { productoId: true, kilosNetos: true, neto: true, cobrado: true } }),
       prisma.producto.findMany({ where: { companyId: req.companyId }, select: { id: true, nombre: true } }),
     ]);
@@ -7376,7 +7418,7 @@ async function _consultaAsistente(texto, companyId, ctx, req) {
   // --- CEREAL: a liquidar / comprometido a entregar ---
   if (/\b(cereal|grano|granos|soja|maiz|maíz|trigo|sorgo|girasol)\b/.test(t) && /\b(comprometid|entregar|liquidar|a liquidar|posicion|posición|falta)\b/.test(t)) {
     const [viajes, liqs, prods] = await Promise.all([
-      prisma.viaje.findMany({ where: { companyId, destinoTipo: { in: ['cerealera', 'venta_directa'] } }, select: { producto: true, kgDescarga: true, kgNetoDest: true, kgNeto: true, cantidad: true } }),
+      prisma.viaje.findMany({ where: { companyId, destinoTipo: { in: ['cerealera', 'venta_directa'] }, estado: { not: 'anulada' } }, select: { producto: true, kgDescarga: true, kgNetoDest: true, kgNeto: true, cantidad: true } }),
       prisma.liquidacionCereal.findMany({ where: { companyId }, select: { productoId: true, kilosNetos: true } }),
       prisma.producto.findMany({ where: { companyId }, select: { id: true, nombre: true } }),
     ]);
@@ -9970,11 +10012,90 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
   } catch (e) { next(e); }
 });
 
+// ============================================================
+// CONCILIACION BANCARIA mensual por cuenta. Al confirmar un periodo (YYYY-MM)
+// de una cuenta, sus movimientos de ese mes quedan bloqueados (no se crean, ni
+// editan, ni borran) hasta reabrir la conciliacion.
+// ============================================================
+function _periodoDe(fecha) {
+  const d = new Date(fecha);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function _finDeMes(periodo) {
+  const [y, m] = periodo.split('-').map(Number);
+  return new Date(y, m, 0, 23, 59, 59, 999);   // dia 0 del mes siguiente = ultimo dia del mes
+}
+// Devuelve la conciliacion que bloquea (cuenta+mes) o null.
+async function _conciliacionBloqueo(companyId, cuentaId, fecha) {
+  if (!cuentaId || !fecha) return null;
+  return prisma.conciliacionBancaria.findFirst({ where: { companyId, cuentaId, periodo: _periodoDe(fecha) } });
+}
+// Saldo de la cuenta hasta el fin del periodo (foto para la conciliacion).
+async function _saldoCuentaHasta(companyId, cuentaId, hasta) {
+  const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: cuentaId, companyId } });
+  if (!cuenta) return 0;
+  let saldo = Number(cuenta.saldoInicial || 0);
+  const movs = await prisma.bancoMovimiento.findMany({ where: { companyId, cuentaId, fecha: { lte: hasta } }, select: { tipo: true, monto: true } });
+  for (const m of movs) {
+    const monto = Number(m.monto || 0);
+    if (BANCO_TIPOS_INGRESO.includes(m.tipo)) saldo += monto;
+    else if (BANCO_TIPOS_EGRESO.includes(m.tipo)) saldo -= monto;
+  }
+  return saldo;
+}
+
+app.get('/api/conciliaciones', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.cuentaId) where.cuentaId = String(req.query.cuentaId);
+    const data = await prisma.conciliacionBancaria.findMany({ where, orderBy: { periodo: 'desc' } });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/conciliaciones', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      cuentaId: z.string().min(1),
+      periodo: z.string().regex(/^\d{4}-\d{2}$/, 'Periodo debe ser YYYY-MM'),
+      saldoExtracto: z.number().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body);
+    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaId, companyId: req.companyId } });
+    if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
+    const yaExiste = await prisma.conciliacionBancaria.findFirst({ where: { cuentaId: d.cuentaId, periodo: d.periodo } });
+    if (yaExiste) return res.status(400).json({ ok: false, error: 'Ese mes ya está conciliado para esta cuenta.' });
+    const saldoSistema = await _saldoCuentaHasta(req.companyId, d.cuentaId, _finDeMes(d.periodo));
+    const row = await prisma.conciliacionBancaria.create({
+      data: {
+        companyId: req.companyId, cuentaId: d.cuentaId, periodo: d.periodo,
+        saldoExtracto: d.saldoExtracto ?? null, saldoSistema,
+        observaciones: d.observaciones || null, userId: req.user?.id || null,
+      },
+    });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Reabrir (borrar) una conciliacion → desbloquea el mes de esa cuenta.
+app.delete('/api/conciliaciones/:id', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.conciliacionBancaria.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    await prisma.conciliacionBancaria.delete({ where: { id: existing.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const d = bancoMovSchema.parse(req.body);
     const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaId, companyId: req.companyId } });
     if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
+    { const bloq = await _conciliacionBloqueo(req.companyId, d.cuentaId, d.fecha);
+      if (bloq) return res.status(400).json({ ok: false, error: `El mes ${bloq.periodo} de esta cuenta está conciliado. Reabrí la conciliación para cargar movimientos en ese mes.` }); }
+    { if (d.cuentaContraId) { const bloq2 = await _conciliacionBloqueo(req.companyId, d.cuentaContraId, d.fecha);
+      if (bloq2) return res.status(400).json({ ok: false, error: `El mes ${bloq2.periodo} de la cuenta destino está conciliado. Reabrí la conciliación primero.` }); } }
     // Transferencia interna: validar cuenta destino y crear el espejo en transacción
     const esTransferInterna = (d.tipo === 'transferencia_out' || d.tipo === 'transferencia_in') && d.cuentaContraId;
     if (esTransferInterna) {
@@ -10047,6 +10168,11 @@ app.put('/api/banco-movimientos/:id', requireCompany, requirePermission('finanza
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const schema = bancoMovSchema.partial().extend({ conciliado: z.boolean().optional(), syncMirror: z.boolean().optional() });
     const parsed = schema.parse(req.body);
+    // Bloqueo por conciliación: ni el mes original ni el mes destino pueden estar conciliados.
+    { const bloqOrig = await _conciliacionBloqueo(req.companyId, existing.cuentaId, existing.fecha);
+      const bloqDest = await _conciliacionBloqueo(req.companyId, parsed.cuentaId || existing.cuentaId, parsed.fecha || existing.fecha);
+      const bloq = bloqOrig || bloqDest;
+      if (bloq) return res.status(400).json({ ok: false, error: `El mes ${bloq.periodo} está conciliado. Reabrí la conciliación para modificar este movimiento.` }); }
     // syncMirror y cajaEfectivo no son columnas del movimiento.
     const { syncMirror, cajaEfectivo, ...d } = parsed;
     const esTransfer = (existing.tipo === 'transferencia_in' || existing.tipo === 'transferencia_out') && existing.cuentaContraId;
@@ -10080,6 +10206,12 @@ app.delete('/api/banco-movimientos/:id', requireCompany, requirePermission('fina
   try {
     const existing = await prisma.bancoMovimiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    { const bloq = await _conciliacionBloqueo(req.companyId, existing.cuentaId, existing.fecha);
+      if (bloq) return res.status(400).json({ ok: false, error: `El mes ${bloq.periodo} de esta cuenta está conciliado. Reabrí la conciliación para borrar el movimiento.` }); }
+    // Si este movimiento vino de depositar/cobrar un cheque, al borrarlo volvemos el cheque a cartera.
+    if (existing.chequeId && (existing.tipo === 'cheque_cobrado' || existing.tipo === 'cheque_pagado')) {
+      await prisma.cheque.updateMany({ where: { id: existing.chequeId, companyId: req.companyId }, data: { estado: 'en_cartera', fechaEndoso: null } });
+    }
     // Si fue parte de una transferencia interna, borrar también el espejo
     if (existing.cuentaContraId && (existing.tipo === 'transferencia_in' || existing.tipo === 'transferencia_out')) {
       const otroTipo = existing.tipo === 'transferencia_in' ? 'transferencia_out' : 'transferencia_in';
