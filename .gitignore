@@ -6,3 +6,6 @@ backups/
 .DS_Store
 Thumbs.db
 *.tmp
+
+# Herramientas de dev / marketing (no se despliegan a clientes)
+_dev/
