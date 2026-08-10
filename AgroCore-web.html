@@ -2541,6 +2541,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'10/08/2026',
+      titulo:'📅 v2.58.0 — Fecha en el chat y "Volver a la nómina" arreglado',
+      desc:'En el <b>chat del equipo</b> ahora aparece un <b>separador con el día</b> (Hoy / Ayer / fecha) entre los mensajes, para saber de cuándo es cada uno. Además, en la <b>planilla de empleados</b>, si cargás varios movimientos seguidos y tocás <b>Volver a la nómina</b>, ahora vuelve de una sola vez (antes había que tocarlo una vez por cada movimiento cargado).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/08/2026',
       titulo:'📎 v2.57.1 — El asistente lee archivos/fotos y abre la carga ya completada',
       desc:'En el chat del asistente hay dos botones: <b>📎 Adjuntar</b> (PDF o imagen) y <b>📷 Foto</b> (cámara del celular). El bot <b>reconoce el documento y te abre el formulario ya cargado</b> para que completes lo que falte y confirmes: <b>liquidación</b> de cereal/animales, <b>factura de compra</b> (con los datos del QR de ARCA), <b>ticket/gasto</b> (movimiento diario) y <b>orden de trabajo</b> (labor). El <b>cheque</b> te lleva a su pantalla. Requiere la <b>IA activada</b> (Configuración → 🤖 Asistente IA).' },
@@ -7233,13 +7236,32 @@ async function chatReload(){
   const prevScrollHeight = cont.scrollHeight;
   const forceBottom = cont.dataset.conv !== conv; // al cambiar de conversación sí vamos al fondo
   cont.dataset.conv = conv;
+  // Etiqueta de día para los separadores del chat (Hoy / Ayer / fecha completa).
+  const _chatDiaLabel = (iso)=>{
+    const d = new Date(iso);
+    const hoy = new Date();
+    const ayer = new Date(); ayer.setDate(hoy.getDate()-1);
+    const mismo = (a,b)=>a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
+    if (mismo(d,hoy)) return 'Hoy';
+    if (mismo(d,ayer)) return 'Ayer';
+    const s = d.toLocaleDateString('es-AR',{weekday:'long',day:'2-digit',month:'2-digit',year:'numeric'});
+    return s.charAt(0).toUpperCase()+s.slice(1);
+  };
+  let _chatLastDay = '';
   cont.innerHTML = msgs.map(m=>{
+    // Separador de fecha cuando cambia el día respecto del mensaje anterior.
+    let sep = '';
+    const dayKey = m.createdAt ? new Date(m.createdAt).toDateString() : '';
+    if (dayKey && dayKey !== _chatLastDay){
+      _chatLastDay = dayKey;
+      sep = `<div class="self-center my-2 px-3 py-0.5 rounded-full bg-slate-200 text-slate-500 text-[11px] font-medium">${esc(_chatDiaLabel(m.createdAt))}</div>`;
+    }
     if (esAsistente && m.rol==='assistant'){
-      return `<div class="self-start max-w-[85%] bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm px-3 py-2 text-sm whitespace-pre-line">🤖 ${esc(m.texto)}</div>`;
+      return sep + `<div class="self-start max-w-[85%] bg-slate-100 text-slate-800 rounded-2xl rounded-tl-sm px-3 py-2 text-sm whitespace-pre-line">🤖 ${esc(m.texto)}</div>`;
     }
     const mine = m.userId===yo && m.rol!=='assistant';
     const hora = m.createdAt? new Date(m.createdAt).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}):'';
-    return `<div class="max-w-[85%] ${mine?'self-end bg-emerald-600 text-white rounded-tr-sm':'self-start bg-white border border-slate-200 text-slate-800 rounded-tl-sm'} rounded-2xl px-3 py-2 text-sm">
+    return sep + `<div class="max-w-[85%] ${mine?'self-end bg-emerald-600 text-white rounded-tr-sm':'self-start bg-white border border-slate-200 text-slate-800 rounded-tl-sm'} rounded-2xl px-3 py-2 text-sm">
       ${(!mine && !esAsistente)?`<div class="text-[11px] font-semibold text-emerald-700 mb-0.5">${esc(m.autorNombre||'—')}</div>`:''}
       <div>${esc(m.texto)}</div>
       <div class="text-[10px] ${mine?'text-emerald-100':'text-slate-400'} text-right mt-0.5">${hora}</div>
@@ -19858,7 +19880,7 @@ async function empMovSave(movId){
       {method:movId?'PUT':'POST',body:JSON.stringify(data)});
     toast(movId?'Actualizado':'Agregado','success'); closeModal();
     state.empMes = (data.fecha||'').slice(0,7) || state.empMes;
-    await empleAbrir(empId);
+    await empleAbrir(empId, false);
   } catch (e) { toast(e.message,'error'); }
 }
 // --- Gestor de categorías de planilla (agregar / eliminar) ---
@@ -19907,7 +19929,7 @@ async function empMovDel(movId){
   const empId=state.empFichaId;
   try{
     await api('/api/empleados/'+empId+'/movimientos/'+movId,{method:'DELETE'});
-    toast('Borrado','success'); await empleAbrir(empId);
+    toast('Borrado','success'); await empleAbrir(empId, false);
   }catch(e){ toast(e.message,'error'); }
 }
 
@@ -19949,7 +19971,7 @@ async function empRopaSave(ropaId){
     await api('/api/empleados/'+empId+'/ropa'+(ropaId?'/'+ropaId:''),
       {method:ropaId?'PUT':'POST',body:JSON.stringify(data)});
     toast(ropaId?'Entrega actualizada':'Entrega registrada','success');
-    closeModal(); await empleAbrir(empId);
+    closeModal(); await empleAbrir(empId, false);
   }catch(e){ toast(e.message,'error'); }
 }
 async function empRopaDel(ropaId){
@@ -19957,7 +19979,7 @@ async function empRopaDel(ropaId){
   const empId=state.empFichaId;
   try{
     await api('/api/empleados/'+empId+'/ropa/'+ropaId,{method:'DELETE'});
-    toast('Borrado','success'); await empleAbrir(empId);
+    toast('Borrado','success'); await empleAbrir(empId, false);
   }catch(e){ toast(e.message,'error'); }
 }
 
@@ -20063,7 +20085,7 @@ async function empLiqSave(periodo){
     toast('Sueldo liquidado','success'); closeModal();
     delete state.cache.efectivo; delete state.cache.cheques;
     state.empMes=periodo;
-    await empleAbrir(empId);
+    await empleAbrir(empId, false);
   }catch(e){ toast(e.message,'error'); }
 }
 async function empLiqAnular(liqId){
@@ -20073,7 +20095,7 @@ async function empLiqAnular(liqId){
     await api('/api/empleados/'+empId+'/liquidaciones/'+liqId,{method:'DELETE'});
     toast('Liquidación anulada','success');
     delete state.cache.efectivo; delete state.cache.cheques;
-    await empleAbrir(empId);
+    await empleAbrir(empId, false);
   }catch(e){ toast(e.message,'error'); }
 }
 
