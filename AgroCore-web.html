@@ -2541,6 +2541,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'11/08/2026',
+      titulo:'📅 v2.60.1 — Fechas de importación corregidas',
+      desc:'Se corrigió un desfasaje que hacía que las fechas de los datos importados por Excel (cartas de porte, cheques, etc.) quedaran un día antes. Ahora se guardan en el día correcto.' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
+      titulo:'🚛 v2.60.0 — Importador de cartas de porte mejorado',
+      desc:'Al importar cartas de porte por Excel ahora se cargan bien todos los datos: <b>PN CP como Kg de carga</b> y <b>PN Final como Kg de descarga</b> (antes se mezclaban), el <b>CUIT separado del nombre</b> del destinatario/destino/rte. comercial, la <b>campaña</b> (se vincula si existe), el <b>pagador del flete</b> y las cartas <b>ANULADAS</b> (quedan con estado Anulada).' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'10/08/2026',
       titulo:'📥 v2.60.0 — Importador de cheques: más campos',
       desc:'Al importar cheques por Excel (Planillas Especiales), ahora el <b>CUIT del titular</b>, el <b>endosante</b>, la <b>fecha de recepción</b> y la <b>fecha de endoso</b> se cargan en sus campos propios (antes iban todos juntos a Observaciones). Aplica a los e-cheques y a los cheques físicos de terceros.' },

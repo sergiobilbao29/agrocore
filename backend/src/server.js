@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.60.0';
+const AGROCORE_VERSION = '2.60.1';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12425,14 +12425,15 @@ function _parseFechaArg(v) {
   if (v instanceof Date) return v;
   if (typeof v === 'number') {              // serial de Excel
     const epoch = new Date(Date.UTC(1899, 11, 30));
-    return new Date(epoch.getTime() + v * 86400000);
+    return new Date(epoch.getTime() + v * 86400000 + 12 * 3600000);  // +12h: fija el día sin importar la zona
   }
   const s = String(v).trim();
   // dd/mm/yyyy o dd/mm/yy
   const m = s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
   if (m) {
     let yyyy = +m[3]; if (yyyy < 100) yyyy += 2000;
-    return new Date(yyyy, +m[2]-1, +m[1]);
+    // Mediodía UTC: evita que en un server en UTC la fecha se corra un día al mostrarla en Argentina.
+    return new Date(Date.UTC(yyyy, +m[2]-1, +m[1], 12, 0, 0));
   }
   const d = new Date(s); return isNaN(d.getTime()) ? null : d;
 }
@@ -12654,23 +12655,56 @@ app.post('/api/admin/importar-cliente/cartas-porte', authMiddleware, requireComp
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sh = wb.SheetNames.find(n => /carta.*porte/i.test(n)) || wb.SheetNames[0];
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[sh], { defval: null, raw: false });
+    // Separa CUIT y nombre. Acepta columnas separadas (CUIT + nombre) o el formato
+    // viejo con todo junto ("30-71711442-2 J.H. B"): en ese caso extrae el CUIT.
+    const cuitNom = (cuitCol, nomCol) => {
+      const m = [cuitCol, nomCol].map(x => x == null ? '' : String(x)).join(' ').match(/\d{2}-?\d{7,8}-?\d/);
+      const cuit = (cuitCol && String(cuitCol).trim()) ? String(cuitCol).trim() : (m ? m[0] : null);
+      let nombre = (nomCol != null ? String(nomCol) : '').trim();
+      if (m && nombre.includes(m[0])) nombre = nombre.replace(m[0], '').trim();
+      return { cuit: cuit || null, nombre: nombre || null };
+    };
     let ok = 0; const errores = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       try {
         if (!r['N° Carta Porte'] && !r['N° CTG']) continue;
+        const anulTxt = String(r['P.N Final'] || '') + ' ' + String(r['Rte. Comercial Venta Primaria'] || r['Rte Comercial'] || '') + ' ' + String(r['Estado'] || '');
+        const anulada = /anulad/i.test(anulTxt);
+        const pnCP    = _parseMonto(r['P.N CP']);
+        const pnFinal = /anulad/i.test(String(r['P.N Final'] || '')) ? null : _parseMonto(r['P.N Final']);
+        const rteP  = cuitNom(r['Rte Comercial CUIT'],     r['Rte Comercial']     || r['Rte. Comercial Venta Primaria']);
+        const rteS  = cuitNom(r['Rte Comercial Sec CUIT'], r['Rte Comercial Sec'] || r['Rte. Comercial Venta Secundaria']);
+        const dtar  = cuitNom(r['Destinatario CUIT'],      r['Destinatario']);
+        const dest  = cuitNom(r['Destino CUIT'],           r['Destino']);
+        // Campaña: si existe una campaña con ese nombre, la vinculamos.
+        let campanaId = null;
+        if (r['Campaña']) { const c = await prisma.campana.findFirst({ where: { companyId: req.companyId, nombre: { contains: String(r['Campaña']).trim() } }, select: { id: true } }); campanaId = c?.id || null; }
+        const estado = anulada ? 'anulada' : (pnFinal > 0 ? 'descargado' : (pnCP > 0 ? 'cargado' : 'pendiente'));
         await prisma.viaje.create({ data: {
           companyId: req.companyId,
           fecha: _parseFechaArg(r['Fecha']) || new Date(),
+          campanaId,
           producto: r['Producto'] || null,
           chofer: r['Chofer'] || null,
-          destino: r['Destinatario'] || r['Destino'] || null,
+          destino: dest.nombre || dtar.nombre || null,
           cartaPorte: r['N° Carta Porte'] ? String(r['N° Carta Porte']) : null,
           ctg: r['N° CTG'] ? String(r['N° CTG']) : null,
-          cantidad: _parseMonto(r['P.N Final'] || r['P.N CP']),
-          flete: _parseMonto(r['Flete pagador']),
-          estado: 'descargado',
-          observaciones: [r['Campaña'] && `Campaña ${r['Campaña']}`, r['Titular Carta Porte'] && `Titular: ${r['Titular Carta Porte']}`, r['Rte. Comercial Venta Primaria'] && `Rte: ${r['Rte. Comercial Venta Primaria']}`].filter(Boolean).join(' · ') || null,
+          cantidad: (pnCP != null ? pnCP : pnFinal),   // kg cargados (PN CP); si no hay, cae al final
+          kgNeto: pnCP != null ? pnCP : null,          // Peso Neto Carta de Porte = carga
+          kgDescarga: pnFinal != null ? pnFinal : null,
+          kgNetoDest: pnFinal != null ? pnFinal : null, // Peso Neto Final = descarga
+          pagadorFlete: r['Flete pagador'] || null,
+          estado,
+          observaciones: [
+            r['Campaña'] && `Campaña ${r['Campaña']}`,
+            r['Titular Carta Porte'] && `Titular: ${r['Titular Carta Porte']}`,
+            rteP.nombre && `Rte. comercial: ${rteP.nombre}${rteP.cuit ? ' (' + rteP.cuit + ')' : ''}`,
+            rteS.nombre && rteS.nombre !== rteP.nombre && `Rte. comercial sec.: ${rteS.nombre}${rteS.cuit ? ' (' + rteS.cuit + ')' : ''}`,
+            dtar.nombre && `Destinatario: ${dtar.nombre}${dtar.cuit ? ' (' + dtar.cuit + ')' : ''}`,
+            dest.cuit && `CUIT destino: ${dest.cuit}`,
+            anulada && 'ANULADA',
+          ].filter(Boolean).join(' · ') || null,
         }});
         ok++;
       } catch (e) { errores.push({ fila: i+2, error: e.message }); }
