@@ -1604,6 +1604,7 @@ model EntregaCereal {
 model BancoCuenta {
   id              String   @id @default(cuid())
   companyId       String
+  nombre          String?                      // nombre para mostrar en la vista general (si está, reemplaza al banco)
   banco           String                       // ej: "Banco Nación", "Galicia"
   sucursal        String?
   tipo            String   @default("cta_cte") // "cta_cte" | "caja_ahorro" | "usd" | "otro"

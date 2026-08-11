@@ -2558,6 +2558,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
+      titulo:'🏷️ v2.69.0 — Cuentas bancarias: nombre propio + marcar en desuso',
+      desc:'Cada cuenta bancaria puede tener un <b>nombre</b> (ej. "Cuenta operativa", "Sueldos"): si lo cargás, es lo que se muestra en el listado en lugar del banco. Además, en la cuenta se puede marcar <b>en desuso</b>, y el listado general tiene un tilde <b>Solo activas</b> (activado por defecto) que oculta las cuentas en desuso — se destilda para verlas.' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
+      titulo:'🏦 v2.68.0 — Cuentas bancarias: cada empresa ve las suyas + transferir a otra empresa',
+      desc:'En <b>Bancos</b> cada empresa ve <b>solo sus propias cuentas</b> (ya no aparecen las de las otras empresas del grupo). Al hacer una <b>transferencia</b> (in/out) el selector de <b>cuenta destino</b> sí lista las cuentas de <b>todas las empresas del grupo</b>, agrupadas por empresa: elegís la empresa y la cuenta, y se registran los <b>dos movimientos</b> (salida en la tuya, entrada en la otra). Además, al <b>editar una transferencia</b> podés <b>corregir la cuenta destino</b> si te equivocaste: el sistema mueve el movimiento espejo a la cuenta correcta.' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
       titulo:'🔎 v2.67.0 — Movimientos diarios: filtros de Categoría, Familia y Caja',
       desc:'En <b>Movimientos diarios</b> el filtro de <b>Categoría</b> ahora muestra las categorías reales de gasto (ya no aparecen etiquetas de banco como "Transferencia in/out"). Se sumó un filtro de <b>Familia</b> con <b>multiselección</b> (elegís varias a la vez), y cuando filtrás por método <b>Efectivo</b> aparece el selector de <b>Caja</b> para ver los movimientos de una caja puntual.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
@@ -27104,13 +27110,19 @@ pages.bancos = async function() {
   const totalUSD = cuentas.filter(c => c.moneda === 'USD' && c.activo).reduce((a, c) => a + Number(c.saldo||0), 0);
   const hayBilleteras = cuentas.some(c => c.esBilleteraVirtual);
   const cf = state._bcoFiltro || 'todas';
-  const cuentasVis = cuentas.filter(c => cf==='todas' ? true : cf==='billetera' ? c.esBilleteraVirtual : !c.esBilleteraVirtual);
+  const soloActivas = state._bcoSoloActivas !== false;   // por defecto solo cuentas activas (oculta las en desuso)
+  const hayEnDesuso = cuentas.some(c => c.activo === false);
+  const cuentasVis = cuentas.filter(c => {
+    if (soloActivas && c.activo === false) return false;
+    return cf==='todas' ? true : cf==='billetera' ? c.esBilleteraVirtual : !c.esBilleteraVirtual;
+  });
   const chip = (k,txt)=>`<button class="btn ${cf===k?'btn-primary':'btn-secondary'} text-xs" onclick="state._bcoFiltro='${k}'; pages.bancos()">${txt}</button>`;
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-2 flex-wrap">
         <div class="text-sm text-slate-600">${cuentasVis.length} de ${cuentas.length} cuenta${cuentas.length===1?'':'s'}</div>
         ${hayBilleteras?`<div class="flex gap-1">${chip('todas','Todas')}${chip('banco','🏛️ Bancos')}${chip('billetera','📲 Billeteras')}</div>`:''}
+        <label class="text-xs text-slate-600 flex items-center gap-1 ml-1 cursor-pointer" title="Ocultar cuentas marcadas en desuso"><input type="checkbox" ${soloActivas?'checked':''} onchange="state._bcoSoloActivas=this.checked; pages.bancos()"/> Solo activas</label>
       </div>
       ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoCuentaForm()">+ Nueva cuenta</button>`:''}
     </div>
@@ -27124,12 +27136,11 @@ pages.bancos = async function() {
         <div class="kpi cursor-pointer hover:shadow-md transition" onclick='bcoVerMovs(${JSON.stringify(c.id)})'>
           <div class="flex items-start justify-between gap-2 mb-2">
             <div class="min-w-0">
-              <div class="font-bold text-slate-800 truncate">${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.banco)}${c.sucursal?` <span class="text-xs text-slate-500 font-normal">· ${esc(c.sucursal)}</span>`:''}</div>
+              <div class="font-bold text-slate-800 truncate">${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.nombre || c.banco)}${c.sucursal?` <span class="text-xs text-slate-500 font-normal">· ${esc(c.sucursal)}</span>`:''}</div>
               <div class="text-[11px] text-slate-500 mt-0.5">
-                ${c.esBilleteraVirtual?'Billetera virtual':(c.tipo==='cta_cte'?'Cta. Corriente':c.tipo==='caja_ahorro'?'Caja de Ahorro':c.tipo==='usd'?'Cuenta USD':'Otro')}
+                ${c.nombre?`${esc(c.banco)} · `:''}${c.esBilleteraVirtual?'Billetera virtual':(c.tipo==='cta_cte'?'Cta. Corriente':c.tipo==='caja_ahorro'?'Caja de Ahorro':c.tipo==='usd'?'Cuenta USD':'Otro')}
                 ${c.numero?` · ${esc(c.numero)}`:''}${c.alias?` · alias: ${esc(c.alias)}`:''}
               </div>
-              ${c.empresaNombre?`<div class="text-[10px] mt-0.5"><span class="badge badge-gray" style="font-size:10px">🏢 ${esc(c.empresaNombre)}</span></div>`:''}
             </div>
             <div class="flex items-center gap-1 flex-shrink-0">
               ${c.esBilleteraVirtual?`<span class="badge text-[10px]" style="background:#f3e8ff;color:#6b21a8;border:1px solid #e9d5ff">📲 Billetera</span>`:''}
@@ -27245,12 +27256,16 @@ async function tarjetaDel(id) {
 }
 
 function bcoCuentaForm(id=null) {
-  let c = { banco:'', sucursal:'', tipo:'cta_cte', moneda:'ARS', numero:'', cbu:'', alias:'', titular:'', saldoInicial:0, observaciones:'', activo:true };
+  let c = { nombre:'', banco:'', sucursal:'', tipo:'cta_cte', moneda:'ARS', numero:'', cbu:'', alias:'', titular:'', saldoInicial:0, observaciones:'', activo:true };
   if (id) { const cur = (state.cache.bancoCuentas||[]).find(x => x.id === id); if (cur) c = { ...c, ...cur }; }
   openModal({
     title: id?'Editar cuenta bancaria':'Nueva cuenta bancaria', size:'max-w-2xl',
     body: `
       <div class="grid grid-cols-3 gap-3 mb-3">
+        <div class="col-span-3"><label class="label">Nombre de la cuenta</label>
+          <input id="bc-nombre" class="input" value="${esc(c.nombre||'')}" placeholder="Ej: Cuenta operativa, Sueldos, Naranja X… (es lo que se muestra en el listado)"/>
+          <div class="text-[10px] text-slate-400 mt-1">Si lo cargás, en la vista general se muestra este nombre en lugar del banco.</div>
+        </div>
         <div class="col-span-2"><label class="label">Banco *</label>
           ${(()=>{ const bancos=catByTipo('Banco').map(b=>b.nombre).filter(Boolean); const cur=c.banco||''; const opts=[...new Set(cur&&!bancos.includes(cur)?[cur,...bancos]:bancos)]; return `<select id="bc-banco" class="input"><option value="">— Elegir banco —</option>${opts.map(b=>`<option value="${esc(b)}" ${b===cur?'selected':''}>${esc(b)}</option>`).join('')}</select>`; })()}
           <div class="text-[10px] text-slate-400 mt-1">Los bancos se administran en Catálogos → Bancos.</div>
@@ -27286,9 +27301,9 @@ function bcoCuentaForm(id=null) {
         <input id="bc-billetera" type="checkbox" ${c.esBilleteraVirtual?'checked':''}/>
         <label for="bc-billetera" class="text-sm text-violet-800">📲 Es <b>billetera virtual</b> (Naranja X, Mercado Pago, Ualá…) — se trata igual que una cuenta pero se puede filtrar aparte.</label>
       </div>
-      <div class="mt-3 flex items-center gap-2">
-        <input id="bc-act" type="checkbox" ${c.activo!==false?'checked':''}/>
-        <label for="bc-act">Cuenta activa</label>
+      <div class="mt-3 flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
+        <input id="bc-desuso" type="checkbox" ${c.activo===false?'checked':''}/>
+        <label for="bc-desuso" class="text-sm text-slate-700">🚫 Cuenta <b>en desuso</b> — no aparece en el listado general (se puede ver destildando "Solo activas").</label>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='bcoCuentaSave(${id?JSON.stringify(id):"null"})'>💾 Guardar</button>`
@@ -27304,6 +27319,7 @@ async function bcoCuentaSave(id) {
     let fechaISO = null;
     if (fec) { const d = new Date(fec + 'T12:00:00'); if (!isNaN(d)) fechaISO = d.toISOString(); }
     data = {
+      nombre: gv('#bc-nombre').trim()||null,
       banco: gv('#bc-banco').trim(),
       sucursal: gv('#bc-suc').trim()||null,
       tipo: gv('#bc-tipo'),
@@ -27316,7 +27332,7 @@ async function bcoCuentaSave(id) {
       fechaInicial: fechaISO,   // mediodía local: evita corrimientos por zona horaria
       observaciones: gv('#bc-obs').trim()||null,
       esBilleteraVirtual: gc('#bc-billetera'),
-      activo: gc('#bc-act'),
+      activo: !gc('#bc-desuso'),   // "en desuso" tildado = cuenta inactiva
     };
   } catch (e) { return toast('Error al leer el formulario: '+(e.message||e),'error'); }
   if (!data.banco) return toast('Falta el banco','warn');
@@ -27623,10 +27639,22 @@ async function tarjetaMovDel(id) {
   } catch (e) { toast(e.message,'error'); }
 }
 
-function bcoMovForm(id=null) {
+// Opciones de cuenta destino (transferencias), agrupadas por empresa del grupo.
+function bcoDestinoOptions(cuentasGrupo, selectedId, excludeId){
+  const byEmp = {};
+  (cuentasGrupo||[]).filter(c=>c.activo).forEach(c => { const e = c.empresaNombre || '—'; (byEmp[e]=byEmp[e]||[]).push(c); });
+  return Object.entries(byEmp).map(([emp, arr]) =>
+    `<optgroup label="${esc(emp)}">${arr.map(c=>`<option value="${c.id}" ${c.id===selectedId?'selected':''} ${c.id===excludeId?'disabled':''}>${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.nombre || c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('')}</optgroup>`
+  ).join('');
+}
+async function bcoMovForm(id=null) {
   const cuentas = state.cache.bancoCuentas || [];
+  // Cuentas de TODAS las empresas del grupo (para elegir la cuenta destino de una transferencia).
+  let cuentasGrupo = [];
+  try { cuentasGrupo = (await api('/api/banco-cuentas?grupo=1')).data || []; state.cache.bancoCuentasGrupo = cuentasGrupo; } catch { cuentasGrupo = state.cache.bancoCuentasGrupo || cuentas; }
   const m = id ? (state.cache.bancoMovs||[]).find(x=>x.id===id) : null;
   const editMode = !!m;
+  const esTransferEdit = editMode && m && (m.tipo==='transferencia_in'||m.tipo==='transferencia_out') && m.cuentaContraId;
   const selCuenta = m ? m.cuentaId : state.bancoCuentaId;
   const fechaVal = (m && m.fecha) ? String(m.fecha).slice(0,10) : new Date().toISOString().slice(0,10);
   openModal({
@@ -27635,7 +27663,7 @@ function bcoMovForm(id=null) {
       <div class="grid grid-cols-3 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Cuenta *</label>
           <select id="bm-cta" class="input" onchange="bcoMovTarjetasRender()">
-            ${cuentas.filter(c=>c.activo || c.id===selCuenta).map(c => `<option value="${c.id}" ${c.id===selCuenta?'selected':''}>${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}${c.empresaNombre?' — '+esc(c.empresaNombre):''}</option>`).join('')}
+            ${cuentas.filter(c=>c.activo || c.id===selCuenta).map(c => `<option value="${c.id}" ${c.id===selCuenta?'selected':''}>${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.nombre || c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('')}
           </select>
         </div>
         <div><label class="label">Fecha *</label><input id="bm-fec" type="date" class="input" value="${fechaVal}"/></div>
@@ -27647,12 +27675,17 @@ function bcoMovForm(id=null) {
         <div class="col-span-2"><label class="label">Concepto *</label><input id="bm-conc" class="input" placeholder="Descripción del movimiento" value="${m?esc(m.concepto||''):''}"/></div>
         <div><label class="label">Monto *</label><input id="bm-monto" type="number" step="0.01" class="input" value="${m?(m.monto||''):''}"/></div>
         <div class="col-span-2"><label class="label">Contraparte</label><input id="bm-contra" class="input" placeholder="Nombre del tercero / banco" value="${m?esc(m.contraparte||''):''}"/></div>
-        ${editMode ? '' : `
+        ${editMode ? (esTransferEdit ? `
+        <div class="col-span-3">
+          <label class="label">Cuenta destino (transferencia)</label>
+          <select id="bm-cta2" class="input">${bcoDestinoOptions(cuentasGrupo, m.cuentaContraId, m.cuentaId)}</select>
+          <div class="text-[11px] text-amber-700 mt-1">⚠️ Si te equivocaste de cuenta, elegí acá la <b>correcta</b>: al guardar se mueve el movimiento espejo a la cuenta destino elegida (puede ser de otra empresa del grupo).</div>
+        </div>` : '') : `
         <div class="col-span-3" id="bm-transfer-wrap" style="display:none">
           <label class="label">Cuenta destino (transferencia interna)</label>
           <select id="bm-cta2" class="input">
             <option value="">— Si es a un tercero, dejar vacío —</option>
-            ${cuentas.filter(c=>c.activo).map(c => `<option value="${c.id}">${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}${c.empresaNombre?' — '+esc(c.empresaNombre):''}</option>`).join('')}
+            ${bcoDestinoOptions(cuentasGrupo, null, selCuenta)}
           </select>
           <div class="text-[11px] text-slate-500 mt-1">Si elegís una cuenta destino, se crea automáticamente el movimiento espejo (entrada en la otra cuenta). Podés transferir entre cuentas de <b>distintas empresas del mismo grupo</b>.</div>
         </div>
@@ -27720,10 +27753,17 @@ async function bcoMovSave(id) {
     if (cta2) data.cuentaContraId = cta2;
     const caja = $('#bm-caja')?.value || null;
     if (caja) data.cajaEfectivo = caja;
-  } else {   // en edición: si es transferencia interna, preguntar si sincronizar el espejo
+  } else {   // en edición: si es transferencia interna, permitir corregir la cuenta destino
     const m = (state.cache.bancoMovs||[]).find(x=>x.id===id);
     if (m && (m.tipo==='transferencia_in'||m.tipo==='transferencia_out') && m.cuentaContraId) {
-      data.syncMirror = confirm('Este movimiento es una transferencia interna entre cuentas propias.\n\n¿Actualizar también el movimiento espejo de la otra cuenta con los mismos cambios?\n\nAceptar = actualizar las dos · Cancelar = solo este movimiento.');
+      const destino = $('#bm-cta2')?.value || m.cuentaContraId;
+      data.cuentaContraId = destino;
+      if (destino !== m.cuentaContraId) {
+        // Cambió la cuenta destino: el backend mueve el movimiento espejo a la cuenta correcta.
+        data.syncMirror = true;
+      } else {
+        data.syncMirror = confirm('Este movimiento es una transferencia interna entre cuentas.\n\n¿Actualizar también el movimiento espejo de la otra cuenta con los mismos cambios?\n\nAceptar = actualizar las dos · Cancelar = solo este movimiento.');
+      }
     }
   }
   // Pago de tarjeta: solo en alta y cuando el tipo es "débito (tarjeta/servicio)".

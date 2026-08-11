@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.67.0';
+const AGROCORE_VERSION = '2.69.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9998,6 +9998,7 @@ const BANCO_TIPOS_EGRESO  = ['extraccion', 'transferencia_out', 'cheque_pagado',
 const BANCO_TIPOS_TODOS   = [...BANCO_TIPOS_INGRESO, ...BANCO_TIPOS_EGRESO, 'otro', 'ajuste_in', 'ajuste_out'];
 
 const bancoCuentaSchema = z.object({
+  nombre: z.string().nullable().optional(),
   banco: z.string().min(1),
   sucursal: z.string().nullable().optional(),
   tipo: z.enum(['cta_cte', 'caja_ahorro', 'usd', 'otro']).optional(),
@@ -10024,7 +10025,10 @@ async function _cidsGrupo(req){
 }
 app.get('/api/banco-cuentas', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
   try {
-    const cids = await _cidsGrupo(req);
+    // Por defecto solo las cuentas de la empresa actual. Con ?grupo=1 se traen las de
+    // TODAS las empresas del grupo (se usa para elegir la cuenta destino en transferencias).
+    const esGrupo = String(req.query.grupo || '') === '1';
+    const cids = esGrupo ? await _cidsGrupo(req) : [req.companyId];
     const cuentas = await prisma.bancoCuenta.findMany({
       where: { companyId: { in: cids } },
       include: { company: { select: { name: true } } },
@@ -10089,8 +10093,9 @@ app.delete('/api/banco-cuentas/:id', requireCompany, requirePermission('finanzas
 // Movimientos de una cuenta (con filtro opcional por fechas / tipo)
 app.get('/api/banco-cuentas/:id/movimientos', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
   try {
-    const cids = await _cidsGrupo(req);
-    const where = { companyId: { in: cids }, cuentaId: req.params.id };
+    // Solo se abren las cuentas de la empresa actual (los movimientos de la cuenta
+    // pertenecen a la empresa dueña de la cuenta).
+    const where = { companyId: req.companyId, cuentaId: req.params.id };
     if (req.query.desde) where.fecha = { ...where.fecha, gte: new Date(String(req.query.desde)) };
     if (req.query.hasta) where.fecha = { ...where.fecha, lte: new Date(String(req.query.hasta)) };
     if (req.query.tipo) where.tipo = String(req.query.tipo);
@@ -10487,9 +10492,51 @@ app.put('/api/banco-movimientos/:id', requireCompany, requirePermission('finanza
     // syncMirror y cajaEfectivo no son columnas del movimiento.
     const { syncMirror, cajaEfectivo, ...d } = parsed;
     const esTransfer = (existing.tipo === 'transferencia_in' || existing.tipo === 'transferencia_out') && existing.cuentaContraId;
+    const otroTipo = existing.tipo === 'transferencia_in' ? 'transferencia_out' : 'transferencia_in';
+    // ¿Se cambió la cuenta destino? (transferido por error a la cuenta equivocada)
+    const cambiaDestino = esTransfer && d.cuentaContraId && d.cuentaContraId !== existing.cuentaContraId;
+
+    if (esTransfer && cambiaDestino) {
+      // Rehacemos el espejo: lo borramos de la cuenta destino anterior y lo creamos en la nueva.
+      // La cuenta destino puede ser de otra empresa del grupo económico.
+      const destinoId = d.cuentaContraId;
+      if (destinoId === existing.cuentaId) return res.status(400).json({ ok: false, error: 'Origen y destino deben ser distintos' });
+      const cuentaOrig = await prisma.bancoCuenta.findFirst({ where: { id: existing.cuentaId, companyId: { in: cids } } });
+      const cuentaDest = await prisma.bancoCuenta.findFirst({ where: { id: destinoId, companyId: { in: cids } } });
+      if (!cuentaDest) return res.status(400).json({ ok: false, error: 'Cuenta destino no encontrada' });
+      // El mes de la nueva cuenta destino tampoco puede estar conciliado.
+      { const bloqNueva = await _conciliacionBloqueo(req.companyId, destinoId, d.fecha || existing.fecha);
+        if (bloqNueva) return res.status(400).json({ ok: false, error: `El mes ${bloqNueva.periodo} de la cuenta destino está conciliado. Reabrí la conciliación primero.` }); }
+      const nuevaFecha    = d.fecha        !== undefined ? d.fecha        : existing.fecha;
+      const nuevoMonto    = d.monto        !== undefined ? d.monto        : existing.monto;
+      const nuevoConcepto = d.concepto     !== undefined ? d.concepto     : existing.concepto;
+      const nuevaObs      = d.observaciones!== undefined ? d.observaciones: existing.observaciones;
+      const result = await prisma.$transaction(async (tx) => {
+        // 1) este movimiento: nuevos datos + cuentaContraId destino + contraparte
+        const row = await tx.bancoMovimiento.update({ where: { id: req.params.id }, data: {
+          ...d, cuentaContraId: destinoId,
+          contraparte: cuentaDest.banco + (cuentaDest.alias ? ' · ' + cuentaDest.alias : ''),
+        }});
+        // 2) borrar el espejo viejo (en la cuenta destino anterior)
+        await tx.bancoMovimiento.deleteMany({ where: {
+          cuentaId: existing.cuentaContraId, cuentaContraId: existing.cuentaId,
+          tipo: otroTipo, fecha: existing.fecha, monto: existing.monto,
+        }});
+        // 3) crear el espejo nuevo en la cuenta destino corregida
+        await tx.bancoMovimiento.create({ data: {
+          companyId: cuentaDest.companyId, cuentaId: destinoId, fecha: nuevaFecha,
+          tipo: otroTipo, concepto: nuevoConcepto, monto: nuevoMonto,
+          contraparte: cuentaOrig ? (cuentaOrig.banco + (cuentaOrig.alias ? ' · ' + cuentaOrig.alias : '')) : null,
+          referencia: existing.referencia || null, cuentaContraId: existing.cuentaId,
+          observaciones: nuevaObs || null, userId: req.user?.id || null,
+        }});
+        return row;
+      });
+      return res.json({ ok: true, data: result });
+    }
+
     if (esTransfer && syncMirror) {
       // Actualiza también el movimiento espejo de la otra cuenta (mismos monto/fecha/concepto/obs).
-      const otroTipo = existing.tipo === 'transferencia_in' ? 'transferencia_out' : 'transferencia_in';
       const result = await prisma.$transaction(async (tx) => {
         const row = await tx.bancoMovimiento.update({ where: { id: req.params.id }, data: d });
         await tx.bancoMovimiento.updateMany({
