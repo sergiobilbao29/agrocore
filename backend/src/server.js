@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.62.0';
+const AGROCORE_VERSION = '2.64.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4862,6 +4862,7 @@ const viajeSchema = z.object({
   origenDepositos: z.array(z.object({ depositoId: z.string(), kg: z.coerce.number() })).nullable().optional(), // carga desde varios depósitos
   depositoDestinoId: z.string().nullable().optional(),
   liquidacionCerealId: z.string().nullable().optional(),
+  contratoCerealId: z.string().nullable().optional(),   // contrato/confirmación al que se imputa la CP
 
       kgTara:      z.coerce.number().nullable().optional(),
       kgBruto:     z.coerce.number().nullable().optional(),
@@ -6787,6 +6788,7 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
       depositoId: z.string(),
       productoId: z.string(),
       clienteId: z.string().nullable().optional(),
+      contratoCerealId: z.string().nullable().optional(),
       fecha: z.coerce.date(),
       numero: z.string().nullable().optional(),
       kilosBrutos: z.number().nonnegative(),
@@ -6810,7 +6812,8 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
       const liq = await tx.liquidacionCereal.create({
         data: {
           companyId: req.companyId, depositoId: d.depositoId, productoId: d.productoId,
-          clienteId: d.clienteId || null, fecha: d.fecha, numero: d.numero || null,
+          clienteId: d.clienteId || null, contratoCerealId: d.contratoCerealId || null,
+          fecha: d.fecha, numero: d.numero || null,
           kilosBrutos: d.kilosBrutos, porcMerma: d.porcMerma, kilosNetos,
           precioPorTn: d.precioPorTn, bruto, totalDescuentos, totalImpuestos, neto,
           fechaCobroEst: d.fechaCobroEst || null,
@@ -6851,7 +6854,10 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
           if (!v) continue;
           const kv = Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
           try { await tx.viajeLiquidacion.create({ data: { companyId: req.companyId, viajeId: vid, liquidacionId: liq.id, kilosAplicados: kv } }); } catch {}
-          if (!v.liquidacionCerealId) { try { await tx.viaje.update({ where: { id: vid }, data: { liquidacionCerealId: liq.id } }); } catch {} }
+          { const upd = {};
+            if (!v.liquidacionCerealId) upd.liquidacionCerealId = liq.id;
+            if (d.contratoCerealId && !v.contratoCerealId) upd.contratoCerealId = d.contratoCerealId;
+            if (Object.keys(upd).length) { try { await tx.viaje.update({ where: { id: vid }, data: upd }); } catch {} } }
         }
       }
       return liq;
@@ -6903,6 +6909,7 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
     const concSchema = z.object({ tipo: z.enum(['descuento', 'impuesto']), concepto: z.string().min(1), importe: z.number(), porcentaje: z.number().nullable().optional() });
     const schema = z.object({
       depositoId: z.string(), productoId: z.string(), clienteId: z.string().nullable().optional(),
+      contratoCerealId: z.string().nullable().optional(),
       fecha: z.coerce.date(), numero: z.string().nullable().optional(),
       kilosBrutos: z.number().nonnegative(), porcMerma: z.number().min(0).max(100).default(0),
       precioPorTn: z.number().nonnegative(), conceptos: z.array(concSchema).default([]),
@@ -6920,6 +6927,7 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
       await tx.liquidacionCerealConcepto.deleteMany({ where: { liquidacionId: existing.id } });
       await tx.liquidacionCereal.update({ where: { id: existing.id }, data: {
         depositoId: d.depositoId, productoId: d.productoId, clienteId: d.clienteId || null,
+        contratoCerealId: d.contratoCerealId || null,
         fecha: d.fecha, numero: d.numero || null, kilosBrutos: d.kilosBrutos, porcMerma: d.porcMerma,
         kilosNetos, precioPorTn: d.precioPorTn, bruto, totalDescuentos, totalImpuestos, neto,
         fechaCobroEst: d.fechaCobroEst || null, observaciones: d.observaciones || null,
@@ -6946,12 +6954,148 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
           if (!v) continue;
           const kv = Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
           try { await tx.viajeLiquidacion.create({ data: { companyId: req.companyId, viajeId: vid, liquidacionId: existing.id, kilosAplicados: kv } }); } catch {}
-          if (!v.liquidacionCerealId) { try { await tx.viaje.update({ where: { id: vid }, data: { liquidacionCerealId: existing.id } }); } catch {} }
+          { const upd = {};
+            if (!v.liquidacionCerealId) upd.liquidacionCerealId = existing.id;
+            if (d.contratoCerealId && !v.contratoCerealId) upd.contratoCerealId = d.contratoCerealId;
+            if (Object.keys(upd).length) { try { await tx.viaje.update({ where: { id: vid }, data: upd }); } catch {} } }
         }
       }
     });
     const full = await prisma.liquidacionCereal.findUnique({ where: { id: existing.id }, include: { deposito: true, conceptos: true } });
     res.json({ ok: true, data: full });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CONTRATOS DE CEREAL (confirmaciones de negocio). Agrupan el compromiso de
+// entrega con un comprador/corredor. Las cartas de porte (viajes) y las
+// pesificaciones (liquidaciones) se imputan al contrato via contratoCerealId.
+// El tablero calcula: pactado / entregado (salientes y descargados) /
+// pendiente de entrega / pesificado / pendiente de pesificar / cobrado.
+// ============================================================
+const contratoCerealSchema = z.object({
+  numeroInterno: z.string().nullable().optional(),
+  numeroCorredor: z.string().nullable().optional(),
+  fecha: z.coerce.date().nullable().optional(),
+  cosecha: z.string().nullable().optional(),
+  productoId: z.string().nullable().optional(),
+  cereal: z.string().nullable().optional(),
+  compradorNombre: z.string().nullable().optional(),
+  compradorCuit: z.string().nullable().optional(),
+  corredorNombre: z.string().nullable().optional(),
+  corredorCuit: z.string().nullable().optional(),
+  acopioDepositoId: z.string().nullable().optional(),
+  acopioNombre: z.string().nullable().optional(),
+  procedencia: z.string().nullable().optional(),
+  destino: z.string().nullable().optional(),
+  tnsPactadas: z.coerce.number().nonnegative().default(0),
+  tipoPrecio: z.enum(['a_fijar','fijo']).default('a_fijar'),
+  precioFijo: z.coerce.number().nullable().optional(),
+  moneda: z.string().default('USD'),
+  pizarra: z.string().nullable().optional(),
+  comisionPorc: z.coerce.number().nullable().optional(),
+  volatilPorc: z.coerce.number().nullable().optional(),
+  contraFlete: z.coerce.number().nullable().optional(),
+  gastoEntregador: z.coerce.number().nullable().optional(),
+  gastoEntregadorIva: z.coerce.boolean().default(false),
+  tarifaFlete: z.coerce.number().nullable().optional(),
+  pagoDias: z.coerce.number().int().nullable().optional(),
+  porcParcial: z.coerce.number().nullable().optional(),
+  porcFinal: z.coerce.number().nullable().optional(),
+  plazoEntregaDesde: z.coerce.date().nullable().optional(),
+  plazoEntregaHasta: z.coerce.date().nullable().optional(),
+  reciboHasta: z.coerce.number().nullable().optional(),
+  condiciones: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+  estado: z.enum(['abierto','entregado','pesificado','cerrado','anulado']).optional(),
+});
+
+// kg de carga (salientes del campo) de una CP
+function _kgCargaViaje(v){ return Number(v.cantidad || v.kgNeto || 0); }
+// Arma el tablero de un contrato desde sus viajes y liquidaciones imputados.
+function _tableroContrato(c, viajes, liqs) {
+  const vs = (viajes || []).filter(v => v.estado !== 'anulada');
+  const kgPactados = Number(c.tnsPactadas || 0) * 1000;
+  let kgSalientes = 0, kgDescargados = 0;
+  for (const v of vs) { kgSalientes += _kgCargaViaje(v); kgDescargados += _kgViaje(v); }
+  let kgPesificados = 0, montoPesificado = 0, montoCobrado = 0, liqCobradas = 0;
+  for (const l of (liqs || [])) {
+    kgPesificados += Number(l.kilosNetos || 0);
+    montoPesificado += Number(l.neto || 0);
+    if (l.cobrado) { liqCobradas++; montoCobrado += Number(l.neto || 0); }
+  }
+  const kgPendienteEntrega = Math.max(0, kgPactados - kgDescargados);
+  const kgPendientePesificar = Math.max(0, kgDescargados - kgPesificados);
+  return {
+    kgPactados, kgSalientes, kgDescargados, kgPendienteEntrega,
+    kgPesificados, kgPendientePesificar, montoPesificado, montoCobrado,
+    cantViajes: vs.length, cantLiquidaciones: (liqs || []).length, liqCobradas,
+    avanceEntregaPct: kgPactados > 0 ? Math.round((kgDescargados / kgPactados) * 100) : 0,
+    avancePesifPct: kgDescargados > 0 ? Math.round((kgPesificados / kgDescargados) * 100) : 0,
+    todoEntregado: kgPactados > 0 && kgDescargados >= kgPactados - 1,
+    todoPesificado: kgDescargados > 0 && kgPesificados >= kgDescargados - 1,
+  };
+}
+
+app.get('/api/contratos-cereal', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const contratos = await prisma.contratoCereal.findMany({ where: { companyId: req.companyId }, orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }] });
+    const ids = contratos.map(c => c.id);
+    const [viajes, liqs, depos] = await Promise.all([
+      ids.length ? prisma.viaje.findMany({ where: { companyId: req.companyId, contratoCerealId: { in: ids } }, select: { id: true, contratoCerealId: true, estado: true, cantidad: true, kgNeto: true, kgDescarga: true, kgNetoDest: true } }) : [],
+      ids.length ? prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId, contratoCerealId: { in: ids } }, select: { id: true, contratoCerealId: true, kilosNetos: true, neto: true, cobrado: true } }) : [],
+      prisma.deposito.findMany({ where: { OR: [{ companyId: req.companyId }, { companyId: null, compartido: true }] }, select: { id: true, nombre: true } }),
+    ]);
+    const depoN = {}; depos.forEach(d => depoN[d.id] = d.nombre);
+    const vByC = {}, lByC = {};
+    for (const v of viajes) (vByC[v.contratoCerealId] = vByC[v.contratoCerealId] || []).push(v);
+    for (const l of liqs) (lByC[l.contratoCerealId] = lByC[l.contratoCerealId] || []).push(l);
+    const data = contratos.map(c => ({ ...c, acopioNombreCalc: c.acopioDepositoId ? (depoN[c.acopioDepositoId] || c.acopioNombre) : c.acopioNombre, tablero: _tableroContrato(c, vByC[c.id], lByC[c.id]) }));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/contratos-cereal/:id', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const c = await prisma.contratoCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!c) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const [viajes, liqs] = await Promise.all([
+      prisma.viaje.findMany({ where: { companyId: req.companyId, contratoCerealId: c.id }, orderBy: { fecha: 'desc' } }),
+      prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId, contratoCerealId: c.id }, orderBy: { fecha: 'desc' }, include: { deposito: true } }),
+    ]);
+    res.json({ ok: true, data: { ...c, viajes, liquidaciones: liqs, tablero: _tableroContrato(c, viajes, liqs) } });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/contratos-cereal', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const d = contratoCerealSchema.parse(req.body);
+    const row = await prisma.contratoCereal.create({ data: { ...d, companyId: req.companyId } });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/contratos-cereal/:id', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.contratoCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const d = contratoCerealSchema.partial().parse(req.body);
+    const row = await prisma.contratoCereal.update({ where: { id: req.params.id }, data: d });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/contratos-cereal/:id', requireCompany, requirePermission('ventas:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.contratoCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    // Desimputamos CP y liquidaciones (no se borran, solo se sueltan) y borramos el contrato.
+    await prisma.$transaction(async (tx) => {
+      await tx.viaje.updateMany({ where: { companyId: req.companyId, contratoCerealId: existing.id }, data: { contratoCerealId: null } });
+      await tx.liquidacionCereal.updateMany({ where: { companyId: req.companyId, contratoCerealId: existing.id }, data: { contratoCerealId: null } });
+      await tx.contratoCereal.delete({ where: { id: existing.id } });
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
@@ -9823,20 +9967,31 @@ const bancoCuentaSchema = z.object({
   titular: z.string().nullable().optional(),
   saldoInicial: z.number().optional(),
   fechaInicial: z.coerce.date().nullable().optional(),
+  esBilleteraVirtual: z.boolean().optional(),
   observaciones: z.string().nullable().optional(),
   activo: z.boolean().optional(),
 });
 
 // Devuelve cuentas con saldo calculado (saldoInicial + Σ ingresos − Σ egresos).
+// Empresas del grupo economico del usuario (sus companies). Las cuentas bancarias
+// se comparten a nivel GRUPO: se ven y operan (transferencias) entre razones sociales
+// del mismo grupo. Cada cuenta/movimiento conserva su companyId (razon social real).
+async function _cidsGrupo(req){
+  const es = await _empresasDeUsuario(req);
+  const ids = (es || []).map(e => e.id);
+  return ids.length ? ids : [req.companyId];
+}
 app.get('/api/banco-cuentas', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
   try {
+    const cids = await _cidsGrupo(req);
     const cuentas = await prisma.bancoCuenta.findMany({
-      where: { companyId: req.companyId },
+      where: { companyId: { in: cids } },
+      include: { company: { select: { name: true } } },
       orderBy: [{ activo: 'desc' }, { banco: 'asc' }],
     });
     const movs = await prisma.bancoMovimiento.groupBy({
       by: ['cuentaId', 'tipo'],
-      where: { companyId: req.companyId },
+      where: { companyId: { in: cids } },
       _sum: { monto: true },
     });
     const data = cuentas.map(c => {
@@ -9846,7 +10001,8 @@ app.get('/api/banco-cuentas', requireCompany, requirePermission('finanzas:read')
         if (BANCO_TIPOS_INGRESO.includes(m.tipo)) saldo += monto;
         else if (BANCO_TIPOS_EGRESO.includes(m.tipo)) saldo -= monto;
       });
-      return { ...c, saldo };
+      const { company, ...rest } = c;
+      return { ...rest, saldo, empresaNombre: company?.name || null };
     });
     res.json({ ok: true, data });
   } catch (e) { next(e); }
@@ -9892,7 +10048,8 @@ app.delete('/api/banco-cuentas/:id', requireCompany, requirePermission('finanzas
 // Movimientos de una cuenta (con filtro opcional por fechas / tipo)
 app.get('/api/banco-cuentas/:id/movimientos', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
   try {
-    const where = { companyId: req.companyId, cuentaId: req.params.id };
+    const cids = await _cidsGrupo(req);
+    const where = { companyId: { in: cids }, cuentaId: req.params.id };
     if (req.query.desde) where.fecha = { ...where.fecha, gte: new Date(String(req.query.desde)) };
     if (req.query.hasta) where.fecha = { ...where.fecha, lte: new Date(String(req.query.hasta)) };
     if (req.query.tipo) where.tipo = String(req.query.tipo);
@@ -10131,17 +10288,18 @@ function _finDeMes(periodo) {
   const [y, m] = periodo.split('-').map(Number);
   return new Date(y, m, 0, 23, 59, 59, 999);   // dia 0 del mes siguiente = ultimo dia del mes
 }
-// Devuelve la conciliacion que bloquea (cuenta+mes) o null.
+// Devuelve la conciliacion que bloquea (cuenta+mes) o null. Se busca por cuenta+periodo
+// (la cuenta es unica), asi funciona tambien con cuentas de otras empresas del grupo.
 async function _conciliacionBloqueo(companyId, cuentaId, fecha) {
   if (!cuentaId || !fecha) return null;
-  return prisma.conciliacionBancaria.findFirst({ where: { companyId, cuentaId, periodo: _periodoDe(fecha) } });
+  return prisma.conciliacionBancaria.findFirst({ where: { cuentaId, periodo: _periodoDe(fecha) } });
 }
 // Saldo de la cuenta hasta el fin del periodo (foto para la conciliacion).
 async function _saldoCuentaHasta(companyId, cuentaId, hasta) {
-  const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: cuentaId, companyId } });
+  const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: cuentaId } });
   if (!cuenta) return 0;
   let saldo = Number(cuenta.saldoInicial || 0);
-  const movs = await prisma.bancoMovimiento.findMany({ where: { companyId, cuentaId, fecha: { lte: hasta } }, select: { tipo: true, monto: true } });
+  const movs = await prisma.bancoMovimiento.findMany({ where: { cuentaId, fecha: { lte: hasta } }, select: { tipo: true, monto: true } });
   for (const m of movs) {
     const monto = Number(m.monto || 0);
     if (BANCO_TIPOS_INGRESO.includes(m.tipo)) saldo += monto;
@@ -10152,7 +10310,8 @@ async function _saldoCuentaHasta(companyId, cuentaId, hasta) {
 
 app.get('/api/conciliaciones', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
   try {
-    const where = { companyId: req.companyId };
+    const cids = await _cidsGrupo(req);
+    const where = { companyId: { in: cids } };
     if (req.query.cuentaId) where.cuentaId = String(req.query.cuentaId);
     const data = await prisma.conciliacionBancaria.findMany({ where, orderBy: { periodo: 'desc' } });
     res.json({ ok: true, data });
@@ -10167,14 +10326,15 @@ app.post('/api/conciliaciones', requireCompany, requirePermission('finanzas:upda
       saldoExtracto: z.number().nullable().optional(),
       observaciones: z.string().nullable().optional(),
     }).parse(req.body);
-    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaId, companyId: req.companyId } });
+    const cids = await _cidsGrupo(req);
+    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaId, companyId: { in: cids } } });
     if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
     const yaExiste = await prisma.conciliacionBancaria.findFirst({ where: { cuentaId: d.cuentaId, periodo: d.periodo } });
     if (yaExiste) return res.status(400).json({ ok: false, error: 'Ese mes ya está conciliado para esta cuenta.' });
-    const saldoSistema = await _saldoCuentaHasta(req.companyId, d.cuentaId, _finDeMes(d.periodo));
+    const saldoSistema = await _saldoCuentaHasta(cuenta.companyId, d.cuentaId, _finDeMes(d.periodo));
     const row = await prisma.conciliacionBancaria.create({
       data: {
-        companyId: req.companyId, cuentaId: d.cuentaId, periodo: d.periodo,
+        companyId: cuenta.companyId, cuentaId: d.cuentaId, periodo: d.periodo,
         saldoExtracto: d.saldoExtracto ?? null, saldoSistema,
         observaciones: d.observaciones || null, userId: req.user?.id || null,
       },
@@ -10186,7 +10346,8 @@ app.post('/api/conciliaciones', requireCompany, requirePermission('finanzas:upda
 // Reabrir (borrar) una conciliacion → desbloquea el mes de esa cuenta.
 app.delete('/api/conciliaciones/:id', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
   try {
-    const existing = await prisma.conciliacionBancaria.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    const cids = await _cidsGrupo(req);
+    const existing = await prisma.conciliacionBancaria.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
     await prisma.conciliacionBancaria.delete({ where: { id: existing.id } });
     res.json({ ok: true });
@@ -10196,22 +10357,24 @@ app.delete('/api/conciliaciones/:id', requireCompany, requirePermission('finanza
 app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const d = bancoMovSchema.parse(req.body);
-    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaId, companyId: req.companyId } });
+    const cids = await _cidsGrupo(req);
+    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaId, companyId: { in: cids } } });
     if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
     { const bloq = await _conciliacionBloqueo(req.companyId, d.cuentaId, d.fecha);
       if (bloq) return res.status(400).json({ ok: false, error: `El mes ${bloq.periodo} de esta cuenta está conciliado. Reabrí la conciliación para cargar movimientos en ese mes.` }); }
     { if (d.cuentaContraId) { const bloq2 = await _conciliacionBloqueo(req.companyId, d.cuentaContraId, d.fecha);
       if (bloq2) return res.status(400).json({ ok: false, error: `El mes ${bloq2.periodo} de la cuenta destino está conciliado. Reabrí la conciliación primero.` }); } }
-    // Transferencia interna: validar cuenta destino y crear el espejo en transacción
+    // Transferencia interna: validar cuenta destino y crear el espejo en transacción.
+    // La cuenta destino puede ser de otra empresa del mismo grupo económico.
     const esTransferInterna = (d.tipo === 'transferencia_out' || d.tipo === 'transferencia_in') && d.cuentaContraId;
     if (esTransferInterna) {
-      const otra = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaContraId, companyId: req.companyId } });
+      const otra = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaContraId, companyId: { in: cids } } });
       if (!otra) return res.status(400).json({ ok: false, error: 'Cuenta destino no encontrada' });
       if (d.cuentaContraId === d.cuentaId) return res.status(400).json({ ok: false, error: 'Origen y destino deben ser distintos' });
       const result = await prisma.$transaction(async (tx) => {
         const outMov = await tx.bancoMovimiento.create({
           data: {
-            companyId: req.companyId, cuentaId: d.cuentaId, fecha: d.fecha,
+            companyId: cuenta.companyId, cuentaId: d.cuentaId, fecha: d.fecha,
             tipo: 'transferencia_out', concepto: d.concepto, monto: d.monto,
             contraparte: otra.banco + (otra.alias ? ' · ' + otra.alias : ''),
             referencia: d.referencia || null, cuentaContraId: d.cuentaContraId,
@@ -10220,7 +10383,7 @@ app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:c
         });
         const inMov = await tx.bancoMovimiento.create({
           data: {
-            companyId: req.companyId, cuentaId: d.cuentaContraId, fecha: d.fecha,
+            companyId: otra.companyId, cuentaId: d.cuentaContraId, fecha: d.fecha,
             tipo: 'transferencia_in', concepto: d.concepto, monto: d.monto,
             contraparte: cuenta.banco + (cuenta.alias ? ' · ' + cuenta.alias : ''),
             referencia: d.referencia || null, cuentaContraId: d.cuentaId,
@@ -10239,7 +10402,7 @@ app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:c
       const result = await prisma.$transaction(async (tx) => {
         const bancoMov = await tx.bancoMovimiento.create({
           data: {
-            companyId: req.companyId, cuentaId: d.cuentaId, fecha: d.fecha,
+            companyId: cuenta.companyId, cuentaId: d.cuentaId, fecha: d.fecha,
             tipo: d.tipo, concepto: d.concepto, monto: d.monto,
             contraparte: d.contraparte || ('Efectivo · ' + d.cajaEfectivo),
             referencia: d.referencia || null, observaciones: d.observaciones || null,
@@ -10262,7 +10425,7 @@ app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:c
     }
     const { cajaEfectivo, ...rest } = d;   // cajaEfectivo no es columna del movimiento bancario
     const row = await prisma.bancoMovimiento.create({
-      data: { ...rest, companyId: req.companyId, userId: req.user?.id || null },
+      data: { ...rest, companyId: cuenta.companyId, userId: req.user?.id || null },
     });
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
@@ -10270,7 +10433,8 @@ app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:c
 
 app.put('/api/banco-movimientos/:id', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
   try {
-    const existing = await prisma.bancoMovimiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    const cids = await _cidsGrupo(req);
+    const existing = await prisma.bancoMovimiento.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const schema = bancoMovSchema.partial().extend({ conciliado: z.boolean().optional(), syncMirror: z.boolean().optional() });
     const parsed = schema.parse(req.body);
@@ -10289,7 +10453,7 @@ app.put('/api/banco-movimientos/:id', requireCompany, requirePermission('finanza
         const row = await tx.bancoMovimiento.update({ where: { id: req.params.id }, data: d });
         await tx.bancoMovimiento.updateMany({
           where: {
-            companyId: req.companyId, cuentaId: existing.cuentaContraId, cuentaContraId: existing.cuentaId,
+            cuentaId: existing.cuentaContraId, cuentaContraId: existing.cuentaId,
             tipo: otroTipo, fecha: existing.fecha, monto: existing.monto,
           },
           data: {
@@ -10310,19 +10474,20 @@ app.put('/api/banco-movimientos/:id', requireCompany, requirePermission('finanza
 
 app.delete('/api/banco-movimientos/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
   try {
-    const existing = await prisma.bancoMovimiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    const cids = await _cidsGrupo(req);
+    const existing = await prisma.bancoMovimiento.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     { const bloq = await _conciliacionBloqueo(req.companyId, existing.cuentaId, existing.fecha);
       if (bloq) return res.status(400).json({ ok: false, error: `El mes ${bloq.periodo} de esta cuenta está conciliado. Reabrí la conciliación para borrar el movimiento.` }); }
     // Si este movimiento vino de depositar/cobrar un cheque, al borrarlo volvemos el cheque a cartera.
     if (existing.chequeId && (existing.tipo === 'cheque_cobrado' || existing.tipo === 'cheque_pagado')) {
-      await prisma.cheque.updateMany({ where: { id: existing.chequeId, companyId: req.companyId }, data: { estado: 'en_cartera', fechaEndoso: null } });
+      await prisma.cheque.updateMany({ where: { id: existing.chequeId, companyId: { in: cids } }, data: { estado: 'en_cartera', fechaEndoso: null } });
     }
-    // Si fue parte de una transferencia interna, borrar también el espejo
+    // Si fue parte de una transferencia interna, borrar también el espejo (puede estar en otra empresa del grupo)
     if (existing.cuentaContraId && (existing.tipo === 'transferencia_in' || existing.tipo === 'transferencia_out')) {
       const otroTipo = existing.tipo === 'transferencia_in' ? 'transferencia_out' : 'transferencia_in';
       await prisma.bancoMovimiento.deleteMany({
-        where: { companyId: req.companyId, cuentaId: existing.cuentaContraId, cuentaContraId: existing.cuentaId,
+        where: { cuentaId: existing.cuentaContraId, cuentaContraId: existing.cuentaId,
                  tipo: otroTipo, fecha: existing.fecha, monto: existing.monto },
       });
     }
@@ -11132,6 +11297,7 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
 app.post('/api/admin/parse-factura-frigorifico-pdf', authMiddleware, requireCompany, upload.single('archivo'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    let pdfParse; try { pdfParse = await getPdfParse(); } catch { return res.status(501).json({ ok: false, error: 'El parser de PDF no está disponible. Cargá la factura a mano.' }); }
     let texto = ''; try { texto = (await pdfParse(req.file.buffer)).text || ''; } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
     // num() tolerante para importes con miles/decimales de 2 dígitos.
     const num = (s) => { if (s == null || s === '') return null; let n = String(s).replace(/[$\s]/g, ''); if (/,\d{1,2}$/.test(n)) n = n.replace(/\./g, '').replace(',', '.'); else if (/\.\d{1,2}$/.test(n)) n = n.replace(/,/g, ''); else n = n.replace(/[,.]/g, ''); const v = Number(n); return isFinite(v) ? v : null; };
@@ -11153,6 +11319,63 @@ app.post('/api/admin/parse-factura-frigorifico-pdf', authMiddleware, requireComp
     res.json({ ok: true, data: {
       frigorifico, frigorificoCuit, facturaPv, facturaNro, fechaFactura,
       kgFaenado, precioKgFaenado, ivaFaenado, lechonesEnteros, mediasRes,
+    }});
+  } catch (e) { next(e); }
+});
+
+// Parser del PDF de la CONFIRMACION DE NEGOCIO / SLIP del acopio (ej. Agrocampo).
+// Extrae los datos del contrato de cereal para prefilear el alta del contrato.
+app.post('/api/admin/parse-confirmacion-cereal-pdf', authMiddleware, requireCompany, upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    let pdfParse; try { pdfParse = await getPdfParse(); } catch { return res.status(501).json({ ok: false, error: 'El parser de PDF no está disponible. Cargá el contrato a mano.' }); }
+    let texto = ''; try { texto = (await pdfParse(req.file.buffer)).text || ''; } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
+    const T = texto.replace(/ /g, ' ');
+    const num = (s) => { if (s == null || s === '') return null; let n = String(s).replace(/[$\sU]/gi, '').replace(/[°º]/g, ''); if (/,\d{1,2}$/.test(n)) n = n.replace(/\./g, '').replace(',', '.'); else if (/\.\d{1,2}$/.test(n)) n = n.replace(/,/g, ''); else n = n.replace(/[,.]/g, ''); const v = Number(n); return isFinite(v) ? v : null; };
+    const fechaArg = (s) => { if (!s) return null; const m = String(s).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/); if (!m) return null; let yy = m[3]; if (yy.length === 2) yy = '20' + yy; return `${yy}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`; };
+    const g = (re) => { const m = T.match(re); return m ? m[1].trim() : null; };
+    const numeroInterno  = g(/Contrato\s*Interno\s*([0-9]{3,8})/i);
+    const numeroCorredor = g(/Contrato\s*Corredor\s*([0-9]{4}\s*-\s*[0-9]{3,8})/i)?.replace(/\s+/g,'') || g(/([0-9]{4}-[0-9]{3,8})/);
+    const cosecha        = g(/Cosecha\s*([0-9]{2}\s*-\s*[0-9]{2})/i)?.replace(/\s+/g,'');
+    const fecha          = fechaArg(g(/FECHA\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i)) || fechaArg(g(/([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/));
+    // Comprador / Corredor (nombre + CUIT). El corredor suele aparecer antes del comprador.
+    const corredorNombre = g(/Corredor\s*\n?\s*([A-ZÁÉÍÓÚÑ][A-Za-z0-9.\s&]{3,60}?)\s*CUIT/i);
+    const corredorCuit   = g(/Corredor[\s\S]{0,80}?CUIT\s*N?[°º:\s]*([23]\d[\- ]?\d{8}[\- ]?\d)/i);
+    const compradorNombre= g(/Comprador\s*\n?\s*([A-ZÁÉÍÓÚÑ][A-Za-z0-9.\s&]{3,60}?)\s*CUIT/i);
+    const compradorCuit  = g(/Comprador[\s\S]{0,80}?CUIT\s*N?[°º:\s]*([23]\d[\- ]?\d{8}[\- ]?\d)/i);
+    const procedencia    = g(/Procedencia[:\s]*([A-ZÁÉÍÓÚÑ][A-Za-z.\s]{2,30}?)\s*(?:Destino|Producto|Comision)/i);
+    const destino        = g(/Destino[:\s]*([A-ZÁÉÍÓÚÑ][A-Za-z.\s]{2,30}?)\s*(?:Producto|Comision|Procedencia|\n)/i);
+    const cereal         = g(/Producto[:\s]*([A-ZÁÉÍÓÚÑ]{3,20})/i);
+    const comisionPorc   = num(g(/Comision[:\s]*([\d.,]+)\s*%/i));
+    const tnsPactadas    = num(g(/Tns[:\s]*([\d.,]+)/i));
+    const volatilPorc    = num(g(/Volatil[:\s]*([\d.,]+)/i));
+    const pagoDias       = num(g(/Pago[:\s]*([\d]+)\s*D/i));
+    const contraFlete    = num(g(/Contra\s*Flete[:\s]*U?\$*\s*([\d.,]+)/i));
+    const gastoEntregador= num(g(/Gto\.?\s*Entregador[:\s]*(?:SI|NO)?\s*\$?\s*([\d.,]+)/i));
+    const gastoEntregadorIva = /Gto\.?\s*Entregador[^\n]*\+\s*IVA/i.test(T);
+    const tarifaFlete    = num(g(/Tar\.?\s*Flete[:\s]*\$?\s*([\d.,]+)/i));
+    const porcParcial    = num(g(/%?\s*Parcial[:\s]*([\d.,]+)/i));
+    const porcFinal      = num(g(/%?\s*Final[:\s]*([\d.,]+)/i));
+    const reciboHasta    = num(g(/Recibo\s*hasta\s*([\d.,]+)\s*%/i));
+    const esAfijar       = /\bAFC\b|a\s*fijar/i.test(T);
+    const pizarra        = /Pizarra\s*Rosario/i.test(T) ? 'Pizarra Rosario' : null;
+    // Plazo de entrega: "01/10/ al 31/12/2026" (el desde puede no traer año → toma el del hasta)
+    let plazoEntregaDesde = null, plazoEntregaHasta = null;
+    const pe = T.match(/Plazo\s*de\s*Entrega\s*([0-3]?\d[\/\-][01]?\d(?:[\/\-]\d{2,4})?)\s*al?\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i);
+    if (pe) {
+      plazoEntregaHasta = fechaArg(pe[2]);
+      let desde = pe[1];
+      if (!/[\/\-]\d{2,4}$/.test(desde.replace(/\/$/,''))) { const yy = (pe[2].match(/(\d{2,4})$/)||[])[1]; desde = desde.replace(/\/$/,'') + '/' + yy; }
+      plazoEntregaDesde = fechaArg(desde);
+    }
+    res.json({ ok: true, data: {
+      numeroInterno, numeroCorredor, cosecha, fecha,
+      compradorNombre, compradorCuit, corredorNombre, corredorCuit,
+      procedencia, destino, cereal, comisionPorc, tnsPactadas, volatilPorc, pagoDias,
+      contraFlete, gastoEntregador, gastoEntregadorIva, tarifaFlete,
+      porcParcial, porcFinal, reciboHasta, pizarra,
+      tipoPrecio: esAfijar ? 'a_fijar' : 'fijo', moneda: 'USD',
+      plazoEntregaDesde, plazoEntregaHasta,
     }});
   } catch (e) { next(e); }
 });

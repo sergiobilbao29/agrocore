@@ -1016,6 +1016,7 @@ const MODULES = [
   { id:'movimientos',   label:'Movimientos',          icon:'🔁', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'cerealeras',    label:'Cerealeras / Depósitos',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
   { id:'hacienda',      label:'Animales',             icon:'🐄', perm:'stock:read',      section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA =====
@@ -2541,6 +2542,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
+      titulo:'📄 v2.64.0 — Contratos de cereal (confirmaciones de negocio)',
+      desc:'Nuevo módulo <b>Contratos de cereal</b> (Stock y depósitos): cargá cada <b>confirmación de negocio</b> con su número, cosecha, cereal, tn pactadas, precio (a fijar o fijo), plazo de entrega, comprador, corredor y acopio. Podés <b>importar el PDF de la confirmación</b> para precargar todo. A cada <b>carta de porte</b> (viaje) y a cada <b>pesificación</b> (liquidación) le podés elegir el contrato, y el <b>tablero</b> te muestra por contrato: pactado, salido del campo, entregado (AFIP), pendiente de entrega, pesificado y pendiente de pesificar. Reemplaza el Excel paralelo.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
+      titulo:'🏦 v2.63.0 — Cuentas bancarias compartidas por grupo económico',
+      desc:'Todas las <b>cuentas bancarias</b> (y billeteras) de tus empresas se ven ahora desde cualquiera de ellas, porque son un <b>mismo grupo económico</b>. Cada tarjeta de cuenta muestra la <b>razón social</b> a la que pertenece. Y podés hacer <b>transferencias entre cuentas de distintas empresas</b> del grupo: en el movimiento bancario elegís la <b>cuenta destino</b> (aunque sea de otra empresa) y se crea automáticamente el movimiento espejo en la otra cuenta.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
+      titulo:'📲 v2.62.0 — Billeteras virtuales en Bancos',
+      desc:'Al cargar/editar una cuenta en Bancos podés marcarla como <b>billetera virtual</b> (Naranja X, Mercado Pago, Ualá…). Recibe el mismo trato que una cuenta (saldo, movimientos, conciliación) y arriba tenés un <b>filtro</b> para ver Bancos, Billeteras o todo.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
       titulo:'🐖 v2.62.0 — Faena: guardar, editar e importar los PDF',
       desc:'La faena ahora <b>queda guardada como registro</b>: el botón 🐖 Faena abre la <b>lista de faenas</b> con "+ Nueva faena", y cada una se puede <b>editar</b> (rehace la liquidación y la factura) o <b>borrar</b> (revierte ambos comprobantes, stock, SENASA y cuentas). Además, en el asistente podés <b>importar los PDF</b>: la liquidación y la factura del frigorífico se leen y <b>precargan los campos</b> automáticamente (revisá antes de guardar).' },
@@ -17237,7 +17247,9 @@ async function viajeForm(id=null) {
   const estadoActual = it.estado || 'pendiente';
   if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
   if (!state.cache.productos) { try { state.cache.productos = (await api('/api/productos')).data || []; } catch { state.cache.productos = []; } }
+  if (!state.cache.contratosCereal) { try { state.cache.contratosCereal = (await api('/api/contratos-cereal')).data || []; } catch { state.cache.contratosCereal = []; } }
   const _camps = state.cache.campanas || [];
+  const _contratos = (state.cache.contratosCereal || []).filter(c => c.estado !== 'anulado');
   const _campLabel = (c) => c.nombre || `${c.cultivo||''}${c.lote?.nombre?' · '+c.lote.nombre:''}${c.ciclo?' · '+c.ciclo:''}`;
   openModal({
     title: id?'Editar viaje':'Nuevo viaje', size:'max-w-4xl',
@@ -17320,6 +17332,13 @@ async function viajeForm(id=null) {
           </select>
         </div>
         <div class="col-span-3 text-[11px] text-amber-800" id="f-dhint">${it.destinoTipo==='venta_directa'?'💡 Después de guardar este viaje, podés cargar la liquidación de cereal desde la lista de viajes (botón 🧾).':''}</div>
+        <div class="col-span-3"><label class="label">📄 Contrato de cereal (imputar esta carta de porte)</label>
+          <select id="f-contrato" class="input">
+            <option value="">— Sin contrato —</option>
+            ${_contratos.map(c=>`<option value="${esc(c.id)}" ${c.id===it.contratoCerealId?'selected':''}>${esc(c.numeroInterno||c.numeroCorredor||'s/n')} · ${esc(c.cereal||'')}${c.cosecha?' · '+esc(c.cosecha):''}${c.acopioNombreCalc?' · '+esc(c.acopioNombreCalc):''}</option>`).join('')}
+          </select>
+          <div class="text-[10px] text-slate-500 mt-1">Los kg de esta CP se suman a lo entregado del contrato (para el tablero de Contratos de cereal).</div>
+        </div>
       </div>
 
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Documentos y flete</h4>
@@ -17615,6 +17634,7 @@ async function viajeSave(id) {
     observaciones:   $('#f-obs').value.trim() || null,
     destinoTipo:        $('#f-dtipo')?.value || null,
     depositoDestinoId:  ['cerealera','otro'].includes($('#f-dtipo')?.value) ? ($('#f-ddep')?.value || null) : null,
+    contratoCerealId:   $('#f-contrato')?.value || null,
     transportistaId: $('#f-trans-sel')?.value || null,
     choferId:        $('#f-chofer-sel')?.value || null,
     camionId:        $('#f-camion-sel')?.value || null,
@@ -24994,6 +25014,200 @@ async function liqCerealImportConfirmar(){
   }catch(e){ toast(e.message,'error'); }
 }
 // ============================================================
+// CONTRATOS DE CEREAL (confirmaciones de negocio). Cada contrato agrupa el
+// compromiso de entrega con un comprador/corredor. Las cartas de porte y las
+// pesificaciones (liquidaciones) se imputan al contrato y el tablero muestra
+// pactado / entregado / pendiente / pesificado. Reemplaza el Excel paralelo.
+// ============================================================
+const CC_KG = (k) => `${fmtN(Math.round(Number(k||0)))} kg`;
+const CC_ESTADOS = { abierto:['Abierto','badge-yellow'], entregado:['Entregado','badge-blue'], pesificado:['Pesificado','badge-green'], cerrado:['Cerrado','badge-gray'], anulado:['Anulado','badge-red'] };
+function ccBadge(s){ const e=CC_ESTADOS[s]||CC_ESTADOS.abierto; return `<span class="badge ${e[1]}">${e[0]}</span>`; }
+function ccBar(pct, color){ pct=Math.max(0,Math.min(100,Math.round(pct||0))); return `<div class="w-full bg-slate-200 rounded h-1.5 mt-1"><div class="${color} h-1.5 rounded" style="width:${pct}%"></div></div>`; }
+
+pages.contratosCereal = async function(){
+  setHeader('Contratos de cereal', 'Confirmaciones de negocio: entregas, pesificaciones y saldo por contrato');
+  if(!can('ventas:read')){ $('#page-body').innerHTML = stubPage('contratosCereal','Contratos de cereal'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let contratos=[];
+  try{ contratos=(await api('/api/contratos-cereal')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  state._ccList=contratos;
+  const t = contratos.reduce((a,c)=>{ const b=c.tablero||{}; a.pactados+=b.kgPactados||0; a.descargados+=b.kgDescargados||0; a.pendEntrega+=b.kgPendienteEntrega||0; a.pesificados+=b.kgPesificados||0; a.pendPesif+=b.kgPendientePesificar||0; return a; }, {pactados:0,descargados:0,pendEntrega:0,pesificados:0,pendPesif:0});
+  const filas = contratos.map(c=>{ const b=c.tablero||{}; return `<tr class="table-row cursor-pointer" onclick='ccVer(${JSON.stringify(c.id)})'>
+      <td><b>${esc(c.numeroInterno||c.numeroCorredor||'s/n')}</b>${c.numeroCorredor&&c.numeroInterno?`<div class="text-[10px] text-slate-500">Corr: ${esc(c.numeroCorredor)}</div>`:''}</td>
+      <td>${esc(c.cereal||'—')}${c.cosecha?`<div class="text-[10px] text-slate-500">${esc(c.cosecha)}</div>`:''}</td>
+      <td>${esc(c.acopioNombreCalc||c.compradorNombre||'—')}${c.compradorNombre&&c.acopioNombreCalc?`<div class="text-[10px] text-slate-500">${esc(c.compradorNombre)}</div>`:''}</td>
+      <td class="text-right">${fmtN(c.tnsPactadas||0)} tn</td>
+      <td class="text-right">${CC_KG(b.kgDescargados)}${ccBar(b.avanceEntregaPct,'bg-blue-500')}</td>
+      <td class="text-right font-semibold ${b.kgPendienteEntrega>0?'text-amber-600':'text-slate-400'}">${CC_KG(b.kgPendienteEntrega)}</td>
+      <td class="text-right">${CC_KG(b.kgPesificados)}${ccBar(b.avancePesifPct,'bg-emerald-500')}</td>
+      <td class="text-right ${b.kgPendientePesificar>0?'text-amber-600':'text-slate-400'}">${CC_KG(b.kgPendientePesificar)}</td>
+      <td>${ccBadge(c.estado)}</td>
+      <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+        ${can('ventas:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='ccForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
+        ${can('ventas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='ccDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
+      </td></tr>`; }).join('') || `<tr><td colspan="10" class="text-center text-slate-400 py-8">Sin contratos. Cargá el primero con "+ Nuevo contrato" o importá el PDF de confirmación.</td></tr>`;
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${contratos.length} contrato${contratos.length===1?'':'s'}</div>
+      <div class="flex gap-2">
+        ${can('ventas:create')?`<button class="btn btn-secondary" onclick="ccImportPDF()">📥 Importar confirmación (PDF)</button>`:''}
+        ${can('ventas:create')?`<button class="btn btn-primary" onclick="ccForm()">+ Nuevo contrato</button>`:''}
+      </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Pactado</div><div class="text-lg font-bold mt-1">${CC_KG(t.pactados)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Entregado</div><div class="text-lg font-bold mt-1 text-blue-700">${CC_KG(t.descargados)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Pend. entrega</div><div class="text-lg font-bold mt-1 text-amber-600">${CC_KG(t.pendEntrega)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Pesificado</div><div class="text-lg font-bold mt-1 text-emerald-700">${CC_KG(t.pesificados)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Pend. pesificar</div><div class="text-lg font-bold mt-1 text-amber-600">${CC_KG(t.pendPesif)}</div></div>
+    </div>
+    <div class="kpi p-0 overflow-hidden">
+      <table class="data">
+        <thead><tr><th>Contrato</th><th>Cereal</th><th>Acopio / Comprador</th><th class="text-right">Pactado</th><th class="text-right">Entregado</th><th class="text-right">Pend. entrega</th><th class="text-right">Pesificado</th><th class="text-right">Pend. pesif.</th><th>Estado</th><th></th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>`;
+};
+
+async function ccForm(id=null, prefill=null){
+  let cont = prefill || {};
+  if(id){ try{ cont=(await api('/api/contratos-cereal/'+id)).data||{}; }catch(e){ return toast(e.message,'error'); } }
+  state._ccEditId = id || null;
+  let depos=[], granos=[];
+  try{
+    const [d,p]=await Promise.all([api('/api/depositos'), api('/api/productos')]);
+    depos=(d.data||[]).filter(x=>x.activo && x.tipo==='cerealera');
+    granos=(p.data||[]).filter(x=>x.activo && /gran|cereal/i.test(x.categoria||''));
+  }catch(e){ return toast(e.message,'error'); }
+  const c=cont; const dv=(x)=> x!=null?x:'';
+  const dfec=(x)=> x?String(x).slice(0,10):'';
+  openModal({ title: id?'✏️ Editar contrato de cereal':'📄 Nuevo contrato de cereal', size:'max-w-4xl',
+    body:`
+      <div class="grid grid-cols-4 gap-3 mb-3">
+        <div><label class="label">Nº interno (acopio)</label><input id="cc-ni" class="input" value="${esc(dv(c.numeroInterno))}" placeholder="134098"/></div>
+        <div><label class="label">Nº corredor</label><input id="cc-nc" class="input" value="${esc(dv(c.numeroCorredor))}" placeholder="2026-134098"/></div>
+        <div><label class="label">Cosecha</label><input id="cc-cos" class="input" value="${esc(dv(c.cosecha))}" placeholder="25-26"/></div>
+        <div><label class="label">Fecha</label><input id="cc-fec" type="date" class="input" value="${dfec(c.fecha)}"/></div>
+        <div><label class="label">Cereal (texto)</label><input id="cc-cereal" class="input" value="${esc(dv(c.cereal))}" placeholder="MAIZ / SOJA"/></div>
+        <div><label class="label">Grano (stock)</label><select id="cc-prod" class="input"><option value="">— opcional —</option>${granos.map(g=>`<option value="${g.id}" ${g.id===c.productoId?'selected':''}>${esc(g.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label">Tn pactadas *</label><input id="cc-tns" type="number" step="0.01" class="input" value="${dv(c.tnsPactadas)}"/></div>
+        <div><label class="label">Estado</label><select id="cc-estado" class="input">${Object.entries(CC_ESTADOS).map(([k,v])=>`<option value="${k}" ${(c.estado||'abierto')===k?'selected':''}>${v[0]}</option>`).join('')}</select></div>
+      </div>
+      <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="col-span-4 text-xs text-slate-600 font-medium">💵 Precio y condiciones comerciales</div>
+        <div><label class="label">Tipo de precio</label><select id="cc-tp" class="input" onchange="ccTipoPrecio()"><option value="a_fijar" ${(c.tipoPrecio||'a_fijar')==='a_fijar'?'selected':''}>A fijar</option><option value="fijo" ${c.tipoPrecio==='fijo'?'selected':''}>Fijo</option></select></div>
+        <div id="cc-pf-wrap" style="${c.tipoPrecio==='fijo'?'':'display:none'}"><label class="label">Precio fijo</label><input id="cc-pf" type="number" step="0.01" class="input" value="${dv(c.precioFijo)}"/></div>
+        <div><label class="label">Moneda</label><select id="cc-mon" class="input"><option value="USD" ${(c.moneda||'USD')==='USD'?'selected':''}>USD</option><option value="ARS" ${c.moneda==='ARS'?'selected':''}>ARS</option></select></div>
+        <div><label class="label">Pizarra (a fijar)</label><input id="cc-piz" class="input" value="${esc(dv(c.pizarra))}" placeholder="Pizarra Rosario"/></div>
+        <div><label class="label">Comisión %</label><input id="cc-com" type="number" step="0.01" class="input" value="${dv(c.comisionPorc)}"/></div>
+        <div><label class="label">Volátil %</label><input id="cc-vol" type="number" step="0.01" class="input" value="${dv(c.volatilPorc)}"/></div>
+        <div><label class="label">Contra flete</label><input id="cc-cf" type="number" step="0.01" class="input" value="${dv(c.contraFlete)}"/></div>
+        <div><label class="label">Pago (días)</label><input id="cc-pago" type="number" class="input" value="${dv(c.pagoDias)}"/></div>
+        <div><label class="label">Gasto entregador</label><input id="cc-ge" type="number" step="0.01" class="input" value="${dv(c.gastoEntregador)}"/></div>
+        <div class="flex items-end pb-1"><label class="text-sm flex items-center gap-1"><input id="cc-geiva" type="checkbox" ${c.gastoEntregadorIva?'checked':''}/> + IVA</label></div>
+        <div><label class="label">Tarifa flete</label><input id="cc-tf" type="number" step="0.01" class="input" value="${dv(c.tarifaFlete)}"/></div>
+        <div><label class="label">Recibo hasta (%)</label><input id="cc-recibo" type="number" step="0.01" class="input" value="${dv(c.reciboHasta)}"/></div>
+        <div><label class="label">% Parcial</label><input id="cc-parcial" type="number" step="0.01" class="input" value="${dv(c.porcParcial)}"/></div>
+        <div><label class="label">% Final</label><input id="cc-final" type="number" step="0.01" class="input" value="${dv(c.porcFinal)}"/></div>
+        <div><label class="label">Entrega desde</label><input id="cc-ped" type="date" class="input" value="${dfec(c.plazoEntregaDesde)}"/></div>
+        <div><label class="label">Entrega hasta</label><input id="cc-peh" type="date" class="input" value="${dfec(c.plazoEntregaHasta)}"/></div>
+      </div>
+      <div class="grid grid-cols-4 gap-3 mb-3">
+        <div class="col-span-2"><label class="label">Comprador</label><input id="cc-comp" class="input" value="${esc(dv(c.compradorNombre))}" placeholder="MATESUR S.A."/></div>
+        <div><label class="label">CUIT comprador</label><input id="cc-compcuit" class="input" value="${esc(dv(c.compradorCuit))}"/></div>
+        <div><label class="label">Acopio (cerealera)</label><select id="cc-acopio" class="input"><option value="">— texto abajo —</option>${depos.map(x=>`<option value="${x.id}" ${x.id===c.acopioDepositoId?'selected':''}>🏭 ${esc(x.nombre)}</option>`).join('')}</select></div>
+        <div class="col-span-2"><label class="label">Corredor</label><input id="cc-corr" class="input" value="${esc(dv(c.corredorNombre))}" placeholder="SESNICH Y VILLALONGA"/></div>
+        <div><label class="label">CUIT corredor</label><input id="cc-corrcuit" class="input" value="${esc(dv(c.corredorCuit))}"/></div>
+        <div><label class="label">Acopio (texto)</label><input id="cc-acopion" class="input" value="${esc(dv(c.acopioNombre))}" placeholder="Agrocampo"/></div>
+        <div><label class="label">Procedencia</label><input id="cc-proc" class="input" value="${esc(dv(c.procedencia))}"/></div>
+        <div><label class="label">Destino</label><input id="cc-dest" class="input" value="${esc(dv(c.destino))}"/></div>
+      </div>
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Condiciones (cámara/grado/humedad)</label><textarea id="cc-cond" class="input" rows="2">${esc(dv(c.condiciones))}</textarea></div>
+        <div><label class="label">Observaciones</label><textarea id="cc-obs" class="input" rows="2">${esc(dv(c.observaciones))}</textarea></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='ccSave(${id?JSON.stringify(id):"null"})'>💾 ${id?'Guardar cambios':'Crear contrato'}</button>` });
+}
+function ccTipoPrecio(){ const w=$('#cc-pf-wrap'); if(w) w.style.display = $('#cc-tp').value==='fijo'?'':'none'; }
+async function ccSave(id){
+  const v=(s)=>{ const el=document.querySelector(s); return el?String(el.value).trim():''; };
+  const n=(s)=>{ const x=v(s); return x===''?null:Number(x); };
+  const data={
+    numeroInterno:v('#cc-ni')||null, numeroCorredor:v('#cc-nc')||null, cosecha:v('#cc-cos')||null,
+    fecha:v('#cc-fec')?new Date(v('#cc-fec')+'T12:00:00').toISOString():null,
+    cereal:v('#cc-cereal')||null, productoId:v('#cc-prod')||null,
+    tnsPactadas:n('#cc-tns')||0, estado:v('#cc-estado')||'abierto',
+    tipoPrecio:v('#cc-tp')||'a_fijar', precioFijo:n('#cc-pf'), moneda:v('#cc-mon')||'USD', pizarra:v('#cc-piz')||null,
+    comisionPorc:n('#cc-com'), volatilPorc:n('#cc-vol'), contraFlete:n('#cc-cf'), pagoDias:n('#cc-pago'),
+    gastoEntregador:n('#cc-ge'), gastoEntregadorIva:$('#cc-geiva')?.checked||false, tarifaFlete:n('#cc-tf'),
+    reciboHasta:n('#cc-recibo'), porcParcial:n('#cc-parcial'), porcFinal:n('#cc-final'),
+    plazoEntregaDesde:v('#cc-ped')?new Date(v('#cc-ped')+'T12:00:00').toISOString():null,
+    plazoEntregaHasta:v('#cc-peh')?new Date(v('#cc-peh')+'T12:00:00').toISOString():null,
+    compradorNombre:v('#cc-comp')||null, compradorCuit:v('#cc-compcuit')||null,
+    corredorNombre:v('#cc-corr')||null, corredorCuit:v('#cc-corrcuit')||null,
+    acopioDepositoId:v('#cc-acopio')||null, acopioNombre:v('#cc-acopion')||null,
+    procedencia:v('#cc-proc')||null, destino:v('#cc-dest')||null,
+    condiciones:v('#cc-cond')||null, observaciones:v('#cc-obs')||null,
+  };
+  if(!data.tnsPactadas) return toast('Cargá las toneladas pactadas','warn');
+  try{
+    await api('/api/contratos-cereal'+(id?'/'+id:''),{ method:id?'PUT':'POST', body:JSON.stringify(data) });
+    toast(id?'Contrato actualizado':'Contrato creado','success'); closeModal();
+    delete state.cache.contratosCereal; pages.contratosCereal();
+  }catch(e){ toast(e.message,'error'); }
+}
+function ccImportPDF(){
+  openModal({ title:'📥 Importar confirmación de negocio (PDF)', size:'max-w-lg',
+    body:`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mb-3">Subí el PDF de la <b>confirmación / SLIP</b> del acopio. Vas a poder revisar y completar todo antes de guardar.</div>
+      <input id="cc-pdf" type="file" accept="application/pdf" class="input"/>
+      <div id="cc-pdf-msg" class="text-sm mt-2"></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="ccImportRun()">Leer PDF</button>` });
+}
+async function ccImportRun(){
+  const f=document.getElementById('cc-pdf')?.files?.[0]; const msg=document.getElementById('cc-pdf-msg');
+  if(!f){ if(msg) msg.innerHTML='<span class="text-red-700">Elegí un PDF.</span>'; return; }
+  if(msg) msg.innerHTML='<span class="text-blue-700">⏳ Leyendo PDF…</span>';
+  try{
+    const fd=new FormData(); fd.append('archivo', f);
+    const r=await fetch(API_BASE+'/api/admin/parse-confirmacion-cereal-pdf',{ method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body:fd });
+    const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||'Error '+r.status);
+    closeModal(); toast('PDF leído — revisá los datos','success'); ccForm(null, j.data);
+  }catch(e){ if(msg) msg.innerHTML=`<span class="text-red-700">❌ ${esc(e.message)}</span>`; }
+}
+async function ccVer(id){
+  let c; try{ c=(await api('/api/contratos-cereal/'+id)).data; }catch(e){ return toast(e.message,'error'); }
+  if(!c) return;
+  const b=c.tablero||{};
+  const viajes=(c.viajes||[]).filter(v=>v.estado!=='anulada');
+  const liqs=c.liquidaciones||[];
+  const rowV=viajes.map(v=>`<tr class="table-row"><td>${fmtDate(v.fecha)}</td><td class="font-mono">${esc(v.cartaPorte||v.cpeNroComprobante||'—')}</td><td class="text-right">${CC_KG(v.cantidad||v.kgNeto||0)}</td><td class="text-right">${CC_KG(v.kgDescarga||v.kgNetoDest||0)}</td></tr>`).join('') || `<tr><td colspan="4" class="text-center text-slate-400 py-4">Sin cartas de porte imputadas.</td></tr>`;
+  const rowL=liqs.map(l=>`<tr class="table-row"><td>${fmtDate(l.fecha)}</td><td>${esc(l.numero||'s/n')}</td><td class="text-right">${CC_KG(l.kilosNetos)}</td><td class="text-right">${fmt$(l.neto)}</td><td>${l.cobrado?'<span class="badge badge-green">Cobrada</span>':'<span class="badge badge-yellow">A cobrar</span>'}</td></tr>`).join('') || `<tr><td colspan="5" class="text-center text-slate-400 py-4">Sin pesificaciones imputadas.</td></tr>`;
+  openModal({ title:`📄 Contrato ${esc(c.numeroInterno||c.numeroCorredor||'')} · ${esc(c.cereal||'')}`, size:'max-w-3xl',
+    body:`
+      <div class="flex items-center gap-2 mb-2 text-sm text-slate-600">${ccBadge(c.estado)} ${c.cosecha?'· Cosecha '+esc(c.cosecha):''} ${c.acopioNombreCalc?'· '+esc(c.acopioNombreCalc):''} ${c.compradorNombre?'· '+esc(c.compradorNombre):''}</div>
+      <div class="grid grid-cols-3 md:grid-cols-6 gap-2 mb-3">
+        <div class="kpi"><div class="text-[10px] text-slate-500">Pactado</div><div class="text-sm font-bold mt-0.5">${fmtN(c.tnsPactadas||0)} tn</div></div>
+        <div class="kpi"><div class="text-[10px] text-slate-500">Salió del campo</div><div class="text-sm font-bold mt-0.5">${CC_KG(b.kgSalientes)}</div></div>
+        <div class="kpi"><div class="text-[10px] text-slate-500">Entregado (AFIP)</div><div class="text-sm font-bold mt-0.5 text-blue-700">${CC_KG(b.kgDescargados)}</div></div>
+        <div class="kpi"><div class="text-[10px] text-slate-500">Pend. entrega</div><div class="text-sm font-bold mt-0.5 text-amber-600">${CC_KG(b.kgPendienteEntrega)}</div></div>
+        <div class="kpi"><div class="text-[10px] text-slate-500">Pesificado</div><div class="text-sm font-bold mt-0.5 text-emerald-700">${CC_KG(b.kgPesificados)}</div></div>
+        <div class="kpi"><div class="text-[10px] text-slate-500">Pend. pesificar</div><div class="text-sm font-bold mt-0.5 text-amber-600">${CC_KG(b.kgPendientePesificar)}</div></div>
+      </div>
+      <div class="text-xs text-slate-500 mb-3">Precio: ${c.tipoPrecio==='fijo'?('Fijo '+fmt$(c.precioFijo||0)):'A fijar'}${c.pizarra?' · '+esc(c.pizarra):''} · ${esc(c.moneda||'USD')}${c.plazoEntregaHasta?' · Entrega hasta '+fmtDate(c.plazoEntregaHasta):''}${(b.montoPesificado)?` · Pesificado $ ${fmtN(Math.round(b.montoPesificado))}`:''}</div>
+      <div class="font-semibold text-slate-700 text-sm mb-1">🚚 Cartas de porte imputadas (${viajes.length})</div>
+      <div class="kpi p-0 overflow-hidden mb-3"><table class="data"><thead><tr><th>Fecha</th><th>CP</th><th class="text-right">Kg carga</th><th class="text-right">Kg descarga</th></tr></thead><tbody>${rowV}</tbody></table></div>
+      <div class="font-semibold text-slate-700 text-sm mb-1">🧾 Pesificaciones imputadas (${liqs.length})</div>
+      <div class="kpi p-0 overflow-hidden"><table class="data"><thead><tr><th>Fecha</th><th>Nº</th><th class="text-right">Kg netos</th><th class="text-right">Neto</th><th>Estado</th></tr></thead><tbody>${rowL}</tbody></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            ${can('ventas:update')?`<button class="btn btn-primary" onclick='closeModal(); ccForm(${JSON.stringify(c.id)})'>✏️ Editar</button>`:''}` });
+}
+async function ccDel(id){
+  if(!confirm('¿Eliminar este contrato? Las cartas de porte y pesificaciones NO se borran, solo se sueltan del contrato.')) return;
+  try{ await api('/api/contratos-cereal/'+id,{ method:'DELETE' }); toast('Contrato eliminado','success'); delete state.cache.contratosCereal; pages.contratosCereal(); }
+  catch(e){ toast(e.message,'error'); }
+}
 // ============================================================
 // POSICIÓN DE GRANOS: las entregas son los VIAJES (con CP a cerealera o venta directa).
 // Tablero por especie + vínculo con liquidaciones.
@@ -25146,13 +25360,14 @@ function pgImportarParaEntrega(viajeId){ state._pgLinkEntrega=viajeId; state._pg
 async function liqForm(edit=null) {
   const ed = edit || {};
   state._liqEditId = ed.id || null;
-  let depos=[], productos=[], clientes=[];
+  let depos=[], productos=[], clientes=[], contratos=[];
   try {
-    const [d, p, c] = await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes')]);
+    const [d, p, c, ct] = await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes'), api('/api/contratos-cereal').catch(()=>({data:[]}))]);
     depos = (d.data||[]).filter(x => x.activo && x.tipo === 'cerealera');
     // Liquidación de cereal: solo granos/cereales (no animales ni insumos).
     productos = (p.data||[]).filter(x => x.activo && /gran|cereal/i.test(x.categoria||''));
     clientes = c.data||[];
+    contratos = (ct.data||[]).filter(x => x.estado !== 'anulado');
   } catch (e) { return toast(e.message,'error'); }
   if (!depos.length) return toast('Cargá primero una cerealera','warn');
   if (!productos.length) return toast('No hay granos cargados. Cargá un cereal o registrá un viaje/compra de grano.','warn');
@@ -25171,6 +25386,9 @@ async function liqForm(edit=null) {
         </div>
         <div class="col-span-2"><label class="label">Cliente comprador</label>
           <select id="lq-cli" class="input"><option value="">— Sin cliente / interno —</option>${clientes.map(c=>`<option value="${c.id}" ${c.id===ed.clienteId?'selected':''}>${esc(c.razonSocial)}</option>`).join('')}</select>
+        </div>
+        <div class="col-span-2"><label class="label">Contrato (pesificación de)</label>
+          <select id="lq-contrato" class="input"><option value="">— Sin contrato —</option>${contratos.map(c=>`<option value="${c.id}" ${c.id===ed.contratoCerealId?'selected':''}>${esc(c.numeroInterno||c.numeroCorredor||'s/n')} · ${esc(c.cereal||'')}${c.cosecha?' · '+esc(c.cosecha):''}</option>`).join('')}</select>
         </div>
       </div>
       <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
@@ -25247,6 +25465,7 @@ async function liqSave() {
     depositoId: $('#lq-dep').value,
     productoId: $('#lq-prod').value,
     clienteId: $('#lq-cli').value || null,
+    contratoCerealId: $('#lq-contrato')?.value || null,
     fecha: new Date($('#lq-fec').value).toISOString(),
     numero: $('#lq-nro').value.trim()||null,
     kilosBrutos: Number($('#lq-brut').value||0),
@@ -26784,9 +27003,16 @@ pages.bancos = async function() {
   try { state.cache.catalogos = (await api('/api/catalogos')).data || state.cache.catalogos || []; } catch {}
   const totalARS = cuentas.filter(c => c.moneda === 'ARS' && c.activo).reduce((a, c) => a + Number(c.saldo||0), 0);
   const totalUSD = cuentas.filter(c => c.moneda === 'USD' && c.activo).reduce((a, c) => a + Number(c.saldo||0), 0);
+  const hayBilleteras = cuentas.some(c => c.esBilleteraVirtual);
+  const cf = state._bcoFiltro || 'todas';
+  const cuentasVis = cuentas.filter(c => cf==='todas' ? true : cf==='billetera' ? c.esBilleteraVirtual : !c.esBilleteraVirtual);
+  const chip = (k,txt)=>`<button class="btn ${cf===k?'btn-primary':'btn-secondary'} text-xs" onclick="state._bcoFiltro='${k}'; pages.bancos()">${txt}</button>`;
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <div class="text-sm text-slate-600">${cuentas.length} cuenta${cuentas.length===1?'':'s'} cargada${cuentas.length===1?'':'s'}</div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <div class="text-sm text-slate-600">${cuentasVis.length} de ${cuentas.length} cuenta${cuentas.length===1?'':'s'}</div>
+        ${hayBilleteras?`<div class="flex gap-1">${chip('todas','Todas')}${chip('banco','🏛️ Bancos')}${chip('billetera','📲 Billeteras')}</div>`:''}
+      </div>
       ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoCuentaForm()">+ Nueva cuenta</button>`:''}
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
@@ -26795,17 +27021,19 @@ pages.bancos = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">Saldo total USD</div><div class="text-2xl font-bold mt-1 ${totalUSD>=0?'text-green-700':'text-red-700'}">US$ ${fmtN(totalUSD)}</div></div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      ${cuentas.map(c => `
+      ${cuentasVis.map(c => `
         <div class="kpi cursor-pointer hover:shadow-md transition" onclick='bcoVerMovs(${JSON.stringify(c.id)})'>
           <div class="flex items-start justify-between gap-2 mb-2">
             <div class="min-w-0">
-              <div class="font-bold text-slate-800 truncate">🏛️ ${esc(c.banco)}${c.sucursal?` <span class="text-xs text-slate-500 font-normal">· ${esc(c.sucursal)}</span>`:''}</div>
+              <div class="font-bold text-slate-800 truncate">${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.banco)}${c.sucursal?` <span class="text-xs text-slate-500 font-normal">· ${esc(c.sucursal)}</span>`:''}</div>
               <div class="text-[11px] text-slate-500 mt-0.5">
-                ${c.tipo==='cta_cte'?'Cta. Corriente':c.tipo==='caja_ahorro'?'Caja de Ahorro':c.tipo==='usd'?'Cuenta USD':'Otro'}
+                ${c.esBilleteraVirtual?'Billetera virtual':(c.tipo==='cta_cte'?'Cta. Corriente':c.tipo==='caja_ahorro'?'Caja de Ahorro':c.tipo==='usd'?'Cuenta USD':'Otro')}
                 ${c.numero?` · ${esc(c.numero)}`:''}${c.alias?` · alias: ${esc(c.alias)}`:''}
               </div>
+              ${c.empresaNombre?`<div class="text-[10px] mt-0.5"><span class="badge badge-gray" style="font-size:10px">🏢 ${esc(c.empresaNombre)}</span></div>`:''}
             </div>
             <div class="flex items-center gap-1 flex-shrink-0">
+              ${c.esBilleteraVirtual?`<span class="badge text-[10px]" style="background:#f3e8ff;color:#6b21a8;border:1px solid #e9d5ff">📲 Billetera</span>`:''}
               <span class="badge ${c.moneda==='USD'?'badge-blue':'badge-green'} text-[10px]">${esc(c.moneda||'ARS')}</span>
               ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar cuenta" onclick='event.stopPropagation(); bcoCuentaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
               ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar / desactivar cuenta" onclick='event.stopPropagation(); bcoCuentaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
@@ -26955,6 +27183,10 @@ function bcoCuentaForm(id=null) {
         <div><label class="label">Fecha del saldo inicial</label><input id="bc-fini" type="date" class="input" value="${c.fechaInicial?String(c.fechaInicial).slice(0,10):''}"/></div>
       </div>
       <div><label class="label">Observaciones</label><textarea id="bc-obs" class="input" rows="2">${esc(c.observaciones||'')}</textarea></div>
+      <div class="mt-3 flex items-center gap-2 p-2 bg-violet-50 rounded-lg border border-violet-200">
+        <input id="bc-billetera" type="checkbox" ${c.esBilleteraVirtual?'checked':''}/>
+        <label for="bc-billetera" class="text-sm text-violet-800">📲 Es <b>billetera virtual</b> (Naranja X, Mercado Pago, Ualá…) — se trata igual que una cuenta pero se puede filtrar aparte.</label>
+      </div>
       <div class="mt-3 flex items-center gap-2">
         <input id="bc-act" type="checkbox" ${c.activo!==false?'checked':''}/>
         <label for="bc-act">Cuenta activa</label>
@@ -26984,6 +27216,7 @@ async function bcoCuentaSave(id) {
       saldoInicial: Number(gv('#bc-sini'))||0,
       fechaInicial: fechaISO,   // mediodía local: evita corrimientos por zona horaria
       observaciones: gv('#bc-obs').trim()||null,
+      esBilleteraVirtual: gc('#bc-billetera'),
       activo: gc('#bc-act'),
     };
   } catch (e) { return toast('Error al leer el formulario: '+(e.message||e),'error'); }
@@ -27303,7 +27536,7 @@ function bcoMovForm(id=null) {
       <div class="grid grid-cols-3 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Cuenta *</label>
           <select id="bm-cta" class="input" onchange="bcoMovTarjetasRender()">
-            ${cuentas.filter(c=>c.activo || c.id===selCuenta).map(c => `<option value="${c.id}" ${c.id===selCuenta?'selected':''}>🏛️ ${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('')}
+            ${cuentas.filter(c=>c.activo || c.id===selCuenta).map(c => `<option value="${c.id}" ${c.id===selCuenta?'selected':''}>${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}${c.empresaNombre?' — '+esc(c.empresaNombre):''}</option>`).join('')}
           </select>
         </div>
         <div><label class="label">Fecha *</label><input id="bm-fec" type="date" class="input" value="${fechaVal}"/></div>
@@ -27320,9 +27553,9 @@ function bcoMovForm(id=null) {
           <label class="label">Cuenta destino (transferencia interna)</label>
           <select id="bm-cta2" class="input">
             <option value="">— Si es a un tercero, dejar vacío —</option>
-            ${cuentas.filter(c=>c.activo).map(c => `<option value="${c.id}">🏛️ ${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('')}
+            ${cuentas.filter(c=>c.activo).map(c => `<option value="${c.id}">${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}${c.empresaNombre?' — '+esc(c.empresaNombre):''}</option>`).join('')}
           </select>
-          <div class="text-[11px] text-slate-500 mt-1">Si elegís una cuenta destino, se crea automáticamente el movimiento espejo (entrada en la otra cuenta).</div>
+          <div class="text-[11px] text-slate-500 mt-1">Si elegís una cuenta destino, se crea automáticamente el movimiento espejo (entrada en la otra cuenta). Podés transferir entre cuentas de <b>distintas empresas del mismo grupo</b>.</div>
         </div>
         <div class="col-span-3" id="bm-caja-wrap" style="display:none">
           <label class="label">Caja de efectivo (opcional)</label>
