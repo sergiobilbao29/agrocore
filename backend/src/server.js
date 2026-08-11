@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.71.0';
+const AGROCORE_VERSION = '2.72.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11658,11 +11658,37 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       cerealProductoId: z.string().nullable().optional(),  // producto cereal del stock que se entrega
       depositoId: z.string().nullable().optional(),        // cerealera/silo de donde sale
       precioPizarra: z.number().nonnegative().nullable().optional(), // ARS por tn al día de la entrega (valuación)
+      // Pago con VARIOS medios: parte efectivo, parte cheque(s), parte transferencia, etc.
+      // Cada leg mueve su propio recurso. La suma de montos debe dar d.monto.
+      pagos: z.array(z.object({
+        metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'tarjeta']),
+        monto: z.number().positive(),
+        cajaOrigen: z.string().nullable().optional(),
+        chequeId: z.string().nullable().optional(),
+        bancoCuentaId: z.string().nullable().optional(),
+        nuevoCheque: z.object({
+          formato: z.enum(['fisico', 'electronico']).optional().default('fisico'),
+          banco: z.string().nullable().optional(),
+          cuenta: z.string().nullable().optional(),
+          nroCheque: z.string().min(1),
+          fechaEmision: z.coerce.date().nullable().optional(),
+          fechaPago: z.coerce.date(),
+          monto: z.number().nullable().optional(),
+          librador: z.string().nullable().optional(),
+        }).nullable().optional(),
+      })).optional(),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
     const sumaCreditos = d.creditos.reduce((a, c) => a + c.importeAplicado, 0);
+    // Pago con varios medios: la suma de los legs debe coincidir con el monto pagado.
+    if (Array.isArray(d.pagos) && d.pagos.length) {
+      const sumaPagos = d.pagos.reduce((a, p) => a + Number(p.monto || 0), 0);
+      if (Math.abs(sumaPagos - d.monto) > 0.02) {
+        return res.status(400).json({ ok: false, error: `La suma de los medios de pago (${sumaPagos.toFixed(2)}) no coincide con el monto total (${d.monto.toFixed(2)})` });
+      }
+    }
     // d.monto = lo que efectivamente sale de caja/banco (en monedaPago). Si se paga
     // en la MISMA moneda de la deuda, debe coincidir con (comprobantes − notas de crédito).
     // Si se paga en otra moneda (ej: deuda USD, pago ARS) no se exige igualdad.
@@ -11794,77 +11820,58 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         }
       }
 
-      // 2. Registrar el movimiento del recurso usado — SOLO si sale plata. Si el
-      // neto es 0 (las notas de crédito cubren todo) es una simple vinculación.
+      // 2. Registrar el/los movimiento(s) del recurso usado — SOLO si sale plata.
+      // movLeg mueve UN medio de pago (efectivo/cheque/transferencia/externo/tarjeta).
+      // Soporta pago con VARIOS medios: se llama una vez por cada leg de d.pagos.
+      const movLeg = async (leg) => {
+        const m = leg.metodo, monto = Number(leg.monto || 0);
+        if (monto <= 0.01) return;
+        if (m === 'cheque') {
+          if (!leg.chequeId && !leg.nuevoCheque) throw new Error('Falta el cheque para pago con cheque');
+          if (leg.nuevoCheque) {
+            const nc = leg.nuevoCheque;
+            await tx.cheque.create({ data: {
+              companyId: req.companyId, tipo: 'propio', formato: nc.formato || 'fisico',
+              banco: nc.banco || null, cuenta: nc.cuenta || null, nroCheque: nc.nroCheque,
+              fechaEmision: nc.fechaEmision || d.fecha, fechaPago: nc.fechaPago,
+              monto: (nc.monto != null ? nc.monto : monto),
+              beneficiario: prov.razonSocial, librador: nc.librador || null,
+              fechaEndoso: d.fecha, enPoderDe: prov.razonSocial, estado: 'entregado',
+              observaciones: d.observaciones || ('Cheque propio entregado a ' + prov.razonSocial),
+            }});
+          } else {
+            const ch = await tx.cheque.findFirst({ where: { id: leg.chequeId, companyId: req.companyId } });
+            if (!ch) throw new Error('Cheque no encontrado');
+            await tx.cheque.update({ where: { id: ch.id }, data: {
+              estado: ch.tipo === 'propio' ? 'entregado' : 'endosado',
+              beneficiario: prov.razonSocial || ch.beneficiario,
+              fechaEndoso: d.fecha, enPoderDe: prov.razonSocial || ch.enPoderDe,
+              observaciones: d.observaciones || ch.observaciones,
+            }});
+          }
+        } else if (m === 'transferencia') {
+          if (!leg.bancoCuentaId) throw new Error('Falta la cuenta bancaria para la transferencia');
+          await tx.bancoMovimiento.create({ data: {
+            companyId: req.companyId, cuentaId: leg.bancoCuentaId, fecha: d.fecha, tipo: 'transferencia_out',
+            concepto: 'Pago a ' + prov.razonSocial, monto, contraparte: prov.razonSocial,
+            observaciones: d.observaciones || null, userId: req.user?.id || null,
+          }});
+        } else if (m === 'efectivo') {
+          await tx.efectivo.create({ data: {
+            companyId: req.companyId, fecha: d.fecha, tipo: 'egreso', concepto: 'Pago a ' + prov.razonSocial,
+            monto, caja: leg.cajaOrigen || null, clasificacion: 'empresa', observaciones: d.observaciones || null,
+          }});
+        } else if (m === 'externo' || m === 'tarjeta') {
+          const esTarjeta = m === 'tarjeta';
+          await tx.efectivo.create({ data: {
+            companyId: req.companyId, fecha: d.fecha, tipo: 'egreso', concepto: 'Pago a ' + prov.razonSocial,
+            monto, caja: leg.cajaOrigen || (esTarjeta ? 'Tarjeta de crédito' : 'Medio externo'), clasificacion: 'empresa',
+            observaciones: [(leg.cajaOrigen ? (esTarjeta ? 'Tarjeta: ' : 'Medio: ') + leg.cajaOrigen : null), d.observaciones].filter(Boolean).join(' · ') || null,
+          }});
+        } else { throw new Error('Método no soportado en pago dividido: ' + m); }
+      };
       if (d.monto > 0.01) {
-      if (d.metodo === 'cheque') {
-        if (!d.chequeId && !d.nuevoCheque) throw new Error('Falta el cheque para pago con cheque');
-        if (d.nuevoCheque) {
-          // Cheque PROPIO nuevo: se crea y se entrega al proveedor en un solo paso.
-          const nc = d.nuevoCheque;
-          await tx.cheque.create({ data: {
-            companyId: req.companyId,
-            tipo: 'propio', formato: nc.formato || 'fisico',
-            banco: nc.banco || null, cuenta: nc.cuenta || null,
-            nroCheque: nc.nroCheque,
-            fechaEmision: nc.fechaEmision || d.fecha,
-            fechaPago: nc.fechaPago,
-            monto: (nc.monto != null ? nc.monto : d.monto),
-            beneficiario: prov.razonSocial,
-            librador: nc.librador || null,
-            fechaEndoso: d.fecha,
-            enPoderDe: prov.razonSocial,
-            estado: 'entregado',
-            observaciones: d.observaciones || ('Cheque propio entregado a ' + prov.razonSocial),
-          }});
-        } else {
-          const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId } });
-          if (!ch) throw new Error('Cheque no encontrado');
-          // Propio: se ENTREGA al proveedor. Tercero: se ENDOSA. En ambos casos sale de cartera
-          // y se registran beneficiario, fecha de salida y en poder de quién queda (el proveedor).
-          await tx.cheque.update({ where: { id: ch.id }, data: {
-            estado: ch.tipo === 'propio' ? 'entregado' : 'endosado',
-            beneficiario: prov.razonSocial || ch.beneficiario,
-            fechaEndoso: d.fecha,
-            enPoderDe: prov.razonSocial || ch.enPoderDe,
-            observaciones: d.observaciones || ch.observaciones,
-          }});
-        }
-      } else if (d.metodo === 'transferencia') {
-        if (!d.bancoCuentaId) throw new Error('Falta bancoCuentaId para transferencia');
-        await tx.bancoMovimiento.create({ data: {
-          companyId: req.companyId, cuentaId: d.bancoCuentaId,
-          fecha: d.fecha, tipo: 'transferencia_out',
-          concepto: 'Pago a ' + prov.razonSocial,
-          monto: d.monto, contraparte: prov.razonSocial,
-          observaciones: d.observaciones || null,
-          userId: req.user?.id || null,
-        }});
-      } else if (d.metodo === 'efectivo') {
-        await tx.efectivo.create({ data: {
-          companyId: req.companyId,
-          fecha: d.fecha, tipo: 'egreso',
-          concepto: 'Pago a ' + prov.razonSocial,
-          monto: d.monto,
-          caja: d.cajaOrigen || null,
-          clasificacion: 'empresa',
-          observaciones: d.observaciones || null,
-        }});
-      } else if (d.metodo === 'externo' || d.metodo === 'tarjeta') {
-        // Billetera / medio externo (Mercado Pago, etc.) o Tarjeta de crédito (solo
-        // etiqueta): no impacta banco, se registra como una "caja" en Control de
-        // Efectivo con el nombre del medio/tarjeta.
-        const esTarjeta = d.metodo === 'tarjeta';
-        await tx.efectivo.create({ data: {
-          companyId: req.companyId,
-          fecha: d.fecha, tipo: 'egreso',
-          concepto: 'Pago a ' + prov.razonSocial,
-          monto: d.monto,
-          caja: d.cajaOrigen || (esTarjeta ? 'Tarjeta de crédito' : 'Medio externo'),
-          clasificacion: 'empresa',
-          observaciones: [(d.cajaOrigen ? (esTarjeta ? 'Tarjeta: ' : 'Medio: ') + d.cajaOrigen : null), d.observaciones].filter(Boolean).join(' · ') || null,
-        }});
-      } else if (d.metodo === 'cereal') {
+      if (d.metodo === 'cereal') {
         // Canje: entregamos grano para cancelar una deuda en toneladas.
         // d.monto = toneladas entregadas (en la moneda/grano de la deuda).
         if (!d.cerealProductoId) throw new Error('Elegí el cereal que se entrega');
@@ -11927,6 +11934,12 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           observaciones: d.observaciones || null, userId: req.user?.id || null,
           cajaOrigen: d.cajaInterco, chequeIdOrigen: d.chequeIdInterco, bancoCuentaIdOrigen: d.bancoCuentaIdInterco,
         });
+      } else {
+        // Medios comunes (efectivo/cheque/transferencia/externo/tarjeta): uno o VARIOS.
+        const legs = (Array.isArray(d.pagos) && d.pagos.length)
+          ? d.pagos
+          : [{ metodo: d.metodo, monto: d.monto, cajaOrigen: d.cajaOrigen, chequeId: d.chequeId, nuevoCheque: d.nuevoCheque, bancoCuentaId: d.bancoCuentaId }];
+        for (const leg of legs) await movLeg(leg);
       }
       } // fin "if (d.monto > 0.01)"
 

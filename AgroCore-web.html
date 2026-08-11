@@ -2558,6 +2558,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
+      titulo:'💸 v2.72.0 — Pagar a proveedor con varios medios (varios cheques / mixto)',
+      desc:'Al pagar a un proveedor ahora podés tildar <b>➕ Pagar con varios medios</b> y dividir el pago: una parte en <b>efectivo</b>, otra con <b>uno o varios cheques</b> y/o por <b>transferencia</b> (o tarjeta). Agregás las filas que quieras, cada una con su medio y su monto, y la suma tiene que dar el total a pagar. La orden de pago sale con el detalle de todos los cheques y el desglose por medio.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
       titulo:'📊 v2.71.0 — Balance General + Flujo detallado por empresa + Resumen multi-empresa ampliado',
       desc:'Tres mejoras financieras: <b>1)</b> Nuevo <b>Balance General</b> (Tablero): elegís un rango de fechas y ves los <b>ingresos y egresos reales por categoría</b>, con <b>gráfico de los mayores gastos</b> e ingresos/egresos por mes, y export a Excel. <b>2)</b> En <b>Flujo de Fondos</b>, botón <b>🏢 Por empresa</b>: muestra el detalle cronológico <b>separado por empresa</b> (fecha, descripción, tipo, banco, subtotal por mes) con export a Excel (una hoja por empresa). <b>3)</b> El <b>Resumen multi-empresa</b> ahora suma columnas de <b>créditos a pagar, cuentas a cobrar y a pagar, arrendamientos pendientes y gastos del mes</b> por empresa.' },
@@ -15350,9 +15353,11 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
             ${esPago ? `<option value="cereal">🌾 Entrega de cereal (canje)</option>` : ''}
             ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (recursos de otra firma)</option>` : ''}
           </select>
+          ${esPago ? `<label class="flex items-center gap-1 text-[11px] text-slate-600 mt-1 cursor-pointer"><input id="pc-dividir" type="checkbox" onchange="pagoDividirToggle('${modo}')"/> ➕ Pagar con varios medios (dividir: efectivo + cheques + transferencia…)</label>` : ''}
         </div>
       </div>
       <div id="pc-metodo-detalle" class="mb-3"></div>
+      <div id="pc-legs" class="mb-3" style="display:none"></div>
       <div id="pc-moneda-zone" class="mb-3"></div>
       <div class="bg-amber-50 border border-amber-300 rounded p-3 text-sm">
         <div class="flex justify-between mb-1"><span>Total tildado:</span><b id="pc-total-tildado">$ 0</b></div>
@@ -15474,6 +15479,7 @@ async function pagoCobroAplicarCredito(modo) {
 function pagoCobroRecalcular() {
   const d = state._pagoCobroData;
   const esPago = d.modo === 'pago';
+  if (document.getElementById('pc-dividir')?.checked) { try { pagoLegRecalc(); } catch {} }
   let totalTildado = 0, deudaArs = 0, deudaArsOk = true;
   const monedasSet = new Set();
   for (const idx in d.tildados) {
@@ -15614,6 +15620,76 @@ function pagoCobroRecalcular() {
   }
 }
 
+// ===== Pago con VARIOS medios (dividir): efectivo + cheque(s) + transferencia =====
+// Cheques usables para entregar en un pago (propios emitidos o terceros en cartera).
+function pagoChequesDisponibles(){
+  return (state.cache.cheques||[]).filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado||''));
+}
+function pagoLegRecursoHTML(metodo){
+  if (metodo==='transferencia') {
+    const ctas=(state.cache.bancoCuentas||[]).filter(c=>c.activo!==false);
+    return `<select class="input text-sm" data-leg-banco><option value="">— Cuenta —</option>${ctas.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre||c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select>`;
+  }
+  if (metodo==='cheque') {
+    const chs=pagoChequesDisponibles();
+    return `<select class="input text-sm" data-leg-cheque onchange="pagoLegChequeChange(this)"><option value="">— Cheque en cartera —</option>${chs.map(c=>`<option value="${esc(c.id)}" data-monto="${c.monto||0}">${c.tipo==='propio'?'🧾':'📩'} N° ${esc(c.nroCheque||c.numero||'')} · ${esc(c.banco||'')} · ${fmt$(c.monto||0)}</option>`).join('')}</select>`;
+  }
+  if (metodo==='tarjeta') {
+    const tj=catByTipo(TARJETA_CAT_TIPO);
+    return `<select class="input text-sm" data-leg-caja><option value="">— Tarjeta —</option>${tj.map(t=>`<option value="${esc(t.nombre)}">💳 ${esc(t.nombre)}</option>`).join('')}</select>`;
+  }
+  // efectivo / externo
+  const cajas=state.cache.efectivoCajas||[];
+  return `<select class="input text-sm" data-leg-caja><option value="">— Caja —</option>${cajas.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>`;
+}
+function pagoLegRowHTML(){
+  return `<tr data-leg class="border-t border-slate-100">
+    <td class="p-1"><select class="input text-sm" data-leg-metodo onchange="pagoLegMetodoChange(this)">
+      <option value="efectivo">💵 Efectivo</option>
+      <option value="cheque">💳 Cheque</option>
+      <option value="transferencia">🏛️ Transferencia</option>
+      <option value="tarjeta">💳 Tarjeta</option>
+    </select></td>
+    <td class="p-1" data-leg-rec>${pagoLegRecursoHTML('efectivo')}</td>
+    <td class="p-1"><input class="input text-sm text-right w-28" type="number" step="0.01" min="0" data-leg-monto placeholder="0" oninput="pagoLegRecalc()"/></td>
+    <td class="p-1 text-right"><button type="button" class="btn btn-ghost text-red-600 text-xs" title="Quitar" onclick="this.closest('tr').remove(); pagoLegRecalc()">×</button></td>
+  </tr>`;
+}
+function pagoLegAdd(){ const tb=document.getElementById('pc-legs-rows'); if(tb){ tb.insertAdjacentHTML('beforeend', pagoLegRowHTML()); pagoLegRecalc(); } }
+function pagoLegMetodoChange(sel){ const row=sel.closest('[data-leg]'); const rec=row?.querySelector('[data-leg-rec]'); if(rec) rec.innerHTML=pagoLegRecursoHTML(sel.value); pagoLegRecalc(); }
+function pagoLegChequeChange(sel){ const opt=sel.selectedOptions?.[0]; const m=Number(opt?.dataset?.monto||0); const row=sel.closest('[data-leg]'); const mi=row?.querySelector('[data-leg-monto]'); if(mi && m>0 && !Number(mi.value)){ mi.value=m; pagoLegRecalc(); } }
+function pagoLegRecalc(){
+  const target=Number(document.getElementById('pc-total-pago')?.value||0);
+  const suma=[...document.querySelectorAll('#pc-legs-rows [data-leg] [data-leg-monto]')].reduce((a,i)=>a+Number(i.value||0),0);
+  const el=document.getElementById('pc-legs-total');
+  if(el){ const dif=Math.round((target-suma)*100)/100;
+    el.innerHTML = `Suma medios: <b>${fmt$(suma)}</b> · Total a pagar: <b>${fmt$(target)}</b> · ${Math.abs(dif)<0.01?'<span class="text-emerald-700">✅ coincide</span>':(dif>0?`<span class="text-amber-700">faltan ${fmt$(dif)}</span>`:`<span class="text-red-700">sobran ${fmt$(-dif)}</span>`)}`;
+  }
+}
+function pagoDividirToggle(modo){
+  const on=document.getElementById('pc-dividir')?.checked;
+  const detalle=document.getElementById('pc-metodo-detalle');
+  const metSel=document.getElementById('pc-metodo');
+  const legs=document.getElementById('pc-legs');
+  if(on){
+    if(metSel){ metSel.disabled=true; }
+    if(detalle) detalle.style.display='none';
+    if(legs){ legs.style.display='';
+      legs.innerHTML=`
+        <div class="border border-slate-200 rounded-lg p-2 bg-slate-50">
+          <div class="text-xs text-slate-600 mb-1">Dividí el pago en varios medios (podés poner varios cheques). La suma debe dar el total a pagar.</div>
+          <table class="w-full text-sm"><thead class="text-[11px] uppercase text-slate-500"><tr><th class="text-left p-1" style="width:22%">Medio</th><th class="text-left p-1">Detalle</th><th class="text-left p-1" style="width:22%">Monto</th><th></th></tr></thead><tbody id="pc-legs-rows"></tbody></table>
+          <div class="flex items-center justify-between mt-1"><button type="button" class="btn btn-secondary text-xs" onclick="pagoLegAdd()">+ Agregar medio</button><div id="pc-legs-total" class="text-[11px] text-slate-600"></div></div>
+        </div>`;
+      pagoLegAdd(); pagoLegAdd();
+    }
+  } else {
+    if(metSel){ metSel.disabled=false; }
+    if(legs){ legs.style.display='none'; legs.innerHTML=''; }
+    if(detalle) detalle.style.display='';
+    pagoCobroMetodoCambio(modo);
+  }
+}
 function pagoCobroMetodoCambio(modo) {
   const esPago = modo === 'pago';
   const metodo = document.getElementById('pc-metodo').value;
@@ -16254,6 +16330,25 @@ async function pagoCobroConfirmar(modo) {
   if (monedaPago && (esACuenta || pagaOtraMoneda)) { body.monedaPago = monedaPago; body.cotizacionPago = d._cotizPago || null; }
   // Neto 0 (las NC cubren todo): es sólo vinculación, no se pide caja/banco/cheque.
   if (monto > 0.01) {
+  const _dividir = esPago && document.getElementById('pc-dividir')?.checked;
+  if (_dividir) {
+    // Pago con VARIOS medios: armamos body.pagos con cada leg.
+    const legs = [];
+    for (const r of document.querySelectorAll('#pc-legs-rows [data-leg]')) {
+      const m = r.querySelector('[data-leg-metodo]')?.value;
+      const mnt = Number(r.querySelector('[data-leg-monto]')?.value || 0);
+      if (!mnt || mnt <= 0) continue;
+      const leg = { metodo: m, monto: mnt };
+      if (m === 'efectivo' || m === 'externo' || m === 'tarjeta') leg.cajaOrigen = r.querySelector('[data-leg-caja]')?.value || null;
+      else if (m === 'transferencia') { leg.bancoCuentaId = r.querySelector('[data-leg-banco]')?.value || null; if (!leg.bancoCuentaId) return toast('Elegí la cuenta bancaria en la fila de transferencia', 'warn'); }
+      else if (m === 'cheque') { leg.chequeId = r.querySelector('[data-leg-cheque]')?.value || null; if (!leg.chequeId) return toast('Elegí un cheque en cada fila de cheque', 'warn'); }
+      legs.push(leg);
+    }
+    if (!legs.length) return toast('Cargá al menos un medio de pago', 'warn');
+    const sumaLegs = legs.reduce((a, l) => a + l.monto, 0);
+    if (Math.abs(sumaLegs - monto) > 0.02) return toast('La suma de los medios (' + fmt$(sumaLegs) + ') no coincide con el total a pagar (' + fmt$(monto) + ')', 'warn');
+    body.pagos = legs; body.metodo = 'efectivo';
+  } else {
   if (metodo === 'efectivo') body.cajaOrigen = document.getElementById('pc-caja')?.value || null;
   if (metodo === 'tarjeta') {
     const _tj = document.getElementById('pc-tarjeta')?.value || null;
@@ -16337,6 +16432,7 @@ async function pagoCobroConfirmar(modo) {
       body.empresaDestinoId = otraEmp;
     }
   }
+  } // fin else (medio único)
   } // fin "if (monto > 0.01)" — bloque de método sólo cuando sale/entra plata
   try {
     const url = esPago ? '/api/pagos-proveedores' : '/api/cobros-clientes';
@@ -16364,6 +16460,16 @@ async function pagoCobroConfirmar(modo) {
                    fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'',
                    comprobantes: opComps, cheques: [], retenciones: [],
                    totalEfectivo: metodo==='efectivo'?monto:0, totalTransferencias: metodo==='transferencia'?monto:0, totalCheques: 0 };
+      // Pago con varios medios: la OP arma los totales y los cheques desde los legs.
+      if (body.pagos && body.pagos.length) {
+        op.metodo = 'varios'; let tEf=0, tTr=0, tCh=0;
+        for (const leg of body.pagos) {
+          if (leg.metodo==='transferencia') { tTr += leg.monto; if(leg.bancoCuentaId){ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===leg.bancoCuentaId); if(b && !op.bancoNombre) op.bancoNombre=`${b.banco}${b.numero?' '+b.numero:''}`; } }
+          else if (leg.metodo==='cheque' && leg.chequeId) { const ch=(state.cache.cheques||[]).find(x=>x.id===leg.chequeId)||{}; tCh += leg.monto; op.cheques.push({ idInterno:ch.id?String(ch.id).slice(0,8):'—', librador:ch.librador||ch.origen||'', tipo:_tipoCh(ch.formato||ch.tipoFormato), endosante:ch.endosante||'', nroCheque:ch.numero||ch.nroCheque||'', nroCuenta:ch.numeroCuenta||ch.nroCuenta||'', fechaVenc:ch.fechaPago, banco:ch.banco||'', importe:Number(ch.monto)||leg.monto }); }
+          else { tEf += leg.monto; }   // efectivo / tarjeta / externo
+        }
+        op.totalEfectivo=tEf; op.totalTransferencias=tTr; op.totalCheques=tCh;
+      }
       if (metodo==='transferencia' && body.bancoCuentaId){ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===body.bancoCuentaId); if(b) op.bancoNombre=`${b.banco}${b.numero?' '+b.numero:''}`; }
       if (metodo==='cheque'){
         if (body.nuevoCheque){ // cheque propio nuevo → librador = la empresa
