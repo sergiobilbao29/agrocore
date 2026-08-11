@@ -67,6 +67,7 @@ model Company {
   campanas        Campana[]
   depositos       Deposito[]
   liquidacionesCereal LiquidacionCereal[]
+  contratosCereal ContratoCereal[]
   liquidacionesHacienda LiquidacionHacienda[]
   mensajes        Mensaje[]
   chatEstados     ChatEstado[]
@@ -879,6 +880,7 @@ model Viaje {
   destinoTipo         String?    // "cerealera" | "venta_directa" | "otro" (NULL = no aplica)
   depositoDestinoId   String?    // si va a cerealera, depósito destino del cereal
   liquidacionCerealId String?    // si ya se cargó la liquidación de venta, su id
+  contratoCerealId    String?    // contrato/confirmación de negocio al que se imputa esta CP
   // ---- IDs relacionales (v0.8.2) ----
   transportistaId String?
   choferId        String?
@@ -913,10 +915,12 @@ model Viaje {
   camionRel        Camion?        @relation(fields: [camionId], references: [id])
   acopladoRel      Acoplado?      @relation(fields: [acopladoId], references: [id])
   liquidacionLinks ViajeLiquidacion[]
+  contratoCereal   ContratoCereal? @relation(fields: [contratoCerealId], references: [id])
 
   @@index([companyId])
   @@index([fecha])
   @@index([estado])
+  @@index([contratoCerealId])
   @@index([facturaCompraId])
   @@index([depositoDestinoId])
   @@index([cpeNroCtg])
@@ -1416,6 +1420,7 @@ model LiquidacionCereal {
   depositoId       String   // cerealera donde estaba el grano
   productoId       String   // cereal liquidado (soja, maíz, trigo, etc.)
   clienteId        String?  // comprador (puede ser la misma cerealera o un tercero)
+  contratoCerealId String?  // contrato/confirmación al que pertenece esta fijación/pesificación
   fecha            DateTime
   numero           String?  // nro de liquidación del comprobante físico
   kilosBrutos      Float    @default(0)
@@ -1434,12 +1439,70 @@ model LiquidacionCereal {
 
   company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   deposito         Deposito @relation(fields: [depositoId], references: [id])
+  contratoCereal   ContratoCereal? @relation(fields: [contratoCerealId], references: [id])
   conceptos        LiquidacionCerealConcepto[]
   viajeLinks       ViajeLiquidacion[]
 
   @@index([companyId])
   @@index([depositoId])
   @@index([fecha])
+  @@index([contratoCerealId])
+}
+
+// ============================================================
+// CONTRATO DE CEREAL (confirmación de negocio / "SLIP"): el compromiso
+// comercial del productor con un comprador/corredor a entregar cierta
+// cantidad de grano, con precio (a fijar o fijo), plazo de entrega y
+// condiciones. Las CARTAS DE PORTE (viajes) y las PESIFICACIONES
+// (liquidaciones) se imputan al contrato para saber cuánto se entregó,
+// cuánto queda pendiente y cuánto se pesificó/cobró.
+// ============================================================
+model ContratoCereal {
+  id                 String   @id @default(cuid())
+  companyId          String
+  numeroInterno      String?  // nro de contrato del acopio/entregador (ej "134098")
+  numeroCorredor     String?  // nro de contrato del corredor (ej "2026-134098")
+  fecha              DateTime?              // fecha de la confirmación
+  cosecha            String?                // ej "25-26"
+  productoId         String?                // grano del catálogo (opcional)
+  cereal             String?                // texto del cereal si no hay producto (ej "MAIZ")
+  compradorNombre    String?                // comprador (ej "MATESUR S.A.")
+  compradorCuit      String?
+  corredorNombre     String?                // corredor (ej "SESNICH Y VILLALONGA")
+  corredorCuit       String?
+  acopioDepositoId   String?                // depósito tipo cerealera donde entrega (ej Agrocampo)
+  acopioNombre       String?                // nombre del acopio/entregador si no es depósito
+  procedencia        String?                // origen (ej "C. MOLDES")
+  destino            String?                // destino (ej "RIO CUARTO")
+  tnsPactadas        Float    @default(0)   // toneladas comprometidas
+  tipoPrecio         String   @default("a_fijar") // "a_fijar" | "fijo"
+  precioFijo         Float?                 // si tipoPrecio = fijo
+  moneda             String   @default("USD")     // moneda del precio/contra flete
+  pizarra            String?                // ej "Pizarra Rosario" (para a fijar)
+  comisionPorc       Float?                 // % comisión del corredor
+  volatilPorc        Float?                 // % volátil
+  contraFlete        Float?                 // contra flete (USD/tn habitualmente)
+  gastoEntregador    Float?                 // gasto del entregador ($/tn)
+  gastoEntregadorIva Boolean  @default(false)
+  tarifaFlete        Float?                 // tarifa de flete ($)
+  pagoDias           Int?                   // días de pago
+  porcParcial        Float?                 // % parcial (ej 97.5)
+  porcFinal          Float?                 // % final (ej 2.5)
+  plazoEntregaDesde  DateTime?
+  plazoEntregaHasta  DateTime?
+  reciboHasta        Float?                 // humedad recibo hasta (%)
+  condiciones        String?                // cámara/grado/humedad (texto libre)
+  observaciones      String?
+  estado             String   @default("abierto") // "abierto" | "entregado" | "pesificado" | "cerrado" | "anulado"
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  company            Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  viajes             Viaje[]
+  liquidaciones      LiquidacionCereal[]
+
+  @@index([companyId])
+  @@index([estado])
 }
 
 model LiquidacionCerealConcepto {
@@ -1551,6 +1614,7 @@ model BancoCuenta {
   titular         String?                      // razón social del titular
   saldoInicial    Float    @default(0)         // saldo de apertura cuando arrancás a usar el sistema
   fechaInicial    DateTime?                    // fecha del saldo inicial
+  esBilleteraVirtual Boolean @default(false)   // true = billetera virtual (Naranja X, Mercado Pago, Ualá...). Mismo trato que una cuenta pero se puede filtrar aparte.
   observaciones   String?
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
