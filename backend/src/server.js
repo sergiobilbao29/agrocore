@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.64.0';
+const AGROCORE_VERSION = '2.66.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7096,6 +7096,47 @@ app.delete('/api/contratos-cereal/:id', requireCompany, requirePermission('venta
       await tx.contratoCereal.delete({ where: { id: existing.id } });
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Compromisos de ENTREGA por contrato de cereal (para avisos/alertas y banners).
+// Igual que los créditos con pago en cereal, pero mirando cuánto falta ENTREGAR de
+// cada contrato y su plazo de entrega. Devuelve solo los que tienen kg pendientes.
+app.get('/api/compromisos-contrato-cereal', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const contratos = await prisma.contratoCereal.findMany({ where: { companyId: req.companyId, estado: { notIn: ['anulado', 'cerrado'] } } });
+    const ids = contratos.map(c => c.id);
+    const [viajes, liqs] = await Promise.all([
+      ids.length ? prisma.viaje.findMany({ where: { companyId: req.companyId, contratoCerealId: { in: ids } }, select: { contratoCerealId: true, estado: true, cantidad: true, kgNeto: true, kgDescarga: true, kgNetoDest: true } }) : [],
+      ids.length ? prisma.liquidacionCereal.findMany({ where: { companyId: req.companyId, contratoCerealId: { in: ids } }, select: { contratoCerealId: true, kilosNetos: true, neto: true, cobrado: true } }) : [],
+    ]);
+    const vByC = {}, lByC = {};
+    for (const v of viajes) (vByC[v.contratoCerealId] = vByC[v.contratoCerealId] || []).push(v);
+    for (const l of liqs) (lByC[l.contratoCerealId] = lByC[l.contratoCerealId] || []).push(l);
+    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+    const data = [];
+    for (const c of contratos) {
+      const tab = _tableroContrato(c, vByC[c.id], lByC[c.id]);
+      if (tab.kgPendienteEntrega <= 0.5) continue;
+      const lim = c.plazoEntregaHasta ? new Date(c.plazoEntregaHasta) : null;
+      let diasRestantes = null;
+      if (lim) { const l0 = new Date(lim); l0.setHours(0, 0, 0, 0); diasRestantes = Math.round((l0 - hoy) / 86400000); }
+      data.push({
+        contratoId: c.id, numero: c.numeroInterno || c.numeroCorredor || null,
+        cereal: c.cereal || null, cosecha: c.cosecha || null,
+        acopio: c.acopioNombre || null, comprador: c.compradorNombre || null,
+        pendienteKg: tab.kgPendienteEntrega, pendienteTn: Math.round(tab.kgPendienteEntrega / 1000 * 100) / 100,
+        fechaLimite: c.plazoEntregaHasta || null,
+        vencido: lim ? lim < hoy : false,
+        diasRestantes,
+      });
+    }
+    data.sort((a, b) => {
+      if (a.fechaLimite && b.fechaLimite) return new Date(a.fechaLimite) - new Date(b.fechaLimite);
+      return a.fechaLimite ? -1 : (b.fechaLimite ? 1 : 0);
+    });
+    const totalPendienteTn = data.reduce((a, x) => a + x.pendienteTn, 0);
+    res.json({ ok: true, data, totalPendienteTn });
   } catch (e) { next(e); }
 });
 

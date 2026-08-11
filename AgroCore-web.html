@@ -1919,6 +1919,21 @@ async function loadNotifs() {
       }
     }
   } catch {}
+  // Compromisos de entrega por CONTRATO de cereal (mismo estilo que los créditos).
+  try {
+    if (can('ventas:read')) {
+      const cc = await api('/api/compromisos-contrato-cereal');
+      const comp = cc.data || [];
+      if (comp.length) {
+        const totTn = comp.reduce((a,c)=>a+Number(c.pendienteTn||0),0);
+        const vencidos = comp.filter(c=>c.vencido).length;
+        const porVencer = comp.filter(c=>!c.vencido && c.diasRestantes!=null && c.diasRestantes<=15).length;
+        const sub = comp.slice(0,3).map(c=>`${fmtN(c.pendienteTn)} tn ${c.cereal||''}${c.numero?' (contrato '+c.numero+')':''}`).join(' · ')
+          + (vencidos?` · ⚠ ${vencidos} vencido${vencidos>1?'s':''}`:'') + (!vencidos&&porVencer?` · ⏳ ${porVencer} por vencer`:'');
+        alertas.push({ icon:'📄', color: vencidos?'text-red-600':'text-amber-600', titulo:`${fmtN(totTn)} tn pendientes de entregar por contrato`, sub, go:'contratosCereal', ctr: comp.length });
+      }
+    }
+  } catch {}
   return alertas;
 }
 
@@ -2542,6 +2557,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
+      titulo:'🔔 v2.66.0 — Alertas de entrega por contrato de cereal',
+      desc:'Los <b>contratos de cereal</b> ahora avisan lo que falta entregar, igual que los créditos con pago en grano. En la <b>campana de notificaciones</b> aparece cuántas toneladas quedan pendientes de entregar por contrato (marcando <b>vencidos</b> y <b>por vencer</b> según el plazo de entrega), y en <b>Contratos de cereal</b>, <b>Viajes</b>, <b>Movimientos</b> y <b>Flujo de fondos</b> se muestra un cartel con el detalle (contrato, cereal, kg pendientes y fecha límite).' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
+      titulo:'💰 v2.65.0 — Cobrar una liquidación de cereal registra la plata',
+      desc:'En una liquidación de cereal, el botón <b>💰 Registrar cobro</b> abre el cuadro de cobro (efectivo, cheque o transferencia a una cuenta bancaria) sobre la cuenta a cobrar que generó la liquidación: al confirmar, <b>entra la plata al banco/caja</b>, se cancela la cuenta a cobrar y la liquidación queda <b>cobrada</b> — todo en un paso. El viejo botón quedó como <b>✔️ Solo marcar cobrada</b> (marca sin registrar dinero, para casos informativos). Ojo: para cobrar así, la liquidación tiene que tener cargado el <b>cliente comprador</b>.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
       titulo:'📄 v2.64.0 — Contratos de cereal (confirmaciones de negocio)',
       desc:'Nuevo módulo <b>Contratos de cereal</b> (Stock y depósitos): cargá cada <b>confirmación de negocio</b> con su número, cosecha, cereal, tn pactadas, precio (a fijar o fijo), plazo de entrega, comprador, corredor y acopio. Podés <b>importar el PDF de la confirmación</b> para precargar todo. A cada <b>carta de porte</b> (viaje) y a cada <b>pesificación</b> (liquidación) le podés elegir el contrato, y el <b>tablero</b> te muestra por contrato: pactado, salido del campo, entregado (AFIP), pendiente de entrega, pesificado y pendiente de pesificar. Reemplaza el Excel paralelo.' },
@@ -15234,7 +15255,7 @@ function ccLibreFilter(k,v){ state.ccLibreFilter = state.ccLibreFilter || { cate
 /* =========================================================
  * 💸 PAGO / COBRO MULTI-COMPROBANTE con métodos varios e Intercompany
  * ========================================================= */
-async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
+async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
   const esPago = modo === 'pago';
   const tipoContacto = esPago ? 'proveedor' : 'cliente';
   // El caché de proveedores/clientes puede no estar cargado si se entra directo a
@@ -15320,6 +15341,20 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */) {
       <button class="btn btn-primary" onclick="pagoCobroConfirmar('${modo}')">${esPago?'💸 Registrar pago':'💰 Registrar cobro'}</button>`
   });
   state._pagoCobroData = { modo, comprobantes: [], tildados: {} };
+  // Preselección (ej. cobrar una liquidación puntual): fija el contacto, carga sus
+  // comprobantes pendientes y auto-tilda el que corresponde a la referencia dada.
+  if (opts.liqCobradaId) state._pagoCobroData.liqCobradaId = opts.liqCobradaId;
+  if (opts.contactoId) {
+    const sel = document.getElementById('pc-contacto');
+    if (sel) {
+      sel.value = opts.contactoId;
+      await pagoCobroCargarComprobantes(modo);
+      if (opts.refAuto) {
+        const idx = (state._pagoCobroData.comprobantes || []).findIndex(c => (c.referencia || '') === opts.refAuto);
+        if (idx >= 0) { const cb = document.querySelector(`.pc-tilde[data-idx="${idx}"]`); if (cb) { cb.checked = true; pagoCobroToggleTilde(idx, true); } }
+      }
+    }
+  }
 }
 
 async function pagoCobroCargarComprobantes(modo) {
@@ -16278,6 +16313,8 @@ async function pagoCobroConfirmar(modo) {
   try {
     const url = esPago ? '/api/pagos-proveedores' : '/api/cobros-clientes';
     const _rsp = await api(url, { method: 'POST', body: JSON.stringify(body) });
+    // Si el cobro salió de una liquidación de cereal, la dejamos marcada como cobrada.
+    if (!esPago && d.liqCobradaId) { try { await api('/api/liquidaciones-cereal/'+d.liqCobradaId+'/marcar-cobrado', { method:'PUT' }); } catch {} }
     closeModal();
     const _ncTxt = creditos.length ? ` · ${creditos.length} NC aplicada${creditos.length===1?'':'s'}` : '';
     const _msg = monto > 0.01
@@ -25047,6 +25084,7 @@ pages.contratosCereal = async function(){
         ${can('ventas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='ccDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
       </td></tr>`; }).join('') || `<tr><td colspan="10" class="text-center text-slate-400 py-8">Sin contratos. Cargá el primero con "+ Nuevo contrato" o importá el PDF de confirmación.</td></tr>`;
   $('#page-body').innerHTML = `
+    <div id="contratos-cereal-banner"></div>
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600">${contratos.length} contrato${contratos.length===1?'':'s'}</div>
       <div class="flex gap-2">
@@ -25067,6 +25105,7 @@ pages.contratosCereal = async function(){
         <tbody>${filas}</tbody>
       </table>
     </div>`;
+  renderCompromisoCerealBanner('contratos-cereal-banner');
 };
 
 async function ccForm(id=null, prefill=null){
@@ -25510,10 +25549,27 @@ async function liqVer(id) {
           <table class="data"><thead><tr><th>Tipo</th><th>Concepto</th><th class="text-right">Importe</th></tr></thead>
           <tbody>${l.conceptos.map(c=>`<tr><td>${c.tipo==='descuento'?'Descuento':'Impuesto'}</td><td>${esc(c.concepto)}</td><td class="text-right">${fmt$(c.importe)}</td></tr>`).join('')}</tbody></table>
         ` : ''}`,
-      footer: `${!l.cobrado && can('ventas:update')?`<button class="btn btn-secondary" onclick='liqMarcarCobrado(${JSON.stringify(l.id)})'>✅ Marcar cobrada</button>`:''}
+      footer: `${!l.cobrado && can('finanzas:create')?`<button class="btn btn-secondary" onclick='liqCobrar(${JSON.stringify(l.id)})'>💰 Registrar cobro</button>`:''}
+               ${!l.cobrado && can('ventas:update')?`<button class="btn btn-ghost text-xs" title="Solo marca la liquidación como cobrada, sin registrar el ingreso de dinero" onclick='liqMarcarCobrado(${JSON.stringify(l.id)})'>✔️ Solo marcar cobrada</button>`:''}
                <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
     });
   } catch (e) { toast(e.message,'error'); }
+}
+// Registrar el cobro REAL de una liquidación: abre el cuadro de cobro a cliente
+// (efectivo / cheque / transferencia) sobre la cuenta a cobrar que generó la
+// liquidación. Al confirmar, entra la plata al banco/caja y la liquidación queda cobrada.
+async function liqCobrar(id) {
+  let l;
+  try { l = (await api('/api/liquidaciones-cereal/'+id)).data; } catch (e) { return toast(e.message,'error'); }
+  if (!l) return;
+  if (!l.clienteId) {
+    if (confirm('Esta liquidación no tiene cliente comprador, por eso no generó una cuenta a cobrar y no se puede registrar el ingreso de dinero.\n\nLo recomendado es editarla y agregar el cliente comprador.\n\n¿Querés marcarla como cobrada igual? (solo informativo, NO registra plata)')) {
+      return liqMarcarCobrado(id);
+    }
+    return;
+  }
+  closeModal();
+  await pagoCobroAbrir('cobro', { contactoId: l.clienteId, refAuto: 'LIQCER-'+l.id, liqCobradaId: l.id });
 }
 async function liqMarcarCobrado(id) {
   try { await api('/api/liquidaciones-cereal/'+id+'/marcar-cobrado',{method:'PUT'}); toast('Marcada como cobrada','success'); closeModal(); pages.liquidaciones(); }
@@ -26402,17 +26458,19 @@ async function credCerealRender(credId){
     </div>`;
 }
 function depoNombre(id){ if(!id) return ''; const d=(state.cache.depositos||[]).find(x=>x.id===id); return d?d.nombre:''; }
-// Aviso informativo de compromisos de entrega de cereal (se inyecta en Movimientos y Viajes).
+// Aviso informativo de compromisos de entrega de cereal (se inyecta en Movimientos, Viajes y Flujo).
+// Incluye los compromisos por CRÉDITO (pago en grano) y por CONTRATO (confirmación de negocio).
 async function renderCompromisoCerealBanner(containerId){
   const el = document.getElementById(containerId); if(!el) return;
-  let items = [];
-  try { const r = await api('/api/compromisos-cereal'); items = r.data||[]; } catch { return; }
-  if (!items.length){ el.innerHTML=''; return; }
+  let items = [], contratos = [];
+  try { const r = await api('/api/compromisos-cereal'); items = r.data||[]; } catch {}
+  try { if (can('ventas:read')) { const rc = await api('/api/compromisos-contrato-cereal'); contratos = rc.data||[]; } } catch {}
+  if (!items.length && !contratos.length){ el.innerHTML=''; return; }
+  const lineasCred = items.map(c=>{ const v=c.vencido; return `<div>• <b>${fmtN(c.pendiente)} tn</b> de <b>${esc(granoLabel(c.grano))}</b> pendientes — crédito ${esc(c.banco||'')}${c.nroOperacion?' #'+esc(c.nroOperacion):''} · límite <span class="${v?'text-red-600 font-semibold':''}">${c.fechaLimite?fmtDate(c.fechaLimite):'—'}${v?' ⚠ vencido':''}</span></div>`; }).join('');
+  const lineasCont = contratos.map(c=>{ const v=c.vencido; const dr=c.diasRestantes; const porV=!v && dr!=null && dr<=15; return `<div>• <b>${fmtN(c.pendienteTn)} tn</b> de <b>${esc(c.cereal||'cereal')}</b> pendientes de entregar — contrato ${esc(c.numero||'s/n')}${c.cosecha?' · '+esc(c.cosecha):''} · límite <span class="${v?'text-red-600 font-semibold':(porV?'text-amber-700 font-semibold':'')}">${c.fechaLimite?fmtDate(c.fechaLimite):'—'}${v?' ⚠ vencido':(porV?` · ⏳ ${dr} día${dr===1?'':'s'}`:'')}</span></div>`; }).join('');
   el.innerHTML = `<div class="rounded-lg border border-amber-300 bg-amber-50 p-3 mb-3">
     <div class="font-semibold text-amber-900 mb-1">🌾 Compromisos de entrega de cereal</div>
-    <div class="text-sm text-amber-900 space-y-0.5">
-      ${items.map(c=>{ const v=c.vencido; return `<div>• <b>${fmtN(c.pendiente)} tn</b> de <b>${esc(granoLabel(c.grano))}</b> pendientes — crédito ${esc(c.banco||'')}${c.nroOperacion?' #'+esc(c.nroOperacion):''} · límite <span class="${v?'text-red-600 font-semibold':''}">${c.fechaLimite?fmtDate(c.fechaLimite):'—'}${v?' ⚠ vencido':''}</span></div>`; }).join('')}
-    </div>
+    <div class="text-sm text-amber-900 space-y-0.5">${lineasCred}${lineasCont}</div>
   </div>`;
 }
 async function entregaCerealForm(credId){
