@@ -2557,6 +2557,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
+      titulo:'🔎 v2.67.0 — Movimientos diarios: filtros de Categoría, Familia y Caja',
+      desc:'En <b>Movimientos diarios</b> el filtro de <b>Categoría</b> ahora muestra las categorías reales de gasto (ya no aparecen etiquetas de banco como "Transferencia in/out"). Se sumó un filtro de <b>Familia</b> con <b>multiselección</b> (elegís varias a la vez), y cuando filtrás por método <b>Efectivo</b> aparece el selector de <b>Caja</b> para ver los movimientos de una caja puntual.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
       titulo:'🔔 v2.66.0 — Alertas de entrega por contrato de cereal',
       desc:'Los <b>contratos de cereal</b> ahora avisan lo que falta entregar, igual que los créditos con pago en grano. En la <b>campana de notificaciones</b> aparece cuántas toneladas quedan pendientes de entregar por contrato (marcando <b>vencidos</b> y <b>por vencer</b> según el plazo de entrega), y en <b>Contratos de cereal</b>, <b>Viajes</b>, <b>Movimientos</b> y <b>Flujo de fondos</b> se muestra un cartel con el detalle (contrato, cereal, kg pendientes y fecha límite).' },
@@ -23811,14 +23814,29 @@ pages.movDiarios = async function() {
   const egresosMes  = filasMes.filter(f => f.tipo === 'egreso').reduce((a,f) => a + f.monto, 0);
   const netoMes = ingresosMes - egresosMes;
 
-  // Categorías existentes para filtro: usamos la CATEGORÍA raíz (antes de " / ") para
-  // poder filtrar "Gastos familiares" y ver todas sus familias juntas.
+  // Árbol de Categorías de Gasto (para armar bien los filtros de Categoría y Familia).
+  if (!state.cache.categoriasGasto) { try { state.cache.categoriasGasto = (await api('/api/categorias-gasto')).data || []; } catch { state.cache.categoriasGasto = []; } }
+  const _catsGasto = state.cache.categoriasGasto || [];
+  const _catRootNames = _catsGasto.filter(c => !c.padreId).map(c => (c.nombre||'').trim()).filter(Boolean);
+  const _catFamNames  = _catsGasto.filter(c =>  c.padreId).map(c => (c.nombre||'').trim()).filter(Boolean);
+  // Etiquetas de tipos bancarios: NO son categorías de gasto, las excluimos del filtro.
+  const _bancoLabels = new Set(Object.values(typeof BANCO_TIPOS!=='undefined'?BANCO_TIPOS:{}).map(t => t.lbl));
+  // Categoría raíz (antes de "/") y familia (después de "/") de un movimiento.
   const _raizCat = c => String(c||'').split('/')[0].trim();
-  const categoriasUnicas = [...new Set(filas.map(f => _raizCat(f.categoria)).filter(Boolean))].sort();
+  const _famCat  = c => { const p = String(c||'').split('/'); return p.length>1 ? p.slice(1).join('/').trim() : ''; };
+  // Categorías para el filtro: las del árbol + las que aparecen en los movimientos,
+  // excluyendo las etiquetas de tipos bancarios (Transferencia in/out, Depósito, etc.).
+  const _catsDeMovs = filas.map(f => _raizCat(f.categoria)).filter(c => c && !_bancoLabels.has(c));
+  const categoriasUnicas = [...new Set([..._catRootNames, ..._catsDeMovs])].sort((a,b)=>a.localeCompare(b));
+  // Familias para el filtro (multiselección): las del árbol + las que aparecen en los movimientos.
+  const _famsDeMovs = filas.map(f => _famCat(f.categoria)).filter(Boolean);
+  const familiasUnicas = [...new Set([..._catFamNames, ..._famsDeMovs])].sort((a,b)=>a.localeCompare(b));
 
   const hoyStr = hoyLocal;
   // Por defecto muestra los movimientos de HOY (desde hoy, hasta hoy).
-  state.movDiariosFilter = state.movDiariosFilter || { q:'', tipo:'', metodo:'', categoria:'', clasif:'', desde:hoyStr, hasta:hoyStr };
+  state.movDiariosFilter = state.movDiariosFilter || { q:'', tipo:'', metodo:'', categoria:'', fams:[], caja:'', clasif:'', desde:hoyStr, hasta:hoyStr };
+  if (!Array.isArray(state.movDiariosFilter.fams)) state.movDiariosFilter.fams = [];
+  if (state.movDiariosFilter.caja === undefined) state.movDiariosFilter.caja = '';
 
   const render = () => {
     const f = state.movDiariosFilter;
@@ -23827,6 +23845,8 @@ pages.movDiarios = async function() {
       if (f.tipo && r.tipo !== f.tipo) return false;
       if (f.metodo && r.metodo !== f.metodo) return false;
       if (f.categoria && _raizCat(r.categoria) !== f.categoria) return false;
+      if (f.fams && f.fams.length && !f.fams.includes(_famCat(r.categoria))) return false;
+      if (f.caja && r.origen !== f.caja) return false;   // caja (efectivo) puntual
       if (f.clasif && r.clasificacion !== f.clasif) return false;
       if (f.desde && (r.fecha || '').slice(0,10) < f.desde) return false;
       if (f.hasta && (r.fecha || '').slice(0,10) > f.hasta) return false;
@@ -23981,6 +24001,18 @@ pages.movDiarios = async function() {
           </select>
         </div>
         <div class="md:col-span-2">
+          <label class="label">Familia</label>
+          ${msHTML('md-fam', familiasUnicas, state.movDiariosFilter.fams, 'mdFam', 'Todas')}
+        </div>
+        ${state.movDiariosFilter.metodo==='efectivo' ? `
+        <div class="md:col-span-2">
+          <label class="label">Caja</label>
+          <select id="md-caja" class="input">
+            <option value="">Todas</option>
+            ${(state.cache.efectivoCajas||[]).map(c => `<option value="${esc(c)}" ${c===state.movDiariosFilter.caja?'selected':''}>${esc(c)}</option>`).join('')}
+          </select>
+        </div>` : ''}
+        <div class="md:col-span-2">
           <label class="label">Clasif.</label>
           <select id="md-clasif" class="input">
             <option value="">Todas</option>
@@ -24005,12 +24037,20 @@ pages.movDiarios = async function() {
 
     <div class="kpi p-0 overflow-hidden"><div id="md-tabla"></div></div>`;
 
-  ['q','tipo','metodo','categoria','clasif','desde','hasta'].forEach(k => {
+  ['q','tipo','categoria','clasif','caja','desde','hasta'].forEach(k => {
     const el = $('#md-' + k);
     if (!el) return;
     const ev = (el.tagName === 'SELECT' || el.type === 'date') ? 'change' : 'input';
     el.addEventListener(ev, e => { state.movDiariosFilter[k] = e.target.value; render(); });
   });
+  // Método: al cambiar re-armamos el panel para mostrar/ocultar el selector de Caja.
+  { const elM = $('#md-metodo'); if (elM) elM.addEventListener('change', e => {
+      state.movDiariosFilter.metodo = e.target.value;
+      if (e.target.value !== 'efectivo') state.movDiariosFilter.caja = '';
+      pages.movDiarios();
+    }); }
+  // Familia (multiselección)
+  msWire('md-fam','mdFam', vals => { state.movDiariosFilter.fams = vals; render(); }, () => render(), 'Todas');
   render();
 };
 
@@ -24023,7 +24063,8 @@ function extraerCategoria(obs) {
   return m[1].trim();
 }
 function movDiariosFiltrosLimpiar() {
-  state.movDiariosFilter = { q:'', tipo:'', metodo:'', categoria:'', clasif:'', desde:'', hasta:'' };
+  state.movDiariosFilter = { q:'', tipo:'', metodo:'', categoria:'', fams:[], caja:'', clasif:'', desde:'', hasta:'' };
+  state._ms_mdFam = false;
   pages.movDiarios();
 }
 // Modal para cargar un movimiento diario
