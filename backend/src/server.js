@@ -12486,21 +12486,26 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
         try {
           const nro = r['Numero de cheque'] || r['Número de cheque'];
           if (!nro) continue;
+          const fRec = _parseFechaArg(r['Fecha de recepcion'] || r['Fecha de recepcion '] || r['Fecha de entrega']);
           await prisma.cheque.create({ data: {
             companyId: req.companyId,
             tipo: 'terceros',
             formato: /electron/i.test(r['Tipo de cheque'] || '') ? 'electronico' : 'fisico',
-            banco: r['Banco Emisor'] || null,
+            banco: r['Banco Emisor'] || r['Banco'] || null,
             nroCheque: String(nro),
-            fechaEmision: _parseFechaArg(r['Fecha de recepcion '] || r['Fecha de entrega']) || new Date(),
+            fechaEmision: fRec || new Date(),
+            fechaRecepcion: fRec || null,
             fechaPago:    _parseFechaArg(r['Fecha de pago']) || new Date(),
             monto: _parseMonto(r['Monto']) || 0,
             librador: r['Titular'] || null,
+            cuitTitular: r['CUIT Titular'] || r['Cuit Titular'] || r['Cuit titular'] || null,
+            endosante: r['Origen'] || r['Endosante'] || null,
             beneficiario: r['Destino'] || null,
+            enPoderDe: r['Quien lo recibe'] || r['Quien lo recibe '] || null,
             estado: _normalizar(r['Estado'] || '').includes('depositad') ? 'depositado'
                   : _normalizar(r['Estado'] || '').includes('cobrad') ? 'cobrado'
                   : 'en_cartera',
-            observaciones: [(r['CUIT Titular']||r['Cuit Titular']) && `CUIT: ${r['CUIT Titular']||r['Cuit Titular']}`, r['Origen'] && `Origen: ${r['Origen']}`, r['Destino'] && `Destino: ${r['Destino']}`, r['Quien lo recibe '] && `Recibido por: ${r['Quien lo recibe ']}`].filter(Boolean).join(' · ') || null,
+            observaciones: [r['Destino'] && `Destino: ${r['Destino']}`, r['Observaciones'] || r['observaciones'] || null].filter(Boolean).join(' · ') || null,
           }});
           ok++;
         } catch (e) { errores.push({ hoja: sh1, fila: i+2, error: e.message }); }
@@ -12529,26 +12534,31 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
           else if (dest.includes('depositad')) estadoCh = 'depositado';
           else if (dest.includes('vendido') || dest.includes('cobrad') || dest.includes('pagad') || fin.includes('pagad') || fin.includes('cobrad')) estadoCh = 'cobrado';
           else estadoCh = 'en_cartera';
+          const fReD = _parseFechaArg(r['Fecha de recepcion'] || r['Fecha de recepcion ']);
+          const fEndD = _parseFechaArg(r['Fecha del movimiento del endoso']);
           await prisma.cheque.create({ data: {
             companyId: req.companyId,
             tipo: 'terceros',
             formato: 'electronico',
             banco: r['Banco'] || null,
             nroCheque: String(nro),
-            fechaEmision: _parseFechaArg(r['Fecha de pago']) || new Date(),
+            // No suele venir fecha de emision: usamos la de recepcion si esta, si no la de pago.
+            fechaEmision: fReD || _parseFechaArg(r['Fecha de pago']) || new Date(),
+            fechaRecepcion: fReD || null,
             fechaPago:    _parseFechaArg(r['Fecha de pago']) || new Date(),
+            fechaEndoso:  fEndD || null,
             monto: _parseMonto(r['Importe']) || 0,
             librador: r['Titular'] || null,
+            cuitTitular: r['Cuit titular'] || r['CUIT Titular'] || r['Cuit Titular'] || null,
+            endosante: r['Endosante'] || null,
             beneficiario: r['A quien se endoso'] || null,
             estado: estadoCh,
             observaciones: [
               r['empresa'] && `Empresa: ${r['empresa']}`,
-              r['Cuit titular'] && `CUIT: ${r['Cuit titular']}`,
-              r['Endosante'] && `Endosante: ${r['Endosante']}`,
+              r['VIA'] && `Vía: ${r['VIA']}`,
               r['Destino del cheque'] && `Destino: ${r['Destino del cheque']}`,
-              r['A quien se endoso'] && `A: ${r['A quien se endoso']}`,
-              r['Fecha del movimiento del endoso'] && `Endoso: ${r['Fecha del movimiento del endoso']}`,
               r['Estado del cheque endosado'] && `Estado endoso: ${r['Estado del cheque endosado']}`,
+              r['Observaciones'] || r['observaciones'] || null,
             ].filter(Boolean).join(' · ') || null,
           }});
           ok++;
