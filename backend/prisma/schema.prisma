@@ -947,6 +947,7 @@ model Empleado {
   fechaIngreso    DateTime?
   fechaEgreso     DateTime?
   sueldo          Float?
+  jornalDiario    Float?    // precio por día (para empleados que cobran por jornada)
   telefono        String?
   email           String?
   direccion       String?

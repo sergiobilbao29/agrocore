@@ -2558,6 +2558,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
+      titulo:'👷 v2.70.0 — Planilla de empleados: sueldo por día, carga múltiple y editar categorías sin salir',
+      desc:'Mejoras en la planilla: <b>1)</b> <b>Precio por día (jornal)</b> en el empleado: en vez de un sueldo mensual fijo, cargás el precio por día y en la planilla usás <b>Días trabajados</b> (le suma) — el valor por día se <b>autocompleta</b>. Los días que no trabaja se descuentan con la nueva categoría de gasto <b>Día no trabajado</b> (también por día, autocompletada), así los vas anotando como un gasto más. <b>2)</b> Nuevo botón <b>➕ Cargar varios</b>: cargás varios movimientos de una vez (una fila por cada gasto/ganancia con su categoría, monto y concepto). <b>3)</b> Al tocar <b>Editar categorías</b> desde el alta de un movimiento, ahora se abre <b>encima</b> y al cerrarlo <b>volvés al movimiento</b> (antes se salía).' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
       titulo:'🏷️ v2.69.0 — Cuentas bancarias: nombre propio + marcar en desuso',
       desc:'Cada cuenta bancaria puede tener un <b>nombre</b> (ej. "Cuenta operativa", "Sueldos"): si lo cargás, es lo que se muestra en el listado en lugar del banco. Además, en la cuenta se puede marcar <b>en desuso</b>, y el listado general tiene un tilde <b>Solo activas</b> (activado por defecto) que oculta las cuentas en desuso — se destilda para verlas.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
@@ -19431,7 +19434,10 @@ function empleForm(id=null) {
         <div><label class="label">Puesto</label><input id="f-pto" class="input" list="f-puestos" value="${esc(it.puesto||'')}"/>
           <datalist id="f-puestos">${catByTipo('Labor').map(x=>`<option value="${esc(x.nombre)}">`).join('')}</datalist>
         </div>
-        <div><label class="label">Sueldo</label><input id="f-sld" type="number" step="0.01" class="input" value="${it.sueldo||''}"/></div>
+        <div><label class="label">Sueldo mensual</label><input id="f-sld" type="number" step="0.01" class="input" value="${it.sueldo||''}"/></div>
+        <div><label class="label">Precio por día (jornal)</label><input id="f-jornal" type="number" step="0.01" class="input" value="${it.jornalDiario||''}" placeholder="Ej: 25000"/>
+          <div class="text-[10px] text-slate-400 mt-1">Se autocompleta al cargar "Días trabajados" en la planilla.</div>
+        </div>
         <div><label class="label">Fecha ingreso</label><input id="f-fin" type="date" class="input" value="${it.fechaIngreso?String(it.fechaIngreso).slice(0,10):''}"/></div>
         <div><label class="label">Fecha egreso</label><input id="f-fout" type="date" class="input" value="${it.fechaEgreso?String(it.fechaEgreso).slice(0,10):''}"/></div>
         <div><label class="label">Teléfono</label><input id="f-tel" class="input" value="${esc(it.telefono||'')}"/></div>
@@ -19542,6 +19548,7 @@ async function empleSave(id) {
     cuil: $('#f-cuil').value.trim()||null,
     puesto: $('#f-pto').value.trim()||null,
     sueldo: $('#f-sld').value?Number($('#f-sld').value):null,
+    jornalDiario: $('#f-jornal')?.value?Number($('#f-jornal').value):null,
     fechaIngreso: $('#f-fin').value?new Date($('#f-fin').value).toISOString():null,
     fechaEgreso: $('#f-fout').value?new Date($('#f-fout').value).toISOString():null,
     telefono: $('#f-tel').value.trim()||null,
@@ -19839,6 +19846,7 @@ function empFichaRender() {
       <button class="btn btn-secondary" onclick="empExportXLSX()" title="Descargar la planilla del mes en Excel">📊 Excel</button>
       <button class="btn btn-secondary" onclick="empReciboPDF()" title="Recibo imprimible para entregar al empleado">🖨️ Recibo PDF</button>
       ${canC?`<button class="btn btn-secondary" onclick="empCatManager()" title="Agregar o eliminar categorías de la planilla">⚙️ Categorías</button>`:''}
+      ${canC?`<button class="btn btn-secondary" onclick="empMovMultiForm()" title="Cargar varios movimientos de una sola vez">➕ Cargar varios</button>`:''}
       ${canC?`<button class="btn btn-primary" onclick="empMovForm()">+ Agregar movimiento</button>`:''}
     </div>
 
@@ -19923,6 +19931,80 @@ function empMovForm(movId=null){
   });
   empMovCatChange();
 }
+// --- Carga MÚLTIPLE de movimientos (varias filas con categoría, monto y concepto) ---
+function empMovMultiForm(){
+  const hoy = new Date().toISOString().slice(0,10);
+  const fechaStr = (hoy.slice(0,7)===state.empMes) ? hoy : (state.empMes+'-01');
+  openModal({
+    title:'➕ Cargar varios movimientos', size:'max-w-4xl',
+    body:`
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div><label class="label">Fecha *</label><input id="mm-fecha" class="input" type="date" value="${fechaStr}"/></div>
+        <div class="flex items-end"><div class="text-[11px] text-slate-500">Una fila por movimiento (gasto o ganancia) con su categoría, monto y concepto. Se guardan todos juntos.</div></div>
+      </div>
+      <div class="overflow-auto" style="max-height:52vh">
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase text-slate-500"><tr>
+            <th class="text-left p-1" style="width:20%">Tipo</th>
+            <th class="text-left p-1" style="width:26%">Categoría</th>
+            <th class="text-left p-1" style="width:16%">Monto</th>
+            <th class="text-left p-1">Concepto</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="mm-rows"></tbody>
+        </table>
+      </div>
+      <div class="mt-2 flex items-center gap-3">
+        <button type="button" class="btn btn-secondary text-xs" onclick="empMovMultiAddRow()">+ Agregar fila</button>
+        <button type="button" class="text-[11px] text-emerald-700 hover:underline" onclick="empCatManager()">⚙️ Editar categorías</button>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="empMovMultiSave()">💾 Agregar todos</button>`
+  });
+  empMovMultiAddRow(); empMovMultiAddRow(); empMovMultiAddRow();
+}
+function empMovMultiRowHTML(){
+  const tipo='gasto';
+  return `<tr data-mm-row class="border-t border-slate-100">
+    <td class="p-1"><select class="input text-sm" data-mm-tipo onchange="empMovMultiTipoChange(this)">
+      <option value="gasto">Gasto (resta)</option><option value="ganancia">Ganancia (suma)</option></select></td>
+    <td class="p-1"><select class="input text-sm" data-mm-cat>${empMovCatOptions(tipo,'')}</select></td>
+    <td class="p-1"><input class="input text-sm text-right" type="number" step="0.01" min="0" data-mm-monto placeholder="0"/></td>
+    <td class="p-1"><input class="input text-sm" data-mm-con placeholder="Ej: adelanto, zapatillas…"/></td>
+    <td class="p-1 text-right"><button type="button" class="btn btn-ghost text-red-600 text-xs" title="Quitar fila" onclick="this.closest('tr').remove()">×</button></td>
+  </tr>`;
+}
+function empMovMultiAddRow(){ const tb=document.getElementById('mm-rows'); if(tb) tb.insertAdjacentHTML('beforeend', empMovMultiRowHTML()); }
+function empMovMultiTipoChange(selTipo){ const row=selTipo.closest('[data-mm-row]'); const catSel=row?.querySelector('[data-mm-cat]'); if(catSel) catSel.innerHTML=empMovCatOptions(selTipo.value,''); }
+async function empMovMultiSave(){
+  const empId=state.empFichaId;
+  const fecha=document.getElementById('mm-fecha')?.value;
+  if(!fecha) return toast('Fecha requerida','warn');
+  const rows=[...document.querySelectorAll('#mm-rows [data-mm-row]')];
+  const items=[];
+  for(const r of rows){
+    const tipo=r.querySelector('[data-mm-tipo]')?.value||'gasto';
+    const catSel=r.querySelector('[data-mm-cat]');
+    const cod=catSel?.value||null;
+    const opt=catSel?.selectedOptions?.[0];
+    const monto=Number(r.querySelector('[data-mm-monto]')?.value||0);
+    const concepto=(r.querySelector('[data-mm-con]')?.value||'').trim();
+    if(!monto && !concepto) continue; // fila vacía → se ignora
+    if(!monto || monto<=0) return toast('Todas las filas con datos necesitan un monto mayor a cero','warn');
+    if(!concepto) return toast('Falta el concepto en alguna fila','warn');
+    const catDef=(state.cache.catPlanilla||[]).find(c=>c.codigo===cod);
+    const unidad=catDef?.unidad||opt?.dataset?.unidad||null;
+    items.push({ fecha, tipo, categoria:cod, concepto, monto, observaciones:null, unidad: (catDef?.modo||opt?.dataset?.modo)==='cant'?unidad:null });
+  }
+  if(!items.length) return toast('Cargá al menos una fila con monto y concepto','warn');
+  try{
+    for(const it of items){ await api('/api/empleados/'+empId+'/movimientos',{method:'POST',body:JSON.stringify(it)}); }
+    toast(items.length+' movimiento'+(items.length>1?'s':'')+' agregado'+(items.length>1?'s':''),'success');
+    closeModal();
+    state.empMes=(fecha||'').slice(0,7)||state.empMes;
+    await empleAbrir(empId,false);
+  }catch(e){ toast(e.message,'error'); }
+}
 function empMovTipoChange(){
   const tipo=$('#m-tipo').value;
   $('#m-cat').innerHTML = empMovCatOptions(tipo,'');
@@ -19941,6 +20023,10 @@ function empMovCatChange(){
   if (esCant) {
     const cl=$('#m-cant-lbl'); if(cl) cl.textContent = 'Cantidad de '+unidad;
     const vl=$('#m-vu-lbl');   if(vl) vl.textContent = unidad;
+    // Si la unidad es "días" y el empleado tiene precio por día cargado, autocompletamos el valor.
+    const jornal = Number(state.empFicha?.emp?.jornalDiario || 0);
+    const vu = $('#m-vu');
+    if (jornal > 0 && /d[ií]a/i.test(unidad||'') && vu && !Number(vu.value)) { vu.value = jornal; }
     empMovCalcCant();
   }
 }
@@ -19995,7 +20081,9 @@ async function empCatManager(){
     <td class="p-2 text-slate-500">${c.modo==='cant'?('cantidad × valor'+(c.unidad?` (${esc(c.unidad)})`:'')):'monto'}</td>
     <td class="p-2 text-right">${can('rrhh:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='empCatDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}</td>
   </tr>`;
-  openModal({
+  // Se abre en el SEGUNDO modal (encima), así al cerrarlo se vuelve al form de
+  // movimiento sin perderlo.
+  openModal2({
     title:'⚙️ Categorías de la planilla', size:'max-w-2xl',
     body:`
       ${can('rrhh:create')?`<div class="mb-3 grid grid-cols-12 gap-2 items-end p-3 bg-slate-50 rounded-lg border border-slate-200">
@@ -20010,8 +20098,17 @@ async function empCatManager(){
       <tbody>${cats.map(fila).join('')||'<tr><td colspan="4" class="p-3 text-center text-slate-400">Sin categorías</td></tr>'}</tbody></table>
       </div>
       <p class="text-[11px] text-slate-500 mt-2">Borrar una categoría no afecta los movimientos ya cargados.</p>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+    footer:`<button class="btn btn-secondary" onclick="empCatManagerCerrar()">Cerrar</button>`
   });
+}
+// Cierra el editor de categorías y refresca los selects de categoría del form que quedó abierto.
+function empCatManagerCerrar(){
+  closeModal2();
+  // Form de un solo movimiento
+  const sel = document.getElementById('m-cat');
+  if (sel) { const tipo = document.getElementById('m-tipo')?.value || 'gasto'; const cur = sel.value; sel.innerHTML = empMovCatOptions(tipo, cur); empMovCatChange(); }
+  // Form de carga múltiple: refresca cada fila
+  document.querySelectorAll('select[data-mm-cat]').forEach(s => { const tipo = s.closest('[data-mm-row]')?.querySelector('[data-mm-tipo]')?.value || 'gasto'; const cur = s.value; s.innerHTML = empMovCatOptions(tipo, cur); });
 }
 async function empCatAdd(){
   const nombre=$('#nc-nom').value.trim();

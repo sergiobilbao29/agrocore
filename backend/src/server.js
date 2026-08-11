@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.69.0';
+const AGROCORE_VERSION = '2.70.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5372,6 +5372,7 @@ mountCrud({
     fechaIngreso: z.coerce.date().nullable().optional(),
     fechaEgreso: z.coerce.date().nullable().optional(),
     sueldo: z.number().nullable().optional(),
+    jornalDiario: z.coerce.number().nullable().optional(),   // precio por día
     telefono: z.string().nullable().optional(),
     email: z.string().nullable().optional(),
     direccion: z.string().nullable().optional(),
@@ -5593,15 +5594,25 @@ const CATEGORIAS_PLANILLA_DEFAULT = [
   { codigo:'adelanto',   nombre:'Adelanto de dinero',      mov:'gasto',    modo:'monto', unidad:null, orden:1, especial:false },
   { codigo:'compra',     nombre:'Compra / cosa personal',  mov:'gasto',    modo:'monto', unidad:null, orden:2, especial:false },
   { codigo:'descuento',  nombre:'Descuento',               mov:'gasto',    modo:'monto', unidad:null, orden:3, especial:false },
-  { codigo:'otro_gasto', nombre:'Otro gasto',              mov:'gasto',    modo:'monto', unidad:null, orden:4, especial:false },
+  { codigo:'dia_no_trab',nombre:'Día no trabajado',        mov:'gasto',    modo:'cant',  unidad:'días', orden:4, especial:true },
+  { codigo:'otro_gasto', nombre:'Otro gasto',              mov:'gasto',    modo:'monto', unidad:null, orden:5, especial:false },
 ];
 async function seedCategoriasPlanilla(companyId) {
   const n = await prisma.categoriaPlanilla.count({ where: { companyId } });
-  if (n > 0) return;
-  await prisma.categoriaPlanilla.createMany({
-    data: CATEGORIAS_PLANILLA_DEFAULT.map(c => ({ ...c, companyId })),
-    skipDuplicates: true,
-  });
+  if (n === 0) {
+    await prisma.categoriaPlanilla.createMany({
+      data: CATEGORIAS_PLANILLA_DEFAULT.map(c => ({ ...c, companyId })),
+      skipDuplicates: true,
+    });
+    return;
+  }
+  // Empresas que ya tenían categorías: aseguramos las categorías por DÍA (jornal),
+  // que sirven para cobrar por días trabajados y descontar los días no trabajados.
+  const porDia = CATEGORIAS_PLANILLA_DEFAULT.filter(c => c.unidad === 'días');
+  for (const c of porDia) {
+    const ex = await prisma.categoriaPlanilla.findFirst({ where: { companyId, codigo: c.codigo } });
+    if (!ex) { try { await prisma.categoriaPlanilla.create({ data: { ...c, companyId } }); } catch {} }
+  }
 }
 const _slugCat = (s) => String(s||'').toLowerCase()
   .replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,40) || 'cat';
