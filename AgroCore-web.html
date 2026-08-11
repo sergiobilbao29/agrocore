@@ -2542,6 +2542,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
+      titulo:'🐖 v2.62.0 — Faena: guardar, editar e importar los PDF',
+      desc:'La faena ahora <b>queda guardada como registro</b>: el botón 🐖 Faena abre la <b>lista de faenas</b> con "+ Nueva faena", y cada una se puede <b>editar</b> (rehace la liquidación y la factura) o <b>borrar</b> (revierte ambos comprobantes, stock, SENASA y cuentas). Además, en el asistente podés <b>importar los PDF</b>: la liquidación y la factura del frigorífico se leen y <b>precargan los campos</b> automáticamente (revisá antes de guardar).' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
       titulo:'🐖 v2.61.0 — Asistente de Faena',
       desc:'En Liquidaciones de animales hay un botón <b>🐖 Faena</b> que registra la operación completa en un paso: la <b>salida de los lechones vivos</b> (liquidación de compra del frigorífico, descuenta stock y SENASA) y la <b>entrada del faenado</b> para vender (factura del frigorífico, por kg, con su costo). Muestra el <b>costo por kg</b> del faenado. Las cantidades y precios de cada punta no tienen que coincidir.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'11/08/2026',
@@ -25317,7 +25320,7 @@ pages.liquidacionesHacienda = async function() {
     <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600" id="liqhac-count"></div>
       <div class="flex gap-2">
-        ${canC?`<button class="btn btn-secondary" onclick="faenaForm()" title="Faena: da salida a los animales vivos (liquidación) y entrada al faenado para vender (factura), en un paso">🐖 Faena</button>`:''}
+        ${canC?`<button class="btn btn-secondary" onclick="faenaListado()" title="Faena: salida de los animales vivos (liquidación) + entrada del faenado para vender (factura). Se guarda y se puede editar.">🐖 Faena</button>`:''}
         ${canC?`<button class="btn btn-secondary" onclick="liqHacImportar()" title="Subir el PDF de la liquidación y autocompletar">📥 Importar de PDF</button>`:''}
         ${canC?`<button class="btn btn-primary" onclick="liqHacForm()">+ Nueva liquidación</button>`:''}
       </div>
@@ -25576,7 +25579,41 @@ async function liqHacSave(){
 // y (2) ENTRADA del faenado para vender con la factura de compra del frigorífico
 // (suma stock del producto por kg, con su costo). No hace falta que coincidan
 // cantidades ni precios entre ambas: son dos operaciones con su propio valor.
-async function faenaForm(){
+async function faenaListado(){
+  let data=[];
+  try { data=(await api('/api/faena')).data||[]; } catch(e){ return toast(e.message,'error'); }
+  state._faenas = data;
+  const rows = data.map(f=>`<tr class="table-row">
+      <td>${fmtDate(f.fecha)}</td>
+      <td>${esc(f.frigorifico||'—')}${f.tropa?` · <span class="text-slate-400">tropa ${esc(f.tropa)}</span>`:''}</td>
+      <td class="text-right">${f.cabezas||0} cab · ${fmtN(f.kgVivo||0)} kg</td>
+      <td class="text-right">${fmtN(f.kgFaenado||0)} kg${f.lechonesEnteros?` · ${f.lechonesEnteros} u`:''}</td>
+      <td class="text-right">${fmt$(f.precioKgFaenado||0)}/kg</td>
+      <td class="text-right whitespace-nowrap">
+        <button class="btn btn-ghost text-xs" title="Editar" onclick='faenaEditar(${JSON.stringify(f.id)})'>✏️</button>
+        <button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='faenaBorrar(${JSON.stringify(f.id)})'>🗑️</button>
+      </td>
+    </tr>`).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin faenas registradas. Cargá la primera con "+ Nueva faena".</td></tr>`;
+  openModal({
+    title:'🐖 Faenas', size:'max-w-4xl',
+    body:`<div class="flex justify-between items-center mb-2"><div class="text-xs text-slate-500">${data.length} faena${data.length===1?'':'s'}</div><button class="btn btn-primary text-sm" onclick="faenaForm()">+ Nueva faena</button></div>
+      <div class="overflow-auto" style="max-height:60vh"><table class="data text-sm"><thead><tr><th>Fecha</th><th>Frigorífico</th><th class="text-right">Salida (vivos)</th><th class="text-right">Entrada (faenado)</th><th class="text-right">Costo</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+function faenaEditar(id){ const f=(state._faenas||[]).find(x=>x.id===id); if(!f) return toast('No encontrada','error'); faenaForm(f); }
+async function faenaBorrar(id){
+  const f=(state._faenas||[]).find(x=>x.id===id); if(!f) return;
+  if(!confirm('¿Borrar esta faena? Se eliminan también la liquidación y la factura que generó (revierte stock, SENASA y cuentas).')) return;
+  let warn='';
+  if(f.liquidacionId){ try{ await api('/api/liquidaciones-hacienda/'+f.liquidacionId,{method:'DELETE'}); }catch(e){ warn+=' · Liquidación: '+e.message; } }
+  if(f.facturaCompraId){ try{ await api('/api/facturas-compra/'+f.facturaCompraId,{method:'DELETE'}); }catch(e){ warn+=' · Factura: '+e.message; } }
+  try{ await api('/api/faena/'+id,{method:'DELETE'}); }catch(e){ return toast(e.message,'error'); }
+  toast(warn? ('Faena borrada, pero:'+warn) : 'Faena borrada', warn?'warn':'success');
+  delete state.cache.haciendaResumen; faenaListado();
+}
+async function faenaForm(fa){
+  const F = fa||{}; state._faenaEdit = fa?.id || null;
   let campos=[], deps=[], cats=[];
   try {
     campos = (await api('/api/campos')).data||[];
@@ -25584,50 +25621,56 @@ async function faenaForm(){
     cats   = (await api('/api/categorias-hacienda').catch(()=>({data:[]}))).data||[];
   } catch(e){ return toast(e.message,'error'); }
   const hoy = new Date().toISOString().slice(0,10);
-  const campoOpts = campos.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('');
-  const depOpts   = deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('');
+  const fec1=(F.fecha||'').slice(0,10)||hoy, fec2=(F.fechaFactura||'').slice(0,10)||hoy;
+  const campoOpts = campos.map(c=>`<option value="${esc(c.id)}" ${c.id===F.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('');
+  const depOpts   = deps.map(d=>`<option value="${esc(d.id)}" ${d.id===F.depositoId?'selected':''}>${esc(d.nombre)}</option>`).join('');
   const catOpts   = cats.map(c=>`<option value="${esc(c.nombre||c.categoria||'')}"></option>`).join('');
+  const V=(x)=> x==null?'':x;
   openModal({
-    title:'🐖 Faena de lechones', size:'max-w-3xl',
+    title: state._faenaEdit?'🐖 Editar faena':'🐖 Faena de lechones', size:'max-w-3xl',
     body:`
-      <div class="text-xs text-slate-500 mb-3">Registra la operación completa: <b>salida de los lechones vivos</b> (liquidación de compra del frigorífico) y <b>entrada del faenado</b> para la venta (factura del frigorífico, <b>por kg</b>). El <b>costo del faenado sale de la factura</b>. La <b>media res</b> es solo la unidad con que factura el frigorífico (2 medias = 1 lechón entero): en stock entra por <b>kg</b> — el peso es el mismo — y podés anotar cuántos lechones enteros recibiste. No importa que no coincidan cantidades ni precios entre las dos puntas.</div>
+      <div class="text-xs text-slate-500 mb-3">Registra la operación completa: <b>salida de los lechones vivos</b> (liquidación de compra del frigorífico) y <b>entrada del faenado</b> para la venta (factura del frigorífico, <b>por kg</b>). El <b>costo del faenado sale de la factura</b>. La <b>media res</b> es solo la unidad con que factura el frigorífico (2 medias = 1 lechón entero): en stock entra por <b>kg</b> — el peso es el mismo — y podés anotar cuántos lechones enteros recibiste.${state._faenaEdit?' <b class="text-amber-700">Al guardar cambios se rehacen los dos comprobantes.</b>':''}</div>
       <div class="grid grid-cols-3 gap-3 mb-3">
-        <div><label class="label">Frigorífico *</label><input id="fa-frig" class="input" placeholder="Ej: Livorno S.A."/></div>
-        <div><label class="label">CUIT frigorífico</label><input id="fa-frigcuit" class="input" placeholder="30-xxxxxxxx-x"/></div>
-        <div><label class="label">Tropa / Ref.</label><input id="fa-tropa" class="input" placeholder="Ej: 26001"/></div>
+        <div><label class="label">Frigorífico *</label><input id="fa-frig" class="input" value="${esc(V(F.frigorifico))}" placeholder="Ej: Livorno S.A."/></div>
+        <div><label class="label">CUIT frigorífico</label><input id="fa-frigcuit" class="input" value="${esc(V(F.frigorificoCuit))}" placeholder="30-xxxxxxxx-x"/></div>
+        <div><label class="label">Tropa / Ref.</label><input id="fa-tropa" class="input" value="${esc(V(F.tropa))}" placeholder="Ej: 26001"/></div>
       </div>
       <div class="kpi p-3 mb-3">
-        <div class="font-semibold text-slate-700 mb-2">1) Salida — Lechones vivos (liquidación de compra)</div>
+        <div class="flex items-center justify-between mb-2"><div class="font-semibold text-slate-700">1) Salida — Lechones vivos (liquidación de compra)</div>
+          <button class="btn btn-ghost text-xs" onclick="document.getElementById('fa-pdf-liq').click()">📥 Importar liquidación PDF</button>
+          <input type="file" id="fa-pdf-liq" accept=".pdf" class="hidden" onchange="faenaImportLiq(this)"/></div>
         <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
           <div><label class="label">Campo *</label><select id="fa-campo" class="input">${campoOpts}</select></div>
-          <div><label class="label">Categoría animal *</label><input id="fa-cat" class="input" list="fa-cats" placeholder="Ej: Porcina Lechones Livianos"/><datalist id="fa-cats">${catOpts}</datalist></div>
-          <div><label class="label">Fecha *</label><input id="fa-fec1" type="date" class="input" value="${hoy}"/></div>
-          <div><label class="label">Cabezas *</label><input id="fa-cab" type="number" min="1" step="1" class="input" oninput="faenaCalc()"/></div>
-          <div><label class="label">Kg vivo *</label><input id="fa-kgv" type="number" min="0" step="0.01" class="input" oninput="faenaCalc()"/></div>
-          <div><label class="label">$/kg vivo *</label><input id="fa-pkv" type="number" min="0" step="0.01" class="input" oninput="faenaCalc()"/></div>
-          <div><label class="label">IVA %</label><input id="fa-iva1" type="number" step="0.01" class="input" value="10.5"/></div>
-          <div><label class="label">N° liquidación</label><input id="fa-nro1" class="input"/></div>
-          <div class="flex items-end"><label class="text-xs flex items-center gap-1"><input type="checkbox" id="fa-senasa" checked/> Descontar SENASA</label></div>
+          <div><label class="label">Categoría animal *</label><input id="fa-cat" class="input" list="fa-cats" value="${esc(V(F.categoria))}" placeholder="Ej: Porcina Lechones Livianos"/><datalist id="fa-cats">${catOpts}</datalist></div>
+          <div><label class="label">Fecha *</label><input id="fa-fec1" type="date" class="input" value="${fec1}"/></div>
+          <div><label class="label">Cabezas *</label><input id="fa-cab" type="number" min="1" step="1" class="input" value="${V(F.cabezas)}" oninput="faenaCalc()"/></div>
+          <div><label class="label">Kg vivo *</label><input id="fa-kgv" type="number" min="0" step="0.01" class="input" value="${V(F.kgVivo)}" oninput="faenaCalc()"/></div>
+          <div><label class="label">$/kg vivo *</label><input id="fa-pkv" type="number" min="0" step="0.01" class="input" value="${V(F.precioKgVivo)}" oninput="faenaCalc()"/></div>
+          <div><label class="label">IVA %</label><input id="fa-iva1" type="number" step="0.01" class="input" value="${F.ivaVivo??10.5}"/></div>
+          <div><label class="label">N° liquidación</label><input id="fa-nro1" class="input" value="${esc(V(F.numeroLiq))}"/></div>
+          <div class="flex items-end"><label class="text-xs flex items-center gap-1"><input type="checkbox" id="fa-senasa" ${F.descontarSenasa===false?'':'checked'}/> Descontar SENASA</label></div>
         </div>
         <div class="text-xs text-slate-500 mt-2" id="fa-r1">Neto venta: —</div>
       </div>
       <div class="kpi p-3 mb-1">
-        <div class="font-semibold text-slate-700 mb-2">2) Entrada — Faenado para vender (factura de compra)</div>
+        <div class="flex items-center justify-between mb-2"><div class="font-semibold text-slate-700">2) Entrada — Faenado para vender (factura de compra)</div>
+          <button class="btn btn-ghost text-xs" onclick="document.getElementById('fa-pdf-fac').click()">📥 Importar factura PDF</button>
+          <input type="file" id="fa-pdf-fac" accept=".pdf" class="hidden" onchange="faenaImportFac(this)"/></div>
         <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <div class="md:col-span-2"><label class="label">Producto faenado *</label><input id="fa-prod" class="input" value="Lechón faenado"/></div>
+          <div class="md:col-span-2"><label class="label">Producto faenado *</label><input id="fa-prod" class="input" value="${esc(F.producto||'Lechón faenado')}"/></div>
           <div><label class="label">Depósito destino</label><select id="fa-dep" class="input"><option value="">—</option>${depOpts}</select></div>
-          <div><label class="label">Lechones enteros (u)</label><input id="fa-uds" type="number" min="0" step="1" class="input" placeholder="ej: 30" oninput="faenaCalc()"/></div>
-          <div><label class="label">Kg faenado *</label><input id="fa-kgf" type="number" min="0" step="0.01" class="input" oninput="faenaCalc()"/></div>
-          <div><label class="label">$/kg faenado *</label><input id="fa-pkf" type="number" min="0" step="0.01" class="input" oninput="faenaCalc()"/></div>
-          <div><label class="label">IVA %</label><input id="fa-iva2" type="number" step="0.01" class="input" value="10.5"/></div>
-          <div><label class="label">Factura Punto Vta</label><input id="fa-pv" type="number" class="input" placeholder="12"/></div>
-          <div><label class="label">Factura N°</label><input id="fa-fnro" type="number" class="input" placeholder="1907"/></div>
-          <div><label class="label">Fecha factura *</label><input id="fa-fec2" type="date" class="input" value="${hoy}"/></div>
+          <div><label class="label">Lechones enteros (u)</label><input id="fa-uds" type="number" min="0" step="1" class="input" value="${V(F.lechonesEnteros)}" placeholder="ej: 30" oninput="faenaCalc()"/></div>
+          <div><label class="label">Kg faenado *</label><input id="fa-kgf" type="number" min="0" step="0.01" class="input" value="${V(F.kgFaenado)}" oninput="faenaCalc()"/></div>
+          <div><label class="label">$/kg faenado *</label><input id="fa-pkf" type="number" min="0" step="0.01" class="input" value="${V(F.precioKgFaenado)}" oninput="faenaCalc()"/></div>
+          <div><label class="label">IVA %</label><input id="fa-iva2" type="number" step="0.01" class="input" value="${F.ivaFaenado??10.5}"/></div>
+          <div><label class="label">Factura Punto Vta</label><input id="fa-pv" type="number" class="input" value="${V(F.facturaPv)}" placeholder="12"/></div>
+          <div><label class="label">Factura N°</label><input id="fa-fnro" type="number" class="input" value="${V(F.facturaNro)}" placeholder="1907"/></div>
+          <div><label class="label">Fecha factura *</label><input id="fa-fec2" type="date" class="input" value="${fec2}"/></div>
         </div>
         <div class="text-sm font-semibold text-emerald-700 mt-2" id="fa-r2">Costo faenado: —</div>
       </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick="faenaSave()">Registrar faena</button>`
+            <button class="btn btn-primary" onclick="faenaSave()">${state._faenaEdit?'Guardar cambios':'Registrar faena'}</button>`
   });
   faenaCalc();
 }
@@ -25656,9 +25699,17 @@ async function faenaSave(){
   const tropa=(val('fa-tropa')||'').trim();
   const ref = tropa ? ('Faena tropa '+tropa) : 'Faena';
   const neto1 = Math.round((kgv*pkv)*(1+iva1/100)*100)/100;
+  const editId = state._faenaEdit || null;
+  // Si estoy editando, primero revierto (borro) los comprobantes anteriores.
+  if (editId){
+    const prev=(state._faenas||[]).find(x=>x.id===editId) || {};
+    if(prev.liquidacionId){ try{ await api('/api/liquidaciones-hacienda/'+prev.liquidacionId,{method:'DELETE'}); }catch(e){} }
+    if(prev.facturaCompraId){ try{ await api('/api/facturas-compra/'+prev.facturaCompraId,{method:'DELETE'}); }catch(e){} }
+  }
   // 1) SALIDA — liquidación de compra (baja lechones vivos del stock de animales)
+  let liqId=null;
   try {
-    await api('/api/liquidaciones-hacienda',{method:'POST',body:JSON.stringify({
+    const r = await api('/api/liquidaciones-hacienda',{method:'POST',body:JSON.stringify({
       campoId, fecha: val('fa-fec1'), numero: (val('fa-nro1')||'').trim()||null,
       receptorNombre: frig, receptorCuit: frigCuit||null,
       gastosTotal:0, ivaGastos:0, neto: neto1,
@@ -25666,10 +25717,12 @@ async function faenaSave(){
       observaciones: ref,
       renglones:[{ categoria:cat, cabezas:cab, kilos:kgv, precioKg:pkv, alicuotaIva:iva1 }],
     })});
+    liqId = r.data?.id || null;
   } catch(e){ return toast('Error en la salida (liquidación): '+e.message,'error'); }
   // 2) ENTRADA — factura de compra del faenado (suma stock del producto por kg, con costo)
+  let facId=null;
   try {
-    await api('/api/facturas-compra',{method:'POST',body:JSON.stringify({
+    const r = await api('/api/facturas-compra',{method:'POST',body:JSON.stringify({
       tipo:'A', clase:'factura',
       puntoVenta: Math.trunc(n('fa-pv')), numero: Math.trunc(n('fa-fnro')),
       fecha: val('fa-fec2'),
@@ -25679,9 +25732,56 @@ async function faenaSave(){
       items:[{ productoNombre: prod, productoUnidad:'kg', productoCategoria:'Faenados',
                descripcion: prod + (uds>0 ? ` (${uds} lechones enteros)` : ''), cantidad: kgf, precioUnit: pkf, alicuotaIva: iva2 }],
     })});
-  } catch(e){ return toast('La salida se guardó, pero falló la entrada (factura): '+e.message,'warn'); }
-  toast(`Faena registrada · faenado ${fmt$(pkf)}/kg de costo`,'success');
-  closeModal(); delete state.cache.haciendaResumen; pages.liquidacionesHacienda();
+    facId = r.data?.id || null;
+  } catch(e){ toast('La salida se guardó, pero falló la entrada (factura): '+e.message,'warn'); }
+  // 3) Guardar / actualizar el registro de Faena (resumen + IDs de los comprobantes).
+  const snap = {
+    fecha: val('fa-fec1'), frigorifico: frig, frigorificoCuit: frigCuit||null, tropa: tropa||null,
+    campoId, categoria: cat, cabezas: cab, kgVivo: kgv, precioKgVivo: pkv, ivaVivo: iva1,
+    numeroLiq: (val('fa-nro1')||'').trim()||null, descontarSenasa: !!document.getElementById('fa-senasa')?.checked,
+    producto: prod, lechonesEnteros: uds||null, kgFaenado: kgf, precioKgFaenado: pkf, ivaFaenado: iva2,
+    facturaPv: Math.trunc(n('fa-pv'))||null, facturaNro: Math.trunc(n('fa-fnro'))||null, fechaFactura: val('fa-fec2'),
+    depositoId: val('fa-dep')||null, liquidacionId: liqId, facturaCompraId: facId, observaciones: ref,
+  };
+  try {
+    if (editId) await api('/api/faena/'+editId,{method:'PUT',body:JSON.stringify(snap)});
+    else        await api('/api/faena',{method:'POST',body:JSON.stringify(snap)});
+  } catch(e){ toast('Comprobantes ok, pero no se guardó el registro de faena: '+e.message,'warn'); }
+  state._faenaEdit=null;
+  toast(`Faena ${editId?'actualizada':'registrada'} · faenado ${fmt$(pkf)}/kg`,'success');
+  closeModal(); delete state.cache.haciendaResumen; faenaListado();
+}
+// Importar el PDF de la liquidación (LIVORNO) → precarga el paso 1.
+async function faenaImportLiq(input){
+  const f=input.files?.[0]; if(!f) return; input.value='';
+  toast('Leyendo liquidación…','info');
+  try {
+    const fd=new FormData(); fd.append('archivo', f);
+    const r=await fetch(API_BASE+'/api/admin/parse-liquidacion-hacienda-pdf',{ method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd });
+    const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||('Error '+r.status));
+    const d=j.data||{}; const reng=(d.renglones||[])[0]||{};
+    const set=(id,v)=>{ const el=document.getElementById(id); if(el && v!=null && v!=='') el.value=v; };
+    set('fa-frig', d.emisorNombre); set('fa-frigcuit', d.emisorCuit);
+    set('fa-cat', reng.categoria); set('fa-cab', reng.cabezas); set('fa-kgv', reng.kilos); set('fa-pkv', reng.precio);
+    set('fa-iva1', reng.alicuotaIva); set('fa-nro1', d.numero); if(d.fecha) set('fa-fec1', d.fecha);
+    faenaCalc(); toast('Liquidación cargada — revisá los datos','success');
+  } catch(e){ toast('No pude leer la liquidación: '+e.message,'error'); }
+}
+// Importar el PDF de la factura del frigorífico → precarga el paso 2.
+async function faenaImportFac(input){
+  const f=input.files?.[0]; if(!f) return; input.value='';
+  toast('Leyendo factura…','info');
+  try {
+    const fd=new FormData(); fd.append('archivo', f);
+    const r=await fetch(API_BASE+'/api/admin/parse-factura-frigorifico-pdf',{ method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd });
+    const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||('Error '+r.status));
+    const d=j.data||{}; const set=(id,v)=>{ const el=document.getElementById(id); if(el && v!=null && v!=='') el.value=v; };
+    if(!document.getElementById('fa-frig')?.value) set('fa-frig', d.frigorifico);
+    if(!document.getElementById('fa-frigcuit')?.value) set('fa-frigcuit', d.frigorificoCuit);
+    set('fa-uds', d.lechonesEnteros); set('fa-kgf', d.kgFaenado); set('fa-pkf', d.precioKgFaenado);
+    set('fa-iva2', d.ivaFaenado); set('fa-pv', d.facturaPv); set('fa-fnro', d.facturaNro); if(d.fechaFactura) set('fa-fec2', d.fechaFactura);
+    faenaCalc(); toast('Factura cargada — revisá los datos','success');
+  } catch(e){ toast('No pude leer la factura: '+e.message,'error'); }
 }
 async function liqHacVer(id){
   try {

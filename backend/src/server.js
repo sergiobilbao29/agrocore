@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.61.0';
+const AGROCORE_VERSION = '2.62.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7084,6 +7084,69 @@ app.get('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission('ve
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
+// ============================================================
+// FAENA: registro editable que enlaza la liquidacion (salida de lechones vivos)
+// y la factura de compra (entrada del faenado por kg). El frontend orquesta la
+// creacion/edicion de los dos comprobantes (reutiliza sus endpoints) y guarda acá
+// el resumen + los IDs para poder listarla y editarla despues.
+// ============================================================
+const faenaSchema = z.object({
+  fecha: z.coerce.date(),
+  frigorifico: z.string().nullable().optional(),
+  frigorificoCuit: z.string().nullable().optional(),
+  tropa: z.string().nullable().optional(),
+  campoId: z.string().nullable().optional(),
+  categoria: z.string().nullable().optional(),
+  cabezas: z.coerce.number().int().nullable().optional(),
+  kgVivo: z.coerce.number().nullable().optional(),
+  precioKgVivo: z.coerce.number().nullable().optional(),
+  ivaVivo: z.coerce.number().nullable().optional(),
+  numeroLiq: z.string().nullable().optional(),
+  descontarSenasa: z.boolean().optional().default(true),
+  producto: z.string().nullable().optional(),
+  lechonesEnteros: z.coerce.number().int().nullable().optional(),
+  kgFaenado: z.coerce.number().nullable().optional(),
+  precioKgFaenado: z.coerce.number().nullable().optional(),
+  ivaFaenado: z.coerce.number().nullable().optional(),
+  facturaPv: z.coerce.number().int().nullable().optional(),
+  facturaNro: z.coerce.number().int().nullable().optional(),
+  fechaFactura: z.coerce.date().nullable().optional(),
+  depositoId: z.string().nullable().optional(),
+  liquidacionId: z.string().nullable().optional(),
+  facturaCompraId: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+app.get('/api/faena', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const data = await prisma.faena.findMany({ where: { companyId: req.companyId }, orderBy: { fecha: 'desc' } });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/faena', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const d = faenaSchema.parse(req.body);
+    const row = await prisma.faena.create({ data: { ...d, companyId: req.companyId } });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.put('/api/faena/:id', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const ex = await prisma.faena.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    const d = faenaSchema.partial().parse(req.body);
+    const row = await prisma.faena.update({ where: { id: ex.id }, data: d });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.delete('/api/faena/:id', requireCompany, requirePermission('ventas:delete'), async (req, res, next) => {
+  try {
+    const ex = await prisma.faena.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    await prisma.faena.delete({ where: { id: ex.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 app.post('/api/liquidaciones-hacienda', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
   try {
     const rengSchema = z.object({
@@ -11059,6 +11122,37 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
       numero, fecha, cae, caeVto, emisorCuit, emisorNombre, receptorCuit, receptorNombre,
       renglones, brutoTotal: Math.round(brutoTotal * 100) / 100, ivaBruto: Math.round(ivaBruto * 100) / 100,
       gastosMasIva, neto,
+    }});
+  } catch (e) { next(e); }
+});
+
+// Parser del PDF de la FACTURA del frigorifico (faenado, ej. LIVORNO factura A).
+// Extrae emisor (frigorifico), numero, fecha, kg totales, precio/kg, IVA y medias
+// reses -> se usa para prefilear el paso 2 del asistente de Faena.
+app.post('/api/admin/parse-factura-frigorifico-pdf', authMiddleware, requireCompany, upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    let texto = ''; try { texto = (await pdfParse(req.file.buffer)).text || ''; } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
+    // num() tolerante para importes con miles/decimales de 2 dígitos.
+    const num = (s) => { if (s == null || s === '') return null; let n = String(s).replace(/[$\s]/g, ''); if (/,\d{1,2}$/.test(n)) n = n.replace(/\./g, '').replace(',', '.'); else if (/\.\d{1,2}$/.test(n)) n = n.replace(/,/g, ''); else n = n.replace(/[,.]/g, ''); const v = Number(n); return isFinite(v) ? v : null; };
+    const fechaArg = (s) => { if (!s) return null; const m = String(s).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/); if (!m) return null; let yy = m[3]; if (yy.length === 2) yy = '20' + yy; return `${yy}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`; };
+    const comp = texto.match(/Comprobante\s*N[°º:\s]*([\d]{3,5})\s*-\s*([\d]{6,8})/i);
+    const facturaPv = comp ? parseInt(comp[1], 10) : null;
+    const facturaNro = comp ? parseInt(comp[2], 10) : null;
+    const fechaFactura = fechaArg((texto.match(/Fecha\s*Emisi[oó]n[:\s]*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i) || [])[1]) || fechaArg((texto.match(/([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/) || [])[1]);
+    const frigorificoCuit = (texto.match(/CUIT[:\s]*([23]\d[\- ]?\d{8}[\- ]?\d)/i) || [])[1] || (texto.match(/(30[\- ]?\d{8}[\- ]?\d)/) || [])[1] || null;
+    let frigorifico = (texto.match(/(LIVORNO[^\n]{0,20}|[A-ZÁÉÍÓÚÑ][A-Za-z.\s]{2,40}FRIGOR[IÍ]FICO)/i) || [])[1] || null;
+    if (frigorifico) frigorifico = frigorifico.replace(/\s{2,}/g, ' ').trim();
+    const kgFaenado = num((texto.match(/Total\s*Cantidad\s*([\d.,]+)/i) || [])[1]);
+    const mediasRes = num((texto.match(/Cant\.?\s*Secund\.?\s*([\d.,]+)/i) || [])[1]);
+    const subtotal = num((texto.match(/SubTotal\s*([\d.,]+)/i) || [])[1]);
+    const ivaFaenado = num((texto.match(/IVA[^%\n]{0,12}(\d{1,2}[.,]\d{1,2})\s*%/i) || [])[1]) || 10.5;
+    // Precio/kg robusto: subtotal (neto) / kg. Evita el precio de 4 decimales del renglón.
+    let precioKgFaenado = (subtotal && kgFaenado) ? Math.round((subtotal / kgFaenado) * 100) / 100 : null;
+    const lechonesEnteros = mediasRes ? Math.round(mediasRes / 2) : null;
+    res.json({ ok: true, data: {
+      frigorifico, frigorificoCuit, facturaPv, facturaNro, fechaFactura,
+      kgFaenado, precioKgFaenado, ivaFaenado, lechonesEnteros, mediasRes,
     }});
   } catch (e) { next(e); }
 });

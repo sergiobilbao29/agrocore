@@ -91,6 +91,7 @@ model Company {
   entregasCereal     EntregaCereal[]
   viajeLiquidacion   ViajeLiquidacion[]
   conciliaciones     ConciliacionBancaria[]
+  faenas             Faena[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -1619,6 +1620,47 @@ model ConciliacionBancaria {
   cuenta        BancoCuenta @relation(fields: [cuentaId], references: [id], onDelete: Cascade)
 
   @@unique([cuentaId, periodo])
+  @@index([companyId])
+}
+
+// FAENA: guarda el resumen de una operacion de faena (registro editable) y enlaza
+// los dos comprobantes que la componen: la liquidacion de compra (salida de los
+// lechones vivos) y la factura de compra (entrada del faenado para vender por kg).
+model Faena {
+  id               String   @id @default(cuid())
+  companyId        String
+  fecha            DateTime
+  frigorifico      String?
+  frigorificoCuit  String?
+  tropa            String?
+  // Salida — lechones vivos (liquidacion)
+  campoId          String?
+  categoria        String?
+  cabezas          Int?
+  kgVivo           Float?
+  precioKgVivo     Float?
+  ivaVivo          Float?
+  numeroLiq        String?
+  descontarSenasa  Boolean  @default(true)
+  // Entrada — faenado (factura)
+  producto         String?
+  lechonesEnteros  Int?
+  kgFaenado        Float?
+  precioKgFaenado  Float?
+  ivaFaenado       Float?
+  facturaPv        Int?
+  facturaNro       Int?
+  fechaFactura     DateTime?
+  depositoId       String?
+  // Enlaces a los comprobantes generados
+  liquidacionId    String?
+  facturaCompraId  String?
+  observaciones    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
   @@index([companyId])
 }
 
