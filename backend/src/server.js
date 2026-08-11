@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.70.0';
+const AGROCORE_VERSION = '2.71.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4628,11 +4628,16 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
     const hoy15 = new Date(hoy.getTime() + 15 * 24 * 60 * 60 * 1000);
     const estadosPendientes = ['en_cartera', 'emitido', 'depositado'];
 
+    const hoy30 = new Date(hoy.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const mesAct = hoy.toISOString().slice(0, 7);
     // Traemos los registros relevantes de TODAS las empresas en una sola query c/u
-    const [cheques, efectivos, flujos] = await Promise.all([
+    const [cheques, efectivos, flujos, cuotas, ctas, arrends] = await Promise.all([
       prisma.cheque.findMany({ where: { companyId: { in: companyIds } } }),
       prisma.efectivo.findMany({ where: { companyId: { in: companyIds } } }),
       prisma.flujoCaja.findMany({ where: { companyId: { in: companyIds } } }),
+      prisma.cuotaCredito.findMany({ where: { credito: { companyId: { in: companyIds } }, pagada: false }, include: { credito: { select: { companyId: true } } } }),
+      prisma.ctaCte.findMany({ where: { companyId: { in: companyIds }, pagado: false } }),
+      prisma.arrendamiento.findMany({ where: { companyId: { in: companyIds }, pagado: false } }),
     ]);
 
     const porEmpresa = empresas.map((emp) => {
@@ -4693,6 +4698,36 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
       const fc = flujos.filter((f) => f.companyId === emp.id);
       const saldoFlujo = fc.reduce((a, f) => a + Number(f.monto || 0), 0);
 
+      // Créditos: cuotas no pagadas (deuda pendiente) + próximas 30 días.
+      const qs = cuotas.filter((q) => q.credito?.companyId === emp.id);
+      const creditosMonto = qs.reduce((a, q) => a + Number(q.importeTotal || 0), 0);
+      const creditosProx30 = qs.filter((q) => q.vencimiento && new Date(q.vencimiento) >= hoy && new Date(q.vencimiento) <= hoy30)
+        .reduce((a, q) => a + Number(q.importeTotal || 0), 0);
+
+      // Cuentas corrientes: a cobrar (clientes/libres a favor) y a pagar (proveedores/libres en contra).
+      const cc = ctas.filter((c) => c.companyId === emp.id);
+      let aCobrar = 0, aPagar = 0;
+      for (const c of cc) {
+        const saldo = Number(c.debe || 0) - Number(c.haber || 0);
+        if (Math.abs(saldo) < 0.01) continue;
+        if (c.contactoTipo === 'proveedor') { if (saldo > 0) aPagar += saldo; else aCobrar += -saldo; }
+        else if (c.contactoTipo === 'cliente') { if (saldo > 0) aCobrar += saldo; else aPagar += -saldo; }
+        else { if (saldo > 0) aCobrar += saldo; else aPagar += -saldo; }
+      }
+
+      // Arrendamientos pendientes: cantidad + monto en efectivo (los en especie no se valorizan acá).
+      const ar = arrends.filter((a) => a.companyId === emp.id);
+      let arrendMontoEf = 0;
+      for (const a of ar) {
+        const cuotasArr = Array.isArray(a.cuotas) ? a.cuotas.filter((c) => !c.pagado) : [];
+        if (cuotasArr.length) arrendMontoEf += cuotasArr.reduce((s, c) => s + Number(c.importe || 0), 0);
+        else arrendMontoEf += Number(a.importe || a.importeHa || 0);
+      }
+
+      // Gastos del mes en curso (egresos de efectivo).
+      const gastosMes = ef.filter((e) => e.tipo === 'egreso' && (e.fecha ? new Date(e.fecha).toISOString().slice(0, 7) : '') === mesAct)
+        .reduce((a, e) => a + Number(e.monto || 0), 0);
+
       return {
         companyId: emp.id,
         companyName: emp.name,
@@ -4707,6 +4742,10 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
         },
         efectivo: { saldo: saldoEfectivo, movimientos: ef.length, cajas },
         flujoCaja: { saldoActual: saldoFlujo, movimientos: fc.length },
+        creditos: { cantCuotas: qs.length, monto: creditosMonto, prox30: creditosProx30 },
+        ctaCte: { aCobrar, aPagar },
+        arrendamientos: { pendientes: ar.length, montoEfectivo: arrendMontoEf },
+        gastos: { mes: gastosMes },
       };
     });
 
@@ -4721,6 +4760,14 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
       acc.efectivo.movimientos += e.efectivo.movimientos;
       acc.flujoCaja.saldoActual += e.flujoCaja.saldoActual;
       acc.flujoCaja.movimientos += e.flujoCaja.movimientos;
+      acc.creditos.cantCuotas += e.creditos.cantCuotas;
+      acc.creditos.monto += e.creditos.monto;
+      acc.creditos.prox30 += e.creditos.prox30;
+      acc.ctaCte.aCobrar += e.ctaCte.aCobrar;
+      acc.ctaCte.aPagar += e.ctaCte.aPagar;
+      acc.arrendamientos.pendientes += e.arrendamientos.pendientes;
+      acc.arrendamientos.montoEfectivo += e.arrendamientos.montoEfectivo;
+      acc.gastos.mes += e.gastos.mes;
       return acc;
     }, emptyTotales());
 
@@ -4733,6 +4780,10 @@ function emptyTotales() {
     cheques: { enCartera: 0, montoEnCartera: 0, aVencer15: 0, montoAVencer15: 0, vencidos: 0, montoVencidos: 0 },
     efectivo: { saldo: 0, movimientos: 0 },
     flujoCaja: { saldoActual: 0, movimientos: 0 },
+    creditos: { cantCuotas: 0, monto: 0, prox30: 0 },
+    ctaCte: { aCobrar: 0, aPagar: 0 },
+    arrendamientos: { pendientes: 0, montoEfectivo: 0 },
+    gastos: { mes: 0 },
   };
 }
 
@@ -9731,6 +9782,7 @@ async function _construirFlujoProyectado(req, opts = {}) {
       concepto: `${esIngreso ? 'Cheque de terceros' : 'Cheque propio'} ${ch.nroCheque || ''} ${ch.banco || ''}`.trim(),
       importe: Number(ch.monto || 0), ref: ch.id,
       contacto: ch.beneficiario || ch.librador || null,
+      banco: ch.banco || null, estado: ch.estado || null,
       empresaId: ch.companyId,
     });
   }
@@ -9778,6 +9830,7 @@ async function _construirFlujoProyectado(req, opts = {}) {
       concepto: `Cuota ${q.numero} · ${q.credito.banco}${q.credito.nroOperacion ? ' #' + q.credito.nroOperacion : ''}`,
       importe: Number(q.importeTotal || 0), ref: q.id,
       contacto: q.credito.banco,
+      banco: q.credito.banco || null,
       empresaId: q.credito.companyId,
     });
   }
@@ -9903,6 +9956,12 @@ async function _construirFlujoProyectado(req, opts = {}) {
   const _normMon = (ev) => { if (ev.moneda == null) ev.moneda = 'ARS'; if (ev.montoOrigen == null) ev.montoOrigen = ev.importe; return ev; };
   items.forEach(_normMon); vencidos.forEach(_normMon);
 
+  // === Nombre de empresa por item (para el detalle cronológico por empresa) ===
+  const _emps = await prisma.company.findMany({ where: { id: { in: companyIds } }, select: { id: true, name: true } });
+  const _empName = {}; _emps.forEach(e => _empName[e.id] = e.name);
+  const _attachEmp = (ev) => { ev.empresaNombre = _empName[ev.empresaId] || null; if (ev.estado == null) ev.estado = 'pendiente'; return ev; };
+  items.forEach(_attachEmp); vencidos.forEach(_attachEmp);
+
   // === Sort + totales ===
   items.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
   vencidos.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
@@ -9951,6 +10010,53 @@ app.get('/api/flujo-proyectado', requireCompany, async (req, res, next) => {
   try {
     const data = await _construirFlujoProyectado(req);
     res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// BALANCE GENERAL (base caja): ingresos y egresos REALES movidos en un rango de
+// fechas, agrupados por categoría. Se nutre de efectivo + banco (no los internos).
+// Sirve para ver los mayores gastos y tomar decisiones.
+// ============================================================
+app.get('/api/balance-general', requireCompany, requirePermission('reportes:read'), async (req, res, next) => {
+  try {
+    const hoy = new Date();
+    const desde = req.query.desde ? new Date(String(req.query.desde) + 'T00:00:00') : new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    const hasta = req.query.hasta ? new Date(String(req.query.hasta) + 'T23:59:59') : hoy;
+    const [ef, bm] = await Promise.all([
+      prisma.efectivo.findMany({ where: { companyId: req.companyId, fecha: { gte: desde, lte: hasta } } }),
+      prisma.bancoMovimiento.findMany({ where: { companyId: req.companyId, fecha: { gte: desde, lte: hasta } } }),
+    ]);
+    const catDe = (obs) => { const m = String(obs || '').match(/Categor[ií]a:\s*([^·\n]+)/i); return m ? m[1].split('/')[0].trim() : null; };
+    const ingresos = {}, egresos = {};
+    const porMes = {};   // { 'YYYY-MM': { ing, egr } }
+    const add = (bucket, cat, monto) => { const k = cat || 'Sin categoría'; bucket[k] = (bucket[k] || 0) + monto; };
+    const addMes = (fecha, tipo, monto) => { const k = new Date(fecha).toISOString().slice(0, 7); const r = porMes[k] || (porMes[k] = { ing: 0, egr: 0 }); if (tipo === 'ingreso') r.ing += monto; else r.egr += monto; };
+    for (const e of ef) {
+      const monto = Number(e.monto || 0);
+      if (e.tipo === 'ingreso') { add(ingresos, catDe(e.observaciones) || 'Ingresos varios', monto); addMes(e.fecha, 'ingreso', monto); }
+      else if (e.tipo === 'egreso') { add(egresos, catDe(e.observaciones) || 'Gastos varios', monto); addMes(e.fecha, 'egreso', monto); }
+      // 'transferencia' entre cajas = interno, no suma
+    }
+    const BAN_LBL = { cheque_cobrado: 'Cheques cobrados', credito_acreditado: 'Créditos acreditados', interes: 'Intereses ganados', cheque_pagado: 'Cheques pagados', debito: 'Débitos', cuota_credito: 'Cuotas de crédito', comision: 'Comisiones bancarias', impuesto: 'Impuestos / sellos', transferencia_in: 'Transferencias recibidas', transferencia_out: 'Transferencias enviadas' };
+    for (const m of bm) {
+      const interno = (m.tipo === 'extraccion' || m.tipo === 'deposito' || !!m.cuentaContraId);
+      if (interno) continue;
+      const monto = Number(m.monto || 0);
+      const cat = catDe(m.observaciones) || BAN_LBL[m.tipo] || m.tipo;
+      if (BANCO_TIPOS_INGRESO.includes(m.tipo)) { add(ingresos, cat, monto); addMes(m.fecha, 'ingreso', monto); }
+      else if (BANCO_TIPOS_EGRESO.includes(m.tipo)) { add(egresos, cat, monto); addMes(m.fecha, 'egreso', monto); }
+    }
+    const toArr = (b) => Object.entries(b).map(([categoria, monto]) => ({ categoria, monto: Math.round(monto) })).filter(x => x.monto > 0).sort((a, b) => b.monto - a.monto);
+    const ingArr = toArr(ingresos), egrArr = toArr(egresos);
+    const totIng = ingArr.reduce((a, x) => a + x.monto, 0), totEgr = egrArr.reduce((a, x) => a + x.monto, 0);
+    const meses = Object.entries(porMes).sort((a, b) => a[0].localeCompare(b[0])).map(([mes, v]) => ({ mes, ingresos: Math.round(v.ing), egresos: Math.round(v.egr) }));
+    res.json({ ok: true, data: {
+      desde: desde.toISOString().slice(0, 10), hasta: hasta.toISOString().slice(0, 10),
+      ingresos: ingArr, egresos: egrArr,
+      totalIngresos: totIng, totalEgresos: totEgr, neto: totIng - totEgr,
+      porMes: meses,
+    }});
   } catch (e) { next(e); }
 });
 

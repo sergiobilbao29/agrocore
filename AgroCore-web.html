@@ -976,6 +976,7 @@ const MODULES = [
   { id:'flujoProyectado',label:'Flujo de Fondos',     icon:'🎯', perm:'finanzas:read',   section:'Tablero' },
   { id:'flujoCaja',     label:'Flujo de caja',        icon:'📈', perm:'finanzas:read',   section:'Tablero' },
   { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:'reportes:read',   section:'Tablero' },
+  { id:'balanceGeneral',label:'Balance General',      icon:'⚖️', perm:'reportes:read',   section:'Tablero' },
   { id:'agenda',        label:'Agenda y recordatorios',icon:'📅', perm:'agenda:read',    section:'Tablero' },
   { id:'mensajes',      label:'Mensajes y asistente', icon:'💬', section:'Tablero' },
 
@@ -2557,6 +2558,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
+      titulo:'📊 v2.71.0 — Balance General + Flujo detallado por empresa + Resumen multi-empresa ampliado',
+      desc:'Tres mejoras financieras: <b>1)</b> Nuevo <b>Balance General</b> (Tablero): elegís un rango de fechas y ves los <b>ingresos y egresos reales por categoría</b>, con <b>gráfico de los mayores gastos</b> e ingresos/egresos por mes, y export a Excel. <b>2)</b> En <b>Flujo de Fondos</b>, botón <b>🏢 Por empresa</b>: muestra el detalle cronológico <b>separado por empresa</b> (fecha, descripción, tipo, banco, subtotal por mes) con export a Excel (una hoja por empresa). <b>3)</b> El <b>Resumen multi-empresa</b> ahora suma columnas de <b>créditos a pagar, cuentas a cobrar y a pagar, arrendamientos pendientes y gastos del mes</b> por empresa.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
       titulo:'👷 v2.70.0 — Planilla de empleados: sueldo por día, carga múltiple y editar categorías sin salir',
       desc:'Mejoras en la planilla: <b>1)</b> <b>Precio por día (jornal)</b> en el empleado: en vez de un sueldo mensual fijo, cargás el precio por día y en la planilla usás <b>Días trabajados</b> (le suma) — el valor por día se <b>autocompleta</b>. Los días que no trabaja se descuentan con la nueva categoría de gasto <b>Día no trabajado</b> (también por día, autocompletada), así los vas anotando como un gasto más. <b>2)</b> Nuevo botón <b>➕ Cargar varios</b>: cargás varios movimientos de una vez (una fila por cada gasto/ganancia con su categoría, monto y concepto). <b>3)</b> Al tocar <b>Editar categorías</b> desde el alta de un movimiento, ahora se abre <b>encima</b> y al cerrarlo <b>volvés al movimiento</b> (antes se salía).' },
@@ -5287,7 +5291,7 @@ pages.resumenGlobal = async function() {
         </div>
       </div>
 
-      <div class="kpi p-0 overflow-hidden">
+      <div class="kpi p-0 overflow-x-auto">
         <div class="px-4 py-3 bg-slate-50 border-b">
           <h3 class="font-semibold text-slate-800">Desglose por empresa</h3>
           <div class="text-xs text-slate-500">Los datos siguen separados por empresa. Esta vista solo suma los totales para que puedas verlos en conjunto.</div>
@@ -5302,13 +5306,17 @@ pages.resumenGlobal = async function() {
               <th class="text-right">A vencer 15d</th>
               <th class="text-right">Vencidos</th>
               <th class="text-right">Efectivo</th>
-              <th class="text-right">Flujo caja</th>
+              <th class="text-right" title="Total de cuotas de créditos pendientes de pago">Créditos a pagar</th>
+              <th class="text-right" title="Saldo pendiente de cobrar (cuentas corrientes)">A cobrar</th>
+              <th class="text-right" title="Saldo pendiente de pagar (cuentas corrientes)">A pagar</th>
+              <th class="text-right" title="Arrendamientos pendientes">Arrend.</th>
+              <th class="text-right" title="Gastos de efectivo del mes en curso">Gastos mes</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             ${todasLasEmpresas.length === 0
-              ? '<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin empresas asociadas a tu usuario.</td></tr>'
+              ? '<tr><td colspan="13" class="text-center text-slate-400 py-8">Sin empresas asociadas a tu usuario.</td></tr>'
               : todasLasEmpresas.map(e => {
                 const marcada = seleccionadas.has(e.companyId);
                 const dim = marcada ? '' : 'opacity-40';
@@ -5326,7 +5334,11 @@ pages.resumenGlobal = async function() {
                   <td class="text-right ${e.cheques.aVencer15>0?'text-amber-600 font-semibold':''}">${e.cheques.aVencer15}</td>
                   <td class="text-right ${e.cheques.vencidos>0?'text-red-600 font-semibold':''}">${e.cheques.vencidos}</td>
                   <td class="text-right ${e.efectivo.saldo<0?'text-red-600':''}">${fmt$(e.efectivo.saldo)}</td>
-                  <td class="text-right ${e.flujoCaja.saldoActual<0?'text-red-600':''}">${fmt$(e.flujoCaja.saldoActual)}</td>
+                  <td class="text-right ${(e.creditos?.monto||0)>0?'text-red-700':''}" title="${e.creditos?.cantCuotas||0} cuota(s) · próx. 30d: ${fmt$(e.creditos?.prox30||0)}">${fmt$(e.creditos?.monto||0)}</td>
+                  <td class="text-right ${(e.ctaCte?.aCobrar||0)>0?'text-emerald-700':''}">${fmt$(e.ctaCte?.aCobrar||0)}</td>
+                  <td class="text-right ${(e.ctaCte?.aPagar||0)>0?'text-red-700':''}">${fmt$(e.ctaCte?.aPagar||0)}</td>
+                  <td class="text-right ${(e.arrendamientos?.pendientes||0)>0?'text-amber-600 font-semibold':''}" title="Monto efectivo pend.: ${fmt$(e.arrendamientos?.montoEfectivo||0)}">${e.arrendamientos?.pendientes||0}</td>
+                  <td class="text-right ${(e.gastos?.mes||0)>0?'text-red-600':''}">${fmt$(e.gastos?.mes||0)}</td>
                   <td class="text-right">
                     <button class="btn btn-ghost text-xs" onclick="cambiarEmpresaYIr('${e.companyId}', 'cheques')" title="Cambiar a esta empresa y ver sus cheques">Cheques →</button>
                   </td>
@@ -5342,7 +5354,11 @@ pages.resumenGlobal = async function() {
               <td class="text-right text-amber-700">${t.cheques.aVencer15}</td>
               <td class="text-right text-red-700">${t.cheques.vencidos}</td>
               <td class="text-right">${fmt$(t.efectivo.saldo)}</td>
-              <td class="text-right">${fmt$(t.flujoCaja.saldoActual)}</td>
+              <td class="text-right text-red-700">${fmt$(t.creditos?.monto||0)}</td>
+              <td class="text-right text-emerald-700">${fmt$(t.ctaCte?.aCobrar||0)}</td>
+              <td class="text-right text-red-700">${fmt$(t.ctaCte?.aPagar||0)}</td>
+              <td class="text-right text-amber-700">${t.arrendamientos?.pendientes||0}</td>
+              <td class="text-right text-red-700">${fmt$(t.gastos?.mes||0)}</td>
               <td></td>
             </tr>
           </tfoot>
@@ -26884,9 +26900,11 @@ pages.flujoProyectado = async function() {
   const ICONS = Object.fromEntries(FLUJO_CATS.map(c => [c.id, c.icon]));
   const ahora = new Date();
 
+  state.flujoVista = state.flujoVista || 'mes';   // 'mes' (mezclado) | 'empresa' (detallado por empresa)
   // Aplicar filtros de categoría (cliente-side)
   const itemsFiltrados = (data.items || []).filter(it => !state.flujoCatsOcultas[it.categoria]);
   const vencidosFiltrados = (data.vencidos?.items || []).filter(it => !state.flujoCatsOcultas[it.categoria]);
+  state._flujoDet = { items: itemsFiltrados.slice(), cur: state.flujoSim.cur };   // para exportar el detalle por empresa
 
   // Recalcular totales con filtro
   const totalIngresos = itemsFiltrados.filter(i => i.tipo==='ingreso').reduce((a,b) => a+b.importe, 0);
@@ -26918,8 +26936,12 @@ pages.flujoProyectado = async function() {
         ${[[30,'30 días'],[90,'90 días'],[180,'180 días'],[365,'1 año'],[730,'2 años']].map(([d,lbl]) => `<button class="btn btn-${state.flujoDias===d?'primary':'secondary'} text-xs" onclick="state.flujoDias=${d}; pages.flujoProyectado();">${lbl}</button>`).join('')}
       </div>
       <div class="flex gap-2 items-center flex-wrap">
+        <div class="flex gap-1">
+          <button class="btn btn-${state.flujoVista==='mes'?'primary':'secondary'} text-xs" onclick="state.flujoVista='mes'; pages.flujoProyectado();">📅 Por mes</button>
+          <button class="btn btn-${state.flujoVista==='empresa'?'primary':'secondary'} text-xs" onclick="state.flujoVista='empresa'; pages.flujoProyectado();">🏢 Por empresa</button>
+        </div>
         ${empresasUser.length > 1 ? `<button class="btn btn-secondary text-xs" onclick="flujoEmpresasModal()">🌐 ${state.flujoEmpresas.length} de ${empresasUser.length} empresas</button>` : ''}
-        <button class="btn btn-secondary text-xs" onclick="flujoExportar()">📥 Exportar Excel</button>
+        ${state.flujoVista==='empresa' ? `<button class="btn btn-secondary text-xs" onclick="flujoDetalleExcel()">📥 Excel x empresa</button>` : `<button class="btn btn-secondary text-xs" onclick="flujoExportar()">📥 Exportar Excel</button>`}
         <span class="text-xs text-slate-500">${itemsFiltrados.length} eventos</span>
       </div>
     </div>
@@ -27019,6 +27041,8 @@ pages.flujoProyectado = async function() {
       }).join('')}
     </div>
 
+    <!-- Items: detalle cronológico por empresa (sin mezclar) -->
+    ${state.flujoVista==='empresa' ? flujoDetallePorEmpresaHTML(itemsFiltrados, fmt$) : `
     <!-- Items proyectados agrupados por mes -->
     <div class="space-y-4">
       ${meses.map(([mes, m]) => {
@@ -27048,7 +27072,7 @@ pages.flujoProyectado = async function() {
           </div>
         </div>`;
       }).join('') || `<div class="kpi text-center text-slate-500 py-8">Sin eventos previstos en este horizonte para las empresas / categorías seleccionadas.</div>`}
-    </div>`;
+    </div>`}`;
 
   // Dibujar el chart de saldo acumulado si hay datos
   if (data.serieAcumulada && data.serieAcumulada.length > 1) {
@@ -27056,6 +27080,179 @@ pages.flujoProyectado = async function() {
   }
   renderCompromisoCerealBanner('flujo-cereal-banner');
 };
+
+// Etiqueta legible del tipo de movimiento del flujo.
+const FLUJO_TIPO_LBL = { cheque:'Cheque', credito:'Cuota crédito', cta_cte:'Cuenta corriente', arrendamiento:'Arrendamiento', cereal:'Liquidación cereal', factura:'Factura', viaje:'Flete' };
+// Detalle cronológico SEPARADO por empresa (como la planilla de flujo de fondos).
+function flujoDetallePorEmpresaHTML(items, fmtMoney){
+  const f$ = fmtMoney || fmt$;
+  const byEmp = {};
+  (items||[]).forEach(it => { const k = it.empresaNombre || 'Sin empresa'; (byEmp[k]=byEmp[k]||[]).push(it); });
+  const empresas = Object.keys(byEmp).sort();
+  if (!empresas.length) return `<div class="kpi text-center text-slate-500 py-8">Sin eventos para el detalle por empresa.</div>`;
+  return empresas.map(emp => {
+    const arr = byEmp[emp].slice().sort((a,b)=> new Date(a.fecha)-new Date(b.fecha));
+    let filas=''; let curMes=null; let subI=0, subE=0, totI=0, totE=0;
+    const mesLbl = (mk)=>{ const [y,m]=mk.split('-'); return new Date(Number(y),Number(m)-1,1).toLocaleDateString('es-AR',{month:'long',year:'numeric'}); };
+    const flush=()=>{ if(curMes!==null){ const net=subI-subE; filas += `<tr class="bg-slate-100 font-semibold"><td colspan="4" class="text-right capitalize">Subtotal ${mesLbl(curMes)}</td><td class="text-right ${net>=0?'text-emerald-700':'text-red-700'}">${net>=0?'+':'-'} ${f$(Math.abs(net))}</td><td></td></tr>`; } };
+    arr.forEach(it=>{ const mk=(it.fecha||'').slice(0,7); if(mk!==curMes){ flush(); curMes=mk; subI=0; subE=0; }
+      if(it.tipo==='ingreso'){subI+=it.importe;totI+=it.importe;} else {subE+=it.importe;totE+=it.importe;}
+      filas += `<tr class="table-row"><td class="whitespace-nowrap">${fmtDate(it.fecha)}</td><td>${esc(it.concepto)}${it.contacto?`<div class="text-[10px] text-slate-500">${esc(it.contacto)}</div>`:''}</td><td class="text-xs">${esc(FLUJO_TIPO_LBL[it.categoria]||it.categoria)}</td><td class="text-xs">${esc(it.banco||'—')}</td><td class="text-right font-semibold ${it.tipo==='ingreso'?'text-emerald-700':'text-red-700'}">${it.tipo==='ingreso'?'+':'-'} ${f$(it.importe)}</td><td class="text-xs text-slate-500 capitalize">${esc(it.estado||'')}</td></tr>`;
+    });
+    flush();
+    const net = totI-totE;
+    return `<div class="kpi p-0 overflow-hidden mb-4">
+      <div class="px-4 py-2 bg-emerald-50 border-b border-emerald-200 flex items-center justify-between flex-wrap gap-2">
+        <h3 class="font-bold text-slate-800">🏢 ${esc(emp)}</h3>
+        <div class="text-xs flex gap-3"><span class="text-emerald-700 font-bold">+ ${f$(totI)}</span><span class="text-red-700 font-bold">- ${f$(totE)}</span><span class="font-bold ${net>=0?'text-emerald-700':'text-red-700'}">= ${f$(net)}</span></div>
+      </div>
+      <div class="overflow-x-auto"><table class="data text-sm">
+        <thead><tr><th>Fecha</th><th>Descripción</th><th>Tipo</th><th>Banco</th><th class="text-right">Importe</th><th>Estado</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table></div>
+    </div>`;
+  }).join('');
+}
+// Exporta el detalle por empresa a Excel: una hoja por empresa, con subtotales por mes.
+function flujoDetalleExcel(){
+  const det = state._flujoDet || { items:[], cur:'ARS' };
+  const items = det.items || [];
+  if (!items.length) return toast('No hay eventos para exportar','warn');
+  if (typeof XLSX === 'undefined') return toast('No se pudo cargar el exportador de Excel','error');
+  const byEmp = {};
+  items.forEach(it => { const k = it.empresaNombre || 'Sin empresa'; (byEmp[k]=byEmp[k]||[]).push(it); });
+  const wb = XLSX.utils.book_new();
+  const signo = (it)=> it.tipo==='ingreso' ? 1 : -1;
+  for (const emp of Object.keys(byEmp).sort()){
+    const arr = byEmp[emp].slice().sort((a,b)=> new Date(a.fecha)-new Date(b.fecha));
+    const rows = [['Fecha','Importe','Descripción','Tipo','Banco','Estado']];
+    let curMes=null, sub=0;
+    const mesLbl=(mk)=>{ const [y,m]=mk.split('-'); return new Date(Number(y),Number(m)-1,1).toLocaleDateString('es-AR',{month:'long',year:'numeric'}); };
+    const flush=()=>{ if(curMes!==null) rows.push(['', Math.round(sub), 'SUBTOTAL '+mesLbl(curMes), '', '', '']); };
+    arr.forEach(it=>{ const mk=(it.fecha||'').slice(0,7); if(mk!==curMes){ flush(); curMes=mk; sub=0; }
+      const imp = Math.round(signo(it)*it.importe); sub += signo(it)*it.importe;
+      rows.push([ new Date(it.fecha).toLocaleDateString('es-AR'), imp, it.concepto||'', FLUJO_TIPO_LBL[it.categoria]||it.categoria, it.banco||'', it.estado||'' ]);
+    });
+    flush();
+    const tot = arr.reduce((a,it)=>a+signo(it)*it.importe,0);
+    rows.push([]); rows.push(['', Math.round(tot), 'TOTAL '+emp, '', '', '']);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:12},{wch:16},{wch:60},{wch:16},{wch:14},{wch:12}];
+    XLSX.utils.book_append_sheet(wb, ws, emp.slice(0,31).replace(/[\\\/\?\*\[\]:]/g,' '));
+  }
+  const cur = det.cur==='USD' ? 'USD' : 'ARS';
+  XLSX.writeFile(wb, `Flujo-de-fondos-por-empresa-${cur}-${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast('Excel generado','success');
+}
+
+// ============================================================
+// BALANCE GENERAL: ingresos/egresos reales por categoría en un rango + gráfico.
+// ============================================================
+pages.balanceGeneral = async function() {
+  setHeader('Balance General', 'Ingresos y egresos reales por categoría — con gráfico de los mayores gastos');
+  if (!can('reportes:read')) { $('#page-body').innerHTML = stubPage('balanceGeneral','Balance General'); return; }
+  const hoy = new Date();
+  if (!state.balDesde) state.balDesde = new Date(hoy.getFullYear(), 0, 1).toISOString().slice(0,10);   // 1 de enero
+  if (!state.balHasta) state.balHasta = hoy.toISOString().slice(0,10);
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let d;
+  try { d = (await api(`/api/balance-general?desde=${state.balDesde}&hasta=${state.balHasta}`)).data; }
+  catch (e) { return toast(e.message,'error'); }
+  const totE = d.totalEgresos||0, totI = d.totalIngresos||0;
+  const pct = (m, tot) => tot>0 ? Math.round(m/tot*100) : 0;
+  const barCat = (arr, tot, color) => arr.map(x => `
+    <tr class="table-row">
+      <td>${esc(x.categoria)}</td>
+      <td class="text-right font-semibold">${fmt$(x.monto)}</td>
+      <td class="w-40"><div class="flex items-center gap-2"><div class="flex-1 bg-slate-100 rounded h-2"><div class="${color} h-2 rounded" style="width:${pct(x.monto,tot)}%"></div></div><span class="text-[10px] text-slate-500 w-8 text-right">${pct(x.monto,tot)}%</span></div></td>
+    </tr>`).join('') || `<tr><td colspan="3" class="text-center text-slate-400 py-4">Sin movimientos en el período.</td></tr>`;
+  $('#page-body').innerHTML = `
+    <div class="kpi mb-4 p-3">
+      <div class="flex items-end gap-3 flex-wrap">
+        <div><label class="label text-xs">Desde</label><input id="bal-desde" type="date" class="input" value="${state.balDesde}"/></div>
+        <div><label class="label text-xs">Hasta</label><input id="bal-hasta" type="date" class="input" value="${state.balHasta}"/></div>
+        <button class="btn btn-primary" onclick="state.balDesde=$('#bal-desde').value; state.balHasta=$('#bal-hasta').value; pages.balanceGeneral();">Aplicar</button>
+        <div class="flex gap-1">
+          <button class="btn btn-secondary text-xs" onclick="balRango('mes')">Este mes</button>
+          <button class="btn btn-secondary text-xs" onclick="balRango('anio')">Este año</button>
+          <button class="btn btn-secondary text-xs" onclick="balRango('12m')">Últ. 12 meses</button>
+        </div>
+        <div class="flex-1"></div>
+        <button class="btn btn-secondary text-xs" onclick="balanceExcel()">📥 Excel</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">⬆️ Ingresos</div><div class="text-2xl font-bold mt-1 text-emerald-700">${fmt$(totI)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">⬇️ Egresos</div><div class="text-2xl font-bold mt-1 text-red-700">${fmt$(totE)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">⚖️ Resultado (neto)</div><div class="text-2xl font-bold mt-1 ${d.neto>=0?'text-emerald-700':'text-red-700'}">${d.neto>=0?'+':''}${fmt$(d.neto)}</div></div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+      <div class="kpi p-3">
+        <div class="text-sm font-semibold text-slate-700 mb-2">🔻 Mayores gastos</div>
+        <canvas id="bal-chart-egr" height="150"></canvas>
+      </div>
+      <div class="kpi p-3">
+        <div class="text-sm font-semibold text-slate-700 mb-2">📈 Ingresos vs egresos por mes</div>
+        <canvas id="bal-chart-mes" height="150"></canvas>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="kpi p-0 overflow-hidden">
+        <div class="px-4 py-2 bg-red-50 border-b border-red-200 font-semibold text-red-800">Egresos por categoría · ${fmt$(totE)}</div>
+        <table class="data"><thead><tr><th>Categoría</th><th class="text-right">Monto</th><th>%</th></tr></thead><tbody>${barCat(d.egresos, totE, 'bg-red-500')}</tbody></table>
+      </div>
+      <div class="kpi p-0 overflow-hidden">
+        <div class="px-4 py-2 bg-emerald-50 border-b border-emerald-200 font-semibold text-emerald-800">Ingresos por categoría · ${fmt$(totI)}</div>
+        <table class="data"><thead><tr><th>Categoría</th><th class="text-right">Monto</th><th>%</th></tr></thead><tbody>${barCat(d.ingresos, totI, 'bg-emerald-500')}</tbody></table>
+      </div>
+    </div>
+    <div class="text-[11px] text-slate-500 mt-3">Se calcula sobre la plata realmente movida (efectivo + banco) en el período, excluyendo transferencias internas. Las categorías salen de cómo se clasificó cada movimiento.</div>`;
+  state._balData = d;
+  balanceDibujarCharts(d);
+};
+function balRango(tipo){
+  const h = new Date();
+  let a;
+  if (tipo==='mes') a = new Date(h.getFullYear(), h.getMonth(), 1);
+  else if (tipo==='anio') a = new Date(h.getFullYear(), 0, 1);
+  else a = new Date(h.getFullYear(), h.getMonth()-11, 1);   // 12 meses
+  state.balDesde = a.toISOString().slice(0,10);
+  state.balHasta = h.toISOString().slice(0,10);
+  pages.balanceGeneral();
+}
+function balanceDibujarCharts(d){
+  if (typeof Chart === 'undefined') return;
+  // Mayores gastos (barras horizontales, top 10)
+  try {
+    const egr = (d.egresos||[]).slice(0,10);
+    const c1 = document.getElementById('bal-chart-egr');
+    if (c1) { if (state._balChartEgr) state._balChartEgr.destroy();
+      state._balChartEgr = new Chart(c1, { type:'bar', data:{ labels: egr.map(x=>x.categoria), datasets:[{ data: egr.map(x=>x.monto), backgroundColor:'#ef4444' }] },
+        options:{ indexAxis:'y', plugins:{ legend:{display:false} }, scales:{ x:{ ticks:{ callback:v=>'$'+fmtN(v) } } } } }); }
+  } catch {}
+  // Ingresos vs egresos por mes
+  try {
+    const meses = d.porMes||[];
+    const c2 = document.getElementById('bal-chart-mes');
+    if (c2) { if (state._balChartMes) state._balChartMes.destroy();
+      state._balChartMes = new Chart(c2, { type:'bar', data:{ labels: meses.map(m=>{const[y,mm]=m.mes.split('-');return new Date(Number(y),Number(mm)-1,1).toLocaleDateString('es-AR',{month:'short',year:'2-digit'});}),
+        datasets:[{ label:'Ingresos', data: meses.map(m=>m.ingresos), backgroundColor:'#10b981' },{ label:'Egresos', data: meses.map(m=>m.egresos), backgroundColor:'#ef4444' }] },
+        options:{ plugins:{ legend:{position:'bottom'} }, scales:{ y:{ ticks:{ callback:v=>'$'+fmtN(v) } } } } }); }
+  } catch {}
+}
+function balanceExcel(){
+  const d = state._balData; if (!d) return;
+  if (typeof XLSX === 'undefined') return toast('No se pudo cargar el exportador','error');
+  const wb = XLSX.utils.book_new();
+  const rowsE = [['Egresos por categoría', ''], ['Categoría','Monto'], ...d.egresos.map(x=>[x.categoria, x.monto]), ['TOTAL EGRESOS', d.totalEgresos]];
+  const rowsI = [['Ingresos por categoría', ''], ['Categoría','Monto'], ...d.ingresos.map(x=>[x.categoria, x.monto]), ['TOTAL INGRESOS', d.totalIngresos]];
+  const wsE = XLSX.utils.aoa_to_sheet(rowsE); wsE['!cols']=[{wch:32},{wch:16}];
+  const wsI = XLSX.utils.aoa_to_sheet(rowsI); wsI['!cols']=[{wch:32},{wch:16}];
+  XLSX.utils.book_append_sheet(wb, wsE, 'Egresos');
+  XLSX.utils.book_append_sheet(wb, wsI, 'Ingresos');
+  XLSX.writeFile(wb, `Balance-general-${d.desde}_a_${d.hasta}.xlsx`);
+  toast('Excel generado','success');
+}
 
 // Dibuja el gráfico de saldo acumulado usando una librería liviana inline (SVG).
 // No depende de Chart.js para no agregar peso. Hace un sparkline simple.
