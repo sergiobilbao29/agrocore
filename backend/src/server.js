@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.72.0';
+const AGROCORE_VERSION = '2.73.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11974,6 +11974,14 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       empresaDestinoId: z.string().nullable().optional(),  // si el cliente paga a otra firma del grupo
       monedaPago: z.string().nullable().optional(),
       cotizacionPago: z.number().positive().nullable().optional(),
+      // Cobro con VARIOS medios: parte efectivo, parte cheque(s) recibidos, parte transferencia.
+      pagos: z.array(z.object({
+        metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'tarjeta']),
+        monto: z.number().positive(),
+        cajaDestino: z.string().nullable().optional(),
+        chequeId: z.string().nullable().optional(),   // cheque de terceros recibido (ya creado)
+        bancoCuentaId: z.string().nullable().optional(),
+      })).optional(),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
@@ -11981,6 +11989,12 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
     const sumaCreditos = d.creditos.reduce((a, c) => a + c.importeAplicado, 0);
     if (d.comprobantes.length && !d.monedaPago && Math.abs((sumaAplicada - sumaCreditos) - d.monto) > 0.01) {
       return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + ') no coincide con el monto cobrado (' + d.monto + ')' });
+    }
+    if (Array.isArray(d.pagos) && d.pagos.length) {
+      const sumaPagos = d.pagos.reduce((a, p) => a + Number(p.monto || 0), 0);
+      if (Math.abs(sumaPagos - d.monto) > 0.02) {
+        return res.status(400).json({ ok: false, error: `La suma de los medios de cobro (${sumaPagos.toFixed(2)}) no coincide con el monto total (${d.monto.toFixed(2)})` });
+      }
     }
     if (sumaCreditos > sumaAplicada + 0.01) {
       return res.status(400).json({ ok: false, error: 'Las notas de crédito aplicadas superan el total de comprobantes tildados' });
@@ -12084,45 +12098,36 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           }
         }
       }
-      // Registrar el recurso recibido — SOLO si entra plata. Neto 0 = vinculación.
+      // Registrar el/los recurso(s) recibido(s) — SOLO si entra plata. Neto 0 = vinculación.
+      const cobLeg = async (leg) => {
+        const m = leg.metodo, monto = Number(leg.monto || 0);
+        if (monto <= 0.01) return;
+        if (m === 'cheque') {
+          // El cliente nos da un cheque de terceros → ya viene creado con chequeId
+          if (!leg.chequeId) throw new Error('Falta el cheque recibido');
+        } else if (m === 'transferencia') {
+          if (!leg.bancoCuentaId) throw new Error('Falta la cuenta bancaria para la transferencia');
+          await tx.bancoMovimiento.create({ data: {
+            companyId: req.companyId, cuentaId: leg.bancoCuentaId, fecha: d.fecha, tipo: 'transferencia_in',
+            concepto: 'Cobro de ' + cli.razonSocial, monto, contraparte: cli.razonSocial,
+            observaciones: d.observaciones || null, userId: req.user?.id || null,
+          }});
+        } else if (m === 'efectivo') {
+          await tx.efectivo.create({ data: {
+            companyId: req.companyId, fecha: d.fecha, tipo: 'ingreso', concepto: 'Cobro de ' + cli.razonSocial,
+            monto, caja: leg.cajaDestino || null, clasificacion: 'empresa', observaciones: d.observaciones || null,
+          }});
+        } else if (m === 'externo' || m === 'tarjeta') {
+          const esTarjeta = m === 'tarjeta';
+          await tx.efectivo.create({ data: {
+            companyId: req.companyId, fecha: d.fecha, tipo: 'ingreso', concepto: 'Cobro de ' + cli.razonSocial,
+            monto, caja: leg.cajaDestino || (esTarjeta ? 'Tarjeta de crédito' : 'Medio externo'), clasificacion: 'empresa',
+            observaciones: [(leg.cajaDestino ? (esTarjeta ? 'Tarjeta: ' : 'Medio: ') + leg.cajaDestino : null), d.observaciones].filter(Boolean).join(' · ') || null,
+          }});
+        } else { throw new Error('Método no soportado en cobro dividido: ' + m); }
+      };
       if (d.monto > 0.01) {
-      if (d.metodo === 'cheque') {
-        // El cliente nos da un cheque de terceros → ya viene creado con chequeId
-        if (!d.chequeId) throw new Error('Falta chequeId del cheque recibido');
-      } else if (d.metodo === 'transferencia') {
-        if (!d.bancoCuentaId) throw new Error('Falta bancoCuentaId');
-        await tx.bancoMovimiento.create({ data: {
-          companyId: req.companyId, cuentaId: d.bancoCuentaId,
-          fecha: d.fecha, tipo: 'transferencia_in',
-          concepto: 'Cobro de ' + cli.razonSocial,
-          monto: d.monto, contraparte: cli.razonSocial,
-          observaciones: d.observaciones || null,
-          userId: req.user?.id || null,
-        }});
-      } else if (d.metodo === 'efectivo') {
-        await tx.efectivo.create({ data: {
-          companyId: req.companyId,
-          fecha: d.fecha, tipo: 'ingreso',
-          concepto: 'Cobro de ' + cli.razonSocial,
-          monto: d.monto,
-          caja: d.cajaDestino || null,
-          clasificacion: 'empresa',
-          observaciones: d.observaciones || null,
-        }});
-      } else if (d.metodo === 'externo' || d.metodo === 'tarjeta') {
-        // Billetera / medio externo o Tarjeta de crédito (solo etiqueta): no impacta
-        // banco, se registra como una "caja" en Control de Efectivo con su nombre.
-        const esTarjeta = d.metodo === 'tarjeta';
-        await tx.efectivo.create({ data: {
-          companyId: req.companyId,
-          fecha: d.fecha, tipo: 'ingreso',
-          concepto: 'Cobro de ' + cli.razonSocial,
-          monto: d.monto,
-          caja: d.cajaDestino || (esTarjeta ? 'Tarjeta de crédito' : 'Medio externo'),
-          clasificacion: 'empresa',
-          observaciones: [(d.cajaDestino ? (esTarjeta ? 'Tarjeta: ' : 'Medio: ') + d.cajaDestino : null), d.observaciones].filter(Boolean).join(' · ') || null,
-        }});
-      } else if (d.metodo === 'intercompany') {
+      if (d.metodo === 'intercompany') {
         // El cliente le paga a otra firma del grupo (firma destino). El cobro
         // queda pero los fondos entran a empresaDestinoId.
         const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
@@ -12159,6 +12164,12 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           observaciones: d.observaciones || null,
           userId: req.user?.id || null,
         }});
+      } else {
+        // Medios comunes (efectivo/cheque/transferencia/externo/tarjeta): uno o VARIOS.
+        const legs = (Array.isArray(d.pagos) && d.pagos.length)
+          ? d.pagos
+          : [{ metodo: d.metodo, monto: d.monto, cajaDestino: d.cajaDestino, chequeId: d.chequeId, bancoCuentaId: d.bancoCuentaId }];
+        for (const leg of legs) await cobLeg(leg);
       }
       } // fin "if (d.monto > 0.01)"
       return { ok: true, comprobantesAplicados: d.comprobantes.length, creditosAplicados: d.creditos.length };

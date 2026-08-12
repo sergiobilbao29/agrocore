@@ -872,6 +872,8 @@ const fmt$ = (n) => '$ ' + Number(n || 0).toLocaleString('es-AR', { minimumFract
 const fmtKg = (n) => Number(n || 0).toLocaleString('es-AR') + ' kg';
 const fmtN = (n) => Number(n || 0).toLocaleString('es-AR');
 const fmtDate = (d) => { if (!d) return ''; const x = new Date(d); return x.toLocaleDateString('es-AR'); };
+// Clave de mes (YYYY-MM) en hora LOCAL — coincide con lo que muestra fmtDate. No usar toISOString (UTC) para agrupar, porque desfasa fechas de fin de mes.
+const mesKeyLocal = (d) => { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0'); };
 const iniciales = (n) => (n || '').split(' ').filter(Boolean).map(w => w[0]).join('').slice(0,2).toUpperCase();
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -2558,9 +2560,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'12/08/2026',
+      titulo:'🗓️ v2.73.0 — Flujo de Fondos: fechas de fin de mes en el mes correcto',
+      desc:'Corregido un desfasaje horario en el <b>Flujo de Fondos</b>: los eventos de los últimos días del mes (por ej. un cheque al <b>31/8</b>) se agrupaban por error en el mes siguiente. Ahora el mes del encabezado coincide con la fecha que se muestra en cada fila, tanto en la vista <b>Por mes</b> como <b>Por empresa</b> y en el <b>Excel</b>.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'11/08/2026',
-      titulo:'💸 v2.72.0 — Pagar a proveedor con varios medios (varios cheques / mixto)',
-      desc:'Al pagar a un proveedor ahora podés tildar <b>➕ Pagar con varios medios</b> y dividir el pago: una parte en <b>efectivo</b>, otra con <b>uno o varios cheques</b> y/o por <b>transferencia</b> (o tarjeta). Agregás las filas que quieras, cada una con su medio y su monto, y la suma tiene que dar el total a pagar. La orden de pago sale con el detalle de todos los cheques y el desglose por medio.' },
+      titulo:'💸 v2.72.0 — Pagar/cobrar con varios medios (varios cheques / mixto)',
+      desc:'Al <b>pagar a un proveedor</b> o <b>cobrar a un cliente</b> ahora podés tildar <b>➕ con varios medios</b> y dividir: una parte en <b>efectivo</b>, otra con <b>uno o varios cheques</b> y/o por <b>transferencia</b> (o tarjeta). En cada fila elegís el medio y el monto (la suma debe dar el total). Podés usar cheques <b>ya en cartera</b> o cargar un <b>cheque nuevo</b> en la misma fila (propio al pagar, recibido al cobrar). La orden de pago sale con el detalle de todos los cheques y el desglose por medio.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/08/2026',
       titulo:'📊 v2.71.0 — Balance General + Flujo detallado por empresa + Resumen multi-empresa ampliado',
       desc:'Tres mejoras financieras: <b>1)</b> Nuevo <b>Balance General</b> (Tablero): elegís un rango de fechas y ves los <b>ingresos y egresos reales por categoría</b>, con <b>gráfico de los mayores gastos</b> e ingresos/egresos por mes, y export a Excel. <b>2)</b> En <b>Flujo de Fondos</b>, botón <b>🏢 Por empresa</b>: muestra el detalle cronológico <b>separado por empresa</b> (fecha, descripción, tipo, banco, subtotal por mes) con export a Excel (una hoja por empresa). <b>3)</b> El <b>Resumen multi-empresa</b> ahora suma columnas de <b>créditos a pagar, cuentas a cobrar y a pagar, arrendamientos pendientes y gastos del mes</b> por empresa.' },
@@ -15353,7 +15358,7 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
             ${esPago ? `<option value="cereal">🌾 Entrega de cereal (canje)</option>` : ''}
             ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (recursos de otra firma)</option>` : ''}
           </select>
-          ${esPago ? `<label class="flex items-center gap-1 text-[11px] text-slate-600 mt-1 cursor-pointer"><input id="pc-dividir" type="checkbox" onchange="pagoDividirToggle('${modo}')"/> ➕ Pagar con varios medios (dividir: efectivo + cheques + transferencia…)</label>` : ''}
+          <label class="flex items-center gap-1 text-[11px] text-slate-600 mt-1 cursor-pointer"><input id="pc-dividir" type="checkbox" onchange="pagoDividirToggle('${modo}')"/> ➕ ${esPago?'Pagar':'Cobrar'} con varios medios (dividir: efectivo + cheques + transferencia…)</label>
         </div>
       </div>
       <div id="pc-metodo-detalle" class="mb-3"></div>
@@ -15626,13 +15631,21 @@ function pagoChequesDisponibles(){
   return (state.cache.cheques||[]).filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado||''));
 }
 function pagoLegRecursoHTML(metodo){
+  const esPago = (state._pagoCobroData?.modo || 'pago') === 'pago';
   if (metodo==='transferencia') {
     const ctas=(state.cache.bancoCuentas||[]).filter(c=>c.activo!==false);
     return `<select class="input text-sm" data-leg-banco><option value="">— Cuenta —</option>${ctas.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre||c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select>`;
   }
-  if (metodo==='cheque') {
+  if (metodo==='cheque') {   // solo pago: cheque ya en cartera
     const chs=pagoChequesDisponibles();
     return `<select class="input text-sm" data-leg-cheque onchange="pagoLegChequeChange(this)"><option value="">— Cheque en cartera —</option>${chs.map(c=>`<option value="${esc(c.id)}" data-monto="${c.monto||0}">${c.tipo==='propio'?'🧾':'📩'} N° ${esc(c.nroCheque||c.numero||'')} · ${esc(c.banco||'')} · ${fmt$(c.monto||0)}</option>`).join('')}</select>`;
+  }
+  if (metodo==='cheque_nuevo') {   // cheque nuevo: propio (pago) o recibido (cobro)
+    return `<div class="grid grid-cols-3 gap-1">
+      <input class="input text-sm" data-leg-chn-banco placeholder="Banco"/>
+      <input class="input text-sm" data-leg-chn-nro placeholder="N° cheque"/>
+      <input class="input text-sm" type="date" data-leg-chn-fpago title="Fecha de pago"/>
+    </div>`;
   }
   if (metodo==='tarjeta') {
     const tj=catByTipo(TARJETA_CAT_TIPO);
@@ -15642,14 +15655,16 @@ function pagoLegRecursoHTML(metodo){
   const cajas=state.cache.efectivoCajas||[];
   return `<select class="input text-sm" data-leg-caja><option value="">— Caja —</option>${cajas.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>`;
 }
+function pagoLegMetodoOptions(){
+  const esPago = (state._pagoCobroData?.modo || 'pago') === 'pago';
+  return `<option value="efectivo">💵 Efectivo</option>
+    <option value="transferencia">🏛️ Transferencia</option>
+    ${esPago ? `<option value="cheque">💳 Cheque en cartera</option><option value="cheque_nuevo">🧾 Cheque nuevo (propio)</option>` : `<option value="cheque_nuevo">📩 Cheque recibido</option>`}
+    <option value="tarjeta">💳 Tarjeta</option>`;
+}
 function pagoLegRowHTML(){
   return `<tr data-leg class="border-t border-slate-100">
-    <td class="p-1"><select class="input text-sm" data-leg-metodo onchange="pagoLegMetodoChange(this)">
-      <option value="efectivo">💵 Efectivo</option>
-      <option value="cheque">💳 Cheque</option>
-      <option value="transferencia">🏛️ Transferencia</option>
-      <option value="tarjeta">💳 Tarjeta</option>
-    </select></td>
+    <td class="p-1"><select class="input text-sm" data-leg-metodo onchange="pagoLegMetodoChange(this)">${pagoLegMetodoOptions()}</select></td>
     <td class="p-1" data-leg-rec>${pagoLegRecursoHTML('efectivo')}</td>
     <td class="p-1"><input class="input text-sm text-right w-28" type="number" step="0.01" min="0" data-leg-monto placeholder="0" oninput="pagoLegRecalc()"/></td>
     <td class="p-1 text-right"><button type="button" class="btn btn-ghost text-red-600 text-xs" title="Quitar" onclick="this.closest('tr').remove(); pagoLegRecalc()">×</button></td>
@@ -16330,23 +16345,48 @@ async function pagoCobroConfirmar(modo) {
   if (monedaPago && (esACuenta || pagaOtraMoneda)) { body.monedaPago = monedaPago; body.cotizacionPago = d._cotizPago || null; }
   // Neto 0 (las NC cubren todo): es sólo vinculación, no se pide caja/banco/cheque.
   if (monto > 0.01) {
-  const _dividir = esPago && document.getElementById('pc-dividir')?.checked;
+  const _dividir = document.getElementById('pc-dividir')?.checked;
   if (_dividir) {
-    // Pago con VARIOS medios: armamos body.pagos con cada leg.
+    // Pago/cobro con VARIOS medios: armamos body.pagos con cada leg.
+    const cajaKey = esPago ? 'cajaOrigen' : 'cajaDestino';
+    const contactoNombre = (esPago ? (state.cache.proveedores||[]) : (state.cache.clientes||[])).find(c=>c.id===contactoId)?.razonSocial || '';
     const legs = [];
     for (const r of document.querySelectorAll('#pc-legs-rows [data-leg]')) {
       const m = r.querySelector('[data-leg-metodo]')?.value;
       const mnt = Number(r.querySelector('[data-leg-monto]')?.value || 0);
       if (!mnt || mnt <= 0) continue;
       const leg = { metodo: m, monto: mnt };
-      if (m === 'efectivo' || m === 'externo' || m === 'tarjeta') leg.cajaOrigen = r.querySelector('[data-leg-caja]')?.value || null;
+      if (m === 'efectivo' || m === 'externo' || m === 'tarjeta') leg[cajaKey] = r.querySelector('[data-leg-caja]')?.value || null;
       else if (m === 'transferencia') { leg.bancoCuentaId = r.querySelector('[data-leg-banco]')?.value || null; if (!leg.bancoCuentaId) return toast('Elegí la cuenta bancaria en la fila de transferencia', 'warn'); }
       else if (m === 'cheque') { leg.chequeId = r.querySelector('[data-leg-cheque]')?.value || null; if (!leg.chequeId) return toast('Elegí un cheque en cada fila de cheque', 'warn'); }
+      else if (m === 'cheque_nuevo') {
+        const banco = (r.querySelector('[data-leg-chn-banco]')?.value||'').trim();
+        const nro = (r.querySelector('[data-leg-chn-nro]')?.value||'').trim();
+        const fpago = r.querySelector('[data-leg-chn-fpago]')?.value;
+        if (!banco || !nro || !fpago) return toast('Completá banco, número y fecha de pago en cada cheque nuevo', 'warn');
+        if (esPago) {
+          // Cheque propio nuevo: lo crea el backend junto con el pago.
+          leg.metodo = 'cheque';
+          leg.nuevoCheque = { formato:'fisico', banco, nroCheque:nro, monto:mnt, fechaPago:new Date(fpago).toISOString(), fechaEmision:new Date(fecha).toISOString() };
+        } else {
+          // Cheque de terceros recibido: lo creamos ahora y usamos su id.
+          try {
+            const chRsp = await api('/api/cheques', { method:'POST', body: JSON.stringify({
+              tipo:'fisico', origen:'tercero', banco, numero:nro, monto:mnt,
+              fechaPago:new Date(fpago).toISOString(), fechaEmision:new Date(fecha).toISOString(),
+              librador: contactoNombre || null, estado:'en_cartera',
+              observaciones:'Recibido de '+(contactoNombre||'cliente')+' por cobranza',
+            })});
+            leg.metodo = 'cheque'; leg.chequeId = chRsp.data?.id;
+            if (!leg.chequeId) throw new Error('No se obtuvo el ID del cheque');
+          } catch (chErr) { return toast('No pude crear el cheque recibido: '+chErr.message, 'error'); }
+        }
+      }
       legs.push(leg);
     }
-    if (!legs.length) return toast('Cargá al menos un medio de pago', 'warn');
+    if (!legs.length) return toast('Cargá al menos un medio de ' + (esPago?'pago':'cobro'), 'warn');
     const sumaLegs = legs.reduce((a, l) => a + l.monto, 0);
-    if (Math.abs(sumaLegs - monto) > 0.02) return toast('La suma de los medios (' + fmt$(sumaLegs) + ') no coincide con el total a pagar (' + fmt$(monto) + ')', 'warn');
+    if (Math.abs(sumaLegs - monto) > 0.02) return toast('La suma de los medios (' + fmt$(sumaLegs) + ') no coincide con el total a ' + (esPago?'pagar':'cobrar') + ' (' + fmt$(monto) + ')', 'warn');
     body.pagos = legs; body.metodo = 'efectivo';
   } else {
   if (metodo === 'efectivo') body.cajaOrigen = document.getElementById('pc-caja')?.value || null;
@@ -16466,6 +16506,7 @@ async function pagoCobroConfirmar(modo) {
         for (const leg of body.pagos) {
           if (leg.metodo==='transferencia') { tTr += leg.monto; if(leg.bancoCuentaId){ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===leg.bancoCuentaId); if(b && !op.bancoNombre) op.bancoNombre=`${b.banco}${b.numero?' '+b.numero:''}`; } }
           else if (leg.metodo==='cheque' && leg.chequeId) { const ch=(state.cache.cheques||[]).find(x=>x.id===leg.chequeId)||{}; tCh += leg.monto; op.cheques.push({ idInterno:ch.id?String(ch.id).slice(0,8):'—', librador:ch.librador||ch.origen||'', tipo:_tipoCh(ch.formato||ch.tipoFormato), endosante:ch.endosante||'', nroCheque:ch.numero||ch.nroCheque||'', nroCuenta:ch.numeroCuenta||ch.nroCuenta||'', fechaVenc:ch.fechaPago, banco:ch.banco||'', importe:Number(ch.monto)||leg.monto }); }
+          else if (leg.metodo==='cheque' && leg.nuevoCheque) { tCh += leg.monto; op.cheques.push({ idInterno:'—', librador:_opEmpresa().nombre, tipo:_tipoCh(leg.nuevoCheque.formato), endosante:'', nroCheque:leg.nuevoCheque.nroCheque||'', nroCuenta:'', fechaVenc:leg.nuevoCheque.fechaPago, banco:leg.nuevoCheque.banco||'', importe:Number(leg.nuevoCheque.monto)||leg.monto }); }
           else { tEf += leg.monto; }   // efectivo / tarjeta / externo
         }
         op.totalEfectivo=tEf; op.totalTransferencias=tTr; op.totalCheques=tCh;
@@ -27022,7 +27063,7 @@ pages.flujoProyectado = async function() {
   // Agrupar items por mes
   const porMes = {};
   itemsFiltrados.forEach(it => {
-    const k = new Date(it.fecha).toISOString().slice(0,7);
+    const k = mesKeyLocal(it.fecha);
     if (!porMes[k]) porMes[k] = { ingresos:0, egresos:0, items:[] };
     porMes[k].items.push(it);
     if (it.tipo === 'ingreso') porMes[k].ingresos += it.importe;
@@ -27201,7 +27242,7 @@ function flujoDetallePorEmpresaHTML(items, fmtMoney){
     let filas=''; let curMes=null; let subI=0, subE=0, totI=0, totE=0;
     const mesLbl = (mk)=>{ const [y,m]=mk.split('-'); return new Date(Number(y),Number(m)-1,1).toLocaleDateString('es-AR',{month:'long',year:'numeric'}); };
     const flush=()=>{ if(curMes!==null){ const net=subI-subE; filas += `<tr class="bg-slate-100 font-semibold"><td colspan="4" class="text-right capitalize">Subtotal ${mesLbl(curMes)}</td><td class="text-right ${net>=0?'text-emerald-700':'text-red-700'}">${net>=0?'+':'-'} ${f$(Math.abs(net))}</td><td></td></tr>`; } };
-    arr.forEach(it=>{ const mk=(it.fecha||'').slice(0,7); if(mk!==curMes){ flush(); curMes=mk; subI=0; subE=0; }
+    arr.forEach(it=>{ const mk=mesKeyLocal(it.fecha); if(mk!==curMes){ flush(); curMes=mk; subI=0; subE=0; }
       if(it.tipo==='ingreso'){subI+=it.importe;totI+=it.importe;} else {subE+=it.importe;totE+=it.importe;}
       filas += `<tr class="table-row"><td class="whitespace-nowrap">${fmtDate(it.fecha)}</td><td>${esc(it.concepto)}${it.contacto?`<div class="text-[10px] text-slate-500">${esc(it.contacto)}</div>`:''}</td><td class="text-xs">${esc(FLUJO_TIPO_LBL[it.categoria]||it.categoria)}</td><td class="text-xs">${esc(it.banco||'—')}</td><td class="text-right font-semibold ${it.tipo==='ingreso'?'text-emerald-700':'text-red-700'}">${it.tipo==='ingreso'?'+':'-'} ${f$(it.importe)}</td><td class="text-xs text-slate-500 capitalize">${esc(it.estado||'')}</td></tr>`;
     });
@@ -27235,7 +27276,7 @@ function flujoDetalleExcel(){
     let curMes=null, sub=0;
     const mesLbl=(mk)=>{ const [y,m]=mk.split('-'); return new Date(Number(y),Number(m)-1,1).toLocaleDateString('es-AR',{month:'long',year:'numeric'}); };
     const flush=()=>{ if(curMes!==null) rows.push(['', Math.round(sub), 'SUBTOTAL '+mesLbl(curMes), '', '', '']); };
-    arr.forEach(it=>{ const mk=(it.fecha||'').slice(0,7); if(mk!==curMes){ flush(); curMes=mk; sub=0; }
+    arr.forEach(it=>{ const mk=mesKeyLocal(it.fecha); if(mk!==curMes){ flush(); curMes=mk; sub=0; }
       const imp = Math.round(signo(it)*it.importe); sub += signo(it)*it.importe;
       rows.push([ new Date(it.fecha).toLocaleDateString('es-AR'), imp, it.concepto||'', FLUJO_TIPO_LBL[it.categoria]||it.categoria, it.banco||'', it.estado||'' ]);
     });
