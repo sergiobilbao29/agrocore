@@ -872,6 +872,10 @@ const fmt$ = (n) => '$ ' + Number(n || 0).toLocaleString('es-AR', { minimumFract
 const fmtKg = (n) => Number(n || 0).toLocaleString('es-AR') + ' kg';
 const fmtN = (n) => Number(n || 0).toLocaleString('es-AR');
 const fmtDate = (d) => { if (!d) return ''; const x = new Date(d); return x.toLocaleDateString('es-AR'); };
+// Fecha "de calendario" sin desfasaje: para campos que se guardan a medianoche UTC
+// (fechas de cheques, vencimientos, etc.) toma el día tal cual del ISO, sin convertir
+// a hora local (que en Argentina restaba un día). Ej: "2026-08-02T00:00:00Z" -> "02/08/2026".
+const fmtFecha = (d) => { if (!d) return ''; const s = String(d); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[3]}/${m[2]}/${m[1]}`; const x = new Date(d); return x.toLocaleDateString('es-AR'); };
 // Clave de mes (YYYY-MM) en hora LOCAL — coincide con lo que muestra fmtDate. No usar toISOString (UTC) para agrupar, porque desfasa fechas de fin de mes.
 const mesKeyLocal = (d) => { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0'); };
 const iniciales = (n) => (n || '').split(' ').filter(Boolean).map(w => w[0]).join('').slice(0,2).toUpperCase();
@@ -2562,6 +2566,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'12/08/2026',
+      titulo:'💳 v2.81.0 — Cheques: fechas correctas y acreditar en banco los que faltaban',
+      desc:'Dos arreglos en cheques. <b>1) Fechas:</b> en el listado de cheques y en los movimientos del banco las fechas se mostraban <b>un día menos</b> (por la zona horaria). Ahora se ven correctas (igual que en el formulario). <b>2) Cheques que no impactaban en el banco:</b> si marcaste un cheque como <b>cobrado/pagado editando el estado</b>, no se generaba el movimiento bancario (por eso en la cuenta aparecían menos cheques). Ahora el botón <b>💰 Acreditar</b> queda disponible aunque el cheque ya esté cobrado, para <b>generar el movimiento faltante</b> eligiendo la cuenta; y el formulario avisa que cambiar el estado a mano no impacta el saldo.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
+      titulo:'📦 v2.80.0 — Pagar a un proveedor con un producto (pago en especie)',
+      desc:'En <b>Pagar a proveedor</b> ahora hay un método nuevo: <b>📦 Pago con producto (en especie)</b>. Sirve para cancelar una deuda entregando mercadería de tu stock (por ej. <b>lechones faenados</b>). Elegís el producto, la cantidad y el precio unitario (o dejás el precio vacío para que se calcule desde el total a pagar), y opcionalmente el depósito. Al confirmar, se <b>descuenta el stock físico</b> del producto entregado y la <b>deuda se salda</b> por ese total. Si <b>deshacés</b> ese pago, la deuda vuelve y el <b>stock se repone</b> automáticamente. Es análogo a la entrega de cereal (que ahora también repone el stock al deshacer).' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'12/08/2026',
       titulo:'🧾 v2.79.0 — Nómina: se saca el cartel "Empleado no encontrado" al volver',
       desc:'Al entrar a la <b>planilla de un empleado</b> y volver a la <b>nómina</b>, a veces aparecía un cartel rojo de "Empleado no encontrado". Corregido: al volver, el sistema muestra la nómina limpia y solo avisa si realmente hacés clic en un empleado que no existe.' },
@@ -13740,10 +13750,10 @@ pages.cheques = async function() {
     { key:'nroCheque', label:'Nº', sort:c=>c.nroCheque||'', render:c=>`<span class="font-mono text-xs">${esc(c.nroCheque)}</span>` },
     { key:'banco', label:'Banco', sort:c=>(c.banco||'').toLowerCase(), render:c=>esc(c.banco||'—') },
     { key:'cuenta', label:'Cuenta', sort:c=>(c.cuenta||'').toLowerCase(), render:c=>esc(c.cuenta||'—') },
-    { key:'fechaEmision', label:'Emisión', sort:c=>fechaAMs(c.fechaEmision), render:c=>fmtDate(c.fechaEmision) },
-    { key:'fechaPago', label:'Pago', sort:c=>fechaAMs(c.fechaPago), render:c=>fmtDate(c.fechaPago) },
-    { key:'fechaRecepcion', label:'Recepción', sort:c=>fechaAMs(c.fechaRecepcion), render:c=>c.fechaRecepcion?fmtDate(c.fechaRecepcion):'—' },
-    { key:'fechaEndoso', label:'Endoso/Entrega', sort:c=>fechaAMs(c.fechaEndoso), render:c=>c.fechaEndoso?fmtDate(c.fechaEndoso):'—' },
+    { key:'fechaEmision', label:'Emisión', sort:c=>fechaAMs(c.fechaEmision), render:c=>fmtFecha(c.fechaEmision) },
+    { key:'fechaPago', label:'Pago', sort:c=>fechaAMs(c.fechaPago), render:c=>fmtFecha(c.fechaPago) },
+    { key:'fechaRecepcion', label:'Recepción', sort:c=>fechaAMs(c.fechaRecepcion), render:c=>c.fechaRecepcion?fmtFecha(c.fechaRecepcion):'—' },
+    { key:'fechaEndoso', label:'Endoso/Entrega', sort:c=>fechaAMs(c.fechaEndoso), render:c=>c.fechaEndoso?fmtFecha(c.fechaEndoso):'—' },
     { key:'beneficiario', label:'Beneficiario', sort:c=>(c.beneficiario||'').toLowerCase(), render:c=>`${esc(c.beneficiario||'—')}${c.enPoderDe?`<br><span class="text-[10px] text-slate-400">📍 ${esc(c.enPoderDe)}</span>`:''}` },
     { key:'librador', label:'Librador / titular', sort:c=>(c.librador||'').toLowerCase(), render:c=>esc(c.librador||'—') },
     { key:'endosante', label:'Endosante', defHidden:true, sort:c=>(c.endosante||'').toLowerCase(), render:c=>esc(c.endosante||'—') },
@@ -13934,6 +13944,7 @@ async function chqForm(id=null) {
         </div>
         <div><label class="label">Estado</label>
           <select id="f-est" class="input">${chqEstadosList().map(e=>`<option value="${e.codigo}" ${e.codigo===estadoDefault?'selected':''}>${esc(e.nombre)}</option>`).join('')}</select>
+          <div class="text-[10px] text-amber-700 mt-1">Para que <b>cobrado/pagado</b> impacte en el <b>saldo del banco</b>, usá el botón <b>💰 Acreditar</b> de la lista (te pide la cuenta). Cambiar el estado acá NO genera el movimiento bancario.</div>
         </div>
         <div><label class="label">Nº de cheque *</label><input id="f-nro" class="input" value="${esc(it.nroCheque||'')}"/></div>
         <div><label class="label">Banco</label>
@@ -14019,11 +14030,12 @@ async function chqDel(id) {
 // terceros), todavía se puede acreditar/pagar. Para los terminados (anulado/rechazado)
 // no ofrecemos el botón.
 function _chqPuedeAcreditar(c) {
+  // Permitimos "acreditar/registrar en banco" incluso si ya está cobrado/pagado:
+  // así se puede generar el movimiento bancario faltante (ej. cheques marcados
+  // como cobrados editando el estado, que no habían generado el movimiento).
   const finales = ['anulado', 'rechazado'];
   if (finales.includes(c.estado)) return false;
-  if (c.tipo === 'terceros') return c.estado !== 'cobrado';
-  if (c.tipo === 'propio')   return c.estado !== 'pagado' && c.estado !== 'cobrado';
-  return false;
+  return c.tipo === 'terceros' || c.tipo === 'propio';
 }
 async function chqAcreditarForm(id) {
   const c = (state.cache.cheques||[]).find(x => x.id === id);
@@ -15457,6 +15469,7 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
             <option value="transferencia">🏛️ Transferencia bancaria</option>
             ${TARJETA_OPT}
             ${esPago ? `<option value="cereal">🌾 Entrega de cereal (canje)</option>` : ''}
+            ${esPago ? `<option value="producto">📦 Pago con producto (en especie)</option>` : ''}
             ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (recursos de otra firma)</option>` : ''}
           </select>
           <label class="flex items-center gap-1 text-[11px] text-slate-600 mt-1 cursor-pointer"><input id="pc-dividir" type="checkbox" onchange="pagoDividirToggle('${modo}')"/> ➕ ${esPago?'Pagar':'Cobrar'} con varios medios (dividir: efectivo + cheques + transferencia…)</label>
@@ -15945,7 +15958,35 @@ function pagoCobroMetodoCambio(modo) {
         </div>
         <div class="col-span-2"><label class="label">Precio pizarra (ARS por tn)</label><input id="pc-cereal-piz" type="number" step="0.01" class="input" value="${pizLive?Math.round(pizLive):''}" oninput="this.dataset.touched='1'" placeholder="ARS/tn del día"/></div>
       </div>`;
+  } else if (metodo === 'producto') {
+    const prods = (state.cache.productos||[]).filter(p => p.activo!==false);
+    const deps = (state.cache.depositos||[]);
+    cont.innerHTML = `
+      <div class="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900 mb-2">📦 Pagás en especie: entregás un producto de tu stock (ej. lechones faenados) para cancelar la deuda. Se descuenta del stock y la deuda se salda por el total (cantidad × precio).</div>
+      <div class="grid grid-cols-2 gap-2">
+        <div class="col-span-2"><label class="label">Producto a entregar *</label>
+          <select id="pc-prodesp" class="input"><option value="">— Elegir —</option>${prods.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}${p.unidad?' ('+esc(p.unidad)+')':''}</option>`).join('')}</select>
+          ${!prods.length?'<div class="text-[11px] text-amber-700 mt-1">No hay productos en el stock. Cargalos en Stock primero.</div>':''}
+        </div>
+        <div><label class="label">Cantidad *</label><input id="pc-prodesp-cant" type="number" step="0.01" class="input" placeholder="unidades" oninput="pcProdEspRecalc()"/></div>
+        <div><label class="label">Precio unitario</label><input id="pc-prodesp-precio" type="number" step="0.01" class="input" placeholder="valor c/u" oninput="this.dataset.touched='1'; pcProdEspRecalc()"/></div>
+        <div><label class="label">Depósito (opcional)</label><select id="pc-prodesp-dep" class="input"><option value="">— Ninguno —</option>${deps.map(x=>`<option value="${esc(x.id)}">${esc(x.nombre)}</option>`).join('')}</select></div>
+        <div class="flex items-end pb-1"><div class="text-sm text-slate-700">Total entregado: <b id="pc-prodesp-total">$ 0</b></div></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-1">El total (cantidad × precio) tiene que coincidir con el monto a pagar. Tip: dejá el precio vacío para que se calcule solo desde el total tildado.</div>`;
+    setTimeout(pcProdEspRecalc, 0);
   }
+}
+// Recalcula el total del pago en especie y, si no cargaste precio, lo deduce del monto a pagar.
+function pcProdEspRecalc(){
+  const cantEl=document.getElementById('pc-prodesp-cant'), precEl=document.getElementById('pc-prodesp-precio'), totEl=document.getElementById('pc-prodesp-total');
+  if(!cantEl||!totEl) return;
+  const cant=Number(cantEl.value||0);
+  const montoPagar=Number(document.getElementById('pc-total-pago')?.value||0);
+  let prec=Number(precEl?.value||0);
+  // Si hay cantidad y monto pero no precio, sugerimos el precio unitario.
+  if(cant>0 && montoPagar>0 && !prec && precEl && !precEl.dataset.touched){ prec = Math.round((montoPagar/cant)*100)/100; precEl.value = prec; }
+  totEl.textContent = '$ ' + fmtN(Math.round(cant*prec));
 }
 
 function pcChequeModo(modo) {
@@ -16043,6 +16084,7 @@ function _opMetodoDetalle(op){
   if (m==='transferencia') return 'Transferencia bancaria'+(op.bancoNombre?' · '+op.bancoNombre:'');
   if (m==='cheque') return 'Cheque'+(op.chequeInfo?' · '+op.chequeInfo:'');
   if (m==='cereal') return 'Entrega de cereal';
+  if (m==='producto') return 'Pago con producto (especie)';
   if (m==='intercompany') return 'Cubierto por otra firma del grupo';
   return m||'—';
 }
@@ -16554,6 +16596,14 @@ async function pagoCobroConfirmar(modo) {
     body.depositoId = document.getElementById('pc-cereal-dep')?.value || null;
     body.precioPizarra = Number(document.getElementById('pc-cereal-piz')?.value || 0) || null;
     if (!body.cerealProductoId) return toast('Elegí el cereal que entregás', 'warn');
+  }
+  if (metodo === 'producto') {
+    body.productoPagoId = document.getElementById('pc-prodesp')?.value || null;
+    body.cantidadProducto = Number(document.getElementById('pc-prodesp-cant')?.value || 0) || null;
+    body.precioProducto = Number(document.getElementById('pc-prodesp-precio')?.value || 0) || null;
+    body.depositoId = document.getElementById('pc-prodesp-dep')?.value || null;
+    if (!body.productoPagoId) return toast('Elegí el producto que entregás', 'warn');
+    if (!body.cantidadProducto || body.cantidadProducto <= 0) return toast('Poné la cantidad del producto', 'warn');
   }
   if (metodo === 'intercompany') {
     if (esPago) {
@@ -28409,7 +28459,7 @@ function bcoMovRender() {
             const signo = t.sign > 0 ? '+' : t.sign < 0 ? '−' : '';
             const bloqueado = (state._bcoConcilSet||new Set()).has((m.fecha||'').slice(0,7));
             return `<tr class="table-row ${bloqueado?'bg-slate-50/60':''}">
-              <td>${fmtDate(m.fecha)}</td>
+              <td>${fmtFecha(m.fecha)}</td>
               <td><span class="text-xs">${t.icon} ${esc(t.lbl)}</span></td>
               <td>${esc(m.concepto)}</td>
               <td class="text-xs text-slate-500">${esc(m.contraparte||'—')}</td>

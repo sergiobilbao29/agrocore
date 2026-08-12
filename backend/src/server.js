@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.79.0';
+const AGROCORE_VERSION = '2.81.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1202,8 +1202,23 @@ app.post('/api/documentos/:id/revertir', requireCompany, requirePermission('fina
           await tx.cheque.update({ where: { id: ch.id }, data: { estado:'en_cartera', enPoderDe:null, fechaEndoso:null, beneficiario:null } });
           if (ch.tipo === 'propio') warns.push('El cheque propio volvió a cartera. Si se había creado sólo para este pago, borralo desde Tesorería → Cheques.');
         }
-      } else if (op.metodo && !['intercompany','cereal'].includes(op.metodo) && Number(doc.total||0) > 0.01) {
+      } else if (op.metodo && !['intercompany','cereal','producto'].includes(op.metodo) && Number(doc.total||0) > 0.01) {
         warns.push('No pude ubicar el movimiento de ' + op.metodo + ' de forma unívoca; revisá Tesorería y ajustalo a mano si corresponde.');
+      }
+      // 2b) Pago en especie (producto) o canje (cereal): reponer el stock entregado
+      // borrando el egreso de stock que generó el pago (el stock se recalcula solo).
+      if (op.metodo === 'producto' || op.metodo === 'cereal') {
+        const mot = op.metodo === 'producto' ? 'pago_especie' : 'entrega_canje';
+        const desde = new Date(new Date(doc.fecha).getTime() - 2 * 86400000);
+        const hasta = new Date(new Date(doc.fecha).getTime() + 2 * 86400000);
+        const movs = await tx.movimiento.findMany({ where: { companyId, motivo: mot, contraparteId: doc.contactoId, contraparteTipo: 'proveedor', fecha: { gte: desde, lte: hasta } } });
+        const objetivo = Number(doc.total || 0);
+        const cand = movs
+          .map(m => ({ m, diff: Math.abs(Number(m.total || 0) - objetivo) }))
+          .filter(x => x.diff < Math.max(1, objetivo * 0.02))
+          .sort((a, b) => a.diff - b.diff);
+        if (cand.length) { await tx.movimiento.delete({ where: { id: cand[0].m.id } }); warns.push('Se repuso al stock el producto entregado en el pago en especie.'); }
+        else warns.push('No pude ubicar el egreso de stock del pago en especie; revisá Stock y reponelo a mano si corresponde.');
       }
       // 3) Borrar el comprobante de OP.
       await tx.documentoEmitido.delete({ where: { id: doc.id } });
@@ -12169,7 +12184,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         ctaCteId: z.string().min(1),
         importeAplicado: z.number().positive(),
       })).optional().default([]),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal', 'externo', 'tarjeta']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal', 'producto', 'externo', 'tarjeta']),
       monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo, sin plata)
       fecha: z.coerce.date(),
       cajaOrigen: z.string().nullable().optional(),
@@ -12199,6 +12214,11 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       cerealProductoId: z.string().nullable().optional(),  // producto cereal del stock que se entrega
       depositoId: z.string().nullable().optional(),        // cerealera/silo de donde sale
       precioPizarra: z.number().nonnegative().nullable().optional(), // ARS por tn al día de la entrega (valuación)
+      // Pago EN ESPECIE con un producto (ej: lechones faenados). Se entrega un
+      // producto del stock/galpon valuado; la deuda se cancela por d.monto (= cant x precio).
+      productoPagoId: z.string().nullable().optional(),    // producto del stock que se entrega
+      cantidadProducto: z.number().positive().nullable().optional(), // unidades entregadas
+      precioProducto: z.number().nonnegative().nullable().optional(), // valor unitario acordado
       // Pago con VARIOS medios: parte efectivo, parte cheque(s), parte transferencia, etc.
       // Cada leg mueve su propio recurso. La suma de montos debe dar d.monto.
       pagos: z.array(z.object({
@@ -12429,6 +12449,28 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           referencia: 'CANJE',
           depositoId: d.depositoId || null,
           observaciones: `Entrega de cereal a ${prov.razonSocial} por canje${d.observaciones ? ' · ' + d.observaciones : ''}`,
+          userId: req.user?.id || null,
+        }});
+      } else if (d.metodo === 'producto') {
+        // Pago EN ESPECIE: entregamos un producto del stock para cancelar la deuda.
+        // d.monto = valor (ARS) aplicado a la deuda = cantidad x precio unitario.
+        if (!d.productoPagoId) throw new Error('Elegí el producto que se entrega');
+        if (!d.cantidadProducto || d.cantidadProducto <= 0) throw new Error('Poné la cantidad del producto entregado');
+        const prodEsp = await tx.producto.findFirst({ where: { id: d.productoPagoId, companyId: req.companyId } });
+        if (!prodEsp) throw new Error('Producto no encontrado en el stock');
+        const cant = Number(d.cantidadProducto);
+        const precioU = d.precioProducto != null ? Number(d.precioProducto) : (cant > 0 ? d.monto / cant : 0);
+        // Chequeo suave: cantidad x precio debe dar aprox el monto pagado.
+        if (d.precioProducto != null && Math.abs(cant * precioU - d.monto) > Math.max(1, d.monto * 0.02)) {
+          throw new Error(`El total del producto (${(cant * precioU).toFixed(2)}) no coincide con el monto a pagar (${d.monto.toFixed(2)})`);
+        }
+        await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: prodEsp.id,
+          fecha: d.fecha, tipo: 'egreso', motivo: 'pago_especie',
+          cantidad: cant, precio: precioU || null, total: d.monto || (cant * precioU) || null,
+          contraparteId: d.proveedorId, contraparteTipo: 'proveedor',
+          referencia: 'PAGO_ESPECIE', depositoId: d.depositoId || null,
+          observaciones: `Pago en especie a ${prov.razonSocial}: ${cant} x ${prodEsp.nombre}${d.observaciones ? ' · ' + d.observaciones : ''}`,
           userId: req.user?.id || null,
         }});
       } else if (d.metodo === 'intercompany') {
