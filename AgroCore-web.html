@@ -2561,6 +2561,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'12/08/2026',
+      titulo:'💳 v2.76.0 — Cheques: depositado ≠ acreditado + filtro separado en el Flujo',
+      desc:'Dos mejoras en cheques. <b>1) Depósito vs acreditación:</b> ahora <b>depositar</b> un cheque de terceros lo deja <b>"en tránsito"</b> y <b>NO suma al saldo</b> del banco (porque puede rechazarse). El saldo se acredita <b>recién cuando lo marcás "cobrado/acreditado"</b>. La cuenta del depósito queda guardada, así lo acreditás con un clic, y sumamos el estado <b>"Rechazado"</b> al flujo de acreditación. <b>2) Flujo de Fondos:</b> el filtro <b>Cheques</b> ahora está separado en <b>Cheques de terceros</b> (lo que vas a cobrar) y <b>Cheques propios</b> (lo que vas a pagar).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
       titulo:'⚖️ v2.75.0 — Balance Patrimonial (Estado de Situación Patrimonial)',
       desc:'El antiguo "Balance General" ahora es un verdadero <b>Estado de Situación Patrimonial</b>: <b>Activo = Pasivo + Patrimonio Neto</b> a una <b>fecha de corte</b>. Toma automático de todo el sistema: caja y bancos (ARS y USD), cheques de terceros en cartera, cuentas corrientes a cobrar/pagar, cheques propios a pagar, créditos bancarios separados en <b>corto y largo plazo</b>, stock valuado y los <b>bienes de uso netos de amortización</b> (del módulo Activos y maquinaria). Además podés <b>cargar líneas a mano</b> en cualquier sección (tierra, capital social, reservas, resultados acumulados, créditos fiscales, etc.). El informe de ingresos/egresos por caja que estaba antes seguís teniéndolo en <b>Flujo de caja</b>. Exportable a Excel.' },
@@ -13942,10 +13945,11 @@ async function chqAcreditarForm(id) {
   }
   const esPropio = c.tipo === 'propio';
   const estadosDestino = esPropio
-    ? ['pagado', 'cobrado']
-    : ['depositado', 'cobrado'];
+    ? ['pagado', 'cobrado', 'rechazado']
+    : ['depositado', 'cobrado', 'rechazado'];
+  const ESTLBL = { depositado:'Depositado (en tránsito)', cobrado:'Cobrado / acreditado', pagado:'Pagado (debitado del banco)', rechazado:'Rechazado' };
   openModal({
-    title: esPropio ? '💸 Marcar cheque propio como pagado' : '💰 Acreditar cheque de terceros',
+    title: esPropio ? '💸 Marcar cheque propio como pagado' : '💰 Acreditar / depositar cheque de terceros',
     size:'max-w-md',
     body: `
       <div class="bg-slate-50 border border-slate-200 p-3 rounded-lg mb-3 text-sm">
@@ -13956,20 +13960,20 @@ async function chqAcreditarForm(id) {
       <div class="grid grid-cols-1 gap-3">
         <div><label class="label">Nuevo estado *</label>
           <select id="ca-est" class="input">
-            ${estadosDestino.map(e => `<option value="${e}">${e}</option>`).join('')}
+            ${estadosDestino.map(e => `<option value="${e}" ${c.estado===e?'selected':''}>${ESTLBL[e]||e}</option>`).join('')}
           </select>
           <div class="text-[11px] text-slate-500 mt-1">
             ${esPropio
-              ? '<b>Pagado</b>: el beneficiario lo cobró del banco. <b>Cobrado</b>: similar (algunas administraciones usan uno u otro).'
-              : '<b>Depositado</b>: lo entregaste al banco, todavía no se acreditó. <b>Cobrado</b>: el banco lo acreditó en tu cuenta.'}
+              ? '<b>Pagado</b>: el banco lo debitó de tu cuenta (recién ahí baja el saldo). <b>Rechazado</b>: no se pagó.'
+              : '<b>Depositado</b>: lo entregaste al banco pero <b>todavía NO acredita</b> el saldo (puede rechazarse). <b>Cobrado</b>: el banco lo <b>acreditó</b> en tu cuenta (recién ahí suma al saldo). <b>Rechazado</b>: no se acreditó.'}
           </div>
         </div>
-        <div><label class="label">Cuenta bancaria${esPropio?' (desde dónde salió)':' (dónde se acreditó)'}</label>
+        <div><label class="label">Cuenta bancaria${esPropio?' (desde dónde sale)':' (dónde se deposita / acredita)'}</label>
           <select id="ca-cta" class="input">
-            <option value="">— Sin registrar en banco —</option>
-            ${cuentas.filter(x=>x.activo).map(x => `<option value="${x.id}">🏛️ ${esc(x.banco)}${x.alias?' · '+esc(x.alias):''} (saldo: ${fmt$(x.saldo)})</option>`).join('')}
+            <option value="">— Sin cuenta —</option>
+            ${cuentas.filter(x=>x.activo).map(x => `<option value="${x.id}" ${c.cuentaBancoId===x.id?'selected':''}>🏛️ ${esc(x.banco)}${x.alias?' · '+esc(x.alias):''} (saldo: ${fmt$(x.saldo)})</option>`).join('')}
           </select>
-          <div class="text-[11px] text-slate-500 mt-1">Si elegís una, el movimiento queda registrado en esa cuenta automáticamente. Si la dejás vacía, solo cambia el estado del cheque.</div>
+          <div class="text-[11px] text-slate-500 mt-1">El movimiento bancario se genera <b>solo cuando el cheque queda "cobrado/acreditado" (o el propio "pagado")</b>. Al depositar, la cuenta queda registrada para acreditar después.</div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div><label class="label">Fecha</label><input id="ca-fec" type="date" class="input" value="${String(c.fechaPago||new Date().toISOString()).slice(0,10)}"/></div>
@@ -27261,7 +27265,8 @@ async function cuotaPagarConfirmar(credId, cuotaId) {
  * Vista consolidada cronológica de ingresos y egresos futuros.
  * ========================================================= */
 const FLUJO_CATS = [
-  { id:'cheque',        lbl:'Cheques',         icon:'💳' },
+  { id:'cheque_terceros', lbl:'Cheques 3ros',  icon:'💳' },
+  { id:'cheque_propio',   lbl:'Cheques propios', icon:'🧾' },
   { id:'cta_cte',       lbl:'Ctas. ctes.',     icon:'📇' },
   { id:'credito',       lbl:'Créditos',        icon:'🏦' },
   { id:'cereal',        lbl:'Liquid. cereal',  icon:'🌾' },
@@ -27500,7 +27505,7 @@ pages.flujoProyectado = async function() {
 };
 
 // Etiqueta legible del tipo de movimiento del flujo.
-const FLUJO_TIPO_LBL = { cheque:'Cheque', credito:'Cuota crédito', cta_cte:'Cuenta corriente', arrendamiento:'Arrendamiento', cereal:'Liquidación cereal', factura:'Factura', viaje:'Flete' };
+const FLUJO_TIPO_LBL = { cheque:'Cheque', cheque_terceros:'Cheque de terceros', cheque_propio:'Cheque propio', credito:'Cuota crédito', cta_cte:'Cuenta corriente', arrendamiento:'Arrendamiento', cereal:'Liquidación cereal', factura:'Factura', viaje:'Flete' };
 // Detalle cronológico SEPARADO por empresa (como la planilla de flujo de fondos).
 function flujoDetallePorEmpresaHTML(items, fmtMoney){
   const f$ = fmtMoney || fmt$;
@@ -28185,7 +28190,8 @@ function bcoConcilPanel() {
 }
 
 // Depositar un cheque de terceros (en cartera) en esta cuenta bancaria.
-// Reusa cambiar-estado: el cheque pasa a "depositado" y genera el ingreso.
+// Reusa cambiar-estado: el cheque pasa a "depositado" (en tránsito). NO acredita
+// el saldo todavía; recién suma cuando se marca "cobrado/acreditado".
 async function bcoDepositarCheque() {
   const cuentaId = state.bancoCuentaId;
   const c = (state.cache.bancoCuentas||[]).find(x => x.id === cuentaId);
@@ -28199,7 +28205,7 @@ async function bcoDepositarCheque() {
   openModal({
     title:'🏦 Depositar cheque de terceros', size:'max-w-lg',
     body:`
-      <div class="text-xs text-slate-500 mb-2">Se deposita en <b>${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</b>. El cheque pasa a <b>depositado</b> y suma al saldo. Después lo podés marcar "cobrado" cuando acredite.</div>
+      <div class="text-xs text-slate-500 mb-2">Se deposita en <b>${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</b>. El cheque pasa a <b>depositado (en tránsito)</b> y <b>todavía NO suma al saldo</b> (puede rechazarse). Cuando el banco lo acredite, marcalo como <b>cobrado</b> desde Cheques y ahí suma. La cuenta queda registrada para acreditarlo con un clic.</div>
       <div><label class="label">Cheque en cartera *</label>
         <select id="dep-cheque" class="input">${opts}</select>
       </div>

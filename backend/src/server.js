@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.75.0';
+const AGROCORE_VERSION = '2.76.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4274,8 +4274,11 @@ mountCrud({
 //   Propio   pagado/cobrado    → EGRESO en cuenta (cheque_pagado)
 // Si vuelve a "en_cartera"/"emitido"/"anulado"/"rechazado": elimina el movimiento.
 // ============================================================
-const CHEQUE_BANCO_ESTADOS_INGRESO = new Set(['depositado', 'cobrado']); // terceros
-const CHEQUE_BANCO_ESTADOS_EGRESO  = new Set(['pagado', 'cobrado']);     // propios
+// Solo "cobrado"/"acreditado" ACREDITA el saldo del banco. "Depositado" es EN
+// TRANSITO (entregado al banco pero todavia no acreditado, puede rechazarse), por
+// eso NO genera movimiento bancario hasta que se cobra/acredita.
+const CHEQUE_BANCO_ESTADOS_INGRESO = new Set(['cobrado', 'acreditado']);   // terceros
+const CHEQUE_BANCO_ESTADOS_EGRESO  = new Set(['pagado', 'cobrado']);       // propios
 
 function _chequeMovTipo(cheque) {
   if (cheque.tipo === 'terceros' && CHEQUE_BANCO_ESTADOS_INGRESO.has(cheque.estado)) return 'cheque_cobrado';
@@ -4370,8 +4373,12 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
           estado: d.estado,
           // Al endosar/entregar/depositar sale de cartera: registramos la fecha si no estaba.
           ...(/endosad|entregad|deposit|pagad/i.test(d.estado) && !cheque.fechaEndoso ? { fechaEndoso: fechaMov } : {}),
+          // Recordamos en qué cuenta se depositó/acreditó (para poder acreditar después).
+          ...(d.cuentaBancoId ? { cuentaBancoId: d.cuentaBancoId } : {}),
         },
       });
+      // Cuenta efectiva: la que eligió ahora, o la que quedó guardada al depositar.
+      const cuentaEfectiva = d.cuentaBancoId || cheque.cuentaBancoId || null;
       // 2) Recalcular si debe haber movimiento bancario para este cheque
       const tipoMov = _chequeMovTipo(actualizado);
       // Buscar movimiento bancario existente (puede ser de un cambio anterior)
@@ -4382,12 +4389,12 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
         return { cheque: actualizado, movimientoBanco: null };
       }
       // El estado nuevo SÍ requiere movimiento
-      if (!d.cuentaBancoId) {
+      if (!cuentaEfectiva) {
         // Si ya existía un movimiento (de un estado anterior), lo dejamos como está;
         // si no, el usuario no eligió cuenta → no creamos uno y avisamos.
-        return { cheque: actualizado, movimientoBanco: existente, warning: existente ? null : 'Para registrar en el banco, elegí una cuenta bancaria' };
+        return { cheque: actualizado, movimientoBanco: existente, warning: existente ? null : 'Para acreditar en el banco, elegí una cuenta bancaria' };
       }
-      const cuenta = await tx.bancoCuenta.findFirst({ where: { id: d.cuentaBancoId, companyId: req.companyId } });
+      const cuenta = await tx.bancoCuenta.findFirst({ where: { id: cuentaEfectiva, companyId: req.companyId } });
       if (!cuenta) throw Object.assign(new Error('Cuenta bancaria no encontrada'), { status: 400 });
       const concepto = `Cheque ${cheque.tipo === 'propio' ? 'propio' : 'de terceros'} #${cheque.nroCheque}${cheque.banco ? ' · ' + cheque.banco : ''}`;
       const contraparte = cheque.tipo === 'propio' ? (cheque.beneficiario || null) : (cheque.librador || null);
@@ -4397,7 +4404,7 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
         movimientoBanco = await tx.bancoMovimiento.update({
           where: { id: existente.id },
           data: {
-            cuentaId: d.cuentaBancoId, fecha: fechaMov, tipo: tipoMov,
+            cuentaId: cuentaEfectiva, fecha: fechaMov, tipo: tipoMov,
             concepto, monto: Number(cheque.monto || 0), contraparte,
             referencia: d.referencia || cheque.nroCheque, observaciones: d.observaciones || null,
             userId: req.user?.id || existente.userId,
@@ -4406,7 +4413,7 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
       } else {
         movimientoBanco = await tx.bancoMovimiento.create({
           data: {
-            companyId: req.companyId, cuentaId: d.cuentaBancoId,
+            companyId: req.companyId, cuentaId: cuentaEfectiva,
             fecha: fechaMov, tipo: tipoMov,
             concepto, monto: Number(cheque.monto || 0), contraparte,
             referencia: d.referencia || cheque.nroCheque,
@@ -9778,7 +9785,7 @@ async function _construirFlujoProyectado(req, opts = {}) {
     const esIngreso = ch.tipo === 'terceros';
     push(ch.fechaPago, {
       tipo: esIngreso ? 'ingreso' : 'egreso',
-      categoria: 'cheque',
+      categoria: esIngreso ? 'cheque_terceros' : 'cheque_propio',
       concepto: `${esIngreso ? 'Cheque de terceros' : 'Cheque propio'} ${ch.nroCheque || ''} ${ch.banco || ''}`.trim(),
       importe: Number(ch.monto || 0), ref: ch.id,
       contacto: ch.beneficiario || ch.librador || null,
