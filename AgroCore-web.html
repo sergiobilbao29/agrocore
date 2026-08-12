@@ -2566,6 +2566,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
+      titulo:'💵 v2.82.0 — Vender / descontar cheques en el banco',
+      desc:'En <b>Tesorería → Cheques</b>, botón nuevo <b>💵 Vender cheques</b>. Tildás los cheques de terceros en cartera que entregás al banco, elegís la cuenta donde se acredita y cargás el <b>neto realmente acreditado</b> (el banco descuenta interés, comisión e impuestos). El sistema calcula el <b>gasto financiero</b> como la diferencia (suma − neto), acredita el neto en la cuenta y registra ese gasto como un cargo bancario, y saca los cheques de cartera (quedan como <b>vendidos</b>). Podés anotar la tasa y el plazo promedio de referencia.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'12/08/2026',
       titulo:'💳 v2.81.0 — Cheques: fechas correctas y acreditar en banco los que faltaban',
       desc:'Dos arreglos en cheques. <b>1) Fechas:</b> en el listado de cheques y en los movimientos del banco las fechas se mostraban <b>un día menos</b> (por la zona horaria). Ahora se ven correctas (igual que en el formulario). <b>2) Cheques que no impactaban en el banco:</b> si marcaste un cheque como <b>cobrado/pagado editando el estado</b>, no se generaba el movimiento bancario (por eso en la cuenta aparecían menos cheques). Ahora el botón <b>💰 Acreditar</b> queda disponible aunque el cheque ya esté cobrado, para <b>generar el movimiento faltante</b> eligiendo la cuenta; y el formulario avisa que cambiar el estado a mano no impacta el saldo.' },
@@ -13853,6 +13856,7 @@ pages.cheques = async function() {
         </div>
         <div class="md:col-span-8 flex gap-2 justify-end flex-wrap">
           <button class="btn btn-secondary" onclick="chqFiltroDisponibles()">Ver disponibles</button>
+          ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Vender / descontar cheques de terceros en el banco" onclick="chqVenderForm()">💵 Vender cheques</button>`:''}
           ${colMenuBtn('cheques')}
           ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Agregar, renombrar o quitar estados de cheque" onclick="chqEstadosManager()">⚙️ Estados</button>`:''}
           ${can('finanzas:create') ? `<button class="btn btn-primary" onclick="chqForm()">+ Nuevo</button>`:''}
@@ -13871,6 +13875,64 @@ pages.cheques = async function() {
 function chqFiltroDisponibles() {
   state.chequeFilter = { estado:'en_cartera', sortCol:null, sortDir:'asc' };
   pages.cheques();
+}
+// ===== VENTA / DESCUENTO de cheques de terceros =====
+async function chqVenderForm(){
+  let cuentas = state.cache.bancoCuentas;
+  if(!cuentas){ try{ cuentas=(await api('/api/banco-cuentas')).data||[]; state.cache.bancoCuentas=cuentas; }catch{ cuentas=[]; } }
+  let cheques=[]; try{ cheques=(await api('/api/cheques')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  const enCartera = cheques.filter(c => c.tipo==='terceros' && /en[_ ]?cartera/i.test(c.estado||''));
+  if(!enCartera.length) return toast('No hay cheques de terceros en cartera para vender','warn');
+  const hoy=new Date().toISOString().slice(0,10);
+  openModal({ title:'💵 Vender / descontar cheques de terceros', size:'max-w-3xl',
+    body:`
+      <div class="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900 mb-2">Elegí los cheques que entregás al banco. Se acredita un <b>neto</b> (menos que la suma) porque el banco cobra <b>interés + comisión + impuestos</b>. Cargá el <b>neto realmente acreditado</b> y el sistema calcula el gasto financiero.</div>
+      <div class="grid grid-cols-2 gap-3 mb-2">
+        <div><label class="label">Cuenta donde se acredita *</label><select id="cv-cuenta" class="input"><option value="">— Elegir —</option>${cuentas.filter(x=>x.activo!==false).map(x=>`<option value="${esc(x.id)}">🏛️ ${esc(x.banco)}${x.alias?' · '+esc(x.alias):''}${x.numero?' · '+esc(x.numero):''}</option>`).join('')}</select></div>
+        <div><label class="label">Fecha de la venta *</label><input id="cv-fecha" type="date" class="input" value="${hoy}"/></div>
+      </div>
+      <div class="kpi p-0 overflow-hidden mb-2" style="max-height:230px;overflow-y:auto"><table class="data text-sm">
+        <thead><tr><th><input type="checkbox" id="cv-all" onclick="cvToggleAll(this.checked)"/></th><th>Nº</th><th>Banco</th><th>Librador</th><th class="text-right">Vto</th><th class="text-right">Monto</th></tr></thead>
+        <tbody>${enCartera.map(c=>`<tr class="table-row"><td><input type="checkbox" class="cv-chq" value="${esc(c.id)}" data-monto="${c.monto}" onchange="chqVenderCalc()"/></td><td>${esc(c.nroCheque||'')}</td><td class="text-xs">${esc(c.banco||'')}</td><td class="text-xs">${esc(c.librador||'')}</td><td class="text-right text-xs">${c.fechaPago?fmtFecha(c.fechaPago):'—'}</td><td class="text-right">${fmt$(c.monto)}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <div class="grid grid-cols-3 gap-3 items-end p-3 bg-slate-50 rounded border border-slate-200">
+        <div><label class="label">Suma seleccionada</label><div class="text-lg font-bold" id="cv-suma">$ 0</div></div>
+        <div><label class="label">Neto acreditado (real) *</label><input id="cv-neto" type="number" step="0.01" class="input" oninput="this.dataset.touched='1'; chqVenderCalc()"/></div>
+        <div><label class="label">Gasto financiero</label><div class="text-lg font-bold text-red-700" id="cv-gasto">$ 0</div></div>
+        <div><label class="label">Tasa % (opcional)</label><input id="cv-tasa" type="number" step="0.01" class="input"/></div>
+        <div><label class="label">Plazo prom. días (opcional)</label><input id="cv-plazo" type="number" class="input"/></div>
+        <div><label class="label">Seleccionados</label><div class="text-sm font-semibold" id="cv-cant">0</div></div>
+      </div>
+      <div class="mt-2"><label class="label">Observaciones</label><input id="cv-obs" class="input" placeholder="Ej: línea tradicional, banco Galicia"/></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="chqVenderSave()">💵 Registrar venta</button>` });
+}
+function cvToggleAll(on){ document.querySelectorAll('.cv-chq').forEach(c=>{ c.checked=on; }); chqVenderCalc(); }
+function chqVenderCalc(){
+  const sel=[...document.querySelectorAll('.cv-chq:checked')];
+  const suma=sel.reduce((a,c)=>a+Number(c.dataset.monto||0),0);
+  const netoEl=document.getElementById('cv-neto');
+  if(netoEl && !netoEl.dataset.touched){ netoEl.value = Math.round(suma); }
+  const neto=Number(netoEl?.value||0);
+  const gasto=Math.max(0, suma-neto);
+  const set=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+  set('cv-suma','$ '+fmtN(Math.round(suma))); set('cv-gasto','$ '+fmtN(Math.round(gasto))); set('cv-cant', String(sel.length));
+}
+async function chqVenderSave(){
+  const ids=[...document.querySelectorAll('.cv-chq:checked')].map(c=>c.value);
+  if(!ids.length) return toast('Elegí al menos un cheque','warn');
+  const cuentaBancoId=document.getElementById('cv-cuenta')?.value;
+  if(!cuentaBancoId) return toast('Elegí la cuenta donde se acredita','warn');
+  const fecha=document.getElementById('cv-fecha')?.value;
+  if(!fecha) return toast('Poné la fecha de la venta','warn');
+  const neto=Number(document.getElementById('cv-neto')?.value||0);
+  if(!neto || neto<=0) return toast('Poné el neto acreditado','warn');
+  const body={ chequeIds:ids, cuentaBancoId, fecha:new Date(fecha+'T12:00:00').toISOString(), netoAcreditado:neto,
+    tasa:Number(document.getElementById('cv-tasa')?.value||0)||null, plazoDias:Number(document.getElementById('cv-plazo')?.value||0)||null,
+    observaciones:(document.getElementById('cv-obs')?.value||'').trim()||null };
+  try{ const r=await api('/api/cheques/vender',{method:'POST',body:JSON.stringify(body)});
+    closeModal(); toast(`${r.data.vendidos} cheque(s) vendidos · neto $${fmtN(Math.round(r.data.neto))} · gasto $${fmtN(Math.round(r.data.gasto))}`,'success');
+    delete state.cache.cheques; delete state.cache.bancoCuentas; pages.cheques();
+  }catch(e){ toast(e.message,'error'); }
 }
 // Ordenar por una columna: 1er clic ascendente, 2do descendente.
 function chqSort(col) {

@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.81.0';
+const AGROCORE_VERSION = '2.82.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4439,6 +4439,66 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
         });
       }
       return { cheque: actualizado, movimientoBanco };
+    });
+    res.json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// VENTA / DESCUENTO DE CHEQUES: se entregan cheques de terceros al banco y se
+// acredita un NETO (menor a la suma) porque el banco cobra interes + comision +
+// impuestos. El usuario carga el NETO realmente acreditado y el sistema calcula
+// el gasto financiero como la diferencia. Los cheques salen de cartera (vendidos).
+// ============================================================
+const venderChequesSchema = z.object({
+  chequeIds: z.array(z.string()).min(1),
+  cuentaBancoId: z.string().min(1),
+  fecha: z.coerce.date(),
+  netoAcreditado: z.number().nonnegative(),
+  tasa: z.number().nullable().optional(),
+  plazoDias: z.number().nullable().optional(),
+  comision: z.number().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+app.post('/api/cheques/vender', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const d = venderChequesSchema.parse(req.body);
+    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaBancoId, companyId: req.companyId } });
+    if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta bancaria no encontrada' });
+    const cheques = await prisma.cheque.findMany({ where: { id: { in: d.chequeIds }, companyId: req.companyId, tipo: 'terceros' } });
+    if (cheques.length !== d.chequeIds.length) return res.status(400).json({ ok: false, error: 'Algún cheque no existe o no es de terceros' });
+    const noEnCartera = cheques.filter(c => !['en_cartera', 'depositado'].includes((c.estado || '').toLowerCase()));
+    if (noEnCartera.length) return res.status(400).json({ ok: false, error: 'Solo se pueden vender cheques en cartera. Revisá: ' + noEnCartera.map(c => c.nroCheque).join(', ') });
+    { const bloq = await _conciliacionBloqueo(req.companyId, d.cuentaBancoId, d.fecha);
+      if (bloq) return res.status(400).json({ ok: false, error: `El mes ${bloq.periodo} de esa cuenta está conciliado. Reabrí la conciliación para registrar la venta.` }); }
+    const suma = cheques.reduce((a, c) => a + Number(c.monto || 0), 0);
+    if (d.netoAcreditado > suma + 0.01) return res.status(400).json({ ok: false, error: 'El neto acreditado no puede superar la suma de los cheques (' + suma.toFixed(2) + ')' });
+    const gasto = Math.max(0, suma - d.netoAcreditado);
+    const result = await prisma.$transaction(async (tx) => {
+      const nref = `VC_${Date.now().toString(36)}`;
+      for (const c of cheques) {
+        await tx.cheque.update({ where: { id: c.id }, data: {
+          estado: 'vendido', cuentaBancoId: d.cuentaBancoId, fechaEndoso: c.fechaEndoso || d.fecha,
+          beneficiario: c.beneficiario || (cuenta.banco + ' (venta/descuento)'),
+          observaciones: [c.observaciones, `Vendido/descontado en ${cuenta.banco} el ${new Date(d.fecha).toISOString().slice(0,10)} (ref ${nref})`].filter(Boolean).join(' · '),
+        }});
+      }
+      // Ingreso BRUTO por la suma de los cheques.
+      await tx.bancoMovimiento.create({ data: {
+        companyId: req.companyId, cuentaId: d.cuentaBancoId, fecha: d.fecha, tipo: 'cheque_cobrado',
+        concepto: `Venta / descuento de ${cheques.length} cheque(s) de terceros`, monto: suma,
+        contraparte: cuenta.banco, referencia: nref, observaciones: d.observaciones || null, userId: req.user?.id || null,
+      }});
+      // Egreso por el GASTO financiero (interés + comisión + impuestos).
+      if (gasto > 0.01) {
+        const partes = []; if (d.tasa) partes.push('tasa ' + d.tasa + '%'); if (d.plazoDias) partes.push(d.plazoDias + ' días');
+        await tx.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: d.cuentaBancoId, fecha: d.fecha, tipo: 'comision',
+          concepto: `Gastos financieros por descuento de cheques${partes.length ? ' (' + partes.join(', ') + ')' : ''}`, monto: gasto,
+          contraparte: cuenta.banco, referencia: nref, observaciones: 'Categoría: Gastos bancarios / financieros', userId: req.user?.id || null,
+        }});
+      }
+      return { vendidos: cheques.length, suma, gasto, neto: d.netoAcreditado };
     });
     res.json({ ok: true, data: result });
   } catch (e) { next(e); }
