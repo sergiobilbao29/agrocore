@@ -978,7 +978,7 @@ const MODULES = [
   { id:'flujoProyectado',label:'Flujo de Fondos',     icon:'🎯', perm:'finanzas:read',   section:'Tablero' },
   { id:'flujoCaja',     label:'Flujo de caja',        icon:'📈', perm:'finanzas:read',   section:'Tablero' },
   { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:'reportes:read',   section:'Tablero' },
-  { id:'balanceGeneral',label:'Balance General',      icon:'⚖️', perm:'reportes:read',   section:'Tablero' },
+  { id:'balanceGeneral',label:'Balance Patrimonial',  icon:'⚖️', perm:'reportes:read',   section:'Tablero' },
   { id:'agenda',        label:'Agenda y recordatorios',icon:'📅', perm:'agenda:read',    section:'Tablero' },
   { id:'mensajes',      label:'Mensajes y asistente', icon:'💬', section:'Tablero' },
 
@@ -1001,6 +1001,7 @@ const MODULES = [
   { id:'efectivo',      label:'Control de efectivo',  icon:'💵', perm:'finanzas:read',   section:'Tesorería' },
   { id:'cheques',       label:'Cheques',              icon:'💳', perm:'finanzas:read',   section:'Tesorería' },
   { id:'creditos',      label:'Créditos bancarios',   icon:'🏦', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'activosFijos',  label:'Activos y maquinaria', icon:'🚜', perm:'finanzas:read',   section:'Tesorería' },
   { id:'arrendamientos',label:'Arrendamientos',       icon:'🏞️', perm:'finanzas:read',   section:'Tesorería' },
   { id:'intercompany',  label:'Cuentas Intercompany', icon:'🔄', perm:'finanzas:read',   section:'Tesorería' },
   { id:'cotizaciones',  label:'Cotizaciones',         icon:'💱', perm:'finanzas:read',   section:'Tesorería' },
@@ -2560,6 +2561,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
+      titulo:'⚖️ v2.75.0 — Balance Patrimonial (Estado de Situación Patrimonial)',
+      desc:'El antiguo "Balance General" ahora es un verdadero <b>Estado de Situación Patrimonial</b>: <b>Activo = Pasivo + Patrimonio Neto</b> a una <b>fecha de corte</b>. Toma automático de todo el sistema: caja y bancos (ARS y USD), cheques de terceros en cartera, cuentas corrientes a cobrar/pagar, cheques propios a pagar, créditos bancarios separados en <b>corto y largo plazo</b>, stock valuado y los <b>bienes de uso netos de amortización</b> (del módulo Activos y maquinaria). Además podés <b>cargar líneas a mano</b> en cualquier sección (tierra, capital social, reservas, resultados acumulados, créditos fiscales, etc.). El informe de ingresos/egresos por caja que estaba antes seguís teniéndolo en <b>Flujo de caja</b>. Exportable a Excel.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
+      titulo:'🚜 v2.74.0 — Activos y maquinaria (bienes de uso + mantenimiento con alertas)',
+      desc:'Nuevo módulo en <b>Tesorería → Activos y maquinaria</b>. Cargá tus <b>bienes de uso</b> (maquinaria, rodados, inmuebles, mejoras, instalaciones) con valor de origen, fecha y vida útil: el sistema calcula el <b>valor neto</b> por amortización lineal (la tierra no amortiza) para el balance patrimonial que viene. Además, cada máquina lleva su <b>historial de mantenimiento</b>: cambios de aceite y services con fecha, km/horas, aceite/filtros/repuestos usados, taller y costo. En cada service definís el <b>próximo por km/horas o por fecha</b> y el sistema te avisa con <b>alertas</b> cuando se acerca o se pasa. Podés actualizar la lectura de km/horas cuando quieras.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'12/08/2026',
       titulo:'🗓️ v2.73.0 — Flujo de Fondos: fechas de fin de mes en el mes correcto',
       desc:'Corregido un desfasaje horario en el <b>Flujo de Fondos</b>: los eventos de los últimos días del mes (por ej. un cheque al <b>31/8</b>) se agrupaban por error en el mes siguiente. Ahora el mes del encabezado coincide con la fecha que se muestra en cada fila, tanto en la vista <b>Por mes</b> como <b>Por empresa</b> y en el <b>Excel</b>.' },
@@ -25368,6 +25375,270 @@ const CC_ESTADOS = { abierto:['Abierto','badge-yellow'], entregado:['Entregado',
 function ccBadge(s){ const e=CC_ESTADOS[s]||CC_ESTADOS.abierto; return `<span class="badge ${e[1]}">${e[0]}</span>`; }
 function ccBar(pct, color){ pct=Math.max(0,Math.min(100,Math.round(pct||0))); return `<div class="w-full bg-slate-200 rounded h-1.5 mt-1"><div class="${color} h-1.5 rounded" style="width:${pct}%"></div></div>`; }
 
+// ============================================================
+// ACTIVOS FIJOS / MAQUINARIA + MANTENIMIENTO
+// ============================================================
+const AF_TIPOS = { maquinaria:['🚜','Maquinaria'], rodado:['🚙','Rodado'], inmueble:['🏠','Inmueble'], mejora:['🧱','Mejora'], instalacion:['🏗️','Instalación'], herramienta:['🔧','Herramienta'], otro:['📦','Otro'] };
+const AF_MANT_TIPOS = { cambio_aceite:['🛢️','Cambio de aceite'], service:['🔧','Service'], reparacion:['🛠️','Reparación'], neumaticos:['🛞','Neumáticos'], revision:['🔍','Revisión'], vtv:['📋','VTV / RTO'], seguro:['🛡️','Seguro'], patente:['🧾','Patente'], otro:['📌','Otro'] };
+const afMoney = (v, mon) => (mon==='USD'?'US$ ':'$ ') + fmtN(Math.round(Number(v)||0));
+const afTipoLbl = (t)=> (AF_TIPOS[t]||['📦',t])[1];
+const afTipoIcon = (t)=> (AF_TIPOS[t]||['📦',t])[0];
+const afMantLbl = (t)=> (AF_MANT_TIPOS[t]||['📌',t])[1];
+const afUnidad = (a)=> a.unidadUso==='horas'?'h':'km';
+
+pages.activosFijos = async function(){
+  setHeader('Activos y maquinaria', 'Bienes de uso (valor patrimonial) + control de mantenimiento y alertas de service');
+  if(!can('finanzas:read')){ $('#page-body').innerHTML = stubPage('activosFijos','Activos y maquinaria'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let activos=[];
+  try{ activos=(await api('/api/activos-fijos')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  state._afList=activos;
+  if(state._afFiltroTipo===undefined) state._afFiltroTipo='';
+  if(state._afVerBajas===undefined) state._afVerBajas=false;
+  const ftipo=state._afFiltroTipo, verBajas=state._afVerBajas;
+  const lista = activos.filter(a=> (!ftipo||a.tipo===ftipo) && (verBajas || a.estado==='activo'));
+  // Totales patrimoniales (valor neto) por moneda.
+  const tot = activos.filter(a=>a.estado==='activo').reduce((acc,a)=>{ const m=a.moneda==='USD'?'usd':'ars'; acc[m]+=Number(a.valorNeto)||0; return acc; },{ars:0,usd:0});
+  const nActivos = activos.filter(a=>a.estado==='activo').length;
+  // Alertas agregadas.
+  let alertas=[]; for(const a of activos) if(a.estado==='activo') alertas=alertas.concat(a.alertas||[]);
+  const nVenc=alertas.filter(x=>x.severidad==='vencido').length, nProx=alertas.filter(x=>x.severidad==='proximo').length;
+  const bannerAlertas = alertas.length ? `
+    <div class="kpi mb-4 p-3" style="background:linear-gradient(135deg,#fff7ed,#fef2f2);border-left:4px solid #f97316">
+      <div class="font-semibold text-slate-700 mb-2">🔔 Mantenimientos ${nVenc?`· <span class="text-red-700">${nVenc} vencido${nVenc===1?'':'s'}</span>`:''} ${nProx?`· <span class="text-amber-700">${nProx} próximo${nProx===1?'':'s'}</span>`:''}</div>
+      <div class="flex flex-wrap gap-2">
+        ${alertas.sort((x,y)=>(x.severidad==='vencido'?0:1)-(y.severidad==='vencido'?0:1)).map(al=>{
+          const col = al.severidad==='vencido'?'bg-red-100 text-red-800 border-red-300':'bg-amber-100 text-amber-800 border-amber-300';
+          const det = al.motivo==='uso' ? `${afMantLbl(al.tipo)} — ${al.severidad==='vencido'?`pasado por ${fmtN(Math.abs(al.faltanUso))} ${al.unidad}`:`faltan ${fmtN(al.faltanUso)} ${al.unidad}`}` : `${afMantLbl(al.tipo)} — ${al.severidad==='vencido'?`venció hace ${Math.abs(al.dias)} día${Math.abs(al.dias)===1?'':'s'}`:`en ${al.dias} día${al.dias===1?'':'s'}`}`;
+          return `<button class="text-xs px-2 py-1 rounded border ${col} text-left" onclick='afVer(${JSON.stringify(al.activoFijoId)})'><b>${esc(al.activo)}</b> · ${esc(det)}</button>`;
+        }).join('')}
+      </div>
+    </div>` : '';
+  const filas = lista.map(a=>{
+    const uso = a.controlaUso && a.usoActual!=null ? `${fmtN(a.usoActual)} ${afUnidad(a)}` : '—';
+    const ult = a.ultimoMantenimiento ? `${fmtDate(a.ultimoMantenimiento.fecha)} · ${afMantLbl(a.ultimoMantenimiento.tipo)}` : '—';
+    const alBadge = (a.alertas&&a.alertas.length) ? `<span class="text-xs px-2 py-0.5 rounded-full ${a.alertas.some(x=>x.severidad==='vencido')?'bg-red-100 text-red-700':'bg-amber-100 text-amber-700'}">🔔 ${a.alertas.length}</span>` : '';
+    const estBadge = a.estado==='activo'?'':`<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 ml-1">${a.estado==='baja'?'baja':'vendido'}</span>`;
+    return `<tr class="table-row cursor-pointer" onclick='afVer(${JSON.stringify(a.id)})'>
+      <td>${afTipoIcon(a.tipo)} <b>${esc(a.nombre)}</b>${estBadge}${(a.marca||a.modelo)?`<div class="text-[10px] text-slate-500">${esc([a.marca,a.modelo,a.anio].filter(Boolean).join(' '))}</div>`:''}</td>
+      <td class="text-xs">${afTipoLbl(a.tipo)}</td>
+      <td class="text-xs">${esc(a.identificacion||'—')}</td>
+      <td class="text-right whitespace-nowrap">${afMoney(a.valorNeto,a.moneda)}${a.amortiza&&a.valorOrigen?`<div class="text-[10px] text-slate-400">orig ${afMoney(a.valorOrigen,a.moneda)}</div>`:''}</td>
+      <td class="text-right text-xs">${uso}</td>
+      <td class="text-xs">${ult} ${alBadge}</td>
+      <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+        ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Registrar service" onclick='afMantForm(${JSON.stringify(a.id)})'>🔧</button>`:''}
+        ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='afForm(${JSON.stringify(a.id)})'>✏️</button>`:''}
+        ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='afDel(${JSON.stringify(a.id)})'>🗑️</button>`:''}
+      </td></tr>`;
+  }).join('') || `<tr><td colspan="7" class="text-center text-slate-400 py-8">Sin activos cargados. Cargá el primero con "+ Nuevo activo".</td></tr>`;
+  $('#page-body').innerHTML = `
+    ${bannerAlertas}
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="flex gap-2 items-center flex-wrap">
+        <select class="input py-1 text-sm" onchange="state._afFiltroTipo=this.value; pages.activosFijos();">
+          <option value="">Todos los tipos</option>
+          ${Object.entries(AF_TIPOS).map(([k,v])=>`<option value="${k}" ${ftipo===k?'selected':''}>${v[0]} ${v[1]}</option>`).join('')}
+        </select>
+        <label class="text-xs flex items-center gap-1 text-slate-600"><input type="checkbox" ${verBajas?'checked':''} onchange="state._afVerBajas=this.checked; pages.activosFijos();"/> Ver bajas / vendidos</label>
+      </div>
+      <div class="flex gap-2">
+        ${can('finanzas:create')?`<button class="btn btn-primary" onclick="afForm()">+ Nuevo activo</button>`:''}
+      </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Activos</div><div class="text-lg font-bold mt-1">${nActivos}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Valor neto ARS</div><div class="text-lg font-bold mt-1 text-emerald-700">${afMoney(tot.ars,'ARS')}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Valor neto USD</div><div class="text-lg font-bold mt-1 text-emerald-700">${afMoney(tot.usd,'USD')}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Alertas de service</div><div class="text-lg font-bold mt-1 ${nVenc?'text-red-700':(nProx?'text-amber-700':'text-slate-400')}">${alertas.length}</div></div>
+    </div>
+    <div class="kpi p-0 overflow-hidden">
+      <table class="data">
+        <thead><tr><th>Activo</th><th>Tipo</th><th>Identificación</th><th class="text-right">Valor neto</th><th class="text-right">Uso</th><th>Último service</th><th></th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>`;
+};
+
+async function afForm(id=null){
+  let a={};
+  if(id){ try{ a=(await api('/api/activos-fijos/'+id)).data||{}; }catch(e){ return toast(e.message,'error'); } }
+  const dv=(x)=> x!=null?x:''; const dfec=(x)=> x?String(x).slice(0,10):'';
+  openModal({ title: id?'✏️ Editar activo':'🚜 Nuevo activo fijo', size:'max-w-3xl',
+    body:`
+      <div class="grid grid-cols-3 gap-3 mb-3">
+        <div><label class="label">Tipo *</label><select id="af-tipo" class="input">${Object.entries(AF_TIPOS).map(([k,v])=>`<option value="${k}" ${(a.tipo||'maquinaria')===k?'selected':''}>${v[0]} ${v[1]}</option>`).join('')}</select></div>
+        <div class="col-span-2"><label class="label">Nombre *</label><input id="af-nombre" class="input" value="${esc(dv(a.nombre))}" placeholder="Tractor John Deere 6125M"/></div>
+        <div><label class="label">Marca</label><input id="af-marca" class="input" value="${esc(dv(a.marca))}"/></div>
+        <div><label class="label">Modelo</label><input id="af-modelo" class="input" value="${esc(dv(a.modelo))}"/></div>
+        <div><label class="label">Año</label><input id="af-anio" type="number" class="input" value="${dv(a.anio)}"/></div>
+        <div class="col-span-2"><label class="label">Identificación (patente / dominio / Nº serie)</label><input id="af-ident" class="input" value="${esc(dv(a.identificacion))}"/></div>
+        <div><label class="label">Ubicación</label><input id="af-ubic" class="input" value="${esc(dv(a.ubicacion))}" placeholder="Campo / galpón"/></div>
+      </div>
+      <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="col-span-4 text-xs text-slate-600 font-medium">💰 Valuación patrimonial</div>
+        <div><label class="label">Fecha de alta</label><input id="af-falta" type="date" class="input" value="${dfec(a.fechaAlta)}"/></div>
+        <div><label class="label">Valor de origen</label><input id="af-vorig" type="number" step="0.01" class="input" value="${dv(a.valorOrigen)}"/></div>
+        <div><label class="label">Moneda</label><select id="af-mon" class="input"><option value="ARS" ${(a.moneda||'ARS')==='ARS'?'selected':''}>ARS</option><option value="USD" ${a.moneda==='USD'?'selected':''}>USD</option></select></div>
+        <div class="flex items-end pb-1"><label class="text-sm flex items-center gap-1"><input id="af-amort" type="checkbox" ${a.amortiza!==false?'checked':''} onchange="afAmortToggle()"/> Amortiza</label></div>
+        <div id="af-vu-wrap"><label class="label">Vida útil (años)</label><input id="af-vu" type="number" class="input" value="${dv(a.vidaUtilAnios)}" placeholder="ej. 10"/></div>
+        <div id="af-vr-wrap"><label class="label">Valor residual</label><input id="af-vr" type="number" step="0.01" class="input" value="${dv(a.valorResidual)}"/></div>
+        <div class="col-span-2 text-[11px] text-slate-500 flex items-end pb-1">La tierra no amortiza (destildá "Amortiza"). El valor neto se calcula solo por amortización lineal.</div>
+      </div>
+      <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="col-span-4 text-xs text-slate-600 font-medium">🔧 Control de uso (para mantenimiento)</div>
+        <div class="flex items-end pb-1"><label class="text-sm flex items-center gap-1"><input id="af-cu" type="checkbox" ${a.controlaUso?'checked':''} onchange="afUsoToggle()"/> Lleva km/horas</label></div>
+        <div id="af-uu-wrap"><label class="label">Unidad</label><select id="af-uu" class="input"><option value="km" ${(a.unidadUso||'km')==='km'?'selected':''}>Kilómetros</option><option value="horas" ${a.unidadUso==='horas'?'selected':''}>Horas</option></select></div>
+        <div id="af-ua-wrap"><label class="label">Lectura actual</label><input id="af-ua" type="number" step="0.01" class="input" value="${dv(a.usoActual)}"/></div>
+      </div>
+      <div class="grid grid-cols-4 gap-3 mb-2">
+        <div><label class="label">Estado</label><select id="af-estado" class="input" onchange="afEstadoToggle()"><option value="activo" ${(a.estado||'activo')==='activo'?'selected':''}>Activo</option><option value="baja" ${a.estado==='baja'?'selected':''}>Dado de baja</option><option value="vendido" ${a.estado==='vendido'?'selected':''}>Vendido</option></select></div>
+        <div id="af-fbaja-wrap" style="${a.estado&&a.estado!=='activo'?'':'display:none'}"><label class="label">Fecha baja/venta</label><input id="af-fbaja" type="date" class="input" value="${dfec(a.fechaBaja)}"/></div>
+        <div id="af-vventa-wrap" style="${a.estado==='vendido'?'':'display:none'}"><label class="label">Valor de venta</label><input id="af-vventa" type="number" step="0.01" class="input" value="${dv(a.valorVenta)}"/></div>
+      </div>
+      <div><label class="label">Observaciones</label><textarea id="af-obs" class="input" rows="2">${esc(dv(a.observaciones))}</textarea></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='afSave(${id?JSON.stringify(id):"null"})'>💾 ${id?'Guardar cambios':'Crear activo'}</button>` });
+  afAmortToggle(); afUsoToggle();
+}
+function afAmortToggle(){ const on=$('#af-amort')?.checked; ['af-vu-wrap','af-vr-wrap'].forEach(w=>{ const el=$('#'+w); if(el) el.style.opacity=on?'1':'0.4'; }); }
+function afUsoToggle(){ const on=$('#af-cu')?.checked; ['af-uu-wrap','af-ua-wrap'].forEach(w=>{ const el=$('#'+w); if(el) el.style.display=on?'':'none'; }); }
+function afEstadoToggle(){ const v=$('#af-estado')?.value; const fb=$('#af-fbaja-wrap'), vv=$('#af-vventa-wrap'); if(fb) fb.style.display=(v!=='activo')?'':'none'; if(vv) vv.style.display=(v==='vendido')?'':'none'; }
+async function afSave(id){
+  const v=(s)=>{ const el=document.querySelector(s); return el?String(el.value).trim():''; };
+  const n=(s)=>{ const x=v(s); return x===''?null:Number(x); };
+  const fISO=(s)=>{ const x=v(s); return x?new Date(x+'T12:00:00').toISOString():null; };
+  const nombre=v('#af-nombre'); if(!nombre) return toast('Poné un nombre','warn');
+  const data={
+    tipo:v('#af-tipo')||'maquinaria', nombre, marca:v('#af-marca')||null, modelo:v('#af-modelo')||null,
+    anio:n('#af-anio'), identificacion:v('#af-ident')||null, ubicacion:v('#af-ubic')||null,
+    fechaAlta:fISO('#af-falta'), valorOrigen:n('#af-vorig'), moneda:v('#af-mon')||'ARS',
+    amortiza:$('#af-amort')?.checked||false, vidaUtilAnios:n('#af-vu'), valorResidual:n('#af-vr'),
+    controlaUso:$('#af-cu')?.checked||false, unidadUso:v('#af-uu')||'km', usoActual:n('#af-ua'),
+    estado:v('#af-estado')||'activo', fechaBaja:fISO('#af-fbaja'), valorVenta:n('#af-vventa'),
+    observaciones:v('#af-obs')||null,
+  };
+  try{
+    if(id) await api('/api/activos-fijos/'+id,{method:'PUT',body:JSON.stringify(data)});
+    else await api('/api/activos-fijos',{method:'POST',body:JSON.stringify(data)});
+    closeModal(); toast('Activo guardado','success'); pages.activosFijos();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function afDel(id){
+  const a=(state._afList||[]).find(x=>x.id===id);
+  if(!confirm(`¿Eliminar "${a?a.nombre:'este activo'}"? Se borra también su historial de mantenimiento.`)) return;
+  try{ await api('/api/activos-fijos/'+id,{method:'DELETE'}); toast('Eliminado','success'); pages.activosFijos(); }catch(e){ toast(e.message,'error'); }
+}
+async function afVer(id){
+  let a={};
+  try{ a=(await api('/api/activos-fijos/'+id)).data||{}; }catch(e){ return toast(e.message,'error'); }
+  const mants=a.mantenimientos||[];
+  const alertasHTML = (a.alertas&&a.alertas.length)? `<div class="mb-3 flex flex-wrap gap-2">${a.alertas.map(al=>{
+      const col=al.severidad==='vencido'?'bg-red-100 text-red-800 border-red-300':'bg-amber-100 text-amber-800 border-amber-300';
+      const det=al.motivo==='uso'?`${afMantLbl(al.tipo)}: ${al.severidad==='vencido'?`pasado por ${fmtN(Math.abs(al.faltanUso))} ${al.unidad}`:`faltan ${fmtN(al.faltanUso)} ${al.unidad}`}`:`${afMantLbl(al.tipo)}: ${al.severidad==='vencido'?`venció hace ${Math.abs(al.dias)}d`:`en ${al.dias}d`}`;
+      return `<span class="text-xs px-2 py-1 rounded border ${col}">🔔 ${esc(det)}</span>`; }).join('')}</div>`:'';
+  const rows = mants.map(m=>`<tr class="table-row">
+      <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
+      <td>${afMantLbl(m.tipo)}${m.descripcion?`<div class="text-[10px] text-slate-500">${esc(m.descripcion)}</div>`:''}</td>
+      <td class="text-right text-xs">${m.usoLectura!=null?fmtN(m.usoLectura)+' '+afUnidad(a):'—'}</td>
+      <td class="text-xs">${esc(m.detalle||'—')}</td>
+      <td class="text-xs">${esc(m.taller||'—')}</td>
+      <td class="text-right text-xs">${m.costo?afMoney(m.costo,m.moneda):'—'}</td>
+      <td class="text-xs">${m.proximoUso!=null?`${fmtN(m.proximoUso)} ${afUnidad(a)}`:''}${m.proximaFecha?`${m.proximoUso!=null?' · ':''}${fmtDate(m.proximaFecha)}`:''}${(m.proximoUso==null&&!m.proximaFecha)?'—':''}</td>
+      <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+        ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='afMantForm(${JSON.stringify(a.id)},${JSON.stringify(m.id)})'>✏️</button>`:''}
+        ${can('finanzas:update')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='afMantDel(${JSON.stringify(a.id)},${JSON.stringify(m.id)})'>🗑️</button>`:''}
+      </td></tr>`).join('') || `<tr><td colspan="8" class="text-center text-slate-400 py-6">Sin mantenimientos registrados.</td></tr>`;
+  const info=(lbl,val)=> val?`<div><span class="text-slate-500">${lbl}:</span> <b>${val}</b></div>`:'';
+  openModal({ title:`${afTipoIcon(a.tipo)} ${esc(a.nombre)}`, size:'max-w-5xl',
+    body:`
+      ${alertasHTML}
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
+        ${info('Tipo', afTipoLbl(a.tipo))}
+        ${info('Marca/Modelo', [a.marca,a.modelo,a.anio].filter(Boolean).join(' '))}
+        ${info('Identificación', a.identificacion)}
+        ${info('Ubicación', a.ubicacion)}
+        ${info('Valor neto', afMoney(a.valorNeto,a.moneda))}
+        ${info('Valor origen', a.valorOrigen?afMoney(a.valorOrigen,a.moneda):'')}
+        ${info('Amortización', a.amortiza?(a.vidaUtilAnios?`Lineal ${a.vidaUtilAnios} años`:'Lineal'):'No amortiza')}
+        ${a.controlaUso?info('Uso actual', (a.usoActual!=null?fmtN(a.usoActual):'0')+' '+afUnidad(a)):''}
+      </div>
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold text-slate-700">🔧 Historial de mantenimiento</h4>
+        <div class="flex gap-2">
+          ${(can('finanzas:update')&&a.controlaUso)?`<button class="btn btn-secondary text-xs" onclick='afUpdKm(${JSON.stringify(a.id)})'>📏 Actualizar ${afUnidad(a)==='h'?'horas':'km'}</button>`:''}
+          ${can('finanzas:update')?`<button class="btn btn-primary text-xs" onclick='afMantForm(${JSON.stringify(a.id)})'>+ Registrar service</button>`:''}
+        </div>
+      </div>
+      <div class="kpi p-0 overflow-hidden overflow-x-auto"><table class="data text-sm">
+        <thead><tr><th>Fecha</th><th>Tipo</th><th class="text-right">Lectura</th><th>Aceite / filtros / repuestos</th><th>Taller</th><th class="text-right">Costo</th><th>Próximo</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            ${can('finanzas:update')?`<button class="btn btn-secondary" onclick='afForm(${JSON.stringify(a.id)})'>✏️ Editar activo</button>`:''}` });
+}
+async function afMantForm(activoId, mid=null){
+  const a=(state._afList||[]).find(x=>x.id===activoId) || {};
+  let m={ fecha:new Date().toISOString().slice(0,10), tipo:'cambio_aceite', moneda:'ARS' };
+  if(mid){ try{ const det=(await api('/api/activos-fijos/'+activoId)).data||{}; m=(det.mantenimientos||[]).find(x=>x.id===mid)||m; }catch(e){ return toast(e.message,'error'); } }
+  const dv=(x)=> x!=null?x:''; const dfec=(x)=> x?String(x).slice(0,10):'';
+  const unidad = a.unidadUso==='horas'?'horas':'km';
+  openModal2({ title: mid?'✏️ Editar mantenimiento':'🔧 Registrar mantenimiento', size:'max-w-2xl',
+    body:`
+      <div class="grid grid-cols-3 gap-3 mb-3">
+        <div><label class="label">Fecha *</label><input id="afm-fecha" type="date" class="input" value="${dfec(m.fecha)}"/></div>
+        <div><label class="label">Tipo *</label><select id="afm-tipo" class="input">${Object.entries(AF_MANT_TIPOS).map(([k,v])=>`<option value="${k}" ${(m.tipo||'cambio_aceite')===k?'selected':''}>${v[0]} ${v[1]}</option>`).join('')}</select></div>
+        <div><label class="label">Lectura (${unidad})</label><input id="afm-uso" type="number" step="0.01" class="input" value="${dv(m.usoLectura)}" placeholder="${a.usoActual!=null?a.usoActual:''}"/></div>
+      </div>
+      <div class="mb-3"><label class="label">Aceite / filtros / repuestos usados</label><textarea id="afm-detalle" class="input" rows="2" placeholder="Aceite 15W40 x 12L, filtro de aceite, filtro de aire, 2 filtros de gasoil">${esc(dv(m.detalle))}</textarea></div>
+      <div class="grid grid-cols-3 gap-3 mb-3">
+        <div class="col-span-1"><label class="label">Taller / proveedor</label><input id="afm-taller" class="input" value="${esc(dv(m.taller))}"/></div>
+        <div><label class="label">Costo</label><input id="afm-costo" type="number" step="0.01" class="input" value="${dv(m.costo)}"/></div>
+        <div><label class="label">Moneda</label><select id="afm-mon" class="input"><option value="ARS" ${(m.moneda||'ARS')==='ARS'?'selected':''}>ARS</option><option value="USD" ${m.moneda==='USD'?'selected':''}>USD</option></select></div>
+      </div>
+      <div class="mb-3"><label class="label">Descripción / notas</label><input id="afm-desc" class="input" value="${esc(dv(m.descripcion))}"/></div>
+      <div class="grid grid-cols-2 gap-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
+        <div class="col-span-2 text-xs text-amber-800 font-medium">🔔 Próximo service (para alertas) — completá al menos uno</div>
+        <div><label class="label">A los (${unidad})</label><input id="afm-pruso" type="number" step="0.01" class="input" value="${dv(m.proximoUso)}" placeholder="${a.usoActual!=null?'ej. '+(Number(a.usoActual)+ (unidad==='horas'?250:10000)):''}"/></div>
+        <div><label class="label">O en fecha</label><input id="afm-prfecha" type="date" class="input" value="${dfec(m.proximaFecha)}"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button>
+            <button class="btn btn-primary" onclick='afMantSave(${JSON.stringify(activoId)},${mid?JSON.stringify(mid):"null"})'>💾 Guardar</button>` });
+}
+async function afMantSave(activoId, mid){
+  const v=(s)=>{ const el=document.querySelector(s); return el?String(el.value).trim():''; };
+  const n=(s)=>{ const x=v(s); return x===''?null:Number(x); };
+  const fISO=(s)=>{ const x=v(s); return x?new Date(x+'T12:00:00').toISOString():null; };
+  const fecha=fISO('#afm-fecha'); if(!fecha) return toast('Poné la fecha','warn');
+  const data={
+    fecha, tipo:v('#afm-tipo')||'service', usoLectura:n('#afm-uso'),
+    detalle:v('#afm-detalle')||null, taller:v('#afm-taller')||null,
+    costo:n('#afm-costo'), moneda:v('#afm-mon')||'ARS', descripcion:v('#afm-desc')||null,
+    proximoUso:n('#afm-pruso'), proximaFecha:fISO('#afm-prfecha'),
+  };
+  try{
+    if(mid) await api(`/api/activos-fijos/${activoId}/mantenimientos/${mid}`,{method:'PUT',body:JSON.stringify(data)});
+    else await api(`/api/activos-fijos/${activoId}/mantenimientos`,{method:'POST',body:JSON.stringify(data)});
+    closeModal2(); toast('Mantenimiento guardado','success');
+    await pages.activosFijos(); afVer(activoId);
+  }catch(e){ toast(e.message,'error'); }
+}
+async function afMantDel(activoId, mid){
+  if(!confirm('¿Borrar este registro de mantenimiento?')) return;
+  try{ await api(`/api/activos-fijos/${activoId}/mantenimientos/${mid}`,{method:'DELETE'}); toast('Borrado','success'); await pages.activosFijos(); afVer(activoId); }catch(e){ toast(e.message,'error'); }
+}
+async function afUpdKm(activoId){
+  const a=(state._afList||[]).find(x=>x.id===activoId)||{};
+  const unidad=a.unidadUso==='horas'?'horas':'km';
+  openModal2({ title:`📏 Actualizar ${unidad}`, size:'max-w-sm',
+    body:`<label class="label">Lectura actual (${unidad})</label><input id="afk-uso" type="number" step="0.01" class="input" value="${a.usoActual!=null?a.usoActual:''}"/>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='afUpdKmSave(${JSON.stringify(activoId)})'>Guardar</button>` });
+}
+async function afUpdKmSave(activoId){
+  const x=$('#afk-uso')?.value; if(x==='') return toast('Poné la lectura','warn');
+  try{ await api('/api/activos-fijos/'+activoId,{method:'PUT',body:JSON.stringify({usoActual:Number(x)})}); closeModal2(); toast('Lectura actualizada','success'); await pages.activosFijos(); afVer(activoId); }catch(e){ toast(e.message,'error'); }
+}
+
 pages.contratosCereal = async function(){
   setHeader('Contratos de cereal', 'Confirmaciones de negocio: entregas, pesificaciones y saldo por contrato');
   if(!can('ventas:read')){ $('#page-body').innerHTML = stubPage('contratosCereal','Contratos de cereal'); return; }
@@ -27296,111 +27567,114 @@ function flujoDetalleExcel(){
 // BALANCE GENERAL: ingresos/egresos reales por categoría en un rango + gráfico.
 // ============================================================
 pages.balanceGeneral = async function() {
-  setHeader('Balance General', 'Ingresos y egresos reales por categoría — con gráfico de los mayores gastos');
-  if (!can('reportes:read')) { $('#page-body').innerHTML = stubPage('balanceGeneral','Balance General'); return; }
-  const hoy = new Date();
-  if (!state.balDesde) state.balDesde = new Date(hoy.getFullYear(), 0, 1).toISOString().slice(0,10);   // 1 de enero
-  if (!state.balHasta) state.balHasta = hoy.toISOString().slice(0,10);
+  setHeader('Balance Patrimonial', 'Estado de situación patrimonial: Activo = Pasivo + Patrimonio Neto, a una fecha de corte');
+  if (!can('reportes:read')) { $('#page-body').innerHTML = stubPage('balanceGeneral','Balance Patrimonial'); return; }
+  if (!state.balFecha) state.balFecha = new Date().toISOString().slice(0,10);
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let d;
-  try { d = (await api(`/api/balance-general?desde=${state.balDesde}&hasta=${state.balHasta}`)).data; }
+  try { d = (await api(`/api/balance-patrimonial?fecha=${state.balFecha}`)).data; }
   catch (e) { return toast(e.message,'error'); }
-  const totE = d.totalEgresos||0, totI = d.totalIngresos||0;
-  const pct = (m, tot) => tot>0 ? Math.round(m/tot*100) : 0;
-  const barCat = (arr, tot, color) => arr.map(x => `
-    <tr class="table-row">
-      <td>${esc(x.categoria)}</td>
-      <td class="text-right font-semibold">${fmt$(x.monto)}</td>
-      <td class="w-40"><div class="flex items-center gap-2"><div class="flex-1 bg-slate-100 rounded h-2"><div class="${color} h-2 rounded" style="width:${pct(x.monto,tot)}%"></div></div><span class="text-[10px] text-slate-500 w-8 text-right">${pct(x.monto,tot)}%</span></div></td>
-    </tr>`).join('') || `<tr><td colspan="3" class="text-center text-slate-400 py-4">Sin movimientos en el período.</td></tr>`;
+  state._balPat = d;
+  const money = (v)=> (v<0?'-$ ':'$ ') + fmtN(Math.abs(Math.round(v||0)));
+  const secRows = (arr) => (arr||[]).map(r=>`<tr class="table-row">
+      <td>${esc(r.rubro)}${r.detalle?`<span class="text-[10px] text-slate-400 ml-1">${esc(r.detalle)}</span>`:''}${r.manual?`<span class="text-[10px] px-1 rounded bg-slate-100 text-slate-500 ml-1">manual${r.moneda==='USD'?' · US$'+fmtN(r.montoOrig):''}</span>`:''}</td>
+      <td class="text-right whitespace-nowrap">${money(r.monto)}</td>
+      <td class="text-right whitespace-nowrap w-14">${r.manual?`<button class="btn btn-ghost text-[11px]" title="Editar" onclick='balAjForm(${JSON.stringify(r.id)})'>✏️</button><button class="btn btn-ghost text-[11px] text-red-600" title="Borrar" onclick='balAjDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}</td>
+    </tr>`).join('');
+  const secBlock = (titulo, arr, total, seccion) => `
+    <div class="mb-3">
+      <div class="flex items-center justify-between px-1 mb-1"><h4 class="font-semibold text-slate-700 text-sm">${titulo}</h4>
+        ${can('reportes:read')?`<button class="text-[11px] text-emerald-700 hover:underline" onclick="balAjNew('${seccion}')">+ línea</button>`:''}</div>
+      <table class="data text-sm"><tbody>${secRows(arr)||''}${(arr&&arr.length)?'':`<tr><td class="text-slate-400 text-xs py-2">Sin datos</td><td></td><td></td></tr>`}
+        <tr class="bg-slate-100 font-semibold"><td>Total ${titulo.toLowerCase()}</td><td class="text-right">${money(total)}</td><td></td></tr></tbody></table>
+    </div>`;
   $('#page-body').innerHTML = `
-    <div class="kpi mb-4 p-3">
-      <div class="flex items-end gap-3 flex-wrap">
-        <div><label class="label text-xs">Desde</label><input id="bal-desde" type="date" class="input" value="${state.balDesde}"/></div>
-        <div><label class="label text-xs">Hasta</label><input id="bal-hasta" type="date" class="input" value="${state.balHasta}"/></div>
-        <button class="btn btn-primary" onclick="state.balDesde=$('#bal-desde').value; state.balHasta=$('#bal-hasta').value; pages.balanceGeneral();">Aplicar</button>
-        <div class="flex gap-1">
-          <button class="btn btn-secondary text-xs" onclick="balRango('mes')">Este mes</button>
-          <button class="btn btn-secondary text-xs" onclick="balRango('anio')">Este año</button>
-          <button class="btn btn-secondary text-xs" onclick="balRango('12m')">Últ. 12 meses</button>
-        </div>
-        <div class="flex-1"></div>
-        <button class="btn btn-secondary text-xs" onclick="balanceExcel()">📥 Excel</button>
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="flex gap-2 items-center flex-wrap text-sm">
+        <span class="text-slate-600">Fecha de corte:</span>
+        <input type="date" class="input py-1 text-sm" value="${state.balFecha}" onchange="state.balFecha=this.value; pages.balanceGeneral();"/>
+        <button class="btn btn-secondary text-xs" onclick="balFechaRapida('hoy')">Hoy</button>
+        <button class="btn btn-secondary text-xs" onclick="balFechaRapida('finMesPasado')">Fin mes pasado</button>
+        <button class="btn btn-secondary text-xs" onclick="balFechaRapida('finAnioPasado')">31/12 pasado</button>
       </div>
+      <button class="btn btn-secondary text-xs" onclick="balPatExcel()">📥 Excel</button>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">⬆️ Ingresos</div><div class="text-2xl font-bold mt-1 text-emerald-700">${fmt$(totI)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">⬇️ Egresos</div><div class="text-2xl font-bold mt-1 text-red-700">${fmt$(totE)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">⚖️ Resultado (neto)</div><div class="text-2xl font-bold mt-1 ${d.neto>=0?'text-emerald-700':'text-red-700'}">${d.neto>=0?'+':''}${fmt$(d.neto)}</div></div>
-    </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-      <div class="kpi p-3">
-        <div class="text-sm font-semibold text-slate-700 mb-2">🔻 Mayores gastos</div>
-        <canvas id="bal-chart-egr" height="150"></canvas>
-      </div>
-      <div class="kpi p-3">
-        <div class="text-sm font-semibold text-slate-700 mb-2">📈 Ingresos vs egresos por mes</div>
-        <canvas id="bal-chart-mes" height="150"></canvas>
-      </div>
+      <div class="kpi"><div class="text-xs text-slate-500">Activo total</div><div class="text-lg font-bold mt-1 text-emerald-700">${money(d.totalActivo)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Pasivo total</div><div class="text-lg font-bold mt-1 text-red-700">${money(d.totalPasivo)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Patrimonio Neto</div><div class="text-lg font-bold mt-1 ${d.patrimonioNeto>=0?'text-slate-800':'text-red-700'}">${money(d.patrimonioNeto)}</div></div>
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <div class="kpi p-0 overflow-hidden">
-        <div class="px-4 py-2 bg-red-50 border-b border-red-200 font-semibold text-red-800">Egresos por categoría · ${fmt$(totE)}</div>
-        <table class="data"><thead><tr><th>Categoría</th><th class="text-right">Monto</th><th>%</th></tr></thead><tbody>${barCat(d.egresos, totE, 'bg-red-500')}</tbody></table>
+      <div class="kpi">
+        <h3 class="font-bold text-emerald-800 mb-2">🟩 ACTIVO</h3>
+        ${secBlock('Activo corriente', d.activoCorriente, d.totalActivoCorriente, 'activo_corriente')}
+        ${secBlock('Activo no corriente', d.activoNoCorriente, d.totalActivoNoCorriente, 'activo_no_corriente')}
+        <div class="flex justify-between px-3 py-2 bg-emerald-600 text-white rounded font-bold"><span>TOTAL ACTIVO</span><span>${money(d.totalActivo)}</span></div>
       </div>
-      <div class="kpi p-0 overflow-hidden">
-        <div class="px-4 py-2 bg-emerald-50 border-b border-emerald-200 font-semibold text-emerald-800">Ingresos por categoría · ${fmt$(totI)}</div>
-        <table class="data"><thead><tr><th>Categoría</th><th class="text-right">Monto</th><th>%</th></tr></thead><tbody>${barCat(d.ingresos, totI, 'bg-emerald-500')}</tbody></table>
+      <div class="kpi">
+        <h3 class="font-bold text-red-800 mb-2">🟥 PASIVO + PATRIMONIO NETO</h3>
+        ${secBlock('Pasivo corriente', d.pasivoCorriente, d.totalPasivoCorriente, 'pasivo_corriente')}
+        ${secBlock('Pasivo no corriente', d.pasivoNoCorriente, d.totalPasivoNoCorriente, 'pasivo_no_corriente')}
+        <div class="flex justify-between px-3 py-1.5 bg-red-100 text-red-800 rounded font-semibold mb-3"><span>Total pasivo</span><span>${money(d.totalPasivo)}</span></div>
+        <div class="mb-3">
+          <div class="flex items-center justify-between px-1 mb-1"><h4 class="font-semibold text-slate-700 text-sm">Patrimonio Neto</h4>${can('reportes:read')?`<button class="text-[11px] text-emerald-700 hover:underline" onclick="balAjNew('patrimonio')">+ línea</button>`:''}</div>
+          <table class="data text-sm"><tbody>${secRows(d.patrimonioManual)}
+            <tr class="table-row"><td>Resultado del ejercicio / ajuste <span class="text-[10px] text-slate-400">(cuadra el balance)</span></td><td class="text-right">${money(d.pnAjuste)}</td><td></td></tr>
+            <tr class="bg-slate-100 font-semibold"><td>Total patrimonio neto</td><td class="text-right">${money(d.patrimonioNeto)}</td><td></td></tr></tbody></table>
+        </div>
+        <div class="flex justify-between px-3 py-2 bg-red-600 text-white rounded font-bold"><span>PASIVO + PN</span><span>${money(d.totalPasivo + d.patrimonioNeto)}</span></div>
       </div>
     </div>
-    <div class="text-[11px] text-slate-500 mt-3">Se calcula sobre la plata realmente movida (efectivo + banco) en el período, excluyendo transferencias internas. Las categorías salen de cómo se clasificó cada movimiento.</div>`;
-  state._balData = d;
-  balanceDibujarCharts(d);
+    <div class="text-[11px] text-slate-500 mt-3">Cotización USD usada: $ ${fmtN(d.usd)}. Toma automático caja, bancos, cheques, cuentas corrientes, créditos (corto/largo plazo), stock valuado y activos fijos netos de amortización. Cargá a mano lo que falte (tierra, capital, resultados acumulados, créditos fiscales) con "+ línea" en cada sección. El "ajuste" del Patrimonio Neto hace que Activo = Pasivo + PN.</div>`;
 };
-function balRango(tipo){
-  const h = new Date();
-  let a;
-  if (tipo==='mes') a = new Date(h.getFullYear(), h.getMonth(), 1);
-  else if (tipo==='anio') a = new Date(h.getFullYear(), 0, 1);
-  else a = new Date(h.getFullYear(), h.getMonth()-11, 1);   // 12 meses
-  state.balDesde = a.toISOString().slice(0,10);
-  state.balHasta = h.toISOString().slice(0,10);
-  pages.balanceGeneral();
+function balFechaRapida(tipo){
+  const h=new Date(); let f;
+  if(tipo==='hoy') f=h;
+  else if(tipo==='finMesPasado') f=new Date(h.getFullYear(), h.getMonth(), 0);
+  else f=new Date(h.getFullYear()-1, 11, 31);
+  state.balFecha=f.toISOString().slice(0,10); pages.balanceGeneral();
 }
-function balanceDibujarCharts(d){
-  if (typeof Chart === 'undefined') return;
-  // Mayores gastos (barras horizontales, top 10)
-  try {
-    const egr = (d.egresos||[]).slice(0,10);
-    const c1 = document.getElementById('bal-chart-egr');
-    if (c1) { if (state._balChartEgr) state._balChartEgr.destroy();
-      state._balChartEgr = new Chart(c1, { type:'bar', data:{ labels: egr.map(x=>x.categoria), datasets:[{ data: egr.map(x=>x.monto), backgroundColor:'#ef4444' }] },
-        options:{ indexAxis:'y', plugins:{ legend:{display:false} }, scales:{ x:{ ticks:{ callback:v=>'$'+fmtN(v) } } } } }); }
-  } catch {}
-  // Ingresos vs egresos por mes
-  try {
-    const meses = d.porMes||[];
-    const c2 = document.getElementById('bal-chart-mes');
-    if (c2) { if (state._balChartMes) state._balChartMes.destroy();
-      state._balChartMes = new Chart(c2, { type:'bar', data:{ labels: meses.map(m=>{const[y,mm]=m.mes.split('-');return new Date(Number(y),Number(mm)-1,1).toLocaleDateString('es-AR',{month:'short',year:'2-digit'});}),
-        datasets:[{ label:'Ingresos', data: meses.map(m=>m.ingresos), backgroundColor:'#10b981' },{ label:'Egresos', data: meses.map(m=>m.egresos), backgroundColor:'#ef4444' }] },
-        options:{ plugins:{ legend:{position:'bottom'} }, scales:{ y:{ ticks:{ callback:v=>'$'+fmtN(v) } } } } }); }
-  } catch {}
+const BAL_SECCIONES = { activo_corriente:'Activo corriente', activo_no_corriente:'Activo no corriente', pasivo_corriente:'Pasivo corriente', pasivo_no_corriente:'Pasivo no corriente', patrimonio:'Patrimonio Neto' };
+function balAjNew(seccion){ balAjForm(null, seccion); }
+async function balAjForm(id, seccion){
+  let a={ seccion: seccion||'activo_corriente', moneda:'ARS' };
+  if(id){ try{ const list=(await api('/api/balance-ajustes')).data||[]; a=list.find(x=>x.id===id)||a; }catch(e){ return toast(e.message,'error'); } }
+  openModal2({ title: id?'✏️ Editar línea del balance':'➕ Nueva línea del balance', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Sección</label><select id="baj-sec" class="input">${Object.entries(BAL_SECCIONES).map(([k,v])=>`<option value="${k}" ${a.seccion===k?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div><label class="label">Rubro / concepto *</label><input id="baj-rubro" class="input" value="${esc(a.rubro||'')}" placeholder="Campo San Antonio 250 ha / Capital social / Saldo IVA a favor"/></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Monto *</label><input id="baj-monto" type="number" step="0.01" class="input" value="${a.monto!=null?a.monto:''}"/></div>
+          <div><label class="label">Moneda</label><select id="baj-mon" class="input"><option value="ARS" ${(a.moneda||'ARS')==='ARS'?'selected':''}>ARS</option><option value="USD" ${a.moneda==='USD'?'selected':''}>USD</option></select></div>
+        </div>
+        <div><label class="label">Notas</label><input id="baj-notas" class="input" value="${esc(a.notas||'')}"/></div>
+        <div class="text-[11px] text-slate-500">Tip: para el Patrimonio Neto cargá capital, reservas y resultados acumulados. El "resultado del ejercicio / ajuste" se calcula solo para que el balance cuadre.</div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='balAjSave(${id?JSON.stringify(id):"null"})'>💾 Guardar</button>` });
 }
-function balanceExcel(){
-  const d = state._balData; if (!d) return;
-  if (typeof XLSX === 'undefined') return toast('No se pudo cargar el exportador','error');
-  const wb = XLSX.utils.book_new();
-  const rowsE = [['Egresos por categoría', ''], ['Categoría','Monto'], ...d.egresos.map(x=>[x.categoria, x.monto]), ['TOTAL EGRESOS', d.totalEgresos]];
-  const rowsI = [['Ingresos por categoría', ''], ['Categoría','Monto'], ...d.ingresos.map(x=>[x.categoria, x.monto]), ['TOTAL INGRESOS', d.totalIngresos]];
-  const wsE = XLSX.utils.aoa_to_sheet(rowsE); wsE['!cols']=[{wch:32},{wch:16}];
-  const wsI = XLSX.utils.aoa_to_sheet(rowsI); wsI['!cols']=[{wch:32},{wch:16}];
-  XLSX.utils.book_append_sheet(wb, wsE, 'Egresos');
-  XLSX.utils.book_append_sheet(wb, wsI, 'Ingresos');
-  XLSX.writeFile(wb, `Balance-general-${d.desde}_a_${d.hasta}.xlsx`);
+async function balAjSave(id){
+  const v=(s)=>{const el=document.querySelector(s);return el?String(el.value).trim():'';};
+  const rubro=v('#baj-rubro'); if(!rubro) return toast('Poné un rubro','warn');
+  const data={ seccion:v('#baj-sec'), rubro, monto:Number(v('#baj-monto')||0), moneda:v('#baj-mon')||'ARS', notas:v('#baj-notas')||null };
+  try{ if(id) await api('/api/balance-ajustes/'+id,{method:'PUT',body:JSON.stringify(data)}); else await api('/api/balance-ajustes',{method:'POST',body:JSON.stringify(data)}); closeModal2(); toast('Guardado','success'); pages.balanceGeneral(); }catch(e){ toast(e.message,'error'); }
+}
+async function balAjDel(id){ if(!confirm('¿Borrar esta línea manual?')) return; try{ await api('/api/balance-ajustes/'+id,{method:'DELETE'}); toast('Borrado','success'); pages.balanceGeneral(); }catch(e){ toast(e.message,'error'); } }
+function balPatExcel(){
+  const d=state._balPat; if(!d) return; if(typeof XLSX==='undefined') return toast('No se pudo cargar el exportador','error');
+  const rows=[['ESTADO DE SITUACION PATRIMONIAL','al '+d.fecha],[]];
+  const dump=(tit,arr)=>{ rows.push([tit,'']); (arr||[]).forEach(r=>rows.push([r.rubro, r.monto])); };
+  dump('ACTIVO CORRIENTE', d.activoCorriente); rows.push(['Total activo corriente', d.totalActivoCorriente]); rows.push([]);
+  dump('ACTIVO NO CORRIENTE', d.activoNoCorriente); rows.push(['Total activo no corriente', d.totalActivoNoCorriente]); rows.push([]);
+  rows.push(['TOTAL ACTIVO', d.totalActivo]); rows.push([]);
+  dump('PASIVO CORRIENTE', d.pasivoCorriente); rows.push(['Total pasivo corriente', d.totalPasivoCorriente]); rows.push([]);
+  dump('PASIVO NO CORRIENTE', d.pasivoNoCorriente); rows.push(['Total pasivo no corriente', d.totalPasivoNoCorriente]); rows.push([]);
+  rows.push(['TOTAL PASIVO', d.totalPasivo]); rows.push([]);
+  dump('PATRIMONIO NETO (manual)', d.patrimonioManual); rows.push(['Resultado del ejercicio / ajuste', d.pnAjuste]); rows.push(['PATRIMONIO NETO', d.patrimonioNeto]);
+  const ws=XLSX.utils.aoa_to_sheet(rows); ws['!cols']=[{wch:44},{wch:18}];
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Balance'); XLSX.writeFile(wb, `Balance-patrimonial-${d.fecha}.xlsx`);
   toast('Excel generado','success');
 }
-
 // Dibuja el gráfico de saldo acumulado usando una librería liviana inline (SVG).
 // No depende de Chart.js para no agregar peso. Hace un sparkline simple.
 function flujoDibujarChart(serie) {

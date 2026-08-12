@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.73.0';
+const AGROCORE_VERSION = '2.75.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10060,6 +10060,121 @@ app.get('/api/balance-general', requireCompany, requirePermission('reportes:read
   } catch (e) { next(e); }
 });
 
+// ============================================================
+// ESTADO DE SITUACION PATRIMONIAL: Activo = Pasivo + Patrimonio Neto a una fecha.
+// Arma automatico lo que el sistema lleva (caja, bancos, cheques, cta cte,
+// creditos corto/largo, stock valuado, activos fijos netos) y suma las lineas
+// manuales (tierra, capital, fiscal, etc.). Todo convertido a ARS.
+// ============================================================
+const balanceAjusteSchema = z.object({
+  seccion: z.enum(['activo_corriente','activo_no_corriente','pasivo_corriente','pasivo_no_corriente','patrimonio']),
+  rubro: z.string().min(1),
+  monto: z.coerce.number().optional(),
+  moneda: z.enum(['ARS','USD']).optional(),
+  notas: z.string().nullable().optional(),
+  orden: z.coerce.number().int().optional(),
+});
+
+app.get('/api/balance-patrimonial', requireCompany, requirePermission('reportes:read'), async (req, res, next) => {
+  try {
+    const corte = req.query.fecha ? new Date(String(req.query.fecha) + 'T23:59:59') : new Date();
+    const usd = (await getCotizacionARS('USD', corte)) || 0;
+    const toARS = (monto, moneda) => Number(monto || 0) * (moneda === 'USD' ? usd : 1);
+    const cid = req.companyId;
+    const dozeMonths = new Date(corte.getTime()); dozeMonths.setFullYear(dozeMonths.getFullYear() + 1);
+
+    const [cuentas, efectivos, cheques, ctas, cuotas, arrends, productos, movs, activos, ajustes] = await Promise.all([
+      prisma.bancoCuenta.findMany({ where: { companyId: cid } }),
+      prisma.efectivo.findMany({ where: { companyId: cid, fecha: { lte: corte } } }),
+      prisma.cheque.findMany({ where: { companyId: cid } }),
+      prisma.ctaCte.findMany({ where: { companyId: cid, pagado: false } }),
+      prisma.cuotaCredito.findMany({ where: { credito: { companyId: cid }, pagada: false } }),
+      prisma.arrendamiento.findMany({ where: { companyId: cid, pagado: false } }),
+      prisma.producto.findMany({ where: { companyId: cid } }),
+      prisma.movimiento.findMany({ where: { companyId: cid, fecha: { lte: corte } }, select: { productoId: true, tipo: true, cantidad: true } }),
+      prisma.activoFijo.findMany({ where: { companyId: cid, estado: 'activo' } }),
+      prisma.balanceAjusteManual.findMany({ where: { companyId: cid }, orderBy: [{ orden: 'asc' }, { createdAt: 'asc' }] }),
+    ]);
+
+    const AC = [], ANC = [], PC = [], PNC = [], PN = [];
+    const push = (arr, rubro, monto, extra) => { if (Math.abs(monto) >= 1) arr.push({ rubro, monto: Math.round(monto), ...(extra || {}) }); };
+
+    // 1) Disponibilidades
+    let saldoEf = 0; for (const e of efectivos) { if (e.tipo === 'ingreso') saldoEf += Number(e.monto || 0); else if (e.tipo === 'egreso') saldoEf -= Number(e.monto || 0); }
+    push(AC, 'Caja / efectivo', saldoEf);
+    let bancoARS = 0, bancoUSDars = 0;
+    for (const c of cuentas) { const s = await _saldoCuentaHasta(cid, c.id, corte); if ((c.moneda || 'ARS') === 'USD') bancoUSDars += s * usd; else bancoARS += s; }
+    push(AC, 'Bancos ARS', bancoARS);
+    push(AC, `Bancos USD (a $ ${Math.round(usd)})`, bancoUSDars);
+
+    // 2) Valores a cobrar: cheques de terceros en cartera
+    const chPendiente = (c) => ['en_cartera', 'depositado'].includes((c.estado || '').toLowerCase());
+    const chTerceros = cheques.filter(c => c.tipo === 'terceros' && chPendiente(c) && (!c.fechaRecepcion || new Date(c.fechaRecepcion) <= corte));
+    push(AC, 'Cheques de terceros en cartera', chTerceros.reduce((a, c) => a + Number(c.monto || 0), 0), { detalle: chTerceros.length + ' cheque(s)' });
+
+    // 3) Cta cte: a cobrar (activo) / a pagar (pasivo)
+    let aCobrar = 0, aPagar = 0;
+    for (const c of ctas) { const saldo = Number(c.debe || 0) - Number(c.haber || 0); if (Math.abs(saldo) < 0.01) continue;
+      if (c.contactoTipo === 'proveedor') { if (saldo > 0) aPagar += saldo; else aCobrar += -saldo; }
+      else { if (saldo > 0) aCobrar += saldo; else aPagar += -saldo; } }
+    push(AC, 'Créditos por ventas (cta. cte.)', aCobrar);
+
+    // 4) Bienes de cambio: stock valuado por categoria
+    const stockByProd = {}; for (const m of movs) { stockByProd[m.productoId] = (stockByProd[m.productoId] || 0) + (m.tipo === 'ingreso' ? m.cantidad : -m.cantidad); }
+    const stockCat = {};
+    for (const p of productos) { const q = stockByProd[p.id] || 0; if (q <= 0) continue;
+      const costo = Number(p.ultimoCostoCompra || p.precioReferencia || 0); if (!costo) continue;
+      const valor = q * costo * (p.ultimoCostoMoneda === 'USD' ? usd : 1);
+      const catKey = /gran|cereal/i.test(p.categoria) ? 'Granos y cereales' : (/insumo|semilla|fitos|fertil/i.test(p.categoria) ? 'Insumos en galpón' : 'Otros bienes de cambio');
+      stockCat[catKey] = (stockCat[catKey] || 0) + valor; }
+    for (const [k, v] of Object.entries(stockCat)) push(AC, k, v);
+
+    // ANC: activos fijos netos
+    let inmueble = 0, maqEtc = 0;
+    for (const a of activos) { const vn = toARS(_valorNetoActivo(a, corte), a.moneda); if (a.tipo === 'inmueble') inmueble += vn; else maqEtc += vn; }
+    push(ANC, 'Inmuebles y tierra', inmueble);
+    push(ANC, 'Maquinaria, rodados e instalaciones', maqEtc);
+
+    // PASIVO
+    push(PC, 'Proveedores (cta. cte.)', aPagar);
+    const chPropios = cheques.filter(c => c.tipo === 'propio' && chPendiente(c));
+    push(PC, 'Cheques propios a pagar', chPropios.reduce((a, c) => a + Number(c.monto || 0), 0), { detalle: chPropios.length + ' cheque(s)' });
+    let credCorto = 0, credLargo = 0;
+    for (const q of cuotas) { const imp = Number(q.importeTotal || 0); const v = q.vencimiento ? new Date(q.vencimiento) : null;
+      if (v && v > dozeMonths) credLargo += imp; else credCorto += imp; }
+    push(PC, 'Deudas financieras (cuotas hasta 12 meses)', credCorto);
+    let arrendEf = 0; for (const a of arrends) { const cs = Array.isArray(a.cuotas) ? a.cuotas.filter(c => !c.pagado) : []; if (cs.length) arrendEf += cs.reduce((s, c) => s + Number(c.importe || 0), 0); else arrendEf += Number(a.importe || a.importeHa || 0); }
+    push(PC, 'Arrendamientos a pagar', arrendEf);
+    push(PNC, 'Deudas financieras (cuotas a más de 12 meses)', credLargo);
+
+    // Ajustes manuales por seccion
+    const secMap = { activo_corriente: AC, activo_no_corriente: ANC, pasivo_corriente: PC, pasivo_no_corriente: PNC, patrimonio: PN };
+    for (const aj of ajustes) { const arr = secMap[aj.seccion]; if (arr) push(arr, aj.rubro, toARS(aj.monto, aj.moneda), { manual: true, id: aj.id, moneda: aj.moneda, montoOrig: aj.monto, notas: aj.notas }); }
+
+    const sum = (arr) => arr.reduce((a, x) => a + x.monto, 0);
+    const totalActivo = sum(AC) + sum(ANC);
+    const totalPasivo = sum(PC) + sum(PNC);
+    const pnCalculado = totalActivo - totalPasivo;
+    const pnManual = sum(PN);
+    const pnAjuste = pnCalculado - pnManual;
+
+    res.json({ ok: true, data: {
+      fecha: corte.toISOString().slice(0, 10), usd: Math.round(usd),
+      activoCorriente: AC, activoNoCorriente: ANC,
+      pasivoCorriente: PC, pasivoNoCorriente: PNC,
+      patrimonioManual: PN, pnAjuste: Math.round(pnAjuste),
+      totalActivoCorriente: sum(AC), totalActivoNoCorriente: sum(ANC), totalActivo,
+      totalPasivoCorriente: sum(PC), totalPasivoNoCorriente: sum(PNC), totalPasivo,
+      patrimonioNeto: pnCalculado,
+    }});
+  } catch (e) { next(e); }
+});
+
+app.get('/api/balance-ajustes', requireCompany, requirePermission('reportes:read'), async (req, res, next) => { try { const rows = await prisma.balanceAjusteManual.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { createdAt: 'asc' }] }); res.json({ ok: true, data: rows }); } catch (e) { next(e); } });
+app.post('/api/balance-ajustes', requireCompany, requirePermission('reportes:read'), async (req, res, next) => { try { const d = balanceAjusteSchema.parse(req.body); const row = await prisma.balanceAjusteManual.create({ data: { ...d, companyId: req.companyId } }); res.status(201).json({ ok: true, data: row }); } catch (e) { next(e); } });
+app.put('/api/balance-ajustes/:id', requireCompany, requirePermission('reportes:read'), async (req, res, next) => { try { const ex = await prisma.balanceAjusteManual.findFirst({ where: { id: req.params.id, companyId: req.companyId } }); if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' }); const d = balanceAjusteSchema.partial().parse(req.body); const row = await prisma.balanceAjusteManual.update({ where: { id: ex.id }, data: d }); res.json({ ok: true, data: row }); } catch (e) { next(e); } });
+app.delete('/api/balance-ajustes/:id', requireCompany, requirePermission('reportes:read'), async (req, res, next) => { try { const ex = await prisma.balanceAjusteManual.findFirst({ where: { id: req.params.id, companyId: req.companyId } }); if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' }); await prisma.balanceAjusteManual.delete({ where: { id: ex.id } }); res.json({ ok: true }); } catch (e) { next(e); } });
+
 // === Exportar Estado de situación a Excel (idea 8) ===
 app.get('/api/flujo-proyectado/export', requireCompany, async (req, res, next) => {
   try {
@@ -10513,6 +10628,190 @@ app.delete('/api/conciliaciones/:id', requireCompany, requirePermission('finanza
     const existing = await prisma.conciliacionBancaria.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
     await prisma.conciliacionBancaria.delete({ where: { id: existing.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// ACTIVO FIJO / BIENES DE USO + MANTENIMIENTO
+//  - Registro de bienes (maquinaria, rodados, inmuebles, mejoras, instalaciones)
+//    con amortizacion lineal para el Estado de Situacion Patrimonial.
+//  - Historial de mantenimiento (services / cambios de aceite) con alerta del
+//    proximo por km/horas o por fecha.
+// ============================================================
+const activoFijoSchema = z.object({
+  tipo: z.enum(['maquinaria','rodado','inmueble','mejora','instalacion','herramienta','otro']).optional(),
+  nombre: z.string().min(1),
+  marca: z.string().nullable().optional(),
+  modelo: z.string().nullable().optional(),
+  anio: z.coerce.number().int().nullable().optional(),
+  identificacion: z.string().nullable().optional(),
+  fechaAlta: z.coerce.date().nullable().optional(),
+  valorOrigen: z.coerce.number().nullable().optional(),
+  moneda: z.enum(['ARS','USD']).optional(),
+  amortiza: z.boolean().optional(),
+  vidaUtilAnios: z.coerce.number().int().nullable().optional(),
+  valorResidual: z.coerce.number().nullable().optional(),
+  estado: z.enum(['activo','baja','vendido']).optional(),
+  fechaBaja: z.coerce.date().nullable().optional(),
+  valorVenta: z.coerce.number().nullable().optional(),
+  controlaUso: z.boolean().optional(),
+  unidadUso: z.enum(['km','horas']).nullable().optional(),
+  usoActual: z.coerce.number().nullable().optional(),
+  ubicacion: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+const mantenimientoSchema = z.object({
+  fecha: z.coerce.date(),
+  tipo: z.string().optional(),
+  usoLectura: z.coerce.number().nullable().optional(),
+  descripcion: z.string().nullable().optional(),
+  detalle: z.string().nullable().optional(),
+  taller: z.string().nullable().optional(),
+  costo: z.coerce.number().nullable().optional(),
+  moneda: z.enum(['ARS','USD']).optional(),
+  proximoUso: z.coerce.number().nullable().optional(),
+  proximaFecha: z.coerce.date().nullable().optional(),
+});
+
+// Valor neto contable de un activo a una fecha (amortizacion lineal).
+// Tierra / no amortizable: mantiene el valor de origen. Baja/vendido: 0.
+function _valorNetoActivo(a, fechaCorte) {
+  const fc = fechaCorte ? new Date(fechaCorte) : new Date();
+  if (a.estado && a.estado !== 'activo') { if (!a.fechaBaja || new Date(a.fechaBaja) <= fc) return 0; }
+  const origen = Number(a.valorOrigen || 0);
+  const residual = Number(a.valorResidual || 0);
+  if (!a.amortiza || !a.vidaUtilAnios || a.vidaUtilAnios <= 0 || !a.fechaAlta) return origen;
+  const alta = new Date(a.fechaAlta);
+  const aniosTrans = Math.max(0, (fc - alta) / (365.25 * 86400000));
+  const amortizable = Math.max(0, origen - residual);
+  const amortAcum = Math.min(amortizable, (amortizable / a.vidaUtilAnios) * aniosTrans);
+  return Math.max(residual, origen - amortAcum);
+}
+
+// Alertas de mantenimiento de un activo: mira, por cada tipo de service, el
+// registro mas reciente que fijo un proximo (por km/horas o por fecha) y decide
+// si esta vencido o proximo a vencer.
+function _alertasActivo(a, mantenimientos) {
+  const out = [];
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const umbralUso = a.unidadUso === 'horas' ? 25 : 500;
+  const umbralDias = 30;
+  const porTipo = {};
+  for (const m of (mantenimientos || [])) {
+    if (m.proximoUso == null && !m.proximaFecha) continue;
+    const k = m.tipo || 'service';
+    if (!porTipo[k] || new Date(m.fecha) > new Date(porTipo[k].fecha)) porTipo[k] = m;
+  }
+  for (const [tipo, m] of Object.entries(porTipo)) {
+    if (m.proximoUso != null && a.usoActual != null && a.controlaUso) {
+      const faltan = Number(m.proximoUso) - Number(a.usoActual);
+      if (faltan <= umbralUso) out.push({ activoFijoId: a.id, activo: a.nombre, tipo, motivo: 'uso', unidad: a.unidadUso || 'km', proximoUso: Number(m.proximoUso), usoActual: Number(a.usoActual), faltanUso: faltan, severidad: faltan <= 0 ? 'vencido' : 'proximo' });
+    }
+    if (m.proximaFecha) {
+      const pf = new Date(m.proximaFecha); pf.setHours(0,0,0,0);
+      const dias = Math.round((pf - hoy) / 86400000);
+      if (dias <= umbralDias) out.push({ activoFijoId: a.id, activo: a.nombre, tipo, motivo: 'fecha', proximaFecha: m.proximaFecha, dias, severidad: dias < 0 ? 'vencido' : 'proximo' });
+    }
+  }
+  return out;
+}
+
+app.get('/api/activos-fijos', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const activos = await prisma.activoFijo.findMany({ where: { companyId: req.companyId }, orderBy: [{ estado: 'asc' }, { nombre: 'asc' }] });
+    const ids = activos.map(a => a.id);
+    const mants = ids.length ? await prisma.mantenimientoActivo.findMany({ where: { companyId: req.companyId, activoFijoId: { in: ids } }, orderBy: { fecha: 'desc' } }) : [];
+    const mByA = {}; for (const m of mants) (mByA[m.activoFijoId] = mByA[m.activoFijoId] || []).push(m);
+    const data = activos.map(a => ({
+      ...a,
+      valorNeto: Math.round(_valorNetoActivo(a, new Date())),
+      nMantenimientos: (mByA[a.id] || []).length,
+      ultimoMantenimiento: (mByA[a.id] || [])[0] || null,
+      alertas: _alertasActivo(a, mByA[a.id]),
+    }));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/activos-fijos/alertas', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const activos = await prisma.activoFijo.findMany({ where: { companyId: req.companyId, estado: 'activo' } });
+    const ids = activos.map(a => a.id);
+    const mants = ids.length ? await prisma.mantenimientoActivo.findMany({ where: { companyId: req.companyId, activoFijoId: { in: ids } }, orderBy: { fecha: 'desc' } }) : [];
+    const mByA = {}; for (const m of mants) (mByA[m.activoFijoId] = mByA[m.activoFijoId] || []).push(m);
+    let alertas = [];
+    for (const a of activos) alertas = alertas.concat(_alertasActivo(a, mByA[a.id]));
+    alertas.sort((x, y) => (x.severidad === 'vencido' ? 0 : 1) - (y.severidad === 'vencido' ? 0 : 1));
+    res.json({ ok: true, data: alertas });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/activos-fijos/:id', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const a = await prisma.activoFijo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!a) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const mantenimientos = await prisma.mantenimientoActivo.findMany({ where: { companyId: req.companyId, activoFijoId: a.id }, orderBy: { fecha: 'desc' } });
+    res.json({ ok: true, data: { ...a, valorNeto: Math.round(_valorNetoActivo(a, new Date())), mantenimientos, alertas: _alertasActivo(a, mantenimientos) } });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/activos-fijos', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const d = activoFijoSchema.parse(req.body);
+    const row = await prisma.activoFijo.create({ data: { ...d, companyId: req.companyId } });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/activos-fijos/:id', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.activoFijo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const d = activoFijoSchema.partial().parse(req.body);
+    const row = await prisma.activoFijo.update({ where: { id: req.params.id }, data: d });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/activos-fijos/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const existing = await prisma.activoFijo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.activoFijo.delete({ where: { id: existing.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/activos-fijos/:id/mantenimientos', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const activo = await prisma.activoFijo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!activo) return res.status(404).json({ ok: false, error: 'Activo no encontrado' });
+    const d = mantenimientoSchema.parse(req.body);
+    const row = await prisma.mantenimientoActivo.create({ data: { ...d, companyId: req.companyId, activoFijoId: activo.id } });
+    // Si la lectura del service es mayor a la lectura actual del activo, la actualizamos.
+    if (d.usoLectura != null && (activo.usoActual == null || d.usoLectura > activo.usoActual)) {
+      await prisma.activoFijo.update({ where: { id: activo.id }, data: { usoActual: d.usoLectura } });
+    }
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/activos-fijos/:id/mantenimientos/:mid', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.mantenimientoActivo.findFirst({ where: { id: req.params.mid, activoFijoId: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const d = mantenimientoSchema.partial().parse(req.body);
+    const row = await prisma.mantenimientoActivo.update({ where: { id: existing.id }, data: d });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/activos-fijos/:id/mantenimientos/:mid', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const existing = await prisma.mantenimientoActivo.findFirst({ where: { id: req.params.mid, activoFijoId: req.params.id, companyId: req.companyId } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.mantenimientoActivo.delete({ where: { id: existing.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

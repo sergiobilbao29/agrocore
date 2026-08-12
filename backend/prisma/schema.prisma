@@ -93,6 +93,9 @@ model Company {
   viajeLiquidacion   ViajeLiquidacion[]
   conciliaciones     ConciliacionBancaria[]
   faenas             Faena[]
+  activosFijos       ActivoFijo[]
+  mantenimientos     MantenimientoActivo[]
+  balanceAjustes     BalanceAjusteManual[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -1932,4 +1935,89 @@ model ViajeLiquidacion {
   @@unique([viajeId, liquidacionId])
   @@index([companyId])
   @@index([liquidacionId])
+}
+
+// ============================================================
+// ACTIVO FIJO / BIENES DE USO: maquinaria, rodados, inmuebles, mejoras e
+// instalaciones. Sirve para (1) el Estado de Situacion Patrimonial (valor neto
+// de amortizacion) y (2) el control de mantenimiento de maquinaria (services,
+// cambios de aceite, con alertas del proximo por km/horas o por fecha).
+// ============================================================
+model ActivoFijo {
+  id             String   @id @default(cuid())
+  companyId      String
+  tipo           String   @default("maquinaria") // maquinaria | rodado | inmueble | mejora | instalacion | herramienta | otro
+  nombre         String
+  marca          String?
+  modelo         String?
+  anio           Int?
+  identificacion String?  // patente / dominio / nro de serie / matricula
+  // ---- Valuacion patrimonial ----
+  fechaAlta      DateTime?  // fecha de adquisicion
+  valorOrigen    Float?   @default(0)
+  moneda         String   @default("ARS")
+  amortiza       Boolean  @default(true)   // la tierra NO amortiza
+  vidaUtilAnios  Int?                       // para amortizacion lineal
+  valorResidual  Float?   @default(0)
+  // ---- Estado / baja ----
+  estado         String   @default("activo") // activo | baja | vendido
+  fechaBaja      DateTime?
+  valorVenta     Float?
+  // ---- Control de uso (maquinaria/rodados) ----
+  controlaUso    Boolean  @default(false)
+  unidadUso      String?  // km | horas
+  usoActual      Float?   @default(0)       // ultima lectura de km/horas
+  ubicacion      String?
+  observaciones  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company        Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  mantenimientos MantenimientoActivo[]
+
+  @@index([companyId])
+  @@index([tipo])
+}
+
+model MantenimientoActivo {
+  id            String   @id @default(cuid())
+  companyId     String
+  activoFijoId  String
+  fecha         DateTime
+  tipo          String   @default("service") // cambio_aceite | service | reparacion | neumaticos | revision | vtv | seguro | patente | otro
+  usoLectura    Float?   // km/horas al momento del service
+  descripcion   String?
+  detalle       String?  // aceite, filtros y repuestos usados (texto libre)
+  taller        String?
+  costo         Float?   @default(0)
+  moneda        String   @default("ARS")
+  proximoUso    Float?   // km/horas del proximo service (opcional)
+  proximaFecha  DateTime? // fecha del proximo service (opcional)
+  createdAt     DateTime @default(now())
+
+  company       Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  activo        ActivoFijo @relation(fields: [activoFijoId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([activoFijoId])
+}
+
+// Lineas manuales del Estado de Situacion Patrimonial: para cargar a mano lo que
+// el sistema no lleva automatico (tierra, maquinaria no registrada, capital
+// social, reservas, resultados acumulados, creditos fiscales, plazos fijos, etc.).
+model BalanceAjusteManual {
+  id        String   @id @default(cuid())
+  companyId String
+  seccion   String   // activo_corriente | activo_no_corriente | pasivo_corriente | pasivo_no_corriente | patrimonio
+  rubro     String
+  monto     Float    @default(0)
+  moneda    String   @default("ARS")
+  notas     String?
+  orden     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
 }
