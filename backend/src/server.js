@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.82.0';
+const AGROCORE_VERSION = '2.83.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8153,12 +8153,13 @@ const _AYUDA_KB = [
       'Se abre solo para imprimir/descargar y podés enviarlo por WhatsApp o email.',
       'Genera la cuenta a cobrar y descuenta stock. Las NC reingresan stock; las ND no.'],
     atajo:{ page:'facturacion', label:'Abrir Facturación' } },
-  { id:'pago_proveedor', terms:['pagar','pago a proveedor','orden de pago','pagar una factura','cancelar deuda','pagar cuenta','como pago'],
+  { id:'pago_proveedor', terms:['pagar','pago a proveedor','orden de pago','pagar una factura','cancelar deuda','pagar cuenta','como pago','pago en especie','pagar con producto','pagar con mercaderia','lechones','varios medios','pago dividido','pagar mitad'],
     titulo:'Pagar a un proveedor (Orden de Pago)',
     pasos:[
-      'Entrá a Cuentas a pagar y buscá al proveedor / la factura.',
-      'Tocá "Pagar" y elegí el medio: efectivo, transferencia, cheque propio, cheque de tercero (endoso), tarjeta o entrega de cereal.',
-      'Podés cargar el cheque en la misma pantalla del pago.',
+      'Entrá a Cuentas a pagar y buscá al proveedor / la factura, y tocá "Pagar".',
+      'Elegí el medio: efectivo, transferencia, cheque propio, cheque de tercero (endoso), tarjeta, entrega de cereal o "Pago con producto (en especie)".',
+      'Pago con producto (en especie): entregás mercadería de tu stock (ej. lechones faenados) — elegís producto, cantidad y precio; descuenta el stock y salda la deuda por ese total. Si deshacés el pago, el stock se repone.',
+      'Podés pagar con VARIOS medios a la vez (parte efectivo + parte cheque + parte transferencia) tildando "Pagar con varios medios", y cargar un cheque propio nuevo en la misma pantalla.',
       'Se genera la Orden de Pago (imprimible / PDF / WhatsApp / email) con retenciones e importe en letras.'],
     atajo:{ page:'ctasPagar', label:'Abrir Cuentas a pagar' } },
   { id:'cobro', terms:['cobrar','cobro','cobrar una factura','recibir un pago','cuenta a cobrar','recibo','como cobro'],
@@ -8314,6 +8315,55 @@ const _AYUDA_KB = [
       'En Roles definís qué puede ver/hacer cada rol (incluso limitar el stock por tipo de producto).',
       'Podés vincular un usuario con su Empleado/Chofer.'],
     atajo:{ page:'usuarios', label:'Abrir Usuarios' } },
+  { id:'costo_hacienda', terms:['costo de hacienda','costo por kilo','costo por kg','costo de carne','feedlot','engorde','recria','cria','lote de engorde','rodeo','ganancia de peso','gpd','pesaje','cuanto cuesta el kilo','costo del novillo','alimentacion del rodeo'],
+    titulo:'Costo de hacienda (costo por kg de carne)',
+    pasos:[
+      'Entrá a Stock y depósitos → Costo de hacienda y creá un "lote" (rodeo): feedlot, engorde a campo, recría o cría.',
+      'Cargá los eventos del lote: Ingreso (compra: cabezas, kg y precio), Alimentación (rollos/fardos/grano del galpón, que descuenta stock, o pastoreo), Sanidad, Labores.',
+      'Cargá Pesajes (el kg total del lote a una fecha): es lo que permite ver la ganancia de peso.',
+      'También Bajas (mortandad) y Ventas.',
+      'El panel te muestra kg producidos, $/kg producido (eficiencia) y $/kg terminado (el costo real del kilo para vender), más GPD y margen.'],
+    atajo:{ page:'rodeos', label:'Abrir Costo de hacienda' } },
+  { id:'forrajera', terms:['forrajera','multicorte','centeno','alfalfa','avena','corte','cortes','rollo','rollos','fardo','fardos','enrollado','pastura','verdeo','campaña forrajera'],
+    titulo:'Campaña forrajera multicorte (rollos/fardos)',
+    pasos:[
+      'Creá la campaña en Producción → Campañas y en "Tipo de campaña" elegí "Forrajera multicorte" (centeno, alfalfa, avena). No se cierra en el primer corte.',
+      'En la card de la campaña aparece el botón "Cortes": cargá cada corte con fecha, trabajo (corte/hilerado/enrollado), rinde (rollos/fardos o kg) y los costos (contratista + insumos imputados).',
+      'Si el destino es "galpón", el corte ingresa los rollos al stock con su costo unitario = (insumos + contratista) ÷ cantidad. Si es pastoreo directo, solo queda registrado.',
+      'Después ese rollo lo consumís desde un lote de hacienda (Costo de hacienda → Alimentación) o lo vendés desde Stock.'],
+    atajo:{ page:'campanas', label:'Abrir Campañas' } },
+  { id:'activos', terms:['activo fijo','activos fijos','maquinaria','bien de uso','bienes de uso','tractor','mantenimiento','service','cambio de aceite','amortizacion','vida util','alerta de service','proximo service','rodado','inmueble'],
+    titulo:'Activos y maquinaria (bienes de uso + mantenimiento)',
+    pasos:[
+      'Entrá a Tesorería → Activos y maquinaria y cargá cada bien (maquinaria, rodado, inmueble, mejora, instalación) con valor de origen, fecha y vida útil. El sistema calcula el valor neto por amortización (la tierra no amortiza).',
+      'En cada máquina llevás su historial de mantenimiento: services y cambios de aceite con fecha, km/horas, aceite/filtros/repuestos, taller y costo.',
+      'En cada mantenimiento definís el próximo por km/horas o por fecha: el módulo te avisa con alertas (vencido / próximo).',
+      'Podés actualizar la lectura de km/horas cuando quieras.'],
+    atajo:{ page:'activosFijos', label:'Abrir Activos y maquinaria' } },
+  { id:'balance_patrimonial', terms:['balance','balance patrimonial','estado de situacion','patrimonio','activo pasivo','patrimonio neto','situacion patrimonial'],
+    titulo:'Balance Patrimonial (Estado de Situación Patrimonial)',
+    pasos:[
+      'Entrá a Tablero → Balance Patrimonial y elegí la fecha de corte.',
+      'Arma Activo = Pasivo + Patrimonio Neto tomando automático: caja y bancos (ARS/USD), cheques de terceros en cartera, cuentas a cobrar y a pagar, cheques propios a pagar, créditos (corto y largo plazo), stock valuado y los bienes de uso netos de amortización.',
+      'Podés cargar líneas a mano en cualquier sección (tierra, capital, reservas, resultados, créditos fiscales).',
+      'Se exporta a Excel. El informe de caja anterior seguís teniéndolo en Flujo de caja.'],
+    atajo:{ page:'balanceGeneral', label:'Abrir Balance Patrimonial' } },
+  { id:'vender_cheques', terms:['vender cheque','vender cheques','descontar cheque','descontar cheques','descuento de cheques','venta de cheques','descuento de cheque','negociar cheques'],
+    titulo:'Vender / descontar cheques en el banco',
+    pasos:[
+      'Entrá a Tesorería → Cheques y tocá "Vender cheques".',
+      'Tildá los cheques de terceros en cartera que entregás al banco y elegí la cuenta donde se acredita.',
+      'Cargá el NETO realmente acreditado (el banco descuenta interés, comisión e impuestos): el sistema calcula el gasto financiero como la diferencia (suma − neto).',
+      'Al confirmar acredita el neto en la cuenta, registra ese gasto como cargo bancario y los cheques quedan "vendidos" (salen de cartera). Podés anotar la tasa y el plazo promedio.'],
+    atajo:{ page:'cheques', label:'Abrir Cheques' } },
+  { id:'acreditar_cheque', terms:['acreditar cheque','cobrar un cheque','cobrar cheque','depositar cheque','deposito de cheque','cheque cobrado','cheque acreditado','no aparece el cheque en el banco','el cheque no suma','cheque rechazado'],
+    titulo:'Depositar / acreditar un cheque de tercero',
+    pasos:[
+      'DEPOSITAR: desde Bancos → la cuenta → "Depositar cheque" (o desde Cheques). El cheque pasa a "depositado (en tránsito)" y todavía NO suma al saldo (puede rechazarse).',
+      'ACREDITAR/COBRAR: cuando el banco lo acredita, en Cheques usá el botón "Acreditar" (icono verde), elegí la cuenta y confirmalo como "cobrado": recién ahí SUMA al saldo del banco.',
+      'Ojo: marcar "cobrado" editando el cheque NO genera el movimiento bancario. Para que impacte hay que usar el botón Acreditar (que pide la cuenta).',
+      'Si se rechaza, marcalo como "rechazado" (no acredita nada).'],
+    atajo:{ page:'cheques', label:'Abrir Cheques' } },
 ];
 function _esPregunta(t){
   return /(^|\s)(como|donde|cuando|cual|cuales|que es|para que|se puede|puedo|podes|podés|puedes|necesito|quiero saber|me explicas|explicame|ayuda|no se como|no entiendo|donde cargo|donde se|donde esta)\b/.test(t) || /\?/.test(t);
@@ -8353,7 +8403,7 @@ function _esPedidoAyudaGeneral(t){
 }
 // Menú de capacidades del asistente.
 function _menuAyuda(){
-  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?"\n• "¿cómo hago una compra o una venta?"\n• "¿cómo importo mis comprobantes?"\n• "¿cómo cargo una liquidación de animales?"\n\nEscribí tu consulta y arrancamos 💪';
+  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Costo de hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?"\n\nEscribí tu consulta y arrancamos 💪';
 }
 // Arma el texto de la respuesta de ayuda (paso a paso).
 function _textoAyuda(e){

@@ -2566,6 +2566,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'12/08/2026',
+      titulo:'🤖 v2.83.0 — El asistente ya sabe todo lo nuevo',
+      desc:'Le enseñamos al <b>asistente</b> las funciones nuevas para que te explique cómo se usan: <b>Costo de hacienda</b> (costo por kg de carne), <b>campañas forrajeras y cortes/rollos</b>, <b>Activos y maquinaria</b> (mantenimiento y alertas), <b>Balance Patrimonial</b>, <b>vender/descontar cheques</b>, <b>depositar vs acreditar</b> un cheque y <b>pagar con un producto (en especie)</b> o con varios medios. Preguntale, por ejemplo, "¿cómo calculo el costo por kg de carne?" o "¿cómo vendo cheques?".' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
       titulo:'💵 v2.82.0 — Vender / descontar cheques en el banco',
       desc:'En <b>Tesorería → Cheques</b>, botón nuevo <b>💵 Vender cheques</b>. Tildás los cheques de terceros en cartera que entregás al banco, elegís la cuenta donde se acredita y cargás el <b>neto realmente acreditado</b> (el banco descuenta interés, comisión e impuestos). El sistema calcula el <b>gasto financiero</b> como la diferencia (suma − neto), acredita el neto en la cuenta y registra ese gasto como un cargo bancario, y saca los cheques de cartera (quedan como <b>vendidos</b>). Podés anotar la tasa y el plazo promedio de referencia.' },
