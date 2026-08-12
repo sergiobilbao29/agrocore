@@ -1022,6 +1022,7 @@ const MODULES = [
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
   { id:'hacienda',      label:'Animales',             icon:'🐄', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'rodeos',        label:'Costo de hacienda',    icon:'🐮', perm:'stock:read',      section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA =====
   { id:'viajes',        label:'Viajes y fletes',      icon:'🚚', perm:'produccion:read', section:'Logística' },
@@ -2561,6 +2562,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
+      titulo:'🌿 v2.78.0 — Campañas forrajeras multicorte (centeno, alfalfa → rollos)',
+      desc:'Las campañas ahora tienen <b>tipo</b>: <b>Cosecha única</b> (Soja/Maíz, como siempre) o <b>Forrajera multicorte</b> (Centeno, Alfalfa, Avena), que <b>no se cierra</b> en el primer corte. En una campaña forrajera aparece el botón <b>🌿 Cortes</b>: cargás cada corte (fecha, trabajo, rinde en rollos/fardos o kg, costo del contratista y costo de insumos imputado) y el sistema <b>ingresa los rollos al galpón</b> con su <b>costo unitario</b> = (insumos + contratista) ÷ cantidad. Después ese artículo lo <b>consumís desde un lote de hacienda</b> (Costo de hacienda → Alimentación, que lo imputa al costo por kg de carne) o lo <b>vendés</b> desde Stock. Así queda cerrado el círculo forraje → animal.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
+      titulo:'🐮 v2.77.0 — Costo de hacienda: costo por kg de carne producido',
+      desc:'Nuevo módulo <b>Stock y depósitos → Costo de hacienda</b>. Creás <b>lotes de engorde o cría</b> (feedlot, engorde a campo, recría o cría) y cargás sus eventos: <b>ingreso de hacienda</b> (cabezas, kg y precio de compra + fletes), <b>alimentación</b> (rollos/fardos/grano <b>descontados del galpón</b> a su costo, o pastoreo directo), <b>sanidad</b>, <b>labores</b>, <b>pesajes</b> (para ver la ganancia de peso), <b>bajas</b> y <b>ventas</b>. El sistema calcula automáticamente los <b>kg producidos</b> y dos métricas: <b>$/kg producido</b> (eficiencia del engorde) y <b>$/kg terminado</b> (costo real del kilo para la venta), además de la ganancia diaria de peso y el margen. Sirve para feedlot, novillos a campo y vacas de cría.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'12/08/2026',
       titulo:'💳 v2.76.0 — Cheques: depositado ≠ acreditado + filtro separado en el Flujo',
       desc:'Dos mejoras en cheques. <b>1) Depósito vs acreditación:</b> ahora <b>depositar</b> un cheque de terceros lo deja <b>"en tránsito"</b> y <b>NO suma al saldo</b> del banco (porque puede rechazarse). El saldo se acredita <b>recién cuando lo marcás "cobrado/acreditado"</b>. La cuenta del depósito queda guardada, así lo acreditás con un clic, y sumamos el estado <b>"Rechazado"</b> al flujo de acreditación. <b>2) Flujo de Fondos:</b> el filtro <b>Cheques</b> ahora está separado en <b>Cheques de terceros</b> (lo que vas a cobrar) y <b>Cheques propios</b> (lo que vas a pagar).' },
@@ -10567,6 +10574,7 @@ pages.campanas = async function() {
           ${proj ? `<div class="text-xs text-slate-600 mt-2 bg-emerald-50 text-emerald-700 rounded p-1.5 text-center"><b>Proyección:</b> ${fmtN(proj)} kg totales</div>`:''}
           <div class="flex gap-1 mt-3 pt-2 border-t">
             <button class="btn btn-ghost text-xs flex-1" onclick="state.insFilter={campana:'${c.id}'}; go('insumos')">🧪 Insumos/Labores</button>
+            ${c.tipoCampana==='forrajera'?`<button class="btn btn-ghost text-xs text-amber-700" title="Cortes / rollos" onclick='cortesModal(${JSON.stringify(c.id)})'>🌿 Cortes</button>`:''}
             <button class="btn btn-ghost text-xs text-indigo-700" title="Planilla de resultado económico" onclick='campanaPlanilla(${JSON.stringify(c.id)})'>📊 Planilla</button>
             ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar finalizada" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅</button>`:''}
             ${can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
@@ -10612,6 +10620,13 @@ function campanaForm(id=null) {
           </select>
         </div>
         <div><label class="label">Cultivo *</label>${catSelect('f-cul', 'Cereal', it.cultivo||'', {attr:'onchange="campNomSug()"'})}</div>
+        <div><label class="label">Tipo de campaña</label>
+          <select id="f-tipo" class="input">
+            <option value="cosecha_unica" ${(it.tipoCampana||'cosecha_unica')==='cosecha_unica'?'selected':''}>Cosecha única (Soja, Maíz…)</option>
+            <option value="forrajera" ${it.tipoCampana==='forrajera'?'selected':''}>Forrajera multicorte (Centeno, Alfalfa…)</option>
+          </select>
+          <div class="text-[11px] text-slate-500 mt-1">La forrajera no se cierra en el primer corte: permite varios cortes para rollos/fardos.</div>
+        </div>
         <div><label class="label">Variedad</label><input id="f-var" class="input" value="${esc(it.variedad||'')}"/></div>
         <div><label class="label">Ciclo</label>
           <select id="f-cic" class="input" onchange="campNomSug()">
@@ -10656,6 +10671,7 @@ async function campanaSave(id) {
     cultivo: $('#f-cul').value.trim(),
     variedad: $('#f-var').value.trim()||null,
     ciclo: $('#f-cic').value.trim()||null,
+    tipoCampana: $('#f-tipo')?.value || 'cosecha_unica',
     hectareas: $('#f-ha').value ? Number($('#f-ha').value) : 0,
     fechaSiembra: $('#f-fs').value ? new Date($('#f-fs').value).toISOString() : null,
     fechaCosecha: $('#f-fc').value ? new Date($('#f-fc').value).toISOString() : null,
@@ -10683,6 +10699,77 @@ async function campanaFinalizar(id) {
     delete state.cache.campanas;
     (pages[state.currentPage] || pages.insumos)();
   } catch (e) { toast(e.message,'error'); }
+}
+
+// ===== CAMPAÑA FORRAJERA: cortes / confección de rollos =====
+const CORTE_TRABAJO = { corte:'Corte', hilerado:'Hilerado', enrollado:'Enrollado', enfardado:'Enfardado', pastoreo:'Pastoreo', otro:'Otro' };
+async function cortesModal(campanaId){
+  const camp = (state.cache.campanas||[]).find(x=>x.id===campanaId) || {};
+  let cortes=[]; try{ cortes=(await api('/api/campanas/'+campanaId+'/cortes')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  const totRollos = cortes.filter(c=>c.destino==='galpon').reduce((a,c)=>a+Number(c.cantidad||0),0);
+  const filas = cortes.map(c=>`<tr class="table-row">
+      <td class="whitespace-nowrap">${fmtDate(c.fecha)}</td>
+      <td>${CORTE_TRABAJO[c.trabajo]||c.trabajo}${c.destino==='pastoreo'?' <span class="text-[10px] px-1 rounded bg-green-100 text-green-700">pastoreo</span>':''}</td>
+      <td class="text-right">${fmtN(c.cantidad||0)} ${esc(c.unidad||'')}</td>
+      <td class="text-right text-xs">${c.costoInsumos?('$'+fmtN(c.costoInsumos)):'—'}</td>
+      <td class="text-right text-xs">${c.costoContratista?('$'+fmtN(c.costoContratista)):'—'}</td>
+      <td class="text-right whitespace-nowrap font-semibold">${c.costoUnitario?((c.moneda==='USD'?'US$ ':'$ ')+fmtN(c.costoUnitario)+'/'+ (c.unidad==='fardos'?'fardo':(c.unidad==='rollos'?'rollo':c.unidad))):'—'}</td>
+      <td class="text-right" onclick="event.stopPropagation()">${can('produccion:update')?`<button class="btn btn-ghost text-[11px] text-red-600" onclick='corteDel(${JSON.stringify(campanaId)},${JSON.stringify(c.id)})'>🗑️</button>`:''}</td>
+    </tr>`).join('') || `<tr><td colspan="7" class="text-center text-slate-400 py-6">Sin cortes. Cargá el primero con "+ Nuevo corte".</td></tr>`;
+  openModal({ title:`🌿 Cortes — ${esc(camp.nombre||camp.cultivo||'Campaña')}`, size:'max-w-4xl',
+    body:`
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm text-slate-600">${cortes.length} corte(s) · <b>${fmtN(totRollos)}</b> unidades a galpón</div>
+        ${can('produccion:update')?`<button class="btn btn-primary text-xs" onclick='corteForm(${JSON.stringify(campanaId)})'>+ Nuevo corte</button>`:''}
+      </div>
+      <div class="kpi p-0 overflow-hidden overflow-x-auto"><table class="data text-sm">
+        <thead><tr><th>Fecha</th><th>Trabajo</th><th class="text-right">Rinde</th><th class="text-right">Insumos</th><th class="text-right">Contratista</th><th class="text-right">Costo unit.</th><th></th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table></div>
+      <div class="text-[11px] text-slate-500 mt-2">Cada corte con destino <b>galpón</b> ingresa los rollos/fardos al stock con su <b>costo unitario</b> = (insumos imputados + contratista) ÷ cantidad. Ese artículo después lo consumís desde un lote de hacienda (Costo de hacienda → Alimentación) o lo vendés desde Stock.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+async function corteForm(campanaId){
+  let prods=[]; try{ prods=(await api('/api/productos')).data||[]; }catch{} prods=prods.filter(p=>p.activo!==false);
+  const hoy=new Date().toISOString().slice(0,10);
+  openModal2({ title:'🌿 Nuevo corte', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha *</label><input id="cor-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label">Trabajo</label><select id="cor-trab" class="input">${Object.entries(CORTE_TRABAJO).map(([k,v])=>`<option value="${k}" ${k==='enrollado'?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div><label class="label">Destino</label><select id="cor-dest" class="input" onchange="corteDestChange()"><option value="galpon">Confección → galpón</option><option value="pastoreo">Pastoreo directo</option></select></div>
+        <div><label class="label">Unidad</label><select id="cor-unid" class="input"><option value="rollos">Rollos</option><option value="fardos">Fardos</option><option value="kg">Kg</option><option value="tn">Tn</option></select></div>
+        <div><label class="label">Cantidad *</label><input id="cor-cant" type="number" step="0.01" class="input" oninput="corteCalc()"/></div>
+        <div id="cor-prod-wrap" class="col-span-2"><label class="label">Artículo del galpón (rollo/fardo)</label><select id="cor-prod" class="input"><option value="">— elegí el artículo donde ingresan —</option>${prods.map(p=>`<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">Si no existe, creá el artículo (ej. "Rollo de Centeno") en Stock y volvé.</div></div>
+        <div><label class="label">Costo insumos imputado</label><input id="cor-cins" type="number" step="0.01" class="input" oninput="corteCalc()"/></div>
+        <div><label class="label">Costo contratista</label><input id="cor-ccon" type="number" step="0.01" class="input" oninput="corteCalc()"/></div>
+        <div><label class="label">Moneda</label><select id="cor-mon" class="input"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>
+        <div class="flex items-end pb-1"><div class="text-sm text-slate-700">Costo unitario: <b id="cor-unit">$ 0</b></div></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">El "costo insumos imputado" es la parte de la siembra/insumos de la campaña que le asignás a este corte (lo ponés a criterio). Sumado al contratista y dividido por la cantidad da el costo por rollo.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='corteSave(${JSON.stringify(campanaId)})'>💾 Guardar corte</button>` });
+}
+function corteDestChange(){ const w=$('#cor-prod-wrap'); if(w) w.style.opacity = ($('#cor-dest')?.value==='pastoreo')?'0.4':'1'; }
+function corteCalc(){
+  const cant=Number($('#cor-cant')?.value||0); const ci=Number($('#cor-cins')?.value||0); const cc=Number($('#cor-ccon')?.value||0);
+  const u=cant>0?(ci+cc)/cant:0; const mon=$('#cor-mon')?.value==='USD'?'US$ ':'$ ';
+  const el=$('#cor-unit'); if(el) el.textContent = mon+fmtN(Math.round(u));
+}
+async function corteSave(campanaId){
+  const v=(s)=>{const el=document.querySelector(s);return el?String(el.value).trim():'';};
+  const n=(s)=>{const x=v(s);return x===''?null:Number(x);};
+  const fecha=v('#cor-fecha'); if(!fecha) return toast('Poné la fecha','warn');
+  const cant=n('#cor-cant'); if(!cant||cant<=0) return toast('Poné la cantidad','warn');
+  const dest=v('#cor-dest')||'galpon';
+  if(dest==='galpon' && !v('#cor-prod')) return toast('Elegí el artículo de galpón (o poné destino Pastoreo)','warn');
+  const data={ fecha:new Date(fecha+'T12:00:00').toISOString(), trabajo:v('#cor-trab')||'enrollado', destino:dest,
+    cantidad:cant, unidad:v('#cor-unid')||'rollos', productoId:v('#cor-prod')||null,
+    costoInsumos:n('#cor-cins')||0, costoContratista:n('#cor-ccon')||0, moneda:v('#cor-mon')||'ARS' };
+  try{ await api('/api/campanas/'+campanaId+'/cortes',{method:'POST',body:JSON.stringify(data)}); closeModal2(); toast('Corte cargado','success'); delete state.cache.productos; cortesModal(campanaId); }catch(e){ toast(e.message,'error'); }
+}
+async function corteDel(campanaId, id){
+  if(!confirm('¿Borrar este corte? Si ingresó rollos al galpón, se revierte ese stock.')) return;
+  try{ await api('/api/cortes/'+id,{method:'DELETE'}); toast('Borrado','success'); delete state.cache.productos; cortesModal(campanaId); }catch(e){ toast(e.message,'error'); }
 }
 
 /* =========================================================
@@ -25378,6 +25465,174 @@ const CC_KG = (k) => `${fmtN(Math.round(Number(k||0)))} kg`;
 const CC_ESTADOS = { abierto:['Abierto','badge-yellow'], entregado:['Entregado','badge-blue'], pesificado:['Pesificado','badge-green'], cerrado:['Cerrado','badge-gray'], anulado:['Anulado','badge-red'] };
 function ccBadge(s){ const e=CC_ESTADOS[s]||CC_ESTADOS.abierto; return `<span class="badge ${e[1]}">${e[0]}</span>`; }
 function ccBar(pct, color){ pct=Math.max(0,Math.min(100,Math.round(pct||0))); return `<div class="w-full bg-slate-200 rounded h-1.5 mt-1"><div class="${color} h-1.5 rounded" style="width:${pct}%"></div></div>`; }
+
+// ============================================================
+// RODEOS / COSTO DE HACIENDA (costo por kg de carne)
+// ============================================================
+const RODEO_SIST = { feedlot:['🏭','Feedlot'], engorde_campo:['🌾','Engorde a campo'], recria:['🐂','Recría'], cria:['🐄','Cría'] };
+const RODEO_EV = { ingreso:['📥','Ingreso (compra)'], nacimiento:['🐣','Nacimiento'], pesaje:['⚖️','Pesaje'], venta:['💰','Venta'], baja:['💀','Baja / mortandad'], alimentacion:['🌿','Alimentación'], sanidad:['💉','Sanidad'], labor:['👷','Labor / personal'], otro:['📌','Otro'] };
+const rodSistLbl = (s)=> (RODEO_SIST[s]||['🐮',s])[1];
+const rodEvLbl = (t)=> (RODEO_EV[t]||['📌',t])[1];
+const rodMoney = (v,mon)=> (mon==='USD'?'US$ ':'$ ') + fmtN(Math.round(Number(v)||0));
+
+pages.rodeos = async function(){
+  setHeader('Costo de hacienda', 'Lotes de engorde / cría: costo por kg de carne producido');
+  if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('rodeos','Costo de hacienda'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let rodeos=[];
+  try{ const r=await api('/api/rodeos'); rodeos=r.data||[]; }catch(e){ return toast(e.message,'error'); }
+  state._rodList=rodeos;
+  const activos=rodeos.filter(r=>r.estado==='activo');
+  const kgProdTot=activos.reduce((a,r)=>a+(r.resultado?.kgProducidos||0),0);
+  const filas=rodeos.map(r=>{ const R=r.resultado||{};
+    return `<tr class="table-row cursor-pointer" onclick='rodVer(${JSON.stringify(r.id)})'>
+      <td>${(RODEO_SIST[r.sistema]||['🐮'])[0]} <b>${esc(r.nombre)}</b>${r.estado!=='activo'?'<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 ml-1">cerrado</span>':''}<div class="text-[10px] text-slate-500">${esc(rodSistLbl(r.sistema))}${r.categoria?' · '+esc(r.categoria):''}</div></td>
+      <td class="text-right">${R.cabActual||0}</td>
+      <td class="text-right">${fmtN(R.kgProducidos||0)} kg</td>
+      <td class="text-right whitespace-nowrap">${R.costoKgProducido!=null?'$ '+fmtN(R.costoKgProducido):'<span class="text-slate-400">pesá</span>'}</td>
+      <td class="text-right whitespace-nowrap font-semibold">${R.costoKgTerminado!=null?'$ '+fmtN(R.costoKgTerminado):'—'}</td>
+      <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+        ${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='rodForm(${JSON.stringify(r.id)})'>✏️</button>`:''}
+        ${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='rodDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+      </td></tr>`;
+  }).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin lotes. Cargá el primero con "+ Nuevo lote".</td></tr>`;
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${activos.length} lote${activos.length===1?'':'s'} activo${activos.length===1?'':'s'}</div>
+      ${can('stock:create')?`<button class="btn btn-primary" onclick="rodForm()">+ Nuevo lote</button>`:''}
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Lotes activos</div><div class="text-lg font-bold mt-1">${activos.length}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Kg producidos (activos)</div><div class="text-lg font-bold mt-1 text-emerald-700">${fmtN(kgProdTot)} kg</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Cabezas en engorde</div><div class="text-lg font-bold mt-1">${activos.reduce((a,r)=>a+(r.resultado?.cabActual||0),0)}</div></div>
+    </div>
+    <div class="kpi p-0 overflow-hidden overflow-x-auto">
+      <table class="data">
+        <thead><tr><th>Lote</th><th class="text-right">Cabezas</th><th class="text-right">Kg producidos</th><th class="text-right">$/kg producido</th><th class="text-right">$/kg terminado</th><th></th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>
+    <div class="text-[11px] text-slate-500 mt-3">$/kg producido = costos directos (alimentación + sanidad + labores) ÷ kg producidos. $/kg terminado = (compra + fletes + costos) ÷ kg del animal. Cargá <b>pesajes</b> en cada lote para capturar la ganancia de peso.</div>`;
+};
+
+async function rodForm(id=null){
+  let r={}; if(id){ try{ r=(await api('/api/rodeos/'+id)).data||{}; }catch(e){ return toast(e.message,'error'); } }
+  let campos=[]; try{ campos=(await api('/api/campos')).data||[]; }catch{}
+  const dv=(x)=>x!=null?x:''; const dfec=(x)=>x?String(x).slice(0,10):'';
+  openModal({ title:id?'✏️ Editar lote':'🐮 Nuevo lote de engorde / cría', size:'max-w-2xl',
+    body:`
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div class="col-span-2"><label class="label">Nombre *</label><input id="rod-nombre" class="input" value="${esc(dv(r.nombre))}" placeholder="Novillitos Lote 1"/></div>
+        <div><label class="label">Sistema *</label><select id="rod-sist" class="input">${Object.entries(RODEO_SIST).map(([k,v])=>`<option value="${k}" ${(r.sistema||'feedlot')===k?'selected':''}>${v[0]} ${v[1]}</option>`).join('')}</select></div>
+        <div><label class="label">Campo</label><select id="rod-campo" class="input"><option value="">—</option>${campos.map(c=>`<option value="${c.id}" ${c.id===r.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label">Categoría</label><input id="rod-cat" class="input" value="${esc(dv(r.categoria))}" placeholder="Novillito / Ternero / Vaca"/></div>
+        <div><label class="label">Fecha de inicio</label><input id="rod-fini" type="date" class="input" value="${dfec(r.fechaInicio)}"/></div>
+        <div><label class="label">Cabezas iniciales</label><input id="rod-cabi" type="number" class="input" value="${dv(r.cabezasInicial)}"/></div>
+        <div><label class="label">Kg iniciales (stock)</label><input id="rod-kgi" type="number" step="0.01" class="input" value="${dv(r.kgInicial)}"/></div>
+        <div><label class="label">Estado</label><select id="rod-estado" class="input"><option value="activo" ${(r.estado||'activo')==='activo'?'selected':''}>Activo</option><option value="cerrado" ${r.estado==='cerrado'?'selected':''}>Cerrado</option></select></div>
+      </div>
+      <div><label class="label">Observaciones</label><textarea id="rod-obs" class="input" rows="2">${esc(dv(r.observaciones))}</textarea></div>
+      <div class="text-[11px] text-slate-500 mt-2">Las "cabezas / kg iniciales" son el stock al abrir el lote (por ej. si ya tenías animales). Las compras se cargan como evento "Ingreso".</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='rodSave(${id?JSON.stringify(id):"null"})'>💾 ${id?'Guardar':'Crear lote'}</button>` });
+}
+async function rodSave(id){
+  const v=(s)=>{const el=document.querySelector(s);return el?String(el.value).trim():'';};
+  const n=(s)=>{const x=v(s);return x===''?null:Number(x);};
+  const nombre=v('#rod-nombre'); if(!nombre) return toast('Poné un nombre','warn');
+  const data={ nombre, sistema:v('#rod-sist')||'feedlot', campoId:v('#rod-campo')||null, categoria:v('#rod-cat')||null,
+    fechaInicio:v('#rod-fini')?new Date(v('#rod-fini')+'T12:00:00').toISOString():null,
+    cabezasInicial:n('#rod-cabi')||0, kgInicial:n('#rod-kgi')||0, estado:v('#rod-estado')||'activo', observaciones:v('#rod-obs')||null };
+  try{ if(id) await api('/api/rodeos/'+id,{method:'PUT',body:JSON.stringify(data)}); else await api('/api/rodeos',{method:'POST',body:JSON.stringify(data)}); closeModal(); toast('Lote guardado','success'); pages.rodeos(); }catch(e){ toast(e.message,'error'); }
+}
+async function rodDel(id){
+  const r=(state._rodList||[]).find(x=>x.id===id);
+  if(!confirm(`¿Eliminar el lote "${r?r.nombre:''}"? Se borran sus eventos.`)) return;
+  try{ await api('/api/rodeos/'+id,{method:'DELETE'}); toast('Eliminado','success'); pages.rodeos(); }catch(e){ toast(e.message,'error'); }
+}
+async function rodVer(id){
+  let r={}; try{ r=(await api('/api/rodeos/'+id)).data||{}; }catch(e){ return toast(e.message,'error'); }
+  state._rodActual=r; const R=r.resultado||{}; const ev=r.eventos||[];
+  const kpi=(lbl,val,cls)=>`<div class="kpi"><div class="text-xs text-slate-500">${lbl}</div><div class="text-base font-bold mt-1 ${cls||''}">${val}</div></div>`;
+  const filas=ev.map(e=>`<tr class="table-row">
+      <td class="whitespace-nowrap">${fmtDate(e.fecha)}</td>
+      <td>${(RODEO_EV[e.tipo]||['📌'])[0]} ${rodEvLbl(e.tipo)}${e.concepto?`<div class="text-[10px] text-slate-500">${esc(e.concepto)}</div>`:''}</td>
+      <td class="text-right text-xs">${e.cabezas!=null?e.cabezas:''}</td>
+      <td class="text-right text-xs">${e.kg!=null?fmtN(e.kg)+' kg':''}</td>
+      <td class="text-right text-xs ${e.tipo==='venta'?'text-emerald-700':''}">${e.monto?rodMoney(e.monto,e.moneda):''}</td>
+      <td class="text-right" onclick="event.stopPropagation()">${can('stock:update')?`<button class="btn btn-ghost text-[11px] text-red-600" onclick='rodEvDel(${JSON.stringify(r.id)},${JSON.stringify(e.id)})'>🗑️</button>`:''}</td>
+    </tr>`).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin eventos. Cargá el ingreso de hacienda y los costos.</td></tr>`;
+  const btn=(t)=>`<button class="btn btn-secondary text-xs" onclick='rodEvForm(${JSON.stringify(r.id)},"${t}")'>${(RODEO_EV[t]||['📌'])[0]} ${rodEvLbl(t)}</button>`;
+  openModal({ title:`${(RODEO_SIST[r.sistema]||['🐮'])[0]} ${esc(r.nombre)}`, size:'max-w-5xl',
+    body:`
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+        ${kpi('Cabezas actuales', R.cabActual||0)}
+        ${kpi('Kg producidos', fmtN(R.kgProducidos||0)+' kg','text-emerald-700')}
+        ${kpi('$/kg producido', R.costoKgProducido!=null?'$ '+fmtN(R.costoKgProducido):'—')}
+        ${kpi('$/kg terminado', R.costoKgTerminado!=null?'$ '+fmtN(R.costoKgTerminado):'—','text-slate-900')}
+        ${kpi('GPD (kg/cab/día)', R.gpd!=null?fmtN(R.gpd):'—')}
+        ${kpi('Costo directo', '$ '+fmtN(R.costoDirecto||0),'text-red-700')}
+        ${kpi('Compra hacienda', '$ '+fmtN(R.costoCompra||0))}
+        ${kpi('Ventas', '$ '+fmtN(R.ventasTotal||0),'text-emerald-700')}
+      </div>
+      ${!R.usaPesaje?`<div class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-3">Todavía no cargaste un <b>pesaje</b>. Sin pesaje el sistema no ve la ganancia de peso, así que el kg producido y el $/kg producido son estimados. Cargá un pesaje con el kg total actual del lote.</div>`:''}
+      <div class="mb-2 p-2 bg-slate-50 rounded border border-slate-200 text-xs text-slate-600">
+        Desglose de costos directos: 🌿 Alimentación $ ${fmtN(R.costoAlim||0)} · 💉 Sanidad $ ${fmtN(R.costoSan||0)} · 👷 Labores $ ${fmtN(R.costoLab||0)} · 📌 Otros $ ${fmtN(R.costoOtro||0)}
+      </div>
+      <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <h4 class="font-semibold text-slate-700">Eventos del lote</h4>
+        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].map(btn).join('')}</div>`:''}
+      </div>
+      <div class="kpi p-0 overflow-hidden overflow-x-auto"><table class="data text-sm">
+        <thead><tr><th>Fecha</th><th>Tipo</th><th class="text-right">Cab.</th><th class="text-right">Kg</th><th class="text-right">Monto</th><th></th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>${can('stock:update')?`<button class="btn btn-secondary" onclick='rodForm(${JSON.stringify(r.id)})'>✏️ Editar lote</button>`:''}` });
+}
+async function rodEvForm(rodeoId, tipo){
+  const tieneCab=['ingreso','nacimiento','pesaje','venta','baja'].includes(tipo);
+  const tieneKg=['ingreso','nacimiento','pesaje','venta','baja'].includes(tipo);
+  const esCosto=['alimentacion','sanidad','labor','otro'].includes(tipo);
+  const esVenta=tipo==='venta'; const esIngreso=tipo==='ingreso'; const esPesaje=tipo==='pesaje';
+  let prods=[];
+  if(tipo==='alimentacion'){ try{ prods=(await api('/api/productos')).data||[]; }catch{} prods=prods.filter(p=>p.activo!==false); }
+  const hoy=new Date().toISOString().slice(0,10);
+  const montoLbl = esVenta?'Ingreso por venta':'Costo';
+  openModal2({ title:`${(RODEO_EV[tipo]||['📌'])[0]} ${rodEvLbl(tipo)}`, size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha *</label><input id="rev-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label">Concepto</label><input id="rev-concepto" class="input" placeholder="${esPesaje?'Pesada de control':(esIngreso?'Compra en remate':'Detalle')}"/></div>
+        ${tieneCab?`<div><label class="label">Cabezas</label><input id="rev-cab" type="number" class="input"/></div>`:''}
+        ${tieneKg?`<div><label class="label">${esPesaje?'Kg TOTAL del lote *':'Kg'}</label><input id="rev-kg" type="number" step="0.01" class="input"/></div>`:''}
+        ${tipo==='alimentacion'?`<div class="col-span-2"><label class="label">Artículo del galpón (descuenta stock)</label><select id="rev-prod" class="input" onchange="rodEvProdChange()"><option value="">— sin descontar galpón (cargo el costo a mano) —</option>${prods.map(p=>`<option value="${p.id}" data-costo="${p.ultimoCostoCompra||p.precioReferencia||0}" data-mon="${p.ultimoCostoMoneda||'ARS'}">${esc(p.nombre)}${p.ultimoCostoCompra?` ($${fmtN(p.ultimoCostoCompra)}/${esc(p.unidad||'u')})`:''}</option>`).join('')}</select></div>
+        <div><label class="label">Cantidad consumida</label><input id="rev-cant" type="number" step="0.01" class="input" oninput="rodEvCalcCosto()"/></div>`:''}
+        ${(esCosto||esVenta||esIngreso)?`<div><label class="label">${montoLbl}${esIngreso?' (compra)':''}</label><input id="rev-monto" type="number" step="0.01" class="input"/></div>
+        <div><label class="label">Moneda</label><select id="rev-mon" class="input"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>`:''}
+        ${esIngreso?`<div><label class="label">Fletes + comisiones</label><input id="rev-flete" type="number" step="0.01" class="input"/></div>`:''}
+      </div>
+      ${esPesaje?`<div class="text-[11px] text-slate-500 mt-2">Poné el <b>kg total</b> de todos los animales del lote a hoy (cabezas × kg promedio). Es lo que usa el sistema para calcular la ganancia de peso.</div>`:''}`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='rodEvSave(${JSON.stringify(rodeoId)},"${tipo}")'>💾 Guardar</button>` });
+}
+function rodEvProdChange(){ rodEvCalcCosto(); }
+function rodEvCalcCosto(){
+  const sel=$('#rev-prod'); const cant=Number($('#rev-cant')?.value||0); const mEl=$('#rev-monto');
+  if(!sel||!mEl) return; const opt=sel.options[sel.selectedIndex]; const costo=Number(opt?.dataset?.costo||0);
+  if(sel.value && costo && cant){ mEl.value=Math.round(costo*cant); const mon=$('#rev-mon'); if(mon&&opt.dataset.mon) mon.value=opt.dataset.mon; }
+}
+async function rodEvSave(rodeoId, tipo){
+  const v=(s)=>{const el=document.querySelector(s);return el?String(el.value).trim():'';};
+  const n=(s)=>{const x=v(s);return x===''?null:Number(x);};
+  const fecha=v('#rev-fecha'); if(!fecha) return toast('Poné la fecha','warn');
+  if(tipo==='pesaje' && !v('#rev-kg')) return toast('Poné el kg total del lote','warn');
+  const data={ tipo, fecha:new Date(fecha+'T12:00:00').toISOString(), concepto:v('#rev-concepto')||null,
+    cabezas:n('#rev-cab'), kg:n('#rev-kg'), monto:n('#rev-monto'), moneda:v('#rev-mon')||'ARS',
+    fleteComision:n('#rev-flete'), productoId:v('#rev-prod')||null, cantidad:n('#rev-cant') };
+  try{ await api(`/api/rodeos/${rodeoId}/eventos`,{method:'POST',body:JSON.stringify(data)}); closeModal2(); toast('Evento cargado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
+}
+async function rodEvDel(rodeoId, eid){
+  if(!confirm('¿Borrar este evento?')) return;
+  try{ await api(`/api/rodeos/${rodeoId}/eventos/${eid}`,{method:'DELETE'}); toast('Borrado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
+}
 
 // ============================================================
 // ACTIVOS FIJOS / MAQUINARIA + MANTENIMIENTO

@@ -96,6 +96,9 @@ model Company {
   activosFijos       ActivoFijo[]
   mantenimientos     MantenimientoActivo[]
   balanceAjustes     BalanceAjusteManual[]
+  rodeos             Rodeo[]
+  rodeoEventos       RodeoEvento[]
+  cortesForraje      CorteForraje[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -248,6 +251,7 @@ model Campo {
   haciendaStocks  HaciendaStock[]
   haciendaMovs    HaciendaMovimiento[]
   liquidacionesHacienda LiquidacionHacienda[]
+  rodeos          Rodeo[]
 
   @@index([companyId])
 }
@@ -278,6 +282,7 @@ model Campana {
   cultivo         String
   variedad        String?
   ciclo           String?   // "2025/26"
+  tipoCampana     String?   @default("cosecha_unica") // cosecha_unica | forrajera (multicorte)
   hectareas       Float    @default(0)
   rindeEstimado   Float?
   rindeReal       Float?
@@ -294,9 +299,39 @@ model Campana {
   lote            Lote      @relation(fields: [loteId], references: [id], onDelete: Cascade)
   insumos         InsumoAplicado[]
   labores         LaborAplicada[]
+  cortes          CorteForraje[]
 
   @@index([companyId])
   @@index([loteId])
+}
+
+// Evento de CORTE de una campaña forrajera multicorte (centeno, alfalfa, avena).
+// Cada corte puede confeccionar rollos/fardos (ingresan al galpon con su costo
+// unitario) o ser pastoreo directo. Costo unitario = (costo insumos imputado +
+// costo del contratista) / cantidad de rollos.
+model CorteForraje {
+  id            String   @id @default(cuid())
+  companyId     String
+  campanaId     String
+  fecha         DateTime
+  trabajo       String   @default("enrollado") // corte | hilerado | enrollado | enfardado | pastoreo | otro
+  destino       String   @default("galpon")    // galpon (confeccion) | pastoreo (consumo directo)
+  cantidad      Float    @default(0)
+  unidad        String   @default("rollos")     // rollos | fardos | kg | tn
+  productoId    String?  // producto de galpon donde ingresan los rollos/fardos
+  costoContratista Float? @default(0)
+  costoInsumos  Float?   @default(0)            // proporcion de siembra/insumos imputada al corte
+  moneda        String   @default("ARS")
+  costoUnitario Float?   @default(0)            // calculado
+  movimientoStockId String? // ingreso a galpon generado (para revertir)
+  observaciones String?
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campana       Campana  @relation(fields: [campanaId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([campanaId])
 }
 
 model InsumoAplicado {
@@ -2001,6 +2036,68 @@ model MantenimientoActivo {
 
   @@index([companyId])
   @@index([activoFijoId])
+}
+
+// ============================================================
+// RODEO / LOTE DE ENGORDE-CRIA: agrupa un grupo de animales para calcular el
+// COSTO POR KG DE CARNE. Sirve para feedlot, invernada a campo y cria.
+// El costo/kg se arma como un inventario en kg + los costos imputados (compra,
+// alimentacion, sanidad, labores). Los pesajes actualizan el kg de stock.
+// ============================================================
+model Rodeo {
+  id             String   @id @default(cuid())
+  companyId      String
+  nombre         String
+  sistema        String   @default("feedlot") // feedlot | engorde_campo | recria | cria
+  campoId        String?
+  categoria      String?  // categoria principal (Novillito, Ternero, Vaca...) - libre
+  fechaInicio    DateTime?
+  fechaFin       DateTime?
+  estado         String   @default("activo")  // activo | cerrado
+  cabezasInicial Int      @default(0)
+  kgInicial      Float    @default(0)          // kg totales de stock al abrir el lote
+  observaciones  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company        Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campo          Campo?        @relation(fields: [campoId], references: [id], onDelete: SetNull)
+  eventos        RodeoEvento[]
+
+  @@index([companyId])
+  @@index([campoId])
+}
+
+// Evento de un rodeo. Segun "tipo" mueve cabezas/kg de stock y/o suma costo:
+//  ingreso (compra)  -> +cabezas +kg, monto = costo de compra
+//  nacimiento        -> +cabezas +kg (cria)
+//  pesaje            -> snapshot: cabezas + kg = stock total a esa fecha
+//  venta             -> -cabezas -kg, monto = ingreso por venta (no es costo)
+//  baja / mortandad  -> -cabezas -kg (el costo se reparte entre los que quedan)
+//  alimentacion / sanidad / labor / otro -> monto = costo directo (puede venir de galpon)
+model RodeoEvento {
+  id            String   @id @default(cuid())
+  companyId     String
+  rodeoId       String
+  fecha         DateTime
+  tipo          String   // ingreso | nacimiento | pesaje | venta | baja | alimentacion | sanidad | labor | otro
+  concepto      String?
+  cabezas       Int?
+  kg            Float?    // kg del evento (compra/venta/baja) o kg TOTAL de stock si tipo=pesaje
+  monto         Float?   @default(0)  // costo (o ingreso en venta)
+  moneda        String   @default("ARS")
+  fleteComision Float?   @default(0)  // fletes + comisiones de compra
+  productoId    String?  // si el costo salio del galpon (rollo/fardo/grano): descuenta stock
+  cantidad      Float?   // cantidad consumida del producto (rollos, kg, etc.)
+  movimientoStockId String? // egreso de galpon generado por el consumo (para revertir)
+  observaciones String?
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  rodeo         Rodeo    @relation(fields: [rodeoId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([rodeoId])
 }
 
 // Lineas manuales del Estado de Situacion Patrimonial: para cargar a mano lo que

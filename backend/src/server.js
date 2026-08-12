@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.76.0';
+const AGROCORE_VERSION = '2.78.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3283,6 +3283,7 @@ mountCrud({
     cultivo: z.string().min(1),
     variedad: z.string().nullable().optional(),
     ciclo: z.string().nullable().optional(),
+    tipoCampana: z.enum(['cosecha_unica','forrajera']).nullable().optional(),
     hectareas: z.number().optional(),
     rindeEstimado: z.number().nullable().optional(),
     rindeReal: z.number().nullable().optional(),
@@ -10181,6 +10182,240 @@ app.get('/api/balance-ajustes', requireCompany, requirePermission('reportes:read
 app.post('/api/balance-ajustes', requireCompany, requirePermission('reportes:read'), async (req, res, next) => { try { const d = balanceAjusteSchema.parse(req.body); const row = await prisma.balanceAjusteManual.create({ data: { ...d, companyId: req.companyId } }); res.status(201).json({ ok: true, data: row }); } catch (e) { next(e); } });
 app.put('/api/balance-ajustes/:id', requireCompany, requirePermission('reportes:read'), async (req, res, next) => { try { const ex = await prisma.balanceAjusteManual.findFirst({ where: { id: req.params.id, companyId: req.companyId } }); if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' }); const d = balanceAjusteSchema.partial().parse(req.body); const row = await prisma.balanceAjusteManual.update({ where: { id: ex.id }, data: d }); res.json({ ok: true, data: row }); } catch (e) { next(e); } });
 app.delete('/api/balance-ajustes/:id', requireCompany, requirePermission('reportes:read'), async (req, res, next) => { try { const ex = await prisma.balanceAjusteManual.findFirst({ where: { id: req.params.id, companyId: req.companyId } }); if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' }); await prisma.balanceAjusteManual.delete({ where: { id: ex.id } }); res.json({ ok: true }); } catch (e) { next(e); } });
+
+// ============================================================
+// RODEO / LOTE DE ENGORDE-CRIA: costo por kg de carne producido.
+//  Inventario en kg + costos imputados. Los pesajes actualizan el kg de stock.
+// ============================================================
+const rodeoSchema = z.object({
+  nombre: z.string().min(1),
+  sistema: z.enum(['feedlot','engorde_campo','recria','cria']).optional(),
+  campoId: z.string().nullable().optional(),
+  categoria: z.string().nullable().optional(),
+  fechaInicio: z.coerce.date().nullable().optional(),
+  fechaFin: z.coerce.date().nullable().optional(),
+  estado: z.enum(['activo','cerrado']).optional(),
+  cabezasInicial: z.coerce.number().int().nullable().optional(),
+  kgInicial: z.coerce.number().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+const rodeoEventoSchema = z.object({
+  fecha: z.coerce.date(),
+  tipo: z.enum(['ingreso','nacimiento','pesaje','venta','baja','alimentacion','sanidad','labor','otro']),
+  concepto: z.string().nullable().optional(),
+  cabezas: z.coerce.number().int().nullable().optional(),
+  kg: z.coerce.number().nullable().optional(),
+  monto: z.coerce.number().nullable().optional(),
+  moneda: z.enum(['ARS','USD']).optional(),
+  fleteComision: z.coerce.number().nullable().optional(),
+  productoId: z.string().nullable().optional(),
+  cantidad: z.coerce.number().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+
+// Calcula kilos producidos, costos y costo/kg de un rodeo. usd = ARS por USD.
+function _rodeoResultado(rodeo, eventos, usd) {
+  const toARS = (m, mon) => Number(m || 0) * (mon === 'USD' ? (usd || 0) : 1);
+  const byTipo = (t) => eventos.filter(e => e.tipo === t);
+  const sumKg = (t) => byTipo(t).reduce((a, e) => a + Number(e.kg || 0), 0);
+  const sumCab = (t) => byTipo(t).reduce((a, e) => a + Number(e.cabezas || 0), 0);
+  const sumCostoARS = (t) => byTipo(t).reduce((a, e) => a + toARS(e.monto, e.moneda), 0);
+
+  const kgComprados = sumKg('ingreso');
+  const kgNacidos = sumKg('nacimiento');
+  const kgVendidos = sumKg('venta');
+  const kgBajas = sumKg('baja');
+  const kgStockInicial = Number(rodeo.kgInicial || 0);
+  // Stock final en kg: el último pesaje si hay; si no, estimado por inventario (sin ganancia).
+  const pesajes = byTipo('pesaje').slice().sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+  const kgEstimado = kgStockInicial + kgComprados + kgNacidos - kgVendidos - kgBajas;
+  const usaPesaje = pesajes.length > 0;
+  const kgStockFinal = usaPesaje ? Number(pesajes[0].kg || 0) : kgEstimado;
+
+  // Cabezas
+  const cabInicial = Number(rodeo.cabezasInicial || 0);
+  const cabActual = cabInicial + sumCab('ingreso') + sumCab('nacimiento') - sumCab('venta') - sumCab('baja');
+
+  // Kg producidos (formula de inventario): (stockFinal + vendidos) - (stockInicial + comprados)
+  // Los nacimientos entran en stockFinal -> cuentan como produccion (util para cria).
+  const kgProducidos = (kgStockFinal + kgVendidos) - (kgStockInicial + kgComprados);
+
+  // Costos
+  const costoCompra = byTipo('ingreso').reduce((a, e) => a + toARS(Number(e.monto || 0) + Number(e.fleteComision || 0), e.moneda), 0);
+  const costoAlim = sumCostoARS('alimentacion');
+  const costoSan = sumCostoARS('sanidad');
+  const costoLab = sumCostoARS('labor');
+  const costoOtro = sumCostoARS('otro');
+  const costoDirecto = costoAlim + costoSan + costoLab + costoOtro;
+  const costoTotalConCompra = costoDirecto + costoCompra;
+  const ventasTotal = sumCostoARS('venta');
+
+  const costoKgProducido = kgProducidos > 0 ? costoDirecto / kgProducidos : null;
+  const costoKgTerminado = kgStockFinal > 0 ? costoTotalConCompra / kgStockFinal : null;
+
+  // GPD (kg/cab/dia): kg producidos / cabezas actuales / dias
+  let gpd = null;
+  const fIni = rodeo.fechaInicio ? new Date(rodeo.fechaInicio) : null;
+  const fFin = usaPesaje ? new Date(pesajes[0].fecha) : new Date();
+  if (fIni && cabActual > 0) { const dias = Math.max(1, (fFin - fIni) / 86400000); gpd = kgProducidos / cabActual / dias; }
+
+  return {
+    kgComprados, kgNacidos, kgVendidos, kgBajas, kgStockInicial, kgStockFinal, kgEstimado, usaPesaje,
+    cabInicial, cabActual, kgProducidos: Math.round(kgProducidos),
+    costoCompra: Math.round(costoCompra), costoAlim: Math.round(costoAlim), costoSan: Math.round(costoSan),
+    costoLab: Math.round(costoLab), costoOtro: Math.round(costoOtro),
+    costoDirecto: Math.round(costoDirecto), costoTotalConCompra: Math.round(costoTotalConCompra),
+    ventasTotal: Math.round(ventasTotal),
+    costoKgProducido: costoKgProducido != null ? Math.round(costoKgProducido) : null,
+    costoKgTerminado: costoKgTerminado != null ? Math.round(costoKgTerminado) : null,
+    gpd: gpd != null ? Math.round(gpd * 1000) / 1000 : null,
+    margen: Math.round(ventasTotal - costoTotalConCompra),
+  };
+}
+
+app.get('/api/rodeos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const usd = (await getCotizacionARS('USD', new Date())) || 0;
+    const rodeos = await prisma.rodeo.findMany({ where: { companyId: req.companyId }, orderBy: [{ estado: 'asc' }, { createdAt: 'desc' }] });
+    const ids = rodeos.map(r => r.id);
+    const eventos = ids.length ? await prisma.rodeoEvento.findMany({ where: { companyId: req.companyId, rodeoId: { in: ids } } }) : [];
+    const evByR = {}; for (const e of eventos) (evByR[e.rodeoId] = evByR[e.rodeoId] || []).push(e);
+    const data = rodeos.map(r => ({ ...r, resultado: _rodeoResultado(r, evByR[r.id] || [], usd), nEventos: (evByR[r.id] || []).length }));
+    res.json({ ok: true, data, usd: Math.round(usd) });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/rodeos/:id', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const usd = (await getCotizacionARS('USD', new Date())) || 0;
+    const r = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { campo: true } });
+    if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const eventos = await prisma.rodeoEvento.findMany({ where: { companyId: req.companyId, rodeoId: r.id }, orderBy: { fecha: 'desc' } });
+    res.json({ ok: true, data: { ...r, eventos, resultado: _rodeoResultado(r, eventos, usd) }, usd: Math.round(usd) });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/rodeos', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try { const d = rodeoSchema.parse(req.body); const row = await prisma.rodeo.create({ data: { ...d, companyId: req.companyId } }); res.status(201).json({ ok: true, data: row }); } catch (e) { next(e); }
+});
+app.put('/api/rodeos/:id', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try { const ex = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } }); if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' }); const d = rodeoSchema.partial().parse(req.body); const row = await prisma.rodeo.update({ where: { id: ex.id }, data: d }); res.json({ ok: true, data: row }); } catch (e) { next(e); }
+});
+app.delete('/api/rodeos/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try { const ex = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } }); if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' }); await prisma.rodeo.delete({ where: { id: ex.id } }); res.json({ ok: true }); } catch (e) { next(e); }
+});
+
+app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
+    const d = rodeoEventoSchema.parse(req.body);
+    const row = await prisma.$transaction(async (tx) => {
+      let movimientoStockId = null;
+      let monto = d.monto;
+      // Consumo desde galpon: descuenta stock y (si no vino monto) lo calcula por costo.
+      if (d.productoId && d.cantidad && d.cantidad > 0) {
+        const prod = await tx.producto.findFirst({ where: { id: d.productoId, companyId: req.companyId } });
+        if (!prod) throw Object.assign(new Error('Producto no encontrado'), { status: 400 });
+        const mv = await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: prod.id, fecha: d.fecha, tipo: 'egreso', motivo: 'consumo_animal',
+          cantidad: Number(d.cantidad), observaciones: `Consumo rodeo ${rodeo.nombre}`, userId: req.user?.id || null,
+        }});
+        movimientoStockId = mv.id;
+        if (monto == null) monto = Number(d.cantidad) * Number(prod.ultimoCostoCompra || prod.precioReferencia || 0) * ((prod.ultimoCostoMoneda === 'USD') ? ((await getCotizacionARS('USD', d.fecha)) || 0) : 1);
+      }
+      return await tx.rodeoEvento.create({ data: { ...d, monto: monto ?? 0, companyId: req.companyId, rodeoId: rodeo.id, movimientoStockId } });
+    });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const ev = await prisma.rodeoEvento.findFirst({ where: { id: req.params.eid, rodeoId: req.params.id, companyId: req.companyId } });
+    if (!ev) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.$transaction(async (tx) => {
+      if (ev.movimientoStockId) { await tx.movimiento.deleteMany({ where: { id: ev.movimientoStockId, companyId: req.companyId } }); }
+      await tx.rodeoEvento.delete({ where: { id: ev.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CAMPAÑA FORRAJERA MULTICORTE: eventos de corte que confeccionan rollos/fardos
+// e ingresan al galpon con su costo unitario, o pastoreo directo.
+// ============================================================
+const corteForrajeSchema = z.object({
+  fecha: z.coerce.date(),
+  trabajo: z.enum(['corte','hilerado','enrollado','enfardado','pastoreo','otro']).optional(),
+  destino: z.enum(['galpon','pastoreo']).optional(),
+  cantidad: z.coerce.number().nullable().optional(),
+  unidad: z.enum(['rollos','fardos','kg','tn']).optional(),
+  productoId: z.string().nullable().optional(),
+  costoContratista: z.coerce.number().nullable().optional(),
+  costoInsumos: z.coerce.number().nullable().optional(),
+  moneda: z.enum(['ARS','USD']).optional(),
+  observaciones: z.string().nullable().optional(),
+});
+
+app.get('/api/campanas/:id/cortes', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const camp = await prisma.campana.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    const cortes = await prisma.corteForraje.findMany({ where: { companyId: req.companyId, campanaId: camp.id }, orderBy: { fecha: 'desc' } });
+    res.json({ ok: true, data: cortes });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/campanas/:id/cortes', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const camp = await prisma.campana.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    const d = corteForrajeSchema.parse(req.body);
+    const cantidad = Number(d.cantidad || 0);
+    const costoTotal = Number(d.costoInsumos || 0) + Number(d.costoContratista || 0);
+    const costoUnitario = cantidad > 0 ? costoTotal / cantidad : 0;
+    const destino = d.destino || 'galpon';
+    const row = await prisma.$transaction(async (tx) => {
+      let movimientoStockId = null;
+      // Confeccion a galpon: ingresa el stock del producto y actualiza su costo unitario.
+      if (destino === 'galpon' && d.productoId && cantidad > 0) {
+        const prod = await tx.producto.findFirst({ where: { id: d.productoId, companyId: req.companyId } });
+        if (!prod) throw Object.assign(new Error('Producto no encontrado'), { status: 400 });
+        const mv = await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: prod.id, fecha: d.fecha, tipo: 'ingreso', motivo: 'cosecha',
+          cantidad, campanaId: camp.id,
+          observaciones: `Corte forrajero ${camp.nombre || camp.cultivo} (${cantidad} ${d.unidad || 'rollos'})`,
+          userId: req.user?.id || null,
+        }});
+        movimientoStockId = mv.id;
+        // El nuevo costo unitario de confeccion pasa a ser el ultimo costo del articulo.
+        await tx.producto.update({ where: { id: prod.id }, data: { ultimoCostoCompra: Math.round(costoUnitario * 100) / 100, ultimoCostoMoneda: d.moneda || 'ARS' } });
+      }
+      return await tx.corteForraje.create({ data: {
+        companyId: req.companyId, campanaId: camp.id, fecha: d.fecha,
+        trabajo: d.trabajo || 'enrollado', destino, cantidad, unidad: d.unidad || 'rollos',
+        productoId: d.productoId || null, costoContratista: d.costoContratista || 0, costoInsumos: d.costoInsumos || 0,
+        moneda: d.moneda || 'ARS', costoUnitario: Math.round(costoUnitario * 100) / 100,
+        movimientoStockId, observaciones: d.observaciones || null,
+      }});
+    });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/cortes/:id', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const c = await prisma.corteForraje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!c) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.$transaction(async (tx) => {
+      if (c.movimientoStockId) await tx.movimiento.deleteMany({ where: { id: c.movimientoStockId, companyId: req.companyId } });
+      await tx.corteForraje.delete({ where: { id: c.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
 
 // === Exportar Estado de situación a Excel (idea 8) ===
 app.get('/api/flujo-proyectado/export', requireCompany, async (req, res, next) => {
