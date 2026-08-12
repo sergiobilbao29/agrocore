@@ -2562,6 +2562,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'12/08/2026',
+      titulo:'🧾 v2.79.0 — Nómina: se saca el cartel "Empleado no encontrado" al volver',
+      desc:'Al entrar a la <b>planilla de un empleado</b> y volver a la <b>nómina</b>, a veces aparecía un cartel rojo de "Empleado no encontrado". Corregido: al volver, el sistema muestra la nómina limpia y solo avisa si realmente hacés clic en un empleado que no existe.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/08/2026',
       titulo:'🌿 v2.78.0 — Campañas forrajeras multicorte (centeno, alfalfa → rollos)',
       desc:'Las campañas ahora tienen <b>tipo</b>: <b>Cosecha única</b> (Soja/Maíz, como siempre) o <b>Forrajera multicorte</b> (Centeno, Alfalfa, Avena), que <b>no se cierra</b> en el primer corte. En una campaña forrajera aparece el botón <b>🌿 Cortes</b>: cargás cada corte (fecha, trabajo, rinde en rollos/fardos o kg, costo del contratista y costo de insumos imputado) y el sistema <b>ingresa los rollos al galpón</b> con su <b>costo unitario</b> = (insumos + contratista) ÷ cantidad. Después ese artículo lo <b>consumís desde un lote de hacienda</b> (Costo de hacienda → Alimentación, que lo imputa al costo por kg de carne) o lo <b>vendés</b> desde Stock. Así queda cerrado el círculo forraje → animal.' },
@@ -19871,7 +19874,9 @@ async function empleAbrir(id, push=true) {
     if (!state.cache.empleados) await crudList('empleados');
     emp = (state.cache.empleados||[]).find(x=>x.id===id);
     if (!emp) { await crudList('empleados'); emp=(state.cache.empleados||[]).find(x=>x.id===id); }
-    if (!emp) { toast('Empleado no encontrado','error'); return pages.empleados(); }
+    // Si no se encuentra (típico al VOLVER a la nómina desde una ficha vía historial),
+    // caemos prolijo en la lista. Solo avisamos si fue un clic explícito (push=true).
+    if (!emp) { if (push) toast('Empleado no encontrado','error'); state.empFichaId=null; return pages.empleados(); }
     movs = (await api('/api/empleados/'+id+'/movimientos')).data || [];
     liqs = (await api('/api/empleados/'+id+'/liquidaciones')).data || [];
     ropa = (await api('/api/empleados/'+id+'/ropa').catch(()=>({data:[]}))).data || [];
