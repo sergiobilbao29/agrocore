@@ -2567,6 +2567,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'13/08/2026',
+      titulo:'🤖 v2.87.0 — El asistente ya explica los remitos internos y las retenciones',
+      desc:'Le enseñamos al <b>asistente</b> las últimas funciones para que te guíe: <b>Remitos internos</b> (salida de insumo al campo con "confirmar uso", transferencia entre depósitos con "confirmar recepción", imprimir y anular) y las <b>retenciones</b> de la <b>Liquidación de animales</b> (ahora se descuentan del neto). Preguntale, por ejemplo, "¿cómo hago un remito interno?" o "¿cómo cargo una liquidación de animales?".' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'13/08/2026',
       titulo:'🐄 v2.86.0 — Liquidación de animales: las retenciones se restan del neto',
       desc:'En <b>Liquidaciones de animales</b>, el campo <b>Gastos e impuestos</b> pasó a llamarse <b>Retenciones y gastos (se restan)</b> y ahora se <b>descuenta</b> del neto a cobrar en vez de sumarse. Estas son las <b>retenciones</b> (ganancias, IIBB, etc.) que el comprador retiene y paga aparte, así que el <b>Neto a cobrar = Bruto + IVA − Retenciones</b>. Si editás el neto a mano, ya no se te pisa al tocar otro campo. Ejemplo: bruto 24.808.000 + IVA 2.604.840 − retenciones 496.160 = <b>26.916.680</b> a cobrar.' },
