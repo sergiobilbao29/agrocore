@@ -99,6 +99,7 @@ model Company {
   rodeos             Rodeo[]
   rodeoEventos       RodeoEvento[]
   cortesForraje      CorteForraje[]
+  remitosInternos    RemitoInterno[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -300,6 +301,7 @@ model Campana {
   insumos         InsumoAplicado[]
   labores         LaborAplicada[]
   cortes          CorteForraje[]
+  remitos         RemitoInterno[]
 
   @@index([companyId])
   @@index([loteId])
@@ -443,6 +445,7 @@ model Producto {
   insumosAplicados InsumoAplicado[]
   itemsFactura    FacturaItem[]
   itemsFacturaCompra FacturaCompraItem[]
+  remitoRenglones RemitoRenglon[]
 
   @@index([companyId])
   @@index([categoria])
@@ -1442,6 +1445,8 @@ model Deposito {
   movimientos     Movimiento[]
   liquidaciones   LiquidacionCereal[]
   viajes          Viaje[]
+  remitosOrigen   RemitoInterno[] @relation("RemitoOrigen")
+  remitosDestino  RemitoInterno[] @relation("RemitoDestino")
 
   @@index([companyId])
   @@index([tipo])
@@ -2118,4 +2123,60 @@ model BalanceAjusteManual {
   company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
+}
+
+// ── Remitos internos ──────────────────────────────────────────────────────────
+// Movimientos de mercadería SIN venta: (a) salida de insumo del depósito hacia el
+// campo (queda "en tránsito"; se imputa a la campaña recién al confirmar el uso),
+// (b) transferencia de mercadería entre depósitos (con confirmación de recepción).
+model RemitoInterno {
+  id                String   @id @default(cuid())
+  companyId         String
+  numero            Int?                         // correlativo por empresa (secuencia 'remito_interno')
+  fecha             DateTime
+  tipo              String                       // 'a_campo' | 'entre_depositos'
+  estado            String   @default("en_transito") // en_transito | usado | recibido | anulado
+  depositoOrigenId  String?                      // null = "Mi campo"
+  depositoDestinoId String?                      // tipo entre_depositos
+  campanaId         String?                      // tipo a_campo: campaña a la que se imputa el uso
+  destinoTexto      String?                      // texto libre del destino (campo/lote/persona) cuando no hay campaña
+  transportista     String?
+  chofer            String?
+  entregadoPor      String?
+  recibidoPor       String?
+  fechaRecepcion    DateTime?                    // cuando se confirma la recepción (entre_depositos)
+  fechaUso          DateTime?                    // cuando se confirma el uso en campaña (a_campo)
+  observaciones     String?
+  userId            String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  depositoOrigen    Deposito? @relation("RemitoOrigen", fields: [depositoOrigenId], references: [id])
+  depositoDestino   Deposito? @relation("RemitoDestino", fields: [depositoDestinoId], references: [id])
+  campana           Campana? @relation(fields: [campanaId], references: [id], onDelete: SetNull)
+  renglones         RemitoRenglon[]
+
+  @@index([companyId])
+  @@index([estado])
+  @@index([campanaId])
+}
+
+model RemitoRenglon {
+  id                String   @id @default(cuid())
+  remitoId          String
+  productoId        String
+  nombre            String                       // snapshot del nombre del producto
+  cantidad          Float
+  unidad            String
+  movimientoOutId   String?                      // egreso del depósito origen
+  movimientoInId    String?                      // ingreso al depósito destino (entre_depositos)
+  insumoAplicadoId  String?                      // uso imputado a la campaña (a_campo)
+  observaciones     String?
+
+  remito            RemitoInterno @relation(fields: [remitoId], references: [id], onDelete: Cascade)
+  producto          Producto @relation(fields: [productoId], references: [id])
+
+  @@index([remitoId])
+  @@index([productoId])
 }
