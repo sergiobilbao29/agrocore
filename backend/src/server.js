@@ -8563,6 +8563,23 @@ const _AYUDA_KB = [
       'Ojo: marcar "cobrado" editando el cheque NO genera el movimiento bancario. Para que impacte hay que usar el botón Acreditar (que pide la cuenta).',
       'Si se rechaza, marcalo como "rechazado" (no acredita nada).'],
     atajo:{ page:'cheques', label:'Abrir Cheques' } },
+  { id:'remitos_internos', terms:['remito','remitos','remito interno','remitos internos','sacar insumo del deposito','llevar insumo al campo','insumo al campo','transferir mercaderia','transferencia entre depositos','mover mercaderia','pasar mercaderia de un deposito a otro','remito de traslado','en transito','descontar del deposito','remito imprimible','firma de recepcion'],
+    titulo:'Remitos internos (mover mercadería sin venta)',
+    pasos:[
+      'Andá a Stock y depósitos → Remitos internos y tocá "+ Nuevo remito". Sirven para mover mercadería SIN venta ni factura (solo mueve stock).',
+      'TIPO A — Salida de insumo al campo: elegís el depósito de origen y los productos. Al emitir, el stock SALE del depósito y el remito queda "en tránsito"; todavía NO se suma como costo a la campaña.',
+      'Cuando confirmás que se usó, tocás "Confirmar uso", elegís la campaña y la fecha, y recién ahí se imputa como uso de insumo (igual que la lógica de cheque depositado≠acreditado).',
+      'TIPO B — Transferencia entre depósitos: elegís origen y destino y los productos. Al emitir descuenta del origen (en tránsito); cuando llega, tocás "Confirmar recepción" y ahí suma al depósito destino.',
+      'Todo remito se puede imprimir/PDF (encabezado de la empresa, detalle y firmas de entrega y recepción conforme) y se puede Anular (revierte los movimientos de stock y el uso en la campaña).'],
+    atajo:{ page:'remitosInternos', label:'Abrir Remitos internos' } },
+  { id:'liquidacion_animales_retenciones', terms:['liquidacion de animales','liquidacion animales','retenciones','retencion','gastos e impuestos','neto a cobrar animales','total tributo','se descuenta del total','descontar retenciones','liquidacion hacienda'],
+    titulo:'Liquidación de animales: retenciones y neto a cobrar',
+    pasos:[
+      'En Ventas → Liquidaciones animales, cargá el campo, comprador, comprobante/CAE y los renglones (categoría, cabezas, kg, $/kg, IVA).',
+      'El campo "Retenciones y gastos (se restan)" es para las retenciones (ganancias, IIBB, etc.) que el comprador retiene y paga aparte: se DESCUENTAN del neto a cobrar.',
+      'El Neto a cobrar = Bruto + IVA − Retenciones. Se sugiere solo y lo podés ajustar a mano (si lo editás, ya no se te pisa).',
+      'Al guardar, descuenta las cabezas del stock real y del declarado SENASA del campo, y arma la cuenta a cobrar por el neto. Al eliminar la liquidación se revierte todo.'],
+    atajo:{ page:'liquidacionesHacienda', label:'Abrir Liquidaciones animales' } },
 ];
 function _esPregunta(t){
   return /(^|\s)(como|donde|cuando|cual|cuales|que es|para que|se puede|puedo|podes|podés|puedes|necesito|quiero saber|me explicas|explicame|ayuda|no se como|no entiendo|donde cargo|donde se|donde esta)\b/.test(t) || /\?/.test(t);
@@ -8602,7 +8619,7 @@ function _esPedidoAyudaGeneral(t){
 }
 // Menú de capacidades del asistente.
 function _menuAyuda(){
-  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Costo de hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?"\n\nEscribí tu consulta y arrancamos 💪';
+  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Costo de hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n\nEscribí tu consulta y arrancamos 💪';
 }
 // Arma el texto de la respuesta de ayuda (paso a paso).
 function _textoAyuda(e){
