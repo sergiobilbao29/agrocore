@@ -1022,6 +1022,7 @@ const MODULES = [
   // ===== STOCK Y DEPÓSITOS =====
   { id:'stock',         label:'Stock',                icon:'📦', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'movimientos',   label:'Movimientos',          icon:'🔁', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'remitosInternos',label:'Remitos internos',    icon:'📤', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'cerealeras',    label:'Cerealeras / Depósitos',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
@@ -2566,6 +2567,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'13/08/2026',
+      titulo:'🐄 v2.86.0 — Liquidación de animales: las retenciones se restan del neto',
+      desc:'En <b>Liquidaciones de animales</b>, el campo <b>Gastos e impuestos</b> pasó a llamarse <b>Retenciones y gastos (se restan)</b> y ahora se <b>descuenta</b> del neto a cobrar en vez de sumarse. Estas son las <b>retenciones</b> (ganancias, IIBB, etc.) que el comprador retiene y paga aparte, así que el <b>Neto a cobrar = Bruto + IVA − Retenciones</b>. Si editás el neto a mano, ya no se te pisa al tocar otro campo. Ejemplo: bruto 24.808.000 + IVA 2.604.840 − retenciones 496.160 = <b>26.916.680</b> a cobrar.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'13/08/2026',
+      titulo:'📤 v2.85.0 — Remitos internos: insumo al campo y transferencias entre depósitos',
+      desc:'Nuevo módulo en <b>Stock y depósitos → Remitos internos</b> para mover mercadería <b>sin venta</b>. <b>(1) Salida de insumo al campo:</b> hacés el remito eligiendo el depósito de origen y los productos; el stock <b>sale del depósito al emitir</b> y el remito queda <b>"en tránsito"</b>. Cuando confirmás <b>"sí se usó"</b>, recién ahí se <b>imputa a la campaña</b> como uso de insumo (igual que la lógica de cheques depositado≠acreditado). <b>(2) Transferencia entre depósitos:</b> origen → destino con detalle de cantidades; descuenta del origen al emitir y, al <b>confirmar la recepción</b>, suma al destino. Todo remito se puede <b>imprimir/PDF</b> con encabezado de la empresa, detalle y <b>firmas de entrega y recepción conforme</b>, y se puede <b>anular</b> (revierte los movimientos de stock y el uso en la campaña).' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'13/08/2026',
+      titulo:'📋 v2.84.0 — Reporte diario de saldos para dueños + cargar varios días de empleado',
+      desc:'Dos cosas. <b>(1) Reporte para dueños:</b> en <b>Tesorería → Bancos</b>, botón nuevo <b>📋 Reporte para dueños</b>. Arma automáticamente el mensaje diario con el <b>saldo de cada cuenta de todas las empresas del grupo</b> ("Hay saldo disponible de $ …" / "Hay saldo negativo de -$ …"), con la <b>fecha en texto</b> (ej: "Jueves 13/08"), el <b>total disponible</b> y un espacio para las <b>aclaraciones (DIF)</b>. Elegís qué cuentas incluir y lo <b>copiás</b> o lo <b>enviás por WhatsApp</b> con un clic. <b>(2) Empleados — Cargar varios:</b> ahora cada fila tiene su propia <b>fecha</b> y, al elegir una categoría <b>por día</b> (ej: "día no trabajado"), el sistema <b>autocompleta el precio del día</b> (jornal) igual que al cargar un movimiento suelto.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'12/08/2026',
       titulo:'🤖 v2.83.0 — El asistente ya sabe todo lo nuevo',
       desc:'Le enseñamos al <b>asistente</b> las funciones nuevas para que te explique cómo se usan: <b>Costo de hacienda</b> (costo por kg de carne), <b>campañas forrajeras y cortes/rollos</b>, <b>Activos y maquinaria</b> (mantenimiento y alertas), <b>Balance Patrimonial</b>, <b>vender/descontar cheques</b>, <b>depositar vs acreditar</b> un cheque y <b>pagar con un producto (en especie)</b> o con varios medios. Preguntale, por ejemplo, "¿cómo calculo el costo por kg de carne?" o "¿cómo vendo cheques?".' },
@@ -20326,9 +20336,10 @@ function empMovMultiForm(){
       <div class="overflow-auto" style="max-height:52vh">
         <table class="w-full text-sm">
           <thead class="text-xs uppercase text-slate-500"><tr>
-            <th class="text-left p-1" style="width:20%">Tipo</th>
-            <th class="text-left p-1" style="width:26%">Categoría</th>
-            <th class="text-left p-1" style="width:16%">Monto</th>
+            <th class="text-left p-1" style="width:17%">Tipo</th>
+            <th class="text-left p-1" style="width:24%">Categoría</th>
+            <th class="text-left p-1" style="width:16%">Fecha</th>
+            <th class="text-left p-1" style="width:14%">Monto</th>
             <th class="text-left p-1">Concepto</th>
             <th></th>
           </tr></thead>
@@ -20346,17 +20357,34 @@ function empMovMultiForm(){
 }
 function empMovMultiRowHTML(){
   const tipo='gasto';
+  const fdef = (document.getElementById('mm-fecha')?.value) || new Date().toISOString().slice(0,10);
   return `<tr data-mm-row class="border-t border-slate-100">
     <td class="p-1"><select class="input text-sm" data-mm-tipo onchange="empMovMultiTipoChange(this)">
       <option value="gasto">Gasto (resta)</option><option value="ganancia">Ganancia (suma)</option></select></td>
-    <td class="p-1"><select class="input text-sm" data-mm-cat>${empMovCatOptions(tipo,'')}</select></td>
+    <td class="p-1"><select class="input text-sm" data-mm-cat onchange="empMovMultiCatChange(this)">${empMovCatOptions(tipo,'')}</select></td>
+    <td class="p-1"><input class="input text-sm" type="date" data-mm-fecha value="${fdef}"/></td>
     <td class="p-1"><input class="input text-sm text-right" type="number" step="0.01" min="0" data-mm-monto placeholder="0"/></td>
-    <td class="p-1"><input class="input text-sm" data-mm-con placeholder="Ej: adelanto, zapatillas…"/></td>
+    <td class="p-1"><input class="input text-sm" data-mm-con placeholder="Ej: día no trabajado, adelanto…"/></td>
     <td class="p-1 text-right"><button type="button" class="btn btn-ghost text-red-600 text-xs" title="Quitar fila" onclick="this.closest('tr').remove()">×</button></td>
   </tr>`;
 }
-function empMovMultiAddRow(){ const tb=document.getElementById('mm-rows'); if(tb) tb.insertAdjacentHTML('beforeend', empMovMultiRowHTML()); }
-function empMovMultiTipoChange(selTipo){ const row=selTipo.closest('[data-mm-row]'); const catSel=row?.querySelector('[data-mm-cat]'); if(catSel) catSel.innerHTML=empMovCatOptions(selTipo.value,''); }
+function empMovMultiAddRow(){ const tb=document.getElementById('mm-rows'); if(tb){ tb.insertAdjacentHTML('beforeend', empMovMultiRowHTML()); const last=tb.lastElementChild?.querySelector('[data-mm-cat]'); if(last) empMovMultiCatChange(last); } }
+function empMovMultiTipoChange(selTipo){ const row=selTipo.closest('[data-mm-row]'); const catSel=row?.querySelector('[data-mm-cat]'); if(catSel){ catSel.innerHTML=empMovCatOptions(selTipo.value,''); empMovMultiCatChange(catSel); } }
+// Al elegir una categoría "por día" (con precio por día cargado en el empleado),
+// autocompletamos el monto de la fila con el jornal (1 día) y sugerimos el concepto.
+function empMovMultiCatChange(sel){
+  const row=sel.closest('[data-mm-row]'); if(!row) return;
+  const cod=sel.value||''; const opt=sel.selectedOptions?.[0];
+  const cat=(state.cache.catPlanilla||[]).find(c=>c.codigo===cod);
+  const modo=cat?.modo||opt?.dataset?.modo||((cod==='horas'||cod==='dias')?'cant':'monto');
+  const unidad=cat?.unidad||opt?.dataset?.unidad||(cod==='dias'?'días':'');
+  const jornal=Number(state.empFicha?.emp?.jornalDiario||0);
+  const montoEl=row.querySelector('[data-mm-monto]'); const conEl=row.querySelector('[data-mm-con]');
+  if(modo==='cant' && /d[ií]a/i.test(unidad||'') && jornal>0 && montoEl && !Number(montoEl.value)){
+    montoEl.value=jornal;
+    if(conEl && !conEl.value.trim()){ const lbl=(opt?.text||'Día').replace(/\s*\(.*\)\s*$/,'').trim(); conEl.value=lbl; }
+  }
+}
 async function empMovMultiSave(){
   const empId=state.empFichaId;
   const fecha=document.getElementById('mm-fecha')?.value;
@@ -20375,7 +20403,17 @@ async function empMovMultiSave(){
     if(!concepto) return toast('Falta el concepto en alguna fila','warn');
     const catDef=(state.cache.catPlanilla||[]).find(c=>c.codigo===cod);
     const unidad=catDef?.unidad||opt?.dataset?.unidad||null;
-    items.push({ fecha, tipo, categoria:cod, concepto, monto, observaciones:null, unidad: (catDef?.modo||opt?.dataset?.modo)==='cant'?unidad:null });
+    const modo=(catDef?.modo||opt?.dataset?.modo);
+    const esCant = modo==='cant';
+    const fechaRow = r.querySelector('[data-mm-fecha]')?.value || fecha;
+    // Para categorías por día: si hay precio por día, mandamos cantidad (días) y valor unitario,
+    // así la planilla lo cuenta como días (igual que en el alta individual).
+    let cantidad=null, valorUnitario=null;
+    if (esCant && /d[ií]a/i.test(unidad||'')) {
+      const jornal=Number(state.empFicha?.emp?.jornalDiario||0);
+      if (jornal>0) { valorUnitario=jornal; cantidad=Math.round((monto/jornal)*100)/100; }
+    }
+    items.push({ fecha: fechaRow, tipo, categoria:cod, concepto, monto, observaciones:null, unidad: esCant?unidad:null, cantidad, valorUnitario });
   }
   if(!items.length) return toast('Cargá al menos una fila con monto y concepto','warn');
   try{
@@ -26721,8 +26759,8 @@ async function liqHacForm(prefill=null){
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3 p-3 bg-slate-50 rounded-lg border">
         <div><label class="label text-xs">Bruto</label><div id="lqh-r-bruto" class="text-base font-bold">$ 0,00</div></div>
         <div><label class="label text-xs">IVA sobre bruto</label><div id="lqh-r-iva" class="text-base font-bold text-slate-600">$ 0,00</div></div>
-        <div><label class="label text-xs">Gastos e impuestos</label><input id="lqh-gastos" type="number" step="0.01" class="input text-right" value="${p.gastosMasIva!=null?p.gastosMasIva:0}" oninput="liqHacRecalc()"/></div>
-        <div><label class="label text-xs">NETO A COBRAR *</label><input id="lqh-neto" type="number" step="0.01" class="input text-right font-bold text-green-700" value="${p.neto!=null?p.neto:''}"/></div>
+        <div><label class="label text-xs" title="Retenciones y gastos que descuenta el comprador (ganancias, IIBB, etc.). Se RESTAN del neto a cobrar.">Retenciones y gastos <span class="text-slate-400 font-normal">(se restan)</span></label><input id="lqh-gastos" type="number" step="0.01" class="input text-right" value="${p.gastosMasIva!=null?p.gastosMasIva:0}" oninput="liqHacRecalc()"/></div>
+        <div><label class="label text-xs">NETO A COBRAR *</label><input id="lqh-neto" type="number" step="0.01" class="input text-right font-bold text-green-700" value="${p.neto!=null?p.neto:''}" oninput="this.dataset.auto='0'"/></div>
       </div>
       <div class="grid grid-cols-2 gap-3 items-center">
         <div><label class="label">Fecha estimada de cobro</label><input id="lqh-cobro" type="date" class="input" value="${p.fechaCobroEst?String(p.fechaCobroEst).slice(0,10):(p.caeVto?String(p.caeVto).slice(0,10):'')}"/></div>
@@ -26764,11 +26802,11 @@ function liqHacRecalc(){
   const setT=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
   setT('lqh-r-bruto', fmt$(bruto));
   setT('lqh-r-iva', fmt$(iva));
-  // Sugerir neto si está vacío: bruto + iva + gastos
+  // Neto a cobrar = bruto + IVA − retenciones/gastos (el comprador las retiene y las paga aparte).
   const netoEl=document.getElementById('lqh-neto');
   if (netoEl && (netoEl.value===''||netoEl.dataset.auto==='1')){
     const gastos=Number(document.getElementById('lqh-gastos')?.value||0);
-    netoEl.value=(Math.round((bruto+iva+gastos)*100)/100); netoEl.dataset.auto='1';
+    netoEl.value=(Math.round((bruto+iva-gastos)*100)/100); netoEl.dataset.auto='1';
   }
 }
 async function liqHacSave(){
@@ -27031,7 +27069,7 @@ async function liqHacVer(id){
         </dl>
         <table class="data mb-2"><thead><tr><th>Categoría</th><th class="text-right">Cabezas</th><th class="text-right">Kg</th><th class="text-right">$/kg</th><th class="text-right">Bruto</th></tr></thead>
         <tbody>${(l.renglones||[]).map(r=>`<tr><td>${esc(r.categoria)}${r.raza?` <span class="text-[11px] text-slate-400">${esc(r.raza)}</span>`:''}</td><td class="text-right">${fmtN(r.cabezas)}</td><td class="text-right">${fmtN(r.kilos)}</td><td class="text-right">${fmt$(r.precioKg)}</td><td class="text-right">${fmt$(r.bruto)}</td></tr>`).join('')}</tbody></table>
-        <div class="text-xs text-slate-500">Bruto ${fmt$(l.brutoTotal)} · IVA ${fmt$(l.ivaBruto)} · Gastos ${fmt$(l.gastosTotal)}</div>`,
+        <div class="text-xs text-slate-500">Bruto ${fmt$(l.brutoTotal)} · IVA ${fmt$(l.ivaBruto)} · Retenciones ${fmt$(l.gastosTotal)}</div>`,
       footer:`${can('ventas:delete')?`<button class="btn btn-ghost text-red-600" onclick='liqHacDel(${JSON.stringify(l.id)})'>🗑️ Eliminar</button>`:''}
               ${!l.cobrado && can('ventas:update')?`<button class="btn btn-secondary" onclick='liqHacCobrado(${JSON.stringify(l.id)})'>✅ Marcar cobrada</button>`:''}
               <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
@@ -28192,6 +28230,281 @@ const BANCO_TIPOS = {
   otro:               { lbl:'Otro',               sign:0, icon:'•'  },
 };
 
+// ══════════════════════════════════════════════════════════════════════════════
+// REMITOS INTERNOS — salida de insumo al campo (en tránsito) y transferencia
+// de mercadería entre depósitos (con recepción). Sin venta ni facturación.
+// ══════════════════════════════════════════════════════════════════════════════
+const REM_ESTADOS = {
+  en_transito: { label: 'En tránsito', cls: 'bg-amber-100 text-amber-800 border-amber-300' },
+  usado:       { label: 'Usado en campaña', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
+  recibido:    { label: 'Recibido', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
+  anulado:     { label: 'Anulado', cls: 'bg-slate-100 text-slate-500 border-slate-300 line-through' },
+};
+
+pages.remitosInternos = async function() {
+  setHeader('Remitos internos', 'Salida de insumo al campo y transferencias de mercadería entre depósitos');
+  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('remitosInternos','Remitos internos'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let remitos = [];
+  try { remitos = (await api('/api/remitos-internos')).data || []; } catch (e) { return toast(e.message,'error'); }
+  state._remitos = remitos;
+  // Cache para el form.
+  if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
+  if (!state.cache.productos) { try { state.cache.productos = (await api('/api/productos')).data || []; } catch { state.cache.productos = []; } }
+  if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
+  const f = state._remFiltro || 'todos';
+  const vis = remitos.filter(r => f==='todos' ? true : f==='pendientes' ? r.estado==='en_transito' : r.tipo===f);
+  const nEnTransito = remitos.filter(r => r.estado==='en_transito').length;
+  const chip = (k,txt)=>`<button class="btn ${f===k?'btn-primary':'btn-secondary'} text-xs" onclick="state._remFiltro='${k}'; pages.remitosInternos()">${txt}</button>`;
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="flex items-center gap-1 flex-wrap">
+        ${chip('todos','Todos')}${chip('pendientes','⏳ En tránsito')}${chip('a_campo','🌾 Al campo')}${chip('entre_depositos','🔁 Entre depósitos')}
+      </div>
+      ${can('stock:create')?`<button class="btn btn-primary" onclick="remForm()">+ Nuevo remito</button>`:''}
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Remitos</div><div class="text-2xl font-bold mt-1">${remitos.length}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">En tránsito (pendientes)</div><div class="text-2xl font-bold mt-1 ${nEnTransito?'text-amber-700':''}">${nEnTransito}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Mostrando</div><div class="text-2xl font-bold mt-1">${vis.length}</div></div>
+    </div>
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="text-left text-slate-500 border-b">
+          <th class="p-2">#</th><th class="p-2">Fecha</th><th class="p-2">Tipo</th><th class="p-2">Origen → Destino</th><th class="p-2">Ítems</th><th class="p-2">Estado</th><th class="p-2"></th>
+        </tr></thead>
+        <tbody>
+          ${vis.map(r => {
+            const est = REM_ESTADOS[r.estado] || { label:r.estado, cls:'bg-slate-100' };
+            const destino = r.tipo==='entre_depositos' ? (r.destinoNombre||'—') : (r.campanaNombre || r.destinoTexto || 'Campo');
+            const nItems = (r.renglones||[]).length;
+            const acc = [];
+            if (r.estado==='en_transito' && can('stock:update')) {
+              if (r.tipo==='a_campo') acc.push(`<button class="btn btn-secondary text-xs" onclick="remConfirmarUso('${r.id}')">✔️ Confirmar uso</button>`);
+              else acc.push(`<button class="btn btn-secondary text-xs" onclick="remConfirmarRecepcion('${r.id}')">📥 Confirmar recepción</button>`);
+            }
+            acc.push(`<button class="btn btn-ghost text-xs" onclick="remImprimir('${r.id}')">🖨️</button>`);
+            if (r.estado!=='anulado' && can('stock:update')) acc.push(`<button class="btn btn-ghost text-xs text-red-600" onclick="remAnular('${r.id}')">Anular</button>`);
+            return `<tr class="border-b hover:bg-slate-50">
+              <td class="p-2 font-mono">${r.numero!=null?String(r.numero).padStart(5,'0'):'—'}</td>
+              <td class="p-2 whitespace-nowrap">${fmtFecha(r.fecha)}</td>
+              <td class="p-2">${r.tipo==='a_campo'?'🌾 Al campo':'🔁 Entre depósitos'}</td>
+              <td class="p-2"><span class="text-slate-600">${esc(r.origenNombre||'Mi campo')}</span> <span class="text-slate-400">→</span> ${esc(destino)}</td>
+              <td class="p-2">${nItems}</td>
+              <td class="p-2"><span class="badge text-[10px] ${est.cls}">${est.label}</span></td>
+              <td class="p-2"><div class="flex items-center gap-1 justify-end flex-wrap">${acc.join('')}</div></td>
+            </tr>`;
+          }).join('') || `<tr><td colspan="7" class="p-6 text-center text-slate-400">Sin remitos. Creá el primero con "+ Nuevo remito".</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+};
+
+function remForm() {
+  const deps = (state.cache.depositos || []).filter(d => d.activo !== false);
+  const camps = (state.cache.campanas || []).filter(c => c.estado !== 'cerrada');
+  const hoy = new Date().toISOString().slice(0,10);
+  const optDeps = (sel) => deps.map(d => `<option value="${d.id}" ${sel===d.id?'selected':''}>${esc(d.nombre)}</option>`).join('');
+  const optCamps = camps.map(c => `<option value="${c.id}">${esc(c.nombre || `${c.cultivo||''} ${c.lote?.nombre||c.loteNombre||''}`.trim() || 'Campaña')}</option>`).join('');
+  openModal({
+    title: '📤 Nuevo remito interno',
+    size: 'lg',
+    body: `
+      <div class="mb-3">
+        <label class="label">Tipo de remito</label>
+        <div class="flex gap-2 flex-wrap">
+          <label class="flex-1 min-w-[220px] border border-slate-200 rounded p-2 cursor-pointer flex items-start gap-2">
+            <input type="radio" name="rem-tipo" value="a_campo" checked onchange="remTipoChange()"/>
+            <span><b>🌾 Salida de insumo al campo</b><div class="text-[11px] text-slate-500">Descuenta del depósito ahora (en tránsito). Se imputa a la campaña al confirmar el uso.</div></span>
+          </label>
+          <label class="flex-1 min-w-[220px] border border-slate-200 rounded p-2 cursor-pointer flex items-start gap-2">
+            <input type="radio" name="rem-tipo" value="entre_depositos" onchange="remTipoChange()"/>
+            <span><b>🔁 Transferencia entre depósitos</b><div class="text-[11px] text-slate-500">Descuenta del origen ahora. Suma al destino al confirmar la recepción.</div></span>
+          </label>
+        </div>
+      </div>
+      <div class="grid md:grid-cols-2 gap-3">
+        <div><label class="label">Fecha</label><input type="date" id="rem-fecha" class="input" value="${hoy}"/></div>
+        <div><label class="label">Depósito de origen</label>
+          <select id="rem-origen" class="input"><option value="">🌾 Mi campo</option>${optDeps()}</select></div>
+        <div id="rem-destino-dep-wrap" style="display:none"><label class="label">Depósito destino</label>
+          <select id="rem-destino-dep" class="input"><option value="">— Elegir —</option>${optDeps()}</select></div>
+        <div id="rem-campana-wrap"><label class="label">Campaña destino (opcional)</label>
+          <select id="rem-campana" class="input"><option value="">— Sin campaña (elegir al confirmar) —</option>${optCamps}</select></div>
+        <div id="rem-destinotexto-wrap"><label class="label">Destino / referencia (opcional)</label>
+          <input id="rem-destinotexto" class="input" placeholder="Ej: Lote 3 · potrero · encargado"/></div>
+        <div><label class="label">Transportista / entregado por (opcional)</label>
+          <input id="rem-entregado" class="input" placeholder="Quién lleva la mercadería"/></div>
+      </div>
+      <div class="mt-4">
+        <div class="flex items-center justify-between mb-1">
+          <label class="label mb-0">Productos</label>
+          <button class="btn btn-secondary text-xs" onclick="remAddRow()">+ Agregar producto</button>
+        </div>
+        <table class="w-full text-sm">
+          <thead><tr class="text-left text-slate-500"><th class="p-1" style="width:52%">Producto</th><th class="p-1" style="width:22%">Cantidad</th><th class="p-1">Unidad</th><th></th></tr></thead>
+          <tbody id="rem-rows"></tbody>
+        </table>
+      </div>
+      <label class="label mt-3">Observaciones (opcional)</label>
+      <input id="rem-obs" class="input" placeholder="Notas del remito"/>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="remSave()">Emitir remito</button>`,
+  });
+  remAddRow();
+  remTipoChange();
+}
+
+function remTipoChange() {
+  const t = document.querySelector('input[name="rem-tipo"]:checked')?.value || 'a_campo';
+  const show = (id, on) => { const e = document.getElementById(id); if (e) e.style.display = on ? '' : 'none'; };
+  show('rem-destino-dep-wrap', t === 'entre_depositos');
+  show('rem-campana-wrap', t === 'a_campo');
+  show('rem-destinotexto-wrap', t === 'a_campo');
+}
+
+function remRowHTML() {
+  const prods = (state.cache.productos || []).filter(p => p.activo !== false);
+  const opts = prods.map(p => `<option value="${p.id}" data-unidad="${esc(p.unidad||'')}">${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join('');
+  return `<tr>
+    <td class="p-1"><select class="input text-sm" data-rem-prod onchange="remRowUnidad(this)"><option value="">— Elegir —</option>${opts}</select></td>
+    <td class="p-1"><input class="input text-sm" type="number" step="any" min="0" data-rem-cant placeholder="0"/></td>
+    <td class="p-1"><input class="input text-sm bg-slate-50" data-rem-unidad readonly placeholder="u"/></td>
+    <td class="p-1"><button class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove()">✕</button></td>
+  </tr>`;
+}
+function remAddRow() { const tb = document.getElementById('rem-rows'); if (tb) tb.insertAdjacentHTML('beforeend', remRowHTML()); }
+function remRowUnidad(sel) {
+  const u = sel.selectedOptions[0]?.getAttribute('data-unidad') || '';
+  const row = sel.closest('tr'); const uEl = row?.querySelector('[data-rem-unidad]');
+  if (uEl) uEl.value = u;
+}
+
+async function remSave() {
+  const tipo = document.querySelector('input[name="rem-tipo"]:checked')?.value || 'a_campo';
+  const fecha = document.getElementById('rem-fecha')?.value;
+  const depositoOrigenId = document.getElementById('rem-origen')?.value || null;
+  const depositoDestinoId = document.getElementById('rem-destino-dep')?.value || null;
+  const campanaId = document.getElementById('rem-campana')?.value || null;
+  const destinoTexto = document.getElementById('rem-destinotexto')?.value?.trim() || null;
+  const entregadoPor = document.getElementById('rem-entregado')?.value?.trim() || null;
+  const observaciones = document.getElementById('rem-obs')?.value?.trim() || null;
+  if (!fecha) return toast('Elegí la fecha','error');
+  if (tipo === 'entre_depositos' && !depositoDestinoId) return toast('Elegí el depósito destino','error');
+  if (tipo === 'entre_depositos' && (depositoOrigenId||null) === depositoDestinoId) return toast('El origen y el destino no pueden ser iguales','error');
+  const renglones = [];
+  document.querySelectorAll('#rem-rows tr').forEach(tr => {
+    const pid = tr.querySelector('[data-rem-prod]')?.value;
+    const cant = Number(tr.querySelector('[data-rem-cant]')?.value);
+    if (pid && cant > 0) renglones.push({ productoId: pid, cantidad: cant });
+  });
+  if (!renglones.length) return toast('Cargá al menos un producto con cantidad','error');
+  try {
+    await api('/api/remitos-internos', { method:'POST', body: JSON.stringify({
+      fecha, tipo, depositoOrigenId, depositoDestinoId,
+      campanaId: tipo==='a_campo' ? campanaId : null,
+      destinoTexto: tipo==='a_campo' ? destinoTexto : null,
+      entregadoPor, observaciones, renglones,
+    }) });
+    toast('Remito emitido','success'); closeModal();
+    delete state.cache.stockActual;
+    pages.remitosInternos();
+  } catch (e) { toast(e.message,'error'); }
+}
+
+function remConfirmarUso(id) {
+  const r = (state._remitos || []).find(x => x.id === id); if (!r) return;
+  const camps = (state.cache.campanas || []).filter(c => c.estado !== 'cerrada');
+  const optCamps = camps.map(c => `<option value="${c.id}" ${r.campanaId===c.id?'selected':''}>${esc(c.nombre || `${c.cultivo||''} ${c.lote?.nombre||c.loteNombre||''}`.trim() || 'Campaña')}</option>`).join('');
+  const hoy = new Date().toISOString().slice(0,10);
+  openModal2({
+    title: '✔️ Confirmar uso en campaña',
+    body: `<p class="text-sm text-slate-600 mb-3">Confirmá que el insumo del remito #${String(r.numero).padStart(5,'0')} se usó. Se va a imputar a la campaña como uso de insumo (el stock ya salió del depósito al emitir).</p>
+      <label class="label">Campaña</label>
+      <select id="rem-uso-camp" class="input"><option value="">— Elegir —</option>${optCamps}</select>
+      <label class="label mt-2">Fecha de uso</label>
+      <input type="date" id="rem-uso-fecha" class="input" value="${hoy}"/>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button>
+             <button class="btn btn-primary" onclick="remConfirmarUsoGo('${id}')">Confirmar</button>`,
+  });
+}
+async function remConfirmarUsoGo(id) {
+  const campanaId = document.getElementById('rem-uso-camp')?.value;
+  const fecha = document.getElementById('rem-uso-fecha')?.value;
+  if (!campanaId) return toast('Elegí la campaña','error');
+  try { await api(`/api/remitos-internos/${id}/confirmar-uso`, { method:'POST', body: JSON.stringify({ campanaId, fecha }) });
+    toast('Uso confirmado e imputado a la campaña','success'); closeModal2(); pages.remitosInternos();
+  } catch (e) { toast(e.message,'error'); }
+}
+
+function remConfirmarRecepcion(id) {
+  const r = (state._remitos || []).find(x => x.id === id); if (!r) return;
+  const hoy = new Date().toISOString().slice(0,10);
+  openModal2({
+    title: '📥 Confirmar recepción',
+    body: `<p class="text-sm text-slate-600 mb-3">Confirmá que la mercadería del remito #${String(r.numero).padStart(5,'0')} llegó a <b>${esc(r.destinoNombre||'destino')}</b>. Se va a sumar al stock del depósito destino.</p>
+      <label class="label">Fecha de recepción</label>
+      <input type="date" id="rem-rec-fecha" class="input" value="${hoy}"/>
+      <label class="label mt-2">Recibido por (opcional)</label>
+      <input id="rem-rec-por" class="input" placeholder="Nombre de quien recibe"/>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button>
+             <button class="btn btn-primary" onclick="remConfirmarRecepcionGo('${id}')">Confirmar recepción</button>`,
+  });
+}
+async function remConfirmarRecepcionGo(id) {
+  const fecha = document.getElementById('rem-rec-fecha')?.value;
+  const recibidoPor = document.getElementById('rem-rec-por')?.value?.trim() || null;
+  try { await api(`/api/remitos-internos/${id}/confirmar-recepcion`, { method:'POST', body: JSON.stringify({ fecha, recibidoPor }) });
+    toast('Recepción confirmada','success'); closeModal2(); delete state.cache.stockActual; pages.remitosInternos();
+  } catch (e) { toast(e.message,'error'); }
+}
+
+async function remAnular(id) {
+  if (!confirm('¿Anular el remito? Se revierten los movimientos de stock (y el uso en la campaña, si estaba imputado).')) return;
+  try { await api(`/api/remitos-internos/${id}/anular`, { method:'POST', body: JSON.stringify({}) });
+    toast('Remito anulado','success'); delete state.cache.stockActual; pages.remitosInternos();
+  } catch (e) { toast(e.message,'error'); }
+}
+
+function remImprimir(id) {
+  const r = (state._remitos || []).find(x => x.id === id); if (!r) return;
+  const emp = (typeof _opEmpresa === 'function') ? _opEmpresa() : { nombre:'Empresa', cuit:'', localidad:'' };
+  const destino = r.tipo==='entre_depositos' ? (r.destinoNombre||'—') : (r.campanaNombre || r.destinoTexto || 'Campo');
+  const filas = (r.renglones||[]).map(x => `<tr><td style="border:1px solid #cbd5e1;padding:6px 8px">${esc(x.nombre)}</td><td style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right">${fmtN(x.cantidad)}</td><td style="border:1px solid #cbd5e1;padding:6px 8px">${esc(x.unidad||'')}</td></tr>`).join('');
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#0f172a;max-width:190mm;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #15803d;padding-bottom:10px;margin-bottom:14px">
+        <div><div style="font-size:20px;font-weight:bold">${esc(emp.nombre)}</div>
+          <div style="font-size:12px;color:#475569">${emp.cuit?('CUIT '+esc(emp.cuit)):''}${emp.localidad?(' · '+esc(emp.localidad)):''}</div></div>
+        <div style="text-align:right"><div style="font-size:16px;font-weight:bold">REMITO INTERNO</div>
+          <div style="font-size:13px">N° ${r.numero!=null?String(r.numero).padStart(5,'0'):'—'}</div>
+          <div style="font-size:12px;color:#475569">${fmtFecha(r.fecha)}</div>
+          <div style="font-size:11px;color:#64748b;text-transform:uppercase;margin-top:2px">DOCUMENTO NO VÁLIDO COMO FACTURA</div></div>
+      </div>
+      <table style="width:100%;font-size:13px;margin-bottom:14px"><tr>
+        <td style="padding:2px 0"><b>Tipo:</b> ${r.tipo==='a_campo'?'Salida de insumo al campo':'Transferencia entre depósitos'}</td></tr>
+        <tr><td style="padding:2px 0"><b>Origen:</b> ${esc(r.origenNombre||'Mi campo')} &nbsp;&nbsp; <b>Destino:</b> ${esc(destino)}</td></tr>
+        ${r.entregadoPor?`<tr><td style="padding:2px 0"><b>Entregado por:</b> ${esc(r.entregadoPor)}</td></tr>`:''}
+        ${r.observaciones?`<tr><td style="padding:2px 0"><b>Obs:</b> ${esc(r.observaciones)}</td></tr>`:''}
+      </table>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:#f1f5f9">
+          <th style="border:1px solid #cbd5e1;padding:6px 8px;text-align:left">Producto</th>
+          <th style="border:1px solid #cbd5e1;padding:6px 8px;text-align:right">Cantidad</th>
+          <th style="border:1px solid #cbd5e1;padding:6px 8px;text-align:left">Unidad</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;margin-top:60px;font-size:12px">
+        <div style="text-align:center;width:45%"><div style="border-top:1px solid #64748b;padding-top:4px">Firma y aclaración — Entrega</div></div>
+        <div style="text-align:center;width:45%"><div style="border-top:1px solid #64748b;padding-top:4px">Firma y aclaración — Recepción conforme</div></div>
+      </div>
+    </div>`;
+  const st = '<style>@page{size:A4;margin:12mm} body{margin:0}</style>';
+  const w = window.open('','_blank','width=840,height=980'); if (!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write('<html><head><title>Remito interno '+(r.numero!=null?String(r.numero).padStart(5,'0'):'')+'</title><meta charset="utf-8">'+st+'</head><body>'+html+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},350);
+}
+
 pages.bancos = async function() {
   setHeader('Bancos', 'Cuentas bancarias y movimientos de depósitos, transferencias, cheques y créditos');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('bancos','Bancos'); return; }
@@ -28219,7 +28532,10 @@ pages.bancos = async function() {
         ${hayBilleteras?`<div class="flex gap-1">${chip('todas','Todas')}${chip('banco','🏛️ Bancos')}${chip('billetera','📲 Billeteras')}</div>`:''}
         <label class="text-xs text-slate-600 flex items-center gap-1 ml-1 cursor-pointer" title="Ocultar cuentas marcadas en desuso"><input type="checkbox" ${soloActivas?'checked':''} onchange="state._bcoSoloActivas=this.checked; pages.bancos()"/> Solo activas</label>
       </div>
-      ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoCuentaForm()">+ Nueva cuenta</button>`:''}
+      <div class="flex items-center gap-2">
+        <button class="btn btn-secondary" onclick="bcoReporteDuenos()" title="Armar el mensaje diario de saldos para enviar por WhatsApp">📋 Reporte para dueños</button>
+        ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoCuentaForm()">+ Nueva cuenta</button>`:''}
+      </div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Cuentas activas</div><div class="text-2xl font-bold mt-1">${cuentas.filter(c=>c.activo).length}</div></div>
@@ -28256,6 +28572,125 @@ pages.bancos = async function() {
     </div>
     ${bcoTarjetasSection()}`;
 };
+
+// ── Reporte diario de saldos para dueños (mensaje de WhatsApp) ────────────────
+// Arma el texto que la administración manda a los dueños con el saldo de cada
+// cuenta bancaria del grupo. Toma las cuentas de TODAS las empresas (grupo=1).
+async function bcoReporteDuenos() {
+  let cuentas = [];
+  try { cuentas = (await api('/api/banco-cuentas?grupo=1')).data || []; }
+  catch (e) { return toast(e.message, 'error'); }
+  cuentas = cuentas.filter(c => c.activo !== false);
+  if (!cuentas.length) return toast('No hay cuentas bancarias activas para reportar.', 'error');
+  // Orden: por empresa y luego por nombre/banco.
+  cuentas.sort((a, b) => (a.empresaNombre || '').localeCompare(b.empresaNombre || '') ||
+    (a.nombre || a.banco || '').localeCompare(b.nombre || b.banco || ''));
+  state._repDuenosCuentas = cuentas;
+  const hoy = new Date().toISOString().slice(0, 10);
+  // Agrupamos por empresa para el selector.
+  const porEmp = {};
+  cuentas.forEach(c => { (porEmp[c.empresaNombre || 'Sin empresa'] ||= []).push(c); });
+  const empHTML = Object.entries(porEmp).map(([emp, cs]) => `
+    <div class="mb-2">
+      <div class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">${esc(emp)}</div>
+      ${cs.map(c => `
+        <label class="flex items-center gap-2 py-0.5 cursor-pointer text-sm">
+          <input type="checkbox" class="rep-chk" value="${esc(c.id)}" checked onchange="_repDuenosGen()"/>
+          <span class="flex-1 truncate">${esc(c.nombre || c.banco)}</span>
+          <span class="text-xs font-semibold ${Number(c.saldo)>=0?'text-green-700':'text-red-700'}">${c.moneda==='USD'?'US$ '+fmtN(c.saldo):fmt$(c.saldo)}</span>
+        </label>`).join('')}
+    </div>`).join('');
+  openModal({
+    title: '📋 Reporte de saldos para dueños',
+    size: 'lg',
+    body: `
+      <div class="grid md:grid-cols-2 gap-4">
+        <div>
+          <label class="label">Fecha del reporte</label>
+          <input type="date" id="rep-fecha" class="input" value="${hoy}" onchange="_repDuenosGen()"/>
+          <div class="mt-3 flex items-center gap-3 text-xs">
+            <label class="flex items-center gap-1 cursor-pointer"><input type="checkbox" id="rep-total" checked onchange="_repDuenosGen()"/> Incluir total disponible</label>
+            <button class="btn btn-ghost text-xs" onclick="document.querySelectorAll('.rep-chk').forEach(x=>x.checked=true); _repDuenosGen()">Todas</button>
+            <button class="btn btn-ghost text-xs" onclick="document.querySelectorAll('.rep-chk').forEach(x=>x.checked=false); _repDuenosGen()">Ninguna</button>
+          </div>
+          <div class="mt-3 max-h-64 overflow-auto border border-slate-200 rounded p-2">${empHTML}</div>
+          <label class="label mt-3">Aclaraciones / DIF (opcional)</label>
+          <textarea id="rep-dif" class="input" rows="3" placeholder="Ej: la DIF de LLSP es un cheque de $500.000 que se acredita mañana…" oninput="_repDuenosGen()"></textarea>
+        </div>
+        <div>
+          <label class="label">Vista previa (se copia tal cual)</label>
+          <textarea id="rep-out" class="input font-mono text-xs" rows="16" readonly></textarea>
+        </div>
+      </div>`,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+      <button class="btn btn-secondary" onclick="_repDuenosCopiar()">📋 Copiar</button>
+      <button class="btn btn-primary" onclick="_repDuenosWhatsApp()">📲 Enviar por WhatsApp</button>`,
+  });
+  _repDuenosGen();
+}
+
+// Formatea un monto para el mensaje: "$ 1.234.567,89" o "-$ 1.234,50" / "US$ ...".
+function _repMonto(n, moneda) {
+  const sym = moneda === 'USD' ? 'US$' : '$';
+  const val = Number(n) || 0;
+  const s = Math.abs(val).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (val < 0 ? '-' + sym + ' ' : sym + ' ') + s;
+}
+
+// Día en texto: "Jueves 13/08" (TZ-safe).
+function _repDia(ymd) {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return '';
+  const dt = new Date(+m[1], +m[2] - 1, +m[3]);
+  const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+  return `${dias[dt.getDay()]} ${m[3]}/${m[2]}`;
+}
+
+// Regenera el texto del reporte según selección/fecha/DIF.
+function _repDuenosGen() {
+  const cuentas = state._repDuenosCuentas || [];
+  const ids = new Set(Array.from(document.querySelectorAll('.rep-chk:checked')).map(x => x.value));
+  const sel = cuentas.filter(c => ids.has(c.id));
+  const fecha = document.getElementById('rep-fecha')?.value || new Date().toISOString().slice(0, 10);
+  const conTotal = document.getElementById('rep-total')?.checked;
+  const dif = (document.getElementById('rep-dif')?.value || '').trim();
+  const lineas = [];
+  lineas.push(_repDia(fecha));
+  lineas.push('');
+  sel.forEach(c => {
+    const label = c.nombre || `${c.banco}${c.empresaNombre ? ' ' + c.empresaNombre : ''}`;
+    const s = Number(c.saldo) || 0;
+    const frase = s < 0 ? 'Hay saldo negativo de' : s === 0 ? 'Sin saldo:' : 'Hay saldo disponible de';
+    lineas.push(`- ${label} - ${frase} ${_repMonto(s, c.moneda)}`);
+  });
+  if (conTotal && sel.length) {
+    const totARS = sel.filter(c => (c.moneda || 'ARS') !== 'USD').reduce((a, c) => a + (Number(c.saldo) || 0), 0);
+    const totUSD = sel.filter(c => c.moneda === 'USD').reduce((a, c) => a + (Number(c.saldo) || 0), 0);
+    lineas.push('');
+    let t = `TOTAL disponible: ${_repMonto(totARS, 'ARS')}`;
+    if (totUSD) t += ` + ${_repMonto(totUSD, 'USD')}`;
+    lineas.push(t);
+  }
+  if (dif) { lineas.push('', 'DIF:', dif); }
+  const out = document.getElementById('rep-out');
+  if (out) out.value = lineas.join('\n');
+}
+
+function _repDuenosCopiar() {
+  const out = document.getElementById('rep-out');
+  if (!out) return;
+  navigator.clipboard?.writeText(out.value).then(
+    () => toast('Reporte copiado. Pegalo en WhatsApp.', 'success'),
+    () => { out.select(); document.execCommand('copy'); toast('Reporte copiado.', 'success'); }
+  );
+}
+
+function _repDuenosWhatsApp() {
+  const out = document.getElementById('rep-out');
+  if (!out) return;
+  window.open('https://wa.me/?text=' + encodeURIComponent(out.value), '_blank');
+}
 
 // Sección "Tarjetas de crédito" dentro de Bancos. Las tarjetas se guardan como
 // catálogo (tipo 'Tarjeta de crédito') y sirven como medio de pago en todo el sistema.

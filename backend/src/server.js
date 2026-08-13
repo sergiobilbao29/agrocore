@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.83.0';
+const AGROCORE_VERSION = '2.86.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6892,6 +6892,205 @@ app.post('/api/entregas-cerealera', requireCompany, requirePermission('stock:cre
       return { egreso, ingreso };
     });
     res.status(201).json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// REMITOS INTERNOS: movimientos de mercadería sin venta.
+//   tipo 'a_campo'         → salida de insumo del depósito al campo. Al emitir
+//                            descuenta del depósito (queda "en_transito"); recién
+//                            al confirmar el uso se imputa a la campaña.
+//   tipo 'entre_depositos' → transferencia entre depósitos. Al emitir descuenta
+//                            del origen; al confirmar la recepción suma al destino.
+// ============================================================
+// Número correlativo de remito interno por empresa (secuencia 'remito_interno').
+async function _tomarNumeroRemito(tx, companyId) {
+  let seq = await tx.secuenciaComprobante.findFirst({ where: { companyId, tipo: 'remito_interno' } });
+  if (!seq) seq = await tx.secuenciaComprobante.create({ data: { companyId, tipo: 'remito_interno', puntoVenta: 1, proximoNumero: 1 } });
+  const upd = await tx.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: { increment: 1 } } });
+  return upd.proximoNumero - 1;
+}
+
+app.get('/api/remitos-internos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.estado) where.estado = String(req.query.estado);
+    if (req.query.tipo) where.tipo = String(req.query.tipo);
+    const remitos = await prisma.remitoInterno.findMany({
+      where,
+      include: {
+        depositoOrigen: { select: { nombre: true } },
+        depositoDestino: { select: { nombre: true } },
+        campana: { select: { nombre: true, cultivo: true, lote: { select: { nombre: true } } } },
+        renglones: true,
+      },
+      orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }],
+    });
+    const data = remitos.map(r => ({
+      ...r,
+      origenNombre: r.depositoOrigen?.nombre || 'Mi campo',
+      destinoNombre: r.depositoDestino?.nombre || null,
+      campanaNombre: r.campana ? (r.campana.nombre || `${r.campana.cultivo || ''} ${r.campana.lote?.nombre || ''}`.trim()) : null,
+    }));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/remitos-internos', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      fecha: z.coerce.date(),
+      tipo: z.enum(['a_campo', 'entre_depositos']),
+      depositoOrigenId: z.string().nullable().optional(),   // null = campo
+      depositoDestinoId: z.string().nullable().optional(),
+      campanaId: z.string().nullable().optional(),
+      destinoTexto: z.string().nullable().optional(),
+      transportista: z.string().nullable().optional(),
+      chofer: z.string().nullable().optional(),
+      entregadoPor: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+      renglones: z.array(z.object({
+        productoId: z.string(),
+        cantidad: z.number().positive(),
+        observaciones: z.string().nullable().optional(),
+      })).min(1, 'Cargá al menos un producto'),
+    });
+    const d = schema.parse(req.body);
+    if (d.tipo === 'entre_depositos') {
+      if (!d.depositoDestinoId) return res.status(400).json({ ok: false, error: 'Elegí el depósito destino.' });
+      if ((d.depositoOrigenId || null) === d.depositoDestinoId) return res.status(400).json({ ok: false, error: 'El origen y el destino no pueden ser el mismo depósito.' });
+    }
+    // Validamos depósitos (propios o compartidos).
+    const depOk = async (id) => id ? await prisma.deposito.findFirst({ where: { id, OR: [{ companyId: req.companyId }, { companyId: { equals: null }, compartido: true }] } }) : true;
+    if (!(await depOk(d.depositoOrigenId))) return res.status(404).json({ ok: false, error: 'Depósito origen no encontrado' });
+    if (!(await depOk(d.depositoDestinoId))) return res.status(404).json({ ok: false, error: 'Depósito destino no encontrado' });
+    if (d.campanaId) {
+      const c = await prisma.campana.findFirst({ where: { id: d.campanaId, companyId: req.companyId } });
+      if (!c) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    }
+    // Resolvemos productos (snapshot nombre + unidad).
+    const prods = await prisma.producto.findMany({ where: { id: { in: d.renglones.map(r => r.productoId) }, companyId: req.companyId } });
+    const pmap = new Map(prods.map(p => [p.id, p]));
+    for (const r of d.renglones) if (!pmap.has(r.productoId)) return res.status(404).json({ ok: false, error: 'Producto no encontrado en un renglón' });
+    const result = await prisma.$transaction(async (tx) => {
+      const numero = await _tomarNumeroRemito(tx, req.companyId);
+      const remito = await tx.remitoInterno.create({
+        data: {
+          companyId: req.companyId, numero, fecha: d.fecha, tipo: d.tipo, estado: 'en_transito',
+          depositoOrigenId: d.depositoOrigenId || null,
+          depositoDestinoId: d.tipo === 'entre_depositos' ? d.depositoDestinoId : null,
+          campanaId: d.tipo === 'a_campo' ? (d.campanaId || null) : null,
+          destinoTexto: d.destinoTexto || null,
+          transportista: d.transportista || null, chofer: d.chofer || null,
+          entregadoPor: d.entregadoPor || null,
+          observaciones: d.observaciones || null, userId: req.user?.id || null,
+        },
+      });
+      for (const r of d.renglones) {
+        const p = pmap.get(r.productoId);
+        // Egreso del depósito origen (la mercadería sale al emitir el remito).
+        const egr = await tx.movimiento.create({
+          data: {
+            companyId: req.companyId, productoId: p.id, depositoId: d.depositoOrigenId || null,
+            fecha: d.fecha, tipo: 'egreso', motivo: 'remito_interno', cantidad: r.cantidad,
+            precio: p.ultimoCostoCompra ?? null,
+            referencia: `REM-${String(numero).padStart(5, '0')}`,
+            observaciones: `Remito interno #${numero}`,
+            userId: req.user?.id || null,
+          },
+        });
+        await tx.remitoRenglon.create({
+          data: { remitoId: remito.id, productoId: p.id, nombre: p.nombre, cantidad: r.cantidad, unidad: p.unidad, movimientoOutId: egr.id, observaciones: r.observaciones || null },
+        });
+      }
+      return remito;
+    });
+    res.status(201).json({ ok: true, data: result });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    next(e);
+  }
+});
+
+// Confirmar USO en la campaña (tipo a_campo): imputa cada renglón como InsumoAplicado.
+app.post('/api/remitos-internos/:id/confirmar-uso', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const rem = await prisma.remitoInterno.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { renglones: true } });
+    if (!rem) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if (rem.tipo !== 'a_campo') return res.status(400).json({ ok: false, error: 'Solo aplica a remitos de insumo al campo.' });
+    if (rem.estado === 'anulado') return res.status(400).json({ ok: false, error: 'El remito está anulado.' });
+    if (rem.estado === 'usado') return res.status(400).json({ ok: false, error: 'El uso ya fue confirmado.' });
+    const campanaId = req.body?.campanaId || rem.campanaId;
+    if (!campanaId) return res.status(400).json({ ok: false, error: 'Elegí a qué campaña imputar el uso.' });
+    const camp = await prisma.campana.findFirst({ where: { id: campanaId, companyId: req.companyId } });
+    if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    const fecha = req.body?.fecha ? new Date(req.body.fecha) : new Date();
+    await prisma.$transaction(async (tx) => {
+      for (const r of rem.renglones) {
+        if (r.insumoAplicadoId) continue;
+        const prod = await tx.producto.findFirst({ where: { id: r.productoId } });
+        const ins = await tx.insumoAplicado.create({
+          data: {
+            campanaId, productoId: r.productoId, nombre: r.nombre, cantidad: r.cantidad, unidad: r.unidad,
+            fecha, precioUnit: prod?.ultimoCostoCompra ?? null,
+            movimientoId: r.movimientoOutId || null,   // el egreso del depósito ya generado al emitir
+            observaciones: `Remito interno #${rem.numero}`,
+          },
+        });
+        await tx.remitoRenglon.update({ where: { id: r.id }, data: { insumoAplicadoId: ins.id } });
+      }
+      await tx.remitoInterno.update({ where: { id: rem.id }, data: { estado: 'usado', fechaUso: fecha, campanaId } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Confirmar RECEPCIÓN (tipo entre_depositos): suma cada renglón al depósito destino.
+app.post('/api/remitos-internos/:id/confirmar-recepcion', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const rem = await prisma.remitoInterno.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { renglones: true } });
+    if (!rem) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if (rem.tipo !== 'entre_depositos') return res.status(400).json({ ok: false, error: 'Solo aplica a transferencias entre depósitos.' });
+    if (rem.estado === 'anulado') return res.status(400).json({ ok: false, error: 'El remito está anulado.' });
+    if (rem.estado === 'recibido') return res.status(400).json({ ok: false, error: 'La recepción ya fue confirmada.' });
+    const fecha = req.body?.fecha ? new Date(req.body.fecha) : new Date();
+    const recibidoPor = req.body?.recibidoPor || null;
+    await prisma.$transaction(async (tx) => {
+      for (const r of rem.renglones) {
+        if (r.movimientoInId) continue;
+        const ing = await tx.movimiento.create({
+          data: {
+            companyId: req.companyId, productoId: r.productoId, depositoId: rem.depositoDestinoId,
+            fecha, tipo: 'ingreso', motivo: 'remito_interno', cantidad: r.cantidad,
+            referencia: `REM-${String(rem.numero).padStart(5, '0')}`,
+            observaciones: `Recepción remito interno #${rem.numero}`,
+            userId: req.user?.id || null,
+          },
+        });
+        await tx.remitoRenglon.update({ where: { id: r.id }, data: { movimientoInId: ing.id } });
+      }
+      await tx.remitoInterno.update({ where: { id: rem.id }, data: { estado: 'recibido', fechaRecepcion: fecha, recibidoPor } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Anular: revierte todo (egreso de origen, ingreso de destino y uso en campaña).
+app.post('/api/remitos-internos/:id/anular', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const rem = await prisma.remitoInterno.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { renglones: true } });
+    if (!rem) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if (rem.estado === 'anulado') return res.status(400).json({ ok: false, error: 'El remito ya está anulado.' });
+    await prisma.$transaction(async (tx) => {
+      for (const r of rem.renglones) {
+        if (r.insumoAplicadoId) { await tx.insumoAplicado.deleteMany({ where: { id: r.insumoAplicadoId } }); }
+        if (r.movimientoInId) { await tx.movimiento.deleteMany({ where: { id: r.movimientoInId } }); }
+        if (r.movimientoOutId) { await tx.movimiento.deleteMany({ where: { id: r.movimientoOutId } }); }
+        await tx.remitoRenglon.update({ where: { id: r.id }, data: { insumoAplicadoId: null, movimientoInId: null, movimientoOutId: null } });
+      }
+      await tx.remitoInterno.update({ where: { id: rem.id }, data: { estado: 'anulado' } });
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
