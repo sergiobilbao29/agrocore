@@ -101,6 +101,7 @@ model Company {
   cortesForraje      CorteForraje[]
   remitosInternos    RemitoInterno[]
   retenciones        Retencion[]
+  adjuntos           Adjunto[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -1819,11 +1820,16 @@ model Recordatorio {
   relacionId        String?
   repetir           String   @default("ninguno")
   userIdCreador     String?
+  // ---- Notificación push al celular ----
+  notificar         Boolean  @default(false)   // avisar por notificación push
+  notificarHora     String?                     // "HH:MM" (hora local) del día del recordatorio
+  notificadoEn      DateTime?                   // cuándo se envió el push (para no repetir)
 
   company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, fecha])
   @@index([companyId, completado, fecha])
+  @@index([notificar, notificadoEn])
 }
 
 
@@ -2010,12 +2016,21 @@ model ActivoFijo {
   unidadUso      String?  // km | horas
   usoActual      Float?   @default(0)       // ultima lectura de km/horas
   ubicacion      String?
+  // ---- Seguro ----
+  asegurado      Boolean  @default(false)
+  aseguradora    String?                    // compania de seguros
+  seguroTipo     String?                    // responsabilidad civil | todo riesgo | incendio | etc.
+  polizaNumero   String?
+  polizaDesde    DateTime?                  // vigencia de la poliza (desde)
+  polizaHasta    DateTime?                  // vigencia de la poliza (hasta) -> alerta al vencer
+  seguroContacto String?                    // productor / telefono / mail del contacto del seguro
   observaciones  String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   company        Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
   mantenimientos MantenimientoActivo[]
+  adjuntos       Adjunto[]
 
   @@index([companyId])
   @@index([tipo])
@@ -2161,6 +2176,32 @@ model RemitoInterno {
   @@index([companyId])
   @@index([estado])
   @@index([campanaId])
+}
+
+// ── Adjuntos (fotos / PDF / documentación) ────────────────────────────────────
+// Archivos vinculados a una entidad del sistema (por ahora: activos fijos —
+// título, escritura, fotos, pólizas, etc.). Genérico por entidadTipo/entidadId
+// para poder colgarlo de otros módulos más adelante.
+model Adjunto {
+  id            String   @id @default(cuid())
+  companyId     String
+  entidadTipo   String                       // 'activo_fijo' | ...
+  entidadId     String
+  activoFijoId  String?                       // FK cuando entidadTipo = 'activo_fijo'
+  nombre        String                        // nombre original del archivo
+  descripcion   String?                       // título / escritura / foto / póliza / etc.
+  mime          String
+  tamano        Int      @default(0)          // bytes
+  storageKey    String                        // ruta/archivo en el disco del servidor
+  userId        String?
+  createdAt     DateTime @default(now())
+
+  company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  activoFijo    ActivoFijo? @relation(fields: [activoFijoId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([entidadTipo, entidadId])
+  @@index([activoFijoId])
 }
 
 // ── Retenciones y percepciones ────────────────────────────────────────────────

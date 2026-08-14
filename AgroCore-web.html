@@ -876,6 +876,10 @@ const fmtDate = (d) => { if (!d) return ''; const x = new Date(d); return x.toLo
 // (fechas de cheques, vencimientos, etc.) toma el día tal cual del ISO, sin convertir
 // a hora local (que en Argentina restaba un día). Ej: "2026-08-02T00:00:00Z" -> "02/08/2026".
 const fmtFecha = (d) => { if (!d) return ''; const s = String(d); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[3]}/${m[2]}/${m[1]}`; const x = new Date(d); return x.toLocaleDateString('es-AR'); };
+// Igual que fmtFecha pero devuelve un Date LOCAL a medianoche del día del ISO (sin
+// desfasaje UTC). Usar para ubicar/comparar/agrupar fechas de calendario, agenda,
+// vencimientos, etc. Ej: "2026-08-07T00:00:00Z" -> Date(2026,7,7) local (no el 6).
+const parseFechaLocal = (d) => { if (!d) return null; const s = String(d); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return new Date(+m[1], +m[2]-1, +m[3]); return new Date(d); };
 // Clave de mes (YYYY-MM) en hora LOCAL — coincide con lo que muestra fmtDate. No usar toISOString (UTC) para agrupar, porque desfasa fechas de fin de mes.
 const mesKeyLocal = (d) => { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0'); };
 const iniciales = (n) => (n || '').split(' ').filter(Boolean).map(w => w[0]).join('').slice(0,2).toUpperCase();
@@ -2569,6 +2573,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'14/08/2026',
+      titulo:'📊 v2.94.0 — Exportar cheques a Excel',
+      desc:'En <b>Tesorería → Cheques</b>, botón nuevo <b>📊 Exportar Excel</b>. Descarga la lista de cheques que estás viendo <b>respetando los filtros activos</b> (por ejemplo, solo los <b>En cartera</b>). El Excel trae todas las columnas — tipo, formato, N°, banco, cuenta, fechas de emisión/pago/recepción/endoso, beneficiario, en poder de, librador, endosante, CUIT, monto, estado y observaciones — con el <b>total</b> al pie. Ideal para pasar el detalle de la cartera al contador o a los dueños.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'📲 v2.93.0 — Notificaciones al celular desde el calendario',
+      desc:'En cualquier <b>recordatorio de la Agenda</b> ahora hay un tilde <b>"📲 Notificar al celular ese día"</b> con la <b>hora</b> que elijas. Ese día, a esa hora, llega una <b>notificación push al teléfono</b> (tipo WhatsApp) a todo el equipo con avisos activados — ideal para eventos puntuales ("Domingo 16 llega Rodrigo a las 10"). Es <b>por recordatorio</b>, así que solo notifica lo que vos querés y no te satura con todos los vencimientos. La primera vez el navegador te pide permiso de notificaciones. <b>En iPhone</b>, para que lleguen con la app cerrada hay que <b>instalar AgroCore en la pantalla de inicio</b> (Compartir → Agregar a inicio); en Android y PC funciona directo.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'🛡️ v2.92.0 — Activos: seguro y documentación adjunta + fix de fechas en la agenda',
+      desc:'Tres cosas. <b>(1) Seguro en Activos y maquinaria:</b> en cada activo cargás si está <b>asegurado</b>, la <b>aseguradora</b>, el <b>tipo de seguro</b>, el <b>N° de póliza</b>, la <b>vigencia (desde/hasta)</b> y un <b>contacto</b>. Cuando la póliza está por vencer (30 días) o vencida, aparece un aviso en la ficha y en las alertas de Activos. <b>(2) Documentación adjunta:</b> ahora podés <b>subir fotos y PDF</b> a cada activo (título, escritura, póliza, lo que necesites) y verlos/descargarlos cuando quieras, sin andar buscándolos por todos lados. <b>(3) Corrección:</b> arreglamos el <b>desfasaje de un día</b> en la Agenda/recordatorios (una fecha marcada el 7 se mostraba el 6); ahora la fecha se muestra y ubica correctamente.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
       titulo:'📥 v2.91.0 — Importar retenciones desde el PDF de la Orden de Pago',
       desc:'En <b>Tesorería → Retenciones</b>, botón nuevo <b>📥 Importar OP (PDF)</b>. Subís la orden de pago y el sistema <b>lee solo los certificados de retención</b> y los carga: detecta el <b>impuesto</b> (Ganancias, IVA, IIBB, SUSS), el <b>régimen</b>, la <b>jurisdicción</b>, el <b>N° de certificado</b>, la <b>base</b>, la <b>alícuota</b> y el <b>importe</b>, además del agente, el sujeto y sus CUIT. Reconoce dos formatos habituales (Agroplaneta y AFA/ERP). Te muestra una <b>vista previa editable</b> donde confirmás la naturaleza (sufrida/practicada) y el contacto antes de cargar todo junto.' },
@@ -13765,6 +13778,7 @@ pages.cheques = async function() {
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows=[];
   try { rows = await crudList('cheques'); } catch (e) { return toast(e.message,'error'); }
+  state._chqRows = rows;   // para exportar respetando los filtros
   try { state.cache.chequeEstados = (await api('/api/cheque-estados')).data || []; } catch { state.cache.chequeEstados = state.cache.chequeEstados || []; }
 
   // Por defecto mostramos los cheques EN CARTERA y sin orden fijo (se ordena por columna).
@@ -13886,6 +13900,7 @@ pages.cheques = async function() {
         </div>
         <div class="md:col-span-8 flex gap-2 justify-end flex-wrap">
           <button class="btn btn-secondary" onclick="chqFiltroDisponibles()">Ver disponibles</button>
+          <button class="btn btn-secondary" title="Descargar a Excel los cheques que se ven (respeta los filtros)" onclick="chqExportExcel()">📊 Exportar Excel</button>
           ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Vender / descontar cheques de terceros en el banco" onclick="chqVenderForm()">💵 Vender cheques</button>`:''}
           ${colMenuBtn('cheques')}
           ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Agregar, renombrar o quitar estados de cheque" onclick="chqEstadosManager()">⚙️ Estados</button>`:''}
@@ -13905,6 +13920,42 @@ pages.cheques = async function() {
 function chqFiltroDisponibles() {
   state.chequeFilter = { estado:'en_cartera', sortCol:null, sortDir:'asc' };
   pages.cheques();
+}
+// Exporta a Excel los cheques que se están viendo (respeta los filtros activos).
+function chqExportExcel() {
+  const f = state.chequeFilter || {};
+  const rows = (state._chqRows || []).filter(c => {
+    if (f.estado && (c.estado||'').toLowerCase() !== f.estado) return false;
+    if (f.tipo   && c.tipo !== f.tipo) return false;
+    if (f.banco  && (c.banco||'') !== f.banco) return false;
+    if (f.cuenta && (c.cuenta||'') !== f.cuenta) return false;
+    if (f.numero && !((c.nroCheque||'').toLowerCase().includes(String(f.numero).toLowerCase()))) return false;
+    return true;
+  });
+  if (!rows.length) return toast('No hay cheques para exportar con los filtros actuales','warn');
+  const estadoLbl = (e)=> (state.cache.chequeEstados||[]).find(x=>x.codigo===e)?.label || e || '';
+  const head = ['Tipo','Formato','N°','Banco','Cuenta','Emisión','Pago/Vto','Recepción','Endoso/Entrega','Beneficiario','En poder de','Librador/titular','Endosante','CUIT titular','Monto','Estado','Observaciones'];
+  const aoa = [head, ...rows.map(c => [
+    c.tipo==='propio'?'Propio':'Terceros',
+    c.formato==='electronico'?'e-cheq':(c.formato==='fisico'?'Físico':''),
+    c.nroCheque||'', c.banco||'', c.cuenta||'',
+    c.fechaEmision?fmtFecha(c.fechaEmision):'', c.fechaPago?fmtFecha(c.fechaPago):'',
+    c.fechaRecepcion?fmtFecha(c.fechaRecepcion):'', c.fechaEndoso?fmtFecha(c.fechaEndoso):'',
+    c.beneficiario||'', c.enPoderDe||'', c.librador||'', c.endosante||'', c.cuitTitular||'',
+    Number(c.monto||0), estadoLbl(c.estado), c.observaciones||'',
+  ])];
+  const total = rows.reduce((a,c)=>a+Number(c.monto||0),0);
+  aoa.push([]); aoa.push(['','','','','','','','','','','','','','TOTAL', total, `${rows.length} cheque(s)`, '']);
+  const estLbl = f.estado ? f.estado.replace(/[^a-z0-9]+/gi,'-') : 'todos';
+  const fn = `Cheques_${estLbl}_${new Date().toISOString().slice(0,10)}.xlsx`;
+  if (typeof XLSX === 'undefined') {
+    const csv = aoa.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=fn.replace('.xlsx','.csv'); a.click(); return;
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = head.map((h,i)=>({ wch: i===14?16 : (i>=9&&i<=12)?20 : 12 }));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Cheques'); XLSX.writeFile(wb, fn);
+  toast('Excel generado','success');
 }
 // ===== VENTA / DESCUENTO de cheques de terceros =====
 async function chqVenderForm(){
@@ -23916,11 +23967,12 @@ pages.agenda = async function() {
 
 // ----- helpers de render por vista -----
 function recoSameDay(a, b) {
+  if (!a || !b) return false;
   return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
 }
 function recoItemsDelDia(recos, dia) {
   const d = new Date(dia); d.setHours(0,0,0,0);
-  return recos.filter(r => recoSameDay(new Date(r.fecha), d));
+  return recos.filter(r => recoSameDay(parseFechaLocal(r.fecha), d));
 }
 function recoChipMini(r) {
   // Mini chip para celdas de mes
@@ -23936,7 +23988,7 @@ function recoChipMini(r) {
   return `<div class="text-[10px] px-1.5 py-0.5 rounded border ${color} truncate cursor-pointer hover:opacity-80" onclick="event.stopPropagation(); recoForm('${r.id}')" title="${esc(r.titulo)}">${esc(recoCatLabel(r.categoria).slice(0,2))} ${esc(titulo)}</div>`;
 }
 function recoCardCompacta(r, today) {
-  const f = new Date(r.fecha); f.setHours(0,0,0,0);
+  const f = parseFechaLocal(r.fecha); f.setHours(0,0,0,0);
   const dias = Math.round((f - today)/86400000);
   const vencido = dias < 0 && !r.completado;
   const prioColor = r.prioridad === 'alta' ? 'border-l-4 border-rose-500' : r.prioridad === 'baja' ? 'border-l-4 border-slate-300' : 'border-l-4 border-amber-400';
@@ -23952,7 +24004,7 @@ function recoCardCompacta(r, today) {
           <span class="font-semibold text-sm ${r.completado?'line-through':''}">${esc(r.titulo)}</span>
           ${r.origen==='auto' ? `<span class="text-[10px] px-1 rounded bg-blue-100 text-blue-700 border border-blue-300">🔗</span>` : ''}
         </div>
-        <div class="text-xs text-slate-600">📅 ${fmtDate(r.fecha)} · ${r.completado ? '✅ Completado' : (vencido?`🔴 vencido hace ${Math.abs(dias)}d`: dias===0?'⚠️ HOY':dias===1?'⚠️ Mañana':`en ${dias}d`)}</div>
+        <div class="text-xs text-slate-600">📅 ${fmtFecha(r.fecha)} · ${r.completado ? '✅ Completado' : (vencido?`🔴 vencido hace ${Math.abs(dias)}d`: dias===0?'⚠️ HOY':dias===1?'⚠️ Mañana':`en ${dias}d`)}</div>
         ${r.descripcion ? `<div class="text-xs text-slate-500 mt-0.5 line-clamp-2">${esc(r.descripcion)}</div>` : ''}
       </div>
       <div class="flex flex-col gap-1">
@@ -24050,7 +24102,7 @@ function recoRenderLista(recos, today, estado) {
   // Vista lista clásica agrupada por mes
   const grupos = {};
   recos.forEach(r => {
-    const f = new Date(r.fecha);
+    const f = parseFechaLocal(r.fecha);
     const key = `${f.getFullYear()}-${String(f.getMonth()+1).padStart(2,'0')}`;
     if (!grupos[key]) grupos[key] = { label: f.toLocaleDateString('es-AR',{month:'long', year:'numeric'}), items: [] };
     grupos[key].items.push(r);
@@ -24110,14 +24162,29 @@ async function recoForm(id) {
           </div>
         </div>
         <div><label class="label">Descripción / notas</label><textarea id="rc-desc" class="input" rows="3" placeholder="Ej. En el campo Los Álamos, lote 4. Llamar al veterinario Pablo el día antes.">${esc(r.descripcion||'')}</textarea></div>
+        <div class="p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+          <label class="flex items-center gap-2 text-sm cursor-pointer font-medium">
+            <input id="rc-notif" type="checkbox" ${r.notificar?'checked':''} onchange="recoNotifToggle()"/> 📲 Notificar al celular ese día
+          </label>
+          <div id="rc-notif-wrap" class="mt-2 flex items-center gap-2 text-sm" style="${r.notificar?'':'display:none'}">
+            <span class="text-slate-600">a las</span>
+            <input id="rc-notif-hora" type="time" class="input w-32" value="${esc(r.notificarHora||'08:00')}"/>
+            <span class="text-[11px] text-slate-500">Llega como notificación al teléfono de todos (necesita permiso de avisos activado).</span>
+          </div>
+        </div>
         <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2">
-          💡 <b>Cómo funciona la alerta:</b> el recordatorio aparece en el banner de <b>Inicio</b> a partir de N días antes de la fecha (el valor de "Avisar días antes"). Si elegís "Repetir", al marcarlo completado se reabre automáticamente para el próximo mes/año.
+          💡 <b>Cómo funciona la alerta:</b> el recordatorio aparece en el banner de <b>Inicio</b> a partir de N días antes de la fecha. Si además tildás <b>Notificar al celular</b>, ese día a la hora elegida te llega una notificación push al teléfono. Si elegís "Repetir", al marcarlo completado se reabre para el próximo mes/año.
         </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              ${(id && r.relacionTipo && RECO_RELACION_DESTINO[r.relacionTipo] && r.relacionId) ? `<button class="btn btn-secondary" onclick="recoIrAlRegistro('${id}')" title="Abrir el registro que originó esta alerta">🔗 Ir al ${RECO_RELACION_DESTINO[r.relacionTipo].label}</button>` : ''}
              <button class="btn btn-primary" onclick="recoSave(${id?`'${id}'`:'null'})">💾 Guardar</button>`
   });
+}
+function recoNotifToggle(){
+  const on=$('#rc-notif')?.checked; const w=$('#rc-notif-wrap'); if(w) w.style.display=on?'':'none';
+  // Al activar, pedimos permiso y registramos la suscripción push de este dispositivo.
+  if(on && typeof activarAvisos==='function') activarAvisos(false);
 }
 async function recoSave(id) {
   const data = {
@@ -24128,6 +24195,8 @@ async function recoSave(id) {
     prioridad: $('#rc-pri').value,
     avisarDiasAntes: Number($('#rc-dias').value||15),
     repetir: $('#rc-rep').value,
+    notificar: $('#rc-notif')?.checked || false,
+    notificarHora: ($('#rc-notif')?.checked ? ($('#rc-notif-hora')?.value || '08:00') : null),
   };
   if (!data.titulo) return toast('Falta el título','warn');
   const esAuto = String(id||'').startsWith('auto:');
@@ -25925,6 +25994,16 @@ async function afForm(id=null){
         <div id="af-uu-wrap"><label class="label">Unidad</label><select id="af-uu" class="input"><option value="km" ${(a.unidadUso||'km')==='km'?'selected':''}>Kilómetros</option><option value="horas" ${a.unidadUso==='horas'?'selected':''}>Horas</option></select></div>
         <div id="af-ua-wrap"><label class="label">Lectura actual</label><input id="af-ua" type="number" step="0.01" class="input" value="${dv(a.usoActual)}"/></div>
       </div>
+      <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-sky-50 rounded-lg border border-sky-200">
+        <div class="col-span-4 text-xs text-slate-600 font-medium flex items-center gap-2">🛡️ Seguro <label class="text-sm flex items-center gap-1 font-normal ml-2"><input id="af-aseg" type="checkbox" ${a.asegurado?'checked':''} onchange="afSeguroToggle()"/> Está asegurado</label></div>
+        <div id="af-seg-1"><label class="label">Aseguradora</label><input id="af-aseguradora" class="input" value="${esc(dv(a.aseguradora))}" placeholder="Ej: La Segunda, Sancor…"/></div>
+        <div id="af-seg-2"><label class="label">Tipo de seguro</label><input id="af-segtipo" class="input" value="${esc(dv(a.seguroTipo))}" placeholder="Todo riesgo / RC / incendio"/></div>
+        <div id="af-seg-3"><label class="label">N° de póliza</label><input id="af-poliza" class="input" value="${esc(dv(a.polizaNumero))}"/></div>
+        <div id="af-seg-4"><label class="label">Contacto</label><input id="af-segcontacto" class="input" value="${esc(dv(a.seguroContacto))}" placeholder="Productor / teléfono"/></div>
+        <div id="af-seg-5"><label class="label">Vigencia desde</label><input id="af-polhdesde" type="date" class="input" value="${dfec(a.polizaDesde)}"/></div>
+        <div id="af-seg-6"><label class="label">Vigencia hasta</label><input id="af-polhasta" type="date" class="input" value="${dfec(a.polizaHasta)}"/></div>
+        <div class="col-span-2 text-[11px] text-slate-500 flex items-end pb-1">Cuando la póliza esté por vencer (30 días) o vencida, aparece un aviso en Activos y maquinaria.</div>
+      </div>
       <div class="grid grid-cols-4 gap-3 mb-2">
         <div><label class="label">Estado</label><select id="af-estado" class="input" onchange="afEstadoToggle()"><option value="activo" ${(a.estado||'activo')==='activo'?'selected':''}>Activo</option><option value="baja" ${a.estado==='baja'?'selected':''}>Dado de baja</option><option value="vendido" ${a.estado==='vendido'?'selected':''}>Vendido</option></select></div>
         <div id="af-fbaja-wrap" style="${a.estado&&a.estado!=='activo'?'':'display:none'}"><label class="label">Fecha baja/venta</label><input id="af-fbaja" type="date" class="input" value="${dfec(a.fechaBaja)}"/></div>
@@ -25933,8 +26012,9 @@ async function afForm(id=null){
       <div><label class="label">Observaciones</label><textarea id="af-obs" class="input" rows="2">${esc(dv(a.observaciones))}</textarea></div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick='afSave(${id?JSON.stringify(id):"null"})'>💾 ${id?'Guardar cambios':'Crear activo'}</button>` });
-  afAmortToggle(); afUsoToggle();
+  afAmortToggle(); afUsoToggle(); afSeguroToggle();
 }
+function afSeguroToggle(){ const on=$('#af-aseg')?.checked; ['af-seg-1','af-seg-2','af-seg-3','af-seg-4','af-seg-5','af-seg-6'].forEach(w=>{ const el=$('#'+w); if(el) el.style.opacity=on?'1':'0.45'; }); }
 function afAmortToggle(){ const on=$('#af-amort')?.checked; ['af-vu-wrap','af-vr-wrap'].forEach(w=>{ const el=$('#'+w); if(el) el.style.opacity=on?'1':'0.4'; }); }
 function afUsoToggle(){ const on=$('#af-cu')?.checked; ['af-uu-wrap','af-ua-wrap'].forEach(w=>{ const el=$('#'+w); if(el) el.style.display=on?'':'none'; }); }
 function afEstadoToggle(){ const v=$('#af-estado')?.value; const fb=$('#af-fbaja-wrap'), vv=$('#af-vventa-wrap'); if(fb) fb.style.display=(v!=='activo')?'':'none'; if(vv) vv.style.display=(v==='vendido')?'':'none'; }
@@ -25950,6 +26030,9 @@ async function afSave(id){
     amortiza:$('#af-amort')?.checked||false, vidaUtilAnios:n('#af-vu'), valorResidual:n('#af-vr'),
     controlaUso:$('#af-cu')?.checked||false, unidadUso:v('#af-uu')||'km', usoActual:n('#af-ua'),
     estado:v('#af-estado')||'activo', fechaBaja:fISO('#af-fbaja'), valorVenta:n('#af-vventa'),
+    asegurado:$('#af-aseg')?.checked||false, aseguradora:v('#af-aseguradora')||null, seguroTipo:v('#af-segtipo')||null,
+    polizaNumero:v('#af-poliza')||null, seguroContacto:v('#af-segcontacto')||null,
+    polizaDesde:fISO('#af-polhdesde'), polizaHasta:fISO('#af-polhasta'),
     observaciones:v('#af-obs')||null,
   };
   try{
@@ -25997,6 +26080,20 @@ async function afVer(id){
         ${info('Amortización', a.amortiza?(a.vidaUtilAnios?`Lineal ${a.vidaUtilAnios} años`:'Lineal'):'No amortiza')}
         ${a.controlaUso?info('Uso actual', (a.usoActual!=null?fmtN(a.usoActual):'0')+' '+afUnidad(a)):''}
       </div>
+      ${a.asegurado || a.aseguradora || a.polizaNumero ? `
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3 p-3 bg-sky-50 rounded-lg border border-sky-200">
+        <div class="col-span-2 md:col-span-4 text-xs text-slate-600 font-medium">🛡️ Seguro${afPolizaEstado(a)}</div>
+        ${info('Aseguradora', a.aseguradora)}
+        ${info('Tipo', a.seguroTipo)}
+        ${info('N° póliza', a.polizaNumero)}
+        ${info('Contacto', a.seguroContacto)}
+        ${info('Vigencia', [a.polizaDesde?fmtFecha(a.polizaDesde):null, a.polizaHasta?('→ '+fmtFecha(a.polizaHasta)):null].filter(Boolean).join(' '))}
+      </div>` : ''}
+      <div class="flex items-center justify-between mb-2">
+        <h4 class="font-semibold text-slate-700">📎 Documentación adjunta</h4>
+        ${can('finanzas:update')?`<label class="btn btn-secondary text-xs cursor-pointer">+ Adjuntar archivo<input type="file" class="hidden" accept="image/*,application/pdf" onchange="afAdjSubir('${a.id}', this)"/></label>`:''}
+      </div>
+      <div id="af-adjuntos" class="mb-4 text-sm text-slate-400">Cargando adjuntos…</div>
       <div class="flex items-center justify-between mb-2">
         <h4 class="font-semibold text-slate-700">🔧 Historial de mantenimiento</h4>
         <div class="flex gap-2">
@@ -26010,6 +26107,61 @@ async function afVer(id){
       </table></div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
             ${can('finanzas:update')?`<button class="btn btn-secondary" onclick='afForm(${JSON.stringify(a.id)})'>✏️ Editar activo</button>`:''}` });
+  afAdjuntosLoad(a.id);
+}
+// Estado de la póliza: badge si está vencida o por vencer (dentro de 30 días).
+function afPolizaEstado(a){
+  if(!a.polizaHasta) return '';
+  const h=parseFechaLocal(a.polizaHasta); const hoy=new Date(); hoy.setHours(0,0,0,0);
+  const dias=Math.round((h-hoy)/86400000);
+  if(dias<0) return ` <span class="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-800 border border-red-300">Póliza vencida hace ${Math.abs(dias)}d</span>`;
+  if(dias<=30) return ` <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">Póliza vence en ${dias}d</span>`;
+  return ` <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">Vigente</span>`;
+}
+// ── Adjuntos de un activo ─────────────────────────────────────────────────────
+async function afAdjuntosLoad(activoId){
+  const cont=document.getElementById('af-adjuntos'); if(!cont) return;
+  let items=[];
+  try{ items=(await api(`/api/adjuntos?entidadTipo=activo_fijo&entidadId=${activoId}`)).data||[]; }
+  catch(e){ cont.innerHTML=`<span class="text-red-500 text-xs">${esc(e.message)}</span>`; return; }
+  if(!items.length){ cont.innerHTML='<span class="text-slate-400 text-xs">Sin archivos. Subí título, escritura, fotos o la póliza con "+ Adjuntar archivo".</span>'; return; }
+  const kb=(n)=> n>1048576? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+  const ico=(m)=> /^image\//.test(m)?'🖼️' : m==='application/pdf'?'📄':'📎';
+  cont.innerHTML=`<div class="grid grid-cols-1 md:grid-cols-2 gap-2">${items.map(x=>`
+    <div class="flex items-center gap-2 border border-slate-200 rounded p-2">
+      <span class="text-lg">${ico(x.mime)}</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm truncate">${esc(x.nombre)}</div>
+        <div class="text-[10px] text-slate-400">${esc(x.descripcion||'')}${x.descripcion?' · ':''}${kb(x.tamano)} · ${fmtFecha(x.createdAt)}</div>
+      </div>
+      <button class="btn btn-ghost text-xs" title="Ver / descargar" onclick="afAdjVer('${x.id}')">⬇️</button>
+      ${can('finanzas:update')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick="afAdjDel('${x.id}','${activoId}')">🗑️</button>`:''}
+    </div>`).join('')}</div>`;
+}
+async function afAdjSubir(activoId, input){
+  const f=input.files?.[0]; if(!f) return; input.value='';
+  if(f.size > 10*1024*1024) return toast('El archivo supera los 10 MB','error');
+  const desc=(prompt('Descripción del archivo (ej: Título, Escritura, Foto, Póliza):','')||'').trim();
+  toast('Subiendo archivo…','info');
+  try{
+    const fd=new FormData(); fd.append('archivo', f); fd.append('entidadTipo','activo_fijo'); fd.append('entidadId', activoId); if(desc) fd.append('descripcion', desc);
+    const r=await fetch(API_BASE+'/api/adjuntos',{ method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd });
+    const j=await r.json(); if(!r.ok||!j.ok) return toast(j.error||'No pude subir el archivo','error');
+    toast('Archivo adjuntado','success'); afAdjuntosLoad(activoId);
+  }catch(e){ toast(e.message||'Error al subir','error'); }
+}
+async function afAdjVer(id){
+  try{
+    const r=await fetch(API_BASE+`/api/adjuntos/${id}/download`,{ headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId } });
+    if(!r.ok) return toast('No pude abrir el archivo','error');
+    const blob=await r.blob(); const url=URL.createObjectURL(blob); window.open(url,'_blank');
+    setTimeout(()=>URL.revokeObjectURL(url), 60000);
+  }catch(e){ toast(e.message,'error'); }
+}
+async function afAdjDel(id, activoId){
+  if(!confirm('¿Borrar este archivo adjunto?')) return;
+  try{ await api(`/api/adjuntos/${id}`,{method:'DELETE'}); toast('Archivo borrado','success'); afAdjuntosLoad(activoId); }
+  catch(e){ toast(e.message,'error'); }
 }
 async function afMantForm(activoId, mid=null){
   const a=(state._afList||[]).find(x=>x.id===activoId) || {};

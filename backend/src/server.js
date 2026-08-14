@@ -36,6 +36,9 @@ async function getPdfParse() {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = process.env.STATIC_DIR || path.resolve(__dirname, '..', '..');
+// Carpeta donde se guardan los archivos adjuntos (fotos/PDF/documentación).
+// Fuera del árbol servido y del repo git (data/ no se versiona). Persistente.
+const ADJUNTOS_DIR = process.env.ADJUNTOS_DIR || path.join(STATIC_DIR, 'data', 'adjuntos');
 
 // Prisma con pool más grande para soportar varios usuarios concurrentes sin timeouts.
 // Por defecto Prisma usa connection_limit=num_physical_cpus*2+1 (3 en máquinas chicas).
@@ -60,7 +63,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.91.0';
+const AGROCORE_VERSION = '2.94.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11543,6 +11546,13 @@ const activoFijoSchema = z.object({
   unidadUso: z.enum(['km','horas']).nullable().optional(),
   usoActual: z.coerce.number().nullable().optional(),
   ubicacion: z.string().nullable().optional(),
+  asegurado: z.boolean().optional(),
+  aseguradora: z.string().nullable().optional(),
+  seguroTipo: z.string().nullable().optional(),
+  polizaNumero: z.string().nullable().optional(),
+  polizaDesde: z.coerce.date().nullable().optional(),
+  polizaHasta: z.coerce.date().nullable().optional(),
+  seguroContacto: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
 const mantenimientoSchema = z.object({
@@ -11597,6 +11607,12 @@ function _alertasActivo(a, mantenimientos) {
       const dias = Math.round((pf - hoy) / 86400000);
       if (dias <= umbralDias) out.push({ activoFijoId: a.id, activo: a.nombre, tipo, motivo: 'fecha', proximaFecha: m.proximaFecha, dias, severidad: dias < 0 ? 'vencido' : 'proximo' });
     }
+  }
+  // Vencimiento de la póliza de seguro (por vencer dentro de 30 días o vencida).
+  if (a.polizaHasta) {
+    const pf = new Date(a.polizaHasta); pf.setHours(0, 0, 0, 0);
+    const dias = Math.round((pf - hoy) / 86400000);
+    if (dias <= umbralDias) out.push({ activoFijoId: a.id, activo: a.nombre, tipo: 'seguro', motivo: 'poliza', proximaFecha: a.polizaHasta, dias, severidad: dias < 0 ? 'vencido' : 'proximo' });
   }
   return out;
 }
@@ -11663,6 +11679,91 @@ app.delete('/api/activos-fijos/:id', requireCompany, requirePermission('finanzas
     const existing = await prisma.activoFijo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.activoFijo.delete({ where: { id: existing.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// ADJUNTOS: fotos / PDF / documentación vinculada a una entidad (activos fijos, etc.)
+// Los archivos se guardan en el disco del servidor (ADJUNTOS_DIR); en la base solo
+// va el metadato (nombre, mime, tamaño, storageKey).
+// ============================================================
+const ADJUNTO_TIPOS = new Set(['activo_fijo']);
+function _adjExtSegura(nombre, mime) {
+  const ext = (path.extname(nombre || '') || '').toLowerCase().replace(/[^.a-z0-9]/g, '');
+  if (ext && ext.length <= 6) return ext;
+  const map = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
+  return map[mime] || '.bin';
+}
+
+app.get('/api/adjuntos', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.entidadTipo) where.entidadTipo = String(req.query.entidadTipo);
+    if (req.query.entidadId) where.entidadId = String(req.query.entidadId);
+    const data = await prisma.adjunto.findMany({
+      where, orderBy: [{ createdAt: 'desc' }],
+      select: { id: true, entidadTipo: true, entidadId: true, activoFijoId: true, nombre: true, descripcion: true, mime: true, tamano: true, createdAt: true },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/adjuntos', requireCompany, requirePermission('finanzas:update'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const entidadTipo = String(req.body.entidadTipo || '');
+    const entidadId = String(req.body.entidadId || '');
+    if (!ADJUNTO_TIPOS.has(entidadTipo)) return res.status(400).json({ ok: false, error: 'Tipo de entidad no válido' });
+    if (!entidadId) return res.status(400).json({ ok: false, error: 'Falta la entidad' });
+    // Verificar que la entidad exista y sea de la empresa.
+    let activoFijoId = null;
+    if (entidadTipo === 'activo_fijo') {
+      const a = await prisma.activoFijo.findFirst({ where: { id: entidadId, companyId: req.companyId } });
+      if (!a) return res.status(404).json({ ok: false, error: 'Activo no encontrado' });
+      activoFijoId = a.id;
+    }
+    const ext = _adjExtSegura(req.file.originalname, req.file.mimetype);
+    const rand = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const storageKey = `${req.companyId}/${rand}${ext}`;
+    const abs = path.join(ADJUNTOS_DIR, storageKey);
+    await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+    await fs.promises.writeFile(abs, req.file.buffer);
+    const row = await prisma.adjunto.create({
+      data: {
+        companyId: req.companyId, entidadTipo, entidadId, activoFijoId,
+        nombre: (req.file.originalname || 'archivo').slice(0, 200),
+        descripcion: (req.body.descripcion || '').slice(0, 200) || null,
+        mime: req.file.mimetype || 'application/octet-stream',
+        tamano: req.file.size || req.file.buffer.length || 0,
+        storageKey, userId: req.user?.id || null,
+      },
+    });
+    res.status(201).json({ ok: true, data: { id: row.id, nombre: row.nombre, mime: row.mime, tamano: row.tamano, descripcion: row.descripcion, createdAt: row.createdAt } });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/adjuntos/:id/download', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const a = await prisma.adjunto.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!a) return res.status(404).json({ ok: false, error: 'Adjunto no encontrado' });
+    // storageKey siempre lo generamos nosotros (companyId/rand.ext) → sin path traversal.
+    const abs = path.join(ADJUNTOS_DIR, a.storageKey);
+    if (!abs.startsWith(ADJUNTOS_DIR) || !fs.existsSync(abs)) return res.status(404).json({ ok: false, error: 'Archivo no disponible' });
+    res.setHeader('Content-Type', a.mime || 'application/octet-stream');
+    const inline = /^image\//.test(a.mime || '') || a.mime === 'application/pdf';
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(a.nombre)}"`);
+    fs.createReadStream(abs).pipe(res);
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/adjuntos/:id', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const a = await prisma.adjunto.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!a) return res.status(404).json({ ok: false, error: 'Adjunto no encontrado' });
+    const abs = path.join(ADJUNTOS_DIR, a.storageKey);
+    try { if (abs.startsWith(ADJUNTOS_DIR) && fs.existsSync(abs)) await fs.promises.unlink(abs); } catch {}
+    await prisma.adjunto.delete({ where: { id: a.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -16070,6 +16171,8 @@ const recordatorioSchema = z.object({
   relacionTipo: z.string().nullable().optional(),
   relacionId: z.string().nullable().optional(),
   repetir: z.enum(['ninguno','mensual','anual']).optional(),
+  notificar: z.boolean().optional(),
+  notificarHora: z.string().regex(/^\d{2}:\d{2}$/,'Hora inválida (HH:MM)').nullable().optional(),
 });
 
 app.post('/api/recordatorios', requireCompany, requirePermission('agenda:create'), async (req, res, next) => {
@@ -16087,7 +16190,9 @@ app.put('/api/recordatorios/:id', requireCompany, requirePermission('agenda:upda
     const existing = await prisma.recordatorio.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const input = recordatorioSchema.partial().parse(req.body);
-    const r = await prisma.recordatorio.update({ where: { id: req.params.id }, data: input });
+    // Si cambia fecha/hora/aviso, re-armamos la notificación (se puede volver a enviar).
+    const reArmar = ('fecha' in input) || ('notificar' in input) || ('notificarHora' in input);
+    const r = await prisma.recordatorio.update({ where: { id: req.params.id }, data: { ...input, ...(reArmar ? { notificadoEn: null } : {}) } });
     res.json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
@@ -17103,7 +17208,42 @@ app.listen(PORT, HOST, () => {
       console.log(`[noticias] Refrescadas ${items.length} noticias del agro.`);
     }
   }, NOT_TTL);
+
+  // ── Motor de notificaciones de recordatorios ────────────────────────────────
+  // Cada minuto: busca recordatorios con "notificar" activado cuyo día es HOY y
+  // cuya hora ya llegó (hora local del server), no completados y sin enviar aún.
+  // Manda una push a todos los usuarios de la empresa y marca notificadoEn.
+  setInterval(_dispararRecordatorios, 60 * 1000);
+  setTimeout(_dispararRecordatorios, 15 * 1000);  // una corrida al arrancar
 });
+
+async function _dispararRecordatorios() {
+  try {
+    const wp = await _getWebpush(); if (!wp) return;   // sin web-push no hay push
+    await _getVapid();
+    const ahora = new Date();
+    const hoyYMD = `${ahora.getFullYear()}-${String(ahora.getMonth()+1).padStart(2,'0')}-${String(ahora.getDate()).padStart(2,'0')}`;
+    const horaAhora = `${String(ahora.getHours()).padStart(2,'0')}:${String(ahora.getMinutes()).padStart(2,'0')}`;
+    // Candidatos: notificar=true, no completados, no notificados. Filtramos fecha/hora en JS.
+    const cands = await prisma.recordatorio.findMany({
+      where: { notificar: true, completado: false, notificadoEn: null },
+      take: 500,
+    });
+    for (const r of cands) {
+      const ymd = String(r.fecha).slice(0, 10);   // fecha guardada a medianoche UTC → día directo del ISO
+      if (ymd !== hoyYMD) continue;
+      const hora = r.notificarHora || '08:00';
+      if (horaAhora < hora) continue;              // todavía no llegó la hora
+      const payload = {
+        title: '📅 ' + (r.titulo || 'Recordatorio'),
+        body: r.descripcion ? String(r.descripcion).slice(0, 140) : 'Recordatorio de hoy en AgroCore',
+        tag: 'reco-' + r.id, url: '/app',
+      };
+      await _pushAMiembros(r.companyId, '', payload);   // exceptUserId='' → a todos
+      await prisma.recordatorio.update({ where: { id: r.id }, data: { notificadoEn: new Date() } }).catch(() => {});
+    }
+  } catch (e) { /* silencioso: no debe tumbar el server */ }
+}
 
 process.on('SIGINT', async () => {
   console.log('\n  Cerrando Prisma...');
