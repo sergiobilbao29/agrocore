@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.87.0';
+const AGROCORE_VERSION = '2.88.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7095,6 +7095,112 @@ app.post('/api/remitos-internos/:id/anular', requireCompany, requirePermission('
 });
 
 // ============================================================
+// EXPORTACIONES PARA EL CONTADOR (Nivel 1): datos operativos limpios para que el
+// estudio contable los importe. Devuelve, para la empresa actual y un rango de
+// fechas: ventas y compras con neto e IVA POR ALÍCUOTA, cobros y pagos (con medio
+// y cheques), la cartera de cheques y el stock valuado a la fecha de corte.
+// ============================================================
+app.get('/api/export-contador', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const desde = req.query.desde ? new Date(String(req.query.desde) + 'T00:00:00') : new Date('2000-01-01');
+    const hasta = req.query.hasta ? new Date(String(req.query.hasta) + 'T23:59:59') : new Date('2999-12-31');
+    const cid = req.companyId;
+    const emp = await prisma.company.findFirst({ where: { id: cid }, select: { name: true, razonSocial: true, cuit: true } });
+    const empNombre = emp?.razonSocial || emp?.name || '';
+    // Bucket de alícuota → clave estándar.
+    const bucket = (a) => { const n = Number(a) || 0; if (n === 21) return '21'; if (n === 10.5) return '105'; if (n === 27) return '27'; if (n === 0) return '0'; return 'otras'; };
+    const armarComprobante = (f, items, contactoNombre, cuit, condIVA) => {
+      const b = { '21': { neto: 0, iva: 0 }, '105': { neto: 0, iva: 0 }, '27': { neto: 0, iva: 0 }, '0': { neto: 0, iva: 0 }, 'otras': { neto: 0, iva: 0 } };
+      (items || []).forEach(it => { const k = bucket(it.alicuotaIva); b[k].neto += Number(it.subtotal || 0); b[k].iva += Number(it.ivaImporte || 0); });
+      return {
+        fecha: f.fecha, tipo: f.tipo, clase: f.clase,
+        comprobante: `${String(f.puntoVenta).padStart(4, '0')}-${String(f.numero).padStart(8, '0')}`,
+        contacto: contactoNombre || '', cuit: cuit || '', condIVA: condIVA || '',
+        moneda: f.moneda || 'ARS', cotizacion: f.cotizacion || null,
+        neto21: b['21'].neto, iva21: b['21'].iva, neto105: b['105'].neto, iva105: b['105'].iva,
+        neto27: b['27'].neto, iva27: b['27'].iva, netoNoGravado: b['0'].neto + b['otras'].neto,
+        totalNeto: Number(f.subtotal || 0), totalIVA: Number(f.iva || 0), total: Number(f.total || 0),
+        cae: f.cae || '', caeVto: f.caeVto || null, origen: f.origen || null,
+      };
+    };
+    // VENTAS
+    const facturas = await prisma.factura.findMany({
+      where: { companyId: cid, fecha: { gte: desde, lte: hasta }, estado: { not: 'anulada' } },
+      include: { items: true, cliente: { select: { razonSocial: true, cuit: true, condIVA: true } } },
+      orderBy: [{ fecha: 'asc' }],
+    });
+    const ventas = facturas.map(f => armarComprobante(f, f.items, f.cliente?.razonSocial, f.cliente?.cuit, f.cliente?.condIVA));
+    // COMPRAS
+    const compras0 = await prisma.facturaCompra.findMany({
+      where: { companyId: cid, fecha: { gte: desde, lte: hasta } },
+      include: { items: true, proveedor: { select: { razonSocial: true, cuit: true, condIVA: true } } },
+      orderBy: [{ fecha: 'asc' }],
+    });
+    const compras = compras0.map(f => armarComprobante(f, f.items, f.proveedor?.razonSocial, f.proveedor?.cuit, f.proveedor?.condIVA));
+    // COBROS y PAGOS (desde DocumentoEmitido, con snapshot en datos)
+    const docs = await prisma.documentoEmitido.findMany({
+      where: { companyId: cid, tipo: { in: ['recibo_cobro', 'orden_pago'] }, fecha: { gte: desde, lte: hasta } },
+      orderBy: [{ fecha: 'asc' }],
+    });
+    const cobros = [], pagos = [];
+    for (const d of docs) {
+      const dd = (d.datos && typeof d.datos === 'object') ? d.datos : {};
+      if (d.tipo === 'recibo_cobro') {
+        cobros.push({
+          fecha: d.fecha, numero: d.numero || '', cliente: d.contactoNombre || dd.cliente || '',
+          cuit: dd.clienteCuit || '', metodo: dd.metodo || '', monto: Number(d.total || dd.monto || 0),
+          moneda: d.moneda || 'ARS', caja: dd.caja || '', banco: dd.bancoNombre || '', cheque: dd.chequeInfo || '',
+          observaciones: dd.obs || dd.observaciones || '',
+        });
+      } else {
+        const chq = Array.isArray(dd.cheques) ? dd.cheques.map(c => `${c.banco || ''} N°${c.numero || c.nroCheque || ''} $${Number(c.importe || 0).toLocaleString('es-AR')}`.trim()).join(' | ') : '';
+        pagos.push({
+          fecha: d.fecha, numero: d.numero || '', proveedor: d.contactoNombre || dd.proveedor || '',
+          cuit: dd.proveedorCuit || dd.cuit || '', metodo: dd.metodo || '', monto: Number(d.total || 0),
+          moneda: d.moneda || 'ARS', cheques: chq, observaciones: dd.obs || dd.observaciones || '',
+        });
+      }
+    }
+    // CHEQUES (cartera + movimientos): del período por fechaPago/recepción, más los pendientes.
+    const chequesRaw = await prisma.cheque.findMany({
+      where: { companyId: cid, estado: { not: 'anulado' } },
+      orderBy: [{ fechaPago: 'asc' }],
+    });
+    const enRango = (d) => { if (!d) return false; const x = new Date(d); return x >= desde && x <= hasta; };
+    const cheques = chequesRaw.filter(c =>
+      enRango(c.fechaPago) || enRango(c.fechaRecepcion) || enRango(c.fechaEndoso) ||
+      ['en_cartera', 'depositado'].includes(c.estado)
+    ).map(c => ({
+      tipo: c.tipo, formato: c.formato || '', banco: c.banco || '', numero: c.nroCheque || '',
+      librador: c.librador || '', beneficiario: c.beneficiario || '', endosante: c.endosante || '',
+      cuitTitular: c.cuitTitular || '', fechaEmision: c.fechaEmision, fechaPago: c.fechaPago,
+      importe: Number(c.monto || 0), estado: c.estado, enPoderDe: c.enPoderDe || '',
+    }));
+    // STOCK valuado a la fecha de corte (hasta): existencia por producto con movimientos <= hasta.
+    const productos = await prisma.producto.findMany({ where: { companyId: cid, activo: true } });
+    const movs = await prisma.movimiento.groupBy({
+      by: ['productoId', 'tipo'], where: { companyId: cid, fecha: { lte: hasta } }, _sum: { cantidad: true },
+    });
+    const existMap = {};
+    movs.forEach(m => { const s = Number(m._sum?.cantidad || 0); existMap[m.productoId] = (existMap[m.productoId] || 0) + (m.tipo === 'ingreso' ? s : -s); });
+    const stockInsumos = [], stockGranos = [];
+    for (const p of productos) {
+      const cant = Math.round((existMap[p.id] || 0) * 100) / 100;
+      if (Math.abs(cant) < 0.001) continue;
+      const costo = Number(p.ultimoCostoCompra || p.precioReferencia || 0);
+      const row = { producto: p.nombre, categoria: p.categoria || '', unidad: p.unidad || '', cantidad: cant, costoUnit: costo, valor: Math.round(cant * costo * 100) / 100 };
+      if (p.categoria === 'granos') stockGranos.push(row); else stockInsumos.push(row);
+    }
+    res.json({
+      ok: true,
+      empresa: { nombre: empNombre, cuit: emp?.cuit || '' },
+      periodo: { desde: req.query.desde || null, hasta: req.query.hasta || null },
+      ventas, compras, cobros, pagos, cheques, stockInsumos, stockGranos,
+    });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
 // LIQUIDACIÓN DE CEREAL: cuando vendés el cereal que tenías en la cerealera.
 // Saca el cereal del depósito + crea movimiento positivo en CtaCte por el neto.
 // ============================================================
@@ -8580,6 +8686,15 @@ const _AYUDA_KB = [
       'El Neto a cobrar = Bruto + IVA − Retenciones. Se sugiere solo y lo podés ajustar a mano (si lo editás, ya no se te pisa).',
       'Al guardar, descuenta las cabezas del stock real y del declarado SENASA del campo, y arma la cuenta a cobrar por el neto. Al eliminar la liquidación se revierte todo.'],
     atajo:{ page:'liquidacionesHacienda', label:'Abrir Liquidaciones animales' } },
+  { id:'export_contador', terms:['exportar para el contador','exportar contador','datos para el contador','pasarle al contador','estudio contable','contador','exportar excel contador','libro iva','iva por alicuota','exportar ventas compras','exportar cheques','stock valuado','cierre de ejercicio','inventario a fecha'],
+    titulo:'Exportar datos para el contador',
+    pasos:[
+      'Andá a Administración → Exportar para contador. Elegí el período (desde/hasta) y las empresas.',
+      'Descargá "Ventas y Compras": facturas emitidas y de compra con CUIT, condición IVA, neto e IVA por alícuota (21/10,5/27), moneda/cotización, CAE y total.',
+      'Descargá "Cobros, Pagos y Cheques": cobranzas y pagos con el medio usado, más la cartera de cheques/e-cheqs (banco, número, vencimiento, estado).',
+      'Descargá "Stock valuado" a la fecha de corte (Hasta): inventario de insumos y de granos con cantidad y valor, para el cierre de ejercicio. También hay un botón "Descargar todo" en un solo Excel.',
+      'Las retenciones/percepciones (SISA, Ganancias, IVA, IIBB) y el Libro IVA Digital .txt de ARCA se agregan en una próxima etapa.'],
+    atajo:{ page:'exportContador', label:'Abrir Exportar para contador' } },
 ];
 function _esPregunta(t){
   return /(^|\s)(como|donde|cuando|cual|cuales|que es|para que|se puede|puedo|podes|podés|puedes|necesito|quiero saber|me explicas|explicame|ayuda|no se como|no entiendo|donde cargo|donde se|donde esta)\b/.test(t) || /\?/.test(t);

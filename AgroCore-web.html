@@ -1043,6 +1043,7 @@ const MODULES = [
   { id:'catalogos',     label:'Catálogos',            icon:'📚', perm:'produccion:read', section:'Administración' },
   { id:'categoriasArt', label:'Categorías y Familias', icon:'🗂️', perm:'produccion:read', section:'Administración' },
   { id:'catGastos',     label:'Categorías de Gastos',  icon:'🏷️', perm:'finanzas:read',    section:'Administración' },
+  { id:'exportContador',label:'Exportar para contador',icon:'🧾', perm:'finanzas:read',    section:'Administración' },
   { id:'usuarios',      label:'Usuarios',             icon:'👤', perm:'*',               section:'Administración' },
   { id:'roles',         label:'Roles y permisos',     icon:'🔐', perm:'*',               section:'Administración' },
   { id:'empresas',      label:'Empresas',             icon:'🏢', perm:'*',               section:'Administración' },
@@ -2567,6 +2568,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'🧾 v2.88.0 — Exportar para el contador (Excel limpios)',
+      desc:'Nueva pantalla en <b>Administración → Exportar para contador</b>, pensada para el estudio contable. Elegís un <b>período</b> y una o varias <b>empresas</b> y descargás Excel con los importes como números (listos para sumar): <b>(1) Ventas y Compras</b> con CUIT, condición IVA, <b>neto e IVA por alícuota</b> (21/10,5/27), no gravado, moneda/cotización, CAE y total; <b>(2) Cobros, Pagos y Cheques</b> con el medio usado y la cartera de cheques/e-cheqs (banco, número, vencimiento, estado); <b>(3) Stock valuado</b> a la fecha de corte (insumos y granos), para el cierre de ejercicio. También hay un botón <b>Descargar todo</b>. Próximamente: retenciones/percepciones (SISA) y el Libro IVA Digital .txt de ARCA.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'13/08/2026',
       titulo:'🤖 v2.87.0 — El asistente ya explica los remitos internos y las retenciones',
       desc:'Le enseñamos al <b>asistente</b> las últimas funciones para que te guíe: <b>Remitos internos</b> (salida de insumo al campo con "confirmar uso", transferencia entre depósitos con "confirmar recepción", imprimir y anular) y las <b>retenciones</b> de la <b>Liquidación de animales</b> (ahora se descuentan del neto). Preguntale, por ejemplo, "¿cómo hago un remito interno?" o "¿cómo cargo una liquidación de animales?".' },
@@ -28232,6 +28236,172 @@ const BANCO_TIPOS = {
   interes:            { lbl:'Interés ganado',     sign:1, icon:'📈' },
   otro:               { lbl:'Otro',               sign:0, icon:'•'  },
 };
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EXPORTAR PARA EL CONTADOR — exportables limpios (Excel) de ventas, compras,
+// cobros, pagos, cheques y stock valuado, para que el estudio contable los importe.
+// ══════════════════════════════════════════════════════════════════════════════
+pages.exportContador = async function() {
+  setHeader('Exportar para el contador', 'Exportables en Excel para el estudio contable — ventas y compras con IVA por alícuota, cobros, pagos, cheques y stock valuado');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('exportContador','Exportar para contador'); return; }
+  const comps = (state.user?.companies || []);
+  const hoy = new Date().toISOString().slice(0,10);
+  const y0 = hoy.slice(0,4) + '-01-01';
+  const st = state._expCont || (state._expCont = { desde: y0, hasta: hoy });
+  const empChecks = comps.map(c => `
+    <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+      <input type="checkbox" class="exp-emp" value="${esc(c.id)}" ${c.id===state.companyId?'checked':''}/>
+      <span>${esc(c.razonSocial || c.name || 'Empresa')}</span>
+    </label>`).join('');
+  $('#page-body').innerHTML = `
+    <div class="card mb-4">
+      <div class="text-sm text-slate-600 mb-3">Elegí el <b>período</b> y las <b>empresas</b>, y descargá los archivos para mandarle al estudio contable. Los importes van como números (listos para sumar) y las ventas/compras traen el <b>neto e IVA discriminado por alícuota</b> (21% / 10,5% / 27%).</div>
+      <div class="grid md:grid-cols-3 gap-4">
+        <div><label class="label">Desde</label><input type="date" id="exp-desde" class="input" value="${st.desde}"/></div>
+        <div><label class="label">Hasta (fecha de corte)</label><input type="date" id="exp-hasta" class="input" value="${st.hasta}"/></div>
+        <div><label class="label">Empresas</label><div class="border border-slate-200 rounded p-2 max-h-32 overflow-auto">${empChecks || '<div class="text-xs text-slate-400">Sin empresas</div>'}</div></div>
+      </div>
+    </div>
+    <div class="grid md:grid-cols-2 gap-3">
+      <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">🧾 Ventas y Compras</div>
+        <div class="text-[11px] text-slate-500 mb-3">Facturas emitidas y de compra con CUIT, condición IVA, neto e IVA por alícuota, moneda/cotización, CAE y total. Dos hojas.</div>
+        <button class="btn btn-primary w-full" onclick="expContDescargar('ventas-compras')">Descargar Ventas y Compras</button>
+      </div>
+      <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">💵 Cobros, Pagos y Cheques</div>
+        <div class="text-[11px] text-slate-500 mb-3">Cobranzas y pagos con el medio usado, y la cartera de cheques/e-cheqs (banco, número, vencimiento, estado). Tres hojas.</div>
+        <button class="btn btn-primary w-full" onclick="expContDescargar('cobros-pagos')">Descargar Cobros, Pagos y Cheques</button>
+      </div>
+      <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">📦 Stock valuado a la fecha</div>
+        <div class="text-[11px] text-slate-500 mb-3">Inventario de insumos y de granos con cantidad y valor a la fecha de corte (Hasta), para el cierre de ejercicio. Dos hojas.</div>
+        <button class="btn btn-primary w-full" onclick="expContDescargar('stock')">Descargar Stock valuado</button>
+      </div>
+      <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">⬇️ Todo en un archivo</div>
+        <div class="text-[11px] text-slate-500 mb-3">Un solo Excel con todas las hojas: Ventas, Compras, Cobros, Pagos, Cheques, Stock insumos y Stock granos.</div>
+        <button class="btn btn-secondary w-full" onclick="expContDescargar('todo')">Descargar todo</button>
+      </div>
+    </div>
+    <div class="text-[11px] text-slate-400 mt-4">Las <b>retenciones y percepciones</b> (SISA, Ganancias, IVA, IIBB) y el <b>Libro IVA Digital .txt</b> de ARCA se agregan en una próxima etapa.</div>`;
+};
+
+// Junta los datos de todas las empresas seleccionadas (una llamada por empresa).
+async function _expContData() {
+  const desde = document.getElementById('exp-desde')?.value;
+  const hasta = document.getElementById('exp-hasta')?.value;
+  const cids = Array.from(document.querySelectorAll('.exp-emp:checked')).map(x => x.value);
+  if (!desde || !hasta) { toast('Elegí el período (desde/hasta)','error'); return null; }
+  if (!cids.length) { toast('Elegí al menos una empresa','error'); return null; }
+  state._expCont = { desde, hasta };
+  const comps = (state.user?.companies || []);
+  const out = { multi: cids.length > 1, desde, hasta, ventas:[], compras:[], cobros:[], pagos:[], cheques:[], stockInsumos:[], stockGranos:[] };
+  for (const cid of cids) {
+    const nombre = (comps.find(c => c.id === cid)?.razonSocial) || (comps.find(c => c.id === cid)?.name) || '';
+    const r = await api(`/api/export-contador?desde=${desde}&hasta=${hasta}&_c=${cid}`, { headers: { 'X-Company-Id': cid } });
+    ['ventas','compras','cobros','pagos','cheques','stockInsumos','stockGranos'].forEach(k => {
+      (r[k] || []).forEach(row => out[k].push({ _empresa: nombre, ...row }));
+    });
+  }
+  return out;
+}
+
+// aoa a partir de filas + columnas [{h,k,date,num}]; antepone Empresa si multi.
+function _expAoa(rows, cols, multi) {
+  const head = [...(multi ? ['Empresa'] : []), ...cols.map(c => c.h)];
+  const body = rows.map(r => [
+    ...(multi ? [r._empresa || ''] : []),
+    ...cols.map(c => {
+      let v = r[c.k];
+      if (c.date) return v ? fmtFecha(v) : '';
+      if (c.num) return v == null ? '' : Number(v);
+      return v == null ? '' : v;
+    })
+  ]);
+  return [head, ...body];
+}
+
+function _expDescargarWb(sheets, filename) {
+  if (typeof XLSX === 'undefined') { toast('Necesitás estar en línea para generar el Excel. Reintentá.','error'); return; }
+  const wb = XLSX.utils.book_new();
+  sheets.forEach(s => { const ws = XLSX.utils.aoa_to_sheet(s.aoa); XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0,31)); });
+  XLSX.writeFile(wb, filename);
+}
+
+const _EXP_COLS = {
+  comp: [
+    { h:'Fecha', k:'fecha', date:true }, { h:'Tipo', k:'tipo' }, { h:'Clase', k:'clase' },
+    { h:'Comprobante', k:'comprobante' }, { h:'Cliente/Proveedor', k:'contacto' }, { h:'CUIT', k:'cuit' },
+    { h:'Cond. IVA', k:'condIVA' }, { h:'Moneda', k:'moneda' }, { h:'Cotización', k:'cotizacion', num:true },
+    { h:'Neto 21%', k:'neto21', num:true }, { h:'IVA 21%', k:'iva21', num:true },
+    { h:'Neto 10,5%', k:'neto105', num:true }, { h:'IVA 10,5%', k:'iva105', num:true },
+    { h:'Neto 27%', k:'neto27', num:true }, { h:'IVA 27%', k:'iva27', num:true },
+    { h:'No gravado/Exento', k:'netoNoGravado', num:true },
+    { h:'Total Neto', k:'totalNeto', num:true }, { h:'Total IVA', k:'totalIVA', num:true }, { h:'Total', k:'total', num:true },
+    { h:'CAE', k:'cae' },
+  ],
+  cobros: [
+    { h:'Fecha', k:'fecha', date:true }, { h:'N°', k:'numero' }, { h:'Cliente', k:'cliente' }, { h:'CUIT', k:'cuit' },
+    { h:'Método', k:'metodo' }, { h:'Monto', k:'monto', num:true }, { h:'Moneda', k:'moneda' },
+    { h:'Caja', k:'caja' }, { h:'Banco', k:'banco' }, { h:'Cheque', k:'cheque' }, { h:'Observaciones', k:'observaciones' },
+  ],
+  pagos: [
+    { h:'Fecha', k:'fecha', date:true }, { h:'N°', k:'numero' }, { h:'Proveedor', k:'proveedor' }, { h:'CUIT', k:'cuit' },
+    { h:'Método', k:'metodo' }, { h:'Monto', k:'monto', num:true }, { h:'Moneda', k:'moneda' },
+    { h:'Cheques entregados', k:'cheques' }, { h:'Observaciones', k:'observaciones' },
+  ],
+  cheques: [
+    { h:'Tipo', k:'tipo' }, { h:'Formato', k:'formato' }, { h:'Banco', k:'banco' }, { h:'N°', k:'numero' },
+    { h:'Librador', k:'librador' }, { h:'Beneficiario', k:'beneficiario' }, { h:'Endosante', k:'endosante' },
+    { h:'CUIT titular', k:'cuitTitular' }, { h:'Emisión', k:'fechaEmision', date:true }, { h:'Pago/Vto', k:'fechaPago', date:true },
+    { h:'Importe', k:'importe', num:true }, { h:'Estado', k:'estado' }, { h:'En poder de', k:'enPoderDe' },
+  ],
+  stock: [
+    { h:'Producto', k:'producto' }, { h:'Categoría', k:'categoria' }, { h:'Unidad', k:'unidad' },
+    { h:'Cantidad', k:'cantidad', num:true }, { h:'Costo unit.', k:'costoUnit', num:true }, { h:'Valor', k:'valor', num:true },
+  ],
+};
+
+async function expContDescargar(que) {
+  const btns = document.querySelectorAll('#page-body button'); btns.forEach(b => b.disabled = true);
+  toast('Generando el Excel…','info');
+  try {
+    const d = await _expContData();
+    if (!d) return;
+    const m = d.multi;
+    const per = `${d.desde}_${d.hasta}`;
+    if (que === 'ventas-compras') {
+      _expDescargarWb([
+        { name:'Ventas', aoa:_expAoa(d.ventas, _EXP_COLS.comp, m) },
+        { name:'Compras', aoa:_expAoa(d.compras, _EXP_COLS.comp, m) },
+      ], `Contador_Ventas-Compras_${per}.xlsx`);
+    } else if (que === 'cobros-pagos') {
+      _expDescargarWb([
+        { name:'Cobros', aoa:_expAoa(d.cobros, _EXP_COLS.cobros, m) },
+        { name:'Pagos', aoa:_expAoa(d.pagos, _EXP_COLS.pagos, m) },
+        { name:'Cheques', aoa:_expAoa(d.cheques, _EXP_COLS.cheques, m) },
+      ], `Contador_Cobros-Pagos-Cheques_${per}.xlsx`);
+    } else if (que === 'stock') {
+      _expDescargarWb([
+        { name:'Stock insumos', aoa:_expAoa(d.stockInsumos, _EXP_COLS.stock, m) },
+        { name:'Stock granos', aoa:_expAoa(d.stockGranos, _EXP_COLS.stock, m) },
+      ], `Contador_Stock-valuado_${d.hasta}.xlsx`);
+    } else {
+      _expDescargarWb([
+        { name:'Ventas', aoa:_expAoa(d.ventas, _EXP_COLS.comp, m) },
+        { name:'Compras', aoa:_expAoa(d.compras, _EXP_COLS.comp, m) },
+        { name:'Cobros', aoa:_expAoa(d.cobros, _EXP_COLS.cobros, m) },
+        { name:'Pagos', aoa:_expAoa(d.pagos, _EXP_COLS.pagos, m) },
+        { name:'Cheques', aoa:_expAoa(d.cheques, _EXP_COLS.cheques, m) },
+        { name:'Stock insumos', aoa:_expAoa(d.stockInsumos, _EXP_COLS.stock, m) },
+        { name:'Stock granos', aoa:_expAoa(d.stockGranos, _EXP_COLS.stock, m) },
+      ], `Contador_Completo_${per}.xlsx`);
+    }
+    toast('Excel generado','success');
+  } catch (e) { toast(e.message || 'Error al generar','error'); }
+  finally { document.querySelectorAll('#page-body button').forEach(b => b.disabled = false); }
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // REMITOS INTERNOS — salida de insumo al campo (en tránsito) y transferencia
