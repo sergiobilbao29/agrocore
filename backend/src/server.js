@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.90.0';
+const AGROCORE_VERSION = '2.91.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8804,6 +8804,7 @@ const _AYUDA_KB = [
       'Elegí la naturaleza: SUFRIDA (nos la retuvieron cuando nos pagaron/compraron) o PRACTICADA (la hicimos nosotros al pagarle a un proveedor/contratista).',
       'Elegí el impuesto (Ganancias, IVA, IIBB, SUSS/SICORE u Otro), el régimen y —si es IIBB— la jurisdicción/provincia.',
       'Cargá la fecha, el contacto (cliente o proveedor, autocompleta CUIT), el N° de certificado, la base, la alícuota y el importe (el importe se sugiere = base × alícuota).',
+      'IMPORTAR DE PDF: con el botón "Importar OP (PDF)" subís la orden de pago (formatos Agroplaneta y AFA/ERP) y el sistema detecta solo los certificados (impuesto, régimen, jurisdicción, N° de certificado, base, alícuota e importe). Revisás la naturaleza y el contacto, y se cargan todas juntas.',
       'Después las exportás para el contador desde Administración → Exportar para contador (hoja "Retenciones").'],
     atajo:{ page:'retenciones', label:'Abrir Retenciones' } },
   { id:'compra_venta_dolares', terms:['comprar dolares','vender dolares','compra de dolares','venta de dolares','dolar mep','comprar usd','cambio de divisas','pasar pesos a dolares','pasar dolares a pesos','tipo de cambio banco'],
@@ -12764,6 +12765,96 @@ app.post('/api/admin/parse-confirmacion-cereal-pdf', authMiddleware, requireComp
       tipoPrecio: esAfijar ? 'a_fijar' : 'fijo', moneda: 'USD',
       plazoEntregaDesde, plazoEntregaHasta,
     }});
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// PARSER de ÓRDENES DE PAGO con RETENCIONES: lee el PDF de la OP y extrae los
+// certificados de retención (Ganancias, IVA, IIBB, SUSS). Soporta dos formatos:
+// Agroplaneta ("CONSTANCIA DE RETENCIÓN") y AFA/ERP ("CERTIFICADO DE RETENCION").
+// Devuelve las retenciones para que el usuario confirme y se carguen solas.
+// ============================================================
+app.post('/api/admin/parse-op-retenciones-pdf', authMiddleware, requireCompany, upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo PDF' });
+    if (!/\.pdf$/i.test(req.file.originalname || '')) return res.status(400).json({ ok: false, error: 'El archivo debe ser un PDF' });
+    let pdfParse; try { pdfParse = await getPdfParse(); }
+    catch { return res.status(501).json({ ok: false, error: 'El parser de PDF no está disponible (pdf-parse no instalado). Cargá las retenciones a mano.' }); }
+    let texto = ''; try { texto = (await pdfParse(req.file.buffer)).text || ''; }
+    catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
+
+    const MONEY = /\d{1,3}(?:,\d{3})*\.\d{2}/g;   // formato US: 1,234,567.89
+    const num = (s) => { if (s == null || s === '') return null; let n = String(s).replace(/[$\s]/g, ''); if (/,\d{1,2}$/.test(n)) n = n.replace(/\./g, '').replace(',', '.'); else if (/\.\d{1,2}$/.test(n)) n = n.replace(/,/g, ''); else n = n.replace(/[,.]/g, ''); const v = Number(n); return isFinite(v) ? v : null; };
+    const fechaArg = (s) => { if (!s) return null; const m = String(s).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/); if (!m) return null; let yy = m[3]; if (yy.length === 2) yy = '20' + yy; return `${yy}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`; };
+    const impuestoDe = (s) => { const t = (s || '').toLowerCase(); if (/seguridad social|suss|ssgen/.test(t)) return 'suss'; if (/ganancia|gca/.test(t)) return 'ganancias'; if (/ingresos brutos|iibb|ibct|\bib\b/.test(t)) return 'iibb'; if (/\biva\b/.test(t)) return 'iva'; return 'otro'; };
+
+    const esAgro = /CONSTANCIA DE RETENCI|Cert\.Retenciones:/i.test(texto);
+    const esAFA = /CERTIFICADO DE RETENCION|Sujeto Pasible de Retencion/i.test(texto);
+    let formato = esAgro ? 'agroplaneta' : (esAFA ? 'afa' : 'desconocido');
+    let opNumero = null, opFecha = null, agenteNombre = null, agenteCuit = null, sujetoNombre = null, sujetoCuit = null;
+    const rets = [];
+
+    if (esAgro) {
+      opNumero = (texto.match(/Orden de Pago OP\s*(\d+)/i) || [])[1] || null;
+      opFecha = fechaArg((texto.match(/Fecha emisi[oó]n:\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i) || [])[1]);
+      sujetoNombre = (texto.match(/Empresa:\s*([^\n]+)/i) || [])[1]?.trim() || null;
+      sujetoCuit = (texto.match(/Empresa:[\s\S]{0,200}?CUIT:\s*(\d{11})/i) || [])[1] || null;
+      const ag = texto.match(/Agente de Retenci[oó]n[\s\S]{0,120}?Razon Social:\s*([^\n]+)[\s\S]{0,60}?CUIT:\s*(\d{11})/i);
+      if (ag) { agenteNombre = ag[1].trim(); agenteCuit = ag[2]; }
+      const comp = (texto.match(/\n(FAc[^\n$]+?)\$/i) || [])[1]?.trim() || null;
+      const certFecha = fechaArg((texto.match(/Fecha:\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})\s*Nro\. Certificado/i) || [])[1]) || opFecha;
+      for (const m of texto.matchAll(/Cert\.Retenciones:\s*(.+?)\s*-\s*(\d+)\s*>>>\s*\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})/gi)) {
+        rets.push({ impuesto: impuestoDe(m[1]), impuestoTexto: m[1].trim(), numeroCertificado: m[2], importe: num(m[3]), fecha: certFecha, comprobanteRef: comp, baseImponible: null, alicuota: null, jurisdiccion: null, regimen: null, observaciones: null });
+      }
+    } else if (esAFA) {
+      opNumero = (texto.match(/N[uú]mero :\s*(\d{5,10})/i) || [])[1] || null;
+      opFecha = fechaArg((texto.match(/Fecha\s*:\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i) || [])[1]);
+      agenteCuit = (texto.match(/Nro\. Agente de Retencion :\s*(\d{11})/i) || [])[1] || null;
+      agenteNombre = (texto.match(/Entidad de IVA para ([^\n]+)/i) || [])[1]?.trim() || null;
+      sujetoNombre = (texto.match(/Sujeto Pasible de Retencion :\s*([^\n]+)/i) || [])[1]?.trim() || null;
+      sujetoCuit = (texto.match(/C\.U\.I\.T\. :\s*(\d{11})/i) || [])[1] || null;
+      const compGlobal = (texto.match(/(\d{4}-\d{8})\/\d/) || [])[1] || null;
+      for (const m of texto.matchAll(/Retenci[oó]n\s+(.+?)-([A-Z0-9]+)-([A-Z0-9]+)Cert:\s*(\d+)\s*-\s*(\d{1,3}(?:,\d{3})*\.\d{2})/gi)) {
+        const impTxt = m[1].trim(), codigo = m[2], jurCode = m[3], cert = m[4], imp = num(m[5]);
+        let base = null, alic = null, desc = null;
+        const bi = texto.indexOf('Codigo :' + codigo + 'Descripcion');
+        if (bi >= 0) {
+          const blk = texto.slice(bi, bi + 600);
+          desc = (blk.match(/Descripcion :([^\n]+)/) || [])[1]?.trim() || null;
+          alic = num((blk.match(/Alic:\s*([\d.,]+)/) || [])[1]);
+          const det = (blk.match(/% C\.U\.Retencion([\s\S]*?)Alic:/) || [])[1] || '';
+          const toks = (det.match(MONEY) || []).map(num).filter(x => x != null);
+          if (toks.length >= 2) base = toks[1];   // [importeComprob, baseImponible, %CU, retencion]
+        }
+        const regimen = (desc && /RG\s*\d+/i.test(desc)) ? desc.match(/RG\s*\d+/i)[0] : codigo;
+        const juris = /cdba|cordoba/i.test(jurCode + impTxt + (desc || '')) ? 'Cordoba' : (jurCode === 'NAC' ? null : jurCode);
+        rets.push({ impuesto: impuestoDe(impTxt + ' ' + codigo), impuestoTexto: impTxt, numeroCertificado: cert, importe: imp, fecha: opFecha, comprobanteRef: compGlobal, baseImponible: base, alicuota: alic, jurisdiccion: juris, regimen, observaciones: desc });
+      }
+    }
+
+    if (!rets.length) return res.status(422).json({ ok: false, error: 'No encontré certificados de retención en el PDF. Podés cargarlas a mano.' });
+
+    // Naturaleza sugerida: comparamos el CUIT de la empresa activa con el del agente/sujeto.
+    const emp = await prisma.company.findFirst({ where: { id: req.companyId }, select: { cuit: true, razonSocial: true, name: true } });
+    const soloDig = (s) => String(s || '').replace(/\D/g, '');
+    const empCuit = soloDig(emp?.cuit);
+    let naturaleza = 'sufrida';
+    if (empCuit && empCuit === soloDig(agenteCuit)) naturaleza = 'practicada';
+    else if (empCuit && empCuit === soloDig(sujetoCuit)) naturaleza = 'sufrida';
+    // Contacto = la OTRA parte. Practicada → el sujeto (proveedor); Sufrida → el agente (quien nos retuvo).
+    const contacto = naturaleza === 'practicada'
+      ? { tipo: 'proveedor', nombre: sujetoNombre, cuit: sujetoCuit }
+      : { tipo: 'cliente', nombre: agenteNombre, cuit: agenteCuit };
+
+    res.json({
+      ok: true,
+      formato, opNumero, opFecha,
+      agente: { nombre: agenteNombre, cuit: agenteCuit },
+      sujeto: { nombre: sujetoNombre, cuit: sujetoCuit },
+      naturalezaSugerida: naturaleza,
+      contacto,
+      retenciones: rets,
+    });
   } catch (e) { next(e); }
 });
 

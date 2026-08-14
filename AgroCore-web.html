@@ -2570,6 +2570,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'📥 v2.91.0 — Importar retenciones desde el PDF de la Orden de Pago',
+      desc:'En <b>Tesorería → Retenciones</b>, botón nuevo <b>📥 Importar OP (PDF)</b>. Subís la orden de pago y el sistema <b>lee solo los certificados de retención</b> y los carga: detecta el <b>impuesto</b> (Ganancias, IVA, IIBB, SUSS), el <b>régimen</b>, la <b>jurisdicción</b>, el <b>N° de certificado</b>, la <b>base</b>, la <b>alícuota</b> y el <b>importe</b>, además del agente, el sujeto y sus CUIT. Reconoce dos formatos habituales (Agroplaneta y AFA/ERP). Te muestra una <b>vista previa editable</b> donde confirmás la naturaleza (sufrida/practicada) y el contacto antes de cargar todo junto.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
       titulo:'🧾 v2.90.0 — Retenciones y percepciones',
       desc:'Nuevo módulo en <b>Tesorería → Retenciones</b> para cargar los certificados del régimen agropecuario: <b>sufridas</b> (te retienen al cobrarte/comprarte) y <b>practicadas</b> (retenés al pagar a un proveedor). Registrás el <b>impuesto</b> (Ganancias, IVA, IIBB, SUSS/SICORE), el <b>régimen</b>, la <b>jurisdicción</b> (IIBB), la fecha, el <b>contacto y CUIT</b>, el <b>N° de certificado</b>, la base, la alícuota y el importe (que se sugiere = base × alícuota). Todo se <b>exporta al contador</b> desde Administración → Exportar para contador (hoja "Retenciones", también en "Descargar todo").' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
@@ -28269,7 +28272,11 @@ pages.retenciones = async function() {
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-1 flex-wrap">${chip('todas','Todas')}${chip('sufrida','📥 Sufridas')}${chip('practicada','📤 Practicadas')}</div>
-      ${can('finanzas:create')?`<button class="btn btn-primary" onclick="retForm()">+ Nueva retención</button>`:''}
+      <div class="flex items-center gap-2">
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="retImportar()" title="Subir el PDF de una Orden de Pago y cargar sus retenciones solas">📥 Importar OP (PDF)</button>`:''}
+        ${can('finanzas:create')?`<button class="btn btn-primary" onclick="retForm()">+ Nueva retención</button>`:''}
+      </div>
+      <input type="file" id="ret-op-file" accept=".pdf" class="hidden" onchange="retImportarSubir(this)"/>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Registros</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
@@ -28307,7 +28314,7 @@ function retForm(id) {
   const optImp = Object.entries(RET_IMPUESTOS).map(([k,v])=>`<option value="${k}" ${p.impuesto===k?'selected':''}>${v}</option>`).join('');
   openModal({
     title: id ? '✏️ Editar retención' : '🧾 Nueva retención / percepción',
-    size: 'lg',
+    size: 'max-w-3xl',
     body: `
       <div class="grid md:grid-cols-2 gap-3">
         <div><label class="label">Naturaleza</label>
@@ -28400,6 +28407,104 @@ async function retDel(id) {
   if (!confirm('¿Eliminar esta retención?')) return;
   try { await api(`/api/retenciones/${id}`, { method:'DELETE' }); toast('Eliminada','success'); pages.retenciones(); }
   catch (e) { toast(e.message,'error'); }
+}
+
+// ── Importar retenciones desde el PDF de una Orden de Pago ─────────────────────
+function retImportar() { document.getElementById('ret-op-file')?.click(); }
+async function retImportarSubir(input) {
+  const f = input.files?.[0]; if (!f) return;
+  input.value = '';
+  toast('Leyendo la orden de pago…','info');
+  try {
+    const fd = new FormData(); fd.append('archivo', f);
+    const r = await fetch(API_BASE + '/api/admin/parse-op-retenciones-pdf', {
+      method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd,
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) return toast(j.error || 'No pude leer el PDF','error');
+    retImportPreview(j);
+  } catch (e) { toast(e.message || 'Error al subir el PDF','error'); }
+}
+function retImportPreview(j) {
+  state._retImport = j;
+  const nat = j.naturalezaSugerida || 'sufrida';
+  const rows = (j.retenciones || []).map((x, i) => `
+    <tr data-ri="${i}" class="border-b">
+      <td class="p-1"><input type="checkbox" class="ri-chk" checked/></td>
+      <td class="p-1"><select class="input text-xs ri-imp">${Object.entries(RET_IMPUESTOS).map(([k,v])=>`<option value="${k}" ${x.impuesto===k?'selected':''}>${v}</option>`).join('')}</select></td>
+      <td class="p-1"><input class="input text-xs ri-reg" value="${esc(x.regimen||'')}" placeholder="Régimen"/></td>
+      <td class="p-1"><input class="input text-xs ri-jur" value="${esc(x.jurisdiccion||'')}" placeholder="Juris."/></td>
+      <td class="p-1"><input class="input text-xs ri-cert" value="${esc(x.numeroCertificado||'')}"/></td>
+      <td class="p-1"><input type="number" step="0.01" class="input text-xs ri-base" value="${x.baseImponible!=null?x.baseImponible:''}"/></td>
+      <td class="p-1"><input type="number" step="0.01" class="input text-xs ri-alic" value="${x.alicuota!=null?x.alicuota:''}"/></td>
+      <td class="p-1"><input type="number" step="0.01" class="input text-xs ri-imp-val font-semibold" value="${x.importe!=null?x.importe:''}"/></td>
+    </tr>`).join('');
+  const totalImp = (j.retenciones||[]).reduce((a,x)=>a+Number(x.importe||0),0);
+  openModal({
+    title: '📥 Retenciones detectadas en la OP',
+    size: 'max-w-5xl',
+    body: `
+      <div class="text-xs text-slate-500 mb-2">Formato: <b>${esc(j.formato)}</b>${j.opNumero?` · OP N° ${esc(j.opNumero)}`:''}${j.opFecha?` · ${fmtFecha(j.opFecha)}`:''}. Revisá y confirmá antes de cargar.</div>
+      <div class="grid md:grid-cols-3 gap-3 mb-3">
+        <div><label class="label">Naturaleza</label>
+          <select id="ri-nat" class="input">
+            <option value="sufrida" ${nat==='sufrida'?'selected':''}>📥 Sufrida (nos retuvieron)</option>
+            <option value="practicada" ${nat==='practicada'?'selected':''}>📤 Practicada (retuvimos)</option>
+          </select>
+          <div class="text-[10px] text-slate-400 mt-0.5">Agente: ${esc(j.agente?.nombre||'—')} (${esc(j.agente?.cuit||'—')}) · Sujeto: ${esc(j.sujeto?.nombre||'—')} (${esc(j.sujeto?.cuit||'—')})</div>
+        </div>
+        <div><label class="label">Contacto (nombre)</label><input id="ri-cont-nom" class="input" value="${esc(j.contacto?.nombre||'')}"/></div>
+        <div><label class="label">Contacto (CUIT)</label><input id="ri-cont-cuit" class="input" value="${esc(j.contacto?.cuit||'')}"/></div>
+        <div><label class="label">Fecha</label><input id="ri-fecha" type="date" class="input" value="${j.opFecha?String(j.opFecha).slice(0,10):new Date().toISOString().slice(0,10)}"/></div>
+        <div class="md:col-span-2"><label class="label">Comprobante asociado</label><input id="ri-comp" class="input" value="${esc((j.retenciones?.[0]?.comprobanteRef)||'')}"/></div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="text-left text-slate-500 border-b">
+            <th class="p-1"></th><th class="p-1">Impuesto</th><th class="p-1">Régimen</th><th class="p-1">Juris.</th><th class="p-1">N° cert.</th><th class="p-1">Base</th><th class="p-1">Alíc%</th><th class="p-1">Importe</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="text-right text-sm mt-2">Total detectado: <b>${fmt$(totalImp)}</b></div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="retImportConfirm()">Cargar retenciones</button>`,
+  });
+}
+async function retImportConfirm() {
+  const j = state._retImport; if (!j) return;
+  const nat = document.getElementById('ri-nat')?.value || 'sufrida';
+  const contNom = document.getElementById('ri-cont-nom')?.value?.trim() || null;
+  const contCuit = document.getElementById('ri-cont-cuit')?.value?.trim() || null;
+  const fecha = document.getElementById('ri-fecha')?.value;
+  const comp = document.getElementById('ri-comp')?.value?.trim() || null;
+  const filas = [...document.querySelectorAll('#modal tbody tr[data-ri]')].filter(tr => tr.querySelector('.ri-chk')?.checked);
+  if (!filas.length) return toast('Marcá al menos una retención','error');
+  if (!fecha) return toast('Elegí la fecha','error');
+  let ok = 0, err = 0;
+  for (const tr of filas) {
+    const body = {
+      naturaleza: nat, clase: 'retencion',
+      impuesto: tr.querySelector('.ri-imp')?.value,
+      regimen: tr.querySelector('.ri-reg')?.value?.trim() || null,
+      jurisdiccion: tr.querySelector('.ri-jur')?.value?.trim() || null,
+      fecha,
+      contactoTipo: nat === 'practicada' ? 'proveedor' : 'cliente',
+      contactoNombre: contNom, cuit: contCuit,
+      numeroCertificado: tr.querySelector('.ri-cert')?.value?.trim() || null,
+      baseImponible: tr.querySelector('.ri-base')?.value ? Number(tr.querySelector('.ri-base').value) : null,
+      alicuota: tr.querySelector('.ri-alic')?.value ? Number(tr.querySelector('.ri-alic').value) : null,
+      importe: Number(tr.querySelector('.ri-imp-val')?.value || 0),
+      comprobanteRef: comp,
+      observaciones: 'Importado de OP' + (j.opNumero ? ` N° ${j.opNumero}` : ''),
+    };
+    if (!(body.importe > 0)) { err++; continue; }
+    try { await api('/api/retenciones', { method:'POST', body: JSON.stringify(body) }); ok++; }
+    catch { err++; }
+  }
+  closeModal();
+  toast(`${ok} retención(es) cargada(s)${err?`, ${err} con error`:''}`, err ? 'warn' : 'success');
+  pages.retenciones();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -28663,7 +28768,7 @@ function remForm() {
   const optCamps = camps.map(c => `<option value="${c.id}">${esc(c.nombre || `${c.cultivo||''} ${c.lote?.nombre||c.loteNombre||''}`.trim() || 'Campaña')}</option>`).join('');
   openModal({
     title: '📤 Nuevo remito interno',
-    size: 'lg',
+    size: 'max-w-3xl',
     body: `
       <div class="mb-3">
         <label class="label">Tipo de remito</label>
@@ -29034,7 +29139,7 @@ async function bcoReporteDuenos() {
     </div>`).join('');
   openModal({
     title: '📋 Reporte de saldos para dueños',
-    size: 'lg',
+    size: 'max-w-2xl',
     body: `
       <div class="grid md:grid-cols-2 gap-4">
         <div>
