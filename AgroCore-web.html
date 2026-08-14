@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'🏛️ v2.97.0 — Libro IVA Digital de ARCA en un clic',
+      desc:'Ya no hace falta cargar comprobante por comprobante en ARCA. En <b>Exportaciones (contador)</b> hay un botón nuevo <b>"Descargar Libro IVA Digital"</b> que arma los archivos <b>.txt de ancho fijo</b> oficiales para importar directo en el portal de ARCA: Comprobantes y Alícuotas de <b>Ventas</b> y de <b>Compras</b>, tomando las facturas cargadas en el sistema. Descarga un <b>ZIP por empresa</b> (el período lo toma del mes de "Hasta") y te avisa cuántos comprobantes salieron y si hay alguno <b>sin CUIT</b> para corregir. Los formatos se verificaron contra archivos reales de ARCA.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
       titulo:'👷 v2.96.0 — Empleados por día + leer facturas desde una foto',
       desc:'Dos cosas. <b>(1) Empleado por día:</b> en la ficha del empleado hay un tilde <b>"📅 Trabaja por día"</b>. Cargás el <b>precio por día (jornal)</b> y los <b>días por mes</b>, y el sistema calcula el <b>sueldo del mes</b> (jornal × días), lo muestra en la planilla igual que un sueldo fijo y lo suma a la <b>Masa salarial</b>. <b>(2) Factura desde foto:</b> en Compras, el botón de cargar comprobante ahora acepta <b>PDF o FOTO (JPG/PNG)</b>. Si sacás una foto de una factura física, el sistema la <b>lee con IA</b> y autocompleta proveedor, número, fecha y total (requiere la IA activada). Si subís un PDF que en realidad es una foto escaneada (sin texto), te avisa claro que subas la foto original.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/08/2026',
@@ -28726,13 +28729,18 @@ pages.exportContador = async function() {
         <div class="text-[11px] text-slate-500 mb-3">Certificados sufridos y practicados (Ganancias, IVA, IIBB, SUSS) con CUIT, régimen, jurisdicción, número, base, alícuota e importe.</div>
         <button class="btn btn-primary w-full" onclick="expContDescargar('retenciones')">Descargar Retenciones</button>
       </div>
+      <div class="kpi border-2 border-emerald-200">
+        <div class="font-bold text-slate-800 mb-1">🏛️ Libro IVA Digital (ARCA) .txt</div>
+        <div class="text-[11px] text-slate-500 mb-3">Genera los archivos de <b>ancho fijo</b> para importar directo en el portal de ARCA: Comprobantes y Alícuotas de <b>Ventas</b> y de <b>Compras</b>. Un ZIP por empresa (el período lo toma del mes de "Hasta").</div>
+        <button class="btn btn-primary w-full" onclick="libroIvaDescargar()">Descargar Libro IVA Digital</button>
+      </div>
       <div class="kpi">
         <div class="font-bold text-slate-800 mb-1">⬇️ Todo en un archivo</div>
         <div class="text-[11px] text-slate-500 mb-3">Un solo Excel con todas las hojas: Ventas, Compras, Cobros, Pagos, Cheques, Stock insumos y Stock granos.</div>
         <button class="btn btn-secondary w-full" onclick="expContDescargar('todo')">Descargar todo</button>
       </div>
     </div>
-    <div class="text-[11px] text-slate-400 mt-4">Las <b>retenciones y percepciones</b> se cargan en <b>Tesorería → Retenciones</b> y salen en esta exportación. El <b>Libro IVA Digital .txt</b> de ARCA se agrega en una próxima etapa.</div>`;
+    <div class="text-[11px] text-slate-400 mt-4">Las <b>retenciones y percepciones</b> se cargan en <b>Tesorería → Retenciones</b> y salen en esta exportación. El <b>Libro IVA Digital</b> arma los 4 .txt de ARCA (Comprobantes + Alícuotas, de Ventas y Compras) desde las facturas cargadas; los comprobantes de un régimen especial (turismo, importación, recibos de uso) van vacíos y solo se completan si tenés esas operaciones.</div>`;
 };
 
 // Junta los datos de todas las empresas seleccionadas (una llamada por empresa).
@@ -28753,6 +28761,37 @@ async function _expContData() {
     });
   }
   return out;
+}
+
+// Descarga el Libro IVA Digital .txt de ARCA (un ZIP por empresa seleccionada).
+async function libroIvaDescargar() {
+  const desde = document.getElementById('exp-desde')?.value;
+  const hasta = document.getElementById('exp-hasta')?.value;
+  const cids = Array.from(document.querySelectorAll('.exp-emp:checked')).map(x => x.value);
+  if (!desde || !hasta) { toast('Elegí el período (desde/hasta)', 'error'); return; }
+  if (!cids.length) { toast('Elegí al menos una empresa', 'error'); return; }
+  state._expCont = { desde, hasta };
+  const comps = (state.user?.companies || []);
+  let ok = 0;
+  toast('Generando Libro IVA Digital…');
+  for (const cid of cids) {
+    const nombre = (comps.find(c => c.id === cid)?.razonSocial) || (comps.find(c => c.id === cid)?.name) || 'empresa';
+    try {
+      const r = await api(`/api/export-libro-iva?desde=${desde}&hasta=${hasta}&_c=${cid}`, { headers: { 'X-Company-Id': cid } });
+      if (!r || !r.ok || !r.zipB64) { toast(`No pude generar el Libro IVA de ${nombre}`, 'error'); continue; }
+      const bytes = _urlB64ToUint8(r.zipB64);
+      const blob = new Blob([bytes], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = r.zipNombre || `LibroIVA_${r.periodo || ''}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      const s = r.resumen || {};
+      toast(`✅ ${nombre}: ${s.ventas || 0} ventas · ${s.compras || 0} compras` + ((s.sinCuit || 0) ? ` · ⚠️ ${s.sinCuit} sin CUIT` : ''), 'success');
+      ok++;
+    } catch (e) { toast(`Error con ${nombre}: ${e.message || e}`, 'error'); }
+  }
+  if (ok > 1) toast(`Listo: ${ok} archivos descargados`, 'success');
 }
 
 // aoa a partir de filas + columnas [{h,k,date,num}]; antepone Empresa si multi.

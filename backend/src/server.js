@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.96.0';
+const AGROCORE_VERSION = '2.97.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7285,6 +7285,154 @@ app.get('/api/export-contador', requireCompany, requirePermission('finanzas:read
       periodo: { desde: req.query.desde || null, hasta: req.query.hasta || null },
       ventas, compras, cobros, pagos, cheques, stockInsumos, stockGranos,
       retenciones: await _retencionesRango(cid, desde, hasta),
+    });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// LIBRO IVA DIGITAL (ARCA) — exporta los .txt de ancho fijo para importar
+// directamente en el portal de ARCA (RG 4597). Genera los 4 archivos base:
+//   COMPROBANTES de VENTAS + ALICUOTAS de VENTAS
+//   COMPROBANTES de COMPRAS + ALICUOTAS de COMPRAS
+// Layouts verificados contra archivos reales de "Libro IVA Digital".
+// ============================================================
+// Código de comprobante ARCA (numérico) a partir de tipo (A/B/C/M/E) + clase.
+const _LIBRO_TIPO_COD = {
+  'A|factura': 1, 'A|nota_debito': 2, 'A|nota_credito': 3,
+  'B|factura': 6, 'B|nota_debito': 7, 'B|nota_credito': 8,
+  'C|factura': 11, 'C|nota_debito': 12, 'C|nota_credito': 13,
+  'M|factura': 51, 'M|nota_debito': 52, 'M|nota_credito': 53,
+  'E|factura': 19, 'E|nota_debito': 20, 'E|nota_credito': 21,
+};
+// Código de alícuota IVA ARCA (4 dígitos).
+function _libroAlicCod(a) {
+  const n = Number(a) || 0;
+  if (n === 0) return '0003';
+  if (n === 10.5) return '0004';
+  if (n === 21) return '0005';
+  if (n === 27) return '0006';
+  if (n === 5) return '0008';
+  if (n === 2.5) return '0009';
+  return '0005';
+}
+// Moneda ARCA + tipo de cambio (10 dígitos, 6 decimales).
+function _libroMoneda(mon, cot) {
+  const m = String(mon || 'ARS').toUpperCase();
+  if (m === 'ARS' || m === 'PES') return { cod: 'PES', tc: 1, convertirARS: false };
+  if (m === 'USD' || m === 'DOL') return { cod: 'DOL', tc: Number(cot) || 1, convertirARS: false };
+  if (m === 'EUR') return { cod: '060', tc: Number(cot) || 1, convertirARS: false };
+  // Monedas no fiscales (SOJA/MAIZ/KGN...): se convierten a pesos con la cotización.
+  return { cod: 'PES', tc: 1, convertirARS: true, factor: Number(cot) || 1 };
+}
+// Helpers de formato de ancho fijo.
+function _libN(v, len) { const s = String(Math.abs(Math.round(Number(v) || 0))); return s.length >= len ? s.slice(-len) : '0'.repeat(len - s.length) + s; }
+function _libImp(v, len = 15) { return _libN(Math.round((Math.abs(Number(v) || 0)) * 100), len); } // 2 decimales implícitos
+function _libTC(tc) { return _libN(Math.round((Number(tc) || 1) * 1000000), 10); } // 6 decimales implícitos
+function _libTxt(v, len) { let s = String(v == null ? '' : v).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim(); if (s.length > len) s = s.slice(0, len); return s + ' '.repeat(len - s.length); }
+function _libDoc(cuit) { const d = String(cuit || '').replace(/\D/g, ''); if (d.length === 11) return { codDoc: '80', nroId: d.padStart(20, '0') }; if (d.length === 7 || d.length === 8) return { codDoc: '96', nroId: d.padStart(20, '0') }; return { codDoc: '99', nroId: '0'.repeat(20) }; }
+function _libFecha(d) { const x = new Date(d); return `${x.getFullYear()}${String(x.getMonth() + 1).padStart(2, '0')}${String(x.getDate()).padStart(2, '0')}`; }
+// Agrupa los items de un comprobante por alícuota → { taxed:[{alic,neto,iva}], exento, noGravado }
+function _libBuckets(items, factor) {
+  const tax = new Map(); let exento = 0;
+  (items || []).forEach(it => {
+    const a = Number(it.alicuotaIva) || 0;
+    const neto = (Number(it.subtotal) || 0) * factor;
+    const iva = (Number(it.ivaImporte) || 0) * factor;
+    if (a > 0) { const k = _libroAlicCod(a); const cur = tax.get(k) || { alic: a, neto: 0, iva: 0 }; cur.neto += neto; cur.iva += iva; tax.set(k, cur); }
+    else exento += neto;
+  });
+  return { taxed: Array.from(tax.values()), exento };
+}
+
+app.get('/api/export-libro-iva', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const desde = req.query.desde ? new Date(String(req.query.desde) + 'T00:00:00') : new Date('2000-01-01');
+    const hasta = req.query.hasta ? new Date(String(req.query.hasta) + 'T23:59:59') : new Date('2999-12-31');
+    const cid = req.companyId;
+    const emp = await prisma.company.findFirst({ where: { id: cid }, select: { name: true, razonSocial: true, cuit: true, arcaCuit: true } });
+    const cuitEmp = String(emp?.cuit || emp?.arcaCuit || '').replace(/\D/g, '');
+    // Etiqueta de período AAAAMM: usa el mes de "hasta".
+    const per = `${hasta.getFullYear()}${String(hasta.getMonth() + 1).padStart(2, '0')}`;
+
+    // ---- VENTAS ----
+    const ventas = await prisma.factura.findMany({
+      where: { companyId: cid, fecha: { gte: desde, lte: hasta }, estado: { not: 'anulada' } },
+      include: { items: true, cliente: { select: { razonSocial: true, cuit: true } } },
+      orderBy: [{ fecha: 'asc' }, { puntoVenta: 'asc' }, { numero: 'asc' }],
+    });
+    const vCbte = [], vAlic = [];
+    const resumen = { ventas: 0, compras: 0, ventasAlic: 0, comprasAlic: 0, sinCuit: 0 };
+    for (const f of ventas) {
+      const tipoCod = _LIBRO_TIPO_COD[`${f.tipo}|${f.clase || 'factura'}`] || 0;
+      const mm = _libroMoneda(f.moneda, f.cotizacion);
+      const factor = mm.convertirARS ? (mm.factor || 1) : 1;
+      const doc = _libDoc(f.cliente?.cuit);
+      if (doc.codDoc === '99') resumen.sinCuit++;
+      const { taxed, exento } = _libBuckets(f.items, factor);
+      const cantAlic = taxed.length;
+      const codOp = cantAlic > 0 ? ' ' : (exento > 0.005 ? 'E' : ' ');
+      const total = (Number(f.total) || 0) * factor;
+      const pv = _libN(f.puntoVenta, 5), nro = _libN(f.numero, 20);
+      const tc3 = String(tipoCod).padStart(3, '0');
+      vCbte.push(
+        _libFecha(f.fecha) + tc3 + pv + nro + nro +
+        doc.codDoc + doc.nroId + _libTxt(f.cliente?.razonSocial || 'Consumidor Final', 30) +
+        _libImp(total) + _libImp(0) + _libImp(0) + _libImp(exento) +
+        _libImp(0) + _libImp(0) + _libImp(0) + _libImp(0) +
+        mm.cod + _libTC(mm.tc) + String(cantAlic) + codOp + _libImp(0) + '00000000'
+      );
+      for (const b of taxed) { vAlic.push(tc3 + pv + nro + _libImp(b.neto) + _libroAlicCod(b.alic) + _libImp(b.iva)); resumen.ventasAlic++; }
+      resumen.ventas++;
+    }
+
+    // ---- COMPRAS ----
+    const compras = await prisma.facturaCompra.findMany({
+      where: { companyId: cid, fecha: { gte: desde, lte: hasta } },
+      include: { items: true, proveedor: { select: { razonSocial: true, cuit: true } } },
+      orderBy: [{ fecha: 'asc' }, { puntoVenta: 'asc' }, { numero: 'asc' }],
+    });
+    const cCbte = [], cAlic = [];
+    for (const f of compras) {
+      const tipoCod = _LIBRO_TIPO_COD[`${f.tipo}|${f.clase || 'factura'}`] || 0;
+      const mm = _libroMoneda(f.moneda, f.cotizacion);
+      const factor = mm.convertirARS ? (mm.factor || 1) : 1;
+      const doc = _libDoc(f.proveedor?.cuit);
+      if (doc.codDoc === '99') resumen.sinCuit++;
+      const { taxed, exento } = _libBuckets(f.items, factor);
+      const cantAlic = taxed.length;
+      const codOp = cantAlic > 0 ? ' ' : (exento > 0.005 ? 'E' : ' ');
+      const total = (Number(f.total) || 0) * factor;
+      const ivaTotal = taxed.reduce((s, b) => s + b.iva, 0);
+      const pv = _libN(f.puntoVenta, 5), nro = _libN(f.numero, 20);
+      const tc3 = String(tipoCod).padStart(3, '0');
+      cCbte.push(
+        _libFecha(f.fecha) + tc3 + pv + nro + ' '.repeat(16) +
+        doc.codDoc + doc.nroId + _libTxt(f.proveedor?.razonSocial || 'Proveedor', 30) +
+        _libImp(total) + _libImp(0) + _libImp(exento) + _libImp(0) +
+        _libImp(0) + _libImp(0) + _libImp(0) + _libImp(0) +
+        mm.cod + _libTC(mm.tc) + String(cantAlic) + codOp +
+        _libImp(ivaTotal) + _libImp(0) + '0'.repeat(11) + _libTxt('', 30) + _libImp(0)
+      );
+      for (const b of taxed) { cAlic.push(tc3 + pv + nro + doc.codDoc + doc.nroId + _libImp(b.neto) + _libroAlicCod(b.alic) + _libImp(b.iva)); resumen.comprasAlic++; }
+      resumen.compras++;
+    }
+
+    // Armar el ZIP (latin-1, líneas CRLF). jszip ya está en node_modules.
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    const mk = (rows) => Buffer.from(rows.join('\r\n') + (rows.length ? '\r\n' : ''), 'latin1');
+    zip.file(`LIBRO_IVA_DIGITAL_VENTAS_CBTE_${per}.txt`, mk(vCbte));
+    zip.file(`LIBRO_IVA_DIGITAL_VENTAS_ALICUOTAS_${per}.txt`, mk(vAlic));
+    zip.file(`LIBRO_IVA_DIGITAL_COMPRAS_CBTE_${per}.txt`, mk(cCbte));
+    zip.file(`LIBRO_IVA_DIGITAL_COMPRAS_ALICUOTAS_${per}.txt`, mk(cAlic));
+    const zipBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    res.json({
+      ok: true,
+      periodo: per,
+      empresa: { nombre: emp?.razonSocial || emp?.name || '', cuit: cuitEmp },
+      zipNombre: `LibroIVA_${(emp?.razonSocial || emp?.name || 'empresa').replace(/[^A-Za-z0-9]+/g, '_').slice(0, 30)}_${per}.zip`,
+      zipB64: zipBuf.toString('base64'),
+      resumen,
     });
   } catch (e) { next(e); }
 });
