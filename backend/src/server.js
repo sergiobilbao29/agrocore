@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.95.0';
+const AGROCORE_VERSION = '2.96.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5593,6 +5593,8 @@ mountCrud({
     fechaEgreso: z.coerce.date().nullable().optional(),
     sueldo: z.number().nullable().optional(),
     jornalDiario: z.coerce.number().nullable().optional(),   // precio por día
+    porDia: z.boolean().optional(),                          // cobra por día (sueldo = jornal × diasMes)
+    diasMes: z.coerce.number().int().nullable().optional(),  // días trabajados por mes
     telefono: z.string().nullable().optional(),
     email: z.string().nullable().optional(),
     direccion: z.string().nullable().optional(),
@@ -12139,9 +12141,40 @@ const FACT_TIPO_AFIP = {
 };
 app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.single('archivo'), async (req, res, next) => {
   try {
-    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo PDF' });
-    if (!/\.pdf$/i.test(req.file.originalname || '')) {
-      return res.status(400).json({ ok: false, error: 'El archivo debe ser un PDF' });
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const nombre = req.file.originalname || '';
+    const esImagen = /^image\//.test(req.file.mimetype || '') || /\.(jpe?g|png|webp|heic)$/i.test(nombre);
+    if (!esImagen && !/\.pdf$/i.test(nombre)) {
+      return res.status(400).json({ ok: false, error: 'El archivo debe ser un PDF o una foto (JPG/PNG).' });
+    }
+    // Mapea la salida de la IA (visión) al mismo formato que devuelve el parser de texto.
+    const _iaAFactura = (d) => {
+      if (!d || d.tipo !== 'factura_compra' || !d.datos) return null;
+      const dat = d.datos;
+      const cuit = String(dat.cuit || '').replace(/\D/g, '');
+      const numRaw = String(dat.numero || '');
+      const mn = numRaw.match(/(\d{1,5})\D+(\d{1,8})/);
+      const monRaw = String(dat.moneda || '').toUpperCase();
+      return {
+        fuente: 'IA_VISION', cae: null, caeVencimiento: null,
+        fecha: dat.fecha ? String(dat.fecha).slice(0, 10) : null,
+        cuitEmisor: cuit.length === 11 ? cuit : null, razonSocialEmisor: dat.proveedor || null,
+        cuitReceptor: null, razonSocialReceptor: null,
+        puntoVenta: mn ? Number(mn[1]) : null, numero: mn ? Number(mn[2]) : (numRaw.replace(/\D/g, '') ? Number(numRaw.replace(/\D/g, '')) : null),
+        tipoCmpCodigo: null, tipoCmpLetra: 'C', clase: 'factura',
+        total: dat.total != null ? Number(dat.total) : null, netoGravado: null,
+        iva21: null, iva105: null, iva27: null, iva25: null, iva5: null,
+        moneda: /US|USD|D[OÓ]LAR|DOL/.test(monRaw) ? 'DOL' : 'PES', cotizacion: 1,
+      };
+    };
+    // Foto/imagen: la leemos con IA (visión). ARCA no aplica acá; es una factura fotografiada.
+    if (esImagen) {
+      const ia = await _iaConfig();
+      if (!ia.enabled) return res.status(422).json({ ok: false, error: 'Para leer una FOTO de factura necesito la IA activada (Configuración → 🤖 Asistente IA). Mientras tanto, cargá la factura a mano.' });
+      const doc = await _iaAnalizarDocumento({ buffer: req.file.buffer, mime: req.file.mimetype }, ia);
+      const mapped = _iaAFactura(doc);
+      if (!mapped) return res.status(422).json({ ok: false, error: 'No pude reconocer una factura de compra en la foto. Probá con una foto más nítida y derecha, o cargala a mano.' });
+      return res.json({ ok: true, data: mapped, viaIA: true });
     }
     let texto = '';
     let pdfParse;
@@ -12156,6 +12189,11 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       texto = data.text || '';
     } catch (e) {
       return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message });
+    }
+    // PDF escaneado (foto envuelta en PDF, sin texto): no se puede leer por texto.
+    if (String(texto).replace(/\s/g, '').length < 25) {
+      return res.status(422).json({ ok: false, scanned: true,
+        error: 'Este PDF es una foto escaneada (no tiene texto adentro). Subí la FOTO original (JPG/PNG) en vez del PDF y la leo con IA, o cargá la factura a mano.' });
     }
 
     // === Helpers de parseo ===

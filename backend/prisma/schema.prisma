@@ -992,6 +992,8 @@ model Empleado {
   fechaEgreso     DateTime?
   sueldo          Float?
   jornalDiario    Float?    // precio por día (para empleados que cobran por jornada)
+  porDia          Boolean  @default(false)  // true = cobra por día (sueldo base = jornalDiario × diasMes)
+  diasMes         Int?                        // cantidad de días trabajados por mes (para empleados por día)
   telefono        String?
   email           String?
   direccion       String?

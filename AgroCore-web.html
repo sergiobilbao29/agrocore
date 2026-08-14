@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'👷 v2.96.0 — Empleados por día + leer facturas desde una foto',
+      desc:'Dos cosas. <b>(1) Empleado por día:</b> en la ficha del empleado hay un tilde <b>"📅 Trabaja por día"</b>. Cargás el <b>precio por día (jornal)</b> y los <b>días por mes</b>, y el sistema calcula el <b>sueldo del mes</b> (jornal × días), lo muestra en la planilla igual que un sueldo fijo y lo suma a la <b>Masa salarial</b>. <b>(2) Factura desde foto:</b> en Compras, el botón de cargar comprobante ahora acepta <b>PDF o FOTO (JPG/PNG)</b>. Si sacás una foto de una factura física, el sistema la <b>lee con IA</b> y autocompleta proveedor, número, fecha y total (requiere la IA activada). Si subís un PDF que en realidad es una foto escaneada (sin texto), te avisa claro que subas la foto original.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/08/2026',
       titulo:'🔧 v2.95.0 — Se arregló la importación de "Mis Comprobantes" de ARCA',
       desc:'Algunos Excel que baja ARCA de <b>Mis Comprobantes</b> (Recibidos y Emitidos) daban el error <i>"No parece el Excel de Mis Comprobantes"</i> aunque el archivo estuviera perfecto. El problema era el <b>formato interno del Excel de ARCA</b> (celdas de texto tipo "inlineStr") que la librería del navegador leía en blanco. Ahora el archivo se <b>procesa en el servidor</b> con un lector propio que entiende ese formato, así que la importación vuelve a andar. Subís el Excel igual que siempre y tocás Importar.' },
@@ -12934,10 +12937,10 @@ async function compForm(pre) {
     title: state._compEdit ? 'Editar factura de compra' : 'Cargar factura de compra', size:'max-w-6xl',
     body: `
       <div class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between gap-2 flex-wrap">
-        <div class="text-sm text-blue-900">📄 <b>¿Tenés el PDF de la factura?</b> Subilo y autocompletamos los datos a partir del QR de ARCA.</div>
+        <div class="text-sm text-blue-900">📄 <b>¿Tenés el PDF o una foto de la factura?</b> Subilo y autocompletamos los datos. El PDF de ARCA se lee por su QR; una <b>foto (JPG/PNG)</b> se lee con IA.</div>
         <div class="flex gap-2 items-center">
-          <input id="f-pdf-file" type="file" accept=".pdf" class="hidden" onchange="compCargarDesdePDF(this)"/>
-          <button class="btn btn-primary text-xs" onclick="document.getElementById('f-pdf-file').click()">📄 Cargar desde PDF</button>
+          <input id="f-pdf-file" type="file" accept=".pdf,image/*" capture="environment" class="hidden" onchange="compCargarDesdePDF(this)"/>
+          <button class="btn btn-primary text-xs" onclick="document.getElementById('f-pdf-file').click()">📄 PDF / 📷 Foto</button>
         </div>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
@@ -19805,6 +19808,28 @@ function solicitarCamionEnviar() {
 /* =========================================================
  * EMPLEADOS
  * ========================================================= */
+// Sueldo base mensual de un empleado: por día = jornal × días/mes; si no, el sueldo fijo.
+function empSueldoBase(emp){
+  if (!emp) return 0;
+  if (emp.porDia) return Math.round(Number(emp.jornalDiario||0) * Number(emp.diasMes||0) * 100) / 100;
+  return Number(emp.sueldo||0);
+}
+// Alterna entre "sueldo mensual" y "por día" en el form de empleado.
+function empModalidadToggle(){
+  const on = document.getElementById('f-pordia')?.checked;
+  const sld = document.getElementById('f-sld-wrap'), jor = document.getElementById('f-jornal-wrap'), dias = document.getElementById('f-dias-wrap');
+  if (sld) sld.style.display = on ? 'none' : '';
+  if (jor) jor.style.display = on ? '' : '';   // el jornal siempre sirve; lo destacamos en modo por día
+  if (dias) dias.style.display = on ? '' : 'none';
+  empSueldoHint();
+}
+function empSueldoHint(){
+  const on = document.getElementById('f-pordia')?.checked;
+  const h = document.getElementById('f-sueldo-hint'); if (!h) return;
+  if (!on) { h.textContent = ''; return; }
+  const j = Number(document.getElementById('f-jornal')?.value||0), d = Number(document.getElementById('f-dias')?.value||0);
+  h.innerHTML = (j && d) ? `Sueldo del mes ≈ <b>${fmt$(j*d)}</b> (${d} día${d===1?'':'s'} × ${fmt$(j)})` : 'Cargá el jornal y los días para calcular el sueldo del mes.';
+}
 pages.empleados = async function() {
   state.empFichaId = null;  // la nómina nunca es una ficha abierta
   setHeader('Empleados', 'Personal y RRHH');
@@ -19813,7 +19838,7 @@ pages.empleados = async function() {
   let rows=[];
   try { rows = await crudList('empleados'); } catch (e) { return toast(e.message,'error'); }
   const activos = rows.filter(e => e.activo !== false).length;
-  const totalSueldos = rows.filter(e => e.activo !== false).reduce((a,e)=>a+Number(e.sueldo||0),0);
+  const totalSueldos = rows.filter(e => e.activo !== false).reduce((a,e)=>a+empSueldoBase(e),0);
   $('#page-body').innerHTML = `
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Empleados</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
@@ -19880,9 +19905,13 @@ function empleForm(id=null) {
         <div><label class="label">Puesto</label><input id="f-pto" class="input" list="f-puestos" value="${esc(it.puesto||'')}"/>
           <datalist id="f-puestos">${catByTipo('Labor').map(x=>`<option value="${esc(x.nombre)}">`).join('')}</datalist>
         </div>
-        <div><label class="label">Sueldo mensual</label><input id="f-sld" type="number" step="0.01" class="input" value="${it.sueldo||''}"/></div>
-        <div><label class="label">Precio por día (jornal)</label><input id="f-jornal" type="number" step="0.01" class="input" value="${it.jornalDiario||''}" placeholder="Ej: 25000"/>
-          <div class="text-[10px] text-slate-400 mt-1">Se autocompleta al cargar "Días trabajados" en la planilla.</div>
+        <div class="col-span-2 p-2 bg-slate-50 rounded border border-slate-200 grid grid-cols-2 gap-3">
+          <label class="col-span-2 text-sm flex items-center gap-2 cursor-pointer font-medium"><input id="f-pordia" type="checkbox" ${it.porDia?'checked':''} onchange="empModalidadToggle()"/> 📅 Trabaja por día (jornal × días)</label>
+          <div id="f-sld-wrap"><label class="label">Sueldo mensual</label><input id="f-sld" type="number" step="0.01" class="input" value="${it.sueldo||''}"/></div>
+          <div id="f-jornal-wrap"><label class="label">Precio por día (jornal)</label><input id="f-jornal" type="number" step="0.01" class="input" value="${it.jornalDiario||''}" oninput="empSueldoHint()" placeholder="Ej: 25000"/></div>
+          <div id="f-dias-wrap"><label class="label">Días por mes</label><input id="f-dias" type="number" step="1" min="0" class="input" value="${it.diasMes||''}" oninput="empSueldoHint()" placeholder="Ej: 24"/></div>
+          <div id="f-sueldo-hint" class="col-span-2 text-[11px] text-emerald-700"></div>
+          <div class="col-span-2 text-[10px] text-slate-400">El precio por día también autocompleta el importe al cargar "días" en la planilla.</div>
         </div>
         <div><label class="label">Fecha ingreso</label><input id="f-fin" type="date" class="input" value="${it.fechaIngreso?String(it.fechaIngreso).slice(0,10):''}"/></div>
         <div><label class="label">Fecha egreso</label><input id="f-fout" type="date" class="input" value="${it.fechaEgreso?String(it.fechaEgreso).slice(0,10):''}"/></div>
@@ -19950,6 +19979,7 @@ function empleForm(id=null) {
              ${id?`<button class="btn btn-secondary" onclick='closeModal(); empleAbrir(${JSON.stringify(id)})' title="Ir a la planilla de gastos, ganancias y sueldo">📋 Ver planilla</button>`:''}
              <button class="btn btn-primary" onclick='empleSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
+  empModalidadToggle();
 }
 function emplToggleChofer() {
   const on = document.getElementById('f-esch')?.checked;
@@ -19995,6 +20025,8 @@ async function empleSave(id) {
     puesto: $('#f-pto').value.trim()||null,
     sueldo: $('#f-sld').value?Number($('#f-sld').value):null,
     jornalDiario: $('#f-jornal')?.value?Number($('#f-jornal').value):null,
+    porDia: $('#f-pordia')?.checked||false,
+    diasMes: $('#f-dias')?.value?Number($('#f-dias').value):null,
     fechaIngreso: $('#f-fin').value?new Date($('#f-fin').value).toISOString():null,
     fechaEgreso: $('#f-fout').value?new Date($('#f-fout').value).toISOString():null,
     telefono: $('#f-tel').value.trim()||null,
@@ -20090,7 +20122,7 @@ function empFichaRender() {
 
   // Sueldo base automático del mes (salvo que ya haya un movimiento "sueldo").
   const haySueldoMov = movsMes.some(m=>m.categoria==='sueldo');
-  const sueldoBase = (!haySueldoMov && Number(emp.sueldo||0)>0) ? Number(emp.sueldo) : 0;
+  const sueldoBase = (!haySueldoMov && empSueldoBase(emp)>0) ? empSueldoBase(emp) : 0;
 
   const gananciasMov = movsMes.filter(m=>m.tipo==='ganancia').reduce((a,m)=>a+Number(m.monto||0),0);
   const gastos       = movsMes.filter(m=>m.tipo==='gasto').reduce((a,m)=>a+Number(m.monto||0),0);
@@ -20662,7 +20694,7 @@ function empLiqForm(periodo){
   const {emp,movs}=state.empFicha;
   const movsMes=movs.filter(m=>m.periodo===periodo);
   const haySueldoMov=movsMes.some(m=>m.categoria==='sueldo');
-  const sueldoBase=(!haySueldoMov&&Number(emp.sueldo||0)>0)?Number(emp.sueldo):0;
+  const sueldoBase=(!haySueldoMov&&empSueldoBase(emp)>0)?empSueldoBase(emp):0;
   const ganMov=movsMes.filter(m=>m.tipo==='ganancia').reduce((a,m)=>a+Number(m.monto||0),0);
   const gastos=movsMes.filter(m=>m.tipo==='gasto').reduce((a,m)=>a+Number(m.monto||0),0);
   const ganancias=ganMov+sueldoBase;
@@ -20781,7 +20813,7 @@ function _empPlanillaMes(){
   const movsMes=movs.filter(m=>m.periodo===mes).sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
   const liq=liqs.find(l=>l.periodo===mes)||null;
   const haySueldoMov=movsMes.some(m=>m.categoria==='sueldo');
-  const sueldoBase=(!haySueldoMov&&Number(emp.sueldo||0)>0)?Number(emp.sueldo):0;
+  const sueldoBase=(!haySueldoMov&&empSueldoBase(emp)>0)?empSueldoBase(emp):0;
   const totGan=movsMes.filter(m=>m.tipo==='ganancia').reduce((a,m)=>a+Number(m.monto||0),0)+sueldoBase;
   const totGasto=movsMes.filter(m=>m.tipo==='gasto').reduce((a,m)=>a+Number(m.monto||0),0);
   const empresa=(state.user?.companies||[]).find(c=>c.id===state.companyId);
