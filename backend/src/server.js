@@ -9,6 +9,7 @@ import { z, ZodError } from 'zod';
 import { PrismaClient } from '@prisma/client';
 import path from 'node:path';
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -63,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.94.0';
+const AGROCORE_VERSION = '2.95.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3763,7 +3764,12 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
 // ============================================================
 app.post('/api/facturas/import-arca', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
   try {
-    const matrix = req.body?.matrix;
+    let matrix = req.body?.matrix;
+    // Si viene el archivo (fileB64), lo parseamos con nuestro lector (maneja inlineStr de ARCA).
+    if ((!Array.isArray(matrix) || !matrix.length) && req.body?.fileB64) {
+      try { matrix = _xlsxToMatrix(Buffer.from(String(req.body.fileB64), 'base64')); }
+      catch (e) { return res.status(400).json({ ok:false, error:'No pude leer el Excel: '+e.message }); }
+    }
     if (!Array.isArray(matrix) || !matrix.length) return res.status(400).json({ ok:false, error:'No se recibieron filas del Excel.' });
     let hdrIdx = -1;
     for (let i=0;i<Math.min(matrix.length,10);i++){ const cells=(matrix[i]||[]).map(_normHdr); if(cells.includes('fecha') && cells.some(c=>c==='imp total')){ hdrIdx=i; break; } }
@@ -4048,6 +4054,79 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
 // único (companyId, proveedorId, tipo, puntoVenta, numero). NO carga renglones
 // de stock (ARCA no los provee): los ítems se agregan después a mano.
 // ============================================================
+// Parser propio de .xlsx → matriz (array de filas). Se usa para el import de ARCA
+// porque el "Mis Comprobantes" que exporta ARCA usa celdas inlineStr que SheetJS
+// 0.18.5 devuelve VACIAS (solo lee los numeros). Este parser lee el XML del zip a
+// mano (zlib, sin dependencias) y maneja inlineStr, shared strings y numeros.
+function _xlsxUnzipEntry(buf, name) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i--) { if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; } }
+  if (eocd < 0) throw new Error('Archivo Excel inválido (no es un .xlsx)');
+  let cdOff = buf.readUInt32LE(eocd + 16);
+  const total = buf.readUInt16LE(eocd + 10);
+  for (let e = 0; e < total; e++) {
+    if (buf.readUInt32LE(cdOff) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(cdOff + 10);
+    const compSize = buf.readUInt32LE(cdOff + 20);
+    const nameLen = buf.readUInt16LE(cdOff + 28);
+    const extraLen = buf.readUInt16LE(cdOff + 30);
+    const commentLen = buf.readUInt16LE(cdOff + 32);
+    const lho = buf.readUInt32LE(cdOff + 42);
+    const nm = buf.toString('utf8', cdOff + 46, cdOff + 46 + nameLen);
+    cdOff += 46 + nameLen + extraLen + commentLen;
+    if (nm !== name) continue;
+    const lnameLen = buf.readUInt16LE(lho + 26);
+    const lextraLen = buf.readUInt16LE(lho + 28);
+    const dataStart = lho + 30 + lnameLen + lextraLen;
+    const comp = buf.slice(dataStart, dataStart + compSize);
+    return method === 0 ? comp : zlib.inflateRawSync(comp);
+  }
+  return null;
+}
+function _xlsxCellText(frag) {
+  let out = ''; const re = /<t[^>]*>([\s\S]*?)<\/t>/g; let m;
+  while ((m = re.exec(frag))) out += m[1];
+  return out.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+}
+function _xlsxColIdx(ref) { const m = String(ref || '').match(/^([A-Z]+)/); if (!m) return 0; let n = 0; for (const ch of m[1]) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; }
+function _xlsxToMatrix(buf) {
+  let shared = [];
+  const ss = _xlsxUnzipEntry(buf, 'xl/sharedStrings.xml');
+  if (ss) { const txt = ss.toString('utf8'); const re = /<si>([\s\S]*?)<\/si>/g; let m; while ((m = re.exec(txt))) shared.push(_xlsxCellText(m[1])); }
+  // Primera hoja: resolvemos por el workbook; si falla, usamos sheet1.xml.
+  let sheetName = 'xl/worksheets/sheet1.xml';
+  const rels = _xlsxUnzipEntry(buf, 'xl/_rels/workbook.xml.rels');
+  const wbx = _xlsxUnzipEntry(buf, 'xl/workbook.xml');
+  if (rels && wbx) {
+    try {
+      const rid = (wbx.toString('utf8').match(/<sheet[^>]*r:id="([^"]+)"/) || [])[1];
+      const tgt = rid ? (rels.toString('utf8').match(new RegExp('Id="' + rid + '"[^>]*Target="([^"]+)"')) || [])[1] : null;
+      if (tgt) sheetName = 'xl/' + tgt.replace(/^\/?xl\//, '').replace(/^\//, '');
+    } catch {}
+  }
+  let sheet = _xlsxUnzipEntry(buf, sheetName) || _xlsxUnzipEntry(buf, 'xl/worksheets/sheet1.xml');
+  if (!sheet) throw new Error('No pude leer la hoja del Excel');
+  const xml = sheet.toString('utf8');
+  const rows = []; const rowRe = /<row[^>]*>([\s\S]*?)<\/row>/g; let rm;
+  while ((rm = rowRe.exec(xml))) {
+    const cells = []; const cRe = /<c\s+([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g; let cm;
+    while ((cm = cRe.exec(rm[1]))) {
+      const attrs = cm[1]; const inner = cm[3] || '';
+      const ref = (attrs.match(/r="([A-Z]+\d+)"/) || [])[1];
+      const t = (attrs.match(/t="([^"]+)"/) || [])[1] || 'n';
+      const idx = _xlsxColIdx(ref);
+      let val = '';
+      if (t === 'inlineStr') val = _xlsxCellText(inner);
+      else if (t === 's') { const v = (inner.match(/<v[^>]*>([\s\S]*?)<\/v>/) || [])[1]; val = shared[Number(v)] || ''; }
+      else { val = (inner.match(/<v[^>]*>([\s\S]*?)<\/v>/) || [])[1] || ''; }
+      cells[idx] = val;
+    }
+    for (let i = 0; i < cells.length; i++) if (cells[i] == null) cells[i] = '';
+    rows.push(cells);
+  }
+  return rows;
+}
+
 const ARCA_TIPO_MAP = {
   1:['A','factura'], 2:['A','nota_debito'], 3:['A','nota_credito'],
   6:['B','factura'], 7:['B','nota_debito'], 8:['B','nota_credito'],
@@ -4065,7 +4144,11 @@ function _arcaFecha(v){ if(v instanceof Date) return v; const s=String(v==null?'
 
 app.post('/api/facturas-compra/import-arca', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
   try {
-    const matrix = req.body?.matrix;
+    let matrix = req.body?.matrix;
+    if ((!Array.isArray(matrix) || !matrix.length) && req.body?.fileB64) {
+      try { matrix = _xlsxToMatrix(Buffer.from(String(req.body.fileB64), 'base64')); }
+      catch (e) { return res.status(400).json({ ok:false, error:'No pude leer el Excel: '+e.message }); }
+    }
     if (!Array.isArray(matrix) || !matrix.length) return res.status(400).json({ ok:false, error:'No se recibieron filas del Excel.' });
     // Ubicar la fila de encabezados (la que tiene "Fecha" e "Imp. Total")
     let hdrIdx = -1;

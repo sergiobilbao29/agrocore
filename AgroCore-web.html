@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/08/2026',
+      titulo:'🔧 v2.95.0 — Se arregló la importación de "Mis Comprobantes" de ARCA',
+      desc:'Algunos Excel que baja ARCA de <b>Mis Comprobantes</b> (Recibidos y Emitidos) daban el error <i>"No parece el Excel de Mis Comprobantes"</i> aunque el archivo estuviera perfecto. El problema era el <b>formato interno del Excel de ARCA</b> (celdas de texto tipo "inlineStr") que la librería del navegador leía en blanco. Ahora el archivo se <b>procesa en el servidor</b> con un lector propio que entiende ese formato, así que la importación vuelve a andar. Subís el Excel igual que siempre y tocás Importar.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'14/08/2026',
       titulo:'📊 v2.94.0 — Exportar cheques a Excel',
       desc:'En <b>Tesorería → Cheques</b>, botón nuevo <b>📊 Exportar Excel</b>. Descarga la lista de cheques que estás viendo <b>respetando los filtros activos</b> (por ejemplo, solo los <b>En cartera</b>). El Excel trae todas las columnas — tipo, formato, N°, banco, cuenta, fechas de emisión/pago/recepción/endoso, beneficiario, en poder de, librador, endosante, CUIT, monto, estado y observaciones — con el <b>total</b> al pie. Ideal para pasar el detalle de la cartera al contador o a los dueños.' },
@@ -12810,34 +12813,27 @@ function compImportArca(){
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
             <button id="arca-btn" class="btn btn-primary" disabled onclick="compImportArcaRun()">Importar</button>`
   });
-  state._arcaMatrix = null;
+  state._arcaFileB64 = null;
   const inp = document.getElementById('arca-file');
   inp.addEventListener('change', e => {
     const file = e.target.files[0]; if(!file) return;
+    state._arcaFileB64 = null; state._arcaCuit = (String(file.name||'').match(/(\d{11})/)||[])[1] || '';
     const rd = new FileReader();
     rd.onload = ev => {
       try {
-        const wb = XLSX.read(new Uint8Array(ev.target.result), { type:'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const m = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
-        state._arcaMatrix = m;
-        state._arcaCuit = (String(file.name||'').match(/(\d{11})/)||[])[1] || '';
-        let n=0, seen=false;
-        for(const row of m){ const c=(row||[]).map(x=>String(x).toLowerCase().trim()); if(!seen){ if(c.includes('fecha')) seen=true; continue; } if(row && String(row[0]||'').trim()) n++; }
-        document.getElementById('arca-status').innerHTML = seen
-          ? `<span class="text-green-700">✓ Detecté <b>${n}</b> comprobantes en el archivo.</span>`
-          : `<span class="text-red-600">No parece el Excel de Mis Comprobantes (no encuentro la fila de encabezados).</span>`;
-        document.getElementById('arca-btn').disabled = !seen || n===0;
+        state._arcaFileB64 = String(ev.target.result||'').split(',')[1] || '';
+        document.getElementById('arca-status').innerHTML = `<span class="text-green-700">✓ Archivo listo: <b>${esc(file.name)}</b>. Tocá <b>Importar</b> para procesarlo.</span>`;
+        document.getElementById('arca-btn').disabled = !state._arcaFileB64;
       } catch(err){ document.getElementById('arca-status').innerHTML = `<span class="text-red-600">No pude leer el archivo: ${esc(err.message)}</span>`; }
     };
-    rd.readAsArrayBuffer(file);
+    rd.readAsDataURL(file);   // el backend parsea el .xlsx (soporta el formato inlineStr de ARCA)
   });
 }
 async function compImportArcaRun(){
-  if(!state._arcaMatrix) return;
+  if(!state._arcaFileB64) return;
   const btn = document.getElementById('arca-btn'); if(btn){ btn.disabled=true; btn.textContent='Importando…'; }
   try {
-    const r = await api('/api/facturas-compra/import-arca', { method:'POST', body: JSON.stringify({ matrix: state._arcaMatrix, archivoCuit: state._arcaCuit||'' }) });
+    const r = await api('/api/facturas-compra/import-arca', { method:'POST', body: JSON.stringify({ fileB64: state._arcaFileB64, archivoCuit: state._arcaCuit||'' }) });
     const s = r.resumen||{}; const det = r.detalle||[];
     const bdg = e => e==='creado'?'<span class="badge badge-green">creado</span>':e==='duplicado'?'<span class="badge badge-yellow">duplicado</span>':e==='omitido'?'<span class="badge badge-blue">omitido</span>':'<span class="badge badge-red">error</span>';
     document.getElementById('arca-status').innerHTML = `
@@ -12873,34 +12869,27 @@ function ventaImportArca(){
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
             <button id="arcav-btn" class="btn btn-primary" disabled onclick="ventaImportArcaRun()">Importar</button>`
   });
-  state._arcavMatrix = null;
+  state._arcavFileB64 = null;
   const inp = document.getElementById('arcav-file');
   inp.addEventListener('change', e => {
     const file = e.target.files[0]; if(!file) return;
     const rd = new FileReader();
     rd.onload = ev => {
       try {
-        const wb = XLSX.read(new Uint8Array(ev.target.result), { type:'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const m = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
-        state._arcavMatrix = m;
+        state._arcavFileB64 = String(ev.target.result||'').split(',')[1] || '';
         state._arcavCuit = (String(file.name||'').match(/(\d{11})/)||[])[1] || '';
-        let n=0, seen=false;
-        for(const row of m){ const c=(row||[]).map(x=>String(x).toLowerCase().trim()); if(!seen){ if(c.includes('fecha')) seen=true; continue; } if(row && String(row[0]||'').trim()) n++; }
-        document.getElementById('arcav-status').innerHTML = seen
-          ? `<span class="text-green-700">✓ Detecté <b>${n}</b> comprobantes en el archivo.</span>`
-          : `<span class="text-red-600">No parece el Excel de Mis Comprobantes (no encuentro la fila de encabezados).</span>`;
-        document.getElementById('arcav-btn').disabled = !seen || n===0;
+        document.getElementById('arcav-status').innerHTML = `<span class="text-green-700">✓ Archivo listo: <b>${esc(file.name)}</b>. Tocá <b>Importar</b> para procesarlo.</span>`;
+        document.getElementById('arcav-btn').disabled = !state._arcavFileB64;
       } catch(err){ document.getElementById('arcav-status').innerHTML = `<span class="text-red-600">No pude leer el archivo: ${esc(err.message)}</span>`; }
     };
-    rd.readAsArrayBuffer(file);
+    rd.readAsDataURL(file);
   });
 }
 async function ventaImportArcaRun(){
-  if(!state._arcavMatrix) return;
+  if(!state._arcavFileB64) return;
   const btn = document.getElementById('arcav-btn'); if(btn){ btn.disabled=true; btn.textContent='Importando…'; }
   try {
-    const r = await api('/api/facturas/import-arca', { method:'POST', body: JSON.stringify({ matrix: state._arcavMatrix, archivoCuit: state._arcavCuit||'' }) });
+    const r = await api('/api/facturas/import-arca', { method:'POST', body: JSON.stringify({ fileB64: state._arcavFileB64, archivoCuit: state._arcavCuit||'' }) });
     const s = r.resumen||{}; const det = r.detalle||[];
     const bdg = e => e==='creado'?'<span class="badge badge-green">creado</span>':e==='duplicado'?'<span class="badge badge-yellow">duplicado</span>':e==='omitido'?'<span class="badge badge-blue">omitido</span>':'<span class="badge badge-red">error</span>';
     document.getElementById('arcav-status').innerHTML = `
