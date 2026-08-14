@@ -100,6 +100,7 @@ model Company {
   rodeoEventos       RodeoEvento[]
   cortesForraje      CorteForraje[]
   remitosInternos    RemitoInterno[]
+  retenciones        Retencion[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -2160,6 +2161,42 @@ model RemitoInterno {
   @@index([companyId])
   @@index([estado])
   @@index([campanaId])
+}
+
+// ── Retenciones y percepciones ────────────────────────────────────────────────
+// Certificados de retención/percepción SUFRIDOS (nos los retienen cuando nos
+// pagan/venden) o PRACTICADOS (los hacemos nosotros al pagar a un proveedor).
+// Impuestos típicos del agro: Ganancias, IVA, IIBB (por jurisdicción), SUSS/SICORE.
+model Retencion {
+  id                String   @id @default(cuid())
+  companyId         String
+  naturaleza        String                       // 'sufrida' | 'practicada'
+  clase             String   @default("retencion") // 'retencion' | 'percepcion'
+  impuesto          String                       // 'ganancias' | 'iva' | 'iibb' | 'suss' | 'otro'
+  regimen           String?                      // código/régimen (ej. RG 830, SICORE)
+  jurisdiccion      String?                      // para IIBB: provincia/jurisdicción
+  fecha             DateTime
+  contactoTipo      String?                      // 'cliente' | 'proveedor'
+  contactoId        String?
+  contactoNombre    String?                      // snapshot
+  cuit              String?
+  numeroCertificado String?
+  baseImponible     Float?
+  alicuota          Float?
+  importe           Float
+  comprobanteRef    String?                      // factura / OP / recibo asociado (texto)
+  moneda            String   @default("ARS")
+  observaciones     String?
+  userId            String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([fecha])
+  @@index([naturaleza])
+  @@index([impuesto])
 }
 
 model RemitoRenglon {
