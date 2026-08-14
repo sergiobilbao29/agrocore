@@ -1004,6 +1004,7 @@ const MODULES = [
   { id:'bancos',        label:'Bancos',               icon:'🏛️', perm:'finanzas:read',   section:'Tesorería' },
   { id:'efectivo',      label:'Control de efectivo',  icon:'💵', perm:'finanzas:read',   section:'Tesorería' },
   { id:'cheques',       label:'Cheques',              icon:'💳', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'retenciones',   label:'Retenciones',          icon:'🧾', perm:'finanzas:read',   section:'Tesorería' },
   { id:'creditos',      label:'Créditos bancarios',   icon:'🏦', perm:'finanzas:read',   section:'Tesorería' },
   { id:'activosFijos',  label:'Activos y maquinaria', icon:'🚜', perm:'finanzas:read',   section:'Tesorería' },
   { id:'arrendamientos',label:'Arrendamientos',       icon:'🏞️', perm:'finanzas:read',   section:'Tesorería' },
@@ -2568,6 +2569,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'🧾 v2.90.0 — Retenciones y percepciones',
+      desc:'Nuevo módulo en <b>Tesorería → Retenciones</b> para cargar los certificados del régimen agropecuario: <b>sufridas</b> (te retienen al cobrarte/comprarte) y <b>practicadas</b> (retenés al pagar a un proveedor). Registrás el <b>impuesto</b> (Ganancias, IVA, IIBB, SUSS/SICORE), el <b>régimen</b>, la <b>jurisdicción</b> (IIBB), la fecha, el <b>contacto y CUIT</b>, el <b>N° de certificado</b>, la base, la alícuota y el importe (que se sugiere = base × alícuota). Todo se <b>exporta al contador</b> desde Administración → Exportar para contador (hoja "Retenciones", también en "Descargar todo").' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'💱 v2.89.0 — Compra y venta de dólares en el banco',
+      desc:'En <b>Tesorería → Bancos</b>, botón nuevo <b>💱 Compra/venta de dólares</b>. Elegís la <b>cuenta en pesos</b> y la <b>cuenta en dólares</b> (del mismo banco), el <b>monto en dólares</b> y el <b>tipo de cambio</b> (el monto en pesos se calcula solo y es editable). En una <b>compra</b> salen los pesos de la cuenta ARS y entran los dólares a la cuenta USD; en una <b>venta</b>, al revés. Quedan los dos movimientos registrados en cada cuenta con su saldo actualizado.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
       titulo:'🧾 v2.88.0 — Exportar para el contador (Excel limpios)',
       desc:'Nueva pantalla en <b>Administración → Exportar para contador</b>, pensada para el estudio contable. Elegís un <b>período</b> y una o varias <b>empresas</b> y descargás Excel con los importes como números (listos para sumar): <b>(1) Ventas y Compras</b> con CUIT, condición IVA, <b>neto e IVA por alícuota</b> (21/10,5/27), no gravado, moneda/cotización, CAE y total; <b>(2) Cobros, Pagos y Cheques</b> con el medio usado y la cartera de cheques/e-cheqs (banco, número, vencimiento, estado); <b>(3) Stock valuado</b> a la fecha de corte (insumos y granos), para el cierre de ejercicio. También hay un botón <b>Descargar todo</b>. Próximamente: retenciones/percepciones (SISA) y el Libro IVA Digital .txt de ARCA.' },
@@ -28234,8 +28241,166 @@ const BANCO_TIPOS = {
   comision:           { lbl:'Comisión',           sign:-1, icon:'🧾' },
   impuesto:           { lbl:'Impuesto / sellos',  sign:-1, icon:'🧾' },
   interes:            { lbl:'Interés ganado',     sign:1, icon:'📈' },
+  cambio_in:          { lbl:'Cambio de divisas (entra)', sign:1, icon:'💱' },
+  cambio_out:         { lbl:'Cambio de divisas (sale)',  sign:-1, icon:'💱' },
   otro:               { lbl:'Otro',               sign:0, icon:'•'  },
 };
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RETENCIONES Y PERCEPCIONES — certificados sufridos (nos los retienen) y
+// practicados (los hacemos al pagar). Ganancias, IVA, IIBB, SUSS/SICORE.
+// ══════════════════════════════════════════════════════════════════════════════
+const RET_IMPUESTOS = { ganancias:'Ganancias', iva:'IVA', iibb:'IIBB', suss:'SUSS / SICORE', otro:'Otro' };
+
+pages.retenciones = async function() {
+  setHeader('Retenciones y percepciones', 'Certificados sufridos (nos retienen al cobrar/vender) y practicados (retenemos al pagar) — Ganancias, IVA, IIBB, SUSS');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('retenciones','Retenciones'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let rows = [];
+  try { rows = (await api('/api/retenciones')).data || []; } catch (e) { return toast(e.message,'error'); }
+  state._retenciones = rows;
+  if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data || []; } catch { state.cache.clientes = []; } }
+  if (!state.cache.proveedores) { try { state.cache.proveedores = (await api('/api/proveedores')).data || []; } catch { state.cache.proveedores = []; } }
+  const f = state._retFiltro || 'todas';
+  const vis = rows.filter(r => f==='todas' ? true : r.naturaleza===f);
+  const totSuf = rows.filter(r => r.naturaleza==='sufrida').reduce((a,r)=>a+Number(r.importe||0),0);
+  const totPra = rows.filter(r => r.naturaleza==='practicada').reduce((a,r)=>a+Number(r.importe||0),0);
+  const chip = (k,txt)=>`<button class="btn ${f===k?'btn-primary':'btn-secondary'} text-xs" onclick="state._retFiltro='${k}'; pages.retenciones()">${txt}</button>`;
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="flex items-center gap-1 flex-wrap">${chip('todas','Todas')}${chip('sufrida','📥 Sufridas')}${chip('practicada','📤 Practicadas')}</div>
+      ${can('finanzas:create')?`<button class="btn btn-primary" onclick="retForm()">+ Nueva retención</button>`:''}
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Registros</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Sufridas (nos retuvieron)</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(totSuf)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Practicadas (retuvimos)</div><div class="text-xl font-bold mt-1 text-amber-700">${fmt$(totPra)}</div></div>
+    </div>
+    <div class="card overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="text-left text-slate-500 border-b">
+          <th class="p-2">Fecha</th><th class="p-2">Naturaleza</th><th class="p-2">Impuesto</th><th class="p-2">Contacto</th><th class="p-2">Certificado</th><th class="p-2 text-right">Importe</th><th class="p-2"></th>
+        </tr></thead>
+        <tbody>
+          ${vis.map(r => `<tr class="border-b hover:bg-slate-50">
+            <td class="p-2 whitespace-nowrap">${fmtFecha(r.fecha)}</td>
+            <td class="p-2">${r.naturaleza==='sufrida'?'<span class="badge badge-green text-[10px]">📥 Sufrida</span>':'<span class="badge text-[10px] bg-amber-100 text-amber-800 border-amber-300">📤 Practicada</span>'}</td>
+            <td class="p-2">${esc(RET_IMPUESTOS[r.impuesto]||r.impuesto)}${r.clase==='percepcion'?' <span class="text-[10px] text-slate-400">(percep.)</span>':''}${r.jurisdiccion?` <span class="text-[10px] text-slate-400">${esc(r.jurisdiccion)}</span>`:''}</td>
+            <td class="p-2">${esc(r.contactoNombre||'')}${r.cuit?`<div class="text-[10px] text-slate-400">${esc(r.cuit)}</div>`:''}</td>
+            <td class="p-2">${esc(r.numeroCertificado||'—')}</td>
+            <td class="p-2 text-right font-semibold">${fmt$(r.importe)}</td>
+            <td class="p-2"><div class="flex gap-1 justify-end">
+              ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" onclick='retForm(${JSON.stringify(r.id)})'>✏️</button>`:''}
+              ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='retDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+            </div></td>
+          </tr>`).join('') || `<tr><td colspan="7" class="p-6 text-center text-slate-400">Sin retenciones cargadas. Agregá la primera con "+ Nueva retención".</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div class="text-[11px] text-slate-400 mt-3">Estos certificados se exportan al contador desde <b>Administración → Exportar para contador</b> (hoja "Retenciones").</div>`;
+};
+
+function retForm(id) {
+  const r = id ? (state._retenciones || []).find(x => x.id === id) : null;
+  const p = r || { naturaleza:'sufrida', clase:'retencion', impuesto:'ganancias', fecha: new Date().toISOString().slice(0,10) };
+  const fecha = p.fecha ? String(p.fecha).slice(0,10) : new Date().toISOString().slice(0,10);
+  const optImp = Object.entries(RET_IMPUESTOS).map(([k,v])=>`<option value="${k}" ${p.impuesto===k?'selected':''}>${v}</option>`).join('');
+  openModal({
+    title: id ? '✏️ Editar retención' : '🧾 Nueva retención / percepción',
+    size: 'lg',
+    body: `
+      <div class="grid md:grid-cols-2 gap-3">
+        <div><label class="label">Naturaleza</label>
+          <select id="ret-nat" class="input" onchange="retFormContactos()">
+            <option value="sufrida" ${p.naturaleza==='sufrida'?'selected':''}>📥 Sufrida (nos la retuvieron al cobrar/vender)</option>
+            <option value="practicada" ${p.naturaleza==='practicada'?'selected':''}>📤 Practicada (la hicimos al pagar)</option>
+          </select></div>
+        <div><label class="label">Tipo</label>
+          <select id="ret-clase" class="input">
+            <option value="retencion" ${p.clase==='retencion'?'selected':''}>Retención</option>
+            <option value="percepcion" ${p.clase==='percepcion'?'selected':''}>Percepción</option>
+          </select></div>
+        <div><label class="label">Impuesto</label><select id="ret-imp" class="input" onchange="retFormJuris()">${optImp}</select></div>
+        <div id="ret-juris-wrap"><label class="label">Jurisdicción (IIBB)</label><input id="ret-juris" class="input" value="${esc(p.jurisdiccion||'')}" placeholder="Ej: Córdoba, CABA…"/></div>
+        <div><label class="label">Régimen / código</label><input id="ret-regimen" class="input" value="${esc(p.regimen||'')}" placeholder="Ej: RG 830, SICORE"/></div>
+        <div><label class="label">Fecha</label><input id="ret-fecha" type="date" class="input" value="${fecha}"/></div>
+        <div class="md:col-span-2"><label class="label">Contacto</label>
+          <select id="ret-contacto" class="input" onchange="retFormPickContacto()"></select></div>
+        <div><label class="label">Nombre (si es manual)</label><input id="ret-nombre" class="input" value="${esc(p.contactoNombre||'')}"/></div>
+        <div><label class="label">CUIT</label><input id="ret-cuit" class="input" value="${esc(p.cuit||'')}"/></div>
+        <div><label class="label">N° de certificado</label><input id="ret-cert" class="input" value="${esc(p.numeroCertificado||'')}"/></div>
+        <div><label class="label">Comprobante asociado</label><input id="ret-comp" class="input" value="${esc(p.comprobanteRef||'')}" placeholder="Factura / OP / recibo"/></div>
+        <div><label class="label">Base imponible</label><input id="ret-base" type="number" step="0.01" class="input" value="${p.baseImponible!=null?p.baseImponible:''}" oninput="retFormCalc()"/></div>
+        <div><label class="label">Alícuota %</label><input id="ret-alic" type="number" step="0.01" class="input" value="${p.alicuota!=null?p.alicuota:''}" oninput="retFormCalc()"/></div>
+        <div><label class="label">Importe retenido *</label><input id="ret-importe" type="number" step="0.01" class="input font-bold" value="${p.importe!=null?p.importe:''}"/></div>
+      </div>
+      <label class="label mt-2">Observaciones</label>
+      <input id="ret-obs" class="input" value="${esc(p.observaciones||'')}"/>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="retSave(${id?JSON.stringify(id):'null'})">Guardar</button>`,
+  });
+  retFormContactos(p.contactoId);
+  retFormJuris();
+}
+function retFormContactos(preId) {
+  const nat = document.getElementById('ret-nat')?.value || 'sufrida';
+  const lista = nat==='sufrida' ? (state.cache.clientes||[]) : (state.cache.proveedores||[]);
+  const sel = document.getElementById('ret-contacto');
+  if (!sel) return;
+  const cur = preId || sel.value;
+  sel.innerHTML = `<option value="">— Manual / otro —</option>` + lista.map(c =>
+    `<option value="${esc(c.id)}" data-nombre="${esc(c.razonSocial||'')}" data-cuit="${esc(c.cuit||'')}" ${c.id===cur?'selected':''}>${esc(c.razonSocial||'')}${c.cuit?` (${esc(c.cuit)})`:''}</option>`).join('');
+}
+function retFormPickContacto() {
+  const opt = document.getElementById('ret-contacto')?.selectedOptions?.[0];
+  if (!opt || !opt.value) return;
+  const n = opt.getAttribute('data-nombre')||''; const c = opt.getAttribute('data-cuit')||'';
+  const nEl = document.getElementById('ret-nombre'); const cEl = document.getElementById('ret-cuit');
+  if (nEl) nEl.value = n; if (cEl) cEl.value = c;
+}
+function retFormJuris() {
+  const imp = document.getElementById('ret-imp')?.value;
+  const w = document.getElementById('ret-juris-wrap'); if (w) w.style.display = imp==='iibb' ? '' : 'none';
+}
+function retFormCalc() {
+  const base = Number(document.getElementById('ret-base')?.value||0);
+  const alic = Number(document.getElementById('ret-alic')?.value||0);
+  const imp = document.getElementById('ret-importe');
+  if (imp && base && alic && !Number(imp.value)) imp.value = Math.round(base*alic/100*100)/100;
+}
+async function retSave(id) {
+  const g = (x)=>document.getElementById(x)?.value;
+  const contactoSel = document.getElementById('ret-contacto');
+  const contactoId = contactoSel?.value || null;
+  const nat = g('ret-nat');
+  const body = {
+    naturaleza: nat, clase: g('ret-clase'), impuesto: g('ret-imp'),
+    regimen: g('ret-regimen')?.trim() || null,
+    jurisdiccion: g('ret-imp')==='iibb' ? (g('ret-juris')?.trim()||null) : null,
+    fecha: g('ret-fecha'),
+    contactoTipo: contactoId ? (nat==='sufrida'?'cliente':'proveedor') : null,
+    contactoId: contactoId || null,
+    contactoNombre: g('ret-nombre')?.trim() || null,
+    cuit: g('ret-cuit')?.trim() || null,
+    numeroCertificado: g('ret-cert')?.trim() || null,
+    comprobanteRef: g('ret-comp')?.trim() || null,
+    baseImponible: g('ret-base') ? Number(g('ret-base')) : null,
+    alicuota: g('ret-alic') ? Number(g('ret-alic')) : null,
+    importe: Number(g('ret-importe')||0),
+    observaciones: g('ret-obs')?.trim() || null,
+  };
+  if (!body.fecha) return toast('Elegí la fecha','error');
+  if (!(body.importe > 0)) return toast('Cargá el importe retenido','error');
+  try {
+    await api(id ? `/api/retenciones/${id}` : '/api/retenciones', { method: id?'PUT':'POST', body: JSON.stringify(body) });
+    toast('Retención guardada','success'); closeModal(); pages.retenciones();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function retDel(id) {
+  if (!confirm('¿Eliminar esta retención?')) return;
+  try { await api(`/api/retenciones/${id}`, { method:'DELETE' }); toast('Eliminada','success'); pages.retenciones(); }
+  catch (e) { toast(e.message,'error'); }
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // EXPORTAR PARA EL CONTADOR — exportables limpios (Excel) de ventas, compras,
@@ -28279,12 +28444,17 @@ pages.exportContador = async function() {
         <button class="btn btn-primary w-full" onclick="expContDescargar('stock')">Descargar Stock valuado</button>
       </div>
       <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">🧾 Retenciones y percepciones</div>
+        <div class="text-[11px] text-slate-500 mb-3">Certificados sufridos y practicados (Ganancias, IVA, IIBB, SUSS) con CUIT, régimen, jurisdicción, número, base, alícuota e importe.</div>
+        <button class="btn btn-primary w-full" onclick="expContDescargar('retenciones')">Descargar Retenciones</button>
+      </div>
+      <div class="kpi">
         <div class="font-bold text-slate-800 mb-1">⬇️ Todo en un archivo</div>
         <div class="text-[11px] text-slate-500 mb-3">Un solo Excel con todas las hojas: Ventas, Compras, Cobros, Pagos, Cheques, Stock insumos y Stock granos.</div>
         <button class="btn btn-secondary w-full" onclick="expContDescargar('todo')">Descargar todo</button>
       </div>
     </div>
-    <div class="text-[11px] text-slate-400 mt-4">Las <b>retenciones y percepciones</b> (SISA, Ganancias, IVA, IIBB) y el <b>Libro IVA Digital .txt</b> de ARCA se agregan en una próxima etapa.</div>`;
+    <div class="text-[11px] text-slate-400 mt-4">Las <b>retenciones y percepciones</b> se cargan en <b>Tesorería → Retenciones</b> y salen en esta exportación. El <b>Libro IVA Digital .txt</b> de ARCA se agrega en una próxima etapa.</div>`;
 };
 
 // Junta los datos de todas las empresas seleccionadas (una llamada por empresa).
@@ -28296,11 +28466,11 @@ async function _expContData() {
   if (!cids.length) { toast('Elegí al menos una empresa','error'); return null; }
   state._expCont = { desde, hasta };
   const comps = (state.user?.companies || []);
-  const out = { multi: cids.length > 1, desde, hasta, ventas:[], compras:[], cobros:[], pagos:[], cheques:[], stockInsumos:[], stockGranos:[] };
+  const out = { multi: cids.length > 1, desde, hasta, ventas:[], compras:[], cobros:[], pagos:[], cheques:[], stockInsumos:[], stockGranos:[], retenciones:[] };
   for (const cid of cids) {
     const nombre = (comps.find(c => c.id === cid)?.razonSocial) || (comps.find(c => c.id === cid)?.name) || '';
     const r = await api(`/api/export-contador?desde=${desde}&hasta=${hasta}&_c=${cid}`, { headers: { 'X-Company-Id': cid } });
-    ['ventas','compras','cobros','pagos','cheques','stockInsumos','stockGranos'].forEach(k => {
+    ['ventas','compras','cobros','pagos','cheques','stockInsumos','stockGranos','retenciones'].forEach(k => {
       (r[k] || []).forEach(row => out[k].push({ _empresa: nombre, ...row }));
     });
   }
@@ -28361,6 +28531,13 @@ const _EXP_COLS = {
     { h:'Producto', k:'producto' }, { h:'Categoría', k:'categoria' }, { h:'Unidad', k:'unidad' },
     { h:'Cantidad', k:'cantidad', num:true }, { h:'Costo unit.', k:'costoUnit', num:true }, { h:'Valor', k:'valor', num:true },
   ],
+  ret: [
+    { h:'Fecha', k:'fecha', date:true }, { h:'Naturaleza', k:'naturaleza' }, { h:'Tipo', k:'clase' },
+    { h:'Impuesto', k:'impuesto' }, { h:'Régimen', k:'regimen' }, { h:'Jurisdicción', k:'jurisdiccion' },
+    { h:'Contacto', k:'contacto' }, { h:'CUIT', k:'cuit' }, { h:'N° certificado', k:'numeroCertificado' },
+    { h:'Base imponible', k:'baseImponible', num:true }, { h:'Alícuota %', k:'alicuota', num:true },
+    { h:'Importe', k:'importe', num:true }, { h:'Moneda', k:'moneda' }, { h:'Comprobante', k:'comprobanteRef' },
+  ],
 };
 
 async function expContDescargar(que) {
@@ -28387,6 +28564,10 @@ async function expContDescargar(que) {
         { name:'Stock insumos', aoa:_expAoa(d.stockInsumos, _EXP_COLS.stock, m) },
         { name:'Stock granos', aoa:_expAoa(d.stockGranos, _EXP_COLS.stock, m) },
       ], `Contador_Stock-valuado_${d.hasta}.xlsx`);
+    } else if (que === 'retenciones') {
+      _expDescargarWb([
+        { name:'Retenciones', aoa:_expAoa(d.retenciones, _EXP_COLS.ret, m) },
+      ], `Contador_Retenciones_${per}.xlsx`);
     } else {
       _expDescargarWb([
         { name:'Ventas', aoa:_expAoa(d.ventas, _EXP_COLS.comp, m) },
@@ -28394,6 +28575,7 @@ async function expContDescargar(que) {
         { name:'Cobros', aoa:_expAoa(d.cobros, _EXP_COLS.cobros, m) },
         { name:'Pagos', aoa:_expAoa(d.pagos, _EXP_COLS.pagos, m) },
         { name:'Cheques', aoa:_expAoa(d.cheques, _EXP_COLS.cheques, m) },
+        { name:'Retenciones', aoa:_expAoa(d.retenciones, _EXP_COLS.ret, m) },
         { name:'Stock insumos', aoa:_expAoa(d.stockInsumos, _EXP_COLS.stock, m) },
         { name:'Stock granos', aoa:_expAoa(d.stockGranos, _EXP_COLS.stock, m) },
       ], `Contador_Completo_${per}.xlsx`);
@@ -28706,6 +28888,7 @@ pages.bancos = async function() {
         <label class="text-xs text-slate-600 flex items-center gap-1 ml-1 cursor-pointer" title="Ocultar cuentas marcadas en desuso"><input type="checkbox" ${soloActivas?'checked':''} onchange="state._bcoSoloActivas=this.checked; pages.bancos()"/> Solo activas</label>
       </div>
       <div class="flex items-center gap-2">
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoCambioDivisas()" title="Comprar o vender dólares moviendo pesos y dólares entre cuentas">💱 Compra/venta de dólares</button>`:''}
         <button class="btn btn-secondary" onclick="bcoReporteDuenos()" title="Armar el mensaje diario de saldos para enviar por WhatsApp">📋 Reporte para dueños</button>
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoCuentaForm()">+ Nueva cuenta</button>`:''}
       </div>
@@ -28745,6 +28928,82 @@ pages.bancos = async function() {
     </div>
     ${bcoTarjetasSection()}`;
 };
+
+// ── Compra / venta de dólares en el banco ─────────────────────────────────────
+// Mueve pesos en una cuenta ARS y dólares en una cuenta USD (mismo banco), al TC.
+function bcoCambioDivisas() {
+  const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
+  const arsAcc = cuentas.filter(c => (c.moneda || 'ARS') === 'ARS');
+  const usdAcc = cuentas.filter(c => c.moneda === 'USD');
+  if (!arsAcc.length || !usdAcc.length) return toast('Necesitás al menos una cuenta en pesos y una en dólares (Bancos → + Nueva cuenta).','error');
+  const hoy = new Date().toISOString().slice(0,10);
+  const optArs = arsAcc.map(c => `<option value="${c.id}">${esc(c.nombre || c.banco)}${c.numero?` · ${esc(c.numero)}`:''}</option>`).join('');
+  const optUsd = usdAcc.map(c => `<option value="${c.id}">${esc(c.nombre || c.banco)}${c.numero?` · ${esc(c.numero)}`:''}</option>`).join('');
+  openModal({
+    title: '💱 Compra / venta de dólares',
+    body: `
+      <div class="mb-3">
+        <label class="label">Operación</label>
+        <div class="flex gap-2">
+          <label class="flex-1 border border-slate-200 rounded p-2 cursor-pointer flex items-center gap-2">
+            <input type="radio" name="fx-op" value="compra" checked onchange="_fxCalc()"/>
+            <span><b>Compra de dólares</b><div class="text-[11px] text-slate-500">Salen pesos, entran dólares</div></span></label>
+          <label class="flex-1 border border-slate-200 rounded p-2 cursor-pointer flex items-center gap-2">
+            <input type="radio" name="fx-op" value="venta" onchange="_fxCalc()"/>
+            <span><b>Venta de dólares</b><div class="text-[11px] text-slate-500">Salen dólares, entran pesos</div></span></label>
+        </div>
+      </div>
+      <div class="grid md:grid-cols-2 gap-3">
+        <div><label class="label">Cuenta en pesos (ARS)</label><select id="fx-ars" class="input">${optArs}</select></div>
+        <div><label class="label">Cuenta en dólares (USD)</label><select id="fx-usd" class="input">${optUsd}</select></div>
+        <div><label class="label">Monto en dólares (US$)</label><input id="fx-usd-monto" type="number" step="0.01" min="0" class="input" oninput="_fxCalc()" placeholder="0.00"/></div>
+        <div><label class="label">Tipo de cambio ($/US$)</label><input id="fx-tc" type="number" step="0.01" min="0" class="input" oninput="_fxCalc()" placeholder="0.00"/></div>
+        <div><label class="label">Monto en pesos ($)</label><input id="fx-ars-monto" type="number" step="0.01" min="0" class="input" oninput="this.dataset.man='1'" placeholder="0.00"/><div class="text-[11px] text-slate-400 mt-0.5">Se calcula solo (US$ × TC); podés ajustarlo.</div></div>
+        <div><label class="label">Fecha</label><input id="fx-fecha" type="date" class="input" value="${hoy}"/></div>
+      </div>
+      <div id="fx-resumen" class="mt-3 text-sm text-slate-600"></div>
+      <label class="label mt-2">Observaciones (opcional)</label>
+      <input id="fx-obs" class="input" placeholder="Ej: nro de operación del banco"/>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="bcoCambioDivisasSave()">Registrar operación</button>`,
+  });
+  _fxCalc();
+}
+function _fxCalc() {
+  const usd = Number(document.getElementById('fx-usd-monto')?.value || 0);
+  const tc = Number(document.getElementById('fx-tc')?.value || 0);
+  const arsEl = document.getElementById('fx-ars-monto');
+  if (arsEl && arsEl.dataset.man !== '1') arsEl.value = usd && tc ? (Math.round(usd * tc * 100) / 100) : '';
+  const op = document.querySelector('input[name="fx-op"]:checked')?.value || 'compra';
+  const ars = Number(arsEl?.value || 0);
+  const r = document.getElementById('fx-resumen');
+  if (r) r.innerHTML = (usd && ars)
+    ? (op === 'compra'
+        ? `Salen <b class="text-red-700">${fmt$(ars)}</b> de la cuenta en pesos y entran <b class="text-green-700">US$ ${fmtN(usd)}</b> a la cuenta en dólares.`
+        : `Salen <b class="text-red-700">US$ ${fmtN(usd)}</b> de la cuenta en dólares y entran <b class="text-green-700">${fmt$(ars)}</b> a la cuenta en pesos.`)
+    : '';
+}
+async function bcoCambioDivisasSave() {
+  const operacion = document.querySelector('input[name="fx-op"]:checked')?.value || 'compra';
+  const cuentaArsId = document.getElementById('fx-ars')?.value;
+  const cuentaUsdId = document.getElementById('fx-usd')?.value;
+  const montoUsd = Number(document.getElementById('fx-usd-monto')?.value || 0);
+  const tipoCambio = Number(document.getElementById('fx-tc')?.value || 0);
+  const montoArs = Number(document.getElementById('fx-ars-monto')?.value || 0);
+  const fecha = document.getElementById('fx-fecha')?.value;
+  const observaciones = document.getElementById('fx-obs')?.value?.trim() || null;
+  if (!cuentaArsId || !cuentaUsdId) return toast('Elegí las dos cuentas','error');
+  if (!(montoUsd > 0)) return toast('Cargá el monto en dólares','error');
+  if (!(tipoCambio > 0)) return toast('Cargá el tipo de cambio','error');
+  if (!fecha) return toast('Elegí la fecha','error');
+  try {
+    await api('/api/banco-cuentas/cambio-divisas', { method:'POST', body: JSON.stringify({
+      operacion, cuentaArsId, cuentaUsdId, montoUsd, tipoCambio, montoArs: montoArs > 0 ? montoArs : null, fecha, observaciones,
+    }) });
+    toast(operacion === 'compra' ? 'Compra de dólares registrada' : 'Venta de dólares registrada','success');
+    closeModal(); delete state.cache.bancoCuentas; pages.bancos();
+  } catch (e) { toast(e.message,'error'); }
+}
 
 // ── Reporte diario de saldos para dueños (mensaje de WhatsApp) ────────────────
 // Arma el texto que la administración manda a los dueños con el saldo de cada

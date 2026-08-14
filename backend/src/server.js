@@ -60,7 +60,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.88.0';
+const AGROCORE_VERSION = '2.90.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7196,7 +7196,109 @@ app.get('/api/export-contador', requireCompany, requirePermission('finanzas:read
       empresa: { nombre: empNombre, cuit: emp?.cuit || '' },
       periodo: { desde: req.query.desde || null, hasta: req.query.hasta || null },
       ventas, compras, cobros, pagos, cheques, stockInsumos, stockGranos,
+      retenciones: await _retencionesRango(cid, desde, hasta),
     });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// RETENCIONES Y PERCEPCIONES (sufridas / practicadas)
+// ============================================================
+const _RET_IMPUESTOS = ['ganancias', 'iva', 'iibb', 'suss', 'otro'];
+async function _retencionesRango(companyId, desde, hasta) {
+  const rows = await prisma.retencion.findMany({
+    where: { companyId, fecha: { gte: desde, lte: hasta } },
+    orderBy: [{ fecha: 'asc' }],
+  });
+  return rows.map(r => ({
+    naturaleza: r.naturaleza, clase: r.clase, impuesto: r.impuesto, regimen: r.regimen || '',
+    jurisdiccion: r.jurisdiccion || '', fecha: r.fecha, contacto: r.contactoNombre || '', cuit: r.cuit || '',
+    numeroCertificado: r.numeroCertificado || '', baseImponible: r.baseImponible ?? null,
+    alicuota: r.alicuota ?? null, importe: Number(r.importe || 0), moneda: r.moneda || 'ARS',
+    comprobanteRef: r.comprobanteRef || '', observaciones: r.observaciones || '',
+  }));
+}
+
+const retencionSchema = z.object({
+  naturaleza: z.enum(['sufrida', 'practicada']),
+  clase: z.enum(['retencion', 'percepcion']).optional().default('retencion'),
+  impuesto: z.enum(['ganancias', 'iva', 'iibb', 'suss', 'otro']),
+  regimen: z.string().nullable().optional(),
+  jurisdiccion: z.string().nullable().optional(),
+  fecha: z.coerce.date(),
+  contactoTipo: z.enum(['cliente', 'proveedor']).nullable().optional(),
+  contactoId: z.string().nullable().optional(),
+  contactoNombre: z.string().nullable().optional(),
+  cuit: z.string().nullable().optional(),
+  numeroCertificado: z.string().nullable().optional(),
+  baseImponible: z.number().nullable().optional(),
+  alicuota: z.number().nullable().optional(),
+  importe: z.number().positive(),
+  comprobanteRef: z.string().nullable().optional(),
+  moneda: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+
+app.get('/api/retenciones', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.naturaleza) where.naturaleza = String(req.query.naturaleza);
+    if (req.query.impuesto) where.impuesto = String(req.query.impuesto);
+    if (req.query.desde || req.query.hasta) {
+      where.fecha = {};
+      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde) + 'T00:00:00');
+      if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59');
+    }
+    const data = await prisma.retencion.findMany({ where, orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }] });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/retenciones', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const d = retencionSchema.parse(req.body);
+    const row = await prisma.retencion.create({ data: {
+      companyId: req.companyId, naturaleza: d.naturaleza, clase: d.clase || 'retencion', impuesto: d.impuesto,
+      regimen: d.regimen || null, jurisdiccion: d.jurisdiccion || null, fecha: d.fecha,
+      contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null, contactoNombre: d.contactoNombre || null,
+      cuit: d.cuit || null, numeroCertificado: d.numeroCertificado || null,
+      baseImponible: d.baseImponible ?? null, alicuota: d.alicuota ?? null, importe: d.importe,
+      comprobanteRef: d.comprobanteRef || null, moneda: d.moneda || 'ARS', observaciones: d.observaciones || null,
+      userId: req.user?.id || null,
+    }});
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    next(e);
+  }
+});
+
+app.put('/api/retenciones/:id', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const ex = await prisma.retencion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'Retención no encontrada' });
+    const d = retencionSchema.parse(req.body);
+    const row = await prisma.retencion.update({ where: { id: ex.id }, data: {
+      naturaleza: d.naturaleza, clase: d.clase || 'retencion', impuesto: d.impuesto,
+      regimen: d.regimen || null, jurisdiccion: d.jurisdiccion || null, fecha: d.fecha,
+      contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null, contactoNombre: d.contactoNombre || null,
+      cuit: d.cuit || null, numeroCertificado: d.numeroCertificado || null,
+      baseImponible: d.baseImponible ?? null, alicuota: d.alicuota ?? null, importe: d.importe,
+      comprobanteRef: d.comprobanteRef || null, moneda: d.moneda || 'ARS', observaciones: d.observaciones || null,
+    }});
+    res.json({ ok: true, data: row });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    next(e);
+  }
+});
+
+app.delete('/api/retenciones/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const ex = await prisma.retencion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'Retención no encontrada' });
+    await prisma.retencion.delete({ where: { id: ex.id } });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
@@ -8693,8 +8795,25 @@ const _AYUDA_KB = [
       'Descargá "Ventas y Compras": facturas emitidas y de compra con CUIT, condición IVA, neto e IVA por alícuota (21/10,5/27), moneda/cotización, CAE y total.',
       'Descargá "Cobros, Pagos y Cheques": cobranzas y pagos con el medio usado, más la cartera de cheques/e-cheqs (banco, número, vencimiento, estado).',
       'Descargá "Stock valuado" a la fecha de corte (Hasta): inventario de insumos y de granos con cantidad y valor, para el cierre de ejercicio. También hay un botón "Descargar todo" en un solo Excel.',
-      'Las retenciones/percepciones (SISA, Ganancias, IVA, IIBB) y el Libro IVA Digital .txt de ARCA se agregan en una próxima etapa.'],
+      'Las retenciones/percepciones se cargan en Tesorería → Retenciones y salen en la exportación. El Libro IVA Digital .txt de ARCA se agrega en una próxima etapa.'],
     atajo:{ page:'exportContador', label:'Abrir Exportar para contador' } },
+  { id:'retenciones', terms:['retencion','retenciones','percepcion','percepciones','certificado de retencion','iibb','ingresos brutos','sicore','suss','me retuvieron','retencion de ganancias','retencion de iva','retencion sufrida','retencion practicada'],
+    titulo:'Retenciones y percepciones',
+    pasos:[
+      'Andá a Tesorería → Retenciones y tocá "+ Nueva retención".',
+      'Elegí la naturaleza: SUFRIDA (nos la retuvieron cuando nos pagaron/compraron) o PRACTICADA (la hicimos nosotros al pagarle a un proveedor/contratista).',
+      'Elegí el impuesto (Ganancias, IVA, IIBB, SUSS/SICORE u Otro), el régimen y —si es IIBB— la jurisdicción/provincia.',
+      'Cargá la fecha, el contacto (cliente o proveedor, autocompleta CUIT), el N° de certificado, la base, la alícuota y el importe (el importe se sugiere = base × alícuota).',
+      'Después las exportás para el contador desde Administración → Exportar para contador (hoja "Retenciones").'],
+    atajo:{ page:'retenciones', label:'Abrir Retenciones' } },
+  { id:'compra_venta_dolares', terms:['comprar dolares','vender dolares','compra de dolares','venta de dolares','dolar mep','comprar usd','cambio de divisas','pasar pesos a dolares','pasar dolares a pesos','tipo de cambio banco'],
+    titulo:'Compra / venta de dólares en el banco',
+    pasos:[
+      'Andá a Tesorería → Bancos y tocá "Compra/venta de dólares".',
+      'Elegí la operación (compra o venta), la cuenta en pesos (ARS) y la cuenta en dólares (USD), normalmente del mismo banco.',
+      'Cargá el monto en dólares y el tipo de cambio: el monto en pesos se calcula solo (US$ × TC) y lo podés ajustar.',
+      'En una COMPRA salen los pesos de la cuenta ARS y entran los dólares a la cuenta USD; en una VENTA es al revés. Quedan los dos movimientos con el saldo de cada cuenta actualizado.'],
+    atajo:{ page:'bancos', label:'Abrir Bancos' } },
 ];
 function _esPregunta(t){
   return /(^|\s)(como|donde|cuando|cual|cuales|que es|para que|se puede|puedo|podes|podés|puedes|necesito|quiero saber|me explicas|explicame|ayuda|no se como|no entiendo|donde cargo|donde se|donde esta)\b/.test(t) || /\?/.test(t);
@@ -8734,7 +8853,7 @@ function _esPedidoAyudaGeneral(t){
 }
 // Menú de capacidades del asistente.
 function _menuAyuda(){
-  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Costo de hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n\nEscribí tu consulta y arrancamos 💪';
+  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Costo de hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo cargo una retención?" · "¿cómo compro/vendo dólares en el banco?" · "¿cómo exporto para el contador?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n\nEscribí tu consulta y arrancamos 💪';
 }
 // Arma el texto de la respuesta de ayuda (paso a paso).
 function _textoAyuda(e){
@@ -10502,7 +10621,7 @@ app.get('/api/balance-general', requireCompany, requirePermission('reportes:read
       else if (e.tipo === 'egreso') { add(egresos, catDe(e.observaciones) || 'Gastos varios', monto); addMes(e.fecha, 'egreso', monto); }
       // 'transferencia' entre cajas = interno, no suma
     }
-    const BAN_LBL = { cheque_cobrado: 'Cheques cobrados', credito_acreditado: 'Créditos acreditados', interes: 'Intereses ganados', cheque_pagado: 'Cheques pagados', debito: 'Débitos', cuota_credito: 'Cuotas de crédito', comision: 'Comisiones bancarias', impuesto: 'Impuestos / sellos', transferencia_in: 'Transferencias recibidas', transferencia_out: 'Transferencias enviadas' };
+    const BAN_LBL = { cheque_cobrado: 'Cheques cobrados', credito_acreditado: 'Créditos acreditados', interes: 'Intereses ganados', cheque_pagado: 'Cheques pagados', debito: 'Débitos', cuota_credito: 'Cuotas de crédito', comision: 'Comisiones bancarias', impuesto: 'Impuestos / sellos', transferencia_in: 'Transferencias recibidas', transferencia_out: 'Transferencias enviadas', cambio_in: 'Cambio de divisas (ingreso)', cambio_out: 'Cambio de divisas (egreso)' };
     for (const m of bm) {
       const interno = (m.tipo === 'extraccion' || m.tipo === 'deposito' || !!m.cuentaContraId);
       if (interno) continue;
@@ -10923,8 +11042,8 @@ app.get('/api/flujo-proyectado/export', requireCompany, async (req, res, next) =
 // ============================================================
 
 // Tipos de movimiento: cuáles suman al saldo y cuáles restan.
-const BANCO_TIPOS_INGRESO = ['deposito', 'transferencia_in', 'cheque_cobrado', 'credito_acreditado', 'interes'];
-const BANCO_TIPOS_EGRESO  = ['extraccion', 'transferencia_out', 'cheque_pagado', 'cuota_credito', 'comision', 'impuesto', 'debito'];
+const BANCO_TIPOS_INGRESO = ['deposito', 'transferencia_in', 'cheque_cobrado', 'credito_acreditado', 'interes', 'cambio_in'];
+const BANCO_TIPOS_EGRESO  = ['extraccion', 'transferencia_out', 'cheque_pagado', 'cuota_credito', 'comision', 'impuesto', 'debito', 'cambio_out'];
 const BANCO_TIPOS_TODOS   = [...BANCO_TIPOS_INGRESO, ...BANCO_TIPOS_EGRESO, 'otro', 'ajuste_in', 'ajuste_out'];
 
 const bancoCuentaSchema = z.object({
@@ -11116,6 +11235,72 @@ async function _intercompanyMoverRecurso(tx, o) {
   }
   // 'deuda' (o vacío): no se mueve ningún recurso, queda solo la deuda intercompany.
 }
+
+// Compra / venta de dólares en el banco: se mueven pesos en una cuenta ARS y
+// dólares en una cuenta USD (típicamente del mismo banco), al tipo de cambio.
+//   compra USD → salen pesos (cambio_out en cuenta ARS) y entran dólares (cambio_in en cuenta USD)
+//   venta  USD → salen dólares (cambio_out en cuenta USD) y entran pesos (cambio_in en cuenta ARS)
+app.post('/api/banco-cuentas/cambio-divisas', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      operacion: z.enum(['compra', 'venta']),
+      cuentaArsId: z.string().min(1),
+      cuentaUsdId: z.string().min(1),
+      montoUsd: z.number().positive(),
+      tipoCambio: z.number().positive(),
+      montoArs: z.number().positive().nullable().optional(),  // si no viene, = montoUsd × tipoCambio
+      fecha: z.coerce.date(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    if (d.cuentaArsId === d.cuentaUsdId) return res.status(400).json({ ok: false, error: 'Elegí dos cuentas distintas (una en pesos y otra en dólares).' });
+    const ctaArs = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaArsId, companyId: req.companyId } });
+    const ctaUsd = await prisma.bancoCuenta.findFirst({ where: { id: d.cuentaUsdId, companyId: req.companyId } });
+    if (!ctaArs || !ctaUsd) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
+    if ((ctaArs.moneda || 'ARS') !== 'ARS') return res.status(400).json({ ok: false, error: 'La cuenta de pesos debe ser en ARS.' });
+    if ((ctaUsd.moneda || '') !== 'USD') return res.status(400).json({ ok: false, error: 'La cuenta de dólares debe ser en USD.' });
+    const montoArs = Math.round((d.montoArs != null ? d.montoArs : d.montoUsd * d.tipoCambio) * 100) / 100;
+    const ref = 'FX-' + Date.now().toString(36).toUpperCase();
+    const tc = d.tipoCambio;
+    const result = await prisma.$transaction(async (tx) => {
+      if (d.operacion === 'compra') {
+        // Salen pesos, entran dólares.
+        const out = await tx.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: d.cuentaArsId, fecha: d.fecha, tipo: 'cambio_out',
+          concepto: `Compra de US$ ${d.montoUsd.toLocaleString('es-AR')} @ ${tc}`, monto: montoArs,
+          contraparte: ctaUsd.nombre || ctaUsd.banco, cuentaContraId: d.cuentaUsdId, referencia: ref,
+          observaciones: d.observaciones || null, userId: req.user?.id || null,
+        }});
+        const inn = await tx.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: d.cuentaUsdId, fecha: d.fecha, tipo: 'cambio_in',
+          concepto: `Compra de dólares (pesos desde ${ctaArs.nombre || ctaArs.banco}) @ ${tc}`, monto: d.montoUsd,
+          contraparte: ctaArs.nombre || ctaArs.banco, cuentaContraId: d.cuentaArsId, referencia: ref,
+          observaciones: d.observaciones || null, userId: req.user?.id || null,
+        }});
+        return { out, inn, montoArs };
+      } else {
+        // Salen dólares, entran pesos.
+        const out = await tx.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: d.cuentaUsdId, fecha: d.fecha, tipo: 'cambio_out',
+          concepto: `Venta de US$ ${d.montoUsd.toLocaleString('es-AR')} @ ${tc}`, monto: d.montoUsd,
+          contraparte: ctaArs.nombre || ctaArs.banco, cuentaContraId: d.cuentaArsId, referencia: ref,
+          observaciones: d.observaciones || null, userId: req.user?.id || null,
+        }});
+        const inn = await tx.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: d.cuentaArsId, fecha: d.fecha, tipo: 'cambio_in',
+          concepto: `Venta de dólares (dólares desde ${ctaUsd.nombre || ctaUsd.banco}) @ ${tc}`, monto: montoArs,
+          contraparte: ctaUsd.nombre || ctaUsd.banco, cuentaContraId: d.cuentaUsdId, referencia: ref,
+          observaciones: d.observaciones || null, userId: req.user?.id || null,
+        }});
+        return { out, inn, montoArs };
+      }
+    });
+    res.status(201).json({ ok: true, data: { referencia: ref, montoArs: result.montoArs } });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    next(e);
+  }
+});
 
 app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
