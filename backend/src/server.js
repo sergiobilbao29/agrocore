@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.98.0';
+const AGROCORE_VERSION = '2.99.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8891,10 +8891,12 @@ const _AYUDA_KB = [
       'También te aviso yo: decime la frase y lo agendo.'],
     atajo:{ page:'agenda', label:'Abrir Agenda' },
     ejemplo:'recordar vacunar el 15/8' },
-  { id:'empleados', terms:['empleado','empleados','planilla','sueldo','jornal','ropa','entrega de ropa','indumentaria','movimiento de empleado','personal','recibo de sueldo'],
+  { id:'empleados', terms:['empleado','empleados','planilla','sueldo','jornal','ropa','entrega de ropa','indumentaria','movimiento de empleado','personal','recibo de sueldo','trabaja por dia','empleado por dia','jornal por dia','dias trabajados'],
     titulo:'Empleados, planilla y entrega de ropa',
     pasos:[
       'Entrá a Empleados para ver el legajo y la planilla de cada uno.',
+      'En la ficha del empleado, si cobra por jornal, tildá "📅 Trabaja por día" y cargá el precio por día (jornal). El campo "Días por mes" es OPCIONAL: si lo dejás vacío, el sistema toma el MES COMPLETO (jornal × días del mes) como sueldo base y lo suma a la masa salarial.',
+      'Después descontás los días no trabajados como un movimiento en la planilla (categoría de descuento).',
       'Cargá movimientos (adelantos, jornales, descuentos) eligiendo la categoría; algunos usan cantidad × valor.',
       'Para la ropa/indumentaria cargá el movimiento con la categoría correspondiente; queda en la planilla.',
       'Podés exportar la planilla a PDF/Excel.'],
@@ -9030,8 +9032,9 @@ const _AYUDA_KB = [
       'Andá a Administración → Exportar para contador. Elegí el período (desde/hasta) y las empresas.',
       'Descargá "Ventas y Compras": facturas emitidas y de compra con CUIT, condición IVA, neto e IVA por alícuota (21/10,5/27), moneda/cotización, CAE y total.',
       'Descargá "Cobros, Pagos y Cheques": cobranzas y pagos con el medio usado, más la cartera de cheques/e-cheqs (banco, número, vencimiento, estado).',
-      'Descargá "Stock valuado" a la fecha de corte (Hasta): inventario de insumos y de granos con cantidad y valor, para el cierre de ejercicio. También hay un botón "Descargar todo" en un solo Excel.',
-      'Las retenciones/percepciones se cargan en Tesorería → Retenciones y salen en la exportación. El Libro IVA Digital .txt de ARCA se agrega en una próxima etapa.'],
+      'Descargá "Stock valuado" a la fecha de corte (Hasta): inventario de insumos y de granos con cantidad y valor, para el cierre de ejercicio. El botón "Descargar todo (Excel)" junta esas hojas en un solo Excel (NO incluye el Libro IVA Digital, que se baja aparte).',
+      'LIBRO IVA DIGITAL (ARCA): con el botón "Descargar Libro IVA Digital" se generan los archivos .txt de ancho fijo oficiales de ARCA (Comprobantes y Alícuotas de Ventas y de Compras) para importar directo en el portal. Baja un ZIP por empresa; el período lo toma del mes de "Hasta". Avisa si hay comprobantes sin CUIT para corregir.',
+      'Las retenciones/percepciones se cargan en Tesorería → Retenciones y salen en la exportación (hoja "Retenciones").'],
     atajo:{ page:'exportContador', label:'Abrir Exportar para contador' } },
   { id:'retenciones', terms:['retencion','retenciones','percepcion','percepciones','certificado de retencion','iibb','ingresos brutos','sicore','suss','me retuvieron','retencion de ganancias','retencion de iva','retencion sufrida','retencion practicada'],
     titulo:'Retenciones y percepciones',
@@ -9051,6 +9054,24 @@ const _AYUDA_KB = [
       'Cargá el monto en dólares y el tipo de cambio: el monto en pesos se calcula solo (US$ × TC) y lo podés ajustar.',
       'En una COMPRA salen los pesos de la cuenta ARS y entran los dólares a la cuenta USD; en una VENTA es al revés. Quedan los dos movimientos con el saldo de cada cuenta actualizado.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
+  { id:'import_resumen_banco', terms:['importar resumen','resumen bancario','resumen del banco','extracto bancario','importar movimientos del banco','subir resumen','cargar movimientos del banco','pdf del banco','homebanking','importar banco','movimientos automaticos banco'],
+    titulo:'Importar el resumen bancario (PDF)',
+    pasos:[
+      'Descargá el resumen de la cuenta en PDF desde el homebanking (el PDF real del banco, no una foto ni captura).',
+      'Entrá a Bancos → abrí la cuenta → tocá "📄 Importar resumen (PDF)" y subí el archivo.',
+      'El sistema lee los movimientos y te los muestra en una tabla para revisar: fecha, concepto, tipo e importe (todo editable, con casillas para incluir o excluir).',
+      'El importe negativo resta (débito) y el positivo suma (crédito). El tipo (transferencia, impuesto, comisión…) se sugiere solo y lo podés cambiar.',
+      'Tocá "Importar seleccionados": se cargan de una, sin duplicar los que ya estaban ni tocar meses ya conciliados.',
+      'Con la IA activada (Super Admin → IA) reconoce cualquier banco; sin IA funciona con los formatos más comunes.'],
+    atajo:{ page:'bancos', label:'Abrir Bancos' } },
+  { id:'factura_foto', terms:['factura por foto','foto de la factura','sacar foto factura','cargar factura con foto','factura escaneada','leer factura','factura imagen','jpg factura','escanear factura','camscanner'],
+    titulo:'Cargar una factura de compra desde una foto',
+    pasos:[
+      'En Compras, al cargar el comprobante, el botón acepta PDF o FOTO (JPG/PNG).',
+      'Si sacaste una foto de una factura física, subila: el sistema la lee con IA y autocompleta proveedor, número, fecha y total.',
+      'Revisá los datos que trajo y guardá la compra normalmente.',
+      'Necesita la IA activada (Super Admin → IA). Si subís un PDF que en realidad es una foto escaneada sin texto, el sistema te avisa que subas la foto original (JPG/PNG).'],
+    atajo:{ page:'compras', label:'Abrir Compras' } },
 ];
 function _esPregunta(t){
   return /(^|\s)(como|donde|cuando|cual|cuales|que es|para que|se puede|puedo|podes|podés|puedes|necesito|quiero saber|me explicas|explicame|ayuda|no se como|no entiendo|donde cargo|donde se|donde esta)\b/.test(t) || /\?/.test(t);

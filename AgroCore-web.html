@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'14/08/2026',
+      titulo:'🤖 v2.99.0 — El asistente aprendió las novedades',
+      desc:'El asistente (bot de ayuda) ahora sabe explicar las funciones nuevas: cómo <b>importar el resumen bancario en PDF</b>, cómo <b>cargar una factura de compra desde una foto</b>, cómo funciona el <b>empleado por día</b> (jornal × días) y cómo descargar el <b>Libro IVA Digital de ARCA</b>. Además actualizamos el <b>Manual</b> y la <b>web</b> con todo esto.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
       titulo:'🏦 v2.98.0 — Importar el resumen del banco en PDF + empleado por día más simple',
       desc:'Tres cosas. <b>(1) Importar resumen bancario (PDF):</b> en <b>Bancos → cuenta</b> hay un botón nuevo <b>"📄 Importar resumen (PDF)"</b>. Descargás el resumen de la cuenta en PDF del homebanking, lo subís, y el sistema lee todos los movimientos y te los muestra en una tabla para revisar (fecha, concepto, tipo e importe). Confirmás y los carga solos, sin cargarlos a mano. No duplica los que ya estaban. Con la IA activada reconoce cualquier banco. <b>(2) Empleado por día:</b> ahora el campo <b>"Días por mes" es opcional</b>: si lo dejás vacío, toma el <b>mes completo</b> (jornal × días del mes) y después la administración descuenta los días no trabajados en la planilla. <b>(3)</b> En <b>Exportaciones (contador)</b> se aclaró que "Descargar todo" es un Excel y que el <b>Libro IVA Digital</b> se baja aparte (son los .txt de ARCA).' },
