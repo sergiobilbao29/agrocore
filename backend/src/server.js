@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.99.0';
+const AGROCORE_VERSION = '2.100.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9054,15 +9054,15 @@ const _AYUDA_KB = [
       'Cargá el monto en dólares y el tipo de cambio: el monto en pesos se calcula solo (US$ × TC) y lo podés ajustar.',
       'En una COMPRA salen los pesos de la cuenta ARS y entran los dólares a la cuenta USD; en una VENTA es al revés. Quedan los dos movimientos con el saldo de cada cuenta actualizado.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
-  { id:'import_resumen_banco', terms:['importar resumen','resumen bancario','resumen del banco','extracto bancario','importar movimientos del banco','subir resumen','cargar movimientos del banco','pdf del banco','homebanking','importar banco','movimientos automaticos banco'],
-    titulo:'Importar el resumen bancario (PDF)',
+  { id:'import_resumen_banco', terms:['importar resumen','resumen bancario','resumen del banco','extracto bancario','importar movimientos del banco','subir resumen','cargar movimientos del banco','pdf del banco','homebanking','importar banco','movimientos automaticos banco','excel del banco','csv del banco','importar excel banco'],
+    titulo:'Importar el resumen bancario (PDF, Excel o CSV)',
     pasos:[
-      'Descargá el resumen de la cuenta en PDF desde el homebanking (el PDF real del banco, no una foto ni captura).',
-      'Entrá a Bancos → abrí la cuenta → tocá "📄 Importar resumen (PDF)" y subí el archivo.',
+      'Descargá el resumen de la cuenta desde el homebanking: sirve PDF, Excel (.xlsx/.xls) o CSV. Si tu banco ofrece Excel/CSV, preferilo (es el más exacto).',
+      'Entrá a Bancos → abrí la cuenta → tocá "📄 Importar resumen (PDF/Excel)" y subí el archivo.',
       'El sistema lee los movimientos y te los muestra en una tabla para revisar: fecha, concepto, tipo e importe (todo editable, con casillas para incluir o excluir).',
       'El importe negativo resta (débito) y el positivo suma (crédito). El tipo (transferencia, impuesto, comisión…) se sugiere solo y lo podés cambiar.',
       'Tocá "Importar seleccionados": se cargan de una, sin duplicar los que ya estaban ni tocar meses ya conciliados.',
-      'Con la IA activada (Super Admin → IA) reconoce cualquier banco; sin IA funciona con los formatos más comunes.'],
+      'El Excel/CSV se lee por columnas (Fecha, Concepto, Importe o Débito/Crédito). El PDF debe ser el real del banco (no una foto). Con la IA activada (Super Admin → IA) reconoce cualquier banco.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
   { id:'factura_foto', terms:['factura por foto','foto de la factura','sacar foto factura','cargar factura con foto','factura escaneada','leer factura','factura imagen','jpg factura','escanear factura','camscanner'],
     titulo:'Cargar una factura de compra desde una foto',
@@ -12236,30 +12236,106 @@ async function _iaParseResumenBancario(textoPdf, ia) {
   } catch (e) { if (e.name !== 'AbortError') console.warn('IA resumen bancario error:', e.message); clearTimeout(to); return null; }
 }
 
-// Paso 1: subir el PDF y obtener la vista previa de movimientos (no crea nada).
+// CSV → matriz (separador , o ; autodetectado; respeta comillas dobles).
+function _csvToMatrix(texto) {
+  const lines = String(texto || '').replace(/\r\n?/g, '\n').split('\n').filter(l => l.length);
+  if (!lines.length) return [];
+  const sep = (lines[0].match(/;/g) || []).length > (lines[0].match(/,/g) || []).length ? ';' : ',';
+  return lines.map(line => {
+    const out = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (q) { if (ch === '"') { if (line[i+1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === sep) { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map(c => c.trim());
+  });
+}
+// Matriz (Excel/CSV de banco) → movimientos, detectando columnas por encabezado.
+function _matrixToMovs(matrix) {
+  if (!Array.isArray(matrix) || !matrix.length) return [];
+  const has = (cells, ...names) => cells.some(c => names.includes(c));
+  let hdr = -1;
+  for (let i = 0; i < Math.min(matrix.length, 15); i++) {
+    const cells = (matrix[i] || []).map(_normHdr);
+    if (has(cells, 'fecha', 'fecha mov', 'fecha movimiento', 'fecha operacion') &&
+        cells.some(c => /(importe|monto|debito|credito|debitos|creditos|debe|haber)/.test(c))) { hdr = i; break; }
+  }
+  if (hdr < 0) return [];
+  const H = {}; (matrix[hdr] || []).forEach((h, i) => { const k = _normHdr(h); if (H[k] == null) H[k] = i; });
+  const col = (...names) => { for (const n of names) if (H[n] != null) return H[n]; return -1; };
+  const iFecha = col('fecha', 'fecha mov', 'fecha movimiento', 'fecha operacion', 'fecha valor');
+  const iConcepto = col('concepto', 'detalle', 'descripcion', 'movimiento', 'referencia descripcion', 'leyenda', 'observacion', 'observaciones');
+  const iImporte = col('importe', 'monto', 'importe movimiento');
+  const iDebito = col('debito', 'debitos', 'debe', 'debito ars', 'debito $');
+  const iCredito = col('credito', 'creditos', 'haber', 'credito ars', 'credito $');
+  const iRef = col('comprobante', 'referencia', 'nro referencia', 'nro operacion', 'operacion', 'nro comprobante', 'nro');
+  const movs = [];
+  for (let r = hdr + 1; r < matrix.length; r++) {
+    const row = matrix[r]; if (!row || !row.length) continue;
+    const fRaw = iFecha >= 0 ? row[iFecha] : null;
+    const fd = _arcaFecha(fRaw); if (!fd || isNaN(fd)) continue;
+    const fecha = `${fd.getFullYear()}-${String(fd.getMonth()+1).padStart(2,'0')}-${String(fd.getDate()).padStart(2,'0')}`;
+    let importe = 0;
+    if (iImporte >= 0 && String(row[iImporte] ?? '').trim() !== '') importe = _numAr(row[iImporte]);
+    else { const deb = iDebito >= 0 ? _numAr(row[iDebito]) : 0; const cre = iCredito >= 0 ? _numAr(row[iCredito]) : 0; importe = (cre || 0) - Math.abs(deb || 0); }
+    if (!isFinite(importe) || importe === 0) continue;
+    const concepto = (iConcepto >= 0 ? String(row[iConcepto] || '') : '').replace(/\s{2,}/g, ' ').trim() || 'Movimiento';
+    const referencia = iRef >= 0 ? String(row[iRef] || '').trim() : '';
+    movs.push({ fecha, concepto, referencia, importe });
+  }
+  return movs;
+}
+
+// Paso 1: subir el resumen (PDF, Excel o CSV) y obtener la vista previa (no crea nada).
 app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const cids = await _cidsGrupo(req);
     const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
-    const b64 = String(req.body?.fileB64 || '').replace(/^data:[^,]+,/, '');
-    if (!b64) return res.status(400).json({ ok: false, error: 'No recibí el PDF.' });
+    const rawB64 = String(req.body?.fileB64 || '');
+    const b64 = rawB64.replace(/^data:[^,]+,/, '');
+    if (!b64) return res.status(400).json({ ok: false, error: 'No recibí el archivo.' });
     const buffer = Buffer.from(b64, 'base64');
-    let texto = '';
-    try { const pdfParse = await getPdfParse(); texto = (await pdfParse(buffer)).text || ''; }
-    catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
-    if (!texto || texto.trim().length < 20) {
-      return res.status(422).json({ ok: false, scanned: true, error: 'El PDF no tiene texto (parece escaneado o una foto). Descargá el resumen en PDF real desde el homebanking.' });
-    }
+    const filename = String(req.body?.filename || '').toLowerCase();
+    const mimeMatch = /^data:([^;]+)/.exec(rawB64);
+    const mime = (req.body?.mime || (mimeMatch ? mimeMatch[1] : '')).toLowerCase();
+    // Detectar el tipo de archivo.
+    const esCsv = /\.csv$/.test(filename) || /text\/csv|application\/csv/.test(mime);
+    const esXlsx = /\.xlsx?$/.test(filename) || /spreadsheet|excel|ms-excel/.test(mime) || (buffer.length > 1 && buffer[0] === 0x50 && buffer[1] === 0x4B && !esCsv); // PK.. = zip/xlsx
+    const esPdf = /\.pdf$/.test(filename) || /application\/pdf/.test(mime) || (buffer.slice(0, 4).toString('latin1') === '%PDF');
     const ia = await _iaConfig();
     let movs = null, fuente = 'texto';
-    if (ia.enabled) { movs = await _iaParseResumenBancario(texto, ia); if (movs && movs.length) fuente = 'IA'; }
-    if (!movs || !movs.length) { movs = _parseResumenBancarioTexto(texto); fuente = 'texto'; }
+
+    if (esPdf && !esXlsx) {
+      let texto = '';
+      try { const pdfParse = await getPdfParse(); texto = (await pdfParse(buffer)).text || ''; }
+      catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
+      if (!texto || texto.trim().length < 20) return res.status(422).json({ ok: false, scanned: true, error: 'El PDF no tiene texto (parece escaneado o una foto). Descargá el resumen en PDF real, o subí el Excel/CSV del banco.' });
+      if (ia.enabled) { movs = await _iaParseResumenBancario(texto, ia); if (movs && movs.length) fuente = 'IA'; }
+      if (!movs || !movs.length) { movs = _parseResumenBancarioTexto(texto); fuente = 'texto'; }
+    } else {
+      // Excel o CSV → matriz.
+      let matrix = [];
+      if (esCsv && !esXlsx) matrix = _csvToMatrix(buffer.toString('utf8'));
+      else { try { matrix = _xlsxToMatrix(buffer); } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el Excel/CSV: ' + e.message }); } }
+      if (!matrix.length) return res.status(422).json({ ok: false, error: 'El archivo no tiene datos legibles.' });
+      // Determinístico primero (más exacto en tablas); IA si no encontró columnas.
+      movs = _matrixToMovs(matrix); fuente = 'tabla';
+      if ((!movs || !movs.length) && ia.enabled) {
+        const texto = matrix.slice(0, 400).map(r => (r || []).join('\t')).join('\n');
+        movs = await _iaParseResumenBancario(texto, ia); if (movs && movs.length) fuente = 'IA';
+      }
+    }
+
     // Ordenar por fecha ascendente y agregar tipo sugerido.
     movs = (movs || []).filter(m => m.fecha && isFinite(m.importe) && m.importe !== 0)
       .sort((a, b) => a.fecha.localeCompare(b.fecha))
       .map(m => ({ ...m, tipo: _bancoTipoDesdeConcepto(m.concepto, m.importe) }));
-    if (!movs.length) return res.status(422).json({ ok: false, error: 'No pude reconocer movimientos en este PDF. Probá activar la IA (Super Admin → IA) o cargalos a mano.' });
+    if (!movs.length) return res.status(422).json({ ok: false, error: 'No pude reconocer movimientos en este archivo. Revisá que sea el resumen del banco (PDF, Excel o CSV), activá la IA (Super Admin → IA) o cargalos a mano.' });
     res.json({ ok: true, fuente, cuenta: { id: cuenta.id, banco: cuenta.banco, moneda: cuenta.moneda }, movimientos: movs });
   } catch (e) { next(e); }
 });

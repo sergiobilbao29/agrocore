@@ -1001,7 +1001,6 @@ const MODULES = [
   { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Compras' },
   { id:'compras',       label:'Compras',              icon:'🛒', perm:'finanzas:read',   section:'Compras' },
   { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Compras' },
-  { id:'libroIVA',      label:'Libro IVA',            icon:'📘', perm:'finanzas:read',   section:'Compras' },
 
   // ===== TESORERÍA — bancos, efectivo, cheques, créditos =====
   { id:'movDiarios',    label:'Movimientos diarios',  icon:'📝', perm:'finanzas:create', section:'Tesorería' },
@@ -1048,6 +1047,7 @@ const MODULES = [
   { id:'catalogos',     label:'Catálogos',            icon:'📚', perm:'produccion:read', section:'Administración' },
   { id:'categoriasArt', label:'Categorías y Familias', icon:'🗂️', perm:'produccion:read', section:'Administración' },
   { id:'catGastos',     label:'Categorías de Gastos',  icon:'🏷️', perm:'finanzas:read',    section:'Administración' },
+  { id:'libroIVA',      label:'Libro IVA (Ventas/Compras)', icon:'📘', perm:'finanzas:read', section:'Administración' },
   { id:'exportContador',label:'Exportar para contador',icon:'🧾', perm:'finanzas:read',    section:'Administración' },
   { id:'usuarios',      label:'Usuarios',             icon:'👤', perm:'*',               section:'Administración' },
   { id:'roles',         label:'Roles y permisos',     icon:'🔐', perm:'*',               section:'Administración' },
@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'14/08/2026',
+      titulo:'🧹 v2.100.0 — Retoques: Libro IVA reubicado, sueldo por día visible e import de banco por Excel',
+      desc:'Tres ajustes pedidos. <b>(1)</b> El <b>Libro IVA (Ventas/Compras)</b> se movió del menú de Compras a <b>Administración</b>, junto a "Exportar para contador", que es donde vive todo lo del estudio contable. <b>(2)</b> En la nómina de <b>Empleados</b>, el empleado que cobra por día ahora <b>muestra su sueldo mensual calculado</b> (jornal × días) en la columna Sueldo, con el detalle "$/día × días". <b>(3)</b> El <b>importador de resumen bancario</b> ahora acepta también <b>Excel (.xlsx/.xls) y CSV</b>, además del PDF — si tu banco los ofrece son más exactos; los lee por columnas (Fecha, Concepto, Importe o Débito/Crédito).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'14/08/2026',
       titulo:'🤖 v2.99.0 — El asistente aprendió las novedades',
       desc:'El asistente (bot de ayuda) ahora sabe explicar las funciones nuevas: cómo <b>importar el resumen bancario en PDF</b>, cómo <b>cargar una factura de compra desde una foto</b>, cómo funciona el <b>empleado por día</b> (jornal × días) y cómo descargar el <b>Libro IVA Digital de ARCA</b>. Además actualizamos el <b>Manual</b> y la <b>web</b> con todo esto.' },
@@ -19890,7 +19893,7 @@ pages.empleados = async function() {
               <td class="font-mono text-xs">${esc(e.dni||'—')}</td>
               <td>${esc(e.puesto||'—')}</td>
               <td>${e.fechaIngreso?fmtDate(e.fechaIngreso):'—'}</td>
-              <td class="text-right">${e.sueldo?fmt$(e.sueldo):'—'}</td>
+              <td class="text-right">${empSueldoBase(e)>0?fmt$(empSueldoBase(e)):'—'}${e.porDia?`<br><span class="text-[10px] text-slate-400">${fmt$(e.jornalDiario||0)}/día${Number(e.diasMes||0)>0?' × '+e.diasMes:' × mes'}</span>`:''}</td>
               <td>${e.activo!==false?'<span class="badge badge-green">Activo</span>':'<span class="badge badge-gray">Baja</span>'}</td>
               <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
                 <button class="btn btn-secondary text-xs" onclick='empleAbrir(${JSON.stringify(e.id)})' title="Abrir la planilla de gastos, ganancias y sueldo">📋 Ver planilla</button>
@@ -29696,26 +29699,26 @@ async function bcoVerMovs(cuentaId) {
 // ── Importar resumen bancario (PDF) ──────────────────────────────────────────
 function bcoImportResumen() {
   openModal({
-    title: '📄 Importar resumen bancario (PDF)',
+    title: '📄 Importar resumen bancario',
     size: 'max-w-lg',
     body: `
-      <p class="text-sm text-slate-600 mb-3">Descargá el <b>resumen de la cuenta en PDF</b> desde el homebanking y subilo acá. El sistema lee los movimientos y te los muestra para revisar antes de cargarlos.</p>
-      <input type="file" id="brf-file" accept="application/pdf,.pdf" class="input"/>
-      <div class="text-[11px] text-slate-400 mt-2">Tiene que ser el PDF real del banco (no una foto ni una captura). Si tenés la IA activada, reconoce cualquier banco; si no, funciona con los formatos más comunes.</div>
+      <p class="text-sm text-slate-600 mb-3">Descargá el <b>resumen de la cuenta</b> desde el homebanking y subilo acá. El sistema lee los movimientos y te los muestra para revisar antes de cargarlos.</p>
+      <input type="file" id="brf-file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv" class="input"/>
+      <div class="text-[11px] text-slate-400 mt-2">Acepta <b>PDF</b>, <b>Excel</b> (.xlsx/.xls) o <b>CSV</b>. El <b>Excel/CSV</b> es el más exacto (si tu banco lo ofrece, preferilo). El PDF tiene que ser el real del banco (no una foto). Con la IA activada reconoce cualquier banco.</div>
       <div id="brf-status" class="text-sm text-slate-500 mt-3"></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="bcoImportResumenSubir()">Leer PDF</button>`,
+             <button class="btn btn-primary" onclick="bcoImportResumenSubir()">Leer archivo</button>`,
   });
 }
 async function bcoImportResumenSubir() {
   const f = document.getElementById('brf-file')?.files?.[0];
-  if (!f) return toast('Elegí un archivo PDF','error');
+  if (!f) return toast('Elegí un archivo (PDF, Excel o CSV)','error');
   const st = document.getElementById('brf-status');
-  if (st) st.textContent = 'Leyendo el PDF…';
+  if (st) st.textContent = 'Leyendo el archivo…';
   const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result)); r.onerror=rej; r.readAsDataURL(f); });
   try {
-    const r = await api(`/api/banco-cuentas/${state.bancoCuentaId}/parse-resumen`, { method:'POST', body: JSON.stringify({ fileB64: b64 }) });
-    if (!r.ok || !r.movimientos?.length) { if (st) st.textContent = ''; return toast(r.error || 'No reconocí movimientos en el PDF','error'); }
+    const r = await api(`/api/banco-cuentas/${state.bancoCuentaId}/parse-resumen`, { method:'POST', body: JSON.stringify({ fileB64: b64, filename: f.name }) });
+    if (!r.ok || !r.movimientos?.length) { if (st) st.textContent = ''; return toast(r.error || 'No reconocí movimientos en el archivo','error'); }
     state._bcoImportMovs = r.movimientos;
     bcoImportResumenPreview(r.fuente);
   } catch (e) {
@@ -29793,7 +29796,7 @@ function bcoMovRender() {
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <button class="btn btn-secondary" onclick="pages.bancos()">← Volver a Bancos</button>
       <div class="flex gap-2 flex-wrap">
-        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoImportResumen()">📄 Importar resumen (PDF)</button>`:''}
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoImportResumen()">📄 Importar resumen (PDF/Excel)</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoDepositarCheque()">🏦 Depositar cheque</button>`:''}
         ${can('finanzas:update')?`<button class="btn btn-secondary" onclick="bcoConciliarForm()">✅ Conciliar mes</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoMovForm()">+ Nuevo movimiento</button>`:''}
