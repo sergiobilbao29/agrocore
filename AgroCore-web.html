@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
+      titulo:'🏦 v2.98.0 — Importar el resumen del banco en PDF + empleado por día más simple',
+      desc:'Tres cosas. <b>(1) Importar resumen bancario (PDF):</b> en <b>Bancos → cuenta</b> hay un botón nuevo <b>"📄 Importar resumen (PDF)"</b>. Descargás el resumen de la cuenta en PDF del homebanking, lo subís, y el sistema lee todos los movimientos y te los muestra en una tabla para revisar (fecha, concepto, tipo e importe). Confirmás y los carga solos, sin cargarlos a mano. No duplica los que ya estaban. Con la IA activada reconoce cualquier banco. <b>(2) Empleado por día:</b> ahora el campo <b>"Días por mes" es opcional</b>: si lo dejás vacío, toma el <b>mes completo</b> (jornal × días del mes) y después la administración descuenta los días no trabajados en la planilla. <b>(3)</b> En <b>Exportaciones (contador)</b> se aclaró que "Descargar todo" es un Excel y que el <b>Libro IVA Digital</b> se baja aparte (son los .txt de ARCA).' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
       titulo:'🏛️ v2.97.0 — Libro IVA Digital de ARCA en un clic',
       desc:'Ya no hace falta cargar comprobante por comprobante en ARCA. En <b>Exportaciones (contador)</b> hay un botón nuevo <b>"Descargar Libro IVA Digital"</b> que arma los archivos <b>.txt de ancho fijo</b> oficiales para importar directo en el portal de ARCA: Comprobantes y Alícuotas de <b>Ventas</b> y de <b>Compras</b>, tomando las facturas cargadas en el sistema. Descarga un <b>ZIP por empresa</b> (el período lo toma del mes de "Hasta") y te avisa cuántos comprobantes salieron y si hay alguno <b>sin CUIT</b> para corregir. Los formatos se verificaron contra archivos reales de ARCA.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/08/2026',
@@ -19812,9 +19815,21 @@ function solicitarCamionEnviar() {
  * EMPLEADOS
  * ========================================================= */
 // Sueldo base mensual de un empleado: por día = jornal × días/mes; si no, el sueldo fijo.
-function empSueldoBase(emp){
+// Días de un mes (ym='YYYY-MM'); si no se pasa, el mes actual.
+function _diasDelMes(ym){
+  let y, m;
+  if (ym && /^\d{4}-\d{2}/.test(ym)) { y = +ym.slice(0,4); m = +ym.slice(5,7); }
+  else { const d = new Date(); y = d.getFullYear(); m = d.getMonth()+1; }
+  return new Date(y, m, 0).getDate();
+}
+function empSueldoBase(emp, ym){
   if (!emp) return 0;
-  if (emp.porDia) return Math.round(Number(emp.jornalDiario||0) * Number(emp.diasMes||0) * 100) / 100;
+  if (emp.porDia) {
+    // Si no se cargaron días, se toma el MES COMPLETO (días del mes). La admin
+    // descuenta después los días no trabajados como un movimiento aparte.
+    const dias = Number(emp.diasMes||0) > 0 ? Number(emp.diasMes) : _diasDelMes(ym);
+    return Math.round(Number(emp.jornalDiario||0) * dias * 100) / 100;
+  }
   return Number(emp.sueldo||0);
 }
 // Alterna entre "sueldo mensual" y "por día" en el form de empleado.
@@ -19831,7 +19846,10 @@ function empSueldoHint(){
   const h = document.getElementById('f-sueldo-hint'); if (!h) return;
   if (!on) { h.textContent = ''; return; }
   const j = Number(document.getElementById('f-jornal')?.value||0), d = Number(document.getElementById('f-dias')?.value||0);
-  h.innerHTML = (j && d) ? `Sueldo del mes ≈ <b>${fmt$(j*d)}</b> (${d} día${d===1?'':'s'} × ${fmt$(j)})` : 'Cargá el jornal y los días para calcular el sueldo del mes.';
+  if (!j) { h.textContent = 'Cargá el precio por día (jornal) para calcular el sueldo del mes.'; return; }
+  if (d > 0) { h.innerHTML = `Sueldo del mes ≈ <b>${fmt$(j*d)}</b> (${d} día${d===1?'':'s'} × ${fmt$(j)})`; return; }
+  const dm = _diasDelMes();
+  h.innerHTML = `Sin días cargados: se toma el <b>mes completo</b> (${dm} días) ≈ <b>${fmt$(j*dm)}</b>. Después descontás los días no trabajados en la planilla.`;
 }
 pages.empleados = async function() {
   state.empFichaId = null;  // la nómina nunca es una ficha abierta
@@ -19912,7 +19930,7 @@ function empleForm(id=null) {
           <label class="col-span-2 text-sm flex items-center gap-2 cursor-pointer font-medium"><input id="f-pordia" type="checkbox" ${it.porDia?'checked':''} onchange="empModalidadToggle()"/> 📅 Trabaja por día (jornal × días)</label>
           <div id="f-sld-wrap"><label class="label">Sueldo mensual</label><input id="f-sld" type="number" step="0.01" class="input" value="${it.sueldo||''}"/></div>
           <div id="f-jornal-wrap"><label class="label">Precio por día (jornal)</label><input id="f-jornal" type="number" step="0.01" class="input" value="${it.jornalDiario||''}" oninput="empSueldoHint()" placeholder="Ej: 25000"/></div>
-          <div id="f-dias-wrap"><label class="label">Días por mes</label><input id="f-dias" type="number" step="1" min="0" class="input" value="${it.diasMes||''}" oninput="empSueldoHint()" placeholder="Ej: 24"/></div>
+          <div id="f-dias-wrap"><label class="label">Días por mes <span class="text-slate-400 font-normal">(opcional)</span></label><input id="f-dias" type="number" step="1" min="0" class="input" value="${it.diasMes||''}" oninput="empSueldoHint()" placeholder="Vacío = mes completo"/></div>
           <div id="f-sueldo-hint" class="col-span-2 text-[11px] text-emerald-700"></div>
           <div class="col-span-2 text-[10px] text-slate-400">El precio por día también autocompleta el importe al cargar "días" en la planilla.</div>
         </div>
@@ -28735,9 +28753,9 @@ pages.exportContador = async function() {
         <button class="btn btn-primary w-full" onclick="libroIvaDescargar()">Descargar Libro IVA Digital</button>
       </div>
       <div class="kpi">
-        <div class="font-bold text-slate-800 mb-1">⬇️ Todo en un archivo</div>
-        <div class="text-[11px] text-slate-500 mb-3">Un solo Excel con todas las hojas: Ventas, Compras, Cobros, Pagos, Cheques, Stock insumos y Stock granos.</div>
-        <button class="btn btn-secondary w-full" onclick="expContDescargar('todo')">Descargar todo</button>
+        <div class="font-bold text-slate-800 mb-1">⬇️ Todo en un Excel</div>
+        <div class="text-[11px] text-slate-500 mb-3">Un solo Excel con las hojas de arriba: Ventas, Compras, Cobros, Pagos, Cheques, Stock insumos y Stock granos. <b>No incluye el Libro IVA Digital</b> (ese se descarga aparte, en su propio botón, porque son los .txt de ARCA).</div>
+        <button class="btn btn-secondary w-full" onclick="expContDescargar('todo')">Descargar todo (Excel)</button>
       </div>
     </div>
     <div class="text-[11px] text-slate-400 mt-4">Las <b>retenciones y percepciones</b> se cargan en <b>Tesorería → Retenciones</b> y salen en esta exportación. El <b>Libro IVA Digital</b> arma los 4 .txt de ARCA (Comprobantes + Alícuotas, de Ventas y Compras) desde las facturas cargadas; los comprobantes de un régimen especial (turismo, importación, recibos de uso) van vacíos y solo se completan si tenés esas operaciones.</div>`;
@@ -29672,6 +29690,87 @@ async function bcoVerMovs(cuentaId) {
   state._bcoMovFilter = state._bcoMovFilter || _ultimoMesRango();
   bcoMovRender();
 }
+// ── Importar resumen bancario (PDF) ──────────────────────────────────────────
+function bcoImportResumen() {
+  openModal({
+    title: '📄 Importar resumen bancario (PDF)',
+    size: 'max-w-lg',
+    body: `
+      <p class="text-sm text-slate-600 mb-3">Descargá el <b>resumen de la cuenta en PDF</b> desde el homebanking y subilo acá. El sistema lee los movimientos y te los muestra para revisar antes de cargarlos.</p>
+      <input type="file" id="brf-file" accept="application/pdf,.pdf" class="input"/>
+      <div class="text-[11px] text-slate-400 mt-2">Tiene que ser el PDF real del banco (no una foto ni una captura). Si tenés la IA activada, reconoce cualquier banco; si no, funciona con los formatos más comunes.</div>
+      <div id="brf-status" class="text-sm text-slate-500 mt-3"></div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="bcoImportResumenSubir()">Leer PDF</button>`,
+  });
+}
+async function bcoImportResumenSubir() {
+  const f = document.getElementById('brf-file')?.files?.[0];
+  if (!f) return toast('Elegí un archivo PDF','error');
+  const st = document.getElementById('brf-status');
+  if (st) st.textContent = 'Leyendo el PDF…';
+  const b64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result)); r.onerror=rej; r.readAsDataURL(f); });
+  try {
+    const r = await api(`/api/banco-cuentas/${state.bancoCuentaId}/parse-resumen`, { method:'POST', body: JSON.stringify({ fileB64: b64 }) });
+    if (!r.ok || !r.movimientos?.length) { if (st) st.textContent = ''; return toast(r.error || 'No reconocí movimientos en el PDF','error'); }
+    state._bcoImportMovs = r.movimientos;
+    bcoImportResumenPreview(r.fuente);
+  } catch (e) {
+    if (st) st.textContent = '';
+    toast(e.message || 'No pude leer el PDF','error');
+  }
+}
+function bcoImportResumenPreview(fuente) {
+  const c = (state.cache.bancoCuentas||[]).find(x => x.id === state.bancoCuentaId);
+  const mon = c ? c.moneda : 'ARS';
+  const movs = state._bcoImportMovs || [];
+  const opts = Object.keys(BANCO_TIPOS).map(k => `<option value="${k}">${esc(BANCO_TIPOS[k].icon)} ${esc(BANCO_TIPOS[k].lbl)}</option>`).join('');
+  const rows = movs.map((m,i)=>{
+    const cred = Number(m.importe) >= 0;
+    return `<tr class="border-b border-slate-100">
+      <td class="p-1 text-center"><input type="checkbox" class="bri-chk" data-i="${i}" checked/></td>
+      <td class="p-1"><input type="date" class="input input-sm !py-0.5 !text-xs" value="${esc((m.fecha||'').slice(0,10))}" onchange="state._bcoImportMovs[${i}].fecha=this.value"/></td>
+      <td class="p-1"><input class="input input-sm !py-0.5 !text-xs w-full" value="${esc(m.concepto||'')}" onchange="state._bcoImportMovs[${i}].concepto=this.value"/></td>
+      <td class="p-1"><select class="input input-sm !py-0.5 !text-xs" onchange="state._bcoImportMovs[${i}].tipo=this.value">${opts.replace('value="'+m.tipo+'"','value="'+m.tipo+'" selected')}</select></td>
+      <td class="p-1 text-right font-semibold ${cred?'text-green-700':'text-red-700'}"><input class="input input-sm !py-0.5 !text-xs text-right w-28" value="${esc(String(m.importe))}" onchange="state._bcoImportMovs[${i}].importe=this.value"/></td>
+    </tr>`;
+  }).join('');
+  openModal({
+    title: `📄 Revisá los movimientos (${movs.length})`,
+    size: 'max-w-4xl',
+    body: `
+      <div class="text-xs text-slate-500 mb-2">Fuente: <b>${fuente==='IA'?'IA (lectura inteligente)':'lectura de texto'}</b>. Destildá los que no quieras, corregí lo que haga falta. El <b>importe negativo</b> resta (débito) y el <b>positivo</b> suma (crédito). Los repetidos no se duplican.</div>
+      <div class="flex gap-2 mb-2 text-xs">
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.bri-chk').forEach(x=>x.checked=true)">Marcar todos</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.bri-chk').forEach(x=>x.checked=false)">Desmarcar todos</button>
+      </div>
+      <div class="overflow-auto max-h-[55vh] border border-slate-200 rounded">
+        <table class="w-full text-xs">
+          <thead class="bg-slate-50 sticky top-0"><tr>
+            <th class="p-1 w-8"></th><th class="p-1 text-left">Fecha</th><th class="p-1 text-left">Concepto</th><th class="p-1 text-left">Tipo</th><th class="p-1 text-right">Importe (${esc(mon)})</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="bcoImportResumenConfirmar()">Importar seleccionados</button>`,
+  });
+}
+async function bcoImportResumenConfirmar() {
+  const all = state._bcoImportMovs || [];
+  const sel = Array.from(document.querySelectorAll('.bri-chk')).filter(x=>x.checked).map(x=>all[+x.dataset.i]).filter(Boolean);
+  if (!sel.length) return toast('No seleccionaste ningún movimiento','error');
+  try {
+    const r = await api(`/api/banco-cuentas/${state.bancoCuentaId}/import-movimientos`, { method:'POST', body: JSON.stringify({ movimientos: sel }) });
+    if (!r.ok) return toast(r.error || 'No pude importar','error');
+    const s = r.resumen || {};
+    closeModal();
+    toast(`✅ ${s.creados||0} cargados` + ((s.duplicados||0)?` · ${s.duplicados} ya estaban`:'') + ((s.bloqueados||0)?` · ${s.bloqueados} en mes conciliado`:''), 'success');
+    state._bcoImportMovs = null;
+    bcoVerMovs(state.bancoCuentaId);
+  } catch (e) { toast(e.message || 'Error al importar','error'); }
+}
+
 function bcoMovAplicarFiltro() {
   state._bcoMovFilter = { desde: $('#bmf-desde')?.value || '', hasta: $('#bmf-hasta')?.value || '' };
   bcoMovRender();
@@ -29691,6 +29790,7 @@ function bcoMovRender() {
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <button class="btn btn-secondary" onclick="pages.bancos()">← Volver a Bancos</button>
       <div class="flex gap-2 flex-wrap">
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoImportResumen()">📄 Importar resumen (PDF)</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoDepositarCheque()">🏦 Depositar cheque</button>`:''}
         ${can('finanzas:update')?`<button class="btn btn-secondary" onclick="bcoConciliarForm()">✅ Conciliar mes</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoMovForm()">+ Nuevo movimiento</button>`:''}

@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.97.0';
+const AGROCORE_VERSION = '2.98.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12108,6 +12108,176 @@ app.post('/api/banco-movimientos', requireCompany, requirePermission('finanzas:c
       data: { ...rest, companyId: cuenta.companyId, userId: req.user?.id || null },
     });
     res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// IMPORTAR RESUMEN BANCARIO (PDF) — lee el PDF del homebanking y arma los
+// movimientos automáticamente. Flujo en 2 pasos: (1) parse → devuelve una
+// vista previa para revisar; (2) import → crea los movimientos elegidos.
+// ============================================================
+// Parsea un número argentino "1.234.567,89" (o "-1.234,56") a float.
+function _numAr(s) {
+  if (s == null) return NaN;
+  let t = String(s).replace(/\$/g, '').replace(/\s/g, '').trim();
+  const neg = /^-/.test(t) || /-$/.test(t);
+  t = t.replace(/[^\d.,]/g, '');
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.'); // formato AR: . miles , decimal
+  const n = parseFloat(t);
+  if (!isFinite(n)) return NaN;
+  return neg ? -Math.abs(n) : n;
+}
+// Deriva el tipo de movimiento bancario a partir del concepto y el signo.
+function _bancoTipoDesdeConcepto(concepto, signo) {
+  const c = String(concepto || '').toUpperCase();
+  const cred = signo >= 0;
+  if (/TRANSF|TRAN\.INTERB|CREDIN|C BE TR|DB CREDIN|VAR /.test(c)) return cred ? 'transferencia_in' : 'transferencia_out';
+  if (/CHEQUE|E-?CHEQ|ECH |ECHEQ|VALOR AL COBRO/.test(c)) return cred ? 'cheque_cobrado' : 'cheque_pagado';
+  if (/GRAVAMEN|LEY 25413|I\.V\.A|IVA |IMPUESTO|IMP\.|PERCEP|RETENC|DEB\.?FISCAL|DEBITO FISCAL/.test(c)) return 'impuesto';
+  if (/COM |COMISION|MANTENIM|COSTO|CARGO|SEG\.|SEGURO|GASTO/.test(c)) return 'comision';
+  if (/INTERES/.test(c)) return 'interes';
+  if (/DEPOSITO|DEP\.|ACREDIT/.test(c) && cred) return 'deposito';
+  if (/EXTRACCION|RETIRO|CAJERO|ATM/.test(c) && !cred) return 'extraccion';
+  return cred ? 'credito_acreditado' : 'debito';
+}
+// Parser determinístico del texto del PDF (sin IA). Pensado para resúmenes tipo
+// homebanking (Technisys y similares): fecha en 1 o 2 líneas + concepto + "$ -x,xx".
+function _parseResumenBancarioTexto(texto) {
+  const lines = String(texto || '').split(/\r?\n/).map(s => s.trim());
+  const movs = [];
+  let fecha = null, concepto = [], skipNum = false;
+  const montoEnd = /\$\s*(-?[\d.]+,\d{2})\s*$/;          // "...$ -0,20" (Monto al final de la línea)
+  const soloNum = /^-?[\d.]+,\d{2}$/;                     // "42.148.599,91" (Saldo suelto)
+  const fechaFull = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/;
+  const fechaDM = /^(\d{1,2})\/(\d{1,2})$/;
+  const fechaY = /^\/(\d{4})$/;
+  const push = (imp, head) => {
+    if (!fecha || !isFinite(imp)) return;
+    let ref = '', con = head || '';
+    const lead = con.match(/^(\d{2,})\s*(.*)$/);          // separa el comprobante numérico pegado al concepto
+    if (lead && lead[2] && /[A-Za-z]/.test(lead[2])) { ref = lead[1]; con = lead[2]; }
+    con = [...concepto, con].join(' ').replace(/\s{2,}/g, ' ').trim();
+    movs.push({ fecha, concepto: con || 'Movimiento', referencia: ref, importe: imp });
+    concepto = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (!ln) continue;
+    if (skipNum && soloNum.test(ln)) { skipNum = false; continue; } // valor del saldo tras un "$" suelto
+    skipNum = false;
+    let m;
+    if ((m = ln.match(fechaFull))) { let y = +m[3]; if (y < 100) y += 2000; fecha = `${y}-${String(+m[2]).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`; concepto = []; continue; }
+    if ((m = ln.match(fechaDM))) { const dd = m[1], mm = m[2]; const nx = lines[i+1] || ''; const my = nx.match(fechaY); const y = my ? +my[1] : new Date().getFullYear(); if (my) i++; fecha = `${y}-${String(+mm).padStart(2,'0')}-${String(+dd).padStart(2,'0')}`; concepto = []; continue; }
+    if ((m = ln.match(montoEnd))) { push(_numAr(m[1]), ln.slice(0, m.index).trim()); continue; }
+    if (ln.replace(/\s/g, '') === '$') { skipNum = true; continue; }  // marcador de saldo ("$ " y el valor va en la línea siguiente)
+    if (soloNum.test(ln)) { continue; }                     // saldo suelto → ignorar
+    if (/^(fecha|comprobante|concepto|monto|saldo|.ltimos|p.gina|pagina)/i.test(ln)) continue;
+    concepto.push(ln);
+  }
+  return movs;
+}
+// Parser con IA (más robusto entre bancos): manda el texto y pide un JSON.
+async function _iaParseResumenBancario(textoPdf, ia) {
+  const cfg = ia || await _iaConfig();
+  if (!cfg.apiKey || !textoPdf) return null;
+  const sys = [
+    'Sos un lector de resúmenes/extractos bancarios argentinos. Te paso el texto extraído de un PDF de homebanking.',
+    'Devolvé SOLO un JSON con la forma { "movimientos": [ { "fecha": "AAAA-MM-DD", "concepto": "...", "referencia": "...", "importe": -1234.56 } ] }.',
+    'Reglas:',
+    '- Una entrada por cada movimiento/transacción real. Ignorá encabezados, totales, saldos y pies de página.',
+    '- importe: número con signo. NEGATIVO = débito (sale plata). POSITIVO = crédito (entra plata). Usá punto decimal, sin separador de miles ni símbolos.',
+    '- NO uses la columna Saldo como importe: el importe es la columna Monto/Débito/Crédito de esa fila.',
+    '- referencia: número de comprobante/operación si está; si no, cadena vacía.',
+    '- fecha en formato AAAA-MM-DD.',
+    'Respondé SOLO el JSON.',
+  ].join('\n');
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 45000);
+  try {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', temperature: 0, max_tokens: 4000, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: sys }, { role: 'user', content: 'Texto del PDF:\n' + String(textoPdf).slice(0, 18000) }] }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(to);
+    if (!r.ok) { console.warn('IA resumen bancario HTTP', r.status); return null; }
+    const j = await r.json();
+    let out = (j?.choices?.[0]?.message?.content || '').trim();
+    let obj; try { obj = JSON.parse(out); } catch { return null; }
+    const arr = Array.isArray(obj) ? obj : (obj.movimientos || obj.movs || []);
+    return arr.map(m => ({
+      fecha: String(m.fecha || '').slice(0, 10),
+      concepto: String(m.concepto || m.detalle || 'Movimiento').trim(),
+      referencia: String(m.referencia || m.comprobante || '').trim(),
+      importe: _numAr(m.importe != null ? m.importe : m.monto),
+    })).filter(m => m.fecha && isFinite(m.importe) && m.importe !== 0);
+  } catch (e) { if (e.name !== 'AbortError') console.warn('IA resumen bancario error:', e.message); clearTimeout(to); return null; }
+}
+
+// Paso 1: subir el PDF y obtener la vista previa de movimientos (no crea nada).
+app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const cids = await _cidsGrupo(req);
+    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
+    if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
+    const b64 = String(req.body?.fileB64 || '').replace(/^data:[^,]+,/, '');
+    if (!b64) return res.status(400).json({ ok: false, error: 'No recibí el PDF.' });
+    const buffer = Buffer.from(b64, 'base64');
+    let texto = '';
+    try { const pdfParse = await getPdfParse(); texto = (await pdfParse(buffer)).text || ''; }
+    catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
+    if (!texto || texto.trim().length < 20) {
+      return res.status(422).json({ ok: false, scanned: true, error: 'El PDF no tiene texto (parece escaneado o una foto). Descargá el resumen en PDF real desde el homebanking.' });
+    }
+    const ia = await _iaConfig();
+    let movs = null, fuente = 'texto';
+    if (ia.enabled) { movs = await _iaParseResumenBancario(texto, ia); if (movs && movs.length) fuente = 'IA'; }
+    if (!movs || !movs.length) { movs = _parseResumenBancarioTexto(texto); fuente = 'texto'; }
+    // Ordenar por fecha ascendente y agregar tipo sugerido.
+    movs = (movs || []).filter(m => m.fecha && isFinite(m.importe) && m.importe !== 0)
+      .sort((a, b) => a.fecha.localeCompare(b.fecha))
+      .map(m => ({ ...m, tipo: _bancoTipoDesdeConcepto(m.concepto, m.importe) }));
+    if (!movs.length) return res.status(422).json({ ok: false, error: 'No pude reconocer movimientos en este PDF. Probá activar la IA (Super Admin → IA) o cargalos a mano.' });
+    res.json({ ok: true, fuente, cuenta: { id: cuenta.id, banco: cuenta.banco, moneda: cuenta.moneda }, movimientos: movs });
+  } catch (e) { next(e); }
+});
+
+// Paso 2: crear los movimientos revisados. Deduplica contra los ya cargados
+// (misma fecha + importe + referencia/concepto) y respeta la conciliación.
+app.post('/api/banco-cuentas/:id/import-movimientos', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const cids = await _cidsGrupo(req);
+    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
+    if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
+    const items = Array.isArray(req.body?.movimientos) ? req.body.movimientos : [];
+    if (!items.length) return res.status(400).json({ ok: false, error: 'No hay movimientos para importar.' });
+    // Movimientos ya existentes de la cuenta (para deduplicar).
+    const existentes = await prisma.bancoMovimiento.findMany({ where: { companyId: cuenta.companyId, cuentaId: cuenta.id }, select: { fecha: true, monto: true, referencia: true, concepto: true } });
+    const norm = (s) => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
+    const keyOf = (fechaISO, monto, ref, con) => `${fechaISO}|${Math.round(monto*100)}|${(ref||'').trim()||norm(con)}`;
+    const vistos = new Set(existentes.map(e => keyOf((e.fecha instanceof Date ? e.fecha.toISOString() : String(e.fecha)).slice(0,10), Number(e.monto||0), e.referencia, e.concepto)));
+    const resumen = { creados: 0, duplicados: 0, omitidos: 0, bloqueados: 0 };
+    const crear = [];
+    for (const it of items) {
+      const fechaISO = String(it.fecha || '').slice(0, 10);
+      const imp = _numAr(it.importe);
+      if (!fechaISO || !isFinite(imp) || imp === 0) { resumen.omitidos++; continue; }
+      const tipo = BANCO_TIPOS_TODOS.includes(it.tipo) ? it.tipo : _bancoTipoDesdeConcepto(it.concepto, imp);
+      const monto = Math.abs(imp);
+      const con = String(it.concepto || 'Movimiento').trim();
+      const ref = String(it.referencia || '').trim();
+      const k = keyOf(fechaISO, monto, ref, con);
+      if (vistos.has(k)) { resumen.duplicados++; continue; }
+      const fechaD = new Date(fechaISO + 'T00:00:00');
+      const bloq = await _conciliacionBloqueo(cuenta.companyId, cuenta.id, fechaD);
+      if (bloq) { resumen.bloqueados++; continue; }
+      vistos.add(k);
+      crear.push({ companyId: cuenta.companyId, cuentaId: cuenta.id, fecha: fechaD, tipo, concepto: con, monto, referencia: ref || null, contraparte: it.contraparte || null, observaciones: 'Importado del resumen bancario', userId: req.user?.id || null });
+    }
+    if (crear.length) await prisma.bancoMovimiento.createMany({ data: crear });
+    resumen.creados = crear.length;
+    res.json({ ok: true, resumen });
   } catch (e) { next(e); }
 });
 
