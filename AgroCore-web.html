@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
+      titulo:'⚖️ v2.103.0 — Ajustar el saldo del banco + editar/eliminar mensajes del chat',
+      desc:'Dos cosas. <b>(1) Saldo bancario que cuadra:</b> cuando el resumen es <b>parcial</b> (solo el último mes, no arranca en la apertura de la cuenta), el saldo del sistema no coincidía con el del banco. Ahora, al importar, el sistema lee el <b>saldo de cierre del banco</b> (la columna Saldo del resumen) y te ofrece <b>"Ajustar saldo al del banco"</b> para que cuadre exacto (corrige el saldo inicial, sin tocar los movimientos). También hay un botón <b>⚖️</b> en la cuenta para ajustarlo a mano poniendo el saldo real del banco. <b>(2) Chat:</b> ahora podés <b>editar (✏️) y eliminar (🗑️)</b> tus propios mensajes en el chat del equipo, grupos y administración.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',
       titulo:'🐄 v2.102.0 — Animales: eliminar categorías duplicadas y evitar el error',
       desc:'En <b>Animales</b> (stock por campo) ahora cada categoría tiene un botón <b>🗑️</b> para <b>eliminarla</b> del campo. Sirve para sacar los <b>duplicados</b> que se armaban al escribir la categoría en plural (ej: cargaste el declarado SENASA en <b>"terneras"</b> pero el físico suma en <b>"ternera"</b>): borrás la fila de más y cargás el declarado en la categoría correcta. Además, para que <b>no vuelva a pasar</b>, el botón <b>"+ Categoría"</b> ahora es un <b>desplegable del catálogo</b> (elegís de la lista, no se escribe a mano), así siempre coincide con el nombre del stock físico.' },
@@ -7436,6 +7439,7 @@ async function chatReload(){
     return s.charAt(0).toUpperCase()+s.slice(1);
   };
   let _chatLastDay = '';
+  state._chatById = {}; (msgs||[]).forEach(m=>{ state._chatById[m.id] = m.texto; });
   cont.innerHTML = msgs.map(m=>{
     // Separador de fecha cuando cambia el día respecto del mensaje anterior.
     let sep = '';
@@ -7452,7 +7456,10 @@ async function chatReload(){
     return sep + `<div class="max-w-[85%] ${mine?'self-end bg-emerald-600 text-white rounded-tr-sm':'self-start bg-white border border-slate-200 text-slate-800 rounded-tl-sm'} rounded-2xl px-3 py-2 text-sm">
       ${(!mine && !esAsistente)?`<div class="text-[11px] font-semibold text-emerald-700 mb-0.5">${esc(m.autorNombre||'—')}</div>`:''}
       <div>${esc(m.texto)}</div>
-      <div class="text-[10px] ${mine?'text-emerald-100':'text-slate-400'} text-right mt-0.5">${hora}</div>
+      <div class="text-[10px] ${mine?'text-emerald-100':'text-slate-400'} flex items-center justify-end gap-2 mt-0.5">
+        ${mine?`<button class="hover:text-white" title="Editar" onclick='chatEditMsg(${JSON.stringify(m.id)})'>✏️</button><button class="hover:text-white" title="Eliminar" onclick='chatDelMsg(${JSON.stringify(m.id)})'>🗑️</button>`:''}
+        <span>${hora}</span>
+      </div>
     </div>`;
   }).join('') || `<div class="text-center text-slate-400 text-sm m-auto">${esAsistente?'Escribí o dictá lo que hiciste y lo cargo por vos.':'Sin mensajes todavía. ¡Escribí el primero!'}</div>`;
   if (forceBottom || nearBottom) {
@@ -7461,6 +7468,29 @@ async function chatReload(){
     // Estaba leyendo arriba: mantenemos su vista aunque hayan entrado mensajes nuevos.
     cont.scrollTop = prevScrollTop + (cont.scrollHeight - prevScrollHeight);
   }
+}
+// Editar un mensaje propio.
+async function chatEditMsg(id){
+  const actual = (state._chatById && state._chatById[id]) || '';
+  const nuevo = prompt('Editar mensaje:', actual);
+  if (nuevo == null) return;                 // canceló
+  const t = String(nuevo).trim();
+  if (!t) return toast('El mensaje no puede quedar vacío','error');
+  if (t === actual) return;
+  try {
+    const r = await api('/api/mensajes/'+id, { method:'PUT', body: JSON.stringify({ texto: t }) });
+    if (!r.ok) return toast(r.error || 'No pude editar','error');
+    chatReload();
+  } catch(e){ toast(e.message||'Error al editar','error'); }
+}
+// Eliminar un mensaje propio.
+async function chatDelMsg(id){
+  if (!confirm('¿Eliminar este mensaje?')) return;
+  try {
+    const r = await api('/api/mensajes/'+id, { method:'DELETE' });
+    if (!r.ok) return toast(r.error || 'No pude eliminar','error');
+    chatReload();
+  } catch(e){ toast(e.message||'Error al eliminar','error'); }
 }
 async function chatEnviar(){
   const inp = document.getElementById('chat-input'); const txt = (inp?.value||'').trim();
@@ -29754,7 +29784,7 @@ async function bcoImportResumenSubir() {
     const r = await api(`/api/banco-cuentas/${state.bancoCuentaId}/parse-resumen`, { method:'POST', body: JSON.stringify({ fileB64: b64, filename: f.name }) });
     if (!r.ok || !r.movimientos?.length) { if (st) st.textContent = ''; return toast(r.error || 'No reconocí movimientos en el archivo','error'); }
     state._bcoImportMovs = r.movimientos;
-    state._bcoImportMeta = { detectado: r.detectado || null, alerta: r.alerta || null, coincide: r.coincideCuenta };
+    state._bcoImportMeta = { detectado: r.detectado || null, alerta: r.alerta || null, coincide: r.coincideCuenta, saldoBanco: (r.saldoBanco!=null?Number(r.saldoBanco):null) };
     bcoImportResumenPreview(r.fuente);
   } catch (e) {
     if (st) st.textContent = '';
@@ -29815,10 +29845,22 @@ async function bcoImportResumenConfirmar() {
     const r = await api(`/api/banco-cuentas/${cid}/import-movimientos`, { method:'POST', body: JSON.stringify({ movimientos: sel }) });
     if (!r.ok) return toast(r.error || 'No pude importar','error');
     const s = r.resumen || {};
+    const saldoBanco = (state._bcoImportMeta && state._bcoImportMeta.saldoBanco != null) ? Number(state._bcoImportMeta.saldoBanco) : null;
+    const c = (state.cache.bancoCuentas||[]).find(x => x.id === cid);
+    const mon = c ? c.moneda : 'ARS';
     closeModal();
     state._bcoImportMovs = null;
     await bcoVerMovs(cid);
-    // Modal de resultado con opción de DESHACER la importación recién hecha.
+    const cAct = (state.cache.bancoCuentas||[]).find(x => x.id === cid);
+    const saldoSistema = cAct ? Number(cAct.saldo||0) : null;
+    const difSaldo = (saldoBanco!=null && saldoSistema!=null) ? Math.round((saldoSistema - saldoBanco)*100)/100 : null;
+    const cuadraBox = (saldoBanco!=null) ? `
+        <div class="mt-3 p-2 rounded border ${difSaldo===0?'bg-emerald-50 border-emerald-300':'bg-amber-50 border-amber-300'} text-xs">
+          <div>Según el resumen, el banco <b>cierra en ${fmtMon(mon, saldoBanco)}</b>.</div>
+          <div class="text-slate-600">Tu cuenta en el sistema quedó en <b>${fmtMon(mon, saldoSistema)}</b>${difSaldo!==0?` (difieren en ${fmtMon(mon, difSaldo)})`:''}.</div>
+          ${difSaldo!==0?`<div class="mt-1 text-amber-800">Suele pasar cuando el resumen es <b>parcial</b> (no arranca en la apertura de la cuenta). Podés <b>ajustar el saldo inicial</b> para que cuadre con el banco.</div>`:'<div class="mt-1 text-emerald-800">✅ Coincide con el banco.</div>'}
+        </div>` : '';
+    // Modal de resultado con opción de DESHACER + AJUSTAR SALDO.
     openModal({
       title: '✅ Importación lista',
       size: 'max-w-md',
@@ -29829,11 +29871,48 @@ async function bcoImportResumenConfirmar() {
           ${(s.bloqueados||0)?`<div class="text-amber-700">${s.bloqueados} en un mes conciliado (no se cargaron).</div>`:''}
           ${(s.omitidos||0)?`<div class="text-slate-500">${s.omitidos} sin datos válidos (omitidos).</div>`:''}
         </div>
+        ${cuadraBox}
         <div class="text-[11px] text-slate-400 mt-3">Si te equivocaste de archivo o de cuenta, podés <b>deshacer esta importación</b> (borra sólo estos ${s.creados||0} movimientos).</div>`,
-      footer: `${(r.importLote && (s.creados||0)) ? `<button class="btn btn-secondary text-red-600" onclick='bcoDeshacerImport(${JSON.stringify(cid)},${JSON.stringify(r.importLote)})'>↩️ Deshacer importación</button>` : ''}
+      footer: `${(r.importLote && (s.creados||0)) ? `<button class="btn btn-ghost text-red-600" onclick='bcoDeshacerImport(${JSON.stringify(cid)},${JSON.stringify(r.importLote)})'>↩️ Deshacer</button>` : ''}
+               ${(saldoBanco!=null && difSaldo!==0) ? `<button class="btn btn-secondary" onclick='bcoAjustarSaldo(${JSON.stringify(cid)},${saldoBanco})'>⚖️ Ajustar saldo al del banco</button>` : ''}
                <button class="btn btn-primary" onclick="closeModal()">Listo</button>`,
     });
   } catch (e) { toast(e.message || 'Error al importar','error'); }
+}
+// Form para ajustar el saldo a mano (leyendo el saldo del banco del homebanking).
+function bcoAjustarSaldoForm() {
+  const cuentaId = state.bancoCuentaId;
+  const c = (state.cache.bancoCuentas||[]).find(x => x.id === cuentaId);
+  const mon = c ? c.moneda : 'ARS';
+  openModal({
+    title: '⚖️ Ajustar saldo al del banco',
+    size: 'max-w-md',
+    body: `
+      <p class="text-sm text-slate-600 mb-2">Tu cuenta en el sistema figura en <b>${fmtMon(mon, c?c.saldo:0)}</b>.</p>
+      <p class="text-xs text-slate-500 mb-3">Poné el <b>saldo real que muestra el banco</b> (el homebanking o la última línea del resumen). El sistema corrige el <b>saldo inicial</b> para que el total coincida, <b>sin tocar los movimientos</b>.</p>
+      <label class="label">Saldo real del banco (${esc(mon)})</label>
+      <input id="ajs-saldo" type="number" step="0.01" class="input" placeholder="Ej: 0 · 605969.39"/>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="bcoAjustarSaldoManual()">Ajustar</button>`,
+  });
+}
+async function bcoAjustarSaldoManual() {
+  const v = document.getElementById('ajs-saldo')?.value;
+  if (v === '' || v == null || isNaN(Number(v))) return toast('Poné el saldo del banco (número)','error');
+  bcoAjustarSaldo(state.bancoCuentaId, Number(v));
+}
+// Ajusta el saldo inicial de la cuenta para que el saldo del sistema coincida con
+// el saldo real del banco (resúmenes parciales que no arrancan en la apertura).
+async function bcoAjustarSaldo(cuentaId, saldoObjetivo) {
+  if (!confirm(`¿Ajustar el saldo de esta cuenta a ${fmt$(saldoObjetivo)} (el saldo de cierre del banco)?\n\nSe corrige el saldo inicial para que el total coincida con el banco. No toca los movimientos.`)) return;
+  try {
+    const r = await api(`/api/banco-cuentas/${cuentaId}/ajustar-saldo`, { method:'POST', body: JSON.stringify({ saldoObjetivo }) });
+    if (!r.ok) return toast(r.error || 'No pude ajustar el saldo','error');
+    closeModal();
+    toast('✅ Saldo ajustado al del banco', 'success');
+    try { state.cache.bancoCuentas = (await api('/api/banco-cuentas')).data || state.cache.bancoCuentas; } catch {}
+    bcoVerMovs(cuentaId);
+  } catch (e) { toast(e.message || 'Error al ajustar','error'); }
 }
 // Deshacer una importación (borra el lote completo).
 async function bcoDeshacerImport(cuentaId, lote) {
@@ -29899,6 +29978,7 @@ function bcoMovRender() {
       <div class="flex gap-2 flex-wrap">
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoImportResumen()">📄 Importar resumen</button>`:''}
         ${can('finanzas:read')?`<button class="btn btn-ghost" title="Ver y deshacer importaciones" onclick="bcoImportacionesPanel()">↩️</button>`:''}
+        ${can('finanzas:update')?`<button class="btn btn-ghost" title="Ajustar el saldo de la cuenta al que muestra el banco" onclick="bcoAjustarSaldoForm()">⚖️</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoDepositarCheque()">🏦 Depositar cheque</button>`:''}
         ${can('finanzas:update')?`<button class="btn btn-secondary" onclick="bcoConciliarForm()">✅ Conciliar mes</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoMovForm()">+ Nuevo movimiento</button>`:''}

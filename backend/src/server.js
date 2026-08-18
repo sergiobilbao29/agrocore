@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.102.0';
+const AGROCORE_VERSION = '2.103.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9357,6 +9357,31 @@ app.post('/api/mensajes', requireCompany, async (req, res, next) => {
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
+// Editar un mensaje propio (o cualquiera si es Super Admin).
+app.put('/api/mensajes/:id', requireCompany, async (req, res, next) => {
+  try {
+    const cids = await _cidsChat(req);
+    const msg = await prisma.mensaje.findFirst({ where: { id: req.params.id, OR: [ { companyId: { in: cids } }, { canal: 'asistente', userId: req.user.id } ] } });
+    if (!msg) return res.status(404).json({ ok: false, error: 'Mensaje no encontrado' });
+    if (String(msg.userId) !== String(req.user.id) && !req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo podés editar tus propios mensajes' });
+    if (msg.rol === 'assistant') return res.status(400).json({ ok: false, error: 'No se pueden editar las respuestas del asistente' });
+    const texto = String(req.body?.texto || '').trim();
+    if (!texto) return res.status(400).json({ ok: false, error: 'El mensaje no puede quedar vacío' });
+    const row = await prisma.mensaje.update({ where: { id: msg.id }, data: { texto } });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+// Eliminar un mensaje propio (o cualquiera si es Super Admin).
+app.delete('/api/mensajes/:id', requireCompany, async (req, res, next) => {
+  try {
+    const cids = await _cidsChat(req);
+    const msg = await prisma.mensaje.findFirst({ where: { id: req.params.id, OR: [ { companyId: { in: cids } }, { canal: 'asistente', userId: req.user.id } ] } });
+    if (!msg) return res.status(404).json({ ok: false, error: 'Mensaje no encontrado' });
+    if (String(msg.userId) !== String(req.user.id) && !req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo podés eliminar tus propios mensajes' });
+    await prisma.mensaje.delete({ where: { id: msg.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
 app.get('/api/mensajes/no-leidos', requireCompany, async (req, res, next) => {
   try {
     // Chat compartido entre empresas: leemos el "leído" del usuario en TODAS sus empresas
@@ -12197,11 +12222,12 @@ function _parseResumenBancarioTexto(texto) {
       const montos = [...rest.matchAll(dineroG)];
       if (montos.length) {
         const imp = _numAr(montos[0][1]);               // primer $ = importe
+        const saldo = montos[1] ? _numAr(montos[1][1]) : null; // segundo $ = saldo del banco
         let head = rest.slice(0, montos[0].index).trim(); // referencia+causal+concepto
         const cm = head.match(/^(\d+)?\s*(.*)$/);
         const ref = (cm && cm[1]) ? cm[1] : '';
         const con = ((cm && cm[2]) ? cm[2] : '').replace(/\s{2,}/g, ' ').trim() || 'Movimiento';
-        if (isFinite(imp) && imp !== 0) { movs.push({ fecha: fechaT, concepto: con, referencia: ref, importe: imp }); }
+        if (isFinite(imp) && imp !== 0) { movs.push({ fecha: fechaT, concepto: con, referencia: ref, importe: imp, saldo }); }
       }
       concepto = []; skipNum = false;
       continue;
@@ -12422,11 +12448,25 @@ app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermissi
       }
     }
 
+    movs = (movs || []).filter(m => m.fecha && isFinite(m.importe) && m.importe !== 0);
+    if (!movs.length) return res.status(422).json({ ok: false, error: 'No pude reconocer movimientos en este archivo. Revisá que sea el resumen del banco (PDF, Excel, CSV o foto), activá la IA (Super Admin → IA) o cargalos a mano.' });
+
+    // Saldo de CIERRE del banco (para poder ajustar el saldo inicial de la cuenta y
+    // que cuadre, aunque el resumen sea parcial). Muchos resúmenes traen la columna
+    // Saldo por fila: el cierre es el saldo del movimiento MÁS reciente.
+    let saldoBanco = null;
+    const conSaldo = movs.filter(m => m.saldo != null && isFinite(m.saldo));
+    if (conSaldo.length) {
+      // Detectar orden del archivo (más reciente primero vs último) por las fechas.
+      const primera = movs[0].fecha, ultima = movs[movs.length - 1].fecha;
+      const masRecientePrimero = primera >= ultima;
+      saldoBanco = masRecientePrimero ? conSaldo[0].saldo : conSaldo[conSaldo.length - 1].saldo;
+    }
+
     // Ordenar por fecha ascendente y agregar tipo sugerido.
-    movs = (movs || []).filter(m => m.fecha && isFinite(m.importe) && m.importe !== 0)
+    movs = movs
       .sort((a, b) => a.fecha.localeCompare(b.fecha))
       .map(m => ({ ...m, tipo: _bancoTipoDesdeConcepto(m.concepto, m.importe) }));
-    if (!movs.length) return res.status(422).json({ ok: false, error: 'No pude reconocer movimientos en este archivo. Revisá que sea el resumen del banco (PDF, Excel, CSV o foto), activá la IA (Super Admin → IA) o cargalos a mano.' });
 
     // Verificar que el resumen sea de la cuenta elegida (por número de cuenta).
     const soloDig = (s) => String(s || '').replace(/\D/g, '');
@@ -12447,6 +12487,7 @@ app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermissi
       detectado: detectado ? { numero: detectado.numero, cuit: detectado.cuit, empresa: detectado.empresa, tipo: detectado.tipo, moneda: detectado.moneda } : null,
       coincideCuenta: (numCuenta && numResumen) ? (numCuenta === numResumen || numResumen.includes(numCuenta) || numCuenta.includes(numResumen)) : null,
       alerta,
+      saldoBanco,   // saldo de cierre del banco (para ajustar el saldo inicial)
       movimientos: movs,
     });
   } catch (e) { next(e); }
@@ -12558,6 +12599,29 @@ app.delete('/api/banco-cuentas/:id/importaciones/:lote', requireCompany, require
     }
     const del = await prisma.bancoMovimiento.deleteMany({ where: filtro });
     res.json({ ok: true, borrados: del.count });
+  } catch (e) { next(e); }
+});
+
+// Ajustar el SALDO INICIAL de la cuenta para que el saldo del sistema coincida con
+// el saldo real del banco (útil cuando el resumen es parcial y no arranca en la
+// apertura de la cuenta). saldoInicial = saldoObjetivo − Σ(movimientos actuales).
+app.post('/api/banco-cuentas/:id/ajustar-saldo', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const cids = await _cidsGrupo(req);
+    const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
+    if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
+    const saldoObjetivo = Number(req.body?.saldoObjetivo);
+    if (!isFinite(saldoObjetivo)) return res.status(400).json({ ok: false, error: 'Saldo objetivo inválido.' });
+    // Suma firmada de TODOS los movimientos de la cuenta.
+    const movs = await prisma.bancoMovimiento.findMany({ where: { companyId: cuenta.companyId, cuentaId: cuenta.id }, select: { tipo: true, monto: true } });
+    let sumaMov = 0;
+    for (const m of movs) {
+      const s = BANCO_TIPOS_INGRESO.includes(m.tipo) ? 1 : (BANCO_TIPOS_EGRESO.includes(m.tipo) ? -1 : 0);
+      sumaMov += s * Number(m.monto || 0);
+    }
+    const nuevoSaldoInicial = Math.round((saldoObjetivo - sumaMov) * 100) / 100;
+    await prisma.bancoCuenta.update({ where: { id: cuenta.id }, data: { saldoInicial: nuevoSaldoInicial } });
+    res.json({ ok: true, saldoInicial: nuevoSaldoInicial, saldoFinal: saldoObjetivo });
   } catch (e) { next(e); }
 });
 
