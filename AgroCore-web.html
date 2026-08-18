@@ -2575,7 +2575,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
       titulo:'🏦 v2.101.0 — Importar resumen del banco: por foto, con verificación de cuenta y deshacer',
-      desc:'Mejoras grandes en el <b>importador de resumen bancario</b>. <b>(1) Verifica la cuenta:</b> el sistema lee el número de cuenta del resumen y te avisa si <b>no coincide</b> con la cuenta elegida, para que no cargues en la equivocada. <b>(2) Deshacer:</b> después de importar podés tocar <b>"↩️ Deshacer importación"</b> (o el botón ↩️ de la cuenta) y borra solo esos movimientos, por si te equivocaste de archivo o cuenta. <b>(3) Foto:</b> si recibís el resumen en <b>papel</b>, ahora le sacás una <b>foto</b> y la lee con IA. <b>(4)</b> Mejor <b>anti-duplicados</b> (compara fecha + importe + referencia + concepto) y soporte del formato de resumen de más bancos (probado con los resúmenes reales que nos pasaron).' },
+      desc:'Mejoras grandes en el <b>importador de resumen bancario</b>. <b>(1) Verifica la cuenta:</b> el sistema lee el número de cuenta del resumen y te avisa si <b>no coincide</b> con la cuenta elegida, para que no cargues en la equivocada. <b>(2) Deshacer:</b> después de importar podés tocar <b>"↩️ Deshacer importación"</b> (o el botón ↩️ de la cuenta) y borra solo esos movimientos, por si te equivocaste de archivo o cuenta. <b>(3) Foto:</b> si recibís el resumen en <b>papel</b>, ahora le sacás una <b>foto</b> y la lee con IA. <b>(4)</b> Mejor <b>anti-duplicados</b> (compara fecha + importe + referencia + concepto) y soporte del formato de resumen de más bancos (probado con los resúmenes reales que nos pasaron). <b>(5)</b> Si una importación <b>anterior</b> (de antes de esta actualización) quedó mal, en el botón ↩️ de la cuenta aparece <b>"Importaciones anteriores"</b> con un botón para <b>borrarlas</b> y volver a importar el resumen correctamente.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'14/08/2026',
       titulo:'🧹 v2.100.0 — Retoques: Libro IVA reubicado, sueldo por día visible e import de banco por Excel',
       desc:'Tres ajustes pedidos. <b>(1)</b> El <b>Libro IVA (Ventas/Compras)</b> se movió del menú de Compras a <b>Administración</b>, junto a "Exportar para contador", que es donde vive todo lo del estudio contable. <b>(2)</b> En la nómina de <b>Empleados</b>, el empleado que cobra por día ahora <b>muestra su sueldo mensual calculado</b> (jornal × días) en la columna Sueldo, con el detalle "$/día × días". <b>(3)</b> El <b>importador de resumen bancario</b> ahora acepta también <b>Excel (.xlsx/.xls) y CSV</b>, además del PDF — si tu banco los ofrece son más exactos; los lee por columnas (Fecha, Concepto, Importe o Débito/Crédito).' },
@@ -29819,20 +29819,31 @@ async function bcoDeshacerImport(cuentaId, lote) {
 // Panel con las últimas importaciones de la cuenta, cada una con "Deshacer".
 async function bcoImportacionesPanel() {
   const cuentaId = state.bancoCuentaId;
-  let lotes = [];
-  try { lotes = (await api(`/api/banco-cuentas/${cuentaId}/importaciones`)).data || []; } catch (e) { return toast(e.message,'error'); }
+  let resp;
+  try { resp = await api(`/api/banco-cuentas/${cuentaId}/importaciones`); } catch (e) { return toast(e.message,'error'); }
+  const lotes = resp.data || [];
+  const legacy = resp.legacy || null;
   const c = (state.cache.bancoCuentas||[]).find(x => x.id === cuentaId);
   const mon = c ? c.moneda : 'ARS';
-  const body = lotes.length
-    ? `<div class="space-y-2">${lotes.map(l => `
+  const filaLote = (l) => `
         <div class="flex items-center justify-between gap-3 p-2 border border-slate-200 rounded">
           <div class="text-sm">
             <div><b>${l.cantidad}</b> movimiento${l.cantidad===1?'':'s'} · ${fmtFecha(l.desde)}${(''+l.desde).slice(0,10)!==(''+l.hasta).slice(0,10)?' → '+fmtFecha(l.hasta):''}</div>
             <div class="text-[11px] text-slate-500">Cargado el ${fmtFecha(l.cargadoEn)} · neto ${fmtMon(mon, l.neto)}</div>
           </div>
           ${can('finanzas:delete')?`<button class="btn btn-ghost btn-sm text-red-600" onclick='bcoDeshacerImport(${JSON.stringify(cuentaId)},${JSON.stringify(l.lote)})'>↩️ Deshacer</button>`:''}
-        </div>`).join('')}</div>`
-    : '<div class="text-sm text-slate-400 py-4 text-center">Todavía no importaste resúmenes en esta cuenta.</div>';
+        </div>`;
+  const legacyBox = legacy ? `
+    <div class="mb-3 p-2 rounded border-2 border-amber-300 bg-amber-50">
+      <div class="text-xs font-semibold text-amber-800 mb-1">⚠️ Importaciones anteriores (cargadas antes de esta actualización)</div>
+      <div class="flex items-center justify-between gap-3">
+        <div class="text-sm text-amber-900"><b>${legacy.cantidad}</b> movimiento${legacy.cantidad===1?'':'s'} importado${legacy.cantidad===1?'':'s'} sin registro de lote · neto ${fmtMon(mon, legacy.neto)}.<div class="text-[11px] text-amber-700 mt-0.5">Si una importación vieja quedó mal (montos desacomodados), borralos y volvé a importar el resumen.</div></div>
+        ${can('finanzas:delete')?`<button class="btn btn-secondary btn-sm text-red-700 whitespace-nowrap" onclick='bcoDeshacerImport(${JSON.stringify(cuentaId)},"__sin_lote__")'>🗑️ Borrar todo</button>`:''}
+      </div>
+    </div>` : '';
+  const body = (legacyBox || '') + (lotes.length
+    ? `<div class="space-y-2">${lotes.map(filaLote).join('')}</div>`
+    : (legacy ? '' : '<div class="text-sm text-slate-400 py-4 text-center">Todavía no importaste resúmenes en esta cuenta.</div>'));
   openModal({ title: '↩️ Importaciones de resúmenes', size:'max-w-lg', body,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
 }

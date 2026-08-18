@@ -12516,7 +12516,24 @@ app.get('/api/banco-cuentas/:id/importaciones', requireCompany, requirePermissio
       map.set(r.importLote, g);
     }
     const lotes = Array.from(map.values()).sort((a, b) => new Date(b.cargadoEn) - new Date(a.cargadoEn)).slice(0, 12);
-    res.json({ ok: true, data: lotes });
+    // Importaciones VIEJAS (cargadas antes de esta versión: no tienen lote). Se
+    // agrupan aparte para poder limpiar lo que quedó mal de una importación previa.
+    const viejas = await prisma.bancoMovimiento.findMany({
+      where: { cuentaId: cuenta.id, importLote: null, observaciones: 'Importado del resumen bancario' },
+      select: { monto: true, tipo: true, fecha: true, createdAt: true },
+    });
+    let legacy = null;
+    if (viejas.length) {
+      let neto = 0, desde = viejas[0].fecha, hasta = viejas[0].fecha, cargadoEn = viejas[0].createdAt;
+      for (const r of viejas) {
+        neto += (BANCO_TIPOS_INGRESO.includes(r.tipo) ? 1 : BANCO_TIPOS_EGRESO.includes(r.tipo) ? -1 : 0) * Number(r.monto || 0);
+        if (new Date(r.fecha) < new Date(desde)) desde = r.fecha;
+        if (new Date(r.fecha) > new Date(hasta)) hasta = r.fecha;
+        if (new Date(r.createdAt) > new Date(cargadoEn)) cargadoEn = r.createdAt;
+      }
+      legacy = { lote: '__sin_lote__', legacy: true, cantidad: viejas.length, neto, desde, hasta, cargadoEn };
+    }
+    res.json({ ok: true, data: lotes, legacy });
   } catch (e) { next(e); }
 });
 
@@ -12528,14 +12545,18 @@ app.delete('/api/banco-cuentas/:id/importaciones/:lote', requireCompany, require
     const cuenta = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!cuenta) return res.status(404).json({ ok: false, error: 'Cuenta no encontrada' });
     const lote = String(req.params.lote || '');
-    const movs = await prisma.bancoMovimiento.findMany({ where: { cuentaId: cuenta.id, importLote: lote }, select: { id: true, fecha: true } });
+    // Filtro: por lote, o el grupo "sin lote" (importaciones viejas mal cargadas).
+    const filtro = lote === '__sin_lote__'
+      ? { cuentaId: cuenta.id, importLote: null, observaciones: 'Importado del resumen bancario' }
+      : { cuentaId: cuenta.id, importLote: lote };
+    const movs = await prisma.bancoMovimiento.findMany({ where: filtro, select: { id: true, fecha: true } });
     if (!movs.length) return res.status(404).json({ ok: false, error: 'No encontré esa importación (quizás ya se deshizo).' });
     // Si algún movimiento cae en un mes conciliado, no se puede deshacer.
     for (const m of movs) {
       const bloq = await _conciliacionBloqueo(cuenta.companyId, cuenta.id, m.fecha);
       if (bloq) return res.status(400).json({ ok: false, error: `No puedo deshacer: hay movimientos en el mes ${bloq.periodo} que está conciliado. Reabrí la conciliación primero.` });
     }
-    const del = await prisma.bancoMovimiento.deleteMany({ where: { cuentaId: cuenta.id, importLote: lote } });
+    const del = await prisma.bancoMovimiento.deleteMany({ where: filtro });
     res.json({ ok: true, borrados: del.count });
   } catch (e) { next(e); }
 });
