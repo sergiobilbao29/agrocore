@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
+      titulo:'🗣️ v2.104.0 — El asistente ahora te habla con voz natural (más humana)',
+      desc:'El asistente aprendió a <b>hablar con una voz mucho más humana y agradable</b>. Con la IA activada usa una <b>voz neural</b> (natural, rioplatense) para leerte sus respuestas; si la IA está apagada o no hay internet, igual te habla con la voz del navegador. Arriba del chat elegís <b>🔊 Mujer</b>, <b>🔊 Hombre</b> o <b>🔇</b> (sin voz), y queda guardado en tu dispositivo. Además el asistente responde con un <b>tono más cálido y cercano</b>, y aprendió lo nuevo: cómo <b>importar el resumen del banco</b> (con "ajustar saldo" y "deshacer"), cómo <b>editar o borrar mensajes del chat</b>, cómo <b>agregar/borrar categorías de animales</b> y cómo hacer la <b>puesta en marcha</b> del sistema. También sumamos un instructivo de <b>primeros pasos</b> para configurar tu empresa de cero.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
       titulo:'⚖️ v2.103.0 — Ajustar el saldo del banco + editar/eliminar mensajes del chat',
       desc:'Dos cosas. <b>(1) Saldo bancario que cuadra:</b> cuando el resumen es <b>parcial</b> (solo el último mes, no arranca en la apertura de la cuenta), el saldo del sistema no coincidía con el del banco. Ahora, al importar, el sistema lee el <b>saldo de cierre del banco</b> (la columna Saldo del resumen) y te ofrece <b>"Ajustar saldo al del banco"</b> para que cuadre exacto (corrige el saldo inicial, sin tocar los movimientos). También hay un botón <b>⚖️</b> en la cuenta para ajustarlo a mano poniendo el saldo real del banco. <b>(2) Detección de duplicados mejorada:</b> al importar, si un movimiento coincide en <b>fecha e importe</b> con uno que ya cargaste a mano (aunque tenga otro texto o sin referencia), lo marca como <b>"posible duplicado"</b> y lo deja <b>destildado</b>, para que no se dupliquen los que ya tenías cargados. <b>(3) Chat:</b> ahora podés <b>editar (✏️) y eliminar (🗑️)</b> tus propios mensajes en el chat del equipo, grupos y administración.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',
@@ -7306,7 +7309,33 @@ function _ttsMejorVoz(genero){
   // Preferimos una que coincida con el género; si ninguna coincide, la mejor disponible.
   return ord.find(v=>reGen.test((v.name||'').toLowerCase())) || ord[0];
 }
-function _ttsHablar(texto){
+// Voz principal: neural de OpenAI (suena humana). Si la IA está apagada, no hay
+// internet, o falla, cae a la voz del navegador (_ttsHablarNavegador).
+async function _ttsHablar(texto){
+  try {
+    if (!_ttsActivo() || !texto) return;
+    const genero = _ttsVoz()==='hombre' ? 'hombre' : 'mujer';
+    // 1) Voz neural OpenAI. state._ttsNeural=false cuando ya sabemos que la IA está off.
+    if (state._ttsNeural !== false) {
+      try {
+        const r = await api('/api/asistente/tts', { method:'POST', body: JSON.stringify({ texto, voz: genero }) });
+        if (r && r.ok && r.audioB64) {
+          try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch {}
+          try { if (state._ttsAudio) { state._ttsAudio.pause(); state._ttsAudio.currentTime = 0; } } catch {}
+          const a = new Audio('data:' + (r.mime || 'audio/mpeg') + ';base64,' + r.audioB64);
+          state._ttsAudio = a;
+          a.play().catch(()=> _ttsHablarNavegador(texto, genero));
+          return;
+        }
+        if (r && r.motivo === 'ia_off') state._ttsNeural = false; // no reintentar por respuesta
+      } catch (e) { /* red/permiso: usamos el navegador */ }
+    }
+    // 2) Respaldo: voz del navegador.
+    _ttsHablarNavegador(texto, genero);
+  } catch {}
+}
+// Voz de respaldo con el sintetizador del navegador (Web Speech API).
+function _ttsHablarNavegador(texto, generoIn){
   try {
     if (!_ttsActivo() || !('speechSynthesis' in window) || !texto) return;
     // Convertir símbolos de plata a palabras (si no, "$5.000" se lee "5000 dólares").
@@ -7317,7 +7346,7 @@ function _ttsHablar(texto){
       .replace(/[*_`#>•]/g, ' ').replace(/\s{2,}/g, ' ').trim();
     if (!t) return;
     if (t.length > 350) t = t.slice(0, 350);
-    const genero = _ttsVoz()==='hombre' ? 'hombre' : 'mujer';
+    const genero = generoIn || (_ttsVoz()==='hombre' ? 'hombre' : 'mujer');
     const hablar = ()=>{
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(t);
@@ -7339,6 +7368,7 @@ function chatTtsSet(v){
   state._ttsVoz = v;
   try{ localStorage.setItem('agro_tts_voz', v); }catch{}
   try{ window.speechSynthesis.cancel(); }catch{}
+  try{ if (state._ttsAudio){ state._ttsAudio.pause(); state._ttsAudio.currentTime = 0; } }catch{}
   if (v!=='off'){ _ttsHablar(v==='hombre' ? 'Listo, ahora te hablo con voz de hombre.' : 'Listo, ahora te hablo con voz de mujer.'); }
   else toast('🔇 Voz desactivada.','info');
 }

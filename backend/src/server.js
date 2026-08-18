@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.103.0';
+const AGROCORE_VERSION = '2.104.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9062,8 +9062,44 @@ const _AYUDA_KB = [
       'El sistema VERIFICA que el resumen sea de esa cuenta (por el número de cuenta) y te avisa si no coincide, para que no cargues en la cuenta equivocada.',
       'Muestra los movimientos en una tabla para revisar: fecha, concepto, tipo e importe (editable, con casillas para incluir o excluir). Importe negativo = débito, positivo = crédito.',
       'Tocá "Importar seleccionados": se cargan de una, SIN duplicar lo ya cargado (compara fecha + importe + referencia + concepto) ni tocar meses conciliados.',
-      'Si te equivocaste de archivo o cuenta, tocás "↩️ Deshacer importación" (en el aviso de fin o en el botón ↩️ de la cuenta) y borra solo esos movimientos.'],
+      'Si el sistema detecta un "posible duplicado" (misma fecha e importe que algo ya cargado a mano), te lo marca y lo deja destildado para que decidas vos.',
+      'Si te equivocaste de archivo o cuenta, tocás "↩️ Deshacer importación" (en el aviso de fin o en el botón ↩️ de la cuenta) y borra solo esos movimientos.',
+      'Si tu resumen es PARCIAL (no arranca de cero) y el saldo del sistema no coincide con el del banco, usá "⚖️ Ajustar saldo al del banco": toma el saldo final del resumen y ajusta el saldo inicial para que quede igualito al banco.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
+  { id:'chat_mensajes', terms:['editar mensaje','borrar mensaje','eliminar mensaje','corregir mensaje','me equivoque en el chat','cambiar lo que escribi','editar lo que dije','borrar lo que escribi','editar chat','eliminar del chat'],
+    titulo:'Editar o borrar un mensaje del chat',
+    pasos:[
+      'En Mensajes y asistente, pasá el mouse (o mantené apretado en el celu) sobre TU mensaje.',
+      'Aparecen dos botones: ✏️ para editar y 🗑️ para eliminar.',
+      'Con ✏️ corregís el texto y guardás; queda marcado como "editado".',
+      'Con 🗑️ lo borrás. Solo podés editar/borrar TUS mensajes (los del asistente no se tocan).'],
+    atajo:{ page:'mensajes', label:'Abrir Mensajes' } },
+  { id:'categoria_animal', terms:['categoria de animal','categoria duplicada','borrar categoria animal','eliminar categoria animal','ternera repetida','categoria repetida','agregar categoria animal','nueva categoria de hacienda','categoria de hacienda','sacar categoria animal'],
+    titulo:'Agregar o borrar categorías de animales',
+    pasos:[
+      'Entrá a Animales: arriba tenés el botón "+ Categoría".',
+      'Para AGREGAR una categoría, se elige del catálogo (así no se cargan nombres repetidos o mal escritos).',
+      'Para BORRAR una categoría (por ejemplo una duplicada como "ternera" y "terneras"), usá el botón 🗑️ en la fila de esa categoría.',
+      'Ojo: solo se puede borrar una categoría si no tiene animales cargados; si tiene, primero pasá esos animales a la categoría correcta.'],
+    atajo:{ page:'hacienda', label:'Abrir Animales' } },
+  { id:'config_inicial', terms:['empezar a usar','primeros pasos','como configuro','configuracion inicial','recien empiezo','arrancar el sistema','como empiezo','puesta en marcha','configurar la empresa','dar de alta la empresa','como arranco','setup inicial'],
+    titulo:'Primeros pasos: configurar la empresa para empezar',
+    pasos:[
+      'Empresa: en Administración → Empresas cargá nombre, CUIT, condición IVA y logo. Si facturás por ARCA, cargá los datos en Configuración; si trabajás informal, dejalo en modo sin ARCA.',
+      'Usuarios y roles: en Administración → Usuarios y Roles y permisos, creá los usuarios y asignales un rol.',
+      'Catálogos y categorías: revisá Catálogos y los árboles de "Categorías y Familias" y "Categorías de Gastos" (se arman solos la primera vez).',
+      'Campos y lotes: en Producción → Campos y lotes cargá tu superficie.',
+      'Plata: en Tesorería cargá tus Cajas (Control de efectivo) y tus cuentas de Banco/tarjetas, cada una con su saldo inicial.',
+      'Contactos: Clientes y Proveedores (podés crearlos al vuelo) y, si llevás sueldos, los Empleados. ¡Y a operar!'],
+    atajo:{ page:'configuracion', label:'Abrir Configuración' } },
+  { id:'voz_asistente', terms:['voz del asistente','que me hable','leer en voz alta','activar la voz','desactivar la voz','voz de mujer','voz de hombre','que hable el bot','audio del asistente','apagar la voz'],
+    titulo:'La voz del asistente (que te hable)',
+    pasos:[
+      'En Mensajes y asistente, arriba del chat, elegís la voz: 🔊 Mujer, 🔊 Hombre o 🔇 (sin voz).',
+      'Con la IA activada, el asistente te lee sus respuestas con una voz natural (neural), bien humana.',
+      'Si la IA está apagada o no hay internet, igual te habla usando la voz del navegador.',
+      'La preferencia queda guardada en ese dispositivo, así la próxima vez arranca como la dejaste.'],
+    atajo:{ page:'mensajes', label:'Abrir Mensajes' } },
   { id:'factura_foto', terms:['factura por foto','foto de la factura','sacar foto factura','cargar factura con foto','factura escaneada','leer factura','factura imagen','jpg factura','escanear factura','camscanner'],
     titulo:'Cargar una factura de compra desde una foto',
     pasos:[
@@ -9093,15 +9129,15 @@ function _saludoRespuesta(texto){
   const palabras = t.split(/\s+/).length;
   // Saludos (solo si el mensaje es corto y arranca saludando; si además pregunta algo, lo maneja la ayuda)
   if (palabras <= 4 && /^(hola|holis|holaa+|buenas|buen dia|buenos dias|buenas tardes|buenas noches|hey|que tal|como estas|como andas|como va|todo bien|que hace|saludos)\b/.test(t)){
-    return '¡Hola! 👋 Soy el asistente de AgroCore. Puedo *cargar cosas por vos* (gastos del día, hacienda, labores, recordatorios) o *explicarte cómo se hace algo* en el sistema.\n\nProbá:\n• Un gasto — ej: "hoy fui a la panadería y gasté 5000 pesos"\n• Contame qué hiciste — ej: "nacieron 5 terneros en Montenegro"\n• O preguntame — ej: "¿cómo hago una compra?"\n\nEscribí "ayuda" y te muestro todo lo que puedo hacer. ¿Con qué te doy una mano?';
+    return '¡Hola! 👋 ¿Cómo andás? Soy tu asistente de AgroCore, y estoy para darte una mano.\n\nPuedo *cargar cosas por vos* (los gastos del día, la hacienda, las labores, un recordatorio) o *explicarte cómo se hace algo* en el sistema, tranqui y paso a paso.\n\nPor ejemplo, contame algo así:\n• "hoy fui a la panadería y gasté 5000 pesos"\n• "nacieron 5 terneros en Montenegro"\n• o preguntame: "¿cómo hago una compra?"\n\nY si querés ver todo lo que sé hacer, escribí "ayuda". ¿En qué te ayudo?';
   }
   // Agradecimientos
   if (palabras <= 4 && /^(gracias|muchas gracias|genial|perfecto|barbaro|buenisimo|joya|excelente|de diez|copado)\b/.test(t)){
-    return '¡De nada! 😊 Cuando quieras, contame qué hiciste o preguntame cómo se hace algo.';
+    return '¡De nada, un gusto! 😊 Cualquier otra cosa que necesites, acá estoy. Contame nomás.';
   }
   // Despedidas / confirmaciones cortas
   if (palabras <= 3 && /^(chau|adios|nos vemos|hasta luego|hasta mañana|listo|ok|okay|oka|dale|buenas noches)\b/.test(t)){
-    return '¡Listo! Cuando quieras seguimos. 👋';
+    return '¡Dale! Que te vaya bien. Cuando quieras seguimos. 👋';
   }
   return null;
 }
@@ -9111,7 +9147,7 @@ function _esPedidoAyudaGeneral(t){
 }
 // Menú de capacidades del asistente.
 function _menuAyuda(){
-  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Costo de hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo cargo una retención?" · "¿cómo compro/vendo dólares en el banco?" · "¿cómo exporto para el contador?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n\nEscribí tu consulta y arrancamos 💪';
+  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Costo de hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo cargo una retención?" · "¿cómo compro/vendo dólares en el banco?" · "¿cómo exporto para el contador?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n• "¿cómo importo el resumen del banco?" (PDF, Excel o foto; con "ajustar saldo" y "deshacer") · "¿cómo edito o borro un mensaje del chat?"\n• "¿cómo empiezo a usar el sistema?" (configuración inicial) · "¿cómo cambio la voz del asistente?"\n\nEscribí tu consulta y arrancamos 💪';
 }
 // Arma el texto de la respuesta de ayuda (paso a paso).
 function _textoAyuda(e){
@@ -9604,6 +9640,51 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       ...extra, data: m });
   } catch (e) { next(e); }
 });
+// --- Asistente: VOZ NEURAL (Text-to-Speech de OpenAI) ---
+// Convierte el texto de la respuesta del bot en audio con una voz humana neural,
+// mucho más natural que la del navegador. Si la IA no está activada o algo falla,
+// devuelve ok:false y el frontend usa la voz del navegador como respaldo.
+//   voz: 'mujer' | 'hombre'  → mapea a voces neurales cálidas de OpenAI.
+const _TTS_VOCES = { mujer: 'coral', hombre: 'onyx' };
+app.post('/api/asistente/tts', requireCompany, async (req, res, next) => {
+  try {
+    const ia = await _iaConfig();
+    if (!ia.enabled) return res.json({ ok: false, motivo: 'ia_off' });
+    let texto = String(req.body?.texto || '').trim();
+    if (!texto) return res.status(400).json({ ok: false, error: 'Sin texto' });
+    // Limpiar markdown/emojis y convertir símbolos de plata a palabras; limitar largo.
+    texto = texto
+      .replace(/US\$\s?/g, ' dólares ').replace(/U\$S\s?/g, ' dólares ').replace(/\$\s?/g, ' pesos ')
+      .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu, ' ')
+      .replace(/[*_`#>•]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    if (!texto) return res.json({ ok: false, motivo: 'vacio' });
+    if (texto.length > 700) texto = texto.slice(0, 700);
+    const genero = (req.body?.voz === 'hombre') ? 'hombre' : 'mujer';
+    const voice = _TTS_VOCES[genero] || 'coral';
+    const r = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${ia.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini-tts',
+        voice,
+        input: texto,
+        response_format: 'mp3',
+        instructions: 'Hablás en español rioplatense (Argentina). Tono cálido, cercano y amable, como un compañero de trabajo del campo que da una mano. Ritmo natural, claro y tranquilo, sin sonar robótico.',
+      }),
+    });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      console.error('TTS OpenAI error', r.status, String(t).slice(0, 200));
+      return res.json({ ok: false, motivo: 'tts_error' });
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.json({ ok: true, audioB64: buf.toString('base64'), mime: 'audio/mpeg' });
+  } catch (e) {
+    console.error('TTS err', e?.message);
+    res.json({ ok: false, motivo: 'tts_error' });
+  }
+});
+
 // --- Asistente: analizar un archivo (PDF/foto) y proponer la acción correspondiente ---
 // Reconoce facturas de compra, liquidaciones (cereal/animales), órdenes de trabajo (labor),
 // tickets/gastos y cheques. Devuelve una "frase" para reprocesar con el flujo normal del bot
