@@ -2575,7 +2575,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
       titulo:'⚖️ v2.103.0 — Ajustar el saldo del banco + editar/eliminar mensajes del chat',
-      desc:'Dos cosas. <b>(1) Saldo bancario que cuadra:</b> cuando el resumen es <b>parcial</b> (solo el último mes, no arranca en la apertura de la cuenta), el saldo del sistema no coincidía con el del banco. Ahora, al importar, el sistema lee el <b>saldo de cierre del banco</b> (la columna Saldo del resumen) y te ofrece <b>"Ajustar saldo al del banco"</b> para que cuadre exacto (corrige el saldo inicial, sin tocar los movimientos). También hay un botón <b>⚖️</b> en la cuenta para ajustarlo a mano poniendo el saldo real del banco. <b>(2) Chat:</b> ahora podés <b>editar (✏️) y eliminar (🗑️)</b> tus propios mensajes en el chat del equipo, grupos y administración.' },
+      desc:'Dos cosas. <b>(1) Saldo bancario que cuadra:</b> cuando el resumen es <b>parcial</b> (solo el último mes, no arranca en la apertura de la cuenta), el saldo del sistema no coincidía con el del banco. Ahora, al importar, el sistema lee el <b>saldo de cierre del banco</b> (la columna Saldo del resumen) y te ofrece <b>"Ajustar saldo al del banco"</b> para que cuadre exacto (corrige el saldo inicial, sin tocar los movimientos). También hay un botón <b>⚖️</b> en la cuenta para ajustarlo a mano poniendo el saldo real del banco. <b>(2) Detección de duplicados mejorada:</b> al importar, si un movimiento coincide en <b>fecha e importe</b> con uno que ya cargaste a mano (aunque tenga otro texto o sin referencia), lo marca como <b>"posible duplicado"</b> y lo deja <b>destildado</b>, para que no se dupliquen los que ya tenías cargados. <b>(3) Chat:</b> ahora podés <b>editar (✏️) y eliminar (🗑️)</b> tus propios mensajes en el chat del equipo, grupos y administración.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',
       titulo:'🐄 v2.102.0 — Animales: eliminar categorías duplicadas y evitar el error',
       desc:'En <b>Animales</b> (stock por campo) ahora cada categoría tiene un botón <b>🗑️</b> para <b>eliminarla</b> del campo. Sirve para sacar los <b>duplicados</b> que se armaban al escribir la categoría en plural (ej: cargaste el declarado SENASA en <b>"terneras"</b> pero el físico suma en <b>"ternera"</b>): borrás la fila de más y cargás el declarado en la categoría correcta. Además, para que <b>no vuelva a pasar</b>, el botón <b>"+ Categoría"</b> ahora es un <b>desplegable del catálogo</b> (elegís de la lista, no se escribe a mano), así siempre coincide con el nombre del stock físico.' },
@@ -29798,14 +29798,16 @@ function bcoImportResumenPreview(fuente) {
   const opts = Object.keys(BANCO_TIPOS).map(k => `<option value="${k}">${esc(BANCO_TIPOS[k].icon)} ${esc(BANCO_TIPOS[k].lbl)}</option>`).join('');
   const rows = movs.map((m,i)=>{
     const cred = Number(m.importe) >= 0;
-    return `<tr class="border-b border-slate-100">
-      <td class="p-1 text-center"><input type="checkbox" class="bri-chk" data-i="${i}" checked/></td>
+    const dup = !!m.dup;
+    return `<tr class="border-b border-slate-100 ${dup?'bg-amber-50':''}">
+      <td class="p-1 text-center"><input type="checkbox" class="bri-chk" data-i="${i}" ${dup?'':'checked'}/></td>
       <td class="p-1"><input type="date" class="input input-sm !py-0.5 !text-xs" value="${esc((m.fecha||'').slice(0,10))}" onchange="state._bcoImportMovs[${i}].fecha=this.value"/></td>
-      <td class="p-1"><input class="input input-sm !py-0.5 !text-xs w-full" value="${esc(m.concepto||'')}" onchange="state._bcoImportMovs[${i}].concepto=this.value"/></td>
+      <td class="p-1"><input class="input input-sm !py-0.5 !text-xs w-full" value="${esc(m.concepto||'')}" onchange="state._bcoImportMovs[${i}].concepto=this.value"/>${dup?`<div class="text-[10px] text-amber-700 font-semibold mt-0.5">⚠️ Posible duplicado (ya hay uno igual ese día por ese importe)</div>`:''}</td>
       <td class="p-1"><select class="input input-sm !py-0.5 !text-xs" onchange="state._bcoImportMovs[${i}].tipo=this.value">${opts.replace('value="'+m.tipo+'"','value="'+m.tipo+'" selected')}</select></td>
       <td class="p-1 text-right font-semibold ${cred?'text-green-700':'text-red-700'}"><input class="input input-sm !py-0.5 !text-xs text-right w-28" value="${esc(String(m.importe))}" onchange="state._bcoImportMovs[${i}].importe=this.value"/></td>
     </tr>`;
   }).join('');
+  const nDup = (movs||[]).filter(m=>m.dup).length;
   const meta = state._bcoImportMeta || {};
   const det = meta.detectado || {};
   const banner = meta.alerta
@@ -29819,7 +29821,8 @@ function bcoImportResumenPreview(fuente) {
     size: 'max-w-4xl',
     body: `
       ${banner}
-      <div class="text-xs text-slate-500 mb-2">Fuente: <b>${fuenteLbl}</b>. Destildá los que no quieras, corregí lo que haga falta. El <b>importe negativo</b> resta (débito) y el <b>positivo</b> suma (crédito). Los repetidos no se duplican.</div>
+      <div class="text-xs text-slate-500 mb-2">Fuente: <b>${fuenteLbl}</b>. Destildá los que no quieras, corregí lo que haga falta. El <b>importe negativo</b> resta (débito) y el <b>positivo</b> suma (crédito).</div>
+      ${nDup?`<div class="mb-2 p-2 rounded border bg-amber-50 border-amber-300 text-amber-800 text-xs"><b>⚠️ ${nDup} posible${nDup===1?'':'s'} duplicado${nDup===1?'':'s'}</b> (ya hay un movimiento con esa fecha e importe, quizás cargado a mano). Los dejé <b>destildados</b> para que no se dupliquen; revisá y tildá solo si de verdad son otros movimientos.</div>`:''}
       <div class="flex gap-2 mb-2 text-xs">
         <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.bri-chk').forEach(x=>x.checked=true)">Marcar todos</button>
         <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.bri-chk').forEach(x=>x.checked=false)">Desmarcar todos</button>

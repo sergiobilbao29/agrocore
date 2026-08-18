@@ -12468,6 +12468,38 @@ app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermissi
       .sort((a, b) => a.fecha.localeCompare(b.fecha))
       .map(m => ({ ...m, tipo: _bancoTipoDesdeConcepto(m.concepto, m.importe) }));
 
+    // Marcar POSIBLES DUPLICADOS contra lo ya cargado en la cuenta. Un movimiento
+    // cargado a mano suele tener otro concepto/sin referencia que el del banco, así
+    // que además del match exacto avisamos por fecha + importe (aunque difiera el texto).
+    try {
+      const yaCargados = await prisma.bancoMovimiento.findMany({
+        where: { companyId: cuenta.companyId, cuentaId: cuenta.id },
+        select: { fecha: true, monto: true, referencia: true, concepto: true },
+      });
+      const centavos = (n) => Math.round(Math.abs(Number(n) || 0) * 100);
+      const normC = (s) => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
+      const porFechaMonto = new Map();  // "fechaISO|centavos" -> [{ref,con}]
+      const exactas = new Set();        // "fechaISO|centavos|ref|con"
+      for (const e of yaCargados) {
+        const f = (e.fecha instanceof Date ? e.fecha.toISOString() : String(e.fecha)).slice(0, 10);
+        const c = centavos(e.monto);
+        const k = `${f}|${c}`;
+        if (!porFechaMonto.has(k)) porFechaMonto.set(k, []);
+        porFechaMonto.get(k).push({ ref: (e.referencia || '').trim(), con: normC(e.concepto) });
+        exactas.add(`${f}|${c}|${(e.referencia || '').trim()}|${normC(e.concepto)}`);
+      }
+      movs = movs.map(m => {
+        const f = String(m.fecha).slice(0, 10);
+        const c = centavos(m.importe);
+        const ref = (m.referencia || '').trim();
+        const con = normC(m.concepto);
+        const exacto = exactas.has(`${f}|${c}|${ref}|${con}`);
+        const mismos = porFechaMonto.get(`${f}|${c}`) || [];
+        const dup = exacto || mismos.length > 0;   // hay uno igual (por texto o por fecha+importe)
+        return { ...m, dup, dupExacto: exacto };
+      });
+    } catch {}
+
     // Verificar que el resumen sea de la cuenta elegida (por número de cuenta).
     const soloDig = (s) => String(s || '').replace(/\D/g, '');
     const numCuenta = soloDig(cuenta.numero);
