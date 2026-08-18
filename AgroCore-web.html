@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',
+      titulo:'🏦 v2.105.0 — Saldo bancario que coincide exacto con el banco',
+      desc:'Corregimos el <b>saldo por movimiento</b> en Bancos, que en cuentas con muchos movimientos del mismo día podía quedar <b>desfasado</b> (el saldo no correspondía a su movimiento). Ahora, al importar el resumen, guardamos el <b>saldo real que informa el banco</b> en cada línea (la columna Saldo del resumen) y lo mostramos <b>tal cual</b>, con un 🏦 al lado — así el saldo de cada fila <b>coincide exacto con tu homebanking</b>, sin recalcular ni depender del orden. Para los movimientos cargados a mano, el saldo se calcula bien igual (corregimos el orden del cálculo). <b>Importante:</b> si una cuenta ya te quedó con el saldo desfasado, entrá a esa cuenta, tocá <b>↩️ Deshacer importación</b> y <b>volvé a importar el resumen</b>: queda con el saldo del banco, exacto.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
       titulo:'🗣️ v2.104.0 — El asistente ahora te habla con voz natural (más humana)',
       desc:'El asistente aprendió a <b>hablar con una voz mucho más humana y agradable</b>. Con la IA activada usa una <b>voz neural</b> (natural, rioplatense) para leerte sus respuestas; si la IA está apagada o no hay internet, igual te habla con la voz del navegador. Arriba del chat elegís <b>🔊 Mujer</b>, <b>🔊 Hombre</b> o <b>🔇</b> (sin voz), y queda guardado en tu dispositivo. Además el asistente responde con un <b>tono más cálido y cercano</b>, y aprendió lo nuevo: cómo <b>importar el resumen del banco</b> (con "ajustar saldo" y "deshacer"), cómo <b>editar o borrar mensajes del chat</b>, cómo <b>agregar/borrar categorías de animales</b> y cómo hacer la <b>puesta en marcha</b> del sistema. También sumamos un instructivo de <b>primeros pasos</b> para configurar tu empresa de cero.' },
@@ -29775,17 +29778,27 @@ async function bcoVerMovs(cuentaId) {
   // Conciliaciones de esta cuenta (meses bloqueados).
   try { state._bcoConcil = (await api('/api/conciliaciones?cuentaId='+cuentaId)).data || []; } catch { state._bcoConcil = []; }
   state._bcoConcilSet = new Set((state._bcoConcil||[]).map(x => x.periodo));
-  // Recalculamos saldo corriente fila a fila (de más viejo a más nuevo, sobre TODO el historial)
+  // Saldo corrido (calculado por la app): acumulamos en orden cronológico ascendente
+  // y mostramos el INVERSO EXACTO de ese mismo array, así el saldo de cada fila es
+  // siempre el de DESPUÉS de su propio movimiento (evita el desfase por orden).
   let running = Number(c.saldoInicial || 0);
-  const movsAsc = [...movs].sort((a,b) => new Date(a.fecha) - new Date(b.fecha) || a.createdAt.localeCompare(b.createdAt));
+  const _cmpAsc = (a,b) => (new Date(a.fecha) - new Date(b.fecha))
+      || String(a.createdAt||'').localeCompare(String(b.createdAt||''))
+      || String(a.id||'').localeCompare(String(b.id||''));
+  const movsAsc = [...movs].sort(_cmpAsc);
   movsAsc.forEach(m => {
     const t = BANCO_TIPOS[m.tipo] || { sign:0 };
     running += t.sign * Number(m.monto || 0);
     m._saldoCorrido = running;
+    // El saldo que se MUESTRA: si el movimiento trae el saldo real del banco (columna
+    // Saldo del resumen importado), usamos ESE — es exacto y coincide con el banco.
+    // Si no, el saldo corrido calculado por la app.
+    const tieneBco = (m.saldoBanco != null && isFinite(Number(m.saldoBanco)));
+    m._saldoMostrar = tieneBco ? Number(m.saldoBanco) : running;
+    m._saldoEsBanco = tieneBco;
   });
-  // Mostramos de más nuevo a más viejo
-  movs.sort((a,b) => new Date(b.fecha) - new Date(a.fecha) || b.createdAt.localeCompare(a.createdAt));
-  state._bcoMovsAll = movs;
+  // Lista para mostrar = inverso exacto del orden de acumulación (más nuevo arriba).
+  state._bcoMovsAll = movsAsc.slice().reverse();
   state._bcoMovFilter = state._bcoMovFilter || _ultimoMesRango();
   bcoMovRender();
 }
@@ -30035,7 +30048,7 @@ function bcoMovRender() {
               <td class="text-xs text-slate-500">${esc(m.contraparte||'—')}</td>
               <td class="font-mono text-[11px]">${esc(m.referencia||'')}</td>
               <td class="text-right font-semibold ${cls}">${signo} ${fmtMon(c.moneda, m.monto)}</td>
-              <td class="text-right text-xs">${fmtMon(c.moneda, m._saldoCorrido)}</td>
+              <td class="text-right text-xs" ${m._saldoEsBanco?'title="Saldo según el banco (del resumen importado)"':'title="Saldo calculado por el sistema"'}>${fmtMon(c.moneda, (m._saldoMostrar!=null?m._saldoMostrar:m._saldoCorrido))}${m._saldoEsBanco?' <span class="text-emerald-600" title="Saldo del banco">🏦</span>':''}</td>
               <td class="text-xs text-slate-500">${m.user?esc((m.user.alias||m.user.nombre+' '+(m.user.apellido||''))):'—'}</td>
               <td class="text-right whitespace-nowrap">
                 ${bloqueado

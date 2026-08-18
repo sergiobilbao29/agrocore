@@ -1698,6 +1698,7 @@ model BancoMovimiento {
   conciliado      Boolean  @default(false)    // marcado al cruzar contra extracto del banco
   observaciones   String?
   importLote      String?                     // id del lote de importación (para poder deshacerla)
+  saldoBanco      Float?                      // saldo de la cuenta SEGÚN EL BANCO tras este movimiento (del resumen). Fuente de verdad exacta.
   userId          String?                     // usuario que lo cargó
   createdAt       DateTime @default(now())
 

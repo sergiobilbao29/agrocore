@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.104.0';
+const AGROCORE_VERSION = '2.105.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12639,7 +12639,11 @@ app.post('/api/banco-cuentas/:id/import-movimientos', requireCompany, requirePer
       const bloq = await _conciliacionBloqueo(cuenta.companyId, cuenta.id, fechaD);
       if (bloq) { resumen.bloqueados++; continue; }
       vistos.add(k);
-      crear.push({ companyId: cuenta.companyId, cuentaId: cuenta.id, fecha: fechaD, tipo, concepto: con, monto, referencia: ref || null, contraparte: it.contraparte || null, observaciones: 'Importado del resumen bancario', importLote, userId: req.user?.id || null });
+      // saldoBanco: el saldo de la cuenta segun el banco DESPUES de este movimiento (columna
+      // Saldo del resumen). Es la fuente de verdad exacta: lo mostramos tal cual, sin recalcular,
+      // asi el saldo por fila SIEMPRE coincide con el banco (evita el desfase por orden intradia).
+      const sBco = (it.saldo != null && isFinite(_numAr(it.saldo))) ? _numAr(it.saldo) : null;
+      crear.push({ companyId: cuenta.companyId, cuentaId: cuenta.id, fecha: fechaD, tipo, concepto: con, monto, referencia: ref || null, contraparte: it.contraparte || null, observaciones: 'Importado del resumen bancario', importLote, saldoBanco: sBco, userId: req.user?.id || null });
     }
     if (crear.length) await prisma.bancoMovimiento.createMany({ data: crear });
     resumen.creados = crear.length;
