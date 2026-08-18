@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',
+      titulo:'🐄 v2.102.0 — Animales: eliminar categorías duplicadas y evitar el error',
+      desc:'En <b>Animales</b> (stock por campo) ahora cada categoría tiene un botón <b>🗑️</b> para <b>eliminarla</b> del campo. Sirve para sacar los <b>duplicados</b> que se armaban al escribir la categoría en plural (ej: cargaste el declarado SENASA en <b>"terneras"</b> pero el físico suma en <b>"ternera"</b>): borrás la fila de más y cargás el declarado en la categoría correcta. Además, para que <b>no vuelva a pasar</b>, el botón <b>"+ Categoría"</b> ahora es un <b>desplegable del catálogo</b> (elegís de la lista, no se escribe a mano), así siempre coincide con el nombre del stock físico.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
       titulo:'🏦 v2.101.0 — Importar resumen del banco: por foto, con verificación de cuenta y deshacer',
       desc:'Mejoras grandes en el <b>importador de resumen bancario</b>. <b>(1) Verifica la cuenta:</b> el sistema lee el número de cuenta del resumen y te avisa si <b>no coincide</b> con la cuenta elegida, para que no cargues en la equivocada. <b>(2) Deshacer:</b> después de importar podés tocar <b>"↩️ Deshacer importación"</b> (o el botón ↩️ de la cuenta) y borra solo esos movimientos, por si te equivocaste de archivo o cuenta. <b>(3) Foto:</b> si recibís el resumen en <b>papel</b>, ahora le sacás una <b>foto</b> y la lee con IA. <b>(4)</b> Mejor <b>anti-duplicados</b> (compara fecha + importe + referencia + concepto) y soporte del formato de resumen de más bancos (probado con los resúmenes reales que nos pasaron). <b>(5)</b> Si una importación <b>anterior</b> (de antes de esta actualización) quedó mal, en el botón ↩️ de la cuenta aparece <b>"Importaciones anteriores"</b> con un botón para <b>borrarlas</b> y volver a importar el resumen correctamente.' },
@@ -14417,6 +14420,7 @@ pages.hacienda = async function() {
                   <td class="text-right whitespace-nowrap">
                     ${canU?`<button class="btn btn-ghost text-xs" onclick='hacDeclaradoForm(${JSON.stringify(campoId)},${JSON.stringify(f.categoria)},${Number(f.declarado||0)},${f.pesoPromedio!=null?f.pesoPromedio:'null'})'>📋 Declarado / kg</button>`:''}
                     ${canC?`<button class="btn btn-ghost text-xs" onclick='hacMovForm(${JSON.stringify(campoId)},${JSON.stringify(f.categoria)})'>+ Mov.</button>`:''}
+                    ${canD && f.stockId?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar esta categoría del campo (borra el declarado SENASA)" onclick='hacBorrarDeclarado(${JSON.stringify(f.stockId)},${JSON.stringify(f.categoria)},${Number(f.real||0)})'>🗑️</button>`:''}
                   </td>
                 </tr>`).join('')}
               </tbody>
@@ -14457,14 +14461,24 @@ pages.hacienda = async function() {
 };
 
 function hacCategoriaForm(campoId) {
+  // Categorías del CATÁLOGO (no texto libre) para evitar duplicados tipo "ternera/terneras".
+  const cfgCats = (state.cache.catHacienda || []).filter(c => c.activo !== false)
+    .sort((a,b)=>String((a.especie||'')+a.nombre).localeCompare(String((b.especie||'')+b.nombre),'es'));
+  const catField = cfgCats.length
+    ? `<select id="h-cat" class="input" onchange="hacCatPesoSuggest()">
+         <option value="">— Elegí una categoría —</option>
+         ${cfgCats.map(c=>`<option value="${esc(c.nombre)}">${esc(c.especie?c.especie+' · ':'')}${esc(c.nombre)}</option>`).join('')}
+       </select>
+       <div class="text-[11px] text-slate-400 mt-1">Las categorías se administran en <b>Catálogo → Categorías de animales</b>. Elegí de la lista para no crear duplicados.</div>`
+    : `<input id="h-cat" class="input" list="h-cat-list" placeholder="Ej: Vaca, Vaquillona, Ternero..." onchange="hacCatPesoSuggest()"/>
+       <datalist id="h-cat-list">${hacCategoriasDisponibles().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`;
   openModal({
     title: 'Agregar categoría al campo',
     body: `
       <div class="grid grid-cols-1 gap-3">
         <div>
           <label class="label">Categoría *</label>
-          <input id="h-cat" class="input" list="h-cat-list" placeholder="Ej: Vacas, Vaquillonas, Terneros..." onchange="hacCatPesoSuggest()"/>
-          <datalist id="h-cat-list">${hacCategoriasDisponibles().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+          ${catField}
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -14526,6 +14540,22 @@ async function hacDeclaradoSave(campoId, categoria) {
   try {
     await api('/api/hacienda-stock',{method:'POST',body:JSON.stringify({campoId,categoria,declarado,pesoPromedio})});
     toast('Declarado actualizado','success'); closeModal();
+    delete state.cache.haciendaResumen; pages.hacienda();
+  } catch(e) { toast(e.message,'error'); }
+}
+// Elimina el declarado SENASA de una categoría del campo (para sacar duplicados
+// tipo "ternera/terneras"). No borra los movimientos: si la categoría tiene
+// cabezas reales, avisa que esas se sacan desde Movimientos.
+async function hacBorrarDeclarado(stockId, categoria, real) {
+  if (!stockId) return toast('Esta fila no tiene declarado para borrar (viene de movimientos).','info');
+  const nRe = Number(real||0);
+  const msg = nRe !== 0
+    ? `La categoría "${categoria}" tiene ${fmtN(nRe)} cabezas por movimientos cargados.\n\nEliminar acá solo saca el DECLARADO SENASA (los movimientos quedan; para sacarlos, borralos en Movimientos).\n\n¿Eliminar el declarado igual?`
+    : `¿Eliminar la categoría "${categoria}" de este campo?\n\nBorra el declarado SENASA que cargaste acá. Si era un duplicado (ej: "terneras" en plural), después cargá el declarado en la categoría correcta del catálogo.`;
+  if (!confirm(msg)) return;
+  try {
+    await api('/api/hacienda-stock/'+stockId,{method:'DELETE'});
+    toast('Categoría eliminada','success');
     delete state.cache.haciendaResumen; pages.hacienda();
   } catch(e) { toast(e.message,'error'); }
 }
