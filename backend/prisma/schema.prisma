@@ -1697,6 +1697,7 @@ model BancoMovimiento {
   efectivoId      String?                     // si corresponde a un retiro/depósito desde caja
   conciliado      Boolean  @default(false)    // marcado al cruzar contra extracto del banco
   observaciones   String?
+  importLote      String?                     // id del lote de importación (para poder deshacerla)
   userId          String?                     // usuario que lo cargó
   createdAt       DateTime @default(now())
 
@@ -1711,6 +1712,7 @@ model BancoMovimiento {
   @@index([tipo])
   @@index([chequeId])
   @@index([cuotaCreditoId])
+  @@index([importLote])
 }
 
 // Conciliacion bancaria mensual, por cuenta. Cuando se confirma un periodo

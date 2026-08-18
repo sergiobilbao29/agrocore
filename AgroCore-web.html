@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
+      titulo:'🏦 v2.101.0 — Importar resumen del banco: por foto, con verificación de cuenta y deshacer',
+      desc:'Mejoras grandes en el <b>importador de resumen bancario</b>. <b>(1) Verifica la cuenta:</b> el sistema lee el número de cuenta del resumen y te avisa si <b>no coincide</b> con la cuenta elegida, para que no cargues en la equivocada. <b>(2) Deshacer:</b> después de importar podés tocar <b>"↩️ Deshacer importación"</b> (o el botón ↩️ de la cuenta) y borra solo esos movimientos, por si te equivocaste de archivo o cuenta. <b>(3) Foto:</b> si recibís el resumen en <b>papel</b>, ahora le sacás una <b>foto</b> y la lee con IA. <b>(4)</b> Mejor <b>anti-duplicados</b> (compara fecha + importe + referencia + concepto) y soporte del formato de resumen de más bancos (probado con los resúmenes reales que nos pasaron).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'14/08/2026',
       titulo:'🧹 v2.100.0 — Retoques: Libro IVA reubicado, sueldo por día visible e import de banco por Excel',
       desc:'Tres ajustes pedidos. <b>(1)</b> El <b>Libro IVA (Ventas/Compras)</b> se movió del menú de Compras a <b>Administración</b>, junto a "Exportar para contador", que es donde vive todo lo del estudio contable. <b>(2)</b> En la nómina de <b>Empleados</b>, el empleado que cobra por día ahora <b>muestra su sueldo mensual calculado</b> (jornal × días) en la columna Sueldo, con el detalle "$/día × días". <b>(3)</b> El <b>importador de resumen bancario</b> ahora acepta también <b>Excel (.xlsx/.xls) y CSV</b>, además del PDF — si tu banco los ofrece son más exactos; los lee por columnas (Fecha, Concepto, Importe o Débito/Crédito).' },
@@ -29698,13 +29701,14 @@ async function bcoVerMovs(cuentaId) {
 }
 // ── Importar resumen bancario (PDF) ──────────────────────────────────────────
 function bcoImportResumen() {
+  const c = (state.cache.bancoCuentas||[]).find(x => x.id === state.bancoCuentaId);
   openModal({
     title: '📄 Importar resumen bancario',
     size: 'max-w-lg',
     body: `
-      <p class="text-sm text-slate-600 mb-3">Descargá el <b>resumen de la cuenta</b> desde el homebanking y subilo acá. El sistema lee los movimientos y te los muestra para revisar antes de cargarlos.</p>
-      <input type="file" id="brf-file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv" class="input"/>
-      <div class="text-[11px] text-slate-400 mt-2">Acepta <b>PDF</b>, <b>Excel</b> (.xlsx/.xls) o <b>CSV</b>. El <b>Excel/CSV</b> es el más exacto (si tu banco lo ofrece, preferilo). El PDF tiene que ser el real del banco (no una foto). Con la IA activada reconoce cualquier banco.</div>
+      <p class="text-sm text-slate-600 mb-2">Vas a importar a la cuenta <b>${esc(c?.banco||'')}${c?.numero?' · N° '+esc(c.numero):''}</b>. Subí el <b>resumen de esa cuenta</b>: el sistema lee los movimientos y te los muestra para revisar antes de cargarlos.</p>
+      <input type="file" id="brf-file" accept="application/pdf,.pdf,.xlsx,.xls,.csv,text/csv,image/*" capture="environment" class="input"/>
+      <div class="text-[11px] text-slate-400 mt-2">Acepta <b>PDF</b>, <b>Excel</b> (.xlsx/.xls), <b>CSV</b> o <b>FOTO</b> del resumen en papel (📷, se lee con IA). El <b>Excel/CSV</b> es el más exacto si tu banco lo ofrece. El sistema <b>verifica que el resumen sea de esta cuenta</b> y <b>no duplica</b> lo ya cargado.</div>
       <div id="brf-status" class="text-sm text-slate-500 mt-3"></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="bcoImportResumenSubir()">Leer archivo</button>`,
@@ -29720,6 +29724,7 @@ async function bcoImportResumenSubir() {
     const r = await api(`/api/banco-cuentas/${state.bancoCuentaId}/parse-resumen`, { method:'POST', body: JSON.stringify({ fileB64: b64, filename: f.name }) });
     if (!r.ok || !r.movimientos?.length) { if (st) st.textContent = ''; return toast(r.error || 'No reconocí movimientos en el archivo','error'); }
     state._bcoImportMovs = r.movimientos;
+    state._bcoImportMeta = { detectado: r.detectado || null, alerta: r.alerta || null, coincide: r.coincideCuenta };
     bcoImportResumenPreview(r.fuente);
   } catch (e) {
     if (st) st.textContent = '';
@@ -29741,11 +29746,20 @@ function bcoImportResumenPreview(fuente) {
       <td class="p-1 text-right font-semibold ${cred?'text-green-700':'text-red-700'}"><input class="input input-sm !py-0.5 !text-xs text-right w-28" value="${esc(String(m.importe))}" onchange="state._bcoImportMovs[${i}].importe=this.value"/></td>
     </tr>`;
   }).join('');
+  const meta = state._bcoImportMeta || {};
+  const det = meta.detectado || {};
+  const banner = meta.alerta
+    ? `<div class="mb-2 p-2 rounded border ${meta.coincide===false?'bg-red-50 border-red-300 text-red-800':'bg-amber-50 border-amber-300 text-amber-800'} text-xs font-semibold">${esc(meta.alerta)}</div>`
+    : (det.numero
+        ? `<div class="mb-2 p-2 rounded border bg-emerald-50 border-emerald-300 text-emerald-800 text-xs">✅ Resumen de la cuenta N° <b>${esc(det.numero)}</b>${det.tipo?' · '+esc(det.tipo):''}${det.empresa?' · '+esc(det.empresa):''} — coincide con la cuenta elegida.</div>`
+        : '');
+  const fuenteLbl = fuente==='IA' ? 'IA (lectura inteligente)' : fuente==='tabla' ? 'Excel/CSV' : 'lectura de texto';
   openModal({
     title: `📄 Revisá los movimientos (${movs.length})`,
     size: 'max-w-4xl',
     body: `
-      <div class="text-xs text-slate-500 mb-2">Fuente: <b>${fuente==='IA'?'IA (lectura inteligente)':'lectura de texto'}</b>. Destildá los que no quieras, corregí lo que haga falta. El <b>importe negativo</b> resta (débito) y el <b>positivo</b> suma (crédito). Los repetidos no se duplican.</div>
+      ${banner}
+      <div class="text-xs text-slate-500 mb-2">Fuente: <b>${fuenteLbl}</b>. Destildá los que no quieras, corregí lo que haga falta. El <b>importe negativo</b> resta (débito) y el <b>positivo</b> suma (crédito). Los repetidos no se duplican.</div>
       <div class="flex gap-2 mb-2 text-xs">
         <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.bri-chk').forEach(x=>x.checked=true)">Marcar todos</button>
         <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.bri-chk').forEach(x=>x.checked=false)">Desmarcar todos</button>
@@ -29767,14 +29781,60 @@ async function bcoImportResumenConfirmar() {
   const sel = Array.from(document.querySelectorAll('.bri-chk')).filter(x=>x.checked).map(x=>all[+x.dataset.i]).filter(Boolean);
   if (!sel.length) return toast('No seleccionaste ningún movimiento','error');
   try {
-    const r = await api(`/api/banco-cuentas/${state.bancoCuentaId}/import-movimientos`, { method:'POST', body: JSON.stringify({ movimientos: sel }) });
+    const cid = state.bancoCuentaId;
+    const r = await api(`/api/banco-cuentas/${cid}/import-movimientos`, { method:'POST', body: JSON.stringify({ movimientos: sel }) });
     if (!r.ok) return toast(r.error || 'No pude importar','error');
     const s = r.resumen || {};
     closeModal();
-    toast(`✅ ${s.creados||0} cargados` + ((s.duplicados||0)?` · ${s.duplicados} ya estaban`:'') + ((s.bloqueados||0)?` · ${s.bloqueados} en mes conciliado`:''), 'success');
     state._bcoImportMovs = null;
-    bcoVerMovs(state.bancoCuentaId);
+    await bcoVerMovs(cid);
+    // Modal de resultado con opción de DESHACER la importación recién hecha.
+    openModal({
+      title: '✅ Importación lista',
+      size: 'max-w-md',
+      body: `
+        <div class="text-sm text-slate-700 space-y-1">
+          <div><b>${s.creados||0}</b> movimiento${(s.creados||0)===1?'':'s'} cargado${(s.creados||0)===1?'':'s'}.</div>
+          ${(s.duplicados||0)?`<div class="text-slate-500">${s.duplicados} ya estaban cargados (no se duplicaron).</div>`:''}
+          ${(s.bloqueados||0)?`<div class="text-amber-700">${s.bloqueados} en un mes conciliado (no se cargaron).</div>`:''}
+          ${(s.omitidos||0)?`<div class="text-slate-500">${s.omitidos} sin datos válidos (omitidos).</div>`:''}
+        </div>
+        <div class="text-[11px] text-slate-400 mt-3">Si te equivocaste de archivo o de cuenta, podés <b>deshacer esta importación</b> (borra sólo estos ${s.creados||0} movimientos).</div>`,
+      footer: `${(r.importLote && (s.creados||0)) ? `<button class="btn btn-secondary text-red-600" onclick='bcoDeshacerImport(${JSON.stringify(cid)},${JSON.stringify(r.importLote)})'>↩️ Deshacer importación</button>` : ''}
+               <button class="btn btn-primary" onclick="closeModal()">Listo</button>`,
+    });
   } catch (e) { toast(e.message || 'Error al importar','error'); }
+}
+// Deshacer una importación (borra el lote completo).
+async function bcoDeshacerImport(cuentaId, lote) {
+  if (!confirm('¿Deshacer esta importación? Se van a borrar los movimientos que se cargaron en ella.')) return;
+  try {
+    const r = await api(`/api/banco-cuentas/${cuentaId}/importaciones/${encodeURIComponent(lote)}`, { method:'DELETE' });
+    if (!r.ok) return toast(r.error || 'No pude deshacer','error');
+    closeModal();
+    toast(`↩️ Importación deshecha (${r.borrados||0} movimientos borrados)`, 'success');
+    bcoVerMovs(cuentaId);
+  } catch (e) { toast(e.message || 'Error al deshacer','error'); }
+}
+// Panel con las últimas importaciones de la cuenta, cada una con "Deshacer".
+async function bcoImportacionesPanel() {
+  const cuentaId = state.bancoCuentaId;
+  let lotes = [];
+  try { lotes = (await api(`/api/banco-cuentas/${cuentaId}/importaciones`)).data || []; } catch (e) { return toast(e.message,'error'); }
+  const c = (state.cache.bancoCuentas||[]).find(x => x.id === cuentaId);
+  const mon = c ? c.moneda : 'ARS';
+  const body = lotes.length
+    ? `<div class="space-y-2">${lotes.map(l => `
+        <div class="flex items-center justify-between gap-3 p-2 border border-slate-200 rounded">
+          <div class="text-sm">
+            <div><b>${l.cantidad}</b> movimiento${l.cantidad===1?'':'s'} · ${fmtFecha(l.desde)}${(''+l.desde).slice(0,10)!==(''+l.hasta).slice(0,10)?' → '+fmtFecha(l.hasta):''}</div>
+            <div class="text-[11px] text-slate-500">Cargado el ${fmtFecha(l.cargadoEn)} · neto ${fmtMon(mon, l.neto)}</div>
+          </div>
+          ${can('finanzas:delete')?`<button class="btn btn-ghost btn-sm text-red-600" onclick='bcoDeshacerImport(${JSON.stringify(cuentaId)},${JSON.stringify(l.lote)})'>↩️ Deshacer</button>`:''}
+        </div>`).join('')}</div>`
+    : '<div class="text-sm text-slate-400 py-4 text-center">Todavía no importaste resúmenes en esta cuenta.</div>';
+  openModal({ title: '↩️ Importaciones de resúmenes', size:'max-w-lg', body,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
 }
 
 function bcoMovAplicarFiltro() {
@@ -29796,7 +29856,8 @@ function bcoMovRender() {
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <button class="btn btn-secondary" onclick="pages.bancos()">← Volver a Bancos</button>
       <div class="flex gap-2 flex-wrap">
-        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoImportResumen()">📄 Importar resumen (PDF/Excel)</button>`:''}
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoImportResumen()">📄 Importar resumen</button>`:''}
+        ${can('finanzas:read')?`<button class="btn btn-ghost" title="Ver y deshacer importaciones" onclick="bcoImportacionesPanel()">↩️</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="bcoDepositarCheque()">🏦 Depositar cheque</button>`:''}
         ${can('finanzas:update')?`<button class="btn btn-secondary" onclick="bcoConciliarForm()">✅ Conciliar mes</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="bcoMovForm()">+ Nuevo movimiento</button>`:''}
