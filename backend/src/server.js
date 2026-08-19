@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.109.0';
+const AGROCORE_VERSION = '2.110.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12272,57 +12272,70 @@ function _bancoTipoDesdeConcepto(concepto, signo) {
 function _parseResumenBancarioTexto(texto) {
   const lines = String(texto || '').split(/\r?\n/).map(s => s.trim());
   const movs = [];
-  let fecha = null, concepto = [], skipNum = false;
-  const montoEnd = /\$\s*(-?[\d.]+,\d{2})\s*$/;          // "...$ -0,20" (Monto al final de la línea)
-  const soloNum = /^-?[\d.]+,\d{2}$/;                     // "42.148.599,91" (Saldo suelto)
-  const fechaFull = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/;
+  const money = /-?\d[\d.]*,\d{2}/g;                      // token de plata (con 2 decimales). El CUIT no tiene coma → no matchea.
+  const fechaFull = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/;
   const fechaDM = /^(\d{1,2})\/(\d{1,2})$/;
   const fechaY = /^\/(\d{4})$/;
-  const push = (imp, head) => {
-    if (!fecha || !isFinite(imp)) return;
-    let ref = '', con = head || '';
-    const lead = con.match(/^(\d{2,})\s*(.*)$/);          // separa el comprobante numérico pegado al concepto
-    if (lead && lead[2] && /[A-Za-z]/.test(lead[2])) { ref = lead[1]; con = lead[2]; }
-    con = [...concepto, con].join(' ').replace(/\s{2,}/g, ' ').trim();
-    movs.push({ fecha, concepto: con || 'Movimiento', referencia: ref, importe: imp });
-    concepto = [];
-  };
   // Formato Technisys "tabla" (una línea por movimiento):
   //   DD/MM/AAAA <referencia><causal><concepto>$ <importe>$ <saldo>
-  // El PRIMER "$" es el importe (con signo); el segundo es el saldo (se ignora).
   const filaTabla = /^(\d{2})\/(\d{2})\/(\d{4})(.*\$.*\d,\d{2}.*)$/;
   const dineroG = /\$\s*(-?[\d.]+,\d{2})/g;
 
+  // Partimos el texto en BLOQUES: cada bloque arranca en una fecha (completa DD/MM/AAAA
+  // o partida DD/MM + /AAAA en la línea siguiente) y junta todo hasta la próxima fecha.
+  // Dentro del bloque, el PRIMER token de plata es el IMPORTE y el SEGUNDO es el SALDO.
+  // Esto tolera todas las variantes de layout (importe inline, importe suelto tras "$",
+  // importe y saldo en la misma línea, transferencias con CUIT intercalado, etc.).
+  const bloques = [];
+  let bloque = null;
+  const startBloque = (fecha) => { if (bloque) bloques.push(bloque); bloque = { fecha, texto: [] }; };
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
     if (!ln) continue;
-    let mt;
-    if ((mt = ln.match(filaTabla))) {
+    let m;
+    if ((m = ln.match(filaTabla))) { if (bloque) { bloques.push(bloque); bloque = null; } bloques.push({ tabla: ln }); continue; }
+    if ((m = ln.match(fechaFull))) { let y = +m[3]; if (y < 100) y += 2000; startBloque(`${y}-${String(+m[2]).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`); const rest = ln.replace(fechaFull, '').trim(); if (rest) bloque.texto.push(rest); continue; }
+    if ((m = ln.match(fechaDM))) { const dd = m[1], mm = m[2]; const nx = lines[i+1] || ''; const my = nx.match(fechaY); const y = my ? +my[1] : new Date().getFullYear(); if (my) i++; startBloque(`${y}-${String(+mm).padStart(2,'0')}-${String(+dd).padStart(2,'0')}`); continue; }
+    if (fechaY.test(ln)) continue;
+    if (/^(fecha|comprobante|concepto|monto|saldo|.ltimos|p.gina|pagina|mi.rcoles|lunes|martes|jueves|viernes|s.bado|domingo)/i.test(ln)) continue;
+    if (bloque) bloque.texto.push(ln);
+  }
+  if (bloque) bloques.push(bloque);
+
+  for (const b of bloques) {
+    if (b.tabla) {   // Technisys una línea
+      const mt = b.tabla.match(filaTabla);
       const fechaT = `${mt[3]}-${mt[2]}-${mt[1]}`;
       const rest = mt[4];
       const montos = [...rest.matchAll(dineroG)];
       if (montos.length) {
-        const imp = _numAr(montos[0][1]);               // primer $ = importe
-        const saldo = montos[1] ? _numAr(montos[1][1]) : null; // segundo $ = saldo del banco
-        let head = rest.slice(0, montos[0].index).trim(); // referencia+causal+concepto
+        const imp = _numAr(montos[0][1]);
+        const saldo = montos[1] ? _numAr(montos[1][1]) : null;
+        let head = rest.slice(0, montos[0].index).trim();
         const cm = head.match(/^(\d+)?\s*(.*)$/);
         const ref = (cm && cm[1]) ? cm[1] : '';
         const con = ((cm && cm[2]) ? cm[2] : '').replace(/\s{2,}/g, ' ').trim() || 'Movimiento';
-        if (isFinite(imp) && imp !== 0) { movs.push({ fecha: fechaT, concepto: con, referencia: ref, importe: imp, saldo }); }
+        if (isFinite(imp) && imp !== 0) movs.push({ fecha: fechaT, concepto: con, referencia: ref, importe: imp, saldo });
       }
-      concepto = []; skipNum = false;
       continue;
     }
-    if (skipNum && soloNum.test(ln)) { skipNum = false; continue; } // valor del saldo tras un "$" suelto
-    skipNum = false;
-    let m;
-    if ((m = ln.match(fechaFull))) { let y = +m[3]; if (y < 100) y += 2000; fecha = `${y}-${String(+m[2]).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`; concepto = []; continue; }
-    if ((m = ln.match(fechaDM))) { const dd = m[1], mm = m[2]; const nx = lines[i+1] || ''; const my = nx.match(fechaY); const y = my ? +my[1] : new Date().getFullYear(); if (my) i++; fecha = `${y}-${String(+mm).padStart(2,'0')}-${String(+dd).padStart(2,'0')}`; concepto = []; continue; }
-    if ((m = ln.match(montoEnd))) { push(_numAr(m[1]), ln.slice(0, m.index).trim()); continue; }
-    if (ln.replace(/\s/g, '') === '$') { skipNum = true; continue; }  // marcador de saldo ("$ " y el valor va en la línea siguiente)
-    if (soloNum.test(ln)) { continue; }                     // saldo suelto → ignorar
-    if (/^(fecha|comprobante|concepto|monto|saldo|.ltimos|p.gina|pagina)/i.test(ln)) continue;
-    concepto.push(ln);
+    const joined = b.texto.join(' ');
+    const nums = [...joined.matchAll(money)].map(x => x[0]);
+    if (!nums.length) continue;
+    const imp = _numAr(nums[0]);                          // 1er token de plata = IMPORTE
+    const saldo = (nums[1] != null) ? _numAr(nums[1]) : null; // 2do token = SALDO
+    if (!isFinite(imp) || imp === 0) continue;
+    // Concepto: sacar plata, "$", el rótulo CUIT/CUIL y el CUIT (11 dígitos). El comprobante
+    // (2 a 9 dígitos pegado a letras al inicio) se separa como referencia.
+    let con = joined
+      .replace(money, ' ').replace(/\$/g, ' ')
+      .replace(/CUIT\/CUIL:?\s*\d*/ig, ' ').replace(/\b\d{11}\b/g, ' ')
+      .replace(/\s{2,}/g, ' ').trim();
+    let ref = '';
+    const lg = con.match(/^(\d{2,9})\s*([A-Za-z].*)$/);
+    if (lg) { ref = lg[1]; con = lg[2].trim(); }
+    con = con.replace(/[-–]\s*$/, '').replace(/\s{2,}/g, ' ').trim();
+    movs.push({ fecha: b.fecha, concepto: con || 'Movimiento', referencia: ref, importe: imp, saldo });
   }
   return movs;
 }
@@ -12369,13 +12382,21 @@ async function _iaParseResumenBancario(textoPdf, ia) {
 // cuenta elegida): número de cuenta, CUIT del titular, denominación y tipo.
 function _extraerMetaResumen(texto) {
   const lines = String(texto || '').split(/\r?\n/).map(s => s.trim());
-  let firstMov = lines.findIndex(l => /^\d{2}\/\d{2}\/\d{4}/.test(l));
+  // Primer movimiento: fecha completa DD/MM/AAAA, o fecha partida DD/MM con /AAAA en la
+  // línea siguiente (formato Banco Nación "Últimos movimientos").
+  let firstMov = lines.findIndex((l, i) =>
+    /^\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(l) ||
+    (/^\d{1,2}\/\d{1,2}$/.test(l) && /^\/\d{4}$/.test(lines[i + 1] || '')));
   if (firstMov < 0) firstMov = lines.length;
-  // Número de cuenta: la línea de sólo dígitos (>=10) más larga antes del primer movimiento.
+  // Un número de 11 dígitos es un CUIT/CUIL, NO un número de cuenta. Lo excluimos para no
+  // confundir el CUIT de un tercero (que aparece en transferencias) con la cuenta del resumen.
+  const esCuit = (d) => d.length === 11;
+  // Número de cuenta: la línea de sólo dígitos (10 a 22) más larga ANTES del primer
+  // movimiento, que NO sea un CUIT. Si no hay, NO inventamos (evita falsas alertas).
   let numero = '';
-  for (let i = 0; i < firstMov; i++) { const d = lines[i].replace(/[\s.\-]/g, ''); if (/^\d{10,22}$/.test(d) && d.length > numero.length) numero = d; }
-  // "Número 482109471763009" en la misma línea (otros formatos).
-  if (!numero) { const mm = texto.match(/N[uú]mero[:\s]*([\d.\-]{10,26})/i); if (mm) numero = mm[1].replace(/[\s.\-]/g, ''); }
+  for (let i = 0; i < firstMov; i++) { const d = lines[i].replace(/[\s.\-]/g, ''); if (/^\d{10,22}$/.test(d) && !esCuit(d) && d.length > numero.length) numero = d; }
+  // "Cuenta N° ..." / "Número ..." / "CBU ..." explícito (evitando el CUIT).
+  if (!numero) { const mm = texto.match(/(?:cuenta|cta|n[uú]mero|cbu)[^\d]{0,12}(\d[\d.\-\s]{9,26}\d)/i); if (mm) { const d = mm[1].replace(/[\s.\-]/g, ''); if (/^\d{10,22}$/.test(d) && !esCuit(d)) numero = d; } }
   const cuit = (texto.match(/(?:Empresa|Titular|CUIT|CUIL)[:\s]*(\d{11})/i) || [])[1] || (texto.match(/\b(\d{11})\b/) || [])[1] || '';
   const emp = ((texto.match(/Empresa:\s*\d{11}\s*-\s*([^\n]+)/i) || [])[1] || '').trim();
   const tipo = ((texto.match(/(CAJA DE AHORROS?[^\n]*|CUENTA CORRIENTE[^\n]*)/i) || [])[1] || '').trim();
