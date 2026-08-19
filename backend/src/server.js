@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.111.0';
+const AGROCORE_VERSION = '2.113.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -139,6 +139,18 @@ function stockCatsPermitidas(req) {
   const cats = req.membership?.role?.stockCategorias;
   if (!Array.isArray(cats) || !cats.length) return null;
   return new Set(cats.map(c => String(c).toLowerCase()));
+}
+
+// Campañas que el rol activo puede VER (Campañas, Insumos/Labores, Viajes, Movimientos
+// de stock). Devuelve un array de IDs, o null cuando NO hay restricción (superAdmin, o el
+// rol tiene acceso total, o no configuró campañas = ve todas).
+function _scopeCampanas(req) {
+  if (req.user?.superAdmin) return null;
+  const perms = req.membership?.role?.permissions || [];
+  if (hasPermission(perms, '*:*')) return null;   // acceso total = sin restricción
+  const ids = req.membership?.role?.campanaIds;
+  if (!Array.isArray(ids) || !ids.length) return null;
+  return ids.filter(Boolean);
 }
 
 // ============================================================
@@ -675,7 +687,7 @@ async function serializeUser(u) {
     logoUrl: uc.company.logoUrl || null,
     ..._coFiscal(uc.company),
     roleLabel: uc.role.label,
-    role: { key: uc.role.key, label: uc.role.label, permissions: uc.role.permissions, stockCategorias: uc.role.stockCategorias || null },
+    role: { key: uc.role.key, label: uc.role.label, permissions: uc.role.permissions, stockCategorias: uc.role.stockCategorias || null, campanaIds: uc.role.campanaIds || null },
   }));
 
   // Super Admin: además ve TODAS las empresas activas del sistema, con permisos
@@ -2202,6 +2214,8 @@ const roleSchema = z.object({
   permissions: z.array(z.string()),
   // Categorías de producto visibles en Stock (vacío/null = todas).
   stockCategorias: z.array(z.string()).nullable().optional(),
+  // Campañas visibles para este rol (vacío/null = todas).
+  campanaIds: z.array(z.string()).nullable().optional(),
 });
 
 app.get('/api/roles', async (_req, res, next) => {
@@ -2498,7 +2512,9 @@ app.delete('/api/usuarios/:id', async (req, res, next) => {
 // ============================================================
 // FACTORIA CRUD GENERICA (empresa-scoped)
 // ============================================================
-function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc' }, include, searchFields = [], injectUserId = false, readOpen = false, dependencias = [], bloquearSi = null }) {
+function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc' }, include, searchFields = [], injectUserId = false, readOpen = false, dependencias = [], bloquearSi = null, scopeCampana = null }) {
+  // scopeCampana: si el rol activo tiene campañas limitadas (rol "Socio"), filtra la
+  // LISTA por campaña. 'id' → el propio registro es la campaña; 'campanaId' → tiene ese campo.
   const full = `/api/${path}`;
   const model = () => prisma[modelName];
   // readOpen = true → la LECTURA (GET) queda disponible para cualquier usuario de la
@@ -2512,6 +2528,10 @@ function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc
       const q = req.query.q?.toString().trim();
       if (q && searchFields.length) {
         where.OR = searchFields.map((f) => ({ [f]: { contains: q, mode: 'insensitive' } }));
+      }
+      if (scopeCampana) {
+        const sc = _scopeCampanas(req);
+        if (sc) { if (scopeCampana === 'id') where.id = { in: sc }; else where[scopeCampana] = { in: sc }; }
       }
       res.json({ ok: true, data: await model().findMany({ where, orderBy, include }) });
     } catch (e) { next(e); }
@@ -2809,7 +2829,7 @@ app.post('/api/categorias-gasto/sembrar', requireCompany, requirePermission('fin
 });
 
 mountCrud({
-  path: 'movimientos', modelName: 'movimiento', perm: 'stock',
+  path: 'movimientos', modelName: 'movimiento', perm: 'stock', scopeCampana: 'campanaId',
   schema: z.object({
     productoId: z.string(),
     fecha: z.coerce.date(),
@@ -3103,9 +3123,12 @@ app.delete('/api/lotes/:id', requireCompany, requirePermission('produccion:delet
 // Unimos InsumoAplicado + LaborAplicada en una sola API para simplificar el frontend.
 app.get('/api/aplicaciones', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
   try {
+    // Si el rol tiene campañas limitadas (Socio), solo trae insumos/labores de esas campañas.
+    const _sc = _scopeCampanas(req);
+    const _wIns = _sc ? { campana: { companyId: req.companyId }, campanaId: { in: _sc } } : { campana: { companyId: req.companyId } };
     const [ins, lab] = await Promise.all([
-      prisma.insumoAplicado.findMany({ where: { campana: { companyId: req.companyId } }, orderBy: { fecha: 'desc' } }),
-      prisma.laborAplicada.findMany({   where: { campana: { companyId: req.companyId } }, orderBy: { fecha: 'desc' } }),
+      prisma.insumoAplicado.findMany({ where: _wIns, orderBy: { fecha: 'desc' } }),
+      prisma.laborAplicada.findMany({   where: _wIns, orderBy: { fecha: 'desc' } }),
     ]);
     const data = [
       ...ins.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'insumo',
@@ -3295,7 +3318,7 @@ app.post('/api/aplicaciones/backfill-stock', requireCompany, requirePermission('
 });
 
 mountCrud({
-  path: 'campanas', modelName: 'campana', perm: 'produccion',
+  path: 'campanas', modelName: 'campana', perm: 'produccion', scopeCampana: 'id',
   schema: z.object({
     loteId: z.string(),
     nombre: z.string().nullable().optional(),
@@ -5338,6 +5361,9 @@ app.get('/api/viajes', requireCompany, requirePermission('logistica:read'), asyn
       where.OR = ['origen','destino','transportista','patente','cartaPorte','ctg']
         .map(f => ({ [f]: { contains: q, mode: 'insensitive' } }));
     }
+    // Rol con campañas limitadas (Socio): solo los viajes de esas campañas.
+    const _scv = _scopeCampanas(req);
+    if (_scv) where.campanaId = { in: _scv };
     const data = await prisma.viaje.findMany({
       where, orderBy: { fecha: 'desc' },
       include: { facturaCompra: { include: { proveedor: true } } },
@@ -11476,7 +11502,11 @@ app.post('/api/banco-cuentas', requireCompany, requirePermission('finanzas:creat
 
 app.put('/api/banco-cuentas/:id', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
   try {
-    const existing = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    // La lista de Bancos muestra cuentas de TODAS las empresas del grupo económico, así
+    // que la edición (incluido el nombre) debe permitirse sobre cualquiera de ellas, no
+    // sólo la empresa activa. (Antes filtraba por req.companyId → daba "No encontrado".)
+    const cids = await _cidsGrupo(req);
+    const existing = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const d = bancoCuentaSchema.partial().parse(req.body);
     const row = await prisma.bancoCuenta.update({ where: { id: req.params.id }, data: d });
@@ -11491,7 +11521,8 @@ app.put('/api/banco-cuentas/:id', requireCompany, requirePermission('finanzas:up
 
 app.delete('/api/banco-cuentas/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
   try {
-    const existing = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    const cids = await _cidsGrupo(req);
+    const existing = await prisma.bancoCuenta.findFirst({ where: { id: req.params.id, companyId: { in: cids } } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const movs = await prisma.bancoMovimiento.count({ where: { cuentaId: req.params.id } });
     if (movs > 0) {

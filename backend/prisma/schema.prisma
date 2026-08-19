@@ -201,6 +201,9 @@ model Role {
   // Categorías de producto que este rol puede VER en Stock (["insumos","granos",
   // "hacienda","repuestos","combustibles","otros"]). Vacío/null = ve todas.
   stockCategorias Json?
+  // IDs de campañas que este rol puede VER (Campañas, Insumos/Labores, Viajes y
+  // Movimientos de stock). Vacío/null = ve TODAS (comportamiento clásico).
+  campanaIds      Json?
   builtin         Boolean  @default(false)  // roles de sistema no borrables
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
