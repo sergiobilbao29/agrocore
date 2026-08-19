@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
+      titulo:'🔧 v2.111.0 — Actualización desde la web: ahora sí, definitivo',
+      desc:'Terminamos de afinar el botón <b>"Instalar actualización"</b>. La tarea que hace la actualización ahora se crea como <b>SYSTEM</b> (antes fallaba al crearse y el sistema quedaba reiniciándose sin volver), y se asegura de encontrar Git y Node aunque no estén en el PATH. Con esto la actualización desde la web se completa sola y el sistema vuelve solo. (Incluye también el importador de Banco Nación de 2.110.)' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
       titulo:'🏦 v2.110.0 — Importar resumen: lee TODOS los movimientos (Banco Nación) y no confunde el CUIT',
       desc:'Mejoramos el lector del resumen bancario en PDF. <b>(1)</b> Ahora reconoce el formato de <b>Banco Nación ("Últimos movimientos")</b> y trae <b>todos</b> los movimientos, incluidas filas que antes se salteaban (como "COBRADO POR CAJA" o las transferencias con el importe en otra columna). <b>(2)</b> Ya <b>no confunde un CUIT</b> (que aparece en las transferencias) con el número de cuenta: si el resumen no trae número de cuenta, no te tira la falsa alerta de "cuenta distinta". El importe de cada fila y su saldo se leen de forma más robusta en todos los bancos.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',

@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.110.0';
+const AGROCORE_VERSION = '2.111.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12928,6 +12928,8 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
       const wrapper = path.join(installDir, '_' + taskName + '.cmd');   // installDir no tiene espacios
       const body = [
         '@echo off',
+        // Asegurar git y node en el PATH (la tarea corre como SYSTEM y puede no tenerlos).
+        'set "PATH=%PATH%;%ProgramFiles%\\Git\\cmd;%ProgramFiles%\\Git\\bin;%ProgramFiles%\\nodejs;%ProgramFiles(x86)%\\nodejs;%LOCALAPPDATA%\\Programs\\nodejs;%APPDATA%\\npm"',
         'ping 127.0.0.1 -n 3 >nul',   // le da tiempo al backend a responder antes de frenarse
         psLine,
         'schtasks /delete /tn "' + taskName + '" /f >nul 2>&1',   // limpieza: borra la tarea
@@ -12936,12 +12938,14 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
       ].join('\r\n');
       fs.writeFileSync(wrapper, body, 'utf8');
       // /st en el futuro cercano para evitar el error "hora en el pasado"; igual lo disparamos ya con /run.
+      // /ru SYSTEM: la tarea corre como SYSTEM (sin password) y FUERA del árbol del servicio;
+      // sin /ru, con el servicio corriendo como SYSTEM, "/rl HIGHEST" hace fallar el /create.
       const d = new Date(Date.now() + 3 * 60000);
       const st = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-      execFileSync('schtasks.exe', ['/create', '/tn', taskName, '/tr', wrapper, '/sc', 'ONCE', '/st', st, '/rl', 'HIGHEST', '/f'], { windowsHide: true, stdio: 'ignore' });
-      execFileSync('schtasks.exe', ['/run', '/tn', taskName], { windowsHide: true, stdio: 'ignore' });
+      execFileSync('schtasks.exe', ['/create', '/tn', taskName, '/tr', wrapper, '/sc', 'ONCE', '/st', st, '/ru', 'SYSTEM', '/f'], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+      execFileSync('schtasks.exe', ['/run', '/tn', taskName], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
       lanzado = true;
-    } catch (e) { console.error('[UPDATE] schtasks fallo, uso fallback:', e?.message); }
+    } catch (e) { console.error('[UPDATE] schtasks fallo, uso fallback:', e?.message, (e && e.stderr ? String(e.stderr) : '')); }
     if (!lanzado) {
       // Fallback (instancias por VBS, sin servicio): proceso desacoplado clasico.
       const psArgs = ['-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Unattended', '-InstallDir', installDir, '-Puerto', String(PORT)];
