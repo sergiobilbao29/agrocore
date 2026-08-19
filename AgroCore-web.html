@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
+      titulo:'🔄 v2.108.0 — Actualizar desde la web ahora funciona con el servicio',
+      desc:'Arreglo de fondo del botón <b>"Instalar actualización"</b> (Configuración → Sistema). En las instalaciones que corren como <b>servicio de Windows</b>, al actualizar desde la web el sistema podía quedar caído (el administrador del servicio cortaba el propio actualizador). Ahora la actualización se dispara como una <b>tarea independiente</b> del servicio, así se completa sola y el sistema vuelve solo, sin dejar nada apagado. Ya se puede actualizar desde el botón sin problema.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
       titulo:'🔄 v2.107.0 — Actualización desde la web más robusta',
       desc:'Mejora interna del botón <b>"Instalar actualización"</b> (Configuración → Sistema): ahora el sistema <b>deduce solo qué instancia reiniciar</b> según su carpeta, aunque no tenga configurado el nombre del servicio. Antes, en ciertas instalaciones, la actualización desde la web podía quedar <b>colgada en "esperando reinicio"</b>; con este cambio se reinicia sola y termina bien. Es una mejora de plomería (no cambia nada de lo que ves en el día a día).' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',

@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.107.0';
+const AGROCORE_VERSION = '2.108.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12892,30 +12892,42 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
     if (!fs.existsSync(scriptPath)) {
       return res.status(500).json({ ok: false, error: 'No se encontró Update-AgroCore.ps1' });
     }
-    // Lanzar como proceso totalmente desacoplado. Usamos un "wrapper" cmd que
-    // a su vez llama a powershell para que cuando matemos node.exe no se mate
-    // a sí mismo. Sin shell intermedio y stdio:ignore, sobrevive a la muerte
-    // del proceso padre (Node).
-    // (spawn ya está importado arriba con ESM; no usar require — el módulo es ESM)
-    const psArgs = [
-      '-WindowStyle', 'Hidden',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', scriptPath,
-      '-Unattended',
-      '-InstallDir', installDir,
-      '-Puerto', String(PORT),
-    ];
-    if (servicio) psArgs.push('-Servicio', servicio);
-    const child = spawn(
-      'cmd.exe',
-      ['/c', 'start', '""', '/b', 'powershell.exe', ...psArgs],
-      {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      }
-    );
-    child.unref();
+    // ---- Lanzar el actualizador FUERA del arbol del servicio ----
+    // Si corremos el script como HIJO del backend, cuando el script frena el servicio
+    // (Stop-Service), NSSM mata todo el arbol de procesos INCLUIDO el actualizador, y la
+    // actualizacion queda a medias con la app caida. Solucion: lo dispara el PROGRAMADOR
+    // DE TAREAS de Windows como una tarea de una sola vez, que corre en su propio proceso,
+    // independiente del servicio. Usamos un .cmd envoltorio para evitar lios de comillas.
+    const q = (s) => `"${String(s).replace(/"/g, '')}"`;
+    let psLine = `powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File ${q(scriptPath)} -Unattended -InstallDir ${q(installDir)} -Puerto ${PORT}`;
+    if (servicio) psLine += ` -Servicio ${q(servicio)}`;
+    let lanzado = false;
+    try {
+      const taskName = 'AgroCoreUpdate_' + Date.now();
+      const wrapper = path.join(installDir, '_' + taskName + '.cmd');   // installDir no tiene espacios
+      const body = [
+        '@echo off',
+        'ping 127.0.0.1 -n 3 >nul',   // le da tiempo al backend a responder antes de frenarse
+        psLine,
+        'schtasks /delete /tn "' + taskName + '" /f >nul 2>&1',   // limpieza: borra la tarea
+        'del "%~f0" >nul 2>&1',                                    // y este propio .cmd
+        '',
+      ].join('\r\n');
+      fs.writeFileSync(wrapper, body, 'utf8');
+      // /st en el futuro cercano para evitar el error "hora en el pasado"; igual lo disparamos ya con /run.
+      const d = new Date(Date.now() + 3 * 60000);
+      const st = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      execFileSync('schtasks.exe', ['/create', '/tn', taskName, '/tr', wrapper, '/sc', 'ONCE', '/st', st, '/rl', 'HIGHEST', '/f'], { windowsHide: true, stdio: 'ignore' });
+      execFileSync('schtasks.exe', ['/run', '/tn', taskName], { windowsHide: true, stdio: 'ignore' });
+      lanzado = true;
+    } catch (e) { console.error('[UPDATE] schtasks fallo, uso fallback:', e?.message); }
+    if (!lanzado) {
+      // Fallback (instancias por VBS, sin servicio): proceso desacoplado clasico.
+      const psArgs = ['-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Unattended', '-InstallDir', installDir, '-Puerto', String(PORT)];
+      if (servicio) psArgs.push('-Servicio', servicio);
+      const child = spawn('cmd.exe', ['/c', 'start', '""', '/b', 'powershell.exe', ...psArgs], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.unref();
+    }
     res.json({ ok: true, mensaje: `Actualización lanzada para ${process.env.AGROCORE_INSTANCIA || 'esta instancia'} (puerto ${PORT}). Se reinicia en 30-90 segundos.` });
   } catch (e) { next(e); }
 });
