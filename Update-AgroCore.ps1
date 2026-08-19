@@ -32,10 +32,14 @@ if (-not $Puerto -or $Puerto -eq 0) {
   if (-not $Puerto -or $Puerto -eq 0) { $Puerto = 3100 }
 }
 if (-not $Servicio) {
+  # Autodeteccion por el NOMBRE de la carpeta (inequivoco). Como todas las instancias
+  # comparten el mismo nssm.exe, no sirve mirar el PathName del servicio.
+  #   C:\AgroCore-Bovio  -> AgroCore-Bovio-Backend
+  #   C:\AgroCore (Demo) -> AgroCore-Backend  o  AgroCore-Demo-Backend
   try {
-    $svc = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
-           Where-Object { $_.PathName -like "*$InstallDir*" } | Select-Object -First 1
-    if ($svc) { $Servicio = $svc.Name }
+    $leaf = Split-Path $InstallDir -Leaf
+    $cands = if ($leaf -match '^AgroCore-(.+)$') { @("AgroCore-$($Matches[1])-Backend") } else { @('AgroCore-Backend','AgroCore-Demo-Backend') }
+    foreach ($c in $cands) { if (Get-Service -Name $c -ErrorAction SilentlyContinue) { $Servicio = $c; break } }
   } catch {}
 }
 Write-Host "[..] Instancia: $InstallDir  (puerto $Puerto, servicio $(if($Servicio){$Servicio}else{'-'}))" -ForegroundColor Gray
