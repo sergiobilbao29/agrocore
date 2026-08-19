@@ -2574,8 +2574,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
-      titulo:'🔄 v2.108.0 — Actualizar desde la web ahora funciona con el servicio',
-      desc:'Arreglo de fondo del botón <b>"Instalar actualización"</b> (Configuración → Sistema). En las instalaciones que corren como <b>servicio de Windows</b>, al actualizar desde la web el sistema podía quedar caído (el administrador del servicio cortaba el propio actualizador). Ahora la actualización se dispara como una <b>tarea independiente</b> del servicio, así se completa sola y el sistema vuelve solo, sin dejar nada apagado. Ya se puede actualizar desde el botón sin problema.' },
+      titulo:'🔄 v2.109.0 — Actualizar desde la web + Origen de movimientos + scroll',
+      desc:'Arreglo de fondo del botón <b>"Instalar actualización"</b> (Configuración → Sistema). En las instalaciones que corren como <b>servicio de Windows</b>, al actualizar desde la web el sistema podía quedar caído (el administrador del servicio cortaba el propio actualizador). Ahora la actualización se dispara como una <b>tarea independiente</b> del servicio, así se completa sola y el sistema vuelve solo, sin dejar nada apagado. Ya se puede actualizar desde el botón sin problema. <b>Además:</b> en <b>Bancos</b>, la tabla de movimientos ahora se puede <b>desplazar hacia la derecha</b> cuando hay más columnas de las que entran en pantalla, para llegar a los botones de editar/eliminar, y suma una columna <b>Origen</b> que muestra si cada movimiento fue <b>📄 Importado</b> (del resumen del banco) o <b>✍️ Manual</b> (cargado a mano).' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
       titulo:'🔄 v2.107.0 — Actualización desde la web más robusta',
       desc:'Mejora interna del botón <b>"Instalar actualización"</b> (Configuración → Sistema): ahora el sistema <b>deduce solo qué instancia reiniciar</b> según su carpeta, aunque no tenga configurado el nombre del servicio. Antes, en ciertas instalaciones, la actualización desde la web podía quedar <b>colgada en "esperando reinicio"</b>; con este cambio se reinicia sola y termina bien. Es una mejora de plomería (no cambia nada de lo que ves en el día a día).' },
@@ -30074,15 +30074,19 @@ function bcoMovRender() {
     </div>
     ${bcoConcilPanel()}
     ${movFiltroFechaBar('bmf', f, 'bcoMovAplicarFiltro', 'bcoMovLimpiarFiltro')}
-    <div class="kpi p-0 overflow-hidden">
-      <table class="data">
-        <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Contraparte</th><th>Ref.</th><th class="text-right">Monto</th><th class="text-right">Saldo</th><th>Cargado por</th><th></th></tr></thead>
+    <div class="kpi p-0 overflow-x-auto">
+      <table class="data" style="min-width:880px">
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Contraparte</th><th>Ref.</th><th class="text-right">Monto</th><th class="text-right">Saldo</th><th>Origen</th><th>Cargado por</th><th></th></tr></thead>
         <tbody>
           ${movs.map(m => {
             const t = BANCO_TIPOS[m.tipo] || { lbl:m.tipo, sign:0, icon:'•' };
             const cls = t.sign > 0 ? 'text-green-700' : t.sign < 0 ? 'text-red-700' : 'text-slate-600';
             const signo = t.sign > 0 ? '+' : t.sign < 0 ? '−' : '';
             const bloqueado = (state._bcoConcilSet||new Set()).has((m.fecha||'').slice(0,7));
+            const _imp = !!(m.importLote || m.observaciones === 'Importado del resumen bancario');
+            const _origen = _imp
+              ? `<span class="text-[11px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 whitespace-nowrap" title="Importado del resumen bancario (PDF / Excel / foto)">📄 Importado</span>`
+              : `<span class="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 whitespace-nowrap" title="Cargado a mano">✍️ Manual</span>`;
             return `<tr class="table-row ${bloqueado?'bg-slate-50/60':''}">
               <td>${fmtFecha(m.fecha)}</td>
               <td><span class="text-xs">${t.icon} ${esc(t.lbl)}</span></td>
@@ -30091,6 +30095,7 @@ function bcoMovRender() {
               <td class="font-mono text-[11px]">${esc(m.referencia||'')}</td>
               <td class="text-right font-semibold ${cls}">${signo} ${fmtMon(c.moneda, m.monto)}</td>
               <td class="text-right text-xs" title="Saldo calculado: saldo inicial ± cada movimiento">${fmtMon(c.moneda, m._saldoCorrido)}</td>
+              <td>${_origen}</td>
               <td class="text-xs text-slate-500">${m.user?esc((m.user.alias||m.user.nombre+' '+(m.user.apellido||''))):'—'}</td>
               <td class="text-right whitespace-nowrap">
                 ${bloqueado
@@ -30099,9 +30104,9 @@ function bcoMovRender() {
                      ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='bcoMovDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`}
               </td>
             </tr>`;
-          }).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin movimientos en el rango elegido. Ampliá las fechas o cargá el primero.</td></tr>`}
+          }).join('') || `<tr><td colspan="10" class="text-center text-slate-400 py-8">Sin movimientos en el rango elegido. Ampliá las fechas o cargá el primero.</td></tr>`}
         </tbody>
-        <tfoot><tr class="font-semibold bg-slate-50"><td colspan="9" class="text-xs text-slate-600">${movs.length} movimiento${movs.length===1?'':'s'} en el rango${f.desde?' · desde '+fmtDate(f.desde):''}${f.hasta?' hasta '+fmtDate(f.hasta):''}</td></tr></tfoot>
+        <tfoot><tr class="font-semibold bg-slate-50"><td colspan="10" class="text-xs text-slate-600">${movs.length} movimiento${movs.length===1?'':'s'} en el rango${f.desde?' · desde '+fmtDate(f.desde):''}${f.hasta?' hasta '+fmtDate(f.hasta):''}</td></tr></tfoot>
       </table>
     </div>`;
 }
