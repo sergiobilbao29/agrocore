@@ -2574,8 +2574,11 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',
-      titulo:'🏦 v2.105.0 — Saldo bancario que coincide exacto con el banco',
-      desc:'Corregimos el <b>saldo por movimiento</b> en Bancos, que en cuentas con muchos movimientos del mismo día podía quedar <b>desfasado</b> (el saldo no correspondía a su movimiento). Ahora, al importar el resumen, guardamos el <b>saldo real que informa el banco</b> en cada línea (la columna Saldo del resumen) y lo mostramos <b>tal cual</b>, con un 🏦 al lado — así el saldo de cada fila <b>coincide exacto con tu homebanking</b>, sin recalcular ni depender del orden. Para los movimientos cargados a mano, el saldo se calcula bien igual (corregimos el orden del cálculo). <b>Importante:</b> si una cuenta ya te quedó con el saldo desfasado, entrá a esa cuenta, tocá <b>↩️ Deshacer importación</b> y <b>volvé a importar el resumen</b>: queda con el saldo del banco, exacto.' },
+      titulo:'🏦 v2.106.0 — Saldo bancario: saldo calculado y en orden (versión final)',
+      desc:'Cierre del ajuste del <b>saldo por movimiento</b> en Bancos. El saldo de cada fila es <b>siempre el calculado</b> por el sistema: arranca del <b>saldo inicial</b> y va sumando/restando cada movimiento. Los movimientos se muestran en <b>orden cronológico</b> (dentro del mismo día se reconstruye la secuencia real), así el saldo queda coherente fila a fila y ya no confunde. <b>Nota:</b> si una cuenta quedó descuadrada de antes, entrá a esa cuenta → <b>↩️ Deshacer importación</b> → <b>volvé a importar el resumen</b> y, si hace falta, <b>⚖️ Ajustar saldo al del banco</b>.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',
+      titulo:'🏦 v2.105.0 — Saldo bancario por movimiento, bien calculado y ordenado',
+      desc:'Corregimos el <b>saldo por movimiento</b> en Bancos, que en cuentas con muchos movimientos del mismo día quedaba <b>desfasado</b> (el saldo no correspondía a su movimiento). Ahora el saldo de cada fila es siempre el <b>calculado por el sistema</b>: arranca del <b>saldo inicial</b> y va sumando/restando cada movimiento. La clave es el <b>orden</b>: los movimientos se ordenan de forma <b>cronológica</b> (dentro del mismo día, cuando importás el resumen usamos el saldo del banco por atrás para reconstruir la secuencia exacta). Así el saldo baja/sube coherente fila a fila y coincide con el banco cuando el saldo inicial está bien puesto. <b>Importante:</b> si una cuenta ya te quedó descuadrada, entrá a esa cuenta, tocá <b>↩️ Deshacer importación</b>, <b>volvé a importar el resumen</b> y, si hace falta, usá <b>⚖️ Ajustar saldo al del banco</b>.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/08/2026',
       titulo:'🗣️ v2.104.0 — El asistente ahora te habla con voz natural (más humana)',
       desc:'El asistente aprendió a <b>hablar con una voz mucho más humana y agradable</b>. Con la IA activada usa una <b>voz neural</b> (natural, rioplatense) para leerte sus respuestas; si la IA está apagada o no hay internet, igual te habla con la voz del navegador. Arriba del chat elegís <b>🔊 Mujer</b>, <b>🔊 Hombre</b> o <b>🔇</b> (sin voz), y queda guardado en tu dispositivo. Además el asistente responde con un <b>tono más cálido y cercano</b>, y aprendió lo nuevo: cómo <b>importar el resumen del banco</b> (con "ajustar saldo" y "deshacer"), cómo <b>editar o borrar mensajes del chat</b>, cómo <b>agregar/borrar categorías de animales</b> y cómo hacer la <b>puesta en marcha</b> del sistema. También sumamos un instructivo de <b>primeros pasos</b> para configurar tu empresa de cero.' },
@@ -29766,6 +29769,46 @@ function movFiltroFechaBar(prefix, f, aplicarFn, limpiarFn) {
     </div>`;
 }
 
+// Ordena los movimientos de una cuenta en orden CRONOLÓGICO ascendente (más viejo →
+// más nuevo). Dentro de un mismo día, si los movimientos traen el saldo del banco
+// (del resumen importado), reconstruye la secuencia EXACTA encadenando por saldo
+// (cada movimiento sigue al que dejó el "saldo anterior" de este). Si no hay saldo del
+// banco, ordena por orden de carga (createdAt/id). No muestra el saldo del banco: solo
+// lo usa para ordenar bien; el saldo que se ve es siempre el calculado.
+function _bcoOrdenCronologico(movs){
+  const cents = x => Math.round(Number(x||0)*100);
+  const signed = m => (BANCO_TIPOS[m.tipo]?.sign||0) * Number(m.monto||0);
+  const porCarga = (a,b) => String(a.createdAt||'').localeCompare(String(b.createdAt||'')) || String(a.id||'').localeCompare(String(b.id||''));
+  const porDia = new Map();
+  (movs||[]).forEach(m => { const d=(m.fecha||'').slice(0,10); if(!porDia.has(d)) porDia.set(d,[]); porDia.get(d).push(m); });
+  const dias = [...porDia.keys()].sort();  // fechas ascendentes
+  const out = [];
+  for (const d of dias){
+    const grupo = porDia.get(d);
+    const conSaldo = grupo.filter(m => m.saldoBanco!=null && isFinite(Number(m.saldoBanco)));
+    if (grupo.length > 1 && conSaldo.length === grupo.length){
+      // Reconstruir la cadena por saldo del banco.
+      const info = grupo.map(m => ({ m, after: cents(m.saldoBanco), before: cents(m.saldoBanco) - cents(signed(m)) }));
+      const afters = new Set(info.map(x=>x.after));
+      const byBefore = new Map();
+      info.forEach(x => { if(!byBefore.has(x.before)) byBefore.set(x.before, []); byBefore.get(x.before).push(x); });
+      let inicios = info.filter(x => !afters.has(x.before));
+      let cur = inicios[0] || info.slice().sort((a,b)=>b.before-a.before)[0];
+      const usados = new Set(); const ordenados = [];
+      while (cur && !usados.has(cur.m.id)){
+        ordenados.push(cur.m); usados.add(cur.m.id);
+        const cand = (byBefore.get(cur.after)||[]).filter(x=>!usados.has(x.m.id));
+        cur = cand[0] || null;
+      }
+      // Los que no encadenaron (duplicados/huecos), al final por orden de carga.
+      grupo.filter(m=>!usados.has(m.id)).sort(porCarga).forEach(m=>ordenados.push(m));
+      out.push(...ordenados);
+    } else {
+      out.push(...grupo.slice().sort(porCarga));
+    }
+  }
+  return out;
+}
 async function bcoVerMovs(cuentaId) {
   state.bancoCuentaId = cuentaId;
   const c = (state.cache.bancoCuentas||[]).find(x => x.id === cuentaId);
@@ -29778,26 +29821,19 @@ async function bcoVerMovs(cuentaId) {
   // Conciliaciones de esta cuenta (meses bloqueados).
   try { state._bcoConcil = (await api('/api/conciliaciones?cuentaId='+cuentaId)).data || []; } catch { state._bcoConcil = []; }
   state._bcoConcilSet = new Set((state._bcoConcil||[]).map(x => x.periodo));
-  // Saldo corrido (calculado por la app): acumulamos en orden cronológico ascendente
-  // y mostramos el INVERSO EXACTO de ese mismo array, así el saldo de cada fila es
-  // siempre el de DESPUÉS de su propio movimiento (evita el desfase por orden).
+  // Saldo corrido SIEMPRE CALCULADO: arranca del saldo inicial y suma/resta cada
+  // movimiento. Para que el cálculo sea correcto, ordenamos los movimientos de forma
+  // cronológica (dentro del mismo día usamos el saldo del banco SOLO para reconstruir
+  // la secuencia real; el número que se muestra es siempre el calculado).
+  const movsAsc = _bcoOrdenCronologico(movs);
   let running = Number(c.saldoInicial || 0);
-  const _cmpAsc = (a,b) => (new Date(a.fecha) - new Date(b.fecha))
-      || String(a.createdAt||'').localeCompare(String(b.createdAt||''))
-      || String(a.id||'').localeCompare(String(b.id||''));
-  const movsAsc = [...movs].sort(_cmpAsc);
   movsAsc.forEach(m => {
     const t = BANCO_TIPOS[m.tipo] || { sign:0 };
     running += t.sign * Number(m.monto || 0);
     m._saldoCorrido = running;
-    // El saldo que se MUESTRA: si el movimiento trae el saldo real del banco (columna
-    // Saldo del resumen importado), usamos ESE — es exacto y coincide con el banco.
-    // Si no, el saldo corrido calculado por la app.
-    const tieneBco = (m.saldoBanco != null && isFinite(Number(m.saldoBanco)));
-    m._saldoMostrar = tieneBco ? Number(m.saldoBanco) : running;
-    m._saldoEsBanco = tieneBco;
   });
-  // Lista para mostrar = inverso exacto del orden de acumulación (más nuevo arriba).
+  // Lista para mostrar = inverso exacto del orden de cálculo (más nuevo arriba), así el
+  // saldo de cada fila es siempre el de DESPUÉS de su propio movimiento (sin desfase).
   state._bcoMovsAll = movsAsc.slice().reverse();
   state._bcoMovFilter = state._bcoMovFilter || _ultimoMesRango();
   bcoMovRender();
@@ -30048,7 +30084,7 @@ function bcoMovRender() {
               <td class="text-xs text-slate-500">${esc(m.contraparte||'—')}</td>
               <td class="font-mono text-[11px]">${esc(m.referencia||'')}</td>
               <td class="text-right font-semibold ${cls}">${signo} ${fmtMon(c.moneda, m.monto)}</td>
-              <td class="text-right text-xs" ${m._saldoEsBanco?'title="Saldo según el banco (del resumen importado)"':'title="Saldo calculado por el sistema"'}>${fmtMon(c.moneda, (m._saldoMostrar!=null?m._saldoMostrar:m._saldoCorrido))}${m._saldoEsBanco?' <span class="text-emerald-600" title="Saldo del banco">🏦</span>':''}</td>
+              <td class="text-right text-xs" title="Saldo calculado: saldo inicial ± cada movimiento">${fmtMon(c.moneda, m._saldoCorrido)}</td>
               <td class="text-xs text-slate-500">${m.user?esc((m.user.alias||m.user.nombre+' '+(m.user.apellido||''))):'—'}</td>
               <td class="text-right whitespace-nowrap">
                 ${bloqueado
