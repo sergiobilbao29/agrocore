@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/08/2026',
+      titulo:'↔️ v2.115.0 — Transferir un cheque a otra empresa del grupo + Cheques en PDF',
+      desc:'Dos cosas en <b>Tesorería → Cheques</b>. <b>(1) Transferir un cheque de terceros a otra empresa del grupo:</b> en cada cheque <b>en cartera</b> hay un botón <b>↔️</b>. Elegís la empresa destino y el cheque <b>sale de tu cartera</b> (queda como "Transferido a otra empresa") y aparece <b>en la cartera de la otra empresa</b>, con una nota que deja asentado <b>de dónde vino</b>. Desde ahí esa empresa lo puede <b>depositar o vender en su propio banco</b>, así el dinero se acredita en el banco de esa firma. <i>No</i> genera deuda entre las empresas (solo mueve el cheque). <b>(2) Exportar cheques a PDF:</b> además del Excel, ahora hay un botón <b>📄 Exportar PDF</b> que descarga la lista que estás viendo (respeta los filtros) con el total al pie, listo para imprimir o mandar.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
       titulo:'🔄 v2.114.0 — Actualizador a prueba de fallos',
       desc:'El botón <b>"Instalar actualización"</b> ahora es <b>a prueba de fallos</b>: pase lo que pase durante la actualización (descarga, dependencias o migraciones de base), el sistema <b>siempre vuelve a levantar solo</b> — nunca más queda "reiniciando" sin volver. Además, cada actualización deja un <b>registro detallado</b> en <code>logs\\update-*.log</code> para poder ver el motivo exacto si algo sale mal.' },
@@ -13786,8 +13789,8 @@ function fechaAMs(v) {
 
 // Estados posibles de un cheque (FALLBACK; los reales son configurables y se
 // cargan en state.cache.chequeEstados). "en_cartera" = recibido y disponible.
-const CHEQUE_ESTADOS = ['en_cartera', 'emitido', 'endosado', 'depositado', 'cobrado', 'pagado', 'rechazado', 'anulado'];
-function chqEstadoLabelDefault(c){ return ({en_cartera:'En cartera',emitido:'Emitido',endosado:'Endosado / Entregado',depositado:'Depositado',cobrado:'Cobrado',pagado:'Pagado',rechazado:'Rechazado',anulado:'Anulado'})[c]||c; }
+const CHEQUE_ESTADOS = ['en_cartera', 'emitido', 'endosado', 'depositado', 'cobrado', 'pagado', 'transferido', 'rechazado', 'anulado'];
+function chqEstadoLabelDefault(c){ return ({en_cartera:'En cartera',emitido:'Emitido',endosado:'Endosado / Entregado',depositado:'Depositado',cobrado:'Cobrado',pagado:'Pagado',transferido:'Transferido a otra empresa',rechazado:'Rechazado',anulado:'Anulado'})[c]||c; }
 // Lista de estados a mostrar (configurables si ya se cargaron, sino los fallback).
 function chqEstadosList(){
   const c = state.cache.chequeEstados;
@@ -13803,7 +13806,7 @@ function chequeBadge(estado) {
   const e = (estado || '').toLowerCase();
   const map = {
     'en_cartera': 'badge-green', 'emitido': 'badge-blue', 'endosado': 'badge-blue', 'depositado': 'badge-yellow',
-    'cobrado': 'badge-gray', 'pagado': 'badge-gray', 'rechazado': 'badge-red', 'anulado': 'badge-gray',
+    'cobrado': 'badge-gray', 'pagado': 'badge-gray', 'transferido': 'badge-blue', 'rechazado': 'badge-red', 'anulado': 'badge-gray',
   };
   return `<span class="badge ${map[e] || 'badge-gray'}">${esc(estado ? chqEstadoNombre(e) : '—')}</span>`;
 }
@@ -13970,6 +13973,8 @@ pages.cheques = async function() {
               <td class="text-right whitespace-nowrap">
                 ${can('finanzas:update') && _chqPuedeAcreditar(c) ?
                    `<button class="btn btn-ghost text-xs" title="${c.tipo==='propio'?'Marcar como pagado (sale de cuenta bancaria)':'Acreditar en banco (depositar / cobrar)'}" onclick='chqAcreditarForm(${JSON.stringify(c.id)})'>${c.tipo==='propio'?'💸':'💰'}</button>` : ''}
+                ${can('finanzas:update') && c.tipo==='terceros' && /en[_ ]?cartera/i.test(c.estado||'') && (state.user?.companies||[]).length>1 ?
+                   `<button class="btn btn-ghost text-xs" title="Transferir este cheque a otra empresa del grupo" onclick='chqTransferirForm(${JSON.stringify(c.id)})'>↔️</button>` : ''}
                 ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" onclick='chqForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
                 ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='chqDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
               </td>
@@ -14026,6 +14031,7 @@ pages.cheques = async function() {
         <div class="md:col-span-8 flex gap-2 justify-end flex-wrap">
           <button class="btn btn-secondary" onclick="chqFiltroDisponibles()">Ver disponibles</button>
           <button class="btn btn-secondary" title="Descargar a Excel los cheques que se ven (respeta los filtros)" onclick="chqExportExcel()">📊 Exportar Excel</button>
+          <button class="btn btn-secondary" title="Descargar a PDF los cheques que se ven (respeta los filtros)" onclick="chqExportPDF()">📄 Exportar PDF</button>
           ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Vender / descontar cheques de terceros en el banco" onclick="chqVenderForm()">💵 Vender cheques</button>`:''}
           ${colMenuBtn('cheques')}
           ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Agregar, renombrar o quitar estados de cheque" onclick="chqEstadosManager()">⚙️ Estados</button>`:''}
@@ -14081,6 +14087,85 @@ function chqExportExcel() {
   ws['!cols'] = head.map((h,i)=>({ wch: i===14?16 : (i>=9&&i<=12)?20 : 12 }));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Cheques'); XLSX.writeFile(wb, fn);
   toast('Excel generado','success');
+}
+// Exporta a PDF los mismos cheques que se ven (respeta filtros), con jsPDF + autoTable.
+function chqExportPDF() {
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if (!jsPDFCtor){ return toast('Esperá un momento, todavía se está cargando la librería de PDF…','warn'); }
+  const f = state.chequeFilter || {};
+  const rows = (state._chqRows || []).filter(c => {
+    if (f.estado && (c.estado||'').toLowerCase() !== f.estado) return false;
+    if (f.tipo   && c.tipo !== f.tipo) return false;
+    if (f.banco  && (c.banco||'') !== f.banco) return false;
+    if (f.cuenta && (c.cuenta||'') !== f.cuenta) return false;
+    if (f.numero && !((c.nroCheque||'').toLowerCase().includes(String(f.numero).toLowerCase()))) return false;
+    return true;
+  });
+  if (!rows.length) return toast('No hay cheques para exportar con los filtros actuales','warn');
+  const estadoLbl = (e)=> (state.cache.chequeEstados||[]).find(x=>x.codigo===e)?.label || chqEstadoLabelDefault(e) || e || '';
+  const doc = new jsPDFCtor({orientation:'landscape',unit:'pt',format:'a4'});
+  const pageW = doc.internal.pageSize.getWidth();
+  let y=40;
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(nombreEmpresaActiva(), pageW/2, y, {align:'center'}); y+=18;
+  doc.setFontSize(12); doc.text('Cheques'+(f.estado?' — '+chqEstadoLabelDefault(f.estado):''), pageW/2, y, {align:'center'}); y+=14;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120);
+  doc.text(`${rows.length} cheque(s) · emitido ${fmtDate(new Date())}`, pageW/2, y, {align:'center'}); doc.setTextColor(0); y+=6;
+  const head = ['Tipo','Fmt','N°','Banco','Pago/Vto','Librador/titular','CUIT','En poder de','Estado','Monto'];
+  const body = rows.map(c => [
+    c.tipo==='propio'?'Propio':'Terceros',
+    c.formato==='electronico'?'e-cheq':(c.formato==='fisico'?'Físico':''),
+    c.nroCheque||'', c.banco||'', c.fechaPago?fmtFecha(c.fechaPago):'',
+    c.librador||'', c.cuitTitular||'', c.enPoderDe||'', estadoLbl(c.estado), fmt$(c.monto),
+  ]);
+  const total = rows.reduce((a,c)=>a+Number(c.monto||0),0);
+  doc.autoTable({
+    head:[head], body,
+    foot:[['','','','','','','','','TOTAL', fmt$(total)]],
+    startY:y+8, styles:{fontSize:8,cellPadding:3},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255]},
+    footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
+    columnStyles:{6:{cellWidth:64},9:{halign:'right'}},
+  });
+  const estLbl = f.estado ? f.estado.replace(/[^a-z0-9]+/gi,'-') : 'todos';
+  doc.save(`Cheques_${estLbl}_${new Date().toISOString().slice(0,10)}.pdf`);
+  toast('PDF generado','success');
+}
+// ===== TRANSFERIR un cheque de terceros a OTRA empresa del grupo =====
+async function chqTransferirForm(id){
+  let cheques = state._chqRows || [];
+  const c = cheques.find(x => x.id === id);
+  if (!c) return toast('Cheque no encontrado','error');
+  const otras = (state.user?.companies || []).filter(x => x.id !== state.companyId);
+  if (!otras.length) return toast('No tenés otra empresa del grupo para transferir.','warn');
+  const hoy = new Date().toISOString().slice(0,10);
+  openModal({
+    title:'↔️ Transferir cheque a otra empresa', size:'max-w-lg',
+    body:`
+      <div class="bg-blue-50 border border-blue-200 rounded p-2 text-xs text-blue-900 mb-3">El cheque <b>#${esc(c.nroCheque||'')}</b> · ${esc(c.banco||'')} · <b>${fmt$(c.monto)}</b> sale de la cartera de <b>${esc(nombreEmpresaActiva())}</b> y pasa a la cartera de la empresa que elijas. Ahí lo vas a poder depositar o vender en su banco. Queda asentado de dónde vino. <b>No</b> genera deuda entre las empresas.</div>
+      <div><label class="label">Empresa destino *</label>
+        <select id="tc-empresa" class="input"><option value="">— Elegir —</option>${otras.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select>
+      </div>
+      <div class="mt-3"><label class="label">Fecha de la transferencia *</label>
+        <input id="tc-fecha" type="date" class="input" value="${hoy}"/>
+      </div>
+      <div class="mt-3"><label class="label">Observaciones (opcional)</label>
+        <input id="tc-obs" class="input" placeholder="Ej: para depositar en Galicia de la otra firma"/>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="chqTransferirSave('${esc(id)}')">↔️ Transferir</button>`
+  });
+}
+async function chqTransferirSave(id){
+  const empresaDestinoId = $('#tc-empresa')?.value;
+  if (!empresaDestinoId) return toast('Elegí la empresa destino','warn');
+  const fecha = $('#tc-fecha')?.value;
+  if (!fecha) return toast('Poné la fecha','warn');
+  const body = { empresaDestinoId, fecha:new Date(fecha+'T12:00:00').toISOString(), observaciones:($('#tc-obs')?.value||'').trim()||null };
+  try {
+    const r = await api('/api/cheques/'+id+'/transferir-empresa', { method:'POST', body: JSON.stringify(body) });
+    closeModal(); toast('Cheque transferido a '+r.data.empresaDestino,'success');
+    delete state.cache.cheques; pages.cheques();
+  } catch (e) { toast(e.message,'error'); }
 }
 // ===== VENTA / DESCUENTO de cheques de terceros =====
 async function chqVenderForm(){

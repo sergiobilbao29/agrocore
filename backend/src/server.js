@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.114.0';
+const AGROCORE_VERSION = '2.115.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4611,6 +4611,63 @@ app.post('/api/cheques/vender', requireCompany, requirePermission('finanzas:upda
     });
     res.json({ ok: true, data: result });
   } catch (e) { next(e); }
+});
+
+// ============================================================
+// TRANSFERIR un cheque de terceros a OTRA empresa del mismo grupo economico.
+// La usuaria tiene el cheque en la Empresa A y lo pasa a la cartera de la Empresa B
+// (p. ej. para depositarlo/venderlo en un banco de B). Segun lo definido: se MUEVE el
+// cheque (sale de A, entra a la cartera de B) SIN generar deuda intercompany, dejando
+// asentado el origen. Es reversible por la transferRef compartida.
+// ============================================================
+const transferirChequeSchema = z.object({
+  empresaDestinoId: z.string().min(1),
+  fecha: z.coerce.date().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+app.post('/api/cheques/:id/transferir-empresa', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const d = transferirChequeSchema.parse(req.body || {});
+    const cheque = await prisma.cheque.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cheque) return res.status(404).json({ ok: false, error: 'Cheque no encontrado' });
+    if (cheque.tipo !== 'terceros') return res.status(400).json({ ok: false, error: 'Solo se pueden transferir cheques de terceros.' });
+    if (!/en[_ ]?cartera/i.test(cheque.estado || '')) return res.status(400).json({ ok: false, error: 'Solo se puede transferir un cheque que esta en cartera.' });
+    if (d.empresaDestinoId === req.companyId) return res.status(400).json({ ok: false, error: 'Elegi una empresa distinta a la actual.' });
+    // La empresa destino tiene que pertenecer al mismo grupo economico del usuario.
+    const cids = await _cidsGrupo(req);
+    if (!cids.includes(d.empresaDestinoId)) return res.status(403).json({ ok: false, error: 'La empresa destino no pertenece a tu grupo.' });
+    const destino = await prisma.company.findUnique({ where: { id: d.empresaDestinoId }, select: { id: true, name: true } });
+    if (!destino) return res.status(404).json({ ok: false, error: 'Empresa destino no encontrada' });
+    const origenNombre = (await prisma.company.findUnique({ where: { id: req.companyId }, select: { name: true } }))?.name || 'otra empresa';
+    const fechaMov = d.fecha || new Date();
+    const fechaTxt = new Date(fechaMov).toISOString().slice(0, 10);
+    const ref = `TC_${Date.now().toString(36).toUpperCase()}`;
+    const result = await prisma.$transaction(async (tx) => {
+      // 1) El cheque sale de la cartera de la empresa origen: queda 'transferido'.
+      await tx.cheque.update({ where: { id: cheque.id }, data: {
+        estado: 'transferido', fechaEndoso: cheque.fechaEndoso || fechaMov,
+        transferRef: ref, destinoEmpresaId: destino.id,
+        observaciones: [cheque.observaciones, `Transferido a ${destino.name} el ${fechaTxt} (ref ${ref})`].filter(Boolean).join(' · '),
+      }});
+      // 2) Se crea la COPIA en la cartera de la empresa destino, con el origen asentado.
+      const copia = await tx.cheque.create({ data: {
+        companyId: destino.id, tipo: 'terceros',
+        formato: cheque.formato || null, banco: cheque.banco || null, cuenta: cheque.cuenta || null,
+        nroCheque: cheque.nroCheque, fechaEmision: cheque.fechaEmision, fechaPago: cheque.fechaPago,
+        monto: cheque.monto,
+        librador: cheque.librador || null, cuitTitular: cheque.cuitTitular || null,
+        endosante: cheque.endosante || origenNombre,
+        fechaRecepcion: fechaMov, enPoderDe: null, beneficiario: null, cuentaBancoId: null,
+        estado: 'en_cartera', transferRef: ref, origenEmpresaId: req.companyId,
+        observaciones: [`Recibido de ${origenNombre} (transferencia interna) el ${fechaTxt} (ref ${ref})`, cheque.observaciones].filter(Boolean).join(' · '),
+      }});
+      return { origenId: cheque.id, copiaId: copia.id, empresaDestino: destino.name, ref };
+    });
+    res.json({ ok: true, data: result });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos invalidos' });
+    next(e);
+  }
 });
 
 // IMPORTANTE: este endpoint va ANTES del mountCrud('ctas-ctes') porque el CRUD

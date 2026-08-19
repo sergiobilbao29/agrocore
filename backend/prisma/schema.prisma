@@ -722,8 +722,12 @@ model Cheque {
   fechaEndoso   DateTime?  // cuándo se endosó/entregó/depositó (salió de cartera)
   enPoderDe     String?    // físicos: en poder de quién está (caja oficina, Luciano, Lucas, Flor...)
   cuentaBancoId String?    // cuenta bancaria donde se deposito/acredito (recordada al depositar)
-  estado        String     @default("en_cartera") // en_cartera, depositado, cobrado, endosado, rechazado
+  estado        String     @default("en_cartera") // en_cartera, depositado, cobrado, endosado, rechazado, transferido
   observaciones String?
+  // Transferencia de cheque entre empresas del mismo grupo economico (sin deuda intercompany).
+  transferRef       String?  // ref compartida entre el cheque origen y su copia en la otra empresa
+  origenEmpresaId   String?  // en la COPIA (empresa destino): de que empresa vino el cheque
+  destinoEmpresaId  String?  // en el cheque ORIGEN: a que empresa se transfirio
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -731,6 +735,7 @@ model Cheque {
 
   @@index([companyId])
   @@index([fechaPago])
+  @@index([transferRef])
 }
 
 model CtaCte {
