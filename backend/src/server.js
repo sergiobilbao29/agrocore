@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.106.0';
+const AGROCORE_VERSION = '2.107.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12871,7 +12871,20 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
     // TODOS los node de la maquina. Ahora pasamos la carpeta, el puerto y el
     // nombre de servicio de ESTA instancia, y el script opera solo sobre ella.
     const installDir = STATIC_DIR;                       // raiz de ESTA instancia
-    const servicio   = (process.env.AGROCORE_SERVICE || '').trim(); // nombre del servicio Windows (vacio = VBS/npm)
+    let   servicio   = (process.env.AGROCORE_SERVICE || '').trim(); // nombre del servicio Windows (vacio = VBS/npm)
+    // Defensa doble: si la variable de entorno no esta seteada (ej: servicio viejo
+    // creado antes de que la agregaramos), deducimos el nombre del servicio por la
+    // CARPETA de la instancia. Es inequivoco por instancia:
+    //   C:\AgroCore-Bovio -> AgroCore-Bovio-Backend    C:\AgroCore (Demo) -> AgroCore-Backend
+    // Si ese servicio no existe, el propio Update-AgroCore.ps1 cae al modo VBS/npm,
+    // asi que pasar el candidato es seguro (no toca servicios de otras instancias).
+    if (!servicio) {
+      try {
+        const leaf = path.basename(installDir);
+        const m = /^AgroCore-(.+)$/i.exec(leaf);
+        servicio = m ? `AgroCore-${m[1]}-Backend` : 'AgroCore-Backend';
+      } catch { servicio = ''; }
+    }
     // Update-AgroCore.ps1 propio de la instancia; si no tiene, caemos al de
     // C:\AgroCore (el script actua sobre -InstallDir, no sobre donde vive).
     let scriptPath = path.join(installDir, 'Update-AgroCore.ps1');

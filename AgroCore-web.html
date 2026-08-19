@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
+      titulo:'🔄 v2.107.0 — Actualización desde la web más robusta',
+      desc:'Mejora interna del botón <b>"Instalar actualización"</b> (Configuración → Sistema): ahora el sistema <b>deduce solo qué instancia reiniciar</b> según su carpeta, aunque no tenga configurado el nombre del servicio. Antes, en ciertas instalaciones, la actualización desde la web podía quedar <b>colgada en "esperando reinicio"</b>; con este cambio se reinicia sola y termina bien. Es una mejora de plomería (no cambia nada de lo que ves en el día a día).' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/08/2026',
       titulo:'🏦 v2.106.0 — Saldo bancario: saldo calculado y en orden (versión final)',
       desc:'Cierre del ajuste del <b>saldo por movimiento</b> en Bancos. El saldo de cada fila es <b>siempre el calculado</b> por el sistema: arranca del <b>saldo inicial</b> y va sumando/restando cada movimiento. Los movimientos se muestran en <b>orden cronológico</b> (dentro del mismo día se reconstruye la secuencia real), así el saldo queda coherente fila a fila y ya no confunde. <b>Nota:</b> si una cuenta quedó descuadrada de antes, entrá a esa cuenta → <b>↩️ Deshacer importación</b> → <b>volvé a importar el resumen</b> y, si hace falta, <b>⚖️ Ajustar saldo al del banco</b>.' },
