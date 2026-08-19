@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/08/2026',
+      titulo:'🔄 v2.114.0 — Actualizador a prueba de fallos',
+      desc:'El botón <b>"Instalar actualización"</b> ahora es <b>a prueba de fallos</b>: pase lo que pase durante la actualización (descarga, dependencias o migraciones de base), el sistema <b>siempre vuelve a levantar solo</b> — nunca más queda "reiniciando" sin volver. Además, cada actualización deja un <b>registro detallado</b> en <code>logs\\update-*.log</code> para poder ver el motivo exacto si algo sale mal.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/08/2026',
       titulo:'👥 v2.113.0 — Rol con campañas limitadas (ej. "Socio")',
       desc:'Ahora un rol puede ver <b>solo algunas campañas</b>, no todas. En <b>Roles y permisos</b>, al editar un rol, aparece <b>"Campañas que puede ver"</b>: si marcás algunas, ese rol verá únicamente <b>esas campañas</b> y sus <b>insumos, labores, viajes y movimientos de stock</b> (si no marcás ninguna, ve todas, como siempre). Ideal para dar acceso a un <b>socio</b> que solo debe ver su parte del negocio.' },

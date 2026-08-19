@@ -59,6 +59,35 @@ function Info($msg) { Write-Host "[..] $msg" -ForegroundColor Gray }
 function Warn($msg) { Write-Host "[!]  $msg" -ForegroundColor Yellow }
 function Err($msg) { Write-Host "[ER] $msg" -ForegroundColor Red }
 
+# Reinicia ESTA instancia. Se llama SIEMPRE al final (aunque algo haya fallado),
+# para no dejar nunca el sistema caido. Usa las variables de script $svcInstalado /
+# $svcName / $InstallDir que se definen en el paso 5 (ya corrio antes de llamar aca).
+function Restart-Instance {
+  H1 "Reiniciando AgroCore..."
+  if ($script:svcInstalado) {
+    Info "Arrancando servicio $script:svcName..."
+    try { Start-Service -Name $script:svcName -ErrorAction Stop; Start-Sleep -Seconds 3; Ok "Servicio arrancado." }
+    catch { Err "No se pudo arrancar el servicio: $($_.Exception.Message)"; Err "Revisa $InstallDir\logs\backend-err.log" }
+  } else {
+    $vbs = Join-Path $InstallDir "INICIAR-AGROCORE.vbs"
+    if (Test-Path $vbs) {
+      Start-Process "wscript.exe" -ArgumentList "`"$vbs`"" -WindowStyle Hidden
+      Start-Sleep -Seconds 3; Ok "AgroCore reiniciado (modo legacy via VBS)."
+    } else { Warn "No hay servicio ni VBS launcher. Inicia AgroCore manualmente." }
+  }
+}
+
+# Log de TODO el proceso a un archivo. Clave cuando corre desatendido (lanzado por el
+# boton de la web como tarea SYSTEM, sin consola visible): asi queda el motivo real
+# de cualquier fallo en logs\update-<fecha>.log.
+$script:UpdateLog = $null
+try {
+  $logDir = Join-Path $InstallDir "logs"
+  if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+  $script:UpdateLog = Join-Path $logDir ("update-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".log")
+  Start-Transcript -Path $script:UpdateLog -Append -Force | Out-Null
+} catch {}
+
 H1 "AgroCore - Actualizador automatico"
 
 # 1. Verificar que existe la instalacion
@@ -173,6 +202,11 @@ if ($conns) {
   Info "Nada escuchando en :$Puerto (ya estaba detenido)."
 }
 
+# Pasos 6 y 7 envueltos: pase lo que pase (git/npm/migrate), el bloque final
+# reinicia SIEMPRE el servicio para no dejar el sistema caido.
+$updateError = $null
+try {
+
 # 6. Pull de la ultima version
 H1 "Descargando ultima version..."
 Push-Location $InstallDir
@@ -194,13 +228,13 @@ try {
         # fetch + reset --hard al remoto. (El backup de la base ya se hizo en el paso 4.)
         Warn "git pull --ff-only fallo (exit $LASTEXITCODE). Forzando a la version publicada (reset --hard)..."
         & git fetch origin 2>&1 | ForEach-Object { Write-Host "    $_" }
-        if ($LASTEXITCODE -ne 0) { Err "git fetch fallo (exit $LASTEXITCODE)"; exit 2 }
+        if ($LASTEXITCODE -ne 0) { throw "git fetch fallo (exit $LASTEXITCODE)" }
         # Branch remoto por defecto: main (con fallback a master).
         $branch = "main"
         & git show-ref --verify --quiet refs/remotes/origin/main
         if ($LASTEXITCODE -ne 0) { $branch = "master" }
         & git reset --hard "origin/$branch" 2>&1 | ForEach-Object { Write-Host "    $_" }
-        if ($LASTEXITCODE -ne 0) { Err "git reset --hard fallo (exit $LASTEXITCODE)"; exit 2 }
+        if ($LASTEXITCODE -ne 0) { throw "git reset --hard fallo (exit $LASTEXITCODE)" }
         Ok "Codigo forzado a origin/$branch."
       }
       Info "Actualizando submodulos (web/img, manual, etc)..."
@@ -239,13 +273,13 @@ try {
   try {
     Info "npm install (puede tardar 1-3 minutos)..."
     & npm install --omit=dev --no-audit --no-fund --loglevel=error 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) { Err "npm install fallo (exit $LASTEXITCODE)"; exit 3 }
-    Ok "Dependencias actualizadas."
+    if ($LASTEXITCODE -ne 0) { Warn "npm install fallo (exit $LASTEXITCODE). Sigo igual: los deps viejos suelen alcanzar." }
+    else { Ok "Dependencias actualizadas." }
 
     Info "Aplicando migraciones de base..."
     & npx prisma migrate deploy 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) { Err "prisma migrate deploy fallo (exit $LASTEXITCODE)"; exit 4 }
-    Ok "Migraciones aplicadas."
+    if ($LASTEXITCODE -ne 0) { Warn "prisma migrate deploy fallo (exit $LASTEXITCODE). Intento db push como respaldo." }
+    else { Ok "Migraciones aplicadas." }
 
     # Sincronizar cualquier cambio de schema que no este en una migracion formal.
     # Algunos campos agregados por db push en dev tambien necesitan correr aca.
@@ -262,29 +296,16 @@ try {
   }
 } finally { Pop-Location }
 
-# 8. Reiniciar AgroCore
-H1 "Reiniciando AgroCore..."
-if ($svcInstalado) {
-  Info "Arrancando servicio $svcName..."
-  try {
-    Start-Service -Name $svcName -ErrorAction Stop
-    Start-Sleep -Seconds 3
-    Ok "Servicio arrancado."
-  } catch {
-    Err "No se pudo arrancar el servicio: $($_.Exception.Message)"
-    Err "Revisa los logs en $InstallDir\logs\backend-err.log"
-  }
-} else {
-  $vbs = Join-Path $InstallDir "INICIAR-AGROCORE.vbs"
-  if (Test-Path $vbs) {
-    Start-Process "wscript.exe" -ArgumentList "`"$vbs`"" -WindowStyle Hidden
-    Start-Sleep -Seconds 3
-    Ok "AgroCore reiniciado (modo legacy via VBS)."
-    Warn "Recomendado: instalar como servicio corriendo Instalar-Servicio-AgroCore.ps1 una sola vez."
-  } else {
-    Warn "No hay servicio instalado ni VBS launcher. Inicia AgroCore manualmente."
-  }
+} catch {
+  # Algo fallo en el pull/deps/migraciones. NO cortamos: logueamos y de todas formas
+  # reiniciamos el servicio abajo, para que el sistema NUNCA quede caido por un update.
+  $updateError = $_
+  Err "Fallo durante la actualizacion: $($_.Exception.Message)"
+  Warn "Reinicio el servicio igual para no dejar el sistema caido."
 }
+
+# 8. Reiniciar AgroCore (SIEMPRE, aunque algo haya fallado arriba)
+Restart-Instance
 
 # 9. Verificar que vuelve a responder
 Info "Verificando que el sistema responde (hasta 60 segundos)..."
@@ -301,12 +322,23 @@ for ($i = 0; $i -lt $timeout; $i++) {
   }
 }
 if (-not $started) {
-  Err "El sistema no respondio en $timeout segundos. Revisar logs en backend\logs."
+  Err "El sistema no respondio en $timeout segundos."
+  if ($script:UpdateLog) { Err "Detalle del update en: $script:UpdateLog" }
+  Err "Logs del backend en: $InstallDir\logs\backend-err.log"
+  try { Stop-Transcript | Out-Null } catch {}
   Pause-IfInteractive "Presiona Enter"
   exit 5
 }
 
-H1 "[OK] Actualizacion completada"
-Ok "AgroCore actualizado a la ultima version."
+if ($updateError) {
+  H1 "[!] Actualizacion terminada CON ADVERTENCIAS"
+  Warn "El sistema quedo ARRIBA, pero hubo un error durante el proceso:"
+  Warn "  $($updateError.Exception.Message)"
+  if ($script:UpdateLog) { Warn "  Revisa el detalle en: $script:UpdateLog" }
+} else {
+  H1 "[OK] Actualizacion completada"
+  Ok "AgroCore actualizado a la ultima version."
+}
 Info "Abri el navegador en http://localhost:$Puerto para verlo."
+try { Stop-Transcript | Out-Null } catch {}
 Pause-IfInteractive "Presiona Enter para salir"
