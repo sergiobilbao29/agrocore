@@ -2241,6 +2241,9 @@ model Retencion {
   comprobanteRef    String?                      // factura / OP / recibo asociado (texto)
   moneda            String   @default("ARS")
   observaciones     String?
+  origen            String   @default("manual")   // 'manual' | 'arca_csv' | 'op_pdf' | 'liquidacion'
+  importLote        String?                        // id del lote de importación (para deshacer)
+  dedupeKey         String?                        // clave anti-duplicado (cuit+certificado+importe+fecha)
   userId            String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -2251,6 +2254,8 @@ model Retencion {
   @@index([fecha])
   @@index([naturaleza])
   @@index([impuesto])
+  @@index([importLote])
+  @@index([dedupeKey])
 }
 
 model RemitoRenglon {

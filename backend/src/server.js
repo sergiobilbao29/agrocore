@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.115.0';
+const AGROCORE_VERSION = '2.116.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -351,7 +351,7 @@ function _hoy0() { const d = new Date(); d.setHours(0,0,0,0); return d; }
 // El arrendamiento guarda el NOMBRE del cereal ("Soja", "Maíz") pero las
 // cotizaciones se guardan por clave en mayúsculas y sin acentos.
 function _claveGrano(g) {
-  return String(g || '').trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return String(g || '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 async function snapshotCotizaciones(dolar, cereales) {
   const fecha = _hoy0();
@@ -619,7 +619,7 @@ async function fetchNoticias() {
   // o en el mismo feed dos veces. Dedup por link normalizado y por titulo normalizado.
   const norm = (s) => (s || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')      // quitar acentos
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')      // quitar acentos
     .replace(/[^a-z0-9 ]/g, '')                            // quitar puntuacion
     .replace(/\s+/g, ' ').trim();
   const normUrl = (u) => (u || '').replace(/^https?:\/\//, '').replace(/\/+$/, '').toLowerCase();
@@ -7411,7 +7411,7 @@ function _libroMoneda(mon, cot) {
 function _libN(v, len) { const s = String(Math.abs(Math.round(Number(v) || 0))); return s.length >= len ? s.slice(-len) : '0'.repeat(len - s.length) + s; }
 function _libImp(v, len = 15) { return _libN(Math.round((Math.abs(Number(v) || 0)) * 100), len); } // 2 decimales implícitos
 function _libTC(tc) { return _libN(Math.round((Number(tc) || 1) * 1000000), 10); } // 6 decimales implícitos
-function _libTxt(v, len) { let s = String(v == null ? '' : v).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim(); if (s.length > len) s = s.slice(0, len); return s + ' '.repeat(len - s.length); }
+function _libTxt(v, len) { let s = String(v == null ? '' : v).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim(); if (s.length > len) s = s.slice(0, len); return s + ' '.repeat(len - s.length); }
 function _libDoc(cuit) { const d = String(cuit || '').replace(/\D/g, ''); if (d.length === 11) return { codDoc: '80', nroId: d.padStart(20, '0') }; if (d.length === 7 || d.length === 8) return { codDoc: '96', nroId: d.padStart(20, '0') }; return { codDoc: '99', nroId: '0'.repeat(20) }; }
 function _libFecha(d) { const x = new Date(d); return `${x.getFullYear()}${String(x.getMonth() + 1).padStart(2, '0')}${String(x.getDate()).padStart(2, '0')}`; }
 // Agrupa los items de un comprobante por alícuota → { taxed:[{alic,neto,iva}], exento, noGravado }
@@ -7618,6 +7618,274 @@ app.delete('/api/retenciones/:id', requireCompany, requirePermission('finanzas:d
     if (!ex) return res.status(404).json({ ok: false, error: 'Retención no encontrada' });
     await prisma.retencion.delete({ where: { id: ex.id } });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// IMPORTAR RETENCIONES/PERCEPCIONES SUFRIDAS desde "Mis Retenciones" de ARCA
+//   Flujo: el usuario/contador exporta el CSV desde el servicio "Mis Retenciones"
+//   (Clave Fiscal) y lo sube acá. Parseamos, deduplicamos por certificado y
+//   creamos las retenciones SUFRIDAS, vinculándolas al proveedor/cliente por CUIT.
+//   NOTA: el mapeo de columnas es tolerante (sinónimos). Cuando tengamos un
+//   archivo real de ejemplo se afina el diccionario _RET_COL_SYN.
+// ============================================================
+function _retNorm(s) { return String(s == null ? '' : s).trim().toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+function _retNumAR(s) {
+  let t = String(s == null ? '' : s).trim().replace(/\$/g, '').replace(/\s/g, '');
+  if (!t) return 0;
+  // formato AR "1.234,56" -> 1234.56 ; formato plano "1234.56" se respeta
+  if (t.includes(',') && t.includes('.')) t = t.replace(/\./g, '').replace(',', '.');
+  else if (t.includes(',')) t = t.replace(',', '.');
+  const n = parseFloat(t); return isNaN(n) ? 0 : n;
+}
+function _retCuit(s) { return String(s == null ? '' : s).replace(/\D/g, ''); }
+function _retFecha(s) {
+  const t = String(s == null ? '' : s).trim();
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);            // ISO
+  if (m) return new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00`);
+  m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/); // DD/MM/AAAA
+  if (m) { let y = m[3]; if (y.length === 2) y = '20' + y;
+    return new Date(`${y}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}T00:00:00`); }
+  const d = new Date(t); return isNaN(d.getTime()) ? null : d;
+}
+function _retImpuesto(txt) {
+  const s = _retNorm(txt);
+  if (/ganancia/.test(s) || /^217/.test(s)) return 'ganancias';
+  if (/\biva\b/.test(s) || /^767/.test(s)) return 'iva';
+  if (/ingresos brutos|iibb|\bib\b|jurisdicc/.test(s)) return 'iibb';
+  if (/suss|seguridad social|sicore|autonomo|seg\. social/.test(s)) return 'suss';
+  return 'otro';
+}
+// Diccionario de sinónimos de encabezados (ajustable al archivo real de ARCA)
+const _RET_COL_SYN = {
+  fecha:             ['fecha','fecha comprobante','fecha de comprobante','fecha operacion','fecha de operacion','fecha emision','fecha de emision','fecha retencion','fecha de retencion','fecha ret'],
+  cuit:              ['cuit','cuit agente','cuit del agente','cuit agente de retencion','cuit retenedor','cuit/cuil','cuit agente ret/perc','cuit del agente de retencion/percepcion'],
+  denominacion:      ['denominacion','razon social','agente','nombre','denominacion agente','razon social agente','agente de retencion'],
+  impuesto:          ['impuesto','descripcion impuesto','gravamen','codigo de impuesto','cod impuesto','impuesto/regimen'],
+  regimen:           ['regimen','codigo de regimen','cod regimen','regimen de retencion','descripcion regimen'],
+  jurisdiccion:      ['jurisdiccion','provincia','jurisdiccion iibb'],
+  tipoComprobante:   ['tipo comprobante','tipo de comprobante','tipo comp'],
+  numeroComprobante: ['numero comprobante','nro comprobante','numero de comprobante','comprobante nro','nro comp','comprobante'],
+  numeroCertificado: ['certificado','numero certificado','nro certificado','numero de certificado','certificado nro','nro certif','n certificado'],
+  importe:           ['importe','importe retenido','importe percibido','monto','importe retencion','importe ret/perc','importe retenido/percibido','retencion','percepcion','total retenido'],
+  clase:             ['tipo','retencion/percepcion','clase','tipo de operacion','ret/perc'],
+};
+function _retDetectDelim(line) {
+  const cands = [';', '\t', '|', ','];
+  let best = ',', bestN = -1;
+  for (const c of cands) { const n = line.split(c).length; if (n > bestN) { bestN = n; best = c; } }
+  return best;
+}
+function _retSplitLine(line, delim) {
+  // parser CSV mínimo con comillas
+  const out = []; let cur = ''; let q = false;
+  for (let i = 0; i < line.length; i++) { const ch = line[i];
+    if (q) { if (ch === '"') { if (line[i+1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else { if (ch === '"') q = true; else if (ch === delim) { out.push(cur); cur = ''; } else cur += ch; }
+  }
+  out.push(cur); return out.map(s => s.trim());
+}
+function _retParseTexto(texto) {
+  const raw = String(texto || '').replace(/^\uFEFF/, '');
+  const lines = raw.split(/\r?\n/).filter(l => l.trim() !== '');
+  if (!lines.length) return { header: [], filas: [], delim: ',' };
+  const delim = _retDetectDelim(lines[0]);
+  const header = _retSplitLine(lines[0], delim);
+  const filas = lines.slice(1).map(l => _retSplitLine(l, delim));
+  return { header, filas, delim };
+}
+function _retMapColumnas(header) {
+  const idx = {}; const hnorm = header.map(_retNorm);
+  for (const [campo, syns] of Object.entries(_RET_COL_SYN)) {
+    let found = -1;
+    for (const syn of syns) { const p = hnorm.indexOf(syn); if (p >= 0) { found = p; break; } }
+    if (found < 0) { // match parcial (contiene)
+      for (let i = 0; i < hnorm.length; i++) { if (syns.some(sy => hnorm[i].includes(sy))) { found = i; break; } }
+    }
+    idx[campo] = found;
+  }
+  return idx;
+}
+function _retFilaNormalizada(cols, idx) {
+  const g = (k) => (idx[k] >= 0 && idx[k] < cols.length) ? cols[idx[k]] : '';
+  const fecha = _retFecha(g('fecha'));
+  const importe = _retNumAR(g('importe'));
+  const claseTxt = _retNorm(g('clase'));
+  const clase = /percep/.test(claseTxt) ? 'percepcion' : 'retencion';
+  const cuit = _retCuit(g('cuit'));
+  const certificado = String(g('numeroCertificado') || '').trim();
+  const comp = [g('tipoComprobante'), g('numeroComprobante')].filter(Boolean).join(' ').trim();
+  return {
+    naturaleza: 'sufrida', clase,
+    impuesto: _retImpuesto(g('impuesto') || g('regimen')),
+    regimen: String(g('regimen') || '').trim() || null,
+    jurisdiccion: String(g('jurisdiccion') || '').trim() || null,
+    fecha: fecha ? fecha.toISOString() : null,
+    contactoNombre: String(g('denominacion') || '').trim() || null,
+    cuit: cuit || null,
+    numeroCertificado: certificado || null,
+    importe,
+    comprobanteRef: comp || null,
+    moneda: 'ARS',
+  };
+}
+function _retDedupeKey(o) {
+  const f = o.fecha ? String(o.fecha).slice(0, 10) : '';
+  return [ _retCuit(o.cuit), (o.numeroCertificado || '').trim(), Math.round(Number(o.importe || 0) * 100), f ].join('|');
+}
+
+// Vista previa: parsea el archivo y marca cuáles son nuevas y cuáles duplicadas (no escribe nada).
+app.post('/api/retenciones/import-arca/preview', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    let texto = req.body?.fileText;
+    if (!texto && req.body?.fileB64) texto = Buffer.from(String(req.body.fileB64).replace(/^data:.*?base64,/, ''), 'base64').toString('utf8');
+    if (!texto || !String(texto).trim()) return res.status(400).json({ ok: false, error: 'Subí el archivo CSV/TXT exportado de "Mis Retenciones".' });
+    const { header, filas } = _retParseTexto(texto);
+    const idx = _retMapColumnas(header);
+    const faltan = ['fecha', 'importe'].filter(k => idx[k] < 0);
+    const rows = filas.map(cols => _retFilaNormalizada(cols, idx));
+    // claves existentes en BD (sufridas) para marcar duplicados
+    const existentes = await prisma.retencion.findMany({
+      where: { companyId: req.companyId, naturaleza: 'sufrida' },
+      select: { dedupeKey: true },
+    });
+    const setBD = new Set(existentes.map(e => e.dedupeKey).filter(Boolean));
+    const vistos = new Set();
+    let nuevas = 0, dup = 0, errores = 0;
+    const out = rows.map((r, i) => {
+      const key = _retDedupeKey(r);
+      let estado = 'nueva', motivo = '';
+      if (!r.fecha || !r.importe) { estado = 'error'; motivo = 'Falta fecha o importe'; errores++; }
+      else if (setBD.has(key) || vistos.has(key)) { estado = 'duplicada'; motivo = 'Ya existe (mismo certificado/importe/fecha)'; dup++; }
+      else { nuevas++; vistos.add(key); }
+      return { fila: i + 2, ...r, dedupeKey: key, estado, motivo };
+    });
+    res.json({ ok: true,
+      columnasDetectadas: header,
+      mapeo: idx,
+      columnasFaltantes: faltan,
+      resumen: { total: out.length, nuevas, duplicadas: dup, errores },
+      filas: out,
+    });
+  } catch (e) { next(e); }
+});
+
+// Confirmar: crea las retenciones sufridas del lote (omite duplicadas por dedupeKey).
+app.post('/api/retenciones/import-arca', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const filas = Array.isArray(req.body?.filas) ? req.body.filas : [];
+    if (!filas.length) return res.status(400).json({ ok: false, error: 'No hay filas para importar.' });
+    const lote = 'ret_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    // claves existentes para no duplicar
+    const existentes = await prisma.retencion.findMany({ where: { companyId: req.companyId, naturaleza: 'sufrida' }, select: { dedupeKey: true } });
+    const setBD = new Set(existentes.map(e => e.dedupeKey).filter(Boolean));
+    // cache de proveedores/clientes por CUIT
+    const provs = await prisma.proveedor.findMany({ where: { companyId: req.companyId }, select: { id: true, cuit: true, razonSocial: true } });
+    const clis  = await prisma.cliente.findMany({ where: { companyId: req.companyId }, select: { id: true, cuit: true, razonSocial: true } });
+    const provByCuit = new Map(provs.filter(p => p.cuit).map(p => [_retCuit(p.cuit), p]));
+    const cliByCuit  = new Map(clis.filter(c => c.cuit).map(c => [_retCuit(c.cuit), c]));
+    let creadas = 0, omitidas = 0;
+    const vistos = new Set();
+    for (const f of filas) {
+      const key = f.dedupeKey || _retDedupeKey(f);
+      const fecha = f.fecha ? new Date(f.fecha) : null;
+      if (!fecha || isNaN(fecha.getTime()) || !Number(f.importe)) { omitidas++; continue; }
+      if (setBD.has(key) || vistos.has(key)) { omitidas++; continue; }
+      vistos.add(key);
+      const cuit = _retCuit(f.cuit);
+      const prov = cuit ? provByCuit.get(cuit) : null;
+      const cli  = (!prov && cuit) ? cliByCuit.get(cuit) : null;
+      await prisma.retencion.create({ data: {
+        companyId: req.companyId, naturaleza: 'sufrida', clase: f.clase || 'retencion',
+        impuesto: _RET_IMPUESTOS.includes(f.impuesto) ? f.impuesto : 'otro',
+        regimen: f.regimen || null, jurisdiccion: f.jurisdiccion || null, fecha,
+        contactoTipo: prov ? 'proveedor' : (cli ? 'cliente' : null),
+        contactoId: prov?.id || cli?.id || null,
+        contactoNombre: f.contactoNombre || prov?.razonSocial || cli?.razonSocial || null,
+        cuit: cuit || null, numeroCertificado: f.numeroCertificado || null,
+        baseImponible: f.baseImponible ?? null, alicuota: f.alicuota ?? null,
+        importe: Number(f.importe), comprobanteRef: f.comprobanteRef || null, moneda: f.moneda || 'ARS',
+        observaciones: f.observaciones || null,
+        origen: 'arca_csv', importLote: lote, dedupeKey: key,
+        userId: req.user?.id || null,
+      }});
+      creadas++;
+    }
+    res.status(201).json({ ok: true, lote, creadas, omitidas });
+  } catch (e) { next(e); }
+});
+
+// Deshacer una importación completa (por lote).
+app.delete('/api/retenciones/import-arca/:lote', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const r = await prisma.retencion.deleteMany({ where: { companyId: req.companyId, importLote: req.params.lote } });
+    res.json({ ok: true, eliminadas: r.count });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// EXPORTAR RETENCIONES PRACTICADAS a SICORE / SIRE (.txt de ancho fijo)
+//   Para que el contador presente en ARCA lo que la empresa le retuvo a terceros.
+//   IMPORTANTE: el layout de abajo (_SICORE_LAYOUT) es la estructura clásica de
+//   SICORE. Los anchos/códigos exactos se validan contra un archivo real del
+//   contador; están todos en un solo lugar para ajustarlos fácil.
+// ============================================================
+function _padNum(v, len) { let s = String(Math.abs(Math.round(Number(v || 0)))); return s.length >= len ? s.slice(-len) : ('0'.repeat(len - s.length) + s); }
+function _padTxt(v, len) { let s = String(v == null ? '' : v).toUpperCase().replace(/[^\x20-\x7E]/g, ' '); return s.length >= len ? s.slice(0, len) : (s + ' '.repeat(len - s.length)); }
+function _fechaDDMMAAAA(d) { const x = new Date(d); const p = n => String(n).padStart(2, '0'); return `${p(x.getDate())}/${p(x.getMonth() + 1)}/${x.getFullYear()}`; }
+// Código de impuesto ARCA por gravamen (placeholder — validar con el contador)
+const _SICORE_COD_IMPUESTO = { ganancias: '0217', iva: '0767', iibb: '0000', suss: '0351', otro: '0000' };
+// Layout SICORE: [campo, longitud, tipo ('N'|'A'|'F'|'I'), fn(reg)]
+//   N=numérico (ceros izq), A=alfanumérico (espacios der), F=fecha DD/MM/AAAA, I=importe*100
+const _SICORE_LAYOUT = [
+  ['codComprobante', 2,  'N', r => 1],
+  ['fechaComprobante', 10, 'F', r => r.fecha],
+  ['numComprobante', 16, 'N', r => (r.comprobanteRef || '').replace(/\D/g, '') || 0],
+  ['importeComprobante', 16, 'I', r => r.importe],
+  ['codImpuesto', 4, 'A', r => _SICORE_COD_IMPUESTO[r.impuesto] || '0000'],
+  ['codRegimen', 3, 'N', r => (r.regimen || '').replace(/\D/g, '') || 0],
+  ['codOperacion', 1, 'N', r => 1],
+  ['baseCalculo', 14, 'I', r => (r.baseImponible != null ? r.baseImponible : r.importe)],
+  ['fechaRetencion', 10, 'F', r => r.fecha],
+  ['codCondicion', 2, 'N', r => 1],
+  ['suspendido', 1, 'N', r => 0],
+  ['importeRetencion', 14, 'I', r => r.importe],
+  ['porcExclusion', 6, 'N', r => 0],
+  ['fechaResolucion', 10, 'A', r => '00/00/0000'],
+  ['tipoDocRetenido', 2, 'N', r => 80],           // 80 = CUIT
+  ['numDocRetenido', 20, 'N', r => (r.cuit || '').replace(/\D/g, '') || 0],
+  ['numCertificado', 14, 'N', r => (r.numeroCertificado || '').replace(/\D/g, '') || 0],
+];
+function _sicoreLinea(r) {
+  let out = '';
+  for (const [, len, tipo, fn] of _SICORE_LAYOUT) {
+    const v = fn(r);
+    if (tipo === 'N') out += _padNum(v, len);
+    else if (tipo === 'I') out += _padNum(Math.round(Number(v || 0) * 100), len);
+    else if (tipo === 'F') out += _padTxt(_fechaDDMMAAAA(v), len);
+    else out += _padTxt(v, len);
+  }
+  return out;
+}
+
+app.get('/api/retenciones/export-sicore', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const formato = String(req.query.formato || 'sicore').toLowerCase(); // 'sicore' | 'sire'
+    const where = { companyId: req.companyId, naturaleza: 'practicada' };
+    if (req.query.impuesto) where.impuesto = String(req.query.impuesto);
+    if (req.query.desde || req.query.hasta) {
+      where.fecha = {};
+      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde) + 'T00:00:00');
+      if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59');
+    }
+    const rows = await prisma.retencion.findMany({ where, orderBy: [{ fecha: 'asc' }] });
+    const contenido = rows.map(_sicoreLinea).join('\r\n') + (rows.length ? '\r\n' : '');
+    const per = `${String(req.query.desde || '').slice(0, 7)}`.replace(/-/g, '') || 'periodo';
+    const filename = `${formato.toUpperCase()}_practicadas_${per}_PROVISORIO.txt`;
+    res.json({ ok: true, formato, registros: rows.length, filename, contenido,
+      advertencia: 'Archivo PROVISORIO: validá el layout (anchos y códigos de impuesto/régimen) contra un archivo real de tu contador antes de presentarlo en ARCA.',
+    });
   } catch (e) { next(e); }
 });
 
@@ -8420,7 +8688,7 @@ app.put('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission('ve
 // Chat de equipo (canal general) + asistente que interpreta frases y carga.
 // ============================================================
 const _permOk = (req, p) => req.user?.superAdmin || hasPermission(req.membership?.role?.permissions || [], p);
-const _sinAcentos = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const _sinAcentos = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 const _nombreUser = (u) => [u?.nombre, u?.apellido].filter(Boolean).join(' ') || u?.alias || u?.email || 'Usuario';
 
 // Contexto (campos + categorías + lotes + campañas) para interpretar.

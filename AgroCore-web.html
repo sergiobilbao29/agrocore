@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'20/08/2026',
+      titulo:'🏦 v2.116.0 — Importar retenciones de ARCA + exportar SICORE/SIRE',
+      desc:'Dos funciones nuevas en <b>Tesorería → Retenciones</b>. <b>(1) Importar de ARCA (CSV):</b> el usuario o el contador exporta el archivo del servicio <b>"Mis Retenciones"</b> de ARCA (con Clave Fiscal) y lo sube al sistema. AgroCore lee todas las filas, detecta el <b>impuesto</b>, el <b>régimen</b>, el <b>N° de certificado</b>, el <b>CUIT del agente</b> y el <b>importe</b>, y carga las <b>retenciones sufridas</b> de una vez. Muestra una <b>vista previa</b> marcando cuáles son <b>nuevas</b>, cuáles ya estaban (no las duplica) y cuáles tienen error; las vincula al <b>proveedor/cliente por CUIT</b> y podés <b>deshacer</b> la importación completa. <b>(2) Exportar SICORE/SIRE:</b> botón <b>📄 Exportar SICORE/SIRE</b> que genera el archivo <b>.txt</b> de ancho fijo con las <b>retenciones practicadas</b> (las que le hiciste a proveedores) para presentar en ARCA. <i>Nota:</i> el archivo sale marcado como <b>PROVISORIO</b> hasta validar el layout exacto contra un archivo real del contador.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/08/2026',
       titulo:'↔️ v2.115.0 — Transferir un cheque a otra empresa del grupo + Cheques en PDF',
       desc:'Dos cosas en <b>Tesorería → Cheques</b>. <b>(1) Transferir un cheque de terceros a otra empresa del grupo:</b> en cada cheque <b>en cartera</b> hay un botón <b>↔️</b>. Elegís la empresa destino y el cheque <b>sale de tu cartera</b> (queda como "Transferido a otra empresa") y aparece <b>en la cartera de la otra empresa</b>, con una nota que deja asentado <b>de dónde vino</b>. Desde ahí esa empresa lo puede <b>depositar o vender en su propio banco</b>, así el dinero se acredita en el banco de esa firma. <i>No</i> genera deuda entre las empresas (solo mueve el cheque). <b>(2) Exportar cheques a PDF:</b> además del Excel, ahora hay un botón <b>📄 Exportar PDF</b> que descarga la lista que estás viendo (respeta los filtros) con el total al pie, listo para imprimir o mandar.' },
@@ -28706,10 +28709,13 @@ pages.retenciones = async function() {
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-1 flex-wrap">${chip('todas','Todas')}${chip('sufrida','📥 Sufridas')}${chip('practicada','📤 Practicadas')}</div>
       <div class="flex items-center gap-2">
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="retArcaImport()" title="Subir el CSV de 'Mis Retenciones' de ARCA y cargar las retenciones sufridas">🏦 Importar de ARCA (CSV)</button>`:''}
+        ${can('finanzas:read')?`<button class="btn btn-secondary" onclick="retSicoreExport()" title="Exportar las retenciones practicadas a SICORE/SIRE (.txt) para presentar en ARCA">📄 Exportar SICORE/SIRE</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="retImportar()" title="Subir el PDF de una Orden de Pago y cargar sus retenciones solas">📥 Importar OP (PDF)</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="retForm()">+ Nueva retención</button>`:''}
       </div>
       <input type="file" id="ret-op-file" accept=".pdf" class="hidden" onchange="retImportarSubir(this)"/>
+      <input type="file" id="ret-arca-file" accept=".csv,.txt" class="hidden" onchange="retArcaSubir(this)"/>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Registros</div><div class="text-2xl font-bold mt-1">${rows.length}</div></div>
@@ -28739,6 +28745,119 @@ pages.retenciones = async function() {
     </div>
     <div class="text-[11px] text-slate-400 mt-3">Estos certificados se exportan al contador desde <b>Administración → Exportar para contador</b> (hoja "Retenciones").</div>`;
 };
+
+// ---------- Importar retenciones SUFRIDAS desde el CSV de "Mis Retenciones" de ARCA ----------
+function retArcaImport() { document.getElementById('ret-arca-file')?.click(); }
+async function retArcaSubir(input) {
+  const f = input.files?.[0]; if (!f) return; input.value = '';
+  toast('Leyendo el archivo de ARCA…', 'info');
+  try {
+    // ARCA suele exportar en Latin-1; lo leemos así para respetar ñ/acentos.
+    const texto = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; try { r.readAsText(f, 'ISO-8859-1'); } catch { r.readAsText(f); } });
+    const j = await api('/api/retenciones/import-arca/preview', { method: 'POST', body: JSON.stringify({ fileText: texto }) });
+    retArcaPreview(j);
+  } catch (e) { toast(e.message || 'No pude leer el archivo', 'error'); }
+}
+function retArcaPreview(j) {
+  state._retArca = j;
+  const r = j.resumen || {};
+  const falt = (j.columnasFaltantes || []);
+  const badge = (est) => est === 'nueva' ? '<span class="badge badge-green text-[10px]">nueva</span>'
+    : est === 'duplicada' ? '<span class="badge text-[10px] bg-amber-100 text-amber-800 border-amber-300">duplicada</span>'
+    : '<span class="badge text-[10px] bg-red-100 text-red-700 border-red-300">error</span>';
+  const filas = (j.filas || []).slice(0, 200).map(x => `
+    <tr class="border-b">
+      <td class="p-1">${badge(x.estado)}</td>
+      <td class="p-1 whitespace-nowrap">${x.fecha ? fmtFecha(x.fecha) : '—'}</td>
+      <td class="p-1">${esc(RET_IMPUESTOS[x.impuesto] || x.impuesto)}${x.clase === 'percepcion' ? ' <span class="text-[10px] text-slate-400">(perc.)</span>' : ''}</td>
+      <td class="p-1">${esc(x.contactoNombre || '')}<div class="text-[10px] text-slate-400">${esc(x.cuit || '')}</div></td>
+      <td class="p-1">${esc(x.numeroCertificado || '—')}</td>
+      <td class="p-1 text-right font-semibold">${fmt$(x.importe)}</td>
+    </tr>`).join('');
+  openModal({
+    title: '🏦 Importar retenciones sufridas de ARCA',
+    size: 'max-w-5xl',
+    body: `
+      ${falt.length ? `<div class="mb-2 p-2 rounded bg-red-50 border border-red-200 text-xs text-red-700">No encontré las columnas: <b>${falt.join(', ')}</b>. Revisá que el archivo sea el CSV de "Mis Retenciones". Columnas detectadas: ${esc((j.columnasDetectadas || []).join(' · '))}</div>` : ''}
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-center">
+        <div class="kpi"><div class="text-xs text-slate-500">Total filas</div><div class="text-xl font-bold">${r.total || 0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Nuevas</div><div class="text-xl font-bold text-emerald-700">${r.nuevas || 0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Duplicadas</div><div class="text-xl font-bold text-amber-700">${r.duplicadas || 0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Con error</div><div class="text-xl font-bold text-red-600">${r.errores || 0}</div></div>
+      </div>
+      <div class="text-[11px] text-slate-400 mb-1">Se importarán solo las <b>nuevas</b>. Las duplicadas (mismo certificado/importe/fecha) se omiten. Se vinculan al proveedor/cliente por CUIT si existe.</div>
+      <div class="overflow-x-auto max-h-80 border rounded">
+        <table class="w-full text-xs">
+          <thead class="sticky top-0 bg-slate-50"><tr class="text-left text-slate-500 border-b">
+            <th class="p-1">Estado</th><th class="p-1">Fecha</th><th class="p-1">Impuesto</th><th class="p-1">Agente</th><th class="p-1">Certificado</th><th class="p-1 text-right">Importe</th>
+          </tr></thead>
+          <tbody>${filas || '<tr><td colspan="6" class="p-4 text-center text-slate-400">Sin filas.</td></tr>'}</tbody>
+        </table>
+      </div>
+      ${(j.filas || []).length > 200 ? `<div class="text-[11px] text-slate-400 mt-1">Mostrando las primeras 200 de ${(j.filas || []).length} filas (se importan todas las nuevas).</div>` : ''}`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="retArcaConfirmar()" ${(r.nuevas || 0) ? '' : 'disabled'}>Importar ${r.nuevas || 0} nuevas</button>`,
+  });
+}
+async function retArcaConfirmar() {
+  const j = state._retArca; if (!j) return;
+  const nuevas = (j.filas || []).filter(x => x.estado === 'nueva');
+  if (!nuevas.length) return toast('No hay filas nuevas para importar', 'info');
+  try {
+    const res = await api('/api/retenciones/import-arca', { method: 'POST', body: JSON.stringify({ filas: nuevas }) });
+    closeModal();
+    toast(`✓ Importadas ${res.creadas} retenciones${res.omitidas ? ` (${res.omitidas} omitidas)` : ''}`, 'success');
+    if (res.lote) state._retUltimoLote = res.lote;
+    await pages.retenciones();
+    if (res.lote && res.creadas) {
+      setTimeout(() => { if (confirm(`Se importaron ${res.creadas} retenciones. ¿Querés DESHACER esta importación?`)) retArcaDeshacer(res.lote); }, 300);
+    }
+  } catch (e) { toast(e.message || 'Error al importar', 'error'); }
+}
+async function retArcaDeshacer(lote) {
+  try {
+    const res = await api('/api/retenciones/import-arca/' + encodeURIComponent(lote), { method: 'DELETE' });
+    toast(`Importación deshecha (${res.eliminadas} eliminadas)`, 'info');
+    await pages.retenciones();
+  } catch (e) { toast(e.message || 'No pude deshacer', 'error'); }
+}
+
+// ---------- Exportar retenciones PRACTICADAS a SICORE / SIRE (.txt) ----------
+function retSicoreExport() {
+  const hoy = new Date();
+  const primero = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0, 10);
+  const ultimo = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).toISOString().slice(0, 10);
+  openModal({
+    title: '📄 Exportar practicadas a SICORE / SIRE',
+    size: 'max-w-lg',
+    body: `
+      <div class="p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800 mb-3">⚠️ Archivo <b>provisorio</b>: el layout (anchos y códigos) hay que validarlo con un archivo real de tu contador antes de presentarlo en ARCA.</div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Desde</label><input id="sic-desde" type="date" class="input" value="${primero}"/></div>
+        <div><label class="label">Hasta</label><input id="sic-hasta" type="date" class="input" value="${ultimo}"/></div>
+        <div><label class="label">Formato</label><select id="sic-formato" class="input"><option value="sicore">SICORE</option><option value="sire">SIRE</option></select></div>
+        <div><label class="label">Impuesto</label><select id="sic-imp" class="input"><option value="">Todos</option>${Object.entries(RET_IMPUESTOS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="retSicoreDescargar()">Generar .txt</button>`,
+  });
+}
+async function retSicoreDescargar() {
+  const desde = $('#sic-desde')?.value, hasta = $('#sic-hasta')?.value;
+  const formato = $('#sic-formato')?.value || 'sicore', imp = $('#sic-imp')?.value || '';
+  const qs = new URLSearchParams({ desde: desde || '', hasta: hasta || '', formato });
+  if (imp) qs.set('impuesto', imp);
+  try {
+    const j = await api('/api/retenciones/export-sicore?' + qs.toString());
+    if (!j.registros) { toast('No hay retenciones practicadas en ese período', 'info'); return; }
+    const blob = new Blob([j.contenido], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = url; a.download = j.filename || 'sicore.txt'; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(url);
+    closeModal();
+    toast(`✓ Generado ${j.filename} (${j.registros} registros). ${j.advertencia || ''}`, 'success');
+  } catch (e) { toast(e.message || 'Error al generar el archivo', 'error'); }
+}
 
 function retForm(id) {
   const r = id ? (state._retenciones || []).find(x => x.id === id) : null;
