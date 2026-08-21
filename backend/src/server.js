@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.117.0';
+const AGROCORE_VERSION = '2.118.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7898,7 +7898,14 @@ app.get('/api/retenciones/export-sicore', requireCompany, requirePermission('fin
   try {
     const formato = String(req.query.formato || 'sicore').toLowerCase(); // 'sicore' | 'sire'
     const where = { companyId: req.companyId, naturaleza: 'practicada' };
-    if (req.query.impuesto) where.impuesto = String(req.query.impuesto);
+    // SICORE/SIRE es SOLO Nacional: Ganancias, IVA, SUSS. IIBB va por SIRCAR.
+    if (req.query.impuesto) {
+      const imp = String(req.query.impuesto).toLowerCase();
+      if (imp === 'iibb') return res.status(400).json({ ok: false, error: 'IIBB no se presenta en SICORE. Usá el exportador SIRCAR (Ingresos Brutos).' });
+      where.impuesto = imp;
+    } else {
+      where.impuesto = { in: ['ganancias', 'iva', 'suss'] };
+    }
     if (req.query.desde || req.query.hasta) {
       where.fecha = {};
       if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde) + 'T00:00:00');
@@ -7910,6 +7917,61 @@ app.get('/api/retenciones/export-sicore', requireCompany, requirePermission('fin
     const filename = `${formato.toUpperCase()}_practicadas_${per}_PROVISORIO.txt`;
     res.json({ ok: true, formato, registros: rows.length, filename, contenido,
       advertencia: 'Archivo PROVISORIO: validá el layout (anchos y códigos de impuesto/régimen) contra un archivo real de tu contador antes de presentarlo en ARCA.',
+    });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// EXPORTAR IIBB PRACTICADAS a SIRCAR (Convenio Multilateral, provincial)
+//   IIBB NO va en SICORE. SIRCAR unifica todas las provincias en un solo .txt,
+//   con el código de jurisdicción (3 dígitos) en cada renglón.
+//   Códigos oficiales de Convenio Multilateral. Formato PROVISORIO (delimitado ; ).
+// ============================================================
+const _JURISDICCIONES = {
+  '901':'CABA','902':'Buenos Aires','903':'Catamarca','904':'Cordoba','905':'Corrientes',
+  '906':'Chaco','907':'Chubut','908':'Entre Rios','909':'Formosa','910':'Jujuy',
+  '911':'La Pampa','912':'La Rioja','913':'Mendoza','914':'Misiones','915':'Neuquen',
+  '916':'Rio Negro','917':'Salta','918':'San Juan','919':'San Luis','920':'Santa Cruz',
+  '921':'Santa Fe','922':'Santiago del Estero','923':'Tucuman','924':'Tierra del Fuego',
+};
+const _JURIS_NOMBRE_A_COD = Object.fromEntries(Object.entries(_JURISDICCIONES).map(([c, n]) => [_retNorm(n), c]));
+function _jurisCodigo(j) {
+  const s = String(j || '').trim();
+  if (/^\d{3}$/.test(s)) return s;
+  return _JURIS_NOMBRE_A_COD[_retNorm(s)] || '';
+}
+function _sircarImp(v) { return Math.abs(Number(v || 0)).toFixed(2).replace('.', ','); }
+function _sircarLinea(r) {
+  const dig = s => String(s == null ? '' : s).replace(/\D/g, '');
+  const tipoComp = /certific/i.test(r.comprobanteRef || '') ? '06' : '01';
+  return [
+    _jurisCodigo(r.jurisdiccion),                                 // código de jurisdicción (3)
+    dig(r.cuit),                                                  // CUIT del retenido
+    _fechaDDMMAAAA(r.fecha),                                      // fecha de retención
+    tipoComp,                                                     // tipo de comprobante
+    dig(r.comprobanteRef),                                        // número de comprobante
+    _sircarImp(r.baseImponible != null ? r.baseImponible : r.importe), // monto base
+    _sircarImp(r.alicuota),                                       // alícuota %
+    _sircarImp(r.importe),                                        // monto retenido
+  ].join(';');
+}
+
+app.get('/api/retenciones/export-sircar', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId, naturaleza: 'practicada', impuesto: 'iibb' };
+    if (req.query.desde || req.query.hasta) {
+      where.fecha = {};
+      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde) + 'T00:00:00');
+      if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59');
+    }
+    const rows = await prisma.retencion.findMany({ where, orderBy: [{ fecha: 'asc' }] });
+    const sinJur = rows.filter(r => !_jurisCodigo(r.jurisdiccion)).length;
+    const header = 'Jurisdiccion;CUIT;Fecha;TipoComp;NroComp;Base;Alicuota;Retenido';
+    const contenido = [header, ...rows.map(_sircarLinea)].join('\r\n') + (rows.length ? '\r\n' : '');
+    const per = `${String(req.query.desde || '').slice(0, 7)}`.replace(/-/g, '') || 'periodo';
+    const filename = `SIRCAR_IIBB_${per}_PROVISORIO.txt`;
+    res.json({ ok: true, sistema: 'sircar', registros: rows.length, sinJurisdiccion: sinJur, filename, contenido,
+      advertencia: 'Archivo PROVISORIO de IIBB (SIRCAR). Verificá los códigos de jurisdicción y el formato con tu contador/aplicativo antes de presentar.',
     });
   } catch (e) { next(e); }
 });

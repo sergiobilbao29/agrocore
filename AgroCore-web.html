@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'20/08/2026',
+      titulo:'🗓️ v2.118.0 — Retenciones: filtro por fechas y SICORE separado de IIBB (SIRCAR)',
+      desc:'Dos mejoras en <b>Tesorería → Retenciones</b>. <b>(1) Filtro por fechas:</b> arriba tenés <b>Desde/Hasta</b> y por defecto trae el <b>mes en curso</b>; los totales y el listado respetan el período. <b>(2) Separamos Nacional de Provincial en la exportación:</b> al Exportar elegís el <b>sistema</b>. <b>SICORE/SIRE</b> arma el archivo Nacional (solo <b>Ganancias, IVA y SUSS</b>) — IIBB ya no se cuela ahí, porque ARCA lo rechazaría. Para <b>Ingresos Brutos</b> hay una opción nueva <b>SIRCAR</b> que junta todas las provincias en un archivo con el <b>código de jurisdicción</b> en cada renglón. Además, al cargar una retención de IIBB ahora elegís la <b>provincia</b> de una lista con su código oficial (901 CABA, 904 Córdoba, 921 Santa Fe, etc.).' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'20/08/2026',
       titulo:'🏦 v2.117.0 — Retenciones de ARCA: lee el archivo real y el SICORE quedó al formato oficial',
       desc:'Afinamos las dos puntas con los archivos reales de ARCA. <b>(1) Importar sufridas:</b> en <b>Tesorería → Retenciones → 🏦 Importar de ARCA</b> ahora podés subir tanto el <b>Excel (.xls/.xlsx)</b> del servicio <b>"Mis Retenciones"</b> como el <b>CSV</b>; reconoce las columnas tal cual vienen (CUIT del agente, denominación, impuesto, régimen, N° de certificado, fecha, tipo de operación e importe), detecta bien si es <b>retención o percepción</b> y el <b>impuesto</b> (IVA, Ganancias), y carga con vista previa, anti-duplicados y "deshacer". <b>(2) Exportar practicadas:</b> el archivo <b>SICORE (.txt)</b> ahora respeta el <b>diseño oficial de ancho fijo de 187 caracteres</b> (tipo y fecha de comprobante, importe con coma decimal, códigos de impuesto/régimen, base, CUIT del retenido y N° de certificado en su posición exacta). Verificado con un export real de "Mis Retenciones" y con el layout de SICORE.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'20/08/2026',
@@ -28693,13 +28696,20 @@ const BANCO_TIPOS = {
 // practicados (los hacemos al pagar). Ganancias, IVA, IIBB, SUSS/SICORE.
 // ══════════════════════════════════════════════════════════════════════════════
 const RET_IMPUESTOS = { ganancias:'Ganancias', iva:'IVA', iibb:'IIBB', suss:'SUSS / SICORE', otro:'Otro' };
+// Códigos oficiales de jurisdicción (Convenio Multilateral) para IIBB / SIRCAR.
+const JURISDICCIONES = { '901':'CABA','902':'Buenos Aires','903':'Catamarca','904':'Córdoba','905':'Corrientes','906':'Chaco','907':'Chubut','908':'Entre Ríos','909':'Formosa','910':'Jujuy','911':'La Pampa','912':'La Rioja','913':'Mendoza','914':'Misiones','915':'Neuquén','916':'Río Negro','917':'Salta','918':'San Juan','919':'San Luis','920':'Santa Cruz','921':'Santa Fe','922':'Santiago del Estero','923':'Tucumán','924':'Tierra del Fuego' };
+function jurisNombre(j){ const s=String(j||'').trim(); return JURISDICCIONES[s] ? (s+' - '+JURISDICCIONES[s]) : s; }
+function jurisCodigo(j){ const s=String(j||'').trim(); if(JURISDICCIONES[s]) return s; const n=s.toLowerCase(); const hit=Object.entries(JURISDICCIONES).find(([,v])=>v.toLowerCase()===n); return hit?hit[0]:s; }
+function retMesDefaults(){ const h=new Date(); const iso=x=>x.toISOString().slice(0,10); return { desde: iso(new Date(h.getFullYear(),h.getMonth(),1)), hasta: iso(new Date(h.getFullYear(),h.getMonth()+1,0)) }; }
 
 pages.retenciones = async function() {
   setHeader('Retenciones y percepciones', 'Certificados sufridos (nos retienen al cobrar/vender) y practicados (retenemos al pagar) — Ganancias, IVA, IIBB, SUSS');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('retenciones','Retenciones'); return; }
+  if (!state._retDesde || !state._retHasta) { const d = retMesDefaults(); state._retDesde = d.desde; state._retHasta = d.hasta; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows = [];
-  try { rows = (await api('/api/retenciones')).data || []; } catch (e) { return toast(e.message,'error'); }
+  const _rq = new URLSearchParams({ desde: state._retDesde, hasta: state._retHasta });
+  try { rows = (await api('/api/retenciones?' + _rq.toString())).data || []; } catch (e) { return toast(e.message,'error'); }
   state._retenciones = rows;
   if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data || []; } catch { state.cache.clientes = []; } }
   if (!state.cache.proveedores) { try { state.cache.proveedores = (await api('/api/proveedores')).data || []; } catch { state.cache.proveedores = []; } }
@@ -28711,6 +28721,10 @@ pages.retenciones = async function() {
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-1 flex-wrap">${chip('todas','Todas')}${chip('sufrida','📥 Sufridas')}${chip('practicada','📤 Practicadas')}</div>
+      <div class="flex items-center gap-1.5 text-xs">
+        <label class="text-slate-500">Desde</label><input type="date" class="input py-1 text-xs w-auto" value="${state._retDesde}" onchange="state._retDesde=this.value; pages.retenciones()"/>
+        <label class="text-slate-500">Hasta</label><input type="date" class="input py-1 text-xs w-auto" value="${state._retHasta}" onchange="state._retHasta=this.value; pages.retenciones()"/>
+      </div>
       <div class="flex items-center gap-2">
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="retArcaImport()" title="Subir el Excel de 'Mis Retenciones' de ARCA (.xls/.xlsx) y cargar las retenciones/percepciones sufridas">🏦 Importar de ARCA (Excel)</button>`:''}
         ${can('finanzas:read')?`<button class="btn btn-secondary" onclick="retSicoreExport()" title="Exportar las retenciones practicadas a SICORE/SIRE (.txt) para presentar en ARCA">📄 Exportar SICORE/SIRE</button>`:''}
@@ -28734,7 +28748,7 @@ pages.retenciones = async function() {
           ${vis.map(r => `<tr class="border-b hover:bg-slate-50">
             <td class="p-2 whitespace-nowrap">${fmtFecha(r.fecha)}</td>
             <td class="p-2">${r.naturaleza==='sufrida'?'<span class="badge badge-green text-[10px]">📥 Sufrida</span>':'<span class="badge text-[10px] bg-amber-100 text-amber-800 border-amber-300">📤 Practicada</span>'}</td>
-            <td class="p-2">${esc(RET_IMPUESTOS[r.impuesto]||r.impuesto)}${r.clase==='percepcion'?' <span class="text-[10px] text-slate-400">(percep.)</span>':''}${r.jurisdiccion?` <span class="text-[10px] text-slate-400">${esc(r.jurisdiccion)}</span>`:''}</td>
+            <td class="p-2">${esc(RET_IMPUESTOS[r.impuesto]||r.impuesto)}${r.clase==='percepcion'?' <span class="text-[10px] text-slate-400">(percep.)</span>':''}${r.jurisdiccion?` <span class="text-[10px] text-slate-400">${esc(jurisNombre(r.jurisdiccion))}</span>`:''}</td>
             <td class="p-2">${esc(r.contactoNombre||'')}${r.cuit?`<div class="text-[10px] text-slate-400">${esc(r.cuit)}</div>`:''}</td>
             <td class="p-2">${esc(r.numeroCertificado||'—')}</td>
             <td class="p-2 text-right font-semibold">${fmt$(r.importe)}</td>
@@ -28825,40 +28839,60 @@ async function retArcaDeshacer(lote) {
   } catch (e) { toast(e.message || 'No pude deshacer', 'error'); }
 }
 
-// ---------- Exportar retenciones PRACTICADAS a SICORE / SIRE (.txt) ----------
+// ---------- Exportar retenciones PRACTICADAS: SICORE/SIRE (Nacional) o SIRCAR (IIBB) ----------
 function retSicoreExport() {
-  const hoy = new Date();
-  const primero = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().slice(0, 10);
-  const ultimo = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).toISOString().slice(0, 10);
+  const d = retMesDefaults();
+  const desde = state._retDesde || d.desde, hasta = state._retHasta || d.hasta;
   openModal({
-    title: '📄 Exportar practicadas a SICORE / SIRE',
+    title: '📄 Exportar retenciones practicadas',
     size: 'max-w-lg',
     body: `
-      <div class="p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800 mb-3">⚠️ Archivo <b>provisorio</b>: el layout (anchos y códigos) hay que validarlo con un archivo real de tu contador antes de presentarlo en ARCA.</div>
       <div class="grid grid-cols-2 gap-3">
-        <div><label class="label">Desde</label><input id="sic-desde" type="date" class="input" value="${primero}"/></div>
-        <div><label class="label">Hasta</label><input id="sic-hasta" type="date" class="input" value="${ultimo}"/></div>
-        <div><label class="label">Formato</label><select id="sic-formato" class="input"><option value="sicore">SICORE</option><option value="sire">SIRE</option></select></div>
-        <div><label class="label">Impuesto</label><select id="sic-imp" class="input"><option value="">Todos</option>${Object.entries(RET_IMPUESTOS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
-      </div>`,
+        <div class="col-span-2"><label class="label">Sistema / destino</label>
+          <select id="exp-sistema" class="input" onchange="retExpSistema()">
+            <option value="sicore">SICORE / SIRE — Nacional (Ganancias, IVA, SUSS)</option>
+            <option value="sircar">SIRCAR — Ingresos Brutos (IIBB, provincial)</option>
+          </select></div>
+        <div><label class="label">Desde</label><input id="exp-desde" type="date" class="input" value="${desde}"/></div>
+        <div><label class="label">Hasta</label><input id="exp-hasta" type="date" class="input" value="${hasta}"/></div>
+        <div class="col-span-2" id="exp-extra"></div>
+      </div>
+      <div id="exp-nota" class="mt-3"></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="retSicoreDescargar()">Generar .txt</button>`,
+             <button class="btn btn-primary" onclick="retExpDescargar()">Generar .txt</button>`,
   });
+  retExpSistema();
 }
-async function retSicoreDescargar() {
-  const desde = $('#sic-desde')?.value, hasta = $('#sic-hasta')?.value;
-  const formato = $('#sic-formato')?.value || 'sicore', imp = $('#sic-imp')?.value || '';
-  const qs = new URLSearchParams({ desde: desde || '', hasta: hasta || '', formato });
-  if (imp) qs.set('impuesto', imp);
+function retExpSistema() {
+  const sis = $('#exp-sistema')?.value || 'sicore';
+  const extra = $('#exp-extra'), nota = $('#exp-nota');
+  if (sis === 'sicore') {
+    extra.innerHTML = `<label class="label">Impuesto</label>
+      <select id="exp-imp" class="input"><option value="">Todos los nacionales (Ganancias, IVA, SUSS)</option>
+        <option value="ganancias">Ganancias</option><option value="iva">IVA</option><option value="suss">SUSS</option></select>`;
+    nota.innerHTML = `<div class="p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">⚠️ Archivo <b>provisorio</b> (187 caracteres): validá el layout con tu contador. <b>IIBB no entra en SICORE</b> — para Ingresos Brutos usá SIRCAR.</div>`;
+  } else {
+    extra.innerHTML = `<div class="p-2 rounded bg-sky-50 border border-sky-200 text-xs text-sky-800">Exporta las <b>IIBB practicadas</b> de todas las provincias en un archivo, con el <b>código de jurisdicción</b> en cada renglón. Cargá la provincia en cada retención de IIBB.</div>`;
+    nota.innerHTML = `<div class="p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">⚠️ SIRCAR <b>provisorio</b>: verificá jurisdicciones y formato con tu contador/aplicativo.</div>`;
+  }
+}
+async function retExpDescargar() {
+  const sis = $('#exp-sistema')?.value || 'sicore';
+  const desde = $('#exp-desde')?.value, hasta = $('#exp-hasta')?.value;
+  const qs = new URLSearchParams({ desde: desde || '', hasta: hasta || '' });
+  let url;
+  if (sis === 'sircar') { url = '/api/retenciones/export-sircar?' + qs.toString(); }
+  else { qs.set('formato', 'sicore'); const imp = $('#exp-imp')?.value || ''; if (imp) qs.set('impuesto', imp); url = '/api/retenciones/export-sicore?' + qs.toString(); }
   try {
-    const j = await api('/api/retenciones/export-sicore?' + qs.toString());
-    if (!j.registros) { toast('No hay retenciones practicadas en ese período', 'info'); return; }
+    const j = await api(url);
+    if (!j.registros) { toast(sis === 'sircar' ? 'No hay IIBB practicadas en ese período' : 'No hay retenciones nacionales practicadas en ese período', 'info'); return; }
     const blob = new Blob([j.contenido], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob); const a = document.createElement('a');
-    a.href = url; a.download = j.filename || 'sicore.txt'; document.body.appendChild(a); a.click();
-    a.remove(); URL.revokeObjectURL(url);
+    const u = URL.createObjectURL(blob); const a = document.createElement('a');
+    a.href = u; a.download = j.filename || 'export.txt'; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(u);
     closeModal();
-    toast(`✓ Generado ${j.filename} (${j.registros} registros). ${j.advertencia || ''}`, 'success');
+    const extra = j.sinJurisdiccion ? ` (${j.sinJurisdiccion} sin provincia — completalas)` : '';
+    toast(`✓ ${j.filename} (${j.registros} registros)${extra}. ${j.advertencia || ''}`, 'success');
   } catch (e) { toast(e.message || 'Error al generar el archivo', 'error'); }
 }
 
@@ -28883,7 +28917,7 @@ function retForm(id) {
             <option value="percepcion" ${p.clase==='percepcion'?'selected':''}>Percepción</option>
           </select></div>
         <div><label class="label">Impuesto</label><select id="ret-imp" class="input" onchange="retFormJuris()">${optImp}</select></div>
-        <div id="ret-juris-wrap"><label class="label">Jurisdicción (IIBB)</label><input id="ret-juris" class="input" value="${esc(p.jurisdiccion||'')}" placeholder="Ej: Córdoba, CABA…"/></div>
+        <div id="ret-juris-wrap"><label class="label">Provincia / Jurisdicción (IIBB)</label><select id="ret-juris" class="input"><option value="">— Elegí provincia —</option>${Object.entries(JURISDICCIONES).map(([c,n])=>`<option value="${c}" ${jurisCodigo(p.jurisdiccion||'')===c?'selected':''}>${c} - ${n}</option>`).join('')}</select></div>
         <div><label class="label">Régimen / código</label><input id="ret-regimen" class="input" value="${esc(p.regimen||'')}" placeholder="Ej: RG 830, SICORE"/></div>
         <div><label class="label">Fecha</label><input id="ret-fecha" type="date" class="input" value="${fecha}"/></div>
         <div class="md:col-span-2"><label class="label">Contacto</label>
