@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'21/08/2026',
+      titulo:'🧾 v2.120.0 — Todo lo del contador en un solo lugar (SICORE/SIRE y SIRCAR en el hub)',
+      desc:'Unificamos las exportaciones del estudio contable en <b>Administración → Exportar para contador</b>. Ahora, además de Ventas/Compras, Cobros/Pagos/Cheques, Stock valuado, el Excel de Retenciones y el Libro IVA Digital, están las dos nuevas tarjetas para <b>presentar en ARCA</b>: <b>SICORE/SIRE</b> (retenciones practicadas nacionales: Ganancias, IVA, SUSS) y <b>SIRCAR</b> (Ingresos Brutos, con código de jurisdicción). Usan el mismo <b>período y selector de empresas</b> del hub y bajan <b>un .txt por empresa</b>. Aclaración importante: el <b>Excel de Retenciones sigue estando</b> (es para que el contador lea y controle); el SICORE/SIRE y el SIRCAR son los archivos para <b>subir al organismo</b>. Los botones también siguen en Tesorería → Retenciones para el día a día.' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'21/08/2026',
       titulo:'🏦 v2.119.0 — Importar resumen del banco: ahora lee el Excel con Débito/Crédito separados',
       desc:'Mejoramos el <b>importador de resumen bancario</b> para reconocer el Excel que baja este homebanking (cuentas del grupo). Ahora entiende el <b>.xls</b> tal cual viene: las columnas <b>Crédito y Débito separadas</b>, los importes en <b>formato con coma de miles</b> (ej. 18,000,000.00) y las fechas con guiones (20-08-2026). Subís el archivo en <b>Bancos → cuenta → Importar resumen</b> y te muestra todos los movimientos para revisar y confirmar, sin duplicar los que ya estaban. Probado con un resumen real (10 movimientos, débitos y créditos, leídos correctamente).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'20/08/2026',
@@ -29144,6 +29147,17 @@ pages.exportContador = async function() {
         <div class="font-bold text-slate-800 mb-1">🧾 Retenciones y percepciones</div>
         <div class="text-[11px] text-slate-500 mb-3">Certificados sufridos y practicados (Ganancias, IVA, IIBB, SUSS) con CUIT, régimen, jurisdicción, número, base, alícuota e importe.</div>
         <button class="btn btn-primary w-full" onclick="expContDescargar('retenciones')">Descargar Retenciones</button>
+        <div class="text-[10px] text-slate-400 mt-2">Este es el Excel <b>para leer/controlar</b>. Para <b>presentar en ARCA</b> usá SICORE/SIRE o SIRCAR (abajo).</div>
+      </div>
+      <div class="kpi border-2 border-emerald-200">
+        <div class="font-bold text-slate-800 mb-1">📄 SICORE / SIRE (ARCA) .txt</div>
+        <div class="text-[11px] text-slate-500 mb-3">Retenciones <b>practicadas nacionales</b> (Ganancias, IVA, SUSS) en el archivo de <b>ancho fijo</b> para presentar en ARCA. Un .txt por empresa (usa el período de arriba). <span class="text-amber-700">Provisorio: validar con el contador.</span></div>
+        <button class="btn btn-primary w-full" onclick="expContSicore('sicore')">Descargar SICORE/SIRE</button>
+      </div>
+      <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">🏙️ SIRCAR — Ingresos Brutos .txt</div>
+        <div class="text-[11px] text-slate-500 mb-3">Retenciones/percepciones de <b>IIBB practicadas</b> de todas las provincias en un archivo, con el <b>código de jurisdicción</b> por renglón. Un .txt por empresa. <span class="text-amber-700">Provisorio: validar con el contador.</span></div>
+        <button class="btn btn-primary w-full" onclick="expContSicore('sircar')">Descargar SIRCAR (IIBB)</button>
       </div>
       <div class="kpi border-2 border-emerald-200">
         <div class="font-bold text-slate-800 mb-1">🏛️ Libro IVA Digital (ARCA) .txt</div>
@@ -29208,6 +29222,39 @@ async function libroIvaDescargar() {
     } catch (e) { toast(`Error con ${nombre}: ${e.message || e}`, 'error'); }
   }
   if (ok > 1) toast(`Listo: ${ok} archivos descargados`, 'success');
+}
+
+// Descarga el .txt de SICORE/SIRE (Nacional) o SIRCAR (IIBB) — un archivo por empresa seleccionada.
+async function expContSicore(sistema) {
+  const desde = document.getElementById('exp-desde')?.value;
+  const hasta = document.getElementById('exp-hasta')?.value;
+  const cids = Array.from(document.querySelectorAll('.exp-emp:checked')).map(x => x.value);
+  if (!desde || !hasta) { toast('Elegí el período (desde/hasta)', 'error'); return; }
+  if (!cids.length) { toast('Elegí al menos una empresa', 'error'); return; }
+  state._expCont = { desde, hasta };
+  const comps = (state.user?.companies || []);
+  const path = sistema === 'sircar' ? '/api/retenciones/export-sircar' : '/api/retenciones/export-sicore';
+  const qs = new URLSearchParams({ desde, hasta });
+  if (sistema !== 'sircar') qs.set('formato', 'sicore');
+  let ok = 0;
+  toast(sistema === 'sircar' ? 'Generando SIRCAR (IIBB)…' : 'Generando SICORE/SIRE…');
+  for (const cid of cids) {
+    const nombre = (comps.find(c => c.id === cid)?.razonSocial) || (comps.find(c => c.id === cid)?.name) || 'empresa';
+    try {
+      const j = await api(`${path}?${qs.toString()}&_c=${cid}`, { headers: { 'X-Company-Id': cid } });
+      if (!j || !j.registros) { toast(`${nombre}: sin practicadas ${sistema === 'sircar' ? 'de IIBB' : 'nacionales'} en el período`, 'info'); continue; }
+      const blob = new Blob([j.contenido], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob); const a = document.createElement('a');
+      const base = (j.filename || 'export.txt').replace(/\.txt$/i, '');
+      a.href = url; a.download = `${base}_${nombre.replace(/[^A-Za-z0-9]+/g, '_').slice(0, 20)}.txt`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      const extra = j.sinJurisdiccion ? ` · ⚠️ ${j.sinJurisdiccion} sin provincia` : '';
+      toast(`✓ ${nombre}: ${j.registros} registros${extra}`, 'success');
+      ok++;
+    } catch (e) { toast(`Error con ${nombre}: ${e.message || e}`, 'error'); }
+  }
+  if (ok > 1) toast(`Listo: ${ok} archivos`, 'success');
 }
 
 // aoa a partir de filas + columnas [{h,k,date,num}]; antepone Empresa si multi.
