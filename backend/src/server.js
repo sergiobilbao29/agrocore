@@ -7630,7 +7630,7 @@ app.delete('/api/retenciones/:id', requireCompany, requirePermission('finanzas:d
 //   archivo real de ejemplo se afina el diccionario _RET_COL_SYN.
 // ============================================================
 function _retNorm(s) { return String(s == null ? '' : s).trim().toLowerCase()
-  .normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/_/g, ' ').replace(/\s+/g, ' '); }
 function _retNumAR(s) {
   let t = String(s == null ? '' : s).trim().replace(/\$/g, '').replace(/\s/g, '');
   if (!t) return 0;
@@ -7663,12 +7663,12 @@ const _RET_COL_SYN = {
   fecha:             ['fecha ret./perc.','fecha ret/perc','fecha','fecha comprobante','fecha de comprobante','fecha operacion','fecha de operacion','fecha emision','fecha de emision','fecha retencion','fecha de retencion','fecha ret'],
   cuit:              ['cuit agente ret./perc.','cuit agente ret/perc','cuit','cuit agente','cuit del agente','cuit agente de retencion','cuit retenedor','cuit/cuil','cuit del agente de retencion/percepcion'],
   denominacion:      ['denominacion o razon social','denominacion','razon social','agente','nombre','denominacion agente','razon social agente','agente de retencion'],
-  impuesto:          ['impuesto','descripcion impuesto','gravamen','codigo de impuesto','cod impuesto','impuesto/regimen'],
-  regimen:           ['regimen','codigo de regimen','cod regimen','regimen de retencion','descripcion regimen'],
+  impuesto:          ['cod impuesto','codigo de impuesto','impuesto','descripcion impuesto','gravamen','impuesto/regimen'],
+  regimen:           ['cod regimen','codigo de regimen','regimen','descripcion regimen','regimen de retencion'],
   jurisdiccion:      ['jurisdiccion','provincia','jurisdiccion iibb'],
   tipoComprobante:   ['descripcion comprobante','tipo comprobante','tipo de comprobante','tipo comp'],
-  numeroComprobante: ['numero comprobante','nro comprobante','numero de comprobante','comprobante nro','nro comp','comprobante'],
-  numeroCertificado: ['numero certificado','certificado','nro certificado','numero de certificado','certificado nro','nro certif','n certificado'],
+  numeroComprobante: ['numero comprobante','num comprobante','nro comprobante','numero de comprobante','comprobante nro','nro comp','comprobante'],
+  numeroCertificado: ['numero certificado','num certificado','certificado','nro certificado','numero de certificado','certificado nro','nro certif','n certificado'],
   importe:           ['importe ret./perc.','importe ret/perc','importe','importe retenido','importe percibido','monto','importe retencion','importe retenido/percibido','total retenido'],
   clase:             ['descripcion operacion','tipo','retencion/percepcion','clase','tipo de operacion','ret/perc'],
 };
@@ -7753,8 +7753,16 @@ app.post('/api/retenciones/import-arca/preview', requireCompany, requirePermissi
     let header, filas;
     if (req.body?.fileB64) {
       const buf = Buffer.from(String(req.body.fileB64).replace(/^data:.*?base64,/, ''), 'base64');
-      try { ({ header, filas } = _retMatrizArchivo(buf)); }
-      catch (_) { ({ header, filas } = _retParseTexto(buf.toString('utf8'))); } // fallback CSV/TXT plano
+      const m = buf.slice(0, 4);
+      const isOle = m[0] === 0xD0 && m[1] === 0xCF && m[2] === 0x11 && m[3] === 0xE0; // .xls binario
+      const isZip = m[0] === 0x50 && m[1] === 0x4B;                                   // .xlsx (zip)
+      if (isOle || isZip) {
+        ({ header, filas } = _retMatrizArchivo(buf));       // Excel: lo lee SheetJS
+      } else {
+        // CSV/TXT: lo parseamos como texto (respeta fechas y números tal cual vienen).
+        let txt = buf.toString('utf8'); if (txt.includes('�')) txt = buf.toString('latin1');
+        ({ header, filas } = _retParseTexto(txt));
+      }
     } else if (req.body?.fileText) {
       ({ header, filas } = _retParseTexto(req.body.fileText));
     } else {
@@ -7854,38 +7862,36 @@ function _padNum(v, len) { let s = String(Math.abs(Math.round(Number(v || 0))));
 function _padTxt(v, len) { let s = String(v == null ? '' : v).toUpperCase().replace(/[^\x20-\x7E]/g, ' '); return s.length >= len ? s.slice(0, len) : (s + ' '.repeat(len - s.length)); }
 function _fechaDDMMAAAA(d) { const x = new Date(d); const p = n => String(n).padStart(2, '0'); return `${p(x.getDate())}/${p(x.getMonth() + 1)}/${x.getFullYear()}`; }
 // Código de impuesto ARCA por gravamen (placeholder — validar con el contador)
-const _SICORE_COD_IMPUESTO = { ganancias: '0217', iva: '0767', iibb: '0000', suss: '0351', otro: '0000' };
-// Layout SICORE: [campo, longitud, tipo ('N'|'A'|'F'|'I'), fn(reg)]
-//   N=numérico (ceros izq), A=alfanumérico (espacios der), F=fecha DD/MM/AAAA, I=importe*100
-const _SICORE_LAYOUT = [
-  ['codComprobante', 2,  'N', r => 1],
-  ['fechaComprobante', 10, 'F', r => r.fecha],
-  ['numComprobante', 16, 'N', r => (r.comprobanteRef || '').replace(/\D/g, '') || 0],
-  ['importeComprobante', 16, 'I', r => r.importe],
-  ['codImpuesto', 4, 'A', r => _SICORE_COD_IMPUESTO[r.impuesto] || '0000'],
-  ['codRegimen', 3, 'N', r => (r.regimen || '').replace(/\D/g, '') || 0],
-  ['codOperacion', 1, 'N', r => 1],
-  ['baseCalculo', 14, 'I', r => (r.baseImponible != null ? r.baseImponible : r.importe)],
-  ['fechaRetencion', 10, 'F', r => r.fecha],
-  ['codCondicion', 2, 'N', r => 1],
-  ['suspendido', 1, 'N', r => 0],
-  ['importeRetencion', 14, 'I', r => r.importe],
-  ['porcExclusion', 6, 'N', r => 0],
-  ['fechaResolucion', 10, 'A', r => '00/00/0000'],
-  ['tipoDocRetenido', 2, 'N', r => 80],           // 80 = CUIT
-  ['numDocRetenido', 20, 'N', r => (r.cuit || '').replace(/\D/g, '') || 0],
-  ['numCertificado', 14, 'N', r => (r.numeroCertificado || '').replace(/\D/g, '') || 0],
-];
+const _SICORE_COD_IMPUESTO = { ganancias: '217', iva: '767', iibb: '000', suss: '301', otro: '000' };
+// Importe SICORE: parte entera con ceros a la izquierda (intLen) + coma + 2 decimales.
+function _sicoreImp(v, intLen) { const s = Math.abs(Number(v || 0)).toFixed(2); const [e, d] = s.split('.'); return e.padStart(intLen, '0').slice(-intLen) + ',' + d; }
+function _sicoreDig(s, len) { const x = String(s == null ? '' : s).replace(/\D/g, ''); return x.padStart(len, '0').slice(-len); }
+// Genera una linea de 187 caracteres (diseno de registro SICORE / RG 2233).
 function _sicoreLinea(r) {
-  let out = '';
-  for (const [, len, tipo, fn] of _SICORE_LAYOUT) {
-    const v = fn(r);
-    if (tipo === 'N') out += _padNum(v, len);
-    else if (tipo === 'I') out += _padNum(Math.round(Number(v || 0) * 100), len);
-    else if (tipo === 'F') out += _padTxt(_fechaDDMMAAAA(v), len);
-    else out += _padTxt(v, len);
-  }
-  return out;
+  const fc = _fechaDDMMAAAA(r.fecha);
+  const base = (r.baseImponible != null ? r.baseImponible : r.importe);
+  const tipoComp = /certific/i.test(r.comprobanteRef || '') ? '06' : '01';
+  let out =
+    tipoComp +                                    // 1-2    tipo de comprobante
+    _padTxt(fc, 10) +                             // 3-12   fecha emision comprobante
+    _sicoreDig(r.comprobanteRef, 16) +           // 13-28  numero de comprobante
+    _sicoreImp(base, 13) +                       // 29-44  importe comprobante (16)
+    (_SICORE_COD_IMPUESTO[r.impuesto] || '000') +// 45-47  codigo de impuesto
+    _sicoreDig(r.regimen, 3) +                   // 48-50  codigo de regimen
+    '1' +                                        // 51     codigo de operacion (retencion)
+    _sicoreImp(base, 11) +                       // 52-65  base de calculo (14)
+    _padTxt(fc, 10) +                            // 66-75  fecha emision retencion
+    '01' +                                       // 76-77  codigo de condicion (inscripto)
+    '0' +                                        // 78     sujeto suspendido/exento
+    _sicoreImp(r.importe, 11) +                  // 79-92  importe retencion practicada (14)
+    '000000' +                                   // 93-98  porcentaje de exclusion
+    _padTxt('', 10) +                            // 99-108 fecha BO exclusion (espacios)
+    '80' +                                       // 109-110 tipo doc del retenido (CUIT)
+    _sicoreDig(r.cuit, 11) +                     // 111-121 CUIT del proveedor
+    _sicoreDig(r.numeroCertificado, 14) +        // 122-135 numero certificado original
+    '0'.repeat(52);                              // 136-187 campos auxiliares
+  if (out.length < 187) out += ' '.repeat(187 - out.length);
+  return out.slice(0, 187);
 }
 
 app.get('/api/retenciones/export-sicore', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
