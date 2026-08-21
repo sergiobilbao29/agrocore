@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.116.0';
+const AGROCORE_VERSION = '2.117.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7651,25 +7651,26 @@ function _retFecha(s) {
 }
 function _retImpuesto(txt) {
   const s = _retNorm(txt);
-  if (/ganancia/.test(s) || /^217/.test(s)) return 'ganancias';
-  if (/\biva\b/.test(s) || /^767/.test(s)) return 'iva';
+  // ojo: "SICORE" aparece en la descripción de IVA/Ganancias, no es SUSS
+  if (/^0*217\b/.test(s) || /ganancia/.test(s)) return 'ganancias';
+  if (/^0*767\b/.test(s) || /\biva\b/.test(s) || /valor agregado/.test(s)) return 'iva';
   if (/ingresos brutos|iibb|\bib\b|jurisdicc/.test(s)) return 'iibb';
-  if (/suss|seguridad social|sicore|autonomo|seg\. social/.test(s)) return 'suss';
+  if (/suss|seguridad social|autonomo|seg\. social/.test(s)) return 'suss';
   return 'otro';
 }
 // Diccionario de sinónimos de encabezados (ajustable al archivo real de ARCA)
 const _RET_COL_SYN = {
-  fecha:             ['fecha','fecha comprobante','fecha de comprobante','fecha operacion','fecha de operacion','fecha emision','fecha de emision','fecha retencion','fecha de retencion','fecha ret'],
-  cuit:              ['cuit','cuit agente','cuit del agente','cuit agente de retencion','cuit retenedor','cuit/cuil','cuit agente ret/perc','cuit del agente de retencion/percepcion'],
-  denominacion:      ['denominacion','razon social','agente','nombre','denominacion agente','razon social agente','agente de retencion'],
+  fecha:             ['fecha ret./perc.','fecha ret/perc','fecha','fecha comprobante','fecha de comprobante','fecha operacion','fecha de operacion','fecha emision','fecha de emision','fecha retencion','fecha de retencion','fecha ret'],
+  cuit:              ['cuit agente ret./perc.','cuit agente ret/perc','cuit','cuit agente','cuit del agente','cuit agente de retencion','cuit retenedor','cuit/cuil','cuit del agente de retencion/percepcion'],
+  denominacion:      ['denominacion o razon social','denominacion','razon social','agente','nombre','denominacion agente','razon social agente','agente de retencion'],
   impuesto:          ['impuesto','descripcion impuesto','gravamen','codigo de impuesto','cod impuesto','impuesto/regimen'],
   regimen:           ['regimen','codigo de regimen','cod regimen','regimen de retencion','descripcion regimen'],
   jurisdiccion:      ['jurisdiccion','provincia','jurisdiccion iibb'],
-  tipoComprobante:   ['tipo comprobante','tipo de comprobante','tipo comp'],
+  tipoComprobante:   ['descripcion comprobante','tipo comprobante','tipo de comprobante','tipo comp'],
   numeroComprobante: ['numero comprobante','nro comprobante','numero de comprobante','comprobante nro','nro comp','comprobante'],
-  numeroCertificado: ['certificado','numero certificado','nro certificado','numero de certificado','certificado nro','nro certif','n certificado'],
-  importe:           ['importe','importe retenido','importe percibido','monto','importe retencion','importe ret/perc','importe retenido/percibido','retencion','percepcion','total retenido'],
-  clase:             ['tipo','retencion/percepcion','clase','tipo de operacion','ret/perc'],
+  numeroCertificado: ['numero certificado','certificado','nro certificado','numero de certificado','certificado nro','nro certif','n certificado'],
+  importe:           ['importe ret./perc.','importe ret/perc','importe','importe retenido','importe percibido','monto','importe retencion','importe retenido/percibido','total retenido'],
+  clase:             ['descripcion operacion','tipo','retencion/percepcion','clase','tipo de operacion','ret/perc'],
 };
 function _retDetectDelim(line) {
   const cands = [';', '\t', '|', ','];
@@ -7735,13 +7736,31 @@ function _retDedupeKey(o) {
   return [ _retCuit(o.cuit), (o.numeroCertificado || '').trim(), Math.round(Number(o.importe || 0) * 100), f ].join('|');
 }
 
+// Lee una matriz [header, ...filas] desde un archivo de "Mis Retenciones".
+// Soporta el .xls binario viejo de ARCA, .xlsx y .csv (SheetJS detecta el formato).
+function _retMatrizArchivo(buf) {
+  const wb = XLSX.read(buf, { type: 'buffer', raw: false, cellDates: false });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  const header = (rows[0] || []).map(x => String(x == null ? '' : x));
+  const filas = rows.slice(1).map(r => (r || []).map(x => String(x == null ? '' : x)));
+  return { header, filas };
+}
+
 // Vista previa: parsea el archivo y marca cuáles son nuevas y cuáles duplicadas (no escribe nada).
 app.post('/api/retenciones/import-arca/preview', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
-    let texto = req.body?.fileText;
-    if (!texto && req.body?.fileB64) texto = Buffer.from(String(req.body.fileB64).replace(/^data:.*?base64,/, ''), 'base64').toString('utf8');
-    if (!texto || !String(texto).trim()) return res.status(400).json({ ok: false, error: 'Subí el archivo CSV/TXT exportado de "Mis Retenciones".' });
-    const { header, filas } = _retParseTexto(texto);
+    let header, filas;
+    if (req.body?.fileB64) {
+      const buf = Buffer.from(String(req.body.fileB64).replace(/^data:.*?base64,/, ''), 'base64');
+      try { ({ header, filas } = _retMatrizArchivo(buf)); }
+      catch (_) { ({ header, filas } = _retParseTexto(buf.toString('utf8'))); } // fallback CSV/TXT plano
+    } else if (req.body?.fileText) {
+      ({ header, filas } = _retParseTexto(req.body.fileText));
+    } else {
+      return res.status(400).json({ ok: false, error: 'Subí el archivo (.xls, .xlsx o .csv) exportado de "Mis Retenciones" de ARCA.' });
+    }
+    if (!header || !header.length) return res.status(400).json({ ok: false, error: 'No pude leer el archivo. Verificá que sea el export de "Mis Retenciones".' });
     const idx = _retMapColumnas(header);
     const faltan = ['fecha', 'importe'].filter(k => idx[k] < 0);
     const rows = filas.map(cols => _retFilaNormalizada(cols, idx));
