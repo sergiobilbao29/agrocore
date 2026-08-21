@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.121.0';
+const AGROCORE_VERSION = '2.122.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12705,7 +12705,7 @@ function _bancoTipoDesdeConcepto(concepto, signo) {
   if (/CHEQUE|E-?CHEQ|ECH |ECHEQ|VALOR AL COBRO/.test(c)) return cred ? 'cheque_cobrado' : 'cheque_pagado';
   if (/GRAVAMEN|LEY 25413|I\.V\.A|IVA |IMPUESTO|IMP\.|PERCEP|RETENC|DEB\.?FISCAL|DEBITO FISCAL/.test(c)) return 'impuesto';
   if (/COM |COMISION|MANTENIM|COSTO|CARGO|SEG\.|SEGURO|GASTO/.test(c)) return 'comision';
-  if (/INTERES/.test(c)) return 'interes';
+  if (/INTERES/.test(c)) return cred ? 'interes' : 'comision'; // interés ganado (ingreso) vs interés/cargo debitado (egreso)
   if (/DEPOSITO|DEP\.|ACREDIT/.test(c) && cred) return 'deposito';
   if (/EXTRACCION|RETIRO|CAJERO|ATM/.test(c) && !cred) return 'extraccion';
   return cred ? 'credito_acreditado' : 'debito';
@@ -13129,7 +13129,12 @@ app.post('/api/banco-cuentas/:id/import-movimientos', requireCompany, requirePer
       const fechaISO = String(it.fecha || '').slice(0, 10);
       const imp = _numAr(it.importe);
       if (!fechaISO || !isFinite(imp) || imp === 0) { resumen.omitidos++; continue; }
-      const tipo = BANCO_TIPOS_TODOS.includes(it.tipo) ? it.tipo : _bancoTipoDesdeConcepto(it.concepto, imp);
+      let tipo = BANCO_TIPOS_TODOS.includes(it.tipo) ? it.tipo : _bancoTipoDesdeConcepto(it.concepto, imp);
+      // Salvaguarda: en un resumen bancario el SIGNO (débito/crédito) lo manda el banco.
+      // Si el tipo elegido contradice el signo (ej. un débito quedó como "interés ganado"),
+      // lo corregimos a un tipo de la dirección correcta para no invertir el saldo.
+      if (imp < 0 && BANCO_TIPOS_INGRESO.includes(tipo)) tipo = 'debito';
+      else if (imp > 0 && BANCO_TIPOS_EGRESO.includes(tipo)) tipo = 'credito_acreditado';
       const monto = Math.abs(imp);
       const con = String(it.concepto || 'Movimiento').trim();
       const ref = String(it.referencia || '').trim();

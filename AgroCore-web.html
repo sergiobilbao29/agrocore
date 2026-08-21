@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'21/08/2026',
+      titulo:'🧾 v2.122.0 — Import del banco: los intereses debitados ya no se suman',
+      desc:'Corrección en el <b>importador de resumen bancario</b>. Un movimiento de <b>intereses debitados</b> (que en el banco RESTA) se estaba cargando como ingreso (SUMANDO), porque el sistema clasificaba todo lo que dice \'interés\' como \'interés ganado\'. Ahora <b>el signo lo manda el banco</b>: si viene en la columna Débito, entra como egreso; si viene en Crédito, como ingreso. Además agregamos una <b>salvaguarda</b> que corrige automáticamente cualquier movimiento importado cuyo tipo contradiga el signo, para que el saldo nunca se invierta. Si ya importaste un resumen con este error, deshacé esa importación (botón Deshacer) y volvé a importarla, o editá ese movimiento a mano.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'21/08/2026',
       titulo:'🧹 v2.121.0 — Exportar para contador más claro: Excel y .txt separados',
       desc:'Ordenamos la pantalla <b>Exportar para contador</b> en dos secciones para que no se mezcle. Arriba, <b>Excel para el estudio contable</b> (Ventas/Compras, Cobros/Pagos/Cheques, Stock valuado y Retenciones) con el botón <b>Todo en un Excel</b>, que ahora aclara que <b>engloba SOLO esas hojas</b> (incluida Retenciones). Abajo, <b>Archivos .txt para presentar en los organismos</b> (SICORE/SIRE, SIRCAR y Libro IVA Digital), que se bajan por separado porque son para subir, no para leer. Así queda claro qué entra en el "Todo" y qué no.' },
