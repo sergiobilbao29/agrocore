@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'21/08/2026',
+      titulo:'🧹 v2.121.0 — Exportar para contador más claro: Excel y .txt separados',
+      desc:'Ordenamos la pantalla <b>Exportar para contador</b> en dos secciones para que no se mezcle. Arriba, <b>Excel para el estudio contable</b> (Ventas/Compras, Cobros/Pagos/Cheques, Stock valuado y Retenciones) con el botón <b>Todo en un Excel</b>, que ahora aclara que <b>engloba SOLO esas hojas</b> (incluida Retenciones). Abajo, <b>Archivos .txt para presentar en los organismos</b> (SICORE/SIRE, SIRCAR y Libro IVA Digital), que se bajan por separado porque son para subir, no para leer. Así queda claro qué entra en el "Todo" y qué no.' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'21/08/2026',
       titulo:'🧾 v2.120.0 — Todo lo del contador en un solo lugar (SICORE/SIRE y SIRCAR en el hub)',
       desc:'Unificamos las exportaciones del estudio contable en <b>Administración → Exportar para contador</b>. Ahora, además de Ventas/Compras, Cobros/Pagos/Cheques, Stock valuado, el Excel de Retenciones y el Libro IVA Digital, están las dos nuevas tarjetas para <b>presentar en ARCA</b>: <b>SICORE/SIRE</b> (retenciones practicadas nacionales: Ganancias, IVA, SUSS) y <b>SIRCAR</b> (Ingresos Brutos, con código de jurisdicción). Usan el mismo <b>período y selector de empresas</b> del hub y bajan <b>un .txt por empresa</b>. Aclaración importante: el <b>Excel de Retenciones sigue estando</b> (es para que el contador lea y controle); el SICORE/SIRE y el SIRCAR son los archivos para <b>subir al organismo</b>. Los botones también siguen en Tesorería → Retenciones para el día a día.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'21/08/2026',
@@ -29127,6 +29130,8 @@ pages.exportContador = async function() {
         <div><label class="label">Empresas</label><div class="border border-slate-200 rounded p-2 max-h-32 overflow-auto">${empChecks || '<div class="text-xs text-slate-400">Sin empresas</div>'}</div></div>
       </div>
     </div>
+    <!-- 1) EXCEL para el estudio contable -->
+    <div class="text-sm font-bold text-agro-800 mb-2 flex items-center gap-2"><span>📊</span> Excel para el estudio contable <span class="text-[11px] font-normal text-slate-400">(para leer y controlar)</span></div>
     <div class="grid md:grid-cols-2 gap-3">
       <div class="kpi">
         <div class="font-bold text-slate-800 mb-1">🧾 Ventas y Compras</div>
@@ -29145,32 +29150,36 @@ pages.exportContador = async function() {
       </div>
       <div class="kpi">
         <div class="font-bold text-slate-800 mb-1">🧾 Retenciones y percepciones</div>
-        <div class="text-[11px] text-slate-500 mb-3">Certificados sufridos y practicados (Ganancias, IVA, IIBB, SUSS) con CUIT, régimen, jurisdicción, número, base, alícuota e importe.</div>
+        <div class="text-[11px] text-slate-500 mb-3">Certificados sufridos y practicados (Ganancias, IVA, IIBB, SUSS) con CUIT, régimen, jurisdicción, número, base, alícuota e importe. Para leer/controlar.</div>
         <button class="btn btn-primary w-full" onclick="expContDescargar('retenciones')">Descargar Retenciones</button>
-        <div class="text-[10px] text-slate-400 mt-2">Este es el Excel <b>para leer/controlar</b>. Para <b>presentar en ARCA</b> usá SICORE/SIRE o SIRCAR (abajo).</div>
-      </div>
-      <div class="kpi border-2 border-emerald-200">
-        <div class="font-bold text-slate-800 mb-1">📄 SICORE / SIRE (ARCA) .txt</div>
-        <div class="text-[11px] text-slate-500 mb-3">Retenciones <b>practicadas nacionales</b> (Ganancias, IVA, SUSS) en el archivo de <b>ancho fijo</b> para presentar en ARCA. Un .txt por empresa (usa el período de arriba). <span class="text-amber-700">Provisorio: validar con el contador.</span></div>
-        <button class="btn btn-primary w-full" onclick="expContSicore('sicore')">Descargar SICORE/SIRE</button>
-      </div>
-      <div class="kpi">
-        <div class="font-bold text-slate-800 mb-1">🏙️ SIRCAR — Ingresos Brutos .txt</div>
-        <div class="text-[11px] text-slate-500 mb-3">Retenciones/percepciones de <b>IIBB practicadas</b> de todas las provincias en un archivo, con el <b>código de jurisdicción</b> por renglón. Un .txt por empresa. <span class="text-amber-700">Provisorio: validar con el contador.</span></div>
-        <button class="btn btn-primary w-full" onclick="expContSicore('sircar')">Descargar SIRCAR (IIBB)</button>
-      </div>
-      <div class="kpi border-2 border-emerald-200">
-        <div class="font-bold text-slate-800 mb-1">🏛️ Libro IVA Digital (ARCA) .txt</div>
-        <div class="text-[11px] text-slate-500 mb-3">Genera los archivos de <b>ancho fijo</b> para importar directo en el portal de ARCA: Comprobantes y Alícuotas de <b>Ventas</b> y de <b>Compras</b>. Un ZIP por empresa (el período lo toma del mes de "Hasta").</div>
-        <button class="btn btn-primary w-full" onclick="libroIvaDescargar()">Descargar Libro IVA Digital</button>
-      </div>
-      <div class="kpi">
-        <div class="font-bold text-slate-800 mb-1">⬇️ Todo en un Excel</div>
-        <div class="text-[11px] text-slate-500 mb-3">Un solo Excel con las hojas de arriba: Ventas, Compras, Cobros, Pagos, Cheques, Stock insumos y Stock granos. <b>No incluye el Libro IVA Digital</b> (ese se descarga aparte, en su propio botón, porque son los .txt de ARCA).</div>
-        <button class="btn btn-secondary w-full" onclick="expContDescargar('todo')">Descargar todo (Excel)</button>
       </div>
     </div>
-    <div class="text-[11px] text-slate-400 mt-4">Las <b>retenciones y percepciones</b> se cargan en <b>Tesorería → Retenciones</b> y salen en esta exportación. El <b>Libro IVA Digital</b> arma los 4 .txt de ARCA (Comprobantes + Alícuotas, de Ventas y Compras) desde las facturas cargadas; los comprobantes de un régimen especial (turismo, importación, recibos de uso) van vacíos y solo se completan si tenés esas operaciones.</div>`;
+    <div class="kpi border-2 border-emerald-300 bg-emerald-50/40 mt-3">
+      <div class="font-bold text-slate-800 mb-1">⬇️ Todo en un Excel</div>
+      <div class="text-[11px] text-slate-500 mb-3">Un solo Excel que <b>engloba TODAS las hojas de esta sección</b>: Ventas, Compras, Cobros, Pagos, Cheques, Stock (insumos y granos) y Retenciones. Los archivos <b>.txt para ARCA</b> (SICORE/SIRE, SIRCAR y Libro IVA Digital) <b>no</b> entran acá: se bajan aparte en la sección de abajo.</div>
+      <button class="btn btn-primary w-full" onclick="expContDescargar('todo')">Descargar todo (Excel)</button>
+    </div>
+
+    <!-- 2) ARCHIVOS .txt para presentar en ARCA/organismos -->
+    <div class="text-sm font-bold text-agro-800 mb-2 mt-6 flex items-center gap-2"><span>🏛️</span> Archivos para presentar en los organismos (.txt) <span class="text-[11px] font-normal text-slate-400">(para subir, no para leer)</span></div>
+    <div class="grid md:grid-cols-3 gap-3">
+      <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">📄 SICORE / SIRE (ARCA)</div>
+        <div class="text-[11px] text-slate-500 mb-3">Retenciones <b>practicadas nacionales</b> (Ganancias, IVA, SUSS), ancho fijo de 187, un .txt por empresa. <span class="text-amber-700">Provisorio: validar con el contador.</span></div>
+        <button class="btn btn-secondary w-full" onclick="expContSicore('sicore')">Descargar SICORE/SIRE</button>
+      </div>
+      <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">🏙️ SIRCAR — Ingresos Brutos</div>
+        <div class="text-[11px] text-slate-500 mb-3">IIBB <b>practicadas</b> de todas las provincias en un .txt, con el <b>código de jurisdicción</b>. Un archivo por empresa. <span class="text-amber-700">Provisorio: validar con el contador.</span></div>
+        <button class="btn btn-secondary w-full" onclick="expContSicore('sircar')">Descargar SIRCAR (IIBB)</button>
+      </div>
+      <div class="kpi">
+        <div class="font-bold text-slate-800 mb-1">🏛️ Libro IVA Digital (ARCA)</div>
+        <div class="text-[11px] text-slate-500 mb-3">Comprobantes y Alícuotas de <b>Ventas</b> y <b>Compras</b> en ancho fijo. Un ZIP por empresa (período del mes de "Hasta").</div>
+        <button class="btn btn-secondary w-full" onclick="libroIvaDescargar()">Descargar Libro IVA Digital</button>
+      </div>
+    </div>
+    <div class="text-[11px] text-slate-400 mt-4">Las <b>retenciones</b> se cargan en <b>Tesorería → Retenciones</b> y salen tanto en el Excel como en SICORE/SIRE/SIRCAR. El <b>Libro IVA Digital</b> arma los .txt de ARCA (Comprobantes + Alícuotas, Ventas y Compras) desde las facturas cargadas; los comprobantes de un régimen especial (turismo, importación, recibos de uso) van vacíos y solo se completan si tenés esas operaciones.</div>`;
 };
 
 // Junta los datos de todas las empresas seleccionadas (una llamada por empresa).
