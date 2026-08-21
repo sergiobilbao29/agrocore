@@ -2573,6 +2573,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'21/08/2026',
+      titulo:'🏦 v2.119.0 — Importar resumen del banco: ahora lee el Excel con Débito/Crédito separados',
+      desc:'Mejoramos el <b>importador de resumen bancario</b> para reconocer el Excel que baja este homebanking (cuentas del grupo). Ahora entiende el <b>.xls</b> tal cual viene: las columnas <b>Crédito y Débito separadas</b>, los importes en <b>formato con coma de miles</b> (ej. 18,000,000.00) y las fechas con guiones (20-08-2026). Subís el archivo en <b>Bancos → cuenta → Importar resumen</b> y te muestra todos los movimientos para revisar y confirmar, sin duplicar los que ya estaban. Probado con un resumen real (10 movimientos, débitos y créditos, leídos correctamente).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'20/08/2026',
       titulo:'🗓️ v2.118.0 — Retenciones: filtro por fechas y SICORE separado de IIBB (SIRCAR)',
       desc:'Dos mejoras en <b>Tesorería → Retenciones</b>. <b>(1) Filtro por fechas:</b> arriba tenés <b>Desde/Hasta</b> y por defecto trae el <b>mes en curso</b>; los totales y el listado respetan el período. <b>(2) Separamos Nacional de Provincial en la exportación:</b> al Exportar elegís el <b>sistema</b>. <b>SICORE/SIRE</b> arma el archivo Nacional (solo <b>Ganancias, IVA y SUSS</b>) — IIBB ya no se cuela ahí, porque ARCA lo rechazaría. Para <b>Ingresos Brutos</b> hay una opción nueva <b>SIRCAR</b> que junta todas las provincias en un archivo con el <b>código de jurisdicción</b> en cada renglón. Además, al cargar una retención de IIBB ahora elegís la <b>provincia</b> de una lista con su código oficial (901 CABA, 904 Córdoba, 921 Santa Fe, etc.).' },

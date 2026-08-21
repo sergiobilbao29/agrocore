@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.118.0';
+const AGROCORE_VERSION = '2.119.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4162,7 +4162,7 @@ function _arcaNum(v){ if(v==null) return 0; let s=String(v).trim(); if(!s) retur
   if(s.includes(',')&&s.includes('.')) s=s.replace(/\./g,'').replace(',','.'); else if(s.includes(',')) s=s.replace(',','.');
   const n=Number(s.replace(/[^0-9.\-]/g,'')); return isFinite(n)?n:0; }
 function _arcaFecha(v){ if(v instanceof Date) return v; const s=String(v==null?'':v).trim();
-  let m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m){ let y=+m[3]; if(y<100)y+=2000; return new Date(y,+m[2]-1,+m[1]); }
+  let m=s.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/); if(m){ let y=+m[3]; if(y<100)y+=2000; return new Date(y,+m[2]-1,+m[1]); }
   m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const d=new Date(s); return isNaN(d)?null:d; }
 
 app.post('/api/facturas-compra/import-arca', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
@@ -12910,6 +12910,38 @@ function _csvToMatrix(texto) {
   });
 }
 // Matriz (Excel/CSV de banco) → movimientos, detectando columnas por encabezado.
+// Parser de números tolerante a formato AR (1.234,56) y US (1,234.56).
+// Regla: el ÚLTIMO separador es el decimal.
+function _numFlex(s) {
+  if (s == null || s === '') return NaN;
+  const raw = String(s);
+  const neg = /-/.test(raw);
+  let t = raw.replace(/[^\d.,]/g, '');
+  if (!t) return NaN;
+  const lc = t.lastIndexOf(','), ld = t.lastIndexOf('.');
+  if (lc > -1 && ld > -1) {
+    if (ld > lc) t = t.replace(/,/g, '');                 // US: 1,234.56
+    else t = t.replace(/\./g, '').replace(',', '.');      // AR: 1.234,56
+  } else if (lc > -1) {
+    const dec = t.length - lc - 1;
+    if (dec === 2) t = t.replace(/,/g, m => '.');          // 1234,56 → decimal
+    else t = t.replace(/,/g, '');                          // 1,234 → miles
+  } else if (ld > -1) {
+    const dots = (t.match(/\./g) || []).length;
+    const dec = t.length - ld - 1;
+    if (dots > 1 || dec === 3) t = t.replace(/\./g, '');   // 1.234.567 → miles
+  }
+  const n = parseFloat(t);
+  return isFinite(n) ? (neg ? -Math.abs(n) : n) : NaN;
+}
+// Lee una matriz desde un Excel con SheetJS (soporta .xls binario viejo, .xlsx y .csv).
+function _excelToMatrix(buffer) {
+  const wb = XLSX.read(buffer, { type: 'buffer', raw: false, cellDates: false });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  return rows.map(r => (r || []).map(c => String(c == null ? '' : c)));
+}
+
 function _matrixToMovs(matrix) {
   if (!Array.isArray(matrix) || !matrix.length) return [];
   const has = (cells, ...names) => cells.some(c => names.includes(c));
@@ -12935,8 +12967,8 @@ function _matrixToMovs(matrix) {
     const fd = _arcaFecha(fRaw); if (!fd || isNaN(fd)) continue;
     const fecha = `${fd.getFullYear()}-${String(fd.getMonth()+1).padStart(2,'0')}-${String(fd.getDate()).padStart(2,'0')}`;
     let importe = 0;
-    if (iImporte >= 0 && String(row[iImporte] ?? '').trim() !== '') importe = _numAr(row[iImporte]);
-    else { const deb = iDebito >= 0 ? _numAr(row[iDebito]) : 0; const cre = iCredito >= 0 ? _numAr(row[iCredito]) : 0; importe = (cre || 0) - Math.abs(deb || 0); }
+    if (iImporte >= 0 && String(row[iImporte] ?? '').trim() !== '') importe = _numFlex(row[iImporte]);
+    else { const deb = iDebito >= 0 ? _numFlex(row[iDebito]) : 0; const cre = iCredito >= 0 ? _numFlex(row[iCredito]) : 0; importe = (cre || 0) - Math.abs(deb || 0); }
     if (!isFinite(importe) || importe === 0) continue;
     const concepto = (iConcepto >= 0 ? String(row[iConcepto] || '') : '').replace(/\s{2,}/g, ' ').trim() || 'Movimiento';
     const referencia = iRef >= 0 ? String(row[iRef] || '').trim() : '';
@@ -12984,7 +13016,11 @@ app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermissi
       // Excel o CSV → matriz.
       let matrix = [];
       if (esCsv && !esXlsx) matrix = _csvToMatrix(buffer.toString('utf8'));
-      else { try { matrix = _xlsxToMatrix(buffer); } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el Excel/CSV: ' + e.message }); } }
+      else {
+        // SheetJS lee .xls binario viejo, .xlsx y hasta CSV; si falla, probamos el parser propio.
+        try { matrix = _excelToMatrix(buffer); }
+        catch (_) { try { matrix = _xlsxToMatrix(buffer); } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el Excel/CSV: ' + e.message }); } }
+      }
       if (!matrix.length) return res.status(422).json({ ok: false, error: 'El archivo no tiene datos legibles.' });
       movs = _matrixToMovs(matrix); fuente = 'tabla';
       if ((!movs || !movs.length) && ia.enabled) {
