@@ -1031,6 +1031,7 @@ const MODULES = [
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
   { id:'hacienda',      label:'Animales',             icon:'🐄', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Stock y depósitos' },
   { id:'rodeos',        label:'Costo de hacienda',    icon:'🐮', perm:'stock:read',      section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA =====
@@ -2573,6 +2574,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/08/2026',
+      titulo:'📋 v2.124.0 — Guías de hacienda (DT-e): mové el stock antes de la factura',
+      desc:'Nuevo módulo en <b>Stock y depósitos → Guías de hacienda (DT-e)</b>. La <b>guía mueve el stock de animales al instante</b> (por categoría y cabezas) y arma una <b>cuenta estimada a cobrar/pagar</b>, sin esperar la liquidación o factura. Podés <b>importar la guía por foto o PDF</b> (la lee la IA: N° de DT-e, fecha, RENSPA y categorías con cabezas), cargar <b>kilos y precios provisorios</b> con <b>varias filas por calidad</b>, y registrar <b>pagos/cobros a cuenta</b>. Cuando llega la <b>liquidación</b> (venta/faena) o la <b>factura de compra</b>, tocás <b>🔗 Vincular</b>: ajustás kilos, precios y retenciones reales, se crea el comprobante fiscal definitivo con su Libro IVA y <b>el stock NO se vuelve a mover</b>. Sirve para venta, compra, invernada, traslado y faena.' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'22/08/2026',
+      titulo:'📄 v2.123.0 — Exportaciones a ARCA listas para el contador',
+      desc:'Pulimos los botones que generan los archivos <b>.txt para presentar en ARCA</b> (SICORE/SIRE, SIRCAR y Libro IVA Digital) en <b>Exportar para contador</b> y en <b>Retenciones</b>, dejándolos claros y prolijos para compartir con tu estudio contable.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'21/08/2026',
       titulo:'🧾 v2.122.0 — Import del banco: los intereses debitados ya no se suman',
       desc:'Corrección en el <b>importador de resumen bancario</b>. Un movimiento de <b>intereses debitados</b> (que en el banco RESTA) se estaba cargando como ingreso (SUMANDO), porque el sistema clasificaba todo lo que dice \'interés\' como \'interés ganado\'. Ahora <b>el signo lo manda el banco</b>: si viene en la columna Débito, entra como egreso; si viene en Crédito, como ingreso. Además agregamos una <b>salvaguarda</b> que corrige automáticamente cualquier movimiento importado cuyo tipo contradiga el signo, para que el saldo nunca se invierta. Si ya importaste un resumen con este error, deshacé esa importación (botón Deshacer) y volvé a importarla, o editá ese movimiento a mano.' },
@@ -27045,6 +27052,386 @@ async function liqMarcarCobrado(id) {
 /* =========================================================
  * LIQUIDACIONES DE HACIENDA — venta que descuenta stock real + SENASA
  * ========================================================= */
+// ============================================================
+// GUÍAS DE HACIENDA / DT-e  (comprobante operativo, previo al fiscal)
+// Mueve stock al instante + cuenta corriente provisoria + pagos a cuenta,
+// y después se vincula con la Liquidación / Factura (cierre fiscal).
+// ============================================================
+const GUIA_MOTIVOS = [
+  { v:'venta', l:'Venta', sentido:'egreso' },
+  { v:'faena', l:'Faena / servicio', sentido:'egreso' },
+  { v:'compra', l:'Compra', sentido:'ingreso' },
+  { v:'invernada', l:'Invernada (ingreso)', sentido:'ingreso' },
+  { v:'traslado', l:'Traslado', sentido:'egreso' },
+  { v:'otro', l:'Otro', sentido:'egreso' },
+];
+function guiaMotivoLabel(v){ return (GUIA_MOTIVOS.find(m=>m.v===v)||{}).l || v; }
+function guiaEstadoBadge(e){
+  const map={ pendiente:['badge-yellow','Pendiente'], vinculada:['badge-green','Vinculada'], anulada:['badge-gray','Anulada'], en_frigorifico:['badge-blue','En frigorífico'], faena_cerrada:['badge-green','Faena cerrada'] };
+  const [c,t]=map[e]||['badge-gray',e]; return `<span class="badge ${c}">${t}</span>`;
+}
+
+pages.guiasHacienda = async function() {
+  setHeader('Guías de hacienda (DT-e)', 'Mové el stock al instante con la guía y sacá la cuenta estimada, antes de la liquidación/factura');
+  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('guiasHacienda','Guías de hacienda'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let rows=[];
+  try { rows = (await api('/api/guias-hacienda')).data || []; } catch(e){ return toast(e.message,'error'); }
+  state._guiaRows = rows;
+  if (!state.guiaFilter) { const d=new Date(); const desde=new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0,10); state.guiaFilter={ desde:'', hasta:'', motivo:'', estado:'' }; }
+  const canC = can('stock:create');
+  const f = state.guiaFilter;
+  $('#page-body').innerHTML = `
+    <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600" id="guia-count"></div>
+      <div class="flex gap-2">
+        ${canC?`<button class="btn btn-secondary" onclick="guiaImportar()" title="Leer la foto o el PDF de la guía DT-e con IA">📷 Importar guía (foto/PDF)</button>`:''}
+        ${canC?`<button class="btn btn-primary" onclick="guiaForm()">+ Nueva guía</button>`:''}
+      </div>
+    </div>
+    <div class="bg-blue-50 border border-blue-200 text-blue-900 text-[13px] rounded-lg p-3 mb-3">
+      La <b>guía DT-e</b> mueve el <b>stock al instante</b> y arma una <b>cuenta estimada</b> (a cobrar/pagar). Cargás las cabezas por categoría y, si querés, kilos y precios provisorios. Cuando llega la <b>liquidación o factura</b>, la <b>vinculás</b>: ajusta los valores reales y no vuelve a mover el stock.
+    </div>
+    <div class="kpi p-2 mb-3 grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
+      <div><label class="label text-[11px]">Desde</label><input type="date" id="gf-d" class="input text-sm" value="${f.desde}" onchange="guiaFiltroSet()"/></div>
+      <div><label class="label text-[11px]">Hasta</label><input type="date" id="gf-h" class="input text-sm" value="${f.hasta}" onchange="guiaFiltroSet()"/></div>
+      <div><label class="label text-[11px]">Motivo</label><select id="gf-m" class="input text-sm" onchange="guiaFiltroSet()"><option value="">Todos</option>${GUIA_MOTIVOS.map(m=>`<option value="${m.v}" ${f.motivo===m.v?'selected':''}>${m.l}</option>`).join('')}</select></div>
+      <div><label class="label text-[11px]">Estado</label><select id="gf-e" class="input text-sm" onchange="guiaFiltroSet()"><option value="">Todos</option><option value="pendiente" ${f.estado==='pendiente'?'selected':''}>Pendiente</option><option value="en_frigorifico" ${f.estado==='en_frigorifico'?'selected':''}>En frigorífico</option><option value="vinculada" ${f.estado==='vinculada'?'selected':''}>Vinculada</option><option value="anulada" ${f.estado==='anulada'?'selected':''}>Anulada</option></select></div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" id="guia-kpis"></div>
+    <div class="kpi p-0 overflow-hidden">
+      <table class="data">
+        <thead><tr><th>Fecha</th><th>N° DT-e</th><th>Motivo</th><th>Campo</th><th>Contacto</th><th class="text-right">Cabezas</th><th class="text-right">Estimado</th><th class="text-right">Pagado</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="guia-tbody"></tbody>
+      </table>
+    </div>`;
+  guiaRender();
+};
+function guiaFiltroSet(){ state.guiaFilter={ desde:$('#gf-d')?.value||'', hasta:$('#gf-h')?.value||'', motivo:$('#gf-m')?.value||'', estado:$('#gf-e')?.value||'' }; guiaRender(); }
+function guiaRender(){
+  const f=state.guiaFilter||{}; const rows=state._guiaRows||[];
+  const fil=rows.filter(r=>{ const d=(r.fecha||'').slice(0,10);
+    if(f.desde&&d<f.desde) return false; if(f.hasta&&d>f.hasta) return false;
+    if(f.motivo&&r.motivo!==f.motivo) return false; if(f.estado&&r.estado!==f.estado) return false; return true; });
+  const activas=fil.filter(r=>r.estado!=='anulada');
+  const cabezas=activas.reduce((a,r)=>a+(r.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0),0);
+  const aCobrar=activas.filter(r=>r.sentido==='egreso'&&r.contactoTipo==='cliente'&&r.estado!=='vinculada').reduce((a,r)=>a+Number(r.saldoEstimado||0),0);
+  const aPagar=activas.filter(r=>r.sentido==='ingreso'&&r.contactoTipo==='proveedor'&&r.estado!=='vinculada').reduce((a,r)=>a+Number(r.saldoEstimado||0),0);
+  const cnt=$('#guia-count'); if(cnt) cnt.textContent=`${fil.length} de ${rows.length} guía${rows.length===1?'':'s'}`;
+  const k=$('#guia-kpis'); if(k) k.innerHTML=`
+    <div class="kpi"><div class="text-xs text-slate-500">Guías (filtro)</div><div class="text-2xl font-bold mt-1">${fil.length}</div></div>
+    <div class="kpi"><div class="text-xs text-slate-500">Cabezas movidas</div><div class="text-2xl font-bold mt-1">${fmtN(cabezas)}</div></div>
+    <div class="kpi"><div class="text-xs text-slate-500">Estimado a cobrar (pend.)</div><div class="text-2xl font-bold mt-1 text-green-700">${fmt$(aCobrar)}</div></div>
+    <div class="kpi"><div class="text-xs text-slate-500">Estimado a pagar (pend.)</div><div class="text-2xl font-bold mt-1 text-amber-600">${fmt$(aPagar)}</div></div>`;
+  const canU=can('stock:update'), canD=can('stock:delete');
+  const tb=$('#guia-tbody'); if(!tb) return;
+  tb.innerHTML = fil.map(r=>{ const cab=(r.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0);
+    const cobrarPagar = r.sentido==='egreso'?'cobrar':'pagar';
+    const vinculable = r.estado!=='vinculada'&&r.estado!=='anulada';
+    return `<tr class="table-row" onclick='guiaVer(${JSON.stringify(r.id)})' style="cursor:pointer">
+      <td>${fmtDate(r.fecha)}</td><td class="font-mono text-xs">${esc(r.numeroDte||'—')}</td>
+      <td>${esc(guiaMotivoLabel(r.motivo))}</td><td>${esc(r.campo?.nombre||(r.campoId?'—':'—'))}</td>
+      <td>${esc(r.titularOrigen||r.titularDestino||r.frigorifico||'—')}</td>
+      <td class="text-right">${fmtN(cab)}</td>
+      <td class="text-right font-semibold">${fmt$(r.totalConIva)}</td>
+      <td class="text-right ${r.pagado?'text-blue-700':''}">${r.pagado?fmt$(r.pagado):'—'}</td>
+      <td>${guiaEstadoBadge(r.estado)}</td>
+      <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+        ${canU&&vinculable?`<button class="btn btn-ghost text-xs" title="Pago a cuenta" onclick='guiaPagos(${JSON.stringify(r.id)})'>💵</button>`:''}
+        ${canU&&vinculable?`<button class="btn btn-ghost text-xs" title="Vincular con liquidación/factura" onclick='guiaVincular(${JSON.stringify(r.id)})'>🔗</button>`:''}
+        ${canU&&vinculable?`<button class="btn btn-ghost text-xs" title="Editar" onclick='guiaEditar(${JSON.stringify(r.id)})'>✏️</button>`:''}
+        ${canU&&vinculable?`<button class="btn btn-ghost text-xs text-amber-600" title="Anular (revierte stock y cuenta)" onclick='guiaAnular(${JSON.stringify(r.id)})'>⛔</button>`:''}
+        ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='guiaEliminar(${JSON.stringify(r.id)})'>🗑️</button>`:''}
+      </td>
+    </tr>`;}).join('') || `<tr><td colspan="10" class="text-center text-slate-400 py-8">Sin guías que coincidan con el filtro.</td></tr>`;
+}
+function guiaGet(id){ return (state._guiaRows||[]).find(x=>x.id===id); }
+async function guiaVer(id){
+  let g; try{ g=(await api('/api/guias-hacienda/'+id)).data; }catch(e){ return toast(e.message,'error'); }
+  const rows=(g.renglones||[]).map(r=>`<tr><td>${esc(r.categoria)}</td><td class="text-right">${fmtN(r.cabezas)}</td><td class="text-right">${r.kilos?fmtN(r.kilos):'—'}</td><td class="text-right">${r.precioKg?fmt$(r.precioKg):'—'}</td><td class="text-right">${fmt$(r.bruto)}</td></tr>`).join('');
+  const pagos=(g.pagos||[]).map(p=>`<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td></tr>`).join('')||`<tr><td colspan="4" class="text-slate-400 text-center py-2">Sin pagos a cuenta.</td></tr>`;
+  openModal({ title:`📋 Guía DT-e ${esc(g.numeroDte||'')}`, size:'max-w-3xl',
+    body:`<div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
+        <div><span class="text-slate-500 text-xs">Fecha</span><br>${fmtDate(g.fecha)}</div>
+        <div><span class="text-slate-500 text-xs">Motivo</span><br>${esc(guiaMotivoLabel(g.motivo))} (${g.sentido})</div>
+        <div><span class="text-slate-500 text-xs">Campo</span><br>${esc(g.campo?.nombre||'—')}</div>
+        <div><span class="text-slate-500 text-xs">Estado</span><br>${guiaEstadoBadge(g.estado)}</div>
+        <div><span class="text-slate-500 text-xs">RENSPA origen</span><br>${esc(g.renspaOrigen||'—')}</div>
+        <div><span class="text-slate-500 text-xs">RENSPA destino</span><br>${esc(g.renspaDestino||'—')}</div>
+        <div class="col-span-2"><span class="text-slate-500 text-xs">Contacto</span><br>${esc(g.titularOrigen||g.titularDestino||g.frigorifico||'—')}</div>
+      </div>
+      <table class="data text-sm mb-3"><thead><tr><th>Categoría</th><th class="text-right">Cabezas</th><th class="text-right">Kg</th><th class="text-right">$/kg</th><th class="text-right">Bruto</th></tr></thead><tbody>${rows}</tbody>
+        <tfoot><tr class="font-semibold"><td>Total estimado (c/IVA)</td><td class="text-right">${fmtN((g.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0))}</td><td colspan="2"></td><td class="text-right">${fmt$(g.totalConIva)}</td></tr></tfoot></table>
+      <div class="text-sm font-medium text-slate-700 mb-1">Pagos a cuenta — pagado ${fmt$(g.pagado)} · saldo estimado ${fmt$(g.saldoEstimado)}</div>
+      <table class="data text-sm"><thead><tr><th>Fecha</th><th>Método</th><th>Ref.</th><th class="text-right">Monto</th></tr></thead><tbody>${pagos}</tbody></table>
+      ${g.observaciones?`<div class="text-xs text-slate-500 mt-2">📝 ${esc(g.observaciones)}</div>`:''}`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+async function guiaEditar(id){
+  try{ const g=(await api('/api/guias-hacienda/'+id)).data; guiaForm({ ...g, _editId:g.id }); }catch(e){ toast(e.message,'error'); }
+}
+async function guiaAnular(id){
+  if(!confirm('¿Anular esta guía? Se revierte el movimiento de stock y la cuenta estimada. Los pagos a cuenta quedan como historial.')) return;
+  try{ await api('/api/guias-hacienda/'+id+'/anular',{method:'POST'}); toast('Guía anulada','success'); delete state.cache.haciendaResumen; pages.guiasHacienda(); }catch(e){ toast(e.message,'error'); }
+}
+async function guiaEliminar(id){
+  if(!confirm('¿Eliminar esta guía definitivamente?')) return;
+  try{ await api('/api/guias-hacienda/'+id,{method:'DELETE'}); toast('Guía eliminada','success'); delete state.cache.haciendaResumen; pages.guiasHacienda(); }catch(e){ toast(e.message,'error'); }
+}
+
+// ---- Importar guía por foto/PDF (IA) ----
+function guiaImportar(){
+  openModal({ title:'📷 Importar guía DT-e (foto o PDF)', size:'max-w-lg',
+    body:`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mb-3">
+        Subí la <b>foto</b> o el <b>PDF</b> de la guía DT-e. La leemos con IA y precargamos el N° de DT-e, la fecha, los RENSPA y las <b>categorías con sus cabezas</b>. Los <b>kilos y precios</b> los completás vos (la guía no los trae).
+      </div>
+      <input id="guia-file" type="file" accept="image/*,.pdf" class="input"/>
+      <div id="guia-file-msg" class="text-xs mt-2"></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="guiaImportarRun()">Leer guía</button>` });
+}
+async function guiaImportarRun(){
+  const f=document.getElementById('guia-file')?.files?.[0]; const msg=document.getElementById('guia-file-msg');
+  if(!f){ if(msg) msg.innerHTML='<span class="text-red-700">Elegí una foto o PDF.</span>'; return; }
+  if(msg) msg.innerHTML='<span class="text-blue-700">⏳ Leyendo la guía…</span>';
+  try{
+    const fd=new FormData(); fd.append('archivo',f);
+    const r=await fetch(API_BASE+'/api/guias-hacienda/import',{ method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body:fd });
+    const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||'Error '+r.status);
+    closeModal(); guiaForm(j.data);
+  }catch(e){ if(msg) msg.innerHTML=`<span class="text-red-700">❌ ${esc(e.message)}</span>`; toast(e.message,'error'); }
+}
+
+// ---- Formulario de guía ----
+async function guiaForm(prefill=null){
+  let campos=[], clientes=[], proveedores=[];
+  try{
+    const [ca,cl,pr]=await Promise.all([api('/api/campos'),api('/api/clientes'),api('/api/proveedores')]);
+    campos=(ca.data||[]).filter(x=>x.activo!==false); clientes=cl.data||[]; proveedores=pr.data||[];
+    if(!state.cache.catHacienda){ try{ state.cache.catHacienda=(await api('/api/categorias-hacienda')).data||[]; }catch{} }
+    if(!state.cache.catalogos){ try{ state.cache.catalogos=(await api('/api/catalogos')).data||[]; }catch{} }
+  }catch(e){ return toast(e.message,'error'); }
+  const cats=hacCategoriasDisponibles();
+  const hoy=new Date().toISOString().slice(0,10);
+  const p=prefill||{};
+  state._guiaEditId=p._editId||null; state._guiaData=p;
+  const motivo=p.motivo||'venta';
+  const rengs=(p.renglones&&p.renglones.length)?p.renglones:[{ categoria:'', cabezas:'', kilos:'', precioKg:'', alicuotaIva:10.5, categoriaTexto:'' }];
+  const catOpts=(sel)=>`<option value="">— elegir —</option>`+cats.map(c=>`<option value="${esc(c)}" ${c===sel?'selected':''}>${esc(c)}</option>`).join('');
+  const rengRow=(r)=>`<tr data-guia-r>
+    <td class="px-1 py-1"><select class="input text-sm" data-r="categoria" onchange="guiaRecalc()">${catOpts(r.categoria||'')}</select>
+      ${r.categoriaTexto?`<div class="text-[10px] text-slate-400 mt-0.5" title="${esc(r.categoriaTexto)}">📄 ${esc((r.categoriaTexto||'').slice(0,40))}</div>`:''}</td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="cabezas" type="number" min="0" step="1" value="${r.cabezas!=null?r.cabezas:''}" oninput="guiaRecalc()"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="kilos" type="number" step="0.01" value="${r.kilos!=null&&r.kilos!==0?r.kilos:''}" oninput="guiaRecalc()"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="precioKg" type="number" step="0.01" value="${r.precioKg!=null&&r.precioKg!==0?r.precioKg:''}" oninput="guiaRecalc()"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="alicuotaIva" type="number" step="0.01" value="${r.alicuotaIva!=null?r.alicuotaIva:10.5}" oninput="guiaRecalc()" style="width:60px"/></td>
+    <td class="px-1 py-1 text-right text-xs" data-r-bruto>—</td>
+    <td class="px-1 py-1 text-right"><button type="button" class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove(); guiaRecalc()">✕</button></td></tr>`;
+  openModal({ title: state._guiaEditId?'✏️ Editar guía DT-e':(prefill&&prefill._editId===undefined&&prefill.numeroDte!==undefined&&!prefill.motivo?'📷 Confirmar guía DT-e':'📋 Nueva guía DT-e'), size:'max-w-5xl',
+    body:`
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div><label class="label">Motivo *</label><select id="guia-motivo" class="input" onchange="guiaMotivoChange()">${GUIA_MOTIVOS.map(m=>`<option value="${m.v}" ${m.v===motivo?'selected':''}>${m.l}</option>`).join('')}</select></div>
+        <div><label class="label">Sentido *</label><select id="guia-sentido" class="input">${['egreso','ingreso'].map(s=>`<option value="${s}" ${ (p.sentido||(GUIA_MOTIVOS.find(m=>m.v===motivo)||{}).sentido)===s?'selected':''}>${s==='egreso'?'Egreso (sale)':'Ingreso (entra)'}</option>`).join('')}</select></div>
+        <div><label class="label">Fecha *</label><input id="guia-fec" type="date" class="input" value="${p.fecha?String(p.fecha).slice(0,10):hoy}"/></div>
+        <div><label class="label">N° DT-e</label><input id="guia-dte" class="input font-mono" value="${esc(p.numeroDte||'')}"/></div>
+        <div class="col-span-2"><label class="label">Campo (tuyo) *</label><select id="guia-campo" class="input"><option value="">— elegir —</option>${campos.map(c=>`<option value="${c.id}" ${c.id===p.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label">Especie</label><input id="guia-esp" class="input" value="${esc(p.especie||'')}" placeholder="Bovino/Porcino…"/></div>
+        <div><label class="label">Alícuota IVA %</label><input id="guia-alic" type="number" step="0.01" class="input" value="${p.alicuotaIva!=null?p.alicuotaIva:10.5}" oninput="guiaRecalc()"/></div>
+        <div><label class="label">Tipo de contacto</label><select id="guia-ctipo" class="input" onchange="guiaCtipoChange()"><option value="">— ninguno —</option><option value="cliente" ${p.contactoTipo==='cliente'?'selected':''}>Cliente</option><option value="proveedor" ${p.contactoTipo==='proveedor'?'selected':''}>Proveedor</option><option value="frigorifico" ${p.contactoTipo==='frigorifico'?'selected':''}>Frigorífico</option></select></div>
+        <div class="col-span-3" id="guia-contacto-wrap">
+          <label class="label">Contacto (para la cuenta estimada)</label>
+          <select id="guia-cid" class="input">${clientes.map(c=>`<option value="cliente:${c.id}" ${p.contactoTipo==='cliente'&&p.contactoId===c.id?'selected':''}>Cliente · ${esc(c.razonSocial)}</option>`).join('')}${proveedores.map(c=>`<option value="proveedor:${c.id}" ${p.contactoTipo==='proveedor'&&p.contactoId===c.id?'selected':''}>Proveedor · ${esc(c.razonSocial)}</option>`).join('')}</select>
+        </div>
+        <div class="col-span-2"><label class="label">Frigorífico (si es faena)</label><input id="guia-frig" class="input" value="${esc(p.frigorifico||'')}"/></div>
+        <div><label class="label">CUIT frig.</label><input id="guia-frigcuit" class="input" value="${esc(p.frigorificoCuit||'')}"/></div>
+        <div class="col-span-2"><label class="label">RENSPA origen</label><input id="guia-rorig" class="input" value="${esc(p.renspaOrigen||'')}"/></div>
+        <div class="col-span-2"><label class="label">RENSPA destino</label><input id="guia-rdest" class="input" value="${esc(p.renspaDestino||'')}"/></div>
+        <div class="col-span-2"><label class="label">Titular origen</label><input id="guia-torig" class="input" value="${esc(p.titularOrigen||'')}"/></div>
+        <div class="col-span-2"><label class="label">Titular destino</label><input id="guia-tdest" class="input" value="${esc(p.titularDestino||'')}"/></div>
+      </div>
+      <div class="kpi p-0 overflow-hidden mb-3">
+        <div class="px-3 py-2 bg-slate-50 border-b flex items-center justify-between">
+          <span class="text-sm font-medium text-slate-700">Renglones — categoría y cabezas (kilos/precios son estimados y opcionales)</span>
+          <button type="button" class="btn btn-secondary text-xs" onclick="guiaAddReng()">+ Renglón</button>
+        </div>
+        <table class="data"><thead><tr><th>Categoría *</th><th class="text-right">Cabezas *</th><th class="text-right">Kg (est.)</th><th class="text-right">$/kg (est.)</th><th class="text-right">IVA %</th><th class="text-right">Bruto</th><th></th></tr></thead>
+          <tbody id="guia-rengs">${rengs.map(r=>rengRow(r)).join('')}</tbody></table>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 bg-slate-50 rounded-lg border mb-3">
+        <div><label class="label text-xs">Bruto estimado</label><div id="guia-t-bruto" class="text-base font-bold">$ 0,00</div></div>
+        <div><label class="label text-xs">IVA estimado</label><div id="guia-t-iva" class="text-base font-bold text-slate-600">$ 0,00</div></div>
+        <div><label class="label text-xs">Total estimado</label><div id="guia-t-total" class="text-base font-bold text-green-700">$ 0,00</div></div>
+        <div class="text-xs text-slate-500 self-center" id="guia-t-hint"></div>
+      </div>
+      <div><label class="label">Observaciones</label><textarea id="guia-obs" class="input" rows="2">${esc(p.observaciones||'')}</textarea></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="guiaSave()">💾 Guardar guía</button>` });
+  guiaCtipoChange(); guiaRecalc();
+}
+function guiaMotivoChange(){
+  const m=$('#guia-motivo')?.value; const s=(GUIA_MOTIVOS.find(x=>x.v===m)||{}).sentido; const se=$('#guia-sentido'); if(se&&s) se.value=s;
+  guiaRecalc();
+}
+function guiaCtipoChange(){
+  const t=$('#guia-ctipo')?.value; const wrap=$('#guia-contacto-wrap'); const sel=$('#guia-cid'); if(!sel) return;
+  if(t==='frigorifico'||t===''){ if(wrap) wrap.style.opacity=t===''?'0.5':'1'; }
+  // filtra opciones por tipo
+  [...sel.options].forEach(o=>{ o.hidden = t && t!=='frigorifico' ? !o.value.startsWith(t+':') : (t==='frigorifico'||t==='' ? true : false); });
+  if(t==='frigorifico'||t===''){ sel.selectedIndex=-1; }
+  else { const vis=[...sel.options].find(o=>!o.hidden); if(vis && ([...sel.options].find(o=>o.selected)?.hidden!==false)) vis.selected=true; }
+}
+function guiaAddReng(){
+  const b=$('#guia-rengs'); if(!b) return; const cats=hacCategoriasDisponibles();
+  const opts=`<option value="">— elegir —</option>`+cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  b.insertAdjacentHTML('beforeend',`<tr data-guia-r>
+    <td class="px-1 py-1"><select class="input text-sm" data-r="categoria" onchange="guiaRecalc()">${opts}</select></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="cabezas" type="number" min="0" step="1" oninput="guiaRecalc()"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="kilos" type="number" step="0.01" oninput="guiaRecalc()"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="precioKg" type="number" step="0.01" oninput="guiaRecalc()"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="alicuotaIva" type="number" step="0.01" value="10.5" oninput="guiaRecalc()" style="width:60px"/></td>
+    <td class="px-1 py-1 text-right text-xs" data-r-bruto>—</td>
+    <td class="px-1 py-1 text-right"><button type="button" class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove(); guiaRecalc()">✕</button></td></tr>`);
+  guiaRecalc();
+}
+function guiaLeerRengs(){
+  return [...document.querySelectorAll('#guia-rengs tr[data-guia-r]')].map(tr=>{
+    const g=(k)=>tr.querySelector(`[data-r="${k}"]`)?.value;
+    const cabezas=parseInt(g('cabezas')||0,10)||0, kilos=Number(g('kilos')||0), precioKg=Number(g('precioKg')||0), alic=Number(g('alicuotaIva')||10.5);
+    const bruto=Math.round(kilos*precioKg*100)/100;
+    return { tr, categoria:g('categoria')||'', cabezas, kilos, precioKg, alicuotaIva:alic, bruto, iva:Math.round(bruto*alic)/100 };
+  });
+}
+function guiaRecalc(){
+  const rs=guiaLeerRengs(); let bruto=0, iva=0;
+  rs.forEach(r=>{ bruto+=r.bruto; iva+=r.iva; const c=r.tr.querySelector('[data-r-bruto]'); if(c) c.textContent=r.bruto?fmt$(r.bruto):'—'; });
+  const setT=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+  setT('guia-t-bruto',fmt$(bruto)); setT('guia-t-iva',fmt$(iva)); setT('guia-t-total',fmt$(bruto+iva));
+  const sent=$('#guia-sentido')?.value; setT('guia-t-hint', sent==='ingreso'?'≈ a pagar (estimado)':'≈ a cobrar (estimado)');
+}
+async function guiaSave(){
+  const rengs=guiaLeerRengs().map(r=>({ categoria:r.categoria, cabezas:r.cabezas, kilos:r.kilos, precioKg:r.precioKg, alicuotaIva:r.alicuotaIva, bruto:r.bruto, iva:r.iva }));
+  if(!rengs.length) return toast('Agregá al menos un renglón','warn');
+  for(const r of rengs){ if(!r.categoria) return toast('Elegí la categoría de cada renglón','warn'); if(!r.cabezas||r.cabezas<1) return toast('Cargá las cabezas de cada renglón','warn'); }
+  const cidRaw=$('#guia-cid')?.value||''; const ctipoSel=$('#guia-ctipo')?.value||'';
+  let contactoTipo=null, contactoId=null;
+  if(ctipoSel==='frigorifico'){ contactoTipo='frigorifico'; }
+  else if(cidRaw.includes(':')){ const [t,id]=cidRaw.split(':'); contactoTipo=t; contactoId=id; }
+  const data={
+    campoId: $('#guia-campo').value||null,
+    fecha: $('#guia-fec').value,
+    sentido: $('#guia-sentido').value,
+    motivo: $('#guia-motivo').value,
+    numeroDte: $('#guia-dte').value.trim()||null,
+    especie: $('#guia-esp').value.trim()||null,
+    alicuotaIva: Number($('#guia-alic').value||10.5),
+    contactoTipo, contactoId,
+    frigorifico: $('#guia-frig').value.trim()||null, frigorificoCuit: $('#guia-frigcuit').value.trim()||null,
+    renspaOrigen: $('#guia-rorig').value.trim()||null, renspaDestino: $('#guia-rdest').value.trim()||null,
+    titularOrigen: $('#guia-torig').value.trim()||null, titularDestino: $('#guia-tdest').value.trim()||null,
+    observaciones: $('#guia-obs').value.trim()||null,
+    archivoNombre: (state._guiaData||{}).archivoNombre||null,
+    renglones: rengs,
+  };
+  if(!data.campoId) return toast('Elegí el campo','warn');
+  try{
+    if(state._guiaEditId){ await api('/api/guias-hacienda/'+state._guiaEditId,{method:'PUT',body:JSON.stringify(data)}); toast('Guía actualizada · stock ajustado','success'); }
+    else { await api('/api/guias-hacienda',{method:'POST',body:JSON.stringify(data)}); toast('Guía guardada · stock movido y cuenta estimada creada','success'); }
+    state._guiaEditId=null; closeModal(); delete state.cache.haciendaResumen; pages.guiasHacienda();
+  }catch(e){ toast(e.message,'error'); }
+}
+
+// ---- Pagos a cuenta ----
+async function guiaPagos(id){
+  let g; try{ g=(await api('/api/guias-hacienda/'+id)).data; }catch(e){ return toast(e.message,'error'); }
+  const hoy=new Date().toISOString().slice(0,10);
+  const pagos=(g.pagos||[]).map(p=>`<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td><td class="text-right"><button class="btn btn-ghost text-xs text-red-600" onclick='guiaPagoDel(${JSON.stringify(id)},${JSON.stringify(p.id)})'>🗑️</button></td></tr>`).join('')||`<tr><td colspan="5" class="text-slate-400 text-center py-2">Sin pagos.</td></tr>`;
+  openModal({ title:`💵 Pagos a cuenta — guía ${esc(g.numeroDte||'')}`, size:'max-w-2xl',
+    body:`<div class="text-sm mb-2">Total estimado ${fmt$(g.totalConIva)} · pagado ${fmt$(g.pagado)} · <b>saldo ${fmt$(g.saldoEstimado)}</b></div>
+      <table class="data text-sm mb-3"><thead><tr><th>Fecha</th><th>Método</th><th>Ref.</th><th class="text-right">Monto</th><th></th></tr></thead><tbody>${pagos}</tbody></table>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 items-end p-3 bg-slate-50 rounded-lg border">
+        <div><label class="label text-xs">Fecha</label><input id="gp-fec" type="date" class="input text-sm" value="${hoy}"/></div>
+        <div><label class="label text-xs">Monto</label><input id="gp-monto" type="number" step="0.01" class="input text-sm text-right"/></div>
+        <div><label class="label text-xs">Método</label><select id="gp-metodo" class="input text-sm"><option value="efectivo">Efectivo</option><option value="banco">Banco/transferencia</option><option value="cheque">Cheque</option><option value="otro">Otro</option></select></div>
+        <div><label class="label text-xs">Referencia</label><input id="gp-ref" class="input text-sm"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button><button class="btn btn-primary" onclick='guiaPagoAdd(${JSON.stringify(id)})'>+ Registrar pago</button>` });
+}
+async function guiaPagoAdd(id){
+  const monto=Number(document.getElementById('gp-monto')?.value||0); if(!monto||monto<=0) return toast('Cargá el monto','warn');
+  const data={ fecha:document.getElementById('gp-fec').value, monto, metodo:document.getElementById('gp-metodo').value, referencia:document.getElementById('gp-ref').value.trim()||null };
+  try{ await api('/api/guias-hacienda/'+id+'/pagos',{method:'POST',body:JSON.stringify(data)}); toast('Pago a cuenta registrado','success'); closeModal(); await pages.guiasHacienda(); guiaPagos(id); }catch(e){ toast(e.message,'error'); }
+}
+async function guiaPagoDel(id,pagoId){
+  if(!confirm('¿Borrar este pago a cuenta?')) return;
+  try{ await api('/api/guias-hacienda/'+id+'/pagos/'+pagoId,{method:'DELETE'}); toast('Pago borrado','success'); closeModal(); await pages.guiasHacienda(); guiaPagos(id); }catch(e){ toast(e.message,'error'); }
+}
+
+// ---- Vincular con liquidación (venta/faena) o factura de compra ----
+async function guiaVincular(id){
+  let g; try{ g=(await api('/api/guias-hacienda/'+id)).data; }catch(e){ return toast(e.message,'error'); }
+  if(g.sentido==='ingreso'){ return guiaVincularCompra(g); }
+  // egreso → liquidación de hacienda
+  const rengRow=(r)=>`<tr data-gv-r data-cat="${esc(r.categoria)}" data-esp="${esc(r.especie||g.especie||'')}">
+    <td class="px-1 py-1 text-sm">${esc(r.categoria)} <span class="text-slate-400">(${fmtN(r.cabezas)} cab)</span></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="cabezas" type="number" value="${r.cabezas}" min="0" step="1"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="kilos" type="number" step="0.01" value="${r.kilos||''}" oninput="guiaVincRecalc()"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="precioKg" type="number" step="0.01" value="${r.precioKg||''}" oninput="guiaVincRecalc()"/></td>
+    <td class="px-1 py-1"><input class="input text-sm text-right" data-r="alicuotaIva" type="number" step="0.01" value="${r.alicuotaIva||10.5}" oninput="guiaVincRecalc()" style="width:60px"/></td>
+    <td class="px-1 py-1 text-right text-xs" data-r-bruto>—</td></tr>`;
+  openModal({ title:`🔗 Vincular guía ${esc(g.numeroDte||'')} → Liquidación`, size:'max-w-4xl',
+    body:`<div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-3 mb-3">
+        Ajustá los <b>kilos y precios REALES</b> de la liquidación. Al vincular se crea la <b>liquidación de animales</b> (cuenta a cobrar definitiva + Libro IVA) y <b>no se vuelve a mover el stock</b> (ya lo movió la guía). Los pagos a cuenta (${fmt$(g.pagado)}) netean contra el neto.
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+        <div><label class="label">N° liquidación</label><input id="gv-nro" class="input" value="${esc(g.numeroDte||'')}"/></div>
+        <div><label class="label">Fecha</label><input id="gv-fec" type="date" class="input" value="${(g.fecha||'').slice(0,10)}"/></div>
+        <div><label class="label">Retenciones/gastos (se restan)</label><input id="gv-gastos" type="number" step="0.01" class="input text-right" value="0" oninput="guiaVincRecalc()"/></div>
+      </div>
+      <table class="data mb-3"><thead><tr><th>Categoría</th><th class="text-right">Cabezas</th><th class="text-right">Kg real</th><th class="text-right">$/kg real</th><th class="text-right">IVA %</th><th class="text-right">Bruto</th></tr></thead><tbody id="gv-rengs">${(g.renglones||[]).map(rengRow).join('')}</tbody></table>
+      <div class="grid grid-cols-3 gap-3 p-3 bg-slate-50 rounded-lg border">
+        <div><label class="label text-xs">Bruto</label><div id="gv-t-bruto" class="font-bold">$ 0,00</div></div>
+        <div><label class="label text-xs">IVA</label><div id="gv-t-iva" class="font-bold text-slate-600">$ 0,00</div></div>
+        <div><label class="label text-xs">NETO A COBRAR</label><input id="gv-neto" type="number" step="0.01" class="input text-right font-bold text-green-700" oninput="this.dataset.auto='0'"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='guiaVincularRun(${JSON.stringify(g.id)})'>🔗 Vincular y crear liquidación</button>` });
+  state._gvGuia=g; guiaVincRecalc();
+}
+function guiaVincLeer(){
+  return [...document.querySelectorAll('#gv-rengs tr[data-gv-r]')].map(tr=>{
+    const g=(k)=>tr.querySelector(`[data-r="${k}"]`)?.value;
+    const cabezas=parseInt(g('cabezas')||0,10)||0, kilos=Number(g('kilos')||0), precioKg=Number(g('precioKg')||0), alic=Number(g('alicuotaIva')||10.5);
+    const bruto=Math.round(kilos*precioKg*100)/100;
+    return { tr, categoria:tr.getAttribute('data-cat'), especie:tr.getAttribute('data-esp')||null, cabezas, kilos, precioKg, alicuotaIva:alic, bruto, iva:Math.round(bruto*alic)/100 };
+  });
+}
+function guiaVincRecalc(){
+  const rs=guiaVincLeer(); let bruto=0, iva=0;
+  rs.forEach(r=>{ bruto+=r.bruto; iva+=r.iva; const c=r.tr.querySelector('[data-r-bruto]'); if(c) c.textContent=r.bruto?fmt$(r.bruto):'—'; });
+  const setT=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+  setT('gv-t-bruto',fmt$(bruto)); setT('gv-t-iva',fmt$(iva));
+  const neto=document.getElementById('gv-neto');
+  if(neto&&(neto.value===''||neto.dataset.auto!=='0')){ const gastos=Number(document.getElementById('gv-gastos')?.value||0); neto.value=Math.round((bruto+iva-gastos)*100)/100; neto.dataset.auto='1'; }
+}
+async function guiaVincularRun(id){
+  const rengs=guiaVincLeer().map(r=>({ categoria:r.categoria, especie:r.especie, cabezas:r.cabezas, kilos:r.kilos, precioKg:r.precioKg, alicuotaIva:r.alicuotaIva, bruto:r.bruto, iva:r.iva }));
+  const data={ numero:document.getElementById('gv-nro').value.trim()||null, fecha:document.getElementById('gv-fec').value||null,
+    gastosTotal:Number(document.getElementById('gv-gastos').value||0), ivaGastos:0,
+    neto:Number(document.getElementById('gv-neto').value||0), renglones:rengs };
+  try{ const r=await api('/api/guias-hacienda/'+id+'/vincular-liquidacion',{method:'POST',body:JSON.stringify(data)});
+    toast('Guía vinculada · liquidación creada','success'); closeModal(); delete state.cache.haciendaResumen; pages.guiasHacienda();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function guiaVincularCompra(g){
+  let fcs=[]; try{ fcs=(await api('/api/facturas-compra')).data||[]; }catch{}
+  const opts=fcs.slice(0,200).map(f=>`<option value="${f.id}">${esc(f.tipo||'FC')} ${String(f.puntoVenta||'').padStart(4,'0')}-${String(f.numero||'').padStart(8,'0')} · ${esc(f.proveedor?.razonSocial||'')} · ${fmt$(f.total)}</option>`).join('');
+  openModal({ title:`🔗 Vincular guía ${esc(g.numeroDte||'')} → Factura de compra`, size:'max-w-lg',
+    body:`<div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-3 mb-3">Elegí la <b>factura de compra</b> del proveedor. Se saca la cuenta estimada de la guía (la factura ya tiene su cuenta a pagar) y el stock queda como lo movió la guía.</div>
+      <label class="label">Factura de compra</label><select id="gv-fc" class="input">${opts||'<option value="">— no hay facturas de compra —</option>'}</select>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='guiaVincularCompraRun(${JSON.stringify(g.id)})'>🔗 Vincular</button>` });
+}
+async function guiaVincularCompraRun(id){
+  const fc=document.getElementById('gv-fc')?.value; if(!fc) return toast('Elegí una factura','warn');
+  try{ await api('/api/guias-hacienda/'+id+'/vincular-compra',{method:'POST',body:JSON.stringify({ facturaCompraId:fc })}); toast('Guía vinculada a la factura','success'); closeModal(); pages.guiasHacienda(); }catch(e){ toast(e.message,'error'); }
+}
+
 pages.liquidacionesHacienda = async function() {
   setHeader('Liquidaciones de animales', 'Venta de animales (faena/consignación) — descuenta stock real y SENASA');
   if (!can('ventas:read')) { $('#page-body').innerHTML = stubPage('liquidacionesHacienda','Liquidaciones animales'); return; }
@@ -28882,10 +29269,10 @@ function retExpSistema() {
     extra.innerHTML = `<label class="label">Impuesto</label>
       <select id="exp-imp" class="input"><option value="">Todos los nacionales (Ganancias, IVA, SUSS)</option>
         <option value="ganancias">Ganancias</option><option value="iva">IVA</option><option value="suss">SUSS</option></select>`;
-    nota.innerHTML = `<div class="p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">⚠️ Archivo <b>provisorio</b> (187 caracteres): validá el layout con tu contador. <b>IIBB no entra en SICORE</b> — para Ingresos Brutos usá SIRCAR.</div>`;
+    nota.innerHTML = `<div class="p-2 rounded bg-sky-50 border border-sky-200 text-xs text-sky-800">📄 Archivo de <b>187 caracteres</b> para presentar en ARCA. <b>IIBB no entra en SICORE</b> — para Ingresos Brutos usá SIRCAR.</div>`;
   } else {
     extra.innerHTML = `<div class="p-2 rounded bg-sky-50 border border-sky-200 text-xs text-sky-800">Exporta las <b>IIBB practicadas</b> de todas las provincias en un archivo, con el <b>código de jurisdicción</b> en cada renglón. Cargá la provincia en cada retención de IIBB.</div>`;
-    nota.innerHTML = `<div class="p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">⚠️ SIRCAR <b>provisorio</b>: verificá jurisdicciones y formato con tu contador/aplicativo.</div>`;
+    nota.innerHTML = `<div class="p-2 rounded bg-sky-50 border border-sky-200 text-xs text-sky-800">🏙️ SIRCAR reúne todas las provincias en un archivo, con el código de jurisdicción por renglón.</div>`;
   }
 }
 async function retExpDescargar() {
@@ -29168,12 +29555,12 @@ pages.exportContador = async function() {
     <div class="grid md:grid-cols-3 gap-3">
       <div class="kpi">
         <div class="font-bold text-slate-800 mb-1">📄 SICORE / SIRE (ARCA)</div>
-        <div class="text-[11px] text-slate-500 mb-3">Retenciones <b>practicadas nacionales</b> (Ganancias, IVA, SUSS), ancho fijo de 187, un .txt por empresa. <span class="text-amber-700">Provisorio: validar con el contador.</span></div>
+        <div class="text-[11px] text-slate-500 mb-3">Retenciones <b>practicadas nacionales</b> (Ganancias, IVA, SUSS), ancho fijo de 187, un .txt por empresa.</div>
         <button class="btn btn-secondary w-full" onclick="expContSicore('sicore')">Descargar SICORE/SIRE</button>
       </div>
       <div class="kpi">
         <div class="font-bold text-slate-800 mb-1">🏙️ SIRCAR — Ingresos Brutos</div>
-        <div class="text-[11px] text-slate-500 mb-3">IIBB <b>practicadas</b> de todas las provincias en un .txt, con el <b>código de jurisdicción</b>. Un archivo por empresa. <span class="text-amber-700">Provisorio: validar con el contador.</span></div>
+        <div class="text-[11px] text-slate-500 mb-3">IIBB <b>practicadas</b> de todas las provincias en un .txt, con el <b>código de jurisdicción</b>. Un archivo por empresa.</div>
         <button class="btn btn-secondary w-full" onclick="expContSicore('sircar')">Descargar SIRCAR (IIBB)</button>
       </div>
       <div class="kpi">

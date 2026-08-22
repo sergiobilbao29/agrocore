@@ -69,6 +69,7 @@ model Company {
   liquidacionesCereal LiquidacionCereal[]
   contratosCereal ContratoCereal[]
   liquidacionesHacienda LiquidacionHacienda[]
+  guiasHacienda   GuiaHacienda[]
   mensajes        Mensaje[]
   chatEstados     ChatEstado[]
   pushSubs        PushSubscription[]
@@ -1286,6 +1287,94 @@ model LiquidacionHaciendaRenglon {
   liquidacion    LiquidacionHacienda @relation(fields: [liquidacionId], references: [id], onDelete: Cascade)
 
   @@index([liquidacionId])
+}
+
+// ============================================================
+// GUÍA DE HACIENDA / DT-e  (comprobante OPERATIVO, previo al fiscal)
+// Mueve el stock de hacienda AL INSTANTE y arma una cuenta corriente
+// PROVISORIA (estimada). Cuando llega la Liquidación / Factura formal se
+// "vincula": ajusta kilos/precios/retenciones reales, NO vuelve a tocar
+// el stock y convierte la CC provisoria en deuda/crédito fiscal definitivo.
+// Cubre compra, venta, invernada, traslado y faena (servicio / propia).
+// ============================================================
+model GuiaHacienda {
+  id              String   @id @default(cuid())
+  companyId       String
+  campoId         String?           // establecimiento propio (origen si egreso / destino si ingreso)
+  fecha           DateTime
+  sentido         String            // "ingreso" | "egreso"
+  motivo          String            // "compra" | "venta" | "faena" | "invernada" | "traslado" | "otro"
+  numeroDte       String?           // N° DT-e / DTe-DUT (código de la guía)
+  renspaOrigen    String?
+  renspaDestino   String?
+  titularOrigen   String?
+  titularDestino  String?
+  especie         String?
+  contactoTipo    String?           // "cliente" | "proveedor" | "frigorifico"
+  contactoId      String?           // proveedor/cliente vinculado (para CC)
+  frigorifico     String?           // nombre libre si faena/servicio
+  frigorificoCuit String?
+  // Comercial provisorio
+  alicuotaIva     Float    @default(10.5)
+  totalEstimado   Float    @default(0)   // suma bruto de renglones (estimado)
+  ivaEstimado     Float    @default(0)
+  // Estado / vinculación
+  estado          String   @default("pendiente")  // pendiente | vinculada | anulada | en_frigorifico | faena_cerrada
+  liquidacionId   String?          // liquidación de hacienda vinculada (cierre fiscal)
+  facturaCompraId String?          // factura de compra vinculada
+  faenaId         String?          // faena vinculada
+  ctacteRef       String?          // referencia del asiento provisorio en ctaCte (para revertir)
+  archivoNombre   String?
+  observaciones   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  renglones       GuiaHaciendaRenglon[]
+  pagos           GuiaHaciendaPago[]
+
+  @@index([companyId])
+  @@index([companyId, estado])
+  @@index([fecha])
+}
+
+model GuiaHaciendaRenglon {
+  id             String   @id @default(cuid())
+  guiaId         String
+  especie        String?
+  categoria      String                     // categoría del sistema (Novillo, Vaquillona, Lechón...)
+  categoriaTexto String?                    // texto crudo de la guía
+  cabezas        Int      @default(0)
+  kilos          Float    @default(0)       // kg totales (manual — la guía no los trae)
+  precioKg       Float    @default(0)       // precio provisorio (puede variar por calidad)
+  bruto          Float    @default(0)       // estimado (kg × precio o manual)
+  alicuotaIva    Float    @default(10.5)
+  iva            Float    @default(0)
+  haciendaMovId  String?                    // movimiento de stock generado (para revertir)
+  createdAt      DateTime @default(now())
+
+  guia           GuiaHacienda @relation(fields: [guiaId], references: [id], onDelete: Cascade)
+
+  @@index([guiaId])
+}
+
+model GuiaHaciendaPago {
+  id             String   @id @default(cuid())
+  guiaId         String
+  companyId      String
+  fecha          DateTime
+  monto          Float
+  metodo         String                     // efectivo | banco | cheque | otro
+  referencia     String?
+  bancoMovId     String?                    // link al movimiento bancario (para revertir)
+  efectivoId     String?
+  observaciones  String?
+  createdAt      DateTime @default(now())
+
+  guia           GuiaHacienda @relation(fields: [guiaId], references: [id], onDelete: Cascade)
+
+  @@index([guiaId])
+  @@index([companyId])
 }
 
 // ============================================================

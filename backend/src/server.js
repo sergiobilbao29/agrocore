@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.122.0';
+const AGROCORE_VERSION = '2.124.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8771,6 +8771,453 @@ app.put('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission('ve
 });
 
 // ============================================================
+// GUÍAS DE HACIENDA / DT-e  (comprobante operativo, previo al fiscal)
+// Mueve stock al instante + cuenta corriente PROVISORIA + pagos a cuenta.
+// Después se "vincula" con la Liquidación / Factura para el cierre fiscal.
+// ============================================================
+
+// tipo de HaciendaMovimiento según sentido + motivo de la guía
+function _guiaMovTipo(sentido, motivo) {
+  const eg = sentido === 'egreso';
+  if (motivo === 'compra' || motivo === 'invernada') return eg ? 'traslado_out' : 'compra';
+  if (motivo === 'venta') return eg ? 'venta' : 'compra';
+  if (motivo === 'faena') return eg ? 'traslado_out' : 'compra';
+  if (motivo === 'traslado') return eg ? 'traslado_out' : 'traslado_in';
+  return eg ? 'traslado_out' : 'traslado_in';
+}
+const _round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+// normaliza y calcula bruto/iva de los renglones
+function _guiaRows(renglones, alicDefault) {
+  return (renglones || []).map(r => {
+    const cabezas = Math.max(0, parseInt(r.cabezas, 10) || 0);
+    const kilos = Math.max(0, Number(r.kilos) || 0);
+    const precioKg = Math.max(0, Number(r.precioKg) || 0);
+    const alic = (r.alicuotaIva != null && r.alicuotaIva !== '') ? Number(r.alicuotaIva) : (alicDefault != null ? Number(alicDefault) : 10.5);
+    const bruto = (r.bruto != null && Number(r.bruto) > 0) ? Number(r.bruto) : kilos * precioKg;
+    const iva = (r.iva != null && r.iva !== '') ? Number(r.iva) : (bruto * alic) / 100;
+    return {
+      especie: r.especie || null,
+      categoria: String(r.categoria || '').trim() || 'Sin categoría',
+      categoriaTexto: r.categoriaTexto || null,
+      cabezas, kilos, precioKg, alicuotaIva: alic,
+      bruto: _round2(bruto), iva: _round2(iva),
+    };
+  });
+}
+// aplica (o revierte) el impacto en stock de una guía: crea HaciendaMovimiento
+// y ajusta el declarado del campo. revert=true borra y suma/resta al revés.
+async function _guiaAplicarStock(tx, guia, rows, revert = false) {
+  if (!guia.campoId) return rows.map(() => null);
+  const tipo = _guiaMovTipo(guia.sentido, guia.motivo);
+  const ingreso = guia.sentido === 'ingreso';
+  const movIds = [];
+  for (const r of rows) {
+    let movId = null;
+    if (!revert) {
+      const mov = await tx.haciendaMovimiento.create({ data: {
+        companyId: guia.companyId, campoId: guia.campoId, categoria: r.categoria,
+        fecha: guia.fecha, tipo, cantidad: r.cabezas, kilos: r.kilos || null,
+        precioKg: r.precioKg || null, total: r.bruto || null,
+        clienteId: (guia.contactoTipo === 'cliente') ? guia.contactoId : null,
+        campoDestino: (guia.motivo === 'faena') ? 'Frigorífico (faena)' : null,
+        facturaRef: `GUIAH-${guia.id}`,
+        observaciones: `Guía DT-e ${guia.numeroDte || ''} (${guia.motivo})`.trim(),
+      }});
+      movId = mov.id;
+    }
+    // Ajuste del declarado del campo/categoría (mismo criterio que liquidación)
+    const st = await tx.haciendaStock.findFirst({ where: { companyId: guia.companyId, campoId: guia.campoId, categoria: r.categoria } });
+    const delta = (ingreso ? 1 : -1) * (revert ? -1 : 1) * r.cabezas;
+    if (st) {
+      await tx.haciendaStock.update({ where: { id: st.id }, data: { declarado: Math.max(0, (st.declarado || 0) + delta) } });
+    } else if (delta > 0) {
+      await tx.haciendaStock.create({ data: { companyId: guia.companyId, campoId: guia.campoId, categoria: r.categoria, declarado: delta } });
+    }
+    movIds.push(movId);
+  }
+  if (revert) {
+    await tx.haciendaMovimiento.deleteMany({ where: { companyId: guia.companyId, facturaRef: `GUIAH-${guia.id}` } });
+  }
+  return movIds;
+}
+// CC provisoria: un asiento "debe" estimado (a cobrar/pagar) contra el contacto
+async function _guiaCrearCCProvisoria(tx, guia, montoConIva) {
+  if (!guia.contactoId || !guia.contactoTipo || guia.contactoTipo === 'frigorifico') return;
+  if (!(montoConIva > 0)) return;
+  await tx.ctaCte.create({ data: {
+    companyId: guia.companyId, contactoTipo: guia.contactoTipo, contactoId: guia.contactoId,
+    fecha: guia.fecha, detalle: `Guía DT-e ${guia.numeroDte || ''} (estimado)`.trim(),
+    referencia: `GUIAH-${guia.id}`, debe: _round2(montoConIva), haber: 0,
+    categoria: 'guia_hacienda_prov',
+  }});
+}
+
+const _GUIA_INC = { renglones: true, pagos: { orderBy: { fecha: 'asc' } } };
+function _guiaConSaldo(g) {
+  const totalConIva = _round2((g.totalEstimado || 0) + (g.ivaEstimado || 0));
+  const pagado = _round2((g.pagos || []).reduce((a, p) => a + (Number(p.monto) || 0), 0));
+  return { ...g, totalConIva, pagado, saldoEstimado: _round2(totalConIva - pagado) };
+}
+
+// LISTA (filtros: estado, motivo, desde/hasta)
+app.get('/api/guias-hacienda', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.estado) where.estado = String(req.query.estado);
+    if (req.query.motivo) where.motivo = String(req.query.motivo);
+    if (req.query.desde || req.query.hasta) {
+      where.fecha = {};
+      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde));
+      if (req.query.hasta) { const h = new Date(String(req.query.hasta)); h.setHours(23, 59, 59, 999); where.fecha.lte = h; }
+    }
+    const data = await prisma.guiaHacienda.findMany({ where, include: _GUIA_INC, orderBy: { fecha: 'desc' } });
+    res.json({ ok: true, data: data.map(_guiaConSaldo) });
+  } catch (e) { next(e); }
+});
+
+// DETALLE
+app.get('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const g = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _GUIA_INC });
+    if (!g) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    res.json({ ok: true, data: _guiaConSaldo(g) });
+  } catch (e) { next(e); }
+});
+
+const _guiaSchema = z.object({
+  campoId: z.string().nullable().optional(),
+  fecha: z.coerce.date(),
+  sentido: z.enum(['ingreso', 'egreso']),
+  motivo: z.enum(['compra', 'venta', 'faena', 'invernada', 'traslado', 'otro']),
+  numeroDte: z.string().nullable().optional(),
+  renspaOrigen: z.string().nullable().optional(),
+  renspaDestino: z.string().nullable().optional(),
+  titularOrigen: z.string().nullable().optional(),
+  titularDestino: z.string().nullable().optional(),
+  especie: z.string().nullable().optional(),
+  contactoTipo: z.enum(['cliente', 'proveedor', 'frigorifico']).nullable().optional(),
+  contactoId: z.string().nullable().optional(),
+  frigorifico: z.string().nullable().optional(),
+  frigorificoCuit: z.string().nullable().optional(),
+  alicuotaIva: z.coerce.number().nonnegative().default(10.5),
+  observaciones: z.string().nullable().optional(),
+  archivoNombre: z.string().nullable().optional(),
+  renglones: z.array(z.object({
+    especie: z.string().nullable().optional(),
+    categoria: z.string().min(1),
+    categoriaTexto: z.string().nullable().optional(),
+    cabezas: z.coerce.number().int().nonnegative().default(0),
+    kilos: z.coerce.number().nonnegative().default(0),
+    precioKg: z.coerce.number().nonnegative().default(0),
+    bruto: z.coerce.number().nonnegative().nullable().optional(),
+    alicuotaIva: z.coerce.number().nonnegative().nullable().optional(),
+    iva: z.coerce.number().nonnegative().nullable().optional(),
+  })).min(1),
+});
+
+// CREAR (mueve stock + CC provisoria)
+app.post('/api/guias-hacienda', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = _guiaSchema.parse(req.body);
+    if (d.campoId) { const campo = await _verifyCampo(req, d.campoId); if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' }); }
+    const rows = _guiaRows(d.renglones, d.alicuotaIva);
+    const totalEstimado = _round2(rows.reduce((a, r) => a + r.bruto, 0));
+    const ivaEstimado = _round2(rows.reduce((a, r) => a + r.iva, 0));
+    const estado = (d.motivo === 'faena' && d.sentido === 'egreso') ? 'en_frigorifico' : 'pendiente';
+
+    const result = await prisma.$transaction(async (tx) => {
+      const guia = await tx.guiaHacienda.create({ data: {
+        companyId: req.companyId, campoId: d.campoId || null, fecha: d.fecha, sentido: d.sentido, motivo: d.motivo,
+        numeroDte: d.numeroDte || null, renspaOrigen: d.renspaOrigen || null, renspaDestino: d.renspaDestino || null,
+        titularOrigen: d.titularOrigen || null, titularDestino: d.titularDestino || null, especie: d.especie || null,
+        contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
+        frigorifico: d.frigorifico || null, frigorificoCuit: d.frigorificoCuit || null,
+        alicuotaIva: d.alicuotaIva, totalEstimado, ivaEstimado, estado,
+        ctacteRef: null, archivoNombre: d.archivoNombre || null, observaciones: d.observaciones || null,
+      }});
+      const movIds = await _guiaAplicarStock(tx, guia, rows);
+      for (let i = 0; i < rows.length; i++) {
+        await tx.guiaHaciendaRenglon.create({ data: { guiaId: guia.id, ...rows[i], haciendaMovId: movIds[i] || null } });
+      }
+      await _guiaCrearCCProvisoria(tx, guia, totalEstimado + ivaEstimado);
+      if (d.contactoId && d.contactoTipo && d.contactoTipo !== 'frigorifico') {
+        await tx.guiaHacienda.update({ where: { id: guia.id }, data: { ctacteRef: `GUIAH-${guia.id}` } });
+      }
+      return guia;
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: result.id }, include: _GUIA_INC });
+    res.status(201).json({ ok: true, data: _guiaConSaldo(full) });
+  } catch (e) { next(e); }
+});
+
+// EDITAR (solo si NO está vinculada): revierte y re-aplica stock + CC
+app.put('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _GUIA_INC });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    if (cur.estado === 'vinculada' || cur.estado === 'faena_cerrada') return res.status(409).json({ ok: false, error: 'La guía ya está vinculada a un comprobante. Desvinculá primero para editar.' });
+    const d = _guiaSchema.parse(req.body);
+    if (d.campoId) { const campo = await _verifyCampo(req, d.campoId); if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' }); }
+    const rows = _guiaRows(d.renglones, d.alicuotaIva);
+    const totalEstimado = _round2(rows.reduce((a, r) => a + r.bruto, 0));
+    const ivaEstimado = _round2(rows.reduce((a, r) => a + r.iva, 0));
+    const estado = (d.motivo === 'faena' && d.sentido === 'egreso') ? 'en_frigorifico' : 'pendiente';
+
+    await prisma.$transaction(async (tx) => {
+      // revertir stock y CC provisoria anteriores
+      await _guiaAplicarStock(tx, cur, cur.renglones, true);
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `GUIAH-${cur.id}`, categoria: 'guia_hacienda_prov' } });
+      await tx.guiaHaciendaRenglon.deleteMany({ where: { guiaId: cur.id } });
+      const guia = await tx.guiaHacienda.update({ where: { id: cur.id }, data: {
+        campoId: d.campoId || null, fecha: d.fecha, sentido: d.sentido, motivo: d.motivo,
+        numeroDte: d.numeroDte || null, renspaOrigen: d.renspaOrigen || null, renspaDestino: d.renspaDestino || null,
+        titularOrigen: d.titularOrigen || null, titularDestino: d.titularDestino || null, especie: d.especie || null,
+        contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
+        frigorifico: d.frigorifico || null, frigorificoCuit: d.frigorificoCuit || null,
+        alicuotaIva: d.alicuotaIva, totalEstimado, ivaEstimado, estado,
+        archivoNombre: d.archivoNombre || cur.archivoNombre || null, observaciones: d.observaciones || null,
+      }});
+      const movIds = await _guiaAplicarStock(tx, guia, rows);
+      for (let i = 0; i < rows.length; i++) {
+        await tx.guiaHaciendaRenglon.create({ data: { guiaId: guia.id, ...rows[i], haciendaMovId: movIds[i] || null } });
+      }
+      await _guiaCrearCCProvisoria(tx, guia, totalEstimado + ivaEstimado);
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
+    res.json({ ok: true, data: _guiaConSaldo(full) });
+  } catch (e) { next(e); }
+});
+
+// ANULAR (revierte stock y CC provisoria; conserva la guía y los pagos como historial)
+app.post('/api/guias-hacienda/:id/anular', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _GUIA_INC });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    if (cur.estado === 'anulada') return res.json({ ok: true, data: _guiaConSaldo(cur) });
+    await prisma.$transaction(async (tx) => {
+      await _guiaAplicarStock(tx, cur, cur.renglones, true);
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `GUIAH-${cur.id}`, categoria: 'guia_hacienda_prov' } });
+      await tx.guiaHaciendaRenglon.updateMany({ where: { guiaId: cur.id }, data: { haciendaMovId: null } });
+      await tx.guiaHacienda.update({ where: { id: cur.id }, data: { estado: 'anulada' } });
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
+    res.json({ ok: true, data: _guiaConSaldo(full) });
+  } catch (e) { next(e); }
+});
+
+// ELIMINAR (solo si no tiene pagos): revierte todo
+app.delete('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _GUIA_INC });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    if ((cur.pagos || []).length) return res.status(409).json({ ok: false, error: 'La guía tiene pagos a cuenta. Anulala en vez de eliminarla.' });
+    await prisma.$transaction(async (tx) => {
+      if (cur.estado !== 'anulada' && cur.estado !== 'vinculada') {
+        await _guiaAplicarStock(tx, cur, cur.renglones, true);
+        await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `GUIAH-${cur.id}` } });
+      }
+      await tx.guiaHacienda.delete({ where: { id: cur.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// PAGO A CUENTA (adelanto) → asiento "haber" que baja el saldo estimado del contacto
+app.post('/api/guias-hacienda/:id/pagos', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    const schema = z.object({
+      fecha: z.coerce.date(), monto: z.coerce.number().positive(),
+      metodo: z.string().default('efectivo'), referencia: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const pago = await prisma.$transaction(async (tx) => {
+      const p = await tx.guiaHaciendaPago.create({ data: {
+        guiaId: cur.id, companyId: req.companyId, fecha: d.fecha, monto: _round2(d.monto),
+        metodo: d.metodo, referencia: d.referencia || null, observaciones: d.observaciones || null,
+      }});
+      if (cur.contactoId && cur.contactoTipo && cur.contactoTipo !== 'frigorifico') {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: cur.contactoTipo, contactoId: cur.contactoId,
+          fecha: d.fecha, detalle: `Pago a cuenta guía ${cur.numeroDte || ''} (${d.metodo})`.trim(),
+          referencia: `GUIAHPAY-${p.id}`, debe: 0, haber: _round2(d.monto), categoria: 'guia_hacienda_pago',
+        }});
+      }
+      return p;
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
+    res.status(201).json({ ok: true, data: _guiaConSaldo(full), pago });
+  } catch (e) { next(e); }
+});
+
+// BORRAR PAGO A CUENTA
+app.delete('/api/guias-hacienda/:id/pagos/:pagoId', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    await prisma.$transaction(async (tx) => {
+      await tx.guiaHaciendaPago.deleteMany({ where: { id: req.params.pagoId, guiaId: cur.id } });
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `GUIAHPAY-${req.params.pagoId}` } });
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
+    res.json({ ok: true, data: _guiaConSaldo(full) });
+  } catch (e) { next(e); }
+});
+
+// VINCULAR con Liquidación de hacienda (cierre fiscal de una VENTA / faena)
+// Crea la liquidación desde la guía SIN volver a mover stock y saca la CC provisoria.
+app.post('/api/guias-hacienda/:id/vincular-liquidacion', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _GUIA_INC });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    if (cur.estado === 'vinculada') return res.status(409).json({ ok: false, error: 'La guía ya está vinculada.' });
+    if (!cur.campoId) return res.status(400).json({ ok: false, error: 'La guía no tiene campo asignado.' });
+    // El body puede traer overrides reales (kilos/precios/retenciones) y datos del comprobante
+    const schema = z.object({
+      numero: z.string().nullable().optional(), fecha: z.coerce.date().nullable().optional(),
+      neto: z.coerce.number().nullable().optional(), gastosTotal: z.coerce.number().default(0), ivaGastos: z.coerce.number().default(0),
+      fechaCobroEst: z.coerce.date().nullable().optional(), observaciones: z.string().nullable().optional(),
+      renglones: z.array(z.object({
+        categoria: z.string().min(1), especie: z.string().nullable().optional(),
+        cabezas: z.coerce.number().int().nonnegative(), kilos: z.coerce.number().nonnegative().default(0),
+        precioKg: z.coerce.number().nonnegative().default(0), bruto: z.coerce.number().nonnegative().nullable().optional(),
+        alicuotaIva: z.coerce.number().nonnegative().default(10.5), iva: z.coerce.number().nonnegative().nullable().optional(),
+      })).nullable().optional(),
+    });
+    const d = schema.parse(req.body || {});
+    const baseRows = (d.renglones && d.renglones.length) ? d.renglones : cur.renglones;
+    const rows = _guiaRows(baseRows, cur.alicuotaIva);
+    const brutoTotal = _round2(rows.reduce((a, r) => a + r.bruto, 0));
+    const ivaBruto = _round2(rows.reduce((a, r) => a + r.iva, 0));
+    const neto = (d.neto != null) ? d.neto : _round2(brutoTotal + ivaBruto - (d.gastosTotal || 0) + (d.ivaGastos || 0));
+
+    const liq = await prisma.$transaction(async (tx) => {
+      // 1) Sacar la CC provisoria de la guía (la liquidación crea la definitiva)
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `GUIAH-${cur.id}`, categoria: 'guia_hacienda_prov' } });
+      // 2) Crear la liquidación (SIN mover stock: ya lo movió la guía)
+      const liq = await tx.liquidacionHacienda.create({ data: {
+        companyId: req.companyId, campoId: cur.campoId, clienteId: (cur.contactoTipo === 'cliente') ? cur.contactoId : null,
+        fecha: d.fecha || cur.fecha, numero: d.numero || cur.numeroDte || null,
+        emisorNombre: cur.frigorifico || null, emisorCuit: cur.frigorificoCuit || null,
+        receptorNombre: cur.titularDestino || null,
+        brutoTotal, ivaBruto, gastosTotal: d.gastosTotal || 0, ivaGastos: d.ivaGastos || 0, neto,
+        fechaCobroEst: d.fechaCobroEst || null,
+        observaciones: `Vinculada a Guía DT-e ${cur.numeroDte || cur.id}. ${d.observaciones || ''}`.trim(),
+      }});
+      for (const r of rows) {
+        await tx.liquidacionHaciendaRenglon.create({ data: {
+          liquidacionId: liq.id, especie: r.especie || cur.especie || null, categoria: r.categoria,
+          cabezas: r.cabezas, kilos: r.kilos || 0, precioKg: r.precioKg || 0,
+          bruto: r.bruto || 0, alicuotaIva: r.alicuotaIva, iva: r.iva || 0, haciendaMovId: null,
+        }});
+      }
+      // 3) CC definitiva a cobrar (si hay cliente). Los pagos a cuenta ya cargados netean.
+      if (cur.contactoTipo === 'cliente' && cur.contactoId) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'cliente', contactoId: cur.contactoId, fecha: d.fecha || cur.fecha,
+          detalle: `Liquidación hacienda ${d.numero || cur.numeroDte || ''}`.trim(),
+          referencia: `LIQHAC-${liq.id}`, debe: neto, haber: 0,
+          vencimiento: d.fechaCobroEst || null, categoria: 'liquidacion_hacienda',
+        }});
+      }
+      await tx.guiaHacienda.update({ where: { id: cur.id }, data: { estado: 'vinculada', liquidacionId: liq.id } });
+      return liq;
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
+    res.json({ ok: true, data: _guiaConSaldo(full), liquidacionId: liq.id });
+  } catch (e) { next(e); }
+});
+
+// VINCULAR con una Factura de Compra existente (cierre fiscal de una COMPRA)
+app.post('/api/guias-hacienda/:id/vincular-compra', requireCompany, requirePermission('compras:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _GUIA_INC });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    if (cur.estado === 'vinculada') return res.status(409).json({ ok: false, error: 'La guía ya está vinculada.' });
+    const facturaCompraId = String((req.body || {}).facturaCompraId || '');
+    if (!facturaCompraId) return res.status(400).json({ ok: false, error: 'Falta la factura de compra' });
+    const fc = await prisma.facturaCompra.findFirst({ where: { id: facturaCompraId, companyId: req.companyId } });
+    if (!fc) return res.status(404).json({ ok: false, error: 'Factura de compra no encontrada' });
+    await prisma.$transaction(async (tx) => {
+      // La factura ya tiene su propia CC (FACC-...). Sacamos la provisoria de la guía.
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `GUIAH-${cur.id}`, categoria: 'guia_hacienda_prov' } });
+      await tx.guiaHacienda.update({ where: { id: cur.id }, data: { estado: 'vinculada', facturaCompraId } });
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
+    res.json({ ok: true, data: _guiaConSaldo(full) });
+  } catch (e) { next(e); }
+});
+
+// IMPORTAR DT-e desde FOTO o PDF (IA) → devuelve datos para revisar (no guarda)
+async function _iaParseGuiaHacienda({ buffer, mime, texto }, ia) {
+  const cfg = ia || await _iaConfig();
+  if (!cfg.apiKey) return null;
+  const sys = [
+    'Sos un lector de Guías de traslado de hacienda argentinas (DT-e / DTe-DUT de SENASA).',
+    'Devolvé SOLO un JSON: { "numeroDte":"", "fecha":"AAAA-MM-DD", "especie":"", "renspaOrigen":"", "renspaDestino":"", "titularOrigen":"", "titularDestino":"", "motivo":"", "renglones":[ {"categoriaTexto":"", "cabezas":0} ] }.',
+    'Reglas:',
+    '- numeroDte: el N° de DT-e o DTe-DUT (ej. 032397606-6).',
+    '- especie: Bovino/Porcino/Ovino/Equino según corresponda.',
+    '- motivo: si el destino dice invernada/cría poné "invernada"; faena/frigorífico "faena"; venta "venta"; si no, "traslado".',
+    '- Las guías traen CATEGORÍA y CANTIDAD de cabezas, NO kilos ni precios. No inventes kilos ni precios.',
+    '- Una entrada por cada categoría (ej. Terneros, Terneras, Vaquillonas).',
+    'Respondé SOLO el JSON.',
+  ].join('\n');
+  const userContent = buffer
+    ? [{ type: 'text', text: 'Leé esta guía de hacienda.' }, { type: 'image_url', image_url: { url: `data:${mime || 'image/jpeg'};base64,${buffer.toString('base64')}` } }]
+    : `Texto de la guía:\n${String(texto || '').slice(0, 12000)}`;
+  const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST', headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', temperature: 0, max_tokens: 1200, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: sys }, { role: 'user', content: userContent }] }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(to);
+    if (!r.ok) { console.warn('IA guía HTTP', r.status); return null; }
+    const j = await r.json();
+    let obj; try { obj = JSON.parse((j?.choices?.[0]?.message?.content || '').trim()); } catch { return null; }
+    const rengs = (obj.renglones || obj.detalle || []).map(x => ({
+      categoriaTexto: String(x.categoriaTexto || x.categoria || '').trim(),
+      categoria: _detectCategoriaHacienda(String(x.categoriaTexto || x.categoria || '')) || String(x.categoriaTexto || x.categoria || '').trim(),
+      cabezas: parseInt(x.cabezas || x.cantidad || 0, 10) || 0,
+      kilos: 0, precioKg: 0,
+    })).filter(x => x.categoria || x.cabezas);
+    return {
+      numeroDte: obj.numeroDte || obj.dte || null,
+      fecha: String(obj.fecha || '').slice(0, 10) || null,
+      especie: obj.especie || null,
+      renspaOrigen: obj.renspaOrigen || null, renspaDestino: obj.renspaDestino || null,
+      titularOrigen: obj.titularOrigen || null, titularDestino: obj.titularDestino || null,
+      motivo: obj.motivo || null, renglones: rengs,
+    };
+  } catch (e) { if (e.name !== 'AbortError') console.warn('IA guía error:', e.message); clearTimeout(to); return null; }
+}
+
+app.post('/api/guias-hacienda/import', requireCompany, requirePermission('stock:create'), upload.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo (foto o PDF de la guía)' });
+    const ia = await _iaConfig();
+    if (!ia.enabled) return res.status(501).json({ ok: false, error: 'La lectura por IA no está configurada. Cargá la guía a mano.' });
+    const name = req.file.originalname || '';
+    const isPdf = /\.pdf$/i.test(name) || req.file.mimetype === 'application/pdf';
+    let parsed = null;
+    if (isPdf) {
+      let texto = '';
+      try { const pdfParse = await getPdfParse(); texto = (await pdfParse(req.file.buffer)).text || ''; } catch { texto = ''; }
+      parsed = await _iaParseGuiaHacienda({ texto }, ia);
+    } else {
+      parsed = await _iaParseGuiaHacienda({ buffer: req.file.buffer, mime: req.file.mimetype || 'image/jpeg' }, ia);
+    }
+    if (!parsed) return res.status(422).json({ ok: false, error: 'No pude leer la guía. Probá con una foto más nítida o cargala a mano.' });
+    parsed.archivoNombre = name;
+    res.json({ ok: true, data: parsed });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
 // MENSAJERÍA INTERNA + ASISTENTE DE CARGA
 // Chat de equipo (canal general) + asistente que interpreta frases y carga.
 // ============================================================
@@ -9251,6 +9698,17 @@ const _AYUDA_KB = [
       'Si el cliente tiene saldo a favor, el sistema te lo ofrece para aplicar.',
       'Se registra el recibo y baja la deuda.'],
     atajo:{ page:'ctasCobrar', label:'Abrir Cuentas a cobrar' } },
+  { id:'guias_hacienda', terms:['guia','guias','dte','dt-e','dte-dut','guia de hacienda','guia de animales','guia de traslado','carta de porte animal','renspa','mover animales con guia','importar guia','foto de la guia','cuenta estimada hacienda','vincular guia','a cuenta hacienda','faena guia','servicio de faena'],
+    titulo:'Guías de hacienda (DT-e)',
+    pasos:[
+      'Andá a Stock y depósitos → Guías de hacienda (DT-e) y tocá "+ Nueva guía" (o "📷 Importar guía" para leer la foto/PDF del DT-e con IA).',
+      'Elegí el motivo (Venta, Compra, Faena/servicio, Invernada, Traslado). El sentido (egreso/ingreso) se sugiere solo. Cargá el campo, el N° de DT-e, los RENSPA y el contacto (cliente/proveedor/frigorífico).',
+      'En los renglones cargás la CATEGORÍA y las CABEZAS (eso es lo que trae la guía). Los KILOS y PRECIOS son estimados y opcionales; podés poner varias filas por calidad (fila 1, 2, 3) con distinto precio.',
+      'Al guardar, la guía MUEVE EL STOCK al instante (suma o resta cabezas del campo) y arma una CUENTA ESTIMADA a cobrar (venta) o a pagar (compra).',
+      'Podés registrar PAGOS/COBROS A CUENTA (adelantos) con el botón 💵, antes de que llegue el comprobante fiscal.',
+      'Cuando llega la LIQUIDACIÓN (venta/faena) o la FACTURA de compra, tocás 🔗 Vincular: ajustás kilos, precios y retenciones reales; se crea el comprobante fiscal definitivo (cuenta corriente + Libro IVA) y el stock NO se vuelve a mover. Los pagos a cuenta ya cargados se netean.',
+      'Para FAENA: la guía saca los animales vivos (quedan "en frigorífico"); el retorno de la carne y el costo del servicio se cierran con el asistente de Faena (en Liquidaciones de animales).'],
+    atajo:{ page:'guiasHacienda', label:'Abrir Guías de hacienda' } },
   { id:'hacienda', terms:['hacienda','nacimiento','ternero','ternero nacido','murio','muerte de animal','compra de hacienda','movimiento de animales','cambio de categoria','cargar animales','stock ganadero','vacas','novillos'],
     titulo:'Cargar un movimiento de animales',
     pasos:[
@@ -9474,15 +9932,18 @@ const _AYUDA_KB = [
       'LIBRO IVA DIGITAL (ARCA): con el botón "Descargar Libro IVA Digital" se generan los archivos .txt de ancho fijo oficiales de ARCA (Comprobantes y Alícuotas de Ventas y de Compras) para importar directo en el portal. Baja un ZIP por empresa; el período lo toma del mes de "Hasta". Avisa si hay comprobantes sin CUIT para corregir.',
       'Las retenciones/percepciones se cargan en Tesorería → Retenciones y salen en la exportación (hoja "Retenciones").'],
     atajo:{ page:'exportContador', label:'Abrir Exportar para contador' } },
-  { id:'retenciones', terms:['retencion','retenciones','percepcion','percepciones','certificado de retencion','iibb','ingresos brutos','sicore','suss','me retuvieron','retencion de ganancias','retencion de iva','retencion sufrida','retencion practicada'],
+  { id:'retenciones', terms:['retencion','retenciones','percepcion','percepciones','certificado de retencion','iibb','ingresos brutos','sicore','sire','sircar','suss','me retuvieron','retencion de ganancias','retencion de iva','retencion sufrida','retencion practicada','mis retenciones','importar retenciones','importar de arca','exportar sicore','exportar retenciones','jurisdiccion'],
     titulo:'Retenciones y percepciones',
     pasos:[
       'Andá a Tesorería → Retenciones y tocá "+ Nueva retención".',
       'Elegí la naturaleza: SUFRIDA (nos la retuvieron cuando nos pagaron/compraron) o PRACTICADA (la hicimos nosotros al pagarle a un proveedor/contratista).',
       'Elegí el impuesto (Ganancias, IVA, IIBB, SUSS/SICORE u Otro), el régimen y —si es IIBB— la jurisdicción/provincia.',
       'Cargá la fecha, el contacto (cliente o proveedor, autocompleta CUIT), el N° de certificado, la base, la alícuota y el importe (el importe se sugiere = base × alícuota).',
-      'IMPORTAR DE PDF: con el botón "Importar OP (PDF)" subís la orden de pago (formatos Agroplaneta y AFA/ERP) y el sistema detecta solo los certificados (impuesto, régimen, jurisdicción, N° de certificado, base, alícuota e importe). Revisás la naturaleza y el contacto, y se cargan todas juntas.',
-      'Después las exportás para el contador desde Administración → Exportar para contador (hoja "Retenciones").'],
+      'IMPORTAR DE PDF: con el botón "Importar OP (PDF)" subís la orden de pago (formatos Agroplaneta y AFA/ERP) y el sistema detecta solo los certificados. Revisás la naturaleza y el contacto, y se cargan todas juntas.',
+      'IMPORTAR DE ARCA (Excel): lo más rápido para las SUFRIDAS. Descargás el Excel del servicio "Mis Retenciones" de ARCA (con Clave Fiscal) y lo subís con el botón "🏦 Importar de ARCA". El sistema lee todas las filas, marca cuáles son nuevas y cuáles ya estaban (no duplica), las vincula al proveedor/cliente por CUIT, y podés deshacer la importación.',
+      'FILTRO POR FECHAS: arriba tenés Desde/Hasta (por defecto el mes en curso); los totales y el listado respetan el período.',
+      'EXPORTAR PARA PRESENTAR: con las PRACTICADAS, el botón "Exportar" genera el archivo para ARCA. Elegís SICORE/SIRE (Nacional: Ganancias, IVA, SUSS) o SIRCAR (Ingresos Brutos, con el código de jurisdicción por renglón). Al cargar una retención de IIBB elegís la provincia de una lista con su código.',
+      'Todo esto también está en Administración → Exportar para contador: el Excel de Retenciones (para leer/controlar) y los .txt SICORE/SIRE y SIRCAR (para presentar).'],
     atajo:{ page:'retenciones', label:'Abrir Retenciones' } },
   { id:'compra_venta_dolares', terms:['comprar dolares','vender dolares','compra de dolares','venta de dolares','dolar mep','comprar usd','cambio de divisas','pasar pesos a dolares','pasar dolares a pesos','tipo de cambio banco'],
     titulo:'Compra / venta de dólares en el banco',
