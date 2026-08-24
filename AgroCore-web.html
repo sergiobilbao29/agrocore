@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'24/08/2026',
+      titulo:'🌾 v2.125.0 — Pagar a proveedor con producto (maíz, soja, lechón) mezclado con efectivo',
+      desc:'En <b>Pagar a proveedor</b>, ahora el <b>producto/especie</b> es un <b>medio más</b> del pago dividido: podés saldar una factura con, por ejemplo, <b>una parte en efectivo y otra en maíz, soja o un lechón faenado</b>. Activás <b>"Pagar con varios medios"</b>, agregás un medio <b>🌾 Producto</b>, elegís el producto, la cantidad y el precio (el importe se calcula solo) y tildás <b>"Descontar del stock"</b> si se lo entregás (o la destildás si, por ejemplo, el fletero se queda el grano y no querés mover stock). Antes esto solo se podía como "pago a cuenta" y desaparecía al tildar la factura. Si pagás sin tildar factura queda <b>a cuenta / saldo a favor</b>, como siempre.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/08/2026',
       titulo:'📋 v2.124.0 — Guías de hacienda (DT-e): mové el stock antes de la factura',
       desc:'Nuevo módulo en <b>Stock y depósitos → Guías de hacienda (DT-e)</b>. La <b>guía mueve el stock de animales al instante</b> (por categoría y cabezas) y arma una <b>cuenta estimada a cobrar/pagar</b>, sin esperar la liquidación o factura. Podés <b>importar la guía por foto o PDF</b> (la lee la IA: N° de DT-e, fecha, RENSPA y categorías con cabezas), cargar <b>kilos y precios provisorios</b> con <b>varias filas por calidad</b>, y registrar <b>pagos/cobros a cuenta</b>. Cuando llega la <b>liquidación</b> (venta/faena) o la <b>factura de compra</b>, tocás <b>🔗 Vincular</b>: ajustás kilos, precios y retenciones reales, se crea el comprobante fiscal definitivo con su Libro IVA y <b>el stock NO se vuelve a mover</b>. Sirve para venta, compra, invernada, traslado y faena.' },
@@ -16173,6 +16176,17 @@ function pagoLegRecursoHTML(metodo){
     const tj=catByTipo(TARJETA_CAT_TIPO);
     return `<select class="input text-sm" data-leg-caja><option value="">— Tarjeta —</option>${tj.map(t=>`<option value="${esc(t.nombre)}">💳 ${esc(t.nombre)}</option>`).join('')}</select>`;
   }
+  if (metodo==='producto') {   // pago en especie como medio (maíz, soja, lechón faenado…)
+    const prods=(state.cache.productos||[]).slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+    const deps=(state.cache.depositos||[]);
+    return `<div class="grid grid-cols-2 gap-1">
+      <select class="input text-sm col-span-2" data-leg-prod onchange="pagoLegRecalc()"><option value="">— Producto que se entrega —</option>${prods.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}${p.unidad?' ('+esc(p.unidad)+')':''}</option>`).join('')}</select>
+      <input class="input text-sm text-right" type="number" step="0.01" min="0" data-leg-prod-cant placeholder="Cantidad" oninput="pagoLegProdSync(this)"/>
+      <input class="input text-sm text-right" type="number" step="0.01" min="0" data-leg-prod-precio placeholder="$/unidad" oninput="pagoLegProdSync(this)"/>
+      ${deps.length?`<select class="input text-sm col-span-2" data-leg-prod-dep><option value="">— Depósito (opcional) —</option>${deps.map(dp=>`<option value="${esc(dp.id)}">${esc(dp.nombre)}</option>`).join('')}</select>`:''}
+      <label class="flex items-center gap-1 text-[11px] text-slate-600 col-span-2"><input type="checkbox" data-leg-prod-stock checked/> Descontar del stock (destildá si no lo entregás, ej. el fletero se queda el grano)</label>
+    </div>`;
+  }
   // efectivo / externo
   const cajas=state.cache.efectivoCajas||[];
   return `<select class="input text-sm" data-leg-caja><option value="">— Caja —</option>${cajas.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>`;
@@ -16182,7 +16196,8 @@ function pagoLegMetodoOptions(){
   return `<option value="efectivo">💵 Efectivo</option>
     <option value="transferencia">🏛️ Transferencia</option>
     ${esPago ? `<option value="cheque">💳 Cheque en cartera</option><option value="cheque_nuevo">🧾 Cheque nuevo (propio)</option>` : `<option value="cheque_nuevo">📩 Cheque recibido</option>`}
-    <option value="tarjeta">💳 Tarjeta</option>`;
+    <option value="tarjeta">💳 Tarjeta</option>
+    ${esPago ? `<option value="producto">🌾 Producto (maíz, soja, lechón…)</option>` : ''}`;
 }
 function pagoLegRowHTML(){
   return `<tr data-leg class="border-t border-slate-100">
@@ -16195,6 +16210,8 @@ function pagoLegRowHTML(){
 function pagoLegAdd(){ const tb=document.getElementById('pc-legs-rows'); if(tb){ tb.insertAdjacentHTML('beforeend', pagoLegRowHTML()); pagoLegRecalc(); } }
 function pagoLegMetodoChange(sel){ const row=sel.closest('[data-leg]'); const rec=row?.querySelector('[data-leg-rec]'); if(rec) rec.innerHTML=pagoLegRecursoHTML(sel.value); pagoLegRecalc(); }
 function pagoLegChequeChange(sel){ const opt=sel.selectedOptions?.[0]; const m=Number(opt?.dataset?.monto||0); const row=sel.closest('[data-leg]'); const mi=row?.querySelector('[data-leg-monto]'); if(mi && m>0 && !Number(mi.value)){ mi.value=m; pagoLegRecalc(); } }
+// Pago con producto (medio dividido): monto = cantidad × precio.
+function pagoLegProdSync(inp){ const row=inp.closest('[data-leg]'); if(!row) return; const cant=Number(row.querySelector('[data-leg-prod-cant]')?.value||0); const pre=Number(row.querySelector('[data-leg-prod-precio]')?.value||0); const mi=row.querySelector('[data-leg-monto]'); if(mi && cant>0 && pre>0){ mi.value=Math.round(cant*pre*100)/100; } pagoLegRecalc(); }
 function pagoLegRecalc(){
   const target=Number(document.getElementById('pc-total-pago')?.value||0);
   const suma=[...document.querySelectorAll('#pc-legs-rows [data-leg] [data-leg-monto]')].reduce((a,i)=>a+Number(i.value||0),0);
@@ -16908,6 +16925,15 @@ async function pagoCobroConfirmar(modo) {
       if (!mnt || mnt <= 0) continue;
       const leg = { metodo: m, monto: mnt };
       if (m === 'efectivo' || m === 'externo' || m === 'tarjeta') leg[cajaKey] = r.querySelector('[data-leg-caja]')?.value || null;
+      else if (m === 'producto') {
+        leg.productoPagoId = r.querySelector('[data-leg-prod]')?.value || null;
+        leg.cantidadProducto = Number(r.querySelector('[data-leg-prod-cant]')?.value || 0) || null;
+        leg.precioProducto = Number(r.querySelector('[data-leg-prod-precio]')?.value || 0) || null;
+        leg.depositoId = r.querySelector('[data-leg-prod-dep]')?.value || null;
+        leg.descontarStock = !!(r.querySelector('[data-leg-prod-stock]')?.checked);
+        if (!leg.productoPagoId) return toast('Elegí el producto en la fila de pago con producto', 'warn');
+        if (!leg.cantidadProducto || leg.cantidadProducto <= 0) return toast('Poné la cantidad del producto en el pago con producto', 'warn');
+      }
       else if (m === 'transferencia') { leg.bancoCuentaId = r.querySelector('[data-leg-banco]')?.value || null; if (!leg.bancoCuentaId) return toast('Elegí la cuenta bancaria en la fila de transferencia', 'warn'); }
       else if (m === 'cheque') { leg.chequeId = r.querySelector('[data-leg-cheque]')?.value || null; if (!leg.chequeId) return toast('Elegí un cheque en cada fila de cheque', 'warn'); }
       else if (m === 'cheque_nuevo') {

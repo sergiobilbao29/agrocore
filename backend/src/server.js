@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.124.0';
+const AGROCORE_VERSION = '2.125.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -14935,11 +14935,17 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       // Pago con VARIOS medios: parte efectivo, parte cheque(s), parte transferencia, etc.
       // Cada leg mueve su propio recurso. La suma de montos debe dar d.monto.
       pagos: z.array(z.object({
-        metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'tarjeta']),
+        metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'tarjeta', 'producto']),
         monto: z.number().positive(),
         cajaOrigen: z.string().nullable().optional(),
         chequeId: z.string().nullable().optional(),
         bancoCuentaId: z.string().nullable().optional(),
+        // Pago en especie como medio dividido (ej: maíz, soja, lechón faenado):
+        productoPagoId: z.string().nullable().optional(),      // producto del stock que se entrega
+        cantidadProducto: z.number().positive().nullable().optional(),
+        precioProducto: z.number().nonnegative().nullable().optional(),
+        descontarStock: z.boolean().optional().default(true),  // false = no mueve stock (ej: el fletero se queda el grano)
+        depositoId: z.string().nullable().optional(),
         nuevoCheque: z.object({
           formato: z.enum(['fisico', 'electronico']).optional().default('fisico'),
           banco: z.string().nullable().optional(),
@@ -14951,6 +14957,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           librador: z.string().nullable().optional(),
         }).nullable().optional(),
       })).optional(),
+      descontarStock: z.boolean().optional().default(true),  // pago en especie de método único: mover stock o no
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
@@ -15142,6 +15149,26 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
             monto, caja: leg.cajaOrigen || (esTarjeta ? 'Tarjeta de crédito' : 'Medio externo'), clasificacion: 'empresa',
             observaciones: [(leg.cajaOrigen ? (esTarjeta ? 'Tarjeta: ' : 'Medio: ') + leg.cajaOrigen : null), d.observaciones].filter(Boolean).join(' · ') || null,
           }});
+        } else if (m === 'producto') {
+          // Pago EN ESPECIE como medio dividido: entregamos un producto del stock
+          // (maíz, soja, lechón faenado, etc.) valuado en leg.monto. Cancela la deuda
+          // igual que cualquier medio; opcionalmente descuenta el stock.
+          if (leg.descontarStock === false) return; // solo cuenta como valor (ej: el fletero se queda el grano)
+          if (!leg.productoPagoId) throw new Error('Elegí el producto que se entrega en el pago con producto');
+          const cant = Number(leg.cantidadProducto || 0);
+          if (!(cant > 0)) throw new Error('Poné la cantidad del producto entregado');
+          const prodEsp = await tx.producto.findFirst({ where: { id: leg.productoPagoId, companyId: req.companyId } });
+          if (!prodEsp) throw new Error('Producto no encontrado en el stock');
+          const precioU = leg.precioProducto != null ? Number(leg.precioProducto) : (cant > 0 ? monto / cant : 0);
+          await tx.movimiento.create({ data: {
+            companyId: req.companyId, productoId: prodEsp.id,
+            fecha: d.fecha, tipo: 'egreso', motivo: 'pago_especie',
+            cantidad: cant, precio: precioU || null, total: monto || (cant * precioU) || null,
+            contraparteId: d.proveedorId, contraparteTipo: 'proveedor',
+            referencia: 'PAGO_ESPECIE', depositoId: leg.depositoId || null,
+            observaciones: `Pago en especie a ${prov.razonSocial}: ${cant} x ${prodEsp.nombre}${d.observaciones ? ' · ' + d.observaciones : ''}`,
+            userId: req.user?.id || null,
+          }});
         } else { throw new Error('Método no soportado en pago dividido: ' + m); }
       };
       if (d.monto > 0.01) {
@@ -15177,15 +15204,17 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         if (d.precioProducto != null && Math.abs(cant * precioU - d.monto) > Math.max(1, d.monto * 0.02)) {
           throw new Error(`El total del producto (${(cant * precioU).toFixed(2)}) no coincide con el monto a pagar (${d.monto.toFixed(2)})`);
         }
-        await tx.movimiento.create({ data: {
-          companyId: req.companyId, productoId: prodEsp.id,
-          fecha: d.fecha, tipo: 'egreso', motivo: 'pago_especie',
-          cantidad: cant, precio: precioU || null, total: d.monto || (cant * precioU) || null,
-          contraparteId: d.proveedorId, contraparteTipo: 'proveedor',
-          referencia: 'PAGO_ESPECIE', depositoId: d.depositoId || null,
-          observaciones: `Pago en especie a ${prov.razonSocial}: ${cant} x ${prodEsp.nombre}${d.observaciones ? ' · ' + d.observaciones : ''}`,
-          userId: req.user?.id || null,
-        }});
+        if (d.descontarStock !== false) {
+          await tx.movimiento.create({ data: {
+            companyId: req.companyId, productoId: prodEsp.id,
+            fecha: d.fecha, tipo: 'egreso', motivo: 'pago_especie',
+            cantidad: cant, precio: precioU || null, total: d.monto || (cant * precioU) || null,
+            contraparteId: d.proveedorId, contraparteTipo: 'proveedor',
+            referencia: 'PAGO_ESPECIE', depositoId: d.depositoId || null,
+            observaciones: `Pago en especie a ${prov.razonSocial}: ${cant} x ${prodEsp.nombre}${d.observaciones ? ' · ' + d.observaciones : ''}`,
+            userId: req.user?.id || null,
+          }});
+        }
       } else if (d.metodo === 'intercompany') {
         // Crear los dos asientos espejo + IntercompanyMovimiento
         const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
