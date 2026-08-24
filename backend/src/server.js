@@ -9686,17 +9686,20 @@ const _AYUDA_KB = [
     pasos:[
       'Entrá a Cuentas a pagar y buscá al proveedor / la factura, y tocá "Pagar".',
       'Elegí el medio: efectivo, transferencia, cheque propio, cheque de tercero (endoso), tarjeta, entrega de cereal o "Pago con producto (en especie)".',
-      'Pago con producto (en especie): entregás mercadería de tu stock (ej. lechones faenados) — elegís producto, cantidad y precio; descuenta el stock y salda la deuda por ese total. Si deshacés el pago, el stock se repone.',
-      'Podés pagar con VARIOS medios a la vez (parte efectivo + parte cheque + parte transferencia) tildando "Pagar con varios medios", y cargar un cheque propio nuevo en la misma pantalla.',
+      'Podés pagar con VARIOS medios a la vez (parte efectivo + parte cheque + parte transferencia + parte producto) tildando "Pagar con varios medios", y cargar un cheque propio nuevo en la misma pantalla.',
+      'PAGO CON PRODUCTO (maíz, soja, lechón faenado): agregá un medio "🌾 Producto", elegí el producto, la cantidad y el precio (el importe se calcula solo). La casilla "Descontar del stock" descuenta la mercadería entregada; destildala si no la entregás (ej. el fletero se queda el grano) y solo cuenta como valor.',
+      'SI SOBRA plata (pagás más que las facturas tildadas): te avisa y, si confirmás, registra el pago y el excedente queda como SALDO A FAVOR del proveedor para otra factura.',
+      'SI FALTA plata (pagás menos): hace el pago parcial aplicando de la factura MÁS VIEJA a la más nueva; la última cubierta queda con el saldo pendiente. Si pagás sin tildar factura, queda a cuenta.',
       'Se genera la Orden de Pago (imprimible / PDF / WhatsApp / email) con retenciones e importe en letras.'],
     atajo:{ page:'ctasPagar', label:'Abrir Cuentas a pagar' } },
   { id:'cobro', terms:['cobrar','cobro','cobrar una factura','recibir un pago','cuenta a cobrar','recibo','como cobro'],
     titulo:'Cobrar a un cliente',
     pasos:[
       'Entrá a Cuentas a cobrar y buscá al cliente / la factura.',
-      'Tocá "Cobrar" y elegí el medio (efectivo, transferencia, cheque de tercero, etc.).',
-      'Si el cliente tiene saldo a favor, el sistema te lo ofrece para aplicar.',
-      'Se registra el recibo y baja la deuda.'],
+      'Tocá "Cobrar" y elegí el medio (efectivo, transferencia, cheque de tercero, etc.). Podés cobrar con VARIOS medios tildando "Cobrar con varios medios".',
+      'COBRO CON PRODUCTO: si el cliente te paga con mercadería (grano, hacienda), agregá un medio "🌾 Producto", elegí producto, cantidad y precio; con "Ingresar al stock" tildado, entra al depósito.',
+      'SI SOBRA (cobrás más que las facturas): el excedente queda como SALDO A FAVOR del cliente. SI FALTA: se aplica parcial de la factura más vieja a la más nueva.',
+      'Si el cliente tiene saldo a favor, el sistema te lo ofrece para aplicar. Se registra el recibo y baja la deuda.'],
     atajo:{ page:'ctasCobrar', label:'Abrir Cuentas a cobrar' } },
   { id:'guias_hacienda', terms:['guia','guias','dte','dt-e','dte-dut','guia de hacienda','guia de animales','guia de traslado','carta de porte animal','renspa','mover animales con guia','importar guia','foto de la guia','cuenta estimada hacienda','vincular guia','a cuenta hacienda','faena guia','servicio de faena'],
     titulo:'Guías de hacienda (DT-e)',
@@ -14958,6 +14961,8 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         }).nullable().optional(),
       })).optional(),
       descontarStock: z.boolean().optional().default(true),  // pago en especie de método único: mover stock o no
+      // Excedente: se pagó más que las facturas tildadas → el resto queda como saldo a favor.
+      excedenteACuenta: z.number().nonnegative().optional().default(0),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
@@ -14974,8 +14979,9 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
     // en la MISMA moneda de la deuda, debe coincidir con (comprobantes − notas de crédito).
     // Si se paga en otra moneda (ej: deuda USD, pago ARS) no se exige igualdad.
     const _mismaMoneda = !d.monedaPago;
-    if (d.comprobantes.length && _mismaMoneda && Math.abs((sumaAplicada - sumaCreditos) - d.monto) > 0.01) {
-      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + ') no coincide con el monto pagado (' + d.monto + ')' });
+    // El neto de facturas MÁS el excedente que queda a favor debe dar el monto pagado.
+    if (d.comprobantes.length && _mismaMoneda && Math.abs((sumaAplicada - sumaCreditos + (d.excedenteACuenta || 0)) - d.monto) > 0.01) {
+      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + (d.excedenteACuenta ? ' + excedente ' + d.excedenteACuenta.toFixed(2) : '') + ') no coincide con el monto pagado (' + d.monto + ')' });
     }
     if (sumaCreditos > sumaAplicada + 0.01) {
       return res.status(400).json({ ok: false, error: 'Las notas de crédito aplicadas (' + sumaCreditos.toFixed(2) + ') superan el total de comprobantes tildados (' + sumaAplicada.toFixed(2) + ')' });
@@ -15065,6 +15071,17 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
             observaciones: (cc.observaciones ? cc.observaciones + ' · ' : '') + 'Aplicada parcialmente el ' + new Date(d.fecha).toISOString().slice(0,10),
           }});
         }
+      }
+      // Excedente de pago: se pagó más que las facturas tildadas → el resto queda
+      // como SALDO A FAVOR del proveedor (haber suelto) para aplicar a otra factura.
+      if (d.comprobantes.length && d.excedenteACuenta && d.excedenteACuenta > 0.01) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId,
+          fecha: d.fecha, detalle: 'Saldo a favor (excedente de pago)',
+          moneda: d.monedaPago || monedaDeuda || 'ARS', cotizacion: d.cotizacionPago ?? null,
+          haber: Math.round(d.excedenteACuenta * 100) / 100,
+          observaciones: 'Excedente de pago que queda a favor' + (d.observaciones ? ' · ' + d.observaciones : ''),
+        }});
       }
       // Pago "a cuenta" (sin comprobantes): haber suelto en la cta cte del proveedor.
       // Reduce el saldo y, si excede la deuda, deja saldo a favor.
@@ -15301,19 +15318,27 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       cotizacionPago: z.number().positive().nullable().optional(),
       // Cobro con VARIOS medios: parte efectivo, parte cheque(s) recibidos, parte transferencia.
       pagos: z.array(z.object({
-        metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'tarjeta']),
+        metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'tarjeta', 'producto']),
         monto: z.number().positive(),
         cajaDestino: z.string().nullable().optional(),
         chequeId: z.string().nullable().optional(),   // cheque de terceros recibido (ya creado)
         bancoCuentaId: z.string().nullable().optional(),
+        // Cobro en especie: el cliente nos paga con un producto (grano, hacienda…) → INGRESA al stock.
+        productoPagoId: z.string().nullable().optional(),
+        cantidadProducto: z.number().positive().nullable().optional(),
+        precioProducto: z.number().nonnegative().nullable().optional(),
+        descontarStock: z.boolean().optional().default(true),  // aquí = mover stock (ingreso). false = no mueve stock.
+        depositoId: z.string().nullable().optional(),
       })).optional(),
+      // Excedente: se cobró más que las facturas → el resto queda como saldo a favor del cliente.
+      excedenteACuenta: z.number().nonnegative().optional().default(0),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
     const sumaCreditos = d.creditos.reduce((a, c) => a + c.importeAplicado, 0);
-    if (d.comprobantes.length && !d.monedaPago && Math.abs((sumaAplicada - sumaCreditos) - d.monto) > 0.01) {
-      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + ') no coincide con el monto cobrado (' + d.monto + ')' });
+    if (d.comprobantes.length && !d.monedaPago && Math.abs((sumaAplicada - sumaCreditos + (d.excedenteACuenta || 0)) - d.monto) > 0.01) {
+      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + (d.excedenteACuenta ? ' + excedente ' + d.excedenteACuenta.toFixed(2) : '') + ') no coincide con el monto cobrado (' + d.monto + ')' });
     }
     if (Array.isArray(d.pagos) && d.pagos.length) {
       const sumaPagos = d.pagos.reduce((a, p) => a + Number(p.monto || 0), 0);
@@ -15391,6 +15416,17 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           }});
         }
       }
+      // Excedente de cobro: se cobró más que las facturas tildadas → el resto queda
+      // como SALDO A FAVOR del cliente (haber suelto) para aplicar a otra factura.
+      if (d.comprobantes.length && d.excedenteACuenta && d.excedenteACuenta > 0.01) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId,
+          fecha: d.fecha, detalle: 'Saldo a favor (excedente de cobro)',
+          moneda: d.monedaPago || monedaDeuda || 'ARS', cotizacion: d.cotizacionPago ?? null,
+          haber: Math.round(d.excedenteACuenta * 100) / 100,
+          observaciones: 'Excedente de cobro que queda a favor' + (d.observaciones ? ' · ' + d.observaciones : ''),
+        }});
+      }
       // Cobro "a cuenta" (sin comprobantes): haber suelto en la cta cte del cliente.
       if (d.comprobantes.length === 0 && d.monto > 0.01) {
         await tx.ctaCte.create({ data: {
@@ -15448,6 +15484,24 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
             companyId: req.companyId, fecha: d.fecha, tipo: 'ingreso', concepto: 'Cobro de ' + cli.razonSocial,
             monto, caja: leg.cajaDestino || (esTarjeta ? 'Tarjeta de crédito' : 'Medio externo'), clasificacion: 'empresa',
             observaciones: [(leg.cajaDestino ? (esTarjeta ? 'Tarjeta: ' : 'Medio: ') + leg.cajaDestino : null), d.observaciones].filter(Boolean).join(' · ') || null,
+          }});
+        } else if (m === 'producto') {
+          // Cobro EN ESPECIE: el cliente nos paga con un producto → INGRESA al stock.
+          if (leg.descontarStock === false) return; // solo cuenta como valor, no mueve stock
+          if (!leg.productoPagoId) throw new Error('Elegí el producto que recibís en el cobro con producto');
+          const cant = Number(leg.cantidadProducto || 0);
+          if (!(cant > 0)) throw new Error('Poné la cantidad del producto recibido');
+          const prodEsp = await tx.producto.findFirst({ where: { id: leg.productoPagoId, companyId: req.companyId } });
+          if (!prodEsp) throw new Error('Producto no encontrado en el stock');
+          const precioU = leg.precioProducto != null ? Number(leg.precioProducto) : (cant > 0 ? monto / cant : 0);
+          await tx.movimiento.create({ data: {
+            companyId: req.companyId, productoId: prodEsp.id,
+            fecha: d.fecha, tipo: 'ingreso', motivo: 'cobro_especie',
+            cantidad: cant, precio: precioU || null, total: monto || (cant * precioU) || null,
+            contraparteId: d.clienteId, contraparteTipo: 'cliente',
+            referencia: 'COBRO_ESPECIE', depositoId: leg.depositoId || null,
+            observaciones: `Cobro en especie de ${cli.razonSocial}: ${cant} x ${prodEsp.nombre}${d.observaciones ? ' · ' + d.observaciones : ''}`,
+            userId: req.user?.id || null,
           }});
         } else { throw new Error('Método no soportado en cobro dividido: ' + m); }
       };
