@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.125.0';
+const AGROCORE_VERSION = '2.126.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9967,6 +9967,15 @@ const _AYUDA_KB = [
       'Si el sistema detecta un "posible duplicado" (misma fecha e importe que algo ya cargado a mano), te lo marca y lo deja destildado para que decidas vos.',
       'Si te equivocaste de archivo o cuenta, tocás "↩️ Deshacer importación" (en el aviso de fin o en el botón ↩️ de la cuenta) y borra solo esos movimientos.',
       'Si tu resumen es PARCIAL (no arranca de cero) y el saldo del sistema no coincide con el del banco, usá "⚖️ Ajustar saldo al del banco": toma el saldo final del resumen y ajusta el saldo inicial para que quede igualito al banco.'],
+    atajo:{ page:'bancos', label:'Abrir Bancos' } },
+  { id:'export_movs_banco', terms:['exportar movimientos banco','exportar cuenta a excel','excel de la cuenta','excel movimientos banco','descargar movimientos banco','bajar movimientos de la cuenta','exportar movimientos de la cuenta','movimientos de la cuenta a excel','pasar movimientos al contador','excel de banco para el contador','exportar cuenta bancaria'],
+    titulo:'Exportar a Excel los movimientos de una cuenta bancaria',
+    pasos:[
+      'Entrá a Tesorería → Bancos → abrí la cuenta que querés exportar.',
+      'Poné el rango de fechas que necesitás en el filtro Desde/Hasta (por defecto trae el último mes). El Excel exporta EXACTAMENTE lo que estás viendo con ese filtro.',
+      'Tocá el botón "📊 Exportar Excel". Se descarga el archivo al instante.',
+      'Trae las columnas: fecha, tipo, concepto, contraparte, referencia, débito, crédito, saldo (corrido), origen (importado o manual) y cargado por, en orden cronológico y con el total de débitos y créditos al pie.',
+      'El nombre del archivo incluye el banco, la cuenta y el período (ej: Movimientos_Banco-Nacion_00012345_20260724_20260824.xlsx), ideal para mandarle al contador o a los dueños.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
   { id:'chat_mensajes', terms:['editar mensaje','borrar mensaje','eliminar mensaje','corregir mensaje','me equivoque en el chat','cambiar lo que escribi','editar lo que dije','borrar lo que escribi','editar chat','eliminar del chat'],
     titulo:'Editar o borrar un mensaje del chat',
