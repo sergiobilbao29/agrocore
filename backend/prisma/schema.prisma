@@ -29,6 +29,7 @@ model Company {
   condIVA         String?   // "RI", "Monotributo", "Exento", "ConsumidorFinal"
   color           String?   // hex (#rrggbb) para tinte de UI
   logoUrl         String?   // logo base64 o URL
+  modulosOcultos  String?   // JSON: ids de módulos ocultos para esta empresa (por actividad)
   informal        Boolean   @default(false) // sin facturación ARCA
   activo          Boolean   @default(true)
   // ---- Integración ARCA / AFIP (WSAA + WSCTG + WSFE) ----

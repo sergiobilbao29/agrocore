@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.128.0';
+const AGROCORE_VERSION = '2.129.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -680,6 +680,7 @@ async function serializeUser(u) {
     domicilio: co.domicilio || null, localidad: co.localidad || null,
     provincia: co.provincia || null, condIVA: co.condIVA || null,
     email: co.email || null, telefono: co.telefono || null,
+    modulosOcultos: co.modulosOcultos || null,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1468,6 +1469,7 @@ const empresaSchema = z.object({
   logoUrl: z.string().nullable().optional(),
   informal: z.boolean().optional(),
   activo: z.boolean().optional(),
+  modulosOcultos: z.string().nullable().optional(),
 });
 
 app.get('/api/empresas', async (req, res, next) => {

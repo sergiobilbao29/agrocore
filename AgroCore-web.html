@@ -926,6 +926,55 @@ function puedeVerModulo(mod) {
   if (flags.length) return flags.includes('menu:' + mod.id);
   return true; // sin lista blanca: la visibilidad depende del permiso de área
 }
+// ¿La EMPRESA activa oculta este módulo? (según su actividad: agrícola/ganadera/haras).
+// Guardado en company.modulosOcultos (JSON array de ids). No aplica a Super admin viendo config.
+function empresaModulosOcultos(){
+  const m = currentMembership();
+  const raw = m && m.modulosOcultos;
+  if (!raw) return [];
+  try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+function empresaOcultaModulo(id){ if(id==='configuracion') return false; return empresaModulosOcultos().includes(id); }
+// Presets de actividad para ocultar/mostrar módulos por empresa.
+const _MOD_ANIMAL = ['hacienda','guiasHacienda','animales','rodeos'];
+const _MOD_AGRICOLA = ['posicionGranos','contratosCereal'];
+function empresaModulosForm(){
+  const oc = new Set(empresaModulosOcultos());
+  const items = (typeof MODULES!=='undefined'?MODULES:[]).filter(m=>m.id && m.perm && m.id!=='configuracion');
+  const secciones=[]; const bySec={};
+  items.forEach(m=>{ const s=m.section||'Otros'; if(!bySec[s]){bySec[s]=[];secciones.push(s);} bySec[s].push(m); });
+  const row = m=>`<label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer"><input type="checkbox" class="em-chk" data-id="${esc(m.id)}" ${oc.has(m.id)?'':'checked'}/> <span>${esc(m.icon||'')} ${esc(m.label)}</span></label>`;
+  const cols = secciones.map(s=>`<div class="mb-3"><div class="text-[11px] font-semibold text-slate-500 uppercase mb-1">${esc(s)}</div>${bySec[s].map(row).join('')}</div>`).join('');
+  openModal({ title:'🧩 Módulos visibles de la empresa', size:'max-w-3xl',
+    body:`
+      <div class="text-xs text-slate-500 mb-2">Destildá lo que NO querés que se vea en esta empresa. Presets rápidos:</div>
+      <div class="flex flex-wrap gap-2 mb-3">
+        <button class="btn btn-ghost btn-sm" onclick="empresaModulosPreset('agricola')">🌾 Ocultar animales (agrícola)</button>
+        <button class="btn btn-ghost btn-sm" onclick="empresaModulosPreset('ganadera')">🐄 Ocultar granos (ganadera/haras)</button>
+        <button class="btn btn-ghost btn-sm" onclick="empresaModulosPreset('todo')">Mostrar todo</button>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 max-h-[55vh] overflow-auto border border-slate-200 rounded p-3">${cols}</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="empresaModulosSave()">Guardar</button>`
+  });
+}
+function empresaModulosPreset(p){
+  document.querySelectorAll('.em-chk').forEach(c=>{
+    const id=c.dataset.id;
+    if(p==='todo'){ c.checked=true; }
+    else if(p==='agricola'){ c.checked=!_MOD_ANIMAL.includes(id); }
+    else if(p==='ganadera'){ c.checked=!_MOD_AGRICOLA.includes(id); }
+  });
+}
+async function empresaModulosSave(){
+  const ocultos=[...document.querySelectorAll('.em-chk')].filter(c=>!c.checked).map(c=>c.dataset.id);
+  const json=JSON.stringify(ocultos);
+  try{
+    await api('/api/empresas/'+state.companyId,{method:'PUT',body:JSON.stringify({ modulosOcultos: json })});
+    const m=currentMembership(); if(m) m.modulosOcultos=json;
+    toast('Módulos actualizados','success'); closeModal(); renderNav();
+  }catch(e){ toast(e.message,'error'); }
+}
 function can(perm) {
   if (!state.user) return false;
   if (state.user.superAdmin) return true;
@@ -1030,7 +1079,7 @@ const MODULES = [
   { id:'cerealeras',    label:'Cerealeras / Depósitos',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
-  { id:'hacienda',      label:'Animales',             icon:'🐄', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'hacienda',      label:'Movimientos de animales',icon:'🐄', perm:'stock:read',    section:'Stock y depósitos' },
   { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Stock y depósitos' },
   { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'rodeos',        label:'Costo de hacienda',    icon:'🐮', perm:'stock:read',      section:'Stock y depósitos' },
@@ -1728,6 +1777,7 @@ function renderNav() {
   // visibles pero con lo de ARCA grisado. Libro IVA se muestra bloqueado (no aplica).
   let items = MODULES.filter(m => {
     if (!m.perm) return true;   // Inicio y similares: siempre visibles
+    if (empresaOcultaModulo(m.id)) return false;   // oculto por actividad de la empresa
     if (!puedeVerModulo(m)) return false;   // lista blanca de menú por rol
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!can(m.perm)) return false;
@@ -2533,7 +2583,7 @@ pages.inicio = async function() {
   const atajos = state.userShortcuts
     .map(sid => MODULES.find(m => m.id === sid))
     .filter(Boolean)
-    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m))
+    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m) && !empresaOcultaModulo(m.id))
     .map(m => ({ id: m.id, label: m.label, sub: m.section, icon: m.icon }));
 
   const puedeVerKPIs = can('dashboard:read');
@@ -2575,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'25/08/2026',
+      titulo:'🧩 v2.129.0 — Módulos visibles por empresa (según actividad) + “Movimientos de animales”',
+      desc:'Ahora podés <b>ocultar del menú los módulos que una empresa no usa</b>. En <b>Configuración → Configuración</b>, botón <b>“Configurar módulos”</b>: destildás lo que no querés mostrar en esa empresa (aplica a todos sus usuarios). Trae <b>presets rápidos</b>: “Ocultar animales (agrícola)”, “Ocultar granos (ganadera/haras)” y “Mostrar todo”. Así una empresa <b>solo agrícola</b> no ve los módulos de animales, y una <b>ganadera/haras</b> no ve lo de granos, sin tocar los roles. Además, el módulo <b>“Animales”</b> (stock por cabezas) pasó a llamarse <b>“Movimientos de animales”</b> para diferenciarlo de las <b>Fichas de animales</b> (ficha individual).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
       titulo:'🐎 v2.128.0 — Fichas de animales (ficha individual 360°): equinos, vacas madre, toros y más',
       desc:'Nuevo módulo en <b>Stock y depósitos → Fichas de animales</b> para seguir cada animal como <b>activo individual</b> (además del stock por cabezas de Hacienda). Sirve para <b>caballos (haras/polo)</b>, <b>vacas madre / toros de cabaña</b>, porcinos, etc. Cada ficha lleva: <b>identidad</b> (nombre, pelaje, sexo, categoría, estado), <b>identificadores</b> (microchip, caravana RFID, N° de registro SRA/AACCP/RP, pasaporte), <b>genealogía</b> (padre, madre y receptora para transferencia embrionaria), <b>ubicación</b> e <b>historial</b> con eventos de sanidad, vacunas, herrajes, reproducción, doma/entrenamiento, torneos, pesajes y traslados. Cada evento puede <b>imputar un costo</b>, así el sistema acumula <b>cuánto costó criar/preparar cada animal</b> y al venderlo calcula el <b>margen real</b> (precio − costo). Los eventos con <b>próximo control</b> (ej. Coggins, vacunas) generan <b>alertas</b>. Preparado para <b>integrar collares/sensores (IoT)</b>: la ficha guarda la caravana RFID/microchip y hay un canal para recibir lecturas de dispositivos. Incluye <b>genealogía enlazada</b> (elegís padre/madre de las fichas ya cargadas y en la ficha ves la <b>descendencia</b> — las hijas/hijos), <b>movimientos de ubicación</b> (📍 Mover: campo ↔ Buenos Aires ↔ cancha, con historial) y <b>eventos de reproducción</b> (IA / transferencia embrionaria: padrillo, donante, receptora y resultado). Seguimos sumando (hotelería a terceros con cuenta corriente, DT-e equino con microchip, integración real de collares).' },
@@ -8834,6 +8887,13 @@ function configRenderConfig(body) {
       <input id="${id}" class="input" value="${esc(val||'')}" placeholder="${esc(ph||'')}" ${ro}/></div>`;
   body.innerHTML = `
     <p class="text-xs text-slate-500 mb-4">Contactos compartidos por todas las empresas. Se usan en los botones de WhatsApp (💬 Asesor, 🚛 Solicitar Camión, etc.). Los teléfonos se cargan con el código de área y número, asumiendo Argentina (+54 9). ${esSuper?'':'<b>Solo el Super Admin puede editar esta sección.</b>'}</p>
+    ${(esSuper || (currentMembership()?.role?.permissions||[]).includes('*:*')) ? `<div class="kpi mb-4 border-l-4 border-emerald-400">
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <div><h4 class="font-semibold text-slate-800">🧩 Módulos visibles de esta empresa</h4>
+          <p class="text-xs text-slate-500">Ocultá del menú lo que esta empresa no usa (ej. una empresa solo agrícola oculta los módulos de animales, y una ganadera/haras oculta lo agrícola). Aplica a todos los usuarios de la empresa.</p></div>
+        <button class="btn btn-secondary" onclick="empresaModulosForm()">Configurar módulos</button>
+      </div>
+    </div>` : ''}
 
     <div class="kpi mb-4">
       <h4 class="font-semibold text-slate-800 mb-3">📈 Asesor comercial (precios de granos)</h4>
