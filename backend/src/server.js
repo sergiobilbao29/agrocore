@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.127.0';
+const AGROCORE_VERSION = '2.128.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9279,6 +9279,235 @@ app.post('/api/guias-hacienda/import', requireCompany, requirePermission('stock:
 });
 
 // ============================================================
+// ANIMALES — Ficha individual (360°) genérica + eventos/costos + IoT-ready
+// ============================================================
+const _animalEspecies = ['equino','bovino','porcino','otro'];
+const animalSchema = z.object({
+  especie: z.string().optional(),
+  nombre: z.string().min(1),
+  sexo: z.string().nullable().optional(),
+  fechaNac: z.coerce.date().nullable().optional(),
+  pelaje: z.string().nullable().optional(),
+  raza: z.string().nullable().optional(),
+  categoria: z.string().nullable().optional(),
+  estado: z.string().nullable().optional(),
+  microchip: z.string().nullable().optional(),
+  caravanaRfid: z.string().nullable().optional(),
+  caravanaVisual: z.string().nullable().optional(),
+  nroRegistro: z.string().nullable().optional(),
+  pasaporte: z.string().nullable().optional(),
+  padreId: z.string().nullable().optional(),
+  padreNombre: z.string().nullable().optional(),
+  madreId: z.string().nullable().optional(),
+  madreNombre: z.string().nullable().optional(),
+  receptoraId: z.string().nullable().optional(),
+  receptoraNombre: z.string().nullable().optional(),
+  campoId: z.string().nullable().optional(),
+  ubicacion: z.string().nullable().optional(),
+  moneda: z.string().nullable().optional(),
+  fechaIngreso: z.coerce.date().nullable().optional(),
+  costoIngreso: z.number().nullable().optional(),
+  origen: z.string().nullable().optional(),
+  valuacion: z.number().nullable().optional(),
+  externo: z.boolean().optional(),
+  propietario: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+const animalEventoSchema = z.object({
+  fecha: z.coerce.date(),
+  tipo: z.string().min(1),
+  concepto: z.string().nullable().optional(),
+  costo: z.number().nullable().optional(),
+  moneda: z.string().nullable().optional(),
+  empleadoId: z.string().nullable().optional(),
+  productoId: z.string().nullable().optional(),
+  cantidad: z.number().nullable().optional(),
+  proximaFecha: z.coerce.date().nullable().optional(),
+  datos: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+// Devuelve el animal con costo acumulado y resultado de venta calculados.
+function _animalConCostos(a) {
+  const evs = a.eventos || [];
+  const costoEventos = evs.reduce((s, e) => s + Number(e.costo || 0), 0);
+  const costoTotal = Number(a.costoIngreso || 0) + costoEventos;
+  const margen = (a.precioVenta != null) ? (Number(a.precioVenta || 0) - costoTotal) : null;
+  return { ...a, _costoEventos: _round2(costoEventos), _costoTotal: _round2(costoTotal), _margen: margen != null ? _round2(margen) : null };
+}
+
+app.get('/api/animales', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.especie) where.especie = String(req.query.especie);
+    if (req.query.estado) where.estado = String(req.query.estado);
+    const data = await prisma.animal.findMany({
+      where, orderBy: [{ estado: 'asc' }, { nombre: 'asc' }],
+      include: { eventos: { select: { costo: true } } },
+    });
+    res.json({ ok: true, data: data.map(_animalConCostos) });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/animales/:id', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const a = await prisma.animal.findFirst({
+      where: { id: req.params.id, companyId: req.companyId },
+      include: { eventos: { orderBy: { fecha: 'desc' } } },
+    });
+    if (!a) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    res.json({ ok: true, data: _animalConCostos(a) });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/animales', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = animalSchema.parse(req.body);
+    const row = await prisma.animal.create({ data: {
+      companyId: req.companyId,
+      especie: (d.especie && _animalEspecies.includes(d.especie)) ? d.especie : 'equino',
+      nombre: d.nombre.trim(), sexo: d.sexo || null, fechaNac: d.fechaNac || null,
+      pelaje: d.pelaje || null, raza: d.raza || null, categoria: d.categoria || null,
+      estado: d.estado || 'activo',
+      microchip: d.microchip || null, caravanaRfid: d.caravanaRfid || null, caravanaVisual: d.caravanaVisual || null,
+      nroRegistro: d.nroRegistro || null, pasaporte: d.pasaporte || null,
+      padreId: d.padreId || null, padreNombre: d.padreNombre || null,
+      madreId: d.madreId || null, madreNombre: d.madreNombre || null,
+      receptoraId: d.receptoraId || null, receptoraNombre: d.receptoraNombre || null,
+      campoId: d.campoId || null, ubicacion: d.ubicacion || null,
+      moneda: d.moneda || 'ARS', fechaIngreso: d.fechaIngreso || null,
+      costoIngreso: d.costoIngreso ?? 0, origen: d.origen || null, valuacion: d.valuacion ?? null,
+      externo: !!d.externo, propietario: d.propietario || null, observaciones: d.observaciones || null,
+    }});
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/animales/:id', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    const d = animalSchema.partial().parse(req.body);
+    const data = { ...d };
+    ['sexo','pelaje','raza','categoria','microchip','caravanaRfid','caravanaVisual','nroRegistro','pasaporte','padreId','padreNombre','madreId','madreNombre','receptoraId','receptoraNombre','campoId','ubicacion','origen','propietario','observaciones']
+      .forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
+    if (d.nombre !== undefined) data.nombre = String(d.nombre).trim();
+    const row = await prisma.animal.update({ where: { id: cur.id }, data });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Vender un animal: registra venta + evento y pasa estado a "vendido".
+app.post('/api/animales/:id/vender', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    const fecha = req.body.fecha ? new Date(req.body.fecha) : new Date();
+    const precio = Number(req.body.precioVenta || 0);
+    const moneda = req.body.monedaVenta || cur.moneda || 'ARS';
+    const clienteId = req.body.clienteId || null;
+    const ref = req.body.ventaRef || null;
+    const row = await prisma.$transaction(async (tx) => {
+      await tx.animalEvento.create({ data: {
+        companyId: req.companyId, animalId: cur.id, fecha, tipo: 'venta',
+        concepto: 'Venta' + (ref ? ' · ' + ref : ''), costo: 0, moneda,
+        datos: JSON.stringify({ precioVenta: precio, moneda, clienteId, ref }),
+      }});
+      return tx.animal.update({ where: { id: cur.id }, data: {
+        estado: 'vendido', fechaVenta: fecha, precioVenta: precio, monedaVenta: moneda,
+        clienteId, ventaRef: ref,
+      }});
+    });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/animales/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const cur = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    // revertir egresos de stock generados por eventos (consumo imputado)
+    const evs = await prisma.animalEvento.findMany({ where: { animalId: cur.id, movimientoStockId: { not: null } } });
+    for (const e of evs) { try { await prisma.movimiento.delete({ where: { id: e.movimientoStockId } }); } catch {} }
+    await prisma.animal.delete({ where: { id: cur.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// --- Eventos del animal (bitácora + acumulador de costos) ---
+app.post('/api/animales/:id/eventos', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const a = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!a) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    const d = animalEventoSchema.parse(req.body);
+    const row = await prisma.$transaction(async (tx) => {
+      let movStockId = null;
+      if (d.productoId && d.cantidad && d.cantidad > 0 && req.body.descontarStock) {
+        const mv = await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: d.productoId, fecha: d.fecha, tipo: 'egreso',
+          motivo: 'consumo_animal', cantidad: Number(d.cantidad), precio: null,
+          referencia: 'ANIMAL:' + a.id, observaciones: 'Consumo — ' + (a.nombre || 'animal'),
+          userId: req.user?.id || null,
+        }});
+        movStockId = mv.id;
+      }
+      return tx.animalEvento.create({ data: {
+        companyId: req.companyId, animalId: a.id, fecha: d.fecha, tipo: d.tipo,
+        concepto: d.concepto || null, costo: d.costo ?? 0, moneda: d.moneda || a.moneda || 'ARS',
+        empleadoId: d.empleadoId || null, productoId: d.productoId || null, cantidad: d.cantidad ?? null,
+        movimientoStockId: movStockId, proximaFecha: d.proximaFecha || null,
+        datos: d.datos || null, observaciones: d.observaciones || null,
+      }});
+    });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/animales/:id/eventos/:evId', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const ev = await prisma.animalEvento.findFirst({ where: { id: req.params.evId, animalId: req.params.id, companyId: req.companyId } });
+    if (!ev) return res.status(404).json({ ok: false, error: 'Evento no encontrado' });
+    if (ev.movimientoStockId) { try { await prisma.movimiento.delete({ where: { id: ev.movimientoStockId } }); } catch {} }
+    await prisma.animalEvento.delete({ where: { id: ev.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Alertas: eventos con proximaFecha vencida o próxima (Coggins, vacunas, controles).
+app.get('/api/animales-alertas', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const dias = Number(req.query.dias || 30);
+    const limite = new Date(); limite.setDate(limite.getDate() + dias);
+    const evs = await prisma.animalEvento.findMany({
+      where: { companyId: req.companyId, proximaFecha: { not: null, lte: limite } },
+      orderBy: { proximaFecha: 'asc' },
+      include: { animal: { select: { id: true, nombre: true, especie: true } } },
+    });
+    res.json({ ok: true, data: evs });
+  } catch (e) { next(e); }
+});
+
+// IoT-ready: ingesta genérica de eventos de collares/sensores/caravanas.
+// Identifica el animal por caravanaRfid o microchip y registra un evento tipo "iot".
+// Pensado para webhooks de SenseHub/Allflex, Digitanimal, etc. (a futuro con token).
+app.post('/api/animales/iot-evento', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const { rfid, microchip, metrica, valor, fecha, concepto } = req.body || {};
+    if (!rfid && !microchip) return res.status(400).json({ ok: false, error: 'Falta rfid o microchip' });
+    const a = await prisma.animal.findFirst({ where: {
+      companyId: req.companyId,
+      OR: [ rfid ? { caravanaRfid: String(rfid) } : undefined, microchip ? { microchip: String(microchip) } : undefined ].filter(Boolean),
+    }});
+    if (!a) return res.status(404).json({ ok: false, error: 'No hay animal con ese identificador' });
+    const ev = await prisma.animalEvento.create({ data: {
+      companyId: req.companyId, animalId: a.id, fecha: fecha ? new Date(fecha) : new Date(),
+      tipo: 'iot', concepto: concepto || (metrica ? String(metrica) : 'Lectura de sensor'), costo: 0,
+      datos: JSON.stringify({ metrica: metrica || null, valor: valor ?? null }),
+    }});
+    res.status(201).json({ ok: true, data: ev, animal: { id: a.id, nombre: a.nombre } });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
 // MENSAJERÍA INTERNA + ASISTENTE DE CARGA
 // Chat de equipo (canal general) + asistente que interpreta frases y carga.
 // ============================================================
@@ -10038,6 +10267,18 @@ const _AYUDA_KB = [
       'Trae las columnas: fecha, tipo, concepto, contraparte, referencia, débito, crédito, saldo (corrido), origen (importado o manual) y cargado por, en orden cronológico y con el total de débitos y créditos al pie.',
       'El nombre del archivo incluye el banco, la cuenta y el período (ej: Movimientos_Banco-Nacion_00012345_20260724_20260824.xlsx), ideal para mandarle al contador o a los dueños.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
+  { id:'fichas_animales', terms:['ficha de animal','caballo','equino','haras','polo','ficha individual','animal individual','pedigree','genealogia','microchip','coggins','vaca madre','toro','padrillo','yegua','reproduccion','transferencia embrionaria','collar','sensor','rfid','costo por animal','vender caballo'],
+    titulo:'Fichas de animales (ficha individual 360°)',
+    pasos:[
+      'Entrá a Stock y depósitos → Fichas de animales.',
+      'Tocá "+ Nuevo animal" y cargá la ficha: nombre, especie (equino/bovino/porcino), sexo, categoría, estado, pelaje, raza y fecha de nacimiento.',
+      'Cargá los identificadores (microchip, caravana RFID, N° de registro SRA/AACCP/RP, pasaporte) y la genealogía (padre, madre y receptora si fue transferencia embrionaria).',
+      'Poné el costo de alta/compra (si nació, dejalo en 0) y la moneda.',
+      'Abrí la ficha y con "+ Agregar evento" cargás sanidad, vacunas, herrajes, reproducción, doma/entrenamiento, torneos, pesajes o traslados. Cada evento puede llevar un COSTO que se suma al costo acumulado del animal.',
+      'En un evento de vacuna o Coggins, poné el "próximo control": el sistema te avisa cuando está por vencer.',
+      'Cuando lo vendés, tocá "💰 Vender": ponés el precio y el sistema calcula el margen real (precio − costo acumulado) y lo pasa a estado Vendido.',
+      'Sirve para caballos de polo (haras), vacas madre/toros de cabaña, porcinos, etc. Está preparado para integrar collares/sensores (guarda la caravana RFID/microchip).'],
+    atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
   { id:'consumo_kiosco', terms:['kiosco','kiosquito','proveeduria','proveeduría','consumo del empleado','cigarrillos empleado','descontar del sueldo','mercaderia empleado','le doy un lechon y descuento','descontar galletitas','lista de precios kiosco','consumo empleado','proveeduria del campo','almacen del campo'],
     titulo:'Kiosco / proveeduría: descontar consumos del sueldo',
     pasos:[

@@ -70,6 +70,8 @@ model Company {
   contratosCereal ContratoCereal[]
   liquidacionesHacienda LiquidacionHacienda[]
   guiasHacienda   GuiaHacienda[]
+  animales        Animal[]
+  animalEventos   AnimalEvento[]
   mensajes        Mensaje[]
   chatEstados     ChatEstado[]
   pushSubs        PushSubscription[]
@@ -1375,6 +1377,102 @@ model GuiaHaciendaPago {
 
   @@index([guiaId])
   @@index([companyId])
+}
+
+// ============================================================
+// ANIMAL — Ficha individual (360°). GENÉRICA para cualquier especie
+// (equino de polo, vaca madre/toro cabaña, porcino, etc.). Convive con el
+// stock por lote/cabezas de Hacienda: acá se lleva el animal como ACTIVO
+// INDIVIDUAL con identidad, genealogía, sanidad, costos acumulados y venta.
+// Preparada para IoT: caravanaRFID/microchip + eventos tipo "iot" (JSON).
+// ============================================================
+model Animal {
+  id            String   @id @default(cuid())
+  companyId     String
+  especie       String   @default("equino")   // equino | bovino | porcino | otro
+  nombre        String                          // nombre / apodo / nombre de registro
+  sexo          String?                         // macho | hembra | castrado
+  fechaNac      DateTime?
+  pelaje        String?                         // pelaje / color
+  raza          String?
+  categoria     String?                         // libre (Potrillo, Yegua, Vaca madre, Toro, Padrillo...)
+  estado        String   @default("activo")     // ver flujo: cria|recria|doma|hechura|jugando|servicio|gestacion|disponible_venta|vendido|prestado|baja
+  // Identificadores (individuales)
+  microchip     String?
+  caravanaRfid  String?                         // RFID / caravana electrónica (IoT)
+  caravanaVisual String?
+  nroRegistro   String?                         // SRA / AACCP / RP
+  pasaporte     String?
+  // Genealogía (id si está en el sistema, o texto libre si es externo)
+  padreId       String?
+  padreNombre   String?
+  madreId       String?
+  madreNombre   String?
+  receptoraId   String?                         // yegua receptora (transferencia embrionaria)
+  receptoraNombre String?
+  // Ubicación
+  campoId       String?
+  ubicacion     String?                         // box / paddock / potrero (texto)
+  // Económico
+  moneda        String   @default("ARS")
+  fechaIngreso  DateTime?
+  costoIngreso  Float?   @default(0)            // costo de compra / valor de alta (nacido = 0)
+  origen        String?                         // "nacido" | "comprado" | otro
+  valuacion     Float?                           // valor estimado actual
+  // Venta
+  fechaVenta    DateTime?
+  precioVenta   Float?
+  monedaVenta   String?
+  clienteId     String?
+  ventaRef      String?                         // referencia factura/boleto
+  // Otros
+  externo       Boolean  @default(false)        // true = de un tercero (pensión / hotelería)
+  propietario   String?                         // dueño si es externo
+  foto          String?
+  observaciones String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  eventos       AnimalEvento[]
+
+  @@index([companyId])
+  @@index([companyId, especie])
+  @@index([companyId, estado])
+  @@index([caravanaRfid])
+  @@index([microchip])
+}
+
+// Evento / historia de un animal. Acumulador de costos y bitácora general.
+// tipo: sanidad | vacuna | herraje | reproduccion | doma | entrenamiento | torneo |
+//       pesaje | traslado | costo | ingreso | venta | nota | iot
+// El campo datos guarda info flexible por tipo (JSON string): reproducción
+// {metodo:IA|TE|monta, donante, padrillo, receptora, resultado}, coggins
+// {fecha, vence}, iot {device, metrica, valor}, etc.
+model AnimalEvento {
+  id            String   @id @default(cuid())
+  companyId     String
+  animalId      String
+  fecha         DateTime
+  tipo          String
+  concepto      String?
+  costo         Float?   @default(0)            // costo imputado al animal (0 si no aplica)
+  moneda        String   @default("ARS")
+  empleadoId    String?                          // vet / domador / petisero
+  productoId    String?                          // si consume de stock (opcional)
+  cantidad      Float?
+  movimientoStockId String?                      // egreso de stock generado (para revertir)
+  proximaFecha  DateTime?                        // vencimiento / próximo control (Coggins, vacuna)
+  datos         String?                          // JSON flexible
+  observaciones String?
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  animal        Animal   @relation(fields: [animalId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([animalId])
+  @@index([companyId, proximaFecha])
 }
 
 // ============================================================

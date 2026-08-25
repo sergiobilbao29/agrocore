@@ -1032,6 +1032,7 @@ const MODULES = [
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
   { id:'hacienda',      label:'Animales',             icon:'🐄', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Stock y depósitos' },
+  { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'rodeos',        label:'Costo de hacienda',    icon:'🐮', perm:'stock:read',      section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA =====
@@ -2574,6 +2575,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
+      titulo:'🐎 v2.128.0 — Fichas de animales (ficha individual 360°): equinos, vacas madre, toros y más',
+      desc:'Nuevo módulo en <b>Stock y depósitos → Fichas de animales</b> para seguir cada animal como <b>activo individual</b> (además del stock por cabezas de Hacienda). Sirve para <b>caballos (haras/polo)</b>, <b>vacas madre / toros de cabaña</b>, porcinos, etc. Cada ficha lleva: <b>identidad</b> (nombre, pelaje, sexo, categoría, estado), <b>identificadores</b> (microchip, caravana RFID, N° de registro SRA/AACCP/RP, pasaporte), <b>genealogía</b> (padre, madre y receptora para transferencia embrionaria), <b>ubicación</b> e <b>historial</b> con eventos de sanidad, vacunas, herrajes, reproducción, doma/entrenamiento, torneos, pesajes y traslados. Cada evento puede <b>imputar un costo</b>, así el sistema acumula <b>cuánto costó criar/preparar cada animal</b> y al venderlo calcula el <b>margen real</b> (precio − costo). Los eventos con <b>próximo control</b> (ej. Coggins, vacunas) generan <b>alertas</b>. Preparado para <b>integrar collares/sensores (IoT)</b>: la ficha guarda la caravana RFID/microchip y hay un canal para recibir lecturas de dispositivos. Primera versión — seguimos sumando (reproducción avanzada, hotelería a terceros, DT-e equino).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
       titulo:'🛒 v2.127.0 — Kiosco / proveeduría del campo: consumos que se descuentan del sueldo',
       desc:'Nuevo en la <b>planilla del empleado</b>: botón <b>🛒 Consumo kiosco</b> para cargar lo que el empleado retira del kiosquito del campo (cigarrillos, galletitas, higiene, etc.) o incluso <b>producción propia</b> (un lechón, media res). Funciona con una <b>lista de precios</b>: creás en <b>Catálogos</b> la familia <b>“Proveeduría”</b> (o Kiosco) y cargás ahí los productos con su <b>Precio de referencia</b>. Al cargar el consumo elegís los ítems, cantidad y precio (se autocompleta y es editable) y el total se le <b>descuenta del sueldo</b> en la planilla, <b>sin generar factura</b>. El <b>descuento de stock es opcional</b> (por defecto no toca stock, porque el kiosco suele llevar una lista de precios y nada más). Si activás el descuento de stock, al borrar el consumo se revierte solo.' },
@@ -27262,6 +27266,261 @@ function guiaMotivoLabel(v){ return (GUIA_MOTIVOS.find(m=>m.v===v)||{}).l || v; 
 function guiaEstadoBadge(e){
   const map={ pendiente:['badge-yellow','Pendiente'], vinculada:['badge-green','Vinculada'], anulada:['badge-gray','Anulada'], en_frigorifico:['badge-blue','En frigorífico'], faena_cerrada:['badge-green','Faena cerrada'] };
   const [c,t]=map[e]||['badge-gray',e]; return `<span class="badge ${c}">${t}</span>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FICHAS DE ANIMALES — ficha individual (360°) genérica (equino/bovino/porcino)
+// ══════════════════════════════════════════════════════════════════════════════
+const ANI_ESPECIES = { equino:'🐎 Equino', bovino:'🐄 Bovino', porcino:'🐖 Porcino', otro:'🐾 Otro' };
+const ANI_ESTADOS = {
+  cria:'Cría', recria:'Recría', doma:'Doma', hechura:'Hechura/Escuela', jugando:'Jugando',
+  servicio:'En servicio', gestacion:'Gestación', disponible_venta:'Disponible venta',
+  vendido:'Vendido', prestado:'Prestado', baja:'Baja', activo:'Activo',
+};
+const ANI_EV_TIPOS = {
+  sanidad:'🩺 Sanidad', vacuna:'💉 Vacuna', herraje:'🧲 Herraje', reproduccion:'🧬 Reproducción',
+  doma:'🐎 Doma', entrenamiento:'🏇 Entrenamiento', torneo:'🏆 Torneo', pesaje:'⚖️ Pesaje',
+  traslado:'🚚 Traslado', costo:'💵 Costo', nota:'📝 Nota', ingreso:'📥 Ingreso', venta:'💰 Venta', iot:'📡 Sensor',
+};
+function _aniEstadoBadge(e){
+  const rojo=['baja']; const gris=['vendido','prestado']; const amb=['disponible_venta'];
+  const cls = rojo.includes(e)?'bg-red-100 text-red-700': gris.includes(e)?'bg-slate-200 text-slate-600': amb.includes(e)?'bg-amber-100 text-amber-800':'bg-emerald-100 text-emerald-800';
+  return `<span class="text-[11px] px-2 py-0.5 rounded-full ${cls}">${esc(ANI_ESTADOS[e]||e||'')}</span>`;
+}
+pages.animales = async function(){
+  setHeader('🐎 Fichas de animales', 'Ficha individual de cada animal: identidad, genealogía, sanidad, costos y venta');
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let data=[], alertas=[];
+  try { data = (await api('/api/animales')).data || []; } catch(e){ return toast(e.message,'error'); }
+  try { alertas = (await api('/api/animales-alertas?dias=30')).data || []; } catch {}
+  state._animales = data; state._aniAlertas = alertas;
+  state._aniFiltro = state._aniFiltro || { especie:'', estado:'', q:'' };
+  aniRender();
+};
+function aniRender(){
+  const f = state._aniFiltro; const all = state._animales||[];
+  const list = all.filter(a=>{
+    if (f.especie && a.especie!==f.especie) return false;
+    if (f.estado && a.estado!==f.estado) return false;
+    if (f.q){ const q=f.q.toLowerCase(); const hay=(a.nombre||'')+' '+(a.microchip||'')+' '+(a.nroRegistro||'')+' '+(a.caravanaRfid||''); if(!hay.toLowerCase().includes(q)) return false; }
+    return true;
+  });
+  const canC = can('stock:create');
+  const espOpts = ['<option value="">Todas las especies</option>'].concat(Object.keys(ANI_ESPECIES).map(k=>`<option value="${k}" ${f.especie===k?'selected':''}>${ANI_ESPECIES[k]}</option>`)).join('');
+  const estOpts = ['<option value="">Todos los estados</option>'].concat(Object.keys(ANI_ESTADOS).filter(k=>k!=='activo').map(k=>`<option value="${k}" ${f.estado===k?'selected':''}>${ANI_ESTADOS[k]}</option>`)).join('');
+  const al = state._aniAlertas||[];
+  const alertBox = al.length ? `<div class="kpi mb-3 border-l-4 border-amber-400">
+      <div class="font-semibold text-amber-800 text-sm mb-1">⚠️ Sanidad por vencer / vencida (${al.length})</div>
+      <div class="text-xs text-slate-600 space-y-0.5">${al.slice(0,8).map(e=>`<div>• ${esc(e.animal?.nombre||'')}: <b>${esc(e.concepto||ANI_EV_TIPOS[e.tipo]||e.tipo)}</b> — ${fmtFecha(e.proximaFecha)}</div>`).join('')}${al.length>8?`<div class="text-slate-400">…y ${al.length-8} más</div>`:''}</div></div>` : '';
+  const card = a => `<div class="kpi hover:shadow-md transition cursor-pointer" onclick='aniVer(${JSON.stringify(a.id)})'>
+    <div class="flex items-start justify-between gap-2">
+      <div><div class="font-bold text-slate-800">${esc(a.nombre)}</div>
+        <div class="text-[11px] text-slate-500">${(ANI_ESPECIES[a.especie]||a.especie)}${a.categoria?' · '+esc(a.categoria):''}${a.sexo?' · '+esc(a.sexo):''}</div></div>
+      ${_aniEstadoBadge(a.estado)}
+    </div>
+    <div class="mt-2 text-[11px] text-slate-500 space-y-0.5">
+      ${a.microchip?`<div>Chip: <span class="font-mono">${esc(a.microchip)}</span></div>`:''}
+      ${(a.padreNombre||a.madreNombre)?`<div>Padre: ${esc(a.padreNombre||'—')} · Madre: ${esc(a.madreNombre||'—')}</div>`:''}
+    </div>
+    <div class="mt-2 flex items-center justify-between border-t border-slate-100 pt-2">
+      <span class="text-[11px] text-slate-500">Costo acum.</span>
+      <span class="font-semibold text-slate-700">${fmtMon(a.moneda||'ARS', a._costoTotal||0)}</span>
+    </div>
+    ${a.precioVenta!=null?`<div class="flex items-center justify-between"><span class="text-[11px] text-slate-500">Margen venta</span><span class="font-semibold ${(a._margen||0)>=0?'text-emerald-700':'text-red-600'}">${fmtMon(a.monedaVenta||a.moneda||'ARS', a._margen||0)}</span></div>`:''}
+  </div>`;
+  $('#page-body').innerHTML = `
+    ${alertBox}
+    <div class="kpi mb-3 flex items-end gap-2 flex-wrap">
+      <div><label class="label text-xs">Especie</label><select class="input" onchange="state._aniFiltro.especie=this.value; aniRender()">${espOpts}</select></div>
+      <div><label class="label text-xs">Estado</label><select class="input" onchange="state._aniFiltro.estado=this.value; aniRender()">${estOpts}</select></div>
+      <div class="flex-1 min-w-[180px]"><label class="label text-xs">Buscar</label><input class="input" placeholder="Nombre, chip, RP…" value="${esc(f.q)}" oninput="state._aniFiltro.q=this.value; aniRender()"/></div>
+      ${canC?`<button class="btn btn-primary" onclick="aniForm()">+ Nuevo animal</button>`:''}
+    </div>
+    <div class="text-xs text-slate-400 mb-2">${list.length} animal${list.length===1?'':'es'}${all.length!==list.length?` (de ${all.length})`:''}</div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      ${list.map(card).join('') || `<div class="text-slate-400 text-sm col-span-full text-center py-10">No hay animales. Tocá “+ Nuevo animal” para cargar el primero.</div>`}
+    </div>`;
+}
+function aniForm(id){
+  const a = id ? (state._animales||[]).find(x=>x.id===id)||{} : {};
+  const dv = v => v==null?'':v;
+  const dt = v => v?String(v).slice(0,10):'';
+  const espOpts = Object.keys(ANI_ESPECIES).map(k=>`<option value="${k}" ${(a.especie||'equino')===k?'selected':''}>${ANI_ESPECIES[k]}</option>`).join('');
+  const estOpts = Object.keys(ANI_ESTADOS).map(k=>`<option value="${k}" ${(a.estado||'cria')===k?'selected':''}>${ANI_ESTADOS[k]}</option>`).join('');
+  openModal({
+    title: id?'Editar ficha del animal':'Nueva ficha de animal', size:'max-w-3xl',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Nombre *</label><input id="an-nombre" class="input" value="${esc(dv(a.nombre))}"/></div>
+        <div><label class="label">Especie</label><select id="an-esp" class="input">${espOpts}</select></div>
+        <div><label class="label">Sexo</label><select id="an-sexo" class="input">${['','macho','hembra','castrado'].map(s=>`<option value="${s}" ${(a.sexo||'')===s?'selected':''}>${s||'—'}</option>`).join('')}</select></div>
+        <div><label class="label">Categoría</label><input id="an-cat" class="input" placeholder="Potrillo, Yegua madre, Padrillo, Vaca…" value="${esc(dv(a.categoria))}"/></div>
+        <div><label class="label">Estado</label><select id="an-estado" class="input">${estOpts}</select></div>
+        <div><label class="label">Fecha de nacimiento</label><input id="an-nac" type="date" class="input" value="${dt(a.fechaNac)}"/></div>
+        <div><label class="label">Pelaje / color</label><input id="an-pelaje" class="input" value="${esc(dv(a.pelaje))}"/></div>
+        <div><label class="label">Raza</label><input id="an-raza" class="input" value="${esc(dv(a.raza))}"/></div>
+      </div>
+      <div class="mt-3 text-xs font-semibold text-slate-500 uppercase">Identificación</div>
+      <div class="grid grid-cols-2 gap-3 mt-1">
+        <div><label class="label">Microchip</label><input id="an-chip" class="input" value="${esc(dv(a.microchip))}"/></div>
+        <div><label class="label">Caravana RFID (IoT/collar)</label><input id="an-rfid" class="input" value="${esc(dv(a.caravanaRfid))}"/></div>
+        <div><label class="label">Caravana visual</label><input id="an-cv" class="input" value="${esc(dv(a.caravanaVisual))}"/></div>
+        <div><label class="label">N° registro (SRA/AACCP/RP)</label><input id="an-reg" class="input" value="${esc(dv(a.nroRegistro))}"/></div>
+        <div><label class="label">Pasaporte / libreta</label><input id="an-pas" class="input" value="${esc(dv(a.pasaporte))}"/></div>
+        <div><label class="label">Ubicación (box/paddock/potrero)</label><input id="an-ubi" class="input" value="${esc(dv(a.ubicacion))}"/></div>
+      </div>
+      <div class="mt-3 text-xs font-semibold text-slate-500 uppercase">Genealogía</div>
+      <div class="grid grid-cols-3 gap-3 mt-1">
+        <div><label class="label">Padre</label><input id="an-padre" class="input" value="${esc(dv(a.padreNombre))}"/></div>
+        <div><label class="label">Madre</label><input id="an-madre" class="input" value="${esc(dv(a.madreNombre))}"/></div>
+        <div><label class="label">Receptora (TE)</label><input id="an-recep" class="input" value="${esc(dv(a.receptoraNombre))}"/></div>
+      </div>
+      <div class="mt-3 text-xs font-semibold text-slate-500 uppercase">Económico</div>
+      <div class="grid grid-cols-3 gap-3 mt-1">
+        <div><label class="label">Origen</label><select id="an-origen" class="input">${['','nacido','comprado'].map(s=>`<option value="${s}" ${(a.origen||'')===s?'selected':''}>${s||'—'}</option>`).join('')}</select></div>
+        <div><label class="label">Costo de alta / compra</label><input id="an-costo" type="number" step="0.01" class="input" value="${dv(a.costoIngreso)}"/></div>
+        <div><label class="label">Moneda</label><select id="an-moneda" class="input">${['ARS','USD'].map(m=>`<option value="${m}" ${(a.moneda||'ARS')===m?'selected':''}>${m}</option>`).join('')}</select></div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mt-3">
+        <label class="text-xs text-slate-600 flex items-center gap-2 cursor-pointer"><input id="an-ext" type="checkbox" ${a.externo?'checked':''}/> Es de un tercero (pensión/hotelería)</label>
+        <div><label class="label">Propietario (si es de tercero)</label><input id="an-prop" class="input" value="${esc(dv(a.propietario))}"/></div>
+      </div>
+      <div class="mt-3"><label class="label">Observaciones</label><textarea id="an-obs" class="input" rows="2">${esc(dv(a.observaciones))}</textarea></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='aniSave(${JSON.stringify(id||null)})'>${id?'Guardar':'Crear ficha'}</button>`
+  });
+}
+async function aniSave(id){
+  const g=x=>document.getElementById(x);
+  const nombre=(g('an-nombre').value||'').trim();
+  if(!nombre) return toast('Poné el nombre','warn');
+  const body={
+    nombre, especie:g('an-esp').value, sexo:g('an-sexo').value||null, categoria:g('an-cat').value||null,
+    estado:g('an-estado').value, fechaNac:g('an-nac').value||null, pelaje:g('an-pelaje').value||null, raza:g('an-raza').value||null,
+    microchip:g('an-chip').value||null, caravanaRfid:g('an-rfid').value||null, caravanaVisual:g('an-cv').value||null,
+    nroRegistro:g('an-reg').value||null, pasaporte:g('an-pas').value||null, ubicacion:g('an-ubi').value||null,
+    padreNombre:g('an-padre').value||null, madreNombre:g('an-madre').value||null, receptoraNombre:g('an-recep').value||null,
+    origen:g('an-origen').value||null, costoIngreso:Number(g('an-costo').value||0), moneda:g('an-moneda').value,
+    externo:g('an-ext').checked, propietario:g('an-prop').value||null, observaciones:g('an-obs').value||null,
+  };
+  try{
+    await api('/api/animales'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
+    toast(id?'Ficha actualizada':'Ficha creada','success'); closeModal(); pages.animales();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function aniVer(id){
+  let a;
+  try { a = (await api('/api/animales/'+id)).data; } catch(e){ return toast(e.message,'error'); }
+  if(!a) return;
+  state._aniActual = a;
+  const canU = can('stock:update'), canD = can('stock:delete'), canC = can('stock:create');
+  const evs = a.eventos||[];
+  const dato = e => { try { return e.datos?JSON.parse(e.datos):null; } catch { return null; } };
+  const filaEv = e => {
+    const d=dato(e);
+    let extra='';
+    if(e.tipo==='venta'&&d) extra=` · ${fmtMon(d.moneda||a.moneda, d.precioVenta||0)}`;
+    if(e.tipo==='iot'&&d) extra=` · ${esc(d.metrica||'')}: ${esc(String(d.valor??''))}`;
+    return `<tr class="border-t border-slate-100">
+      <td class="p-1 whitespace-nowrap">${fmtFecha(e.fecha)}</td>
+      <td class="p-1">${ANI_EV_TIPOS[e.tipo]||e.tipo}</td>
+      <td class="p-1">${esc(e.concepto||'')}${extra}${e.proximaFecha?` <span class="text-[10px] text-amber-700">(próx: ${fmtFecha(e.proximaFecha)})</span>`:''}</td>
+      <td class="p-1 text-right">${e.costo?fmtMon(e.moneda||a.moneda,e.costo):'—'}</td>
+      <td class="p-1 text-right">${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='aniEventoDel(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>🗑️</button>`:''}</td>
+    </tr>`;
+  };
+  const dl = (lbl,val)=> val?`<div><span class="text-[11px] text-slate-400">${lbl}</span><div class="text-sm">${esc(val)}</div></div>`:'';
+  openModal({
+    title:`${(ANI_ESPECIES[a.especie]||'')} ${esc(a.nombre)}`, size:'max-w-4xl',
+    body:`
+      <div class="flex items-center gap-2 mb-3">${_aniEstadoBadge(a.estado)}${a.categoria?`<span class="text-xs text-slate-500">${esc(a.categoria)}</span>`:''}
+        <div class="flex-1"></div>
+        ${canU?`<button class="btn btn-ghost text-xs" onclick='aniForm(${JSON.stringify(a.id)})'>✏️ Editar</button>`:''}
+        ${(canU&&a.estado!=='vendido')?`<button class="btn btn-secondary text-xs" onclick='aniVenderForm(${JSON.stringify(a.id)})'>💰 Vender</button>`:''}
+        ${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='aniDel(${JSON.stringify(a.id)})'>🗑️</button>`:''}
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div class="kpi"><div class="text-[11px] text-slate-500">Costo acumulado</div><div class="text-lg font-bold">${fmtMon(a.moneda||'ARS',a._costoTotal||0)}</div></div>
+        ${a.precioVenta!=null?`<div class="kpi"><div class="text-[11px] text-slate-500">Precio venta</div><div class="text-lg font-bold">${fmtMon(a.monedaVenta||a.moneda,a.precioVenta)}</div></div>
+        <div class="kpi"><div class="text-[11px] text-slate-500">Margen</div><div class="text-lg font-bold ${(a._margen||0)>=0?'text-emerald-700':'text-red-600'}">${fmtMon(a.monedaVenta||a.moneda,a._margen||0)}</div></div>`:`<div class="kpi"><div class="text-[11px] text-slate-500">Valuación</div><div class="text-lg font-bold">${a.valuacion!=null?fmtMon(a.moneda,a.valuacion):'—'}</div></div>`}
+        <div class="kpi"><div class="text-[11px] text-slate-500">Nacimiento</div><div class="text-lg font-bold">${a.fechaNac?fmtFecha(a.fechaNac):'—'}</div></div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        ${dl('Sexo',a.sexo)}${dl('Pelaje',a.pelaje)}${dl('Raza',a.raza)}${dl('Ubicación',a.ubicacion)}
+        ${dl('Microchip',a.microchip)}${dl('RFID',a.caravanaRfid)}${dl('N° registro',a.nroRegistro)}${dl('Pasaporte',a.pasaporte)}
+        ${dl('Padre',a.padreNombre)}${dl('Madre',a.madreNombre)}${dl('Receptora (TE)',a.receptoraNombre)}${a.externo?dl('Propietario',a.propietario||'Tercero'):''}
+      </div>
+      <div class="flex items-center justify-between mb-2">
+        <div class="font-semibold text-slate-700">Historial y costos</div>
+        ${canC?`<button class="btn btn-primary text-xs" onclick='aniEventoForm(${JSON.stringify(a.id)})'>+ Agregar evento</button>`:''}
+      </div>
+      <div class="kpi p-0 overflow-x-auto"><table class="data" style="min-width:640px">
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th class="text-right">Costo</th><th></th></tr></thead>
+        <tbody>${evs.map(filaEv).join('')||`<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin eventos todavía.</td></tr>`}</tbody>
+      </table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+function aniEventoForm(id){
+  const hoy=new Date().toISOString().slice(0,10);
+  const tipoOpts=Object.keys(ANI_EV_TIPOS).filter(k=>!['venta','ingreso','iot'].includes(k)).map(k=>`<option value="${k}">${ANI_EV_TIPOS[k]}</option>`).join('');
+  openModal({
+    title:'Agregar evento a la ficha', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha *</label><input id="ae-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label">Tipo *</label><select id="ae-tipo" class="input">${tipoOpts}</select></div>
+        <div class="col-span-2"><label class="label">Detalle / concepto</label><input id="ae-con" class="input" placeholder="Ej: vacuna gripe, herrada, servicio con padrillo X, práctica…"/></div>
+        <div><label class="label">Costo imputado</label><input id="ae-costo" type="number" step="0.01" class="input" placeholder="0"/></div>
+        <div><label class="label">Próximo control / vencimiento</label><input id="ae-prox" type="date" class="input" title="Ej: vencimiento de Coggins o próxima vacuna"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ae-obs" class="input" rows="2"></textarea></div>
+      </div>
+      <div class="text-[11px] text-slate-400 mt-2">El “costo imputado” se suma al costo acumulado del animal. El “próximo control” dispara una alerta (ideal para Coggins / vacunas).</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='aniEventoSave(${JSON.stringify(id)})'>Agregar</button>`
+  });
+}
+async function aniEventoSave(id){
+  const g=x=>document.getElementById(x);
+  const body={ fecha:g('ae-fecha').value, tipo:g('ae-tipo').value, concepto:g('ae-con').value||null,
+    costo:Number(g('ae-costo').value||0), proximaFecha:g('ae-prox').value||null, observaciones:g('ae-obs').value||null };
+  if(!body.fecha) return toast('Poné la fecha','warn');
+  try{ await api('/api/animales/'+id+'/eventos',{method:'POST',body:JSON.stringify(body)}); toast('Evento agregado','success'); closeModal(); aniVer(id); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function aniEventoDel(id,evId){
+  if(!confirm('¿Eliminar este evento?')) return;
+  try{ await api('/api/animales/'+id+'/eventos/'+evId,{method:'DELETE'}); toast('Eliminado','success'); aniVer(id); }
+  catch(e){ toast(e.message,'error'); }
+}
+function aniVenderForm(id){
+  const a=state._aniActual||{}; const hoy=new Date().toISOString().slice(0,10);
+  openModal({ title:'💰 Vender animal', size:'max-w-md',
+    body:`
+      <p class="text-xs text-slate-500 mb-2">Registra la venta y calcula el margen (precio − costo acumulado). Pasa el animal a estado <b>Vendido</b>.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha *</label><input id="av-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label">Moneda</label><select id="av-moneda" class="input">${['ARS','USD'].map(m=>`<option value="${m}" ${(a.moneda||'ARS')===m?'selected':''}>${m}</option>`).join('')}</select></div>
+        <div class="col-span-2"><label class="label">Precio de venta *</label><input id="av-precio" type="number" step="0.01" class="input"/></div>
+        <div class="col-span-2"><label class="label">Referencia (factura/boleto)</label><input id="av-ref" class="input"/></div>
+      </div>
+      <div class="text-[11px] text-slate-400 mt-2">Costo acumulado actual: <b>${fmtMon(a.moneda||'ARS',a._costoTotal||0)}</b></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='aniVenderSave(${JSON.stringify(id)})'>Registrar venta</button>`
+  });
+}
+async function aniVenderSave(id){
+  const g=x=>document.getElementById(x);
+  const precio=Number(g('av-precio').value||0);
+  if(!precio||precio<=0) return toast('Poné el precio de venta','warn');
+  try{ await api('/api/animales/'+id+'/vender',{method:'POST',body:JSON.stringify({ fecha:g('av-fecha').value, precioVenta:precio, monedaVenta:g('av-moneda').value, ventaRef:g('av-ref').value||null })});
+    toast('Venta registrada','success'); closeModal(); pages.animales(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function aniDel(id){
+  if(!confirm('¿Eliminar la ficha del animal y todo su historial? Esta acción no se puede deshacer.')) return;
+  try{ await api('/api/animales/'+id,{method:'DELETE'}); toast('Ficha eliminada','success'); closeModal(); pages.animales(); }
+  catch(e){ toast(e.message,'error'); }
 }
 
 pages.guiasHacienda = async function() {
