@@ -2574,6 +2574,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
+      titulo:'🛒 v2.127.0 — Kiosco / proveeduría del campo: consumos que se descuentan del sueldo',
+      desc:'Nuevo en la <b>planilla del empleado</b>: botón <b>🛒 Consumo kiosco</b> para cargar lo que el empleado retira del kiosquito del campo (cigarrillos, galletitas, higiene, etc.) o incluso <b>producción propia</b> (un lechón, media res). Funciona con una <b>lista de precios</b>: creás en <b>Catálogos</b> la familia <b>“Proveeduría”</b> (o Kiosco) y cargás ahí los productos con su <b>Precio de referencia</b>. Al cargar el consumo elegís los ítems, cantidad y precio (se autocompleta y es editable) y el total se le <b>descuenta del sueldo</b> en la planilla, <b>sin generar factura</b>. El <b>descuento de stock es opcional</b> (por defecto no toca stock, porque el kiosco suele llevar una lista de precios y nada más). Si activás el descuento de stock, al borrar el consumo se revierte solo.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'24/08/2026',
       titulo:'📊 v2.126.0 — Exportar a Excel los movimientos de una cuenta bancaria',
       desc:'Dentro de cada <b>cuenta bancaria</b> (Tesorería → Bancos → abrir la cuenta) hay un botón nuevo <b>📊 Exportar Excel</b>. Descarga los <b>movimientos que estás viendo respetando el filtro de fechas</b> (Desde/Hasta) en un archivo listo para el contador o los dueños. Trae todas las columnas — <b>fecha, tipo, concepto, contraparte, referencia, débito, crédito, saldo corrido, origen (importado/manual) y cargado por</b> — en orden cronológico y con el <b>total de débitos y créditos</b> al pie. El nombre del archivo incluye el banco, la cuenta y el período (ej: <i>Movimientos_Banco-Nacion_00012345_20260724_20260824.xlsx</i>).' },
@@ -20666,6 +20669,7 @@ function empFichaRender() {
       <button class="btn btn-secondary" onclick="empExportXLSX()" title="Descargar la planilla del mes en Excel">📊 Excel</button>
       <button class="btn btn-secondary" onclick="empReciboPDF()" title="Recibo imprimible para entregar al empleado">🖨️ Recibo PDF</button>
       ${canC?`<button class="btn btn-secondary" onclick="empCatManager()" title="Agregar o eliminar categorías de la planilla">⚙️ Categorías</button>`:''}
+      ${canC?`<button class="btn btn-secondary" onclick="empConsumoForm()" title="Cargar consumo del kiosco / proveeduría del campo (se descuenta del sueldo)">🛒 Consumo kiosco</button>`:''}
       ${canC?`<button class="btn btn-secondary" onclick="empMovMultiForm()" title="Cargar varios movimientos de una sola vez">➕ Cargar varios</button>`:''}
       ${canC?`<button class="btn btn-primary" onclick="empMovForm()">+ Agregar movimiento</button>`:''}
     </div>
@@ -20750,6 +20754,143 @@ function empMovForm(movId=null){
              <button class="btn btn-primary" onclick='empMovSave(${JSON.stringify(movId)})'>${movId?'Guardar':'Agregar'}</button>`
   });
   empMovCatChange();
+}
+// --- CONSUMO DE KIOSCO / PROVEEDURÍA (lista de precios → descuento del sueldo) ---
+// Un producto es "de proveeduría" si su categoría RAÍZ del árbol se llama
+// Proveeduría / Kiosco (o su categoría plana lo menciona). Producción propia
+// (un lechón, etc.) también puede colgar de esa familia para descontarla del sueldo.
+function _esProdProveeduria(p){
+  const raiz = (prodCategoriaRaiz(p)||'').toLowerCase();
+  if (/proveedur|kiosco|kiosquito|prove/.test(raiz)) return true;
+  return /proveedur|kiosco|kiosquito/.test((p.categoria||'').toLowerCase());
+}
+function _consumoProdOpts(){
+  const all = !!state._consumoVerTodos;
+  let list = (state._consumoProds||[]).slice();
+  if (!all) { const f = list.filter(_esProdProveeduria); if (f.length) list = f; }
+  list.sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  const opt = p => {
+    const precio = Number(p.precioReferencia || p.ultimoCostoCompra || 0);
+    return `<option value="${esc(p.id)}" data-precio="${precio}" data-nom="${esc(p.nombre)}">${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`;
+  };
+  return `<option value="">— Elegir producto —</option>` + list.map(opt).join('') +
+         `<option value="__libre__">✎ Otro (escribir a mano)</option>`;
+}
+async function empConsumoForm(){
+  try { state._consumoProds = (await api('/api/productos')).data || []; } catch { state._consumoProds = []; }
+  if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
+  if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos=[]; } }
+  state._consumoVerTodos = false;
+  const hoy = new Date().toISOString().slice(0,10);
+  const fechaStr = (hoy.slice(0,7)===state.empMes) ? hoy : (state.empMes+'-01');
+  const hayProv = (state._consumoProds||[]).some(_esProdProveeduria);
+  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false && d.tipo!=='cerealera');
+  openModal({
+    title:'🛒 Consumo del kiosco / proveeduría', size:'max-w-3xl',
+    body:`
+      <div class="text-[12px] text-slate-500 mb-3">Cargá lo que retiró el empleado del kiosquito del campo. Se le <b>descuenta del sueldo</b> (cantidad × precio). El precio sale del <b>Precio de referencia</b> del producto y lo podés editar. <b>No genera factura.</b></div>
+      ${!hayProv?`<div class="mb-3 p-2 rounded border bg-amber-50 border-amber-300 text-amber-800 text-xs">Todavía no marcaste productos de kiosco. Creá en <b>Catálogos</b> la familia <b>“Proveeduría”</b> (o Kiosco) y cargá ahí los productos con su <b>precio</b>. Mientras tanto, tildá “Ver todos” o escribí a mano.</div>`:''}
+      <div class="grid grid-cols-2 gap-3 mb-2">
+        <div><label class="label">Fecha *</label><input id="cons-fecha" class="input" type="date" value="${fechaStr}"/></div>
+        <div class="flex items-end"><label class="text-xs text-slate-600 flex items-center gap-2 cursor-pointer"><input type="checkbox" id="cons-vertodos" onchange="state._consumoVerTodos=this.checked; empConsumoRebuildSelects()"/> Ver todos los productos</label></div>
+      </div>
+      <div class="overflow-auto" style="max-height:44vh">
+        <table class="w-full text-sm">
+          <thead class="text-xs uppercase text-slate-500"><tr>
+            <th class="text-left p-1" style="width:44%">Producto</th>
+            <th class="text-left p-1" style="width:14%">Cantidad</th>
+            <th class="text-left p-1" style="width:18%">Precio unit.</th>
+            <th class="text-right p-1" style="width:18%">Subtotal</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="cons-rows"></tbody>
+        </table>
+      </div>
+      <div class="mt-2 flex items-center justify-between">
+        <button type="button" class="btn btn-secondary text-xs" onclick="empConsumoAddRow()">+ Agregar ítem</button>
+        <div class="text-right"><span class="text-xs text-slate-500">Total a descontar</span><div id="cons-total" class="text-xl font-bold text-red-600">$ 0</div></div>
+      </div>
+      <div class="mt-3 p-2 rounded bg-slate-50 border border-slate-200">
+        <label class="text-xs text-slate-700 flex items-center gap-2 cursor-pointer"><input type="checkbox" id="cons-stock" onchange="empConsumoToggleStock()"/> <b>Descontar del stock</b> (opcional — normalmente el kiosco no lleva stock)</label>
+        <div id="cons-dep-wrap" class="mt-2" style="display:none"><label class="label text-xs">Depósito de salida</label>
+          <select id="cons-dep" class="input"><option value="">Campo (por defecto)</option>${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}</select>
+        </div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="empConsumoSave()">💾 Descontar del sueldo</button>`
+  });
+  empConsumoAddRow(); empConsumoAddRow(); empConsumoAddRow();
+}
+function empConsumoRowHTML(){
+  return `<tr data-cons-row class="border-t border-slate-100">
+    <td class="p-1">
+      <select class="input text-sm" data-cons-prod onchange="empConsumoProdChange(this)">${_consumoProdOpts()}</select>
+      <input class="input text-sm mt-1" data-cons-libre placeholder="Nombre del producto" style="display:none"/>
+    </td>
+    <td class="p-1"><input class="input text-sm text-right" type="number" step="0.01" min="0" data-cons-cant value="1" oninput="empConsumoCalc()"/></td>
+    <td class="p-1"><input class="input text-sm text-right" type="number" step="0.01" min="0" data-cons-precio placeholder="0" oninput="empConsumoCalc()"/></td>
+    <td class="p-1 text-right font-semibold" data-cons-sub>$ 0</td>
+    <td class="p-1 text-right"><button type="button" class="btn btn-ghost text-red-600 text-xs" title="Quitar" onclick="this.closest('tr').remove(); empConsumoCalc()">×</button></td>
+  </tr>`;
+}
+function empConsumoAddRow(){ const tb=document.getElementById('cons-rows'); if(tb){ tb.insertAdjacentHTML('beforeend', empConsumoRowHTML()); } }
+function empConsumoRebuildSelects(){
+  document.querySelectorAll('#cons-rows [data-cons-row]').forEach(r=>{
+    const sel=r.querySelector('[data-cons-prod]'); if(sel){ const v=sel.value; sel.innerHTML=_consumoProdOpts(); sel.value=v; }
+  });
+}
+function empConsumoProdChange(sel){
+  const row=sel.closest('[data-cons-row]'); if(!row) return;
+  const libre=row.querySelector('[data-cons-libre]');
+  const precioEl=row.querySelector('[data-cons-precio]');
+  if(sel.value==='__libre__'){ if(libre){ libre.style.display=''; libre.focus(); } }
+  else {
+    if(libre){ libre.style.display='none'; libre.value=''; }
+    const opt=sel.selectedOptions?.[0];
+    const precio=Number(opt?.dataset?.precio||0);
+    if(precioEl && precio>0) precioEl.value=precio;
+  }
+  empConsumoCalc();
+}
+function empConsumoCalc(){
+  let total=0;
+  document.querySelectorAll('#cons-rows [data-cons-row]').forEach(r=>{
+    const c=Number(r.querySelector('[data-cons-cant]')?.value||0);
+    const p=Number(r.querySelector('[data-cons-precio]')?.value||0);
+    const sub=c*p; total+=sub;
+    const s=r.querySelector('[data-cons-sub]'); if(s) s.textContent=fmt$(sub);
+  });
+  const t=document.getElementById('cons-total'); if(t) t.textContent=fmt$(total);
+}
+function empConsumoToggleStock(){ const on=document.getElementById('cons-stock')?.checked; const w=document.getElementById('cons-dep-wrap'); if(w) w.style.display=on?'':'none'; }
+async function empConsumoSave(){
+  const empId=state.empFichaId;
+  const fecha=document.getElementById('cons-fecha')?.value;
+  if(!fecha) return toast('Poné la fecha','warn');
+  const items=[];
+  for(const r of document.querySelectorAll('#cons-rows [data-cons-row]')){
+    const sel=r.querySelector('[data-cons-prod]'); const val=sel?.value||'';
+    const cant=Number(r.querySelector('[data-cons-cant]')?.value||0);
+    const precio=Number(r.querySelector('[data-cons-precio]')?.value||0);
+    if(!val && !cant) continue;
+    let productoId=null, nombre='';
+    if(val==='__libre__'){ nombre=(r.querySelector('[data-cons-libre]')?.value||'').trim(); }
+    else if(val){ productoId=val; nombre=sel.selectedOptions?.[0]?.dataset?.nom||''; }
+    else continue;
+    if(!nombre) return toast('Falta el nombre de un producto','warn');
+    if(!cant || cant<=0) return toast('Poné la cantidad de '+nombre,'warn');
+    if(precio<0) return toast('Precio inválido en '+nombre,'warn');
+    items.push({ productoId, nombre, cantidad:cant, precio });
+  }
+  if(!items.length) return toast('Cargá al menos un ítem','warn');
+  const descontarStock=!!document.getElementById('cons-stock')?.checked;
+  const depositoId=document.getElementById('cons-dep')?.value||null;
+  try{
+    await api('/api/empleados/'+empId+'/consumo-proveeduria',{method:'POST',body:JSON.stringify({ fecha, items, descontarStock, depositoId })});
+    toast('Consumo descontado del sueldo','success'); closeModal();
+    state.empMes=(fecha||'').slice(0,7)||state.empMes;
+    await empleAbrir(empId,false);
+  }catch(e){ toast(e.message,'error'); }
 }
 // --- Carga MÚLTIPLE de movimientos (varias filas con categoría, monto y concepto) ---
 function empMovMultiForm(){

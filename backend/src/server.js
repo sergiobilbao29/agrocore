@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.126.0';
+const AGROCORE_VERSION = '2.127.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5804,8 +5804,69 @@ app.delete('/api/empleados/:id/movimientos/:movId', requireCompany, requirePermi
       where: { id: req.params.movId, empleadoId: emp.id, companyId: req.companyId },
     });
     if (!existing) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado' });
+    // Si es un consumo de proveeduría/kiosco que descontó stock, revertimos esos egresos.
+    if (existing.categoria === 'proveeduria') {
+      try { await prisma.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'PROV:'+existing.id } }); } catch {}
+    }
     await prisma.movimientoEmpleado.delete({ where: { id: req.params.movId } });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ---------- CONSUMO DE PROVEEDURÍA / KIOSCO DEL CAMPO ----------
+// El empleado retira mercadería del kiosquito del campo (o producción propia, ej. un
+// lechón) contra una LISTA DE PRECIOS. Se registra como UN gasto en su planilla
+// (cantidad × precio por ítem) que se le descuenta del sueldo. NO genera factura.
+// El descuento de stock es OPCIONAL (por defecto no toca stock).
+const consumoProvSchema = z.object({
+  fecha: z.coerce.date(),
+  items: z.array(z.object({
+    productoId: z.string().nullable().optional(),
+    nombre: z.string().min(1),
+    cantidad: z.number().positive(),
+    precio: z.number().min(0),
+  })).min(1),
+  descontarStock: z.boolean().optional(),
+  depositoId: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+app.post('/api/empleados/:id/consumo-proveeduria', requireCompany, requirePermission('rrhh:create'), async (req, res, next) => {
+  try {
+    const emp = await getEmpleadoScoped(req);
+    if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
+    const d = consumoProvSchema.parse(req.body);
+    const r2 = (x) => Math.round(Number(x || 0) * 100) / 100;
+    const qf = (x) => { const n = Number(x || 0); return (n % 1 === 0) ? String(n) : n.toFixed(2); };
+    const total = r2(d.items.reduce((a, it) => a + Number(it.cantidad || 0) * Number(it.precio || 0), 0));
+    if (total <= 0) return res.status(400).json({ ok: false, error: 'El consumo debe ser mayor a cero' });
+    const detalle = d.items.map(it => `${it.nombre} x${qf(it.cantidad)}`).join(', ');
+    const nombreEmp = (`${emp.nombre || ''} ${emp.apellido || ''}`).trim() || 'empleado';
+    const out = await prisma.$transaction(async (tx) => {
+      const mov = await tx.movimientoEmpleado.create({
+        data: {
+          companyId: req.companyId, empleadoId: emp.id, fecha: d.fecha, periodo: periodoDe(d.fecha),
+          tipo: 'gasto', categoria: 'proveeduria', concepto: 'Consumo kiosco: ' + detalle, monto: total,
+          observaciones: d.observaciones || null,
+        },
+      });
+      if (d.descontarStock) {
+        for (const it of d.items) {
+          if (!it.productoId) continue;
+          await tx.movimiento.create({
+            data: {
+              companyId: req.companyId, productoId: it.productoId, fecha: d.fecha, tipo: 'egreso',
+              motivo: 'consumo_proveeduria', cantidad: Number(it.cantidad || 0), precio: Number(it.precio || 0),
+              total: r2(Number(it.cantidad || 0) * Number(it.precio || 0)),
+              depositoId: d.depositoId || null, referencia: 'PROV:' + mov.id,
+              observaciones: 'Consumo kiosco — ' + nombreEmp,
+              userId: req.user?.id || null,
+            },
+          });
+        }
+      }
+      return mov;
+    });
+    res.status(201).json({ ok: true, data: out });
   } catch (e) { next(e); }
 });
 
@@ -9977,6 +10038,17 @@ const _AYUDA_KB = [
       'Trae las columnas: fecha, tipo, concepto, contraparte, referencia, débito, crédito, saldo (corrido), origen (importado o manual) y cargado por, en orden cronológico y con el total de débitos y créditos al pie.',
       'El nombre del archivo incluye el banco, la cuenta y el período (ej: Movimientos_Banco-Nacion_00012345_20260724_20260824.xlsx), ideal para mandarle al contador o a los dueños.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
+  { id:'consumo_kiosco', terms:['kiosco','kiosquito','proveeduria','proveeduría','consumo del empleado','cigarrillos empleado','descontar del sueldo','mercaderia empleado','le doy un lechon y descuento','descontar galletitas','lista de precios kiosco','consumo empleado','proveeduria del campo','almacen del campo'],
+    titulo:'Kiosco / proveeduría: descontar consumos del sueldo',
+    pasos:[
+      'Primero armá la LISTA DE PRECIOS: en Catálogos creá la familia "Proveeduría" (o Kiosco) y cargá ahí los productos del kiosquito (cigarrillos, galletitas, jugo, etc.) con su Precio de referencia. Podés incluir producción propia (un lechón, media res) para descontarla igual.',
+      'Entrá a RRHH → Empleados → abrí la ficha del empleado.',
+      'Tocá el botón "🛒 Consumo kiosco".',
+      'Elegí los productos, la cantidad y el precio (se autocompleta con el precio de referencia y lo podés editar). El total se calcula solo.',
+      'Guardá con "Descontar del sueldo": queda como un gasto en la planilla del mes y se le resta al sueldo. NO genera factura.',
+      'El "Descontar del stock" es OPCIONAL (por defecto NO toca stock, porque el kiosco suele ser solo una lista de precios). Si lo activás, elegí el depósito; al borrar el consumo se revierte el stock solo.',
+      'Si el empleado compró afuera algo especial y trajo el ticket, cargalo a mano como gasto normal (o reintegro si puso la plata) desde "+ Agregar movimiento".'],
+    atajo:{ page:'empleados', label:'Abrir Empleados' } },
   { id:'chat_mensajes', terms:['editar mensaje','borrar mensaje','eliminar mensaje','corregir mensaje','me equivoque en el chat','cambiar lo que escribi','editar lo que dije','borrar lo que escribi','editar chat','eliminar del chat'],
     titulo:'Editar o borrar un mensaje del chat',
     pasos:[
