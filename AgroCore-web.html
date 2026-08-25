@@ -2577,7 +2577,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
       titulo:'🐎 v2.128.0 — Fichas de animales (ficha individual 360°): equinos, vacas madre, toros y más',
-      desc:'Nuevo módulo en <b>Stock y depósitos → Fichas de animales</b> para seguir cada animal como <b>activo individual</b> (además del stock por cabezas de Hacienda). Sirve para <b>caballos (haras/polo)</b>, <b>vacas madre / toros de cabaña</b>, porcinos, etc. Cada ficha lleva: <b>identidad</b> (nombre, pelaje, sexo, categoría, estado), <b>identificadores</b> (microchip, caravana RFID, N° de registro SRA/AACCP/RP, pasaporte), <b>genealogía</b> (padre, madre y receptora para transferencia embrionaria), <b>ubicación</b> e <b>historial</b> con eventos de sanidad, vacunas, herrajes, reproducción, doma/entrenamiento, torneos, pesajes y traslados. Cada evento puede <b>imputar un costo</b>, así el sistema acumula <b>cuánto costó criar/preparar cada animal</b> y al venderlo calcula el <b>margen real</b> (precio − costo). Los eventos con <b>próximo control</b> (ej. Coggins, vacunas) generan <b>alertas</b>. Preparado para <b>integrar collares/sensores (IoT)</b>: la ficha guarda la caravana RFID/microchip y hay un canal para recibir lecturas de dispositivos. Primera versión — seguimos sumando (reproducción avanzada, hotelería a terceros, DT-e equino).' },
+      desc:'Nuevo módulo en <b>Stock y depósitos → Fichas de animales</b> para seguir cada animal como <b>activo individual</b> (además del stock por cabezas de Hacienda). Sirve para <b>caballos (haras/polo)</b>, <b>vacas madre / toros de cabaña</b>, porcinos, etc. Cada ficha lleva: <b>identidad</b> (nombre, pelaje, sexo, categoría, estado), <b>identificadores</b> (microchip, caravana RFID, N° de registro SRA/AACCP/RP, pasaporte), <b>genealogía</b> (padre, madre y receptora para transferencia embrionaria), <b>ubicación</b> e <b>historial</b> con eventos de sanidad, vacunas, herrajes, reproducción, doma/entrenamiento, torneos, pesajes y traslados. Cada evento puede <b>imputar un costo</b>, así el sistema acumula <b>cuánto costó criar/preparar cada animal</b> y al venderlo calcula el <b>margen real</b> (precio − costo). Los eventos con <b>próximo control</b> (ej. Coggins, vacunas) generan <b>alertas</b>. Preparado para <b>integrar collares/sensores (IoT)</b>: la ficha guarda la caravana RFID/microchip y hay un canal para recibir lecturas de dispositivos. Incluye <b>genealogía enlazada</b> (elegís padre/madre de las fichas ya cargadas y en la ficha ves la <b>descendencia</b> — las hijas/hijos), <b>movimientos de ubicación</b> (📍 Mover: campo ↔ Buenos Aires ↔ cancha, con historial) y <b>eventos de reproducción</b> (IA / transferencia embrionaria: padrillo, donante, receptora y resultado). Seguimos sumando (hotelería a terceros con cuenta corriente, DT-e equino con microchip, integración real de collares).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
       titulo:'🛒 v2.127.0 — Kiosco / proveeduría del campo: consumos que se descuentan del sueldo',
       desc:'Nuevo en la <b>planilla del empleado</b>: botón <b>🛒 Consumo kiosco</b> para cargar lo que el empleado retira del kiosquito del campo (cigarrillos, galletitas, higiene, etc.) o incluso <b>producción propia</b> (un lechón, media res). Funciona con una <b>lista de precios</b>: creás en <b>Catálogos</b> la familia <b>“Proveeduría”</b> (o Kiosco) y cargás ahí los productos con su <b>Precio de referencia</b>. Al cargar el consumo elegís los ítems, cantidad y precio (se autocompleta y es editable) y el total se le <b>descuenta del sueldo</b> en la planilla, <b>sin generar factura</b>. El <b>descuento de stock es opcional</b> (por defecto no toca stock, porque el kiosco suele llevar una lista de precios y nada más). Si activás el descuento de stock, al borrar el consumo se revierte solo.' },
@@ -27287,6 +27287,7 @@ function _aniEstadoBadge(e){
   const cls = rojo.includes(e)?'bg-red-100 text-red-700': gris.includes(e)?'bg-slate-200 text-slate-600': amb.includes(e)?'bg-amber-100 text-amber-800':'bg-emerald-100 text-emerald-800';
   return `<span class="text-[11px] px-2 py-0.5 rounded-full ${cls}">${esc(ANI_ESTADOS[e]||e||'')}</span>`;
 }
+function _aniIdPorNombre(nom){ if(!nom) return null; const n=(nom||'').trim().toLowerCase(); const a=(state._animales||[]).find(x=>(x.nombre||'').trim().toLowerCase()===n); return a?a.id:null; }
 pages.animales = async function(){
   setHeader('🐎 Fichas de animales', 'Ficha individual de cada animal: identidad, genealogía, sanidad, costos y venta');
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
@@ -27370,10 +27371,12 @@ function aniForm(id){
         <div><label class="label">Ubicación (box/paddock/potrero)</label><input id="an-ubi" class="input" value="${esc(dv(a.ubicacion))}"/></div>
       </div>
       <div class="mt-3 text-xs font-semibold text-slate-500 uppercase">Genealogía</div>
+      <div class="text-[11px] text-slate-400 mb-1">Escribí el nombre. Si el padre/madre ya está cargado como ficha, elegilo de la lista y queda <b>enlazado</b> (así aparece la descendencia).</div>
+      <datalist id="an-anim-list">${(state._animales||[]).map(x=>`<option value="${esc(x.nombre)}"></option>`).join('')}</datalist>
       <div class="grid grid-cols-3 gap-3 mt-1">
-        <div><label class="label">Padre</label><input id="an-padre" class="input" value="${esc(dv(a.padreNombre))}"/></div>
-        <div><label class="label">Madre</label><input id="an-madre" class="input" value="${esc(dv(a.madreNombre))}"/></div>
-        <div><label class="label">Receptora (TE)</label><input id="an-recep" class="input" value="${esc(dv(a.receptoraNombre))}"/></div>
+        <div><label class="label">Padre</label><input id="an-padre" class="input" list="an-anim-list" value="${esc(dv(a.padreNombre))}"/></div>
+        <div><label class="label">Madre</label><input id="an-madre" class="input" list="an-anim-list" value="${esc(dv(a.madreNombre))}"/></div>
+        <div><label class="label">Receptora (TE)</label><input id="an-recep" class="input" list="an-anim-list" value="${esc(dv(a.receptoraNombre))}"/></div>
       </div>
       <div class="mt-3 text-xs font-semibold text-slate-500 uppercase">Económico</div>
       <div class="grid grid-cols-3 gap-3 mt-1">
@@ -27400,6 +27403,7 @@ async function aniSave(id){
     microchip:g('an-chip').value||null, caravanaRfid:g('an-rfid').value||null, caravanaVisual:g('an-cv').value||null,
     nroRegistro:g('an-reg').value||null, pasaporte:g('an-pas').value||null, ubicacion:g('an-ubi').value||null,
     padreNombre:g('an-padre').value||null, madreNombre:g('an-madre').value||null, receptoraNombre:g('an-recep').value||null,
+    padreId:_aniIdPorNombre(g('an-padre').value), madreId:_aniIdPorNombre(g('an-madre').value), receptoraId:_aniIdPorNombre(g('an-recep').value),
     origen:g('an-origen').value||null, costoIngreso:Number(g('an-costo').value||0), moneda:g('an-moneda').value,
     externo:g('an-ext').checked, propietario:g('an-prop').value||null, observaciones:g('an-obs').value||null,
   };
@@ -27436,6 +27440,7 @@ async function aniVer(id){
       <div class="flex items-center gap-2 mb-3">${_aniEstadoBadge(a.estado)}${a.categoria?`<span class="text-xs text-slate-500">${esc(a.categoria)}</span>`:''}
         <div class="flex-1"></div>
         ${canU?`<button class="btn btn-ghost text-xs" onclick='aniForm(${JSON.stringify(a.id)})'>✏️ Editar</button>`:''}
+        ${canU?`<button class="btn btn-ghost text-xs" onclick='aniMoverForm(${JSON.stringify(a.id)})'>📍 Mover</button>`:''}
         ${(canU&&a.estado!=='vendido')?`<button class="btn btn-secondary text-xs" onclick='aniVenderForm(${JSON.stringify(a.id)})'>💰 Vender</button>`:''}
         ${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='aniDel(${JSON.stringify(a.id)})'>🗑️</button>`:''}
       </div>
@@ -27450,6 +27455,10 @@ async function aniVer(id){
         ${dl('Microchip',a.microchip)}${dl('RFID',a.caravanaRfid)}${dl('N° registro',a.nroRegistro)}${dl('Pasaporte',a.pasaporte)}
         ${dl('Padre',a.padreNombre)}${dl('Madre',a.madreNombre)}${dl('Receptora (TE)',a.receptoraNombre)}${a.externo?dl('Propietario',a.propietario||'Tercero'):''}
       </div>
+      ${(a.hijos&&a.hijos.length)?`<div class="mb-4">
+        <div class="font-semibold text-slate-700 mb-1">Descendencia (${a.hijos.length})</div>
+        <div class="flex flex-wrap gap-2">${a.hijos.map(h=>`<button class="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-800 hover:bg-emerald-100" onclick='aniVer(${JSON.stringify(h.id)})'>${esc(h.nombre)}${h.sexo?' · '+esc(h.sexo):''}${h.fechaNac?' · '+fmtFecha(h.fechaNac):''}</button>`).join('')}</div>
+      </div>`:''}
       <div class="flex items-center justify-between mb-2">
         <div class="font-semibold text-slate-700">Historial y costos</div>
         ${canC?`<button class="btn btn-primary text-xs" onclick='aniEventoForm(${JSON.stringify(a.id)})'>+ Agregar evento</button>`:''}
@@ -27469,8 +27478,16 @@ function aniEventoForm(id){
     body:`
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Fecha *</label><input id="ae-fecha" type="date" class="input" value="${hoy}"/></div>
-        <div><label class="label">Tipo *</label><select id="ae-tipo" class="input">${tipoOpts}</select></div>
-        <div class="col-span-2"><label class="label">Detalle / concepto</label><input id="ae-con" class="input" placeholder="Ej: vacuna gripe, herrada, servicio con padrillo X, práctica…"/></div>
+        <div><label class="label">Tipo *</label><select id="ae-tipo" class="input" onchange="aniEvTipoChange()">${tipoOpts}</select></div>
+        <div class="col-span-2"><label class="label">Detalle / concepto</label><input id="ae-con" class="input" placeholder="Ej: vacuna gripe, desvasado/herrada, servicio con padrillo X, práctica…"/></div>
+        <div id="ae-repro" class="col-span-2 grid grid-cols-2 gap-3 p-2 rounded bg-emerald-50 border border-emerald-200" style="display:none">
+          <div class="col-span-2 text-[11px] font-semibold text-emerald-800">Datos de reproducción</div>
+          <div><label class="label">Método</label><select id="ae-r-metodo" class="input"><option value="">—</option><option>IA (inseminación)</option><option>TE (transferencia embrionaria)</option><option>Monta natural</option></select></div>
+          <div><label class="label">Resultado</label><select id="ae-r-res" class="input"><option value="">—</option><option>Servicio</option><option>Preñada</option><option>Vacía</option><option>Parió</option></select></div>
+          <div><label class="label">Padrillo</label><input id="ae-r-padrillo" class="input" list="an-anim-list"/></div>
+          <div><label class="label">Donante (TE)</label><input id="ae-r-donante" class="input" list="an-anim-list"/></div>
+          <div class="col-span-2"><label class="label">Receptora (TE)</label><input id="ae-r-recep" class="input" list="an-anim-list"/></div>
+        </div>
         <div><label class="label">Costo imputado</label><input id="ae-costo" type="number" step="0.01" class="input" placeholder="0"/></div>
         <div><label class="label">Próximo control / vencimiento</label><input id="ae-prox" type="date" class="input" title="Ej: vencimiento de Coggins o próxima vacuna"/></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ae-obs" class="input" rows="2"></textarea></div>
@@ -27480,10 +27497,18 @@ function aniEventoForm(id){
             <button class="btn btn-primary" onclick='aniEventoSave(${JSON.stringify(id)})'>Agregar</button>`
   });
 }
+function aniEvTipoChange(){ const r=document.getElementById('ae-repro'); if(r) r.style.display = (document.getElementById('ae-tipo').value==='reproduccion')?'grid':'none'; }
 async function aniEventoSave(id){
   const g=x=>document.getElementById(x);
-  const body={ fecha:g('ae-fecha').value, tipo:g('ae-tipo').value, concepto:g('ae-con').value||null,
-    costo:Number(g('ae-costo').value||0), proximaFecha:g('ae-prox').value||null, observaciones:g('ae-obs').value||null };
+  const tipo=g('ae-tipo').value;
+  let concepto=g('ae-con').value||null, datos=null;
+  if(tipo==='reproduccion'){
+    const r={ metodo:g('ae-r-metodo').value||null, resultado:g('ae-r-res').value||null, padrillo:g('ae-r-padrillo').value||null, donante:g('ae-r-donante').value||null, receptora:g('ae-r-recep').value||null };
+    datos=JSON.stringify(r);
+    if(!concepto){ concepto=[r.metodo,r.padrillo?('padrillo '+r.padrillo):'',r.resultado].filter(Boolean).join(' · ')||'Reproducción'; }
+  }
+  const body={ fecha:g('ae-fecha').value, tipo, concepto,
+    costo:Number(g('ae-costo').value||0), proximaFecha:g('ae-prox').value||null, observaciones:g('ae-obs').value||null, datos };
   if(!body.fecha) return toast('Poné la fecha','warn');
   try{ await api('/api/animales/'+id+'/eventos',{method:'POST',body:JSON.stringify(body)}); toast('Evento agregado','success'); closeModal(); aniVer(id); }
   catch(e){ toast(e.message,'error'); }
@@ -27515,6 +27540,29 @@ async function aniVenderSave(id){
   if(!precio||precio<=0) return toast('Poné el precio de venta','warn');
   try{ await api('/api/animales/'+id+'/vender',{method:'POST',body:JSON.stringify({ fecha:g('av-fecha').value, precioVenta:precio, monedaVenta:g('av-moneda').value, ventaRef:g('av-ref').value||null })});
     toast('Venta registrada','success'); closeModal(); pages.animales(); }
+  catch(e){ toast(e.message,'error'); }
+}
+function aniMoverForm(id){
+  const a=state._aniActual||{}; const hoy=new Date().toISOString().slice(0,10);
+  openModal({ title:'📍 Mover / trasladar', size:'max-w-md',
+    body:`
+      <p class="text-xs text-slate-500 mb-2">Actualiza la ubicación y deja el traslado en el historial. Ubicación actual: <b>${esc(a.ubicacion||'—')}</b>.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Destino / nueva ubicación *</label><input id="mv-ubi" class="input" placeholder="Ej: Campo · Buenos Aires · Cancha · Haras X"/></div>
+        <div><label class="label">Fecha</label><input id="mv-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label">Costo flete (opcional)</label><input id="mv-costo" type="number" step="0.01" class="input" placeholder="0"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><input id="mv-obs" class="input"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='aniMoverSave(${JSON.stringify(id)})'>Mover</button>`
+  });
+}
+async function aniMoverSave(id){
+  const g=x=>document.getElementById(x);
+  const ubicacion=(g('mv-ubi').value||'').trim();
+  if(!ubicacion) return toast('Poné el destino','warn');
+  try{ await api('/api/animales/'+id+'/mover',{method:'POST',body:JSON.stringify({ ubicacion, fecha:g('mv-fecha').value, costo:Number(g('mv-costo').value||0), observaciones:g('mv-obs').value||null })});
+    toast('Movido','success'); closeModal(); aniVer(id); }
   catch(e){ toast(e.message,'error'); }
 }
 async function aniDel(id){

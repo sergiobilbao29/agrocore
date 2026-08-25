@@ -9355,7 +9355,13 @@ app.get('/api/animales/:id', requireCompany, requirePermission('stock:read'), as
       include: { eventos: { orderBy: { fecha: 'desc' } } },
     });
     if (!a) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
-    res.json({ ok: true, data: _animalConCostos(a) });
+    // Descendencia: animales cuyo padre o madre es éste (genealogía enlazada por id).
+    const hijos = await prisma.animal.findMany({
+      where: { companyId: req.companyId, OR: [{ padreId: a.id }, { madreId: a.id }] },
+      select: { id: true, nombre: true, sexo: true, especie: true, estado: true, fechaNac: true },
+      orderBy: { fechaNac: 'desc' },
+    });
+    res.json({ ok: true, data: { ..._animalConCostos(a), hijos } });
   } catch (e) { next(e); }
 });
 
@@ -9416,6 +9422,27 @@ app.post('/api/animales/:id/vender', requireCompany, requirePermission('stock:up
         estado: 'vendido', fechaVenta: fecha, precioVenta: precio, monedaVenta: moneda,
         clienteId, ventaRef: ref,
       }});
+    });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Mover / trasladar el animal: actualiza la ubicación y deja el traslado en el historial.
+app.post('/api/animales/:id/mover', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    const destino = (req.body.ubicacion || '').trim();
+    if (!destino) return res.status(400).json({ ok: false, error: 'Poné el destino / ubicación' });
+    const fecha = req.body.fecha ? new Date(req.body.fecha) : new Date();
+    const row = await prisma.$transaction(async (tx) => {
+      await tx.animalEvento.create({ data: {
+        companyId: req.companyId, animalId: cur.id, fecha, tipo: 'traslado',
+        concepto: `${cur.ubicacion ? cur.ubicacion + ' → ' : ''}${destino}`,
+        costo: Number(req.body.costo || 0), moneda: cur.moneda || 'ARS',
+        observaciones: req.body.observaciones || null,
+      }});
+      return tx.animal.update({ where: { id: cur.id }, data: { ubicacion: destino, campoId: req.body.campoId || cur.campoId } });
     });
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
