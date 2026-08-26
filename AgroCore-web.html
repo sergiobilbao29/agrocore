@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
+      titulo:'🏨 v2.130.0 — Fichas de animales Fase 3: hotelería a terceros + certificado de traslado (DT-e equino)',
+      desc:'Para <b>haras y cabañas que reciben animales de terceros en pensión</b>: en la ficha de un animal marcado como <b>externo (propietario tercero)</b>, al cargar un evento aparece la opción <b>“Cobrar este importe al propietario”</b>, con dos tipos nuevos de evento: <b>🏨 Pensión (hotelería)</b> y <b>🛠️ Servicio a tercero</b>. Después, con el botón <b>🏨 Hotelería (terceros)</b> (arriba en Fichas de animales) sacás un <b>resumen por propietario</b> filtrando por fechas: te muestra el <b>detalle de cargos y el total a cobrar a cada dueño</b>, listo para facturar, y lo podés <b>exportar a Excel</b>. Además, toda ficha suma el botón <b>🧾 Certificado</b>: genera un <b>certificado de traslado imprimible</b> con la identificación individual del animal (nombre, especie, sexo, pelaje, <b>microchip</b>, RFID, N° de registro, padre/madre, origen y destino) — pensado como respaldo para el movimiento del animal. <i>Aclaración: es un documento interno; no reemplaza el DT-e ni la documentación sanitaria oficial de SENASA.</i>' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'25/08/2026',
       titulo:'🧩 v2.129.0 — Módulos visibles por empresa (según actividad) + “Movimientos de animales”',
       desc:'Ahora podés <b>ocultar del menú los módulos que una empresa no usa</b>. En <b>Configuración → Configuración</b>, botón <b>“Configurar módulos”</b>: destildás lo que no querés mostrar en esa empresa (aplica a todos sus usuarios). Trae <b>presets rápidos</b>: “Ocultar animales (agrícola)”, “Ocultar granos (ganadera/haras)” y “Mostrar todo”. Así una empresa <b>solo agrícola</b> no ve los módulos de animales, y una <b>ganadera/haras</b> no ve lo de granos, sin tocar los roles. Además, el módulo <b>“Animales”</b> (stock por cabezas) pasó a llamarse <b>“Movimientos de animales”</b> para diferenciarlo de las <b>Fichas de animales</b> (ficha individual).' },
@@ -27340,6 +27343,7 @@ const ANI_ESTADOS = {
 const ANI_EV_TIPOS = {
   sanidad:'🩺 Sanidad', vacuna:'💉 Vacuna', herraje:'🧲 Herraje', reproduccion:'🧬 Reproducción',
   doma:'🐎 Doma', entrenamiento:'🏇 Entrenamiento', torneo:'🏆 Torneo', pesaje:'⚖️ Pesaje',
+  pension:'🏨 Pensión (hotelería)', servicio:'🛠️ Servicio a tercero',
   traslado:'🚚 Traslado', costo:'💵 Costo', nota:'📝 Nota', ingreso:'📥 Ingreso', venta:'💰 Venta', iot:'📡 Sensor',
 };
 function _aniEstadoBadge(e){
@@ -27395,6 +27399,7 @@ function aniRender(){
       <div><label class="label text-xs">Especie</label><select class="input" onchange="state._aniFiltro.especie=this.value; aniRender()">${espOpts}</select></div>
       <div><label class="label text-xs">Estado</label><select class="input" onchange="state._aniFiltro.estado=this.value; aniRender()">${estOpts}</select></div>
       <div class="flex-1 min-w-[180px]"><label class="label text-xs">Buscar</label><input class="input" placeholder="Nombre, chip, RP…" value="${esc(f.q)}" oninput="state._aniFiltro.q=this.value; aniRender()"/></div>
+      ${(all.some(a=>a.externo))?`<button class="btn btn-outline" onclick="aniHoteleria()">🏨 Hotelería (terceros)</button>`:''}
       ${canC?`<button class="btn btn-primary" onclick="aniForm()">+ Nuevo animal</button>`:''}
     </div>
     <div class="text-xs text-slate-400 mb-2">${list.length} animal${list.length===1?'':'es'}${all.length!==list.length?` (de ${all.length})`:''}</div>
@@ -27501,6 +27506,7 @@ async function aniVer(id){
         <div class="flex-1"></div>
         ${canU?`<button class="btn btn-ghost text-xs" onclick='aniForm(${JSON.stringify(a.id)})'>✏️ Editar</button>`:''}
         ${canU?`<button class="btn btn-ghost text-xs" onclick='aniMoverForm(${JSON.stringify(a.id)})'>📍 Mover</button>`:''}
+        <button class="btn btn-ghost text-xs" onclick='aniCertificado(${JSON.stringify(a.id)})' title="Certificado de traslado / DT-e equino imprimible">🧾 Certificado</button>
         ${(canU&&a.estado!=='vendido')?`<button class="btn btn-secondary text-xs" onclick='aniVenderForm(${JSON.stringify(a.id)})'>💰 Vender</button>`:''}
         ${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='aniDel(${JSON.stringify(a.id)})'>🗑️</button>`:''}
       </div>
@@ -27530,6 +27536,94 @@ async function aniVer(id){
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
   });
 }
+// Fase 3 — Hotelería / servicios a terceros: resumen de cargos a cobrar por propietario.
+async function aniHoteleria(){
+  const hoy=new Date(); const desde0=new Date(hoy.getFullYear(),hoy.getMonth(),1).toISOString().slice(0,10); const hasta0=hoy.toISOString().slice(0,10);
+  state._aniHotel = state._aniHotel || { desde:desde0, hasta:hasta0 };
+  openModal({ title:'🏨 Hotelería / servicios a terceros', size:'max-w-3xl',
+    body:`<div id="hot-body"><div class="text-slate-400 text-sm">Cargando…</div></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+  aniHoteleriaLoad();
+}
+async function aniHoteleriaLoad(){
+  const f=state._aniHotel; let data=[];
+  try{ data=(await api('/api/animales-hoteleria?desde='+f.desde+'&hasta='+f.hasta)).data||[]; }catch(e){ return toast(e.message,'error'); }
+  state._aniHotelData=data;
+  const cont=document.getElementById('hot-body'); if(!cont) return;
+  const bloque = g => `<div class="kpi mb-3">
+      <div class="flex items-center justify-between mb-1">
+        <div class="font-bold text-slate-800">${esc(g.propietario)}</div>
+        <div class="text-right"><div class="text-[11px] text-slate-500">Total a cobrar</div><div class="text-lg font-bold text-emerald-700">${fmtMon(g.moneda,g.total)}</div></div>
+      </div>
+      <table class="data w-full text-xs"><thead><tr><th>Fecha</th><th>Animal</th><th>Concepto</th><th class="text-right">Importe</th></tr></thead>
+      <tbody>${g.items.map(i=>`<tr class="border-t border-slate-100"><td class="p-1 whitespace-nowrap">${fmtFecha(i.fecha)}</td><td class="p-1">${esc(i.animal||'')}</td><td class="p-1">${(ANI_EV_TIPOS[i.tipo]||i.tipo)}${i.concepto?' · '+esc(i.concepto):''}</td><td class="p-1 text-right">${fmtMon(g.moneda,i.costo)}</td></tr>`).join('')}</tbody></table>
+    </div>`;
+  cont.innerHTML = `
+    <div class="flex items-end gap-2 flex-wrap mb-3">
+      <div><label class="label text-xs">Desde</label><input type="date" class="input" value="${f.desde}" onchange="state._aniHotel.desde=this.value; aniHoteleriaLoad()"/></div>
+      <div><label class="label text-xs">Hasta</label><input type="date" class="input" value="${f.hasta}" onchange="state._aniHotel.hasta=this.value; aniHoteleriaLoad()"/></div>
+      <div class="flex-1"></div>
+      ${data.length?`<button class="btn btn-outline text-xs" onclick="aniHoteleriaExport()">⬇️ Excel</button>`:''}
+    </div>
+    <div class="text-[11px] text-slate-400 mb-2">Incluye los eventos marcados “Cobrar al propietario” de animales de terceros en pensión. Se agrupa por propietario para facturar.</div>
+    ${data.length?data.map(bloque).join(''):`<div class="text-slate-400 text-sm text-center py-8">No hay cargos a cobrar en el período. Cargá eventos de tipo Pensión/Servicio marcando “Cobrar al propietario” en la ficha de cada animal de tercero.</div>`}`;
+}
+function aniHoteleriaExport(){
+  const data=state._aniHotelData||[]; const f=state._aniHotel;
+  let rows=[['Propietario','Fecha','Animal','Especie','Tipo','Concepto','Moneda','Importe']];
+  data.forEach(g=>g.items.forEach(i=>rows.push([g.propietario,fmtFecha(i.fecha),i.animal||'',ANI_ESPECIES[i.especie]||i.especie||'',ANI_EV_TIPOS[i.tipo]||i.tipo,i.concepto||'',g.moneda,String(i.costo)])));
+  const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+  const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=`Hoteleria_${f.desde}_${f.hasta}.csv`; a.click(); URL.revokeObjectURL(url);
+}
+// Fase 3 — Certificado de traslado / DT-e equino (documento imprimible con identificación individual).
+function aniCertificado(id){
+  const a=(state._aniActual&&state._aniActual.id===id)?state._aniActual:(state._animales||[]).find(x=>x.id===id);
+  if(!a) return toast('No se encontró el animal','error');
+  const emp=(state.user&&state.user.companies)?state.user.companies.find(c=>c.id===state.companyId):null;
+  const empNom=(emp&&emp.name)||'—'; const empCuit=(emp&&emp.cuit)?emp.cuit:'';
+  const hoy=new Date().toLocaleDateString('es-AR');
+  const row=(l,v)=>`<tr><td class="l">${l}</td><td class="v">${v||'—'}</td></tr>`;
+  const html=`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Certificado de traslado — ${esc(a.nombre)}</title>
+    <style>
+      *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;color:#1e293b;margin:0;padding:28px;font-size:13px}
+      .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #047857;padding-bottom:10px;margin-bottom:14px}
+      .brand{font-size:22px;font-weight:800;color:#047857} .brand small{display:block;font-size:11px;color:#64748b;font-weight:400}
+      h1{font-size:16px;margin:0 0 2px} .sub{color:#64748b;font-size:11px}
+      table{width:100%;border-collapse:collapse;margin:8px 0}
+      td.l{width:38%;background:#f1f5f9;font-weight:600;padding:6px 8px;border:1px solid #e2e8f0}
+      td.v{padding:6px 8px;border:1px solid #e2e8f0} .mono{font-family:monospace}
+      .sec{font-weight:700;color:#047857;margin:14px 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+      .firmas{display:flex;justify-content:space-between;margin-top:48px} .firma{width:45%;text-align:center;border-top:1px solid #94a3b8;padding-top:6px;font-size:11px;color:#475569}
+      .nota{margin-top:18px;font-size:10px;color:#94a3b8;border-top:1px dashed #cbd5e1;padding-top:8px}
+      @media print{body{padding:12mm}}
+    </style></head><body>
+    <div class="head">
+      <div><div class="brand">AgroCore <small>El Corazón del Negocio Agrícola</small></div></div>
+      <div style="text-align:right"><h1>Certificado de traslado</h1><div class="sub">Documento interno equino · ${hoy}</div></div>
+    </div>
+    <div class="sec">Establecimiento / Titular</div>
+    <table>${row('Empresa',esc(empNom))}${empCuit?row('CUIT','<span class="mono">'+esc(empCuit)+'</span>'):''}${a.propietario?row('Propietario del animal',esc(a.propietario)):''}</table>
+    <div class="sec">Identificación del animal</div>
+    <table>
+      ${row('Nombre',esc(a.nombre))}
+      ${row('Especie / categoría',(ANI_ESPECIES[a.especie]||a.especie||'')+(a.categoria?(' · '+esc(a.categoria)):''))}
+      ${row('Sexo',esc(a.sexo||''))}${row('Pelaje',esc(a.pelaje||''))}${row('Raza',esc(a.raza||''))}
+      ${row('Fecha de nacimiento',a.fechaNac?fmtFecha(a.fechaNac):'')}
+      ${row('Microchip','<span class="mono">'+esc(a.microchip||'—')+'</span>')}
+      ${row('RFID / caravana','<span class="mono">'+esc(a.caravanaRfid||a.caravanaVisual||'—')+'</span>')}
+      ${row('N° de registro',esc(a.nroRegistro||''))}${row('Pasaporte',esc(a.pasaporte||''))}
+      ${row('Padre',esc(a.padreNombre||''))}${row('Madre',esc(a.madreNombre||''))}
+    </table>
+    <div class="sec">Traslado</div>
+    <table>${row('Origen',esc(a.ubicacion||''))}${row('Destino','________________________________')}${row('Fecha de traslado','________________________________')}${row('Transportista / medio','________________________________')}</table>
+    <div class="firmas"><div class="firma">Firma del remitente</div><div class="firma">Firma del transportista</div></div>
+    <div class="nota">Documento generado por AgroCore con fines de identificación y control interno del movimiento del animal. No reemplaza el DT-e (Documento de Tránsito Electrónico) ni la documentación sanitaria oficial exigida por SENASA, que debe tramitarse por los canales oficiales.</div>
+    <script>window.onload=function(){setTimeout(function(){window.print();},250);}<\/script>
+    </body></html>`;
+  const w=window.open('','_blank'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write(html); w.document.close();
+}
 function aniEventoForm(id){
   const hoy=new Date().toISOString().slice(0,10);
   const tipoOpts=Object.keys(ANI_EV_TIPOS).filter(k=>!['venta','ingreso','iot'].includes(k)).map(k=>`<option value="${k}">${ANI_EV_TIPOS[k]}</option>`).join('');
@@ -27548,8 +27642,12 @@ function aniEventoForm(id){
           <div><label class="label">Donante (TE)</label><input id="ae-r-donante" class="input" list="an-anim-list"/></div>
           <div class="col-span-2"><label class="label">Receptora (TE)</label><input id="ae-r-recep" class="input" list="an-anim-list"/></div>
         </div>
-        <div><label class="label">Costo imputado</label><input id="ae-costo" type="number" step="0.01" class="input" placeholder="0"/></div>
+        <div><label class="label" id="ae-costo-lbl">Costo imputado</label><input id="ae-costo" type="number" step="0.01" class="input" placeholder="0"/></div>
         <div><label class="label">Próximo control / vencimiento</label><input id="ae-prox" type="date" class="input" title="Ej: vencimiento de Coggins o próxima vacuna"/></div>
+        ${(state._aniActual&&state._aniActual.externo)?`<div class="col-span-2 flex items-center gap-2 p-2 rounded bg-amber-50 border border-amber-200">
+          <input id="ae-cobrar" type="checkbox" class="w-4 h-4"/>
+          <label for="ae-cobrar" class="text-xs text-amber-800">Cobrar este importe al propietario (${esc(state._aniActual.propietario||'tercero')}) — pensión/servicio de hotelería</label>
+        </div>`:''}
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ae-obs" class="input" rows="2"></textarea></div>
       </div>
       <div class="text-[11px] text-slate-400 mt-2">El “costo imputado” se suma al costo acumulado del animal. El “próximo control” dispara una alerta (ideal para Coggins / vacunas).</div>`,
@@ -27557,7 +27655,11 @@ function aniEventoForm(id){
             <button class="btn btn-primary" onclick='aniEventoSave(${JSON.stringify(id)})'>Agregar</button>`
   });
 }
-function aniEvTipoChange(){ const r=document.getElementById('ae-repro'); if(r) r.style.display = (document.getElementById('ae-tipo').value==='reproduccion')?'grid':'none'; }
+function aniEvTipoChange(){ const t=document.getElementById('ae-tipo').value; const r=document.getElementById('ae-repro'); if(r) r.style.display = (t==='reproduccion')?'grid':'none';
+  const cb=document.getElementById('ae-cobrar'); const lbl=document.getElementById('ae-costo-lbl');
+  if(cb && (t==='pension'||t==='servicio')) cb.checked=true;
+  if(lbl) lbl.textContent = (cb&&cb.checked) ? 'Importe a cobrar' : 'Costo imputado';
+}
 async function aniEventoSave(id){
   const g=x=>document.getElementById(x);
   const tipo=g('ae-tipo').value;
@@ -27567,8 +27669,10 @@ async function aniEventoSave(id){
     datos=JSON.stringify(r);
     if(!concepto){ concepto=[r.metodo,r.padrillo?('padrillo '+r.padrillo):'',r.resultado].filter(Boolean).join(' · ')||'Reproducción'; }
   }
+  const cb=g('ae-cobrar');
   const body={ fecha:g('ae-fecha').value, tipo, concepto,
-    costo:Number(g('ae-costo').value||0), proximaFecha:g('ae-prox').value||null, observaciones:g('ae-obs').value||null, datos };
+    costo:Number(g('ae-costo').value||0), proximaFecha:g('ae-prox').value||null, observaciones:g('ae-obs').value||null, datos,
+    aCobrar: cb?!!cb.checked:false };
   if(!body.fecha) return toast('Poné la fecha','warn');
   try{ await api('/api/animales/'+id+'/eventos',{method:'POST',body:JSON.stringify(body)}); toast('Evento agregado','success'); closeModal(); aniVer(id); }
   catch(e){ toast(e.message,'error'); }

@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.129.0';
+const AGROCORE_VERSION = '2.130.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9325,6 +9325,7 @@ const animalEventoSchema = z.object({
   productoId: z.string().nullable().optional(),
   cantidad: z.number().nullable().optional(),
   proximaFecha: z.coerce.date().nullable().optional(),
+  aCobrar: z.boolean().optional(),
   datos: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
@@ -9483,7 +9484,7 @@ app.post('/api/animales/:id/eventos', requireCompany, requirePermission('stock:c
         companyId: req.companyId, animalId: a.id, fecha: d.fecha, tipo: d.tipo,
         concepto: d.concepto || null, costo: d.costo ?? 0, moneda: d.moneda || a.moneda || 'ARS',
         empleadoId: d.empleadoId || null, productoId: d.productoId || null, cantidad: d.cantidad ?? null,
-        movimientoStockId: movStockId, proximaFecha: d.proximaFecha || null,
+        movimientoStockId: movStockId, proximaFecha: d.proximaFecha || null, aCobrar: !!d.aCobrar,
         datos: d.datos || null, observaciones: d.observaciones || null,
       }});
     });
@@ -9512,6 +9513,36 @@ app.get('/api/animales-alertas', requireCompany, requirePermission('stock:read')
       include: { animal: { select: { id: true, nombre: true, especie: true } } },
     });
     res.json({ ok: true, data: evs });
+  } catch (e) { next(e); }
+});
+
+// Fase 3 — Hotelería / servicios a terceros: resumen de cargos a cobrar por propietario.
+// Toma los eventos marcados aCobrar=true de animales externos (propietario tercero),
+// dentro del rango de fechas, y los agrupa por propietario para facturar la pensión/servicios.
+app.get('/api/animales-hoteleria', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const { desde, hasta } = req.query;
+    const where = { companyId: req.companyId, aCobrar: true, animal: { externo: true } };
+    if (desde || hasta) { where.fecha = {}; if (desde) where.fecha.gte = new Date(desde); if (hasta) { const h = new Date(hasta); h.setHours(23,59,59,999); where.fecha.lte = h; } }
+    const evs = await prisma.animalEvento.findMany({
+      where, orderBy: [{ fecha: 'asc' }],
+      include: { animal: { select: { id: true, nombre: true, especie: true, propietario: true, microchip: true } } },
+    });
+    const grupos = {};
+    for (const ev of evs) {
+      const prop = (ev.animal && ev.animal.propietario) ? ev.animal.propietario : 'Sin propietario';
+      const mon = ev.moneda || 'ARS';
+      const key = prop + '|' + mon;
+      if (!grupos[key]) grupos[key] = { propietario: prop, moneda: mon, total: 0, items: [] };
+      const costo = Number(ev.costo || 0);
+      grupos[key].total = _round2(grupos[key].total + costo);
+      grupos[key].items.push({
+        id: ev.id, fecha: ev.fecha, tipo: ev.tipo, concepto: ev.concepto, costo,
+        animalId: ev.animal ? ev.animal.id : null, animal: ev.animal ? ev.animal.nombre : null,
+        especie: ev.animal ? ev.animal.especie : null,
+      });
+    }
+    res.json({ ok: true, data: Object.values(grupos).sort((a,b)=> a.propietario.localeCompare(b.propietario)) });
   } catch (e) { next(e); }
 });
 
@@ -10296,6 +10327,15 @@ const _AYUDA_KB = [
       'Trae las columnas: fecha, tipo, concepto, contraparte, referencia, débito, crédito, saldo (corrido), origen (importado o manual) y cargado por, en orden cronológico y con el total de débitos y créditos al pie.',
       'El nombre del archivo incluye el banco, la cuenta y el período (ej: Movimientos_Banco-Nacion_00012345_20260724_20260824.xlsx), ideal para mandarle al contador o a los dueños.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
+  { id:'hoteleria_animales', terms:['hoteleria','hotelería','pension','pensión','caballo de tercero','animal de tercero','caballo ajeno','cobrar la pension','pension de caballos','servicio a tercero','propietario del caballo','facturar pension','certificado de traslado','dt-e','dte equino','guia del caballo','papeles para trasladar','papeles del caballo'],
+    titulo:'Hotelería a terceros y certificado de traslado (Fichas de animales)',
+    pasos:[
+      'HOTELERÍA (cobrar pensión de caballos/animales de terceros): en la ficha del animal, marcalo como Externo y poné el nombre del Propietario (en el form del animal).',
+      'Cargá los gastos con "+ Agregar evento" usando el tipo "🏨 Pensión (hotelería)" o "🛠️ Servicio a tercero" y tildá "Cobrar este importe al propietario". El importe queda como cargo a cobrar.',
+      'Para ver cuánto cobrarle a cada dueño: en Fichas de animales, botón "🏨 Hotelería (terceros)". Elegís el rango de fechas y te muestra el total por propietario con el detalle, listo para facturar. Podés exportarlo a Excel.',
+      'CERTIFICADO DE TRASLADO: abrí la ficha de cualquier animal y tocá "🧾 Certificado". Genera un documento imprimible con la identificación individual (nombre, especie, sexo, pelaje, microchip, RFID, N° de registro, padre/madre, origen y destino).',
+      'Ojo: el certificado es un documento interno de respaldo; NO reemplaza el DT-e ni la documentación sanitaria oficial de SENASA, que se tramitan por los canales oficiales.'],
+    atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
   { id:'fichas_animales', terms:['ficha de animal','caballo','equino','haras','polo','ficha individual','animal individual','pedigree','genealogia','microchip','coggins','vaca madre','toro','padrillo','yegua','reproduccion','transferencia embrionaria','collar','sensor','rfid','costo por animal','vender caballo'],
     titulo:'Fichas de animales (ficha individual 360°)',
     pasos:[

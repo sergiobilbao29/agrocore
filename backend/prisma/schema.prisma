@@ -1463,6 +1463,7 @@ model AnimalEvento {
   productoId    String?                          // si consume de stock (opcional)
   cantidad      Float?
   movimientoStockId String?                      // egreso de stock generado (para revertir)
+  aCobrar       Boolean  @default(false)         // hotelería/servicio: cargo a cobrar al propietario tercero
   proximaFecha  DateTime?                        // vencimiento / próximo control (Coggins, vacuna)
   datos         String?                          // JSON flexible
   observaciones String?

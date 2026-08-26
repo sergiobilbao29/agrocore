@@ -289,8 +289,28 @@ try {
     if ($LASTEXITCODE -ne 0) { Warn "db push fallo (codigo $LASTEXITCODE), continuamos igual." } else { Ok "Schema sincronizado." }
 
     Info "Regenerando Prisma Client..."
-    & npx prisma generate 2>&1 | ForEach-Object { Write-Host "    $_" }
-    if ($LASTEXITCODE -ne 0) { Warn "prisma generate fallo (codigo $LASTEXITCODE)" } else { Ok "Prisma Client OK." }
+    # En Windows, si algun node todavia tiene tomado query_engine-windows.dll.node,
+    # 'prisma generate' falla con EPERM al renombrar. Lo hacemos ROBUSTO:
+    #  1) matamos cualquier node residual de ESTA instancia (por puerto),
+    #  2) limpiamos .tmp huerfanos del cliente,
+    #  3) reintentamos hasta 4 veces con pausa.
+    $prismaClientDir = Join-Path $backendDir "node_modules\.prisma\client"
+    $genOk = $false
+    for ($try = 1; $try -le 4; $try++) {
+      # Asegurar que no quede node escuchando en este puerto (libera el .dll.node)
+      $c2 = Get-NetTCPConnection -LocalPort $Puerto -State Listen -ErrorAction SilentlyContinue
+      if ($c2) { $c2.OwningProcess | Select-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } catch {} }; Start-Sleep -Seconds 2 }
+      # Borrar temporales huerfanos que dejan los intentos fallidos
+      if (Test-Path $prismaClientDir) {
+        Get-ChildItem $prismaClientDir -Filter "*.tmp*" -ErrorAction SilentlyContinue | ForEach-Object { try { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue } catch {} }
+      }
+      & npx prisma generate 2>&1 | ForEach-Object { Write-Host "    $_" }
+      if ($LASTEXITCODE -eq 0) { $genOk = $true; break }
+      Warn "prisma generate fallo (intento $try/4, codigo $LASTEXITCODE). Reintento en 4s..."
+      Start-Sleep -Seconds 4
+    }
+    if ($genOk) { Ok "Prisma Client OK." }
+    else { Warn "prisma generate NO pudo completarse tras 4 intentos. El servicio se reiniciara igual; si un modulo nuevo falla con 'findMany', volve a correr el actualizador con el sistema detenido." }
   } finally {
     $ErrorActionPreference = $oldErrPref
   }
