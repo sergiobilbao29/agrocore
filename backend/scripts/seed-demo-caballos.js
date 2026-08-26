@@ -9,7 +9,7 @@
  *
  * Es idempotente: si ya existe "Colibrí" en esa empresa, no vuelve a cargar.
  */
-const { PrismaClient } = require('@prisma/client');
+import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 function d(s){ return new Date(s + 'T12:00:00'); }
