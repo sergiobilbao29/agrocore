@@ -22,10 +22,15 @@ async function main(){
     if (!c) { console.error('No hay empresas. Creá una y reintentá.'); process.exit(1); }
     companyId = c.id; console.log('Empresa:', c.nombre || c.id);
   }
-  const ya = await prisma.animal.findFirst({ where: { companyId, nombre: 'Colibrí' } });
-  if (ya) { console.log('El ejemplo ya estaba cargado. Nada que hacer.'); return; }
+  const yaHaras = await prisma.animal.findFirst({ where: { companyId, nombre: 'Colibrí' } });
+  const yaPension = await prisma.animal.findFirst({ where: { companyId, nombre: 'Pampero (de terceros)' } });
+  const yaRodeoT = await prisma.rodeo.findFirst({ where: { companyId, nombre: 'Engorde terceros — La Estancia' } });
+  if (yaHaras && yaPension && yaRodeoT) { console.log('El ejemplo ya estaba cargado. Nada que hacer.'); return; }
 
   const mk = (o) => prisma.animal.create({ data: { companyId, especie:'equino', moneda:'USD', ...o } });
+  const ev = (animalId, o) => prisma.animalEvento.create({ data: { companyId, animalId, moneda:'USD', costo:0, ...o } });
+
+  if (!yaHaras) {
 
   // Padrillo y madres (base de la genealogía)
   const padrillo = await mk({ nombre:'Machitos', sexo:'macho', categoria:'Padrillo', estado:'servicio',
@@ -51,8 +56,6 @@ async function main(){
     pelaje:'Moro', raza:'SPC', fechaNac:d('2023-10-05'), microchip:'941000012340012',
     origen:'nacido', costoIngreso:0, ubicacion:'Campo',
     padreId:padrillo.id, padreNombre:padrillo.nombre, madreId:madre2.id, madreNombre:madre2.nombre });
-
-  const ev = (animalId, o) => prisma.animalEvento.create({ data: { companyId, animalId, moneda:'USD', costo:0, ...o } });
 
   // Sanidad / Coggins con vencimiento (dispara alerta), herraje, doma, reproducción, traslado
   await ev(hija1.id, { fecha:d('2026-07-01'), tipo:'sanidad', concepto:'Test de Coggins (AIE) — negativo', proximaFecha:futuro(20), costo:35 });
@@ -82,6 +85,39 @@ async function main(){
   await ev(vendido.id, { fecha:d('2026-01-15'), tipo:'torneo', concepto:'Torneo — buen desempeño', costo:500 });
   await ev(vendido.id, { fecha:d('2026-06-30'), tipo:'venta', concepto:'Venta · Boleto 0001', datos: JSON.stringify({ precioVenta:22000, moneda:'USD', ref:'Boleto 0001' }) });
 
-  console.log('✔ Cargado: 1 padrillo, 2 madres, 2 potrancas, 1 potrillo y 1 vendido, con genealogía, sanidad y eventos.');
+    console.log('✔ Haras: 1 padrillo, 2 madres, 2 potrancas, 1 potrillo y 1 vendido, con genealogía y eventos.');
+  } // fin bloque haras
+
+  // ── HOTELERÍA: un caballo de un tercero en pensión (cargos a cobrar al dueño) ──
+  if (!yaPension) {
+    const pension = await mk({ nombre:'Pampero (de terceros)', sexo:'castrado', categoria:'Petiso jugado', estado:'hechura',
+      pelaje:'Bayo', raza:'SPC', fechaNac:d('2018-10-01'), microchip:'941000012349001', nroRegistro:'AACCP-0801',
+      origen:'externo', externo:true, propietario:'Estancia La Querencia SA', ubicacion:'Buenos Aires (pensión)',
+      costoIngreso:0, observaciones:'Caballo de tercero en pensión/hotelería. Los gastos se le cobran al dueño.' });
+    await ev(pension.id, { fecha:d('2026-08-01'), tipo:'pension', concepto:'Pensión mensual (box + comida)', costo:450, aCobrar:true });
+    await ev(pension.id, { fecha:d('2026-08-10'), tipo:'herraje', concepto:'Herrada completa', costo:60, aCobrar:true });
+    await ev(pension.id, { fecha:d('2026-08-12'), tipo:'servicio', concepto:'Veterinario — revisación', costo:80, aCobrar:true });
+    await ev(pension.id, { fecha:d('2026-08-05'), tipo:'sanidad', concepto:'Test de Coggins', proximaFecha:futuro(25), costo:35, aCobrar:true });
+    console.log('✔ Pensión: 1 caballo de tercero (Estancia La Querencia) con cargos a cobrar.');
+  }
+
+  // ── CAPITALIZACIÓN DE HACIENDA: rodeo de engorde de terceros (hotelería ganadera) ──
+  if (!yaRodeoT) {
+    const rt = await prisma.rodeo.create({ data: { companyId, nombre:'Engorde terceros — La Estancia', sistema:'feedlot',
+      categoria:'Novillito', estado:'activo', fechaInicio:d('2026-06-01'), cabezasInicial:120, kgInicial:24000,
+      externo:true, propietario:'Estancia La Querencia SA',
+      observaciones:'Hacienda de terceros recibida para engorde. Se le cobra la capitalización al dueño.' } });
+    const rev = (o) => prisma.rodeoEvento.create({ data: { companyId, rodeoId: rt.id, moneda:'ARS', ...o } });
+    // costos reales del engorde (NO se le cobran directo, van al costo del servicio)
+    await rev({ fecha:d('2026-06-15'), tipo:'alimentacion', concepto:'Ración balanceada', monto:180000 });
+    await rev({ fecha:d('2026-07-10'), tipo:'pesaje', concepto:'Pesada de control', kg:31200 });
+    // cargos a cobrar al dueño (capitalización por cabeza/día + sanidad)
+    await rev({ fecha:d('2026-06-30'), tipo:'capitalizacion', concepto:'Capitalización junio (120 cab.)', cabezas:120, monto:360000, aCobrar:true });
+    await rev({ fecha:d('2026-07-31'), tipo:'capitalizacion', concepto:'Capitalización julio (120 cab.)', cabezas:120, monto:372000, aCobrar:true });
+    await rev({ fecha:d('2026-07-05'), tipo:'servicio', concepto:'Sanidad — vacunación y antiparasitario', monto:54000, aCobrar:true });
+    console.log('✔ Capitalización: 1 rodeo de terceros (120 cab.) con cargos a cobrar.');
+  }
+
+  console.log('✔ Demo de caballos + hotelería/capitalización lista.');
 }
 main().catch(e=>{ console.error(e); process.exit(1); }).finally(()=>prisma.$disconnect());

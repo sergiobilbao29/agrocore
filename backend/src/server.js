@@ -9516,35 +9516,56 @@ app.get('/api/animales-alertas', requireCompany, requirePermission('stock:read')
   } catch (e) { next(e); }
 });
 
-// Fase 3 — Hotelería / servicios a terceros: resumen de cargos a cobrar por propietario.
-// Toma los eventos marcados aCobrar=true de animales externos (propietario tercero),
-// dentro del rango de fechas, y los agrupa por propietario para facturar la pensión/servicios.
-app.get('/api/animales-hoteleria', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+// Fase 3 — Hotelería / capitalización de terceros: resumen de cargos a cobrar por propietario.
+// Unifica DOS fuentes: (1) eventos aCobrar de ANIMALES externos (haras/individuales) y
+// (2) eventos aCobrar de RODEOS externos (hacienda de terceros para engorde/capitalización).
+// Se agrupa por propietario + moneda para facturar. Mantiene la ruta vieja como alias.
+async function _hoteleriaHandler(req, res, next) {
   try {
     const { desde, hasta } = req.query;
-    const where = { companyId: req.companyId, aCobrar: true, animal: { externo: true } };
-    if (desde || hasta) { where.fecha = {}; if (desde) where.fecha.gte = new Date(desde); if (hasta) { const h = new Date(hasta); h.setHours(23,59,59,999); where.fecha.lte = h; } }
-    const evs = await prisma.animalEvento.findMany({
-      where, orderBy: [{ fecha: 'asc' }],
+    const rango = {};
+    if (desde) rango.gte = new Date(desde);
+    if (hasta) { const h = new Date(hasta); h.setHours(23,59,59,999); rango.lte = h; }
+    const tieneRango = !!(desde || hasta);
+
+    // (1) Animales individuales externos
+    const whereAn = { companyId: req.companyId, aCobrar: true, animal: { externo: true } };
+    if (tieneRango) whereAn.fecha = rango;
+    const evsAn = await prisma.animalEvento.findMany({
+      where: whereAn, orderBy: [{ fecha: 'asc' }],
       include: { animal: { select: { id: true, nombre: true, especie: true, propietario: true, microchip: true } } },
     });
+    // (2) Rodeos (hacienda) externos
+    const whereRo = { companyId: req.companyId, aCobrar: true, rodeo: { externo: true } };
+    if (tieneRango) whereRo.fecha = rango;
+    const evsRo = await prisma.rodeoEvento.findMany({
+      where: whereRo, orderBy: [{ fecha: 'asc' }],
+      include: { rodeo: { select: { id: true, nombre: true, propietario: true } } },
+    });
+
     const grupos = {};
-    for (const ev of evs) {
-      const prop = (ev.animal && ev.animal.propietario) ? ev.animal.propietario : 'Sin propietario';
-      const mon = ev.moneda || 'ARS';
-      const key = prop + '|' + mon;
-      if (!grupos[key]) grupos[key] = { propietario: prop, moneda: mon, total: 0, items: [] };
-      const costo = Number(ev.costo || 0);
-      grupos[key].total = _round2(grupos[key].total + costo);
-      grupos[key].items.push({
-        id: ev.id, fecha: ev.fecha, tipo: ev.tipo, concepto: ev.concepto, costo,
-        animalId: ev.animal ? ev.animal.id : null, animal: ev.animal ? ev.animal.nombre : null,
-        especie: ev.animal ? ev.animal.especie : null,
-      });
-    }
+    const push = (prop, mon, item) => {
+      const p = prop || 'Sin propietario'; const m = mon || 'ARS'; const key = p + '|' + m;
+      if (!grupos[key]) grupos[key] = { propietario: p, moneda: m, total: 0, items: [] };
+      grupos[key].total = _round2(grupos[key].total + Number(item.costo || 0));
+      grupos[key].items.push(item);
+    };
+    for (const ev of evsAn) push((ev.animal && ev.animal.propietario), ev.moneda, {
+      id: ev.id, origen: 'animal', fecha: ev.fecha, tipo: ev.tipo, concepto: ev.concepto, costo: Number(ev.costo || 0),
+      refId: ev.animal ? ev.animal.id : null, ref: ev.animal ? ev.animal.nombre : null, especie: ev.animal ? ev.animal.especie : null,
+    });
+    for (const ev of evsRo) push((ev.rodeo && ev.rodeo.propietario), ev.moneda, {
+      id: ev.id, origen: 'rodeo', fecha: ev.fecha, tipo: ev.tipo, concepto: ev.concepto, costo: Number(ev.monto || 0),
+      refId: ev.rodeo ? ev.rodeo.id : null, ref: ev.rodeo ? ev.rodeo.nombre : null, especie: 'hacienda',
+      cabezas: ev.cabezas ?? null,
+    });
+    // orden interno por fecha dentro de cada grupo
+    Object.values(grupos).forEach(g => g.items.sort((a,b)=> new Date(a.fecha) - new Date(b.fecha)));
     res.json({ ok: true, data: Object.values(grupos).sort((a,b)=> a.propietario.localeCompare(b.propietario)) });
   } catch (e) { next(e); }
-});
+}
+app.get('/api/hoteleria', requireCompany, requirePermission('stock:read'), _hoteleriaHandler);
+app.get('/api/animales-hoteleria', requireCompany, requirePermission('stock:read'), _hoteleriaHandler); // alias compatible
 
 // IoT-ready: ingesta genérica de eventos de collares/sensores/caravanas.
 // Identifica el animal por caravanaRfid o microchip y registra un evento tipo "iot".
@@ -10327,13 +10348,13 @@ const _AYUDA_KB = [
       'Trae las columnas: fecha, tipo, concepto, contraparte, referencia, débito, crédito, saldo (corrido), origen (importado o manual) y cargado por, en orden cronológico y con el total de débitos y créditos al pie.',
       'El nombre del archivo incluye el banco, la cuenta y el período (ej: Movimientos_Banco-Nacion_00012345_20260724_20260824.xlsx), ideal para mandarle al contador o a los dueños.'],
     atajo:{ page:'bancos', label:'Abrir Bancos' } },
-  { id:'hoteleria_animales', terms:['hoteleria','hotelería','pension','pensión','caballo de tercero','animal de tercero','caballo ajeno','cobrar la pension','pension de caballos','servicio a tercero','propietario del caballo','facturar pension','certificado de traslado','dt-e','dte equino','guia del caballo','papeles para trasladar','papeles del caballo'],
-    titulo:'Hotelería a terceros y certificado de traslado (Fichas de animales)',
+  { id:'hoteleria_animales', terms:['hoteleria','hotelería','pension','pensión','caballo de tercero','animal de tercero','caballo ajeno','cobrar la pension','pension de caballos','servicio a tercero','propietario del caballo','facturar pension','certificado de traslado','dt-e','dte equino','guia del caballo','papeles para trasladar','papeles del caballo','capitalizacion','capitalización','hacienda de terceros','engorde de terceros','recibo hacienda para engordar','cobrar el engorde','hotel de hacienda','recibir novillos de otro','engordar a terceros'],
+    titulo:'Hotelería / capitalización de terceros (caballos y hacienda) y certificado de traslado',
     pasos:[
-      'HOTELERÍA (cobrar pensión de caballos/animales de terceros): en la ficha del animal, marcalo como Externo y poné el nombre del Propietario (en el form del animal).',
-      'Cargá los gastos con "+ Agregar evento" usando el tipo "🏨 Pensión (hotelería)" o "🛠️ Servicio a tercero" y tildá "Cobrar este importe al propietario". El importe queda como cargo a cobrar.',
-      'Para ver cuánto cobrarle a cada dueño: en Fichas de animales, botón "🏨 Hotelería (terceros)". Elegís el rango de fechas y te muestra el total por propietario con el detalle, listo para facturar. Podés exportarlo a Excel.',
-      'CERTIFICADO DE TRASLADO: abrí la ficha de cualquier animal y tocá "🧾 Certificado". Genera un documento imprimible con la identificación individual (nombre, especie, sexo, pelaje, microchip, RFID, N° de registro, padre/madre, origen y destino).',
+      'CABALLOS EN PENSIÓN: en Fichas de animales, marcá el animal como Externo y poné el Propietario. Cargá los gastos con "+ Agregar evento" tipo "🏨 Pensión (hotelería)" o "🛠️ Servicio a tercero" y tildá "Cobrar este importe al propietario".',
+      'HACIENDA DE TERCEROS (capitalización / engorde a terceros): en Rodeos (Costo de hacienda), al crear/editar el lote tildá "Hacienda de terceros" y poné el dueño. Dentro del lote cargá eventos "🏨 Capitalización" o "🛠️ Servicio" (por cabeza/mes) que quedan como cargo a cobrar. Los costos reales del engorde (alimentación, sanidad) se siguen cargando normal para tu control.',
+      'RESUMEN PARA FACTURAR: el botón "🏨 Hotelería / capitalización (terceros)" (está en Fichas de animales y en Rodeos) muestra un resumen UNIFICADO por propietario (caballos + hacienda) por rango de fechas, con el total a cobrar a cada dueño. Se exporta a Excel.',
+      'CERTIFICADO DE TRASLADO: en la ficha de cualquier animal, botón "🧾 Certificado" → documento imprimible con la identificación individual (nombre, especie, sexo, pelaje, microchip, RFID, N° de registro, padre/madre, origen y destino).',
       'Ojo: el certificado es un documento interno de respaldo; NO reemplaza el DT-e ni la documentación sanitaria oficial de SENASA, que se tramitan por los canales oficiales.'],
     atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
   { id:'fichas_animales', terms:['ficha de animal','caballo','equino','haras','polo','ficha individual','animal individual','pedigree','genealogia','microchip','coggins','vaca madre','toro','padrillo','yegua','reproduccion','transferencia embrionaria','collar','sensor','rfid','costo por animal','vender caballo'],
@@ -12429,11 +12450,13 @@ const rodeoSchema = z.object({
   estado: z.enum(['activo','cerrado']).optional(),
   cabezasInicial: z.coerce.number().int().nullable().optional(),
   kgInicial: z.coerce.number().nullable().optional(),
+  externo: z.boolean().optional(),
+  propietario: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
 const rodeoEventoSchema = z.object({
   fecha: z.coerce.date(),
-  tipo: z.enum(['ingreso','nacimiento','pesaje','venta','baja','alimentacion','sanidad','labor','otro']),
+  tipo: z.enum(['ingreso','nacimiento','pesaje','venta','baja','alimentacion','sanidad','labor','pension','capitalizacion','servicio','otro']),
   concepto: z.string().nullable().optional(),
   cabezas: z.coerce.number().int().nullable().optional(),
   kg: z.coerce.number().nullable().optional(),
@@ -12442,6 +12465,7 @@ const rodeoEventoSchema = z.object({
   fleteComision: z.coerce.number().nullable().optional(),
   productoId: z.string().nullable().optional(),
   cantidad: z.coerce.number().nullable().optional(),
+  aCobrar: z.boolean().optional(),
   observaciones: z.string().nullable().optional(),
 });
 

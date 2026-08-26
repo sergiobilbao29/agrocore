@@ -2626,8 +2626,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
-      titulo:'🏨 v2.130.0 — Fichas de animales Fase 3: hotelería a terceros + certificado de traslado (DT-e equino)',
-      desc:'Para <b>haras y cabañas que reciben animales de terceros en pensión</b>: en la ficha de un animal marcado como <b>externo (propietario tercero)</b>, al cargar un evento aparece la opción <b>“Cobrar este importe al propietario”</b>, con dos tipos nuevos de evento: <b>🏨 Pensión (hotelería)</b> y <b>🛠️ Servicio a tercero</b>. Después, con el botón <b>🏨 Hotelería (terceros)</b> (arriba en Fichas de animales) sacás un <b>resumen por propietario</b> filtrando por fechas: te muestra el <b>detalle de cargos y el total a cobrar a cada dueño</b>, listo para facturar, y lo podés <b>exportar a Excel</b>. Además, toda ficha suma el botón <b>🧾 Certificado</b>: genera un <b>certificado de traslado imprimible</b> con la identificación individual del animal (nombre, especie, sexo, pelaje, <b>microchip</b>, RFID, N° de registro, padre/madre, origen y destino) — pensado como respaldo para el movimiento del animal. <i>Aclaración: es un documento interno; no reemplaza el DT-e ni la documentación sanitaria oficial de SENASA.</i>' },
+      titulo:'🏨 v2.130.0 — Hotelería y capitalización de terceros (caballos y hacienda) + certificado de traslado',
+      desc:'Para quienes <b>reciben animales de terceros</b> — un haras con caballos en pensión, o un campo que <b>recibe hacienda para engordar y cobrar la capitalización</b>. Funciona en dos lugares con la misma lógica: <b>(1) Fichas de animales</b> — marcá el animal como <b>externo</b> con su <b>propietario</b> y cargá eventos <b>🏨 Pensión</b> o <b>🛠️ Servicio a tercero</b> tildando “Cobrar al propietario”. <b>(2) Rodeos (Costo de hacienda)</b> — marcá el lote como <b>hacienda de terceros</b> con su dueño y cargá eventos <b>🏨 Capitalización</b> o <b>🛠️ Servicio</b> (por cabeza/mes) también a cobrar. Con el botón <b>🏨 Hotelería / capitalización (terceros)</b> sacás un <b>resumen unificado por propietario</b> (caballos + hacienda) filtrando por fechas, con el <b>total a cobrar a cada dueño</b> listo para facturar y <b>export a Excel</b>. Además, cada ficha de animal suma el botón <b>🧾 Certificado</b>: un <b>certificado de traslado imprimible</b> con la identificación individual (nombre, especie, sexo, pelaje, <b>microchip</b>, RFID, N° de registro, padre/madre, origen y destino). <i>Es un documento interno; no reemplaza el DT-e ni la documentación sanitaria oficial de SENASA.</i>' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'25/08/2026',
       titulo:'🧩 v2.129.0 — Módulos visibles por empresa (según actividad) + “Movimientos de animales”',
       desc:'Ahora podés <b>ocultar del menú los módulos que una empresa no usa</b>. En <b>Configuración → Configuración</b>, botón <b>“Configurar módulos”</b>: destildás lo que no querés mostrar en esa empresa (aplica a todos sus usuarios). Trae <b>presets rápidos</b>: “Ocultar animales (agrícola)”, “Ocultar granos (ganadera/haras)” y “Mostrar todo”. Así una empresa <b>solo agrícola</b> no ve los módulos de animales, y una <b>ganadera/haras</b> no ve lo de granos, sin tocar los roles. Además, el módulo <b>“Animales”</b> (stock por cabezas) pasó a llamarse <b>“Movimientos de animales”</b> para diferenciarlo de las <b>Fichas de animales</b> (ficha individual).' },
@@ -26283,7 +26283,7 @@ function ccBar(pct, color){ pct=Math.max(0,Math.min(100,Math.round(pct||0))); re
 // RODEOS / COSTO DE HACIENDA (costo por kg de carne)
 // ============================================================
 const RODEO_SIST = { feedlot:['🏭','Feedlot'], engorde_campo:['🌾','Engorde a campo'], recria:['🐂','Recría'], cria:['🐄','Cría'] };
-const RODEO_EV = { ingreso:['📥','Ingreso (compra)'], nacimiento:['🐣','Nacimiento'], pesaje:['⚖️','Pesaje'], venta:['💰','Venta'], baja:['💀','Baja / mortandad'], alimentacion:['🌿','Alimentación'], sanidad:['💉','Sanidad'], labor:['👷','Labor / personal'], otro:['📌','Otro'] };
+const RODEO_EV = { ingreso:['📥','Ingreso (compra)'], nacimiento:['🐣','Nacimiento'], pesaje:['⚖️','Pesaje'], venta:['💰','Venta'], baja:['💀','Baja / mortandad'], alimentacion:['🌿','Alimentación'], sanidad:['💉','Sanidad'], labor:['👷','Labor / personal'], capitalizacion:['🏨','Capitalización'], pension:['🏨','Pensión'], servicio:['🛠️','Servicio a tercero'], otro:['📌','Otro'] };
 const rodSistLbl = (s)=> (RODEO_SIST[s]||['🐮',s])[1];
 const rodEvLbl = (t)=> (RODEO_EV[t]||['📌',t])[1];
 const rodMoney = (v,mon)=> (mon==='USD'?'US$ ':'$ ') + fmtN(Math.round(Number(v)||0));
@@ -26312,7 +26312,10 @@ pages.rodeos = async function(){
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600">${activos.length} lote${activos.length===1?'':'s'} activo${activos.length===1?'':'s'}</div>
-      ${can('stock:create')?`<button class="btn btn-primary" onclick="rodForm()">+ Nuevo lote</button>`:''}
+      <div class="flex gap-2">
+        ${rodeos.some(r=>r.externo)?`<button class="btn btn-outline" onclick="aniHoteleria()">🏨 Capitalización / hotelería (terceros)</button>`:''}
+        ${can('stock:create')?`<button class="btn btn-primary" onclick="rodForm()">+ Nuevo lote</button>`:''}
+      </div>
     </div>
     <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Lotes activos</div><div class="text-lg font-bold mt-1">${activos.length}</div></div>
@@ -26344,6 +26347,11 @@ async function rodForm(id=null){
         <div><label class="label">Kg iniciales (stock)</label><input id="rod-kgi" type="number" step="0.01" class="input" value="${dv(r.kgInicial)}"/></div>
         <div><label class="label">Estado</label><select id="rod-estado" class="input"><option value="activo" ${(r.estado||'activo')==='activo'?'selected':''}>Activo</option><option value="cerrado" ${r.estado==='cerrado'?'selected':''}>Cerrado</option></select></div>
       </div>
+      <div class="p-2 rounded bg-amber-50 border border-amber-200 mb-3">
+        <label class="flex items-center gap-2 text-sm text-amber-900"><input id="rod-externo" type="checkbox" class="w-4 h-4" ${r.externo?'checked':''} onchange="document.getElementById('rod-prop-wrap').style.display=this.checked?'block':'none'"/> Hacienda de terceros (capitalización / hotelería de engorde)</label>
+        <div id="rod-prop-wrap" style="display:${r.externo?'block':'none'}" class="mt-2"><label class="label">Propietario de la hacienda</label><input id="rod-prop" class="input" value="${esc(dv(r.propietario))}" placeholder="Nombre del dueño de los animales"/></div>
+        <div class="text-[11px] text-amber-700 mt-1">Si recibís hacienda de un tercero para engordar y cobrarle el servicio, tildá esto. Después cargás los cargos con el tipo <b>Capitalización / Pensión</b> marcando “Cobrar al propietario”.</div>
+      </div>
       <div><label class="label">Observaciones</label><textarea id="rod-obs" class="input" rows="2">${esc(dv(r.observaciones))}</textarea></div>
       <div class="text-[11px] text-slate-500 mt-2">Las "cabezas / kg iniciales" son el stock al abrir el lote (por ej. si ya tenías animales). Las compras se cargan como evento "Ingreso".</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='rodSave(${id?JSON.stringify(id):"null"})'>💾 ${id?'Guardar':'Crear lote'}</button>` });
@@ -26352,9 +26360,11 @@ async function rodSave(id){
   const v=(s)=>{const el=document.querySelector(s);return el?String(el.value).trim():'';};
   const n=(s)=>{const x=v(s);return x===''?null:Number(x);};
   const nombre=v('#rod-nombre'); if(!nombre) return toast('Poné un nombre','warn');
+  const externo=!!document.querySelector('#rod-externo')?.checked;
   const data={ nombre, sistema:v('#rod-sist')||'feedlot', campoId:v('#rod-campo')||null, categoria:v('#rod-cat')||null,
     fechaInicio:v('#rod-fini')?new Date(v('#rod-fini')+'T12:00:00').toISOString():null,
-    cabezasInicial:n('#rod-cabi')||0, kgInicial:n('#rod-kgi')||0, estado:v('#rod-estado')||'activo', observaciones:v('#rod-obs')||null };
+    cabezasInicial:n('#rod-cabi')||0, kgInicial:n('#rod-kgi')||0, estado:v('#rod-estado')||'activo',
+    externo, propietario:externo?(v('#rod-prop')||null):null, observaciones:v('#rod-obs')||null };
   try{ if(id) await api('/api/rodeos/'+id,{method:'PUT',body:JSON.stringify(data)}); else await api('/api/rodeos',{method:'POST',body:JSON.stringify(data)}); closeModal(); toast('Lote guardado','success'); pages.rodeos(); }catch(e){ toast(e.message,'error'); }
 }
 async function rodDel(id){
@@ -26393,7 +26403,7 @@ async function rodVer(id){
       </div>
       <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
         <h4 class="font-semibold text-slate-700">Eventos del lote</h4>
-        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].map(btn).join('')}</div>`:''}
+        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].concat(r.externo?['capitalizacion','servicio']:[]).map(btn).join('')}</div>`:''}
       </div>
       <div class="kpi p-0 overflow-hidden overflow-x-auto"><table class="data text-sm">
         <thead><tr><th>Fecha</th><th>Tipo</th><th class="text-right">Cab.</th><th class="text-right">Kg</th><th class="text-right">Monto</th><th></th></tr></thead>
@@ -26402,14 +26412,15 @@ async function rodVer(id){
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>${can('stock:update')?`<button class="btn btn-secondary" onclick='rodForm(${JSON.stringify(r.id)})'>✏️ Editar lote</button>`:''}` });
 }
 async function rodEvForm(rodeoId, tipo){
-  const tieneCab=['ingreso','nacimiento','pesaje','venta','baja'].includes(tipo);
+  const esCargo=['capitalizacion','pension','servicio'].includes(tipo);
+  const tieneCab=['ingreso','nacimiento','pesaje','venta','baja','capitalizacion','pension'].includes(tipo);
   const tieneKg=['ingreso','nacimiento','pesaje','venta','baja'].includes(tipo);
   const esCosto=['alimentacion','sanidad','labor','otro'].includes(tipo);
   const esVenta=tipo==='venta'; const esIngreso=tipo==='ingreso'; const esPesaje=tipo==='pesaje';
   let prods=[];
   if(tipo==='alimentacion'){ try{ prods=(await api('/api/productos')).data||[]; }catch{} prods=prods.filter(p=>p.activo!==false); }
   const hoy=new Date().toISOString().slice(0,10);
-  const montoLbl = esVenta?'Ingreso por venta':'Costo';
+  const montoLbl = esVenta?'Ingreso por venta':(esCargo?'Importe a cobrar al dueño':'Costo');
   openModal2({ title:`${(RODEO_EV[tipo]||['📌'])[0]} ${rodEvLbl(tipo)}`, size:'max-w-lg',
     body:`
       <div class="grid grid-cols-2 gap-3">
@@ -26419,10 +26430,11 @@ async function rodEvForm(rodeoId, tipo){
         ${tieneKg?`<div><label class="label">${esPesaje?'Kg TOTAL del lote *':'Kg'}</label><input id="rev-kg" type="number" step="0.01" class="input"/></div>`:''}
         ${tipo==='alimentacion'?`<div class="col-span-2"><label class="label">Artículo del galpón (descuenta stock)</label><select id="rev-prod" class="input" onchange="rodEvProdChange()"><option value="">— sin descontar galpón (cargo el costo a mano) —</option>${prods.map(p=>`<option value="${p.id}" data-costo="${p.ultimoCostoCompra||p.precioReferencia||0}" data-mon="${p.ultimoCostoMoneda||'ARS'}">${esc(p.nombre)}${p.ultimoCostoCompra?` ($${fmtN(p.ultimoCostoCompra)}/${esc(p.unidad||'u')})`:''}</option>`).join('')}</select></div>
         <div><label class="label">Cantidad consumida</label><input id="rev-cant" type="number" step="0.01" class="input" oninput="rodEvCalcCosto()"/></div>`:''}
-        ${(esCosto||esVenta||esIngreso)?`<div><label class="label">${montoLbl}${esIngreso?' (compra)':''}</label><input id="rev-monto" type="number" step="0.01" class="input"/></div>
+        ${(esCosto||esVenta||esIngreso||esCargo)?`<div><label class="label">${montoLbl}${esIngreso?' (compra)':''}</label><input id="rev-monto" type="number" step="0.01" class="input"/></div>
         <div><label class="label">Moneda</label><select id="rev-mon" class="input"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>`:''}
         ${esIngreso?`<div><label class="label">Fletes + comisiones</label><input id="rev-flete" type="number" step="0.01" class="input"/></div>`:''}
       </div>
+      ${esCargo?`<div class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">🏨 Este importe se registra como <b>cargo a cobrar al dueño de la hacienda</b> (no es costo del engorde). Aparece en el resumen “Capitalización / hotelería (terceros)” para facturarle. Podés poner las <b>cabezas</b> para calcular por cabeza/día si querés.</div>`:''}
       ${esPesaje?`<div class="text-[11px] text-slate-500 mt-2">Poné el <b>kg total</b> de todos los animales del lote a hoy (cabezas × kg promedio). Es lo que usa el sistema para calcular la ganancia de peso.</div>`:''}`,
     footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='rodEvSave(${JSON.stringify(rodeoId)},"${tipo}")'>💾 Guardar</button>` });
 }
@@ -26437,9 +26449,10 @@ async function rodEvSave(rodeoId, tipo){
   const n=(s)=>{const x=v(s);return x===''?null:Number(x);};
   const fecha=v('#rev-fecha'); if(!fecha) return toast('Poné la fecha','warn');
   if(tipo==='pesaje' && !v('#rev-kg')) return toast('Poné el kg total del lote','warn');
+  const esCargo=['capitalizacion','pension','servicio'].includes(tipo);
   const data={ tipo, fecha:new Date(fecha+'T12:00:00').toISOString(), concepto:v('#rev-concepto')||null,
     cabezas:n('#rev-cab'), kg:n('#rev-kg'), monto:n('#rev-monto'), moneda:v('#rev-mon')||'ARS',
-    fleteComision:n('#rev-flete'), productoId:v('#rev-prod')||null, cantidad:n('#rev-cant') };
+    fleteComision:n('#rev-flete'), productoId:v('#rev-prod')||null, cantidad:n('#rev-cant'), aCobrar:esCargo };
   try{ await api(`/api/rodeos/${rodeoId}/eventos`,{method:'POST',body:JSON.stringify(data)}); closeModal2(); toast('Evento cargado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
 }
 async function rodEvDel(rodeoId, eid){
@@ -27555,8 +27568,8 @@ async function aniHoteleriaLoad(){
         <div class="font-bold text-slate-800">${esc(g.propietario)}</div>
         <div class="text-right"><div class="text-[11px] text-slate-500">Total a cobrar</div><div class="text-lg font-bold text-emerald-700">${fmtMon(g.moneda,g.total)}</div></div>
       </div>
-      <table class="data w-full text-xs"><thead><tr><th>Fecha</th><th>Animal</th><th>Concepto</th><th class="text-right">Importe</th></tr></thead>
-      <tbody>${g.items.map(i=>`<tr class="border-t border-slate-100"><td class="p-1 whitespace-nowrap">${fmtFecha(i.fecha)}</td><td class="p-1">${esc(i.animal||'')}</td><td class="p-1">${(ANI_EV_TIPOS[i.tipo]||i.tipo)}${i.concepto?' · '+esc(i.concepto):''}</td><td class="p-1 text-right">${fmtMon(g.moneda,i.costo)}</td></tr>`).join('')}</tbody></table>
+      <table class="data w-full text-xs"><thead><tr><th>Fecha</th><th>Detalle</th><th>Concepto</th><th class="text-right">Importe</th></tr></thead>
+      <tbody>${g.items.map(i=>`<tr class="border-t border-slate-100"><td class="p-1 whitespace-nowrap">${fmtFecha(i.fecha)}</td><td class="p-1">${i.origen==='rodeo'?'🐄 ':'🐎 '}${esc(i.ref||'')}${i.cabezas?` <span class="text-slate-400">(${i.cabezas} cab.)</span>`:''}</td><td class="p-1">${(ANI_EV_TIPOS[i.tipo]||i.tipo)}${i.concepto?' · '+esc(i.concepto):''}</td><td class="p-1 text-right">${fmtMon(g.moneda,i.costo)}</td></tr>`).join('')}</tbody></table>
     </div>`;
   cont.innerHTML = `
     <div class="flex items-end gap-2 flex-wrap mb-3">
@@ -27565,13 +27578,13 @@ async function aniHoteleriaLoad(){
       <div class="flex-1"></div>
       ${data.length?`<button class="btn btn-outline text-xs" onclick="aniHoteleriaExport()">⬇️ Excel</button>`:''}
     </div>
-    <div class="text-[11px] text-slate-400 mb-2">Incluye los eventos marcados “Cobrar al propietario” de animales de terceros en pensión. Se agrupa por propietario para facturar.</div>
-    ${data.length?data.map(bloque).join(''):`<div class="text-slate-400 text-sm text-center py-8">No hay cargos a cobrar en el período. Cargá eventos de tipo Pensión/Servicio marcando “Cobrar al propietario” en la ficha de cada animal de tercero.</div>`}`;
+    <div class="text-[11px] text-slate-400 mb-2">Incluye los cargos marcados “Cobrar al propietario” de <b>animales de terceros</b> (fichas) y de <b>hacienda de terceros</b> en engorde/capitalización (Rodeos). Se agrupa por propietario para facturar.</div>
+    ${data.length?data.map(bloque).join(''):`<div class="text-slate-400 text-sm text-center py-8">No hay cargos a cobrar en el período. Cargalos como eventos de Pensión/Capitalización/Servicio marcando “Cobrar al propietario” en la ficha del animal o en el rodeo de terceros.</div>`}`;
 }
 function aniHoteleriaExport(){
   const data=state._aniHotelData||[]; const f=state._aniHotel;
-  let rows=[['Propietario','Fecha','Animal','Especie','Tipo','Concepto','Moneda','Importe']];
-  data.forEach(g=>g.items.forEach(i=>rows.push([g.propietario,fmtFecha(i.fecha),i.animal||'',ANI_ESPECIES[i.especie]||i.especie||'',ANI_EV_TIPOS[i.tipo]||i.tipo,i.concepto||'',g.moneda,String(i.costo)])));
+  let rows=[['Propietario','Fecha','Origen','Detalle','Cabezas','Tipo','Concepto','Moneda','Importe']];
+  data.forEach(g=>g.items.forEach(i=>rows.push([g.propietario,fmtFecha(i.fecha),i.origen==='rodeo'?'Hacienda':'Animal',i.ref||'',i.cabezas!=null?String(i.cabezas):'',ANI_EV_TIPOS[i.tipo]||i.tipo,i.concepto||'',g.moneda,String(i.costo)])));
   const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
   const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'}); const url=URL.createObjectURL(blob);
   const a=document.createElement('a'); a.href=url; a.download=`Hoteleria_${f.desde}_${f.hasta}.csv`; a.click(); URL.revokeObjectURL(url);

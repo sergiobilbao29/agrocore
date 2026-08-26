@@ -2279,6 +2279,8 @@ model Rodeo {
   estado         String   @default("activo")  // activo | cerrado
   cabezasInicial Int      @default(0)
   kgInicial      Float    @default(0)          // kg totales de stock al abrir el lote
+  externo        Boolean  @default(false)      // hacienda de terceros (capitalización/hotelería de engorde)
+  propietario    String?                        // dueño de la hacienda si es de terceros
   observaciones  String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -2313,6 +2315,7 @@ model RodeoEvento {
   productoId    String?  // si el costo salio del galpon (rollo/fardo/grano): descuenta stock
   cantidad      Float?   // cantidad consumida del producto (rollos, kg, etc.)
   movimientoStockId String? // egreso de galpon generado por el consumo (para revertir)
+  aCobrar       Boolean  @default(false)  // capitalización/hotelería: cargo a cobrar al dueño de la hacienda
   observaciones String?
   createdAt     DateTime @default(now())
 
