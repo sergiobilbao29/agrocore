@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.130.0';
+const AGROCORE_VERSION = '2.131.0';
 const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9306,6 +9306,7 @@ const animalSchema = z.object({
   receptoraNombre: z.string().nullable().optional(),
   campoId: z.string().nullable().optional(),
   ubicacion: z.string().nullable().optional(),
+  rodeoId: z.string().nullable().optional(),
   moneda: z.string().nullable().optional(),
   fechaIngreso: z.coerce.date().nullable().optional(),
   costoIngreso: z.number().nullable().optional(),
@@ -9324,6 +9325,7 @@ const animalEventoSchema = z.object({
   empleadoId: z.string().nullable().optional(),
   productoId: z.string().nullable().optional(),
   cantidad: z.number().nullable().optional(),
+  peso: z.number().nullable().optional(),        // kg de un pesaje individual
   proximaFecha: z.coerce.date().nullable().optional(),
   aCobrar: z.boolean().optional(),
   datos: z.string().nullable().optional(),
@@ -9382,7 +9384,7 @@ app.post('/api/animales', requireCompany, requirePermission('stock:create'), asy
       padreId: d.padreId || null, padreNombre: d.padreNombre || null,
       madreId: d.madreId || null, madreNombre: d.madreNombre || null,
       receptoraId: d.receptoraId || null, receptoraNombre: d.receptoraNombre || null,
-      campoId: d.campoId || null, ubicacion: d.ubicacion || null,
+      campoId: d.campoId || null, ubicacion: d.ubicacion || null, rodeoId: d.rodeoId || null,
       moneda: d.moneda || 'ARS', fechaIngreso: d.fechaIngreso || null,
       costoIngreso: d.costoIngreso ?? 0, origen: d.origen || null, valuacion: d.valuacion ?? null,
       externo: !!d.externo, propietario: d.propietario || null, observaciones: d.observaciones || null,
@@ -9397,7 +9399,7 @@ app.put('/api/animales/:id', requireCompany, requirePermission('stock:update'), 
     if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
     const d = animalSchema.partial().parse(req.body);
     const data = { ...d };
-    ['sexo','pelaje','raza','categoria','microchip','caravanaRfid','caravanaVisual','nroRegistro','pasaporte','padreId','padreNombre','madreId','madreNombre','receptoraId','receptoraNombre','campoId','ubicacion','origen','propietario','observaciones']
+    ['sexo','pelaje','raza','categoria','microchip','caravanaRfid','caravanaVisual','nroRegistro','pasaporte','padreId','padreNombre','madreId','madreNombre','receptoraId','receptoraNombre','campoId','ubicacion','rodeoId','origen','propietario','observaciones']
       .forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
     if (d.nombre !== undefined) data.nombre = String(d.nombre).trim();
     const row = await prisma.animal.update({ where: { id: cur.id }, data });
@@ -9480,12 +9482,21 @@ app.post('/api/animales/:id/eventos', requireCompany, requirePermission('stock:c
         }});
         movStockId = mv.id;
       }
+      // Pesaje individual: si viene el peso (kg), lo guardo en datos y actualizo el
+      // último peso conocido del animal (sirve para el pesaje del lote desde balanzas).
+      let datos = d.datos || null;
+      const pesoKg = (d.peso != null && d.peso > 0) ? Number(d.peso) : null;
+      if (d.tipo === 'pesaje' && pesoKg != null) {
+        try { const o = datos ? JSON.parse(datos) : {}; o.pesoKg = pesoKg; datos = JSON.stringify(o); }
+        catch { datos = JSON.stringify({ pesoKg }); }
+        await tx.animal.update({ where: { id: a.id }, data: { pesoKg, pesoFecha: d.fecha } });
+      }
       return tx.animalEvento.create({ data: {
         companyId: req.companyId, animalId: a.id, fecha: d.fecha, tipo: d.tipo,
         concepto: d.concepto || null, costo: d.costo ?? 0, moneda: d.moneda || a.moneda || 'ARS',
         empleadoId: d.empleadoId || null, productoId: d.productoId || null, cantidad: d.cantidad ?? null,
         movimientoStockId: movStockId, proximaFecha: d.proximaFecha || null, aCobrar: !!d.aCobrar,
-        datos: d.datos || null, observaciones: d.observaciones || null,
+        datos, observaciones: d.observaciones || null,
       }});
     });
     res.status(201).json({ ok: true, data: row });
@@ -9579,11 +9590,30 @@ app.post('/api/animales/iot-evento', requireCompany, requirePermission('stock:cr
       OR: [ rfid ? { caravanaRfid: String(rfid) } : undefined, microchip ? { microchip: String(microchip) } : undefined ].filter(Boolean),
     }});
     if (!a) return res.status(404).json({ ok: false, error: 'No hay animal con ese identificador' });
-    const ev = await prisma.animalEvento.create({ data: {
-      companyId: req.companyId, animalId: a.id, fecha: fecha ? new Date(fecha) : new Date(),
-      tipo: 'iot', concepto: concepto || (metrica ? String(metrica) : 'Lectura de sensor'), costo: 0,
-      datos: JSON.stringify({ metrica: metrica || null, valor: valor ?? null }),
-    }});
+    const when = fecha ? new Date(fecha) : new Date();
+    // Si la métrica es un PESO (balanza en la manga / caravana con pesaje), lo registramos
+    // como un evento de PESAJE y actualizamos el último peso del animal (alimenta el
+    // "pesaje desde balanzas" del lote). El resto de métricas quedan como evento "iot".
+    const met = String(metrica || '').toLowerCase();
+    const esPeso = ['peso','peso_kg','pesokg','weight','kg'].includes(met);
+    let ev;
+    if (esPeso && valor != null && Number(valor) > 0) {
+      const pesoKg = Number(valor);
+      ev = await prisma.$transaction(async (tx) => {
+        await tx.animal.update({ where: { id: a.id }, data: { pesoKg, pesoFecha: when } });
+        return tx.animalEvento.create({ data: {
+          companyId: req.companyId, animalId: a.id, fecha: when, tipo: 'pesaje',
+          concepto: concepto || 'Pesaje automático (balanza/caravana)', costo: 0,
+          datos: JSON.stringify({ pesoKg, origen: 'iot' }),
+        }});
+      });
+    } else {
+      ev = await prisma.animalEvento.create({ data: {
+        companyId: req.companyId, animalId: a.id, fecha: when,
+        tipo: 'iot', concepto: concepto || (metrica ? String(metrica) : 'Lectura de sensor'), costo: 0,
+        datos: JSON.stringify({ metrica: metrica || null, valor: valor ?? null }),
+      }});
+    }
     res.status(201).json({ ok: true, data: ev, animal: { id: a.id, nombre: a.nombre } });
   } catch (e) { next(e); }
 });
@@ -10356,6 +10386,15 @@ const _AYUDA_KB = [
       'RESUMEN PARA FACTURAR: el botón "🏨 Hotelería / capitalización (terceros)" (está en Fichas de animales y en Rodeos) muestra un resumen UNIFICADO por propietario (caballos + hacienda) por rango de fechas, con el total a cobrar a cada dueño. Se exporta a Excel.',
       'CERTIFICADO DE TRASLADO: en la ficha de cualquier animal, botón "🧾 Certificado" → documento imprimible con la identificación individual (nombre, especie, sexo, pelaje, microchip, RFID, N° de registro, padre/madre, origen y destino).',
       'Ojo: el certificado es un documento interno de respaldo; NO reemplaza el DT-e ni la documentación sanitaria oficial de SENASA, que se tramitan por los canales oficiales.'],
+    atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
+  { id:'iot_pesaje_animales', terms:['caravana electronica','caravana electrónica','collar','collar satelital','sensor','rfid','iot','balanza','pesaje automatico','pesaje automático','peso individual','peso del animal','vincular ficha a lote','ficha y rodeo','pesaje del lote','pesar la tropa','pesaje desde balanzas','allflex','senshub','digitanimal'],
+    titulo:'Caravana electrónica / collar y pesaje del lote (Ficha ↔ Rodeo)',
+    pasos:[
+      'La caravana electrónica y el collar son POR ANIMAL: se registran en la Ficha de animales (que guarda microchip y caravana RFID), no en el Rodeo (que es por lote).',
+      'Vinculá la ficha a su lote: en la ficha del animal, campo "Lote / rodeo (engorde)". Así el animal con collar queda identificado y a la vez pertenece a su lote de Costo de hacienda.',
+      'Peso individual: cargá un evento "Pesaje" en la ficha y poné los kg (o llega automático por el canal IoT si el dispositivo/balanza manda el peso). Queda como "último peso" del animal.',
+      'Pesaje del lote automático: en Costo de hacienda, abrí el lote y tocá "⚖️ Pesaje desde balanzas". El sistema suma el peso de todas las fichas vinculadas y crea el pesaje del lote (kg total + cabezas), sin pesar la tropa a mano.',
+      'Resumen: los sensores viven en la Ficha (individual) y el costo/kg vive en el Rodeo (lote); vincularlos conecta las dos cosas.'],
     atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
   { id:'fichas_animales', terms:['ficha de animal','caballo','equino','haras','polo','ficha individual','animal individual','pedigree','genealogia','microchip','coggins','vaca madre','toro','padrillo','yegua','reproduccion','transferencia embrionaria','collar','sensor','rfid','costo por animal','vender caballo'],
     titulo:'Fichas de animales (ficha individual 360°)',
@@ -12595,6 +12634,44 @@ app.delete('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('st
       await tx.rodeoEvento.delete({ where: { id: ev.id } });
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Animales (fichas) vinculados a un lote con su último peso conocido.
+app.get('/api/rodeos/:id/animales', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
+    const animales = await prisma.animal.findMany({
+      where: { companyId: req.companyId, rodeoId: rodeo.id },
+      select: { id: true, nombre: true, categoria: true, caravanaRfid: true, microchip: true, pesoKg: true, pesoFecha: true, estado: true },
+      orderBy: [{ nombre: 'asc' }],
+    });
+    const conPeso = animales.filter(a => a.pesoKg != null && a.pesoKg > 0);
+    const sumaKg = _round2(conPeso.reduce((s, a) => s + Number(a.pesoKg || 0), 0));
+    res.json({ ok: true, data: animales, resumen: { total: animales.length, conPeso: conPeso.length, sumaKg } });
+  } catch (e) { next(e); }
+});
+
+// Pesaje del LOTE armado desde las balanzas individuales: suma el último peso de las
+// fichas vinculadas al rodeo y crea un evento "pesaje" (kg total + cabezas).
+app.post('/api/rodeos/:id/pesaje-desde-fichas', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
+    const animales = await prisma.animal.findMany({
+      where: { companyId: req.companyId, rodeoId: rodeo.id, pesoKg: { not: null, gt: 0 } },
+      select: { id: true, pesoKg: true },
+    });
+    if (!animales.length) return res.status(400).json({ ok: false, error: 'No hay animales vinculados con peso cargado. Cargá pesajes en las fichas (o llegan por balanza/caravana).' });
+    const kg = _round2(animales.reduce((s, a) => s + Number(a.pesoKg || 0), 0));
+    const cabezas = animales.length;
+    const fecha = req.body && req.body.fecha ? new Date(req.body.fecha) : new Date();
+    const ev = await prisma.rodeoEvento.create({ data: {
+      companyId: req.companyId, rodeoId: rodeo.id, fecha, tipo: 'pesaje',
+      concepto: `Pesaje desde balanzas individuales (${cabezas} animales)`, cabezas, kg, monto: 0, moneda: 'ARS',
+    }});
+    res.status(201).json({ ok: true, data: ev, resumen: { cabezas, kg } });
   } catch (e) { next(e); }
 });
 

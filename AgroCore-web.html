@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'26/08/2026',
+      titulo:'📡 v2.131.0 — Caravana electrónica / collar: peso individual que suma al pesaje del lote',
+      desc:'Ahora la <b>Ficha de animales</b> se puede <b>vincular a un lote (rodeo) de Costo de hacienda</b>: en la ficha, elegí el <b>Lote / rodeo</b>. Así la hacienda con <b>caravana electrónica o collar satelital</b> queda identificada individualmente y a la vez pertenece a su lote de engorde. Sumamos el <b>peso individual</b>: cuando cargás un evento de <b>Pesaje</b> en la ficha (a mano) o cuando un dispositivo manda el peso por el canal IoT (balanza en la manga / caravana con pesaje), se guarda como <b>último peso</b> del animal. Y desde el lote, el botón <b>⚖️ Pesaje desde balanzas</b> arma automáticamente el <b>pesaje del lote</b> sumando el peso de todas las fichas vinculadas (kg total + cabezas), sin tener que pesar la tropa entera a mano. En resumen: los <b>sensores viven en la Ficha</b> (individual) y el <b>costo/kg vive en el Rodeo</b> (lote), ahora conectados.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/08/2026',
       titulo:'🏨 v2.130.0 — Hotelería y capitalización de terceros (caballos y hacienda) + certificado de traslado',
       desc:'Para quienes <b>reciben animales de terceros</b> — un haras con caballos en pensión, o un campo que <b>recibe hacienda para engordar y cobrar la capitalización</b>. Funciona en dos lugares con la misma lógica: <b>(1) Fichas de animales</b> — marcá el animal como <b>externo</b> con su <b>propietario</b> y cargá eventos <b>🏨 Pensión</b> o <b>🛠️ Servicio a tercero</b> tildando “Cobrar al propietario”. <b>(2) Rodeos (Costo de hacienda)</b> — marcá el lote como <b>hacienda de terceros</b> con su dueño y cargá eventos <b>🏨 Capitalización</b> o <b>🛠️ Servicio</b> (por cabeza/mes) también a cobrar. Con el botón <b>🏨 Hotelería / capitalización (terceros)</b> sacás un <b>resumen unificado por propietario</b> (caballos + hacienda) filtrando por fechas, con el <b>total a cobrar a cada dueño</b> listo para facturar y <b>export a Excel</b>. Además, cada ficha de animal suma el botón <b>🧾 Certificado</b>: un <b>certificado de traslado imprimible</b> con la identificación individual (nombre, especie, sexo, pelaje, <b>microchip</b>, RFID, N° de registro, padre/madre, origen y destino). <i>Es un documento interno; no reemplaza el DT-e ni la documentación sanitaria oficial de SENASA.</i>' },
@@ -26403,7 +26406,7 @@ async function rodVer(id){
       </div>
       <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
         <h4 class="font-semibold text-slate-700">Eventos del lote</h4>
-        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].concat(r.externo?['capitalizacion','servicio']:[]).map(btn).join('')}</div>`:''}
+        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].concat(r.externo?['capitalizacion','servicio']:[]).map(btn).join('')}<button class="btn btn-outline text-xs" title="Arma un pesaje del lote sumando el peso de las fichas vinculadas (caravana/collar/balanza)" onclick='rodPesajeFichas(${JSON.stringify(r.id)})'>⚖️ Pesaje desde balanzas</button></div>`:''}
       </div>
       <div class="kpi p-0 overflow-hidden overflow-x-auto"><table class="data text-sm">
         <thead><tr><th>Fecha</th><th>Tipo</th><th class="text-right">Cab.</th><th class="text-right">Kg</th><th class="text-right">Monto</th><th></th></tr></thead>
@@ -26454,6 +26457,18 @@ async function rodEvSave(rodeoId, tipo){
     cabezas:n('#rev-cab'), kg:n('#rev-kg'), monto:n('#rev-monto'), moneda:v('#rev-mon')||'ARS',
     fleteComision:n('#rev-flete'), productoId:v('#rev-prod')||null, cantidad:n('#rev-cant'), aCobrar:esCargo };
   try{ await api(`/api/rodeos/${rodeoId}/eventos`,{method:'POST',body:JSON.stringify(data)}); closeModal2(); toast('Evento cargado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
+}
+async function rodPesajeFichas(rodeoId){
+  let info;
+  try{ info=await api(`/api/rodeos/${rodeoId}/animales`); }catch(e){ return toast(e.message,'error'); }
+  const r=info.resumen||{total:0,conPeso:0,sumaKg:0};
+  if(!r.total) return toast('Este lote no tiene fichas de animales vinculadas. Vinculalas desde Fichas de animales (campo “Lote / rodeo”).','warn');
+  if(!r.conPeso) return toast('Las fichas vinculadas todavía no tienen peso cargado (por pesaje manual o por balanza/caravana).','warn');
+  if(!confirm(`Se creará un pesaje del lote sumando ${r.conPeso} de ${r.total} animales vinculados con peso.\nKg total: ${fmtN(r.sumaKg)} kg.\n¿Confirmás?`)) return;
+  try{ const res=await api(`/api/rodeos/${rodeoId}/pesaje-desde-fichas`,{method:'POST',body:JSON.stringify({})});
+    toast(`Pesaje cargado: ${res.resumen.cabezas} cab · ${fmtN(res.resumen.kg)} kg`,'success');
+    await pages.rodeos(); rodVer(rodeoId);
+  }catch(e){ toast(e.message,'error'); }
 }
 async function rodEvDel(rodeoId, eid){
   if(!confirm('¿Borrar este evento?')) return;
@@ -27371,6 +27386,7 @@ pages.animales = async function(){
   let data=[], alertas=[];
   try { data = (await api('/api/animales')).data || []; } catch(e){ return toast(e.message,'error'); }
   try { alertas = (await api('/api/animales-alertas?dias=30')).data || []; } catch {}
+  try { state._aniRodeos = (await api('/api/rodeos')).data || []; } catch { state._aniRodeos = state._aniRodeos || []; }
   state._animales = data; state._aniAlertas = alertas;
   state._aniFiltro = state._aniFiltro || { especie:'', estado:'', q:'' };
   aniRender();
@@ -27447,7 +27463,9 @@ function aniForm(id){
         <div><label class="label">N° registro (SRA/AACCP/RP)</label><input id="an-reg" class="input" value="${esc(dv(a.nroRegistro))}"/></div>
         <div><label class="label">Pasaporte / libreta</label><input id="an-pas" class="input" value="${esc(dv(a.pasaporte))}"/></div>
         <div><label class="label">Ubicación (box/paddock/potrero)</label><input id="an-ubi" class="input" value="${esc(dv(a.ubicacion))}"/></div>
+        <div><label class="label">Lote / rodeo (engorde)</label><select id="an-rodeo" class="input"><option value="">— sin lote —</option>${(state._aniRodeos||[]).map(r=>`<option value="${r.id}" ${a.rodeoId===r.id?'selected':''}>${esc(r.nombre)}${r.externo?' (terceros)':''}</option>`).join('')}</select></div>
       </div>
+      <div class="text-[11px] text-slate-400 mt-1">Vinculá el animal a un lote de <b>Costo de hacienda</b> si lleva caravana electrónica/collar: su peso individual puede sumar al pesaje del lote.</div>
       <div class="mt-3 text-xs font-semibold text-slate-500 uppercase">Genealogía</div>
       <div class="text-[11px] text-slate-400 mb-1">Escribí el nombre. Si el padre/madre ya está cargado como ficha, elegilo de la lista y queda <b>enlazado</b> (así aparece la descendencia).</div>
       <datalist id="an-anim-list">${(state._animales||[]).map(x=>`<option value="${esc(x.nombre)}"></option>`).join('')}</datalist>
@@ -27480,6 +27498,7 @@ async function aniSave(id){
     estado:g('an-estado').value, fechaNac:g('an-nac').value||null, pelaje:g('an-pelaje').value||null, raza:g('an-raza').value||null,
     microchip:g('an-chip').value||null, caravanaRfid:g('an-rfid').value||null, caravanaVisual:g('an-cv').value||null,
     nroRegistro:g('an-reg').value||null, pasaporte:g('an-pas').value||null, ubicacion:g('an-ubi').value||null,
+    rodeoId:(g('an-rodeo')?g('an-rodeo').value:'')||null,
     padreNombre:g('an-padre').value||null, madreNombre:g('an-madre').value||null, receptoraNombre:g('an-recep').value||null,
     padreId:_aniIdPorNombre(g('an-padre').value), madreId:_aniIdPorNombre(g('an-madre').value), receptoraId:_aniIdPorNombre(g('an-recep').value),
     origen:g('an-origen').value||null, costoIngreso:Number(g('an-costo').value||0), moneda:g('an-moneda').value,
@@ -27533,6 +27552,8 @@ async function aniVer(id){
         ${dl('Sexo',a.sexo)}${dl('Pelaje',a.pelaje)}${dl('Raza',a.raza)}${dl('Ubicación',a.ubicacion)}
         ${dl('Microchip',a.microchip)}${dl('RFID',a.caravanaRfid)}${dl('N° registro',a.nroRegistro)}${dl('Pasaporte',a.pasaporte)}
         ${dl('Padre',a.padreNombre)}${dl('Madre',a.madreNombre)}${dl('Receptora (TE)',a.receptoraNombre)}${a.externo?dl('Propietario',a.propietario||'Tercero'):''}
+        ${a.rodeoId?dl('Lote / rodeo',((state._aniRodeos||[]).find(r=>r.id===a.rodeoId)||{}).nombre||'—'):''}
+        ${a.pesoKg!=null?dl('Último peso',`${fmtN(a.pesoKg)} kg${a.pesoFecha?' · '+fmtFecha(a.pesoFecha):''}`):''}
       </div>
       ${(a.hijos&&a.hijos.length)?`<div class="mb-4">
         <div class="font-semibold text-slate-700 mb-1">Descendencia (${a.hijos.length})</div>
@@ -27655,6 +27676,7 @@ function aniEventoForm(id){
           <div><label class="label">Donante (TE)</label><input id="ae-r-donante" class="input" list="an-anim-list"/></div>
           <div class="col-span-2"><label class="label">Receptora (TE)</label><input id="ae-r-recep" class="input" list="an-anim-list"/></div>
         </div>
+        <div id="ae-peso-wrap" class="col-span-2" style="display:none"><label class="label">Peso (kg)</label><input id="ae-peso" type="number" step="0.1" class="input" placeholder="Ej: 380"/><div class="text-[11px] text-slate-400 mt-1">Queda como último peso del animal. Si está vinculado a un lote, suma al “pesaje desde balanzas”.</div></div>
         <div><label class="label" id="ae-costo-lbl">Costo imputado</label><input id="ae-costo" type="number" step="0.01" class="input" placeholder="0"/></div>
         <div><label class="label">Próximo control / vencimiento</label><input id="ae-prox" type="date" class="input" title="Ej: vencimiento de Coggins o próxima vacuna"/></div>
         ${(state._aniActual&&state._aniActual.externo)?`<div class="col-span-2 flex items-center gap-2 p-2 rounded bg-amber-50 border border-amber-200">
@@ -27672,6 +27694,7 @@ function aniEvTipoChange(){ const t=document.getElementById('ae-tipo').value; co
   const cb=document.getElementById('ae-cobrar'); const lbl=document.getElementById('ae-costo-lbl');
   if(cb && (t==='pension'||t==='servicio')) cb.checked=true;
   if(lbl) lbl.textContent = (cb&&cb.checked) ? 'Importe a cobrar' : 'Costo imputado';
+  const pw=document.getElementById('ae-peso-wrap'); if(pw) pw.style.display = (t==='pesaje')?'block':'none';
 }
 async function aniEventoSave(id){
   const g=x=>document.getElementById(x);
@@ -27683,9 +27706,11 @@ async function aniEventoSave(id){
     if(!concepto){ concepto=[r.metodo,r.padrillo?('padrillo '+r.padrillo):'',r.resultado].filter(Boolean).join(' · ')||'Reproducción'; }
   }
   const cb=g('ae-cobrar');
+  const pesoEl=g('ae-peso');
   const body={ fecha:g('ae-fecha').value, tipo, concepto,
     costo:Number(g('ae-costo').value||0), proximaFecha:g('ae-prox').value||null, observaciones:g('ae-obs').value||null, datos,
-    aCobrar: cb?!!cb.checked:false };
+    aCobrar: cb?!!cb.checked:false,
+    peso: (tipo==='pesaje' && pesoEl && pesoEl.value) ? Number(pesoEl.value) : null };
   if(!body.fecha) return toast('Poné la fecha','warn');
   try{ await api('/api/animales/'+id+'/eventos',{method:'POST',body:JSON.stringify(body)}); toast('Evento agregado','success'); closeModal(); aniVer(id); }
   catch(e){ toast(e.message,'error'); }

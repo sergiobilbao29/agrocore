@@ -1426,6 +1426,11 @@ model Animal {
   monedaVenta   String?
   clienteId     String?
   ventaRef      String?                         // referencia factura/boleto
+  // Vínculo con un lote/rodeo (para hacienda individualizada con caravana/collar)
+  rodeoId       String?
+  // Último peso individual conocido (de balanza / caravana con pesaje / pesaje manual)
+  pesoKg        Float?
+  pesoFecha     DateTime?
   // Otros
   externo       Boolean  @default(false)        // true = de un tercero (pensión / hotelería)
   propietario   String?                         // dueño si es externo
@@ -1435,6 +1440,7 @@ model Animal {
   updatedAt     DateTime @updatedAt
 
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  rodeo         Rodeo?         @relation(fields: [rodeoId], references: [id], onDelete: SetNull)
   eventos       AnimalEvento[]
 
   @@index([companyId])
@@ -1442,6 +1448,7 @@ model Animal {
   @@index([companyId, estado])
   @@index([caravanaRfid])
   @@index([microchip])
+  @@index([rodeoId])
 }
 
 // Evento / historia de un animal. Acumulador de costos y bitácora general.
@@ -2288,6 +2295,7 @@ model Rodeo {
   company        Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   campo          Campo?        @relation(fields: [campoId], references: [id], onDelete: SetNull)
   eventos        RodeoEvento[]
+  animales       Animal[]
 
   @@index([companyId])
   @@index([campoId])
