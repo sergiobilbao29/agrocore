@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.133.0';
+const AGROCORE_VERSION = '2.134.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10242,20 +10242,21 @@ const _AYUDA_KB = [
   { id:'importar', terms:['importar','importar comprobantes','mis comprobantes','importar pdf','importar excel','importar factura','subir comprobante','importar de arca','importar archivo'],
     titulo:'Importar comprobantes (PDF / Excel de ARCA)',
     pasos:[
-      'Para comprobantes RECIBIDOS: Compras → "Importar" y subí el Excel de "Mis Comprobantes Recibidos" de ARCA.',
+      'Para comprobantes RECIBIDOS: Movimientos de compras → "Importar" y subí el Excel de "Mis Comprobantes Recibidos" de ARCA.',
       'El sistema hace un preview, evita duplicados (por CUIT y número) y da de alta la compra y el proveedor.',
       'Para una factura suelta en PDF podés importarla desde la misma pantalla de compra.',
+      'Planillas Especiales (cartas de porte, cheques, efectivo, créditos): TODOS los importadores ahora verifican si el dato ya existe y NO lo duplican si subís el mismo archivo dos veces. Cartas de porte compara por N° CTG; cheques por número + importe; efectivo por fecha/caja/tipo/importe; créditos por operación. Al terminar, el resumen muestra el contador 🔁 Duplicados (omitidos) además de Importados y Fallos.',
       'Revisá el preview y confirmá; podés corregir antes de importar.'],
     atajo:{ page:'compras', label:'Abrir Compras' } },
   { id:'venta', terms:['venta','vender','factura de venta','emitir factura','facturar','factura arca','cae','comprobante de venta','nota de credito','nota de debito'],
     titulo:'Emitir una factura de venta (ARCA)',
     pasos:[
-      'Entrá a Facturación → "Nueva venta".',
+      'Entrá a Movimientos de ventas (antes "Facturación") → "Nueva venta".',
       'Elegí el cliente, la fecha y cargá los renglones (producto, cantidad, precio, IVA).',
       'Todo en una sola pantalla: al emitir se arma el comprobante ARCA por triplicado y el PDF.',
       'Se abre solo para imprimir/descargar y podés enviarlo por WhatsApp o email.',
       'Genera la cuenta a cobrar y descuenta stock. Las NC reingresan stock; las ND no.'],
-    atajo:{ page:'facturacion', label:'Abrir Facturación' } },
+    atajo:{ page:'facturacion', label:'Abrir Movimientos de ventas' } },
   { id:'pago_proveedor', terms:['pagar','pago a proveedor','orden de pago','pagar una factura','cancelar deuda','pagar cuenta','como pago','pago en especie','pagar con producto','pagar con mercaderia','lechones','varios medios','pago dividido','pagar mitad'],
     titulo:'Pagar a un proveedor (Orden de Pago)',
     pasos:[
@@ -10267,14 +10268,16 @@ const _AYUDA_KB = [
       'SI FALTA plata (pagás menos): hace el pago parcial aplicando de la factura MÁS VIEJA a la más nueva; la última cubierta queda con el saldo pendiente. Si pagás sin tildar factura, queda a cuenta.',
       'Se genera la Orden de Pago (imprimible / PDF / WhatsApp / email) con retenciones e importe en letras.'],
     atajo:{ page:'ctasPagar', label:'Abrir Cuentas a pagar' } },
-  { id:'cobro', terms:['cobrar','cobro','cobrar una factura','recibir un pago','cuenta a cobrar','recibo','como cobro'],
+  { id:'cobro', terms:['cobrar','cobro','cobrar una factura','recibir un pago','cuenta a cobrar','recibo','como cobro','cobro a cuenta','cobro parcial','editar movimiento','eliminar movimiento','borrar cobro','deshacer cobro'],
     titulo:'Cobrar a un cliente',
     pasos:[
       'Entrá a Cuentas a cobrar y buscá al cliente / la factura.',
       'Tocá "Cobrar" y elegí el medio (efectivo, transferencia, cheque de tercero, etc.). Podés cobrar con VARIOS medios tildando "Cobrar con varios medios".',
+      'COBRO A CUENTA / PARCIAL: tildá la factura (o la guía) y escribí en "Total a cobrar" un importe MENOR al saldo; el sistema aplica ese monto como pago a cuenta y el resto queda pendiente (no hace falta editar el importe de la fila a mano).',
       'COBRO CON PRODUCTO: si el cliente te paga con mercadería (grano, hacienda), agregá un medio "🌾 Producto", elegí producto, cantidad y precio; con "Ingresar al stock" tildado, entra al depósito.',
       'SI SOBRA (cobrás más que las facturas): el excedente queda como SALDO A FAVOR del cliente. SI FALTA: se aplica parcial de la factura más vieja a la más nueva.',
-      'Si el cliente tiene saldo a favor, el sistema te lo ofrece para aplicar. Se registra el recibo y baja la deuda.'],
+      'Cada cobro genera el RECIBO en Movimientos de ventas. Para deshacer un cobro (repone la deuda y revierte caja/banco/cheque), usá el botón ↩️ del recibo en Movimientos de ventas.',
+      'EDITAR/ELIMINAR movimientos: en el visor de cuenta corriente (botón "Ver movimientos") podés editar ✏️ o eliminar 🗑️ los movimientos MANUALES; los que genera un comprobante (factura, guía o cobro) quedan con 🔒 y se corrigen desde su comprobante o con Deshacer.'],
     atajo:{ page:'ctasCobrar', label:'Abrir Cuentas a cobrar' } },
   { id:'guias_hacienda', terms:['guia','guias','dte','dt-e','dte-dut','guia de hacienda','guia de animales','guia de traslado','carta de porte animal','renspa','mover animales con guia','importar guia','foto de la guia','cuenta estimada hacienda','vincular guia','a cuenta hacienda','faena guia','servicio de faena'],
     titulo:'Guías de hacienda (DT-e)',
@@ -10283,7 +10286,7 @@ const _AYUDA_KB = [
       'Elegí el motivo (Venta, Compra, Faena/servicio, Invernada, Traslado). El sentido (egreso/ingreso) se sugiere solo. Cargá el campo, el N° de DT-e, los RENSPA y el contacto (cliente/proveedor/frigorífico).',
       'En los renglones cargás la CATEGORÍA y las CABEZAS (eso es lo que trae la guía). Los KILOS y PRECIOS son estimados y opcionales; podés poner varias filas por calidad (fila 1, 2, 3) con distinto precio.',
       'Al guardar, la guía MUEVE EL STOCK al instante (suma o resta cabezas del campo) y arma una CUENTA ESTIMADA a cobrar (venta) o a pagar (compra).',
-      'Podés registrar PAGOS/COBROS A CUENTA (adelantos) con el botón 💵, antes de que llegue el comprobante fiscal.',
+      'Podés registrar COBROS/PAGOS A CUENTA (adelantos) con el botón 💵. Abre la MISMA pantalla completa de Cuentas a cobrar/pagar: elegís caja del catálogo, cuenta bancaria, cheque con sus datos o varios medios; para un adelanto parcial, tildás la guía y ponés un monto menor al saldo. Mueve la plata (caja/banco) y genera el recibo / orden de pago en Movimientos de ventas/compras, y queda reflejado en la guía. Se deshace desde Movimientos de ventas/compras con ↩️.',
       'Cuando llega la LIQUIDACIÓN (venta/faena) o la FACTURA de compra, tocás 🔗 Vincular: ajustás kilos, precios y retenciones reales; se crea el comprobante fiscal definitivo (cuenta corriente + Libro IVA) y el stock NO se vuelve a mover. Los pagos a cuenta ya cargados se netean.',
       'Para FAENA: la guía saca los animales vivos (quedan "en frigorífico"); el retorno de la carne y el costo del servicio se cierran con el asistente de Faena (en Liquidaciones de animales).'],
     atajo:{ page:'guiasHacienda', label:'Abrir Guías de hacienda' } },
@@ -10635,6 +10638,16 @@ const _AYUDA_KB = [
       'Revisá los datos que trajo y guardá la compra normalmente.',
       'Necesita la IA activada (Super Admin → IA). Si subís un PDF que en realidad es una foto escaneada sin texto, el sistema te avisa que subas la foto original (JPG/PNG).'],
     atajo:{ page:'compras', label:'Abrir Compras' } },
+  { id:'novedades', terms:['novedades','que hay de nuevo','qué hay de nuevo','que cambio','qué cambió','ultima version','última versión','ultimas mejoras','últimas mejoras','cambios','actualizacion','actualización','que se agrego','qué se agregó','version nueva','versión nueva'],
+    titulo:'¿Qué hay de nuevo? (últimas mejoras)',
+    pasos:[
+      '🔁 IMPORTADORES ANTI-DUPLICADOS: las Planillas Especiales (cartas de porte, cheques, efectivo, créditos) ya no duplican si subís el mismo archivo dos veces. El resumen muestra el contador 🔁 Duplicados.',
+      '🧾 COBRO/PAGO DESDE LA GUÍA con la pantalla completa: el botón 💵 de una guía abre la misma pantalla de Cuentas a cobrar/pagar (caja del catálogo, cuenta bancaria, cheque con datos, varios medios). Mueve la plata y genera el recibo / orden de pago en Movimientos de ventas/compras, reflejado en la guía.',
+      '💰 COBRO A CUENTA / PARCIAL: tildás el comprobante (o la guía) y ponés un total menor al saldo; aplica ese monto y el resto queda pendiente.',
+      '✏️🗑️ EDITAR / ELIMINAR MOVIMIENTOS: en el visor de cuenta corriente podés editar/eliminar los movimientos manuales; los cobros/OP se deshacen con ↩️ desde Movimientos de ventas/compras (repone la deuda y revierte caja/banco/cheque).',
+      '🏷️ RENOMBRES: "Facturación" ahora es "Movimientos de ventas" y "Compras" es "Movimientos de compras" (muestran todos los comprobantes de cada lado).',
+      'Consejo: si no ves los cambios después de actualizar, hacé Ctrl+F5 para refrescar.'],
+    atajo:{ page:'guiasHacienda', label:'Abrir Guías de hacienda' } },
 ];
 function _esPregunta(t){
   return /(^|\s)(como|donde|cuando|cual|cuales|que es|para que|se puede|puedo|podes|podés|puedes|necesito|quiero saber|me explicas|explicame|ayuda|no se como|no entiendo|donde cargo|donde se|donde esta)\b/.test(t) || /\?/.test(t);
