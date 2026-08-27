@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
+      titulo:'🐎 v2.141.0 — Ficha del animal con foto tipo currículum + cobro de Contado obligatorio',
+      desc:'<b>(1) Ficha más prolija:</b> la <b>foto</b> del animal ahora va <b>a la izquierda</b> (tamaño currículum) y al lado los datos y KPIs, aprovechando mejor el espacio. Si no hay foto se ve un recuadro para cargarla con <b>📷 Agregar foto</b>. En el <b>listado</b> de animales cada ficha muestra su miniatura. <b>(2) Contado: cobro obligatorio.</b> Si la venta es de <b>Contado</b> y no elegís cómo entra la plata, ya <b>no</b> se guarda “sin registrar”: el sistema te <b>lleva al bloque de Cobro</b> y te pide elegir el medio (efectivo→caja, transferencia→banco, cheque, etc.). Si querés dejarla a cobrar, cambiá la condición a <b>Cuenta corriente</b>. <b>(3) Calendario:</b> las ventas a plazo aparecen en el <b>mes del vencimiento</b> (no en el mes actual). Para verlas, movete a ese mes con “mes siguiente ›” o usá la vista <b>📋 Lista</b>; en el <b>Flujo de fondos</b> ya se ven proyectadas.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
       titulo:'🐎 v2.140.0 — Cargar la foto del animal directo desde la ficha + Contado de Consumidor final entra a caja',
       desc:'<b>(1) Foto directo desde la ficha:</b> ahora en la <b>ficha del animal</b> (sin abrir Editar) tenés el botón <b>📷 Agregar/Cambiar foto</b>: elegís la imagen y se guarda al instante. También podés seguir cargándola desde el formulario de edición. <b>(2) Contado a Consumidor final:</b> cuando la venta es de <b>contado</b> a Consumidor final, ya <b>no</b> te obliga a emitir “sin registrar”. Si en el bloque de cobro elegís <b>cómo entra la plata</b> (efectivo → caja, transferencia → banco, etc.), el ingreso se <b>registra directo en esa caja/banco</b>. Solo si no elegís ningún medio te pregunta si querés emitir sin registrar el ingreso. <b>(3) Recordá:</b> las ventas a plazo (cta cte) aparecen en el <b>calendario en el mes del vencimiento</b> (no en el mes actual) — miralas en ese mes o en la vista <b>Lista</b>; en el <b>Flujo de fondos</b> se ven proyectadas.' },
@@ -12350,15 +12353,17 @@ async function factSave() {
   // (ingreso directo a caja/banco).
   if (!externa && data.condicionVenta === 'Contado') {
     const _met0 = document.getElementById('vent-met')?.value || '';
+    const _focusCobro = () => { const w=document.getElementById('vent-cobro-wrap'); if(w){ w.classList.remove('hidden'); w.scrollIntoView({behavior:'smooth',block:'center'}); } const m=document.getElementById('vent-met'); if(m) m.focus(); };
     if (!_met0) {
-      if (!confirm('La venta es de CONTADO pero no elegiste CÓMO ingresa la plata (caja, banco, etc.).\n\nSi seguís, NO se registra el ingreso a caja/banco.\n\n¿Emitir igual?')) return;
-    } else {
-      if (_met0==='efectivo'      && !document.getElementById('vent-caja')?.value)    return toast('Elegí la CAJA donde ingresa el efectivo.','warn');
-      if (_met0==='transferencia' && !document.getElementById('vent-banco')?.value)   return toast('Elegí la CUENTA BANCARIA de la transferencia.','warn');
-      if (_met0==='cheque'        && !document.getElementById('vent-cheque')?.value)  return toast('Elegí el CHEQUE recibido (o cargá uno nuevo).','warn');
-      if (_met0==='externo'       && !document.getElementById('vent-medio')?.value)   return toast('Elegí el medio externo donde ingresa.','warn');
-      if (_met0==='tarjeta'       && !document.getElementById('vent-tarjeta')?.value) return toast('Elegí la tarjeta.','warn');
+      // Contado: el cobro es OBLIGATORIO. No se puede guardar sin elegir cómo ingresa la plata.
+      _focusCobro();
+      return toast('La venta es de CONTADO: elegí abajo CÓMO ingresa la plata (efectivo, transferencia, cheque…) y a qué caja/cuenta. Si querés dejarla a cobrar, cambiá la condición a Cuenta corriente.','warn');
     }
+    if (_met0==='efectivo'      && !document.getElementById('vent-caja')?.value)    { _focusCobro(); return toast('Elegí la CAJA donde ingresa el efectivo.','warn'); }
+    if (_met0==='transferencia' && !document.getElementById('vent-banco')?.value)   { _focusCobro(); return toast('Elegí la CUENTA BANCARIA de la transferencia.','warn'); }
+    if (_met0==='cheque'        && !document.getElementById('vent-cheque')?.value)  { _focusCobro(); return toast('Elegí el CHEQUE recibido (o cargá uno nuevo).','warn'); }
+    if (_met0==='externo'       && !document.getElementById('vent-medio')?.value)   { _focusCobro(); return toast('Elegí el medio externo donde ingresa.','warn'); }
+    if (_met0==='tarjeta'       && !document.getElementById('vent-tarjeta')?.value) { _focusCobro(); return toast('Elegí la tarjeta.','warn'); }
   }
   try {
     if (state._factEdit) {
@@ -27769,21 +27774,28 @@ async function aniVer(id){
   openModal({
     title:`${(ANI_ESPECIES[a.especie]||'')} ${esc(a.nombre)}`, size:'max-w-4xl',
     body:`
-      ${a.foto?`<div class="mb-3"><img src="${esc(a.foto)}" alt="${esc(a.nombre)}" class="w-full max-h-64 object-contain rounded-lg border bg-slate-50 cursor-zoom-in" onclick="window.open(this.src,'_blank')"/></div>`:''}
-      <div class="flex items-center gap-2 mb-3">${_aniEstadoBadge(a.estado)}${a.categoria?`<span class="text-xs text-slate-500">${esc(a.categoria)}</span>`:''}
-        <div class="flex-1"></div>
-        ${canU?`<button class="btn btn-ghost text-xs" onclick='aniForm(${JSON.stringify(a.id)})'>✏️ Editar</button>`:''}
-        ${canU?`<button class="btn btn-ghost text-xs" onclick='document.getElementById("ani-foto-directa").click()'>📷 ${a.foto?'Cambiar':'Agregar'} foto</button><input type="file" id="ani-foto-directa" accept="image/*" class="hidden" onchange='aniFotoDirecta(${JSON.stringify(a.id)}, event)'/>`:''}
-        ${canU?`<button class="btn btn-ghost text-xs" onclick='aniMoverForm(${JSON.stringify(a.id)})'>📍 Mover</button>`:''}
-        <button class="btn btn-ghost text-xs" onclick='aniCertificado(${JSON.stringify(a.id)})' title="Certificado de traslado / DT-e equino imprimible">🧾 Certificado</button>
-        ${(canU&&a.estado!=='vendido')?`<button class="btn btn-secondary text-xs" onclick='aniVenderForm(${JSON.stringify(a.id)})'>💰 Vender</button>`:''}
-        ${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='aniDel(${JSON.stringify(a.id)})'>🗑️</button>`:''}
-      </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-        <div class="kpi"><div class="text-[11px] text-slate-500">Costo acumulado</div><div class="text-lg font-bold">${fmtMon(a.moneda||'ARS',a._costoTotal||0)}</div></div>
-        ${a.precioVenta!=null?`<div class="kpi"><div class="text-[11px] text-slate-500">Precio venta</div><div class="text-lg font-bold">${fmtMon(a.monedaVenta||a.moneda,a.precioVenta)}</div></div>
-        <div class="kpi"><div class="text-[11px] text-slate-500">Margen</div><div class="text-lg font-bold ${(a._margen||0)>=0?'text-emerald-700':'text-red-600'}">${fmtMon(a.monedaVenta||a.moneda,a._margen||0)}</div></div>`:`<div class="kpi"><div class="text-[11px] text-slate-500">Valuación</div><div class="text-lg font-bold">${a.valuacion!=null?fmtMon(a.moneda,a.valuacion):'—'}</div></div>`}
-        <div class="kpi"><div class="text-[11px] text-slate-500">Nacimiento</div><div class="text-lg font-bold">${a.fechaNac?fmtFecha(a.fechaNac):'—'}</div></div>
+      <div class="flex flex-col sm:flex-row gap-4 mb-3">
+        ${a.foto
+          ? `<img src="${esc(a.foto)}" alt="${esc(a.nombre)}" class="w-40 h-40 object-cover rounded-lg border bg-slate-50 shrink-0 cursor-zoom-in self-start" onclick="window.open(this.src,'_blank')"/>`
+          : `<div class="w-40 h-40 rounded-lg border flex items-center justify-center text-5xl text-slate-300 shrink-0 self-start" style="background:#f8fafc">🐎</div>`}
+        <input type="file" id="ani-foto-directa" accept="image/*" class="hidden" onchange='aniFotoDirecta(${JSON.stringify(a.id)}, event)'/>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-3 flex-wrap">${_aniEstadoBadge(a.estado)}${a.categoria?`<span class="text-xs text-slate-500">${esc(a.categoria)}</span>`:''}
+            <div class="flex-1"></div>
+            ${canU?`<button class="btn btn-ghost text-xs" onclick='aniForm(${JSON.stringify(a.id)})'>✏️ Editar</button>`:''}
+            ${canU?`<button class="btn btn-ghost text-xs" onclick='document.getElementById("ani-foto-directa").click()'>📷 ${a.foto?'Cambiar':'Agregar'} foto</button>`:''}
+            ${canU?`<button class="btn btn-ghost text-xs" onclick='aniMoverForm(${JSON.stringify(a.id)})'>📍 Mover</button>`:''}
+            <button class="btn btn-ghost text-xs" onclick='aniCertificado(${JSON.stringify(a.id)})' title="Certificado de traslado / DT-e equino imprimible">🧾 Certificado</button>
+            ${(canU&&a.estado!=='vendido')?`<button class="btn btn-secondary text-xs" onclick='aniVenderForm(${JSON.stringify(a.id)})'>💰 Vender</button>`:''}
+            ${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='aniDel(${JSON.stringify(a.id)})'>🗑️</button>`:''}
+          </div>
+          <div class="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            <div class="kpi"><div class="text-[11px] text-slate-500">Costo acumulado</div><div class="text-lg font-bold">${fmtMon(a.moneda||'ARS',a._costoTotal||0)}</div></div>
+            ${a.precioVenta!=null?`<div class="kpi"><div class="text-[11px] text-slate-500">Precio venta</div><div class="text-lg font-bold">${fmtMon(a.monedaVenta||a.moneda,a.precioVenta)}</div></div>
+            <div class="kpi"><div class="text-[11px] text-slate-500">Margen</div><div class="text-lg font-bold ${(a._margen||0)>=0?'text-emerald-700':'text-red-600'}">${fmtMon(a.monedaVenta||a.moneda,a._margen||0)}</div></div>`:`<div class="kpi"><div class="text-[11px] text-slate-500">Valuación</div><div class="text-lg font-bold">${a.valuacion!=null?fmtMon(a.moneda,a.valuacion):'—'}</div></div>`}
+            <div class="kpi"><div class="text-[11px] text-slate-500">Nacimiento</div><div class="text-lg font-bold">${a.fechaNac?fmtFecha(a.fechaNac):'—'}</div></div>
+          </div>
+        </div>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         ${dl('Sexo',a.sexo)}${dl('Pelaje',a.pelaje)}${dl('Raza',a.raza)}${dl('Ubicación',a.ubicacion)}
