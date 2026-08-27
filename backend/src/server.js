@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.137.0';
+const AGROCORE_VERSION = '2.138.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3502,7 +3502,6 @@ function _condicionDiasFrom(cond, diasExpl) {
 }
 
 async function crearCtaCteDesdeFactura(tx, { companyId, factura, contactoTipo, contactoId, refPrefix, motivo, condicion, condicionDias, vencimientoFecha }) {
-  if (!contactoId) return; // sin cliente/proveedor registrado no hay cuenta corriente
   const _moneda = factura.moneda || 'ARS';
   const _cotiz = factura.cotizacion != null ? factura.cotizacion : (_moneda === 'ARS' ? 1 : null);
   const compNum = `${String(factura.puntoVenta).padStart(4, '0')}-${String(factura.numero).padStart(8, '0')}`;
@@ -3523,10 +3522,18 @@ async function crearCtaCteDesdeFactura(tx, { companyId, factura, contactoTipo, c
       vencimiento = new Date(factura.fecha);
     }
   }
+  // Sin cliente/proveedor registrado (ej. Consumidor final): solo registramos la
+  // cuenta a cobrar/pagar cuando es A PLAZO (vencimiento posterior a la fecha), como
+  // movimiento "libre", para que aparezca en Agenda y Flujo de fondos. Si es contado
+  // no hay nada pendiente que seguir.
+  const esPlazo = vencimiento && new Date(vencimiento).setHours(0,0,0,0) > new Date(factura.fecha).setHours(0,0,0,0);
+  if (!contactoId && !esPlazo) return;
   await tx.ctaCte.create({
     data: {
       companyId,
-      contactoTipo, contactoId,
+      contactoTipo: contactoId ? contactoTipo : 'libre',
+      contactoId: contactoId || null,
+      nombreLibre: contactoId ? null : `Consumidor final · ${motivo} ${factura.tipo} ${compNum}`,
       fecha: factura.fecha,
       vencimiento,
       detalle: `${motivo} ${factura.tipo} ${compNum}`,
@@ -9489,6 +9496,7 @@ const animalSchema = z.object({
   externo: z.boolean().optional(),
   propietario: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
+  foto: z.string().nullable().optional(),
 });
 const animalEventoSchema = z.object({
   fecha: z.coerce.date(),
@@ -9562,6 +9570,7 @@ app.post('/api/animales', requireCompany, requirePermission('stock:create'), asy
       moneda: d.moneda || 'ARS', fechaIngreso: d.fechaIngreso || null,
       costoIngreso: d.costoIngreso ?? 0, origen: d.origen || null, valuacion: d.valuacion ?? null,
       externo: !!d.externo, propietario: d.propietario || null, observaciones: d.observaciones || null,
+      foto: d.foto || null,
     }});
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
@@ -9573,7 +9582,7 @@ app.put('/api/animales/:id', requireCompany, requirePermission('stock:update'), 
     if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
     const d = animalSchema.partial().parse(req.body);
     const data = { ...d };
-    ['sexo','pelaje','raza','categoria','microchip','caravanaRfid','caravanaVisual','nroRegistro','pasaporte','padreId','padreNombre','madreId','madreNombre','receptoraId','receptoraNombre','campoId','ubicacion','rodeoId','origen','propietario','observaciones']
+    ['sexo','pelaje','raza','categoria','microchip','caravanaRfid','caravanaVisual','nroRegistro','pasaporte','padreId','padreNombre','madreId','madreNombre','receptoraId','receptoraNombre','campoId','ubicacion','rodeoId','origen','propietario','observaciones','foto']
       .forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
     if (d.nombre !== undefined) data.nombre = String(d.nombre).trim();
     const row = await prisma.animal.update({ where: { id: cur.id }, data });

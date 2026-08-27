@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
+      titulo:'🐎 v2.138.0 — Foto del animal en la ficha + ventas a plazo a Consumidor final entran al calendario y al flujo',
+      desc:'<b>(1) Foto del animal:</b> en <b>Fichas de animales</b>, al crear o editar una ficha podés <b>subir una foto</b> (JPG/PNG) desde el celular o la compu. Se <b>reduce automáticamente</b> para que no pese, se ve una <b>vista previa</b> al elegirla y podés <b>quitarla</b> cuando quieras. La foto aparece como <b>miniatura</b> en el listado de animales y en <b>grande dentro de la ficha</b> (tocala para verla ampliada). <b>(2) Ventas a plazo a Consumidor final:</b> cuando emitís una factura <b>a plazo (cuenta corriente)</b> sin cliente asignado (Consumidor final), ahora <b>igual se registra el vencimiento</b>: aparece en el <b>calendario</b> el día que hay que cobrar y también en el <b>flujo de fondos</b> como ingreso proyectado (antes solo se registraba si tenía un cliente cargado). <i>Si tenés una factura vieja de este tipo, entrá a editarla y guardala para que genere el vencimiento.</i>' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/08/2026',
       titulo:'🧾 v2.137.0 — Venta Contado: exige cargar el cobro y su caja/cuenta + editar factura respeta la condición',
       desc:'<b>(1) Cobro de guías unificado:</b> cuando cobrás una guía DT-e desde <b>Cuentas a cobrar</b>, ese cobro ahora <b>también queda registrado como pago de la guía</b>, así la guía y la cuenta corriente muestran <b>siempre lo mismo</b> (antes podían quedar desfasadas — por ejemplo la guía en $6.000.000 y la cuenta corriente en $12.000.000). El recibo sale por el <b>monto realmente cobrado</b>. <b>(2) Editar y eliminar movimientos:</b> en el <b>visor de cuenta corriente</b> podés <b>editar ✏️ o eliminar 🗑️</b> los movimientos <b>manuales</b> (los generados por una factura, guía o cobro quedan con candado 🔒: se corrigen desde su comprobante). Desde <b>Movimientos de ventas/compras</b> cada <b>cobro/OP</b> tiene el botón <b>↩️ Deshacer</b>, que <b>repone la deuda</b> y revierte el ingreso/egreso de caja, banco o cheque y el pago de la guía. <b>(3) Renombre:</b> "Facturación" pasó a llamarse <b>Movimientos de ventas</b> y "Compras" a <b>Movimientos de compras</b> (muestran todos los comprobantes de cada lado). <b>(4) Importadores anti-duplicados:</b> Cartas de porte (por N° CTG), Cheques (número+importe), Efectivo (fecha/caja/tipo/importe) y Créditos <b>ya no se duplican</b> si subís el mismo archivo dos veces; el resumen suma el contador <b>🔁 Duplicados</b>. <b>(5) Cobro/pago desde la Guía DT-e — pantalla completa:</b> el botón <b>💵 Registrar cobro/pago</b> de la guía ahora abre la <b>misma pantalla que Cuentas a cobrar/pagar</b> — con <b>caja del catálogo</b>, <b>cuenta bancaria</b>, <b>cheque con todos sus datos</b> y <b>varios medios</b>. Mueve la plata donde corresponde y genera el <b>recibo / orden de pago</b> en Movimientos de ventas/compras, y queda <b>reflejado en la guía</b> automáticamente. Los cobros/pagos se deshacen desde <b>Movimientos de ventas/compras (↩️)</b>. Además el gestor de pagos se abre también desde el <b>detalle de la guía</b>.' },
@@ -27544,8 +27547,11 @@ function aniRender(){
       <div class="text-xs text-slate-600 space-y-0.5">${al.slice(0,8).map(e=>`<div>• ${esc(e.animal?.nombre||'')}: <b>${esc(e.concepto||ANI_EV_TIPOS[e.tipo]||e.tipo)}</b> — ${fmtFecha(e.proximaFecha)}</div>`).join('')}${al.length>8?`<div class="text-slate-400">…y ${al.length-8} más</div>`:''}</div></div>` : '';
   const card = a => `<div class="kpi hover:shadow-md transition cursor-pointer" onclick='aniVer(${JSON.stringify(a.id)})'>
     <div class="flex items-start justify-between gap-2">
-      <div><div class="font-bold text-slate-800">${esc(a.nombre)}</div>
+      <div class="flex items-start gap-2">
+        ${a.foto?`<img src="${esc(a.foto)}" alt="" class="w-12 h-12 rounded-md object-cover border shrink-0"/>`:''}
+        <div><div class="font-bold text-slate-800">${esc(a.nombre)}</div>
         <div class="text-[11px] text-slate-500">${(ANI_ESPECIES[a.especie]||a.especie)}${a.categoria?' · '+esc(a.categoria):''}${a.sexo?' · '+esc(a.sexo):''}</div></div>
+      </div>
       ${_aniEstadoBadge(a.estado)}
     </div>
     <div class="mt-2 text-[11px] text-slate-500 space-y-0.5">
@@ -27581,6 +27587,16 @@ function aniForm(id){
   openModal({
     title: id?'Editar ficha del animal':'Nueva ficha de animal', size:'max-w-3xl',
     body:`
+      <div class="flex items-center gap-4 mb-3">
+        <img id="an-foto-prev" src="${a.foto?esc(a.foto):''}" alt="" class="w-24 h-24 rounded-lg object-cover border ${a.foto?'':'hidden'}" style="background:#f1f5f9"/>
+        <div id="an-foto-ph" class="w-24 h-24 rounded-lg border flex items-center justify-center text-3xl text-slate-300 ${a.foto?'hidden':''}" style="background:#f8fafc">🐎</div>
+        <div>
+          <label class="label">Foto del animal</label>
+          <input id="an-foto-file" type="file" accept="image/*" class="input" onchange="aniFotoPick(event)"/>
+          <input type="hidden" id="an-foto" value="${a.foto?esc(a.foto):''}"/>
+          <div class="text-[11px] text-slate-400 mt-1">JPG/PNG. Se reduce automáticamente. <a href="#" onclick="aniFotoBorrar();return false" class="text-rose-600">Quitar foto</a></div>
+        </div>
+      </div>
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Nombre *</label><input id="an-nombre" class="input" value="${esc(dv(a.nombre))}"/></div>
         <div><label class="label">Especie</label><select id="an-esp" class="input">${espOpts}</select></div>
@@ -27639,11 +27655,38 @@ async function aniSave(id){
     padreId:_aniIdPorNombre(g('an-padre').value), madreId:_aniIdPorNombre(g('an-madre').value), receptoraId:_aniIdPorNombre(g('an-recep').value),
     origen:g('an-origen').value||null, costoIngreso:Number(g('an-costo').value||0), moneda:g('an-moneda').value,
     externo:g('an-ext').checked, propietario:g('an-prop').value||null, observaciones:g('an-obs').value||null,
+    foto:(g('an-foto')?g('an-foto').value:'')||null,
   };
   try{
     await api('/api/animales'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
     toast(id?'Ficha actualizada':'Ficha creada','success'); closeModal(); pages.animales();
   }catch(e){ toast(e.message,'error'); }
+}
+function aniFotoBorrar(){
+  const h=document.getElementById('an-foto'); if(h) h.value='';
+  const f=document.getElementById('an-foto-file'); if(f) f.value='';
+  const p=document.getElementById('an-foto-prev'); if(p){ p.src=''; p.classList.add('hidden'); }
+  const ph=document.getElementById('an-foto-ph'); if(ph) ph.classList.remove('hidden');
+}
+function aniFotoPick(ev){
+  const file=ev.target.files&&ev.target.files[0]; if(!file) return;
+  if(!/^image\//.test(file.type)) return toast('Elegí una imagen','warn');
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const img=new Image();
+    img.onload=()=>{
+      const max=800; let w=img.width, h=img.height;
+      if(w>max||h>max){ if(w>=h){ h=Math.round(h*max/w); w=max; } else { w=Math.round(w*max/h); h=max; } }
+      const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+      cv.getContext('2d').drawImage(img,0,0,w,h);
+      const data=cv.toDataURL('image/jpeg',0.82);
+      const hid=document.getElementById('an-foto'); if(hid) hid.value=data;
+      const p=document.getElementById('an-foto-prev'); if(p){ p.src=data; p.classList.remove('hidden'); }
+      const ph=document.getElementById('an-foto-ph'); if(ph) ph.classList.add('hidden');
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 async function aniVer(id){
   let a;
@@ -27670,6 +27713,7 @@ async function aniVer(id){
   openModal({
     title:`${(ANI_ESPECIES[a.especie]||'')} ${esc(a.nombre)}`, size:'max-w-4xl',
     body:`
+      ${a.foto?`<div class="mb-3"><img src="${esc(a.foto)}" alt="${esc(a.nombre)}" class="w-full max-h-64 object-contain rounded-lg border bg-slate-50 cursor-zoom-in" onclick="window.open(this.src,'_blank')"/></div>`:''}
       <div class="flex items-center gap-2 mb-3">${_aniEstadoBadge(a.estado)}${a.categoria?`<span class="text-xs text-slate-500">${esc(a.categoria)}</span>`:''}
         <div class="flex-1"></div>
         ${canU?`<button class="btn btn-ghost text-xs" onclick='aniForm(${JSON.stringify(a.id)})'>✏️ Editar</button>`:''}
