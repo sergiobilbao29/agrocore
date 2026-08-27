@@ -15964,6 +15964,24 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
     } catch {}
   }
   if (!lista.length) return toast('No hay ' + (esPago ? 'proveedores' : 'clientes') + ' cargados.', 'warn');
+  // Cajas / cheques / cuentas para los métodos de pago (puede entrarse directo desde
+  // una Guía sin haber pasado antes por Ventas/Compras, donde se cachean).
+  if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
+    try {
+      const [efRsp, chRsp, cbRsp, catRsp] = await Promise.all([
+        api('/api/efectivo').catch(() => ({ data: [] })),
+        api('/api/cheques').catch(() => ({ data: [] })),
+        api('/api/banco-cuentas').catch(() => ({ data: [] })),
+        api('/api/catalogos').catch(() => ({ data: [] })),
+      ]);
+      const cajasCat  = (catRsp.data || []).filter(c => c.tipo === 'Caja' && c.activo !== false).map(c => c.nombre);
+      const cajasHist = (efRsp.data || []).map(e => (e.caja || '').trim()).filter(Boolean);
+      state.cache.efectivoCajas = [...new Set([...cajasCat, ...cajasHist])].sort();
+      state.cache.cheques = chRsp.data || [];
+      state.cache.bancoCuentas = cbRsp.data || [];
+      state.cache.catalogos = catRsp.data || [];
+    } catch {}
+  }
 
   // Pre-cargar datos para los selectores de método (cajas, cheques en cartera, cuentas bancarias)
   try {
@@ -16025,7 +16043,7 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
       <div id="pc-moneda-zone" class="mb-3"></div>
       <div class="bg-amber-50 border border-amber-300 rounded p-3 text-sm">
         <div class="flex justify-between mb-1"><span>Total tildado:</span><b id="pc-total-tildado">$ 0</b></div>
-        <div class="flex justify-between items-center"><span>Total a ${esPago?'pagar':'cobrar'}:</span><input id="pc-total-pago" type="number" class="input text-right w-32 py-0 text-sm" value="0" oninput="this.dataset.touched='1';pagoCobroRecalcular()"/></div>
+        <div class="flex justify-between items-center"><span>Total a ${esPago?'pagar':'cobrar'}:</span><input id="pc-total-pago" type="number" class="input text-right w-32 py-0 text-sm" value="0" oninput="pagoCobroTotalManual('${modo}')"/></div>
         <div id="pc-diff" class="text-xs mt-2"></div>
       </div>
       <div>
@@ -16054,6 +16072,25 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
   }
 }
 
+// Cobro/pago PARCIAL (a cuenta): si hay UN solo comprobante tildado y el usuario
+// escribe un total menor a su saldo, aplicamos ese importe al comprobante (queda
+// como pago a cuenta y el resto sigue pendiente). Así no hace falta editar a mano
+// el importe de la fila.
+function pagoCobroTotalManual(modo){
+  const inp=document.getElementById('pc-total-pago'); if(!inp) return;
+  inp.dataset.touched='1';
+  const d=state._pagoCobroData||{};
+  const tild=Object.keys(d.tildados||{}).filter(k=>d.tildados[k]);
+  const total=Number(inp.value||0);
+  if(tild.length===1 && total>0){
+    const idx=tild[0];
+    const impEl=document.querySelector(`.pc-importe[data-idx="${idx}"]`);
+    const it=(d.comprobantes||[])[idx]||{};
+    const saldo=Number(it.saldoPendiente||0);
+    if(impEl && !it.esCredito && total < saldo-0.01){ impEl.value=total.toFixed(2); }
+  }
+  pagoCobroRecalcular();
+}
 async function pagoCobroCargarComprobantes(modo) {
   const esPago = modo === 'pago';
   const contactoId = document.getElementById('pc-contacto').value;
