@@ -9184,6 +9184,35 @@ app.post('/api/guias-hacienda/:id/pagos', requireCompany, requirePermission('sto
   } catch (e) { next(e); }
 });
 
+// EDITAR PAGO A CUENTA (ajusta también el asiento en cuenta corriente)
+app.put('/api/guias-hacienda/:id/pagos/:pagoId', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    const pago = await prisma.guiaHaciendaPago.findFirst({ where: { id: req.params.pagoId, guiaId: cur.id } });
+    if (!pago) return res.status(404).json({ ok: false, error: 'Pago no encontrado' });
+    const schema = z.object({
+      fecha: z.coerce.date(), monto: z.coerce.number().positive(),
+      metodo: z.string().default('efectivo'), referencia: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    await prisma.$transaction(async (tx) => {
+      await tx.guiaHaciendaPago.update({ where: { id: pago.id }, data: {
+        fecha: d.fecha, monto: _round2(d.monto), metodo: d.metodo,
+        referencia: d.referencia || null, observaciones: d.observaciones || null,
+      }});
+      // Reflejar el cambio en el asiento de cuenta corriente (GUIAHPAY) si existe.
+      await tx.ctaCte.updateMany({
+        where: { companyId: req.companyId, referencia: `GUIAHPAY-${pago.id}` },
+        data: { fecha: d.fecha, haber: _round2(d.monto), detalle: `Pago a cuenta guía ${cur.numeroDte || ''} (${d.metodo})`.trim() },
+      });
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
+    res.json({ ok: true, data: _guiaConSaldo(full) });
+  } catch (e) { next(e); }
+});
+
 // BORRAR PAGO A CUENTA
 app.delete('/api/guias-hacienda/:id/pagos/:pagoId', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
   try {
