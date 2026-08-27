@@ -2626,6 +2626,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
+      titulo:'🧾 v2.139.0 — Venta Contado al EDITAR: alerta y cobro también al modificar + opción "Sin depósito"',
+      desc:'<b>(1) Contado también al editar:</b> ahora, si <b>modificás</b> una factura y la dejás en <b>Contado</b>, el sistema te pide el cobro igual que al emitirla (te avisa si falta elegir la caja/cuenta) y <b>registra el ingreso</b>. Antes esto solo pasaba al crear la factura, no al editarla. <b>(2) Consumidor final de contado:</b> si la venta es de contado y el cliente es <b>Consumidor final</b> (sin cuenta corriente), el cobro se registra como <b>ingreso directo a la caja o banco</b> elegido (efectivo, transferencia, etc.), así la plata queda reflejada. <b>(3) Opción "Sin depósito":</b> en el campo Depósito de la factura de venta se agregó <b>🚫 Sin depósito (no descuenta stock)</b>, para ventas de <b>servicios</b> o cosas que no salen de ningún depósito.' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
       titulo:'🐎 v2.138.0 — Foto del animal en la ficha + ventas a plazo a Consumidor final entran al calendario y al flujo',
       desc:'<b>(1) Foto del animal:</b> en <b>Fichas de animales</b>, al crear o editar una ficha podés <b>subir una foto</b> (JPG/PNG) desde el celular o la compu. Se <b>reduce automáticamente</b> para que no pese, se ve una <b>vista previa</b> al elegirla y podés <b>quitarla</b> cuando quieras. La foto aparece como <b>miniatura</b> en el listado de animales y en <b>grande dentro de la ficha</b> (tocala para verla ampliada). <b>(2) Ventas a plazo a Consumidor final:</b> cuando emitís una factura <b>a plazo (cuenta corriente)</b> sin cliente asignado (Consumidor final), ahora <b>igual se registra el vencimiento</b>: aparece en el <b>calendario</b> el día que hay que cobrar y también en el <b>flujo de fondos</b> como ingreso proyectado (antes solo se registraba si tenía un cliente cargado). <i>Si tenés una factura vieja de este tipo, entrá a editarla y guardala para que genere el vencimiento.</i>' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/08/2026',
@@ -11888,6 +11891,7 @@ async function factForm(prefill = null) {
         <div><label class="label">Depósito (stock)</label>
           <select id="f-deposito" class="input">
             <option value="">🌱 Campo / general</option>
+            <option value="__nostock__">🚫 Sin depósito (no descuenta stock)</option>
             ${_depsVta.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}
           </select>
         </div>
@@ -12229,6 +12233,48 @@ async function factCrearClienteDesdePDF(){
     const msg = document.getElementById('f-pdf-msg'); const aviso = msg?.querySelector('.bg-amber-50'); if (aviso) aviso.remove();
   } catch(e){ toast(e.message,'error'); }
 }
+// Registra el cobro de una venta de CONTADO. Si hay cliente, aplica el cobro a su
+// cuenta corriente (mueve caja/banco/cheque). Si es Consumidor final (sin cliente),
+// registra un ingreso directo a la caja/banco elegidos (no hay cuenta que saldar).
+async function _cobroContadoDesdeVenta(data, items) {
+  if (data.condicionVenta !== 'Contado') return;
+  const clienteId = document.getElementById('f-cli')?.value || null;
+  const metodo = document.getElementById('vent-met')?.value;
+  if (!metodo) return;
+  const total = items.reduce((a, it) => a + Number(it.cantidad||0) * Number(it.precioUnit||0) * (1 + Number(it.alicuotaIva||0)/100), 0);
+  const compTxt = data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0');
+  try {
+    if (clienteId) {
+      const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=cliente&contactoId=${encodeURIComponent(clienteId)}`);
+      const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.debe||0) - total) < 1)
+        .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+      if (!pend.length) return;
+      const cobroBody = {
+        clienteId,
+        comprobantes: [{ ctaCteId: pend[0].id, importeAplicado: total }],
+        metodo, monto: total, fecha: data.fecha,
+        observaciones: 'Cobro contado factura ' + compTxt,
+      };
+      if (metodo === 'efectivo')      cobroBody.cajaDestino   = document.getElementById('vent-caja')?.value || null;
+      if (metodo === 'cheque')        cobroBody.chequeId      = document.getElementById('vent-cheque')?.value || null;
+      if (metodo === 'transferencia') cobroBody.bancoCuentaId = document.getElementById('vent-banco')?.value || null;
+      if (metodo === 'externo')       cobroBody.cajaDestino   = document.getElementById('vent-medio')?.value || null;
+      if (metodo === 'tarjeta')       cobroBody.cajaDestino   = document.getElementById('vent-tarjeta')?.value || null;
+      await api('/api/cobros-clientes', { method:'POST', body: JSON.stringify(cobroBody) });
+    } else {
+      // Consumidor final: ingreso directo (Movimientos de ventas / caja).
+      const mov = { fecha: data.fecha, tipo: 'ingreso', concepto: 'Venta contado factura ' + compTxt, monto: total, metodo, clasificacion: 'empresa' };
+      if (metodo === 'efectivo')      mov.caja = document.getElementById('vent-caja')?.value || null;
+      else if (metodo === 'externo')  mov.caja = document.getElementById('vent-medio')?.value || null;
+      else if (metodo === 'tarjeta')  mov.caja = document.getElementById('vent-tarjeta')?.value || null;
+      else if (metodo === 'transferencia') mov.bancoCuentaId = document.getElementById('vent-banco')?.value || null;
+      else if (metodo === 'cheque')   mov.chequeId = document.getElementById('vent-cheque')?.value || null;
+      await api('/api/movimientos-diarios', { method:'POST', body: JSON.stringify(mov) });
+    }
+  } catch (pErr) {
+    toast('Guardado, pero hubo un problema al registrar el ingreso: ' + pErr.message, 'warn');
+  }
+}
 async function factSave() {
   const externa = !!document.getElementById('f-externa')?.checked;
   const items = $$('#fi-tbody tr[data-fi]').map(tr => ({
@@ -12276,7 +12322,8 @@ async function factSave() {
     numero: Number($('#f-nro').value||1),
     fecha: new Date($('#f-fec').value).toISOString(),
     clienteId: $('#f-cli').value || null,
-    depositoId: $('#f-deposito')?.value || null,
+    depositoId: ($('#f-deposito')?.value === '__nostock__') ? null : ($('#f-deposito')?.value || null),
+    sinStock: $('#f-deposito')?.value === '__nostock__',
     condicionVenta: $('#f-cv').value,
     ...monedaCotizBody('f'),
     condicionDias,
@@ -12296,7 +12343,7 @@ async function factSave() {
     data.caeVto = new Date(caeVto).toISOString();
   }
   // CONTADO: asegurar que se cargue el cobro y su destino (o confirmar que queda pendiente).
-  if (!state._factEdit && !externa && data.condicionVenta === 'Contado') {
+  if (!externa && data.condicionVenta === 'Contado') {
     const _cli0 = $('#f-cli').value || null;
     const _met0 = document.getElementById('vent-met')?.value || '';
     if (!_cli0) {
@@ -12314,6 +12361,7 @@ async function factSave() {
   try {
     if (state._factEdit) {
       await api('/api/facturas/'+state._factEdit, { method:'PUT', body: JSON.stringify(data) });
+      await _cobroContadoDesdeVenta(data, items);
       toast('Factura actualizada','success');
       state._factEdit = null;
       delete state.cache.stockMap; delete state.cache.facturas; delete state.cache.ctasCtes;
@@ -12323,35 +12371,8 @@ async function factSave() {
     const facturaId = r.data?.id;
     toast((externa?'Factura ARCA registrada':'Factura autorizada')+' · CAE '+r.data.cae,'success');
     delete state.cache.stockMap;
-
-    // Si condición Contado + método elegido, registrar el cobro
-    const clienteId = $('#f-cli').value || null;
-    const metodo = document.getElementById('vent-met')?.value;
-    if (facturaId && data.condicionVenta === 'Contado' && metodo && clienteId) {
-      try {
-        const total = items.reduce((a, it) => a + Number(it.cantidad||0) * Number(it.precioUnit||0) * (1 + Number(it.alicuotaIva||0)/100), 0);
-        const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=cliente&contactoId=${encodeURIComponent(clienteId)}`);
-        const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.debe||0) - total) < 1)
-          .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
-        if (pend.length) {
-          const cobroBody = {
-            clienteId,
-            comprobantes: [{ ctaCteId: pend[0].id, importeAplicado: total }],
-            metodo, monto: total,
-            fecha: data.fecha,
-            observaciones: 'Cobro contado factura ' + data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0'),
-          };
-          if (metodo === 'efectivo')      cobroBody.cajaDestino   = document.getElementById('vent-caja')?.value || null;
-          if (metodo === 'cheque')        cobroBody.chequeId      = document.getElementById('vent-cheque')?.value || null;
-          if (metodo === 'transferencia') cobroBody.bancoCuentaId = document.getElementById('vent-banco')?.value || null;
-          if (metodo === 'externo')       cobroBody.cajaDestino   = document.getElementById('vent-medio')?.value || null;
-          if (metodo === 'tarjeta')       cobroBody.cajaDestino   = document.getElementById('vent-tarjeta')?.value || null;
-          await api('/api/cobros-clientes', { method:'POST', body: JSON.stringify(cobroBody) });
-        }
-      } catch (pErr) {
-        toast('Factura emitida pero hubo un problema con el cobro: ' + pErr.message, 'warn');
-      }
-    }
+    // Si condición Contado + método elegido, registrar el cobro / ingreso.
+    await _cobroContadoDesdeVenta(data, items);
     closeModal(); pages.facturacion();
   } catch (e) { toast(e.message,'error'); }
 }

@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.138.0';
+const AGROCORE_VERSION = '2.139.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3662,6 +3662,7 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
       depositoId: z.string().nullable().optional(),
+      sinStock: z.boolean().optional(),
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
     });
@@ -3690,7 +3691,7 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
         include: { cliente: true, items: true },
       });
       if (_clase === 'factura') {
-        await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'egreso', motivo: 'venta', contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA', userId: req.user?.id || null, depositoId: input.depositoId || null });
+        if (!input.sinStock) await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'egreso', motivo: 'venta', contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA', userId: req.user?.id || null, depositoId: input.depositoId || null });
         await crearCtaCteDesdeFactura(tx, { companyId: req.companyId, factura: f, contactoTipo: 'cliente', contactoId: input.clienteId || null, refPrefix: 'FAC', motivo: 'Factura', condicion: input.condicionVenta, condicionDias: input.condicionDias, vencimientoFecha: input.vencimientoFecha || null });
       } else if (_clase === 'nota_credito') {
         await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'devolucion_venta', contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA', userId: req.user?.id || null, depositoId: input.depositoId || null });
@@ -3728,6 +3729,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
       depositoId: z.string().nullable().optional(),   // depósito de donde sale el stock vendido
+      sinStock: z.boolean().optional(),               // "Sin depósito": no descuenta stock
       observaciones: z.string().nullable().optional(),
       origen: z.enum(['agrocore', 'arca_externa']).optional().default('agrocore'),
       cae: z.string().optional(),
@@ -3787,7 +3789,8 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       await _avanzarSecuencia(tx, req.companyId, _seqTipoFactura(_clase, input.tipo), input.puntoVenta, input.numero);
       if (_clase === 'factura') {
         // Factura de venta: sale stock (egreso) + el cliente queda debiendo (debe).
-        await crearMovimientosDesdeFactura(tx, {
+        // Si es "Sin depósito", no se descuenta stock (ventas de servicios, etc.).
+        if (!input.sinStock) await crearMovimientosDesdeFactura(tx, {
           companyId: req.companyId, factura: f, tipo: 'egreso', motivo: 'venta',
           contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA',
           userId: req.user?.id || null, depositoId: input.depositoId || null,
