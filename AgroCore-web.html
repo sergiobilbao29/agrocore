@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
+      titulo:'🐎 v2.140.0 — Cargar la foto del animal directo desde la ficha + Contado de Consumidor final entra a caja',
+      desc:'<b>(1) Foto directo desde la ficha:</b> ahora en la <b>ficha del animal</b> (sin abrir Editar) tenés el botón <b>📷 Agregar/Cambiar foto</b>: elegís la imagen y se guarda al instante. También podés seguir cargándola desde el formulario de edición. <b>(2) Contado a Consumidor final:</b> cuando la venta es de <b>contado</b> a Consumidor final, ya <b>no</b> te obliga a emitir “sin registrar”. Si en el bloque de cobro elegís <b>cómo entra la plata</b> (efectivo → caja, transferencia → banco, etc.), el ingreso se <b>registra directo en esa caja/banco</b>. Solo si no elegís ningún medio te pregunta si querés emitir sin registrar el ingreso. <b>(3) Recordá:</b> las ventas a plazo (cta cte) aparecen en el <b>calendario en el mes del vencimiento</b> (no en el mes actual) — miralas en ese mes o en la vista <b>Lista</b>; en el <b>Flujo de fondos</b> se ven proyectadas.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
       titulo:'🧾 v2.139.0 — Venta Contado al EDITAR: alerta y cobro también al modificar + opción "Sin depósito"',
       desc:'<b>(1) Contado también al editar:</b> ahora, si <b>modificás</b> una factura y la dejás en <b>Contado</b>, el sistema te pide el cobro igual que al emitirla (te avisa si falta elegir la caja/cuenta) y <b>registra el ingreso</b>. Antes esto solo pasaba al crear la factura, no al editarla. <b>(2) Consumidor final de contado:</b> si la venta es de contado y el cliente es <b>Consumidor final</b> (sin cuenta corriente), el cobro se registra como <b>ingreso directo a la caja o banco</b> elegido (efectivo, transferencia, etc.), así la plata queda reflejada. <b>(3) Opción "Sin depósito":</b> en el campo Depósito de la factura de venta se agregó <b>🚫 Sin depósito (no descuenta stock)</b>, para ventas de <b>servicios</b> o cosas que no salen de ningún depósito.' },
@@ -12343,13 +12346,12 @@ async function factSave() {
     data.caeVto = new Date(caeVto).toISOString();
   }
   // CONTADO: asegurar que se cargue el cobro y su destino (o confirmar que queda pendiente).
+  // Vale tanto con cliente (mueve su cuenta corriente) como con Consumidor final
+  // (ingreso directo a caja/banco).
   if (!externa && data.condicionVenta === 'Contado') {
-    const _cli0 = $('#f-cli').value || null;
     const _met0 = document.getElementById('vent-met')?.value || '';
-    if (!_cli0) {
-      if (!confirm('La venta es de CONTADO pero el cliente es "Consumidor final": no se puede registrar el cobro en una cuenta.\n\n¿Emitir igual (sin registrar el ingreso a caja)?')) return;
-    } else if (!_met0) {
-      if (!confirm('La venta es de CONTADO pero no elegiste CÓMO se cobra.\n\nSi seguís, la factura queda como cuenta a cobrar pendiente y NO se registra el ingreso a caja/banco.\n\n¿Emitir igual?')) return;
+    if (!_met0) {
+      if (!confirm('La venta es de CONTADO pero no elegiste CÓMO ingresa la plata (caja, banco, etc.).\n\nSi seguís, NO se registra el ingreso a caja/banco.\n\n¿Emitir igual?')) return;
     } else {
       if (_met0==='efectivo'      && !document.getElementById('vent-caja')?.value)    return toast('Elegí la CAJA donde ingresa el efectivo.','warn');
       if (_met0==='transferencia' && !document.getElementById('vent-banco')?.value)   return toast('Elegí la CUENTA BANCARIA de la transferencia.','warn');
@@ -27709,6 +27711,39 @@ function aniFotoPick(ev){
   };
   reader.readAsDataURL(file);
 }
+// Redimensiona un archivo de imagen a un data URL (base64) reducido.
+function _fotoResize(file){
+  return new Promise((resolve,reject)=>{
+    if(!file){ resolve(null); return; }
+    if(!/^image\//.test(file.type)){ reject(new Error('Elegí una imagen')); return; }
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('No se pudo leer el archivo'));
+    reader.onload=e=>{
+      const img=new Image();
+      img.onerror=()=>reject(new Error('Imagen inválida'));
+      img.onload=()=>{
+        const max=800; let w=img.width, h=img.height;
+        if(w>max||h>max){ if(w>=h){ h=Math.round(h*max/w); w=max; } else { w=Math.round(w*max/h); h=max; } }
+        const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+        cv.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(cv.toDataURL('image/jpeg',0.82));
+      };
+      img.src=e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+// Sube/actualiza la foto directamente desde la vista de la ficha (sin abrir el form).
+async function aniFotoDirecta(id, ev){
+  const file=ev.target.files&&ev.target.files[0]; if(!file) return;
+  try{
+    toast('Procesando foto…','info');
+    const data=await _fotoResize(file);
+    await api('/api/animales/'+id,{method:'PUT',body:JSON.stringify({ foto:data })});
+    toast('Foto guardada','success');
+    aniVer(id);
+  }catch(e){ toast(e.message,'error'); }
+}
 async function aniVer(id){
   let a;
   try { a = (await api('/api/animales/'+id)).data; } catch(e){ return toast(e.message,'error'); }
@@ -27738,6 +27773,7 @@ async function aniVer(id){
       <div class="flex items-center gap-2 mb-3">${_aniEstadoBadge(a.estado)}${a.categoria?`<span class="text-xs text-slate-500">${esc(a.categoria)}</span>`:''}
         <div class="flex-1"></div>
         ${canU?`<button class="btn btn-ghost text-xs" onclick='aniForm(${JSON.stringify(a.id)})'>✏️ Editar</button>`:''}
+        ${canU?`<button class="btn btn-ghost text-xs" onclick='document.getElementById("ani-foto-directa").click()'>📷 ${a.foto?'Cambiar':'Agregar'} foto</button><input type="file" id="ani-foto-directa" accept="image/*" class="hidden" onchange='aniFotoDirecta(${JSON.stringify(a.id)}, event)'/>`:''}
         ${canU?`<button class="btn btn-ghost text-xs" onclick='aniMoverForm(${JSON.stringify(a.id)})'>📍 Mover</button>`:''}
         <button class="btn btn-ghost text-xs" onclick='aniCertificado(${JSON.stringify(a.id)})' title="Certificado de traslado / DT-e equino imprimible">🧾 Certificado</button>
         ${(canU&&a.estado!=='vendido')?`<button class="btn btn-secondary text-xs" onclick='aniVenderForm(${JSON.stringify(a.id)})'>💰 Vender</button>`:''}
