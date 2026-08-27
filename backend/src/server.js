@@ -9155,6 +9155,68 @@ app.delete('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:d
 });
 
 // PAGO A CUENTA (adelanto) → asiento "haber" que baja el saldo estimado del contacto
+// Busca el contacto (cliente/proveedor) de la guía para nombrar movimientos y comprobantes.
+async function _guiaContacto(companyId, tipo, id) {
+  if (!id || !tipo || tipo === 'frigorifico') return null;
+  if (tipo === 'cliente') return prisma.cliente.findFirst({ where: { id, companyId } });
+  return prisma.proveedor.findFirst({ where: { id, companyId } });
+}
+// Un pago a cuenta de una guía es un COBRO (si el contacto es cliente) o un PAGO
+// (si es proveedor). Además del asiento en cuenta corriente, tiene que:
+//  - mover la CAJA (efectivo) o el BANCO (transferencia), y
+//  - generar el comprobante (recibo de cobro / orden de pago) para que aparezca
+//    en Movimientos de ventas / compras.
+// Todo queda etiquetado con [GUIAHPAY-<pagoId>] para poder revertirlo al editar/borrar.
+async function _guiaPagoAplicarRecurso(tx, req, cur, pago, d, contacto) {
+  if (!cur.contactoId || !cur.contactoTipo || cur.contactoTipo === 'frigorifico') return;
+  const esCliente = cur.contactoTipo === 'cliente';
+  const nombre = contacto?.razonSocial || cur.titularOrigen || cur.titularDestino || 'Contacto';
+  const concepto = `${esCliente ? 'Cobro' : 'Pago'} guía DT-e ${cur.numeroDte || ''}`.trim();
+  const tag = `[GUIAHPAY-${pago.id}]`;
+  const obs = [d.observaciones, tag].filter(Boolean).join(' ');
+  const monto = _round2(d.monto);
+  const m = String(d.metodo || 'efectivo').toLowerCase();
+  // 1) Recurso: caja o banco.
+  if (m === 'efectivo' || m === 'tarjeta' || m === 'externo') {
+    await tx.efectivo.create({ data: {
+      companyId: req.companyId, fecha: d.fecha, tipo: esCliente ? 'ingreso' : 'egreso',
+      concepto, monto, caja: d.cajaDestino || (m === 'tarjeta' ? 'Tarjeta de crédito' : (m === 'externo' ? 'Medio externo' : null)),
+      clasificacion: 'empresa', observaciones: obs,
+    }});
+  } else if (m === 'banco' || m === 'transferencia') {
+    if (d.bancoCuentaId) {
+      await tx.bancoMovimiento.create({ data: {
+        companyId: req.companyId, cuentaId: d.bancoCuentaId, fecha: d.fecha,
+        tipo: esCliente ? 'transferencia_in' : 'transferencia_out',
+        concepto, monto, contraparte: nombre, observaciones: obs, userId: req.user?.id || null,
+      }});
+    }
+  }
+  // (cheque / otro: el movimiento del cheque se gestiona desde Tesorería; igual se emite el comprobante)
+  // 2) Comprobante numerado (recibo de cobro / orden de pago) → Movimientos de ventas/compras.
+  const tipoDoc = esCliente ? 'recibo_cobro' : 'orden_pago';
+  let seq = await tx.secuenciaComprobante.findFirst({ where: { companyId: req.companyId, tipo: tipoDoc } });
+  if (!seq) seq = await tx.secuenciaComprobante.create({ data: { companyId: req.companyId, tipo: tipoDoc, puntoVenta: 1, proximoNumero: 1 } });
+  const upd = await tx.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: { increment: 1 } } });
+  const numeroFmt = String(upd.puntoVenta).padStart(4, '0') + '-' + String(upd.proximoNumero - 1).padStart(8, '0');
+  await tx.documentoEmitido.create({ data: {
+    companyId: req.companyId, tipo: tipoDoc, numero: numeroFmt, fecha: d.fecha,
+    contactoTipo: cur.contactoTipo, contactoId: cur.contactoId, contactoNombre: nombre,
+    total: monto, moneda: 'ARS',
+    datos: { numero: numeroFmt, fecha: d.fecha, cliente: nombre, proveedor: nombre, monto, metodo: d.metodo,
+      comprobantes: [{ detalle: `Guía DT-e ${cur.numeroDte || ''} (estimado)`.trim(), importe: monto }],
+      obs: `Pago a cuenta de guía DT-e ${cur.numeroDte || ''}`.trim(), _guiaPagoId: pago.id },
+    createdById: req.user?.id || null,
+  }});
+}
+// Revierte caja/banco y el comprobante generados por un pago de guía.
+async function _guiaPagoRevertirRecurso(tx, req, pagoId, contactoId) {
+  await tx.efectivo.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: `[GUIAHPAY-${pagoId}]` } } });
+  await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: `[GUIAHPAY-${pagoId}]` } } });
+  const docs = await tx.documentoEmitido.findMany({ where: { companyId: req.companyId, tipo: { in: ['recibo_cobro', 'orden_pago'] }, ...(contactoId ? { contactoId } : {}) } });
+  for (const doc of docs) { const dj = doc.datos || {}; if (dj && dj._guiaPagoId === pagoId) await tx.documentoEmitido.delete({ where: { id: doc.id } }); }
+}
+
 app.post('/api/guias-hacienda/:id/pagos', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
   try {
     const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
@@ -9163,8 +9225,12 @@ app.post('/api/guias-hacienda/:id/pagos', requireCompany, requirePermission('sto
       fecha: z.coerce.date(), monto: z.coerce.number().positive(),
       metodo: z.string().default('efectivo'), referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      cajaDestino: z.string().nullable().optional(),
+      bancoCuentaId: z.string().nullable().optional(),
+      chequeId: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
+    const contacto = await _guiaContacto(req.companyId, cur.contactoTipo, cur.contactoId);
     const pago = await prisma.$transaction(async (tx) => {
       const p = await tx.guiaHaciendaPago.create({ data: {
         guiaId: cur.id, companyId: req.companyId, fecha: d.fecha, monto: _round2(d.monto),
@@ -9177,6 +9243,7 @@ app.post('/api/guias-hacienda/:id/pagos', requireCompany, requirePermission('sto
           referencia: `GUIAHPAY-${p.id}`, debe: 0, haber: _round2(d.monto), categoria: 'guia_hacienda_pago',
         }});
       }
+      await _guiaPagoAplicarRecurso(tx, req, cur, p, d, contacto);
       return p;
     });
     const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
@@ -9195,8 +9262,12 @@ app.put('/api/guias-hacienda/:id/pagos/:pagoId', requireCompany, requirePermissi
       fecha: z.coerce.date(), monto: z.coerce.number().positive(),
       metodo: z.string().default('efectivo'), referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      cajaDestino: z.string().nullable().optional(),
+      bancoCuentaId: z.string().nullable().optional(),
+      chequeId: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
+    const contacto = await _guiaContacto(req.companyId, cur.contactoTipo, cur.contactoId);
     await prisma.$transaction(async (tx) => {
       await tx.guiaHaciendaPago.update({ where: { id: pago.id }, data: {
         fecha: d.fecha, monto: _round2(d.monto), metodo: d.metodo,
@@ -9207,6 +9278,9 @@ app.put('/api/guias-hacienda/:id/pagos/:pagoId', requireCompany, requirePermissi
         where: { companyId: req.companyId, referencia: `GUIAHPAY-${pago.id}` },
         data: { fecha: d.fecha, haber: _round2(d.monto), detalle: `Pago a cuenta guía ${cur.numeroDte || ''} (${d.metodo})`.trim() },
       });
+      // Rehacer caja/banco y comprobante (revierte los anteriores y aplica los nuevos).
+      await _guiaPagoRevertirRecurso(tx, req, pago.id, cur.contactoId);
+      await _guiaPagoAplicarRecurso(tx, req, cur, pago, d, contacto);
     });
     const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
     res.json({ ok: true, data: _guiaConSaldo(full) });
@@ -9221,6 +9295,8 @@ app.delete('/api/guias-hacienda/:id/pagos/:pagoId', requireCompany, requirePermi
     await prisma.$transaction(async (tx) => {
       await tx.guiaHaciendaPago.deleteMany({ where: { id: req.params.pagoId, guiaId: cur.id } });
       await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `GUIAHPAY-${req.params.pagoId}` } });
+      // Revertir caja/banco y el comprobante generados por el pago.
+      await _guiaPagoRevertirRecurso(tx, req, req.params.pagoId, cur.contactoId);
     });
     const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
     res.json({ ok: true, data: _guiaConSaldo(full) });
@@ -15636,6 +15712,18 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
             referencia: cc.referencia, pagado: true,
             observaciones: 'Pago via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
           }});
+          // Unificación con Guías DT-e (compra): si el comprobante pagado es una guía,
+          // el pago también queda registrado como pago de la guía (sin doble asiento).
+          if (cc.referencia && /^GUIAH-/.test(cc.referencia)) {
+            const guiaId = cc.referencia.replace(/^GUIAH-/, '');
+            const g = await tx.guiaHacienda.findFirst({ where: { id: guiaId, companyId: req.companyId }, select: { id: true } });
+            if (g) {
+              await tx.guiaHaciendaPago.create({ data: {
+                guiaId: g.id, companyId: req.companyId, fecha: d.fecha, monto: cashPortion,
+                metodo: d.metodo, referencia: cc.referencia, observaciones: 'Cobro desde Cuenta corriente',
+              }});
+            }
+          }
         }
       }
       // Aplicar NOTAS DE CRÉDITO / créditos a cuenta tildados. NO se toca su importe:

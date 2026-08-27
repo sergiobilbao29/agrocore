@@ -2627,7 +2627,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/08/2026',
       titulo:'🧾 v2.132.0 — Guías: cobro unificado con Cuenta corriente + editar/eliminar movimientos + anti-duplicados en importadores',
-      desc:'<b>(1) Cobro de guías unificado:</b> cuando cobrás una guía DT-e desde <b>Cuentas a cobrar</b>, ese cobro ahora <b>también queda registrado como pago de la guía</b>, así la guía y la cuenta corriente muestran <b>siempre lo mismo</b> (antes podían quedar desfasadas — por ejemplo la guía en $6.000.000 y la cuenta corriente en $12.000.000). El recibo sale por el <b>monto realmente cobrado</b>. <b>(2) Editar y eliminar movimientos:</b> en el <b>visor de cuenta corriente</b> podés <b>editar ✏️ o eliminar 🗑️</b> los movimientos <b>manuales</b> (los generados por una factura, guía o cobro quedan con candado 🔒: se corrigen desde su comprobante). Desde <b>Movimientos de ventas/compras</b> cada <b>cobro/OP</b> tiene el botón <b>↩️ Deshacer</b>, que <b>repone la deuda</b> y revierte el ingreso/egreso de caja, banco o cheque y el pago de la guía. <b>(3) Renombre:</b> "Facturación" pasó a llamarse <b>Movimientos de ventas</b> y "Compras" a <b>Movimientos de compras</b> (muestran todos los comprobantes de cada lado). <b>(4) Importadores anti-duplicados:</b> Cartas de porte (por N° CTG), Cheques (número+importe), Efectivo (fecha/caja/tipo/importe) y Créditos <b>ya no se duplican</b> si subís el mismo archivo dos veces; el resumen suma el contador <b>🔁 Duplicados</b>. <b>(5) Pagos a cuenta de Guías DT-e:</b> ahora se pueden <b>editar ✏️ y eliminar 🗑️</b> (antes solo se podían agregar), y se accede al gestor también desde el <b>detalle de la guía</b>; al editar/borrar se ajusta solo el asiento en la cuenta corriente.' },
+      desc:'<b>(1) Cobro de guías unificado:</b> cuando cobrás una guía DT-e desde <b>Cuentas a cobrar</b>, ese cobro ahora <b>también queda registrado como pago de la guía</b>, así la guía y la cuenta corriente muestran <b>siempre lo mismo</b> (antes podían quedar desfasadas — por ejemplo la guía en $6.000.000 y la cuenta corriente en $12.000.000). El recibo sale por el <b>monto realmente cobrado</b>. <b>(2) Editar y eliminar movimientos:</b> en el <b>visor de cuenta corriente</b> podés <b>editar ✏️ o eliminar 🗑️</b> los movimientos <b>manuales</b> (los generados por una factura, guía o cobro quedan con candado 🔒: se corrigen desde su comprobante). Desde <b>Movimientos de ventas/compras</b> cada <b>cobro/OP</b> tiene el botón <b>↩️ Deshacer</b>, que <b>repone la deuda</b> y revierte el ingreso/egreso de caja, banco o cheque y el pago de la guía. <b>(3) Renombre:</b> "Facturación" pasó a llamarse <b>Movimientos de ventas</b> y "Compras" a <b>Movimientos de compras</b> (muestran todos los comprobantes de cada lado). <b>(4) Importadores anti-duplicados:</b> Cartas de porte (por N° CTG), Cheques (número+importe), Efectivo (fecha/caja/tipo/importe) y Créditos <b>ya no se duplican</b> si subís el mismo archivo dos veces; el resumen suma el contador <b>🔁 Duplicados</b>. <b>(5) Cobro/pago desde la Guía DT-e — pantalla completa:</b> el botón <b>💵 Registrar cobro/pago</b> de la guía ahora abre la <b>misma pantalla que Cuentas a cobrar/pagar</b> — con <b>caja del catálogo</b>, <b>cuenta bancaria</b>, <b>cheque con todos sus datos</b> y <b>varios medios</b>. Mueve la plata donde corresponde y genera el <b>recibo / orden de pago</b> en Movimientos de ventas/compras, y queda <b>reflejado en la guía</b> automáticamente. Los cobros/pagos se deshacen desde <b>Movimientos de ventas/compras (↩️)</b>. Además el gestor de pagos se abre también desde el <b>detalle de la guía</b>.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'26/08/2026',
       titulo:'📡 v2.131.0 — Caravana electrónica / collar: peso individual que suma al pesaje del lote',
       desc:'Ahora la <b>Ficha de animales</b> se puede <b>vincular a un lote (rodeo) de Costo de hacienda</b>: en la ficha, elegí el <b>Lote / rodeo</b>. Así la hacienda con <b>caravana electrónica o collar satelital</b> queda identificada individualmente y a la vez pertenece a su lote de engorde. Sumamos el <b>peso individual</b>: cuando cargás un evento de <b>Pesaje</b> en la ficha (a mano) o cuando un dispositivo manda el peso por el canal IoT (balanza en la manga / caravana con pesaje), se guarda como <b>último peso</b> del animal. Y desde el lote, el botón <b>⚖️ Pesaje desde balanzas</b> arma automáticamente el <b>pesaje del lote</b> sumando el peso de todas las fichas vinculadas (kg total + cabezas), sin tener que pesar la tropa entera a mano. En resumen: los <b>sensores viven en la Ficha</b> (individual) y el <b>costo/kg vive en el Rodeo</b> (lote), ahora conectados.' },
@@ -28113,31 +28113,57 @@ async function guiaSave(){
 // ---- Pagos a cuenta ----
 async function guiaPagos(id){
   let g; try{ g=(await api('/api/guias-hacienda/'+id)).data; }catch(e){ return toast(e.message,'error'); }
-  const hoy=new Date().toISOString().slice(0,10);
-  const pagos=(g.pagos||[]).map(p=>`<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td><td class="text-right whitespace-nowrap"><button class="btn btn-ghost text-xs" title="Editar" onclick='guiaPagoEdit(${JSON.stringify(id)},${JSON.stringify(p.id)},${JSON.stringify((p.fecha||"").slice(0,10))},${Number(p.monto)||0},${JSON.stringify(p.metodo||"efectivo")},${JSON.stringify(p.referencia||"")})'>✏️</button><button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='guiaPagoDel(${JSON.stringify(id)},${JSON.stringify(p.id)})'>🗑️</button></td></tr>`).join('')||`<tr><td colspan="5" class="text-slate-400 text-center py-2">Sin pagos.</td></tr>`;
+  const esCliente = g.contactoTipo==='cliente';
+  const esProv = g.contactoTipo==='proveedor';
+  const tieneContacto = (esCliente||esProv) && g.contactoId;
+  const accion = esCliente ? 'Registrar cobro' : 'Registrar pago';
+  const pagos=(g.pagos||[]).map(p=>{
+    const viaVentas = (p.observaciones||'')==='Cobro desde Cuenta corriente';
+    const acc = viaVentas
+      ? `<span class="text-[10px] text-slate-400" title="Se gestiona desde Movimientos de ventas/compras (Deshacer ↩️)">🔗 ventas</span>`
+      : `<button class="btn btn-ghost text-xs text-red-600" title="Eliminar (revierte caja/banco y comprobante)" onclick='guiaPagoDel(${JSON.stringify(id)},${JSON.stringify(p.id)})'>🗑️</button>`;
+    return `<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td><td class="text-right whitespace-nowrap">${acc}</td></tr>`;
+  }).join('')||`<tr><td colspan="5" class="text-slate-400 text-center py-2">Sin pagos.</td></tr>`;
   openModal({ title:`💵 Pagos a cuenta — guía ${esc(g.numeroDte||'')}`, size:'max-w-2xl',
     body:`<div class="text-sm mb-2">Total estimado ${fmt$(g.totalConIva)} · pagado ${fmt$(g.pagado)} · <b>saldo ${fmt$(g.saldoEstimado)}</b></div>
       <table class="data text-sm mb-3"><thead><tr><th>Fecha</th><th>Método</th><th>Ref.</th><th class="text-right">Monto</th><th></th></tr></thead><tbody>${pagos}</tbody></table>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 items-end p-3 bg-slate-50 rounded-lg border">
-        <div><label class="label text-xs">Fecha</label><input id="gp-fec" type="date" class="input text-sm" value="${hoy}"/></div>
-        <div><label class="label text-xs">Monto</label><input id="gp-monto" type="number" step="0.01" class="input text-sm text-right"/></div>
-        <div><label class="label text-xs">Método</label><select id="gp-metodo" class="input text-sm"><option value="efectivo">Efectivo</option><option value="banco">Banco/transferencia</option><option value="cheque">Cheque</option><option value="otro">Otro</option></select></div>
-        <div><label class="label text-xs">Referencia</label><input id="gp-ref" class="input text-sm"/></div>
-      </div>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button><button id="gp-save" class="btn btn-primary" onclick='guiaPagoAdd(${JSON.stringify(id)})'>+ Registrar pago</button>` });
+      ${tieneContacto
+        ? `<div class="text-[12px] text-slate-600 bg-slate-50 border rounded-lg p-3">💡 El ${esCliente?'cobro':'pago'} usa la pantalla completa (caja del catálogo, cuenta bancaria, cheque con sus datos, varios medios) y genera el ${esCliente?'recibo':'la orden de pago'} en Movimientos de ${esCliente?'ventas':'compras'}. Queda reflejado acá automáticamente.</div>`
+        : `<div class="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Esta guía no tiene cliente/proveedor con cuenta corriente (ej. frigorífico), así que no se registran cobros/pagos.</div>`}`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>${(tieneContacto && can('finanzas:create') && g.saldoEstimado>0)?`<button class="btn btn-primary" onclick='guiaPagoFull(${JSON.stringify(g.contactoTipo)},${JSON.stringify(g.contactoId)})'>💰 ${accion}</button>`:''}` });
   state._gpEdit=null;
+}
+// Abre la pantalla COMPLETA de cobro/pago (misma de Cuentas a cobrar/pagar) para la
+// guía: caja del catálogo, cuenta bancaria, cheque con datos, varios medios. Como el
+// cobro/pago cae sobre el renglón de la guía en la cuenta corriente, queda reflejado
+// en la guía automáticamente (genera recibo/OP en Movimientos de ventas/compras).
+function guiaPagoFull(tipo, contactoId){
+  closeModal();
+  setTimeout(()=>ccCobroPagoForm(tipo, contactoId), 60);
+}
+// Muestra el campo Caja (efectivo) o Cuenta bancaria (banco/transferencia) según el método.
+function guiaPagoMetodoUI(){
+  const m=document.getElementById('gp-metodo')?.value||'efectivo';
+  const caja=document.getElementById('gp-wrap-caja'); const banco=document.getElementById('gp-wrap-banco');
+  if(caja) caja.style.display=(m==='efectivo')?'':'none';
+  if(banco) banco.style.display=(m==='banco')?'':'none';
 }
 // Cargar un pago en el formulario para editarlo (el botón pasa a "Guardar cambios").
 function guiaPagoEdit(id,pagoId,fecha,monto,metodo,ref){
   state._gpEdit={ id, pagoId };
   const set=(k,v)=>{ const el=document.getElementById(k); if(el) el.value=v; };
   set('gp-fec',fecha||''); set('gp-monto',monto||''); set('gp-metodo',metodo||'efectivo'); set('gp-ref',ref||'');
+  guiaPagoMetodoUI();
   const b=document.getElementById('gp-save'); if(b) b.textContent='💾 Guardar cambios';
   document.getElementById('gp-monto')?.focus();
 }
 async function guiaPagoAdd(id){
   const monto=Number(document.getElementById('gp-monto')?.value||0); if(!monto||monto<=0) return toast('Cargá el monto','warn');
-  const data={ fecha:document.getElementById('gp-fec').value, monto, metodo:document.getElementById('gp-metodo').value, referencia:document.getElementById('gp-ref').value.trim()||null };
+  const metodo=document.getElementById('gp-metodo').value;
+  const data={ fecha:document.getElementById('gp-fec').value, monto, metodo, referencia:document.getElementById('gp-ref').value.trim()||null,
+    cajaDestino: metodo==='efectivo' ? (document.getElementById('gp-caja')?.value.trim()||null) : null,
+    bancoCuentaId: metodo==='banco' ? (document.getElementById('gp-banco')?.value||null) : null };
+  if(metodo==='banco' && !data.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn');
   const ed=state._gpEdit;
   try{
     if(ed && ed.id===id){
