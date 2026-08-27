@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.142.0';
+const AGROCORE_VERSION = '2.143.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2915,6 +2915,18 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     try { await sincronizarProductosHacienda(req.companyId); } catch {}
     try { await sincronizarProductosInsumos(req.companyId); } catch {}
     try { await sincronizarProductosCereales(req.companyId); } catch {}
+    try { await sincronizarProductosFichas(req.companyId); } catch {}
+    // Existencia de fichas de animales: CONTEO de fichas en el campo por especie+categoría
+    // (no cuentan vendidas/prestadas/baja). Es la fuente de verdad de su stock.
+    let fichaByNombre = {};
+    try {
+      const _fw = { companyId: req.companyId, estado: { in: ANI_ESTADOS_EN_CAMPO } };
+      const fichas = await prisma.animal.findMany({ where: _fw, select: { especie: true, categoria: true } });
+      for (const a of fichas) {
+        const n = _fichaProdNombre(a.especie, a.categoria);
+        fichaByNombre[n] = (fichaByNombre[n] || 0) + 1;
+      }
+    } catch {}
     // Mapa nombre→tipo de insumo (Herbicida, Fertilizante, ...) para etiquetar cada fila.
     let insTipoMap = {};
     try { insTipoMap = await insumoNombreATipo(req.companyId); } catch {}
@@ -2992,6 +3004,11 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       if ((p.categoria || '').toLowerCase() === 'hacienda') {
         const h = hacByCat[p.categoriaHacienda || p.nombre] || { cabezas: 0, kilos: 0 };
         return { ...p, existencia: h.cabezas, kilos: Math.round(h.kilos), esHacienda: true, bajoMinimo: h.cabezas < Number(p.stockMinimo || 0) };
+      }
+      // Fichas de animales: existencia = conteo de fichas en el campo (no de Movimiento).
+      if ((p.categoria || '') === 'Animales') {
+        const cab = fichaByNombre[p.nombre] || 0;
+        return { ...p, existencia: cab, esFicha: true, bajoMinimo: cab < Number(p.stockMinimo || 0) };
       }
       const ing = movs.find((m) => m.productoId === p.id && m.tipo === 'ingreso')?._sum?.cantidad || 0;
       const egr = movs.find((m) => m.productoId === p.id && m.tipo === 'egreso')?._sum?.cantidad || 0;
@@ -6831,6 +6848,66 @@ async function sincronizarProductosHacienda(companyId) {
     byCatHac.add(nombre.toLowerCase());
   }
 }
+// ============================================================
+// FICHAS DE ANIMALES ↔ STOCK GENERAL
+// Cada ficha individual (Animal) suma 1 cabeza al stock general, agrupada por
+// especie + categoría (ej. "Equino · Potrillo"). Solo cuentan las que están EN
+// EL CAMPO; NO suman las Vendidas, Prestadas (afuera) ni de Baja.
+// El stock se calcula por CONTEO de fichas (fuente de verdad); además se dejan
+// movimientos de historial para ver cómo se mueve.
+// ============================================================
+const ANI_ESPECIE_LABEL = { equino: 'Equino', bovino: 'Bovino', porcino: 'Porcino', otro: 'Otro' };
+// Estados que SÍ cuentan como stock del campo (excluye vendido, prestado, baja).
+const ANI_ESTADOS_EN_CAMPO = ['cria','recria','doma','hechura','jugando','servicio','gestacion','disponible_venta','activo'];
+// Categorías de equinos "de fábrica" para el catálogo (se pueden agregar más).
+const EQUINO_CATEGORIAS_BASE = [
+  'Padrillo','Yegua madre','Yegua','Potrillo','Potranca','Potro','Redomón','Caballo',
+  'Caballo castrado','Petiso','Petiso de polo','Caballo de polo','Caballo de salto',
+  'Caballo de carrera','Caballo de trabajo','Caballo de escuela','Falabella','Mula','Burro / Asno',
+];
+function _fichaProdNombre(especie, categoria) {
+  const esp = ANI_ESPECIE_LABEL[especie] || (especie || 'Animal');
+  const cat = (categoria || '').trim() || 'Sin categoría';
+  return `${esp} · ${cat}`;
+}
+// Crea (si faltan) los Productos de fichas: uno por especie+categoría presentes en
+// las fichas + todas las categorías de equinos del catálogo. Categoría raíz 'Animales'.
+async function sincronizarProductosFichas(companyId) {
+  const animales = await prisma.animal.findMany({ where: { companyId }, select: { especie: true, categoria: true } });
+  const pares = new Set();
+  for (const a of animales) pares.add(`${a.especie || 'equino'}||${(a.categoria || '').trim() || 'Sin categoría'}`);
+  // Sumar catálogo de equinos (para que aparezcan aunque tengan 0)
+  for (const c of EQUINO_CATEGORIAS_BASE) pares.add(`equino||${c}`);
+  // Categorías de equino que el usuario haya agregado al catálogo de animales.
+  try {
+    const cats = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId, especie: 'equino' }, select: { nombre: true } });
+    for (const c of cats) if ((c.nombre || '').trim()) pares.add(`equino||${c.nombre.trim()}`);
+  } catch {}
+  const prods = await prisma.producto.findMany({ where: { companyId, categoria: 'Animales' }, select: { nombre: true } });
+  const have = new Set(prods.map(p => (p.nombre || '').toLowerCase()));
+  for (const key of pares) {
+    const [esp, cat] = key.split('||');
+    const nombre = _fichaProdNombre(esp, cat);
+    if (have.has(nombre.toLowerCase())) continue;
+    await prisma.producto.create({ data: { companyId, categoria: 'Animales', nombre, unidad: 'cabeza', stockMinimo: 0, activo: true } });
+    have.add(nombre.toLowerCase());
+  }
+}
+// Registra un movimiento de historial de stock para una ficha (no es la fuente de
+// verdad del stock —eso es el conteo— pero deja trazabilidad en Movimientos).
+async function _movFicha(db, companyId, animal, tipo, motivo, fecha) {
+  try {
+    const nombre = _fichaProdNombre(animal.especie, animal.categoria);
+    let prod = await db.producto.findFirst({ where: { companyId, categoria: 'Animales', nombre }, select: { id: true } });
+    if (!prod) prod = await db.producto.create({ data: { companyId, categoria: 'Animales', nombre, unidad: 'cabeza', stockMinimo: 0, activo: true }, select: { id: true } });
+    await db.movimiento.create({ data: {
+      companyId, productoId: prod.id, fecha: fecha || new Date(), tipo, motivo,
+      cantidad: 1, referencia: `FICHA-${animal.id}`,
+      observaciones: `${animal.nombre || 'Animal'}${animal.categoria ? ' · ' + animal.categoria : ''}`,
+    }});
+  } catch (e) { /* historial best-effort */ }
+}
+
 // Tipos de insumo "de fábrica" + los que el usuario haya agregado en Catálogos → Tipos de insumo.
 // Debe coincidir con LEGACY_INS_TIPOS del frontend (AgroCore-web.html).
 const INSUMO_TIPOS_BASE = ['Herbicida', 'Insecticida', 'Fungicida', 'Fertilizante', 'Semilla', 'Coadyuvante', 'Insumo'];
@@ -9580,6 +9657,10 @@ app.post('/api/animales', requireCompany, requirePermission('stock:create'), asy
       externo: !!d.externo, propietario: d.propietario || null, observaciones: d.observaciones || null,
       foto: d.foto || null,
     }});
+    // Ficha nueva EN EL CAMPO → suma 1 al stock (historial). Las externas (de terceros) no.
+    if (!row.externo && ANI_ESTADOS_EN_CAMPO.includes(row.estado)) {
+      await _movFicha(prisma, req.companyId, row, 'ingreso', 'alta ficha', row.fechaIngreso || new Date());
+    }
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -9594,6 +9675,20 @@ app.put('/api/animales/:id', requireCompany, requirePermission('stock:update'), 
       .forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
     if (d.nombre !== undefined) data.nombre = String(d.nombre).trim();
     const row = await prisma.animal.update({ where: { id: cur.id }, data });
+    // Reconciliar historial de stock si cambió la categoría o el estado (entra/sale del campo).
+    try {
+      const antesEnCampo = !cur.externo && ANI_ESTADOS_EN_CAMPO.includes(cur.estado);
+      const ahoraEnCampo = !row.externo && ANI_ESTADOS_EN_CAMPO.includes(row.estado);
+      const catCambio = (cur.categoria || '') !== (row.categoria || '') || (cur.especie || '') !== (row.especie || '');
+      if (antesEnCampo && !ahoraEnCampo) {
+        await _movFicha(prisma, req.companyId, cur, 'egreso', 'baja de stock (ficha)', new Date());
+      } else if (!antesEnCampo && ahoraEnCampo) {
+        await _movFicha(prisma, req.companyId, row, 'ingreso', 'reingreso (ficha)', new Date());
+      } else if (antesEnCampo && ahoraEnCampo && catCambio) {
+        await _movFicha(prisma, req.companyId, cur, 'egreso', 'cambio de categoría', new Date());
+        await _movFicha(prisma, req.companyId, row, 'ingreso', 'cambio de categoría', new Date());
+      }
+    } catch {}
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -9614,10 +9709,15 @@ app.post('/api/animales/:id/vender', requireCompany, requirePermission('stock:up
         concepto: 'Venta' + (ref ? ' · ' + ref : ''), costo: 0, moneda,
         datos: JSON.stringify({ precioVenta: precio, moneda, clienteId, ref }),
       }});
-      return tx.animal.update({ where: { id: cur.id }, data: {
+      const upd = await tx.animal.update({ where: { id: cur.id }, data: {
         estado: 'vendido', fechaVenta: fecha, precioVenta: precio, monedaVenta: moneda,
         clienteId, ventaRef: ref,
       }});
+      // Si estaba en el campo, sale del stock (egreso de historial).
+      if (!cur.externo && ANI_ESTADOS_EN_CAMPO.includes(cur.estado)) {
+        await _movFicha(tx, req.companyId, cur, 'egreso', 'venta', fecha);
+      }
+      return upd;
     });
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
@@ -9644,6 +9744,63 @@ app.post('/api/animales/:id/mover', requireCompany, requirePermission('stock:upd
   } catch (e) { next(e); }
 });
 
+// Prestar un animal: sale del campo (provisorio, puede volver). NO suma al stock.
+app.post('/api/animales/:id/prestar', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    if (cur.estado === 'vendido') return res.status(400).json({ ok: false, error: 'El animal está vendido; no se puede prestar.' });
+    const prestadoA = (req.body.prestadoA || '').trim();
+    if (!prestadoA) return res.status(400).json({ ok: false, error: 'Indicá a quién / dónde se presta.' });
+    const fecha = req.body.fecha ? new Date(req.body.fecha) : new Date();
+    const vuelta = req.body.vuelta ? new Date(req.body.vuelta) : null;
+    const row = await prisma.$transaction(async (tx) => {
+      await tx.animalEvento.create({ data: {
+        companyId: req.companyId, animalId: cur.id, fecha, tipo: 'traslado',
+        concepto: `🤝 Prestado a ${prestadoA}${vuelta ? ' · vuelve ' + vuelta.toISOString().slice(0,10) : ''}`,
+        costo: 0, moneda: cur.moneda || 'ARS', observaciones: req.body.observaciones || null,
+      }});
+      const upd = await tx.animal.update({ where: { id: cur.id }, data: {
+        estado: 'prestado', prestadoA, prestamoFecha: fecha, prestamoVuelta: vuelta,
+      }});
+      if (!cur.externo && ANI_ESTADOS_EN_CAMPO.includes(cur.estado)) {
+        await _movFicha(tx, req.companyId, cur, 'egreso', 'préstamo (sale del campo)', fecha);
+      }
+      return upd;
+    });
+    // Recordatorio de vuelta (si hay fecha estimada) — best-effort.
+    if (vuelta) { try { await prisma.recordatorio.create({ data: {
+      companyId: req.companyId, titulo: `Vuelve caballo prestado: ${cur.nombre}`,
+      descripcion: `Prestado a ${prestadoA}`, fecha: vuelta, categoria: 'general',
+      prioridad: 'media', completado: false,
+    }}); } catch {} }
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Devolver un animal prestado: vuelve al campo (reingresa al stock).
+app.post('/api/animales/:id/devolver', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    const fecha = req.body.fecha ? new Date(req.body.fecha) : new Date();
+    const nuevoEstado = req.body.estado && ANI_ESTADOS_EN_CAMPO.includes(req.body.estado) ? req.body.estado : 'activo';
+    const row = await prisma.$transaction(async (tx) => {
+      await tx.animalEvento.create({ data: {
+        companyId: req.companyId, animalId: cur.id, fecha, tipo: 'traslado',
+        concepto: `↩️ Devuelto del préstamo${cur.prestadoA ? ' (' + cur.prestadoA + ')' : ''}`,
+        costo: 0, moneda: cur.moneda || 'ARS', observaciones: req.body.observaciones || null,
+      }});
+      const upd = await tx.animal.update({ where: { id: cur.id }, data: {
+        estado: nuevoEstado, prestadoA: null, prestamoFecha: null, prestamoVuelta: null,
+      }});
+      if (!cur.externo) await _movFicha(tx, req.companyId, upd, 'ingreso', 'devolución de préstamo', fecha);
+      return upd;
+    });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
 app.delete('/api/animales/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
   try {
     const cur = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
@@ -9651,6 +9808,8 @@ app.delete('/api/animales/:id', requireCompany, requirePermission('stock:delete'
     // revertir egresos de stock generados por eventos (consumo imputado)
     const evs = await prisma.animalEvento.findMany({ where: { animalId: cur.id, movimientoStockId: { not: null } } });
     for (const e of evs) { try { await prisma.movimiento.delete({ where: { id: e.movimientoStockId } }); } catch {} }
+    // Borrar los movimientos de historial de stock de esta ficha.
+    try { await prisma.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: `FICHA-${cur.id}` } }); } catch {}
     await prisma.animal.delete({ where: { id: cur.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }

@@ -1433,6 +1433,10 @@ model Animal {
   // Último peso individual conocido (de balanza / caravana con pesaje / pesaje manual)
   pesoKg        Float?
   pesoFecha     DateTime?
+  // Préstamo (animal prestado / afuera jugando; puede volver — no suma al stock del campo)
+  prestadoA     String?                         // a quién se prestó / dónde está (texto)
+  prestamoFecha DateTime?                       // cuándo salió
+  prestamoVuelta DateTime?                      // fecha estimada de vuelta
   // Otros
   externo       Boolean  @default(false)        // true = de un tercero (pensión / hotelería)
   propietario   String?                         // dueño si es externo

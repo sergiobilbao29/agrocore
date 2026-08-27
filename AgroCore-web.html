@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/08/2026',
+      titulo:'🐎 v2.143.0 — Las Fichas de animales suman al Stock general + Prestar/Devolver caballos',
+      desc:'Ahora cada <b>ficha de animal</b> cuenta como <b>1 cabeza en el Stock general</b>, agrupada por <b>Animal → Equino → categoría</b> (Padrillo, Yegua madre, Potrillo…). En <b>Stock</b> aparece la categoría <b>Animales</b> con el total por tipo, y en <b>Movimientos</b> se ve cómo se mueve (alta, venta, préstamo, devolución). <b>Qué NO suma al campo:</b> los <b>Vendidos</b> (queda el registro de a quién se vendió, filtrable), los <b>Prestados</b> (afuera, pueden volver) y las <b>Bajas</b>. <b>Prestar / Devolver:</b> en la ficha, botón <b>🤝 Prestar</b> (a quién/dónde, fecha, vuelta estimada → agenda recordatorio) saca el caballo del campo de forma provisoria; cuando vuelve, <b>↩️ Devolver</b> lo reintegra al stock. Además sumamos al <b>catálogo</b> todas las categorías de equinos y un desplegable para elegirlas en la ficha. <i>Las fichas de terceros (pensión/hotelería) no suman al stock propio.</i>' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
       titulo:'🧾 v2.142.0 — Al pasar una factura de Contado a Cuenta corriente, se borra el ingreso de la caja',
       desc:'Cuando una venta de <b>Contado a Consumidor final</b> registraba el ingreso en la caja y después la <b>editabas a Cuenta corriente</b>, el movimiento de caja quedaba dado (sin borrarse). Ahora ese ingreso queda <b>vinculado a la factura</b>: al editarla (cambiar la condición, el importe o el medio) o al eliminarla, el sistema <b>revierte automáticamente</b> el ingreso de la caja/banco y lo vuelve a crear según cómo quede la factura. Así la caja siempre refleja lo correcto.' },
@@ -27535,6 +27538,7 @@ function guiaEstadoBadge(e){
 // FICHAS DE ANIMALES — ficha individual (360°) genérica (equino/bovino/porcino)
 // ══════════════════════════════════════════════════════════════════════════════
 const ANI_ESPECIES = { equino:'🐎 Equino', bovino:'🐄 Bovino', porcino:'🐖 Porcino', otro:'🐾 Otro' };
+const EQUINO_CATEGORIAS = ['Padrillo','Yegua madre','Yegua','Potrillo','Potranca','Potro','Redomón','Caballo','Caballo castrado','Petiso','Petiso de polo','Caballo de polo','Caballo de salto','Caballo de carrera','Caballo de trabajo','Caballo de escuela','Falabella','Mula','Burro / Asno'];
 const ANI_ESTADOS = {
   cria:'Cría', recria:'Recría', doma:'Doma', hechura:'Hechura/Escuela', jugando:'Jugando',
   servicio:'En servicio', gestacion:'Gestación', disponible_venta:'Disponible venta',
@@ -27634,7 +27638,8 @@ function aniForm(id){
         <div><label class="label">Nombre *</label><input id="an-nombre" class="input" value="${esc(dv(a.nombre))}"/></div>
         <div><label class="label">Especie</label><select id="an-esp" class="input">${espOpts}</select></div>
         <div><label class="label">Sexo</label><select id="an-sexo" class="input">${['','macho','hembra','castrado'].map(s=>`<option value="${s}" ${(a.sexo||'')===s?'selected':''}>${s||'—'}</option>`).join('')}</select></div>
-        <div><label class="label">Categoría</label><input id="an-cat" class="input" placeholder="Potrillo, Yegua madre, Padrillo, Vaca…" value="${esc(dv(a.categoria))}"/></div>
+        <div><label class="label">Categoría</label><input id="an-cat" class="input" list="an-cat-list" placeholder="Potrillo, Yegua madre, Padrillo…" value="${esc(dv(a.categoria))}"/>
+          <datalist id="an-cat-list">${EQUINO_CATEGORIAS.map(c=>`<option value="${esc(c)}"></option>`).join('')}</datalist></div>
         <div><label class="label">Estado</label><select id="an-estado" class="input">${estOpts}</select></div>
         <div><label class="label">Fecha de nacimiento</label><input id="an-nac" type="date" class="input" value="${dt(a.fechaNac)}"/></div>
         <div><label class="label">Pelaje / color</label><input id="an-pelaje" class="input" value="${esc(dv(a.pelaje))}"/></div>
@@ -27790,6 +27795,8 @@ async function aniVer(id){
             ${canU?`<button class="btn btn-ghost text-xs" onclick='aniForm(${JSON.stringify(a.id)})'>✏️ Editar</button>`:''}
             ${canU?`<button class="btn btn-ghost text-xs" onclick='document.getElementById("ani-foto-directa").click()'>📷 ${a.foto?'Cambiar':'Agregar'} foto</button>`:''}
             ${canU?`<button class="btn btn-ghost text-xs" onclick='aniMoverForm(${JSON.stringify(a.id)})'>📍 Mover</button>`:''}
+            ${(canU&&a.estado==='prestado')?`<button class="btn btn-secondary text-xs" onclick='aniDevolver(${JSON.stringify(a.id)})'>↩️ Devolver</button>`:''}
+            ${(canU&&a.estado!=='vendido'&&a.estado!=='prestado'&&a.estado!=='baja'&&!a.externo)?`<button class="btn btn-ghost text-xs" onclick='aniPrestarForm(${JSON.stringify(a.id)})'>🤝 Prestar</button>`:''}
             <button class="btn btn-ghost text-xs" onclick='aniCertificado(${JSON.stringify(a.id)})' title="Certificado de traslado / DT-e equino imprimible">🧾 Certificado</button>
             ${(canU&&a.estado!=='vendido')?`<button class="btn btn-secondary text-xs" onclick='aniVenderForm(${JSON.stringify(a.id)})'>💰 Vender</button>`:''}
             ${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='aniDel(${JSON.stringify(a.id)})'>🗑️</button>`:''}
@@ -27808,6 +27815,8 @@ async function aniVer(id){
         ${dl('Padre',a.padreNombre)}${dl('Madre',a.madreNombre)}${dl('Receptora (TE)',a.receptoraNombre)}${a.externo?dl('Propietario',a.propietario||'Tercero'):''}
         ${a.rodeoId?dl('Lote / rodeo',((state._aniRodeos||[]).find(r=>r.id===a.rodeoId)||{}).nombre||'—'):''}
         ${a.pesoKg!=null?dl('Último peso',`${fmtN(a.pesoKg)} kg${a.pesoFecha?' · '+fmtFecha(a.pesoFecha):''}`):''}
+        ${a.estado==='prestado'?dl('Prestado a',`${esc(a.prestadoA||'—')}${a.prestamoVuelta?' · vuelve '+fmtFecha(a.prestamoVuelta):''}`):''}
+        ${a.estado==='vendido'&&a.clienteId?dl('Vendido a',(((state.cache.clientes||[]).find(c=>c.id===a.clienteId)||{}).razonSocial)||a.ventaRef||'cliente'):''}
       </div>
       ${(a.hijos&&a.hijos.length)?`<div class="mb-4">
         <div class="font-semibold text-slate-700 mb-1">Descendencia (${a.hijos.length})</div>
@@ -27996,6 +28005,36 @@ async function aniVenderSave(id){
   if(!precio||precio<=0) return toast('Poné el precio de venta','warn');
   try{ await api('/api/animales/'+id+'/vender',{method:'POST',body:JSON.stringify({ fecha:g('av-fecha').value, precioVenta:precio, monedaVenta:g('av-moneda').value, ventaRef:g('av-ref').value||null })});
     toast('Venta registrada','success'); closeModal(); pages.animales(); }
+  catch(e){ toast(e.message,'error'); }
+}
+function aniPrestarForm(id){
+  const a=state._aniActual||{}; const hoy=new Date().toISOString().slice(0,10);
+  openModal({ title:'🤝 Prestar animal', size:'max-w-md',
+    body:`
+      <p class="text-xs text-slate-500 mb-2">El animal sale del campo de forma <b>provisoria</b> (puede volver). Mientras está prestado <b>no suma al stock del campo</b>. Cuando vuelva, usá <b>↩️ Devolver</b>.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Prestado a / dónde *</label><input id="pr-a" class="input" placeholder="Ej: Cancha de polo Bs. As. · Juan Pérez"/></div>
+        <div><label class="label">Fecha</label><input id="pr-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label">Vuelve (estimado)</label><input id="pr-vuelta" type="date" class="input"/></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><input id="pr-obs" class="input"/></div>
+      </div>
+      <div class="text-[11px] text-slate-400 mt-2">Si ponés fecha de vuelta, se agenda un recordatorio.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='aniPrestarSave(${JSON.stringify(id)})'>Prestar</button>`
+  });
+}
+async function aniPrestarSave(id){
+  const g=x=>document.getElementById(x);
+  const prestadoA=(g('pr-a').value||'').trim();
+  if(!prestadoA) return toast('Indicá a quién / dónde se presta','warn');
+  try{ await api('/api/animales/'+id+'/prestar',{method:'POST',body:JSON.stringify({ prestadoA, fecha:g('pr-fecha').value, vuelta:g('pr-vuelta').value||null, observaciones:g('pr-obs').value||null })});
+    toast('Animal prestado (sale del stock del campo)','success'); closeModal(); pages.animales(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function aniDevolver(id){
+  if(!confirm('¿Confirmás que el animal volvió? Vuelve al stock del campo.')) return;
+  try{ await api('/api/animales/'+id+'/devolver',{method:'POST',body:JSON.stringify({ fecha:new Date().toISOString().slice(0,10) })});
+    toast('Animal devuelto, vuelve al stock','success'); closeModal(); pages.animales(); }
   catch(e){ toast(e.message,'error'); }
 }
 function aniMoverForm(id){
