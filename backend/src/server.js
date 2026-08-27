@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.141.0';
+const AGROCORE_VERSION = '2.142.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3678,6 +3678,9 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
       const _clase = input.clase || 'factura';
       await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'VTA', facturaId: req.params.id });
       await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FAC', facturaId: req.params.id });
+      // Revertir un eventual cobro de CONTADO de Consumidor final (ingreso directo a caja/banco).
+      await tx.efectivo.deleteMany({ where: { companyId: req.companyId, referencia: `FACCOB-${req.params.id}` } });
+      await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, referencia: `FACCOB-${req.params.id}` } });
       await tx.facturaItem.deleteMany({ where: { facturaId: req.params.id } });
       const f = await tx.factura.update({
         where: { id: req.params.id },
@@ -3975,6 +3978,8 @@ app.delete('/api/facturas/:id', requireCompany, requirePermission('ventas:delete
     await prisma.$transaction(async (tx) => {
       await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'VTA', facturaId: req.params.id });
       await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FAC', facturaId: req.params.id });
+      await tx.efectivo.deleteMany({ where: { companyId: req.companyId, referencia: `FACCOB-${req.params.id}` } });
+      await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, referencia: `FACCOB-${req.params.id}` } });
       await tx.factura.delete({ where: { id: req.params.id } }); // items caen por onDelete: Cascade
     });
     res.json({ ok: true });
@@ -13287,6 +13292,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       // Contraparte opcional (texto libre) — solo descriptivo
       contraparte: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      referencia: z.string().nullable().optional(),   // vínculo con otro módulo (ej. FACCOB-<facturaId>)
     });
     const d = schema.parse(req.body);
     const detalleObs = [
@@ -13308,6 +13314,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
           monto: d.monto,
           caja: d.caja || null,
           clasificacion: d.clasificacion || 'empresa',
+          referencia: d.referencia || null,
           observaciones: detalleObs || null,
         },
       });
@@ -13328,6 +13335,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
           concepto: d.concepto,
           monto: d.monto,
           contraparte: d.contraparte || null,
+          referencia: d.referencia || null,
           observaciones: detalleObs || null,
           userId: req.user?.id || null,
         },

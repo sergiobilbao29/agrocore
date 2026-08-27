@@ -858,6 +858,7 @@ model Efectivo {
   caja          String?    // caja de origen (o caja única para ingreso/egreso)
   cajaDestino   String?    // caja de destino (solo para transferencia entre cajas)
   clasificacion String?    // "empresa" | "propio" (para ingresos y egresos)
+  referencia    String?    // vínculo con otro módulo (ej. FACCOB-<facturaId> para revertir)
   observaciones String?
   createdAt     DateTime @default(now())
 
@@ -865,6 +866,7 @@ model Efectivo {
 
   @@index([companyId])
   @@index([fecha])
+  @@index([referencia])
 }
 
 model FlujoCaja {

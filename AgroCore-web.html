@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
+      titulo:'🧾 v2.142.0 — Al pasar una factura de Contado a Cuenta corriente, se borra el ingreso de la caja',
+      desc:'Cuando una venta de <b>Contado a Consumidor final</b> registraba el ingreso en la caja y después la <b>editabas a Cuenta corriente</b>, el movimiento de caja quedaba dado (sin borrarse). Ahora ese ingreso queda <b>vinculado a la factura</b>: al editarla (cambiar la condición, el importe o el medio) o al eliminarla, el sistema <b>revierte automáticamente</b> el ingreso de la caja/banco y lo vuelve a crear según cómo quede la factura. Así la caja siempre refleja lo correcto.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
       titulo:'🐎 v2.141.0 — Ficha del animal con foto tipo currículum + cobro de Contado obligatorio',
       desc:'<b>(1) Ficha más prolija:</b> la <b>foto</b> del animal ahora va <b>a la izquierda</b> (tamaño currículum) y al lado los datos y KPIs, aprovechando mejor el espacio. Si no hay foto se ve un recuadro para cargarla con <b>📷 Agregar foto</b>. En el <b>listado</b> de animales cada ficha muestra su miniatura. <b>(2) Contado: cobro obligatorio.</b> Si la venta es de <b>Contado</b> y no elegís cómo entra la plata, ya <b>no</b> se guarda “sin registrar”: el sistema te <b>lleva al bloque de Cobro</b> y te pide elegir el medio (efectivo→caja, transferencia→banco, cheque, etc.). Si querés dejarla a cobrar, cambiá la condición a <b>Cuenta corriente</b>. <b>(3) Calendario:</b> las ventas a plazo aparecen en el <b>mes del vencimiento</b> (no en el mes actual). Para verlas, movete a ese mes con “mes siguiente ›” o usá la vista <b>📋 Lista</b>; en el <b>Flujo de fondos</b> ya se ven proyectadas.' },
@@ -12242,7 +12245,7 @@ async function factCrearClienteDesdePDF(){
 // Registra el cobro de una venta de CONTADO. Si hay cliente, aplica el cobro a su
 // cuenta corriente (mueve caja/banco/cheque). Si es Consumidor final (sin cliente),
 // registra un ingreso directo a la caja/banco elegidos (no hay cuenta que saldar).
-async function _cobroContadoDesdeVenta(data, items) {
+async function _cobroContadoDesdeVenta(facturaId, data, items) {
   if (data.condicionVenta !== 'Contado') return;
   const clienteId = document.getElementById('f-cli')?.value || null;
   const metodo = document.getElementById('vent-met')?.value;
@@ -12268,8 +12271,9 @@ async function _cobroContadoDesdeVenta(data, items) {
       if (metodo === 'tarjeta')       cobroBody.cajaDestino   = document.getElementById('vent-tarjeta')?.value || null;
       await api('/api/cobros-clientes', { method:'POST', body: JSON.stringify(cobroBody) });
     } else {
-      // Consumidor final: ingreso directo (Movimientos de ventas / caja).
-      const mov = { fecha: data.fecha, tipo: 'ingreso', concepto: 'Venta contado factura ' + compTxt, monto: total, metodo, clasificacion: 'empresa' };
+      // Consumidor final: ingreso directo (Movimientos de ventas / caja), vinculado a la
+      // factura con referencia FACCOB-<id> para poder revertirlo si se edita/elimina.
+      const mov = { fecha: data.fecha, tipo: 'ingreso', concepto: 'Venta contado factura ' + compTxt, monto: total, metodo, clasificacion: 'empresa', referencia: facturaId ? ('FACCOB-'+facturaId) : null };
       if (metodo === 'efectivo')      mov.caja = document.getElementById('vent-caja')?.value || null;
       else if (metodo === 'externo')  mov.caja = document.getElementById('vent-medio')?.value || null;
       else if (metodo === 'tarjeta')  mov.caja = document.getElementById('vent-tarjeta')?.value || null;
@@ -12367,8 +12371,9 @@ async function factSave() {
   }
   try {
     if (state._factEdit) {
-      await api('/api/facturas/'+state._factEdit, { method:'PUT', body: JSON.stringify(data) });
-      await _cobroContadoDesdeVenta(data, items);
+      const _editId = state._factEdit;
+      await api('/api/facturas/'+_editId, { method:'PUT', body: JSON.stringify(data) });
+      await _cobroContadoDesdeVenta(_editId, data, items);
       toast('Factura actualizada','success');
       state._factEdit = null;
       delete state.cache.stockMap; delete state.cache.facturas; delete state.cache.ctasCtes;
@@ -12379,7 +12384,7 @@ async function factSave() {
     toast((externa?'Factura ARCA registrada':'Factura autorizada')+' · CAE '+r.data.cae,'success');
     delete state.cache.stockMap;
     // Si condición Contado + método elegido, registrar el cobro / ingreso.
-    await _cobroContadoDesdeVenta(data, items);
+    await _cobroContadoDesdeVenta(facturaId, data, items);
     closeModal(); pages.facturacion();
   } catch (e) { toast(e.message,'error'); }
 }
