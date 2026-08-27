@@ -64,8 +64,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.131.0';
-const AGROCORE_BUILD = new Date('2026-07-27').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.132.0';
+const AGROCORE_BUILD = new Date('2026-08-26').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -1184,8 +1184,61 @@ app.post('/api/documentos/backfill-op', requireCompany, requirePermission('finan
 app.post('/api/documentos/:id/revertir', requireCompany, requirePermission('finanzas:delete'), async (req, res) => {
   try {
     const doc = await prisma.documentoEmitido.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
-    if (!doc) return res.status(404).json({ ok:false, error:'OP no encontrada' });
-    if (doc.tipo !== 'orden_pago') return res.status(400).json({ ok:false, error:'Solo se puede deshacer una Orden de Pago' });
+    if (!doc) return res.status(404).json({ ok:false, error:'Comprobante no encontrado' });
+    if (doc.tipo !== 'orden_pago' && doc.tipo !== 'recibo_cobro') return res.status(400).json({ ok:false, error:'Solo se puede deshacer una Orden de Pago o un Recibo de cobro' });
+
+    // ============ DESHACER RECIBO DE COBRO (cliente) ============
+    // Revierte el/los asiento(s) "Cobro de..." en la cuenta corriente, el recurso
+    // recibido (efectivo/banco), el pago de la guía si el cobro era de una guía, y
+    // reabre la deuda cobrada. Best-effort con avisos, igual que la OP.
+    if (doc.tipo === 'recibo_cobro') {
+      const companyId = req.companyId;
+      const rec = doc.datos || {};
+      const total = Number(doc.total || rec.monto || 0);
+      const cli = doc.contactoId ? await prisma.cliente.findFirst({ where: { id: doc.contactoId, companyId } }) : null;
+      const warns = [];
+      await prisma.$transaction(async (tx) => {
+        // 1) Asientos "Cobro de..." del cliente en la fecha del recibo → borrarlos y reabrir su deuda.
+        const desde = new Date(new Date(doc.fecha).getTime() - 2 * 86400000);
+        const hasta = new Date(new Date(doc.fecha).getTime() + 2 * 86400000);
+        const cobros = await tx.ctaCte.findMany({ where: {
+          companyId, contactoTipo: 'cliente', contactoId: doc.contactoId,
+          detalle: { startsWith: 'Cobro de' }, haber: { gt: 0 }, fecha: { gte: desde, lte: hasta },
+        }});
+        let restante = total; const refsReabrir = new Set();
+        for (const r of cobros.sort((a,b)=>Math.abs(new Date(a.fecha)-new Date(doc.fecha))-Math.abs(new Date(b.fecha)-new Date(doc.fecha)))) {
+          if (restante <= 0.01) break;
+          await tx.ctaCte.delete({ where: { id: r.id } });
+          if (r.referencia) refsReabrir.add(r.referencia);
+          restante = Math.round((restante - Number(r.haber || 0)) * 100) / 100;
+        }
+        for (const ref of refsReabrir) {
+          await tx.ctaCte.updateMany({ where: { companyId, contactoTipo:'cliente', contactoId: doc.contactoId, referencia: ref, debe:{ gt:0 } }, data:{ pagado:false } });
+          // 2) Si el cobro era de una guía DT-e, borrar el pago de la guía asociado.
+          if (/^GUIAH-/.test(ref)) {
+            const guiaId = ref.replace(/^GUIAH-/, '');
+            await tx.guiaHaciendaPago.deleteMany({ where: { companyId, guiaId, observaciones: 'Cobro desde Cuenta corriente' } });
+          }
+        }
+        if (!cobros.length) warns.push('No encontré el asiento de cobro en la cuenta corriente; revisalo manualmente.');
+        // 3) Recurso recibido (efectivo / banco) por el nombre del cliente y monto.
+        if (cli && total > 0.01) {
+          const efe = await tx.efectivo.findMany({ where: { companyId, tipo:'ingreso', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
+          const efeT = efe.filter(e => Math.abs(Number(e.monto) - total) < Math.max(1, total*0.02));
+          if (efeT.length) { for (const e of efeT.slice(0,1)) await tx.efectivo.delete({ where: { id: e.id } }); }
+          else {
+            const ban = await tx.bancoMovimiento.findMany({ where: { companyId, tipo:'transferencia_in', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
+            const banT = ban.filter(b => Math.abs(Number(b.monto) - total) < Math.max(1, total*0.02));
+            if (banT.length) { for (const b of banT.slice(0,1)) await tx.bancoMovimiento.delete({ where: { id: b.id } }); }
+            else warns.push('No pude ubicar de forma unívoca el ingreso de caja/banco del cobro; revisá Tesorería y ajustalo a mano si corresponde. Si el cobro fue con cheque, el cheque quedó en cartera.');
+          }
+        }
+        // 4) Borrar el recibo.
+        await tx.documentoEmitido.delete({ where: { id: doc.id } });
+      });
+      return res.json({ ok:true, warnings: warns });
+    }
+
     const op = doc.datos || {};
     const companyId = req.companyId;
     // Ubicar el recurso si no vino linkeado (OP nuevas).
@@ -4780,6 +4833,22 @@ mountCrud({
   }),
   orderBy: { fecha: 'desc' },
   searchFields: ['detalle', 'nombreLibre', 'referencia', 'categoria'],
+  // Solo se pueden borrar movimientos MANUALES desde el visor. Los asientos que
+  // genera un comprobante (factura, guía, liquidación, cobro/pago) se deshacen
+  // desde su comprobante ("Deshacer" en Movimientos de ventas/compras) para que
+  // se reponga la deuda y el recurso asociado. Así no quedan saldos inconsistentes.
+  bloquearSi: (row) => {
+    const ref = String(row.referencia || '');
+    const det = String(row.detalle || '');
+    const cat = String(row.categoria || '');
+    if (ref && /^(FAC|FACC|FACV|FACHR|GUIAH|GUIAHPAY|LIQ|LIQH|OP|REC|CPE|ARR|CRED)/i.test(ref))
+      return 'es un movimiento generado por un comprobante (factura, guía, liquidación o cobro). Eliminalo desde su comprobante en Movimientos de ventas/compras, o con "Deshacer" en el recibo/OP';
+    if (/^(cobro|pago) de /i.test(det))
+      return 'es el contra-asiento de un cobro/pago. Deshacelo desde el recibo u orden de pago (Movimientos de ventas/compras)';
+    if (/guia_hacienda|liquidacion|factura/i.test(cat))
+      return 'es un movimiento del sistema. Eliminalo desde su comprobante de origen';
+    return null;
+  },
 });
 
 mountCrud({
@@ -15886,6 +15955,20 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
             referencia: cc.referencia, pagado: true,
             observaciones: 'Cobro via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
           }});
+          // Unificación con Guías DT-e: si el comprobante cobrado es una guía de
+          // hacienda, registramos el cobro TAMBIÉN como pago de la guía para que la
+          // guía y la cuenta corriente queden siempre sincronizadas. NO creamos un
+          // segundo asiento (el "Cobro de..." de arriba ya es el haber en la CC).
+          if (cc.referencia && /^GUIAH-/.test(cc.referencia)) {
+            const guiaId = cc.referencia.replace(/^GUIAH-/, '');
+            const g = await tx.guiaHacienda.findFirst({ where: { id: guiaId, companyId: req.companyId }, select: { id: true } });
+            if (g) {
+              await tx.guiaHaciendaPago.create({ data: {
+                guiaId: g.id, companyId: req.companyId, fecha: d.fecha, monto: cashPortion,
+                metodo: d.metodo, referencia: cc.referencia, observaciones: 'Cobro desde Cuenta corriente',
+              }});
+            }
+          }
         }
       }
       // Aplicar NOTAS DE CRÉDITO / créditos a cuenta tildados (no se toca su importe).
@@ -16894,7 +16977,11 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    let ok = 0; const errores = [];
+    let ok = 0; let dup = 0; const errores = [];
+    // Anti-duplicados: mismo número de cheque + mismo monto en la empresa.
+    const chequeExiste = async (nroCheque, monto) => !!(await prisma.cheque.findFirst({
+      where: { companyId: req.companyId, nroCheque: String(nroCheque), monto: monto || 0 }, select: { id: true },
+    }));
     // Hoja 1: Cheques físicos a tercero (recibidos)
     const sh1 = wb.SheetNames.find(n => /fisic.*tercer/i.test(n));
     if (sh1) {
@@ -16904,6 +16991,8 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
         try {
           const nro = r['Numero de cheque'] || r['Número de cheque'];
           if (!nro) continue;
+          const monto1 = _parseMonto(r['Monto']) || 0;
+          if (await chequeExiste(nro, monto1)) { dup++; continue; }
           const fRec = _parseFechaArg(r['Fecha de recepcion'] || r['Fecha de recepcion '] || r['Fecha de entrega']);
           await prisma.cheque.create({ data: {
             companyId: req.companyId,
@@ -16914,7 +17003,7 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
             fechaEmision: fRec || new Date(),
             fechaRecepcion: fRec || null,
             fechaPago:    _parseFechaArg(r['Fecha de pago']) || new Date(),
-            monto: _parseMonto(r['Monto']) || 0,
+            monto: monto1,
             librador: r['Titular'] || null,
             cuitTitular: r['CUIT Titular'] || r['Cuit Titular'] || r['Cuit titular'] || null,
             endosante: r['Origen'] || r['Endosante'] || null,
@@ -16952,6 +17041,8 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
           else if (dest.includes('depositad')) estadoCh = 'depositado';
           else if (dest.includes('vendido') || dest.includes('cobrad') || dest.includes('pagad') || fin.includes('pagad') || fin.includes('cobrad')) estadoCh = 'cobrado';
           else estadoCh = 'en_cartera';
+          const monto2 = _parseMonto(r['Importe']) || 0;
+          if (await chequeExiste(nro, monto2)) { dup++; continue; }
           const fReD = _parseFechaArg(r['Fecha de recepcion'] || r['Fecha de recepcion ']);
           const fEndD = _parseFechaArg(r['Fecha del movimiento del endoso']);
           await prisma.cheque.create({ data: {
@@ -16965,7 +17056,7 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
             fechaRecepcion: fReD || null,
             fechaPago:    _parseFechaArg(r['Fecha de pago']) || new Date(),
             fechaEndoso:  fEndD || null,
-            monto: _parseMonto(r['Importe']) || 0,
+            monto: monto2,
             librador: r['Titular'] || null,
             cuitTitular: r['Cuit titular'] || r['CUIT Titular'] || r['Cuit Titular'] || null,
             endosante: r['Endosante'] || null,
@@ -16992,6 +17083,8 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
         try {
           const nro = r['BAYRA '] || r['BAYRA'] || r['Numero'];
           if (!nro) continue;
+          const monto3 = _parseMonto(r['Importe']) || 0;
+          if (await chequeExiste(nro, monto3)) { dup++; continue; }
           await prisma.cheque.create({ data: {
             companyId: req.companyId,
             tipo: 'propio',
@@ -17000,7 +17093,7 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
             nroCheque: String(nro),
             fechaEmision: _parseFechaArg(r['Fecha de pago']) || new Date(),
             fechaPago:    _parseFechaArg(r['Fecha de pago']) || new Date(),
-            monto: _parseMonto(r['Importe']) || 0,
+            monto: monto3,
             beneficiario: r['Beneficiario'] || null,
             estado: _normalizar(r['Estado'] || '').includes('pagad') ? 'pagado' : 'emitido',
             observaciones: [r['empresa'] && `Empresa: ${r['empresa']}`, (r['Cuit']||r['Cuit Beneficiario']) && `CUIT: ${r['Cuit']||r['Cuit Beneficiario']}`].filter(Boolean).join(' · ') || null,
@@ -17009,7 +17102,7 @@ app.post('/api/admin/importar-cliente/cheques', authMiddleware, requireCompany, 
         } catch (e) { errores.push({ hoja: sh3, fila: i+2, error: e.message }); }
       }
     }
-    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 100) });
+    res.json({ ok: true, importados: ok, duplicados: dup, fallos: errores.length, errores: errores.slice(0, 100) });
   } catch (e) { next(e); }
 });
 
@@ -17022,10 +17115,15 @@ app.post('/api/admin/importar-cliente/creditos', authMiddleware, requireCompany,
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
     // Las hojas que NO son crédito (resumen/flujo)
     const skipShs = ['cuadro guia','flujo de fondos'];
-    let creditos = 0, cuotas = 0; const errores = [];
+    let creditos = 0, cuotas = 0, dup = 0; const errores = [];
     for (const shName of wb.SheetNames) {
       if (skipShs.includes(_normalizar(shName))) continue;
       try {
+        // Anti-duplicados: ya se importó un crédito con esta operación (nombre de hoja).
+        const yaExiste = await prisma.credito.findFirst({
+          where: { companyId: req.companyId, nroOperacion: shName }, select: { id: true },
+        });
+        if (yaExiste) { dup++; continue; }
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[shName], { defval: null, raw: false });
         const cuotasData = rows.filter(r => r['Cuota '] || r['Cuota']).map(r => ({
           numero: parseInt(r['Cuota '] || r['Cuota']),
@@ -17061,7 +17159,7 @@ app.post('/api/admin/importar-cliente/creditos', authMiddleware, requireCompany,
         creditos++;
       } catch (e) { errores.push({ hoja: shName, error: e.message }); }
     }
-    res.json({ ok: true, creditos, cuotas, fallos: errores.length, errores });
+    res.json({ ok: true, creditos, cuotas, duplicados: dup, fallos: errores.length, errores });
   } catch (e) { next(e); }
 });
 
@@ -17081,11 +17179,23 @@ app.post('/api/admin/importar-cliente/cartas-porte', authMiddleware, requireComp
       if (m && nombre.includes(m[0])) nombre = nombre.replace(m[0], '').trim();
       return { cuit: cuit || null, nombre: nombre || null };
     };
-    let ok = 0; const errores = [];
+    let ok = 0; let dup = 0; const errores = [];
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       try {
         if (!r['N° Carta Porte'] && !r['N° CTG']) continue;
+        // Anti-duplicados: si ya existe un viaje con el mismo CTG (o, si no hay CTG,
+        // con el mismo N° de carta de porte) en esta empresa, lo salteamos.
+        const ctgStr = r['N° CTG'] ? String(r['N° CTG']).trim() : null;
+        const cpStr  = r['N° Carta Porte'] ? String(r['N° Carta Porte']).trim() : null;
+        const yaExiste = await prisma.viaje.findFirst({
+          where: {
+            companyId: req.companyId,
+            ...(ctgStr ? { ctg: ctgStr } : { cartaPorte: cpStr }),
+          },
+          select: { id: true },
+        });
+        if (yaExiste) { dup++; continue; }
         const anulTxt = String(r['P.N Final'] || '') + ' ' + String(r['Rte. Comercial Venta Primaria'] || r['Rte Comercial'] || '') + ' ' + String(r['Estado'] || '');
         const anulada = /anulad/i.test(anulTxt);
         const pnCP    = _parseMonto(r['P.N CP']);
@@ -17126,7 +17236,7 @@ app.post('/api/admin/importar-cliente/cartas-porte', authMiddleware, requireComp
         ok++;
       } catch (e) { errores.push({ fila: i+2, error: e.message }); }
     }
-    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 50) });
+    res.json({ ok: true, importados: ok, duplicados: dup, fallos: errores.length, errores: errores.slice(0, 50) });
   } catch (e) { next(e); }
 });
 
@@ -17136,7 +17246,7 @@ app.post('/api/admin/importar-cliente/efectivo', authMiddleware, requireCompany,
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
     const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    let ok = 0; const errores = [];
+    let ok = 0; let dup = 0; const errores = [];
     for (const shName of wb.SheetNames) {
       if (!/^(diari|oficina|lucas|luciano|caja)/i.test(shName)) continue;
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[shName], { defval: null, raw: false });
@@ -17148,12 +17258,19 @@ app.post('/api/admin/importar-cliente/efectivo', authMiddleware, requireCompany,
           const egr = _parseMonto(r['Egreso']);
           const fecha = _parseFechaArg(r['Fecha']);
           if (!fecha || (!ing && !egr)) continue;
+          const tipoEf = ing ? 'ingreso' : 'egreso';
+          const montoEf = ing || egr || 0;
+          // Anti-duplicados: mismo día, caja, tipo y monto en la empresa.
+          const yaExiste = await prisma.efectivo.findFirst({
+            where: { companyId: req.companyId, fecha, tipo: tipoEf, caja, monto: montoEf }, select: { id: true },
+          });
+          if (yaExiste) { dup++; continue; }
           await prisma.efectivo.create({ data: {
             companyId: req.companyId,
             fecha,
-            tipo: ing ? 'ingreso' : 'egreso',
+            tipo: tipoEf,
             caja,
-            monto: ing || egr || 0,
+            monto: montoEf,
             concepto: r['Cuenta de'] || r['Entregado a '] || r['Recibido por'] || 'Importado',
             clasificacion: 'empresa',
             observaciones: [r['Recibido por'] && `De: ${r['Recibido por']}`, r['Entregado a '] && `Para: ${r['Entregado a ']}`].filter(Boolean).join(' · ') || null,
@@ -17162,7 +17279,7 @@ app.post('/api/admin/importar-cliente/efectivo', authMiddleware, requireCompany,
         } catch (e) { errores.push({ hoja: shName, fila: i+2, error: e.message }); }
       }
     }
-    res.json({ ok: true, importados: ok, fallos: errores.length, errores: errores.slice(0, 50) });
+    res.json({ ok: true, importados: ok, duplicados: dup, fallos: errores.length, errores: errores.slice(0, 50) });
   } catch (e) { next(e); }
 });
 
