@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
+      titulo:'🐎 v2.144.0 — El catálogo ya trae todas las categorías de equinos',
+      desc:'Ahora en <b>Catálogos → Animales</b> aparecen automáticamente todas las categorías de <b>equinos</b> (Padrillo, Yegua madre, Potrillo, Potranca, Caballo de polo, etc.), para elegirlas en las Fichas de animales y que el stock quede agrupado por tipo. Se cargan solas al abrir el catálogo. <i>(También se corrigió el script de datos de Demo.)</i>' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/08/2026',
       titulo:'🐎 v2.143.0 — Las Fichas de animales suman al Stock general + Prestar/Devolver caballos',
       desc:'Ahora cada <b>ficha de animal</b> cuenta como <b>1 cabeza en el Stock general</b>, agrupada por <b>Animal → Equino → categoría</b> (Padrillo, Yegua madre, Potrillo…). En <b>Stock</b> aparece la categoría <b>Animales</b> con el total por tipo, y en <b>Movimientos</b> se ve cómo se mueve (alta, venta, préstamo, devolución). <b>Qué NO suma al campo:</b> los <b>Vendidos</b> (queda el registro de a quién se vendió, filtrable), los <b>Prestados</b> (afuera, pueden volver) y las <b>Bajas</b>. <b>Prestar / Devolver:</b> en la ficha, botón <b>🤝 Prestar</b> (a quién/dónde, fecha, vuelta estimada → agenda recordatorio) saca el caballo del campo de forma provisoria; cuando vuelve, <b>↩️ Devolver</b> lo reintegra al stock. Además sumamos al <b>catálogo</b> todas las categorías de equinos y un desplegable para elegirlas en la ficha. <i>Las fichas de terceros (pensión/hotelería) no suman al stock propio.</i>' },

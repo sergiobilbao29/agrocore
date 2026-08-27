@@ -13,7 +13,7 @@
 //    node scripts\seed-demo-fichas.js                (busca la empresa "Demo")
 //    node scripts\seed-demo-fichas.js <companyId>    (empresa puntual)
 // ============================================================
-const { PrismaClient } = require('@prisma/client');
+import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 const ANI_ESPECIE_LABEL = { equino: 'Equino', bovino: 'Bovino', porcino: 'Porcino', otro: 'Otro' };

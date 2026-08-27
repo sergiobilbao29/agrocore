@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.143.0';
+const AGROCORE_VERSION = '2.144.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6870,6 +6870,21 @@ function _fichaProdNombre(especie, categoria) {
   const cat = (categoria || '').trim() || 'Sin categoría';
   return `${esp} · ${cat}`;
 }
+// Siembra en el catálogo de animales (CategoriaHaciendaConfig) todas las categorías
+// de equinos "de fábrica", para que se puedan vincular con las fichas. Idempotente.
+async function sincronizarCatalogoEquinos(companyId) {
+  const existentes = new Set((await prisma.categoriaHaciendaConfig.findMany({
+    where: { companyId }, select: { nombre: true },
+  })).map(c => (c.nombre || '').toLowerCase()));
+  let orden = 40;
+  for (const nombre of EQUINO_CATEGORIAS_BASE) {
+    if (existentes.has(nombre.toLowerCase())) continue;
+    try {
+      await prisma.categoriaHaciendaConfig.create({ data: { companyId, especie: 'Equino', nombre, transiciones: [], orden: orden++, activo: true } });
+      existentes.add(nombre.toLowerCase());
+    } catch (e) { /* único / carrera: ignorar */ }
+  }
+}
 // Crea (si faltan) los Productos de fichas: uno por especie+categoría presentes en
 // las fichas + todas las categorías de equinos del catálogo. Categoría raíz 'Animales'.
 async function sincronizarProductosFichas(companyId) {
@@ -6990,6 +7005,7 @@ app.get('/api/categorias-hacienda', requireCompany, requirePermission('stock:rea
   try {
     await seedCategoriasHacienda(req.companyId);
     await mergeCatalogoAnimalesEnConfig(req.companyId);
+    try { await sincronizarCatalogoEquinos(req.companyId); } catch {}
     await sincronizarProductosHacienda(req.companyId);
     const data = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { especie: 'asc' }, { nombre: 'asc' }] });
     res.json({ ok: true, data });
