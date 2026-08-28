@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
+      titulo:'🐎 v2.145.0 — Fichas en el Stock general + terceros diferenciados + filtros en Movimientos de animales',
+      desc:'<b>(1) Fichas visibles en Stock:</b> los equinos de las <b>Fichas de animales</b> ahora aparecen en <b>Stock</b> (categoría <b>Animales</b>, agrupados por especie · categoría). <b>(2) Terceros diferenciados:</b> los animales de terceros (pensión/hotelería) también se contabilizan, en su propio renglón <b>“… (terceros)”</b>, separados de los propios. <b>(3) Cobro/Pago:</b> al abrir Cobrar/Pagar con <b>Efectivo</b>, la <b>caja</b> ya aparece desde el arranque (antes había que cambiar de medio y volver). <b>(4) Movimientos de animales:</b> la pantalla ahora se llama así (antes “Animales”) y suma <b>filtros</b> por campo, por diferencia y buscador de categoría.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
       titulo:'🐎 v2.144.0 — El catálogo ya trae todas las categorías de equinos',
       desc:'Ahora en <b>Catálogos → Animales</b> aparecen automáticamente todas las categorías de <b>equinos</b> (Padrillo, Yegua madre, Potrillo, Potranca, Caballo de polo, etc.), para elegirlas en las Fichas de animales y que el stock quede agrupado por tipo. Se cargan solas al abrir el catálogo. <i>(También se corrigió el script de datos de Demo.)</i>' },
@@ -6377,7 +6380,10 @@ pages.stock = async function() {
       // (salvo que se active "ver fuera de catálogo"). No se borran, solo no se listan.
       if (_hayCat && !verFuera && !prodEnCatalogo(p, _sets)) return false;
       if (catSel.length && !catSel.includes(catRaizStock(p))) return false;
-      if (state.stockFilter.fam) { const caId = _prodCaId(_pmap[p.id]) || _prodCaId(p); if (!_catCadena(caId).includes(state.stockFilter.fam)) return false; }
+      if (state.stockFilter.fam) {
+        if (p.esFicha) { if (!String(p.subtipo||'').toLowerCase().includes(String(state.stockFilter.fam).toLowerCase())) return false; }
+        else { const caId = _prodCaId(_pmap[p.id]) || _prodCaId(p); if (!_catCadena(caId).includes(state.stockFilter.fam)) return false; }
+      }
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
       if (!q) return true;
@@ -11542,6 +11548,8 @@ function _prodCaId(p) {
 function prodEnCatalogo(p, sets){
   sets = sets || _catalogoArtSets();
   const { nombres, animales, norm } = sets;
+  // Fichas de animales: son un renglón de stock propio (Animal · categoría), siempre visibles.
+  if ((p.categoria||'') === 'Animales' || p.esFicha) return true;
   // Animales: SOLO vale si su categoría de animal sigue vigente en el catálogo de
   // Animales. Así no se cuelan animales de especies que el usuario ya no tiene
   // (ej. quedó solo Bovino y sobran Cabra, Chivo). No alcanza con tener familia.
@@ -14681,8 +14689,8 @@ function hacTipoLabel(t){
 }
 
 pages.hacienda = async function() {
-  setHeader('Animales', 'Stock por campo · declarado (SENASA) vs real');
-  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('hacienda','Animales'); return; }
+  setHeader('Movimientos de animales', 'Stock por campo · declarado (SENASA) vs real');
+  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('hacienda','Movimientos de animales'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
 
   let resumen = { campos: [], filas: [] };
@@ -14747,6 +14755,21 @@ pages.hacienda = async function() {
         ${canC?`<button class="btn btn-secondary" onclick="hacVincularFactura()" title="Vincular una factura ya cargada que no movió el stock de animales">🔗 Vincular factura</button>`:''}
         ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
       </div>
+    </div>
+    <div class="kpi mb-3 flex flex-wrap items-end gap-2">
+      <div><label class="label text-xs">Campo</label>
+        <select id="hac-f-campo" class="input" onchange="hacFiltrar()">
+          <option value="">Todos los campos</option>
+          ${campos.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('')}
+        </select></div>
+      <div><label class="label text-xs">Diferencia</label>
+        <select id="hac-f-dif" class="input" onchange="hacFiltrar()">
+          <option value="">Todas</option>
+          <option value="con">Solo con diferencia</option>
+          <option value="sin">Sin diferencia</option>
+        </select></div>
+      <div class="flex-1 min-w-[180px]"><label class="label text-xs">Buscar categoría</label>
+        <input id="hac-f-cat" class="input" placeholder="Ej: Novillo, Vaca, Ternero…" oninput="hacFiltrar()"/></div>
     </div>`;
 
   const ventasRendPend = (movs||[]).filter(m=>m.tipo==='venta' && m.modoVenta==='rendimiento' && m.estadoRend==='pendiente');
@@ -14771,7 +14794,7 @@ pages.hacienda = async function() {
       const realSum = lst.reduce((a,f)=>a+Number(f.real||0),0);
       const dif = realSum - declSum;
       html += `
-        <div class="kpi mb-4 p-0 overflow-hidden">
+        <div class="kpi mb-4 p-0 overflow-hidden hac-campo-card" data-hac-campo="${esc(campoId)}">
           <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
             <div>
               <div class="font-semibold text-slate-800">🌾 ${esc(campo ? campo.nombre : 'Campo')}</div>
@@ -14793,7 +14816,7 @@ pages.hacienda = async function() {
                 <th></th>
               </tr></thead>
               <tbody>
-                ${lst.map(f => `<tr class="table-row">
+                ${lst.map(f => `<tr class="table-row hac-cat-row" data-hac-cat="${esc((f.categoria||'').toLowerCase())}" data-hac-dif="${f.diferencia!==0?'con':'sin'}">
                   <td><b>${esc(f.categoria)}</b></td>
                   <td class="text-right">${fmtN(f.declarado)}</td>
                   <td class="text-right font-semibold">${fmtN(f.real)}</td>
@@ -14943,6 +14966,27 @@ async function hacBorrarDeclarado(stockId, categoria, real) {
 }
 
 function _hacRefresh(){ if (state._hacCtx==='mov' && pages.movimientos) pages.movimientos(); else pages.hacienda(); }
+// Filtro cliente de la página Movimientos de animales (campo / categoría / diferencia).
+function hacFiltrar(){
+  const campoSel = (document.getElementById('hac-f-campo')?.value)||'';
+  const difSel = (document.getElementById('hac-f-dif')?.value)||'';
+  const q = ((document.getElementById('hac-f-cat')?.value)||'').trim().toLowerCase();
+  document.querySelectorAll('.hac-campo-card').forEach(card => {
+    const okCampo = !campoSel || card.getAttribute('data-hac-campo')===campoSel;
+    let visibles = 0;
+    card.querySelectorAll('.hac-cat-row').forEach(row => {
+      const cat = row.getAttribute('data-hac-cat')||'';
+      const dif = row.getAttribute('data-hac-dif')||'';
+      const okCat = !q || cat.includes(q);
+      const okDif = !difSel || dif===difSel;
+      const show = okCampo && okCat && okDif;
+      row.style.display = show ? '' : 'none';
+      if (show) visibles++;
+    });
+    // La tarjeta se muestra si es del campo elegido y tiene al menos una fila visible
+    card.style.display = (okCampo && (visibles>0 || (!q && !difSel))) ? '' : 'none';
+  });
+}
 async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') {
   state._hacCtx = ctx;
   if (!state.cache.catHacienda || !state.cache.catHacienda.length) { try { state.cache.catHacienda=(await api('/api/categorias-hacienda')).data||[]; } catch {} }
@@ -16127,6 +16171,9 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
       <button class="btn btn-primary" onclick="pagoCobroConfirmar('${modo}')">${esPago?'💸 Registrar pago':'💰 Registrar cobro'}</button>`
   });
   state._pagoCobroData = { modo, comprobantes: [], tildados: {} };
+  // Dibujar el detalle del método inicial (Efectivo por defecto) para que la caja
+  // aparezca desde el arranque, sin tener que cambiar de método y volver.
+  try { pagoCobroMetodoCambio(modo); } catch {}
   // Preselección (ej. cobrar una liquidación puntual): fija el contacto, carga sus
   // comprobantes pendientes y auto-tilda el que corresponde a la referencia dada.
   if (opts.liqCobradaId) state._pagoCobroData.liqCobradaId = opts.liqCobradaId;

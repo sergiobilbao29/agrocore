@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.144.0';
+const AGROCORE_VERSION = '2.145.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2921,9 +2921,9 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     let fichaByNombre = {};
     try {
       const _fw = { companyId: req.companyId, estado: { in: ANI_ESTADOS_EN_CAMPO } };
-      const fichas = await prisma.animal.findMany({ where: _fw, select: { especie: true, categoria: true } });
+      const fichas = await prisma.animal.findMany({ where: _fw, select: { especie: true, categoria: true, externo: true } });
       for (const a of fichas) {
-        const n = _fichaProdNombre(a.especie, a.categoria);
+        const n = _fichaProdNombre(a.especie, a.categoria, a.externo);
         fichaByNombre[n] = (fichaByNombre[n] || 0) + 1;
       }
     } catch {}
@@ -3008,7 +3008,9 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       // Fichas de animales: existencia = conteo de fichas en el campo (no de Movimiento).
       if ((p.categoria || '') === 'Animales') {
         const cab = fichaByNombre[p.nombre] || 0;
-        return { ...p, existencia: cab, esFicha: true, bajoMinimo: cab < Number(p.stockMinimo || 0) };
+        const esp = String(p.nombre || '').split(' · ')[0] || 'Animal';   // "Equino · Potranca" → Equino
+        const esTerceros = /\(terceros\)/i.test(p.nombre || '');
+        return { ...p, existencia: cab, esFicha: true, esTerceros, subtipo: esp + (esTerceros ? ' · terceros' : ''), bajoMinimo: cab < Number(p.stockMinimo || 0) };
       }
       const ing = movs.find((m) => m.productoId === p.id && m.tipo === 'ingreso')?._sum?.cantidad || 0;
       const egr = movs.find((m) => m.productoId === p.id && m.tipo === 'egreso')?._sum?.cantidad || 0;
@@ -6865,10 +6867,10 @@ const EQUINO_CATEGORIAS_BASE = [
   'Caballo castrado','Petiso','Petiso de polo','Caballo de polo','Caballo de salto',
   'Caballo de carrera','Caballo de trabajo','Caballo de escuela','Falabella','Mula','Burro / Asno',
 ];
-function _fichaProdNombre(especie, categoria) {
+function _fichaProdNombre(especie, categoria, externo) {
   const esp = ANI_ESPECIE_LABEL[especie] || (especie || 'Animal');
   const cat = (categoria || '').trim() || 'Sin categoría';
-  return `${esp} · ${cat}`;
+  return `${esp} · ${cat}${externo ? ' (terceros)' : ''}`;
 }
 // Siembra en el catálogo de animales (CategoriaHaciendaConfig) todas las categorías
 // de equinos "de fábrica", para que se puedan vincular con las fichas. Idempotente.
@@ -6888,21 +6890,21 @@ async function sincronizarCatalogoEquinos(companyId) {
 // Crea (si faltan) los Productos de fichas: uno por especie+categoría presentes en
 // las fichas + todas las categorías de equinos del catálogo. Categoría raíz 'Animales'.
 async function sincronizarProductosFichas(companyId) {
-  const animales = await prisma.animal.findMany({ where: { companyId }, select: { especie: true, categoria: true } });
-  const pares = new Set();
-  for (const a of animales) pares.add(`${a.especie || 'equino'}||${(a.categoria || '').trim() || 'Sin categoría'}`);
-  // Sumar catálogo de equinos (para que aparezcan aunque tengan 0)
-  for (const c of EQUINO_CATEGORIAS_BASE) pares.add(`equino||${c}`);
+  const animales = await prisma.animal.findMany({ where: { companyId }, select: { especie: true, categoria: true, externo: true } });
+  const pares = new Set();  // clave: especie||categoria||externo(0/1)
+  for (const a of animales) pares.add(`${a.especie || 'equino'}||${(a.categoria || '').trim() || 'Sin categoría'}||${a.externo ? 1 : 0}`);
+  // Sumar catálogo de equinos (propios, para que aparezcan aunque tengan 0)
+  for (const c of EQUINO_CATEGORIAS_BASE) pares.add(`equino||${c}||0`);
   // Categorías de equino que el usuario haya agregado al catálogo de animales.
   try {
     const cats = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId, especie: 'equino' }, select: { nombre: true } });
-    for (const c of cats) if ((c.nombre || '').trim()) pares.add(`equino||${c.nombre.trim()}`);
+    for (const c of cats) if ((c.nombre || '').trim()) pares.add(`equino||${c.nombre.trim()}||0`);
   } catch {}
   const prods = await prisma.producto.findMany({ where: { companyId, categoria: 'Animales' }, select: { nombre: true } });
   const have = new Set(prods.map(p => (p.nombre || '').toLowerCase()));
   for (const key of pares) {
-    const [esp, cat] = key.split('||');
-    const nombre = _fichaProdNombre(esp, cat);
+    const [esp, cat, ext] = key.split('||');
+    const nombre = _fichaProdNombre(esp, cat, ext === '1');
     if (have.has(nombre.toLowerCase())) continue;
     await prisma.producto.create({ data: { companyId, categoria: 'Animales', nombre, unidad: 'cabeza', stockMinimo: 0, activo: true } });
     have.add(nombre.toLowerCase());
@@ -6912,7 +6914,7 @@ async function sincronizarProductosFichas(companyId) {
 // verdad del stock —eso es el conteo— pero deja trazabilidad en Movimientos).
 async function _movFicha(db, companyId, animal, tipo, motivo, fecha) {
   try {
-    const nombre = _fichaProdNombre(animal.especie, animal.categoria);
+    const nombre = _fichaProdNombre(animal.especie, animal.categoria, animal.externo);
     let prod = await db.producto.findFirst({ where: { companyId, categoria: 'Animales', nombre }, select: { id: true } });
     if (!prod) prod = await db.producto.create({ data: { companyId, categoria: 'Animales', nombre, unidad: 'cabeza', stockMinimo: 0, activo: true }, select: { id: true } });
     await db.movimiento.create({ data: {
@@ -9673,8 +9675,9 @@ app.post('/api/animales', requireCompany, requirePermission('stock:create'), asy
       externo: !!d.externo, propietario: d.propietario || null, observaciones: d.observaciones || null,
       foto: d.foto || null,
     }});
-    // Ficha nueva EN EL CAMPO → suma 1 al stock (historial). Las externas (de terceros) no.
-    if (!row.externo && ANI_ESTADOS_EN_CAMPO.includes(row.estado)) {
+    // Ficha nueva EN EL CAMPO → suma 1 al stock (historial). Las de terceros suman a su
+    // propio renglón diferenciado ("… (terceros)").
+    if (ANI_ESTADOS_EN_CAMPO.includes(row.estado)) {
       await _movFicha(prisma, req.companyId, row, 'ingreso', 'alta ficha', row.fechaIngreso || new Date());
     }
     res.status(201).json({ ok: true, data: row });
@@ -9693,9 +9696,9 @@ app.put('/api/animales/:id', requireCompany, requirePermission('stock:update'), 
     const row = await prisma.animal.update({ where: { id: cur.id }, data });
     // Reconciliar historial de stock si cambió la categoría o el estado (entra/sale del campo).
     try {
-      const antesEnCampo = !cur.externo && ANI_ESTADOS_EN_CAMPO.includes(cur.estado);
-      const ahoraEnCampo = !row.externo && ANI_ESTADOS_EN_CAMPO.includes(row.estado);
-      const catCambio = (cur.categoria || '') !== (row.categoria || '') || (cur.especie || '') !== (row.especie || '');
+      const antesEnCampo = ANI_ESTADOS_EN_CAMPO.includes(cur.estado);
+      const ahoraEnCampo = ANI_ESTADOS_EN_CAMPO.includes(row.estado);
+      const catCambio = (cur.categoria || '') !== (row.categoria || '') || (cur.especie || '') !== (row.especie || '') || (!!cur.externo !== !!row.externo);
       if (antesEnCampo && !ahoraEnCampo) {
         await _movFicha(prisma, req.companyId, cur, 'egreso', 'baja de stock (ficha)', new Date());
       } else if (!antesEnCampo && ahoraEnCampo) {
@@ -9730,7 +9733,7 @@ app.post('/api/animales/:id/vender', requireCompany, requirePermission('stock:up
         clienteId, ventaRef: ref,
       }});
       // Si estaba en el campo, sale del stock (egreso de historial).
-      if (!cur.externo && ANI_ESTADOS_EN_CAMPO.includes(cur.estado)) {
+      if (ANI_ESTADOS_EN_CAMPO.includes(cur.estado)) {
         await _movFicha(tx, req.companyId, cur, 'egreso', 'venta', fecha);
       }
       return upd;
@@ -9779,7 +9782,7 @@ app.post('/api/animales/:id/prestar', requireCompany, requirePermission('stock:u
       const upd = await tx.animal.update({ where: { id: cur.id }, data: {
         estado: 'prestado', prestadoA, prestamoFecha: fecha, prestamoVuelta: vuelta,
       }});
-      if (!cur.externo && ANI_ESTADOS_EN_CAMPO.includes(cur.estado)) {
+      if (ANI_ESTADOS_EN_CAMPO.includes(cur.estado)) {
         await _movFicha(tx, req.companyId, cur, 'egreso', 'préstamo (sale del campo)', fecha);
       }
       return upd;
@@ -9810,7 +9813,7 @@ app.post('/api/animales/:id/devolver', requireCompany, requirePermission('stock:
       const upd = await tx.animal.update({ where: { id: cur.id }, data: {
         estado: nuevoEstado, prestadoA: null, prestamoFecha: null, prestamoVuelta: null,
       }});
-      if (!cur.externo) await _movFicha(tx, req.companyId, upd, 'ingreso', 'devolución de préstamo', fecha);
+      await _movFicha(tx, req.companyId, upd, 'ingreso', 'devolución de préstamo', fecha);
       return upd;
     });
     res.json({ ok: true, data: row });
