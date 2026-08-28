@@ -2626,6 +2626,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
+      titulo:'🐴 v2.149.0 — Ficha con Campo, equinos en Stock como los demás animales y filtro de Depósito',
+      desc:'<b>(1) Campo en la ficha:</b> ahora la <b>Ficha de animal</b> tiene el dato de <b>Campo (dónde está)</b>, además de la ubicación (box/potrero). <b>(2) Equinos en Stock como los demás:</b> ya no muestran el ícono de tubo de ensayo 🧪 ni el prefijo "Equino ·" en la columna Producto; se ven igual que las otras especies (nombre = categoría, con 🐴 y la especie como subtítulo). <b>(3) Filtro de Depósito:</b> al filtrar Stock por un depósito/campo, los animales de ese campo se cuentan correctamente (antes ignoraban el filtro).' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
       titulo:'🐎 v2.148.0 — Stock de equinos sin duplicados + el filtro por Familia (Bovino/Equino) trae todo',
       desc:'<b>(1) Sin duplicados:</b> los <b>equinos</b> se manejan como <b>Fichas de animales</b> (renglón "Equino · categoría"), no como stock de hacienda por cabezas. Sacamos el renglón viejo duplicado (ej. "Yegua madre" en 0 que convivía con "Equino · Yegua madre"). Queda un solo renglón, el correcto. <b>(2) Filtro por Familia:</b> ahora <b>Bovino</b>, <b>Equino</b>, etc. traen los animales tanto en <b>Stock</b> como en <b>Movimientos</b> (antes solo con Categoría = Animales). El filtro reconoce la <b>especie</b> del animal aunque no esté cableada al árbol.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
@@ -6405,14 +6408,14 @@ pages.stock = async function() {
         <tbody>
           ${filtered.map(p => `
             <tr class="table-row">
-              <td><b>${esc(p.esHacienda ? (p.categoriaHacienda || (p.nombre||'').split(' - ').pop().trim()) : p.nombre)}</b>${p.codigo?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.codigo)}</div>`:''}</td>
+              <td><b>${esc(p.esHacienda ? (p.categoriaHacienda || (p.nombre||'').split(' - ').pop().trim()) : (p.esFicha ? (p.nombre||'').split(' · ').slice(1).join(' · ').trim() || p.nombre : p.nombre))}</b>${p.codigo?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.codigo)}</div>`:''}</td>
               <td><span class="badge badge-blue">${esc(catRaizStock(p))}</span>${(() => {
                 if (p.esHacienda) {
                   const esp = _hacEspMap[(p.categoriaHacienda||p.nombre||'').toLowerCase().trim()];
                   if (esp) { const raiz = _especieRaizHac(esp); const sub = raiz + (raiz.toLowerCase()!==esp.toLowerCase()?' · '+esp:''); return `<div class="text-[10px] text-slate-500 mt-0.5">🐄 ${esc(sub)}</div>`; }
                   return '';
                 }
-                return p.subtipo?`<div class="text-[10px] text-slate-500 mt-0.5">🧪 ${esc(p.subtipo)}</div>`:'';
+                return p.subtipo?`<div class="text-[10px] text-slate-500 mt-0.5">${p.esFicha?'🐴':'🏷️'} ${esc(p.subtipo)}</div>`:'';
               })()}</td>
               <td class="text-right font-semibold ${Number(p.existencia)<=0?'text-red-600':(p.bajoMinimo?'text-amber-600':'text-emerald-700')}">${fmtN(p.existencia)}${p.esHacienda&&p.kilos?`<div class="text-[11px] text-slate-500 font-normal">${fmtN(p.kilos)} kg</div>`:''}</td>
               <td>${esc(p.unidad)}${p.esHacienda?`<div class="text-[10px] ${p.categoriaHacienda?'text-amber-700':'text-red-500'}">${p.categoriaHacienda?'🐄 '+esc(p.categoriaHacienda):'⚠ sin vincular'}</div>`:''}</td>
@@ -27666,6 +27669,7 @@ pages.animales = async function(){
   try { data = (await api('/api/animales')).data || []; } catch(e){ return toast(e.message,'error'); }
   try { alertas = (await api('/api/animales-alertas?dias=30')).data || []; } catch {}
   try { state._aniRodeos = (await api('/api/rodeos')).data || []; } catch { state._aniRodeos = state._aniRodeos || []; }
+  try { if(!state.cache.campos) state.cache.campos = (await api('/api/campos')).data || []; } catch {}
   state._animales = data; state._aniAlertas = alertas;
   state._aniFiltro = state._aniFiltro || { especie:'', estado:'', q:'' };
   aniRender();
@@ -27755,6 +27759,7 @@ function aniForm(id){
         <div><label class="label">Caravana visual</label><input id="an-cv" class="input" value="${esc(dv(a.caravanaVisual))}"/></div>
         <div><label class="label">N° registro (SRA/AACCP/RP)</label><input id="an-reg" class="input" value="${esc(dv(a.nroRegistro))}"/></div>
         <div><label class="label">Pasaporte / libreta</label><input id="an-pas" class="input" value="${esc(dv(a.pasaporte))}"/></div>
+        <div><label class="label">Campo (dónde está)</label><select id="an-campo" class="input"><option value="">— Sin campo —</option>${(state.cache.campos||[]).map(c=>`<option value="${c.id}" ${a.campoId===c.id?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
         <div><label class="label">Ubicación (box/paddock/potrero)</label><input id="an-ubi" class="input" value="${esc(dv(a.ubicacion))}"/></div>
         <div><label class="label">Lote / rodeo (engorde)</label><select id="an-rodeo" class="input"><option value="">— sin lote —</option>${(state._aniRodeos||[]).map(r=>`<option value="${r.id}" ${a.rodeoId===r.id?'selected':''}>${esc(r.nombre)}${r.externo?' (terceros)':''}</option>`).join('')}</select></div>
       </div>
@@ -27791,6 +27796,7 @@ async function aniSave(id){
     estado:g('an-estado').value, fechaNac:g('an-nac').value||null, pelaje:g('an-pelaje').value||null, raza:g('an-raza').value||null,
     microchip:g('an-chip').value||null, caravanaRfid:g('an-rfid').value||null, caravanaVisual:g('an-cv').value||null,
     nroRegistro:g('an-reg').value||null, pasaporte:g('an-pas').value||null, ubicacion:g('an-ubi').value||null,
+    campoId:(g('an-campo')?g('an-campo').value:'')||null,
     rodeoId:(g('an-rodeo')?g('an-rodeo').value:'')||null,
     padreNombre:g('an-padre').value||null, madreNombre:g('an-madre').value||null, receptoraNombre:g('an-recep').value||null,
     padreId:_aniIdPorNombre(g('an-padre').value), madreId:_aniIdPorNombre(g('an-madre').value), receptoraId:_aniIdPorNombre(g('an-recep').value),
@@ -27913,7 +27919,7 @@ async function aniVer(id){
         </div>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        ${dl('Sexo',a.sexo)}${dl('Pelaje',a.pelaje)}${dl('Raza',a.raza)}${dl('Ubicación',a.ubicacion)}
+        ${dl('Sexo',a.sexo)}${dl('Pelaje',a.pelaje)}${dl('Raza',a.raza)}${dl('Campo',((state.cache.campos||[]).find(c=>c.id===a.campoId)||{}).nombre||'')}${dl('Ubicación',a.ubicacion)}
         ${dl('Microchip',a.microchip)}${dl('RFID',a.caravanaRfid)}${dl('N° registro',a.nroRegistro)}${dl('Pasaporte',a.pasaporte)}
         ${dl('Padre',a.padreNombre)}${dl('Madre',a.madreNombre)}${dl('Receptora (TE)',a.receptoraNombre)}${a.externo?dl('Propietario',a.propietario||'Tercero'):''}
         ${a.rodeoId?dl('Lote / rodeo',((state._aniRodeos||[]).find(r=>r.id===a.rodeoId)||{}).nombre||'—'):''}

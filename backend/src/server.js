@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.148.0';
+const AGROCORE_VERSION = '2.149.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2921,6 +2921,12 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     let fichaByNombre = {};
     try {
       const _fw = { companyId: req.companyId, estado: { in: ANI_ESTADOS_EN_CAMPO } };
+      // Si se filtra por un depósito que representa un campo, las fichas se limitan a
+      // ese campo. Si el depósito NO es un campo (cerealera/silo), no hay animales.
+      if (depositoId) {
+        const dep = await prisma.deposito.findFirst({ where: { id: depositoId }, select: { campoId: true } });
+        _fw.campoId = dep?.campoId || '__sin_campo__';
+      }
       const fichas = await prisma.animal.findMany({ where: _fw, select: { especie: true, categoria: true, externo: true } });
       for (const a of fichas) {
         const n = _fichaProdNombre(a.especie, a.categoria, a.externo);
