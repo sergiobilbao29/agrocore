@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.153.0';
+const AGROCORE_VERSION = '2.154.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2667,12 +2667,27 @@ mountCrud({
     ivaDefault: z.number().nullable().optional(),
     tipoArticulo: z.string().nullable().optional(),
     categoriaArticuloId: z.string().nullable().optional(),
+    vademecumId: z.string().nullable().optional(),
   }),
   orderBy: { nombre: 'asc' },
   searchFields: ['nombre', 'categoria', 'sku', 'codigoBarras'],
   dependencias: [
     { model: 'movimiento', where: (id) => ({ productoId: id }), label: 'movimientos de stock' },
   ],
+});
+
+// ---- Vademécum: referencia de fitosanitarios y fertilizantes (Argentina) ----
+// Datos estáticos en backend/data/vademecum.json (principio activo, modo de acción,
+// cultivos, objetivos, dosis, banda tox, carencia, nota). Orientativo: manda el marbete/SENASA.
+let _VADEMECUM = [];
+try { _VADEMECUM = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'data', 'vademecum.json'), 'utf8')); } catch { _VADEMECUM = []; }
+app.get('/api/vademecum', requireCompany, requirePermission('stock:read'), (req, res) => {
+  const q = _sinAcentos(String(req.query.q || '')).trim();
+  const tipo = String(req.query.tipo || '').trim();
+  let data = _VADEMECUM;
+  if (tipo) data = data.filter(v => v.tipo === tipo);
+  if (q) data = data.filter(v => _sinAcentos([v.principioActivo, v.grupoMoa, v.grado, (v.cultivos||[]).join(' '), (v.objetivos||[]).join(' '), v.nota].filter(Boolean).join(' ')).includes(q));
+  res.json({ ok: true, data });
 });
 
 // ============================================================

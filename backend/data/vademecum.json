@@ -1,0 +1,1732 @@
+[
+  {
+    "id": "glifosato",
+    "principioActivo": "Glifosato",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 9",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "algodon"
+    ],
+    "objetivos": [
+      "sorgo de Alepo",
+      "gramon",
+      "gramineas anuales",
+      "latifoliadas"
+    ],
+    "dosis": "720–1.440 g e.a./ha en barbecho normal; hasta 2.160–2.880 g e.a./ha en perennes establecidas (1,5–3 L/ha de sal potásica 62%, dosis alta 4,5–6 L/ha)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "No corresponde en barbecho; 15–30 días típicos en cultivos tolerantes — según marbete",
+    "nota": "Solo ya no alcanza: yuyo colorado (Amaranthus palmeri/hybridus) y rama negra (Conyza spp.) resistentes cubren más de 25 M ha. Usalo como base pero SIEMPRE acompañado de un residual (grupo 15 o 14) más un hormonal o PPO de contacto. Cuidá el agua de aplicación: dureza alta y bicarbonatos secuestran el activo, corregí con sulfato de amonio."
+  },
+  {
+    "id": "2-4-d",
+    "principioActivo": "2,4-D",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 4",
+    "cultivos": [
+      "maiz",
+      "trigo",
+      "cebada",
+      "sorgo"
+    ],
+    "objetivos": [
+      "rama negra",
+      "girasol guacho",
+      "quinoa",
+      "nabo",
+      "cardos",
+      "latifoliadas"
+    ],
+    "dosis": "400–1.000 g e.a./ha (0,7–1,7 L/ha de sal amina 60%); ésteres solo en barbecho invernal y a menor dosis",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "30–60 días típicos en cereales; según marbete",
+    "nota": "Es el socio obligado del glifosato contra rama negra, pero pegale chica (menos de 8–10 cm de roseta) porque pasada esa etapa la rebrota. Ojo con la deriva y la volatilización de ésteres sobre lotes vecinos de soja, girasol, vid o frutales: usá sal amina en primaveraverano y respetá las restricciones provinciales y municipales de periurbano."
+  },
+  {
+    "id": "dicamba",
+    "principioActivo": "Dicamba",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 4",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "sorgo"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "rama negra",
+      "Ipomoea",
+      "enredaderas",
+      "ortiga mansa"
+    ],
+    "dosis": "120–480 g e.a./ha (0,25–1 L/ha de sal dimetilamina 57,7% ≈ 480 g e.a./L)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "30–60 días típicos en maíz y trigo; según marbete",
+    "nota": "Rinde más que 2,4- D sobre Ipomoea y sobre yuyo colorado emergido, pero es MUCHO más volátil: aplicar con temperatura menor a 28 °C, sin inversión térmica y con pastillas antideriva es condición, no consejo. Ya hay poblaciones de Amaranthus con menor sensibilidad al grupo 4 en el norte: no lo uses como único mecanismo dos años seguidos."
+  },
+  {
+    "id": "atrazina",
+    "principioActivo": "Atrazina",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 5",
+    "cultivos": [
+      "maiz",
+      "sorgo"
+    ],
+    "objetivos": [
+      "gramineas",
+      "latifoliadas"
+    ],
+    "dosis": "1.000–2.000 g i.a./ha (2–4 L/ha de SC 50% o 1,1– 2,2 kg/ha de WG 90%)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "60 días típicos en maíz y sorgo; según marbete",
+    "nota": "Barata y con residualidad útil, pero cuidá el cultivo siguiente: en suelos de pH alto y con poca lluvia la carryover pega en soja, girasol y verdeos de invierno. En yuyo colorado ya hay poblaciones con resistencia múltiple 5+2 (triazinas + ALS) en el NOA, así que no la cargues sola: mezclala con HPPD (27) o con acetoclor/S-metolacloro (15). Es objeto de restricciones ambientales crecientes por lixiviación a napa."
+  },
+  {
+    "id": "acetoclor",
+    "principioActivo": "Acetoclor",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 15",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "sorgo"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "Digitaria",
+      "Echinochloa",
+      "Eleusine",
+      "gramineas anuales"
+    ],
+    "dosis": "1.500–2.500 g i.a./ha (1,7–2,8 L/ha de EC 90%); ajustar por materia orgánica y textura",
+    "grado": null,
+    "bandaTox": "Amarillo (II)",
+    "indiceSalino": null,
+    "carencia": "Uso preemergente; el intervalo a cosecha queda cubierto por el ciclo — según marbete",
+    "nota": "Es de los pocos mecanismos sin resistencia confirmada en Amaranthus en Argentina: cuidalo. Necesita 15– 20 mm de lluvia dentro de los 7–10 días para incorporarse; sin agua no hay control. En sorgo va solo con semilla tratada con protector (safener), sin eso te fitotoxica el cultivo."
+  },
+  {
+    "id": "s-metolacloro",
+    "principioActivo": "S-metolacloro",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 15",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "girasol",
+      "poroto"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "chamico",
+      "gramineas anuales"
+    ],
+    "dosis": "960–1.920 g i.a./ha (1–2 L/ha de EC 96%)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "Uso preemergente; según marbete",
+    "nota": "El isómero S rinde igual que el metolacloro racémico a casi la mitad de dosis, así que no traslades dosis de etiquetas viejas. Mismo requisito de lluvia de activación que acetoclor. Es la herramienta central del control por capas ('layering') en yuyo colorado: preemergente con 15 y repique a los 20–25 días con otro residual antes de que el cultivo cierre el surco."
+  },
+  {
+    "id": "flumioxazin",
+    "principioActivo": "Flumioxazin",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 14",
+    "cultivos": [
+      "soja",
+      "girasol",
+      "cana de azucar"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "rama negra",
+      "quinoa",
+      "verdolaga",
+      "latifoliadas"
+    ],
+    "dosis": "50–120 g i.a./ha (100–250 g/ha de WG/WP 48–50%)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Uso presiembra/preemergente; según marbete",
+    "nota": "Respetá el intervalo a la siembra de soja (típicamente 10–15 días y lluvia mediante) o te va a hacer necrosis en el hipocótile, sobre todo en suelos arenosos y con siembra somera. Es residual, no de rescate: sobre malezas emergidas no trabaja. Rotá el sitio PPO con 15 y 27, porque ya hay Amaranthus palmeri con resistencia a PPO reportada en la región."
+  },
+  {
+    "id": "sulfentrazone",
+    "principioActivo": "Sulfentrazone",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 14",
+    "cultivos": [
+      "soja",
+      "cana de azucar"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "chamico",
+      "verdolaga",
+      "ciperaceas"
+    ],
+    "dosis": "200–400 g i.a./ha (0,4–0,8 L/ha de SC 50%)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "Uso presiembra/preemergente; según marbete",
+    "nota": "Es el PPO de mayor residualidad del paquete, ideal contra el flujo largo de emergencia de Amaranthus, pero por eso mismo dosificá según textura y materia orgánica: en suelos arenosos con menos de 1,5% de MO te fitotoxica la soja. Ojo con el cultivo siguiente en rotaciones cortas con maíz o trigo. El girasol es muy sensible a PPO residuales: no lo posiciones ahí y cuidá el carryover si el girasol viene en la rotación."
+  },
+  {
+    "id": "diclosulam",
+    "principioActivo": "Diclosulam",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 2",
+    "cultivos": [
+      "soja",
+      "mani"
+    ],
+    "objetivos": [
+      "girasol guacho",
+      "chamico",
+      "quinoa",
+      "Ipomoea",
+      "latifoliadas"
+    ],
+    "dosis": "25–35 g i.a./ha (30–42 g/ha de WG 84%)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Uso presiembra/preemergente; según marbete",
+    "nota": "Su punto débil es justo el problema del país: en la mayoría de las poblaciones de yuyo colorado y rama negra el grupo 2 ya está perdido por mutación en el gen ALS. Usalo por el resto del espectro y siempre mezclado con un 14 o un 15, nunca como base residual único. Carryover a considerar sobre girasol, sorgo y verdeos."
+  },
+  {
+    "id": "imazetapir",
+    "principioActivo": "Imazetapir",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 2",
+    "cultivos": [
+      "soja",
+      "girasol",
+      "poroto",
+      "arroz",
+      "alfalfa",
+      "arveja"
+    ],
+    "objetivos": [],
+    "dosis": "80–100 g i.a./ha (0,8–1 L/ha de SL 10%)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "60–70 días típicos en soja; según marbete",
+    "nota": "En sistemas IMI (girasol y arroz) la presión de selección sobre ALS es altísima: si repetís el evento en el mismo lote año tras año, la resistencia aparece en 3–4 campañas. Alterná con otro mecanismo dentro del mismo cultivo y no confíes en él para Amaranthus ni Conyza. Tiene residualidad que puede afectar maíz y trigo en la secuencia."
+  },
+  {
+    "id": "haloxifop",
+    "principioActivo": "Haloxifop",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 1",
+    "cultivos": [
+      "soja",
+      "girasol",
+      "algodon",
+      "poroto",
+      "alfalfa"
+    ],
+    "objetivos": [
+      "sorgo de Alepo",
+      "capin",
+      "pasto cuaresma",
+      "maiz guacho",
+      "gramineas anuales"
+    ],
+    "dosis": "50–120 g i.a./ha de haloxifop-R metil (0,1–0,2 L/ha de EC 54%; dosis alta para rizomas de Alepo)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "60–70 días típicos en soja y girasol; según marbete",
+    "nota": "En 2026 el control de maíz guacho dejó de ser cosmético: es corte del puente verde de Dalbulus maidis, así que en NOA/NEA y centronorte tratalo como práctica sanitaria y no como limpieza estética. Ya hay Echinochloa y Eleusine resistentes a ACCasa: no repitas 'fop' sobre 'fop', rotá a 'dim' (cletodim) o a glufosinato, y nunca lo mezcles con hormonales en el mismo tanque porque cae el control."
+  },
+  {
+    "id": "cletodim",
+    "principioActivo": "Cletodim",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 1",
+    "cultivos": [
+      "soja",
+      "girasol",
+      "alfalfa",
+      "papa",
+      "cebolla"
+    ],
+    "objetivos": [
+      "raigras",
+      "maiz guacho",
+      "gramineas anuales"
+    ],
+    "dosis": "96–240 g i.a./ha (0,4–1 L/ha de EC 24%), con aceite metilado siempre",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "60–70 días típicos; según marbete",
+    "nota": "Es hoy la herramienta más confiable contra raigrás resistente a glifosato en el sudeste bonaerense y contra maíz guacho apilado, pero justamente por eso está bajo presión: hay poblaciones de Lolium con resistencia a ACCasa. Pegale a la maleza chica y en activo crecimiento, sin estrés hídrico, y no le bajes la dosis para 'estirar' el bidón — la subdosis es la fábrica de resistencia."
+  },
+  {
+    "id": "glufosinato-de-amonio",
+    "principioActivo": "Glufosinato de amonio",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 10",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "algodon"
+    ],
+    "objetivos": [
+      "gramineas",
+      "latifoliadas"
+    ],
+    "dosis": "400–750 g i.a./ha (2–4 L/ha de SL 20%)",
+    "grado": null,
+    "bandaTox": "Amarillo (II)",
+    "indiceSalino": null,
+    "carencia": "30–70 días según cultivo; no corresponde en barbecho — según marbete",
+    "nota": "Es la alternativa real al glifosato sobre rama negra y yuyo colorado resistentes, pero es de contacto: sin 150–200 L/ha de caldo, gota fina y buena cobertura no funciona, y rebrota. Trabaja mejor con alta humedad relativa, luz y temperatura — la aplicación de madrugada o con seca prolongada rinde la mitad. Cuidá el recurso: es la última línea antes de quedarte sin químico para Amaranthus."
+  },
+  {
+    "id": "saflufenacil",
+    "principioActivo": "Saflufenacil",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 14",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "rama negra"
+    ],
+    "dosis": "25–70 g i.a./ha (35–100 g/ha de WG 70%), siempre con adyuvante recomendado",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "3–7 días como desecante; en barbecho no corresponde — según marbete",
+    "nota": "Es el 'quemante' de elección para rescatar rama negra grande que el 2,4- D ya no toma, y va bien mezclado con glifosato. Tiene algo de residualidad, así que respetá el intervalo a la siembra de soja. Rota el sitio PPO: si ya usaste flumioxazin o sulfentrazone de residual en el mismo lote, no repitas 14 en el rescate."
+  },
+  {
+    "id": "metribuzin",
+    "principioActivo": "Metribuzin",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 5",
+    "cultivos": [
+      "soja",
+      "trigo",
+      "papa",
+      "cana de azucar"
+    ],
+    "objetivos": [
+      "latifoliadas"
+    ],
+    "dosis": "250–500 g i.a./ha (0,5–1 L/ha de SC 48% o 0,35–0,7 kg/ha de WG 70%)",
+    "grado": null,
+    "bandaTox": "Amarillo (II)",
+    "indiceSalino": null,
+    "carencia": "60–70 días típicos en soja y papa; según marbete",
+    "nota": "Es muy sensible a textura y materia orgánica: la misma dosis que en un francolimoso te clorosa la soja en un lote arenoso o en cabeceras. Bajá dosis en suelos livianos y evitá aplicar con el cultivo estresado o después de una lluvia fuerte. Aporta un sitio C1 útil para acompañar residuales de grupo 15 en la premergencia de soja."
+  },
+  {
+    "id": "bentazon",
+    "principioActivo": "Bentazon",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 6",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "poroto",
+      "arroz",
+      "arveja"
+    ],
+    "objetivos": [
+      "chamico",
+      "quinoa",
+      "ciperaceas",
+      "Cyperus",
+      "latifoliadas"
+    ],
+    "dosis": "480–960 g i.a./ha (0,8–1,6 L/ha de SL 60%), con aceite",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "60–70 días típicos; según marbete",
+    "nota": "Aunque comparte el fotosistema II con atrazina y metribuzin, se une en otro sitio, así que sirve donde hay resistencia a triazinas — pero no lo trates como mecanismo 'nuevo'. Es estrictamente de contacto y sobre maleza chica: pasada la 4ª hoja no la mata. Es de las pocas opciones sobre cebollín en soja."
+  },
+  {
+    "id": "fomesafen",
+    "principioActivo": "Fomesafen",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 14",
+    "cultivos": [
+      "soja",
+      "poroto"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "chamico",
+      "verdolaga",
+      "Ipomoea",
+      "latifoliadas"
+    ],
+    "dosis": "200–350 g i.a./ha (0,8–1,4 L/ha de SL 25%)",
+    "grado": null,
+    "bandaTox": "Amarillo (II)",
+    "indiceSalino": null,
+    "carencia": "60–70 días típicos en soja; según marbete",
+    "nota": "Es el rescate posemergente clásico contra Amaranthus, pero solo funciona con la maleza de menos de 8–10 cm y con buena cobertura; sobre yuyo colorado de 30 cm tirás plata. Va a quemar hoja de soja, eso es esperable y se recupera. La aparición de PPO-resistentes en Amaranthus palmeri obliga a no depender de él: el residual de grupo 15 es lo que evita tener que usarlo."
+  },
+  {
+    "id": "piroxasulfona",
+    "principioActivo": "Piroxasulfona",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 15",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "girasol"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "raigras",
+      "gramineas anuales"
+    ],
+    "dosis": "60–150 g i.a./ha (70–180 g/ha de WG 85%)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Uso presiembra/preemergente; según marbete",
+    "nota": "Es el residual más potente por unidad de dosis del grupo 15 y hoy la mejor carta contra raigrás resistente a glifosato y a ACCasa en trigo y en barbecho largo. Necesita 10– 15 mm para activarse y no perdona el mal posicionamiento: aplicado sobre rastrojo grueso y sin lluvia, no baja al suelo. Cuidalo rotando con acetoclor o S-metolacloro para no fundir el único mecanismo residual que todavía está entero."
+  },
+  {
+    "id": "mesotrione",
+    "principioActivo": "Mesotrione",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 27",
+    "cultivos": [
+      "maiz",
+      "sorgo"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "chamico",
+      "quinoa",
+      "gramineas",
+      "latifoliadas"
+    ],
+    "dosis": "96–192 g i.a./ha (0,2–0,4 L/ha de SC 48%), con aceite metilado",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "45–60 días típicos en maíz; según marbete",
+    "nota": "Trabaja en sinergia real con atrazina: la mezcla 27+5 levanta el control de yuyo colorado bastante por encima de cualquiera de los dos solo, y es la forma correcta de seguir usando atrazina sin quemarla. No lo apliques sobre híbridos de maíz sensibles ni junto a insecticidas organofosforados, porque perdés selectividad. Blanquea la maleza en 5–7 días: no juzgues el control a las 48 h."
+  },
+  {
+    "id": "nicosulfuron",
+    "principioActivo": "Nicosulfuron",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 2",
+    "cultivos": [
+      "maiz"
+    ],
+    "objetivos": [
+      "sorgo de Alepo",
+      "capin",
+      "pasto cuaresma",
+      "gramineas",
+      "latifoliadas"
+    ],
+    "dosis": "40–60 g i.a./ha (1–1,5 L/ha de OD 4% o 50–80 g/ha de WG 75%)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "45–60 días típicos en maíz; según marbete",
+    "nota": "Sigue siendo la mejor herramienta selectiva contra Alepo en maíz, pero es grupo 2 puro: hay poblaciones de Alepo y de capín ya resistentes en el centronorte, y el gen ALS se selecciona rápido. Rotá el sitio dentro del maíz combinándolo con HPPD (27) y residual (15). No lo mezcles con organofosforados y respetá el intervalo con el tratamiento de semilla."
+  },
+  {
+    "id": "tembotrione",
+    "principioActivo": "Tembotrione",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 27",
+    "cultivos": [
+      "maiz"
+    ],
+    "objetivos": [
+      "yuyo colorado",
+      "capin",
+      "pasto cuaresma",
+      "Eleusine",
+      "gramineas anuales",
+      "latifoliadas"
+    ],
+    "dosis": "75–100 g i.a./ha (0,18–0,24 L/ha de SC 42%), con el adyuvante y el safener de la formulación",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "45–60 días típicos en maíz; según marbete",
+    "nota": "Cubre mejor las gramíneas que mesotrione, así que sirve para descansar nicosulfuron y sacarle presión al grupo 2 en maíz. Ya hay Amaranthus con resistencia a HPPD en otras regiones del mundo: no lo repitas dos campañas seguidas como único posemergente. Verificá la tolerancia del híbrido antes de aplicar y sostené la mezcla con atrazina cuando el registro lo permita."
+  },
+  {
+    "id": "paraquat",
+    "principioActivo": "Paraquat",
+    "tipo": "herbicida",
+    "grupoMoa": "HRAC 22",
+    "cultivos": [],
+    "objetivos": [
+      "maleza emergida"
+    ],
+    "dosis": "400–600 g i.a./ha (1,5–2,5 L/ha de SL 27,6%), con alto volumen de caldo",
+    "grado": null,
+    "bandaTox": "Rojo (Ib)",
+    "indiceSalino": null,
+    "carencia": "7–15 días como desecante; no corresponde en barbecho — según marbete",
+    "nota": "Es el activo más peligroso de esta tabla: la ingestión accidental de pocos mililitros no tiene antídoto, y por eso está prohibido en la UE y tiene restricciones y prohibiciones que varían por provincia y municipio en Argentina — verificá la normativa vigente en tu jurisdicción antes de recomendarlo. Técnicamente sigue siendo útil porque aporta un mecanismo (22) que ninguna otra herramienta del paquete cubre, pero es puro contacto, no tiene residual y rebrota en perennes. Si lo usás, EPP completo, envase cerrado y nunca trasvasar a envases de bebida."
+  },
+  {
+    "id": "lambdacialotrina",
+    "principioActivo": "Lambdacialotrina",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 3A",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "girasol"
+    ],
+    "objetivos": [
+      "isoca de las leguminosas",
+      "bolillera",
+      "chinches",
+      "Nezara",
+      "Piezodorus",
+      "Dichelops",
+      "pulgones",
+      "trips",
+      "cogollero",
+      "chicharrita (Dalbulus maidis)"
+    ],
+    "dosis": "50-150 cc/ha de formulado 25% CS (dosis alta para chinches y adultos de Dalbulus)",
+    "grado": null,
+    "bandaTox": "Amarilla (II)",
+    "indiceSalino": null,
+    "carencia": "14-21 días según cultivo; ver marbete",
+    "nota": "Poder de volteo alto y residualidad corta: contra Dalbulus baja adultos del momento pero no frena reinfestación desde maíz guacho. Muy tóxico para abejas y arrasa con benéficos (Trichogramma, coccinélidos, arañas): usar de tarde/noche y no encadenar aplicaciones 3A."
+  },
+  {
+    "id": "cipermetrina",
+    "principioActivo": "Cipermetrina",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 3A",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "girasol"
+    ],
+    "objetivos": [
+      "isocas defoliadoras",
+      "chinches",
+      "pulgones",
+      "trips",
+      "cogollero"
+    ],
+    "dosis": "50-200 cc/ha de formulado 25% EC según plaga y volumen",
+    "grado": null,
+    "bandaTox": "Amarilla (II)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "Es el 3A más barato y por eso el más sobreusado: hay resistencia documentada en chinches y baja eficacia sobre Spodoptera frugiperda de más de 3 estadios. Sirve como acompañante, no como base del programa. Alta toxicidad para abejas y peces."
+  },
+  {
+    "id": "clorpirifos",
+    "principioActivo": "Clorpirifós",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 1B",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "isoca militar",
+      "orugas cortadoras",
+      "chinches",
+      "plagas de suelo"
+    ],
+    "dosis": "600-1.200 cc/ha de formulado 48% EC (valor histórico de referencia)",
+    "grado": null,
+    "bandaTox": "Amarilla (II)",
+    "indiceSalino": null,
+    "carencia": "21-35 días según cultivo; ver marbete",
+    "nota": "ATENCIÓN REGU- LATORIA: en Argentina el uso agrícola de clorpirifós y clorpirifósmetil está PROHIBIDO por SENASA, con cronograma escalonado de baja. Figura acá solo como referencia histórica y para identificar remanentes en depósito. Verificá la norma vigente y el estado del registro en SENASA antes de cualquier consideración."
+  },
+  {
+    "id": "imidacloprid",
+    "principioActivo": "Imidacloprid",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 4A",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "chinches",
+      "pulgones",
+      "trips",
+      "chicharrita (Dalbulus maidis)",
+      "mosca blanca"
+    ],
+    "dosis": "Curasemilla: 100- 300 cc/100 kg de semilla (formulado 60% FS). Foliar: 100-250 cc/ha (formulado 35% SC)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "21 días foliar; curasemilla no aplica; ver marbete",
+    "nota": "En maíz la curasemilla neonicotinoide da una ventana de protección temprana de ~20-25 días contra Dalbulus: baja transmisión inicial, pero no reemplaza el manejo cultural (fecha de siembra y control de maíz guacho, que es el reservorio). Altamente tóxico para abejas: no aplicar en floración ni con deriva sobre colmenas."
+  },
+  {
+    "id": "tiametoxam",
+    "principioActivo": "Tiametoxam",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 4A",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "chinches",
+      "pulgones",
+      "trips",
+      "chicharrita (Dalbulus maidis)",
+      "mosca blanca"
+    ],
+    "dosis": "Curasemilla: 100- 300 cc/100 kg de semilla (formulado 35% FS). Foliar: 100-200 g/ha (formulado 25% WG)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "21 días foliar; ver marbete",
+    "nota": "Base del paquete antichicharrita en NOA/NEA y centronorte, generalmente en mezcla comercial con una diamida antipicudo/orugas. Sigue siendo grupo 4A: si curaste la semilla con 4A, no repitas foliar 4A en los primeros estadios, rotá a 4D o 3A. Muy tóxico para abejas."
+  },
+  {
+    "id": "acetamiprid",
+    "principioActivo": "Acetamiprid",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 4A",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "girasol"
+    ],
+    "objetivos": [
+      "chinches",
+      "pulgones",
+      "chicharrita",
+      "mosca blanca"
+    ],
+    "dosis": "150-300 g/ha de formulado 20% SP",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "Es el 4A menos tóxico para abejas del grupo, pero sigue habiendo restricción en floración. Buena acción translaminar sobre insectos escondidos en el cogollo. No lo uses en secuencia con tiametoxam o imidacloprid: para la resistencia son todos el mismo grupo."
+  },
+  {
+    "id": "clorantraniliprol",
+    "principioActivo": "Clorantraniliprol",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 28",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "girasol"
+    ],
+    "objetivos": [
+      "orugas defoliadoras",
+      "Spodoptera frugiperda",
+      "Anticarsia",
+      "Rachiplusia",
+      "Helicoverpa",
+      "Diatraea",
+      "barrenador del tallo"
+    ],
+    "dosis": "25–50 cc/ha en defoliadoras de soja; 50–100 cc/ha para Spodoptera frugiperda y Diatraea en maíz (formulado 20% SC)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "El estándar para cogollero en maíz no-Bt y para refugios: residualidad de 14-21 días y muy blando con benéficos y abejas. Justamente por eso hay que cuidarlo: resistencia documentada en Spodoptera en Brasil. Máximo 2 aplicaciones consecutivas de grupo 28 por campaña y después rotá a 5, 18 o 22A. Dosis alta con presión alta y larvas de más de 2 estadios."
+  },
+  {
+    "id": "flubendiamida",
+    "principioActivo": "Flubendiamida",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 28",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "girasol"
+    ],
+    "objetivos": [
+      "orugas defoliadoras",
+      "Spodoptera frugiperda"
+    ],
+    "dosis": "20-50 cc/ha de formulado 48% SC",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "Actúa solo por ingestión, así que la cobertura manda: subí volumen de caldo y apuntá al cogollo. Muy selectivo (no toca predatores ni parasitoides), ideal en MIP. Comparte grupo 28 con clorantraniliprol: alternar entre ambos NO es rotar."
+  },
+  {
+    "id": "spinetoram",
+    "principioActivo": "Spinetoram",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 5",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "girasol"
+    ],
+    "objetivos": [
+      "orugas",
+      "trips",
+      "Spodoptera",
+      "Helicoverpa",
+      "minadores"
+    ],
+    "dosis": "50-120 cc/ha de formulados al 12%, o 50-100 g/ha en WG 25%; según formulación",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "7-14 días; ver marbete",
+    "nota": "De lo mejor que hay para trips, un target donde piretroides y neonicotinoides ya vienen fallando. Es tóxico para abejas mientras el caldo está húmedo y se vuelve prácticamente inocuo una vez seco: aplicá al atardecer. Rotación de lujo frente a 28 y 3A."
+  },
+  {
+    "id": "indoxacarb",
+    "principioActivo": "Indoxacarb",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 22A",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "girasol"
+    ],
+    "objetivos": [
+      "orugas",
+      "Spodoptera frugiperda",
+      "Helicoverpa"
+    ],
+    "dosis": "100-200 cc/ha de formulado 15% SC (o 60-125 g/ha en WG 30%)",
+    "grado": null,
+    "bandaTox": "Amarilla (II)",
+    "indiceSalino": null,
+    "carencia": "7-14 días; ver marbete",
+    "nota": "Proinsecticida: lo activa el metabolismo de la larva, por eso el corte de daño es rápido aunque la muerte tarde. Carencia corta, útil cerca de cosecha. Grupo 22A puro para romper una secuencia de diamidas (28) sin caer en piretroides."
+  },
+  {
+    "id": "metoxifenocida",
+    "principioActivo": "Metoxifenocida",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 18",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "girasol"
+    ],
+    "objetivos": [
+      "orugas defoliadoras",
+      "Spodoptera",
+      "Anticarsia",
+      "Rachiplusia",
+      "Helicoverpa"
+    ],
+    "dosis": "100-250 cc/ha de formulado 24% SC",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "7-14 días; ver marbete",
+    "nota": "Es el único grupo 18 de este listado y prácticamente la única diacilhidrazina de uso corriente hoy en extensivos argentinos (el grupo incluye además tebufenozide). Cuidalo: no hay muchos modos de acción de recambio con este nivel de selectividad sobre benéficos."
+  },
+  {
+    "id": "novaluron",
+    "principioActivo": "Novaluron",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 15",
+    "cultivos": [
+      "soja",
+      "maiz"
+    ],
+    "objetivos": [
+      "orugas defoliadoras",
+      "Spodoptera frugiperda",
+      "mosca blanca"
+    ],
+    "dosis": "100-250 cc/ha de formulado 10% EC",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "Regulador de crecimiento: mata en la muda, no de golpe. No lo evalúes a las 48 h ni lo uses con daño instalado. Buena residualidad y ovicida sobre huevos recién puestos. Cero efecto sobre adultos de benéficos, aunque sí afecta estadios inmaduros de predatores."
+  },
+  {
+    "id": "diflubenzuron",
+    "principioActivo": "Diflubenzuron",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 15",
+    "cultivos": [
+      "soja",
+      "maiz"
+    ],
+    "objetivos": [
+      "isocas defoliadoras",
+      "Spodoptera"
+    ],
+    "dosis": "30-100 g/ha de formulado 25% WP",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "Barato y de baja toxicidad para vertebrados, pero mismo grupo 15 que novaluron: alternarlos no es rotar. Solo actúa sobre larvas jóvenes y por ingestión/contacto en la muda. Muy tóxico para crustáceos: cuidá zonas de amortiguamiento cerca de cursos de agua."
+  },
+  {
+    "id": "abamectina",
+    "principioActivo": "Abamectina",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 6",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "girasol"
+    ],
+    "objetivos": [
+      "trips",
+      "aranuela roja (Tetranychus urticae)",
+      "acaros"
+    ],
+    "dosis": "200-500 cc/ha de formulado 1,8% EC según target y volumen",
+    "grado": null,
+    "bandaTox": "Amarilla (II)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "Los brotes de arañuela suelen ser consecuencia de haber quemado los ácaros predatores con piretroides: revisá el historial antes de aplicar. Es translaminar, no sistémico, así que necesita mojar bien el envés. Muy tóxico para abejas en húmedo y para organismos acuáticos."
+  },
+  {
+    "id": "bifentrin",
+    "principioActivo": "Bifentrin",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 3A",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "girasol"
+    ],
+    "objetivos": [
+      "chinches",
+      "trips",
+      "chicharrita",
+      "acaros"
+    ],
+    "dosis": "50-200 cc/ha de formulado 10% EC según plaga",
+    "grado": null,
+    "bandaTox": "Amarilla (II)",
+    "indiceSalino": null,
+    "carencia": "21-30 días; ver marbete",
+    "nota": "Es de los pocos piretroides con acción real sobre ácaros (junto a fenpropatrin), lo que reduce el rebote de arañuela típico de cipermetrina. Aun así es 3A: no lo encadenes con lambdacialotrina ni cipermetrina."
+  },
+  {
+    "id": "sulfoxaflor",
+    "principioActivo": "Sulfoxaflor",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 4C",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "chinches",
+      "Nezara",
+      "Piezodorus",
+      "Dichelops",
+      "Edessa",
+      "pulgones",
+      "hemipteros"
+    ],
+    "dosis": "100-200 cc/ha de formulado 24% SC",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "La herramienta más consistente hoy para chinches, donde piretroides y organofosforados vienen perdiendo eficacia. Es 4C, no 4A: técnicamente rota frente a tiametoxam/imidacloprid, aunque hay resistencia cruzada parcial reportada, así que no abuses. Restricciones fuertes de uso en floración por toxicidad a abejas. Si lo pensás para Dalbulus, verificá primero que el marbete tenga ese target registrado."
+  },
+  {
+    "id": "flupiradifurona",
+    "principioActivo": "Flupiradifurona",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 4D",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "chinches",
+      "pulgones",
+      "chicharrita (Dalbulus maidis)",
+      "mosca blanca"
+    ],
+    "dosis": "300-750 cc/ha de formulado 20% SL según plaga y presión",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "14-21 días; ver marbete",
+    "nota": "Pieza clave para rotar en el planteo antichicharrita: es 4D, distinto subgrupo que la curasemilla 4A, así que te permite una segunda ventana sin repetir modo de acción. Sistémico y translaminar, llega al adulto que se esconde en el cogollo. Perfil más benigno para abejas que los 4A, pero igual respetá las restricciones del marbete. Acordate: bajar poblaciones de Dalbulus reduce transmisión, no cura la planta ya infectada por el achaparramiento."
+  },
+  {
+    "id": "bacillus-thuringiensis",
+    "principioActivo": "Bacillus thuringiensis (var. kurstaki / aizawai)",
+    "tipo": "insecticida",
+    "grupoMoa": "IRAC 11A",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "girasol"
+    ],
+    "objetivos": [
+      "Spodoptera frugiperda",
+      "Anticarsia",
+      "Rachiplusia",
+      "Helicoverpa",
+      "lepidopteros"
+    ],
+    "dosis": "500-1.500 g/ha de formulados WP/WG (típicamente 32.000 UI/mg); según formulación y título",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "0 días en general; ver marbete",
+    "nota": "Solo por ingestión y solo sobre larvas chicas: si la oruga ya está grande, no sirve. Se degrada con UV, así que aplicá al atardecer y con buena cobertura sobre el cogollo. Carencia cero lo hace ideal cerca de cosecha y en lotes con conflicto de vecindad. Ojo con el maíz Bt: usar Cry foliar sobre eventos Bt suma presión de selección sobre las mismas toxinas."
+  },
+  {
+    "id": "azoxistrobina",
+    "principioActivo": "Azoxistrobina",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 11",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "roya asiatica",
+      "roya comun",
+      "roya de la hoja",
+      "mancha en ojo de rana (MOR)",
+      "mancha amarilla",
+      "tizon",
+      "Cercospora"
+    ],
+    "dosis": "Referencia: 60- 125 g i.a./ha (equivale a 0,3- 0,5 L/ha de un SC 25%). Casi siempre en premezcla con triazol o SDHI",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Típico 21-30 días en soja y maíz, 30- 40 días en trigo — verificá el marbete",
+    "nota": "Nunca sola: QoI es resistencia de sitio único (mutación G143A) y ya hay poblaciones de Cercospora sojina y Zymoseptoria tritici con sensibilidad reducida en la región. Máximo 2 aplicaciones de QoI por campaña y siempre mezclada con un modo de acción distinto. En trigo, no apliques QoI en espiga (Z59–65) con riesgo de fusariosis: no controlan F. graminearum y pueden aumentar el DON en grano. Ahí va triazol específico (protioconazole/tebuconazole) dirigido a la espiga."
+  },
+  {
+    "id": "piraclostrobin",
+    "principioActivo": "Piraclostrobin",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 11",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "royas",
+      "mancha en ojo de rana (MOR)",
+      "mancha marron",
+      "manchas foliares",
+      "antracnosis",
+      "tizon",
+      "Cercospora"
+    ],
+    "dosis": "Referencia: 50- 133 g i.a./ha. En premezclas comerciales, 0,3- 0,8 L/ha del formulado según concentración",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "Típico 20-30 días en soja, 30 días en trigo — verificá el marbete",
+    "nota": "El famoso 'efecto verde' (retención de área foliar) no reemplaza control: si aplicás tarde sobre pústulas activas, la planta se ve verde pero el rinde ya se perdió. Aplicá preventivo o en inicio de síntomas, nunca curativo. En trigo, no apliques QoI en espiga (Z59–65) con riesgo de fusariosis: no controlan F. graminearum y pueden aumentar el DON en grano. Ahí va triazol específico (protioconazole/tebuconazole) dirigido a la espiga."
+  },
+  {
+    "id": "trifloxistrobina",
+    "principioActivo": "Trifloxistrobina",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 11",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "roya de la hoja",
+      "mancha en ojo de rana (MOR)",
+      "mancha amarilla",
+      "tizon",
+      "septoriosis"
+    ],
+    "dosis": "Referencia: 50- 100 g i.a./ha (0,3-0,75 L/ha de las premezclas más comunes)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Típico 30-40 días en trigo, 21-30 días en soja — verificá el marbete",
+    "nota": "Comparte sitio de acción con el resto de las estrobilurinas: alternar entre QoI no es alternar nada. Si ya metiste una azoxistrobina, la rotación real es hacia SDHI o multisitio, no hacia otra estrobi. En trigo, no apliques QoI en espiga (Z59–65) con riesgo de fusariosis: no controlan F. graminearum y pueden aumentar el DON en grano. Ahí va triazol específico (protioconazole/tebuconazole) dirigido a la espiga."
+  },
+  {
+    "id": "epoxiconazole",
+    "principioActivo": "Epoxiconazole",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 3",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "roya de la hoja",
+      "mancha en ojo de rana (MOR)",
+      "mancha amarilla",
+      "tizon",
+      "septoriosis"
+    ],
+    "dosis": "Referencia: 25- 60 g i.a./ha, prácticamente siempre dentro de una premezcla",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "Típico 30-40 días en trigo, 30 días en soja — verificá el marbete",
+    "nota": "Es sospechoso de toxicidad reproductiva y está prohibido en la UE: revisá antes de usarlo si el lote va a grano con destino de exportación con LMR europeo. En el manejo, los DMI ya perdieron sensibilidad frente a roya asiática por mutaciones acumuladas en el gen CYP51"
+  },
+  {
+    "id": "tebuconazole",
+    "principioActivo": "Tebuconazole",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 3",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "royas",
+      "mancha en ojo de rana (MOR)",
+      "tizon",
+      "fusariosis de la espiga",
+      "carbones (Ustilago)",
+      "caries"
+    ],
+    "dosis": "Referencia foliar: 130-215 g i.a./ha (0,3-0,5 L/ha de un SC 43%). Para fusariosis de espiga, el extremo alto del rango",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "Típico 30 días en trigo y soja — verificá el marbete",
+    "nota": "Es el caballo de batalla contra fusariosis de la espiga en trigo, pero el momento es todo: antesis (Z61-65), con boquillas dobles o inclinadas hacia la espiga y caudal alto. Aplicado en hoja bandera no te cubre la espiga. Control esperable de FET: parcial, nunca total"
+  },
+  {
+    "id": "protioconazole",
+    "principioActivo": "Protioconazole",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 3",
+    "cultivos": [
+      "soja",
+      "trigo",
+      "cebada"
+    ],
+    "objetivos": [
+      "royas",
+      "mancha amarilla",
+      "septoriosis",
+      "fusariosis de la espiga",
+      "Fusarium graminearum",
+      "EFC"
+    ],
+    "dosis": "Referencia: 60- 125 g i.a./ha (0,4-0,8 L/ha de las premezclas habituales)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Típico 30-40 días en trigo — verificá el marbete",
+    "nota": "Además de bajar severidad de espiga, es el que mejor correlaciona con reducción de DON (deoxinivalenol) en grano — dato que importa si el trigo va a molinería con tolerancia de micotoxinas. Igual: sin aplicación en antesis y con lluvias en floración, ningún fungicida te salva"
+  },
+  {
+    "id": "ciproconazole",
+    "principioActivo": "Ciproconazole",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 3",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "roya asiatica",
+      "royas",
+      "mancha en ojo de rana (MOR)",
+      "mancha marron",
+      "manchas foliares",
+      "tizon"
+    ],
+    "dosis": "Referencia: 20- 40 g i.a./ha (0,3- 0,5 L/ha de las premezclas más difundidas)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Típico 21-30 días en soja, 30 días en trigo — verificá el marbete",
+    "nota": "Aporta curatividad corta (2-3 días de infección latente), no más. Si hay pústulas esporulando la premezcla ya llegó tarde: el criterio en roya de soja es monitoreo + aplicación en R3-R5.1 antes de síntomas visibles en el tercio medio"
+  },
+  {
+    "id": "fluxapyroxad",
+    "principioActivo": "Fluxapyroxad",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 7",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "cebada"
+    ],
+    "objetivos": [
+      "royas",
+      "mancha en ojo de rana (MOR)",
+      "mancha marron",
+      "mancha amarilla",
+      "tizon",
+      "Cercospora",
+      "septoriosis",
+      "ramularia"
+    ],
+    "dosis": "Referencia: 40- 75 g i.a./ha (0,5- 0,8 L/ha de las premezclas triples más usadas)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "Típico 21-30 días en soja, 30-40 días en trigo — verificá el marbete",
+    "nota": "Los SDHI son el grupo de mayor valor residual hoy y por eso el de mayor riesgo de quemarse: sitio único, mutaciones en sdhB/sdhC ya reportadas en Ramularia y Zymoseptoria en Europa. Máximo 2 aplicaciones de SDHI por ciclo, siempre en mezcla, nunca dos SDHI seguidos"
+  },
+  {
+    "id": "bixafen",
+    "principioActivo": "Bixafen",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 7",
+    "cultivos": [
+      "soja",
+      "trigo",
+      "cebada"
+    ],
+    "objetivos": [
+      "royas",
+      "mancha en ojo de rana (MOR)",
+      "mancha amarilla",
+      "septoriosis",
+      "ramularia",
+      "escaldadura"
+    ],
+    "dosis": "Referencia: 50- 75 g i.a./ha (0,4- 0,6 L/ha de las premezclas más comunes)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Típico 30-40 días en trigo y cebada — verificá el marbete",
+    "nota": "El retorno de un SDHI en trigo se juega en la hoja bandera (Z37-39): esa hoja aporta la mayor parte del llenado. Aplicar antes desperdicia residualidad y aplicar después no recupera el área ya perdida"
+  },
+  {
+    "id": "benzovindiflupir",
+    "principioActivo": "Benzovindiflupir",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 7",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "roya asiatica",
+      "royas",
+      "mancha en ojo de rana (MOR)",
+      "tizon"
+    ],
+    "dosis": "Referencia: 30- 60 g i.a./ha (0,3- 0,5 L/ha de SC, o 0,15-0,2 kg/ha en formulados WG)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Típico 21-30 días en soja — verificá el marbete",
+    "nota": "Es de los más potentes sobre roya asiática, lo que lo vuelve el activo a proteger. Reservalo para la aplicación de mayor presión (R3-R5.1 con condiciones predisponentes) y acompañalo con un multisitio; no lo gastes en la primera pasada preventiva de baja presión"
+  },
+  {
+    "id": "mancozeb",
+    "principioActivo": "Mancozeb",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC M03",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "royas",
+      "mancha en ojo de rana (MOR)",
+      "manchas foliares",
+      "septoriosis"
+    ],
+    "dosis": "Referencia: 1.200-2.000 g i.a./ha (1,5-2,5 kg/ha de un WP/WG 80%)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Típico 30-45 días — verificá el marbete",
+    "nota": "Es tu seguro antiresistencia: al ser multisitio, no genera presión de selección y protege la vida útil de QoI y SDHI. Contras reales: es puro contacto, se lava con 20-25 mm de lluvia y exige buena cobertura (mínimo 100 L/ha terrestre, gota finamedia). No aprobado en la UE desde 2021 (toxicidad reproductiva / disrupción endocrina): si el grano va a exportación con LMR europeo, chequealo antes de usarlo."
+  },
+  {
+    "id": "clorotalonil",
+    "principioActivo": "Clorotalonil",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC M05",
+    "cultivos": [
+      "soja",
+      "trigo"
+    ],
+    "objetivos": [
+      "roya asiatica",
+      "mancha en ojo de rana (MOR)",
+      "mancha marron",
+      "tizon",
+      "Cercospora"
+    ],
+    "dosis": "Referencia: 720- 1.500 g i.a./ha (1,0-2,0 L/ha de un SC 72%)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "Típico 30 días en soja — verificá el marbete",
+    "nota": "Irritante ocular y dérmico marcado, y clasificado en la UE como sospechoso de carcinogenicidad; muy tóxico para organismos acuáticos (cuidá zonas de amortiguamiento y cursos de agua). EPP completo obligatorio. Prohibido en la UE desde 2020: si el grano va a destino europeo, revisá LMR."
+  },
+  {
+    "id": "carbendazim",
+    "principioActivo": "Carbendazim",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 1",
+    "cultivos": [
+      "soja",
+      "trigo"
+    ],
+    "objetivos": [
+      "mancha en ojo de rana (MOR)",
+      "mancha purpura",
+      "antracnosis",
+      "fusariosis de la espiga"
+    ],
+    "dosis": "Referencia: 250- 500 g i.a./ha (0,5-1,0 L/ha de un SC 50%)",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "Típico 30-40 días — verificá el marbete",
+    "nota": "No aprobado en la UE, cancelado en EE.UU. y prohibido en Brasil. Verificá vigencia del registro y restricciones en SENASA, y el LMR del mercado de destino, antes de incluirlo en el programa."
+  },
+  {
+    "id": "difenoconazole",
+    "principioActivo": "Difenoconazole",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 3",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "royas",
+      "mancha en ojo de rana (MOR)",
+      "manchas foliares",
+      "carbones (Ustilago)",
+      "caries"
+    ],
+    "dosis": "Foliar: 100–150 g i.a./ha. Curasemilla: 3–6 g i.a./100 kg de semilla (ref.: 100– 200 cc/100 kg de un FS 30 g/L)",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "Típico 30 días foliar en trigo; N/A en curasemilla — verificá el marbete",
+    "nota": "Si lo usaste como curasemilla, ya metiste una carga de DMI en el ciclo: contala para el conteo de aplicaciones del grupo 3 y no armes el programa foliar como si arrancaras de cero. Ojo con la dosis de curasemilla: es un orden de magnitud menor que la foliar. Verificá el marbete del formulado."
+  },
+  {
+    "id": "carboxin-thiram",
+    "principioActivo": "Carboxin + thiram",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 7",
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "cebada"
+    ],
+    "objetivos": [
+      "carbones (Ustilago)",
+      "caries",
+      "Rhizoctonia"
+    ],
+    "dosis": "Referencia: 200- 300 cc del formulado (aprox. 20+20%) por cada 100 kg de semilla, con caldo de 600-1.000 cc/100 kg",
+    "grado": null,
+    "bandaTox": "Azul (III)",
+    "indiceSalino": null,
+    "carencia": "No aplica (tratamiento de semilla) — respetá el plazo de resiembra y las restricciones de destino del marbete",
+    "nota": "Semilla tratada NO se usa como alimento ni se vende como grano: separá y rotulá el lote. Y el curasemilla no reemplaza calidad de semilla: si el poder germinativo viene bajo, ningún fungicida te va a levantar el stand"
+  },
+  {
+    "id": "fludioxonil-metalaxil-m",
+    "principioActivo": "Fludioxonil + metalaxil-M",
+    "tipo": "fungicida",
+    "grupoMoa": "FRAC 12",
+    "cultivos": [
+      "soja",
+      "maiz"
+    ],
+    "objetivos": [
+      "Fusarium",
+      "Rhizoctonia",
+      "Pythium",
+      "Phytophthora",
+      "Sclerotinia",
+      "oomicetes"
+    ],
+    "dosis": "Referencia: 100- 200 cc del formulado por cada 100 kg de semilla, según concentración y presión de patógenos de suelo",
+    "grado": null,
+    "bandaTox": "Verde (IV)",
+    "indiceSalino": null,
+    "carencia": "No aplica (tratamiento de semilla) — verificá restricciones del marbete",
+    "nota": "El metalaxil solo tiene sentido si esperás oomicetes: siembra temprana, suelo frío, lote con historia de dampingoff o napa alta. En siembra en piso seco y temperatura alta no aporta y es plata tirada. Ojo que FRAC 4 tiene riesgo alto de resistencia si se repite campaña tras campaña sobre el mismo lote"
+  },
+  {
+    "id": "urea-granulada",
+    "principioActivo": "Urea granulada",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "maiz",
+      "trigo",
+      "cebada",
+      "sorgo",
+      "pasturas"
+    ],
+    "objetivos": [
+      "N"
+    ],
+    "dosis": "100-300 kg/ha (46-138 kg N/ha) según análisis de suelo, N-NO3 a 60 cm y rinde objetivo",
+    "grado": "46-0-0",
+    "bandaTox": null,
+    "indiceSalino": 75,
+    "carencia": "no aplica",
+    "nota": "Al voleo en superficie sobre rastrojo, con pH alto, calor y sin lluvia, la volatilización como amoníaco puede llevarse 15-30% del N: incorporá, aplicá antes de una lluvia de 10-15 mm o usá inhibidor. Nunca en contacto con la semilla."
+  },
+  {
+    "id": "urea-tratada-con-nbpt",
+    "principioActivo": "Urea tratada con NBPT (inhibidor de ureasa)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "maiz",
+      "trigo"
+    ],
+    "objetivos": [
+      "N"
+    ],
+    "dosis": "100-300 kg/ha (igual que urea; el inhibidor no cambia la dosis de N)",
+    "grado": "46-0-0",
+    "bandaTox": null,
+    "indiceSalino": 75,
+    "carencia": "no aplica",
+    "nota": "El NBPT compra una ventana de aproximadamente 7-14 días según temperatura, no elimina la pérdida. Solo se paga si la aplicación es superficial y no hay lluvia asegurada; incorporada, el sobreprecio no se recupera."
+  },
+  {
+    "id": "uan-32",
+    "principioActivo": "UAN 32 (solución nitrogenada)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "maiz",
+      "trigo",
+      "cultivos de cobertura"
+    ],
+    "objetivos": [
+      "N"
+    ],
+    "dosis": "100-300 L/ha (densidad ~1,32 kg/L → aprox. 42- 127 kg N/ha)",
+    "grado": "32-0-0",
+    "bandaTox": null,
+    "indiceSalino": 63,
+    "carencia": "no aplica",
+    "nota": "La mitad ureica también volatiliza si queda en superficie: mejor chorreado en banda que pulverizado en abanico. Sobre hoja quema, así que evitá el abanico fino en cultivo emergido y ojo con la temperatura al momento de aplicar."
+  },
+  {
+    "id": "nitrato-de-amonio-calcareo",
+    "principioActivo": "Nitrato de amonio calcáreo (CAN 27)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "trigo",
+      "cebada",
+      "pasturas"
+    ],
+    "objetivos": [
+      "N",
+      "Ca",
+      "Mg"
+    ],
+    "dosis": "150-350 kg/ha (40-95 kg N/ha)",
+    "grado": "27-0-0",
+    "bandaTox": null,
+    "indiceSalino": 65,
+    "carencia": "no aplica",
+    "nota": "Casi no volatiliza, así que rinde mejor que la urea en aplicaciones superficiales de invierno, pero el nitrato lixivia en suelos arenosos con excesos hídricos. El nitrato de amonio puro (33-0-0) está alcanzado por la normativa de precursores de explosivos; el CAN es la alternativa comercial habitual."
+  },
+  {
+    "id": "sulfato-de-amonio",
+    "principioActivo": "Sulfato de amonio",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "maiz",
+      "trigo",
+      "colza",
+      "pasturas"
+    ],
+    "objetivos": [
+      "N",
+      "S"
+    ],
+    "dosis": "80-250 kg/ha (17-52 kg N/ha y 19-60 kg S/ha)",
+    "grado": "21-0-0-24S",
+    "bandaTox": null,
+    "indiceSalino": 69,
+    "carencia": "no aplica",
+    "nota": "Es el fertilizante más acidificante del grupo: en suelos con pH menor a 5,8 y uso repetido, monitoreá pH y presupuestá calcáreo. Aporta S ya disponible como sulfato, a diferencia del azufre elemental."
+  },
+  {
+    "id": "sulfonitrato-de-amonio",
+    "principioActivo": "Sulfonitrato de amonio",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "maiz",
+      "trigo",
+      "cebada"
+    ],
+    "objetivos": [
+      "N",
+      "S"
+    ],
+    "dosis": "100-250 kg/ha (26-65 kg N/ha)",
+    "grado": "26-0-0",
+    "bandaTox": null,
+    "indiceSalino": null,
+    "carencia": "no aplica",
+    "nota": "El grado varía según el formulador: leé el análisis garantizado del rótulo antes de calcular la dosis, no asumas 26-0-0-13S. Ventaja sobre la mezcla física: no segrega en la tolva ni en la distribución."
+  },
+  {
+    "id": "map",
+    "principioActivo": "MAP (fosfato monoamónico)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "girasol"
+    ],
+    "objetivos": [
+      "N",
+      "P"
+    ],
+    "dosis": "60-150 kg/ha (31-78 kg P2O5/ha), a ajustar por P Bray del suelo",
+    "grado": "11-52-0",
+    "bandaTox": null,
+    "indiceSalino": 30,
+    "carencia": "no aplica",
+    "nota": "Es el más seguro de los fosfatados para poner cerca de la semilla porque acidifica la zona de disolución y no libera amoníaco libre, a diferencia del DAP. Aun así, en soja respetá las distancias del cuerpo de siembra."
+  },
+  {
+    "id": "dap",
+    "principioActivo": "DAP (fosfato diamónico)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "maiz",
+      "trigo",
+      "cebada"
+    ],
+    "objetivos": [
+      "N",
+      "P"
+    ],
+    "dosis": "60-150 kg/ha (28-69 kg P2O5/ha y 11-27 kg N/ha)",
+    "grado": "18-46-0",
+    "bandaTox": null,
+    "indiceSalino": 34,
+    "carencia": "no aplica",
+    "nota": "Al disolverse genera una zona alcalina y libera amoníaco libre: en contacto directo con la semilla, y sobre todo en suelos de pH alto y siembras en seco, puede afectar la implantación. Si va en la línea, bajá dosis o pasate a MAP."
+  },
+  {
+    "id": "superfosfato-simple",
+    "principioActivo": "Superfosfato simple (SPS)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "alfalfa",
+      "pasturas"
+    ],
+    "objetivos": [
+      "P",
+      "S",
+      "Ca"
+    ],
+    "dosis": "80-250 kg/ha (17-52 kg P2O5/ha y 10-30 kg S/ha)",
+    "grado": "0-21-0",
+    "bandaTox": null,
+    "indiceSalino": 8,
+    "carencia": "no aplica",
+    "nota": "El bajo índice salino lo hace amigable para aplicación en línea, pero la baja concentración encarece el flete por unidad de P. Mezclado en seco con urea forma una pasta húmeda (reacción higroscópica): si mezclás, aplicá el mismo día, no lo guardes en la tolva."
+  },
+  {
+    "id": "superfosfato-triple",
+    "principioActivo": "Superfosfato triple (SPT)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "soja"
+    ],
+    "objetivos": [
+      "P"
+    ],
+    "dosis": "50-150 kg/ha (23-69 kg P2O5/ha)",
+    "grado": "0-46-0",
+    "bandaTox": null,
+    "indiceSalino": 10,
+    "carencia": "no aplica",
+    "nota": "Aporta bastante menos S y Ca que el simple, así que si venías cubriendo el S con SPS y cambiás a triple, el azufre queda descubierto. Misma incompatibilidad de mezcla física con urea."
+  },
+  {
+    "id": "polifosfato-de-amonio",
+    "principioActivo": "Polifosfato de amonio (APP) líquido",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [],
+    "objetivos": [
+      "N",
+      "P"
+    ],
+    "dosis": "30-90 L/ha en banda (densidad ~1,4 kg/L)",
+    "grado": "10-34-0",
+    "bandaTox": null,
+    "indiceSalino": null,
+    "carencia": "no aplica",
+    "nota": "El polifosfato secuestra cationes, así que tolera cargas de Zn mejor que las soluciones de ortofosfato, pero igual hacé prueba de jarra antes de mezclar. Con aguas duras o pH alto puede precipitar en el tanque."
+  },
+  {
+    "id": "cloruro-de-potasio",
+    "principioActivo": "Cloruro de potasio (KCl)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "papa",
+      "cana de azucar",
+      "yerba",
+      "te",
+      "horticolas",
+      "forestaciones"
+    ],
+    "objetivos": [
+      "K"
+    ],
+    "dosis": "50-200 kg/ha (30-120 kg K2O/ha) según K intercambiable y extracción del cultivo",
+    "grado": "0-0-60",
+    "bandaTox": null,
+    "indiceSalino": 116,
+    "carencia": "no aplica",
+    "nota": "Nunca en contacto con la semilla: es el que más quema por salinidad. En cultivos sensibles al cloruro (tabaco, papa para industria, algunas hortícolas) usá sulfato de potasio y guardá el KCl para los tolerantes."
+  },
+  {
+    "id": "sulfato-de-potasio",
+    "principioActivo": "Sulfato de potasio",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "papa",
+      "horticolas",
+      "frutales",
+      "vid",
+      "tabaco"
+    ],
+    "objetivos": [
+      "K"
+    ],
+    "dosis": "50-200 kg/ha (25-100 kg K2O/ha)",
+    "grado": "0-0-50",
+    "bandaTox": null,
+    "indiceSalino": 46,
+    "carencia": "no aplica",
+    "nota": "Cuesta bastante más por unidad de K que el cloruro: se justifica por el cloruro, no por el potasio. Aporta S como sulfato, así que descontalo del plan de azufre."
+  },
+  {
+    "id": "nitrato-de-potasio",
+    "principioActivo": "Nitrato de potasio",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "papa",
+      "horticolas",
+      "frutales",
+      "vid"
+    ],
+    "objetivos": [
+      "N",
+      "K"
+    ],
+    "dosis": "Fertirriego: 30- 120 kg/ha por ciclo, fraccionado. Foliar: 2-5 kg cada 100 L de caldo",
+    "grado": "13-0-46",
+    "bandaTox": null,
+    "indiceSalino": 74,
+    "carencia": "no aplica",
+    "nota": "Alta solubilidad y muy buena compatibilidad en fertirriego, incluido con nitrato de calcio. Lo que no conviene es armar solución madre concentrada junto con fuentes de sulfato: puede precipitar sulfato de potasio. En foliar, aplicá en horario fresco para no quemar hoja."
+  },
+  {
+    "id": "tiosulfato-de-amonio",
+    "principioActivo": "Tiosulfato de amonio (ATS)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "maiz",
+      "trigo",
+      "cultivos de cobertura"
+    ],
+    "objetivos": [
+      "N",
+      "S"
+    ],
+    "dosis": "20-70 L/ha (densidad ~1,33 kg/L → aprox. 7-24 kg S/ha)",
+    "grado": "12-0-0-26S",
+    "bandaTox": null,
+    "indiceSalino": null,
+    "carencia": "no aplica",
+    "nota": "Es compatible con UAN, que es su uso estándar, pero se descompone y libera azufre si se mezcla con soluciones ácidas (pH bajo) o con calcio. Prueba de jarra obligatoria antes de armar cualquier mezcla nueva en el tanque."
+  },
+  {
+    "id": "azufre-elemental",
+    "principioActivo": "Azufre elemental (bentonítico)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "soja",
+      "maiz",
+      "trigo",
+      "alfalfa"
+    ],
+    "objetivos": [
+      "S"
+    ],
+    "dosis": "15-45 kg/ha de producto (aprox. 13-40 kg S/ha)",
+    "grado": "0-0-0-90S",
+    "bandaTox": null,
+    "indiceSalino": null,
+    "carencia": "no aplica",
+    "nota": "El S elemental necesita oxidarse biológicamente antes de estar disponible: eso depende de temperatura, humedad y tamaño de partícula, y puede tardar semanas o meses. Si el cultivo ya muestra deficiencia, la respuesta la da un sulfato, no esto."
+  },
+  {
+    "id": "yeso-agricola",
+    "principioActivo": "Yeso agrícola (sulfato de calcio dihidratado)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [],
+    "objetivos": [
+      "S",
+      "Ca",
+      "enmienda de suelos sodicos"
+    ],
+    "dosis": "Como fuente de S: 150-400 kg/ha. Como enmienda de suelos sódicos: 1-5 t/ha según RAS y PSI",
+    "grado": null,
+    "bandaTox": null,
+    "indiceSalino": 8,
+    "carencia": "no aplica",
+    "nota": "El yeso NO corrige acidez: no sube el pH, es sulfato de calcio, no carbonato. Para bajar acidez va calcáreo. Y para que la enmienda sódica funcione hace falta drenaje y agua que lave el sodio desplazado, si no solo movés el problema de lugar."
+  },
+  {
+    "id": "calcareo-dolomita",
+    "principioActivo": "Calcáreo / dolomita (carbonato de calcio y magnesio)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [],
+    "objetivos": [
+      "Ca",
+      "Mg",
+      "correccion de acidez"
+    ],
+    "dosis": "500-3000 kg/ha según pH inicial, acidez intercambiable y el PRNT del material",
+    "grado": null,
+    "bandaTox": null,
+    "indiceSalino": 5,
+    "carencia": "no aplica",
+    "nota": "La dosis no se calcula por pH solo: pedí el PRNT (poder relativo de neutralización total) del material, porque entre dos calcáreos la dosis puede diferir al doble. Reacciona lento y necesita incorporación y humedad: aplicá 6-12 meses antes de esperar el efecto."
+  },
+  {
+    "id": "sulfato-de-zinc",
+    "principioActivo": "Sulfato de zinc (monohidratado 33% Zn / heptahidratado 21% Zn)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "maiz",
+      "arroz",
+      "frutales"
+    ],
+    "objetivos": [
+      "Zn"
+    ],
+    "dosis": "Suelo: 5–20 kg/ha de producto = 1,7–6,6 kg Zn/ha con monohidratado (33%) o 1,0–4,2 kg Zn/ha con heptahidratado (21%)",
+    "grado": null,
+    "bandaTox": null,
+    "indiceSalino": null,
+    "carencia": "no aplica",
+    "nota": "En solución con fosfatos precipita como fosfato de zinc y se pierde la disponibilidad: si va en fertirriego o mezcla líquida con fosforados, usá quelato (EDTA) o polifosfato como vehículo. Confirmá el déficit con análisis, no lo apliques a ciegas. Calculá siempre sobre el análisis garantizado del rótulo: son dos sales con concentración distinta."
+  },
+  {
+    "id": "boro",
+    "principioActivo": "Boro (ulexita 10% B / octaborato disódico 20,5% B)",
+    "tipo": "fertilizante",
+    "grupoMoa": null,
+    "cultivos": [
+      "girasol",
+      "alfalfa",
+      "colza",
+      "horticolas",
+      "frutales",
+      "remolacha"
+    ],
+    "objetivos": [
+      "B"
+    ],
+    "dosis": "0,5-2 kg de B/ha al suelo; foliar 200-600 g de B/ha fraccionado",
+    "grado": null,
+    "bandaTox": null,
+    "indiceSalino": null,
+    "carencia": "no aplica",
+    "nota": "Es el micronutriente con menor distancia entre deficiencia y toxicidad: pasarte de 2-3 kg B/ha en un suelo liviano ya es riesgo real de daño. Nunca lo apliques en contacto con la semilla y no lo distribuyas en franjas: exigí buena uniformidad de aplicación."
+  }
+]
