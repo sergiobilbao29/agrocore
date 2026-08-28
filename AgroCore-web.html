@@ -1071,6 +1071,7 @@ const MODULES = [
   { id:'insumos',       label:'Insumos y labores',    icon:'🧪', perm:'produccion:read', section:'Producción' },
   { id:'serviciosTerceros', label:'Servicios a terceros', icon:'🤝', perm:'produccion:read', section:'Producción' },
   { id:'reporteMargen', label:'Reporte de margen',    icon:'💹', perm:'stock:read',      section:'Producción' },
+  { id:'calculadoras',  label:'Calculadoras agronómicas', icon:'🧮', perm:'produccion:read', section:'Producción' },
 
   // ===== STOCK Y DEPÓSITOS =====
   { id:'stock',         label:'Stock',                icon:'📦', perm:'stock:read',      section:'Stock y depósitos' },
@@ -2625,6 +2626,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
+      titulo:'📊 v2.152.0 — Los sueldos ya cuentan como gasto en el Dashboard + Calculadoras agronómicas',
+      desc:'<b>(1) Sueldos en el Dashboard:</b> el costo del personal ahora aparece en <b>Ingresos vs Egresos</b>, <b>Flujo neto</b> y en <b>Egresos por categoría</b> (renglón "Sueldos"). Toma el sueldo del mes de cada empleado activo más los movimientos de la planilla; si el período está liquidado usa el neto pagado (sin contar dos veces). <b>(2) Calculadoras agronómicas:</b> nuevo módulo en <b>Producción</b> con 16 calculadoras (densidad de siembra, forrajeras, engranajes, curado, nitrógeno/urea, mezcla física N-P-K, corrección de nutrientes, encalado, yeso, pulverizadora, estimación de rinde de soja y maíz, conversor).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/08/2026',
       titulo:'🚚 v2.151.0 — Mover animal de un campo/depósito a otro + certificado de traslado',
       desc:'La acción <b>📍 Mover</b> ahora permite <b>trasladar el animal a otro campo/depósito</b> (además de cambiar el box/potrero interno). Al cambiar de campo, su stock pasa a contarse en el campo destino (filtro de Depósito). Se puede cargar <b>transportista y patente</b>, y al guardar se genera un <b>Certificado de traslado</b> imprimible/PDF con origen, destino y datos del animal (documento interno, no reemplaza el DT-e/SENASA).' },
@@ -4960,23 +4964,36 @@ async function dashResumen() {
 /* ==== TAB: Finanzas (ingresos vs egresos detallado + categorías ingreso/egreso) ==== */
 async function dashFinanzas() {
   const target = $('#dash-content');
-  let flujo=[], ccs=[], efectivos=[], bancoMovs=[];
+  let flujo=[], ccs=[], efectivos=[], bancoMovs=[], sueldosMes=[];
   try {
-    const [efRsp, bmRsp, ccRsp] = await Promise.all([
+    const [efRsp, bmRsp, ccRsp, suRsp] = await Promise.all([
       api('/api/efectivo').catch(()=>({data:[]})),
       api('/api/banco-movimientos').catch(()=>({data:[]})),
       api('/api/ctas-ctes').catch(()=>({data:[]})),
+      api('/api/dashboard/sueldos').catch(()=>({data:[]})),
     ]);
     efectivos = efRsp.data || [];
     bancoMovs = bmRsp.data || [];
     ccs = (ccRsp.data || []).filter(c => dashFechaEnFiltro(c.fecha));
+    sueldosMes = suRsp.data || [];
   } catch {}
   await cargarCotizVivas();  // para valorizar cuentas en otra moneda a pesos del día
+  // ¿Es un pago de sueldo generado por una liquidación? Lo contamos aparte
+  // (desde /api/dashboard/sueldos), así que lo excluimos del efectivo para no duplicar.
+  const _esPagoSueldo = (e) => /^Sueldo\s/.test(e.concepto||'') && /Liquidaci[oó]n de sueldo/i.test(e.observaciones||'');
   // Flujo: Efectivo + Banco-movimientos filtrados por dashFechaEnFiltro
   for (const e of efectivos) {
     if (e.tipo === 'transferencia') continue;
+    if (_esPagoSueldo(e)) continue;
     if (!dashFechaEnFiltro(e.fecha)) continue;
     flujo.push({ fecha: e.fecha, monto: e.tipo === 'ingreso' ? Number(e.monto||0) : -Number(e.monto||0), categoria: e.clasificacion === 'propio' ? 'Personal' : 'Empresa' });
+  }
+  // Sueldos del personal (devengado por mes; incluye liquidados y no liquidados).
+  for (const s of (sueldosMes||[])) {
+    const monto = Number(s.monto||0); if (!monto) continue;
+    const f = (s.mes||'') + '-15';
+    if (!dashFechaEnFiltro(f)) continue;
+    flujo.push({ fecha: f, monto: -monto, categoria: 'Sueldos' });
   }
   for (const m of bancoMovs) {
     // TODOS los tipos de movimiento bancario (igual que Movimientos Diarios): cheques
@@ -27668,6 +27685,116 @@ function _aniEstadoBadge(e){
   return `<span class="text-[11px] px-2 py-0.5 rounded-full ${cls}">${esc(ANI_ESTADOS[e]||e||'')}</span>`;
 }
 function _aniIdPorNombre(nom){ if(!nom) return null; const n=(nom||'').trim().toLowerCase(); const a=(state._animales||[]).find(x=>(x.nombre||'').trim().toLowerCase()===n); return a?a.id:null; }
+
+/* ===================== CALCULADORAS AGRONÓMICAS ===================== */
+// Mismas 16 calculadoras que la web pública, dentro del sistema.
+const _CN = id => Number(document.getElementById(id)?.value || 0);
+const _CS = (id,v) => { const e=document.getElementById(id); if(e) e.textContent=v; };
+const _cf0 = n => Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:0});
+const _cf1 = n => Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:1});
+const _cf2 = n => Number(n||0).toLocaleString('es-AR',{maximumFractionDigits:2});
+function calcDensidadS(){ const pl=_CN('cs-ds-pl'),pg=_CN('cs-ds-pg'),pms=_CN('cs-ds-pms'); _CS('cs-ds-out',(pl>0&&pg>0&&pms>0)?_cf1((pl*10000/(pg/100))*pms/1e6):'—'); }
+function calcForrajS(){ const spv=_CN('cs-fo-spv'),pur=_CN('cs-fo-pur'),pg=_CN('cs-fo-pg'),ha=_CN('cs-fo-ha'); if(spv>0&&pur>0&&pg>0){const c=spv/((pur/100)*(pg/100)); _CS('cs-fo-kg',_cf1(c)); _CS('cs-fo-vc',_cf1(pur*pg/100)); _CS('cs-fo-total',_cf0(c*ha));} else {_CS('cs-fo-kg','—');_CS('cs-fo-vc','—');_CS('cs-fo-total','—');} }
+function calcEngrS(){ const sem=_CN('cs-en-sem'),orif=_CN('cs-en-orif'),diam=_CN('cs-en-diam'),pin=_CN('cs-en-pinon'),pat=_CN('cs-en-pat'); if(sem>0&&orif>0&&diam>0&&pin>0){const rel=(sem*Math.PI*(diam/100)*(1-pat/100))/orif; _CS('cs-en-rel',_cf2(rel)); _CS('cs-en-con',rel>0?_cf1(pin/rel):'—');} else {_CS('cs-en-rel','—');_CS('cs-en-con','—');} }
+function calcCuradoS(){ const kg=_CN('cs-cu-kg'),f=_CN('cs-cu-f'),i=_CN('cs-cu-i'),o=_CN('cs-cu-o'),a=_CN('cs-cu-a'),cap=_CN('cs-cu-cap'); if(kg>0){_CS('cs-cu-total',_cf1((f+i+o+a)*kg/100/1000)); _CS('cs-cu-cargas',cap>0?_cf1(kg/cap):'—');} else {_CS('cs-cu-total','—');_CS('cs-cu-cargas','—');} }
+function calcUreaS(){ const meta=_CN('cs-nu-meta'),su=_CN('cs-nu-suelo'),ar=_CN('cs-nu-arr'),pn=_CN('cs-nu-pn'); const falta=Math.max(0,meta-su-ar); _CS('cs-nu-falta',_cf0(falta)); _CS('cs-nu-kg',pn>0?_cf0(falta/(pn/100)):'—'); }
+function calcMezclaS(){ const n=_CN('cs-mf-n'),p=_CN('cs-mf-p'),k=_CN('cs-mf-k'),nu=_CN('cs-mf-nurea'),pm=_CN('cs-mf-pmap'),nm=_CN('cs-mf-nmap'),kc=_CN('cs-mf-kclo'); const map=pm>0?p/(pm/100):0; const urea=nu>0?Math.max(0,(n-map*(nm/100))/(nu/100)):0; const clo=kc>0?k/(kc/100):0; _CS('cs-mf-map',_cf0(map)); _CS('cs-mf-urea',_cf0(urea)); _CS('cs-mf-clo',_cf0(clo)); _CS('cs-mf-total',_cf0(map+urea+clo)); }
+function calcCorrS(){ const an=_CN('cs-co-an'),um=_CN('cs-co-um'),pr=_CN('cs-co-prof'),de=_CN('cs-co-dens'),ef=_CN('cs-co-efic'); const br=um-an; _CS('cs-co-brecha',_cf1(br)); const sin=Math.max(0,br)*pr*de*0.1; _CS('cs-co-kg',ef>0?_cf0(sin/(ef/100)):'—'); }
+function calcEncalS(){ const cic=_CN('cs-ec-cic'),v1=_CN('cs-ec-v1'),v2=_CN('cs-ec-v2'),pr=_CN('cs-ec-prnt'),ha=_CN('cs-ec-ha'); const t=(pr>0&&v2>v1)?((v2-v1)*cic)/pr:0; _CS('cs-ec-tha',t>0?_cf2(t):'—'); _CS('cs-ec-total',t>0?_cf1(t*ha):'—'); }
+function calcYesoS(){ const s=_CN('cs-ye-s'),cs=_CN('cs-ye-conts'),cca=_CN('cs-ye-contca'),ha=_CN('cs-ye-ha'); if(cs>0&&s>0){const kg=s/(cs/100); _CS('cs-ye-kg',_cf0(kg)); _CS('cs-ye-ca',_cf1(kg*(cca/100))); _CS('cs-ye-total',_cf0(kg*ha));} else {_CS('cs-ye-kg','—');_CS('cs-ye-ca','—');_CS('cs-ye-total','—');} }
+function calcDosisS(){ const ha=_CN('cs-dt-ha'),do_=_CN('cs-dt-dosis'),ca=_CN('cs-dt-caldo'),ta=_CN('cs-dt-tanque'); _CS('cs-dt-total',do_>0&&ha>0?_cf0(ha*do_):'—'); if(ca>0&&ta>0){const h=ta/ca; _CS('cs-dt-hatan',_cf1(h)); _CS('cs-dt-prodtan',_cf1(h*do_));} else {_CS('cs-dt-hatan','—');_CS('cs-dt-prodtan','—');} }
+function calcPulverS(){ const vol=_CN('cs-pu-vol'),vel=_CN('cs-pu-vel'),di=_CN('cs-pu-dist'),an=_CN('cs-pu-ancho'); if(vol>0&&vel>0&&di>0){const past=(vol*vel*di)/60000; _CS('cs-pu-past',_cf2(past)); const nn=an>0?(an*100/di):0; _CS('cs-pu-total',nn>0?_cf1(past*nn):'—');} else {_CS('cs-pu-past','—');_CS('cs-pu-total','—');} }
+function calcRindeSojaS(){ const pl=_CN('cs-rs-pl'),v=_CN('cs-rs-vai'),g=_CN('cs-rs-gra'),pmg=_CN('cs-rs-pmg'); if(pl>0&&v>0&&g>0&&pmg>0){const kg=pl*v*g*pmg/100; _CS('cs-rs-tn',_cf2(kg/1000)); _CS('cs-rs-qq',_cf1(kg/100)); _CS('cs-rs-kg',_cf0(kg));} else {_CS('cs-rs-tn','—');_CS('cs-rs-qq','—');_CS('cs-rs-kg','—');} }
+function calcRindeMaizS(){ const pl=_CN('cs-rm-pl'),h=_CN('cs-rm-hil'),g=_CN('cs-rm-gra'),pmg=_CN('cs-rm-pmg'); if(pl>0&&h>0&&g>0&&pmg>0){const kg=pl*h*g*pmg/1e6; _CS('cs-rm-tn',_cf2(kg/1000)); _CS('cs-rm-qq',_cf1(kg/100)); _CS('cs-rm-kg',_cf0(kg));} else {_CS('cs-rm-tn','—');_CS('cs-rm-qq','—');_CS('cs-rm-kg','—');} }
+function calcConvS(){ const qq=_CN('cs-cv-qq'),ha=_CN('cs-cv-ha'); if(qq>0){_CS('cs-cv-tn',_cf2(qq/10)); _CS('cs-cv-kg',_cf0(qq*100)); _CS('cs-cv-prod',ha>0?_cf1(qq/10*ha):'—');} else {_CS('cs-cv-tn','—');_CS('cs-cv-kg','—');_CS('cs-cv-prod','—');} }
+function _calcRecalcAll(){ [calcDensidadS,calcForrajS,calcEngrS,calcCuradoS,calcUreaS,calcMezclaS,calcCorrS,calcEncalS,calcYesoS,calcDosisS,calcPulverS,calcRindeSojaS,calcRindeMaizS,calcConvS].forEach(fn=>{try{fn();}catch(e){}}); }
+pages.calculadoras = async function(){
+  setHeader('Calculadoras agronómicas','Siembra, fertilización, aplicación y rinde');
+  const card = (titulo, sub, body) => `<div class="card p-4"><div class="font-semibold text-slate-800">${titulo}</div><div class="text-xs text-slate-500 mb-2">${sub}</div>${body}</div>`;
+  const res = (inner) => `<div class="mt-2 rounded-lg p-2 text-center" style="background:#f0fdf4">${inner}</div>`;
+  const big = (id,unidad) => `<span class="text-xl font-extrabold text-emerald-700" id="${id}">—</span> <span class="text-xs text-slate-500">${unidad||''}</span>`;
+  $('#page-body').innerHTML = `
+    <div class="space-y-5">
+      <div class="text-sm text-slate-500">Cálculos rápidos de criterio agronómico. Los valores son orientativos: ajustá a tu lote, análisis de suelo y al marbete del producto.</div>
+
+      <div><div class="text-lg font-bold text-emerald-800 mb-2">🌱 Siembra e implantación</div>
+      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+        ${card('Densidad — granos','Kg de semilla por hectárea.',`
+          <label class="label">Plantas (pl/m²)</label><input id="cs-ds-pl" type="number" value="30" class="input mb-2" oninput="calcDensidadS()"/>
+          <label class="label">Poder germinativo (%)</label><input id="cs-ds-pg" type="number" value="90" class="input mb-2" oninput="calcDensidadS()"/>
+          <label class="label">Peso mil semillas (g)</label><input id="cs-ds-pms" type="number" value="180" class="input" oninput="calcDensidadS()"/>
+          ${res(big('cs-ds-out','kg/ha'))}`)}
+        ${card('Densidad — forrajeras','Semilla comercial por valor cultural.',`
+          <label class="label">Dosis pura viable (kg/ha)</label><input id="cs-fo-spv" type="number" step="0.1" value="12" class="input mb-2" oninput="calcForrajS()"/>
+          <label class="label">Pureza (%)</label><input id="cs-fo-pur" type="number" value="96" class="input mb-2" oninput="calcForrajS()"/>
+          <label class="label">Poder germinativo (%)</label><input id="cs-fo-pg" type="number" value="85" class="input mb-2" oninput="calcForrajS()"/>
+          <label class="label">Superficie (ha)</label><input id="cs-fo-ha" type="number" value="45" class="input" oninput="calcForrajS()"/>
+          ${res(big('cs-fo-kg','kg/ha')+`<div class="text-xs text-slate-500">VC <span id="cs-fo-vc">—</span>% · total <span id="cs-fo-total">—</span> kg</div>`)}`)}
+        ${card('Engranajes de sembradora','Piñón conducido para tu densidad.',`
+          <label class="label">Semillas (sem/m)</label><input id="cs-en-sem" type="number" step="0.1" value="18" class="input mb-2" oninput="calcEngrS()"/>
+          <label class="label">Orificios del disco</label><input id="cs-en-orif" type="number" value="60" class="input mb-2" oninput="calcEngrS()"/>
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">Ø rueda (cm)</label><input id="cs-en-diam" type="number" value="62" class="input" oninput="calcEngrS()"/></div><div><label class="label">Piñón conductor</label><input id="cs-en-pinon" type="number" value="17" class="input" oninput="calcEngrS()"/></div></div>
+          <label class="label mt-2">Patinamiento (%)</label><input id="cs-en-pat" type="number" value="5" class="input" oninput="calcEngrS()"/>
+          ${res(big('cs-en-con','dientes')+`<div class="text-xs text-slate-500">relación <span id="cs-en-rel">—</span></div>`)}`)}
+        ${card('Curado de semilla','Caldo total y por carga (cc/100 kg).',`
+          <label class="label">Semilla a curar (kg)</label><input id="cs-cu-kg" type="number" value="4200" class="input mb-2" oninput="calcCuradoS()"/>
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">Fungicida</label><input id="cs-cu-f" type="number" value="250" class="input" oninput="calcCuradoS()"/></div><div><label class="label">Insecticida</label><input id="cs-cu-i" type="number" value="180" class="input" oninput="calcCuradoS()"/></div><div><label class="label">Inoculante</label><input id="cs-cu-o" type="number" value="300" class="input" oninput="calcCuradoS()"/></div><div><label class="label">Agua</label><input id="cs-cu-a" type="number" value="400" class="input" oninput="calcCuradoS()"/></div></div>
+          <label class="label mt-2">Capacidad (kg/carga)</label><input id="cs-cu-cap" type="number" value="500" class="input" oninput="calcCuradoS()"/>
+          ${res(big('cs-cu-total','L')+`<div class="text-xs text-slate-500"><span id="cs-cu-cargas">—</span> cargas</div>`)}`)}
+      </div></div>
+
+      <div><div class="text-lg font-bold text-emerald-800 mb-2">🧪 Fertilización y suelo</div>
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        ${card('Nitrógeno: cuánta urea','Kg de fertilizante para tu meta de N.',`
+          <label class="label">Meta de N (kg/ha)</label><input id="cs-nu-meta" type="number" value="120" class="input mb-2" oninput="calcUreaS()"/>
+          <label class="label">N en suelo (kg/ha)</label><input id="cs-nu-suelo" type="number" value="40" class="input mb-2" oninput="calcUreaS()"/>
+          <label class="label">N del arrancador (kg/ha)</label><input id="cs-nu-arr" type="number" value="10" class="input mb-2" oninput="calcUreaS()"/>
+          <label class="label">% N del fertilizante</label><input id="cs-nu-pn" type="number" value="46" class="input" oninput="calcUreaS()"/>
+          ${res(big('cs-nu-kg','kg/ha')+`<div class="text-xs text-slate-500">faltan <span id="cs-nu-falta">—</span> kg N/ha</div>`)}`)}
+        ${card('Mezcla física (N-P-K)','MAP + Urea + Cloruro para tu objetivo.',`
+          <div class="grid grid-cols-3 gap-2"><div><label class="label">N</label><input id="cs-mf-n" type="number" value="160" class="input" oninput="calcMezclaS()"/></div><div><label class="label">P₂O₅</label><input id="cs-mf-p" type="number" value="55" class="input" oninput="calcMezclaS()"/></div><div><label class="label">K₂O</label><input id="cs-mf-k" type="number" value="30" class="input" oninput="calcMezclaS()"/></div></div>
+          <div class="grid grid-cols-4 gap-2 mt-2"><div><label class="label">%N urea</label><input id="cs-mf-nurea" type="number" value="46" class="input" oninput="calcMezclaS()"/></div><div><label class="label">%P MAP</label><input id="cs-mf-pmap" type="number" value="52" class="input" oninput="calcMezclaS()"/></div><div><label class="label">%N MAP</label><input id="cs-mf-nmap" type="number" value="11" class="input" oninput="calcMezclaS()"/></div><div><label class="label">%K clor</label><input id="cs-mf-kclo" type="number" value="60" class="input" oninput="calcMezclaS()"/></div></div>
+          ${res(`<div class="text-sm">MAP <b id="cs-mf-map">—</b> · Urea <b id="cs-mf-urea">—</b> · Cloruro <b id="cs-mf-clo">—</b> <span class="text-xs text-slate-500">kg/ha</span></div><div class="text-xs text-slate-500">Total: <b id="cs-mf-total">—</b> kg/ha</div>`)}`)}
+        ${card('Corrección según análisis','Kg/ha para llegar al umbral (P, K, S…).',`
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">Análisis (ppm)</label><input id="cs-co-an" type="number" step="0.1" value="9.5" class="input" oninput="calcCorrS()"/></div><div><label class="label">Umbral (ppm)</label><input id="cs-co-um" type="number" value="18" class="input" oninput="calcCorrS()"/></div><div><label class="label">Profundidad (cm)</label><input id="cs-co-prof" type="number" value="20" class="input" oninput="calcCorrS()"/></div><div><label class="label">Densidad (g/cm³)</label><input id="cs-co-dens" type="number" step="0.01" value="1.25" class="input" oninput="calcCorrS()"/></div></div>
+          <label class="label mt-2">Eficiencia de la fuente (%)</label><input id="cs-co-efic" type="number" value="40" class="input" oninput="calcCorrS()"/>
+          ${res(big('cs-co-kg','kg/ha')+`<div class="text-xs text-slate-500">brecha <span id="cs-co-brecha">—</span> ppm</div>`)}`)}
+        ${card('Encalado','Calcáreo para subir saturación de bases.',`
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">CIC (cmolc/kg)</label><input id="cs-ec-cic" type="number" step="0.1" value="15.2" class="input" oninput="calcEncalS()"/></div><div><label class="label">PRNT (%)</label><input id="cs-ec-prnt" type="number" value="85" class="input" oninput="calcEncalS()"/></div><div><label class="label">Sat. V1 (%)</label><input id="cs-ec-v1" type="number" value="52" class="input" oninput="calcEncalS()"/></div><div><label class="label">Sat. V2 (%)</label><input id="cs-ec-v2" type="number" value="70" class="input" oninput="calcEncalS()"/></div></div>
+          <label class="label mt-2">Superficie (ha)</label><input id="cs-ec-ha" type="number" value="84" class="input" oninput="calcEncalS()"/>
+          ${res(big('cs-ec-tha','t/ha')+`<div class="text-xs text-slate-500">total lote <span id="cs-ec-total">—</span> t</div>`)}`)}
+        ${card('Yeso agrícola','Aporte de azufre y calcio.',`
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">S a aportar (kg/ha)</label><input id="cs-ye-s" type="number" value="22" class="input" oninput="calcYesoS()"/></div><div><label class="label">% S del yeso</label><input id="cs-ye-conts" type="number" value="18" class="input" oninput="calcYesoS()"/></div><div><label class="label">% Ca del yeso</label><input id="cs-ye-contca" type="number" value="23" class="input" oninput="calcYesoS()"/></div><div><label class="label">Superficie (ha)</label><input id="cs-ye-ha" type="number" value="84" class="input" oninput="calcYesoS()"/></div></div>
+          ${res(big('cs-ye-kg','kg/ha')+`<div class="text-xs text-slate-500">aporta <span id="cs-ye-ca">—</span> kg Ca/ha · total <span id="cs-ye-total">—</span> kg</div>`)}`)}
+      </div></div>
+
+      <div><div class="text-lg font-bold text-emerald-800 mb-2">🚿 Aplicación y pulverización</div>
+      <div class="grid md:grid-cols-2 gap-4">
+        ${card('Dosis y mezcla de tanque','Producto total y hectáreas por tanque.',`
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">Superficie (ha)</label><input id="cs-dt-ha" type="number" value="100" class="input" oninput="calcDosisS()"/></div><div><label class="label">Dosis (l o kg /ha)</label><input id="cs-dt-dosis" type="number" step="0.1" value="2.5" class="input" oninput="calcDosisS()"/></div><div><label class="label">Caldo (l/ha)</label><input id="cs-dt-caldo" type="number" value="100" class="input" oninput="calcDosisS()"/></div><div><label class="label">Tanque (l)</label><input id="cs-dt-tanque" type="number" value="3000" class="input" oninput="calcDosisS()"/></div></div>
+          ${res(big('cs-dt-total','l/kg total')+`<div class="text-xs text-slate-500"><span id="cs-dt-hatan">—</span> ha/tanque · <span id="cs-dt-prodtan">—</span> por tanque</div>`)}`)}
+        ${card('Regulación de pulverizadora','Caudal por pastilla para tu caldo.',`
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">Caldo (l/ha)</label><input id="cs-pu-vol" type="number" value="100" class="input" oninput="calcPulverS()"/></div><div><label class="label">Velocidad (km/h)</label><input id="cs-pu-vel" type="number" step="0.1" value="14" class="input" oninput="calcPulverS()"/></div><div><label class="label">Dist. pastillas (cm)</label><input id="cs-pu-dist" type="number" value="52" class="input" oninput="calcPulverS()"/></div><div><label class="label">Ancho botalón (m)</label><input id="cs-pu-ancho" type="number" value="21" class="input" oninput="calcPulverS()"/></div></div>
+          ${res(big('cs-pu-past','l/min por pastilla')+`<div class="text-xs text-slate-500"><span id="cs-pu-total">—</span> l/min total</div>`)}`)}
+      </div></div>
+
+      <div><div class="text-lg font-bold text-emerald-800 mb-2">🌾 Rinde y cosecha</div>
+      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+        ${card('🫘 Rinde de soja','Plantas × vainas × granos × peso de mil.',`
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">Plantas (pl/m²)</label><input id="cs-rs-pl" type="number" value="30" class="input" oninput="calcRindeSojaS()"/></div><div><label class="label">Vainas/planta</label><input id="cs-rs-vai" type="number" value="40" class="input" oninput="calcRindeSojaS()"/></div><div><label class="label">Granos/vaina</label><input id="cs-rs-gra" type="number" step="0.1" value="2.3" class="input" oninput="calcRindeSojaS()"/></div><div><label class="label">Peso mil (g)</label><input id="cs-rs-pmg" type="number" value="150" class="input" oninput="calcRindeSojaS()"/></div></div>
+          ${res(`<span class="text-xl font-extrabold text-emerald-700"><span id="cs-rs-tn">—</span> tn/ha</span><div class="text-xs text-slate-500"><span id="cs-rs-qq">—</span> qq/ha · <span id="cs-rs-kg">—</span> kg/ha</div>`)}`)}
+        ${card('🌽 Rinde de maíz','Plantas × hileras × granos × peso de mil.',`
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">Plantas (pl/ha)</label><input id="cs-rm-pl" type="number" value="75000" class="input" oninput="calcRindeMaizS()"/></div><div><label class="label">Hileras/espiga</label><input id="cs-rm-hil" type="number" value="16" class="input" oninput="calcRindeMaizS()"/></div><div><label class="label">Granos/hilera</label><input id="cs-rm-gra" type="number" value="35" class="input" oninput="calcRindeMaizS()"/></div><div><label class="label">Peso mil (g)</label><input id="cs-rm-pmg" type="number" value="300" class="input" oninput="calcRindeMaizS()"/></div></div>
+          ${res(`<span class="text-xl font-extrabold text-emerald-700"><span id="cs-rm-tn">—</span> tn/ha</span><div class="text-xs text-slate-500"><span id="cs-rm-qq">—</span> qq/ha · <span id="cs-rm-kg">—</span> kg/ha</div>`)}`)}
+        ${card('🧮 Conversor de rinde','qq ↔ tn ↔ kg y producción total.',`
+          <div class="grid grid-cols-2 gap-2"><div><label class="label">Rinde (qq/ha)</label><input id="cs-cv-qq" type="number" step="0.1" value="35" class="input" oninput="calcConvS()"/></div><div><label class="label">Superficie (ha)</label><input id="cs-cv-ha" type="number" value="100" class="input" oninput="calcConvS()"/></div></div>
+          ${res(`<span class="text-xl font-extrabold text-emerald-700"><span id="cs-cv-tn">—</span> tn/ha</span><div class="text-xs text-slate-500"><span id="cs-cv-kg">—</span> kg/ha · total <b><span id="cs-cv-prod">—</span> tn</b></div>`)}`)}
+        ${card('Estimar y usar','Consejo','<div class="text-xs text-slate-500">Cargá los conteos a campo para estimar el rinde en pie, y usá el margen y el rinde de indiferencia desde <b>Reporte de margen</b> y las <b>Campañas</b> para ver el resultado económico real.</div>')}
+      </div></div>
+    </div>`;
+  _calcRecalcAll();
+};
+
 pages.animales = async function(){
   setHeader('🐎 Fichas de animales', 'Ficha individual de cada animal: identidad, genealogía, sanidad, costos y venta');
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;

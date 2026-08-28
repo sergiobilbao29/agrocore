@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.151.0';
+const AGROCORE_VERSION = '2.152.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6380,6 +6380,61 @@ app.delete('/api/empleados/:id/liquidaciones/:liqId', requireCompany, requirePer
     });
 
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Costo de sueldos por mes para el Dashboard (últimos N meses).
+// Unifica: si el período está liquidado usa el neto de la liquidación; si no,
+// usa el sueldo base del empleado activo + los movimientos de planilla no
+// liquidados del período. Así el Dashboard muestra el costo de personal aunque
+// todavía no se haya liquidado/pagado. El frontend excluye del efectivo los
+// pagos de sueldo (para no contar dos veces los ya liquidados por efectivo).
+app.get('/api/dashboard/sueldos', requireCompany, requirePermission('dashboard:read'), async (req, res, next) => {
+  try {
+    const nMonths = Number(req.query.meses || 14);
+    const now = new Date();
+    const months = [];
+    for (let i = nMonths - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(d.toISOString().slice(0, 7));
+    }
+    const minKey = months[0];
+    const emps = await prisma.empleado.findMany({
+      where: { companyId: req.companyId },
+      select: { id: true, sueldo: true, estado: true, fechaIngreso: true },
+    });
+    const [liqs, movs] = await Promise.all([
+      prisma.liquidacionSueldo.findMany({ where: { companyId: req.companyId }, select: { empleadoId: true, periodo: true, neto: true } }),
+      prisma.movimientoEmpleado.findMany({ where: { companyId: req.companyId, liquidacionId: null }, select: { empleadoId: true, periodo: true, tipo: true, monto: true, categoria: true } }),
+    ]);
+    const liqMap = {};   // emp|periodo -> neto
+    liqs.forEach(l => { const k = l.empleadoId + '|' + String(l.periodo || '').slice(0, 7); liqMap[k] = (liqMap[k] || 0) + Number(l.neto || 0); });
+    const movMap = {};   // emp|periodo -> neto (ganancia - gasto)
+    const sueldoMovSet = new Set();  // emp|periodo con movimiento categoria 'sueldo' (para no duplicar base)
+    movs.forEach(m => {
+      const k = m.empleadoId + '|' + String(m.periodo || '').slice(0, 7);
+      movMap[k] = (movMap[k] || 0) + (m.tipo === 'gasto' ? -Number(m.monto || 0) : Number(m.monto || 0));
+      if (m.categoria === 'sueldo') sueldoMovSet.add(k);
+    });
+    const porMes = {};
+    for (const e of emps) {
+      const activo = String(e.estado || '').toLowerCase() !== 'baja';
+      const ingMes = e.fechaIngreso ? new Date(e.fechaIngreso).toISOString().slice(0, 7) : minKey;
+      for (const mk of months) {
+        if (mk < ingMes) continue;
+        const key = e.id + '|' + mk;
+        let monto;
+        if (liqMap[key] != null) {
+          monto = liqMap[key];                        // ya liquidado: costo real
+        } else {
+          const base = (activo && !sueldoMovSet.has(key)) ? Number(e.sueldo || 0) : 0;
+          monto = base + (movMap[key] || 0);          // devengado: base + planilla no liquidada
+        }
+        if (monto) porMes[mk] = (porMes[mk] || 0) + monto;
+      }
+    }
+    const data = months.map(mk => ({ mes: mk, monto: Math.round(porMes[mk] || 0) }));
+    res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
 
