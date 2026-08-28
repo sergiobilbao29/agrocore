@@ -2626,6 +2626,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
+      titulo:'🐎 v2.148.0 — Stock de equinos sin duplicados + el filtro por Familia (Bovino/Equino) trae todo',
+      desc:'<b>(1) Sin duplicados:</b> los <b>equinos</b> se manejan como <b>Fichas de animales</b> (renglón "Equino · categoría"), no como stock de hacienda por cabezas. Sacamos el renglón viejo duplicado (ej. "Yegua madre" en 0 que convivía con "Equino · Yegua madre"). Queda un solo renglón, el correcto. <b>(2) Filtro por Familia:</b> ahora <b>Bovino</b>, <b>Equino</b>, etc. traen los animales tanto en <b>Stock</b> como en <b>Movimientos</b> (antes solo con Categoría = Animales). El filtro reconoce la <b>especie</b> del animal aunque no esté cableada al árbol.' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
       titulo:'🐎 v2.147.0 — El filtro por Familia (Equino, Bovino…) ahora trae los animales en Stock y Movimientos',
       desc:'Antes, al filtrar por <b>Familia = Equino</b> (o Bovino, etc.) en <b>Stock</b> y <b>Movimientos</b> no aparecía nada (solo funcionaba filtrando por Categoría = Animales). Ahora el filtro por familia resuelve la <b>especie</b> de cada animal y trae las fichas y la hacienda correctamente. Además, en <b>Movimientos</b> agregamos una aclaración: es el <b>libro de stock</b> (insumos, granos y animales); el <b>conteo por campo</b> (declarado SENASA vs real) sigue en <b>Movimientos de animales</b>.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
@@ -6386,7 +6389,7 @@ pages.stock = async function() {
       // (salvo que se active "ver fuera de catálogo"). No se borran, solo no se listan.
       if (_hayCat && !verFuera && !prodEnCatalogo(p, _sets)) return false;
       if (catSel.length && !catSel.includes(catRaizStock(p))) return false;
-      if (state.stockFilter.fam) { const caId = _prodCaId(p) || _prodCaId(_pmap[p.id]); if (!_catCadena(caId).includes(state.stockFilter.fam)) return false; }
+      if (state.stockFilter.fam) { if (!_prodEnFamilia(p, state.stockFilter.fam) && !_prodEnFamilia(_pmap[p.id], state.stockFilter.fam)) return false; }
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
       if (!q) return true;
@@ -6914,7 +6917,11 @@ pages.movimientos = async function() {
         const pcat = m._hac ? 'Animales' : prodCategoriaRaiz(prods.find(x=>x.id===m.productoId));
         if (!f.cats.includes(pcat)) return false;
       }
-      if (f.fam) { const pp = prods.find(x=>x.id===m.productoId); const caId = _prodCaId(pp) || (m._hac ? _prodCaId({categoria:'hacienda', categoriaHacienda:(m.producto?.categoriaHacienda|| (m.producto?.nombre||'').split(' - ').pop().trim())}) : null); if (!_catCadena(caId).includes(f.fam)) return false; }
+      if (f.fam) {
+        const pp = prods.find(x=>x.id===m.productoId);
+        const pHac = m._hac ? { categoria:'hacienda', esHacienda:true, categoriaHacienda:(m.producto?.categoriaHacienda || (m.producto?.nombre||'').split(' - ').pop().trim()) } : null;
+        if (!_prodEnFamilia(pp, f.fam) && !(pHac && _prodEnFamilia(pHac, f.fam))) return false;
+      }
       if (f.motivo && m.motivo !== f.motivo) return false;
       if (f.desde && (m.fecha||'') < f.desde) return false;
       if (f.hasta && (m.fecha||'') > f.hasta+'T23:59:59') return false;
@@ -11564,6 +11571,31 @@ function _prodCaId(p) {
     if (node) return node.id;
   }
   return null;
+}
+// Nombre del nodo del árbol (familia) por su id — para comparar por nombre.
+function _famNombrePorId(id){ if(!id) return ''; const n=(state.cache.categoriasArt||[]).find(c=>c.id===id); return n?String(n.nombre||'').trim():''; }
+// Especie (familia) de un producto ANIMAL: hacienda -> cfg.especie; ficha -> "Equino · X" -> Equino.
+function _animalEspecie(p){
+  if(!p) return '';
+  if(p.categoria==='hacienda' || p.esHacienda){
+    const nm=String(p.categoriaHacienda||(p.nombre||'').split(' - ').pop().trim()).toLowerCase();
+    const cfg=(state.cache.catHacienda||[]).find(c=>String(c.nombre||'').toLowerCase().trim()===nm);
+    return cfg?String(cfg.especie||'').trim():'';
+  }
+  if(p.categoria==='Animales' || p.esFicha){
+    return String(p.subtipo||p.nombre||'').split(' · ')[0].replace(/\(terceros\)/i,'').trim();
+  }
+  return '';
+}
+// ¿El producto p cae dentro de la familia seleccionada (id del árbol)? Robusto: por cadena
+// del árbol O por NOMBRE de especie (para animales cuya familia no está cableada al árbol).
+function _prodEnFamilia(p, famId){
+  if(!famId) return true;
+  const caId = _prodCaId(p);
+  if(caId && _catCadena(caId).includes(famId)) return true;
+  const famNom = _famNombrePorId(famId).toLowerCase();
+  const esp = _animalEspecie(p).toLowerCase();
+  return !!(famNom && esp && esp===famNom);
 }
 // ¿El producto está representado en el Catálogo? (por nombre o, en hacienda, por categoría)
 function prodEnCatalogo(p, sets){

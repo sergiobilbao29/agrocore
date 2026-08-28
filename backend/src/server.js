@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.147.0';
+const AGROCORE_VERSION = '2.148.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6822,8 +6822,21 @@ async function mergeCatalogoAnimalesEnConfig(companyId) {
 // (categoria='hacienda', unidad='cabezas') para unificarse en Stock/Movimientos.
 // Si ya hay un producto con el mismo nombre pero sin vincular, lo vincula.
 async function sincronizarProductosHacienda(companyId) {
-  const cats = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId, activo: true } });
-  if (!cats.length) return;
+  const catsAll = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId, activo: true } });
+  if (!catsAll.length) return;
+  // Los EQUINOS se manejan como Fichas de animales (producto 'Animales', ej. "Equino · Yegua madre"),
+  // NO como stock de hacienda por cabezas. Por eso no creamos productos de hacienda para equinos
+  // y desactivamos los que hayan quedado (evita el duplicado "Yegua madre" 0 vs "Equino · Yegua madre").
+  const _esEquino = (esp) => String(esp || '').toLowerCase().trim() === 'equino';
+  const equinoNames = new Set(catsAll.filter(c => _esEquino(c.especie)).map(c => (c.nombre || '').toLowerCase().trim()));
+  if (equinoNames.size) {
+    try {
+      const dupEquino = await prisma.producto.findMany({ where: { companyId, categoria: 'hacienda' }, select: { id: true, nombre: true, categoriaHacienda: true } });
+      const aDesactivar = dupEquino.filter(p => equinoNames.has(String(p.categoriaHacienda || p.nombre.split(' - ').pop()).toLowerCase().trim())).map(p => p.id);
+      if (aDesactivar.length) await prisma.producto.updateMany({ where: { id: { in: aDesactivar } }, data: { activo: false } });
+    } catch {}
+  }
+  const cats = catsAll.filter(c => !_esEquino(c.especie));
   const prods = await prisma.producto.findMany({
     where: { companyId, categoria: 'hacienda' },
     select: { id: true, nombre: true, categoriaHacienda: true },
