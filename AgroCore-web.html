@@ -2628,6 +2628,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
+      titulo:'👷 v2.158.0 — Sueldos por día en Dashboard/Flujo + diagnóstico del Vademécum',
+      desc:'<b>Sueldos:</b> ahora el <b>Flujo de fondos</b> y el <b>Dashboard</b> toman bien el costo de los empleados <b>por día</b> (jornal × días), no solo los de sueldo fijo — antes esos quedaban en 0 y por eso la línea Sueldos no aparecía. Usa el mismo criterio que la Masa salarial. <b>Vademécum:</b> si la base figura vacía, ahora hay un botón <b>Ver diagnóstico</b> que muestra desde dónde intenta leer el archivo (para resolver casos puntuales de instalación).' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
       titulo:'🧫 v2.157.0 — Vademécum: se corrige el permiso que lo dejaba vacío',
       desc:'El Vademécum aparecía vacío porque pedía un permiso distinto al del menú. Ahora usa el mismo permiso (Producción) y además la base se recarga sola si hiciera falta. Ya se ven los 76 principios activos.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
@@ -27782,7 +27785,7 @@ function calcConvS(){ const qq=_CN('cs-cv-qq'),ha=_CN('cs-cv-ha'); if(qq>0){_CS(
 function _calcRecalcAll(){ [calcDensidadS,calcForrajS,calcEngrS,calcCuradoS,calcUreaS,calcMezclaS,calcCorrS,calcEncalS,calcYesoS,calcDosisS,calcPulverS,calcRindeSojaS,calcRindeMaizS,calcConvS].forEach(fn=>{try{fn();}catch(e){}}); }
 /* ===================== VADEMÉCUM DE INSUMOS ===================== */
 async function _cargarVademecum(){
-  if (state.cache.vademecum) return state.cache.vademecum;
+  if (state.cache.vademecum && state.cache.vademecum.length) return state.cache.vademecum;
   try { state.cache.vademecum = (await api('/api/vademecum')).data || []; } catch { state.cache.vademecum = []; }
   state.cache.vademById = {}; (state.cache.vademecum||[]).forEach(v=>{ state.cache.vademById[v.id]=v; });
   return state.cache.vademecum;
@@ -27807,6 +27810,13 @@ function vademecumVer(id){
       <div class="text-[11px] text-slate-400 mt-2">Valores orientativos. El documento legal es el <b>marbete</b> y el registro <b>SENASA</b> (combinación producto + cultivo + plaga/maleza/enfermedad).</div>
     </div>` });
 }
+async function vademecumDiag(){
+  const el = $('#vade-diag'); if (el) el.textContent = 'Consultando…';
+  try {
+    const r = await api('/api/vademecum?debug=1');
+    if (el) el.innerHTML = `cargados: <b>${r.cargados}</b><br>cargadoDesde: ${esc(r.cargadoDesde||'(ninguno)')}<br>__dirname: ${esc(r.__dirname||'')}<br>cwd: ${esc(r.cwd||'')}<br>candidatos:<br>${(r.candidatos||[]).map(c=>`&nbsp;&nbsp;${c.existe?'✅':'❌'} ${esc(c.p)}`).join('<br>')}`;
+  } catch(e){ if (el) el.textContent = 'Error: '+e.message; }
+}
 pages.vademecum = async function(){
   setHeader('Vademécum de insumos','Referencia de fitosanitarios y fertilizantes · orientativo');
   await _cargarVademecum();
@@ -27829,8 +27839,16 @@ pages.vademecum = async function(){
       <div class="text-[11px] text-slate-500 mt-1 line-clamp-2">${esc(v.dosis||'')}</div>
       ${(v.cultivos&&v.cultivos.length)?`<div class="text-[10px] text-slate-400 mt-1">${esc(v.cultivos.join(' · '))}</div>`:''}
     </div>`;
-    $('#vade-list').innerHTML = list.length ? `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">${list.map(card).join('')}</div>` : `<div class="text-sm text-slate-500 p-4">Sin resultados.</div>`;
-    $('#vade-count').textContent = list.length + ' de ' + (state.cache.vademecum||[]).length;
+    const total = (state.cache.vademecum||[]).length;
+    if (list.length) {
+      $('#vade-list').innerHTML = `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">${list.map(card).join('')}</div>`;
+    } else if (total === 0 && !q && !tipo) {
+      // Base vacía: mostramos diagnóstico para soporte.
+      $('#vade-list').innerHTML = `<div class="card p-4 text-sm text-slate-600">La base del vademécum figura vacía en este servidor. <button class="btn btn-secondary text-xs ml-2" onclick="vademecumDiag()">🔍 Ver diagnóstico</button><div id="vade-diag" class="mt-2 text-[11px] font-mono text-slate-500"></div></div>`;
+    } else {
+      $('#vade-list').innerHTML = `<div class="text-sm text-slate-500 p-4">Sin resultados.</div>`;
+    }
+    $('#vade-count').textContent = list.length + ' de ' + total;
   };
   const tipoBtn=(t,l)=>`<button class="btn btn-sm ${state.vadeFiltro.tipo===t?'btn-primary':'btn-secondary'}" onclick="state.vadeFiltro.tipo='${t}';pages.vademecum()">${l}</button>`;
   $('#page-body').innerHTML = `

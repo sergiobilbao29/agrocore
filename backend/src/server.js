@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.157.0';
+const AGROCORE_VERSION = '2.158.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6426,6 +6426,16 @@ app.delete('/api/empleados/:id/liquidaciones/:liqId', requireCompany, requirePer
   } catch (e) { next(e); }
 });
 
+// Sueldo BASE mensual de un empleado, contemplando "por día" (jornal × días).
+// Mismo criterio que la "Masa salarial" del listado de empleados.
+function _sueldoBaseMensual(e, y, m) {
+  if (e && e.porDia) {
+    const diasEnMes = new Date(y, m + 1, 0).getDate();
+    const dias = Number(e.diasMes) > 0 ? Number(e.diasMes) : diasEnMes;
+    return Number(e.jornalDiario || 0) * dias;
+  }
+  return Number((e && e.sueldo) || 0);
+}
 // Costo de sueldos por mes para el Dashboard (últimos N meses).
 // Unifica: si el período está liquidado usa el neto de la liquidación; si no,
 // usa el sueldo base del empleado activo + los movimientos de planilla no
@@ -6444,7 +6454,7 @@ app.get('/api/dashboard/sueldos', requireCompany, requirePermission('dashboard:r
     const minKey = months[0];
     const emps = await prisma.empleado.findMany({
       where: { companyId: req.companyId },
-      select: { id: true, sueldo: true, estado: true, fechaIngreso: true },
+      select: { id: true, sueldo: true, activo: true, fechaIngreso: true, porDia: true, jornalDiario: true, diasMes: true },
     });
     const [liqs, movs] = await Promise.all([
       prisma.liquidacionSueldo.findMany({ where: { companyId: req.companyId }, select: { empleadoId: true, periodo: true, neto: true } }),
@@ -6461,16 +6471,17 @@ app.get('/api/dashboard/sueldos', requireCompany, requirePermission('dashboard:r
     });
     const porMes = {};
     for (const e of emps) {
-      const activo = String(e.estado || '').toLowerCase() !== 'baja';
+      const activo = e.activo !== false;
       const ingMes = e.fechaIngreso ? new Date(e.fechaIngreso).toISOString().slice(0, 7) : minKey;
       for (const mk of months) {
         if (mk < ingMes) continue;
+        const [yy, mm] = mk.split('-').map(Number);
         const key = e.id + '|' + mk;
         let monto;
         if (liqMap[key] != null) {
           monto = liqMap[key];                        // ya liquidado: costo real
         } else {
-          const base = (activo && !sueldoMovSet.has(key)) ? Number(e.sueldo || 0) : 0;
+          const base = (activo && !sueldoMovSet.has(key)) ? _sueldoBaseMensual(e, yy, mm - 1) : 0;
           monto = base + (movMap[key] || 0);          // devengado: base + planilla no liquidada
         }
         if (monto) porMes[mk] = (porMes[mk] || 0) + monto;
@@ -12863,7 +12874,7 @@ async function _construirFlujoProyectado(req, opts = {}) {
   // liquidados (pagados) no se cuentan. Es estimado; el pago real lo confirma la liquidación.
   try {
     const [_emplS, _liqS, _movS] = await Promise.all([
-      prisma.empleado.findMany({ where: { companyId: { in: companyIds } }, select: { id: true, companyId: true, sueldo: true, estado: true, fechaIngreso: true } }),
+      prisma.empleado.findMany({ where: { companyId: { in: companyIds } }, select: { id: true, companyId: true, sueldo: true, activo: true, fechaIngreso: true, porDia: true, jornalDiario: true, diasMes: true } }),
       prisma.liquidacionSueldo.findMany({ where: { companyId: { in: companyIds } }, select: { empleadoId: true, periodo: true } }),
       prisma.movimientoEmpleado.findMany({ where: { companyId: { in: companyIds }, liquidacionId: null }, select: { empleadoId: true, periodo: true, tipo: true, monto: true } }),
     ]);
@@ -12874,7 +12885,7 @@ async function _construirFlujoProyectado(req, opts = {}) {
     { let d = new Date(hoy.getFullYear(), hoy.getMonth(), 1); const end = new Date(horizonte.getFullYear(), horizonte.getMonth(), 1);
       while (d <= end) { _months.push({ key: d.toISOString().slice(0, 7), y: d.getFullYear(), m: d.getMonth() }); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); } }
     for (const cid of companyIds) {
-      const emps = _emplS.filter(e => e.companyId === cid && String(e.estado || '').toLowerCase() !== 'baja');
+      const emps = _emplS.filter(e => e.companyId === cid && e.activo !== false);
       for (const mm of _months) {
         let monto = 0;
         for (const e of emps) {
@@ -12882,7 +12893,7 @@ async function _construirFlujoProyectado(req, opts = {}) {
           if (mm.key < ingMes) continue;
           const key = e.id + '|' + mm.key;
           if (_liqSet.has(key)) continue;   // ese mes ya está liquidado/pagado
-          monto += Number(e.sueldo || 0) + (_movMap[key] || 0);
+          monto += _sueldoBaseMensual(e, mm.y, mm.m) + (_movMap[key] || 0);
         }
         if (monto > 0) {
           const pay = new Date(mm.y, mm.m + 1, 0); // último día del mes
