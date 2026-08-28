@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.150.0';
+const AGROCORE_VERSION = '2.151.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9769,14 +9769,25 @@ app.post('/api/animales/:id/mover', requireCompany, requirePermission('stock:upd
     const destino = (req.body.ubicacion || '').trim();
     if (!destino) return res.status(400).json({ ok: false, error: 'Poné el destino / ubicación' });
     const fecha = req.body.fecha ? new Date(req.body.fecha) : new Date();
+    const nuevoCampoId = req.body.campoId || cur.campoId;
+    // Nombres de campo para dejar el traslado claro en el historial (origen → destino).
+    let campoTxt = '';
+    if (nuevoCampoId && nuevoCampoId !== cur.campoId) {
+      try {
+        const ids = [cur.campoId, nuevoCampoId].filter(Boolean);
+        const cs = await prisma.campo.findMany({ where: { id: { in: ids }, companyId: req.companyId }, select: { id: true, nombre: true } });
+        const nom = (id) => (cs.find(c => c.id === id) || {}).nombre;
+        campoTxt = `${cur.campoId ? (nom(cur.campoId) || 'campo') : 'sin campo'} → ${nom(nuevoCampoId) || 'campo'}`;
+      } catch {}
+    }
     const row = await prisma.$transaction(async (tx) => {
       await tx.animalEvento.create({ data: {
         companyId: req.companyId, animalId: cur.id, fecha, tipo: 'traslado',
-        concepto: `${cur.ubicacion ? cur.ubicacion + ' → ' : ''}${destino}`,
+        concepto: campoTxt ? `${campoTxt}${destino ? ' · ' + destino : ''}` : `${cur.ubicacion ? cur.ubicacion + ' → ' : ''}${destino}`,
         costo: Number(req.body.costo || 0), moneda: cur.moneda || 'ARS',
         observaciones: req.body.observaciones || null,
       }});
-      return tx.animal.update({ where: { id: cur.id }, data: { ubicacion: destino, campoId: req.body.campoId || cur.campoId } });
+      return tx.animal.update({ where: { id: cur.id }, data: { ubicacion: destino, campoId: nuevoCampoId } });
     });
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }

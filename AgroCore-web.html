@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/08/2026',
+      titulo:'🚚 v2.151.0 — Mover animal de un campo/depósito a otro + certificado de traslado',
+      desc:'La acción <b>📍 Mover</b> ahora permite <b>trasladar el animal a otro campo/depósito</b> (además de cambiar el box/potrero interno). Al cambiar de campo, su stock pasa a contarse en el campo destino (filtro de Depósito). Se puede cargar <b>transportista y patente</b>, y al guardar se genera un <b>Certificado de traslado</b> imprimible/PDF con origen, destino y datos del animal (documento interno, no reemplaza el DT-e/SENASA).' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
       titulo:'🐴 v2.150.0 — Prestar caballo arreglado + eventos del animal editables',
       desc:'<b>(1) Prestar:</b> se corrigió el error al prestar un animal (faltaban aplicar los campos del préstamo en la base). Ahora Prestar/Devolver funcionan y el animal sale/entra del stock del campo como corresponde. <b>(2) Eventos editables:</b> en la ficha, el <b>Historial y costos</b> ahora deja <b>editar ✏️</b> cada evento (fecha, tipo, detalle, costo, próximo control, peso, observaciones), no solo borrarlo. Al editar un consumo se recalcula el descuento de stock. <i>Nota: si venías de la 2.149 y el préstamo daba error, corré la reparación de Prisma indicada.</i>' },
@@ -28171,16 +28174,27 @@ async function aniDevolver(id){
     toast('Animal devuelto, vuelve al stock','success'); closeModal(); pages.animales(); }
   catch(e){ toast(e.message,'error'); }
 }
-function aniMoverForm(id){
+async function aniMoverForm(id){
   const a=state._aniActual||{}; const hoy=new Date().toISOString().slice(0,10);
-  openModal({ title:'📍 Mover / trasladar', size:'max-w-md',
+  try { if(!state.cache.campos) state.cache.campos = (await api('/api/campos')).data || []; } catch {}
+  const campos = state.cache.campos || [];
+  const campoActual = (campos.find(c=>c.id===a.campoId)||{}).nombre || '';
+  const opts = `<option value="">— Sin cambio de campo —</option>` + campos.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('');
+  openModal({ title:'📍 Mover / trasladar', size:'max-w-lg',
     body:`
-      <p class="text-xs text-slate-500 mb-2">Actualiza la ubicación y deja el traslado en el historial. Ubicación actual: <b>${esc(a.ubicacion||'—')}</b>.</p>
+      <p class="text-xs text-slate-500 mb-2">Trasladá el animal a otro <b>campo/depósito</b> y/o cambiá su ubicación interna. Origen actual: <b>${esc(campoActual||'—')}${a.ubicacion?(' · '+esc(a.ubicacion)):''}</b>.</p>
       <div class="grid grid-cols-2 gap-3">
-        <div class="col-span-2"><label class="label">Destino / nueva ubicación *</label><input id="mv-ubi" class="input" placeholder="Ej: Campo · Buenos Aires · Cancha · Haras X"/></div>
+        <div class="col-span-2"><label class="label">Campo / depósito destino</label><select id="mv-campo" class="input">${opts}</select><div class="text-[11px] text-slate-400 mt-1">Al cambiar de campo, el stock del animal se cuenta en el nuevo campo (filtro de Depósito).</div></div>
+        <div class="col-span-2"><label class="label">Ubicación interna (box / potrero) *</label><input id="mv-ubi" class="input" value="${esc(a.ubicacion||'')}" placeholder="Ej: Box 3 · Potrero Los Sauces · Cancha"/></div>
         <div><label class="label">Fecha</label><input id="mv-fecha" type="date" class="input" value="${hoy}"/></div>
         <div><label class="label">Costo flete (opcional)</label><input id="mv-costo" type="number" step="0.01" class="input" placeholder="0"/></div>
-        <div class="col-span-2"><label class="label">Observaciones</label><input id="mv-obs" class="input"/></div>
+        <div><label class="label">Transportista (opcional)</label><input id="mv-transp" class="input" placeholder="Nombre / empresa"/></div>
+        <div><label class="label">Patente (opcional)</label><input id="mv-pat" class="input" placeholder="AA123BB"/></div>
+        <div class="col-span-2"><label class="label">Observaciones / motivo</label><input id="mv-obs" class="input"/></div>
+        <div class="col-span-2 flex items-center gap-2 p-2 rounded bg-emerald-50 border border-emerald-200">
+          <input id="mv-cert" type="checkbox" class="w-4 h-4" checked/>
+          <label for="mv-cert" class="text-xs text-emerald-800">Generar certificado de traslado (para imprimir/PDF) al guardar</label>
+        </div>
       </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick='aniMoverSave(${JSON.stringify(id)})'>Mover</button>`
@@ -28189,10 +28203,79 @@ function aniMoverForm(id){
 async function aniMoverSave(id){
   const g=x=>document.getElementById(x);
   const ubicacion=(g('mv-ubi').value||'').trim();
-  if(!ubicacion) return toast('Poné el destino','warn');
-  try{ await api('/api/animales/'+id+'/mover',{method:'POST',body:JSON.stringify({ ubicacion, fecha:g('mv-fecha').value, costo:Number(g('mv-costo').value||0), observaciones:g('mv-obs').value||null })});
-    toast('Movido','success'); closeModal(); aniVer(id); }
+  const campoId=g('mv-campo')?g('mv-campo').value:'';
+  if(!ubicacion) return toast('Poné la ubicación de destino','warn');
+  const a=state._aniActual||{};
+  const campos=state.cache.campos||[];
+  const origenCampo=(campos.find(c=>c.id===a.campoId)||{}).nombre||'';
+  const origenUbi=a.ubicacion||'';
+  const transportista=g('mv-transp')?g('mv-transp').value.trim():'';
+  const patente=g('mv-pat')?g('mv-pat').value.trim():'';
+  const obs=g('mv-obs').value||null;
+  const fecha=g('mv-fecha').value;
+  const quiereCert=g('mv-cert')?g('mv-cert').checked:false;
+  const body={ ubicacion, fecha, costo:Number(g('mv-costo').value||0), observaciones:obs };
+  if(campoId) body.campoId=campoId;
+  try{
+    await api('/api/animales/'+id+'/mover',{method:'POST',body:JSON.stringify(body)});
+    toast('Movido','success'); closeModal();
+    if(quiereCert){
+      const destinoCampo=campoId?((campos.find(c=>c.id===campoId)||{}).nombre||''):origenCampo;
+      aniCertTraslado({ animal:a, fecha, origenCampo, origenUbi, destinoCampo, destinoUbi:ubicacion, transportista, patente, obs });
+    }
+    aniVer(id);
+  }
   catch(e){ toast(e.message,'error'); }
+}
+function aniCertTraslado(o){
+  const a=o.animal||{};
+  const emp = (typeof _opEmpresa === 'function') ? _opEmpresa() : { nombre:'Empresa', cuit:'', localidad:'' };
+  const esp = ANI_ESPECIES[a.especie]||a.especie||'';
+  const dato=(lbl,val)=> val?`<tr><td style="padding:3px 8px;color:#475569;white-space:nowrap"><b>${lbl}</b></td><td style="padding:3px 8px">${esc(val)}</td></tr>`:'';
+  const html=`
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#0f172a;max-width:190mm;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #15803d;padding-bottom:10px;margin-bottom:14px">
+        <div><div style="font-size:20px;font-weight:bold">${esc(emp.nombre)}</div>
+          <div style="font-size:12px;color:#475569">${emp.cuit?('CUIT '+esc(emp.cuit)):''}${emp.localidad?(' · '+esc(emp.localidad)):''}</div></div>
+        <div style="text-align:right"><div style="font-size:16px;font-weight:bold">CERTIFICADO DE TRASLADO</div>
+          <div style="font-size:13px">${fmtFecha(o.fecha)}</div>
+          <div style="font-size:11px;color:#64748b;text-transform:uppercase;margin-top:2px">DOCUMENTO INTERNO — NO REEMPLAZA EL DT-e/SENASA</div></div>
+      </div>
+      <div style="font-size:13px;font-weight:bold;margin:6px 0 4px">Datos del animal</div>
+      <table style="width:100%;border:1px solid #e2e8f0;border-collapse:collapse;font-size:13px;margin-bottom:12px">
+        ${dato('Nombre', a.nombre)}${dato('Especie / categoría', [esp,a.categoria].filter(Boolean).join(' · '))}
+        ${dato('Sexo / pelaje', [a.sexo,a.pelaje].filter(Boolean).join(' · '))}${dato('Raza', a.raza)}
+        ${dato('Microchip', a.microchip)}${dato('Caravana', a.caravanaVisual||a.caravanaRfid)}${dato('N° registro', a.nroRegistro)}
+      </table>
+      <table style="width:100%;font-size:13px;margin-bottom:12px">
+        <tr>
+          <td style="width:50%;vertical-align:top;padding-right:8px">
+            <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px">
+              <div style="font-weight:bold;color:#15803d;margin-bottom:4px">ORIGEN</div>
+              <div>${esc(o.origenCampo||'—')}</div>${o.origenUbi?`<div style="color:#475569">${esc(o.origenUbi)}</div>`:''}
+            </div>
+          </td>
+          <td style="width:50%;vertical-align:top;padding-left:8px">
+            <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px">
+              <div style="font-weight:bold;color:#15803d;margin-bottom:4px">DESTINO</div>
+              <div>${esc(o.destinoCampo||'—')}</div>${o.destinoUbi?`<div style="color:#475569">${esc(o.destinoUbi)}</div>`:''}
+            </div>
+          </td>
+        </tr>
+      </table>
+      <table style="width:100%;font-size:13px;margin-bottom:8px">
+        ${(o.transportista||o.patente)?`<tr><td style="padding:2px 0"><b>Transporte:</b> ${esc(o.transportista||'—')}${o.patente?(' · Patente '+esc(o.patente)):''}</td></tr>`:''}
+        ${o.obs?`<tr><td style="padding:2px 0"><b>Observaciones:</b> ${esc(o.obs)}</td></tr>`:''}
+      </table>
+      <div style="display:flex;justify-content:space-between;margin-top:60px;font-size:12px">
+        <div style="text-align:center;width:45%"><div style="border-top:1px solid #64748b;padding-top:4px">Firma y aclaración — Salida</div></div>
+        <div style="text-align:center;width:45%"><div style="border-top:1px solid #64748b;padding-top:4px">Firma y aclaración — Recepción conforme</div></div>
+      </div>
+    </div>`;
+  const st='<style>@page{size:A4;margin:12mm} body{margin:0}</style>';
+  const w=window.open('','_blank','width=840,height=980'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write('<html><head><title>Certificado de traslado '+esc(a.nombre||'')+'</title><meta charset="utf-8">'+st+'</head><body>'+html+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},350);
 }
 async function aniDel(id){
   if(!confirm('¿Eliminar la ficha del animal y todo su historial? Esta acción no se puede deshacer.')) return;
