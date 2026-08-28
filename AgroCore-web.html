@@ -2626,6 +2626,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/08/2026',
+      titulo:'🤖 v2.153.0 — El asistente ahora también responde agronomía',
+      desc:'Le enseñamos al <b>asistente</b> más de <b>1.000 preguntas y respuestas de agronomía</b> (suelos y fertilidad, fertilización, fitopatología, malezas y herbicidas, plagas, maquinaria, soja, maíz, trigo y forrajes). Preguntale cosas como <i>"¿umbral de chinche en soja?"</i>, <i>"control de mancha ojo de rana"</i> o <i>"cuánto nitrógeno lleva el maíz"</i> y te contesta al toque, además de seguir ayudándote con el uso del sistema. Las respuestas son orientativas: validá dosis, umbrales y aplicaciones con el marbete/SENASA y tu asesor.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
       titulo:'📊 v2.152.0 — Los sueldos ya cuentan como gasto en el Dashboard + Calculadoras agronómicas',
       desc:'<b>(1) Sueldos en el Dashboard:</b> el costo del personal ahora aparece en <b>Ingresos vs Egresos</b>, <b>Flujo neto</b> y en <b>Egresos por categoría</b> (renglón "Sueldos"). Toma el sueldo del mes de cada empleado activo más los movimientos de la planilla; si el período está liquidado usa el neto pagado (sin contar dos veces). <b>(2) Calculadoras agronómicas:</b> nuevo módulo en <b>Producción</b> con 16 calculadoras (densidad de siembra, forrajeras, engranajes, curado, nitrógeno/urea, mezcla física N-P-K, corrección de nutrientes, encalado, yeso, pulverizadora, estimación de rinde de soja y maíz, conversor).' },

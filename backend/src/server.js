@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.152.0';
+const AGROCORE_VERSION = '2.153.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10994,6 +10994,32 @@ function _buscarAyuda(texto){
   }
   return bestScore > 0 ? best : null;
 }
+// ---- Base agronómica (Q&A) para el asistente ----
+// ~1.000 preguntas/respuestas de agronomía (suelos, fertilización, malezas, plagas,
+// maquinaria, soja, maíz, trigo, forrajes). Se cargan de backend/data/agro-qa.json.
+let _AGRO_QA = [];
+try { _AGRO_QA = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'data', 'agro-qa.json'), 'utf8')); } catch { _AGRO_QA = []; }
+const _AGRO_STOP = new Set(['que','cual','cuales','como','cuando','donde','para','por','con','los','las','del','una','uno','unos','unas','de','la','el','en','un','se','su','sus','al','lo','es','son','hay','tiene','tengo','cuanto','cuanta','cuantos','cuantas','porque','sobre','entre','mas','menos','muy','ser','esta','este','esto','estos','estas','me','mi','te','le','les','yo','vos','mejor','hacer','tengo','quiero','saber','decime','explicame','cuentame']);
+function _agroTok(s){ return _sinAcentos(String(s||'')).replace(/[^a-z0-9ñ\s]/g,' ').split(/\s+/).filter(w=>w.length>=3 && !_AGRO_STOP.has(w)); }
+// Busca la mejor respuesta agronómica. Devuelve {entry, score} o null.
+function _buscarAgro(texto){
+  if (!_AGRO_QA.length) return null;
+  const q = _agroTok(texto); if (!q.length) return null;
+  const qs = [...new Set(q)];
+  let best=null, bestScore=0;
+  for (const e of _AGRO_QA){
+    if (!e._pt){ e._pt = new Set(_agroTok(e.pregunta)); e._at = new Set([...e._pt, ..._agroTok(e.respuesta), ..._agroTok(e.materia), ..._agroTok(e.subtema)]); }
+    let score=0;
+    for (const w of qs){ if (e._pt.has(w)) score += 3; else if (e._at.has(w)) score += 1; }
+    if (score > bestScore){ bestScore=score; best=e; }
+  }
+  const need = Math.min(2, qs.length);
+  return (best && bestScore >= Math.max(3, need*2)) ? { entry: best, score: bestScore } : null;
+}
+function _textoAgro(hit){
+  const e = hit.entry;
+  return `📗 Agronomía — ${e.materia}\n\n${e.respuesta}\n\n(Respuesta orientativa de la base agronómica de AgroCore. Para dosis, umbrales y decisiones de aplicación validá con el marbete/SENASA y tu asesor.)`;
+}
 // Charla básica: saludos, agradecimientos y despedidas. Devuelve texto o null.
 function _saludoRespuesta(texto){
   const t = _sinAcentos(texto).trim().replace(/[!¡?¿.,]/g,'');
@@ -11439,6 +11465,13 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
         const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', ayudaId: e.id });
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, ejemplo: e.ejemplo || null, titulo: e.titulo, data: m });
       }
+      // 1-bis) Consulta AGRONÓMICA (suelos, plagas, malezas, cultivos, etc.).
+      const ag = _buscarAgro(texto);
+      if (ag) {
+        const msg = _textoAgro(ag);
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', agroId: ag.entry.id });
+        return res.json({ ok: true, status: 'ayuda', mensaje: msg, titulo: 'Agronomía · ' + ag.entry.materia, data: m });
+      }
     }
     } // fin if(!readyPend)
     let r = readyPend || _interpretarMensaje(texto, ctx);
@@ -11474,6 +11507,13 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
         const msg = _textoAyuda(e);
         const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', ayudaId: e.id });
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, ejemplo: e.ejemplo || null, titulo: e.titulo, data: m });
+      }
+      // 2-bis) Fallback agronómico: consulta técnica de campo.
+      const ag = _buscarAgro(texto);
+      if (ag) {
+        const msg = _textoAgro(ag);
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', agroId: ag.entry.id });
+        return res.json({ ok: true, status: 'ayuda', mensaje: msg, titulo: 'Agronomía · ' + ag.entry.materia, data: m });
       }
       const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.error, { status: 'ayuda' });
       return res.json({ ok: true, status: 'ayuda', mensaje: r.error, data: m });
