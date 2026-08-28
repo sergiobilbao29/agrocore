@@ -2625,6 +2625,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
+      titulo:'🐎 v2.147.0 — El filtro por Familia (Equino, Bovino…) ahora trae los animales en Stock y Movimientos',
+      desc:'Antes, al filtrar por <b>Familia = Equino</b> (o Bovino, etc.) en <b>Stock</b> y <b>Movimientos</b> no aparecía nada (solo funcionaba filtrando por Categoría = Animales). Ahora el filtro por familia resuelve la <b>especie</b> de cada animal y trae las fichas y la hacienda correctamente. Además, en <b>Movimientos</b> agregamos una aclaración: es el <b>libro de stock</b> (insumos, granos y animales); el <b>conteo por campo</b> (declarado SENASA vs real) sigue en <b>Movimientos de animales</b>.' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
+      titulo:'📚 v2.146.0 — Documentación actualizada (asistente, manual, web e instructivos de Haras y Rodeos)',
+      desc:'Actualizamos toda la documentación con lo nuevo de animales: el <b>asistente 🤖</b> ahora explica cómo las fichas suman al stock, prestar/devolver, la foto y los animales de terceros; el <b>manual</b> y la <b>web</b> suman esas secciones; y se regeneraron los instructivos <b>Haras / Caballos</b> y <b>Circuito de Rodeos</b> en PDF.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/08/2026',
       titulo:'🐎 v2.145.0 — Fichas en el Stock general + terceros diferenciados + filtros en Movimientos de animales',
       desc:'<b>(1) Fichas visibles en Stock:</b> los equinos de las <b>Fichas de animales</b> ahora aparecen en <b>Stock</b> (categoría <b>Animales</b>, agrupados por especie · categoría). <b>(2) Terceros diferenciados:</b> los animales de terceros (pensión/hotelería) también se contabilizan, en su propio renglón <b>“… (terceros)”</b>, separados de los propios. <b>(3) Cobro/Pago:</b> al abrir Cobrar/Pagar con <b>Efectivo</b>, la <b>caja</b> ya aparece desde el arranque (antes había que cambiar de medio y volver). <b>(4) Movimientos de animales:</b> la pantalla ahora se llama así (antes “Animales”) y suma <b>filtros</b> por campo, por diferencia y buscador de categoría.' },
@@ -6380,10 +6386,7 @@ pages.stock = async function() {
       // (salvo que se active "ver fuera de catálogo"). No se borran, solo no se listan.
       if (_hayCat && !verFuera && !prodEnCatalogo(p, _sets)) return false;
       if (catSel.length && !catSel.includes(catRaizStock(p))) return false;
-      if (state.stockFilter.fam) {
-        if (p.esFicha) { if (!String(p.subtipo||'').toLowerCase().includes(String(state.stockFilter.fam).toLowerCase())) return false; }
-        else { const caId = _prodCaId(_pmap[p.id]) || _prodCaId(p); if (!_catCadena(caId).includes(state.stockFilter.fam)) return false; }
-      }
+      if (state.stockFilter.fam) { const caId = _prodCaId(p) || _prodCaId(_pmap[p.id]); if (!_catCadena(caId).includes(state.stockFilter.fam)) return false; }
       if (estado === 'bajo' && !p.bajoMinimo) return false;
       if (estado === 'ok'   &&  p.bajoMinimo) return false;
       if (!q) return true;
@@ -7011,6 +7014,9 @@ pages.movimientos = async function() {
 
   $('#page-body').innerHTML = `
     <div id="mov-cereal-banner"></div>
+    <div class="mb-3 bg-blue-50 border border-blue-200 rounded-lg p-2 text-xs text-blue-800 flex items-start gap-2">
+      <span>📦</span><span>Este es el <b>libro de stock</b>: entradas y salidas de <b>insumos, granos y animales</b> (incluidas las altas/ventas de las fichas y de la hacienda). El <b>conteo de hacienda por campo</b> (declarado SENASA vs real) se maneja en <b>🐄 Movimientos de animales</b>. Para ver solo animales, filtrá <b>Categoría = Animales</b> o <b>Familia</b> (Equino, Bovino…).</span>
+    </div>
     <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
     <div class="kpi mb-3">
       <div class="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
@@ -11537,10 +11543,25 @@ function _catalogoArtSets(){
 function _prodCaId(p) {
   if (!p) return null;
   if (p.categoriaArticuloId) return p.categoriaArticuloId;
+  // Nodo del árbol con un nombre dado (ej. "Bovino", "Equino"). Helper local.
+  const _nodoPorNombre = (nom) => {
+    if (!nom) return null;
+    const n = String(nom).toLowerCase().trim();
+    return (state.cache.categoriasArt||[]).find(c => String(c.nombre||'').toLowerCase().trim()===n) || null;
+  };
   if (p.categoria==='hacienda' || p.esHacienda) {
     const nm = String(p.categoriaHacienda || (p.nombre||'').split(' - ').pop().trim()).toLowerCase();
     const cfg = (state.cache.catHacienda||[]).find(c => String(c.nombre||'').toLowerCase().trim()===nm);
-    if (cfg && cfg.categoriaArticuloId) return cfg.categoriaArticuloId;
+    // Preferimos el nodo de la ESPECIE (ej. "Bovino") para que el filtro por familia
+    // a nivel especie funcione; si no existe, usamos el que tenga configurado.
+    if (cfg) { const espNode = _nodoPorNombre(cfg.especie); if (espNode) return espNode.id; if (cfg.categoriaArticuloId) return cfg.categoriaArticuloId; }
+  }
+  // Fichas de animales (categoria 'Animales', nombre "Equino · Potrillo [ (terceros)]"):
+  // la FAMILIA es la especie. La resolvemos al nodo del árbol con ese nombre (ej. "Equino").
+  if (p.categoria==='Animales' || p.esFicha) {
+    const esp = String(p.subtipo || p.nombre || '').split(' · ')[0].replace(/\(terceros\)/i,'').trim();
+    const node = _nodoPorNombre(esp);
+    if (node) return node.id;
   }
   return null;
 }

@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.145.0';
+const AGROCORE_VERSION = '2.147.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10777,7 +10777,11 @@ const _AYUDA_KB = [
       'Poné el costo de alta/compra (si nació, dejalo en 0) y la moneda.',
       'Abrí la ficha y con "+ Agregar evento" cargás sanidad, vacunas, herrajes, reproducción, doma/entrenamiento, torneos, pesajes o traslados. Cada evento puede llevar un COSTO que se suma al costo acumulado del animal.',
       'En un evento de vacuna o Coggins, poné el "próximo control": el sistema te avisa cuando está por vencer.',
-      'Cuando lo vendés, tocá "💰 Vender": ponés el precio y el sistema calcula el margen real (precio − costo acumulado) y lo pasa a estado Vendido.',
+      'FOTO: en el formulario tocá "Seleccionar archivo" (se reduce sola), o dentro de la ficha usá "📷 Agregar/Cambiar foto". Aparece en la ficha y como miniatura en el listado.',
+      'STOCK: cada ficha suma 1 cabeza al Stock general, agrupada como Animal → Equino → categoría (Padrillo, Yegua madre, Potrillo...). Mirala en Stock filtrando Familia = Equino. NO suman al campo los Vendidos, Prestados ni de Baja.',
+      'PRESTAR/DEVOLVER: si el caballo sale del campo de forma provisoria, tocá "🤝 Prestar" (a quién, fecha y vuelta estimada → agenda un recordatorio); sale del stock pero puede volver. Cuando vuelve, tocá "↩️ Devolver".',
+      'Cuando lo vendés, tocá "💰 Vender": ponés el precio y el sistema calcula el margen real (precio − costo acumulado) y lo pasa a estado Vendido (queda a quién se vendió, filtrable).',
+      'TERCEROS: si el animal es de un tercero (pensión/hotelería), marcalo como externo con su propietario; se cuenta en el stock en un renglón aparte "(terceros)", separado de los propios.',
       'Sirve para caballos de polo (haras), vacas madre/toros de cabaña, porcinos, etc. Está preparado para integrar collares/sensores (guarda la caravana RFID/microchip).'],
     atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
   { id:'consumo_kiosco', terms:['kiosco','kiosquito','proveeduria','proveeduría','consumo del empleado','cigarrillos empleado','descontar del sueldo','mercaderia empleado','le doy un lechon y descuento','descontar galletitas','lista de precios kiosco','consumo empleado','proveeduria del campo','almacen del campo'],
