@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.156.0';
+const AGROCORE_VERSION = '2.157.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2680,25 +2680,39 @@ mountCrud({
 // Datos estáticos en backend/data/vademecum.json (principio activo, modo de acción,
 // cultivos, objetivos, dosis, banda tox, carencia, nota). Orientativo: manda el marbete/SENASA.
 let _VADEMECUM = [];
-function _cargarJsonData(nombre) {
-  const cands = [
-    path.resolve(__dirname, '..', 'data', nombre),      // backend/data
+let _VADE_PATH = null;   // ruta desde donde se cargó (diagnóstico)
+function _vadeCandidatos(nombre) {
+  return [
+    path.resolve(__dirname, '..', 'data', nombre),                 // backend/data
+    path.resolve(__dirname, 'data', nombre),                       // src/data (por las dudas)
     path.resolve(__dirname, '..', '..', 'backend', 'data', nombre),
     path.resolve(STATIC_DIR, 'backend', 'data', nombre),
     path.resolve(process.cwd(), 'backend', 'data', nombre),
     path.resolve(process.cwd(), 'data', nombre),
   ];
-  for (const p of cands) {
-    try { if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) {}
+}
+function _cargarJsonData(nombre) {
+  for (const p of _vadeCandidatos(nombre)) {
+    try { if (fs.existsSync(p)) { const d = JSON.parse(fs.readFileSync(p, 'utf8')); if (nombre === 'vademecum.json') _VADE_PATH = p; return d; } } catch (e) {}
   }
   return null;
 }
 try { _VADEMECUM = _cargarJsonData('vademecum.json') || []; } catch { _VADEMECUM = []; }
-console.log(`[vademecum] ${_VADEMECUM.length} principios activos cargados`);
-app.get('/api/vademecum', requireCompany, requirePermission('stock:read'), (req, res) => {
+console.log(`[vademecum] ${_VADEMECUM.length} principios activos cargados${_VADE_PATH?(' desde '+_VADE_PATH):''}`);
+// Reintenta cargar si quedó vacío (por si el archivo llegó después de iniciar el server).
+function _getVademecum() {
+  if (!_VADEMECUM || !_VADEMECUM.length) { try { _VADEMECUM = _cargarJsonData('vademecum.json') || []; } catch {} }
+  return _VADEMECUM;
+}
+app.get('/api/vademecum', requireCompany, requirePermission('produccion:read'), (req, res) => {
+  let data = _getVademecum();
+  // Modo diagnóstico: /api/vademecum?debug=1 → muestra rutas probadas (para soporte).
+  if (String(req.query.debug || '') === '1') {
+    const cands = _vadeCandidatos('vademecum.json').map(p => ({ p, existe: (() => { try { return fs.existsSync(p); } catch { return false; } })() }));
+    return res.json({ ok: true, cargados: data.length, cargadoDesde: _VADE_PATH, __dirname, cwd: process.cwd(), STATIC_DIR, candidatos: cands });
+  }
   const q = _sinAcentos(String(req.query.q || '')).trim();
   const tipo = String(req.query.tipo || '').trim();
-  let data = _VADEMECUM;
   if (tipo) data = data.filter(v => v.tipo === tipo);
   if (q) data = data.filter(v => _sinAcentos([v.principioActivo, v.grupoMoa, v.grado, (v.cultivos||[]).join(' '), (v.objetivos||[]).join(' '), v.nota].filter(Boolean).join(' ')).includes(q));
   res.json({ ok: true, data });

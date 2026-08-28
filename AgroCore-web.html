@@ -2628,6 +2628,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
+      titulo:'🧫 v2.157.0 — Vademécum: se corrige el permiso que lo dejaba vacío',
+      desc:'El Vademécum aparecía vacío porque pedía un permiso distinto al del menú. Ahora usa el mismo permiso (Producción) y además la base se recarga sola si hiciera falta. Ya se ven los 76 principios activos.' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
       titulo:'🧫 v2.156.0 — Vademécum con las 76 fichas precargadas',
       desc:'Corregimos que el <b>Vademécum de insumos</b> aparecía vacío: ahora quedan cargados los 76 principios activos (herbicidas, insecticidas, fungicidas y fertilizantes) y también la base de agronomía del asistente, en todas las instancias.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/08/2026',
