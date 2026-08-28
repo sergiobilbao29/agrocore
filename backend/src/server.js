@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.149.0';
+const AGROCORE_VERSION = '2.150.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9888,6 +9888,53 @@ app.post('/api/animales/:id/eventos', requireCompany, requirePermission('stock:c
       }});
     });
     res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Editar un evento del animal (bitácora). Reconcilia el egreso de stock si cambia
+// el consumo (producto/cantidad) y actualiza el último peso si es un pesaje.
+app.put('/api/animales/:id/eventos/:evId', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const a = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!a) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    const ev = await prisma.animalEvento.findFirst({ where: { id: req.params.evId, animalId: a.id, companyId: req.companyId } });
+    if (!ev) return res.status(404).json({ ok: false, error: 'Evento no encontrado' });
+    const d = animalEventoSchema.partial().parse(req.body);
+    const row = await prisma.$transaction(async (tx) => {
+      // Reconciliar movimiento de stock (consumo imputado) si cambió producto/cantidad
+      // o si se pide (des)activar el descuento de stock.
+      let movStockId = ev.movimientoStockId;
+      const nuevoProd = d.productoId !== undefined ? d.productoId : ev.productoId;
+      const nuevaCant = d.cantidad !== undefined ? d.cantidad : ev.cantidad;
+      const quiereDescontar = req.body.descontarStock !== undefined ? !!req.body.descontarStock : !!ev.movimientoStockId;
+      const fechaMov = d.fecha || ev.fecha;
+      const debeTener = quiereDescontar && nuevoProd && nuevaCant && Number(nuevaCant) > 0;
+      if (ev.movimientoStockId) { try { await tx.movimiento.delete({ where: { id: ev.movimientoStockId } }); } catch {} movStockId = null; }
+      if (debeTener) {
+        const mv = await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: nuevoProd, fecha: fechaMov, tipo: 'egreso',
+          motivo: 'consumo_animal', cantidad: Number(nuevaCant), precio: null,
+          referencia: 'ANIMAL:' + a.id, observaciones: 'Consumo — ' + (a.nombre || 'animal'),
+          userId: req.user?.id || null,
+        }});
+        movStockId = mv.id;
+      }
+      // Pesaje: actualizar último peso conocido.
+      let datos = d.datos !== undefined ? d.datos : ev.datos;
+      const tipoFinal = d.tipo || ev.tipo;
+      const pesoKg = (d.peso != null && d.peso > 0) ? Number(d.peso) : null;
+      if (tipoFinal === 'pesaje' && pesoKg != null) {
+        try { const o = datos ? JSON.parse(datos) : {}; o.pesoKg = pesoKg; datos = JSON.stringify(o); }
+        catch { datos = JSON.stringify({ pesoKg }); }
+        await tx.animal.update({ where: { id: a.id }, data: { pesoKg, pesoFecha: fechaMov } });
+      }
+      const data = { movimientoStockId: movStockId, datos };
+      ['fecha','tipo','concepto','costo','moneda','empleadoId','productoId','cantidad','proximaFecha','observaciones']
+        .forEach(k => { if (d[k] !== undefined) data[k] = d[k]; });
+      if (d.aCobrar !== undefined) data.aCobrar = !!d.aCobrar;
+      return tx.animalEvento.update({ where: { id: ev.id }, data });
+    });
+    res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
 

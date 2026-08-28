@@ -2625,6 +2625,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
+      titulo:'🐴 v2.150.0 — Prestar caballo arreglado + eventos del animal editables',
+      desc:'<b>(1) Prestar:</b> se corrigió el error al prestar un animal (faltaban aplicar los campos del préstamo en la base). Ahora Prestar/Devolver funcionan y el animal sale/entra del stock del campo como corresponde. <b>(2) Eventos editables:</b> en la ficha, el <b>Historial y costos</b> ahora deja <b>editar ✏️</b> cada evento (fecha, tipo, detalle, costo, próximo control, peso, observaciones), no solo borrarlo. Al editar un consumo se recalcula el descuento de stock. <i>Nota: si venías de la 2.149 y el préstamo daba error, corré la reparación de Prisma indicada.</i>' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/08/2026',
       titulo:'🐴 v2.149.0 — Ficha con Campo, equinos en Stock como los demás animales y filtro de Depósito',
       desc:'<b>(1) Campo en la ficha:</b> ahora la <b>Ficha de animal</b> tiene el dato de <b>Campo (dónde está)</b>, además de la ubicación (box/potrero). <b>(2) Equinos en Stock como los demás:</b> ya no muestran el ícono de tubo de ensayo 🧪 ni el prefijo "Equino ·" en la columna Producto; se ven igual que las otras especies (nombre = categoría, con 🐴 y la especie como subtítulo). <b>(3) Filtro de Depósito:</b> al filtrar Stock por un depósito/campo, los animales de ese campo se cuentan correctamente (antes ignoraban el filtro).' },
@@ -27886,7 +27889,7 @@ async function aniVer(id){
       <td class="p-1">${ANI_EV_TIPOS[e.tipo]||e.tipo}</td>
       <td class="p-1">${esc(e.concepto||'')}${extra}${e.proximaFecha?` <span class="text-[10px] text-amber-700">(próx: ${fmtFecha(e.proximaFecha)})</span>`:''}</td>
       <td class="p-1 text-right">${e.costo?fmtMon(e.moneda||a.moneda,e.costo):'—'}</td>
-      <td class="p-1 text-right">${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='aniEventoDel(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>🗑️</button>`:''}</td>
+      <td class="p-1 text-right whitespace-nowrap">${(canU && !['venta','ingreso','iot'].includes(e.tipo))?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aniEventoEdit(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>✏️</button>`:''}${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='aniEventoDel(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>🗑️</button>`:''}</td>
     </tr>`;
   };
   const dl = (lbl,val)=> val?`<div><span class="text-[11px] text-slate-400">${lbl}</span><div class="text-sm">${esc(val)}</div></div>`:'';
@@ -28030,16 +28033,27 @@ function aniCertificado(id){
   const w=window.open('','_blank'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
   w.document.write(html); w.document.close();
 }
-function aniEventoForm(id){
+function aniEventoEdit(id,evId){
+  const ev=((state._aniActual&&state._aniActual.eventos)||[]).find(e=>e.id===evId);
+  if(!ev) return toast('Evento no encontrado','error');
+  aniEventoForm(id, ev);
+}
+function aniEventoForm(id, ev){
   const hoy=new Date().toISOString().slice(0,10);
-  const tipoOpts=Object.keys(ANI_EV_TIPOS).filter(k=>!['venta','ingreso','iot'].includes(k)).map(k=>`<option value="${k}">${ANI_EV_TIPOS[k]}</option>`).join('');
+  const esEdit=!!ev;
+  const evD=(()=>{ try{ return ev&&ev.datos?JSON.parse(ev.datos):null; }catch{ return null; } })();
+  const fechaVal=esEdit&&ev.fecha?String(ev.fecha).slice(0,10):hoy;
+  // Si el tipo del evento no está en la lista base (ej. traslado), lo agregamos para poder editarlo.
+  let tiposBase=Object.keys(ANI_EV_TIPOS).filter(k=>!['venta','ingreso','iot'].includes(k));
+  if(esEdit && ev.tipo && !tiposBase.includes(ev.tipo)) tiposBase=[ev.tipo,...tiposBase];
+  const tipoOpts=tiposBase.map(k=>`<option value="${k}" ${esEdit&&ev.tipo===k?'selected':''}>${ANI_EV_TIPOS[k]||k}</option>`).join('');
   openModal({
-    title:'Agregar evento a la ficha', size:'max-w-lg',
+    title: esEdit?'Editar evento de la ficha':'Agregar evento a la ficha', size:'max-w-lg',
     body:`
       <div class="grid grid-cols-2 gap-3">
-        <div><label class="label">Fecha *</label><input id="ae-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label">Fecha *</label><input id="ae-fecha" type="date" class="input" value="${fechaVal}"/></div>
         <div><label class="label">Tipo *</label><select id="ae-tipo" class="input" onchange="aniEvTipoChange()">${tipoOpts}</select></div>
-        <div class="col-span-2"><label class="label">Detalle / concepto</label><input id="ae-con" class="input" placeholder="Ej: vacuna gripe, desvasado/herrada, servicio con padrillo X, práctica…"/></div>
+        <div class="col-span-2"><label class="label">Detalle / concepto</label><input id="ae-con" class="input" value="${esEdit?esc(ev.concepto||''):''}" placeholder="Ej: vacuna gripe, desvasado/herrada, servicio con padrillo X, práctica…"/></div>
         <div id="ae-repro" class="col-span-2 grid grid-cols-2 gap-3 p-2 rounded bg-emerald-50 border border-emerald-200" style="display:none">
           <div class="col-span-2 text-[11px] font-semibold text-emerald-800">Datos de reproducción</div>
           <div><label class="label">Método</label><select id="ae-r-metodo" class="input"><option value="">—</option><option>IA (inseminación)</option><option>TE (transferencia embrionaria)</option><option>Monta natural</option></select></div>
@@ -28048,19 +28062,26 @@ function aniEventoForm(id){
           <div><label class="label">Donante (TE)</label><input id="ae-r-donante" class="input" list="an-anim-list"/></div>
           <div class="col-span-2"><label class="label">Receptora (TE)</label><input id="ae-r-recep" class="input" list="an-anim-list"/></div>
         </div>
-        <div id="ae-peso-wrap" class="col-span-2" style="display:none"><label class="label">Peso (kg)</label><input id="ae-peso" type="number" step="0.1" class="input" placeholder="Ej: 380"/><div class="text-[11px] text-slate-400 mt-1">Queda como último peso del animal. Si está vinculado a un lote, suma al “pesaje desde balanzas”.</div></div>
-        <div><label class="label" id="ae-costo-lbl">Costo imputado</label><input id="ae-costo" type="number" step="0.01" class="input" placeholder="0"/></div>
-        <div><label class="label">Próximo control / vencimiento</label><input id="ae-prox" type="date" class="input" title="Ej: vencimiento de Coggins o próxima vacuna"/></div>
+        <div id="ae-peso-wrap" class="col-span-2" style="display:${esEdit&&ev.tipo==='pesaje'?'block':'none'}"><label class="label">Peso (kg)</label><input id="ae-peso" type="number" step="0.1" class="input" value="${esEdit&&evD&&evD.pesoKg!=null?evD.pesoKg:''}" placeholder="Ej: 380"/><div class="text-[11px] text-slate-400 mt-1">Queda como último peso del animal. Si está vinculado a un lote, suma al “pesaje desde balanzas”.</div></div>
+        <div><label class="label" id="ae-costo-lbl">Costo imputado</label><input id="ae-costo" type="number" step="0.01" class="input" value="${esEdit&&ev.costo?ev.costo:''}" placeholder="0"/></div>
+        <div><label class="label">Próximo control / vencimiento</label><input id="ae-prox" type="date" class="input" value="${esEdit&&ev.proximaFecha?String(ev.proximaFecha).slice(0,10):''}" title="Ej: vencimiento de Coggins o próxima vacuna"/></div>
         ${(state._aniActual&&state._aniActual.externo)?`<div class="col-span-2 flex items-center gap-2 p-2 rounded bg-amber-50 border border-amber-200">
-          <input id="ae-cobrar" type="checkbox" class="w-4 h-4"/>
+          <input id="ae-cobrar" type="checkbox" class="w-4 h-4" ${esEdit&&ev.aCobrar?'checked':''}/>
           <label for="ae-cobrar" class="text-xs text-amber-800">Cobrar este importe al propietario (${esc(state._aniActual.propietario||'tercero')}) — pensión/servicio de hotelería</label>
         </div>`:''}
-        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ae-obs" class="input" rows="2"></textarea></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ae-obs" class="input" rows="2">${esEdit?esc(ev.observaciones||''):''}</textarea></div>
       </div>
       <div class="text-[11px] text-slate-400 mt-2">El “costo imputado” se suma al costo acumulado del animal. El “próximo control” dispara una alerta (ideal para Coggins / vacunas).</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick='aniEventoSave(${JSON.stringify(id)})'>Agregar</button>`
+            <button class="btn btn-primary" onclick='aniEventoSave(${JSON.stringify(id)},${esEdit?JSON.stringify(ev.id):'null'})'>${esEdit?'Guardar':'Agregar'}</button>`
   });
+  if(esEdit) setTimeout(()=>{
+    aniEvTipoChange();
+    if(ev.tipo==='reproduccion' && evD){
+      const set=(x,v)=>{ const el=document.getElementById(x); if(el&&v!=null) el.value=v; };
+      set('ae-r-metodo',evD.metodo); set('ae-r-res',evD.resultado); set('ae-r-padrillo',evD.padrillo); set('ae-r-donante',evD.donante); set('ae-r-recep',evD.receptora);
+    }
+  },0);
 }
 function aniEvTipoChange(){ const t=document.getElementById('ae-tipo').value; const r=document.getElementById('ae-repro'); if(r) r.style.display = (t==='reproduccion')?'grid':'none';
   const cb=document.getElementById('ae-cobrar'); const lbl=document.getElementById('ae-costo-lbl');
@@ -28068,7 +28089,7 @@ function aniEvTipoChange(){ const t=document.getElementById('ae-tipo').value; co
   if(lbl) lbl.textContent = (cb&&cb.checked) ? 'Importe a cobrar' : 'Costo imputado';
   const pw=document.getElementById('ae-peso-wrap'); if(pw) pw.style.display = (t==='pesaje')?'block':'none';
 }
-async function aniEventoSave(id){
+async function aniEventoSave(id, evId){
   const g=x=>document.getElementById(x);
   const tipo=g('ae-tipo').value;
   let concepto=g('ae-con').value||null, datos=null;
@@ -28084,7 +28105,11 @@ async function aniEventoSave(id){
     aCobrar: cb?!!cb.checked:false,
     peso: (tipo==='pesaje' && pesoEl && pesoEl.value) ? Number(pesoEl.value) : null };
   if(!body.fecha) return toast('Poné la fecha','warn');
-  try{ await api('/api/animales/'+id+'/eventos',{method:'POST',body:JSON.stringify(body)}); toast('Evento agregado','success'); closeModal(); aniVer(id); }
+  try{
+    if(evId){ await api('/api/animales/'+id+'/eventos/'+evId,{method:'PUT',body:JSON.stringify(body)}); toast('Evento actualizado','success'); }
+    else { await api('/api/animales/'+id+'/eventos',{method:'POST',body:JSON.stringify(body)}); toast('Evento agregado','success'); }
+    closeModal(); aniVer(id);
+  }
   catch(e){ toast(e.message,'error'); }
 }
 async function aniEventoDel(id,evId){
