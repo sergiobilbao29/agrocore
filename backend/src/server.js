@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.155.0';
+const AGROCORE_VERSION = '2.156.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2680,7 +2680,21 @@ mountCrud({
 // Datos estáticos en backend/data/vademecum.json (principio activo, modo de acción,
 // cultivos, objetivos, dosis, banda tox, carencia, nota). Orientativo: manda el marbete/SENASA.
 let _VADEMECUM = [];
-try { _VADEMECUM = JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', 'data', 'vademecum.json'), 'utf8')); } catch { _VADEMECUM = []; }
+function _cargarJsonData(nombre) {
+  const cands = [
+    path.resolve(__dirname, '..', 'data', nombre),      // backend/data
+    path.resolve(__dirname, '..', '..', 'backend', 'data', nombre),
+    path.resolve(STATIC_DIR, 'backend', 'data', nombre),
+    path.resolve(process.cwd(), 'backend', 'data', nombre),
+    path.resolve(process.cwd(), 'data', nombre),
+  ];
+  for (const p of cands) {
+    try { if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) {}
+  }
+  return null;
+}
+try { _VADEMECUM = _cargarJsonData('vademecum.json') || []; } catch { _VADEMECUM = []; }
+console.log(`[vademecum] ${_VADEMECUM.length} principios activos cargados`);
 app.get('/api/vademecum', requireCompany, requirePermission('stock:read'), (req, res) => {
   const q = _sinAcentos(String(req.query.q || '')).trim();
   const tipo = String(req.query.tipo || '').trim();
