@@ -64,7 +64,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.154.0';
+const AGROCORE_VERSION = '2.155.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12828,6 +12828,41 @@ async function _construirFlujoProyectado(req, opts = {}) {
   // === Normalizar moneda/montoOrigen para el simulador (los que no la traen son ARS) ===
   const _normMon = (ev) => { if (ev.moneda == null) ev.moneda = 'ARS'; if (ev.montoOrigen == null) ev.montoOrigen = ev.importe; return ev; };
   items.forEach(_normMon); vencidos.forEach(_normMon);
+
+  // === Sueldos del personal (proyección de lo que se tiene que pagar por mes) ===
+  // Una línea "Sueldos" por mes y empresa: suma el sueldo fijo de cada empleado
+  // activo + los movimientos de su planilla no liquidados del mes. Los períodos ya
+  // liquidados (pagados) no se cuentan. Es estimado; el pago real lo confirma la liquidación.
+  try {
+    const [_emplS, _liqS, _movS] = await Promise.all([
+      prisma.empleado.findMany({ where: { companyId: { in: companyIds } }, select: { id: true, companyId: true, sueldo: true, estado: true, fechaIngreso: true } }),
+      prisma.liquidacionSueldo.findMany({ where: { companyId: { in: companyIds } }, select: { empleadoId: true, periodo: true } }),
+      prisma.movimientoEmpleado.findMany({ where: { companyId: { in: companyIds }, liquidacionId: null }, select: { empleadoId: true, periodo: true, tipo: true, monto: true } }),
+    ]);
+    const _liqSet = new Set(_liqS.map(l => l.empleadoId + '|' + String(l.periodo || '').slice(0, 7)));
+    const _movMap = {};
+    _movS.forEach(m => { const k = m.empleadoId + '|' + String(m.periodo || '').slice(0, 7); _movMap[k] = (_movMap[k] || 0) + (m.tipo === 'gasto' ? -Number(m.monto || 0) : Number(m.monto || 0)); });
+    const _months = [];
+    { let d = new Date(hoy.getFullYear(), hoy.getMonth(), 1); const end = new Date(horizonte.getFullYear(), horizonte.getMonth(), 1);
+      while (d <= end) { _months.push({ key: d.toISOString().slice(0, 7), y: d.getFullYear(), m: d.getMonth() }); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); } }
+    for (const cid of companyIds) {
+      const emps = _emplS.filter(e => e.companyId === cid && String(e.estado || '').toLowerCase() !== 'baja');
+      for (const mm of _months) {
+        let monto = 0;
+        for (const e of emps) {
+          const ingMes = e.fechaIngreso ? new Date(e.fechaIngreso).toISOString().slice(0, 7) : mm.key;
+          if (mm.key < ingMes) continue;
+          const key = e.id + '|' + mm.key;
+          if (_liqSet.has(key)) continue;   // ese mes ya está liquidado/pagado
+          monto += Number(e.sueldo || 0) + (_movMap[key] || 0);
+        }
+        if (monto > 0) {
+          const pay = new Date(mm.y, mm.m + 1, 0); // último día del mes
+          push(pay, { tipo: 'egreso', categoria: 'sueldos', concepto: 'Sueldos del personal', importe: Math.round(monto), empresaId: cid, moneda: 'ARS', montoOrigen: Math.round(monto), estado: 'estimado' });
+        }
+      }
+    }
+  } catch {}
 
   // === Nombre de empresa por item (para el detalle cronológico por empresa) ===
   const _emps = await prisma.company.findMany({ where: { id: { in: companyIds } }, select: { id: true, name: true } });
