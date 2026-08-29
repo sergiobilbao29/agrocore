@@ -2353,6 +2353,9 @@ model RodeoEvento {
   clienteId      String?  // cliente/comprador de la venta (para cuenta a cobrar)
   facturaId      String?  // factura de venta vinculada
   liquidacionHaciendaId String? // liquidación de hacienda vinculada
+  // v2.167: vinculación de la COMPRA (ingreso) con el circuito comercial
+  proveedorId    String?  // proveedor de la compra de hacienda (para cuenta a pagar)
+  facturaCompraId String? // factura de compra vinculada
   observaciones String?
   createdAt     DateTime @default(now())
 

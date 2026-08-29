@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.166.0';
+const AGROCORE_VERSION = '2.167.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13207,6 +13207,10 @@ const rodeoEventoSchema = z.object({
   clienteId: z.string().nullable().optional(),
   facturaId: z.string().nullable().optional(),
   liquidacionHaciendaId: z.string().nullable().optional(),
+  // v2.167: compra (ingreso) vinculada al circuito comercial
+  compraModo: z.enum(['solo','ctapagar','facturacompra']).nullable().optional(),
+  proveedorId: z.string().nullable().optional(),
+  facturaCompraId: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
 
@@ -13307,8 +13311,8 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
     const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
     const d = rodeoEventoSchema.parse(req.body);
-    // ventaModo es solo de control (no es columna de RodeoEvento).
-    const { ventaModo, ...evBase } = d;
+    // ventaModo/compraModo son solo de control (no son columnas de RodeoEvento).
+    const { ventaModo, compraModo, ...evBase } = d;
     const row = await prisma.$transaction(async (tx) => {
       let prod = null;
       if (d.productoId) {
@@ -13380,6 +13384,23 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
           if (!l) throw Object.assign(new Error('Liquidación no encontrada'), { status: 400 });
         }
       }
+      // v2.167: COMPRA (ingreso) vinculada al circuito comercial.
+      if (d.tipo === 'ingreso' && compraModo && compraModo !== 'solo') {
+        const totalCompra = Number(monto || 0) + Number(d.fleteComision || 0);
+        if (compraModo === 'ctapagar') {
+          if (!d.proveedorId) throw Object.assign(new Error('Elegí el proveedor para la cuenta a pagar'), { status: 400 });
+          await tx.ctaCte.create({ data: {
+            companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId,
+            fecha: d.fecha, detalle: `Compra hacienda - lote ${rodeo.nombre}`.trim(),
+            referencia: `RODCOMPRA-${ev.id}`, debe: totalCompra, haber: 0,
+            categoria: 'compra_hacienda',
+          }});
+        } else if (compraModo === 'facturacompra') {
+          if (!d.facturaCompraId) throw Object.assign(new Error('Elegí la factura de compra a vincular'), { status: 400 });
+          const f = await tx.facturaCompra.findFirst({ where: { id: d.facturaCompraId, companyId: req.companyId } });
+          if (!f) throw Object.assign(new Error('Factura de compra no encontrada'), { status: 400 });
+        }
+      }
       return ev;
     });
     res.status(201).json({ ok: true, data: row });
@@ -13396,6 +13417,8 @@ app.delete('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('st
       await tx.movimiento.deleteMany({ where: { referencia: `RODMIX-${ev.id}`, companyId: req.companyId } });
       // Venta con cuenta a cobrar generada: la damos de baja también.
       await tx.ctaCte.deleteMany({ where: { referencia: `RODVENTA-${ev.id}`, companyId: req.companyId } });
+      // Compra con cuenta a pagar generada: la damos de baja también.
+      await tx.ctaCte.deleteMany({ where: { referencia: `RODCOMPRA-${ev.id}`, companyId: req.companyId } });
       await tx.rodeoEvento.delete({ where: { id: ev.id } });
     });
     res.json({ ok: true });

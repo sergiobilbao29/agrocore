@@ -26828,7 +26828,7 @@ async function rodVer(id){
   const kpi=(lbl,val,cls)=>`<div class="kpi"><div class="text-xs text-slate-500">${lbl}</div><div class="text-base font-bold mt-1 ${cls||''}">${val}</div></div>`;
   const filas=ev.map(e=>`<tr class="table-row">
       <td class="whitespace-nowrap">${fmtDate(e.fecha)}</td>
-      <td>${(RODEO_EV[e.tipo]||['📌'])[0]} ${rodEvLbl(e.tipo)}${e.concepto?`<div class="text-[10px] text-slate-500">${esc(e.concepto)}</div>`:''}${e.liquidacionHaciendaId?`<div><span class="badge badge-green text-[10px]">🔗 Liquidación</span></div>`:''}${e.facturaId?`<div><span class="badge badge-green text-[10px]">🔗 Factura</span></div>`:''}${(e.clienteId && !e.facturaId && !e.liquidacionHaciendaId && e.tipo==='venta')?`<div><span class="badge badge-blue text-[10px]">🔗 Cta. a cobrar</span></div>`:''}</td>
+      <td>${(RODEO_EV[e.tipo]||['📌'])[0]} ${rodEvLbl(e.tipo)}${e.concepto?`<div class="text-[10px] text-slate-500">${esc(e.concepto)}</div>`:''}${e.liquidacionHaciendaId?`<div><span class="badge badge-green text-[10px]">🔗 Liquidación</span></div>`:''}${e.facturaId?`<div><span class="badge badge-green text-[10px]">🔗 Factura</span></div>`:''}${(e.clienteId && !e.facturaId && !e.liquidacionHaciendaId && e.tipo==='venta')?`<div><span class="badge badge-blue text-[10px]">🔗 Cta. a cobrar</span></div>`:''}${e.facturaCompraId?`<div><span class="badge badge-green text-[10px]">🔗 Factura compra</span></div>`:''}${(e.proveedorId && !e.facturaCompraId && e.tipo==='ingreso')?`<div><span class="badge badge-amber text-[10px]">🔗 Cta. a pagar</span></div>`:''}</td>
       <td class="text-right text-xs">${e.cabezas!=null?e.cabezas:''}</td>
       <td class="text-right text-xs">${e.kg!=null?fmtN(e.kg)+' kg':''}</td>
       <td class="text-right text-xs ${e.tipo==='venta'?'text-emerald-700':''}">${e.monto?rodMoney(e.monto,e.moneda):''}</td>
@@ -26875,6 +26875,11 @@ async function rodEvForm(rodeoId, tipo){
     try{ facturas=(await api('/api/facturas')).data||[]; }catch{}
     try{ liqs=(await api('/api/liquidaciones-hacienda')).data||[]; }catch{}
   }
+  let proveedores=[], facturasCompra=[];
+  if(tipo==='ingreso'){
+    try{ proveedores=(await api('/api/proveedores')).data||[]; }catch{}
+    try{ facturasCompra=(await api('/api/facturas-compra')).data||[]; }catch{}
+  }
   const hoy=new Date().toISOString().slice(0,10);
   const montoLbl = esVenta?'Ingreso por venta':(esCargo?'Importe a cobrar al dueño':'Costo');
   openModal2({ title:`${(RODEO_EV[tipo]||['📌'])[0]} ${rodEvLbl(tipo)}`, size:'max-w-lg',
@@ -26901,6 +26906,15 @@ async function rodEvForm(rodeoId, tipo){
         <div class="col-span-2" id="rev-vcli" style="display:none"><label class="label">Cliente / comprador</label><select id="rev-cliente" class="input"><option value="">— Elegí cliente —</option>${clientes.map(c=>`<option value="${c.id}">${esc(c.nombre||c.razonSocial||'')}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">Genera la cuenta a cobrar por el importe de la venta.</div></div>
         <div class="col-span-2" id="rev-vliq" style="display:none"><label class="label">Liquidación de hacienda</label><select id="rev-liq" class="input"><option value="">— Elegí liquidación —</option>${liqs.map(l=>`<option value="${l.id}">${fmtDate(l.fecha)} · ${esc(l.numero||'s/n')} · $${fmtN(l.neto||0)}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">La liquidación ya lleva su propia cuenta a cobrar; acá solo se vincula.</div></div>
         <div class="col-span-2" id="rev-vfac" style="display:none"><label class="label">Factura de venta</label><select id="rev-fac" class="input"><option value="">— Elegí factura —</option>${facturas.map(f=>`<option value="${f.id}">${fmtDate(f.fecha)} · ${esc((f.tipo||'')+' '+(f.numero||''))} · $${fmtN(f.total||f.neto||0)}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">La factura ya lleva su propia cuenta a cobrar; acá solo se vincula.</div></div>`:''}
+        ${esIngreso?`<div class="col-span-2 border-t border-slate-200 pt-2 mt-1">
+          <label class="label">Registrar la compra como</label>
+          <select id="rev-cmodo" class="input" onchange="rodCompraModo()">
+            <option value="solo">Solo en el rodeo (no toca finanzas)</option>
+            <option value="ctapagar">Cuenta a pagar a un proveedor</option>
+            <option value="facturacompra">Vincular a una factura de compra</option>
+          </select></div>
+        <div class="col-span-2" id="rev-cprov" style="display:none"><label class="label">Proveedor</label><select id="rev-prov" class="input"><option value="">— Elegí proveedor —</option>${proveedores.map(p=>`<option value="${p.id}">${esc(p.nombre||p.razonSocial||'')}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">Genera la cuenta a pagar por la compra (monto + fletes/comisiones).</div></div>
+        <div class="col-span-2" id="rev-cfac" style="display:none"><label class="label">Factura de compra</label><select id="rev-faccompra" class="input"><option value="">— Elegí factura de compra —</option>${facturasCompra.map(f=>`<option value="${f.id}">${fmtDate(f.fecha)} · ${esc((f.proveedor&&f.proveedor.nombre)||'')} · ${esc((f.tipo||'')+' '+(f.numero||''))} · $${fmtN(f.total||f.neto||0)}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">La factura de compra ya lleva su propia cuenta a pagar; acá solo se vincula.</div></div>`:''}
       </div>
       ${esCargo?`<div class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">🏨 Este importe se registra como <b>cargo a cobrar al dueño de la hacienda</b> (no es costo del engorde). Aparece en el resumen “Capitalización / hotelería (terceros)” para facturarle. Podés poner las <b>cabezas</b> para calcular por cabeza/día si querés.</div>`:''}
       ${esPesaje?`<div class="text-[11px] text-slate-500 mt-2">Poné el <b>kg total</b> de todos los animales del lote a hoy (cabezas × kg promedio). Es lo que usa el sistema para calcular la ganancia de peso.</div>`:''}`,
@@ -26910,6 +26924,11 @@ function rodVentaModo(){
   const m=$('#rev-vmodo')?.value||'solo';
   const show=(id,on)=>{ const e=$(id); if(e) e.style.display=on?'block':'none'; };
   show('#rev-vcli', m==='ctacte'); show('#rev-vliq', m==='liquidacion'); show('#rev-vfac', m==='factura');
+}
+function rodCompraModo(){
+  const m=$('#rev-cmodo')?.value||'solo';
+  const show=(id,on)=>{ const e=$(id); if(e) e.style.display=on?'block':'none'; };
+  show('#rev-cprov', m==='ctapagar'); show('#rev-cfac', m==='facturacompra');
 }
 function rodEvProdChange(){
   const sel=$('#rev-prod'); const opt=sel?sel.options[sel.selectedIndex]:null;
@@ -26938,6 +26957,11 @@ async function rodEvSave(rodeoId, tipo){
     if(vm==='ctacte'){ const cid=v('#rev-cliente'); if(!cid) return toast('Elegí el cliente para la cuenta a cobrar','warn'); data.clienteId=cid; }
     if(vm==='liquidacion'){ const lid=v('#rev-liq'); if(!lid) return toast('Elegí la liquidación a vincular','warn'); data.liquidacionHaciendaId=lid; }
     if(vm==='factura'){ const fid=v('#rev-fac'); if(!fid) return toast('Elegí la factura a vincular','warn'); data.facturaId=fid; }
+  }
+  if(tipo==='ingreso'){
+    const cm=v('#rev-cmodo')||'solo'; data.compraModo=cm;
+    if(cm==='ctapagar'){ const pid=v('#rev-prov'); if(!pid) return toast('Elegí el proveedor para la cuenta a pagar','warn'); data.proveedorId=pid; }
+    if(cm==='facturacompra'){ const fid=v('#rev-faccompra'); if(!fid) return toast('Elegí la factura de compra a vincular','warn'); data.facturaCompraId=fid; }
   }
   try{ await api(`/api/rodeos/${rodeoId}/eventos`,{method:'POST',body:JSON.stringify(data)}); closeModal2(); toast('Evento cargado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
 }
