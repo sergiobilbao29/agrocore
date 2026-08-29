@@ -27832,7 +27832,7 @@ pages.vademecum = async function(){
     let list=(state.cache.vademecum||[]);
     if(tipo) list=list.filter(v=>v.tipo===tipo);
     if(q) list=list.filter(v=>_sinAcentos([v.principioActivo,v.grupoMoa,v.grado,(v.cultivos||[]).join(' '),(v.objetivos||[]).join(' '),v.nota].filter(Boolean).join(' ')).includes(q));
-    const card=v=>`<div class="card p-3 cursor-pointer hover:border-emerald-300" onclick='vademecumVer(${JSON.stringify(v.id)})'>
+    const card=v=>`<div class="bg-white rounded-xl border border-slate-200 shadow-sm p-3 cursor-pointer hover:border-emerald-400 hover:shadow-md transition" onclick='vademecumVer(${JSON.stringify(v.id)})'>
       <div class="flex items-center justify-between gap-2">
         <div class="font-semibold text-slate-800">${esc(v.principioActivo)}</div>
         <span class="text-[10px] text-slate-500 whitespace-nowrap">${VADE_TIPO[v.tipo]||''}</span>
@@ -27847,7 +27847,7 @@ pages.vademecum = async function(){
     </div>`;
     const total = (state.cache.vademecum||[]).length;
     if (list.length) {
-      $('#vade-list').innerHTML = `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">${list.map(card).join('')}</div>`;
+      $('#vade-list').innerHTML = `<div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">${list.map(card).join('')}</div>`;
     } else if (total === 0 && !q && !tipo) {
       // Base vacía: mostramos diagnóstico para soporte.
       $('#vade-list').innerHTML = `<div class="card p-4 text-sm text-slate-600">La base del vademécum figura vacía en este servidor. <button class="btn btn-secondary text-xs ml-2" onclick="vademecumDiag()">🔍 Ver diagnóstico</button><div id="vade-diag" class="mt-2 text-[11px] font-mono text-slate-500"></div></div>`;
