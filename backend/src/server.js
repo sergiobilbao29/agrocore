@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.161.0';
+const AGROCORE_VERSION = '2.162.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3256,16 +3256,52 @@ app.get('/api/aplicaciones', requireCompany, requirePermission('produccion:read'
     // Si el rol tiene campañas limitadas (Socio), solo trae insumos/labores de esas campañas.
     const _sc = _scopeCampanas(req);
     const _wIns = _sc ? { campana: { companyId: req.companyId }, campanaId: { in: _sc } } : { campana: { companyId: req.companyId } };
-    const [ins, lab] = await Promise.all([
+    // laborInsumo: insumos consumidos DENTRO de una labor. Se muestran también como
+    // insumos de la campaña (única fuente de verdad; al borrar la labor desaparecen).
+    const _wLabIns = _sc
+      ? { labor: { campanaId: { in: _sc }, campana: { companyId: req.companyId } } }
+      : { labor: { campanaId: { not: null }, campana: { companyId: req.companyId } } };
+    const [ins, lab, labIns] = await Promise.all([
       prisma.insumoAplicado.findMany({ where: _wIns, orderBy: { fecha: 'desc' } }),
       prisma.laborAplicada.findMany({   where: _wIns, orderBy: { fecha: 'desc' } }),
+      prisma.laborInsumo.findMany({ where: _wLabIns, include: { producto: true, labor: true } }),
     ]);
+    // Los insumos de labor pueden venir en la moneda de la labor (ej. ARS). Los pasamos a USD
+    // para que sumen consistente con el resto de los insumos de la campaña.
+    const _cotUSD = (await getCotizacionARS('USD', new Date())) || null;
+    const _aUSD = async (monto, moneda, fecha) => {
+      const n = Number(monto || 0);
+      if (!n) return 0;
+      if (!moneda || moneda === 'USD') return n;
+      const cotMon = await getCotizacionARS(moneda, fecha);
+      const cotUSD = (await getCotizacionARS('USD', fecha)) || _cotUSD;
+      if (!cotMon || !cotUSD) return n; // sin cotización: dejamos el valor tal cual
+      return (n * cotMon) / cotUSD;
+    };
+    const labInsMapped = [];
+    for (const li of labIns) {
+      const L = li.labor || {};
+      const mon = L.monedaCosto || 'USD';
+      const ha = Number(L.hectareasAplicadas || 0) || null;
+      const totalUSD = await _aUSD(li.total != null ? li.total : (Number(li.precioUnit || 0) * Number(li.cantidad || 0)), mon, L.fecha);
+      const precioUnitUSD = await _aUSD(li.precioUnit || 0, mon, L.fecha);
+      labInsMapped.push({
+        id: 'LI-' + li.id, campanaId: L.campanaId, tipo: 'insumo', origen: 'labor',
+        item: (li.producto?.nombre) || 'Insumo', subtipo: li.unidad || null,
+        unidadHa: ha ? Number(li.cantidad || 0) / ha : Number(li.cantidad || 0),
+        precioUnit: precioUnitUSD,
+        costoHa: ha ? totalUSD / ha : totalUSD,
+        moneda: 'USD', hectareasAplicadas: L.hectareasAplicadas,
+        fecha: L.fecha, observaciones: (L.tipo ? ('Labor: ' + L.tipo) : null),
+      });
+    }
     const data = [
       ...ins.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'insumo',
         item: x.nombre, subtipo: x.unidad || null,
         unidadHa: x.cantidad, precioUnit: x.precioUnit ?? null,
         costoHa: x.costo, moneda: 'USD', hectareasAplicadas: x.hectareasAplicadas,
         fecha: x.fecha, observaciones: x.observaciones })),
+      ...labInsMapped,
       ...lab.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'labor',
         item: x.tipo, subtipo: null,
         unidadHa: null, precioUnit: null,

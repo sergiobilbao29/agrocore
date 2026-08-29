@@ -22415,9 +22415,10 @@ pages.insumos = async function() {
                          const ha = haDe(a);
                          const total = itemTotal(a);
                          const isParcial = a.hectareasAplicadas != null && Number(a.hectareasAplicadas) < haLote;
+                         const deLabor = a.origen === 'labor';
                          return `
                          <tr class="table-row">
-                           <td><b>${esc(a.item)}</b></td>
+                           <td><b>${esc(a.item)}</b>${deLabor?` <span class="badge badge-gray text-[10px]" title="Insumo consumido dentro de una labor. Se edita/borra desde la labor.">🚜 de labor</span>`:''}</td>
                            <td><span class="badge badge-blue">${esc(a.subtipo||'')}</span></td>
                            <td class="text-right">${fmtN(a.unidadHa||0)}</td>
                            <td class="text-right">${fmtN(insConv(a.precioUnit||0,'USD'))}</td>
@@ -22425,7 +22426,7 @@ pages.insumos = async function() {
                            <td class="text-right ${isParcial?'text-amber-600 font-semibold':''}" title="${isParcial?'Aplicación parcial (lote: '+haLote+' ha)':''}">${fmtN(ha)}${isParcial?' *':''}</td>
                            <td class="text-right font-semibold">${fmtN(total)}</td>
                            <td>${a.fecha?fmtDate(a.fecha):'—'}</td>
-                           <td class="text-right whitespace-nowrap">${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)},${JSON.stringify(a.campanaId)})'>🗑️</button></td>
+                           <td class="text-right whitespace-nowrap">${deLabor?'<span class="text-[11px] text-slate-400">—</span>':`${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)},${JSON.stringify(a.campanaId)})'>🗑️</button>`}</td>
                          </tr>`;}).join('')}</tbody>
                      </table>`}
                 <div class="text-xs font-semibold text-slate-600 uppercase mt-4 mb-2 flex items-center justify-between">
