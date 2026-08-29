@@ -421,6 +421,22 @@ model LaborInsumo {
   @@index([productoId])
 }
 
+// v2.164: componentes de un producto "mezcla/ración". Ej: Ración novillo = 85% Maíz + 15% Núcleo.
+// Al consumir la mezcla (ej. en alimentación de un rodeo), se descuenta cada componente de su
+// stock en la proporción indicada, valorizado a su propio costo. La mezcla en sí es "virtual"
+// (no lleva stock propio). Sin relaciones @relation: se resuelven por productoId a mano.
+model MezclaComponente {
+  id            String   @id @default(cuid())
+  companyId     String
+  mezclaId      String   // Producto que es la mezcla (Producto.esMezcla = true)
+  componenteId String    // Producto componente que sí lleva stock
+  porcentaje    Float    @default(0)  // % en peso del componente dentro de la mezcla
+  createdAt     DateTime @default(now())
+
+  @@index([companyId])
+  @@index([mezclaId])
+}
+
 // ============================================================
 // STOCK: productos (maestro) + movimientos (ledger)
 // ============================================================
@@ -448,6 +464,7 @@ model Producto {
   tipoArticulo    String?
   categoriaArticuloId String?
   vademecumId     String?   // v2.154: vínculo al principio activo del vademécum (dosis/carencia/modo de acción)
+  esMezcla        Boolean   @default(false)  // v2.164: producto "ración/mezcla": al consumirlo, se descuentan sus componentes
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   categoriaArticulo CategoriaArticulo? @relation(fields: [categoriaArticuloId], references: [id], onDelete: SetNull)
@@ -2331,6 +2348,7 @@ model RodeoEvento {
   cantidad      Float?   // cantidad consumida del producto (rollos, kg, etc.)
   movimientoStockId String? // egreso de galpon generado por el consumo (para revertir)
   aCobrar       Boolean  @default(false)  // capitalización/hotelería: cargo a cobrar al dueño de la hacienda
+  campanaForrajeraId String? // v2.164: si el costo de pastura se imputó desde una campaña forrajera
   observaciones String?
   createdAt     DateTime @default(now())
 

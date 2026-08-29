@@ -6761,7 +6761,12 @@ async function prodForm(id=null, opts={}) {
   const it = id ? (state.cache.productos||[]).find(x=>x.id===id) || {} : {};
   if (!state.cache.catHacienda) { try { state.cache.catHacienda = (await api('/api/categorias-hacienda')).data || []; } catch {} }
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
+  if (!state.cache.productos) { try { state.cache.productos = (await api('/api/productos')).data || []; } catch {} }
   try { await _cargarVademecum(); } catch {}
+  // Componentes de la mezcla (si es edición de una ración ya cargada).
+  let _mezComps = [];
+  if (id && it.esMezcla) { try { _mezComps = (await api('/api/productos/'+id+'/mezcla')).data || []; } catch {} }
+  state._mezEditId = id || null;
   const cats = state.cache.catHacienda || [];
   state._prodAfter = opts.after || null;
   // Al crear desde una categoría del árbol (ej. Repuestos) preseleccionamos esa categoría/familia.
@@ -6811,11 +6816,60 @@ async function prodForm(id=null, opts={}) {
             }).join('')}
           </select>
         </div>
+        <div class="col-span-2 border-t border-slate-200 pt-2 mt-1">
+          <label class="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+            <input type="checkbox" id="f-esmezcla" ${it.esMezcla?'checked':''} onchange="_mezToggle()"> 🧪 Es una ración / mezcla (al consumirla, descuenta sus componentes del stock)
+          </label>
+          <div id="f-mez-wrap" style="display:${it.esMezcla?'block':'none'}" class="mt-2 p-2 bg-emerald-50 rounded border border-emerald-200">
+            <div class="text-[11px] text-slate-600 mb-2">Fórmula por <b>% en peso</b>. Ej: 85% Maíz + 15% Núcleo. Al consumir la ración en un rodeo se descuenta cada componente de su stock, valorizado a su costo.</div>
+            <div id="f-mez-rows" class="space-y-1"></div>
+            <div class="flex items-center justify-between mt-2">
+              <button type="button" class="btn btn-secondary text-xs" onclick="_mezAddRow()">+ Componente</button>
+              <span class="text-xs text-slate-600">Total: <b id="f-mez-total">0</b>% <span class="text-slate-400">(debería sumar 100)</span></span>
+            </div>
+          </div>
+        </div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='prodSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
+  // Pinta los componentes de la mezcla (si los hay); si no, una fila vacía cuando se tilde.
+  if (it.esMezcla) { _mezComps.forEach(c => _mezAddRow(c)); if (!_mezComps.length) _mezAddRow(); }
+}
+// ----- Ración / mezcla: editor de fórmula de componentes -----
+function _mezProdOptions(sel) {
+  const prods = (state.cache.productos||[]).filter(p => !p.esMezcla && p.id !== state._mezEditId && (p.categoria||'')!=='hacienda' && (p.categoria||'')!=='Animales');
+  return `<option value="">— Elegí componente —</option>` + prods.map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?(' ('+esc(p.unidad)+')'):''}</option>`).join('');
+}
+function _mezAddRow(c) {
+  const box = document.getElementById('f-mez-rows'); if (!box) return;
+  const row = document.createElement('div');
+  row.className = 'flex items-center gap-2';
+  row.setAttribute('data-mezrow','1');
+  row.innerHTML = `
+    <select class="input text-sm" data-mezf="comp" style="flex:1" onchange="_mezRecalc()">${_mezProdOptions(c?c.componenteId:'')}</select>
+    <input type="number" step="0.1" class="input text-sm text-right" data-mezf="pct" style="width:90px" value="${c?Number(c.porcentaje||0):''}" placeholder="%" oninput="_mezRecalc()"/>
+    <span class="text-xs text-slate-400">%</span>
+    <button type="button" class="btn btn-ghost text-xs text-red-600" title="Quitar" onclick="this.closest('[data-mezrow]').remove();_mezRecalc()">✕</button>`;
+  box.appendChild(row);
+  _mezRecalc();
+}
+function _mezToggle() {
+  const on = !!document.getElementById('f-esmezcla')?.checked;
+  const w = document.getElementById('f-mez-wrap'); if (w) w.style.display = on ? 'block' : 'none';
+  if (on && !document.querySelectorAll('#f-mez-rows [data-mezrow]').length) _mezAddRow();
+}
+function _mezRecalc() {
+  let t = 0;
+  document.querySelectorAll('#f-mez-rows [data-mezrow]').forEach(r => { t += Number(r.querySelector('[data-mezf="pct"]')?.value||0); });
+  const el = document.getElementById('f-mez-total'); if (el){ el.textContent = Math.round(t*10)/10; el.style.color = (Math.abs(t-100)<0.5)?'#16a34a':'#b45309'; }
+}
+function _mezLeerComponentes() {
+  return [...document.querySelectorAll('#f-mez-rows [data-mezrow]')].map(r => ({
+    componenteId: r.querySelector('[data-mezf="comp"]')?.value || '',
+    porcentaje: Number(r.querySelector('[data-mezf="pct"]')?.value || 0),
+  })).filter(c => c.componenteId && c.porcentaje > 0);
 }
 // Deriva la categoría "plana" (legado) desde la raíz del árbol elegida, para que el resto
 // del sistema (detección de hacienda/insumo/cereal, etc.) siga funcionando con un solo campo.
@@ -6853,10 +6907,18 @@ async function prodSave(id) {
     codigoBarras: $('#f-ean')?.value.trim() || null,
     ivaDefault: ($('#f-ivadef')?.value !== '' && $('#f-ivadef')?.value != null) ? Number($('#f-ivadef').value) : null,
     vademecumId: $('#f-vademecum')?.value || null,
+    esMezcla: !!$('#f-esmezcla')?.checked,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
   if (!caId && !cat) return toast('Elegí la categoría','warn');
-  try { await api('/api/productos'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
+  // Fórmula de la mezcla (si aplica).
+  const esMezcla = data.esMezcla;
+  const comps = esMezcla ? _mezLeerComponentes() : [];
+  if (esMezcla && !comps.length) return toast('Cargá al menos un componente de la ración/mezcla','warn');
+  try {
+    const r = await api('/api/productos'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
+    const pid = id || r?.data?.id;
+    if (pid) { try { await api('/api/productos/'+pid+'/mezcla', { method:'PUT', body: JSON.stringify({ esMezcla, componentes: comps }) }); } catch(e){ /* no romper el alta si falla la fórmula */ } }
     toast(id?'Actualizado':'Creado','success'); closeModal(); delete state.cache.productos;
     const after = state._prodAfter; state._prodAfter = null;
     if (after==='catalogos') pages.catalogos(); else pages.stock();
@@ -26791,7 +26853,7 @@ async function rodVer(id){
       </div>
       <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
         <h4 class="font-semibold text-slate-700">Eventos del lote</h4>
-        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].concat(r.externo?['capitalizacion','servicio']:[]).map(btn).join('')}<button class="btn btn-outline text-xs" title="Arma un pesaje del lote sumando el peso de las fichas vinculadas (caravana/collar/balanza)" onclick='rodPesajeFichas(${JSON.stringify(r.id)})'>⚖️ Pesaje desde balanzas</button></div>`:''}
+        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].concat(r.externo?['capitalizacion','servicio']:[]).map(btn).join('')}<button class="btn btn-outline text-xs" title="Arma un pesaje del lote sumando el peso de las fichas vinculadas (caravana/collar/balanza)" onclick='rodPesajeFichas(${JSON.stringify(r.id)})'>⚖️ Pesaje desde balanzas</button><button class="btn btn-outline text-xs" title="Imputa el costo de una campaña forrajera (pastura) a este lote como costo de alimentación" onclick='rodForrajeraForm(${JSON.stringify(r.id)})'>🌱 Imputar pastura (forrajera)</button></div>`:''}
       </div>
       <div class="kpi p-0 overflow-hidden overflow-x-auto"><table class="data text-sm">
         <thead><tr><th>Fecha</th><th>Tipo</th><th class="text-right">Cab.</th><th class="text-right">Kg</th><th class="text-right">Monto</th><th></th></tr></thead>
@@ -26816,7 +26878,8 @@ async function rodEvForm(rodeoId, tipo){
         <div><label class="label">Concepto</label><input id="rev-concepto" class="input" placeholder="${esPesaje?'Pesada de control':(esIngreso?'Compra en remate':'Detalle')}"/></div>
         ${tieneCab?`<div><label class="label">Cabezas</label><input id="rev-cab" type="number" class="input"/></div>`:''}
         ${tieneKg?`<div><label class="label">${esPesaje?'Kg TOTAL del lote *':'Kg'}</label><input id="rev-kg" type="number" step="0.01" class="input"/></div>`:''}
-        ${tipo==='alimentacion'?`<div class="col-span-2"><label class="label">Artículo del galpón (descuenta stock)</label><select id="rev-prod" class="input" onchange="rodEvProdChange()"><option value="">— sin descontar galpón (cargo el costo a mano) —</option>${prods.map(p=>`<option value="${p.id}" data-costo="${p.ultimoCostoCompra||p.precioReferencia||0}" data-mon="${p.ultimoCostoMoneda||'ARS'}">${esc(p.nombre)}${p.ultimoCostoCompra?` ($${fmtN(p.ultimoCostoCompra)}/${esc(p.unidad||'u')})`:''}</option>`).join('')}</select></div>
+        ${tipo==='alimentacion'?`<div class="col-span-2"><label class="label">Artículo del galpón (descuenta stock)</label><select id="rev-prod" class="input" onchange="rodEvProdChange()"><option value="">— sin descontar galpón (cargo el costo a mano) —</option>${prods.map(p=>`<option value="${p.id}" data-costo="${p.ultimoCostoCompra||p.precioReferencia||0}" data-mon="${p.ultimoCostoMoneda||'ARS'}" data-mezcla="${p.esMezcla?1:''}">${p.esMezcla?'🧪 ':''}${esc(p.nombre)}${p.esMezcla?' · ración':(p.ultimoCostoCompra?` ($${fmtN(p.ultimoCostoCompra)}/${esc(p.unidad||'u')})`:'')}</option>`).join('')}</select>
+          <div id="rev-mezhint" class="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2 mt-1" style="display:none">🧪 Es una <b>ración/mezcla</b>: al guardar se descuentan del stock sus componentes en la proporción de la fórmula, y el costo se calcula solo.</div></div>
         <div><label class="label">Cantidad consumida</label><input id="rev-cant" type="number" step="0.01" class="input" oninput="rodEvCalcCosto()"/></div>`:''}
         ${(esCosto||esVenta||esIngreso||esCargo)?`<div><label class="label">${montoLbl}${esIngreso?' (compra)':''}</label><input id="rev-monto" type="number" step="0.01" class="input"/></div>
         <div><label class="label">Moneda</label><select id="rev-mon" class="input"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>`:''}
@@ -26826,10 +26889,17 @@ async function rodEvForm(rodeoId, tipo){
       ${esPesaje?`<div class="text-[11px] text-slate-500 mt-2">Poné el <b>kg total</b> de todos los animales del lote a hoy (cabezas × kg promedio). Es lo que usa el sistema para calcular la ganancia de peso.</div>`:''}`,
     footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='rodEvSave(${JSON.stringify(rodeoId)},"${tipo}")'>💾 Guardar</button>` });
 }
-function rodEvProdChange(){ rodEvCalcCosto(); }
+function rodEvProdChange(){
+  const sel=$('#rev-prod'); const opt=sel?sel.options[sel.selectedIndex]:null;
+  const esMez=!!(opt&&opt.dataset&&opt.dataset.mezcla);
+  const h=$('#rev-mezhint'); if(h) h.style.display=esMez?'block':'none';
+  rodEvCalcCosto();
+}
 function rodEvCalcCosto(){
   const sel=$('#rev-prod'); const cant=Number($('#rev-cant')?.value||0); const mEl=$('#rev-monto');
-  if(!sel||!mEl) return; const opt=sel.options[sel.selectedIndex]; const costo=Number(opt?.dataset?.costo||0);
+  if(!sel||!mEl) return; const opt=sel.options[sel.selectedIndex];
+  if(opt&&opt.dataset&&opt.dataset.mezcla) return; // mezcla: el costo lo calcula el backend por componentes
+  const costo=Number(opt?.dataset?.costo||0);
   if(sel.value && costo && cant){ mEl.value=Math.round(costo*cant); const mon=$('#rev-mon'); if(mon&&opt.dataset.mon) mon.value=opt.dataset.mon; }
 }
 async function rodEvSave(rodeoId, tipo){
@@ -26858,6 +26928,57 @@ async function rodPesajeFichas(rodeoId){
 async function rodEvDel(rodeoId, eid){
   if(!confirm('¿Borrar este evento?')) return;
   try{ await api(`/api/rodeos/${rodeoId}/eventos/${eid}`,{method:'DELETE'}); toast('Borrado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
+}
+// Imputar el costo de una campaña forrajera (pastura) al rodeo como alimentación.
+async function rodForrajeraForm(rodeoId){
+  let camps=[];
+  try{ camps=(await api('/api/campanas')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  const forr=camps.filter(c=>c.tipoCampana==='forrajera');
+  const lista=forr.length?forr:camps;
+  if(!lista.length) return toast('No hay campañas cargadas. Creá primero la campaña forrajera (pastura).','warn');
+  const hoy=new Date().toISOString().slice(0,10);
+  openModal2({ title:'🌱 Imputar pastura de campaña forrajera', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Campaña (pastura) *</label>
+          <select id="rf-camp" class="input" onchange="rodForrajeraPreview('${rodeoId}')">
+            <option value="">— Elegí la campaña —</option>
+            ${lista.map(c=>`<option value="${c.id}">${esc(campLabel?campLabel(c):(c.nombre||c.cultivo||'Campaña'))}${c.tipoCampana==='forrajera'?' · forrajera':''}</option>`).join('')}
+          </select>
+          ${!forr.length?'<div class="text-[11px] text-amber-700 mt-1">No hay campañas marcadas como forrajeras; se muestran todas. Igual podés imputar el costo de cualquier campaña de pastura.</div>':''}
+        </div>
+        <div><label class="label">% que come este lote</label><input id="rf-pct" type="number" step="1" class="input" value="100" oninput="rodForrajeraPreview('${rodeoId}')"/></div>
+        <div><label class="label">Fecha</label><input id="rf-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div class="col-span-2" id="rf-preview"><div class="text-[11px] text-slate-400">Elegí una campaña para ver el costo estimado de la pastura.</div></div>
+        <div class="col-span-2"><label class="label">Importe a imputar (ARS) — editable</label><input id="rf-monto" type="number" step="0.01" class="input" placeholder="Se calcula solo; podés ajustarlo"/></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Se carga como un evento de <b>alimentación</b> en este lote. Si volvés a imputar la misma campaña, se actualiza el importe (no se duplica).</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='rodForrajeraSave(${JSON.stringify(rodeoId)})'>💾 Imputar</button>` });
+}
+async function rodForrajeraPreview(rodeoId){
+  const campId=$('#rf-camp')?.value||''; const box=$('#rf-preview'); if(!box) return;
+  if(!campId){ box.innerHTML='<div class="text-[11px] text-slate-400">Elegí una campaña para ver el costo estimado de la pastura.</div>'; return; }
+  box.innerHTML='<div class="text-[11px] text-slate-400">Calculando…</div>';
+  try{
+    const r=await api(`/api/rodeos/${rodeoId}/forrajera-preview?campanaId=${encodeURIComponent(campId)}`);
+    const d=r.data||{}; const pct=Number($('#rf-pct')?.value||100);
+    const imputar=Math.round(Number(d.totalARS||0)*pct/100);
+    box.innerHTML=`<div class="bg-emerald-50 border border-emerald-200 rounded p-2 text-xs">
+      <div>Costo total de la pastura: <b>$ ${fmtN(d.totalARS||0)}</b></div>
+      <div class="text-slate-500">Insumos $ ${fmtN(d.costoIns||0)} · Labores $ ${fmtN(d.costoLab||0)} · Cortes/pastoreo $ ${fmtN(d.costoCortes||0)}</div>
+      <div class="mt-1">Imputar al lote (${pct}%): <b class="text-emerald-700">$ ${fmtN(imputar)}</b></div>
+    </div>`;
+    const m=$('#rf-monto'); if(m) m.value=imputar;
+  }catch(e){ box.innerHTML=`<div class="text-[11px] text-red-600">${esc(e.message)}</div>`; }
+}
+async function rodForrajeraSave(rodeoId){
+  const campId=$('#rf-camp')?.value||''; if(!campId) return toast('Elegí la campaña','warn');
+  const pct=Number($('#rf-pct')?.value||100);
+  const fecha=$('#rf-fecha')?.value; const monto=$('#rf-monto')?.value!==''?Number($('#rf-monto').value):null;
+  const data={ campanaId:campId, porcentaje:pct, fecha:fecha?new Date(fecha+'T12:00:00').toISOString():undefined, monto };
+  try{ const r=await api(`/api/rodeos/${rodeoId}/imputar-forrajera`,{method:'POST',body:JSON.stringify(data)});
+    closeModal2(); toast(r.actualizado?'Pastura actualizada':'Pastura imputada','success'); await pages.rodeos(); rodVer(rodeoId);
+  }catch(e){ toast(e.message,'error'); }
 }
 
 // ============================================================
