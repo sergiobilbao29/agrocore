@@ -2628,6 +2628,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
+      titulo:'🧫 v2.159.0 — Vademécum siempre disponible + insumos sin animales + calculadoras más claras',
+      desc:'<b>(1) Vademécum:</b> ahora los 76 principios activos vienen embebidos en el propio sistema, así que se ven siempre aunque una instalación no tenga el archivo de datos. <b>(2) Cargar labor:</b> el selector de insumos ya NO muestra los animales (fichas/hacienda), solo insumos reales del catálogo. <b>(3) Calculadoras agronómicas:</b> cada calculadora ahora tiene su recuadro bien separado (borde y título).' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
       titulo:'👷 v2.158.0 — Sueldos por día en Dashboard/Flujo + diagnóstico del Vademécum',
       desc:'<b>Sueldos:</b> ahora el <b>Flujo de fondos</b> y el <b>Dashboard</b> toman bien el costo de los empleados <b>por día</b> (jornal × días), no solo los de sueldo fijo — antes esos quedaban en 0 y por eso la línea Sueldos no aparecía. Usa el mismo criterio que la Masa salarial. <b>Vademécum:</b> si la base figura vacía, ahora hay un botón <b>Ver diagnóstico</b> que muestra desde dónde intenta leer el archivo (para resolver casos puntuales de instalación).' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/08/2026',
@@ -23022,7 +23025,9 @@ function laAddIns(ins = { productoId:'', cantidad:0, precioUnit:0 }) {
   // agrupados por su categoría del árbol (Insumos, Cereales / Granos para semilla propia, etc.).
   const _sets = _catalogoArtSets();
   const productos = (state.cache.productos || []).filter(p =>
-    !(p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda') && prodEnCatalogo(p, _sets));
+    !(p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda') &&
+    !(p.esFicha || (p.categoria||'')==='Animales') &&   // los animales no son insumos de una labor
+    prodEnCatalogo(p, _sets));
   const groups = {};
   productos.forEach(p => { const g = prodCategoriaRaiz(p) || 'Otros'; (groups[g] = groups[g] || []).push(p); });
   const optHtml = (p) => `<option value="${p.id}" ${p.id===ins.productoId?'selected':''} data-prec="${(p.ultimoCostoCompra ?? p.precioReferencia ?? '')}" data-uni="${esc(p.unidad||'')}">${esc(p.nombre)} (${esc(p.unidad||'')})</option>`;
@@ -27868,7 +27873,7 @@ pages.vademecum = async function(){
 };
 pages.calculadoras = async function(){
   setHeader('Calculadoras agronómicas','Siembra, fertilización, aplicación y rinde');
-  const card = (titulo, sub, body) => `<div class="card p-4"><div class="font-semibold text-slate-800">${titulo}</div><div class="text-xs text-slate-500 mb-2">${sub}</div>${body}</div>`;
+  const card = (titulo, sub, body) => `<div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col"><div class="font-bold text-emerald-800 border-b border-slate-100 pb-2 mb-2">${titulo}<div class="text-[11px] text-slate-500 font-normal mt-0.5">${sub}</div></div>${body}</div>`;
   const res = (inner) => `<div class="mt-2 rounded-lg p-2 text-center" style="background:#f0fdf4">${inner}</div>`;
   const big = (id,unidad) => `<span class="text-xl font-extrabold text-emerald-700" id="${id}">—</span> <span class="text-xs text-slate-500">${unidad||''}</span>`;
   $('#page-body').innerHTML = `

@@ -13,6 +13,7 @@ import zlib from 'node:zlib';
 import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import VADEMECUM_EMBEBIDO from './vademecum-data.mjs';  // respaldo por si no está backend/data/vademecum.json
 import multer from 'multer';
 import XLSX from 'xlsx';
 // pdf-parse: dependencia OPCIONAL. Si no está instalada o falla la carga, el
@@ -64,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.158.0';
+const AGROCORE_VERSION = '2.159.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2698,10 +2699,16 @@ function _cargarJsonData(nombre) {
   return null;
 }
 try { _VADEMECUM = _cargarJsonData('vademecum.json') || []; } catch { _VADEMECUM = []; }
+// Respaldo embebido en el código (backend/src): garantiza que el vademécum SIEMPRE
+// tenga datos, aunque no se haya desplegado backend/data en la instancia.
+if (!_VADEMECUM || !_VADEMECUM.length) { _VADEMECUM = Array.isArray(VADEMECUM_EMBEBIDO) ? VADEMECUM_EMBEBIDO : []; _VADE_PATH = 'embebido (src/vademecum-data.mjs)'; }
 console.log(`[vademecum] ${_VADEMECUM.length} principios activos cargados${_VADE_PATH?(' desde '+_VADE_PATH):''}`);
-// Reintenta cargar si quedó vacío (por si el archivo llegó después de iniciar el server).
+// Reintenta cargar del archivo si quedó vacío; si no, usa el embebido.
 function _getVademecum() {
-  if (!_VADEMECUM || !_VADEMECUM.length) { try { _VADEMECUM = _cargarJsonData('vademecum.json') || []; } catch {} }
+  if (!_VADEMECUM || !_VADEMECUM.length) {
+    try { _VADEMECUM = _cargarJsonData('vademecum.json') || []; } catch {}
+    if (!_VADEMECUM.length && Array.isArray(VADEMECUM_EMBEBIDO)) _VADEMECUM = VADEMECUM_EMBEBIDO;
+  }
   return _VADEMECUM;
 }
 app.get('/api/vademecum', requireCompany, requirePermission('produccion:read'), (req, res) => {
