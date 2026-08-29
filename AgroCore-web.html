@@ -26868,7 +26868,7 @@ async function rodEvForm(rodeoId, tipo){
   const esCosto=['alimentacion','sanidad','labor','otro'].includes(tipo);
   const esVenta=tipo==='venta'; const esIngreso=tipo==='ingreso'; const esPesaje=tipo==='pesaje';
   let prods=[];
-  if(tipo==='alimentacion'){ try{ prods=(await api('/api/productos')).data||[]; }catch{} prods=prods.filter(p=>p.activo!==false); }
+  if(tipo==='alimentacion'){ try{ prods=(await api('/api/productos')).data||[]; }catch{} prods=prods.filter(p=>p.activo!==false && (p.categoria||'')!=='hacienda' && (p.categoria||'')!=='Animales' && !p.esFicha); }
   const hoy=new Date().toISOString().slice(0,10);
   const montoLbl = esVenta?'Ingreso por venta':(esCargo?'Importe a cobrar al dueño':'Costo');
   openModal2({ title:`${(RODEO_EV[tipo]||['📌'])[0]} ${rodEvLbl(tipo)}`, size:'max-w-lg',
