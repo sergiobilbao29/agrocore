@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.167.0';
+const AGROCORE_VERSION = '2.169.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13211,6 +13211,12 @@ const rodeoEventoSchema = z.object({
   compraModo: z.enum(['solo','ctapagar','facturacompra']).nullable().optional(),
   proveedorId: z.string().nullable().optional(),
   facturaCompraId: z.string().nullable().optional(),
+  // v2.168: labor vinculada a empleado (comisión) o servicio de terceros
+  laborModo: z.enum(['solo','empleado','tercero']).nullable().optional(),
+  empleadoId: z.string().nullable().optional(),
+  porcentajeEmpleado: z.coerce.number().nullable().optional(),
+  // v2.169: gasto (sanidad/otro) vinculado a compra
+  gastoModo: z.enum(['solo','ctapagar','facturacompra']).nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
 
@@ -13311,8 +13317,8 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
     const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
     const d = rodeoEventoSchema.parse(req.body);
-    // ventaModo/compraModo son solo de control (no son columnas de RodeoEvento).
-    const { ventaModo, compraModo, ...evBase } = d;
+    // ventaModo/compraModo/laborModo son solo de control (no son columnas de RodeoEvento).
+    const { ventaModo, compraModo, laborModo, gastoModo, ...evBase } = d;
     const row = await prisma.$transaction(async (tx) => {
       let prod = null;
       if (d.productoId) {
@@ -13401,6 +13407,56 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
           if (!f) throw Object.assign(new Error('Factura de compra no encontrada'), { status: 400 });
         }
       }
+      // v2.168: LABOR vinculada a empleado (comisión a planilla) o servicio de terceros.
+      if (d.tipo === 'labor' && laborModo && laborModo !== 'solo') {
+        if (laborModo === 'empleado') {
+          if (!d.empleadoId) throw Object.assign(new Error('Elegí el empleado que hizo la labor'), { status: 400 });
+          const emp = await tx.empleado.findFirst({ where: { id: d.empleadoId, companyId: req.companyId } });
+          if (!emp) throw Object.assign(new Error('Empleado no encontrado'), { status: 400 });
+          const pct = (d.porcentajeEmpleado != null && d.porcentajeEmpleado > 0) ? d.porcentajeEmpleado : null;
+          const comision = pct != null ? (Number(monto || 0) * pct / 100) : Number(monto || 0);
+          if (comision > 0) {
+            const periodo = d.fecha.toISOString().slice(0, 7);
+            const movEmp = await tx.movimientoEmpleado.create({ data: {
+              companyId: req.companyId, empleadoId: emp.id, fecha: d.fecha, periodo,
+              tipo: 'ganancia', categoria: 'labor',
+              concepto: `Labor en lote ${rodeo.nombre}${d.concepto ? ' - ' + d.concepto : ''}${pct != null ? ' (' + pct + '%)' : ''}`,
+              monto: comision, observaciones: `Generado por labor de rodeo ${ev.id}`,
+            }});
+            await tx.rodeoEvento.update({ where: { id: ev.id }, data: { movimientoEmpleadoId: movEmp.id } });
+          }
+        } else if (laborModo === 'tercero') {
+          if (d.facturaCompraId) {
+            const f = await tx.facturaCompra.findFirst({ where: { id: d.facturaCompraId, companyId: req.companyId } });
+            if (!f) throw Object.assign(new Error('Factura de compra no encontrada'), { status: 400 });
+          } else if (d.proveedorId) {
+            await tx.ctaCte.create({ data: {
+              companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId,
+              fecha: d.fecha, detalle: `Servicio (labor) - lote ${rodeo.nombre}`.trim(),
+              referencia: `RODLABOR-${ev.id}`, debe: Number(monto || 0), haber: 0,
+              categoria: 'servicio_labor',
+            }});
+          } else {
+            throw Object.assign(new Error('Elegí el proveedor o la factura del servicio de terceros'), { status: 400 });
+          }
+        }
+      }
+      // v2.169: GASTO (sanidad/otro) vinculado a una compra.
+      if ((d.tipo === 'sanidad' || d.tipo === 'otro') && gastoModo && gastoModo !== 'solo') {
+        if (gastoModo === 'ctapagar') {
+          if (!d.proveedorId) throw Object.assign(new Error('Elegí el proveedor para la cuenta a pagar'), { status: 400 });
+          await tx.ctaCte.create({ data: {
+            companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId,
+            fecha: d.fecha, detalle: `${d.tipo === 'sanidad' ? 'Sanidad' : 'Gasto'} - lote ${rodeo.nombre}`.trim(),
+            referencia: `RODGASTO-${ev.id}`, debe: Number(monto || 0), haber: 0,
+            categoria: 'gasto_hacienda',
+          }});
+        } else if (gastoModo === 'facturacompra') {
+          if (!d.facturaCompraId) throw Object.assign(new Error('Elegí la factura de compra a vincular'), { status: 400 });
+          const f = await tx.facturaCompra.findFirst({ where: { id: d.facturaCompraId, companyId: req.companyId } });
+          if (!f) throw Object.assign(new Error('Factura de compra no encontrada'), { status: 400 });
+        }
+      }
       return ev;
     });
     res.status(201).json({ ok: true, data: row });
@@ -13419,6 +13475,11 @@ app.delete('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('st
       await tx.ctaCte.deleteMany({ where: { referencia: `RODVENTA-${ev.id}`, companyId: req.companyId } });
       // Compra con cuenta a pagar generada: la damos de baja también.
       await tx.ctaCte.deleteMany({ where: { referencia: `RODCOMPRA-${ev.id}`, companyId: req.companyId } });
+      // Labor: comisión del empleado en la planilla y/o cta a pagar del servicio de terceros.
+      if (ev.movimientoEmpleadoId) { await tx.movimientoEmpleado.deleteMany({ where: { id: ev.movimientoEmpleadoId, companyId: req.companyId } }); }
+      await tx.ctaCte.deleteMany({ where: { referencia: `RODLABOR-${ev.id}`, companyId: req.companyId } });
+      // Gasto (sanidad/otro) con cuenta a pagar generada.
+      await tx.ctaCte.deleteMany({ where: { referencia: `RODGASTO-${ev.id}`, companyId: req.companyId } });
       await tx.rodeoEvento.delete({ where: { id: ev.id } });
     });
     res.json({ ok: true });

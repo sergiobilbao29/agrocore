@@ -2354,8 +2354,12 @@ model RodeoEvento {
   facturaId      String?  // factura de venta vinculada
   liquidacionHaciendaId String? // liquidación de hacienda vinculada
   // v2.167: vinculación de la COMPRA (ingreso) con el circuito comercial
-  proveedorId    String?  // proveedor de la compra de hacienda (para cuenta a pagar)
-  facturaCompraId String? // factura de compra vinculada
+  proveedorId    String?  // proveedor de la compra de hacienda (para cuenta a pagar). v2.168: tambien proveedor del servicio de labor de terceros
+  facturaCompraId String? // factura de compra vinculada. v2.168: tambien factura del servicio de terceros
+  // v2.168: vinculación de la LABOR con empleado (comisión) o servicio de terceros
+  empleadoId     String?  // empleado que hizo la labor (comisión a la planilla)
+  porcentajeEmpleado Float? // % de comisión del empleado sobre el costo de la labor
+  movimientoEmpleadoId String? // MovimientoEmpleado (ganancia) generado en la planilla
   observaciones String?
   createdAt     DateTime @default(now())
 
