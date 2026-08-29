@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.165.0';
+const AGROCORE_VERSION = '2.166.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13202,6 +13202,11 @@ const rodeoEventoSchema = z.object({
   productoId: z.string().nullable().optional(),
   cantidad: z.coerce.number().nullable().optional(),
   aCobrar: z.boolean().optional(),
+  // v2.166: venta vinculada al circuito comercial
+  ventaModo: z.enum(['solo','ctacte','factura','liquidacion']).nullable().optional(),
+  clienteId: z.string().nullable().optional(),
+  facturaId: z.string().nullable().optional(),
+  liquidacionHaciendaId: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
 
@@ -13302,6 +13307,8 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
     const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
     const d = rodeoEventoSchema.parse(req.body);
+    // ventaModo es solo de control (no es columna de RodeoEvento).
+    const { ventaModo, ...evBase } = d;
     const row = await prisma.$transaction(async (tx) => {
       let prod = null;
       if (d.productoId) {
@@ -13316,7 +13323,7 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
       if (prod && prod.esMezcla && d.cantidad && d.cantidad > 0) {
         const comps = await tx.mezclaComponente.findMany({ where: { companyId: req.companyId, mezclaId: prod.id } });
         if (!comps.length) throw Object.assign(new Error('La ración/mezcla no tiene componentes cargados'), { status: 400 });
-        const ev = await tx.rodeoEvento.create({ data: { ...d, monto: 0, companyId: req.companyId, rodeoId: rodeo.id, movimientoStockId: null } });
+        const ev = await tx.rodeoEvento.create({ data: { ...evBase, monto: 0, companyId: req.companyId, rodeoId: rodeo.id, movimientoStockId: null } });
         let montoTot = 0, primerMov = null;
         for (const c of comps) {
           const cp = await tx.producto.findFirst({ where: { id: c.componenteId, companyId: req.companyId } });
@@ -13352,7 +13359,28 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
         movimientoStockId = mv.id;
         if (monto == null) monto = totalC;
       }
-      return await tx.rodeoEvento.create({ data: { ...d, monto: monto ?? 0, companyId: req.companyId, rodeoId: rodeo.id, movimientoStockId } });
+      const ev = await tx.rodeoEvento.create({ data: { ...evBase, monto: monto ?? 0, companyId: req.companyId, rodeoId: rodeo.id, movimientoStockId } });
+      // v2.166: VENTA vinculada al circuito comercial.
+      if (d.tipo === 'venta' && ventaModo && ventaModo !== 'solo') {
+        if (ventaModo === 'ctacte') {
+          if (!d.clienteId) throw Object.assign(new Error('Elegí el cliente para la cuenta a cobrar'), { status: 400 });
+          await tx.ctaCte.create({ data: {
+            companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId,
+            fecha: d.fecha, detalle: `Venta hacienda - lote ${rodeo.nombre}`.trim(),
+            referencia: `RODVENTA-${ev.id}`, debe: Number(monto || 0), haber: 0,
+            categoria: 'venta_hacienda',
+          }});
+        } else if (ventaModo === 'factura') {
+          if (!d.facturaId) throw Object.assign(new Error('Elegí la factura a vincular'), { status: 400 });
+          const f = await tx.factura.findFirst({ where: { id: d.facturaId, companyId: req.companyId } });
+          if (!f) throw Object.assign(new Error('Factura no encontrada'), { status: 400 });
+        } else if (ventaModo === 'liquidacion') {
+          if (!d.liquidacionHaciendaId) throw Object.assign(new Error('Elegí la liquidación a vincular'), { status: 400 });
+          const l = await tx.liquidacionHacienda.findFirst({ where: { id: d.liquidacionHaciendaId, companyId: req.companyId } });
+          if (!l) throw Object.assign(new Error('Liquidación no encontrada'), { status: 400 });
+        }
+      }
+      return ev;
     });
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
@@ -13366,6 +13394,8 @@ app.delete('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('st
       if (ev.movimientoStockId) { await tx.movimiento.deleteMany({ where: { id: ev.movimientoStockId, companyId: req.companyId } }); }
       // Mezcla/ración: borra todos los egresos de componentes generados por este evento.
       await tx.movimiento.deleteMany({ where: { referencia: `RODMIX-${ev.id}`, companyId: req.companyId } });
+      // Venta con cuenta a cobrar generada: la damos de baja también.
+      await tx.ctaCte.deleteMany({ where: { referencia: `RODVENTA-${ev.id}`, companyId: req.companyId } });
       await tx.rodeoEvento.delete({ where: { id: ev.id } });
     });
     res.json({ ok: true });

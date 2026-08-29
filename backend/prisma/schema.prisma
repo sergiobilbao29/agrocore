@@ -2349,6 +2349,10 @@ model RodeoEvento {
   movimientoStockId String? // egreso de galpon generado por el consumo (para revertir)
   aCobrar       Boolean  @default(false)  // capitalización/hotelería: cargo a cobrar al dueño de la hacienda
   campanaForrajeraId String? // v2.164: si el costo de pastura se imputó desde una campaña forrajera
+  // v2.166: vinculación de la VENTA del rodeo con el circuito comercial
+  clienteId      String?  // cliente/comprador de la venta (para cuenta a cobrar)
+  facturaId      String?  // factura de venta vinculada
+  liquidacionHaciendaId String? // liquidación de hacienda vinculada
   observaciones String?
   createdAt     DateTime @default(now())
 
