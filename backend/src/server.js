@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.162.0';
+const AGROCORE_VERSION = '2.164.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2669,6 +2669,7 @@ mountCrud({
     tipoArticulo: z.string().nullable().optional(),
     categoriaArticuloId: z.string().nullable().optional(),
     vademecumId: z.string().nullable().optional(),
+    esMezcla: z.boolean().optional(),
   }),
   orderBy: { nombre: 'asc' },
   searchFields: ['nombre', 'categoria', 'sku', 'codigoBarras'],
@@ -3264,8 +3265,14 @@ app.get('/api/aplicaciones', requireCompany, requirePermission('produccion:read'
     const [ins, lab, labIns] = await Promise.all([
       prisma.insumoAplicado.findMany({ where: _wIns, orderBy: { fecha: 'desc' } }),
       prisma.laborAplicada.findMany({   where: _wIns, orderBy: { fecha: 'desc' } }),
-      prisma.laborInsumo.findMany({ where: _wLabIns, include: { producto: true, labor: true } }),
+      prisma.laborInsumo.findMany({ where: _wLabIns, include: { labor: true } }),
     ]);
+    // LaborInsumo no tiene relación a Producto; resolvemos los nombres aparte.
+    const _prodIds = [...new Set(labIns.map(li => li.productoId).filter(Boolean))];
+    const _prods = _prodIds.length
+      ? await prisma.producto.findMany({ where: { id: { in: _prodIds }, companyId: req.companyId }, select: { id: true, nombre: true } })
+      : [];
+    const _prodNombre = Object.fromEntries(_prods.map(p => [p.id, p.nombre]));
     // Los insumos de labor pueden venir en la moneda de la labor (ej. ARS). Los pasamos a USD
     // para que sumen consistente con el resto de los insumos de la campaña.
     const _cotUSD = (await getCotizacionARS('USD', new Date())) || null;
@@ -3287,7 +3294,7 @@ app.get('/api/aplicaciones', requireCompany, requirePermission('produccion:read'
       const precioUnitUSD = await _aUSD(li.precioUnit || 0, mon, L.fecha);
       labInsMapped.push({
         id: 'LI-' + li.id, campanaId: L.campanaId, tipo: 'insumo', origen: 'labor',
-        item: (li.producto?.nombre) || 'Insumo', subtipo: li.unidad || null,
+        item: _prodNombre[li.productoId] || 'Insumo', subtipo: li.unidad || null,
         unidadHa: ha ? Number(li.cantidad || 0) / ha : Number(li.cantidad || 0),
         precioUnit: precioUnitUSD,
         costoHa: ha ? totalUSD / ha : totalUSD,
@@ -13296,18 +13303,54 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
     if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
     const d = rodeoEventoSchema.parse(req.body);
     const row = await prisma.$transaction(async (tx) => {
+      let prod = null;
+      if (d.productoId) {
+        prod = await tx.producto.findFirst({ where: { id: d.productoId, companyId: req.companyId } });
+        if (!prod) throw Object.assign(new Error('Producto no encontrado'), { status: 400 });
+      }
+      const usd = await getCotizacionARS('USD', d.fecha) || 0;
+      const costoUnit = (p) => Number(p.ultimoCostoCompra || p.precioReferencia || 0) * ((p.ultimoCostoMoneda === 'USD') ? usd : 1);
+
+      // MEZCLA / RACIÓN: al consumirla, descuenta cada componente en su proporción
+      // (la mezcla es virtual, no lleva stock propio). El costo = suma de componentes.
+      if (prod && prod.esMezcla && d.cantidad && d.cantidad > 0) {
+        const comps = await tx.mezclaComponente.findMany({ where: { companyId: req.companyId, mezclaId: prod.id } });
+        if (!comps.length) throw Object.assign(new Error('La ración/mezcla no tiene componentes cargados'), { status: 400 });
+        const ev = await tx.rodeoEvento.create({ data: { ...d, monto: 0, companyId: req.companyId, rodeoId: rodeo.id, movimientoStockId: null } });
+        let montoTot = 0, primerMov = null;
+        for (const c of comps) {
+          const cp = await tx.producto.findFirst({ where: { id: c.componenteId, companyId: req.companyId } });
+          if (!cp) continue;
+          const cantC = Number(d.cantidad) * Number(c.porcentaje || 0) / 100;
+          if (cantC <= 0) continue;
+          const cu = costoUnit(cp);
+          const totalC = cantC * cu;
+          montoTot += totalC;
+          const mv = await tx.movimiento.create({ data: {
+            companyId: req.companyId, productoId: cp.id, fecha: d.fecha, tipo: 'egreso', motivo: 'consumo_animal',
+            cantidad: cantC, precio: cu || null, total: totalC || null,
+            referencia: `RODMIX-${ev.id}`,
+            observaciones: `Consumo rodeo ${rodeo.nombre} · ración ${prod.nombre}`, userId: req.user?.id || null,
+          }});
+          if (!primerMov) primerMov = mv.id;
+        }
+        const montoFinal = d.monto != null ? d.monto : montoTot;
+        return await tx.rodeoEvento.update({ where: { id: ev.id }, data: { monto: montoFinal, movimientoStockId: primerMov } });
+      }
+
+      // Consumo desde galpon (producto simple): descuenta stock y (si no vino monto) lo calcula.
       let movimientoStockId = null;
       let monto = d.monto;
-      // Consumo desde galpon: descuenta stock y (si no vino monto) lo calcula por costo.
-      if (d.productoId && d.cantidad && d.cantidad > 0) {
-        const prod = await tx.producto.findFirst({ where: { id: d.productoId, companyId: req.companyId } });
-        if (!prod) throw Object.assign(new Error('Producto no encontrado'), { status: 400 });
+      if (prod && d.cantidad && d.cantidad > 0) {
+        const cu = costoUnit(prod);
+        const totalC = Number(d.cantidad) * cu;
         const mv = await tx.movimiento.create({ data: {
           companyId: req.companyId, productoId: prod.id, fecha: d.fecha, tipo: 'egreso', motivo: 'consumo_animal',
-          cantidad: Number(d.cantidad), observaciones: `Consumo rodeo ${rodeo.nombre}`, userId: req.user?.id || null,
+          cantidad: Number(d.cantidad), precio: cu || null, total: totalC || null,
+          observaciones: `Consumo rodeo ${rodeo.nombre}`, userId: req.user?.id || null,
         }});
         movimientoStockId = mv.id;
-        if (monto == null) monto = Number(d.cantidad) * Number(prod.ultimoCostoCompra || prod.precioReferencia || 0) * ((prod.ultimoCostoMoneda === 'USD') ? ((await getCotizacionARS('USD', d.fecha)) || 0) : 1);
+        if (monto == null) monto = totalC;
       }
       return await tx.rodeoEvento.create({ data: { ...d, monto: monto ?? 0, companyId: req.companyId, rodeoId: rodeo.id, movimientoStockId } });
     });
@@ -13321,9 +13364,130 @@ app.delete('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('st
     if (!ev) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.$transaction(async (tx) => {
       if (ev.movimientoStockId) { await tx.movimiento.deleteMany({ where: { id: ev.movimientoStockId, companyId: req.companyId } }); }
+      // Mezcla/ración: borra todos los egresos de componentes generados por este evento.
+      await tx.movimiento.deleteMany({ where: { referencia: `RODMIX-${ev.id}`, companyId: req.companyId } });
       await tx.rodeoEvento.delete({ where: { id: ev.id } });
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// v2.164 — Producto MEZCLA / RACIÓN: fórmula de componentes
+// ============================================================
+// Lista los componentes de una mezcla (con nombre/unidad/stock del componente).
+app.get('/api/productos/:id/mezcla', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const mezcla = await prisma.producto.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!mezcla) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
+    const comps = await prisma.mezclaComponente.findMany({ where: { companyId: req.companyId, mezclaId: mezcla.id } });
+    const ids = [...new Set(comps.map(c => c.componenteId))];
+    const prods = ids.length ? await prisma.producto.findMany({ where: { id: { in: ids }, companyId: req.companyId }, select: { id: true, nombre: true, unidad: true, ultimoCostoCompra: true, ultimoCostoMoneda: true, precioReferencia: true } }) : [];
+    const pm = Object.fromEntries(prods.map(p => [p.id, p]));
+    const data = comps.map(c => ({ id: c.id, componenteId: c.componenteId, porcentaje: c.porcentaje,
+      nombre: pm[c.componenteId]?.nombre || '(componente eliminado)', unidad: pm[c.componenteId]?.unidad || '',
+      costoUnit: pm[c.componenteId] ? Number(pm[c.componenteId].ultimoCostoCompra || pm[c.componenteId].precioReferencia || 0) : 0,
+      costoMoneda: pm[c.componenteId]?.ultimoCostoMoneda || 'ARS' }));
+    res.json({ ok: true, data, esMezcla: !!mezcla.esMezcla, total: data.reduce((a, c) => a + Number(c.porcentaje || 0), 0) });
+  } catch (e) { next(e); }
+});
+// Reemplaza la fórmula completa de una mezcla (y marca el producto como mezcla).
+app.put('/api/productos/:id/mezcla', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const mezcla = await prisma.producto.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!mezcla) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
+    const schema = z.object({
+      esMezcla: z.boolean().optional(),
+      componentes: z.array(z.object({ componenteId: z.string().min(1), porcentaje: z.coerce.number() })).default([]),
+    });
+    const d = schema.parse(req.body || {});
+    const comps = d.componentes.filter(c => c.componenteId && c.componenteId !== mezcla.id && Number(c.porcentaje) > 0);
+    await prisma.$transaction(async (tx) => {
+      await tx.mezclaComponente.deleteMany({ where: { companyId: req.companyId, mezclaId: mezcla.id } });
+      for (const c of comps) {
+        await tx.mezclaComponente.create({ data: { companyId: req.companyId, mezclaId: mezcla.id, componenteId: c.componenteId, porcentaje: Number(c.porcentaje) } });
+      }
+      const esMezcla = d.esMezcla != null ? d.esMezcla : comps.length > 0;
+      await tx.producto.update({ where: { id: mezcla.id }, data: { esMezcla } });
+    });
+    res.json({ ok: true, data: { componentes: comps.length } });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// v2.164 — Imputar el costo de una campaña FORRAJERA a un rodeo (pastura)
+// ============================================================
+// Calcula el costo de producir la pastura (insumos + labores de la campaña forrajera
+// + contratista de cortes de pastoreo), lo prorratea por % y lo carga como un evento
+// "alimentacion" en el rodeo. Si ya se imputó esa campaña, actualiza el importe.
+async function _costoCampanaForrajeraARS(campanaId, companyId, fecha) {
+  const usd = (await getCotizacionARS('USD', fecha)) || 0;
+  const [ins, lab, cortes] = await Promise.all([
+    prisma.insumoAplicado.findMany({ where: { campanaId, campana: { companyId } } }),
+    prisma.laborAplicada.findMany({ where: { campanaId, campana: { companyId } } }),
+    prisma.corteForraje.findMany({ where: { campanaId, companyId } }),
+  ]);
+  // Insumos: costo (u$s/ha) × ha → USD → ARS
+  const costoIns = ins.reduce((a, x) => a + Number(x.costo || 0) * Number(x.hectareasAplicadas || 0) * usd, 0);
+  // Labores: costo (por ha, en monedaCosto) × ha → ARS
+  let costoLab = 0;
+  for (const x of lab) {
+    const mon = x.monedaCosto || 'USD';
+    const base = Number(x.costo || 0) * Number(x.hectareasAplicadas || 0);
+    const cot = mon === 'ARS' ? 1 : ((await getCotizacionARS(mon, x.fecha)) || 0);
+    costoLab += base * cot;
+  }
+  // Cortes de pastoreo: solo el trabajo del contratista (los insumos ya están arriba)
+  let costoCortes = 0;
+  for (const c of cortes) {
+    if (c.destino !== 'pastoreo') continue;
+    const mon = c.moneda || 'ARS';
+    const cot = mon === 'ARS' ? 1 : ((await getCotizacionARS(mon, c.fecha)) || 0);
+    costoCortes += Number(c.costoContratista || 0) * cot;
+  }
+  return { totalARS: costoIns + costoLab + costoCortes, costoIns, costoLab, costoCortes };
+}
+
+app.get('/api/rodeos/:id/forrajera-preview', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
+    const campanaId = String(req.query.campanaId || '');
+    if (!campanaId) return res.status(400).json({ ok: false, error: 'Falta campanaId' });
+    const camp = await prisma.campana.findFirst({ where: { id: campanaId, companyId: req.companyId } });
+    if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    const desglose = await _costoCampanaForrajeraARS(campanaId, req.companyId, new Date());
+    res.json({ ok: true, data: { campana: { id: camp.id, nombre: camp.nombre, cultivo: camp.cultivo, tipoCampana: camp.tipoCampana }, ...desglose } });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/rodeos/:id/imputar-forrajera', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
+    const schema = z.object({
+      campanaId: z.string().min(1),
+      porcentaje: z.coerce.number().min(0).max(100).default(100),
+      fecha: z.coerce.date().optional(),
+      monto: z.coerce.number().nullable().optional(), // override manual opcional
+      concepto: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const camp = await prisma.campana.findFirst({ where: { id: d.campanaId, companyId: req.companyId } });
+    if (!camp) return res.status(404).json({ ok: false, error: 'Campaña no encontrada' });
+    const fecha = d.fecha || new Date();
+    const desglose = await _costoCampanaForrajeraARS(d.campanaId, req.companyId, fecha);
+    const monto = d.monto != null ? d.monto : Math.round(desglose.totalARS * d.porcentaje / 100);
+    const concepto = d.concepto || `Pastura: ${camp.nombre || camp.cultivo || 'campaña forrajera'}${d.porcentaje < 100 ? ` (${d.porcentaje}%)` : ''}`;
+    // Si ya se imputó esa campaña a este rodeo, actualizamos el importe (no duplicamos).
+    const ex = await prisma.rodeoEvento.findFirst({ where: { companyId: req.companyId, rodeoId: rodeo.id, campanaForrajeraId: d.campanaId } });
+    let row;
+    if (ex) {
+      row = await prisma.rodeoEvento.update({ where: { id: ex.id }, data: { fecha, tipo: 'alimentacion', concepto, monto, moneda: 'ARS' } });
+    } else {
+      row = await prisma.rodeoEvento.create({ data: { companyId: req.companyId, rodeoId: rodeo.id, fecha, tipo: 'alimentacion', concepto, monto, moneda: 'ARS', campanaForrajeraId: d.campanaId } });
+    }
+    res.status(201).json({ ok: true, data: row, desglose, actualizado: !!ex });
   } catch (e) { next(e); }
 });
 
