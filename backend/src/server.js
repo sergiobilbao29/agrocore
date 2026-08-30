@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.170.0';
+const AGROCORE_VERSION = '2.171.0';
 const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11464,6 +11464,57 @@ app.post('/api/mensajes/marcar-leido', requireCompany, async (req, res, next) =>
     });
     res.json({ ok: true });
   } catch (e) { next(e); }
+});
+
+// ============================================================
+// BOT PÚBLICO DE LA WEB (agrocore.ar) — con IA (OpenAI). Sin auth.
+// Solo conocimiento general de AgroCore/agro (no toca datos de empresas).
+// Anti-abuso: tope por IP y global diario. Reusa _iaConfig() (misma API key).
+// ============================================================
+const _botWeb = { day: { k: '', n: 0 }, ip: new Map() };
+function _botWebLimite(ip) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  if (_botWeb.day.k !== hoy) { _botWeb.day = { k: hoy, n: 0 }; _botWeb.ip.clear(); }
+  if (_botWeb.day.n >= Number(process.env.BOTWEB_MAX_DIA || 2000)) return 'global';
+  if ((_botWeb.ip.get(ip) || 0) >= Number(process.env.BOTWEB_MAX_IP || 40)) return 'ip';
+  return null;
+}
+function _botWebContexto(texto, k) {
+  const q = [...new Set(_agroTok(texto))]; if (!q.length) return [];
+  const arr = [];
+  for (const e of _AGRO_QA) {
+    if (!e._pt) { e._pt = new Set(_agroTok(e.pregunta)); e._at = new Set([...e._pt, ..._agroTok(e.respuesta), ..._agroTok(e.materia), ..._agroTok(e.subtema)]); }
+    let s = 0; for (const w of q) { if (e._pt.has(w)) s += 3; else if (e._at.has(w)) s += 1; }
+    if (s > 0) arr.push({ e, s });
+  }
+  arr.sort((a, b) => b.s - a.s);
+  return arr.slice(0, k || 6).map(x => x.e);
+}
+app.post('/api/bot-web', async (req, res) => {
+  try {
+    const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+    const lim = _botWebLimite(ip);
+    if (lim) return res.status(429).json({ ok: false, error: 'Demasiadas consultas por ahora. Probá en un rato.' });
+    const pregunta = String((req.body && req.body.pregunta) || '').trim().slice(0, 400);
+    if (!pregunta) return res.status(400).json({ ok: false, error: 'Falta la pregunta' });
+    const cfg = await _iaConfig();
+    if (!cfg.enabled) {
+      const hit = _buscarAgro(pregunta);
+      return res.json({ ok: true, fuente: 'base', respuesta: hit ? hit.entry.respuesta : '' });
+    }
+    _botWeb.day.n++; _botWeb.ip.set(ip, (_botWeb.ip.get(ip) || 0) + 1);
+    const ctx = _botWebContexto(pregunta, 6).map((e, i) => `(${i + 1}) [${e.materia}] ${e.pregunta}\n${e.respuesta}`).join('\n\n').slice(0, 6000);
+    const sys = 'Sos el asistente de AgroCore (software de gestión agropecuaria argentino) en su sitio web público. Respondé SOLO sobre: el sistema AgroCore, las calculadoras agronómicas, el vademécum de insumos y agronomía/ganadería general para productores y estudiantes de agronomía. Si te preguntan algo ajeno (política, chismes, programación, etc.), respondé amablemente que solo ayudás con temas de AgroCore y el campo. Usá español rioplatense (voseo), claro y breve (máximo ~120 palabras). Si hay un cálculo, mostrá la fórmula y el resultado. Basate en el CONTEXTO cuando exista; si no sabés, decilo y sugerí solicitar una demo. No inventes precios ni datos de cuentas. Aclarar que dosis y umbrales son orientativos (validar con marbete/SENASA).';
+    const user = (ctx ? ('CONTEXTO:\n' + ctx + '\n\n') : '') + 'PREGUNTA: ' + pregunta;
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST', headers: { 'Authorization': 'Bearer ' + cfg.apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', temperature: 0.3, max_tokens: 420, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] }),
+    });
+    if (!r.ok) { const hit = _buscarAgro(pregunta); return res.json({ ok: true, fuente: 'base', respuesta: hit ? hit.entry.respuesta : '' }); }
+    const j = await r.json();
+    const respuesta = ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '').trim();
+    res.json({ ok: true, fuente: 'ia', respuesta });
+  } catch (e) { res.status(200).json({ ok: false, error: 'No disponible' }); }
 });
 
 // --- Asistente: interpretar (no ejecuta) ---
