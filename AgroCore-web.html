@@ -14633,6 +14633,7 @@ function chqAplicarTipo(limpiar){
   const tipo = document.getElementById('f-tipo')?.value || 'propio';
   const esProp = tipo === 'propio';
   _chqCampo('f-cue',  esProp,  limpiar);
+  _chqCampo('f-ctabco', esProp, limpiar);
   _chqCampo('f-endo', !esProp, limpiar);
   _chqCampo('f-frec', !esProp, limpiar);
 }
@@ -14675,6 +14676,13 @@ async function chqForm(id=null) {
           <select id="f-cue" class="input">${chqCuentaOptions(it.banco||'', it.cuenta||'')}</select>
           <div class="text-[10px] text-slate-400 mt-1">Cuentas cargadas en Tesorería → Bancos del banco elegido (cheques propios).</div>
         </div>
+        <div><label class="label">Cuenta de banco — débito al pagar (propios)</label>
+          <select id="f-ctabco" class="input">
+            <option value="">— Elegir —</option>
+            ${_bcoCuentas.filter(x=>x.activo!==false).map(x=>`<option value="${x.id}" ${it.cuentaBancoId===x.id?'selected':''}>🏛️ ${esc(x.banco||'')}${x.numero?' · '+esc(x.numero):(x.alias?' · '+esc(x.alias):'')}${x.moneda&&x.moneda!=='ARS'?' ('+esc(x.moneda)+')':''}</option>`).join('')}
+          </select>
+          <div class="text-[10px] text-slate-400 mt-1">Cuenta real de Bancos de la que sale el dinero. Al marcarlo <b>Pagado</b> desde la lista, se debita solo de esta cuenta.</div>
+        </div>
         <div><label class="label">Fecha emisión *</label><input id="f-fe" type="date" class="input" value="${it.fechaEmision?String(it.fechaEmision).slice(0,10):new Date().toISOString().slice(0,10)}"/></div>
         <div><label class="label">Fecha pago *</label><input id="f-fp" type="date" class="input" value="${it.fechaPago?String(it.fechaPago).slice(0,10):''}"/></div>
         <div><label class="label">Monto *</label><input id="f-mon" type="number" step="0.01" class="input" value="${it.monto||''}"/></div>
@@ -14715,6 +14723,7 @@ async function chqSave(id) {
     estado: $('#f-est').value,
     banco: $('#f-bco').value||null,
     cuenta: $('#f-cue')?.value || null,
+    cuentaBancoId: $('#f-ctabco')?.value || null,
     nroCheque: $('#f-nro').value.trim(),
     fechaEmision: new Date($('#f-fe').value).toISOString(),
     fechaPago: new Date($('#f-fp').value).toISOString(),
@@ -14731,7 +14740,7 @@ async function chqSave(id) {
   if (!data.nroCheque || !data.monto) return toast('Nº y monto requeridos','warn');
   // Coherencia por tipo: los cheques de terceros no llevan cuenta bancaria propia;
   // los propios no llevan endosante ni fecha de recepción.
-  if (data.tipo === 'terceros') { data.cuenta = null; }
+  if (data.tipo === 'terceros') { data.cuenta = null; data.cuentaBancoId = null; }
   if (data.tipo === 'propio')   { data.endosante = null; data.fechaRecepcion = null; }
   try { await api('/api/cheques'+(id?'/'+id:''), { method:id?'PUT':'POST', body: JSON.stringify(data) });
     toast(id?'Actualizado':'Creado','success'); closeModal(); delete state.cache.cheques; pages.cheques();

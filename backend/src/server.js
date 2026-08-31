@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.171.0';
-const AGROCORE_BUILD = new Date('2026-08-27').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.172.0';
+const AGROCORE_BUILD = new Date('2026-08-31').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -4558,6 +4558,7 @@ mountCrud({
     formato: z.string().nullable().optional(),  // "fisico" | "electronico"
     banco: z.string().nullable().optional(),
     cuenta: z.string().nullable().optional(),
+    cuentaBancoId: z.string().nullable().optional(),  // cuenta REAL de Bancos: de dónde se debita (propios) al marcar Pagado
     nroCheque: z.string().min(1),
     fechaEmision: z.coerce.date(),
     fechaPago: z.coerce.date(),
