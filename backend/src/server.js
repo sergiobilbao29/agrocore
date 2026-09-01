@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.172.0';
+const AGROCORE_VERSION = '2.173.0';
 const AGROCORE_BUILD = new Date('2026-08-31').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9794,7 +9794,84 @@ const animalEventoSchema = z.object({
   aCobrar: z.boolean().optional(),
   datos: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
+  // v2.173: vínculo con el circuito comercial (igual que los eventos de rodeo).
+  //   gastoModo: sanidad/herraje/otros → cuenta a pagar del proveedor o factura de compra.
+  //   laborModo: doma/entrenamiento/etc → comisión a empleado (planilla) o servicio de tercero.
+  //   cobroModo: pensión/servicio a un tercero → cuenta a cobrar al cliente (dueño del animal).
+  gastoModo: z.enum(['solo','ctapagar','facturacompra']).nullable().optional(),
+  laborModo: z.enum(['solo','empleado','tercero']).nullable().optional(),
+  cobroModo: z.enum(['solo','ctacte']).nullable().optional(),
+  clienteId: z.string().nullable().optional(),
+  proveedorId: z.string().nullable().optional(),
+  facturaCompraId: z.string().nullable().optional(),
+  porcentajeEmpleado: z.coerce.number().nullable().optional(),
 });
+// Crea los vínculos comerciales de un evento de ficha (cta cte / empleado), con
+// referencias estables para poder revertirlos. `ev` ya debe existir (tiene id).
+async function _aniEvAplicarVinculos(tx, companyId, animal, ev, d, userId) {
+  const monto = Number(d.costo || 0);
+  const nom = animal.nombre || 'animal';
+  // GASTO (sanidad, herraje, vacuna, reproducción, costo, otro) → proveedor
+  if (d.gastoModo && d.gastoModo !== 'solo') {
+    if (d.gastoModo === 'ctapagar') {
+      if (!d.proveedorId) throw Object.assign(new Error('Elegí el proveedor para la cuenta a pagar'), { status: 400 });
+      await tx.ctaCte.create({ data: {
+        companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId, fecha: d.fecha,
+        detalle: `${(d.tipo||'Gasto')} ficha - ${nom}`.trim(), referencia: `ANIGASTO-${ev.id}`,
+        debe: monto, haber: 0, categoria: 'gasto_hacienda',
+      }});
+    } else if (d.gastoModo === 'facturacompra') {
+      if (!d.facturaCompraId) throw Object.assign(new Error('Elegí la factura de compra a vincular'), { status: 400 });
+      const f = await tx.facturaCompra.findFirst({ where: { id: d.facturaCompraId, companyId } });
+      if (!f) throw Object.assign(new Error('Factura de compra no encontrada'), { status: 400 });
+    }
+  }
+  // LABOR (doma, entrenamiento, herraje, traslado…) → empleado (comisión) o tercero
+  if (d.laborModo && d.laborModo !== 'solo') {
+    if (d.laborModo === 'empleado') {
+      if (!d.empleadoId) throw Object.assign(new Error('Elegí el empleado que hizo la labor'), { status: 400 });
+      const emp = await tx.empleado.findFirst({ where: { id: d.empleadoId, companyId } });
+      if (!emp) throw Object.assign(new Error('Empleado no encontrado'), { status: 400 });
+      const pct = (d.porcentajeEmpleado != null && d.porcentajeEmpleado > 0) ? d.porcentajeEmpleado : null;
+      const comision = pct != null ? (monto * pct / 100) : monto;
+      if (comision > 0) {
+        await tx.movimientoEmpleado.create({ data: {
+          companyId, empleadoId: emp.id, fecha: d.fecha, periodo: d.fecha.toISOString().slice(0,7),
+          tipo: 'ganancia', categoria: 'labor',
+          concepto: `Labor en ficha ${nom}${d.concepto ? ' - ' + d.concepto : ''}${pct != null ? ' (' + pct + '%)' : ''}`,
+          monto: comision, observaciones: `ANIEVT-${ev.id}`,
+        }});
+      }
+    } else if (d.laborModo === 'tercero') {
+      if (d.facturaCompraId) {
+        const f = await tx.facturaCompra.findFirst({ where: { id: d.facturaCompraId, companyId } });
+        if (!f) throw Object.assign(new Error('Factura de compra no encontrada'), { status: 400 });
+      } else if (d.proveedorId) {
+        await tx.ctaCte.create({ data: {
+          companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId, fecha: d.fecha,
+          detalle: `Servicio (labor) ficha - ${nom}`.trim(), referencia: `ANILABOR-${ev.id}`,
+          debe: monto, haber: 0, categoria: 'servicio_labor',
+        }});
+      } else { throw Object.assign(new Error('Elegí el proveedor o la factura del servicio de terceros'), { status: 400 }); }
+    }
+  }
+  // COBRO (pensión / servicio a un tercero) → cuenta a cobrar al cliente
+  if (d.cobroModo && d.cobroModo !== 'solo') {
+    if (!d.clienteId) throw Object.assign(new Error('Elegí el cliente (dueño) a cobrar'), { status: 400 });
+    await tx.ctaCte.create({ data: {
+      companyId, contactoTipo: 'cliente', contactoId: d.clienteId, fecha: d.fecha,
+      detalle: `${(d.tipo||'Pensión')} ficha - ${nom}`.trim(), referencia: `ANICOBRO-${ev.id}`,
+      debe: monto, haber: 0, categoria: 'pension_hoteleria',
+    }});
+  }
+}
+// Quita los vínculos comerciales de un evento de ficha (para borrar o reconciliar).
+async function _aniEvQuitarVinculos(tx, companyId, evId) {
+  for (const p of ['ANIGASTO','ANILABOR','ANICOBRO']) {
+    await tx.ctaCte.deleteMany({ where: { companyId, referencia: `${p}-${evId}` } });
+  }
+  await tx.movimientoEmpleado.deleteMany({ where: { companyId, observaciones: `ANIEVT-${evId}` } });
+}
 // Devuelve el animal con costo acumulado y resultado de venta calculados.
 function _animalConCostos(a) {
   const evs = a.eventos || [];
@@ -9914,6 +9991,26 @@ app.post('/api/animales/:id/vender', requireCompany, requirePermission('stock:up
       // Si estaba en el campo, sale del stock (egreso de historial).
       if (ANI_ESTADOS_EN_CAMPO.includes(cur.estado)) {
         await _movFicha(tx, req.companyId, cur, 'egreso', 'venta', fecha);
+      }
+      // v2.173: venta vinculada al circuito comercial (igual que el rodeo).
+      const ventaModo = req.body.ventaModo || null;
+      if (ventaModo && ventaModo !== 'solo') {
+        if (ventaModo === 'ctacte') {
+          if (!clienteId) throw Object.assign(new Error('Elegí el cliente para la cuenta a cobrar'), { status: 400 });
+          await tx.ctaCte.create({ data: {
+            companyId: req.companyId, contactoTipo: 'cliente', contactoId: clienteId, fecha,
+            detalle: `Venta ${cur.nombre || 'animal'}${ref ? ' · ' + ref : ''}`.trim(),
+            referencia: `ANIVENTA-${cur.id}`, debe: precio, haber: 0, categoria: 'venta_hacienda',
+          }});
+        } else if (ventaModo === 'factura') {
+          if (!req.body.facturaId) throw Object.assign(new Error('Elegí la factura a vincular'), { status: 400 });
+          const f = await tx.factura.findFirst({ where: { id: req.body.facturaId, companyId: req.companyId } });
+          if (!f) throw Object.assign(new Error('Factura no encontrada'), { status: 400 });
+        } else if (ventaModo === 'liquidacion') {
+          if (!req.body.liquidacionHaciendaId) throw Object.assign(new Error('Elegí la liquidación a vincular'), { status: 400 });
+          const l = await tx.liquidacionHacienda.findFirst({ where: { id: req.body.liquidacionHaciendaId, companyId: req.companyId } });
+          if (!l) throw Object.assign(new Error('Liquidación no encontrada'), { status: 400 });
+        }
       }
       return upd;
     });
@@ -10050,13 +10147,16 @@ app.post('/api/animales/:id/eventos', requireCompany, requirePermission('stock:c
         catch { datos = JSON.stringify({ pesoKg }); }
         await tx.animal.update({ where: { id: a.id }, data: { pesoKg, pesoFecha: d.fecha } });
       }
-      return tx.animalEvento.create({ data: {
+      const ev = await tx.animalEvento.create({ data: {
         companyId: req.companyId, animalId: a.id, fecha: d.fecha, tipo: d.tipo,
         concepto: d.concepto || null, costo: d.costo ?? 0, moneda: d.moneda || a.moneda || 'ARS',
         empleadoId: d.empleadoId || null, productoId: d.productoId || null, cantidad: d.cantidad ?? null,
         movimientoStockId: movStockId, proximaFecha: d.proximaFecha || null, aCobrar: !!d.aCobrar,
         datos, observaciones: d.observaciones || null,
       }});
+      // v2.173: vínculos con el circuito comercial (cta cte / empleado), igual que el rodeo.
+      await _aniEvAplicarVinculos(tx, req.companyId, a, ev, d, req.user?.id || null);
+      return ev;
     });
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
@@ -10103,7 +10203,15 @@ app.put('/api/animales/:id/eventos/:evId', requireCompany, requirePermission('st
       ['fecha','tipo','concepto','costo','moneda','empleadoId','productoId','cantidad','proximaFecha','observaciones']
         .forEach(k => { if (d[k] !== undefined) data[k] = d[k]; });
       if (d.aCobrar !== undefined) data.aCobrar = !!d.aCobrar;
-      return tx.animalEvento.update({ where: { id: ev.id }, data });
+      const upd = await tx.animalEvento.update({ where: { id: ev.id }, data });
+      // v2.173: reconciliar los vínculos comerciales. Se rehacen con los datos
+      // enviados (fecha/costo efectivos del evento actualizado).
+      if (req.body.gastoModo !== undefined || req.body.laborModo !== undefined || req.body.cobroModo !== undefined) {
+        await _aniEvQuitarVinculos(tx, req.companyId, ev.id);
+        const eff = { ...d, tipo: upd.tipo, fecha: upd.fecha, costo: upd.costo, empleadoId: upd.empleadoId };
+        await _aniEvAplicarVinculos(tx, req.companyId, a, upd, eff, req.user?.id || null);
+      }
+      return upd;
     });
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
@@ -10113,8 +10221,11 @@ app.delete('/api/animales/:id/eventos/:evId', requireCompany, requirePermission(
   try {
     const ev = await prisma.animalEvento.findFirst({ where: { id: req.params.evId, animalId: req.params.id, companyId: req.companyId } });
     if (!ev) return res.status(404).json({ ok: false, error: 'Evento no encontrado' });
-    if (ev.movimientoStockId) { try { await prisma.movimiento.delete({ where: { id: ev.movimientoStockId } }); } catch {} }
-    await prisma.animalEvento.delete({ where: { id: ev.id } });
+    await prisma.$transaction(async (tx) => {
+      if (ev.movimientoStockId) { try { await tx.movimiento.delete({ where: { id: ev.movimientoStockId } }); } catch {} }
+      await _aniEvQuitarVinculos(tx, req.companyId, ev.id);
+      await tx.animalEvento.delete({ where: { id: ev.id } });
+    });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -10870,21 +10981,30 @@ const _AYUDA_KB = [
       'Podés vincular un usuario con su Empleado/Chofer.'],
     atajo:{ page:'usuarios', label:'Abrir Usuarios' } },
   { id:'costo_hacienda', terms:['costo de hacienda','costo por kilo','costo por kg','costo de carne','feedlot','engorde','recria','cria','lote de engorde','rodeo','ganancia de peso','gpd','pesaje','cuanto cuesta el kilo','costo del novillo','alimentacion del rodeo'],
-    titulo:'Costo de hacienda (costo por kg de carne)',
+    titulo:'Rodeos y Hacienda (costo por kg de carne)',
     pasos:[
-      'Entrá a Stock y depósitos → Costo de hacienda y creá un "lote" (rodeo): feedlot, engorde a campo, recría o cría.',
+      'Entrá a Stock y depósitos → Rodeos y Hacienda y creá un "lote" (rodeo): feedlot, engorde a campo, recría o cría.',
       'Cargá los eventos del lote: Ingreso (compra: cabezas, kg y precio), Alimentación (rollos/fardos/grano del galpón, que descuenta stock, o pastoreo), Sanidad, Labores.',
       'Cargá Pesajes (el kg total del lote a una fecha): es lo que permite ver la ganancia de peso.',
       'También Bajas (mortandad) y Ventas.',
       'El panel te muestra kg producidos, $/kg producido (eficiencia) y $/kg terminado (el costo real del kilo para vender), más GPD y margen.'],
-    atajo:{ page:'rodeos', label:'Abrir Costo de hacienda' } },
+    atajo:{ page:'rodeos', label:'Abrir Rodeos y Hacienda' } },
+  { id:'ficha_vinculos', terms:['evento de la ficha','eventos ficha','vincular evento','ficha animal finanzas','sanidad a proveedor','comision al empleado','cobrar pension','cobrar al dueño','gasto de la ficha','vincular con el sistema','cuenta corriente ficha','doma empleado','herraje proveedor','servicio a tercero','pension a cobrar','venta de animal cuenta corriente'],
+    titulo:'Eventos de la ficha vinculados al circuito comercial',
+    pasos:[
+      'En Fichas de animales abrí la ficha y tocá "Agregar evento" (sanidad, herraje, doma, entrenamiento, pensión, servicio, etc.).',
+      'Poné el importe en "Costo imputado" y, en "Vincular con el sistema", elegí cómo impacta: Gasto → cuenta a pagar del proveedor (o factura de compra); Labor de empleado propio → comisión a la planilla (Sueldos), con % opcional; Servicio de tercero → cuenta a pagar del proveedor; Cobrar al cliente → cuenta a cobrar al dueño (pensión/servicio de hotelería).',
+      'Si el evento consume un producto (con cantidad), descuenta el stock del galpón.',
+      'La venta del animal (botón Vender) se puede registrar como cuenta a cobrar a un cliente, o vincular a una factura de venta o a una liquidación de hacienda.',
+      'Si borrás el evento, se revierten solos los movimientos generados (cuenta corriente, comisión de la planilla y stock).'],
+    atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
   { id:'forrajera', terms:['forrajera','multicorte','centeno','alfalfa','avena','corte','cortes','rollo','rollos','fardo','fardos','enrollado','pastura','verdeo','campaña forrajera'],
     titulo:'Campaña forrajera multicorte (rollos/fardos)',
     pasos:[
       'Creá la campaña en Producción → Campañas y en "Tipo de campaña" elegí "Forrajera multicorte" (centeno, alfalfa, avena). No se cierra en el primer corte.',
       'En la card de la campaña aparece el botón "Cortes": cargá cada corte con fecha, trabajo (corte/hilerado/enrollado), rinde (rollos/fardos o kg) y los costos (contratista + insumos imputados).',
       'Si el destino es "galpón", el corte ingresa los rollos al stock con su costo unitario = (insumos + contratista) ÷ cantidad. Si es pastoreo directo, solo queda registrado.',
-      'Después ese rollo lo consumís desde un lote de hacienda (Costo de hacienda → Alimentación) o lo vendés desde Stock.'],
+      'Después ese rollo lo consumís desde un lote de hacienda (Rodeos y Hacienda → Alimentación) o lo vendés desde Stock.'],
     atajo:{ page:'campanas', label:'Abrir Campañas' } },
   { id:'activos', terms:['activo fijo','activos fijos','maquinaria','bien de uso','bienes de uso','tractor','mantenimiento','service','cambio de aceite','amortizacion','vida util','alerta de service','proximo service','rodado','inmueble'],
     titulo:'Activos y maquinaria (bienes de uso + mantenimiento)',
@@ -10991,7 +11111,7 @@ const _AYUDA_KB = [
     titulo:'Hotelería / capitalización de terceros (caballos y hacienda) y certificado de traslado',
     pasos:[
       'CABALLOS EN PENSIÓN: en Fichas de animales, marcá el animal como Externo y poné el Propietario. Cargá los gastos con "+ Agregar evento" tipo "🏨 Pensión (hotelería)" o "🛠️ Servicio a tercero" y tildá "Cobrar este importe al propietario".',
-      'HACIENDA DE TERCEROS (capitalización / engorde a terceros): en Rodeos (Costo de hacienda), al crear/editar el lote tildá "Hacienda de terceros" y poné el dueño. Dentro del lote cargá eventos "🏨 Capitalización" o "🛠️ Servicio" (por cabeza/mes) que quedan como cargo a cobrar. Los costos reales del engorde (alimentación, sanidad) se siguen cargando normal para tu control.',
+      'HACIENDA DE TERCEROS (capitalización / engorde a terceros): en Rodeos (Rodeos y Hacienda), al crear/editar el lote tildá "Hacienda de terceros" y poné el dueño. Dentro del lote cargá eventos "🏨 Capitalización" o "🛠️ Servicio" (por cabeza/mes) que quedan como cargo a cobrar. Los costos reales del engorde (alimentación, sanidad) se siguen cargando normal para tu control.',
       'RESUMEN PARA FACTURAR: el botón "🏨 Hotelería / capitalización (terceros)" (está en Fichas de animales y en Rodeos) muestra un resumen UNIFICADO por propietario (caballos + hacienda) por rango de fechas, con el total a cobrar a cada dueño. Se exporta a Excel.',
       'CERTIFICADO DE TRASLADO: en la ficha de cualquier animal, botón "🧾 Certificado" → documento imprimible con la identificación individual (nombre, especie, sexo, pelaje, microchip, RFID, N° de registro, padre/madre, origen y destino).',
       'Ojo: el certificado es un documento interno de respaldo; NO reemplaza el DT-e ni la documentación sanitaria oficial de SENASA, que se tramitan por los canales oficiales.'],
@@ -11000,9 +11120,9 @@ const _AYUDA_KB = [
     titulo:'Caravana electrónica / collar y pesaje del lote (Ficha ↔ Rodeo)',
     pasos:[
       'La caravana electrónica y el collar son POR ANIMAL: se registran en la Ficha de animales (que guarda microchip y caravana RFID), no en el Rodeo (que es por lote).',
-      'Vinculá la ficha a su lote: en la ficha del animal, campo "Lote / rodeo (engorde)". Así el animal con collar queda identificado y a la vez pertenece a su lote de Costo de hacienda.',
+      'Vinculá la ficha a su lote: en la ficha del animal, campo "Lote / rodeo (engorde)". Así el animal con collar queda identificado y a la vez pertenece a su lote de Rodeos y Hacienda.',
       'Peso individual: cargá un evento "Pesaje" en la ficha y poné los kg (o llega automático por el canal IoT si el dispositivo/balanza manda el peso). Queda como "último peso" del animal.',
-      'Pesaje del lote automático: en Costo de hacienda, abrí el lote y tocá "⚖️ Pesaje desde balanzas". El sistema suma el peso de todas las fichas vinculadas y crea el pesaje del lote (kg total + cabezas), sin pesar la tropa a mano.',
+      'Pesaje del lote automático: en Rodeos y Hacienda, abrí el lote y tocá "⚖️ Pesaje desde balanzas". El sistema suma el peso de todas las fichas vinculadas y crea el pesaje del lote (kg total + cabezas), sin pesar la tropa a mano.',
       'Resumen: los sensores viven en la Ficha (individual) y el costo/kg vive en el Rodeo (lote); vincularlos conecta las dos cosas.'],
     atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
   { id:'fichas_animales', terms:['ficha de animal','caballo','equino','haras','polo','ficha individual','animal individual','pedigree','genealogia','microchip','coggins','vaca madre','toro','padrillo','yegua','reproduccion','transferencia embrionaria','collar','sensor','rfid','costo por animal','vender caballo'],
@@ -11149,7 +11269,7 @@ function _esPedidoAyudaGeneral(t){
 }
 // Menú de capacidades del asistente.
 function _menuAyuda(){
-  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Costo de hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo cargo una retención?" · "¿cómo compro/vendo dólares en el banco?" · "¿cómo exporto para el contador?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n• "¿cómo importo el resumen del banco?" (PDF, Excel o foto; con "ajustar saldo" y "deshacer") · "¿cómo edito o borro un mensaje del chat?"\n• "¿cómo empiezo a usar el sistema?" (configuración inicial) · "¿cómo cambio la voz del asistente?"\n\nEscribí tu consulta y arrancamos 💪';
+  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Rodeos y Hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo cargo una retención?" · "¿cómo compro/vendo dólares en el banco?" · "¿cómo exporto para el contador?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n• "¿cómo importo el resumen del banco?" (PDF, Excel o foto; con "ajustar saldo" y "deshacer") · "¿cómo edito o borro un mensaje del chat?"\n• "¿cómo empiezo a usar el sistema?" (configuración inicial) · "¿cómo cambio la voz del asistente?"\n\nEscribí tu consulta y arrancamos 💪';
 }
 // Arma el texto de la respuesta de ayuda (paso a paso).
 function _textoAyuda(e){
