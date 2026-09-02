@@ -936,8 +936,10 @@ function empresaModulosOcultos(){
 }
 function empresaOcultaModulo(id){ if(id==='configuracion') return false; return empresaModulosOcultos().includes(id); }
 // Presets de actividad para ocultar/mostrar módulos por empresa.
-const _MOD_ANIMAL = ['hacienda','guiasHacienda','animales','rodeos'];
-const _MOD_AGRICOLA = ['posicionGranos','contratosCereal'];
+// "Ocultar animales (agrícola)" oculta las pantallas exclusivas de hacienda/haras.
+const _MOD_ANIMAL = ['hacienda','guiasHacienda','animales','rodeos','liquidacionesHacienda'];
+// "Ocultar granos (ganadera/haras)" oculta solo las pantallas exclusivas de grano/agronomía.
+const _MOD_AGRICOLA = ['posicionGranos','contratosCereal','liquidaciones','vademecum','calculadoras'];
 function empresaModulosForm(){
   const oc = new Set(empresaModulosOcultos());
   const items = (typeof MODULES!=='undefined'?MODULES:[]).filter(m=>m.id && m.perm && m.id!=='configuracion');
@@ -1022,13 +1024,15 @@ function can(perm) {
 // Orden de las secciones del menú: sigue el flujo administrativo real
 // (vistas rápidas → ventas → compras → tesorería → producción → stock → logística → rrhh → admin).
 const MENU_SECTIONS = [
-  'Tablero', 'Ventas', 'Compras', 'Tesorería',
-  'Producción', 'Stock y depósitos', 'Logística', 'RRHH', 'Administración'
+  'Tablero', 'Comercial', 'Producción', 'Ganadería y Haras',
+  'Stock y depósitos', 'Logística y transporte', 'Tesorería',
+  'Patrimonio y contratos', 'Administración'
 ];
 
 const MODULES = [
-  // ===== INICIO — siempre arriba de todo, sin sección =====
+  // ===== ARRIBA DE TODO, sin sección (siempre visible) =====
   { id:'inicio',        label:'Inicio',               icon:'🏠', perm:null,              section:'' },
+  { id:'mensajes',      label:'Mensajes y asistente', icon:'💬', section:'' },
 
   // ===== TABLERO — vistas rápidas y resúmenes =====
   { id:'dashboard',     label:'Dashboard',            icon:'📊', perm:'dashboard:read',  section:'Tablero' },
@@ -1037,33 +1041,18 @@ const MODULES = [
   { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:'reportes:read',   section:'Tablero' },
   { id:'balanceGeneral',label:'Balance Patrimonial',  icon:'⚖️', perm:'reportes:read',   section:'Tablero' },
   { id:'agenda',        label:'Agenda y recordatorios',icon:'📅', perm:'agenda:read',    section:'Tablero' },
-  { id:'mensajes',      label:'Mensajes y asistente', icon:'💬', section:'Tablero' },
 
-  // ===== VENTAS — todo lo que entra =====
-  { id:'clientes',      label:'Clientes',             icon:'👥', perm:'contactos:read',  section:'Ventas' },
-  { id:'facturacion',   label:'Movimientos de ventas', icon:'🧮', perm:'finanzas:read',   section:'Ventas' },
-  { id:'liquidaciones', label:'Liquidaciones cereal', icon:'🧾', perm:'ventas:read',     section:'Ventas' },
-  { id:'liquidacionesHacienda', label:'Liquidaciones animales', icon:'🐄', perm:'ventas:read', section:'Ventas' },
-  { id:'ctasCobrar',    label:'Cuentas a cobrar',     icon:'💰', perm:'finanzas:read',   section:'Ventas' },
+  // ===== COMERCIAL — ventas y compras (lo que entra y lo que sale) =====
+  { id:'clientes',      label:'Clientes',             icon:'👥', perm:'contactos:read',  section:'Comercial' },
+  { id:'facturacion',   label:'Movimientos de ventas', icon:'🧮', perm:'finanzas:read',   section:'Comercial' },
+  { id:'liquidaciones', label:'Liquidaciones cereal', icon:'🧾', perm:'ventas:read',     section:'Comercial' },
+  { id:'liquidacionesHacienda', label:'Liquidaciones animales', icon:'🐄', perm:'ventas:read', section:'Comercial' },
+  { id:'ctasCobrar',    label:'Cuentas a cobrar',     icon:'💰', perm:'finanzas:read',   section:'Comercial' },
+  { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Comercial' },
+  { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Comercial' },
+  { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Comercial' },
 
-  // ===== COMPRAS — todo lo que sale =====
-  { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Compras' },
-  { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Compras' },
-  { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Compras' },
-
-  // ===== TESORERÍA — bancos, efectivo, cheques, créditos =====
-  { id:'movDiarios',    label:'Movimientos diarios',  icon:'📝', perm:'finanzas:create', section:'Tesorería' },
-  { id:'bancos',        label:'Bancos',               icon:'🏛️', perm:'finanzas:read',   section:'Tesorería' },
-  { id:'efectivo',      label:'Control de efectivo',  icon:'💵', perm:'finanzas:read',   section:'Tesorería' },
-  { id:'cheques',       label:'Cheques',              icon:'💳', perm:'finanzas:read',   section:'Tesorería' },
-  { id:'retenciones',   label:'Retenciones',          icon:'🧾', perm:'finanzas:read',   section:'Tesorería' },
-  { id:'creditos',      label:'Créditos bancarios',   icon:'🏦', perm:'finanzas:read',   section:'Tesorería' },
-  { id:'activosFijos',  label:'Activos y maquinaria', icon:'🚜', perm:'finanzas:read',   section:'Tesorería' },
-  { id:'arrendamientos',label:'Arrendamientos',       icon:'🏞️', perm:'finanzas:read',   section:'Tesorería' },
-  { id:'intercompany',  label:'Cuentas Intercompany', icon:'🔄', perm:'finanzas:read',   section:'Tesorería' },
-  { id:'cotizaciones',  label:'Cotizaciones',         icon:'💱', perm:'finanzas:read',   section:'Tesorería' },
-
-  // ===== PRODUCCIÓN agrícola =====
+  // ===== PRODUCCIÓN — herramientas compartidas (campos, campañas, insumos, labores, servicios) =====
   { id:'campos',        label:'Campos y lotes',       icon:'🗺️', perm:'produccion:read', section:'Producción' },
   { id:'mapaCampos',    label:'Mapa de lotes',        icon:'🛰️', perm:'produccion:read', section:'Producción' },
   { id:'campanas',      label:'Campañas',             icon:'🌱', perm:'produccion:read', section:'Producción' },
@@ -1074,29 +1063,43 @@ const MODULES = [
   { id:'calculadoras',  label:'Calculadoras agronómicas', icon:'🧮', perm:'produccion:read', section:'Producción' },
   { id:'vademecum',     label:'Vademécum de insumos',  icon:'🧫', perm:'produccion:read', section:'Producción' },
 
+  // ===== GANADERÍA Y HARAS — todo el ciclo de los animales =====
+  { id:'hacienda',      label:'Movimientos de animales',icon:'🐄', perm:'stock:read',    section:'Ganadería y Haras' },
+  { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Ganadería y Haras' },
+  { id:'rodeos',        label:'Rodeos y Hacienda',    icon:'🐮', perm:'stock:read',      section:'Ganadería y Haras' },
+  { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Ganadería y Haras' },
+
   // ===== STOCK Y DEPÓSITOS =====
   { id:'stock',         label:'Stock',                icon:'📦', perm:'stock:read',      section:'Stock y depósitos' },
-  { id:'movimientos',   label:'Movimientos',          icon:'🔁', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'movimientos',   label:'Movimientos de stock', icon:'🔁', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'remitosInternos',label:'Remitos internos',    icon:'📤', perm:'stock:read',      section:'Stock y depósitos' },
-  { id:'cerealeras',    label:'Cerealeras / Depósitos',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'cerealeras',    label:'Depósitos y cerealeras',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
-  { id:'hacienda',      label:'Movimientos de animales',icon:'🐄', perm:'stock:read',    section:'Stock y depósitos' },
-  { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Stock y depósitos' },
-  { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Stock y depósitos' },
-  { id:'rodeos',        label:'Rodeos y Hacienda',    icon:'🐮', perm:'stock:read',      section:'Stock y depósitos' },
 
-  // ===== LOGÍSTICA =====
-  { id:'viajes',        label:'Viajes y fletes',      icon:'🚚', perm:'produccion:read', section:'Logística' },
-  { id:'transportistas',label:'Transportistas',       icon:'🚛', perm:'viajes:read',     section:'Logística' },
-  { id:'choferes',      label:'Choferes',             icon:'👤', perm:'viajes:read',     section:'Logística' },
-  { id:'camiones',      label:'Camiones (chasis)',    icon:'🚚', perm:'viajes:read',     section:'Logística' },
-  { id:'acoplados',     label:'Acoplados',            icon:'🚃', perm:'viajes:read',     section:'Logística' },
+  // ===== LOGÍSTICA Y TRANSPORTE — fletes (cereal o hacienda) =====
+  { id:'viajes',        label:'Viajes y fletes',      icon:'🚚', perm:'produccion:read', section:'Logística y transporte' },
+  { id:'transportistas',label:'Transportistas',       icon:'🚛', perm:'viajes:read',     section:'Logística y transporte' },
+  { id:'choferes',      label:'Choferes',             icon:'👤', perm:'viajes:read',     section:'Logística y transporte' },
+  { id:'camiones',      label:'Camiones (chasis)',    icon:'🚚', perm:'viajes:read',     section:'Logística y transporte' },
+  { id:'acoplados',     label:'Acoplados',            icon:'🚃', perm:'viajes:read',     section:'Logística y transporte' },
 
-  // ===== RRHH =====
-  { id:'empleados',     label:'Empleados',            icon:'👷', perm:'finanzas:read',   section:'RRHH' },
+  // ===== TESORERÍA — solo lo líquido del día a día =====
+  { id:'movDiarios',    label:'Movimientos diarios',  icon:'📝', perm:'finanzas:create', section:'Tesorería' },
+  { id:'bancos',        label:'Bancos',               icon:'🏛️', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'efectivo',      label:'Control de efectivo',  icon:'💵', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'cheques',       label:'Cheques',              icon:'💳', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'retenciones',   label:'Retenciones',          icon:'🧾', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'creditos',      label:'Créditos bancarios',   icon:'🏦', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'intercompany',  label:'Cuentas Intercompany', icon:'🔄', perm:'finanzas:read',   section:'Tesorería' },
+  { id:'cotizaciones',  label:'Cotizaciones',         icon:'💱', perm:'finanzas:read',   section:'Tesorería' },
+
+  // ===== PATRIMONIO Y CONTRATOS — lo no líquido =====
+  { id:'activosFijos',  label:'Activos y maquinaria', icon:'🚜', perm:'finanzas:read',   section:'Patrimonio y contratos' },
+  { id:'arrendamientos',label:'Arrendamientos',       icon:'🏞️', perm:'finanzas:read',   section:'Patrimonio y contratos' },
 
   // ===== ADMINISTRACIÓN =====
+  { id:'empleados',     label:'Empleados',            icon:'👷', perm:'finanzas:read',   section:'Administración' },
   { id:'catalogos',     label:'Catálogos',            icon:'📚', perm:'produccion:read', section:'Administración' },
   { id:'categoriasArt', label:'Categorías y Familias', icon:'🗂️', perm:'produccion:read', section:'Administración' },
   { id:'catGastos',     label:'Categorías de Gastos',  icon:'🏷️', perm:'finanzas:read',    section:'Administración' },
@@ -1847,12 +1850,15 @@ function renderNav() {
   }).join('');
 
   // Render para items sin sección — botones simples al tope, sin tachón ni header.
-  const topItems = itemsArriba.map(i => `
+  const topItems = itemsArriba.map(i => {
+    const badge = (i.id==='mensajes' && state._chatNoLeidos) ? `<span class="ml-auto text-[10px] font-bold bg-red-500 text-white rounded-full px-1.5 py-0.5 min-w-[18px] text-center">${state._chatNoLeidos>99?'99+':state._chatNoLeidos}</span>` : '';
+    return `
     <button type="button" onclick="go('${i.id}')"
             class="sidebar-link w-full text-left px-3 py-2 flex items-center gap-2 mt-1 ${state.currentPage===i.id?'active':''}">
       <span class="text-base w-5 text-center">${i.icon}</span>
-      <span class="truncate font-medium">${esc(i.label)}</span>
-    </button>`).join('');
+      <span class="truncate font-medium">${esc(i.label)}</span>${badge}
+    </button>`;
+  }).join('');
 
   const vacio = !items.length && q
     ? `<div class="text-xs text-white/60 px-4 py-3 italic">Sin coincidencias para "${esc(q)}"</div>`
@@ -2627,6 +2633,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/09/2026',
+      titulo:'🧭 v2.174.0 — Menú reordenado + asistente siempre a mano',
+      desc:'Reorganizamos el menú para que sea más fácil de encontrar todo, <b>sin perder ningún acceso</b>. <b>Mensajes y asistente</b> quedó fijo arriba de todo, siempre a la vista. Ahora hay grupos más claros: <b>Comercial</b> (ventas y compras juntas), <b>Producción</b> (campos, campañas, insumos y labores, servicios — compartidos por agrícolas y ganaderos), <b>Ganadería y Haras</b> (movimientos de animales, fichas, Rodeos y Hacienda, guías DT-e), <b>Stock y depósitos</b> (Stock, Movimientos de stock, Remitos internos, Depósitos y cerealeras), <b>Logística y transporte</b> (viajes, transportistas, choferes, camiones y acoplados), <b>Tesorería</b> (solo lo del día a día) y <b>Patrimonio y contratos</b> (activos/maquinaria y arrendamientos). No se ocultó nada: cada empresa sigue eligiendo qué ver desde <b>Configuración → Módulos visibles</b>, con los presets por rubro.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'31/08/2026',
       titulo:'🐎 v2.173.0 — Ficha de animales conectada al circuito comercial + "Rodeos y Hacienda"',
       desc:'Los <b>eventos de la Ficha de animales</b> ahora se pueden <b>vincular con el resto del sistema</b>, igual que los del rodeo. En el evento (sanidad, herraje, doma, entrenamiento, pensión, servicio, etc.) elegís cómo impacta: <b>Gasto → cuenta a pagar del proveedor</b> (o factura de compra), <b>Labor de empleado propio → comisión a la planilla (Sueldos)</b>, <b>Servicio de tercero → cuenta a pagar del proveedor</b>, o <b>Cobrar al cliente</b> (pensión/servicio de hotelería → cuenta a cobrar del dueño). La <b>venta</b> de un animal también se puede registrar como <b>cuenta a cobrar a un cliente</b> o vincular a una <b>factura</b> o <b>liquidación de hacienda</b>. El <b>consumo de un producto</b> sigue descontando stock. Todo se revierte si borrás el evento. Además, la sección <b>"Costo de hacienda" pasó a llamarse "Rodeos y Hacienda"</b>.' },
