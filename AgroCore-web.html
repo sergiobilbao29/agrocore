@@ -2634,6 +2634,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/09/2026',
+      titulo:'👷 v2.175.0 — Empleados: cuenta corriente con saldo que arrastra + sueldo por mes',
+      desc:'La ficha del empleado ahora <b>abre siempre en el mes actual</b>. Sumamos una <b>cuenta corriente</b>: cada mes muestra el <b>saldo a pagar con arrastre</b> (saldo del mes anterior a favor o en contra + lo devengado del mes − gastos/adelantos). Al <b>Registrar pago</b> ponés el <b>monto real</b> que transferís (puede ser menos o más que el total) y la <b>diferencia queda como saldo</b> que pasa solo al mes siguiente — como el "cuadrito a favor/en contra" del Excel. Para los <b>sueldos que cambian todos los meses</b> (administración, aumento de comercio), usá el botón <b>"💵 Sueldo del mes"</b>: el valor queda <b>fijo para ese mes</b>, así cambiarlo no te modifica los meses ya cargados.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/09/2026',
       titulo:'🧭 v2.174.0 — Menú reordenado + asistente siempre a mano',
       desc:'Reorganizamos el menú para que sea más fácil de encontrar todo, <b>sin perder ningún acceso</b>. <b>Mensajes y asistente</b> quedó fijo arriba de todo, siempre a la vista. Ahora hay grupos más claros: <b>Comercial</b> (ventas y compras juntas), <b>Producción</b> (campos, campañas, insumos y labores, servicios — compartidos por agrícolas y ganaderos), <b>Ganadería y Haras</b> (movimientos de animales, fichas, Rodeos y Hacienda, guías DT-e), <b>Stock y depósitos</b> (Stock, Movimientos de stock, Remitos internos, Depósitos y cerealeras), <b>Logística y transporte</b> (viajes, transportistas, choferes, camiones y acoplados), <b>Tesorería</b> (solo lo del día a día) y <b>Patrimonio y contratos</b> (activos/maquinaria y arrendamientos). No se ocultó nada: cada empresa sigue eligiendo qué ver desde <b>Configuración → Módulos visibles</b>, con los presets por rubro.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'31/08/2026',
@@ -20899,6 +20902,33 @@ async function empleDel(id) {
 const EMP_MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 function empMesLabel(p){ if(!p) return ''; const [y,m]=String(p).split('-'); return `${EMP_MESES[Number(m)-1]||m} ${y}`; }
 function empPeriodoHoy(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
+// --- Cuenta corriente del empleado (saldo que arrastra de un mes al otro) ---
+// Devengado de un período = lo que ganó − lo que retiró (gastos) ese mes.
+// Para meses ya liquidados usamos los totales congelados de la liquidación
+// (así cambiar el sueldo de la ficha NO altera meses viejos). Para meses abiertos,
+// calculamos con los movimientos + el sueldo base automático.
+function empDevengadoPeriodo(emp, movs, liqs, p){
+  const liq = (liqs||[]).find(l=>l.periodo===p);
+  if (liq) return Number(liq.totalGanancias||0) - Number(liq.totalGastos||0);
+  const mm = (movs||[]).filter(m=>m.periodo===p);
+  const haySueldoMov = mm.some(m=>m.categoria==='sueldo');
+  const sb = (!haySueldoMov && empSueldoBase(emp,p)>0) ? empSueldoBase(emp,p) : 0;
+  const gan = mm.filter(m=>m.tipo==='ganancia').reduce((a,m)=>a+Number(m.monto||0),0)+sb;
+  const gas = mm.filter(m=>m.tipo==='gasto').reduce((a,m)=>a+Number(m.monto||0),0);
+  return gan - gas;
+}
+function empPagadoPeriodo(liqs, p){
+  const liq = (liqs||[]).find(l=>l.periodo===p);
+  if (!liq) return 0;
+  return Number(liq.pagado!=null ? liq.pagado : (liq.neto||0));
+}
+// Saldo a favor del empleado (lo que la empresa le debe) acumulado hasta ANTES
+// del mes indicado. Positivo = a favor del empleado; negativo = el empleado debe.
+function empSaldoAnterior(emp, movs, liqs, mes){
+  const pers = [...new Set([...(movs||[]).map(m=>m.periodo), ...(liqs||[]).map(l=>l.periodo)])]
+    .filter(p=>p && p < mes);
+  return pers.reduce((a,p)=> a + empDevengadoPeriodo(emp,movs,liqs,p) - empPagadoPeriodo(liqs,p), 0);
+}
 function empCatLabel(c){
   if (!c) return 'Otro';
   const cat = (state.cache.catPlanilla||[]).find(x=>x.codigo===c);
@@ -20931,11 +20961,10 @@ async function empleAbrir(id, push=true) {
     state.cache.catPlanilla = (await api('/api/categorias-planilla').catch(()=>({data:state.cache.catPlanilla||[]}))).data || [];
   } catch (e) { return toast(e.message,'error'); }
   state.empFicha = { emp, movs, liqs, ropa };
-  // Al abrir la ficha (navegación real) arrancamos en el mes más reciente con
-  // datos; en los re-render internos respetamos el mes que el usuario eligió.
+  // Al abrir la ficha (navegación real) arrancamos SIEMPRE en el mes/año actual;
+  // en los re-render internos respetamos el mes que el usuario eligió.
   if (push) {
-    const periodos = [...movs.map(m=>m.periodo), ...liqs.map(l=>l.periodo), empPeriodoHoy()].filter(Boolean);
-    state.empMes = periodos.sort().reverse()[0];
+    state.empMes = empPeriodoHoy();
   }
   empFichaRender();
 }
@@ -20962,6 +20991,11 @@ function empFichaRender() {
   const gastos       = movsMes.filter(m=>m.tipo==='gasto').reduce((a,m)=>a+Number(m.monto||0),0);
   const ganancias    = gananciasMov + sueldoBase;
   const neto         = ganancias - gastos;
+  // Cuenta corriente: saldo que viene arrastrando de meses anteriores.
+  const saldoAnt     = empSaldoAnterior(emp, movs, liqs, mes);   // + a favor del empleado, − debe
+  const aPagarAcum   = saldoAnt + neto;                          // total adeudado al empleado (con arrastre) antes de pagar este mes
+  const pagadoMes    = liq ? Number(liq.pagado!=null?liq.pagado:(liq.neto||0)) : 0;
+  const saldoCierre  = saldoAnt + neto - pagadoMes;              // lo que queda arrastrando al mes siguiente
 
   const canC = can('rrhh:create')||can('finanzas:create');
   const canU = can('rrhh:update')||can('finanzas:update');
@@ -21012,25 +21046,30 @@ function empFichaRender() {
       : liq.medioPago==='cheque' ? `Cheque propio N° ${esc(liq.nroCheque||'—')}${liq.banco?` · ${esc(liq.banco)}`:''}`
       : liq.medioPago==='intercompany' ? `🔄 Intercompany (pagó otra firma del grupo)`
       : `Transferencia${liq.banco?` · ${esc(liq.banco)}`:''}${liq.referencia?` · ${esc(liq.referencia)}`:''}`;
+    const saldoTxt = Math.abs(saldoCierre) < 0.5 ? 'Cuenta al día' :
+      (saldoCierre>0 ? `Queda a favor del empleado ${fmt$(saldoCierre)} (pasa al mes siguiente)` : `El empleado queda debiendo ${fmt$(-saldoCierre)} (pasa al mes siguiente)`);
     cajaLiq = `<div class="kpi" style="background:linear-gradient(135deg,#047857,#065f46);border:none;">
       <div class="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <div class="text-xs uppercase tracking-wider" style="color:#a7f3d0">✅ Sueldo liquidado · ${empMesLabel(mes)}</div>
-          <div class="text-2xl font-extrabold text-white mt-0.5">${fmt$(liq.neto)}</div>
+          <div class="text-xs uppercase tracking-wider" style="color:#a7f3d0">✅ Pagado · ${empMesLabel(mes)}</div>
+          <div class="text-2xl font-extrabold text-white mt-0.5">${fmt$(pagadoMes)}</div>
           <div class="text-xs mt-1" style="color:#d1fae5">${detalle} · ${liq.fecha?fmtDate(liq.fecha):''}</div>
+          <div class="text-xs mt-1" style="color:#a7f3d0">${saldoTxt}</div>
         </div>
         ${canD?`<button class="btn btn-secondary text-xs" onclick='empLiqAnular(${JSON.stringify(liq.id)})'>Anular liquidación</button>`:''}
       </div>
     </div>`;
   } else {
+    const saldoAntTxt = Math.abs(saldoAnt) < 0.5 ? '' :
+      (saldoAnt>0 ? `<span class="text-emerald-700">Saldo mes anterior a favor ${fmt$(saldoAnt)}</span> · ` : `<span class="text-red-600">Saldo mes anterior en contra ${fmt$(-saldoAnt)}</span> · `);
     cajaLiq = `<div class="kpi">
       <div class="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <div class="text-xs text-slate-500">Neto a liquidar · ${empMesLabel(mes)}</div>
-          <div class="text-2xl font-extrabold mt-0.5 ${neto>=0?'text-emerald-700':'text-red-600'}">${fmt$(neto)}</div>
-          <div class="text-xs text-slate-400 mt-1">Ganancias ${fmt$(ganancias)} − Gastos ${fmt$(gastos)}</div>
+          <div class="text-xs text-slate-500">Saldo a pagar · ${empMesLabel(mes)} <span class="text-[11px] text-slate-400">(con arrastre)</span></div>
+          <div class="text-2xl font-extrabold mt-0.5 ${aPagarAcum>=0?'text-emerald-700':'text-red-600'}">${fmt$(aPagarAcum)}</div>
+          <div class="text-xs text-slate-400 mt-1">${saldoAntTxt}Neto del mes ${fmt$(neto)} (Ganancias ${fmt$(ganancias)} − Gastos ${fmt$(gastos)})</div>
         </div>
-        ${canC?`<button class="btn btn-primary" onclick='empLiqForm(${JSON.stringify(mes)})'>💵 Liquidar sueldo</button>`:''}
+        ${canC?`<button class="btn btn-primary" onclick='empLiqForm(${JSON.stringify(mes)})'>💵 Registrar pago</button>`:''}
       </div>
     </div>`;
   }
@@ -21162,6 +21201,7 @@ function empFichaRender() {
       ${canC?`<button class="btn btn-secondary" onclick="empCatManager()" title="Agregar o eliminar categorías de la planilla">⚙️ Categorías</button>`:''}
       ${canC?`<button class="btn btn-secondary" onclick="empConsumoForm()" title="Cargar consumo del kiosco / proveeduría del campo (se descuenta del sueldo)">🛒 Consumo kiosco</button>`:''}
       ${canC?`<button class="btn btn-secondary" onclick="empMovMultiForm()" title="Cargar varios movimientos de una sola vez">➕ Cargar varios</button>`:''}
+      ${canC?`<button class="btn btn-secondary" onclick="empSueldoDelMes()" title="Cargar el sueldo de este mes (queda fijo para el mes; ideal para sueldos que cambian)">💵 Sueldo del mes</button>`:''}
       ${canC?`<button class="btn btn-primary" onclick="empMovForm()">+ Agregar movimiento</button>`:''}
     </div>
 
@@ -21207,9 +21247,18 @@ function empMovCatOptions(tipo, sel){
   return def.map(([v,l,modo,uni])=>`<option value="${v}" data-modo="${modo}" data-unidad="${uni}" ${v===sel?'selected':''}>${l}</option>`).join('');
 }
 
-function empMovForm(movId=null){
+// Carga rápida del sueldo del mes: crea un movimiento ganancia/sueldo prefijado,
+// que queda FIJO para ese mes (editar el sueldo de la ficha no lo cambia). Sugiere
+// el último sueldo cargado a mano o, si no hay, el sueldo de la ficha.
+function empSueldoDelMes(){
+  const {emp,movs}=state.empFicha; const mes=state.empMes;
+  const sueldos=(movs||[]).filter(m=>m.categoria==='sueldo'&&m.periodo<mes).sort((a,b)=>b.periodo.localeCompare(a.periodo));
+  const sug = sueldos.length ? Number(sueldos[0].monto||0) : Number(empSueldoBase(emp,mes)||0);
+  empMovForm(null, { tipo:'ganancia', categoria:'sueldo', concepto:'Sueldo '+empMesLabel(mes), monto: sug||'' });
+}
+function empMovForm(movId=null, preset=null){
   const movs = (state.empFicha&&state.empFicha.movs)||[];
-  const it = movId ? (movs.find(m=>m.id===movId)||{}) : {};
+  const it = movId ? (movs.find(m=>m.id===movId)||{}) : (preset||{});
   const tipo = it.tipo || 'gasto';
   const cat  = it.categoria || (tipo==='gasto'?'adelanto':'horas');
   let fechaStr;
@@ -21663,22 +21712,32 @@ async function empRopaDel(ropaId){
 }
 
 function empLiqForm(periodo){
-  const {emp,movs}=state.empFicha;
+  const {emp,movs,liqs}=state.empFicha;
   const movsMes=movs.filter(m=>m.periodo===periodo);
   const haySueldoMov=movsMes.some(m=>m.categoria==='sueldo');
-  const sueldoBase=(!haySueldoMov&&empSueldoBase(emp)>0)?empSueldoBase(emp):0;
+  const sueldoBase=(!haySueldoMov&&empSueldoBase(emp,periodo)>0)?empSueldoBase(emp,periodo):0;
   const ganMov=movsMes.filter(m=>m.tipo==='ganancia').reduce((a,m)=>a+Number(m.monto||0),0);
   const gastos=movsMes.filter(m=>m.tipo==='gasto').reduce((a,m)=>a+Number(m.monto||0),0);
   const ganancias=ganMov+sueldoBase;
   const neto=ganancias-gastos;
+  const saldoAnt=empSaldoAnterior(emp,movs,liqs,periodo);
+  const aPagar=Math.round((saldoAnt+neto)*100)/100;   // total adeudado con arrastre
+  const sugerido=Math.max(0,aPagar);
   const hoy=new Date().toISOString().slice(0,10);
+  const saldoAntTxt = Math.abs(saldoAnt)<0.5 ? '' :
+    (saldoAnt>0 ? ` + saldo mes anterior a favor ${fmt$(saldoAnt)}` : ` − saldo mes anterior en contra ${fmt$(-saldoAnt)}`);
   openModal({
-    title:'Liquidar sueldo · '+empMesLabel(periodo),
+    title:'Registrar pago de sueldo · '+empMesLabel(periodo),
     body:`
       <div class="kpi mb-3" style="background:linear-gradient(135deg,#047857,#065f46);border:none;">
-        <div class="text-xs uppercase tracking-wider" style="color:#a7f3d0">Neto a pagar</div>
-        <div class="text-3xl font-extrabold text-white mt-0.5">${fmt$(neto)}</div>
-        <div class="text-xs mt-1" style="color:#d1fae5">Ganancias ${fmt$(ganancias)}${sueldoBase>0?` (incluye sueldo base ${fmt$(sueldoBase)})`:''} − Gastos ${fmt$(gastos)}</div>
+        <div class="text-xs uppercase tracking-wider" style="color:#a7f3d0">Saldo a pagar (con arrastre)</div>
+        <div class="text-3xl font-extrabold text-white mt-0.5">${fmt$(aPagar)}</div>
+        <div class="text-xs mt-1" style="color:#d1fae5">Neto del mes ${fmt$(neto)}${sueldoBase>0?` (incluye sueldo base ${fmt$(sueldoBase)})`:''}${saldoAntTxt}</div>
+      </div>
+      <div class="mb-3">
+        <label class="label">Monto que pagás ahora *</label>
+        <input id="lq-monto" class="input" type="number" step="0.01" value="${sugerido}" oninput="empLiqSaldoPreview(${saldoAnt+neto})"/>
+        <p id="lq-saldo-preview" class="text-xs text-slate-500 mt-1"></p>
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Fecha de pago *</label><input id="lq-fecha" class="input" type="date" value="${hoy}"/></div>
@@ -21705,6 +21764,14 @@ function empLiqForm(periodo){
             <button class="btn btn-primary" onclick='empLiqSave(${JSON.stringify(periodo)})'>Confirmar liquidación</button>`
   });
   empLiqMedioChange();
+}
+function empLiqSaldoPreview(aPagar){
+  const el=$('#lq-saldo-preview'); if(!el) return;
+  const pago=Number($('#lq-monto')?.value||0);
+  const resto=Math.round((aPagar-pago)*100)/100;
+  if(Math.abs(resto)<0.5){ el.textContent='Queda la cuenta al día.'; el.className='text-xs text-slate-500 mt-1'; }
+  else if(resto>0){ el.textContent=`Queda ${fmt$(resto)} a favor del empleado (pasa al mes siguiente).`; el.className='text-xs text-emerald-700 mt-1'; }
+  else { el.textContent=`El empleado queda debiendo ${fmt$(-resto)} (pasa al mes siguiente).`; el.className='text-xs text-red-600 mt-1'; }
 }
 function empLiqMedioChange(){
   const medio=$('#lq-medio').value;
@@ -21733,10 +21800,13 @@ function empLiqMedioChange(){
 async function empLiqSave(periodo){
   const empId=state.empFichaId;
   const medio=$('#lq-medio').value;
+  const montoPagado=Number($('#lq-monto')?.value||0);
+  if(montoPagado<0) return toast('El monto a pagar no puede ser negativo','warn');
   const data={
     periodo,
     fecha:$('#lq-fecha').value,
     medioPago:medio,
+    montoPagado,
     caja: medio==='efectivo' ? ($('#lq-caja').value||null) : (medio==='tarjeta' ? ($('#lq-tarjeta')?.value?.trim()||null) : null),
     banco: (medio!=='efectivo' && medio!=='tarjeta') ? ($('#lq-banco').value.trim()||null) : null,
     nroCheque: medio==='cheque' ? ($('#lq-cheque').value.trim()||null) : null,

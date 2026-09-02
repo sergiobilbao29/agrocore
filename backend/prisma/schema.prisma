@@ -1147,7 +1147,8 @@ model LiquidacionSueldo {
   sueldoBase     Float    @default(0)
   totalGanancias Float    @default(0)  // incluye sueldoBase
   totalGastos    Float    @default(0)
-  neto           Float    @default(0)
+  neto           Float    @default(0)  // devengado del mes = totalGanancias - totalGastos
+  pagado         Float?               // monto REALMENTE pagado (puede diferir del neto: la diferencia arrastra como saldo). Si es null, se asume = neto (compat).
   medioPago      String     // "efectivo" | "cheque" | "transferencia"
   caja           String?    // caja de efectivo usada (medioPago = efectivo)
   banco          String?    // banco del cheque o de la transferencia

@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.174.0';
+const AGROCORE_VERSION = '2.175.0';
 const AGROCORE_BUILD = new Date('2026-09-02').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6263,6 +6263,10 @@ const liqSchema = z.object({
   nroCheque: z.string().nullable().optional(),
   referencia: z.string().nullable().optional(),
   incluirSueldoBase: z.boolean().optional(),
+  // Monto realmente pagado (cuenta corriente): puede diferir del neto del mes; la
+  // diferencia queda como saldo a favor/en contra que arrastra al mes siguiente.
+  // Si no viene, se paga el neto del mes (comportamiento anterior).
+  montoPagado: z.coerce.number().min(0).optional(),
   observaciones: z.string().nullable().optional(),
   // Intercompany: otra firma del grupo pone los fondos del sueldo.
   empresaOrigenId: z.string().nullable().optional(),
@@ -6319,6 +6323,9 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
     const sueldoBase = (d.incluirSueldoBase !== false && !haySueldoMov) ? Number(emp.sueldo || 0) : 0;
     const totalGanancias = totalGananciasMov + sueldoBase;
     const neto = totalGanancias - totalGastos;
+    // Cuenta corriente: el monto que realmente se paga puede diferir del neto del
+    // mes (la diferencia arrastra como saldo). Si no se especifica, se paga el neto.
+    const pagado = (d.montoPagado != null) ? Number(d.montoPagado) : neto;
 
     const nombreCompleto = `${emp.apellido}, ${emp.nombre}`;
     const liquidacion = await prisma.$transaction(async (tx) => {
@@ -6329,53 +6336,53 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
       // Intercompany: otra firma del grupo paga el sueldo. Deja los asientos espejo
       // y mueve el recurso REAL de la firma que financia (misma lógica que el pago
       // a proveedor Intercompany).
-      if (neto > 0 && d.medioPago === 'intercompany') {
+      if (pagado > 0 && d.medioPago === 'intercompany') {
         const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`;
         const concepto = `Sueldo ${nombreCompleto} · ${d.periodo}`;
         const obsIc = `Liquidación de sueldo ${d.periodo}${d.observaciones ? ' · ' + d.observaciones : ''} [ic:${interRef}]`;
-        // Esta empresa (destino) queda debiendo a la otra: haber = neto.
+        // Esta empresa (destino) queda debiendo a la otra: haber = pagado.
         await tx.ctaCte.create({ data: {
           companyId: req.companyId, contactoTipo: 'intercompany',
           empresaContraparteId: d.empresaOrigenId, intercompanyRef: interRef,
           fecha: d.fecha, detalle: concepto + ' — pagado por otra firma del grupo',
-          haber: neto, observaciones: obsIc,
+          haber: pagado, observaciones: obsIc,
         }});
-        // La firma que paga queda con saldo a favor: debe = neto.
+        // La firma que paga queda con saldo a favor: debe = pagado.
         await tx.ctaCte.create({ data: {
           companyId: d.empresaOrigenId, contactoTipo: 'intercompany',
           empresaContraparteId: req.companyId, intercompanyRef: interRef,
           fecha: d.fecha, detalle: 'Sueldo pagado para otra firma del grupo: ' + concepto,
-          debe: neto, observaciones: obsIc,
+          debe: pagado, observaciones: obsIc,
         }});
         await tx.intercompanyMovimiento.create({ data: {
           fecha: d.fecha, empresaOrigenId: d.empresaOrigenId, empresaDestinoId: req.companyId,
-          monto: neto, motivo: concepto, intercompanyRef: interRef,
+          monto: pagado, motivo: concepto, intercompanyRef: interRef,
           observaciones: obsIc, userId: req.user?.id || null,
         }});
         await _intercompanyMoverRecurso(tx, {
           empresaOrigenId: d.empresaOrigenId, recurso: d.recursoIntercompany || 'deuda',
-          monto: neto, fecha: d.fecha, concepto, observaciones: obsIc, userId: req.user?.id || null,
+          monto: pagado, fecha: d.fecha, concepto, observaciones: obsIc, userId: req.user?.id || null,
           cajaOrigen: d.cajaOrigen, chequeIdOrigen: d.chequeIdOrigen, bancoCuentaIdOrigen: d.bancoCuentaIdOrigen,
         });
         intercompanyRef = interRef;
       }
 
-      // Sólo generamos el pago en otros módulos si el neto es positivo.
-      if (neto > 0 && (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta')) {
+      // Sólo generamos el pago en otros módulos si el monto pagado es positivo.
+      if (pagado > 0 && (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta')) {
         const ef = await tx.efectivo.create({
           data: {
             companyId: req.companyId,
             fecha: d.fecha,
             tipo: 'egreso',
             concepto: `Sueldo ${nombreCompleto} · ${d.periodo}`,
-            monto: neto,
+            monto: pagado,
             caja: d.caja,
             clasificacion: 'empresa',
             observaciones: `Liquidación de sueldo ${d.periodo}` + (d.medioPago === 'tarjeta' ? ' · Tarjeta: ' + d.caja : ''),
           },
         });
         efectivoId = ef.id;
-      } else if (neto > 0 && d.medioPago === 'cheque') {
+      } else if (pagado > 0 && d.medioPago === 'cheque') {
         const ch = await tx.cheque.create({
           data: {
             companyId: req.companyId,
@@ -6384,7 +6391,7 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
             nroCheque: d.nroCheque,
             fechaEmision: d.fecha,
             fechaPago: d.fecha,
-            monto: neto,
+            monto: pagado,
             beneficiario: nombreCompleto,
             estado: 'en_cartera',
             observaciones: `Liquidación de sueldo ${d.periodo}`,
@@ -6403,6 +6410,7 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
           totalGanancias,
           totalGastos,
           neto,
+          pagado,
           medioPago: d.medioPago,
           caja: (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta') ? d.caja : null,
           banco: (d.medioPago !== 'efectivo' && d.medioPago !== 'tarjeta') ? (d.banco || null) : null,
@@ -10920,6 +10928,15 @@ const _AYUDA_KB = [
       'Cargá movimientos (adelantos, jornales, descuentos) eligiendo la categoría; algunos usan cantidad × valor.',
       'Para la ropa/indumentaria cargá el movimiento con la categoría correspondiente; queda en la planilla.',
       'Podés exportar la planilla a PDF/Excel.'],
+    atajo:{ page:'empleados', label:'Abrir Empleados' } },
+  { id:'empleado_saldo', terms:['saldo del empleado','saldo a favor empleado','le debo al empleado','el empleado me debe','arrastre de sueldo','saldo mes anterior','retira de mas','no retira todo el sueldo','cuenta corriente empleado','pago parcial de sueldo','sueldo que cambia','aumento de comercio','sueldo de administracion','sueldo distinto cada mes'],
+    titulo:'Cuenta corriente del empleado (saldo que arrastra) y sueldo que cambia',
+    pasos:[
+      'La ficha del empleado abre siempre en el MES ACTUAL.',
+      'Cada mes muestra el "Saldo a pagar (con arrastre)": saldo del mes anterior (a favor o en contra) + lo devengado del mes − gastos/adelantos.',
+      'Al tocar "Registrar pago" ponés el MONTO REAL que transferís (puede ser menos o más que el total). La diferencia queda como saldo a favor / en contra y pasa sola al mes siguiente.',
+      'Ejemplo: en septiembre pagás el sueldo de agosto; lo que no retiró queda a favor y aparece arriba del mes siguiente.',
+      'Sueldos que cambian todos los meses (administración, aumento de comercio): usá el botón "💵 Sueldo del mes" y cargá el valor de ese mes. Queda FIJO para ese mes: cambiar el sueldo en la ficha NO modifica los meses ya cargados.'],
     atajo:{ page:'empleados', label:'Abrir Empleados' } },
   { id:'viajes', terms:['viaje','flete','transporte','camion','chofer','acoplado','carta de porte','transportista'],
     titulo:'Cargar un viaje / flete',
