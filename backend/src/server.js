@@ -10776,7 +10776,7 @@ const _AYUDA_KB = [
   { id:'compra', terms:['compra','cargar una compra','factura de compra','comprobante recibido','factura de proveedor','registrar compra','gasto con factura'],
     titulo:'Cargar una compra / factura de proveedor',
     pasos:[
-      'Entrá a Compras → "Nueva compra".',
+      'Entrá a Comercial → Movimientos de compras → "Nueva compra".',
       'Elegí el proveedor (si no existe, lo creás ahí mismo) y la fecha.',
       'Cargá los renglones (producto/servicio, cantidad, precio) y el IVA; la moneda puede ser $ o US$.',
       'Guardá: genera la cuenta a pagar y, si es un insumo/artículo, suma el stock.',
@@ -10825,7 +10825,7 @@ const _AYUDA_KB = [
   { id:'guias_hacienda', terms:['guia','guias','dte','dt-e','dte-dut','guia de hacienda','guia de animales','guia de traslado','carta de porte animal','renspa','mover animales con guia','importar guia','foto de la guia','cuenta estimada hacienda','vincular guia','a cuenta hacienda','faena guia','servicio de faena'],
     titulo:'Guías de hacienda (DT-e)',
     pasos:[
-      'Andá a Stock y depósitos → Guías de hacienda (DT-e) y tocá "+ Nueva guía" (o "📷 Importar guía" para leer la foto/PDF del DT-e con IA).',
+      'Andá a Ganadería y Haras → Guías de hacienda (DT-e) y tocá "+ Nueva guía" (o "📷 Importar guía" para leer la foto/PDF del DT-e con IA).',
       'Elegí el motivo (Venta, Compra, Faena/servicio, Invernada, Traslado). El sentido (egreso/ingreso) se sugiere solo. Cargá el campo, el N° de DT-e, los RENSPA y el contacto (cliente/proveedor/frigorífico).',
       'En los renglones cargás la CATEGORÍA y las CABEZAS (eso es lo que trae la guía). Los KILOS y PRECIOS son estimados y opcionales; podés poner varias filas por calidad (fila 1, 2, 3) con distinto precio.',
       'Al guardar, la guía MUEVE EL STOCK al instante (suma o resta cabezas del campo) y arma una CUENTA ESTIMADA a cobrar (venta) o a pagar (compra).',
@@ -10983,7 +10983,7 @@ const _AYUDA_KB = [
   { id:'costo_hacienda', terms:['costo de hacienda','costo por kilo','costo por kg','costo de carne','feedlot','engorde','recria','cria','lote de engorde','rodeo','ganancia de peso','gpd','pesaje','cuanto cuesta el kilo','costo del novillo','alimentacion del rodeo'],
     titulo:'Rodeos y Hacienda (costo por kg de carne)',
     pasos:[
-      'Entrá a Stock y depósitos → Rodeos y Hacienda y creá un "lote" (rodeo): feedlot, engorde a campo, recría o cría.',
+      'Entrá a Ganadería y Haras → Rodeos y Hacienda y creá un "lote" (rodeo): feedlot, engorde a campo, recría o cría.',
       'Cargá los eventos del lote: Ingreso (compra: cabezas, kg y precio), Alimentación (rollos/fardos/grano del galpón, que descuenta stock, o pastoreo), Sanidad, Labores.',
       'Cargá Pesajes (el kg total del lote a una fecha): es lo que permite ver la ganancia de peso.',
       'También Bajas (mortandad) y Ventas.',
@@ -11009,7 +11009,7 @@ const _AYUDA_KB = [
   { id:'activos', terms:['activo fijo','activos fijos','maquinaria','bien de uso','bienes de uso','tractor','mantenimiento','service','cambio de aceite','amortizacion','vida util','alerta de service','proximo service','rodado','inmueble'],
     titulo:'Activos y maquinaria (bienes de uso + mantenimiento)',
     pasos:[
-      'Entrá a Tesorería → Activos y maquinaria y cargá cada bien (maquinaria, rodado, inmueble, mejora, instalación) con valor de origen, fecha y vida útil. El sistema calcula el valor neto por amortización (la tierra no amortiza).',
+      'Entrá a Patrimonio y contratos → Activos y maquinaria y cargá cada bien (maquinaria, rodado, inmueble, mejora, instalación) con valor de origen, fecha y vida útil. El sistema calcula el valor neto por amortización (la tierra no amortiza).',
       'En cada máquina llevás su historial de mantenimiento: services y cambios de aceite con fecha, km/horas, aceite/filtros/repuestos, taller y costo.',
       'En cada mantenimiento definís el próximo por km/horas o por fecha: el módulo te avisa con alertas (vencido / próximo).',
       'Podés actualizar la lectura de km/horas cuando quieras.'],
@@ -11050,7 +11050,7 @@ const _AYUDA_KB = [
   { id:'liquidacion_animales_retenciones', terms:['liquidacion de animales','liquidacion animales','retenciones','retencion','gastos e impuestos','neto a cobrar animales','total tributo','se descuenta del total','descontar retenciones','liquidacion hacienda'],
     titulo:'Liquidación de animales: retenciones y neto a cobrar',
     pasos:[
-      'En Ventas → Liquidaciones animales, cargá el campo, comprador, comprobante/CAE y los renglones (categoría, cabezas, kg, $/kg, IVA).',
+      'En Comercial → Liquidaciones animales, cargá el campo, comprador, comprobante/CAE y los renglones (categoría, cabezas, kg, $/kg, IVA).',
       'El campo "Retenciones y gastos (se restan)" es para las retenciones (ganancias, IIBB, etc.) que el comprador retiene y paga aparte: se DESCUENTAN del neto a cobrar.',
       'El Neto a cobrar = Bruto + IVA − Retenciones. Se sugiere solo y lo podés ajustar a mano (si lo editás, ya no se te pisa).',
       'Al guardar, descuenta las cabezas del stock real y del declarado SENASA del campo, y arma la cuenta a cobrar por el neto. Al eliminar la liquidación se revierte todo.'],
@@ -11128,7 +11128,7 @@ const _AYUDA_KB = [
   { id:'fichas_animales', terms:['ficha de animal','caballo','equino','haras','polo','ficha individual','animal individual','pedigree','genealogia','microchip','coggins','vaca madre','toro','padrillo','yegua','reproduccion','transferencia embrionaria','collar','sensor','rfid','costo por animal','vender caballo'],
     titulo:'Fichas de animales (ficha individual 360°)',
     pasos:[
-      'Entrá a Stock y depósitos → Fichas de animales.',
+      'Entrá a Ganadería y Haras → Fichas de animales.',
       'Tocá "+ Nuevo animal" y cargá la ficha: nombre, especie (equino/bovino/porcino), sexo, categoría, estado, pelaje, raza y fecha de nacimiento.',
       'Cargá los identificadores (microchip, caravana RFID, N° de registro SRA/AACCP/RP, pasaporte) y la genealogía (padre, madre y receptora si fue transferencia embrionaria).',
       'Poné el costo de alta/compra (si nació, dejalo en 0) y la moneda.',
