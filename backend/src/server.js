@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.175.0';
-const AGROCORE_BUILD = new Date('2026-09-02').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.176.0';
+const AGROCORE_BUILD = new Date('2026-09-03').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -16245,9 +16245,41 @@ app.post('/api/admin/parse-liquidacion-hacienda-pdf', authMiddleware, requireCom
     //  (B) invertido (ej. LIVORNO): importes ANTES, cabezas justo DESPUÉS de "Kg. Vivo",
     //      y la categoría/raza en la línea SIGUIENTE. Se detecta por el encabezado.
     const invertido = /\$ ?IVA[\s\S]{0,60}Cabezas[\s\S]{0,12}Categor/i.test(texto);
+    // (C) por cabeza (ej. TECCAS): UM = "Cabeza", sin "Kg. Vivo". El precio ($/cabeza)
+    //     puede venir cortado en dos líneas y el bruto+%IVA+$IVA vienen pegados.
+    const porCabeza = /Cabeza\s*\d/i.test(texto) && !/Kg\.?\s*Vivo/i.test(texto);
     const secEnd = texto.indexOf('Importe Bruto:');   // usado también abajo para el Importe Neto
     const renglones = [];
-    if (invertido) {
+    if (porCabeza) {
+      const sec = secEnd > 0 ? texto.slice(0, secEnd) : texto;
+      // <especie> <categoría> / <raza> ... Cabeza<cant> [precio partido] <bruto><%iva><$iva pegados>
+      const reC = /(Bovino|Porcino|Ovino|Equino|Caprino)([\s\S]*?)Cabeza\s*(\d{1,4})\s*([\s\S]*?)(\d{1,3}(?:,\d{3})*\.\d{2})(\d{1,2}\.\d{2})(\d{1,3}(?:,\d{3})*\.\d{2})/gi;
+      let m;
+      while ((m = reC.exec(sec))) {
+        const especie = m[1];
+        const cabezas = parseInt(m[3], 10) || null;
+        const bruto = num(m[5]);
+        const alic = num(m[6]) || 10.5;
+        const iva = num(m[7]);
+        const catTexto = (especie + ' ' + m[2]).replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        // Precio por cabeza: exacto desde bruto/cabezas (el $UM del PDF viene cortado en 2 líneas).
+        const precioCab = (bruto && cabezas) ? Math.round((bruto / cabezas) * 100) / 100 : null;
+        renglones.push({
+          especie,
+          categoriaTexto: catTexto || null,
+          raza: (catTexto.match(/\/\s*(.+)$/) || [])[1] || null,
+          categoria: _detectCategoriaHacienda(catTexto),
+          tropa: null,
+          cabezas,
+          kilos: null,               // este comprobante factura por cabeza, no por kg
+          unidad: 'cabeza',
+          precioKg: precioCab,       // se reutiliza el campo de precio ($/cabeza)
+          bruto,
+          alicuotaIva: alic,
+          iva: iva != null ? iva : (bruto ? Math.round(bruto * alic) / 100 : null),
+        });
+      }
+    } else if (invertido) {
       // Ej: "149,940.0010.501,428,000.005,100.00280Kg. Vivo20\nPorcina Lechones Livianos"
       //   antes de "Kg. Vivo": $IVA %IVA $Bruto $UM(precio) Cantidad(kg)  ·  después: Cabezas  ·  línea sig.: categoría
       const MONEY = /\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2}/g;

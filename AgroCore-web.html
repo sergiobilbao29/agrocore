@@ -2633,6 +2633,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'03/09/2026',
+      titulo:'🐄 v2.176.0 — Importar liquidación de hacienda: ahora lee comprobantes por cabeza',
+      desc:'El <b>Importar de PDF</b> de <b>Liquidaciones de animales</b> ahora reconoce los comprobantes que facturan <b>por cabeza</b> (unidad "Cabeza", por ejemplo los de TECCAS), además de los que ya venían por kilo vivo. Antes tomaba el encabezado pero <b>no cargaba los renglones</b>; ahora trae categoría, raza, cabezas, precio por cabeza, importe bruto e IVA de cada línea. Igual conviene revisar los renglones antes de guardar.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/09/2026',
       titulo:'👷 v2.175.0 — Empleados: cuenta corriente con saldo que arrastra + sueldo por mes',
       desc:'La ficha del empleado ahora <b>abre siempre en el mes actual</b>. Sumamos una <b>cuenta corriente</b>: cada mes muestra el <b>saldo a pagar con arrastre</b> (saldo del mes anterior a favor o en contra + lo devengado del mes − gastos/adelantos). Al <b>Registrar pago</b> ponés el <b>monto real</b> que transferís (puede ser menos o más que el total) y la <b>diferencia queda como saldo</b> que pasa solo al mes siguiente — como el "cuadrito a favor/en contra" del Excel. Para los <b>sueldos que cambian todos los meses</b> (administración, aumento de comercio), usá el botón <b>"💵 Sueldo del mes"</b>: el valor queda <b>fijo para ese mes</b>, así cambiarlo no te modifica los meses ya cargados.' },
