@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.177.0';
-const AGROCORE_BUILD = new Date('2026-09-03').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.178.0';
+const AGROCORE_BUILD = new Date('2026-09-04').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -5366,6 +5366,7 @@ const viajeSchema = z.object({
   depositoOrigenId: z.string().nullable().optional(),   // silo/silobolsa de origen (excluye campaña)
   origenDepositos: z.array(z.object({ depositoId: z.string(), kg: z.coerce.number() })).nullable().optional(), // carga desde varios depósitos
   depositoDestinoId: z.string().nullable().optional(),
+  compradorClienteId: z.string().nullable().optional(), // a quién le vendés (puede ≠ acopio de descarga)
   liquidacionCerealId: z.string().nullable().optional(),
   contratoCerealId: z.string().nullable().optional(),   // contrato/confirmación al que se imputa la CP
 

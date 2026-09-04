@@ -954,7 +954,8 @@ model Viaje {
   origenDepositos     Json?      // carga desde VARIOS depósitos: [{ depositoId, kg }] (suma = kg del viaje). Si está, reemplaza a depositoOrigenId para el egreso de stock.
   // ---- Destino del cereal (cuando aplica) ----
   destinoTipo         String?    // "cerealera" | "venta_directa" | "otro" (NULL = no aplica)
-  depositoDestinoId   String?    // si va a cerealera, depósito destino del cereal
+  depositoDestinoId   String?    // si va a cerealera, depósito destino del cereal (lugar físico de entrega)
+  compradorClienteId  String?    // a quién le vendés el grano (puede ser distinto del acopio donde descargás)
   liquidacionCerealId String?    // si ya se cargó la liquidación de venta, su id
   contratoCerealId    String?    // contrato/confirmación de negocio al que se imputa esta CP
   // ---- IDs relacionales (v0.8.2) ----

@@ -2633,6 +2633,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/09/2026',
+      titulo:'🚚 v2.178.0 — El comprador se carga en el viaje (carta de porte)',
+      desc:'Ahora, al <b>cargar el viaje / carta de porte</b>, en <b>Destino del cereal</b> podés elegir el <b>Comprador (a quién le vendés)</b>. Puede ser <b>distinto del acopio</b> donde descargás el camión (ej. le vendés a <i>Amashi</i> pero entregás en <i>JHB</i>). Queda guardado en la CP y sirve para <b>prellenar la liquidación</b> después, sin tener que acordarte a quién era cada camión. El comprador es opcional: si todavía no sabés a quién vendés, lo dejás en blanco y lo definís al hacer la liquidación.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/09/2026',
       titulo:'🌾 v2.177.0 — Liquidación de cereal: comprador ≠ acopio + varios camiones en una liquidación',
       desc:'Dos mejoras en <b>Liquidaciones de cereal</b> para el negocio real: <b>(1)</b> el <b>comprador</b> (quien te liquida, ej. <i>Amashi</i>) puede ser <b>distinto del acopio</b> donde descargaste (ej. <i>JHB</i>): cargá el <b>Acopio / cerealera (dónde entregaste)</b> arriba y el <b>Cliente comprador</b> aparte. <b>(2)</b> Al cargar una liquidación a mano ahora podés <b>agrupar varias cartas de porte (camiones)</b>: tildás los viajes pendientes que entran en esa liquidación y con <b>“➕ Sumar kg de las tildadas”</b> completás los kilos brutos. Sirve para los que hacen una sola liquidación con 4 o 5 camiones adentro (y también seguís pudiendo liquidar por camión desde Posición de granos).' },
@@ -18574,8 +18577,10 @@ async function viajeForm(id=null) {
   if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
   if (!state.cache.productos) { try { state.cache.productos = (await api('/api/productos')).data || []; } catch { state.cache.productos = []; } }
   if (!state.cache.contratosCereal) { try { state.cache.contratosCereal = (await api('/api/contratos-cereal')).data || []; } catch { state.cache.contratosCereal = []; } }
+  if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data || []; } catch { state.cache.clientes = []; } }
   const _camps = state.cache.campanas || [];
   const _contratos = (state.cache.contratosCereal || []).filter(c => c.estado !== 'anulado');
+  const _clientesV = (state.cache.clientes || []).slice().sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||''));
   const _campLabel = (c) => c.nombre || `${c.cultivo||''}${c.lote?.nombre?' · '+c.lote.nombre:''}${c.ciclo?' · '+c.ciclo:''}`;
   openModal({
     title: id?'Editar viaje':'Nuevo viaje', size:'max-w-4xl',
@@ -18656,6 +18661,10 @@ async function viajeForm(id=null) {
           <select id="f-ddep" class="input">
             <option value="">— Cargá cerealeras desde Stock → Cerealeras —</option>
           </select>
+        </div>
+        <div class="col-span-3"><label class="label">Comprador (a quién le vendés)</label>
+          <select id="f-comprador" class="input"><option value="">— Sin comprador / a definir —</option>${_clientesV.map(c=>`<option value="${esc(c.id)}" ${c.id===it.compradorClienteId?'selected':''}>${esc(c.razonSocial)}</option>`).join('')}</select>
+          <div class="text-[10px] text-slate-500 mt-1">El comprador puede ser distinto del acopio donde descargás (ej. le vendés a Amashi pero entregás en JHB). Se usa para prellenar la liquidación.</div>
         </div>
         <div class="col-span-3 text-[11px] text-amber-800" id="f-dhint">${it.destinoTipo==='venta_directa'?'💡 Después de guardar este viaje, podés cargar la liquidación de cereal desde la lista de viajes (botón 🧾).':''}</div>
         <div class="col-span-3"><label class="label">📄 Contrato de cereal (imputar esta carta de porte)</label>
@@ -18960,6 +18969,7 @@ async function viajeSave(id) {
     observaciones:   $('#f-obs').value.trim() || null,
     destinoTipo:        $('#f-dtipo')?.value || null,
     depositoDestinoId:  ['cerealera','otro'].includes($('#f-dtipo')?.value) ? ($('#f-ddep')?.value || null) : null,
+    compradorClienteId: $('#f-comprador')?.value || null,
     contratoCerealId:   $('#f-contrato')?.value || null,
     transportistaId: $('#f-trans-sel')?.value || null,
     choferId:        $('#f-chofer-sel')?.value || null,
