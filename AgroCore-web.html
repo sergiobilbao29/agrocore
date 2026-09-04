@@ -2633,6 +2633,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/09/2026',
+      titulo:'🌾 v2.177.0 — Liquidación de cereal: comprador ≠ acopio + varios camiones en una liquidación',
+      desc:'Dos mejoras en <b>Liquidaciones de cereal</b> para el negocio real: <b>(1)</b> el <b>comprador</b> (quien te liquida, ej. <i>Amashi</i>) puede ser <b>distinto del acopio</b> donde descargaste (ej. <i>JHB</i>): cargá el <b>Acopio / cerealera (dónde entregaste)</b> arriba y el <b>Cliente comprador</b> aparte. <b>(2)</b> Al cargar una liquidación a mano ahora podés <b>agrupar varias cartas de porte (camiones)</b>: tildás los viajes pendientes que entran en esa liquidación y con <b>“➕ Sumar kg de las tildadas”</b> completás los kilos brutos. Sirve para los que hacen una sola liquidación con 4 o 5 camiones adentro (y también seguís pudiendo liquidar por camión desde Posición de granos).' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'03/09/2026',
       titulo:'🐄 v2.176.0 — Importar liquidación de hacienda: ahora lee comprobantes por cabeza',
       desc:'El <b>Importar de PDF</b> de <b>Liquidaciones de animales</b> ahora reconoce los comprobantes que facturan <b>por cabeza</b> (unidad "Cabeza", por ejemplo los de TECCAS), además de los que ya venían por kilo vivo. Antes tomaba el encabezado pero <b>no cargaba los renglones</b>; ahora trae categoría, raza, cabezas, precio por cabeza, importe bruto e IVA de cada línea. Igual conviene revisar los renglones antes de guardar.' },
@@ -27860,14 +27863,16 @@ function pgImportarParaEntrega(viajeId){ state._pgLinkEntrega=viajeId; state._pg
 async function liqForm(edit=null) {
   const ed = edit || {};
   state._liqEditId = ed.id || null;
-  let depos=[], productos=[], clientes=[], contratos=[];
+  let depos=[], productos=[], clientes=[], contratos=[], entregasPend=[];
   try {
-    const [d, p, c, ct] = await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes'), api('/api/contratos-cereal').catch(()=>({data:[]}))]);
+    const [d, p, c, ct, en] = await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes'), api('/api/contratos-cereal').catch(()=>({data:[]})), api('/api/entregas-grano').catch(()=>({data:[]}))]);
     depos = (d.data||[]).filter(x => x.activo && x.tipo === 'cerealera');
     // Liquidación de cereal: solo granos/cereales (no animales ni insumos).
     productos = (p.data||[]).filter(x => x.activo && /gran|cereal/i.test(x.categoria||''));
     clientes = c.data||[];
     contratos = (ct.data||[]).filter(x => x.estado !== 'anulado');
+    // Cartas de porte (viajes) todavía no liquidadas del todo, para agrupar varias en una liquidación.
+    entregasPend = (en.data||[]).filter(x => x.estado !== 'liquidada').sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
   } catch (e) { return toast(e.message,'error'); }
   if (!depos.length) return toast('Cargá primero una cerealera','warn');
   if (!productos.length) return toast('No hay granos cargados. Cargá un cereal o registrá un viaje/compra de grano.','warn');
@@ -27875,8 +27880,8 @@ async function liqForm(edit=null) {
   openModal({
     title: state._liqEditId ? '✏️ Editar liquidación de cereal' : '🧾 Nueva liquidación de cereal', size:'max-w-4xl',
     body: `
-      <div class="grid grid-cols-4 gap-3 mb-3">
-        <div class="col-span-2"><label class="label">Cerealera *</label>
+      <div class="grid grid-cols-4 gap-3 mb-1">
+        <div class="col-span-2"><label class="label">Acopio / cerealera (dónde entregaste) *</label>
           <select id="lq-dep" class="input">${depos.map(d=>`<option value="${d.id}" ${d.id===ed.depositoId?'selected':''}>${esc(d.nombre)}</option>`).join('')}</select>
         </div>
         <div><label class="label">Fecha *</label><input id="lq-fec" type="date" class="input" value="${_fec}"/></div>
@@ -27884,13 +27889,27 @@ async function liqForm(edit=null) {
         <div class="col-span-2"><label class="label">Producto *</label>
           <select id="lq-prod" class="input">${productos.map(p=>`<option value="${p.id}" ${p.id===ed.productoId?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select>
         </div>
-        <div class="col-span-2"><label class="label">Cliente comprador</label>
+        <div class="col-span-2"><label class="label">Cliente comprador (quien te liquida)</label>
           <select id="lq-cli" class="input"><option value="">— Sin cliente / interno —</option>${clientes.map(c=>`<option value="${c.id}" ${c.id===ed.clienteId?'selected':''}>${esc(c.razonSocial)}</option>`).join('')}</select>
         </div>
         <div class="col-span-2"><label class="label">Contrato (pesificación de)</label>
           <select id="lq-contrato" class="input"><option value="">— Sin contrato —</option>${contratos.map(c=>`<option value="${c.id}" ${c.id===ed.contratoCerealId?'selected':''}>${esc(c.numeroInterno||c.numeroCorredor||'s/n')} · ${esc(c.cereal||'')}${c.cosecha?' · '+esc(c.cosecha):''}</option>`).join('')}</select>
         </div>
       </div>
+      <div class="text-[11px] text-slate-500 mb-3">El <b>comprador</b> (ej. Amashi) puede ser distinto del <b>acopio</b> donde descargaste (ej. JHB): poné el acopio arriba y el comprador en "Cliente comprador".</div>
+      ${(!state._liqEditId && entregasPend.length) ? `
+      <div class="kpi p-0 overflow-hidden mb-3">
+        <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+          <span class="text-sm font-medium text-slate-700">Cartas de porte que agrupa esta liquidación <span class="text-[11px] text-slate-400">(opcional · podés poner varios camiones)</span></span>
+          <button type="button" class="btn btn-secondary text-xs" onclick="liqSumarKgCP()">➕ Sumar kg de las tildadas</button>
+        </div>
+        <div style="max-height:26vh;overflow:auto">
+          <table class="data text-sm"><thead><tr><th style="width:30px"></th><th>Fecha</th><th>CP</th><th>Especie</th><th>Destino</th><th class="text-right">Kg</th><th>Estado</th></tr></thead>
+            <tbody>${entregasPend.map(e=>`<tr class="table-row"><td><input type="checkbox" class="lq-cp" value="${esc(e.id)}" data-kg="${Number(e.kilos||0)}"/></td><td>${fmtDate(e.fecha)}</td><td class="font-mono">${esc(e.cpe||'—')}</td><td>${esc(e.especie||'—')}</td><td>${esc(e.cerealera||e.destino||'—')}</td><td class="text-right">${fmtN(Math.round(e.kilos||0))}</td><td>${e.estado==='parcial'?'<span class="badge badge-blue">Parcial</span>':'<span class="badge badge-yellow">Pendiente</span>'}</td></tr>`).join('')}</tbody>
+          </table>
+        </div>
+        <div class="px-3 py-1 text-[11px] text-slate-500">Tildá los camiones que entran en esta liquidación. "Sumar kg" completa los Kilos brutos con la suma de los tildados.</div>
+      </div>` : ''}
       <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
         <div class="col-span-4 text-xs text-blue-800 font-medium">⚖️ Cálculo del bruto</div>
         <div><label class="label">Kilos brutos *</label><input id="lq-brut" type="number" step="0.01" class="input" value="${ed.kilosBrutos!=null?ed.kilosBrutos:''}" oninput="liqRecalc()"/></div>
@@ -27927,6 +27946,8 @@ async function liqForm(edit=null) {
     liqRecalc();
   }, 0);
 }
+// Suma los kg de las cartas de porte tildadas al campo Kilos brutos.
+function liqSumarKgCP(){ const s=$$('.lq-cp:checked').reduce((a,c)=>a+Number(c.dataset.kg||0),0); if(s>0){ const el=$('#lq-brut'); if(el){ el.value=Math.round(s); liqRecalc(); } } else { toast('Tildá al menos una carta de porte','warn'); } }
 function liqAddConc(c = { tipo:'descuento', concepto:'', importe:0 }) {
   const row = `<tr data-lc>
     <td><select class="input text-sm" data-lcf="tipo" onchange="liqRecalc()"><option value="descuento" ${c.tipo==='descuento'?'selected':''}>Descuento</option><option value="impuesto" ${c.tipo==='impuesto'?'selected':''}>Impuesto</option></select></td>
@@ -27975,6 +27996,8 @@ async function liqSave() {
     fechaCobroEst: $('#lq-cobro').value ? new Date($('#lq-cobro').value).toISOString() : null,
     observaciones: $('#lq-obs').value.trim()||null,
   };
+  // Cartas de porte (camiones) que agrupa esta liquidación — solo al crear.
+  if (!state._liqEditId) { const vids = $$('.lq-cp:checked').map(c=>c.value); if (vids.length) data.viajeIds = vids; }
   if (!data.kilosBrutos || !data.precioPorTn) return toast('Cargá kilos y precio','warn');
   try {
     if (state._liqEditId) {

@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.176.0';
+const AGROCORE_VERSION = '2.177.0';
 const AGROCORE_BUILD = new Date('2026-09-03').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10857,12 +10857,14 @@ const _AYUDA_KB = [
       'El sistema lee los renglones y detecta la categoría de cada animal.',
       'Confirmá: descuenta el stock real y el de SENASA y genera la cuenta a cobrar.'],
     atajo:{ page:'liquidacionesHacienda', label:'Abrir Liquidaciones de animales' } },
-  { id:'liq_cereal', terms:['liquidacion de cereal','liquidacion de granos','liquidacion cerealera','venta de granos','1116','entrega de cereal'],
-    titulo:'Liquidación de cereal',
+  { id:'liq_cereal', terms:['liquidacion de cereal','liquidacion de granos','liquidacion cerealera','venta de granos','1116','entrega de cereal','comprador distinto acopio','vendi a uno entregue en otro','amashi jhb','varios camiones una liquidacion','liquidacion con varias cartas de porte','agrupar cartas de porte'],
+    titulo:'Liquidación de cereal (comprador ≠ acopio, y varios camiones)',
     pasos:[
-      'Entrá a Liquidaciones (cereal) y cargá la liquidación de la cerealera.',
-      'Solo aparecen los granos del catálogo.',
-      'Se registra el ingreso y el movimiento de stock a pizarra.'],
+      'Entrá a Comercial → Liquidaciones cereal y cargá la liquidación (o importala del PDF).',
+      'El COMPRADOR (quien te liquida, ej. Amashi) puede ser distinto del ACOPIO donde descargaste (ej. JHB): poné el acopio en "Acopio / cerealera (dónde entregaste)" y el comprador en "Cliente comprador".',
+      'Si una sola liquidación agrupa varios camiones, tildá las cartas de porte pendientes que entran y tocá "➕ Sumar kg de las tildadas" para completar los kilos.',
+      'Solo aparecen los granos del catálogo. Se descuenta el stock del acopio y se arma la cuenta a cobrar del comprador.',
+      'Si te liquidan por camión, podés vincular la liquidación a cada viaje desde Posición de granos.'],
     atajo:{ page:'liquidaciones', label:'Abrir Liquidaciones' } },
   { id:'labor', terms:['labor','cosecha','siembra','pulverizacion','fumigacion','fertilizacion','laboreo','aplicacion','trabajo en el lote','tarea en el campo'],
     titulo:'Cargar una labor en un lote',
