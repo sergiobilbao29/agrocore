@@ -1050,6 +1050,10 @@ model Empleado {
   aseguradora     String?  // nombre de la aseguradora / ART
   aseguradoraTel  String?  // teléfono de emergencia de la aseguradora
   seguroActivo    Boolean  @default(false)
+  // ---- Datos para transferir el sueldo (planilla de pagos) ----
+  alias           String?  // alias de la cuenta (CBU/CVU)
+  cbu             String?  // CBU / CVU
+  bancoNombre     String?  // banco de la cuenta
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   movimientos     MovimientoEmpleado[]
   liquidaciones   LiquidacionSueldo[]

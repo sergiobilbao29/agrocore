@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.178.0';
-const AGROCORE_BUILD = new Date('2026-09-04').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.180.0';
+const AGROCORE_BUILD = new Date('2026-09-07').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -5904,6 +5904,10 @@ mountCrud({
     aseguradora: z.string().nullable().optional(),
     aseguradoraTel: z.string().nullable().optional(),
     seguroActivo: z.boolean().optional(),
+    // ---- Datos para transferir el sueldo (planilla de pagos) ----
+    alias: z.string().nullable().optional(),
+    cbu: z.string().nullable().optional(),
+    bancoNombre: z.string().nullable().optional(),
   }),
   orderBy: { apellido: 'asc' },
   searchFields: ['nombre', 'apellido', 'dni', 'cuil', 'puesto'],

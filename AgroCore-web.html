@@ -2633,6 +2633,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/09/2026',
+      titulo:'🏦 v2.180.0 — Planilla de pagos con alias/CBU + arreglo del arrastre de sueldos',
+      desc:'Tres mejoras en <b>Empleados</b>: <b>(1)</b> en la ficha del empleado ahora podés cargar <b>Alias, CBU y Banco</b>. <b>(2)</b> Botón <b>“🖨️ Planilla de pagos”</b> en la nómina: arma la lista de sueldos a pagar del mes con el monto y el alias/CBU al lado de cada uno, lista para imprimir; podés editar montos y <b>sumar otros pagos</b> que no sean de empleados. <b>(3)</b> Arreglo importante en la liquidación: el <b>saldo que arrastra</b> de un mes al otro ahora coincide siempre con lo que muestra la ficha (antes podía salir invertido si editabas movimientos después de liquidar) y el resumen anual muestra el <b>Total pagado</b> real. Si editás movimientos de un mes ya liquidado, ahora te avisa que <b>anules y vuelvas a liquidar</b>.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/09/2026',
       titulo:'🚚 v2.178.0 — El comprador se carga en el viaje (carta de porte)',
       desc:'Ahora, al <b>cargar el viaje / carta de porte</b>, en <b>Destino del cereal</b> podés elegir el <b>Comprador (a quién le vendés)</b>. Puede ser <b>distinto del acopio</b> donde descargás el camión (ej. le vendés a <i>Amashi</i> pero entregás en <i>JHB</i>). Queda guardado en la CP y sirve para <b>prellenar la liquidación</b> después, sin tener que acordarte a quién era cada camión. El comprador es opcional: si todavía no sabés a quién vendés, lo dejás en blanco y lo definís al hacer la liquidación.' },
@@ -20700,7 +20703,10 @@ pages.empleados = async function() {
     </div>
     <div class="mb-3 flex items-center justify-between">
       <h3 class="font-semibold text-slate-800">Nómina</h3>
-      ${can('finanzas:create') || can('rrhh:create') ? `<button class="btn btn-primary" onclick="empleForm()">+ Nuevo empleado</button>`:''}
+      <div class="flex items-center gap-2">
+        <button class="btn btn-secondary" onclick="empPlanillaPagos()" title="Lista de sueldos a pagar del mes con alias/CBU, lista para imprimir">🖨️ Planilla de pagos</button>
+        ${can('finanzas:create') || can('rrhh:create') ? `<button class="btn btn-primary" onclick="empleForm()">+ Nuevo empleado</button>`:''}
+      </div>
     </div>
     <p class="text-xs text-slate-500 mb-2">Tocá <b>📋 Ver planilla</b> (o hacé clic en la fila del empleado) para abrir su planilla de gastos, ganancias y liquidación de sueldo. El lápiz ✏️ es solo para editar sus datos.</p>
     <div class="kpi p-0 overflow-hidden">
@@ -20790,6 +20796,21 @@ function empleForm(id=null) {
           </div>
         </div>
         <div class="text-[11px] text-slate-500 mt-2">💡 Al dar de baja al empleado, el seguro se marca inactivo automáticamente. Al volver a darlo de alta, acordate de reactivar el seguro con la aseguradora.</div>
+      </div>
+      <div class="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
+        <div class="text-xs text-slate-600 font-semibold mb-2">🏦 Datos para transferir el sueldo</div>
+        <div class="grid grid-cols-3 gap-3">
+          <div><label class="label">Alias</label>
+            <input id="f-alias" class="input" value="${esc(it.alias||'')}" placeholder="Ej: JUAN.PEREZ.CAMPO"/>
+          </div>
+          <div><label class="label">CBU / CVU</label>
+            <input id="f-cbu" class="input" value="${esc(it.cbu||'')}" placeholder="22 dígitos" inputmode="numeric"/>
+          </div>
+          <div><label class="label">Banco</label>
+            <input id="f-bancoNombre" class="input" value="${esc(it.bancoNombre||'')}" placeholder="Ej: Banco Nación"/>
+          </div>
+        </div>
+        <div class="text-[11px] text-slate-500 mt-2">💡 Estos datos aparecen en la <b>Planilla de pagos</b> (botón 🖨️ en la nómina) al lado del monto a transferir de cada uno.</div>
       </div>
       <div class="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
         <div class="text-xs text-slate-600 font-semibold mb-2">⚙️ Tipo de empleado y forma de cobro</div>
@@ -20893,6 +20914,9 @@ async function empleSave(id) {
     aseguradora: $('#f-aseg')?.value.trim() || null,
     aseguradoraTel: $('#f-asegtel')?.value.trim() || null,
     seguroActivo: $('#f-act').checked ? ($('#f-seg')?.checked || false) : false,
+    alias: $('#f-alias')?.value.trim() || null,
+    cbu: $('#f-cbu')?.value.trim() || null,
+    bancoNombre: $('#f-bancoNombre')?.value.trim() || null,
     tipo: $('#f-tipo')?.value || 'propio',
     cobraPorcentaje: $('#f-cp')?.checked || false,
     porcentajeDefault: $('#f-pd')?.value ? Number($('#f-pd').value) : null,
@@ -20950,6 +20974,129 @@ function empCatLabel(c){
   const cat = (state.cache.catPlanilla||[]).find(x=>x.codigo===c);
   if (cat) return cat.nombre;
   return ({sueldo:'Sueldo',horas:'Horas trabajadas',dias:'Días trabajados',adelanto:'Adelanto',compra:'Compra personal',premio:'Premio / bono',descuento:'Descuento',otro_ing:'Otro ingreso',otro_gasto:'Otro gasto',otro:'Otro'})[c]||c;
+}
+
+// --- PLANILLA DE PAGOS: lista de sueldos a transferir del mes con alias/CBU ---
+// Calcula, para cada empleado activo, lo que corresponde pagar este mes (con arrastre)
+// y arma una hoja imprimible con monto + alias + CBU al lado de cada uno. Permite
+// sumar a mano otros pagos (que no son de empleados) antes de imprimir.
+async function empPlanillaPagos(){
+  const periodo = empPeriodoHoy();
+  let emps = state.cache.empleados;
+  try { if(!emps){ emps = await crudList('empleados'); } } catch(e){ return toast(e.message,'error'); }
+  const activos = (emps||[]).filter(e=>e.activo!==false);
+  if (!activos.length) return toast('No hay empleados activos','warn');
+  toast('Calculando sueldos a pagar…','info');
+  const rows = [];
+  await Promise.all(activos.map(async e=>{
+    let movs=[], liqs=[];
+    try { movs=(await api('/api/empleados/'+e.id+'/movimientos')).data||[]; } catch(_){}
+    try { liqs=(await api('/api/empleados/'+e.id+'/liquidaciones')).data||[]; } catch(_){}
+    const yaLiq = liqs.some(l=>l.periodo===periodo);
+    const aPagar = empSaldoAnterior(e,movs,liqs,periodo) + empDevengadoPeriodo(e,movs,liqs,periodo);
+    rows.push({ nombre:`${e.apellido||''}, ${e.nombre||''}`.trim(), alias:e.alias||'', cbu:e.cbu||'', banco:e.bancoNombre||'', monto: yaLiq?0:Math.max(0,aPagar), yaLiq });
+  }));
+  rows.sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const trHtml = (r)=>`<tr class="pp-row border-b border-slate-100">
+      <td class="px-2 py-1 text-center"><input type="checkbox" class="pp-inc" ${(!r.yaLiq && r.monto>0)?'checked':''} onchange="empPlanillaRecalc()"></td>
+      <td class="px-2 py-1"><input class="input pp-nom text-sm" value="${esc(r.nombre)}" ${r.yaLiq?'':''}/>${r.yaLiq?'<span class="text-[10px] text-slate-400"> · ya liquidado este mes</span>':''}</td>
+      <td class="px-2 py-1"><input class="input pp-alias text-sm" value="${esc(r.alias)}" placeholder="alias"/></td>
+      <td class="px-2 py-1"><input class="input pp-cbu text-sm font-mono" value="${esc(r.cbu)}" placeholder="CBU/CVU"/></td>
+      <td class="px-2 py-1"><input class="input pp-banco text-sm" value="${esc(r.banco)}" placeholder="banco"/></td>
+      <td class="px-2 py-1"><input type="number" step="0.01" class="input pp-monto text-sm text-right" value="${r.monto?Math.round(r.monto):''}" oninput="empPlanillaRecalc()"/></td>
+    </tr>`;
+  openModal({
+    title:'🖨️ Planilla de pagos · '+empMesLabel(periodo),
+    size:'max-w-4xl',
+    body:`
+      <p class="text-xs text-slate-500 mb-2">Revisá los montos (podés editarlos), completá alias/CBU si falta y sumá otros pagos que no sean de empleados. Después tocá <b>Imprimir</b>.</p>
+      <div class="overflow-x-auto border border-slate-200 rounded-lg">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-slate-600"><tr>
+            <th class="px-2 py-2 w-8">✓</th><th class="px-2 py-2 text-left">Beneficiario</th>
+            <th class="px-2 py-2 text-left">Alias</th><th class="px-2 py-2 text-left">CBU / CVU</th>
+            <th class="px-2 py-2 text-left">Banco</th><th class="px-2 py-2 text-right">Monto</th>
+          </tr></thead>
+          <tbody id="pp-tbody">${rows.map(trHtml).join('')}</tbody>
+        </table>
+      </div>
+      <div class="flex items-center justify-between mt-3">
+        <button class="btn btn-secondary text-sm" onclick="empPlanillaAddLine()">➕ Agregar otro pago (no empleado)</button>
+        <div class="text-right"><span class="text-xs text-slate-500">Total a transferir</span><div class="text-xl font-bold text-emerald-700" id="pp-total">$ 0</div></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            <button class="btn btn-primary" onclick="empPlanillaImprimir()">🖨️ Imprimir</button>`
+  });
+  empPlanillaRecalc();
+}
+function empPlanillaAddLine(){
+  const tb = document.getElementById('pp-tbody'); if(!tb) return;
+  const tr = document.createElement('tr'); tr.className='pp-row border-b border-slate-100';
+  tr.innerHTML = `<td class="px-2 py-1 text-center"><input type="checkbox" class="pp-inc" checked onchange="empPlanillaRecalc()"></td>
+      <td class="px-2 py-1"><input class="input pp-nom text-sm" placeholder="Nombre / concepto"/></td>
+      <td class="px-2 py-1"><input class="input pp-alias text-sm" placeholder="alias"/></td>
+      <td class="px-2 py-1"><input class="input pp-cbu text-sm font-mono" placeholder="CBU/CVU"/></td>
+      <td class="px-2 py-1"><input class="input pp-banco text-sm" placeholder="banco"/></td>
+      <td class="px-2 py-1"><input type="number" step="0.01" class="input pp-monto text-sm text-right" oninput="empPlanillaRecalc()"/></td>`;
+  tb.appendChild(tr);
+}
+function empPlanillaLeer(){
+  return Array.from(document.querySelectorAll('#pp-tbody .pp-row')).map(tr=>({
+    inc: tr.querySelector('.pp-inc')?.checked,
+    nombre: tr.querySelector('.pp-nom')?.value.trim()||'',
+    alias: tr.querySelector('.pp-alias')?.value.trim()||'',
+    cbu: tr.querySelector('.pp-cbu')?.value.trim()||'',
+    banco: tr.querySelector('.pp-banco')?.value.trim()||'',
+    monto: Number(tr.querySelector('.pp-monto')?.value||0),
+  })).filter(r=>r.inc && (r.nombre || r.monto));
+}
+function empPlanillaRecalc(){
+  const tot = empPlanillaLeer().reduce((a,r)=>a+(r.monto||0),0);
+  const el = document.getElementById('pp-total'); if(el) el.textContent = fmt$(tot);
+}
+function empPlanillaImprimir(){
+  const rows = empPlanillaLeer();
+  if (!rows.length) return toast('No hay pagos tildados para imprimir','warn');
+  const periodo = empPeriodoHoy();
+  const empresa = (state.user?.companies?.find(c=>c.id===state.companyId)||{}).name || 'Empresa';
+  const total = rows.reduce((a,r)=>a+(r.monto||0),0);
+  const hoy = new Date().toLocaleDateString('es-AR');
+  const filas = rows.map((r,i)=>`<tr>
+      <td class="c">${i+1}</td>
+      <td>${esc(r.nombre)||'—'}</td>
+      <td>${esc(r.alias)||'—'}</td>
+      <td class="mono">${esc(r.cbu)||'—'}</td>
+      <td>${esc(r.banco)||'—'}</td>
+      <td class="r">${fmt$(r.monto||0)}</td>
+      <td class="c" style="width:70px"></td>
+    </tr>`).join('');
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Planilla de pagos ${empMesLabel(periodo)}</title>
+    <style>
+      *{font-family:Arial,Helvetica,sans-serif;box-sizing:border-box}
+      body{margin:24px;color:#1f2937}
+      h1{color:#143C19;font-size:18px;margin:0 0 2px}
+      .sub{color:#6b7280;font-size:12px;margin-bottom:14px}
+      table{width:100%;border-collapse:collapse;font-size:12px}
+      th,td{border:1px solid #cbd5e1;padding:6px 8px;text-align:left}
+      th{background:#143C19;color:#fff;font-size:11px}
+      td.r,th.r{text-align:right}.c{text-align:center}.mono{font-family:'Courier New',monospace;font-size:11px}
+      tfoot td{font-weight:bold;background:#f4f3ea}
+      .pie{margin-top:22px;color:#6b7280;font-size:11px}
+      @media print{body{margin:12px}}
+    </style></head><body>
+    <h1>Planilla de pagos — ${empresa}</h1>
+    <div class="sub">Período: ${empMesLabel(periodo)} · Emitida: ${hoy}</div>
+    <table>
+      <thead><tr><th class="c" style="width:26px">#</th><th>Beneficiario</th><th>Alias</th><th>CBU / CVU</th><th>Banco</th><th class="r" style="width:120px">Monto</th><th class="c" style="width:70px">✓ Pagado</th></tr></thead>
+      <tbody>${filas}</tbody>
+      <tfoot><tr><td colspan="5" class="r">TOTAL A TRANSFERIR</td><td class="r">${fmt$(total)}</td><td></td></tr></tfoot>
+    </table>
+    <div class="pie">${rows.length} pago${rows.length===1?'':'s'} · Generado por AgroCore · agrocore.ar</div>
+    <script>window.onload=function(){setTimeout(function(){window.print();},250);}<\/script>
+  </body></html>`;
+  const w = window.open('','_blank','width=900,height=1000');
+  if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write(html); w.document.close();
 }
 
 // Abre la ficha de un empleado: trae sus movimientos y liquidaciones y la dibuja.
@@ -21011,7 +21158,12 @@ function empFichaRender() {
   const saldoAnt     = empSaldoAnterior(emp, movs, liqs, mes);   // + a favor del empleado, − debe
   const aPagarAcum   = saldoAnt + neto;                          // total adeudado al empleado (con arrastre) antes de pagar este mes
   const pagadoMes    = liq ? Number(liq.pagado!=null?liq.pagado:(liq.neto||0)) : 0;
-  const saldoCierre  = saldoAnt + neto - pagadoMes;              // lo que queda arrastrando al mes siguiente
+  // Para meses YA LIQUIDADOS usamos el neto CONGELADO de la liquidación (mismo que el arrastre),
+  // así lo que muestra la ficha del mes coincide exacto con lo que pasa al mes siguiente.
+  const netoLiq      = liq ? (Number(liq.totalGanancias||0) - Number(liq.totalGastos||0)) : neto;
+  const saldoCierre  = saldoAnt + netoLiq - pagadoMes;           // lo que queda arrastrando al mes siguiente
+  // ¿Se editaron movimientos DESPUÉS de liquidar? (el neto actual ya no coincide con el congelado)
+  const liqDesactualizada = liq && Math.abs(netoLiq - neto) > 0.5;
 
   const canC = can('rrhh:create')||can('finanzas:create');
   const canU = can('rrhh:update')||can('finanzas:update');
@@ -21074,6 +21226,9 @@ function empFichaRender() {
         </div>
         ${canD?`<button class="btn btn-secondary text-xs" onclick='empLiqAnular(${JSON.stringify(liq.id)})'>Anular liquidación</button>`:''}
       </div>
+      ${liqDesactualizada?`<div class="mt-3 rounded-lg px-3 py-2 text-xs" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d">
+        ⚠️ <b>Liquidación desactualizada.</b> Editaste movimientos después de liquidar: el neto de este mes ahora es <b>${fmt$(neto)}</b> pero la liquidación quedó congelada en <b>${fmt$(netoLiq)}</b>. Para que el saldo arrastre bien, <b>anulá y volvé a liquidar</b> este mes.
+      </div>`:''}
     </div>`;
   } else {
     const saldoAntTxt = Math.abs(saldoAnt) < 0.5 ? '' :
@@ -21113,7 +21268,7 @@ function empFichaRender() {
               <td class="px-3 py-2 text-slate-600 capitalize">${esc(l.medioPago||'')}</td>
               <td class="px-3 py-2 text-right text-emerald-700">${fmt$(l.totalGanancias)}</td>
               <td class="px-3 py-2 text-right text-red-600">${fmt$(l.totalGastos)}</td>
-              <td class="px-3 py-2 text-right font-bold text-slate-800">${fmt$(l.neto)}</td>
+              <td class="px-3 py-2 text-right font-bold text-slate-800">${fmt$(l.pagado!=null?l.pagado:(l.neto||0))}</td>
               <td class="px-3 py-2 text-right">${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='event.stopPropagation();empLiqAnular(${JSON.stringify(l.id)})'>Anular</button>`:''}</td>
             </tr>`).join('')}
           </tbody>
@@ -21124,7 +21279,8 @@ function empFichaRender() {
   // --- Resumen anual (año del mes seleccionado) ---
   const anio = String(mes).slice(0,4);
   const liqsAnio = liqs.filter(l=>String(l.periodo).startsWith(anio+'-'));
-  const totalLiqAnio   = liqsAnio.reduce((a,l)=>a+Number(l.neto||0),0);
+  const _liqPagado     = (l)=> Number(l.pagado!=null ? l.pagado : (l.neto||0));
+  const totalLiqAnio   = liqsAnio.reduce((a,l)=>a+_liqPagado(l),0);   // lo REALMENTE pagado en el año
   const totalGanAnio   = liqsAnio.reduce((a,l)=>a+Number(l.totalGanancias||0),0);
   const totalGastoAnio = liqsAnio.reduce((a,l)=>a+Number(l.totalGastos||0),0);
   const promedioAnio   = liqsAnio.length ? totalLiqAnio/liqsAnio.length : 0;
@@ -21132,9 +21288,9 @@ function empFichaRender() {
     <div class="mt-6">
       <h3 class="font-semibold text-slate-800 mb-2">Resumen anual ${anio}</h3>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-        <div class="kpi"><div class="text-xs text-slate-500">Total liquidado ${anio}</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(totalLiqAnio)}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Total pagado ${anio}</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(totalLiqAnio)}</div></div>
         <div class="kpi"><div class="text-xs text-slate-500">Meses liquidados</div><div class="text-xl font-bold mt-1">${liqsAnio.length} / 12</div></div>
-        <div class="kpi"><div class="text-xs text-slate-500">Promedio mensual</div><div class="text-xl font-bold mt-1">${fmt$(promedioAnio)}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Promedio pagado mensual</div><div class="text-xl font-bold mt-1">${fmt$(promedioAnio)}</div></div>
         <div class="kpi"><div class="text-xs text-slate-500">Ganancias / Gastos del año</div><div class="text-sm font-bold mt-1.5"><span class="text-emerald-700">${fmt$(totalGanAnio)}</span> <span class="text-slate-400">/</span> <span class="text-red-600">${fmt$(totalGastoAnio)}</span></div></div>
       </div>
       <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
@@ -21143,7 +21299,7 @@ function empFichaRender() {
           const l = liqsAnio.find(x=>x.periodo===p);
           return `<button class="kpi text-left ${p===mes?'ring-2 ring-green-600':''}" style="cursor:pointer" onclick='empSetMes(${JSON.stringify(p)})'>
             <div class="text-xs text-slate-500">${EMP_MESES[i].slice(0,3)}</div>
-            <div class="text-sm font-bold mt-0.5 ${l?'text-emerald-700':'text-slate-300'}">${l?fmt$(l.neto):'—'}</div>
+            <div class="text-sm font-bold mt-0.5 ${l?'text-emerald-700':'text-slate-300'}">${l?fmt$(_liqPagado(l)):'—'}</div>
           </button>`;
         }).join('')}
       </div>
