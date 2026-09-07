@@ -2634,6 +2634,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'07/09/2026',
+      titulo:'🏦 v2.183.0 — Importar resumen: el mensaje de cierre usa el saldo actualizado',
+      desc:'Al terminar de importar, el aviso de “según el resumen el banco cierra en…” comparaba contra el saldo de tu cuenta <b>de antes de importar</b>, y mostraba una diferencia falsa (te invitaba a ajustar el saldo inicial sin necesidad). Ahora refresca el saldo de la cuenta después de importar, así el header y el mensaje muestran el <b>saldo nuevo</b> y, si coincide con el banco, te dice “✅ Coincide con el banco”.' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'07/09/2026',
       titulo:'🏦 v2.182.0 — Importar resumen de banco: detecta bien el saldo de cierre (Nación y otros)',
       desc:'Al importar un resumen, algunos bancos (como <b>Banco Nación</b>) muestran en la columna <b>Saldo</b> el importe <b>antes</b> del movimiento (o sea, el resultado del movimiento anterior), no después. AgroCore ahora <b>detecta automáticamente</b> la convención de cada banco encadenando los saldos y calcula el <b>saldo de cierre real</b>. Si no puede verificar el encadenamiento con seguridad, <b>ya no sugiere ajustar el saldo</b> (antes podía proponer un saldo corrido por un movimiento). Así el botón “Ajustar saldo al del banco” solo aparece cuando el número es confiable.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'07/09/2026',
@@ -32809,6 +32812,10 @@ async function bcoImportResumenConfirmar() {
     const mon = c ? c.moneda : 'ARS';
     closeModal();
     state._bcoImportMovs = null;
+    // El saldo de la cuenta CAMBIÓ al importar: refrescamos la lista de cuentas para que
+    // el header y la comparación con el banco usen el saldo NUEVO (no el que había antes,
+    // que mostraba una diferencia falsa por el/los movimientos recién importados).
+    try { const _bc = (await api('/api/banco-cuentas')).data; if (_bc) state.cache.bancoCuentas = _bc; } catch {}
     await bcoVerMovs(cid);
     const cAct = (state.cache.bancoCuentas||[]).find(x => x.id === cid);
     const saldoSistema = cAct ? Number(cAct.saldo||0) : null;
