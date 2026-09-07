@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.180.0';
+const AGROCORE_VERSION = '2.181.0';
 const AGROCORE_BUILD = new Date('2026-09-07').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6325,7 +6325,12 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
     // Sueldo base automático del mes, salvo que ya exista un movimiento de
     // categoría "sueldo" cargado a mano para ese período.
     const haySueldoMov = movs.some(m => m.categoria === 'sueldo');
-    const sueldoBase = (d.incluirSueldoBase !== false && !haySueldoMov) ? Number(emp.sueldo || 0) : 0;
+    // Sueldo base contemplando "por día" (jornal × días), igual que la ficha del frontend.
+    // Antes usaba solo emp.sueldo y para los empleados por día quedaba en 0 (congelaba
+    // Ganancias mal y el saldo salía invertido).
+    const [_liqY, _liqM] = String(d.periodo || '').split('-').map(Number);
+    const sueldoBase = (d.incluirSueldoBase !== false && !haySueldoMov)
+      ? _sueldoBaseMensual(emp, _liqY, (_liqM || 1) - 1) : 0;
     const totalGanancias = totalGananciasMov + sueldoBase;
     const neto = totalGanancias - totalGastos;
     // Cuenta corriente: el monto que realmente se paga puede diferir del neto del

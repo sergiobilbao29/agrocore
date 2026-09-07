@@ -2633,6 +2633,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'07/09/2026',
+      titulo:'🐛 v2.181.0 — Fix liquidación de empleados por día (sueldo base congelado en $0)',
+      desc:'Al liquidar a un empleado que cobra <b>por día</b> (jornal × días), la liquidación estaba congelando el <b>sueldo base en $0</b>, y por eso el neto y el saldo salían invertidos (te decía que el empleado “debía” cuando en realidad tenía a favor). Ahora la liquidación calcula el sueldo base igual que la ficha (jornal × días del mes) y los números cierran bien. <b>Importante:</b> si ya tenías liquidaciones de empleados por día mal congeladas, entrá a ese mes, <b>anulá la liquidación y volvé a liquidar</b> para que tome los valores corregidos. Además, la cabecera de la ficha ahora muestra el sueldo base por día (jornal × días) en vez de “sin cargar”.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/09/2026',
       titulo:'🏦 v2.180.0 — Planilla de pagos con alias/CBU + arreglo del arrastre de sueldos',
       desc:'Tres mejoras en <b>Empleados</b>: <b>(1)</b> en la ficha del empleado ahora podés cargar <b>Alias, CBU y Banco</b>. <b>(2)</b> Botón <b>“🖨️ Planilla de pagos”</b> en la nómina: arma la lista de sueldos a pagar del mes con el monto y el alias/CBU al lado de cada uno, lista para imprimir; podés editar montos y <b>sumar otros pagos</b> que no sean de empleados. <b>(3)</b> Arreglo importante en la liquidación: el <b>saldo que arrastra</b> de un mes al otro ahora coincide siempre con lo que muestra la ficha (antes podía salir invertido si editabas movimientos después de liquidar) y el resumen anual muestra el <b>Total pagado</b> real. Si editás movimientos de un mes ya liquidado, ahora te avisa que <b>anules y vuelvas a liquidar</b>.' },
@@ -21354,8 +21357,9 @@ function empFichaRender() {
           <div class="text-sm text-slate-500">${esc(emp.puesto||'Sin puesto')}${emp.dni?` · DNI ${esc(emp.dni)}`:''}</div>
         </div>
         <div class="text-right">
-          <div class="text-xs text-slate-500">Sueldo base</div>
-          <div class="text-lg font-bold text-slate-800">${emp.sueldo?fmt$(emp.sueldo):'— sin cargar —'}</div>
+          <div class="text-xs text-slate-500">Sueldo base ${emp.porDia?'<span class="text-[10px] text-slate-400">(por día)</span>':''}</div>
+          <div class="text-lg font-bold text-slate-800">${empSueldoBase(emp,mes)>0?fmt$(empSueldoBase(emp,mes)):'— sin cargar —'}</div>
+          ${emp.porDia?`<div class="text-[10px] text-slate-400">${fmt$(emp.jornalDiario||0)}/día × ${Number(emp.diasMes||0)>0?emp.diasMes+' días':'mes completo'}</div>`:''}
         </div>
         ${canU?`<button class="btn btn-secondary text-xs" onclick='empleForm(${JSON.stringify(empId)})'>Editar datos</button>`:''}
       </div>
