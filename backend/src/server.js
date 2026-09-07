@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.181.0';
+const AGROCORE_VERSION = '2.182.0';
 const AGROCORE_BUILD = new Date('2026-09-07').toISOString().slice(0, 10);
 
 // ============================================================
@@ -15161,15 +15161,45 @@ app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermissi
     if (!movs.length) return res.status(422).json({ ok: false, error: 'No pude reconocer movimientos en este archivo. Revisá que sea el resumen del banco (PDF, Excel, CSV o foto), activá la IA (Super Admin → IA) o cargalos a mano.' });
 
     // Saldo de CIERRE del banco (para poder ajustar el saldo inicial de la cuenta y
-    // que cuadre, aunque el resumen sea parcial). Muchos resúmenes traen la columna
-    // Saldo por fila: el cierre es el saldo del movimiento MÁS reciente.
+    // que cuadre, aunque el resumen sea parcial). OJO: la columna "Saldo" NO usa la
+    // misma convención en todos los bancos: algunos muestran el saldo DESPUÉS del
+    // movimiento (Technisys) y otros (p.ej. Banco Nación) el saldo ANTES del movimiento
+    // (o sea, el resultado del movimiento anterior). Detectamos la convención + el orden
+    // del archivo probando 4 hipótesis contra los pares consecutivos y, sólo si hay una
+    // ganadora clara, calculamos el cierre real. Si no, devolvemos null para NO sugerir
+    // un ajuste de saldo equivocado.
     let saldoBanco = null;
-    const conSaldo = movs.filter(m => m.saldo != null && isFinite(m.saldo));
-    if (conSaldo.length) {
-      // Detectar orden del archivo (más reciente primero vs último) por las fechas.
-      const primera = movs[0].fecha, ultima = movs[movs.length - 1].fecha;
-      const masRecientePrimero = primera >= ultima;
-      saldoBanco = masRecientePrimero ? conSaldo[0].saldo : conSaldo[conSaldo.length - 1].saldo;
+    let saldoBancoConfiable = false;
+    {
+      const cs = movs.filter(m => m.saldo != null && isFinite(m.saldo) && isFinite(m.importe));  // en ORDEN DEL ARCHIVO
+      const cent = (n) => Math.round(Number(n) * 100);
+      const eq = (a, b) => Math.abs(cent(a) - cent(b)) <= 1;
+      if (cs.length === 1) {
+        // Un solo movimiento: no se puede saber la convención. Mejor no arriesgar.
+        saldoBanco = cs[0].saldo; saldoBancoConfiable = false;
+      } else if (cs.length >= 2) {
+        let ascPost = 0, ascPre = 0, descPost = 0, descPre = 0;
+        for (let i = 0; i < cs.length - 1; i++) {
+          const p = cs[i], q = cs[i + 1];   // p antes que q en el archivo
+          if (eq(q.saldo, p.saldo + q.importe)) ascPost++;   // archivo viejo→nuevo, saldo=DESPUÉS
+          if (eq(q.saldo, p.saldo + p.importe)) ascPre++;    // archivo viejo→nuevo, saldo=ANTES
+          if (eq(p.saldo, q.saldo + p.importe)) descPost++;  // archivo nuevo→viejo, saldo=DESPUÉS
+          if (eq(p.saldo, q.saldo + q.importe)) descPre++;   // archivo nuevo→viejo, saldo=ANTES
+        }
+        const pares = cs.length - 1;
+        const hyps = [
+          { k: 'ascPost',  v: ascPost,  nuevo: cs[cs.length - 1], pre: false },
+          { k: 'ascPre',   v: ascPre,   nuevo: cs[cs.length - 1], pre: true  },
+          { k: 'descPost', v: descPost, nuevo: cs[0],             pre: false },
+          { k: 'descPre',  v: descPre,  nuevo: cs[0],             pre: true  },
+        ].sort((a, b) => b.v - a.v);
+        const ganador = hyps[0], segundo = hyps[1];
+        // Cierre real = saldo del movimiento MÁS NUEVO + (su importe si la columna es "antes").
+        const cierre = ganador.nuevo.saldo + (ganador.pre ? ganador.nuevo.importe : 0);
+        saldoBanco = Math.round(cierre * 100) / 100;
+        // Confiable sólo si la hipótesis ganadora explica la mayoría de los pares y es única.
+        saldoBancoConfiable = (ganador.v >= Math.ceil(pares * 0.6)) && (ganador.v > segundo.v);
+      }
     }
 
     // Ordenar por fecha ascendente y agregar tipo sugerido.
@@ -15228,7 +15258,8 @@ app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermissi
       detectado: detectado ? { numero: detectado.numero, cuit: detectado.cuit, empresa: detectado.empresa, tipo: detectado.tipo, moneda: detectado.moneda } : null,
       coincideCuenta: (numCuenta && numResumen) ? (numCuenta === numResumen || numResumen.includes(numCuenta) || numCuenta.includes(numResumen)) : null,
       alerta,
-      saldoBanco,   // saldo de cierre del banco (para ajustar el saldo inicial)
+      saldoBanco,   // saldo de cierre REAL del banco (contempla la convención de la columna)
+      saldoBancoConfiable,  // true = pudimos verificar el encadenamiento de saldos; false = no sugerir ajuste
       movimientos: movs,
     });
   } catch (e) { next(e); }

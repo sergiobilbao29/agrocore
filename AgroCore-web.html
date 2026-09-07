@@ -2634,6 +2634,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'07/09/2026',
+      titulo:'🏦 v2.182.0 — Importar resumen de banco: detecta bien el saldo de cierre (Nación y otros)',
+      desc:'Al importar un resumen, algunos bancos (como <b>Banco Nación</b>) muestran en la columna <b>Saldo</b> el importe <b>antes</b> del movimiento (o sea, el resultado del movimiento anterior), no después. AgroCore ahora <b>detecta automáticamente</b> la convención de cada banco encadenando los saldos y calcula el <b>saldo de cierre real</b>. Si no puede verificar el encadenamiento con seguridad, <b>ya no sugiere ajustar el saldo</b> (antes podía proponer un saldo corrido por un movimiento). Así el botón “Ajustar saldo al del banco” solo aparece cuando el número es confiable.' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'07/09/2026',
       titulo:'🐛 v2.181.0 — Fix liquidación de empleados por día (sueldo base congelado en $0)',
       desc:'Al liquidar a un empleado que cobra <b>por día</b> (jornal × días), la liquidación estaba congelando el <b>sueldo base en $0</b>, y por eso el neto y el saldo salían invertidos (te decía que el empleado “debía” cuando en realidad tenía a favor). Ahora la liquidación calcula el sueldo base igual que la ficha (jornal × días del mes) y los números cierran bien. <b>Importante:</b> si ya tenías liquidaciones de empleados por día mal congeladas, entrá a ese mes, <b>anulá la liquidación y volvé a liquidar</b> para que tome los valores corregidos. Además, la cabecera de la ficha ahora muestra el sueldo base por día (jornal × días) en vez de “sin cargar”.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/09/2026',
@@ -32734,7 +32737,7 @@ async function bcoImportResumenSubir() {
     const r = await api(`/api/banco-cuentas/${state.bancoCuentaId}/parse-resumen`, { method:'POST', body: JSON.stringify({ fileB64: b64, filename: f.name }) });
     if (!r.ok || !r.movimientos?.length) { if (st) st.textContent = ''; return toast(r.error || 'No reconocí movimientos en el archivo','error'); }
     state._bcoImportMovs = r.movimientos;
-    state._bcoImportMeta = { detectado: r.detectado || null, alerta: r.alerta || null, coincide: r.coincideCuenta, saldoBanco: (r.saldoBanco!=null?Number(r.saldoBanco):null) };
+    state._bcoImportMeta = { detectado: r.detectado || null, alerta: r.alerta || null, coincide: r.coincideCuenta, saldoBanco: (r.saldoBanco!=null?Number(r.saldoBanco):null), saldoBancoConfiable: !!r.saldoBancoConfiable };
     bcoImportResumenPreview(r.fuente);
   } catch (e) {
     if (st) st.textContent = '';
@@ -32798,7 +32801,10 @@ async function bcoImportResumenConfirmar() {
     const r = await api(`/api/banco-cuentas/${cid}/import-movimientos`, { method:'POST', body: JSON.stringify({ movimientos: sel }) });
     if (!r.ok) return toast(r.error || 'No pude importar','error');
     const s = r.resumen || {};
-    const saldoBanco = (state._bcoImportMeta && state._bcoImportMeta.saldoBanco != null) ? Number(state._bcoImportMeta.saldoBanco) : null;
+    // Sólo confiamos en el saldo de cierre si pudimos verificar el encadenamiento de saldos.
+    // (La columna "Saldo" no usa la misma convención en todos los bancos: algunos muestran
+    // el saldo ANTES del movimiento, p.ej. Banco Nación. Si no lo verificamos, no sugerimos ajuste.)
+    const saldoBanco = (state._bcoImportMeta && state._bcoImportMeta.saldoBanco != null && state._bcoImportMeta.saldoBancoConfiable) ? Number(state._bcoImportMeta.saldoBanco) : null;
     const c = (state.cache.bancoCuentas||[]).find(x => x.id === cid);
     const mon = c ? c.moneda : 'ARS';
     closeModal();
