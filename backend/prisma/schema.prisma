@@ -2528,6 +2528,7 @@ model RemitoRenglon {
 model TrialSignup {
   id           String    @id @default(cuid())
   email        String
+  cuit         String?
   nombre       String
   empresa      String
   telefono     String?

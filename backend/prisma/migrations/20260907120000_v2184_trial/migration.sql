@@ -7,6 +7,7 @@ ALTER TABLE "Company" ADD COLUMN IF NOT EXISTS "trialExtended" BOOLEAN NOT NULL 
 CREATE TABLE IF NOT EXISTS "TrialSignup" (
   "id"           TEXT NOT NULL,
   "email"        TEXT NOT NULL,
+  "cuit"         TEXT,
   "nombre"       TEXT NOT NULL,
   "empresa"      TEXT NOT NULL,
   "telefono"     TEXT,

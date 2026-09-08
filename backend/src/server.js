@@ -973,6 +973,7 @@ app.post('/api/public/trial/signup', async (req, res) => {
     const schema = z.object({
       nombre: z.string().trim().min(2, 'Ingresá tu nombre'),
       empresa: z.string().trim().min(2, 'Ingresá el nombre de tu campo o empresa'),
+      cuit: z.string().trim().min(1, 'Ingresá tu CUIT'),
       email: z.string().trim().email('Email inválido'),
       telefono: z.string().trim().optional().nullable(),
       actividad: z.enum(['agricola', 'ganadera', 'mixta']).optional().nullable(),
@@ -980,19 +981,23 @@ app.post('/api/public/trial/signup', async (req, res) => {
     });
     const d = schema.parse(req.body);
     const email = d.email.toLowerCase();
+    const cuit = String(d.cuit).replace(/\D/g, '');
+    if (cuit.length !== 11) return res.status(400).json({ ok: false, error: 'El CUIT debe tener 11 dígitos.' });
     // Anti-abuso: si ya existe un usuario con ese email, no rearmamos trial.
     const yaUser = await prisma.user.findUnique({ where: { email } });
     if (yaUser) return res.status(409).json({ ok: false, error: 'Ya existe una cuenta con ese email. Iniciá sesión con tu contraseña.' });
-    // Un solo trial por email: si ya verificó uno antes, lo mandamos a contratar.
-    const yaVerificado = await prisma.trialSignup.findFirst({ where: { email, verifiedAt: { not: null } } });
-    if (yaVerificado) return res.status(409).json({ ok: false, error: 'Ya usaste una prueba gratuita con ese email. Escribinos para contratar AgroCore.' });
+    // Un solo trial por email o por CUIT.
+    const yaVerificado = await prisma.trialSignup.findFirst({ where: { verifiedAt: { not: null }, OR: [{ email }, { cuit }] } });
+    if (yaVerificado) return res.status(409).json({ ok: false, error: 'Ya usaste una prueba gratuita con ese email o CUIT. Escribinos para contratar AgroCore.' });
+    const yaEmpresaCuit = await prisma.company.findFirst({ where: { cuit, plan: 'trial' } });
+    if (yaEmpresaCuit) return res.status(409).json({ ok: false, error: 'Ya hay una prueba activa con ese CUIT. Escribinos para contratar AgroCore.' });
     // Limpiamos altas pendientes previas del mismo email (reenvío de verificación).
     await prisma.trialSignup.deleteMany({ where: { email, verifiedAt: null } });
     const token = (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)).replace(/-/g, '')
       + (globalThis.crypto?.randomUUID?.() || Date.now().toString(36)).replace(/-/g, '');
     const passwordHash = await bcrypt.hash(d.password, 10);
     await prisma.trialSignup.create({ data: {
-      email, nombre: d.nombre, empresa: d.empresa, telefono: d.telefono || null,
+      email, cuit, nombre: d.nombre, empresa: d.empresa, telefono: d.telefono || null,
       actividad: d.actividad || null, passwordHash, token,
       expiresAt: new Date(Date.now() + 2 * 86400000),
     }});
@@ -1032,12 +1037,15 @@ app.get('/api/public/trial/verify', async (req, res) => {
     if (!adminRole) return fail('error');
 
     const company = await prisma.company.create({ data: {
-      name: su.empresa, email: su.email, telefono: su.telefono || null,
+      name: su.empresa, cuit: su.cuit || null, email: su.email, telefono: su.telefono || null,
       plan: 'trial', trialEndsAt: new Date(Date.now() + TRIAL_DIAS * 86400000),
       informal: true, activo: true,
     }});
+    // El alias del usuario es el CUIT (si está libre), así puede loguear con el CUIT o el email.
+    let alias = su.cuit || null;
+    if (alias && await prisma.user.findFirst({ where: { alias } })) alias = null;
     const user = await prisma.user.create({ data: {
-      email: su.email, passwordHash: su.passwordHash, nombre: su.nombre, activo: true, superAdmin: false,
+      email: su.email, alias, passwordHash: su.passwordHash, nombre: su.nombre, activo: true, superAdmin: false,
     }});
     await prisma.userCompany.create({ data: { userId: user.id, companyId: company.id, roleId: adminRole.id } });
     // Sembrar catálogos base (best-effort; en la instancia trial conviene tener una empresa plantilla).
