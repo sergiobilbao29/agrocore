@@ -1034,6 +1034,7 @@ const MODULES = [
   // ===== ARRIBA DE TODO, sin sección (siempre visible) =====
   { id:'inicio',        label:'Inicio',               icon:'🏠', perm:null,              section:'' },
   { id:'mensajes',      label:'Mensajes y asistente', icon:'💬', section:'' },
+  { id:'ayuda',         label:'Ayuda y manual',       icon:'📖', perm:null,              section:'' },
 
   // ===== TABLERO — vistas rápidas y resúmenes =====
   { id:'dashboard',     label:'Dashboard',            icon:'📊', perm:'dashboard:read',  section:'Tablero' },
@@ -2610,6 +2611,86 @@ function stubPage(id, label) {
  * ========================================================= */
 const pages = {};
 
+/* ----- AYUDA Y MANUAL ----- */
+pages.ayuda = async function() {
+  setHeader('Ayuda y manual', 'Manual de usuario e instructivos de procesos');
+  const WEB = 'https://agrocore.ar';
+  // Instructivos de procesos disponibles para descargar (PDF).
+  const INSTRUCTIVOS = [
+    { grupo:'Primeros pasos', items:[
+      { f:'Instructivo-Inicio-1Pagina.pdf', t:'Inicio rápido (1 página)', d:'Lo esencial para empezar a usar AgroCore.' },
+      { f:'Instructivo-Acomodar-Cuentas-Bancarias.pdf', t:'Acomodar cuentas bancarias', d:'Cargar saldos iniciales y ordenar tus bancos.' },
+    ]},
+    { grupo:'Finanzas', items:[
+      { f:'Instructivo-Pagos-y-Cobros.pdf', t:'Pagos y cobros', d:'Registrar pagos a proveedores y cobros de clientes.' },
+      { f:'Instructivo-Pago-Dividido-Producto-y-Cheque.pdf', t:'Pago dividido (producto y cheque)', d:'Cancelar con parte producto y parte cheque.' },
+      { f:'Instructivo-Cheques-Propios-y-Terceros.pdf', t:'Cheques propios y de terceros', d:'Manejo completo de cheques en cartera.' },
+      { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
+    ]},
+    { grupo:'Cereal', items:[
+      { f:'Instructivo-Circuito-Campana-Cereal.pdf', t:'Circuito campaña cereal', d:'De la siembra a la cosecha, paso a paso.' },
+      { f:'Instructivo-Contratos-de-Cereal.pdf', t:'Contratos de cereal', d:'Cargar y seguir contratos de venta.' },
+      { f:'Instructivo-Liquidacion-Cereal-Comprador-y-Camiones.pdf', t:'Liquidación de cereal, comprador y camiones', d:'Cartas de porte, viajes y liquidación.' },
+    ]},
+    { grupo:'Forrajera y hacienda', items:[
+      { f:'Instructivo-Circuito-Campana-Forrajera-Multicorte.pdf', t:'Campaña forrajera multicorte', d:'Praderas y verdeos de varios cortes.' },
+      { f:'Instructivo-Circuito-Rodeos.pdf', t:'Circuito de rodeos', d:'Organizar y mover rodeos.' },
+      { f:'Instructivo-Manejo-de-Animales.pdf', t:'Manejo de animales', d:'Altas, bajas y eventos del ganado.' },
+      { f:'Instructivo-Guias-Hacienda.pdf', t:'Guías de hacienda', d:'Emitir y controlar guías.' },
+      { f:'Instructivo-Costo-Kilo-Carne.pdf', t:'Costo por kilo de carne', d:'Calcular el costo real del kilo producido.' },
+      { f:'Instructivo-Haras-Caballos.pdf', t:'Haras / caballos', d:'Gestión de equinos.' },
+    ]},
+    { grupo:'Otros', items:[
+      { f:'Instructivo-Remitos-Internos.pdf', t:'Remitos internos', d:'Movimientos internos entre establecimientos.' },
+    ]},
+  ];
+
+  const grupoHtml = (g) => `
+    <div class="mb-6">
+      <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">${esc(g.grupo)}</h3>
+      <div class="grid gap-3 sm:grid-cols-2">
+        ${g.items.map(it => `
+          <a href="${WEB}/instructivos/${encodeURIComponent(it.f)}" target="_blank" rel="noopener"
+             class="flex items-start gap-3 bg-white border border-slate-200 rounded-xl p-4 hover:border-emerald-400 hover:shadow-sm transition">
+            <div class="text-2xl leading-none">📄</div>
+            <div class="min-w-0">
+              <div class="font-semibold text-slate-800">${esc(it.t)}</div>
+              <div class="text-xs text-slate-500 mt-0.5">${esc(it.d)}</div>
+              <div class="text-[11px] font-semibold text-emerald-700 mt-1.5">Descargar PDF ↓</div>
+            </div>
+          </a>`).join('')}
+      </div>
+    </div>`;
+
+  $('#page-body').innerHTML = `
+    <div class="max-w-4xl mx-auto">
+      <div class="rounded-2xl p-6 mb-6 text-white" style="background:linear-gradient(135deg,#143C19,#1c5a2a)">
+        <div class="flex items-start gap-4 flex-wrap">
+          <div class="text-4xl">📖</div>
+          <div class="min-w-0 flex-1">
+            <div class="text-lg font-extrabold">Manual de usuario</div>
+            <p class="text-emerald-100/90 text-sm mt-1 max-w-xl">Guía completa de todas las funciones de AgroCore, con capturas y ejemplos. Se abre en una pestaña nueva.</p>
+          </div>
+          <a href="${WEB}/manual.html" target="_blank" rel="noopener"
+             class="bg-white text-emerald-900 font-bold rounded-lg px-4 py-2.5 hover:bg-emerald-50 transition whitespace-nowrap">Abrir el manual →</a>
+        </div>
+      </div>
+
+      <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+        <h2 class="text-lg font-bold text-slate-800">Instructivos de procesos</h2>
+        <p class="text-xs text-slate-500">Guías cortas en PDF para tareas puntuales.</p>
+      </div>
+      ${INSTRUCTIVOS.map(grupoHtml).join('')}
+
+      <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mt-2 text-sm text-emerald-900">
+        ¿No encontrás lo que buscás? Escribinos por
+        <a class="underline font-semibold" target="_blank" rel="noopener"
+           href="https://wa.me/5493582408884?text=Hola!%20Tengo%20una%20consulta%20sobre%20AgroCore.">WhatsApp</a>
+        y te damos una mano.
+      </div>
+    </div>`;
+};
+
 /* ----- INICIO ----- */
 pages.inicio = async function() {
   setHeader('Inicio', 'Bienvenida a AgroCore');
@@ -2687,6 +2768,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'08/09/2026',
+      titulo:'📖 v2.185.0 — Sección de Ayuda: manual e instructivos a mano',
+      desc:'Nuevo ítem <b>“Ayuda y manual”</b> arriba de todo en el menú (siempre visible para todos). Adentro tenés el <b>Manual de usuario</b> completo a un clic y los <b>instructivos de procesos</b> para descargar en PDF (inicio rápido, pagos y cobros, cheques, sueldos, circuito de cereal, contratos, liquidación, campaña forrajera, rodeos, guías de hacienda, costo por kilo de carne y más), agrupados por tema. También mejoramos la <b>entrega del email de activación</b> de la prueba gratuita para que caiga menos en spam.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'08/09/2026',
       titulo:'🎁 v2.184.0 — Prueba gratuita self-service (30 días)',
       desc:'Nueva forma de captar clientes: desde la web pueden <b>crear su propia prueba gratis por 30 días</b> (confirmando el email), sin que la habilites a mano. La empresa arranca con los catálogos base. Cuando la prueba vence, el sistema se <b>bloquea</b> y muestra una pantalla para <b>contratar</b> o <b>extender 15 días</b> (una sola vez). Mientras dura, aparece un cartelito con los días restantes. <b>Solo aplica a la instancia de prueba</b> (trial.agrocore.ar); las instalaciones de clientes no cambian.' },

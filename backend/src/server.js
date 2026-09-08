@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.184.0';
+const AGROCORE_VERSION = '2.185.0';
 const AGROCORE_BUILD = new Date('2026-09-08').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1011,7 +1011,11 @@ app.post('/api/public/trial/signup', async (req, res) => {
       </p>
       <p style="font-size:12px;color:#6b7280">Si no fuiste vos, ignorá este mensaje. El enlace vence en 48 horas.<br>AgroCore · El corazón del negocio agrícola · agrocore.ar</p>
     </div>`;
-    const r = await enviarEmailResend({ to: email, subject: 'Activá tu prueba gratuita de AgroCore 🌱', html, fromName: 'AgroCore' });
+    const textoPlano = `Bienvenido a AgroCore, ${d.nombre}.\n\n`
+      + `Activá tu prueba gratuita de ${TRIAL_DIAS} días para ${d.empresa} confirmando tu email:\n${link}\n\n`
+      + `Si no fuiste vos, ignorá este mensaje. El enlace vence en 48 horas.\n`
+      + `AgroCore · El corazón del negocio agrícola · agrocore.ar`;
+    const r = await enviarEmailResend({ to: email, subject: 'Activá tu prueba gratuita de AgroCore', html, text: textoPlano, replyTo: 'consultas@agrocore.ar', fromName: 'AgroCore' });
     if (!r.ok) return res.status(r.notConfigured ? 503 : 502).json({ ok: false, error: 'No pudimos enviar el email de confirmación. Probá de nuevo en un rato.' });
     res.json({ ok: true, message: 'Te enviamos un email para confirmar tu cuenta.' });
   } catch (e) {
