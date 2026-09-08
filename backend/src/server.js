@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.183.0';
-const AGROCORE_BUILD = new Date('2026-09-07').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.184.0';
+const AGROCORE_BUILD = new Date('2026-09-08').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -189,8 +189,33 @@ async function authMiddleware(req, res, next) {
   } catch (err) { next(err); }
 }
 
+// Info de la prueba gratuita de una empresa: días restantes, si venció y si puede extender.
+function _trialInfo(co) {
+  if (!co || co.plan !== 'trial' || !co.trialEndsAt) return null;
+  const fin = new Date(co.trialEndsAt);
+  const ms = fin.getTime() - Date.now();
+  const diasRestantes = Math.ceil(ms / 86400000);
+  return {
+    plan: 'trial',
+    trialEndsAt: fin.toISOString(),
+    diasRestantes,
+    vencido: ms <= 0,
+    puedeExtender: !co.trialExtended,
+    extendida: !!co.trialExtended,
+  };
+}
+
 function requireCompany(req, res, next) {
   if (!req.companyId) return res.status(400).json({ ok: false, error: 'Falta header X-Company-Id' });
+  // Candado de prueba gratuita: si la empresa es "trial" y venció, se bloquea todo
+  // (menos el super admin, que puede seguir administrando). El front muestra la
+  // pantalla de "Contratá AgroCore" al recibir el 402.
+  if (!req.user?.superAdmin) {
+    const t = _trialInfo(req.membership?.company);
+    if (t && t.vencido) {
+      return res.status(402).json({ ok: false, trialExpired: true, puedeExtender: t.puedeExtender, error: 'Tu prueba gratuita de AgroCore venció.' });
+    }
+  }
   next();
 }
 
@@ -688,6 +713,8 @@ async function serializeUser(u) {
     color: uc.company.color || null,
     logoUrl: uc.company.logoUrl || null,
     ..._coFiscal(uc.company),
+    plan: uc.company.plan || 'full',
+    trial: _trialInfo(uc.company),
     roleLabel: uc.role.label,
     role: { key: uc.role.key, label: uc.role.label, permissions: uc.role.permissions, stockCategorias: uc.role.stockCategorias || null, campanaIds: uc.role.campanaIds || null },
   }));
@@ -804,6 +831,25 @@ app.post('/api/auth/change-password', authMiddleware, async (req, res, next) => 
   } catch (e) { next(e); }
 });
 
+// Extender la prueba gratuita 15 días (UNA sola vez). No pasa por requireCompany
+// para que el usuario con la prueba vencida igual pueda extenderla desde la pantalla
+// de bloqueo. Usa la empresa del header X-Company-Id.
+app.post('/api/trial/extend', authMiddleware, async (req, res, next) => {
+  try {
+    if (!req.companyId) return res.status(400).json({ ok: false, error: 'Falta la empresa' });
+    const co = req.membership?.company
+      || (req.user?.superAdmin ? await prisma.company.findUnique({ where: { id: req.companyId } }) : null);
+    if (!co) return res.status(403).json({ ok: false, error: 'Sin acceso a esta empresa' });
+    if (co.plan !== 'trial') return res.status(400).json({ ok: false, error: 'Esta empresa no está en prueba gratuita' });
+    if (co.trialExtended) return res.status(409).json({ ok: false, error: 'La prueba ya fue extendida una vez. Para seguir usando AgroCore, contratá el sistema.' });
+    // Suma 15 días desde el vencimiento (o desde hoy si ya venció).
+    const base = co.trialEndsAt && new Date(co.trialEndsAt) > new Date() ? new Date(co.trialEndsAt) : new Date();
+    const nuevo = new Date(base.getTime() + 15 * 86400000);
+    await prisma.company.update({ where: { id: co.id }, data: { trialEndsAt: nuevo, trialExtended: true } });
+    res.json({ ok: true, trialEndsAt: nuevo.toISOString(), diasRestantes: Math.ceil((nuevo.getTime() - Date.now()) / 86400000) });
+  } catch (e) { next(e); }
+});
+
 // ============================================================
 // Preferencias del usuario actual (shortcuts del Inicio, etc.)
 // ============================================================
@@ -906,6 +952,105 @@ app.post('/api/contact', async (req, res) => {
     if (!r.ok) return res.status(r.notConfigured ? 503 : 502).json({ ok: false, error: r.error });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ============================================================
+// PRUEBA GRATUITA SELF-SERVICE (PÚBLICO, sin auth)
+// El prospecto se registra desde la web, confirma su email, y se le crea sola una
+// empresa "trial" por 30 días con catálogos base. Solo tiene sentido en la instancia
+// de prueba (trial.agrocore.ar). TRIAL_SIGNUP_ENABLED=1 lo habilita.
+// ============================================================
+const TRIAL_DIAS = 30;
+const TRIAL_SIGNUP_ENABLED = process.env.TRIAL_SIGNUP_ENABLED === '1';
+function _baseUrl(req) {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  return `${proto}://${req.get('host')}`;
+}
+
+app.post('/api/public/trial/signup', async (req, res) => {
+  try {
+    if (!TRIAL_SIGNUP_ENABLED) return res.status(404).json({ ok: false, error: 'Registro de prueba no habilitado en esta instancia.' });
+    const schema = z.object({
+      nombre: z.string().trim().min(2, 'Ingresá tu nombre'),
+      empresa: z.string().trim().min(2, 'Ingresá el nombre de tu campo o empresa'),
+      email: z.string().trim().email('Email inválido'),
+      telefono: z.string().trim().optional().nullable(),
+      actividad: z.enum(['agricola', 'ganadera', 'mixta']).optional().nullable(),
+      password: z.string().min(6, 'La contraseña debe tener al menos 6 caracteres'),
+    });
+    const d = schema.parse(req.body);
+    const email = d.email.toLowerCase();
+    // Anti-abuso: si ya existe un usuario con ese email, no rearmamos trial.
+    const yaUser = await prisma.user.findUnique({ where: { email } });
+    if (yaUser) return res.status(409).json({ ok: false, error: 'Ya existe una cuenta con ese email. Iniciá sesión con tu contraseña.' });
+    // Un solo trial por email: si ya verificó uno antes, lo mandamos a contratar.
+    const yaVerificado = await prisma.trialSignup.findFirst({ where: { email, verifiedAt: { not: null } } });
+    if (yaVerificado) return res.status(409).json({ ok: false, error: 'Ya usaste una prueba gratuita con ese email. Escribinos para contratar AgroCore.' });
+    // Limpiamos altas pendientes previas del mismo email (reenvío de verificación).
+    await prisma.trialSignup.deleteMany({ where: { email, verifiedAt: null } });
+    const token = (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)).replace(/-/g, '')
+      + (globalThis.crypto?.randomUUID?.() || Date.now().toString(36)).replace(/-/g, '');
+    const passwordHash = await bcrypt.hash(d.password, 10);
+    await prisma.trialSignup.create({ data: {
+      email, nombre: d.nombre, empresa: d.empresa, telefono: d.telefono || null,
+      actividad: d.actividad || null, passwordHash, token,
+      expiresAt: new Date(Date.now() + 2 * 86400000),
+    }});
+    const link = `${_baseUrl(req)}/api/public/trial/verify?token=${token}`;
+    const html = `<div style="font-family:Arial,sans-serif;font-size:15px;color:#1f2937;max-width:520px;margin:auto">
+      <h2 style="color:#143C19">¡Bienvenido a AgroCore, ${_escHtml(d.nombre)}! 🌱</h2>
+      <p>Estás a un clic de tu prueba gratuita de <b>${TRIAL_DIAS} días</b> para <b>${_escHtml(d.empresa)}</b>.</p>
+      <p>Confirmá tu email para activar tu cuenta:</p>
+      <p style="text-align:center;margin:28px 0">
+        <a href="${link}" style="background:#166534;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold">Activar mi prueba gratuita</a>
+      </p>
+      <p style="font-size:12px;color:#6b7280">Si no fuiste vos, ignorá este mensaje. El enlace vence en 48 horas.<br>AgroCore · El corazón del negocio agrícola · agrocore.ar</p>
+    </div>`;
+    const r = await enviarEmailResend({ to: email, subject: 'Activá tu prueba gratuita de AgroCore 🌱', html, fromName: 'AgroCore' });
+    if (!r.ok) return res.status(r.notConfigured ? 503 : 502).json({ ok: false, error: 'No pudimos enviar el email de confirmación. Probá de nuevo en un rato.' });
+    res.json({ ok: true, message: 'Te enviamos un email para confirmar tu cuenta.' });
+  } catch (e) {
+    if (e?.issues) return res.status(400).json({ ok: false, error: e.issues[0]?.message || 'Datos inválidos' });
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/public/trial/verify', async (req, res) => {
+  const base = _baseUrl(req);
+  const fail = (motivo) => res.redirect(302, `${base}/?trial=${motivo}`);
+  try {
+    if (!TRIAL_SIGNUP_ENABLED) return fail('off');
+    const token = String(req.query.token || '');
+    if (!token) return fail('error');
+    const su = await prisma.trialSignup.findUnique({ where: { token } });
+    if (!su) return fail('error');
+    if (su.verifiedAt) return res.redirect(302, `${base}/?trial=ok`);   // idempotente
+    if (new Date(su.expiresAt) < new Date()) return fail('vencido');
+    // Doble chequeo anti-carrera: que no haya quedado un usuario con ese email.
+    if (await prisma.user.findUnique({ where: { email: su.email } })) return fail('existe');
+    const adminRole = await prisma.role.findFirst({ where: { key: 'admin' } });
+    if (!adminRole) return fail('error');
+
+    const company = await prisma.company.create({ data: {
+      name: su.empresa, email: su.email, telefono: su.telefono || null,
+      plan: 'trial', trialEndsAt: new Date(Date.now() + TRIAL_DIAS * 86400000),
+      informal: true, activo: true,
+    }});
+    const user = await prisma.user.create({ data: {
+      email: su.email, passwordHash: su.passwordHash, nombre: su.nombre, activo: true, superAdmin: false,
+    }});
+    await prisma.userCompany.create({ data: { userId: user.id, companyId: company.id, roleId: adminRole.id } });
+    // Sembrar catálogos base (best-effort; en la instancia trial conviene tener una empresa plantilla).
+    try { await _autoSembrarCatalogosDesdeTemplate(company.id); } catch (_) {}
+    try { await seedChequeEstados(company.id); } catch (_) {}
+    try { await seedCategoriasPlanilla(company.id); } catch (_) {}
+    try { await seedCategoriasHacienda(company.id); } catch (_) {}
+    await prisma.trialSignup.update({ where: { id: su.id }, data: { verifiedAt: new Date(), companyId: company.id } });
+    return res.redirect(302, `${base}/?trial=ok`);
+  } catch (e) {
+    console.warn('[trial.verify] error:', e.message);
+    return fail('error');
+  }
 });
 
 // ============================================================

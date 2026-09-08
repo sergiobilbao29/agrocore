@@ -32,6 +32,10 @@ model Company {
   modulosOcultos  String?   // JSON: ids de módulos ocultos para esta empresa (por actividad)
   informal        Boolean   @default(false) // sin facturación ARCA
   activo          Boolean   @default(true)
+  // ---- Prueba gratuita self-service (instancia trial) ----
+  plan            String    @default("full")  // "full" (cliente) | "trial" (prueba 30 días)
+  trialEndsAt     DateTime?                    // fecha de vencimiento de la prueba
+  trialExtended   Boolean   @default(false)    // ya usó la extensión de 15 días (una sola vez)
   // ---- Integración ARCA / AFIP (WSAA + WSCTG + WSFE) ----
   arcaCuit        String?   // CUIT registrado en el cert de ARCA (puede diferir del cuit fiscal)
   arcaCertCrt     String?   // contenido del cert.crt (PEM). DEBE ir encriptado at-rest en producción.
@@ -2517,4 +2521,23 @@ model RemitoRenglon {
 
   @@index([remitoId])
   @@index([productoId])
+}
+
+// Registro público de prueba gratuita: guarda el alta pendiente hasta que el
+// prospecto confirma su email; al verificar se crea la empresa trial + usuario admin.
+model TrialSignup {
+  id           String    @id @default(cuid())
+  email        String
+  nombre       String
+  empresa      String
+  telefono     String?
+  actividad    String?   // "agricola" | "ganadera" | "mixta"
+  passwordHash String
+  token        String    @unique
+  expiresAt    DateTime
+  verifiedAt   DateTime?
+  companyId    String?
+  createdAt    DateTime  @default(now())
+
+  @@index([email])
 }
