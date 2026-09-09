@@ -2768,6 +2768,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/09/2026',
+      titulo:'🚚 v2.186.0 — Viajes: merma y neto a liquidar, comprador y pantalla más ordenada',
+      desc:'Rehicimos la pantalla de <b>Nuevo/Editar viaje</b> para que sea más clara y corta: sacamos campos duplicados (antes cargabas "Kg carga" y "Neto" por separado; ahora es un solo <b>Peso Neto</b>) y reagrupamos todo por secciones (Datos, Pesos, Destino/venta, Documentos, Transporte, Gastos). <b>(1) Merma y neto a liquidar:</b> cargás la <b>Merma (kg)</b> y el sistema calcula el <b>Neto a liquidar = Peso Neto − Merma</b>. Importante: el <b>flete se sigue cobrando por el peso neto transportado</b> (sin descontar merma); la merma solo afecta la liquidación y los kg acopiados. <b>(2) Comprador vs Cerealera:</b> podés cargar por separado <b>a quién le vendés</b> (comprador, ej. Serros) y <b>dónde descargás</b> (cerealera/destino, ej. Promaíz), y crear cualquiera de los dos <b>sin salir del viaje</b> con "+ nuevo". La lista de viajes ahora tiene una columna <b>“Vendido a / Comprador”</b>. <b>(3) Cereal vendido:</b> nuevo cuadro arriba de la lista con el <b>total vendido (venta directa)</b> por peso neto, que podés filtrar por comprador y por grano. <b>(4)</b> Arreglamos que la <b>fecha</b> del viaje se mostraba un día antes.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'08/09/2026',
       titulo:'📖 v2.185.0 — Sección de Ayuda: manual e instructivos a mano',
       desc:'Nuevo ítem <b>“Ayuda y manual”</b> arriba de todo en el menú (siempre visible para todos). Adentro tenés el <b>Manual de usuario</b> completo a un clic y los <b>instructivos de procesos</b> para descargar en PDF (inicio rápido, pagos y cobros, cheques, sueldos, circuito de cereal, contratos, liquidación, campaña forrajera, rodeos, guías de hacienda, costo por kilo de carne y más), agrupados por tema. También mejoramos la <b>entrega del email de activación</b> de la prueba gratuita para que caiga menos en spam.' },
@@ -18406,6 +18409,17 @@ function viajeEstadoBadge(e) {
   const m = VIAJE_ESTADOS[e] || { label: e || '—', cls: 'badge-gray' };
   return `<span class="badge ${m.cls}">${m.label}</span>`;
 }
+// Texto de "vendido a": comprador (cliente) si está; si no, la cerealera/destino.
+function viajeCompradorTxt(v) {
+  if (v.compradorClienteId) {
+    const c = (state.cache.clientes||[]).find(x=>x.id===v.compradorClienteId);
+    if (c) return '👤 '+esc(c.razonSocial);
+  }
+  const dep = v.depositoDestinoId ? (state.cache.depositos||[]).find(x=>x.id===v.depositoDestinoId) : null;
+  if (dep) return '🏭 '+esc(dep.nombre);
+  if (v.destinoTipo==='venta_directa') return '💰 Venta directa';
+  return '<span class="text-slate-400">—</span>';
+}
 
 function viajeRecalcKgOri() {
   const tara=Number(document.getElementById('f-tara')?.value||0);
@@ -18413,8 +18427,7 @@ function viajeRecalcKgOri() {
   const neto=bruto-tara;
   const inpN=document.getElementById('f-neto');
   if(inpN&&bruto>0&&tara>=0) inpN.value=neto>0?neto.toFixed(2):'';
-  const inpKg=document.getElementById('f-kg');
-  if(inpKg&&bruto>0&&neto>0){inpKg.value=neto.toFixed(2); if(typeof viajeRecalcDif==='function') viajeRecalcDif();}
+  if(typeof viajeRecalcDif==='function') viajeRecalcDif();
 }
 function viajeRecalcKgDest() {
   const tara=Number(document.getElementById('f-taraD')?.value||0);
@@ -18422,8 +18435,22 @@ function viajeRecalcKgDest() {
   const neto=bruto-tara;
   const inpN=document.getElementById('f-netoD');
   if(inpN&&bruto>0&&tara>=0) inpN.value=neto>0?neto.toFixed(2):'';
-  const inpKgd=document.getElementById('f-kgd');
-  if(inpKgd&&bruto>0&&neto>0){inpKgd.value=neto.toFixed(2); if(typeof viajeRecalcDif==='function') viajeRecalcDif();}
+  if(typeof viajeRecalcDif==='function') viajeRecalcDif();
+}
+// Neto a liquidar = Peso Neto − Merma. Base: neto destino si está, si no neto origen.
+// El flete NO usa este número (se cobra por el peso neto transportado).
+function viajeRecalcMerma() {
+  const netoOri  = Number(document.getElementById('f-neto')?.value||0);
+  const netoDest = Number(document.getElementById('f-netoD')?.value||0);
+  const base = netoDest>0 ? netoDest : netoOri;
+  const merma = Number(document.getElementById('f-merma')?.value||0);
+  const out = document.getElementById('f-netoliq');
+  if (out) {
+    if (base>0) { const r = base - merma; out.value = (r>0?r:0).toFixed(2); }
+    else out.value = '';
+  }
+  const pct = document.getElementById('f-merma-pct');
+  if (pct) pct.textContent = (base>0 && merma>0) ? ('= '+(merma/base*100).toFixed(2)+'% del peso neto') : '';
 }
 function viajeAutoTransp(inp){const ds=document.getElementById('ds-transp');if(!ds)return;const v=(inp.value||'').trim().toLowerCase();const m=Array.from(ds.querySelectorAll('option')).find(o=>(o.dataset.nombre||'').toLowerCase()===v);if(!m)return;const c=document.getElementById('f-trcuit');if(c&&m.dataset.cuit)c.value=m.dataset.cuit;}
 function viajeAutoChofer(inp){const ds=document.getElementById('ds-chofer');if(!ds)return;const v=(inp.value||'').trim().toLowerCase();const m=Array.from(ds.querySelectorAll('option')).find(o=>(o.dataset.nombre||'').toLowerCase()===v);if(!m)return;const c=document.getElementById('f-chcuit');if(c&&m.dataset.cuit)c.value=m.dataset.cuit;}
@@ -18441,6 +18468,7 @@ pages.viajes = async function() {
   // Para las columnas "Origen/Destino cereal" necesitamos nombres de campañas y depósitos.
   if (!state.cache.campanas)  { try { state.cache.campanas  = (await api('/api/campanas')).data  || []; } catch { state.cache.campanas = []; } }
   if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
+  if (!state.cache.clientes)  { try { state.cache.clientes  = (await api('/api/clientes')).data  || []; } catch { state.cache.clientes = []; } }
 
   const canC = can('produccion:create')||can('logistica:create');
   const canU = can('produccion:update')||can('logistica:update');
@@ -18478,16 +18506,19 @@ pages.viajes = async function() {
 
   // Columnas configurables (mostrar/ocultar/reordenar) y ordenables por click.
   const viajeCols = [
-    { key:'fecha', label:'Fecha', sort:v=>fechaAMs(v.fecha), render:v=>`<span class="whitespace-nowrap">${fmtDate(v.fecha)}</span>` },
+    { key:'fecha', label:'Fecha', sort:v=>fechaAMs(v.fecha), render:v=>`<span class="whitespace-nowrap">${fmtFecha(v.fecha)}</span>` },
     { key:'ruta', label:'Origen → Destino', sort:v=>(v.origen||'').toLowerCase(), render:v=>`${esc(v.origen||'—')} <span class="text-slate-400">→</span> ${esc(v.destino||'—')}${v.destinoTipo==='cerealera'?` <span class="badge badge-yellow text-[10px]" title="Va a cerealera">🏭</span>`:v.destinoTipo==='venta_directa'?` <span class="badge badge-green text-[10px]" title="Venta directa">💰</span>`:''}` },
     { key:'origen', label:'Origen', defHidden:true, sort:v=>(v.origen||'').toLowerCase(), render:v=>esc(v.origen||'—') },
     { key:'destino', label:'Destino', defHidden:true, sort:v=>(v.destino||'').toLowerCase(), render:v=>esc(v.destino||'—') },
     { key:'origenCereal', label:'Origen cereal', defHidden:true, sort:v=>viajeOrigenCerealTxt(v).toLowerCase(), render:v=>viajeOrigenCerealTxt(v) },
     { key:'destinoCereal', label:'Destino cereal', defHidden:true, sort:v=>viajeDestinoCerealTxt(v).toLowerCase(), render:v=>viajeDestinoCerealTxt(v) },
+    { key:'comprador', label:'Vendido a / Comprador', sort:v=>viajeCompradorTxt(v).toLowerCase(), render:v=>viajeCompradorTxt(v) },
     { key:'producto', label:'Producto', sort:v=>(v.producto||'').toLowerCase(), render:v=>`<b>${esc(v.producto||'—')}</b>` },
-    { key:'kgCarga', label:'Kg carga', align:'text-right', sort:v=>Number(v.cantidad||0), render:v=>v.cantidad?fmtN(v.cantidad):'—' },
-    { key:'kgDesc', label:'Kg desc.', align:'text-right', sort:v=>Number(v.kgDescarga||0), render:v=>v.kgDescarga?fmtN(v.kgDescarga):'—' },
+    { key:'kgCarga', label:'Peso neto', align:'text-right', sort:v=>Number(v.cantidad||0), render:v=>v.cantidad?fmtN(v.cantidad):'—' },
+    { key:'kgDesc', label:'Neto dest.', align:'text-right', sort:v=>Number(v.kgDescarga||0), render:v=>v.kgDescarga?fmtN(v.kgDescarga):'—' },
     { key:'dif', label:'Dif.', align:'text-right', sort:v=>Number(v.cantidad||0)-Number(v.kgDescarga||0), render:v=>{ const dif=Number(v.cantidad||0)-Number(v.kgDescarga||0); const t=(v.cantidad||v.kgDescarga)?(dif===0?'0':(dif>0?`-${fmtN(dif)}`:`+${fmtN(-dif)}`)):'—'; const cls=dif===0?'text-slate-400':(Math.abs(dif)>500?'text-red-600':'text-amber-700'); return `<span class="font-semibold ${cls}">${t}</span>`; } },
+    { key:'merma', label:'Merma', align:'text-right', defHidden:true, sort:v=>Number(v.mermaKg||0), render:v=>v.mermaKg?fmtN(v.mermaKg):'<span class="text-slate-400">—</span>' },
+    { key:'netoLiq', label:'Neto a liquidar', align:'text-right', defHidden:true, sort:v=>Number(v.netoLiquidar||0), render:v=>v.netoLiquidar?fmtN(v.netoLiquidar):'<span class="text-slate-400">—</span>' },
     { key:'tarifa', label:'Tarifa', align:'text-right', sort:v=>Number(v.tarifa||0), render:v=>v.tarifa?fmt$(v.tarifa)+'/t':'—' },
     { key:'camion', label:'Camión / Patente', sort:v=>(v.tipoCamion||'').toLowerCase(), render:v=>`${esc(v.tipoCamion||'—')}${v.patente?` <span class="text-slate-400">${esc(v.patente)}</span>`:''}` },
     { key:'chofer', label:'Chofer', sort:v=>(v.chofer||'').toLowerCase(), render:v=>esc(v.chofer||'—') },
@@ -18523,6 +18554,8 @@ pages.viajes = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">Kg cargados</div><div class="text-xl font-bold mt-1">${fmtN(totalKg)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Kg descargados</div><div class="text-xl font-bold mt-1">${fmtN(totalKgDesc)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Faltan pagar (facturados)</div><div class="text-xl font-bold mt-1 ${pendientesPago?'text-amber-700':'text-slate-500'}">${pendientesPago}</div></div>`;
+
+    viajeVendidoRender();
 
     const vcols = colVisibles('viajes', viajeCols);
     const vByKey = Object.fromEntries(viajeCols.map(c=>[c.key,c]));
@@ -18566,6 +18599,7 @@ pages.viajes = async function() {
   $('#page-body').innerHTML = `
     <div id="viajes-cereal-banner"></div>
     <div id="viajes-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+    <div id="viajes-vendido" class="mb-4"></div>
 
     <div class="kpi mb-3">
       <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
@@ -18644,6 +18678,69 @@ function viajeFiltrosLimpiar() {
   state.viajeFilter = { q:'', desde:'', hasta:'', producto:'', origen:'', estado:'' };
   pages.viajes();
 }
+// Cuadro "Cereal vendido" (solo venta directa). Suma el PESO NETO de la carta de
+// porte (kgNeto || cantidad) de los viajes con destino "venta directa", filtrable
+// por comprador (cliente) y por grano. No cuenta las CP anuladas.
+function viajeVendidoRender() {
+  const cont = document.getElementById('viajes-vendido');
+  if (!cont) return;
+  const rows = (state.cache.viajes || []).filter(v => v.destinoTipo === 'venta_directa' && v.estado !== 'anulada');
+  state.viajeVendidoFilter = state.viajeVendidoFilter || { cliente:'', grano:'' };
+  const f = state.viajeVendidoFilter;
+  const clientes = state.cache.clientes || [];
+  const pesoNeto = v => Number(v.kgNeto || v.cantidad || 0);
+  // Opciones de los selects (sobre el universo de venta directa).
+  const granos = [...new Set(rows.map(v=>(v.producto||'').trim()).filter(Boolean))].sort();
+  const compradoresIds = [...new Set(rows.map(v=>v.compradorClienteId).filter(Boolean))];
+  const compradores = compradoresIds.map(id => clientes.find(c=>c.id===id)).filter(Boolean)
+    .sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||''));
+  // Aplicar filtros del cuadro.
+  const sel = rows.filter(v => {
+    if (f.cliente && v.compradorClienteId !== f.cliente) return false;
+    if (f.grano && (v.producto||'').trim() !== f.grano) return false;
+    return true;
+  });
+  const totalKg = sel.reduce((a,v)=>a+pesoNeto(v),0);
+  const nViajes = sel.length;
+  // Desglose por grano (para el detalle).
+  const porGrano = {};
+  sel.forEach(v => { const g=(v.producto||'—').trim()||'—'; porGrano[g]=(porGrano[g]||0)+pesoNeto(v); });
+  const detalle = Object.entries(porGrano).sort((a,b)=>b[1]-a[1]);
+  if (!rows.length) { cont.innerHTML = ''; return; }
+  cont.innerHTML = `
+    <div class="kpi">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h3 class="font-semibold text-slate-800">💰 Cereal vendido <span class="text-xs font-normal text-slate-500">(venta directa, por peso neto de la CP)</span></h3>
+        <div class="flex flex-wrap gap-2">
+          <select id="vv-cliente" class="input py-1 text-sm" style="width:auto">
+            <option value="">Todos los compradores</option>
+            ${compradores.map(c=>`<option value="${esc(c.id)}" ${c.id===f.cliente?'selected':''}>${esc(c.razonSocial)}</option>`).join('')}
+          </select>
+          <select id="vv-grano" class="input py-1 text-sm" style="width:auto">
+            <option value="">Todos los granos</option>
+            ${granos.map(g=>`<option value="${esc(g)}" ${g===f.grano?'selected':''}>${esc(g)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+          <div class="text-[11px] text-emerald-700 uppercase tracking-wide">Total vendido</div>
+          <div class="text-2xl font-bold text-emerald-800 mt-1">${fmtN(totalKg)} <span class="text-sm font-normal">kg</span></div>
+          <div class="text-[11px] text-emerald-700 mt-0.5">${fmtN(totalKg/1000)} tn · ${nViajes} viaje${nViajes===1?'':'s'}</div>
+        </div>
+        ${detalle.slice(0,3).map(([g,kg])=>`
+          <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+            <div class="text-[11px] text-slate-500 uppercase tracking-wide">${esc(g)}</div>
+            <div class="text-xl font-bold text-slate-800 mt-1">${fmtN(kg)} <span class="text-xs font-normal">kg</span></div>
+            <div class="text-[11px] text-slate-500 mt-0.5">${fmtN(kg/1000)} tn</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  const cs = document.getElementById('vv-cliente');
+  const gs = document.getElementById('vv-grano');
+  if (cs) cs.addEventListener('change', e => { state.viajeVendidoFilter.cliente = e.target.value; viajeVendidoRender(); });
+  if (gs) gs.addEventListener('change', e => { state.viajeVendidoFilter.grano = e.target.value; viajeVendidoRender(); });
+}
 
 // Exporta los viajes FILTRADOS a Excel usando SheetJS (XLSX está cargado por CDN para otros usos).
 // Si XLSX no está disponible globalmente, hace fallback a CSV.
@@ -18669,8 +18766,8 @@ function viajesExportarExcel() {
     return;
   }
   const aoa = [[
-    'Fecha', 'Origen', 'Destino', 'Origen cereal', 'Destino cereal', 'Producto',
-    'Kg carga', 'Kg descarga', 'Diferencia',
+    'Fecha', 'Origen', 'Destino', 'Origen cereal', 'Destino cereal', 'Comprador', 'Producto',
+    'Peso neto (kg)', 'Neto destino (kg)', 'Diferencia', 'Merma (kg)', 'Neto a liquidar (kg)',
     'Tarifa $/t', 'Flete total',
     'Transportista', 'CUIT transporte', 'Chofer', 'Patente', 'Acoplado', 'Tipo camión',
     'Carta de porte', 'CTG', 'Pagador del flete',
@@ -18688,10 +18785,11 @@ function viajesExportarExcel() {
     const _dc = v.destinoTipo==='cerealera' ? ('Cerealera: ' + (_depD.nombre||''))
               : v.destinoTipo==='venta_directa' ? 'Venta directa'
               : v.destinoTipo==='otro' ? ('Depósito: ' + (_depD.nombre||'')) : '';
+    const _comp = v.compradorClienteId ? (((state.cache.clientes||[]).find(x=>x.id===v.compradorClienteId)||{}).razonSocial || '') : '';
     aoa.push([
       v.fecha ? String(v.fecha).slice(0, 10) : '',
-      v.origen || '', v.destino || '', _oc, _dc, v.producto || '',
-      v.cantidad || 0, v.kgDescarga || 0, dif,
+      v.origen || '', v.destino || '', _oc, _dc, _comp, v.producto || '',
+      v.cantidad || 0, v.kgDescarga || 0, dif, v.mermaKg || 0, v.netoLiquidar || 0,
       v.tarifa || 0, viajeFleteTotal(v),
       v.transportista || '', v.transporteCuit || '', v.chofer || '', v.patente || '', v.patenteAcoplado || '', v.tipoCamion || '',
       v.cartaPorte || '', v.ctg || '', v.pagadorFlete || '',
@@ -18740,11 +18838,20 @@ async function viajeForm(id=null) {
     body: `
       <p class="text-xs text-slate-500 mb-2">El <b>estado</b> del viaje se actualiza solo según los datos cargados (kg, factura, pago). Podés sobreescribirlo manualmente si hace falta.</p>
       ${viajeDatalistsHTML()}
-      <h4 class="font-semibold text-slate-700 text-sm mb-1.5 mt-1">Viaje</h4>
+      <!-- 1) DATOS DEL VIAJE -->
+      <h4 class="font-semibold text-slate-700 text-sm mb-1.5 mt-1">Datos del viaje</h4>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${fechaStr}"/></div>
-        <div><label class="label">Producto / Carga (grano)</label>${granoSelect('f-prod', it.producto||'', { placeholder:'— Grano —' })}</div>
-        <div class="col-span-2"><label class="label">Origen del cereal</label>
+        <div><label class="label">Producto / grano</label>${granoSelect('f-prod', it.producto||'', { placeholder:'— Grano —' })}</div>
+        <div><label class="label">Estado</label>
+          <select id="f-estado" class="input">
+            ${Object.entries(VIAJE_ESTADOS).map(([k,v])=>`<option value="${k}" ${k===estadoActual?'selected':''}>${v.label}</option>`).join('')}
+          </select>
+        </div>
+        <div><label class="label">Unidad</label>${catSelect('f-uni', 'Unidad de medida', it.unidad||'kg', { placeholder:'— Unidad —' })}</div>
+        <div class="col-span-2"><label class="label">Origen (localidad)</label><input id="f-ori" class="input" value="${esc(it.origen||'')}" placeholder="Ej: Sampacho, Córdoba"/></div>
+        <div class="col-span-2"><label class="label">Destino (localidad)</label><input id="f-des" class="input" value="${esc(it.destino||'')}" placeholder="Ej: Quequén, Buenos Aires"/></div>
+        <div class="col-span-4"><label class="label">Origen del cereal</label>
           <select id="f-origtipo" class="input mb-2" onchange="viajeOrigTipo()">
             <option value="" ${!it.campanaId && !it.depositoOrigenId ? 'selected':''}>— Sin especificar / texto libre —</option>
             <option value="campana" ${it.campanaId?'selected':''}>🌾 De una campaña (trilla)</option>
@@ -18768,38 +18875,33 @@ async function viajeForm(id=null) {
               <button type="button" class="btn btn-ghost text-xs text-emerald-700" onclick="viajeAddOrigRow()">+ Agregar depósito</button>
               <div id="f-origmulti-sum" class="text-[11px] text-slate-500"></div>
             </div>
-            <div class="text-[10px] text-slate-500">El cereal sale de cada depósito por los Kg indicados. La suma debe dar los Kg del viaje.</div>
+            <div class="text-[10px] text-slate-500">El cereal sale de cada depósito por los Kg indicados. La suma debe dar el peso neto del viaje.</div>
           </div>
         </div>
-        <div class="col-span-2"><label class="label">Origen</label><input id="f-ori" class="input" value="${esc(it.origen||'')}" placeholder="Ej: Sampacho, Córdoba"/></div>
-        <div class="col-span-2"><label class="label">Destino</label><input id="f-des" class="input" value="${esc(it.destino||'')}" placeholder="Ej: Quequén, Buenos Aires"/></div>
-        <div><label class="label">Km recorridos</label><input id="f-km" type="number" step="0.01" class="input" value="${it.km||''}"/></div>
-        <div><label class="label">Tarifa ($/ton)</label><input id="f-tarifa" type="number" step="0.01" class="input" value="${it.tarifa||''}"/></div>
-        <div class="col-span-2"></div>
       </div>
 
-      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Carga / descarga</h4>
-      <div class="grid grid-cols-4 gap-3 mb-3">
-        <div><label class="label">Kg carga</label><input id="f-kg" type="number" step="0.01" class="input" value="${it.cantidad||''}" oninput="viajeRecalcDif()"/></div>
-        <div><label class="label">Kg descarga</label><input id="f-kgd" type="number" step="0.01" class="input" value="${it.kgDescarga||''}" oninput="viajeRecalcDif()"/></div>
-        <div><label class="label">Diferencia</label><div id="f-dif" class="input bg-slate-50 font-semibold flex items-center">—</div></div>
-        <div><label class="label">Unidad</label>${catSelect('f-uni', 'Unidad de medida', it.unidad||'', { placeholder:'— Unidad —' })}</div>
-      </div>
-
-      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">⚖️ Pesaje del camión (para Carta de Porte)</h4>
-      <div class="grid grid-cols-3 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
-        <div class="col-span-3 text-[11px] text-blue-800">📍 <b>Origen</b> — antes de cargar y al salir</div>
+      <!-- 2) PESOS (CARTA DE PORTE) -->
+      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">⚖️ Pesos (Carta de Porte)</h4>
+      <div class="grid grid-cols-3 gap-3 mb-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
+        <div class="col-span-3 text-[11px] text-blue-800">📍 <b>Origen</b> — antes de cargar y al salir. El <b>Peso Neto</b> es lo que viaja (kg transportados).</div>
         <div><label class="label">Tara (kg, vacío)</label><input id="f-tara" type="number" step="0.01" class="input" value="${it.kgTara||''}" oninput="viajeRecalcKgOri()"/></div>
         <div><label class="label">Bruto (kg, cargado)</label><input id="f-bruto" type="number" step="0.01" class="input" value="${it.kgBruto||''}" oninput="viajeRecalcKgOri()"/></div>
-        <div><label class="label">Neto (kg)</label><input id="f-neto" type="number" step="0.01" class="input bg-emerald-50 font-semibold" value="${it.kgNeto||''}"/></div>
-        <div class="col-span-3 text-[11px] text-blue-800 mt-1">📍 <b>Destino</b> — al llegar y después de descargar (opcional)</div>
+        <div><label class="label">Peso Neto (kg) *</label><input id="f-neto" type="number" step="0.01" class="input bg-emerald-50 font-semibold" value="${(it.kgNeto ?? it.cantidad)||''}" oninput="viajeRecalcDif()"/></div>
+        <div class="col-span-3 text-[11px] text-blue-800 mt-1">📍 <b>Destino</b> — al llegar y después de descargar (opcional).</div>
         <div><label class="label">Tara destino</label><input id="f-taraD" type="number" step="0.01" class="input" value="${it.kgTaraDest||''}" oninput="viajeRecalcKgDest()"/></div>
         <div><label class="label">Bruto destino</label><input id="f-brutoD" type="number" step="0.01" class="input" value="${it.kgBrutoDest||''}" oninput="viajeRecalcKgDest()"/></div>
-        <div><label class="label">Neto destino</label><input id="f-netoD" type="number" step="0.01" class="input bg-emerald-50 font-semibold" value="${it.kgNetoDest||''}"/></div>
-        <div class="col-span-3 text-[10px] text-slate-500">Neto = Bruto − Tara · sincroniza con Kg carga (origen) y Kg descarga (destino)</div>
+        <div><label class="label">Peso Neto destino (kg)</label><input id="f-netoD" type="number" step="0.01" class="input bg-emerald-50 font-semibold" value="${(it.kgNetoDest ?? it.kgDescarga)||''}" oninput="viajeRecalcDif()"/></div>
+        <div class="col-span-3 text-[10px] text-slate-500">Peso Neto = Bruto − Tara.</div>
+      </div>
+      <div class="grid grid-cols-3 gap-3 mb-3 p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+        <div><label class="label">Diferencia (origen − destino)</label><div id="f-dif" class="input bg-white font-semibold flex items-center">—</div></div>
+        <div><label class="label">Merma (kg)</label><input id="f-merma" type="number" step="0.01" class="input" value="${it.mermaKg||''}" oninput="viajeRecalcMerma()" placeholder="0"/><div id="f-merma-pct" class="text-[10px] text-slate-500 mt-1"></div></div>
+        <div><label class="label">Neto a liquidar (kg)</label><input id="f-netoliq" type="number" step="0.01" class="input bg-white font-semibold" value="${it.netoLiquidar||''}"/></div>
+        <div class="col-span-3 text-[10px] text-emerald-800">💡 <b>Neto a liquidar = Peso Neto − Merma</b>. La merma solo afecta la liquidación y los kg acopiados; el <b>flete se cobra por el peso neto transportado</b> (sin descontar merma).</div>
       </div>
 
-      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Destino del cereal</h4>
+      <!-- 3) DESTINO DEL CEREAL (VENTA) -->
+      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Destino del cereal (venta)</h4>
       <div class="grid grid-cols-3 gap-3 mb-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
         <div><label class="label">Tipo de destino</label>
           <select id="f-dtipo" class="input" onchange="viajeDestTipo()">
@@ -18810,14 +18912,14 @@ async function viajeForm(id=null) {
           </select>
         </div>
         <div class="col-span-2" id="f-ddep-wrap" style="${it.destinoTipo==='cerealera'?'':'display:none'}">
-          <label class="label">Cerealera destino</label>
+          <label class="label">Cerealera / Destino (dónde descarga) <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeQuickCerealera()">+ nueva</button></label>
           <select id="f-ddep" class="input">
-            <option value="">— Cargá cerealeras desde Stock → Cerealeras —</option>
+            <option value="">— Elegí la cerealera —</option>
           </select>
         </div>
-        <div class="col-span-3"><label class="label">Comprador (a quién le vendés)</label>
+        <div class="col-span-3"><label class="label">Comprador (a quién le vendés) <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeQuickComprador()">+ nuevo</button></label>
           <select id="f-comprador" class="input"><option value="">— Sin comprador / a definir —</option>${_clientesV.map(c=>`<option value="${esc(c.id)}" ${c.id===it.compradorClienteId?'selected':''}>${esc(c.razonSocial)}</option>`).join('')}</select>
-          <div class="text-[10px] text-slate-500 mt-1">El comprador puede ser distinto del acopio donde descargás (ej. le vendés a Amashi pero entregás en JHB). Se usa para prellenar la liquidación.</div>
+          <div class="text-[10px] text-slate-500 mt-1">El <b>comprador</b> (a quién le vendés, ej. Serros) puede ser distinto de la <b>cerealera/destino</b> donde descargás el camión (ej. Promaíz). Se usa para prellenar la liquidación y para el cuadro de cereal vendido.</div>
         </div>
         <div class="col-span-3 text-[11px] text-amber-800" id="f-dhint">${it.destinoTipo==='venta_directa'?'💡 Después de guardar este viaje, podés cargar la liquidación de cereal desde la lista de viajes (botón 🧾).':''}</div>
         <div class="col-span-3"><label class="label">📄 Contrato de cereal (imputar esta carta de porte)</label>
@@ -18829,7 +18931,8 @@ async function viajeForm(id=null) {
         </div>
       </div>
 
-      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Documentos y flete</h4>
+      <!-- 4) DOCUMENTOS -->
+      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Documentos</h4>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Carta de porte</label><input id="f-cp" class="input" value="${esc(it.cartaPorte||'')}" placeholder="Nº CP"/></div>
         <div><label class="label">CTG</label><input id="f-ctg" class="input" value="${esc(it.ctg||'')}" placeholder="Código CTG"/></div>
@@ -18838,6 +18941,7 @@ async function viajeForm(id=null) {
         </div>
       </div>
 
+      <!-- 5) TRANSPORTE -->
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Transporte</h4>
       <div class="grid grid-cols-4 gap-3 mb-2 p-3 bg-slate-50 rounded-lg border border-slate-200">
         <div class="col-span-4 flex items-center justify-between">
@@ -18869,9 +18973,11 @@ async function viajeForm(id=null) {
         </div>
         <div><label class="label">Patente chasis <button type="button" class="text-[10px] text-emerald-700 hover:underline" onclick="viajeGuardarContacto('Camion')">💾</button></label><input id="f-pat" list="ds-camion" autocomplete="off" oninput="viajeAutoCamion(this)" onchange="viajeAutoCamion(this)" class="input" value="${esc(it.patente||'')}"/></div>
         <div><label class="label">Patente acoplado</label><input id="f-pata" class="input" value="${esc(it.patenteAcoplado||'')}"/></div>
-        <div></div>
+        <div><label class="label">Km recorridos</label><input id="f-km" type="number" step="0.01" class="input" value="${it.km||''}"/></div>
+        <div><label class="label">Tarifa ($/ton)</label><input id="f-tarifa" type="number" step="0.01" class="input" value="${it.tarifa||''}"/></div>
       </div>
 
+      <!-- 6) GASTOS -->
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Gastos del viaje (opcional)</h4>
       <div class="grid grid-cols-5 gap-3 mb-3">
         <div><label class="label">Combustible</label><input id="f-comb" type="number" step="0.01" class="input" value="${it.combustible||''}"/></div>
@@ -18881,15 +18987,11 @@ async function viajeForm(id=null) {
         <div><label class="label">Total gastos</label><input id="f-total" class="input bg-slate-100" readonly/></div>
       </div>
 
-      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Estado y observaciones</h4>
-      <div class="grid grid-cols-4 gap-3">
-        <div><label class="label">Estado</label>
-          <select id="f-estado" class="input">
-            ${Object.entries(VIAJE_ESTADOS).map(([k,v])=>`<option value="${k}" ${k===estadoActual?'selected':''}>${v.label}</option>`).join('')}
-          </select>
-        </div>
-        <div class="col-span-3 text-xs text-slate-500 pt-6">El estado se sugiere solo: <i>cargado</i> al ingresar kg de carga, <i>descargado</i> al ingresar kg descargados, <i>facturado</i> al vincular la factura, <i>pagado</i> al saldar la cuenta del transporte.</div>
-        <div class="col-span-4"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
+      <!-- 7) OBSERVACIONES -->
+      <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Observaciones</h4>
+      <div class="grid grid-cols-1 gap-3">
+        <div class="text-xs text-slate-500">El estado se sugiere solo: <i>cargado</i> al ingresar peso neto, <i>descargado</i> al ingresar neto destino, <i>facturado</i> al vincular la factura, <i>pagado</i> al saldar la cuenta del transporte. Podés forzarlo con el campo Estado de arriba.</div>
+        <div><textarea id="f-obs" class="input" rows="2" placeholder="Observaciones...">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='viajeSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
@@ -18903,6 +19005,7 @@ async function viajeForm(id=null) {
   inputsTotal.forEach(i => { const el = $('#'+i); if (el) el.oninput = recalc; });
   recalc();
   viajeRecalcDif();
+  viajeRecalcMerma();
   // Cargar depósitos en el select de destino (todos los activos: cerealeras y propios).
   (async () => {
     try {
@@ -19018,7 +19121,7 @@ function viajeAddOrigRow(depositoId='', kg='') {
 function viajeOrigSum() {
   const sumEl = document.getElementById('f-origmulti-sum'); if (!sumEl) return;
   let suma = 0; document.querySelectorAll('#f-origmulti-rows .vj-od-kg').forEach(i => suma += Number(i.value||0));
-  const total = Number($('#f-kg')?.value || $('#f-neto')?.value || 0);
+  const total = Number($('#f-neto')?.value || 0);
   const ok = total>0 && Math.abs(suma-total) <= 1;
   sumEl.innerHTML = `Suma: <b>${fmtN(suma)}</b> kg` + (total>0 ? ` / viaje: <b>${fmtN(total)}</b> kg ${ok?'<span class="text-emerald-600">✓</span>':'<span class="text-red-600">✗ no coincide</span>'}` : '');
 }
@@ -19034,6 +19137,42 @@ function viajeDDepRebuild() {
   sel.innerHTML = `<option value="">— Elegí ${tipo==='cerealera'?'la cerealera':'el depósito'} —</option>` +
     list.map(d => `<option value="${d.id}" ${want===d.id?'selected':''}>${d.tipo==='cerealera'?'🏭':'📦'} ${esc(d.nombre)}${d.localidad?` · ${esc(d.localidad)}`:''}</option>`).join('');
   if (!list.length) sel.insertAdjacentHTML('beforeend', `<option value="" disabled>${tipo==='cerealera'?'No hay cerealeras ACTIVAS — cargalas/activalas en Cerealeras y depósitos':'No hay depósitos propios activos'}</option>`);
+}
+// Alta rápida de COMPRADOR (cliente) sin cerrar el viaje. Crea el cliente con
+// razón social (y CUIT opcional) y lo deja seleccionado en el select f-comprador.
+async function viajeQuickComprador() {
+  const nombre = (prompt('Nombre / razón social del comprador (a quién le vendés):') || '').trim();
+  if (!nombre) return;
+  const cuit = (prompt('CUIT del comprador (opcional):') || '').trim();
+  try {
+    const r = await api('/api/clientes', { method:'POST', body: JSON.stringify({ razonSocial: nombre, cuit: cuit || null }) });
+    const nuevo = r.data;
+    state.cache.clientes = state.cache.clientes || [];
+    state.cache.clientes.push(nuevo);
+    const sel = $('#f-comprador');
+    if (sel) {
+      const lista = state.cache.clientes.slice().sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||''));
+      sel.innerHTML = '<option value="">— Sin comprador / a definir —</option>' +
+        lista.map(c=>`<option value="${esc(c.id)}" ${c.id===nuevo.id?'selected':''}>${esc(c.razonSocial)}</option>`).join('');
+      sel.value = nuevo.id;
+    }
+    toast('Comprador creado y seleccionado','success');
+  } catch (e) { toast(e.message,'error'); }
+}
+// Alta rápida de CEREALERA (depósito tipo cerealera) sin cerrar el viaje.
+async function viajeQuickCerealera() {
+  const nombre = (prompt('Nombre de la cerealera / destino (dónde descarga el camión):') || '').trim();
+  if (!nombre) return;
+  const localidad = (prompt('Localidad (opcional):') || '').trim();
+  try {
+    const r = await api('/api/depositos', { method:'POST', body: JSON.stringify({ nombre, tipo:'cerealera', localidad: localidad || null, activo:true }) });
+    const nuevo = r.data;
+    state.cache.depositos = state.cache.depositos || [];
+    state.cache.depositos.push(nuevo);
+    const sel = $('#f-ddep');
+    if (sel) { sel.dataset.sel = nuevo.id; viajeDDepRebuild(); }
+    toast('Cerealera creada y seleccionada','success');
+  } catch (e) { toast(e.message,'error'); }
 }
 function viajeDestTipo() {
   const t = $('#f-dtipo').value;
@@ -19052,14 +19191,18 @@ function viajeDestTipo() {
   }
 }
 function viajeRecalcDif() {
-  const kg  = Number($('#f-kg')?.value||0);
-  const kgd = Number($('#f-kgd')?.value||0);
+  const kg  = Number($('#f-neto')?.value||0);
+  const kgd = Number($('#f-netoD')?.value||0);
   const el  = $('#f-dif');
-  if (!el) return;
-  if (!kg && !kgd) { el.textContent='—'; el.className='input bg-slate-50 font-semibold flex items-center text-slate-400'; return; }
-  const dif = kg - kgd;
-  el.textContent = (dif>=0?'':'+') + fmtN(Math.abs(dif)) + ' kg' + (dif>0?' menos':(dif<0?' más':''));
-  el.className = 'input bg-slate-50 font-semibold flex items-center ' + (dif===0?'text-slate-500':(Math.abs(dif)>500?'text-red-600':'text-amber-700'));
+  if (el) {
+    if (!kg && !kgd) { el.textContent='—'; el.className='input bg-white font-semibold flex items-center text-slate-400'; }
+    else {
+      const dif = kg - kgd;
+      el.textContent = (dif>=0?'':'+') + fmtN(Math.abs(dif)) + ' kg' + (dif>0?' menos':(dif<0?' más':''));
+      el.className = 'input bg-white font-semibold flex items-center ' + (dif===0?'text-slate-500':(Math.abs(dif)>500?'text-red-600':'text-amber-700'));
+    }
+  }
+  if (typeof viajeRecalcMerma==='function') viajeRecalcMerma();
 }
 // Lee las filas de "varios depósitos" a [{depositoId, kg}] (descarta filas vacías).
 function viajeReadOrigRows() {
@@ -19076,9 +19219,9 @@ async function viajeSave(id) {
   if ($('#f-origtipo')?.value === 'multidep') {
     const rows = viajeReadOrigRows();
     if (!rows.length) return toast('Agregá al menos un depósito con Kg.','warn');
-    const total = Number($('#f-kg')?.value || $('#f-neto')?.value || 0);
+    const total = Number($('#f-neto')?.value || 0);
     const suma = rows.reduce((a,o)=>a+o.kg,0);
-    if (total>0 && Math.abs(suma-total) > 1) return toast(`La suma de Kg por depósito (${fmtN(suma)}) debe ser igual a los Kg del viaje (${fmtN(total)}).`,'warn');
+    if (total>0 && Math.abs(suma-total) > 1) return toast(`La suma de Kg por depósito (${fmtN(suma)}) debe ser igual al peso neto del viaje (${fmtN(total)}).`,'warn');
   }
   const comb = Number($('#f-comb').value||0);
   const pea  = Number($('#f-pea').value ||0);
@@ -19092,14 +19235,18 @@ async function viajeSave(id) {
     campanaId:        ($('#f-origtipo')?.value === 'campana')  ? ($('#f-campana')?.value || null) : null,
     depositoOrigenId: ($('#f-origtipo')?.value === 'deposito') ? ($('#f-origdep')?.value || null) : null,
     origenDepositos:  ($('#f-origtipo')?.value === 'multidep') ? viajeReadOrigRows() : null,
-    cantidad:        $('#f-kg').value  ? Number($('#f-kg').value)  : null,
-    kgDescarga:      $('#f-kgd').value ? Number($('#f-kgd').value) : null,
+    // Peso Neto (origen) es la carga que viaja: alimenta tanto cantidad (kg carga)
+    // como kgNeto (neto de la CP). Peso Neto destino alimenta kgDescarga y kgNetoDest.
+    cantidad:        $('#f-neto')?.value  ? Number($('#f-neto').value)  : null,
+    kgNeto:          $('#f-neto')?.value  ? Number($('#f-neto').value)  : null,
+    kgDescarga:      $('#f-netoD')?.value ? Number($('#f-netoD').value) : null,
+    kgNetoDest:      $('#f-netoD')?.value ? Number($('#f-netoD').value) : null,
     kgTara:          $('#f-tara')?.value  ? Number($('#f-tara').value)  : null,
     kgBruto:         $('#f-bruto')?.value ? Number($('#f-bruto').value) : null,
-    kgNeto:          $('#f-neto')?.value  ? Number($('#f-neto').value)  : null,
     kgTaraDest:      $('#f-taraD')?.value  ? Number($('#f-taraD').value)  : null,
     kgBrutoDest:     $('#f-brutoD')?.value ? Number($('#f-brutoD').value) : null,
-    kgNetoDest:      $('#f-netoD')?.value  ? Number($('#f-netoD').value)  : null,
+    mermaKg:         $('#f-merma')?.value   ? Number($('#f-merma').value)   : null,
+    netoLiquidar:    $('#f-netoliq')?.value ? Number($('#f-netoliq').value) : null,
     unidad:          $('#f-uni').value.trim() || null,
     cartaPorte:      $('#f-cp').value.trim() || null,
     ctg:             $('#f-ctg').value.trim() || null,

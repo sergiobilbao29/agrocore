@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.185.0';
-const AGROCORE_BUILD = new Date('2026-09-08').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.186.0';
+const AGROCORE_BUILD = new Date('2026-09-09').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -5533,7 +5533,9 @@ const viajeSchema = z.object({
       kgTaraDest:  z.coerce.number().nullable().optional(),
       kgBrutoDest: z.coerce.number().nullable().optional(),
       kgNetoDest:  z.coerce.number().nullable().optional(),
-    
+      mermaKg:      z.coerce.number().nullable().optional(),
+      netoLiquidar: z.coerce.number().nullable().optional(),
+
       transportistaId: z.string().nullable().optional(),
       choferId:        z.string().nullable().optional(),
       camionId:        z.string().nullable().optional(),

@@ -929,6 +929,9 @@ model Viaje {
   kgTaraDest      Float?    // camión vacío en destino (después de descargar)
   kgBrutoDest     Float?    // camión cargado en destino (peso total al llegar)
   kgNetoDest      Float?    // = kgBrutoDest - kgTaraDest (lo que pesó la carga al llegar)
+  // ---- Merma (para liquidación / kg acopiados; NO afecta el flete) ----
+  mermaKg         Float?    // kilos de merma (humedad/calidad) que se restan del peso neto
+  netoLiquidar    Float?    // = peso neto - mermaKg (kg que efectivamente liquida/acopia el comprador)
   unidad          String?
   transportista   String?
   transporteCuit  String?   // CUIT del transporte
