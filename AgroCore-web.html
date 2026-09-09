@@ -2808,6 +2808,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'09/09/2026',
+      titulo:'📥 v2.190.0 — Importar liquidación por PDF y vincular la carta de porte en un paso',
+      desc:'Al importar el PDF de la <b>Liquidación Primaria de Granos</b> (Stock → Liquidaciones de cereal → Importar), la pantalla de revisión ahora te muestra las <b>cartas de porte</b> y te deja <b>tildar la(s) que cubre</b> esa liquidación — tildando solo las del mismo comprador y grano automáticamente. Así, al confirmar, la liquidación queda <b>vinculada a la CP</b> y el viaje pasa a 🧾 Liquidado sin pasos extra. El importador lee número/COE, fecha, comprador, grano, kg, precio, deducciones, retenciones y el neto a cobrar.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/09/2026',
       titulo:'🧾 v2.189.0 — Liquidaciones de cereal asociadas a las cartas de porte',
       desc:'Ahora es fácil <b>asociar la liquidación con su carta de porte</b> y que el viaje quede marcado como cobrado. Desde <b>Viajes</b>, en la fila de la CP, el botón <b>🧾</b> abre la liquidación con esa carta de porte <b>ya tildada</b>. En el formulario podés <b>tildar varias cartas de porte</b> (cuando el acopio te liquida varios camiones juntos), y una misma CP puede tener <b>más de una liquidación</b> (parcial + final por mermas): cargás cada liquidación y tildás la misma CP. La lista de viajes tiene una columna nueva <b>“Cereal (cobro)”</b>: <i>Sin liquidar → 🧾 Liquidado → ✅ Cobrado</i>. Cuando marcás la liquidación como <b>cobrada</b> (en Stock → Liquidaciones de cereal), la CP pasa a ✅ Cobrado.' },
@@ -27274,15 +27277,20 @@ async function liqCerealImportRun(){
   }catch(e){ if(msg) msg.innerHTML=`<span class="text-red-700">❌ ${esc(e.message)}</span>`; }
 }
 async function liqCerealPreview(p){
-  let depos=[], prods=[], clientes=[];
+  let depos=[], prods=[], clientes=[], cpPend=[];
   try{
-    const [d,pr,cl]=await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes')]);
+    const [d,pr,cl,vi]=await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes'), api('/api/viajes').catch(()=>({data:[]}))]);
     depos=(d.data||[]).filter(x=>x.activo && x.tipo==='cerealera');
     prods=(pr.data||[]).filter(x=>x.activo && /gran|cereal/i.test(x.categoria||''));
     clientes=cl.data||[];
+    cpPend=(vi.data||[]).filter(x=>x.estado!=='anulada' && (x.destinoTipo==='venta_directa'||x.destinoTipo==='cerealera'||x.compradorClienteId))
+      .sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
   }catch(e){ return toast(e.message,'error'); }
   state._lqcData=p;
   const cliMatch = p.clienteId || (p.compradorCuit ? (clientes.find(c=>String(c.cuit||'').replace(/\D/g,'')===String(p.compradorCuit).replace(/\D/g,''))||{}).id : '') || '';
+  // CP candidatas a vincular: si venimos de Posición de granos, ya trae una fija.
+  const preCP = state._pgLinkEntrega || null;
+  const _grano = String(p.granoNombre||'').toLowerCase().split(' ')[0]||'';
   const hoy=(p.fecha||new Date().toISOString().slice(0,10));
   openModal({ title:'📥 Revisar liquidación antes de importar', size:'max-w-2xl',
     body:`
@@ -27310,6 +27318,15 @@ async function liqCerealPreview(p){
         </div>
         <div class="col-span-2 bg-slate-50 rounded p-2 text-xs text-slate-500">Operación c/IVA: ${p.operacionCIva?fmt$(p.operacionCIva):'—'} · Deducciones: ${fmt$(p.deducciones||0)} · Retenciones: ${fmt$(p.retenciones||0)}</div>
         <div class="col-span-2"><label class="label">Neto a cobrar (deuda del cliente) *</label><input id="lqc-neto" type="number" step="0.01" class="input font-bold" value="${p.neto||''}"/></div>
+        ${cpPend.length ? `
+        <div class="col-span-2 border-t pt-2 mt-1">
+          <label class="label">Cartas de porte que cubre esta liquidación <span class="text-[11px] text-slate-400">(tildá una o varias)</span></label>
+          <div class="border border-slate-200 rounded-lg overflow-hidden" style="max-height:24vh;overflow:auto">
+            <table class="data text-xs"><thead><tr><th style="width:26px"></th><th>Fecha</th><th>CP</th><th>Producto</th><th>Comprador/destino</th><th class="text-right">Peso neto</th><th>Cereal</th></tr></thead>
+            <tbody>${cpPend.map(v=>{ const kg=Number(v.netoLiquidar||v.kgDescarga||v.kgNeto||v.cantidad||0); const comp=(v.compradorClienteId&&(clientes.find(c=>c.id===v.compradorClienteId)||{}).razonSocial)||v.destino||'—'; const est=v.liqEstado==='cobrado'?'✅':v.liqEstado==='cobrado_parcial'?'◐':v.liqEstado==='liquidado'?'🧾':''; const pre=(v.id===preCP || (cliMatch && v.compradorClienteId===cliMatch && _grano && String(v.producto||'').toLowerCase().includes(_grano)))?'checked':''; return `<tr><td><input type="checkbox" class="lqc-cp" value="${esc(v.id)}" ${pre}/></td><td>${fmtFecha(v.fecha)}</td><td class="font-mono">${esc(v.cartaPorte||v.ctg||'—')}</td><td>${esc(v.producto||'—')}</td><td>${esc(comp)}</td><td class="text-right">${fmtN(Math.round(kg))}</td><td>${est}</td></tr>`;}).join('')}</tbody></table>
+          </div>
+          <div class="text-[10px] text-slate-500 mt-1">Tildé automáticamente las CP del mismo comprador y grano. Ajustá si hace falta. Podés dejar sin tildar y vincularlas después.</div>
+        </div>` : ''}
       </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="liqCerealImportConfirmar()">✅ Importar</button>` });
@@ -27328,12 +27345,14 @@ async function liqCerealImportConfirmar(){
   if(cliSel==='__new__'){ const rs=$('#lqc-cli-rs').value.trim(); if(!rs) return toast('Poné la razón social del cliente','warn'); body.clienteNuevo={ razonSocial:rs, cuit:$('#lqc-cli-cuit').value.trim()||null }; }
   else if(cliSel){ body.clienteId=cliSel; }
   else return toast('Elegí o creá el comprador (cliente)','warn');
-  // Si venimos desde Posición de granos, vinculamos la liquidación con el viaje (CP).
+  // Vincular con las cartas de porte tildadas (o la que venga de Posición de granos).
   const linkEnt = state._pgLinkEntrega || null;
-  if(linkEnt) body.viajeIds=[linkEnt];
+  const vids = $$('.lqc-cp:checked').map(c=>c.value);
+  if (linkEnt && !vids.includes(linkEnt)) vids.push(linkEnt);
+  if (vids.length) body.viajeIds = vids;
   try{
     const r=await api('/api/liquidaciones-cereal/importar',{ method:'POST', body:JSON.stringify(body) });
-    toast('Liquidación importada'+(r.clienteCreado?' · cliente creado':'')+' · stock descontado y deuda generada'+(linkEnt?' · vinculada a la entrega':''),'success');
+    toast('Liquidación importada'+(r.clienteCreado?' · cliente creado':'')+' · stock descontado y deuda generada'+(vids.length?` · vinculada a ${vids.length} carta${vids.length>1?'s':''} de porte`:''),'success');
     closeModal(); const volver=state._pgVolver; state._pgLinkEntrega=null; state._pgVolver=null;
     if(volver) pages.posicionGranos(); else pages.liquidaciones();
   }catch(e){ toast(e.message,'error'); }
