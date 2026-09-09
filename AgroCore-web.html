@@ -2688,8 +2688,48 @@ pages.ayuda = async function() {
            href="https://wa.me/5493582408884?text=Hola!%20Tengo%20una%20consulta%20sobre%20AgroCore.">WhatsApp</a>
         y te damos una mano.
       </div>
+      ${state.user?.superAdmin ? `
+      <div class="bg-white border border-slate-200 rounded-xl p-4 mt-4">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <div class="font-semibold text-slate-800">🌐 Consultas del asistente de la web</div>
+            <div class="text-xs text-slate-500">Preguntas que dejan los visitantes en el chat de agrocore.ar.</div>
+          </div>
+          <button class="btn btn-secondary" onclick="botWebLogsAbrir()">Ver consultas</button>
+        </div>
+      </div>` : ''}
     </div>`;
 };
+// Visor de consultas del asistente público de la web (solo superadmin).
+async function botWebLogsAbrir() {
+  openModal({ title:'🌐 Consultas del asistente de la web', size:'max-w-3xl',
+    body:`<div id="bwl-body" class="text-sm text-slate-500">Cargando…</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+  try {
+    const r = await api('/api/bot-web/logs?take=300');
+    const rows = r.data || [];
+    const body = $('#bwl-body'); if (!body) return;
+    if (!rows.length) { body.innerHTML = '<div class="text-center text-slate-400 py-8">Todavía no hay consultas registradas.</div>'; return; }
+    const fuenteBadge = f => f==='ia' ? '<span class="badge badge-blue text-[10px]">IA</span>'
+                            : f==='charla' ? '<span class="badge badge-gray text-[10px]">charla</span>'
+                            : f==='sin_resultado' ? '<span class="badge badge-yellow text-[10px]">sin respuesta</span>'
+                            : '<span class="badge badge-green text-[10px]">base</span>';
+    body.innerHTML = `
+      <div class="text-xs text-slate-500 mb-2">Últimas ${rows.length} de ${r.total||rows.length} consultas.</div>
+      <div class="overflow-x-auto"><table class="data text-xs"><thead><tr>
+        <th>Fecha</th><th>Pregunta</th><th>Respuesta</th><th></th>
+      </tr></thead><tbody>
+      ${rows.map(x=>`<tr class="table-row align-top">
+        <td class="whitespace-nowrap">${fmtFecha(x.createdAt)} ${new Date(x.createdAt).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}</td>
+        <td class="font-medium">${esc(x.pregunta||'')}</td>
+        <td class="text-slate-600">${esc((x.respuesta||'').slice(0,180))}${(x.respuesta||'').length>180?'…':''}</td>
+        <td>${fuenteBadge(x.fuente)}</td>
+      </tr>`).join('')}
+      </tbody></table></div>`;
+  } catch (e) {
+    const body = $('#bwl-body'); if (body) body.innerHTML = `<div class="text-red-600">${esc(e.message||'No se pudo cargar')}</div>`;
+  }
+}
 
 /* ----- INICIO ----- */
 pages.inicio = async function() {
@@ -2768,6 +2808,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/09/2026',
+      titulo:'🌐 v2.188.0 — Ahora sabés qué preguntan en el asistente de la web',
+      desc:'El asistente del sitio (agrocore.ar) ahora <b>guarda las consultas</b> de los visitantes. Si sos <b>superadmin</b>, entrá a <b>Ayuda y manual → “Ver consultas”</b> y ves las últimas preguntas y respuestas (con fecha y de dónde salió la respuesta). Sirve para saber qué busca la gente y mejorar el sistema.' },
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'09/09/2026',
+      titulo:'🤖 v2.187.0 — El asistente ya explica las novedades de viajes y la sección Ayuda',
+      desc:'Actualizamos al asistente para que sepa explicar lo nuevo: cómo cargar la <b>merma y el neto a liquidar</b> en el viaje (y que el flete se cobra por el peso neto transportado), la diferencia entre <b>comprador</b> y <b>cerealera/destino</b>, el cuadro de <b>cereal vendido</b>, y dónde está el <b>Manual e instructivos</b> (sección Ayuda).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/09/2026',
       titulo:'🚚 v2.186.0 — Viajes: merma y neto a liquidar, comprador y pantalla más ordenada',
       desc:'Rehicimos la pantalla de <b>Nuevo/Editar viaje</b> para que sea más clara y corta: sacamos campos duplicados (antes cargabas "Kg carga" y "Neto" por separado; ahora es un solo <b>Peso Neto</b>) y reagrupamos todo por secciones (Datos, Pesos, Destino/venta, Documentos, Transporte, Gastos). <b>(1) Merma y neto a liquidar:</b> cargás la <b>Merma (kg)</b> y el sistema calcula el <b>Neto a liquidar = Peso Neto − Merma</b>. Importante: el <b>flete se sigue cobrando por el peso neto transportado</b> (sin descontar merma); la merma solo afecta la liquidación y los kg acopiados. <b>(2) Comprador vs Cerealera:</b> podés cargar por separado <b>a quién le vendés</b> (comprador, ej. Serros) y <b>dónde descargás</b> (cerealera/destino, ej. Promaíz), y crear cualquiera de los dos <b>sin salir del viaje</b> con "+ nuevo". La lista de viajes ahora tiene una columna <b>“Vendido a / Comprador”</b>. <b>(3) Cereal vendido:</b> nuevo cuadro arriba de la lista con el <b>total vendido (venta directa)</b> por peso neto, que podés filtrar por comprador y por grano. <b>(4)</b> Arreglamos que la <b>fecha</b> del viaje se mostraba un día antes.' },

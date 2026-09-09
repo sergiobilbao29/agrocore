@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.186.0';
+const AGROCORE_VERSION = '2.188.0';
 const AGROCORE_BUILD = new Date('2026-09-09').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1094,6 +1094,55 @@ app.get('/api/system/demo-status', async (_req, res) => {
     // Si falla, devolver "no demo" para no exponer credenciales por error
     res.json({ ok: true, demoAdmin: false, demoSuper: false, anyDemo: false });
   }
+});
+
+// Asistente PÚBLICO de la web (agrocore.ar). Responde consultas sobre AgroCore y
+// agronomía, y GUARDA cada pregunta+respuesta en BotWebLog para poder revisarlas
+// después. No requiere login (por eso va antes del authMiddleware).
+app.post('/api/public/bot-web', async (req, res) => {
+  const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+  const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
+  const pregunta = String((req.body && req.body.pregunta) || '').trim().slice(0, 400);
+  let respuesta = '', fuente = '';
+  try {
+    const lim = _botWebLimite(ip);
+    if (lim) return res.status(429).json({ ok: false, error: 'Demasiadas consultas por ahora. Probá en un rato.' });
+    if (!pregunta) return res.status(400).json({ ok: false, error: 'Falta la pregunta' });
+    const cfg = await _iaConfig();
+    if (!cfg.enabled) {
+      const hit = _buscarAgro(pregunta);
+      respuesta = hit ? hit.entry.respuesta : ''; fuente = 'base';
+    } else {
+      _botWeb.day.n++; _botWeb.ip.set(ip, (_botWeb.ip.get(ip) || 0) + 1);
+      const ctx = _botWebContexto(pregunta, 6).map((e, i) => `(${i + 1}) [${e.materia}] ${e.pregunta}\n${e.respuesta}`).join('\n\n').slice(0, 6000);
+      const sys = 'Sos el asistente de AgroCore (software de gestión agropecuaria argentino) en su sitio web público. Respondé SOLO sobre: el sistema AgroCore, las calculadoras agronómicas, el vademécum de insumos y agronomía/ganadería general para productores y estudiantes de agronomía. Si te preguntan algo ajeno (política, chismes, programación, etc.), respondé amablemente que solo ayudás con temas de AgroCore y el campo. Usá español rioplatense (voseo), claro y breve (máximo ~120 palabras). Si hay un cálculo, mostrá la fórmula y el resultado. Basate en el CONTEXTO cuando exista; si no sabés, decilo y sugerí solicitar una demo. No inventes precios ni datos de cuentas. Aclarar que dosis y umbrales son orientativos (validar con marbete/SENASA).';
+      const user = (ctx ? ('CONTEXTO:\n' + ctx + '\n\n') : '') + 'PREGUNTA: ' + pregunta;
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST', headers: { 'Authorization': 'Bearer ' + cfg.apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', temperature: 0.3, max_tokens: 420, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] }),
+      });
+      if (!r.ok) { const hit = _buscarAgro(pregunta); respuesta = hit ? hit.entry.respuesta : ''; fuente = 'base'; }
+      else { const j = await r.json(); respuesta = ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '').trim(); fuente = 'ia'; }
+    }
+    res.json({ ok: true, fuente, respuesta });
+  } catch (e) { res.status(200).json({ ok: false, error: 'No disponible' }); }
+  // Registro best-effort (no bloquea la respuesta ni la rompe si falla).
+  try { if (pregunta) await prisma.botWebLog.create({ data: { pregunta, respuesta: respuesta ? respuesta.slice(0, 4000) : null, fuente: fuente || null, ip: ip || null, userAgent: userAgent || null } }); } catch {}
+});
+
+// Solo-registro: para las respuestas que el chat web resuelve localmente (base de
+// conocimiento del cliente), sin pasar por IA. Guarda pregunta+respuesta y responde ok.
+app.post('/api/public/bot-web-log', async (req, res) => {
+  try {
+    const ip = String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim();
+    const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
+    const pregunta = String((req.body && req.body.pregunta) || '').trim().slice(0, 400);
+    if (!pregunta) return res.json({ ok: true });
+    const respuesta = String((req.body && req.body.respuesta) || '').slice(0, 2000) || null;
+    const fuente = String((req.body && req.body.fuente) || 'base').slice(0, 30);
+    await prisma.botWebLog.create({ data: { pregunta, respuesta, fuente, ip: ip || null, userAgent: userAgent || null } });
+    res.json({ ok: true });
+  } catch (e) { res.json({ ok: false }); }
 });
 
 // ============================================================
@@ -11109,14 +11158,32 @@ const _AYUDA_KB = [
       'Ejemplo: en septiembre pagás el sueldo de agosto; lo que no retiró queda a favor y aparece arriba del mes siguiente.',
       'Sueldos que cambian todos los meses (administración, aumento de comercio): usá el botón "💵 Sueldo del mes" y cargá el valor de ese mes. Queda FIJO para ese mes: cambiar el sueldo en la ficha NO modifica los meses ya cargados.'],
     atajo:{ page:'empleados', label:'Abrir Empleados' } },
-  { id:'viajes', terms:['viaje','flete','transporte','camion','chofer','acoplado','carta de porte','transportista'],
-    titulo:'Cargar un viaje / flete',
+  { id:'viajes', terms:['viaje','flete','transporte','camion','chofer','acoplado','carta de porte','transportista','peso neto','comprador'],
+    titulo:'Cargar un viaje / carta de porte',
     pasos:[
-      'Entrá a Viajes → "Nuevo viaje".',
-      'Elegí origen (campo o depósito/silo), destino, producto y cantidad; podés asociarlo a una campaña.',
+      'Entrá a Viajes → "Nuevo viaje". El formulario está en secciones: Datos, Pesos, Destino/venta, Documentos, Transporte, Gastos.',
+      'En Pesos cargás el Peso Neto (o Tara y Bruto, que lo calculan solo). Ese peso neto es lo que viaja y por lo que se cobra el flete.',
+      'En Destino del cereal elegís a quién le vendés (Comprador, ej. Serros) y, aparte, dónde descargás (Cerealera/Destino, ej. Promaíz). Podés crear cualquiera de los dos con "+ nuevo" sin salir del viaje.',
       'Al guardar se dan de alta solos el transportista, chofer, camión y acoplado si son nuevos.',
-      'Marcá "Pagado" para registrar el pago y, si aplica, la comisión del chofer-empleado.'],
+      'Marcá "Pagado" para registrar el pago y, si aplica, la comisión del chofer-empleado.',
+      'Arriba de la lista tenés el cuadro "Cereal vendido" (venta directa) por peso neto, filtrable por comprador y grano.'],
     atajo:{ page:'viajes', label:'Abrir Viajes' } },
+  { id:'viaje_merma', terms:['merma','neto a liquidar','descontar merma','merma humedad','kg acopiados','merma cereal','peso neto menos merma'],
+    titulo:'Merma y neto a liquidar en el viaje',
+    pasos:[
+      'En el viaje, dentro de la sección Pesos, cargás la Merma (kg).',
+      'El sistema calcula solo el Neto a liquidar = Peso Neto − Merma (te muestra también el % que representa).',
+      'Importante: la merma NO afecta el flete. El flete se cobra por el peso neto transportado; la merma solo baja los kg que liquida/acopia el comprador.',
+      'Si el acopio ya te entrega el neto con las mermas incluidas, dejá la merma en 0.',
+      'El neto a liquidar queda guardado en la CP para prellenar después la liquidación.'],
+    atajo:{ page:'viajes', label:'Abrir Viajes' } },
+  { id:'ayuda_manual', terms:['manual','ayuda','instructivo','instructivos','como se usa','guia de uso','tutorial','pdf de ayuda','donde esta el manual'],
+    titulo:'Manual e instructivos (sección Ayuda)',
+    pasos:[
+      'Arriba de todo en el menú tenés "Ayuda y manual" (visible para todos).',
+      'Ahí abrís el Manual de usuario completo en una pestaña nueva.',
+      'Y descargás los instructivos de procesos en PDF (inicio rápido, pagos y cobros, cheques, sueldos, circuito de cereal, contratos, liquidación, forrajera, rodeos, guías de hacienda, costo por kilo de carne y más), agrupados por tema.'],
+    atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
   { id:'mensajes', terms:['mensaje','chat','grupo','grupos','mensajeria','avisos','notificaciones','asistente','equipo','comunicar'],
     titulo:'Mensajes, grupos y avisos',
     pasos:[
@@ -11824,6 +11891,18 @@ app.post('/api/bot-web', async (req, res) => {
     const respuesta = ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || '').trim();
     res.json({ ok: true, fuente: 'ia', respuesta });
   } catch (e) { res.status(200).json({ ok: false, error: 'No disponible' }); }
+});
+
+// Consultas del asistente PÚBLICO de la web (solo superadmin). Lista las últimas
+// preguntas+respuestas registradas para revisar qué consultan los visitantes.
+app.get('/api/bot-web/logs', async (req, res, next) => {
+  try {
+    if (!req.user?.superAdmin) return res.status(403).json({ ok: false, error: 'Solo un superadmin puede ver las consultas de la web.' });
+    const take = Math.min(Number(req.query.take) || 300, 1000);
+    const rows = await prisma.botWebLog.findMany({ orderBy: { createdAt: 'desc' }, take });
+    const total = await prisma.botWebLog.count();
+    res.json({ ok: true, data: rows, total });
+  } catch (e) { next(e); }
 });
 
 // --- Asistente: interpretar (no ejecuta) ---

@@ -1564,6 +1564,21 @@ model Mensaje {
   @@index([createdAt])
 }
 
+// Registro de consultas al asistente PÚBLICO de la web (agrocore.ar). No tiene
+// companyId: son visitantes anónimos. Sirve para saber qué preguntan y mejorar
+// la base de respuestas. Solo lo ve un superadmin desde la app.
+model BotWebLog {
+  id        String   @id @default(cuid())
+  pregunta  String
+  respuesta String?
+  fuente    String?    // "ia" | "base" | "" (sin respuesta)
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 model ChatEstado {
   id              String   @id @default(cuid())
   companyId       String
