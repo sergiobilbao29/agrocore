@@ -2809,6 +2809,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/09/2026',
+      titulo:'🧾 v2.189.0 — Liquidaciones de cereal asociadas a las cartas de porte',
+      desc:'Ahora es fácil <b>asociar la liquidación con su carta de porte</b> y que el viaje quede marcado como cobrado. Desde <b>Viajes</b>, en la fila de la CP, el botón <b>🧾</b> abre la liquidación con esa carta de porte <b>ya tildada</b>. En el formulario podés <b>tildar varias cartas de porte</b> (cuando el acopio te liquida varios camiones juntos), y una misma CP puede tener <b>más de una liquidación</b> (parcial + final por mermas): cargás cada liquidación y tildás la misma CP. La lista de viajes tiene una columna nueva <b>“Cereal (cobro)”</b>: <i>Sin liquidar → 🧾 Liquidado → ✅ Cobrado</i>. Cuando marcás la liquidación como <b>cobrada</b> (en Stock → Liquidaciones de cereal), la CP pasa a ✅ Cobrado.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/09/2026',
       titulo:'🌐 v2.188.0 — Ahora sabés qué preguntan en el asistente de la web',
       desc:'El asistente del sitio (agrocore.ar) ahora <b>guarda las consultas</b> de los visitantes. Si sos <b>superadmin</b>, entrá a <b>Ayuda y manual → “Ver consultas”</b> y ves las últimas preguntas y respuestas (con fecha y de dónde salió la respuesta). Sirve para saber qué busca la gente y mejorar el sistema.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'09/09/2026',
@@ -18455,6 +18458,15 @@ function viajeEstadoBadge(e) {
   const m = VIAJE_ESTADOS[e] || { label: e || '—', cls: 'badge-gray' };
   return `<span class="badge ${m.cls}">${m.label}</span>`;
 }
+// Estado de cobro del cereal de una CP (calculado en el backend a partir de las
+// liquidaciones vinculadas). Distinto del estado del flete (pagado).
+function viajeCerealTxt(v) {
+  const e = v.liqEstado || (v.liqCount ? 'liquidado' : 'sin_liquidar');
+  if (e === 'cobrado')          return '<span class="badge badge-green" title="Cereal cobrado">✅ Cobrado</span>';
+  if (e === 'cobrado_parcial')  return '<span class="badge badge-blue" title="Alguna liquidación cobrada, otras pendientes">◐ Cobro parcial</span>';
+  if (e === 'liquidado')        return '<span class="badge badge-yellow" title="Liquidado, pendiente de cobro">🧾 Liquidado</span>';
+  return '<span class="text-slate-400">Sin liquidar</span>';
+}
 // Texto de "vendido a": comprador (cliente) si está; si no, la cerealera/destino.
 function viajeCompradorTxt(v) {
   if (v.compradorClienteId) {
@@ -18559,6 +18571,7 @@ pages.viajes = async function() {
     { key:'origenCereal', label:'Origen cereal', defHidden:true, sort:v=>viajeOrigenCerealTxt(v).toLowerCase(), render:v=>viajeOrigenCerealTxt(v) },
     { key:'destinoCereal', label:'Destino cereal', defHidden:true, sort:v=>viajeDestinoCerealTxt(v).toLowerCase(), render:v=>viajeDestinoCerealTxt(v) },
     { key:'comprador', label:'Vendido a / Comprador', sort:v=>viajeCompradorTxt(v).toLowerCase(), render:v=>viajeCompradorTxt(v) },
+    { key:'cereal', label:'Cereal (cobro)', sort:v=>(v.liqEstado||''), render:v=>viajeCerealTxt(v) },
     { key:'producto', label:'Producto', sort:v=>(v.producto||'').toLowerCase(), render:v=>`<b>${esc(v.producto||'—')}</b>` },
     { key:'kgCarga', label:'Peso neto', align:'text-right', sort:v=>Number(v.cantidad||0), render:v=>v.cantidad?fmtN(v.cantidad):'—' },
     { key:'kgDesc', label:'Neto dest.', align:'text-right', sort:v=>Number(v.kgDescarga||0), render:v=>v.kgDescarga?fmtN(v.kgDescarga):'—' },
@@ -18629,7 +18642,7 @@ pages.viajes = async function() {
                   ${canU && v.estado!=='pagado' && can('finanzas:create')?`<button class="btn btn-ghost text-xs text-indigo-700" title="Cargar factura del transporte y pagar en un paso" onclick='viajeFacturarYPagarAbrir(${JSON.stringify(v.id)})'>💸</button>`:''}
                   ${v.destinoTipo==='cerealera' && v.depositoDestinoId && !v.depositoOrigenId && can('stock:entrega_cerealera:create')?`<button class="btn btn-ghost text-xs" title="Cargar entrega del cereal a la cerealera" onclick='viajeEntregaCereal(${JSON.stringify(v.id)})'>📤</button>`:''}
                   ${v.depositoOrigenId && can('finanzas:update')?`<button class="btn btn-ghost text-xs text-amber-700" title="Entregar este cereal a cuenta de un crédito" onclick='viajeEntregaCredito(${JSON.stringify(v.id)})'>🌾</button>`:''}
-                  ${v.destinoTipo==='venta_directa' && can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-ghost text-xs" title="Cargar liquidación de venta del cereal" onclick='viajeLiquidacion(${JSON.stringify(v.id)})'>🧾</button>`:''}
+                  ${(v.destinoTipo==='venta_directa' || v.destinoTipo==='cerealera' || v.compradorClienteId) && can('finanzas:liquidacion_cereal:create')?`<button class="btn btn-ghost text-xs" title="Cargar/asociar la liquidación del cereal de esta carta de porte" onclick='viajeLiquidacion(${JSON.stringify(v.id)})'>🧾</button>`:''}
                   ${canU && v.estado!=='pagado' && v.estado!=='anulada'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar como pagado (sin generar factura)" onclick='viajeMarcarPagado(${JSON.stringify(v.id)})'>💵</button>`:''}
                   ${canU && v.estado!=='anulada' && v.estado!=='pagado'?`<button class="btn btn-ghost text-xs text-orange-600" title="Anular esta carta de porte (revierte sus movimientos, queda como Anulada)" onclick='viajeAnular(${JSON.stringify(v.id)})'>🚫</button>`:''}
                   ${canU && v.estado==='anulada'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Reactivar esta carta de porte" onclick='viajeReactivar(${JSON.stringify(v.id)})'>↩️</button>`:''}
@@ -19521,7 +19534,7 @@ async function viajeEntregaCereal(viajeId) {
 async function viajeLiquidacion(viajeId) {
   const v = (state.cache.viajes||[]).find(x => x.id === viajeId);
   if (!v) return toast('Viaje no encontrado','error');
-  await liqForm();
+  await liqForm(null, viajeId);   // deja tildada esta carta de porte para vincularla
   setTimeout(() => {
     const productos = state.cache.productos || [];
     const prod = productos.find(p => (p.nombre||'').toLowerCase() === (v.producto||'').toLowerCase());
@@ -28370,19 +28383,21 @@ async function pgDesvincular(viajeId,liqId){
   catch(e){ toast(e.message,'error'); }
 }
 function pgImportarParaEntrega(viajeId){ state._pgLinkEntrega=viajeId; state._pgVolver=true; closeModal(); liqCerealImportar(); }
-async function liqForm(edit=null) {
+async function liqForm(edit=null, desdeViajeId=null) {
   const ed = edit || {};
   state._liqEditId = ed.id || null;
-  let depos=[], productos=[], clientes=[], contratos=[], entregasPend=[];
+  let depos=[], productos=[], clientes=[], contratos=[], cpPend=[];
   try {
-    const [d, p, c, ct, en] = await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes'), api('/api/contratos-cereal').catch(()=>({data:[]})), api('/api/entregas-grano').catch(()=>({data:[]}))]);
+    const [d, p, c, ct, vi] = await Promise.all([api('/api/depositos'), api('/api/productos'), api('/api/clientes'), api('/api/contratos-cereal').catch(()=>({data:[]})), api('/api/viajes').catch(()=>({data:[]}))]);
     depos = (d.data||[]).filter(x => x.activo && x.tipo === 'cerealera');
     // Liquidación de cereal: solo granos/cereales (no animales ni insumos).
     productos = (p.data||[]).filter(x => x.activo && /gran|cereal/i.test(x.categoria||''));
     clientes = c.data||[];
     contratos = (ct.data||[]).filter(x => x.estado !== 'anulado');
-    // Cartas de porte (viajes) todavía no liquidadas del todo, para agrupar varias en una liquidación.
-    entregasPend = (en.data||[]).filter(x => x.estado !== 'liquidada').sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+    // Cartas de porte (viajes) para agrupar en la liquidación: las que van a venta/cerealera
+    // o tienen comprador, y que NO están anuladas. Mostramos si ya tienen liquidación.
+    cpPend = (vi.data||[]).filter(x => x.estado !== 'anulada' && (x.destinoTipo==='venta_directa' || x.destinoTipo==='cerealera' || x.compradorClienteId))
+      .sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
   } catch (e) { return toast(e.message,'error'); }
   if (!depos.length) return toast('Cargá primero una cerealera','warn');
   if (!productos.length) return toast('No hay granos cargados. Cargá un cereal o registrá un viaje/compra de grano.','warn');
@@ -28407,18 +28422,18 @@ async function liqForm(edit=null) {
         </div>
       </div>
       <div class="text-[11px] text-slate-500 mb-3">El <b>comprador</b> (ej. Amashi) puede ser distinto del <b>acopio</b> donde descargaste (ej. JHB): poné el acopio arriba y el comprador en "Cliente comprador".</div>
-      ${(!state._liqEditId && entregasPend.length) ? `
+      ${(!state._liqEditId && cpPend.length) ? `
       <div class="kpi p-0 overflow-hidden mb-3">
         <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-          <span class="text-sm font-medium text-slate-700">Cartas de porte que agrupa esta liquidación <span class="text-[11px] text-slate-400">(opcional · podés poner varios camiones)</span></span>
+          <span class="text-sm font-medium text-slate-700">Cartas de porte que agrupa esta liquidación <span class="text-[11px] text-slate-400">(tildá uno o varios camiones)</span></span>
           <button type="button" class="btn btn-secondary text-xs" onclick="liqSumarKgCP()">➕ Sumar kg de las tildadas</button>
         </div>
         <div style="max-height:26vh;overflow:auto">
-          <table class="data text-sm"><thead><tr><th style="width:30px"></th><th>Fecha</th><th>CP</th><th>Especie</th><th>Destino</th><th class="text-right">Kg</th><th>Estado</th></tr></thead>
-            <tbody>${entregasPend.map(e=>`<tr class="table-row"><td><input type="checkbox" class="lq-cp" value="${esc(e.id)}" data-kg="${Number(e.kilos||0)}"/></td><td>${fmtDate(e.fecha)}</td><td class="font-mono">${esc(e.cpe||'—')}</td><td>${esc(e.especie||'—')}</td><td>${esc(e.cerealera||e.destino||'—')}</td><td class="text-right">${fmtN(Math.round(e.kilos||0))}</td><td>${e.estado==='parcial'?'<span class="badge badge-blue">Parcial</span>':'<span class="badge badge-yellow">Pendiente</span>'}</td></tr>`).join('')}</tbody>
+          <table class="data text-sm"><thead><tr><th style="width:30px"></th><th>Fecha</th><th>CP</th><th>Producto</th><th>Comprador / destino</th><th class="text-right">Peso neto</th><th>Cereal</th></tr></thead>
+            <tbody>${cpPend.map(v=>{ const kg=Number(v.netoLiquidar||v.kgDescarga||v.kgNeto||v.cantidad||0); const comp=(v.compradorClienteId&&(clientes.find(c=>c.id===v.compradorClienteId)||{}).razonSocial)|| v.destino || '—'; const est=v.liqEstado==='cobrado'?'<span class="badge badge-green">✅ Cobrado</span>':v.liqEstado==='cobrado_parcial'?'<span class="badge badge-blue">Cobro parcial</span>':v.liqEstado==='liquidado'?'<span class="badge badge-yellow">Liquidado</span>':'<span class="badge badge-gray">Sin liquidar</span>'; const pre=(v.id===desdeViajeId)?'checked':''; return `<tr class="table-row"><td><input type="checkbox" class="lq-cp" value="${esc(v.id)}" data-kg="${kg}" ${pre}/></td><td>${fmtFecha(v.fecha)}</td><td class="font-mono">${esc(v.cartaPorte||v.ctg||'—')}</td><td>${esc(v.producto||'—')}</td><td>${esc(comp)}</td><td class="text-right">${fmtN(Math.round(kg))}</td><td>${est}</td></tr>`;}).join('')}</tbody>
           </table>
         </div>
-        <div class="px-3 py-1 text-[11px] text-slate-500">Tildá los camiones que entran en esta liquidación. "Sumar kg" completa los Kilos brutos con la suma de los tildados.</div>
+        <div class="px-3 py-1 text-[11px] text-slate-500">Tildá la(s) carta(s) de porte que cubre esta liquidación. Una CP puede tener varias liquidaciones (parcial + final). "Sumar kg" completa los Kilos brutos con la suma de las tildadas.</div>
       </div>` : ''}
       <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
         <div class="col-span-4 text-xs text-blue-800 font-medium">⚖️ Cálculo del bruto</div>

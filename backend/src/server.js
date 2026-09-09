@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.188.0';
+const AGROCORE_VERSION = '2.189.0';
 const AGROCORE_BUILD = new Date('2026-09-09').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5837,8 +5837,20 @@ app.get('/api/viajes', requireCompany, requirePermission('logistica:read'), asyn
     if (_scv) where.campanaId = { in: _scv };
     const data = await prisma.viaje.findMany({
       where, orderBy: { fecha: 'desc' },
-      include: { facturaCompra: { include: { proveedor: true } } },
+      include: {
+        facturaCompra: { include: { proveedor: true } },
+        liquidacionLinks: { include: { liquidacion: { select: { id: true, numero: true, neto: true, cobrado: true, fecha: true } } } },
+      },
     });
+    // Resumen de cobro del cereal por CP (liquidado/cobrado) para la lista de viajes.
+    for (const v of data) {
+      const links = v.liquidacionLinks || [];
+      v.liqCount = links.length;
+      v.liqCobradas = links.filter(l => l.liquidacion?.cobrado).length;
+      v.liqEstado = !links.length ? 'sin_liquidar'
+        : (links.every(l => l.liquidacion?.cobrado) ? 'cobrado'
+        : (links.some(l => l.liquidacion?.cobrado) ? 'cobrado_parcial' : 'liquidado'));
+    }
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
