@@ -86,6 +86,7 @@ model Company {
   importLotes     ImportLote[]
   intercoOrigen   IntercompanyMovimiento[] @relation("IntercoOrigen")
   intercoDestino  IntercompanyMovimiento[] @relation("IntercoDestino")
+  compensaciones  Compensacion[]
   bancoMovimientos BancoMovimiento[]
   recordatorios   Recordatorio[]
   recordatoriosOcultos RecordatorioOculto[]
@@ -578,6 +579,9 @@ model Cliente {
   provincia       String?
   pais            String?
   observaciones   String?
+  // Vínculo cliente↔proveedor: cuando la misma persona/empresa es cliente Y proveedor,
+  // ambas fichas comparten el mismo vinculoId (UUID). Permite verlas juntas y compensar.
+  vinculoId       String?
   activo          Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -587,6 +591,7 @@ model Cliente {
   laboresServicio LaborAplicada[]
 
   @@index([companyId])
+  @@index([vinculoId])
 }
 
 model Proveedor {
@@ -604,6 +609,8 @@ model Proveedor {
   provincia       String?
   pais            String?
   observaciones   String?
+  // Vínculo cliente↔proveedor (ver Cliente.vinculoId): misma persona con ambos roles.
+  vinculoId       String?
   activo          Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -612,6 +619,7 @@ model Proveedor {
   facturasCompra  FacturaCompra[]
 
   @@index([companyId])
+  @@index([vinculoId])
 }
 
 // ============================================================
@@ -762,6 +770,33 @@ model Cheque {
   @@index([companyId])
   @@index([fechaPago])
   @@index([transferRef])
+}
+
+// Compensación de cuentas: cuando la misma persona es cliente y proveedor, se
+// netea lo que nos debe (cta a cobrar) contra lo que le debemos (cta a pagar).
+// No mueve caja ni banco: crea un HABER en la cta cte del cliente (reduce lo que
+// nos debe) y un HABER en la del proveedor (reduce lo que le debemos). Guarda las
+// dos filas para poder deshacer.
+model Compensacion {
+  id            String   @id @default(cuid())
+  companyId     String
+  fecha         DateTime
+  clienteId     String
+  proveedorId   String
+  monto         Float
+  moneda        String   @default("ARS")
+  ccClienteId   String?   // fila CtaCte (haber) del lado cliente
+  ccProveedorId String?   // fila CtaCte (haber) del lado proveedor
+  referencia    String?   // COMP-xxxx
+  observaciones String?
+  userId        String?
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([clienteId])
+  @@index([proveedorId])
 }
 
 model CtaCte {

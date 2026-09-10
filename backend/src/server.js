@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.191.0';
+const AGROCORE_VERSION = '2.192.0';
 const AGROCORE_BUILD = new Date('2026-09-10').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17557,6 +17557,211 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       return { ok: true, comprobantesAplicados: d.comprobantes.length, creditosAplicados: d.creditos.length };
     });
     res.json({ ok: true, ...result });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CONTACTOS: vínculo Cliente↔Proveedor + COMPENSACIÓN de cuentas
+// ------------------------------------------------------------
+// Cuando la misma persona es cliente y proveedor, sus dos fichas comparten
+// vinculoId. La compensación netea lo que nos debe (cta a cobrar) contra lo que
+// le debemos (cta a pagar): crea un HABER en cada cta cte (no mueve caja/banco).
+// ============================================================
+
+// Saldo (ARS) de un contacto: Σ(debe − haber). Positivo = pendiente
+// (cliente: nos debe / proveedor: le debemos).
+async function _saldoContactoARS(client, companyId, tipo, contactoId) {
+  const rows = await client.ctaCte.findMany({
+    where: { companyId, contactoTipo: tipo, contactoId, OR: [{ moneda: 'ARS' }, { moneda: null }] },
+    select: { debe: true, haber: true },
+  });
+  return Math.round(rows.reduce((a, r) => a + (Number(r.debe || 0) - Number(r.haber || 0)), 0) * 100) / 100;
+}
+
+// Alta de contacto con uno o ambos roles (crea cliente y/o proveedor con datos
+// compartidos y, si son los dos, los vincula por vinculoId).
+app.post('/api/contactos', requireCompany, requirePermission('contactos:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      roles: z.array(z.enum(['cliente', 'proveedor'])).min(1),
+      razonSocial: z.string().min(1),
+      nombreFantasia: z.string().nullable().optional(),
+      cuit: z.string().nullable().optional(),
+      condIVA: z.string().nullable().optional(),
+      email: z.string().nullable().optional(),
+      telefono: z.string().nullable().optional(),
+      direccion: z.string().nullable().optional(),
+      localidad: z.string().nullable().optional(),
+      provincia: z.string().nullable().optional(),
+      pais: z.string().nullable().optional(),
+      rubro: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const roles = [...new Set(d.roles)];
+    const ambos = roles.includes('cliente') && roles.includes('proveedor');
+    const vinculoId = ambos ? ('vinc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)) : null;
+    const base = {
+      companyId: req.companyId, razonSocial: d.razonSocial, nombreFantasia: d.nombreFantasia || null,
+      cuit: d.cuit || null, condIVA: d.condIVA || null, email: d.email || null, telefono: d.telefono || null,
+      direccion: d.direccion || null, localidad: d.localidad || null, provincia: d.provincia || null,
+      pais: d.pais || null, observaciones: d.observaciones || null, vinculoId,
+    };
+    const out = await prisma.$transaction(async (tx) => {
+      const r = {};
+      if (roles.includes('cliente'))   r.cliente   = await tx.cliente.create({ data: { ...base } });
+      if (roles.includes('proveedor')) r.proveedor = await tx.proveedor.create({ data: { ...base, rubro: d.rubro || null } });
+      return r;
+    });
+    res.json({ ok: true, vinculoId, clienteId: out.cliente?.id || null, proveedorId: out.proveedor?.id || null });
+  } catch (e) { next(e); }
+});
+
+// Vincular un cliente y un proveedor existentes (misma persona).
+app.post('/api/contactos/vincular', requireCompany, requirePermission('contactos:update'), async (req, res, next) => {
+  try {
+    const d = z.object({ clienteId: z.string().min(1), proveedorId: z.string().min(1) }).parse(req.body);
+    const cli = await prisma.cliente.findFirst({ where: { id: d.clienteId, companyId: req.companyId } });
+    const prov = await prisma.proveedor.findFirst({ where: { id: d.proveedorId, companyId: req.companyId } });
+    if (!cli || !prov) return res.status(404).json({ ok: false, error: 'Cliente o proveedor no encontrado' });
+    if (cli.cuit && prov.cuit && cli.cuit.replace(/\D/g, '') !== prov.cuit.replace(/\D/g, '')) {
+      // No bloqueamos, pero avisamos: puede ser intencional.
+    }
+    const vinculoId = cli.vinculoId || prov.vinculoId || ('vinc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+    await prisma.$transaction([
+      prisma.cliente.update({ where: { id: cli.id }, data: { vinculoId } }),
+      prisma.proveedor.update({ where: { id: prov.id }, data: { vinculoId } }),
+    ]);
+    res.json({ ok: true, vinculoId });
+  } catch (e) { next(e); }
+});
+
+// Desvincular (limpia el vinculoId del cliente y/o proveedor indicados).
+app.post('/api/contactos/desvincular', requireCompany, requirePermission('contactos:update'), async (req, res, next) => {
+  try {
+    const d = z.object({ clienteId: z.string().nullable().optional(), proveedorId: z.string().nullable().optional() }).parse(req.body);
+    const ops = [];
+    if (d.clienteId)   ops.push(prisma.cliente.updateMany({ where: { id: d.clienteId, companyId: req.companyId }, data: { vinculoId: null } }));
+    if (d.proveedorId) ops.push(prisma.proveedor.updateMany({ where: { id: d.proveedorId, companyId: req.companyId }, data: { vinculoId: null } }));
+    if (ops.length) await prisma.$transaction(ops);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Saldos de un par cliente/proveedor + máximo compensable (para el modal).
+app.get('/api/contactos/saldos', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const clienteId = String(req.query.clienteId || '');
+    const proveedorId = String(req.query.proveedorId || '');
+    if (!clienteId || !proveedorId) return res.status(400).json({ ok: false, error: 'Falta clienteId o proveedorId' });
+    const saldoCobrar = await _saldoContactoARS(prisma, req.companyId, 'cliente', clienteId);
+    const saldoPagar  = await _saldoContactoARS(prisma, req.companyId, 'proveedor', proveedorId);
+    const maxCompensable = Math.max(0, Math.min(saldoCobrar, saldoPagar));
+    res.json({ ok: true, data: { saldoCobrar, saldoPagar, neto: Math.round((saldoCobrar - saldoPagar) * 100) / 100, maxCompensable } });
+  } catch (e) { next(e); }
+});
+
+// Pares compensables: fichas cliente+proveedor vinculadas (mismo vinculoId), con sus saldos.
+app.get('/api/contactos/compensables', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const clientes = await prisma.cliente.findMany({ where: { companyId: req.companyId, vinculoId: { not: null } }, select: { id: true, razonSocial: true, cuit: true, vinculoId: true } });
+    const provs = await prisma.proveedor.findMany({ where: { companyId: req.companyId, vinculoId: { not: null } }, select: { id: true, razonSocial: true, cuit: true, vinculoId: true } });
+    const provByVinc = new Map(provs.map(p => [p.vinculoId, p]));
+    const out = [];
+    for (const c of clientes) {
+      const p = provByVinc.get(c.vinculoId);
+      if (!p) continue;
+      const saldoCobrar = await _saldoContactoARS(prisma, req.companyId, 'cliente', c.id);
+      const saldoPagar  = await _saldoContactoARS(prisma, req.companyId, 'proveedor', p.id);
+      out.push({
+        vinculoId: c.vinculoId,
+        clienteId: c.id, clienteNombre: c.razonSocial, cuit: c.cuit || p.cuit || null,
+        proveedorId: p.id, proveedorNombre: p.razonSocial,
+        saldoCobrar, saldoPagar, neto: Math.round((saldoCobrar - saldoPagar) * 100) / 100,
+        maxCompensable: Math.max(0, Math.min(saldoCobrar, saldoPagar)),
+      });
+    }
+    res.json({ ok: true, data: out });
+  } catch (e) { next(e); }
+});
+
+// Registrar una compensación (netea cta cobrar cliente vs cta pagar proveedor).
+app.post('/api/compensaciones', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      clienteId: z.string().min(1),
+      proveedorId: z.string().min(1),
+      monto: z.number().positive(),
+      fecha: z.coerce.date(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body);
+    const cli = await prisma.cliente.findFirst({ where: { id: d.clienteId, companyId: req.companyId } });
+    const prov = await prisma.proveedor.findFirst({ where: { id: d.proveedorId, companyId: req.companyId } });
+    if (!cli || !prov) return res.status(404).json({ ok: false, error: 'Cliente o proveedor no encontrado' });
+    const saldoCobrar = await _saldoContactoARS(prisma, req.companyId, 'cliente', d.clienteId);
+    const saldoPagar  = await _saldoContactoARS(prisma, req.companyId, 'proveedor', d.proveedorId);
+    if (saldoCobrar <= 0.01) return res.status(400).json({ ok: false, error: 'El cliente no tiene saldo a cobrar para compensar' });
+    if (saldoPagar <= 0.01) return res.status(400).json({ ok: false, error: 'El proveedor no tiene saldo a pagar para compensar' });
+    const maxComp = Math.min(saldoCobrar, saldoPagar);
+    if (d.monto > maxComp + 0.01) return res.status(400).json({ ok: false, error: `El monto (${d.monto.toFixed(2)}) supera lo compensable (${maxComp.toFixed(2)})` });
+
+    const result = await prisma.$transaction(async (tx) => {
+      const comp = await tx.compensacion.create({ data: {
+        companyId: req.companyId, fecha: d.fecha, clienteId: d.clienteId, proveedorId: d.proveedorId,
+        monto: d.monto, moneda: 'ARS', observaciones: d.observaciones || null, userId: req.user?.id || null,
+      }});
+      const ref = 'COMP-' + comp.id.slice(-8);
+      const obs = 'Compensación cliente↔proveedor' + (d.observaciones ? ' · ' + d.observaciones : '');
+      const ccCli = await tx.ctaCte.create({ data: {
+        companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId, fecha: d.fecha,
+        detalle: 'Compensación con proveedor ' + prov.razonSocial, moneda: 'ARS', cotizacion: 1,
+        haber: d.monto, pagado: true, referencia: ref, observaciones: obs,
+      }});
+      const ccProv = await tx.ctaCte.create({ data: {
+        companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId, fecha: d.fecha,
+        detalle: 'Compensación con cliente ' + cli.razonSocial, moneda: 'ARS', cotizacion: 1,
+        haber: d.monto, pagado: true, referencia: ref, observaciones: obs,
+      }});
+      await tx.compensacion.update({ where: { id: comp.id }, data: { referencia: ref, ccClienteId: ccCli.id, ccProveedorId: ccProv.id } });
+      return { ...comp, referencia: ref };
+    });
+    res.json({ ok: true, data: {
+      ...result,
+      clienteNombre: cli.razonSocial, proveedorNombre: prov.razonSocial,
+      saldoCobrarPrevio: saldoCobrar, saldoPagarPrevio: saldoPagar,
+      saldoCobrarNuevo: Math.round((saldoCobrar - d.monto) * 100) / 100,
+      saldoPagarNuevo: Math.round((saldoPagar - d.monto) * 100) / 100,
+    }});
+  } catch (e) { next(e); }
+});
+
+// Listar compensaciones (con nombres de cliente/proveedor).
+app.get('/api/compensaciones', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const comps = await prisma.compensacion.findMany({ where: { companyId: req.companyId }, orderBy: { fecha: 'desc' } });
+    const cliIds = [...new Set(comps.map(c => c.clienteId))];
+    const provIds = [...new Set(comps.map(c => c.proveedorId))];
+    const [clis, provs] = await Promise.all([
+      prisma.cliente.findMany({ where: { id: { in: cliIds } }, select: { id: true, razonSocial: true } }),
+      prisma.proveedor.findMany({ where: { id: { in: provIds } }, select: { id: true, razonSocial: true } }),
+    ]);
+    const cliMap = new Map(clis.map(c => [c.id, c.razonSocial]));
+    const provMap = new Map(provs.map(p => [p.id, p.razonSocial]));
+    res.json({ ok: true, data: comps.map(c => ({ ...c, clienteNombre: cliMap.get(c.clienteId) || '—', proveedorNombre: provMap.get(c.proveedorId) || '—' })) });
+  } catch (e) { next(e); }
+});
+
+// Deshacer una compensación (borra los dos asientos y el registro).
+app.delete('/api/compensaciones/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const comp = await prisma.compensacion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!comp) return res.status(404).json({ ok: false, error: 'Compensación no encontrada' });
+    await prisma.$transaction(async (tx) => {
+      if (comp.ccClienteId)   await tx.ctaCte.deleteMany({ where: { id: comp.ccClienteId, companyId: req.companyId } });
+      if (comp.ccProveedorId) await tx.ctaCte.deleteMany({ where: { id: comp.ccProveedorId, companyId: req.companyId } });
+      await tx.compensacion.delete({ where: { id: comp.id } });
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

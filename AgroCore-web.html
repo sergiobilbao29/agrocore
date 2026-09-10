@@ -1074,6 +1074,7 @@ const MODULES = [
   { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Comercial' },
   { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Comercial' },
   { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Comercial' },
+  { id:'compensaciones',label:'Compensación de cuentas',icon:'🔀', perm:'finanzas:read',  section:'Comercial' },
 
   // ===== PRODUCCIÓN — herramientas compartidas (campos, campañas, insumos, labores, servicios) =====
   { id:'campos',        label:'Campos y lotes',       icon:'🗺️', perm:'produccion:read', section:'Producción' },
@@ -2647,6 +2648,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Pago-Dividido-Producto-y-Cheque.pdf', t:'Pago dividido (producto y cheque)', d:'Cancelar con parte producto y parte cheque.' },
       { f:'Instructivo-Cheques-Propios-y-Terceros.pdf', t:'Cheques propios y de terceros', d:'Manejo completo de cheques en cartera.' },
       { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
+      { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
     ]},
     { grupo:'Cereal', items:[
       { f:'Instructivo-Circuito-Campana-Cereal.pdf', t:'Circuito campaña cereal', d:'De la siembra a la cosecha, paso a paso.' },
@@ -2829,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/09/2026',
+      titulo:'🔀 v2.192.0 — Compensación de cuentas (cuando el cliente también es proveedor)',
+      desc:'Nueva sección <b>Comercial → Compensación de cuentas</b>. Cuando la misma persona te compra (cliente) y además te vende/factura (proveedor) —por ejemplo un fletero al que le vendés un lechón—, ahora podés <b>netear</b> lo que te debe contra lo que le debés en un solo paso. Podés <b>vincular</b> el cliente con el proveedor (misma persona), ver sus <b>dos saldos y el neto juntos</b>, y con <b>“Compensar”</b> el sistema genera el cruce en las cuentas corrientes (sin mover caja ni banco), deja la diferencia pendiente y emite un <b>comprobante de compensación</b> imprimible. También se puede <b>deshacer</b>. Y desde ahí podés dar de alta un contacto marcando <b>“Es cliente” y/o “Es proveedor”</b> a la vez, sin cargar los datos dos veces.' },
     { tag:'Mejora', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/09/2026',
       titulo:'📴 v2.191.0 — Modo offline al día: cargá animales y labores sin señal',
       desc:'Repasamos todo el <b>modo offline de Producción</b> para que la gente del campo pueda seguir cargando aunque no haya internet. Ahora funcionan sin señal, además de <b>Campos, Campañas e Insumos</b>: <b>Movimientos de animales</b> (nacimientos, muertes, altas de hacienda) y <b>Labores</b>. Los cambios se guardan en el celular y se <b>sincronizan solos</b> cuando vuelve la conexión (vas a ver la barra “📴 Sin conexión · X cambios pendientes”). También se cachea la lista de <b>categorías de hacienda</b> para que el formulario de carga tenga las opciones aunque estés sin señal. Nota: Rodeos, Fichas de animales y Guías siguen necesitando conexión.' },
@@ -15991,6 +15996,235 @@ function ccSaldoCell(porMoneda){
   return ms.map(m=>`<div>${monedaFmt(m, porMoneda[m])}</div>`).join('');
 }
 // ===== COTIZACIONES (multimoneda): live + histórico editable =====
+/* ===================== COMPENSACIÓN DE CUENTAS =====================
+ * Netea lo que un contacto nos debe (cliente) contra lo que le debemos
+ * (proveedor), cuando es la misma persona. No mueve caja ni banco.
+ * ================================================================== */
+pages.compensaciones = async function() {
+  setHeader('Compensación de cuentas', 'Netear cliente ↔ proveedor (misma persona)');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('compensaciones','Compensación de cuentas'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let pares = [], hist = [];
+  try { pares = (await api('/api/contactos/compensables')).data || []; } catch {}
+  try { hist  = (await api('/api/compensaciones')).data || []; } catch {}
+
+  const paresConSaldo = pares.filter(p => p.maxCompensable > 0.01);
+  const filaPar = p => `<tr class="table-row">
+      <td><b>${esc(p.clienteNombre)}</b>${p.cuit?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.cuit)}</div>`:''}</td>
+      <td class="text-right text-emerald-700">${fmt$(p.saldoCobrar)}</td>
+      <td class="text-right text-amber-700">${fmt$(p.saldoPagar)}</td>
+      <td class="text-right font-semibold ${p.neto>=0?'text-emerald-700':'text-amber-700'}">${fmt$(p.neto)}</td>
+      <td class="text-right">${p.maxCompensable>0.01
+        ? `<button class="btn btn-primary text-xs" onclick='compensarForm(${JSON.stringify(p.clienteId)},${JSON.stringify(p.proveedorId)})'>🔀 Compensar ${fmt$(p.maxCompensable)}</button>`
+        : `<span class="text-[11px] text-slate-400">sin saldo cruzado</span>`}</td>
+    </tr>`;
+
+  const filaHist = h => `<tr class="table-row">
+      <td>${fmtFecha(h.fecha)}</td>
+      <td class="font-mono text-xs">${esc(h.referencia||'—')}</td>
+      <td><b>${esc(h.clienteNombre)}</b></td>
+      <td>${esc(h.proveedorNombre)}</td>
+      <td class="text-right font-semibold">${fmt$(h.monto)}</td>
+      <td class="text-right whitespace-nowrap">
+        <button class="btn btn-ghost text-xs" title="Comprobante" onclick='compensacionComprobante(${JSON.stringify(h)})'>🧾</button>
+        ${can('finanzas:delete') ? `<button class="btn btn-ghost text-xs text-red-600" title="Deshacer" onclick='compensacionDeshacer(${JSON.stringify(h.id)})'>↩️</button>` : ''}
+      </td>
+    </tr>`;
+
+  $('#page-body').innerHTML = `
+    <div class="flex flex-wrap gap-2 mb-4">
+      ${can('finanzas:create') ? `<button class="btn btn-primary" onclick="compensarForm()">🔀 Nueva compensación</button>` : ''}
+      ${can('contactos:update') ? `<button class="btn btn-secondary" onclick="contactoVincularForm()">🔗 Vincular cliente↔proveedor</button>` : ''}
+      ${can('contactos:create') ? `<button class="btn btn-secondary" onclick="contactoAltaForm()">＋ Contacto (cliente y/o proveedor)</button>` : ''}
+    </div>
+
+    <div class="kpi p-0 overflow-hidden mb-4">
+      <div class="px-4 py-2 bg-slate-50 border-b text-sm font-semibold text-slate-700">Contactos vinculados con saldo compensable</div>
+      <table class="data">
+        <thead><tr><th>Contacto (cliente ↔ proveedor)</th><th class="text-right">Nos debe</th><th class="text-right">Le debemos</th><th class="text-right">Neto</th><th></th></tr></thead>
+        <tbody>${paresConSaldo.map(filaPar).join('') || `<tr><td colspan="5" class="text-center text-slate-400 py-6">No hay contactos vinculados con saldo cruzado. Vinculá un cliente con su proveedor para verlos acá.</td></tr>`}</tbody>
+      </table>
+    </div>
+
+    <div class="kpi p-0 overflow-hidden">
+      <div class="px-4 py-2 bg-slate-50 border-b text-sm font-semibold text-slate-700">Historial de compensaciones</div>
+      <table class="data">
+        <thead><tr><th>Fecha</th><th>Ref.</th><th>Cliente</th><th>Proveedor</th><th class="text-right">Monto</th><th></th></tr></thead>
+        <tbody>${hist.map(filaHist).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-6">Todavía no registraste compensaciones</td></tr>`}</tbody>
+      </table>
+    </div>`;
+};
+
+async function compensarForm(preCli=null, prePro=null) {
+  if (!can('finanzas:create')) return toast('No tenés permiso','warn');
+  let clis = [], provs = [];
+  try { [clis, provs] = await Promise.all([crudList('clientes'), crudList('proveedores')]); } catch (e) { return toast(e.message,'error'); }
+  const opt = (arr, sel) => arr.slice().sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||''))
+    .map(x=>`<option value="${x.id}" ${x.id===sel?'selected':''}>${esc(x.razonSocial)}${x.cuit?' · '+esc(x.cuit):''}</option>`).join('');
+  openModal({
+    title: 'Compensar cuentas',
+    size: 'max-w-lg',
+    body: `
+      <p class="text-xs text-slate-500 mb-3">Elegí el <b>mismo</b> contacto como cliente y como proveedor. Se netea lo que te debe contra lo que le debés. No mueve caja ni banco.</p>
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Cliente (nos debe)</label><select id="comp-cli" class="input"><option value="">— Elegir —</option>${opt(clis, preCli)}</select></div>
+        <div><label class="label">Proveedor (le debemos)</label><select id="comp-pro" class="input"><option value="">— Elegir —</option>${opt(provs, prePro)}</select></div>
+        <div id="comp-saldos" class="text-sm"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Monto a compensar</label><input id="comp-monto" type="number" step="0.01" class="input" /></div>
+          <div><label class="label">Fecha</label><input id="comp-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}" /></div>
+        </div>
+        <div><label class="label">Observaciones</label><input id="comp-obs" class="input" placeholder="Opcional"/></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button id="comp-save" class="btn btn-primary" disabled onclick="compensarSave()">Compensar</button>`,
+  });
+  $('#comp-cli').onchange = compensarRefresh;
+  $('#comp-pro').onchange = compensarRefresh;
+  if (preCli && prePro) compensarRefresh();
+}
+async function compensarRefresh() {
+  const cliId = $('#comp-cli').value, proId = $('#comp-pro').value;
+  const box = $('#comp-saldos'), save = $('#comp-save'), monto = $('#comp-monto');
+  if (!cliId || !proId) { box.innerHTML = ''; save.disabled = true; return; }
+  box.innerHTML = `<div class="text-slate-400 text-xs">Calculando saldos…</div>`;
+  let s;
+  try { s = (await api(`/api/contactos/saldos?clienteId=${encodeURIComponent(cliId)}&proveedorId=${encodeURIComponent(proId)}`)).data; }
+  catch (e) { box.innerHTML = `<div class="text-red-600 text-xs">${esc(e.message)}</div>`; return; }
+  state._compMax = s.maxCompensable;
+  box.innerHTML = `
+    <div class="bg-slate-50 rounded-lg p-3 grid grid-cols-3 gap-2 text-center">
+      <div><div class="text-[11px] text-slate-500">Nos debe</div><div class="font-semibold text-emerald-700">${fmt$(s.saldoCobrar)}</div></div>
+      <div><div class="text-[11px] text-slate-500">Le debemos</div><div class="font-semibold text-amber-700">${fmt$(s.saldoPagar)}</div></div>
+      <div><div class="text-[11px] text-slate-500">Compensable</div><div class="font-bold text-agro-700">${fmt$(s.maxCompensable)}</div></div>
+    </div>
+    ${s.maxCompensable<=0.01 ? `<div class="text-xs text-amber-600 mt-2">No hay saldo cruzado para compensar (falta que tenga saldo a cobrar Y a pagar).</div>` : ''}`;
+  if (s.maxCompensable > 0.01) { monto.value = s.maxCompensable.toFixed(2); save.disabled = false; }
+  else { monto.value = ''; save.disabled = true; }
+}
+async function compensarSave() {
+  const cliId = $('#comp-cli').value, proId = $('#comp-pro').value;
+  const monto = Number($('#comp-monto').value || 0);
+  const fecha = $('#comp-fecha').value;
+  const obs = $('#comp-obs').value.trim();
+  if (!cliId || !proId) return toast('Elegí cliente y proveedor','warn');
+  if (!(monto > 0)) return toast('Ingresá un monto','warn');
+  if (state._compMax != null && monto > state._compMax + 0.01) return toast('El monto supera lo compensable ('+fmt$(state._compMax)+')','warn');
+  if (!fecha) return toast('Elegí la fecha','warn');
+  const btn = $('#comp-save'); if (btn) { btn.disabled = true; btn.textContent = 'Compensando…'; }
+  try {
+    const r = await api('/api/compensaciones', { method:'POST', body: JSON.stringify({ clienteId:cliId, proveedorId:proId, monto, fecha, observaciones: obs||null }) });
+    toast('Compensación registrada ✓','success');
+    closeModal();
+    if (r.data) compensacionComprobante(r.data);
+    if (state.currentPage === 'compensaciones') pages.compensaciones();
+  } catch (e) { toast(e.message,'error'); if (btn) { btn.disabled = false; btn.textContent = 'Compensar'; } }
+}
+async function compensacionDeshacer(id) {
+  if (!confirm('¿Deshacer esta compensación? Se borran los dos asientos y los saldos vuelven a quedar pendientes.')) return;
+  try { await api('/api/compensaciones/'+id, { method:'DELETE' }); toast('Compensación deshecha','success'); pages.compensaciones(); }
+  catch (e) { toast(e.message,'error'); }
+}
+function compensacionComprobante(c) {
+  const emp = (state.companies||[]).find(e=>e.id===state.companyId) || {};
+  const html = `<div id="comp-doc" style="font-family:Arial,sans-serif;color:#111;max-width:720px;margin:0 auto;padding:24px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #14532d;padding-bottom:10px;margin-bottom:16px">
+      <div><div style="font-size:20px;font-weight:800;color:#14532d">${esc(emp.nombre||'AgroCore')}</div>
+        ${emp.cuit?`<div style="font-size:12px;color:#555">CUIT ${esc(emp.cuit)}</div>`:''}</div>
+      <div style="text-align:right"><div style="font-size:16px;font-weight:800">COMPROBANTE DE COMPENSACIÓN</div>
+        <div style="font-size:12px;color:#555">Ref: ${esc(c.referencia||'—')}</div>
+        <div style="font-size:12px;color:#555">Fecha: ${fmtFecha(c.fecha)}</div></div>
+    </div>
+    <p style="font-size:13px;line-height:1.6">Se compensa el saldo entre las cuentas del mismo contacto, por
+      <b>${fmt$(c.monto)}</b>, aplicando lo que adeuda como cliente contra lo que se le adeuda como proveedor.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px">
+      <tr style="background:#f0fdf4"><td style="padding:8px;border:1px solid #ddd"><b>Cliente</b> (cta a cobrar)</td><td style="padding:8px;border:1px solid #ddd">${esc(c.clienteNombre||'')}</td></tr>
+      <tr><td style="padding:8px;border:1px solid #ddd"><b>Proveedor</b> (cta a pagar)</td><td style="padding:8px;border:1px solid #ddd">${esc(c.proveedorNombre||'')}</td></tr>
+      <tr style="background:#fef3c7"><td style="padding:8px;border:1px solid #ddd"><b>Monto compensado</b></td><td style="padding:8px;border:1px solid #ddd"><b>${fmt$(c.monto)}</b></td></tr>
+      ${c.saldoCobrarNuevo!=null?`<tr><td style="padding:8px;border:1px solid #ddd">Saldo a cobrar tras compensar</td><td style="padding:8px;border:1px solid #ddd">${fmt$(c.saldoCobrarNuevo)}</td></tr>`:''}
+      ${c.saldoPagarNuevo!=null?`<tr><td style="padding:8px;border:1px solid #ddd">Saldo a pagar tras compensar</td><td style="padding:8px;border:1px solid #ddd">${fmt$(c.saldoPagarNuevo)}</td></tr>`:''}
+    </table>
+    ${c.observaciones?`<p style="font-size:12px;color:#555;margin-top:12px">Obs.: ${esc(c.observaciones)}</p>`:''}
+    <p style="font-size:11px;color:#888;margin-top:24px">Este comprobante no representa movimiento de fondos. Es un cruce contable entre cuentas corrientes.</p>
+    <div style="display:flex;justify-content:space-between;margin-top:48px;font-size:12px">
+      <div style="text-align:center;width:45%;border-top:1px solid #999;padding-top:6px">Firma empresa</div>
+      <div style="text-align:center;width:45%;border-top:1px solid #999;padding-top:6px">Firma contacto</div>
+    </div>
+  </div>`;
+  const w = window.open('','_blank','width=820,height=980');
+  if (!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write('<html><head><title>Compensación '+(c.referencia||'')+'</title><meta charset="utf-8"><style>@page{size:A4;margin:12mm}</style></head><body>'+html+'</body></html>');
+  w.document.close(); w.focus(); setTimeout(()=>{ try{ w.print(); }catch(e){} }, 350);
+}
+
+function contactoVincularForm() {
+  if (!can('contactos:update')) return toast('No tenés permiso','warn');
+  Promise.all([crudList('clientes'), crudList('proveedores')]).then(([clis, provs]) => {
+    const opt = arr => arr.slice().sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||''))
+      .map(x=>`<option value="${x.id}">${esc(x.razonSocial)}${x.cuit?' · '+esc(x.cuit):''}</option>`).join('');
+    openModal({
+      title:'Vincular cliente ↔ proveedor', size:'max-w-lg',
+      body:`<p class="text-xs text-slate-500 mb-3">Marcá que un <b>cliente</b> y un <b>proveedor</b> son la misma persona. Quedan vinculados para compensar y ver sus saldos juntos.</p>
+        <div class="grid grid-cols-1 gap-3">
+          <div><label class="label">Cliente</label><select id="vinc-cli" class="input"><option value="">— Elegir —</option>${opt(clis)}</select></div>
+          <div><label class="label">Proveedor</label><select id="vinc-pro" class="input"><option value="">— Elegir —</option>${opt(provs)}</select></div>
+        </div>`,
+      footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="contactoVincularSave()">Vincular</button>`,
+    });
+  }).catch(e=>toast(e.message,'error'));
+}
+async function contactoVincularSave() {
+  const clienteId = $('#vinc-cli').value, proveedorId = $('#vinc-pro').value;
+  if (!clienteId || !proveedorId) return toast('Elegí cliente y proveedor','warn');
+  try { await api('/api/contactos/vincular', { method:'POST', body: JSON.stringify({ clienteId, proveedorId }) });
+    toast('Vinculados ✓','success'); closeModal(); if (state.currentPage==='compensaciones') pages.compensaciones();
+  } catch (e) { toast(e.message,'error'); }
+}
+
+function contactoAltaForm() {
+  if (!can('contactos:create')) return toast('No tenés permiso','warn');
+  openModal({
+    title:'Nuevo contacto', size:'max-w-lg',
+    body:`<div class="flex gap-4 mb-3 text-sm">
+        <label class="flex items-center gap-2"><input type="checkbox" id="ct-rc" checked/> Es cliente</label>
+        <label class="flex items-center gap-2"><input type="checkbox" id="ct-rp" checked/> Es proveedor</label>
+      </div>
+      <p class="text-[11px] text-slate-500 mb-3">Si marcás los dos, se crean ambas fichas con los mismos datos y quedan vinculadas.</p>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Razón social *</label><input id="ct-rs" class="input"/></div>
+        <div><label class="label">Nombre fantasía</label><input id="ct-nf" class="input"/></div>
+        <div><label class="label">CUIT</label><input id="ct-cuit" class="input"/></div>
+        <div><label class="label">Condición IVA</label>${catSelect('ct-iva','Condición IVA','',{placeholder:'— Elegir —'})}</div>
+        <div><label class="label">Rubro (proveedor)</label><input id="ct-rubro" class="input"/></div>
+        <div><label class="label">Email</label><input id="ct-em" class="input"/></div>
+        <div><label class="label">Teléfono</label><input id="ct-tel" class="input"/></div>
+        <div class="col-span-2"><label class="label">Dirección</label><input id="ct-dir" class="input"/></div>
+        <div><label class="label">Localidad</label><input id="ct-loc" class="input"/></div>
+        <div><label class="label">Provincia</label><input id="ct-prov" class="input"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="contactoAltaSave()">Guardar</button>`,
+  });
+}
+async function contactoAltaSave() {
+  const roles = [];
+  if ($('#ct-rc').checked) roles.push('cliente');
+  if ($('#ct-rp').checked) roles.push('proveedor');
+  if (!roles.length) return toast('Marcá al menos un rol','warn');
+  const razonSocial = $('#ct-rs').value.trim();
+  if (!razonSocial) return toast('Falta la razón social','warn');
+  const body = { roles, razonSocial,
+    nombreFantasia:$('#ct-nf').value.trim()||null, cuit:$('#ct-cuit').value.trim()||null,
+    condIVA:($('#ct-iva')?.value||'')||null, rubro:$('#ct-rubro').value.trim()||null,
+    email:$('#ct-em').value.trim()||null, telefono:$('#ct-tel').value.trim()||null,
+    direccion:$('#ct-dir').value.trim()||null, localidad:$('#ct-loc').value.trim()||null,
+    provincia:$('#ct-prov').value.trim()||null };
+  try { await api('/api/contactos', { method:'POST', body: JSON.stringify(body) });
+    toast('Contacto creado ✓','success'); closeModal();
+    delete state.cache.clientes; delete state.cache.proveedores;
+    if (state.currentPage==='compensaciones') pages.compensaciones();
+  } catch (e) { toast(e.message,'error'); }
+}
+
 pages.cotizaciones = async function() {
   setHeader('Cotizaciones', 'Dólar, euro y pizarras de granos · histórico para multimoneda');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('cotizaciones','Cotizaciones'); return; }
