@@ -612,9 +612,14 @@ const OfflineSync = (() => {
 })();
 
 // Endpoints cuyos GET conviene cachear para poder usarlos sin conexión.
-const CACHEABLE_GET = ['/api/campos', '/api/lotes', '/api/campanas', '/api/catalogos', '/api/aplicaciones'];
-// Endpoints cuyas mutaciones se pueden encolar offline (Producción).
-const QUEUEABLE = ['/api/campos', '/api/lotes', '/api/campanas', '/api/aplicaciones'];
+// Producción (campos, lotes, campañas, insumos/labores) + movimientos de animales.
+const CACHEABLE_GET = ['/api/campos', '/api/lotes', '/api/campanas', '/api/catalogos', '/api/aplicaciones',
+                       '/api/categorias-hacienda', '/api/hacienda-resumen', '/api/hacienda-movimientos'];
+// Endpoints cuyas mutaciones se pueden encolar offline (Producción + movimientos de animales).
+// Ojo: /api/aplicaciones cubre insumos; /api/labores-avanzada cubre labores;
+// /api/hacienda-movimientos cubre nacimientos/muertes/altas de hacienda desde el campo.
+const QUEUEABLE = ['/api/campos', '/api/lotes', '/api/campanas', '/api/aplicaciones',
+                   '/api/labores-avanzada', '/api/hacienda-movimientos'];
 
 function cacheKeyFor(path) { return (state.companyId || 'nc') + '|' + path; }
 function isCacheable(path) { return CACHEABLE_GET.some((p) => path === p || path.startsWith(p + '?')); }
@@ -705,7 +710,23 @@ async function queueMutation(method, path, bodyStr) {
 
   // Reflejar el cambio en la caché local para que se vea al instante.
   if (method === 'POST') {
-    await injectIntoCachedList(path, { ...body, id: tmpId, _offline: true });
+    if (path === '/api/labores-avanzada') {
+      // La pantalla de Insumos y labores lee la lista desde /api/aplicaciones,
+      // pero una labor se guarda por otro endpoint. Para que la labor cargada
+      // sin señal aparezca YA (mientras está pendiente de sincronizar), armamos
+      // un ítem con forma de "aplicación de labor" y lo metemos en esa lista.
+      await injectIntoCachedList('/api/aplicaciones', {
+        id: tmpId, _offline: true, tipo: 'labor',
+        item: body.tipo, campanaId: body.campanaId || null,
+        hectareasAplicadas: body.hectareasAplicadas ?? null,
+        fecha: body.fecha, costo: body.costo ?? null,
+        moneda: body.monedaCosto || 'ARS',
+        esServicio: !!body.esServicio, clienteId: body.clienteId || null,
+        observaciones: body.observaciones || null,
+      });
+    } else {
+      await injectIntoCachedList(path, { ...body, id: tmpId, _offline: true });
+    }
   }
   updateOfflineBar();
 
@@ -2539,7 +2560,7 @@ function offlineSectionCard(label) {
         <div style="font-size:.7rem;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.03em;margin-bottom:3px;">
           ✓ Disponible sin conexión
         </div>
-        <div style="font-size:.88rem;color:#334155;">Inicio · Campos y lotes · Campañas · Insumos y labores</div>
+        <div style="font-size:.88rem;color:#334155;">Inicio · Campos y lotes · Campañas · Insumos y labores · Movimientos de animales</div>
       </div>
       <button class="btn btn-primary" onclick="go(state.currentPage)">Reintentar</button>
     </div>`;
@@ -2808,6 +2829,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/09/2026',
+      titulo:'📴 v2.191.0 — Modo offline al día: cargá animales y labores sin señal',
+      desc:'Repasamos todo el <b>modo offline de Producción</b> para que la gente del campo pueda seguir cargando aunque no haya internet. Ahora funcionan sin señal, además de <b>Campos, Campañas e Insumos</b>: <b>Movimientos de animales</b> (nacimientos, muertes, altas de hacienda) y <b>Labores</b>. Los cambios se guardan en el celular y se <b>sincronizan solos</b> cuando vuelve la conexión (vas a ver la barra “📴 Sin conexión · X cambios pendientes”). También se cachea la lista de <b>categorías de hacienda</b> para que el formulario de carga tenga las opciones aunque estés sin señal. Nota: Rodeos, Fichas de animales y Guías siguen necesitando conexión.' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'09/09/2026',
       titulo:'📥 v2.190.0 — Importar liquidación por PDF y vincular la carta de porte en un paso',
       desc:'Al importar el PDF de la <b>Liquidación Primaria de Granos</b> (Stock → Liquidaciones de cereal → Importar), la pantalla de revisión ahora te muestra las <b>cartas de porte</b> y te deja <b>tildar la(s) que cubre</b> esa liquidación — tildando solo las del mismo comprador y grano automáticamente. Así, al confirmar, la liquidación queda <b>vinculada a la CP</b> y el viaje pasa a 🧾 Liquidado sin pasos extra. El importador lee número/COE, fecha, comprador, grano, kg, precio, deducciones, retenciones y el neto a cobrar.' },
