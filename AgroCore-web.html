@@ -1091,7 +1091,6 @@ const MODULES = [
   { id:'hacienda',      label:'Movimientos de animales',icon:'🐄', perm:'stock:read',    section:'Ganadería y Haras' },
   { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'rodeos',        label:'Rodeos y Hacienda',    icon:'🐮', perm:'stock:read',      section:'Ganadería y Haras' },
-  { id:'tableroHacienda',label:'Tablero de hacienda', icon:'📊', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'mapaHacienda',  label:'Traslado de hacienda', icon:'🔀', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Ganadería y Haras' },
 
@@ -2833,6 +2832,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/09/2026',
+      titulo:'📊 v2.199.0 — El Tablero de eficiencia ahora vive dentro de Rodeos y Hacienda',
+      desc:'Unificamos el <b>Tablero de hacienda</b> dentro del módulo <b>Rodeos y Hacienda</b>: ya no es un ítem aparte en el menú. Adentro del módulo tenés un selector <b>📋 Lista / 📊 Tablero de eficiencia</b> para pasar de la tabla a las tarjetas por lote (GPD, $/kg y margen con semáforo) sin cambiar de pantalla. Todo lo de hacienda queda en un solo lugar.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/09/2026',
       titulo:'🗺️ v2.198.0 — Tarjetas de rodeo sobre el potrero en el Mapa',
       desc:'En <b>Mapa de lotes → Vista Hacienda</b>, cada potrero con un rodeo asignado ahora muestra una <b>tarjeta sobre el lote</b> (estilo Potreros del INTA) con el nombre del rodeo, <b>cabezas, peso promedio, kilos totales y carga (cab/ha)</b>, más los botones <b>“↔ Mover”</b> (reubica el rodeo en otro campo/potrero/corral) y <b>“Ver ficha”</b>. Los potreros con hacienda se pintan en verde y los vacíos en gris, para ver la rotación de un vistazo. Reutiliza el mismo mapa satelital del rinde agrícola.' },
@@ -27756,6 +27758,8 @@ const rodMoney = (v,mon)=> (mon==='USD'?'US$ ':'$ ') + fmtN(Math.round(Number(v)
 pages.rodeos = async function(){
   setHeader('Rodeos y Hacienda', 'Lotes de engorde / cría: costo por kg de carne producido');
   if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('rodeos','Rodeos y Hacienda'); return; }
+  state._rodVista = state._rodVista || 'lista';
+  if(state._rodVista==='tablero'){ return pages.tableroHacienda(); }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rodeos=[];
   try{ const r=await api('/api/rodeos'); rodeos=r.data||[]; }catch(e){ return toast(e.message,'error'); }
@@ -27776,9 +27780,11 @@ pages.rodeos = async function(){
   }).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin lotes. Cargá el primero con "+ Nuevo lote".</td></tr>`;
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <div class="text-sm text-slate-600">${activos.length} lote${activos.length===1?'':'s'} activo${activos.length===1?'':'s'}</div>
+      <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm">
+        <button class="px-3 py-1.5 bg-agro-700 text-white">📋 Lista</button>
+        <button class="px-3 py-1.5 bg-white text-slate-600" onclick="state._rodVista='tablero';pages.rodeos()">📊 Tablero de eficiencia</button>
+      </div>
       <div class="flex gap-2">
-        <button class="btn btn-outline" onclick="go('tableroHacienda')">📊 Tablero de eficiencia</button>
         ${rodeos.some(r=>r.externo)?`<button class="btn btn-outline" onclick="aniHoteleria()">🏨 Capitalización / hotelería (terceros)</button>`:''}
         ${can('stock:create')?`<button class="btn btn-primary" onclick="rodForm()">+ Nuevo lote</button>`:''}
       </div>
@@ -27802,8 +27808,9 @@ pages.rodeos = async function(){
  * objetivo cargado en cada lote. Reusa el "resultado" que calcula el backend.
  * ======================================================================== */
 pages.tableroHacienda = async function(){
-  setHeader('Tablero de hacienda', 'Eficiencia por lote: GPD, $/kg y margen de un vistazo');
-  if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('tableroHacienda','Tablero de hacienda'); return; }
+  setHeader('Rodeos y Hacienda', 'Tablero de eficiencia por lote: GPD, $/kg y margen de un vistazo');
+  state._rodVista = 'tablero';
+  if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('rodeos','Rodeos y Hacienda'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rodeos=[], usd=0;
   try{ const r=await api('/api/rodeos'); rodeos=r.data||[]; usd=r.usd||0; }catch(e){ return toast(e.message,'error'); }
@@ -27871,11 +27878,20 @@ pages.tableroHacienda = async function(){
 
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm">
-        <button class="px-3 py-1.5 ${filtro==='activos'?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._tabHacFiltro='activos';pages.tableroHacienda()">Activos</button>
-        <button class="px-3 py-1.5 ${filtro==='todos'?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._tabHacFiltro='todos';pages.tableroHacienda()">Todos</button>
+      <div class="flex items-center gap-2 flex-wrap">
+        <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm">
+          <button class="px-3 py-1.5 bg-white text-slate-600" onclick="state._rodVista='lista';pages.rodeos()">📋 Lista</button>
+          <button class="px-3 py-1.5 bg-agro-700 text-white">📊 Tablero de eficiencia</button>
+        </div>
+        <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm">
+          <button class="px-3 py-1.5 ${filtro==='activos'?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._tabHacFiltro='activos';pages.tableroHacienda()">Activos</button>
+          <button class="px-3 py-1.5 ${filtro==='todos'?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._tabHacFiltro='todos';pages.tableroHacienda()">Todos</button>
+        </div>
       </div>
-      <button class="btn btn-outline" onclick="go('rodeos')">📋 Ver como lista</button>
+      <div class="flex gap-2">
+        ${rodeos.some(r=>r.externo)?`<button class="btn btn-outline" onclick="aniHoteleria()">🏨 Capitalización / hotelería (terceros)</button>`:''}
+        ${can('stock:create')?`<button class="btn btn-primary" onclick="rodForm()">+ Nuevo lote</button>`:''}
+      </div>
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Lotes</div><div class="text-lg font-bold mt-1">${lista.length}</div></div>
