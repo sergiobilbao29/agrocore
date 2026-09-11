@@ -2376,6 +2376,9 @@ model Rodeo {
   externo        Boolean  @default(false)      // hacienda de terceros (capitalización/hotelería de engorde)
   propietario    String?                        // dueño de la hacienda si es de terceros
   observaciones  String?
+  // Objetivos/presupuesto para el tablero de eficiencia (semaforización).
+  objetivoCostoKg Float?                        // $/kg producido objetivo (verde si estás por debajo)
+  objetivoGpd     Float?                        // kg/cab/día objetivo (verde si estás por encima)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

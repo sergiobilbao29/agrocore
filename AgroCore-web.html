@@ -1091,6 +1091,7 @@ const MODULES = [
   { id:'hacienda',      label:'Movimientos de animales',icon:'🐄', perm:'stock:read',    section:'Ganadería y Haras' },
   { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'rodeos',        label:'Rodeos y Hacienda',    icon:'🐮', perm:'stock:read',      section:'Ganadería y Haras' },
+  { id:'tableroHacienda',label:'Tablero de hacienda', icon:'📊', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Ganadería y Haras' },
 
   // ===== STOCK Y DEPÓSITOS =====
@@ -2831,6 +2832,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/09/2026',
+      titulo:'📊 v2.193.0 — Tablero de hacienda: eficiencia por lote de un vistazo',
+      desc:'Nueva vista <b>Ganadería y Haras → Tablero de hacienda</b> (o el botón <b>“📊 Tablero de eficiencia”</b> dentro de Rodeos). Muestra <b>tarjetas por lote</b> con lo importante sin entrar a cada uno: <b>GPD</b> (kg/cabeza/día), <b>$/kg producido</b>, <b>$/kg terminado</b> y <b>margen</b>, más totales arriba. Ahora en cada lote podés cargar un <b>objetivo de $/kg y de GPD</b> (botón 🎯) y el tablero te lo <b>semaforiza</b>: 🟢 dentro del objetivo, 🔴 fuera, ⚪ sin objetivo/sin datos. Ideal para ver de un golpe qué lote va bien y cuál se está yendo de costo. No cambia nada de la carga: usa los mismos datos de Rodeos y Hacienda.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/09/2026',
       titulo:'🔀 v2.192.0 — Compensación de cuentas (cuando el cliente también es proveedor)',
       desc:'Nueva sección <b>Comercial → Compensación de cuentas</b>. Cuando la misma persona te compra (cliente) y además te vende/factura (proveedor) —por ejemplo un fletero al que le vendés un lechón—, ahora podés <b>netear</b> lo que te debe contra lo que le debés en un solo paso. Podés <b>vincular</b> el cliente con el proveedor (misma persona), ver sus <b>dos saldos y el neto juntos</b>, y con <b>“Compensar”</b> el sistema genera el cruce en las cuentas corrientes (sin mover caja ni banco), deja la diferencia pendiente y emite un <b>comprobante de compensación</b> imprimible. También se puede <b>deshacer</b>. Y desde ahí podés dar de alta un contacto marcando <b>“Es cliente” y/o “Es proveedor”</b> a la vez, sin cargar los datos dos veces.' },
@@ -27660,6 +27664,7 @@ pages.rodeos = async function(){
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600">${activos.length} lote${activos.length===1?'':'s'} activo${activos.length===1?'':'s'}</div>
       <div class="flex gap-2">
+        <button class="btn btn-outline" onclick="go('tableroHacienda')">📊 Tablero de eficiencia</button>
         ${rodeos.some(r=>r.externo)?`<button class="btn btn-outline" onclick="aniHoteleria()">🏨 Capitalización / hotelería (terceros)</button>`:''}
         ${can('stock:create')?`<button class="btn btn-primary" onclick="rodForm()">+ Nuevo lote</button>`:''}
       </div>
@@ -27678,6 +27683,97 @@ pages.rodeos = async function(){
     <div class="text-[11px] text-slate-500 mt-3">$/kg producido = costos directos (alimentación + sanidad + labores) ÷ kg producidos. $/kg terminado = (compra + fletes + costos) ÷ kg del animal. Cargá <b>pesajes</b> en cada lote para capturar la ganancia de peso.</div>`;
 };
 
+/* ============ TABLERO DE EFICIENCIA POR LOTE (dashboard visual) ============
+ * Tarjetas por rodeo con GPD, $/kg producido y margen, con semaforo contra el
+ * objetivo cargado en cada lote. Reusa el "resultado" que calcula el backend.
+ * ======================================================================== */
+pages.tableroHacienda = async function(){
+  setHeader('Tablero de hacienda', 'Eficiencia por lote: GPD, $/kg y margen de un vistazo');
+  if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('tableroHacienda','Tablero de hacienda'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let rodeos=[], usd=0;
+  try{ const r=await api('/api/rodeos'); rodeos=r.data||[]; usd=r.usd||0; }catch(e){ return toast(e.message,'error'); }
+  state._rodList=rodeos;
+  state._tabHacFiltro = state._tabHacFiltro || 'activos';
+  const filtro = state._tabHacFiltro;
+  const lista = rodeos.filter(r => filtro==='todos' ? true : r.estado==='activo');
+
+  // Totales (sobre lo mostrado)
+  const totKgProd = lista.reduce((a,r)=>a+(r.resultado?.kgProducidos||0),0);
+  const totCab = lista.reduce((a,r)=>a+(r.resultado?.cabActual||0),0);
+  const totMargen = lista.reduce((a,r)=>a+(r.resultado?.margen||0),0);
+
+  // Semaforo: devuelve {cls, dot, txt} segun valor vs objetivo (menorEsMejor para costo).
+  const sem = (val, obj, menorEsMejor) => {
+    if(val==null) return { dot:'#cbd5e1', cls:'text-slate-400' };
+    if(obj==null||!(obj>0)) return { dot:'#94a3b8', cls:'text-slate-700' };
+    const ok = menorEsMejor ? (val <= obj) : (val >= obj);
+    return ok ? { dot:'#16a34a', cls:'text-emerald-700' } : { dot:'#dc2626', cls:'text-red-600' };
+  };
+  const gpdTxt = g => g==null ? '—' : (Math.round(g*1000)/1000).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:3})+' kg/día';
+
+  const card = r => {
+    const R = r.resultado||{};
+    const sCosto = sem(R.costoKgProducido, r.objetivoCostoKg, true);
+    const sGpd   = sem(R.gpd, r.objetivoGpd, false);
+    const cerrado = r.estado!=='activo';
+    const metric = (lbl, val, s, obj, objfmt) => `
+      <div class="rounded-lg bg-slate-50 p-2 text-center">
+        <div class="text-[10px] text-slate-500 uppercase tracking-wide">${lbl}</div>
+        <div class="text-base font-bold mt-0.5 ${s.cls}"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.dot};margin-right:4px;vertical-align:middle"></span>${val}</div>
+        ${obj!=null&&obj>0?`<div class="text-[10px] text-slate-400">obj. ${objfmt}</div>`:`<div class="text-[10px] text-slate-300">sin objetivo</div>`}
+      </div>`;
+    return `<div class="kpi ${cerrado?'opacity-60':''}" style="border-left:4px solid ${sCosto.dot}">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <div class="font-bold truncate">${(RODEO_SIST[r.sistema]||['🐮'])[0]} ${esc(r.nombre)}${cerrado?'<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 ml-1">cerrado</span>':''}</div>
+          <div class="text-[11px] text-slate-500">${esc(rodSistLbl(r.sistema))}${r.categoria?' · '+esc(r.categoria):''}</div>
+        </div>
+        <div class="whitespace-nowrap text-right">
+          <div class="text-xs text-slate-500">${R.cabActual||0} cab · ${fmtN(R.kgProducidos||0)} kg</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-2 mt-3">
+        ${metric('GPD', gpdTxt(R.gpd), sGpd, r.objetivoGpd, r.objetivoGpd?gpdTxt(r.objetivoGpd):'')}
+        ${metric('$/kg producido', R.costoKgProducido!=null?'$ '+fmtN(R.costoKgProducido):'pesá', sCosto, r.objetivoCostoKg, r.objetivoCostoKg?('$ '+fmtN(r.objetivoCostoKg)):'')}
+      </div>
+      <div class="grid grid-cols-2 gap-2 mt-2">
+        <div class="rounded-lg bg-slate-50 p-2 text-center">
+          <div class="text-[10px] text-slate-500 uppercase tracking-wide">$/kg terminado</div>
+          <div class="text-base font-bold mt-0.5">${R.costoKgTerminado!=null?'$ '+fmtN(R.costoKgTerminado):'—'}</div>
+        </div>
+        <div class="rounded-lg bg-slate-50 p-2 text-center">
+          <div class="text-[10px] text-slate-500 uppercase tracking-wide">Margen</div>
+          <div class="text-base font-bold mt-0.5 ${(R.margen||0)>=0?'text-emerald-700':'text-red-600'}">${fmt$(R.margen||0)}</div>
+        </div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Costos: alim ${fmt$(R.costoAlim||0)} · san ${fmt$(R.costoSan||0)} · labor ${fmt$(R.costoLab||0)}${R.costoOtro?` · otros ${fmt$(R.costoOtro)}`:''}</div>
+      <div class="flex gap-2 mt-3">
+        <button class="btn btn-secondary text-xs flex-1" onclick='rodVer(${JSON.stringify(r.id)})'>Ver detalle</button>
+        ${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Objetivos / editar" onclick='rodForm(${JSON.stringify(r.id)})'>🎯</button>`:''}
+      </div>
+    </div>`;
+  };
+
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm">
+        <button class="px-3 py-1.5 ${filtro==='activos'?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._tabHacFiltro='activos';pages.tableroHacienda()">Activos</button>
+        <button class="px-3 py-1.5 ${filtro==='todos'?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._tabHacFiltro='todos';pages.tableroHacienda()">Todos</button>
+      </div>
+      <button class="btn btn-outline" onclick="go('rodeos')">📋 Ver como lista</button>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Lotes</div><div class="text-lg font-bold mt-1">${lista.length}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Cabezas</div><div class="text-lg font-bold mt-1">${totCab}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Kg producidos</div><div class="text-lg font-bold mt-1 text-emerald-700">${fmtN(totKgProd)} kg</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Margen total</div><div class="text-lg font-bold mt-1 ${totMargen>=0?'text-emerald-700':'text-red-600'}">${fmt$(totMargen)}</div></div>
+    </div>
+    ${lista.length ? `<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">${lista.map(card).join('')}</div>`
+      : `<div class="kpi text-center text-slate-400 py-10">No hay lotes ${filtro==='activos'?'activos':''}. Cargá uno desde <b>Rodeos y Hacienda → + Nuevo lote</b> y ponele un objetivo de $/kg y GPD para ver el semáforo.</div>`}
+    <div class="text-[11px] text-slate-500 mt-3">🟢 dentro del objetivo · 🔴 fuera del objetivo · ⚪ sin objetivo o sin datos. El objetivo de cada lote se carga con el botón 🎯. Cargá <b>pesajes</b> para que el GPD y el $/kg reflejen la ganancia de peso.</div>`;
+};
+
 async function rodForm(id=null){
   let r={}; if(id){ try{ r=(await api('/api/rodeos/'+id)).data||{}; }catch(e){ return toast(e.message,'error'); } }
   let campos=[]; try{ campos=(await api('/api/campos')).data||[]; }catch{}
@@ -27693,6 +27789,8 @@ async function rodForm(id=null){
         <div><label class="label">Cabezas iniciales</label><input id="rod-cabi" type="number" class="input" value="${dv(r.cabezasInicial)}"/></div>
         <div><label class="label">Kg iniciales (stock)</label><input id="rod-kgi" type="number" step="0.01" class="input" value="${dv(r.kgInicial)}"/></div>
         <div><label class="label">Estado</label><select id="rod-estado" class="input"><option value="activo" ${(r.estado||'activo')==='activo'?'selected':''}>Activo</option><option value="cerrado" ${r.estado==='cerrado'?'selected':''}>Cerrado</option></select></div>
+        <div><label class="label">Objetivo $/kg producido</label><input id="rod-objkg" type="number" step="0.01" class="input" value="${dv(r.objetivoCostoKg)}" placeholder="para el semáforo del tablero"/></div>
+        <div><label class="label">Objetivo GPD (kg/cab/día)</label><input id="rod-objgpd" type="number" step="0.001" class="input" value="${dv(r.objetivoGpd)}" placeholder="ej. 1.2"/></div>
       </div>
       <div class="p-2 rounded bg-amber-50 border border-amber-200 mb-3">
         <label class="flex items-center gap-2 text-sm text-amber-900"><input id="rod-externo" type="checkbox" class="w-4 h-4" ${r.externo?'checked':''} onchange="document.getElementById('rod-prop-wrap').style.display=this.checked?'block':'none'"/> Hacienda de terceros (capitalización / hotelería de engorde)</label>
@@ -27711,6 +27809,7 @@ async function rodSave(id){
   const data={ nombre, sistema:v('#rod-sist')||'feedlot', campoId:v('#rod-campo')||null, categoria:v('#rod-cat')||null,
     fechaInicio:v('#rod-fini')?new Date(v('#rod-fini')+'T12:00:00').toISOString():null,
     cabezasInicial:n('#rod-cabi')||0, kgInicial:n('#rod-kgi')||0, estado:v('#rod-estado')||'activo',
+    objetivoCostoKg:n('#rod-objkg'), objetivoGpd:n('#rod-objgpd'),
     externo, propietario:externo?(v('#rod-prop')||null):null, observaciones:v('#rod-obs')||null };
   try{ if(id) await api('/api/rodeos/'+id,{method:'PUT',body:JSON.stringify(data)}); else await api('/api/rodeos',{method:'POST',body:JSON.stringify(data)}); closeModal(); toast('Lote guardado','success'); pages.rodeos(); }catch(e){ toast(e.message,'error'); }
 }

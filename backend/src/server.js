@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.192.0';
+const AGROCORE_VERSION = '2.193.0';
 const AGROCORE_BUILD = new Date('2026-09-10').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13640,6 +13640,8 @@ const rodeoSchema = z.object({
   externo: z.boolean().optional(),
   propietario: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
+  objetivoCostoKg: z.coerce.number().nullable().optional(),
+  objetivoGpd: z.coerce.number().nullable().optional(),
 });
 const rodeoEventoSchema = z.object({
   fecha: z.coerce.date(),
