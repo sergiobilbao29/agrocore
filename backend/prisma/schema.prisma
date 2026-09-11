@@ -285,6 +285,7 @@ model Lote {
 
   campo           Campo    @relation(fields: [campoId], references: [id], onDelete: Cascade)
   campanas        Campana[]
+  rodeos          Rodeo[]
 
   @@index([campoId])
 }
@@ -2367,7 +2368,9 @@ model Rodeo {
   nombre         String
   sistema        String   @default("feedlot") // feedlot | engorde_campo | recria | cria
   campoId        String?
-  categoria      String?  // categoria principal (Novillito, Ternero, Vaca...) - libre
+  loteId         String?  // lote/potrero donde se aloja
+  corral         String?  // corral (feedlot) — texto libre
+  categoria      String?  // categoria principal (desde catálogo de animales)
   fechaInicio    DateTime?
   fechaFin       DateTime?
   estado         String   @default("activo")  // activo | cerrado
@@ -2384,11 +2387,13 @@ model Rodeo {
 
   company        Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   campo          Campo?        @relation(fields: [campoId], references: [id], onDelete: SetNull)
+  lote           Lote?         @relation(fields: [loteId], references: [id], onDelete: SetNull)
   eventos        RodeoEvento[]
   animales       Animal[]
 
   @@index([companyId])
   @@index([campoId])
+  @@index([loteId])
 }
 
 // Evento de un rodeo. Segun "tipo" mueve cabezas/kg de stock y/o suma costo:

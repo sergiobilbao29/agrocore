@@ -2833,6 +2833,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/09/2026',
+      titulo:'🗺️ v2.198.0 — Tarjetas de rodeo sobre el potrero en el Mapa',
+      desc:'En <b>Mapa de lotes → Vista Hacienda</b>, cada potrero con un rodeo asignado ahora muestra una <b>tarjeta sobre el lote</b> (estilo Potreros del INTA) con el nombre del rodeo, <b>cabezas, peso promedio, kilos totales y carga (cab/ha)</b>, más los botones <b>“↔ Mover”</b> (reubica el rodeo en otro campo/potrero/corral) y <b>“Ver ficha”</b>. Los potreros con hacienda se pintan en verde y los vacíos en gris, para ver la rotación de un vistazo. Reutiliza el mismo mapa satelital del rinde agrícola.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/09/2026',
+      titulo:'🧾 v2.197.0 — Cargá la factura desde el evento del rodeo (compra/venta/sanidad)',
+      desc:'En la ficha del rodeo, al cargar una <b>Compra (ingreso)</b>, una <b>Venta</b> o un gasto de <b>Sanidad/Otro</b>, ahora podés elegir <b>“➕ Crear factura nueva”</b> sin salir de la ficha: ponés proveedor/cliente, tipo, punto de venta, número e IVA, y el sistema <b>genera el comprobante y su cuenta a pagar/cobrar</b> automáticamente, vinculándolo al evento. Seguís teniendo las opciones de <b>vincular</b> una factura ya existente o dejar solo la cuenta corriente.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/09/2026',
+      titulo:'🐮 v2.196.0 — Rodeos por lote/corral, categoría desde catálogo y depósito en alimentación',
+      desc:'Mejoras en <b>Rodeos y Hacienda</b>: al crear/editar un lote de engorde ahora elegís <b>Campo, Lote/potrero y Corral</b> (para feedlot), y la <b>Categoría se toma del catálogo de animales</b> (podés cambiarla cuando recategorizan, ej. Ternero → Novillo). Al cargar una <b>Alimentación</b> podés elegir de <b>qué depósito sale</b> el alimento (descuenta el stock de ese depósito). Y en <b>Traslado de hacienda</b> quedó arreglado el <b>arrastrar y soltar</b> entre campos (además del toque en el celular).' },
     { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'10/09/2026',
       titulo:'🗺️ v2.195.0 — El Mapa de lotes ahora también muestra la hacienda + fecha correcta en listados',
       desc:'El <b>Mapa de lotes</b> (Producción) ahora tiene un selector <b>Vista: Rinde | Hacienda</b>. En <b>Hacienda</b>, cada campo aparece ubicado con la <b>cantidad de animales</b> (el punto crece según las cabezas), su detalle por categoría y los <b>feedlots (🐮) y haras (🐎)</b> que tiene asignados. Así usás <b>un solo mapa</b> para las campañas de cereal y para ver dónde está la hacienda. El tablero de arrastrar-y-soltar para mover animales entre campos ahora se llama <b>“Traslado de hacienda”</b>. Además, corregimos un desfasaje que mostraba <b>un día menos</b> en la fecha de algunas facturas y movimientos en los listados.' },
@@ -8491,6 +8500,7 @@ pages.mapaCampos = async function(){
   const hacByCampo = {}; // campoId -> {cab,kg,cats:[fila]}
   hacFilas.forEach(f=>{ if(Number(f.real||0)<=0) return; const h=hacByCampo[f.campoId]=hacByCampo[f.campoId]||{cab:0,kg:0,cats:[]}; h.cab+=Number(f.real||0); h.kg+=(f.kilosReal!=null?Number(f.kilosReal):0); h.cats.push(f); });
   const rodByCampo = {}; rodeos.forEach(r=>{ if(r.campoId&&r.estado==='activo') (rodByCampo[r.campoId]=rodByCampo[r.campoId]||[]).push(r); });
+  const rodByLote = {}; rodeos.forEach(r=>{ if(r.loteId&&r.estado==='activo') (rodByLote[r.loteId]=rodByLote[r.loteId]||[]).push(r); });
   const rodIco = r => r.sistema==='feedlot'?'🐮':(r.sistema==='recria'||r.sistema==='engorde_campo'?'🐄':(r.sistema==='cria'?'🐄':'🐎'));
 
   try { await ensureLeaflet(); } catch(e){ $('#page-body').innerHTML = `<div class="stub-card">No se pudo cargar el mapa: ${esc(e.message)} El mapa necesita conexión a internet.</div>`; return; }
@@ -8594,7 +8604,7 @@ pages.mapaCampos = async function(){
   state._mapaLayers = {};
   const bounds = [];
   showLotes.forEach(l=>{
-    const r = rindePorLote[l.id]; const col = esHac ? '#cbd5e1' : mapaColorRinde(r, rMin, rMax);
+    const r = rindePorLote[l.id]; const col = esHac ? ((rodByLote[l.id]||[]).length ? '#86efac' : '#cbd5e1') : mapaColorRinde(r, rMin, rMax);
     const camp = campPorLote[l.id];
     const popup = `<b>${esc(l.nombre)}</b><br>${esc(l.campo?.nombre||'')}${l.hectareas?` · ${fmtN(l.hectareas)} ha`:''}<br>`
       + (camp?`${esc(camp.cultivo||'')} ${esc(camp.ciclo||'')}<br>Rinde: <b>${r!=null?fmtN(r)+' kg/ha':'—'}</b>`:'Sin campaña');
@@ -8637,6 +8647,32 @@ pages.mapaCampos = async function(){
       state._mapaCampoLayers[c.id]=mk; bounds.push(pt);
     }
   });
+  // Tarjetas de rodeo sobre el potrero (vista Hacienda): peso prom, kilos, carga + acciones.
+  if (esHac){
+    showLotes.forEach(l=>{
+      const rds = rodByLote[l.id]||[]; if(!rds.length) return;
+      const lay = state._mapaLayers[l.id]; let center=null;
+      if(lay){ try{ center = lay.getBounds ? lay.getBounds().getCenter() : lay.getLatLng(); }catch{} }
+      if(!center) center = mapaParsePunto(l.centro) || mapaParsePunto(l.campo?.geolocalizacion);
+      if(!center) return;
+      const rd = rds[0]; const R = rd.resultado||{};
+      const cab = R.cabActual||0; const kg = R.kgStockFinal||0;
+      const pp = cab>0 ? Math.round(kg/cab) : null;
+      const ha = Number(l.hectareas||0); const carga = (ha>0&&cab>0) ? (Math.round(cab/ha*100)/100) : null;
+      const html = `<div style="background:#fff;border:2px solid #15803d;border-radius:8px;padding:4px 7px;font-size:11px;line-height:1.35;box-shadow:0 1px 5px rgba(0,0,0,.35);min-width:132px;white-space:nowrap">
+        <div style="font-weight:700;color:#14532d">${(RODEO_SIST[rd.sistema]||['🐮'])[0]} ${esc(rd.nombre)}</div>
+        <div>${cab} cab${pp!=null?` · ${pp} kg`:''}</div>
+        ${(kg||carga!=null)?`<div>${kg?fmtN(kg)+' kg tot':''}${(kg&&carga!=null)?' · ':''}${carga!=null?carga+' c/ha':''}</div>`:''}
+        ${rds.length>1?`<div style="color:#64748b">+${rds.length-1} rodeo(s) más</div>`:''}
+        <div style="margin-top:3px;border-top:1px solid #e2e8f0;padding-top:3px">
+          <span style="color:#15803d;font-weight:600;cursor:pointer" onclick="rodMoverLote('${rd.id}')">↔ Mover</span>
+          <span style="color:#cbd5e1"> | </span>
+          <span style="color:#0369a1;font-weight:600;cursor:pointer" onclick="rodVer('${rd.id}')">Ver ficha</span>
+        </div></div>`;
+      const icon = L.divIcon({ className:'rod-card', html, iconSize:[0,0], iconAnchor:[66,18] });
+      L.marker(center, { icon, interactive:true, riseOnHover:true }).addTo(map);
+    });
+  }
   if (bounds.length){ try{ map.fitBounds(L.latLngBounds(bounds).pad(0.15)); }catch{ map.setView(bounds[0],13); } }
   else { map.setView([-33.5,-64.4], 6); } // centro aprox Argentina agrícola
 };
@@ -8653,6 +8689,38 @@ function mapaFocusCampo(campoId){
   if (!map||!lay) return;
   if (lay.getLatLng){ map.setView(lay.getLatLng(), 14); }
   lay.openPopup && lay.openPopup();
+}
+// Mover un rodeo a otro potrero/campo (reubicación; no toca el stock por campo).
+async function rodMoverLote(rodeoId){
+  if(!can('stock:update')) return toast('No tenés permiso','warn');
+  let rod={}, campos=[], lotes=[];
+  try{ rod=(await api('/api/rodeos/'+rodeoId)).data||{}; }catch(e){ return toast(e.message,'error'); }
+  try{ campos=(await api('/api/campos')).data||[]; }catch{}
+  try{ lotes=(await api('/api/lotes')).data||[]; }catch{}
+  state._movRodLotes=lotes;
+  openModal({ title:'↔ Mover rodeo de potrero', size:'max-w-md',
+    body:`<p class="text-xs text-slate-500 mb-3">Reubicá <b>${esc(rod.nombre||'')}</b> en otro campo/lote. Es un movimiento de <b>ubicación</b>; el stock por campo no cambia (si cambiás de campo, el traslado de stock se hace desde “Traslado de hacienda”).</p>
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Campo</label><select id="mrl-campo" class="input" onchange="rodMoverLoteLotes()"><option value="">—</option>${campos.map(c=>`<option value="${c.id}" ${c.id===rod.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label">Lote / potrero</label><select id="mrl-lote" class="input"><option value="">—</option>${lotes.filter(l=>!rod.campoId||(l.campo?.id||l.campoId)===rod.campoId).map(l=>`<option value="${l.id}" ${l.id===rod.loteId?'selected':''}>${esc(l.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label">Corral <span class="text-slate-400">(feedlot)</span></label><input id="mrl-corral" class="input" value="${esc(rod.corral||'')}"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='rodMoverLoteSave(${JSON.stringify(rodeoId)})'>Mover</button>` });
+}
+function rodMoverLoteLotes(){
+  const campoId=document.querySelector('#mrl-campo')?.value||'';
+  const sel=document.querySelector('#mrl-lote'); if(!sel) return;
+  const lotes=(state._movRodLotes||[]).filter(l=>!campoId||(l.campo?.id||l.campoId)===campoId);
+  sel.innerHTML='<option value="">—</option>'+lotes.map(l=>`<option value="${l.id}">${esc(l.nombre)}</option>`).join('');
+}
+async function rodMoverLoteSave(rodeoId){
+  const campoId=document.querySelector('#mrl-campo')?.value||null;
+  const loteId=document.querySelector('#mrl-lote')?.value||null;
+  const corral=document.querySelector('#mrl-corral')?.value.trim()||null;
+  try{ await api('/api/rodeos/'+rodeoId,{method:'PUT',body:JSON.stringify({ campoId, loteId, corral })});
+    toast('Rodeo reubicado ✓','success'); closeModal();
+    if(state.currentPage==='mapaCampos') pages.mapaCampos(); else if(state.currentPage==='rodeos') pages.rodeos();
+  }catch(e){ toast(e.message,'error'); }
 }
 // Dibujar / editar el contorno de un lote sobre el mapa — dibujo manual con
 // clics (no depende de librerías externas, así anda siempre que cargue el mapa).
@@ -27853,17 +27921,16 @@ pages.mapaHacienda = async function(){
     const carga = ha>0 && cab>0 ? (cab/ha) : null;
     const chips = fs.map(f=>{
       const pp = f.pesoPromedio!=null?Number(f.pesoPromedio):0;
-      return `<span draggable="true"
-        ondragstart="hacDragStart(event,${JSON.stringify(c.id)},${JSON.stringify(f.categoria)},${Number(f.real||0)},${pp})"
-        onclick="hacTrasladar(${JSON.stringify(c.id)},${JSON.stringify(f.categoria)},${Number(f.real||0)},${pp})"
+      return `<span draggable="true" data-campo="${c.id}" data-cat="${esc(f.categoria)}" data-cab="${Number(f.real||0)}" data-pp="${pp}"
+        ondragstart="hacDragStart(event,this)" onclick="hacChipClick(this)"
         class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs cursor-move hover:bg-emerald-100"
         title="Arrastrá a otro campo para trasladar (o tocá)">🐄 ${esc(f.categoria)}: <b>${f.real}</b>${f.kilosReal!=null?` · ${fmtN(f.kilosReal)}kg`:''}</span>`;
     }).join(' ');
     const rods = (rodByCampo[c.id]||[]).map(r=>`<span class="inline-block px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 text-[11px]">${(RODEO_SIST[r.sistema]||['🐮'])[0]} ${esc(r.nombre)}</span>`).join(' ');
-    return `<div class="kpi transition"
+    return `<div class="kpi transition" data-campo="${c.id}"
         ondragover="event.preventDefault(); this.classList.add('ring-2','ring-emerald-500')"
         ondragleave="this.classList.remove('ring-2','ring-emerald-500')"
-        ondrop="this.classList.remove('ring-2','ring-emerald-500'); hacDrop(event,${JSON.stringify(c.id)})">
+        ondrop="hacDrop(event,this)">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <div class="font-bold truncate">🗺️ ${esc(c.nombre)}</div>
@@ -27894,16 +27961,21 @@ pages.mapaHacienda = async function(){
       : `<div class="kpi text-center text-slate-400 py-10">No hay campos ganaderos con hacienda. Cargá stock en <b>Movimientos de animales</b> o marcá el campo como ganadero/mixto.</div>`}`;
 };
 
-function hacDragStart(ev, campoId, categoria, cab, pesoProm){
-  state._dragHac = { campoId, categoria, cab, pesoProm };
-  try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain', categoria); }catch(e){}
+function hacDragStart(ev, el){
+  state._dragHac = { campoId: el.dataset.campo, categoria: el.dataset.cat, cab: Number(el.dataset.cab)||0, pesoProm: Number(el.dataset.pp)||0 };
+  try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain', el.dataset.cat||''); }catch(e){}
 }
-function hacDrop(ev, destinoCampoId){
+function hacChipClick(el){
+  hacTrasladar(el.dataset.campo, el.dataset.cat, Number(el.dataset.cab)||0, Number(el.dataset.pp)||0);
+}
+function hacDrop(ev, el){
   ev.preventDefault();
+  el.classList.remove('ring-2','ring-emerald-500');
   const d = state._dragHac; state._dragHac=null;
   if(!d) return;
-  if(d.campoId===destinoCampoId) return toast('El campo origen y destino son el mismo','warn');
-  hacTrasladar(d.campoId, d.categoria, d.cab, d.pesoProm, destinoCampoId);
+  const destino = el.dataset.campo;
+  if(d.campoId===destino) return toast('El campo origen y destino son el mismo','warn');
+  hacTrasladar(d.campoId, d.categoria, d.cab, d.pesoProm, destino);
 }
 function hacTrasladar(origenId, categoria, maxCab, pesoProm, destinoId=null){
   if(!can('stock:update')) return toast('No tenés permiso para trasladar','warn');
@@ -27956,15 +28028,23 @@ async function hacTrasladarSave(origenId, categoria, maxCab, pesoProm){
 
 async function rodForm(id=null){
   let r={}; if(id){ try{ r=(await api('/api/rodeos/'+id)).data||{}; }catch(e){ return toast(e.message,'error'); } }
-  let campos=[]; try{ campos=(await api('/api/campos')).data||[]; }catch{}
+  let campos=[], lotesAll=[], catsHac=[];
+  try{ campos=(await api('/api/campos')).data||[]; }catch{}
+  try{ lotesAll=(await api('/api/lotes')).data||[]; }catch{}
+  try{ catsHac=(await api('/api/categorias-hacienda')).data||[]; }catch{}
+  state._rodLotesAll=lotesAll;
   const dv=(x)=>x!=null?x:''; const dfec=(x)=>x?String(x).slice(0,10):'';
+  const catNombres=[...new Set(catsHac.map(c=>c.nombre).filter(Boolean))];
+  if(r.categoria && !catNombres.includes(r.categoria)) catNombres.unshift(r.categoria);
   openModal({ title:id?'✏️ Editar lote':'🐮 Nuevo lote de engorde / cría', size:'max-w-2xl',
     body:`
       <div class="grid grid-cols-2 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Nombre *</label><input id="rod-nombre" class="input" value="${esc(dv(r.nombre))}" placeholder="Novillitos Lote 1"/></div>
         <div><label class="label">Sistema *</label><select id="rod-sist" class="input">${Object.entries(RODEO_SIST).map(([k,v])=>`<option value="${k}" ${(r.sistema||'feedlot')===k?'selected':''}>${v[0]} ${v[1]}</option>`).join('')}</select></div>
-        <div><label class="label">Campo</label><select id="rod-campo" class="input"><option value="">—</option>${campos.map(c=>`<option value="${c.id}" ${c.id===r.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
-        <div><label class="label">Categoría</label><input id="rod-cat" class="input" value="${esc(dv(r.categoria))}" placeholder="Novillito / Ternero / Vaca"/></div>
+        <div><label class="label">Campo</label><select id="rod-campo" class="input" onchange="rodLotesRefresh()"><option value="">—</option>${campos.map(c=>`<option value="${c.id}" ${c.id===r.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label">Lote / potrero</label><select id="rod-lote" class="input"><option value="">—</option>${lotesAll.filter(l=>!r.campoId||(l.campo?.id||l.campoId)===r.campoId).map(l=>`<option value="${l.id}" ${l.id===r.loteId?'selected':''}>${esc(l.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label">Corral <span class="text-slate-400">(feedlot)</span></label><input id="rod-corral" class="input" value="${esc(dv(r.corral))}" placeholder="ej. Corral 3"/></div>
+        <div><label class="label">Categoría</label><select id="rod-cat" class="input"><option value="">— Elegí —</option>${catNombres.map(nc=>`<option value="${esc(nc)}" ${nc===r.categoria?'selected':''}>${esc(nc)}</option>`).join('')}</select><div class="text-[11px] text-slate-400 mt-0.5">Podés cambiarla cuando recategorizan (ej. Ternero → Novillo).</div></div>
         <div><label class="label">Fecha de inicio</label><input id="rod-fini" type="date" class="input" value="${dfec(r.fechaInicio)}"/></div>
         <div><label class="label">Cabezas iniciales</label><input id="rod-cabi" type="number" class="input" value="${dv(r.cabezasInicial)}"/></div>
         <div><label class="label">Kg iniciales (stock)</label><input id="rod-kgi" type="number" step="0.01" class="input" value="${dv(r.kgInicial)}"/></div>
@@ -27981,12 +28061,18 @@ async function rodForm(id=null){
       <div class="text-[11px] text-slate-500 mt-2">Las "cabezas / kg iniciales" son el stock al abrir el lote (por ej. si ya tenías animales). Las compras se cargan como evento "Ingreso".</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='rodSave(${id?JSON.stringify(id):"null"})'>💾 ${id?'Guardar':'Crear lote'}</button>` });
 }
+function rodLotesRefresh(){
+  const campoId=document.querySelector('#rod-campo')?.value||'';
+  const sel=document.querySelector('#rod-lote'); if(!sel) return;
+  const lotes=(state._rodLotesAll||[]).filter(l=>!campoId||(l.campo?.id||l.campoId)===campoId);
+  sel.innerHTML='<option value="">—</option>'+lotes.map(l=>`<option value="${l.id}">${esc(l.nombre)}</option>`).join('');
+}
 async function rodSave(id){
   const v=(s)=>{const el=document.querySelector(s);return el?String(el.value).trim():'';};
   const n=(s)=>{const x=v(s);return x===''?null:Number(x);};
   const nombre=v('#rod-nombre'); if(!nombre) return toast('Poné un nombre','warn');
   const externo=!!document.querySelector('#rod-externo')?.checked;
-  const data={ nombre, sistema:v('#rod-sist')||'feedlot', campoId:v('#rod-campo')||null, categoria:v('#rod-cat')||null,
+  const data={ nombre, sistema:v('#rod-sist')||'feedlot', campoId:v('#rod-campo')||null, loteId:v('#rod-lote')||null, corral:v('#rod-corral')||null, categoria:v('#rod-cat')||null,
     fechaInicio:v('#rod-fini')?new Date(v('#rod-fini')+'T12:00:00').toISOString():null,
     cabezasInicial:n('#rod-cabi')||0, kgInicial:n('#rod-kgi')||0, estado:v('#rod-estado')||'activo',
     objetivoCostoKg:n('#rod-objkg'), objetivoGpd:n('#rod-objgpd'),
@@ -28043,8 +28129,9 @@ async function rodEvForm(rodeoId, tipo){
   const tieneKg=['ingreso','nacimiento','pesaje','venta','baja'].includes(tipo);
   const esCosto=['alimentacion','sanidad','labor','otro'].includes(tipo);
   const esVenta=tipo==='venta'; const esIngreso=tipo==='ingreso'; const esPesaje=tipo==='pesaje';
-  let prods=[];
-  if(tipo==='alimentacion'){ try{ prods=(await api('/api/productos')).data||[]; }catch{} prods=prods.filter(p=>p.activo!==false && (p.categoria||'')!=='hacienda' && (p.categoria||'')!=='Animales' && !p.esFicha); }
+  let prods=[], depositosAlim=[];
+  if(tipo==='alimentacion'){ try{ prods=(await api('/api/productos')).data||[]; }catch{} prods=prods.filter(p=>p.activo!==false && (p.categoria||'')!=='hacienda' && (p.categoria||'')!=='Animales' && !p.esFicha);
+    try{ depositosAlim=(await api('/api/depositos')).data||[]; }catch{} }
   let clientes=[], facturas=[], liqs=[];
   if(tipo==='venta'){
     try{ clientes=(await api('/api/clientes')).data||[]; }catch{}
@@ -28070,7 +28157,8 @@ async function rodEvForm(rodeoId, tipo){
         ${tieneKg?`<div><label class="label">${esPesaje?'Kg TOTAL del lote *':'Kg'}</label><input id="rev-kg" type="number" step="0.01" class="input"/></div>`:''}
         ${tipo==='alimentacion'?`<div class="col-span-2"><label class="label">Artículo del galpón (descuenta stock)</label><select id="rev-prod" class="input" onchange="rodEvProdChange()"><option value="">— sin descontar galpón (cargo el costo a mano) —</option>${prods.map(p=>`<option value="${p.id}" data-costo="${p.ultimoCostoCompra||p.precioReferencia||0}" data-mon="${p.ultimoCostoMoneda||'ARS'}" data-mezcla="${p.esMezcla?1:''}">${p.esMezcla?'🧪 ':''}${esc(p.nombre)}${p.esMezcla?' · ración':(p.ultimoCostoCompra?` ($${fmtN(p.ultimoCostoCompra)}/${esc(p.unidad||'u')})`:'')}</option>`).join('')}</select>
           <div id="rev-mezhint" class="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2 mt-1" style="display:none">🧪 Es una <b>ración/mezcla</b>: al guardar se descuentan del stock sus componentes en la proporción de la fórmula, y el costo se calcula solo.</div></div>
-        <div><label class="label">Cantidad consumida</label><input id="rev-cant" type="number" step="0.01" class="input" oninput="rodEvCalcCosto()"/></div>`:''}
+        <div><label class="label">Cantidad consumida</label><input id="rev-cant" type="number" step="0.01" class="input" oninput="rodEvCalcCosto()"/></div>
+        <div><label class="label">Depósito de dónde sale</label><select id="rev-deposito" class="input"><option value="">🏠 Campo / general</option>${depositosAlim.map(dp=>`<option value="${dp.id}">${esc(dp.nombre)}</option>`).join('')}</select></div>`:''}
         ${(esCosto||esVenta||esIngreso||esCargo)?`<div><label class="label">${montoLbl}${esIngreso?' (compra)':''}</label><input id="rev-monto" type="number" step="0.01" class="input"/></div>
         <div><label class="label">Moneda</label><select id="rev-mon" class="input"><option value="ARS">ARS</option><option value="USD">USD</option></select></div>`:''}
         ${esIngreso?`<div><label class="label">Fletes + comisiones</label><input id="rev-flete" type="number" step="0.01" class="input"/></div>`:''}
@@ -28081,6 +28169,7 @@ async function rodEvForm(rodeoId, tipo){
             <option value="ctacte">Cuenta a cobrar a un cliente</option>
             <option value="liquidacion">Vincular a una liquidación de hacienda</option>
             <option value="factura">Vincular a una factura de venta</option>
+            <option value="factura_nueva">➕ Crear factura de venta nueva</option>
           </select></div>
         <div class="col-span-2" id="rev-vcli" style="display:none"><label class="label">Cliente / comprador</label><select id="rev-cliente" class="input"><option value="">— Elegí cliente —</option>${clientes.map(c=>`<option value="${c.id}">${esc(c.nombre||c.razonSocial||'')}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">Genera la cuenta a cobrar por el importe de la venta.</div></div>
         <div class="col-span-2" id="rev-vliq" style="display:none"><label class="label">Liquidación de hacienda</label><select id="rev-liq" class="input"><option value="">— Elegí liquidación —</option>${liqs.map(l=>`<option value="${l.id}">${fmtDate(l.fecha)} · ${esc(l.numero||'s/n')} · $${fmtN(l.neto||0)}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">La liquidación ya lleva su propia cuenta a cobrar; acá solo se vincula.</div></div>
@@ -28091,6 +28180,7 @@ async function rodEvForm(rodeoId, tipo){
             <option value="solo">Solo en el rodeo (no toca finanzas)</option>
             <option value="ctapagar">Cuenta a pagar a un proveedor</option>
             <option value="facturacompra">Vincular a una factura de compra</option>
+            <option value="facturacompra_nueva">➕ Crear factura de compra nueva</option>
           </select></div>
         <div class="col-span-2" id="rev-cprov" style="display:none"><label class="label">Proveedor</label><select id="rev-prov" class="input"><option value="">— Elegí proveedor —</option>${proveedores.map(p=>`<option value="${p.id}">${esc(p.nombre||p.razonSocial||'')}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">Genera la cuenta a pagar por la compra (monto + fletes/comisiones).</div></div>
         <div class="col-span-2" id="rev-cfac" style="display:none"><label class="label">Factura de compra</label><select id="rev-faccompra" class="input"><option value="">— Elegí factura de compra —</option>${facturasCompra.map(f=>`<option value="${f.id}">${fmtDate(f.fecha)} · ${esc((f.proveedor&&f.proveedor.nombre)||'')} · ${esc((f.tipo||'')+' '+(f.numero||''))} · $${fmtN(f.total||f.neto||0)}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">La factura de compra ya lleva su propia cuenta a pagar; acá solo se vincula.</div></div>`:''}
@@ -28116,9 +28206,19 @@ async function rodEvForm(rodeoId, tipo){
             <option value="solo">Solo en el rodeo (no toca finanzas)</option>
             <option value="ctapagar">Cuenta a pagar a un proveedor</option>
             <option value="facturacompra">Vincular a una factura de compra</option>
+            <option value="facturacompra_nueva">➕ Crear factura de compra nueva</option>
           </select></div>
         <div class="col-span-2" id="rev-gprov" style="display:none"><label class="label">Proveedor</label><select id="rev-gprovsel" class="input"><option value="">— Elegí proveedor —</option>${proveedores.map(p=>`<option value="${p.id}">${esc(p.nombre||p.razonSocial||'')}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">Genera la cuenta a pagar por el gasto (veterinaria, sanidad, etc.).</div></div>
         <div class="col-span-2" id="rev-gfac" style="display:none"><label class="label">Factura de compra</label><select id="rev-gfacsel" class="input"><option value="">— Elegí factura de compra —</option>${facturasCompra.map(f=>`<option value="${f.id}">${fmtDate(f.fecha)} · ${esc((f.proveedor&&f.proveedor.nombre)||'')} · ${esc((f.tipo||'')+' '+(f.numero||''))} · $${fmtN(f.total||f.neto||0)}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">La factura ya lleva su cuenta a pagar; acá solo se vincula.</div></div>`:''}
+        <div class="col-span-2" id="rev-facnew" style="display:none">
+          <div class="grid grid-cols-4 gap-2 border-t border-slate-200 pt-2 mt-1">
+            <div><label class="label">Tipo</label><select id="rev-fn-tipo" class="input"><option>A</option><option>B</option><option>C</option></select></div>
+            <div><label class="label">Pto vta</label><input id="rev-fn-pv" type="number" class="input" placeholder="1"/></div>
+            <div><label class="label">Número</label><input id="rev-fn-nro" type="number" class="input"/></div>
+            <div><label class="label">IVA %</label><select id="rev-fn-iva" class="input"><option value="0">0</option><option value="10.5">10,5</option><option value="21" selected>21</option><option value="27">27</option></select></div>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-1">Se crea el comprobante y su cuenta ${esVenta?'a cobrar (cliente)':'a pagar (proveedor)'}. El importe de arriba se toma como <b>neto</b>; si ponés IVA, se suma para el total del comprobante.</div>
+        </div>
       </div>
       ${esCargo?`<div class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">🏨 Este importe se registra como <b>cargo a cobrar al dueño de la hacienda</b> (no es costo del engorde). Aparece en el resumen “Capitalización / hotelería (terceros)” para facturarle. Podés poner las <b>cabezas</b> para calcular por cabeza/día si querés.</div>`:''}
       ${esPesaje?`<div class="text-[11px] text-slate-500 mt-2">Poné el <b>kg total</b> de todos los animales del lote a hoy (cabezas × kg promedio). Es lo que usa el sistema para calcular la ganancia de peso.</div>`:''}`,
@@ -28127,12 +28227,14 @@ async function rodEvForm(rodeoId, tipo){
 function rodVentaModo(){
   const m=$('#rev-vmodo')?.value||'solo';
   const show=(id,on)=>{ const e=$(id); if(e) e.style.display=on?'block':'none'; };
-  show('#rev-vcli', m==='ctacte'); show('#rev-vliq', m==='liquidacion'); show('#rev-vfac', m==='factura');
+  show('#rev-vcli', m==='ctacte'||m==='factura_nueva'); show('#rev-vliq', m==='liquidacion'); show('#rev-vfac', m==='factura');
+  show('#rev-facnew', m==='factura_nueva');
 }
 function rodCompraModo(){
   const m=$('#rev-cmodo')?.value||'solo';
   const show=(id,on)=>{ const e=$(id); if(e) e.style.display=on?'block':'none'; };
-  show('#rev-cprov', m==='ctapagar'); show('#rev-cfac', m==='facturacompra');
+  show('#rev-cprov', m==='ctapagar'||m==='facturacompra_nueva'); show('#rev-cfac', m==='facturacompra');
+  show('#rev-facnew', m==='facturacompra_nueva');
 }
 function rodLaborModo(){
   const m=$('#rev-lmodo')?.value||'solo';
@@ -28142,7 +28244,8 @@ function rodLaborModo(){
 function rodGastoModo(){
   const m=$('#rev-gmodo')?.value||'solo';
   const show=(id,on)=>{ const e=$(id); if(e) e.style.display=on?'block':'none'; };
-  show('#rev-gprov', m==='ctapagar'); show('#rev-gfac', m==='facturacompra');
+  show('#rev-gprov', m==='ctapagar'||m==='facturacompra_nueva'); show('#rev-gfac', m==='facturacompra');
+  show('#rev-facnew', m==='facturacompra_nueva');
 }
 function rodEvProdChange(){
   const sel=$('#rev-prod'); const opt=sel?sel.options[sel.selectedIndex]:null;
@@ -28157,6 +28260,24 @@ function rodEvCalcCosto(){
   const costo=Number(opt?.dataset?.costo||0);
   if(sel.value && costo && cant){ mEl.value=Math.round(costo*cant); const mon=$('#rev-mon'); if(mon&&opt.dataset.mon) mon.value=opt.dataset.mon; }
 }
+// Crea una factura NUEVA (venta o compra) desde el evento del rodeo y devuelve su id.
+// Reusa los endpoints de facturación (que generan la cuenta corriente correspondiente).
+async function _rodCrearFacturaEvento(kind, contactoId){
+  const gv=(s)=>{const el=document.querySelector(s);return el?String(el.value).trim():'';};
+  const tipo=gv('#rev-fn-tipo')||'A';
+  const pv=Number(gv('#rev-fn-pv')||0); const nro=Number(gv('#rev-fn-nro')||0);
+  const iva=Number(gv('#rev-fn-iva')||0); const neto=Number(gv('#rev-monto')||0);
+  const fechaISO=new Date((gv('#rev-fecha')||new Date().toISOString().slice(0,10))+'T12:00:00').toISOString();
+  if(!pv||!nro) throw new Error('Completá punto de venta y número de la factura');
+  if(!(neto>0)) throw new Error('Poné el importe (neto) de la factura');
+  const item={ descripcion: gv('#rev-concepto')||(kind==='venta'?'Venta de hacienda':'Gasto de hacienda'), cantidad:1, precioUnit:neto, alicuotaIva:iva };
+  if(kind==='venta'){
+    const r=await api('/api/facturas',{method:'POST',body:JSON.stringify({ clienteId:contactoId, tipo, puntoVenta:pv, numero:nro, fecha:fechaISO, condicionVenta:'cuenta_corriente', origen:'agrocore', items:[item] })});
+    return r.data?.id || r.id;
+  }
+  const r=await api('/api/facturas-compra',{method:'POST',body:JSON.stringify({ proveedorId:contactoId, tipo, puntoVenta:pv, numero:nro, fecha:fechaISO, items:[item] })});
+  return r.data?.id || r.id;
+}
 async function rodEvSave(rodeoId, tipo){
   const v=(s)=>{const el=document.querySelector(s);return el?String(el.value).trim():'';};
   const n=(s)=>{const x=v(s);return x===''?null:Number(x);};
@@ -28165,17 +28286,22 @@ async function rodEvSave(rodeoId, tipo){
   const esCargo=['capitalizacion','pension','servicio'].includes(tipo);
   const data={ tipo, fecha:new Date(fecha+'T12:00:00').toISOString(), concepto:v('#rev-concepto')||null,
     cabezas:n('#rev-cab'), kg:n('#rev-kg'), monto:n('#rev-monto'), moneda:v('#rev-mon')||'ARS',
-    fleteComision:n('#rev-flete'), productoId:v('#rev-prod')||null, cantidad:n('#rev-cant'), aCobrar:esCargo };
+    fleteComision:n('#rev-flete'), productoId:v('#rev-prod')||null, cantidad:n('#rev-cant'), aCobrar:esCargo,
+    depositoId:(tipo==='alimentacion'?(v('#rev-deposito')||null):null) };
   if(tipo==='venta'){
     const vm=v('#rev-vmodo')||'solo'; data.ventaModo=vm;
     if(vm==='ctacte'){ const cid=v('#rev-cliente'); if(!cid) return toast('Elegí el cliente para la cuenta a cobrar','warn'); data.clienteId=cid; }
     if(vm==='liquidacion'){ const lid=v('#rev-liq'); if(!lid) return toast('Elegí la liquidación a vincular','warn'); data.liquidacionHaciendaId=lid; }
     if(vm==='factura'){ const fid=v('#rev-fac'); if(!fid) return toast('Elegí la factura a vincular','warn'); data.facturaId=fid; }
+    if(vm==='factura_nueva'){ const cid=v('#rev-cliente'); if(!cid) return toast('Elegí el cliente de la factura','warn');
+      try{ const fid=await _rodCrearFacturaEvento('venta',cid); if(!fid) throw new Error('No se pudo crear la factura'); data.facturaId=fid; data.ventaModo='factura'; }catch(e){ return toast(e.message,'error'); } }
   }
   if(tipo==='ingreso'){
     const cm=v('#rev-cmodo')||'solo'; data.compraModo=cm;
     if(cm==='ctapagar'){ const pid=v('#rev-prov'); if(!pid) return toast('Elegí el proveedor para la cuenta a pagar','warn'); data.proveedorId=pid; }
     if(cm==='facturacompra'){ const fid=v('#rev-faccompra'); if(!fid) return toast('Elegí la factura de compra a vincular','warn'); data.facturaCompraId=fid; }
+    if(cm==='facturacompra_nueva'){ const pid=v('#rev-prov'); if(!pid) return toast('Elegí el proveedor de la factura','warn');
+      try{ const fid=await _rodCrearFacturaEvento('compra',pid); if(!fid) throw new Error('No se pudo crear la factura de compra'); data.facturaCompraId=fid; data.compraModo='facturacompra'; }catch(e){ return toast(e.message,'error'); } }
   }
   if(tipo==='labor'){
     const lm=v('#rev-lmodo')||'solo'; data.laborModo=lm;
@@ -28186,6 +28312,8 @@ async function rodEvSave(rodeoId, tipo){
     const gm=v('#rev-gmodo')||'solo'; data.gastoModo=gm;
     if(gm==='ctapagar'){ const pid=v('#rev-gprovsel'); if(!pid) return toast('Elegí el proveedor para la cuenta a pagar','warn'); data.proveedorId=pid; }
     if(gm==='facturacompra'){ const fid=v('#rev-gfacsel'); if(!fid) return toast('Elegí la factura de compra a vincular','warn'); data.facturaCompraId=fid; }
+    if(gm==='facturacompra_nueva'){ const pid=v('#rev-gprovsel'); if(!pid) return toast('Elegí el proveedor de la factura','warn');
+      try{ const fid=await _rodCrearFacturaEvento('compra',pid); if(!fid) throw new Error('No se pudo crear la factura de compra'); data.facturaCompraId=fid; data.gastoModo='facturacompra'; }catch(e){ return toast(e.message,'error'); } }
   }
   try{ await api(`/api/rodeos/${rodeoId}/eventos`,{method:'POST',body:JSON.stringify(data)}); closeModal2(); toast('Evento cargado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
 }

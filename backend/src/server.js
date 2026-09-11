@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.195.0';
-const AGROCORE_BUILD = new Date('2026-09-10').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.198.0';
+const AGROCORE_BUILD = new Date('2026-09-11').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -13631,6 +13631,8 @@ const rodeoSchema = z.object({
   nombre: z.string().min(1),
   sistema: z.enum(['feedlot','engorde_campo','recria','cria']).optional(),
   campoId: z.string().nullable().optional(),
+  loteId: z.string().nullable().optional(),
+  corral: z.string().nullable().optional(),
   categoria: z.string().nullable().optional(),
   fechaInicio: z.coerce.date().nullable().optional(),
   fechaFin: z.coerce.date().nullable().optional(),
@@ -13655,6 +13657,7 @@ const rodeoEventoSchema = z.object({
   productoId: z.string().nullable().optional(),
   cantidad: z.coerce.number().nullable().optional(),
   aCobrar: z.boolean().optional(),
+  depositoId: z.string().nullable().optional(),  // alimentación: depósito de donde sale el alimento
   // v2.166: venta vinculada al circuito comercial
   ventaModo: z.enum(['solo','ctacte','factura','liquidacion']).nullable().optional(),
   clienteId: z.string().nullable().optional(),
@@ -13771,7 +13774,7 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
     if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
     const d = rodeoEventoSchema.parse(req.body);
     // ventaModo/compraModo/laborModo son solo de control (no son columnas de RodeoEvento).
-    const { ventaModo, compraModo, laborModo, gastoModo, ...evBase } = d;
+    const { ventaModo, compraModo, laborModo, gastoModo, depositoId, ...evBase } = d;
     const row = await prisma.$transaction(async (tx) => {
       let prod = null;
       if (d.productoId) {
@@ -13798,7 +13801,7 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
           montoTot += totalC;
           const mv = await tx.movimiento.create({ data: {
             companyId: req.companyId, productoId: cp.id, fecha: d.fecha, tipo: 'egreso', motivo: 'consumo_animal',
-            cantidad: cantC, precio: cu || null, total: totalC || null,
+            cantidad: cantC, precio: cu || null, total: totalC || null, depositoId: depositoId || null,
             referencia: `RODMIX-${ev.id}`,
             observaciones: `Consumo rodeo ${rodeo.nombre} · ración ${prod.nombre}`, userId: req.user?.id || null,
           }});
@@ -13816,7 +13819,7 @@ app.post('/api/rodeos/:id/eventos', requireCompany, requirePermission('stock:upd
         const totalC = Number(d.cantidad) * cu;
         const mv = await tx.movimiento.create({ data: {
           companyId: req.companyId, productoId: prod.id, fecha: d.fecha, tipo: 'egreso', motivo: 'consumo_animal',
-          cantidad: Number(d.cantidad), precio: cu || null, total: totalC || null,
+          cantidad: Number(d.cantidad), precio: cu || null, total: totalC || null, depositoId: depositoId || null,
           observaciones: `Consumo rodeo ${rodeo.nombre}`, userId: req.user?.id || null,
         }});
         movimientoStockId = mv.id;
