@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.199.0';
+const AGROCORE_VERSION = '2.200.0';
 const AGROCORE_BUILD = new Date('2026-09-11').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11194,7 +11194,7 @@ const _AYUDA_KB = [
     pasos:[
       'Arriba de todo en el menú tenés "Ayuda y manual" (visible para todos).',
       'Ahí abrís el Manual de usuario completo en una pestaña nueva.',
-      'Y descargás los instructivos de procesos en PDF (inicio rápido, pagos y cobros, cheques, sueldos, circuito de cereal, contratos, liquidación, forrajera, rodeos, guías de hacienda, costo por kilo de carne y más), agrupados por tema.'],
+      'Y descargás los instructivos de procesos en PDF (inicio rápido, pagos y cobros, cheques, sueldos, compensación de cuentas, circuito de cereal, contratos, liquidación, forrajera, el manejo integral de la hacienda —rodeos, alimentación, guías, liquidaciones y costo por kg— y más), agrupados por tema.'],
     atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
   { id:'mensajes', terms:['mensaje','chat','grupo','grupos','mensajeria','avisos','notificaciones','asistente','equipo','comunicar'],
     titulo:'Mensajes, grupos y avisos',
@@ -11247,15 +11247,39 @@ const _AYUDA_KB = [
       'En Roles definís qué puede ver/hacer cada rol (incluso limitar el stock por tipo de producto).',
       'Podés vincular un usuario con su Empleado/Chofer.'],
     atajo:{ page:'usuarios', label:'Abrir Usuarios' } },
-  { id:'costo_hacienda', terms:['costo de hacienda','costo por kilo','costo por kg','costo de carne','feedlot','engorde','recria','cria','lote de engorde','rodeo','ganancia de peso','gpd','pesaje','cuanto cuesta el kilo','costo del novillo','alimentacion del rodeo'],
+  { id:'costo_hacienda', terms:['costo de hacienda','costo por kilo','costo por kg','costo de carne','feedlot','engorde','recria','cria','lote de engorde','rodeo','ganancia de peso','gpd','pesaje','cuanto cuesta el kilo','costo del novillo','alimentacion del rodeo','corral','campo y lote del rodeo','categoria del rodeo','cargar factura desde el rodeo','deposito de alimentacion','imputar pastura'],
     titulo:'Rodeos y Hacienda (costo por kg de carne)',
     pasos:[
-      'Entrá a Ganadería y Haras → Rodeos y Hacienda y creá un "lote" (rodeo): feedlot, engorde a campo, recría o cría.',
-      'Cargá los eventos del lote: Ingreso (compra: cabezas, kg y precio), Alimentación (rollos/fardos/grano del galpón, que descuenta stock, o pastoreo), Sanidad, Labores.',
-      'Cargá Pesajes (el kg total del lote a una fecha): es lo que permite ver la ganancia de peso.',
-      'También Bajas (mortandad) y Ventas.',
-      'El panel te muestra kg producidos, $/kg producido (eficiencia) y $/kg terminado (el costo real del kilo para vender), más GPD y margen.'],
+      'Entrá a Ganadería y Haras → Rodeos y Hacienda y creá un "lote" (rodeo): feedlot, engorde a campo, recría, cría o capitalización de terceros.',
+      'Ubicalo en Campo + Lote/potrero + Corral (para feedlot). La Categoría se elige del catálogo de animales (Ternero, Novillo, Vaca…) y se puede cambiar cuando recategorizan.',
+      'Cargá los eventos: Ingreso (compra), Alimentación (elegís el DEPÓSITO de donde sale el alimento y descuenta ese stock; si es una mezcla, descuenta cada componente), Sanidad, Labores. También podés "Imputar pastura" desde una campaña forrajera (por %).',
+      'Al cargar una Compra, Venta o Sanidad podés, sin salir de la ficha, crear la factura nueva (o vincular una existente): genera el comprobante y su cuenta a pagar/cobrar.',
+      'Cargá Pesajes (el kg total del lote a una fecha): es lo que permite ver la ganancia de peso. También Bajas y Ventas.',
+      'El panel te muestra kg producidos, $/kg producido, $/kg terminado, GPD y margen. Con el selector Lista / Tablero de eficiencia ves las tarjetas por lote con semáforo contra el objetivo.'],
     atajo:{ page:'rodeos', label:'Abrir Rodeos y Hacienda' } },
+  { id:'ganaderia_360', terms:['ganaderia 360','panel ganadero','resumen ganadero','dashboard ganaderia','tablero ganadero','cuanto gaste en hacienda','margen total hacienda','cabezas totales','ver toda la hacienda','panel de hacienda'],
+    titulo:'Ganadería 360 (panel resumen de toda la hacienda)',
+    pasos:[
+      'Entrá a Ganadería y Haras → Ganadería 360: es el panel que junta todo de un vistazo.',
+      'Arriba ves los totales: cabezas en engorde, kg producidos, $/kg producido promedio (ponderado) y margen total de los lotes activos.',
+      'Después está la plata invertida por rubro (compra, alimentación, sanidad, labores, otros) y el rendimiento por lote (mejor a peor por margen).',
+      'Abajo, el circuito comercial del período (mes/año/todo): ventas por liquidación y cuánto queda por cobrar, y las guías DT-e con lo que falta vincular o pagar.'],
+    atajo:{ page:'ganaderiaDash', label:'Abrir Ganadería 360' } },
+  { id:'traslado_hacienda', terms:['trasladar hacienda','mover animales de campo','traslado de hacienda','mover hacienda','pasar animales a otro campo','arrastrar hacienda','mover rodeo en el mapa','mapa de hacienda','tarjetas de rodeo en el mapa','carga cab/ha','donde estan los animales'],
+    titulo:'Mover hacienda y ver dónde está (traslado y mapa)',
+    pasos:[
+      'Traslado de hacienda: en Ganadería y Haras → Traslado de hacienda ves cada campo con su stock por categoría. Arrastrás (o tocás) una categoría de un campo a otro y se abre el traslado ya prellenado.',
+      'Mapa: en Mapa de lotes, con la vista "Hacienda", cada potrero con un rodeo muestra una tarjeta con cabezas, peso promedio, kilos y carga (cab/ha).',
+      'Desde esa tarjeta podés "Mover" el rodeo a otro campo/lote/corral o abrir su ficha.'],
+    atajo:{ page:'mapaHacienda', label:'Abrir Traslado de hacienda' } },
+  { id:'compensacion', terms:['compensacion','compensar cuentas','cliente que tambien es proveedor','proveedor y cliente','netear cuentas','me compra y me vende','compensar cliente proveedor','vincular cliente proveedor','misma persona compra y vende'],
+    titulo:'Compensación de cuentas (cliente que también es proveedor)',
+    pasos:[
+      'Cuando la misma persona te compra y te vende, dejás la ficha de Cliente y la de Proveedor pero las vinculás (quedan enlazadas por vínculo).',
+      'En Compensación de cuentas ves el saldo de ambos lados y el neto.',
+      'Al compensar, el sistema hace un asiento cruzado (haber en la cuenta del cliente y en la del proveedor) por el monto que elijas, sin mover plata.',
+      'Después pagás o cobrás solo la diferencia. Podés deshacer la compensación si te equivocaste.'],
+    atajo:{ page:'ctasCtes', label:'Abrir Cuentas corrientes' } },
   { id:'ficha_vinculos', terms:['evento de la ficha','eventos ficha','vincular evento','ficha animal finanzas','sanidad a proveedor','comision al empleado','cobrar pension','cobrar al dueño','gasto de la ficha','vincular con el sistema','cuenta corriente ficha','doma empleado','herraje proveedor','servicio a tercero','pension a cobrar','venta de animal cuenta corriente'],
     titulo:'Eventos de la ficha vinculados al circuito comercial',
     pasos:[
@@ -11536,7 +11560,7 @@ function _esPedidoAyudaGeneral(t){
 }
 // Menú de capacidades del asistente.
 function _menuAyuda(){
-  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Rodeos y Hacienda) · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo cargo una retención?" · "¿cómo compro/vendo dólares en el banco?" · "¿cómo exporto para el contador?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n• "¿cómo importo el resumen del banco?" (PDF, Excel o foto; con "ajustar saldo" y "deshacer") · "¿cómo edito o borro un mensaje del chat?"\n• "¿cómo empiezo a usar el sistema?" (configuración inicial) · "¿cómo cambio la voz del asistente?"\n\nEscribí tu consulta y arrancamos 💪';
+  return 'Te puedo dar una mano con esto 👇\n\n📋 CARGAR POR VOS (me contás y lo registro):\n• Animales → "nacieron 5 terneros en Montenegro"\n• Labores → "cosecha en el lote 1 de Campo Prueba"\n• Recordatorios → "recordar vacunar el 15/8"\n\n📖 EXPLICARTE CÓMO SE HACE (preguntame):\n• "¿cómo cargo un cheque de tercero?" · "¿cómo deposito/acredito un cheque?" · "¿cómo vendo/descuento cheques?"\n• "¿cómo hago una compra o una venta?" · "¿cómo pago a un proveedor?" (efectivo, cheque, en especie con un producto, varios medios)\n• "¿cómo calculo el costo por kg de carne?" (Rodeos y Hacienda) · "¿qué es Ganadería 360?" · "¿cómo cargo una campaña forrajera / cortes / rollos?"\n• "¿cómo traslado o veo dónde está la hacienda?" (traslado y mapa) · "¿cómo compenso cuentas de un cliente que también es proveedor?"\n• "¿cómo cargo la maquinaria y su mantenimiento?" (Activos y maquinaria) · "¿qué es el Balance Patrimonial?"\n• "¿cómo hago un remito interno?" (sacar insumo al campo / transferir entre depósitos)\n• "¿cómo cargo una retención?" · "¿cómo compro/vendo dólares en el banco?" · "¿cómo exporto para el contador?"\n• "¿cómo importo mis comprobantes?" · "¿cómo cargo una liquidación de animales?" (retenciones que se descuentan)\n• "¿cómo importo el resumen del banco?" (PDF, Excel o foto; con "ajustar saldo" y "deshacer") · "¿cómo edito o borro un mensaje del chat?"\n• "¿cómo empiezo a usar el sistema?" (configuración inicial) · "¿cómo cambio la voz del asistente?"\n\nEscribí tu consulta y arrancamos 💪';
 }
 // Arma el texto de la respuesta de ayuda (paso a paso).
 function _textoAyuda(e){

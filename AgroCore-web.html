@@ -1088,6 +1088,7 @@ const MODULES = [
   { id:'vademecum',     label:'Vademécum de insumos',  icon:'🧫', perm:'produccion:read', section:'Producción' },
 
   // ===== GANADERÍA Y HARAS — todo el ciclo de los animales =====
+  { id:'ganaderiaDash', label:'Ganadería 360',        icon:'📈', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'hacienda',      label:'Movimientos de animales',icon:'🐄', perm:'stock:read',    section:'Ganadería y Haras' },
   { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'rodeos',        label:'Rodeos y Hacienda',    icon:'🐮', perm:'stock:read',      section:'Ganadería y Haras' },
@@ -2658,10 +2659,8 @@ pages.ayuda = async function() {
     ]},
     { grupo:'Forrajera y hacienda', items:[
       { f:'Instructivo-Circuito-Campana-Forrajera-Multicorte.pdf', t:'Campaña forrajera multicorte', d:'Praderas y verdeos de varios cortes.' },
-      { f:'Instructivo-Circuito-Rodeos.pdf', t:'Circuito de rodeos', d:'Organizar y mover rodeos.' },
-      { f:'Instructivo-Manejo-de-Animales.pdf', t:'Manejo de animales', d:'Altas, bajas y eventos del ganado.' },
+      { f:'Instructivo-Manejo-Integral-Hacienda.pdf', t:'Manejo integral de la hacienda', d:'Todo el ciclo en una guía: pastura/alimento, rodeos, gastos, alimentación con descuento de stock, compras/ventas, guías, liquidaciones y costo por kg con la ganancia.' },
       { f:'Instructivo-Guias-Hacienda.pdf', t:'Guías de hacienda', d:'Emitir y controlar guías.' },
-      { f:'Instructivo-Costo-Kilo-Carne.pdf', t:'Costo por kilo de carne', d:'Calcular el costo real del kilo producido.' },
       { f:'Instructivo-Haras-Caballos.pdf', t:'Haras / caballos', d:'Gestión de equinos.' },
     ]},
     { grupo:'Otros', items:[
@@ -2832,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/09/2026',
+      titulo:'📈 v2.200.0 — Ganadería 360: toda la hacienda en un panel',
+      desc:'Nuevo módulo <b>Ganadería y Haras → Ganadería 360</b>: el panel resumen de toda la hacienda de un vistazo. Arriba, los <b>totales</b> de los lotes activos (cabezas, kg producidos, <b>$/kg producido promedio</b> ponderado y <b>margen total</b>). Después, la <b>plata invertida por rubro</b> (compra, alimentación, sanidad, labores, otros) y el <b>rendimiento por lote</b> ordenado por margen. Abajo, el <b>circuito comercial del período</b> (mes/año/todo): ventas por liquidación y lo que queda por cobrar, más las guías DT-e con lo que falta vincular o pagar. Además, actualizamos el <b>manual, el asistente y la web</b>, y unificamos los instructivos de rodeos, manejo de animales y costo por kg en una sola guía: <b>“Manejo integral de la hacienda”</b> (en Ayuda y manual).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/09/2026',
       titulo:'📊 v2.199.0 — El Tablero de eficiencia ahora vive dentro de Rodeos y Hacienda',
       desc:'Unificamos el <b>Tablero de hacienda</b> dentro del módulo <b>Rodeos y Hacienda</b>: ya no es un ítem aparte en el menú. Adentro del módulo tenés un selector <b>📋 Lista / 📊 Tablero de eficiencia</b> para pasar de la tabla a las tarjetas por lote (GPD, $/kg y margen con semáforo) sin cambiar de pantalla. Todo lo de hacienda queda en un solo lugar.' },
@@ -27902,6 +27904,139 @@ pages.tableroHacienda = async function(){
     ${lista.length ? `<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">${lista.map(card).join('')}</div>`
       : `<div class="kpi text-center text-slate-400 py-10">No hay lotes ${filtro==='activos'?'activos':''}. Cargá uno desde <b>Rodeos y Hacienda → + Nuevo lote</b> y ponele un objetivo de $/kg y GPD para ver el semáforo.</div>`}
     <div class="text-[11px] text-slate-500 mt-3">🟢 dentro del objetivo · 🔴 fuera del objetivo · ⚪ sin objetivo o sin datos. El objetivo de cada lote se carga con el botón 🎯. Cargá <b>pesajes</b> para que el GPD y el $/kg reflejen la ganancia de peso.</div>`;
+};
+
+/* ================= GANADERÍA 360 (panel resumen del dueño) =====================
+ * Junta en una pantalla lo global de la hacienda: cabezas y kg, $/kg promedio
+ * ponderado y margen, la plata puesta por rubro (compra/alimentación/sanidad/
+ * labores/otros), el consumo de alimentación (incluye la pastura imputada), y el
+ * circuito comercial del período (ventas por liquidación y guías DT-e pendientes).
+ * Se arma reutilizando /api/rodeos (trae "resultado" por lote), guías y
+ * liquidaciones. No cambia ninguna carga ni la lógica de stock.
+ * ============================================================================= */
+pages.ganaderiaDash = async function(){
+  setHeader('Ganadería 360', 'Toda la hacienda de un vistazo: cabezas, kg, costo por kg, margen y circuito comercial');
+  if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('ganaderiaDash','Ganadería 360'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let rodeos=[], guias=[], liqs=[];
+  try{ const r=await api('/api/rodeos'); rodeos=r.data||[]; }catch(e){ return toast(e.message,'error'); }
+  try{ const g=await api('/api/guias-hacienda'); guias=g.data||[]; }catch(e){ guias=[]; }
+  try{ const l=await api('/api/liquidaciones-hacienda'); liqs=l.data||[]; }catch(e){ liqs=[]; }
+
+  state._ganPeriodo = state._ganPeriodo || 'anio';
+  const per = state._ganPeriodo;
+  const now = new Date();
+  let desde = null;
+  if(per==='mes') desde = new Date(now.getFullYear(), now.getMonth(), 1);
+  else if(per==='anio') desde = new Date(now.getFullYear(), 0, 1);
+  const inPer = d => { if(!desde) return true; const x=new Date(d); return !isNaN(x) && x>=desde; };
+  const perLbl = per==='mes' ? 'este mes' : (per==='anio' ? 'este año' : 'todo');
+
+  const activos = rodeos.filter(r=>r.estado==='activo');
+  const S = k => activos.reduce((a,r)=>a+(r.resultado?.[k]||0),0);
+  const cab = S('cabActual'), kgProd = S('kgProducidos'), margen = S('margen');
+  const cCompra=S('costoCompra'), cAlim=S('costoAlim'), cSan=S('costoSan'), cLab=S('costoLab'), cOtro=S('costoOtro');
+  const costoDir = cAlim+cSan+cLab+cOtro;
+  const invTotal = cCompra+costoDir;
+  const kgPromCosto = kgProd>0 ? Math.round(costoDir/kgProd) : null;
+
+  // Circuito comercial del período
+  const liqsPer = liqs.filter(l=>inPer(l.fecha));
+  const ventasNeto = liqsPer.reduce((a,l)=>a+(Number(l.neto)||0),0);
+  const liqsPend = liqsPer.filter(l=>!l.cobrado);
+  const porCobrar = liqsPend.reduce((a,l)=>a+(Number(l.neto)||0),0);
+  const guiasPer = guias.filter(g=>inPer(g.fecha) && g.estado!=='anulada');
+  const guiasVenta = guiasPer.filter(g=>g.motivo==='venta'||g.sentido==='egreso');
+  const guiasCompra = guiasPer.filter(g=>g.motivo==='compra'||g.sentido==='ingreso');
+  const guiasSinVincular = guiasPer.filter(g=>g.estado==='pendiente');
+  const saldoGuias = guiasPer.reduce((a,g)=>a+(Number(g.saldoEstimado)||0),0);
+
+  // Barras de gasto por rubro
+  const rubros = [
+    { l:'Compra de hacienda', v:cCompra, c:'#0ea5e9' },
+    { l:'Alimentación', v:cAlim, c:'#16a34a' },
+    { l:'Sanidad', v:cSan, c:'#f59e0b' },
+    { l:'Labores', v:cLab, c:'#8b5cf6' },
+    { l:'Otros', v:cOtro, c:'#64748b' },
+  ];
+  const maxR = Math.max(1, ...rubros.map(r=>r.v));
+  const barRow = r => `
+    <div class="flex items-center gap-2 text-xs">
+      <div class="w-32 shrink-0 text-slate-600">${r.l}</div>
+      <div class="flex-1 bg-slate-100 rounded h-4 overflow-hidden"><div style="width:${Math.round(r.v/maxR*100)}%;background:${r.c};height:100%"></div></div>
+      <div class="w-28 shrink-0 text-right font-semibold text-slate-700">${fmt$(r.v)}</div>
+    </div>`;
+
+  // Ranking de lotes por margen (mejor y peor)
+  const ranked = activos.slice().sort((a,b)=>(b.resultado?.margen||0)-(a.resultado?.margen||0));
+  const rankRow = r => { const R=r.resultado||{}; return `
+    <tr class="table-row cursor-pointer" onclick='rodVer(${JSON.stringify(r.id)})'>
+      <td>${(RODEO_SIST[r.sistema]||['🐮'])[0]} <b>${esc(r.nombre)}</b><div class="text-[10px] text-slate-500">${esc(rodSistLbl(r.sistema))}${r.categoria?' · '+esc(r.categoria):''}</div></td>
+      <td class="text-right">${R.cabActual||0}</td>
+      <td class="text-right whitespace-nowrap">${R.costoKgProducido!=null?'$ '+fmtN(R.costoKgProducido):'<span class="text-slate-400">pesá</span>'}</td>
+      <td class="text-right whitespace-nowrap font-semibold ${(R.margen||0)>=0?'text-emerald-700':'text-red-600'}">${fmt$(R.margen||0)}</td>
+    </tr>`; };
+
+  const kpi = (lbl, val, sub, cls) => `
+    <div class="kpi"><div class="text-xs text-slate-500">${lbl}</div>
+      <div class="text-lg font-bold mt-1 ${cls||''}">${val}</div>
+      ${sub?`<div class="text-[10px] text-slate-400 mt-0.5">${sub}</div>`:''}</div>`;
+
+  const pill = (v,on) => `<button class="px-3 py-1.5 ${on?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._ganPeriodo='${v}';pages.ganaderiaDash()">${v==='mes'?'Mes':(v==='anio'?'Año':'Todo')}</button>`;
+
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${activos.length} lote${activos.length===1?'':'s'} activo${activos.length===1?'':'s'} · circuito comercial de <b>${perLbl}</b></div>
+      <div class="flex items-center gap-2">
+        <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm">${pill('mes',per==='mes')}${pill('anio',per==='anio')}${pill('todo',per==='todo')}</div>
+        <button class="btn btn-outline" onclick="go('rodeos')">📊 Tablero por lote</button>
+        <button class="btn btn-outline" onclick="go('mapaCampos')">🗺️ Mapa</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      ${kpi('Cabezas en engorde', fmtN(cab))}
+      ${kpi('Kg producidos', fmtN(kgProd)+' kg', 'lotes activos', 'text-emerald-700')}
+      ${kpi('$/kg producido (prom.)', kgPromCosto!=null?('$ '+fmtN(kgPromCosto)):'—', 'ponderado por kg')}
+      ${kpi('Margen total', fmt$(margen), 'ventas − costos', margen>=0?'text-emerald-700':'text-red-600')}
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+      <div class="kpi">
+        <div class="flex items-center justify-between mb-3"><div class="font-semibold text-slate-700">💵 Plata invertida por rubro</div><div class="text-xs text-slate-500">Total ${fmt$(invTotal)}</div></div>
+        <div class="space-y-2">${rubros.map(barRow).join('')}</div>
+        <div class="text-[11px] text-slate-500 mt-3">La <b>Alimentación</b> incluye el alimento cargado en cada rodeo y la <b>pastura</b> imputada desde la campaña forrajera. Los costos salen de los eventos de cada lote.</div>
+      </div>
+      <div class="kpi">
+        <div class="font-semibold text-slate-700 mb-3">🐄 Rendimiento por lote</div>
+        <div class="overflow-x-auto"><table class="data"><thead><tr><th>Lote</th><th class="text-right">Cab.</th><th class="text-right">$/kg</th><th class="text-right">Margen</th></tr></thead>
+          <tbody>${ranked.length?ranked.map(rankRow).join(''):'<tr><td colspan="4" class="text-center text-slate-400 py-6">Sin lotes activos.</td></tr>'}</tbody></table></div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="kpi">
+        <div class="font-semibold text-slate-700 mb-3">🧾 Ventas y liquidaciones (${perLbl})</div>
+        <div class="grid grid-cols-2 gap-3">
+          ${kpi('Liquidaciones', fmtN(liqsPer.length), 'de animales')}
+          ${kpi('Neto vendido', fmt$(ventasNeto), '', 'text-emerald-700')}
+          ${kpi('Pendientes de cobro', fmtN(liqsPend.length))}
+          ${kpi('$ por cobrar', fmt$(porCobrar), '', porCobrar>0?'text-amber-600':'')}
+        </div>
+        <button class="btn btn-secondary text-xs mt-3 w-full" onclick="go('liquidacionesHacienda')">Ver liquidaciones →</button>
+      </div>
+      <div class="kpi">
+        <div class="font-semibold text-slate-700 mb-3">📋 Guías DT-e (${perLbl})</div>
+        <div class="grid grid-cols-2 gap-3">
+          ${kpi('Guías', fmtN(guiasPer.length), `${guiasVenta.length} venta · ${guiasCompra.length} compra`)}
+          ${kpi('A vincular', fmtN(guiasSinVincular.length), 'cierre fiscal', guiasSinVincular.length>0?'text-amber-600':'')}
+          ${kpi('Saldo a pagar', fmt$(saldoGuias), 'guías de compra', saldoGuias>0?'text-red-600':'')}
+          ${kpi('Cabezas movidas', fmtN(guiasPer.reduce((a,g)=>a+((g.renglones||[]).reduce((s,x)=>s+(Number(x.cabezas)||0),0)),0)))}
+        </div>
+        <button class="btn btn-secondary text-xs mt-3 w-full" onclick="go('guiasHacienda')">Ver guías →</button>
+      </div>
+    </div>
+    <div class="text-[11px] text-slate-500 mt-3">Los KPI de kg, $/kg y margen reflejan el estado actual de los lotes activos (cargá <b>pesajes</b> para capturar la ganancia de peso). El circuito comercial se filtra por el período elegido.</div>`;
 };
 
 /* ================= MAPA DE HACIENDA (tablero visual + drag&drop) =================
