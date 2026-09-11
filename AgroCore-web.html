@@ -1092,7 +1092,7 @@ const MODULES = [
   { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'rodeos',        label:'Rodeos y Hacienda',    icon:'🐮', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'tableroHacienda',label:'Tablero de hacienda', icon:'📊', perm:'stock:read',      section:'Ganadería y Haras' },
-  { id:'mapaHacienda',  label:'Mapa de hacienda',     icon:'🗺️', perm:'stock:read',      section:'Ganadería y Haras' },
+  { id:'mapaHacienda',  label:'Traslado de hacienda', icon:'🔀', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Ganadería y Haras' },
 
   // ===== STOCK Y DEPÓSITOS =====
@@ -2833,8 +2833,11 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'10/09/2026',
+      titulo:'🗺️ v2.195.0 — El Mapa de lotes ahora también muestra la hacienda + fecha correcta en listados',
+      desc:'El <b>Mapa de lotes</b> (Producción) ahora tiene un selector <b>Vista: Rinde | Hacienda</b>. En <b>Hacienda</b>, cada campo aparece ubicado con la <b>cantidad de animales</b> (el punto crece según las cabezas), su detalle por categoría y los <b>feedlots (🐮) y haras (🐎)</b> que tiene asignados. Así usás <b>un solo mapa</b> para las campañas de cereal y para ver dónde está la hacienda. El tablero de arrastrar-y-soltar para mover animales entre campos ahora se llama <b>“Traslado de hacienda”</b>. Además, corregimos un desfasaje que mostraba <b>un día menos</b> en la fecha de algunas facturas y movimientos en los listados.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/09/2026',
-      titulo:'🗺️ v2.194.0 — Mapa de hacienda: trasladá arrastrando entre campos',
+      titulo:'🔀 v2.194.0 — Traslado de hacienda: mové animales arrastrando entre campos',
       desc:'Nueva vista <b>Ganadería y Haras → Mapa de hacienda</b>. Muestra <b>cada campo como una tarjeta</b> con su stock por categoría (cabezas y kg) y la <b>carga (cab/ha)</b>. Para <b>trasladar hacienda</b> de un campo a otro, ahora solo tenés que <b>arrastrar</b> la categoría (🐄) y soltarla en el campo destino: se abre el traslado ya prellenado y, al confirmar, descuenta del origen y suma al destino (mismo movimiento de siempre). En el <b>celular</b>, tocás la categoría y elegís el destino. No cambia nada de cómo se cargan los movimientos.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/09/2026',
       titulo:'📊 v2.193.0 — Tablero de hacienda: eficiencia por lote de un vistazo',
@@ -8481,10 +8484,20 @@ pages.mapaCampos = async function(){
     ]);
   } catch(e){ return toast(e.message,'error'); }
   state.cache.lotes = lotes; state.cache.campanas = campanas;
+  // Datos de hacienda (para la vista "Hacienda": ubicar animales, feedlots y haras)
+  let hacFilas=[], rodeos=[];
+  try { hacFilas = ((await api('/api/hacienda-resumen')).data||{}).filas || []; } catch {}
+  try { rodeos = (await api('/api/rodeos')).data || []; } catch {}
+  const hacByCampo = {}; // campoId -> {cab,kg,cats:[fila]}
+  hacFilas.forEach(f=>{ if(Number(f.real||0)<=0) return; const h=hacByCampo[f.campoId]=hacByCampo[f.campoId]||{cab:0,kg:0,cats:[]}; h.cab+=Number(f.real||0); h.kg+=(f.kilosReal!=null?Number(f.kilosReal):0); h.cats.push(f); });
+  const rodByCampo = {}; rodeos.forEach(r=>{ if(r.campoId&&r.estado==='activo') (rodByCampo[r.campoId]=rodByCampo[r.campoId]||[]).push(r); });
+  const rodIco = r => r.sistema==='feedlot'?'🐮':(r.sistema==='recria'||r.sistema==='engorde_campo'?'🐄':(r.sistema==='cria'?'🐄':'🐎'));
+
   try { await ensureLeaflet(); } catch(e){ $('#page-body').innerHTML = `<div class="stub-card">No se pudo cargar el mapa: ${esc(e.message)} El mapa necesita conexión a internet.</div>`; return; }
 
-  state.mapaF = state.mapaF || { campoId:'', ciclo:'' };
-  const mf = state.mapaF;
+  state.mapaF = state.mapaF || { campoId:'', ciclo:'', vista:'rinde' };
+  const mf = state.mapaF; if(!mf.vista) mf.vista='rinde';
+  const esHac = mf.vista==='hacienda';
   const ciclos = [...new Set(campanas.map(c=>(c.ciclo||'').trim()).filter(Boolean))].sort().reverse();
 
   // Rinde por lote: última campaña (o la del ciclo elegido), rindeReal || estimado.
@@ -8508,6 +8521,9 @@ pages.mapaCampos = async function(){
   const selCiclo = `<select class="input" onchange="mapaSet('ciclo',this.value)">
     <option value="">Última campaña de cada lote</option>
     ${ciclos.map(c=>`<option value="${esc(c)}" ${c===mf.ciclo?'selected':''}>${esc(c)}</option>`).join('')}</select>`;
+  const selVista = `<select class="input" onchange="mapaSet('vista',this.value)">
+    <option value="rinde" ${!esHac?'selected':''}>🌾 Rinde (cereal)</option>
+    <option value="hacienda" ${esHac?'selected':''}>🐄 Hacienda</option></select>`;
 
   const sinContorno = showLotes.filter(l=>!mapaNormGeo(l.geojson)).length;
   const hayCoords = showLotes.some(l=>mapaNormGeo(l.geojson)||mapaParsePunto(l.centro))
@@ -8520,16 +8536,22 @@ pages.mapaCampos = async function(){
     </div>`:''}`;
   $('#page-body').innerHTML += `
     <div class="flex flex-wrap items-end gap-3 mb-3">
+      <div><label class="label text-xs">Vista</label>${selVista}</div>
       <div><label class="label text-xs">Campo</label>${selCampo}</div>
-      <div><label class="label text-xs">Campaña / ciclo</label>${selCiclo}</div>
+      ${!esHac?`<div><label class="label text-xs">Campaña / ciclo</label>${selCiclo}</div>`:''}
       <div class="flex-1"></div>
-      <div class="flex items-center gap-3 text-xs text-slate-600">
+      ${esHac ? `<div class="flex items-center gap-3 text-xs text-slate-600">
+        <span class="flex items-center gap-1">🐄 animales</span>
+        <span class="flex items-center gap-1">🐮 feedlot</span>
+        <span class="flex items-center gap-1">🐎 haras</span>
+        <span class="text-slate-400">El tamaño del punto crece con las cabezas</span>
+      </div>` : `<div class="flex items-center gap-3 text-xs text-slate-600">
         <span>Rinde:</span>
         <span class="flex items-center gap-1"><span style="width:16px;height:12px;background:#dc2626;display:inline-block;border-radius:2px"></span> bajo</span>
         <span class="flex items-center gap-1"><span style="width:16px;height:12px;background:#eab308;display:inline-block;border-radius:2px"></span> medio</span>
         <span class="flex items-center gap-1"><span style="width:16px;height:12px;background:#16a34a;display:inline-block;border-radius:2px"></span> alto</span>
         <span class="flex items-center gap-1"><span style="width:16px;height:12px;background:#94a3b8;display:inline-block;border-radius:2px"></span> sin dato</span>
-      </div>
+      </div>`}
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-4 gap-3">
       <div class="lg:col-span-3">
@@ -8537,9 +8559,9 @@ pages.mapaCampos = async function(){
       </div>
       <div class="lg:col-span-1">
         <div class="kpi p-0 overflow-hidden" style="max-height:66vh;overflow-y:auto">
-          <div class="px-3 py-2 bg-slate-50 border-b text-sm font-medium text-slate-700">Lotes ${sinContorno?`<span class="text-[11px] text-amber-600">· ${sinContorno} sin contorno</span>`:''}</div>
+          <div class="px-3 py-2 bg-slate-50 border-b text-sm font-medium text-slate-700">${esHac?'Campos con hacienda':`Lotes ${sinContorno?`<span class="text-[11px] text-amber-600">· ${sinContorno} sin contorno</span>`:''}`}</div>
           <div class="divide-y divide-slate-100">
-            ${showLotes.sort((a,b)=>(a.campo?.nombre||'').localeCompare(b.campo?.nombre||'')||a.nombre.localeCompare(b.nombre)).map(l=>{
+            ${esHac ? (campos.filter(c=>(!mf.campoId||c.id===mf.campoId)).filter(c=>hacByCampo[c.id]||(rodByCampo[c.id]||[]).length||c.tipoExplotacion==='ganadera'||c.tipoExplotacion==='mixta').sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).map(c=>{ const h=hacByCampo[c.id]||{cab:0,kg:0,cats:[]}; const rds=rodByCampo[c.id]||[]; return `<div class="px-3 py-2 hover:bg-slate-50 cursor-pointer" onclick="mapaFocusCampo('${c.id}')"><div class="flex items-center justify-between gap-2"><div class="min-w-0"><div class="text-sm font-medium text-slate-800 truncate">${esc(c.nombre)}</div><div class="text-[11px] text-slate-400 truncate">${h.cab?h.cab+' cab'+(h.kg?' · '+fmtN(h.kg)+' kg':''):'sin animales'}</div></div></div>${h.cats.length?`<div class="mt-1 flex flex-wrap gap-1">${h.cats.map(f=>`<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800">${esc(f.categoria)}: ${f.real}</span>`).join('')}</div>`:''}${rds.length?`<div class="mt-1 flex flex-wrap gap-1">${rds.map(r=>`<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800">${rodIco(r)} ${esc(r.nombre)}</span>`).join('')}</div>`:''}</div>`; }).join('') || '<div class="px-3 py-6 text-center text-slate-400 text-sm">Sin hacienda cargada.</div>') : (showLotes.sort((a,b)=>(a.campo?.nombre||'').localeCompare(b.campo?.nombre||'')||a.nombre.localeCompare(b.nombre)).map(l=>{
               const r=rindePorLote[l.id]; const col=mapaColorRinde(r,rMin,rMax); const tieneGeo=!!mapaNormGeo(l.geojson)||!!mapaParsePunto(l.centro);
               return `<div class="px-3 py-2 hover:bg-slate-50 cursor-pointer" onclick="mapaFocus('${l.id}')">
                 <div class="flex items-center justify-between gap-2">
@@ -8553,7 +8575,7 @@ pages.mapaCampos = async function(){
                   ${can('produccion:update')?`<button class="btn btn-ghost text-[11px]" onclick="event.stopPropagation(); mapaImportar('${l.id}')">📁 Importar</button>`:''}
                 </div>
               </div>`;
-            }).join('') || '<div class="px-3 py-6 text-center text-slate-400 text-sm">Sin lotes.</div>'}
+            }).join('') || '<div class="px-3 py-6 text-center text-slate-400 text-sm">Sin lotes.</div>') }
           </div>
         </div>
       </div>
@@ -8572,7 +8594,7 @@ pages.mapaCampos = async function(){
   state._mapaLayers = {};
   const bounds = [];
   showLotes.forEach(l=>{
-    const r = rindePorLote[l.id]; const col = mapaColorRinde(r, rMin, rMax);
+    const r = rindePorLote[l.id]; const col = esHac ? '#cbd5e1' : mapaColorRinde(r, rMin, rMax);
     const camp = campPorLote[l.id];
     const popup = `<b>${esc(l.nombre)}</b><br>${esc(l.campo?.nombre||'')}${l.hectareas?` · ${fmtN(l.hectareas)} ha`:''}<br>`
       + (camp?`${esc(camp.cultivo||'')} ${esc(camp.ciclo||'')}<br>Rinde: <b>${r!=null?fmtN(r)+' kg/ha':'—'}</b>`:'Sin campaña');
@@ -8591,14 +8613,28 @@ pages.mapaCampos = async function(){
   });
   // Marcadores de campo: ubican el establecimiento aunque los lotes no tengan contorno.
   const camposMostrar = campos.filter(c => !mf.campoId || c.id===mf.campoId);
+  state._mapaCampoLayers = {};
   camposMostrar.forEach(c=>{
     const pt = mapaParsePunto(c.geolocalizacion);
-    if (pt){
-      L.circleMarker(pt, { radius:8, color:'#065f46', weight:2, fillColor:'#10b981', fillOpacity:0.95 })
+    if (!pt) return;
+    if (esHac){
+      const h = hacByCampo[c.id]||{cab:0,kg:0,cats:[]}; const rds = rodByCampo[c.id]||[];
+      const radius = h.cab>0 ? Math.max(9, Math.min(28, 8 + Math.sqrt(h.cab))) : 8;
+      const col = h.cab>0 ? '#15803d' : '#94a3b8';
+      const popup = `📍 <b>${esc(c.nombre||'')}</b>`
+        + (h.cab? `<br>🐄 <b>${h.cab}</b> cab${h.kg?` · ${fmtN(h.kg)} kg`:''}`:'<br><span style="color:#94a3b8">sin animales</span>')
+        + (h.cats.length? `<br>${h.cats.map(f=>`${esc(f.categoria)}: ${f.real}`).join(' · ')}`:'')
+        + (rds.length? `<br>${rds.map(r=>`${rodIco(r)} ${esc(r.nombre)}`).join('<br>')}`:'');
+      const mk = L.circleMarker(pt, { radius, color:'#064e3b', weight:2, fillColor:col, fillOpacity:0.9 })
+        .bindTooltip((h.cab? '🐄 '+h.cab : '📍')+' '+(c.nombre||''), { direction:'top' })
+        .bindPopup(popup).addTo(map);
+      state._mapaCampoLayers[c.id]=mk; bounds.push(pt);
+    } else {
+      const mk = L.circleMarker(pt, { radius:8, color:'#065f46', weight:2, fillColor:'#10b981', fillOpacity:0.95 })
         .bindTooltip('📍 '+(c.nombre||''), { direction:'top' })
         .bindPopup(`📍 <b>${esc(c.nombre||'')}</b>${c.localidad?`<br>${esc(c.localidad)}${c.provincia?', '+esc(c.provincia):''}`:''}`)
         .addTo(map);
-      bounds.push(pt);
+      state._mapaCampoLayers[c.id]=mk; bounds.push(pt);
     }
   });
   if (bounds.length){ try{ map.fitBounds(L.latLngBounds(bounds).pad(0.15)); }catch{ map.setView(bounds[0],13); } }
@@ -8610,6 +8646,12 @@ function mapaFocus(loteId){
   if (!map||!lay) return;
   if (lay.getBounds){ try{ map.fitBounds(lay.getBounds().pad(0.3)); }catch{} }
   else if (lay.getLatLng){ map.setView(lay.getLatLng(), 15); }
+  lay.openPopup && lay.openPopup();
+}
+function mapaFocusCampo(campoId){
+  const map=state._mapaObj, lay=state._mapaCampoLayers?.[campoId];
+  if (!map||!lay) return;
+  if (lay.getLatLng){ map.setView(lay.getLatLng(), 14); }
   lay.openPopup && lay.openPopup();
 }
 // Dibujar / editar el contorno de un lote sobre el mapa — dibujo manual con
@@ -11845,7 +11887,7 @@ pages.facturacion = async function() {
         <tbody>
           ${movs.map(m => `
             <tr class="table-row">
-              <td>${fmtDate(m.fecha)}</td>
+              <td>${fmtFecha(m.fecha)}</td>
               <td>${badge(m)}</td>
               <td class="text-xs">${m.kind==='factura'
                 ? `<span class="badge badge-blue">${esc(m.letra)}</span> <span class="font-mono">${String(m.pv).padStart(4,'0')}-${String(m.nro).padStart(8,'0')}</span>${m.origen==='arca_externa'?` <span class="badge badge-yellow text-[10px]" title="Cargada manualmente desde ARCA">📥 ARCA ext.</span>`:''}`
@@ -13511,7 +13553,7 @@ pages.compras = async function() {
         <tbody>
           ${movs.map(m => `
             <tr class="table-row">
-              <td>${fmtDate(m.fecha)}</td>
+              <td>${fmtFecha(m.fecha)}</td>
               <td>${badge(m)}</td>
               <td class="text-xs">${m.kind==='factura'?`<span class="font-mono">${esc(m.comp)}</span>`:`<span class="text-slate-500">${esc(m.comp)}</span>${m.enviado?' <span title="Enviado por email">✉️</span>':''}`}</td>
               <td><b>${esc(m.proveedorNombre)}</b></td>
@@ -15231,7 +15273,7 @@ pages.hacienda = async function() {
       <h3 class="text-sm font-bold text-amber-900 mb-2">⏳ Ventas a rendimiento pendientes de cerrar</h3>
       <table class="data"><thead><tr><th>Fecha</th><th>Campo</th><th>Categoría</th><th class="text-right">Cabezas</th><th>Cliente</th><th></th></tr></thead><tbody>
         ${ventasRendPend.map(m=>{ const cli=(state.cache.clientes||[]).find(c=>c.id===m.clienteId); const campo=camposMap.get(m.campoId); return `<tr class="table-row">
-          <td>${fmtDate(m.fecha)}</td><td>${esc(campo?campo.nombre:'—')}</td><td><b>${esc(m.categoria)}</b></td>
+          <td>${fmtFecha(m.fecha)}</td><td>${esc(campo?campo.nombre:'—')}</td><td><b>${esc(m.categoria)}</b></td>
           <td class="text-right">${fmtN(m.cantidad)}</td><td>${esc(cli?(cli.razonSocial||cli.nombre||'—'):'—')}</td>
           <td class="text-right">${canU?`<button class="btn btn-secondary text-xs" onclick='hacRendConfirm(${JSON.stringify(m.id)})'>✅ Cerrar rendimiento</button>`:''}</td>
         </tr>`; }).join('')}
@@ -15301,7 +15343,7 @@ pages.hacienda = async function() {
               const txt = (m.tipo==='ajuste') ? (c>=0?'+':'') + fmtN(c) : (s>0?'+':s<0?'-':'') + fmtN(Math.abs(c));
               const color = (m.tipo==='ajuste'?(c>0?'text-emerald-700':c<0?'text-red-600':'text-slate-500'):(s>0?'text-emerald-700':s<0?'text-red-600':'text-slate-500'));
               return `<tr class="table-row">
-                <td>${fmtDate(m.fecha)}</td>
+                <td>${fmtFecha(m.fecha)}</td>
                 <td>${esc((m.campo&&m.campo.nombre)||(camposMap.get(m.campoId)?.nombre)||'—')}</td>
                 <td>${esc(m.categoria)}</td>
                 <td>${hacTipoLabel(m.tipo)}</td>
@@ -16538,7 +16580,7 @@ pages.ctasCtes = async function() {
                 else vencBadge = `<span class="text-slate-600">${fStr}</span>`;
               }
               return `<tr class="table-row ${m.pagado?'opacity-60':''}">
-                <td>${fmtDate(m.fecha)}</td>
+                <td>${fmtFecha(m.fecha)}</td>
                 <td>${vencBadge}</td>
                 <td>${m.categoria?`<span class="badge badge-gray">${esc(m.categoria)}</span>`:'—'}</td>
                 <td>${esc(m.nombreLibre||'—')}</td>
@@ -16618,7 +16660,7 @@ function ccVerMovimientos(tipo, contactoId) {
                  <button class="text-slate-400 hover:text-red-600 ml-1" title="Eliminar" onclick="ccMovEliminar('${m.id}')">🗑️</button>`
               : (esSistema ? `<span class="text-[10px] text-slate-300" title="Movimiento del sistema: se deshace desde su comprobante">🔒</span>` : '');
             return `<tr class="table-row">
-              <td>${fmtDate(m.fecha)}</td>
+              <td>${fmtFecha(m.fecha)}</td>
               <td>${esc(m.detalle||'—')}${m.referencia?` <span class="text-[10px] text-slate-400">(${esc(m.referencia)})</span>`:''}</td>
               <td class="text-right">${m.debe?monedaFmt(m.moneda||'ARS', m.debe):'—'}</td>
               <td class="text-right text-emerald-700">${m.haber?monedaFmt(m.moneda||'ARS', m.haber):'—'}</td>
@@ -18207,7 +18249,7 @@ async function intercoVerMovs(empAId, empBId, empAName, empBName) {
           <thead><tr><th>Fecha</th><th>Origen</th><th>Destino</th><th>Motivo</th><th class="text-right">Monto</th></tr></thead>
           <tbody>
             ${movs.map(m => `<tr>
-              <td>${fmtDate(m.fecha)}</td>
+              <td>${fmtFecha(m.fecha)}</td>
               <td>${esc(m.empresaOrigen?.name || '')}</td>
               <td>${esc(m.empresaDestino?.name || '')}</td>
               <td class="text-xs">${esc(m.motivo)}${m.observaciones?'<br><span class="text-slate-400">'+esc(m.observaciones)+'</span>':''}</td>
@@ -18607,7 +18649,7 @@ pages.flujoCaja = async function() {
         <tbody>
           ${list.reverse().map(m => `
             <tr class="table-row">
-              <td>${fmtDate(m.fecha)}</td>
+              <td>${fmtFecha(m.fecha)}</td>
               <td>${esc(m.concepto)}</td>
               <td>${m.categoria?`<span class="badge badge-blue">${esc(m.categoria)}</span>`:'—'}</td>
               <td class="text-right font-semibold ${Number(m.monto)>=0?'text-emerald-700':'text-red-700'}">${fmt$(m.monto)}</td>
@@ -27785,7 +27827,7 @@ pages.tableroHacienda = async function(){
  * movimiento traslado_out/traslado_in. No cambia la lógica de stock existente.
  * ============================================================================= */
 pages.mapaHacienda = async function(){
-  setHeader('Mapa de hacienda', 'Stock por campo · arrastrá una categoría para trasladarla');
+  setHeader('Traslado de hacienda', 'Stock por campo · arrastrá una categoría para trasladarla');
   if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('mapaHacienda','Mapa de hacienda'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let filas=[], campos=[], rodeos=[];
