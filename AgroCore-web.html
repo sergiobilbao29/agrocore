@@ -1092,6 +1092,7 @@ const MODULES = [
   { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'rodeos',        label:'Rodeos y Hacienda',    icon:'🐮', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'tableroHacienda',label:'Tablero de hacienda', icon:'📊', perm:'stock:read',      section:'Ganadería y Haras' },
+  { id:'mapaHacienda',  label:'Mapa de hacienda',     icon:'🗺️', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Ganadería y Haras' },
 
   // ===== STOCK Y DEPÓSITOS =====
@@ -2832,6 +2833,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/09/2026',
+      titulo:'🗺️ v2.194.0 — Mapa de hacienda: trasladá arrastrando entre campos',
+      desc:'Nueva vista <b>Ganadería y Haras → Mapa de hacienda</b>. Muestra <b>cada campo como una tarjeta</b> con su stock por categoría (cabezas y kg) y la <b>carga (cab/ha)</b>. Para <b>trasladar hacienda</b> de un campo a otro, ahora solo tenés que <b>arrastrar</b> la categoría (🐄) y soltarla en el campo destino: se abre el traslado ya prellenado y, al confirmar, descuenta del origen y suma al destino (mismo movimiento de siempre). En el <b>celular</b>, tocás la categoría y elegís el destino. No cambia nada de cómo se cargan los movimientos.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/09/2026',
       titulo:'📊 v2.193.0 — Tablero de hacienda: eficiencia por lote de un vistazo',
       desc:'Nueva vista <b>Ganadería y Haras → Tablero de hacienda</b> (o el botón <b>“📊 Tablero de eficiencia”</b> dentro de Rodeos). Muestra <b>tarjetas por lote</b> con lo importante sin entrar a cada uno: <b>GPD</b> (kg/cabeza/día), <b>$/kg producido</b>, <b>$/kg terminado</b> y <b>margen</b>, más totales arriba. Ahora en cada lote podés cargar un <b>objetivo de $/kg y de GPD</b> (botón 🎯) y el tablero te lo <b>semaforiza</b>: 🟢 dentro del objetivo, 🔴 fuera, ⚪ sin objetivo/sin datos. Ideal para ver de un golpe qué lote va bien y cuál se está yendo de costo. No cambia nada de la carga: usa los mismos datos de Rodeos y Hacienda.' },
@@ -27773,6 +27777,140 @@ pages.tableroHacienda = async function(){
       : `<div class="kpi text-center text-slate-400 py-10">No hay lotes ${filtro==='activos'?'activos':''}. Cargá uno desde <b>Rodeos y Hacienda → + Nuevo lote</b> y ponele un objetivo de $/kg y GPD para ver el semáforo.</div>`}
     <div class="text-[11px] text-slate-500 mt-3">🟢 dentro del objetivo · 🔴 fuera del objetivo · ⚪ sin objetivo o sin datos. El objetivo de cada lote se carga con el botón 🎯. Cargá <b>pesajes</b> para que el GPD y el $/kg reflejen la ganancia de peso.</div>`;
 };
+
+/* ================= MAPA DE HACIENDA (tablero visual + drag&drop) =================
+ * Muestra cada campo ganadero como una tarjeta con su stock por categoría y la
+ * carga (cab/ha). Arrastrando una categoría de un campo a otro (o tocándola en
+ * el celular) se abre el traslado ya prellenado, que internamente ejecuta el
+ * movimiento traslado_out/traslado_in. No cambia la lógica de stock existente.
+ * ============================================================================= */
+pages.mapaHacienda = async function(){
+  setHeader('Mapa de hacienda', 'Stock por campo · arrastrá una categoría para trasladarla');
+  if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('mapaHacienda','Mapa de hacienda'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let filas=[], campos=[], rodeos=[];
+  try{
+    const [rr, rc, ro] = await Promise.all([
+      api('/api/hacienda-resumen'), api('/api/campos'), api('/api/rodeos').catch(()=>({data:[]}))
+    ]);
+    filas=(rr.data&&rr.data.filas)||[]; campos=rc.data||[]; rodeos=ro.data||[];
+  }catch(e){ return toast(e.message,'error'); }
+  state._mapHacCampos = campos;
+  const byCampo={}; filas.forEach(f=>{ (byCampo[f.campoId]=byCampo[f.campoId]||[]).push(f); });
+  const rodByCampo={}; rodeos.forEach(r=>{ if(r.campoId&&r.estado==='activo') (rodByCampo[r.campoId]=rodByCampo[r.campoId]||[]).push(r); });
+  const esGan = c => c.tipoExplotacion==='ganadera'||c.tipoExplotacion==='mixta';
+  const lista = campos.filter(c => byCampo[c.id] || esGan(c));
+
+  let totCab=0, totKg=0;
+  const card = c => {
+    const fs = (byCampo[c.id]||[]).filter(f=>Number(f.real||0)>0).sort((a,b)=>a.categoria.localeCompare(b.categoria,'es'));
+    const cab = fs.reduce((a,f)=>a+Number(f.real||0),0);
+    const kg = fs.reduce((a,f)=>a+(f.kilosReal!=null?Number(f.kilosReal):0),0);
+    totCab+=cab; totKg+=kg;
+    const ha = Number(c.hectareas||0);
+    const carga = ha>0 && cab>0 ? (cab/ha) : null;
+    const chips = fs.map(f=>{
+      const pp = f.pesoPromedio!=null?Number(f.pesoPromedio):0;
+      return `<span draggable="true"
+        ondragstart="hacDragStart(event,${JSON.stringify(c.id)},${JSON.stringify(f.categoria)},${Number(f.real||0)},${pp})"
+        onclick="hacTrasladar(${JSON.stringify(c.id)},${JSON.stringify(f.categoria)},${Number(f.real||0)},${pp})"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs cursor-move hover:bg-emerald-100"
+        title="Arrastrá a otro campo para trasladar (o tocá)">🐄 ${esc(f.categoria)}: <b>${f.real}</b>${f.kilosReal!=null?` · ${fmtN(f.kilosReal)}kg`:''}</span>`;
+    }).join(' ');
+    const rods = (rodByCampo[c.id]||[]).map(r=>`<span class="inline-block px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 text-[11px]">${(RODEO_SIST[r.sistema]||['🐮'])[0]} ${esc(r.nombre)}</span>`).join(' ');
+    return `<div class="kpi transition"
+        ondragover="event.preventDefault(); this.classList.add('ring-2','ring-emerald-500')"
+        ondragleave="this.classList.remove('ring-2','ring-emerald-500')"
+        ondrop="this.classList.remove('ring-2','ring-emerald-500'); hacDrop(event,${JSON.stringify(c.id)})">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <div class="font-bold truncate">🗺️ ${esc(c.nombre)}</div>
+          <div class="text-[11px] text-slate-500">${ha>0?fmtN(ha)+' ha':'sin ha'}${c.localidad?' · '+esc(c.localidad):''}</div>
+        </div>
+        <div class="text-right whitespace-nowrap">
+          <div class="text-sm font-bold">${cab} cab</div>
+          <div class="text-[11px] text-slate-500">${kg?fmtN(kg)+' kg':'—'}</div>
+        </div>
+      </div>
+      ${carga!=null?`<div class="mt-1 text-[11px] ${carga>3?'text-red-600':'text-slate-500'}">Carga: <b>${(Math.round(carga*100)/100).toLocaleString('es-AR')}</b> cab/ha</div>`:''}
+      <div class="mt-2 flex flex-wrap gap-1 min-h-[28px]">${chips||'<span class="text-[11px] text-slate-400">Sin hacienda — soltá acá una categoría para trasladar</span>'}</div>
+      ${rods?`<div class="mt-2 pt-2 border-t border-slate-100 flex flex-wrap gap-1">${rods}</div>`:''}
+    </div>`;
+  };
+  const cards = lista.map(card).join('');
+
+  $('#page-body').innerHTML = `
+    <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${lista.length} campo${lista.length===1?'':'s'} · <b>${totCab}</b> cabezas${totKg?` · ${fmtN(totKg)} kg`:''}</div>
+      <div class="flex gap-2">
+        <button class="btn btn-outline" onclick="go('hacienda')">📋 Movimientos de animales</button>
+        <button class="btn btn-outline" onclick="go('rodeos')">🐮 Rodeos</button>
+      </div>
+    </div>
+    <div class="kpi bg-sky-50 border-sky-200 text-sky-800 text-[12px] mb-3">💡 Arrastrá una categoría (🐄) de un campo y soltala en otro para <b>trasladar</b> la hacienda. En el celular, <b>tocá</b> la categoría y elegí el campo destino.</div>
+    ${lista.length ? `<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">${cards}</div>`
+      : `<div class="kpi text-center text-slate-400 py-10">No hay campos ganaderos con hacienda. Cargá stock en <b>Movimientos de animales</b> o marcá el campo como ganadero/mixto.</div>`}`;
+};
+
+function hacDragStart(ev, campoId, categoria, cab, pesoProm){
+  state._dragHac = { campoId, categoria, cab, pesoProm };
+  try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain', categoria); }catch(e){}
+}
+function hacDrop(ev, destinoCampoId){
+  ev.preventDefault();
+  const d = state._dragHac; state._dragHac=null;
+  if(!d) return;
+  if(d.campoId===destinoCampoId) return toast('El campo origen y destino son el mismo','warn');
+  hacTrasladar(d.campoId, d.categoria, d.cab, d.pesoProm, destinoCampoId);
+}
+function hacTrasladar(origenId, categoria, maxCab, pesoProm, destinoId=null){
+  if(!can('stock:update')) return toast('No tenés permiso para trasladar','warn');
+  const campos = state._mapHacCampos||[];
+  const nom = id => (campos.find(c=>c.id===id)||{}).nombre || '—';
+  const destinos = campos.filter(c=>c.id!==origenId);
+  openModal({
+    title:'🔀 Trasladar hacienda', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Desde</label><input class="input bg-slate-50" value="${esc(nom(origenId))}" disabled></div>
+        <div><label class="label">Categoría</label><input class="input bg-slate-50" value="${esc(categoria)}" disabled></div>
+        <div class="col-span-2"><label class="label">Hacia (campo destino)</label>
+          <select id="th-dest" class="input">
+            <option value="">— Elegir —</option>
+            ${destinos.map(c=>`<option value="${c.id}" ${c.id===destinoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}
+          </select></div>
+        <div><label class="label">Cabezas (máx ${maxCab})</label><input id="th-cab" type="number" class="input" min="1" max="${maxCab}" value="${maxCab}"></div>
+        <div><label class="label">Kilos (opcional)</label><input id="th-kg" type="number" step="0.01" class="input" value="${pesoProm>0?Math.round(maxCab*pesoProm):''}"></div>
+        <div class="col-span-2"><label class="label">Fecha</label><input id="th-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><input id="th-obs" class="input" placeholder="Opcional"></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='hacTrasladarSave(${JSON.stringify(origenId)},${JSON.stringify(categoria)},${maxCab},${pesoProm||0})'>Trasladar</button>`,
+  });
+  // Auto-calcular kg al cambiar cabezas (si hay peso promedio)
+  if(pesoProm>0){ const cabEl=document.getElementById('th-cab'), kgEl=document.getElementById('th-kg');
+    if(cabEl&&kgEl) cabEl.oninput=()=>{ kgEl.value = Math.round((Number(cabEl.value||0))*pesoProm); }; }
+}
+async function hacTrasladarSave(origenId, categoria, maxCab, pesoProm){
+  const destino = document.getElementById('th-dest').value;
+  const cab = Number(document.getElementById('th-cab').value||0);
+  const kg = document.getElementById('th-kg').value!==''?Number(document.getElementById('th-kg').value):null;
+  const fecha = document.getElementById('th-fec').value;
+  const obs = document.getElementById('th-obs').value.trim();
+  if(!destino) return toast('Elegí el campo destino','warn');
+  if(destino===origenId) return toast('El destino debe ser distinto del origen','warn');
+  if(!(cab>0)) return toast('Ingresá las cabezas','warn');
+  if(cab>maxCab) return toast('No podés trasladar más de '+maxCab+' cabezas','warn');
+  if(!fecha) return toast('Elegí la fecha','warn');
+  try{
+    await api('/api/hacienda-movimientos',{method:'POST',body:JSON.stringify({
+      tipo:'traslado', campoId:origenId, campoDestino:destino, categoria,
+      cantidad:cab, kilos:kg, fecha:new Date(fecha+'T12:00:00').toISOString(),
+      observaciones:obs||null })});
+    toast('Traslado registrado ✓','success'); closeModal();
+    delete state.cache.haciendaResumen;
+    if(state.currentPage==='mapaHacienda') pages.mapaHacienda();
+  }catch(e){ toast(e.message,'error'); }
+}
 
 async function rodForm(id=null){
   let r={}; if(id){ try{ r=(await api('/api/rodeos/'+id)).data||{}; }catch(e){ return toast(e.message,'error'); } }
