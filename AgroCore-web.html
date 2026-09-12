@@ -2831,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/09/2026',
+      titulo:'📦 v2.201.0 — Stock realmente compartido en depósitos compartidos',
+      desc:'Ahora un <b>depósito compartido</b> tiene un <b>único pozo de stock común a todas las empresas</b>. Si una empresa compra (ej. GasOil o un insumo) a un depósito compartido, esa existencia la <b>ven y descuentan todas</b> las empresas que lo usan — ya no queda un contador por empresa. El sistema unifica el mismo insumo por <b>nombre + unidad</b>, así que alcanza con que el producto se llame igual en cada empresa (lo garantiza copiar los catálogos desde <b>Sistema → Copiar configuración entre empresas</b>). Los depósitos <b>privados</b> siguen exactamente igual (stock por empresa).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'11/09/2026',
       titulo:'📈 v2.200.0 — Ganadería 360: toda la hacienda en un panel',
       desc:'Nuevo módulo <b>Ganadería y Haras → Ganadería 360</b>: el panel resumen de toda la hacienda de un vistazo. Arriba, los <b>totales</b> de los lotes activos (cabezas, kg producidos, <b>$/kg producido promedio</b> ponderado y <b>margen total</b>). Después, la <b>plata invertida por rubro</b> (compra, alimentación, sanidad, labores, otros) y el <b>rendimiento por lote</b> ordenado por margen. Abajo, el <b>circuito comercial del período</b> (mes/año/todo): ventas por liquidación y lo que queda por cobrar, más las guías DT-e con lo que falta vincular o pagar. Además, actualizamos el <b>manual, el asistente y la web</b>, y unificamos los instructivos de rodeos, manejo de animales y costo por kg en una sola guía: <b>“Manejo integral de la hacienda”</b> (en Ayuda y manual).' },

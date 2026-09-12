@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.200.0';
+const AGROCORE_VERSION = '2.201.0';
 const AGROCORE_BUILD = new Date('2026-09-11').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3164,6 +3164,34 @@ mountCrud({
 });
 
 // Stock actual (calculado)
+// ===== STOCK COMPARTIDO (depósitos compartidos entre empresas) =====
+// Los depósitos con compartido=true son un ÚNICO pozo común a todas las empresas.
+// Como cada empresa tiene su propio registro de Producto, unificamos por CLAVE =
+// nombre normalizado + unidad. Existencia en un depósito compartido = suma de
+// (ingresos - egresos) de TODAS las empresas para esa clave en ese depósito.
+const _claveProd = (nombre, unidad) =>
+  _sinAcentos(String(nombre || '').toLowerCase()).replace(/\s+/g, ' ').trim() + '|' + String(unidad || '').toLowerCase().trim();
+
+async function _stockCompartidoPorClave(soloDepositoId = null) {
+  const depWhere = soloDepositoId ? { id: soloDepositoId, compartido: true } : { compartido: true };
+  const deps = await prisma.deposito.findMany({ where: depWhere, select: { id: true } });
+  const ids = deps.map(d => d.id);
+  const byKey = {};
+  if (!ids.length) return { ids, byKey };
+  const movs = await prisma.movimiento.findMany({
+    where: { depositoId: { in: ids } },
+    select: { tipo: true, cantidad: true, producto: { select: { nombre: true, unidad: true } } },
+  });
+  for (const m of movs) {
+    if (!m.producto) continue;
+    const k = _claveProd(m.producto.nombre, m.producto.unidad);
+    if (!byKey[k]) byKey[k] = { ing: 0, egr: 0 };
+    if (m.tipo === 'ingreso') byKey[k].ing += Number(m.cantidad || 0);
+    else if (m.tipo === 'egreso') byKey[k].egr += Number(m.cantidad || 0);
+  }
+  return { ids, byKey };
+}
+
 app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     const depositoId = req.query.depositoId || null;
@@ -3205,16 +3233,27 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       where: { companyId: req.companyId, activo: true },
       orderBy: { nombre: 'asc' },
     });
-    // Filtramos los movimientos:
-    // - Los de la empresa activa SIEMPRE entran
-    // - Si filtran por depósito X, solo los movs de ese depósito
-    const movWhere = { companyId: req.companyId };
-    if (depositoId) movWhere.depositoId = depositoId;
-    const movs = await prisma.movimiento.groupBy({
-      by: ['productoId', 'tipo'],
-      where: movWhere,
-      _sum: { cantidad: true },
-    });
+    // Filtramos los movimientos, con soporte de DEPÓSITOS COMPARTIDOS:
+    // - Depósitos privados / sin depósito: solo movimientos de la empresa activa.
+    // - Depósitos compartidos: pozo común (todas las empresas) agrupado por clave.
+    let depFiltrado = null;
+    if (depositoId) depFiltrado = await prisma.deposito.findFirst({ where: { id: depositoId }, select: { id: true, compartido: true } });
+    const filtroEsCompartido = !!(depFiltrado && depFiltrado.compartido);
+    const { ids: sharedIds, byKey: sharedByKey } = await _stockCompartidoPorClave(
+      depositoId ? (filtroEsCompartido ? depositoId : '__none__') : null
+    );
+    let movs = [];
+    if (depositoId) {
+      // Si el filtro es un depósito compartido, todo sale del pozo común (movs propios vacío).
+      if (!filtroEsCompartido) {
+        movs = await prisma.movimiento.groupBy({ by: ['productoId', 'tipo'], where: { companyId: req.companyId, depositoId }, _sum: { cantidad: true } });
+      }
+    } else {
+      const wPropio = sharedIds.length
+        ? { companyId: req.companyId, OR: [{ depositoId: null }, { depositoId: { notIn: sharedIds } }] }
+        : { companyId: req.companyId };
+      movs = await prisma.movimiento.groupBy({ by: ['productoId', 'tipo'], where: wPropio, _sum: { cantidad: true } });
+    }
     // Productos de hacienda: su existencia NO sale de Movimiento sino que se
     // nutre de los movimientos de animales (cabezas reales + kg estimados).
     // Se vincula por el mapeo producto.categoriaHacienda (o el nombre si no hay).
@@ -3277,7 +3316,8 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
       }
       const ing = movs.find((m) => m.productoId === p.id && m.tipo === 'ingreso')?._sum?.cantidad || 0;
       const egr = movs.find((m) => m.productoId === p.id && m.tipo === 'egreso')?._sum?.cantidad || 0;
-      const existencia = Number(ing) - Number(egr);
+      const sh = sharedByKey[_claveProd(p.nombre, p.unidad)] || { ing: 0, egr: 0 };
+      const existencia = (Number(ing) - Number(egr)) + (sh.ing - sh.egr);
       // Para insumos, etiquetamos con su tipo del catálogo (Herbicida, Fertilizante…).
       const subtipo = (p.categoria || '').toLowerCase() === 'insumos'
         ? (insTipoMap[_nrmNombre(p.nombre)] || (p.categoriaArticuloId ? _famNodo[p.categoriaArticuloId] : null) || null) : null;
@@ -7664,6 +7704,20 @@ app.get('/api/stock-por-deposito', requireCompany, requirePermission('stock:read
       where: { companyId: req.companyId },
       _sum: { cantidad: true },
     });
+    // Depósitos compartidos: pozo común (todas las empresas) por clave nombre+unidad.
+    const sharedDepIds = depositos.filter(d => d.compartido).map(d => d.id);
+    const poolByDepKey = {};
+    if (sharedDepIds.length) {
+      const smovs = await prisma.movimiento.findMany({
+        where: { depositoId: { in: sharedDepIds } },
+        select: { depositoId: true, tipo: true, cantidad: true, producto: { select: { nombre: true, unidad: true } } },
+      });
+      for (const m of smovs) {
+        if (!m.producto) continue;
+        const kk = m.depositoId + '::' + _claveProd(m.producto.nombre, m.producto.unidad);
+        poolByDepKey[kk] = (poolByDepKey[kk] || 0) + (m.tipo === 'ingreso' ? Number(m.cantidad || 0) : -Number(m.cantidad || 0));
+      }
+    }
     // Para cada producto, tabla con depósitos (campo + cerealeras)
     const data = productos.map(p => {
       const byDep = {};
@@ -7675,6 +7729,12 @@ app.get('/api/stock-por-deposito', requireCompany, requirePermission('stock:read
         if (!byDep[key]) return;
         const cant = Number(m._sum?.cantidad || 0);
         byDep[key].existencia += (m.tipo === 'ingreso' ? cant : -cant);
+      });
+      // Sobrescribir depósitos compartidos con el pozo común (todas las empresas).
+      depositos.forEach(d => {
+        if (d.compartido && byDep[d.id]) {
+          byDep[d.id].existencia = poolByDepKey[d.id + '::' + _claveProd(p.nombre, p.unidad)] || 0;
+        }
       });
       return { ...p, depositos: Object.values(byDep) };
     });
