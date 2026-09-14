@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.208.0';
+const AGROCORE_VERSION = '2.210.0';
 const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3785,6 +3785,288 @@ app.get('/api/campanas/:id/rinde', requireCompany, requirePermission('produccion
   } catch (e) { next(e); }
 });
 
+// ============================================================
+// SOCIEDAD / UTE de campaña (MULTIEMPRESA)
+// Vive por encima de las empresas: se ve/edita desde cualquier empresa del grupo
+// (las empresas a las que tiene acceso el usuario). Consolida cosecha (cartas de
+// porte) y costos (labores/insumos) de campos de varias empresas + campos externos.
+// ============================================================
+function _grupoCompanyIds(req) {
+  return (req.user?.userCompanies || []).map(uc => uc.companyId);
+}
+const _socioSchema = z.object({
+  nombre: z.string().min(1),
+  descripcion: z.string().nullable().optional(),
+  ciclo: z.string().nullable().optional(),
+  fechaInicio: z.coerce.date().nullable().optional(),
+  fechaFin: z.coerce.date().nullable().optional(),
+  activa: z.boolean().optional(),
+  socios: z.array(z.object({ nombre: z.string(), aporta: z.string().nullable().optional(), participacion: z.coerce.number().nullable().optional() })).nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+});
+
+// LISTA — todas las sociedades del grupo (de cualquier empresa a la que accede el usuario)
+app.get('/api/sociedades', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const grupo = _grupoCompanyIds(req);
+    const socs = await prisma.sociedad.findMany({
+      where: { ownerCompanyId: { in: grupo } },
+      include: { campos: true }, orderBy: { createdAt: 'desc' },
+    });
+    res.json({ ok: true, data: socs });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/sociedades', requireCompany, requirePermission('produccion:create'), async (req, res, next) => {
+  try {
+    const d = _socioSchema.parse(req.body);
+    const soc = await prisma.sociedad.create({ data: {
+      ownerCompanyId: req.companyId, nombre: d.nombre, descripcion: d.descripcion || null,
+      ciclo: d.ciclo || null, fechaInicio: d.fechaInicio || null, fechaFin: d.fechaFin || null,
+      activa: d.activa !== false, socios: d.socios || null, observaciones: d.observaciones || null,
+    }});
+    res.status(201).json({ ok: true, data: soc });
+  } catch (e) { next(e); }
+});
+
+async function _sociedadDelGrupo(req, id) {
+  const grupo = _grupoCompanyIds(req);
+  return prisma.sociedad.findFirst({ where: { id, ownerCompanyId: { in: grupo } } });
+}
+
+app.put('/api/sociedades/:id', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const cur = await _sociedadDelGrupo(req, req.params.id);
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const d = _socioSchema.parse(req.body);
+    const soc = await prisma.sociedad.update({ where: { id: cur.id }, data: {
+      nombre: d.nombre, descripcion: d.descripcion || null, ciclo: d.ciclo || null,
+      fechaInicio: d.fechaInicio || null, fechaFin: d.fechaFin || null,
+      activa: d.activa !== false, socios: d.socios || null, observaciones: d.observaciones || null,
+    }});
+    res.json({ ok: true, data: soc });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/sociedades/:id', requireCompany, requirePermission('produccion:delete'), async (req, res, next) => {
+  try {
+    const cur = await _sociedadDelGrupo(req, req.params.id);
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    await prisma.sociedad.delete({ where: { id: cur.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// AGREGAR campo a la sociedad (real de alguna empresa del grupo, o externo de un socio)
+app.post('/api/sociedades/:id/campos', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const cur = await _sociedadDelGrupo(req, req.params.id);
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const d = z.object({
+      campoId: z.string().nullable().optional(),
+      companyId: z.string().nullable().optional(),
+      externoNombre: z.string().nullable().optional(),
+      externoTitular: z.string().nullable().optional(),
+      externoCuit: z.string().nullable().optional(),
+      externoLocalidad: z.string().nullable().optional(),
+      hectareas: z.coerce.number().nonnegative().default(0),
+      cultivo: z.string().nullable().optional(),
+      aportante: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body);
+    // Campo real: verificar que sea de una empresa del grupo.
+    if (d.campoId) {
+      const grupo = _grupoCompanyIds(req);
+      const campo = await prisma.campo.findFirst({ where: { id: d.campoId, companyId: { in: grupo } } });
+      if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
+      d.companyId = campo.companyId;
+      if (!d.hectareas) d.hectareas = Number(campo.hectareas || 0);
+    } else if (!d.externoNombre) {
+      return res.status(400).json({ ok: false, error: 'Elegí un campo o cargá un campo externo (nombre)' });
+    }
+    const link = await prisma.sociedadCampo.create({ data: {
+      sociedadId: cur.id, campoId: d.campoId || null, companyId: d.companyId || null,
+      externoNombre: d.externoNombre || null, externoTitular: d.externoTitular || null,
+      externoCuit: d.externoCuit || null, externoLocalidad: d.externoLocalidad || null,
+      hectareas: d.hectareas || 0, cultivo: d.cultivo || null, aportante: d.aportante || null,
+      observaciones: d.observaciones || null,
+    }});
+    res.status(201).json({ ok: true, data: link });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/sociedades/:id/campos/:linkId', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const cur = await _sociedadDelGrupo(req, req.params.id);
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    await prisma.sociedadCampo.deleteMany({ where: { id: req.params.linkId, sociedadId: cur.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Consolida los datos de una sociedad (por campo: cosecha, costos) cruzando todas
+// las empresas del grupo. Devuelve filas + cartas etiquetadas + totales + cosecha por cultivo.
+async function _sociedadCompute(req, cur) {
+    const ciclo = (cur.ciclo || '').trim();
+    const kgDeViaje = (v) => Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
+    const _companyName = {};
+    for (const uc of (req.user?.userCompanies || [])) _companyName[uc.companyId] = uc.company?.name || '';
+    const cosechaPorCultivo = {};
+    const _sumaCultivo = (cultivos, kg) => { const c = (cultivos && cultivos[0]) || 'Sin cultivo'; cosechaPorCultivo[c] = (cosechaPorCultivo[c] || 0) + kg; };
+
+    const filas = [];
+    for (const link of cur.campos) {
+      if (!link.campoId) {
+        // Campo externo de un socio: informativo (no consolidamos sus movimientos).
+        filas.push({ linkId: link.id, externo: true, nombre: link.externoNombre || 'Campo externo',
+          titular: link.externoTitular || null, empresa: null, hectareas: Number(link.hectareas || 0),
+          cultivos: link.cultivo ? [link.cultivo] : [], kgCosechados: 0, viajes: 0,
+          labores: 0, insumos: 0, costoEstimado: 0, aportante: link.aportante || null });
+        continue;
+      }
+      const campo = await prisma.campo.findFirst({ where: { id: link.campoId }, include: { lotes: { select: { id: true } } } });
+      if (!campo) { filas.push({ linkId: link.id, externo: false, nombre: '(campo eliminado)', empresa: _companyName[link.companyId] || '', hectareas: Number(link.hectareas || 0), cultivos: [], kgCosechados: 0, viajes: 0, labores: 0, insumos: 0, costoEstimado: 0, aportante: link.aportante || null }); continue; }
+      const loteIds = campo.lotes.map(l => l.id);
+      let campanas = loteIds.length ? await prisma.campana.findMany({ where: { loteId: { in: loteIds } }, select: { id: true, cultivo: true, ciclo: true } }) : [];
+      if (ciclo) campanas = campanas.filter(c => !c.ciclo || String(c.ciclo).trim() === ciclo);
+      const campIds = campanas.map(c => c.id);
+      const cultivos = [...new Set(campanas.map(c => c.cultivo).filter(Boolean))];
+      let kgCosechados = 0, nViajes = 0, nLabores = 0, nInsumos = 0, costo = 0;
+      if (campIds.length) {
+        const viajes = await prisma.viaje.findMany({ where: { campanaId: { in: campIds }, estado: { not: 'anulada' } } });
+        nViajes = viajes.length; kgCosechados = viajes.reduce((a, v) => a + kgDeViaje(v), 0);
+        const insumos = await prisma.insumoAplicado.findMany({ where: { campanaId: { in: campIds } } });
+        nInsumos = insumos.length;
+        costo += insumos.reduce((a, i) => a + ((i.costo != null && i.hectareasAplicadas != null) ? Number(i.costo) * Number(i.hectareasAplicadas) : (i.precioUnit != null ? Number(i.precioUnit) * Number(i.cantidad || 0) : 0)), 0);
+        const labores = await prisma.laborAplicada.findMany({ where: { campanaId: { in: campIds } } });
+        nLabores = labores.length;
+        costo += labores.reduce((a, l) => a + ((l.costo != null && l.hectareasAplicadas != null) ? Number(l.costo) * Number(l.hectareasAplicadas) : Number(l.costo || 0)), 0);
+      }
+      const filaCult = cultivos.length ? cultivos : (link.cultivo ? [link.cultivo] : []);
+      _sumaCultivo(filaCult, kgCosechados);
+      filas.push({ linkId: link.id, externo: false, nombre: campo.nombre, campoId: campo.id,
+        empresa: _companyName[link.companyId] || '', titular: campo.propietario || null,
+        hectareas: Number(link.hectareas || campo.hectareas || 0),
+        cultivos: filaCult,
+        kgCosechados: _round2(kgCosechados), viajes: nViajes, labores: nLabores, insumos: nInsumos,
+        costoEstimado: _round2(costo), aportante: link.aportante || null });
+    }
+    // Cartas de porte etiquetadas manualmente a la sociedad (ej. CP de un socio) — bucket aparte.
+    const viajesTag = await prisma.viaje.findMany({ where: { sociedadId: cur.id, estado: { not: 'anulada' } } });
+    const kgTag = viajesTag.reduce((a, v) => a + kgDeViaje(v), 0);
+    for (const v of viajesTag) _sumaCultivo([v.producto || 'Sin cultivo'], kgDeViaje(v));
+
+    const tot = filas.reduce((a, f) => ({
+      hectareas: a.hectareas + f.hectareas, kg: a.kg + f.kgCosechados, costo: a.costo + f.costoEstimado,
+    }), { hectareas: 0, kg: 0, costo: 0 });
+    return {
+      sociedad: { id: cur.id, nombre: cur.nombre, ciclo: cur.ciclo, activa: cur.activa, socios: cur.socios || [], observaciones: cur.observaciones },
+      filas,
+      cartasEtiquetadas: { cantidad: viajesTag.length, kg: _round2(kgTag),
+        detalle: viajesTag.map(v => ({ id: v.id, fecha: v.fecha, cartaPorte: v.cartaPorte, producto: v.producto, kg: kgDeViaje(v), origen: v.origen, destino: v.destino })) },
+      cosechaPorCultivo: Object.entries(cosechaPorCultivo).map(([cultivo, kg]) => ({ cultivo, kg: _round2(kg) })),
+      totales: { hectareas: _round2(tot.hectareas), kgCosechados: _round2(tot.kg + kgTag), costoEstimado: _round2(tot.costo) },
+    };
+}
+
+// TABLERO consolidado de la sociedad (por campo).
+app.get('/api/sociedades/:id/tablero', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const cur = await prisma.sociedad.findFirst({ where: { id: req.params.id, ownerCompanyId: { in: _grupoCompanyIds(req) } }, include: { campos: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    res.json({ ok: true, data: await _sociedadCompute(req, cur) });
+  } catch (e) { next(e); }
+});
+
+// GUARDAR la config de liquidación (precios, gastos comunes, aportes) y los socios con su %.
+app.put('/api/sociedades/:id/liquidacion', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const cur = await _sociedadDelGrupo(req, req.params.id);
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const d = z.object({
+      socios: z.array(z.object({ nombre: z.string(), aporta: z.string().nullable().optional(), participacion: z.coerce.number().nullable().optional() })).nullable().optional(),
+      liquidacion: z.object({
+        precioTnDefault: z.coerce.number().nullable().optional(),
+        precios: z.array(z.object({ cultivo: z.string(), precioTn: z.coerce.number() })).nullable().optional(),
+        gastosComunes: z.array(z.object({ concepto: z.string(), monto: z.coerce.number() })).nullable().optional(),
+        aportes: z.array(z.object({ socio: z.string().nullable().optional(), tipo: z.string().nullable().optional(), concepto: z.string().nullable().optional(), monto: z.coerce.number() })).nullable().optional(),
+        incluirCostosSistema: z.boolean().optional(),
+        notas: z.string().nullable().optional(),
+      }).nullable().optional(),
+    }).parse(req.body);
+    const soc = await prisma.sociedad.update({ where: { id: cur.id }, data: {
+      ...(d.socios !== undefined ? { socios: d.socios } : {}),
+      ...(d.liquidacion !== undefined ? { liquidacion: d.liquidacion } : {}),
+    }});
+    res.json({ ok: true, data: soc });
+  } catch (e) { next(e); }
+});
+
+// CALCULAR la liquidación: valoriza la cosecha ($/tn), suma gastos, y reparte el
+// resultado por participación de cada socio, comparando contra lo que aportó.
+app.get('/api/sociedades/:id/liquidacion', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const cur = await prisma.sociedad.findFirst({ where: { id: req.params.id, ownerCompanyId: { in: _grupoCompanyIds(req) } }, include: { campos: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const comp = await _sociedadCompute(req, cur);
+    const cfg = cur.liquidacion || {};
+    const precios = {}; for (const p of (cfg.precios || [])) precios[p.cultivo] = Number(p.precioTn) || 0;
+    const precioDef = Number(cfg.precioTnDefault) || 0;
+    // Ingreso = Σ (tn por cultivo × precio $/tn del cultivo, o precio por defecto).
+    let ingreso = 0; const ingresoPorCultivo = [];
+    for (const c of comp.cosechaPorCultivo) {
+      const precioTn = precios[c.cultivo] != null && precios[c.cultivo] > 0 ? precios[c.cultivo] : precioDef;
+      const tn = c.kg / 1000; const monto = _round2(tn * precioTn);
+      ingreso += monto; ingresoPorCultivo.push({ cultivo: c.cultivo, kg: c.kg, tn: _round2(tn), precioTn, monto });
+    }
+    ingreso = _round2(ingreso);
+    const gastosComunes = _round2((cfg.gastosComunes || []).reduce((a, g) => a + (Number(g.monto) || 0), 0));
+    const costosSistema = cfg.incluirCostosSistema ? _round2(comp.totales.costoEstimado || 0) : 0;
+    const aportes = (cfg.aportes || []).map(a => ({ ...a, monto: _round2(Number(a.monto) || 0) }));
+    const aportesTotal = _round2(aportes.reduce((a, x) => a + x.monto, 0));
+    const gastosTotal = _round2(gastosComunes + costosSistema + aportesTotal);
+    const resultado = _round2(ingreso - gastosTotal);
+    // Socios: participación % (editable) y aporte propio (Σ sus aportes).
+    const socios = (cur.socios || []).map(s => {
+      const aporteSocio = _round2(aportes.filter(a => (a.socio || '') === s.nombre).reduce((x, a) => x + a.monto, 0));
+      return { nombre: s.nombre, aporta: s.aporta || null, participacion: Number(s.participacion) || 0, aporte: aporteSocio };
+    });
+    const sumaPart = _round2(socios.reduce((a, s) => a + s.participacion, 0));
+    // Sugerencia de % por aporte (si cargaron aportes).
+    for (const s of socios) s.participacionSugerida = aportesTotal > 0 ? _round2(s.aporte / aportesTotal * 100) : 0;
+    // Reparto: cada socio recibe su % del INGRESO y ya puso su aporte → neto de caja.
+    // Además "le corresponde" = su % del resultado (ganancia).
+    for (const s of socios) {
+      const pf = s.participacion / 100;
+      s.participacionIngreso = _round2(pf * ingreso);
+      s.ganancia = _round2(pf * resultado);
+      s.neto = _round2(pf * ingreso - s.aporte);   // caja: cobra su parte de la venta, descuenta lo que puso
+    }
+    res.json({ ok: true, data: {
+      sociedad: comp.sociedad,
+      cosecha: { kg: comp.totales.kgCosechados, porCultivo: comp.cosechaPorCultivo },
+      ingresoPorCultivo, ingreso,
+      gastos: { gastosComunes, costosSistema, costosSistemaTotal: _round2(comp.totales.costoEstimado || 0), aportesTotal, total: gastosTotal, incluirCostosSistema: !!cfg.incluirCostosSistema },
+      aportes, resultado, socios, sumaParticipacion: sumaPart,
+      config: { precioTnDefault: precioDef, precios: cfg.precios || [], gastosComunes: cfg.gastosComunes || [], notas: cfg.notas || '' },
+    }});
+  } catch (e) { next(e); }
+});
+
+// Campos de TODAS las empresas del grupo (para el picker de la sociedad).
+app.get('/api/sociedades-campos-grupo', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const grupo = _grupoCompanyIds(req);
+    const campos = await prisma.campo.findMany({
+      where: { companyId: { in: grupo }, activo: true },
+      select: { id: true, nombre: true, companyId: true, hectareas: true, propietario: true, localidad: true },
+      orderBy: { nombre: 'asc' },
+    });
+    const cn = {}; for (const uc of (req.user?.userCompanies || [])) cn[uc.companyId] = uc.company?.name || '';
+    res.json({ ok: true, data: campos.map(c => ({ ...c, empresa: cn[c.companyId] || '' })) });
+  } catch (e) { next(e); }
+});
+
 // ---------- VENTAS (facturas con items + CAE simulado) ----------
 function calcFactura(items) {
   let subtotal = 0, iva = 0;
@@ -5603,6 +5885,7 @@ const viajeSchema = z.object({
   destino: z.string().nullable().optional(),
   producto: z.string().nullable().optional(),
   campanaId: z.string().nullable().optional(),    // campaña del grano (para rinde real)
+  sociedadId: z.string().nullable().optional(),   // Sociedad/UTE a la que se imputa la carta de porte (tag manual)
   cantidad: z.number().nullable().optional(),     // kg carga
   kgDescarga: z.number().nullable().optional(),
   unidad: z.string().nullable().optional(),

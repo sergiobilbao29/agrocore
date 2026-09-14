@@ -322,6 +322,64 @@ model Campana {
   @@index([loteId])
 }
 
+// ============================================================
+// SOCIEDAD / UTE de campaña (MULTIEMPRESA)
+// Agrupa campos de VARIAS empresas del grupo (y campos "externos" de socios que
+// no están en ninguna de nuestras empresas) para una campaña puntual. NO cambia
+// la titularidad fiscal: las cartas de porte siguen saliendo de la empresa/CUIT
+// del campo. La sociedad sólo CONSOLIDA cosecha (cartas de porte) y costos
+// (labores/insumos) para llevar la cuenta del negocio en participación.
+// Vive por encima de las empresas: se accede desde cualquier empresa del grupo
+// (por eso ownerCompanyId es sólo la empresa desde la que se creó).
+// ============================================================
+model Sociedad {
+  id             String   @id @default(cuid())
+  ownerCompanyId String                     // empresa del grupo desde la que se creó (para acceso)
+  nombre         String                     // ej "SPL — Campaña 2026/27"
+  descripcion    String?
+  ciclo          String?                    // campaña, ej "2026/27"
+  fechaInicio    DateTime?
+  fechaFin       DateTime?
+  activa         Boolean  @default(true)
+  socios         Json?                      // [{ id, nombre, aporta, participacion }] (% de participación editable)
+  // Config de liquidación de la participación (fase 2): precios de la cosecha, gastos
+  // comunes y aportes cargados por socio. { precioTnDefault, precios:[{cultivo,precioTn}],
+  //   gastosComunes:[{concepto,monto}], aportes:[{socio,tipo,concepto,monto}],
+  //   incluirCostosSistema:bool, notas }
+  liquidacion    Json?
+  observaciones  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  campos         SociedadCampo[]
+
+  @@index([ownerCompanyId])
+}
+
+// Campo asignado a una sociedad. Puede ser un Campo REAL de alguna empresa del
+// grupo (campoId + companyId) o un campo EXTERNO de un socio (datos sueltos).
+model SociedadCampo {
+  id              String   @id @default(cuid())
+  sociedadId      String
+  campoId         String?                   // Campo real (de alguna empresa del grupo)
+  companyId       String?                   // empresa dueña del campo real (de dónde salen las CP)
+  // Campo EXTERNO de un socio (no está en ninguna de nuestras empresas):
+  externoNombre   String?
+  externoTitular  String?                   // titular/arrendatario real (sale la CP)
+  externoCuit     String?
+  externoLocalidad String?
+  hectareas       Float    @default(0)      // ha aportadas a la sociedad (puede ser parcial)
+  cultivo         String?                   // cultivo de la campaña en ese campo (informativo)
+  aportante       String?                   // quién aporta el campo (socio/empresa)
+  observaciones   String?
+  createdAt       DateTime @default(now())
+
+  sociedad        Sociedad @relation(fields: [sociedadId], references: [id], onDelete: Cascade)
+
+  @@index([sociedadId])
+  @@index([campoId])
+}
+
 // Evento de CORTE de una campaña forrajera multicorte (centeno, alfalfa, avena).
 // Cada corte puede confeccionar rollos/fardos (ingresan al galpon con su costo
 // unitario) o ser pastoreo directo. Costo unitario = (costo insumos imputado +
@@ -956,6 +1014,7 @@ model Viaje {
   destino         String?
   producto        String?   // carga: "Soja", "Maíz", "Girasol"...
   campanaId       String?   // campaña de la que sale el grano (para rinde real)
+  sociedadId      String?   // Sociedad/UTE a la que se imputa esta carta de porte (tag manual, ej. CP de un socio)
   cantidad        Float?    // kg cargados (al subir el camión) — neto en origen
   kgDescarga      Float?    // kg efectivamente descargados — neto en destino
   // ---- Pesaje del camión (para Carta de Porte) ----

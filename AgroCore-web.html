@@ -1084,6 +1084,7 @@ const MODULES = [
   { id:'insumos',       label:'Insumos y labores',    icon:'🧪', perm:'produccion:read', section:'Producción' },
   { id:'serviciosTerceros', label:'Servicios a terceros', icon:'🤝', perm:'produccion:read', section:'Producción' },
   { id:'reporteMargen', label:'Reporte de margen',    icon:'💹', perm:'stock:read',      section:'Producción' },
+  { id:'sociedades',    label:'Sociedades / UTE',     icon:'🤝', perm:'produccion:read', section:'Producción' },
   { id:'calculadoras',  label:'Calculadoras agronómicas', icon:'🧮', perm:'produccion:read', section:'Producción' },
   { id:'vademecum',     label:'Vademécum de insumos',  icon:'🧫', perm:'produccion:read', section:'Producción' },
 
@@ -2831,6 +2832,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'14/09/2026',
+      titulo:'💰 v2.210.0 — Sociedades: liquidación de la participación de cada socio',
+      desc:'La <b>Sociedad / UTE</b> ahora liquida. En el tablero hay un botón <b>“💰 Liquidación”</b> donde: ponés el <b>precio $/tn</b> (por defecto y por cultivo) y el sistema valoriza la cosecha (ingreso); cargás <b>gastos comunes</b> y los <b>aportes de cada socio</b> (campos, maquinaria, líquidos, insumos, empleados), con opción de sumar también los costos consolidados del sistema; y definís el <b>% de participación</b> de cada socio (con botón <b>“Sugerir % por aporte”</b>). El sistema calcula <b>ingreso − gastos = resultado</b> y arma el <b>reparto por socio</b>: su % del ingreso, su ganancia (% del resultado) y el <b>neto a cobrar o poner</b> (su parte de la venta menos lo que aportó). Todo se guarda en la sociedad.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'14/09/2026',
+      titulo:'🤝 v2.209.0 — Sociedades / UTE (negocio en participación multiempresa)',
+      desc:'Nuevo módulo <b>Producción → Sociedades / UTE</b> para llevar un negocio en participación de campaña entre varias empresas y socios, <b>sin cambiar la facturación</b>. Creás la sociedad (ej. “SPL 2026/27”), le asignás <b>campos de cualquiera de tus empresas</b> (Del Pistrin, DLL, Gerardo…) y también <b>campos externos</b> de los socios. Las cartas de porte siguen saliendo del titular real del campo; la sociedad <b>consolida</b> la cosecha (kg de las cartas de porte) y los costos (labores/insumos) por campo, con totales de hectáreas, cosecha y costo estimado. Si una carta de porte sale de un socio, al cargar el viaje podés <b>etiquetarla a la sociedad</b> para que sume. Cargás los socios y qué aporta cada uno (campos, maquinaria, líquidos, empleados) — la liquidación de la participación de cada socio queda para una próxima etapa.' },
     { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
       titulo:'📩 v2.208.0 — Cobro con varios medios: elegir cheques ya en cartera',
       desc:'En el cobro con <b>varios medios</b> (dividir), ahora podés elegir un <b>cheque recibido que ya está en cartera</b> (no solo cargar uno nuevo). Cada fila de cheque tiene dos opciones: <b>“Cheque recibido en cartera”</b> (lista los cheques de terceros en cartera con banco, N° y monto; al elegirlo completa el importe) o <b>“Cheque recibido nuevo”</b> (lo cargás ahí mismo). Así podés cobrar una guía entregando varios cheques que ya tenías cargados.' },
@@ -8841,6 +8848,341 @@ async function mapaImportarRun(loteId){
 }
 
 /* ----- CAMPOS ----- */
+/* =========================================================
+ * 🤝 SOCIEDADES / UTE — negocio en participación multiempresa
+ * ========================================================= */
+pages.sociedades = async function() {
+  setHeader('Sociedades / UTE', 'Negocios en participación entre empresas — consolida campos, cartas de porte y costos');
+  if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('sociedades','Sociedades'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let socs=[];
+  try { socs=(await api('/api/sociedades')).data||[]; } catch(e){ return toast(e.message,'error'); }
+  state.cache.sociedades = socs;
+  if (state._socSel) { const s=socs.find(x=>x.id===state._socSel); if (s) return socTablero(s.id); state._socSel=null; }
+  const canC=can('produccion:create');
+  const cards = socs.map(s=>{
+    const nCampos=(s.campos||[]).length;
+    return `<div class="kpi" style="cursor:pointer" onclick='socAbrir(${JSON.stringify(s.id)})'>
+      <div class="flex justify-between items-start gap-2">
+        <div><div class="font-bold text-emerald-900">🤝 ${esc(s.nombre)}</div>
+          <div class="text-xs text-slate-500 mt-0.5">${s.ciclo?('Campaña '+esc(s.ciclo)+' · '):''}${nCampos} campo${nCampos===1?'':'s'}${s.activa?'':' · inactiva'}</div>
+          ${s.descripcion?`<div class="text-xs text-slate-600 mt-1">${esc(s.descripcion)}</div>`:''}</div>
+        <span class="text-slate-300 text-lg">›</span>
+      </div></div>`;
+  }).join('')||`<div class="kpi text-center text-slate-500 py-8">Todavía no hay sociedades.${canC?' Creá la primera con “+ Nueva sociedad”.':''}</div>`;
+  $('#page-body').innerHTML = `
+    <div class="flex justify-end mb-3">${canC?`<button class="btn btn-primary" onclick="socForm()">+ Nueva sociedad</button>`:''}</div>
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900 mb-3">Una <b>sociedad / UTE</b> agrupa campos de <b>varias empresas</b> (y de socios externos) para una campaña. No cambia la facturación: las cartas de porte siguen saliendo del titular del campo. Acá se <b>consolidan</b> la cosecha (cartas de porte) y los costos (labores/insumos) del negocio en conjunto.</div>
+    <div class="grid gap-2 md:grid-cols-2">${cards}</div>`;
+};
+function socAbrir(id){ state._socSel=id; pages.sociedades(); }
+function socVolver(){ state._socSel=null; pages.sociedades(); }
+
+function socForm(prefill=null){
+  const p=prefill||{}; state._socEditId=p.id||null;
+  const socios=(p.socios||[]);
+  openModal({ title: state._socEditId?'✏️ Editar sociedad':'🤝 Nueva sociedad / UTE', size:'max-w-2xl',
+    body:`
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div class="col-span-2"><label class="label">Nombre *</label><input id="soc-nombre" class="input" value="${esc(p.nombre||'')}" placeholder="Ej: SPL — Campaña 2026/27"/></div>
+        <div><label class="label">Campaña / ciclo</label><input id="soc-ciclo" class="input" value="${esc(p.ciclo||'')}" placeholder="2026/27"/></div>
+        <div><label class="label">Estado</label><select id="soc-activa" class="input"><option value="1" ${p.activa!==false?'selected':''}>Activa</option><option value="0" ${p.activa===false?'selected':''}>Inactiva</option></select></div>
+        <div><label class="label">Desde</label><input id="soc-desde" type="date" class="input" value="${p.fechaInicio?String(p.fechaInicio).slice(0,10):''}"/></div>
+        <div><label class="label">Hasta</label><input id="soc-hasta" type="date" class="input" value="${p.fechaFin?String(p.fechaFin).slice(0,10):''}"/></div>
+        <div class="col-span-2"><label class="label">Descripción</label><input id="soc-desc" class="input" value="${esc(p.descripcion||'')}" placeholder="Opcional"/></div>
+      </div>
+      <div class="border rounded-lg p-2 bg-slate-50 mb-3">
+        <div class="flex justify-between items-center mb-1"><span class="text-sm font-medium text-slate-700">Socios y aportes (informativo)</span>
+          <button type="button" class="btn btn-secondary text-xs" onclick="socSocioAdd()">+ Socio</button></div>
+        <div id="soc-socios">${socios.map(s=>socSocioRow(s)).join('')||''}</div>
+        <div class="text-[11px] text-slate-500 mt-1">Ej: quién aporta campos, maquinaria, líquidos, empleados.</div>
+      </div>
+      <div><label class="label">Observaciones</label><textarea id="soc-obs" class="input" rows="2">${esc(p.observaciones||'')}</textarea></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="socSave()">💾 Guardar</button>` });
+}
+function socSocioRow(s){ s=s||{}; return `<div class="grid grid-cols-2 gap-2 mb-1" data-soc-row>
+  <input class="input text-sm" data-soc-nombre placeholder="Socio" value="${esc(s.nombre||'')}"/>
+  <div class="flex gap-1"><input class="input text-sm flex-1" data-soc-aporta placeholder="Qué aporta (campos, maquinaria…)" value="${esc(s.aporta||'')}"/>
+  <button type="button" class="btn btn-ghost text-red-600 text-xs" onclick="this.closest('[data-soc-row]').remove()">✕</button></div></div>`; }
+function socSocioAdd(){ const c=document.getElementById('soc-socios'); if(c) c.insertAdjacentHTML('beforeend', socSocioRow()); }
+async function socSave(){
+  const nombre=$('#soc-nombre').value.trim(); if(!nombre) return toast('Poné el nombre','warn');
+  const _prevSoc=(state.cache.sociedades||[]).find(x=>x.id===state._socEditId)?.socios||[];
+  const socios=[...document.querySelectorAll('#soc-socios [data-soc-row]')].map(r=>{ const nombre=r.querySelector('[data-soc-nombre]').value.trim(); const prev=_prevSoc.find(x=>x.nombre===nombre)||{}; return { nombre, aporta:r.querySelector('[data-soc-aporta]').value.trim()||null, participacion:prev.participacion!=null?prev.participacion:null }; }).filter(s=>s.nombre);
+  const data={ nombre, ciclo:$('#soc-ciclo').value.trim()||null, descripcion:$('#soc-desc').value.trim()||null,
+    fechaInicio:$('#soc-desde').value||null, fechaFin:$('#soc-hasta').value||null,
+    activa:$('#soc-activa').value==='1', socios, observaciones:$('#soc-obs').value.trim()||null };
+  try{
+    if(state._socEditId){ await api('/api/sociedades/'+state._socEditId,{method:'PUT',body:JSON.stringify(data)}); toast('Sociedad actualizada','success'); }
+    else { const r=await api('/api/sociedades',{method:'POST',body:JSON.stringify(data)}); toast('Sociedad creada','success'); state._socSel=r.data?.id||null; }
+    state._socEditId=null; closeModal(); pages.sociedades();
+  }catch(e){ toast(e.message,'error'); }
+}
+
+async function socTablero(id){
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando tablero…</div>`;
+  let t; try{ t=(await api('/api/sociedades/'+id+'/tablero')).data; }catch(e){ state._socSel=null; return toast(e.message,'error'); }
+  const s=t.sociedad, canU=can('produccion:update');
+  const filas=(t.filas||[]).map(f=>`<tr class="table-row">
+      <td>${f.externo?'📍 ':'🗺️ '}${esc(f.nombre)}${f.externo?' <span class="badge badge-amber">externo</span>':''}${f.empresa?`<div class="text-[11px] text-slate-500">${esc(f.empresa)}</div>`:''}${f.titular?`<div class="text-[11px] text-slate-400">${esc(f.titular)}</div>`:''}</td>
+      <td class="text-right">${fmtN(f.hectareas)}</td>
+      <td>${(f.cultivos||[]).map(c=>esc(c)).join(', ')||'—'}</td>
+      <td class="text-right font-semibold">${f.kgCosechados?fmtN(f.kgCosechados)+' kg':'—'}</td>
+      <td class="text-right">${f.viajes||0}</td>
+      <td class="text-right">${(f.labores||0)+(f.insumos||0)}</td>
+      <td class="text-right">${f.costoEstimado?fmt$(f.costoEstimado):'—'}</td>
+      <td class="text-right">${canU?`<button class="btn btn-ghost text-red-600 text-xs" title="Quitar de la sociedad" onclick='socCampoDel(${JSON.stringify(id)},${JSON.stringify(f.linkId)})'>✕</button>`:''}</td>
+    </tr>`).join('')||`<tr><td colspan="8" class="text-center text-slate-400 py-4">Sin campos asignados todavía.</td></tr>`;
+  const tot=t.totales||{};
+  const ct=t.cartasEtiquetadas||{cantidad:0,kg:0,detalle:[]};
+  $('#page-body').innerHTML = `
+    <div class="flex items-center justify-between mb-3">
+      <button class="btn btn-ghost text-sm" onclick="socVolver()">‹ Volver</button>
+      <div class="flex gap-2">${canU?`<button class="btn btn-secondary text-sm" onclick='socCampoForm(${JSON.stringify(id)})'>+ Agregar campo</button>`:''}<button class="btn btn-primary text-sm" onclick='socLiquidacion(${JSON.stringify(id)})'>💰 Liquidación</button>${canU?`<button class="btn btn-ghost text-sm" onclick='socEditarActual(${JSON.stringify(id)})'>✏️ Editar</button>`:''}</div>
+    </div>
+    <div class="kpi mb-3">
+      <div class="font-bold text-emerald-900 text-lg">🤝 ${esc(s.nombre)}</div>
+      <div class="text-xs text-slate-500">${s.ciclo?('Campaña '+esc(s.ciclo)):''}${s.activa?'':' · inactiva'}</div>
+      ${(s.socios&&s.socios.length)?`<div class="text-xs text-slate-600 mt-1">Socios: ${s.socios.map(x=>esc(x.nombre)+(x.aporta?` (${esc(x.aporta)})`:'')).join(' · ')}</div>`:''}
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+      <div class="kpi"><div class="text-xs text-slate-500">Campos</div><div class="text-2xl font-bold mt-1">${(t.filas||[]).length}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Hectáreas</div><div class="text-2xl font-bold mt-1">${fmtN(tot.hectareas||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Cosecha total</div><div class="text-2xl font-bold mt-1 text-emerald-700">${fmtN(tot.kgCosechados||0)} <span class="text-sm">kg</span></div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Costo estimado</div><div class="text-2xl font-bold mt-1 text-amber-600">${fmt$(tot.costoEstimado||0)}</div></div>
+    </div>
+    <div class="kpi p-0 overflow-hidden mb-3">
+      <table class="data"><thead><tr><th>Campo</th><th class="text-right">Ha</th><th>Cultivo</th><th class="text-right">Cosechado</th><th class="text-right">Viajes</th><th class="text-right">Trabajos</th><th class="text-right">Costo est.</th><th></th></tr></thead>
+        <tbody>${filas}</tbody></table>
+    </div>
+    ${ct.cantidad?`<div class="kpi mb-3"><div class="text-sm font-medium text-slate-700 mb-1">📩 Cartas de porte etiquetadas a la sociedad (${ct.cantidad}) — ${fmtN(ct.kg)} kg</div>
+      <table class="data text-sm"><thead><tr><th>Fecha</th><th>Carta de porte</th><th>Producto</th><th>Origen→Destino</th><th class="text-right">Kg</th></tr></thead>
+      <tbody>${ct.detalle.map(v=>`<tr><td>${fmtFecha(v.fecha)}</td><td class="font-mono text-xs">${esc(v.cartaPorte||'—')}</td><td>${esc(v.producto||'—')}</td><td class="text-xs">${esc(v.origen||'')} → ${esc(v.destino||'')}</td><td class="text-right">${fmtN(v.kg)}</td></tr>`).join('')}</tbody></table></div>`:''}
+    <div class="text-[11px] text-slate-500">La cosecha sale de las cartas de porte (viajes) de los campos de la sociedad. Para sumar una carta que salió de un socio, editá el viaje y elegí esta sociedad. El costo estimado suma labores + insumos según la moneda de carga.</div>`;
+}
+function socEditarActual(id){ const s=(state.cache.sociedades||[]).find(x=>x.id===id); if(s) socForm(s); }
+
+function socCampoForm(id){
+  openModal({ title:'+ Agregar campo a la sociedad', size:'max-w-lg',
+    body:`
+      <div class="flex gap-2 mb-3 text-xs">
+        <button type="button" class="btn btn-secondary text-xs flex-1" id="soc-cm-real" onclick="socCampoModo('real')">🗺️ Campo de una empresa</button>
+        <button type="button" class="btn btn-ghost text-xs flex-1" id="soc-cm-ext" onclick="socCampoModo('externo')">📍 Campo externo (socio)</button>
+      </div>
+      <div id="soc-campo-real">
+        <label class="label">Campo (de cualquiera de tus empresas)</label>
+        <select id="soc-campoid" class="input"><option value="">Cargando…</option></select>
+        <div class="grid grid-cols-2 gap-2 mt-2">
+          <div><label class="label text-xs">Hectáreas a la sociedad</label><input id="soc-ha-r" type="number" step="0.01" class="input" placeholder="0 = todo el campo"/></div>
+          <div><label class="label text-xs">Cultivo</label><input id="soc-cult-r" class="input" placeholder="Opcional"/></div>
+        </div>
+      </div>
+      <div id="soc-campo-ext" class="hidden">
+        <div class="grid grid-cols-2 gap-2">
+          <div class="col-span-2"><label class="label text-xs">Nombre del campo *</label><input id="soc-ext-nombre" class="input" placeholder="Ej: La Rosa (socio)"/></div>
+          <div><label class="label text-xs">Titular / arrendatario</label><input id="soc-ext-titular" class="input" placeholder="Sale la CP"/></div>
+          <div><label class="label text-xs">CUIT</label><input id="soc-ext-cuit" class="input"/></div>
+          <div><label class="label text-xs">Localidad</label><input id="soc-ext-loc" class="input"/></div>
+          <div><label class="label text-xs">Hectáreas</label><input id="soc-ha-e" type="number" step="0.01" class="input"/></div>
+          <div><label class="label text-xs">Cultivo</label><input id="soc-cult-e" class="input"/></div>
+        </div>
+      </div>
+      <div class="mt-2"><label class="label text-xs">Aportante (quién pone el campo)</label><input id="soc-aportante" class="input" placeholder="Opcional"/></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='socCampoSave(${JSON.stringify(id)})'>Agregar</button>` });
+  state._socCampoModo='real';
+  api('/api/sociedades-campos-grupo').then(r=>{
+    const sel=document.getElementById('soc-campoid'); if(!sel) return;
+    const cs=r.data||[];
+    sel.innerHTML=`<option value="">— Elegir campo —</option>`+cs.map(c=>`<option value="${esc(c.id)}" data-ha="${c.hectareas||0}">${esc(c.nombre)} · ${esc(c.empresa||'')}${c.hectareas?(' · '+fmtN(c.hectareas)+' ha'):''}</option>`).join('');
+  }).catch(()=>{});
+}
+function socCampoModo(m){ state._socCampoModo=m;
+  document.getElementById('soc-campo-real')?.classList.toggle('hidden', m!=='real');
+  document.getElementById('soc-campo-ext')?.classList.toggle('hidden', m!=='externo');
+  document.getElementById('soc-cm-real')?.classList.toggle('btn-secondary', m==='real'); document.getElementById('soc-cm-real')?.classList.toggle('btn-ghost', m!=='real');
+  document.getElementById('soc-cm-ext')?.classList.toggle('btn-secondary', m==='externo'); document.getElementById('soc-cm-ext')?.classList.toggle('btn-ghost', m!=='externo');
+}
+async function socCampoSave(id){
+  let data;
+  if((state._socCampoModo||'real')==='real'){
+    const campoId=document.getElementById('soc-campoid')?.value; if(!campoId) return toast('Elegí un campo','warn');
+    data={ campoId, hectareas:Number(document.getElementById('soc-ha-r')?.value||0)||0, cultivo:document.getElementById('soc-cult-r')?.value.trim()||null, aportante:document.getElementById('soc-aportante')?.value.trim()||null };
+  } else {
+    const nombre=document.getElementById('soc-ext-nombre')?.value.trim(); if(!nombre) return toast('Poné el nombre del campo externo','warn');
+    data={ externoNombre:nombre, externoTitular:document.getElementById('soc-ext-titular')?.value.trim()||null, externoCuit:document.getElementById('soc-ext-cuit')?.value.trim()||null,
+      externoLocalidad:document.getElementById('soc-ext-loc')?.value.trim()||null, hectareas:Number(document.getElementById('soc-ha-e')?.value||0)||0,
+      cultivo:document.getElementById('soc-cult-e')?.value.trim()||null, aportante:document.getElementById('soc-aportante')?.value.trim()||null };
+  }
+  try{ await api('/api/sociedades/'+id+'/campos',{method:'POST',body:JSON.stringify(data)}); toast('Campo agregado','success'); closeModal(); socTablero(id); }catch(e){ toast(e.message,'error'); }
+}
+async function socCampoDel(id,linkId){
+  if(!confirm('¿Quitar este campo de la sociedad? (no borra el campo ni sus datos)')) return;
+  try{ await api('/api/sociedades/'+id+'/campos/'+linkId,{method:'DELETE'}); toast('Campo quitado','success'); socTablero(id); }catch(e){ toast(e.message,'error'); }
+}
+
+// ---- Liquidación de la participación de socios ----
+async function socLiquidacion(id){
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando liquidación…</div>`;
+  let L; try{ L=(await api('/api/sociedades/'+id+'/liquidacion')).data; }catch(e){ return toast(e.message,'error'); }
+  state._liqData=L; state._liqId=id;
+  const s=L.sociedad, cfg=L.config||{};
+  // Filas de precio por cultivo (todos los cultivos cosechados + los ya cargados)
+  const preciosMap={}; (cfg.precios||[]).forEach(p=>preciosMap[p.cultivo]=p.precioTn);
+  const cultivos=[...new Set([...(L.cosecha.porCultivo||[]).map(c=>c.cultivo), ...(cfg.precios||[]).map(p=>p.cultivo)])];
+  const preciosRows=cultivos.map(c=>{ const kg=(L.cosecha.porCultivo.find(x=>x.cultivo===c)||{}).kg||0;
+    return `<tr data-precio-row><td>${esc(c)}<input type="hidden" data-precio-cult value="${esc(c)}"/></td><td class="text-right">${fmtN(kg)} kg</td><td class="text-right">${fmtN(Math.round(kg/10)/100)} tn</td>
+      <td><input class="input text-sm text-right" type="number" step="0.01" data-precio-tn value="${preciosMap[c]!=null?preciosMap[c]:''}" placeholder="${cfg.precioTnDefault||'$/tn'}" oninput="socLiqRecalc()"/></td></tr>`;}).join('')||`<tr><td colspan="4" class="text-slate-400 text-center py-2">Sin cosecha cargada todavía.</td></tr>`;
+  const socioNames=(s.socios||[]).map(x=>x.nombre);
+  const gastosRows=(cfg.gastosComunes||[]).map(g=>socLiqGastoRow(g)).join('');
+  const aportesRows=(L.aportes||[]).map(a=>socLiqAporteRow(a,socioNames)).join('');
+  const sociosRows=(L.socios||[]).map(so=>`<tr data-socio-row data-nombre="${esc(so.nombre)}">
+      <td>${esc(so.nombre)}${so.aporta?`<div class="text-[11px] text-slate-500">${esc(so.aporta)}</div>`:''}</td>
+      <td><input class="input text-sm text-right" style="width:80px" type="number" step="0.01" data-socio-part value="${so.participacion||''}" oninput="socLiqRecalc()"/> %</td>
+      <td class="text-right" data-c-aporte>${fmt$(so.aporte||0)}</td>
+      <td class="text-right" data-c-ping>${fmt$(so.participacionIngreso||0)}</td>
+      <td class="text-right font-semibold" data-c-gan>${fmt$(so.ganancia||0)}</td>
+      <td class="text-right font-bold" data-c-neto>${fmt$(so.neto||0)}</td>
+    </tr>`).join('')||`<tr><td colspan="6" class="text-slate-400 text-center py-2">Cargá los socios (editando la sociedad).</td></tr>`;
+  $('#page-body').innerHTML = `
+    <div class="flex items-center justify-between mb-3">
+      <button class="btn btn-ghost text-sm" onclick='socTablero(${JSON.stringify(id)})'>‹ Volver al tablero</button>
+      <div class="flex gap-2"><button class="btn btn-secondary text-sm" onclick="socLiqImprimir()">🖨️ Imprimir / PDF</button><button class="btn btn-primary text-sm" onclick="socLiqGuardar()">💾 Guardar y calcular</button></div>
+    </div>
+    <div class="kpi mb-3"><div class="font-bold text-emerald-900 text-lg">💰 Liquidación — ${esc(s.nombre)}</div>
+      <div class="text-xs text-slate-500">${s.ciclo?('Campaña '+esc(s.ciclo)+' · '):''}Cosecha total: ${fmtN(L.cosecha.kg||0)} kg</div></div>
+
+    <div class="grid md:grid-cols-2 gap-3 mb-3">
+      <div class="kpi p-0 overflow-hidden">
+        <div class="px-3 py-2 bg-slate-50 border-b text-sm font-medium text-slate-700">🌾 Precio de la cosecha</div>
+        <div class="p-2"><div class="flex items-center gap-2 mb-2 text-sm"><span>Precio $/tn por defecto:</span><input id="liq-precio-def" class="input text-sm text-right" style="width:120px" type="number" step="0.01" value="${cfg.precioTnDefault||''}" oninput="socLiqRecalc()"/></div>
+          <table class="data text-sm"><thead><tr><th>Cultivo</th><th class="text-right">Kg</th><th class="text-right">Tn</th><th class="text-right">$/tn</th></tr></thead><tbody id="liq-precios">${preciosRows}</tbody></table></div>
+      </div>
+      <div class="kpi p-0 overflow-hidden">
+        <div class="px-3 py-2 bg-slate-50 border-b flex justify-between items-center"><span class="text-sm font-medium text-slate-700">🧾 Gastos comunes</span><button class="btn btn-secondary text-xs" onclick="socLiqGastoAdd()">+ Gasto</button></div>
+        <div class="p-2"><table class="w-full text-sm"><tbody id="liq-gastos">${gastosRows}</tbody></table>
+          <label class="flex items-center gap-1 text-xs text-slate-600 mt-2"><input type="checkbox" id="liq-incl-sist" ${L.gastos.incluirCostosSistema?'checked':''} onchange="socLiqRecalc()"/> Sumar también los costos del sistema (labores/insumos consolidados: ${fmt$(L.gastos.costosSistemaTotal||0)})</label></div>
+      </div>
+    </div>
+
+    <div class="kpi p-0 overflow-hidden mb-3">
+      <div class="px-3 py-2 bg-slate-50 border-b flex justify-between items-center"><span class="text-sm font-medium text-slate-700">📥 Aportes de cada socio (lo que puso: campos, maquinaria, líquidos, empleados…)</span><button class="btn btn-secondary text-xs" onclick="socLiqAporteAdd()">+ Aporte</button></div>
+      <div class="p-2"><table class="w-full text-sm"><thead class="text-[11px] uppercase text-slate-500"><tr><th class="text-left p-1">Socio</th><th class="text-left p-1">Tipo</th><th class="text-left p-1">Concepto</th><th class="text-left p-1" style="width:130px">Monto $</th><th></th></tr></thead><tbody id="liq-aportes">${aportesRows}</tbody></table></div>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+      <div class="kpi"><div class="text-xs text-slate-500">Ingreso (cosecha)</div><div class="text-xl font-bold mt-1 text-emerald-700" id="liq-ingreso">${fmt$(L.ingreso||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Gastos totales</div><div class="text-xl font-bold mt-1 text-amber-600" id="liq-gastostot">${fmt$(L.gastos.total||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Resultado</div><div class="text-xl font-bold mt-1" id="liq-resultado">${fmt$(L.resultado||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Suma participación</div><div class="text-xl font-bold mt-1" id="liq-sumapart">${fmtN(L.sumaParticipacion||0)}%</div></div>
+    </div>
+
+    <div class="kpi p-0 overflow-hidden mb-2">
+      <div class="px-3 py-2 bg-slate-50 border-b flex justify-between items-center"><span class="text-sm font-medium text-slate-700">👥 Reparto por socio</span><button class="btn btn-ghost text-xs" onclick="socLiqSugerir()">Sugerir % por aporte</button></div>
+      <table class="data text-sm"><thead><tr><th>Socio</th><th class="text-right">Particip.</th><th class="text-right">Aportó</th><th class="text-right">% del ingreso</th><th class="text-right">Ganancia</th><th class="text-right">Neto a cobrar/(poner)</th></tr></thead>
+        <tbody id="liq-socios">${sociosRows}</tbody></table>
+    </div>
+    <div class="text-[11px] text-slate-500">“Neto” = su % del ingreso menos lo que aportó (posición de caja de cada socio). “Ganancia” = su % del resultado. La suma de participaciones debería dar 100%.</div>`;
+  socLiqRecalc();
+}
+function socLiqGastoRow(g){ g=g||{}; return `<tr data-gasto-row><td class="p-1"><input class="input text-sm" data-gasto-concepto placeholder="Concepto" value="${esc(g.concepto||'')}"/></td>
+  <td class="p-1" style="width:130px"><input class="input text-sm text-right" type="number" step="0.01" data-gasto-monto value="${g.monto!=null?g.monto:''}" oninput="socLiqRecalc()"/></td>
+  <td class="p-1" style="width:32px"><button class="btn btn-ghost text-red-600 text-xs" onclick="this.closest('[data-gasto-row]').remove(); socLiqRecalc()">✕</button></td></tr>`; }
+function socLiqGastoAdd(){ document.getElementById('liq-gastos')?.insertAdjacentHTML('beforeend', socLiqGastoRow()); }
+function socLiqAporteRow(a,socios){ a=a||{}; socios=socios||[];
+  const tipos=['campo','maquinaria','liquidos','insumos','empleados','otro'];
+  return `<tr data-aporte-row><td class="p-1"><select class="input text-sm" data-aporte-socio><option value="">— Socio —</option>${socios.map(n=>`<option ${a.socio===n?'selected':''}>${esc(n)}</option>`).join('')}</select></td>
+    <td class="p-1"><select class="input text-sm" data-aporte-tipo>${tipos.map(t=>`<option value="${t}" ${a.tipo===t?'selected':''}>${t}</option>`).join('')}</select></td>
+    <td class="p-1"><input class="input text-sm" data-aporte-concepto placeholder="Detalle" value="${esc(a.concepto||'')}"/></td>
+    <td class="p-1"><input class="input text-sm text-right" type="number" step="0.01" data-aporte-monto value="${a.monto!=null?a.monto:''}" oninput="socLiqRecalc()"/></td>
+    <td class="p-1" style="width:32px"><button class="btn btn-ghost text-red-600 text-xs" onclick="this.closest('[data-aporte-row]').remove(); socLiqRecalc()">✕</button></td></tr>`; }
+function socLiqAporteAdd(){ const socios=((state._liqData?.sociedad?.socios)||[]).map(x=>x.nombre); document.getElementById('liq-aportes')?.insertAdjacentHTML('beforeend', socLiqAporteRow({},socios)); }
+function _socLiqRead(){
+  const precioDef=Number(document.getElementById('liq-precio-def')?.value||0);
+  const precios=[...document.querySelectorAll('#liq-precios [data-precio-row]')].map(r=>({ cultivo:r.querySelector('[data-precio-cult]')?.value, precioTn:Number(r.querySelector('[data-precio-tn]')?.value||0) })).filter(p=>p.cultivo && p.precioTn>0);
+  const gastosComunes=[...document.querySelectorAll('#liq-gastos [data-gasto-row]')].map(r=>({ concepto:r.querySelector('[data-gasto-concepto]')?.value.trim()||'Gasto', monto:Number(r.querySelector('[data-gasto-monto]')?.value||0) })).filter(g=>g.monto);
+  const aportes=[...document.querySelectorAll('#liq-aportes [data-aporte-row]')].map(r=>({ socio:r.querySelector('[data-aporte-socio]')?.value||null, tipo:r.querySelector('[data-aporte-tipo]')?.value||null, concepto:r.querySelector('[data-aporte-concepto]')?.value.trim()||null, monto:Number(r.querySelector('[data-aporte-monto]')?.value||0) })).filter(a=>a.monto);
+  const incluir=document.getElementById('liq-incl-sist')?.checked||false;
+  const socios=[...document.querySelectorAll('#liq-socios [data-socio-row]')].map(r=>({ nombre:r.getAttribute('data-nombre'), participacion:Number(r.querySelector('[data-socio-part]')?.value||0) }));
+  return { precioDef, precios, gastosComunes, aportes, incluir, socios };
+}
+function socLiqRecalc(){
+  const d=_socLiqRead(); const L=state._liqData||{};
+  const preciosMap={}; d.precios.forEach(p=>preciosMap[p.cultivo]=p.precioTn);
+  let ingreso=0; (L.cosecha?.porCultivo||[]).forEach(c=>{ const pt=preciosMap[c.cultivo]||d.precioDef||0; ingreso+=(c.kg/1000)*pt; });
+  ingreso=Math.round(ingreso*100)/100;
+  const gastosCom=d.gastosComunes.reduce((a,g)=>a+g.monto,0);
+  const costosSist=d.incluir?Number(L.gastos?.costosSistemaTotal||0):0;
+  const aportesTot=d.aportes.reduce((a,x)=>a+x.monto,0);
+  const gastosTot=Math.round((gastosCom+costosSist+aportesTot)*100)/100;
+  const resultado=Math.round((ingreso-gastosTot)*100)/100;
+  const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  set('liq-ingreso',fmt$(ingreso)); set('liq-gastostot',fmt$(gastosTot)); set('liq-resultado',fmt$(resultado));
+  const sumaPart=d.socios.reduce((a,s)=>a+s.participacion,0); set('liq-sumapart',fmtN(Math.round(sumaPart*100)/100)+'%');
+  document.querySelectorAll('#liq-socios [data-socio-row]').forEach(r=>{
+    const nombre=r.getAttribute('data-nombre'); const part=Number(r.querySelector('[data-socio-part]')?.value||0);
+    const aporte=d.aportes.filter(a=>a.socio===nombre).reduce((x,a)=>x+a.monto,0);
+    const ping=part/100*ingreso, gan=part/100*resultado, neto=ping-aporte;
+    const c=(sel,v)=>{ const e=r.querySelector(sel); if(e) e.textContent=fmt$(Math.round(v*100)/100); };
+    c('[data-c-aporte]',aporte); c('[data-c-ping]',ping); c('[data-c-gan]',gan); c('[data-c-neto]',neto);
+  });
+}
+function socLiqSugerir(){
+  const d=_socLiqRead(); const aportesTot=d.aportes.reduce((a,x)=>a+x.monto,0);
+  if(!(aportesTot>0)) return toast('Cargá los aportes primero para sugerir el %','warn');
+  document.querySelectorAll('#liq-socios [data-socio-row]').forEach(r=>{
+    const nombre=r.getAttribute('data-nombre'); const aporte=d.aportes.filter(a=>a.socio===nombre).reduce((x,a)=>x+a.monto,0);
+    const inp=r.querySelector('[data-socio-part]'); if(inp) inp.value=(Math.round(aporte/aportesTot*10000)/100);
+  });
+  socLiqRecalc();
+}
+function socLiqImprimir(){
+  const d=_socLiqRead(); const L=state._liqData||{}; const s=L.sociedad||{};
+  const preciosMap={}; d.precios.forEach(p=>preciosMap[p.cultivo]=p.precioTn);
+  let ingreso=0; const ingRows=(L.cosecha?.porCultivo||[]).map(c=>{ const pt=preciosMap[c.cultivo]||d.precioDef||0; const monto=(c.kg/1000)*pt; ingreso+=monto; return `<tr><td>${esc(c.cultivo)}</td><td style="text-align:right">${fmtN(c.kg)} kg</td><td style="text-align:right">${fmtN(Math.round(c.kg/10)/100)} tn</td><td style="text-align:right">${fmt$(pt)}</td><td style="text-align:right">${fmt$(Math.round(monto*100)/100)}</td></tr>`; }).join('');
+  ingreso=Math.round(ingreso*100)/100;
+  const gastosCom=d.gastosComunes.reduce((a,g)=>a+g.monto,0);
+  const costosSist=d.incluir?Number(L.gastos?.costosSistemaTotal||0):0;
+  const aportesTot=d.aportes.reduce((a,x)=>a+x.monto,0);
+  const gastosTot=Math.round((gastosCom+costosSist+aportesTot)*100)/100;
+  const resultado=Math.round((ingreso-gastosTot)*100)/100;
+  const aporteDe=(n)=>d.aportes.filter(a=>a.socio===n).reduce((x,a)=>x+a.monto,0);
+  const socRows=d.socios.map(so=>{ const ap=aporteDe(so.nombre); const ping=so.participacion/100*ingreso, gan=so.participacion/100*resultado, neto=ping-ap;
+    return `<tr><td>${esc(so.nombre)}</td><td style="text-align:right">${fmtN(so.participacion)}%</td><td style="text-align:right">${fmt$(ap)}</td><td style="text-align:right">${fmt$(Math.round(ping*100)/100)}</td><td style="text-align:right">${fmt$(Math.round(gan*100)/100)}</td><td style="text-align:right;font-weight:700">${fmt$(Math.round(neto*100)/100)}</td></tr>`; }).join('');
+  const apRows=d.aportes.map(a=>`<tr><td>${esc(a.socio||'—')}</td><td>${esc(a.tipo||'')}</td><td>${esc(a.concepto||'')}</td><td style="text-align:right">${fmt$(a.monto)}</td></tr>`).join('')||'<tr><td colspan="4" style="color:#888">Sin aportes cargados.</td></tr>';
+  const emp=(typeof nombreEmpresaActiva==='function'?nombreEmpresaActiva():'')||'';
+  const win=window.open('','_blank'); if(!win) return toast('Habilitá las ventanas emergentes para imprimir','warn');
+  win.document.write(`<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Liquidación ${esc(s.nombre||'')}</title>
+    <style>body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1f2937;margin:24px;font-size:13px}
+      h1{font-size:20px;color:#14532d;margin:0 0 2px} .sub{color:#64748b;margin:0 0 14px}
+      table{width:100%;border-collapse:collapse;margin:6px 0 14px} th,td{border:1px solid #e5e7eb;padding:6px 8px;text-align:left} th{background:#14532d;color:#fff}
+      h3{color:#15803d;font-size:14px;margin:16px 0 4px;border-bottom:1px solid #dcfce7;padding-bottom:3px}
+      .tot{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0} .tot div{background:#f7f7ee;border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px}
+      .tot b{display:block;font-size:16px;color:#14532d} .foot{margin-top:20px;color:#94a3b8;font-size:11px;border-top:1px solid #e5e7eb;padding-top:8px}</style></head>
+    <body>
+      <h1>💰 Liquidación — ${esc(s.nombre||'')}</h1>
+      <p class="sub">${s.ciclo?('Campaña '+esc(s.ciclo)+' · '):''}${emp?('Emitido por '+esc(emp)+' · '):''}${new Date().toLocaleDateString('es-AR')}</p>
+      <div class="tot"><div>Ingreso (cosecha)<b>${fmt$(ingreso)}</b></div><div>Gastos totales<b>${fmt$(gastosTot)}</b></div><div>Resultado<b>${fmt$(resultado)}</b></div><div>Cosecha<b>${fmtN(L.cosecha?.kg||0)} kg</b></div></div>
+      <h3>Ingreso por cultivo</h3>
+      <table><thead><tr><th>Cultivo</th><th style="text-align:right">Kg</th><th style="text-align:right">Tn</th><th style="text-align:right">$/tn</th><th style="text-align:right">Importe</th></tr></thead><tbody>${ingRows||'<tr><td colspan=5 style="color:#888">Sin cosecha.</td></tr>'}</tbody></table>
+      <h3>Gastos</h3>
+      <table><tbody>${d.gastosComunes.map(g=>`<tr><td>${esc(g.concepto)}</td><td style="text-align:right">${fmt$(g.monto)}</td></tr>`).join('')}${costosSist?`<tr><td>Costos del sistema (labores/insumos)</td><td style="text-align:right">${fmt$(costosSist)}</td></tr>`:''}<tr><td>Aportes de socios</td><td style="text-align:right">${fmt$(aportesTot)}</td></tr><tr style="font-weight:700"><td>Total gastos</td><td style="text-align:right">${fmt$(gastosTot)}</td></tr></tbody></table>
+      <h3>Aportes de cada socio</h3>
+      <table><thead><tr><th>Socio</th><th>Tipo</th><th>Concepto</th><th style="text-align:right">Monto</th></tr></thead><tbody>${apRows}</tbody></table>
+      <h3>Reparto por socio</h3>
+      <table><thead><tr><th>Socio</th><th style="text-align:right">Particip.</th><th style="text-align:right">Aportó</th><th style="text-align:right">% del ingreso</th><th style="text-align:right">Ganancia</th><th style="text-align:right">Neto a cobrar/(poner)</th></tr></thead><tbody>${socRows}</tbody></table>
+      <p class="foot">“Neto” = su % del ingreso menos lo que aportó. “Ganancia” = su % del resultado. Documento interno de gestión (AgroCore) — no es un comprobante fiscal.</p>
+      <script>window.onload=function(){setTimeout(function(){window.print();},300);}<\/script>
+    </body></html>`);
+  win.document.close();
+}
+async function socLiqGuardar(){
+  const d=_socLiqRead(); const id=state._liqId;
+  const sociosPrev=(state._liqData?.sociedad?.socios)||[];
+  const socios=d.socios.map(s=>{ const prev=sociosPrev.find(x=>x.nombre===s.nombre)||{}; return { nombre:s.nombre, aporta:prev.aporta||null, participacion:s.participacion }; });
+  const body={ socios, liquidacion:{ precioTnDefault:d.precioDef||null, precios:d.precios, gastosComunes:d.gastosComunes, aportes:d.aportes, incluirCostosSistema:d.incluir, notas:(state._liqData?.config?.notas)||null } };
+  try{ await api('/api/sociedades/'+id+'/liquidacion',{method:'PUT',body:JSON.stringify(body)}); toast('Liquidación guardada','success'); delete state.cache.sociedades; socLiquidacion(id); }catch(e){ toast(e.message,'error'); }
+}
+
 pages.campos = async function() {
   setHeader('Campos y lotes', 'Superficie productiva');
   if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('campos','Campos'); return; }
@@ -19337,6 +19679,8 @@ async function viajeForm(id=null) {
   if (!state.cache.productos) { try { state.cache.productos = (await api('/api/productos')).data || []; } catch { state.cache.productos = []; } }
   if (!state.cache.contratosCereal) { try { state.cache.contratosCereal = (await api('/api/contratos-cereal')).data || []; } catch { state.cache.contratosCereal = []; } }
   if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data || []; } catch { state.cache.clientes = []; } }
+  if (!state.cache.sociedades) { try { state.cache.sociedades = (await api('/api/sociedades')).data || []; } catch { state.cache.sociedades = []; } }
+  const _socsV = (state.cache.sociedades || []).filter(s => s.activa !== false);
   const _camps = state.cache.campanas || [];
   const _contratos = (state.cache.contratosCereal || []).filter(c => c.estado !== 'anulado');
   const _clientesV = (state.cache.clientes || []).slice().sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||''));
@@ -19447,6 +19791,9 @@ async function viajeForm(id=null) {
         <div class="col-span-2"><label class="label">Pagador del flete</label>
           <input id="f-pagador" class="input" value="${esc(it.pagadorFlete||'')}" placeholder="Quien paga el flete (ej. Cliente, Acopio, nombre)"/>
         </div>
+        ${_socsV.length?`<div class="col-span-4"><label class="label">Sociedad / UTE (opcional)</label>
+          <select id="f-sociedad" class="input"><option value="">— Ninguna —</option>${_socsV.map(s=>`<option value="${esc(s.id)}" ${it.sociedadId===s.id?'selected':''}>${esc(s.nombre)}${s.ciclo?(' · '+esc(s.ciclo)):''}</option>`).join('')}</select>
+          <div class="text-[11px] text-slate-500 mt-0.5">Imputá esta carta de porte a una sociedad para que sume a su cosecha (útil si la CP salió de un socio).</div></div>`:''}
       </div>
 
       <!-- 5) TRANSPORTE -->
@@ -19741,6 +20088,7 @@ async function viajeSave(id) {
     destino:         $('#f-des').value.trim() || null,
     producto:        $('#f-prod').value.trim() || null,
     campanaId:        ($('#f-origtipo')?.value === 'campana')  ? ($('#f-campana')?.value || null) : null,
+    sociedadId:       $('#f-sociedad')?.value || null,
     depositoOrigenId: ($('#f-origtipo')?.value === 'deposito') ? ($('#f-origdep')?.value || null) : null,
     origenDepositos:  ($('#f-origtipo')?.value === 'multidep') ? viajeReadOrigRows() : null,
     // Peso Neto (origen) es la carga que viaja: alimenta tanto cantidad (kg carga)
