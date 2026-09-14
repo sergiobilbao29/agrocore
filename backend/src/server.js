@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.201.0';
-const AGROCORE_BUILD = new Date('2026-09-11').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.202.0';
+const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -17422,6 +17422,27 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       const sumaPagos = d.pagos.reduce((a, p) => a + Number(p.monto || 0), 0);
       if (Math.abs(sumaPagos - d.monto) > 0.02) {
         return res.status(400).json({ ok: false, error: `La suma de los medios de cobro (${sumaPagos.toFixed(2)}) no coincide con el monto total (${d.monto.toFixed(2)})` });
+      }
+    }
+    // Validación: al cobrar con un CHEQUE de terceros, el importe aplicado debe
+    // coincidir con el VALOR real del cheque. Evita cerrar una deuda/guía por su
+    // total usando un cheque de otro importe (bug reportado). Si el cheque no
+    // cubre todo, hay que hacer un cobro PARCIAL por el valor del cheque.
+    {
+      const _fmt = (n) => '$' + Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const _legsChk = (Array.isArray(d.pagos) && d.pagos.length)
+        ? d.pagos
+        : [{ metodo: d.metodo, monto: d.monto, chequeId: d.chequeId }];
+      for (const leg of _legsChk) {
+        if (leg.metodo === 'cheque' && leg.chequeId) {
+          const ch = await prisma.cheque.findFirst({ where: { id: leg.chequeId, companyId: req.companyId }, select: { monto: true, numero: true } });
+          if (ch && Math.abs(Number(ch.monto || 0) - Number(leg.monto || 0)) > 0.02) {
+            return res.status(400).json({ ok: false, error:
+              `El cheque N° ${ch.numero || ''} es de ${_fmt(ch.monto)}, pero estás aplicando ${_fmt(leg.monto)}. ` +
+              `El importe cobrado con un cheque debe ser igual al valor del cheque. ` +
+              `Si no cubre el total, hacé un cobro parcial por ${_fmt(ch.monto)}.` });
+          }
+        }
       }
     }
     if (sumaCreditos > sumaAplicada + 0.01) {

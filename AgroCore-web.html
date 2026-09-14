@@ -2831,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/09/2026',
+      titulo:'🧾 v2.202.0 — Cobro con cheque: toma el valor del cheque (y lo valida)',
+      desc:'Cobrar con cheque ahora es a prueba de errores. <b>1) Autocompletado:</b> al elegir (o cargar) un cheque en la pantalla de cobro/pago, el <b>total a cobrar se ajusta solo al valor del cheque</b>. Si el cheque es menor al saldo (por ejemplo, cobrás una guía y entregan un cheque parcial), queda como <b>cobro parcial</b> y el resto sigue pendiente — sin tener que corregir el importe a mano. Funciona con un solo cheque y con <b>varios medios/cheques</b> (el total sigue la suma). <b>2) Validación:</b> si el importe aplicado con un cheque no coincide con su valor real, el sistema avisa (“El cheque N° X es de $… pero estás aplicando $…”) y no deja cerrar la deuda por un total distinto. Antes, al asociar un cheque de menor importe a una guía, la tomaba como saldada por el total (sobrepagada); eso ya no puede pasar.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/09/2026',
       titulo:'📦 v2.201.0 — Stock realmente compartido en depósitos compartidos',
       desc:'Ahora un <b>depósito compartido</b> tiene un <b>único pozo de stock común a todas las empresas</b>. Si una empresa compra (ej. GasOil o un insumo) a un depósito compartido, esa existencia la <b>ven y descuentan todas</b> las empresas que lo usan — ya no queda un contador por empresa. El sistema unifica el mismo insumo por <b>nombre + unidad</b>, así que alcanza con que el producto se llame igual en cada empresa (lo garantiza copiar los catálogos desde <b>Sistema → Copiar configuración entre empresas</b>). Los depósitos <b>privados</b> siguen exactamente igual (stock por empresa).' },
@@ -17300,12 +17303,50 @@ function pagoLegMetodoChange(sel){ const row=sel.closest('[data-leg]'); const re
 function pagoLegChequeChange(sel){ const opt=sel.selectedOptions?.[0]; const m=Number(opt?.dataset?.monto||0); const row=sel.closest('[data-leg]'); const mi=row?.querySelector('[data-leg-monto]'); if(mi && m>0 && !Number(mi.value)){ mi.value=m; pagoLegRecalc(); } }
 // Pago con producto (medio dividido): monto = cantidad × precio.
 function pagoLegProdSync(inp){ const row=inp.closest('[data-leg]'); if(!row) return; const cant=Number(row.querySelector('[data-leg-prod-cant]')?.value||0); const pre=Number(row.querySelector('[data-leg-prod-precio]')?.value||0); const mi=row.querySelector('[data-leg-monto]'); if(mi && cant>0 && pre>0){ mi.value=Math.round(cant*pre*100)/100; } pagoLegRecalc(); }
+// Al ELEGIR o CARGAR un cheque en el cobro/pago SIMPLE, el importe sigue el VALOR del
+// cheque: un cheque por menos que el saldo queda como cobro/pago PARCIAL que coincide con
+// el cheque. Así, cobrando una guía por su total, si el cheque es menor, no se cierra la
+// guía por el total (bug reportado) sino que queda el saldo pendiente.
+function pcChequeAutoTotal(monto){
+  const m=Number(monto||0); if(!(m>0)) return;
+  const inp=document.getElementById('pc-total-pago'); if(!inp) return;
+  // Solo autocompletamos cuando hay 0 o 1 comprobante tildado (caso típico: una guía o
+  // un cobro a cuenta). Con varias facturas tildadas dejamos que el usuario distribuya.
+  const d=state._pagoCobroData||{};
+  const tild=Object.keys(d.tildados||{}).filter(k=>d.tildados[k]);
+  if(tild.length>1) return;
+  inp.value=m.toFixed(2);
+  try{ pagoCobroTotalManual((d.modo)||'cobro'); }catch{}
+}
 function pagoLegRecalc(){
-  const target=Number(document.getElementById('pc-total-pago')?.value||0);
+  const inpTotal=document.getElementById('pc-total-pago');
   const suma=[...document.querySelectorAll('#pc-legs-rows [data-leg] [data-leg-monto]')].reduce((a,i)=>a+Number(i.value||0),0);
+  // Si hay UN SOLO comprobante tildado (caso típico: una guía), el total a cobrar/pagar
+  // sigue la suma de los medios (cheques): queda como cobro/pago PARCIAL que coincide.
+  if(inpTotal && !pagoLegRecalc._sync){
+    const d=state._pagoCobroData||{};
+    const tild=Object.keys(d.tildados||{}).filter(k=>d.tildados[k]);
+    if(tild.length===1 && suma>0){
+      const it=(d.comprobantes||[])[tild[0]]||{};
+      if(!it.esCredito){
+        const saldo=Number(it.saldoPendiente||0);
+        const nuevo=(saldo>0.01) ? Math.min(suma, saldo) : suma;
+        if(Math.abs(Number(inpTotal.value||0)-nuevo)>0.01){
+          pagoLegRecalc._sync=true;
+          inpTotal.value=nuevo.toFixed(2); inpTotal.dataset.touched='1';
+          const impEl=document.querySelector(`.pc-importe[data-idx="${tild[0]}"]`);
+          if(impEl) impEl.value=nuevo.toFixed(2);
+          try{ pagoCobroRecalcular(); }catch{}
+          pagoLegRecalc._sync=false;
+        }
+      }
+    }
+  }
+  const target=Number(inpTotal?.value||0);
+  const esPago=(state._pagoCobroData?.modo==='pago');
   const el=document.getElementById('pc-legs-total');
   if(el){ const dif=Math.round((target-suma)*100)/100;
-    el.innerHTML = `Suma medios: <b>${fmt$(suma)}</b> · Total a pagar: <b>${fmt$(target)}</b> · ${Math.abs(dif)<0.01?'<span class="text-emerald-700">✅ coincide</span>':(dif>0?`<span class="text-amber-700">faltan ${fmt$(dif)}</span>`:`<span class="text-red-700">sobran ${fmt$(-dif)}</span>`)}`;
+    el.innerHTML = `Suma medios: <b>${fmt$(suma)}</b> · Total a ${esPago?'pagar':'cobrar'}: <b>${fmt$(target)}</b> · ${Math.abs(dif)<0.01?'<span class="text-emerald-700">✅ coincide</span>':(dif>0?`<span class="text-amber-700">faltan ${fmt$(dif)}</span>`:`<span class="text-red-700">sobran ${fmt$(-dif)}</span>`)}`;
   }
 }
 function pagoDividirToggle(modo){
@@ -17366,7 +17407,7 @@ function pagoCobroMetodoCambio(modo) {
         </div>
         <div id="pc-cheque-existente" class="${defExistente?'':'hidden'}">
           <label class="label">Cheque a entregar</label>
-          <select id="pc-cheque" class="input">
+          <select id="pc-cheque" class="input" onchange="pcChequeAutoTotal(this.selectedOptions[0]?.dataset.monto)">
             <option value="">— Seleccionar —</option>
             ${enCartera.map(c => `<option value="${esc(c.id)}" data-monto="${c.monto||0}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}${c.tipo==='electronico'?' 📱':' 📝'}${/emitido/i.test(c.estado||'')?' (propio)':' (terceros)'}</option>`).join('')}
           </select>
@@ -17379,7 +17420,7 @@ function pagoCobroMetodoCambio(modo) {
               <datalist id="pc-chn-banco-list">${((state.cache.catalogos||[]).filter(c=>c.tipo==='Banco').map(c=>`<option value="${esc(c.nombre)}">`)).join('')}</datalist>
             </div>
             <div><label class="label text-xs">Número *</label><input id="pc-chn-numero" class="input" placeholder="Ej: 00012345"/></div>
-            <div><label class="label text-xs">Monto</label><input id="pc-chn-monto" type="number" step="0.01" class="input" placeholder="Auto: total a pagar"/></div>
+            <div><label class="label text-xs">Monto</label><input id="pc-chn-monto" type="number" step="0.01" class="input" placeholder="Auto: total a pagar" oninput="pcChequeAutoTotal(this.value)"/></div>
             <div><label class="label text-xs">Fecha de pago *</label><input id="pc-chn-fpago" type="date" class="input"/></div>
             <div class="col-span-2"><label class="label text-xs">Tipo</label>
               <select id="pc-chn-tipo" class="input">
@@ -17406,7 +17447,7 @@ function pagoCobroMetodoCambio(modo) {
               <datalist id="pc-chn-banco-list">${((state.cache.catalogos||[]).filter(c=>c.tipo==='Banco').map(c=>`<option value="${esc(c.nombre)}">`)).join('')}</datalist>
             </div>
             <div><label class="label text-xs">Número *</label><input id="pc-chn-numero" class="input" placeholder="Ej: 00012345"/></div>
-            <div><label class="label text-xs">Monto</label><input id="pc-chn-monto" type="number" step="0.01" class="input" placeholder="Auto: total a cobrar"/></div>
+            <div><label class="label text-xs">Monto</label><input id="pc-chn-monto" type="number" step="0.01" class="input" placeholder="Auto: total a cobrar" oninput="pcChequeAutoTotal(this.value)"/></div>
             <div><label class="label text-xs">Fecha de pago *</label><input id="pc-chn-fpago" type="date" class="input"/></div>
             <div><label class="label text-xs">CUIT librador</label><input id="pc-chn-cuit" class="input" placeholder="Opcional"/></div>
             <div><label class="label text-xs">Librador</label><input id="pc-chn-librador" class="input" placeholder="Nombre del firmante"/></div>
@@ -17421,10 +17462,11 @@ function pagoCobroMetodoCambio(modo) {
         </div>
         <div id="pc-cheque-existente" class="hidden">
           <label class="label">Cheque ya cargado en cartera</label>
-          <select id="pc-cheque" class="input">
+          <select id="pc-cheque" class="input" onchange="pcChequeAutoTotal(this.selectedOptions[0]?.dataset.monto)">
             <option value="">— Seleccionar —</option>
-            ${enCartera.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}
+            ${enCartera.map(c => `<option value="${esc(c.id)}" data-monto="${c.monto||0}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)} · vto ${c.fechaPago?fmtDate(c.fechaPago):'sin fecha'}</option>`).join('')}
           </select>
+          <div class="text-[11px] text-blue-700 mt-1">💡 El total a cobrar se ajusta al valor del cheque (queda como cobro parcial si es menor al saldo).</div>
           ${!enCartera.length ? '<div class="text-xs text-amber-700 mt-1">No hay cheques en cartera. Usá la opción "Cargar nuevo" arriba.</div>' : ''}
         </div>`;
     }
