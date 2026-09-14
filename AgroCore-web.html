@@ -2831,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
+      titulo:'🔄 v2.205.0 — Guía: recalcular pagos desde la cuenta corriente',
+      desc:'Si por idas y vueltas (deshacer/rehacer cobros, cheques recargados) los <b>pagos de una guía quedaron desfasados</b> de su cuenta corriente, ahora hay un botón <b>“🔄 Recalcular pagos”</b> en la ventana de Pagos a cuenta de la guía. Reconstruye la lista de pagos tomando como fuente real los cobros/pagos que figuran en la <b>cuenta corriente</b> del cliente/proveedor aplicados a esa guía, así el <b>pagado y el saldo de la guía coinciden con la cuenta corriente</b>. Nota: un cobro hecho “a cuenta” (sin tildar la guía) queda como saldo del cliente y no se imputa a la guía; para que cuente en la guía, cobrá tildándola.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/09/2026',
       titulo:'🧮 v2.204.0 — Guía DT-e: total del negocio y cuenta que se liquida',
       desc:'La <b>Guía de hacienda</b> ahora muestra las dos cuentas del negocio: el <b>total del negocio</b> (cabezas × kilos × precio, con IVA) y la <b>cuenta que se liquida / neto a cobrar</b>. Cargás el <b>achique/recorte en kilos</b> (con su $/kg, o se toma el precio promedio del negocio) y las <b>retenciones</b> como monto, y el sistema calcula: <b>Total del negocio − Achique = Base</b>, <b>Base + IVA − Retenciones = Neto a cobrar/liquidar</b>. La cuenta corriente estimada y el saldo de la guía pasan a usar ese <b>neto</b>, así lo que cobrás cierra la guía por el valor real. Se ve en el formulario (en vivo mientras cargás) y en el detalle de la guía.' },
@@ -30712,7 +30715,7 @@ async function guiaPagos(id){
       ${tieneContacto
         ? `<div class="text-[12px] text-slate-600 bg-slate-50 border rounded-lg p-3">💡 El ${esCliente?'cobro':'pago'} usa la pantalla completa (caja del catálogo, cuenta bancaria, cheque con sus datos, varios medios) y genera el ${esCliente?'recibo':'la orden de pago'} en Movimientos de ${esCliente?'ventas':'compras'}. Queda reflejado acá automáticamente.</div>`
         : `<div class="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Esta guía no tiene cliente/proveedor con cuenta corriente (ej. frigorífico), así que no se registran cobros/pagos.</div>`}`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>${(tieneContacto && can('finanzas:create') && g.saldoEstimado>0)?`<button class="btn btn-primary" onclick='guiaPagoFull(${JSON.stringify(g.contactoTipo)},${JSON.stringify(g.contactoId)},${JSON.stringify(g.id)})'>💰 ${accion}</button>`:''}` });
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>${(tieneContacto&&can('stock:update'))?`<button class="btn btn-ghost text-xs" title="Reconstruye los pagos de la guía desde la cuenta corriente (si quedaron desfasados)" onclick='guiaResyncPagos(${JSON.stringify(id)})'>🔄 Recalcular pagos</button>`:''}${(tieneContacto && can('finanzas:create') && g.saldoEstimado>0)?`<button class="btn btn-primary" onclick='guiaPagoFull(${JSON.stringify(g.contactoTipo)},${JSON.stringify(g.contactoId)},${JSON.stringify(g.id)})'>💰 ${accion}</button>`:''}` });
   state._gpEdit=null;
 }
 // Abre la pantalla COMPLETA de cobro/pago (misma de Cuentas a cobrar/pagar) para la
@@ -30763,6 +30766,12 @@ async function guiaPagoAdd(id){
 async function guiaPagoDel(id,pagoId){
   if(!confirm('¿Borrar este pago a cuenta?')) return;
   try{ await api('/api/guias-hacienda/'+id+'/pagos/'+pagoId,{method:'DELETE'}); toast('Pago borrado','success'); closeModal(); await pages.guiasHacienda(); guiaPagos(id); }catch(e){ toast(e.message,'error'); }
+}
+// Reconstruye los pagos de la guía desde la cuenta corriente (fuente real). Útil si por
+// idas y vueltas (deshacer/rehacer cobros) la guía quedó desfasada de la CC.
+async function guiaResyncPagos(id){
+  if(!confirm('Reconstruye los pagos de esta guía tomando los cobros/pagos que figuran en su cuenta corriente. ¿Continuar?')) return;
+  try{ await api('/api/guias-hacienda/'+id+'/resync-pagos',{method:'POST'}); toast('Pagos recalculados desde la cuenta corriente','success'); delete state.cache.ctasCtes; await pages.guiasHacienda(); guiaPagos(id); }catch(e){ toast(e.message,'error'); }
 }
 
 // ---- Vincular con liquidación (venta/faena) o factura de compra ----

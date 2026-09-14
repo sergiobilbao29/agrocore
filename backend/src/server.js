@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.204.0';
+const AGROCORE_VERSION = '2.205.0';
 const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9913,6 +9913,35 @@ app.delete('/api/guias-hacienda/:id/pagos/:pagoId', requireCompany, requirePermi
       await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: `GUIAHPAY-${req.params.pagoId}` } });
       // Revertir caja/banco y el comprobante generados por el pago.
       await _guiaPagoRevertirRecurso(tx, req, req.params.pagoId, cur.contactoId);
+    });
+    const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
+    res.json({ ok: true, data: _guiaConSaldo(full) });
+  } catch (e) { next(e); }
+});
+
+// RECALCULAR / RESINCRONIZAR los pagos de la guía desde la Cuenta Corriente.
+// La cuenta corriente es la fuente real: cada cobro/pago aplicado a la guía deja un
+// asiento (haber) con referencia GUIAH-<id> (cobros desde Ventas/Compras) o
+// GUIAHPAY-<pagoId> (pagos a cuenta del mini-form). Si por idas y vueltas la lista de
+// pagos de la guía quedó desfasada de la CC, este endpoint la reconstruye para que
+// coincidan: pagado en la guía = lo cobrado/pagado contra ella en la CC.
+app.post('/api/guias-hacienda/:id/resync-pagos', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
+    const _metodoDe = (obs) => { const m = /Cobro via (\w+)|Pago via (\w+)|\((\w+)\)/i.exec(obs || ''); return (m && (m[1] || m[2] || m[3]) || 'cobro').toLowerCase(); };
+    await prisma.$transaction(async (tx) => {
+      // Cobros hechos desde Ventas/Compras aplicados a esta guía (referencia GUIAH-<id>, haber > 0).
+      const ccCobros = await tx.ctaCte.findMany({ where: { companyId: req.companyId, referencia: `GUIAH-${cur.id}`, haber: { gt: 0 } }, orderBy: { fecha: 'asc' } });
+      // Borrar los pagos "espejo" de la CC (los del mini-form GUIAHPAY se conservan).
+      await tx.guiaHaciendaPago.deleteMany({ where: { guiaId: cur.id, observaciones: 'Cobro desde Cuenta corriente' } });
+      for (const cc of ccCobros) {
+        await tx.guiaHaciendaPago.create({ data: {
+          guiaId: cur.id, companyId: req.companyId, fecha: cc.fecha, monto: _round2(cc.haber),
+          metodo: _metodoDe(cc.observaciones || cc.detalle), referencia: `GUIAH-${cur.id}`,
+          observaciones: 'Cobro desde Cuenta corriente',
+        }});
+      }
     });
     const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
     res.json({ ok: true, data: _guiaConSaldo(full) });
