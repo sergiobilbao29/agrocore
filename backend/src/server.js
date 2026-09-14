@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.211.0';
+const AGROCORE_VERSION = '2.212.0';
 const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17541,7 +17541,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
             moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
             haber: cashPortion,
             referencia: cc.referencia, pagado: true,
-            observaciones: 'Pago via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
+            observaciones: 'Pago via ' + _medioResumenDe(d) + (d.observaciones ? ' · ' + d.observaciones : ''),
           }});
           // Unificación con Guías DT-e (compra): si el comprobante pagado es una guía,
           // el pago también queda registrado como pago de la guía (sin doble asiento).
@@ -17551,7 +17551,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
             if (g) {
               await tx.guiaHaciendaPago.create({ data: {
                 guiaId: g.id, companyId: req.companyId, fecha: d.fecha, monto: cashPortion,
-                metodo: d.metodo, referencia: cc.referencia, observaciones: 'Cobro desde Cuenta corriente',
+                metodo: _medioResumenDe(d), referencia: cc.referencia, observaciones: 'Cobro desde Cuenta corriente',
               }});
             }
           }
@@ -17801,6 +17801,15 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
   } catch (e) { next(e); }
 });
 
+// Resumen legible del/los medio(s) de un cobro/pago, para mostrar en el pago de la guía.
+// Con varios medios (d.pagos) junta los distintos: ej. "efectivo + cheque".
+function _medioResumenDe(d) {
+  const legs = (Array.isArray(d.pagos) && d.pagos.length) ? d.pagos : [{ metodo: d.metodo }];
+  const norm = (m) => (m === 'cheque_nuevo' ? 'cheque' : (m || 'efectivo'));
+  const distintos = [...new Set(legs.map(l => norm(l.metodo)))];
+  return distintos.join(' + ');
+}
+
 // === POST registrar cobro de cliente (multi-comprobante + multi-metodo) ===
 // Mismo esquema que pago a proveedor pero inverso.
 app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
@@ -17922,7 +17931,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
             moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
             haber: cashPortion,
             referencia: cc.referencia, pagado: true,
-            observaciones: 'Cobro via ' + d.metodo + (d.observaciones ? ' · ' + d.observaciones : ''),
+            observaciones: 'Cobro via ' + _medioResumenDe(d) + (d.observaciones ? ' · ' + d.observaciones : ''),
           }});
           // Unificación con Guías DT-e: si el comprobante cobrado es una guía de
           // hacienda, registramos el cobro TAMBIÉN como pago de la guía para que la
@@ -17934,7 +17943,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
             if (g) {
               await tx.guiaHaciendaPago.create({ data: {
                 guiaId: g.id, companyId: req.companyId, fecha: d.fecha, monto: cashPortion,
-                metodo: d.metodo, referencia: cc.referencia, observaciones: 'Cobro desde Cuenta corriente',
+                metodo: _medioResumenDe(d), referencia: cc.referencia, observaciones: 'Cobro desde Cuenta corriente',
               }});
             }
           }

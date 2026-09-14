@@ -2833,6 +2833,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
+      titulo:'🧾 v2.212.0 — Cobro con varios medios: método correcto y cheques en el recibo',
+      desc:'Cuando cobrás con <b>varios medios</b> (ej. efectivo + varios cheques), ahora el pago figura con el <b>método real</b> (“efectivo + cheque”) en vez de mostrar todo como efectivo — tanto en la guía como en la cuenta corriente. Y el <b>recibo</b> ahora <b>detalla los cheques</b> entregados (N°, banco, vencimiento e importe) en pantalla, impresión y PDF.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/09/2026',
       titulo:'📄 v2.211.0 — Sociedades: liquidación imprimible, instructivo y ayuda',
       desc:'Cerramos el módulo <b>Sociedades / UTE</b>: la liquidación ahora se puede <b>imprimir / exportar a PDF</b> (con cosecha, ingreso, gastos, resultado y el reparto por socio) para pasarle a cada uno. Sumamos un <b>instructivo paso a paso</b> (Ayuda → Instructivos → “Sociedades / UTE”) para implementarlo y cargarlo bien, y el <b>asistente</b> y el <b>manual</b> ya lo explican.' },
@@ -18003,6 +18006,7 @@ function _opMetodoDetalle(op){
   if (m==='efectivo') return 'Efectivo'+(op.caja?' · caja '+op.caja:'');
   if (m==='transferencia') return 'Transferencia bancaria'+(op.bancoNombre?' · '+op.bancoNombre:'');
   if (m==='cheque') return 'Cheque'+(op.chequeInfo?' · '+op.chequeInfo:'');
+  if (m==='varios') return 'Varios medios'+(op.chequeInfo?' · '+op.chequeInfo:'');
   if (m==='cereal') return 'Entrega de cereal';
   if (m==='producto') return 'Pago con producto (especie)';
   if (m==='intercompany') return 'Cubierto por otra firma del grupo';
@@ -18324,6 +18328,9 @@ function _recHTML(r){
       <div style="margin-top:4px"><b>En concepto de:</b> ${comps}</div>
       <div style="margin-top:2px;color:#475569"><b>Forma de cobro:</b> ${esc(_opMetodoDetalle({metodo:r.metodo, bancoNombre:r.bancoNombre, chequeInfo:r.chequeInfo, caja:r.caja}))}</div>
     </div>
+    ${(r.cheques&&r.cheques.length)?`<table style="width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px">
+      <thead><tr style="background:#f1f5f9"><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left">Cheque N°</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left">Banco</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left">Vto.</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right">Importe</th></tr></thead>
+      <tbody>${r.cheques.map(c=>`<tr><td style="border:1px solid #cbd5e1;padding:4px 6px">${esc(c.nroCheque||'')}</td><td style="border:1px solid #cbd5e1;padding:4px 6px">${esc(c.banco||'')}</td><td style="border:1px solid #cbd5e1;padding:4px 6px">${c.fechaPago?fmtDate(c.fechaPago):'—'}</td><td style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right">${fmt$(c.importe||0)}</td></tr>`).join('')}</tbody></table>`:''}
     <div style="background:#166534;color:#fff;padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;font-size:15px;font-weight:bold;margin-bottom:24px">
       <span>TOTAL RECIBIDO</span><span>${fmt$(r.monto)}</span></div>
     ${r.obs?`<div style="font-size:11px;color:#64748b;margin-bottom:16px">Observaciones: ${esc(r.obs)}</div>`:''}
@@ -18355,6 +18362,11 @@ function _recBuildPDF(r){
   const comps='En concepto de: '+((r.comprobantes||[]).map(c=>c.detalle).join('  ·  ')||'Cobro a cuenta');
   const compL=doc.splitTextToSize(comps, W-2*M); doc.text(compL, M, y); y+=compL.length*11+4;
   doc.text('Forma de cobro: '+_opMetodoDetalle({metodo:r.metodo, bancoNombre:r.bancoNombre, chequeInfo:r.chequeInfo, caja:r.caja}), M, y); y+=18;
+  if (r.cheques && r.cheques.length){
+    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.text('Cheques entregados:', M, y); y+=12; doc.setFont('helvetica','normal');
+    for (const c of r.cheques){ doc.text('N° '+(c.nroCheque||'')+'  '+(c.banco||'')+(c.fechaPago?'  vto '+fmtDate(c.fechaPago):''), M+6, y); doc.text(fmt$(c.importe||0), W-M-12, y, {align:'right'}); y+=11; }
+    y+=6; doc.setFontSize(9);
+  }
   doc.setFillColor(22,101,52); doc.rect(M,y,W-2*M,26,'F'); doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(12);
   doc.text('TOTAL RECIBIDO', M+12, y+17); doc.text(fmt$(r.monto), W-M-12, y+17, {align:'right'}); doc.setTextColor(0,0,0); y+=54;
   doc.setDrawColor(150); doc.line(60,y,240,y); doc.line(W-240,y,W-60,y); y+=12; doc.setFont('helvetica','normal'); doc.setFontSize(8);
@@ -18660,9 +18672,19 @@ async function pagoCobroConfirmar(modo) {
       const cli = (state.cache.clientes||[]).find(c=>c.id===contactoId) || {};
       const recComps = comprobantes.map(c => { const it=(d.comprobantes||[]).find(x=>x.id===c.ctaCteId)||{}; return { detalle: it.detalle||it.referencia||'Comprobante', importe: c.importeAplicado }; });
       const rec = { numero:_rsp?.data?.numero||null, cliente: cli.razonSocial||'', clienteCuit: cli.cuit||'', clienteEmail: cli.email||'', clienteTel: cli.telefono||'',
-        fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', comprobantes: recComps };
+        fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', cheques: [], comprobantes: recComps };
       if (metodo==='transferencia' && body.bancoCuentaId){ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===body.bancoCuentaId); if(b) rec.bancoNombre=`${b.banco}${b.numero?' '+b.numero:''}`; }
-      if (metodo==='cheque' && body.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===body.chequeId); if(ch) rec.chequeInfo=`${ch.banco||''} N° ${ch.numero||ch.nroCheque||''}`; }
+      if (metodo==='cheque' && body.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===body.chequeId); if(ch){ rec.chequeInfo=`${ch.banco||''} N° ${ch.numero||ch.nroCheque||''}`; rec.cheques.push({ banco:ch.banco||'', nroCheque:ch.numero||ch.nroCheque||'', fechaPago:ch.fechaPago, importe:Number(ch.monto)||0 }); } }
+      // Cobro con VARIOS medios: detallar cheques (en cartera o nuevos) y el resumen de forma de cobro.
+      if (body.pagos && body.pagos.length){
+        rec.metodo='varios'; const partes=[];
+        for (const leg of body.pagos){
+          if (leg.metodo==='cheque' && leg.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===leg.chequeId)||{}; rec.cheques.push({ banco:ch.banco||'', nroCheque:ch.numero||ch.nroCheque||'', fechaPago:ch.fechaPago, importe:Number(ch.monto)||leg.monto }); }
+          else if (leg.metodo==='cheque' && leg.nuevoCheque){ rec.cheques.push({ banco:leg.nuevoCheque.banco||'', nroCheque:leg.nuevoCheque.nroCheque||'', fechaPago:leg.nuevoCheque.fechaPago, importe:Number(leg.nuevoCheque.monto)||leg.monto }); }
+        }
+        const nCh=rec.cheques.length, ef=body.pagos.filter(l=>l.metodo==='efectivo'||l.metodo==='externo'||l.metodo==='tarjeta').length, tr=body.pagos.filter(l=>l.metodo==='transferencia').length;
+        rec.chequeInfo=[ef?'efectivo':null, tr?'transferencia':null, nCh?(nCh+' cheque'+(nCh===1?'':'s')):null].filter(Boolean).join(' + ');
+      }
       try {
         const rd=await api('/api/documentos',{method:'POST',body:JSON.stringify({ tipo:'recibo_cobro', numero:rec.numero, fecha,
           contactoTipo:'cliente', contactoId, contactoNombre:rec.cliente, contactoEmail:rec.clienteEmail||null, total:monto, moneda:'ARS', datos:rec })});
