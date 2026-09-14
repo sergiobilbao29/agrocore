@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.203.0';
+const AGROCORE_VERSION = '2.204.0';
 const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9572,10 +9572,32 @@ async function _guiaCrearCCProvisoria(tx, guia, montoConIva) {
 }
 
 const _GUIA_INC = { renglones: true, pagos: { orderBy: { fecha: 'asc' } } };
+// Cuenta que se liquida (estimada) a partir del total del negocio:
+//   total del negocio (bruto)  −  achique (kilos × $/kg)  =  base
+//   base  +  IVA(base)  −  retenciones  =  NETO a cobrar/liquidar
+// Si no hay achique ni retenciones, el neto = bruto + IVA (igual que antes).
+function _guiaCalc(g) {
+  const bruto = _round2(g.totalEstimado || 0);                         // TOTAL DEL NEGOCIO
+  const kilos = _round2((g.renglones || []).reduce((a, r) => a + (Number(r.kilos) || 0), 0));
+  const precioProm = kilos > 0 ? bruto / kilos : 0;
+  const achiqueKg = Number(g.achiqueKg) || 0;
+  const achiquePrecioEf = (Number(g.achiquePrecio) > 0) ? Number(g.achiquePrecio) : precioProm;
+  const achiqueMonto = _round2(achiqueKg * achiquePrecioEf);
+  const base = _round2(Math.max(0, bruto - achiqueMonto));
+  const ivaLiquidacion = _round2(base * (Number(g.alicuotaIva) || 0) / 100);
+  const retenciones = _round2(Number(g.retencionesMonto) || 0);
+  const neto = _round2(base + ivaLiquidacion - retenciones);
+  return { bruto, kilos, precioProm: _round2(precioProm), achiqueKg,
+    achiquePrecio: _round2(achiquePrecioEf), achiqueMonto, base, ivaLiquidacion, retenciones, neto };
+}
 function _guiaConSaldo(g) {
-  const totalConIva = _round2((g.totalEstimado || 0) + (g.ivaEstimado || 0));
+  const c = _guiaCalc(g);
+  const totalConIva = _round2((g.totalEstimado || 0) + (g.ivaEstimado || 0)); // referencia histórica
   const pagado = _round2((g.pagos || []).reduce((a, p) => a + (Number(p.monto) || 0), 0));
-  return { ...g, totalConIva, pagado, saldoEstimado: _round2(totalConIva - pagado) };
+  // El neto a cobrar es la "cuenta que se liquida". Si nunca se cargó (guías viejas), cae al total con IVA.
+  const netoEstimado = (Number(g.netoEstimado) > 0) ? _round2(g.netoEstimado) : c.neto;
+  return { ...g, calc: c, totalNegocio: c.bruto, totalConIva, netoEstimado, pagado,
+    saldoEstimado: _round2(netoEstimado - pagado) };
 }
 
 // LISTA (filtros: estado, motivo, desde/hasta)
@@ -9619,6 +9641,9 @@ const _guiaSchema = z.object({
   frigorifico: z.string().nullable().optional(),
   frigorificoCuit: z.string().nullable().optional(),
   alicuotaIva: z.coerce.number().nonnegative().default(10.5),
+  achiqueKg: z.coerce.number().nonnegative().default(0),
+  achiquePrecio: z.coerce.number().nonnegative().default(0),
+  retencionesMonto: z.coerce.number().nonnegative().default(0),
   observaciones: z.string().nullable().optional(),
   archivoNombre: z.string().nullable().optional(),
   renglones: z.array(z.object({
@@ -9642,6 +9667,7 @@ app.post('/api/guias-hacienda', requireCompany, requirePermission('stock:create'
     const rows = _guiaRows(d.renglones, d.alicuotaIva);
     const totalEstimado = _round2(rows.reduce((a, r) => a + r.bruto, 0));
     const ivaEstimado = _round2(rows.reduce((a, r) => a + r.iva, 0));
+    const netoEstimado = _guiaCalc({ totalEstimado, renglones: rows, alicuotaIva: d.alicuotaIva, achiqueKg: d.achiqueKg, achiquePrecio: d.achiquePrecio, retencionesMonto: d.retencionesMonto }).neto;
     const estado = (d.motivo === 'faena' && d.sentido === 'egreso') ? 'en_frigorifico' : 'pendiente';
 
     const result = await prisma.$transaction(async (tx) => {
@@ -9652,13 +9678,14 @@ app.post('/api/guias-hacienda', requireCompany, requirePermission('stock:create'
         contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
         frigorifico: d.frigorifico || null, frigorificoCuit: d.frigorificoCuit || null,
         alicuotaIva: d.alicuotaIva, totalEstimado, ivaEstimado, estado,
+        achiqueKg: d.achiqueKg || 0, achiquePrecio: d.achiquePrecio || 0, retencionesMonto: d.retencionesMonto || 0, netoEstimado,
         ctacteRef: null, archivoNombre: d.archivoNombre || null, observaciones: d.observaciones || null,
       }});
       const movIds = await _guiaAplicarStock(tx, guia, rows);
       for (let i = 0; i < rows.length; i++) {
         await tx.guiaHaciendaRenglon.create({ data: { guiaId: guia.id, ...rows[i], haciendaMovId: movIds[i] || null } });
       }
-      await _guiaCrearCCProvisoria(tx, guia, totalEstimado + ivaEstimado);
+      await _guiaCrearCCProvisoria(tx, guia, netoEstimado);
       if (d.contactoId && d.contactoTipo && d.contactoTipo !== 'frigorifico') {
         await tx.guiaHacienda.update({ where: { id: guia.id }, data: { ctacteRef: `GUIAH-${guia.id}` } });
       }
@@ -9680,6 +9707,7 @@ app.put('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:upda
     const rows = _guiaRows(d.renglones, d.alicuotaIva);
     const totalEstimado = _round2(rows.reduce((a, r) => a + r.bruto, 0));
     const ivaEstimado = _round2(rows.reduce((a, r) => a + r.iva, 0));
+    const netoEstimado = _guiaCalc({ totalEstimado, renglones: rows, alicuotaIva: d.alicuotaIva, achiqueKg: d.achiqueKg, achiquePrecio: d.achiquePrecio, retencionesMonto: d.retencionesMonto }).neto;
     const estado = (d.motivo === 'faena' && d.sentido === 'egreso') ? 'en_frigorifico' : 'pendiente';
 
     await prisma.$transaction(async (tx) => {
@@ -9694,13 +9722,14 @@ app.put('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:upda
         contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
         frigorifico: d.frigorifico || null, frigorificoCuit: d.frigorificoCuit || null,
         alicuotaIva: d.alicuotaIva, totalEstimado, ivaEstimado, estado,
+        achiqueKg: d.achiqueKg || 0, achiquePrecio: d.achiquePrecio || 0, retencionesMonto: d.retencionesMonto || 0, netoEstimado,
         archivoNombre: d.archivoNombre || cur.archivoNombre || null, observaciones: d.observaciones || null,
       }});
       const movIds = await _guiaAplicarStock(tx, guia, rows);
       for (let i = 0; i < rows.length; i++) {
         await tx.guiaHaciendaRenglon.create({ data: { guiaId: guia.id, ...rows[i], haciendaMovId: movIds[i] || null } });
       }
-      await _guiaCrearCCProvisoria(tx, guia, totalEstimado + ivaEstimado);
+      await _guiaCrearCCProvisoria(tx, guia, netoEstimado);
     });
     const full = await prisma.guiaHacienda.findUnique({ where: { id: cur.id }, include: _GUIA_INC });
     res.json({ ok: true, data: _guiaConSaldo(full) });

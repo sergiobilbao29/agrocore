@@ -2831,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/09/2026',
+      titulo:'🧮 v2.204.0 — Guía DT-e: total del negocio y cuenta que se liquida',
+      desc:'La <b>Guía de hacienda</b> ahora muestra las dos cuentas del negocio: el <b>total del negocio</b> (cabezas × kilos × precio, con IVA) y la <b>cuenta que se liquida / neto a cobrar</b>. Cargás el <b>achique/recorte en kilos</b> (con su $/kg, o se toma el precio promedio del negocio) y las <b>retenciones</b> como monto, y el sistema calcula: <b>Total del negocio − Achique = Base</b>, <b>Base + IVA − Retenciones = Neto a cobrar/liquidar</b>. La cuenta corriente estimada y el saldo de la guía pasan a usar ese <b>neto</b>, así lo que cobrás cierra la guía por el valor real. Se ve en el formulario (en vivo mientras cargás) y en el detalle de la guía.' },
     { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
       titulo:'🔧 v2.203.0 — Cobro con cheque: arreglos al elegir/cargar el cheque',
       desc:'Corregimos dos errores al cobrar con cheque que aparecieron con la validación nueva: <b>1)</b> al <b>elegir un cheque ya cargado</b> en cartera, tiraba un error técnico (buscaba el cheque por un campo mal escrito) — ya valida bien el importe contra el valor del cheque. <b>2)</b> al <b>cargar un cheque nuevo recibido</b> desde la cobranza, decía “No pude crear el cheque: datos inválidos” porque enviaba mal el tipo/número del cheque — ahora lo crea correctamente como cheque de terceros en cartera y lo vincula a la cobranza. Aplica al cobro simple y al de varios medios.' },
@@ -30410,7 +30413,7 @@ pages.guiasHacienda = async function() {
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" id="guia-kpis"></div>
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
-        <thead><tr><th>Fecha</th><th>N° DT-e</th><th>Motivo</th><th>Campo</th><th>Contacto</th><th class="text-right">Cabezas</th><th class="text-right">Estimado</th><th class="text-right">Pagado</th><th>Estado</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>N° DT-e</th><th>Motivo</th><th>Campo</th><th>Contacto</th><th class="text-right">Cabezas</th><th class="text-right">Total negocio</th><th class="text-right">Neto a cobrar</th><th class="text-right">Pagado</th><th>Estado</th><th></th></tr></thead>
         <tbody id="guia-tbody"></tbody>
       </table>
     </div>`;
@@ -30442,7 +30445,8 @@ function guiaRender(){
       <td>${esc(guiaMotivoLabel(r.motivo))}</td><td>${esc(r.campo?.nombre||(r.campoId?'—':'—'))}</td>
       <td>${esc(r.titularOrigen||r.titularDestino||r.frigorifico||'—')}</td>
       <td class="text-right">${fmtN(cab)}</td>
-      <td class="text-right font-semibold">${fmt$(r.totalConIva)}</td>
+      <td class="text-right">${fmt$(r.totalConIva)}</td>
+      <td class="text-right font-semibold text-emerald-800">${fmt$(r.netoEstimado!=null?r.netoEstimado:r.totalConIva)}</td>
       <td class="text-right ${r.pagado?'text-blue-700':''}">${r.pagado?fmt$(r.pagado):'—'}</td>
       <td>${guiaEstadoBadge(r.estado)}</td>
       <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
@@ -30470,7 +30474,16 @@ async function guiaVer(id){
         <div class="col-span-2"><span class="text-slate-500 text-xs">Contacto</span><br>${esc(g.titularOrigen||g.titularDestino||g.frigorifico||'—')}</div>
       </div>
       <table class="data text-sm mb-3"><thead><tr><th>Categoría</th><th class="text-right">Cabezas</th><th class="text-right">Kg</th><th class="text-right">$/kg</th><th class="text-right">Bruto</th></tr></thead><tbody>${rows}</tbody>
-        <tfoot><tr class="font-semibold"><td>Total estimado (c/IVA)</td><td class="text-right">${fmtN((g.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0))}</td><td colspan="2"></td><td class="text-right">${fmt$(g.totalConIva)}</td></tr></tfoot></table>
+        <tfoot><tr class="font-semibold"><td>Total del negocio (c/IVA)</td><td class="text-right">${fmtN((g.renglones||[]).reduce((s,x)=>s+Number(x.cabezas||0),0))}</td><td colspan="2"></td><td class="text-right">${fmt$(g.totalConIva)}</td></tr></tfoot></table>
+      ${(()=>{ const c=g.calc||{}; return `<div class="p-3 bg-amber-50 rounded-lg border border-amber-200 mb-3 text-sm text-amber-900">
+        <div class="font-medium mb-1">🧮 Cuenta que se liquida (estimada)</div>
+        <div class="flex justify-between"><span>Total del negocio</span><b>${fmt$(c.bruto!=null?c.bruto:g.totalNegocio||0)}</b></div>
+        <div class="flex justify-between"><span>− Achique (${fmtN(c.achiqueKg||0)} kg${c.achiquePrecio?' × '+fmt$(c.achiquePrecio):''})</span><span>− ${fmt$(c.achiqueMonto||0)}</span></div>
+        <div class="flex justify-between border-t border-amber-200 pt-0.5"><span>Base imponible</span><span>${fmt$(c.base||0)}</span></div>
+        <div class="flex justify-between"><span>+ IVA</span><span>+ ${fmt$(c.ivaLiquidacion||0)}</span></div>
+        <div class="flex justify-between"><span>− Retenciones</span><span>− ${fmt$(c.retenciones||0)}</span></div>
+        <div class="flex justify-between border-t border-amber-300 pt-1 text-base font-bold text-emerald-800"><span>Neto a cobrar / liquidar</span><span>${fmt$(g.netoEstimado!=null?g.netoEstimado:(c.neto||0))}</span></div>
+      </div>`; })()}
       <div class="text-sm font-medium text-slate-700 mb-1">Pagos a cuenta — pagado ${fmt$(g.pagado)} · saldo estimado ${fmt$(g.saldoEstimado)}</div>
       <table class="data text-sm"><thead><tr><th>Fecha</th><th>Método</th><th>Ref.</th><th class="text-right">Monto</th></tr></thead><tbody>${pagos}</tbody></table>
       ${g.observaciones?`<div class="text-xs text-slate-500 mt-2">📝 ${esc(g.observaciones)}</div>`:''}`,
@@ -30566,10 +30579,26 @@ async function guiaForm(prefill=null){
           <tbody id="guia-rengs">${rengs.map(r=>rengRow(r)).join('')}</tbody></table>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 bg-slate-50 rounded-lg border mb-3">
-        <div><label class="label text-xs">Bruto estimado</label><div id="guia-t-bruto" class="text-base font-bold">$ 0,00</div></div>
-        <div><label class="label text-xs">IVA estimado</label><div id="guia-t-iva" class="text-base font-bold text-slate-600">$ 0,00</div></div>
-        <div><label class="label text-xs">Total estimado</label><div id="guia-t-total" class="text-base font-bold text-green-700">$ 0,00</div></div>
+        <div><label class="label text-xs">Bruto (total del negocio)</label><div id="guia-t-bruto" class="text-base font-bold">$ 0,00</div></div>
+        <div><label class="label text-xs">IVA s/ bruto</label><div id="guia-t-iva" class="text-base font-bold text-slate-600">$ 0,00</div></div>
+        <div><label class="label text-xs">Total c/IVA</label><div id="guia-t-total" class="text-base font-bold text-green-700">$ 0,00</div></div>
         <div class="text-xs text-slate-500 self-center" id="guia-t-hint"></div>
+      </div>
+      <div class="p-3 bg-amber-50 rounded-lg border border-amber-200 mb-3">
+        <div class="text-sm font-medium text-amber-900 mb-2">🧮 Cuenta que se liquida (estimada)</div>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-2">
+          <div><label class="label text-xs">Achique / recorte (kg)</label><input id="guia-achkg" type="number" step="0.01" class="input" value="${p.achiqueKg?p.achiqueKg:''}" placeholder="0" oninput="guiaRecalc()"/></div>
+          <div><label class="label text-xs">$/kg del achique</label><input id="guia-achpre" type="number" step="0.01" class="input" value="${p.achiquePrecio?p.achiquePrecio:''}" placeholder="auto: precio prom." oninput="guiaRecalc()"/></div>
+          <div><label class="label text-xs">Retenciones $</label><input id="guia-ret" type="number" step="0.01" class="input" value="${p.retencionesMonto?p.retencionesMonto:''}" placeholder="0" oninput="guiaRecalc()"/></div>
+        </div>
+        <div class="text-sm text-amber-900 space-y-0.5">
+          <div class="flex justify-between"><span>Total del negocio</span><b id="guia-l-neg">$ 0,00</b></div>
+          <div class="flex justify-between"><span>− Achique (<span id="guia-l-achkg">0</span> kg)</span><span id="guia-l-ach">$ 0,00</span></div>
+          <div class="flex justify-between border-t border-amber-200 pt-0.5"><span>Base imponible</span><span id="guia-l-base">$ 0,00</span></div>
+          <div class="flex justify-between"><span>+ IVA</span><span id="guia-l-iva">$ 0,00</span></div>
+          <div class="flex justify-between"><span>− Retenciones</span><span id="guia-l-ret">$ 0,00</span></div>
+          <div class="flex justify-between border-t border-amber-300 pt-1 text-base font-bold text-emerald-800"><span>Neto a cobrar / liquidar</span><span id="guia-l-neto">$ 0,00</span></div>
+        </div>
       </div>
       <div><label class="label">Observaciones</label><textarea id="guia-obs" class="input" rows="2">${esc(p.observaciones||'')}</textarea></div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="guiaSave()">💾 Guardar guía</button>` });
@@ -30609,11 +30638,24 @@ function guiaLeerRengs(){
   });
 }
 function guiaRecalc(){
-  const rs=guiaLeerRengs(); let bruto=0, iva=0;
-  rs.forEach(r=>{ bruto+=r.bruto; iva+=r.iva; const c=r.tr.querySelector('[data-r-bruto]'); if(c) c.textContent=r.bruto?fmt$(r.bruto):'—'; });
+  const rs=guiaLeerRengs(); let bruto=0, iva=0, kilos=0;
+  rs.forEach(r=>{ bruto+=r.bruto; iva+=r.iva; kilos+=r.kilos; const c=r.tr.querySelector('[data-r-bruto]'); if(c) c.textContent=r.bruto?fmt$(r.bruto):'—'; });
   const setT=(id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
   setT('guia-t-bruto',fmt$(bruto)); setT('guia-t-iva',fmt$(iva)); setT('guia-t-total',fmt$(bruto+iva));
   const sent=$('#guia-sentido')?.value; setT('guia-t-hint', sent==='ingreso'?'≈ a pagar (estimado)':'≈ a cobrar (estimado)');
+  // Cuenta que se liquida: bruto − achique(kg×$/kg) → base → +IVA → −retenciones → neto.
+  const precioProm = kilos>0 ? bruto/kilos : 0;
+  const achkg = Number($('#guia-achkg')?.value||0);
+  const achpreIn = Number($('#guia-achpre')?.value||0);
+  const achpre = achpreIn>0 ? achpreIn : precioProm;
+  const achMonto = Math.round(achkg*achpre*100)/100;
+  const base = Math.max(0, Math.round((bruto-achMonto)*100)/100);
+  const alicG = Number($('#guia-alic')?.value||10.5);
+  const ivaLiq = Math.round(base*alicG)/100;
+  const ret = Number($('#guia-ret')?.value||0);
+  const neto = Math.round((base+ivaLiq-ret)*100)/100;
+  setT('guia-l-neg',fmt$(bruto)); setT('guia-l-achkg',fmtN(achkg)); setT('guia-l-ach','− '+fmt$(achMonto));
+  setT('guia-l-base',fmt$(base)); setT('guia-l-iva','+ '+fmt$(ivaLiq)); setT('guia-l-ret','− '+fmt$(ret)); setT('guia-l-neto',fmt$(neto));
 }
 async function guiaSave(){
   const rengs=guiaLeerRengs().map(r=>({ categoria:r.categoria, cabezas:r.cabezas, kilos:r.kilos, precioKg:r.precioKg, alicuotaIva:r.alicuotaIva, bruto:r.bruto, iva:r.iva }));
@@ -30631,6 +30673,9 @@ async function guiaSave(){
     numeroDte: $('#guia-dte').value.trim()||null,
     especie: $('#guia-esp').value.trim()||null,
     alicuotaIva: Number($('#guia-alic').value||10.5),
+    achiqueKg: Number($('#guia-achkg')?.value||0),
+    achiquePrecio: Number($('#guia-achpre')?.value||0),
+    retencionesMonto: Number($('#guia-ret')?.value||0),
     contactoTipo, contactoId,
     frigorifico: $('#guia-frig').value.trim()||null, frigorificoCuit: $('#guia-frigcuit').value.trim()||null,
     renspaOrigen: $('#guia-rorig').value.trim()||null, renspaDestino: $('#guia-rdest').value.trim()||null,
@@ -30662,7 +30707,7 @@ async function guiaPagos(id){
     return `<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td><td class="text-right whitespace-nowrap">${acc}</td></tr>`;
   }).join('')||`<tr><td colspan="5" class="text-slate-400 text-center py-2">Sin pagos.</td></tr>`;
   openModal({ title:`💵 Pagos a cuenta — guía ${esc(g.numeroDte||'')}`, size:'max-w-2xl',
-    body:`<div class="text-sm mb-2">Total estimado ${fmt$(g.totalConIva)} · pagado ${fmt$(g.pagado)} · <b>saldo ${fmt$(g.saldoEstimado)}</b></div>
+    body:`<div class="text-sm mb-2">Total del negocio ${fmt$(g.totalConIva)} · <b>neto a cobrar ${fmt$(g.netoEstimado!=null?g.netoEstimado:g.totalConIva)}</b> · pagado ${fmt$(g.pagado)} · <b>saldo ${fmt$(g.saldoEstimado)}</b></div>
       <table class="data text-sm mb-3"><thead><tr><th>Fecha</th><th>Método</th><th>Ref.</th><th class="text-right">Monto</th><th></th></tr></thead><tbody>${pagos}</tbody></table>
       ${tieneContacto
         ? `<div class="text-[12px] text-slate-600 bg-slate-50 border rounded-lg p-3">💡 El ${esCliente?'cobro':'pago'} usa la pantalla completa (caja del catálogo, cuenta bancaria, cheque con sus datos, varios medios) y genera el ${esCliente?'recibo':'la orden de pago'} en Movimientos de ${esCliente?'ventas':'compras'}. Queda reflejado acá automáticamente.</div>`

@@ -1388,8 +1388,14 @@ model GuiaHacienda {
   frigorificoCuit String?
   // Comercial provisorio
   alicuotaIva     Float    @default(10.5)
-  totalEstimado   Float    @default(0)   // suma bruto de renglones (estimado)
+  totalEstimado   Float    @default(0)   // suma bruto de renglones (estimado) = TOTAL DEL NEGOCIO
   ivaEstimado     Float    @default(0)
+  // Cuenta que se liquida (estimada): al total del negocio se le descuenta el ACHIQUE
+  // (recorte/desbaste en kilos), al resto se le suma IVA y se le descuentan RETENCIONES.
+  achiqueKg        Float    @default(0)   // kilos de recorte/desbaste que descuenta el comprador
+  achiquePrecio    Float    @default(0)   // $/kg del achique (0 = usa precio promedio del negocio)
+  retencionesMonto Float    @default(0)   // total de retenciones (monto manual)
+  netoEstimado     Float    @default(0)   // neto a cobrar/liquidar estimado (base + IVA - retenciones)
   // Estado / vinculación
   estado          String   @default("pendiente")  // pendiente | vinculada | anulada | en_frigorifico | faena_cerrada
   liquidacionId   String?          // liquidación de hacienda vinculada (cierre fiscal)
