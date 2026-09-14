@@ -2832,6 +2832,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
+      titulo:'📩 v2.208.0 — Cobro con varios medios: elegir cheques ya en cartera',
+      desc:'En el cobro con <b>varios medios</b> (dividir), ahora podés elegir un <b>cheque recibido que ya está en cartera</b> (no solo cargar uno nuevo). Cada fila de cheque tiene dos opciones: <b>“Cheque recibido en cartera”</b> (lista los cheques de terceros en cartera con banco, N° y monto; al elegirlo completa el importe) o <b>“Cheque recibido nuevo”</b> (lo cargás ahí mismo). Así podés cobrar una guía entregando varios cheques que ya tenías cargados.' },
+    { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
       titulo:'💰 v2.207.0 — Guías/cobros: el saldo pendiente ahora es el real',
       desc:'Corregimos que al <b>cobrar/pagar</b> un comprobante ya cobrado en parte (típico en <b>guías DT-e</b>) el sistema traía el <b>total</b> en vez del <b>saldo pendiente</b>. Ahora, al elegir el comprobante, el importe viene con lo que <b>realmente falta</b> (resta los cobros/pagos ya aplicados). Además, el <b>saldo y lo pagado de la guía</b> se calculan directo desde la <b>cuenta corriente</b>, así siempre coinciden — incluido cuando aplicás un <b>saldo a favor</b> a la guía.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/09/2026',
@@ -17267,8 +17270,9 @@ function pagoLegRecursoHTML(metodo){
     const ctas=(state.cache.bancoCuentas||[]).filter(c=>c.activo!==false);
     return `<select class="input text-sm" data-leg-banco><option value="">— Cuenta —</option>${ctas.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre||c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select>`;
   }
-  if (metodo==='cheque') {   // solo pago: cheque ya en cartera
-    const chs=pagoChequesDisponibles();
+  if (metodo==='cheque') {   // cheque ya en cartera: pago (propio/terceros) o cobro (terceros recibidos)
+    const chs = esPago ? pagoChequesDisponibles()
+      : (state.cache.cheques||[]).filter(c => /en[_ ]?cartera/i.test(c.estado||''));
     return `<select class="input text-sm" data-leg-cheque onchange="pagoLegChequeChange(this)"><option value="">— Cheque en cartera —</option>${chs.map(c=>`<option value="${esc(c.id)}" data-monto="${c.monto||0}">${c.tipo==='propio'?'🧾':'📩'} N° ${esc(c.nroCheque||c.numero||'')} · ${esc(c.banco||'')} · ${fmt$(c.monto||0)}</option>`).join('')}</select>`;
   }
   if (metodo==='cheque_nuevo') {   // cheque nuevo: propio (pago) o recibido (cobro)
@@ -17301,7 +17305,7 @@ function pagoLegMetodoOptions(){
   const esPago = (state._pagoCobroData?.modo || 'pago') === 'pago';
   return `<option value="efectivo">💵 Efectivo</option>
     <option value="transferencia">🏛️ Transferencia</option>
-    ${esPago ? `<option value="cheque">💳 Cheque en cartera</option><option value="cheque_nuevo">🧾 Cheque nuevo (propio)</option>` : `<option value="cheque_nuevo">📩 Cheque recibido</option>`}
+    ${esPago ? `<option value="cheque">💳 Cheque en cartera</option><option value="cheque_nuevo">🧾 Cheque nuevo (propio)</option>` : `<option value="cheque">📩 Cheque recibido en cartera</option><option value="cheque_nuevo">📝 Cheque recibido nuevo</option>`}
     <option value="tarjeta">💳 Tarjeta</option>
     <option value="producto">🌾 Producto ${esPago?'(maíz, soja, lechón…)':'(recibido del cliente)'}</option>`;
 }
