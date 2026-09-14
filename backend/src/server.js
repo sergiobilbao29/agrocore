@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.206.0';
+const AGROCORE_VERSION = '2.207.0';
 const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5129,6 +5129,27 @@ app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas
     // Son la contrapartida de un pago, no un comprobante a pagar ni un crédito a favor.
     // (Los nuevos ya se guardan como pagado:true; esto cubre los viejos.)
     const items = itemsRaw.filter(x => !/^(pago|cobro) de /i.test(x.detalle || ''));
+    // Netear cobros/pagos PARCIALES ya aplicados: los contra-asientos "Cobro de…/Pago de…"
+    // comparten la 'referencia' del comprobante (típico en guías DT-e y cobros parciales),
+    // y están marcados pagado:true (no entran arriba). Restamos esos haberes del saldo
+    // pendiente del comprobante; si no, una guía/factura ya cobrada en parte muestra el total.
+    const refs = [...new Set(items.filter(i => i.referencia && Number(i.debe || 0) > 0).map(i => i.referencia))];
+    if (refs.length) {
+      const contra = await prisma.ctaCte.findMany({
+        where: { companyId: req.companyId, contactoTipo: tipo, ...(contactoId ? { contactoId } : {}), referencia: { in: refs }, haber: { gt: 0 }, debe: 0 },
+        select: { referencia: true, haber: true, detalle: true },
+      });
+      const cobradoPorRef = {};
+      for (const c of contra) {
+        if (!/^(pago|cobro) de /i.test(c.detalle || '')) continue;
+        cobradoPorRef[c.referencia] = (cobradoPorRef[c.referencia] || 0) + Number(c.haber || 0);
+      }
+      for (const it of items) {
+        if (it.referencia && cobradoPorRef[it.referencia] && Number(it.debe || 0) > 0) {
+          it.haber = Math.round((Number(it.haber || 0) + cobradoPorRef[it.referencia]) * 100) / 100;
+        }
+      }
+    }
     // Saldo a favor = créditos todavía no aplicados a una factura: pagos/cobros
     // "a cuenta" (referencia null) Y notas de crédito (referencia 'FACC'/'FAC-…').
     // Todos son asientos de haber puro (debe=0, haber>0). Una factura parcialmente
@@ -9602,6 +9623,30 @@ function _guiaConSaldo(g) {
     saldoEstimado: _round2(netoEstimado - pagado) };
 }
 
+// El saldo/pagado REAL de la guía sale de su cuenta corriente (referencia GUIAH-<id>):
+// saldo = Σ(debe − haber) de esos asientos. Así la guía coincide siempre con la cuenta
+// corriente, incluso si se aplicó un saldo a favor o hubo cobros parciales.
+async function _guiaAplicarSaldosCC(companyId, guias) {
+  const arr = Array.isArray(guias) ? guias : [guias];
+  const refs = arr.filter(g => g.contactoId).map(g => `GUIAH-${g.id}`);
+  if (!refs.length) return guias;
+  const rows = await prisma.ctaCte.findMany({
+    where: { companyId, referencia: { in: refs } },
+    select: { referencia: true, debe: true, haber: true },
+  });
+  const saldoByRef = {};
+  for (const r of rows) { const k = r.referencia; saldoByRef[k] = (saldoByRef[k] || 0) + (Number(r.debe || 0) - Number(r.haber || 0)); }
+  for (const g of arr) {
+    const s = saldoByRef[`GUIAH-${g.id}`];
+    if (s != null) {
+      const saldo = _round2(Math.max(0, s));
+      g.saldoEstimado = saldo;
+      g.pagado = _round2(Math.max(0, (Number(g.netoEstimado) || 0) - saldo));
+    }
+  }
+  return guias;
+}
+
 // LISTA (filtros: estado, motivo, desde/hasta)
 app.get('/api/guias-hacienda', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
@@ -9614,7 +9659,9 @@ app.get('/api/guias-hacienda', requireCompany, requirePermission('stock:read'), 
       if (req.query.hasta) { const h = new Date(String(req.query.hasta)); h.setHours(23, 59, 59, 999); where.fecha.lte = h; }
     }
     const data = await prisma.guiaHacienda.findMany({ where, include: _GUIA_INC, orderBy: { fecha: 'desc' } });
-    res.json({ ok: true, data: data.map(_guiaConSaldo) });
+    const mapped = data.map(_guiaConSaldo);
+    await _guiaAplicarSaldosCC(req.companyId, mapped);
+    res.json({ ok: true, data: mapped });
   } catch (e) { next(e); }
 });
 
@@ -9652,6 +9699,7 @@ app.get('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:read
     const g = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _GUIA_INC });
     if (!g) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
     const withSaldo = _guiaConSaldo(g);
+    await _guiaAplicarSaldosCC(req.companyId, withSaldo);
     await _guiaAdjuntarComprobantes(req.companyId, withSaldo);
     res.json({ ok: true, data: withSaldo });
   } catch (e) { next(e); }

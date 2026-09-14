@@ -2831,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
+      titulo:'💰 v2.207.0 — Guías/cobros: el saldo pendiente ahora es el real',
+      desc:'Corregimos que al <b>cobrar/pagar</b> un comprobante ya cobrado en parte (típico en <b>guías DT-e</b>) el sistema traía el <b>total</b> en vez del <b>saldo pendiente</b>. Ahora, al elegir el comprobante, el importe viene con lo que <b>realmente falta</b> (resta los cobros/pagos ya aplicados). Además, el <b>saldo y lo pagado de la guía</b> se calculan directo desde la <b>cuenta corriente</b>, así siempre coinciden — incluido cuando aplicás un <b>saldo a favor</b> a la guía.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/09/2026',
       titulo:'🧮 v2.206.0 — Guía: achique en $, N° de comprobante y ajustes',
       desc:'Mejoras en la cuenta que se liquida de la guía: <b>1)</b> el <b>achique</b> ahora se puede cargar como <b>monto $ directo</b> (además de por kilos) — clave para guías de <b>faena/servicio que no tienen kilos</b>, donde antes el neto quedaba igual al total. El achique en $ tiene prioridad. <b>2)</b> En la ventana de cobros/pagos de la guía, la columna ahora muestra el <b>N° de comprobante</b> (recibo/orden de pago) en vez de una referencia interna. <b>3)</b> El botón pasa a llamarse <b>“Recalcular cobros”</b> (o pagos, según corresponda).' },
