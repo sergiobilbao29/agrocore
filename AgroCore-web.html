@@ -2654,6 +2654,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
     ]},
     { grupo:'Cereal', items:[
+      { f:'Instructivo-Sociedades-UTE.pdf', t:'Sociedades / UTE (negocio en participación)', d:'Armar una sociedad de campaña entre empresas y socios: asignar campos, consolidar cosecha/costos y liquidar la participación de cada socio.' },
       { f:'Instructivo-Circuito-Campana-Cereal.pdf', t:'Circuito campaña cereal', d:'De la siembra a la cosecha, paso a paso.' },
       { f:'Instructivo-Contratos-de-Cereal.pdf', t:'Contratos de cereal', d:'Cargar y seguir contratos de venta.' },
       { f:'Instructivo-Liquidacion-Cereal-Comprador-y-Camiones.pdf', t:'Liquidación de cereal, comprador y camiones', d:'Cartas de porte, viajes y liquidación.' },
@@ -2832,6 +2833,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/09/2026',
+      titulo:'📄 v2.211.0 — Sociedades: liquidación imprimible, instructivo y ayuda',
+      desc:'Cerramos el módulo <b>Sociedades / UTE</b>: la liquidación ahora se puede <b>imprimir / exportar a PDF</b> (con cosecha, ingreso, gastos, resultado y el reparto por socio) para pasarle a cada uno. Sumamos un <b>instructivo paso a paso</b> (Ayuda → Instructivos → “Sociedades / UTE”) para implementarlo y cargarlo bien, y el <b>asistente</b> y el <b>manual</b> ya lo explican.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'14/09/2026',
       titulo:'💰 v2.210.0 — Sociedades: liquidación de la participación de cada socio',
       desc:'La <b>Sociedad / UTE</b> ahora liquida. En el tablero hay un botón <b>“💰 Liquidación”</b> donde: ponés el <b>precio $/tn</b> (por defecto y por cultivo) y el sistema valoriza la cosecha (ingreso); cargás <b>gastos comunes</b> y los <b>aportes de cada socio</b> (campos, maquinaria, líquidos, insumos, empleados), con opción de sumar también los costos consolidados del sistema; y definís el <b>% de participación</b> de cada socio (con botón <b>“Sugerir % por aporte”</b>). El sistema calcula <b>ingreso − gastos = resultado</b> y arma el <b>reparto por socio</b>: su % del ingreso, su ganancia (% del resultado) y el <b>neto a cobrar o poner</b> (su parte de la venta menos lo que aportó). Todo se guarda en la sociedad.' },

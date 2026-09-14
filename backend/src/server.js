@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.210.0';
+const AGROCORE_VERSION = '2.211.0';
 const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11747,6 +11747,15 @@ const _AYUDA_KB = [
       'Después está la plata invertida por rubro (compra, alimentación, sanidad, labores, otros) y el rendimiento por lote (mejor a peor por margen).',
       'Abajo, el circuito comercial del período (mes/año/todo): ventas por liquidación y cuánto queda por cobrar, y las guías DT-e con lo que falta vincular o pagar.'],
     atajo:{ page:'ganaderiaDash', label:'Abrir Ganadería 360' } },
+  { id:'sociedades_ute', terms:['sociedad','ute','sociedad de campaña','negocio en participacion','union transitoria','socios','armar una sociedad','campos de varias empresas','campos de socios','liquidar la sociedad','participacion de socios','como reparto entre socios','aportes de socios','spl','sociedad multiempresa','campo externo','cosecha en conjunto'],
+    titulo:'Sociedades / UTE (negocio en participación entre empresas)',
+    pasos:[
+      'Entrá a Producción → Sociedades / UTE y tocá "+ Nueva sociedad". Ponele nombre (ej. SPL 2026/27), la campaña/ciclo y, si querés, cargá los socios y qué aporta cada uno (campos, maquinaria, líquidos, empleados).',
+      'Abrí la sociedad y con "+ Agregar campo" sumale los campos: podés elegir campos de CUALQUIERA de tus empresas (Del Pistrin, DLL, Gerardo…) o cargar un campo EXTERNO de un socio (con su titular/CUIT). No cambia la facturación: las cartas de porte siguen saliendo del titular real del campo.',
+      'El tablero consolida por campo: hectáreas, cultivo, kg cosechados (de las cartas de porte) y costo estimado (labores + insumos), con totales, cruzando todas tus empresas.',
+      'Si una carta de porte sale de un socio (otra empresa), al cargar el viaje elegí la Sociedad en el selector "Sociedad / UTE" para que sume a la cosecha.',
+      'Para repartir: botón "💰 Liquidación". Poné el precio $/tn (valoriza la cosecha = ingreso), cargá gastos comunes y los aportes de cada socio, y el % de participación (con "Sugerir % por aporte"). El sistema calcula ingreso − gastos = resultado y el neto a cobrar/poner de cada socio. Se puede imprimir/PDF.'],
+    atajo:{ page:'sociedades', label:'Abrir Sociedades / UTE' } },
   { id:'traslado_hacienda', terms:['trasladar hacienda','mover animales de campo','traslado de hacienda','mover hacienda','pasar animales a otro campo','arrastrar hacienda','mover rodeo en el mapa','mapa de hacienda','tarjetas de rodeo en el mapa','carga cab/ha','donde estan los animales'],
     titulo:'Mover hacienda y ver dónde está (traslado y mapa)',
     pasos:[
