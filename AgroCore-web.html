@@ -2831,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
+      titulo:'🔧 v2.203.0 — Cobro con cheque: arreglos al elegir/cargar el cheque',
+      desc:'Corregimos dos errores al cobrar con cheque que aparecieron con la validación nueva: <b>1)</b> al <b>elegir un cheque ya cargado</b> en cartera, tiraba un error técnico (buscaba el cheque por un campo mal escrito) — ya valida bien el importe contra el valor del cheque. <b>2)</b> al <b>cargar un cheque nuevo recibido</b> desde la cobranza, decía “No pude crear el cheque: datos inválidos” porque enviaba mal el tipo/número del cheque — ahora lo crea correctamente como cheque de terceros en cartera y lo vincula a la cobranza. Aplica al cobro simple y al de varios medios.' },
     { tag:'Mejora', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/09/2026',
       titulo:'🧾 v2.202.0 — Cobro con cheque: toma el valor del cheque (y lo valida)',
       desc:'Cobrar con cheque ahora es a prueba de errores. <b>1) Autocompletado:</b> al elegir (o cargar) un cheque en la pantalla de cobro/pago, el <b>total a cobrar se ajusta solo al valor del cheque</b>. Si el cheque es menor al saldo (por ejemplo, cobrás una guía y entregan un cheque parcial), queda como <b>cobro parcial</b> y el resto sigue pendiente — sin tener que corregir el importe a mano. Funciona con un solo cheque y con <b>varios medios/cheques</b> (el total sigue la suma). <b>2) Validación:</b> si el importe aplicado con un cheque no coincide con su valor real, el sistema avisa (“El cheque N° X es de $… pero estás aplicando $…”) y no deja cerrar la deuda por un total distinto. Antes, al asociar un cheque de menor importe a una guía, la tomaba como saldada por el total (sobrepagada); eso ya no puede pasar.' },
@@ -18091,8 +18094,9 @@ async function pagoCobroConfirmar(modo) {
           // Cheque de terceros recibido: lo creamos ahora y usamos su id.
           try {
             const chRsp = await api('/api/cheques', { method:'POST', body: JSON.stringify({
-              tipo:'fisico', origen:'tercero', banco, numero:nro, monto:mnt,
+              tipo:'terceros', formato:'fisico', banco, nroCheque:nro, monto:mnt,
               fechaPago:new Date(fpago).toISOString(), fechaEmision:new Date(fecha).toISOString(),
+              fechaRecepcion:new Date(fecha).toISOString(),
               librador: contactoNombre || null, estado:'en_cartera',
               observaciones:'Recibido de '+(contactoNombre||'cliente')+' por cobranza',
             })});
@@ -18170,14 +18174,15 @@ async function pagoCobroConfirmar(modo) {
       try {
         const cli = (state.cache.clientes || []).find(c => c.id === contactoId);
         const chRsp = await api('/api/cheques', { method: 'POST', body: JSON.stringify({
-          tipo: tipoCh,
-          origen: 'tercero',                  // recibido del cliente
-          banco, numero,
+          tipo: 'terceros',                   // cheque recibido del cliente
+          formato: tipoCh,                    // 'fisico' | 'electronico'
+          banco, nroCheque: numero,
           monto: montoCh,
           fechaPago: new Date(fechaPago).toISOString(),
           fechaEmision: new Date(fecha).toISOString(),
+          fechaRecepcion: new Date(fecha).toISOString(),
           librador: librador || (cli?.razonSocial || null),
-          cuitLibrador: cuit,
+          cuitTitular: cuit,
           estado: 'en_cartera',
           observaciones: 'Recibido de ' + (cli?.razonSocial || 'cliente') + ' por cobranza',
         })});

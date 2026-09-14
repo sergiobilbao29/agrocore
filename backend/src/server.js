@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.202.0';
+const AGROCORE_VERSION = '2.203.0';
 const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17435,10 +17435,10 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         : [{ metodo: d.metodo, monto: d.monto, chequeId: d.chequeId }];
       for (const leg of _legsChk) {
         if (leg.metodo === 'cheque' && leg.chequeId) {
-          const ch = await prisma.cheque.findFirst({ where: { id: leg.chequeId, companyId: req.companyId }, select: { monto: true, numero: true } });
+          const ch = await prisma.cheque.findFirst({ where: { id: leg.chequeId, companyId: req.companyId }, select: { monto: true, nroCheque: true } });
           if (ch && Math.abs(Number(ch.monto || 0) - Number(leg.monto || 0)) > 0.02) {
             return res.status(400).json({ ok: false, error:
-              `El cheque N° ${ch.numero || ''} es de ${_fmt(ch.monto)}, pero estás aplicando ${_fmt(leg.monto)}. ` +
+              `El cheque N° ${ch.nroCheque || ''} es de ${_fmt(ch.monto)}, pero estás aplicando ${_fmt(leg.monto)}. ` +
               `El importe cobrado con un cheque debe ser igual al valor del cheque. ` +
               `Si no cubre el total, hacé un cobro parcial por ${_fmt(ch.monto)}.` });
           }
