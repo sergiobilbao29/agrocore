@@ -1394,6 +1394,7 @@ model GuiaHacienda {
   // (recorte/desbaste en kilos), al resto se le suma IVA y se le descuentan RETENCIONES.
   achiqueKg        Float    @default(0)   // kilos de recorte/desbaste que descuenta el comprador
   achiquePrecio    Float    @default(0)   // $/kg del achique (0 = usa precio promedio del negocio)
+  achiqueMonto     Float    @default(0)   // achique en $ directo (tiene prioridad sobre kg×$/kg; útil si la guía no tiene kilos)
   retencionesMonto Float    @default(0)   // total de retenciones (monto manual)
   netoEstimado     Float    @default(0)   // neto a cobrar/liquidar estimado (base + IVA - retenciones)
   // Estado / vinculación

@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.205.0';
+const AGROCORE_VERSION = '2.206.0';
 const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9582,7 +9582,9 @@ function _guiaCalc(g) {
   const precioProm = kilos > 0 ? bruto / kilos : 0;
   const achiqueKg = Number(g.achiqueKg) || 0;
   const achiquePrecioEf = (Number(g.achiquePrecio) > 0) ? Number(g.achiquePrecio) : precioProm;
-  const achiqueMonto = _round2(achiqueKg * achiquePrecioEf);
+  // Achique: si se cargó un monto $ directo, tiene prioridad (útil si la guía no tiene kilos);
+  // si no, se calcula por kilos × $/kg.
+  const achiqueMonto = (Number(g.achiqueMonto) > 0) ? _round2(g.achiqueMonto) : _round2(achiqueKg * achiquePrecioEf);
   const base = _round2(Math.max(0, bruto - achiqueMonto));
   const ivaLiquidacion = _round2(base * (Number(g.alicuotaIva) || 0) / 100);
   const retenciones = _round2(Number(g.retencionesMonto) || 0);
@@ -9616,12 +9618,42 @@ app.get('/api/guias-hacienda', requireCompany, requirePermission('stock:read'), 
   } catch (e) { next(e); }
 });
 
+// Adjunta a cada pago el N° de comprobante (recibo de cobro / orden de pago) resolviéndolo
+// desde DocumentoEmitido: mismo contacto, importe ≈ monto del pago, priorizando los que
+// referencian esta guía en su detalle. No reutiliza el mismo comprobante para dos pagos.
+async function _guiaAdjuntarComprobantes(companyId, g) {
+  try {
+    if (!g.contactoId || !(g.pagos || []).length) return g;
+    const docs = await prisma.documentoEmitido.findMany({
+      where: { companyId, contactoId: g.contactoId, tipo: { in: ['recibo_cobro', 'orden_pago'] } },
+      select: { id: true, numero: true, fecha: true, total: true, datos: true },
+      orderBy: { fecha: 'asc' },
+    });
+    const dte = String(g.numeroDte || '').trim();
+    const refGuia = (d) => { try { const cs = (d.datos && d.datos.comprobantes) || []; return dte && cs.some(c => String(c.detalle || '').includes(dte)); } catch { return false; } };
+    const usados = new Set();
+    for (const p of g.pagos) {
+      const cand = docs.filter(d => !usados.has(d.id) && Math.abs(Number(d.total || 0) - Number(p.monto || 0)) <= 0.02);
+      // Prioridad: los que mencionan la guía; luego, fecha más cercana al pago.
+      cand.sort((a, b) => {
+        const ra = refGuia(a) ? 0 : 1, rb = refGuia(b) ? 0 : 1; if (ra !== rb) return ra - rb;
+        return Math.abs(new Date(a.fecha) - new Date(p.fecha)) - Math.abs(new Date(b.fecha) - new Date(p.fecha));
+      });
+      const doc = cand[0];
+      if (doc) { usados.add(doc.id); p.comprobante = doc.numero || null; }
+    }
+  } catch {}
+  return g;
+}
+
 // DETALLE
 app.get('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
     const g = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _GUIA_INC });
     if (!g) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
-    res.json({ ok: true, data: _guiaConSaldo(g) });
+    const withSaldo = _guiaConSaldo(g);
+    await _guiaAdjuntarComprobantes(req.companyId, withSaldo);
+    res.json({ ok: true, data: withSaldo });
   } catch (e) { next(e); }
 });
 
@@ -9643,6 +9675,7 @@ const _guiaSchema = z.object({
   alicuotaIva: z.coerce.number().nonnegative().default(10.5),
   achiqueKg: z.coerce.number().nonnegative().default(0),
   achiquePrecio: z.coerce.number().nonnegative().default(0),
+  achiqueMonto: z.coerce.number().nonnegative().default(0),
   retencionesMonto: z.coerce.number().nonnegative().default(0),
   observaciones: z.string().nullable().optional(),
   archivoNombre: z.string().nullable().optional(),
@@ -9667,7 +9700,7 @@ app.post('/api/guias-hacienda', requireCompany, requirePermission('stock:create'
     const rows = _guiaRows(d.renglones, d.alicuotaIva);
     const totalEstimado = _round2(rows.reduce((a, r) => a + r.bruto, 0));
     const ivaEstimado = _round2(rows.reduce((a, r) => a + r.iva, 0));
-    const netoEstimado = _guiaCalc({ totalEstimado, renglones: rows, alicuotaIva: d.alicuotaIva, achiqueKg: d.achiqueKg, achiquePrecio: d.achiquePrecio, retencionesMonto: d.retencionesMonto }).neto;
+    const netoEstimado = _guiaCalc({ totalEstimado, renglones: rows, alicuotaIva: d.alicuotaIva, achiqueKg: d.achiqueKg, achiquePrecio: d.achiquePrecio, achiqueMonto: d.achiqueMonto, retencionesMonto: d.retencionesMonto }).neto;
     const estado = (d.motivo === 'faena' && d.sentido === 'egreso') ? 'en_frigorifico' : 'pendiente';
 
     const result = await prisma.$transaction(async (tx) => {
@@ -9678,7 +9711,7 @@ app.post('/api/guias-hacienda', requireCompany, requirePermission('stock:create'
         contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
         frigorifico: d.frigorifico || null, frigorificoCuit: d.frigorificoCuit || null,
         alicuotaIva: d.alicuotaIva, totalEstimado, ivaEstimado, estado,
-        achiqueKg: d.achiqueKg || 0, achiquePrecio: d.achiquePrecio || 0, retencionesMonto: d.retencionesMonto || 0, netoEstimado,
+        achiqueKg: d.achiqueKg || 0, achiquePrecio: d.achiquePrecio || 0, achiqueMonto: d.achiqueMonto || 0, retencionesMonto: d.retencionesMonto || 0, netoEstimado,
         ctacteRef: null, archivoNombre: d.archivoNombre || null, observaciones: d.observaciones || null,
       }});
       const movIds = await _guiaAplicarStock(tx, guia, rows);
@@ -9707,7 +9740,7 @@ app.put('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:upda
     const rows = _guiaRows(d.renglones, d.alicuotaIva);
     const totalEstimado = _round2(rows.reduce((a, r) => a + r.bruto, 0));
     const ivaEstimado = _round2(rows.reduce((a, r) => a + r.iva, 0));
-    const netoEstimado = _guiaCalc({ totalEstimado, renglones: rows, alicuotaIva: d.alicuotaIva, achiqueKg: d.achiqueKg, achiquePrecio: d.achiquePrecio, retencionesMonto: d.retencionesMonto }).neto;
+    const netoEstimado = _guiaCalc({ totalEstimado, renglones: rows, alicuotaIva: d.alicuotaIva, achiqueKg: d.achiqueKg, achiquePrecio: d.achiquePrecio, achiqueMonto: d.achiqueMonto, retencionesMonto: d.retencionesMonto }).neto;
     const estado = (d.motivo === 'faena' && d.sentido === 'egreso') ? 'en_frigorifico' : 'pendiente';
 
     await prisma.$transaction(async (tx) => {
@@ -9722,7 +9755,7 @@ app.put('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:upda
         contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null,
         frigorifico: d.frigorifico || null, frigorificoCuit: d.frigorificoCuit || null,
         alicuotaIva: d.alicuotaIva, totalEstimado, ivaEstimado, estado,
-        achiqueKg: d.achiqueKg || 0, achiquePrecio: d.achiquePrecio || 0, retencionesMonto: d.retencionesMonto || 0, netoEstimado,
+        achiqueKg: d.achiqueKg || 0, achiquePrecio: d.achiquePrecio || 0, achiqueMonto: d.achiqueMonto || 0, retencionesMonto: d.retencionesMonto || 0, netoEstimado,
         archivoNombre: d.archivoNombre || cur.archivoNombre || null, observaciones: d.observaciones || null,
       }});
       const movIds = await _guiaAplicarStock(tx, guia, rows);

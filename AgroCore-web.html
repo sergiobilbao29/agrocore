@@ -2831,6 +2831,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/09/2026',
+      titulo:'🧮 v2.206.0 — Guía: achique en $, N° de comprobante y ajustes',
+      desc:'Mejoras en la cuenta que se liquida de la guía: <b>1)</b> el <b>achique</b> ahora se puede cargar como <b>monto $ directo</b> (además de por kilos) — clave para guías de <b>faena/servicio que no tienen kilos</b>, donde antes el neto quedaba igual al total. El achique en $ tiene prioridad. <b>2)</b> En la ventana de cobros/pagos de la guía, la columna ahora muestra el <b>N° de comprobante</b> (recibo/orden de pago) en vez de una referencia interna. <b>3)</b> El botón pasa a llamarse <b>“Recalcular cobros”</b> (o pagos, según corresponda).' },
     { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
       titulo:'🔄 v2.205.0 — Guía: recalcular pagos desde la cuenta corriente',
       desc:'Si por idas y vueltas (deshacer/rehacer cobros, cheques recargados) los <b>pagos de una guía quedaron desfasados</b> de su cuenta corriente, ahora hay un botón <b>“🔄 Recalcular pagos”</b> en la ventana de Pagos a cuenta de la guía. Reconstruye la lista de pagos tomando como fuente real los cobros/pagos que figuran en la <b>cuenta corriente</b> del cliente/proveedor aplicados a esa guía, así el <b>pagado y el saldo de la guía coinciden con la cuenta corriente</b>. Nota: un cobro hecho “a cuenta” (sin tildar la guía) queda como saldo del cliente y no se imputa a la guía; para que cuente en la guía, cobrá tildándola.' },
@@ -30459,13 +30462,13 @@ function guiaRender(){
         ${canU&&vinculable?`<button class="btn btn-ghost text-xs text-amber-600" title="Anular (revierte stock y cuenta)" onclick='guiaAnular(${JSON.stringify(r.id)})'>⛔</button>`:''}
         ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='guiaEliminar(${JSON.stringify(r.id)})'>🗑️</button>`:''}
       </td>
-    </tr>`;}).join('') || `<tr><td colspan="10" class="text-center text-slate-400 py-8">Sin guías que coincidan con el filtro.</td></tr>`;
+    </tr>`;}).join('') || `<tr><td colspan="11" class="text-center text-slate-400 py-8">Sin guías que coincidan con el filtro.</td></tr>`;
 }
 function guiaGet(id){ return (state._guiaRows||[]).find(x=>x.id===id); }
 async function guiaVer(id){
   let g; try{ g=(await api('/api/guias-hacienda/'+id)).data; }catch(e){ return toast(e.message,'error'); }
   const rows=(g.renglones||[]).map(r=>`<tr><td>${esc(r.categoria)}</td><td class="text-right">${fmtN(r.cabezas)}</td><td class="text-right">${r.kilos?fmtN(r.kilos):'—'}</td><td class="text-right">${r.precioKg?fmt$(r.precioKg):'—'}</td><td class="text-right">${fmt$(r.bruto)}</td></tr>`).join('');
-  const pagos=(g.pagos||[]).map(p=>`<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td></tr>`).join('')||`<tr><td colspan="4" class="text-slate-400 text-center py-2">Sin pagos a cuenta.</td></tr>`;
+  const pagos=(g.pagos||[]).map(p=>`<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.comprobante||p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td></tr>`).join('')||`<tr><td colspan="4" class="text-slate-400 text-center py-2">Sin pagos a cuenta.</td></tr>`;
   openModal({ title:`📋 Guía DT-e ${esc(g.numeroDte||'')}`, size:'max-w-3xl',
     body:`<div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
         <div><span class="text-slate-500 text-xs">Fecha</span><br>${fmtDate(g.fecha)}</div>
@@ -30488,7 +30491,7 @@ async function guiaVer(id){
         <div class="flex justify-between border-t border-amber-300 pt-1 text-base font-bold text-emerald-800"><span>Neto a cobrar / liquidar</span><span>${fmt$(g.netoEstimado!=null?g.netoEstimado:(c.neto||0))}</span></div>
       </div>`; })()}
       <div class="text-sm font-medium text-slate-700 mb-1">Pagos a cuenta — pagado ${fmt$(g.pagado)} · saldo estimado ${fmt$(g.saldoEstimado)}</div>
-      <table class="data text-sm"><thead><tr><th>Fecha</th><th>Método</th><th>Ref.</th><th class="text-right">Monto</th></tr></thead><tbody>${pagos}</tbody></table>
+      <table class="data text-sm"><thead><tr><th>Fecha</th><th>Método</th><th>Comprobante</th><th class="text-right">Monto</th></tr></thead><tbody>${pagos}</tbody></table>
       ${g.observaciones?`<div class="text-xs text-slate-500 mt-2">📝 ${esc(g.observaciones)}</div>`:''}`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>${can('stock:update')?`<button class="btn btn-primary" onclick='guiaPagos(${JSON.stringify(id)})'>💵 Pagos a cuenta</button>`:''}` });
 }
@@ -30589,11 +30592,13 @@ async function guiaForm(prefill=null){
       </div>
       <div class="p-3 bg-amber-50 rounded-lg border border-amber-200 mb-3">
         <div class="text-sm font-medium text-amber-900 mb-2">🧮 Cuenta que se liquida (estimada)</div>
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-2">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
           <div><label class="label text-xs">Achique / recorte (kg)</label><input id="guia-achkg" type="number" step="0.01" class="input" value="${p.achiqueKg?p.achiqueKg:''}" placeholder="0" oninput="guiaRecalc()"/></div>
           <div><label class="label text-xs">$/kg del achique</label><input id="guia-achpre" type="number" step="0.01" class="input" value="${p.achiquePrecio?p.achiquePrecio:''}" placeholder="auto: precio prom." oninput="guiaRecalc()"/></div>
+          <div><label class="label text-xs">Achique $ (directo)</label><input id="guia-achmon" type="number" step="0.01" class="input" value="${p.achiqueMonto?p.achiqueMonto:''}" placeholder="si no hay kilos" oninput="guiaRecalc()"/></div>
           <div><label class="label text-xs">Retenciones $</label><input id="guia-ret" type="number" step="0.01" class="input" value="${p.retencionesMonto?p.retencionesMonto:''}" placeholder="0" oninput="guiaRecalc()"/></div>
         </div>
+        <div class="text-[11px] text-amber-700 mb-1">El achique se calcula por <b>kilos × $/kg</b>; si la guía no tiene kilos, cargá el <b>Achique $</b> directo (tiene prioridad).</div>
         <div class="text-sm text-amber-900 space-y-0.5">
           <div class="flex justify-between"><span>Total del negocio</span><b id="guia-l-neg">$ 0,00</b></div>
           <div class="flex justify-between"><span>− Achique (<span id="guia-l-achkg">0</span> kg)</span><span id="guia-l-ach">$ 0,00</span></div>
@@ -30651,7 +30656,8 @@ function guiaRecalc(){
   const achkg = Number($('#guia-achkg')?.value||0);
   const achpreIn = Number($('#guia-achpre')?.value||0);
   const achpre = achpreIn>0 ? achpreIn : precioProm;
-  const achMonto = Math.round(achkg*achpre*100)/100;
+  const achMonManual = Number($('#guia-achmon')?.value||0);
+  const achMonto = achMonManual>0 ? achMonManual : Math.round(achkg*achpre*100)/100;
   const base = Math.max(0, Math.round((bruto-achMonto)*100)/100);
   const alicG = Number($('#guia-alic')?.value||10.5);
   const ivaLiq = Math.round(base*alicG)/100;
@@ -30678,6 +30684,7 @@ async function guiaSave(){
     alicuotaIva: Number($('#guia-alic').value||10.5),
     achiqueKg: Number($('#guia-achkg')?.value||0),
     achiquePrecio: Number($('#guia-achpre')?.value||0),
+    achiqueMonto: Number($('#guia-achmon')?.value||0),
     retencionesMonto: Number($('#guia-ret')?.value||0),
     contactoTipo, contactoId,
     frigorifico: $('#guia-frig').value.trim()||null, frigorificoCuit: $('#guia-frigcuit').value.trim()||null,
@@ -30707,15 +30714,15 @@ async function guiaPagos(id){
     const acc = viaVentas
       ? `<span class="text-[10px] text-slate-400" title="Se gestiona desde Movimientos de ventas/compras (Deshacer ↩️)">🔗 ventas</span>`
       : `<button class="btn btn-ghost text-xs text-red-600" title="Eliminar (revierte caja/banco y comprobante)" onclick='guiaPagoDel(${JSON.stringify(id)},${JSON.stringify(p.id)})'>🗑️</button>`;
-    return `<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td><td class="text-right whitespace-nowrap">${acc}</td></tr>`;
+    return `<tr><td>${fmtDate(p.fecha)}</td><td>${esc(p.metodo)}</td><td>${esc(p.comprobante||p.referencia||'')}</td><td class="text-right">${fmt$(p.monto)}</td><td class="text-right whitespace-nowrap">${acc}</td></tr>`;
   }).join('')||`<tr><td colspan="5" class="text-slate-400 text-center py-2">Sin pagos.</td></tr>`;
   openModal({ title:`💵 Pagos a cuenta — guía ${esc(g.numeroDte||'')}`, size:'max-w-2xl',
     body:`<div class="text-sm mb-2">Total del negocio ${fmt$(g.totalConIva)} · <b>neto a cobrar ${fmt$(g.netoEstimado!=null?g.netoEstimado:g.totalConIva)}</b> · pagado ${fmt$(g.pagado)} · <b>saldo ${fmt$(g.saldoEstimado)}</b></div>
-      <table class="data text-sm mb-3"><thead><tr><th>Fecha</th><th>Método</th><th>Ref.</th><th class="text-right">Monto</th><th></th></tr></thead><tbody>${pagos}</tbody></table>
+      <table class="data text-sm mb-3"><thead><tr><th>Fecha</th><th>Método</th><th>Comprobante</th><th class="text-right">Monto</th><th></th></tr></thead><tbody>${pagos}</tbody></table>
       ${tieneContacto
         ? `<div class="text-[12px] text-slate-600 bg-slate-50 border rounded-lg p-3">💡 El ${esCliente?'cobro':'pago'} usa la pantalla completa (caja del catálogo, cuenta bancaria, cheque con sus datos, varios medios) y genera el ${esCliente?'recibo':'la orden de pago'} en Movimientos de ${esCliente?'ventas':'compras'}. Queda reflejado acá automáticamente.</div>`
         : `<div class="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">Esta guía no tiene cliente/proveedor con cuenta corriente (ej. frigorífico), así que no se registran cobros/pagos.</div>`}`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>${(tieneContacto&&can('stock:update'))?`<button class="btn btn-ghost text-xs" title="Reconstruye los pagos de la guía desde la cuenta corriente (si quedaron desfasados)" onclick='guiaResyncPagos(${JSON.stringify(id)})'>🔄 Recalcular pagos</button>`:''}${(tieneContacto && can('finanzas:create') && g.saldoEstimado>0)?`<button class="btn btn-primary" onclick='guiaPagoFull(${JSON.stringify(g.contactoTipo)},${JSON.stringify(g.contactoId)},${JSON.stringify(g.id)})'>💰 ${accion}</button>`:''}` });
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>${(tieneContacto&&can('stock:update'))?`<button class="btn btn-ghost text-xs" title="Reconstruye los ${esCliente?'cobros':'pagos'} de la guía desde la cuenta corriente (si quedaron desfasados)" onclick='guiaResyncPagos(${JSON.stringify(id)})'>🔄 Recalcular ${esCliente?'cobros':'pagos'}</button>`:''}${(tieneContacto && can('finanzas:create') && g.saldoEstimado>0)?`<button class="btn btn-primary" onclick='guiaPagoFull(${JSON.stringify(g.contactoTipo)},${JSON.stringify(g.contactoId)},${JSON.stringify(g.id)})'>💰 ${accion}</button>`:''}` });
   state._gpEdit=null;
 }
 // Abre la pantalla COMPLETA de cobro/pago (misma de Cuentas a cobrar/pagar) para la
