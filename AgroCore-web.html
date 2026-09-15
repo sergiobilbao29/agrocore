@@ -2834,6 +2834,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/09/2026',
+      titulo:'🌾 v2.215.0 — Liquidaciones de cereal: deducciones de flete/gastos y estado real',
+      desc:'Cuando el comprador te <b>descuenta flete o gastos</b> y cobrás menos que el neto, ahora en la liquidación (tocás la fila para ver el detalle) hay un bloque <b>“Deducciones del comprador”</b>: cargás el concepto y el importe y el <b>saldo a cobrar baja a lo que realmente cobrás</b>. Podés <b>vincular la factura de flete/gasto</b> (ahora o después) y esa factura queda <b>saldada</b> (la pagó el comprador al descontarla). Además el <b>estado</b> de cada liquidación (Pendiente / Parcial / Cobrada) ahora sale de la <b>cuenta corriente</b>, así siempre coincide con Cuentas a cobrar (se termina el desfasaje de “cobrada en un lado y pendiente en el otro”). El detalle muestra cuánto cobraste en efectivo/banco, cuánto se dedujo y el saldo.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/09/2026',
+      titulo:'🤝 v2.214.0 — Sociedades: detalle por campo, editar/eliminar y elegir moneda',
+      desc:'En la Sociedad/UTE ahora podés <b>ver el detalle de cada campo</b>: tocás el campo (o el 📋) y ves la lista de labores e insumos cargados, uno por uno, con opción de <b>✏️ editar</b> y <b>🗑️ eliminar</b> cada uno (ya no hace falta borrar el campo). Al cargar, elegís la <b>moneda de cada movimiento</b> (US$ o $); y arriba del tablero (y en la liquidación) hay un <b>selector “Ver en US$ / $”</b> que convierte todo a la moneda elegida con la cotización del día. Así, si cargás un ítem en dólares y otro en pesos, los ves sumados en la moneda que quieras.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/09/2026',
       titulo:'🧾 v2.213.0 — Resumen multiempresa: cheques físicos en cartera detallados',
       desc:'En el <b>Resumen multiempresa</b>, además del total por empresa, ahora hay un recuadro <b>“🧾 Cheques físicos en cartera”</b> que lista los cheques <b>uno por uno</b> (N°, banco, librador / de quién vino, en poder de quién está, tipo, vencimiento e importe) de las empresas seleccionadas, con el total al pie. Los vencidos se marcan en rojo. No incluye e-cheques.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/09/2026',
@@ -8989,24 +8995,27 @@ async function socSave(){
 
 async function socTablero(id){
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando tablero…</div>`;
-  let t; try{ t=(await api('/api/sociedades/'+id+'/tablero')).data; }catch(e){ state._socSel=null; return toast(e.message,'error'); }
+  state._socDetalleLink = null;   // al entrar al tablero, la carga rápida vuelve al tablero (no al detalle)
+  state._socMoneda = state._socMoneda || 'USD'; const mon = state._socMoneda;
+  let t; try{ t=(await api('/api/sociedades/'+id+'/tablero?moneda='+mon)).data; }catch(e){ state._socSel=null; return toast(e.message,'error'); }
+  const fmtMon=(v)=>(mon==='ARS'?'$ ':'US$ ')+fmtN(v||0);
   const s=t.sociedad, canU=can('produccion:update');
   const filas=(t.filas||[]).map(f=>`<tr class="table-row">
-      <td>${f.externo?'📍 ':'🗺️ '}${esc(f.nombre)}${f.externo?' <span class="badge badge-amber">externo</span>':''}${f.empresa?`<div class="text-[11px] text-slate-500">${esc(f.empresa)}</div>`:''}${f.titular?`<div class="text-[11px] text-slate-400">${esc(f.titular)}</div>`:''}</td>
+      <td>${f.campoId?`<a class="text-emerald-700 hover:underline cursor-pointer" onclick='socCampoDetalle(${JSON.stringify(id)},${JSON.stringify(f.linkId)})'>${f.externo?'📍 ':'🗺️ '}${esc(f.nombre)}</a>`:`${f.externo?'📍 ':'🗺️ '}${esc(f.nombre)}`}${f.externo?' <span class="badge badge-amber">externo</span>':''}${f.empresa?`<div class="text-[11px] text-slate-500">${esc(f.empresa)}</div>`:''}${f.titular?`<div class="text-[11px] text-slate-400">${esc(f.titular)}</div>`:''}</td>
       <td class="text-right">${fmtN(f.hectareas)}</td>
       <td>${(f.cultivos||[]).map(c=>esc(c)).join(', ')||'—'}</td>
       <td class="text-right font-semibold">${f.kgCosechados?fmtN(f.kgCosechados)+' kg':'—'}</td>
       <td class="text-right">${f.viajes||0}</td>
-      <td class="text-right">${(f.labores||0)+(f.insumos||0)}</td>
-      <td class="text-right">${f.costoEstimado?fmt$(f.costoEstimado):'—'}</td>
-      <td class="text-right">${canU?`<button class="btn btn-ghost text-red-600 text-xs" title="Quitar de la sociedad" onclick='socCampoDel(${JSON.stringify(id)},${JSON.stringify(f.linkId)})'>✕</button>`:''}</td>
+      <td class="text-right">${f.campoId?`<a class="text-emerald-700 hover:underline cursor-pointer" onclick='socCampoDetalle(${JSON.stringify(id)},${JSON.stringify(f.linkId)})' title="Ver detalle y editar">${(f.labores||0)+(f.insumos||0)}</a>`:((f.labores||0)+(f.insumos||0))}</td>
+      <td class="text-right">${f.costoEstimado?fmtMon(f.costoEstimado):'—'}</td>
+      <td class="text-right whitespace-nowrap">${f.campoId?`<button class="btn btn-ghost text-xs" title="Ver detalle / editar" onclick='socCampoDetalle(${JSON.stringify(id)},${JSON.stringify(f.linkId)})'>📋</button>`:''}${canU?`<button class="btn btn-ghost text-red-600 text-xs" title="Quitar de la sociedad" onclick='socCampoDel(${JSON.stringify(id)},${JSON.stringify(f.linkId)})'>✕</button>`:''}</td>
     </tr>`).join('')||`<tr><td colspan="8" class="text-center text-slate-400 py-4">Sin campos asignados todavía.</td></tr>`;
   const tot=t.totales||{};
   const ct=t.cartasEtiquetadas||{cantidad:0,kg:0,detalle:[]};
   $('#page-body').innerHTML = `
     <div class="flex items-center justify-between mb-3">
       <button class="btn btn-ghost text-sm" onclick="socVolver()">‹ Volver</button>
-      <div class="flex gap-2 flex-wrap">${canU?`<button class="btn btn-secondary text-sm" onclick='socCargaForm(${JSON.stringify(id)})'>➕ Cargar labor / insumo</button>`:''}${canU?`<button class="btn btn-secondary text-sm" onclick='socCampoForm(${JSON.stringify(id)})'>+ Agregar campo</button>`:''}<button class="btn btn-primary text-sm" onclick='socLiquidacion(${JSON.stringify(id)})'>💰 Liquidación</button>${canU?`<button class="btn btn-ghost text-sm" onclick='socEditarActual(${JSON.stringify(id)})'>✏️ Editar</button>`:''}</div>
+      <div class="flex gap-2 flex-wrap items-center"><span class="text-xs text-slate-500">Ver en</span><select class="input text-sm py-1" style="width:auto" onchange="state._socMoneda=this.value; socTablero(${JSON.stringify(id)})"><option value="USD"${mon==='USD'?' selected':''}>US$</option><option value="ARS"${mon==='ARS'?' selected':''}>$ ARS</option></select>${canU?`<button class="btn btn-secondary text-sm" onclick='socCargaForm(${JSON.stringify(id)})'>➕ Cargar labor / insumo</button>`:''}${canU?`<button class="btn btn-secondary text-sm" onclick='socCampoForm(${JSON.stringify(id)})'>+ Agregar campo</button>`:''}<button class="btn btn-primary text-sm" onclick='socLiquidacion(${JSON.stringify(id)})'>💰 Liquidación</button>${canU?`<button class="btn btn-ghost text-sm" onclick='socEditarActual(${JSON.stringify(id)})'>✏️ Editar</button>`:''}</div>
     </div>
     <div class="kpi mb-3">
       <div class="font-bold text-emerald-900 text-lg">🤝 ${esc(s.nombre)}</div>
@@ -9017,7 +9026,7 @@ async function socTablero(id){
       <div class="kpi"><div class="text-xs text-slate-500">Campos</div><div class="text-2xl font-bold mt-1">${(t.filas||[]).length}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Hectáreas</div><div class="text-2xl font-bold mt-1">${fmtN(tot.hectareas||0)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Cosecha total</div><div class="text-2xl font-bold mt-1 text-emerald-700">${fmtN(tot.kgCosechados||0)} <span class="text-sm">kg</span></div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Costo estimado</div><div class="text-2xl font-bold mt-1 text-amber-600">${fmt$(tot.costoEstimado||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Costo estimado (${mon==='ARS'?'$':'US$'})</div><div class="text-2xl font-bold mt-1 text-amber-600">${fmtMon(tot.costoEstimado||0)}</div></div>
     </div>
     <div class="kpi p-0 overflow-hidden mb-3">
       <table class="data"><thead><tr><th>Campo</th><th class="text-right">Ha</th><th>Cultivo</th><th class="text-right">Cosechado</th><th class="text-right">Viajes</th><th class="text-right">Trabajos</th><th class="text-right">Costo est.</th><th></th></tr></thead>
@@ -9089,7 +9098,7 @@ async function socCampoDel(id,linkId){
 }
 
 // ---- Carga centralizada de labores/insumos desde la solapa de la Sociedad ----
-async function socCargaForm(id){
+async function socCargaForm(id, prefLink){
   let dt; try{ dt=(await api('/api/sociedades/'+id+'/carga-datos')).data; }catch(e){ return toast(e.message,'error'); }
   if(!dt.campos || !dt.campos.length) return toast('Primero agregá campos a la sociedad','warn');
   state._socCarga=dt; state._socCargaId=id; state._socCargaTipo='insumo';
@@ -9117,6 +9126,7 @@ async function socCargaForm(id){
           <div><label class="label text-xs">Unidad</label><input id="soc-cg-unidad" class="input" placeholder="lt/ha, kg/ha…"/></div>
           <div><label class="label text-xs">Cant. por ha</label><input id="soc-cg-unidadha" type="number" step="0.0001" class="input" placeholder="0"/></div>
           <div><label class="label text-xs">Precio unitario</label><input id="soc-cg-precio" type="number" step="0.01" class="input" placeholder="0"/></div>
+          <div><label class="label text-xs">Moneda</label><select id="soc-cg-moneda-ins" class="input"><option value="USD">US$</option><option value="ARS">$ ARS</option></select></div>
         </div>
         <label class="flex items-center gap-2 mt-2 text-sm"><input type="checkbox" id="soc-cg-stock"/> Descontar del stock de la empresa dueña del campo</label>
         <div class="text-[11px] text-slate-500 mt-1">Si tildás descontar stock, se descuenta la cantidad por ha × hectáreas del depósito de esa empresa. Si no, se registra sólo el costo.</div>
@@ -9132,6 +9142,7 @@ async function socCargaForm(id){
       </div>
       <div class="mt-2"><label class="label text-xs">Observaciones</label><input id="soc-cg-obs" class="input"/></div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='socCargaSave(${JSON.stringify(id)})'>Guardar</button>` });
+  if(prefLink){ const sc=document.getElementById('soc-cg-campo'); if(sc) sc.value=prefLink; }
   socCargaCampoChange();
 }
 function socCargaTipo(t){ state._socCargaTipo=t;
@@ -9172,6 +9183,7 @@ async function socCargaSave(id){
     body={ linkId, tipo:'insumo', item:item||(document.getElementById('soc-cg-prod')?.selectedOptions?.[0]?.getAttribute('data-nombre'))||'Insumo',
       fecha, hectareasAplicadas:ha, productoId, subtipo:document.getElementById('soc-cg-unidad')?.value.trim()||null,
       unidadHa:Number(document.getElementById('soc-cg-unidadha')?.value||0)||null, precioUnit:Number(document.getElementById('soc-cg-precio')?.value||0)||null,
+      monedaCosto:document.getElementById('soc-cg-moneda-ins')?.value||'USD',
       descontarStock:!!document.getElementById('soc-cg-stock')?.checked, observaciones:obs };
   } else {
     const labtipo=(document.getElementById('soc-cg-labtipo')?.value||'').trim(); if(!labtipo) return toast('Poné el tipo de labor','warn');
@@ -9181,14 +9193,85 @@ async function socCargaSave(id){
   }
   try{ const r=await api('/api/sociedades/'+id+'/carga',{method:'POST',body:JSON.stringify(body)});
     toast(tipo==='insumo'?('Insumo cargado'+(r.data?.descontoStock?' (stock descontado)':'')):'Labor cargada','success');
-    closeModal(); socTablero(id);
+    closeModal();
+    if(state._socDetalleLink) socCampoDetalle(id, state._socDetalleLink); else socTablero(id);
   }catch(e){ toast(e.message,'error'); }
+}
+
+// ---- Detalle por campo: ver / editar / eliminar lo cargado ----
+async function socCampoDetalle(id, linkId){
+  const mon=state._socMoneda||'USD';
+  let d; try{ d=(await api('/api/sociedades/'+id+'/campo/'+linkId+'/detalle?moneda='+mon)).data; }catch(e){ return toast(e.message,'error'); }
+  state._socDetalle=d; state._socDetalleLink=linkId; state._socDetalleId=id;
+  const canU=can('produccion:update'), canD=can('produccion:delete');
+  const monTxt=(m)=>((m==='ARS')?'$':'US$');
+  const rows=(d.items||[]).map(it=>`<tr class="table-row">
+      <td class="text-xs whitespace-nowrap">${fmtFecha(it.fecha)}</td>
+      <td>${it.tipo==='insumo'?'🧪':'🚜'} ${esc(it.nombre||'')}${it.observaciones?`<div class="text-[11px] text-slate-400">${esc(it.observaciones)}</div>`:''}</td>
+      <td class="text-right text-xs">${it.hectareasAplicadas!=null?fmtN(it.hectareasAplicadas)+' ha':'—'}</td>
+      <td class="text-right text-xs">${monTxt(it.moneda)} ${fmtN(it.monto)}${(it.moneda||'USD')!==mon?`<div class="text-[11px] text-slate-400">= ${monTxt(mon)} ${fmtN(it.montoVista)}</div>`:''}</td>
+      <td class="text-center text-xs">${it.tipo==='insumo'?(it.tieneStock?'📦':'—'):'—'}</td>
+      <td class="text-right whitespace-nowrap">${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='socAplicacionEdit(${JSON.stringify(it.id)})'>✏️</button>`:''}${canD?`<button class="btn btn-ghost text-red-600 text-xs" title="Eliminar" onclick='socAplicacionDel(${JSON.stringify(id)},${JSON.stringify(it.id)})'>🗑️</button>`:''}</td>
+    </tr>`).join('')||`<tr><td colspan="6" class="text-center text-slate-400 py-4">Sin labores ni insumos cargados en este campo todavía.</td></tr>`;
+  openModal({ title:`📋 ${esc(d.campo||'Campo')}${d.esExterno?' (externo)':''}`, size:'max-w-2xl',
+    body:`
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-xs text-slate-500">${d.ciclo?('Ciclo '+esc(d.ciclo)):'Ciclo de la sociedad'} · ${(d.items||[]).length} movimiento(s)</div>
+        <div class="text-sm font-semibold text-amber-700">Total: ${monTxt(mon)} ${fmtN(d.totalVista||0)}</div>
+      </div>
+      <div class="kpi p-0 overflow-hidden">
+        <table class="data text-sm"><thead><tr><th>Fecha</th><th>Concepto</th><th class="text-right">Ha</th><th class="text-right">Costo</th><th class="text-center" title="Descontó stock">Stock</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Los montos se muestran en su moneda de carga; abajo, convertido a la moneda de vista (${monTxt(mon)}). Cambiá la moneda de vista desde el tablero.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal(); socTablero(${JSON.stringify(id)})">‹ Volver al tablero</button>${canU?`<button class="btn btn-primary" onclick='closeModal(); socCargaForm(${JSON.stringify(id)},${JSON.stringify(linkId)})'>➕ Cargar acá</button>`:''}` });
+}
+async function socAplicacionDel(id, itemId){
+  if(!confirm('¿Eliminar este movimiento? Si descontó stock, se repone.')) return;
+  try{ await api('/api/sociedades/'+id+'/aplicacion/'+itemId,{method:'DELETE'}); toast('Movimiento eliminado','success'); socCampoDetalle(id, state._socDetalleLink); }catch(e){ toast(e.message,'error'); }
+}
+function socAplicacionEdit(itemId){
+  const d=state._socDetalle; if(!d) return; const it=(d.items||[]).find(x=>x.id===itemId); if(!it) return;
+  const fecha=(it.fecha?new Date(it.fecha):new Date()).toISOString().slice(0,10);
+  const esIns=it.tipo==='insumo';
+  openModal({ title:(esIns?'✏️ Editar insumo':'✏️ Editar labor'), size:'max-w-md',
+    body:`
+      <div class="grid grid-cols-2 gap-2">
+        <div class="col-span-2"><label class="label text-xs">${esIns?'Nombre / detalle':'Tipo de labor'}</label><input id="soc-ed-item" class="input" value="${esc(it.nombre||'')}"/></div>
+        <div><label class="label text-xs">Fecha</label><input id="soc-ed-fecha" type="date" class="input" value="${fecha}"/></div>
+        <div><label class="label text-xs">Hectáreas</label><input id="soc-ed-ha" type="number" step="0.01" class="input" value="${it.hectareasAplicadas!=null?it.hectareasAplicadas:''}"/></div>
+        ${esIns?`
+          <div><label class="label text-xs">Unidad</label><input id="soc-ed-unidad" class="input" value="${esc(it.unidad||'')}"/></div>
+          <div><label class="label text-xs">Cant. por ha</label><input id="soc-ed-unidadha" type="number" step="0.0001" class="input" value="${it.cantidad!=null?it.cantidad:''}"/></div>
+          <div><label class="label text-xs">Precio unitario</label><input id="soc-ed-precio" type="number" step="0.01" class="input" value="${it.precioUnit!=null?it.precioUnit:''}"/></div>
+        `:`
+          <div><label class="label text-xs">Costo por ha</label><input id="soc-ed-costoha" type="number" step="0.01" class="input" value="${it.costo!=null?it.costo:''}"/></div>
+        `}
+        <div><label class="label text-xs">Moneda</label><select id="soc-ed-moneda" class="input"><option value="USD"${(it.moneda||'USD')==='USD'?' selected':''}>US$</option><option value="ARS"${it.moneda==='ARS'?' selected':''}>$ ARS</option></select></div>
+        <div class="col-span-2"><label class="label text-xs">Observaciones</label><input id="soc-ed-obs" class="input" value="${esc(it.observaciones||'')}"/></div>
+      </div>
+      ${esIns&&it.tieneStock?`<div class="text-[11px] text-amber-700 mt-2">⚠️ Este insumo descontó stock: al editar cantidad/precio, se ajusta el egreso de stock.</div>`:''}`,
+    footer:`<button class="btn btn-secondary" onclick='socCampoDetalle(${JSON.stringify(state._socDetalleId)},${JSON.stringify(state._socDetalleLink)})'>Cancelar</button><button class="btn btn-primary" onclick='socAplicacionEditSave(${JSON.stringify(itemId)},${JSON.stringify(esIns)})'>Guardar</button>` });
+}
+async function socAplicacionEditSave(itemId, esIns){
+  const id=state._socDetalleId;
+  const body={ item:(document.getElementById('soc-ed-item')?.value||'').trim(),
+    fecha:document.getElementById('soc-ed-fecha')?.value||null,
+    hectareasAplicadas:Number(document.getElementById('soc-ed-ha')?.value||0)||null,
+    monedaCosto:document.getElementById('soc-ed-moneda')?.value||'USD',
+    observaciones:document.getElementById('soc-ed-obs')?.value.trim()||null };
+  if(esIns){ body.subtipo=document.getElementById('soc-ed-unidad')?.value.trim()||null;
+    body.unidadHa=Number(document.getElementById('soc-ed-unidadha')?.value||0)||null;
+    body.precioUnit=Number(document.getElementById('soc-ed-precio')?.value||0)||null;
+  } else { body.costoHa=Number(document.getElementById('soc-ed-costoha')?.value||0)||null; }
+  try{ await api('/api/sociedades/'+id+'/aplicacion/'+itemId,{method:'PUT',body:JSON.stringify(body)}); toast('Guardado','success'); socCampoDetalle(id, state._socDetalleLink); }catch(e){ toast(e.message,'error'); }
 }
 
 // ---- Liquidación de la participación de socios ----
 async function socLiquidacion(id){
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando liquidación…</div>`;
-  let L; try{ L=(await api('/api/sociedades/'+id+'/liquidacion')).data; }catch(e){ return toast(e.message,'error'); }
+  state._socMoneda=state._socMoneda||'USD'; const mon=state._socMoneda; const monTxt=(mon==='ARS'?'$ ARS':'US$');
+  let L; try{ L=(await api('/api/sociedades/'+id+'/liquidacion?moneda='+mon)).data; }catch(e){ return toast(e.message,'error'); }
   state._liqData=L; state._liqId=id;
   const s=L.sociedad, cfg=L.config||{};
   // Filas de precio por cultivo (todos los cultivos cosechados + los ya cargados)
@@ -9211,10 +9294,10 @@ async function socLiquidacion(id){
   $('#page-body').innerHTML = `
     <div class="flex items-center justify-between mb-3">
       <button class="btn btn-ghost text-sm" onclick='socTablero(${JSON.stringify(id)})'>‹ Volver al tablero</button>
-      <div class="flex gap-2"><button class="btn btn-secondary text-sm" onclick="socLiqImprimir()">🖨️ Imprimir / PDF</button><button class="btn btn-primary text-sm" onclick="socLiqGuardar()">💾 Guardar y calcular</button></div>
+      <div class="flex gap-2 items-center flex-wrap"><span class="text-xs text-slate-500">Moneda</span><select class="input text-sm py-1" style="width:auto" onchange="state._socMoneda=this.value; socLiquidacion(${JSON.stringify(id)})"><option value="USD"${mon==='USD'?' selected':''}>US$</option><option value="ARS"${mon==='ARS'?' selected':''}>$ ARS</option></select><button class="btn btn-secondary text-sm" onclick="socLiqImprimir()">🖨️ Imprimir / PDF</button><button class="btn btn-primary text-sm" onclick="socLiqGuardar()">💾 Guardar y calcular</button></div>
     </div>
     <div class="kpi mb-3"><div class="font-bold text-emerald-900 text-lg">💰 Liquidación — ${esc(s.nombre)}</div>
-      <div class="text-xs text-slate-500">${s.ciclo?('Campaña '+esc(s.ciclo)+' · '):''}Cosecha total: ${fmtN(L.cosecha.kg||0)} kg</div></div>
+      <div class="text-xs text-slate-500">${s.ciclo?('Campaña '+esc(s.ciclo)+' · '):''}Cosecha total: ${fmtN(L.cosecha.kg||0)} kg · <b>Valores en ${monTxt}</b> (precios, gastos y aportes se cargan en ${monTxt}; los costos del sistema se convierten a esa moneda)</div></div>
 
     <div class="grid md:grid-cols-2 gap-3 mb-3">
       <div class="kpi p-0 overflow-hidden">
@@ -28196,12 +28279,13 @@ function liqCerRender() {
     if (f.hasta && d > f.hasta) return false;
     if (f.cliente && r.clienteId !== f.cliente) return false;
     if (f.producto && r.productoId !== f.producto) return false;
-    if (f.estado === 'cobrada' && !r.cobrado) return false;
-    if (f.estado === 'pendiente' && r.cobrado) return false;
+    const cob = (r.estadoCobro ? r.estadoCobro==='cobrado' : r.cobrado);
+    if (f.estado === 'cobrada' && !cob) return false;
+    if (f.estado === 'pendiente' && cob) return false;
     return true;
   });
   const total = fil.reduce((a,r)=>a+Number(r.neto||0),0);
-  const pend = fil.filter(r=>!r.cobrado).reduce((a,r)=>a+Number(r.neto||0),0);
+  const pend = fil.reduce((a,r)=>a+Number(r.saldoCobro!=null?r.saldoCobro:((r.estadoCobro?r.estadoCobro==='cobrado':r.cobrado)?0:r.neto)),0);
   const cnt=$('#liqcer-count'); if(cnt) cnt.textContent = `${fil.length} de ${rows.length} liquidación${rows.length===1?'':'es'}`;
   const k=$('#liqcer-kpis'); if(k) k.innerHTML = `
     <div class="kpi"><div class="text-xs text-slate-500">Liquidaciones (filtro)</div><div class="text-2xl font-bold mt-1">${fil.length}</div></div>
@@ -28217,10 +28301,10 @@ function liqCerRender() {
       <td>${esc(state._liqCerCli[r.clienteId]||'—')}</td>
       <td class="text-right">${fmtN(r.kilosNetos)}</td>
       <td class="text-right">${fmt$(r.precioPorTn)}</td>
-      <td class="text-right font-bold text-green-700">${fmt$(r.neto)}</td>
-      <td>${r.cobrado?'<span class="badge badge-green">Cobrada</span>':'<span class="badge badge-yellow">Pendiente</span>'}</td>
+      <td class="text-right font-bold text-green-700">${fmt$(r.neto)}${(r.deducido>0)?`<div class="text-[11px] text-slate-400 font-normal">− ${fmt$(r.deducido)} deduc.</div>`:''}</td>
+      <td>${r.estadoCobro==='cobrado'?'<span class="badge badge-green">Cobrada</span>':(r.estadoCobro==='parcial'?`<span class="badge badge-amber">Parcial</span><div class="text-[11px] text-slate-400">Saldo ${fmt$(r.saldoCobro||0)}</div>`:'<span class="badge badge-yellow">Pendiente</span>')}</td>
       <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
-        ${canU&&!r.cobrado?`<button class="btn btn-ghost text-xs" title="Editar" onclick='liqCerEditar(${JSON.stringify(r.id)})'>✏️</button>`:''}
+        ${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='liqCerEditar(${JSON.stringify(r.id)})'>✏️</button>`:''}
         ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='liqCerEliminar(${JSON.stringify(r.id)})'>🗑️</button>`:''}
       </td>
     </tr>`).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin liquidaciones que coincidan con el filtro.</td></tr>`;
@@ -29988,14 +30072,70 @@ async function liqVer(id) {
           <dt class="text-slate-500"><b>NETO</b></dt><dd><b class="text-green-700">${fmt$(l.neto)}</b></dd>
         </dl>
         ${l.conceptos?.length ? `
-          <table class="data"><thead><tr><th>Tipo</th><th>Concepto</th><th class="text-right">Importe</th></tr></thead>
+          <table class="data mb-3"><thead><tr><th>Tipo</th><th>Concepto</th><th class="text-right">Importe</th></tr></thead>
           <tbody>${l.conceptos.map(c=>`<tr><td>${c.tipo==='descuento'?'Descuento':'Impuesto'}</td><td>${esc(c.concepto)}</td><td class="text-right">${fmt$(c.importe)}</td></tr>`).join('')}</tbody></table>
-        ` : ''}`,
-      footer: `${!l.cobrado && can('finanzas:create')?`<button class="btn btn-secondary" onclick='liqCobrar(${JSON.stringify(l.id)})'>💰 Registrar cobro</button>`:''}
-               ${!l.cobrado && can('ventas:update')?`<button class="btn btn-ghost text-xs" title="Solo marca la liquidación como cobrada, sin registrar el ingreso de dinero" onclick='liqMarcarCobrado(${JSON.stringify(l.id)})'>✔️ Solo marcar cobrada</button>`:''}
+        ` : ''}
+        <div class="grid grid-cols-3 gap-2 mb-3 text-center">
+          <div class="kpi p-2"><div class="text-[11px] text-slate-500">Cobrado efectivo/banco</div><div class="font-bold text-emerald-700">${fmt$(l.cobradoEfectivo||0)}</div></div>
+          <div class="kpi p-2"><div class="text-[11px] text-slate-500">Deducciones (flete/gastos)</div><div class="font-bold text-amber-600">${fmt$(l.deducido||0)}</div></div>
+          <div class="kpi p-2"><div class="text-[11px] text-slate-500">Saldo pendiente</div><div class="font-bold ${(l.saldoCobro||0)>0.01?'text-red-600':'text-slate-400'}">${fmt$(l.saldoCobro||0)}</div></div>
+        </div>
+        <div class="kpi p-0 overflow-hidden">
+          <div class="px-3 py-2 bg-slate-50 border-b flex justify-between items-center"><span class="text-sm font-medium text-slate-700">🚚 Deducciones del comprador (flete/gastos)</span>${can('ventas:update')?`<button class="btn btn-secondary text-xs" onclick='liqDedForm(${JSON.stringify(l.id)})'>+ Deducción</button>`:''}</div>
+          <table class="data text-sm"><tbody>${(l.deducciones||[]).map(x=>`<tr>
+            <td>${esc(x.concepto)}${x.observaciones?`<div class="text-[11px] text-slate-400">${esc(x.observaciones)}</div>`:''}</td>
+            <td class="text-xs">${x.facturaCompraId?'<span class="badge badge-green">factura vinculada</span>':`<button class="btn btn-ghost text-xs text-emerald-700" onclick='liqDedVincular(${JSON.stringify(l.id)},${JSON.stringify(x.id)})'>🔗 Vincular factura</button>`}</td>
+            <td class="text-right font-semibold">${fmt$(x.importe)}</td>
+            <td class="text-right">${can('ventas:update')?`<button class="btn btn-ghost text-xs text-red-600" onclick='liqDedDel(${JSON.stringify(l.id)},${JSON.stringify(x.id)})'>🗑️</button>`:''}</td>
+          </tr>`).join('')||`<tr><td colspan="4" class="text-center text-slate-400 py-3">Sin deducciones. Si el comprador te descontó flete o gastos, agregalos acá para que el saldo a cobrar dé lo real.</td></tr>`}</tbody></table>
+        </div>`,
+      footer: `${(l.saldoCobro||0)>0.01 && can('finanzas:create')?`<button class="btn btn-secondary" onclick='liqCobrar(${JSON.stringify(l.id)})'>💰 Registrar cobro</button>`:''}
+               ${(l.saldoCobro||0)>0.01 && can('ventas:update')?`<button class="btn btn-ghost text-xs" title="Solo marca la liquidación como cobrada, sin registrar el ingreso de dinero" onclick='liqMarcarCobrado(${JSON.stringify(l.id)})'>✔️ Solo marcar cobrada</button>`:''}
                <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
     });
   } catch (e) { toast(e.message,'error'); }
+}
+// ---- Deducciones del comprador en la liquidación (flete/gastos) ----
+async function liqDedForm(liqId){
+  let facs=[]; try{ facs=(await api('/api/facturas-compra')).data||[]; }catch(_){}
+  const opts=facs.map(f=>`<option value="${esc(f.id)}" data-prov="${esc(f.proveedorId||'')}">${esc(f.proveedor?.nombre||f.proveedorNombre||'Proveedor')} · ${esc((f.tipo||'')+' '+(f.puntoVenta!=null?String(f.puntoVenta).padStart(4,'0')+'-':'')+(f.numero!=null?String(f.numero).padStart(8,'0'):''))} · ${fmt$(f.total||0)}</option>`).join('');
+  openModal({ title:'+ Deducción del comprador', size:'max-w-md',
+    body:`
+      <div class="text-[12px] text-slate-500 mb-2">Lo que el comprador te descontó de la liquidación (flete, gastos). Baja el saldo a cobrar. Podés vincular la factura ahora o después.</div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="label text-xs">Concepto *</label><input id="liqded-concepto" class="input" placeholder="Flete, Gastos, Secada…"/></div>
+        <div><label class="label text-xs">Importe *</label><input id="liqded-importe" type="number" step="0.01" class="input" placeholder="0"/></div>
+        <div class="col-span-2"><label class="label text-xs">Factura de compra (opcional)</label><select id="liqded-factura" class="input"><option value="">— Sin factura por ahora —</option>${opts}</select></div>
+        <div class="col-span-2"><label class="label text-xs">Observaciones</label><input id="liqded-obs" class="input"/></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Si vinculás la factura, además se marca como pagada (el comprador la pagó al descontarla).</div>`,
+    footer:`<button class="btn btn-secondary" onclick='liqVer(${JSON.stringify(liqId)})'>Cancelar</button><button class="btn btn-primary" onclick='liqDedSave(${JSON.stringify(liqId)})'>Agregar</button>` });
+}
+async function liqDedSave(liqId){
+  const concepto=(document.getElementById('liqded-concepto')?.value||'').trim(); if(!concepto) return toast('Poné el concepto','warn');
+  const importe=Number(document.getElementById('liqded-importe')?.value||0); if(!(importe>0)) return toast('Poné el importe','warn');
+  const sel=document.getElementById('liqded-factura'); const facturaCompraId=sel?.value||null;
+  const proveedorId=sel?.selectedOptions?.[0]?.getAttribute('data-prov')||null;
+  const body={ concepto, importe, facturaCompraId, proveedorId:proveedorId||null, observaciones:document.getElementById('liqded-obs')?.value.trim()||null };
+  try{ await api('/api/liquidaciones-cereal/'+liqId+'/deducciones',{method:'POST',body:JSON.stringify(body)}); toast('Deducción agregada','success'); liqVer(liqId); }catch(e){ toast(e.message,'error'); }
+}
+async function liqDedDel(liqId, dedId){
+  if(!confirm('¿Eliminar esta deducción? Se repone el saldo a cobrar y, si tenía factura vinculada, vuelve a quedar impaga.')) return;
+  try{ await api('/api/liquidaciones-cereal/'+liqId+'/deducciones/'+dedId,{method:'DELETE'}); toast('Deducción eliminada','success'); liqVer(liqId); }catch(e){ toast(e.message,'error'); }
+}
+async function liqDedVincular(liqId, dedId){
+  let facs=[]; try{ facs=(await api('/api/facturas-compra')).data||[]; }catch(_){}
+  if(!facs.length) return toast('No hay facturas de compra cargadas','warn');
+  const opts=facs.map(f=>`<option value="${esc(f.id)}" data-prov="${esc(f.proveedorId||'')}">${esc(f.proveedor?.nombre||f.proveedorNombre||'Proveedor')} · ${esc((f.tipo||'')+' '+(f.numero!=null?String(f.numero).padStart(8,'0'):''))} · ${fmt$(f.total||0)}</option>`).join('');
+  openModal({ title:'🔗 Vincular factura a la deducción', size:'max-w-md',
+    body:`<label class="label text-xs">Factura de compra (flete/gasto)</label><select id="liqvinc-factura" class="input">${opts}</select>
+      <div class="text-[11px] text-slate-500 mt-2">Al vincular, la factura queda marcada como pagada (el comprador la pagó al descontarla de la liquidación).</div>`,
+    footer:`<button class="btn btn-secondary" onclick='liqVer(${JSON.stringify(liqId)})'>Cancelar</button><button class="btn btn-primary" onclick='liqDedVincularSave(${JSON.stringify(liqId)},${JSON.stringify(dedId)})'>Vincular</button>` });
+}
+async function liqDedVincularSave(liqId, dedId){
+  const sel=document.getElementById('liqvinc-factura'); const facturaCompraId=sel?.value; if(!facturaCompraId) return toast('Elegí una factura','warn');
+  const proveedorId=sel?.selectedOptions?.[0]?.getAttribute('data-prov')||null;
+  try{ await api('/api/liquidaciones-cereal/'+liqId+'/deducciones/'+dedId+'/vincular',{method:'PUT',body:JSON.stringify({facturaCompraId, proveedorId:proveedorId||null})}); toast('Factura vinculada y saldada','success'); liqVer(liqId); }catch(e){ toast(e.message,'error'); }
 }
 // Registrar el cobro REAL de una liquidación: abre el cuadro de cobro a cliente
 // (efectivo / cheque / transferencia) sobre la cuenta a cobrar que generó la

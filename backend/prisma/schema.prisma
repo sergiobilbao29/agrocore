@@ -424,8 +424,9 @@ model InsumoAplicado {
   unidad              String
   hectareasAplicadas  Float?      // Hectareas reales donde se aplico (NULL = lote completo, legado)
   fecha               DateTime
-  costo               Float?      // costo por hectarea (u$s/ha)
-  precioUnit          Float?      // costo por unidad (u$s/unidad) — para autocompletar/mostrar
+  costo               Float?      // costo por hectarea (en 'moneda')
+  precioUnit          Float?      // costo por unidad (en 'moneda') — para autocompletar/mostrar
+  moneda              String?     // moneda del costo/precio (USD/ARS/...). null = USD (convención agro)
   movimientoId        String?     // egreso de stock generado por el uso (para poder anular)
   observaciones       String?
   createdAt           DateTime @default(now())
@@ -1854,6 +1855,7 @@ model LiquidacionCereal {
   deposito         Deposito @relation(fields: [depositoId], references: [id])
   contratoCereal   ContratoCereal? @relation(fields: [contratoCerealId], references: [id])
   conceptos        LiquidacionCerealConcepto[]
+  deducciones      LiquidacionDeduccion[]
   viajeLinks       ViajeLiquidacion[]
 
   @@index([companyId])
@@ -1929,6 +1931,31 @@ model LiquidacionCerealConcepto {
   liquidacion     LiquidacionCereal @relation(fields: [liquidacionId], references: [id], onDelete: Cascade)
 
   @@index([liquidacionId])
+}
+
+// Deducción que el COMPRADOR le descuenta a la liquidación (flete, gastos) y que
+// hace que se cobre menos que el neto. Reduce el saldo a cobrar de la liquidación
+// (asiento haber en la cta cte del cliente). Si se vincula la factura de compra
+// del flete/gasto, esa factura queda saldada (la pagó el comprador al descontarla).
+// Se puede cargar solo con el importe y adjuntar la factura después.
+model LiquidacionDeduccion {
+  id              String   @id @default(cuid())
+  companyId       String
+  liquidacionId   String
+  concepto        String                     // "Flete", "Gastos", "Secada"...
+  importe         Float    @default(0)        // en la moneda de la liquidación (ARS)
+  fecha           DateTime @default(now())
+  facturaCompraId String?                     // factura de compra vinculada (cuando la tiene)
+  proveedorId     String?                     // proveedor de esa factura (informativo)
+  ctaCteLiqId     String?                     // asiento haber creado en la cta cte del cliente (para revertir)
+  ctaCtePagoId    String?                     // asiento de pago creado sobre la factura de compra (para revertir)
+  observaciones   String?
+  createdAt       DateTime @default(now())
+
+  liquidacion     LiquidacionCereal @relation(fields: [liquidacionId], references: [id], onDelete: Cascade)
+
+  @@index([liquidacionId])
+  @@index([companyId])
 }
 
 // ============================================================

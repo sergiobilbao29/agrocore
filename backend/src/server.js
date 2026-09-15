@@ -65,7 +65,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.213.0';
+const AGROCORE_VERSION = '2.215.0';
 const AGROCORE_BUILD = new Date('2026-09-15').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4039,7 +4039,7 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
         const ins = await tx.insumoAplicado.create({ data: {
           campanaId: campana.id, productoId: prod?.id || null, nombre: prod?.nombre || d.item,
           cantidad: d.unidadHa || 0, unidad: d.subtipo || prod?.unidad || 'u/ha', fecha,
-          costo: d.costoHa || 0, precioUnit: d.precioUnit ?? null,
+          costo: d.costoHa || 0, precioUnit: d.precioUnit ?? null, moneda: d.monedaCosto || 'USD',
           hectareasAplicadas: d.hectareasAplicadas ?? null, observaciones: d.observaciones || null,
         }});
         if (descontar && cantConsumida > 0) {
@@ -4076,11 +4076,152 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
   } catch (e) { next(e); }
 });
 
+// DETALLE de un campo de la sociedad: lista sus labores e insumos (de la campaña del
+// ciclo, no cerradas) para poder verlos uno por uno, editarlos y eliminarlos.
+app.get('/api/sociedades/:id/campo/:linkId/detalle', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const cur = await _sociedadDelGrupo(req, req.params.id);
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const link = await prisma.sociedadCampo.findFirst({ where: { id: req.params.linkId, sociedadId: cur.id } });
+    if (!link || !link.campoId || !link.companyId) return res.status(404).json({ ok: false, error: 'Campo no válido' });
+    if (!_grupoCompanyIds(req).includes(link.companyId)) return res.status(403).json({ ok: false, error: 'Sin acceso a la empresa del campo' });
+    const campo = await prisma.campo.findFirst({ where: { id: link.campoId }, include: { lotes: { select: { id: true } } } });
+    if (!campo) return res.status(404).json({ ok: false, error: 'Campo no encontrado' });
+    const loteIds = campo.lotes.map(l => l.id);
+    const ciclo = (cur.ciclo || '').trim();
+    let campanas = loteIds.length ? await prisma.campana.findMany({ where: { loteId: { in: loteIds }, companyId: link.companyId } }) : [];
+    campanas = campanas.filter(c => String(c.estado || '') !== 'cerrada').filter(c => !ciclo || String(c.ciclo || '').trim() === ciclo);
+    const campIds = campanas.map(c => c.id);
+    // Moneda de vista + conversión (igual criterio que el tablero).
+    const vm = (req.query.moneda === 'ARS') ? 'ARS' : 'USD';
+    const tcUSD = (await getCotizacionARS('USD', new Date())) || 1;
+    const toView = (monto, m) => { const from = (m === 'ARS') ? 'ARS' : 'USD'; const n = Number(monto || 0); if (from === vm) return n; const ars = (from === 'ARS') ? n : n * tcUSD; return (vm === 'ARS') ? ars : (tcUSD ? ars / tcUSD : n); };
+    const items = [];
+    if (campIds.length) {
+      const insumos = await prisma.insumoAplicado.findMany({ where: { campanaId: { in: campIds } }, orderBy: { fecha: 'desc' } });
+      for (const i of insumos) {
+        const base = (i.costo != null && i.hectareasAplicadas != null) ? Number(i.costo) * Number(i.hectareasAplicadas) : (i.precioUnit != null ? Number(i.precioUnit) * Number(i.cantidad || 0) : 0);
+        items.push({ id: i.id, tipo: 'insumo', nombre: i.nombre, fecha: i.fecha, hectareasAplicadas: i.hectareasAplicadas,
+          cantidad: i.cantidad, unidad: i.unidad, precioUnit: i.precioUnit, costo: i.costo, moneda: i.moneda || 'USD',
+          monto: _round2(base), montoVista: _round2(toView(base, i.moneda)), tieneStock: !!i.movimientoId, observaciones: i.observaciones || null });
+      }
+      const labores = await prisma.laborAplicada.findMany({ where: { campanaId: { in: campIds } }, orderBy: { fecha: 'desc' } });
+      for (const l of labores) {
+        const base = (l.costo != null && l.hectareasAplicadas != null) ? Number(l.costo) * Number(l.hectareasAplicadas) : Number(l.costo || 0);
+        items.push({ id: l.id, tipo: 'labor', nombre: l.tipo, fecha: l.fecha, hectareasAplicadas: l.hectareasAplicadas,
+          costo: l.costo, moneda: l.monedaCosto || 'USD', responsable: l.responsable || null,
+          monto: _round2(base), montoVista: _round2(toView(base, l.monedaCosto)), observaciones: l.observaciones || null });
+      }
+      items.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+    }
+    res.json({ ok: true, data: {
+      linkId: link.id, campoId: campo.id, campo: campo.nombre, esExterno: !!link.esExterno, ciclo: cur.ciclo || null,
+      moneda: vm, totalVista: _round2(items.reduce((a, x) => a + x.montoVista, 0)), items,
+    }});
+  } catch (e) { next(e); }
+});
+
+// Helper: busca una aplicación (insumo/labor) que pertenezca a un campo de la sociedad.
+async function _sociedadAplicacion(req, cur, itemId) {
+  const grupo = _grupoCompanyIds(req);
+  const campoIds = cur.campos.filter(l => l.campoId && grupo.includes(l.companyId)).map(l => l.campoId);
+  if (!campoIds.length) return null;
+  const whereBase = { id: itemId, campana: { companyId: { in: grupo }, lote: { campoId: { in: campoIds } } } };
+  const ins = await prisma.insumoAplicado.findFirst({ where: whereBase, include: { campana: true } });
+  if (ins) return { tipo: 'insumo', row: ins, companyId: ins.campana.companyId };
+  const lab = await prisma.laborAplicada.findFirst({ where: whereBase, include: { campana: true } });
+  if (lab) return { tipo: 'labor', row: lab, companyId: lab.campana.companyId };
+  return null;
+}
+
+// EDITAR una labor/insumo cargado en un campo de la sociedad (cross-empresa).
+app.put('/api/sociedades/:id/aplicacion/:itemId', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.sociedad.findFirst({ where: { id: req.params.id, ownerCompanyId: { in: _grupoCompanyIds(req) } }, include: { campos: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const found = await _sociedadAplicacion(req, cur, req.params.itemId);
+    if (!found) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado en la sociedad' });
+    const d = z.object({
+      item: z.string().min(1).optional(),
+      subtipo: z.string().nullable().optional(),
+      unidadHa: z.coerce.number().nullable().optional(),
+      precioUnit: z.coerce.number().nullable().optional(),
+      costoHa: z.coerce.number().nullable().optional(),
+      monedaCosto: z.string().nullable().optional(),
+      hectareasAplicadas: z.coerce.number().nullable().optional(),
+      fecha: z.coerce.date().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body || {});
+    const tgt = found.companyId;
+    if (found.tipo === 'insumo') {
+      const ins = found.row;
+      const row = await prisma.insumoAplicado.update({ where: { id: ins.id }, data: {
+        nombre: d.item ?? ins.nombre,
+        unidad: d.subtipo !== undefined ? (d.subtipo || 'u/ha') : ins.unidad,
+        cantidad: d.unidadHa !== undefined ? (d.unidadHa || 0) : ins.cantidad,
+        precioUnit: d.precioUnit !== undefined ? d.precioUnit : ins.precioUnit,
+        costo: d.costoHa !== undefined ? (d.costoHa || 0) : ins.costo,
+        moneda: d.monedaCosto !== undefined ? (d.monedaCosto || 'USD') : (ins.moneda || 'USD'),
+        hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : ins.hectareasAplicadas,
+        fecha: d.fecha || ins.fecha,
+        observaciones: d.observaciones !== undefined ? d.observaciones : ins.observaciones,
+      }});
+      if (ins.movimientoId) {
+        const cant = Number(row.cantidad || 0) * Number(row.hectareasAplicadas || 0);
+        const total = Number(row.precioUnit || 0) * cant;
+        await prisma.movimiento.updateMany({ where: { id: ins.movimientoId, companyId: tgt }, data: { cantidad: cant, precio: row.precioUnit ?? null, total: total || null, fecha: row.fecha } });
+      }
+      return res.json({ ok: true, data: { ...row, tipo: 'insumo' } });
+    }
+    const lab = found.row;
+    const row = await prisma.laborAplicada.update({ where: { id: lab.id }, data: {
+      tipo: d.item ?? lab.tipo,
+      costo: d.costoHa !== undefined ? (d.costoHa || 0) : lab.costo,
+      monedaCosto: d.monedaCosto !== undefined ? (d.monedaCosto || 'USD') : lab.monedaCosto,
+      hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : lab.hectareasAplicadas,
+      fecha: d.fecha || lab.fecha,
+      observaciones: d.observaciones !== undefined ? d.observaciones : lab.observaciones,
+    }});
+    res.json({ ok: true, data: { ...row, tipo: 'labor' } });
+  } catch (e) { next(e); }
+});
+
+// ELIMINAR una labor/insumo cargado en un campo de la sociedad (cross-empresa).
+app.delete('/api/sociedades/:id/aplicacion/:itemId', requireCompany, requirePermission('produccion:delete'), async (req, res, next) => {
+  try {
+    const cur = await prisma.sociedad.findFirst({ where: { id: req.params.id, ownerCompanyId: { in: _grupoCompanyIds(req) } }, include: { campos: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const found = await _sociedadAplicacion(req, cur, req.params.itemId);
+    if (!found) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado en la sociedad' });
+    if (found.tipo === 'insumo') {
+      const ins = found.row;
+      await prisma.$transaction(async (tx) => {
+        await tx.insumoAplicado.delete({ where: { id: ins.id } });
+        if (ins.movimientoId) await tx.movimiento.deleteMany({ where: { id: ins.movimientoId, companyId: found.companyId } });
+      });
+      return res.json({ ok: true });
+    }
+    await prisma.laborAplicada.delete({ where: { id: found.row.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 // Consolida los datos de una sociedad (por campo: cosecha, costos) cruzando todas
 // las empresas del grupo. Devuelve filas + cartas etiquetadas + totales + cosecha por cultivo.
-async function _sociedadCompute(req, cur) {
+async function _sociedadCompute(req, cur, viewMoneda) {
     const ciclo = (cur.ciclo || '').trim();
     const kgDeViaje = (v) => Number(v.kgDescarga || v.kgNetoDest || v.kgNeto || v.cantidad || 0);
+    // Moneda de VISTA: convertimos todos los costos a esta moneda (USD por defecto, convención agro).
+    const vm = (viewMoneda === 'ARS') ? 'ARS' : 'USD';
+    const tcUSD = (await getCotizacionARS('USD', new Date())) || 1;   // ARS por 1 USD
+    // Convierte un monto en su moneda de carga a la moneda de vista (solo USD/ARS).
+    const toView = (monto, m) => {
+      const from = (m === 'ARS') ? 'ARS' : 'USD';
+      const n = Number(monto || 0);
+      if (from === vm) return n;
+      const ars = (from === 'ARS') ? n : n * tcUSD;
+      return (vm === 'ARS') ? ars : (tcUSD ? ars / tcUSD : n);
+    };
     const _companyName = {};
     for (const uc of (req.user?.userCompanies || [])) _companyName[uc.companyId] = uc.company?.name || '';
     const cosechaPorCultivo = {};
@@ -4112,10 +4253,10 @@ async function _sociedadCompute(req, cur) {
         nViajes = viajes.length; kgCosechados = viajes.reduce((a, v) => a + kgDeViaje(v), 0);
         const insumos = await prisma.insumoAplicado.findMany({ where: { campanaId: { in: campIds } } });
         nInsumos = insumos.length;
-        costo += insumos.reduce((a, i) => a + ((i.costo != null && i.hectareasAplicadas != null) ? Number(i.costo) * Number(i.hectareasAplicadas) : (i.precioUnit != null ? Number(i.precioUnit) * Number(i.cantidad || 0) : 0)), 0);
+        costo += insumos.reduce((a, i) => a + toView((i.costo != null && i.hectareasAplicadas != null) ? Number(i.costo) * Number(i.hectareasAplicadas) : (i.precioUnit != null ? Number(i.precioUnit) * Number(i.cantidad || 0) : 0), i.moneda), 0);
         const labores = await prisma.laborAplicada.findMany({ where: { campanaId: { in: campIds } } });
         nLabores = labores.length;
-        costo += labores.reduce((a, l) => a + ((l.costo != null && l.hectareasAplicadas != null) ? Number(l.costo) * Number(l.hectareasAplicadas) : Number(l.costo || 0)), 0);
+        costo += labores.reduce((a, l) => a + toView((l.costo != null && l.hectareasAplicadas != null) ? Number(l.costo) * Number(l.hectareasAplicadas) : Number(l.costo || 0), l.monedaCosto), 0);
       }
       const filaCult = cultivos.length ? cultivos : (link.cultivo ? [link.cultivo] : []);
       _sumaCultivo(filaCult, kgCosechados);
@@ -4142,6 +4283,7 @@ async function _sociedadCompute(req, cur) {
         detalle: viajesTag.map(v => ({ id: v.id, fecha: v.fecha, cartaPorte: v.cartaPorte, producto: v.producto, kg: kgDeViaje(v), origen: v.origen, destino: v.destino })) },
       cosechaPorCultivo: Object.entries(cosechaPorCultivo).map(([cultivo, kg]) => ({ cultivo, kg: _round2(kg) })),
       totales: { hectareas: _round2(tot.hectareas), kgCosechados: _round2(tot.kg + kgTag), costoEstimado: _round2(tot.costo) },
+      moneda: vm,   // moneda en la que están expresados los costos de este cálculo
     };
 }
 
@@ -4150,7 +4292,7 @@ app.get('/api/sociedades/:id/tablero', requireCompany, requirePermission('produc
   try {
     const cur = await prisma.sociedad.findFirst({ where: { id: req.params.id, ownerCompanyId: { in: _grupoCompanyIds(req) } }, include: { campos: true } });
     if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
-    res.json({ ok: true, data: await _sociedadCompute(req, cur) });
+    res.json({ ok: true, data: await _sociedadCompute(req, cur, req.query.moneda) });
   } catch (e) { next(e); }
 });
 
@@ -4167,6 +4309,7 @@ app.put('/api/sociedades/:id/liquidacion', requireCompany, requirePermission('pr
         gastosComunes: z.array(z.object({ concepto: z.string(), monto: z.coerce.number() })).nullable().optional(),
         aportes: z.array(z.object({ socio: z.string().nullable().optional(), tipo: z.string().nullable().optional(), concepto: z.string().nullable().optional(), monto: z.coerce.number() })).nullable().optional(),
         incluirCostosSistema: z.boolean().optional(),
+        moneda: z.string().nullable().optional(),
         notas: z.string().nullable().optional(),
       }).nullable().optional(),
     }).parse(req.body);
@@ -4184,8 +4327,9 @@ app.get('/api/sociedades/:id/liquidacion', requireCompany, requirePermission('pr
   try {
     const cur = await prisma.sociedad.findFirst({ where: { id: req.params.id, ownerCompanyId: { in: _grupoCompanyIds(req) } }, include: { campos: true } });
     if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
-    const comp = await _sociedadCompute(req, cur);
     const cfg = cur.liquidacion || {};
+    const vmLiq = ((req.query.moneda || cfg.moneda) === 'ARS') ? 'ARS' : 'USD';
+    const comp = await _sociedadCompute(req, cur, vmLiq);
     const precios = {}; for (const p of (cfg.precios || [])) precios[p.cultivo] = Number(p.precioTn) || 0;
     const precioDef = Number(cfg.precioTnDefault) || 0;
     // Ingreso = Σ (tn por cultivo × precio $/tn del cultivo, o precio por defecto).
@@ -4224,7 +4368,8 @@ app.get('/api/sociedades/:id/liquidacion', requireCompany, requirePermission('pr
       ingresoPorCultivo, ingreso,
       gastos: { gastosComunes, costosSistema, costosSistemaTotal: _round2(comp.totales.costoEstimado || 0), aportesTotal, total: gastosTotal, incluirCostosSistema: !!cfg.incluirCostosSistema },
       aportes, resultado, socios, sumaParticipacion: sumaPart,
-      config: { precioTnDefault: precioDef, precios: cfg.precios || [], gastosComunes: cfg.gastosComunes || [], notas: cfg.notas || '' },
+      moneda: vmLiq,
+      config: { precioTnDefault: precioDef, precios: cfg.precios || [], gastosComunes: cfg.gastosComunes || [], notas: cfg.notas || '', moneda: cfg.moneda || 'USD' },
     }});
   } catch (e) { next(e); }
 });
@@ -9193,13 +9338,39 @@ app.get('/api/retenciones/export-sircar', requireCompany, requirePermission('fin
 // LIQUIDACIÓN DE CEREAL: cuando vendés el cereal que tenías en la cerealera.
 // Saca el cereal del depósito + crea movimiento positivo en CtaCte por el neto.
 // ============================================================
+// Calcula el estado de cobro de cada liquidación desde la CUENTA CORRIENTE (no del
+// campo 'cobrado'), para que siempre coincida con cuentas a cobrar. Separa lo cobrado
+// en efectivo/banco de lo deducido por el comprador (flete/gastos).
+async function _liqCerealAplicarSaldos(companyId, liqs) {
+  if (!liqs.length) return liqs;
+  const refs = liqs.map(l => `LIQCER-${l.id}`);
+  const rows = await prisma.ctaCte.findMany({ where: { companyId, contactoTipo: 'cliente', referencia: { in: refs } } });
+  const byRef = {}; for (const r of rows) { (byRef[r.referencia] = byRef[r.referencia] || []).push(r); }
+  for (const l of liqs) {
+    const rs = byRef[`LIQCER-${l.id}`] || [];
+    const debe = rs.reduce((a, r) => a + Number(r.debe || 0), 0);
+    const haber = rs.reduce((a, r) => a + Number(r.haber || 0), 0);
+    const deducido = rs.filter(r => r.categoria === 'deduccion_liq').reduce((a, r) => a + Number(r.haber || 0), 0);
+    const cobradoEfectivo = _round2(haber - deducido);
+    const base = debe > 0 ? debe : Number(l.neto || 0);
+    const saldo = _round2(base - haber);
+    l.cobradoEfectivo = cobradoEfectivo;
+    l.deducido = _round2(deducido);
+    l.saldoCobro = _round2(Math.max(saldo, 0));
+    l.estadoCobro = saldo <= 0.01 ? 'cobrado' : (haber > 0.01 ? 'parcial' : 'pendiente');
+    l.cobrado = (l.estadoCobro === 'cobrado');   // sincroniza el flag para compatibilidad
+  }
+  return liqs;
+}
+
 app.get('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
   try {
     const data = await prisma.liquidacionCereal.findMany({
       where: { companyId: req.companyId },
       orderBy: { fecha: 'desc' },
-      include: { deposito: true, conceptos: true },
+      include: { deposito: true, conceptos: true, deducciones: true },
     });
+    await _liqCerealAplicarSaldos(req.companyId, data);
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
@@ -9208,9 +9379,10 @@ app.get('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
   try {
     const data = await prisma.liquidacionCereal.findFirst({
       where: { id: req.params.id, companyId: req.companyId },
-      include: { deposito: true, conceptos: true },
+      include: { deposito: true, conceptos: true, deducciones: true },
     });
     if (!data) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    await _liqCerealAplicarSaldos(req.companyId, [data]);
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
@@ -9313,13 +9485,108 @@ app.put('/api/liquidaciones-cereal/:id/marcar-cobrado', requireCompany, requireP
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
+
+// ============================================================
+// DEDUCCIONES del comprador en una liquidación (flete/gastos que descuenta y por
+// eso cobrás menos). Cada deducción baja el saldo a cobrar de la liquidación
+// (asiento haber en la cta cte del cliente) y, si se vincula la factura de compra,
+// deja esa factura saldada (la pagó el comprador al descontarla).
+// ============================================================
+// Registra el pago (por deducción) sobre una factura de compra, dejándola saldada.
+async function _dedSaldarFactura(tx, companyId, ded, liq, fecha) {
+  const fac = await tx.facturaCompra.findFirst({ where: { id: ded.facturaCompraId, companyId } });
+  if (!fac) return null;
+  const cc = await tx.ctaCte.create({ data: {
+    companyId, contactoTipo: 'proveedor', contactoId: fac.proveedorId || ded.proveedorId || null,
+    fecha: fecha || new Date(),
+    detalle: `Pago por deducción del comprador (liquidación ${liq.numero || liq.id.slice(-6).toUpperCase()})`,
+    referencia: `FACC-${fac.id}`, debe: 0, haber: Number(ded.importe || 0), pagado: true,
+    categoria: 'pago_deduccion_liq',
+  }});
+  return cc.id;
+}
+// Crea el asiento haber en la cta cte del cliente por la deducción (baja el saldo a cobrar).
+async function _dedAsientoLiq(tx, companyId, ded, liq) {
+  if (!liq.clienteId) return null;
+  const cc = await tx.ctaCte.create({ data: {
+    companyId, contactoTipo: 'cliente', contactoId: liq.clienteId, fecha: ded.fecha || new Date(),
+    detalle: `Deducción del comprador: ${ded.concepto}`,
+    referencia: `LIQCER-${liq.id}`, debe: 0, haber: Number(ded.importe || 0), pagado: true,
+    categoria: 'deduccion_liq',
+  }});
+  return cc.id;
+}
+
+app.post('/api/liquidaciones-cereal/:id/deducciones', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const liq = await prisma.liquidacionCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!liq) return res.status(404).json({ ok: false, error: 'Liquidación no encontrada' });
+    const d = z.object({
+      concepto: z.string().min(1),
+      importe: z.coerce.number().positive(),
+      fecha: z.coerce.date().nullable().optional(),
+      facturaCompraId: z.string().nullable().optional(),
+      proveedorId: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body);
+    const out = await prisma.$transaction(async (tx) => {
+      const ded = await tx.liquidacionDeduccion.create({ data: {
+        companyId: req.companyId, liquidacionId: liq.id, concepto: d.concepto, importe: d.importe,
+        fecha: d.fecha || new Date(), facturaCompraId: d.facturaCompraId || null, proveedorId: d.proveedorId || null,
+        observaciones: d.observaciones || null,
+      }});
+      const ctaCteLiqId = await _dedAsientoLiq(tx, req.companyId, ded, liq);
+      let ctaCtePagoId = null;
+      if (d.facturaCompraId) ctaCtePagoId = await _dedSaldarFactura(tx, req.companyId, ded, liq, d.fecha);
+      return tx.liquidacionDeduccion.update({ where: { id: ded.id }, data: { ctaCteLiqId, ctaCtePagoId } });
+    });
+    res.status(201).json({ ok: true, data: out });
+  } catch (e) { next(e); }
+});
+
+// Vincular (o cambiar) la factura de compra de una deducción ya cargada.
+app.put('/api/liquidaciones-cereal/:id/deducciones/:dedId/vincular', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const liq = await prisma.liquidacionCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!liq) return res.status(404).json({ ok: false, error: 'Liquidación no encontrada' });
+    const ded = await prisma.liquidacionDeduccion.findFirst({ where: { id: req.params.dedId, liquidacionId: liq.id, companyId: req.companyId } });
+    if (!ded) return res.status(404).json({ ok: false, error: 'Deducción no encontrada' });
+    const d = z.object({ facturaCompraId: z.string(), proveedorId: z.string().nullable().optional() }).parse(req.body);
+    const out = await prisma.$transaction(async (tx) => {
+      if (ded.ctaCtePagoId) await tx.ctaCte.deleteMany({ where: { id: ded.ctaCtePagoId, companyId: req.companyId } });
+      const upd = { ...ded, facturaCompraId: d.facturaCompraId, proveedorId: d.proveedorId || ded.proveedorId };
+      const ctaCtePagoId = await _dedSaldarFactura(tx, req.companyId, upd, liq, ded.fecha);
+      return tx.liquidacionDeduccion.update({ where: { id: ded.id }, data: { facturaCompraId: d.facturaCompraId, proveedorId: d.proveedorId || ded.proveedorId, ctaCtePagoId } });
+    });
+    res.json({ ok: true, data: out });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/liquidaciones-cereal/:id/deducciones/:dedId', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const liq = await prisma.liquidacionCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!liq) return res.status(404).json({ ok: false, error: 'Liquidación no encontrada' });
+    const ded = await prisma.liquidacionDeduccion.findFirst({ where: { id: req.params.dedId, liquidacionId: liq.id, companyId: req.companyId } });
+    if (!ded) return res.status(404).json({ ok: false, error: 'Deducción no encontrada' });
+    await prisma.$transaction(async (tx) => {
+      if (ded.ctaCteLiqId) await tx.ctaCte.deleteMany({ where: { id: ded.ctaCteLiqId, companyId: req.companyId } });
+      if (ded.ctaCtePagoId) await tx.ctaCte.deleteMany({ where: { id: ded.ctaCtePagoId, companyId: req.companyId } });
+      await tx.liquidacionDeduccion.delete({ where: { id: ded.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
 // Revierte los efectos de una liquidación de cereal (stock, cta cte, vínculos de viajes).
 async function _revertirLiqCereal(tx, companyId, liq) {
   const refs = [`LIQCER-${liq.id}`, `LIQ-${liq.id.slice(-6).toUpperCase()}`];
   // Egreso de stock (nuevo formato por referencia; legacy por numero+producto+deposito)
   await tx.movimiento.deleteMany({ where: { companyId, referencia: { in: refs } } });
   if (liq.numero) await tx.movimiento.deleteMany({ where: { companyId, motivo: 'liquidacion_cerealera', referencia: liq.numero, productoId: liq.productoId, depositoId: liq.depositoId } });
-  // Cuenta a cobrar
+  // Pagos de facturas de flete/gasto que se habían saldado por deducción de esta liquidación.
+  const deds = await tx.liquidacionDeduccion.findMany({ where: { companyId, liquidacionId: liq.id } }).catch(() => []);
+  const pagoIds = deds.map(x => x.ctaCtePagoId).filter(Boolean);
+  if (pagoIds.length) await tx.ctaCte.deleteMany({ where: { companyId, id: { in: pagoIds } } });
+  // Cuenta a cobrar (incluye los asientos haber de las deducciones, por compartir la referencia LIQCER-)
   await tx.ctaCte.deleteMany({ where: { companyId, referencia: { in: refs } } });
 }
 // Quita los vínculos de viajes (posición de granos) de una liquidación de cereal.
