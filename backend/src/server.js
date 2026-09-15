@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.212.0';
-const AGROCORE_BUILD = new Date('2026-09-14').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.213.0';
+const AGROCORE_BUILD = new Date('2026-09-15').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -3874,6 +3874,7 @@ app.post('/api/sociedades/:id/campos', requireCompany, requirePermission('produc
       aportante: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
     }).parse(req.body);
+    let esExterno = false;
     // Campo real: verificar que sea de una empresa del grupo.
     if (d.campoId) {
       const grupo = _grupoCompanyIds(req);
@@ -3881,11 +3882,24 @@ app.post('/api/sociedades/:id/campos', requireCompany, requirePermission('produc
       if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
       d.companyId = campo.companyId;
       if (!d.hectareas) d.hectareas = Number(campo.hectareas || 0);
-    } else if (!d.externoNombre) {
+    } else if (d.externoNombre) {
+      // Campo EXTERNO de un socio: creamos un Campo "sombra" bajo la empresa dueña de la
+      // sociedad (ownerCompany) con un lote único, para poder cargarle labores/insumos y
+      // consolidar costos. NO cambia la titularidad fiscal de las cartas de porte.
+      const shadow = await prisma.campo.create({ data: {
+        companyId: cur.ownerCompanyId, nombre: d.externoNombre,
+        localidad: d.externoLocalidad || null, hectareas: Number(d.hectareas || 0),
+        propietario: d.externoTitular || null, titularidad: 'externo_sociedad',
+        tipoExplotacion: 'agricola', esExternoSociedad: true, sociedadId: cur.id,
+        observaciones: `Campo externo de socio en sociedad "${cur.nombre}"${d.externoCuit ? ' · CUIT ' + d.externoCuit : ''}`,
+      }});
+      await prisma.lote.create({ data: { campoId: shadow.id, nombre: 'Lote único', hectareas: Number(d.hectareas || 0) } });
+      d.campoId = shadow.id; d.companyId = cur.ownerCompanyId; esExterno = true;
+    } else {
       return res.status(400).json({ ok: false, error: 'Elegí un campo o cargá un campo externo (nombre)' });
     }
     const link = await prisma.sociedadCampo.create({ data: {
-      sociedadId: cur.id, campoId: d.campoId || null, companyId: d.companyId || null,
+      sociedadId: cur.id, campoId: d.campoId || null, companyId: d.companyId || null, esExterno,
       externoNombre: d.externoNombre || null, externoTitular: d.externoTitular || null,
       externoCuit: d.externoCuit || null, externoLocalidad: d.externoLocalidad || null,
       hectareas: d.hectareas || 0, cultivo: d.cultivo || null, aportante: d.aportante || null,
@@ -3899,8 +3913,166 @@ app.delete('/api/sociedades/:id/campos/:linkId', requireCompany, requirePermissi
   try {
     const cur = await _sociedadDelGrupo(req, req.params.id);
     if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
-    await prisma.sociedadCampo.deleteMany({ where: { id: req.params.linkId, sociedadId: cur.id } });
+    const link = await prisma.sociedadCampo.findFirst({ where: { id: req.params.linkId, sociedadId: cur.id } });
+    if (!link) return res.json({ ok: true });
+    await prisma.sociedadCampo.delete({ where: { id: link.id } });
+    // Si era un campo externo con campo "sombra" y no tiene datos cargados, lo eliminamos también
+    // (así no queda basura bajo la empresa dueña). Si ya tiene campañas con labores/insumos, se conserva.
+    if (link.esExterno && link.campoId) {
+      const shadow = await prisma.campo.findFirst({ where: { id: link.campoId, esExternoSociedad: true }, include: { lotes: { select: { id: true } } } });
+      if (shadow) {
+        const loteIds = shadow.lotes.map(l => l.id);
+        const nCamp = loteIds.length ? await prisma.campana.count({ where: { loteId: { in: loteIds } } }) : 0;
+        if (nCamp === 0) await prisma.campo.delete({ where: { id: shadow.id } }); // cascade borra el/los lote(s)
+      }
+    }
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CARGA CENTRALIZADA desde la solapa de la Sociedad (v2.213.0)
+// Permite cargar labores/insumos a cualquier campo de la sociedad (de la empresa
+// que sea, o campo externo con su campo "sombra") SIN cambiar de empresa activa.
+// El dato se guarda en la campaña de la empresa DUEÑA del campo, así "vive" ahí
+// solo (no se duplica): cada empresa lo ve en su propia producción.
+// ============================================================
+
+// Datos para el formulario de carga: campos de la sociedad + productos y empleados
+// por empresa (para los desplegables, ya que la empresa activa puede ser otra).
+app.get('/api/sociedades/:id/carga-datos', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const cur = await prisma.sociedad.findFirst({ where: { id: req.params.id, ownerCompanyId: { in: _grupoCompanyIds(req) } }, include: { campos: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const grupo = _grupoCompanyIds(req);
+    const _companyName = {};
+    for (const uc of (req.user?.userCompanies || [])) _companyName[uc.companyId] = uc.company?.name || '';
+    const campos = [];
+    const companyIds = new Set();
+    for (const link of cur.campos) {
+      if (!link.campoId || !link.companyId) continue;               // sólo campos reales/sombra
+      if (!grupo.includes(link.companyId)) continue;                // empresa fuera del acceso del usuario
+      const campo = await prisma.campo.findFirst({ where: { id: link.campoId }, select: { id: true, nombre: true } });
+      if (!campo) continue;
+      companyIds.add(link.companyId);
+      campos.push({ linkId: link.id, campoId: campo.id, companyId: link.companyId,
+        empresa: link.esExterno ? (link.externoTitular || 'Externo') : (_companyName[link.companyId] || ''),
+        nombre: campo.nombre, esExterno: !!link.esExterno,
+        hectareas: Number(link.hectareas || 0), cultivo: link.cultivo || null });
+    }
+    const productosPorEmpresa = {}, empleadosPorEmpresa = {};
+    for (const cid of companyIds) {
+      const prods = await prisma.producto.findMany({
+        where: { companyId: cid, activo: true, categoria: { notIn: ['granos', 'hacienda'] } },
+        select: { id: true, nombre: true, unidad: true }, orderBy: { nombre: 'asc' } });
+      productosPorEmpresa[cid] = prods;
+      const emps = await prisma.empleado.findMany({ where: { companyId: cid, activo: true }, select: { id: true, nombre: true, apellido: true }, orderBy: { apellido: 'asc' } });
+      empleadosPorEmpresa[cid] = emps.map(e => ({ id: e.id, nombre: `${e.nombre} ${e.apellido || ''}`.trim() }));
+    }
+    res.json({ ok: true, data: { ciclo: cur.ciclo || null, campos, productosPorEmpresa, empleadosPorEmpresa } });
+  } catch (e) { next(e); }
+});
+
+// Asegura una campaña para el lote del campo, en el ciclo de la sociedad. La crea si no existe.
+async function _sociedadEnsureCampana(link, cur, cultivoFallback) {
+  const campo = await prisma.campo.findFirst({ where: { id: link.campoId }, include: { lotes: { select: { id: true } } } });
+  if (!campo) throw Object.assign(new Error('Campo no encontrado'), { status: 404 });
+  let loteId = campo.lotes[0]?.id;
+  if (!loteId) { const l = await prisma.lote.create({ data: { campoId: campo.id, nombre: 'Lote único', hectareas: Number(campo.hectareas || 0) } }); loteId = l.id; }
+  const loteIds = campo.lotes.map(l => l.id); if (!loteIds.includes(loteId)) loteIds.push(loteId);
+  const ciclo = (cur.ciclo || '').trim();
+  let campana = (await prisma.campana.findMany({ where: { loteId: { in: loteIds }, companyId: link.companyId }, orderBy: { createdAt: 'desc' } }))
+    .filter(c => String(c.estado || '') !== 'cerrada')
+    .filter(c => !ciclo || String(c.ciclo || '').trim() === ciclo)[0];
+  if (!campana) {
+    campana = await prisma.campana.create({ data: {
+      companyId: link.companyId, loteId,
+      nombre: `Sociedad ${cur.nombre}${ciclo ? ' — ' + ciclo : ''}`,
+      cultivo: cultivoFallback || link.cultivo || 'Sin especificar',
+      ciclo: ciclo || null, hectareas: Number(link.hectareas || campo.hectareas || 0),
+      estado: 'en_curso',
+      observaciones: `Campaña creada automáticamente desde la Sociedad/UTE "${cur.nombre}".`,
+    }});
+  }
+  return campana;
+}
+
+// Crea una labor o un insumo en el campo elegido (empresa dueña), desde la sociedad.
+app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('produccion:create'), async (req, res, next) => {
+  try {
+    const cur = await _sociedadDelGrupo(req, req.params.id);
+    if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
+    const d = z.object({
+      linkId: z.string(),
+      tipo: z.enum(['insumo', 'labor']),
+      item: z.string().min(1),                       // insumo: nombre / labor: tipo de labor
+      fecha: z.coerce.date().nullable().optional(),
+      hectareasAplicadas: z.coerce.number().nullable().optional(),
+      costoHa: z.coerce.number().nullable().optional(),
+      monedaCosto: z.string().nullable().optional(),
+      cultivo: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+      // insumo
+      productoId: z.string().nullable().optional(),
+      unidadHa: z.coerce.number().nullable().optional(),
+      precioUnit: z.coerce.number().nullable().optional(),
+      subtipo: z.string().nullable().optional(),
+      descontarStock: z.boolean().optional(),
+      // labor
+      empleadoId: z.string().nullable().optional(),
+    }).parse(req.body);
+
+    const link = await prisma.sociedadCampo.findFirst({ where: { id: d.linkId, sociedadId: cur.id } });
+    if (!link || !link.campoId || !link.companyId) return res.status(400).json({ ok: false, error: 'Campo de la sociedad no válido' });
+    if (!_grupoCompanyIds(req).includes(link.companyId)) return res.status(403).json({ ok: false, error: 'No tenés acceso a la empresa de ese campo' });
+
+    const campana = await _sociedadEnsureCampana(link, cur, d.cultivo);
+    const fecha = d.fecha || new Date();
+    const tgt = link.companyId;
+
+    if (d.tipo === 'insumo') {
+      let prod = null;
+      if (d.productoId) prod = await prisma.producto.findFirst({ where: { id: d.productoId, companyId: tgt } });
+      const descontar = d.descontarStock !== false && !!prod;   // sólo si eligió producto real
+      const cantConsumida = Number(d.unidadHa || 0) * Number(d.hectareasAplicadas || 0);
+      const row = await prisma.$transaction(async (tx) => {
+        const ins = await tx.insumoAplicado.create({ data: {
+          campanaId: campana.id, productoId: prod?.id || null, nombre: prod?.nombre || d.item,
+          cantidad: d.unidadHa || 0, unidad: d.subtipo || prod?.unidad || 'u/ha', fecha,
+          costo: d.costoHa || 0, precioUnit: d.precioUnit ?? null,
+          hectareasAplicadas: d.hectareasAplicadas ?? null, observaciones: d.observaciones || null,
+        }});
+        if (descontar && cantConsumida > 0) {
+          const total = (d.precioUnit || 0) * cantConsumida;
+          const mov = await tx.movimiento.create({ data: {
+            companyId: tgt, productoId: prod.id, depositoId: null, fecha, tipo: 'egreso', motivo: 'aplicacion',
+            cantidad: cantConsumida, precio: d.precioUnit ?? null, total: total || null,
+            referencia: `INS-${ins.id.slice(-6).toUpperCase()}`,
+            observaciones: `Aplicado desde Sociedad "${cur.nombre}" (${prod.nombre})`, userId: req.user?.id || null,
+          }});
+          await tx.insumoAplicado.update({ where: { id: ins.id }, data: { movimientoId: mov.id } });
+          ins.movimientoId = mov.id;
+        }
+        return ins;
+      });
+      return res.status(201).json({ ok: true, data: { ...row, tipo: 'insumo', descontoStock: descontar && cantConsumida > 0 } });
+    }
+
+    // Labor
+    let responsable = null;
+    if (d.empleadoId) {
+      const emp = await prisma.empleado.findFirst({ where: { id: d.empleadoId, companyId: tgt } });
+      if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado en la empresa del campo' });
+      responsable = `${emp.nombre} ${emp.apellido || ''}`.trim();
+    }
+    const labor = await prisma.laborAplicada.create({ data: {
+      campanaId: campana.id, tipo: d.item, fecha,
+      hectareasAplicadas: d.hectareasAplicadas ?? null,
+      costo: d.costoHa ?? null, monedaCosto: d.monedaCosto || 'USD',
+      empleadoId: d.empleadoId || null, responsable,
+      observaciones: d.observaciones || null,
+    }});
+    res.status(201).json({ ok: true, data: { ...labor, tipo: 'labor' } });
   } catch (e) { next(e); }
 });
 
@@ -3927,8 +4099,11 @@ async function _sociedadCompute(req, cur) {
       const campo = await prisma.campo.findFirst({ where: { id: link.campoId }, include: { lotes: { select: { id: true } } } });
       if (!campo) { filas.push({ linkId: link.id, externo: false, nombre: '(campo eliminado)', empresa: _companyName[link.companyId] || '', hectareas: Number(link.hectareas || 0), cultivos: [], kgCosechados: 0, viajes: 0, labores: 0, insumos: 0, costoEstimado: 0, aportante: link.aportante || null }); continue; }
       const loteIds = campo.lotes.map(l => l.id);
-      let campanas = loteIds.length ? await prisma.campana.findMany({ where: { loteId: { in: loteIds } }, select: { id: true, cultivo: true, ciclo: true } }) : [];
-      if (ciclo) campanas = campanas.filter(c => !c.ciclo || String(c.ciclo).trim() === ciclo);
+      let campanas = loteIds.length ? await prisma.campana.findMany({ where: { loteId: { in: loteIds } }, select: { id: true, cultivo: true, ciclo: true, estado: true } }) : [];
+      // No consolidamos campañas CERRADAS (ej. la 25/26 que ya se cerró) — sólo las vigentes de la sociedad.
+      campanas = campanas.filter(c => String(c.estado || '') !== 'cerrada');
+      // Si la sociedad tiene ciclo cargado, sólo suma las campañas de ESE ciclo (evita que se cuele otra campaña del campo).
+      if (ciclo) campanas = campanas.filter(c => String(c.ciclo || '').trim() === ciclo);
       const campIds = campanas.map(c => c.id);
       const cultivos = [...new Set(campanas.map(c => c.cultivo).filter(Boolean))];
       let kgCosechados = 0, nViajes = 0, nLabores = 0, nInsumos = 0, costo = 0;
@@ -3944,8 +4119,9 @@ async function _sociedadCompute(req, cur) {
       }
       const filaCult = cultivos.length ? cultivos : (link.cultivo ? [link.cultivo] : []);
       _sumaCultivo(filaCult, kgCosechados);
-      filas.push({ linkId: link.id, externo: false, nombre: campo.nombre, campoId: campo.id,
-        empresa: _companyName[link.companyId] || '', titular: campo.propietario || null,
+      filas.push({ linkId: link.id, externo: !!link.esExterno, nombre: campo.nombre, campoId: campo.id,
+        empresa: link.esExterno ? null : (_companyName[link.companyId] || ''),
+        titular: link.esExterno ? (link.externoTitular || campo.propietario || null) : (campo.propietario || null),
         hectareas: Number(link.hectareas || campo.hectareas || 0),
         cultivos: filaCult,
         kgCosechados: _round2(kgCosechados), viajes: nViajes, labores: nLabores, insumos: nInsumos,
@@ -5646,6 +5822,16 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
     const porEmpresa = empresas.map((emp) => {
       const ch = cheques.filter((c) => c.companyId === emp.id);
       const chPend = ch.filter((c) => estadosPendientes.includes((c.estado || '').toLowerCase()));
+      // Detalle de cheques FÍSICOS en cartera (no e-cheq): para verlos uno por uno en el resumen.
+      const chFisCartera = ch
+        .filter((c) => (c.estado || '').toLowerCase() === 'en_cartera' && (c.formato || 'fisico') !== 'electronico')
+        .sort((a, b) => new Date(a.fechaPago || 0) - new Date(b.fechaPago || 0))
+        .map((c) => ({
+          id: c.id, nroCheque: c.nroCheque, banco: c.banco || null, monto: Number(c.monto || 0),
+          fechaPago: c.fechaPago, fechaEmision: c.fechaEmision, tipo: c.tipo,
+          librador: c.librador || c.cuitTitular || null, endosante: c.endosante || null,
+          enPoderDe: c.enPoderDe || null, beneficiario: c.beneficiario || null,
+        }));
       const chVenc = chPend.filter((c) => c.fechaPago && new Date(c.fechaPago) < hoy);
       const chAVenc = chPend.filter((c) => {
         if (!c.fechaPago) return false;
@@ -5742,6 +5928,10 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
           montoAVencer15: sumMonto(chAVenc),
           vencidos: chVenc.length,
           montoVencidos: sumMonto(chVenc),
+          // Detalle de los cheques físicos en cartera (para el desglose en el resumen).
+          fisicosCartera: chFisCartera.length,
+          montoFisicosCartera: chFisCartera.reduce((a, c) => a + c.monto, 0),
+          detalleCartera: chFisCartera,
         },
         efectivo: { saldo: saldoEfectivo, movimientos: ef.length, cajas },
         flujoCaja: { saldoActual: saldoFlujo, movimientos: fc.length },
@@ -11747,12 +11937,20 @@ const _AYUDA_KB = [
       'Después está la plata invertida por rubro (compra, alimentación, sanidad, labores, otros) y el rendimiento por lote (mejor a peor por margen).',
       'Abajo, el circuito comercial del período (mes/año/todo): ventas por liquidación y cuánto queda por cobrar, y las guías DT-e con lo que falta vincular o pagar.'],
     atajo:{ page:'ganaderiaDash', label:'Abrir Ganadería 360' } },
-  { id:'sociedades_ute', terms:['sociedad','ute','sociedad de campaña','negocio en participacion','union transitoria','socios','armar una sociedad','campos de varias empresas','campos de socios','liquidar la sociedad','participacion de socios','como reparto entre socios','aportes de socios','spl','sociedad multiempresa','campo externo','cosecha en conjunto'],
+  { id:'resumen_multiempresa', terms:['resumen multiempresa','resumen multi-empresa','resumen de todas las empresas','cheques en cartera de todas las empresas','ver los cheques de todas las empresas','cheques fisicos en cartera','detalle de cheques en cartera','cuantos cheques tengo en cartera','cheques por empresa','cartera de cheques del grupo','consolidado de cheques'],
+    titulo:'Resumen multiempresa (cheques físicos en cartera detallados)',
+    pasos:[
+      'Entrá a Tablero → Resumen multi-empresa. Arriba tenés las tarjetas del grupo (cheques en cartera, a vencer, vencidos, efectivo, créditos, a cobrar/pagar, etc.) y la tabla por empresa. Con los tildes elegís qué empresas entran en los totales.',
+      'Debajo de la tabla está el recuadro "🧾 Cheques físicos en cartera": lista los cheques físicos (no e-cheq) UNO POR UNO de las empresas tildadas, con N°, banco, librador / de quién vino, en poder de quién está, tipo, vencimiento e importe, y el total al pie.',
+      'Los cheques vencidos aparecen en rojo. Para ver o gestionar un cheque puntual (depositar, endosar, etc.) usá el botón "Cheques →" de la empresa o entrá a esa empresa → Cheques.'],
+    atajo:{ page:'resumenGlobal', label:'Abrir Resumen multi-empresa' } },
+  { id:'sociedades_ute', terms:['sociedad','ute','sociedad de campaña','negocio en participacion','union transitoria','socios','armar una sociedad','campos de varias empresas','campos de socios','liquidar la sociedad','participacion de socios','como reparto entre socios','aportes de socios','spl','sociedad multiempresa','campo externo','cosecha en conjunto','cargar labor en la sociedad','cargar insumo en la sociedad','cargar sin cambiar de empresa','carga centralizada','labores campo externo','insumos campo externo','no me deja cargar en el campo externo','me figura campaña cerrada','se cuela la campaña vieja'],
     titulo:'Sociedades / UTE (negocio en participación entre empresas)',
     pasos:[
       'Entrá a Producción → Sociedades / UTE y tocá "+ Nueva sociedad". Ponele nombre (ej. SPL 2026/27), la campaña/ciclo y, si querés, cargá los socios y qué aporta cada uno (campos, maquinaria, líquidos, empleados).',
-      'Abrí la sociedad y con "+ Agregar campo" sumale los campos: podés elegir campos de CUALQUIERA de tus empresas (Del Pistrin, DLL, Gerardo…) o cargar un campo EXTERNO de un socio (con su titular/CUIT). No cambia la facturación: las cartas de porte siguen saliendo del titular real del campo.',
-      'El tablero consolida por campo: hectáreas, cultivo, kg cosechados (de las cartas de porte) y costo estimado (labores + insumos), con totales, cruzando todas tus empresas.',
+      'Abrí la sociedad y con "+ Agregar campo" sumale los campos: podés elegir campos de CUALQUIERA de tus empresas (Del Pistrin, DLL, Gerardo…) o cargar un campo EXTERNO de un socio (con su titular/CUIT). No cambia la facturación: las cartas de porte siguen saliendo del titular real del campo. A los campos externos el sistema les crea un campo interno automáticamente, así también se les pueden cargar labores e insumos.',
+      'Cargá labores e insumos SIN cambiar de empresa: con el botón "➕ Cargar labor / insumo" elegís cualquier campo de la sociedad (de la empresa que sea, o externo) y lo cargás desde ahí. El dato queda guardado en la empresa dueña del campo (se ve también en su producción) y no se duplica. En insumos podés elegir descontar del stock de esa empresa o registrar solo el costo.',
+      'El tablero consolida por campo: hectáreas, cultivo, kg cosechados (de las cartas de porte) y costo estimado (labores + insumos), con totales, cruzando todas tus empresas. Ojo: sólo suma las campañas del CICLO de la sociedad y que NO estén cerradas (por eso conviene cargarle el ciclo, ej. 26/27; así no se cuela una campaña vieja del campo).',
       'Si una carta de porte sale de un socio (otra empresa), al cargar el viaje elegí la Sociedad en el selector "Sociedad / UTE" para que sume a la cosecha.',
       'Para repartir: botón "💰 Liquidación". Poné el precio $/tn (valoriza la cosecha = ingreso), cargá gastos comunes y los aportes de cada socio, y el % de participación (con "Sugerir % por aporte"). El sistema calcula ingreso − gastos = resultado y el neto a cobrar/poner de cada socio. Se puede imprimir/PDF.'],
     atajo:{ page:'sociedades', label:'Abrir Sociedades / UTE' } },

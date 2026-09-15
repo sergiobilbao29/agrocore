@@ -256,6 +256,11 @@ model Campo {
   geolocalizacion String?   // "lat,lng" o URL Maps (ej. https://maps.app.goo.gl/xxx)
   observaciones   String?
   esDeposito      Boolean  @default(false)  // si el campo funciona también como depósito (silo/galpón propio)
+  // Campo "sombra" creado automáticamente para un campo EXTERNO de un socio en una Sociedad/UTE.
+  // Vive bajo la empresa desde la que se creó la sociedad (ownerCompany) sólo para poder cargarle
+  // labores/insumos y consolidar costos. NO cambia la titularidad fiscal de las cartas de porte.
+  esExternoSociedad Boolean @default(false)
+  sociedadId      String?   // sociedad a la que pertenece este campo sombra (si esExternoSociedad)
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -368,6 +373,7 @@ model SociedadCampo {
   externoTitular  String?                   // titular/arrendatario real (sale la CP)
   externoCuit     String?
   externoLocalidad String?
+  esExterno       Boolean  @default(false)  // true = campoId apunta a un Campo "sombra" de un socio externo
   hectareas       Float    @default(0)      // ha aportadas a la sociedad (puede ser parcial)
   cultivo         String?                   // cultivo de la campaña en ese campo (informativo)
   aportante       String?                   // quién aporta el campo (socio/empresa)

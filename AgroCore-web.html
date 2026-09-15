@@ -2833,6 +2833,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/09/2026',
+      titulo:'🧾 v2.213.0 — Resumen multiempresa: cheques físicos en cartera detallados',
+      desc:'En el <b>Resumen multiempresa</b>, además del total por empresa, ahora hay un recuadro <b>“🧾 Cheques físicos en cartera”</b> que lista los cheques <b>uno por uno</b> (N°, banco, librador / de quién vino, en poder de quién está, tipo, vencimiento e importe) de las empresas seleccionadas, con el total al pie. Los vencidos se marcan en rojo. No incluye e-cheques.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/09/2026',
+      titulo:'🤝 v2.213.0 — Sociedades/UTE: cargá labores e insumos desde una sola pantalla',
+      desc:'Desde la solapa de la Sociedad ahora hay un botón <b>➕ Cargar labor / insumo</b>: elegís cualquier campo de la sociedad (de la empresa que sea, o un <b>campo externo</b> de un socio) y cargás la labor o el insumo <b>sin cambiar de empresa</b>. El dato queda guardado en la empresa dueña del campo (se ve también en su producción) — no se duplica. En insumos podés elegir <b>descontar del stock</b> de esa empresa o registrar <b>solo el costo</b>. Además, los <b>campos externos</b> ya se pueden trabajar (se les crea un campo interno automáticamente, sin cambiar la titularidad fiscal de las cartas de porte) y el tablero <b>ya no mezcla campañas cerradas</b>: sólo consolida las del ciclo de la sociedad.' },
     { tag:'Arreglo', color:'bg-rose-100 text-rose-800 border-rose-300', fecha:'14/09/2026',
       titulo:'🧾 v2.212.0 — Cobro con varios medios: método correcto y cheques en el recibo',
       desc:'Cuando cobrás con <b>varios medios</b> (ej. efectivo + varios cheques), ahora el pago figura con el <b>método real</b> (“efectivo + cheque”) en vez de mostrar todo como efectivo — tanto en la guía como en la cuenta corriente. Y el <b>recibo</b> ahora <b>detalla los cheques</b> entregados (N°, banco, vencimiento e importe) en pantalla, impresión y PDF.' },
@@ -6017,6 +6023,61 @@ pages.resumenGlobal = async function() {
       </div>
 
       ${(() => {
+        // ===== Cheques físicos en cartera (detalle) =====
+        // Muestra uno por uno los cheques físicos en cartera de las empresas seleccionadas.
+        const chFilas = [];
+        for (const e of porEmp) {
+          if (!seleccionadas.has(e.companyId)) continue;
+          for (const c of ((e.cheques && e.cheques.detalleCartera) || [])) {
+            chFilas.push({ ...c, empresaId: e.companyId, empresaName: e.companyName, color: e.color });
+          }
+        }
+        chFilas.sort((a,b)=> (a.empresaName||'').localeCompare(b.empresaName||'','es') || (new Date(a.fechaPago||0)-new Date(b.fechaPago||0)));
+        const totCh = chFilas.reduce((a,c)=>a+Number(c.monto||0),0);
+        const hoyMs = Date.now();
+        if (chFilas.length === 0) {
+          return `
+          <div class="kpi p-0 overflow-hidden mt-4">
+            <div class="px-4 py-3 bg-slate-50 border-b">
+              <h3 class="font-semibold text-slate-800">🧾 Cheques físicos en cartera</h3>
+              <div class="text-xs text-slate-500">Detalle de los cheques físicos disponibles en cartera, por empresa.</div>
+            </div>
+            <div class="text-center text-slate-400 py-8 px-4">Las empresas seleccionadas no tienen cheques físicos en cartera.</div>
+          </div>`;
+        }
+        return `
+        <div class="kpi p-0 overflow-hidden mt-4">
+          <div class="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 class="font-semibold text-slate-800">🧾 Cheques físicos en cartera <span class="text-slate-400 font-normal">(${chFilas.length})</span></h3>
+              <div class="text-xs text-slate-500">Detalle uno por uno (no e-cheq). Los vencidos aparecen en rojo.</div>
+            </div>
+            <div class="text-right"><div class="text-[11px] text-slate-500">Total en cartera (físicos)</div><div class="text-lg font-bold text-emerald-700">${fmt$(totCh)}</div></div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="data text-sm">
+              <thead><tr>
+                <th>Empresa</th><th>N°</th><th>Banco</th><th>Librador / De quién</th><th>En poder de</th><th>Tipo</th><th class="text-right">Vencimiento</th><th class="text-right">Monto</th>
+              </tr></thead>
+              <tbody>
+                ${chFilas.map(c=>{ const venc = c.fechaPago && (new Date(c.fechaPago).getTime() < hoyMs); return `<tr class="table-row">
+                  <td><div class="flex items-center gap-1.5">${c.color?`<span class="w-2.5 h-2.5 rounded-full" style="background:${esc(c.color)}"></span>`:''}<span class="text-xs">${esc(c.empresaName)}</span></div></td>
+                  <td class="font-mono text-xs">${esc(c.nroCheque||'—')}</td>
+                  <td class="text-xs">${esc(c.banco||'—')}</td>
+                  <td class="text-xs">${esc(c.librador||c.endosante||'—')}</td>
+                  <td class="text-xs">${esc(c.enPoderDe||'—')}</td>
+                  <td class="text-xs">${c.tipo==='propio'?'Propio':'Terceros'}</td>
+                  <td class="text-right text-xs ${venc?'text-red-600 font-semibold':''}">${c.fechaPago?fmtFecha(c.fechaPago):'—'}</td>
+                  <td class="text-right font-semibold">${fmt$(c.monto)}</td>
+                </tr>`;}).join('')}
+              </tbody>
+              <tfoot><tr class="font-bold bg-slate-50"><td colspan="7" class="text-right">TOTAL</td><td class="text-right text-emerald-700">${fmt$(totCh)}</td></tr></tfoot>
+            </table>
+          </div>
+        </div>`;
+      })()}
+
+      ${(() => {
         // ===== Cajas por empresa =====
         // Aplanamos: [{empresaId, empresaName, color, caja, ingresos, egresos, saldo, ...}]
         const filas = [];
@@ -8945,7 +9006,7 @@ async function socTablero(id){
   $('#page-body').innerHTML = `
     <div class="flex items-center justify-between mb-3">
       <button class="btn btn-ghost text-sm" onclick="socVolver()">‹ Volver</button>
-      <div class="flex gap-2">${canU?`<button class="btn btn-secondary text-sm" onclick='socCampoForm(${JSON.stringify(id)})'>+ Agregar campo</button>`:''}<button class="btn btn-primary text-sm" onclick='socLiquidacion(${JSON.stringify(id)})'>💰 Liquidación</button>${canU?`<button class="btn btn-ghost text-sm" onclick='socEditarActual(${JSON.stringify(id)})'>✏️ Editar</button>`:''}</div>
+      <div class="flex gap-2 flex-wrap">${canU?`<button class="btn btn-secondary text-sm" onclick='socCargaForm(${JSON.stringify(id)})'>➕ Cargar labor / insumo</button>`:''}${canU?`<button class="btn btn-secondary text-sm" onclick='socCampoForm(${JSON.stringify(id)})'>+ Agregar campo</button>`:''}<button class="btn btn-primary text-sm" onclick='socLiquidacion(${JSON.stringify(id)})'>💰 Liquidación</button>${canU?`<button class="btn btn-ghost text-sm" onclick='socEditarActual(${JSON.stringify(id)})'>✏️ Editar</button>`:''}</div>
     </div>
     <div class="kpi mb-3">
       <div class="font-bold text-emerald-900 text-lg">🤝 ${esc(s.nombre)}</div>
@@ -8965,7 +9026,7 @@ async function socTablero(id){
     ${ct.cantidad?`<div class="kpi mb-3"><div class="text-sm font-medium text-slate-700 mb-1">📩 Cartas de porte etiquetadas a la sociedad (${ct.cantidad}) — ${fmtN(ct.kg)} kg</div>
       <table class="data text-sm"><thead><tr><th>Fecha</th><th>Carta de porte</th><th>Producto</th><th>Origen→Destino</th><th class="text-right">Kg</th></tr></thead>
       <tbody>${ct.detalle.map(v=>`<tr><td>${fmtFecha(v.fecha)}</td><td class="font-mono text-xs">${esc(v.cartaPorte||'—')}</td><td>${esc(v.producto||'—')}</td><td class="text-xs">${esc(v.origen||'')} → ${esc(v.destino||'')}</td><td class="text-right">${fmtN(v.kg)}</td></tr>`).join('')}</tbody></table></div>`:''}
-    <div class="text-[11px] text-slate-500">La cosecha sale de las cartas de porte (viajes) de los campos de la sociedad. Para sumar una carta que salió de un socio, editá el viaje y elegí esta sociedad. El costo estimado suma labores + insumos según la moneda de carga.</div>`;
+    <div class="text-[11px] text-slate-500">La cosecha sale de las cartas de porte (viajes) de los campos de la sociedad. Para sumar una carta que salió de un socio, editá el viaje y elegí esta sociedad. El costo estimado suma labores + insumos según la moneda de carga.<br>💡 Con <b>➕ Cargar labor / insumo</b> cargás directo en cualquier campo (de la empresa que sea, o externo) sin cambiar de empresa: el dato queda guardado en la empresa dueña del campo y se ve también en su producción. Sólo se consolidan las campañas del ciclo de la sociedad que no estén cerradas.</div>`;
 }
 function socEditarActual(id){ const s=(state.cache.sociedades||[]).find(x=>x.id===id); if(s) socForm(s); }
 
@@ -9025,6 +9086,103 @@ async function socCampoSave(id){
 async function socCampoDel(id,linkId){
   if(!confirm('¿Quitar este campo de la sociedad? (no borra el campo ni sus datos)')) return;
   try{ await api('/api/sociedades/'+id+'/campos/'+linkId,{method:'DELETE'}); toast('Campo quitado','success'); socTablero(id); }catch(e){ toast(e.message,'error'); }
+}
+
+// ---- Carga centralizada de labores/insumos desde la solapa de la Sociedad ----
+async function socCargaForm(id){
+  let dt; try{ dt=(await api('/api/sociedades/'+id+'/carga-datos')).data; }catch(e){ return toast(e.message,'error'); }
+  if(!dt.campos || !dt.campos.length) return toast('Primero agregá campos a la sociedad','warn');
+  state._socCarga=dt; state._socCargaId=id; state._socCargaTipo='insumo';
+  const hoy=new Date().toISOString().slice(0,10);
+  const campoOpts=dt.campos.map(c=>`<option value="${esc(c.linkId)}">${c.esExterno?'📍 ':'🗺️ '}${esc(c.nombre)} · ${esc(c.empresa||'')}</option>`).join('');
+  openModal({ title:'➕ Cargar labor / insumo', size:'max-w-lg',
+    body:`
+      <label class="label text-xs">Campo (de la sociedad)</label>
+      <select id="soc-cg-campo" class="input" onchange="socCargaCampoChange()">${campoOpts}</select>
+      <div id="soc-cg-dest" class="text-[11px] text-emerald-700 mt-1"></div>
+      <div class="flex gap-2 my-3 text-xs">
+        <button type="button" class="btn btn-secondary text-xs flex-1" id="soc-cg-t-ins" onclick="socCargaTipo('insumo')">🧪 Insumo</button>
+        <button type="button" class="btn btn-ghost text-xs flex-1" id="soc-cg-t-lab" onclick="socCargaTipo('labor')">🚜 Labor</button>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="label text-xs">Fecha</label><input id="soc-cg-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label text-xs">Hectáreas aplicadas</label><input id="soc-cg-ha" type="number" step="0.01" class="input" placeholder="0"/></div>
+      </div>
+      <!-- INSUMO -->
+      <div id="soc-cg-ins" class="mt-2">
+        <label class="label text-xs">Insumo del catálogo (opcional)</label>
+        <select id="soc-cg-prod" class="input" onchange="socCargaProdChange()"><option value="">— Sin producto (solo costo) —</option></select>
+        <div class="grid grid-cols-2 gap-2 mt-2">
+          <div><label class="label text-xs">Nombre / detalle</label><input id="soc-cg-item" class="input" placeholder="Ej: Glifosato"/></div>
+          <div><label class="label text-xs">Unidad</label><input id="soc-cg-unidad" class="input" placeholder="lt/ha, kg/ha…"/></div>
+          <div><label class="label text-xs">Cant. por ha</label><input id="soc-cg-unidadha" type="number" step="0.0001" class="input" placeholder="0"/></div>
+          <div><label class="label text-xs">Precio unitario</label><input id="soc-cg-precio" type="number" step="0.01" class="input" placeholder="0"/></div>
+        </div>
+        <label class="flex items-center gap-2 mt-2 text-sm"><input type="checkbox" id="soc-cg-stock"/> Descontar del stock de la empresa dueña del campo</label>
+        <div class="text-[11px] text-slate-500 mt-1">Si tildás descontar stock, se descuenta la cantidad por ha × hectáreas del depósito de esa empresa. Si no, se registra sólo el costo.</div>
+      </div>
+      <!-- LABOR -->
+      <div id="soc-cg-lab" class="mt-2 hidden">
+        <div class="grid grid-cols-2 gap-2">
+          <div class="col-span-2"><label class="label text-xs">Tipo de labor</label><input id="soc-cg-labtipo" class="input" placeholder="Siembra, pulverización, cosecha…"/></div>
+          <div><label class="label text-xs">Costo por ha</label><input id="soc-cg-costoha" type="number" step="0.01" class="input" placeholder="0"/></div>
+          <div><label class="label text-xs">Moneda</label><select id="soc-cg-moneda" class="input"><option value="USD">US$</option><option value="ARS">$ ARS</option></select></div>
+          <div class="col-span-2"><label class="label text-xs">Empleado responsable (opcional)</label><select id="soc-cg-emp" class="input"><option value="">—</option></select></div>
+        </div>
+      </div>
+      <div class="mt-2"><label class="label text-xs">Observaciones</label><input id="soc-cg-obs" class="input"/></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='socCargaSave(${JSON.stringify(id)})'>Guardar</button>` });
+  socCargaCampoChange();
+}
+function socCargaTipo(t){ state._socCargaTipo=t;
+  document.getElementById('soc-cg-ins')?.classList.toggle('hidden', t!=='insumo');
+  document.getElementById('soc-cg-lab')?.classList.toggle('hidden', t!=='labor');
+  document.getElementById('soc-cg-t-ins')?.classList.toggle('btn-secondary', t==='insumo'); document.getElementById('soc-cg-t-ins')?.classList.toggle('btn-ghost', t!=='insumo');
+  document.getElementById('soc-cg-t-lab')?.classList.toggle('btn-secondary', t==='labor'); document.getElementById('soc-cg-t-lab')?.classList.toggle('btn-ghost', t!=='labor');
+}
+function socCargaCampoChange(){
+  const dt=state._socCarga; if(!dt) return;
+  const linkId=document.getElementById('soc-cg-campo')?.value;
+  const c=(dt.campos||[]).find(x=>x.linkId===linkId); if(!c) return;
+  const dest=document.getElementById('soc-cg-dest'); if(dest) dest.innerHTML=`Se cargará en: <b>${esc(c.empresa||'')}</b>${c.esExterno?' (campo externo)':''} · campaña ${dt.ciclo?('del ciclo '+esc(dt.ciclo)):'de la sociedad'}`;
+  // productos de esa empresa
+  const prods=(dt.productosPorEmpresa||{})[c.companyId]||[];
+  const psel=document.getElementById('soc-cg-prod'); if(psel) psel.innerHTML=`<option value="">— Sin producto (solo costo) —</option>`+prods.map(p=>`<option value="${esc(p.id)}" data-unidad="${esc(p.unidad||'')}" data-nombre="${esc(p.nombre)}">${esc(p.nombre)}${p.unidad?(' ('+esc(p.unidad)+')'):''}</option>`).join('');
+  // empleados de esa empresa
+  const emps=(dt.empleadosPorEmpresa||{})[c.companyId]||[];
+  const esel=document.getElementById('soc-cg-emp'); if(esel) esel.innerHTML=`<option value="">—</option>`+emps.map(e=>`<option value="${esc(e.id)}">${esc(e.nombre)}</option>`).join('');
+}
+function socCargaProdChange(){
+  const sel=document.getElementById('soc-cg-prod'); const opt=sel?.selectedOptions?.[0]; if(!opt) return;
+  if(opt.value){ const it=document.getElementById('soc-cg-item'); if(it&&!it.value) it.value=opt.getAttribute('data-nombre')||'';
+    const un=document.getElementById('soc-cg-unidad'); if(un&&!un.value) un.value=opt.getAttribute('data-unidad')||'';
+    const st=document.getElementById('soc-cg-stock'); if(st) st.checked=true; }
+}
+async function socCargaSave(id){
+  const linkId=document.getElementById('soc-cg-campo')?.value; if(!linkId) return toast('Elegí un campo','warn');
+  const tipo=state._socCargaTipo||'insumo';
+  const fecha=document.getElementById('soc-cg-fecha')?.value||null;
+  const ha=Number(document.getElementById('soc-cg-ha')?.value||0)||null;
+  const obs=document.getElementById('soc-cg-obs')?.value.trim()||null;
+  let body;
+  if(tipo==='insumo'){
+    const item=(document.getElementById('soc-cg-item')?.value||'').trim();
+    const productoId=document.getElementById('soc-cg-prod')?.value||null;
+    if(!item && !productoId) return toast('Poné el insumo (nombre o producto)','warn');
+    body={ linkId, tipo:'insumo', item:item||(document.getElementById('soc-cg-prod')?.selectedOptions?.[0]?.getAttribute('data-nombre'))||'Insumo',
+      fecha, hectareasAplicadas:ha, productoId, subtipo:document.getElementById('soc-cg-unidad')?.value.trim()||null,
+      unidadHa:Number(document.getElementById('soc-cg-unidadha')?.value||0)||null, precioUnit:Number(document.getElementById('soc-cg-precio')?.value||0)||null,
+      descontarStock:!!document.getElementById('soc-cg-stock')?.checked, observaciones:obs };
+  } else {
+    const labtipo=(document.getElementById('soc-cg-labtipo')?.value||'').trim(); if(!labtipo) return toast('Poné el tipo de labor','warn');
+    body={ linkId, tipo:'labor', item:labtipo, fecha, hectareasAplicadas:ha,
+      costoHa:Number(document.getElementById('soc-cg-costoha')?.value||0)||null, monedaCosto:document.getElementById('soc-cg-moneda')?.value||'USD',
+      empleadoId:document.getElementById('soc-cg-emp')?.value||null, observaciones:obs };
+  }
+  try{ const r=await api('/api/sociedades/'+id+'/carga',{method:'POST',body:JSON.stringify(body)});
+    toast(tipo==='insumo'?('Insumo cargado'+(r.data?.descontoStock?' (stock descontado)':'')):'Labor cargada','success');
+    closeModal(); socTablero(id);
+  }catch(e){ toast(e.message,'error'); }
 }
 
 // ---- Liquidación de la participación de socios ----
