@@ -65,8 +65,8 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.215.0';
-const AGROCORE_BUILD = new Date('2026-09-15').toISOString().slice(0, 10);
+const AGROCORE_VERSION = '2.216.0';
+const AGROCORE_BUILD = new Date('2026-09-16').toISOString().slice(0, 10);
 
 // ============================================================
 // CONFIG
@@ -9406,6 +9406,7 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
       porcMerma: z.number().min(0).max(100).default(0),
       precioPorTn: z.number().nonnegative(),
       conceptos: z.array(concSchema).default([]),
+      deducciones: z.array(z.object({ concepto: z.string().min(1), importe: z.coerce.number().positive(), facturaCompraId: z.string().nullable().optional(), proveedorId: z.string().nullable().optional(), observaciones: z.string().nullable().optional() })).nullable().optional(),
       fechaCobroEst: z.coerce.date().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       viajeIds: z.array(z.string()).nullable().optional(),
@@ -9471,6 +9472,8 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
             if (Object.keys(upd).length) { try { await tx.viaje.update({ where: { id: vid }, data: upd }); } catch {} } }
         }
       }
+      // Deducciones del comprador (flete/gastos) cargadas desde el formulario.
+      if (d.deducciones && d.deducciones.length) await _aplicarDeduccionesLiq(tx, req.companyId, liq, d.deducciones);
       return liq;
     });
     res.status(201).json({ ok: true, data: result });
@@ -9505,6 +9508,24 @@ async function _dedSaldarFactura(tx, companyId, ded, liq, fecha) {
   }});
   return cc.id;
 }
+// Crea una lista de deducciones para una liquidación (asiento haber + saldar factura vinculada).
+// Se usa al crear/editar la liquidación desde el formulario. 'liq' necesita { id, clienteId, numero, fecha }.
+async function _aplicarDeduccionesLiq(tx, companyId, liq, list) {
+  for (const x of (list || [])) {
+    if (!x || !x.concepto || !(Number(x.importe) > 0)) continue;
+    const ded = await tx.liquidacionDeduccion.create({ data: {
+      companyId, liquidacionId: liq.id, concepto: String(x.concepto), importe: Number(x.importe),
+      fecha: x.fecha ? new Date(x.fecha) : (liq.fecha || new Date()),
+      facturaCompraId: x.facturaCompraId || null, proveedorId: x.proveedorId || null,
+      observaciones: x.observaciones || null,
+    }});
+    const ctaCteLiqId = await _dedAsientoLiq(tx, companyId, ded, liq);
+    let ctaCtePagoId = null;
+    if (x.facturaCompraId) ctaCtePagoId = await _dedSaldarFactura(tx, companyId, ded, liq, ded.fecha);
+    await tx.liquidacionDeduccion.update({ where: { id: ded.id }, data: { ctaCteLiqId, ctaCtePagoId } });
+  }
+}
+
 // Crea el asiento haber en la cta cte del cliente por la deducción (baja el saldo a cobrar).
 async function _dedAsientoLiq(tx, companyId, ded, liq) {
   if (!liq.clienteId) return null;
@@ -9619,6 +9640,7 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
       fecha: z.coerce.date(), numero: z.string().nullable().optional(),
       kilosBrutos: z.number().nonnegative(), porcMerma: z.number().min(0).max(100).default(0),
       precioPorTn: z.number().nonnegative(), conceptos: z.array(concSchema).default([]),
+      deducciones: z.array(z.object({ concepto: z.string().min(1), importe: z.coerce.number().positive(), facturaCompraId: z.string().nullable().optional(), proveedorId: z.string().nullable().optional(), observaciones: z.string().nullable().optional() })).nullable().optional(),
       fechaCobroEst: z.coerce.date().nullable().optional(), observaciones: z.string().nullable().optional(),
       viajeIds: z.array(z.string()).nullable().optional(),
     });
@@ -9666,8 +9688,22 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
             if (Object.keys(upd).length) { try { await tx.viaje.update({ where: { id: vid }, data: upd }); } catch {} } }
         }
       }
+      // Deducciones: el _revertirLiqCereal de arriba ya borró sus asientos en cta cte, así que
+      // hay que reaplicarlas. Si el form las manda (nuevo), reemplazamos por esa lista; si no
+      // vienen (llamador viejo), preservamos las que había recreando su efecto.
+      const liqLike = { id: existing.id, clienteId: d.clienteId || null, numero: d.numero || null, fecha: d.fecha };
+      if (Array.isArray(d.deducciones)) {
+        await tx.liquidacionDeduccion.deleteMany({ where: { liquidacionId: existing.id } });
+        await _aplicarDeduccionesLiq(tx, req.companyId, liqLike, d.deducciones);
+      } else {
+        const olds = await tx.liquidacionDeduccion.findMany({ where: { liquidacionId: existing.id } });
+        if (olds.length) {
+          await tx.liquidacionDeduccion.deleteMany({ where: { liquidacionId: existing.id } });
+          await _aplicarDeduccionesLiq(tx, req.companyId, liqLike, olds.map(o => ({ concepto: o.concepto, importe: o.importe, facturaCompraId: o.facturaCompraId, proveedorId: o.proveedorId, fecha: o.fecha, observaciones: o.observaciones })));
+        }
+      }
     });
-    const full = await prisma.liquidacionCereal.findUnique({ where: { id: existing.id }, include: { deposito: true, conceptos: true } });
+    const full = await prisma.liquidacionCereal.findUnique({ where: { id: existing.id }, include: { deposito: true, conceptos: true, deducciones: true } });
     res.json({ ok: true, data: full });
   } catch (e) { next(e); }
 });

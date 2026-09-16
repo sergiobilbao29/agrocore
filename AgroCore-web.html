@@ -2833,6 +2833,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/09/2026',
+      titulo:'🌾 v2.216.0 — Deducciones de flete/gastos al crear o editar la liquidación',
+      desc:'Ahora las <b>deducciones del comprador</b> (flete/gastos) se pueden cargar <b>directamente al crear o editar</b> la liquidación de cereal, sin tener que entrar al detalle. En el formulario hay una sección <b>“Deducciones del comprador”</b> donde ponés concepto e importe y, si querés, <b>vinculás una factura de compra ya cargada</b> (queda saldada, porque la pagó el comprador al descontarla). El saldo a cobrar baja a lo que realmente cobrás. Al editar la liquidación las deducciones se conservan y se recalculan solas.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/09/2026',
       titulo:'🌾 v2.215.0 — Liquidaciones de cereal: deducciones de flete/gastos y estado real',
       desc:'Cuando el comprador te <b>descuenta flete o gastos</b> y cobrás menos que el neto, ahora en la liquidación (tocás la fila para ver el detalle) hay un bloque <b>“Deducciones del comprador”</b>: cargás el concepto y el importe y el <b>saldo a cobrar baja a lo que realmente cobrás</b>. Podés <b>vincular la factura de flete/gasto</b> (ahora o después) y esa factura queda <b>saldada</b> (la pagó el comprador al descontarla). Además el <b>estado</b> de cada liquidación (Pendiente / Parcial / Cobrada) ahora sale de la <b>cuenta corriente</b>, así siempre coincide con Cuentas a cobrar (se termina el desfasaje de “cobrada en un lado y pendiente en el otro”). El detalle muestra cuánto cobraste en efectivo/banco, cuánto se dedujo y el saldo.' },
@@ -29975,6 +29978,17 @@ async function liqForm(edit=null, desdeViajeId=null) {
         <div><label class="label text-xs">Impuestos</label><div id="lq-r-imp" class="text-base font-bold text-red-700">$ 0,00</div></div>
         <div><label class="label text-xs">NETO A COBRAR</label><div id="lq-r-neto" class="text-lg font-bold text-green-700">$ 0,00</div></div>
       </div>
+      <div class="kpi p-0 overflow-hidden mb-3">
+        <div class="px-3 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
+          <span class="text-sm font-medium text-slate-700">🚚 Deducciones del comprador (flete/gastos que te descontó)</span>
+          <button class="btn btn-secondary text-xs" onclick="liqAddDed()">+ Deducción</button>
+        </div>
+        <table class="data">
+          <thead><tr><th>Concepto</th><th class="text-right">Importe</th><th>Factura de compra (opcional)</th><th></th></tr></thead>
+          <tbody id="lq-ded"></tbody>
+        </table>
+        <div class="px-3 py-1.5 text-[11px] text-slate-500">Bajan el saldo a cobrar a lo que realmente cobrás. Si vinculás la factura, queda saldada (la pagó el comprador al descontarla). Podés dejarla sin factura y vincularla después.</div>
+      </div>
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Fecha estimada de cobro</label><input id="lq-cobro" type="date" class="input" value="${ed.fechaCobroEst?new Date(ed.fechaCobroEst).toISOString().slice(0,10):''}"/></div>
         <div><label class="label">Observaciones</label><input id="lq-obs" class="input" value="${esc(ed.observaciones||'')}"/></div>
@@ -29982,11 +29996,30 @@ async function liqForm(edit=null, desdeViajeId=null) {
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="liqSave()">💾 ${state._liqEditId?'Guardar cambios':'Registrar liquidación'}</button>`
   });
-  setTimeout(() => {
+  setTimeout(async () => {
     const cs = (ed.conceptos && ed.conceptos.length) ? ed.conceptos : (state._liqEditId ? [] : [{ tipo:'descuento', concepto:'Flete', importe:0 }]);
     cs.forEach(c => liqAddConc(c));
     liqRecalc();
+    // Facturas de compra para vincular en las deducciones + prefill de deducciones existentes.
+    try { state._liqFacturas = (await api('/api/facturas-compra')).data || []; } catch(_) { state._liqFacturas = []; }
+    (ed.deducciones || []).forEach(x => liqAddDed(x));
   }, 0);
+}
+function liqFacturaOpts(sel){
+  const facs = state._liqFacturas || [];
+  return `<option value="">— Sin factura —</option>` + facs.map(f=>{
+    const et = (f.tipo||'')+' '+(f.puntoVenta!=null?String(f.puntoVenta).padStart(4,'0')+'-':'')+(f.numero!=null?String(f.numero).padStart(8,'0'):'');
+    return `<option value="${esc(f.id)}" data-prov="${esc(f.proveedorId||'')}" ${sel===f.id?'selected':''}>${esc(f.proveedor?.nombre||f.proveedorNombre||'Proveedor')} · ${esc(et)} · ${fmt$(f.total||0)}</option>`;
+  }).join('');
+}
+function liqAddDed(d = { concepto:'', importe:0, facturaCompraId:'' }) {
+  const row = `<tr data-ld>
+    <td><input class="input text-sm" data-ldf="concepto" value="${esc(d.concepto||'')}" placeholder="Flete, Gastos, Secada..."/></td>
+    <td><input class="input text-sm w-32 text-right" type="number" step="0.01" data-ldf="importe" value="${d.importe||0}"/></td>
+    <td><select class="input text-sm" data-ldf="factura">${liqFacturaOpts(d.facturaCompraId||'')}</select></td>
+    <td><button class="btn btn-ghost text-red-600" onclick="this.closest('tr').remove()">×</button></td>
+  </tr>`;
+  $('#lq-ded').insertAdjacentHTML('beforeend', row);
 }
 // Suma los kg de las cartas de porte tildadas al campo Kilos brutos.
 function liqSumarKgCP(){ const s=$$('.lq-cp:checked').reduce((a,c)=>a+Number(c.dataset.kg||0),0); if(s>0){ const el=$('#lq-brut'); if(el){ el.value=Math.round(s); liqRecalc(); } } else { toast('Tildá al menos una carta de porte','warn'); } }
@@ -30024,6 +30057,14 @@ async function liqSave() {
     concepto: tr.querySelector('[data-lcf="concepto"]').value.trim(),
     importe: Number(tr.querySelector('[data-lcf="importe"]').value||0),
   })).filter(c => c.concepto);
+  const deducciones = $$('#lq-ded tr[data-ld]').map(tr => {
+    const fsel = tr.querySelector('[data-ldf="factura"]');
+    const fid = fsel && fsel.value ? fsel.value : null;
+    const prov = fid ? (fsel.selectedOptions[0]?.getAttribute('data-prov')||null) : null;
+    return { concepto: tr.querySelector('[data-ldf="concepto"]').value.trim(),
+      importe: Number(tr.querySelector('[data-ldf="importe"]').value||0),
+      facturaCompraId: fid, proveedorId: prov };
+  }).filter(x => x.concepto && x.importe > 0);
   const data = {
     depositoId: $('#lq-dep').value,
     productoId: $('#lq-prod').value,
@@ -30035,6 +30076,7 @@ async function liqSave() {
     porcMerma: Number($('#lq-merma').value||0),
     precioPorTn: Number($('#lq-prec').value||0),
     conceptos,
+    deducciones,
     fechaCobroEst: $('#lq-cobro').value ? new Date($('#lq-cobro').value).toISOString() : null,
     observaciones: $('#lq-obs').value.trim()||null,
   };
