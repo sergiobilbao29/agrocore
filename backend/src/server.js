@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.221.0';
+const AGROCORE_VERSION = '2.223.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1764,6 +1764,34 @@ app.get('/api/empresas/trial-leads', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Alta MANUAL de un lead / prospecto (los que no entran por el trial: los cargás vos).
+app.post('/api/empresas/trial-leads', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const schema = z.object({
+      nombre: z.string().min(1),
+      empresa: z.string().nullable().optional(),
+      cuit: z.string().nullable().optional(),
+      email: z.string().nullable().optional(),
+      telefono: z.string().nullable().optional(),
+      actividad: z.string().nullable().optional(),
+      segEstado: z.string().nullable().optional(),
+      segNotas: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const token = 'manual-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const row = await prisma.trialSignup.create({ data: {
+      nombre: d.nombre.trim(), empresa: (d.empresa || d.nombre).trim(), cuit: d.cuit || null,
+      email: (d.email || '').trim(),   // el modelo pide String; vacío es válido
+      telefono: d.telefono || null, actividad: d.actividad || null,
+      passwordHash: '', token, expiresAt: new Date(0),   // lead manual: no es un alta de prueba real
+      verifiedAt: null, companyId: null,
+      segEstado: d.segEstado || 'Nuevo', segNotas: d.segNotas || 'Cargado a mano',
+    }});
+    res.status(201).json({ ok: true, data: { id: row.id } });
+  } catch (e) { next(e); }
+});
+
 // Actualizar el seguimiento comercial de un lead de prueba (estado, próximo contacto, notas).
 app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
   try {
@@ -1935,7 +1963,14 @@ app.get('/api/suscripciones/tablero', requireCompany, requirePermission('ventas:
       const e = estados[_abonoRef(s.id, periodo)];
       if (e && e.generada) { generadas++; const cob = (s.monto || 0) - (e.saldo || 0); cobrado += cob; pendiente += Math.max(0, e.saldo || 0); if (e.cobrada) cobradas++; }
     }
-    res.json({ ok: true, data: { periodo, activos: activos.length, total: subs.length, mrr: _round2(mrr), generadas, cobradas, cobrado: _round2(cobrado), pendiente: _round2(pendiente) } });
+    // Vencidos: cuotas de abono (cualquier mes) ya vencidas y con saldo pendiente.
+    const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+    const rows = await prisma.ctaCte.findMany({ where: { companyId: req.companyId, contactoTipo: 'cliente', referencia: { startsWith: 'ABONO-' }, vencimiento: { lt: hoy } }, select: { referencia: true, debe: true, haber: true } });
+    const acc = {};
+    for (const r of rows) { const k = r.referencia; if (!acc[k]) acc[k] = 0; acc[k] += (r.debe || 0) - (r.haber || 0); }
+    let vencidosCant = 0, vencidosMonto = 0;
+    for (const k of Object.keys(acc)) { if (acc[k] > 0.01) { vencidosCant++; vencidosMonto += acc[k]; } }
+    res.json({ ok: true, data: { periodo, activos: activos.length, total: subs.length, mrr: _round2(mrr), generadas, cobradas, cobrado: _round2(cobrado), pendiente: _round2(pendiente), vencidosCant, vencidosMonto: _round2(vencidosMonto) } });
   } catch (e) { next(e); }
 });
 

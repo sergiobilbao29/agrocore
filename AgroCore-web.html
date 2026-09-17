@@ -2833,6 +2833,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/09/2026',
+      titulo:'📇 v2.223.0 — Leads: cargá prospectos a mano + Facturar solo para clientes',
+      desc:'En <b>Leads / Prospectos</b> ahora hay <b>“+ Nuevo prospecto”</b> para cargar a mano clientes o futuros clientes que <b>no entraron por el trial</b> (nombre, empresa, WhatsApp, CUIT, email, actividad, estado y notas) — se suman a la misma lista con su seguimiento. Además, el botón <b>Facturar</b> de Abonos solo aparece cuando el cliente ya existe (no para prospectos sin convertir).' },
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
+      titulo:'📄 v2.222.0 — Abonos: facturá el abono (con/sin ARCA) y alerta de cobranza vencida',
+      desc:'En <b>Abonos / Clientes</b>, cada abono tiene el botón <b>📄 Facturar</b>: abre el formulario de <b>factura de venta que ya usás</b>, prellenado con el cliente y el abono del mes, para emitir con tu flujo habitual (con ARCA/CAE o sin ARCA) y <b>enviarla por mail/WhatsApp</b> como cualquier factura. Además el tablero muestra un <b>aviso rojo de cobranza vencida</b> (cuotas de abono impagas de cualquier mes, con total). <i>Pendiente para automatizar del todo:</i> emisión de CAE real automática (conectar FECAESolicitar de ARCA) y facturación recurrente sin intervención.' },
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
       titulo:'💳 v2.221.0 — Administrá AgroCore: convertí leads en clientes + abonos mensuales y cobranza',
       desc:'Primera parte del <b>CRM/administración de AgroCore</b> (Super Admin). Desde <b>Leads de prueba</b> convertís un lead en <b>Cliente</b> con un clic (➕👤). En <b>Empresas → 💳 Abonos / Clientes</b> cargás el <b>abono mensual fijo</b> de cada cliente y con “Generar cuotas del mes” se crean las cuentas a cobrar del período (aparecen en <b>Cuentas a cobrar</b> y se cobran con el flujo normal: efectivo, banco, cheque). Arriba tenés el tablero con <b>MRR</b> (ingreso mensual), clientes activos y <b>cobrado vs pendiente</b> del mes. <i>Próxima fase:</i> factura fiscal/no-fiscal con envío automático por mail/WhatsApp y recordatorios.' },
@@ -9778,7 +9784,7 @@ pages.empresas = async function() {
     <div class="mb-4 flex items-center justify-between">
       <h3 class="font-semibold text-slate-800">${rows.length} empresas</h3>
       <div class="flex gap-2">
-        ${(esSuper && state._trialLeads && state._trialLeads.length)?`<button class="btn btn-secondary" onclick="empTrialLeads()">📇 Leads de prueba (${state._trialLeads.length})</button>`:''}
+        ${esSuper?`<button class="btn btn-secondary" onclick="empTrialLeads()">📇 Leads / Prospectos${(state._trialLeads&&state._trialLeads.length)?` (${state._trialLeads.length})`:''}</button>`:''}
         ${esSuper?`<button class="btn btn-secondary" onclick="pages.abonos()">💳 Abonos / Clientes</button>`:''}
         ${puedeCrear ? `<button class="btn btn-primary" onclick="empForm()">+ Nueva empresa</button>` : ''}
       </div>
@@ -9877,8 +9883,11 @@ async function empTrialLeads(){
       <td class="p-1 align-top text-center whitespace-nowrap"><button class="btn btn-primary text-xs" onclick="empLeadGuardar('${esc(l.id)}')">💾</button>${l.segEstado!=='Cliente'?`<button class="btn btn-ghost text-xs" title="Convertir en cliente para facturarle el abono" onclick="empLeadConvertir('${esc(l.id)}')">➕👤</button>`:'<span class="text-[10px] text-emerald-700">cliente</span>'}</td>
     </tr>`;
   };
-  openModal({ title:'📇 Leads de la prueba gratuita', size:'max-w-5xl',
-    body:`<div class="text-[12px] text-slate-500 mb-2">Contacto y <b>seguimiento</b> de quienes se registraron en la prueba (agrocore.ar/prueba). Se agregan solos a medida que se registran. El 💬 abre WhatsApp con un mensaje listo. Poné estado, próximo contacto y notas, y guardá con 💾.</div>
+  openModal({ title:'📇 Leads / Prospectos', size:'max-w-5xl',
+    body:`<div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+      <div class="text-[12px] text-slate-500">Contacto y <b>seguimiento</b> de leads: los del <b>trial</b> se agregan solos y también podés <b>cargar prospectos a mano</b>. El 💬 abre WhatsApp con un mensaje listo. Guardá el seguimiento con 💾; convertí a cliente con ➕👤.</div>
+      <button class="btn btn-primary text-xs whitespace-nowrap" onclick="empLeadNuevo()">+ Nuevo prospecto</button>
+    </div>
       <div class="overflow-x-auto"><table class="data text-sm" style="min-width:900px">
         <thead><tr><th>Alta</th><th>Contacto</th><th>WhatsApp / Email</th><th>Estado</th><th>Próx. contacto</th><th>Notas</th><th></th></tr></thead>
         <tbody>${leads.map(fila).join('')||`<tr><td colspan="7" class="text-center text-slate-400 py-6">Todavía no hay registros de prueba.</td></tr>`}</tbody>
@@ -9897,6 +9906,32 @@ async function empLeadGuardar(id){
     await api('/api/empresas/trial-leads/'+id,{method:'PUT',body:JSON.stringify(body)});
     const l=(state._trialLeads||[]).find(x=>x.id===id); if(l){ l.segEstado=body.segEstado; l.segFecha=body.segFecha; l.segNotas=body.segNotas; }
     toast('Seguimiento guardado','success');
+  }catch(e){ toast(e.message,'error'); }
+}
+function empLeadNuevo(){
+  openModal2({ title:'+ Nuevo prospecto', size:'max-w-lg',
+    body:`<div class="text-[12px] text-slate-500 mb-2">Cargá un cliente o futuro cliente que <b>no</b> entró por el trial. Después le hacés el seguimiento y, cuando quieras, lo convertís a cliente.</div>
+      <div class="grid grid-cols-2 gap-2">
+        <div class="col-span-2"><label class="label text-xs">Nombre y apellido *</label><input id="nl-nombre" class="input"/></div>
+        <div class="col-span-2"><label class="label text-xs">Empresa / Campo</label><input id="nl-empresa" class="input"/></div>
+        <div><label class="label text-xs">WhatsApp / Tel</label><input id="nl-tel" class="input" placeholder="3582..."/></div>
+        <div><label class="label text-xs">CUIT</label><input id="nl-cuit" class="input"/></div>
+        <div class="col-span-2"><label class="label text-xs">Email</label><input id="nl-email" class="input"/></div>
+        <div><label class="label text-xs">Actividad</label><select id="nl-act" class="input"><option value="">—</option><option value="agricola">Agrícola</option><option value="ganadera">Ganadera</option><option value="mixta">Mixta</option></select></div>
+        <div><label class="label text-xs">Estado</label><select id="nl-est" class="input">${LEAD_ESTADOS.map(e=>`<option value="${e.v}">${e.v}</option>`).join('')}</select></div>
+        <div class="col-span-2"><label class="label text-xs">Notas</label><input id="nl-notas" class="input" placeholder="De dónde salió, referido por…"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="empLeadNuevoSave()">Crear</button>` });
+}
+async function empLeadNuevoSave(){
+  const g=x=>document.getElementById(x);
+  const nombre=(g('nl-nombre').value||'').trim(); if(!nombre) return toast('Poné el nombre','warn');
+  const body={ nombre, empresa:g('nl-empresa').value.trim()||null, telefono:g('nl-tel').value.trim()||null,
+    cuit:g('nl-cuit').value.trim()||null, email:g('nl-email').value.trim()||null, actividad:g('nl-act').value||null,
+    segEstado:g('nl-est').value||'Nuevo', segNotas:g('nl-notas').value.trim()||null };
+  try{
+    await api('/api/empresas/trial-leads',{method:'POST',body:JSON.stringify(body)});
+    state._trialLeads=null; toast('Prospecto agregado','success'); closeModal2(); empTrialLeads();
   }catch(e){ toast(e.message,'error'); }
 }
 async function empLeadConvertir(id){
@@ -9941,7 +9976,8 @@ async function abonosRender(){
     <td class="p-1 text-center">${s.activo?'<span class="badge badge-green">activo</span>':'<span class="text-[11px] text-slate-400">pausado</span>'}</td>
     <td class="p-1 text-center">${cuotaBadge(s.cuota)}</td>
     <td class="p-1 text-right whitespace-nowrap">
-      ${(!s.cuota||!s.cuota.generada)?`<button class="btn btn-ghost text-xs" title="Generar la cuota de ${per}" onclick="abonoGenerar('${s.id}')">🧾 Cuota</button>`:''}
+      ${(!s.cuota||!s.cuota.generada)?`<button class="btn btn-ghost text-xs" title="Generar la cuenta a cobrar de ${per}" onclick="abonoGenerar('${s.id}')">🧾 Cuota</button>`:''}
+      ${s.cliente?`<button class="btn btn-ghost text-xs" title="Emitir factura del abono (con o sin ARCA) y enviarla" onclick="abonoFacturar('${s.id}')">📄 Facturar</button>`:''}
       ${(s.cuota&&s.cuota.generada&&!s.cuota.cobrada)?`<button class="btn btn-ghost text-xs text-emerald-700" title="Registrar cobro" onclick="abonoCobrar('${esc(s.clienteId)}')">💰 Cobrar</button>`:''}
       <button class="btn btn-ghost text-xs" title="Editar" onclick="abonoForm('${s.id}')">✏️</button>
       <button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick="abonoDel('${s.id}')">🗑️</button>
@@ -9949,6 +9985,7 @@ async function abonosRender(){
   </tr>`;
   const [y,m]=per.split('-'); const perLbl=['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][Number(m)]+' '+y;
   $('#page-body').innerHTML = `
+    ${(tab.vencidosCant>0)?`<div class="kpi mb-3 border-l-4 border-red-500 bg-red-50"><div class="font-semibold text-red-800 text-sm">⚠️ Cobranza vencida: ${tab.vencidosCant} cuota(s) de abono impaga(s) por ${fmt$(tab.vencidosMonto||0)}</div><div class="text-xs text-red-700 mt-0.5">Revisá <b>Cuentas a cobrar</b> (referencia ABONO-…) o usá 💰 Cobrar en cada cliente.</div></div>`:''}
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
       <div class="kpi"><div class="text-[11px] text-slate-500">MRR (ingreso mensual)</div><div class="text-lg font-bold text-emerald-700">${fmt$(tab.mrr||0)}</div></div>
       <div class="kpi"><div class="text-[11px] text-slate-500">Clientes activos</div><div class="text-lg font-bold">${tab.activos||0}</div></div>
@@ -10005,6 +10042,19 @@ async function abonoGenerarMes(){
   if(!confirm('¿Generar las cuotas de '+state._abonoPeriodo+' para todos los abonos activos que no la tengan?')) return;
   try{ const r=await api('/api/suscripciones/generar-mes',{method:'POST',body:JSON.stringify({periodo:state._abonoPeriodo})});
     toast(`Listo: ${r.data?.creadas||0} cuota(s) nueva(s) de ${r.data?.total||0} abonos`,'success'); abonosRender(); }catch(e){ toast(e.message,'error'); }
+}
+async function abonoFacturar(id){
+  const s=(state._abonos||[]).find(x=>x.id===id); if(!s) return;
+  if(typeof factForm!=='function') return toast('Emití la factura desde Movimientos de ventas','info');
+  const per=state._abonoPeriodo;
+  closeModal&&closeModal();
+  // Abre el formulario de factura de venta que ya usás (con o sin ARCA), prellenado con el abono.
+  await factForm({
+    clienteId: s.clienteId,
+    items: [{ descripcion: `${s.concepto||'Abono mensual AgroCore'} · ${per}`, cantidad: 1, precioUnit: s.monto||0, alicuotaIva: 21 }],
+    observaciones: `Abono ${per} · ref ${'ABONO-'+s.id+'-'+per}`,
+    moneda: s.moneda||'ARS',
+  });
 }
 async function abonoCobrar(clienteId){
   if(typeof pagoCobroAbrir==='function'){ closeModal&&closeModal(); await pagoCobroAbrir('cobro',{ contactoId: clienteId }); }
