@@ -2833,6 +2833,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/09/2026',
+      titulo:'🧾 v2.217.0 — Cargá la factura del flete sin salir de la liquidación',
+      desc:'En las <b>deducciones del comprador</b> (flete/gastos), al lado del desplegable de factura ahora hay un botón <b>“＋ Factura”</b>: cargás ahí mismo la <b>factura de compra del flete/gasto</b> (proveedor, tipo, punto de venta, número, fecha, neto e IVA) sin tener que ir a Movimientos de compras. Al guardar, la factura queda <b>registrada en compras y vinculada</b> a la deducción (marcada como pagada, porque el comprador la descontó de tu liquidación). Recordá: ese desplegable <b>vincula</b> facturas ya cargadas — si aparece “Sin factura” es porque todavía no cargaste ninguna en esa empresa; con este botón la cargás en el momento.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/09/2026',
       titulo:'🌾 v2.216.0 — Deducciones de flete/gastos al crear o editar la liquidación',
       desc:'Ahora las <b>deducciones del comprador</b> (flete/gastos) se pueden cargar <b>directamente al crear o editar</b> la liquidación de cereal, sin tener que entrar al detalle. En el formulario hay una sección <b>“Deducciones del comprador”</b> donde ponés concepto e importe y, si querés, <b>vinculás una factura de compra ya cargada</b> (queda saldada, porque la pagó el comprador al descontarla). El saldo a cobrar baja a lo que realmente cobrás. Al editar la liquidación las deducciones se conservan y se recalculan solas.' },
@@ -30016,10 +30019,96 @@ function liqAddDed(d = { concepto:'', importe:0, facturaCompraId:'' }) {
   const row = `<tr data-ld>
     <td><input class="input text-sm" data-ldf="concepto" value="${esc(d.concepto||'')}" placeholder="Flete, Gastos, Secada..."/></td>
     <td><input class="input text-sm w-32 text-right" type="number" step="0.01" data-ldf="importe" value="${d.importe||0}"/></td>
-    <td><select class="input text-sm" data-ldf="factura">${liqFacturaOpts(d.facturaCompraId||'')}</select></td>
+    <td><div class="flex items-center gap-1">
+      <select class="input text-sm flex-1" data-ldf="factura">${liqFacturaOpts(d.facturaCompraId||'')}</select>
+      <button type="button" class="btn btn-secondary text-xs whitespace-nowrap" title="Cargar una factura de compra nueva (flete/gasto) y vincularla acá" onclick="liqNuevaFacturaCompra(this)">＋ Factura</button>
+    </div></td>
     <td><button class="btn btn-ghost text-red-600" onclick="this.closest('tr').remove()">×</button></td>
   </tr>`;
   $('#lq-ded').insertAdjacentHTML('beforeend', row);
+}
+// Rehace todos los selects de factura de la tabla de deducciones (tras cargar una
+// factura nueva), conservando lo elegido en cada fila; si se pasa una fila y un id
+// nuevo, deja esa fila apuntando a la factura recién creada.
+function liqRefreshDedFacturaSelects(newId, rowEl){
+  $$('#lq-ded tr[data-ld] select[data-ldf="factura"]').forEach(sel=>{
+    const isTarget = rowEl && newId && sel === rowEl.querySelector('[data-ldf="factura"]');
+    const cur = isTarget ? newId : sel.value;
+    sel.innerHTML = liqFacturaOpts(cur);
+    sel.value = cur;
+  });
+}
+// Abre el alta rápida de factura de compra (flete/gasto) SIN salir de la liquidación.
+// Modo 'inline' (desde la fila del form) o 'sel' (desde un <select> de un modal).
+async function liqNuevaFacturaCompra(btn){
+  const tr = btn.closest('tr');
+  const concepto = (tr?.querySelector('[data-ldf="concepto"]')?.value||'').trim() || 'Flete';
+  const importe = Number(tr?.querySelector('[data-ldf="importe"]')?.value || 0);
+  window._liqNfMode = 'inline'; window._liqNfRow = tr; window._liqNfTargetSel = null;
+  liqNfAbrir(concepto, importe);
+}
+async function liqNuevaFacturaSel(targetSelId, concepto){
+  window._liqNfMode = 'sel'; window._liqNfRow = null; window._liqNfTargetSel = targetSelId;
+  const imp = Number(document.getElementById('liqded-importe')?.value || 0);
+  liqNfAbrir(concepto || (document.getElementById('liqded-concepto')?.value||'Flete'), imp);
+}
+async function liqNfAbrir(concepto, importe){
+  if(!state.cache) state.cache = {};
+  if(!state.cache.proveedores){ try{ state.cache.proveedores=(await api('/api/proveedores')).data||[]; }catch(_){ state.cache.proveedores=[]; } }
+  const provOpts = (state.cache.proveedores||[]).map(p=>`<option value="${esc(p.id)}">${esc(p.nombre||p.razonSocial||'Proveedor')}</option>`).join('');
+  const hoy = new Date().toISOString().slice(0,10);
+  openModal2({ title:'＋ Cargar factura de compra (flete/gasto)', size:'max-w-lg',
+    body:`
+      <div class="text-[12px] text-slate-500 mb-2">Cargá acá la factura del flete o gasto. Se registra en <b>Movimientos de compras</b> y queda vinculada a esta deducción (la factura se marca como pagada, porque el comprador la descontó de tu liquidación).</div>
+      <div class="grid grid-cols-2 gap-2">
+        <div class="col-span-2"><label class="label text-xs">Proveedor (quién te factura el flete/gasto)</label><select id="nf-prov" class="input"><option value="">— Sin proveedor —</option>${provOpts}</select></div>
+        <div><label class="label text-xs">Tipo *</label><select id="nf-tipo" class="input"><option>A</option><option>B</option><option>C</option><option>E</option></select></div>
+        <div><label class="label text-xs">Fecha *</label><input id="nf-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label text-xs">Punto de venta *</label><input id="nf-pv" type="number" class="input" placeholder="1"/></div>
+        <div><label class="label text-xs">Número *</label><input id="nf-num" type="number" class="input" placeholder="12345"/></div>
+        <div class="col-span-2"><label class="label text-xs">Concepto</label><input id="nf-desc" class="input" value="${esc(concepto)}"/></div>
+        <div><label class="label text-xs">Neto gravado *</label><input id="nf-neto" type="number" step="0.01" class="input" value="${importe>0?importe:''}" oninput="liqNfCalc()"/></div>
+        <div><label class="label text-xs">IVA %</label><select id="nf-iva" class="input" onchange="liqNfCalc()"><option value="21">21%</option><option value="10.5">10,5%</option><option value="27">27%</option><option value="0">0% / Exento</option></select></div>
+        <div class="col-span-2"><label class="label text-xs">Total (calculado)</label><input id="nf-total" class="input bg-slate-50" readonly/></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">El <b>Neto gravado</b> es el importe sin IVA; el total se calcula solo. Si la factura es tipo B/C, poné el total en Neto y dejá IVA en 0.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="liqNfGuardar()">Cargar y vincular</button>` });
+  setTimeout(liqNfCalc, 0);
+}
+function liqNfCalc(){
+  const neto=Number(document.getElementById('nf-neto')?.value||0);
+  const iva=Number(document.getElementById('nf-iva')?.value||0);
+  const el=document.getElementById('nf-total'); if(el) el.value=fmt$(neto*(1+iva/100));
+}
+async function liqNfGuardar(){
+  const tipo=document.getElementById('nf-tipo')?.value||'A';
+  const pv=parseInt(document.getElementById('nf-pv')?.value||'',10);
+  const num=parseInt(document.getElementById('nf-num')?.value||'',10);
+  const fecha=document.getElementById('nf-fecha')?.value||'';
+  const neto=Number(document.getElementById('nf-neto')?.value||0);
+  const iva=Number(document.getElementById('nf-iva')?.value||0);
+  const desc=(document.getElementById('nf-desc')?.value||'').trim()||'Flete';
+  const provId=document.getElementById('nf-prov')?.value||null;
+  if(!Number.isInteger(pv)||!Number.isInteger(num)) return toast('Completá punto de venta y número','warn');
+  if(!fecha) return toast('Poné la fecha de la factura','warn');
+  if(!(neto>0)) return toast('Poné el neto gravado','warn');
+  const body={ proveedorId:provId||null, tipo, puntoVenta:pv, numero:num, fecha,
+    items:[{ descripcion:desc, cantidad:1, precioUnit:neto, alicuotaIva:iva, productoNombre:desc }] };
+  try{
+    const r=await api('/api/facturas-compra',{method:'POST',body:JSON.stringify(body)});
+    const fac=r.data||r;
+    if(window._liqNfMode==='inline'){
+      state._liqFacturas = state._liqFacturas||[]; state._liqFacturas.unshift(fac);
+      liqRefreshDedFacturaSelects(fac.id, window._liqNfRow);
+    } else if(window._liqNfMode==='sel'){
+      const sel=document.getElementById(window._liqNfTargetSel);
+      if(sel){ const o=document.createElement('option'); o.value=fac.id; o.setAttribute('data-prov', fac.proveedorId||'');
+        o.textContent=(fac.proveedor?.nombre||fac.proveedorNombre||'Proveedor')+' · '+((fac.tipo||'')+' '+String(fac.numero||'').padStart(8,'0'))+' · '+fmt$(fac.total||0);
+        sel.appendChild(o); sel.value=fac.id; }
+    }
+    closeModal2();
+    toast('Factura cargada y lista para vincular','success');
+  }catch(e){ toast(e.message,'error'); }
 }
 // Suma los kg de las cartas de porte tildadas al campo Kilos brutos.
 function liqSumarKgCP(){ const s=$$('.lq-cp:checked').reduce((a,c)=>a+Number(c.dataset.kg||0),0); if(s>0){ const el=$('#lq-brut'); if(el){ el.value=Math.round(s); liqRecalc(); } } else { toast('Tildá al menos una carta de porte','warn'); } }
@@ -30147,7 +30236,7 @@ async function liqDedForm(liqId){
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label text-xs">Concepto *</label><input id="liqded-concepto" class="input" placeholder="Flete, Gastos, Secada…"/></div>
         <div><label class="label text-xs">Importe *</label><input id="liqded-importe" type="number" step="0.01" class="input" placeholder="0"/></div>
-        <div class="col-span-2"><label class="label text-xs">Factura de compra (opcional)</label><select id="liqded-factura" class="input"><option value="">— Sin factura por ahora —</option>${opts}</select></div>
+        <div class="col-span-2"><label class="label text-xs">Factura de compra (opcional)</label><div class="flex items-center gap-1"><select id="liqded-factura" class="input flex-1"><option value="">— Sin factura por ahora —</option>${opts}</select><button type="button" class="btn btn-secondary text-xs whitespace-nowrap" onclick="liqNuevaFacturaSel('liqded-factura')">＋ Nueva</button></div></div>
         <div class="col-span-2"><label class="label text-xs">Observaciones</label><input id="liqded-obs" class="input"/></div>
       </div>
       <div class="text-[11px] text-slate-500 mt-2">Si vinculás la factura, además se marca como pagada (el comprador la pagó al descontarla).</div>`,
