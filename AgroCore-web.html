@@ -2834,6 +2834,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
+      titulo:'💳 v2.221.0 — Administrá AgroCore: convertí leads en clientes + abonos mensuales y cobranza',
+      desc:'Primera parte del <b>CRM/administración de AgroCore</b> (Super Admin). Desde <b>Leads de prueba</b> convertís un lead en <b>Cliente</b> con un clic (➕👤). En <b>Empresas → 💳 Abonos / Clientes</b> cargás el <b>abono mensual fijo</b> de cada cliente y con “Generar cuotas del mes” se crean las cuentas a cobrar del período (aparecen en <b>Cuentas a cobrar</b> y se cobran con el flujo normal: efectivo, banco, cheque). Arriba tenés el tablero con <b>MRR</b> (ingreso mensual), clientes activos y <b>cobrado vs pendiente</b> del mes. <i>Próxima fase:</i> factura fiscal/no-fiscal con envío automático por mail/WhatsApp y recordatorios.' },
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
       titulo:'📇 v2.220.0 — Leads de prueba: seguimiento comercial + WhatsApp con un clic',
       desc:'El panel <b>“Leads de prueba”</b> (Empresas, Super Admin) ahora es un mini-CRM: cada lead tiene <b>estado</b> del embudo (Nuevo → Contactado → Demo → En prueba → Cliente / Perdido), <b>próximo contacto</b> y <b>notas</b>, que guardás con 💾 y quedan en el sistema. Además, un botón <b>💬 WhatsApp</b> abre el chat con un <b>mensaje cálido ya escrito</b> (personalizado con el nombre, la empresa y la actividad). Los nuevos registros de la prueba se agregan solos. Export a CSV incluye el seguimiento.' },
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
@@ -9776,6 +9779,7 @@ pages.empresas = async function() {
       <h3 class="font-semibold text-slate-800">${rows.length} empresas</h3>
       <div class="flex gap-2">
         ${(esSuper && state._trialLeads && state._trialLeads.length)?`<button class="btn btn-secondary" onclick="empTrialLeads()">📇 Leads de prueba (${state._trialLeads.length})</button>`:''}
+        ${esSuper?`<button class="btn btn-secondary" onclick="pages.abonos()">💳 Abonos / Clientes</button>`:''}
         ${puedeCrear ? `<button class="btn btn-primary" onclick="empForm()">+ Nueva empresa</button>` : ''}
       </div>
     </div>
@@ -9870,7 +9874,7 @@ async function empTrialLeads(){
       <td class="p-1 align-top"><select class="input text-xs" data-lf="segEstado">${estOpts(l.segEstado)}</select></td>
       <td class="p-1 align-top"><input type="date" class="input text-xs" data-lf="segFecha" value="${dt(l.segFecha)}"/></td>
       <td class="p-1 align-top"><input class="input text-xs" data-lf="segNotas" value="${esc(l.segNotas||'')}" placeholder="Notas…"/></td>
-      <td class="p-1 align-top text-center"><button class="btn btn-primary text-xs" onclick="empLeadGuardar('${esc(l.id)}')">💾</button></td>
+      <td class="p-1 align-top text-center whitespace-nowrap"><button class="btn btn-primary text-xs" onclick="empLeadGuardar('${esc(l.id)}')">💾</button>${l.segEstado!=='Cliente'?`<button class="btn btn-ghost text-xs" title="Convertir en cliente para facturarle el abono" onclick="empLeadConvertir('${esc(l.id)}')">➕👤</button>`:'<span class="text-[10px] text-emerald-700">cliente</span>'}</td>
     </tr>`;
   };
   openModal({ title:'📇 Leads de la prueba gratuita', size:'max-w-5xl',
@@ -9895,12 +9899,116 @@ async function empLeadGuardar(id){
     toast('Seguimiento guardado','success');
   }catch(e){ toast(e.message,'error'); }
 }
+async function empLeadConvertir(id){
+  if(!confirm('¿Convertir este lead en Cliente de la empresa actual? Después podés cargarle el abono mensual en “Abonos”.')) return;
+  try{
+    const r=await api('/api/empresas/trial-leads/'+id+'/convertir-cliente',{method:'POST',body:JSON.stringify({})});
+    const l=(state._trialLeads||[]).find(x=>x.id===id); if(l) l.segEstado='Cliente';
+    toast('Cliente creado: '+(r.data?.razonSocial||''),'success');
+    if(state.cache) state.cache.clientes=null;
+    empTrialLeads();
+  }catch(e){ toast(e.message,'error'); }
+}
 function empTrialLeadsExport(){
   const leads=state._trialLeads||[]; const ACTIV={agricola:'Agrícola',ganadera:'Ganadera',mixta:'Mixta'};
   let rows=[['Alta','Contacto','Empresa','CUIT','Telefono','Email','Actividad','Verificado','Estado','ProxContacto','Notas']];
   leads.forEach(l=>rows.push([fmtFecha(l.createdAt),l.nombre||'',l.empresa||'',l.cuit||'',l.telefono||'',l.email||'',ACTIV[l.actividad]||l.actividad||'',l.verifiedAt?'Si':'No',l.segEstado||'',l.segFecha?String(l.segFecha).slice(0,10):'',l.segNotas||'']));
   const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'})); a.download='AgroCore-Leads-Prueba.csv'; a.click();
+}
+// ── Abonos / Clientes de AgroCore (administrar el negocio: suscripción mensual + cobranza) ──
+pages.abonos = async function(){
+  if(!state.user?.superAdmin){ return toast('Solo Super Admin','warn'); }
+  setHeader('Abonos / Clientes', 'Administración de AgroCore · suscripciones y cobranza');
+  state._abonoPeriodo = state._abonoPeriodo || (function(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); })();
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  await abonosRender();
+};
+async function abonosRender(){
+  const per = state._abonoPeriodo;
+  let subs=[], tab={};
+  try{
+    const [r,t] = await Promise.all([ api('/api/suscripciones?periodo='+per), api('/api/suscripciones/tablero?periodo='+per) ]);
+    subs=r.data||[]; tab=t.data||{};
+  }catch(e){ return toast(e.message,'error'); }
+  state._abonos = subs;
+  const cuotaBadge = c => !c||!c.generada ? '<span class="text-[11px] text-slate-400">sin generar</span>'
+    : (c.cobrada ? '<span class="badge badge-green">cobrada</span>' : `<span class="badge" style="background:#fee2e2;color:#991b1b">pendiente ${fmt$(c.saldo)}</span>`);
+  const fila = s => `<tr class="border-t border-slate-100">
+    <td class="p-1"><b>${esc(s.cliente?.razonSocial||'—')}</b>${s.cliente?.telefono?` <a class="text-emerald-700 text-xs" href="https://wa.me/${String(s.cliente.telefono).replace(/[^0-9]/g,'')}" target="_blank">💬</a>`:''}<div class="text-[10px] text-slate-400">${esc(s.concepto||'')}</div></td>
+    <td class="p-1 text-right whitespace-nowrap">${fmtMon(s.moneda,s.monto)}</td>
+    <td class="p-1 text-center">${s.diaVenc}</td>
+    <td class="p-1 text-center">${s.activo?'<span class="badge badge-green">activo</span>':'<span class="text-[11px] text-slate-400">pausado</span>'}</td>
+    <td class="p-1 text-center">${cuotaBadge(s.cuota)}</td>
+    <td class="p-1 text-right whitespace-nowrap">
+      ${(!s.cuota||!s.cuota.generada)?`<button class="btn btn-ghost text-xs" title="Generar la cuota de ${per}" onclick="abonoGenerar('${s.id}')">🧾 Cuota</button>`:''}
+      ${(s.cuota&&s.cuota.generada&&!s.cuota.cobrada)?`<button class="btn btn-ghost text-xs text-emerald-700" title="Registrar cobro" onclick="abonoCobrar('${esc(s.clienteId)}')">💰 Cobrar</button>`:''}
+      <button class="btn btn-ghost text-xs" title="Editar" onclick="abonoForm('${s.id}')">✏️</button>
+      <button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick="abonoDel('${s.id}')">🗑️</button>
+    </td>
+  </tr>`;
+  const [y,m]=per.split('-'); const perLbl=['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][Number(m)]+' '+y;
+  $('#page-body').innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+      <div class="kpi"><div class="text-[11px] text-slate-500">MRR (ingreso mensual)</div><div class="text-lg font-bold text-emerald-700">${fmt$(tab.mrr||0)}</div></div>
+      <div class="kpi"><div class="text-[11px] text-slate-500">Clientes activos</div><div class="text-lg font-bold">${tab.activos||0}</div></div>
+      <div class="kpi"><div class="text-[11px] text-slate-500">Cobrado ${perLbl}</div><div class="text-lg font-bold text-emerald-700">${fmt$(tab.cobrado||0)}</div></div>
+      <div class="kpi"><div class="text-[11px] text-slate-500">Pendiente ${perLbl}</div><div class="text-lg font-bold text-red-600">${fmt$(tab.pendiente||0)}</div></div>
+    </div>
+    <div class="kpi mb-3 flex items-end gap-2 flex-wrap">
+      <div><label class="label text-xs">Período</label><input type="month" class="input" value="${per}" onchange="state._abonoPeriodo=this.value; abonosRender()"/></div>
+      <div class="flex-1"></div>
+      <button class="btn btn-secondary" onclick="abonoGenerarMes()">🧾 Generar cuotas del mes</button>
+      <button class="btn btn-primary" onclick="abonoForm()">+ Nuevo abono</button>
+    </div>
+    <div class="text-[11px] text-slate-400 mb-2">Cada cuota generada aparece en <b>Cuentas a cobrar</b> y se cobra con el flujo normal (efectivo, banco, cheque…). El estado “cobrada/pendiente” sale de ahí.</div>
+    <div class="kpi p-0 overflow-x-auto"><table class="data" style="min-width:720px">
+      <thead><tr><th>Cliente</th><th class="text-right">Abono</th><th class="text-center">Día venc.</th><th class="text-center">Estado</th><th class="text-center">Cuota ${perLbl}</th><th></th></tr></thead>
+      <tbody>${subs.map(fila).join('')||`<tr><td colspan="6" class="text-center text-slate-400 py-8">Todavía no cargaste abonos. Convertí un lead a cliente en “Leads de prueba” y después tocá “+ Nuevo abono”.</td></tr>`}</tbody>
+    </table></div>`;
+}
+async function abonoForm(id){
+  const s = id ? (state._abonos||[]).find(x=>x.id===id)||{} : {};
+  if(!state.cache) state.cache={};
+  if(!state.cache.clientes){ try{ state.cache.clientes=(await api('/api/clientes')).data||[]; }catch(_){ state.cache.clientes=[]; } }
+  const cliOpts = (state.cache.clientes||[]).map(c=>`<option value="${esc(c.id)}" ${s.clienteId===c.id?'selected':''}>${esc(c.razonSocial)}</option>`).join('');
+  openModal({ title: id?'Editar abono':'Nuevo abono mensual', size:'max-w-lg',
+    body:`<div class="grid grid-cols-2 gap-3">
+      <div class="col-span-2"><label class="label">Cliente *</label>${id?`<input class="input" value="${esc(s.cliente?.razonSocial||'')}" disabled/>`:`<select id="ab-cli" class="input"><option value="">— Elegí —</option>${cliOpts}</select>`}</div>
+      <div class="col-span-2"><label class="label">Concepto</label><input id="ab-concepto" class="input" value="${esc(s.concepto||'Abono mensual AgroCore')}"/></div>
+      <div><label class="label">Monto mensual *</label><input id="ab-monto" type="number" step="0.01" class="input" value="${s.monto!=null?s.monto:''}"/></div>
+      <div><label class="label">Moneda</label><select id="ab-moneda" class="input">${['ARS','USD'].map(x=>`<option value="${x}" ${(s.moneda||'ARS')===x?'selected':''}>${x}</option>`).join('')}</select></div>
+      <div><label class="label">Día de vencimiento</label><input id="ab-dia" type="number" min="1" max="28" class="input" value="${s.diaVenc||10}"/></div>
+      <div class="flex items-center gap-2 mt-5"><input id="ab-activo" type="checkbox" ${s.activo!==false?'checked':''}/><label for="ab-activo" class="text-sm">Activo</label></div>
+      <div class="col-span-2"><label class="label">Notas</label><input id="ab-notas" class="input" value="${esc(s.notas||'')}"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="abonoSave(${JSON.stringify(id||null)})">${id?'Guardar':'Crear'}</button>` });
+}
+async function abonoSave(id){
+  const g=x=>document.getElementById(x);
+  const body={ concepto:g('ab-concepto').value.trim()||'Abono mensual AgroCore', monto:Number(g('ab-monto').value||0),
+    moneda:g('ab-moneda').value, diaVenc:Number(g('ab-dia').value||10), activo:g('ab-activo').checked, notas:g('ab-notas').value.trim()||null };
+  if(!id){ const cli=g('ab-cli').value; if(!cli) return toast('Elegí el cliente','warn'); body.clienteId=cli; }
+  if(!(body.monto>=0)) return toast('Poné el monto','warn');
+  try{ await api('/api/suscripciones'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)}); toast('Abono guardado','success'); closeModal(); abonosRender(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function abonoDel(id){
+  if(!confirm('¿Eliminar este abono? (no borra las cuotas ya generadas)')) return;
+  try{ await api('/api/suscripciones/'+id,{method:'DELETE'}); toast('Abono eliminado','success'); abonosRender(); }catch(e){ toast(e.message,'error'); }
+}
+async function abonoGenerar(id){
+  try{ const r=await api('/api/suscripciones/'+id+'/generar-cuota',{method:'POST',body:JSON.stringify({periodo:state._abonoPeriodo})});
+    toast(r.data?.creada?'Cuota generada (mirala en Cuentas a cobrar)':'Ya estaba generada','success'); abonosRender(); }catch(e){ toast(e.message,'error'); }
+}
+async function abonoGenerarMes(){
+  if(!confirm('¿Generar las cuotas de '+state._abonoPeriodo+' para todos los abonos activos que no la tengan?')) return;
+  try{ const r=await api('/api/suscripciones/generar-mes',{method:'POST',body:JSON.stringify({periodo:state._abonoPeriodo})});
+    toast(`Listo: ${r.data?.creadas||0} cuota(s) nueva(s) de ${r.data?.total||0} abonos`,'success'); abonosRender(); }catch(e){ toast(e.message,'error'); }
+}
+async function abonoCobrar(clienteId){
+  if(typeof pagoCobroAbrir==='function'){ closeModal&&closeModal(); await pagoCobroAbrir('cobro',{ contactoId: clienteId }); }
+  else { toast('Andá a Cuentas a cobrar para registrar el cobro','info'); }
 }
 function empForm(id=null) {
   const it = id ? (state.cache.empresas||[]).find(x=>x.id===id)||{} : {};

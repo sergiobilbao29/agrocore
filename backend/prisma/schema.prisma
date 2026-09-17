@@ -111,6 +111,7 @@ model Company {
   remitosInternos    RemitoInterno[]
   retenciones        Retencion[]
   adjuntos           Adjunto[]
+  suscripciones      Suscripcion[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -2598,6 +2599,32 @@ model RemitoInterno {
   @@index([companyId])
   @@index([estado])
   @@index([campanaId])
+}
+
+// ── Suscripciones / Abonos (para administrar AgroCore como negocio) ────────────
+// Abono mensual fijo de un cliente (ej. la mensualidad del sistema AgroCore).
+// Cada mes se genera una cuenta a cobrar (CtaCte) con referencia ABONO-<id>-<AAAA-MM>,
+// que se cobra con el flujo normal de Cuentas a cobrar.
+model Suscripcion {
+  id          String   @id @default(cuid())
+  companyId   String
+  clienteId   String
+  concepto    String   @default("Abono mensual AgroCore")
+  monto       Float    @default(0)
+  moneda      String   @default("ARS")
+  diaVenc     Int      @default(10)     // día del mes en que vence la cuota (1-28)
+  activo      Boolean  @default(true)
+  inicio      DateTime?
+  notas       String?
+  leadId      String?                    // si vino de un lead de prueba
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([companyId, clienteId])
+  @@index([companyId, activo])
 }
 
 // ── Adjuntos (fotos / PDF / documentación) ────────────────────────────────────

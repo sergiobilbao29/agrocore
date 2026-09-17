@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.220.0';
+const AGROCORE_VERSION = '2.221.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1783,6 +1783,159 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     const row = await prisma.trialSignup.update({ where: { id: cur.id }, data,
       select: { id: true, segEstado: true, segFecha: true, segNotas: true } });
     res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Convertir un lead de la prueba en Cliente de la empresa actual (para facturarle el abono).
+app.post('/api/empresas/trial-leads/:id/convertir-cliente', requireCompany, requirePermission('contactos:create'), async (req, res, next) => {
+  try {
+    const l = await prisma.trialSignup.findUnique({ where: { id: req.params.id } });
+    if (!l) return res.status(404).json({ ok: false, error: 'Lead no encontrado' });
+    // Evitar duplicado por CUIT en esta empresa.
+    let cli = null;
+    const cuitNorm = String(l.cuit || '').replace(/\D/g, '');
+    if (cuitNorm) cli = await prisma.cliente.findFirst({ where: { companyId: req.companyId, cuit: { contains: cuitNorm.slice(0, 11) } } });
+    if (!cli) {
+      cli = await prisma.cliente.create({ data: {
+        companyId: req.companyId,
+        razonSocial: (l.empresa || l.nombre || 'Cliente').slice(0, 120),
+        nombreFantasia: l.nombre || null,
+        cuit: l.cuit || null, email: l.email || null, telefono: l.telefono || null,
+        observaciones: `Alta desde prueba gratuita (${l.actividad || 's/actividad'})`,
+        activo: true,
+      }});
+    }
+    await prisma.trialSignup.update({ where: { id: l.id }, data: { segEstado: 'Cliente' } });
+    res.status(201).json({ ok: true, data: { clienteId: cli.id, razonSocial: cli.razonSocial } });
+  } catch (e) { next(e); }
+});
+
+// ── Suscripciones / Abonos mensuales ──────────────────────────────────────────
+const _susSchema = z.object({
+  clienteId: z.string().min(1),
+  concepto: z.string().optional(),
+  monto: z.number().nonnegative(),
+  moneda: z.string().optional(),
+  diaVenc: z.number().int().min(1).max(28).optional(),
+  activo: z.boolean().optional(),
+  inicio: z.coerce.date().nullable().optional(),
+  notas: z.string().nullable().optional(),
+  leadId: z.string().nullable().optional(),
+});
+function _periodoActual() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
+function _abonoRef(susId, periodo) { return `ABONO-${susId}-${periodo}`; }
+// Estado de cobranza de un conjunto de referencias ABONO en el periodo.
+async function _abonosEstado(companyId, refs) {
+  if (!refs.length) return {};
+  const rows = await prisma.ctaCte.findMany({ where: { companyId, contactoTipo: 'cliente', referencia: { in: refs } }, select: { referencia: true, debe: true, haber: true } });
+  const acc = {};
+  for (const r of rows) { const k = r.referencia; if (!acc[k]) acc[k] = { debe: 0, haber: 0 }; acc[k].debe += r.debe || 0; acc[k].haber += r.haber || 0; }
+  const out = {};
+  for (const k of Object.keys(acc)) { const s = acc[k]; out[k] = { generada: true, saldo: _round2(s.debe - s.haber), cobrada: (s.debe - s.haber) <= 0.01 }; }
+  return out;
+}
+
+app.get('/api/suscripciones', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const periodo = String(req.query.periodo || _periodoActual());
+    const subs = await prisma.suscripcion.findMany({ where: { companyId: req.companyId }, orderBy: [{ activo: 'desc' }, { createdAt: 'desc' }] });
+    const cliIds = [...new Set(subs.map(s => s.clienteId))];
+    const clientes = cliIds.length ? await prisma.cliente.findMany({ where: { id: { in: cliIds } }, select: { id: true, razonSocial: true, nombreFantasia: true, telefono: true, email: true } }) : [];
+    const cliById = Object.fromEntries(clientes.map(c => [c.id, c]));
+    const estados = await _abonosEstado(req.companyId, subs.map(s => _abonoRef(s.id, periodo)));
+    const data = subs.map(s => ({ ...s, cliente: cliById[s.clienteId] || null, periodo, cuota: estados[_abonoRef(s.id, periodo)] || { generada: false } }));
+    res.json({ ok: true, data, periodo });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/suscripciones', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const d = _susSchema.parse(req.body);
+    const cli = await prisma.cliente.findFirst({ where: { id: d.clienteId, companyId: req.companyId }, select: { id: true } });
+    if (!cli) return res.status(404).json({ ok: false, error: 'Cliente no encontrado' });
+    const row = await prisma.suscripcion.create({ data: {
+      companyId: req.companyId, clienteId: d.clienteId,
+      concepto: d.concepto || 'Abono mensual AgroCore', monto: d.monto, moneda: d.moneda || 'ARS',
+      diaVenc: d.diaVenc || 10, activo: d.activo !== false, inicio: d.inicio || null, notas: d.notas || null, leadId: d.leadId || null,
+    }});
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/suscripciones/:id', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const cur = await prisma.suscripcion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Suscripción no encontrada' });
+    const d = _susSchema.partial().parse(req.body);
+    const data = {};
+    ['concepto','monto','moneda','diaVenc','activo','inicio','notas'].forEach(k => { if (d[k] !== undefined) data[k] = d[k]; });
+    const row = await prisma.suscripcion.update({ where: { id: cur.id }, data });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/suscripciones/:id', requireCompany, requirePermission('ventas:delete'), async (req, res, next) => {
+  try {
+    const cur = await prisma.suscripcion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Suscripción no encontrada' });
+    await prisma.suscripcion.delete({ where: { id: cur.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Genera la cuota del periodo (cuenta a cobrar) para una suscripción. Evita duplicar.
+async function _generarCuotaAbono(companyId, sus, periodo) {
+  const ref = _abonoRef(sus.id, periodo);
+  const ya = await prisma.ctaCte.findFirst({ where: { companyId, contactoTipo: 'cliente', referencia: ref }, select: { id: true } });
+  if (ya) return { creada: false, ref };
+  const [anio, mes] = periodo.split('-').map(Number);
+  const dia = Math.min(sus.diaVenc || 10, 28);
+  const venc = new Date(anio, mes - 1, dia);
+  await prisma.ctaCte.create({ data: {
+    companyId, contactoTipo: 'cliente', contactoId: sus.clienteId,
+    fecha: new Date(anio, mes - 1, 1), vencimiento: venc,
+    detalle: `${sus.concepto || 'Abono mensual'} · ${periodo}`,
+    categoria: 'Abono', moneda: sus.moneda || 'ARS', debe: sus.monto || 0, haber: 0,
+    referencia: ref,
+  }});
+  return { creada: true, ref };
+}
+
+app.post('/api/suscripciones/:id/generar-cuota', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const sus = await prisma.suscripcion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!sus) return res.status(404).json({ ok: false, error: 'Suscripción no encontrada' });
+    const periodo = String(req.body?.periodo || _periodoActual());
+    const r = await _generarCuotaAbono(req.companyId, sus, periodo);
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+
+// Genera las cuotas del periodo para TODAS las suscripciones activas (que no la tengan).
+app.post('/api/suscripciones/generar-mes', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const periodo = String(req.body?.periodo || _periodoActual());
+    const subs = await prisma.suscripcion.findMany({ where: { companyId: req.companyId, activo: true } });
+    let creadas = 0;
+    for (const s of subs) { const r = await _generarCuotaAbono(req.companyId, s, periodo); if (r.creada) creadas++; }
+    res.json({ ok: true, data: { periodo, creadas, total: subs.length } });
+  } catch (e) { next(e); }
+});
+
+// Tablero: MRR, activos y cobranza del periodo.
+app.get('/api/suscripciones/tablero', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const periodo = String(req.query.periodo || _periodoActual());
+    const subs = await prisma.suscripcion.findMany({ where: { companyId: req.companyId } });
+    const activos = subs.filter(s => s.activo);
+    const mrr = activos.reduce((a, s) => a + (s.monto || 0), 0);
+    const estados = await _abonosEstado(req.companyId, activos.map(s => _abonoRef(s.id, periodo)));
+    let cobrado = 0, pendiente = 0, generadas = 0, cobradas = 0;
+    for (const s of activos) {
+      const e = estados[_abonoRef(s.id, periodo)];
+      if (e && e.generada) { generadas++; const cob = (s.monto || 0) - (e.saldo || 0); cobrado += cob; pendiente += Math.max(0, e.saldo || 0); if (e.cobrada) cobradas++; }
+    }
+    res.json({ ok: true, data: { periodo, activos: activos.length, total: subs.length, mrr: _round2(mrr), generadas, cobradas, cobrado: _round2(cobrado), pendiente: _round2(pendiente) } });
   } catch (e) { next(e); }
 });
 
