@@ -2834,6 +2834,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
+      titulo:'📇 v2.220.0 — Leads de prueba: seguimiento comercial + WhatsApp con un clic',
+      desc:'El panel <b>“Leads de prueba”</b> (Empresas, Super Admin) ahora es un mini-CRM: cada lead tiene <b>estado</b> del embudo (Nuevo → Contactado → Demo → En prueba → Cliente / Perdido), <b>próximo contacto</b> y <b>notas</b>, que guardás con 💾 y quedan en el sistema. Además, un botón <b>💬 WhatsApp</b> abre el chat con un <b>mensaje cálido ya escrito</b> (personalizado con el nombre, la empresa y la actividad). Los nuevos registros de la prueba se agregan solos. Export a CSV incluye el seguimiento.' },
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
       titulo:'📇 v2.219.0 — Empresas: contacto de quien creó cada prueba (leads)',
       desc:'Cuando alguien crea una empresa desde la <b>prueba gratuita</b> (agrocore.ar/prueba), sus <b>datos de contacto</b> quedan guardados. Ahora, en <b>Empresas</b> (solo Super Admin), cada empresa creada por el trial muestra un recuadro <b>“📇 Contacto de la prueba”</b> con nombre, WhatsApp/teléfono, email y actividad, y arriba hay un botón <b>“Leads de prueba”</b> con la lista completa (con enlace directo a WhatsApp y export a CSV). Así sabés de quién es cada empresa nueva y podés hacer el seguimiento comercial.' },
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
@@ -9772,7 +9775,7 @@ pages.empresas = async function() {
     <div class="mb-4 flex items-center justify-between">
       <h3 class="font-semibold text-slate-800">${rows.length} empresas</h3>
       <div class="flex gap-2">
-        ${esSuper?`<button class="btn btn-secondary" onclick="empTrialLeads()">📇 Leads de prueba${(state._trialLeads&&state._trialLeads.length)?` (${state._trialLeads.length})`:''}</button>`:''}
+        ${(esSuper && state._trialLeads && state._trialLeads.length)?`<button class="btn btn-secondary" onclick="empTrialLeads()">📇 Leads de prueba (${state._trialLeads.length})</button>`:''}
         ${puedeCrear ? `<button class="btn btn-primary" onclick="empForm()">+ Nueva empresa</button>` : ''}
       </div>
     </div>
@@ -9823,35 +9826,79 @@ pages.empresas = async function() {
       }).join('') || '<div class="stub-card col-span-full">Sin empresas</div>'}
     </div>`;
 };
-// Leads de la prueba gratuita (superAdmin): datos de contacto de quien se registró en la landing.
+// Estados del embudo de seguimiento de leads (con color).
+const LEAD_ESTADOS = [
+  { v:'Nuevo', c:'bg-slate-100 text-slate-700' },
+  { v:'Contactado', c:'bg-sky-100 text-sky-800' },
+  { v:'Demo agendada', c:'bg-blue-100 text-blue-800' },
+  { v:'Demo hecha', c:'bg-violet-100 text-violet-800' },
+  { v:'En prueba', c:'bg-amber-100 text-amber-800' },
+  { v:'Cliente', c:'bg-emerald-100 text-emerald-800' },
+  { v:'Perdido', c:'bg-rose-100 text-rose-800' },
+];
+// Arma el link de WhatsApp con un mensaje cálido pre-cargado (personalizado por nombre/empresa/actividad).
+function leadWaLink(l){
+  const num = String(l.telefono||'').replace(/[^0-9]/g,'');
+  if(!num) return null;
+  const nom = (l.nombre||'').trim().split(/\s+/)[0] || '';
+  const emp = (l.empresa||'').trim();
+  let linea2 = 'te quería escribir en persona para darte la bienvenida y ponerme a disposición estos días de prueba';
+  if(l.actividad==='ganadera') linea2 = 'te quería escribir para darte una mano con la parte de hacienda (fichas, costo por kilo, guías) en estos días de prueba';
+  else if(l.actividad==='agricola') linea2 = 'te quería escribir para ayudarte a ordenar campañas, insumos y cosecha desde el arranque';
+  const msg = `¡Hola${nom?' '+nom:''}! ¿Cómo andás? Soy Sergio, de AgroCore 🌱\n`
+    + `Vi que armaste tu prueba${emp?' para '+emp:''} y ${linea2}.\n`
+    + `Si querés, coordinamos 15 minutos por videollamada y te dejo el sistema andando con tus datos. Y si te traba algo, me escribís por acá y te contesto yo.\n`
+    + `¿Te viene bien que lo veamos esta semana? Decime qué día y horario te queda cómodo 🙌`;
+  return `https://wa.me/${num}?text=${encodeURIComponent(msg)}`;
+}
+// Leads de la prueba gratuita (superAdmin): contacto + seguimiento comercial.
 async function empTrialLeads(){
   let leads = state._trialLeads;
   if(!leads){ try{ leads=(await api('/api/empresas/trial-leads')).data||[]; state._trialLeads=leads; }catch(e){ return toast(e.message,'error'); } }
   const ACTIV = { agricola:'Agrícola', ganadera:'Ganadera', mixta:'Mixta' };
-  const wa = t => String(t||'').replace(/[^0-9]/g,'');
-  const fila = l => `<tr class="border-t border-slate-100">
-    <td class="p-1 whitespace-nowrap">${fmtFecha(l.createdAt)}</td>
-    <td class="p-1"><b>${esc(l.nombre||'—')}</b></td>
-    <td class="p-1">${esc(l.empresa||'')}${l.company&&l.company.name&&l.company.name!==l.empresa?` <span class="text-slate-400">(en sistema: ${esc(l.company.name)})</span>`:''}</td>
-    <td class="p-1 font-mono text-[11px]">${esc(l.cuit||'—')}</td>
-    <td class="p-1">${l.telefono?`<a class="text-emerald-700" href="https://wa.me/${wa(l.telefono)}" target="_blank">${esc(l.telefono)}</a>`:'—'}</td>
-    <td class="p-1">${l.email?`<a class="text-emerald-700" href="mailto:${esc(l.email)}">${esc(l.email)}</a>`:'—'}</td>
-    <td class="p-1">${esc(ACTIV[l.actividad]||l.actividad||'—')}</td>
-    <td class="p-1 text-center">${l.verifiedAt?'✔':'⏳'}</td>
-  </tr>`;
+  const dt = v => v?String(v).slice(0,10):'';
+  const estOpts = (sel)=> '<option value="">— Estado —</option>'+LEAD_ESTADOS.map(e=>`<option value="${e.v}" ${sel===e.v?'selected':''}>${e.v}</option>`).join('');
+  const fila = l => {
+    const waCel = l.telefono
+      ? `<div class="flex items-center gap-1"><a class="text-emerald-700" href="https://wa.me/${String(l.telefono).replace(/[^0-9]/g,'')}" target="_blank">${esc(l.telefono)}</a>
+          <a class="btn btn-ghost text-xs" title="Enviar WhatsApp con mensaje" href="${leadWaLink(l)}" target="_blank">💬</a></div>`
+      : '<span class="text-slate-400">—</span>';
+    return `<tr class="border-t border-slate-100" data-lead="${esc(l.id)}">
+      <td class="p-1 whitespace-nowrap align-top">${fmtFecha(l.createdAt)}<div class="text-[10px] text-slate-400">${l.verifiedAt?'✔ verificó':'⏳ sin verif.'}</div></td>
+      <td class="p-1 align-top"><b>${esc(l.nombre||'—')}</b><div class="text-[10px] text-slate-400">${esc(l.empresa||'')}${esc(ACTIV[l.actividad]?(' · '+ACTIV[l.actividad]):'')}</div></td>
+      <td class="p-1 align-top">${waCel}${l.email?`<div class="text-[11px]"><a class="text-emerald-700" href="mailto:${esc(l.email)}">${esc(l.email)}</a></div>`:''}</td>
+      <td class="p-1 align-top"><select class="input text-xs" data-lf="segEstado">${estOpts(l.segEstado)}</select></td>
+      <td class="p-1 align-top"><input type="date" class="input text-xs" data-lf="segFecha" value="${dt(l.segFecha)}"/></td>
+      <td class="p-1 align-top"><input class="input text-xs" data-lf="segNotas" value="${esc(l.segNotas||'')}" placeholder="Notas…"/></td>
+      <td class="p-1 align-top text-center"><button class="btn btn-primary text-xs" onclick="empLeadGuardar('${esc(l.id)}')">💾</button></td>
+    </tr>`;
+  };
   openModal({ title:'📇 Leads de la prueba gratuita', size:'max-w-5xl',
-    body:`<div class="text-[12px] text-slate-500 mb-2">Datos de contacto de quienes se registraron en la prueba (agrocore.ar/prueba). ✔ = verificó el email. Tocá el teléfono para abrir WhatsApp.</div>
-      <div class="overflow-x-auto"><table class="data text-sm" style="min-width:760px">
-        <thead><tr><th>Alta</th><th>Contacto</th><th>Empresa</th><th>CUIT</th><th>WhatsApp/Tel</th><th>Email</th><th>Actividad</th><th>Verif.</th></tr></thead>
-        <tbody>${leads.map(fila).join('')||`<tr><td colspan="8" class="text-center text-slate-400 py-6">Todavía no hay registros de prueba.</td></tr>`}</tbody>
+    body:`<div class="text-[12px] text-slate-500 mb-2">Contacto y <b>seguimiento</b> de quienes se registraron en la prueba (agrocore.ar/prueba). Se agregan solos a medida que se registran. El 💬 abre WhatsApp con un mensaje listo. Poné estado, próximo contacto y notas, y guardá con 💾.</div>
+      <div class="overflow-x-auto"><table class="data text-sm" style="min-width:900px">
+        <thead><tr><th>Alta</th><th>Contacto</th><th>WhatsApp / Email</th><th>Estado</th><th>Próx. contacto</th><th>Notas</th><th></th></tr></thead>
+        <tbody>${leads.map(fila).join('')||`<tr><td colspan="7" class="text-center text-slate-400 py-6">Todavía no hay registros de prueba.</td></tr>`}</tbody>
       </table></div>
       <div class="text-right mt-2">${leads.length?`<button class="btn btn-outline text-xs" onclick="empTrialLeadsExport()">⬇️ Exportar CSV</button>`:''}</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
 }
+async function empLeadGuardar(id){
+  const tr=document.querySelector(`tr[data-lead="${id}"]`); if(!tr) return;
+  const body={
+    segEstado: tr.querySelector('[data-lf="segEstado"]').value||null,
+    segFecha: tr.querySelector('[data-lf="segFecha"]').value||null,
+    segNotas: tr.querySelector('[data-lf="segNotas"]').value.trim()||null,
+  };
+  try{
+    await api('/api/empresas/trial-leads/'+id,{method:'PUT',body:JSON.stringify(body)});
+    const l=(state._trialLeads||[]).find(x=>x.id===id); if(l){ l.segEstado=body.segEstado; l.segFecha=body.segFecha; l.segNotas=body.segNotas; }
+    toast('Seguimiento guardado','success');
+  }catch(e){ toast(e.message,'error'); }
+}
 function empTrialLeadsExport(){
   const leads=state._trialLeads||[]; const ACTIV={agricola:'Agrícola',ganadera:'Ganadera',mixta:'Mixta'};
-  let rows=[['Alta','Contacto','Empresa','CUIT','Telefono','Email','Actividad','Verificado']];
-  leads.forEach(l=>rows.push([fmtFecha(l.createdAt),l.nombre||'',l.empresa||'',l.cuit||'',l.telefono||'',l.email||'',ACTIV[l.actividad]||l.actividad||'',l.verifiedAt?'Si':'No']));
+  let rows=[['Alta','Contacto','Empresa','CUIT','Telefono','Email','Actividad','Verificado','Estado','ProxContacto','Notas']];
+  leads.forEach(l=>rows.push([fmtFecha(l.createdAt),l.nombre||'',l.empresa||'',l.cuit||'',l.telefono||'',l.email||'',ACTIV[l.actividad]||l.actividad||'',l.verifiedAt?'Si':'No',l.segEstado||'',l.segFecha?String(l.segFecha).slice(0,10):'',l.segNotas||'']));
   const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'})); a.download='AgroCore-Leads-Prueba.csv'; a.click();
 }

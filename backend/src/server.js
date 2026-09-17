@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.219.0';
+const AGROCORE_VERSION = '2.220.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1753,7 +1753,7 @@ app.get('/api/empresas/trial-leads', async (req, res, next) => {
     const where = soloVerificados ? { verifiedAt: { not: null } } : {};
     const leads = await prisma.trialSignup.findMany({
       where, orderBy: [{ createdAt: 'desc' }],
-      select: { id: true, nombre: true, empresa: true, cuit: true, email: true, telefono: true, actividad: true, verifiedAt: true, companyId: true, createdAt: true },
+      select: { id: true, nombre: true, empresa: true, cuit: true, email: true, telefono: true, actividad: true, verifiedAt: true, companyId: true, createdAt: true, segEstado: true, segFecha: true, segNotas: true },
     });
     // Nombre real de la empresa creada (por si la renombraron después).
     const ids = [...new Set(leads.map(l => l.companyId).filter(Boolean))];
@@ -1761,6 +1761,28 @@ app.get('/api/empresas/trial-leads', async (req, res, next) => {
     const byId = Object.fromEntries(comps.map(c => [c.id, c]));
     const data = leads.map(l => ({ ...l, company: l.companyId ? (byId[l.companyId] || null) : null }));
     res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Actualizar el seguimiento comercial de un lead de prueba (estado, próximo contacto, notas).
+app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const schema = z.object({
+      segEstado: z.string().max(40).nullable().optional(),
+      segFecha: z.coerce.date().nullable().optional(),
+      segNotas: z.string().max(2000).nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const cur = await prisma.trialSignup.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Lead no encontrado' });
+    const data = {};
+    if (d.segEstado !== undefined) data.segEstado = d.segEstado || null;
+    if (d.segFecha !== undefined) data.segFecha = d.segFecha || null;
+    if (d.segNotas !== undefined) data.segNotas = d.segNotas || null;
+    const row = await prisma.trialSignup.update({ where: { id: cur.id }, data,
+      select: { id: true, segEstado: true, segFecha: true, segNotas: true } });
+    res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
 
