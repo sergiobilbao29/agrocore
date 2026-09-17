@@ -2833,9 +2833,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
+      titulo:'🐎 v2.218.0 — Ficha del animal: 2ª foto de perfil + estudios y archivos (radiografías, videos)',
+      desc:'En la ficha de cada animal ahora podés cargar <b>dos fotos de perfil</b> (frente y costado). Y sumamos una sección <b>“📎 Estudios y archivos”</b> para adjuntar <b>radiografías, videos (trote, lastimadura), fotos, análisis y PDF</b>: subís lo que quieras a los antecedentes generales del caballo, o al 📎 de un evento puntual del historial (lo que se le hizo/pasó ese día). Se ven y descargan desde la misma ficha. Admite archivos grandes (hasta 150 MB, ideal para videos).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/09/2026',
-      titulo:'🧾 v2.217.0 — Cargá la factura del flete sin salir de la liquidación',
-      desc:'En las <b>deducciones del comprador</b> (flete/gastos), al lado del desplegable de factura ahora hay un botón <b>“＋ Factura”</b>: cargás ahí mismo la <b>factura de compra del flete/gasto</b> (proveedor, tipo, punto de venta, número, fecha, neto e IVA) sin tener que ir a Movimientos de compras. Al guardar, la factura queda <b>registrada en compras y vinculada</b> a la deducción (marcada como pagada, porque el comprador la descontó de tu liquidación). Recordá: ese desplegable <b>vincula</b> facturas ya cargadas — si aparece “Sin factura” es porque todavía no cargaste ninguna en esa empresa; con este botón la cargás en el momento.' },
+      titulo:'🧾 v2.217.0 — Importá la factura del flete (PDF/foto) sin salir de la liquidación',
+      desc:'En las <b>deducciones del comprador</b> (flete/gastos), al lado del desplegable de factura ahora hay un botón <b>“＋ Factura”</b> que abre un alta rápida con <b>“📄 Importar PDF / foto”</b>: subís el PDF de ARCA (o una foto de la factura) y se <b>completan solos</b> proveedor, tipo, punto de venta, número, fecha, neto e IVA. Revisás y guardás. La factura queda <b>registrada en Movimientos de compras y vinculada</b> a la deducción (marcada como pagada, porque el comprador la descontó de tu liquidación). También podés cargarla a mano si preferís. Recordá: el desplegable <b>vincula</b> facturas ya cargadas — si aparece “Sin factura” es porque todavía no había ninguna; con este botón la cargás en el momento.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/09/2026',
       titulo:'🌾 v2.216.0 — Deducciones de flete/gastos al crear o editar la liquidación',
       desc:'Ahora las <b>deducciones del comprador</b> (flete/gastos) se pueden cargar <b>directamente al crear o editar</b> la liquidación de cereal, sin tener que entrar al detalle. En el formulario hay una sección <b>“Deducciones del comprador”</b> donde ponés concepto e importe y, si querés, <b>vinculás una factura de compra ya cargada</b> (queda saldada, porque la pagó el comprador al descontarla). El saldo a cobrar baja a lo que realmente cobrás. Al editar la liquidación las deducciones se conservan y se recalculan solas.' },
@@ -30060,6 +30063,15 @@ async function liqNfAbrir(concepto, importe){
   openModal2({ title:'＋ Cargar factura de compra (flete/gasto)', size:'max-w-lg',
     body:`
       <div class="text-[12px] text-slate-500 mb-2">Cargá acá la factura del flete o gasto. Se registra en <b>Movimientos de compras</b> y queda vinculada a esta deducción (la factura se marca como pagada, porque el comprador la descontó de tu liquidación).</div>
+      <div class="p-2 mb-2 rounded-lg border border-dashed border-emerald-300 bg-emerald-50/50">
+        <div class="flex items-center gap-2 flex-wrap">
+          <label class="btn btn-primary text-xs cursor-pointer">📄 Importar PDF / foto
+            <input type="file" accept="application/pdf,image/*" class="hidden" onchange="liqNfImportar(this)"/>
+          </label>
+          <span class="text-[11px] text-slate-500">Tenés el PDF en la compu? Subilo y completo los campos solos. Después revisás y guardás.</span>
+        </div>
+        <div id="nf-msg" class="text-[12px] mt-1"></div>
+      </div>
       <div class="grid grid-cols-2 gap-2">
         <div class="col-span-2"><label class="label text-xs">Proveedor (quién te factura el flete/gasto)</label><select id="nf-prov" class="input"><option value="">— Sin proveedor —</option>${provOpts}</select></div>
         <div><label class="label text-xs">Tipo *</label><select id="nf-tipo" class="input"><option>A</option><option>B</option><option>C</option><option>E</option></select></div>
@@ -30079,6 +30091,51 @@ function liqNfCalc(){
   const neto=Number(document.getElementById('nf-neto')?.value||0);
   const iva=Number(document.getElementById('nf-iva')?.value||0);
   const el=document.getElementById('nf-total'); if(el) el.value=fmt$(neto*(1+iva/100));
+}
+// Lee el PDF (ARCA) o la foto (IA) de la factura y completa el mini-form. La usuaria
+// después revisa y guarda. Usa el mismo parser que Compras (/api/admin/parse-factura-pdf).
+async function liqNfImportar(input){
+  const archivo = input.files && input.files[0]; if(!archivo) return;
+  const msg = document.getElementById('nf-msg');
+  const setVal=(id,v)=>{ const el=document.getElementById(id); if(el && v!=null && v!=='') el.value=v; };
+  if(msg) msg.innerHTML='<span class="text-blue-700">⏳ Leyendo la factura…</span>';
+  try{
+    const fd=new FormData(); fd.append('archivo', archivo);
+    const r=await fetch(API_BASE+'/api/admin/parse-factura-pdf',{ method:'POST',
+      headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body:fd });
+    const j=await r.json();
+    if(!r.ok || !j.ok) throw new Error(j.error || ('Error '+r.status));
+    const d=j.data;
+    setVal('nf-tipo', d.tipoCmpLetra || 'A');
+    setVal('nf-pv', d.puntoVenta || '');
+    setVal('nf-num', d.numero || '');
+    if(d.fecha) setVal('nf-fecha', String(d.fecha).slice(0,10));
+    // Neto e IVA
+    let neto = d.netoGravado; let iva = d.iva21 ? 21 : d.iva105 ? 10.5 : d.iva27 ? 27 : null;
+    if(neto==null && d.total!=null){ if(iva==null) iva=21; neto = Number(d.total)/(1+iva/100); }
+    if(iva==null) iva=21;
+    if(neto!=null){ const nn=document.getElementById('nf-neto'); if(nn) nn.value=Number(neto).toFixed(2); }
+    const iv=document.getElementById('nf-iva'); if(iv) iv.value=String(iva);
+    // Proveedor por CUIT del emisor
+    let provMatch=null;
+    if(d.cuitEmisor){
+      const cuitNorm=String(d.cuitEmisor).replace(/[-.\s]/g,'');
+      provMatch=(state.cache?.proveedores||[]).find(p=>String(p.cuit||'').replace(/[-.\s]/g,'')===cuitNorm);
+      if(provMatch) setVal('nf-prov', provMatch.id);
+    }
+    liqNfCalc();
+    let html=`<span class="text-emerald-700">✅ Factura ${d.tipoCmpLetra||'?'} ${d.puntoVenta!=null?String(d.puntoVenta).padStart(4,'0'):'----'}-${d.numero!=null?String(d.numero).padStart(8,'0'):'--------'} leída${j.viaIA?' (foto/IA)':''}. Revisá los datos y guardá.</span>`;
+    if(!provMatch && d.razonSocialEmisor){
+      html+=`<div class="mt-1 text-amber-800">⚠️ El proveedor <b>${esc(d.razonSocialEmisor)}</b>${d.cuitEmisor?` (CUIT ${esc(d.cuitEmisor)})`:''} no está en el catálogo. Elegilo del desplegable o dejalo en “Sin proveedor”.</div>`;
+    }
+    if(d.moneda && /DOL|USD|US/.test(String(d.moneda))){
+      html+=`<div class="mt-1 text-amber-800">⚠️ La factura parece estar en dólares. Este alta rápida la carga en pesos; si es en US$, cargala desde Movimientos de compras.</div>`;
+    }
+    if(msg) msg.innerHTML=html;
+  }catch(e){
+    if(msg) msg.innerHTML=`<span class="text-red-700">❌ ${esc(e.message)}</span>`;
+    toast('No pude leer la factura: '+e.message,'error');
+  }finally{ input.value=''; }
 }
 async function liqNfGuardar(){
   const tipo=document.getElementById('nf-tipo')?.value||'A';
@@ -30596,14 +30653,26 @@ function aniForm(id){
   openModal({
     title: id?'Editar ficha del animal':'Nueva ficha de animal', size:'max-w-3xl',
     body:`
-      <div class="flex items-center gap-4 mb-3">
-        <img id="an-foto-prev" src="${a.foto?esc(a.foto):''}" alt="" class="w-24 h-24 rounded-lg object-cover border ${a.foto?'':'hidden'}" style="background:#f1f5f9"/>
-        <div id="an-foto-ph" class="w-24 h-24 rounded-lg border flex items-center justify-center text-3xl text-slate-300 ${a.foto?'hidden':''}" style="background:#f8fafc">🐎</div>
-        <div>
-          <label class="label">Foto del animal</label>
-          <input id="an-foto-file" type="file" accept="image/*" class="input" onchange="aniFotoPick(event)"/>
-          <input type="hidden" id="an-foto" value="${a.foto?esc(a.foto):''}"/>
-          <div class="text-[11px] text-slate-400 mt-1">JPG/PNG. Se reduce automáticamente. <a href="#" onclick="aniFotoBorrar();return false" class="text-rose-600">Quitar foto</a></div>
+      <div class="flex items-start gap-4 mb-3 flex-wrap">
+        <div class="flex items-center gap-3">
+          <img id="an-foto-prev" src="${a.foto?esc(a.foto):''}" alt="" class="w-24 h-24 rounded-lg object-cover border ${a.foto?'':'hidden'}" style="background:#f1f5f9"/>
+          <div id="an-foto-ph" class="w-24 h-24 rounded-lg border flex items-center justify-center text-3xl text-slate-300 ${a.foto?'hidden':''}" style="background:#f8fafc">🐎</div>
+          <div>
+            <label class="label">Foto 1 (frente)</label>
+            <input id="an-foto-file" type="file" accept="image/*" class="input" onchange="aniFotoPick(event)"/>
+            <input type="hidden" id="an-foto" value="${a.foto?esc(a.foto):''}"/>
+            <div class="text-[11px] text-slate-400 mt-1">JPG/PNG. Se reduce sola. <a href="#" onclick="aniFotoBorrar();return false" class="text-rose-600">Quitar</a></div>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <img id="an-foto2-prev" src="${a.foto2?esc(a.foto2):''}" alt="" class="w-24 h-24 rounded-lg object-cover border ${a.foto2?'':'hidden'}" style="background:#f1f5f9"/>
+          <div id="an-foto2-ph" class="w-24 h-24 rounded-lg border flex items-center justify-center text-3xl text-slate-300 ${a.foto2?'hidden':''}" style="background:#f8fafc">🐎</div>
+          <div>
+            <label class="label">Foto 2 (costado)</label>
+            <input id="an-foto2-file" type="file" accept="image/*" class="input" onchange="aniFoto2Pick(event)"/>
+            <input type="hidden" id="an-foto2" value="${a.foto2?esc(a.foto2):''}"/>
+            <div class="text-[11px] text-slate-400 mt-1">Opcional. <a href="#" onclick="aniFoto2Borrar();return false" class="text-rose-600">Quitar</a></div>
+          </div>
         </div>
       </div>
       <div class="grid grid-cols-2 gap-3">
@@ -30668,6 +30737,7 @@ async function aniSave(id){
     origen:g('an-origen').value||null, costoIngreso:Number(g('an-costo').value||0), moneda:g('an-moneda').value,
     externo:g('an-ext').checked, propietario:g('an-prop').value||null, observaciones:g('an-obs').value||null,
     foto:(g('an-foto')?g('an-foto').value:'')||null,
+    foto2:(g('an-foto2')?g('an-foto2').value:'')||null,
   };
   try{
     await api('/api/animales'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
@@ -30699,6 +30769,21 @@ function aniFotoPick(ev){
     img.src=e.target.result;
   };
   reader.readAsDataURL(file);
+}
+function aniFoto2Borrar(){
+  const h=document.getElementById('an-foto2'); if(h) h.value='';
+  const f=document.getElementById('an-foto2-file'); if(f) f.value='';
+  const p=document.getElementById('an-foto2-prev'); if(p){ p.src=''; p.classList.add('hidden'); }
+  const ph=document.getElementById('an-foto2-ph'); if(ph) ph.classList.remove('hidden');
+}
+async function aniFoto2Pick(ev){
+  const file=ev.target.files&&ev.target.files[0]; if(!file) return;
+  try{
+    const data=await _fotoResize(file);
+    const hid=document.getElementById('an-foto2'); if(hid) hid.value=data;
+    const p=document.getElementById('an-foto2-prev'); if(p){ p.src=data; p.classList.remove('hidden'); }
+    const ph=document.getElementById('an-foto2-ph'); if(ph) ph.classList.add('hidden');
+  }catch(e){ toast(e.message,'warn'); }
 }
 // Redimensiona un archivo de imagen a un data URL (base64) reducido.
 function _fotoResize(file){
@@ -30751,7 +30836,7 @@ async function aniVer(id){
       <td class="p-1">${ANI_EV_TIPOS[e.tipo]||e.tipo}</td>
       <td class="p-1">${esc(e.concepto||'')}${extra}${e.proximaFecha?` <span class="text-[10px] text-amber-700">(próx: ${fmtFecha(e.proximaFecha)})</span>`:''}</td>
       <td class="p-1 text-right">${e.costo?fmtMon(e.moneda||a.moneda,e.costo):'—'}</td>
-      <td class="p-1 text-right whitespace-nowrap">${(canU && !['venta','ingreso','iot'].includes(e.tipo))?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aniEventoEdit(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>✏️</button>`:''}${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='aniEventoDel(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>🗑️</button>`:''}</td>
+      <td class="p-1 text-right whitespace-nowrap"><button class="btn btn-ghost text-xs" title="Archivos del evento (radiografías, videos, fotos)" onclick='aniAdjEvento(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>📎</button>${(canU && !['venta','ingreso','iot'].includes(e.tipo))?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aniEventoEdit(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>✏️</button>`:''}${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='aniEventoDel(${JSON.stringify(a.id)},${JSON.stringify(e.id)})'>🗑️</button>`:''}</td>
     </tr>`;
   };
   const dl = (lbl,val)=> val?`<div><span class="text-[11px] text-slate-400">${lbl}</span><div class="text-sm">${esc(val)}</div></div>`:'';
@@ -30759,9 +30844,14 @@ async function aniVer(id){
     title:`${(ANI_ESPECIES[a.especie]||'')} ${esc(a.nombre)}`, size:'max-w-4xl',
     body:`
       <div class="flex flex-col sm:flex-row gap-4 mb-3">
-        ${a.foto
-          ? `<img src="${esc(a.foto)}" alt="${esc(a.nombre)}" class="w-40 h-40 object-cover rounded-lg border bg-slate-50 shrink-0 cursor-zoom-in self-start" onclick="window.open(this.src,'_blank')"/>`
-          : `<div class="w-40 h-40 rounded-lg border flex items-center justify-center text-5xl text-slate-300 shrink-0 self-start" style="background:#f8fafc">🐎</div>`}
+        <div class="flex gap-2 shrink-0 self-start">
+          ${a.foto
+            ? `<img src="${esc(a.foto)}" alt="${esc(a.nombre)}" title="Frente" class="w-40 h-40 object-cover rounded-lg border bg-slate-50 cursor-zoom-in" onclick="window.open(this.src,'_blank')"/>`
+            : `<div class="w-40 h-40 rounded-lg border flex items-center justify-center text-5xl text-slate-300" style="background:#f8fafc">🐎</div>`}
+          ${a.foto2
+            ? `<img src="${esc(a.foto2)}" alt="${esc(a.nombre)} costado" title="Costado" class="w-40 h-40 object-cover rounded-lg border bg-slate-50 cursor-zoom-in" onclick="window.open(this.src,'_blank')"/>`
+            : ''}
+        </div>
         <input type="file" id="ani-foto-directa" accept="image/*" class="hidden" onchange='aniFotoDirecta(${JSON.stringify(a.id)}, event)'/>
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2 mb-3 flex-wrap">${_aniEstadoBadge(a.estado)}${a.categoria?`<span class="text-xs text-slate-500">${esc(a.categoria)}</span>`:''}
@@ -30803,9 +30893,81 @@ async function aniVer(id){
       <div class="kpi p-0 overflow-x-auto"><table class="data" style="min-width:640px">
         <thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th class="text-right">Costo</th><th></th></tr></thead>
         <tbody>${evs.map(filaEv).join('')||`<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin eventos todavía.</td></tr>`}</tbody>
-      </table></div>`,
+      </table></div>
+      <div class="flex items-center justify-between mt-4 mb-2">
+        <div class="font-semibold text-slate-700">📎 Estudios y archivos <span class="text-[11px] font-normal text-slate-400">(radiografías, videos, fotos, PDF, análisis)</span></div>
+        ${canU?`<label class="btn btn-primary text-xs cursor-pointer">+ Subir archivo<input type="file" class="hidden" accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx" onchange='aniAdjSubir(${JSON.stringify(a.id)}, this)'/></label>`:''}
+      </div>
+      <div id="ani-adjuntos" class="text-sm text-slate-400">Cargando archivos…</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
   });
+  aniAdjLoad(a.id);
+}
+// ── Estudios y archivos de un animal (fotos, radiografías, videos, PDF) ──
+async function aniAdjLoad(animalId){
+  const cont=document.getElementById('ani-adjuntos'); if(!cont) return;
+  let items=[];
+  try{ items=(await api(`/api/animales/${animalId}/adjuntos`)).data||[]; }
+  catch(e){ cont.innerHTML=`<span class="text-red-500 text-xs">${esc(e.message)}</span>`; return; }
+  state._aniAdjuntos=items;
+  const generales=items.filter(x=>!x.animalEventoId);
+  if(!generales.length){ cont.innerHTML='<span class="text-slate-400 text-xs">Sin archivos generales todavía. Subí radiografías, videos del trote, fotos o análisis con “+ Subir archivo”. También podés adjuntar archivos a un evento del historial con el 📎.</span>'; return; }
+  cont.innerHTML=aniAdjGrid(generales, animalId);
+}
+function aniAdjGrid(items, animalId){
+  const canU=can('stock:update');
+  const kb=(n)=> n>1048576? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+  const ico=(m)=> /^image\//.test(m)?'🖼️' : /^video\//.test(m)?'🎬' : m==='application/pdf'?'📄':'📎';
+  return `<div class="grid grid-cols-1 md:grid-cols-2 gap-2">${items.map(x=>`
+    <div class="flex items-center gap-2 border border-slate-200 rounded p-2">
+      <span class="text-lg">${ico(x.mime)}</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm truncate">${esc(x.nombre)}</div>
+        <div class="text-[10px] text-slate-400">${esc(x.descripcion||'')}${x.descripcion?' · ':''}${kb(x.tamano)} · ${fmtFecha(x.createdAt)}</div>
+      </div>
+      <button class="btn btn-ghost text-xs" title="Ver / descargar" onclick="aniAdjVer('${animalId}','${x.id}')">⬇️</button>
+      ${canU?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick="aniAdjDel('${animalId}','${x.id}')">🗑️</button>`:''}
+    </div>`).join('')}</div>`;
+}
+async function aniAdjSubir(animalId, input, eventoId){
+  const f=input.files?.[0]; if(!f) return; input.value='';
+  if(f.size > 150*1024*1024) return toast('El archivo supera los 150 MB','error');
+  const desc=(prompt('Descripción (ej: Radiografía rodilla, Video trote, Análisis sangre, Placa…):','')||'').trim();
+  toast('Subiendo archivo…','info');
+  try{
+    const fd=new FormData(); fd.append('archivo', f); if(desc) fd.append('descripcion', desc); if(eventoId) fd.append('eventoId', eventoId);
+    const r=await fetch(API_BASE+`/api/animales/${animalId}/adjuntos`,{ method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd });
+    const j=await r.json(); if(!r.ok||!j.ok) return toast(j.error||'No pude subir el archivo','error');
+    toast('Archivo adjuntado','success');
+    if(eventoId){ aniAdjEvento(animalId, eventoId); } else { aniAdjLoad(animalId); }
+  }catch(e){ toast(e.message||'Error al subir','error'); }
+}
+async function aniAdjVer(animalId, id){
+  try{
+    toast('Abriendo…','info');
+    const r=await fetch(API_BASE+`/api/animales/${animalId}/adjuntos/${id}/download`,{ headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId } });
+    if(!r.ok) return toast('No pude abrir el archivo','error');
+    const blob=await r.blob(); const url=URL.createObjectURL(blob); window.open(url,'_blank');
+    setTimeout(()=>URL.revokeObjectURL(url), 120000);
+  }catch(e){ toast(e.message,'error'); }
+}
+async function aniAdjDel(animalId, id){
+  if(!confirm('¿Borrar este archivo?')) return;
+  try{ await api(`/api/animales/${animalId}/adjuntos/${id}`,{method:'DELETE'}); toast('Archivo borrado','success');
+    const em=document.getElementById('adjev-body'); if(em && state._aniAdjEvId){ aniAdjEvento(animalId, state._aniAdjEvId); } else { aniAdjLoad(animalId); }
+  }catch(e){ toast(e.message,'error'); }
+}
+// Archivos de un evento del historial (modal secundario, sin cerrar la ficha).
+async function aniAdjEvento(animalId, eventoId){
+  state._aniAdjEvId=eventoId;
+  let items=[];
+  try{ items=(await api(`/api/animales/${animalId}/adjuntos`)).data||[]; }catch(e){ return toast(e.message,'error'); }
+  const evItems=items.filter(x=>x.animalEventoId===eventoId);
+  const canU=can('stock:update');
+  openModal2({ title:'📎 Archivos del evento', size:'max-w-lg',
+    body:`<div class="text-[12px] text-slate-500 mb-2">Adjuntá acá lo que se le hizo/pasó ese día: radiografías, videos (trote, lastimadura), fotos, análisis, PDF.</div>
+      <div id="adjev-body">${evItems.length?aniAdjGrid(evItems, animalId):'<span class="text-slate-400 text-xs">Sin archivos en este evento.</span>'}</div>`,
+    footer:`${canU?`<label class="btn btn-primary text-xs cursor-pointer">+ Subir archivo<input type="file" class="hidden" accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx" onchange='aniAdjSubir(${JSON.stringify(animalId)}, this, ${JSON.stringify(eventoId)})'/></label>`:''}<button class="btn btn-secondary" onclick="closeModal2()">Cerrar</button>` });
 }
 // Fase 3 — Hotelería / servicios a terceros: resumen de cargos a cobrar por propietario.
 async function aniHoteleria(){

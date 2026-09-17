@@ -61,11 +61,13 @@ const app = express();
 // Se declara ACÁ ARRIBA porque varios endpoints lo usan al levantarse y JavaScript
 // no permite usar una const antes de su inicialización (TDZ).
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+// Para adjuntos multimedia (radiografías, videos del trote, fotos, PDF) que pueden pesar más.
+const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize: 150 * 1024 * 1024 } });
 
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.217.0';
+const AGROCORE_VERSION = '2.218.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10992,6 +10994,7 @@ const animalSchema = z.object({
   propietario: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
   foto: z.string().nullable().optional(),
+  foto2: z.string().nullable().optional(),
 });
 const animalEventoSchema = z.object({
   fecha: z.coerce.date(),
@@ -11142,7 +11145,7 @@ app.post('/api/animales', requireCompany, requirePermission('stock:create'), asy
       moneda: d.moneda || 'ARS', fechaIngreso: d.fechaIngreso || null,
       costoIngreso: d.costoIngreso ?? 0, origen: d.origen || null, valuacion: d.valuacion ?? null,
       externo: !!d.externo, propietario: d.propietario || null, observaciones: d.observaciones || null,
-      foto: d.foto || null,
+      foto: d.foto || null, foto2: d.foto2 || null,
     }});
     // Ficha nueva EN EL CAMPO → suma 1 al stock (historial). Las de terceros suman a su
     // propio renglón diferenciado ("… (terceros)").
@@ -11159,7 +11162,7 @@ app.put('/api/animales/:id', requireCompany, requirePermission('stock:update'), 
     if (!cur) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
     const d = animalSchema.partial().parse(req.body);
     const data = { ...d };
-    ['sexo','pelaje','raza','categoria','microchip','caravanaRfid','caravanaVisual','nroRegistro','pasaporte','padreId','padreNombre','madreId','madreNombre','receptoraId','receptoraNombre','campoId','ubicacion','rodeoId','origen','propietario','observaciones','foto']
+    ['sexo','pelaje','raza','categoria','microchip','caravanaRfid','caravanaVisual','nroRegistro','pasaporte','padreId','padreNombre','madreId','madreNombre','receptoraId','receptoraNombre','campoId','ubicacion','rodeoId','origen','propietario','observaciones','foto','foto2']
       .forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
     if (d.nombre !== undefined) data.nombre = String(d.nombre).trim();
     const row = await prisma.animal.update({ where: { id: cur.id }, data });
@@ -11329,7 +11332,85 @@ app.delete('/api/animales/:id', requireCompany, requirePermission('stock:delete'
     for (const e of evs) { try { await prisma.movimiento.delete({ where: { id: e.movimientoStockId } }); } catch {} }
     // Borrar los movimientos de historial de stock de esta ficha.
     try { await prisma.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: `FICHA-${cur.id}` } }); } catch {}
-    await prisma.animal.delete({ where: { id: cur.id } });
+    // Borrar del disco los adjuntos (fotos/radiografías/videos) de la ficha y sus eventos.
+    try {
+      const adjs = await prisma.adjunto.findMany({ where: { companyId: req.companyId, animalId: cur.id }, select: { storageKey: true } });
+      for (const a of adjs) { try { const abs = path.join(ADJUNTOS_DIR, a.storageKey); if (abs.startsWith(ADJUNTOS_DIR) && fs.existsSync(abs)) await fs.promises.unlink(abs); } catch {} }
+    } catch {}
+    await prisma.animal.delete({ where: { id: cur.id } });   // cascade borra eventos y filas de adjuntos
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── Adjuntos de la ficha del animal (fotos, radiografías, videos, PDF, archivos) ──
+// Se cuelgan del animal (antecedentes generales) o de un evento del historial.
+// Reusa el modelo Adjunto y ADJUNTOS_DIR, pero con permisos de stock (haras/hacienda).
+app.get('/api/animales/:id/adjuntos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const a = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId }, select: { id: true } });
+    if (!a) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    const data = await prisma.adjunto.findMany({
+      where: { companyId: req.companyId, animalId: a.id },
+      orderBy: [{ createdAt: 'desc' }],
+      select: { id: true, animalEventoId: true, nombre: true, descripcion: true, mime: true, tamano: true, createdAt: true },
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+app.post('/api/animales/:id/adjuntos', requireCompany, requirePermission('stock:update'), uploadMedia.single('archivo'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'Falta el archivo' });
+    const a = await prisma.animal.findFirst({ where: { id: req.params.id, companyId: req.companyId }, select: { id: true } });
+    if (!a) return res.status(404).json({ ok: false, error: 'Animal no encontrado' });
+    let animalEventoId = null, entidadTipo = 'animal';
+    const evId = (req.body.eventoId || '').trim();
+    if (evId) {
+      const ev = await prisma.animalEvento.findFirst({ where: { id: evId, animalId: a.id, companyId: req.companyId }, select: { id: true } });
+      if (!ev) return res.status(404).json({ ok: false, error: 'Evento no encontrado' });
+      animalEventoId = ev.id; entidadTipo = 'animal_evento';
+    }
+    const ext = _adjExtSegura(req.file.originalname, req.file.mimetype);
+    const rand = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const storageKey = `${req.companyId}/${rand}${ext}`;
+    const abs = path.join(ADJUNTOS_DIR, storageKey);
+    await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+    await fs.promises.writeFile(abs, req.file.buffer);
+    const row = await prisma.adjunto.create({
+      data: {
+        companyId: req.companyId, entidadTipo, entidadId: animalEventoId || a.id,
+        animalId: a.id, animalEventoId,
+        nombre: (req.file.originalname || 'archivo').slice(0, 200),
+        descripcion: (req.body.descripcion || '').slice(0, 200) || null,
+        mime: req.file.mimetype || 'application/octet-stream',
+        tamano: req.file.size || req.file.buffer.length || 0,
+        storageKey, userId: req.user?.id || null,
+      },
+    });
+    res.status(201).json({ ok: true, data: { id: row.id, animalEventoId: row.animalEventoId, nombre: row.nombre, mime: row.mime, tamano: row.tamano, descripcion: row.descripcion, createdAt: row.createdAt } });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/animales/:id/adjuntos/:adjId/download', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const a = await prisma.adjunto.findFirst({ where: { id: req.params.adjId, companyId: req.companyId, animalId: req.params.id } });
+    if (!a) return res.status(404).json({ ok: false, error: 'Adjunto no encontrado' });
+    const abs = path.join(ADJUNTOS_DIR, a.storageKey);
+    if (!abs.startsWith(ADJUNTOS_DIR) || !fs.existsSync(abs)) return res.status(404).json({ ok: false, error: 'Archivo no disponible' });
+    res.setHeader('Content-Type', a.mime || 'application/octet-stream');
+    const inline = /^(image|video)\//.test(a.mime || '') || a.mime === 'application/pdf';
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(a.nombre)}"`);
+    fs.createReadStream(abs).pipe(res);
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/animales/:id/adjuntos/:adjId', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const a = await prisma.adjunto.findFirst({ where: { id: req.params.adjId, companyId: req.companyId, animalId: req.params.id } });
+    if (!a) return res.status(404).json({ ok: false, error: 'Adjunto no encontrado' });
+    const abs = path.join(ADJUNTOS_DIR, a.storageKey);
+    try { if (abs.startsWith(ADJUNTOS_DIR) && fs.existsSync(abs)) await fs.promises.unlink(abs); } catch {}
+    await prisma.adjunto.delete({ where: { id: a.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

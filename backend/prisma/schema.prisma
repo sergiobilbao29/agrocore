@@ -1580,7 +1580,8 @@ model Animal {
   // Otros
   externo       Boolean  @default(false)        // true = de un tercero (pensión / hotelería)
   propietario   String?                         // dueño si es externo
-  foto          String?
+  foto          String?                          // foto de perfil (frente)
+  foto2         String?                          // segunda foto de perfil (costado)
   observaciones String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -1588,6 +1589,7 @@ model Animal {
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   rodeo         Rodeo?         @relation(fields: [rodeoId], references: [id], onDelete: SetNull)
   eventos       AnimalEvento[]
+  adjuntos      Adjunto[]
 
   @@index([companyId])
   @@index([companyId, especie])
@@ -1624,6 +1626,7 @@ model AnimalEvento {
 
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   animal        Animal   @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  adjuntos      Adjunto[]
 
   @@index([companyId])
   @@index([animalId])
@@ -2604,11 +2607,13 @@ model RemitoInterno {
 model Adjunto {
   id            String   @id @default(cuid())
   companyId     String
-  entidadTipo   String                       // 'activo_fijo' | ...
+  entidadTipo   String                       // 'activo_fijo' | 'animal' | 'animal_evento' | ...
   entidadId     String
   activoFijoId  String?                       // FK cuando entidadTipo = 'activo_fijo'
+  animalId      String?                       // FK cuando el adjunto es de una ficha de animal (o de un evento suyo)
+  animalEventoId String?                      // FK cuando entidadTipo = 'animal_evento'
   nombre        String                        // nombre original del archivo
-  descripcion   String?                       // título / escritura / foto / póliza / etc.
+  descripcion   String?                       // título / escritura / foto / póliza / radiografía / video / etc.
   mime          String
   tamano        Int      @default(0)          // bytes
   storageKey    String                        // ruta/archivo en el disco del servidor
@@ -2617,10 +2622,14 @@ model Adjunto {
 
   company       Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   activoFijo    ActivoFijo? @relation(fields: [activoFijoId], references: [id], onDelete: Cascade)
+  animal        Animal?       @relation(fields: [animalId], references: [id], onDelete: Cascade)
+  animalEvento  AnimalEvento? @relation(fields: [animalEventoId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
   @@index([entidadTipo, entidadId])
   @@index([activoFijoId])
+  @@index([animalId])
+  @@index([animalEventoId])
 }
 
 // ── Retenciones y percepciones ────────────────────────────────────────────────
