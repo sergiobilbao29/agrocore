@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.218.0';
+const AGROCORE_VERSION = '2.219.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1740,6 +1740,27 @@ app.get('/api/empresas', async (req, res, next) => {
       ? await prisma.company.findMany({ orderBy: { name: 'asc' } })
       : req.user.userCompanies.map((uc) => uc.company);
     res.json({ ok: true, data: companies });
+  } catch (e) { next(e); }
+});
+
+// Leads de la prueba gratuita: datos de contacto de quien se registró en la landing
+// (agrocore.ar/prueba). Solo superAdmin. Sirve para saber de quién es cada empresa
+// creada por el trial y para el seguimiento comercial.
+app.get('/api/empresas/trial-leads', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const soloVerificados = req.query.verificados === '1';
+    const where = soloVerificados ? { verifiedAt: { not: null } } : {};
+    const leads = await prisma.trialSignup.findMany({
+      where, orderBy: [{ createdAt: 'desc' }],
+      select: { id: true, nombre: true, empresa: true, cuit: true, email: true, telefono: true, actividad: true, verifiedAt: true, companyId: true, createdAt: true },
+    });
+    // Nombre real de la empresa creada (por si la renombraron después).
+    const ids = [...new Set(leads.map(l => l.companyId).filter(Boolean))];
+    const comps = ids.length ? await prisma.company.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, plan: true, trialEndsAt: true } }) : [];
+    const byId = Object.fromEntries(comps.map(c => [c.id, c]));
+    const data = leads.map(l => ({ ...l, company: l.companyId ? (byId[l.companyId] || null) : null }));
+    res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
 

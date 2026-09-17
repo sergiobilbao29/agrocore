@@ -2834,6 +2834,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
+      titulo:'📇 v2.219.0 — Empresas: contacto de quien creó cada prueba (leads)',
+      desc:'Cuando alguien crea una empresa desde la <b>prueba gratuita</b> (agrocore.ar/prueba), sus <b>datos de contacto</b> quedan guardados. Ahora, en <b>Empresas</b> (solo Super Admin), cada empresa creada por el trial muestra un recuadro <b>“📇 Contacto de la prueba”</b> con nombre, WhatsApp/teléfono, email y actividad, y arriba hay un botón <b>“Leads de prueba”</b> con la lista completa (con enlace directo a WhatsApp y export a CSV). Así sabés de quién es cada empresa nueva y podés hacer el seguimiento comercial.' },
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
       titulo:'🐎 v2.218.0 — Ficha del animal: 2ª foto de perfil + estudios y archivos (radiografías, videos)',
       desc:'En la ficha de cada animal ahora podés cargar <b>dos fotos de perfil</b> (frente y costado). Y sumamos una sección <b>“📎 Estudios y archivos”</b> para adjuntar <b>radiografías, videos (trote, lastimadura), fotos, análisis y PDF</b>: subís lo que quieras a los antecedentes generales del caballo, o al 📎 de un evento puntual del historial (lo que se le hizo/pasó ese día). Se ven y descargan desde la misma ficha. Admite archivos grandes (hasta 150 MB, ideal para videos).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/09/2026',
@@ -9756,11 +9759,22 @@ pages.empresas = async function() {
   // Los botones se muestran siempre; el backend rechaza si el usuario no tiene permisos.
   const puedeEditar = () => true;
   const puedeCrear = true;
+  // Leads de la prueba gratuita (solo superAdmin): para saber de quién es cada empresa creada por el trial.
+  const esSuper = !!state.user?.superAdmin;
+  let leadByCompany = {};
+  if (esSuper) {
+    try { const lr = await api('/api/empresas/trial-leads'); state._trialLeads = lr.data||[]; (state._trialLeads).forEach(l=>{ if(l.companyId && !leadByCompany[l.companyId]) leadByCompany[l.companyId]=l; }); }
+    catch(_) { state._trialLeads = []; }
+  }
+  const ACTIV = { agricola:'Agrícola', ganadera:'Ganadera', mixta:'Mixta' };
 
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between">
       <h3 class="font-semibold text-slate-800">${rows.length} empresas</h3>
-      ${puedeCrear ? `<button class="btn btn-primary" onclick="empForm()">+ Nueva empresa</button>` : ''}
+      <div class="flex gap-2">
+        ${esSuper?`<button class="btn btn-secondary" onclick="empTrialLeads()">📇 Leads de prueba${(state._trialLeads&&state._trialLeads.length)?` (${state._trialLeads.length})`:''}</button>`:''}
+        ${puedeCrear ? `<button class="btn btn-primary" onclick="empForm()">+ Nueva empresa</button>` : ''}
+      </div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       ${rows.map(e => {
@@ -9793,12 +9807,54 @@ pages.empresas = async function() {
             <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Localidad</div><div class="font-bold truncate">${esc(e.localidad||'—')}</div></div>
             <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Color</div><div class="flex items-center gap-1"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${esc(color)};border:1px solid rgba(0,0,0,.15);"></span><span class="font-mono text-[11px]">${esc(color)}</span></div></div>
           </div>
+          ${(esSuper && leadByCompany[e.id]) ? (l=>`
+            <div class="mt-3 border-t pt-2 bg-amber-50/60 -mx-2 px-2 rounded-b">
+              <div class="text-[10px] uppercase text-amber-700 font-semibold mb-1">📇 Contacto de la prueba</div>
+              <div class="text-xs text-slate-700 space-y-0.5">
+                <div><b>${esc(l.nombre||'—')}</b>${l.actividad?` · ${esc(ACTIV[l.actividad]||l.actividad)}`:''}</div>
+                ${l.telefono?`<div>📱 <a class="text-emerald-700" href="https://wa.me/${esc(String(l.telefono).replace(/[^0-9]/g,''))}" target="_blank">${esc(l.telefono)}</a></div>`:''}
+                ${l.email?`<div>✉️ <a class="text-emerald-700" href="mailto:${esc(l.email)}">${esc(l.email)}</a></div>`:''}
+                <div class="text-[10px] text-slate-400">Se registró el ${fmtFecha(l.createdAt)}${l.verifiedAt?' · ✔ verificó email':' · ⏳ sin verificar'}</div>
+              </div>
+            </div>`)(leadByCompany[e.id]) : ''}
           ${!activa && (state.user.companies||[]).some(c=>c.id===e.id) ? `
             <div class="mt-3 border-t pt-2"><button class="btn btn-secondary text-xs w-full" onclick="switchCompany('${e.id}')">→ Trabajar en esta empresa</button></div>` : ''}
         </div>`;
       }).join('') || '<div class="stub-card col-span-full">Sin empresas</div>'}
     </div>`;
 };
+// Leads de la prueba gratuita (superAdmin): datos de contacto de quien se registró en la landing.
+async function empTrialLeads(){
+  let leads = state._trialLeads;
+  if(!leads){ try{ leads=(await api('/api/empresas/trial-leads')).data||[]; state._trialLeads=leads; }catch(e){ return toast(e.message,'error'); } }
+  const ACTIV = { agricola:'Agrícola', ganadera:'Ganadera', mixta:'Mixta' };
+  const wa = t => String(t||'').replace(/[^0-9]/g,'');
+  const fila = l => `<tr class="border-t border-slate-100">
+    <td class="p-1 whitespace-nowrap">${fmtFecha(l.createdAt)}</td>
+    <td class="p-1"><b>${esc(l.nombre||'—')}</b></td>
+    <td class="p-1">${esc(l.empresa||'')}${l.company&&l.company.name&&l.company.name!==l.empresa?` <span class="text-slate-400">(en sistema: ${esc(l.company.name)})</span>`:''}</td>
+    <td class="p-1 font-mono text-[11px]">${esc(l.cuit||'—')}</td>
+    <td class="p-1">${l.telefono?`<a class="text-emerald-700" href="https://wa.me/${wa(l.telefono)}" target="_blank">${esc(l.telefono)}</a>`:'—'}</td>
+    <td class="p-1">${l.email?`<a class="text-emerald-700" href="mailto:${esc(l.email)}">${esc(l.email)}</a>`:'—'}</td>
+    <td class="p-1">${esc(ACTIV[l.actividad]||l.actividad||'—')}</td>
+    <td class="p-1 text-center">${l.verifiedAt?'✔':'⏳'}</td>
+  </tr>`;
+  openModal({ title:'📇 Leads de la prueba gratuita', size:'max-w-5xl',
+    body:`<div class="text-[12px] text-slate-500 mb-2">Datos de contacto de quienes se registraron en la prueba (agrocore.ar/prueba). ✔ = verificó el email. Tocá el teléfono para abrir WhatsApp.</div>
+      <div class="overflow-x-auto"><table class="data text-sm" style="min-width:760px">
+        <thead><tr><th>Alta</th><th>Contacto</th><th>Empresa</th><th>CUIT</th><th>WhatsApp/Tel</th><th>Email</th><th>Actividad</th><th>Verif.</th></tr></thead>
+        <tbody>${leads.map(fila).join('')||`<tr><td colspan="8" class="text-center text-slate-400 py-6">Todavía no hay registros de prueba.</td></tr>`}</tbody>
+      </table></div>
+      <div class="text-right mt-2">${leads.length?`<button class="btn btn-outline text-xs" onclick="empTrialLeadsExport()">⬇️ Exportar CSV</button>`:''}</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+function empTrialLeadsExport(){
+  const leads=state._trialLeads||[]; const ACTIV={agricola:'Agrícola',ganadera:'Ganadera',mixta:'Mixta'};
+  let rows=[['Alta','Contacto','Empresa','CUIT','Telefono','Email','Actividad','Verificado']];
+  leads.forEach(l=>rows.push([fmtFecha(l.createdAt),l.nombre||'',l.empresa||'',l.cuit||'',l.telefono||'',l.email||'',ACTIV[l.actividad]||l.actividad||'',l.verifiedAt?'Si':'No']));
+  const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'})); a.download='AgroCore-Leads-Prueba.csv'; a.click();
+}
 function empForm(id=null) {
   const it = id ? (state.cache.empresas||[]).find(x=>x.id===id)||{} : {};
   const iniciales = esc((it.name||'?').slice(0,2).toUpperCase());
