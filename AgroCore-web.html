@@ -2834,6 +2834,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
+      titulo:'🛠️ v2.228.0 — Editar lead: guardado corregido de raíz',
+      desc:'El botón <b>Guardar</b> del lead no respondía por una bandera interna que quedaba trabada tras un error previo y bloqueaba todos los guardados siguientes. Se reescribió el guardado para que <b>nunca se trabe</b> (el anti doble-clic ahora usa el propio botón) y para tolerar campos faltantes. Ahora editar un lead guarda siempre.' },
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
       titulo:'🛠️ v2.227.0 — Editar lead: guarda siempre (aunque falte la migración) + error visible',
       desc:'Si una instancia todavía no tenía aplicada la base de la v2.224, al editar un lead <b>no guardaba nada</b> y no avisaba. Ahora el guardado es <b>resiliente</b>: guarda igual los datos principales y, si Provincia/Ciudad/Contactos/Mantenimiento no se pueden persistir, te muestra un aviso claro (hay que actualizar la base con Fix-Prisma en esa instancia). Además, cualquier error de guardado ahora se ve en pantalla.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/09/2026',
@@ -9968,25 +9971,29 @@ async function empLeadForm(id){
     footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="empLeadFormSave(${JSON.stringify(id||null)})">${id?'Guardar':'Crear'}</button>` });
 }
 async function empLeadFormSave(id){
-  if(window._leadSaving) return; // evita doble/triple clic
   const g=x=>document.getElementById(x);
-  const nombre=(g('nl-nombre').value||'').trim(); if(!nombre) return toast('Poné el nombre','warn');
-  window._leadSaving=true;
-  const btn=document.querySelector('#modal2 .btn-primary'); if(btn){ btn.disabled=true; btn.textContent='Guardando…'; }
-  const contactos=[...document.querySelectorAll('#nl-cont-body tr[data-lc]')].map(tr=>({
-    nombre:tr.querySelector('[data-lcf="nombre"]').value.trim(), tel:tr.querySelector('[data-lcf="tel"]').value.trim()
-  })).filter(c=>c.nombre||c.tel);
-  const body={ nombre, empresa:g('nl-empresa').value.trim()||null, telefono:g('nl-tel').value.trim()||null,
-    cuit:g('nl-cuit').value.trim()||null, email:g('nl-email').value.trim()||null, actividad:g('nl-act').value||null,
-    provincia:g('nl-prov').value.trim()||null, ciudad:g('nl-ciudad').value.trim()||null, contactos,
-    mantenimiento:g('nl-mant').checked, segEstado:g('nl-est').value||'Nuevo', segNotas:g('nl-notas').value.trim()||null };
+  const val=x=>{ const el=g(x); return el && el.value!=null ? String(el.value).trim() : ''; };
+  const btn=document.querySelector('#modal2 .btn-primary');
+  if(btn && btn.disabled) return;            // ya está guardando (anti doble-clic, sin flag global que se trabe)
+  const nombre=val('nl-nombre'); if(!nombre){ return toast('Poné el nombre','warn'); }
+  if(btn){ btn.disabled=true; btn.textContent='Guardando…'; }
   try{
+    const contactos=[...document.querySelectorAll('#nl-cont-body tr[data-lc]')].map(tr=>({
+      nombre:(tr.querySelector('[data-lcf="nombre"]')?.value||'').trim(),
+      tel:(tr.querySelector('[data-lcf="tel"]')?.value||'').trim()
+    })).filter(c=>c.nombre||c.tel);
+    const body={ nombre, empresa:val('nl-empresa')||null, telefono:val('nl-tel')||null,
+      cuit:val('nl-cuit')||null, email:val('nl-email')||null, actividad:val('nl-act')||null,
+      provincia:val('nl-prov')||null, ciudad:val('nl-ciudad')||null, contactos,
+      mantenimiento:!!(g('nl-mant')&&g('nl-mant').checked), segEstado:val('nl-est')||'Nuevo', segNotas:val('nl-notas')||null };
     const r=await api('/api/empresas/trial-leads'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
     state._trialLeads=null;
     if(r && r.aviso){ toast(r.aviso,'warn'); } else { toast(id?'Lead actualizado':'Prospecto agregado','success'); }
     closeModal2(); empTrialLeads();
-  }catch(e){ toast('No se pudo guardar: '+e.message,'error'); const btn=document.querySelector('#modal2 .btn-primary'); if(btn){ btn.disabled=false; btn.textContent=id?'Guardar':'Crear'; } }
-  finally{ window._leadSaving=false; }
+  }catch(e){
+    toast('No se pudo guardar: '+(e&&e.message||e),'error');
+    if(btn){ btn.disabled=false; btn.textContent=id?'Guardar':'Crear'; }
+  }
 }
 async function empLeadConvertir(id){
   if(!confirm('¿Convertir este lead en Cliente de la empresa actual? Después podés cargarle el abono mensual en “Abonos”.')) return;

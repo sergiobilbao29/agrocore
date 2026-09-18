@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.227.0';
+const AGROCORE_VERSION = '2.228.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
