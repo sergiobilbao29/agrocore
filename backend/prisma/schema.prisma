@@ -2738,6 +2738,11 @@ model TrialSignup {
   segEstado    String?   // Nuevo | Contactado | Demo agendada | Demo hecha | En prueba | Cliente | Perdido
   segFecha     DateTime? // próximo seguimiento
   segNotas     String?
+  // Datos comerciales adicionales
+  provincia    String?
+  ciudad       String?
+  contactos    Json?     // [{nombre, tel}] — varios contactos por lead
+  mantenimiento Boolean  @default(false)  // contrató el abono mensual (marca comercial)
   createdAt    DateTime  @default(now())
 
   @@index([email])

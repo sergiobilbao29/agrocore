@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.223.0';
+const AGROCORE_VERSION = '2.225.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1753,7 +1753,7 @@ app.get('/api/empresas/trial-leads', async (req, res, next) => {
     const where = soloVerificados ? { verifiedAt: { not: null } } : {};
     const leads = await prisma.trialSignup.findMany({
       where, orderBy: [{ createdAt: 'desc' }],
-      select: { id: true, nombre: true, empresa: true, cuit: true, email: true, telefono: true, actividad: true, verifiedAt: true, companyId: true, createdAt: true, segEstado: true, segFecha: true, segNotas: true },
+      select: { id: true, nombre: true, empresa: true, cuit: true, email: true, telefono: true, actividad: true, verifiedAt: true, companyId: true, createdAt: true, segEstado: true, segFecha: true, segNotas: true, provincia: true, ciudad: true, contactos: true, mantenimiento: true },
     });
     // Nombre real de la empresa creada (por si la renombraron después).
     const ids = [...new Set(leads.map(l => l.companyId).filter(Boolean))];
@@ -1768,6 +1768,7 @@ app.get('/api/empresas/trial-leads', async (req, res, next) => {
 app.post('/api/empresas/trial-leads', async (req, res, next) => {
   try {
     if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const _contactoSchema = z.object({ nombre: z.string().optional().nullable(), tel: z.string().optional().nullable() });
     const schema = z.object({
       nombre: z.string().min(1),
       empresa: z.string().nullable().optional(),
@@ -1775,15 +1776,23 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
       email: z.string().nullable().optional(),
       telefono: z.string().nullable().optional(),
       actividad: z.string().nullable().optional(),
+      provincia: z.string().nullable().optional(),
+      ciudad: z.string().nullable().optional(),
+      contactos: z.array(_contactoSchema).nullable().optional(),
+      mantenimiento: z.boolean().optional(),
       segEstado: z.string().nullable().optional(),
       segNotas: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
+    const _cont = Array.isArray(d.contactos) ? d.contactos.filter(c => (c.nombre || c.tel)) : null;
     const token = 'manual-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     const row = await prisma.trialSignup.create({ data: {
       nombre: d.nombre.trim(), empresa: (d.empresa || d.nombre).trim(), cuit: d.cuit || null,
       email: (d.email || '').trim(),   // el modelo pide String; vacío es válido
       telefono: d.telefono || null, actividad: d.actividad || null,
+      provincia: d.provincia || null, ciudad: d.ciudad || null,
+      contactos: (_cont && _cont.length) ? _cont : undefined,
+      mantenimiento: !!d.mantenimiento,
       passwordHash: '', token, expiresAt: new Date(0),   // lead manual: no es un alta de prueba real
       verifiedAt: null, companyId: null,
       segEstado: d.segEstado || 'Nuevo', segNotas: d.segNotas || 'Cargado a mano',
@@ -1796,10 +1805,21 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
 app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
   try {
     if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const _contactoSchema = z.object({ nombre: z.string().optional().nullable(), tel: z.string().optional().nullable() });
     const schema = z.object({
       segEstado: z.string().max(40).nullable().optional(),
       segFecha: z.coerce.date().nullable().optional(),
       segNotas: z.string().max(2000).nullable().optional(),
+      nombre: z.string().nullable().optional(),
+      empresa: z.string().nullable().optional(),
+      cuit: z.string().nullable().optional(),
+      email: z.string().nullable().optional(),
+      telefono: z.string().nullable().optional(),
+      actividad: z.string().nullable().optional(),
+      provincia: z.string().nullable().optional(),
+      ciudad: z.string().nullable().optional(),
+      contactos: z.array(_contactoSchema).nullable().optional(),
+      mantenimiento: z.boolean().optional(),
     });
     const d = schema.parse(req.body);
     const cur = await prisma.trialSignup.findUnique({ where: { id: req.params.id }, select: { id: true } });
@@ -1808,8 +1828,13 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     if (d.segEstado !== undefined) data.segEstado = d.segEstado || null;
     if (d.segFecha !== undefined) data.segFecha = d.segFecha || null;
     if (d.segNotas !== undefined) data.segNotas = d.segNotas || null;
+    if (d.nombre !== undefined && d.nombre) data.nombre = String(d.nombre).trim();
+    if (d.empresa !== undefined) data.empresa = (d.empresa || '').trim() || data.nombre || 'Prospecto';
+    ['cuit','email','telefono','actividad','provincia','ciudad'].forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
+    if (d.contactos !== undefined) { const c = Array.isArray(d.contactos) ? d.contactos.filter(x => (x.nombre || x.tel)) : []; data.contactos = c.length ? c : null; }
+    if (d.mantenimiento !== undefined) data.mantenimiento = !!d.mantenimiento;
     const row = await prisma.trialSignup.update({ where: { id: cur.id }, data,
-      select: { id: true, segEstado: true, segFecha: true, segNotas: true } });
+      select: { id: true, segEstado: true, segFecha: true, segNotas: true, provincia: true, ciudad: true, contactos: true, mantenimiento: true } });
     res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -1834,7 +1859,27 @@ app.post('/api/empresas/trial-leads/:id/convertir-cliente', requireCompany, requ
       }});
     }
     await prisma.trialSignup.update({ where: { id: l.id }, data: { segEstado: 'Cliente' } });
-    res.status(201).json({ ok: true, data: { clienteId: cli.id, razonSocial: cli.razonSocial } });
+    // Si el lead tiene marcado el mantenimiento mensual, activamos el abono solo (si no existe).
+    let suscripcionCreada = false;
+    if (l.mantenimiento) {
+      const yaSus = await prisma.suscripcion.findFirst({ where: { companyId: req.companyId, clienteId: cli.id }, select: { id: true } });
+      if (!yaSus) {
+        await prisma.suscripcion.create({ data: { companyId: req.companyId, clienteId: cli.id, concepto: 'Abono mensual AgroCore', monto: 0, moneda: 'ARS', diaVenc: 10, activo: true, leadId: l.id, notas: 'Alta automática (mantenimiento del lead). Cargá el monto.' } });
+        suscripcionCreada = true;
+      }
+    }
+    res.status(201).json({ ok: true, data: { clienteId: cli.id, razonSocial: cli.razonSocial, suscripcionCreada } });
+  } catch (e) { next(e); }
+});
+
+// Eliminar un lead / prospecto.
+app.delete('/api/empresas/trial-leads/:id', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const cur = await prisma.trialSignup.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Lead no encontrado' });
+    await prisma.trialSignup.delete({ where: { id: cur.id } });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
