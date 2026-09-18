@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.226.0';
+const AGROCORE_VERSION = '2.227.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1833,9 +1833,22 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     ['cuit','email','telefono','actividad','provincia','ciudad'].forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
     if (d.contactos !== undefined) { const c = Array.isArray(d.contactos) ? d.contactos.filter(x => (x.nombre || x.tel)) : []; data.contactos = c.length ? c : null; }
     if (d.mantenimiento !== undefined) data.mantenimiento = !!d.mantenimiento;
-    const row = await prisma.trialSignup.update({ where: { id: cur.id }, data,
-      select: { id: true, segEstado: true, segFecha: true, segNotas: true, provincia: true, ciudad: true, contactos: true, mantenimiento: true } });
-    res.json({ ok: true, data: row });
+    // Resiliente: si el Prisma Client de esta instancia todavía no conoce las columnas
+    // nuevas (falta prisma generate tras la migración v2.224), guardamos igual lo que
+    // sí conoce y avisamos qué campos quedaron pendientes, en vez de fallar todo.
+    let row, aviso = null;
+    try {
+      row = await prisma.trialSignup.update({ where: { id: cur.id }, data });
+    } catch (e1) {
+      const nuevos = ['provincia','ciudad','contactos','mantenimiento'];
+      const msg = String(e1 && e1.message || '');
+      if (/Unknown arg|Unknown field|provincia|ciudad|contactos|mantenimiento|column .* does not exist/i.test(msg)) {
+        const dataBase = { ...data }; nuevos.forEach(k => delete dataBase[k]);
+        row = await prisma.trialSignup.update({ where: { id: cur.id }, data: dataBase });
+        aviso = 'Se guardaron los datos principales. Provincia/Ciudad/Contactos/Mantenimiento requieren actualizar la base en esta instancia (corré Fix-Prisma).';
+      } else { throw e1; }
+    }
+    res.json({ ok: true, data: { id: row.id }, aviso });
   } catch (e) { next(e); }
 });
 

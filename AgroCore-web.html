@@ -2833,6 +2833,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
+      titulo:'🛠️ v2.227.0 — Editar lead: guarda siempre (aunque falte la migración) + error visible',
+      desc:'Si una instancia todavía no tenía aplicada la base de la v2.224, al editar un lead <b>no guardaba nada</b> y no avisaba. Ahora el guardado es <b>resiliente</b>: guarda igual los datos principales y, si Provincia/Ciudad/Contactos/Mantenimiento no se pueden persistir, te muestra un aviso claro (hay que actualizar la base con Fix-Prisma en esa instancia). Además, cualquier error de guardado ahora se ve en pantalla.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/09/2026',
       titulo:'📍 v2.226.0 — Leads: Provincia y Ciudad desde catálogos',
       desc:'En la ficha del lead, <b>Provincia</b> y <b>Ciudad</b> ahora se eligen de los <b>catálogos</b> (misma lista que en Empresas/Clientes), con la ciudad filtrada por la provincia elegida. <i>Importante:</i> si al editar un lead no guardaba, era porque faltaba aplicar la migración de la v2.224 en esa instancia — al actualizar con la migración queda resuelto.' },
@@ -9978,9 +9981,11 @@ async function empLeadFormSave(id){
     provincia:g('nl-prov').value.trim()||null, ciudad:g('nl-ciudad').value.trim()||null, contactos,
     mantenimiento:g('nl-mant').checked, segEstado:g('nl-est').value||'Nuevo', segNotas:g('nl-notas').value.trim()||null };
   try{
-    await api('/api/empresas/trial-leads'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
-    state._trialLeads=null; toast(id?'Lead actualizado':'Prospecto agregado','success'); closeModal2(); empTrialLeads();
-  }catch(e){ toast(e.message,'error'); const btn=document.querySelector('#modal2 .btn-primary'); if(btn){ btn.disabled=false; btn.textContent=id?'Guardar':'Crear'; } }
+    const r=await api('/api/empresas/trial-leads'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
+    state._trialLeads=null;
+    if(r && r.aviso){ toast(r.aviso,'warn'); } else { toast(id?'Lead actualizado':'Prospecto agregado','success'); }
+    closeModal2(); empTrialLeads();
+  }catch(e){ toast('No se pudo guardar: '+e.message,'error'); const btn=document.querySelector('#modal2 .btn-primary'); if(btn){ btn.disabled=false; btn.textContent=id?'Guardar':'Crear'; } }
   finally{ window._leadSaving=false; }
 }
 async function empLeadConvertir(id){
