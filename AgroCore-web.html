@@ -2853,33 +2853,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
-    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
-      titulo:'🛠️ v2.231.0 — Editar lead sin email: ya no da error 500',
-      desc:'Al guardar un lead <b>sin email</b> (por ejemplo Peiretti), el servidor devolvía error (“email must not be null”) porque el email es un campo obligatorio del modelo. Ahora, si dejás el email vacío, se guarda como vacío en vez de nulo y <b>el guardado funciona igual</b>. Este arreglo es del servidor: hay que <b>reiniciar el backend</b> de la instancia (lo hace Actualizar-Todas-Local).' },
-    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
-      titulo:'🛠️ v2.230.0 — Editar lead desde la ficha: por fin guarda',
-      desc:'El botón <b>Guardar</b> dentro de la ficha del lead no hacía nada al editar (sí funcionaba el disquito de la planilla). La causa era un detalle en el código del botón: al editar, el identificador del lead se insertaba con comillas dobles dentro del <code>onclick</code>, que también usa comillas dobles, y eso <b>cortaba</b> la instrucción (por eso en la consola aparecía “Unexpected end of input”). Se corrigió y ahora <b>Guardar dentro de la ficha guarda siempre</b>.' },
-    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'18/09/2026',
-      titulo:'📇 v2.229.0 — Leads: contacto con email + fecha de alta editable + aviso de versión nueva',
-      desc:'En la ficha del lead, cada <b>contacto</b> (ej. la secretaria) ahora tiene <b>nombre, teléfono y email</b>. Se agregó la <b>fecha de alta</b> (toma la del trial y podés cambiarla a mano). Y el sistema ahora <b>avisa con un cartel</b> cuando hay una versión nueva disponible mientras tenés la pestaña abierta, con botón “Actualizar ahora” — así no te quedás con una versión vieja cargada sin darte cuenta.' },
-    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
-      titulo:'🛠️ v2.228.0 — Editar lead: guardado corregido de raíz',
-      desc:'El botón <b>Guardar</b> del lead no respondía por una bandera interna que quedaba trabada tras un error previo y bloqueaba todos los guardados siguientes. Se reescribió el guardado para que <b>nunca se trabe</b> (el anti doble-clic ahora usa el propio botón) y para tolerar campos faltantes. Ahora editar un lead guarda siempre.' },
-    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
-      titulo:'🛠️ v2.227.0 — Editar lead: guarda siempre (aunque falte la migración) + error visible',
-      desc:'Si una instancia todavía no tenía aplicada la base de la v2.224, al editar un lead <b>no guardaba nada</b> y no avisaba. Ahora el guardado es <b>resiliente</b>: guarda igual los datos principales y, si Provincia/Ciudad/Contactos/Mantenimiento no se pueden persistir, te muestra un aviso claro (hay que actualizar la base con Fix-Prisma en esa instancia). Además, cualquier error de guardado ahora se ve en pantalla.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/09/2026',
-      titulo:'📍 v2.226.0 — Leads: Provincia y Ciudad desde catálogos',
-      desc:'En la ficha del lead, <b>Provincia</b> y <b>Ciudad</b> ahora se eligen de los <b>catálogos</b> (misma lista que en Empresas/Clientes), con la ciudad filtrada por la provincia elegida. <i>Importante:</i> si al editar un lead no guardaba, era porque faltaba aplicar la migración de la v2.224 en esa instancia — al actualizar con la migración queda resuelto.' },
-    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/09/2026',
-      titulo:'⚙️ v2.225.0 — Leads: abono automático al marcar mantenimiento + eliminar + anti doble-clic',
-      desc:'Ahora al tildar <b>Mantenimiento mensual</b> en un lead que ya es cliente, el <b>abono se activa solo</b> (queda creado en Abonos para que le cargues el monto). Se pueden <b>eliminar leads</b> con 🗑️. Y arreglamos el guardado: el botón se <b>bloquea mientras guarda</b> (“Guardando…”), así no se duplican registros por tocar varias veces cuando la conexión está lenta.' },
-    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/09/2026',
-      titulo:'📇 v2.224.0 — Leads: más datos (varios contactos, provincia, ciudad y mantenimiento mensual)',
-      desc:'La ficha del lead ahora tiene <b>varios contactos</b> (nombre + teléfono cada uno), <b>provincia</b> y <b>ciudad</b>, y una casilla <b>“Mantenimiento mensual”</b> para marcar quién contrató el abono. Todo se carga/edita con el botón ✏️ de cada lead o desde “+ Nuevo prospecto”, y el mantenimiento también se tilda rápido desde la columna <b>Mant.</b> de la lista (guardás con 💾).' },
-    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/09/2026',
-      titulo:'📇 v2.223.0 — Leads: cargá prospectos a mano + Facturar solo para clientes',
-      desc:'En <b>Leads / Prospectos</b> ahora hay <b>“+ Nuevo prospecto”</b> para cargar a mano clientes o futuros clientes que <b>no entraron por el trial</b> (nombre, empresa, WhatsApp, CUIT, email, actividad, estado y notas) — se suman a la misma lista con su seguimiento. Además, el botón <b>Facturar</b> de Abonos solo aparece cuando el cliente ya existe (no para prospectos sin convertir).' },
+      titulo:'📧 v2.232.0 — Leads: el email ahora es obligatorio y te avisa si falta',
+      desc:'Al guardar un lead, el <b>email pasó a ser obligatorio</b> (queda marcado con *). Si lo dejás vacío o mal escrito, el sistema <b>te avisa en el momento</b> (“Falta cargar el email” / “formato no válido”) y resalta el campo, en vez de dejar guardar y fallar después.' },
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/09/2026',
       titulo:'📄 v2.222.0 — Abonos: facturá el abono (con/sin ARCA) y alerta de cobranza vencida',
       desc:'En <b>Abonos / Clientes</b>, cada abono tiene el botón <b>📄 Facturar</b>: abre el formulario de <b>factura de venta que ya usás</b>, prellenado con el cliente y el abono del mes, para emitir con tu flujo habitual (con ARCA/CAE o sin ARCA) y <b>enviarla por mail/WhatsApp</b> como cualquier factura. Además el tablero muestra un <b>aviso rojo de cobranza vencida</b> (cuotas de abono impagas de cualquier mes, con total). <i>Pendiente para automatizar del todo:</i> emisión de CAE real automática (conectar FECAESolicitar de ARCA) y facturación recurrente sin intervención.' },
@@ -9986,7 +9962,7 @@ async function empLeadForm(id){
         <div class="col-span-2"><label class="label text-xs">Empresa / Campo</label><input id="nl-empresa" class="input" value="${esc(l.empresa||'')}"/></div>
         <div><label class="label text-xs">WhatsApp / Tel principal</label><input id="nl-tel" class="input" value="${esc(l.telefono||'')}" placeholder="3582..."/></div>
         <div><label class="label text-xs">CUIT</label><input id="nl-cuit" class="input" value="${esc(l.cuit||'')}"/></div>
-        <div class="col-span-2"><label class="label text-xs">Email</label><input id="nl-email" class="input" value="${esc(l.email||'')}"/></div>
+        <div class="col-span-2"><label class="label text-xs">Email *</label><input id="nl-email" type="email" class="input" value="${esc(l.email||'')}" placeholder="obligatorio"/></div>
         <div><label class="label text-xs">Provincia</label>${provSel}</div>
         <div><label class="label text-xs">Ciudad</label>${ciudadSel}</div>
         <div><label class="label text-xs">Actividad</label><select id="nl-act" class="input">${['','agricola','ganadera','mixta'].map(a=>`<option value="${a}" ${(l.actividad||'')===a?'selected':''}>${a?({agricola:'Agrícola',ganadera:'Ganadera',mixta:'Mixta'}[a]):'—'}</option>`).join('')}</select></div>
@@ -10007,6 +9983,9 @@ async function empLeadFormSave(id){
   const btn=document.querySelector('#modal2 .btn-primary');
   if(btn && btn.disabled) return;            // ya está guardando (anti doble-clic, sin flag global que se trabe)
   const nombre=val('nl-nombre'); if(!nombre){ return toast('Poné el nombre','warn'); }
+  const emailVal=val('nl-email');
+  if(!emailVal){ const em=g('nl-email'); if(em){ em.classList.add('ring-2','ring-red-400'); em.focus(); } return toast('Falta cargar el email — es obligatorio','warn'); }
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)){ const em=g('nl-email'); if(em){ em.classList.add('ring-2','ring-red-400'); em.focus(); } return toast('El email no tiene un formato válido','warn'); }
   if(btn){ btn.disabled=true; btn.textContent='Guardando…'; }
   try{
     const contactos=[...document.querySelectorAll('#nl-cont-body tr[data-lc]')].map(tr=>({
