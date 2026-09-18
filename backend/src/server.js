@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.228.0';
+const AGROCORE_VERSION = '2.229.0';
 const AGROCORE_BUILD = new Date('2026-09-17').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1768,7 +1768,7 @@ app.get('/api/empresas/trial-leads', async (req, res, next) => {
 app.post('/api/empresas/trial-leads', async (req, res, next) => {
   try {
     if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
-    const _contactoSchema = z.object({ nombre: z.string().optional().nullable(), tel: z.string().optional().nullable() });
+    const _contactoSchema = z.object({ nombre: z.string().optional().nullable(), tel: z.string().optional().nullable(), email: z.string().optional().nullable() });
     const schema = z.object({
       nombre: z.string().min(1),
       empresa: z.string().nullable().optional(),
@@ -1782,9 +1782,10 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
       mantenimiento: z.boolean().optional(),
       segEstado: z.string().nullable().optional(),
       segNotas: z.string().nullable().optional(),
+      fechaAlta: z.coerce.date().nullable().optional(),
     });
     const d = schema.parse(req.body);
-    const _cont = Array.isArray(d.contactos) ? d.contactos.filter(c => (c.nombre || c.tel)) : null;
+    const _cont = Array.isArray(d.contactos) ? d.contactos.filter(c => (c.nombre || c.tel || c.email)) : null;
     const token = 'manual-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     const row = await prisma.trialSignup.create({ data: {
       nombre: d.nombre.trim(), empresa: (d.empresa || d.nombre).trim(), cuit: d.cuit || null,
@@ -1796,6 +1797,7 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
       passwordHash: '', token, expiresAt: new Date(0),   // lead manual: no es un alta de prueba real
       verifiedAt: null, companyId: null,
       segEstado: d.segEstado || 'Nuevo', segNotas: d.segNotas || 'Cargado a mano',
+      ...(d.fechaAlta ? { createdAt: d.fechaAlta } : {}),
     }});
     res.status(201).json({ ok: true, data: { id: row.id } });
   } catch (e) { next(e); }
@@ -1805,7 +1807,7 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
 app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
   try {
     if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
-    const _contactoSchema = z.object({ nombre: z.string().optional().nullable(), tel: z.string().optional().nullable() });
+    const _contactoSchema = z.object({ nombre: z.string().optional().nullable(), tel: z.string().optional().nullable(), email: z.string().optional().nullable() });
     const schema = z.object({
       segEstado: z.string().max(40).nullable().optional(),
       segFecha: z.coerce.date().nullable().optional(),
@@ -1820,6 +1822,7 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
       ciudad: z.string().nullable().optional(),
       contactos: z.array(_contactoSchema).nullable().optional(),
       mantenimiento: z.boolean().optional(),
+      fechaAlta: z.coerce.date().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const cur = await prisma.trialSignup.findUnique({ where: { id: req.params.id }, select: { id: true } });
@@ -1831,8 +1834,9 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     if (d.nombre !== undefined && d.nombre) data.nombre = String(d.nombre).trim();
     if (d.empresa !== undefined) data.empresa = (d.empresa || '').trim() || data.nombre || 'Prospecto';
     ['cuit','email','telefono','actividad','provincia','ciudad'].forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
-    if (d.contactos !== undefined) { const c = Array.isArray(d.contactos) ? d.contactos.filter(x => (x.nombre || x.tel)) : []; data.contactos = c.length ? c : null; }
+    if (d.contactos !== undefined) { const c = Array.isArray(d.contactos) ? d.contactos.filter(x => (x.nombre || x.tel || x.email)) : []; data.contactos = c.length ? c : null; }
     if (d.mantenimiento !== undefined) data.mantenimiento = !!d.mantenimiento;
+    if (d.fechaAlta) data.createdAt = d.fechaAlta;
     // Resiliente: si el Prisma Client de esta instancia todavía no conoce las columnas
     // nuevas (falta prisma generate tras la migración v2.224), guardamos igual lo que
     // sí conoce y avisamos qué campos quedaron pendientes, en vez de fallar todo.

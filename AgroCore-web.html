@@ -1295,8 +1295,28 @@ async function loadSystemVersion() {
     state.systemBuild   = r.build;
     const el = document.getElementById('brand-version');
     if (el) el.textContent = `v${r.version}`;
+    // Detector de versión nueva: si el servidor ya está en una versión distinta a la
+    // que cargó esta pestaña, el JS en memoria quedó viejo → avisamos para recargar
+    // (evita el clásico "actualicé pero sigue con el bug" por pestaña abierta hace rato).
+    if (!state._loadedVersion) { state._loadedVersion = r.version; }
+    else if (r.version && r.version !== state._loadedVersion && !state._verBanner) {
+      state._verBanner = true;
+      _mostrarBannerActualizar(r.version);
+    }
   } catch {}
 }
+function _mostrarBannerActualizar(nueva){
+  if (document.getElementById('ac-update-banner')) return;
+  const b = document.createElement('div');
+  b.id = 'ac-update-banner';
+  b.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:99999;background:#166534;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.25);font-size:14px;display:flex;align-items:center;gap:12px;max-width:92vw';
+  b.innerHTML = `🚀 Hay una versión nueva (v${esc(nueva)}). Recargá para usarla.
+    <button onclick="location.reload(true)" style="background:#fff;color:#166534;border:0;border-radius:8px;padding:7px 12px;font-weight:700;cursor:pointer">Actualizar ahora</button>
+    <button onclick="document.getElementById('ac-update-banner').remove()" style="background:transparent;color:#fff;border:0;cursor:pointer;font-size:18px;line-height:1">×</button>`;
+  document.body.appendChild(b);
+}
+// Chequea la versión cada 2 minutos para detectar actualizaciones mientras la pestaña está abierta.
+if (!window._verWatch) { window._verWatch = setInterval(() => { try { loadSystemVersion(); } catch {} }, 120000); }
 // Consulta GitHub para ver si hay una versión más nueva publicada.
 async function checkForUpdates() {
   try {
@@ -2833,6 +2853,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'18/09/2026',
+      titulo:'📇 v2.229.0 — Leads: contacto con email + fecha de alta editable + aviso de versión nueva',
+      desc:'En la ficha del lead, cada <b>contacto</b> (ej. la secretaria) ahora tiene <b>nombre, teléfono y email</b>. Se agregó la <b>fecha de alta</b> (toma la del trial y podés cambiarla a mano). Y el sistema ahora <b>avisa con un cartel</b> cuando hay una versión nueva disponible mientras tenés la pestaña abierta, con botón “Actualizar ahora” — así no te quedás con una versión vieja cargada sin darte cuenta.' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
       titulo:'🛠️ v2.228.0 — Editar lead: guardado corregido de raíz',
       desc:'El botón <b>Guardar</b> del lead no respondía por una bandera interna que quedaba trabada tras un error previo y bloqueaba todos los guardados siguientes. Se reescribió el guardado para que <b>nunca se trabe</b> (el anti doble-clic ahora usa el propio botón) y para tolerar campos faltantes. Ahora editar un lead guarda siempre.' },
@@ -9891,7 +9914,7 @@ async function empTrialLeads(){
     return `<tr class="border-t border-slate-100" data-lead="${esc(l.id)}">
       <td class="p-1 whitespace-nowrap align-top">${fmtFecha(l.createdAt)}<div class="text-[10px] text-slate-400">${l.verifiedAt?'✔ verificó':'⏳ sin verif.'}</div></td>
       <td class="p-1 align-top"><b>${esc(l.nombre||'—')}</b><div class="text-[10px] text-slate-400">${esc(l.empresa||'')}${esc(ACTIV[l.actividad]?(' · '+ACTIV[l.actividad]):'')}</div>${(l.provincia||l.ciudad)?`<div class="text-[10px] text-slate-400">📍 ${esc([l.ciudad,l.provincia].filter(Boolean).join(', '))}</div>`:''}</td>
-      <td class="p-1 align-top">${waCel}${l.email?`<div class="text-[11px]"><a class="text-emerald-700" href="mailto:${esc(l.email)}">${esc(l.email)}</a></div>`:''}${(Array.isArray(l.contactos)&&l.contactos.length)?`<div class="text-[10px] text-slate-500 mt-0.5">${l.contactos.map(c=>`👤 ${esc(c.nombre||'')}${c.tel?` · ${esc(c.tel)}`:''}`).join('<br/>')}</div>`:''}</td>
+      <td class="p-1 align-top">${waCel}${l.email?`<div class="text-[11px]"><a class="text-emerald-700" href="mailto:${esc(l.email)}">${esc(l.email)}</a></div>`:''}${(Array.isArray(l.contactos)&&l.contactos.length)?`<div class="text-[10px] text-slate-500 mt-0.5">${l.contactos.map(c=>`👤 ${esc(c.nombre||'')}${c.tel?` · ${esc(c.tel)}`:''}${c.email?` · ${esc(c.email)}`:''}`).join('<br/>')}</div>`:''}</td>
       <td class="p-1 align-top"><select class="input text-xs" data-lf="segEstado">${estOpts(l.segEstado)}</select></td>
       <td class="p-1 align-top"><input type="date" class="input text-xs" data-lf="segFecha" value="${dt(l.segFecha)}"/></td>
       <td class="p-1 align-top"><input class="input text-xs" data-lf="segNotas" value="${esc(l.segNotas||'')}" placeholder="Notas…"/></td>
@@ -9937,8 +9960,9 @@ async function empLeadEliminar(id){
 }
 function empLeadNuevo(){ empLeadForm(null); }
 function empLeadContactoRow(c={}){
-  return `<tr data-lc><td class="pr-1"><input class="input text-xs" data-lcf="nombre" value="${esc(c.nombre||'')}" placeholder="Nombre"/></td>
+  return `<tr data-lc><td class="pr-1"><input class="input text-xs" data-lcf="nombre" value="${esc(c.nombre||'')}" placeholder="Nombre (ej: secretaria)"/></td>
     <td class="pr-1"><input class="input text-xs" data-lcf="tel" value="${esc(c.tel||'')}" placeholder="Teléfono"/></td>
+    <td class="pr-1"><input class="input text-xs" data-lcf="email" value="${esc(c.email||'')}" placeholder="Email"/></td>
     <td><button class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove()">×</button></td></tr>`;
 }
 function empLeadAddContacto(){ document.getElementById('nl-cont-body')?.insertAdjacentHTML('beforeend', empLeadContactoRow()); }
@@ -9961,6 +9985,7 @@ async function empLeadForm(id){
         <div><label class="label text-xs">Ciudad</label>${ciudadSel}</div>
         <div><label class="label text-xs">Actividad</label><select id="nl-act" class="input">${['','agricola','ganadera','mixta'].map(a=>`<option value="${a}" ${(l.actividad||'')===a?'selected':''}>${a?({agricola:'Agrícola',ganadera:'Ganadera',mixta:'Mixta'}[a]):'—'}</option>`).join('')}</select></div>
         <div><label class="label text-xs">Estado</label><select id="nl-est" class="input">${LEAD_ESTADOS.map(e=>`<option value="${e.v}" ${(l.segEstado||'Nuevo')===e.v?'selected':''}>${e.v}</option>`).join('')}</select></div>
+        <div><label class="label text-xs">Fecha de alta</label><input id="nl-fecha" type="date" class="input" value="${l.createdAt?String(l.createdAt).slice(0,10):''}"/></div>
       </div>
       <div class="mt-2 flex items-center gap-2"><input id="nl-mant" type="checkbox" ${l.mantenimiento?'checked':''}/><label for="nl-mant" class="text-sm">Contrató el <b>mantenimiento mensual</b> (activa alertas de facturación/cobranza)</label></div>
       <div class="mt-3">
@@ -9980,11 +10005,13 @@ async function empLeadFormSave(id){
   try{
     const contactos=[...document.querySelectorAll('#nl-cont-body tr[data-lc]')].map(tr=>({
       nombre:(tr.querySelector('[data-lcf="nombre"]')?.value||'').trim(),
-      tel:(tr.querySelector('[data-lcf="tel"]')?.value||'').trim()
-    })).filter(c=>c.nombre||c.tel);
+      tel:(tr.querySelector('[data-lcf="tel"]')?.value||'').trim(),
+      email:(tr.querySelector('[data-lcf="email"]')?.value||'').trim()
+    })).filter(c=>c.nombre||c.tel||c.email);
     const body={ nombre, empresa:val('nl-empresa')||null, telefono:val('nl-tel')||null,
       cuit:val('nl-cuit')||null, email:val('nl-email')||null, actividad:val('nl-act')||null,
       provincia:val('nl-prov')||null, ciudad:val('nl-ciudad')||null, contactos,
+      fechaAlta:val('nl-fecha')||null,
       mantenimiento:!!(g('nl-mant')&&g('nl-mant').checked), segEstado:val('nl-est')||'Nuevo', segNotas:val('nl-notas')||null };
     const r=await api('/api/empresas/trial-leads'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
     state._trialLeads=null;
