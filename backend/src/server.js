@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.230.0';
+const AGROCORE_VERSION = '2.231.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1833,7 +1833,8 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     if (d.segNotas !== undefined) data.segNotas = d.segNotas || null;
     if (d.nombre !== undefined && d.nombre) data.nombre = String(d.nombre).trim();
     if (d.empresa !== undefined) data.empresa = (d.empresa || '').trim() || data.nombre || 'Prospecto';
-    ['cuit','email','telefono','actividad','provincia','ciudad'].forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
+    if (d.email !== undefined) data.email = (d.email == null ? '' : String(d.email)).trim(); // email es requerido en el modelo: nunca null (vacío -> '')
+    ['cuit','telefono','actividad','provincia','ciudad'].forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
     if (d.contactos !== undefined) { const c = Array.isArray(d.contactos) ? d.contactos.filter(x => (x.nombre || x.tel || x.email)) : []; data.contactos = c.length ? c : null; }
     if (d.mantenimiento !== undefined) data.mantenimiento = !!d.mantenimiento;
     if (d.fechaAlta) data.createdAt = d.fechaAlta;
