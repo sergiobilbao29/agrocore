@@ -2833,6 +2833,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/09/2026',
+      titulo:'📍 v2.226.0 — Leads: Provincia y Ciudad desde catálogos',
+      desc:'En la ficha del lead, <b>Provincia</b> y <b>Ciudad</b> ahora se eligen de los <b>catálogos</b> (misma lista que en Empresas/Clientes), con la ciudad filtrada por la provincia elegida. <i>Importante:</i> si al editar un lead no guardaba, era porque faltaba aplicar la migración de la v2.224 en esa instancia — al actualizar con la migración queda resuelto.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/09/2026',
       titulo:'⚙️ v2.225.0 — Leads: abono automático al marcar mantenimiento + eliminar + anti doble-clic',
       desc:'Ahora al tildar <b>Mantenimiento mensual</b> en un lead que ya es cliente, el <b>abono se activa solo</b> (queda creado en Abonos para que le cargues el monto). Se pueden <b>eliminar leads</b> con 🗑️. Y arreglamos el guardado: el botón se <b>bloquea mientras guarda</b> (“Guardando…”), así no se duplican registros por tocar varias veces cuando la conexión está lenta.' },
@@ -9933,9 +9936,13 @@ function empLeadContactoRow(c={}){
     <td><button class="btn btn-ghost text-xs text-red-600" onclick="this.closest('tr').remove()">×</button></td></tr>`;
 }
 function empLeadAddContacto(){ document.getElementById('nl-cont-body')?.insertAdjacentHTML('beforeend', empLeadContactoRow()); }
-function empLeadForm(id){
+async function empLeadForm(id){
   const l = id ? (state._trialLeads||[]).find(x=>x.id===id)||{} : {};
   const conts = Array.isArray(l.contactos)? l.contactos : [];
+  if(!state.cache) state.cache={};
+  if(!state.cache.catalogos){ try{ state.cache.catalogos=(await api('/api/catalogos')).data||[]; }catch(_){ state.cache.catalogos=[]; } }
+  const provSel = catSelect('nl-prov','Provincia', l.provincia||'', { placeholder:'— Provincia —', class:'input text-sm' });
+  const ciudadSel = catSelect('nl-ciudad','Ciudad', l.ciudad||'', { placeholder:'— Ciudad —', class:'input text-sm', parent: l.provincia||'', parentSelect:'nl-prov' });
   openModal2({ title: id?'Editar lead / prospecto':'+ Nuevo prospecto', size:'max-w-xl',
     body:`<div class="text-[12px] text-slate-500 mb-2">${id?'Editá los datos y contactos del lead.':'Cargá un cliente o futuro cliente que <b>no</b> entró por el trial.'}</div>
       <div class="grid grid-cols-2 gap-2">
@@ -9944,8 +9951,8 @@ function empLeadForm(id){
         <div><label class="label text-xs">WhatsApp / Tel principal</label><input id="nl-tel" class="input" value="${esc(l.telefono||'')}" placeholder="3582..."/></div>
         <div><label class="label text-xs">CUIT</label><input id="nl-cuit" class="input" value="${esc(l.cuit||'')}"/></div>
         <div class="col-span-2"><label class="label text-xs">Email</label><input id="nl-email" class="input" value="${esc(l.email||'')}"/></div>
-        <div><label class="label text-xs">Provincia</label><input id="nl-prov" class="input" value="${esc(l.provincia||'')}"/></div>
-        <div><label class="label text-xs">Ciudad</label><input id="nl-ciudad" class="input" value="${esc(l.ciudad||'')}"/></div>
+        <div><label class="label text-xs">Provincia</label>${provSel}</div>
+        <div><label class="label text-xs">Ciudad</label>${ciudadSel}</div>
         <div><label class="label text-xs">Actividad</label><select id="nl-act" class="input">${['','agricola','ganadera','mixta'].map(a=>`<option value="${a}" ${(l.actividad||'')===a?'selected':''}>${a?({agricola:'Agrícola',ganadera:'Ganadera',mixta:'Mixta'}[a]):'—'}</option>`).join('')}</select></div>
         <div><label class="label text-xs">Estado</label><select id="nl-est" class="input">${LEAD_ESTADOS.map(e=>`<option value="${e.v}" ${(l.segEstado||'Nuevo')===e.v?'selected':''}>${e.v}</option>`).join('')}</select></div>
       </div>
