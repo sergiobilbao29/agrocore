@@ -2853,6 +2853,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
+      titulo:'🛠️ v2.230.0 — Editar lead desde la ficha: por fin guarda',
+      desc:'El botón <b>Guardar</b> dentro de la ficha del lead no hacía nada al editar (sí funcionaba el disquito de la planilla). La causa era un detalle en el código del botón: al editar, el identificador del lead se insertaba con comillas dobles dentro del <code>onclick</code>, que también usa comillas dobles, y eso <b>cortaba</b> la instrucción (por eso en la consola aparecía “Unexpected end of input”). Se corrigió y ahora <b>Guardar dentro de la ficha guarda siempre</b>.' },
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'18/09/2026',
       titulo:'📇 v2.229.0 — Leads: contacto con email + fecha de alta editable + aviso de versión nueva',
       desc:'En la ficha del lead, cada <b>contacto</b> (ej. la secretaria) ahora tiene <b>nombre, teléfono y email</b>. Se agregó la <b>fecha de alta</b> (toma la del trial y podés cambiarla a mano). Y el sistema ahora <b>avisa con un cartel</b> cuando hay una versión nueva disponible mientras tenés la pestaña abierta, con botón “Actualizar ahora” — así no te quedás con una versión vieja cargada sin darte cuenta.' },
@@ -9077,7 +9080,7 @@ async function socTablero(id){
   $('#page-body').innerHTML = `
     <div class="flex items-center justify-between mb-3">
       <button class="btn btn-ghost text-sm" onclick="socVolver()">‹ Volver</button>
-      <div class="flex gap-2 flex-wrap items-center"><span class="text-xs text-slate-500">Ver en</span><select class="input text-sm py-1" style="width:auto" onchange="state._socMoneda=this.value; socTablero(${JSON.stringify(id)})"><option value="USD"${mon==='USD'?' selected':''}>US$</option><option value="ARS"${mon==='ARS'?' selected':''}>$ ARS</option></select>${canU?`<button class="btn btn-secondary text-sm" onclick='socCargaForm(${JSON.stringify(id)})'>➕ Cargar labor / insumo</button>`:''}${canU?`<button class="btn btn-secondary text-sm" onclick='socCampoForm(${JSON.stringify(id)})'>+ Agregar campo</button>`:''}<button class="btn btn-primary text-sm" onclick='socLiquidacion(${JSON.stringify(id)})'>💰 Liquidación</button>${canU?`<button class="btn btn-ghost text-sm" onclick='socEditarActual(${JSON.stringify(id)})'>✏️ Editar</button>`:''}</div>
+      <div class="flex gap-2 flex-wrap items-center"><span class="text-xs text-slate-500">Ver en</span><select class="input text-sm py-1" style="width:auto" onchange="state._socMoneda=this.value; socTablero('${esc(id)}')"><option value="USD"${mon==='USD'?' selected':''}>US$</option><option value="ARS"${mon==='ARS'?' selected':''}>$ ARS</option></select>${canU?`<button class="btn btn-secondary text-sm" onclick='socCargaForm(${JSON.stringify(id)})'>➕ Cargar labor / insumo</button>`:''}${canU?`<button class="btn btn-secondary text-sm" onclick='socCampoForm(${JSON.stringify(id)})'>+ Agregar campo</button>`:''}<button class="btn btn-primary text-sm" onclick='socLiquidacion(${JSON.stringify(id)})'>💰 Liquidación</button>${canU?`<button class="btn btn-ghost text-sm" onclick='socEditarActual(${JSON.stringify(id)})'>✏️ Editar</button>`:''}</div>
     </div>
     <div class="kpi mb-3">
       <div class="font-bold text-emerald-900 text-lg">🤝 ${esc(s.nombre)}</div>
@@ -9286,7 +9289,7 @@ async function socCampoDetalle(id, linkId){
         <tbody>${rows}</tbody></table>
       </div>
       <div class="text-[11px] text-slate-500 mt-2">Los montos se muestran en su moneda de carga; abajo, convertido a la moneda de vista (${monTxt(mon)}). Cambiá la moneda de vista desde el tablero.</div>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal(); socTablero(${JSON.stringify(id)})">‹ Volver al tablero</button>${canU?`<button class="btn btn-primary" onclick='closeModal(); socCargaForm(${JSON.stringify(id)},${JSON.stringify(linkId)})'>➕ Cargar acá</button>`:''}` });
+    footer:`<button class="btn btn-secondary" onclick="closeModal(); socTablero('${esc(id)}')">‹ Volver al tablero</button>${canU?`<button class="btn btn-primary" onclick='closeModal(); socCargaForm(${JSON.stringify(id)},${JSON.stringify(linkId)})'>➕ Cargar acá</button>`:''}` });
 }
 async function socAplicacionDel(id, itemId){
   if(!confirm('¿Eliminar este movimiento? Si descontó stock, se repone.')) return;
@@ -9356,7 +9359,7 @@ async function socLiquidacion(id){
   $('#page-body').innerHTML = `
     <div class="flex items-center justify-between mb-3">
       <button class="btn btn-ghost text-sm" onclick='socTablero(${JSON.stringify(id)})'>‹ Volver al tablero</button>
-      <div class="flex gap-2 items-center flex-wrap"><span class="text-xs text-slate-500">Moneda</span><select class="input text-sm py-1" style="width:auto" onchange="state._socMoneda=this.value; socLiquidacion(${JSON.stringify(id)})"><option value="USD"${mon==='USD'?' selected':''}>US$</option><option value="ARS"${mon==='ARS'?' selected':''}>$ ARS</option></select><button class="btn btn-secondary text-sm" onclick="socLiqImprimir()">🖨️ Imprimir / PDF</button><button class="btn btn-primary text-sm" onclick="socLiqGuardar()">💾 Guardar y calcular</button></div>
+      <div class="flex gap-2 items-center flex-wrap"><span class="text-xs text-slate-500">Moneda</span><select class="input text-sm py-1" style="width:auto" onchange="state._socMoneda=this.value; socLiquidacion('${esc(id)}')"><option value="USD"${mon==='USD'?' selected':''}>US$</option><option value="ARS"${mon==='ARS'?' selected':''}>$ ARS</option></select><button class="btn btn-secondary text-sm" onclick="socLiqImprimir()">🖨️ Imprimir / PDF</button><button class="btn btn-primary text-sm" onclick="socLiqGuardar()">💾 Guardar y calcular</button></div>
     </div>
     <div class="kpi mb-3"><div class="font-bold text-emerald-900 text-lg">💰 Liquidación — ${esc(s.nombre)}</div>
       <div class="text-xs text-slate-500">${s.ciclo?('Campaña '+esc(s.ciclo)+' · '):''}Cosecha total: ${fmtN(L.cosecha.kg||0)} kg · <b>Valores en ${monTxt}</b> (precios, gastos y aportes se cargan en ${monTxt}; los costos del sistema se convierten a esa moneda)</div></div>
@@ -9993,7 +9996,7 @@ async function empLeadForm(id){
         <table class="w-full text-sm"><tbody id="nl-cont-body">${(conts.length?conts:[]).map(c=>empLeadContactoRow(c)).join('')}</tbody></table>
       </div>
       <div class="mt-2"><label class="label text-xs">Notas</label><input id="nl-notas" class="input" value="${esc(l.segNotas||'')}" placeholder="De dónde salió, referido por…"/></div>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="empLeadFormSave(${JSON.stringify(id||null)})">${id?'Guardar':'Crear'}</button>` });
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="empLeadFormSave(${id?`'${esc(id)}'`:'null'})">${id?'Guardar':'Crear'}</button>` });
 }
 async function empLeadFormSave(id){
   const g=x=>document.getElementById(x);
@@ -10107,7 +10110,7 @@ async function abonoForm(id){
       <div class="flex items-center gap-2 mt-5"><input id="ab-activo" type="checkbox" ${s.activo!==false?'checked':''}/><label for="ab-activo" class="text-sm">Activo</label></div>
       <div class="col-span-2"><label class="label">Notas</label><input id="ab-notas" class="input" value="${esc(s.notas||'')}"/></div>
     </div>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="abonoSave(${JSON.stringify(id||null)})">${id?'Guardar':'Crear'}</button>` });
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="abonoSave(${id?`'${esc(id)}'`:'null'})">${id?'Guardar':'Crear'}</button>` });
 }
 async function abonoSave(id){
   const g=x=>document.getElementById(x);
@@ -14318,7 +14321,7 @@ async function factVer(id) {
                <button class="btn btn-secondary" onclick="factPDF()">📄 PDF</button>
                <button class="btn btn-secondary" onclick="factWhatsApp()">💬 WhatsApp</button>
                <button class="btn btn-primary" onclick="factEmail()">✉️ Email</button>
-               ${f.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) && !f.pagada ? `<button class="btn btn-secondary" onclick="closeModal(); factEditar(${JSON.stringify(f.id)})">✏️ Editar</button>` : ''}
+               ${f.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) && !f.pagada ? `<button class="btn btn-secondary" onclick="closeModal(); factEditar('${esc(f.id)}')">✏️ Editar</button>` : ''}
                ${sinCae && (can('ventas:delete')||can('ventas:update')) ? `<button class="btn btn-secondary text-red-600" onclick='factEliminar(${JSON.stringify(f.id)})'>🗑️ Eliminar</button>` : ''}`
     });
   } catch (e) { toast(e.message,'error'); }
@@ -15217,7 +15220,7 @@ async function compVer(id) {
         </table>
         ${f.observaciones ? `<div class="mt-3 text-sm text-slate-600"><b>Observaciones:</b> ${esc(f.observaciones)}</div>` : ''}
         <div class="mt-3 text-xs text-slate-500">💡 Para que una compra <b>nutra el stock</b>, editala y cargale los productos (cantidad + IVA). Esos ítems ingresan al depósito.</div>`,
-      footer: `${(can('compras:update')||can('finanzas:update')) ? (f.pagada ? `<span class="text-xs text-slate-400 mr-auto">🔒 Con pago aplicado — no editable</span>` : `<button class="btn btn-primary" onclick="closeModal(); compEditar(${JSON.stringify(f.id)})">✏️ Editar</button>`) : ''}<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+      footer: `${(can('compras:update')||can('finanzas:update')) ? (f.pagada ? `<span class="text-xs text-slate-400 mr-auto">🔒 Con pago aplicado — no editable</span>` : `<button class="btn btn-primary" onclick="closeModal(); compEditar('${esc(f.id)}')">✏️ Editar</button>`) : ''}<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
     });
   } catch (e) { toast(e.message,'error'); }
 }
@@ -34071,7 +34074,7 @@ function retForm(id) {
       <label class="label mt-2">Observaciones</label>
       <input id="ret-obs" class="input" value="${esc(p.observaciones||'')}"/>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-             <button class="btn btn-primary" onclick="retSave(${id?JSON.stringify(id):'null'})">Guardar</button>`,
+             <button class="btn btn-primary" onclick="retSave(${id?`'${esc(id)}'`:'null'})">Guardar</button>`,
   });
   retFormContactos(p.contactoId);
   retFormJuris();
