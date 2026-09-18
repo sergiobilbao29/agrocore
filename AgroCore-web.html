@@ -910,7 +910,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'
 function toast(msg, type='info') {
   const colors = { info:'bg-slate-800', success:'bg-green-600', error:'bg-red-600', warn:'bg-amber-600' };
   const t = document.createElement('div');
-  t.className = `fixed bottom-4 left-1/2 -translate-x-1/2 ${colors[type]||colors.info} text-white px-4 py-2 rounded-lg shadow-lg z-[60] text-sm fade-in`;
+  t.className = `fixed bottom-4 left-1/2 -translate-x-1/2 ${colors[type]||colors.info} text-white px-4 py-2 rounded-lg shadow-lg z-[9999] text-sm fade-in`;
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3200);
@@ -2853,6 +2853,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
+      titulo:'🔔 v2.233.0 — Los avisos ya no quedan tapados por las ventanas',
+      desc:'Los mensajes de aviso (como “Falta cargar el email”) aparecían <b>detrás</b> de la ventana de edición y no se veían. Ahora se muestran <b>siempre por encima</b> de cualquier ventana.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/09/2026',
       titulo:'📧 v2.232.0 — Leads: el email ahora es obligatorio y te avisa si falta',
       desc:'Al guardar un lead, el <b>email pasó a ser obligatorio</b> (queda marcado con *). Si lo dejás vacío o mal escrito, el sistema <b>te avisa en el momento</b> (“Falta cargar el email” / “formato no válido”) y resalta el campo, en vez de dejar guardar y fallar después.' },
