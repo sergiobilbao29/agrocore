@@ -2853,6 +2853,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'21/09/2026',
+      titulo:'🌾 v2.235.0 — Liquidaciones de cereal importadas: ahora sí muestran “Cobrada”',
+      desc:'Las liquidaciones que se <b>importaban de PDF</b> quedaban siempre como <b>Pendiente</b> aunque estuvieran cobradas, porque su cuenta corriente usaba una referencia interna distinta a la que lee el estado. Se corrigió: el estado (Cobrada/Parcial/Pendiente) ahora toma <b>siempre</b> lo real de la cuenta corriente, para las importadas y las cargadas a mano. <i>No hay que rehacer nada</i>: al actualizar, las que ya estaban cobradas pasan a figurar como cobradas solas.' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
       titulo:'🧾 v2.234.0 — Factura C: no discrimina IVA',
       desc:'Las <b>Facturas C</b> (monotributista/exento) <b>no discriminan IVA</b>. Ahora, al elegir tipo <b>C</b>, el sistema <b>oculta la columna y el renglón de IVA</b> y el total es igual al importe cargado (sin sumar IVA). Aplica en ventas, en el registro de facturas ya emitidas por ARCA y en compras. Las Facturas A siguen discriminando IVA como siempre.' },

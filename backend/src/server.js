@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.234.0';
+const AGROCORE_VERSION = '2.235.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9639,11 +9639,16 @@ app.get('/api/retenciones/export-sircar', requireCompany, requirePermission('fin
 // en efectivo/banco de lo deducido por el comprador (flete/gastos).
 async function _liqCerealAplicarSaldos(companyId, liqs) {
   if (!liqs.length) return liqs;
-  const refs = liqs.map(l => `LIQCER-${l.id}`);
+  // Una liquidación puede tener su cuenta corriente bajo DOS referencias según cómo se creó:
+  //  · manual/editada  -> LIQCER-<id>
+  //  · importada de PDF -> LIQ-<6 últimos del id>
+  // Consideramos las dos para que el estado (cobrada/pendiente) siempre coincida con la cta cte.
+  const refShort = (l) => `LIQ-${l.id.slice(-6).toUpperCase()}`;
+  const refs = liqs.flatMap(l => [`LIQCER-${l.id}`, refShort(l)]);
   const rows = await prisma.ctaCte.findMany({ where: { companyId, contactoTipo: 'cliente', referencia: { in: refs } } });
   const byRef = {}; for (const r of rows) { (byRef[r.referencia] = byRef[r.referencia] || []).push(r); }
   for (const l of liqs) {
-    const rs = byRef[`LIQCER-${l.id}`] || [];
+    const rs = [...(byRef[`LIQCER-${l.id}`] || []), ...(byRef[refShort(l)] || [])];
     const debe = rs.reduce((a, r) => a + Number(r.debe || 0), 0);
     const haber = rs.reduce((a, r) => a + Number(r.haber || 0), 0);
     const deducido = rs.filter(r => r.categoria === 'deduccion_liq').reduce((a, r) => a + Number(r.haber || 0), 0);
@@ -17720,7 +17725,7 @@ app.post('/api/liquidaciones-cereal/importar', requireCompany, requirePermission
       if (clienteId) {
         await tx.ctaCte.create({ data: {
           companyId: req.companyId, contactoTipo: 'cliente', contactoId: clienteId, fecha: d.fecha,
-          detalle: `Liquidación cereal ${d.numero || ''}`.trim(), referencia: `LIQ-${liq.id.slice(-6).toUpperCase()}`,
+          detalle: `Liquidación cereal ${d.numero || ''}`.trim(), referencia: `LIQCER-${liq.id}`,
           debe: d.neto, haber: 0, categoria: 'liquidacion_cereal',
         }});
       }
