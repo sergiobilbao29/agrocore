@@ -2854,6 +2854,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/09/2026',
+      titulo:'🌾 v2.237.0 — Deducciones al editar: elegí la factura y se completa sola',
+      desc:'Al <b>editar</b> la liquidación (lápiz), en la sección de deducciones ahora también funciona el <b>autocompletado</b>: elegís la factura de compra que te descontaron y trae solo el <b>importe</b> y el <b>concepto</b> (queda “Factura A 0001-…”, así se ve <b>cuál</b> factura es). Al reeditar, las deducciones cargadas se <b>conservan</b> con su factura marcada.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/09/2026',
       titulo:'🌾 v2.236.0 — Deducciones: elegí la factura de compra y trae el importe solo',
       desc:'En las <b>deducciones del comprador</b> de la liquidación, cuando el comprador te <b>descontó una factura de compra</b>, ahora la <b>elegís del desplegable</b> y el sistema <b>completa solo el concepto y el importe</b> con el total de esa factura (antes había que tipearlo). La factura queda <b>vinculada y saldada</b> (la pagó el comprador al descontarla) y el <b>saldo a cobrar</b> de la liquidación baja a lo real. Si el comprador te descontó dos facturas, agregás dos deducciones, una por cada factura.' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'21/09/2026',
@@ -30386,15 +30389,28 @@ function liqFacturaOpts(sel){
   const facs = state._liqFacturas || [];
   return `<option value="">— Sin factura —</option>` + facs.map(f=>{
     const et = (f.tipo||'')+' '+(f.puntoVenta!=null?String(f.puntoVenta).padStart(4,'0')+'-':'')+(f.numero!=null?String(f.numero).padStart(8,'0'):'');
-    return `<option value="${esc(f.id)}" data-prov="${esc(f.proveedorId||'')}" ${sel===f.id?'selected':''}>${esc(f.proveedor?.nombre||f.proveedorNombre||'Proveedor')} · ${esc(et)} · ${fmt$(f.total||0)}</option>`;
+    return `<option value="${esc(f.id)}" data-prov="${esc(f.proveedorId||'')}" data-total="${Number(f.total||0)}" data-lbl="${esc(et)}" ${sel===f.id?'selected':''}>${esc(f.proveedor?.nombre||f.proveedorNombre||'Proveedor')} · ${esc(et)} · ${fmt$(f.total||0)}</option>`;
   }).join('');
+}
+// Al elegir una factura de compra en una fila de deducción (form de edición), trae
+// solo el importe (total de la factura) y el concepto, para que coincida y se vea qué factura es.
+function liqDedRowFacturaPick(sel){
+  const opt=sel?.selectedOptions?.[0]; if(!opt||!opt.value) return;
+  const tr=sel.closest('tr'); if(!tr) return;
+  const total=Number(opt.getAttribute('data-total')||0);
+  const lbl=opt.getAttribute('data-lbl')||'';
+  const imp=tr.querySelector('[data-ldf="importe"]');
+  const conc=tr.querySelector('[data-ldf="concepto"]');
+  if(imp && total>0) imp.value=total.toFixed(2);
+  if(conc && !conc.value.trim()) conc.value=('Factura '+lbl).trim();
+  if(typeof liqRecalc==='function') liqRecalc();
 }
 function liqAddDed(d = { concepto:'', importe:0, facturaCompraId:'' }) {
   const row = `<tr data-ld>
     <td><input class="input text-sm" data-ldf="concepto" value="${esc(d.concepto||'')}" placeholder="Flete, Gastos, Secada..."/></td>
     <td><input class="input text-sm w-32 text-right" type="number" step="0.01" data-ldf="importe" value="${d.importe||0}"/></td>
     <td><div class="flex items-center gap-1">
-      <select class="input text-sm flex-1" data-ldf="factura">${liqFacturaOpts(d.facturaCompraId||'')}</select>
+      <select class="input text-sm flex-1" data-ldf="factura" onchange="liqDedRowFacturaPick(this)">${liqFacturaOpts(d.facturaCompraId||'')}</select>
       <button type="button" class="btn btn-secondary text-xs whitespace-nowrap" title="Cargar una factura de compra nueva (flete/gasto) y vincularla acá" onclick="liqNuevaFacturaCompra(this)">＋ Factura</button>
     </div></td>
     <td><button class="btn btn-ghost text-red-600" onclick="this.closest('tr').remove()">×</button></td>
