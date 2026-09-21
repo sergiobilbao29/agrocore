@@ -2853,6 +2853,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/09/2026',
+      titulo:'🌾 v2.236.0 — Deducciones: elegí la factura de compra y trae el importe solo',
+      desc:'En las <b>deducciones del comprador</b> de la liquidación, cuando el comprador te <b>descontó una factura de compra</b>, ahora la <b>elegís del desplegable</b> y el sistema <b>completa solo el concepto y el importe</b> con el total de esa factura (antes había que tipearlo). La factura queda <b>vinculada y saldada</b> (la pagó el comprador al descontarla) y el <b>saldo a cobrar</b> de la liquidación baja a lo real. Si el comprador te descontó dos facturas, agregás dos deducciones, una por cada factura.' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'21/09/2026',
       titulo:'🌾 v2.235.0 — Liquidaciones de cereal importadas: ahora sí muestran “Cobrada”',
       desc:'Las liquidaciones que se <b>importaban de PDF</b> quedaban siempre como <b>Pendiente</b> aunque estuvieran cobradas, porque su cuenta corriente usaba una referencia interna distinta a la que lee el estado. Se corrigió: el estado (Cobrada/Parcial/Pendiente) ahora toma <b>siempre</b> lo real de la cuenta corriente, para las importadas y las cargadas a mano. <i>No hay que rehacer nada</i>: al actualizar, las que ya estaban cobradas pasan a figurar como cobradas solas.' },
@@ -30654,18 +30657,28 @@ async function liqVer(id) {
 // ---- Deducciones del comprador en la liquidación (flete/gastos) ----
 async function liqDedForm(liqId){
   let facs=[]; try{ facs=(await api('/api/facturas-compra')).data||[]; }catch(_){}
-  const opts=facs.map(f=>`<option value="${esc(f.id)}" data-prov="${esc(f.proveedorId||'')}">${esc(f.proveedor?.nombre||f.proveedorNombre||'Proveedor')} · ${esc((f.tipo||'')+' '+(f.puntoVenta!=null?String(f.puntoVenta).padStart(4,'0')+'-':'')+(f.numero!=null?String(f.numero).padStart(8,'0'):''))} · ${fmt$(f.total||0)}</option>`).join('');
+  const opts=facs.map(f=>`<option value="${esc(f.id)}" data-prov="${esc(f.proveedorId||'')}" data-total="${Number(f.total||0)}" data-lbl="${esc((f.tipo||'')+' '+(f.puntoVenta!=null?String(f.puntoVenta).padStart(4,'0')+'-':'')+(f.numero!=null?String(f.numero).padStart(8,'0'):''))}">${esc(f.proveedor?.nombre||f.proveedorNombre||'Proveedor')} · ${esc((f.tipo||'')+' '+(f.puntoVenta!=null?String(f.puntoVenta).padStart(4,'0')+'-':'')+(f.numero!=null?String(f.numero).padStart(8,'0'):''))} · ${fmt$(f.total||0)}</option>`).join('');
   openModal({ title:'+ Deducción del comprador', size:'max-w-md',
     body:`
       <div class="text-[12px] text-slate-500 mb-2">Lo que el comprador te descontó de la liquidación (flete, gastos). Baja el saldo a cobrar. Podés vincular la factura ahora o después.</div>
       <div class="grid grid-cols-2 gap-2">
+        <div class="col-span-2"><label class="label text-xs">Factura de compra que te descontó (opcional)</label><div class="flex items-center gap-1"><select id="liqded-factura" class="input flex-1" onchange="liqDedFacturaPick(this)"><option value="">— Sin factura por ahora —</option>${opts}</select><button type="button" class="btn btn-secondary text-xs whitespace-nowrap" onclick="liqNuevaFacturaSel('liqded-factura')">＋ Nueva</button></div><div class="text-[11px] text-slate-400 mt-0.5">Al elegirla, se completan solos el concepto y el importe.</div></div>
         <div><label class="label text-xs">Concepto *</label><input id="liqded-concepto" class="input" placeholder="Flete, Gastos, Secada…"/></div>
         <div><label class="label text-xs">Importe *</label><input id="liqded-importe" type="number" step="0.01" class="input" placeholder="0"/></div>
-        <div class="col-span-2"><label class="label text-xs">Factura de compra (opcional)</label><div class="flex items-center gap-1"><select id="liqded-factura" class="input flex-1"><option value="">— Sin factura por ahora —</option>${opts}</select><button type="button" class="btn btn-secondary text-xs whitespace-nowrap" onclick="liqNuevaFacturaSel('liqded-factura')">＋ Nueva</button></div></div>
         <div class="col-span-2"><label class="label text-xs">Observaciones</label><input id="liqded-obs" class="input"/></div>
       </div>
       <div class="text-[11px] text-slate-500 mt-2">Si vinculás la factura, además se marca como pagada (el comprador la pagó al descontarla).</div>`,
     footer:`<button class="btn btn-secondary" onclick='liqVer(${JSON.stringify(liqId)})'>Cancelar</button><button class="btn btn-primary" onclick='liqDedSave(${JSON.stringify(liqId)})'>Agregar</button>` });
+}
+// Al elegir una factura de compra en la deducción, trae solo el importe y el concepto.
+function liqDedFacturaPick(sel){
+  const opt=sel?.selectedOptions?.[0]; if(!opt||!opt.value) return;
+  const total=Number(opt.getAttribute('data-total')||0);
+  const lbl=opt.getAttribute('data-lbl')||'';
+  const impEl=document.getElementById('liqded-importe');
+  const concEl=document.getElementById('liqded-concepto');
+  if(impEl && total>0) impEl.value=total.toFixed(2);   // el descuento = el total de la factura
+  if(concEl && !concEl.value.trim()) concEl.value=('Factura '+lbl).trim();
 }
 async function liqDedSave(liqId){
   const concepto=(document.getElementById('liqded-concepto')?.value||'').trim(); if(!concepto) return toast('Poné el concepto','warn');
