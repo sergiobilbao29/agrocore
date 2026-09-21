@@ -2854,6 +2854,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
+      titulo:'🧾 v2.234.0 — Factura C: no discrimina IVA',
+      desc:'Las <b>Facturas C</b> (monotributista/exento) <b>no discriminan IVA</b>. Ahora, al elegir tipo <b>C</b>, el sistema <b>oculta la columna y el renglón de IVA</b> y el total es igual al importe cargado (sin sumar IVA). Aplica en ventas, en el registro de facturas ya emitidas por ARCA y en compras. Las Facturas A siguen discriminando IVA como siempre.' },
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/09/2026',
       titulo:'🔔 v2.233.0 — Los avisos ya no quedan tapados por las ventanas',
       desc:'Los mensajes de aviso (como “Falta cargar el email”) aparecían <b>detrás</b> de la ventana de edición y no se veían. Ahora se muestran <b>siempre por encima</b> de cualquier ventana.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/09/2026',
@@ -13211,7 +13214,7 @@ function factItemRow(i=0, it={}) {
       </td>
       <td><input class="input text-sm w-24 text-right" type="number" step="0.01" data-f="cantidad" value="${it.cantidad||1}"/></td>
       <td><input class="input text-sm w-28 text-right" type="number" step="0.01" data-f="precioUnit" value="${it.precioUnit||0}"/></td>
-      <td><select class="input text-sm w-20" data-f="alicuotaIva">
+      <td class="iva-col"><select class="input text-sm w-20" data-f="alicuotaIva">
         ${[0,10.5,21,27].map(a=>`<option ${Number(it.alicuotaIva||21)===a?'selected':''}>${a}</option>`).join('')}
       </select></td>
       <td class="text-right text-xs text-slate-500" data-total>$ 0,00</td>
@@ -13343,21 +13346,29 @@ async function nuevoItemRapidoSave(tbodyId, filaIdx) {
     tr.outerHTML = nuevoHTML;
     try { factRenderDatalist(); } catch {}   // que el nuevo producto aparezca en el buscador
     // Recalcular totales
-    if (isExterna) { try { factExtRecalc(); } catch {} } else { try { factRecalc(); } catch {} }
+    if (isExterna) { try { factExtTipoUI(); } catch {} } else { try { factTipoUI(); } catch {} }
   } catch (e) { toast(e.message,'error'); }
 }
 
+// La Factura C (monotributista/exento) NO discrimina IVA: el importe es final.
+// La Nota de Crédito/Débito C tampoco. Devuelve true cuando el comprobante no lleva IVA.
+// Sirve para los tres formularios: venta (f-tipo), ARCA externa (fe-tipo) y compras (fc-tipo).
+function factNoDiscriminaIVA() {
+  const el = document.getElementById('f-tipo') || document.getElementById('fe-tipo') || document.getElementById('fc-tipo');
+  return !!el && (el.value || '').toUpperCase() === 'C';
+}
 function factRecalc() {
   // Mostrar los importes en la moneda elegida (venta usa #f-moneda, compra #fc-moneda).
   const sel = document.getElementById('fc-moneda') || document.getElementById('f-moneda');
   const mon = sel ? sel.value : 'ARS';
   const sym = (!mon || mon==='ARS') ? '$' : credMonSym(mon);
   const fmtC = (v) => (sym==='$') ? fmt$(v) : (sym + fmt$(v).slice(1));
+  const noIva = factNoDiscriminaIVA();
   let subtotal = 0, iva = 0;
   $$('#fi-tbody tr[data-fi]').forEach(tr => {
     const get = (f) => Number(tr.querySelector(`[data-f="${f}"]`).value || 0);
     const sub = get('cantidad') * get('precioUnit');
-    const ivaImp = sub * (get('alicuotaIva') / 100);
+    const ivaImp = noIva ? 0 : sub * (get('alicuotaIva') / 100);
     tr.querySelector('[data-total]').textContent = fmtC(sub + ivaImp);
     subtotal += sub; iva += ivaImp;
   });
@@ -13365,6 +13376,16 @@ function factRecalc() {
   $('#fi-sub').textContent = fmtC(subtotal);
   $('#fi-iva').textContent = fmtC(iva);
   $('#fi-tot').textContent = fmtC(total);
+}
+// Ajusta la UI del formulario de venta según el tipo de comprobante:
+// en Factura C oculta la columna/renglón de IVA (no se discrimina) y recalcula.
+function factTipoUI() {
+  const noIva = factNoDiscriminaIVA();
+  // Oculta/mostra la columna de IVA (thead, cada fila y el renglón de IVA del pie).
+  document.querySelectorAll('.iva-col').forEach(el => { el.style.display = noIva ? 'none' : ''; });
+  const hint = document.getElementById('f-clase-hint');
+  if (noIva && hint) { hint.innerHTML = '<span class="text-amber-700">🧾 Factura C: no discrimina IVA — el importe cargado es el total final.</span>'; }
+  if (typeof factRecalc === 'function') factRecalc();
 }
 async function factForm(prefill = null) {
   state._factEdit = (prefill && prefill._editId) ? prefill._editId : null;
@@ -13422,7 +13443,7 @@ async function factForm(prefill = null) {
           </select>
         </div>
         <div><label class="label">Tipo *</label>
-          <select id="f-tipo" class="input" onchange="factSugerirNro()">
+          <select id="f-tipo" class="input" onchange="factSugerirNro(); factTipoUI()">
             ${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}
           </select>
         </div>
@@ -13453,17 +13474,17 @@ async function factForm(prefill = null) {
       ${factCatFilterBar()}
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
-          <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
+          <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th class="iva-col">IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
           <tbody id="fi-tbody">${factItemRow(0,{cantidad:1,precioUnit:0,alicuotaIva:21})}</tbody>
           <tfoot>
-            <tr><td colspan="5" class="text-right">Subtotal</td><td class="text-right" id="fi-sub">$ 0,00</td><td></td></tr>
-            <tr><td colspan="5" class="text-right">IVA</td><td class="text-right" id="fi-iva">$ 0,00</td><td></td></tr>
+            <tr id="fi-sub-row"><td colspan="5" class="text-right">Subtotal</td><td class="text-right" id="fi-sub">$ 0,00</td><td></td></tr>
+            <tr id="fi-iva-row" class="iva-col"><td colspan="5" class="text-right">IVA</td><td class="text-right" id="fi-iva">$ 0,00</td><td></td></tr>
             <tr><td colspan="5" class="text-right font-bold">TOTAL</td><td class="text-right font-bold text-lg text-green-700" id="fi-tot">$ 0,00</td><td></td></tr>
           </tfoot>
         </table>
       </div>
       <div class="flex items-center justify-between">
-        <button class="btn btn-secondary text-sm" onclick="document.getElementById('fi-tbody').insertAdjacentHTML('beforeend', factItemRow()); factRecalc();">+ Agregar item</button>
+        <button class="btn btn-secondary text-sm" onclick="document.getElementById('fi-tbody').insertAdjacentHTML('beforeend', factItemRow()); factTipoUI();">+ Agregar item</button>
         <div id="f-cae-hint" class="text-xs text-slate-500">💡 El CAE se genera simulado al autorizar</div>
       </div>
       <div id="vent-cobro-wrap" class="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
@@ -13493,7 +13514,7 @@ async function factForm(prefill = null) {
   // listeners
   setTimeout(async () => {
     $('#fi-tbody').addEventListener('input', factRecalc);
-    factRecalc();
+    factTipoUI();
     if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     factRenderDatalist();
     factClaseHint();
@@ -13553,7 +13574,7 @@ async function factForm(prefill = null) {
         $('#fi-tbody').innerHTML = prefill.items.map((it,i)=>factItemRow(i,it)).join('');
       }
       if (prefill.observaciones && $('#f-obs')) $('#f-obs').value = prefill.observaciones;
-      factRecalc();
+      factTipoUI();
     }
   }, 0);
 }
@@ -13827,7 +13848,7 @@ async function factSave() {
     descripcion: tr.querySelector('[data-f="descripcion"]').value.trim(),
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),
-    alicuotaIva: Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
+    alicuotaIva: factNoDiscriminaIVA() ? 0 : Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
     campoId: tr.querySelector('[data-f="campoId"]')?.value || null,
     cabezas: tr.querySelector('[data-f="cabezas"]')?.value ? Number(tr.querySelector('[data-f="cabezas"]').value) : null,
   })).filter(it => it.descripcion && it.cantidad > 0);
@@ -13974,7 +13995,7 @@ async function factFormExterna() {
       <div id="fe-pdf-msg" class="text-xs mb-3"></div>
       <div class="grid grid-cols-4 gap-3 mb-3">
         <div><label class="label">Tipo *</label>
-          <select id="fe-tipo" class="input">
+          <select id="fe-tipo" class="input" onchange="factExtTipoUI()">
             ${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}
           </select>
         </div>
@@ -14002,17 +14023,17 @@ async function factFormExterna() {
       ${factCatFilterBar()}
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
-          <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
+          <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th id="fe-iva-th">IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
           <tbody id="fei-tbody">${factItemRow(0,{cantidad:1,precioUnit:0,alicuotaIva:21}).replace(/data-fi/g,'data-fei').replace(/factRecalc\(\)/g,'factExtRecalc()')}</tbody>
           <tfoot>
             <tr><td colspan="5" class="text-right">Subtotal</td><td class="text-right" id="fei-sub">$ 0,00</td><td></td></tr>
-            <tr><td colspan="5" class="text-right">IVA</td><td class="text-right" id="fei-iva">$ 0,00</td><td></td></tr>
+            <tr id="fei-iva-row"><td colspan="5" class="text-right">IVA</td><td class="text-right" id="fei-iva">$ 0,00</td><td></td></tr>
             <tr><td colspan="5" class="text-right font-bold">TOTAL</td><td class="text-right font-bold text-lg text-green-700" id="fei-tot">$ 0,00</td><td></td></tr>
           </tfoot>
         </table>
       </div>
       <div class="flex items-center justify-between">
-        <button class="btn btn-secondary text-sm" onclick="document.getElementById('fei-tbody').insertAdjacentHTML('beforeend', factItemRow().replace(/data-fi/g,'data-fei').replace(/factRecalc\(\)/g,'factExtRecalc()')); factExtRecalc();">+ Agregar item</button>
+        <button class="btn btn-secondary text-sm" onclick="document.getElementById('fei-tbody').insertAdjacentHTML('beforeend', factItemRow().replace(/data-fi/g,'data-fei').replace(/factRecalc\(\)/g,'factExtRecalc()')); factExtTipoUI();">+ Agregar item</button>
         <div class="text-xs text-slate-500">Los totales deben coincidir con los del PDF de ARCA.</div>
       </div>
       <div id="vente-cobro-wrap" class="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
@@ -14039,7 +14060,7 @@ async function factFormExterna() {
   });
   setTimeout(async () => {
     $('#fei-tbody').addEventListener('input', factExtRecalc);
-    factExtRecalc();
+    factExtTipoUI();
     if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     factRenderDatalist();
     // Pre-cargar datos para método
@@ -14073,11 +14094,12 @@ async function factFormExterna() {
 // Recalcular totales del modal de factura externa. Mismo cálculo que factRecalc
 // pero apuntando a los IDs "fei-*" y filas "data-fei" para no pisar el form normal.
 function factExtRecalc() {
+  const noIva = factNoDiscriminaIVA();
   let subtotal = 0, iva = 0;
   $$('#fei-tbody tr[data-fei]').forEach(tr => {
     const get = (f) => Number(tr.querySelector(`[data-f="${f}"]`)?.value || 0);
     const sub = get('cantidad') * get('precioUnit');
-    const ivaImp = sub * (get('alicuotaIva') / 100);
+    const ivaImp = noIva ? 0 : sub * (get('alicuotaIva') / 100);
     const totalCell = tr.querySelector('[data-total]');
     if (totalCell) totalCell.textContent = fmt$(sub + ivaImp);
     subtotal += sub; iva += ivaImp;
@@ -14085,6 +14107,12 @@ function factExtRecalc() {
   $('#fei-sub').textContent = fmt$(subtotal);
   $('#fei-iva').textContent = fmt$(iva);
   $('#fei-tot').textContent = fmt$(subtotal + iva);
+}
+// Ajusta la UI del form ARCA externa según el tipo (Factura C no discrimina IVA).
+function factExtTipoUI() {
+  const noIva = factNoDiscriminaIVA();
+  document.querySelectorAll('#fei-tbody .iva-col, #fei-iva-row, #fe-iva-th').forEach(el => { el.style.display = noIva ? 'none' : ''; });
+  if (typeof factExtRecalc === 'function') factExtRecalc();
 }
 // Sube el PDF al backend y autopobla los campos del form de factura externa (Ventas).
 async function factExternaCargarDesdePDF(input) {
@@ -14140,7 +14168,7 @@ async function factExternaCargarDesdePDF(input) {
         if (pu)   pu.value = (d.cantidadItem ? (neto / d.cantidadItem) : neto).toFixed(2);
         if (iv)   iv.value = iva;
       }
-      factExtRecalc();
+      factExtTipoUI();
     }
 
     if (msg) {
@@ -14207,7 +14235,7 @@ async function factSaveExterna() {
     descripcion: tr.querySelector('[data-f="descripcion"]').value.trim(),
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),
-    alicuotaIva: Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
+    alicuotaIva: factNoDiscriminaIVA() ? 0 : Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
     campoId: tr.querySelector('[data-f="campoId"]')?.value || null,
     cabezas: tr.querySelector('[data-f="cabezas"]')?.value ? Number(tr.querySelector('[data-f="cabezas"]').value) : null,
   })).filter(it => it.descripcion && it.cantidad > 0);
@@ -14796,7 +14824,7 @@ async function compForm(pre) {
           </select>
         </div>
         <div><label class="label">Tipo *</label>
-          <select id="f-tipo" class="input">${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}</select>
+          <select id="f-tipo" class="input" onchange="factTipoUI()">${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}</select>
         </div>
         <div><label class="label">Pto. venta *</label><input id="f-pv" class="input" type="number" value="1"/></div>
         <div><label class="label">Número *</label><input id="f-nro" class="input" type="number" value="1"/></div>
@@ -14823,16 +14851,16 @@ async function compForm(pre) {
       ${factCatFilterBar()}
       <div class="kpi p-0 overflow-hidden mb-3">
         <table class="data">
-          <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th>IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
+          <thead><tr><th class="w-1/4">Producto</th><th>Descripción</th><th class="text-right">Cant.</th><th class="text-right">P. Unit.</th><th class="iva-col">IVA %</th><th class="text-right">Total</th><th></th></tr></thead>
           <tbody id="fi-tbody">${(pre && pre.items && pre.items.length) ? pre.items.map((it,i)=>factItemRow(i,it)).join('') : factItemRow(0,{cantidad:1,precioUnit:0,alicuotaIva:21})}</tbody>
           <tfoot>
             <tr><td colspan="5" class="text-right">Subtotal</td><td class="text-right" id="fi-sub">$ 0,00</td><td></td></tr>
-            <tr><td colspan="5" class="text-right">IVA</td><td class="text-right" id="fi-iva">$ 0,00</td><td></td></tr>
+            <tr id="fi-iva-row" class="iva-col"><td colspan="5" class="text-right">IVA</td><td class="text-right" id="fi-iva">$ 0,00</td><td></td></tr>
             <tr><td colspan="5" class="text-right font-bold">TOTAL</td><td class="text-right font-bold text-lg text-green-700" id="fi-tot">$ 0,00</td><td></td></tr>
           </tfoot>
         </table>
       </div>
-      <button class="btn btn-secondary text-sm" onclick="document.getElementById('fi-tbody').insertAdjacentHTML('beforeend', factItemRow()); factRecalc();">+ Agregar item</button>
+      <button class="btn btn-secondary text-sm" onclick="document.getElementById('fi-tbody').insertAdjacentHTML('beforeend', factItemRow()); factTipoUI();">+ Agregar item</button>
       <div id="comp-pago-wrap" class="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
         <div class="text-xs font-semibold text-blue-900 mb-2">💳 Pago — Condición Contado (se registra junto con la factura)</div>
         <div class="grid grid-cols-2 gap-3">
@@ -14865,7 +14893,7 @@ async function compForm(pre) {
       if(_m&&pre.moneda){ _m.value=pre.moneda; const _w=document.getElementById('fc-cotiz-wrap'); if(_w)_w.style.display=(pre.moneda==='ARS')?'none':''; const _c=document.getElementById('fc-cotiz'); if(_c&&pre.cotizacion){ _c.value=pre.cotizacion; _c.dataset.manual='1'; } }
     }
     $('#fi-tbody').addEventListener('input', factRecalc);
-    factRecalc();
+    factTipoUI();
     if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     factRenderDatalist();
     // Pre-cargar datos para método de pago si todavía no están
@@ -15077,7 +15105,7 @@ async function compSave() {
     descripcion: tr.querySelector('[data-f="descripcion"]').value.trim(),
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     precioUnit: Number(tr.querySelector('[data-f="precioUnit"]').value||0),
-    alicuotaIva: Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
+    alicuotaIva: factNoDiscriminaIVA() ? 0 : Number(tr.querySelector('[data-f="alicuotaIva"]').value||21),
     campoId: tr.querySelector('[data-f="campoId"]')?.value || null,
     cabezas: tr.querySelector('[data-f="cabezas"]')?.value ? Number(tr.querySelector('[data-f="cabezas"]').value) : null,
   })).filter(it => it.descripcion && it.cantidad > 0);
