@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.241.0';
+const AGROCORE_VERSION = '2.242.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -937,6 +937,40 @@ function _companyActiva(req) {
   return uc?.company || null;
 }
 
+// A quién avisamos cuando se crea una empresa nueva desde la prueba gratuita.
+const TRIAL_AVISO_EMAIL = process.env.TRIAL_AVISO_EMAIL || 'consultas@agrocore.ar';
+// Envía un email interno con los datos del nuevo trial (no bloquea el alta si falla).
+async function _notificarNuevaEmpresaTrial(su, company) {
+  if (!mailConfigurado()) return { ok: false, notConfigured: true };
+  const act = { agricola: 'Agrícola', ganadera: 'Ganadera', mixta: 'Mixta' }[su.actividad] || (su.actividad || '—');
+  const ubic = [su.ciudad, su.provincia].filter(Boolean).join(', ') || '—';
+  const tel = (su.telefono || '').replace(/[^0-9]/g, '');
+  const filas = [
+    ['Empresa / establecimiento', su.empresa],
+    ['Contacto', su.nombre],
+    ['Email', su.email],
+    ['Teléfono', su.telefono || '—'],
+    ['CUIT', su.cuit || '—'],
+    ['Provincia / Ciudad', ubic],
+    ['Actividad', act],
+    ['Fecha de alta', new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Cordoba' })],
+  ].map(([k, v]) => `<tr><td style="padding:6px 10px;color:#6b7280;border-bottom:1px solid #eee">${_escHtml(k)}</td><td style="padding:6px 10px;font-weight:bold;color:#111;border-bottom:1px solid #eee">${_escHtml(String(v))}</td></tr>`).join('');
+  const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto">
+    <h2 style="color:#143C19">🌱 Nueva empresa en la prueba gratuita</h2>
+    <p style="color:#374151">Se activó una nueva cuenta de prueba en AgroCore. Datos para el seguimiento comercial:</p>
+    <table style="border-collapse:collapse;width:100%;font-size:14px">${filas}</table>
+    ${tel ? `<p style="margin-top:16px"><a href="https://wa.me/${tel}" style="background:#166534;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:bold">💬 Escribir por WhatsApp</a></p>` : ''}
+    <p style="font-size:12px;color:#9ca3af;margin-top:18px">Aviso automático de AgroCore · agrocore.ar/prueba</p>
+  </div>`;
+  const text = `Nueva empresa en la prueba gratuita de AgroCore\n\n`
+    + `Empresa: ${su.empresa}\nContacto: ${su.nombre}\nEmail: ${su.email}\nTeléfono: ${su.telefono || '—'}\n`
+    + `CUIT: ${su.cuit || '—'}\nProvincia/Ciudad: ${ubic}\nActividad: ${act}\n`;
+  return enviarEmailResend({
+    to: TRIAL_AVISO_EMAIL, subject: `🌱 Nueva prueba: ${su.empresa} (${ubic})`,
+    html, text, replyTo: su.email, fromName: 'AgroCore Trial',
+  });
+}
+
 // Formulario de contacto de la web pública (agrocore.ar). PÚBLICO (sin auth).
 app.post('/api/contact', async (req, res) => {
   try {
@@ -979,6 +1013,8 @@ app.post('/api/public/trial/signup', async (req, res) => {
       email: z.string().trim().email('Email inválido'),
       telefono: z.string().trim().optional().nullable(),
       actividad: z.enum(['agricola', 'ganadera', 'mixta']).optional().nullable(),
+      provincia: z.string().trim().optional().nullable(),
+      ciudad: z.string().trim().optional().nullable(),
       password: z.string().min(6, 'La contraseña debe tener al menos 6 caracteres'),
     });
     const d = schema.parse(req.body);
@@ -998,11 +1034,19 @@ app.post('/api/public/trial/signup', async (req, res) => {
     const token = (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)).replace(/-/g, '')
       + (globalThis.crypto?.randomUUID?.() || Date.now().toString(36)).replace(/-/g, '');
     const passwordHash = await bcrypt.hash(d.password, 10);
-    await prisma.trialSignup.create({ data: {
+    // provincia/ciudad son campos nuevos: si la instancia no está migrada, reintentamos sin ellos.
+    const _suBase = {
       email, cuit, nombre: d.nombre, empresa: d.empresa, telefono: d.telefono || null,
       actividad: d.actividad || null, passwordHash, token,
       expiresAt: new Date(Date.now() + 2 * 86400000),
-    }});
+    };
+    try {
+      await prisma.trialSignup.create({ data: { ..._suBase, provincia: d.provincia || null, ciudad: d.ciudad || null } });
+    } catch (e) {
+      if (/Unknown arg|Unknown field|provincia|ciudad|column .* does not exist/i.test(e.message || '')) {
+        await prisma.trialSignup.create({ data: _suBase });
+      } else { throw e; }
+    }
     const link = `${_baseUrl(req)}/api/public/trial/verify?token=${token}`;
     const html = `<div style="font-family:Arial,sans-serif;font-size:15px;color:#1f2937;max-width:520px;margin:auto">
       <h2 style="color:#143C19">¡Bienvenido a AgroCore, ${_escHtml(d.nombre)}! 🌱</h2>
@@ -1044,6 +1088,7 @@ app.get('/api/public/trial/verify', async (req, res) => {
 
     const company = await prisma.company.create({ data: {
       name: su.empresa, cuit: su.cuit || null, email: su.email, telefono: su.telefono || null,
+      provincia: su.provincia || null, localidad: su.ciudad || null, pais: 'Argentina',
       plan: 'trial', trialEndsAt: new Date(Date.now() + TRIAL_DIAS * 86400000),
       informal: true, activo: true,
     }});
@@ -1060,6 +1105,8 @@ app.get('/api/public/trial/verify', async (req, res) => {
     try { await seedCategoriasPlanilla(company.id); } catch (_) {}
     try { await seedCategoriasHacienda(company.id); } catch (_) {}
     await prisma.trialSignup.update({ where: { id: su.id }, data: { verifiedAt: new Date(), companyId: company.id } });
+    // Aviso interno: nos avisa por email cuando se crea una empresa nueva desde el trial.
+    try { await _notificarNuevaEmpresaTrial(su, company); } catch (e) { console.warn('[trial.verify] aviso no enviado:', e.message); }
     return res.redirect(302, `${base}/?trial=ok`);
   } catch (e) {
     console.warn('[trial.verify] error:', e.message);
