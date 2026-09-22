@@ -2304,6 +2304,20 @@ function closeModal() { $('#modal').classList.add('hidden'); }
 
 // ===================== PRUEBA GRATUITA (trial) =====================
 const TRIAL_WA = 'https://wa.me/5493582408884?text=' + encodeURIComponent('Hola! Estuve probando AgroCore y quiero contratarlo.');
+// Datos de contacto visibles (fallback si la persona no tiene WhatsApp).
+const TRIAL_TEL_DISPLAY = '+54 9 3582 40-8884';
+const TRIAL_TEL_RAW = '5493582408884';
+const TRIAL_EMAIL = 'consultas@agrocore.ar';
+const TRIAL_EMAIL_LINK = 'mailto:' + TRIAL_EMAIL + '?subject=' + encodeURIComponent('Quiero contratar AgroCore') + '&body=' + encodeURIComponent('Hola! Estuve probando AgroCore y quiero contratarlo.');
+function trialCopiarTel(){ try{ navigator.clipboard.writeText('+'+TRIAL_TEL_RAW); toast('Número copiado: '+TRIAL_TEL_DISPLAY,'success'); }catch(e){ toast('Número: '+TRIAL_TEL_DISPLAY,'info'); } }
+// Bloque de contacto alternativo (email + teléfono) para cuando WhatsApp no está disponible.
+function trialContactoAltHTML(){
+  return `<div style="margin-top:12px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:13px;color:#475569">
+      <div style="margin-bottom:6px">¿No tenés WhatsApp? También podés:</div>
+      <a href="${TRIAL_EMAIL_LINK}" style="display:inline-block;color:#166534;font-weight:bold;text-decoration:none;margin:2px 0">✉️ ${TRIAL_EMAIL}</a><br/>
+      <span>📞 <b>${TRIAL_TEL_DISPLAY}</b> <a href="tel:+${TRIAL_TEL_RAW}" style="color:#166534;text-decoration:none">llamar</a> · <a href="#" onclick="trialCopiarTel();return false" style="color:#166534;text-decoration:none">copiar</a></span>
+    </div>`;
+}
 function _trialActual() {
   const co = (state.user?.companies || []).find(c => c.id === state.companyId);
   return co && co.plan === 'trial' ? (co.trial || null) : null;
@@ -2321,7 +2335,24 @@ function trialBannerRefresh() {
   }
   const urgente = t.diasRestantes <= 5;
   el.innerHTML = `<span>🎁 Prueba gratuita: <b style="color:${urgente?'#fca5a5':'#E8AC1E'}">${t.diasRestantes} día${t.diasRestantes===1?'':'s'}</b> restantes</span>
-    <a href="${TRIAL_WA}" target="_blank" rel="noopener" style="background:#E8AC1E;color:#143C19;font-weight:bold;border-radius:999px;padding:4px 12px;text-decoration:none">Contratar</a>`;
+    <a href="${TRIAL_WA}" target="_blank" rel="noopener" onclick="setTimeout(trialContratarModal,600)" style="background:#E8AC1E;color:#143C19;font-weight:bold;border-radius:999px;padding:4px 12px;text-decoration:none">Contratar</a>`;
+}
+// Modal con las vías de contacto (por si WhatsApp no abre / no tiene la app).
+function trialContratarModal(){
+  if (document.getElementById('trial-contacto-modal')) return;
+  const ov = document.createElement('div');
+  ov.id = 'trial-contacto-modal';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(6,26,12,.6);display:flex;align-items:center;justify-content:center;padding:20px';
+  ov.onclick = (e)=>{ if(e.target===ov) ov.remove(); };
+  ov.innerHTML = `<div style="max-width:420px;width:100%;background:#fff;border-radius:16px;padding:24px;text-align:center;font-family:inherit">
+      <div style="font-size:38px">💬</div>
+      <h3 style="color:#143C19;font-size:18px;font-weight:800;margin:6px 0">¡Gracias por querer contratar AgroCore!</h3>
+      <p style="color:#475569;font-size:13px;margin-bottom:14px">Se abrió WhatsApp en otra pestaña. Si no se abrió o no tenés la app, contactanos por acá:</p>
+      <a href="${TRIAL_WA}" target="_blank" rel="noopener" style="display:block;background:#166534;color:#fff;font-weight:bold;border-radius:10px;padding:12px;text-decoration:none;margin-bottom:8px">💬 Abrir WhatsApp de nuevo</a>
+      ${trialContactoAltHTML()}
+      <button onclick="document.getElementById('trial-contacto-modal').remove()" style="background:none;border:none;color:#94a3b8;font-size:13px;cursor:pointer;margin-top:12px">Cerrar</button>
+    </div>`;
+  document.body.appendChild(ov);
 }
 // Pantalla de bloqueo total cuando la prueba venció (se dispara con el 402 del backend).
 function trialBloqueoMostrar(body) {
@@ -2337,7 +2368,8 @@ function trialBloqueoMostrar(body) {
       <p style="color:#475569;font-size:14px;margin-bottom:20px">Esperamos que AgroCore te haya servido para ordenar tu campo. Para seguir usándolo con todos tus datos, contratá el sistema — te ayudamos con la puesta en marcha.</p>
       <a href="${TRIAL_WA}" target="_blank" rel="noopener" style="display:block;background:#166534;color:#fff;font-weight:bold;border-radius:10px;padding:14px;text-decoration:none;margin-bottom:10px">💬 Contratar AgroCore por WhatsApp</a>
       ${puedeExtender ? `<button onclick="trialExtender()" style="display:block;width:100%;background:#F4F3EA;color:#143C19;font-weight:bold;border:1px solid #cbd5e1;border-radius:10px;padding:12px;cursor:pointer;margin-bottom:10px">🎁 Extender 15 días gratis (una sola vez)</button>` : ''}
-      <button onclick="logout()" style="background:none;border:none;color:#94a3b8;font-size:13px;cursor:pointer">Cerrar sesión</button>
+      ${trialContactoAltHTML()}
+      <button onclick="logout()" style="background:none;border:none;color:#94a3b8;font-size:13px;cursor:pointer;margin-top:10px">Cerrar sesión</button>
     </div>`;
   document.body.appendChild(ov);
 }
@@ -2853,6 +2885,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',
+      titulo:'📞 v2.241.0 — Prueba gratis: contacto alternativo si no tenés WhatsApp',
+      desc:'Al tocar <b>Contratar</b> desde la prueba gratuita seguimos abriendo WhatsApp (como estaba), pero ahora aparece además un cartel con las <b>otras vías de contacto</b> por si la persona no tiene WhatsApp Web o la app: <b>email</b> (consultas@agrocore.ar) y <b>teléfono</b> (con botones de llamar y copiar). Lo mismo en la pantalla de <b>prueba vencida</b>: debajo del botón de WhatsApp quedan siempre visibles el mail y el teléfono. Así nadie queda trabado sin saber a quién escribir.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',
       titulo:'🔗 v2.240.0 — Abonos: la factura se vincula a la cuota (no se duplica la deuda)',
       desc:'Cuando facturás un abono, la <b>factura reemplaza a la cuota del mes</b>: antes quedaban las dos deudas en la cuenta corriente (la cuota del abono <b>y</b> la factura) y el cliente aparecía debiendo doble. Ahora al <b>📄 Facturar</b> desde Abonos se saca automáticamente la cuota duplicada y queda solo la factura. Si ya emitiste o <b>importaste la factura de ARCA por afuera</b>, usá el nuevo botón <b>🔗 Vincular factura</b> en la fila del abono para asociarla a la cuota del período (y limpiar el duplicado). El abono muestra el <b>N° de factura</b> vinculada y su estado real de cobro; también podés <b>🔗✖ Desvincular</b> para volver a la cuota. <i>Nota: si la cuota ya tenía un cobro cargado, primero deshacelo.</i>' },
