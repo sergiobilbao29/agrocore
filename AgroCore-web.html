@@ -2886,6 +2886,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',
+      titulo:'📄 v2.243.0 — Importar liquidación de cereal: aviso claro si subís una Orden de Pago',
+      desc:'Al <b>importar el PDF</b> en Liquidaciones de cereal, si por error subís la <b>ORDEN DE PAGO</b> de la cerealera (AGD y otras mandan dos PDF: la liquidación y la orden de pago), ahora el sistema te avisa claramente: <i>"Este PDF es una ORDEN DE PAGO, no la Liquidación Primaria de Granos. Importá la liquidación (la que tiene el C.O.E.); la orden de pago se usa al registrar el cobro."</i> Antes salía un error genérico y confundía. Recordá: la <b>liquidación (LPG)</b> es la que genera la deuda a cobrar; la <b>orden de pago</b> es el cobro.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',
       titulo:'📍 v2.242.0 — Prueba gratis con provincia/ciudad + aviso de nueva empresa',
       desc:'La página de <b>prueba gratuita</b> (agrocore.ar/prueba) ahora pide <b>provincia</b> y <b>ciudad</b> con listas precargadas (y si tu localidad no está, la escribís a mano). Esos datos quedan guardados en el <b>lead</b> y en la <b>empresa</b> que se crea. Además, cuando alguien activa una prueba nueva, se envía un <b>aviso por email</b> (a consultas@agrocore.ar) con todos sus datos de contacto y un botón directo de WhatsApp, para el seguimiento comercial. También actualizamos el <b>presupuesto de la web</b> con todas las funcionalidades del sistema (las 9 secciones completas).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',

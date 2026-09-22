@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.242.0';
+const AGROCORE_VERSION = '2.243.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17853,7 +17853,14 @@ app.post('/api/admin/parse-liquidacion-cereal-pdf', authMiddleware, requireCompa
     if (!/\.pdf$/i.test(req.file.originalname || '')) return res.status(400).json({ ok: false, error: 'El archivo debe ser un PDF' });
     let pdfParse; try { pdfParse = await getPdfParse(); } catch { return res.status(501).json({ ok: false, error: 'El parser de PDF no está disponible. Cargá la liquidación a mano.' }); }
     let texto = ''; try { texto = (await pdfParse(req.file.buffer)).text || ''; } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
-    if (!/LIQUIDACI[ÓO]N\s+PRIMARIA\s+DE\s+GRANOS/i.test(texto)) return res.status(400).json({ ok: false, error: 'No parece una Liquidación Primaria de Granos. Verificá el PDF.' });
+    if (!/LIQUIDACI[ÓO]N\s+PRIMARIA\s+DE\s+GRANOS/i.test(texto)) {
+      // Caso típico: la cerealera manda dos PDF — la Liquidación Primaria de Granos (LPG)
+      // y una ORDEN DE PAGO. Acá va SOLO la LPG; la orden de pago es el cobro.
+      if (/ORDEN\s+DE\s+PAGO/i.test(texto)) {
+        return res.status(400).json({ ok: false, error: 'Este PDF es una ORDEN DE PAGO de la cerealera, no la Liquidación Primaria de Granos. Importá acá la LIQUIDACIÓN (el PDF que dice "Liquidación Primaria de Granos" con el C.O.E.). La orden de pago se usa al registrar el COBRO en Cuentas a cobrar.' });
+      }
+      return res.status(400).json({ ok: false, error: 'No parece una Liquidación Primaria de Granos. Subí el PDF de la liquidación (LPG) — el que tiene el C.O.E. Si es una orden de pago o un comprobante de otro tipo, cargalo a mano.' });
+    }
     const data = _parseLiquidacionCereal(texto);
     const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, activo: true, categoria: 'cereales' }, select: { id: true, nombre: true } });
     let productoId = null;
