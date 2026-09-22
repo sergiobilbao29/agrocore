@@ -2854,6 +2854,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',
+      titulo:'🔗 v2.240.0 — Abonos: la factura se vincula a la cuota (no se duplica la deuda)',
+      desc:'Cuando facturás un abono, la <b>factura reemplaza a la cuota del mes</b>: antes quedaban las dos deudas en la cuenta corriente (la cuota del abono <b>y</b> la factura) y el cliente aparecía debiendo doble. Ahora al <b>📄 Facturar</b> desde Abonos se saca automáticamente la cuota duplicada y queda solo la factura. Si ya emitiste o <b>importaste la factura de ARCA por afuera</b>, usá el nuevo botón <b>🔗 Vincular factura</b> en la fila del abono para asociarla a la cuota del período (y limpiar el duplicado). El abono muestra el <b>N° de factura</b> vinculada y su estado real de cobro; también podés <b>🔗✖ Desvincular</b> para volver a la cuota. <i>Nota: si la cuota ya tenía un cobro cargado, primero deshacelo.</i>' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',
       titulo:'📇 v2.239.0 — Leads: seguimiento más completo + exportación con todos los datos',
       desc:'La ficha del lead ahora tiene un bloque de <b>seguimiento comercial</b>: <b>Contacto por</b> (cómo llegó: WhatsApp, feria, recomendación…), <b>1er contacto</b>, <b>último contacto</b> y <b>próximo contacto</b>, además del estado y las notas que ya estaban. Y al <b>Exportar</b> ahora salen <b>todos los datos</b> de cada lead (alta, contacto, empresa, CUIT, teléfono, email, actividad, provincia, ciudad, verificado, estado, contacto por, fechas de seguimiento, mantenimiento, otros contactos y notas) — ideal para tu planilla de seguimiento.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/09/2026',
@@ -10078,8 +10081,14 @@ async function abonosRender(){
     subs=r.data||[]; tab=t.data||{};
   }catch(e){ return toast(e.message,'error'); }
   state._abonos = subs;
-  const cuotaBadge = c => !c||!c.generada ? '<span class="text-[11px] text-slate-400">sin generar</span>'
-    : (c.cobrada ? '<span class="badge badge-green">cobrada</span>' : `<span class="badge" style="background:#fee2e2;color:#991b1b">pendiente ${fmt$(c.saldo)}</span>`);
+  const cuotaBadge = c => {
+    if (!c || !c.generada) return '<span class="text-[11px] text-slate-400">sin generar</span>';
+    const facLbl = c.facturada ? `<div class="text-[10px] text-slate-500 mt-0.5">📄 ${esc(c.facturaNumero||'facturada')}</div>` : '';
+    const st = c.cobrada
+      ? '<span class="badge badge-green">cobrada</span>'
+      : `<span class="badge" style="background:#fee2e2;color:#991b1b">pendiente ${c.facturada?fmtMon(c.monedaFactura,c.saldo):fmt$(c.saldo)}</span>`;
+    return st + facLbl;
+  };
   const fila = s => `<tr class="border-t border-slate-100">
     <td class="p-1"><b>${esc(s.cliente?.razonSocial||'—')}</b>${s.cliente?.telefono?` <a class="text-emerald-700 text-xs" href="https://wa.me/${String(s.cliente.telefono).replace(/[^0-9]/g,'')}" target="_blank">💬</a>`:''}<div class="text-[10px] text-slate-400">${esc(s.concepto||'')}</div></td>
     <td class="p-1 text-right whitespace-nowrap">${fmtMon(s.moneda,s.monto)}</td>
@@ -10088,7 +10097,9 @@ async function abonosRender(){
     <td class="p-1 text-center">${cuotaBadge(s.cuota)}</td>
     <td class="p-1 text-right whitespace-nowrap">
       ${(!s.cuota||!s.cuota.generada)?`<button class="btn btn-ghost text-xs" title="Generar la cuenta a cobrar de ${per}" onclick="abonoGenerar('${s.id}')">🧾 Cuota</button>`:''}
-      ${s.cliente?`<button class="btn btn-ghost text-xs" title="Emitir factura del abono (con o sin ARCA) y enviarla" onclick="abonoFacturar('${s.id}')">📄 Facturar</button>`:''}
+      ${(s.cliente&&!s.cuota?.facturada)?`<button class="btn btn-ghost text-xs" title="Emitir factura del abono (con o sin ARCA) y enviarla" onclick="abonoFacturar('${s.id}')">📄 Facturar</button>`:''}
+      ${(s.cliente&&!s.cuota?.facturada)?`<button class="btn btn-ghost text-xs text-indigo-700" title="Vincular una factura ya emitida (p. ej. importada de ARCA) a la cuota de ${per}" onclick="abonoVincularFactura('${s.id}')">🔗 Vincular factura</button>`:''}
+      ${s.cuota?.facturada?`<button class="btn btn-ghost text-xs text-amber-700" title="Desvincular la factura y volver a la cuota del abono" onclick="abonoDesvincularFactura('${s.id}')">🔗✖ Desvincular</button>`:''}
       ${(s.cuota&&s.cuota.generada&&!s.cuota.cobrada)?`<button class="btn btn-ghost text-xs text-emerald-700" title="Registrar cobro" onclick="abonoCobrar('${esc(s.clienteId)}')">💰 Cobrar</button>`:''}
       <button class="btn btn-ghost text-xs" title="Editar" onclick="abonoForm('${s.id}')">✏️</button>
       <button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick="abonoDel('${s.id}')">🗑️</button>
@@ -10165,11 +10176,49 @@ async function abonoFacturar(id){
     items: [{ descripcion: `${s.concepto||'Abono mensual AgroCore'} · ${per}`, cantidad: 1, precioUnit: s.monto||0, alicuotaIva: 21 }],
     observaciones: `Abono ${per} · ref ${'ABONO-'+s.id+'-'+per}`,
     moneda: s.moneda||'ARS',
+    suscripcionId: s.id,
+    abonoPeriodo: per,
   });
 }
 async function abonoCobrar(clienteId){
   if(typeof pagoCobroAbrir==='function'){ closeModal&&closeModal(); await pagoCobroAbrir('cobro',{ contactoId: clienteId }); }
   else { toast('Andá a Cuentas a cobrar para registrar el cobro','info'); }
+}
+// Vincular una factura ya emitida (p. ej. importada de ARCA) a la cuota del abono.
+// Saca la cuota ABONO- duplicada para que la deuda no se cuente dos veces.
+async function abonoVincularFactura(id){
+  const s=(state._abonos||[]).find(x=>x.id===id); if(!s) return;
+  const per=state._abonoPeriodo;
+  let facs=[];
+  try{ const r=await api('/api/suscripciones/'+id+'/facturas-cliente'); facs=r.data||[]; }
+  catch(e){ return toast(e.message,'error'); }
+  const libres=facs.filter(f=>!f.vinculada);
+  if(!libres.length) return toast('No hay facturas del cliente disponibles para vincular. Emití o importá la factura primero.','warn');
+  const opts=libres.map(f=>`<option value="${esc(f.id)}">${esc(f.numero)} · ${String(f.fecha).slice(0,10)} · ${esc(fmtMon(f.moneda,f.total))}</option>`).join('');
+  openModal({ title:'🔗 Vincular factura al abono · '+per, size:'max-w-lg',
+    body:`<div class="text-xs text-slate-600 mb-2">Elegí la factura que corresponde a la cuota del abono de <b>${esc(s.cliente?.razonSocial||'')}</b> (período <b>${per}</b>). Al vincularla, la cuota <b>ABONO-</b> del período se elimina para que no quede la deuda duplicada; queda solo la factura.</div>
+      <label class="label">Factura del cliente</label>
+      <select id="ab-vinc-fac" class="input">${opts}</select>
+      <div class="text-[11px] text-amber-700 mt-2">Si la cuota del abono ya tenía un cobro cargado, no se borra: primero deshacé ese cobro.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="abonoVincularFacturaSave('${esc(id)}')">🔗 Vincular</button>` });
+}
+async function abonoVincularFacturaSave(id){
+  const facturaId=$('#ab-vinc-fac')?.value; if(!facturaId) return toast('Elegí una factura','warn');
+  const per=state._abonoPeriodo;
+  try{
+    const r=await api('/api/suscripciones/'+id+'/vincular-factura',{method:'POST',body:JSON.stringify({facturaId,periodo:per})});
+    if(r.data && r.data.cuotaConCobros) toast('Factura vinculada. Ojo: la cuota del abono tenía cobros y no se eliminó — revisá Cuentas a cobrar.','warn');
+    else toast('Factura vinculada al abono. Se sacó la cuota duplicada.','success');
+    closeModal(); abonosRender();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function abonoDesvincularFactura(id){
+  const per=state._abonoPeriodo;
+  if(!confirm('¿Desvincular la factura de la cuota de '+per+'? Se vuelve a generar la cuota del abono (ABONO-).')) return;
+  try{
+    await api('/api/suscripciones/'+id+'/desvincular-factura',{method:'POST',body:JSON.stringify({periodo:per})});
+    toast('Factura desvinculada. Se regeneró la cuota del abono.','success'); abonosRender();
+  }catch(e){ toast(e.message,'error'); }
 }
 function empForm(id=null) {
   const it = id ? (state.cache.empresas||[]).find(x=>x.id===id)||{} : {};
@@ -13538,7 +13587,9 @@ async function factForm(prefill = null) {
         <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís método se autoriza la factura Y se registra el cobro. Requiere que el cliente esté seleccionado (no consumidor final).</div>
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
-      <input type="hidden" id="f-labor-servicio" value="${esc(prefill?.laborServicioId||'')}"/>`,
+      <input type="hidden" id="f-labor-servicio" value="${esc(prefill?.laborServicioId||'')}"/>
+      <input type="hidden" id="f-abono-sus" value="${esc(prefill?.suscripcionId||'')}"/>
+      <input type="hidden" id="f-abono-periodo" value="${esc(prefill?.abonoPeriodo||'')}"/>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button id="f-save-btn" class="btn btn-primary" onclick="factSave()">💾 ${state._factEdit?'Guardar cambios':'Autorizar'}</button>`
   });
@@ -13925,6 +13976,8 @@ async function factSave() {
     vencimientoFecha,
     observaciones: $('#f-obs').value.trim()||null,
     laborServicioId: $('#f-labor-servicio')?.value || null,
+    suscripcionId: $('#f-abono-sus')?.value || null,
+    abonoPeriodo: $('#f-abono-periodo')?.value || null,
     items,
   };
   // Modo "ya emitida en ARCA": se registra con su CAE real (no se reenvía a ARCA).

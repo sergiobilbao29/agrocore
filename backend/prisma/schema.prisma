@@ -712,6 +712,8 @@ model Factura {
   caeVto          DateTime?
   estado          String    @default("pendiente") // pendiente, autorizada, anulada
   origen          String    @default("agrocore") // "agrocore" (emitida desde el sistema) | "arca_externa" (emitida directamente en ARCA y cargada manualmente)
+  suscripcionId   String?   // si esta factura corresponde a la cuota de un abono, lo vinculamos acá
+  abonoPeriodo    String?   // período del abono facturado (YYYY-MM) — junto con suscripcionId identifica la cuota
   observaciones   String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

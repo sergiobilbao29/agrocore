@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.239.0';
+const AGROCORE_VERSION = '2.240.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1943,6 +1943,63 @@ async function _abonosEstado(companyId, refs) {
   return out;
 }
 
+// Estado de las cuotas de un conjunto de abonos, considerando la FACTURA vinculada.
+// Si el abono tiene una factura del período (suscripcionId+abonoPeriodo), el estado
+// (saldo/cobrada) sale de esa factura (FAC-<id>). Si no, cae a la cuota ABONO-.
+// Devuelve un mapa por susId. Así la deuda no se cuenta dos veces.
+async function _abonosEstadoFull(companyId, subs, periodo) {
+  const out = {};
+  if (!subs.length) return out;
+  const susIds = subs.map(s => s.id);
+  let facs = [];
+  try {
+    facs = await prisma.factura.findMany({
+      where: { companyId, suscripcionId: { in: susIds }, abonoPeriodo: periodo, estado: { not: 'anulada' } },
+      select: { id: true, suscripcionId: true, tipo: true, clase: true, puntoVenta: true, numero: true, total: true, moneda: true },
+    });
+  } catch (_e) { facs = []; } // instancia sin migrar → sin facturas vinculadas
+  const facBySus = {};
+  for (const f of facs) { if (!facBySus[f.suscripcionId]) facBySus[f.suscripcionId] = f; }
+  const facRefs = facs.map(f => `FAC-${f.id}`);
+  const facSaldo = {};
+  if (facRefs.length) {
+    const rows = await prisma.ctaCte.findMany({ where: { companyId, contactoTipo: 'cliente', referencia: { in: facRefs } }, select: { referencia: true, debe: true, haber: true } });
+    for (const r of rows) { const k = r.referencia; if (!facSaldo[k]) facSaldo[k] = { debe: 0, haber: 0 }; facSaldo[k].debe += r.debe || 0; facSaldo[k].haber += r.haber || 0; }
+  }
+  const abEstados = await _abonosEstado(companyId, subs.map(s => _abonoRef(s.id, periodo)));
+  for (const s of subs) {
+    const f = facBySus[s.id];
+    if (f) {
+      const sa = facSaldo[`FAC-${f.id}`] || { debe: 0, haber: 0 };
+      const saldo = _round2(sa.debe - sa.haber);
+      out[s.id] = {
+        generada: true, facturada: true, facturaId: f.id,
+        facturaNumero: `${_labelComp(f.clase, f.tipo)} ${String(f.puntoVenta).padStart(4, '0')}-${String(f.numero).padStart(8, '0')}`,
+        totalFactura: _round2(f.total), monedaFactura: f.moneda,
+        saldo, cobrada: saldo <= 0.01,
+      };
+    } else {
+      out[s.id] = abEstados[_abonoRef(s.id, periodo)] || { generada: false };
+    }
+  }
+  return out;
+}
+
+// Vincula una factura a la cuota de un abono. Marca la factura (suscripcionId+periodo)
+// y, si la cuota ABONO- del período no tiene cobros, la elimina para no duplicar deuda.
+// Devuelve { cuotaRemovida, cuotaConCobros }.
+async function _vincularAbonoFactura(tx, companyId, { facturaId, susId, periodo }) {
+  await tx.factura.update({ where: { id: facturaId }, data: { suscripcionId: susId, abonoPeriodo: periodo } });
+  const ref = _abonoRef(susId, periodo);
+  const rows = await tx.ctaCte.findMany({ where: { companyId, contactoTipo: 'cliente', referencia: ref }, select: { id: true, debe: true, haber: true } });
+  const haber = rows.reduce((a, r) => a + (r.haber || 0), 0);
+  if (rows.length && haber <= 0.01) {
+    await tx.ctaCte.deleteMany({ where: { companyId, contactoTipo: 'cliente', referencia: ref } });
+    return { cuotaRemovida: true, cuotaConCobros: false };
+  }
+  return { cuotaRemovida: false, cuotaConCobros: rows.length > 0 };
+}
+
 app.get('/api/suscripciones', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
   try {
     const periodo = String(req.query.periodo || _periodoActual());
@@ -1950,8 +2007,8 @@ app.get('/api/suscripciones', requireCompany, requirePermission('ventas:read'), 
     const cliIds = [...new Set(subs.map(s => s.clienteId))];
     const clientes = cliIds.length ? await prisma.cliente.findMany({ where: { id: { in: cliIds } }, select: { id: true, razonSocial: true, nombreFantasia: true, telefono: true, email: true } }) : [];
     const cliById = Object.fromEntries(clientes.map(c => [c.id, c]));
-    const estados = await _abonosEstado(req.companyId, subs.map(s => _abonoRef(s.id, periodo)));
-    const data = subs.map(s => ({ ...s, cliente: cliById[s.clienteId] || null, periodo, cuota: estados[_abonoRef(s.id, periodo)] || { generada: false } }));
+    const estados = await _abonosEstadoFull(req.companyId, subs, periodo);
+    const data = subs.map(s => ({ ...s, cliente: cliById[s.clienteId] || null, periodo, cuota: estados[s.id] || { generada: false } }));
     res.json({ ok: true, data, periodo });
   } catch (e) { next(e); }
 });
@@ -2030,6 +2087,59 @@ app.post('/api/suscripciones/generar-mes', requireCompany, requirePermission('ve
   } catch (e) { next(e); }
 });
 
+// Facturas del cliente del abono candidatas a vincular (para el período).
+// Trae las facturas del cliente (clase factura/ND, no anuladas) con saldo/estado y
+// si ya están vinculadas a algún abono, para el picker del frontend.
+app.get('/api/suscripciones/:id/facturas-cliente', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const sus = await prisma.suscripcion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!sus) return res.status(404).json({ ok: false, error: 'Suscripción no encontrada' });
+    const facs = await prisma.factura.findMany({
+      where: { companyId: req.companyId, clienteId: sus.clienteId, clase: { in: ['factura', 'nota_debito'] }, estado: { not: 'anulada' } },
+      orderBy: { fecha: 'desc' }, take: 60,
+      select: { id: true, tipo: true, clase: true, puntoVenta: true, numero: true, fecha: true, total: true, moneda: true, suscripcionId: true, abonoPeriodo: true },
+    });
+    const data = facs.map(f => ({
+      id: f.id, fecha: f.fecha, total: _round2(f.total), moneda: f.moneda,
+      numero: `${_labelComp(f.clase, f.tipo)} ${String(f.puntoVenta).padStart(4, '0')}-${String(f.numero).padStart(8, '0')}`,
+      vinculada: !!f.suscripcionId, suscripcionId: f.suscripcionId, abonoPeriodo: f.abonoPeriodo,
+    }));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Vincular una factura existente (p.ej. importada de ARCA) a la cuota del abono.
+// Marca la factura y saca la cuota ABONO- del período para que la deuda no se duplique.
+app.post('/api/suscripciones/:id/vincular-factura', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const d = z.object({ facturaId: z.string().min(1), periodo: z.string().min(1) }).parse(req.body);
+    const sus = await prisma.suscripcion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!sus) return res.status(404).json({ ok: false, error: 'Suscripción no encontrada' });
+    const fac = await prisma.factura.findFirst({ where: { id: d.facturaId, companyId: req.companyId } });
+    if (!fac) return res.status(404).json({ ok: false, error: 'Factura no encontrada' });
+    if (fac.clienteId && sus.clienteId && fac.clienteId !== sus.clienteId) {
+      return res.status(400).json({ ok: false, error: 'La factura es de otro cliente. Elegí una factura del mismo cliente del abono.' });
+    }
+    if (fac.suscripcionId && (fac.suscripcionId !== sus.id || fac.abonoPeriodo !== d.periodo)) {
+      return res.status(400).json({ ok: false, error: 'Esa factura ya está vinculada a otro abono/período.' });
+    }
+    const r = await prisma.$transaction(tx => _vincularAbonoFactura(tx, req.companyId, { facturaId: d.facturaId, susId: sus.id, periodo: d.periodo }));
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+
+// Desvincular la factura del abono: limpia el vínculo y regenera la cuota ABONO- del período.
+app.post('/api/suscripciones/:id/desvincular-factura', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const d = z.object({ periodo: z.string().min(1), regenerarCuota: z.boolean().optional() }).parse(req.body);
+    const sus = await prisma.suscripcion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!sus) return res.status(404).json({ ok: false, error: 'Suscripción no encontrada' });
+    await prisma.factura.updateMany({ where: { companyId: req.companyId, suscripcionId: sus.id, abonoPeriodo: d.periodo }, data: { suscripcionId: null, abonoPeriodo: null } });
+    if (d.regenerarCuota !== false) await _generarCuotaAbono(req.companyId, sus, d.periodo);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 // Tablero: MRR, activos y cobranza del periodo.
 app.get('/api/suscripciones/tablero', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
   try {
@@ -2037,11 +2147,17 @@ app.get('/api/suscripciones/tablero', requireCompany, requirePermission('ventas:
     const subs = await prisma.suscripcion.findMany({ where: { companyId: req.companyId } });
     const activos = subs.filter(s => s.activo);
     const mrr = activos.reduce((a, s) => a + (s.monto || 0), 0);
-    const estados = await _abonosEstado(req.companyId, activos.map(s => _abonoRef(s.id, periodo)));
+    const estados = await _abonosEstadoFull(req.companyId, activos, periodo);
     let cobrado = 0, pendiente = 0, generadas = 0, cobradas = 0;
     for (const s of activos) {
-      const e = estados[_abonoRef(s.id, periodo)];
-      if (e && e.generada) { generadas++; const cob = (s.monto || 0) - (e.saldo || 0); cobrado += cob; pendiente += Math.max(0, e.saldo || 0); if (e.cobrada) cobradas++; }
+      const e = estados[s.id];
+      if (e && e.generada) {
+        generadas++;
+        // Base del monto: si está facturada, el total real de la factura (en su moneda de vista); si no, el monto del abono.
+        const base = e.facturada ? (e.totalFactura || 0) : (s.monto || 0);
+        const cob = base - (e.saldo || 0);
+        cobrado += cob; pendiente += Math.max(0, e.saldo || 0); if (e.cobrada) cobradas++;
+      }
     }
     // Vencidos: cuotas de abono (cualquier mes) ya vencidas y con saldo pendiente.
     const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
@@ -5018,6 +5134,8 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       cae: z.string().optional(),
       caeVto: z.coerce.date().optional(),
       laborServicioId: z.string().nullable().optional(),   // si la factura sale de una labor a terceros, la vinculamos
+      suscripcionId: z.string().nullable().optional(),     // si la factura es la cuota de un abono, la vinculamos
+      abonoPeriodo: z.string().nullable().optional(),      // período del abono (YYYY-MM)
       items: z.array(itemFacSchema).min(1),
     });
     const input = schema.parse(req.body);
@@ -5119,6 +5237,11 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         if (lab && lab.cliente && lab.cliente.companyId === req.companyId) {
           await tx.laborAplicada.update({ where: { id: lab.id }, data: { facturaId: f.id } });
         }
+      }
+      // Si la factura es la cuota de un abono, la vinculamos y sacamos la cuota ABONO- duplicada.
+      if (_clase === 'factura' && input.suscripcionId && input.abonoPeriodo) {
+        const sus = await tx.suscripcion.findFirst({ where: { id: input.suscripcionId, companyId: req.companyId }, select: { id: true } });
+        if (sus) await _vincularAbonoFactura(tx, req.companyId, { facturaId: f.id, susId: input.suscripcionId, periodo: input.abonoPeriodo });
       }
       return f;
     });
