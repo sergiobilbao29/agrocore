@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.237.0';
+const AGROCORE_VERSION = '2.239.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1751,10 +1751,15 @@ app.get('/api/empresas/trial-leads', async (req, res, next) => {
     if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
     const soloVerificados = req.query.verificados === '1';
     const where = soloVerificados ? { verifiedAt: { not: null } } : {};
-    const leads = await prisma.trialSignup.findMany({
-      where, orderBy: [{ createdAt: 'desc' }],
-      select: { id: true, nombre: true, empresa: true, cuit: true, email: true, telefono: true, actividad: true, verifiedAt: true, companyId: true, createdAt: true, segEstado: true, segFecha: true, segNotas: true, provincia: true, ciudad: true, contactos: true, mantenimiento: true },
-    });
+    const selBase = { id: true, nombre: true, empresa: true, cuit: true, email: true, telefono: true, actividad: true, verifiedAt: true, companyId: true, createdAt: true, segEstado: true, segFecha: true, segNotas: true, provincia: true, ciudad: true, contactos: true, mantenimiento: true };
+    const selFull = { ...selBase, origen: true, segPrimerContacto: true, segUltimoContacto: true };
+    let leads;
+    try {
+      leads = await prisma.trialSignup.findMany({ where, orderBy: [{ createdAt: 'desc' }], select: selFull });
+    } catch (e0) {
+      // Instancia sin la migración v2.239 todavía: devolvemos lo que sí existe.
+      leads = await prisma.trialSignup.findMany({ where, orderBy: [{ createdAt: 'desc' }], select: selBase });
+    }
     // Nombre real de la empresa creada (por si la renombraron después).
     const ids = [...new Set(leads.map(l => l.companyId).filter(Boolean))];
     const comps = ids.length ? await prisma.company.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, plan: true, trialEndsAt: true } }) : [];
@@ -1783,6 +1788,10 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
       segEstado: z.string().nullable().optional(),
       segNotas: z.string().nullable().optional(),
       fechaAlta: z.coerce.date().nullable().optional(),
+      origen: z.string().nullable().optional(),
+      segFecha: z.coerce.date().nullable().optional(),
+      segPrimerContacto: z.coerce.date().nullable().optional(),
+      segUltimoContacto: z.coerce.date().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const _cont = Array.isArray(d.contactos) ? d.contactos.filter(c => (c.nombre || c.tel || c.email)) : null;
@@ -1797,6 +1806,8 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
       passwordHash: '', token, expiresAt: new Date(0),   // lead manual: no es un alta de prueba real
       verifiedAt: null, companyId: null,
       segEstado: d.segEstado || 'Nuevo', segNotas: d.segNotas || 'Cargado a mano',
+      origen: d.origen || null, segFecha: d.segFecha || null,
+      segPrimerContacto: d.segPrimerContacto || null, segUltimoContacto: d.segUltimoContacto || null,
       ...(d.fechaAlta ? { createdAt: d.fechaAlta } : {}),
     }});
     res.status(201).json({ ok: true, data: { id: row.id } });
@@ -1823,6 +1834,9 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
       contactos: z.array(_contactoSchema).nullable().optional(),
       mantenimiento: z.boolean().optional(),
       fechaAlta: z.coerce.date().nullable().optional(),
+      origen: z.string().max(40).nullable().optional(),
+      segPrimerContacto: z.coerce.date().nullable().optional(),
+      segUltimoContacto: z.coerce.date().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const cur = await prisma.trialSignup.findUnique({ where: { id: req.params.id }, select: { id: true } });
@@ -1831,6 +1845,9 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     if (d.segEstado !== undefined) data.segEstado = d.segEstado || null;
     if (d.segFecha !== undefined) data.segFecha = d.segFecha || null;
     if (d.segNotas !== undefined) data.segNotas = d.segNotas || null;
+    if (d.origen !== undefined) data.origen = d.origen || null;
+    if (d.segPrimerContacto !== undefined) data.segPrimerContacto = d.segPrimerContacto || null;
+    if (d.segUltimoContacto !== undefined) data.segUltimoContacto = d.segUltimoContacto || null;
     if (d.nombre !== undefined && d.nombre) data.nombre = String(d.nombre).trim();
     if (d.empresa !== undefined) data.empresa = (d.empresa || '').trim() || data.nombre || 'Prospecto';
     if (d.email !== undefined) data.email = (d.email == null ? '' : String(d.email)).trim(); // email es requerido en el modelo: nunca null (vacío -> '')
@@ -1845,9 +1862,9 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     try {
       row = await prisma.trialSignup.update({ where: { id: cur.id }, data });
     } catch (e1) {
-      const nuevos = ['provincia','ciudad','contactos','mantenimiento'];
+      const nuevos = ['provincia','ciudad','contactos','mantenimiento','origen','segPrimerContacto','segUltimoContacto'];
       const msg = String(e1 && e1.message || '');
-      if (/Unknown arg|Unknown field|provincia|ciudad|contactos|mantenimiento|column .* does not exist/i.test(msg)) {
+      if (/Unknown arg|Unknown field|provincia|ciudad|contactos|mantenimiento|origen|segPrimerContacto|segUltimoContacto|column .* does not exist/i.test(msg)) {
         const dataBase = { ...data }; nuevos.forEach(k => delete dataBase[k]);
         row = await prisma.trialSignup.update({ where: { id: cur.id }, data: dataBase });
         aviso = 'Se guardaron los datos principales. Provincia/Ciudad/Contactos/Mantenimiento requieren actualizar la base en esta instancia (corré Fix-Prisma).';

@@ -2853,6 +2853,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',
+      titulo:'📇 v2.239.0 — Leads: seguimiento más completo + exportación con todos los datos',
+      desc:'La ficha del lead ahora tiene un bloque de <b>seguimiento comercial</b>: <b>Contacto por</b> (cómo llegó: WhatsApp, feria, recomendación…), <b>1er contacto</b>, <b>último contacto</b> y <b>próximo contacto</b>, además del estado y las notas que ya estaban. Y al <b>Exportar</b> ahora salen <b>todos los datos</b> de cada lead (alta, contacto, empresa, CUIT, teléfono, email, actividad, provincia, ciudad, verificado, estado, contacto por, fechas de seguimiento, mantenimiento, otros contactos y notas) — ideal para tu planilla de seguimiento.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/09/2026',
+      titulo:'🌾 v2.238.0 — Importar varias liquidaciones de cereal juntas',
+      desc:'En <b>Liquidaciones de cereal → Importar de PDF</b> ahora podés elegir <b>varios PDF a la vez</b>. El sistema los lee todos y te los muestra <b>de a uno</b> para revisar y confirmar (arriba dice “1 de 3”, “2 de 3”…). Si <b>varias liquidaciones corresponden a la misma carta de porte</b>, importalas todas y <b>tildá esa CP en cada una</b> (el sistema permite que compartan la misma CP). Ojo: en el importador van solo las Liquidaciones de Granos; las <b>Órdenes de Pago</b> son los cobros y se registran aparte.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'21/09/2026',
       titulo:'🌾 v2.237.0 — Deducciones al editar: elegí la factura y se completa sola',
       desc:'Al <b>editar</b> la liquidación (lápiz), en la sección de deducciones ahora también funciona el <b>autocompletado</b>: elegís la factura de compra que te descontaron y trae solo el <b>importe</b> y el <b>concepto</b> (queda “Factura A 0001-…”, así se ve <b>cuál</b> factura es). Al reeditar, las deducciones cargadas se <b>conservan</b> con su factura marcada.' },
@@ -9984,6 +9990,13 @@ async function empLeadForm(id){
         <div><label class="label text-xs">Estado</label><select id="nl-est" class="input">${LEAD_ESTADOS.map(e=>`<option value="${e.v}" ${(l.segEstado||'Nuevo')===e.v?'selected':''}>${e.v}</option>`).join('')}</select></div>
         <div><label class="label text-xs">Fecha de alta</label><input id="nl-fecha" type="date" class="input" value="${l.createdAt?String(l.createdAt).slice(0,10):''}"/></div>
       </div>
+      <div class="grid grid-cols-2 gap-2 mt-2 p-2 rounded-lg bg-slate-50 border border-slate-200">
+        <div class="col-span-2 text-[11px] text-slate-500 font-semibold">📇 Seguimiento comercial</div>
+        <div><label class="label text-xs">Contacto por (origen)</label><select id="nl-origen" class="input">${['','WhatsApp','Prueba gratis','Feria/Evento','Conocido','Recomendación','Google','Otro'].map(o=>`<option value="${o}" ${(l.origen||'')===o?'selected':''}>${o||'—'}</option>`).join('')}</select></div>
+        <div><label class="label text-xs">Próximo contacto</label><input id="nl-prox" type="date" class="input" value="${l.segFecha?String(l.segFecha).slice(0,10):''}"/></div>
+        <div><label class="label text-xs">1er contacto</label><input id="nl-prim" type="date" class="input" value="${l.segPrimerContacto?String(l.segPrimerContacto).slice(0,10):''}"/></div>
+        <div><label class="label text-xs">Último contacto</label><input id="nl-ult" type="date" class="input" value="${l.segUltimoContacto?String(l.segUltimoContacto).slice(0,10):''}"/></div>
+      </div>
       <div class="mt-2 flex items-center gap-2"><input id="nl-mant" type="checkbox" ${l.mantenimiento?'checked':''}/><label for="nl-mant" class="text-sm">Contrató el <b>mantenimiento mensual</b> (activa alertas de facturación/cobranza)</label></div>
       <div class="mt-3">
         <div class="flex items-center justify-between mb-1"><span class="label text-xs">Otros contactos</span><button class="btn btn-secondary text-xs" onclick="empLeadAddContacto()">+ Contacto</button></div>
@@ -10012,6 +10025,8 @@ async function empLeadFormSave(id){
       cuit:val('nl-cuit')||null, email:val('nl-email')||null, actividad:val('nl-act')||null,
       provincia:val('nl-prov')||null, ciudad:val('nl-ciudad')||null, contactos,
       fechaAlta:val('nl-fecha')||null,
+      origen:val('nl-origen')||null, segFecha:val('nl-prox')||null,
+      segPrimerContacto:val('nl-prim')||null, segUltimoContacto:val('nl-ult')||null,
       mantenimiento:!!(g('nl-mant')&&g('nl-mant').checked), segEstado:val('nl-est')||'Nuevo', segNotas:val('nl-notas')||null };
     const r=await api('/api/empresas/trial-leads'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
     state._trialLeads=null;
@@ -10034,8 +10049,16 @@ async function empLeadConvertir(id){
 }
 function empTrialLeadsExport(){
   const leads=state._trialLeads||[]; const ACTIV={agricola:'Agrícola',ganadera:'Ganadera',mixta:'Mixta'};
-  let rows=[['Alta','Contacto','Empresa','CUIT','Telefono','Email','Actividad','Verificado','Estado','ProxContacto','Notas']];
-  leads.forEach(l=>rows.push([fmtFecha(l.createdAt),l.nombre||'',l.empresa||'',l.cuit||'',l.telefono||'',l.email||'',ACTIV[l.actividad]||l.actividad||'',l.verifiedAt?'Si':'No',l.segEstado||'',l.segFecha?String(l.segFecha).slice(0,10):'',l.segNotas||'']));
+  const d=x=>x?String(x).slice(0,10):'';
+  const conts=l=>Array.isArray(l.contactos)?l.contactos.map(c=>[c.nombre,c.tel,c.email].filter(Boolean).join(' ')).filter(Boolean).join(' | '):'';
+  let rows=[['Alta','Contacto','Empresa','CUIT','Telefono','Email','Actividad','Provincia','Ciudad','Verificado','Estado','Contacto por','1er contacto','Ult. contacto','Prox. contacto','Mantenimiento','Otros contactos','Notas']];
+  leads.forEach(l=>rows.push([
+    d(l.createdAt), l.nombre||'', l.empresa||'', l.cuit||'', l.telefono||'', l.email||'',
+    ACTIV[l.actividad]||l.actividad||'', l.provincia||'', l.ciudad||'',
+    l.verifiedAt?'Si':'No', l.segEstado||'', l.origen||'',
+    d(l.segPrimerContacto), d(l.segUltimoContacto), d(l.segFecha),
+    l.mantenimiento?'Si':'No', conts(l), l.segNotas||''
+  ]));
   const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(';')).join('\r\n');
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8;'})); a.download='AgroCore-Leads-Prueba.csv'; a.click();
 }
@@ -28704,22 +28727,31 @@ async function liqCerEliminar(id) {
 // ---- Importar Liquidación Primaria de Granos (PDF) ----
 function liqCerealImportar(){
   openModal({ title:'📥 Importar liquidación de cereal (PDF)', size:'max-w-lg',
-    body:`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mb-3">Subí el PDF de la <b>Liquidación Primaria de Granos</b>. Vas a poder revisar y corregir todo antes de confirmar. Al confirmar: descuenta el stock del depósito y genera la cuenta a cobrar del comprador.</div>
-      <input id="lqc-pdf" type="file" accept="application/pdf" class="input"/>
+    body:`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-3 mb-3">Subí el/los PDF de la <b>Liquidación Primaria de Granos</b>. Podés elegir <b>varios juntos</b> y los revisás de a uno. Al confirmar cada uno: descuenta el stock del depósito y genera la cuenta a cobrar del comprador.<br><span class="text-[11px]">💡 Si varias liquidaciones son de la misma carta de porte, importalas todas y tildá esa CP en cada una.</span></div>
+      <input id="lqc-pdf" type="file" accept="application/pdf" class="input" multiple/>
+      <div class="text-[11px] text-slate-500 mt-1">No incluyas las <b>Órdenes de Pago</b>: esas son los cobros, no se importan como liquidación.</div>
       <div id="lqc-pdf-msg" class="text-sm mt-2"></div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="liqCerealImportRun()">Leer PDF</button>` });
 }
 async function liqCerealImportRun(){
-  const f=document.getElementById('lqc-pdf')?.files?.[0]; const msg=document.getElementById('lqc-pdf-msg');
-  if(!f){ if(msg) msg.innerHTML='<span class="text-red-700">Elegí un PDF.</span>'; return; }
-  if(msg) msg.innerHTML='<span class="text-blue-700">⏳ Leyendo PDF…</span>';
-  try{
-    const fd=new FormData(); fd.append('archivo', f);
-    const r=await fetch(API_BASE+'/api/admin/parse-liquidacion-cereal-pdf', { method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body:fd });
-    const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||'Error '+r.status);
-    closeModal(); liqCerealPreview(j.data);
-  }catch(e){ if(msg) msg.innerHTML=`<span class="text-red-700">❌ ${esc(e.message)}</span>`; }
+  const files=[...(document.getElementById('lqc-pdf')?.files||[])]; const msg=document.getElementById('lqc-pdf-msg');
+  if(!files.length){ if(msg) msg.innerHTML='<span class="text-red-700">Elegí uno o más PDF.</span>'; return; }
+  const parsed=[]; const errores=[];
+  for(let i=0;i<files.length;i++){
+    if(msg) msg.innerHTML=`<span class="text-blue-700">⏳ Leyendo PDF ${i+1} de ${files.length}…</span>`;
+    try{
+      const fd=new FormData(); fd.append('archivo', files[i]);
+      const r=await fetch(API_BASE+'/api/admin/parse-liquidacion-cereal-pdf', { method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body:fd });
+      const j=await r.json(); if(!r.ok||!j.ok) throw new Error(j.error||'Error '+r.status);
+      parsed.push(j.data);
+    }catch(e){ errores.push(files[i].name+': '+(e.message||e)); }
+  }
+  if(!parsed.length){ if(msg) msg.innerHTML=`<span class="text-red-700">❌ No se pudo leer ningún PDF.<br>${esc(errores.join(' · '))}</span>`; return; }
+  if(errores.length) toast(`${errores.length} PDF no se pudieron leer (revisá que sean Liquidación de Granos)`,'warn');
+  // Cola: se revisa/importa de a uno; al confirmar uno se abre el siguiente.
+  state._lqcQueue=parsed; state._lqcQIdx=0;
+  closeModal(); liqCerealPreview(parsed[0]);
 }
 async function liqCerealPreview(p){
   let depos=[], prods=[], clientes=[], cpPend=[];
@@ -28737,7 +28769,8 @@ async function liqCerealPreview(p){
   const preCP = state._pgLinkEntrega || null;
   const _grano = String(p.granoNombre||'').toLowerCase().split(' ')[0]||'';
   const hoy=(p.fecha||new Date().toISOString().slice(0,10));
-  openModal({ title:'📥 Revisar liquidación antes de importar', size:'max-w-2xl',
+  const _qN=(state._lqcQueue&&state._lqcQueue.length>1)?` (${(state._lqcQIdx||0)+1} de ${state._lqcQueue.length})`:'';
+  openModal({ title:'📥 Revisar liquidación antes de importar'+_qN, size:'max-w-2xl',
     body:`
       <div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2 mb-3">Revisá y corregí lo que haga falta. El <b>Neto</b> es lo que se va a registrar como deuda a cobrar — verificalo contra el PDF (Importe Neto a Pagar).</div>
       <div class="grid grid-cols-2 gap-3 text-sm">
@@ -28798,7 +28831,14 @@ async function liqCerealImportConfirmar(){
   try{
     const r=await api('/api/liquidaciones-cereal/importar',{ method:'POST', body:JSON.stringify(body) });
     toast('Liquidación importada'+(r.clienteCreado?' · cliente creado':'')+' · stock descontado y deuda generada'+(vids.length?` · vinculada a ${vids.length} carta${vids.length>1?'s':''} de porte`:''),'success');
-    closeModal(); const volver=state._pgVolver; state._pgLinkEntrega=null; state._pgVolver=null;
+    closeModal();
+    // Si hay más liquidaciones en la cola (import múltiple), abrir la siguiente.
+    if(Array.isArray(state._lqcQueue) && (state._lqcQIdx||0) < state._lqcQueue.length-1){
+      state._lqcQIdx=(state._lqcQIdx||0)+1;
+      return liqCerealPreview(state._lqcQueue[state._lqcQIdx]);
+    }
+    state._lqcQueue=null; state._lqcQIdx=0;
+    const volver=state._pgVolver; state._pgLinkEntrega=null; state._pgVolver=null;
     if(volver) pages.posicionGranos(); else pages.liquidaciones();
   }catch(e){ toast(e.message,'error'); }
 }

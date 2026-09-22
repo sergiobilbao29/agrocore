@@ -2736,8 +2736,11 @@ model TrialSignup {
   companyId    String?
   // Seguimiento comercial (CRM interno del lead de prueba)
   segEstado    String?   // Nuevo | Contactado | Demo agendada | Demo hecha | En prueba | Cliente | Perdido
-  segFecha     DateTime? // próximo seguimiento
+  segFecha     DateTime? // próximo seguimiento (ProxContacto)
   segNotas     String?
+  origen       String?   // cómo llegó: WhatsApp | Prueba gratis | Feria/Evento | Conocido | Recomendación | Google | Otro
+  segPrimerContacto DateTime? // fecha del primer contacto
+  segUltimoContacto DateTime? // fecha del último contacto
   // Datos comerciales adicionales
   provincia    String?
   ciudad       String?
