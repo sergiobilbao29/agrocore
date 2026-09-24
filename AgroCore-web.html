@@ -2916,6 +2916,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'24/09/2026',
+      titulo:'🚚 v2.245.0 — Viajes: nuevos estados “Arribada” y “Volvió a destino”',
+      desc:'En <b>Viajes y fletes</b> sumamos dos estados para las cartas de porte: <b>🛬 Arribada</b> (el camión llegó a destino) y <b>↩️ Volvió a destino</b> (para las CP de <b>campo a campo</b> que se hacen para mover cereal y que <b>no descargan en ningún lado</b>). Ahora podés <b>cerrar</b> esa CP eligiendo el estado desde el formulario del viaje (campo Estado) o desde el filtro de la lista. Son marcas <b>manuales</b>: no generan ni mueven stock, y si la CP tenía stock cargado, al pasarla a “Volvió a destino” ese movimiento se revierte solo.' },
     { tag:'Nuevo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/09/2026',
       titulo:'🎥 v2.244.0 — Videos tutoriales en la Ayuda',
       desc:'Sumamos <b>videos tutoriales</b> que muestran el sistema funcionando. Entrá a <b>Ayuda y manual</b> (arriba de todo en el menú) y arriba de los instructivos vas a ver la sección <b>“Videos tutoriales”</b>: <b>🐎 Gestión de un Haras / Caballos</b> (un caballo de punta a punta: ficha, historial, costos, prestar/devolver y venta con margen) y <b>🐄 Manejo integral de la hacienda</b> (rodeos, alimentación, guías y costo por kilo con la ganancia). También quedaron en el <b>manual</b> y en la <b>web</b>, y el <b>asistente 🤖</b> ya los recomienda cuando preguntás por caballos/haras o por hacienda.' },
@@ -20016,12 +20019,14 @@ async function fcDel(id) {
  * ========================================================= */
 const VIAJE_TIPOS_CAMION = ['Chasis','Semi','Bitren','Acoplado simple','Acoplado doble','Jaula','Tolva','Cisterna'];
 const VIAJE_ESTADOS = {
-  pendiente:  { label: 'Pendiente',  cls: 'badge-gray' },
-  cargado:    { label: 'Cargado',    cls: 'badge-blue' },
-  descargado: { label: 'Descargado', cls: 'badge-yellow' },
-  facturado:  { label: 'Facturado',  cls: 'badge-blue' },
-  pagado:     { label: 'Pagado',     cls: 'badge-green' },
-  anulada:    { label: '🚫 Anulada', cls: 'badge-red' },
+  pendiente:      { label: 'Pendiente',        cls: 'badge-gray' },
+  cargado:        { label: 'Cargado',          cls: 'badge-blue' },
+  arribada:       { label: '🛬 Arribada',      cls: 'badge-yellow' },
+  descargado:     { label: 'Descargado',       cls: 'badge-yellow' },
+  volvio_destino: { label: '↩️ Volvió a destino', cls: 'badge-gray' },
+  facturado:      { label: 'Facturado',        cls: 'badge-blue' },
+  pagado:         { label: 'Pagado',           cls: 'badge-green' },
+  anulada:        { label: '🚫 Anulada',       cls: 'badge-red' },
 };
 // Flete total = kg de descarga (o cargados si no hay descarga) × tarifa ($/tonelada).
 // Si hay un flete cargado a mano en el viaje, se respeta ese valor.
@@ -20646,7 +20651,7 @@ async function viajeForm(id=null) {
       <!-- 7) OBSERVACIONES -->
       <h4 class="font-semibold text-slate-700 text-sm mb-1.5">Observaciones</h4>
       <div class="grid grid-cols-1 gap-3">
-        <div class="text-xs text-slate-500">El estado se sugiere solo: <i>cargado</i> al ingresar peso neto, <i>descargado</i> al ingresar neto destino, <i>facturado</i> al vincular la factura, <i>pagado</i> al saldar la cuenta del transporte. Podés forzarlo con el campo Estado de arriba.</div>
+        <div class="text-xs text-slate-500">El estado se sugiere solo: <i>cargado</i> al ingresar peso neto, <i>descargado</i> al ingresar neto destino, <i>facturado</i> al vincular la factura, <i>pagado</i> al saldar la cuenta del transporte. Podés forzarlo con el campo Estado de arriba. <b>🛬 Arribada</b> (llegó a destino) y <b>↩️ Volvió a destino</b> (CP de campo a campo que no descargó en ningún lado) son marcas manuales para cerrar la carta de porte; no mueven stock.</div>
         <div><textarea id="f-obs" class="input" rows="2" placeholder="Observaciones...">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>

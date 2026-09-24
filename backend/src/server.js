@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.244.0';
+const AGROCORE_VERSION = '2.245.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6726,7 +6726,7 @@ const viajeSchema = z.object({
   varios: z.number().nullable().optional(),
   total: z.number().nullable().optional(),
   flete: z.number().nullable().optional(),
-  estado: z.enum(['pendiente','cargado','descargado','facturado','pagado','anulada']).optional(),
+  estado: z.enum(['pendiente','cargado','arribada','descargado','volvio_destino','facturado','pagado','anulada']).optional(),
   facturaCompraId: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
   // Destino del cereal (registrar a dónde va para luego cargar la liquidación)
@@ -6772,6 +6772,9 @@ const viajeSchema = z.object({
 function deriveEstadoViaje(d, prev) {
   if (prev && prev.estado === 'anulada') return 'anulada';   // una CP anulada no se re-activa al editar
   if (prev && prev.estado === 'pagado') return 'pagado';
+  // "arribada" y "volvió a destino" son marcas MANUALES (CP campo a campo que no
+  // descargó, o que llegó a destino sin registrar la descarga): no se recalculan solas.
+  if (prev && (prev.estado === 'arribada' || prev.estado === 'volvio_destino')) return prev.estado;
   if (d.facturaCompraId)                return 'facturado';
   if (Number(d.kgDescarga || 0) > 0)    return 'descargado';
   if (Number(d.cantidad || 0) > 0)      return 'cargado';
@@ -7220,7 +7223,7 @@ app.post('/api/viajes/:id/reactivar', requireCompany, requirePermission('logisti
 // hook automático del cobro/pago).
 app.post('/api/viajes/:id/estado', requireCompany, requirePermission('logistica:update'), async (req, res, next) => {
   try {
-    const { estado } = z.object({ estado: z.enum(['pendiente','cargado','descargado','facturado','pagado','anulada']) }).parse(req.body);
+    const { estado } = z.object({ estado: z.enum(['pendiente','cargado','arribada','descargado','volvio_destino','facturado','pagado','anulada']) }).parse(req.body);
     const existing = await prisma.viaje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const row = await prisma.viaje.update({ where: { id: req.params.id }, data: { estado } });
