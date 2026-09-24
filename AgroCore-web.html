@@ -2916,6 +2916,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-red-100 text-red-800 border-red-300', fecha:'24/09/2026',
+      titulo:'🛡️ v2.248.0 — No se pueden cargar CP duplicadas + fix de la fecha al importar',
+      desc:'Dos arreglos importantes en <b>Viajes / cartas de porte</b>: <b>(1)</b> ahora el sistema <b>bloquea cargar una carta de porte repetida</b> — si el <b>CTG (o N° de CP)</b> ya existe en <b>esta empresa o en cualquier otra del grupo</b>, no la deja crear/importar y avisa en qué empresa ya está (evita duplicar el stock y lo declarado). <b>(2)</b> Al <b>importar la CP desde el PDF de ARCA</b>, la <b>fecha del viaje</b> ahora toma la <b>fecha de PARTIDA</b> real de la carta de porte (antes agarraba por error el sello de impresión del PDF y las cargaba con la fecha del día).' },
+    { tag:'Mejora', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/09/2026',
+      titulo:'🔗 v2.247.0 — Liquidaciones: ver/desvincular cartas de porte + control de CP duplicadas entre empresas',
+      desc:'Tres mejoras para el control de cereal: <b>(1)</b> en <b>Liquidaciones de cereal</b> ahora ves <b>a qué cartas de porte está vinculada</b> cada liquidación (🔗 CP …) y, si una quedó marcada como liquidada/cobrada por error, la podés <b>Desvincular</b> con el botón 🔗 (la CP vuelve a “Sin liquidar” y la liquidación queda igual). <b>(2)</b> En <b>Viajes</b> sumamos el botón <b>“⚠️ CP duplicadas entre empresas”</b>: detecta la <b>misma carta de porte / CTG cargada en más de una empresa</b> (lo que inflaba el stock y lo declarado), listando en qué empresas está para que borres la que no corresponde. <b>(3)</b> Recordá: la misma CP no debe cargarse en dos empresas — revisá con ese botón antes de cerrar controles de stock o IVA.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/09/2026',
       titulo:'🤝 v2.246.0 — Sociedades: qué socio aportó cada insumo/labor + aportes reales por socio',
       desc:'En <b>Sociedades / UTE</b>, al <b>cargar (o editar) un insumo o una labor</b> desde la solapa de la sociedad, ahora podés indicar <b>qué socio lo aportó</b> (“Socio que lo aportó”). En el <b>detalle del campo</b> se ve una etiqueta 👤 con el socio de cada movimiento. Y en la <b>Liquidación</b> sumamos un panel nuevo <b>“🧮 Aportes reales por socio”</b>: suma automáticamente lo que cargó cada socio, lo compara con <b>lo que le correspondería poner según su %</b> y muestra la <b>diferencia</b> (verde = puso de más, rojo = puso de menos). Así la cuenta se hace con lo que realmente aportó cada uno. También sale en el <b>PDF/impresión</b> de la liquidación.' },
@@ -20326,6 +20332,7 @@ pages.viajes = async function() {
         <button class="btn btn-secondary" onclick="viajesExportarExcel()">📥 Exportar Excel</button>
         <button class="btn btn-secondary" onclick="solicitarCamionForm()">🚛 Solicitar Camión Logística</button>
         <button class="btn btn-secondary" onclick="verificarCtgsForm()" title="Consultar el estado de los CTGs en ARCA y completar los kg descargados">🔍 Verificar CTGs en ARCA</button>
+        <button class="btn btn-secondary text-amber-700" onclick="viajesDuplicadosGrupo()" title="Detectar la misma carta de porte cargada en más de una empresa (evita duplicar stock)">⚠️ CP duplicadas entre empresas</button>
         ${canC?`<label class="btn btn-secondary cursor-pointer" title="Importar una CP desde PDF de ARCA y crear el viaje completo">
           📥 Importar CP
           <input type="file" accept="application/pdf" style="display:none" onchange="viajeImportarCP(this)"/>
@@ -20997,6 +21004,21 @@ async function viajesBorrarTodas() {
     toast(`Se borraron ${r.deleted ?? cuantos} cartas de porte / viajes`,'success');
     delete state.cache.viajes; pages.viajes();
   } catch (e) { toast(e.message,'error'); }
+}
+// Detectar la misma carta de porte / CTG cargada en MÁS DE UNA empresa del grupo.
+async function viajesDuplicadosGrupo() {
+  let dups; try { dups = (await api('/api/viajes/ctgs-duplicados-grupo')).data || []; }
+  catch(e){ return toast(e.message,'error'); }
+  const body = !dups.length
+    ? `<div class="text-center text-emerald-700 py-6">✅ No hay cartas de porte cargadas en más de una empresa. Todo en orden.</div>`
+    : `<p class="text-xs text-slate-600 mb-3">Estas cartas de porte están cargadas en <b>más de una empresa</b>. La misma CP no debería figurar en dos empresas: dejá la que corresponde y <b>borrá la de la empresa equivocada</b> (desde Viajes de esa empresa, con el botón 🚫/🗑️). Así el stock y lo declarado en IVA no se duplican.</p>
+      ${dups.map(d=>`<div class="border border-amber-200 rounded-lg p-2 mb-2">
+        <div class="text-sm font-semibold text-slate-800">CP ${esc(d.cartaPorte||'—')} · CTG ${esc(d.ctg||'—')}</div>
+        <table class="w-full text-xs mt-1"><thead class="text-slate-500"><tr><th class="text-left">Empresa</th><th class="text-left">Fecha</th><th class="text-left">Producto</th><th class="text-right">Kg</th><th class="text-left">Estado</th></tr></thead>
+        <tbody>${d.ocurrencias.map(o=>`<tr><td class="font-medium">${esc(o.empresa)}</td><td>${fmtDate(o.fecha)}</td><td>${esc(o.producto)}</td><td class="text-right">${fmtN(o.kg)}</td><td>${esc(o.estado)}</td></tr>`).join('')}</tbody></table>
+      </div>`).join('')}`;
+  openModal({ title:`⚠️ Cartas de porte en más de una empresa${dups.length?` (${dups.length})`:''}`, size:'max-w-2xl',
+    body, footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
 }
 async function viajeMarcarPagado(id) {
   const v = (state.cache.viajes||[]).find(x=>x.id===id) || {};
@@ -28857,7 +28879,7 @@ function liqCerRender() {
   tb.innerHTML = fil.map(r => `
     <tr class="table-row" onclick='liqVer(${JSON.stringify(r.id)})' style="cursor:pointer">
       <td>${fmtDate(r.fecha)}</td>
-      <td>${esc(r.numero||'—')}</td>
+      <td>${esc(r.numero||'—')}${(r.cartasPorte&&r.cartasPorte.length)?`<div class="text-[11px] text-emerald-700" title="Cartas de porte vinculadas">🔗 CP ${r.cartasPorte.map(c=>esc(c.cartaPorte||c.ctg||'?')).join(', ')}</div>`:''}</td>
       <td>${esc(r.deposito?.nombre||'—')}</td>
       <td>${esc(state._liqCerCli[r.clienteId]||'—')}</td>
       <td class="text-right">${fmtN(r.kilosNetos)}</td>
@@ -28865,10 +28887,31 @@ function liqCerRender() {
       <td class="text-right font-bold text-green-700">${fmt$(r.neto)}${(r.deducido>0)?`<div class="text-[11px] text-slate-400 font-normal">− ${fmt$(r.deducido)} deduc.</div>`:''}</td>
       <td>${r.estadoCobro==='cobrado'?'<span class="badge badge-green">Cobrada</span>':(r.estadoCobro==='parcial'?`<span class="badge badge-amber">Parcial</span><div class="text-[11px] text-slate-400">Saldo ${fmt$(r.saldoCobro||0)}</div>`:'<span class="badge badge-yellow">Pendiente</span>')}</td>
       <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">
+        ${(r.cartasPorte&&r.cartasPorte.length&&canU)?`<button class="btn btn-ghost text-xs" title="Ver / desvincular cartas de porte" onclick='liqCerCPs(${JSON.stringify(r.id)})'>🔗</button>`:''}
         ${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='liqCerEditar(${JSON.stringify(r.id)})'>✏️</button>`:''}
         ${canD?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='liqCerEliminar(${JSON.stringify(r.id)})'>🗑️</button>`:''}
       </td>
     </tr>`).join('') || `<tr><td colspan="9" class="text-center text-slate-400 py-8">Sin liquidaciones que coincidan con el filtro.</td></tr>`;
+}
+// Ver las cartas de porte vinculadas a una liquidación y poder DESVINCULAR la que
+// esté mal (queda "Sin liquidar" de nuevo, sin borrar la liquidación).
+function liqCerCPs(id) {
+  const r = (state._liqCerRows||[]).find(x=>x.id===id); if(!r) return;
+  const cps = r.cartasPorte||[];
+  const rows = cps.map(c=>`<tr class="table-row"><td>${esc(c.cartaPorte||'—')}</td><td class="text-xs text-slate-500">${esc(c.ctg||'—')}</td><td class="text-right">${fmtN(c.kg||0)} kg</td>
+    <td class="text-right"><button class="btn btn-ghost text-xs text-red-600" onclick='liqCerDesvincular(${JSON.stringify(id)},${JSON.stringify(c.id)})'>Desvincular</button></td></tr>`).join('')||`<tr><td colspan="4" class="text-center text-slate-400 py-3">Sin cartas de porte vinculadas.</td></tr>`;
+  openModal({ title:'🔗 Cartas de porte de la liquidación '+esc(r.numero||''), size:'max-w-lg',
+    body:`<p class="text-xs text-slate-500 mb-2">Estas son las CP a las que se aplicó esta liquidación. Si alguna quedó vinculada por error (aparece como liquidada/cobrada sin corresponder), tocá <b>Desvincular</b>: la CP vuelve a <b>Sin liquidar</b> y la liquidación queda igual.</p>
+      <table class="data text-sm"><thead><tr><th>Carta de porte</th><th>CTG</th><th class="text-right">Kg</th><th></th></tr></thead><tbody>${rows}</tbody></table>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+async function liqCerDesvincular(id, viajeId) {
+  if(!confirm('¿Desvincular esta carta de porte de la liquidación? La CP vuelve a quedar Sin liquidar.')) return;
+  try { await api('/api/liquidaciones-cereal/'+id+'/desvincular-viaje',{method:'POST',body:JSON.stringify({viajeId})});
+    toast('Carta de porte desvinculada','success'); closeModal();
+    try{ const lq=await api('/api/liquidaciones-cereal'); state._liqCerRows=lq.data||[]; liqCerRender(); }catch{}
+    delete state.cache.viajes;
+  } catch(e){ toast(e.message,'error'); }
 }
 async function liqCerEditar(id) {
   try { const r = await api('/api/liquidaciones-cereal/'+id); liqForm(r.data); }

@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.246.0';
+const AGROCORE_VERSION = '2.248.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7172,10 +7172,38 @@ function _chkOrigenDepositos(v) {
   return null;
 }
 
+// Chequea si ya existe una carta de porte con el mismo CTG (o N° de CP) en CUALQUIER
+// empresa del grupo (no anulada). Evita cargar la misma CP dos veces o en otra empresa.
+async function _ctgDuplicadoEnGrupo(req, ctg, cartaPorte, excludeId) {
+  const norm = s => String(s || '').replace(/\D/g, '');
+  const nctg = norm(ctg), ncp = norm(cartaPorte);
+  if (!nctg && !ncp) return null;
+  const grupo = _grupoCompanyIds(req);
+  const cand = await prisma.viaje.findMany({
+    where: { companyId: { in: grupo }, estado: { not: 'anulada' }, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    select: { id: true, companyId: true, ctg: true, cartaPorte: true },
+  });
+  const cn = {}; for (const uc of (req.user?.userCompanies || [])) cn[uc.companyId] = uc.company?.name || '';
+  for (const v of cand) {
+    const vctg = norm(v.ctg), vcp = norm(v.cartaPorte);
+    if ((nctg && vctg && vctg === nctg) || (ncp && vcp && vcp === ncp)) {
+      return { viajeId: v.id, empresa: cn[v.companyId] || 'otra empresa', misma: v.companyId === req.companyId };
+    }
+  }
+  return null;
+}
+
 app.post('/api/viajes', requireCompany, requirePermission('logistica:create'), async (req, res, next) => {
   try {
     const d = viajeSchema.parse(req.body);
     { const eD = _chkOrigenDepositos(d); if (eD) return res.status(400).json({ ok: false, error: eD }); }
+    // Control de duplicados: misma CP/CTG ya cargada (en esta u otra empresa del grupo).
+    if (!req.body.forzarDuplicado && (d.ctg || d.cartaPorte)) {
+      const dup = await _ctgDuplicadoEnGrupo(req, d.ctg, d.cartaPorte);
+      if (dup) return res.status(409).json({ ok: false, code: 'CP_DUPLICADA',
+        error: `Ya existe una carta de porte con ese ${d.ctg ? 'CTG' : 'N°'} en ${dup.misma ? 'ESTA empresa' : ('la empresa "' + dup.empresa + '"')}. No se cargó para no duplicar el stock. Si igual querés cargarla, revisá que no sea la misma CP.`,
+        dup });
+    }
     if (d.facturaCompraId) {
       const f = await prisma.facturaCompra.findFirst({ where: { id: d.facturaCompraId, companyId: req.companyId } });
       if (!f) return res.status(400).json({ ok: false, error: 'Factura de compra no válida' });
@@ -9914,6 +9942,24 @@ async function _liqCerealAplicarSaldos(companyId, liqs) {
   return liqs;
 }
 
+// Adjunta a cada liquidación las CARTAS DE PORTE (viajes) vinculadas, para poder
+// ver/controlar a qué CP se aplicó cada liquidación y detectar vínculos erróneos.
+async function _liqCerealCartasPorte(companyId, liqs) {
+  if (!liqs.length) return liqs;
+  const ids = liqs.map(l => l.id);
+  const links = await prisma.viajeLiquidacion.findMany({ where: { companyId, liquidacionId: { in: ids } } }).catch(() => []);
+  // También el vínculo simple viaje.liquidacionCerealId (legacy / 1 a 1).
+  const directos = await prisma.viaje.findMany({ where: { companyId, liquidacionCerealId: { in: ids } }, select: { id: true, cartaPorte: true, ctg: true, liquidacionCerealId: true, kgDescarga: true, kgNeto: true, cantidad: true } }).catch(() => []);
+  const viajeIds = [...new Set([...links.map(x => x.viajeId), ...directos.map(x => x.id)])];
+  const viajes = viajeIds.length ? await prisma.viaje.findMany({ where: { companyId, id: { in: viajeIds } }, select: { id: true, cartaPorte: true, ctg: true, kgDescarga: true, kgNeto: true, cantidad: true } }) : [];
+  const vById = Object.fromEntries(viajes.map(v => [v.id, v]));
+  const porLiq = {}; for (const l of liqs) porLiq[l.id] = new Map();
+  for (const lk of links) { const v = vById[lk.viajeId]; if (v && porLiq[lk.liquidacionId]) porLiq[lk.liquidacionId].set(v.id, { id: v.id, cartaPorte: v.cartaPorte || null, ctg: v.ctg || null, kg: Number(lk.kilosAplicados || v.kgDescarga || v.cantidad || 0) }); }
+  for (const v of directos) { if (porLiq[v.liquidacionCerealId]) porLiq[v.liquidacionCerealId].set(v.id, { id: v.id, cartaPorte: v.cartaPorte || null, ctg: v.ctg || null, kg: Number(v.kgDescarga || v.cantidad || 0) }); }
+  for (const l of liqs) l.cartasPorte = Array.from((porLiq[l.id] || new Map()).values());
+  return liqs;
+}
+
 app.get('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
   try {
     const data = await prisma.liquidacionCereal.findMany({
@@ -9922,7 +9968,64 @@ app.get('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:r
       include: { deposito: true, conceptos: true, deducciones: true },
     });
     await _liqCerealAplicarSaldos(req.companyId, data);
+    await _liqCerealCartasPorte(req.companyId, data);
     res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// CTGs / Cartas de porte DUPLICADAS entre empresas del grupo: la misma CP cargada en
+// más de una empresa (o más de una vez). Sirve para controlar stock y lo declarado en IVA.
+app.get('/api/viajes/ctgs-duplicados-grupo', requireCompany, requirePermission('logistica:read'), async (req, res, next) => {
+  try {
+    const grupo = _grupoCompanyIds(req);
+    const cn = {}; for (const uc of (req.user?.userCompanies || [])) cn[uc.companyId] = uc.company?.name || '';
+    const viajes = await prisma.viaje.findMany({
+      where: { companyId: { in: grupo }, estado: { not: 'anulada' } },
+      select: { id: true, companyId: true, ctg: true, cartaPorte: true, fecha: true, producto: true, kgDescarga: true, kgNeto: true, cantidad: true, estado: true, origen: true, destino: true },
+      orderBy: { fecha: 'desc' },
+    });
+    // Clave = CTG (si hay) o, en su defecto, N° de carta de porte. Normalizada.
+    const norm = (s) => String(s || '').replace(/\D/g, '');
+    const grupos = {};
+    for (const v of viajes) {
+      const key = norm(v.ctg) || ('CP' + norm(v.cartaPorte));
+      if (key === 'CP' || key === '') continue;
+      (grupos[key] = grupos[key] || []).push(v);
+    }
+    const dups = [];
+    for (const [key, arr] of Object.entries(grupos)) {
+      const empresas = new Set(arr.map(v => v.companyId));
+      if (arr.length > 1 && empresas.size > 1) {   // misma CP en 2+ empresas
+        dups.push({
+          clave: key,
+          ctg: arr[0].ctg || null,
+          cartaPorte: arr[0].cartaPorte || null,
+          ocurrencias: arr.map(v => ({
+            viajeId: v.id, empresa: cn[v.companyId] || '—', companyId: v.companyId,
+            fecha: v.fecha, producto: v.producto || '', estado: v.estado || '',
+            kg: Number(v.kgDescarga || v.kgNeto || v.cantidad || 0),
+            origen: v.origen || '', destino: v.destino || '',
+          })),
+        });
+      }
+    }
+    dups.sort((a, b) => new Date(b.ocurrencias[0].fecha) - new Date(a.ocurrencias[0].fecha));
+    res.json({ ok: true, data: dups });
+  } catch (e) { next(e); }
+});
+
+// Desvincular UNA carta de porte (viaje) de una liquidación (sin borrar la liquidación).
+// Sirve para corregir cuando una CP quedó marcada como liquidada/cobrada por error.
+app.post('/api/liquidaciones-cereal/:id/desvincular-viaje', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
+  try {
+    const liq = await prisma.liquidacionCereal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!liq) return res.status(404).json({ ok: false, error: 'Liquidación no encontrada' });
+    const { viajeId } = z.object({ viajeId: z.string() }).parse(req.body);
+    await prisma.$transaction(async (tx) => {
+      await tx.viajeLiquidacion.deleteMany({ where: { companyId: req.companyId, liquidacionId: liq.id, viajeId } }).catch(() => {});
+      await tx.viaje.updateMany({ where: { companyId: req.companyId, id: viajeId, liquidacionCerealId: liq.id }, data: { liquidacionCerealId: null } }).catch(() => {});
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
@@ -9934,6 +10037,7 @@ app.get('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
     });
     if (!data) return res.status(404).json({ ok: false, error: 'No encontrada' });
     await _liqCerealAplicarSaldos(req.companyId, [data]);
+    await _liqCerealCartasPorte(req.companyId, [data]);
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
@@ -22931,7 +23035,10 @@ function _parsearTextoCPE(txt) {
     if (mDom1) dominioCamion = mDom1[1].replace(/\s+/g,'');
   }
 
-  const partidaFecha = get(/(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?)/);
+  // Fecha de PARTIDA: anclada a la etiqueta "Partida" (evita agarrar el sello de
+  // impresión/consulta "dd/mm/aaaa hh:mm" que aparece en el encabezado del PDF).
+  let partidaFecha = get(/Partida\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?)/i);
+  if (!partidaFecha) partidaFecha = get(/Partida\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
   let kmsARecorrer = get(/Kms\.\s*a\s*recorrer\s*:?\s*(\d+)/i);
   if (!kmsARecorrer) {
     const m2 = txt.match(/Partida[\s\S]{0,200}?\n(\d{1,4})\n+(\d+)\s*\n+Tarifa/);
@@ -23001,12 +23108,16 @@ app.post('/api/arca/cpe/importar-como-viaje', authMiddleware, requireCompany, re
     const data = await pdfParse(req.file.buffer);
     const txt = data.text || '';
     const d = _parsearTextoCPE(txt);
-    // Fecha del viaje desde partida
-    let fechaIso = new Date();
-    if (d.partidaFecha) {
-      const mm = d.partidaFecha.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{2}):(\d{2})/);
-      if (mm) fechaIso = new Date(`${mm[3]}-${mm[2].padStart(2,'0')}-${mm[1].padStart(2,'0')}T${mm[4]}:${mm[5]}:00`);
+    // Control de duplicados: la misma CP/CTG ya cargada en esta u otra empresa del grupo.
+    if (!(req.query.forzar === '1' || req.body?.forzarDuplicado)) {
+      const dup = await _ctgDuplicadoEnGrupo(req, d.cpeNroCtg, d.cpeNroComprobante);
+      if (dup) return res.status(409).json({ ok: false, code: 'CP_DUPLICADA',
+        error: `Esta carta de porte (CTG ${d.cpeNroCtg || d.cpeNroComprobante || '?'}) ya está cargada en ${dup.misma ? 'ESTA empresa' : ('la empresa "' + dup.empresa + '"')}. No se importó para no duplicar el stock.`,
+        dup });
     }
+    // Fecha del viaje: PARTIDA de la CP; si no, la fecha de emisión de la CP; nunca "hoy".
+    const _dmy = (s) => { const m = String(s||'').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/); return m ? new Date(`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}T${(m[4]||'00')}:${(m[5]||'00')}:00`) : null; };
+    let fechaIso = _dmy(d.partidaFecha) || _dmy(d.fechaEmisionTxt) || new Date();
     const v = await prisma.viaje.create({ data: {
       companyId: req.companyId,
       fecha: fechaIso,
@@ -23032,7 +23143,7 @@ app.post('/api/arca/cpe/importar-como-viaje', authMiddleware, requireCompany, re
       observaciones: 'Importado desde PDF de ARCA' + (d.observaciones?` · ${d.observaciones}`:''),
       cpeNroCtg: d.cpeNroCtg, cpeNroComprobante: d.cpeNroComprobante,
       cpeEstado: 'emitida', cpeTipo: 'automotor',
-      cpeFechaEmision: new Date(),
+      cpeFechaEmision: _dmy(d.fechaEmisionTxt) || new Date(),
       cpeOrigenCuit: d.titularCuit || null,
       cpeOrigenRenspa: d.origenRenspa || null,
       cpeDestinoCuit: d.destinoCuit || null,
