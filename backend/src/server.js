@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.243.0';
+const AGROCORE_VERSION = '2.244.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12619,7 +12619,8 @@ const _AYUDA_KB = [
       'Entrá a Animales, elegí el campo y tocá "Nuevo movimiento".',
       'Elegí el tipo (nacimiento, muerte, compra, venta, cambio de categoría) y la categoría del animal.',
       'Cargá la cantidad de cabezas (y kg/precio si es compra).',
-      'Guardá: actualiza el stock ganadero real y el de SENASA.'],
+      'Guardá: actualiza el stock ganadero real y el de SENASA.',
+      '🎥 Video: mirá "Manejo integral de la hacienda" (rodeos, alimentación, costo por kg y margen) → https://youtu.be/xwzjHYBQuH4'],
     atajo:{ page:'hacienda', label:'Abrir Animales' },
     ejemplo:'nacieron 5 terneros en Montenegro' },
   { id:'liq_hacienda', terms:['liquidacion de hacienda','liquidacion hacienda','liquidacion del frigorifico','venta de hacienda','remate','consignatario','liquidacion de venta de animales'],
@@ -12737,7 +12738,16 @@ const _AYUDA_KB = [
     pasos:[
       'Arriba de todo en el menú tenés "Ayuda y manual" (visible para todos).',
       'Ahí abrís el Manual de usuario completo en una pestaña nueva.',
-      'Y descargás los instructivos de procesos en PDF (inicio rápido, pagos y cobros, cheques, sueldos, compensación de cuentas, circuito de cereal, contratos, liquidación, forrajera, el manejo integral de la hacienda —rodeos, alimentación, guías, liquidaciones y costo por kg— y más), agrupados por tema.'],
+      'Y descargás los instructivos de procesos en PDF (inicio rápido, pagos y cobros, cheques, sueldos, compensación de cuentas, circuito de cereal, contratos, liquidación, forrajera, el manejo integral de la hacienda —rodeos, alimentación, guías, liquidaciones y costo por kg— y más), agrupados por tema.',
+      'También hay Videos tutoriales (se abren en YouTube): "Gestión de un Haras / Caballos" (https://youtu.be/SUfvevn2j-M) y "Manejo integral de la hacienda" (https://youtu.be/xwzjHYBQuH4).'],
+    atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
+  { id:'ayuda_videos', terms:['video','videos','video tutorial','videos tutoriales','tutorial en video','youtube','ver un video','hay videos','video de ayuda','viedo','vídeo'],
+    titulo:'Videos tutoriales (YouTube)',
+    pasos:[
+      'Tenemos videos que muestran el sistema funcionando, en la sección "Ayuda y manual" (arriba de todo en el menú).',
+      '🐎 Gestión de un Haras / Caballos: un caballo de punta a punta (ficha, historial de sanidad/doma/pesajes, costos, prestar/devolver y venta con margen) → https://youtu.be/SUfvevn2j-M',
+      '🐄 Manejo integral de la hacienda: rodeos, alimentación con descuento de stock, gastos, compras/ventas, guías y costo por kilo con la ganancia → https://youtu.be/xwzjHYBQuH4',
+      'Se abren en YouTube; podés verlos desde la compu o el celular.'],
     atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
   { id:'mensajes', terms:['mensaje','chat','grupo','grupos','mensajeria','avisos','notificaciones','asistente','equipo','comunicar'],
     titulo:'Mensajes, grupos y avisos',
@@ -12991,7 +13001,8 @@ const _AYUDA_KB = [
       'PRESTAR/DEVOLVER: si el caballo sale del campo de forma provisoria, tocá "🤝 Prestar" (a quién, fecha y vuelta estimada → agenda un recordatorio); sale del stock pero puede volver. Cuando vuelve, tocá "↩️ Devolver".',
       'Cuando lo vendés, tocá "💰 Vender": ponés el precio y el sistema calcula el margen real (precio − costo acumulado) y lo pasa a estado Vendido (queda a quién se vendió, filtrable).',
       'TERCEROS: si el animal es de un tercero (pensión/hotelería), marcalo como externo con su propietario; se cuenta en el stock en un renglón aparte "(terceros)", separado de los propios.',
-      'Sirve para caballos de polo (haras), vacas madre/toros de cabaña, porcinos, etc. Está preparado para integrar collares/sensores (guarda la caravana RFID/microchip).'],
+      'Sirve para caballos de polo (haras), vacas madre/toros de cabaña, porcinos, etc. Está preparado para integrar collares/sensores (guarda la caravana RFID/microchip).',
+      '🎥 Video: mirá "Gestión de un Haras / Caballos" para verlo funcionando de punta a punta → https://youtu.be/SUfvevn2j-M'],
     atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
   { id:'consumo_kiosco', terms:['kiosco','kiosquito','proveeduria','proveeduría','consumo del empleado','cigarrillos empleado','descontar del sueldo','mercaderia empleado','le doy un lechon y descuento','descontar galletitas','lista de precios kiosco','consumo empleado','proveeduria del campo','almacen del campo'],
     titulo:'Kiosco / proveeduría: descontar consumos del sueldo',

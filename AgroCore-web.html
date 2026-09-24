@@ -2722,6 +2722,35 @@ pages.ayuda = async function() {
     ]},
   ];
 
+  // Videos tutoriales en YouTube.
+  const VIDEOS = [
+    { id:'SUfvevn2j-M', t:'Gestión de un Haras / Caballos', d:'Un caballo de punta a punta: ficha, historial (sanidad, doma, pesajes), costos, prestar/devolver y venta con margen.' },
+    { id:'xwzjHYBQuH4', t:'Manejo integral de la hacienda', d:'Rodeos, alimentación con descuento de stock, gastos, compras/ventas, guías y costo por kilo con la ganancia.' },
+  ];
+  const videosHtml = `
+    <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+      <h2 class="text-lg font-bold text-slate-800">Videos tutoriales</h2>
+      <p class="text-xs text-slate-500">Se abren en YouTube.</p>
+    </div>
+    <div class="grid gap-3 sm:grid-cols-2 mb-6">
+      ${VIDEOS.map(v => `
+        <a href="https://youtu.be/${v.id}" target="_blank" rel="noopener"
+           class="flex items-start gap-3 bg-white border border-slate-200 rounded-xl p-4 hover:border-emerald-400 hover:shadow-sm transition">
+          <div class="relative shrink-0">
+            <img src="https://i.ytimg.com/vi/${v.id}/mqdefault.jpg" alt="" loading="lazy"
+                 class="w-32 h-20 object-cover rounded-lg bg-slate-100">
+            <div class="absolute inset-0 flex items-center justify-center">
+              <div class="w-9 h-9 rounded-full bg-black/60 text-white flex items-center justify-center text-base">▶</div>
+            </div>
+          </div>
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-800">${esc(v.t)}</div>
+            <div class="text-xs text-slate-500 mt-0.5">${esc(v.d)}</div>
+            <div class="text-[11px] font-semibold text-emerald-700 mt-1.5">Ver en YouTube ↗</div>
+          </div>
+        </a>`).join('')}
+    </div>`;
+
   const grupoHtml = (g) => `
     <div class="mb-6">
       <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">${esc(g.grupo)}</h3>
@@ -2757,6 +2786,8 @@ pages.ayuda = async function() {
         <h2 class="text-lg font-bold text-slate-800">Instructivos de procesos</h2>
         <p class="text-xs text-slate-500">Guías cortas en PDF para tareas puntuales.</p>
       </div>
+      ${videosHtml}
+
       ${INSTRUCTIVOS.map(grupoHtml).join('')}
 
       <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mt-2 text-sm text-emerald-900">
@@ -2885,6 +2916,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/09/2026',
+      titulo:'🎥 v2.244.0 — Videos tutoriales en la Ayuda',
+      desc:'Sumamos <b>videos tutoriales</b> que muestran el sistema funcionando. Entrá a <b>Ayuda y manual</b> (arriba de todo en el menú) y arriba de los instructivos vas a ver la sección <b>“Videos tutoriales”</b>: <b>🐎 Gestión de un Haras / Caballos</b> (un caballo de punta a punta: ficha, historial, costos, prestar/devolver y venta con margen) y <b>🐄 Manejo integral de la hacienda</b> (rodeos, alimentación, guías y costo por kilo con la ganancia). También quedaron en el <b>manual</b> y en la <b>web</b>, y el <b>asistente 🤖</b> ya los recomienda cuando preguntás por caballos/haras o por hacienda.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'22/09/2026',
       titulo:'📄 v2.243.0 — Importar liquidación de cereal: aviso claro si subís una Orden de Pago',
       desc:'Al <b>importar el PDF</b> en Liquidaciones de cereal, si por error subís la <b>ORDEN DE PAGO</b> de la cerealera (AGD y otras mandan dos PDF: la liquidación y la orden de pago), ahora el sistema te avisa claramente: <i>"Este PDF es una ORDEN DE PAGO, no la Liquidación Primaria de Granos. Importá la liquidación (la que tiene el C.O.E.); la orden de pago se usa al registrar el cobro."</i> Antes salía un error genérico y confundía. Recordá: la <b>liquidación (LPG)</b> es la que genera la deuda a cobrar; la <b>orden de pago</b> es el cobro.' },
