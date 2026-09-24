@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.245.0';
+const AGROCORE_VERSION = '2.246.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4445,7 +4445,8 @@ app.get('/api/sociedades/:id/carga-datos', requireCompany, requirePermission('pr
       const emps = await prisma.empleado.findMany({ where: { companyId: cid, activo: true }, select: { id: true, nombre: true, apellido: true }, orderBy: { apellido: 'asc' } });
       empleadosPorEmpresa[cid] = emps.map(e => ({ id: e.id, nombre: `${e.nombre} ${e.apellido || ''}`.trim() }));
     }
-    res.json({ ok: true, data: { ciclo: cur.ciclo || null, campos, productosPorEmpresa, empleadosPorEmpresa } });
+    const socios = (cur.socios || []).map(s => ({ id: s.id || s.nombre, nombre: s.nombre }));
+    res.json({ ok: true, data: { ciclo: cur.ciclo || null, campos, productosPorEmpresa, empleadosPorEmpresa, socios } });
   } catch (e) { next(e); }
 });
 
@@ -4488,6 +4489,7 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
       monedaCosto: z.string().nullable().optional(),
       cultivo: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      aporteSocioId: z.string().nullable().optional(),   // Sociedad: qué socio lo aportó
       // insumo
       productoId: z.string().nullable().optional(),
       unidadHa: z.coerce.number().nullable().optional(),
@@ -4505,6 +4507,10 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
     const campana = await _sociedadEnsureCampana(link, cur, d.cultivo);
     const fecha = d.fecha || new Date();
     const tgt = link.companyId;
+    // Socio que aportó (opcional): resolvemos su nombre del listado de socios de la sociedad.
+    const _socioAp = d.aporteSocioId ? (cur.socios || []).find(s => (s.id || s.nombre) === d.aporteSocioId) : null;
+    const aporteSocioId = _socioAp ? (_socioAp.id || _socioAp.nombre) : null;
+    const aporteSocioNombre = _socioAp ? _socioAp.nombre : null;
 
     if (d.tipo === 'insumo') {
       let prod = null;
@@ -4516,6 +4522,7 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
           campanaId: campana.id, productoId: prod?.id || null, nombre: prod?.nombre || d.item,
           cantidad: d.unidadHa || 0, unidad: d.subtipo || prod?.unidad || 'u/ha', fecha,
           costo: d.costoHa || 0, precioUnit: d.precioUnit ?? null, moneda: d.monedaCosto || 'USD',
+          aporteSocioId, aporteSocioNombre,
           hectareasAplicadas: d.hectareasAplicadas ?? null, observaciones: d.observaciones || null,
         }});
         if (descontar && cantConsumida > 0) {
@@ -4546,6 +4553,7 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
       hectareasAplicadas: d.hectareasAplicadas ?? null,
       costo: d.costoHa ?? null, monedaCosto: d.monedaCosto || 'USD',
       empleadoId: d.empleadoId || null, responsable,
+      aporteSocioId, aporteSocioNombre,
       observaciones: d.observaciones || null,
     }});
     res.status(201).json({ ok: true, data: { ...labor, tipo: 'labor' } });
@@ -4579,6 +4587,7 @@ app.get('/api/sociedades/:id/campo/:linkId/detalle', requireCompany, requirePerm
         const base = (i.costo != null && i.hectareasAplicadas != null) ? Number(i.costo) * Number(i.hectareasAplicadas) : (i.precioUnit != null ? Number(i.precioUnit) * Number(i.cantidad || 0) : 0);
         items.push({ id: i.id, tipo: 'insumo', nombre: i.nombre, fecha: i.fecha, hectareasAplicadas: i.hectareasAplicadas,
           cantidad: i.cantidad, unidad: i.unidad, precioUnit: i.precioUnit, costo: i.costo, moneda: i.moneda || 'USD',
+          aporteSocioId: i.aporteSocioId || null, aporteSocioNombre: i.aporteSocioNombre || null,
           monto: _round2(base), montoVista: _round2(toView(base, i.moneda)), tieneStock: !!i.movimientoId, observaciones: i.observaciones || null });
       }
       const labores = await prisma.laborAplicada.findMany({ where: { campanaId: { in: campIds } }, orderBy: { fecha: 'desc' } });
@@ -4586,12 +4595,14 @@ app.get('/api/sociedades/:id/campo/:linkId/detalle', requireCompany, requirePerm
         const base = (l.costo != null && l.hectareasAplicadas != null) ? Number(l.costo) * Number(l.hectareasAplicadas) : Number(l.costo || 0);
         items.push({ id: l.id, tipo: 'labor', nombre: l.tipo, fecha: l.fecha, hectareasAplicadas: l.hectareasAplicadas,
           costo: l.costo, moneda: l.monedaCosto || 'USD', responsable: l.responsable || null,
+          aporteSocioId: l.aporteSocioId || null, aporteSocioNombre: l.aporteSocioNombre || null,
           monto: _round2(base), montoVista: _round2(toView(base, l.monedaCosto)), observaciones: l.observaciones || null });
       }
       items.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
     }
     res.json({ ok: true, data: {
       linkId: link.id, campoId: campo.id, campo: campo.nombre, esExterno: !!link.esExterno, ciclo: cur.ciclo || null,
+      socios: (cur.socios || []).map(s => ({ id: s.id || s.nombre, nombre: s.nombre })),
       moneda: vm, totalVista: _round2(items.reduce((a, x) => a + x.montoVista, 0)), items,
     }});
   } catch (e) { next(e); }
@@ -4627,8 +4638,15 @@ app.put('/api/sociedades/:id/aplicacion/:itemId', requireCompany, requirePermiss
       hectareasAplicadas: z.coerce.number().nullable().optional(),
       fecha: z.coerce.date().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      aporteSocioId: z.string().nullable().optional(),
     }).parse(req.body || {});
     const tgt = found.companyId;
+    // Resolver socio que aportó (si vino en el body).
+    let aporteSocioPatch = {};
+    if (d.aporteSocioId !== undefined) {
+      const _s = d.aporteSocioId ? (cur.socios || []).find(s => (s.id || s.nombre) === d.aporteSocioId) : null;
+      aporteSocioPatch = { aporteSocioId: _s ? (_s.id || _s.nombre) : null, aporteSocioNombre: _s ? _s.nombre : null };
+    }
     if (found.tipo === 'insumo') {
       const ins = found.row;
       const row = await prisma.insumoAplicado.update({ where: { id: ins.id }, data: {
@@ -4641,6 +4659,7 @@ app.put('/api/sociedades/:id/aplicacion/:itemId', requireCompany, requirePermiss
         hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : ins.hectareasAplicadas,
         fecha: d.fecha || ins.fecha,
         observaciones: d.observaciones !== undefined ? d.observaciones : ins.observaciones,
+        ...aporteSocioPatch,
       }});
       if (ins.movimientoId) {
         const cant = Number(row.cantidad || 0) * Number(row.hectareasAplicadas || 0);
@@ -4657,6 +4676,7 @@ app.put('/api/sociedades/:id/aplicacion/:itemId', requireCompany, requirePermiss
       hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : lab.hectareasAplicadas,
       fecha: d.fecha || lab.fecha,
       observaciones: d.observaciones !== undefined ? d.observaciones : lab.observaciones,
+      ...aporteSocioPatch,
     }});
     res.json({ ok: true, data: { ...row, tipo: 'labor' } });
   } catch (e) { next(e); }
@@ -4799,6 +4819,38 @@ app.put('/api/sociedades/:id/liquidacion', requireCompany, requirePermission('pr
 
 // CALCULAR la liquidación: valoriza la cosecha ($/tn), suma gastos, y reparte el
 // resultado por participación de cada socio, comparando contra lo que aportó.
+// Aportes REALES por socio: suma de insumos+labores cargados en los campos de la
+// sociedad (del ciclo, campañas no cerradas), agrupados por el socio que los aportó,
+// convertidos a la moneda de vista. Los que no tienen socio van a "sinAsignar".
+async function _sociedadAportesReales(req, cur, vm, tcUSD) {
+  const grupo = _grupoCompanyIds(req);
+  const ciclo = (cur.ciclo || '').trim();
+  const toView = (monto, m) => { const from = (m === 'ARS') ? 'ARS' : 'USD'; const n = Number(monto || 0); if (from === vm) return n; const ars = (from === 'ARS') ? n : n * tcUSD; return (vm === 'ARS') ? ars : (tcUSD ? ars / tcUSD : n); };
+  const porSocio = {}; let sinAsignar = 0;
+  const add = (nombre, monto) => { if (!monto) return; if (nombre) porSocio[nombre] = _round2((porSocio[nombre] || 0) + monto); else sinAsignar = _round2(sinAsignar + monto); };
+  for (const link of (cur.campos || [])) {
+    if (!link.campoId || !link.companyId || !grupo.includes(link.companyId)) continue;
+    const campo = await prisma.campo.findFirst({ where: { id: link.campoId }, include: { lotes: { select: { id: true } } } });
+    if (!campo) continue;
+    const loteIds = campo.lotes.map(l => l.id); if (!loteIds.length) continue;
+    let camps = await prisma.campana.findMany({ where: { loteId: { in: loteIds }, companyId: link.companyId } });
+    camps = camps.filter(c => String(c.estado || '') !== 'cerrada').filter(c => !ciclo || String(c.ciclo || '').trim() === ciclo);
+    const campIds = camps.map(c => c.id); if (!campIds.length) continue;
+    const insumos = await prisma.insumoAplicado.findMany({ where: { campanaId: { in: campIds } } });
+    for (const i of insumos) {
+      const base = (i.costo != null && i.hectareasAplicadas != null) ? Number(i.costo) * Number(i.hectareasAplicadas) : (i.precioUnit != null ? Number(i.precioUnit) * Number(i.cantidad || 0) : 0);
+      add(i.aporteSocioNombre || null, toView(base, i.moneda));
+    }
+    const labores = await prisma.laborAplicada.findMany({ where: { campanaId: { in: campIds } } });
+    for (const l of labores) {
+      const base = (l.costo != null && l.hectareasAplicadas != null) ? Number(l.costo) * Number(l.hectareasAplicadas) : Number(l.costo || 0);
+      add(l.aporteSocioNombre || null, toView(base, l.monedaCosto));
+    }
+  }
+  const total = _round2(Object.values(porSocio).reduce((a, x) => a + x, 0) + sinAsignar);
+  return { porSocio, sinAsignar: _round2(sinAsignar), total };
+}
+
 app.get('/api/sociedades/:id/liquidacion', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
   try {
     const cur = await prisma.sociedad.findFirst({ where: { id: req.params.id, ownerCompanyId: { in: _grupoCompanyIds(req) } }, include: { campos: true } });
@@ -4832,13 +4884,21 @@ app.get('/api/sociedades/:id/liquidacion', requireCompany, requirePermission('pr
     for (const s of socios) s.participacionSugerida = aportesTotal > 0 ? _round2(s.aporte / aportesTotal * 100) : 0;
     // Reparto: cada socio recibe su % del INGRESO y ya puso su aporte → neto de caja.
     // Además "le corresponde" = su % del resultado (ganancia).
+    // Aportes REALES por socio (suma de insumos+labores marcados con cada socio).
+    const _tcLiq = (await getCotizacionARS('USD', new Date())) || 1;
+    const aportesReales = await _sociedadAportesReales(req, cur, vmLiq, _tcLiq);
     for (const s of socios) {
       const pf = s.participacion / 100;
       s.participacionIngreso = _round2(pf * ingreso);
       s.ganancia = _round2(pf * resultado);
       s.neto = _round2(pf * ingreso - s.aporte);   // caja: cobra su parte de la venta, descuenta lo que puso
+      // Aporte real (insumos/labores que cargó) y cuánto le correspondería poner por su %.
+      s.aporteReal = _round2(aportesReales.porSocio[s.nombre] || 0);
+      s.aporteQueLeCorresponde = _round2(pf * aportesReales.total);
+      s.diferenciaAporte = _round2(s.aporteReal - s.aporteQueLeCorresponde);  // + puso de más, − puso de menos
     }
     res.json({ ok: true, data: {
+      aportesReales,
       sociedad: comp.sociedad,
       cosecha: { kg: comp.totales.kgCosechados, porCultivo: comp.cosechaPorCultivo },
       ingresoPorCultivo, ingreso,
@@ -12622,8 +12682,7 @@ const _AYUDA_KB = [
       'Entrá a Animales, elegí el campo y tocá "Nuevo movimiento".',
       'Elegí el tipo (nacimiento, muerte, compra, venta, cambio de categoría) y la categoría del animal.',
       'Cargá la cantidad de cabezas (y kg/precio si es compra).',
-      'Guardá: actualiza el stock ganadero real y el de SENASA.',
-      '🎥 Video: mirá "Manejo integral de la hacienda" (rodeos, alimentación, costo por kg y margen) → https://youtu.be/xwzjHYBQuH4'],
+      'Guardá: actualiza el stock ganadero real y el de SENASA.'],
     atajo:{ page:'hacienda', label:'Abrir Animales' },
     ejemplo:'nacieron 5 terneros en Montenegro' },
   { id:'liq_hacienda', terms:['liquidacion de hacienda','liquidacion hacienda','liquidacion del frigorifico','venta de hacienda','remate','consignatario','liquidacion de venta de animales'],
@@ -12717,7 +12776,7 @@ const _AYUDA_KB = [
       'Ejemplo: en septiembre pagás el sueldo de agosto; lo que no retiró queda a favor y aparece arriba del mes siguiente.',
       'Sueldos que cambian todos los meses (administración, aumento de comercio): usá el botón "💵 Sueldo del mes" y cargá el valor de ese mes. Queda FIJO para ese mes: cambiar el sueldo en la ficha NO modifica los meses ya cargados.'],
     atajo:{ page:'empleados', label:'Abrir Empleados' } },
-  { id:'viajes', terms:['viaje','flete','transporte','camion','chofer','acoplado','carta de porte','transportista','peso neto','comprador'],
+  { id:'viajes', terms:['viaje','flete','transporte','camion','chofer','acoplado','carta de porte','transportista','peso neto','comprador','estado de la carta de porte','arribada','arribo','volvio a destino','volvió a destino','campo a campo','cerrar carta de porte','no descargo','cp campo a campo'],
     titulo:'Cargar un viaje / carta de porte',
     pasos:[
       'Entrá a Viajes → "Nuevo viaje". El formulario está en secciones: Datos, Pesos, Destino/venta, Documentos, Transporte, Gastos.',
@@ -12725,7 +12784,11 @@ const _AYUDA_KB = [
       'En Destino del cereal elegís a quién le vendés (Comprador, ej. Serros) y, aparte, dónde descargás (Cerealera/Destino, ej. Promaíz). Podés crear cualquiera de los dos con "+ nuevo" sin salir del viaje.',
       'Al guardar se dan de alta solos el transportista, chofer, camión y acoplado si son nuevos.',
       'Marcá "Pagado" para registrar el pago y, si aplica, la comisión del chofer-empleado.',
-      'Arriba de la lista tenés el cuadro "Cereal vendido" (venta directa) por peso neto, filtrable por comprador y grano.'],
+      'ESTADOS: pendiente → cargado → descargado → facturado → pagado se ponen solos con los datos. Además, desde el campo Estado del formulario podés elegir a mano "🛬 Arribada" (llegó a destino) o "↩️ Volvió a destino".',
+      'CAMPO A CAMPO: si hacés una carta de porte de campo a campo para mover cereal y NO descargó en ningún lado, editá el viaje y ponele el estado "↩️ Volvió a destino" para cerrarla. Es una marca manual: no mueve stock (y si tenía stock cargado, lo revierte).',
+      'Si en esa CP de campo a campo el grano SÍ se bajó en el otro campo, en cambio dejala en "Descargado" y elegí el depósito destino, así el grano viaja de un campo al otro en el stock.',
+      'Arriba de la lista tenés el cuadro "Cereal vendido" (venta directa) por peso neto, filtrable por comprador y grano.',
+      '🎥 Video: mirá "Circuito de una campaña de cereal" (carta de porte, entrega en el acopio, venta al comprador y liquidación) → https://youtu.be/xwzjHYBQuH4'],
     atajo:{ page:'viajes', label:'Abrir Viajes' } },
   { id:'viaje_merma', terms:['merma','neto a liquidar','descontar merma','merma humedad','kg acopiados','merma cereal','peso neto menos merma'],
     titulo:'Merma y neto a liquidar en el viaje',
@@ -12742,7 +12805,7 @@ const _AYUDA_KB = [
       'Arriba de todo en el menú tenés "Ayuda y manual" (visible para todos).',
       'Ahí abrís el Manual de usuario completo en una pestaña nueva.',
       'Y descargás los instructivos de procesos en PDF (inicio rápido, pagos y cobros, cheques, sueldos, compensación de cuentas, circuito de cereal, contratos, liquidación, forrajera, el manejo integral de la hacienda —rodeos, alimentación, guías, liquidaciones y costo por kg— y más), agrupados por tema.',
-      'También hay Videos tutoriales (se abren en YouTube): "Gestión de un Haras / Caballos" (https://youtu.be/SUfvevn2j-M) y "Manejo integral de la hacienda" (https://youtu.be/xwzjHYBQuH4).'],
+      'También hay Videos tutoriales (se abren en YouTube): "Gestión de un Haras / Caballos" (https://youtu.be/SUfvevn2j-M) y "Circuito de una campaña de cereal" (https://youtu.be/xwzjHYBQuH4).'],
     atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
   { id:'ayuda_videos', terms:['video','videos','video tutorial','videos tutoriales','tutorial en video','youtube','ver un video','hay videos','video de ayuda','viedo','vídeo'],
     titulo:'Videos tutoriales (YouTube)',

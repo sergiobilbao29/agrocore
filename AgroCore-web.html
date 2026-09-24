@@ -2725,7 +2725,7 @@ pages.ayuda = async function() {
   // Videos tutoriales en YouTube.
   const VIDEOS = [
     { id:'SUfvevn2j-M', t:'Gestión de un Haras / Caballos', d:'Un caballo de punta a punta: ficha, historial (sanidad, doma, pesajes), costos, prestar/devolver y venta con margen.' },
-    { id:'xwzjHYBQuH4', t:'Manejo integral de la hacienda', d:'Rodeos, alimentación con descuento de stock, gastos, compras/ventas, guías y costo por kilo con la ganancia.' },
+    { id:'xwzjHYBQuH4', t:'Circuito de una campaña de cereal', d:'De la carga del camión a la venta: cartas de porte, entrega en el acopio, venta al comprador y liquidación agrupando los camiones.' },
   ];
   const videosHtml = `
     <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
@@ -2916,6 +2916,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'24/09/2026',
+      titulo:'🤝 v2.246.0 — Sociedades: qué socio aportó cada insumo/labor + aportes reales por socio',
+      desc:'En <b>Sociedades / UTE</b>, al <b>cargar (o editar) un insumo o una labor</b> desde la solapa de la sociedad, ahora podés indicar <b>qué socio lo aportó</b> (“Socio que lo aportó”). En el <b>detalle del campo</b> se ve una etiqueta 👤 con el socio de cada movimiento. Y en la <b>Liquidación</b> sumamos un panel nuevo <b>“🧮 Aportes reales por socio”</b>: suma automáticamente lo que cargó cada socio, lo compara con <b>lo que le correspondería poner según su %</b> y muestra la <b>diferencia</b> (verde = puso de más, rojo = puso de menos). Así la cuenta se hace con lo que realmente aportó cada uno. También sale en el <b>PDF/impresión</b> de la liquidación.' },
     { tag:'Nuevo', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'24/09/2026',
       titulo:'🚚 v2.245.0 — Viajes: nuevos estados “Arribada” y “Volvió a destino”',
       desc:'En <b>Viajes y fletes</b> sumamos dos estados para las cartas de porte: <b>🛬 Arribada</b> (el camión llegó a destino) y <b>↩️ Volvió a destino</b> (para las CP de <b>campo a campo</b> que se hacen para mover cereal y que <b>no descargan en ningún lado</b>). Ahora podés <b>cerrar</b> esa CP eligiendo el estado desde el formulario del viaje (campo Estado) o desde el filtro de la lista. Son marcas <b>manuales</b>: no generan ni mueven stock, y si la CP tenía stock cargado, al pasarla a “Volvió a destino” ese movimiento se revierte solo.' },
@@ -9255,6 +9258,9 @@ async function socCargaForm(id, prefLink){
       <label class="label text-xs">Campo (de la sociedad)</label>
       <select id="soc-cg-campo" class="input" onchange="socCargaCampoChange()">${campoOpts}</select>
       <div id="soc-cg-dest" class="text-[11px] text-emerald-700 mt-1"></div>
+      ${(dt.socios&&dt.socios.length)?`<div class="mt-2"><label class="label text-xs">Socio que lo aportó (opcional)</label>
+        <select id="soc-cg-socio" class="input"><option value="">— Sin asignar —</option>${dt.socios.map(s=>`<option value="${esc(s.id)}">${esc(s.nombre)}</option>`).join('')}</select>
+        <div class="text-[11px] text-slate-500 mt-1">Sirve para la liquidación: se suma a los aportes reales de ese socio.</div></div>`:''}
       <div class="flex gap-2 my-3 text-xs">
         <button type="button" class="btn btn-secondary text-xs flex-1" id="soc-cg-t-ins" onclick="socCargaTipo('insumo')">🧪 Insumo</button>
         <button type="button" class="btn btn-ghost text-xs flex-1" id="soc-cg-t-lab" onclick="socCargaTipo('labor')">🚜 Labor</button>
@@ -9321,6 +9327,7 @@ async function socCargaSave(id){
   const fecha=document.getElementById('soc-cg-fecha')?.value||null;
   const ha=Number(document.getElementById('soc-cg-ha')?.value||0)||null;
   const obs=document.getElementById('soc-cg-obs')?.value.trim()||null;
+  const aporteSocioId=document.getElementById('soc-cg-socio')?.value||null;
   let body;
   if(tipo==='insumo'){
     const item=(document.getElementById('soc-cg-item')?.value||'').trim();
@@ -9330,12 +9337,12 @@ async function socCargaSave(id){
       fecha, hectareasAplicadas:ha, productoId, subtipo:document.getElementById('soc-cg-unidad')?.value.trim()||null,
       unidadHa:Number(document.getElementById('soc-cg-unidadha')?.value||0)||null, precioUnit:Number(document.getElementById('soc-cg-precio')?.value||0)||null,
       monedaCosto:document.getElementById('soc-cg-moneda-ins')?.value||'USD',
-      descontarStock:!!document.getElementById('soc-cg-stock')?.checked, observaciones:obs };
+      descontarStock:!!document.getElementById('soc-cg-stock')?.checked, aporteSocioId, observaciones:obs };
   } else {
     const labtipo=(document.getElementById('soc-cg-labtipo')?.value||'').trim(); if(!labtipo) return toast('Poné el tipo de labor','warn');
     body={ linkId, tipo:'labor', item:labtipo, fecha, hectareasAplicadas:ha,
       costoHa:Number(document.getElementById('soc-cg-costoha')?.value||0)||null, monedaCosto:document.getElementById('soc-cg-moneda')?.value||'USD',
-      empleadoId:document.getElementById('soc-cg-emp')?.value||null, observaciones:obs };
+      empleadoId:document.getElementById('soc-cg-emp')?.value||null, aporteSocioId, observaciones:obs };
   }
   try{ const r=await api('/api/sociedades/'+id+'/carga',{method:'POST',body:JSON.stringify(body)});
     toast(tipo==='insumo'?('Insumo cargado'+(r.data?.descontoStock?' (stock descontado)':'')):'Labor cargada','success');
@@ -9353,7 +9360,7 @@ async function socCampoDetalle(id, linkId){
   const monTxt=(m)=>((m==='ARS')?'$':'US$');
   const rows=(d.items||[]).map(it=>`<tr class="table-row">
       <td class="text-xs whitespace-nowrap">${fmtFecha(it.fecha)}</td>
-      <td>${it.tipo==='insumo'?'🧪':'🚜'} ${esc(it.nombre||'')}${it.observaciones?`<div class="text-[11px] text-slate-400">${esc(it.observaciones)}</div>`:''}</td>
+      <td>${it.tipo==='insumo'?'🧪':'🚜'} ${esc(it.nombre||'')}${it.aporteSocioNombre?`<span class="text-[10px] bg-emerald-100 text-emerald-800 rounded px-1 ml-1">👤 ${esc(it.aporteSocioNombre)}</span>`:''}${it.observaciones?`<div class="text-[11px] text-slate-400">${esc(it.observaciones)}</div>`:''}</td>
       <td class="text-right text-xs">${it.hectareasAplicadas!=null?fmtN(it.hectareasAplicadas)+' ha':'—'}</td>
       <td class="text-right text-xs">${monTxt(it.moneda)} ${fmtN(it.monto)}${(it.moneda||'USD')!==mon?`<div class="text-[11px] text-slate-400">= ${monTxt(mon)} ${fmtN(it.montoVista)}</div>`:''}</td>
       <td class="text-center text-xs">${it.tipo==='insumo'?(it.tieneStock?'📦':'—'):'—'}</td>
@@ -9394,6 +9401,7 @@ function socAplicacionEdit(itemId){
           <div><label class="label text-xs">Costo por ha</label><input id="soc-ed-costoha" type="number" step="0.01" class="input" value="${it.costo!=null?it.costo:''}"/></div>
         `}
         <div><label class="label text-xs">Moneda</label><select id="soc-ed-moneda" class="input"><option value="USD"${(it.moneda||'USD')==='USD'?' selected':''}>US$</option><option value="ARS"${it.moneda==='ARS'?' selected':''}>$ ARS</option></select></div>
+        ${(d.socios&&d.socios.length)?`<div class="col-span-2"><label class="label text-xs">Socio que lo aportó</label><select id="soc-ed-socio" class="input"><option value="">— Sin asignar —</option>${d.socios.map(s=>`<option value="${esc(s.id)}"${(it.aporteSocioId===s.id||it.aporteSocioNombre===s.nombre)?' selected':''}>${esc(s.nombre)}</option>`).join('')}</select></div>`:''}
         <div class="col-span-2"><label class="label text-xs">Observaciones</label><input id="soc-ed-obs" class="input" value="${esc(it.observaciones||'')}"/></div>
       </div>
       ${esIns&&it.tieneStock?`<div class="text-[11px] text-amber-700 mt-2">⚠️ Este insumo descontó stock: al editar cantidad/precio, se ajusta el egreso de stock.</div>`:''}`,
@@ -9405,6 +9413,7 @@ async function socAplicacionEditSave(itemId, esIns){
     fecha:document.getElementById('soc-ed-fecha')?.value||null,
     hectareasAplicadas:Number(document.getElementById('soc-ed-ha')?.value||0)||null,
     monedaCosto:document.getElementById('soc-ed-moneda')?.value||'USD',
+    aporteSocioId:(document.getElementById('soc-ed-socio')?document.getElementById('soc-ed-socio').value:null)||null,
     observaciones:document.getElementById('soc-ed-obs')?.value.trim()||null };
   if(esIns){ body.subtipo=document.getElementById('soc-ed-unidad')?.value.trim()||null;
     body.unidadHa=Number(document.getElementById('soc-ed-unidadha')?.value||0)||null;
@@ -9475,7 +9484,18 @@ async function socLiquidacion(id){
       <table class="data text-sm"><thead><tr><th>Socio</th><th class="text-right">Particip.</th><th class="text-right">Aportó</th><th class="text-right">% del ingreso</th><th class="text-right">Ganancia</th><th class="text-right">Neto a cobrar/(poner)</th></tr></thead>
         <tbody id="liq-socios">${sociosRows}</tbody></table>
     </div>
-    <div class="text-[11px] text-slate-500">“Neto” = su % del ingreso menos lo que aportó (posición de caja de cada socio). “Ganancia” = su % del resultado. La suma de participaciones debería dar 100%.</div>`;
+    <div class="text-[11px] text-slate-500">“Neto” = su % del ingreso menos lo que aportó (posición de caja de cada socio). “Ganancia” = su % del resultado. La suma de participaciones debería dar 100%.</div>
+
+    <div class="kpi p-0 overflow-hidden mt-3">
+      <div class="px-3 py-2 bg-slate-50 border-b text-sm font-medium text-slate-700">🧮 Aportes reales por socio <span class="text-[11px] font-normal text-slate-500">(suma automática de los insumos y labores que cargó cada socio en los campos de la sociedad)</span></div>
+      <table class="data text-sm"><thead><tr><th>Socio</th><th class="text-right">Aportó (real)</th><th class="text-right">Le corresponde por su %</th><th class="text-right">Diferencia</th></tr></thead>
+        <tbody>${(L.socios||[]).map(so=>{ const dif=so.diferenciaAporte||0; const col=dif>0.5?'text-emerald-700':(dif<-0.5?'text-red-600':'text-slate-500');
+          return `<tr><td>${esc(so.nombre)}</td><td class="text-right font-semibold">${fmt$(so.aporteReal||0)}</td><td class="text-right text-slate-500">${fmt$(so.aporteQueLeCorresponde||0)}</td><td class="text-right font-semibold ${col}">${dif>0?'+':''}${fmt$(dif)}</td></tr>`; }).join('')||`<tr><td colspan="4" class="text-slate-400 text-center py-2">Sin socios cargados.</td></tr>`}
+        ${(L.aportesReales&&L.aportesReales.sinAsignar>0)?`<tr class="text-slate-400"><td>Sin asignar a un socio</td><td class="text-right">${fmt$(L.aportesReales.sinAsignar)}</td><td colspan="2" class="text-right text-[11px]">Asignalos eligiendo el socio al cargar/editar el insumo o labor</td></tr>`:''}
+        <tr class="font-bold border-t"><td>Total aportado</td><td class="text-right">${fmt$((L.aportesReales&&L.aportesReales.total)||0)}</td><td colspan="2"></td></tr>
+        </tbody></table>
+      <div class="text-[11px] text-slate-500 p-2">Diferencia = lo que aportó realmente menos lo que le correspondería poner según su participación. <b class="text-emerald-700">Verde</b>: puso de más (los otros le deben). <b class="text-red-600">Rojo</b>: puso de menos.</div>
+    </div>`;
   socLiqRecalc();
 }
 function socLiqGastoRow(g){ g=g||{}; return `<tr data-gasto-row><td class="p-1"><input class="input text-sm" data-gasto-concepto placeholder="Concepto" value="${esc(g.concepto||'')}"/></td>
@@ -9564,7 +9584,9 @@ function socLiqImprimir(){
       <table><thead><tr><th>Socio</th><th>Tipo</th><th>Concepto</th><th style="text-align:right">Monto</th></tr></thead><tbody>${apRows}</tbody></table>
       <h3>Reparto por socio</h3>
       <table><thead><tr><th>Socio</th><th style="text-align:right">Particip.</th><th style="text-align:right">Aportó</th><th style="text-align:right">% del ingreso</th><th style="text-align:right">Ganancia</th><th style="text-align:right">Neto a cobrar/(poner)</th></tr></thead><tbody>${socRows}</tbody></table>
-      <p class="foot">“Neto” = su % del ingreso menos lo que aportó. “Ganancia” = su % del resultado. Documento interno de gestión (AgroCore) — no es un comprobante fiscal.</p>
+      ${(L.aportesReales)?`<h3>Aportes reales por socio (insumos y labores cargados)</h3>
+      <table><thead><tr><th>Socio</th><th style="text-align:right">Aportó (real)</th><th style="text-align:right">Le corresponde por su %</th><th style="text-align:right">Diferencia</th></tr></thead><tbody>${(L.socios||[]).map(so=>`<tr><td>${esc(so.nombre)}</td><td style="text-align:right">${fmt$(so.aporteReal||0)}</td><td style="text-align:right">${fmt$(so.aporteQueLeCorresponde||0)}</td><td style="text-align:right">${(so.diferenciaAporte||0)>0?'+':''}${fmt$(so.diferenciaAporte||0)}</td></tr>`).join('')}${L.aportesReales.sinAsignar>0?`<tr><td>Sin asignar</td><td style="text-align:right">${fmt$(L.aportesReales.sinAsignar)}</td><td colspan="2"></td></tr>`:''}<tr style="font-weight:700"><td>Total</td><td style="text-align:right">${fmt$(L.aportesReales.total||0)}</td><td colspan="2"></td></tr></tbody></table>`:''}
+      <p class="foot">“Neto” = su % del ingreso menos lo que aportó. “Ganancia” = su % del resultado. “Diferencia” en aportes reales: + puso de más, − puso de menos. Documento interno de gestión (AgroCore) — no es un comprobante fiscal.</p>
       <script>window.onload=function(){setTimeout(function(){window.print();},300);}<\/script>
     </body></html>`);
   win.document.close();
