@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.255.0';
+const AGROCORE_VERSION = '2.256.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6523,6 +6523,50 @@ app.post('/api/efectivo/transferencia-intercompany', requireCompany, requirePerm
       }});
     });
     res.json({ ok: true, intercompanyRef: interRef });
+  } catch (e) { next(e); }
+});
+
+// Consolidado de efectivo POR TENEDOR entre las empresas del grupo que trabajan
+// con "caja por tenedor". Se usa en Control de efectivo para ver, sin salir de la
+// página, cuánto tiene cada persona sumando todas las empresas. Requiere solo
+// finanzas:read (no Reportes).
+app.get('/api/efectivo/consolidado-tenedor', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    let empresas = req.user.superAdmin
+      ? await prisma.company.findMany({ where: { activo: true }, orderBy: { name: 'asc' } })
+      : (req.user.userCompanies || []).map((uc) => uc.company);
+    empresas = empresas.filter((e) => e && e.cajaPorTenedor === true);
+    if (!empresas.length) return res.json({ ok: true, data: { activo: false, tenedores: [], total: 0 } });
+    const ids = empresas.map((e) => e.id);
+    const empById = Object.fromEntries(empresas.map((e) => [e.id, e]));
+    const efs = await prisma.efectivo.findMany({ where: { companyId: { in: ids } } });
+    // Saldo por (empresa, tenedor).
+    const saldoEC = new Map();
+    const add = (cid, caja, delta) => {
+      const k = cid + '||' + caja; saldoEC.set(k, (saldoEC.get(k) || 0) + delta);
+    };
+    for (const e of efs) {
+      const caja = (e.caja && String(e.caja).trim()) || '(sin tenedor)';
+      const m = Number(e.monto || 0);
+      const t = (e.tipo || '').toLowerCase();
+      if (t === 'ingreso') add(e.companyId, caja, m);
+      else if (t === 'egreso') add(e.companyId, caja, -m);
+      else if (t === 'transferencia') {
+        add(e.companyId, caja, -m);
+        if (e.cajaDestino) add(e.companyId, (String(e.cajaDestino).trim() || '(sin tenedor)'), m);
+      }
+    }
+    // Agrupar por tenedor sumando empresas.
+    const ten = new Map();
+    for (const [k, saldo] of saldoEC) {
+      const idx = k.indexOf('||'); const cid = k.slice(0, idx); const caja = k.slice(idx + 2);
+      if (!ten.has(caja)) ten.set(caja, { nombre: caja, total: 0, porEmpresa: [] });
+      const tt = ten.get(caja); tt.total += saldo;
+      tt.porEmpresa.push({ empresaName: empById[cid]?.name || cid, color: empById[cid]?.color || null, saldo });
+    }
+    const tenedores = [...ten.values()].sort((a, b) => b.total - a.total);
+    const total = tenedores.reduce((a, t) => a + t.total, 0);
+    res.json({ ok: true, data: { activo: true, tenedores, total, empresas: empresas.map((e) => e.name) } });
   } catch (e) { next(e); }
 });
 
