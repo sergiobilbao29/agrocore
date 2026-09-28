@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.251.0';
+const AGROCORE_VERSION = '2.252.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6483,10 +6483,10 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
     // Si es superAdmin sin headers, listamos TODAS las empresas activas
     let empresas;
     if (req.user.superAdmin) {
-      empresas = await prisma.company.findMany({ where: { activo: true }, select: { id: true, name: true, color: true } });
+      empresas = await prisma.company.findMany({ where: { activo: true }, select: { id: true, name: true, color: true, cajaPorTenedor: true } });
     } else {
       empresas = (req.user.userCompanies || []).map((uc) => ({
-        id: uc.companyId, name: uc.company.name, color: uc.company.color,
+        id: uc.companyId, name: uc.company.name, color: uc.company.color, cajaPorTenedor: uc.company.cajaPorTenedor === true,
       }));
     }
     if (!empresas.length) {
@@ -6611,6 +6611,7 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
         companyId: emp.id,
         companyName: emp.name,
         color: emp.color || null,
+        cajaPorTenedor: emp.cajaPorTenedor === true,
         cheques: {
           enCartera: chPend.length,
           montoEnCartera: sumMonto(chPend),

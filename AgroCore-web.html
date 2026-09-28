@@ -2919,6 +2919,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
+      titulo:'🧑‍💼 v2.252.0 — Caja por tenedor (Fase 3): arqueo consolidado por persona',
+      desc:'En el <b>Resumen multiempresa</b>, cuando el grupo trabaja con “caja por tenedor”, aparece un nuevo recuadro <b>“🧑‍💼 Efectivo por tenedor (consolidado)”</b>: muestra <b>cuánto efectivo tiene cada persona</b> (Oficina, Lucas, Luciano) <b>sumando todas las empresas</b>, con el <b>detalle de qué empresa es cada parte</b> y el <b>total en mano</b> del grupo. Así ves de un vistazo lo que tiene cada uno sin ir empresa por empresa.' },
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
       titulo:'💵 v2.251.0 — Caja por tenedor (Fase 2): elegir el tenedor al cobrar/pagar',
       desc:'Segunda parte del <b>efectivo por tenedor</b>. Con la opción activada, en <b>todos los cobros y pagos con efectivo</b> (cuentas a cobrar/pagar, cobro/pago de guías DT-e, liquidaciones, pago a proveedor y movimientos diarios) el campo “Caja” ahora dice <b>“Tenedor”</b> — elegís quién tiene/recibe la plata (Oficina, Lucas, Luciano). Si la empresa no tiene el modo activo, todo sigue diciendo “Caja” como antes. <i>Próxima fase:</i> arqueo consolidado por tenedor sumando todas las empresas + asiento automático entre empresas.' },
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
@@ -6254,6 +6257,50 @@ pages.resumenGlobal = async function() {
                 </tr>`;}).join('')}
               </tbody>
               <tfoot><tr class="font-bold bg-slate-50"><td colspan="7" class="text-right">TOTAL</td><td class="text-right text-emerald-700">${fmt$(totCh)}</td></tr></tfoot>
+            </table>
+          </div>
+        </div>`;
+      })()}
+
+      ${(() => {
+        // ===== Efectivo por TENEDOR (consolidado entre empresas) =====
+        // Solo se muestra si alguna empresa seleccionada trabaja con "caja por tenedor".
+        const grupoTenedor = porEmp.some(e => seleccionadas.has(e.companyId) && e.cajaPorTenedor === true);
+        if (!grupoTenedor) return '';
+        const tmap = new Map();
+        for (const e of porEmp) {
+          if (!seleccionadas.has(e.companyId)) continue;
+          for (const c of ((e.efectivo && e.efectivo.cajas) || [])) {
+            const key = c.nombre || '(sin tenedor)';
+            if (!tmap.has(key)) tmap.set(key, { nombre:key, total:0, porEmp:[] });
+            const t = tmap.get(key);
+            t.total += Number(c.saldo||0);
+            t.porEmp.push({ empresaName:e.companyName, color:e.color, saldo:Number(c.saldo||0) });
+          }
+        }
+        const tenedores = [...tmap.values()].sort((a,b)=> b.total - a.total);
+        if (!tenedores.length) return '';
+        const totalGeneral = tenedores.reduce((a,t)=>a+t.total,0);
+        return `
+        <div class="kpi p-0 overflow-hidden mt-4">
+          <div class="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 class="font-semibold text-slate-800">🧑‍💼 Efectivo por tenedor <span class="text-slate-400 font-normal">(consolidado)</span></h3>
+              <div class="text-xs text-slate-500">Cuánto efectivo tiene cada persona sumando todas las empresas. El detalle muestra de qué empresa es cada parte.</div>
+            </div>
+            <div class="text-right"><div class="text-[11px] text-slate-500">Total en mano</div><div class="text-lg font-bold text-emerald-700">${fmt$(totalGeneral)}</div></div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="data text-sm">
+              <thead><tr><th>Tenedor</th><th>Detalle por empresa</th><th class="text-right">Total</th></tr></thead>
+              <tbody>
+                ${tenedores.map(t=>`<tr class="table-row">
+                  <td class="font-semibold">${esc(t.nombre)}</td>
+                  <td><div class="flex flex-wrap gap-1.5">${t.porEmp.filter(p=>Math.abs(p.saldo)>0.009).map(p=>`<span class="inline-flex items-center gap-1 text-[11px] bg-slate-100 rounded px-1.5 py-0.5">${p.color?`<span class="w-2 h-2 rounded-full" style="background:${esc(p.color)}"></span>`:''}${esc(p.empresaName)}: <b>${fmt$(p.saldo)}</b></span>`).join('')||'<span class="text-xs text-slate-400">—</span>'}</div></td>
+                  <td class="text-right font-bold ${t.total<0?'text-red-600':'text-emerald-700'}">${fmt$(t.total)}</td>
+                </tr>`).join('')}
+              </tbody>
+              <tfoot><tr class="font-bold bg-slate-50"><td colspan="2" class="text-right">TOTAL EN MANO</td><td class="text-right text-emerald-700">${fmt$(totalGeneral)}</td></tr></tfoot>
             </table>
           </div>
         </div>`;
