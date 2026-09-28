@@ -2918,6 +2918,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/09/2026',
+      titulo:'🩹 v2.255.0 — Resumen multiempresa: no rompe si falta la migración de caja por tenedor',
+      desc:'El Resumen multi-empresa dejaba de cargar con un error de base ("Unknown field cajaPorTenedor") cuando el código de caja por tenedor se instalaba <b>sin haber corrido la migración</b>. Se corrigió para que el resumen cargue igual; el consolidado por tenedor aparece cuando la migración está aplicada. Igual, recordá correr la actualización con migración (Actualizar-Todas-Local) para tener la función completa.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/09/2026',
       titulo:'📖 v2.254.0 — Caja por tenedor: ayuda del asistente + manual',
       desc:'El <b>asistente (bot)</b> ahora explica la <b>caja por tenedor</b>: cómo activarla, cargar el efectivo por persona, ver el consolidado y saldar entre empresas. Preguntale “caja por tenedor” o “cuánto efectivo tiene cada uno”. También se documentó en el manual de usuario.' },
