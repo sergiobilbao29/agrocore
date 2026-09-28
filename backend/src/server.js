@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.252.0';
+const AGROCORE_VERSION = '2.253.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6452,6 +6452,78 @@ mountCrud({
   }),
   orderBy: { fecha: 'desc' },
   searchFields: ['concepto', 'caja'],
+});
+
+// ============================================================
+// CAJA POR TENEDOR (Fase 4) — Transferencia de efectivo INTERCOMPANY
+// Cuando una persona (tenedor) tiene una sola caja física para varias empresas,
+// la plata que puso EMPRESA A y usó EMPRESA B genera un descuadre por empresa
+// (A queda con efectivo "de más" y B en negativo "fantasma"). Este endpoint lo
+// corrige: mueve el efectivo A→B para el MISMO tenedor y deja la DEUDA entre
+// empresas (B le debe a A) con los asientos espejo en Cta Cte. El total en mano
+// del tenedor no cambia; solo se acomoda a qué empresa pertenece cada parte.
+app.post('/api/efectivo/transferencia-intercompany', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      empresaOrigenId: z.string().min(1),   // la que PUSO la plata (queda acreedora)
+      empresaDestinoId: z.string().min(1),  // la que la USÓ (queda deudora)
+      tenedor: z.string().min(1),           // persona/caja física (se usa igual en ambas)
+      monto: z.number().positive(),
+      fecha: z.coerce.date(),
+      motivo: z.string().min(1),
+    });
+    const d = schema.parse(req.body);
+    if (d.empresaOrigenId === d.empresaDestinoId) return res.status(400).json({ ok: false, error: 'Elegí dos empresas distintas' });
+    // Ambas empresas deben ser accesibles para el usuario (o superAdmin).
+    const permitidas = req.user.superAdmin
+      ? null
+      : new Set((req.user.userCompanies || []).map((uc) => uc.companyId));
+    if (permitidas && (!permitidas.has(d.empresaOrigenId) || !permitidas.has(d.empresaDestinoId))) {
+      return res.status(403).json({ ok: false, error: 'No tenés acceso a alguna de las empresas elegidas' });
+    }
+    const [co, cd] = await Promise.all([
+      prisma.company.findUnique({ where: { id: d.empresaOrigenId }, select: { name: true } }),
+      prisma.company.findUnique({ where: { id: d.empresaDestinoId }, select: { name: true } }),
+    ]);
+    if (!co || !cd) return res.status(404).json({ ok: false, error: 'Empresa no encontrada' });
+
+    const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const obs = `Transferencia de efectivo entre empresas (tenedor: ${d.tenedor}) — ${d.motivo} [ic:${interRef}]`;
+
+    await prisma.$transaction(async (tx) => {
+      // 1) Efectivo: sale de ORIGEN y entra a DESTINO, misma caja/tenedor.
+      await tx.efectivo.create({ data: {
+        companyId: d.empresaOrigenId, fecha: d.fecha, tipo: 'egreso',
+        concepto: `Préstamo de efectivo a ${cd.name}: ${d.motivo}`, monto: d.monto,
+        caja: d.tenedor, clasificacion: 'empresa', referencia: `ICEF-${interRef}`, observaciones: obs,
+      }});
+      await tx.efectivo.create({ data: {
+        companyId: d.empresaDestinoId, fecha: d.fecha, tipo: 'ingreso',
+        concepto: `Efectivo recibido de ${co.name}: ${d.motivo}`, monto: d.monto,
+        caja: d.tenedor, clasificacion: 'empresa', referencia: `ICEF-${interRef}`, observaciones: obs,
+      }});
+      // 2) Cta Cte intercompany (asientos espejo): DESTINO debe a ORIGEN.
+      await tx.ctaCte.create({ data: {
+        companyId: d.empresaOrigenId, contactoTipo: 'intercompany',
+        empresaContraparteId: d.empresaDestinoId, intercompanyRef: interRef,
+        fecha: d.fecha, detalle: `Efectivo prestado a ${cd.name} (tenedor ${d.tenedor})`,
+        debe: d.monto, observaciones: obs,
+      }});
+      await tx.ctaCte.create({ data: {
+        companyId: d.empresaDestinoId, contactoTipo: 'intercompany',
+        empresaContraparteId: d.empresaOrigenId, intercompanyRef: interRef,
+        fecha: d.fecha, detalle: `Efectivo recibido de ${co.name} (tenedor ${d.tenedor})`,
+        haber: d.monto, observaciones: obs,
+      }});
+      // 3) Movimiento intercompany (registro central).
+      await tx.intercompanyMovimiento.create({ data: {
+        fecha: d.fecha, empresaOrigenId: d.empresaOrigenId, empresaDestinoId: d.empresaDestinoId,
+        monto: d.monto, motivo: d.motivo, intercompanyRef: interRef,
+        observaciones: obs, userId: req.user?.id || null,
+      }});
+    });
+    res.json({ ok: true, intercompanyRef: interRef });
+  } catch (e) { next(e); }
 });
 
 mountCrud({

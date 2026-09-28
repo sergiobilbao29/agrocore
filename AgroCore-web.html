@@ -2919,6 +2919,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
+      titulo:'⚖️ v2.253.0 — Caja por tenedor (Fase 4): saldar efectivo entre empresas',
+      desc:'Última parte del <b>efectivo por tenedor</b>. En el recuadro consolidado del Resumen multiempresa hay un botón <b>“⚖️ Saldar entre empresas”</b>: cuando una empresa puso el efectivo y otra lo usó (misma persona/caja), registrás en un paso que <b>una le prestó a la otra</b>. El sistema mueve el efectivo de una empresa a la otra para ese tenedor y deja la <b>deuda entre empresas</b> en cuenta corriente (asientos espejo) — así <b>no queda plata fantasma</b> ni se duplican los movimientos, y los libros de cada empresa quedan correctos. El total en mano del tenedor no cambia.' },
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
       titulo:'🧑‍💼 v2.252.0 — Caja por tenedor (Fase 3): arqueo consolidado por persona',
       desc:'En el <b>Resumen multiempresa</b>, cuando el grupo trabaja con “caja por tenedor”, aparece un nuevo recuadro <b>“🧑‍💼 Efectivo por tenedor (consolidado)”</b>: muestra <b>cuánto efectivo tiene cada persona</b> (Oficina, Lucas, Luciano) <b>sumando todas las empresas</b>, con el <b>detalle de qué empresa es cada parte</b> y el <b>total en mano</b> del grupo. Así ves de un vistazo lo que tiene cada uno sin ir empresa por empresa.' },
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
@@ -6288,7 +6291,10 @@ pages.resumenGlobal = async function() {
               <h3 class="font-semibold text-slate-800">🧑‍💼 Efectivo por tenedor <span class="text-slate-400 font-normal">(consolidado)</span></h3>
               <div class="text-xs text-slate-500">Cuánto efectivo tiene cada persona sumando todas las empresas. El detalle muestra de qué empresa es cada parte.</div>
             </div>
-            <div class="text-right"><div class="text-[11px] text-slate-500">Total en mano</div><div class="text-lg font-bold text-emerald-700">${fmt$(totalGeneral)}</div></div>
+            <div class="flex items-center gap-3">
+              ${can('finanzas:create') ? `<button class="btn btn-secondary text-xs" onclick="tenedorSaldarModal()" title="Registrar que una empresa le prestó efectivo a otra (deja la deuda entre empresas y acomoda los saldos)">⚖️ Saldar entre empresas</button>` : ''}
+              <div class="text-right"><div class="text-[11px] text-slate-500">Total en mano</div><div class="text-lg font-bold text-emerald-700">${fmt$(totalGeneral)}</div></div>
+            </div>
           </div>
           <div class="overflow-x-auto">
             <table class="data text-sm">
@@ -6627,6 +6633,50 @@ pages.resumenGlobal = async function() {
     chSoloTerceros = !chSoloTerceros;
     localStorage.setItem(CH_TERC_KEY, chSoloTerceros ? '1' : '0');
     render();
+  };
+  // Fase 4: saldar efectivo entre empresas por un tenedor (deja la deuda intercompany).
+  window.tenedorSaldarModal = () => {
+    const emps = (state.cache.empresas || []).filter(e => e.cajaPorTenedor === true && e.activo !== false);
+    if (emps.length < 2) { toast('Necesitás al menos dos empresas con "caja por tenedor" activada.', 'warn'); return; }
+    const tenedores = catByTipo('Caja').map(c => c.nombre).filter(Boolean);
+    const optE = (sel) => emps.map(e => `<option value="${esc(e.id)}" ${e.id===sel?'selected':''}>${esc(e.name)}</option>`).join('');
+    const optT = tenedores.length ? tenedores.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('') : '';
+    openModal({
+      title: '⚖️ Saldar efectivo entre empresas',
+      body: `
+        <p class="text-xs text-slate-500 mb-3">La empresa que <b>puso</b> la plata le presta al tenedor lo que usó la empresa que <b>gastó</b>. Queda registrada la <b>deuda entre empresas</b> y se acomodan los saldos. El total en mano del tenedor no cambia.</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Tenedor (persona) *</label>${tenedores.length ? `<select id="ts-ten" class="input">${optT}</select>` : `<input id="ts-ten" class="input" placeholder="Ej: Lucas"/>`}</div>
+          <div><label class="label">Monto *</label><input id="ts-monto" class="input" type="number" step="0.01" min="0"/></div>
+          <div><label class="label">Empresa que puso la plata *</label><select id="ts-origen" class="input">${optE()}</select></div>
+          <div><label class="label">Empresa que la usó *</label><select id="ts-destino" class="input">${optE(emps[1]?.id)}</select></div>
+          <div><label class="label">Fecha *</label><input id="ts-fecha" class="input" type="date" value="${new Date().toISOString().slice(0,10)}"/></div>
+          <div><label class="label">Motivo *</label><input id="ts-motivo" class="input" placeholder="Ej: pagó gasto de..."/></div>
+        </div>`,
+      footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+               <button class="btn btn-primary" onclick="tenedorSaldarSave()">Registrar</button>`
+    });
+  };
+  window.tenedorSaldarSave = async () => {
+    const body = {
+      tenedor: ($('#ts-ten')?.value || '').trim(),
+      monto: Number($('#ts-monto')?.value || 0),
+      empresaOrigenId: $('#ts-origen')?.value || '',
+      empresaDestinoId: $('#ts-destino')?.value || '',
+      fecha: $('#ts-fecha')?.value || '',
+      motivo: ($('#ts-motivo')?.value || '').trim(),
+    };
+    if (!body.tenedor) return toast('Elegí el tenedor', 'warn');
+    if (!(body.monto > 0)) return toast('Poné un monto mayor a 0', 'warn');
+    if (!body.empresaOrigenId || !body.empresaDestinoId) return toast('Elegí las dos empresas', 'warn');
+    if (body.empresaOrigenId === body.empresaDestinoId) return toast('Tienen que ser dos empresas distintas', 'warn');
+    if (!body.motivo) return toast('Poné un motivo', 'warn');
+    try {
+      await api('/api/efectivo/transferencia-intercompany', { method: 'POST', body: JSON.stringify(body) });
+      toast('Listo: se registró la deuda entre empresas y se acomodaron los saldos.', 'success');
+      closeModal();
+      pages.resumenGlobal();
+    } catch (e) { toast(e.message, 'error'); }
   };
   window.resumenLimpiarCajasFiltros = () => {
     cajasFiltro = new Set();
