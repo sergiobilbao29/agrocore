@@ -2916,6 +2916,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/09/2026',
+      titulo:'🧾 v2.249.0 — Resumen multiempresa: filtrar solo cheques de terceros',
+      desc:'En el <b>Resumen multiempresa</b>, en el recuadro de <b>Cheques físicos en cartera</b>, se agregó la casilla <b>“Solo cheques de terceros”</b>. Al tildarla, el listado deja únicamente los cheques <b>de terceros</b> de todas las empresas seleccionadas (NLL, Del Pistrin, Gerardo, RPI) y el <b>total</b> se recalcula solo con esos — ideal para el listado que se pasa el viernes. Sin tildar, sigue mostrando propios + terceros como antes.' },
     { tag:'Mejora', color:'bg-red-100 text-red-800 border-red-300', fecha:'24/09/2026',
       titulo:'🛡️ v2.248.0 — No se pueden cargar CP duplicadas + fix de la fecha al importar',
       desc:'Dos arreglos importantes en <b>Viajes / cartas de porte</b>: <b>(1)</b> ahora el sistema <b>bloquea cargar una carta de porte repetida</b> — si el <b>CTG (o N° de CP)</b> ya existe en <b>esta empresa o en cualquier otra del grupo</b>, no la deja crear/importar y avisa en qué empresa ya está (evita duplicar el stock y lo declarado). <b>(2)</b> Al <b>importar la CP desde el PDF de ARCA</b>, la <b>fecha del viaje</b> ahora toma la <b>fecha de PARTIDA</b> real de la carta de porte (antes agarraba por error el sello de impresión del PDF y las cargaba con la fecha del día).' },
@@ -5988,6 +5991,9 @@ pages.resumenGlobal = async function() {
   let cajaEmpresasFiltro = (() => {
     try { return new Set(JSON.parse(localStorage.getItem(CAJA_EMP_KEY) || '[]')); } catch { return new Set(); }
   })();
+  // Cheques físicos en cartera: filtrar solo los de terceros (para el listado del viernes).
+  const CH_TERC_KEY = 'ac.resumenChSoloTerceros';
+  let chSoloTerceros = (localStorage.getItem(CH_TERC_KEY) === '1');
   // Filtros del recuadro de stock multi-empresa (ahora MULTI cada uno: Sets)
   const STOCK_KEY = 'ac.resumenStockFilter';
   let stockFiltro = (() => {
@@ -6194,26 +6200,33 @@ pages.resumenGlobal = async function() {
           }
         }
         chFilas.sort((a,b)=> (a.empresaName||'').localeCompare(b.empresaName||'','es') || (new Date(a.fechaPago||0)-new Date(b.fechaPago||0)));
-        const totCh = chFilas.reduce((a,c)=>a+Number(c.monto||0),0);
+        // Filtro "solo terceros": para el listado que se pasa el viernes (excluye los propios).
+        const chView = chSoloTerceros ? chFilas.filter(c => (c.tipo||'') !== 'propio') : chFilas;
+        const totCh = chView.reduce((a,c)=>a+Number(c.monto||0),0);
         const hoyMs = Date.now();
-        if (chFilas.length === 0) {
+        const chTogglineHTML = `<label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none"><input type="checkbox" ${chSoloTerceros?'checked':''} onchange="resumenToggleChTerceros()"> Solo cheques de terceros</label>`;
+        if (chView.length === 0) {
           return `
           <div class="kpi p-0 overflow-hidden mt-4">
-            <div class="px-4 py-3 bg-slate-50 border-b">
-              <h3 class="font-semibold text-slate-800">🧾 Cheques físicos en cartera</h3>
-              <div class="text-xs text-slate-500">Detalle de los cheques físicos disponibles en cartera, por empresa.</div>
+            <div class="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 class="font-semibold text-slate-800">🧾 Cheques físicos en cartera</h3>
+                <div class="text-xs text-slate-500">Detalle de los cheques físicos disponibles en cartera, por empresa.</div>
+              </div>
+              ${chTogglineHTML}
             </div>
-            <div class="text-center text-slate-400 py-8 px-4">Las empresas seleccionadas no tienen cheques físicos en cartera.</div>
+            <div class="text-center text-slate-400 py-8 px-4">${chSoloTerceros ? 'Las empresas seleccionadas no tienen cheques físicos <b>de terceros</b> en cartera.' : 'Las empresas seleccionadas no tienen cheques físicos en cartera.'}</div>
           </div>`;
         }
         return `
         <div class="kpi p-0 overflow-hidden mt-4">
           <div class="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 class="font-semibold text-slate-800">🧾 Cheques físicos en cartera <span class="text-slate-400 font-normal">(${chFilas.length})</span></h3>
+              <h3 class="font-semibold text-slate-800">🧾 Cheques físicos en cartera <span class="text-slate-400 font-normal">(${chView.length})</span></h3>
               <div class="text-xs text-slate-500">Detalle uno por uno (no e-cheq). Los vencidos aparecen en rojo.</div>
+              <div class="mt-1.5">${chTogglineHTML}</div>
             </div>
-            <div class="text-right"><div class="text-[11px] text-slate-500">Total en cartera (físicos)</div><div class="text-lg font-bold text-emerald-700">${fmt$(totCh)}</div></div>
+            <div class="text-right"><div class="text-[11px] text-slate-500">Total en cartera (${chSoloTerceros?'solo terceros':'físicos'})</div><div class="text-lg font-bold text-emerald-700">${fmt$(totCh)}</div></div>
           </div>
           <div class="overflow-x-auto">
             <table class="data text-sm">
@@ -6221,7 +6234,7 @@ pages.resumenGlobal = async function() {
                 <th>Empresa</th><th>N°</th><th>Banco</th><th>Librador / De quién</th><th>En poder de</th><th>Tipo</th><th class="text-right">Vencimiento</th><th class="text-right">Monto</th>
               </tr></thead>
               <tbody>
-                ${chFilas.map(c=>{ const venc = c.fechaPago && (new Date(c.fechaPago).getTime() < hoyMs); return `<tr class="table-row">
+                ${chView.map(c=>{ const venc = c.fechaPago && (new Date(c.fechaPago).getTime() < hoyMs); return `<tr class="table-row">
                   <td><div class="flex items-center gap-1.5">${c.color?`<span class="w-2.5 h-2.5 rounded-full" style="background:${esc(c.color)}"></span>`:''}<span class="text-xs">${esc(c.empresaName)}</span></div></td>
                   <td class="font-mono text-xs">${esc(c.nroCheque||'—')}</td>
                   <td class="text-xs">${esc(c.banco||'—')}</td>
@@ -6553,6 +6566,11 @@ pages.resumenGlobal = async function() {
   window.resumenToggleCajaEmpresa = (empresaId) => {
     toggleInSet(cajaEmpresasFiltro, empresaId);
     localStorage.setItem(CAJA_EMP_KEY, JSON.stringify([...cajaEmpresasFiltro]));
+    render();
+  };
+  window.resumenToggleChTerceros = () => {
+    chSoloTerceros = !chSoloTerceros;
+    localStorage.setItem(CH_TERC_KEY, chSoloTerceros ? '1' : '0');
     render();
   };
   window.resumenLimpiarCajasFiltros = () => {
