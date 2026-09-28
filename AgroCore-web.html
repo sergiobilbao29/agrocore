@@ -1769,7 +1769,7 @@ async function switchCompany(id) {
 async function applyCompanyTheme() {
   const m = currentMembership();
   const root = document.documentElement;
-  let color = '#15803d', informal = false;
+  let color = '#15803d', informal = false, cajaTenedor = false;
   try {
     if (!state.cache.empresas) {
       const r = await api('/api/empresas');
@@ -1779,6 +1779,7 @@ async function applyCompanyTheme() {
     if (emp) {
       color = emp.color || '#15803d';
       informal = emp.informal === true;
+      cajaTenedor = emp.cajaPorTenedor === true;
     }
   } catch {}
   const wm = $('#company-watermark');
@@ -1798,6 +1799,7 @@ async function applyCompanyTheme() {
   root.style.setProperty('--company-tint-4', `rgba(${r},${g},${b},0.18)`);
   root.style.setProperty('--company-tint-bg', `rgba(${r},${g},${b},0.09)`);
   state.companyInformal = informal;
+  state.cajaPorTenedor = cajaTenedor;
 }
 
 // Estado de plegado de las secciones del sidebar (se persiste en localStorage por usuario).
@@ -2916,6 +2918,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
+      titulo:'💵 v2.251.0 — Caja por tenedor (Fase 2): elegir el tenedor al cobrar/pagar',
+      desc:'Segunda parte del <b>efectivo por tenedor</b>. Con la opción activada, en <b>todos los cobros y pagos con efectivo</b> (cuentas a cobrar/pagar, cobro/pago de guías DT-e, liquidaciones, pago a proveedor y movimientos diarios) el campo “Caja” ahora dice <b>“Tenedor”</b> — elegís quién tiene/recibe la plata (Oficina, Lucas, Luciano). Si la empresa no tiene el modo activo, todo sigue diciendo “Caja” como antes. <i>Próxima fase:</i> arqueo consolidado por tenedor sumando todas las empresas + asiento automático entre empresas.' },
+    { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
+      titulo:'💵 v2.250.0 — Caja por tenedor (Fase 1): quién tiene la plata',
+      desc:'Primera parte del <b>efectivo unificado entre empresas</b>. En <b>Administración → Empresas</b>, cada empresa tiene la opción <b>“Caja por tenedor”</b>: al activarla, en <b>Control de efectivo</b> el campo “Caja” pasa a llamarse <b>“Tenedor”</b> (quién tiene la plata: Oficina, Lucas, Luciano…). Los tenedores se cargan en <b>Configuración → Catálogos → Caja</b>. Es <b>opcional</b>: si no la activás, todo sigue igual (caja por empresa). <i>Próximas fases:</i> arqueo consolidado por tenedor sumando todas las empresas y el asiento automático entre empresas para que no se dupliquen los movimientos.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/09/2026',
       titulo:'🧾 v2.249.0 — Resumen multiempresa: filtrar solo cheques de terceros',
       desc:'En el <b>Resumen multiempresa</b>, en el recuadro de <b>Cheques físicos en cartera</b>, se agregó la casilla <b>“Solo cheques de terceros”</b>. Al tildarla, el listado deja únicamente los cheques <b>de terceros</b> de todas las empresas seleccionadas (NLL, Del Pistrin, Gerardo, RPI) y el <b>total</b> se recalcula solo con esos — ideal para el listado que se pasa el viernes. Sin tildar, sigue mostrando propios + terceros como antes.' },
@@ -10378,6 +10386,10 @@ function empForm(id=null) {
           <input id="f-inf" type="checkbox" ${it.informal?'checked':''} />
           <label for="f-inf" class="text-sm">Empresa informal (sin facturación ARCA)</label>
         </div>
+        <div class="col-span-2 flex items-start gap-2 mt-1">
+          <input id="f-tenedor" type="checkbox" ${it.cajaPorTenedor?'checked':''} class="mt-0.5" />
+          <label for="f-tenedor" class="text-sm">Caja por tenedor <span class="text-slate-400">— el efectivo se maneja por persona que tiene la plata (Oficina, Lucas, Luciano), unificado entre las empresas del grupo. Activalo en todas las empresas del grupo que compartan la misma caja.</span></label>
+        </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='empSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
@@ -10414,6 +10426,7 @@ async function empSave(id) {
     telefono: $('#f-tel').value.trim()||null,
     email: $('#f-em').value.trim()||null,
     informal: $('#f-inf').checked,
+    cajaPorTenedor: $('#f-tenedor')?.checked || false,
   };
   if (!data.name) return toast('Nombre requerido','warn');
   try { await api('/api/empresas'+(id?'/'+id:''), { method: id?'PUT':'POST', body: JSON.stringify(data) });
@@ -16848,7 +16861,7 @@ function hacVentaCobroChange(){
   const c=$('#h-cobro')?.value; const det=$('#h-cobro-det'); if(!det) return;
   if (c==='efectivo'){
     const cajas=catByTipo('Caja').map(x=>x.nombre).filter(Boolean);
-    det.innerHTML = `<label class="label">Caja</label>${cajas.length?`<select id="h-cobro-caja" class="input"><option value="">— elegir —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select>`:`<input id="h-cobro-caja" class="input" placeholder="Nombre de caja"/>`}`;
+    det.innerHTML = `<label class="label">${state.cajaPorTenedor?'Tenedor':'Caja'}</label>${cajas.length?`<select id="h-cobro-caja" class="input"><option value="">— elegir —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select>`:`<input id="h-cobro-caja" class="input" placeholder="Nombre de caja"/>`}`;
   } else if (c==='banco'){
     const ctas=(state.cache.bancoCuentas||[]).filter(x=>x.activo!==false);
     det.innerHTML = `<label class="label">Cuenta bancaria</label><select id="h-cobro-banco" class="input"><option value="">— elegir —</option>${ctas.map(x=>`<option value="${esc(x.id)}">${esc(x.banco)}${x.alias?' · '+esc(x.alias):''}</option>`).join('')}</select>${ctas.length?'':'<p class="text-[11px] text-amber-700 mt-1">No hay cuentas bancarias cargadas. Cargá una en Bancos o usá otro medio.</p>'}`;
@@ -18572,7 +18585,7 @@ function pagoCobroMetodoCambio(modo) {
   if (metodo === 'efectivo') {
     const cajas = state.cache.efectivoCajas || [];
     if (cajas.length) {
-      cont.innerHTML = `<label class="label">${esPago ? 'Caja de la que sale el efectivo' : 'Caja donde ingresa el efectivo'} *</label>
+      cont.innerHTML = `<label class="label">${state.cajaPorTenedor ? 'Tenedor (quién tiene la plata)' : (esPago ? 'Caja de la que sale el efectivo' : 'Caja donde ingresa el efectivo')} *</label>
         <select id="pc-caja" class="input">
           <option value="">— Elegir caja —</option>
           ${cajas.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
@@ -19749,9 +19762,9 @@ function ccMetodoCambio() {
   if (met === 'efectivo') {
     const cajas = state.cache.efectivoCajas || [];
     det.innerHTML = cajas.length
-      ? `<label class="label">${esPago ? 'Caja de la que sale' : 'Caja donde ingresa'}</label>
+      ? `<label class="label">${state.cajaPorTenedor ? 'Tenedor' : (esPago ? 'Caja de la que sale' : 'Caja donde ingresa')}</label>
          <select id="f-met-caja" class="input"><option value="">— Elegir —</option>${cajas.map(c => `<option>${esc(c)}</option>`).join('')}</select>`
-      : `<label class="label">${esPago ? 'Caja' : 'Caja'}</label><input id="f-met-caja" class="input" placeholder="Nombre de caja"/>`;
+      : `<label class="label">${state.cajaPorTenedor ? 'Tenedor' : 'Caja'}</label><input id="f-met-caja" class="input" placeholder="Nombre de caja"/>`;
   } else if (met === 'cheque') {
     const cheques = (state.cache.cheques || []).filter(c => /en[_ ]?cartera|emitido|depositado/i.test(c.estado || ''));
     det.innerHTML = cheques.length
@@ -21078,7 +21091,7 @@ function viajeMarcarPagadoMetodo() {
   if (!c) return;
   if (m === 'efectivo') {
     const cajas = state.cache.efectivoCajas || [];
-    c.innerHTML = `<label class="label">Caja de la que sale el efectivo *</label>` + (cajas.length
+    c.innerHTML = `<label class="label">${state.cajaPorTenedor?'Tenedor (quién tiene la plata) *':'Caja de la que sale el efectivo *'}</label>` + (cajas.length
       ? `<select id="vmp-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select>`
       : `<input id="vmp-caja" class="input" placeholder="Ej: Oficina..."/><div class="text-[11px] text-amber-700 mt-1">⚠️ No hay cajas cargadas. Cargalas en Configuración → Catálogos → Cajas.</div>`);
   } else if (m === 'transferencia') {
@@ -21622,7 +21635,7 @@ function viajeFacPagarMetodoCambio() {
   if (metodo === 'efectivo') {
     const cajas = state.cache.efectivoCajas || [];
     if (cajas.length) {
-      cont.innerHTML = `<label class="label">Caja de la que sale el efectivo *</label>
+      cont.innerHTML = `<label class="label">${state.cajaPorTenedor?'Tenedor (quién tiene la plata) *':'Caja de la que sale el efectivo *'}</label>
         <select id="vfp-caja" class="input">
           <option value="">— Elegir caja —</option>
           ${cajas.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
@@ -23944,7 +23957,7 @@ function empLiqForm(periodo){
             ${(state.user?.companies||[]).length > 1 ? `<option value="intercompany">🔄 Intercompany (otra firma paga)</option>` : ''}
           </select>
         </div>
-        <div id="lq-caja-wrap"><label class="label">Caja *</label>${catSelect('lq-caja','Caja','',{placeholder:'— Elegir caja —'})}</div>
+        <div id="lq-caja-wrap"><label class="label">${state.cajaPorTenedor?'Tenedor *':'Caja *'}</label>${catSelect('lq-caja','Caja','',{placeholder: state.cajaPorTenedor?'— Quién tiene la plata —':'— Elegir caja —'})}</div>
         <div id="lq-tarjeta-wrap">${tarjetaPicker('lq-tarjeta')}</div>
         <div id="lq-banco-wrap"><label class="label">Banco</label>${catSelect('lq-banco','Banco','',{placeholder:'— Elegir banco —'})}</div>
         <div id="lq-cheque-wrap"><label class="label">N° de cheque *</label><input id="lq-cheque" class="input"/></div>
@@ -26935,7 +26948,7 @@ async function arrPagarCuota(id, idx){
           <option value="tarjeta">💳 Tarjeta de crédito</option>
         </select>
       </div>
-      <div id="ap-efectivo-wrap"><label class="label">Caja de la que sale el pago</label>
+      <div id="ap-efectivo-wrap"><label class="label">${state.cajaPorTenedor?'Tenedor (quién tiene la plata)':'Caja de la que sale el pago'}</label>
         <select id="ap-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
         ${cajas.length?'':'<div class="text-[11px] text-amber-700 mt-1">No hay cajas cargadas. Cargá una en Catálogos → Cajas.</div>'}</div>
       <div id="ap-tarjeta-wrap" style="display:none">${tarjetaPicker('ap-tarjeta')}</div>
@@ -28190,7 +28203,7 @@ function movDiariosMetodoCambio() {
   if (met === 'efectivo') {
     const cajas = state.cache.efectivoCajas || [];
     det.innerHTML = cajas.length
-      ? `<label class="label">Caja *</label>
+      ? `<label class="label">${state.cajaPorTenedor?'Tenedor *':'Caja *'}</label>
          <select id="md-caja" class="input">
            <option value="">— Elegir caja —</option>
            ${cajas.map(c => `<option>${esc(c)}</option>`).join('')}
@@ -28550,7 +28563,7 @@ function efForm(id=null, tipoInicial=null) {
             <option value="transferencia" ${tipo==='transferencia'?'selected':''}>Transferencia entre cajas</option>
           </select>
         </div>
-        <div id="f-caja-wrap"><label class="label" id="f-caja-lbl">Caja *</label>${catSelect('f-caja', 'Caja', it.caja||'', { placeholder:'— Elegir caja —' })}</div>
+        <div id="f-caja-wrap"><label class="label" id="f-caja-lbl">${state.cajaPorTenedor?'Tenedor *':'Caja *'}</label>${catSelect('f-caja', 'Caja', it.caja||'', { placeholder: state.cajaPorTenedor?'— Quién tiene la plata —':'— Elegir caja —' })}</div>
         <div id="f-cajadest-wrap"><label class="label">Caja destino *</label>${catSelect('f-cajadest', 'Caja', it.cajaDestino||'', { placeholder:'— Elegir caja —' })}</div>
         <div class="col-span-2"><label class="label">Concepto *</label><input id="f-con" class="input" value="${esc(it.concepto||'')}" placeholder="Ej: cobranza cliente, combustible, mercado…"/></div>
         <div><label class="label">Monto *</label><input id="f-mon" class="input" type="number" step="0.01" min="0" value="${it.monto||''}"/></div>
@@ -28573,12 +28586,12 @@ function efTipoChange() {
   if (tipo==='transferencia') {
     $('#f-cajadest-wrap').style.display = '';
     $('#f-clasif-wrap').style.display = 'none';
-    $('#f-caja-lbl').textContent = 'Caja origen *';
+    $('#f-caja-lbl').textContent = state.cajaPorTenedor ? 'Tenedor origen *' : 'Caja origen *';
     $('#f-hint').textContent = 'La plata sale de la caja origen y entra a la caja destino. El total general de la empresa no cambia.';
   } else {
     $('#f-cajadest-wrap').style.display = 'none';
     $('#f-clasif-wrap').style.display = '';
-    $('#f-caja-lbl').textContent = 'Caja *';
+    $('#f-caja-lbl').textContent = state.cajaPorTenedor ? 'Tenedor *' : 'Caja *';
     $('#f-hint').textContent = tipo==='ingreso'
       ? 'Entra plata a la caja elegida. Marcá si es un ingreso de la empresa o propio.'
       : 'Sale plata de la caja elegida. Marcá si el gasto es de la empresa o propio.';
@@ -33514,7 +33527,7 @@ async function cuotaPagar(credId, cuotaId) {
           </select>
           <div class="text-[11px] text-slate-500 mt-1">Si la elegís, se carga el movimiento de egreso en esa cuenta (siempre en pesos).</div>
         </div>
-        <div id="cp-caja-wrap" style="display:none"><label class="label">Caja de la que sale el pago</label>
+        <div id="cp-caja-wrap" style="display:none"><label class="label">${state.cajaPorTenedor?'Tenedor (quién tiene la plata)':'Caja de la que sale el pago'}</label>
           <select id="cp-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
           ${cajas.length?'':'<div class="text-[11px] text-amber-700 mt-1">No hay cajas cargadas. Cargá una en Catálogos → Cajas.</div>'}
         </div>

@@ -31,6 +31,10 @@ model Company {
   logoUrl         String?   // logo base64 o URL
   modulosOcultos  String?   // JSON: ids de módulos ocultos para esta empresa (por actividad)
   informal        Boolean   @default(false) // sin facturación ARCA
+  // v2.250.0 — Modo "caja por tenedor": el efectivo se maneja por PERSONA que tiene
+  // la plata (Oficina, Lucas, Luciano), consolidado entre las empresas del grupo,
+  // en vez de por caja separada por empresa. Opt-in: se activa por empresa del grupo.
+  cajaPorTenedor  Boolean   @default(false)
   activo          Boolean   @default(true)
   // ---- Prueba gratuita self-service (instancia trial) ----
   plan            String    @default("full")  // "full" (cliente) | "trial" (prueba 30 días)
