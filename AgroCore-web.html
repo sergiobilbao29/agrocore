@@ -2918,6 +2918,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/09/2026',
+      titulo:'📖 v2.254.0 — Caja por tenedor: ayuda del asistente + manual',
+      desc:'El <b>asistente (bot)</b> ahora explica la <b>caja por tenedor</b>: cómo activarla, cargar el efectivo por persona, ver el consolidado y saldar entre empresas. Preguntale “caja por tenedor” o “cuánto efectivo tiene cada uno”. También se documentó en el manual de usuario.' },
     { tag:'Nuevo', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'28/09/2026',
       titulo:'⚖️ v2.253.0 — Caja por tenedor (Fase 4): saldar efectivo entre empresas',
       desc:'Última parte del <b>efectivo por tenedor</b>. En el recuadro consolidado del Resumen multiempresa hay un botón <b>“⚖️ Saldar entre empresas”</b>: cuando una empresa puso el efectivo y otra lo usó (misma persona/caja), registrás en un paso que <b>una le prestó a la otra</b>. El sistema mueve el efectivo de una empresa a la otra para ese tenedor y deja la <b>deuda entre empresas</b> en cuenta corriente (asientos espejo) — así <b>no queda plata fantasma</b> ni se duplican los movimientos, y los libros de cada empresa quedan correctos. El total en mano del tenedor no cambia.' },

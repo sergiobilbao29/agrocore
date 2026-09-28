@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.253.0';
+const AGROCORE_VERSION = '2.254.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13069,6 +13069,16 @@ const _AYUDA_KB = [
       'Entrá a Tablero → Resumen multi-empresa. Arriba tenés las tarjetas del grupo (cheques en cartera, a vencer, vencidos, efectivo, créditos, a cobrar/pagar, etc.) y la tabla por empresa. Con los tildes elegís qué empresas entran en los totales.',
       'Debajo de la tabla está el recuadro "🧾 Cheques físicos en cartera": lista los cheques físicos (no e-cheq) UNO POR UNO de las empresas tildadas, con N°, banco, librador / de quién vino, en poder de quién está, tipo, vencimiento e importe, y el total al pie.',
       'Los cheques vencidos aparecen en rojo. Para ver o gestionar un cheque puntual (depositar, endosar, etc.) usá el botón "Cheques →" de la empresa o entrá a esa empresa → Cheques.'],
+    atajo:{ page:'resumenGlobal', label:'Abrir Resumen multi-empresa' } },
+  { id:'caja_por_tenedor', terms:['caja por tenedor','tenedor','quien tiene la plata','efectivo por persona','caja unica','una sola caja','efectivo unificado','caja de lucas','caja de luciano','caja oficina','plata de otra empresa','efectivo entre empresas','saldar entre empresas','plata fantasma','se duplica el efectivo','cuanto efectivo tiene cada uno','arqueo por persona','deuda entre empresas por efectivo'],
+    titulo:'Caja por tenedor (efectivo unificado entre empresas)',
+    pasos:[
+      'Para qué sirve: cuando el grupo maneja UNA sola caja física por persona (Oficina, Lucas, Luciano) aunque la plata sea de varias empresas. Así cargás el efectivo por quién lo tiene, no por empresa, y ves cuánto tiene cada uno sumando todo.',
+      'Activarlo (una vez): Administración → Empresas → editar cada empresa del grupo → tildar "Caja por tenedor". Activalo en TODAS las empresas que comparten la caja. Cargá las personas en Configuración → Catálogos → Caja (Oficina, Lucas, Luciano…).',
+      'Día a día: en Control de efectivo y en todos los cobros/pagos con efectivo (cuentas a cobrar/pagar, guías, liquidaciones, pago a proveedor, movimientos diarios) el campo pasa a llamarse "Tenedor": elegís quién tiene o recibe la plata. No hace falta pensar en la empresa.',
+      'Ver el total de cada uno: Tablero → Resumen multi-empresa → recuadro "🧑‍💼 Efectivo por tenedor (consolidado)": muestra cuánto tiene cada persona sumando todas las empresas, con el detalle de qué empresa es cada parte.',
+      'Cerrar los números por empresa (lo hace el admin/contador cada tanto, NO la operativa diaria): en ese recuadro, botón "⚖️ Saldar entre empresas". Cuando una empresa puso el efectivo y otra lo usó, registra que una le prestó a la otra: acomoda los saldos y deja la deuda entre empresas en cuenta corriente. El total en mano del tenedor no cambia y no se duplica nada.',
+      'Es opcional: si una empresa no tiene tildado "Caja por tenedor", sigue trabajando con la caja por empresa como siempre.'],
     atajo:{ page:'resumenGlobal', label:'Abrir Resumen multi-empresa' } },
   { id:'sociedades_ute', terms:['sociedad','ute','sociedad de campaña','negocio en participacion','union transitoria','socios','armar una sociedad','campos de varias empresas','campos de socios','liquidar la sociedad','participacion de socios','como reparto entre socios','aportes de socios','spl','sociedad multiempresa','campo externo','cosecha en conjunto','cargar labor en la sociedad','cargar insumo en la sociedad','cargar sin cambiar de empresa','carga centralizada','labores campo externo','insumos campo externo','no me deja cargar en el campo externo','me figura campaña cerrada','se cuela la campaña vieja'],
     titulo:'Sociedades / UTE (negocio en participación entre empresas)',
