@@ -2919,6 +2919,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'29/09/2026',
+      titulo:'🧑‍💼 v2.259.0 — Control de efectivo: consolidado por tenedor + movimientos de todas las empresas',
+      desc:'Se corrigió por qué el recuadro <b>“Efectivo por tenedor — todas las empresas”</b> no aparecía en Control de efectivo (un choque interno de rutas). Ahora <b>sí se ve</b> el total de cada persona sumando todas las empresas del grupo, y además se agregó abajo la tabla <b>“Movimientos de efectivo — todas las empresas”</b>: lista los últimos movimientos de caja de todas las empresas con la <b>columna de qué empresa</b> es cada uno. (Para editar un movimiento, entrás a la empresa correspondiente.)' },
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'29/09/2026',
       titulo:'🔄 v2.258.0 — La pantalla siempre toma la última versión (sin caché vieja)',
       desc:'Ajuste técnico: el sistema ya no deja que el navegador guarde en caché la pantalla de la app. Así, apenas se publica una actualización, <b>al recargar ves siempre la versión nueva</b> — se termina el problema de que el sistema figuraba actualizado pero la pantalla mostraba lo viejo (por eso el recuadro “Efectivo por tenedor” a veces no aparecía en Control de efectivo aunque ya estaba). <i>Una última recarga fuerte (Ctrl+F5) y queda al día.</i>' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'29/09/2026',
@@ -28666,9 +28669,11 @@ pages.efectivo = async function() {
       const cont = document.getElementById('ef-consolidado');
       if (!cont) return;
       try {
-        const r = await api('/api/efectivo/consolidado-tenedor');
+        const r = await api('/api/efectivo-consolidado-tenedor');
         const d = (r && r.data) || {};
         if (!d.activo || !(d.tenedores || []).length) { cont.innerHTML = ''; return; }
+        const badge = (tipo) => tipo==='ingreso' ? '<span class="badge badge-green">Ingreso</span>' : tipo==='egreso' ? '<span class="badge badge-red">Egreso</span>' : '<span class="badge badge-blue">Transferencia</span>';
+        const movs = (d.movimientos || []);
         cont.innerHTML = `
           <div class="kpi p-0 overflow-hidden">
             <div class="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-center justify-between gap-2">
@@ -28687,7 +28692,24 @@ pages.efectivo = async function() {
               </tr>`).join('')}</tbody>
               <tfoot><tr class="font-bold bg-slate-50"><td colspan="2" class="text-right">TOTAL EN MANO</td><td class="text-right text-emerald-700">${fmt$(d.total || 0)}</td></tr></tfoot>
             </table></div>
-          </div>`;
+          </div>
+          ${movs.length ? `<div class="kpi p-0 overflow-hidden mt-4">
+            <div class="px-4 py-3 bg-slate-50 border-b">
+              <h3 class="font-semibold text-slate-800">💵 Movimientos de efectivo — todas las empresas</h3>
+              <div class="text-xs text-slate-500">Últimos ${movs.length} movimientos de todas las empresas del grupo, con la empresa de cada uno. Para editarlos, entrá a la empresa correspondiente.</div>
+            </div>
+            <div class="overflow-x-auto"><table class="data text-sm">
+              <thead><tr><th>Fecha</th><th>Empresa</th><th>Tenedor</th><th>Tipo</th><th>Concepto</th><th class="text-right">Monto</th></tr></thead>
+              <tbody>${movs.map(m => { const neg = m.tipo==='egreso'; const cajaCell = m.tipo==='transferencia' ? `${esc(m.caja||'?')} → ${esc(m.cajaDestino||'?')}` : esc(m.caja||'—'); return `<tr class="table-row">
+                <td class="whitespace-nowrap">${m.fecha?fmtFecha(m.fecha):'—'}</td>
+                <td><div class="flex items-center gap-1.5">${m.color?`<span class="w-2.5 h-2.5 rounded-full" style="background:${esc(m.color)}"></span>`:''}<span class="text-xs">${esc(m.empresaName)}</span></div></td>
+                <td class="text-xs">${cajaCell}</td>
+                <td>${badge(m.tipo)}</td>
+                <td class="text-xs">${esc(m.concepto||'')}</td>
+                <td class="text-right font-semibold ${neg?'text-red-600':(m.tipo==='ingreso'?'text-emerald-700':'text-blue-700')}">${neg?'-':(m.tipo==='ingreso'?'+':'')}${fmt$(m.monto)}</td>
+              </tr>`; }).join('')}</tbody>
+            </table></div>
+          </div>` : ''}`;
       } catch (e) { cont.innerHTML = ''; }
     })();
   }

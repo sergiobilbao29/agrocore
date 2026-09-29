@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.258.0';
+const AGROCORE_VERSION = '2.259.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6540,13 +6540,16 @@ app.post('/api/efectivo/transferencia-intercompany', requireCompany, requirePerm
 // con "caja por tenedor". Se usa en Control de efectivo para ver, sin salir de la
 // página, cuánto tiene cada persona sumando todas las empresas. Requiere solo
 // finanzas:read (no Reportes).
-app.get('/api/efectivo/consolidado-tenedor', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+// OJO: la ruta NO puede colgar de /api/efectivo/... porque el CRUD de efectivo tiene
+// GET /api/efectivo/:id y capturaría "consolidado-tenedor" como si fuera un id. Por eso
+// va como /api/efectivo-consolidado-tenedor.
+app.get('/api/efectivo-consolidado-tenedor', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
   try {
     let empresas = req.user.superAdmin
       ? await prisma.company.findMany({ where: { activo: true }, orderBy: { name: 'asc' } })
       : (req.user.userCompanies || []).map((uc) => uc.company);
     empresas = empresas.filter((e) => e && e.cajaPorTenedor === true);
-    if (!empresas.length) return res.json({ ok: true, data: { activo: false, tenedores: [], total: 0 } });
+    if (!empresas.length) return res.json({ ok: true, data: { activo: false, tenedores: [], total: 0, movimientos: [] } });
     const ids = empresas.map((e) => e.id);
     const empById = Object.fromEntries(empresas.map((e) => [e.id, e]));
     const efs = await prisma.efectivo.findMany({ where: { companyId: { in: ids } } });
@@ -6576,7 +6579,19 @@ app.get('/api/efectivo/consolidado-tenedor', requireCompany, requirePermission('
     }
     const tenedores = [...ten.values()].sort((a, b) => b.total - a.total);
     const total = tenedores.reduce((a, t) => a + t.total, 0);
-    res.json({ ok: true, data: { activo: true, tenedores, total, empresas: empresas.map((e) => e.name) } });
+    // Movimientos de efectivo de TODAS las empresas del grupo (con la empresa de cada uno),
+    // ordenados del más nuevo al más viejo. Se limita a los últimos 300 para no pesar.
+    const movimientos = efs
+      .slice()
+      .sort((a, b) => new Date(b.fecha || 0) - new Date(a.fecha || 0))
+      .slice(0, 300)
+      .map((e) => ({
+        id: e.id, fecha: e.fecha, empresaName: empById[e.companyId]?.name || e.companyId,
+        color: empById[e.companyId]?.color || null, tipo: e.tipo,
+        caja: e.caja || null, cajaDestino: e.cajaDestino || null,
+        concepto: e.concepto || '', monto: Number(e.monto || 0), clasificacion: e.clasificacion || null,
+      }));
+    res.json({ ok: true, data: { activo: true, tenedores, total, movimientos, empresas: empresas.map((e) => e.name) } });
   } catch (e) { next(e); }
 });
 
