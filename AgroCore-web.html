@@ -2918,6 +2918,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'29/09/2026',
+      titulo:'🏦 v2.261.0 — Importar resumen: ahora lee bien el formato del Banco Hipotecario',
+      desc:'El importador de resúmenes no reconocía el formato del <b>Banco Hipotecario</b> (usa punto decimal, ej. <code>1300343.55</code>, y pega el importe con el saldo). Tomaba mal los montos y el signo. Ahora <b>lee correctamente</b> importe y saldo, respeta el signo del banco (N/C = entra plata, N/D = sale) y separa bien cada movimiento. Los resúmenes en formato argentino clásico (con coma decimal) siguen funcionando igual. <b>Si ya importaste mal un resumen del Hipotecario:</b> deshacé esa importación (botón ↩), poné el saldo inicial de la cuenta en 0 y volvé a importar el PDF.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'29/09/2026',
       titulo:'💰 v2.260.0 — El total verde grande ahora es el del GRUPO (todas las empresas)',
       desc:'En Control de efectivo (con caja por tenedor), el <b>total verde de arriba</b> ahora muestra la <b>caja general del grupo</b> — la suma del efectivo de todas las empresas — para que se vea todo junto de una. El efectivo <b>de la empresa en la que estás parada</b> pasó a mostrarse en una tarjeta <b>justo debajo</b>. Nada cambia en la contabilidad: cada movimiento sigue quedando en su empresa.' },

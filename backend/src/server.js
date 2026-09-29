@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.260.0';
+const AGROCORE_VERSION = '2.261.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17021,8 +17021,18 @@ function _bancoTipoDesdeConcepto(concepto, signo) {
 function _parseResumenBancarioTexto(texto) {
   const lines = String(texto || '').split(/\r?\n/).map(s => s.trim());
   const movs = [];
-  const money = /-?\d[\d.]*,\d{2}/g;                      // token de plata (con 2 decimales). El CUIT no tiene coma → no matchea.
-  const fechaFull = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/;
+  // Detección del formato numérico del banco:
+  //  - Argentino:  1.234.567,89  (punto miles, coma decimal)   → _numAr
+  //  - Punto decimal / "pegado" (ej. Banco Hipotecario, que además pega importe y saldo:
+  //    "-7802.061292541.49" = importe -7802.06 + saldo 1292541.49; "1300343.551300343.55"):
+  //    números como 1300343.55 / -7802.06, sin separador de miles.
+  const esHipo = /Banco Hipotecario|IMPORTE_MON|SALDO\s+EN\s+\$/i.test(texto);
+  const hasComma = /-?\d[\d.]*,\d{2}/.test(texto);
+  const dotMode = esHipo || (!hasComma && /-?\d+\.\d{2}/.test(texto));
+  const mkMoney = () => dotMode ? /-?\d+\.\d{2}/g : /-?\d[\d.]*,\d{2}/g;   // 2 decimales sí o sí.
+  const money = mkMoney();                                // token de plata. El CUIT no tiene decimales → no matchea.
+  const parseNum = (s) => dotMode ? (parseFloat(String(s).replace(/[^0-9.\-]/g, '')) || NaN) : _numAr(s);
+  const fechaFull = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?!\d)/;   // tolera fecha PEGADA a la descripción (28/09/2026N/D...).
   const fechaDM = /^(\d{1,2})\/(\d{1,2})$/;
   const fechaY = /^\/(\d{4})$/;
   // Formato Technisys "tabla" (una línea por movimiento):
@@ -17046,7 +17056,7 @@ function _parseResumenBancarioTexto(texto) {
     if ((m = ln.match(fechaFull))) { let y = +m[3]; if (y < 100) y += 2000; startBloque(`${y}-${String(+m[2]).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`); const rest = ln.replace(fechaFull, '').trim(); if (rest) bloque.texto.push(rest); continue; }
     if ((m = ln.match(fechaDM))) { const dd = m[1], mm = m[2]; const nx = lines[i+1] || ''; const my = nx.match(fechaY); const y = my ? +my[1] : new Date().getFullYear(); if (my) i++; startBloque(`${y}-${String(+mm).padStart(2,'0')}-${String(+dd).padStart(2,'0')}`); continue; }
     if (fechaY.test(ln)) continue;
-    if (/^(fecha|comprobante|concepto|monto|saldo|.ltimos|p.gina|pagina|mi.rcoles|lunes|martes|jueves|viernes|s.bado|domingo)/i.test(ln)) continue;
+    if (/^(fecha|comprobante|concepto|monto|saldo|importe|descrip|total\b|total:|el presente|correspondiente|movimientos del|cte \$|.ltimos|p.gina|pagina|mi.rcoles|lunes|martes|jueves|viernes|s.bado|domingo)/i.test(ln)) continue;
     if (bloque) bloque.texto.push(ln);
   }
   if (bloque) bloques.push(bloque);
@@ -17069,15 +17079,15 @@ function _parseResumenBancarioTexto(texto) {
       continue;
     }
     const joined = b.texto.join(' ');
-    const nums = [...joined.matchAll(money)].map(x => x[0]);
+    const nums = [...joined.matchAll(mkMoney())].map(x => x[0]);
     if (!nums.length) continue;
-    const imp = _numAr(nums[0]);                          // 1er token de plata = IMPORTE
-    const saldo = (nums[1] != null) ? _numAr(nums[1]) : null; // 2do token = SALDO
+    const imp = parseNum(nums[0]);                        // 1er token de plata = IMPORTE (con su signo)
+    const saldo = (nums[1] != null) ? parseNum(nums[1]) : null; // 2do token = SALDO
     if (!isFinite(imp) || imp === 0) continue;
     // Concepto: sacar plata, "$", el rótulo CUIT/CUIL y el CUIT (11 dígitos). El comprobante
     // (2 a 9 dígitos pegado a letras al inicio) se separa como referencia.
     let con = joined
-      .replace(money, ' ').replace(/\$/g, ' ')
+      .replace(mkMoney(), ' ').replace(/\$/g, ' ')
       .replace(/CUIT\/CUIL:?\s*\d*/ig, ' ').replace(/\b\d{11}\b/g, ' ')
       .replace(/\s{2,}/g, ' ').trim();
     let ref = '';
