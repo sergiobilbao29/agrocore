@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.257.0';
+const AGROCORE_VERSION = '2.258.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -83,7 +83,17 @@ app.use(express.json({ limit: '10mb' }));
 // Servir el HTML del frontend desde el mismo dominio (C:\AgroCore\AgroCore-web.html)
 // accesible como GET /app. Al vivir todo bajo la misma URL, se elimina CORS y se
 // puede exponer a internet con un único túnel de Cloudflare.
-app.get('/app', (_req, res) => { res.set('X-Robots-Tag', 'noindex, nofollow'); res.sendFile(path.join(STATIC_DIR, 'AgroCore-web.html')); });
+app.get('/app', (_req, res) => {
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  // No cachear el HTML de la app: así, apenas se publica una versión nueva, el
+  // navegador SIEMPRE trae el AgroCore-web.html actualizado (revalida con el server)
+  // en vez de quedarse con una copia vieja en caché. Evita el clásico "el backend
+  // ya está en la versión nueva pero la pantalla sigue mostrando la vieja".
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.sendFile(path.join(STATIC_DIR, 'AgroCore-web.html'));
+});
 app.use('/assets', express.static(path.join(STATIC_DIR, 'assets'), { fallthrough: true }));
 
 // Las instancias de clientes (bocco., peiretti., llsp., gerardo., npi., demo, etc.) son
