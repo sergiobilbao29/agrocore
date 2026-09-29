@@ -2918,6 +2918,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'29/09/2026',
+      titulo:'💰 v2.260.0 — El total verde grande ahora es el del GRUPO (todas las empresas)',
+      desc:'En Control de efectivo (con caja por tenedor), el <b>total verde de arriba</b> ahora muestra la <b>caja general del grupo</b> — la suma del efectivo de todas las empresas — para que se vea todo junto de una. El efectivo <b>de la empresa en la que estás parada</b> pasó a mostrarse en una tarjeta <b>justo debajo</b>. Nada cambia en la contabilidad: cada movimiento sigue quedando en su empresa.' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'29/09/2026',
       titulo:'🧑‍💼 v2.259.0 — Control de efectivo: consolidado por tenedor + movimientos de todas las empresas',
       desc:'Se corrigió por qué el recuadro <b>“Efectivo por tenedor — todas las empresas”</b> no aparecía en Control de efectivo (un choque interno de rutas). Ahora <b>sí se ve</b> el total de cada persona sumando todas las empresas del grupo, y además se agregó abajo la tabla <b>“Movimientos de efectivo — todas las empresas”</b>: lista los últimos movimientos de caja de todas las empresas con la <b>columna de qué empresa</b> es cada uno. (Para editar un movimiento, entrás a la empresa correspondiente.)' },
@@ -28507,9 +28510,9 @@ pages.efectivo = async function() {
     <div class="kpi mb-4" style="background:linear-gradient(135deg,#047857,#065f46);border:none;">
       <div class="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <div class="text-xs uppercase tracking-wider" style="color:#a7f3d0">💰 Caja general · total en efectivo de la empresa</div>
-          <div class="text-3xl font-extrabold text-white mt-1">${fmt$(totalGeneral)}</div>
-          <div class="text-xs mt-1" style="color:#d1fae5">Suma de todas las cajas, sin importar quién la tenga</div>
+          <div class="text-xs uppercase tracking-wider" id="ef-cg-label" style="color:#a7f3d0">💰 Caja general · total en efectivo de la empresa</div>
+          <div class="text-3xl font-extrabold text-white mt-1" id="ef-cg-monto">${fmt$(totalGeneral)}</div>
+          <div class="text-xs mt-1" id="ef-cg-sub" style="color:#d1fae5">Suma de todas las cajas, sin importar quién la tenga</div>
         </div>
         <div class="text-right text-xs" style="color:#d1fae5">
           <div>${cajas.length} caja${cajas.length===1?'':'s'}</div>
@@ -28519,6 +28522,7 @@ pages.efectivo = async function() {
     </div>
 
     <div id="ef-consolidado" class="mb-4"></div>
+    <div id="ef-empresa-total"></div>
 
     ${cajas.length===0 ? `
       <div class="stub-card mb-4">Todavía no tenés cajas cargadas. Creá tus cajas (Oficina, Luciano, Lucas…) en <b>Catálogos → Cajas (efectivo)</b> y después registrá los movimientos acá.</div>
@@ -28667,11 +28671,19 @@ pages.efectivo = async function() {
   {
     (async () => {
       const cont = document.getElementById('ef-consolidado');
+      const etDiv = document.getElementById('ef-empresa-total');
       if (!cont) return;
+      const empNombre = (state.user?.companies || []).find(c => c.id === state.companyId)?.name
+        || (state.cache.empresas || []).find(e => e.id === state.companyId)?.name || 'esta empresa';
       try {
         const r = await api('/api/efectivo-consolidado-tenedor');
         const d = (r && r.data) || {};
-        if (!d.activo || !(d.tenedores || []).length) { cont.innerHTML = ''; return; }
+        if (!d.activo || !(d.tenedores || []).length) { cont.innerHTML = ''; if (etDiv) etDiv.innerHTML = ''; return; }
+        // El verde de arriba pasa a mostrar el TOTAL DEL GRUPO; el de esta empresa va debajo.
+        const cgM = document.getElementById('ef-cg-monto'); if (cgM) cgM.textContent = fmt$(d.total || 0);
+        const cgL = document.getElementById('ef-cg-label'); if (cgL) cgL.textContent = '💰 Caja general del GRUPO · total en efectivo de todas las empresas';
+        const cgS = document.getElementById('ef-cg-sub'); if (cgS) cgS.textContent = 'Suma del efectivo de todas las empresas del grupo (por tenedor)';
+        if (etDiv) etDiv.innerHTML = `<div class="kpi mb-4" style="border-left:4px solid var(--company-color,#15803d)"><div class="flex items-center justify-between flex-wrap gap-2"><div><div class="text-[11px] uppercase tracking-wider text-slate-500">Efectivo de esta empresa</div><div class="text-base font-bold text-slate-800">${esc(empNombre)}</div></div><div class="text-2xl font-extrabold" style="color:var(--company-color,#15803d)">${fmt$(totalGeneral)}</div></div></div>`;
         const badge = (tipo) => tipo==='ingreso' ? '<span class="badge badge-green">Ingreso</span>' : tipo==='egreso' ? '<span class="badge badge-red">Egreso</span>' : '<span class="badge badge-blue">Transferencia</span>';
         const movs = (d.movimientos || []);
         cont.innerHTML = `
@@ -28710,7 +28722,7 @@ pages.efectivo = async function() {
               </tr>`; }).join('')}</tbody>
             </table></div>
           </div>` : ''}`;
-      } catch (e) { cont.innerHTML = ''; }
+      } catch (e) { cont.innerHTML = ''; if (etDiv) etDiv.innerHTML = ''; }
     })();
   }
 };
