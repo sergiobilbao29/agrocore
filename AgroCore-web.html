@@ -2767,6 +2767,7 @@ pages.ayuda = async function() {
   // Videos tutoriales en YouTube.
   const VIDEOS = [
     { id:'SUfvevn2j-M', t:'Gestión de un Haras / Caballos', d:'Un caballo de punta a punta: ficha, historial (sanidad, doma, pesajes), costos, prestar/devolver y venta con margen.' },
+    { id:'dgMB_4XgIQU', t:'Manejo integral de la hacienda', d:'Rodeos, alimentación, guías de hacienda y el costo por kilo de carne con la ganancia del ciclo.' },
     { id:'xwzjHYBQuH4', t:'Circuito de una campaña de cereal', d:'De la carga del camión a la venta: cartas de porte, entrega en el acopio, venta al comprador y liquidación agrupando los camiones.' },
   ];
   const videosHtml = `
@@ -2958,6 +2959,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'30/09/2026',
+      titulo:'🐄 v2.265.0 — Video "Manejo integral de la hacienda" en la Ayuda',
+      desc:'Sumamos a <b>Ayuda y manual</b> el video <b>🐄 Manejo integral de la hacienda</b> (rodeos, alimentación, guías y costo por kilo de carne con la ganancia). Ya son tres videos: Haras/Caballos, Hacienda y Campaña de cereal. También corregimos el enlace en el asistente 🤖 (antes el de hacienda apuntaba al video equivocado).' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'30/09/2026',
       titulo:'✨ v2.264.0 — Ajustes: carteles más lindos, facturas con mejores valores por defecto',
       desc:'Varios pulidos: los <b>carteles de confirmación</b> ahora son del estilo del sistema (ya no el cartel gris del navegador). Al <b>emitir una factura de venta o compra</b>, viene por defecto en <b>“Sin depósito”</b> (no descuenta stock salvo que elijas un depósito) y con la condición <b>“Contado”</b>. En <b>Servicios a terceros</b>, si tocás un cliente del panel de pendientes y volvés a tocarlo, se <b>des-filtra</b> (podés ver de nuevo todos). Y el <b>Tipo de labor</b> ahora ofrece <b>todas las labores del catálogo</b>, aunque no hayas entrado antes a Insumos/Labores.' },

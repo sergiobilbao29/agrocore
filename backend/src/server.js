@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.264.0';
+const AGROCORE_VERSION = '2.265.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13062,14 +13062,15 @@ const _AYUDA_KB = [
       'Arriba de todo en el menú tenés "Ayuda y manual" (visible para todos).',
       'Ahí abrís el Manual de usuario completo en una pestaña nueva.',
       'Y descargás los instructivos de procesos en PDF (inicio rápido, pagos y cobros, cheques, sueldos, compensación de cuentas, circuito de cereal, contratos, liquidación, forrajera, el manejo integral de la hacienda —rodeos, alimentación, guías, liquidaciones y costo por kg— y más), agrupados por tema.',
-      'También hay Videos tutoriales (se abren en YouTube): "Gestión de un Haras / Caballos" (https://youtu.be/SUfvevn2j-M) y "Circuito de una campaña de cereal" (https://youtu.be/xwzjHYBQuH4).'],
+      'También hay Videos tutoriales (se abren en YouTube): "Gestión de un Haras / Caballos" (https://youtu.be/SUfvevn2j-M), "Manejo integral de la hacienda" (https://youtu.be/dgMB_4XgIQU) y "Circuito de una campaña de cereal" (https://youtu.be/xwzjHYBQuH4).'],
     atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
   { id:'ayuda_videos', terms:['video','videos','video tutorial','videos tutoriales','tutorial en video','youtube','ver un video','hay videos','video de ayuda','viedo','vídeo'],
     titulo:'Videos tutoriales (YouTube)',
     pasos:[
       'Tenemos videos que muestran el sistema funcionando, en la sección "Ayuda y manual" (arriba de todo en el menú).',
       '🐎 Gestión de un Haras / Caballos: un caballo de punta a punta (ficha, historial de sanidad/doma/pesajes, costos, prestar/devolver y venta con margen) → https://youtu.be/SUfvevn2j-M',
-      '🐄 Manejo integral de la hacienda: rodeos, alimentación con descuento de stock, gastos, compras/ventas, guías y costo por kilo con la ganancia → https://youtu.be/xwzjHYBQuH4',
+      '🐄 Manejo integral de la hacienda: rodeos, alimentación con descuento de stock, gastos, compras/ventas, guías y costo por kilo con la ganancia → https://youtu.be/dgMB_4XgIQU',
+      '🌾 Circuito de una campaña de cereal: carta de porte, entrega en el acopio, venta al comprador y liquidación agrupando los camiones → https://youtu.be/xwzjHYBQuH4',
       'Se abren en YouTube; podés verlos desde la compu o el celular.'],
     atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
   { id:'mensajes', terms:['mensaje','chat','grupo','grupos','mensajeria','avisos','notificaciones','asistente','equipo','comunicar'],
