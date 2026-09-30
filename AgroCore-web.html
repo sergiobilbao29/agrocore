@@ -2413,6 +2413,46 @@ function openModal2({ title, body, footer, size='max-w-lg' }) {
 }
 function closeModal2() { const m = document.getElementById('modal2'); if (m) m.style.display = 'none'; }
 
+// Confirmación linda con el estilo del sistema (reemplaza al confirm() del navegador).
+// Devuelve una Promise<boolean>. Ej: if (await uiConfirm('¿Seguro?')) { ... }
+function uiConfirm(message, opts = {}) {
+  return new Promise(resolve => {
+    const title  = opts.title  || 'Confirmar';
+    const ok     = opts.okText || 'Aceptar';
+    const cancel = opts.cancelText || 'Cancelar';
+    const icon   = opts.icon || '❓';
+    const danger = !!opts.danger;
+    let done = false;
+    window.__uiConfirmDone = (v) => { if (done) return; done = true; try { closeModal2(); } catch {} resolve(!!v); };
+    openModal2({
+      title,
+      size: 'max-w-md',
+      body: `<div class="flex items-start gap-3">
+               <div class="text-2xl leading-none">${icon}</div>
+               <div class="text-sm text-slate-700 whitespace-pre-line">${esc(message)}</div>
+             </div>`,
+      footer: `<button class="btn btn-secondary" onclick="window.__uiConfirmDone(false)">${esc(cancel)}</button>
+               <button class="btn ${danger?'btn-danger':'btn-primary'}" onclick="window.__uiConfirmDone(true)">${esc(ok)}</button>`,
+    });
+  });
+}
+// Aviso lindo (reemplaza al alert() del navegador). Devuelve Promise<void>.
+function uiAlert(message, opts = {}) {
+  return new Promise(resolve => {
+    let done = false;
+    window.__uiAlertDone = () => { if (done) return; done = true; try { closeModal2(); } catch {} resolve(); };
+    openModal2({
+      title: opts.title || 'Aviso',
+      size: 'max-w-md',
+      body: `<div class="flex items-start gap-3">
+               <div class="text-2xl leading-none">${opts.icon||'ℹ️'}</div>
+               <div class="text-sm text-slate-700 whitespace-pre-line">${esc(message)}</div>
+             </div>`,
+      footer: `<button class="btn btn-primary" onclick="window.__uiAlertDone()">${esc(opts.okText||'Entendido')}</button>`,
+    });
+  });
+}
+
 async function openMiCuenta() {
   $('#user-menu').classList.add('hidden');
   const u = state.user;
@@ -2918,6 +2958,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'30/09/2026',
+      titulo:'✨ v2.264.0 — Ajustes: carteles más lindos, facturas con mejores valores por defecto',
+      desc:'Varios pulidos: los <b>carteles de confirmación</b> ahora son del estilo del sistema (ya no el cartel gris del navegador). Al <b>emitir una factura de venta o compra</b>, viene por defecto en <b>“Sin depósito”</b> (no descuenta stock salvo que elijas un depósito) y con la condición <b>“Contado”</b>. En <b>Servicios a terceros</b>, si tocás un cliente del panel de pendientes y volvés a tocarlo, se <b>des-filtra</b> (podés ver de nuevo todos). Y el <b>Tipo de labor</b> ahora ofrece <b>todas las labores del catálogo</b>, aunque no hayas entrado antes a Insumos/Labores.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'30/09/2026',
       titulo:'📌 v2.263.0 — Servicios a terceros: cuánto hay pendiente de facturar por cliente',
       desc:'Arriba de la lista de <b>Servicios a terceros</b> aparece un panel <b>“Pendiente de facturar”</b> con el total sin facturar de cada cliente (labor + insumos) y cuántos servicios son. Tocando el nombre de un cliente, se <b>filtra por ese cliente y se tildan todos sus servicios pendientes</b>, listos para facturar juntos con un clic.' },
@@ -13797,8 +13840,8 @@ async function factForm(prefill = null) {
         <div><label class="label">Fecha *</label><input id="f-fec" class="input" type="date" value="${new Date().toISOString().slice(0,10)}"/></div>
         <div><label class="label">Depósito (stock)</label>
           <select id="f-deposito" class="input">
+            <option value="__nostock__" selected>🚫 Sin depósito (no descuenta stock)</option>
             <option value="">🌱 Campo / general</option>
-            <option value="__nostock__">🚫 Sin depósito (no descuenta stock)</option>
             ${_depsVta.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}
           </select>
         </div>
@@ -13810,7 +13853,7 @@ async function factForm(prefill = null) {
         </div>
         <div class="col-span-2"><label class="label">Condición venta</label>
           <select id="f-cv" class="input">
-            ${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}" data-fecha="${c.fechaFija||''}">${esc(c.nombre)}${c.fechaFija?` (vto ${fmtDate(c.fechaFija)})`:''}</option>`).join('')}
+            ${condicionesDePago().map(c=>`<option data-dias="${c.dias!=null?c.dias:''}" data-fecha="${c.fechaFija||''}" ${/contado/i.test(c.nombre||'')?'selected':''}>${esc(c.nombre)}${c.fechaFija?` (vto ${fmtDate(c.fechaFija)})`:''}</option>`).join('')}
           </select>
         </div>
         ${monedaFieldHTML('f')}
@@ -25289,6 +25332,15 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
     state.cache.clientes = (cl.data || state.cache.clientes || []).filter(x => x.activo !== false);
     state.cache.empleados = empleados;
     state.cache.productos = productos;
+    // Cargar el catálogo de labores si no está en cache (para que el "Tipo de labor"
+    // ofrezca TODAS las labores del catálogo, no solo las ya usadas).
+    if (!state.cache.laboresCat) {
+      try {
+        const cats = (await api('/api/catalogos')).data || [];
+        state.cache.catalogos = cats;
+        state.cache.laboresCat = cats.filter(c => c.tipo === 'Labor');
+      } catch {}
+    }
     laboresCat = state.cache.laboresCat || [];
     try { await _cargarVademecum(); } catch {}
   } catch (err) { return toast(err.message, 'error'); }
@@ -25691,9 +25743,11 @@ async function laborSave() {
       if (pages.serviciosTerceros) { await pages.serviciosTerceros(); } else { pages.insumos(); }
       // Ofrecer facturar el servicio recién cargado, o dejarlo pendiente.
       if (nuevoId && can('ventas:create')) {
-        if (confirm('Servicio cargado. ¿Querés facturarlo ahora al cliente?\n\n(Si no, queda como PENDIENTE y lo podés facturar después, solo o junto con otros del mismo cliente.)')) {
-          facturarServicio(nuevoId);
-        }
+        const facturarYa = await uiConfirm(
+          '¿Querés facturarlo ahora al cliente?\n\nSi no, queda como PENDIENTE y lo podés facturar después, solo o junto con otros del mismo cliente.',
+          { title: '🤝 Servicio cargado', icon:'🧾', okText:'🧾 Facturar ahora', cancelText:'Dejar pendiente' }
+        );
+        if (facturarYa) facturarServicio(nuevoId);
       }
     }
     else pages.insumos();
@@ -25862,10 +25916,14 @@ function servChkAll(master) {
 // Desde el panel de pendientes: filtra por ese cliente y tilda todos sus servicios pendientes.
 async function servPendCliente(id) {
   state.servFilter = state.servFilter || { cliente:'', tipo:'', empleado:'', desde:'', hasta:'' };
-  state.servFilter.cliente = id || '';
+  // Toggle: si ya está filtrado por ese cliente, lo quita y muestra todos.
+  const yaFiltrado = state.servFilter.cliente === (id || '');
+  state.servFilter.cliente = yaFiltrado ? '' : (id || '');
   await pages.serviciosTerceros();
-  const all = document.getElementById('serv-chk-all');
-  if (all) { all.checked = true; servChkAll(all); }
+  if (!yaFiltrado) {
+    const all = document.getElementById('serv-chk-all');
+    if (all) { all.checked = true; servChkAll(all); }
+  }
 }
 // Facturar en una sola factura todas las labores tildadas (deben ser del mismo cliente).
 async function facturarServiciosSel() {
