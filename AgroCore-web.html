@@ -2918,6 +2918,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'30/09/2026',
+      titulo:'📌 v2.263.0 — Servicios a terceros: cuánto hay pendiente de facturar por cliente',
+      desc:'Arriba de la lista de <b>Servicios a terceros</b> aparece un panel <b>“Pendiente de facturar”</b> con el total sin facturar de cada cliente (labor + insumos) y cuántos servicios son. Tocando el nombre de un cliente, se <b>filtra por ese cliente y se tildan todos sus servicios pendientes</b>, listos para facturar juntos con un clic.' },
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'30/09/2026',
+      titulo:'🧾 v2.262.0 — Servicios a terceros: facturá al toque o dejá pendiente y facturá varios juntos',
+      desc:'Al cargar una <b>labor a un tercero</b>, ahora al guardar te pregunta si querés <b>facturarla en el momento</b> o dejarla <b>pendiente</b>. En <b>Producción → Servicios a terceros</b> cada servicio pendiente tiene un <b>casillero</b>: tildá varios de un <b>mismo cliente</b> y con <b>“🧾 Facturar seleccionados”</b> salen todos en <b>una sola factura</b> (un renglón por labor + un renglón por cada insumo, como el gasoil). También podés seguir facturando de a uno con el botón de cada fila. Al autorizar la factura, todos esos servicios quedan marcados como <b>facturados</b> y vinculados a ella.' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'29/09/2026',
       titulo:'🏦 v2.261.0 — Importar resumen: ahora lee bien el formato del Banco Hipotecario',
       desc:'El importador de resúmenes no reconocía el formato del <b>Banco Hipotecario</b> (usa punto decimal, ej. <code>1300343.55</code>, y pega el importe con el saldo). Tomaba mal los montos y el signo. Ahora <b>lee correctamente</b> importe y saldo, respeta el signo del banco (N/C = entra plata, N/D = sale) y separa bien cada movimiento. Los resúmenes en formato argentino clásico (con coma decimal) siguen funcionando igual. <b>Si ya importaste mal un resumen del Hipotecario:</b> deshacé esa importación (botón ↩), poné el saldo inicial de la cuenta en 0 y volvé a importar el PDF.' },
@@ -13846,6 +13852,7 @@ async function factForm(prefill = null) {
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
       <input type="hidden" id="f-labor-servicio" value="${esc(prefill?.laborServicioId||'')}"/>
+      <input type="hidden" id="f-labor-servicio-ids" value='${esc(JSON.stringify(prefill?.laborServicioIds||[]))}'/>
       <input type="hidden" id="f-abono-sus" value="${esc(prefill?.suscripcionId||'')}"/>
       <input type="hidden" id="f-abono-periodo" value="${esc(prefill?.abonoPeriodo||'')}"/>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -14234,6 +14241,7 @@ async function factSave() {
     vencimientoFecha,
     observaciones: $('#f-obs').value.trim()||null,
     laborServicioId: $('#f-labor-servicio')?.value || null,
+    laborServicioIds: (()=>{ try { return JSON.parse($('#f-labor-servicio-ids')?.value||'[]'); } catch { return []; } })(),
     suscripcionId: $('#f-abono-sus')?.value || null,
     abonoPeriodo: $('#f-abono-periodo')?.value || null,
     items,
@@ -25671,13 +25679,23 @@ async function laborSave() {
     insumos,
   };
   try {
-    await api('/api/labores-avanzada', { method:'POST', body: JSON.stringify(data) });
+    const res = await api('/api/labores-avanzada', { method:'POST', body: JSON.stringify(data) });
+    const nuevoId = res?.data?.id || null;
     const nEmp = empleados.length;
     toast('Labor cargada' + (esServicio?' · 🤝 servicio a terceros':'') + (nEmp?` · ${nEmp} empleado${nEmp===1?'':'s'}`:'') + (insumos.length?` · ${insumos.length} insumo${insumos.length===1?'':'s'} del stock`:''),'success');
     state._insScrollTo = camp;
     closeModal();
     delete state.cache.stockMap;
-    if (esServicio) { delete state.cache.laboresServicio; (pages.serviciosTerceros ? pages.serviciosTerceros() : pages.insumos()); }
+    if (esServicio) {
+      delete state.cache.laboresServicio;
+      if (pages.serviciosTerceros) { await pages.serviciosTerceros(); } else { pages.insumos(); }
+      // Ofrecer facturar el servicio recién cargado, o dejarlo pendiente.
+      if (nuevoId && can('ventas:create')) {
+        if (confirm('Servicio cargado. ¿Querés facturarlo ahora al cliente?\n\n(Si no, queda como PENDIENTE y lo podés facturar después, solo o junto con otros del mismo cliente.)')) {
+          facturarServicio(nuevoId);
+        }
+      }
+    }
     else pages.insumos();
   } catch (e) { toast(e.message,'error'); }
 }
@@ -25719,7 +25737,11 @@ pages.serviciosTerceros = async function() {
       const estado = l.facturado
         ? `<span class="badge badge-green">✔ Facturada ${l.factura?`${l.factura.tipo} ${String(l.factura.puntoVenta).padStart(4,'0')}-${String(l.factura.numero).padStart(8,'0')}`:''}</span>`
         : (can('ventas:create') ? `<button class="btn btn-primary text-xs" onclick='facturarServicio(${JSON.stringify(l.id)})'>🧾 Facturar</button>` : `<span class="badge badge-yellow">Pendiente</span>`);
+      const chk = (!l.facturado && can('ventas:create'))
+        ? `<input type="checkbox" class="serv-chk" data-id="${esc(l.id)}" data-cli="${esc(l.clienteId||'')}" onchange="servChkUpd()"/>`
+        : '';
       return `<tr class="table-row">
+        <td class="text-center">${chk}</td>
         <td>${fmtDate(l.fecha)}</td>
         <td class="font-medium">${esc(l.clienteNombre)}</td>
         <td>${esc(l.tipo)}${l.hectareasAplicadas?` <span class="text-[11px] text-slate-400">· ${fmtN(l.hectareasAplicadas)} ha</span>`:''}</td>
@@ -25730,14 +25752,42 @@ pages.serviciosTerceros = async function() {
         <td class="text-right">${estado}</td>
       </tr>`;
     }).join('');
-    $('#serv-tbody').innerHTML = rows || `<tr><td colspan="8" class="text-center text-slate-400 py-8">${labs.length? 'No hay servicios con esos filtros.' : 'Todavía no cargaste servicios a terceros. Usá “🤝 Nuevo servicio” o marcá “Servicio a terceros” al cargar una labor.'}</td></tr>`;
+    $('#serv-tbody').innerHTML = rows || `<tr><td colspan="9" class="text-center text-slate-400 py-8">${labs.length? 'No hay servicios con esos filtros.' : 'Todavía no cargaste servicios a terceros. Usá “🤝 Nuevo servicio” o marcá “Servicio a terceros” al cargar una labor.'}</td></tr>`;
+    // Panel: pendiente de facturar por cliente (sobre los servicios filtrados, sin facturar).
+    const pdiv = $('#serv-pend');
+    if (pdiv) {
+      const porCli = {};
+      fil.filter(l=>!l.facturado).forEach(l => {
+        const k = l.clienteId || '_';
+        const ins = (l.insumos||[]).reduce((a,i)=>a+Number(i.total||0),0);
+        const monto = Number(l.precioLabor||0) + ins;
+        if (!porCli[k]) porCli[k] = { nombre: l.clienteNombre||'—', moneda: l.moneda||'ARS', total: 0, n: 0, id: l.clienteId||'' };
+        porCli[k].total += monto; porCli[k].n += 1;
+      });
+      const arr = Object.values(porCli).sort((a,b)=>b.total-a.total);
+      if (arr.length) {
+        const totGen = arr.reduce((a,c)=>a+c.total,0);
+        pdiv.innerHTML = `<div class="kpi bg-amber-50 border-amber-200">
+          <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+            <div class="text-sm font-semibold text-amber-800">📌 Pendiente de facturar${arr.length>1?` · total ${sym(arr[0].moneda)}${fmtN(totGen)}`:''}</div>
+            <div class="text-[11px] text-amber-700">Tocá un cliente para filtrarlo y tildar todos sus servicios.</div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            ${arr.map(c=>`<button class="badge badge-yellow hover:brightness-95" style="cursor:pointer" onclick='servPendCliente(${JSON.stringify(c.id)})'>${esc(c.nombre)} · <b>${sym(c.moneda)}${fmtN(c.total)}</b> <span class="opacity-70">(${c.n})</span></button>`).join('')}
+          </div></div>`;
+      } else { pdiv.innerHTML = ''; }
+    }
+    servChkUpd();
     const c = $('#serv-count'); if (c) c.textContent = `${fil.length} servicio${fil.length===1?'':'s'}${pend?` · ${pend} sin facturar`:''}`;
   };
 
   $('#page-body').innerHTML = `
     <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <div class="text-[11px] text-slate-500">💡 El <b>precio de la labor</b> es lo que cobrás por el servicio; el <b>% del empleado</b> se calcula solo sobre ese precio (no sobre insumos como el gasoil). Al facturar, se cargan la labor y los insumos como líneas de la factura.</div>
-      ${can('produccion:create')?`<button class="btn btn-primary text-sm" onclick="laborForm(true, null, null, true)">🤝 Nuevo servicio</button>`:''}
+      <div class="text-[11px] text-slate-500">💡 El <b>precio de la labor</b> es lo que cobrás por el servicio; el <b>% del empleado</b> se calcula solo sobre ese precio (no sobre insumos como el gasoil). Al facturar, se cargan la labor y los insumos como líneas de la factura. Podés <b>tildar varios servicios del mismo cliente</b> y facturarlos juntos.</div>
+      <div class="flex gap-2">
+        ${can('ventas:create')?`<button id="serv-fact-sel" class="btn btn-secondary text-sm" onclick="facturarServiciosSel()" disabled>🧾 Facturar seleccionados</button>`:''}
+        ${can('produccion:create')?`<button class="btn btn-primary text-sm" onclick="laborForm(true, null, null, true)">🤝 Nuevo servicio</button>`:''}
+      </div>
     </div>
     <div class="kpi mb-3">
       <div class="grid grid-cols-2 md:grid-cols-6 gap-2 items-end">
@@ -25756,9 +25806,10 @@ pages.serviciosTerceros = async function() {
       </div>
       <div class="text-[11px] text-slate-500 mt-2" id="serv-count"></div>
     </div>
+    <div id="serv-pend" class="mb-3"></div>
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
-        <thead><tr><th>Fecha</th><th>Cliente</th><th>Labor</th><th class="text-right">Precio labor</th><th class="text-right">Insumos</th><th>Empleado</th><th class="text-right">Ganancia empl.</th><th class="text-right">Factura</th></tr></thead>
+        <thead><tr><th class="w-8 text-center"><input type="checkbox" id="serv-chk-all" onchange="servChkAll(this)" title="Seleccionar pendientes"/></th><th>Fecha</th><th>Cliente</th><th>Labor</th><th class="text-right">Precio labor</th><th class="text-right">Insumos</th><th>Empleado</th><th class="text-right">Ganancia empl.</th><th class="text-right">Factura</th></tr></thead>
         <tbody id="serv-tbody"></tbody>
       </table>
     </div>`;
@@ -25768,21 +25819,72 @@ pages.serviciosTerceros = async function() {
   render();
 };
 function servFiltrosLimpiar() { state.servFilter = { cliente:'', tipo:'', empleado:'', desde:'', hasta:'' }; pages.serviciosTerceros(); }
-// Abrir la facturación prellenada desde una labor a terceros (labor + insumos como líneas).
+// Renglones de factura desde una o varias labores: 1 línea por labor + 1 por cada insumo.
+function _itemsDesdeLabores(list) {
+  const items = [];
+  list.forEach(l => {
+    items.push({
+      descripcion: `Labor: ${l.tipo}${l.hectareasAplicadas?` · ${fmtN(l.hectareasAplicadas)} ha`:''}${list.length>1?` (${fmtDate(l.fecha)})`:''}`,
+      cantidad: 1, precioUnit: Number(l.precioLabor||0), alicuotaIva: 21,
+    });
+    (l.insumos||[]).forEach(i => items.push({
+      descripcion: i.nombre + (i.unidad?` (${i.unidad})`:''),
+      cantidad: Number(i.cantidad||1), precioUnit: Number(i.precioUnit||0), alicuotaIva: 21,
+    }));
+  });
+  return items;
+}
+// Abrir la facturación prellenada desde UNA labor a terceros.
 async function facturarServicio(id) {
   const l = (state.cache.laboresServicio||[]).find(x=>x.id===id);
   if (!l) return toast('Labor no encontrada','error');
   if (l.facturado) return toast('Esta labor ya fue facturada','warn');
   if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data||[]; } catch {} }
-  const items = [{
-    descripcion: `Labor: ${l.tipo}${l.hectareasAplicadas?` · ${fmtN(l.hectareasAplicadas)} ha`:''}`,
-    cantidad: 1, precioUnit: Number(l.precioLabor||0), alicuotaIva: 21,
-  }];
-  (l.insumos||[]).forEach(i => items.push({
-    descripcion: i.nombre + (i.unidad?` (${i.unidad})`:''),
-    cantidad: Number(i.cantidad||1), precioUnit: Number(i.precioUnit||0), alicuotaIva: 21,
-  }));
-  factForm({ clienteId: l.clienteId, items, laborServicioId: l.id, observaciones: `Servicio a terceros — ${l.tipo}` });
+  factForm({ clienteId: l.clienteId, items: _itemsDesdeLabores([l]), laborServicioId: l.id, laborServicioIds: [l.id], observaciones: `Servicio a terceros — ${l.tipo}` });
+}
+// Selección múltiple: habilita el botón y valida que sean del mismo cliente.
+function servChkUpd() {
+  const chks = Array.from(document.querySelectorAll('.serv-chk:checked'));
+  const btn = $('#serv-fact-sel');
+  const clis = [...new Set(chks.map(c=>c.dataset.cli))];
+  if (btn) {
+    btn.disabled = chks.length === 0;
+    btn.textContent = chks.length ? `🧾 Facturar seleccionados (${chks.length})` : '🧾 Facturar seleccionados';
+    // Aviso visual si hay más de un cliente entre los tildados.
+    btn.classList.toggle('btn-danger', clis.length > 1);
+    btn.classList.toggle('btn-secondary', clis.length <= 1);
+  }
+}
+function servChkAll(master) {
+  document.querySelectorAll('.serv-chk').forEach(c => { c.checked = master.checked; });
+  servChkUpd();
+}
+// Desde el panel de pendientes: filtra por ese cliente y tilda todos sus servicios pendientes.
+async function servPendCliente(id) {
+  state.servFilter = state.servFilter || { cliente:'', tipo:'', empleado:'', desde:'', hasta:'' };
+  state.servFilter.cliente = id || '';
+  await pages.serviciosTerceros();
+  const all = document.getElementById('serv-chk-all');
+  if (all) { all.checked = true; servChkAll(all); }
+}
+// Facturar en una sola factura todas las labores tildadas (deben ser del mismo cliente).
+async function facturarServiciosSel() {
+  const chks = Array.from(document.querySelectorAll('.serv-chk:checked'));
+  if (!chks.length) return toast('Tildá al menos un servicio','warn');
+  const clis = [...new Set(chks.map(c=>c.dataset.cli))];
+  if (clis.length > 1) return toast('Elegí servicios de un MISMO cliente para facturarlos juntos','error');
+  const ids = chks.map(c=>c.dataset.id);
+  const labs = (state.cache.laboresServicio||[]).filter(l => ids.includes(l.id) && !l.facturado);
+  if (!labs.length) return toast('No hay servicios pendientes en la selección','warn');
+  if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data||[]; } catch {} }
+  const cli = labs[0].clienteId;
+  const nombre = labs[0].clienteNombre || '';
+  factForm({
+    clienteId: cli,
+    items: _itemsDesdeLabores(labs),
+    laborServicioIds: labs.map(l=>l.id),
+    observaciones: `Servicios a terceros (${labs.length}) — ${nombre}`,
+  });
 }
 
 /* ---------- CATALOGOS (maestros) con pestañas ---------- */

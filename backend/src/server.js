@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.261.0';
+const AGROCORE_VERSION = '2.263.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5253,6 +5253,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       cae: z.string().optional(),
       caeVto: z.coerce.date().optional(),
       laborServicioId: z.string().nullable().optional(),   // si la factura sale de una labor a terceros, la vinculamos
+      laborServicioIds: z.array(z.string()).optional(),    // varias labores a terceros en una misma factura
       suscripcionId: z.string().nullable().optional(),     // si la factura es la cuota de un abono, la vinculamos
       abonoPeriodo: z.string().nullable().optional(),      // período del abono (YYYY-MM)
       items: z.array(itemFacSchema).min(1),
@@ -5349,10 +5350,15 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
           observaciones: input.observaciones || null,
         }});
       }
-      // Vincular la labor a terceros con esta factura (queda "facturada").
+      // Vincular la/las labor(es) a terceros con esta factura (quedan "facturadas").
       // LaborAplicada no tiene companyId; validamos la pertenencia por el cliente.
-      if (input.laborServicioId) {
-        const lab = await tx.laborAplicada.findFirst({ where: { id: input.laborServicioId, esServicio: true }, include: { cliente: true } }).catch(()=>null);
+      // Acepta un id único (compatibilidad) o un array (facturar varios servicios juntos).
+      const _laborIds = [...new Set([
+        ...(Array.isArray(input.laborServicioIds) ? input.laborServicioIds : []),
+        ...(input.laborServicioId ? [input.laborServicioId] : []),
+      ].filter(Boolean))];
+      for (const _lid of _laborIds) {
+        const lab = await tx.laborAplicada.findFirst({ where: { id: _lid, esServicio: true, facturaId: null }, include: { cliente: true } }).catch(()=>null);
         if (lab && lab.cliente && lab.cliente.companyId === req.companyId) {
           await tx.laborAplicada.update({ where: { id: lab.id }, data: { facturaId: f.id } });
         }
