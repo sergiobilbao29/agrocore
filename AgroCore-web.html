@@ -1081,9 +1081,9 @@ const MODULES = [
   { id:'mapaCampos',    label:'Mapa de lotes',        icon:'🛰️', perm:'produccion:read', section:'Producción' },
   { id:'campanas',      label:'Campañas',             icon:'🌱', perm:'produccion:read', section:'Producción' },
   { id:'historialCampanas', label:'Historial de campañas', icon:'📖', perm:'produccion:read', section:'Producción' },
+  { id:'ordenesTrabajo', label:'Órdenes de trabajo', icon:'📋', perm:'produccion:read', section:'Producción' },
   { id:'insumos',       label:'Insumos y labores',    icon:'🧪', perm:'produccion:read', section:'Producción' },
   { id:'serviciosTerceros', label:'Servicios a terceros', icon:'🤝', perm:'produccion:read', section:'Producción' },
-  { id:'ordenesTrabajo', label:'Órdenes de trabajo', icon:'📋', perm:'produccion:read', section:'Producción' },
   { id:'reporteMargen', label:'Reporte de margen',    icon:'💹', perm:'stock:read',      section:'Producción' },
   { id:'sociedades',    label:'Sociedades / UTE',     icon:'🤝', perm:'produccion:read', section:'Producción' },
   { id:'calculadoras',  label:'Calculadoras agronómicas', icon:'🧮', perm:'produccion:read', section:'Producción' },
@@ -2739,24 +2739,34 @@ pages.ayuda = async function() {
   const INSTRUCTIVOS = [
     { grupo:'Primeros pasos', items:[
       { f:'Instructivo-Inicio-1Pagina.pdf', t:'Inicio rápido (1 página)', d:'Lo esencial para empezar a usar AgroCore.' },
+      { f:'Instructivo-Puesta-en-Marcha.pdf', t:'Puesta en marcha (paso a paso)', d:'Configurar la empresa y cargar los datos iniciales, completo.' },
       { f:'Instructivo-Acomodar-Cuentas-Bancarias.pdf', t:'Acomodar cuentas bancarias', d:'Cargar saldos iniciales y ordenar tus bancos.' },
     ]},
     { grupo:'Finanzas', items:[
       { f:'Instructivo-Pagos-y-Cobros.pdf', t:'Pagos y cobros', d:'Registrar pagos a proveedores y cobros de clientes.' },
       { f:'Instructivo-Pago-Dividido-Producto-y-Cheque.pdf', t:'Pago dividido (producto y cheque)', d:'Cancelar con parte producto y parte cheque.' },
       { f:'Instructivo-Cheques-Propios-y-Terceros.pdf', t:'Cheques propios y de terceros', d:'Manejo completo de cheques en cartera.' },
+      { f:'Instructivo-Caja-por-Tenedor.pdf', t:'Caja por tenedor', d:'Controlar efectivo por persona que lo tiene a cargo.' },
       { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
       { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
+    ]},
+    { grupo:'Producción', items:[
+      { f:'Instructivo-Ordenes-de-Trabajo.pdf', t:'Órdenes de trabajo', d:'Indicarle al contratista qué labor hacer y qué insumos usar, entregarla (imprimir/WhatsApp) y después facturar el servicio.' },
     ]},
     { grupo:'Cereal', items:[
       { f:'Instructivo-Sociedades-UTE.pdf', t:'Sociedades / UTE (negocio en participación)', d:'Armar una sociedad de campaña entre empresas y socios: asignar campos, consolidar cosecha/costos y liquidar la participación de cada socio.' },
       { f:'Instructivo-Circuito-Campana-Cereal.pdf', t:'Circuito campaña cereal', d:'De la siembra a la cosecha, paso a paso.' },
       { f:'Instructivo-Contratos-de-Cereal.pdf', t:'Contratos de cereal', d:'Cargar y seguir contratos de venta.' },
+      { f:'Instructivo-Cartas-de-Porte-y-Liquidaciones.pdf', t:'Cartas de porte y liquidaciones', d:'Cargar cartas de porte y armar la liquidación del cereal.' },
       { f:'Instructivo-Liquidacion-Cereal-Comprador-y-Camiones.pdf', t:'Liquidación de cereal, comprador y camiones', d:'Cartas de porte, viajes y liquidación.' },
+      { f:'Instructivo-Liquidacion-Cereal-Paso-a-Paso.pdf', t:'Liquidación de cereal (paso a paso)', d:'Guía detallada para liquidar una venta de cereal.' },
     ]},
     { grupo:'Forrajera y hacienda', items:[
       { f:'Instructivo-Circuito-Campana-Forrajera-Multicorte.pdf', t:'Campaña forrajera multicorte', d:'Praderas y verdeos de varios cortes.' },
       { f:'Instructivo-Manejo-Integral-Hacienda.pdf', t:'Manejo integral de la hacienda', d:'Todo el ciclo en una guía: pastura/alimento, rodeos, gastos, alimentación con descuento de stock, compras/ventas, guías, liquidaciones y costo por kg con la ganancia.' },
+      { f:'Instructivo-Manejo-de-Animales.pdf', t:'Manejo de animales', d:'Altas, movimientos, pesajes y eventos de la hacienda.' },
+      { f:'Instructivo-Circuito-Rodeos.pdf', t:'Circuito de rodeos', d:'Armar rodeos, imputar alimentación y ver el costo del lote.' },
+      { f:'Instructivo-Costo-Kilo-Carne.pdf', t:'Costo por kilo de carne', d:'Cómo se calcula el costo por kg y la ganancia del ciclo.' },
       { f:'Instructivo-Guias-Hacienda.pdf', t:'Guías de hacienda', d:'Emitir y controlar guías.' },
       { f:'Instructivo-Haras-Caballos.pdf', t:'Haras / caballos', d:'Gestión de equinos.' },
     ]},
@@ -2960,6 +2970,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'01/10/2026',
+      titulo:'📋 v2.268.0 — Órdenes de trabajo: logo en la impresión, WhatsApp y nuevo instructivo',
+      desc:'Más mejoras en las <b>Órdenes de trabajo</b>: el listado ahora muestra la <b>Fecha de la labor</b> en su propia columna y el acceso del menú quedó <b>arriba de "Insumos y labores"</b>. La <b>impresión</b> lleva el <b>logo real de AgroCore</b> en el encabezado y el <b>mensaje de WhatsApp</b> quedó más profesional. Sumamos el <b>instructivo "Órdenes de trabajo"</b> en Ayuda y manual, y publicamos otros instructivos que faltaban (Puesta en marcha, Caja por tenedor, Cartas de porte, Liquidación paso a paso, Rodeos, Manejo de animales, Costo por kg y Sociedades/UTE).' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'01/10/2026',
       titulo:'📋 v2.267.0 — Órdenes de trabajo: calendario, filtros e impresión más linda',
       desc:'Mejoras sobre las Órdenes de trabajo: ahora la <b>fecha de la labor aparece en el Calendario/Agenda</b> y <b>avisa 3 días antes</b>. Sumamos <b>filtros por fecha (desde/hasta) y por campaña</b>. La <b>impresión</b> quedó más profesional (encabezado, colores y pie <i>"Generado por AgroCore"</i>) y el <b>mensaje de WhatsApp</b> más prolijo. Se corrigió el desfasaje de un día en la fecha de emisión.' },
@@ -26019,13 +26032,14 @@ pages.ordenesTrabajo = async function() {
       return `<tr class="table-row">
         <td class="font-medium">N° ${esc(o.nro)}</td>
         <td>${fmtDate(o.fecha)}</td>
+        <td>${o.fechaLabor?fmtDate(o.fechaLabor):'<span class="text-slate-400">—</span>'}</td>
         <td>${esc(o.contratistaNombre||'—')}</td>
         <td>${nLab} labor${nLab===1?'':'es'}${haTot?` · ${fmtN(haTot)} ha`:''}</td>
         <td><span class="badge ${est.cls}">${est.lbl}</span></td>
         <td class="text-right whitespace-nowrap">${acc}</td>
       </tr>`;
     }).join('');
-    $('#ot-tbody').innerHTML = rows || `<tr><td colspan="6" class="text-center text-slate-400 py-8">${ots.length?'No hay órdenes con esos filtros.':'Todavía no cargaste órdenes de trabajo. Tocá “+ Nueva orden”.'}</td></tr>`;
+    $('#ot-tbody').innerHTML = rows || `<tr><td colspan="7" class="text-center text-slate-400 py-8">${ots.length?'No hay órdenes con esos filtros.':'Todavía no cargaste órdenes de trabajo. Tocá “+ Nueva orden”.'}</td></tr>`;
   };
 
   const provOpts = (state.cache.proveedores||[]).filter(p=>p.activo!==false).map(p=>`<option value="${esc(p.id)}">${esc(p.razonSocial||p.nombreFantasia||'')}</option>`).join('');
@@ -26055,7 +26069,7 @@ pages.ordenesTrabajo = async function() {
     </div>
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
-        <thead><tr><th>N°</th><th>Fecha</th><th>Contratista</th><th>Labores</th><th>Estado</th><th class="text-right">Acciones</th></tr></thead>
+        <thead><tr><th>N°</th><th>Emisión</th><th>Fecha de la labor</th><th>Contratista</th><th>Labores</th><th>Estado</th><th class="text-right">Acciones</th></tr></thead>
         <tbody id="ot-tbody"></tbody>
       </table>
     </div>`;
@@ -26257,6 +26271,7 @@ async function otFacturar(id){
   });
 }
 // Documento imprimible (entregar en mano / imprimir a PDF)
+const _OT_LOGO='data:image/png;base64,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';
 function _otDocHTML(o){
   const emp = state.user.companies?.find(c=>c.id===state.companyId);
   const filas = [];
@@ -26281,7 +26296,7 @@ function _otDocHTML(o){
   return `<div id="ot-doc" style="font-family:'Segoe UI',Arial,sans-serif;color:#1e293b;max-width:1040px;margin:0 auto;font-size:12px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;background:linear-gradient(135deg,#1b5e20,#2e7d32);color:#fff;border-radius:12px 12px 0 0;padding:16px 20px">
       <div style="display:flex;align-items:center;gap:12px">
-        <div style="width:42px;height:42px;border-radius:10px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:22px">🌿</div>
+        <img src="${_OT_LOGO}" alt="AgroCore" style="height:46px;width:auto;display:block"/>
         <div><div style="font-size:22px;font-weight:800;letter-spacing:.5px">ORDEN DE TRABAJO</div>
         <div style="font-size:13px;opacity:.92">${esc(emp?.name||'AgroCore')}</div></div>
       </div>
@@ -26321,20 +26336,32 @@ async function otWhatsapp(id){
   if (!o) { try { o=(await api('/api/ordenes-trabajo/'+id)).data; } catch(e){ return toast(e.message,'error'); } }
   const prov = (state.cache.proveedores||[]).find(p=>p.id===o.contratistaId);
   const emp = state.user.companies?.find(c=>c.id===state.companyId);
+  const SEP = '━━━━━━━━━━━━━━━';
   const L = [];
-  L.push(`📋 *ORDEN DE TRABAJO N° ${o.nro}*`);
-  if (emp?.name) L.push(`_${emp.name}_`);
-  L.push(`📅 Fecha de labor: *${fmtDate(o.fechaLabor||o.fecha)}*`);
-  if (o.contratistaNombre) L.push(`👷 Contratista: ${o.contratistaNombre}`);
+  L.push(`*ORDEN DE TRABAJO N° ${o.nro}*`);
+  if (emp?.name) L.push(emp.name);
+  L.push(SEP);
+  const nombreCorto = (o.contratistaNombre||'').split(' ')[0];
+  L.push(`Estimado/a${nombreCorto?' '+nombreCorto:''}, le detallamos la labor a realizar y los insumos a aplicar:`);
+  L.push('');
+  L.push(`🗓️ *Fecha de la labor:* ${fmtDate(o.fechaLabor||o.fecha)}`);
+  if (o.contratistaNombre) L.push(`👷 *Contratista:* ${o.contratistaNombre}`);
   o.renglones.forEach((r,idx)=>{
     L.push('');
-    L.push(`*${idx+1}) ${r.labor||'Labor'}*${r.hectareas?` — ${fmtN(r.hectareas)} ha`:''}`);
-    const ubic = [r.campo, r.lote && `Lote ${r.lote}`, r.cultivo].filter(Boolean).join(' · ');
+    L.push(SEP);
+    L.push(`*${idx+1}) ${r.labor||'Labor'}*${r.hectareas?`  ·  ${fmtN(r.hectareas)} ha`:''}`);
+    const ubic = [r.campo, r.lote && `Lote ${r.lote}`, r.cultivo].filter(Boolean).join('  ·  ');
     if (ubic) L.push(`📍 ${ubic}`);
-    (r.insumos||[]).forEach(it=> L.push(`   • ${it.nombre}: *${it.total!=null?fmtN(it.total):'—'} ${it.unidad||''}*${it.dosis!=null?` (${fmtN(it.dosis)}/ha)`:''}`));
-    if (r.observacion) L.push(`   📝 ${r.observacion}`);
+    if ((r.insumos||[]).length) {
+      L.push('Insumos a aplicar:');
+      r.insumos.forEach(it=> L.push(`   • ${it.nombre}: *${it.total!=null?fmtN(it.total):'—'} ${it.unidad||''}*${it.dosis!=null?`  (${fmtN(it.dosis)}/ha)`:''}`));
+    }
+    if (r.observacion) L.push(`📝 ${r.observacion}`);
   });
-  if (o.observaciones) { L.push(''); L.push(`📝 *Observaciones:* ${o.observaciones}`); }
+  if (o.observaciones) { L.push(''); L.push(SEP); L.push(`📝 *Observaciones generales:*`); L.push(o.observaciones); }
+  L.push('');
+  L.push(SEP);
+  L.push('Ante cualquier consulta quedamos a disposición. ¡Gracias!');
   window.open(waLink(prov?.telefono||'', L.join('\n')), '_blank');
 }
 
