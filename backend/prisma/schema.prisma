@@ -116,6 +116,7 @@ model Company {
   retenciones        Retencion[]
   adjuntos           Adjunto[]
   suscripciones      Suscripcion[]
+  ordenesTrabajo     OrdenTrabajo[]
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -692,6 +693,7 @@ model Proveedor {
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   facturasCompra  FacturaCompra[]
+  ordenesTrabajo  OrdenTrabajo[]
 
   @@index([companyId])
   @@index([vinculoId])
@@ -2759,4 +2761,71 @@ model TrialSignup {
   createdAt    DateTime  @default(now())
 
   @@index([email])
+}
+
+// ============================================================
+// ÓRDENES DE TRABAJO (v2.266): documento para el contratista con la labor a
+// realizar e insumos a usar sobre campañas/lotes. Estados: pendiente → realizada
+// → facturada (al cargar la factura de compra del proveedor). Sin precios en la OT.
+// ============================================================
+model OrdenTrabajo {
+  id              String   @id @default(cuid())
+  companyId       String
+  puntoVenta      Int      @default(1)
+  numero          Int
+  fecha           DateTime                 // fecha de emisión
+  fechaLabor      DateTime?                // fecha planificada de la labor
+  contratistaId   String?                  // Proveedor que ejecuta la labor
+  estado          String   @default("pendiente")  // pendiente | realizada | facturada | anulada
+  observaciones   String?
+  descuentaStock  Boolean  @default(false) // si al realizarla egresa los insumos del stock
+  depositoId      String?                  // depósito de salida de los insumos (si descuenta)
+  stockMovido     Boolean  @default(false) // ya generó los egresos de stock
+  fechaRealizada  DateTime?
+  facturaCompraId String?                  // factura de compra del contratista (deuda)
+  userId          String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contratista  Proveedor?          @relation(fields: [contratistaId], references: [id])
+  renglones    OrdenTrabajoRenglon[]
+
+  @@index([companyId])
+  @@index([contratistaId])
+  @@index([estado])
+}
+
+model OrdenTrabajoRenglon {
+  id          String  @id @default(cuid())
+  ordenId     String
+  campanaId   String?
+  campo       String?
+  lote        String?
+  cultivo     String?
+  hectareas   Float?
+  labor       String
+  observacion String?
+  createdAt   DateTime @default(now())
+
+  orden    OrdenTrabajo        @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+  insumos  OrdenTrabajoInsumo[]
+
+  @@index([ordenId])
+}
+
+model OrdenTrabajoInsumo {
+  id           String  @id @default(cuid())
+  renglonId    String
+  productoId   String?
+  nombre       String
+  unidad       String?
+  dosis        Float?    // dosis por hectárea
+  total        Float?    // cantidad total (dosis × has)
+  movimientoId String?   // egreso de stock generado (si la OT descuenta)
+  createdAt    DateTime @default(now())
+
+  renglon  OrdenTrabajoRenglon @relation(fields: [renglonId], references: [id], onDelete: Cascade)
+
+  @@index([renglonId])
 }

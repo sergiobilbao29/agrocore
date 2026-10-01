@@ -1083,6 +1083,7 @@ const MODULES = [
   { id:'historialCampanas', label:'Historial de campañas', icon:'📖', perm:'produccion:read', section:'Producción' },
   { id:'insumos',       label:'Insumos y labores',    icon:'🧪', perm:'produccion:read', section:'Producción' },
   { id:'serviciosTerceros', label:'Servicios a terceros', icon:'🤝', perm:'produccion:read', section:'Producción' },
+  { id:'ordenesTrabajo', label:'Órdenes de trabajo', icon:'📋', perm:'produccion:read', section:'Producción' },
   { id:'reporteMargen', label:'Reporte de margen',    icon:'💹', perm:'stock:read',      section:'Producción' },
   { id:'sociedades',    label:'Sociedades / UTE',     icon:'🤝', perm:'produccion:read', section:'Producción' },
   { id:'calculadoras',  label:'Calculadoras agronómicas', icon:'🧮', perm:'produccion:read', section:'Producción' },
@@ -2959,6 +2960,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'01/10/2026',
+      titulo:'📋 v2.266.0 — Órdenes de trabajo para el contratista',
+      desc:'Nueva sección <b>Producción → Órdenes de trabajo</b>. Armás un documento para el contratista con la <b>labor a realizar</b> y los <b>insumos a usar</b> (producto, dosis/ha y total) sobre una o varias campañas/lotes, con fecha. Sale <b>sin precios</b>, se puede <b>imprimir</b> (entregar en mano o guardar PDF) o mandar por <b>💬 WhatsApp</b>. Queda <b>⏳ pendiente</b>; cuando se hace, la marcás <b>✅ realizada</b> (opcionalmente descuenta los insumos del stock); y desde ahí, con <b>🧾 Facturar</b>, cargás la <b>factura de compra del contratista</b> que genera la <b>deuda en el proveedor</b>.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'30/09/2026',
       titulo:'🐄 v2.265.0 — Video "Manejo integral de la hacienda" en la Ayuda',
       desc:'Sumamos a <b>Ayuda y manual</b> el video <b>🐄 Manejo integral de la hacienda</b> (rodeos, alimentación, guías y costo por kilo de carne con la ganancia). Ya son tres videos: Haras/Caballos, Hacienda y Campaña de cereal. También corregimos el enlace en el asistente 🤖 (antes el de hacienda apuntaba al video equivocado).' },
@@ -15584,6 +15588,13 @@ async function compSave() {
     toast('Factura de compra registrada','success');
     delete state.cache.stockMap;
     delete state._compraPdfData;
+    // Si esta factura sale de una Orden de Trabajo, la vinculamos (OT → facturada).
+    if (state._otFacturando && facturaId) {
+      const _otid = state._otFacturando; state._otFacturando = null;
+      try { await api('/api/ordenes-trabajo/'+_otid+'/facturar', { method:'POST', body: JSON.stringify({ facturaCompraId: facturaId }) }); } catch (le) { toast('Factura ok, pero no se pudo vincular a la OT: '+le.message,'warn'); }
+      closeModal();
+      if (pages.ordenesTrabajo) { return pages.ordenesTrabajo(); }
+    }
     closeModal(); pages.compras();
   } catch (e) { toast(e.message,'error'); }
 }
@@ -25947,6 +25958,341 @@ async function facturarServiciosSel() {
     laborServicioIds: labs.map(l=>l.id),
     observaciones: `Servicios a terceros (${labs.length}) — ${nombre}`,
   });
+}
+
+/* ============================================================
+   ÓRDENES DE TRABAJO (v2.266): documento para el contratista con la labor
+   e insumos a usar. Estados: pendiente → realizada → facturada.
+   ============================================================ */
+const OT_ESTADOS = {
+  pendiente: { lbl:'⏳ Pendiente', cls:'badge-yellow' },
+  realizada: { lbl:'✅ Realizada (sin facturar)', cls:'badge-blue' },
+  facturada: { lbl:'🧾 Facturada', cls:'badge-green' },
+  anulada:   { lbl:'🚫 Anulada', cls:'badge-gray' },
+};
+let _otRows = [];  // renglones en edición
+
+pages.ordenesTrabajo = async function() {
+  setHeader('Órdenes de trabajo', 'Indicá al contratista qué labor realizar y qué insumos usar. Imprimila o mandala, marcala realizada y facturá al proveedor.');
+  if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('ordenesTrabajo','Órdenes de trabajo'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let ots = [];
+  try {
+    const [o, p] = await Promise.all([ api('/api/ordenes-trabajo'), api('/api/proveedores').catch(()=>({data:state.cache.proveedores||[]})) ]);
+    ots = o.data || [];
+    state.cache.proveedores = p.data || state.cache.proveedores || [];
+  } catch (e) { $('#page-body').innerHTML = `<div class="text-red-600 text-sm">${esc(e.message)}</div>`; return; }
+  state.cache.ordenesTrabajo = ots;
+  state.otFilter = state.otFilter || { estado:'', contratista:'' };
+
+  const render = () => {
+    const f = state.otFilter;
+    const fil = ots.filter(o => (!f.estado || o.estado===f.estado) && (!f.contratista || o.contratistaId===f.contratista));
+    const rows = fil.map(o => {
+      const est = OT_ESTADOS[o.estado] || OT_ESTADOS.pendiente;
+      const nLab = o.renglones.length;
+      const haTot = o.renglones.reduce((a,r)=>a+Number(r.hectareas||0),0);
+      let acc = `<button class="btn btn-ghost text-xs" title="Imprimir / ver" onclick='otImprimir(${JSON.stringify(o.id)})'>🖨️</button>
+                 <button class="btn btn-ghost text-xs" title="WhatsApp" onclick='otWhatsapp(${JSON.stringify(o.id)})'>💬</button>`;
+      if (can('produccion:update') && o.estado==='pendiente') acc += ` <button class="btn btn-ghost text-xs" title="Editar" onclick='otForm(${JSON.stringify(o.id)})'>✏️</button>`;
+      if (can('produccion:update') && o.estado==='pendiente') acc += ` <button class="btn btn-primary text-xs" onclick='otRealizar(${JSON.stringify(o.id)})'>✅ Realizada</button>`;
+      if (can('compras:create') && o.estado==='realizada') acc += ` <button class="btn btn-primary text-xs" onclick='otFacturar(${JSON.stringify(o.id)})'>🧾 Facturar</button>`;
+      if (can('produccion:update') && o.estado==='realizada') acc += ` <button class="btn btn-ghost text-xs" title="Volver a pendiente" onclick='otReabrir(${JSON.stringify(o.id)})'>↩️</button>`;
+      if (can('produccion:update') && o.estado==='facturada') acc += ` <button class="btn btn-ghost text-xs" title="Quitar factura" onclick='otDesfacturar(${JSON.stringify(o.id)})'>↩️ Factura</button>`;
+      if (can('produccion:delete') && o.estado!=='facturada') acc += ` <button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='otDel(${JSON.stringify(o.id)})'>🗑️</button>`;
+      return `<tr class="table-row">
+        <td class="font-medium">N° ${esc(o.nro)}</td>
+        <td>${fmtDate(o.fecha)}</td>
+        <td>${esc(o.contratistaNombre||'—')}</td>
+        <td>${nLab} labor${nLab===1?'':'es'}${haTot?` · ${fmtN(haTot)} ha`:''}</td>
+        <td><span class="badge ${est.cls}">${est.lbl}</span></td>
+        <td class="text-right whitespace-nowrap">${acc}</td>
+      </tr>`;
+    }).join('');
+    $('#ot-tbody').innerHTML = rows || `<tr><td colspan="6" class="text-center text-slate-400 py-8">${ots.length?'No hay órdenes con esos filtros.':'Todavía no cargaste órdenes de trabajo. Tocá “+ Nueva orden”.'}</td></tr>`;
+  };
+
+  const provOpts = (state.cache.proveedores||[]).filter(p=>p.activo!==false).map(p=>`<option value="${esc(p.id)}">${esc(p.razonSocial||p.nombreFantasia||'')}</option>`).join('');
+  $('#page-body').innerHTML = `
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <div class="text-[11px] text-slate-500">💡 La orden sale <b>sin precios</b>. El costo aparece cuando cargás la factura del contratista (botón 🧾 Facturar), que genera la deuda en el proveedor.</div>
+      ${can('produccion:create')?`<button class="btn btn-primary text-sm" onclick="otForm()">+ Nueva orden</button>`:''}
+    </div>
+    <div class="kpi mb-3">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
+        <div><label class="label">Estado</label>
+          <select id="otf-estado" class="input"><option value="">Todos</option>
+            <option value="pendiente">⏳ Pendiente</option><option value="realizada">✅ Realizada</option>
+            <option value="facturada">🧾 Facturada</option><option value="anulada">🚫 Anulada</option>
+          </select>
+        </div>
+        <div><label class="label">Contratista</label>
+          <select id="otf-contra" class="input"><option value="">Todos</option>${provOpts}</select>
+        </div>
+      </div>
+    </div>
+    <div class="kpi p-0 overflow-hidden">
+      <table class="data">
+        <thead><tr><th>N°</th><th>Fecha</th><th>Contratista</th><th>Labores</th><th>Estado</th><th class="text-right">Acciones</th></tr></thead>
+        <tbody id="ot-tbody"></tbody>
+      </table>
+    </div>`;
+  const be=(id,k)=>{ const el=$('#'+id); if(el) el.addEventListener('change',e=>{ state.otFilter[k]=e.target.value; render(); }); };
+  be('otf-estado','estado'); be('otf-contra','contratista');
+  render();
+};
+
+// Carga catálogos/campañas/productos necesarios para el form
+async function _otCargarAux() {
+  if (!state.cache.proveedores) { try { state.cache.proveedores = (await api('/api/proveedores')).data||[]; } catch {} }
+  if (!state.cache.campanas)    { try { state.cache.campanas = (await api('/api/campanas')).data||[]; } catch {} }
+  if (!state.cache.productos)   { try { state.cache.productos = (await api('/api/productos')).data||[]; } catch {} }
+  if (!state.cache.depositos)   { try { state.cache.depositos = (await api('/api/depositos')).data||[]; } catch {} }
+  if (!state.cache.laboresCat)  { try { const c=(await api('/api/catalogos')).data||[]; state.cache.catalogos=c; state.cache.laboresCat=c.filter(x=>x.tipo==='Labor'); } catch {} }
+}
+
+async function otForm(id) {
+  await _otCargarAux();
+  let edit = null;
+  if (id) { try { edit = (await api('/api/ordenes-trabajo/'+id)).data; } catch(e){ return toast(e.message,'error'); } }
+  state._otEdit = edit ? edit.id : null;
+  // Cargar renglones a _otRows
+  _otRows = (edit?.renglones?.length ? edit.renglones.map(r=>({
+    campanaId:r.campanaId||'', campo:r.campo||'', lote:r.lote||'', cultivo:r.cultivo||'', hectareas:r.hectareas??'',
+    labor:r.labor||'', observacion:r.observacion||'',
+    insumos:(r.insumos||[]).map(i=>({productoId:i.productoId||'', nombre:i.nombre||'', unidad:i.unidad||'', dosis:i.dosis??'', total:i.total??''})),
+  })) : [{ campanaId:'',campo:'',lote:'',cultivo:'',hectareas:'',labor:'',observacion:'',insumos:[{productoId:'',nombre:'',unidad:'',dosis:'',total:''}] }]);
+  const provs = (state.cache.proveedores||[]).filter(p=>p.activo!==false);
+  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
+  openModal({
+    title: edit ? `🛠️ Editar orden de trabajo N° ${esc(edit.nro)}` : '📋 Nueva orden de trabajo', size:'max-w-5xl',
+    body: `
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div><label class="label">Fecha emisión *</label><input id="ot-fec" type="date" class="input" value="${(edit?String(edit.fecha).slice(0,10):new Date().toISOString().slice(0,10))}"/></div>
+        <div><label class="label">Fecha de la labor</label><input id="ot-feclab" type="date" class="input" value="${edit?.fechaLabor?String(edit.fechaLabor).slice(0,10):''}"/></div>
+        <div class="col-span-2"><label class="label">Contratista (proveedor)</label>
+          <select id="ot-contra" class="input"><option value="">— Elegí el contratista —</option>${provs.map(p=>`<option value="${esc(p.id)}" ${edit?.contratistaId===p.id?'selected':''}>${esc(p.razonSocial||p.nombreFantasia||'')}${p.cuit?` · ${esc(p.cuit)}`:''}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div class="p-3 bg-amber-50 border border-amber-200 rounded-lg mb-3">
+        <label class="flex items-center gap-2 cursor-pointer text-sm font-semibold text-amber-900">
+          <input type="checkbox" id="ot-descstock" ${edit?.descuentaStock?'checked':''} onchange="document.getElementById('ot-dep-wrap').classList.toggle('hidden', !this.checked)"/>
+          📦 Descontar los insumos del stock al marcarla realizada
+        </label>
+        <div id="ot-dep-wrap" class="mt-2 ${edit?.descuentaStock?'':'hidden'}">
+          <label class="label">Depósito de salida de los insumos</label>
+          <select id="ot-dep" class="input"><option value="">🌱 General</option>${deps.map(d=>`<option value="${esc(d.id)}" ${edit?.depositoId===d.id?'selected':''}>${esc(d.nombre)}</option>`).join('')}</select>
+        </div>
+      </div>
+      <div id="ot-rows"></div>
+      <button type="button" class="btn btn-secondary text-sm mt-2" onclick="otAddRow()">+ Agregar labor / renglón</button>
+      <div class="mt-3"><label class="label">Observaciones generales</label><textarea id="ot-obs" class="input" rows="2">${esc(edit?.observaciones||'')}</textarea></div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick="otSave()">💾 ${edit?'Guardar cambios':'Crear orden'}</button>`
+  });
+  otRenderRows();
+}
+
+function _otLaboresDatalistId(){ return 'ot-labores-dl'; }
+function otRenderRows() {
+  const cont = document.getElementById('ot-rows'); if (!cont) return;
+  const camps = state.cache.campanas||[];
+  const prods = (state.cache.productos||[]).filter(p=>p.activo!==false);
+  const labs = state.cache.laboresCat||[];
+  const campOpts = camps.map(c=>`<option value="${esc(c.id)}">${esc(campLabel(c))}${c.lote?.hectareas?` (${fmtN(c.lote.hectareas)} ha)`:''}</option>`).join('');
+  const prodOpts = prods.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join('');
+  const labOpts  = labs.map(l=>`<option value="${esc(l.nombre)}">`).join('');
+  cont.innerHTML = `<datalist id="${_otLaboresDatalistId()}">${labOpts}</datalist>` + _otRows.map((r,ri)=>`
+    <div class="p-3 border border-slate-200 rounded-lg mb-2 bg-slate-50">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-xs font-semibold text-slate-600">Renglón ${ri+1}</div>
+        ${_otRows.length>1?`<button type="button" class="btn btn-ghost text-xs text-red-600" onclick="otDelRow(${ri})">✕ quitar renglón</button>`:''}
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2">
+        <div class="md:col-span-2"><label class="label">Campaña (opcional)</label>
+          <select class="input" onchange="otPickCampana(${ri}, this.value)"><option value="">— Ninguna —</option>${camps.map(c=>`<option value="${esc(c.id)}" ${r.campanaId===c.id?'selected':''}>${esc(campLabel(c))}</option>`).join('')}</select>
+        </div>
+        <div><label class="label">Campo</label><input class="input" value="${esc(r.campo||'')}" oninput="_otRows[${ri}].campo=this.value"/></div>
+        <div><label class="label">Lote</label><input class="input" value="${esc(r.lote||'')}" oninput="_otRows[${ri}].lote=this.value"/></div>
+        <div><label class="label">Cultivo</label><input class="input" value="${esc(r.cultivo||'')}" oninput="_otRows[${ri}].cultivo=this.value"/></div>
+        <div><label class="label">Hectáreas</label><input type="number" step="0.01" class="input" value="${r.hectareas??''}" oninput="_otRows[${ri}].hectareas=this.value; otRecalcInsumos(${ri})"/></div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2">
+        <div class="md:col-span-2"><label class="label">Labor *</label><input class="input" list="${_otLaboresDatalistId()}" placeholder="Pulverización, Siembra…" value="${esc(r.labor||'')}" oninput="_otRows[${ri}].labor=this.value"/></div>
+        <div class="md:col-span-4"><label class="label">Observación del renglón</label><input class="input" value="${esc(r.observacion||'')}" oninput="_otRows[${ri}].observacion=this.value"/></div>
+      </div>
+      <div class="text-[11px] font-semibold text-slate-500 mb-1">Insumos</div>
+      <table class="data text-sm"><thead><tr><th>Producto</th><th class="text-right">Dosis/ha</th><th class="text-right">Total</th><th>Unidad</th><th></th></tr></thead>
+        <tbody>${(r.insumos||[]).map((it,ii)=>`
+          <tr>
+            <td><select class="input" onchange="otPickProducto(${ri},${ii},this.value)"><option value="">— Insumo —</option>${prods.map(p=>`<option value="${esc(p.id)}" ${it.productoId===p.id?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select>
+                ${!it.productoId&&it.nombre?`<input class="input mt-1" value="${esc(it.nombre)}" oninput="_otRows[${ri}].insumos[${ii}].nombre=this.value" placeholder="nombre libre"/>`:''}</td>
+            <td><input type="number" step="0.001" class="input text-right" value="${it.dosis??''}" oninput="_otRows[${ri}].insumos[${ii}].dosis=this.value; otRecalcInsumoTotal(${ri},${ii})"/></td>
+            <td><input type="number" step="0.001" class="input text-right" value="${it.total??''}" oninput="_otRows[${ri}].insumos[${ii}].total=this.value"/></td>
+            <td><input class="input" value="${esc(it.unidad||'')}" oninput="_otRows[${ri}].insumos[${ii}].unidad=this.value" placeholder="lt/kg"/></td>
+            <td class="text-right">${(r.insumos.length>1)?`<button type="button" class="btn btn-ghost text-xs text-red-600" onclick="otDelInsumo(${ri},${ii})">✕</button>`:''}</td>
+          </tr>`).join('')}</tbody></table>
+      <button type="button" class="btn btn-ghost text-xs mt-1" onclick="otAddInsumo(${ri})">+ insumo</button>
+    </div>`).join('');
+}
+function otSyncDom(){ /* valores ya sincronizados por oninput; no-op para selects de campaña/producto que usan sus propios handlers */ }
+function otAddRow(){ otSyncDom(); _otRows.push({ campanaId:'',campo:'',lote:'',cultivo:'',hectareas:'',labor:'',observacion:'',insumos:[{productoId:'',nombre:'',unidad:'',dosis:'',total:''}] }); otRenderRows(); }
+function otDelRow(ri){ _otRows.splice(ri,1); otRenderRows(); }
+function otAddInsumo(ri){ _otRows[ri].insumos.push({productoId:'',nombre:'',unidad:'',dosis:'',total:''}); otRenderRows(); }
+function otDelInsumo(ri,ii){ _otRows[ri].insumos.splice(ii,1); otRenderRows(); }
+function otPickCampana(ri, cid){
+  _otRows[ri].campanaId = cid;
+  const c = (state.cache.campanas||[]).find(x=>x.id===cid);
+  if (c) {
+    _otRows[ri].campo = c.lote?.campo?.nombre || c.campo?.nombre || _otRows[ri].campo || '';
+    _otRows[ri].lote = c.lote?.nombre || _otRows[ri].lote || '';
+    _otRows[ri].cultivo = c.cultivo || c.cultivoNombre || _otRows[ri].cultivo || '';
+    if (c.lote?.hectareas) _otRows[ri].hectareas = c.lote.hectareas;
+  }
+  otRenderRows();
+}
+function otPickProducto(ri,ii,pid){
+  _otRows[ri].insumos[ii].productoId = pid;
+  const p = (state.cache.productos||[]).find(x=>x.id===pid);
+  if (p){ _otRows[ri].insumos[ii].nombre = p.nombre; if(p.unidad) _otRows[ri].insumos[ii].unidad = p.unidad; }
+  otRecalcInsumoTotal(ri,ii);
+  otRenderRows();
+}
+function otRecalcInsumoTotal(ri,ii){
+  const r=_otRows[ri], it=r.insumos[ii];
+  const ha=Number(r.hectareas||0), d=Number(it.dosis||0);
+  if (ha>0 && d>0) it.total = Math.round(ha*d*1000)/1000;
+}
+function otRecalcInsumos(ri){ (_otRows[ri].insumos||[]).forEach((_,ii)=>otRecalcInsumoTotal(ri,ii)); otRenderRows(); }
+
+async function otSave(){
+  const renglones = _otRows.map(r=>({
+    campanaId: r.campanaId||null, campo:r.campo||null, lote:r.lote||null, cultivo:r.cultivo||null,
+    hectareas: r.hectareas!==''&&r.hectareas!=null?Number(r.hectareas):null,
+    labor: (r.labor||'').trim(), observacion: r.observacion||null,
+    insumos: (r.insumos||[]).filter(i=>(i.productoId||i.nombre)).map(i=>({
+      productoId:i.productoId||null, nombre:(i.nombre||'').trim()||'(insumo)', unidad:i.unidad||null,
+      dosis: i.dosis!==''&&i.dosis!=null?Number(i.dosis):null, total: i.total!==''&&i.total!=null?Number(i.total):null,
+    })),
+  })).filter(r=>r.labor);
+  if (!renglones.length) return toast('Cargá al menos un renglón con su labor','warn');
+  const data = {
+    fecha: new Date($('#ot-fec').value).toISOString(),
+    fechaLabor: $('#ot-feclab').value ? new Date($('#ot-feclab').value).toISOString() : null,
+    contratistaId: $('#ot-contra').value||null,
+    observaciones: $('#ot-obs').value.trim()||null,
+    descuentaStock: !!$('#ot-descstock')?.checked,
+    depositoId: ($('#ot-descstock')?.checked ? ($('#ot-dep')?.value||null) : null),
+    renglones,
+  };
+  try {
+    if (state._otEdit) await api('/api/ordenes-trabajo/'+state._otEdit, { method:'PUT', body: JSON.stringify(data) });
+    else await api('/api/ordenes-trabajo', { method:'POST', body: JSON.stringify(data) });
+    state._otEdit = null; toast('Orden de trabajo guardada','success'); closeModal(); pages.ordenesTrabajo();
+  } catch (e) { toast(e.message,'error'); }
+}
+
+async function otRealizar(id){
+  const o = (state.cache.ordenesTrabajo||[]).find(x=>x.id===id); if(!o) return;
+  let descontar = o.descuentaStock;
+  if (o.descuentaStock) {
+    descontar = await uiConfirm('Esta orden tiene activado "descontar insumos del stock".\n\n¿Descontar ahora los insumos del stock al marcarla realizada?', { title:'Marcar realizada', icon:'📦', okText:'Sí, descontar stock', cancelText:'No descontar' });
+  } else {
+    const ok = await uiConfirm('¿Marcar esta orden como REALIZADA? Después vas a poder facturarla al contratista.', { title:'Marcar realizada', icon:'✅', okText:'Sí, realizada', cancelText:'Cancelar' });
+    if (!ok) return;
+  }
+  try { await api('/api/ordenes-trabajo/'+id+'/realizar', { method:'POST', body: JSON.stringify({ descontarStock: descontar, depositoId: o.depositoId||null }) });
+    toast('Orden marcada como realizada','success'); pages.ordenesTrabajo();
+  } catch(e){ toast(e.message,'error'); }
+}
+async function otReabrir(id){
+  if (!await uiConfirm('¿Volver la orden a PENDIENTE? Si había descontado stock, se reintegra.', {title:'Reabrir orden', icon:'↩️', okText:'Sí, reabrir', cancelText:'Cancelar'})) return;
+  try { await api('/api/ordenes-trabajo/'+id+'/reabrir', { method:'POST', body:'{}' }); toast('Orden reabierta','success'); pages.ordenesTrabajo(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function otDesfacturar(id){
+  if (!await uiConfirm('¿Quitar la factura vinculada? La factura de compra NO se borra; solo se desvincula y la orden vuelve a "realizada".', {title:'Quitar factura', icon:'↩️', okText:'Sí, quitar', cancelText:'Cancelar'})) return;
+  try { await api('/api/ordenes-trabajo/'+id+'/desfacturar', { method:'POST', body:'{}' }); toast('Factura desvinculada','success'); pages.ordenesTrabajo(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function otDel(id){
+  if (!await uiConfirm('¿Eliminar esta orden de trabajo? No se puede deshacer.', {title:'Eliminar orden', icon:'🗑️', danger:true, okText:'Eliminar', cancelText:'Cancelar'})) return;
+  try { await api('/api/ordenes-trabajo/'+id, { method:'DELETE' }); toast('Orden eliminada','success'); pages.ordenesTrabajo(); }
+  catch(e){ toast(e.message,'error'); }
+}
+// Facturar: abre la factura de compra prellenada con el contratista y la OT vinculada.
+async function otFacturar(id){
+  const o = (state.cache.ordenesTrabajo||[]).find(x=>x.id===id); if(!o) return toast('Orden no encontrada','error');
+  if (!o.contratistaId) return toast('La orden no tiene contratista. Editala y asignale el proveedor antes de facturar.','warn');
+  if (!state.cache.proveedores) { try { state.cache.proveedores = (await api('/api/proveedores')).data||[]; } catch {} }
+  const labores = [...new Set(o.renglones.map(r=>r.labor).filter(Boolean))].join(', ');
+  const haTot = o.renglones.reduce((a,r)=>a+Number(r.hectareas||0),0);
+  state._otFacturando = o.id;
+  compForm({
+    proveedorId: o.contratistaId, tipo:'A',
+    observaciones: `Orden de trabajo N° ${o.nro}${labores?` — ${labores}`:''}`,
+    items: [{ descripcion:`Labor según OT N° ${o.nro}${labores?`: ${labores}`:''}${haTot?` · ${fmtN(haTot)} ha`:''}`, cantidad:1, precioUnit:0, alicuotaIva:21 }],
+  });
+}
+// Documento imprimible (entregar en mano / imprimir a PDF)
+function _otDocHTML(o){
+  const emp = state.user.companies?.find(c=>c.id===state.companyId);
+  const filas = [];
+  o.renglones.forEach(r=>{
+    const ins = (r.insumos||[]);
+    const rows = Math.max(ins.length,1);
+    ins.forEach((it,k)=>{
+      filas.push(`<tr>
+        ${k===0?`<td rowspan="${rows}">${esc(fmtDate(o.fechaLabor||o.fecha))}</td><td rowspan="${rows}">${esc(r.campo||'')}</td><td rowspan="${rows}">${esc(r.lote||'')}</td><td rowspan="${rows}">${esc(r.cultivo||'')}</td><td rowspan="${rows}" style="text-align:right">${r.hectareas?fmtN(r.hectareas):''}</td><td rowspan="${rows}"><b>${esc(r.labor||'')}</b></td>`:''}
+        <td>${esc(it.nombre||'')}</td><td style="text-align:right">${it.dosis!=null?fmtN(it.dosis):''}</td><td style="text-align:right">${it.total!=null?fmtN(it.total):''}</td><td>${esc(it.unidad||'')}</td>
+        ${k===0?`<td rowspan="${rows}">${esc(r.observacion||'')}</td>`:''}
+      </tr>`);
+    });
+    if (!ins.length) filas.push(`<tr><td>${esc(fmtDate(o.fechaLabor||o.fecha))}</td><td>${esc(r.campo||'')}</td><td>${esc(r.lote||'')}</td><td>${esc(r.cultivo||'')}</td><td style="text-align:right">${r.hectareas?fmtN(r.hectareas):''}</td><td><b>${esc(r.labor||'')}</b></td><td></td><td></td><td></td><td></td><td>${esc(r.observacion||'')}</td></tr>`);
+  });
+  // Provisión de insumos: totales por insumo
+  const prov = {};
+  o.renglones.forEach(r=>(r.insumos||[]).forEach(it=>{ const k=(it.nombre||'').trim(); if(!k)return; if(!prov[k])prov[k]={total:0,unidad:it.unidad||''}; prov[k].total+=Number(it.total||0); }));
+  const provRows = Object.entries(prov).map(([n,v])=>`<tr><td>${esc(n)}</td><td style="text-align:right">${fmtN(v.total)}</td><td>${esc(v.unidad)}</td></tr>`).join('');
+  return `<div id="ot-doc" style="font-family:Arial,sans-serif;color:#1e293b;max-width:1000px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #1b5e20;padding-bottom:8px;margin-bottom:10px">
+      <div><div style="font-size:20px;font-weight:bold;color:#1b5e20">ORDEN DE TRABAJO</div><div style="font-size:13px;color:#475569">${esc(emp?.name||'AgroCore')}</div></div>
+      <div style="text-align:right"><div style="font-size:16px;font-weight:bold">N° ${esc(o.nro)}</div><div style="font-size:12px">Emisión: ${esc(fmtDate(o.fecha))}</div>${o.fechaLabor?`<div style="font-size:12px">Fecha labor: ${esc(fmtDate(o.fechaLabor))}</div>`:''}</div>
+    </div>
+    <div style="display:flex;gap:16px;font-size:13px;margin-bottom:10px;flex-wrap:wrap">
+      <div><b>Contratista:</b> ${esc(o.contratistaNombre||'—')}${o.contratistaCuit?` · CUIT ${esc(o.contratistaCuit)}`:''}</div>
+      <div><b>Estado:</b> ${esc((OT_ESTADOS[o.estado]||{}).lbl||o.estado)}</div>
+    </div>
+    <table border="1" cellspacing="0" cellpadding="5" style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead style="background:#e8f5e9"><tr><th>FECHA</th><th>CAMPO</th><th>LOTE</th><th>CULTIVO</th><th>HAS</th><th>LABOR</th><th>INSUMO</th><th>DOSIS</th><th>TOTAL</th><th>UNID</th><th>OBSERV</th></tr></thead>
+      <tbody>${filas.join('')}</tbody>
+    </table>
+    ${provRows?`<div style="margin-top:14px"><div style="font-weight:bold;background:#fff59d;padding:4px 8px">PROVISIÓN DE INSUMOS</div>
+      <table border="1" cellspacing="0" cellpadding="5" style="width:60%;border-collapse:collapse;font-size:12px;margin-top:4px"><thead style="background:#f1f5f9"><tr><th>INSUMO</th><th>TOTAL</th><th>UNIDAD</th></tr></thead><tbody>${provRows}</tbody></table></div>`:''}
+    ${o.observaciones?`<div style="margin-top:12px;font-size:12px"><b>Observaciones:</b> ${esc(o.observaciones)}</div>`:''}
+    <div style="margin-top:40px;display:flex;justify-content:space-around;font-size:12px"><div style="border-top:1px solid #333;padding-top:4px;width:40%;text-align:center">Entregó</div><div style="border-top:1px solid #333;padding-top:4px;width:40%;text-align:center">Recibió (contratista)</div></div>
+  </div>`;
+}
+async function otImprimir(id){
+  let o = (state.cache.ordenesTrabajo||[]).find(x=>x.id===id);
+  if (!o) { try { o=(await api('/api/ordenes-trabajo/'+id)).data; } catch(e){ return toast(e.message,'error'); } }
+  const w = window.open('','_blank','width=980,height=1000'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write(`<html><head><title>Orden de trabajo N° ${esc(o.nro)}</title><meta charset="utf-8"><style>@page{size:A4 landscape;margin:10mm}body{margin:0;padding:10px}</style></head><body>${_otDocHTML(o)}</body></html>`);
+  w.document.close(); w.focus(); setTimeout(()=>{ try{w.print();}catch(e){} }, 350);
+}
+async function otWhatsapp(id){
+  let o = (state.cache.ordenesTrabajo||[]).find(x=>x.id===id);
+  if (!o) { try { o=(await api('/api/ordenes-trabajo/'+id)).data; } catch(e){ return toast(e.message,'error'); } }
+  const prov = (state.cache.proveedores||[]).find(p=>p.id===o.contratistaId);
+  const lines = [`*ORDEN DE TRABAJO N° ${o.nro}*`, `Fecha labor: ${fmtDate(o.fechaLabor||o.fecha)}`, o.contratistaNombre?`Contratista: ${o.contratistaNombre}`:'', ''];
+  o.renglones.forEach(r=>{
+    lines.push(`• ${r.labor}${r.hectareas?` — ${fmtN(r.hectareas)} ha`:''}${r.campo?` (${r.campo}${r.lote?' / '+r.lote:''})`:''}`);
+    (r.insumos||[]).forEach(it=> lines.push(`   - ${it.nombre}: ${it.total!=null?fmtN(it.total):''} ${it.unidad||''}${it.dosis!=null?` (${fmtN(it.dosis)}/ha)`:''}`));
+    if (r.observacion) lines.push(`   obs: ${r.observacion}`);
+  });
+  if (o.observaciones) { lines.push(''); lines.push(`Obs: ${o.observaciones}`); }
+  lines.push(''); lines.push('(Para la copia impresa, usá el botón 🖨️ y guardá como PDF.)');
+  window.open(waLink(prov?.telefono||'', lines.filter(x=>x!==undefined).join('\n')), '_blank');
 }
 
 /* ---------- CATALOGOS (maestros) con pestañas ---------- */

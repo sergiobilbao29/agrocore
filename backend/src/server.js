@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.265.0';
+const AGROCORE_VERSION = '2.266.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13073,6 +13073,15 @@ const _AYUDA_KB = [
       '🌾 Circuito de una campaña de cereal: carta de porte, entrega en el acopio, venta al comprador y liquidación agrupando los camiones → https://youtu.be/xwzjHYBQuH4',
       'Se abren en YouTube; podés verlos desde la compu o el celular.'],
     atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
+  { id:'ordenes_trabajo', terms:['orden de trabajo','ordenes de trabajo','orden de labores','ot','orden al contratista','orden de aplicacion','mandar a pulverizar','orden para el contratista','labor del contratista','que insumos usar','provision de insumos','facturar contratista','orden labor'],
+    titulo:'Órdenes de trabajo (para el contratista)',
+    pasos:[
+      'Andá a Producción → Órdenes de trabajo → "+ Nueva orden".',
+      'Elegí el contratista (proveedor) y la fecha. Agregá uno o varios renglones: campo/lote/cultivo/hectáreas + la labor (pulverización, siembra…) y sus insumos (producto, dosis por hectárea y total; el total se calcula solo con las hectáreas).',
+      'La orden sale SIN precios. Guardala y queda ⏳ Pendiente. Con 🖨️ la imprimís (para entregar en mano o guardar PDF) o con 💬 la mandás por WhatsApp.',
+      'Si tildás "descontar los insumos del stock", al marcarla ✅ Realizada egresa cada insumo del depósito elegido.',
+      'Cuando el contratista la hizo, tocá ✅ Realizada. Después, con 🧾 Facturar cargás la factura de compra del contratista: eso genera la deuda en la cuenta del proveedor y la orden queda 🧾 Facturada (podés adjuntar el PDF de la factura).'],
+    atajo:{ page:'ordenesTrabajo', label:'Abrir Órdenes de trabajo' } },
   { id:'mensajes', terms:['mensaje','chat','grupo','grupos','mensajeria','avisos','notificaciones','asistente','equipo','comunicar'],
     titulo:'Mensajes, grupos y avisos',
     pasos:[
@@ -15035,6 +15044,244 @@ app.get('/api/labores-servicio', requireCompany, requirePermission('produccion:r
       };
     });
     res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// ÓRDENES DE TRABAJO (v2.266): documento para el contratista con la labor a
+// realizar e insumos a usar sobre campañas/lotes. Sin precios. Estados:
+// pendiente → realizada → facturada (al cargar la factura de compra del proveedor).
+// ============================================================
+function _serializeOT(o) {
+  return {
+    id: o.id, numero: o.numero, puntoVenta: o.puntoVenta,
+    nro: `${String(o.puntoVenta).padStart(4,'0')}-${String(o.numero).padStart(8,'0')}`,
+    fecha: o.fecha, fechaLabor: o.fechaLabor, fechaRealizada: o.fechaRealizada,
+    estado: o.estado, observaciones: o.observaciones,
+    descuentaStock: o.descuentaStock, depositoId: o.depositoId, stockMovido: o.stockMovido,
+    contratistaId: o.contratistaId,
+    contratistaNombre: o.contratista ? (o.contratista.razonSocial || o.contratista.nombreFantasia || '') : null,
+    contratistaCuit: o.contratista?.cuit || null,
+    facturaCompraId: o.facturaCompraId || null,
+    renglones: (o.renglones || []).map(r => ({
+      id: r.id, campanaId: r.campanaId, campo: r.campo, lote: r.lote, cultivo: r.cultivo,
+      hectareas: r.hectareas, labor: r.labor, observacion: r.observacion,
+      insumos: (r.insumos || []).map(i => ({
+        id: i.id, productoId: i.productoId, nombre: i.nombre, unidad: i.unidad,
+        dosis: i.dosis, total: i.total,
+      })),
+    })),
+    createdAt: o.createdAt,
+  };
+}
+const _otInclude = { contratista: true, renglones: { include: { insumos: true }, orderBy: { createdAt: 'asc' } } };
+const otRenglonSchema = z.object({
+  campanaId: z.string().nullable().optional(),
+  campo: z.string().nullable().optional(),
+  lote: z.string().nullable().optional(),
+  cultivo: z.string().nullable().optional(),
+  hectareas: z.coerce.number().nullable().optional(),
+  labor: z.string().min(1),
+  observacion: z.string().nullable().optional(),
+  insumos: z.array(z.object({
+    productoId: z.string().nullable().optional(),
+    nombre: z.string().min(1),
+    unidad: z.string().nullable().optional(),
+    dosis: z.coerce.number().nullable().optional(),
+    total: z.coerce.number().nullable().optional(),
+  })).optional().default([]),
+});
+const otSchema = z.object({
+  puntoVenta: z.number().int().optional().default(1),
+  fecha: z.coerce.date(),
+  fechaLabor: z.coerce.date().nullable().optional(),
+  contratistaId: z.string().nullable().optional(),
+  observaciones: z.string().nullable().optional(),
+  descuentaStock: z.boolean().optional().default(false),
+  depositoId: z.string().nullable().optional(),
+  renglones: z.array(otRenglonSchema).min(1),
+});
+
+// Listar
+app.get('/api/ordenes-trabajo', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const list = await prisma.ordenTrabajo.findMany({
+      where: { companyId: req.companyId },
+      orderBy: [{ fecha: 'desc' }, { numero: 'desc' }],
+      include: _otInclude,
+    });
+    res.json({ ok: true, data: list.map(_serializeOT) });
+  } catch (e) { next(e); }
+});
+// Detalle
+app.get('/api/ordenes-trabajo/:id', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const o = await prisma.ordenTrabajo.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _otInclude });
+    if (!o) return res.status(404).json({ ok: false, error: 'Orden de trabajo no encontrada' });
+    res.json({ ok: true, data: _serializeOT(o) });
+  } catch (e) { next(e); }
+});
+// Crear
+app.post('/api/ordenes-trabajo', requireCompany, requirePermission('produccion:create'), async (req, res, next) => {
+  try {
+    const d = otSchema.parse(req.body);
+    const pv = d.puntoVenta || 1;
+    const creada = await prisma.$transaction(async (tx) => {
+      let seq = await tx.secuenciaComprobante.findFirst({ where: { companyId: req.companyId, tipo: 'OT', puntoVenta: pv } });
+      if (!seq) seq = await tx.secuenciaComprobante.create({ data: { companyId: req.companyId, tipo: 'OT', puntoVenta: pv, proximoNumero: 1 } });
+      const numero = seq.proximoNumero;
+      await tx.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: { increment: 1 } } });
+      const o = await tx.ordenTrabajo.create({
+        data: {
+          companyId: req.companyId, puntoVenta: pv, numero,
+          fecha: d.fecha, fechaLabor: d.fechaLabor || null,
+          contratistaId: d.contratistaId || null, observaciones: d.observaciones || null,
+          descuentaStock: !!d.descuentaStock, depositoId: d.depositoId || null,
+          estado: 'pendiente', userId: req.user?.id || null,
+          renglones: {
+            create: d.renglones.map(r => ({
+              campanaId: r.campanaId || null, campo: r.campo || null, lote: r.lote || null,
+              cultivo: r.cultivo || null, hectareas: r.hectareas ?? null, labor: r.labor,
+              observacion: r.observacion || null,
+              insumos: { create: (r.insumos || []).map(i => ({
+                productoId: i.productoId || null, nombre: i.nombre, unidad: i.unidad || null,
+                dosis: i.dosis ?? null, total: i.total ?? null,
+              })) },
+            })),
+          },
+        },
+        include: _otInclude,
+      });
+      return o;
+    });
+    res.status(201).json({ ok: true, data: _serializeOT(creada) });
+  } catch (e) { next(e); }
+});
+// Editar (solo si está pendiente)
+app.put('/api/ordenes-trabajo/:id', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const o = await prisma.ordenTrabajo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!o) return res.status(404).json({ ok: false, error: 'Orden no encontrada' });
+    if (o.estado !== 'pendiente') return res.status(400).json({ ok: false, error: 'Solo se puede editar una orden PENDIENTE. Si ya está realizada o facturada, no se modifica.' });
+    const d = otSchema.parse(req.body);
+    const upd = await prisma.$transaction(async (tx) => {
+      await tx.ordenTrabajoRenglon.deleteMany({ where: { ordenId: o.id } }); // borra renglones+insumos (cascade)
+      return tx.ordenTrabajo.update({
+        where: { id: o.id },
+        data: {
+          fecha: d.fecha, fechaLabor: d.fechaLabor || null,
+          contratistaId: d.contratistaId || null, observaciones: d.observaciones || null,
+          descuentaStock: !!d.descuentaStock, depositoId: d.depositoId || null,
+          renglones: {
+            create: d.renglones.map(r => ({
+              campanaId: r.campanaId || null, campo: r.campo || null, lote: r.lote || null,
+              cultivo: r.cultivo || null, hectareas: r.hectareas ?? null, labor: r.labor,
+              observacion: r.observacion || null,
+              insumos: { create: (r.insumos || []).map(i => ({
+                productoId: i.productoId || null, nombre: i.nombre, unidad: i.unidad || null,
+                dosis: i.dosis ?? null, total: i.total ?? null,
+              })) },
+            })),
+          },
+        },
+        include: _otInclude,
+      });
+    });
+    res.json({ ok: true, data: _serializeOT(upd) });
+  } catch (e) { next(e); }
+});
+// Marcar REALIZADA (opcionalmente descuenta stock de los insumos)
+app.post('/api/ordenes-trabajo/:id/realizar', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const body = z.object({ fechaRealizada: z.coerce.date().nullable().optional(), descontarStock: z.boolean().optional(), depositoId: z.string().nullable().optional() }).parse(req.body || {});
+    const o = await prisma.ordenTrabajo.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _otInclude });
+    if (!o) return res.status(404).json({ ok: false, error: 'Orden no encontrada' });
+    if (o.estado === 'anulada') return res.status(400).json({ ok: false, error: 'La orden está anulada.' });
+    const descontar = body.descontarStock != null ? body.descontarStock : o.descuentaStock;
+    const depId = body.depositoId !== undefined ? body.depositoId : o.depositoId;
+    const upd = await prisma.$transaction(async (tx) => {
+      if (descontar && !o.stockMovido) {
+        for (const r of o.renglones) {
+          for (const i of r.insumos) {
+            if (!i.productoId || !(Number(i.total) > 0)) continue;
+            const mov = await tx.movimiento.create({ data: {
+              companyId: req.companyId, productoId: i.productoId, depositoId: depId || null,
+              fecha: body.fechaRealizada || new Date(), tipo: 'egreso', motivo: 'aplicacion',
+              cantidad: Number(i.total), precio: null, total: null,
+              referencia: `OT-${o.numero}`,
+              observaciones: `Insumo de Orden de Trabajo ${String(o.puntoVenta).padStart(4,'0')}-${String(o.numero).padStart(8,'0')}${r.labor ? ' · ' + r.labor : ''}`,
+              userId: req.user?.id || null,
+            }});
+            await tx.ordenTrabajoInsumo.update({ where: { id: i.id }, data: { movimientoId: mov.id } });
+          }
+        }
+      }
+      return tx.ordenTrabajo.update({
+        where: { id: o.id },
+        data: {
+          estado: 'realizada', fechaRealizada: body.fechaRealizada || new Date(),
+          descuentaStock: descontar, depositoId: depId || null,
+          stockMovido: descontar ? true : o.stockMovido,
+        },
+        include: _otInclude,
+      });
+    });
+    res.json({ ok: true, data: _serializeOT(upd) });
+  } catch (e) { next(e); }
+});
+// Volver a PENDIENTE (revierte el egreso de stock si lo había)
+app.post('/api/ordenes-trabajo/:id/reabrir', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const o = await prisma.ordenTrabajo.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _otInclude });
+    if (!o) return res.status(404).json({ ok: false, error: 'Orden no encontrada' });
+    if (o.facturaCompraId) return res.status(400).json({ ok: false, error: 'La orden ya fue facturada. Primero quitá la factura.' });
+    const upd = await prisma.$transaction(async (tx) => {
+      if (o.stockMovido) {
+        for (const r of o.renglones) for (const i of r.insumos) {
+          if (i.movimientoId) { await tx.movimiento.deleteMany({ where: { id: i.movimientoId, companyId: req.companyId } }); await tx.ordenTrabajoInsumo.update({ where: { id: i.id }, data: { movimientoId: null } }); }
+        }
+      }
+      return tx.ordenTrabajo.update({ where: { id: o.id }, data: { estado: 'pendiente', fechaRealizada: null, stockMovido: false }, include: _otInclude });
+    });
+    res.json({ ok: true, data: _serializeOT(upd) });
+  } catch (e) { next(e); }
+});
+// Vincular una factura de compra ya creada (deja la OT en estado 'facturada')
+app.post('/api/ordenes-trabajo/:id/facturar', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const body = z.object({ facturaCompraId: z.string().min(1) }).parse(req.body || {});
+    const o = await prisma.ordenTrabajo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!o) return res.status(404).json({ ok: false, error: 'Orden no encontrada' });
+    const fac = await prisma.facturaCompra.findFirst({ where: { id: body.facturaCompraId, companyId: req.companyId } });
+    if (!fac) return res.status(400).json({ ok: false, error: 'Factura de compra no encontrada' });
+    const upd = await prisma.ordenTrabajo.update({ where: { id: o.id }, data: { facturaCompraId: fac.id, estado: 'facturada', fechaRealizada: o.fechaRealizada || new Date() }, include: _otInclude });
+    res.json({ ok: true, data: _serializeOT(upd) });
+  } catch (e) { next(e); }
+});
+// Desvincular la factura (vuelve a 'realizada'; no borra la factura de compra)
+app.post('/api/ordenes-trabajo/:id/desfacturar', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
+  try {
+    const o = await prisma.ordenTrabajo.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _otInclude });
+    if (!o) return res.status(404).json({ ok: false, error: 'Orden no encontrada' });
+    const upd = await prisma.ordenTrabajo.update({ where: { id: o.id }, data: { facturaCompraId: null, estado: 'realizada' }, include: _otInclude });
+    res.json({ ok: true, data: _serializeOT(upd) });
+  } catch (e) { next(e); }
+});
+// Anular / eliminar (no si está facturada)
+app.delete('/api/ordenes-trabajo/:id', requireCompany, requirePermission('produccion:delete'), async (req, res, next) => {
+  try {
+    const o = await prisma.ordenTrabajo.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _otInclude });
+    if (!o) return res.status(404).json({ ok: false, error: 'Orden no encontrada' });
+    if (o.facturaCompraId) return res.status(400).json({ ok: false, error: 'No se puede eliminar una orden facturada. Quitá la factura primero.' });
+    await prisma.$transaction(async (tx) => {
+      if (o.stockMovido) {
+        for (const r of o.renglones) for (const i of r.insumos) {
+          if (i.movimientoId) await tx.movimiento.deleteMany({ where: { id: i.movimientoId, companyId: req.companyId } });
+        }
+      }
+      await tx.ordenTrabajo.delete({ where: { id: o.id } });
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
