@@ -2970,6 +2970,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'02/10/2026',
+      titulo:'📋 v2.269.0 — La Orden de trabajo realizada ahora carga la labor e insumos en la campaña',
+      desc:'Al marcar una <b>Orden de trabajo</b> como <b>✅ realizada</b>, ahora se registran automáticamente la <b>labor</b> y los <b>insumos</b> de cada renglón en la <b>campaña</b> correspondiente (aparecen en <b>Insumos y labores</b>), igual que si los cargaras a mano. Si además la OT descuenta stock, el egreso queda vinculado al insumo aplicado. Al <b>volver la orden a pendiente</b> se revierte todo (labor, insumos y stock). <i>Si ya tenías una OT realizada antes de esta versión, volvela a pendiente y marcala realizada de nuevo para que cargue la labor y los insumos.</i>' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'01/10/2026',
       titulo:'📋 v2.268.0 — Órdenes de trabajo: logo en la impresión, WhatsApp y nuevo instructivo',
       desc:'Más mejoras en las <b>Órdenes de trabajo</b>: el listado ahora muestra la <b>Fecha de la labor</b> en su propia columna y el acceso del menú quedó <b>arriba de "Insumos y labores"</b>. La <b>impresión</b> lleva el <b>logo real de AgroCore</b> en el encabezado y el <b>mensaje de WhatsApp</b> quedó más profesional. Sumamos el <b>instructivo "Órdenes de trabajo"</b> en Ayuda y manual, y publicamos otros instructivos que faltaban (Puesta en marcha, Caja por tenedor, Cartas de porte, Liquidación paso a paso, Rodeos, Manejo de animales, Costo por kg y Sociedades/UTE). Además renovamos el <b>logo de AgroCore</b> por su versión vectorizada de alta calidad en todo el sistema y la web.' },
@@ -26234,11 +26237,11 @@ async function otRealizar(id){
   if (o.descuentaStock) {
     descontar = await uiConfirm('Esta orden tiene activado "descontar insumos del stock".\n\n¿Descontar ahora los insumos del stock al marcarla realizada?', { title:'Marcar realizada', icon:'📦', okText:'Sí, descontar stock', cancelText:'No descontar' });
   } else {
-    const ok = await uiConfirm('¿Marcar esta orden como REALIZADA? Después vas a poder facturarla al contratista.', { title:'Marcar realizada', icon:'✅', okText:'Sí, realizada', cancelText:'Cancelar' });
+    const ok = await uiConfirm('¿Marcar esta orden como REALIZADA? Se va a registrar la labor y los insumos en la campaña. Después vas a poder facturarla al contratista.', { title:'Marcar realizada', icon:'✅', okText:'Sí, realizada', cancelText:'Cancelar' });
     if (!ok) return;
   }
   try { await api('/api/ordenes-trabajo/'+id+'/realizar', { method:'POST', body: JSON.stringify({ descontarStock: descontar, depositoId: o.depositoId||null }) });
-    toast('Orden marcada como realizada','success'); pages.ordenesTrabajo();
+    toast('Orden realizada: labor e insumos cargados en la campaña','success'); pages.ordenesTrabajo();
   } catch(e){ toast(e.message,'error'); }
 }
 async function otReabrir(id){

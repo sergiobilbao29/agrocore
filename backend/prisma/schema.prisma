@@ -436,6 +436,7 @@ model InsumoAplicado {
   aporteSocioId       String?     // Sociedad/UTE: qué socio aportó este insumo (para el aporte real por socio)
   aporteSocioNombre   String?     // snapshot del nombre del socio que lo aportó
   movimientoId        String?     // egreso de stock generado por el uso (para poder anular)
+  ordenTrabajoId      String?     // si provino de una Orden de Trabajo realizada (para poder revertir)
   observaciones       String?
   createdAt           DateTime @default(now())
 
@@ -443,6 +444,7 @@ model InsumoAplicado {
   producto    Producto? @relation(fields: [productoId], references: [id])
 
   @@index([campanaId])
+  @@index([ordenTrabajoId])
 }
 
 model LaborAplicada {
@@ -468,6 +470,7 @@ model LaborAplicada {
   porcentajeEmpleado  Float?     // % que cobra el empleado sobre el precio total de la labor
   gananciaEmpleado    Float?     // monto calculado y registrado en la planilla del empleado
   movimientoEmpleadoId String?   // id del MovimientoEmpleado generado (para poder anular)
+  ordenTrabajoId      String?    // si provino de una Orden de Trabajo realizada (para poder revertir)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @default(now()) @updatedAt
 
@@ -477,6 +480,7 @@ model LaborAplicada {
   insumos     LaborInsumo[]
 
   @@index([campanaId])
+  @@index([ordenTrabajoId])
   @@index([empleadoId])
   @@index([clienteId])
 }
@@ -2781,6 +2785,7 @@ model OrdenTrabajo {
   descuentaStock  Boolean  @default(false) // si al realizarla egresa los insumos del stock
   depositoId      String?                  // depósito de salida de los insumos (si descuenta)
   stockMovido     Boolean  @default(false) // ya generó los egresos de stock
+  aplicadoEnCampana Boolean @default(false) // ya registró la labor e insumos en la campaña
   fechaRealizada  DateTime?
   facturaCompraId String?                  // factura de compra del contratista (deuda)
   userId          String?

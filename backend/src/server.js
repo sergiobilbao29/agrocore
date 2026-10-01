@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.268.0';
+const AGROCORE_VERSION = '2.269.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -15199,29 +15199,71 @@ app.post('/api/ordenes-trabajo/:id/realizar', requireCompany, requirePermission(
     if (o.estado === 'anulada') return res.status(400).json({ ok: false, error: 'La orden está anulada.' });
     const descontar = body.descontarStock != null ? body.descontarStock : o.descuentaStock;
     const depId = body.depositoId !== undefined ? body.depositoId : o.depositoId;
+    const fechaReal = body.fechaRealizada || new Date();
+    const nroOT = `${String(o.puntoVenta).padStart(4,'0')}-${String(o.numero).padStart(8,'0')}`;
     const upd = await prisma.$transaction(async (tx) => {
+      // Mapa de insumoId -> movimiento de stock generado (para enlazarlo también al InsumoAplicado)
+      const movPorInsumo = {};
       if (descontar && !o.stockMovido) {
         for (const r of o.renglones) {
           for (const i of r.insumos) {
             if (!i.productoId || !(Number(i.total) > 0)) continue;
             const mov = await tx.movimiento.create({ data: {
               companyId: req.companyId, productoId: i.productoId, depositoId: depId || null,
-              fecha: body.fechaRealizada || new Date(), tipo: 'egreso', motivo: 'aplicacion',
+              fecha: fechaReal, tipo: 'egreso', motivo: 'aplicacion',
               cantidad: Number(i.total), precio: null, total: null,
               referencia: `OT-${o.numero}`,
-              observaciones: `Insumo de Orden de Trabajo ${String(o.puntoVenta).padStart(4,'0')}-${String(o.numero).padStart(8,'0')}${r.labor ? ' · ' + r.labor : ''}`,
+              observaciones: `Insumo de Orden de Trabajo ${nroOT}${r.labor ? ' · ' + r.labor : ''}`,
               userId: req.user?.id || null,
             }});
             await tx.ordenTrabajoInsumo.update({ where: { id: i.id }, data: { movimientoId: mov.id } });
+            movPorInsumo[i.id] = mov.id;
+          }
+        }
+      }
+      // Registrar la labor y los insumos en la campaña (si el renglón tiene campaña y no se cargó antes)
+      if (!o.aplicadoEnCampana) {
+        for (const r of o.renglones) {
+          if (!r.campanaId) continue;
+          const camp = await tx.campana.findFirst({ where: { id: r.campanaId, companyId: req.companyId } });
+          if (!camp) continue;
+          const ubic = [r.campo, r.lote && `Lote ${r.lote}`, r.cultivo].filter(Boolean).join(' · ');
+          const obsBase = `OT ${nroOT}${ubic ? ' · ' + ubic : ''}`;
+          // Labor
+          if (r.labor) {
+            await tx.laborAplicada.create({ data: {
+              campanaId: r.campanaId, tipo: r.labor, fecha: fechaReal,
+              hectareasAplicadas: r.hectareas != null ? Number(r.hectareas) : null,
+              observaciones: [obsBase, r.observacion].filter(Boolean).join(' · '),
+              ordenTrabajoId: o.id,
+            }});
+          }
+          // Insumos
+          for (const i of r.insumos) {
+            const ha = r.hectareas != null ? Number(r.hectareas) : null;
+            // cantidad por hectárea: dosis si está; si no, total/ha; si no hay ha, el total
+            let cantHa = (i.dosis != null) ? Number(i.dosis)
+              : (ha && ha > 0 && i.total != null) ? Number(i.total) / ha
+              : (i.total != null ? Number(i.total) : 0);
+            await tx.insumoAplicado.create({ data: {
+              campanaId: r.campanaId, productoId: i.productoId || null,
+              nombre: i.nombre || 'Insumo', cantidad: cantHa || 0,
+              unidad: i.unidad || 'u/ha', fecha: fechaReal,
+              hectareasAplicadas: ha,
+              movimientoId: movPorInsumo[i.id] || null,
+              ordenTrabajoId: o.id,
+              observaciones: obsBase,
+            }});
           }
         }
       }
       return tx.ordenTrabajo.update({
         where: { id: o.id },
         data: {
-          estado: 'realizada', fechaRealizada: body.fechaRealizada || new Date(),
+          estado: 'realizada', fechaRealizada: fechaReal,
           descuentaStock: descontar, depositoId: depId || null,
           stockMovido: descontar ? true : o.stockMovido,
+          aplicadoEnCampana: true,
         },
         include: _otInclude,
       });
@@ -15241,7 +15283,10 @@ app.post('/api/ordenes-trabajo/:id/reabrir', requireCompany, requirePermission('
           if (i.movimientoId) { await tx.movimiento.deleteMany({ where: { id: i.movimientoId, companyId: req.companyId } }); await tx.ordenTrabajoInsumo.update({ where: { id: i.id }, data: { movimientoId: null } }); }
         }
       }
-      return tx.ordenTrabajo.update({ where: { id: o.id }, data: { estado: 'pendiente', fechaRealizada: null, stockMovido: false }, include: _otInclude });
+      // Revertir la labor e insumos registrados en la campaña (los que haya movido el stock ya se borraron arriba)
+      await tx.insumoAplicado.deleteMany({ where: { ordenTrabajoId: o.id } });
+      await tx.laborAplicada.deleteMany({ where: { ordenTrabajoId: o.id } });
+      return tx.ordenTrabajo.update({ where: { id: o.id }, data: { estado: 'pendiente', fechaRealizada: null, stockMovido: false, aplicadoEnCampana: false }, include: _otInclude });
     });
     res.json({ ok: true, data: _serializeOT(upd) });
   } catch (e) { next(e); }
@@ -15279,6 +15324,8 @@ app.delete('/api/ordenes-trabajo/:id', requireCompany, requirePermission('produc
           if (i.movimientoId) await tx.movimiento.deleteMany({ where: { id: i.movimientoId, companyId: req.companyId } });
         }
       }
+      await tx.insumoAplicado.deleteMany({ where: { ordenTrabajoId: o.id } });
+      await tx.laborAplicada.deleteMany({ where: { ordenTrabajoId: o.id } });
       await tx.ordenTrabajo.delete({ where: { id: o.id } });
     });
     res.json({ ok: true });
