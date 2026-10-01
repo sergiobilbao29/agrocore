@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.266.0';
+const AGROCORE_VERSION = '2.267.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -22480,6 +22480,36 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
         : 'Vencimiento de arrendamiento';
       empujar(a.vencimiento, a.id, '', desc);
     }
+  }
+
+  // N) Órdenes de trabajo con fecha de labor pendiente (aún no realizadas)
+  const otsCal = await prisma.ordenTrabajo.findMany({
+    where: { companyId, estado: 'pendiente', fechaLabor: { not: null, lte: limiteFuturo } },
+    include: { contratista: true, renglones: true },
+    orderBy: { fechaLabor: 'asc' },
+  });
+  for (const o of otsCal) {
+    if (setOcultos.has(`orden_trabajo:${o.id}`)) continue;
+    const fl = new Date(o.fechaLabor); fl.setHours(0,0,0,0);
+    if (!incluirVencidos && fl < today) continue;
+    const labores = [...new Set((o.renglones||[]).map(r=>r.labor).filter(Boolean))].join(', ');
+    const prov = o.contratista ? (o.contratista.razonSocial || o.contratista.nombreFantasia || '') : '';
+    items.push({
+      id: `auto:ot:${o.id}`,
+      origen: 'auto',
+      autoTipo: 'orden_trabajo',
+      autoRefId: o.id,
+      titulo: `Labor OT N° ${String(o.puntoVenta).padStart(4,'0')}-${String(o.numero).padStart(8,'0')}${labores?`: ${labores}`:''}`,
+      descripcion: `Orden de trabajo${prov?` · ${prov}`:''} — realizar la labor`,
+      fecha: o.fechaLabor,
+      categoria: 'produccion',
+      prioridad: 'media',
+      avisarDiasAntes: 3,
+      completado: false,
+      repetir: 'ninguno',
+      relacionTipo: 'orden_trabajo',
+      relacionId: o.id,
+    });
   }
 
   return items;

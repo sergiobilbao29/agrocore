@@ -2960,6 +2960,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'01/10/2026',
+      titulo:'📋 v2.267.0 — Órdenes de trabajo: calendario, filtros e impresión más linda',
+      desc:'Mejoras sobre las Órdenes de trabajo: ahora la <b>fecha de la labor aparece en el Calendario/Agenda</b> y <b>avisa 3 días antes</b>. Sumamos <b>filtros por fecha (desde/hasta) y por campaña</b>. La <b>impresión</b> quedó más profesional (encabezado, colores y pie <i>"Generado por AgroCore"</i>) y el <b>mensaje de WhatsApp</b> más prolijo. Se corrigió el desfasaje de un día en la fecha de emisión.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'01/10/2026',
       titulo:'📋 v2.266.0 — Órdenes de trabajo para el contratista',
       desc:'Nueva sección <b>Producción → Órdenes de trabajo</b>. Armás un documento para el contratista con la <b>labor a realizar</b> y los <b>insumos a usar</b> (producto, dosis/ha y total) sobre una o varias campañas/lotes, con fecha. Sale <b>sin precios</b>, se puede <b>imprimir</b> (entregar en mano o guardar PDF) o mandar por <b>💬 WhatsApp</b>. Queda <b>⏳ pendiente</b>; cuando se hace, la marcás <b>✅ realizada</b> (opcionalmente descuenta los insumos del stock); y desde ahí, con <b>🧾 Facturar</b>, cargás la <b>factura de compra del contratista</b> que genera la <b>deuda en el proveedor</b>.' },
@@ -25971,6 +25974,10 @@ const OT_ESTADOS = {
   anulada:   { lbl:'🚫 Anulada', cls:'badge-gray' },
 };
 let _otRows = [];  // renglones en edición
+// Fecha para <input type=date> usando partes LOCALES (evita el -1 día por zona horaria).
+function _otDInput(d){ if(!d) return ''; const x=new Date(d); if(isNaN(x)) return ''; const p=n=>String(n).padStart(2,'0'); return `${x.getFullYear()}-${p(x.getMonth()+1)}-${p(x.getDate())}`; }
+// De un value de <input type=date> (YYYY-MM-DD) a ISO al MEDIODÍA local (así fmtDate no corre el día).
+function _otDIso(v){ return v ? new Date(v+'T12:00:00').toISOString() : null; }
 
 pages.ordenesTrabajo = async function() {
   setHeader('Órdenes de trabajo', 'Indicá al contratista qué labor realizar y qué insumos usar. Imprimila o mandala, marcala realizada y facturá al proveedor.');
@@ -25978,16 +25985,25 @@ pages.ordenesTrabajo = async function() {
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let ots = [];
   try {
-    const [o, p] = await Promise.all([ api('/api/ordenes-trabajo'), api('/api/proveedores').catch(()=>({data:state.cache.proveedores||[]})) ]);
+    const [o, p, ca] = await Promise.all([ api('/api/ordenes-trabajo'), api('/api/proveedores').catch(()=>({data:state.cache.proveedores||[]})), api('/api/campanas').catch(()=>({data:state.cache.campanas||[]})) ]);
     ots = o.data || [];
     state.cache.proveedores = p.data || state.cache.proveedores || [];
+    state.cache.campanas = ca.data || state.cache.campanas || [];
   } catch (e) { $('#page-body').innerHTML = `<div class="text-red-600 text-sm">${esc(e.message)}</div>`; return; }
   state.cache.ordenesTrabajo = ots;
-  state.otFilter = state.otFilter || { estado:'', contratista:'' };
+  state.otFilter = state.otFilter || { estado:'', contratista:'', campana:'', desde:'', hasta:'' };
 
   const render = () => {
     const f = state.otFilter;
-    const fil = ots.filter(o => (!f.estado || o.estado===f.estado) && (!f.contratista || o.contratistaId===f.contratista));
+    const fil = ots.filter(o => {
+      if (f.estado && o.estado!==f.estado) return false;
+      if (f.contratista && o.contratistaId!==f.contratista) return false;
+      if (f.campana && !(o.renglones||[]).some(r=>r.campanaId===f.campana)) return false;
+      const d = String(o.fecha||'').slice(0,10);
+      if (f.desde && d < f.desde) return false;
+      if (f.hasta && d > f.hasta) return false;
+      return true;
+    });
     const rows = fil.map(o => {
       const est = OT_ESTADOS[o.estado] || OT_ESTADOS.pendiente;
       const nLab = o.renglones.length;
@@ -26019,7 +26035,7 @@ pages.ordenesTrabajo = async function() {
       ${can('produccion:create')?`<button class="btn btn-primary text-sm" onclick="otForm()">+ Nueva orden</button>`:''}
     </div>
     <div class="kpi mb-3">
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
+      <div class="grid grid-cols-2 md:grid-cols-6 gap-2 items-end">
         <div><label class="label">Estado</label>
           <select id="otf-estado" class="input"><option value="">Todos</option>
             <option value="pendiente">⏳ Pendiente</option><option value="realizada">✅ Realizada</option>
@@ -26029,6 +26045,12 @@ pages.ordenesTrabajo = async function() {
         <div><label class="label">Contratista</label>
           <select id="otf-contra" class="input"><option value="">Todos</option>${provOpts}</select>
         </div>
+        <div><label class="label">Campaña</label>
+          <select id="otf-camp" class="input"><option value="">Todas</option>${(state.cache.campanas||[]).map(c=>`<option value="${esc(c.id)}">${esc(campLabel(c))}</option>`).join('')}</select>
+        </div>
+        <div><label class="label">Desde (emisión)</label><input id="otf-desde" type="date" class="input" value="${esc(state.otFilter.desde||'')}"/></div>
+        <div><label class="label">Hasta (emisión)</label><input id="otf-hasta" type="date" class="input" value="${esc(state.otFilter.hasta||'')}"/></div>
+        <div><button class="btn btn-secondary w-full" onclick="state.otFilter={estado:'',contratista:'',campana:'',desde:'',hasta:''}; pages.ordenesTrabajo();">Limpiar</button></div>
       </div>
     </div>
     <div class="kpi p-0 overflow-hidden">
@@ -26038,7 +26060,7 @@ pages.ordenesTrabajo = async function() {
       </table>
     </div>`;
   const be=(id,k)=>{ const el=$('#'+id); if(el) el.addEventListener('change',e=>{ state.otFilter[k]=e.target.value; render(); }); };
-  be('otf-estado','estado'); be('otf-contra','contratista');
+  be('otf-estado','estado'); be('otf-contra','contratista'); be('otf-camp','campana'); be('otf-desde','desde'); be('otf-hasta','hasta');
   render();
 };
 
@@ -26068,8 +26090,8 @@ async function otForm(id) {
     title: edit ? `🛠️ Editar orden de trabajo N° ${esc(edit.nro)}` : '📋 Nueva orden de trabajo', size:'max-w-5xl',
     body: `
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-        <div><label class="label">Fecha emisión *</label><input id="ot-fec" type="date" class="input" value="${(edit?String(edit.fecha).slice(0,10):new Date().toISOString().slice(0,10))}"/></div>
-        <div><label class="label">Fecha de la labor</label><input id="ot-feclab" type="date" class="input" value="${edit?.fechaLabor?String(edit.fechaLabor).slice(0,10):''}"/></div>
+        <div><label class="label">Fecha emisión *</label><input id="ot-fec" type="date" class="input" value="${edit?_otDInput(edit.fecha):_otDInput(new Date())}"/></div>
+        <div><label class="label">Fecha de la labor</label><input id="ot-feclab" type="date" class="input" value="${_otDInput(edit?.fechaLabor)}"/></div>
         <div class="col-span-2"><label class="label">Contratista (proveedor)</label>
           <select id="ot-contra" class="input"><option value="">— Elegí el contratista —</option>${provs.map(p=>`<option value="${esc(p.id)}" ${edit?.contratistaId===p.id?'selected':''}>${esc(p.razonSocial||p.nombreFantasia||'')}${p.cuit?` · ${esc(p.cuit)}`:''}</option>`).join('')}</select>
         </div>
@@ -26177,8 +26199,8 @@ async function otSave(){
   })).filter(r=>r.labor);
   if (!renglones.length) return toast('Cargá al menos un renglón con su labor','warn');
   const data = {
-    fecha: new Date($('#ot-fec').value).toISOString(),
-    fechaLabor: $('#ot-feclab').value ? new Date($('#ot-feclab').value).toISOString() : null,
+    fecha: _otDIso($('#ot-fec').value),
+    fechaLabor: _otDIso($('#ot-feclab').value),
     contratistaId: $('#ot-contra').value||null,
     observaciones: $('#ot-obs').value.trim()||null,
     descuentaStock: !!$('#ot-descstock')?.checked,
@@ -26254,23 +26276,37 @@ function _otDocHTML(o){
   const prov = {};
   o.renglones.forEach(r=>(r.insumos||[]).forEach(it=>{ const k=(it.nombre||'').trim(); if(!k)return; if(!prov[k])prov[k]={total:0,unidad:it.unidad||''}; prov[k].total+=Number(it.total||0); }));
   const provRows = Object.entries(prov).map(([n,v])=>`<tr><td>${esc(n)}</td><td style="text-align:right">${fmtN(v.total)}</td><td>${esc(v.unidad)}</td></tr>`).join('');
-  return `<div id="ot-doc" style="font-family:Arial,sans-serif;color:#1e293b;max-width:1000px;margin:0 auto">
-    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #1b5e20;padding-bottom:8px;margin-bottom:10px">
-      <div><div style="font-size:20px;font-weight:bold;color:#1b5e20">ORDEN DE TRABAJO</div><div style="font-size:13px;color:#475569">${esc(emp?.name||'AgroCore')}</div></div>
-      <div style="text-align:right"><div style="font-size:16px;font-weight:bold">N° ${esc(o.nro)}</div><div style="font-size:12px">Emisión: ${esc(fmtDate(o.fecha))}</div>${o.fechaLabor?`<div style="font-size:12px">Fecha labor: ${esc(fmtDate(o.fechaLabor))}</div>`:''}</div>
+  const est = (OT_ESTADOS[o.estado]||{}).lbl || o.estado;
+  const genFecha = new Date(); const genTxt = `${_otDInput(genFecha).split('-').reverse().join('/')} ${String(genFecha.getHours()).padStart(2,'0')}:${String(genFecha.getMinutes()).padStart(2,'0')}`;
+  return `<div id="ot-doc" style="font-family:'Segoe UI',Arial,sans-serif;color:#1e293b;max-width:1040px;margin:0 auto;font-size:12px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;background:linear-gradient(135deg,#1b5e20,#2e7d32);color:#fff;border-radius:12px 12px 0 0;padding:16px 20px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:42px;height:42px;border-radius:10px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:22px">🌿</div>
+        <div><div style="font-size:22px;font-weight:800;letter-spacing:.5px">ORDEN DE TRABAJO</div>
+        <div style="font-size:13px;opacity:.92">${esc(emp?.name||'AgroCore')}</div></div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:18px;font-weight:800">N° ${esc(o.nro)}</div>
+        <div style="font-size:12px;opacity:.92">Emisión: ${esc(fmtDate(o.fecha))}</div>
+        ${o.fechaLabor?`<div style="font-size:12px;opacity:.92">📅 Fecha de labor: <b>${esc(fmtDate(o.fechaLabor))}</b></div>`:''}
+      </div>
     </div>
-    <div style="display:flex;gap:16px;font-size:13px;margin-bottom:10px;flex-wrap:wrap">
-      <div><b>Contratista:</b> ${esc(o.contratistaNombre||'—')}${o.contratistaCuit?` · CUIT ${esc(o.contratistaCuit)}`:''}</div>
-      <div><b>Estado:</b> ${esc((OT_ESTADOS[o.estado]||{}).lbl||o.estado)}</div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;justify-content:space-between;background:#f1f5f9;border:1px solid #e2e8f0;border-top:none;padding:10px 20px">
+      <div><span style="color:#64748b">Contratista:</span> <b>${esc(o.contratistaNombre||'—')}</b>${o.contratistaCuit?` <span style="color:#64748b">· CUIT ${esc(o.contratistaCuit)}</span>`:''}</div>
+      <div><span style="color:#64748b">Estado:</span> <b>${esc(est)}</b></div>
     </div>
-    <table border="1" cellspacing="0" cellpadding="5" style="width:100%;border-collapse:collapse;font-size:12px">
-      <thead style="background:#e8f5e9"><tr><th>FECHA</th><th>CAMPO</th><th>LOTE</th><th>CULTIVO</th><th>HAS</th><th>LABOR</th><th>INSUMO</th><th>DOSIS</th><th>TOTAL</th><th>UNID</th><th>OBSERV</th></tr></thead>
+    <table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;margin-top:14px;border:1px solid #cbd5e1">
+      <thead><tr style="background:#1b5e20;color:#fff;text-align:left">
+        <th style="padding:7px 8px">FECHA</th><th style="padding:7px 8px">CAMPO</th><th style="padding:7px 8px">LOTE</th><th style="padding:7px 8px">CULTIVO</th><th style="padding:7px 8px;text-align:right">HAS</th><th style="padding:7px 8px">LABOR</th><th style="padding:7px 8px">INSUMO</th><th style="padding:7px 8px;text-align:right">DOSIS/HA</th><th style="padding:7px 8px;text-align:right">TOTAL</th><th style="padding:7px 8px">UNID</th><th style="padding:7px 8px">OBSERV</th>
+      </tr></thead>
       <tbody>${filas.join('')}</tbody>
     </table>
-    ${provRows?`<div style="margin-top:14px"><div style="font-weight:bold;background:#fff59d;padding:4px 8px">PROVISIÓN DE INSUMOS</div>
-      <table border="1" cellspacing="0" cellpadding="5" style="width:60%;border-collapse:collapse;font-size:12px;margin-top:4px"><thead style="background:#f1f5f9"><tr><th>INSUMO</th><th>TOTAL</th><th>UNIDAD</th></tr></thead><tbody>${provRows}</tbody></table></div>`:''}
-    ${o.observaciones?`<div style="margin-top:12px;font-size:12px"><b>Observaciones:</b> ${esc(o.observaciones)}</div>`:''}
-    <div style="margin-top:40px;display:flex;justify-content:space-around;font-size:12px"><div style="border-top:1px solid #333;padding-top:4px;width:40%;text-align:center">Entregó</div><div style="border-top:1px solid #333;padding-top:4px;width:40%;text-align:center">Recibió (contratista)</div></div>
+    ${provRows?`<div style="margin-top:16px">
+      <div style="font-weight:700;color:#1b5e20;background:#fff59d;padding:6px 10px;border-radius:6px;display:inline-block">📦 PROVISIÓN DE INSUMOS</div>
+      <table cellspacing="0" cellpadding="0" style="width:62%;border-collapse:collapse;margin-top:6px;border:1px solid #cbd5e1"><thead><tr style="background:#f1f5f9;text-align:left"><th style="padding:6px 8px">INSUMO</th><th style="padding:6px 8px;text-align:right">TOTAL</th><th style="padding:6px 8px">UNIDAD</th></tr></thead><tbody>${provRows}</tbody></table></div>`:''}
+    ${o.observaciones?`<div style="margin-top:14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px"><b>Observaciones:</b> ${esc(o.observaciones)}</div>`:''}
+    <div style="margin-top:48px;display:flex;justify-content:space-around"><div style="border-top:1px solid #334155;padding-top:4px;width:38%;text-align:center;color:#475569">Entregó</div><div style="border-top:1px solid #334155;padding-top:4px;width:38%;text-align:center;color:#475569">Recibió (contratista)</div></div>
+    <div style="margin-top:22px;border-top:1px solid #e2e8f0;padding-top:6px;text-align:center;color:#94a3b8;font-size:10px">Generado por <b style="color:#1b5e20">AgroCore</b> · ${esc(genTxt)} · El corazón del negocio agrícola</div>
   </div>`;
 }
 async function otImprimir(id){
@@ -26284,15 +26320,22 @@ async function otWhatsapp(id){
   let o = (state.cache.ordenesTrabajo||[]).find(x=>x.id===id);
   if (!o) { try { o=(await api('/api/ordenes-trabajo/'+id)).data; } catch(e){ return toast(e.message,'error'); } }
   const prov = (state.cache.proveedores||[]).find(p=>p.id===o.contratistaId);
-  const lines = [`*ORDEN DE TRABAJO N° ${o.nro}*`, `Fecha labor: ${fmtDate(o.fechaLabor||o.fecha)}`, o.contratistaNombre?`Contratista: ${o.contratistaNombre}`:'', ''];
-  o.renglones.forEach(r=>{
-    lines.push(`• ${r.labor}${r.hectareas?` — ${fmtN(r.hectareas)} ha`:''}${r.campo?` (${r.campo}${r.lote?' / '+r.lote:''})`:''}`);
-    (r.insumos||[]).forEach(it=> lines.push(`   - ${it.nombre}: ${it.total!=null?fmtN(it.total):''} ${it.unidad||''}${it.dosis!=null?` (${fmtN(it.dosis)}/ha)`:''}`));
-    if (r.observacion) lines.push(`   obs: ${r.observacion}`);
+  const emp = state.user.companies?.find(c=>c.id===state.companyId);
+  const L = [];
+  L.push(`📋 *ORDEN DE TRABAJO N° ${o.nro}*`);
+  if (emp?.name) L.push(`_${emp.name}_`);
+  L.push(`📅 Fecha de labor: *${fmtDate(o.fechaLabor||o.fecha)}*`);
+  if (o.contratistaNombre) L.push(`👷 Contratista: ${o.contratistaNombre}`);
+  o.renglones.forEach((r,idx)=>{
+    L.push('');
+    L.push(`*${idx+1}) ${r.labor||'Labor'}*${r.hectareas?` — ${fmtN(r.hectareas)} ha`:''}`);
+    const ubic = [r.campo, r.lote && `Lote ${r.lote}`, r.cultivo].filter(Boolean).join(' · ');
+    if (ubic) L.push(`📍 ${ubic}`);
+    (r.insumos||[]).forEach(it=> L.push(`   • ${it.nombre}: *${it.total!=null?fmtN(it.total):'—'} ${it.unidad||''}*${it.dosis!=null?` (${fmtN(it.dosis)}/ha)`:''}`));
+    if (r.observacion) L.push(`   📝 ${r.observacion}`);
   });
-  if (o.observaciones) { lines.push(''); lines.push(`Obs: ${o.observaciones}`); }
-  lines.push(''); lines.push('(Para la copia impresa, usá el botón 🖨️ y guardá como PDF.)');
-  window.open(waLink(prov?.telefono||'', lines.filter(x=>x!==undefined).join('\n')), '_blank');
+  if (o.observaciones) { L.push(''); L.push(`📝 *Observaciones:* ${o.observaciones}`); }
+  window.open(waLink(prov?.telefono||'', L.join('\n')), '_blank');
 }
 
 /* ---------- CATALOGOS (maestros) con pestañas ---------- */
