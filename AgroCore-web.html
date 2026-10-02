@@ -2970,6 +2970,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'02/10/2026',
+      titulo:'🌐 v2.269.2 — Depósito compartido: stock real sumando todas las empresas',
+      desc:'Al <b>filtrar Stock por un depósito compartido</b> 🌐, ahora ves <b>todos los artículos que están físicamente en ese depósito</b> con la <b>existencia neta real</b> (ingresos menos egresos/uso) <b>sumando todas las empresas</b> que lo comparten — antes mostraba solo lo de tu empresa. Los artículos que cargó otra empresa aparecen marcados como <i>"de otra empresa"</i> (solo lectura desde tu vista). Los depósitos privados siguen igual.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'02/10/2026',
+      titulo:'📋 v2.269.1 — Volver a pendiente una OT ya no da error',
+      desc:'Blindaje en las <b>Órdenes de trabajo</b>: al <b>volver a pendiente</b> (o eliminar) una orden, el sistema solo intenta revertir la labor e insumos si esa orden efectivamente los había cargado en la campaña. Soluciona el error que aparecía al reabrir una OT vieja (anterior a la v2.269).' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'02/10/2026',
       titulo:'📋 v2.269.0 — La Orden de trabajo realizada ahora carga la labor e insumos en la campaña',
       desc:'Al marcar una <b>Orden de trabajo</b> como <b>✅ realizada</b>, ahora se registran automáticamente la <b>labor</b> y los <b>insumos</b> de cada renglón en la <b>campaña</b> correspondiente (aparecen en <b>Insumos y labores</b>), igual que si los cargaras a mano. Si además la OT descuenta stock, el egreso queda vinculado al insumo aplicado. Al <b>volver la orden a pendiente</b> se revierte todo (labor, insumos y stock). <i>Si ya tenías una OT realizada antes de esta versión, volvela a pendiente y marcala realizada de nuevo para que cargue la labor y los insumos.</i>' },
@@ -7235,9 +7241,11 @@ pages.stock = async function() {
               <td class="text-right">${fmtN(p.stockMinimo)}</td>
               <td>${p.bajoMinimo?'<span class="badge badge-red">Bajo mínimo</span>':'<span class="badge badge-green">OK</span>'}</td>
               <td class="text-right whitespace-nowrap">
-                ${p.esHacienda?`<button class="btn btn-ghost text-xs text-amber-700" title="Gestionar en Animales" onclick="go('hacienda')">🐄 Animales</button>`:`${can('stock:create')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Nueva entrada" onclick='movEntrada(${JSON.stringify(p.id)})'>⬆️</button>`:''}
+                ${String(p.id).startsWith('comp:')
+                  ? `<span class="text-[11px] text-slate-400" title="Artículo cargado por otra empresa en este depósito compartido">de otra empresa</span>`
+                  : `${p.esHacienda?`<button class="btn btn-ghost text-xs text-amber-700" title="Gestionar en Animales" onclick="go('hacienda')">🐄 Animales</button>`:`${can('stock:create')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Nueva entrada" onclick='movEntrada(${JSON.stringify(p.id)})'>⬆️</button>`:''}
                 ${can('stock:create')?`<button class="btn btn-ghost text-xs text-red-600" title="Nueva salida" onclick='movSalida(${JSON.stringify(p.id)})'>⬇️</button>`:''}`}
-                ${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='prodForm(${JSON.stringify(p.id)})'>✏️</button>`:''}
+                ${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='prodForm(${JSON.stringify(p.id)})'>✏️</button>`:''}`}
               </td>
             </tr>`).join('') || `<tr><td colspan="8" class="text-center text-slate-400 py-8">${rows.length?'Sin coincidencias':'Aún no hay productos'}</td></tr>`}
         </tbody>

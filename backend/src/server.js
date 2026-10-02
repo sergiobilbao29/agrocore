@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.269.0';
+const AGROCORE_VERSION = '2.269.2';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3668,12 +3668,14 @@ async function _stockCompartidoPorClave(soloDepositoId = null) {
   if (!ids.length) return { ids, byKey };
   const movs = await prisma.movimiento.findMany({
     where: { depositoId: { in: ids } },
-    select: { tipo: true, cantidad: true, producto: { select: { nombre: true, unidad: true } } },
+    select: { tipo: true, cantidad: true, producto: { select: { nombre: true, unidad: true, categoria: true, categoriaArticuloId: true } } },
   });
   for (const m of movs) {
     if (!m.producto) continue;
     const k = _claveProd(m.producto.nombre, m.producto.unidad);
-    if (!byKey[k]) byKey[k] = { ing: 0, egr: 0 };
+    // Guardamos también un "muestra" del producto (nombre/unidad/categoría) para poder
+    // listar el artículo aunque la empresa activa no lo tenga en su propio catálogo.
+    if (!byKey[k]) byKey[k] = { ing: 0, egr: 0, nombre: m.producto.nombre, unidad: m.producto.unidad, categoria: m.producto.categoria || null, categoriaArticuloId: m.producto.categoriaArticuloId || null };
     if (m.tipo === 'ingreso') byKey[k].ing += Number(m.cantidad || 0);
     else if (m.tipo === 'egreso') byKey[k].egr += Number(m.cantidad || 0);
   }
@@ -3789,6 +3791,32 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
         hacByCat[cat].cabezas += real[k];
         if (pesoBy[k] != null) hacByCat[cat].kilos += real[k] * pesoBy[k];
       });
+    }
+    // DEPÓSITO COMPARTIDO: las filas se arman desde el POZO COMÚN (todas las empresas),
+    // no desde el catálogo de la empresa activa. Así se ve cada artículo físicamente en el
+    // depósito con su existencia neta (ingresos - egresos) sumada entre todas las empresas,
+    // incluso si la empresa activa no tiene ese producto o lo nombró distinto.
+    if (filtroEsCompartido) {
+      const propioByClave = {};
+      productos.forEach(p => { propioByClave[_claveProd(p.nombre, p.unidad)] = p; });
+      const dataComp = Object.entries(sharedByKey).map(([k, v]) => {
+        const base = propioByClave[k] || {};
+        const nombre = base.nombre || v.nombre || 'Artículo';
+        const unidad = base.unidad || v.unidad || '';
+        const categoria = base.categoria || v.categoria || null;
+        const existencia = Number(v.ing || 0) - Number(v.egr || 0);
+        const subtipo = (categoria || '').toLowerCase() === 'insumos'
+          ? (insTipoMap[_nrmNombre(nombre)] || (base.categoriaArticuloId ? _famNodo[base.categoriaArticuloId] : (v.categoriaArticuloId ? _famNodo[v.categoriaArticuloId] : null)) || null) : null;
+        return {
+          id: base.id || ('comp:' + k), nombre, unidad, categoria,
+          categoriaArticuloId: base.categoriaArticuloId || v.categoriaArticuloId || null,
+          stockMinimo: base.stockMinimo || 0, activo: true, compartidoPozo: true,
+          existencia, subtipo, bajoMinimo: existencia < Number(base.stockMinimo || 0),
+        };
+      }).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
+      const catsOkC = stockCatsPermitidas(req);
+      const dataCompFiltrada = catsOkC ? dataComp.filter(p => catsOkC.has((p.categoria || '').toLowerCase())) : dataComp;
+      return res.json({ ok: true, data: dataCompFiltrada });
     }
     const data = productos.map((p) => {
       if ((p.categoria || '').toLowerCase() === 'hacienda') {
@@ -15283,9 +15311,11 @@ app.post('/api/ordenes-trabajo/:id/reabrir', requireCompany, requirePermission('
           if (i.movimientoId) { await tx.movimiento.deleteMany({ where: { id: i.movimientoId, companyId: req.companyId } }); await tx.ordenTrabajoInsumo.update({ where: { id: i.id }, data: { movimientoId: null } }); }
         }
       }
-      // Revertir la labor e insumos registrados en la campaña (los que haya movido el stock ya se borraron arriba)
-      await tx.insumoAplicado.deleteMany({ where: { ordenTrabajoId: o.id } });
-      await tx.laborAplicada.deleteMany({ where: { ordenTrabajoId: o.id } });
+      // Revertir la labor e insumos registrados en la campaña (solo si esta OT los generó)
+      if (o.aplicadoEnCampana) {
+        await tx.insumoAplicado.deleteMany({ where: { ordenTrabajoId: o.id } });
+        await tx.laborAplicada.deleteMany({ where: { ordenTrabajoId: o.id } });
+      }
       return tx.ordenTrabajo.update({ where: { id: o.id }, data: { estado: 'pendiente', fechaRealizada: null, stockMovido: false, aplicadoEnCampana: false }, include: _otInclude });
     });
     res.json({ ok: true, data: _serializeOT(upd) });
@@ -15324,8 +15354,10 @@ app.delete('/api/ordenes-trabajo/:id', requireCompany, requirePermission('produc
           if (i.movimientoId) await tx.movimiento.deleteMany({ where: { id: i.movimientoId, companyId: req.companyId } });
         }
       }
-      await tx.insumoAplicado.deleteMany({ where: { ordenTrabajoId: o.id } });
-      await tx.laborAplicada.deleteMany({ where: { ordenTrabajoId: o.id } });
+      if (o.aplicadoEnCampana) {
+        await tx.insumoAplicado.deleteMany({ where: { ordenTrabajoId: o.id } });
+        await tx.laborAplicada.deleteMany({ where: { ordenTrabajoId: o.id } });
+      }
       await tx.ordenTrabajo.delete({ where: { id: o.id } });
     });
     res.json({ ok: true });
