@@ -2974,6 +2974,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'02/10/2026',
+      titulo:'🗓️ v2.270.2 — Fecha correcta al importar el PDF de la Carta de Porte',
+      desc:'Corregimos la <b>fecha del viaje</b> al <b>importar la CP (PDF de ARCA)</b>: en algunos PDF el lector desordenaba las fechas y tomaba el <b>Vencimiento</b> en lugar de la fecha real. Ahora identificamos cada fecha por su formato (<b>Partida</b> con segundos, <b>Vencimiento</b> con hora, <b>Emisión</b> sin hora) y el viaje queda con la <b>fecha de partida/emisión</b> correcta.' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'04/10/2026',
       titulo:'📘 v2.270.1 — Instructivo de Remitos de compra en la Ayuda',
       desc:'Sumamos el <b>instructivo "Remitos de compra"</b> (paso a paso del circuito recepción → factura, con parciales y devoluciones) en <b>Ayuda y manual</b>, dentro del nuevo grupo <b>Compras</b>.' },

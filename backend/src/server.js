@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.270.1';
+const AGROCORE_VERSION = '2.270.2';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -23922,9 +23922,17 @@ function _parsearTextoCPE(txt) {
     if (mDom1) dominioCamion = mDom1[1].replace(/\s+/g,'');
   }
 
-  // Fecha de PARTIDA: anclada a la etiqueta "Partida" (evita agarrar el sello de
-  // impresión/consulta "dd/mm/aaaa hh:mm" que aparece en el encabezado del PDF).
-  let partidaFecha = get(/Partida\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?)/i);
+  // Fechas de la CPE. OJO: pdf-parse suele DESORDENAR etiquetas y valores (los
+  // labels "Fecha:", "Vencimiento:", "Partida:" quedan separados de sus fechas y
+  // a veces el Vencimiento aparece ANTES que la emisión). Por eso NO alcanza con
+  // "la primera fecha" ni con anclar a la etiqueta. Las clasificamos por FORMATO,
+  // que en la CPE oficial de ARCA es distinto para cada una:
+  //   - Partida      -> dd/mm/aaaa HH:MM:SS  (con segundos)
+  //   - Vencimiento  -> dd/mm/aaaa HH:MM     (hora sin segundos)
+  //   - Emisión      -> dd/mm/aaaa           (sin hora)
+  // Fecha de PARTIDA: la que tiene segundos; si no, se ancla a la etiqueta.
+  let partidaFecha = get(/(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{2}:\d{2}:\d{2})/);
+  if (!partidaFecha) partidaFecha = get(/Partida\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{2}:\d{2}(?::\d{2})?)/i);
   if (!partidaFecha) partidaFecha = get(/Partida\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
   let kmsARecorrer = get(/Kms\.\s*a\s*recorrer\s*:?\s*(\d+)/i);
   if (!kmsARecorrer) {
@@ -23938,10 +23946,20 @@ function _parsearTextoCPE(txt) {
 
   const cpeNroCtg = get(/CTG\s*:?\s*(\d{11,})/i);
   const cpeNroComprobante = get(/(\d{5}-\d{8})/);
-  const fechaEmisionTxt = get(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+  // Vencimiento: fecha con hora en HH:MM (sin segundos). Emisión: fecha "pelada"
+  // (sin hora) y, si no hubiera, cualquier fecha que NO sea el vencimiento.
+  const fechaVtoTxt = (txt.match(/(\d{1,2}\/\d{1,2}\/\d{4}\s+\d{2}:\d{2})(?!:)/) || [])[1] || null;
+  let fechaEmisionTxt = null;
+  {
+    const vtoDay = fechaVtoTxt ? fechaVtoTxt.slice(0, 10) : null;
+    const todas = txt.match(/\d{1,2}\/\d{1,2}\/\d{4}(?:\s+\d{2}:\d{2}(?::\d{2})?)?/g) || [];
+    const bare = todas.find(s => !/\d{2}:\d{2}/.test(s));
+    const alt = todas.find(s => s.slice(0, 10) !== vtoDay) || todas[0] || null;
+    fechaEmisionTxt = ((bare || alt || '') + '').slice(0, 10) || null;
+  }
 
   return {
-    cpeNroCtg, cpeNroComprobante, fechaEmisionTxt, fechaVtoTxt: null,
+    cpeNroCtg, cpeNroComprobante, fechaEmisionTxt, fechaVtoTxt,
     titularCuit: A('titular').cuit,                 titularRazon: A('titular').razon,
     remitenteCuit: A('remitente').cuit,             remitenteRazon: A('remitente').razon,
     rteComercialPrimCuit: A('rteComercialPrim').cuit, rteComercialPrimRazon: A('rteComercialPrim').razon,
