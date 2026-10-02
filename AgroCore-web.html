@@ -2751,6 +2751,9 @@ pages.ayuda = async function() {
       { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
       { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
     ]},
+    { grupo:'Compras', items:[
+      { f:'Instructivo-Remitos-de-Compra.pdf', t:'Remitos de compra (recepción → factura)', d:'Recibís la mercadería con remito (suma stock) y después la facturás vinculándola al remito, sin duplicar el inventario. Parciales, devoluciones y reporte de recibido no facturado.' },
+    ]},
     { grupo:'Producción', items:[
       { f:'Instructivo-Ordenes-de-Trabajo.pdf', t:'Órdenes de trabajo', d:'Indicarle al contratista qué labor hacer y qué insumos usar, entregarla (imprimir/WhatsApp) y después facturar el servicio.' },
     ]},
@@ -2971,6 +2974,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'04/10/2026',
+      titulo:'📘 v2.270.1 — Instructivo de Remitos de compra en la Ayuda',
+      desc:'Sumamos el <b>instructivo "Remitos de compra"</b> (paso a paso del circuito recepción → factura, con parciales y devoluciones) en <b>Ayuda y manual</b>, dentro del nuevo grupo <b>Compras</b>.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/10/2026',
       titulo:'📦 v2.270.0 — Remitos de compra: recepción de mercadería → factura',
       desc:'Nueva sección <b>Comercial → Remitos de compra</b>. Cargás el <b>remito</b> cuando recibís la mercadería: <b>suma el stock al instante</b> y queda <b>pendiente de facturar</b>. Cuando llega la factura del proveedor, en la carga de la factura tocás <b>“📦 Vincular desde remito”</b>: la factura <b>genera la deuda pero NO vuelve a sumar stock</b> (se evita la duplicación). Soporta <b>parciales</b> (un remito en varias facturas o varios remitos en una), <b>devoluciones</b> a proveedor (remito de devolución que saca del stock; después cargás la Nota de Crédito del proveedor) y un reporte de <b>mercadería recibida no facturada</b> para el cierre contable. La factura de compra directa (que suma stock) <b>sigue funcionando igual</b> si no la vinculás a un remito. <br>También mejoramos los filtros de <b>Stock por empresa y depósito</b> en el Resumen multi-empresa: ahora Producto, Empresa y Depósito son <b>listas desplegables</b> (en vez de una pared de botones).' },
