@@ -1072,6 +1072,7 @@ const MODULES = [
   { id:'liquidacionesHacienda', label:'Liquidaciones animales', icon:'🐄', perm:'ventas:read', section:'Comercial' },
   { id:'ctasCobrar',    label:'Cuentas a cobrar',     icon:'💰', perm:'finanzas:read',   section:'Comercial' },
   { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Comercial' },
+  { id:'remitosCompra', label:'Remitos de compra',    icon:'📦', perm:'compras:read',    section:'Comercial' },
   { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Comercial' },
   { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Comercial' },
   { id:'compensaciones',label:'Compensación de cuentas',icon:'🔀', perm:'finanzas:read',  section:'Comercial' },
@@ -2970,6 +2971,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/10/2026',
+      titulo:'📦 v2.270.0 — Remitos de compra: recepción de mercadería → factura',
+      desc:'Nueva sección <b>Comercial → Remitos de compra</b>. Cargás el <b>remito</b> cuando recibís la mercadería: <b>suma el stock al instante</b> y queda <b>pendiente de facturar</b>. Cuando llega la factura del proveedor, en la carga de la factura tocás <b>“📦 Vincular desde remito”</b>: la factura <b>genera la deuda pero NO vuelve a sumar stock</b> (se evita la duplicación). Soporta <b>parciales</b> (un remito en varias facturas o varios remitos en una), <b>devoluciones</b> a proveedor (remito de devolución que saca del stock; después cargás la Nota de Crédito del proveedor) y un reporte de <b>mercadería recibida no facturada</b> para el cierre contable. La factura de compra directa (que suma stock) <b>sigue funcionando igual</b> si no la vinculás a un remito. <br>También mejoramos los filtros de <b>Stock por empresa y depósito</b> en el Resumen multi-empresa: ahora Producto, Empresa y Depósito son <b>listas desplegables</b> (en vez de una pared de botones).' },
     { tag:'Mejora', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'02/10/2026',
       titulo:'🌐 v2.269.2 — Depósito compartido: stock real sumando todas las empresas',
       desc:'Al <b>filtrar Stock por un depósito compartido</b> 🌐, ahora ves <b>todos los artículos que están físicamente en ese depósito</b> con la <b>existencia neta real</b> (ingresos menos egresos/uso) <b>sumando todas las empresas</b> que lo comparten — antes mostraba solo lo de tu empresa. Los artículos que cargó otra empresa aparecen marcados como <i>"de otra empresa"</i> (solo lectura desde tu vista). Los depósitos privados siguen igual.' },
@@ -6617,24 +6621,26 @@ pages.resumenGlobal = async function() {
             <div class="flex flex-wrap items-start justify-between gap-3 mb-3">
               <div>
                 <h3 class="font-semibold text-slate-800">📦 Stock por empresa y depósito</h3>
-                <div class="text-xs text-slate-500">Tildá uno o varios chips para filtrar. Sin filtros muestra el total consolidado.</div>
+                <div class="text-xs text-slate-500">Elegí los filtros desde cada lista desplegable. Sin filtros muestra el total consolidado.</div>
               </div>
               ${filtroActivo ? `<button class="btn btn-secondary text-xs" onclick="resumenStockLimpiar()">✕ Limpiar filtros</button>` : ''}
             </div>
-            <div class="space-y-2">
-              <div>
-                <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-600 mb-1">Producto${fProds.size>0?` (${fProds.size})`:''}</div>
-                <div class="flex flex-wrap gap-1.5">${chipsHTML(itemsProductos, fProds, 'resumenToggleStockProducto')}</div>
-              </div>
-              <div>
-                <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-600 mb-1">Empresa${fEmps.size>0?` (${fEmps.size})`:''}</div>
-                <div class="flex flex-wrap gap-1.5">${chipsHTML(itemsEmpresas, fEmps, 'resumenToggleStockEmpresa')}</div>
-              </div>
-              <div>
-                <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-600 mb-1">Depósito${fDeps.size>0?` (${fDeps.size})`:''}</div>
-                <div class="flex flex-wrap gap-1.5">${chipsHTML(itemsDepositos, fDeps, 'resumenToggleStockDeposito')}</div>
-              </div>
-            </div>
+            ${(()=>{ const drop=(lbl,cnt,itemsHtml)=>`
+              <details class="rm-drop" style="position:relative">
+                <summary class="input" style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:6px">
+                  <span class="truncate text-sm">${lbl}${cnt>0?` · <b>${cnt} seleccionado${cnt>1?'s':''}</b>`:' · Todos'}</span>
+                  <span style="color:#94a3b8">▾</span>
+                </summary>
+                <div style="position:absolute;z-index:40;left:0;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 10px 28px -8px rgba(0,0,0,.28);max-height:300px;overflow:auto;padding:10px">
+                  <div class="flex flex-wrap gap-1.5">${itemsHtml}</div>
+                </div>
+              </details>`;
+              return `<div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+                ${drop('Producto', fProds.size, chipsHTML(itemsProductos, fProds, 'resumenToggleStockProducto'))}
+                ${drop('Empresa', fEmps.size, chipsHTML(itemsEmpresas, fEmps, 'resumenToggleStockEmpresa'))}
+                ${drop('Depósito', fDeps.size, chipsHTML(itemsDepositos, fDeps, 'resumenToggleStockDeposito'))}
+              </div>`;
+            })()}
           </div>
 
           ${(fProds.size > 0 && filas.length > 0) ? `
@@ -14990,6 +14996,257 @@ async function factAnular(id) {
 /* =========================================================
  * COMPRAS
  * ========================================================= */
+/* ========================= REMITOS DE COMPRA ========================= */
+const RC_ESTADOS = {
+  pendiente: { lbl:'⏳ Pendiente', cls:'badge-amber' },
+  parcial:   { lbl:'◐ Parcial',   cls:'badge-blue' },
+  facturado: { lbl:'🧾 Facturado', cls:'badge-green' },
+  cerrado:   { lbl:'🔒 Cerrado',   cls:'badge-gray' },
+  anulado:   { lbl:'🚫 Anulado',   cls:'badge-red' },
+};
+function _rcDatalistHTML(){
+  const lista = (typeof _factItemsLista==='function') ? _factItemsLista() : [];
+  return `<datalist id="rc-datalist">${lista.map(x=>{
+    const val = x.unidad ? `${x.nombre} (${x.unidad})` : x.nombre;
+    return `<option value="${esc(val)}" data-pid="${esc(x.productoId||'')}" data-nombre="${esc(x.nombre)}" data-unidad="${esc(x.unidad||'')}" data-cat="${esc(x.categoria||'')}" data-precio="${esc(x.precio||'')}"></option>`;
+  }).join('')}</datalist>`;
+}
+function rcPickItem(inp){
+  const tr=inp.closest('tr'); if(!tr) return;
+  const ds=document.getElementById('rc-datalist'); const val=(inp.value||'').trim();
+  const hid=tr.querySelector('input[type="hidden"][data-f="productoId"]');
+  tr.dataset.productoNombre=''; tr.dataset.productoUnidad=''; tr.dataset.productoCategoria='';
+  if(hid) hid.value='';
+  if(!val){ return; }
+  const match=Array.from(ds?.querySelectorAll('option')||[]).find(o=>(o.value||'').toLowerCase()===val.toLowerCase());
+  if(!match) return; // texto libre
+  tr.dataset.productoNombre=match.dataset.nombre||''; tr.dataset.productoUnidad=match.dataset.unidad||''; tr.dataset.productoCategoria=match.dataset.cat||'';
+  if(hid) hid.value=match.dataset.pid||'';
+  const desc=tr.querySelector('[data-f="descripcion"]'); const uni=tr.querySelector('[data-f="unidad"]'); const prc=tr.querySelector('[data-f="precioEstim"]');
+  if(desc && !desc.value.trim()) desc.value=match.dataset.nombre||'';
+  if(uni && !uni.value.trim()) uni.value=match.dataset.unidad||'';
+  if(prc && (!prc.value||Number(prc.value)===0) && match.dataset.precio) prc.value=match.dataset.precio;
+  rcRecalc();
+}
+function rcItemRow(i=0, it={}){
+  const pid=it.productoId||''; const uni=it.unidad||'';
+  const valor = it.descripcion ? (uni?`${it.descripcion} (${uni})`:it.descripcion) : '';
+  return `<tr data-rci>
+    <td><div class="flex gap-1"><input list="rc-datalist" class="input text-sm flex-1" data-f="buscar" placeholder="🔎 Artículo…" value="${esc(valor)}" oninput="rcPickItem(this)" onchange="rcPickItem(this)" autocomplete="off"/><input type="hidden" data-f="productoId" value="${esc(pid)}"/></div></td>
+    <td><input class="input text-sm" data-f="descripcion" value="${esc(it.descripcion||'')}" placeholder="Detalle"/></td>
+    <td><input class="input text-sm w-24 text-right" type="number" step="0.01" data-f="cantidad" value="${it.cantidad||1}" oninput="rcRecalc()"/></td>
+    <td><input class="input text-sm w-20" data-f="unidad" value="${esc(uni)}" placeholder="u/kg/l"/></td>
+    <td><input class="input text-sm w-28 text-right" type="number" step="0.01" data-f="precioEstim" value="${it.precioEstim!=null?it.precioEstim:''}" placeholder="estim." oninput="rcRecalc()"/></td>
+    <td class="text-right text-xs text-slate-500" data-rct>$ 0,00</td>
+    <td class="text-center"><button class="btn btn-ghost text-red-600" onclick="this.closest('tr').remove(); rcRecalc()">×</button></td>
+  </tr>`;
+}
+function rcRecalc(){
+  let tot=0;
+  $$('#rc-tbody tr[data-rci]').forEach(tr=>{
+    const c=Number(tr.querySelector('[data-f="cantidad"]')?.value||0); const p=Number(tr.querySelector('[data-f="precioEstim"]')?.value||0);
+    const sub=c*p; tot+=sub; const cell=tr.querySelector('[data-rct]'); if(cell) cell.textContent='$ '+fmtN(sub);
+  });
+  const t=$('#rc-tot'); if(t) t.textContent='$ '+fmtN(tot);
+}
+
+pages.remitosCompra = async function(){
+  setHeader('Remitos de compra', 'Recepción de mercadería: suma stock y queda pendiente de facturar.');
+  if(!can('compras:read')){ $('#page-body').innerHTML=stubPage('remitosCompra','Remitos de compra'); return; }
+  $('#page-body').innerHTML=`<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let rem=[];
+  try{
+    const [r,p]=await Promise.all([api('/api/remitos-compra'), api('/api/proveedores').catch(()=>({data:state.cache.proveedores||[]}))]);
+    rem=r.data||[]; state.cache.proveedores=p.data||state.cache.proveedores||[];
+  }catch(e){ $('#page-body').innerHTML=`<div class="text-red-600 text-sm">${esc(e.message)}</div>`; return; }
+  state.cache.remitosCompra=rem;
+  state.rcFilter=state.rcFilter||{ estado:'', proveedor:'', desde:'', hasta:'' };
+  const provOpts=(state.cache.proveedores||[]).map(p=>`<option value="${esc(p.id)}">${esc(p.razonSocial||p.nombreFantasia||'')}</option>`).join('');
+  const render=()=>{
+    const f=state.rcFilter;
+    const fil=rem.filter(r=>{
+      if(f.estado && r.estado!==f.estado) return false;
+      if(f.proveedor && r.proveedorId!==f.proveedor) return false;
+      const d=String(r.fecha||'').slice(0,10);
+      if(f.desde && d<f.desde) return false;
+      if(f.hasta && d>f.hasta) return false;
+      return true;
+    });
+    const rows=fil.map(r=>{
+      const est=RC_ESTADOS[r.estado]||RC_ESTADOS.pendiente;
+      const tipoTag = r.tipo==='devolucion' ? '<span class="badge badge-red text-[10px]">↩️ Devolución</span>' : '';
+      let acc=`<button class="btn btn-ghost text-xs" title="Ver" onclick='rcDetalle(${JSON.stringify(r.id)})'>👁️</button>`;
+      if(r.tipo==='entrada' && can('compras:create') && r.estado==='pendiente' && !r.facturado) acc+=` <button class="btn btn-ghost text-xs" title="Editar" onclick='rcForm(${JSON.stringify(r.id)})'>✏️</button>`;
+      if(r.tipo==='entrada' && can('compras:create') && (r.estado==='pendiente'||r.estado==='parcial')) acc+=` <button class="btn btn-primary text-xs" title="Facturar este remito" onclick='rcFacturar(${JSON.stringify(r.id)})'>🧾 Facturar</button>`;
+      if(r.tipo==='entrada' && can('compras:create') && r.pendienteTotal>0.0001 && r.estado!=='anulado') acc+=` <button class="btn btn-ghost text-xs" title="Devolución a proveedor" onclick='rcDevolucion(${JSON.stringify(r.id)})'>↩️</button>`;
+      if(can('compras:update') && r.estado!=='anulado' && !r.facturado) acc+=` <button class="btn btn-ghost text-xs text-amber-700" title="Anular" onclick='rcAnular(${JSON.stringify(r.id)})'>🚫</button>`;
+      if(can('compras:delete') && !r.facturado) acc+=` <button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='rcDel(${JSON.stringify(r.id)})'>🗑️</button>`;
+      return `<tr class="table-row">
+        <td class="font-medium">${esc(r.nro)} ${tipoTag}</td>
+        <td>${fmtDate(r.fecha)}</td>
+        <td>${esc(r.proveedorNombre||'—')}</td>
+        <td>${esc(r.numeroProveedor||'—')}</td>
+        <td>${r.items.length} ít.${r.pendienteTotal>0.0001?` · <span class="text-amber-700">pend ${fmtN(r.pendienteTotal)}</span>`:''}</td>
+        <td><span class="badge ${est.cls}">${est.lbl}</span></td>
+        <td class="text-right">${r.valorPendiente>0?'$ '+fmtN(r.valorPendiente):'—'}</td>
+        <td class="text-right whitespace-nowrap">${acc}</td>
+      </tr>`;
+    }).join('');
+    $('#rc-tbody-list').innerHTML = rows || `<tr><td colspan="8" class="text-center text-slate-400 py-8">${rem.length?'No hay remitos con esos filtros.':'Todavía no cargaste remitos de compra. Tocá “+ Nuevo remito”.'}</td></tr>`;
+  };
+  $('#page-body').innerHTML=`
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <div class="text-[11px] text-slate-500">💡 El <b>remito</b> suma stock al recibir la mercadería y queda <b>pendiente de facturar</b>. Después, al cargar la factura del proveedor, la vinculás al remito y <b>no se vuelve a sumar stock</b>.</div>
+      <div class="flex gap-2">
+        <button class="btn btn-secondary text-sm" onclick="rcReporteNoFacturado()">📊 Recibido no facturado</button>
+        ${can('compras:create')?`<button class="btn btn-primary text-sm" onclick="rcForm()">+ Nuevo remito</button>`:''}
+      </div>
+    </div>
+    <div class="kpi mb-3"><div class="grid grid-cols-2 md:grid-cols-5 gap-2 items-end">
+      <div><label class="label">Estado</label><select id="rcf-estado" class="input"><option value="">Todos</option>
+        <option value="pendiente">⏳ Pendiente</option><option value="parcial">◐ Parcial</option><option value="facturado">🧾 Facturado</option><option value="anulado">🚫 Anulado</option></select></div>
+      <div><label class="label">Proveedor</label><select id="rcf-prov" class="input"><option value="">Todos</option>${provOpts}</select></div>
+      <div><label class="label">Desde</label><input id="rcf-desde" type="date" class="input" value="${esc(state.rcFilter.desde||'')}"/></div>
+      <div><label class="label">Hasta</label><input id="rcf-hasta" type="date" class="input" value="${esc(state.rcFilter.hasta||'')}"/></div>
+      <div><button class="btn btn-secondary w-full" onclick="state.rcFilter={estado:'',proveedor:'',desde:'',hasta:''}; pages.remitosCompra();">Limpiar</button></div>
+    </div></div>
+    <div class="kpi p-0 overflow-hidden"><table class="data">
+      <thead><tr><th>N°</th><th>Fecha</th><th>Proveedor</th><th>N° prov.</th><th>Ítems</th><th>Estado</th><th class="text-right">Valor pend.</th><th class="text-right">Acciones</th></tr></thead>
+      <tbody id="rc-tbody-list"></tbody></table></div>`;
+  const be=(id,k)=>{ const el=$('#'+id); if(el) el.addEventListener('change',e=>{ state.rcFilter[k]=e.target.value; render(); }); };
+  be('rcf-estado','estado'); be('rcf-prov','proveedor'); be('rcf-desde','desde'); be('rcf-hasta','hasta');
+  render();
+};
+
+async function _rcCargarAux(){
+  if(!state.cache.proveedores){ try{ state.cache.proveedores=(await api('/api/proveedores')).data||[]; }catch{} }
+  if(!state.cache.productos){ try{ state.cache.productos=(await api('/api/productos')).data||[]; }catch{} }
+  if(!state.cache.catalogos){ try{ state.cache.catalogos=(await api('/api/catalogos')).data||[]; }catch{} }
+  if(!state.cache.depositos){ try{ state.cache.depositos=(await api('/api/depositos')).data||[]; }catch{} }
+}
+async function rcForm(id=null){
+  await _rcCargarAux();
+  let r=null;
+  if(id){ try{ r=(await api('/api/remitos-compra/'+id)).data; }catch(e){ return toast(e.message,'error'); } }
+  state._rcEdit=id||null;
+  const provs=state.cache.proveedores||[];
+  const deps=(state.cache.depositos||[]).filter(d=>d.activo!==false);
+  const items=(r&&r.items&&r.items.length)?r.items:[{cantidad:1}];
+  openModal({ title: id?'Editar remito de compra':'Nuevo remito de compra', size:'max-w-5xl',
+    body:`
+      ${_rcDatalistHTML()}
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div class="col-span-2"><label class="label">Proveedor</label><select id="rc-prov" class="input"><option value="">—</option>${provs.map(p=>`<option value="${esc(p.id)}" ${r&&r.proveedorId===p.id?'selected':''}>${esc(p.razonSocial||p.nombreFantasia||'')}</option>`).join('')}</select></div>
+        <div><label class="label">N° remito (papel)</label><input id="rc-nprov" class="input" value="${esc(r?.numeroProveedor||'')}" placeholder="0001-00001234"/></div>
+        <div><label class="label">Fecha *</label><input id="rc-fecha" type="date" class="input" value="${r?String(r.fecha).slice(0,10):new Date().toISOString().slice(0,10)}"/></div>
+        <div class="col-span-2"><label class="label">Depósito destino (stock)</label><select id="rc-dep" class="input"><option value="">🌱 Campo / general</option>${deps.map(d=>`<option value="${esc(d.id)}" ${r&&r.depositoId===d.id?'selected':''}>${esc(d.nombre)}${d.tipo?` · ${esc(d.tipo)}`:''}</option>`).join('')}</select></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><input id="rc-obs" class="input" value="${esc(r?.observaciones||'')}"/></div>
+      </div>
+      <div class="kpi p-0 overflow-hidden mb-2"><table class="data">
+        <thead><tr><th class="w-1/4">Artículo</th><th>Descripción</th><th class="text-right">Cantidad</th><th>Unidad</th><th class="text-right">P. estim.</th><th class="text-right">Subtotal</th><th></th></tr></thead>
+        <tbody id="rc-tbody">${items.map((it,i)=>rcItemRow(i,it)).join('')}</tbody>
+        <tfoot><tr><td colspan="5" class="text-right font-bold">Valor estimado</td><td class="text-right font-bold text-green-700" id="rc-tot">$ 0,00</td><td></td></tr></tfoot>
+      </table></div>
+      <button class="btn btn-secondary text-sm" onclick="document.getElementById('rc-tbody').insertAdjacentHTML('beforeend', rcItemRow()); rcRecalc();">+ Agregar ítem</button>
+      <div class="text-[11px] text-slate-500 mt-2">El <b>precio estimado</b> es orientativo (para valorizar lo pendiente). El costo real entra con la factura.</div>
+    `,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="rcSave()">💾 Guardar remito</button>`
+  });
+  rcRecalc();
+}
+async function rcSave(){
+  const items=$$('#rc-tbody tr[data-rci]').map(tr=>({
+    productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
+    productoNombre: tr.dataset.productoNombre || null,
+    productoUnidad: tr.dataset.productoUnidad || null,
+    productoCategoria: tr.dataset.productoCategoria || null,
+    descripcion: tr.querySelector('[data-f="descripcion"]').value.trim() || tr.querySelector('[data-f="buscar"]').value.trim(),
+    cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
+    unidad: tr.querySelector('[data-f="unidad"]').value.trim() || null,
+    precioEstim: tr.querySelector('[data-f="precioEstim"]').value!=='' ? Number(tr.querySelector('[data-f="precioEstim"]').value) : null,
+  })).filter(it=>it.descripcion && it.cantidad>0);
+  if(!items.length) return toast('Agregá al menos un ítem','warn');
+  const data={
+    proveedorId: $('#rc-prov').value||null,
+    numeroProveedor: $('#rc-nprov').value.trim()||null,
+    fecha: new Date($('#rc-fecha').value+'T12:00:00').toISOString(),
+    depositoId: $('#rc-dep').value||null,
+    observaciones: $('#rc-obs').value.trim()||null,
+    items,
+  };
+  try{
+    if(state._rcEdit){ await api('/api/remitos-compra/'+state._rcEdit,{method:'PUT',body:JSON.stringify(data)}); toast('Remito actualizado','success'); }
+    else { await api('/api/remitos-compra',{method:'POST',body:JSON.stringify(data)}); toast('Remito cargado: stock sumado','success'); }
+    state._rcEdit=null; delete state.cache.stockMap; closeModal(); pages.remitosCompra();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function rcDetalle(id){
+  let r; try{ r=(await api('/api/remitos-compra/'+id)).data; }catch(e){ return toast(e.message,'error'); }
+  const est=RC_ESTADOS[r.estado]||RC_ESTADOS.pendiente;
+  const filas=r.items.map(i=>`<tr><td>${esc(i.productoNombre||i.descripcion)}</td><td class="text-right">${fmtN(i.cantidad)} ${esc(i.unidad||'')}</td><td class="text-right">${fmtN(i.cantidadFacturada)}</td><td class="text-right">${fmtN(i.cantidadDevuelta)}</td><td class="text-right font-semibold ${i.pendiente>0?'text-amber-700':'text-emerald-700'}">${fmtN(i.pendiente)}</td><td class="text-right">${i.precioEstim!=null?'$ '+fmtN(i.precioEstim):'—'}</td></tr>`).join('');
+  openModal2({ title:`Remito ${r.nro}`, size:'max-w-3xl',
+    body:`<div class="text-sm mb-2"><b>${esc(r.proveedorNombre||'—')}</b> · ${fmtDate(r.fecha)} · <span class="badge ${est.cls}">${est.lbl}</span>${r.numeroProveedor?` · N° prov. ${esc(r.numeroProveedor)}`:''}${r.depositoNombre?` · 📦 ${esc(r.depositoNombre)}`:''}</div>
+      <div class="kpi p-0 overflow-hidden"><table class="data"><thead><tr><th>Artículo</th><th class="text-right">Recibido</th><th class="text-right">Facturado</th><th class="text-right">Devuelto</th><th class="text-right">Pendiente</th><th class="text-right">P. estim.</th></tr></thead><tbody>${filas}</tbody></table></div>
+      ${r.observaciones?`<div class="text-xs text-slate-500 mt-2">📝 ${esc(r.observaciones)}</div>`:''}
+      <div class="text-xs text-slate-500 mt-2">Valor pendiente de facturar: <b>$ ${fmtN(r.valorPendiente)}</b></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cerrar</button>` });
+}
+async function rcDevolucion(id){
+  let r; try{ r=(await api('/api/remitos-compra/'+id)).data; }catch(e){ return toast(e.message,'error'); }
+  const its=r.items.filter(i=>(Number(i.cantidad)-Number(i.cantidadDevuelta))>0.0001);
+  if(!its.length) return toast('No hay cantidades para devolver','info');
+  const filas=its.map(i=>{ const pend=Number(i.cantidad)-Number(i.cantidadDevuelta); return `<tr>
+    <td class="text-center"><input type="checkbox" class="rd-chk" data-item="${esc(i.id)}" data-max="${pend}"/></td>
+    <td>${esc(i.productoNombre||i.descripcion)}</td><td class="text-right">${fmtN(pend)} ${esc(i.unidad||'')}</td>
+    <td><input type="number" step="0.01" class="input text-sm w-28 text-right rd-cant" value="${pend}"/></td></tr>`; }).join('');
+  openModal2({ title:`Devolución a proveedor — ${r.nro}`, size:'max-w-2xl',
+    body:`<div class="text-xs text-slate-500 mb-2">Se genera un <b>remito de devolución</b> vinculado y <b>sale del stock</b>. El pendiente a facturar del remito original se ajusta.</div>
+      <div class="mb-2"><label class="label">Fecha</label><input id="rd-fecha" type="date" class="input w-48" value="${new Date().toISOString().slice(0,10)}"/></div>
+      <div class="kpi p-0 overflow-hidden"><table class="data"><thead><tr><th></th><th>Artículo</th><th class="text-right">Disponible</th><th class="text-right">A devolver</th></tr></thead><tbody>${filas}</tbody></table></div>
+      <div class="mt-2"><label class="label">Observaciones</label><input id="rd-obs" class="input" placeholder="Motivo (dañado, sobrante…)"/></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="rcDevolucionAplicar(${JSON.stringify(id)})">↩️ Registrar devolución</button>` });
+}
+async function rcDevolucionAplicar(id){
+  const chks=$$('.rd-chk').filter(c=>c.checked);
+  if(!chks.length) return toast('Tildá al menos un renglón','warn');
+  const items=[]; let err=false;
+  chks.forEach(c=>{ const tr=c.closest('tr'); const cant=Number(tr.querySelector('.rd-cant')?.value||0); const max=Number(c.dataset.max||0);
+    if(cant<=0||cant>max+0.0001){ err=true; return; } items.push({ remitoItemId:c.dataset.item, cantidad:cant }); });
+  if(err) return toast('Revisá las cantidades (no podés devolver más de lo disponible)','warn');
+  if(!items.length) return toast('Poné cantidades válidas','warn');
+  const body={ fecha:new Date($('#rd-fecha').value+'T12:00:00').toISOString(), observaciones:$('#rd-obs').value.trim()||null, items };
+  try{ await api('/api/remitos-compra/'+id+'/devolucion',{method:'POST',body:JSON.stringify(body)}); toast('Devolución registrada','success'); closeModal2(); delete state.cache.stockMap; pages.remitosCompra(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function rcAnular(id){
+  const ok=await uiConfirm('¿Anular este remito? Se revierte el stock que había sumado.',{title:'Anular remito',icon:'🚫',okText:'Sí, anular',cancelText:'No'});
+  if(!ok) return;
+  try{ await api('/api/remitos-compra/'+id+'/anular',{method:'POST',body:'{}'}); toast('Remito anulado','success'); delete state.cache.stockMap; pages.remitosCompra(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function rcDel(id){
+  const ok=await uiConfirm('¿Eliminar este remito? Se revierte el stock.',{title:'Eliminar remito',icon:'🗑️',okText:'Sí, eliminar',cancelText:'No'});
+  if(!ok) return;
+  try{ await api('/api/remitos-compra/'+id,{method:'DELETE'}); toast('Remito eliminado','success'); delete state.cache.stockMap; pages.remitosCompra(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function rcFacturar(id){
+  const r=(state.cache.remitosCompra||[]).find(x=>x.id===id);
+  if(!state.cache.proveedores){ try{ state.cache.proveedores=(await api('/api/proveedores')).data||[]; }catch{} }
+  await compForm({});
+  // Preseleccionar proveedor y abrir el vinculador de remitos
+  setTimeout(async ()=>{ const pv=$('#f-prov'); if(pv && r){ pv.value=r.proveedorId||''; } await compVincularRemito(); }, 150);
+}
+async function rcReporteNoFacturado(){
+  let d; try{ d=(await api('/api/remitos-compra/no-facturado')).data; }catch(e){ return toast(e.message,'error'); }
+  const rows=(d.remitos||[]).map(r=>`<tr><td>${esc(r.nro)}</td><td>${fmtDate(r.fecha)}</td><td>${esc(r.proveedorNombre||'—')}</td><td class="text-right">${fmtN(r.pendienteTotal)}</td><td class="text-right">$ ${fmtN(r.valorPendiente)}</td></tr>`).join('');
+  openModal2({ title:'Mercadería recibida no facturada', size:'max-w-2xl',
+    body:`<div class="text-xs text-slate-500 mb-2">Remitos de entrada pendientes o parciales, valorizados al precio estimado. Útil para el cierre contable.</div>
+      <div class="kpi p-0 overflow-hidden"><table class="data"><thead><tr><th>N°</th><th>Fecha</th><th>Proveedor</th><th class="text-right">Pend.</th><th class="text-right">Valor</th></tr></thead><tbody>${rows||`<tr><td colspan="5" class="text-center text-slate-400 py-6">No hay mercadería pendiente de facturar 🎉</td></tr>`}</tbody>
+      <tfoot><tr><td colspan="4" class="text-right font-bold">TOTAL valorizado</td><td class="text-right font-bold text-green-700">$ ${fmtN(d.totalValorizado||0)}</td></tr></tfoot></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cerrar</button>` });
+}
+
 pages.compras = async function() {
   setHeader('Movimientos de compras', 'Facturas de compra y pagos (órdenes de pago)');
   if (!can('finanzas:read') && !can('compras:read')) { $('#page-body').innerHTML = stubPage('compras','Compras'); return; }
@@ -15215,6 +15472,7 @@ async function ventaImportArcaRun(){
 }
 async function compForm(pre) {
   state._compEdit = (pre && pre.id) ? pre.id : null;
+  state._compRemitoLinks = (pre && pre._remitoLinks) ? pre._remitoLinks : [];
   const provs = state.cache.proveedores || [];
   await cargarMonedas();
   // Asegurar que productos + catálogos + stock-actual esten en cache para el selector de items.
@@ -15244,6 +15502,11 @@ async function compForm(pre) {
           <button class="btn btn-primary text-xs" onclick="document.getElementById('f-pdf-file').click()">📄 PDF / 📷 Foto</button>
         </div>
       </div>
+      <div class="mb-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between gap-2 flex-wrap">
+        <div class="text-sm text-emerald-900">📦 <b>¿La mercadería ya ingresó con un remito?</b> Vinculá la factura al remito: el stock ya entró, así que <b>no se vuelve a sumar</b>. Solo genera la deuda y liquida el remito.</div>
+        <button class="btn btn-secondary text-xs" onclick="compVincularRemito()">📦 Vincular desde remito</button>
+      </div>
+      <div id="comp-remito-banner"></div>
       <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
         <div><label class="label">Comprobante *</label>
           <select id="f-clase" class="input">
@@ -15525,6 +15788,54 @@ async function compCrearProveedorDesdePDF() {
   } catch (e) { toast(e.message,'error'); }
 }
 
+async function compVincularRemito(){
+  const provId = $('#f-prov')?.value || '';
+  if(!provId) return toast('Elegí primero el proveedor para traer sus remitos','warn');
+  let rem=[];
+  try { rem=(await api('/api/remitos-compra/pendientes?proveedorId='+encodeURIComponent(provId))).data||[]; }
+  catch(e){ return toast(e.message,'error'); }
+  if(!rem.length) return toast('Este proveedor no tiene remitos pendientes de facturar','info');
+  const rowsHtml = rem.map(r=>{
+    const its = r.items.filter(i=>i.pendiente>0.0001).map(i=>`
+      <tr>
+        <td class="text-center"><input type="checkbox" class="rv-chk" data-remito="${esc(r.id)}" data-item="${esc(i.id)}" data-desc="${esc(i.productoNombre||i.descripcion)}" data-precio="${i.precioEstim||0}" data-pid="${esc(i.productoId||'')}" checked/></td>
+        <td>${esc(i.productoNombre||i.descripcion)}</td>
+        <td class="text-right">${fmtN(i.pendiente)} ${esc(i.unidad||'')}</td>
+        <td><input type="number" step="0.01" class="input text-sm w-28 text-right rv-cant" value="${i.pendiente}"/></td>
+        <td class="text-right">${i.precioEstim!=null?'$ '+fmtN(i.precioEstim):'—'}</td>
+      </tr>`).join('');
+    return `<tr class="bg-slate-50"><td colspan="5" class="font-semibold text-sm py-1">📦 Remito ${esc(r.nro)}${r.numeroProveedor?' · prov. '+esc(r.numeroProveedor):''} · ${fmtDate(r.fecha)}${r.estado==='parcial'?' · <span class="badge badge-amber">parcial</span>':''}</td></tr>${its}`;
+  }).join('');
+  openModal2({ title:'Vincular remito(s) a la factura', size:'max-w-3xl',
+    body:`<div class="text-xs text-slate-500 mb-2">Tildá los renglones a facturar y ajustá la cantidad si facturás parcial. El precio es el <b>estimado del remito</b>; si la factura vino con otro precio, corregilo después en la grilla de la factura.</div>
+      <div class="kpi p-0 overflow-hidden"><table class="data"><thead><tr><th></th><th>Artículo</th><th class="text-right">Pendiente</th><th class="text-right">A facturar</th><th class="text-right">P. estim.</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="compVincularRemitoAplicar()">Vincular a la factura</button>` });
+}
+function compVincularRemitoAplicar(){
+  const chks=$$('.rv-chk').filter(c=>c.checked);
+  if(!chks.length) return toast('Tildá al menos un renglón','warn');
+  const links=[]; const items=[];
+  chks.forEach(c=>{
+    const tr=c.closest('tr'); const cant=Number(tr.querySelector('.rv-cant')?.value||0);
+    if(!(cant>0)) return;
+    links.push({ remitoId:c.dataset.remito, remitoItemId:c.dataset.item, cantidad:cant });
+    items.push({ productoId:c.dataset.pid||null, descripcion:c.dataset.desc, cantidad:cant, precioUnit:Number(c.dataset.precio||0), alicuotaIva:21 });
+  });
+  if(!links.length) return toast('Poné cantidades válidas','warn');
+  state._compRemitoLinks=links;
+  $('#fi-tbody').innerHTML = items.map((it,i)=>factItemRow(i,it)).join('');
+  if (typeof factTipoUI==='function') factTipoUI();
+  const dep=$('#f-deposito'); if(dep){ dep.value=''; const d=dep.closest('div'); if(d) d.style.display='none'; }
+  const b=$('#comp-remito-banner'); if(b) b.innerHTML=`<div class="mb-3 p-2 bg-emerald-100 border border-emerald-300 rounded text-sm text-emerald-900">📦 Factura vinculada a <b>${links.length}</b> renglón(es) de remito. El stock ya ingresó con el remito; esta factura <b>solo genera la deuda</b> y liquida el remito. <button class="btn btn-ghost text-xs" onclick="compDesvincularRemito()">Quitar vínculo</button></div>`;
+  closeModal2();
+}
+function compDesvincularRemito(){
+  state._compRemitoLinks=[];
+  const b=$('#comp-remito-banner'); if(b) b.innerHTML='';
+  const dep=$('#f-deposito'); if(dep){ const d=dep.closest('div'); if(d) d.style.display=''; }
+  toast('Vínculo quitado. Si guardás así, la factura sumará stock normalmente.','info');
+}
+
 async function compSave() {
   const items = $$('#fi-tbody tr[data-fi]').map(tr => ({
     productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
@@ -15563,6 +15874,10 @@ async function compSave() {
     observaciones: $('#f-obs').value.trim()||null,
     items,
   };
+  // Vínculo con remitos de compra (si se cargó desde remito): el stock no se vuelve a sumar.
+  if (!state._compEdit && Array.isArray(state._compRemitoLinks) && state._compRemitoLinks.length) {
+    data.remitoLinks = state._compRemitoLinks;
+  }
   // Si vino de PDF, incluir CUIT + razón social del emisor para mostrarlos aunque no haya proveedor
   if (pdfData && (pdfData.cuitEmisor || pdfData.razonSocialEmisor)) {
     data.emisorCuit = pdfData.cuitEmisor || null;

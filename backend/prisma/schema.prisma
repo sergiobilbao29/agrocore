@@ -117,6 +117,8 @@ model Company {
   adjuntos           Adjunto[]
   suscripciones      Suscripcion[]
   ordenesTrabajo     OrdenTrabajo[]
+  remitosCompra   RemitoCompra[]
+
 }
 
 // Numeración correlativa de comprobantes internos (Orden de Pago, Recibo de cobro).
@@ -562,6 +564,8 @@ model Producto {
   @@index([companyId])
   @@index([categoria])
   @@index([categoriaArticuloId])
+  remitoCompraItems RemitoCompraItem[]
+
 }
 
 // v2.8.0 - Arbol de categorias/familias de articulos (padre/hijo), editable por
@@ -701,6 +705,8 @@ model Proveedor {
 
   @@index([companyId])
   @@index([vinculoId])
+  remitosCompra   RemitoCompra[]
+
 }
 
 // ============================================================
@@ -789,6 +795,8 @@ model FacturaCompra {
   proveedor       Proveedor? @relation(fields: [proveedorId], references: [id])
   items           FacturaCompraItem[]
   viajes          Viaje[]   // viajes que esta factura cubre (fletes del transportista)
+  remitoLinks     RemitoFacturaLink[]  // remitos de compra que esta factura liquida
+  vinculadaRemito Boolean   @default(false)  // true = el stock entró por remito, la factura NO lo suma
 
   @@unique([companyId, proveedorId, tipo, puntoVenta, numero])
   @@index([companyId])
@@ -814,6 +822,84 @@ model FacturaCompraItem {
 
   @@index([facturaCompraId])
   @@index([productoId])
+}
+
+// ============================================================
+// CIRCUITO DE COMPRAS: Remito de entrada → Factura de proveedor
+// El REMITO de entrada suma stock (recepción de mercadería). La FACTURA, si se
+// vincula al remito, NO vuelve a sumar stock (solo genera la deuda). Soporta
+// parciales (un remito ↔ varias facturas y viceversa) y devoluciones.
+// ============================================================
+model RemitoCompra {
+  id              String   @id @default(cuid())
+  companyId       String
+  proveedorId     String?
+  tipo            String   @default("entrada")   // "entrada" | "devolucion"
+  numero          Int?                            // correlativo interno (secuencia 'remito_compra')
+  numeroProveedor String?                         // nº del remito en papel del proveedor
+  fecha           DateTime
+  depositoId      String?                         // depósito destino del stock que entra (o sale, si devolución)
+  moneda          String   @default("ARS")
+  cotizacion      Float?
+  estado          String   @default("pendiente")  // pendiente | parcial | facturado | cerrado | anulado
+  remitoOrigenId  String?                         // si tipo=devolucion: remito de entrada original
+  stockMovido     Boolean  @default(true)         // ya generó los movimientos de stock
+  observaciones   String?
+  userId          String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  proveedor       Proveedor? @relation(fields: [proveedorId], references: [id])
+  deposito        Deposito?  @relation(fields: [depositoId], references: [id])
+  remitoOrigen    RemitoCompra?  @relation("RemitoDevolucion", fields: [remitoOrigenId], references: [id])
+  devoluciones    RemitoCompra[] @relation("RemitoDevolucion")
+  items           RemitoCompraItem[]
+  facturaLinks    RemitoFacturaLink[]
+
+  @@index([companyId])
+  @@index([proveedorId])
+  @@index([estado])
+  @@index([tipo])
+}
+
+model RemitoCompraItem {
+  id                String  @id @default(cuid())
+  remitoCompraId    String
+  productoId        String?
+  descripcion       String
+  cantidad          Float                         // cantidad recibida en este remito
+  cantidadFacturada Float   @default(0)           // cuánto de esta línea ya se facturó
+  cantidadDevuelta  Float   @default(0)           // cuánto se devolvió (remito de devolución)
+  precioEstim       Float?                        // costo estimado por unidad (para valorizar lo no facturado)
+  unidad            String?
+  campoId           String?
+  cabezas           Float?
+  remitoOrigenItemId String?                      // si es renglón de devolución: item del remito original
+
+  remitoCompra      RemitoCompra @relation(fields: [remitoCompraId], references: [id], onDelete: Cascade)
+  producto          Producto? @relation(fields: [productoId], references: [id])
+  facturaLinks      RemitoFacturaLink[]
+
+  @@index([remitoCompraId])
+  @@index([productoId])
+}
+
+// Vínculo N:M entre factura de compra y renglones de remito (parciales).
+model RemitoFacturaLink {
+  id                 String  @id @default(cuid())
+  companyId          String
+  facturaCompraId    String
+  remitoCompraId     String
+  remitoItemId       String?
+  cantidad           Float   @default(0)
+
+  facturaCompra      FacturaCompra     @relation(fields: [facturaCompraId], references: [id], onDelete: Cascade)
+  remitoCompra       RemitoCompra      @relation(fields: [remitoCompraId], references: [id], onDelete: Cascade)
+  remitoItem         RemitoCompraItem? @relation(fields: [remitoItemId], references: [id], onDelete: SetNull)
+
+  @@index([facturaCompraId])
+  @@index([remitoCompraId])
 }
 
 // ============================================================
@@ -1840,6 +1926,8 @@ model Deposito {
   @@index([companyId])
   @@index([tipo])
   @@index([compartido])
+  remitosCompra   RemitoCompra[]
+
 }
 
 // ============================================================

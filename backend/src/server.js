@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.269.2';
+const AGROCORE_VERSION = '2.270.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5022,6 +5022,15 @@ async function crearMovimientosDesdeFactura(tx, { companyId, factura, tipo, moti
   return items.length;
 }
 
+// Correlativo interno de remitos de compra (secuencia 'remito_compra', punto de venta 0).
+async function _siguienteNumeroRemitoCompra(tx, companyId) {
+  let seq = await tx.secuenciaComprobante.findFirst({ where: { companyId, tipo: 'remito_compra', puntoVenta: 0 } });
+  if (!seq) seq = await tx.secuenciaComprobante.create({ data: { companyId, tipo: 'remito_compra', puntoVenta: 0, proximoNumero: 1 } });
+  const n = seq.proximoNumero;
+  await tx.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: { increment: 1 } } });
+  return n;
+}
+
 async function borrarMovimientosDeFactura(tx, { companyId, refPrefix, facturaId }) {
   const ref = `${refPrefix}-${facturaId}`;
   // Revertir también los movimientos de animales generados por la factura.
@@ -5614,12 +5623,16 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       depositoId: z.string().nullable().optional(),   // depósito destino del stock que entra
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
+      // Vínculo con remitos de compra: si viene, el stock YA entró por el remito,
+      // así que la factura NO lo suma (solo genera la deuda y liquida el remito).
+      remitoLinks: z.array(z.object({ remitoItemId: z.string(), remitoId: z.string(), cantidad: z.number().positive() })).optional(),
       // Datos del emisor cuando no hay proveedor en el catálogo (vienen del PDF)
       emisorCuit: z.string().nullable().optional(),
       emisorRazonSocial: z.string().nullable().optional(),
       cae: z.string().nullable().optional(),
     });
     const input = schema.parse(req.body);
+    const _vincRemito = Array.isArray(input.remitoLinks) && input.remitoLinks.length > 0;
     // Si no hay proveedor pero sí datos del emisor (PDF), los preservamos en observaciones
     if (!input.proveedorId && (input.emisorCuit || input.emisorRazonSocial)) {
       const ext = [
@@ -5651,12 +5664,27 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
         include: { proveedor: true, items: true },
       });
       if (_clase === 'factura') {
-        // Factura: entra stock + le quedamos debiendo al proveedor (debe).
-        await crearMovimientosDesdeFactura(tx, {
-          companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'compra',
-          contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'CPR',
-          userId: req.user?.id || null, depositoId: input.depositoId || null,
-        });
+        // Factura: si NO está vinculada a un remito, entra stock (flujo directo de siempre).
+        // Si SE vincula a remitos, el stock YA entró con el remito → no se vuelve a sumar.
+        if (!_vincRemito) {
+          await crearMovimientosDesdeFactura(tx, {
+            companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'compra',
+            contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'CPR',
+            userId: req.user?.id || null, depositoId: input.depositoId || null,
+          });
+        } else {
+          await tx.facturaCompra.update({ where: { id: f.id }, data: { vinculadaRemito: true } });
+          const remitosAfectados = new Set();
+          for (const lk of input.remitoLinks) {
+            await tx.remitoFacturaLink.create({ data: {
+              companyId: req.companyId, facturaCompraId: f.id, remitoCompraId: lk.remitoId,
+              remitoItemId: lk.remitoItemId, cantidad: Number(lk.cantidad),
+            }});
+            await tx.remitoCompraItem.update({ where: { id: lk.remitoItemId }, data: { cantidadFacturada: { increment: Number(lk.cantidad) } } });
+            remitosAfectados.add(lk.remitoId);
+          }
+          for (const rid of remitosAfectados) await _recalcEstadoRemitoCompra(tx, rid);
+        }
         await crearCtaCteDesdeFactura(tx, {
           companyId: req.companyId, factura: f,
           contactoTipo: 'proveedor', contactoId: input.proveedorId || null,
@@ -5982,7 +6010,325 @@ app.delete('/api/facturas-compra/:id', requireCompany, requirePermission('compra
     await prisma.$transaction(async (tx) => {
       await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'CPR', facturaId: req.params.id });
       await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FACC', facturaId: req.params.id });
+      // Revertir vínculos con remitos de compra (devuelve lo facturado y recalcula estado).
+      const links = await tx.remitoFacturaLink.findMany({ where: { facturaCompraId: req.params.id } });
+      const remitosAfectados = new Set();
+      for (const lk of links) {
+        if (lk.remitoItemId) await tx.remitoCompraItem.update({ where: { id: lk.remitoItemId }, data: { cantidadFacturada: { decrement: Number(lk.cantidad || 0) } } });
+        remitosAfectados.add(lk.remitoCompraId);
+      }
+      await tx.remitoFacturaLink.deleteMany({ where: { facturaCompraId: req.params.id } });
       await tx.facturaCompra.delete({ where: { id: req.params.id } });
+      for (const rid of remitosAfectados) await _recalcEstadoRemitoCompra(tx, rid);
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// REMITO DE COMPRA (recepción de mercadería) → Factura de proveedor
+// El remito suma stock al recibir; la factura, si se vincula, NO lo duplica.
+// ============================================================
+const _remitoCompraInclude = {
+  proveedor: true, deposito: true,
+  items: { include: { producto: { select: { id: true, nombre: true, unidad: true, categoria: true } } } },
+  facturaLinks: true, remitoOrigen: { select: { id: true, numero: true } },
+};
+function _serializeRemitoCompra(r) {
+  const nro = `R-${String(r.numero || 0).padStart(8, '0')}`;
+  const items = (r.items || []).map(i => {
+    const pend = Math.max(0, Number(i.cantidad || 0) - Number(i.cantidadFacturada || 0) - Number(i.cantidadDevuelta || 0));
+    return {
+      id: i.id, productoId: i.productoId, descripcion: i.descripcion,
+      cantidad: i.cantidad, cantidadFacturada: i.cantidadFacturada, cantidadDevuelta: i.cantidadDevuelta,
+      pendiente: pend, precioEstim: i.precioEstim, unidad: i.unidad || i.producto?.unidad || null,
+      campoId: i.campoId, cabezas: i.cabezas,
+      valorPendiente: pend * Number(i.precioEstim || 0),
+      productoNombre: i.producto?.nombre || i.descripcion,
+    };
+  });
+  const pendienteTotal = items.reduce((a, it) => a + it.pendiente, 0);
+  const valorPendiente = items.reduce((a, it) => a + it.valorPendiente, 0);
+  const valorTotal = (r.items || []).reduce((a, i) => a + Number(i.cantidad || 0) * Number(i.precioEstim || 0), 0);
+  return {
+    id: r.id, numero: r.numero, nro, tipo: r.tipo, numeroProveedor: r.numeroProveedor,
+    fecha: r.fecha, depositoId: r.depositoId, depositoNombre: r.deposito?.nombre || null,
+    moneda: r.moneda, cotizacion: r.cotizacion, estado: r.estado,
+    remitoOrigenId: r.remitoOrigenId, stockMovido: r.stockMovido,
+    proveedorId: r.proveedorId,
+    proveedorNombre: r.proveedor ? (r.proveedor.razonSocial || r.proveedor.nombreFantasia || '') : null,
+    observaciones: r.observaciones, items, pendienteTotal, valorPendiente, valorTotal,
+    facturado: (r.facturaLinks || []).length > 0,
+    createdAt: r.createdAt,
+  };
+}
+// Recalcula el estado de un remito de ENTRADA según lo facturado de cada renglón.
+async function _recalcEstadoRemitoCompra(tx, remitoId) {
+  const r = await tx.remitoCompra.findUnique({ where: { id: remitoId }, include: { items: true } });
+  if (!r || r.tipo !== 'entrada') return;
+  if (r.estado === 'anulado' || r.estado === 'cerrado') return;
+  let algoFacturado = false, todoFacturado = true;
+  for (const i of r.items) {
+    const objetivo = Number(i.cantidad || 0) - Number(i.cantidadDevuelta || 0); // lo realmente a facturar
+    const fact = Number(i.cantidadFacturada || 0);
+    if (fact > 0.0001) algoFacturado = true;
+    if (fact + 0.0001 < objetivo) todoFacturado = false;
+  }
+  const estado = todoFacturado ? 'facturado' : (algoFacturado ? 'parcial' : 'pendiente');
+  await tx.remitoCompra.update({ where: { id: remitoId }, data: { estado } });
+}
+// Construye un objeto "factura-like" para reutilizar crearMovimientosDesdeFactura.
+function _remitoComoFactura(r) {
+  return {
+    id: r.id, tipo: 'R', puntoVenta: 0, numero: r.numero || 0, fecha: r.fecha,
+    items: (r.items || []).map(i => ({
+      productoId: i.productoId, descripcion: i.descripcion, cantidad: i.cantidad,
+      precioUnit: i.precioEstim || 0, subtotal: Number(i.cantidad || 0) * Number(i.precioEstim || 0),
+      campoId: i.campoId, cabezas: i.cabezas, depositoId: r.depositoId || null,
+    })),
+  };
+}
+const remitoItemSchema = z.object({
+  productoId: z.string().nullable().optional(),
+  productoNombre: z.string().nullable().optional(),
+  productoUnidad: z.string().nullable().optional(),
+  productoCategoria: z.string().nullable().optional(),
+  descripcion: z.string().min(1),
+  cantidad: z.number().positive(),
+  precioEstim: z.number().nullable().optional(),
+  unidad: z.string().nullable().optional(),
+  campoId: z.string().nullable().optional(),
+  cabezas: z.number().nullable().optional(),
+});
+
+// Listado
+app.get('/api/remitos-compra', requireCompany, requirePermission('compras:read'), async (req, res, next) => {
+  try {
+    const w = { companyId: req.companyId };
+    if (req.query.estado) w.estado = req.query.estado;
+    if (req.query.tipo) w.tipo = req.query.tipo;
+    if (req.query.proveedorId) w.proveedorId = req.query.proveedorId;
+    if (req.query.desde || req.query.hasta) {
+      w.fecha = {};
+      if (req.query.desde) w.fecha.gte = new Date(req.query.desde + 'T00:00:00');
+      if (req.query.hasta) w.fecha.lte = new Date(req.query.hasta + 'T23:59:59');
+    }
+    const list = await prisma.remitoCompra.findMany({ where: w, include: _remitoCompraInclude, orderBy: [{ fecha: 'desc' }, { numero: 'desc' }] });
+    res.json({ ok: true, data: list.map(_serializeRemitoCompra) });
+  } catch (e) { next(e); }
+});
+
+// Remitos de ENTRADA pendientes/parciales de un proveedor (para vincular en la factura)
+app.get('/api/remitos-compra/pendientes', requireCompany, requirePermission('compras:read'), async (req, res, next) => {
+  try {
+    const w = { companyId: req.companyId, tipo: 'entrada', estado: { in: ['pendiente', 'parcial'] } };
+    if (req.query.proveedorId) w.proveedorId = req.query.proveedorId;
+    const list = await prisma.remitoCompra.findMany({ where: w, include: _remitoCompraInclude, orderBy: [{ fecha: 'asc' }] });
+    const data = list.map(_serializeRemitoCompra).filter(r => r.pendienteTotal > 0.0001);
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Reporte: mercadería recibida NO facturada, valorizada a una fecha
+app.get('/api/remitos-compra/no-facturado', requireCompany, requirePermission('compras:read'), async (req, res, next) => {
+  try {
+    const w = { companyId: req.companyId, tipo: 'entrada', estado: { in: ['pendiente', 'parcial'] } };
+    if (req.query.hasta) w.fecha = { lte: new Date(req.query.hasta + 'T23:59:59') };
+    const list = await prisma.remitoCompra.findMany({ where: w, include: _remitoCompraInclude, orderBy: [{ fecha: 'asc' }] });
+    const rows = list.map(_serializeRemitoCompra).filter(r => r.pendienteTotal > 0.0001);
+    const total = rows.reduce((a, r) => a + r.valorPendiente, 0);
+    res.json({ ok: true, data: { remitos: rows, totalValorizado: total } });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/remitos-compra/:id', requireCompany, requirePermission('compras:read'), async (req, res, next) => {
+  try {
+    const r = await prisma.remitoCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _remitoCompraInclude });
+    if (!r) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    res.json({ ok: true, data: _serializeRemitoCompra(r) });
+  } catch (e) { next(e); }
+});
+
+// Crear remito de ENTRADA (recepción): suma stock de inmediato.
+app.post('/api/remitos-compra', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      proveedorId: z.string().nullable().optional(),
+      numeroProveedor: z.string().nullable().optional(),
+      fecha: z.coerce.date(),
+      depositoId: z.string().nullable().optional(),
+      moneda: z.string().optional(),
+      cotizacion: z.number().positive().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+      items: z.array(remitoItemSchema).min(1),
+    });
+    const input = schema.parse(req.body);
+    const creado = await prisma.$transaction(async (tx) => {
+      for (const it of input.items) it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
+      const numero = await _siguienteNumeroRemitoCompra(tx, req.companyId);
+      const r = await tx.remitoCompra.create({
+        data: {
+          companyId: req.companyId, proveedorId: input.proveedorId || null, tipo: 'entrada',
+          numero, numeroProveedor: input.numeroProveedor || null, fecha: input.fecha,
+          depositoId: input.depositoId || null, moneda: input.moneda || 'ARS', cotizacion: input.cotizacion || null,
+          estado: 'pendiente', stockMovido: true, userId: req.user?.id || null,
+          observaciones: input.observaciones || null,
+          items: { create: input.items.map(it => ({
+            productoId: it.productoId || null, descripcion: it.descripcion, cantidad: Number(it.cantidad),
+            precioEstim: it.precioEstim != null ? Number(it.precioEstim) : null, unidad: it.unidad || null,
+            campoId: it.campoId || null, cabezas: it.cabezas != null ? Number(it.cabezas) : null,
+          })) },
+        },
+        include: _remitoCompraInclude,
+      });
+      await crearMovimientosDesdeFactura(tx, {
+        companyId: req.companyId, factura: _remitoComoFactura(r), tipo: 'ingreso', motivo: 'compra',
+        contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'RC',
+        userId: req.user?.id || null, depositoId: input.depositoId || null,
+      });
+      return r;
+    });
+    res.status(201).json({ ok: true, data: _serializeRemitoCompra(creado) });
+  } catch (e) { next(e); }
+});
+
+// Editar remito (solo si está pendiente y sin facturas vinculadas): rehace stock.
+app.put('/api/remitos-compra/:id', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const cur = await prisma.remitoCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { facturaLinks: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if (cur.tipo !== 'entrada') return res.status(400).json({ ok: false, error: 'Solo se editan remitos de entrada.' });
+    if ((cur.facturaLinks || []).length) return res.status(400).json({ ok: false, error: 'El remito ya tiene facturas vinculadas. Desvinculá primero.' });
+    if (cur.estado === 'anulado') return res.status(400).json({ ok: false, error: 'El remito está anulado.' });
+    const schema = z.object({
+      proveedorId: z.string().nullable().optional(),
+      numeroProveedor: z.string().nullable().optional(),
+      fecha: z.coerce.date(),
+      depositoId: z.string().nullable().optional(),
+      moneda: z.string().optional(),
+      cotizacion: z.number().positive().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+      items: z.array(remitoItemSchema).min(1),
+    });
+    const input = schema.parse(req.body);
+    const upd = await prisma.$transaction(async (tx) => {
+      await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'RC', facturaId: cur.id });
+      await tx.remitoCompraItem.deleteMany({ where: { remitoCompraId: cur.id } });
+      for (const it of input.items) it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
+      const r = await tx.remitoCompra.update({
+        where: { id: cur.id },
+        data: {
+          proveedorId: input.proveedorId || null, numeroProveedor: input.numeroProveedor || null,
+          fecha: input.fecha, depositoId: input.depositoId || null, moneda: input.moneda || 'ARS',
+          cotizacion: input.cotizacion || null, observaciones: input.observaciones || null, estado: 'pendiente',
+          items: { create: input.items.map(it => ({
+            productoId: it.productoId || null, descripcion: it.descripcion, cantidad: Number(it.cantidad),
+            precioEstim: it.precioEstim != null ? Number(it.precioEstim) : null, unidad: it.unidad || null,
+            campoId: it.campoId || null, cabezas: it.cabezas != null ? Number(it.cabezas) : null,
+          })) },
+        },
+        include: _remitoCompraInclude,
+      });
+      await crearMovimientosDesdeFactura(tx, {
+        companyId: req.companyId, factura: _remitoComoFactura(r), tipo: 'ingreso', motivo: 'compra',
+        contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'RC',
+        userId: req.user?.id || null, depositoId: input.depositoId || null,
+      });
+      return r;
+    });
+    res.json({ ok: true, data: _serializeRemitoCompra(upd) });
+  } catch (e) { next(e); }
+});
+
+// Devolución a proveedor (antes de facturar): remito de devolución vinculado, egresa stock.
+app.post('/api/remitos-compra/:id/devolucion', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const orig = await prisma.remitoCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { items: true } });
+    if (!orig) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if (orig.tipo !== 'entrada') return res.status(400).json({ ok: false, error: 'Solo se devuelve sobre un remito de entrada.' });
+    const schema = z.object({
+      fecha: z.coerce.date(),
+      observaciones: z.string().nullable().optional(),
+      items: z.array(z.object({ remitoItemId: z.string(), cantidad: z.number().positive() })).min(1),
+    });
+    const input = schema.parse(req.body);
+    const creado = await prisma.$transaction(async (tx) => {
+      const numero = await _siguienteNumeroRemitoCompra(tx, req.companyId);
+      const itemsDev = [];
+      for (const d of input.items) {
+        const oi = orig.items.find(x => x.id === d.remitoItemId);
+        if (!oi) throw Object.assign(new Error('Renglón del remito no encontrado'), { status: 400 });
+        const pend = Number(oi.cantidad || 0) - Number(oi.cantidadDevuelta || 0);
+        if (d.cantidad > pend + 0.0001) throw Object.assign(new Error(`No podés devolver más de ${pend} de ${oi.descripcion}`), { status: 400 });
+        itemsDev.push({
+          productoId: oi.productoId || null, descripcion: oi.descripcion, cantidad: Number(d.cantidad),
+          precioEstim: oi.precioEstim, unidad: oi.unidad, campoId: oi.campoId, cabezas: oi.cabezas,
+          remitoOrigenItemId: oi.id,
+        });
+        await tx.remitoCompraItem.update({ where: { id: oi.id }, data: { cantidadDevuelta: { increment: Number(d.cantidad) } } });
+      }
+      const dev = await tx.remitoCompra.create({
+        data: {
+          companyId: req.companyId, proveedorId: orig.proveedorId, tipo: 'devolucion',
+          numero, numeroProveedor: null, fecha: input.fecha, depositoId: orig.depositoId,
+          moneda: orig.moneda, cotizacion: orig.cotizacion, estado: 'cerrado', stockMovido: true,
+          remitoOrigenId: orig.id, userId: req.user?.id || null,
+          observaciones: input.observaciones || `Devolución del remito R-${String(orig.numero||0).padStart(8,'0')}`,
+          items: { create: itemsDev },
+        },
+        include: _remitoCompraInclude,
+      });
+      // Egreso de stock por la devolución
+      await crearMovimientosDesdeFactura(tx, {
+        companyId: req.companyId, factura: _remitoComoFactura(dev), tipo: 'egreso', motivo: 'devolucion_compra',
+        contraparteId: orig.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'RC',
+        userId: req.user?.id || null, depositoId: orig.depositoId || null,
+      });
+      await _recalcEstadoRemitoCompra(tx, orig.id);
+      return dev;
+    });
+    res.status(201).json({ ok: true, data: _serializeRemitoCompra(creado) });
+  } catch (e) { if (e.status) return res.status(e.status).json({ ok: false, error: e.message }); next(e); }
+});
+
+// Anular remito (revierte stock). Bloqueado si tiene facturas vinculadas.
+app.post('/api/remitos-compra/:id/anular', requireCompany, requirePermission('compras:update'), async (req, res, next) => {
+  try {
+    const r = await prisma.remitoCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { facturaLinks: true, devoluciones: true } });
+    if (!r) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if ((r.facturaLinks || []).length) return res.status(400).json({ ok: false, error: 'No se puede anular: tiene facturas vinculadas.' });
+    if ((r.devoluciones || []).length) return res.status(400).json({ ok: false, error: 'No se puede anular: tiene devoluciones. Anulá las devoluciones primero.' });
+    await prisma.$transaction(async (tx) => {
+      await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'RC', facturaId: r.id });
+      // Si es una devolución, revertir el contador del remito origen
+      if (r.tipo === 'devolucion' && r.remitoOrigenId) {
+        const items = await tx.remitoCompraItem.findMany({ where: { remitoCompraId: r.id } });
+        for (const it of items) {
+          if (it.remitoOrigenItemId) await tx.remitoCompraItem.update({ where: { id: it.remitoOrigenItemId }, data: { cantidadDevuelta: { decrement: Number(it.cantidad || 0) } } });
+        }
+        await _recalcEstadoRemitoCompra(tx, r.remitoOrigenId);
+      }
+      await tx.remitoCompra.update({ where: { id: r.id }, data: { estado: 'anulado', stockMovido: false } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/remitos-compra/:id', requireCompany, requirePermission('compras:delete'), async (req, res, next) => {
+  try {
+    const r = await prisma.remitoCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: { facturaLinks: true, devoluciones: true, items: true } });
+    if (!r) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if ((r.facturaLinks || []).length) return res.status(400).json({ ok: false, error: 'No se puede eliminar: tiene facturas vinculadas.' });
+    if (r.tipo === 'entrada' && (r.devoluciones || []).length) return res.status(400).json({ ok: false, error: 'No se puede eliminar: tiene devoluciones.' });
+    await prisma.$transaction(async (tx) => {
+      await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'RC', facturaId: r.id });
+      if (r.tipo === 'devolucion' && r.remitoOrigenId) {
+        for (const it of r.items) {
+          if (it.remitoOrigenItemId) await tx.remitoCompraItem.update({ where: { id: it.remitoOrigenItemId }, data: { cantidadDevuelta: { decrement: Number(it.cantidad || 0) } } });
+        }
+        await _recalcEstadoRemitoCompra(tx, r.remitoOrigenId);
+      }
+      await tx.remitoCompra.delete({ where: { id: r.id } });
     });
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -13101,6 +13447,17 @@ const _AYUDA_KB = [
       '🌾 Circuito de una campaña de cereal: carta de porte, entrega en el acopio, venta al comprador y liquidación agrupando los camiones → https://youtu.be/xwzjHYBQuH4',
       'Se abren en YouTube; podés verlos desde la compu o el celular.'],
     atajo:{ page:'ayuda', label:'Abrir Ayuda y manual' } },
+  { id:'remitos_compra', terms:['remito de compra','remitos de compra','recepcion de mercaderia','recibir mercaderia','remito del proveedor','remito de entrada','vincular remito','remito a factura','mercaderia recibida no facturada','recibido no facturado','devolucion a proveedor','remito de devolucion','sumar stock con remito','factura no suma stock','circuito de compras'],
+    titulo:'Remitos de compra (recepción → factura)',
+    pasos:[
+      'Cuando recibís la mercadería con el remito del proveedor, andá a Comercial → Remitos de compra → "+ Nuevo remito". Cargá proveedor, fecha, depósito y los artículos con la cantidad recibida (el precio es estimado). Al guardar, el stock SE SUMA al instante y el remito queda ⏳ Pendiente de facturar.',
+      'Cuando llega la factura del proveedor, cargá la factura normal (Movimientos de compras → Nueva factura de compra) y tocá "📦 Vincular desde remito": elegí los renglones del remito a facturar. La factura genera la deuda pero NO vuelve a sumar stock (ya entró con el remito).',
+      'Parciales: podés facturar un remito en varias facturas (ajustando la cantidad), o varios remitos en una sola factura. El remito pasa a ◐ Parcial o 🧾 Facturado según lo cubierto.',
+      'Devolución a proveedor: en el remito, botón ↩️, elegís qué devolver. Se genera un remito de devolución que SACA del stock y baja el pendiente. Después, si corresponde, cargás la Nota de Crédito del proveedor (baja la deuda).',
+      'Reporte "Recibido no facturado": botón arriba a la derecha; lista los remitos pendientes valorizados (para el cierre contable).',
+      'Tip: si comprás de mostrador y la mercadería llega directo con la factura, seguí usando la factura de compra normal (suma stock sola, sin remito). El remito es para cuando la mercadería entra ANTES que la factura.',
+    ],
+    atajo:{ page:'remitosCompra', label:'Abrir Remitos de compra' } },
   { id:'ordenes_trabajo', terms:['orden de trabajo','ordenes de trabajo','orden de labores','ot','orden al contratista','orden de aplicacion','mandar a pulverizar','orden para el contratista','labor del contratista','que insumos usar','provision de insumos','facturar contratista','orden labor'],
     titulo:'Órdenes de trabajo (para el contratista)',
     pasos:[
