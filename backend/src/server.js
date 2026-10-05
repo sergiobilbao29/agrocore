@@ -11,6 +11,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import VADEMECUM_EMBEBIDO from './vademecum-data.mjs';  // respaldo por si no está backend/data/vademecum.json
@@ -67,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.271.1';
+const AGROCORE_VERSION = '2.272.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -18440,9 +18441,71 @@ app.delete('/api/banco-movimientos/:id', requireCompany, requirePermission('fina
 // Lanza Update-AgroCore.ps1 como proceso desacoplado. La API responde de
 // inmediato porque el script va a matar Node como parte del update.
 // El cliente debe hacer polling de /api/system/version hasta detectar el cambio.
+// ============================================================
+// LICENCIA / SUSCRIPCION (control de actualizaciones por abono)
+// El sistema es on-premise: corre en la PC/servidor del cliente. Para que un
+// cliente que dejó de pagar no pueda bajar NUEVAS versiones desde la app, se
+// usa una licencia FIRMADA con Ed25519:
+//   - Vos firmás un token { inst, hasta } con tu CLAVE PRIVADA (fuera del repo).
+//   - El sistema solo tiene la CLAVE PUBLICA y VERIFICA la firma (no puede falsificar).
+//   - El token se guarda en un archivo (licencia.lic) en la carpeta de la instancia.
+// Regla: sin licencia => control inactivo (se permite, para no romper instalaciones
+// viejas). Con licencia vigente => se permite. Con licencia vencida o de otra
+// instancia => se BLOQUEA el botón de actualizar (vos siempre podés actualizar a
+// mano por RDP/script, que no pasa por este endpoint).
+const LICENCIA_PUBKEY = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAPLpAqP1+gQliZG3ekG6D3UTcJvH1eae3fbgKWudOzCk=\n-----END PUBLIC KEY-----\n';
+function _licenciaArchivo() { return path.join(STATIC_DIR, 'licencia.lic'); }
+function _licenciaInstancia() { try { return path.basename(STATIC_DIR) || 'AgroCore'; } catch { return 'AgroCore'; } }
+function _verificarLicToken(token) {
+  try {
+    const [p, s] = String(token || '').trim().split('.');
+    if (!p || !s) return null;
+    const data = Buffer.from(p, 'base64url');
+    const sig = Buffer.from(s, 'base64url');
+    const ok = crypto.verify(null, data, crypto.createPublicKey(LICENCIA_PUBKEY), sig);
+    if (!ok) return null;
+    return JSON.parse(data.toString('utf8'));   // { inst, hasta:'YYYY-MM-DD' }
+  } catch { return null; }
+}
+function _estadoLicencia() {
+  const inst = _licenciaInstancia();
+  let token = null;
+  try { if (fs.existsSync(_licenciaArchivo())) token = fs.readFileSync(_licenciaArchivo(), 'utf8').trim(); } catch {}
+  if (!token) return { configurada: false, valida: true, instancia: inst, hasta: null, diasRestantes: null, motivo: 'sin_licencia' };
+  const pay = _verificarLicToken(token);
+  if (!pay) return { configurada: true, valida: false, instancia: inst, hasta: null, diasRestantes: null, motivo: 'firma_invalida' };
+  const instOk = String(pay.inst || '') === inst;
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const hasta = new Date(String(pay.hasta) + 'T23:59:59');
+  const diasRestantes = isNaN(hasta.getTime()) ? null : Math.round((hasta.getTime() - hoy.getTime()) / 86400000);
+  const vigente = !isNaN(hasta.getTime()) && hasta.getTime() >= hoy.getTime();
+  return { configurada: true, valida: instOk && vigente, instancia: inst, licInstancia: pay.inst || null,
+    hasta: pay.hasta || null, diasRestantes, motivo: !instOk ? 'otra_instancia' : (vigente ? 'ok' : 'vencida') };
+}
+// Estado (lo puede leer cualquier usuario logueado, para mostrar el aviso).
+app.get('/api/admin/licencia', authMiddleware, async (req, res) => {
+  res.json({ ok: true, data: _estadoLicencia(), version: AGROCORE_VERSION });
+});
+// Cargar / renovar licencia (solo Super Admin). Valida la firma antes de guardar.
+app.post('/api/admin/licencia', authMiddleware, async (req, res) => {
+  if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo el Super Admin puede cargar la licencia' });
+  const token = String(req.body?.token || '').trim();
+  const pay = _verificarLicToken(token);
+  if (!pay) return res.status(400).json({ ok: false, error: 'Licencia inválida: la firma no coincide. Verificá que copiaste el código completo.' });
+  if (String(pay.inst || '') !== _licenciaInstancia()) return res.status(400).json({ ok: false, error: `Esta licencia es para la instancia "${pay.inst}", no para "${_licenciaInstancia()}".` });
+  try { fs.writeFileSync(_licenciaArchivo(), token, 'utf8'); } catch (e) { return res.status(500).json({ ok: false, error: 'No se pudo guardar la licencia: ' + e.message }); }
+  res.json({ ok: true, data: _estadoLicencia() });
+});
+
 app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, next) => {
   try {
     if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo el Super Admin puede instalar actualizaciones' });
+    // Candado por suscripción: si la licencia está vencida o es inválida, no se baja la actualización.
+    const _lic = _estadoLicencia();
+    if (!_lic.valida) return res.status(403).json({ ok: false, code: 'LICENCIA_VENCIDA',
+      error: _lic.motivo === 'otra_instancia'
+        ? 'La licencia cargada es de otra instancia. Contactá a soporte.'
+        : 'Suscripción vencida: las actualizaciones están deshabilitadas. Regularizá el abono y contactá a soporte para renovar la licencia.' });
     if (os.platform() !== 'win32') {
       return res.status(400).json({ ok: false, error: 'La actualización remota solo funciona en servidores Windows. En Linux ejecutá manualmente el script.' });
     }
