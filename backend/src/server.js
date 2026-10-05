@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.271.0';
+const AGROCORE_VERSION = '2.271.1';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11593,7 +11593,19 @@ function _guiaCalc(g) {
   // si no, se calcula por kilos × $/kg.
   const achiqueMonto = (Number(g.achiqueMonto) > 0) ? _round2(g.achiqueMonto) : _round2(achiqueKg * achiquePrecioEf);
   const base = _round2(Math.max(0, bruto - achiqueMonto));
-  const ivaLiquidacion = _round2(base * (Number(g.alicuotaIva) || 0) / 100);
+  // IVA de la liquidación: usar el IVA REAL de los renglones (alícuota efectiva
+  // sobre el bruto), aplicado a la base. Si los renglones tienen IVA 0, da 0.
+  // Fallback a la alícuota a nivel guía solo en guías viejas sin IVA por renglón.
+  const _rengs = g.renglones || [];
+  const _algunaAlic = _rengs.some(r => r.alicuotaIva != null);
+  let ivaLiquidacion;
+  if (_algunaAlic) {
+    const _ivaRengs = _rengs.reduce((a, r) => a + (Number(r.iva) || 0), 0);
+    const _alicEf = bruto > 0 ? (_ivaRengs / bruto) : 0;
+    ivaLiquidacion = _round2(base * _alicEf);
+  } else {
+    ivaLiquidacion = _round2(base * (Number(g.alicuotaIva) || 0) / 100);
+  }
   const retenciones = _round2(Number(g.retencionesMonto) || 0);
   const neto = _round2(base + ivaLiquidacion - retenciones);
   return { bruto, kilos, precioProm: _round2(precioProm), achiqueKg,

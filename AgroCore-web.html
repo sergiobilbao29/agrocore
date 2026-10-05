@@ -2974,6 +2974,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'05/10/2026',
+      titulo:'🧮 v2.271.1 — Guías DT-e: el IVA de la liquidación respeta el IVA de los renglones',
+      desc:'En las <b>Guías de hacienda (DT-e)</b>, la "Cuenta que se liquida" calculaba el IVA con una alícuota fija (10,5%) aunque cargaras <b>IVA 0</b> en los renglones. Ahora el IVA de la liquidación usa el <b>IVA real de los renglones</b>: si ponés 0, la cuenta no suma IVA; si hay alícuotas mixtas, las respeta. Corregido en la pantalla y en la cuenta guardada.' },
     { tag:'Nuevo', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/10/2026',
       titulo:'🗓️ v2.271.0 — Vencimientos de pago en facturas de compra (servicios)',
       desc:'Las facturas de compra ahora tienen <b>vencimiento(s) de pago</b>. En el alta/edición podés cargar uno o <b>varios vencimientos</b> (fecha + importe), ideal para servicios (luz, gas, teléfono) que traen <b>2do vencimiento con recargo</b>. El <b>1er vencimiento manda</b>: define la deuda, entra al <b>Flujo de fondos</b> y dispara una <b>alerta en la Agenda/Calendario 3 días antes y el día</b> del vencimiento. Si la factura trae vencimiento, se usa esa fecha <b>en lugar de la condición de pago</b>. Además el <b>importador de PDF</b> ahora lee los vencimientos de las facturas de servicio (formatos tipo ECOGAS, cooperativas eléctricas y telefonía) y los autocompleta.' },
@@ -33446,8 +33449,10 @@ function guiaRecalc(){
   const achMonManual = Number($('#guia-achmon')?.value||0);
   const achMonto = achMonManual>0 ? achMonManual : Math.round(achkg*achpre*100)/100;
   const base = Math.max(0, Math.round((bruto-achMonto)*100)/100);
-  const alicG = Number($('#guia-alic')?.value||10.5);
-  const ivaLiq = Math.round(base*alicG)/100;
+  // IVA de la liquidación = IVA REAL de los renglones (alícuota efectiva sobre el
+  // bruto), aplicado a la base. Si los renglones tienen IVA 0, acá también da 0.
+  const alicEfectiva = bruto>0 ? (iva/bruto)*100 : 0;
+  const ivaLiq = Math.round(base*alicEfectiva)/100;
   const ret = Number($('#guia-ret')?.value||0);
   const neto = Math.round((base+ivaLiq-ret)*100)/100;
   setT('guia-l-neg',fmt$(bruto)); setT('guia-l-achkg',fmtN(achkg)); setT('guia-l-ach','− '+fmt$(achMonto));
