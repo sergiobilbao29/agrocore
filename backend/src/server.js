@@ -67,7 +67,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.270.2';
+const AGROCORE_VERSION = '2.271.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5618,6 +5618,13 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       condicionCompra: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo
       vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
+      // Vencimientos de pago (servicios: luz/gas/teléfono). El 1ro manda para la
+      // deuda/flujo/alertas; los demás son "si pagás después, pagás este importe".
+      vencimientos: z.array(z.object({
+        nro: z.number().int().optional(),
+        fecha: z.coerce.date(),
+        importe: z.number().nullable().optional(),
+      })).nullable().optional(),
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
       depositoId: z.string().nullable().optional(),   // depósito destino del stock que entra
@@ -5633,6 +5640,14 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
     });
     const input = schema.parse(req.body);
     const _vincRemito = Array.isArray(input.remitoLinks) && input.remitoLinks.length > 0;
+    // Vencimientos: normalizo a [{nro,fecha(ISO),importe}] ordenados por fecha.
+    // El 1er vencimiento es el que manda para la deuda / flujo / alertas.
+    const _vtos = (Array.isArray(input.vencimientos) ? input.vencimientos : [])
+      .filter(v => v && v.fecha)
+      .map((v, i) => ({ nro: v.nro || (i + 1), fecha: new Date(v.fecha), importe: v.importe != null ? Number(v.importe) : null }))
+      .sort((a, b) => a.fecha - b.fecha)
+      .map((v, i) => ({ nro: i + 1, fecha: v.fecha.toISOString(), importe: v.importe }));
+    const _primerVto = input.vencimientoFecha || (_vtos[0] ? new Date(_vtos[0].fecha) : null);
     // Si no hay proveedor pero sí datos del emisor (PDF), los preservamos en observaciones
     if (!input.proveedorId && (input.emisorCuit || input.emisorRazonSocial)) {
       const ext = [
@@ -5657,6 +5672,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
           companyId: req.companyId, proveedorId: input.proveedorId || null,
           tipo: input.tipo, clase: _clase, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
           condicionCompra: input.condicionCompra, observaciones: input.observaciones,
+          fechaVencimiento: _primerVto, vencimientos: _vtos.length ? _vtos : undefined,
           moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
           items: { create: totales.items },
@@ -5690,7 +5706,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
           contactoTipo: 'proveedor', contactoId: input.proveedorId || null,
           refPrefix: 'FACC', motivo: 'Compra',
           condicion: input.condicionCompra, condicionDias: input.condicionDias,
-          vencimientoFecha: input.vencimientoFecha || null,
+          vencimientoFecha: _primerVto,
         });
       } else {
         // Nota de crédito: reduce lo que le debemos (haber). Nota de débito: lo suma (debe).
@@ -5941,6 +5957,11 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       condicionCompra: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),
       vencimientoFecha: z.coerce.date().nullable().optional(),
+      vencimientos: z.array(z.object({
+        nro: z.number().int().optional(),
+        fecha: z.coerce.date(),
+        importe: z.number().nullable().optional(),
+      })).nullable().optional(),
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
       depositoId: z.string().nullable().optional(),
@@ -5951,6 +5972,12 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       cae: z.string().nullable().optional(),
     });
     const input = schema.parse(req.body);
+    const _vtos = (Array.isArray(input.vencimientos) ? input.vencimientos : [])
+      .filter(v => v && v.fecha)
+      .map((v, i) => ({ nro: v.nro || (i + 1), fecha: new Date(v.fecha), importe: v.importe != null ? Number(v.importe) : null }))
+      .sort((a, b) => a.fecha - b.fecha)
+      .map((v, i) => ({ nro: i + 1, fecha: v.fecha.toISOString(), importe: v.importe }));
+    const _primerVto = input.vencimientoFecha || (_vtos[0] ? new Date(_vtos[0].fecha) : null);
     const existing = await prisma.facturaCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
     if (await _compraTienePago(req.companyId, req.params.id)) return res.status(400).json({ ok: false, error: 'No se puede editar: la compra tiene un pago aplicado (OP). Primero deshacé el pago desde la Orden de pago.' });
@@ -5980,6 +6007,7 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
           proveedorId: input.proveedorId || null, tipo: input.tipo, clase: _clase,
           puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
           condicionCompra: input.condicionCompra, observaciones: input.observaciones,
+          fechaVencimiento: _primerVto, vencimientos: _vtos.length ? _vtos : null,
           moneda: _mon, cotizacion: _cot, subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
           items: { create: totales.items },
         },
@@ -5987,7 +6015,7 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       });
       if (_clase === 'factura') {
         await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'compra', contraparteId: input.proveedorId || null, contraparteTipo: 'proveedor', refPrefix: 'CPR', userId: req.user?.id || null, depositoId: input.depositoId || null });
-        await crearCtaCteDesdeFactura(tx, { companyId: req.companyId, factura: f, contactoTipo: 'proveedor', contactoId: input.proveedorId || null, refPrefix: 'FACC', motivo: 'Compra', condicion: input.condicionCompra, condicionDias: input.condicionDias, vencimientoFecha: input.vencimientoFecha || null });
+        await crearCtaCteDesdeFactura(tx, { companyId: req.companyId, factura: f, contactoTipo: 'proveedor', contactoId: input.proveedorId || null, refPrefix: 'FACC', motivo: 'Compra', condicion: input.condicionCompra, condicionDias: input.condicionDias, vencimientoFecha: _primerVto });
       } else {
         const esNC = _clase === 'nota_credito';
         await tx.ctaCte.create({ data: { companyId: req.companyId, contactoTipo: 'proveedor', contactoId: input.proveedorId || null, fecha: input.fecha,
@@ -18839,6 +18867,14 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       }
     }
 
+    // === VENCIMIENTOS de pago (facturas de servicio: luz / gas / teléfono) ===
+    // Muchas facturas de servicios traen uno o varios vencimientos con su importe
+    // ("Vencimiento 1 / 2", "Total a pagar hasta el DD/MM $...", "VENCIMIENTO: DD/MM").
+    // Los clasificamos por formato y los devolvemos como [{nro, fecha(ISO), importe}].
+    // El 1ro (más temprano) es el que manda para la deuda, el flujo y las alertas.
+    resultado.vencimientos = _parseVencimientosServicio(texto, resultado.total);
+    resultado.fechaVencimiento = resultado.vencimientos[0] ? resultado.vencimientos[0].fecha : null;
+
     res.json({
       ok: true,
       data: resultado,
@@ -18851,6 +18887,52 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     });
   } catch (e) { next(e); }
 });
+
+// Extrae vencimientos de pago de una factura de servicio a partir del texto del PDF.
+// Devuelve [{nro, fecha:'YYYY-MM-DD', importe:Number|null}] ordenados por fecha.
+function _parseVencimientosServicio(texto, total) {
+  const arNum = (s) => {
+    if (s == null) return null;
+    let n = String(s).replace(/[$\s]/g, '');
+    if (/,\d{1,2}$/.test(n)) n = n.replace(/\./g, '').replace(',', '.');
+    else n = n.replace(/,/g, '');
+    const v = Number(n); return isFinite(v) ? v : null;
+  };
+  const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const out = [];
+  const add = (fechaStr, imp) => {
+    const m = String(fechaStr).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (!m) return;
+    const iso = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    out.push({ fecha: iso, importe: imp != null ? imp : null });
+  };
+  let mm;
+  // 1) "Vencimiento N  DD/MM/AAAA  importe"  (y variante con el importe adelante)
+  const re1 = /Vencimiento\s*0?([12])\D{0,4}(\d{1,2}\/\d{1,2}\/\d{4})\D{0,4}(\d{1,3}(?:\.\d{3})*,\d{2})/gi;
+  while ((mm = re1.exec(texto))) add(mm[2], arNum(mm[3]));
+  const re2 = /(\d{1,3}(?:\.\d{3})*,\d{2})(\d{1,2}\/\d{1,2}\/\d{4})Vencimiento\s*0?([12])/gi;
+  while ((mm = re2.exec(texto))) add(mm[2], arNum(mm[1]));
+  // 2) "...a pagar hasta el DD/MM/AAAA  $importe"  (gas)
+  const re3 = /a pagar hasta el\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*\$?\s*([\d.,]+)?/gi;
+  while ((mm = re3.exec(texto))) add(mm[1], mm[2] ? arNum(mm[2]) : total);
+  // 3) "VENCIMIENTO: DD/MM/AAAA"  (no CAE / CESP / Próximo)
+  const re4 = /VENCIMIENTO\s*:?\s*(\d{1,2}\/\d{1,2}\/\d{4})/gi;
+  while ((mm = re4.exec(texto))) { const ctx = texto.slice(Math.max(0, mm.index - 30), mm.index); if (/CESP|CAE|Prox/i.test(ctx)) continue; add(mm[1], total); }
+  // 4) Fallback: una fecha pegada al TOTAL (<= 1 salto de línea), sin CESP/CAE/Emisión
+  if (out.length === 0 && total) {
+    let fmt; try { fmt = Number(total).toLocaleString('es-AR', { minimumFractionDigits: 2 }); } catch { fmt = String(total); }
+    for (const v of [esc(fmt), esc(fmt.replace(/\./g, ''))]) {
+      const rA = new RegExp(v + '\\s*\\n?\\s*(\\d{1,2}/\\d{1,2}/\\d{4})', 'g');
+      const rB = new RegExp('(\\d{1,2}/\\d{1,2}/\\d{4})\\s*\\n?\\s*\\$?\\s*' + v, 'g');
+      for (const r of [rA, rB]) { while ((mm = r.exec(texto))) { const i = mm.index; const ctx = texto.slice(Math.max(0, i - 40), i + 40); if (/CESP|CAE|Emisi/i.test(ctx)) continue; add(mm[1], total); } }
+    }
+  }
+  // dedupe por fecha (quedarse con el importe conocido) y ordenar
+  const seen = {}; const ded = [];
+  for (const v of out) { if (seen[v.fecha]) { if (v.importe != null && seen[v.fecha].importe == null) seen[v.fecha].importe = v.importe; continue; } seen[v.fecha] = v; ded.push(v); }
+  ded.sort((a, b) => a.fecha.localeCompare(b.fecha));
+  return ded.map((v, i) => ({ nro: i + 1, fecha: v.fecha, importe: v.importe != null ? v.importe : (total || null) }));
+}
 
 // ============================================================
 // PARSER de LIQUIDACIÓN DE HACIENDA (Liquidación de compra por faena/venta).
@@ -22853,17 +22935,23 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
     else if (c.contactoTipo === 'proveedor' && mapPrv[c.contactoId]) contactoNombre = mapPrv[c.contactoId];
     const esCobrar = c.contactoTipo === 'cliente' || (c.debe || 0) > 0 && c.contactoTipo !== 'proveedor';
     const verbo = c.contactoTipo === 'proveedor' ? 'Pagar a' : c.contactoTipo === 'cliente' ? 'Cobrar de' : 'Vence';
+    // Facturas de compra (luz/gas/teléfono y proveedores): avisar 3 días antes que
+    // vence la factura. El resto de la cuenta corriente mantiene 15 días.
+    const esFactCompra = String(c.referencia || '').startsWith('FACC') && c.contactoTipo === 'proveedor';
+    const _titulo = esFactCompra
+      ? `Vence factura · ${contactoNombre || c.detalle}`.trim()
+      : `${verbo} ${contactoNombre || c.detalle}`.trim();
     items.push({
       id: `auto:ctacte:${c.id}`,
       origen: 'auto',
       autoTipo: 'ctacte',
       autoRefId: c.id,
-      titulo: `${verbo} ${contactoNombre || c.detalle}`.trim(),
+      titulo: _titulo,
       descripcion: `${c.detalle} · $${monto.toFixed(2)}${c.categoria?` · ${c.categoria}`:''}`,
       fecha: c.vencimiento,
       categoria: 'vencimiento',
-      prioridad: 'media',
-      avisarDiasAntes: 15,
+      prioridad: esFactCompra ? 'alta' : 'media',
+      avisarDiasAntes: esFactCompra ? 3 : 15,
       completado: false,
       repetir: 'ninguno',
       relacionTipo: 'ctacte',

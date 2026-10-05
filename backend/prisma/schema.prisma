@@ -788,6 +788,11 @@ model FacturaCompra {
   iva             Float     @default(0)        // en moneda origen
   total           Float     @default(0)        // en moneda origen
   observaciones   String?
+  // Vencimiento(s) de pago. fechaVencimiento = 1er vencimiento (el que manda para la
+  // deuda, el flujo de fondos y las alertas). vencimientos = lista completa
+  // [{nro, fecha, importe}] para servicios con 2+ vencimientos (recargo si pagás tarde).
+  fechaVencimiento DateTime?
+  vencimientos    Json?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -801,6 +806,7 @@ model FacturaCompra {
   @@unique([companyId, proveedorId, tipo, puntoVenta, numero])
   @@index([companyId])
   @@index([fecha])
+  @@index([fechaVencimiento])
 }
 
 model FacturaCompraItem {
