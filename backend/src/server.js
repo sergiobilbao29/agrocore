@@ -4620,7 +4620,8 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
         const ins = await tx.insumoAplicado.create({ data: {
           campanaId: campana.id, productoId: prod?.id || null, nombre: prod?.nombre || d.item,
           cantidad: d.unidadHa || 0, unidad: d.subtipo || prod?.unidad || 'u/ha', fecha,
-          costo: d.costoHa || 0, precioUnit: d.precioUnit ?? null, moneda: d.monedaCosto || 'USD',
+          costo: (d.costoHa != null ? d.costoHa : (Number(d.unidadHa || 0) * Number(d.precioUnit || 0))) || 0,
+          precioUnit: d.precioUnit ?? null, moneda: d.monedaCosto || 'USD',
           aporteSocioId, aporteSocioNombre,
           hectareasAplicadas: d.hectareasAplicadas ?? null, observaciones: d.observaciones || null,
         }});
@@ -4753,7 +4754,9 @@ app.put('/api/sociedades/:id/aplicacion/:itemId', requireCompany, requirePermiss
         unidad: d.subtipo !== undefined ? (d.subtipo || 'u/ha') : ins.unidad,
         cantidad: d.unidadHa !== undefined ? (d.unidadHa || 0) : ins.cantidad,
         precioUnit: d.precioUnit !== undefined ? d.precioUnit : ins.precioUnit,
-        costo: d.costoHa !== undefined ? (d.costoHa || 0) : ins.costo,
+        // Si no mandan costo/ha, lo recalculamos como cant/ha × precio unitario.
+        costo: d.costoHa !== undefined ? (d.costoHa || 0)
+               : ((Number(d.unidadHa !== undefined ? d.unidadHa : (ins.cantidad || 0)) * Number(d.precioUnit !== undefined ? d.precioUnit : (ins.precioUnit || 0))) || ins.costo || 0),
         moneda: d.monedaCosto !== undefined ? (d.monedaCosto || 'USD') : (ins.moneda || 'USD'),
         hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : ins.hectareasAplicadas,
         fecha: d.fecha || ins.fecha,
