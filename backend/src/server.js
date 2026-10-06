@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.274.0';
+const AGROCORE_VERSION = '2.274.1';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -16398,15 +16398,19 @@ function _rodeoResultado(rodeo, eventos, usd) {
   const kgVendidos = sumKg('venta');
   const kgBajas = sumKg('baja');
   const kgStockInicial = Number(rodeo.kgInicial || 0);
-  // Stock final en kg: el último pesaje si hay; si no, estimado por inventario (sin ganancia).
+  // Lote CERRADO = ya terminado/vendido: el corral queda vacío (stock final 0), sin
+  // necesidad de cargar un pesaje de cierre en 0. Así los kg producidos quedan = lo
+  // vendido menos lo comprado (la ganancia de peso del engorde).
+  const cerrado = String(rodeo.estado || '') === 'cerrado';
+  // Stock final en kg: 0 si está cerrado; el último pesaje si hay; si no, estimado por inventario.
   const pesajes = byTipo('pesaje').slice().sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
   const kgEstimado = kgStockInicial + kgComprados + kgNacidos - kgVendidos - kgBajas;
   const usaPesaje = pesajes.length > 0;
-  const kgStockFinal = usaPesaje ? Number(pesajes[0].kg || 0) : kgEstimado;
+  const kgStockFinal = cerrado ? 0 : (usaPesaje ? Number(pesajes[0].kg || 0) : kgEstimado);
 
-  // Cabezas
+  // Cabezas (0 si el lote está cerrado: ya salieron todos).
   const cabInicial = Number(rodeo.cabezasInicial || 0);
-  const cabActual = cabInicial + sumCab('ingreso') + sumCab('nacimiento') - sumCab('venta') - sumCab('baja');
+  const cabActual = cerrado ? 0 : (cabInicial + sumCab('ingreso') + sumCab('nacimiento') - sumCab('venta') - sumCab('baja'));
 
   // Kg producidos (formula de inventario): (stockFinal + vendidos) - (stockInicial + comprados)
   // Los nacimientos entran en stockFinal -> cuentan como produccion (util para cria).

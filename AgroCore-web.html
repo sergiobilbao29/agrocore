@@ -3013,6 +3013,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/10/2026',
+      titulo:'🔒 v2.274.1 — Cierre de rodeo sin pesaje en 0',
+      desc:'Para cerrar un lote de engorde ya <b>no hace falta</b> cargar un pesaje en 0. Con poner el lote en estado <b>cerrado</b> (Editar lote), el sistema asume el <b>corral vacío</b> y calcula igual los kg producidos, el $/kg, el $/kg terminado y el margen (sobre lo comprado, los costos y lo vendido). Más prolijo y sin movimientos "raros" en la lista.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/10/2026',
       titulo:'🐄 v2.274.0 — Ganadería 360 en pesos/dólares + editar movimientos de rodeo + Historial alineado',
       desc:'Tres mejoras. <b>(1) Ganadería 360:</b> ahora podés ver todo en <b>pesos o dólares</b> (botón arriba) y el período <b>"Todo"</b> incluye también los <b>lotes cerrados</b> (antes solo mostraba los activos); el rendimiento por lote lista los cerrados con su etiqueta. <b>(2) Rodeos:</b> cada <b>movimiento</b> del lote (ingreso, alimentación, sanidad, venta, pesaje…) ahora se puede <b>editar ✏️</b> (fecha, concepto, cabezas, kg, monto, moneda), no solo borrar. Además, en los lotes <b>ya vendidos</b> (cerrados) ahora se calculan igual el <b>GPD</b> y el <b>$/kg terminado</b> (sobre los kg vendidos). <b>(3) Historial de campañas:</b> los valores de las columnas quedan <b>alineados</b> y la tabla muestra todos los rubros.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'05/10/2026',
@@ -30828,7 +30831,8 @@ async function rodVer(id){
         ${kpi('Compra hacienda', '$ '+fmtN(R.costoCompra||0))}
         ${kpi('Ventas', '$ '+fmtN(R.ventasTotal||0),'text-emerald-700')}
       </div>
-      ${!R.usaPesaje?`<div class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-3">Todavía no cargaste un <b>pesaje</b>. Sin pesaje el sistema no ve la ganancia de peso, así que el kg producido y el $/kg producido son estimados. Cargá un pesaje con el kg total actual del lote.</div>`:''}
+      ${(!R.usaPesaje && r.estado!=='cerrado')?`<div class="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-3">Todavía no cargaste un <b>pesaje</b>. Sin pesaje el sistema no ve la ganancia de peso, así que el kg producido y el $/kg producido son estimados. Cargá un pesaje con el kg total actual del lote.</div>`:''}
+      ${r.estado==='cerrado'?`<div class="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2 mb-3">🔒 Lote <b>cerrado</b>: el corral quedó vacío. El resultado se calcula sobre lo comprado, los costos y lo vendido (no hace falta ningún pesaje de cierre).</div>`:''}
       <div class="mb-2 p-2 bg-slate-50 rounded border border-slate-200 text-xs text-slate-600">
         Desglose de costos directos: 🌿 Alimentación $ ${fmtN(R.costoAlim||0)} · 💉 Sanidad $ ${fmtN(R.costoSan||0)} · 👷 Labores $ ${fmtN(R.costoLab||0)} · 📌 Otros $ ${fmtN(R.costoOtro||0)}
       </div>
