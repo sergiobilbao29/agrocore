@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.275.0';
+const AGROCORE_VERSION = '2.276.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3365,6 +3365,9 @@ mountCrud({
     categoriaArticuloId: z.string().nullable().optional(),
     vademecumId: z.string().nullable().optional(),
     esMezcla: z.boolean().optional(),
+    // v2.276 — doble unidad (hortícolas)
+    unidad2: z.string().nullable().optional(),
+    kgPorUnidad2: z.number().nullable().optional(),
   }),
   orderBy: { nombre: 'asc' },
   searchFields: ['nombre', 'categoria', 'sku', 'codigoBarras'],
@@ -16706,6 +16709,118 @@ app.put('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('stock
       return r;
     });
     res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// v2.276 — EMPAQUE / PROCESAMIENTO (hortícolas: cebolla, papa)
+// Entra 1 producto a granel (egreso kg) y salen N clasificados por calibre (ingreso),
+// consumiendo materiales de empaque (egreso) y registrando la merma del proceso.
+// Todo el stock se maneja en la unidad base del producto (kg). Aditivo.
+// ============================================================
+app.get('/api/ordenes-empaque', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const rows = await prisma.ordenEmpaque.findMany({ where: { companyId: req.companyId }, orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }], take: 500 });
+    res.json({ ok: true, data: rows });
+  } catch (e) { next(e); }
+});
+app.get('/api/ordenes-empaque/:id', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const row = await prisma.ordenEmpaque.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!row) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.post('/api/ordenes-empaque', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      fecha: z.coerce.date(),
+      campanaId: z.string().nullable().optional(),
+      productoGranelId: z.string().min(1),
+      kgEntrada: z.coerce.number().positive(),
+      observaciones: z.string().nullable().optional(),
+      salidas: z.array(z.object({
+        productoId: z.string().min(1),
+        calibre: z.string().nullable().optional(),
+        bolsas: z.coerce.number().nullable().optional(),
+        kgPorBolsa: z.coerce.number().nullable().optional(),
+        kg: z.coerce.number().nullable().optional(),
+        precioVenta: z.coerce.number().nullable().optional(),
+      })).min(1),
+      materiales: z.array(z.object({
+        productoId: z.string().min(1),
+        cantidad: z.coerce.number().positive(),
+      })).optional(),
+    }).parse(req.body);
+
+    const granel = await prisma.producto.findFirst({ where: { id: d.productoGranelId, companyId: req.companyId } });
+    if (!granel) return res.status(400).json({ ok: false, error: 'Producto a granel no encontrado' });
+
+    // kg de cada salida: el enviado, o bolsas × kgPorBolsa.
+    const salidas = d.salidas.map(s => {
+      const kg = (s.kg != null && s.kg > 0) ? Number(s.kg) : (Number(s.bolsas || 0) * Number(s.kgPorBolsa || 0));
+      return { ...s, kg: _round2(kg) };
+    });
+    const sumSalidas = salidas.reduce((a, s) => a + Number(s.kg || 0), 0);
+    const kgMerma = _round2(Math.max(0, d.kgEntrada - sumSalidas));
+
+    const result = await prisma.$transaction(async (tx) => {
+      const nro = (await tx.ordenEmpaque.count({ where: { companyId: req.companyId } })) + 1;
+      const movIds = [];
+      // 1) Egreso del granel (sale del stock lo que entra al proceso, merma incluida).
+      const mEg = await tx.movimiento.create({ data: {
+        companyId: req.companyId, productoId: granel.id, fecha: d.fecha, tipo: 'egreso', motivo: 'empaque',
+        cantidad: d.kgEntrada, referencia: `EMP-${nro}`, campanaId: d.campanaId || null,
+        observaciones: `Empaque Nº ${nro}: ${granel.nombre} a clasificado`, userId: req.user?.id || null,
+      }});
+      movIds.push(mEg.id);
+      // 2) Ingreso de cada producto clasificado (en kg).
+      const salidasOut = [];
+      for (const s of salidas) {
+        const prod = await tx.producto.findFirst({ where: { id: s.productoId, companyId: req.companyId } });
+        if (!prod) throw Object.assign(new Error('Producto clasificado no encontrado'), { status: 400 });
+        if (!(s.kg > 0)) continue;
+        const mIn = await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: prod.id, fecha: d.fecha, tipo: 'ingreso', motivo: 'empaque',
+          cantidad: s.kg, precio: s.precioVenta ?? null, referencia: `EMP-${nro}`, campanaId: d.campanaId || null,
+          observaciones: `Empaque Nº ${nro}${s.calibre ? ' · ' + s.calibre : ''}${s.bolsas ? ' · ' + s.bolsas + ' bolsas' : ''}`,
+          userId: req.user?.id || null,
+        }});
+        movIds.push(mIn.id);
+        salidasOut.push({ productoId: prod.id, nombre: prod.nombre, calibre: s.calibre || null, bolsas: s.bolsas || null, kgPorBolsa: s.kgPorBolsa || null, kg: s.kg, precioVenta: s.precioVenta ?? null });
+      }
+      // 3) Egreso de materiales de empaque (bolsas, hilo, etiquetas…).
+      const materialesOut = [];
+      for (const m of (d.materiales || [])) {
+        const prod = await tx.producto.findFirst({ where: { id: m.productoId, companyId: req.companyId } });
+        if (!prod) continue;
+        const mm = await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: prod.id, fecha: d.fecha, tipo: 'egreso', motivo: 'empaque_material',
+          cantidad: m.cantidad, referencia: `EMP-${nro}`,
+          observaciones: `Material consumido en empaque Nº ${nro}`, userId: req.user?.id || null,
+        }});
+        movIds.push(mm.id);
+        materialesOut.push({ productoId: prod.id, nombre: prod.nombre, cantidad: m.cantidad });
+      }
+      return await tx.ordenEmpaque.create({ data: {
+        companyId: req.companyId, fecha: d.fecha, numero: nro, campanaId: d.campanaId || null,
+        productoGranelId: granel.id, kgEntrada: d.kgEntrada, salidas: salidasOut, materiales: materialesOut,
+        kgMerma, observaciones: d.observaciones || null, movIds,
+      }});
+    });
+    res.status(201).json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+app.delete('/api/ordenes-empaque/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const row = await prisma.ordenEmpaque.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!row) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    const ids = Array.isArray(row.movIds) ? row.movIds : [];
+    await prisma.$transaction(async (tx) => {
+      if (ids.length) await tx.movimiento.deleteMany({ where: { id: { in: ids }, companyId: req.companyId } });
+      await tx.ordenEmpaque.delete({ where: { id: row.id } });
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

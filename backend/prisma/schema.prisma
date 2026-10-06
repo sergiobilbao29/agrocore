@@ -524,6 +524,30 @@ model MezclaComponente {
   @@index([mezclaId])
 }
 
+// v2.276: ORDEN DE EMPAQUE / PROCESAMIENTO (hortícolas: cebolla, papa, etc.)
+// Entra un producto "a granel" (se descuenta de stock por kg) y salen uno o varios
+// productos clasificados por calibre (se ingresan a stock), consumiendo materiales de
+// empaque (bolsas, hilo, etiquetas) y registrando la merma del proceso. Aditivo.
+model OrdenEmpaque {
+  id               String   @id @default(cuid())
+  companyId        String
+  fecha            DateTime
+  numero           Int?
+  campanaId        String?
+  productoGranelId String                       // producto a granel que entra
+  kgEntrada        Float                        // kg de granel procesados
+  salidas          Json                         // [{productoId,nombre,calibre,bolsas,kgPorBolsa,kg,precioVenta}]
+  materiales       Json?                        // [{productoId,nombre,cantidad}]
+  kgMerma          Float    @default(0)
+  observaciones    String?
+  estado           String   @default("confirmada")
+  movIds           Json?                        // ids de movimientos de stock generados (para revertir)
+  createdAt        DateTime @default(now())
+
+  @@index([companyId])
+  @@index([fecha])
+}
+
 // ============================================================
 // STOCK: productos (maestro) + movimientos (ledger)
 // ============================================================
@@ -552,6 +576,9 @@ model Producto {
   categoriaArticuloId String?
   vademecumId     String?   // v2.154: vínculo al principio activo del vademécum (dosis/carencia/modo de acción)
   esMezcla        Boolean   @default(false)  // v2.164: producto "ración/mezcla": al consumirlo, se descuentan sus componentes
+  // v2.276: doble unidad de medida (hortícolas): ej. unidad="kg", unidad2="bolsa", kgPorUnidad2=20.
+  unidad2         String?   // unidad secundaria / de presentación (bolsa, malla, bin, cajón)
+  kgPorUnidad2    Float?    // cuántos kg equivale 1 unidad2 (para convertir bolsas <-> kg)
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   categoriaArticulo CategoriaArticulo? @relation(fields: [categoriaArticuloId], references: [id], onDelete: SetNull)

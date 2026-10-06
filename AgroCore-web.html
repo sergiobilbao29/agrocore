@@ -1101,6 +1101,7 @@ const MODULES = [
   // ===== STOCK Y DEPÓSITOS =====
   { id:'stock',         label:'Stock',                icon:'📦', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'movimientos',   label:'Movimientos de stock', icon:'🔁', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'empaque',       label:'Empaque / Clasificación',icon:'📦', perm:'stock:read',    section:'Stock y depósitos' },
   { id:'remitosInternos',label:'Remitos internos',    icon:'📤', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'cerealeras',    label:'Depósitos y cerealeras',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
@@ -3012,6 +3013,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/10/2026',
+      titulo:'📦 v2.276.0 — Empaque / Clasificación (hortícolas: cebolla, papa) + doble unidad',
+      desc:'Nuevo módulo <b>Stock y depósitos → Empaque / Clasificación</b> para producciones que se empacan (cebolla, papa, etc.). Cargás una <b>orden de empaque</b>: entra el producto <b>a granel</b> (kg), salen uno o varios <b>calibres</b> en bolsas (comercial, grande, chica, descarte…), se <b>consumen los materiales</b> (bolsas, hilo, etiquetas) y queda registrada la <b>merma del proceso</b>. El stock del granel baja, el de cada calibre sube y los calibres después se <b>venden</b> normalmente. Además, cada producto puede tener una <b>doble unidad</b> (ej. base <b>kg</b> + presentación <b>bolsa de 20 kg</b>). Todo es opcional y no afecta a los cultivos que ya venías usando.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/10/2026',
       titulo:'📅 v2.275.0 — Planilla de pagos: elegir el mes a liquidar',
       desc:'En <b>Empleados → 🖨️ Planilla de pagos</b> ahora podés <b>elegir el mes</b> que querés pagar (selector arriba del listado). Sirve para cuando cerrás los sueldos <b>el mes siguiente</b>: estando en octubre podés imprimir la planilla de <b>septiembre</b> con los montos de ese mes, sin que se mezcle con lo que ya se cargó del mes nuevo. El total y la impresión toman el mes elegido.' },
@@ -7656,6 +7660,9 @@ async function prodForm(id=null, opts={}) {
             ${[['','— Sin definir —'],['21','21%'],['10.5','10.5%'],['27','27%'],['0','0% / Exento']].map(([v,l])=>`<option value="${v}" ${String(it.ivaDefault??'')===v?'selected':''}>${l}</option>`).join('')}
           </select>
         </div>
+        <div><label class="label">Unidad de presentación <span class="text-slate-400">(opcional)</span></label><input id="f-uni2" class="input" value="${esc(it.unidad2||'')}" placeholder="bolsa, malla, bin, cajón…"/></div>
+        <div><label class="label">Kg por presentación</label><input id="f-kgu2" type="number" step="0.01" class="input" value="${it.kgPorUnidad2||''}" placeholder="ej. 20"/></div>
+        <div class="col-span-2 text-[10px] text-slate-400 -mt-1">Doble unidad (hortícolas): ej. unidad base <b>kg</b> + presentación <b>bolsa</b> de <b>20</b> kg. Se usa en Empaque para convertir bolsas ↔ kg.</div>
         <div class="col-span-2"><label class="label">🧫 Principio activo (vademécum) <span class="text-slate-400">— para dosis, carencia y modo de acción al aplicar</span></label>
           <select id="f-vademecum" class="input">
             <option value="">— Sin vincular —</option>
@@ -7758,6 +7765,8 @@ async function prodSave(id) {
     ivaDefault: ($('#f-ivadef')?.value !== '' && $('#f-ivadef')?.value != null) ? Number($('#f-ivadef').value) : null,
     vademecumId: $('#f-vademecum')?.value || null,
     esMezcla: !!$('#f-esmezcla')?.checked,
+    unidad2: $('#f-uni2')?.value.trim() || null,
+    kgPorUnidad2: $('#f-kgu2')?.value ? Number($('#f-kgu2').value) : null,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
   if (!caId && !cat) return toast('Elegí la categoría','warn');
@@ -30478,6 +30487,195 @@ pages.tableroHacienda = async function(){
  * Se arma reutilizando /api/rodeos (trae "resultado" por lote), guías y
  * liquidaciones. No cambia ninguna carga ni la lógica de stock.
  * ============================================================================= */
+/* =========================================================
+ * EMPAQUE / CLASIFICACIÓN (hortícolas: cebolla, papa)
+ * Entra producto a granel (kg) y salen clasificados por calibre (bolsas),
+ * consumiendo materiales de empaque y registrando la merma del proceso.
+ * ========================================================= */
+let _empSeq = 0;
+async function _empProductos(){
+  let p = state.cache.productos;
+  if (!p) { try { p = (await api('/api/productos')).data||[]; state.cache.productos = p; } catch { p = []; } }
+  return (p||[]).filter(x => x.activo!==false && !(x.esHacienda) && (x.categoria||'').toLowerCase()!=='hacienda' && !x.esFicha);
+}
+function _empProdOpts(prods, sel){
+  return prods.map(p=>`<option value="${p.id}" data-uni="${esc(p.unidad||'')}" data-kgb="${p.kgPorUnidad2||''}" ${p.id===sel?'selected':''}>${esc(p.nombre)}${p.unidad?' ('+esc(p.unidad)+')':''}</option>`).join('');
+}
+pages.empaque = async function(){
+  setHeader('Empaque / Clasificación', 'Procesá cosecha a granel: clasificá por calibre, consumí materiales y registrá la merma');
+  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('empaque','Empaque'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let ordenes=[];
+  try { ordenes=(await api('/api/ordenes-empaque')).data||[]; } catch(e){ return toast(e.message,'error'); }
+  const filas = ordenes.map(o=>{
+    const sal = Array.isArray(o.salidas)?o.salidas:[];
+    const kgClas = sal.reduce((a,s)=>a+Number(s.kg||0),0);
+    const bolsas = sal.reduce((a,s)=>a+Number(s.bolsas||0),0);
+    return `<tr class="table-row">
+      <td>${o.fecha?fmtDate(o.fecha):'—'}</td>
+      <td class="text-center">#${o.numero||''}</td>
+      <td class="text-right">${fmtN(o.kgEntrada||0)} kg</td>
+      <td class="text-right text-emerald-700">${fmtN(kgClas)} kg${bolsas?` · ${fmtN(bolsas)} bolsas`:''}</td>
+      <td class="text-right text-amber-700">${fmtN(o.kgMerma||0)} kg</td>
+      <td class="text-right whitespace-nowrap">
+        <button class="btn btn-ghost text-xs" onclick='empaqueVer(${JSON.stringify(o.id)})'>👁️</button>
+        ${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='empaqueDel(${JSON.stringify(o.id)})'>🗑️</button>`:''}
+      </td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="text-center text-slate-400 py-8">Todavía no hay órdenes de empaque. Tocá “+ Nueva orden”.</td></tr>';
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${ordenes.length} orden${ordenes.length===1?'':'es'} de empaque</div>
+      ${can('stock:create')?`<button class="btn btn-primary" onclick="empaqueForm()">+ Nueva orden de empaque</button>`:''}
+    </div>
+    <div class="kpi p-0 overflow-hidden overflow-x-auto"><table class="data text-sm">
+      <thead><tr><th>Fecha</th><th class="text-center">N°</th><th class="text-right">Entra (granel)</th><th class="text-right">Sale (clasificado)</th><th class="text-right">Merma</th><th></th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table></div>
+    <div class="text-[11px] text-slate-500 mt-3">Al guardar, baja el stock del producto a granel, sube el stock de cada calibre y se descuentan los materiales de empaque. La merma del proceso queda registrada (no vuelve al stock).</div>`;
+};
+async function empaqueForm(){
+  const prods = await _empProductos();
+  if (!prods.length) return toast('Primero cargá productos en el Catálogo (granel, calibres y materiales).','warn');
+  let campanas = state.cache.campanas; if(!campanas){ try{ campanas=(await api('/api/campanas')).data||[]; state.cache.campanas=campanas; }catch{ campanas=[]; } }
+  const hoy = new Date().toISOString().slice(0,10);
+  openModal({
+    title:'📦 Nueva orden de empaque', size:'max-w-5xl',
+    body:`
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div><label class="label">Fecha *</label><input id="emp-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div class="md:col-span-2"><label class="label">Campaña / lote (opcional)</label>
+          <select id="emp-camp" class="input"><option value="">— Sin campaña —</option>${(campanas||[]).map(c=>`<option value="${c.id}">${esc(campLabel(c))}</option>`).join('')}</select></div>
+        <div><label class="label">Kg que entran *</label><input id="emp-kg" type="number" step="0.01" class="input text-right" oninput="empaqueRecalc()" placeholder="kg a granel"/></div>
+      </div>
+      <div><label class="label">Producto a granel que entra *</label>
+        <select id="emp-granel" class="input">${_empProdOpts(prods)}</select></div>
+
+      <div class="kpi p-0 overflow-hidden my-3">
+        <div class="px-3 py-2 bg-slate-50 border-b flex items-center justify-between"><span class="text-sm font-medium">🧅 Salidas por calibre</span><button class="btn btn-secondary text-xs" onclick="empaqueAddSal()">+ Calibre</button></div>
+        <div class="overflow-x-auto"><table class="data text-sm"><thead><tr><th>Producto (calibre)</th><th>Etiqueta calibre</th><th class="text-right">Bolsas</th><th class="text-right">Kg/bolsa</th><th class="text-right">Kg</th><th class="text-right">$/bolsa</th><th></th></tr></thead><tbody id="emp-sal"></tbody></table></div>
+      </div>
+      <div class="kpi p-0 overflow-hidden my-3">
+        <div class="px-3 py-2 bg-slate-50 border-b flex items-center justify-between"><span class="text-sm font-medium">🎁 Materiales de empaque consumidos</span><button class="btn btn-secondary text-xs" onclick="empaqueAddMat()">+ Material</button></div>
+        <div class="overflow-x-auto"><table class="data text-sm"><thead><tr><th>Material</th><th class="text-right">Cantidad</th><th></th></tr></thead><tbody id="emp-mat"></tbody></table></div>
+      </div>
+      <div class="flex items-center justify-end gap-6 text-sm p-2 bg-slate-50 rounded-lg">
+        <div>Entra: <b id="emp-t-ent">0</b> kg</div>
+        <div>Clasificado: <b class="text-emerald-700" id="emp-t-sal">0</b> kg</div>
+        <div>Merma: <b class="text-amber-700" id="emp-t-mer">0</b> kg (<span id="emp-t-mpct">0</span>%)</div>
+      </div>
+      <input type="hidden" id="emp-prods" value='${esc(JSON.stringify(prods.map(p=>({id:p.id,nombre:p.nombre,unidad:p.unidad,kgb:p.kgPorUnidad2||null}))))}'/>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="empaqueSave()">💾 Guardar orden</button>`
+  });
+  empaqueAddSal(); empaqueAddSal(); empaqueAddMat();
+}
+function _empProdsCache(){ try{ return JSON.parse($('#emp-prods').value||'[]'); }catch{ return []; } }
+function empaqueAddSal(){
+  const tb=$('#emp-sal'); if(!tb) return; const prods=_empProdsCache(); const rid=++_empSeq;
+  const opts=prods.map(p=>`<option value="${p.id}" data-kgb="${p.kgb||''}">${esc(p.nombre)}</option>`).join('');
+  tb.insertAdjacentHTML('beforeend', `<tr data-sal>
+    <td><select class="input text-sm" data-sf="prod" onchange="empaqueSalProd(this)"><option value="">— Elegí —</option>${opts}</select></td>
+    <td><input class="input text-sm" data-sf="cal" placeholder="Comercial / Grande…" style="min-width:120px"/></td>
+    <td><input type="number" step="1" class="input text-sm text-right" data-sf="bolsas" style="width:80px" oninput="empaqueRecalc()"/></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-sf="kgb" style="width:80px" value="20" oninput="empaqueRecalc()"/></td>
+    <td class="text-right" data-sf="kg">0</td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-sf="precio" style="width:90px" placeholder="$"/></td>
+    <td><button class="btn btn-ghost text-red-600 text-xs" onclick="this.closest('tr').remove();empaqueRecalc()">✕</button></td>
+  </tr>`);
+}
+function empaqueSalProd(sel){
+  const kgb=sel.options[sel.selectedIndex]?.dataset?.kgb;
+  const tr=sel.closest('tr'); const i=tr.querySelector('[data-sf="kgb"]');
+  if(kgb && i && (!i.value || Number(i.value)===20)) i.value=kgb;
+  empaqueRecalc();
+}
+function empaqueAddMat(){
+  const tb=$('#emp-mat'); if(!tb) return; const prods=_empProdsCache();
+  const opts=prods.map(p=>`<option value="${p.id}">${esc(p.nombre)}</option>`).join('');
+  tb.insertAdjacentHTML('beforeend', `<tr data-mat>
+    <td><select class="input text-sm" data-mf="prod"><option value="">— Elegí —</option>${opts}</select></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-mf="cant" style="width:110px"/></td>
+    <td><button class="btn btn-ghost text-red-600 text-xs" onclick="this.closest('tr').remove()">✕</button></td>
+  </tr>`);
+}
+function empaqueRecalc(){
+  let sal=0;
+  $$('#emp-sal tr[data-sal]').forEach(tr=>{
+    const b=Number(tr.querySelector('[data-sf="bolsas"]')?.value||0);
+    const k=Number(tr.querySelector('[data-sf="kgb"]')?.value||0);
+    const kg=b*k; const c=tr.querySelector('[data-sf="kg"]'); if(c) c.textContent=fmtN(kg);
+    sal+=kg;
+  });
+  const ent=Number($('#emp-kg')?.value||0);
+  const mer=Math.max(0,ent-sal);
+  if($('#emp-t-ent'))$('#emp-t-ent').textContent=fmtN(ent);
+  if($('#emp-t-sal'))$('#emp-t-sal').textContent=fmtN(sal);
+  if($('#emp-t-mer'))$('#emp-t-mer').textContent=fmtN(mer);
+  if($('#emp-t-mpct'))$('#emp-t-mpct').textContent=ent>0?((mer/ent*100).toFixed(1)):'0';
+}
+async function empaqueSave(){
+  const fecha=$('#emp-fecha')?.value; const granel=$('#emp-granel')?.value; const kg=Number($('#emp-kg')?.value||0);
+  if(!fecha) return toast('Falta la fecha','warn');
+  if(!granel) return toast('Elegí el producto a granel','warn');
+  if(!(kg>0)) return toast('Ingresá los kg que entran','warn');
+  const salidas=$$('#emp-sal tr[data-sal]').map(tr=>({
+    productoId: tr.querySelector('[data-sf="prod"]')?.value||'',
+    calibre: tr.querySelector('[data-sf="cal"]')?.value.trim()||null,
+    bolsas: Number(tr.querySelector('[data-sf="bolsas"]')?.value||0)||null,
+    kgPorBolsa: Number(tr.querySelector('[data-sf="kgb"]')?.value||0)||null,
+    precioVenta: Number(tr.querySelector('[data-sf="precio"]')?.value||0)||null,
+  })).filter(s=>s.productoId && (s.bolsas||0)>0);
+  if(!salidas.length) return toast('Cargá al menos un calibre de salida','warn');
+  const materiales=$$('#emp-mat tr[data-mat]').map(tr=>({
+    productoId: tr.querySelector('[data-mf="prod"]')?.value||'',
+    cantidad: Number(tr.querySelector('[data-mf="cant"]')?.value||0),
+  })).filter(m=>m.productoId && m.cantidad>0);
+  const data={ fecha:new Date(fecha+'T12:00:00').toISOString(), campanaId:$('#emp-camp')?.value||null, productoGranelId:granel, kgEntrada:kg, salidas, materiales };
+  try{ await api('/api/ordenes-empaque',{method:'POST',body:JSON.stringify(data)}); toast('Orden de empaque guardada','success'); closeModal(); delete state.cache.stockMap; pages.empaque(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function empaqueVer(id){
+  let o; try{ o=(await api('/api/ordenes-empaque/'+id)).data; }catch(e){ return toast(e.message,'error'); }
+  if(!o) return toast('No encontrada','error');
+  const sal=Array.isArray(o.salidas)?o.salidas:[]; const mat=Array.isArray(o.materiales)?o.materiales:[];
+  const kgClas=sal.reduce((a,s)=>a+Number(s.kg||0),0);
+  const salHtml=sal.map(s=>`<tr><td>${esc(s.nombre||'')}${s.calibre?' · '+esc(s.calibre):''}</td><td class="text-right">${s.bolsas?fmtN(s.bolsas)+' bolsas':''}</td><td class="text-right">${fmtN(s.kg||0)} kg</td><td class="text-right">${s.precioVenta?fmt$(s.precioVenta):'—'}</td></tr>`).join('');
+  const matHtml=mat.length?mat.map(m=>`<tr><td>${esc(m.nombre||'')}</td><td class="text-right">${fmtN(m.cantidad||0)}</td></tr>`).join(''):'<tr><td colspan="2" class="text-slate-400 text-xs">Sin materiales</td></tr>';
+  openModal({ title:`📦 Orden de empaque #${o.numero||''}`, size:'max-w-2xl',
+    body:`<div class="text-sm text-slate-600 mb-2">${o.fecha?fmtDate(o.fecha):''}</div>
+      <div class="grid grid-cols-3 gap-2 mb-3">
+        <div class="kpi"><div class="text-xs text-slate-500">Entra (granel)</div><div class="font-bold">${fmtN(o.kgEntrada||0)} kg</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Clasificado</div><div class="font-bold text-emerald-700">${fmtN(kgClas)} kg</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Merma (${o.kgEntrada?((o.kgMerma/o.kgEntrada*100).toFixed(1)):'0'}%)</div><div class="font-bold text-amber-700">${fmtN(o.kgMerma||0)} kg</div></div>
+      </div>
+      <table class="data text-sm mb-3"><thead><tr><th>Calibre</th><th class="text-right">Bolsas</th><th class="text-right">Kg</th><th class="text-right">$/bolsa</th></tr></thead><tbody>${salHtml}</tbody></table>
+      <div class="text-xs font-semibold text-slate-600 mb-1">Materiales consumidos</div>
+      <table class="data text-sm"><tbody>${matHtml}</tbody></table>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button><button class="btn btn-primary" onclick='empaqueImprimir(${JSON.stringify(o.id)})'>🖨️ Imprimir</button>` });
+}
+async function empaqueImprimir(id){
+  let o; try{ o=(await api('/api/ordenes-empaque/'+id)).data; }catch(e){ return toast(e.message,'error'); }
+  if(!o) return;
+  const sal=Array.isArray(o.salidas)?o.salidas:[]; const mat=Array.isArray(o.materiales)?o.materiales:[];
+  const empresa=(state.user?.companies?.find(c=>c.id===state.companyId)||{}).name||'Empresa';
+  const kgClas=sal.reduce((a,s)=>a+Number(s.kg||0),0);
+  const filasS=sal.map(s=>`<tr><td>${esc(s.nombre||'')}${s.calibre?' · '+esc(s.calibre):''}</td><td class=r>${s.bolsas?fmtN(s.bolsas):'—'}</td><td class=r>${fmtN(s.kg||0)}</td></tr>`).join('');
+  const filasM=mat.map(m=>`<tr><td>${esc(m.nombre||'')}</td><td class=r>${fmtN(m.cantidad||0)}</td></tr>`).join('')||'<tr><td colspan=2>—</td></tr>';
+  const html=`<!doctype html><html lang=es><head><meta charset=utf-8><title>Empaque #${o.numero||''}</title>
+    <style>*{font-family:Arial,sans-serif}body{margin:24px;color:#1f2937}h1{color:#143C19;font-size:18px;margin:0}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #d1d5db;padding:5px 8px;font-size:13px}th{background:#f1f5f9;text-align:left}.r{text-align:right}.k{display:inline-block;margin-right:24px}</style></head>
+    <body><h1>Parte de empaque — ${esc(empresa)}</h1>
+    <div style="font-size:12px;color:#555;margin:4px 0 10px">Orden #${o.numero||''} · ${o.fecha?new Date(o.fecha).toLocaleDateString('es-AR'):''}</div>
+    <div><span class=k><b>Entra (granel):</b> ${fmtN(o.kgEntrada||0)} kg</span><span class=k><b>Clasificado:</b> ${fmtN(kgClas)} kg</span><span class=k><b>Merma:</b> ${fmtN(o.kgMerma||0)} kg</span></div>
+    <table><thead><tr><th>Calibre</th><th class=r>Bolsas</th><th class=r>Kg</th></tr></thead><tbody>${filasS}</tbody></table>
+    <h3 style="font-size:13px;margin:14px 0 0">Materiales de empaque</h3>
+    <table><thead><tr><th>Material</th><th class=r>Cantidad</th></tr></thead><tbody>${filasM}</tbody></table>
+    </body></html>`;
+  const w=window.open('','_blank'); if(w){ w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>w.print(),300); }
+}
+async function empaqueDel(id){
+  if(!confirm('¿Eliminar esta orden de empaque? Se revierten los movimientos de stock que generó.')) return;
+  try{ await api('/api/ordenes-empaque/'+id,{method:'DELETE'}); toast('Orden eliminada','success'); delete state.cache.stockMap; pages.empaque(); }
+  catch(e){ toast(e.message,'error'); }
+}
 pages.ganaderiaDash = async function(){
   setHeader('Ganadería 360', 'Toda la hacienda de un vistazo: cabezas, kg, costo por kg, margen y circuito comercial');
   if(!can('stock:read')){ $('#page-body').innerHTML = stubPage('ganaderiaDash','Ganadería 360'); return; }
