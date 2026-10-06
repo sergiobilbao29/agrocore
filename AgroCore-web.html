@@ -3012,6 +3012,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'05/10/2026',
+      titulo:'💱 v2.273.0 — Campañas: insumos en pesos o dólares + editar insumos de una labor',
+      desc:'Dos arreglos en <b>Insumos y labores</b>. 1) Ahora al cargar o editar un <b>insumo</b> podés elegir la <b>moneda</b> (pesos o dólares) y el sistema convierte bien los importes al ver los costos en $ o en u$s (antes tomaba todo como dólares y los cargados en pesos salían mal). 2) Los <b>insumos consumidos dentro de una labor</b> ahora se pueden <b>editar</b>: al editar la labor aparece la lista de insumos para agregar, cambiar cantidades/precios o quitar, y el stock se recalcula solo. En el listado, el insumo marcado como <b>🚜 de labor</b> tiene un botón que te lleva a editarlo en su labor.' },
     { tag:'Interno', color:'bg-slate-100 text-slate-700 border-slate-300', fecha:'05/10/2026',
       titulo:'🔑 v2.272.0 — Licencia / suscripción con vencimiento',
       desc:'Control interno de suscripción: cada instalación puede llevar una <b>licencia firmada con vencimiento</b>. Si está vencida, el botón de <b>actualizar el sistema</b> queda bloqueado hasta renovar (en Administración → actualizaciones → <b>🔑 Licencia</b> se ve el estado y se carga el código de renovación). El resto del sistema sigue funcionando normal.' },
@@ -25407,17 +25410,18 @@ pages.insumos = async function() {
                          const total = itemTotal(a);
                          const isParcial = a.hectareasAplicadas != null && Number(a.hectareasAplicadas) < haLote;
                          const deLabor = a.origen === 'labor';
+                         const parentLabor = (deLabor && a.laborId) ? laboresC.find(x=>x.id===a.laborId) : null;
                          return `
                          <tr class="table-row">
-                           <td><b>${esc(a.item)}</b>${deLabor?` <span class="badge badge-gray text-[10px]" title="Insumo consumido dentro de una labor. Se edita/borra desde la labor.">🚜 de labor</span>`:''}</td>
+                           <td><b>${esc(a.item)}</b>${deLabor?` <span class="badge badge-gray text-[10px]" title="Insumo consumido dentro de una labor. Se edita desde la labor.">🚜 de labor</span>`:''}</td>
                            <td><span class="badge badge-blue">${esc(a.subtipo||'')}</span></td>
                            <td class="text-right">${fmtN(a.unidadHa||0)}</td>
-                           <td class="text-right">${fmtN(insConv(a.precioUnit||0,'USD'))}</td>
+                           <td class="text-right">${fmtN(insConv(a.precioUnit||0, a.moneda))}</td>
                            <td class="text-right">${fmtN(insConv(a.costoHa||0, a.moneda))}</td>
                            <td class="text-right ${isParcial?'text-amber-600 font-semibold':''}" title="${isParcial?'Aplicación parcial (lote: '+haLote+' ha)':''}">${fmtN(ha)}${isParcial?' *':''}</td>
                            <td class="text-right font-semibold">${fmtN(total)}</td>
                            <td>${a.fecha?fmtDate(a.fecha):'—'}</td>
-                           <td class="text-right whitespace-nowrap">${deLabor?'<span class="text-[11px] text-slate-400">—</span>':`${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)},${JSON.stringify(a.campanaId)})'>🗑️</button>`}</td>
+                           <td class="text-right whitespace-nowrap">${deLabor?(parentLabor&&can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar en su labor" onclick='aplicEditForm(${JSON.stringify(parentLabor)})'>✏️ labor</button>`:'<span class="text-[11px] text-slate-400">—</span>'):`${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='aplicEditForm(${JSON.stringify(a)})'>✏️</button>`:''}<button class="btn btn-ghost text-xs" title="Eliminar" onclick='aplicDel(${JSON.stringify(a.id)},${JSON.stringify(a.campanaId)})'>🗑️</button>`}</td>
                          </tr>`;}).join('')}</tbody>
                      </table>`}
                 <div class="text-xs font-semibold text-slate-600 uppercase mt-4 mb-2 flex items-center justify-between">
@@ -25572,13 +25576,16 @@ function aplicForm(tipo, campanaId) {
   openModal({
     title: 'Cargar insumos al lote', size:'max-w-5xl',
     body: `
-      <div class="grid grid-cols-3 gap-3 mb-3">
+      <div class="grid grid-cols-4 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Campaña / Lote *</label>
           <select id="f-camp" class="input" onchange="insCampChange()">
             ${campanas.map(c=>`<option value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}" ${c.id===campanaId?'selected':''}>${esc(campLabel(c))} (${fmtN(c.lote?.hectareas||0)} ha)</option>`).join('')}
           </select>
         </div>
         <div><label class="label">Fecha *</label><input id="f-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">Moneda de los costos</label>
+          <select id="f-moneda" class="input">${monedasOpts().map(([k,l])=>`<option value="${k}" ${k==='USD'?'selected':''}>${esc(l)}</option>`).join('')}</select>
+        </div>
       </div>
       <div class="kpi p-0 overflow-hidden mb-2">
         <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
@@ -25589,14 +25596,14 @@ function aplicForm(tipo, campanaId) {
           <table class="data text-sm">
             <thead><tr>
               <th>Tipo *</th><th>Producto *</th>
-              <th class="text-right">Unid/ha</th><th class="text-right">u\$s/unidad</th>
-              <th class="text-right">u\$s/ha</th><th class="text-right">Ha aplic. *</th><th></th>
+              <th class="text-right">Unid/ha</th><th class="text-right">Costo/unidad</th>
+              <th class="text-right">Costo/ha</th><th class="text-right">Ha aplic. *</th><th></th>
             </tr></thead>
             <tbody id="f-ins-body"></tbody>
           </table>
         </div>
       </div>
-      <div class="text-[11px] text-slate-500 mb-1">Cargá todos los insumos del lote de una sola vez. Las hectáreas aplicadas vienen del lote; cambialas por fila si aplicaste solo en una parte. Cada insumo descuenta del stock al guardar.</div>
+      <div class="text-[11px] text-slate-500 mb-1">Cargá todos los insumos del lote de una sola vez, en la <b>moneda</b> que elegiste arriba (pesos o dólares). Las hectáreas aplicadas vienen del lote; cambialas por fila si aplicaste solo en una parte. Cada insumo descuenta del stock al guardar.</div>
       <datalist id="f-catlist">${itemNames.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="aplicSaveMulti()">💾 Guardar insumos</button>`
@@ -25666,6 +25673,7 @@ async function aplicSaveMulti(){
   // Mediodía local: evita que la fecha se corra un día por la zona horaria al guardar/mostrar.
   const fecha = fecRaw ? new Date(fecRaw+'T12:00:00').toISOString() : null;
   if (!campanaId) return toast('Campaña requerida','warn');
+  const moneda = $('#f-moneda')?.value || 'USD';
   const rows = $$('#f-ins-body tr[data-ins]');
   const items = [];
   for (const tr of rows){
@@ -25685,6 +25693,7 @@ async function aplicSaveMulti(){
       unidadHa: uha ? Number(uha) : null,
       precioUnit: pu ? Number(pu) : null,
       costoHa: cha || 0,
+      moneda,
       hectareasAplicadas: ha,
       fecha,
       observaciones: null,
@@ -25725,8 +25734,9 @@ function aplicEditForm(a){
         ${esIns?`
         <div><label class="label">Tipo</label><select id="ae-sub" class="input">${tiposInsumoElegibles(a.subtipo).map(s=>`<option ${s===a.subtipo?'selected':''}>${esc(s)}</option>`).join('')}</select></div>
         <div><label class="label">Unid/ha</label><input id="ae-uha" type="number" step="0.01" class="input" value="${a.unidadHa??''}"/></div>
-        <div><label class="label">u\$s/unidad</label><input id="ae-pu" type="number" step="0.01" class="input" value="${a.precioUnit??''}"/></div>`:''}
-        <div><label class="label">u\$s/ha</label><input id="ae-cha" type="number" step="0.01" class="input" value="${a.costoHa??''}"/></div>
+        <div><label class="label">Costo/unidad</label><input id="ae-pu" type="number" step="0.01" class="input" value="${a.precioUnit??''}"/></div>`:''}
+        <div><label class="label">Costo/ha</label><input id="ae-cha" type="number" step="0.01" class="input" value="${a.costoHa??''}"/></div>
+        ${esIns?`<div><label class="label">Moneda</label><select id="ae-mon" class="input">${monedasOpts().map(([k,l])=>`<option value="${k}" ${k===(a.moneda||'USD')?'selected':''}>${esc(l)}</option>`).join('')}</select></div>`:''}
         <div><label class="label">Ha aplicadas</label><input id="ae-ha" type="number" step="0.01" class="input" value="${a.hectareasAplicadas??''}"/></div>
         <div><label class="label">Fecha</label><input id="ae-fec" type="date" class="input" value="${a.fecha?String(a.fecha).slice(0,10):''}"/></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="ae-obs" class="input" rows="2">${esc(a.observaciones||'')}</textarea></div>
@@ -25750,6 +25760,7 @@ async function aplicEditSave(id, esIns){
     data.subtipo = $('#ae-sub')?.value || null;
     data.unidadHa = num('#ae-uha');
     data.precioUnit = num('#ae-pu');
+    data.moneda = $('#ae-mon')?.value || 'USD';
   }
   try { await api('/api/aplicaciones/'+id, { method:'PUT', body: JSON.stringify(data) });
     toast('Actualizado','success'); closeModal(); delete state.cache.aplicaciones; pages.insumos();
@@ -25834,7 +25845,7 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
           </div>
         </div>
         ${editMode ? `
-        <div class="text-[11px] text-slate-500">Este es el precio/costo de la labor por hectárea (se muestra en la campaña en la moneda elegida). Para cambiar los <b>empleados</b> o los <b>insumos consumidos</b>, borrá la labor y volvé a cargarla.</div>
+        <div class="text-[11px] text-slate-500">Este es el precio/costo de la labor por hectárea (se muestra en la campaña en la moneda elegida). Los <b>insumos consumidos</b> se editan abajo. Para cambiar los <b>empleados</b>, borrá la labor y volvé a cargarla.</div>
         ` : `
         <div class="text-[11px] text-slate-500 mb-3">El % de cada empleado se aplica sobre el precio de referencia. La labor se valoriza en la moneda elegida (en la campaña se convierte a la moneda que elijas).</div>
         <table class="data text-sm">
@@ -25879,7 +25890,6 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
 
       ${empleadosSection}
 
-      ${editMode ? '' : `
       <div class="kpi p-0 overflow-hidden mb-3">
         <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <span class="text-sm font-medium text-slate-700">🧪 Insumos consumidos (descuentan del stock)</span>
@@ -25889,7 +25899,8 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
           <thead><tr><th>Producto</th><th class="text-right">Cantidad</th><th class="text-right">Precio unit.</th><th class="text-right">Total</th><th></th></tr></thead>
           <tbody id="la-ins"></tbody>
         </table>
-      </div>`}
+        ${editMode?'<div class="text-[11px] text-slate-500 px-3 py-2">Podés agregar, cambiar o quitar insumos. Al guardar se recalcula el stock consumido por esta labor.</div>':''}
+      </div>
 
       <div><label class="label">Observaciones</label><textarea id="la-obs" class="input" rows="2"></textarea></div>
       <input type="hidden" id="la-mode" value="${avanzada?'avanzada':'simple'}"/>
@@ -25918,6 +25929,11 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
       if ($('#la-tp')) $('#la-tp').value = 'por_hectarea';
       if ($('#la-mon') && edit.moneda) $('#la-mon').value = edit.moneda;
       if ($('#la-obs')) $('#la-obs').value = edit.observaciones || '';
+      // Prefill de insumos consumidos de la labor (para poder editarlos).
+      if ($('#la-ins') && Array.isArray(edit.insumos)) {
+        $('#la-ins').innerHTML = '';
+        edit.insumos.forEach(i => laAddIns({ productoId: i.productoId, cantidad: i.cantidad, precioUnit: i.precioUnit }));
+      }
       laRecalc();
     } else {
       setHa();
@@ -26144,6 +26160,11 @@ async function laborSave() {
     const pr = $('#la-pr')?.value ? Number($('#la-pr').value) : null;
     const tp = $('#la-tp')?.value || 'por_hectarea';
     const costoHa = (pr != null) ? (tp === 'por_hectarea' ? pr : (ha ? pr / ha : pr)) : null;
+    const insumosEd = $$('#la-ins tr[data-la]').map(tr => ({
+      productoId: tr.querySelector('[data-laf="productoId"]').value,
+      cantidad: Number(tr.querySelector('[data-laf="cantidad"]').value || 0),
+      precioUnit: Number(tr.querySelector('[data-laf="precioUnit"]').value || 0),
+    })).filter(i => i.productoId && i.cantidad > 0);
     const data = {
       item: tipo,
       costoHa,
@@ -26151,10 +26172,11 @@ async function laborSave() {
       hectareasAplicadas: ha,
       fecha: $('#la-fec').value ? new Date($('#la-fec').value+'T12:00:00').toISOString() : null,
       observaciones: $('#la-obs').value.trim() || null,
+      insumos: insumosEd,
     };
     try {
       await api('/api/aplicaciones/'+editId, { method:'PUT', body: JSON.stringify(data) });
-      toast('Labor actualizada','success'); state._insScrollTo = camp; closeModal(); delete state.cache.aplicaciones; pages.insumos();
+      toast('Labor actualizada','success'); state._insScrollTo = camp; closeModal(); delete state.cache.aplicaciones; delete state.cache.stockMap; pages.insumos();
     } catch (e) { toast(e.message,'error'); }
     return;
   }

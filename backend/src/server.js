@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.272.0';
+const AGROCORE_VERSION = '2.273.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4049,14 +4049,21 @@ app.get('/api/aplicaciones', requireCompany, requirePermission('produccion:read'
       return (n * cotMon) / cotUSD;
     };
     const labInsMapped = [];
+    // Insumos consumidos agrupados por labor (para poder verlos/editarlos desde la labor).
+    const labInsByLabor = {};
     for (const li of labIns) {
       const L = li.labor || {};
       const mon = L.monedaCosto || 'USD';
       const ha = Number(L.hectareasAplicadas || 0) || null;
       const totalUSD = await _aUSD(li.total != null ? li.total : (Number(li.precioUnit || 0) * Number(li.cantidad || 0)), mon, L.fecha);
       const precioUnitUSD = await _aUSD(li.precioUnit || 0, mon, L.fecha);
+      (labInsByLabor[li.laborId] = labInsByLabor[li.laborId] || []).push({
+        id: li.id, productoId: li.productoId, item: _prodNombre[li.productoId] || 'Insumo',
+        cantidad: li.cantidad, unidad: li.unidad || null,
+        precioUnit: li.precioUnit ?? null, total: li.total ?? null, observaciones: li.observaciones || null,
+      });
       labInsMapped.push({
-        id: 'LI-' + li.id, campanaId: L.campanaId, tipo: 'insumo', origen: 'labor',
+        id: 'LI-' + li.id, campanaId: L.campanaId, tipo: 'insumo', origen: 'labor', laborId: li.laborId,
         item: _prodNombre[li.productoId] || 'Insumo', subtipo: li.unidad || null,
         unidadHa: ha ? Number(li.cantidad || 0) / ha : Number(li.cantidad || 0),
         precioUnit: precioUnitUSD,
@@ -4069,14 +4076,14 @@ app.get('/api/aplicaciones', requireCompany, requirePermission('produccion:read'
       ...ins.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'insumo',
         item: x.nombre, subtipo: x.unidad || null,
         unidadHa: x.cantidad, precioUnit: x.precioUnit ?? null,
-        costoHa: x.costo, moneda: 'USD', hectareasAplicadas: x.hectareasAplicadas,
+        costoHa: x.costo, moneda: x.moneda || 'USD', hectareasAplicadas: x.hectareasAplicadas,
         fecha: x.fecha, observaciones: x.observaciones })),
       ...labInsMapped,
       ...lab.map(x => ({ id: x.id, campanaId: x.campanaId, tipo: 'labor',
         item: x.tipo, subtipo: null,
         unidadHa: null, precioUnit: null,
         costoHa: x.costo, moneda: x.monedaCosto || 'USD', hectareasAplicadas: x.hectareasAplicadas,
-        fecha: x.fecha, observaciones: x.observaciones })),
+        fecha: x.fecha, observaciones: x.observaciones, insumos: labInsByLabor[x.id] || [] })),
     ];
     res.json({ ok: true, data });
   } catch (e) { next(e); }
@@ -4092,6 +4099,7 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
       unidadHa: z.number().nullable().optional(),
       precioUnit: z.number().nullable().optional(),
       costoHa: z.number().nullable().optional(),
+      moneda: z.string().nullable().optional(),
       hectareasAplicadas: z.number().nullable().optional(),
       fecha: z.coerce.date().nullable().optional(),
       observaciones: z.string().nullable().optional(),
@@ -4111,7 +4119,7 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
         const ins = await tx.insumoAplicado.create({
           data: { campanaId: d.campanaId, productoId: prod?.id || null, nombre: d.item, cantidad: d.unidadHa || 0,
             unidad: d.subtipo || 'u/ha', fecha, costo: d.costoHa || 0,
-            precioUnit: d.precioUnit ?? null,
+            precioUnit: d.precioUnit ?? null, moneda: d.moneda || 'USD',
             hectareasAplicadas: d.hectareasAplicadas ?? null,
             observaciones: d.observaciones || null },
         });
@@ -4154,10 +4162,18 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
       unidadHa: z.number().nullable().optional(),
       precioUnit: z.number().nullable().optional(),
       costoHa: z.number().nullable().optional(),
+      moneda: z.string().nullable().optional(),
       monedaCosto: z.string().nullable().optional(),
       hectareasAplicadas: z.number().nullable().optional(),
       fecha: z.coerce.date().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      // Insumos consumidos de una labor (si se manda, se reemplazan por completo).
+      insumos: z.array(z.object({
+        productoId: z.string(),
+        cantidad: z.coerce.number().nullable().optional(),
+        precioUnit: z.coerce.number().nullable().optional(),
+        observaciones: z.string().nullable().optional(),
+      })).optional(),
     });
     const d = schema.parse(req.body || {});
     const ins = await prisma.insumoAplicado.findFirst({ where: { id, campana: { companyId: req.companyId } } });
@@ -4168,6 +4184,7 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
         cantidad: d.unidadHa !== undefined ? (d.unidadHa || 0) : ins.cantidad,
         precioUnit: d.precioUnit !== undefined ? d.precioUnit : ins.precioUnit,
         costo: d.costoHa !== undefined ? (d.costoHa || 0) : ins.costo,
+        moneda: d.moneda !== undefined ? (d.moneda || 'USD') : ins.moneda,
         hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : ins.hectareasAplicadas,
         fecha: d.fecha || ins.fecha,
         observaciones: d.observaciones !== undefined ? d.observaciones : ins.observaciones,
@@ -4185,14 +4202,52 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
     }
     const lab = await prisma.laborAplicada.findFirst({ where: { id, campana: { companyId: req.companyId } } });
     if (lab) {
-      const row = await prisma.laborAplicada.update({ where: { id }, data: {
-        tipo: d.item ?? lab.tipo,
-        costo: d.costoHa !== undefined ? (d.costoHa || 0) : lab.costo,
-        monedaCosto: d.monedaCosto !== undefined ? (d.monedaCosto || 'USD') : lab.monedaCosto,
-        hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : lab.hectareasAplicadas,
-        fecha: d.fecha || lab.fecha,
-        observaciones: d.observaciones !== undefined ? d.observaciones : lab.observaciones,
-      }});
+      const nuevaFecha = d.fecha || lab.fecha;
+      const nuevoTipo = d.item ?? lab.tipo;
+      const row = await prisma.$transaction(async (tx) => {
+        const r = await tx.laborAplicada.update({ where: { id }, data: {
+          tipo: nuevoTipo,
+          costo: d.costoHa !== undefined ? (d.costoHa || 0) : lab.costo,
+          monedaCosto: d.monedaCosto !== undefined ? (d.monedaCosto || 'USD') : lab.monedaCosto,
+          hectareasAplicadas: d.hectareasAplicadas !== undefined ? d.hectareasAplicadas : lab.hectareasAplicadas,
+          fecha: nuevaFecha,
+          observaciones: d.observaciones !== undefined ? d.observaciones : lab.observaciones,
+        }});
+        // Si vienen insumos, se reemplazan por completo: borramos los actuales (y su
+        // egreso de stock) y recreamos los nuevos con su movimiento.
+        if (d.insumos !== undefined) {
+          const viejos = await tx.laborInsumo.findMany({ where: { laborId: id } });
+          const movIds = viejos.map(v => v.movimientoId).filter(Boolean);
+          if (movIds.length) await tx.movimiento.deleteMany({ where: { id: { in: movIds }, companyId: req.companyId } });
+          await tx.laborInsumo.deleteMany({ where: { laborId: id } });
+          for (const it of (d.insumos || [])) {
+            if (!it.productoId) continue;
+            const prod = await tx.producto.findFirst({ where: { id: it.productoId, companyId: req.companyId } });
+            if (!prod) continue;
+            const cant = Number(it.cantidad || 0);
+            const total = Number(it.precioUnit || 0) * cant;
+            let movId = null;
+            if (cant > 0) {
+              const mov = await tx.movimiento.create({ data: {
+                companyId: req.companyId, productoId: it.productoId, depositoId: null,
+                fecha: nuevaFecha, tipo: 'egreso', motivo: 'aplicacion',
+                cantidad: cant, precio: it.precioUnit ?? null, total: total || null,
+                referencia: `LAB-${id.slice(-6).toUpperCase()}`,
+                observaciones: `Consumido en labor: ${nuevoTipo}`,
+                userId: req.user?.id || null,
+              }});
+              movId = mov.id;
+            }
+            await tx.laborInsumo.create({ data: {
+              laborId: id, productoId: it.productoId,
+              cantidad: cant, unidad: prod.unidad,
+              precioUnit: it.precioUnit ?? null, total: total || null,
+              movimientoId: movId, observaciones: it.observaciones || null,
+            }});
+          }
+        }
+        return r;
+      });
       return res.json({ ok: true, data: { ...row, tipo: 'labor' } });
     }
     res.status(404).json({ ok: false, error: 'No encontrado' });
