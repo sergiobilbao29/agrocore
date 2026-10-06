@@ -3013,6 +3013,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/10/2026',
+      titulo:'📅 v2.275.0 — Planilla de pagos: elegir el mes a liquidar',
+      desc:'En <b>Empleados → 🖨️ Planilla de pagos</b> ahora podés <b>elegir el mes</b> que querés pagar (selector arriba del listado). Sirve para cuando cerrás los sueldos <b>el mes siguiente</b>: estando en octubre podés imprimir la planilla de <b>septiembre</b> con los montos de ese mes, sin que se mezcle con lo que ya se cargó del mes nuevo. El total y la impresión toman el mes elegido.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/10/2026',
       titulo:'🔒 v2.274.1 — Cierre de rodeo sin pesaje en 0',
       desc:'Para cerrar un lote de engorde ya <b>no hace falta</b> cargar un pesaje en 0. Con poner el lote en estado <b>cerrado</b> (Editar lote), el sistema asume el <b>corral vacío</b> y calcula igual los kg producidos, el $/kg, el $/kg terminado y el margen (sobre lo comprado, los costos y lo vendido). Más prolijo y sin movimientos "raros" en la lista.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/10/2026',
@@ -23654,8 +23657,9 @@ function empCatLabel(c){
 // Calcula, para cada empleado activo, lo que corresponde pagar este mes (con arrastre)
 // y arma una hoja imprimible con monto + alias + CBU al lado de cada uno. Permite
 // sumar a mano otros pagos (que no son de empleados) antes de imprimir.
-async function empPlanillaPagos(){
-  const periodo = empPeriodoHoy();
+async function empPlanillaPagos(periodo){
+  periodo = periodo || empPeriodoHoy();
+  state._ppPeriodo = periodo;
   let emps = state.cache.empleados;
   try { if(!emps){ emps = await crudList('empleados'); } } catch(e){ return toast(e.message,'error'); }
   const activos = (emps||[]).filter(e=>e.activo!==false);
@@ -23683,6 +23687,11 @@ async function empPlanillaPagos(){
     title:'🖨️ Planilla de pagos · '+empMesLabel(periodo),
     size:'max-w-4xl',
     body:`
+      <div class="flex items-center gap-2 mb-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
+        <label class="text-sm font-medium text-slate-700">📅 Mes a liquidar</label>
+        <input type="month" id="pp-periodo" class="input text-sm" style="width:auto" value="${periodo}" max="${empPeriodoHoy()}" onchange="empPlanillaPagos(this.value)"/>
+        <span class="text-[11px] text-slate-500">Elegí el mes que querés pagar (por ej. el mes que ya cerró).</span>
+      </div>
       <p class="text-xs text-slate-500 mb-2">Revisá los montos (podés editarlos), completá alias/CBU si falta y sumá otros pagos que no sean de empleados. Después tocá <b>Imprimir</b>.</p>
       <div class="overflow-x-auto border border-slate-200 rounded-lg">
         <table class="min-w-full text-sm">
@@ -23731,7 +23740,7 @@ function empPlanillaRecalc(){
 function empPlanillaImprimir(){
   const rows = empPlanillaLeer();
   if (!rows.length) return toast('No hay pagos tildados para imprimir','warn');
-  const periodo = empPeriodoHoy();
+  const periodo = (document.getElementById('pp-periodo')?.value) || state._ppPeriodo || empPeriodoHoy();
   const empresa = (state.user?.companies?.find(c=>c.id===state.companyId)||{}).name || 'Empresa';
   const total = rows.reduce((a,r)=>a+(r.monto||0),0);
   const hoy = new Date().toLocaleDateString('es-AR');
