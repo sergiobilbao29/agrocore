@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.273.0';
+const AGROCORE_VERSION = '2.274.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -16423,13 +16423,20 @@ function _rodeoResultado(rodeo, eventos, usd) {
   const ventasTotal = sumCostoARS('venta');
 
   const costoKgProducido = kgProducidos > 0 ? costoDirecto / kgProducidos : null;
-  const costoKgTerminado = kgStockFinal > 0 ? costoTotalConCompra / kgStockFinal : null;
+  // $/kg terminado: costo total ÷ kg "terminados". En un lote en marcha son los kg en
+  // stock; en un lote ya vendido (stock 0) usamos los kg vendidos, así el costo por kg
+  // de carne terminada sigue teniendo sentido.
+  const kgTerminado = kgStockFinal > 0 ? kgStockFinal : kgVendidos;
+  const costoKgTerminado = kgTerminado > 0 ? costoTotalConCompra / kgTerminado : null;
 
-  // GPD (kg/cab/dia): kg producidos / cabezas actuales / dias
+  // GPD (kg/cab/dia): kg producidos / cabezas / dias.
+  // En lotes cerrados (ya vendidos) cabActual = 0, así que usamos las cabezas que
+  // pasaron por el corral (iniciales + ingresos + nacimientos) para igual poder mostrarlo.
   let gpd = null;
   const fIni = rodeo.fechaInicio ? new Date(rodeo.fechaInicio) : null;
-  const fFin = usaPesaje ? new Date(pesajes[0].fecha) : new Date();
-  if (fIni && cabActual > 0) { const dias = Math.max(1, (fFin - fIni) / 86400000); gpd = kgProducidos / cabActual / dias; }
+  const fFin = usaPesaje ? new Date(pesajes[0].fecha) : (rodeo.fechaFin ? new Date(rodeo.fechaFin) : new Date());
+  const cabRef = cabActual > 0 ? cabActual : (cabInicial + sumCab('ingreso') + sumCab('nacimiento'));
+  if (fIni && cabRef > 0) { const dias = Math.max(1, (fFin - fIni) / 86400000); gpd = kgProducidos / cabRef / dias; }
 
   return {
     kgComprados, kgNacidos, kgVendidos, kgBajas, kgStockInicial, kgStockFinal, kgEstimado, usaPesaje,
@@ -16648,6 +16655,53 @@ app.delete('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('st
       await tx.rodeoEvento.delete({ where: { id: ev.id } });
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// Editar un evento de rodeo (campos básicos: fecha, concepto, cabezas, kg, monto, moneda).
+// No re-hace las vinculaciones financieras/stock (para eso, borrá el evento y recargalo).
+// Si el evento tiene un movimiento de stock simple asociado, le ajusta fecha/total.
+app.put('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const ev = await prisma.rodeoEvento.findFirst({ where: { id: req.params.eid, rodeoId: req.params.id, companyId: req.companyId } });
+    if (!ev) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const d = z.object({
+      fecha: z.coerce.date().optional(),
+      concepto: z.string().nullable().optional(),
+      cabezas: z.coerce.number().int().nullable().optional(),
+      kg: z.coerce.number().nullable().optional(),
+      monto: z.coerce.number().nullable().optional(),
+      moneda: z.enum(['ARS','USD']).nullable().optional(),
+    }).parse(req.body || {});
+    const data = {};
+    if (d.fecha !== undefined) data.fecha = d.fecha;
+    if (d.concepto !== undefined) data.concepto = d.concepto || null;
+    if (d.cabezas !== undefined) data.cabezas = d.cabezas;
+    if (d.kg !== undefined) data.kg = d.kg;
+    if (d.monto !== undefined) data.monto = d.monto;
+    if (d.moneda !== undefined && d.moneda) data.moneda = d.moneda;
+    const row = await prisma.$transaction(async (tx) => {
+      const r = await tx.rodeoEvento.update({ where: { id: ev.id }, data });
+      // Ajustar el movimiento de stock simple asociado (si lo hay) a la nueva fecha/total.
+      if (ev.movimientoStockId) {
+        const mvData = {};
+        if (data.fecha) mvData.fecha = data.fecha;
+        if (d.monto !== undefined) mvData.total = d.monto != null ? d.monto : null;
+        if (Object.keys(mvData).length) await tx.movimiento.updateMany({ where: { id: ev.movimientoStockId, companyId: req.companyId }, data: mvData });
+      }
+      // Si la venta/compra generó una cuenta corriente propia, actualizar su importe/fecha.
+      if (d.monto !== undefined || data.fecha) {
+        const upd = {};
+        if (d.monto !== undefined) { upd.debe = d.monto != null ? d.monto : 0; }
+        if (data.fecha) upd.fecha = data.fecha;
+        if (Object.keys(upd).length) {
+          await tx.ctaCte.updateMany({ where: { referencia: `RODVENTA-${ev.id}`, companyId: req.companyId }, data: upd });
+          const updPagar = { ...upd }; if (d.monto !== undefined) { delete updPagar.debe; updPagar.haber = d.monto != null ? d.monto : 0; }
+          await tx.ctaCte.updateMany({ where: { referencia: `RODCOMPRA-${ev.id}`, companyId: req.companyId }, data: updPagar });
+        }
+      }
+      return r;
+    });
+    res.json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
 

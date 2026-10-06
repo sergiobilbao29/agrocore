@@ -3012,6 +3012,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/10/2026',
+      titulo:'🐄 v2.274.0 — Ganadería 360 en pesos/dólares + editar movimientos de rodeo + Historial alineado',
+      desc:'Tres mejoras. <b>(1) Ganadería 360:</b> ahora podés ver todo en <b>pesos o dólares</b> (botón arriba) y el período <b>"Todo"</b> incluye también los <b>lotes cerrados</b> (antes solo mostraba los activos); el rendimiento por lote lista los cerrados con su etiqueta. <b>(2) Rodeos:</b> cada <b>movimiento</b> del lote (ingreso, alimentación, sanidad, venta, pesaje…) ahora se puede <b>editar ✏️</b> (fecha, concepto, cabezas, kg, monto, moneda), no solo borrar. Además, en los lotes <b>ya vendidos</b> (cerrados) ahora se calculan igual el <b>GPD</b> y el <b>$/kg terminado</b> (sobre los kg vendidos). <b>(3) Historial de campañas:</b> los valores de las columnas quedan <b>alineados</b> y la tabla muestra todos los rubros.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'05/10/2026',
       titulo:'💱 v2.273.0 — Campañas: insumos en pesos o dólares + editar insumos de una labor',
       desc:'Dos arreglos en <b>Insumos y labores</b>. 1) Ahora al cargar o editar un <b>insumo</b> podés elegir la <b>moneda</b> (pesos o dólares) y el sistema convierte bien los importes al ver los costos en $ o en u$s (antes tomaba todo como dólares y los cargados en pesos salían mal). 2) Los <b>insumos consumidos dentro de una labor</b> ahora se pueden <b>editar</b>: al editar la labor aparece la lista de insumos para agregar, cambiar cantidades/precios o quitar, y el stock se recalcula solo. En el listado, el insumo marcado como <b>🚜 de labor</b> tiene un botón que te lleva a editarlo en su labor.' },
@@ -13230,9 +13233,9 @@ pages.historialCampanas = async function() {
       <div class="font-bold">${esc(d.c.ciclo||'—')}</div>
       <div class="text-[10px] font-normal opacity-80 mt-0.5">${d.enCurso?'En curso':''}</div></th>`).join('');
   const grpRow = (txt)=>`<tr><td colspan="${nc+1}" class="px-3 py-1.5 bg-emerald-50 text-emerald-800 font-bold text-xs uppercase tracking-wide sticky left-0">${txt}</td></tr>`;
-  const genRow = (lbl, fn, cls)=>`<tr class="border-t border-slate-100 hover:bg-slate-50">
+  const genRow = (lbl, fn, cls, alignRight)=>`<tr class="border-t border-slate-100 hover:bg-slate-50">
     <td class="px-3 py-1.5 text-slate-600 sticky left-0 bg-white z-10 ${cls||''}">${lbl}</td>
-    ${datos.map(d=>`<td class="px-3 py-1.5 text-center ${cls||''}">${fn(d)}</td>`).join('')}</tr>`;
+    ${datos.map(d=>`<td class="px-3 py-1.5 ${alignRight?'text-right tabular-nums':'text-center'} ${cls||''}">${fn(d)}</td>`).join('')}</tr>`;
   const famRow = ([k,lbl])=>`<tr class="border-t border-slate-50 hover:bg-slate-50">
     <td class="px-3 py-1.5 text-slate-600 sticky left-0 bg-white z-10">${lbl}</td>
     ${datos.map(d=>`<td class="px-3 py-1.5 text-right tabular-nums ${d.fam[k]?'text-slate-700':'text-slate-300'}">${d.fam[k]?M(d.fam[k]):'—'}</td>`).join('')}</tr>`;
@@ -13255,10 +13258,10 @@ pages.historialCampanas = async function() {
             ${datos.map(d=>`<td class="px-3 py-2 text-right tabular-nums text-slate-800">${M(d.costoTotal)}</td>`).join('')}
           </tr>
           ${grpRow('📊 Resultados económicos')}
-          ${genRow('Rinde obtenido (qq/ha)', d=>`<span class="font-medium">${d.rindeQq?_plN2(d.rindeQq):'—'}</span>${d.enCurso&&d.rindeQq?' <span class="text-[10px] text-slate-400">est.</span>':''}`)}
-          ${genRow('Precio promedio ('+sym+'/qq)', d=>`${d.precioQq?(sym+' '+_plN2(d.precioQq*rate)):'—'}${d.precioEstimado&&d.precioQq?' <span class="text-[10px] text-slate-400">pizarra</span>':''}`)}
-          ${genRow('Ingreso bruto ('+sym+'/ha)', d=>M(d.ingreso))}
-          ${genRow('Rinde de indiferencia (qq/ha)', d=>`<span class="text-amber-700 font-semibold">${d.rindeIndif?_plN2(d.rindeIndif):'—'}</span>`)}
+          ${genRow('Rinde obtenido (qq/ha)', d=>`<span class="font-medium">${d.rindeQq?_plN2(d.rindeQq):'—'}</span>${d.enCurso&&d.rindeQq?' <span class="text-[10px] text-slate-400">est.</span>':''}`, '', true)}
+          ${genRow('Precio promedio ('+sym+'/qq)', d=>`${d.precioQq?(sym+' '+_plN2(d.precioQq*rate)):'—'}${d.precioEstimado&&d.precioQq?' <span class="text-[10px] text-slate-400">pizarra</span>':''}`, '', true)}
+          ${genRow('Ingreso bruto ('+sym+'/ha)', d=>M(d.ingreso), '', true)}
+          ${genRow('Rinde de indiferencia (qq/ha)', d=>`<span class="text-amber-700 font-semibold">${d.rindeIndif?_plN2(d.rindeIndif):'—'}</span>`, '', true)}
           <tr class="border-t-2 border-slate-300 bg-emerald-50/60 font-bold">
             <td class="px-3 py-2 sticky left-0 bg-emerald-50 z-10">📈 MARGEN BRUTO / HA</td>
             ${datos.map(d=>`<td class="px-3 py-2 text-right tabular-nums ${d.margen>=0?'text-emerald-700':'text-red-600'}">${d.margen>=0?'+':''}${M(Math.abs(d.margen)).replace('—','0')}</td>`).join('')}
@@ -30481,9 +30484,22 @@ pages.ganaderiaDash = async function(){
   const inPer = d => { if(!desde) return true; const x=new Date(d); return !isNaN(x) && x>=desde; };
   const perLbl = per==='mes' ? 'este mes' : (per==='anio' ? 'este año' : 'todo');
 
+  // Moneda de vista (Pesos / Dólares). Los montos de los rodeos están en ARS.
+  try { await cargarCotizVivas(); } catch {}
+  const _usd = Number((state.cache.cotizVivas||{}).USD||0);
+  state._ganMoneda = state._ganMoneda || 'ARS';
+  const ganMon = state._ganMoneda==='USD' ? 'USD' : 'ARS';
+  const conv = v => ganMon==='USD' ? (_usd>0 ? Number(v||0)/_usd : 0) : Number(v||0);
+  const money = v => ganMon==='USD' ? ('u$s '+fmtN(Math.round(conv(v)))) : fmt$(v);
+
   const activos = rodeos.filter(r=>r.estado==='activo');
-  const S = k => activos.reduce((a,r)=>a+(r.resultado?.[k]||0),0);
-  const cab = S('cabActual'), kgProd = S('kgProducidos'), margen = S('margen');
+  // Lotes del período: los activos (en engorde ahora) + los cerrados dentro del período.
+  // En "Todo" entran todos (incluidos los cerrados de años anteriores).
+  const enPeriodo = r => { if(per==='todo') return true; if(r.estado==='activo') return true; const f=r.fechaFin||r.fechaInicio; return f?inPer(f):false; };
+  const rodeosPer = rodeos.filter(enPeriodo);
+  const S = k => rodeosPer.reduce((a,r)=>a+(r.resultado?.[k]||0),0);
+  const cab = activos.reduce((a,r)=>a+(r.resultado?.cabActual||0),0);
+  const kgProd = S('kgProducidos'), margen = S('margen');
   const cCompra=S('costoCompra'), cAlim=S('costoAlim'), cSan=S('costoSan'), cLab=S('costoLab'), cOtro=S('costoOtro');
   const costoDir = cAlim+cSan+cLab+cOtro;
   const invTotal = cCompra+costoDir;
@@ -30513,17 +30529,17 @@ pages.ganaderiaDash = async function(){
     <div class="flex items-center gap-2 text-xs">
       <div class="w-32 shrink-0 text-slate-600">${r.l}</div>
       <div class="flex-1 bg-slate-100 rounded h-4 overflow-hidden"><div style="width:${Math.round(r.v/maxR*100)}%;background:${r.c};height:100%"></div></div>
-      <div class="w-28 shrink-0 text-right font-semibold text-slate-700">${fmt$(r.v)}</div>
+      <div class="w-28 shrink-0 text-right font-semibold text-slate-700">${money(r.v)}</div>
     </div>`;
 
-  // Ranking de lotes por margen (mejor y peor)
-  const ranked = activos.slice().sort((a,b)=>(b.resultado?.margen||0)-(a.resultado?.margen||0));
-  const rankRow = r => { const R=r.resultado||{}; return `
+  // Ranking de lotes por margen (incluye los del período: activos + cerrados)
+  const ranked = rodeosPer.slice().sort((a,b)=>(b.resultado?.margen||0)-(a.resultado?.margen||0));
+  const rankRow = r => { const R=r.resultado||{}; const cerr = r.estado==='cerrado'; return `
     <tr class="table-row cursor-pointer" onclick='rodVer(${JSON.stringify(r.id)})'>
-      <td>${(RODEO_SIST[r.sistema]||['🐮'])[0]} <b>${esc(r.nombre)}</b><div class="text-[10px] text-slate-500">${esc(rodSistLbl(r.sistema))}${r.categoria?' · '+esc(r.categoria):''}</div></td>
+      <td>${(RODEO_SIST[r.sistema]||['🐮'])[0]} <b>${esc(r.nombre)}</b>${cerr?' <span class="badge badge-gray text-[9px]">cerrado</span>':''}<div class="text-[10px] text-slate-500">${esc(rodSistLbl(r.sistema))}${r.categoria?' · '+esc(r.categoria):''}</div></td>
       <td class="text-right">${R.cabActual||0}</td>
-      <td class="text-right whitespace-nowrap">${R.costoKgProducido!=null?'$ '+fmtN(R.costoKgProducido):'<span class="text-slate-400">pesá</span>'}</td>
-      <td class="text-right whitespace-nowrap font-semibold ${(R.margen||0)>=0?'text-emerald-700':'text-red-600'}">${fmt$(R.margen||0)}</td>
+      <td class="text-right whitespace-nowrap">${R.costoKgProducido!=null?money(R.costoKgProducido):'<span class="text-slate-400">pesá</span>'}</td>
+      <td class="text-right whitespace-nowrap font-semibold ${(R.margen||0)>=0?'text-emerald-700':'text-red-600'}">${money(R.margen||0)}</td>
     </tr>`; };
 
   const kpi = (lbl, val, sub, cls) => `
@@ -30532,12 +30548,15 @@ pages.ganaderiaDash = async function(){
       ${sub?`<div class="text-[10px] text-slate-400 mt-0.5">${sub}</div>`:''}</div>`;
 
   const pill = (v,on) => `<button class="px-3 py-1.5 ${on?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._ganPeriodo='${v}';pages.ganaderiaDash()">${v==='mes'?'Mes':(v==='anio'?'Año':'Todo')}</button>`;
+  const pillMon = (v,on) => `<button class="px-3 py-1.5 ${on?'bg-agro-700 text-white':'bg-white text-slate-600'}" onclick="state._ganMoneda='${v}';pages.ganaderiaDash()">${v==='ARS'?'Pesos':'Dólares'}</button>`;
+  const simbMon = ganMon==='USD' ? 'u$s' : '$';
 
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
-      <div class="text-sm text-slate-600">${activos.length} lote${activos.length===1?'':'s'} activo${activos.length===1?'':'s'} · circuito comercial de <b>${perLbl}</b></div>
-      <div class="flex items-center gap-2">
+      <div class="text-sm text-slate-600">${rodeosPer.length} lote${rodeosPer.length===1?'':'s'} · circuito comercial de <b>${perLbl}</b></div>
+      <div class="flex items-center gap-2 flex-wrap">
         <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm">${pill('mes',per==='mes')}${pill('anio',per==='anio')}${pill('todo',per==='todo')}</div>
+        <div class="inline-flex rounded-lg border border-slate-200 overflow-hidden text-sm">${pillMon('ARS',ganMon==='ARS')}${pillMon('USD',ganMon==='USD')}</div>
         <button class="btn btn-outline" onclick="go('rodeos')">📊 Tablero por lote</button>
         <button class="btn btn-outline" onclick="go('mapaCampos')">🗺️ Mapa</button>
       </div>
@@ -30545,14 +30564,14 @@ pages.ganaderiaDash = async function(){
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       ${kpi('Cabezas en engorde', fmtN(cab))}
-      ${kpi('Kg producidos', fmtN(kgProd)+' kg', 'lotes activos', 'text-emerald-700')}
-      ${kpi('$/kg producido (prom.)', kgPromCosto!=null?('$ '+fmtN(kgPromCosto)):'—', 'ponderado por kg')}
-      ${kpi('Margen total', fmt$(margen), 'ventas − costos', margen>=0?'text-emerald-700':'text-red-600')}
+      ${kpi('Kg producidos', fmtN(kgProd)+' kg', perLbl, 'text-emerald-700')}
+      ${kpi(simbMon+'/kg producido (prom.)', kgPromCosto!=null?money(kgPromCosto):'—', 'ponderado por kg')}
+      ${kpi('Margen total', money(margen), 'ventas − costos', margen>=0?'text-emerald-700':'text-red-600')}
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
       <div class="kpi">
-        <div class="flex items-center justify-between mb-3"><div class="font-semibold text-slate-700">💵 Plata invertida por rubro</div><div class="text-xs text-slate-500">Total ${fmt$(invTotal)}</div></div>
+        <div class="flex items-center justify-between mb-3"><div class="font-semibold text-slate-700">💵 Plata invertida por rubro</div><div class="text-xs text-slate-500">Total ${money(invTotal)}</div></div>
         <div class="space-y-2">${rubros.map(barRow).join('')}</div>
         <div class="text-[11px] text-slate-500 mt-3">La <b>Alimentación</b> incluye el alimento cargado en cada rodeo y la <b>pastura</b> imputada desde la campaña forrajera. Los costos salen de los eventos de cada lote.</div>
       </div>
@@ -30568,9 +30587,9 @@ pages.ganaderiaDash = async function(){
         <div class="font-semibold text-slate-700 mb-3">🧾 Ventas y liquidaciones (${perLbl})</div>
         <div class="grid grid-cols-2 gap-3">
           ${kpi('Liquidaciones', fmtN(liqsPer.length), 'de animales')}
-          ${kpi('Neto vendido', fmt$(ventasNeto), '', 'text-emerald-700')}
+          ${kpi('Neto vendido', money(ventasNeto), '', 'text-emerald-700')}
           ${kpi('Pendientes de cobro', fmtN(liqsPend.length))}
-          ${kpi('$ por cobrar', fmt$(porCobrar), '', porCobrar>0?'text-amber-600':'')}
+          ${kpi(simbMon+' por cobrar', money(porCobrar), '', porCobrar>0?'text-amber-600':'')}
         </div>
         <button class="btn btn-secondary text-xs mt-3 w-full" onclick="go('liquidacionesHacienda')">Ver liquidaciones →</button>
       </div>
@@ -30579,7 +30598,7 @@ pages.ganaderiaDash = async function(){
         <div class="grid grid-cols-2 gap-3">
           ${kpi('Guías', fmtN(guiasPer.length), `${guiasVenta.length} venta · ${guiasCompra.length} compra`)}
           ${kpi('A vincular', fmtN(guiasSinVincular.length), 'cierre fiscal', guiasSinVincular.length>0?'text-amber-600':'')}
-          ${kpi('Saldo a pagar', fmt$(saldoGuias), 'guías de compra', saldoGuias>0?'text-red-600':'')}
+          ${kpi('Saldo a pagar', money(saldoGuias), 'guías de compra', saldoGuias>0?'text-red-600':'')}
           ${kpi('Cabezas movidas', fmtN(guiasPer.reduce((a,g)=>a+((g.renglones||[]).reduce((s,x)=>s+(Number(x.cabezas)||0),0)),0)))}
         </div>
         <button class="btn btn-secondary text-xs mt-3 w-full" onclick="go('guiasHacienda')">Ver guías →</button>
@@ -30794,7 +30813,7 @@ async function rodVer(id){
       <td class="text-right text-xs">${e.cabezas!=null?e.cabezas:''}</td>
       <td class="text-right text-xs">${e.kg!=null?fmtN(e.kg)+' kg':''}</td>
       <td class="text-right text-xs ${e.tipo==='venta'?'text-emerald-700':''}">${e.monto?rodMoney(e.monto,e.moneda):''}</td>
-      <td class="text-right" onclick="event.stopPropagation()">${can('stock:update')?`<button class="btn btn-ghost text-[11px] text-red-600" onclick='rodEvDel(${JSON.stringify(r.id)},${JSON.stringify(e.id)})'>🗑️</button>`:''}</td>
+      <td class="text-right whitespace-nowrap" onclick="event.stopPropagation()">${can('stock:update')?`<button class="btn btn-ghost text-[11px]" title="Editar" onclick='rodEvEditForm(${JSON.stringify(r.id)},${JSON.stringify(e)})'>✏️</button><button class="btn btn-ghost text-[11px] text-red-600" title="Eliminar" onclick='rodEvDel(${JSON.stringify(r.id)},${JSON.stringify(e.id)})'>🗑️</button>`:''}</td>
     </tr>`).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin eventos. Cargá el ingreso de hacienda y los costos.</td></tr>`;
   const btn=(t)=>`<button class="btn btn-secondary text-xs" onclick='rodEvForm(${JSON.stringify(r.id)},"${t}")'>${(RODEO_EV[t]||['📌'])[0]} ${rodEvLbl(t)}</button>`;
   openModal({ title:`${(RODEO_SIST[r.sistema]||['🐮'])[0]} ${esc(r.nombre)}`, size:'max-w-5xl',
@@ -31032,6 +31051,40 @@ async function rodPesajeFichas(rodeoId){
 async function rodEvDel(rodeoId, eid){
   if(!confirm('¿Borrar este evento?')) return;
   try{ await api(`/api/rodeos/${rodeoId}/eventos/${eid}`,{method:'DELETE'}); toast('Borrado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
+}
+// Editar un evento del rodeo (campos básicos). Las vinculaciones financieras/stock
+// (cuenta a cobrar/pagar, factura, descuento de galpón) no se rehacen desde acá.
+function rodEvEditForm(rodeoId, e){
+  const tieneCab=['ingreso','nacimiento','pesaje','venta','baja','capitalizacion','pension'].includes(e.tipo);
+  const tieneKg=['ingreso','nacimiento','pesaje','venta','baja'].includes(e.tipo);
+  const tieneMonto=['alimentacion','sanidad','labor','otro','venta','ingreso','capitalizacion','pension','servicio'].includes(e.tipo);
+  const fec = e.fecha ? String(e.fecha).slice(0,10) : '';
+  openModal2({ title:`✏️ Editar ${rodEvLbl(e.tipo)}`, size:'max-w-md',
+    body:`
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha *</label><input id="ree-fecha" type="date" class="input" value="${fec}"/></div>
+        <div><label class="label">Concepto</label><input id="ree-concepto" class="input" value="${esc(e.concepto||'')}"/></div>
+        ${tieneCab?`<div><label class="label">Cabezas</label><input id="ree-cab" type="number" class="input" value="${e.cabezas??''}"/></div>`:''}
+        ${tieneKg?`<div><label class="label">Kg</label><input id="ree-kg" type="number" step="0.01" class="input" value="${e.kg??''}"/></div>`:''}
+        ${tieneMonto?`<div><label class="label">${e.tipo==='venta'?'Ingreso':'Monto'}</label><input id="ree-monto" type="number" step="0.01" class="input" value="${e.monto??''}"/></div>
+        <div><label class="label">Moneda</label><select id="ree-mon" class="input"><option value="ARS" ${(e.moneda||'ARS')==='ARS'?'selected':''}>ARS</option><option value="USD" ${e.moneda==='USD'?'selected':''}>USD</option></select></div>`:''}
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Se editan los datos del movimiento. Si este evento había generado una cuenta a cobrar/pagar propia, se ajusta su importe. Para cambiar vínculos a facturas o el descuento de galpón, borralo y volvé a cargarlo.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='rodEvEditSave(${JSON.stringify(rodeoId)},${JSON.stringify(e.id)})'>💾 Guardar</button>` });
+}
+async function rodEvEditSave(rodeoId, eid){
+  const num = (sel) => { const v = $(sel)?.value; return (v!==undefined && v!=='') ? Number(v) : null; };
+  const fecha = $('#ree-fecha')?.value;
+  if(!fecha) return toast('Falta la fecha','warn');
+  const data = {
+    fecha: new Date(fecha+'T12:00:00').toISOString(),
+    concepto: $('#ree-concepto')?.value.trim() || null,
+  };
+  if ($('#ree-cab')) data.cabezas = num('#ree-cab');
+  if ($('#ree-kg')) data.kg = num('#ree-kg');
+  if ($('#ree-monto')) data.monto = num('#ree-monto');
+  if ($('#ree-mon')) data.moneda = $('#ree-mon').value;
+  try{ await api(`/api/rodeos/${rodeoId}/eventos/${eid}`,{method:'PUT',body:JSON.stringify(data)}); closeModal2(); toast('Evento actualizado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
 }
 // Imputar el costo de una campaña forrajera (pastura) al rodeo como alimentación.
 async function rodForrajeraForm(rodeoId){
