@@ -1082,6 +1082,7 @@ const MODULES = [
   { id:'mapaCampos',    label:'Mapa de lotes',        icon:'🛰️', perm:'produccion:read', section:'Producción' },
   { id:'campanas',      label:'Campañas',             icon:'🌱', perm:'produccion:read', section:'Producción' },
   { id:'historialCampanas', label:'Historial de campañas', icon:'📖', perm:'produccion:read', section:'Producción' },
+  { id:'presupuestoCampanas', label:'Presupuesto de campaña', icon:'🎯', perm:'produccion:read', section:'Producción' },
   { id:'ordenesTrabajo', label:'Órdenes de trabajo', icon:'📋', perm:'produccion:read', section:'Producción' },
   { id:'insumos',       label:'Insumos y labores',    icon:'🧪', perm:'produccion:read', section:'Producción' },
   { id:'serviciosTerceros', label:'Servicios a terceros', icon:'🤝', perm:'produccion:read', section:'Producción' },
@@ -3013,6 +3014,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'07/10/2026',
+      titulo:'🎯 v2.277.0 — Presupuesto de campaña (presupuestado vs. ejecutado, con semáforo)',
+      desc:'Nueva pantalla <b>Producción → Presupuesto de campaña</b> para <b>planificar cuánto vas a gastar</b> en la próxima campaña y controlar los desvíos mientras la hacés. Lo mejor: el sistema <b>propone un presupuesto estimado automáticamente</b> tomando el <b>promedio de las campañas anteriores</b> del mismo lote/cultivo (así tenés una base de referencia y solo ajustás cantidades y precios, no cargás todo de cero). El <b>plan es por hectárea</b> por rubro (semillas, herbicidas, fertilizantes, fungicidas/insecticidas, labores, cosecha, costos fijos): ponés <b>cant/ha × $/unidad</b> o el <b>costo/ha</b> directo, en US$ o pesos, y se multiplica por las hectáreas del lote para darte la <b>previsión total</b> (el dinero que tenés que reservar). A medida que avanza la campaña, el <b>ejecutado real</b> sale solo de los <b>insumos y labores</b> que ya cargás, y una tabla muestra por rubro lo <b>Presupuestado vs. Ejecutado</b>, el <b>desvío en $ y %</b> y un <b>semáforo</b> (🟢 bajo presupuesto · 🟡 en regla dentro de la tolerancia · 🔴 sobrepasado), con <b>tolerancia configurable</b>. Hay una vista <b>Consolidada</b> con la <b>previsión financiera total del año</b> (todas las campañas). Todo es <b>multimoneda</b> (USD/$) y no afecta nada de lo que ya venías usando.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/10/2026',
       titulo:'📦 v2.276.0 — Empaque / Clasificación (hortícolas: cebolla, papa) + doble unidad',
       desc:'Nuevo módulo <b>Stock y depósitos → Empaque / Clasificación</b> para producciones que se empacan (cebolla, papa, etc.). Cargás una <b>orden de empaque</b>: entra el producto <b>a granel</b> (kg), salen uno o varios <b>calibres</b> en bolsas (comercial, grande, chica, descarte…), se <b>consumen los materiales</b> (bolsas, hilo, etiquetas) y queda registrada la <b>merma del proceso</b>. El stock del granel baja, el de cada calibre sube y los calibres después se <b>venden</b> normalmente. Además, cada producto puede tener una <b>doble unidad</b> (ej. base <b>kg</b> + presentación <b>bolsa de 20 kg</b>). Todo es opcional y no afecta a los cultivos que ya venías usando. <b>Arreglo:</b> al cargar un <b>insumo en una Sociedad/UTE</b> con cantidad/ha y precio unitario, ahora el <b>costo se calcula bien</b> (antes podía quedar en $0 si no se tipeaba el costo por hectárea).' },
@@ -13104,6 +13108,464 @@ async function corteDel(campanaId, id){
  * (cultivo, variedad, ciclo, rinde, fechas, análisis de suelo, insumos
  * —incluidos fertilizantes—, labores y observaciones).
  * ========================================================= */
+/* =========================================================
+ * PRESUPUESTO DE CAMPAÑA (plan proyectado vs real) — v2.277.0
+ * Reutiliza la agrupación por rubro del Historial y la multimoneda.
+ * El plan se guarda en campana.presupuesto (JSON). El "real/ejecutado"
+ * sale de insumos y labores ya cargados. Semáforo por rubro con tolerancia.
+ * ========================================================= */
+const PRESU_RUBROS = [
+  ['semillas','🌰 Semillas y Curasemillas'],
+  ['herbicidas','🧪 Herbicidas y Barbecho'],
+  ['fertilizantes','🌱 Fertilizantes'],
+  ['fungicidas','🐛 Fungicidas / Insecticidas'],
+  ['labores','🚜 Labores (siembra/fumig.)'],
+  ['cosecha','🌾 Cosecha'],
+  ['otros','📦 Otros insumos'],
+  ['fijos','🏛️ Costos fijos / estructura'],
+];
+function _presuFamDe(tipo){ const t=(tipo||'').toLowerCase();
+  if(/semilla|curasemilla/.test(t)) return 'semillas';
+  if(/fertiliz/.test(t)) return 'fertilizantes';
+  if(/fungicida|insecticida/.test(t)) return 'fungicidas';
+  if(/herbicida|barbecho|coadyuvante/.test(t)) return 'herbicidas';
+  return 'otros'; }
+function _presuZero(){ return { semillas:0,herbicidas:0,fertilizantes:0,fungicidas:0,labores:0,cosecha:0,otros:0,fijos:0 }; }
+// Calcula presupuesto y real por rubro (todo en US$/ha base). classify(app)->rubro para insumos.
+function _presuCalc(c, apps, classify){
+  const ha = Number(c.lote?.hectareas || c.hectareas || 0);
+  const presu = _presuZero(), real = _presuZero();
+  const P = (c.presupuesto && typeof c.presupuesto==='object') ? c.presupuesto : null;
+  if (P){
+    (P.lineas||[]).forEach(l=>{ const r = (presu[l.rubro]!=null) ? l.rubro : 'otros';
+      presu[r] += _toUsd(Number(l.costoHa||0), l.moneda); });
+    (P.costosFijos||[]).forEach(f=>{ const v=_toUsd(Number(f.monto||0), f.moneda);
+      presu.fijos += (f.modo==='total') ? (ha>0?v/ha:0) : v; });
+  }
+  (apps||[]).forEach(a=>{
+    const haApp = Number(a.hectareasAplicadas ?? ha) || 0;
+    const perHa = ha>0 ? (_toUsd(a.costoHa, a.moneda)*haApp)/ha : _toUsd(a.costoHa, a.moneda);
+    let f;
+    if (a.tipo==='labor') f = /cosecha/i.test(a.item||'') ? 'cosecha' : 'labores';
+    else f = classify(a);
+    real[f] += perHa;
+  });
+  const pl = (c.planilla && typeof c.planilla==='object')?c.planilla:{};
+  const plMon = pl.moneda==='ARS'?'ARS':'USD';
+  if (!real.cosecha) (pl.costosFijos||[]).forEach(cfx=>{
+    if(/cosecha/i.test(cfx.concepto||'') && cfx.valor!==''&&cfx.valor!=null){ const val=_toUsd(Number(cfx.valor),plMon);
+      real.cosecha += (cfx.modo==='total')?(ha>0?val/ha:0):val; }});
+  const presuTotHa = Object.values(presu).reduce((s,x)=>s+x,0);
+  const realTotHa  = Object.values(real).reduce((s,x)=>s+x,0);
+  const tol = (P && P.tolerancia!=null && P.tolerancia!=='') ? Number(P.tolerancia) : 10;
+  const tienePresu = !!P && (((P.lineas||[]).length)||((P.costosFijos||[]).length));
+  return { ha, presu, real, presuTotHa, realTotHa, presuTot:presuTotHa*ha, realTot:realTotHa*ha, tol, tienePresu };
+}
+// Semáforo por comparación presupuestado vs real.
+function _presuSem(presu, real, tol){
+  if (presu<=0.005) return real>0.005 ? ['🔵','Sin presupuesto','text-slate-500'] : ['—','','text-slate-300'];
+  const desvPct = (real-presu)/presu*100;
+  if (real < presu*0.999) return ['🟢','Bajo presupuesto','text-emerald-600'];
+  if (desvPct <= (Number(tol)||0)) return ['🟡','En regla','text-amber-600'];
+  return ['🔴','Sobrepasado','text-red-600'];
+}
+
+pages.presupuestoCampanas = async function() {
+  setHeader('Presupuesto de campaña', 'Planificación de costos: presupuestado vs. ejecutado');
+  if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('presupuestoCampanas','Presupuesto de campaña'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando presupuestos…</div>`;
+  let campanas=[], aplics=[], cats=[];
+  try {
+    await cargarCotizVivas();
+    campanas = (await api('/api/campanas')).data || [];
+    aplics   = (await api('/api/aplicaciones').catch(()=>({data:[]}))).data || [];
+    cats     = (await api('/api/catalogos').catch(()=>({data:state.cache.catalogos||[]}))).data || [];
+  } catch (e) { return toast(e.message,'error'); }
+  state.cache.campanas = campanas; state.cache.catalogos = cats; state.cache.aplicaciones = aplics;
+
+  const cv = state.cache.cotizVivas || {}; const dolar = Number(cv.USD||0);
+  const insumosCat = cats.filter(c => tiposInsumoNombres().includes(c.tipo));
+  const insTipoMap = {}; insumosCat.forEach(c => { if (c.nombre) insTipoMap[c.nombre.trim().toLowerCase()] = (c.tipo||'').trim(); });
+  const tipoDeApp = (a) => insTipoMap[(a.item||'').trim().toLowerCase()] || (a.subtipo||'').trim();
+  const classify = (a)=> _presuFamDe(tipoDeApp(a));
+  const aplicsPorCamp = {};
+  aplics.forEach(a => { (aplicsPorCamp[a.campanaId] = aplicsPorCamp[a.campanaId] || []).push(a); });
+
+  state.presuF = state.presuF || { moneda:'USD', vista:'consolidado', ciclo:'', campanaId:'' };
+  const pf = state.presuF;
+  const moneda = pf.moneda==='ARS'?'ARS':'USD';
+  const rate = (moneda==='ARS' && dolar>0) ? dolar : 1;
+  const sym  = moneda==='ARS' ? '$' : 'u$s';
+  const M = (usd)=> `${sym} ${moneda==='ARS'?_plN0((usd||0)*rate):_plN2((usd||0)*rate)}`;
+  const Msig = (usd)=> `${usd>=0?'+':'−'}${sym} ${moneda==='ARS'?_plN0(Math.abs(usd||0)*rate):_plN2(Math.abs(usd||0)*rate)}`;
+
+  // Ciclos disponibles
+  const ciclos = Array.from(new Set(campanas.map(c=>c.ciclo).filter(Boolean))).sort().reverse();
+  if (pf.ciclo && !ciclos.includes(pf.ciclo)) pf.ciclo='';
+  const campFiltradas = campanas.filter(c=> !pf.ciclo || c.ciclo===pf.ciclo);
+
+  const selMon = `<select class="input" onchange="presuSet('moneda',this.value)">
+    <option value="USD" ${moneda==='USD'?'selected':''}>USD</option>
+    <option value="ARS" ${moneda==='ARS'?'selected':''}>Pesos</option></select>`;
+  const selCiclo = `<select class="input" onchange="presuSet('ciclo',this.value)">
+    <option value="">Todos los ciclos</option>
+    ${ciclos.map(c=>`<option value="${esc(c)}" ${pf.ciclo===c?'selected':''}>${esc(c)}</option>`).join('')}</select>`;
+  const selVista = `<select class="input" onchange="presuSet('vista',this.value)">
+    <option value="consolidado" ${pf.vista==='consolidado'?'selected':''}>📊 Consolidado (previsión total)</option>
+    <option value="campana" ${pf.vista==='campana'?'selected':''}>🔎 Una campaña (detalle)</option></select>`;
+
+  let cuerpo='';
+  if (pf.vista==='campana'){
+    // selector de campaña
+    const ordDesc = (a,b)=> String(b.ciclo||'').localeCompare(String(a.ciclo||'')) || (new Date(b.fechaSiembra||b.createdAt||0)-new Date(a.fechaSiembra||a.createdAt||0));
+    const opts = campFiltradas.slice().sort(ordDesc);
+    if (pf.campanaId && !opts.some(c=>c.id===pf.campanaId)) pf.campanaId='';
+    if (!pf.campanaId && opts.length) pf.campanaId = opts[0].id;
+    const c = opts.find(x=>x.id===pf.campanaId) || null;
+    const selCamp = `<select class="input" onchange="presuSet('campanaId',this.value)">
+      ${opts.map(o=>`<option value="${o.id}" ${o.id===pf.campanaId?'selected':''}>${esc(o.ciclo||'')} · ${esc(o.cultivo||'')} · ${esc(o.lote?.campo?.nombre||'')}/${esc(o.lote?.nombre||'')}</option>`).join('')}
+      ${opts.length?'':'<option value="">— sin campañas —</option>'}</select>`;
+    if (!c){
+      cuerpo = `<div class="stub-card">No hay campañas para ese filtro. Cargalas en <b>Producción → Campañas</b>.</div>`;
+    } else {
+      const r = _presuCalc(c, aplicsPorCamp[c.id]||[], classify);
+      const kpi = (lbl,val,extra)=>`<div class="rounded-xl p-4 border border-slate-200 bg-white shadow-sm">
+        <div class="text-xs text-slate-500">${lbl}</div><div class="text-xl font-extrabold text-slate-800 mt-1">${val}</div>${extra?`<div class="text-[11px] text-slate-400 mt-0.5">${extra}</div>`:''}</div>`;
+      const restante = r.presuTot - r.realTot;
+      const avance = r.presuTot>0 ? (r.realTot/r.presuTot*100) : 0;
+      const semG = _presuSem(r.presuTotHa, r.realTotHa, r.tol);
+      const kpis = `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        ${kpi('💰 Previsión total (a reservar)', r.tienePresu?M(r.presuTot):'—', r.tienePresu?M(r.presuTotHa)+'/ha':'sin presupuesto cargado')}
+        ${kpi('🧾 Ejecutado a hoy', M(r.realTot), M(r.realTotHa)+'/ha')}
+        ${kpi('🏦 Restante del presupuesto', r.tienePresu?Msig(restante):'—', r.tienePresu?(restante>=0?'disponible':'excedido'):'')}
+        ${kpi('📈 Avance de gasto', r.tienePresu?_plN0(avance)+'%':'—', `${semG[0]} ${semG[1]}`)}
+      </div>`;
+      const filas = PRESU_RUBROS.map(([k,lbl])=>{
+        const p=r.presu[k]*r.ha, re=r.real[k]*r.ha;
+        if (p<=0.005 && re<=0.005) return '';
+        const desv=re-p; const pct = p>0.005 ? (desv/p*100) : (re>0.005?100:0);
+        const sem=_presuSem(r.presu[k], r.real[k], r.tol);
+        return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+          <td class="px-3 py-2 text-slate-700">${lbl}</td>
+          <td class="px-3 py-2 text-right tabular-nums">${p>0.005?M(p):'—'}</td>
+          <td class="px-3 py-2 text-right tabular-nums">${re>0.005?M(re):'—'}</td>
+          <td class="px-3 py-2 text-right tabular-nums ${desv>0?'text-red-600':desv<0?'text-emerald-600':'text-slate-500'}">${p>0.005||re>0.005?Msig(desv):'—'}</td>
+          <td class="px-3 py-2 text-right tabular-nums ${desv>0?'text-red-600':desv<0?'text-emerald-600':'text-slate-500'}">${p>0.005?((pct>=0?'+':'')+_plN2(pct)+'%'):'—'}</td>
+          <td class="px-3 py-2 text-center"><span class="${sem[2]} text-xs font-semibold whitespace-nowrap">${sem[0]} ${sem[1]}</span></td></tr>`;
+      }).join('');
+      const totDesv = r.realTot - r.presuTot; const totPct = r.presuTot>0?(totDesv/r.presuTot*100):0;
+      const tabla = `<div class="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+        <table class="text-sm border-collapse w-full bg-white">
+          <thead class="text-xs bg-slate-800 text-white"><tr>
+            <th class="text-left px-3 py-2">Rubro / Etapa</th>
+            <th class="text-right px-3 py-2">Presupuestado</th>
+            <th class="text-right px-3 py-2">Ejecutado / Real</th>
+            <th class="text-right px-3 py-2">Desvío (${sym})</th>
+            <th class="text-right px-3 py-2">Desvío (%)</th>
+            <th class="text-center px-3 py-2">Estado</th></tr></thead>
+          <tbody>
+            ${filas || `<tr><td colspan="6" class="px-3 py-6 text-center text-slate-400">Sin datos. Cargá el presupuesto y/o insumos y labores.</td></tr>`}
+            <tr class="border-t-2 border-slate-300 bg-slate-50 font-bold">
+              <td class="px-3 py-2">TOTAL CAMPAÑA</td>
+              <td class="px-3 py-2 text-right tabular-nums">${r.tienePresu?M(r.presuTot):'—'}</td>
+              <td class="px-3 py-2 text-right tabular-nums">${M(r.realTot)}</td>
+              <td class="px-3 py-2 text-right tabular-nums ${totDesv>0?'text-red-600':totDesv<0?'text-emerald-600':''}">${r.tienePresu?Msig(totDesv):'—'}</td>
+              <td class="px-3 py-2 text-right tabular-nums ${totDesv>0?'text-red-600':totDesv<0?'text-emerald-600':''}">${r.tienePresu?((totPct>=0?'+':'')+_plN2(totPct)+'%'):'—'}</td>
+              <td class="px-3 py-2 text-center">${(()=>{const s=_presuSem(r.presuTotHa,r.realTotHa,r.tol);return `<span class="${s[2]} text-xs font-bold">${s[0]} ${s[1]}</span>`;})()}</td></tr>
+          </tbody></table></div>`;
+      cuerpo = `
+        <div class="kpi mb-4"><div class="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <div><label class="label text-xs">🔎 Vista</label>${selVista}</div>
+          <div><label class="label text-xs">📅 Ciclo</label>${selCiclo}</div>
+          <div class="md:col-span-1"><label class="label text-xs">🌱 Campaña</label>${selCamp}</div>
+          <div><label class="label text-xs">💲 Moneda</label>${selMon}</div>
+        </div></div>
+        <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+          <h3 class="font-bold text-slate-800">${esc(c.cultivo||'')}${c.variedad?' · '+esc(c.variedad):''}
+            <span class="text-xs font-normal text-slate-400">· ${esc(c.lote?.campo?.nombre||'')} / ${esc(c.lote?.nombre||'')} · ${_plN0(r.ha)} ha · tolerancia ${_plN0(r.tol)}%</span></h3>
+          <div class="flex gap-2">
+            ${can('produccion:update')?`<button class="btn btn-secondary text-xs" onclick="presuCopiar('${c.id}')">📋 Copiar de otra campaña</button>`:''}
+            ${can('produccion:update')?`<button class="btn btn-primary text-xs" onclick="presuEdit('${c.id}')">${r.tienePresu?'✏️ Editar presupuesto':'✨ Generar presupuesto estimado'}</button>`:''}
+          </div>
+        </div>
+        ${!r.tienePresu?`<div class="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-3 mb-3">Esta campaña todavía no tiene <b>presupuesto cargado</b>. Tocá <b>✨ Generar presupuesto estimado</b>: el sistema <b>propone un plan automáticamente</b> tomando el promedio de las campañas anteriores del mismo lote/cultivo, y vos lo ajustás. Igual podés ver lo ejecutado.</div>`:''}
+        ${kpis}
+        ${tabla}
+        <p class="text-[11px] text-slate-400 mt-3">El <b>presupuestado</b> se carga por hectárea y se multiplica por las ${_plN0(r.ha)} ha del lote. El <b>ejecutado</b> sale de los insumos y labores reales cargados en <b>Insumos y labores</b> (convertidos al tipo de cambio de cada aplicación). 🟢 bajo presupuesto · 🟡 en regla (dentro de la tolerancia) · 🔴 sobrepasado.</p>`;
+    }
+  } else {
+    // CONSOLIDADO
+    const datos = campFiltradas.map(c=>({ c, r:_presuCalc(c, aplicsPorCamp[c.id]||[], classify) }));
+    const conPresu = datos.filter(d=>d.r.tienePresu);
+    const sinPresu = datos.length - conPresu.length;
+    const prevTot = conPresu.reduce((s,d)=>s+d.r.presuTot,0);
+    const ejecTot = datos.reduce((s,d)=>s+d.r.realTot,0);   // todo lo gastado (tenga o no presupuesto)
+    const ejecConPresu = conPresu.reduce((s,d)=>s+d.r.realTot,0);
+    const restante = prevTot - ejecConPresu;
+    const avance = prevTot>0?(ejecConPresu/prevTot*100):0;
+    const kpi = (lbl,val,extra,cls)=>`<div class="rounded-xl p-4 border border-slate-200 bg-white shadow-sm">
+      <div class="text-xs text-slate-500">${lbl}</div><div class="text-xl font-extrabold ${cls||'text-slate-800'} mt-1">${val}</div>${extra?`<div class="text-[11px] text-slate-400 mt-0.5">${extra}</div>`:''}</div>`;
+    const kpis = `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      ${kpi('💰 Previsión financiera total', M(prevTot), `para ${conPresu.length} campaña${conPresu.length===1?'':'s'}${pf.ciclo?' ('+esc(pf.ciclo)+')':''}`,'text-emerald-700')}
+      ${kpi('🧾 Ejecutado total', M(ejecTot), 'de todas las campañas')}
+      ${kpi('🏦 Restante por gastar', Msig(restante), restante>=0?'disponible':'excedido')}
+      ${kpi('📈 Avance de gasto', prevTot>0?_plN0(avance)+'%':'—', 'sobre lo presupuestado')}
+    </div>`;
+    // Consolidado por rubro
+    const totR = _presuZero(), totRe = _presuZero();
+    conPresu.forEach(d=>{ PRESU_RUBROS.forEach(([k])=>{ totR[k]+=d.r.presu[k]*d.r.ha; totRe[k]+=d.r.real[k]*d.r.ha; }); });
+    const filasRubro = PRESU_RUBROS.map(([k,lbl])=>{ const p=totR[k], re=totRe[k];
+      if (p<=0.005 && re<=0.005) return '';
+      const desv=re-p; const pct=p>0.005?(desv/p*100):0; const sem=_presuSem(p,re,10);
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="px-3 py-2 text-slate-700">${lbl}</td>
+        <td class="px-3 py-2 text-right tabular-nums">${p>0.005?M(p):'—'}</td>
+        <td class="px-3 py-2 text-right tabular-nums">${re>0.005?M(re):'—'}</td>
+        <td class="px-3 py-2 text-right tabular-nums ${desv>0?'text-red-600':desv<0?'text-emerald-600':'text-slate-500'}">${p>0.005?Msig(desv):'—'}</td>
+        <td class="px-3 py-2 text-center"><span class="${sem[2]} text-xs font-semibold">${sem[0]}</span></td></tr>`;
+    }).join('');
+    // Por campaña
+    const ordDesc = (a,b)=> String(b.c.ciclo||'').localeCompare(String(a.c.ciclo||'')) || (a.c.cultivo||'').localeCompare(b.c.cultivo||'');
+    const filasCamp = datos.slice().sort(ordDesc).map(d=>{ const c=d.c, r=d.r;
+      const desv=r.realTot-r.presuTot; const pct=r.presuTot>0?(desv/r.presuTot*100):0;
+      const sem=_presuSem(r.presuTotHa, r.realTotHa, r.tol);
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onclick="presuVer('${c.id}')">
+        <td class="px-3 py-2"><div class="font-medium text-slate-700">${esc(c.ciclo||'')} · ${esc(c.cultivo||'')}</div><div class="text-[11px] text-slate-400">${esc(c.lote?.campo?.nombre||'')} / ${esc(c.lote?.nombre||'')}</div></td>
+        <td class="px-3 py-2 text-right tabular-nums">${_plN0(r.ha)}</td>
+        <td class="px-3 py-2 text-right tabular-nums">${r.tienePresu?M(r.presuTot):'<span class="text-slate-300">—</span>'}</td>
+        <td class="px-3 py-2 text-right tabular-nums">${M(r.realTot)}</td>
+        <td class="px-3 py-2 text-right tabular-nums ${desv>0?'text-red-600':desv<0?'text-emerald-600':'text-slate-500'}">${r.tienePresu?((pct>=0?'+':'')+_plN2(pct)+'%'):'—'}</td>
+        <td class="px-3 py-2 text-center"><span class="${sem[2]} text-xs font-semibold whitespace-nowrap">${sem[0]} ${sem[1]}</span></td></tr>`;
+    }).join('');
+    cuerpo = `
+      <div class="kpi mb-4"><div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div><label class="label text-xs">🔎 Vista</label>${selVista}</div>
+        <div><label class="label text-xs">📅 Ciclo</label>${selCiclo}</div>
+        <div><label class="label text-xs">💲 Moneda</label>${selMon}</div>
+      </div></div>
+      ${kpis}
+      ${sinPresu>0?`<div class="rounded-lg bg-slate-50 border border-slate-200 text-slate-600 text-xs px-4 py-2 mb-3">Hay <b>${sinPresu}</b> campaña${sinPresu===1?'':'s'} sin presupuesto cargado (no suman a la previsión total). Entrá a cada una en la vista <b>“Una campaña”</b> para cargarlo.</div>`:''}
+      <div class="grid lg:grid-cols-2 gap-5">
+        <div>
+          <h3 class="font-bold text-slate-800 mb-2">📊 Presupuestado vs ejecutado por rubro</h3>
+          <div class="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+            <table class="text-sm border-collapse w-full bg-white">
+              <thead class="text-xs bg-slate-800 text-white"><tr>
+                <th class="text-left px-3 py-2">Rubro</th><th class="text-right px-3 py-2">Presup.</th>
+                <th class="text-right px-3 py-2">Ejecutado</th><th class="text-right px-3 py-2">Desvío</th><th class="text-center px-3 py-2">Estado</th></tr></thead>
+              <tbody>${filasRubro||`<tr><td colspan="5" class="px-3 py-6 text-center text-slate-400">Sin presupuestos cargados.</td></tr>`}</tbody></table></div>
+        </div>
+        <div>
+          <h3 class="font-bold text-slate-800 mb-2">🌱 Por campaña <span class="text-xs font-normal text-slate-400">(clic para ver el detalle)</span></h3>
+          <div class="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
+            <table class="text-sm border-collapse w-full bg-white">
+              <thead class="text-xs bg-slate-800 text-white"><tr>
+                <th class="text-left px-3 py-2">Campaña</th><th class="text-right px-3 py-2">Ha</th>
+                <th class="text-right px-3 py-2">Presup.</th><th class="text-right px-3 py-2">Ejecutado</th>
+                <th class="text-right px-3 py-2">Desvío</th><th class="text-center px-3 py-2">Estado</th></tr></thead>
+              <tbody>${filasCamp||`<tr><td colspan="6" class="px-3 py-6 text-center text-slate-400">Sin campañas.</td></tr>`}</tbody></table></div>
+        </div>
+      </div>
+      <p class="text-[11px] text-slate-400 mt-3">La <b>previsión financiera total</b> es la suma de los presupuestos de las campañas (el dinero a reservar para el ciclo). El <b>ejecutado</b> sale de insumos y labores reales. 🟢 bajo presupuesto · 🟡 en regla · 🔴 sobrepasado · 🔵 gastos sin presupuesto.</p>`;
+  }
+  $('#page-body').innerHTML = cuerpo;
+};
+function presuSet(k,v){ state.presuF = state.presuF||{}; state.presuF[k]=v; if(k==='vista'&&v==='campana'&&!state.presuF.campanaId){} pages.presupuestoCampanas(); }
+function presuVer(id){ state.presuF = state.presuF||{}; state.presuF.vista='campana'; state.presuF.campanaId=id; pages.presupuestoCampanas(); }
+
+/* ---- Propuesta automática en base a campañas anteriores comparables ---- */
+function _presuProponer(c){
+  const camps = state.cache.campanas||[];
+  const aplics = state.cache.aplicaciones||[];
+  const cats = state.cache.catalogos||[];
+  const insumosCat = cats.filter(x=>tiposInsumoNombres().includes(x.tipo));
+  const insTipoMap={}; insumosCat.forEach(x=>{ if(x.nombre) insTipoMap[x.nombre.trim().toLowerCase()]=(x.tipo||'').trim(); });
+  const classify=(a)=>_presuFamDe(insTipoMap[(a.item||'').trim().toLowerCase()]||(a.subtipo||'').trim());
+  const aByC={}; aplics.forEach(a=>{(aByC[a.campanaId]=aByC[a.campanaId]||[]).push(a);});
+  // comparables: prioridad mismo lote+cultivo > mismo cultivo > mismo lote
+  const score=(x)=>{ let s=0; if(x.lote?.id===c.lote?.id)s+=2; if((x.cultivo||'').toLowerCase()===(c.cultivo||'').toLowerCase())s+=2; return s; };
+  let cand = camps.filter(x=>x.id!==c.id).map(x=>({x, sc:score(x)})).filter(o=>o.sc>0);
+  if(!cand.length) return null;
+  const maxSc = Math.max(...cand.map(o=>o.sc));
+  cand = cand.filter(o=>o.sc===maxSc).map(o=>o.x).sort((a,b)=>String(b.ciclo||'').localeCompare(String(a.ciclo||'')));
+  // real por rubro de cada una (USD/ha); promediar las que tienen datos, hasta 3 más recientes
+  const calcs = cand.map(x=>({x, r:_presuCalc(x, aByC[x.id]||[], classify)})).filter(o=>o.r.realTotHa>0.01).slice(0,3);
+  if(!calcs.length) return null;
+  const avg=_presuZero();
+  PRESU_RUBROS.forEach(([k])=>{ avg[k]= calcs.reduce((s,o)=>s+o.r.real[k],0)/calcs.length; });
+  const lineas=[]; const costosFijos=[];
+  PRESU_RUBROS.forEach(([k,lbl])=>{ if(k==='fijos') return; if(avg[k]>0.005)
+    lineas.push({ rubro:k, concepto:lbl.replace(/^[^ ]+ /,''), cantHa:null, precioUnit:null, costoHa:+avg[k].toFixed(2), moneda:'USD' }); });
+  if(avg.fijos>0.005) costosFijos.push({ concepto:'Costos fijos (referencia)', monto:+avg.fijos.toFixed(2), modo:'ha', moneda:'USD' });
+  const base = calcs.length>1 ? `promedio de ${calcs.length} campañas anteriores (${calcs.map(o=>o.x.ciclo||'?').join(', ')})` : `la campaña ${calcs[0].x.ciclo||''} ${calcs[0].x.cultivo||''}`.trim();
+  return { lineas, costosFijos, base };
+}
+
+/* ---- Editor de presupuesto ---- */
+function presuEdit(campanaId){
+  const c = (state.cache.campanas||[]).find(x=>x.id===campanaId); if(!c) return toast('Campaña no encontrada','error');
+  const P = (c.presupuesto && typeof c.presupuesto==='object') ? c.presupuesto : {};
+  const tieneP = !!(P.lineas||[]).length || !!(P.costosFijos||[]).length;
+  let lineas = (P.lineas||[]).map(l=>({ rubro:l.rubro||'otros', concepto:l.concepto||'', cantHa:l.cantHa??'', precioUnit:l.precioUnit??'', costoHa:l.costoHa??'', moneda:l.moneda||'USD' }));
+  let fijos  = (P.costosFijos||[]).map(f=>({ concepto:f.concepto||'', monto:f.monto??'', modo:f.modo||'ha', moneda:f.moneda||'USD' }));
+  let tolerancia = (P.tolerancia!=null&&P.tolerancia!=='')?Number(P.tolerancia):10;
+  let propuestaMsg = '';
+  // Si la campaña NO tiene presupuesto, proponer uno automáticamente desde campañas anteriores.
+  if (!tieneP){
+    const prop = _presuProponer(c);
+    if (prop && prop.lineas.length){
+      lineas = prop.lineas.map(l=>({ rubro:l.rubro, concepto:l.concepto, cantHa:'', precioUnit:'', costoHa:l.costoHa, moneda:l.moneda }));
+      fijos  = prop.costosFijos.map(f=>({ concepto:f.concepto, monto:f.monto, modo:f.modo, moneda:f.moneda }));
+      propuestaMsg = `💡 Propuesta estimada en base a ${prop.base}. Son valores de referencia: ajustá cantidades y precios y guardá.`;
+    }
+  }
+  state._presuEdit = { campanaId, ha: Number(c.lote?.hectareas || c.hectareas || 0), tolerancia, lineas, fijos, propuestaMsg };
+  if (!state._presuEdit.lineas.length) state._presuEdit.lineas.push({ rubro:'labores', concepto:'', cantHa:'', precioUnit:'', costoHa:'', moneda:'USD' });
+  openModal({ title:`✏️ Presupuesto — ${esc(c.ciclo||'')} ${esc(c.cultivo||'')} (${_plN0(state._presuEdit.ha)} ha)`, size:'max-w-4xl',
+    body:`<div id="presu-edit-body"></div>`,
+    footer:`<button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="presuEditSave()">💾 Guardar presupuesto</button>` });
+  _presuEditRender();
+}
+function _presuEditRowOpts(sel){ return PRESU_RUBROS.filter(([k])=>k!=='fijos').map(([k,l])=>`<option value="${k}" ${sel===k?'selected':''}>${l}</option>`).join(''); }
+function _presuEditRender(){
+  const E=state._presuEdit; if(!E) return;
+  const monOpt=(s)=>`<option value="USD" ${s==='USD'?'selected':''}>USD</option><option value="ARS" ${s==='ARS'?'selected':''}>$</option>`;
+  const linRows = E.lineas.map((l,i)=>`<tr>
+    <td class="p-1"><select class="input input-sm" onchange="presuEditF('lineas',${i},'rubro',this.value)">${_presuEditRowOpts(l.rubro)}</select></td>
+    <td class="p-1"><input class="input input-sm" value="${esc(l.concepto)}" placeholder="ej. Glifosato / Fumigación" oninput="presuEditF('lineas',${i},'concepto',this.value)"></td>
+    <td class="p-1"><input class="input input-sm text-right" type="number" step="any" value="${l.cantHa}" placeholder="cant/ha" oninput="presuEditF('lineas',${i},'cantHa',this.value)"></td>
+    <td class="p-1"><input class="input input-sm text-right" type="number" step="any" value="${l.precioUnit}" placeholder="$/unidad" oninput="presuEditF('lineas',${i},'precioUnit',this.value)"></td>
+    <td class="p-1"><input class="input input-sm text-right font-semibold" type="number" step="any" value="${l.costoHa}" placeholder="costo/ha" oninput="presuEditF('lineas',${i},'costoHa',this.value)"></td>
+    <td class="p-1 w-20"><select class="input input-sm" onchange="presuEditF('lineas',${i},'moneda',this.value)">${monOpt(l.moneda)}</select></td>
+    <td class="p-1 text-center"><button class="text-red-500 hover:text-red-700" onclick="presuEditDel('lineas',${i})">🗑️</button></td></tr>`).join('');
+  const fijoRows = E.fijos.map((f,i)=>`<tr>
+    <td class="p-1"><input class="input input-sm" value="${esc(f.concepto)}" placeholder="ej. Arrendamiento, Seguro, Agrónomo" oninput="presuEditF('fijos',${i},'concepto',this.value)"></td>
+    <td class="p-1"><input class="input input-sm text-right font-semibold" type="number" step="any" value="${f.monto}" placeholder="monto" oninput="presuEditF('fijos',${i},'monto',this.value)"></td>
+    <td class="p-1 w-28"><select class="input input-sm" onchange="presuEditF('fijos',${i},'modo',this.value)"><option value="ha" ${f.modo==='ha'?'selected':''}>por ha</option><option value="total" ${f.modo==='total'?'selected':''}>total lote</option></select></td>
+    <td class="p-1 w-20"><select class="input input-sm" onchange="presuEditF('fijos',${i},'moneda',this.value)">${monOpt(f.moneda)}</select></td>
+    <td class="p-1 text-center"><button class="text-red-500 hover:text-red-700" onclick="presuEditDel('fijos',${i})">🗑️</button></td></tr>`).join('');
+  $('#presu-edit-body').innerHTML = `
+    ${E.propuestaMsg?`<div class="rounded-lg bg-sky-50 border border-sky-200 text-sky-800 text-sm px-4 py-2.5 mb-3 flex items-start justify-between gap-3">
+      <span>${E.propuestaMsg}</span>
+      <button class="btn btn-secondary btn-sm shrink-0" onclick="presuEditRehacer()">🔄 Rehacer propuesta</button></div>`:''}
+    <div class="mb-3 text-xs text-slate-500">Cargá el plan <b>por hectárea</b>. Si ponés <b>cant/ha</b> y <b>$/unidad</b>, el costo/ha se calcula solo; o escribí el <b>costo/ha</b> directo. El sistema lo multiplica por las <b>${_plN0(E.ha)} ha</b> del lote.</div>
+    <h4 class="font-semibold text-slate-700 text-sm mb-1">🧪 Insumos y labores proyectados</h4>
+    <div class="overflow-x-auto"><table class="w-full text-sm"><thead class="text-[11px] text-slate-500"><tr>
+      <th class="text-left px-1">Rubro</th><th class="text-left px-1">Concepto</th><th class="px-1">Cant/ha</th><th class="px-1">$/unidad</th><th class="px-1">Costo/ha</th><th class="px-1">Mon.</th><th></th></tr></thead>
+      <tbody>${linRows}</tbody></table></div>
+    <button class="btn btn-secondary btn-sm mt-2" onclick="presuEditAdd('lineas')">➕ Agregar línea</button>
+    <h4 class="font-semibold text-slate-700 text-sm mt-4 mb-1">🏛️ Costos fijos / estructura</h4>
+    <div class="overflow-x-auto"><table class="w-full text-sm"><thead class="text-[11px] text-slate-500"><tr>
+      <th class="text-left px-1">Concepto</th><th class="px-1">Monto</th><th class="px-1">Modo</th><th class="px-1">Mon.</th><th></th></tr></thead>
+      <tbody>${fijoRows||''}</tbody></table></div>
+    <button class="btn btn-secondary btn-sm mt-2" onclick="presuEditAdd('fijos')">➕ Agregar costo fijo</button>
+    <div class="flex items-center gap-3 mt-4 pt-3 border-t">
+      <label class="label text-xs mb-0">🚦 Tolerancia de desvío (%)</label>
+      <input class="input input-sm w-24 text-right" type="number" step="any" value="${E.tolerancia}" oninput="presuEditF('tol',0,'tolerancia',this.value)">
+      <span class="text-[11px] text-slate-400">Pasado este % sobre lo presupuestado, el rubro se marca 🔴.</span>
+    </div>
+    <div id="presu-edit-tot" class="mt-3">${_presuEditTotHtml()}</div>`;
+}
+function _presuEditTotHtml(){
+  const E=state._presuEdit; if(!E) return '';
+  let usdHa=0;
+  E.lineas.forEach(l=>{ usdHa += _toUsd(Number(l.costoHa||0), l.moneda); });
+  E.fijos.forEach(f=>{ const v=_toUsd(Number(f.monto||0), f.moneda); usdHa += f.modo==='total'?(E.ha>0?v/E.ha:0):v; });
+  const cv=state.cache.cotizVivas||{}; const dolar=Number(cv.USD||0);
+  const tot=usdHa*E.ha;
+  return `<div class="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+    <div><span class="text-slate-500">Presupuesto/ha:</span> <b>u$s ${_plN2(usdHa)}</b></div>
+    <div><span class="text-slate-500">Previsión total (${_plN0(E.ha)} ha):</span> <b class="text-emerald-700">u$s ${_plN2(tot)}</b>${dolar>0?` <span class="text-slate-400">· $ ${_plN0(tot*dolar)}</span>`:''}</div></div>`;
+}
+function presuEditF(kind,i,field,val){
+  const E=state._presuEdit; if(!E) return;
+  if(kind==='tol'){ E.tolerancia=val; return; }
+  const row = E[kind][i]; if(!row) return; row[field]=val;
+  // autocompletar costo/ha = cant/ha × $/unidad si ambos y no se editó costo manualmente en este cambio
+  if(kind==='lineas' && (field==='cantHa'||field==='precioUnit')){
+    const cant=Number(row.cantHa||0), pu=Number(row.precioUnit||0);
+    if(cant>0 && pu>0) row.costoHa = +(cant*pu).toFixed(2);
+  }
+  // refrescar costo/ha visible si cambió por autocompletar
+  if(kind==='lineas' && (field==='cantHa'||field==='precioUnit')){
+    const body=$('#presu-edit-body'); if(body){ const inp=body.querySelectorAll('tbody tr')[i]?.querySelectorAll('input')[2]; if(inp) inp.value=row.costoHa; }
+  }
+  const tot=$('#presu-edit-tot'); if(tot) tot.innerHTML=_presuEditTotHtml();
+}
+function presuEditAdd(kind){ const E=state._presuEdit; if(!E) return;
+  if(kind==='lineas') E.lineas.push({ rubro:'otros', concepto:'', cantHa:'', precioUnit:'', costoHa:'', moneda:'USD' });
+  else E.fijos.push({ concepto:'', monto:'', modo:'ha', moneda:'USD' });
+  _presuEditRender(); }
+function presuEditDel(kind,i){ const E=state._presuEdit; if(!E) return; E[kind].splice(i,1); _presuEditRender(); }
+function presuEditRehacer(){
+  const E=state._presuEdit; if(!E) return;
+  const c=(state.cache.campanas||[]).find(x=>x.id===E.campanaId); if(!c) return;
+  const prop=_presuProponer(c);
+  if(!prop||!prop.lineas.length){ toast('No hay campañas anteriores con costos para proponer','error'); return; }
+  E.lineas = prop.lineas.map(l=>({ rubro:l.rubro, concepto:l.concepto, cantHa:'', precioUnit:'', costoHa:l.costoHa, moneda:l.moneda }));
+  E.fijos  = prop.costosFijos.map(f=>({ concepto:f.concepto, monto:f.monto, modo:f.modo, moneda:f.moneda }));
+  E.propuestaMsg = `💡 Propuesta estimada en base a ${prop.base}. Son valores de referencia: ajustá cantidades y precios y guardá.`;
+  _presuEditRender();
+}
+async function presuEditSave(){
+  const E=state._presuEdit; if(!E) return;
+  const lineas = E.lineas.filter(l=> (l.concepto&&l.concepto.trim()) || Number(l.costoHa||0)>0 )
+    .map(l=>({ rubro:l.rubro||'otros', concepto:(l.concepto||'').trim(), cantHa:l.cantHa===''?null:Number(l.cantHa), precioUnit:l.precioUnit===''?null:Number(l.precioUnit), costoHa:Number(l.costoHa||0), moneda:l.moneda||'USD' }));
+  const costosFijos = E.fijos.filter(f=> (f.concepto&&f.concepto.trim()) || Number(f.monto||0)>0 )
+    .map(f=>({ concepto:(f.concepto||'').trim(), monto:Number(f.monto||0), modo:f.modo||'ha', moneda:f.moneda||'USD' }));
+  const presupuesto = { moneda:'USD', tolerancia:E.tolerancia===''?10:Number(E.tolerancia), lineas, costosFijos, updatedAt:new Date().toISOString() };
+  try{
+    await api('/api/campanas/'+E.campanaId,{ method:'PUT', body:{ presupuesto } });
+    const c=(state.cache.campanas||[]).find(x=>x.id===E.campanaId); if(c) c.presupuesto=presupuesto;
+    toast('Presupuesto guardado','success'); closeModal(); state._presuEdit=null; pages.presupuestoCampanas();
+  }catch(e){ toast(e.message,'error'); }
+}
+/* ---- Copiar de campaña anterior (presupuesto o costos reales) ---- */
+function presuCopiar(campanaId){
+  const camps = state.cache.campanas||[];
+  const c = camps.find(x=>x.id===campanaId); if(!c) return;
+  // campañas candidatas: mismo lote o mismo cultivo, distintas, ordenadas por ciclo desc
+  const cand = camps.filter(x=>x.id!==campanaId && (x.lote?.id===c.lote?.id || (x.cultivo||'')===(c.cultivo||'')))
+    .sort((a,b)=> String(b.ciclo||'').localeCompare(String(a.ciclo||'')));
+  if(!cand.length) return toast('No hay otra campaña para copiar','error');
+  const opts = cand.map(x=>{ const tieneP = x.presupuesto && (x.presupuesto.lineas||[]).length;
+    return `<option value="${x.id}">${esc(x.ciclo||'')} · ${esc(x.cultivo||'')} · ${esc(x.lote?.campo?.nombre||'')}/${esc(x.lote?.nombre||'')} ${tieneP?'— tiene presupuesto':'— usar costos reales'}</option>`; }).join('');
+  openModal2({ title:'📋 Copiar presupuesto de otra campaña', size:'max-w-lg',
+    body:`<p class="text-sm text-slate-600 mb-2">Elegí de qué campaña copiar. Si esa campaña tiene un <b>presupuesto cargado</b>, se copia tal cual (vos ajustás hectáreas/precios). Si no, se arma el plan con sus <b>costos reales por rubro</b>.</p>
+      <select id="presu-copy-src" class="input w-full">${opts}</select>`,
+    footer:`<button class="btn btn-ghost" onclick="closeModal2()">Cancelar</button>
+      <button class="btn btn-primary" onclick="presuCopiarDo('${campanaId}')">Copiar y editar</button>` });
+}
+async function presuCopiarDo(campanaId){
+  const srcId = $('#presu-copy-src')?.value; if(!srcId) return;
+  const camps = state.cache.campanas||[];
+  const src = camps.find(x=>x.id===srcId); const dst = camps.find(x=>x.id===campanaId);
+  if(!src||!dst) return;
+  let lineas=[], costosFijos=[], tolerancia=10;
+  if(src.presupuesto && (src.presupuesto.lineas||[]).length){
+    lineas = (src.presupuesto.lineas||[]).map(l=>({...l}));
+    costosFijos = (src.presupuesto.costosFijos||[]).map(f=>({...f}));
+    tolerancia = src.presupuesto.tolerancia!=null?src.presupuesto.tolerancia:10;
+  } else {
+    // armar desde costos reales por rubro de la campaña origen
+    let aplics=[];
+    try{ aplics = (await api('/api/aplicaciones')).data||[]; }catch(e){}
+    const cats = state.cache.catalogos||[];
+    const insumosCat = cats.filter(x => tiposInsumoNombres().includes(x.tipo));
+    const insTipoMap = {}; insumosCat.forEach(x => { if (x.nombre) insTipoMap[x.nombre.trim().toLowerCase()] = (x.tipo||'').trim(); });
+    const classify=(a)=>_presuFamDe(insTipoMap[(a.item||'').trim().toLowerCase()]||(a.subtipo||'').trim());
+    const r=_presuCalc(src, aplics.filter(a=>a.campanaId===srcId), classify);
+    PRESU_RUBROS.forEach(([k,lbl])=>{ if(k==='fijos') return; if(r.real[k]>0.005)
+      lineas.push({ rubro:k, concepto:lbl.replace(/^[^ ]+ /,'')+' (ref. año anterior)', cantHa:null, precioUnit:null, costoHa:+r.real[k].toFixed(2), moneda:'USD' }); });
+    if(r.real.fijos>0.005) costosFijos.push({ concepto:'Costos fijos (ref. año anterior)', monto:+r.real.fijos.toFixed(2), modo:'ha', moneda:'USD' });
+  }
+  dst.presupuesto = { moneda:'USD', tolerancia, lineas, costosFijos, updatedAt:new Date().toISOString() };
+  closeModal2();
+  presuEdit(campanaId);   // abre el editor con lo copiado para ajustar
+  toast('Copiado. Ajustá y guardá.','success');
+}
+
 pages.historialCampanas = async function() {
   setHeader('Historial de campañas', 'Comparador de campañas por lote');
   if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('historialCampanas','Historial de campañas'); return; }

@@ -321,6 +321,7 @@ model Campana {
   observaciones   String?
   analisisSuelo   String?   // texto libre: analisis de suelo del lote para esa campana (se ve en el Historial)
   planilla        Json?     // planilla resultado economico: costos fijos + parametros (precio, rinde, flete, comercializacion)
+  presupuesto     Json?     // presupuesto proyectado de la campana: lineas por rubro (plan/ha), costos fijos, tolerancia (semaforo vs real)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
