@@ -3014,6 +3014,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/10/2026',
+      titulo:'🎯 v2.278.0 — Presupuesto de campaña: arreglo al guardar + ayuda del asistente',
+      desc:'Corregimos un error que impedía <b>guardar el presupuesto</b> de una campaña (daba un aviso rojo). Ya guarda sin problemas. Además, el <b>asistente de AgroCore</b> ahora sabe explicar el módulo: preguntale “¿cómo armo el presupuesto de una campaña?” y te lleva directo con el paso a paso.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'07/10/2026',
       titulo:'🎯 v2.277.0 — Presupuesto de campaña (presupuestado vs. ejecutado, con semáforo)',
       desc:'Nueva pantalla <b>Producción → Presupuesto de campaña</b> para <b>planificar cuánto vas a gastar</b> en la próxima campaña y controlar los desvíos mientras la hacés. Lo mejor: el sistema <b>propone un presupuesto estimado automáticamente</b> tomando el <b>promedio de las campañas anteriores</b> del mismo lote/cultivo (así tenés una base de referencia y solo ajustás cantidades y precios, no cargás todo de cero). El <b>plan es por hectárea</b> por rubro (semillas, herbicidas, fertilizantes, fungicidas/insecticidas, labores, cosecha, costos fijos): ponés <b>cant/ha × $/unidad</b> o el <b>costo/ha</b> directo, en US$ o pesos, y se multiplica por las hectáreas del lote para darte la <b>previsión total</b> (el dinero que tenés que reservar). A medida que avanza la campaña, el <b>ejecutado real</b> sale solo de los <b>insumos y labores</b> que ya cargás, y una tabla muestra por rubro lo <b>Presupuestado vs. Ejecutado</b>, el <b>desvío en $ y %</b> y un <b>semáforo</b> (🟢 bajo presupuesto · 🟡 en regla dentro de la tolerancia · 🔴 sobrepasado), con <b>tolerancia configurable</b>. Hay una vista <b>Consolidada</b> con la <b>previsión financiera total del año</b> (todas las campañas). Todo es <b>multimoneda</b> (USD/$) y no afecta nada de lo que ya venías usando.' },
@@ -13516,7 +13519,7 @@ async function presuEditSave(){
     .map(f=>({ concepto:(f.concepto||'').trim(), monto:Number(f.monto||0), modo:f.modo||'ha', moneda:f.moneda||'USD' }));
   const presupuesto = { moneda:'USD', tolerancia:E.tolerancia===''?10:Number(E.tolerancia), lineas, costosFijos, updatedAt:new Date().toISOString() };
   try{
-    await api('/api/campanas/'+E.campanaId,{ method:'PUT', body:{ presupuesto } });
+    await api('/api/campanas/'+E.campanaId,{ method:'PUT', body:JSON.stringify({ presupuesto }) });
     const c=(state.cache.campanas||[]).find(x=>x.id===E.campanaId); if(c) c.presupuesto=presupuesto;
     toast('Presupuesto guardado','success'); closeModal(); state._presuEdit=null; pages.presupuestoCampanas();
   }catch(e){ toast(e.message,'error'); }

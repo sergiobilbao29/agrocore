@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.277.0';
+const AGROCORE_VERSION = '2.278.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13593,6 +13593,15 @@ const _AYUDA_KB = [
       'Elegí varias para compararlas (rinde, costos, margen).',
       'Sirve para decidir qué lote/cultivo rindió mejor.'],
     atajo:{ page:'historialCampanas', label:'Abrir Historial de campañas' } },
+  { id:'presupuesto_campana', terms:['presupuesto','presupuesto de campaña','presupuestar','cuanto voy a gastar','prevision','cuanto reservar','plan de costos','presupuestado vs ejecutado','desvio de costos','semaforo de costos','planificar gastos'],
+    titulo:'Presupuesto de campaña (presupuestado vs ejecutado)',
+    pasos:[
+      'Entrá a Producción → Presupuesto de campaña.',
+      'Con la vista en "Una campaña", elegí la campaña y tocá "Generar presupuesto estimado": el sistema propone un plan automáticamente con el promedio de las campañas anteriores del mismo lote/cultivo.',
+      'Ajustá el plan por hectárea por rubro (cant/ha × $/unidad o costo/ha directo), sumá costos fijos y definí la tolerancia de desvío (%). Guardá: te da la previsión total (plata a reservar).',
+      'Durante la campaña, el ejecutado se carga solo desde los insumos y labores reales; la tabla compara Presupuestado vs Ejecutado por rubro con desvío $/% y un semáforo (verde bajo presupuesto, amarillo en regla, rojo sobrepasado).',
+      'La vista "Consolidado" muestra la previsión financiera total del año sumando todas las campañas.'],
+    atajo:{ page:'presupuestoCampanas', label:'Abrir Presupuesto de campaña' } },
   { id:'campana', terms:['campaña','nueva campaña','sembrar un lote','crear campaña','cultivo','ciclo'],
     titulo:'Crear una campaña',
     pasos:[
