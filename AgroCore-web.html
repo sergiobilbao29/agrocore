@@ -2796,6 +2796,8 @@ pages.ayuda = async function() {
     ]},
     { grupo:'Producción', items:[
       { f:'Instructivo-Ordenes-de-Trabajo.pdf', t:'Órdenes de trabajo', d:'Indicarle al contratista qué labor hacer y qué insumos usar, entregarla (imprimir/WhatsApp) y después facturar el servicio.' },
+      { f:'Instructivo-Presupuesto-de-Campana.pdf', t:'Presupuesto de campaña', d:'Armar el presupuesto a futuro (el sistema lo propone con las campañas anteriores) y controlar lo presupuestado contra lo realmente gastado durante la campaña.' },
+      { f:'Instructivo-Empaque-Horticolas-Cebolla.pdf', t:'Empaque / clasificación de hortícolas (cebolla)', d:'Registrar el empaque, la clasificación por calibre y el rendimiento del galpón.' },
     ]},
     { grupo:'Cereal', items:[
       { f:'Instructivo-Sociedades-UTE.pdf', t:'Sociedades / UTE (negocio en participación)', d:'Armar una sociedad de campaña entre empresas y socios: asignar campos, consolidar cosecha/costos y liquidar la participación de cada socio.' },
@@ -2813,6 +2815,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Costo-Kilo-Carne.pdf', t:'Costo por kilo de carne', d:'Cómo se calcula el costo por kg y la ganancia del ciclo.' },
       { f:'Instructivo-Guias-Hacienda.pdf', t:'Guías de hacienda', d:'Emitir y controlar guías.' },
       { f:'Instructivo-Haras-Caballos.pdf', t:'Haras / caballos', d:'Gestión de equinos.' },
+      { f:'Instructivo-Caravanas-Electronicas-RFID.pdf', t:'Caravanas electrónicas (RFID)', d:'Importar caravanas a un rodeo desde el bastón, pesar por caravana con auto-mapeo al rodeo, avisar faltantes y seguir la evolución de peso y GDP en la ficha del animal.' },
     ]},
     { grupo:'Otros', items:[
       { f:'Instructivo-Remitos-Internos.pdf', t:'Remitos internos', d:'Movimientos internos entre establecimientos.' },
@@ -3014,6 +3017,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'08/10/2026',
+      titulo:'📚 v2.281.0 — Manual, Ayuda y asistente al día (caravanas, presupuesto y empaque)',
+      desc:'Actualizamos toda la documentación para que coincida con el sistema: el <b>Manual de usuario</b> suma las secciones de <b>Presupuesto de campaña</b>, <b>Empaque / clasificación de hortícolas</b> y <b>Caravanas electrónicas (RFID)</b>; en <b>Ayuda → Instructivos</b> ya están los tres nuevos PDFs para descargar; y el <b>asistente de AgroCore</b> aprendió a explicar el <b>Empaque / Clasificación</b> (además de caravanas y presupuesto, que ya sabía). Nada cambia en la operatoria: es puro acompañamiento.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'07/10/2026',
       titulo:'📈 v2.280.0 — Ficha individual: evolución de peso y GDP (ganancia diaria)',
       desc:'En la <b>Ficha de animal</b> (cabaña, cría, haras o cualquier animal con caravana) ahora aparece <b>📈 Evolución de peso y GDP</b>: toma todos los pesajes del animal (los que cargás a mano o los que llegan por caravana/balanza), muestra el <b>peso actual</b>, la <b>ganancia diaria de peso promedio</b> (kg/día), un <b>gráfico</b> de la curva y una tabla con cada pesaje y su GDP entre fechas. Además, el buscador de Fichas ahora encuentra por <b>caravana (RFID) o número visual</b>: escribís la caravana y entrás directo a la ficha del animal.' },

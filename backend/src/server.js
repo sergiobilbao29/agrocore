@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.280.0';
+const AGROCORE_VERSION = '2.281.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13601,6 +13601,14 @@ const _AYUDA_KB = [
       'Al terminar, avisa las caravanas que NO se pesaron (faltantes) y te deja marcarlas muerto/extraviado (baja) o dejarlas pendientes.',
       'Para cabaña, cría o haras (animales de valor) usá la Ficha de animal individual con su RFID: historial de peso, sanidad y genealogía.'],
     atajo:{ page:'rodeos', label:'Abrir Rodeos y Hacienda' } },
+  { id:'empaque', terms:['empaque','empacar','clasificar','clasificacion','clasificación','calibre','calibres','cebolla','cebollas','horticola','hortícola','horticolas','hortícolas','galpon','galpón','descarte','merma empaque','granel','bolsas','bolsones','acondicionamiento'],
+    titulo:'Empaque / clasificación de hortícolas',
+    pasos:[
+      'Primero cargá en el Catálogo los productos que intervienen: el producto a granel (ej. cebolla a granel), un producto por cada calibre/categoría de salida y los materiales de empaque (bolsas, bolsones, etiquetas).',
+      'Entrá a Stock y depósitos → Empaque / Clasificación y tocá "+ Nueva orden de empaque".',
+      'Cargá los kg que entran a granel y el detalle de salida por calibre (kg y bolsas/bolsones de cada uno) más los materiales consumidos. La merma la calcula el sistema (lo que entra menos lo clasificado).',
+      'Al guardar: baja el stock del producto a granel, sube el stock de cada calibre, descuenta los materiales de empaque y deja registrada la merma (no vuelve al stock). Así ves el rendimiento real del galpón.'],
+    atajo:{ page:'empaque', label:'Abrir Empaque / Clasificación' } },
   { id:'presupuesto_campana', terms:['presupuesto','presupuesto de campaña','presupuestar','cuanto voy a gastar','prevision','cuanto reservar','plan de costos','presupuestado vs ejecutado','desvio de costos','semaforo de costos','planificar gastos'],
     titulo:'Presupuesto de campaña (presupuestado vs ejecutado)',
     pasos:[
