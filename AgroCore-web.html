@@ -3014,6 +3014,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'07/10/2026',
+      titulo:'🏷️ v2.279.0 — Caravanas electrónicas (RFID): importar y pesar por bastón',
+      desc:'Nuevo en <b>Rodeos y Hacienda</b> para feedlot y rodeos grandes, sin cargar una ficha por animal. Dentro de un lote tenés dos botones: <b>🏷️ Importar caravanas</b> (subís el archivo del bastón lector y crea/mueve todas las caravanas del lote de una) y <b>📡 Pesaje por caravana</b> (subís el archivo de pesaje y el sistema aplica cada peso al animal por su <b>RFID</b> — sabe solo a qué lote va —, registra el pesaje del lote y recalcula el promedio). Al terminar <b>avisa las caravanas que no se pesaron</b> (faltantes) y te deja marcarlas <b>muerto/extraviado</b> (baja) o dejarlas pendientes; también lista las caravanas leídas que no están en el sistema. Un <b>único importador</b> entiende los formatos de <b>Allflex, Tru-Test, Gallagher y Datamars</b> (detecta columnas, ignora metadatos y limpia el archivo). Para cabaña, cría y haras seguís usando la <b>Ficha individual</b> con su RFID. El asistente también lo explica.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'07/10/2026',
       titulo:'🎯 v2.278.0 — Presupuesto de campaña: arreglo al guardar + ayuda del asistente',
       desc:'Corregimos un error que impedía <b>guardar el presupuesto</b> de una campaña (daba un aviso rojo). Ya guarda sin problemas. Además, el <b>asistente de AgroCore</b> ahora sabe explicar el módulo: preguntale “¿cómo armo el presupuesto de una campaña?” y te lleva directo con el paso a paso.' },
@@ -31510,7 +31513,7 @@ async function rodVer(id){
       </div>
       <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
         <h4 class="font-semibold text-slate-700">Eventos del lote</h4>
-        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].concat(r.externo?['capitalizacion','servicio']:[]).map(btn).join('')}<button class="btn btn-outline text-xs" title="Arma un pesaje del lote sumando el peso de las fichas vinculadas (caravana/collar/balanza)" onclick='rodPesajeFichas(${JSON.stringify(r.id)})'>⚖️ Pesaje desde balanzas</button><button class="btn btn-outline text-xs" title="Imputa el costo de una campaña forrajera (pastura) a este lote como costo de alimentación" onclick='rodForrajeraForm(${JSON.stringify(r.id)})'>🌱 Imputar pastura (forrajera)</button></div>`:''}
+        ${can('stock:update')?`<div class="flex gap-1 flex-wrap">${['ingreso','pesaje','alimentacion','sanidad','labor','venta','baja','nacimiento','otro'].concat(r.externo?['capitalizacion','servicio']:[]).map(btn).join('')}<button class="btn btn-outline text-xs" title="Arma un pesaje del lote sumando el peso de las fichas vinculadas (caravana/collar/balanza)" onclick='rodPesajeFichas(${JSON.stringify(r.id)})'>⚖️ Pesaje desde balanzas</button><button class="btn btn-outline text-xs" title="Dar de alta las caravanas electrónicas (RFID) de este lote desde el archivo del bastón lector" onclick='rodCaravanasImport(${JSON.stringify(r.id)})'>🏷️ Importar caravanas</button><button class="btn btn-outline text-xs" title="Subir el archivo de pesaje del bastón: el sistema aplica cada peso por RFID y avisa las caravanas faltantes" onclick='rodPesajeRfid(${JSON.stringify(r.id)})'>📡 Pesaje por caravana</button><button class="btn btn-outline text-xs" title="Imputa el costo de una campaña forrajera (pastura) a este lote como costo de alimentación" onclick='rodForrajeraForm(${JSON.stringify(r.id)})'>🌱 Imputar pastura (forrajera)</button></div>`:''}
       </div>
       <div class="kpi p-0 overflow-hidden overflow-x-auto"><table class="data text-sm">
         <thead><tr><th>Fecha</th><th>Tipo</th><th class="text-right">Cab.</th><th class="text-right">Kg</th><th class="text-right">Monto</th><th></th></tr></thead>
@@ -31727,6 +31730,131 @@ async function rodPesajeFichas(rodeoId){
 async function rodEvDel(rodeoId, eid){
   if(!confirm('¿Borrar este evento?')) return;
   try{ await api(`/api/rodeos/${rodeoId}/eventos/${eid}`,{method:'DELETE'}); toast('Borrado','success'); await pages.rodeos(); rodVer(rodeoId); }catch(e){ toast(e.message,'error'); }
+}
+
+/* ===== CARAVANAS ELECTRÓNICAS (RFID) — Etapa 1 ===== */
+// Convierte texto numérico ("342.5" / "342,5" / "1.234,5") a número.
+function _cvNum(s){ if(s==null||s==='') return null; var t=String(s).replace(/\s/g,'');
+  if(t.indexOf('.')>=0 && t.indexOf(',')>=0){ t=t.replace(/\./g,'').replace(',','.'); } else if(t.indexOf(',')>=0){ t=t.replace(',','.'); }
+  var n=parseFloat(t); return isNaN(n)?null:n; }
+// Parser universal de archivos de bastón (Allflex, Tru-Test, Gallagher, Datamars).
+function _parseBaston(text){
+  var lines=String(text||'').split(/\r?\n/).map(function(l){return l.trim();}).filter(Boolean)
+    .filter(function(l){ return !/^[#;]/.test(l); });           // ignora metadatos Gallagher
+  if(!lines.length) return { rows:[], info:'archivo vacío' };
+  function cols(l){ if(l.indexOf(';')>=0 && l.indexOf(',')<0) return l.split(';'); if(l.indexOf('\t')>=0) return l.split('\t'); return l.split(','); }
+  var MAP={ rfid:[/rfid/i,/\beid\b/i,/caravana/i,/electr/i,/\btag\b/i], visual:[/visual/i,/\bvid\b/i,/numero/i,/arete/i], peso:[/weight/i,/peso/i,/\bkg\b/i], fecha:[/date/i,/fecha/i] };
+  var first=cols(lines[0]).map(function(s){return s.trim();});
+  var hasHeader=first.some(function(h){ return /rfid|eid|weight|peso|visual|vid|date|fecha|caravana|tag/i.test(h); });
+  var rows=[];
+  var isRfid=function(v){ return /^\d{12,}$/.test(String(v||'').replace(/\s/g,'')); };
+  if(hasHeader){
+    var idx={rfid:-1,visual:-1,peso:-1,fecha:-1};
+    first.forEach(function(h,i){ Object.keys(MAP).forEach(function(k){ if(idx[k]<0 && MAP[k].some(function(re){return re.test(h);})) idx[k]=i; }); });
+    for(var i=1;i<lines.length;i++){ var c=cols(lines[i]).map(function(s){return s.trim();});
+      var rfid = idx.rfid>=0 ? c[idx.rfid] : (c.find(isRfid)||'');
+      rfid=String(rfid||'').replace(/\s/g,''); if(!rfid) continue;
+      rows.push({ rfid:rfid, visual: idx.visual>=0?(c[idx.visual]||null):null, peso: idx.peso>=0?_cvNum(c[idx.peso]):null, fecha: idx.fecha>=0?(c[idx.fecha]||null):null });
+    }
+    return { rows:rows, info:'con encabezado' };
+  }
+  // Sin encabezado: Allflex (RFID por renglón) o "rfid,fecha,hora"
+  lines.forEach(function(l){ var c=cols(l).map(function(s){return s.trim();});
+    var rfid=(c.find(isRfid)||c[0]||'').replace(/\s/g,''); if(!rfid) return;
+    var peso=null; c.forEach(function(v){ if(v.replace(/\s/g,'')===rfid) return; var n=_cvNum(v); if(n!=null && n>=20 && n<=2000) peso=n; });
+    rows.push({ rfid:rfid, visual:null, peso:peso, fecha:null });
+  });
+  return { rows:rows, info:'sin encabezado (RFID por renglón)' };
+}
+function _cvReadFile(input, cb){ var f=input&&input.files&&input.files[0]; if(!f){ cb(null); return; } var r=new FileReader(); r.onload=function(){ cb(String(r.result||''), f.name); }; r.readAsText(f); }
+
+// A) Importar caravanas a un rodeo
+function rodCaravanasImport(rodeoId){
+  state._cvImp={ rodeoId:rodeoId, rows:[] };
+  openModal({ title:'🏷️ Importar caravanas al lote', size:'max-w-lg',
+    body:`<p class="text-sm text-slate-600 mb-3">Subí el archivo que exporta el <b>bastón lector</b> (Allflex, Tru-Test, Gallagher, Datamars) al dar el alta/ingreso de la tropa. El sistema crea las caravanas y las asigna a este lote de una. Si una caravana ya existía, la <b>mueve</b> a este lote.</p>
+      <label class="label text-xs">Archivo del bastón (.csv / .txt)</label>
+      <input type="file" id="cv-file" accept=".csv,.txt,text/plain" class="input"/>
+      <div class="grid grid-cols-2 gap-2 mt-3">
+        <div><label class="label text-xs">Especie</label><select id="cv-esp" class="input"><option value="bovino">Bovino</option><option value="porcino">Porcino</option><option value="ovino">Ovino</option><option value="otro">Otro</option></select></div>
+        <div><label class="label text-xs">Categoría (opcional)</label><input id="cv-cat" class="input" placeholder="ej. Novillito"/></div>
+        <div><label class="label text-xs">Costo de ingreso c/u (opcional)</label><input id="cv-costo" type="number" step="any" class="input" placeholder="0"/></div>
+        <div><label class="label text-xs">Moneda</label><select id="cv-mon" class="input"><option value="ARS">$ ARS</option><option value="USD">USD</option></select></div>
+      </div>
+      <div id="cv-prev" class="text-xs text-slate-500 mt-3"></div>`,
+    footer:`<button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" id="cv-ok" disabled onclick="rodCaravanasImportDo()">Importar</button>` });
+  $('#cv-file').onchange=function(){ _cvReadFile(this, function(txt){ if(txt==null) return;
+    var p=_parseBaston(txt); state._cvImp.rows=p.rows;
+    var ej=p.rows.slice(0,3).map(function(r){return r.visual?('#'+r.visual+' · '):''+r.rfid;}).join('<br>');
+    $('#cv-prev').innerHTML = p.rows.length ? `✅ Se detectaron <b>${p.rows.length}</b> caravanas (${p.info}).<div class="mt-1 font-mono text-[11px] text-slate-400">${ej}${p.rows.length>3?'<br>…':''}</div>` : '⚠️ No se detectaron caravanas en el archivo.';
+    $('#cv-ok').disabled = !p.rows.length;
+  }); };
+}
+async function rodCaravanasImportDo(){
+  var E=state._cvImp; if(!E||!E.rows.length) return;
+  var body={ caravanas:E.rows, especie:$('#cv-esp').value, categoria:($('#cv-cat').value||'').trim()||null,
+    costoIngreso:_cvNum($('#cv-costo').value)||0, moneda:$('#cv-mon').value };
+  var btn=$('#cv-ok'); btn.disabled=true; btn.textContent='Importando…';
+  try{ var r=await api(`/api/rodeos/${E.rodeoId}/caravanas-importar`,{method:'POST',body:JSON.stringify(body)});
+    toast(`Caravanas: ${r.creados} nuevas · ${r.movidos} movidas a este lote${r.duplicadosArchivo?` · ${r.duplicadosArchivo} duplicadas en el archivo`:''}`,'success');
+    closeModal(); await pages.rodeos(); rodVer(E.rodeoId);
+  }catch(e){ toast(e.message,'error'); btn.disabled=false; btn.textContent='Importar'; }
+}
+
+// B) Pesaje por caravana (RFID) con auto-mapeo + faltantes
+function rodPesajeRfid(rodeoId){
+  state._cvPes={ rodeoId:rodeoId, rows:[] };
+  openModal({ title:'📡 Pesaje por caravana (RFID)', size:'max-w-2xl',
+    body:`<div id="cv-pes-top"><p class="text-sm text-slate-600 mb-3">Subí el archivo de <b>pesaje</b> del bastón con balanza. El sistema aplica cada peso al animal por su RFID (sabe solo a qué lote va), registra el pesaje del lote y te avisa qué caravanas <b>no se pesaron</b>.</p>
+      <label class="label text-xs">Archivo de pesaje (.csv / .txt)</label>
+      <input type="file" id="cvp-file" accept=".csv,.txt,text/plain" class="input"/>
+      <div id="cvp-prev" class="text-xs text-slate-500 mt-3"></div></div>
+      <div id="cv-pes-res"></div>`,
+    footer:`<button class="btn btn-ghost" onclick="closeModal()">Cerrar</button>
+            <button class="btn btn-primary" id="cvp-ok" disabled onclick="rodPesajeRfidDo()">Procesar pesaje</button>` });
+  $('#cvp-file').onchange=function(){ _cvReadFile(this, function(txt){ if(txt==null) return;
+    var p=_parseBaston(txt); state._cvPes.rows=p.rows.filter(function(r){return r.peso!=null && r.peso>0;});
+    $('#cvp-prev').innerHTML = state._cvPes.rows.length ? `✅ <b>${state._cvPes.rows.length}</b> pesajes detectados (${p.info}).` : '⚠️ No se detectaron pesos. El archivo de pesaje debe traer la columna de peso (Weight/Peso/Kg).';
+    $('#cvp-ok').disabled = !state._cvPes.rows.length;
+  }); };
+}
+async function rodPesajeRfidDo(){
+  var E=state._cvPes; if(!E||!E.rows.length) return;
+  var btn=$('#cvp-ok'); btn.disabled=true; btn.textContent='Procesando…';
+  try{ var r=await api('/api/pesaje-rfid',{method:'POST',body:JSON.stringify({ pesajes:E.rows, rodeoId:E.rodeoId })});
+    $('#cv-pes-top').style.display='none';
+    var rod=(r.rodeos||[]).map(function(x){return `<div class="flex justify-between border-b border-slate-100 py-1"><span>${esc(x.nombre)}</span><span class="tabular-nums">${x.cabezas} cab · ${fmtN(x.kg)} kg · prom ${fmtN(x.promedio)} kg</span></div>`;}).join('')||'<div class="text-slate-400">—</div>';
+    var desc=(r.desconocidas||[]);
+    var falt=(r.faltantes||[]);
+    var faltHtml=falt.map(function(f){
+      var lista=f.animales.map(function(a){return `#${esc(a.visual||'—')} <span class="font-mono text-[10px] text-slate-400">${esc(a.rfid||'')}</span>`;}).join(' · ');
+      var ids=JSON.stringify(f.animales.map(function(a){return a.id;}));
+      return `<div class="rounded-lg border border-amber-300 bg-amber-50 p-3 mb-2">
+        <div class="font-semibold text-amber-800 text-sm mb-1">⚠️ ${esc(f.nombre)}: faltan ${f.animales.length} caravana(s) sin pesaje</div>
+        <div class="text-[12px] text-slate-600 mb-2">${lista}</div>
+        <div class="flex gap-1 flex-wrap">
+          <button class="btn btn-outline text-xs" onclick='rodFaltantesAccion(${ids},"muerto","${E.rodeoId}")'>☠️ Marcar muerto (baja)</button>
+          <button class="btn btn-outline text-xs" onclick='rodFaltantesAccion(${ids},"extraviado","${E.rodeoId}")'>❓ Marcar extraviado (baja)</button>
+          <button class="btn btn-outline text-xs" onclick='rodFaltantesAccion(${ids},"pendiente","${E.rodeoId}")'>⏳ Dejar pendiente</button>
+        </div></div>`;
+    }).join('');
+    $('#cv-pes-res').innerHTML=`
+      <div class="rounded-lg bg-emerald-50 border border-emerald-200 p-3 mb-3 text-sm"><b>✅ ${r.pesados}</b> animales pesados.</div>
+      <h4 class="font-semibold text-slate-700 text-sm mb-1">Pesaje por lote</h4>
+      <div class="text-sm mb-3">${rod}</div>
+      ${desc.length?`<div class="rounded-lg bg-slate-50 border border-slate-200 p-3 mb-3 text-xs text-slate-600"><b>${desc.length}</b> caravana(s) leída(s) que <b>no están en el sistema</b> (no se cargaron o son de otro lote): ${desc.slice(0,8).map(function(d){return esc(d.rfid);}).join(', ')}${desc.length>8?'…':''}. Importalas primero con “🏷️ Importar caravanas”.</div>`:''}
+      ${faltHtml||'<div class="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-700">🎉 Todas las caravanas activas del lote recibieron su pesaje.</div>'}`;
+    $('#cvp-ok').style.display='none';
+    await pages.rodeos();
+  }catch(e){ toast(e.message,'error'); btn.disabled=false; btn.textContent='Procesar pesaje'; }
+}
+async function rodFaltantesAccion(ids, accion, rodeoId){
+  if(accion!=='pendiente' && !confirm(accion==='muerto'?'¿Dar de baja por MORTANDAD a las caravanas faltantes?':'¿Dar de baja por EXTRAVÍO a las caravanas faltantes?')) return;
+  try{ var r=await api('/api/animales/marcar-faltantes',{method:'POST',body:JSON.stringify({ ids:ids, accion:accion })});
+    toast(accion==='pendiente'?'Quedaron pendientes':`${r.actualizados} caravana(s) dadas de baja`,'success');
+    closeModal(); await pages.rodeos(); if(rodeoId) rodVer(rodeoId);
+  }catch(e){ toast(e.message,'error'); }
 }
 // Editar un evento del rodeo (campos básicos). Las vinculaciones financieras/stock
 // (cuenta a cobrar/pagar, factura, descuento de galpón) no se rehacen desde acá.

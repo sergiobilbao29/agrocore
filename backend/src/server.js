@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.278.0';
+const AGROCORE_VERSION = '2.279.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13593,6 +13593,14 @@ const _AYUDA_KB = [
       'Elegí varias para compararlas (rinde, costos, margen).',
       'Sirve para decidir qué lote/cultivo rindió mejor.'],
     atajo:{ page:'historialCampanas', label:'Abrir Historial de campañas' } },
+  { id:'caravanas_rfid', terms:['caravana','caravanas','rfid','eid','baston','bastón','lector','pesaje por caravana','pesaje rfid','feedlot','allflex','tru-test','trutest','gallagher','datamars','caravana electronica','identificacion electronica','pesada','balanza'],
+    titulo:'Caravanas electrónicas (RFID) en feedlot y rodeos',
+    pasos:[
+      'En Ganadería y Haras → Rodeos y Hacienda, abrí el lote/rodeo y tocá "🏷️ Importar caravanas": subís el archivo del bastón lector (Allflex, Tru-Test, Gallagher, Datamars) y crea todas las caravanas del lote de una, sin cargar ficha por animal.',
+      'Para pesar, tocá "📡 Pesaje por caravana": subís el archivo de pesaje del bastón con balanza. El sistema aplica cada peso al animal por su RFID (sabe solo a qué lote va) y registra el pesaje del lote.',
+      'Al terminar, avisa las caravanas que NO se pesaron (faltantes) y te deja marcarlas muerto/extraviado (baja) o dejarlas pendientes.',
+      'Para cabaña, cría o haras (animales de valor) usá la Ficha de animal individual con su RFID: historial de peso, sanidad y genealogía.'],
+    atajo:{ page:'rodeos', label:'Abrir Rodeos y Hacienda' } },
   { id:'presupuesto_campana', terms:['presupuesto','presupuesto de campaña','presupuestar','cuanto voy a gastar','prevision','cuanto reservar','plan de costos','presupuestado vs ejecutado','desvio de costos','semaforo de costos','planificar gastos'],
     titulo:'Presupuesto de campaña (presupuestado vs ejecutado)',
     pasos:[
@@ -16991,6 +16999,165 @@ app.post('/api/rodeos/:id/pesaje-desde-fichas', requireCompany, requirePermissio
       concepto: `Pesaje desde balanzas individuales (${cabezas} animales)`, cabezas, kg, monto: 0, moneda: 'ARS',
     }});
     res.status(201).json({ ok: true, data: ev, resumen: { cabezas, kg } });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CARAVANAS ELECTRÓNICAS (RFID/EID) — Etapa 1
+//   A) Importar caravanas a un rodeo (alta masiva liviana, sin ficha)
+//   B) Pesaje por caravana: auto-mapea RFID -> rodeo, registra y detecta faltantes
+//   C) Resolver faltantes (extraviado/muerto/pendiente)
+//   El parser multimarca del archivo del bastón se hace en el frontend;
+//   acá llega el JSON ya normalizado.
+// ============================================================
+const _rfidNorm = (s) => String(s || '').replace(/\s+/g, '').trim();
+
+// A) Importar caravanas a un rodeo
+app.post('/api/rodeos/:id/caravanas-importar', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const rodeo = await prisma.rodeo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!rodeo) return res.status(404).json({ ok: false, error: 'Rodeo no encontrado' });
+    const d = z.object({
+      caravanas: z.array(z.object({
+        rfid: z.string().min(1),
+        visual: z.string().nullable().optional(),
+        peso: z.coerce.number().nullable().optional(),
+        fecha: z.coerce.date().nullable().optional(),
+      })).min(1),
+      especie: z.string().optional(),
+      categoria: z.string().nullable().optional(),
+      costoIngreso: z.coerce.number().nullable().optional(),
+      moneda: z.enum(['ARS', 'USD']).optional(),
+    }).parse(req.body);
+
+    const especie = (d.especie || 'bovino');
+    const categoria = (d.categoria != null ? d.categoria : rodeo.categoria) || null;
+    const costoIngreso = Number(d.costoIngreso || 0);
+    const moneda = d.moneda || 'ARS';
+
+    // Dedup dentro del archivo (gana la primera aparición)
+    const seen = new Set(); let dupArchivo = 0; const filas = [];
+    for (const c of d.caravanas) {
+      const rfid = _rfidNorm(c.rfid);
+      if (!rfid) continue;
+      if (seen.has(rfid)) { dupArchivo++; continue; }
+      seen.add(rfid);
+      filas.push({ rfid, visual: (c.visual != null ? String(c.visual).trim() : null), peso: (c.peso != null ? Number(c.peso) : null), fecha: c.fecha ? new Date(c.fecha) : null });
+    }
+    const rfids = filas.map(f => f.rfid);
+    const existentes = await prisma.animal.findMany({ where: { companyId: req.companyId, caravanaRfid: { in: rfids } }, select: { id: true, caravanaRfid: true } });
+    const exMap = new Map(existentes.map(a => [a.caravanaRfid, a.id]));
+
+    let creados = 0, movidos = 0;
+    const nuevos = [];
+    for (const f of filas) {
+      const exId = exMap.get(f.rfid);
+      if (exId) {
+        await prisma.animal.update({ where: { id: exId }, data: {
+          rodeoId: rodeo.id, estado: 'activo',
+          ...(f.visual ? { caravanaVisual: f.visual } : {}),
+          ...(f.peso != null ? { pesoKg: f.peso, pesoFecha: f.fecha || new Date() } : {}),
+        }});
+        movidos++;
+      } else {
+        nuevos.push({
+          companyId: req.companyId, especie,
+          nombre: f.visual || ('RFID ' + f.rfid.slice(-6)),
+          categoria, estado: 'activo',
+          caravanaRfid: f.rfid, caravanaVisual: f.visual,
+          rodeoId: rodeo.id,
+          fechaIngreso: f.fecha || new Date(), origen: 'comprado',
+          costoIngreso, moneda,
+          ...(f.peso != null ? { pesoKg: f.peso, pesoFecha: f.fecha || new Date() } : {}),
+        });
+      }
+    }
+    if (nuevos.length) { await prisma.animal.createMany({ data: nuevos }); creados = nuevos.length; }
+    res.status(201).json({ ok: true, creados, movidos, total: creados + movidos, duplicadosArchivo: dupArchivo });
+  } catch (e) { next(e); }
+});
+
+// B) Pesaje por caravana (RFID): auto-mapea al rodeo del animal + detecta faltantes
+app.post('/api/pesaje-rfid', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      pesajes: z.array(z.object({
+        rfid: z.string().min(1),
+        visual: z.string().nullable().optional(),
+        peso: z.coerce.number(),
+        fecha: z.coerce.date().nullable().optional(),
+      })).min(1),
+      rodeoId: z.string().nullable().optional(),
+      registrarEvento: z.boolean().optional(),
+    }).parse(req.body);
+
+    // Último peso leído por RFID (gana el último del archivo)
+    const porRfid = new Map();
+    for (const p of d.pesajes) { const rfid = _rfidNorm(p.rfid); if (!rfid) continue;
+      porRfid.set(rfid, { rfid, visual: p.visual != null ? String(p.visual).trim() : null, peso: Number(p.peso), fecha: p.fecha ? new Date(p.fecha) : new Date() }); }
+    const rfids = [...porRfid.keys()];
+    const animales = await prisma.animal.findMany({ where: { companyId: req.companyId, caravanaRfid: { in: rfids } },
+      select: { id: true, caravanaRfid: true, caravanaVisual: true, rodeoId: true } });
+    const anMap = new Map(animales.map(a => [a.caravanaRfid, a]));
+
+    const desconocidas = []; const pesadosSet = new Set(); const porRodeo = new Map();
+    for (const [rfid, p] of porRfid) {
+      const a = anMap.get(rfid);
+      if (!a) { desconocidas.push({ rfid, visual: p.visual, peso: p.peso }); continue; }
+      await prisma.animal.update({ where: { id: a.id }, data: { pesoKg: p.peso, pesoFecha: p.fecha } });
+      await prisma.animalEvento.create({ data: { companyId: req.companyId, animalId: a.id, fecha: p.fecha, tipo: 'pesaje', concepto: `Pesaje ${_round2(p.peso)} kg (caravana/balanza)` } }).catch(()=>{});
+      pesadosSet.add(rfid);
+      const rid = a.rodeoId || '_sin';
+      const acc = porRodeo.get(rid) || { cabezas: 0, kg: 0 };
+      acc.cabezas++; acc.kg += p.peso; porRodeo.set(rid, acc);
+    }
+
+    // Registrar un evento de pesaje por rodeo (resumen), salvo que pidan no hacerlo
+    const rodeoIds = [...porRodeo.keys()].filter(x => x !== '_sin');
+    const rodeos = await prisma.rodeo.findMany({ where: { id: { in: rodeoIds }, companyId: req.companyId }, select: { id: true, nombre: true } });
+    const rodeoNombre = new Map(rodeos.map(r => [r.id, r.nombre]));
+    const resumenRodeos = [];
+    for (const rid of rodeoIds) {
+      const acc = porRodeo.get(rid); const kg = _round2(acc.kg);
+      if (d.registrarEvento !== false) {
+        await prisma.rodeoEvento.create({ data: { companyId: req.companyId, rodeoId: rid, fecha: new Date(), tipo: 'pesaje',
+          concepto: `Pesaje por caravana (${acc.cabezas} animales)`, cabezas: acc.cabezas, kg, monto: 0, moneda: 'ARS' } });
+      }
+      resumenRodeos.push({ rodeoId: rid, nombre: rodeoNombre.get(rid) || '—', cabezas: acc.cabezas, kg, promedio: acc.cabezas ? _round2(kg / acc.cabezas) : 0 });
+    }
+
+    // Faltantes: animales activos del/los rodeo(s) que NO recibieron pesaje
+    const scopeRodeos = d.rodeoId ? [d.rodeoId] : rodeoIds;
+    const faltantes = [];
+    if (scopeRodeos.length) {
+      const activos = await prisma.animal.findMany({ where: { companyId: req.companyId, rodeoId: { in: scopeRodeos },
+        estado: { notIn: ['baja', 'vendido'] } }, select: { id: true, caravanaRfid: true, caravanaVisual: true, rodeoId: true } });
+      const byRodeo = {};
+      for (const a of activos) { if (a.caravanaRfid && pesadosSet.has(a.caravanaRfid)) continue;
+        (byRodeo[a.rodeoId] = byRodeo[a.rodeoId] || []).push({ id: a.id, rfid: a.caravanaRfid, visual: a.caravanaVisual }); }
+      for (const rid of Object.keys(byRodeo)) faltantes.push({ rodeoId: rid, nombre: rodeoNombre.get(rid) || (d.rodeoId ? (await prisma.rodeo.findFirst({ where: { id: rid, companyId: req.companyId }, select: { nombre: true } }))?.nombre : '—') || '—', animales: byRodeo[rid] });
+    }
+
+    res.json({ ok: true, pesados: pesadosSet.size, rodeos: resumenRodeos, desconocidas, faltantes });
+  } catch (e) { next(e); }
+});
+
+// C) Resolver faltantes: marcar extraviado/muerto (baja) o dejar pendiente
+app.post('/api/animales/marcar-faltantes', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const d = z.object({ ids: z.array(z.string()).min(1), accion: z.enum(['extraviado', 'muerto', 'pendiente']), fecha: z.coerce.date().nullable().optional() }).parse(req.body);
+    if (d.accion === 'pendiente') return res.json({ ok: true, actualizados: 0 });
+    const fecha = d.fecha ? new Date(d.fecha) : new Date();
+    const nota = d.accion === 'muerto' ? 'Baja por mortandad (detectado en pesaje por caravana)' : 'Baja por extravío (no leído en pesaje por caravana)';
+    const animales = await prisma.animal.findMany({ where: { id: { in: d.ids }, companyId: req.companyId }, select: { id: true, rodeoId: true, pesoKg: true, observaciones: true } });
+    let n = 0;
+    for (const a of animales) {
+      await prisma.animal.update({ where: { id: a.id }, data: { estado: 'baja', observaciones: [a.observaciones, nota].filter(Boolean).join(' · ') } });
+      if (a.rodeoId) await prisma.rodeoEvento.create({ data: { companyId: req.companyId, rodeoId: a.rodeoId, fecha, tipo: 'baja',
+        concepto: nota, cabezas: 1, kg: _round2(Number(a.pesoKg || 0)), monto: 0, moneda: 'ARS' } }).catch(()=>{});
+      n++;
+    }
+    res.json({ ok: true, actualizados: n });
   } catch (e) { next(e); }
 });
 
