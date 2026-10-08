@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.281.0';
+const AGROCORE_VERSION = '2.283.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -949,6 +949,22 @@ function _companyActiva(req) {
   return uc?.company || null;
 }
 
+// Normaliza un telefono a formato WhatsApp argentino: codigo de pais 54 + 9 (celular).
+// Ej: "+54 3624 746230" -> "5493624746230". Soporta 0 de larga distancia y el 549 ya puesto.
+function _waArgentina(telRaw) {
+  let d = String(telRaw || '').replace(/[^0-9]/g, '');
+  if (!d) return '';
+  d = d.replace(/^00/, ''); // prefijo internacional 00
+  if (d.startsWith('54')) {
+    let rest = d.slice(2).replace(/^0/, ''); // nacional, sin 0 de larga distancia
+    if (!rest.startsWith('9')) rest = '9' + rest; // 9 de celular
+    return '54' + rest;
+  }
+  // Sin codigo de pais: asumimos Argentina.
+  d = d.replace(/^0/, '');
+  return d.startsWith('9') ? '54' + d : '549' + d;
+}
+
 // A quién avisamos cuando se crea una empresa nueva desde la prueba gratuita.
 const TRIAL_AVISO_EMAIL = process.env.TRIAL_AVISO_EMAIL || 'consultas@agrocore.ar';
 // Envía un email interno con los datos del nuevo trial (no bloquea el alta si falla).
@@ -956,7 +972,7 @@ async function _notificarNuevaEmpresaTrial(su, company) {
   if (!mailConfigurado()) return { ok: false, notConfigured: true };
   const act = { agricola: 'Agrícola', ganadera: 'Ganadera', mixta: 'Mixta' }[su.actividad] || (su.actividad || '—');
   const ubic = [su.ciudad, su.provincia].filter(Boolean).join(', ') || '—';
-  const tel = (su.telefono || '').replace(/[^0-9]/g, '');
+  const tel = _waArgentina(su.telefono);
   const filas = [
     ['Empresa / establecimiento', su.empresa],
     ['Contacto', su.nombre],
