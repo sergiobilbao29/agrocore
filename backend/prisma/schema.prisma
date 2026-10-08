@@ -1985,8 +1985,10 @@ model LiquidacionCereal {
   precioPorTn      Float    @default(0)
   bruto            Float    @default(0)   // (kilosNetos / 1000) * precioPorTn
   totalDescuentos  Float    @default(0)   // suma de conceptos negativos
-  totalImpuestos   Float    @default(0)   // IVA + IIBB + ganancias retenidas
-  neto             Float    @default(0)   // a cobrar
+  totalImpuestos   Float    @default(0)   // retenciones (IIBB + ganancias) que RESTAN
+  alicuotaIva      Float    @default(0)   // % de IVA sobre el bruto (ej. 10.5)
+  iva              Float    @default(0)   // IVA que SE SUMA al neto a cobrar
+  neto             Float    @default(0)   // mercadería neta (bruto - descuentos - retenciones)
   fechaCobroEst    DateTime?              // estimada de cobro (para el flujo proyectado)
   cobrado          Boolean  @default(false)
   observaciones    String?
