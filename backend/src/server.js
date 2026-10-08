@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.279.0';
+const AGROCORE_VERSION = '2.280.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17105,7 +17105,7 @@ app.post('/api/pesaje-rfid', requireCompany, requirePermission('stock:update'), 
       const a = anMap.get(rfid);
       if (!a) { desconocidas.push({ rfid, visual: p.visual, peso: p.peso }); continue; }
       await prisma.animal.update({ where: { id: a.id }, data: { pesoKg: p.peso, pesoFecha: p.fecha } });
-      await prisma.animalEvento.create({ data: { companyId: req.companyId, animalId: a.id, fecha: p.fecha, tipo: 'pesaje', concepto: `Pesaje ${_round2(p.peso)} kg (caravana/balanza)` } }).catch(()=>{});
+      await prisma.animalEvento.create({ data: { companyId: req.companyId, animalId: a.id, fecha: p.fecha, tipo: 'pesaje', cantidad: _round2(p.peso), concepto: `Pesaje ${_round2(p.peso)} kg (caravana/balanza)` } }).catch(()=>{});
       pesadosSet.add(rfid);
       const rid = a.rodeoId || '_sin';
       const acc = porRodeo.get(rid) || { cabezas: 0, kg: 0 };
