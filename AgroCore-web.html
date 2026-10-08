@@ -3017,6 +3017,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'08/10/2026',
+      titulo:'🌾 v2.285.0 — IVA en la liquidación de cereal',
+      desc:'La <b>liquidación de cereal</b> ahora contempla el <b>IVA</b>. En el formulario elegís la alícuota (<b>Sin IVA / 10,5% / 21%</b>) y el sistema muestra <b>Neto mercadería</b>, <b>IVA</b> y <b>TOTAL A COBRAR</b> (neto + IVA). La <b>cuenta corriente del cliente</b> queda por el total con IVA, así cuando cobrás todo —los cheques por el neto y la <b>transferencia del IVA</b>— la liquidación queda saldada <b>sin dejar un saldo a favor</b> por el IVA. Las liquidaciones ya cargadas quedan igual (IVA 0); si necesitás, podés editarlas y elegir la alícuota.' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'08/10/2026',
+      titulo:'🧾 v2.284.0 — Recibo de cobro: muestra la transferencia y el total real',
+      desc:'En los cobros con <b>varios medios</b>, el <b>recibo</b> ahora detalla también la <b>transferencia</b> (y el efectivo/tarjeta), no solo los cheques: se agregó una sección <b>“Otros medios”</b> con el banco y el importe de cada una. Además, el <b>TOTAL RECIBIDO</b> toma el <b>total realmente cobrado</b> (cheques + transferencias), que antes podía salir recortado. Aplica a la pantalla, la impresión y el PDF.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'08/10/2026',
       titulo:'🧾 v2.283.0 — Recibo de sueldo: ahora muestra el saldo que arrastra',
       desc:'El <b>recibo de liquidación de sueldo</b> (PDF) ahora refleja el <b>arrastre</b> de meses anteriores, no solo el neto del mes. Debajo de los totales muestra: <b>Neto del mes</b>, el <b>saldo a favor o en contra del mes anterior</b> y el <b>TOTAL A PAGAR (con arrastre)</b>. Si la liquidación ya está hecha, agrega lo <b>pagado</b> y el <b>saldo que pasa al mes siguiente</b> — así los empleados ven en el recibo lo mismo que cobran por transferencia.' },
@@ -20300,6 +20306,9 @@ function _recHTML(r){
     ${(r.cheques&&r.cheques.length)?`<table style="width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px">
       <thead><tr style="background:#f1f5f9"><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left">Cheque N°</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left">Banco</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left">Vto.</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right">Importe</th></tr></thead>
       <tbody>${r.cheques.map(c=>`<tr><td style="border:1px solid #cbd5e1;padding:4px 6px">${esc(c.nroCheque||'')}</td><td style="border:1px solid #cbd5e1;padding:4px 6px">${esc(c.banco||'')}</td><td style="border:1px solid #cbd5e1;padding:4px 6px">${c.fechaPago?fmtDate(c.fechaPago):'—'}</td><td style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right">${fmt$(c.importe||0)}</td></tr>`).join('')}</tbody></table>`:''}
+    ${(r.otros&&r.otros.length)?`<table style="width:100%;border-collapse:collapse;margin-bottom:10px;font-size:11px">
+      <thead><tr style="background:#f1f5f9"><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left">Otros medios</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right">Importe</th></tr></thead>
+      <tbody>${r.otros.map(o=>`<tr><td style="border:1px solid #cbd5e1;padding:4px 6px">${esc(o.label||'')}</td><td style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right">${fmt$(o.importe||0)}</td></tr>`).join('')}</tbody></table>`:''}
     <div style="background:#166534;color:#fff;padding:10px 14px;border-radius:6px;display:flex;justify-content:space-between;font-size:15px;font-weight:bold;margin-bottom:24px">
       <span>TOTAL RECIBIDO</span><span>${fmt$(r.monto)}</span></div>
     ${r.obs?`<div style="font-size:11px;color:#64748b;margin-bottom:16px">Observaciones: ${esc(r.obs)}</div>`:''}
@@ -20334,6 +20343,11 @@ function _recBuildPDF(r){
   if (r.cheques && r.cheques.length){
     doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.text('Cheques entregados:', M, y); y+=12; doc.setFont('helvetica','normal');
     for (const c of r.cheques){ doc.text('N° '+(c.nroCheque||'')+'  '+(c.banco||'')+(c.fechaPago?'  vto '+fmtDate(c.fechaPago):''), M+6, y); doc.text(fmt$(c.importe||0), W-M-12, y, {align:'right'}); y+=11; }
+    y+=6; doc.setFontSize(9);
+  }
+  if (r.otros && r.otros.length){
+    doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.text('Otros medios:', M, y); y+=12; doc.setFont('helvetica','normal');
+    for (const o of r.otros){ doc.text(String(o.label||''), M+6, y); doc.text(fmt$(o.importe||0), W-M-12, y, {align:'right'}); y+=11; }
     y+=6; doc.setFontSize(9);
   }
   doc.setFillColor(22,101,52); doc.rect(M,y,W-2*M,26,'F'); doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(12);
@@ -20640,23 +20654,32 @@ async function pagoCobroConfirmar(modo) {
     if (!esPago && monto > 0.01) {
       const cli = (state.cache.clientes||[]).find(c=>c.id===contactoId) || {};
       const recComps = comprobantes.map(c => { const it=(d.comprobantes||[]).find(x=>x.id===c.ctaCteId)||{}; return { detalle: it.detalle||it.referencia||'Comprobante', importe: c.importeAplicado }; });
+      // Total REALMENTE recibido: si hubo varios medios, body.monto = suma de todos (incluye transferencias).
+      const montoRec = Math.max(Number(body.monto)||0, monto);
+      // Nombre de una cuenta bancaria por id (para detallar transferencias en el recibo).
+      const _bcoNombre = (id)=>{ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===id); return b?`${b.banco}${b.numero?' '+b.numero:''}`:''; };
       const rec = { numero:_rsp?.data?.numero||null, cliente: cli.razonSocial||'', clienteCuit: cli.cuit||'', clienteEmail: cli.email||'', clienteTel: cli.telefono||'',
-        fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', cheques: [], comprobantes: recComps };
-      if (metodo==='transferencia' && body.bancoCuentaId){ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===body.bancoCuentaId); if(b) rec.bancoNombre=`${b.banco}${b.numero?' '+b.numero:''}`; }
+        fecha, metodo, monto: montoRec, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', cheques: [], otros: [], comprobantes: recComps };
+      if (metodo==='transferencia' && body.bancoCuentaId){ const b=_bcoNombre(body.bancoCuentaId); if(b) rec.bancoNombre=b; rec.otros.push({ label:'Transferencia'+(b?' · '+b:''), importe: montoRec }); }
+      if (metodo==='efectivo' && !(body.pagos&&body.pagos.length)){ rec.otros.push({ label:'Efectivo'+(body.cajaOrigen?' · '+body.cajaOrigen:''), importe: montoRec }); }
       if (metodo==='cheque' && body.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===body.chequeId); if(ch){ rec.chequeInfo=`${ch.banco||''} N° ${ch.numero||ch.nroCheque||''}`; rec.cheques.push({ banco:ch.banco||'', nroCheque:ch.numero||ch.nroCheque||'', fechaPago:ch.fechaPago, importe:Number(ch.monto)||0 }); } }
-      // Cobro con VARIOS medios: detallar cheques (en cartera o nuevos) y el resumen de forma de cobro.
+      // Cobro con VARIOS medios: detallar cheques, transferencias y efectivo, y el resumen de forma de cobro.
       if (body.pagos && body.pagos.length){
-        rec.metodo='varios'; const partes=[];
+        rec.metodo='varios';
         for (const leg of body.pagos){
           if (leg.metodo==='cheque' && leg.chequeId){ const ch=(state.cache.cheques||[]).find(x=>x.id===leg.chequeId)||{}; rec.cheques.push({ banco:ch.banco||'', nroCheque:ch.numero||ch.nroCheque||'', fechaPago:ch.fechaPago, importe:Number(ch.monto)||leg.monto }); }
           else if (leg.metodo==='cheque' && leg.nuevoCheque){ rec.cheques.push({ banco:leg.nuevoCheque.banco||'', nroCheque:leg.nuevoCheque.nroCheque||'', fechaPago:leg.nuevoCheque.fechaPago, importe:Number(leg.nuevoCheque.monto)||leg.monto }); }
+          else if (leg.metodo==='transferencia'){ const b=_bcoNombre(leg.bancoCuentaId); rec.otros.push({ label:'Transferencia'+(b?' · '+b:''), importe:Number(leg.monto)||0 }); }
+          else if (leg.metodo==='efectivo'){ rec.otros.push({ label:'Efectivo'+(leg.cajaDestino?' · '+leg.cajaDestino:''), importe:Number(leg.monto)||0 }); }
+          else if (leg.metodo==='tarjeta'){ rec.otros.push({ label:'Tarjeta', importe:Number(leg.monto)||0 }); }
+          else if (leg.metodo==='externo'){ rec.otros.push({ label:'Otro medio', importe:Number(leg.monto)||0 }); }
         }
         const nCh=rec.cheques.length, ef=body.pagos.filter(l=>l.metodo==='efectivo'||l.metodo==='externo'||l.metodo==='tarjeta').length, tr=body.pagos.filter(l=>l.metodo==='transferencia').length;
         rec.chequeInfo=[ef?'efectivo':null, tr?'transferencia':null, nCh?(nCh+' cheque'+(nCh===1?'':'s')):null].filter(Boolean).join(' + ');
       }
       try {
         const rd=await api('/api/documentos',{method:'POST',body:JSON.stringify({ tipo:'recibo_cobro', numero:rec.numero, fecha,
-          contactoTipo:'cliente', contactoId, contactoNombre:rec.cliente, contactoEmail:rec.clienteEmail||null, total:monto, moneda:'ARS', datos:rec })});
+          contactoTipo:'cliente', contactoId, contactoNombre:rec.cliente, contactoEmail:rec.clienteEmail||null, total:montoRec, moneda:'ARS', datos:rec })});
         rec._docId=rd?.data?.id||null;
         if (rd?.data?.numero) rec.numero = rd.data.numero; // número correlativo asignado por el sistema
       } catch(e){}
@@ -32726,12 +32749,17 @@ async function liqForm(edit=null, desdeViajeId=null) {
         </div>
         <div class="px-3 py-1 text-[11px] text-slate-500">Tildá la(s) carta(s) de porte que cubre esta liquidación. Una CP puede tener varias liquidaciones (parcial + final). "Sumar kg" completa los Kilos brutos con la suma de las tildadas.</div>
       </div>` : ''}
-      <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
-        <div class="col-span-4 text-xs text-blue-800 font-medium">⚖️ Cálculo del bruto</div>
+      <div class="grid grid-cols-5 gap-3 mb-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+        <div class="col-span-5 text-xs text-blue-800 font-medium">⚖️ Cálculo del bruto</div>
         <div><label class="label">Kilos brutos *</label><input id="lq-brut" type="number" step="0.01" class="input" value="${ed.kilosBrutos!=null?ed.kilosBrutos:''}" oninput="liqRecalc()"/></div>
         <div><label class="label">% Merma</label><input id="lq-merma" type="number" step="0.01" class="input" value="${ed.porcMerma!=null?ed.porcMerma:0}" oninput="liqRecalc()"/></div>
         <div><label class="label">Kg netos (calc.)</label><input id="lq-net" class="input bg-slate-100" readonly/></div>
         <div><label class="label">Precio $/tn *</label><input id="lq-prec" type="number" step="0.01" class="input" value="${ed.precioPorTn!=null?ed.precioPorTn:''}" oninput="liqRecalc()"/></div>
+        <div><label class="label">IVA</label>
+          <select id="lq-iva-alic" class="input" onchange="liqRecalc()">
+            ${[['0','Sin IVA'],['10.5','10,5%'],['21','21%']].map(([v,l])=>`<option value="${v}" ${String(ed.alicuotaIva!=null?ed.alicuotaIva:'10.5')===v?'selected':''}>${l}</option>`).join('')}
+          </select>
+        </div>
       </div>
       <div class="kpi p-0 overflow-hidden mb-3">
         <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
@@ -32743,12 +32771,14 @@ async function liqForm(edit=null, desdeViajeId=null) {
           <tbody id="lq-conc"></tbody>
         </table>
       </div>
-      <div class="grid grid-cols-4 gap-3 mb-3 p-3 bg-green-50 rounded-lg border border-green-200">
+      <div class="grid grid-cols-5 gap-3 mb-3 p-3 bg-green-50 rounded-lg border border-green-200">
         <div><label class="label text-xs">Bruto</label><div id="lq-r-bruto" class="text-base font-bold">$ 0,00</div></div>
         <div><label class="label text-xs">Descuentos</label><div id="lq-r-desc" class="text-base font-bold text-red-700">$ 0,00</div></div>
-        <div><label class="label text-xs">Impuestos</label><div id="lq-r-imp" class="text-base font-bold text-red-700">$ 0,00</div></div>
-        <div><label class="label text-xs">NETO A COBRAR</label><div id="lq-r-neto" class="text-lg font-bold text-green-700">$ 0,00</div></div>
+        <div><label class="label text-xs">Retenciones</label><div id="lq-r-imp" class="text-base font-bold text-red-700">$ 0,00</div></div>
+        <div><label class="label text-xs">IVA</label><div id="lq-r-iva" class="text-base font-bold text-blue-700">$ 0,00</div></div>
+        <div><label class="label text-xs">TOTAL A COBRAR</label><div id="lq-r-neto" class="text-lg font-bold text-green-700">$ 0,00</div></div>
       </div>
+      <div class="text-[11px] text-slate-500 -mt-1 mb-3">Neto mercadería (sin IVA): <b id="lq-r-netomerc">$ 0,00</b>. El <b>IVA se suma</b> al total a cobrar; las retenciones se restan.</div>
       <div class="kpi p-0 overflow-hidden mb-3">
         <div class="px-3 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
           <span class="text-sm font-medium text-slate-700">🚚 Deducciones del comprador (flete/gastos que te descontó)</span>
@@ -32969,11 +32999,17 @@ function liqRecalc() {
     if (tipo === 'descuento') totalDesc += imp;
     else totalImp += imp;
   });
+  const alicIva = Number($('#lq-iva-alic')?.value||0);
+  const netoMerc = bruto - totalDesc - totalImp;      // mercadería neta (sin IVA)
+  const iva = bruto * alicIva / 100;                  // IVA sobre el bruto, se SUMA
+  const aCobrar = netoMerc + iva;
   $('#lq-net').value = fmtN(neto);
   $('#lq-r-bruto').textContent = fmt$(bruto);
   $('#lq-r-desc').textContent = '- ' + fmt$(totalDesc);
   $('#lq-r-imp').textContent = '- ' + fmt$(totalImp);
-  $('#lq-r-neto').textContent = fmt$(bruto - totalDesc - totalImp);
+  const elIva = $('#lq-r-iva'); if (elIva) elIva.textContent = '+ ' + fmt$(iva);
+  const elNm = $('#lq-r-netomerc'); if (elNm) elNm.textContent = fmt$(netoMerc);
+  $('#lq-r-neto').textContent = fmt$(aCobrar);
 }
 async function liqSave() {
   const conceptos = $$('#lq-conc tr[data-lc]').map(tr => ({
@@ -32999,6 +33035,7 @@ async function liqSave() {
     kilosBrutos: Number($('#lq-brut').value||0),
     porcMerma: Number($('#lq-merma').value||0),
     precioPorTn: Number($('#lq-prec').value||0),
+    alicuotaIva: Number($('#lq-iva-alic')?.value||0),
     conceptos,
     deducciones,
     fechaCobroEst: $('#lq-cobro').value ? new Date($('#lq-cobro').value).toISOString() : null,
@@ -33034,8 +33071,10 @@ async function liqVer(id) {
           <dt class="text-slate-500">Precio</dt><dd>${fmt$(l.precioPorTn)}/tn</dd>
           <dt class="text-slate-500">Bruto</dt><dd>${fmt$(l.bruto)}</dd>
           <dt class="text-slate-500">Descuentos</dt><dd>- ${fmt$(l.totalDescuentos)}</dd>
-          <dt class="text-slate-500">Impuestos</dt><dd>- ${fmt$(l.totalImpuestos)}</dd>
-          <dt class="text-slate-500"><b>NETO</b></dt><dd><b class="text-green-700">${fmt$(l.neto)}</b></dd>
+          <dt class="text-slate-500">Retenciones</dt><dd>- ${fmt$(l.totalImpuestos)}</dd>
+          <dt class="text-slate-500">Neto mercadería</dt><dd>${fmt$(l.neto)}</dd>
+          ${Number(l.iva||0)>0?`<dt class="text-slate-500">IVA${l.alicuotaIva?' ('+l.alicuotaIva+'%)':''}</dt><dd class="text-blue-700">+ ${fmt$(l.iva)}</dd>`:''}
+          <dt class="text-slate-500"><b>TOTAL A COBRAR</b></dt><dd><b class="text-green-700">${fmt$(Number(l.neto||0)+Number(l.iva||0))}</b></dd>
         </dl>
         ${l.conceptos?.length ? `
           <table class="data mb-3"><thead><tr><th>Tipo</th><th>Concepto</th><th class="text-right">Importe</th></tr></thead>
