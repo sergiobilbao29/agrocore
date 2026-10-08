@@ -3018,6 +3018,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'08/10/2026',
+      titulo:'🧾 v2.283.0 — Recibo de sueldo: ahora muestra el saldo que arrastra',
+      desc:'El <b>recibo de liquidación de sueldo</b> (PDF) ahora refleja el <b>arrastre</b> de meses anteriores, no solo el neto del mes. Debajo de los totales muestra: <b>Neto del mes</b>, el <b>saldo a favor o en contra del mes anterior</b> y el <b>TOTAL A PAGAR (con arrastre)</b>. Si la liquidación ya está hecha, agrega lo <b>pagado</b> y el <b>saldo que pasa al mes siguiente</b> — así los empleados ven en el recibo lo mismo que cobran por transferencia.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'08/10/2026',
       titulo:'📚 v2.281.0 — Manual, Ayuda y asistente al día (caravanas, presupuesto y empaque)',
       desc:'Actualizamos toda la documentación para que coincida con el sistema: el <b>Manual de usuario</b> suma las secciones de <b>Presupuesto de campaña</b>, <b>Empaque / clasificación de hortícolas</b> y <b>Caravanas electrónicas (RFID)</b>; en <b>Ayuda → Instructivos</b> ya están los tres nuevos PDFs para descargar; y el <b>asistente de AgroCore</b> aprendió a explicar el <b>Empaque / Clasificación</b> (además de caravanas y presupuesto, que ya sabía). Nada cambia en la operatoria: es puro acompañamiento.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'07/10/2026',
@@ -25201,8 +25204,14 @@ function _empPlanillaMes(){
   const totGan=movsMes.filter(m=>m.tipo==='ganancia').reduce((a,m)=>a+Number(m.monto||0),0)+sueldoBase;
   const totGasto=movsMes.filter(m=>m.tipo==='gasto').reduce((a,m)=>a+Number(m.monto||0),0);
   const empresa=(state.user?.companies||[]).find(c=>c.id===state.companyId);
+  const neto=totGan-totGasto;
+  const saldoAnterior=empSaldoAnterior(emp,movs,liqs,mes);          // arrastre del/los mes(es) anterior(es)
+  const aPagar=Math.round((saldoAnterior+neto)*100)/100;           // total adeudado con arrastre
+  const pagado=liq?Number(liq.montoPagado||0):null;                 // lo realmente transferido
+  const saldoSiguiente=(pagado!=null)?Math.round((aPagar-pagado)*100)/100:null; // lo que pasa al mes que viene
   return {
-    emp, mes, movsMes, liq, sueldoBase, totGan, totGasto, neto: totGan-totGasto,
+    emp, mes, movsMes, liq, sueldoBase, totGan, totGasto, neto,
+    saldoAnterior, aPagar, pagado, saldoSiguiente,
     nombreEmpresa: empresa?.name || 'AgroCore',
     cuitEmpresa: empresa?.cuit||'',
   };
@@ -25314,15 +25323,47 @@ function empReciboPDF(){
     columnStyles:{0:{cellWidth:64},2:{halign:'right',cellWidth:90},3:{halign:'right',cellWidth:90}},
   });
   let yy=doc.lastAutoTable.finalY+18;
-  if (yy>pageH-170){ doc.addPage(); yy=50; }
+  if (yy>pageH-210){ doc.addPage(); yy=50; }
 
-  // Neto a cobrar
+  const hayArrastre = Math.abs(d.saldoAnterior||0) >= 0.5;
+
+  // Resumen de liquidación: neto del mes + arrastre del mes anterior.
+  doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(0,0,0);
+  const lineaResumen=(label,val,bold)=>{
+    doc.setFont('helvetica',bold?'bold':'normal');
+    doc.text(label,54,yy);
+    doc.text(val,pageW-54,yy,{align:'right'});
+    yy+=16;
+  };
+  lineaResumen('Neto del mes', fmtMoney(d.neto));
+  if (hayArrastre){
+    if (d.saldoAnterior>0) lineaResumen('(+) Saldo a favor del mes anterior', fmtMoney(d.saldoAnterior));
+    else lineaResumen('(-) Saldo en contra del mes anterior', fmtMoney(-d.saldoAnterior));
+  }
+  yy+=2;
+
+  // Total a pagar (con arrastre)
   doc.setFillColor(4,120,87);
   doc.rect(40,yy,pageW-80,34,'F');
   doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(12);
-  doc.text('NETO A COBRAR', 54, yy+22);
-  doc.text(fmtMoney(d.neto), pageW-54, yy+22, {align:'right'});
+  doc.text(hayArrastre?'TOTAL A PAGAR (con arrastre)':'NETO A COBRAR', 54, yy+22);
+  doc.text(fmtMoney(d.aPagar), pageW-54, yy+22, {align:'right'});
   doc.setTextColor(0,0,0); yy+=48;
+
+  // Si ya se liquidó: lo pagado y el saldo que pasa al mes siguiente.
+  if (d.liq && d.pagado!=null){
+    doc.setFont('helvetica','normal'); doc.setFontSize(10);
+    lineaResumen('Pagado ahora', fmtMoney(d.pagado));
+    const resto=d.saldoSiguiente||0;
+    if (Math.abs(resto)>=0.5){
+      doc.setTextColor(resto>0?4:180, resto>0?120:83, resto>0?87:9);
+      lineaResumen(resto>0?'Queda a favor del empleado (pasa al mes siguiente)':'Queda debiendo el empleado (pasa al mes siguiente)', fmtMoney(Math.abs(resto)), true);
+      doc.setTextColor(0,0,0);
+    } else {
+      lineaResumen('Saldo', 'Cuenta al día');
+    }
+    yy+=2;
+  }
 
   doc.setFont('helvetica','normal'); doc.setFontSize(9);
   if (d.liq){
