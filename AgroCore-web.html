@@ -3022,6 +3022,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/10/2026',
+      titulo:'🙋‍♀️ v2.294.0 — Conocé a Cora + carga por voz manos libres',
+      desc:'El asistente ahora se llama <b>Cora</b> 👋 y habla más cercano y campero. Y la gran novedad: <b>carga por voz manos libres</b> — tocás el micrófono 🎤, contás lo que hiciste (ej. <i>"cargá 200 litros de gasoil en el lote 3, pagué 150 mil en efectivo"</i>) y <b>al soltar se envía solo</b>: Cora lo entiende, te muestra la ficha para confirmar y lo guarda. Cuando falta un dato, te pide <b>solo ese</b>. La voz de Cora es femenina y más natural (si la IA está activada).' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/10/2026',
+      titulo:'🔊 v2.293.0 — Al asistente ahora lo podés hacer callar',
+      desc:'Sumamos un botón <b>⏹ Detener</b> al lado de la voz del Asistente para <b>cortar lo que está diciendo</b> en cualquier momento. Además, la voz <b>se calla sola</b> cuando empezás a escribir una orden nueva o cuando tocás el micrófono para dictar, así no te pisa. Recordá: la voz <b>humana</b> (más natural) necesita tener activada la IA; sin IA usa la voz del navegador, que suena más robótica.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/10/2026',
       titulo:'🔧 v2.292.0 — Fix: el reporte de centros de costo no cargaba',
       desc:'Corregimos un error que impedía abrir el <b>Reporte por centro de costo</b> (el detalle de las compras no tomaba bien el nombre del proveedor). Ahora el reporte abre normal y muestra el proveedor en cada compra imputada.' },
@@ -8467,11 +8473,13 @@ function chatVoz(inputId){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return toast('Tu navegador no soporta dictado por voz. Escribí el mensaje.','warn');
   if (_chatVozRec){ try{ _chatVozRec.stop(); }catch{} _chatVozRec=null; return; }
+  try { ttsStop(); } catch {}   // si el asistente está hablando, se calla al empezar a dictar
   const rec = new SR(); _chatVozRec = rec;
   rec.lang = 'es-AR'; rec.interimResults = false; rec.maxAlternatives = 1;
   const btn = document.getElementById(inputId==='chat-input'?'chat-voz':'chat-voz-a');
   if (btn) btn.textContent = '🔴';
-  rec.onresult = (e)=>{ const txt = e.results[0][0].transcript; const inp = document.getElementById(inputId); if (inp){ inp.value = (inp.value?inp.value+' ':'')+txt; inp.focus(); } };
+  let _vozTxt = '';
+  rec.onresult = (e)=>{ const txt = e.results[0][0].transcript; _vozTxt = txt; const inp = document.getElementById(inputId); if (inp){ inp.value = (inp.value?inp.value+' ':'')+txt; inp.focus(); } };
   rec.onerror = (e)=>{
     const err = e?.error||'';
     if (err==='not-allowed'||err==='service-not-allowed') toast('Tenés que permitir el micrófono para dictar. Revisá los permisos del navegador.','warn');
@@ -8479,7 +8487,12 @@ function chatVoz(inputId){
     else if (err==='network') toast('El dictado por voz no está disponible en este navegador (probá con Chrome). Igual podés escribir el mensaje.','warn');
     else if (err!=='aborted') toast('No pude captar el audio. Escribí el mensaje o probá con Chrome.','warn');
   };
-  rec.onend = ()=>{ _chatVozRec=null; if (btn) btn.textContent='🎤'; };
+  rec.onend = ()=>{ _chatVozRec=null; if (btn) btn.textContent='🎤';
+    // Manos libres con Cora: si dictaste en el Asistente, al terminar lo mando solo.
+    if (inputId==='chat-input-a' && _vozTxt.trim() && state._manosLibres!==false){
+      setTimeout(()=>{ try{ chatAsistente(); }catch{} }, 250);
+    }
+  };
   try { rec.start(); } catch { _chatVozRec=null; }
 }
 // --- Voz de salida (Text-to-Speech): el asistente lee en voz alta su respuesta ---
@@ -8519,25 +8532,44 @@ function _ttsMejorVoz(genero){
 }
 // Voz principal: neural de OpenAI (suena humana). Si la IA está apagada, no hay
 // internet, o falla, cae a la voz del navegador (_ttsHablarNavegador).
+// Frena cualquier voz en curso (neural de OpenAI o la del navegador) y marca el
+// botón como inactivo. Invalida también una reproducción neural que esté "en vuelo"
+// (incrementa _ttsSeq) para que no arranque a sonar después de tocar Detener.
+function ttsStop(){
+  state._ttsSeq = (state._ttsSeq || 0) + 1;
+  try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch {}
+  try { if (state._ttsAudio) { state._ttsAudio.pause(); state._ttsAudio.currentTime = 0; state._ttsAudio = null; } } catch {}
+  _ttsBtnEstado(false);
+}
+// Muestra/oculta el botón "Detener voz" según si está hablando.
+function _ttsBtnEstado(hablando){
+  const b = document.getElementById('chat-voz-stop');
+  if (b) b.style.display = hablando ? '' : 'none';
+}
 async function _ttsHablar(texto){
   try {
     if (!_ttsActivo() || !texto) return;
+    ttsStop();                              // corta lo anterior antes de empezar
+    const seq = state._ttsSeq;              // token de esta locución
     const genero = _ttsVoz()==='hombre' ? 'hombre' : 'mujer';
     // 1) Voz neural OpenAI. state._ttsNeural=false cuando ya sabemos que la IA está off.
     if (state._ttsNeural !== false) {
       try {
         const r = await api('/api/asistente/tts', { method:'POST', body: JSON.stringify({ texto, voz: genero }) });
+        if (state._ttsSeq !== seq) return;  // la frenaron mientras se generaba el audio
         if (r && r.ok && r.audioB64) {
-          try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch {}
-          try { if (state._ttsAudio) { state._ttsAudio.pause(); state._ttsAudio.currentTime = 0; } } catch {}
           const a = new Audio('data:' + (r.mime || 'audio/mpeg') + ';base64,' + r.audioB64);
           state._ttsAudio = a;
-          a.play().catch(()=> _ttsHablarNavegador(texto, genero));
+          a.onended = ()=>{ if (state._ttsAudio===a){ state._ttsAudio=null; _ttsBtnEstado(false); } };
+          a.onpause = ()=> _ttsBtnEstado(false);
+          _ttsBtnEstado(true);
+          a.play().catch(()=>{ _ttsBtnEstado(false); _ttsHablarNavegador(texto, genero); });
           return;
         }
         if (r && r.motivo === 'ia_off') state._ttsNeural = false; // no reintentar por respuesta
       } catch (e) { /* red/permiso: usamos el navegador */ }
     }
+    if (state._ttsSeq !== seq) return;
     // 2) Respaldo: voz del navegador.
     _ttsHablarNavegador(texto, genero);
   } catch {}
@@ -8561,9 +8593,12 @@ function _ttsHablarNavegador(texto, generoIn){
       const v = _ttsMejorVoz(genero);
       u.lang = (v && v.lang) || 'es-AR';
       // Más suave y humana: ritmo pausado y tono acorde al género.
-      u.rate = 0.9; u.pitch = genero==='hombre' ? 0.9 : 1.08; u.volume = 1;
+      u.rate = 0.95; u.pitch = genero==='hombre' ? 0.92 : 1.06; u.volume = 1;
       if (v) u.voice = v;
+      u.onend = ()=> _ttsBtnEstado(false);
+      u.onerror = ()=> _ttsBtnEstado(false);
       window.speechSynthesis.speak(u);
+      _ttsBtnEstado(true);
     };
     if (!(window.speechSynthesis.getVoices()||[]).length){
       window.speechSynthesis.onvoiceschanged = ()=>{ window.speechSynthesis.onvoiceschanged=null; hablar(); };
@@ -8610,7 +8645,7 @@ pages.mensajes = async function(){
       <button class="btn btn-ghost text-xs" onclick="probarAviso()" title="Enviar un aviso de prueba a este dispositivo">🧪 Probar</button>
     </div>
     ${esAsistente?`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2.5 mb-2">
-      <b>3 cosas</b> puedo hacer: <b>(1) Consultar</b> tus datos — <i>"¿cuánto stock queda de Atrazina?"</i> · <i>"mostrame los animales"</i>. <b>(2) Cargar</b> por vos — <i>"hoy fui a la panadería y gasté 5000 pesos"</i> · <i>"nacieron 5 terneros en Montenegro"</i> · <i>"aplicá 120 litros de Glifosato en el lote 1"</i> · <i>"recordar vacunar el 15/8"</i>. <b>(3) Explicarte cómo se hace</b> — <i>"¿cómo cargo un cheque de tercero?"</i>. Escribí o dictá 🎤, y elegí la <b>voz</b> (👩 mujer / 👨 hombre) para que te lea las respuestas.</div>`
+      👋 Hola, soy <b>Cora</b>, tu asistente de AgroCore. <b>3 cosas</b> puedo hacer: <b>(1) Consultar</b> tus datos — <i>"¿cuánto stock queda de Atrazina?"</i> · <i>"mostrame los animales"</i>. <b>(2) Cargar</b> por vos — <i>"hoy fui a la panadería y gasté 5000 pesos"</i> · <i>"nacieron 5 terneros en Montenegro"</i> · <i>"aplicá 120 litros de Glifosato en el lote 1"</i> · <i>"recordar vacunar el 15/8"</i>. <b>(3) Explicarte cómo se hace</b> — <i>"¿cómo cargo un cheque de tercero?"</i>. Escribí o dictá 🎤, y elegí la <b>voz</b> (👩 mujer / 👨 hombre) para que te lea las respuestas.</div>`
      : grupoActual?`<div class="text-xs text-slate-500 mb-2">👪 <b>${esc(grupoActual.nombre)}</b> · ${(grupoActual.miembros||[]).length} integrante${(grupoActual.miembros||[]).length===1?'':'s'}</div>`:''}
     <div id="chat-msgs" style="height:56vh;min-height:320px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
     <div id="chat-confirm"></div>
@@ -8619,7 +8654,8 @@ pages.mensajes = async function(){
         <option value="off" ${_ttsVoz()==='off'?'selected':''}>🔇 Sin voz</option>
         <option value="mujer" ${_ttsVoz()==='mujer'?'selected':''}>👩 Mujer</option>
         <option value="hombre" ${_ttsVoz()==='hombre'?'selected':''}>👨 Hombre</option>
-      </select>`:''}
+      </select>
+      <button class="btn btn-secondary" id="chat-voz-stop" style="display:none" onclick="ttsStop()" title="Frenar la voz">⏹</button>`:''}
       <button class="btn btn-secondary" id="${esAsistente?'chat-voz-a':'chat-voz'}" onclick="chatVoz('${esAsistente?'chat-input-a':'chat-input'}')" title="Dictar por voz">🎤</button>
       ${esAsistente?`
       <input type="file" id="ast-file" accept="application/pdf,image/*" class="hidden" onchange="astAnalizarArchivo(this.files&&this.files[0]); this.value='';"/>
@@ -8740,6 +8776,7 @@ async function chatEnviar(){
 async function chatAsistente(){
   const inp = document.getElementById('chat-input-a'); const txt = (inp?.value||'').trim();
   if (!txt) return;
+  try { ttsStop(); } catch {}   // si estaba hablando, se calla al mandar una orden nueva
   inp.value='';
   try {
     const r = await api('/api/asistente',{method:'POST',body:JSON.stringify({texto:txt, pendiente: state._astPendiente||null, empresaScope: state._astEmpresaScope||null})});

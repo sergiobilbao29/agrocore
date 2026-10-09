@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.292.0';
+const AGROCORE_VERSION = '2.294.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -14239,7 +14239,7 @@ function _saludoRespuesta(texto){
   const palabras = t.split(/\s+/).length;
   // Saludos (solo si el mensaje es corto y arranca saludando; si además pregunta algo, lo maneja la ayuda)
   if (palabras <= 4 && /^(hola|holis|holaa+|buenas|buen dia|buenos dias|buenas tardes|buenas noches|hey|que tal|como estas|como andas|como va|todo bien|que hace|saludos)\b/.test(t)){
-    return '¡Hola! 👋 ¿Cómo andás? Soy tu asistente de AgroCore, y estoy para darte una mano.\n\nPuedo *cargar cosas por vos* (los gastos del día, la hacienda, las labores, un recordatorio) o *explicarte cómo se hace algo* en el sistema, tranqui y paso a paso.\n\nPor ejemplo, contame algo así:\n• "hoy fui a la panadería y gasté 5000 pesos"\n• "nacieron 5 terneros en Montenegro"\n• o preguntame: "¿cómo hago una compra?"\n\nY si querés ver todo lo que sé hacer, escribí "ayuda". ¿En qué te ayudo?';
+    return '¡Hola! 👋 ¿Cómo andás? Soy *Cora*, tu asistente de AgroCore, y estoy para darte una mano.\n\nPuedo *cargar cosas por vos* (los gastos del día, la hacienda, las labores, un recordatorio) o *explicarte cómo se hace algo* en el sistema, tranqui y paso a paso.\n\nPor ejemplo, contame algo así:\n• "hoy fui a la panadería y gasté 5000 pesos"\n• "nacieron 5 terneros en Montenegro"\n• o preguntame: "¿cómo hago una compra?"\n\nY si querés ver todo lo que sé hacer, escribí "ayuda". ¿En qué te ayudo?';
   }
   // Agradecimientos
   if (palabras <= 4 && /^(gracias|muchas gracias|genial|perfecto|barbaro|buenisimo|joya|excelente|de diez|copado)\b/.test(t)){
@@ -14660,11 +14660,11 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       const rp = _completarPendiente(texto, pendiente, ctx);
       if (rp) {
         if (rp.cancelado) {
-          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', rp.mensaje, { status: 'ayuda' });
+          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', rp.mensaje, { status: 'ayuda' });
           return res.json({ ok: true, status: 'ayuda', mensaje: rp.mensaje, data: m });
         }
         if (rp.faltante) {
-          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', rp.pregunta, { status: 'faltante', accion: rp.accion, faltante: rp.faltante, params: rp.params });
+          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', rp.pregunta, { status: 'faltante', accion: rp.accion, faltante: rp.faltante, params: rp.params });
           return res.json({ ok: true, status: 'faltante', accion: rp.accion, faltante: rp.faltante, params: rp.params, mensaje: rp.pregunta, data: m });
         }
         readyPend = rp; // acción completa → sigue al armado de la propuesta
@@ -14675,12 +14675,12 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     // 0) Charla básica (saludos, gracias, chau) y pedido de ayuda general.
     const _sal = _saludoRespuesta(texto);
     if (_sal) {
-      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', _sal, { status: 'ayuda', charla: true });
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', _sal, { status: 'ayuda', charla: true });
       return res.json({ ok: true, status: 'ayuda', mensaje: _sal, data: m });
     }
     if (_esPedidoAyudaGeneral(_tn)) {
       const msg = _menuAyuda();
-      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', menu: true });
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda', menu: true });
       return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: m });
     }
     // 0.5) CONSULTAS de solo lectura (stock, animales, lotes, campañas, plata).
@@ -14698,7 +14698,7 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
         }
         if (partes.length) {
           const msg = partes.join('\n\n');
-          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', consulta: true });
+          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda', consulta: true });
           return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: m });
         }
       } else {
@@ -14711,10 +14711,10 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
           // Es una consulta. Si hay varias empresas y el usuario no eligió, preguntamos.
           if (multiEmpresa && !empresaScope) {
             const msg = '¿De qué empresa querés el dato? Elegí abajo 👇';
-            const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'empresa', modo: 'consulta' });
+            const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'empresa', modo: 'consulta' });
             return res.json({ ok: true, status: 'empresa', modo: 'consulta', texto, empresas, mensaje: msg, data: m });
           }
-          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', _c, { status: 'ayuda', consulta: true });
+          const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', _c, { status: 'ayuda', consulta: true });
           return res.json({ ok: true, status: 'ayuda', mensaje: _c, data: m });
         }
       }
@@ -14729,7 +14729,7 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
           ? 'Las facturas de venta con CAE se emiten desde Facturación (por seguridad no las emito yo). Te llevo y las revisás/emitís ahí.'
           : 'Las facturas de compra se cargan en Compras (con ítems e IVA). Si tenés el PDF o el Excel de ARCA, con "Importar" se carga casi solo. Te llevo.';
         const msg = intro + '\n\n' + _textoAyuda(e);
-        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', ayudaId: e.id });
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda', ayudaId: e.id });
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, titulo: e.titulo, data: m });
       }
     }
@@ -14738,14 +14738,14 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       const e = _buscarAyuda(texto);
       if (e) {
         const msg = _textoAyuda(e);
-        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', ayudaId: e.id });
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda', ayudaId: e.id });
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, ejemplo: e.ejemplo || null, titulo: e.titulo, data: m });
       }
       // 1-bis) Consulta AGRONÓMICA (suelos, plagas, malezas, cultivos, etc.).
       const ag = _buscarAgro(texto);
       if (ag) {
         const msg = _textoAgro(ag);
-        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', agroId: ag.entry.id });
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda', agroId: ag.entry.id });
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, titulo: 'Agronomía · ' + ag.entry.materia, data: m });
       }
     }
@@ -14762,7 +14762,7 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
           try {
             const c2 = await _consultaAsistente(norm, req.companyId, ctx, req);
             if (c2) {
-              const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', c2, { status: 'ayuda', consulta: true, ia: true });
+              const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', c2, { status: 'ayuda', consulta: true, ia: true });
               return res.json({ ok: true, status: 'ayuda', mensaje: c2, data: m });
             }
           } catch {}
@@ -14773,7 +14773,7 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
     }
     // Falta un dato para completar la carga (ej: el monto del gasto) → lo pedimos.
     if (r.faltante) {
-      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.pregunta, { status: 'faltante', accion: r.accion, faltante: r.faltante, params: r.params });
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', r.pregunta, { status: 'faltante', accion: r.accion, faltante: r.faltante, params: r.params });
       return res.json({ ok: true, status: 'faltante', accion: r.accion, faltante: r.faltante, params: r.params, mensaje: r.pregunta, data: m });
     }
     if (r.error) {
@@ -14781,17 +14781,17 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       const e = _buscarAyuda(texto);
       if (e) {
         const msg = _textoAyuda(e);
-        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', ayudaId: e.id });
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda', ayudaId: e.id });
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, atajo: e.atajo || null, ejemplo: e.ejemplo || null, titulo: e.titulo, data: m });
       }
       // 2-bis) Fallback agronómico: consulta técnica de campo.
       const ag = _buscarAgro(texto);
       if (ag) {
         const msg = _textoAgro(ag);
-        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', agroId: ag.entry.id });
+        const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda', agroId: ag.entry.id });
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, titulo: 'Agronomía · ' + ag.entry.materia, data: m });
       }
-      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', r.error, { status: 'ayuda' });
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', r.error, { status: 'ayuda' });
       return res.json({ ok: true, status: 'ayuda', mensaje: r.error, data: m });
     }
     // Empresa donde se cargará: deducida de la entidad matcheada (campo/campaña/contacto).
@@ -14811,7 +14811,7 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       if (prod) r.params.insumoNombre = prod.nombre; // usar el nombre exacto del catálogo
       if (!prod) { try { familias = [...await insumoTipoNombresSet(cidParaCatalogo)]; } catch { familias = INSUMO_TIPOS_BASE; } }
     }
-    const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente',
+    const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora',
       `Voy a registrar: ${r.resumen}. ¿Confirmás?`, { status: 'propuesta', accion: r.accion, params: r.params, resumen: r.resumen });
     const extra = {};
     // Listas para el editor, tomadas de la empresa que corresponda (la del contacto en
@@ -14832,7 +14832,7 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
 // mucho más natural que la del navegador. Si la IA no está activada o algo falla,
 // devuelve ok:false y el frontend usa la voz del navegador como respaldo.
 //   voz: 'mujer' | 'hombre'  → mapea a voces neurales cálidas de OpenAI.
-const _TTS_VOCES = { mujer: 'coral', hombre: 'onyx' };
+const _TTS_VOCES = { mujer: 'coral', hombre: 'ash' };  // voces cálidas/naturales (ash suena menos "robótico" que onyx)
 app.post('/api/asistente/tts', requireCompany, async (req, res, next) => {
   try {
     const ia = await _iaConfig();
@@ -14894,7 +14894,7 @@ app.post('/api/asistente/analizar-archivo', requireCompany, upload.single('archi
     const doc = await _iaAnalizarDocumento({ buffer: req.file.buffer, mime, filename: req.file.originalname, textoPdf }, ia);
     if (!doc || !doc.tipo) {
       const msg = 'No pude reconocer el documento 🤔. Probá con una foto más nítida o cargalo a mano.';
-      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', msg, { status: 'ayuda', archivo: true });
+      const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda', archivo: true });
       return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: m });
     }
     const d = doc.datos || {};
@@ -14926,7 +14926,7 @@ app.post('/api/asistente/analizar-archivo', requireCompany, upload.single('archi
     } else {
       mensaje = doc.resumen || 'No pude asociarlo a una acción. Cargalo a mano en la pantalla correspondiente.';
     }
-    await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', mensaje, { status: 'ayuda', archivo: true, tipo: doc.tipo });
+    await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', mensaje, { status: 'ayuda', archivo: true, tipo: doc.tipo });
     res.json({ ok: true, tipo: doc.tipo, resumen: doc.resumen || null, frase, atajo, mensaje });
   } catch (e) { next(e); }
 });
@@ -15030,7 +15030,7 @@ app.post('/api/asistente/confirmar', requireCompany, async (req, res, next) => {
     } else {
       return res.status(400).json({ ok: false, error: 'Acción no soportada' });
     }
-    const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Asistente', resumen, { status: 'hecho', accion });
+    const m = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', resumen, { status: 'hecho', accion });
     res.json({ ok: true, mensaje: resumen, data: m });
   } catch (e) { next(e); }
 });
