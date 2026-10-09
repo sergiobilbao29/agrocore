@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.285.0';
+const AGROCORE_VERSION = '2.286.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8050,7 +8050,18 @@ const movEmpSchema = z.object({
   unidad: z.string().nullable().optional(),
   monto: z.number(),
   observaciones: z.string().nullable().optional(),
+  // Pago inmediato desde caja/banco (solo para gastos de plata real: adelanto, compra).
+  pagarAhora: z.boolean().optional(),
+  medioPago: z.enum(['efectivo', 'transferencia', 'cheque']).nullable().optional(),
+  caja: z.string().nullable().optional(),
+  bancoCuentaId: z.string().nullable().optional(),
+  banco: z.string().nullable().optional(),
+  nroCheque: z.string().nullable().optional(),
 });
+// Categorias de GASTO que son salida real de plata (pueden pagarse al instante desde caja/banco).
+// NO entran descuento ni dia_no_trabajado (son deducciones, no mueven caja).
+const _CATS_GASTO_NO_CAJA = new Set(['descuento', 'dia_no_trab', 'proveeduria']);
+function _gastoMueveCaja(categoria) { return !_CATS_GASTO_NO_CAJA.has(String(categoria || '')); }
 
 // Listar movimientos de la planilla de un empleado.
 app.get('/api/empleados/:id/movimientos', requireCompany, requirePermission('rrhh:read'), async (req, res, next) => {
@@ -8071,23 +8082,52 @@ app.post('/api/empleados/:id/movimientos', requireCompany, requirePermission('rr
     const emp = await getEmpleadoScoped(req);
     if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
     const d = movEmpSchema.parse(req.body);
-    const row = await prisma.movimientoEmpleado.create({
-      data: {
-        companyId: req.companyId,
-        empleadoId: emp.id,
-        fecha: d.fecha,
-        periodo: periodoDe(d.fecha),
-        tipo: d.tipo,
-        categoria: d.categoria || null,
-        concepto: d.concepto,
-        horas: d.horas ?? null,
-        valorHora: d.valorHora ?? null,
-        cantidad: d.cantidad ?? null,
-        valorUnitario: d.valorUnitario ?? null,
-        unidad: d.unidad ?? null,
-        monto: d.monto,
-        observaciones: d.observaciones || null,
-      },
+    // ¿Hay que generar el egreso real de caja/banco ahora mismo?
+    // Solo para GASTOS de plata real (adelanto, compra...) con "pagar ahora" y monto positivo.
+    const pagaAhora = !!d.pagarAhora && d.tipo === 'gasto' && _gastoMueveCaja(d.categoria) && Number(d.monto) > 0 && !!d.medioPago;
+    const nombreEmp = (`${emp.nombre || ''} ${emp.apellido || ''}`).trim() || 'empleado';
+    const row = await prisma.$transaction(async (tx) => {
+      const mov = await tx.movimientoEmpleado.create({
+        data: {
+          companyId: req.companyId,
+          empleadoId: emp.id,
+          fecha: d.fecha,
+          periodo: periodoDe(d.fecha),
+          tipo: d.tipo,
+          categoria: d.categoria || null,
+          concepto: d.concepto,
+          horas: d.horas ?? null,
+          valorHora: d.valorHora ?? null,
+          cantidad: d.cantidad ?? null,
+          valorUnitario: d.valorUnitario ?? null,
+          unidad: d.unidad ?? null,
+          monto: d.monto,
+          observaciones: d.observaciones || null,
+        },
+      });
+      if (pagaAhora) {
+        const tag = `[EMPMOV:${mov.id}]`;
+        const concepto = `${d.concepto} · ${nombreEmp}`;
+        if (d.medioPago === 'efectivo') {
+          await tx.efectivo.create({ data: {
+            companyId: req.companyId, fecha: d.fecha, tipo: 'egreso', concepto, monto: Number(d.monto),
+            caja: d.caja || null, clasificacion: 'empresa', observaciones: `Empleados: ${d.concepto} ${tag}`,
+          }});
+        } else if (d.medioPago === 'cheque') {
+          await tx.cheque.create({ data: {
+            companyId: req.companyId, tipo: 'propio', banco: d.banco || null, nroCheque: d.nroCheque || null,
+            fechaEmision: d.fecha, fechaPago: d.fecha, monto: Number(d.monto), beneficiario: nombreEmp,
+            estado: 'en_cartera', observaciones: `Empleados: ${d.concepto} ${tag}`,
+          }});
+        } else if (d.medioPago === 'transferencia' && d.bancoCuentaId) {
+          await tx.bancoMovimiento.create({ data: {
+            companyId: req.companyId, cuentaId: d.bancoCuentaId, fecha: d.fecha, tipo: 'transferencia_out',
+            concepto, monto: Number(d.monto), contraparte: nombreEmp,
+            observaciones: `Empleados: ${d.concepto} ${tag}`, userId: req.user?.id || null,
+          }});
+        }
+      }
+      return mov;
     });
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
@@ -8125,6 +8165,11 @@ app.delete('/api/empleados/:id/movimientos/:movId', requireCompany, requirePermi
     if (existing.categoria === 'proveeduria') {
       try { await prisma.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'PROV:'+existing.id } }); } catch {}
     }
+    // Si al cargarlo generó un egreso real de caja/banco/cheque, lo revertimos.
+    const tag = `[EMPMOV:${existing.id}]`;
+    try { await prisma.efectivo.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } }); } catch {}
+    try { await prisma.cheque.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } }); } catch {}
+    try { await prisma.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } }); } catch {}
     await prisma.movimientoEmpleado.delete({ where: { id: req.params.movId } });
     res.json({ ok: true });
   } catch (e) { next(e); }

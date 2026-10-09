@@ -2789,6 +2789,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Cheques-Propios-y-Terceros.pdf', t:'Cheques propios y de terceros', d:'Manejo completo de cheques en cartera.' },
       { f:'Instructivo-Caja-por-Tenedor.pdf', t:'Caja por tenedor', d:'Controlar efectivo por persona que lo tiene a cargo.' },
       { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
+      { f:'Instructivo-Empleados-y-Sueldos.pdf', t:'Empleados y sueldos (completo)', d:'Guía completa: alta, sueldo fijo/variable/por día, labores con %, gastos, adelantos, entregas, cuenta corriente con arrastre y liquidación.' },
       { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
     ]},
     { grupo:'Compras', items:[
@@ -3017,6 +3018,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/10/2026',
+      titulo:'💵 v2.286.0 — Adelantos de empleados que salen de la caja al instante',
+      desc:'Al cargar un <b>Adelanto de dinero</b> o una <b>Compra / cosa personal</b> en la planilla de un empleado, ahora aparece la opción <b>“💵 Pagar ahora desde caja/banco”</b>: elegís el medio (efectivo y la caja, transferencia y la cuenta, o cheque propio) y el sistema <b>genera el egreso real</b> en Control de Efectivo / Bancos en ese momento, además de descontarlo del sueldo. Al <b>liquidar</b> a fin de mes el adelanto ya está restado, así que pagás solo el resto (no se duplica). Si borrás el movimiento, también se revierte la salida de caja. Los descuentos y días no trabajados (que no mueven plata) siguen igual.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'08/10/2026',
       titulo:'🌾 v2.285.0 — IVA en la liquidación de cereal',
       desc:'La <b>liquidación de cereal</b> ahora contempla el <b>IVA</b>. En el formulario elegís la alícuota (<b>Sin IVA / 10,5% / 21%</b>) y el sistema muestra <b>Neto mercadería</b>, <b>IVA</b> y <b>TOTAL A COBRAR</b> (neto + IVA). La <b>cuenta corriente del cliente</b> queda por el total con IVA, así cuando cobrás todo —los cheques por el neto y la <b>transferencia del IVA</b>— la liquidación queda saldada <b>sin dejar un saldo a favor</b> por el IVA. Las liquidaciones ya cargadas quedan igual (IVA 0); si necesitás, podés editarlas y elegir la alícuota.' },
@@ -24624,7 +24628,9 @@ function empSueldoDelMes(){
   const sug = sueldos.length ? Number(sueldos[0].monto||0) : Number(empSueldoBase(emp,mes)||0);
   empMovForm(null, { tipo:'ganancia', categoria:'sueldo', concepto:'Sueldo '+empMesLabel(mes), monto: sug||'' });
 }
-function empMovForm(movId=null, preset=null){
+async function empMovForm(movId=null, preset=null){
+  // Precargamos cuentas bancarias y cajas para el pago inmediato (si hace falta).
+  if (!state.cache.bancoCuentas) { try { state.cache.bancoCuentas = (await api('/api/banco-cuentas')).data || []; } catch { state.cache.bancoCuentas = []; } }
   const movs = (state.empFicha&&state.empFicha.movs)||[];
   const it = movId ? (movs.find(m=>m.id===movId)||{}) : (preset||{});
   const tipo = it.tipo || 'gasto';
@@ -24657,6 +24663,23 @@ function empMovForm(movId=null, preset=null){
         </div>
         <div class="col-span-2"><label class="label">Concepto *</label><input id="m-con" class="input" value="${esc(it.concepto||'')}" placeholder="Ej: adelanto quincena, horas extra cosecha, zapatillas…"/></div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="m-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
+        ${movId ? '' : `<div id="m-pay-wrap" class="col-span-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3" style="display:none">
+          <label class="text-sm flex items-center gap-2 cursor-pointer font-medium text-emerald-900"><input type="checkbox" id="m-pay-on" onchange="empMovPagoToggle()"/> 💵 Pagar ahora desde caja/banco (registra el egreso real)</label>
+          <div class="text-[11px] text-emerald-800 mt-1">Para adelantos/compras que entregás en el momento. Igual se descuenta del sueldo; al liquidar pagás solo el resto (no se duplica). Si lo dejás sin tildar, queda solo en la planilla.</div>
+          <div id="m-pay-fields" class="grid grid-cols-2 gap-3 mt-2" style="display:none">
+            <div><label class="label">Medio de pago *</label>
+              <select id="m-pay-medio" class="input" onchange="empMovPagoMedio()">
+                <option value="efectivo">Efectivo en caja</option>
+                <option value="transferencia">Transferencia bancaria</option>
+                <option value="cheque">Cheque propio</option>
+              </select>
+            </div>
+            <div id="m-pay-caja-wrap"><label class="label">${state.cajaPorTenedor?'Tenedor *':'Caja *'}</label>${catSelect('m-pay-caja','Caja','',{placeholder: state.cajaPorTenedor?'— Quién entrega —':'— Elegir caja —'})}</div>
+            <div id="m-pay-cta-wrap" style="display:none"><label class="label">Cuenta bancaria *</label><select id="m-pay-cta" class="input"><option value="">— Elegir —</option>${(state.cache.bancoCuentas||[]).filter(c=>c.activo!==false).map(c=>`<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select></div>
+            <div id="m-pay-banco-wrap" style="display:none"><label class="label">Banco</label>${catSelect('m-pay-banco','Banco','',{placeholder:'— Banco —'})}</div>
+            <div id="m-pay-cheque-wrap" style="display:none"><label class="label">N° de cheque *</label><input id="m-pay-cheque" class="input"/></div>
+          </div>
+        </div>`}
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='empMovSave(${JSON.stringify(movId)})'>${movId?'Guardar':'Agregar'}</button>`
@@ -24907,6 +24930,30 @@ function empMovTipoChange(){
   $('#m-cat').innerHTML = empMovCatOptions(tipo,'');
   empMovCatChange();
 }
+// Categorías de gasto que NO mueven caja (son solo deducciones).
+const _CATS_GASTO_SIN_CAJA = new Set(['descuento','dia_no_trab','proveeduria']);
+// Muestra/oculta el bloque "Pagar ahora desde caja/banco" según tipo y categoría.
+function empMovPagoVisibility(){
+  const wrap = $('#m-pay-wrap'); if(!wrap) return;   // (en edición no existe)
+  const tipo = $('#m-tipo')?.value;
+  const cod  = $('#m-cat')?.value || '';
+  const mostrar = (tipo==='gasto') && !_CATS_GASTO_SIN_CAJA.has(cod);
+  wrap.style.display = mostrar ? '' : 'none';
+  if(!mostrar){ const on=$('#m-pay-on'); if(on) on.checked=false; empMovPagoToggle(); }
+}
+function empMovPagoToggle(){
+  const on = $('#m-pay-on')?.checked;
+  const f = $('#m-pay-fields'); if(f) f.style.display = on ? 'grid' : 'none';
+  if(on) empMovPagoMedio();
+}
+function empMovPagoMedio(){
+  const m = $('#m-pay-medio')?.value || 'efectivo';
+  const show=(id,v)=>{ const el=$('#'+id); if(el) el.style.display=v?'':'none'; };
+  show('m-pay-caja-wrap',   m==='efectivo');
+  show('m-pay-cta-wrap',    m==='transferencia');
+  show('m-pay-banco-wrap',  m==='cheque');
+  show('m-pay-cheque-wrap', m==='cheque');
+}
 function empMovCatChange(){
   const sel = $('#m-cat'); if(!sel) return;
   const opt = sel.selectedOptions?.[0];
@@ -24926,6 +24973,7 @@ function empMovCatChange(){
     if (jornal > 0 && /d[ií]a/i.test(unidad||'') && vu && !Number(vu.value)) { vu.value = jornal; }
     empMovCalcCant();
   }
+  empMovPagoVisibility();
 }
 function empMovCalcCant(){
   const q=Number($('#m-cant')?.value||0), v=Number($('#m-vu')?.value||0);
@@ -24960,6 +25008,14 @@ async function empMovSave(movId){
   if (!data.fecha)    return toast('Fecha requerida','warn');
   if (!data.concepto) return toast('Concepto requerido','warn');
   if (!data.monto || data.monto<=0) return toast('Ingresá un monto mayor a cero','warn');
+  // Pago inmediato desde caja/banco (solo al dar de alta un gasto de plata real).
+  if (!movId && tipo==='gasto' && $('#m-pay-on')?.checked){
+    const medio = $('#m-pay-medio')?.value || 'efectivo';
+    data.pagarAhora = true; data.medioPago = medio;
+    if (medio==='efectivo'){ data.caja = $('#m-pay-caja')?.value||null; if(!data.caja) return toast('Elegí la caja de la que sale el adelanto','warn'); }
+    else if (medio==='transferencia'){ data.bancoCuentaId = $('#m-pay-cta')?.value||null; if(!data.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn'); }
+    else if (medio==='cheque'){ data.banco = $('#m-pay-banco')?.value||null; data.nroCheque = $('#m-pay-cheque')?.value?.trim()||null; if(!data.nroCheque) return toast('Ingresá el N° de cheque','warn'); }
+  }
   try {
     await api('/api/empleados/'+empId+'/movimientos'+(movId?'/'+movId:''),
       {method:movId?'PUT':'POST',body:JSON.stringify(data)});
