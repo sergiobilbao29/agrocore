@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.291.0';
+const AGROCORE_VERSION = '2.292.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3703,7 +3703,7 @@ app.get('/api/centros-costo-reporte', requireCompany, requirePermission('finanza
       where, orderBy: { fecha: 'desc' },
       include: {
         centroCosto: { select: { id: true, nombre: true, clasificacion: true, campoId: true } },
-        facturaCompra: { select: { tipo: true, puntoVenta: true, numero: true, proveedor: { select: { nombre: true } } } },
+        facturaCompra: { select: { tipo: true, puntoVenta: true, numero: true, proveedor: { select: { razonSocial: true, nombreFantasia: true } } } },
         efectivo: { select: { concepto: true, caja: true } },
         bancoMovimiento: { select: { concepto: true, contraparte: true } },
       },
@@ -3732,7 +3732,8 @@ app.get('/api/centros-costo-reporte', requireCompany, requirePermission('finanza
       let origen = '';
       if (im.origenTipo === 'compra' && im.facturaCompra) {
         const f = im.facturaCompra;
-        origen = `Compra ${f.tipo || ''} ${String(f.puntoVenta || 0).padStart(4, '0')}-${String(f.numero || 0).padStart(8, '0')}` + (f.proveedor?.nombre ? ` · ${f.proveedor.nombre}` : '');
+        const _prov = f.proveedor ? (f.proveedor.razonSocial || f.proveedor.nombreFantasia || '') : '';
+        origen = `Compra ${f.tipo || ''} ${String(f.puntoVenta || 0).padStart(4, '0')}-${String(f.numero || 0).padStart(8, '0')}` + (_prov ? ` · ${_prov}` : '');
       } else if (im.efectivo) {
         origen = `Gasto · ${im.efectivo.concepto || ''}` + (im.efectivo.caja ? ` (${im.efectivo.caja})` : '');
       } else if (im.bancoMovimiento) {

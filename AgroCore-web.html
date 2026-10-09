@@ -3022,6 +3022,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/10/2026',
+      titulo:'🔧 v2.292.0 — Fix: el reporte de centros de costo no cargaba',
+      desc:'Corregimos un error que impedía abrir el <b>Reporte por centro de costo</b> (el detalle de las compras no tomaba bien el nombre del proveedor). Ahora el reporte abre normal y muestra el proveedor en cada compra imputada.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/10/2026',
       titulo:'📄 v2.291.0 — Instructivo de Centros de costo',
       desc:'Sumamos el <b>instructivo paso a paso de Centros de costo</b> (configurar, usar e informes) en <b>Ayuda y manual → Instructivos → Finanzas</b> y también en el manual de usuario de la web. Explica activar el módulo por empresa, armar el catálogo, imputar compras y gastos (100% / % / monto / por hectáreas) y leer el reporte.' },
