@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.296.0';
+const AGROCORE_VERSION = '2.298.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13498,18 +13498,20 @@ function _interpretarMensaje(texto, ctx) {
   if (tipo) {
     const cat = ctx.categorias.find(c => t.includes(_sinAcentos(c)))
       || ctx.categorias.find(c => t.includes(_sinAcentos(c).replace(/a$|o$/, '')));
-    if (!numero) return { error: 'No entendí la cantidad. Ej: "nacieron 5 terneros en Montenegro".' };
+    // "un / una / uno" cuenta como 1 (ej: "nació un ternero en El Porvenir").
+    const cant = numero || (/\b(un|una|uno)\b/.test(t) ? 1 : null);
+    if (!cant) return { error: 'No entendí la cantidad. Decime cuántos, ej: "nacieron 5 terneros en Montenegro" o "nació un ternero en El Porvenir".' };
     if (!cat) return { error: `No reconocí la categoría de animal. Las que tenés: ${ctx.categorias.join(', ') || '(cargá categorías de animales primero)'}.` };
-    if (!campo) return { error: 'No reconocí el campo. Decí en qué campo, ej: "en Montenegro".' };
+    if (!campo) return { error: 'No reconocí el campo. Decime en qué campo, ej: "en Montenegro".' };
     const lbl = tipo === 'nacimiento' ? 'Nacimiento' : tipo === 'muerte' ? 'Muerte' : 'Compra';
-    const params = { campoId: campo.id, campoNombre: campo.nombre, categoria: cat, tipo, cantidad: numero };
+    const params = { campoId: campo.id, campoNombre: campo.nombre, categoria: cat, tipo, cantidad: cant };
     // En compras: intentar capturar kg por cabeza y precio por kg.
     if (tipo === 'compra') {
       const kgCab = (t.match(/de\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?|kgs|hg|kilogramos)\b/) || t.match(/(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?|kgs|hg|kilogramos)\s*(?:cada|c\/u|por\s*cabeza|aprox)/))?.[1];
       const pkg = (t.match(/(\d+(?:[.,]\d+)?)\s*(?:pesos|\$)?\s*(?:por|el|x|\/)\s*(?:kg|kilo)/))?.[1];
       const _n = (s) => s ? Number(String(s).replace(/\./g, '').replace(',', '.')) : null;
       const kgUno = _n(kgCab), precioKg = _n(pkg);
-      if (kgUno) params.kilos = Math.round(kgUno * numero * 100) / 100;
+      if (kgUno) params.kilos = Math.round(kgUno * cant * 100) / 100;
       if (precioKg) params.precioKg = precioKg;
       if (params.kilos && precioKg) params.total = Math.round(params.kilos * precioKg * 100) / 100;
     }
@@ -14780,11 +14782,10 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       return res.json({ ok: true, status: 'faltante', accion: r.accion, faltante: r.faltante, params: r.params, mensaje: r.pregunta, data: m });
     }
     if (r.error) {
-      // Si el mensaje parece una ORDEN de carga (tiene un monto o verbo de plata/cantidad),
-      // NO contestamos con tutorial ni con agronomía: pedimos que lo repita más claro.
+      // Solo si hay un MONTO y aun así no se entendió, pedimos repetirlo (no tapamos los
+      // mensajes útiles de animales/labores como "No reconocí el campo/categoría").
       const _tieneMonto = (_parseMontoPesos(texto) || 0) > 0;
-      const _pareceOrden = _tieneMonto || /\b(le di|les di|di|adelante|adelanto|entregue|preste|anticipe|pague|gaste|compre|cobre|nacieron|murieron|aplique)\b/.test(_tn);
-      if (_pareceOrden) {
+      if (_tieneMonto) {
         const msg = 'Mmm, no te agarré bien eso 🤔. Probá de nuevo más simple, por ejemplo: "le di 10000 a Denise", "gasté 5000 en nafta" o "pagué 30000 a Don José". Si querés, decime el nombre, el monto y para qué.';
         const mm = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda' });
         return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: mm });

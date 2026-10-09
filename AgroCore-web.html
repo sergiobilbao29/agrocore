@@ -400,7 +400,7 @@
         </div>
         <div class="relative">
           <button onclick="abrirAsistente()" class="btn btn-ghost relative p-1" title="Asistente — preguntá cómo se hace algo o cargá cosas por vos" id="asist-btn">
-            <span class="text-xl leading-none">🤖</span>
+            <img src="https://agrocore.ar/img/cora-avatar.png" alt="Cora" class="w-8 h-8 rounded-full object-cover" onerror="this.outerHTML='<span class=\&quot;text-xl leading-none\&quot;>🤖</span>'">
             <span id="asist-badge" class="hidden absolute -top-0.5 -right-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded-full min-w-[16px] h-[16px] px-1 flex items-center justify-center">0</span>
           </button>
         </div>
@@ -3025,6 +3025,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/10/2026',
+      titulo:'🤖 v2.298.0 — Cora tiene cara nueva',
+      desc:'Estrenamos la imagen de <b>Cora</b>, la asistente de AgroCore: ahora su carita aparece en el <b>botón de arriba</b> (al lado de la campanita), en el <b>botón flotante</b> de voz y también en la <b>web</b>. Más linda y reconocible. 🌱' },
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/10/2026',
+      titulo:'🐄 v2.297.0 — Cora: "nació un ternero" y mensajes más claros',
+      desc:'Cora ahora entiende cuando decís <b>un/una</b> como cantidad (ej. <i>"nació un ternero en El Porvenir"</i>) y lo carga. Además, cuando no reconoce el <b>campo</b> o la <b>categoría</b>, te lo dice con claridad (antes se perdía ese aviso). Y el botón del ejemplo pasó a llamarse <b>“Probar este ejemplo”</b> para que se entienda qué hace.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/10/2026',
       titulo:'🎤 v2.296.0 — Botón de Cora siempre a mano + chat más cómodo en el celular',
       desc:'Sumamos un <b>botón verde flotante 🎤</b> abajo a la derecha, visible en <b>cualquier pantalla</b>: lo tocás y Cora se abre y <b>arranca a escucharte</b> para que le cargues algo por voz al toque, sin buscar el menú. Además mejoramos cómo se ve el <b>chat en el celular</b> (los botones y el cuadro de texto ya no se amontonan).' },
@@ -8698,8 +8704,9 @@ function ensureCoraFab(){
     b.title = 'Hablale a Cora (cargar por voz)';
     b.setAttribute('aria-label','Hablale a Cora');
     b.onclick = coraHablar;
-    b.style.cssText = 'position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:9000;width:60px;height:60px;border-radius:50%;background:#15803d;color:#fff;border:none;box-shadow:0 6px 18px rgba(0,0,0,.28);font-size:26px;display:flex;align-items:center;justify-content:center;cursor:pointer';
-    b.innerHTML = '🎤';
+    b.style.cssText = 'position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:9000;width:62px;height:62px;border-radius:50%;background:#15803d;color:#fff;border:3px solid #eab308;box-shadow:0 6px 18px rgba(0,0,0,.28);font-size:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;padding:0';
+    // Cara de Cora; si no carga (offline), cae al micrófono.
+    b.innerHTML = '<img src="https://agrocore.ar/img/cora-avatar.png" alt="Cora" style="width:100%;height:100%;object-fit:cover;border-radius:50%" onerror="this.parentNode.innerHTML=\'🎤\'">';
     document.body.appendChild(b);
   } catch {}
 }
@@ -8936,9 +8943,9 @@ async function chatAsistente(){
       // Respuesta de "cómo se hace": ofrecemos abrir la pantalla y/o hacerlo nosotros.
       const btns = [];
       if (r.atajo && r.atajo.page) btns.push(`<button class="btn btn-primary text-xs" onclick="asistAbrir('${r.atajo.page}')">➡️ ${esc(r.atajo.label||'Abrir')}</button>`);
-      if (r.ejemplo) btns.push(`<button class="btn btn-secondary text-xs" onclick="asistEjemplo(${JSON.stringify(r.ejemplo).replace(/"/g,'&quot;')})">🤖 Lo hago yo</button>`);
+      if (r.ejemplo) btns.push(`<button class="btn btn-secondary text-xs" onclick="asistEjemplo(${JSON.stringify(r.ejemplo).replace(/"/g,'&quot;')})" title="Carga este ejemplo para que veas cómo queda">🤖 Probar este ejemplo</button>`);
       box.innerHTML = `<div class="bg-blue-50 border border-blue-200 rounded-lg p-2.5 mb-2">
-        <div class="text-xs text-blue-900 mb-2">${esc(r.titulo||'Te muestro cómo')} — ¿querés que te lleve directo${r.ejemplo?' o lo cargo yo':''}?</div>
+        <div class="text-xs text-blue-900 mb-2">${esc(r.titulo||'Te muestro cómo')} — ¿querés que te lleve directo${r.ejemplo?' o probar un ejemplo':''}?</div>
         <div class="flex gap-2 justify-end flex-wrap">${btns.join('')}</div></div>`;
     } else if (box){ box.innerHTML=''; }
   } catch(e){ toast(e.message,'error'); inp.value=txt; }
