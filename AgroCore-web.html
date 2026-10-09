@@ -3018,6 +3018,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/10/2026',
+      titulo:'🧾 v2.287.0 — Pagar adelantos al empleado con cheque de terceros',
+      desc:'En el pago inmediato de un adelanto/compra (dentro del movimiento del empleado) se sumó la opción <b>“Cheque de terceros (de cartera)”</b>: elegís un cheque de terceros que tenés <b>en cartera</b> y al guardar queda <b>Endosado / Entregado</b> al empleado y sale de la cartera. Si borrás el movimiento, el cheque <b>vuelve a cartera</b>. Ya estaban efectivo, transferencia y cheque propio.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/10/2026',
       titulo:'💵 v2.286.0 — Adelantos de empleados que salen de la caja al instante',
       desc:'Al cargar un <b>Adelanto de dinero</b> o una <b>Compra / cosa personal</b> en la planilla de un empleado, ahora aparece la opción <b>“💵 Pagar ahora desde caja/banco”</b>: elegís el medio (efectivo y la caja, transferencia y la cuenta, o cheque propio) y el sistema <b>genera el egreso real</b> en Control de Efectivo / Bancos en ese momento, además de descontarlo del sueldo. Al <b>liquidar</b> a fin de mes el adelanto ya está restado, así que pagás solo el resto (no se duplica). Si borrás el movimiento, también se revierte la salida de caja. Los descuentos y días no trabajados (que no mueven plata) siguen igual.' },
@@ -24631,6 +24634,7 @@ function empSueldoDelMes(){
 async function empMovForm(movId=null, preset=null){
   // Precargamos cuentas bancarias y cajas para el pago inmediato (si hace falta).
   if (!state.cache.bancoCuentas) { try { state.cache.bancoCuentas = (await api('/api/banco-cuentas')).data || []; } catch { state.cache.bancoCuentas = []; } }
+  if (!movId) { try { state.cache.cheques = (await api('/api/cheques')).data || state.cache.cheques || []; } catch { state.cache.cheques = state.cache.cheques||[]; } }
   const movs = (state.empFicha&&state.empFicha.movs)||[];
   const it = movId ? (movs.find(m=>m.id===movId)||{}) : (preset||{});
   const tipo = it.tipo || 'gasto';
@@ -24671,13 +24675,18 @@ async function empMovForm(movId=null, preset=null){
               <select id="m-pay-medio" class="input" onchange="empMovPagoMedio()">
                 <option value="efectivo">Efectivo en caja</option>
                 <option value="transferencia">Transferencia bancaria</option>
-                <option value="cheque">Cheque propio</option>
+                <option value="cheque">Cheque propio (nuevo)</option>
+                <option value="cheque_terceros">Cheque de terceros (de cartera)</option>
               </select>
             </div>
             <div id="m-pay-caja-wrap"><label class="label">${state.cajaPorTenedor?'Tenedor *':'Caja *'}</label>${catSelect('m-pay-caja','Caja','',{placeholder: state.cajaPorTenedor?'— Quién entrega —':'— Elegir caja —'})}</div>
             <div id="m-pay-cta-wrap" style="display:none"><label class="label">Cuenta bancaria *</label><select id="m-pay-cta" class="input"><option value="">— Elegir —</option>${(state.cache.bancoCuentas||[]).filter(c=>c.activo!==false).map(c=>`<option value="${esc(c.id)}">${esc(c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select></div>
             <div id="m-pay-banco-wrap" style="display:none"><label class="label">Banco</label>${catSelect('m-pay-banco','Banco','',{placeholder:'— Banco —'})}</div>
             <div id="m-pay-cheque-wrap" style="display:none"><label class="label">N° de cheque *</label><input id="m-pay-cheque" class="input"/></div>
+            <div id="m-pay-chter-wrap" class="col-span-2" style="display:none"><label class="label">Cheque de terceros en cartera *</label>
+              ${(()=>{ const ch=(state.cache.cheques||[]).filter(c=>c.tipo==='terceros' && (c.estado||'').toLowerCase()==='en_cartera'); return ch.length
+                ? `<select id="m-pay-chter" class="input"><option value="">— Elegir cheque —</option>${ch.map(c=>`<option value="${esc(c.id)}">${esc(c.banco||'Banco')} N° ${esc(c.numero||c.nroCheque||'?')} · ${fmt$(c.monto)}${c.fechaPago?' · vto '+fmtDate(c.fechaPago):''}</option>`).join('')}</select><div class="text-[11px] text-slate-500 mt-1">Al guardar, el cheque pasa a <b>Endosado / Entregado</b> y sale de la cartera.</div>`
+                : `<div class="text-xs text-amber-700">⚠️ No hay cheques de terceros en cartera. Cargalos en Tesorería → Cheques.</div>`; })()}</div>
           </div>
         </div>`}
       </div>`,
@@ -24953,6 +24962,7 @@ function empMovPagoMedio(){
   show('m-pay-cta-wrap',    m==='transferencia');
   show('m-pay-banco-wrap',  m==='cheque');
   show('m-pay-cheque-wrap', m==='cheque');
+  show('m-pay-chter-wrap',  m==='cheque_terceros');
 }
 function empMovCatChange(){
   const sel = $('#m-cat'); if(!sel) return;
@@ -25015,6 +25025,7 @@ async function empMovSave(movId){
     if (medio==='efectivo'){ data.caja = $('#m-pay-caja')?.value||null; if(!data.caja) return toast('Elegí la caja de la que sale el adelanto','warn'); }
     else if (medio==='transferencia'){ data.bancoCuentaId = $('#m-pay-cta')?.value||null; if(!data.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn'); }
     else if (medio==='cheque'){ data.banco = $('#m-pay-banco')?.value||null; data.nroCheque = $('#m-pay-cheque')?.value?.trim()||null; if(!data.nroCheque) return toast('Ingresá el N° de cheque','warn'); }
+    else if (medio==='cheque_terceros'){ data.chequeId = $('#m-pay-chter')?.value||null; if(!data.chequeId) return toast('Elegí el cheque de terceros a entregar','warn'); }
   }
   try {
     await api('/api/empleados/'+empId+'/movimientos'+(movId?'/'+movId:''),

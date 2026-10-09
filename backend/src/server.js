@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.286.0';
+const AGROCORE_VERSION = '2.287.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8052,11 +8052,12 @@ const movEmpSchema = z.object({
   observaciones: z.string().nullable().optional(),
   // Pago inmediato desde caja/banco (solo para gastos de plata real: adelanto, compra).
   pagarAhora: z.boolean().optional(),
-  medioPago: z.enum(['efectivo', 'transferencia', 'cheque']).nullable().optional(),
+  medioPago: z.enum(['efectivo', 'transferencia', 'cheque', 'cheque_terceros']).nullable().optional(),
   caja: z.string().nullable().optional(),
   bancoCuentaId: z.string().nullable().optional(),
   banco: z.string().nullable().optional(),
   nroCheque: z.string().nullable().optional(),
+  chequeId: z.string().nullable().optional(),   // cheque de terceros en cartera a entregar
 });
 // Categorias de GASTO que son salida real de plata (pueden pagarse al instante desde caja/banco).
 // NO entran descuento ni dia_no_trabajado (son deducciones, no mueven caja).
@@ -8125,6 +8126,15 @@ app.post('/api/empleados/:id/movimientos', requireCompany, requirePermission('rr
             concepto, monto: Number(d.monto), contraparte: nombreEmp,
             observaciones: `Empleados: ${d.concepto} ${tag}`, userId: req.user?.id || null,
           }});
+        } else if (d.medioPago === 'cheque_terceros' && d.chequeId) {
+          // Entregamos (endosamos) un cheque de terceros que estaba en cartera.
+          const ch = await tx.cheque.findFirst({ where: { id: d.chequeId, companyId: req.companyId, tipo: 'terceros' } });
+          if (ch) {
+            await tx.cheque.update({ where: { id: ch.id }, data: {
+              estado: 'endosado', beneficiario: nombreEmp, enPoderDe: nombreEmp, fechaEndoso: d.fecha,
+              observaciones: ((ch.observaciones ? ch.observaciones + ' ' : '') + `Entregado a ${nombreEmp} ${tag}`),
+            }});
+          }
         }
       }
       return mov;
@@ -8168,8 +8178,17 @@ app.delete('/api/empleados/:id/movimientos/:movId', requireCompany, requirePermi
     // Si al cargarlo generó un egreso real de caja/banco/cheque, lo revertimos.
     const tag = `[EMPMOV:${existing.id}]`;
     try { await prisma.efectivo.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } }); } catch {}
-    try { await prisma.cheque.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } }); } catch {}
     try { await prisma.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } }); } catch {}
+    // Cheques PROPIOS creados por nosotros: se borran.
+    try { await prisma.cheque.deleteMany({ where: { companyId: req.companyId, tipo: 'propio', observaciones: { contains: tag } } }); } catch {}
+    // Cheques de TERCEROS entregados/endosados: vuelven a cartera (no se borran).
+    try {
+      const entregados = await prisma.cheque.findMany({ where: { companyId: req.companyId, tipo: 'terceros', observaciones: { contains: tag } } });
+      for (const ch of entregados) {
+        const obs = (ch.observaciones || '').replace(new RegExp('\\s*Entregado a [^\\[]*' + tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '').replace(tag, '').trim() || null;
+        await prisma.cheque.update({ where: { id: ch.id }, data: { estado: 'en_cartera', beneficiario: null, enPoderDe: null, fechaEndoso: null, observaciones: obs } });
+      }
+    } catch {}
     await prisma.movimientoEmpleado.delete({ where: { id: req.params.movId } });
     res.json({ ok: true });
   } catch (e) { next(e); }
