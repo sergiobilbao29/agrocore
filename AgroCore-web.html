@@ -1845,6 +1845,7 @@ async function applyCompanyTheme() {
   state.companyInformal = informal;
   state.cajaPorTenedor = cajaTenedor;
   state.usaCentrosCosto = usaCC;
+  try { ensureCoraFab(); } catch {}
 }
 
 // Estado de plegado de las secciones del sidebar (se persiste en localStorage por usuario).
@@ -2651,6 +2652,8 @@ async function submitChangePwd() {
 function go(page, fromHistory = false) {
   state.currentPage = page;
   state.empFichaId = null;  // al navegar por el menú salimos de la ficha de empleado
+  // Botón flotante de Cora: visible en todas las pantallas menos en el propio chat.
+  try { const fab=document.getElementById('cora-fab'); if (fab) fab.style.display = (page==='mensajes') ? 'none' : 'flex'; } catch {}
   renderNav();
   autoCloseSidebarOnNav();
   // Sincronizar con la barra de URL para que back/forward del navegador funcionen.
@@ -3022,6 +3025,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/10/2026',
+      titulo:'🎤 v2.296.0 — Botón de Cora siempre a mano + chat más cómodo en el celular',
+      desc:'Sumamos un <b>botón verde flotante 🎤</b> abajo a la derecha, visible en <b>cualquier pantalla</b>: lo tocás y Cora se abre y <b>arranca a escucharte</b> para que le cargues algo por voz al toque, sin buscar el menú. Además mejoramos cómo se ve el <b>chat en el celular</b> (los botones y el cuadro de texto ya no se amontonan).' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/10/2026',
       titulo:'🎯 v2.295.0 — Cora entiende mejor y carga de una',
       desc:'Cora ahora reconoce cuando le <b>entregás plata a alguien</b> ("le di 10000 a Denise", "adelanté 100.000 a Juan", "entregué/presté/anticipé…") y lo <b>carga directo</b> (te muestra la ficha para confirmar y, si falta el monto, te lo pide) en vez de tirarte el tutorial. Y cuando un pedido tiene un monto pero no lo entiende del todo, te pide que lo repitas más simple, sin contestar cosas que no venían al caso.' },
@@ -8652,7 +8658,7 @@ pages.mensajes = async function(){
      : grupoActual?`<div class="text-xs text-slate-500 mb-2">👪 <b>${esc(grupoActual.nombre)}</b> · ${(grupoActual.miembros||[]).length} integrante${(grupoActual.miembros||[]).length===1?'':'s'}</div>`:''}
     <div id="chat-msgs" style="height:56vh;min-height:320px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
     <div id="chat-confirm"></div>
-    <div class="flex gap-2 items-end">
+    <div class="flex flex-wrap gap-2 items-end">
       ${esAsistente?`<select id="chat-tts" class="btn btn-secondary" style="padding-right:1.6rem" title="Voz del asistente" onchange="chatTtsSet(this.value)">
         <option value="off" ${_ttsVoz()==='off'?'selected':''}>🔇 Sin voz</option>
         <option value="mujer" ${_ttsVoz()==='mujer'?'selected':''}>👩 Mujer</option>
@@ -8665,17 +8671,38 @@ pages.mensajes = async function(){
       <input type="file" id="ast-cam" accept="image/*" capture="environment" class="hidden" onchange="astAnalizarArchivo(this.files&&this.files[0]); this.value='';"/>
       <button class="btn btn-secondary" title="Adjuntar factura, liquidación, orden de trabajo, ticket, cheque…" onclick="document.getElementById('ast-file').click()">📎</button>
       <button class="btn btn-secondary" title="Sacar una foto" onclick="document.getElementById('ast-cam').click()">📷</button>`:''}
-      <textarea id="${esAsistente?'chat-input-a':'chat-input'}" class="input flex-1" rows="1" placeholder="${esAsistente?'Contame qué hiciste…':(grupoActual?('Mensaje a '+esc(grupoActual.nombre)+'…'):'Escribí un mensaje al equipo…')}" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault(); ${esAsistente?'chatAsistente()':'chatEnviar()'};}"></textarea>
+      <textarea id="${esAsistente?'chat-input-a':'chat-input'}" class="input flex-1" style="min-width:140px" rows="1" placeholder="${esAsistente?'Contame qué hiciste…':(grupoActual?('Mensaje a '+esc(grupoActual.nombre)+'…'):'Escribí un mensaje al equipo…')}" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault(); ${esAsistente?'chatAsistente()':'chatEnviar()'};}"></textarea>
       <button class="btn btn-primary" onclick="${esAsistente?'chatAsistente()':'chatEnviar()'}">${esAsistente?'Cargar':'Enviar'}</button>
     </div>`;
   if (!esAsistente){ try{ await api('/api/mensajes/marcar-leido',{method:'POST',body:JSON.stringify({canal:cur})}); if(state._chatPorCanal) state._chatPorCanal[cur]=0; chatRecalcTotal(); }catch{} }
   await chatReload();
   if (state._mensajesPoll) clearInterval(state._mensajesPoll);
   state._mensajesPoll = setInterval(()=>{ if (state.currentPage==='mensajes') chatReload(); else { clearInterval(state._mensajesPoll); state._mensajesPoll=null; } }, 5000);
+  // Si Cora se abrió desde el botón flotante de voz, arrancamos a dictar solo.
+  if (esAsistente && state._coraAutoMic){ state._coraAutoMic=false; setTimeout(()=>{ try{ chatVoz('chat-input-a'); }catch{} }, 500); }
 };
 function mensajesSel(key){ state.mensajesConv=key; state._asistProp=null; pages.mensajes(); }
 // Abre directo el Asistente (desde el botón del header).
 function abrirAsistente(){ state.mensajesConv='asistente'; state._asistProp=null; go('mensajes'); }
+// Abre a Cora y arranca a dictar de una (manos libres), desde cualquier pantalla.
+function coraHablar(){ state._coraAutoMic = true; abrirAsistente(); }
+// Botón flotante (FAB) de Cora: siempre visible cuando estás logueado. Un toque abre
+// a Cora y arranca el micrófono para que le hables directo. Se crea una sola vez.
+function ensureCoraFab(){
+  try {
+    if (!state.user) { const ex=document.getElementById('cora-fab'); if(ex) ex.remove(); return; }
+    if (document.getElementById('cora-fab')) return;
+    const b = document.createElement('button');
+    b.id = 'cora-fab';
+    b.type = 'button';
+    b.title = 'Hablale a Cora (cargar por voz)';
+    b.setAttribute('aria-label','Hablale a Cora');
+    b.onclick = coraHablar;
+    b.style.cssText = 'position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:9000;width:60px;height:60px;border-radius:50%;background:#15803d;color:#fff;border:none;box-shadow:0 6px 18px rgba(0,0,0,.28);font-size:26px;display:flex;align-items:center;justify-content:center;cursor:pointer';
+    b.innerHTML = '🎤';
+    document.body.appendChild(b);
+  } catch {}
+}
 // Manda un aviso de prueba a este dispositivo (activa avisos primero si hace falta).
 async function probarAviso(){
   try {
