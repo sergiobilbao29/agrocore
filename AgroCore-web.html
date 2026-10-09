@@ -2794,6 +2794,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
       { f:'Instructivo-Empleados-y-Sueldos.pdf', t:'Empleados y sueldos (completo)', d:'Guía completa: alta, sueldo fijo/variable/por día, labores con %, gastos, adelantos, entregas, cuenta corriente con arrastre y liquidación.' },
       { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
+      { f:'Instructivo-Centros-de-Costo.pdf', t:'Centros de costo (configurar, usar y reportes)', d:'Saber cuánto gastaste e invertiste en cada campo, actividad o proyecto: activar por empresa, armar el catálogo, imputar compras y gastos (100% / %, monto o por hectáreas) y ver el reporte con detalle y export a Excel.' },
     ]},
     { grupo:'Compras', items:[
       { f:'Instructivo-Remitos-de-Compra.pdf', t:'Remitos de compra (recepción → factura)', d:'Recibís la mercadería con remito (suma stock) y después la facturás vinculándola al remito, sin duplicar el inventario. Parciales, devoluciones y reporte de recibido no facturado.' },
@@ -3021,6 +3022,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/10/2026',
+      titulo:'📄 v2.291.0 — Instructivo de Centros de costo',
+      desc:'Sumamos el <b>instructivo paso a paso de Centros de costo</b> (configurar, usar e informes) en <b>Ayuda y manual → Instructivos → Finanzas</b> y también en el manual de usuario de la web. Explica activar el módulo por empresa, armar el catálogo, imputar compras y gastos (100% / % / monto / por hectáreas) y leer el reporte.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/10/2026',
       titulo:'📊 v2.290.0 — Reporte por centro de costo',
       desc:'Tercera etapa de <b>Centros de costo</b>: en <b>Administración → Centros de costo → “Ver reporte”</b> elegís un período y ves <b>cuánto gastaste e invertiste en cada centro</b>. Muestra el total por centro, separa <b>gasto operativo</b> de <b>inversión</b>, trae tarjetas de resumen, el <b>detalle de cada movimiento</b> (clic en el centro) y <b>exportación a Excel</b>. El asistente también aprendió a explicar los centros de costo paso a paso.' },
