@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.289.0';
+const AGROCORE_VERSION = '2.290.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3684,6 +3684,68 @@ app.get('/api/imputaciones-cc', requireCompany, requirePermission('finanzas:read
     }
     const data = await prisma.imputacionCC.findMany({ where, orderBy: { fecha: 'desc' }, include: { centroCosto: true } });
     res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Reporte de gastos e inversiones por centro de costo (Etapa 3). Agrega las
+// imputaciones por centro en un rango de fechas, separando gasto (operativo) de
+// inversión y compra de gasto diario. Incluye el detalle de cada movimiento.
+app.get('/api/centros-costo-reporte', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.desde || req.query.hasta) {
+      where.fecha = {};
+      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde));
+      if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59');
+    }
+    if (req.query.centroCostoId) where.centroCostoId = String(req.query.centroCostoId);
+    const imps = await prisma.imputacionCC.findMany({
+      where, orderBy: { fecha: 'desc' },
+      include: {
+        centroCosto: { select: { id: true, nombre: true, clasificacion: true, campoId: true } },
+        facturaCompra: { select: { tipo: true, puntoVenta: true, numero: true, proveedor: { select: { nombre: true } } } },
+        efectivo: { select: { concepto: true, caja: true } },
+        bancoMovimiento: { select: { concepto: true, contraparte: true } },
+      },
+    });
+    // Agrupar por centro de costo
+    const porCentro = new Map();
+    for (const im of imps) {
+      const cc = im.centroCosto; if (!cc) continue;
+      if (!porCentro.has(cc.id)) porCentro.set(cc.id, {
+        centroCostoId: cc.id, nombre: cc.nombre, clasificacion: cc.clasificacion || null, campoId: cc.campoId || null,
+        total: 0, compras: 0, gastos: 0, cantidad: 0,
+      });
+      const g = porCentro.get(cc.id);
+      const m = Number(im.monto || 0);
+      g.total = _round2(g.total + m);
+      if (im.origenTipo === 'compra') g.compras = _round2(g.compras + m); else g.gastos = _round2(g.gastos + m);
+      g.cantidad += 1;
+    }
+    const centros = [...porCentro.values()].sort((a, b) => b.total - a.total);
+    const totalGeneral = _round2(centros.reduce((a, c) => a + c.total, 0));
+    const totalOperativo = _round2(centros.filter(c => c.clasificacion === 'operativo').reduce((a, c) => a + c.total, 0));
+    const totalInversion = _round2(centros.filter(c => c.clasificacion === 'inversion').reduce((a, c) => a + c.total, 0));
+    const totalSinClasif = _round2(centros.filter(c => !c.clasificacion).reduce((a, c) => a + c.total, 0));
+    // Detalle plano (para desglose por centro)
+    const detalle = imps.map(im => {
+      let origen = '';
+      if (im.origenTipo === 'compra' && im.facturaCompra) {
+        const f = im.facturaCompra;
+        origen = `Compra ${f.tipo || ''} ${String(f.puntoVenta || 0).padStart(4, '0')}-${String(f.numero || 0).padStart(8, '0')}` + (f.proveedor?.nombre ? ` · ${f.proveedor.nombre}` : '');
+      } else if (im.efectivo) {
+        origen = `Gasto · ${im.efectivo.concepto || ''}` + (im.efectivo.caja ? ` (${im.efectivo.caja})` : '');
+      } else if (im.bancoMovimiento) {
+        origen = `Gasto · ${im.bancoMovimiento.concepto || ''}` + (im.bancoMovimiento.contraparte ? ` · ${im.bancoMovimiento.contraparte}` : '');
+      } else {
+        origen = im.origenTipo === 'compra' ? 'Compra' : 'Gasto';
+      }
+      return {
+        id: im.id, fecha: im.fecha, centroCostoId: im.centroCostoId, centroNombre: im.centroCosto?.nombre || '',
+        origenTipo: im.origenTipo, modo: im.modo, monto: im.monto, porcentaje: im.porcentaje, origen,
+      };
+    });
+    res.json({ ok: true, data: { centros, detalle, totales: { total: totalGeneral, operativo: totalOperativo, inversion: totalInversion, sinClasif: totalSinClasif, cantidad: imps.length } } });
   } catch (e) { next(e); }
 });
 
@@ -13529,6 +13591,15 @@ function _completarPendiente(texto, pendiente, ctx) {
 //  ofrece hacerlo pidiendo los datos con un ejemplo.
 // ============================================================
 const _AYUDA_KB = [
+  { id:'centros_costo', terms:['centro de costo','centros de costo','centro costo','imputar gasto','repartir gasto','prorratear','prorrateo','por hectareas','reparto por campo','unidad de negocio','a que campo','imputacion','distribuir gasto','gasto por campo','gasto por actividad'],
+    titulo:'Centros de costo: imputar y repartir gastos e inversiones',
+    pasos:[
+      'Primero activalo por empresa: Empresas → editar → tildá "Usar centros de costo" (si no lo activás, nada cambia).',
+      'Creá el catálogo en Administración → Centros de costo: un centro por cada campo, unidad de negocio o proyecto. Opcional: vinculá un campo (habilita el prorrateo por hectáreas) y poné una clasificación (operativo/inversión).',
+      'Al cargar una factura de compra o un gasto en Movimientos diarios (efectivo, transferencia o débito) aparece el bloque "Repartir por centro de costo".',
+      'Elegí cómo repartir: 100% a un centro, manual por porcentaje (%), manual por monto ($) o prorratear por hectáreas (de los campos vinculados).',
+      'Mirá los totales en Administración → Centros de costo → "Ver reporte": gasto operativo e inversión por centro, con detalle y export a Excel.'],
+    atajo:{ page:'centrosCosto', label:'Abrir Centros de costo' } },
   { id:'cheque_tercero', terms:['cheque de tercero','cheque tercero','cheques de tercero','cheque recibido','me dieron un cheque','cobre un cheque','endosar','endoso','cheque que me','cheque ajeno'],
     titulo:'Cargar un cheque de tercero',
     pasos:[

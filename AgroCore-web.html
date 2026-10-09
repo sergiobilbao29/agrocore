@@ -3022,6 +3022,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/10/2026',
+      titulo:'📊 v2.290.0 — Reporte por centro de costo',
+      desc:'Tercera etapa de <b>Centros de costo</b>: en <b>Administración → Centros de costo → “Ver reporte”</b> elegís un período y ves <b>cuánto gastaste e invertiste en cada centro</b>. Muestra el total por centro, separa <b>gasto operativo</b> de <b>inversión</b>, trae tarjetas de resumen, el <b>detalle de cada movimiento</b> (clic en el centro) y <b>exportación a Excel</b>. El asistente también aprendió a explicar los centros de costo paso a paso.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/10/2026',
       titulo:'🎯 v2.289.0 — Imputá compras y gastos a tus centros de costo',
       desc:'Segunda etapa de <b>Centros de costo</b> (para empresas que lo tengan activado): al cargar una <b>factura de compra</b> o un <b>gasto en Movimientos diarios</b> (efectivo, transferencia o débito) ahora aparece el bloque <b>“🎯 Repartir por centro de costo”</b>. Podés elegir cómo repartirlo: <b>100% a un centro</b>, <b>manual por porcentaje (%)</b>, <b>manual por monto ($)</b> o <b>prorratear automáticamente por hectáreas</b> de los campos vinculados a cada centro. El reparto es opcional: si no lo usás, nada cambia. Esta base alimenta los <b>reportes por centro de costo</b> que llegan en la próxima etapa.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/10/2026',
@@ -27735,7 +27738,10 @@ function centroCostoRender() {
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <div class="text-sm text-slate-600">${ccs.length} centro${ccs.length===1?'':'s'} de costo</div>
-      ${puedeCrear?`<button class="btn btn-primary" onclick="centroCostoForm(null)">+ Nuevo centro de costo</button>`:''}
+      <div class="flex gap-2">
+        <button class="btn btn-secondary" onclick="centroCostoReporte()">📊 Ver reporte</button>
+        ${puedeCrear?`<button class="btn btn-primary" onclick="centroCostoForm(null)">+ Nuevo centro de costo</button>`:''}
+      </div>
     </div>
     <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mb-3">
       💡 Un <b>centro de costo</b> es una unidad a la que querés asignar gastos e inversiones: un campo, una unidad de negocio, un proyecto. Si lo vinculás a un <b>campo</b>, más adelante vas a poder prorratear automáticamente por hectáreas; el <b>peso</b> sirve para repartos manuales por defecto.
@@ -27811,6 +27817,103 @@ async function centroCostoDel(id) {
     delete state.cache.centrosCosto;
     toast('Eliminado','success'); pages.centrosCosto();
   } catch (e) { toast(e.message,'error'); }
+}
+
+/* ===== Reporte de gastos e inversiones por centro de costo (Etapa 3) ===== */
+function _ccRepDefaultRango() {
+  const hoy = new Date();
+  const desde = new Date(hoy.getFullYear(), 0, 1);  // 1 de enero del año en curso
+  const iso = d => d.toISOString().slice(0, 10);
+  return { desde: iso(desde), hasta: iso(hoy) };
+}
+async function centroCostoReporte(desde, hasta) {
+  setHeader('Reporte por centro de costo', 'Gastos e inversiones imputados a cada centro, en el período elegido.');
+  const r = state._ccRepRango || _ccRepDefaultRango();
+  if (desde != null) r.desde = desde;
+  if (hasta != null) r.hasta = hasta;
+  state._ccRepRango = r;
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando reporte…</div>`;
+  let rep = null;
+  try {
+    const q = new URLSearchParams({ desde: r.desde || '', hasta: r.hasta || '' }).toString();
+    rep = (await api('/api/centros-costo-reporte?' + q)).data;
+  } catch (e) { return toast(e.message, 'error'); }
+  state._ccRep = rep;
+  centroCostoReporteRender();
+}
+function centroCostoReporteRender() {
+  const rep = state._ccRep || { centros: [], detalle: [], totales: {} };
+  const r = state._ccRepRango || _ccRepDefaultRango();
+  const centros = rep.centros || [];
+  const tot = rep.totales || {};
+  const maxTotal = centros.reduce((a, c) => Math.max(a, c.total || 0), 0) || 1;
+  const clasLabel = c => c === 'operativo' ? '<span class="badge badge-blue text-[10px]">Operativo</span>' : (c === 'inversion' ? '<span class="badge badge-amber text-[10px]">Inversión</span>' : '<span class="badge badge-gray text-[10px]">Sin clasificar</span>');
+  const filas = centros.map(c => `<tr class="cursor-pointer hover:bg-slate-50" onclick="centroCostoReporteDetalle(${JSON.stringify(c.centroCostoId)})">
+      <td class="font-medium">${esc(c.nombre)} ${clasLabel(c.clasificacion)}</td>
+      <td class="text-right">${fmt$(c.compras)}</td>
+      <td class="text-right">${fmt$(c.gastos)}</td>
+      <td class="text-right font-semibold">${fmt$(c.total)}</td>
+      <td class="w-40"><div class="bg-slate-100 rounded h-3 overflow-hidden"><div class="bg-emerald-500 h-3" style="width:${Math.round((c.total||0)/maxTotal*100)}%"></div></div></td>
+    </tr>`).join('');
+  $('#page-body').innerHTML = `
+    <div class="mb-3 flex items-center gap-2 flex-wrap">
+      <button class="btn btn-ghost text-sm" onclick="pages.centrosCosto()">← Volver al catálogo</button>
+      <div class="flex items-end gap-2 flex-wrap ml-auto">
+        <div><label class="label text-xs">Desde</label><input id="ccrep-desde" type="date" class="input" value="${r.desde||''}"></div>
+        <div><label class="label text-xs">Hasta</label><input id="ccrep-hasta" type="date" class="input" value="${r.hasta||''}"></div>
+        <button class="btn btn-primary" onclick="centroCostoReporte($('#ccrep-desde').value, $('#ccrep-hasta').value)">Aplicar</button>
+        <button class="btn btn-secondary" onclick="centroCostoReporteExport()">⬇️ Excel</button>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="kpi"><div class="text-xs text-slate-500">Total período</div><div class="text-xl font-bold">${fmt$(tot.total||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Operativo (gasto)</div><div class="text-xl font-bold text-blue-700">${fmt$(tot.operativo||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Inversión</div><div class="text-xl font-bold text-amber-700">${fmt$(tot.inversion||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Movimientos</div><div class="text-xl font-bold">${fmtN(tot.cantidad||0)}</div></div>
+    </div>
+    <div class="kpi overflow-x-auto">
+      <table class="table w-full text-sm">
+        <thead><tr><th>Centro de costo</th><th class="text-right">Compras</th><th class="text-right">Gastos diarios</th><th class="text-right">Total</th><th>Participación</th></tr></thead>
+        <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">No hay gastos imputados a centros de costo en este período.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <div id="ccrep-detalle" class="mt-4"></div>`;
+}
+function centroCostoReporteDetalle(ccId) {
+  const rep = state._ccRep || { detalle: [] };
+  const det = (rep.detalle || []).filter(d => d.centroCostoId === ccId);
+  const cc = (rep.centros || []).find(c => c.centroCostoId === ccId);
+  const el = $('#ccrep-detalle'); if (!el) return;
+  el.innerHTML = `<div class="kpi">
+    <div class="flex items-center justify-between mb-2">
+      <div class="font-semibold">Detalle · ${esc(cc?.nombre || '')}</div>
+      <button class="btn btn-ghost text-xs" onclick="document.getElementById('ccrep-detalle').innerHTML=''">✕ Cerrar</button>
+    </div>
+    <div class="overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Fecha</th><th>Origen</th><th>Modo</th><th class="text-right">Monto</th></tr></thead>
+      <tbody>${det.map(d => `<tr>
+        <td>${fmtDate(d.fecha)}</td>
+        <td>${esc(d.origen)}</td>
+        <td class="text-xs text-slate-500">${d.modo==='hectareas'?'por ha':(d.modo==='manual'?'manual':'100%')}${d.porcentaje?` · ${fmtN(d.porcentaje)}%`:''}</td>
+        <td class="text-right font-medium">${fmt$(d.monto)}</td>
+      </tr>`).join('') || `<tr><td colspan="4" class="text-center text-slate-400 py-4">Sin movimientos.</td></tr>`}</tbody>
+    </table></div>
+  </div>`;
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function centroCostoReporteExport() {
+  const rep = state._ccRep || { centros: [], detalle: [] };
+  const r = state._ccRepRango || {};
+  const esc2 = v => `"${String(v==null?'':v).replace(/"/g,'""')}"`;
+  let csv = 'Reporte por centro de costo\n';
+  csv += `Período,${r.desde||''} a ${r.hasta||''}\n\n`;
+  csv += 'Centro de costo,Clasificación,Compras,Gastos diarios,Total\n';
+  (rep.centros || []).forEach(c => { csv += [esc2(c.nombre), esc2(c.clasificacion||''), c.compras||0, c.gastos||0, c.total||0].join(',') + '\n'; });
+  csv += '\nFecha,Centro,Origen,Modo,Monto\n';
+  (rep.detalle || []).forEach(d => { csv += [esc2(fmtDate(d.fecha)), esc2(d.centroNombre), esc2(d.origen), esc2(d.modo), d.monto||0].join(',') + '\n'; });
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `centros-costo_${r.desde||''}_${r.hasta||''}.csv`; a.click();
 }
 
 /* ===== Componente reutilizable: Reparto por Centro de Costo (Etapa 2) =====
