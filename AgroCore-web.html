@@ -1134,6 +1134,7 @@ const MODULES = [
   { id:'catalogos',     label:'Catálogos',            icon:'📚', perm:'produccion:read', section:'Administración' },
   { id:'categoriasArt', label:'Categorías y Familias', icon:'🗂️', perm:'produccion:read', section:'Administración' },
   { id:'catGastos',     label:'Categorías de Gastos',  icon:'🏷️', perm:'finanzas:read',    section:'Administración' },
+  { id:'centrosCosto',  label:'Centros de costo',      icon:'🎯', perm:'finanzas:read',    section:'Administración' },
   { id:'libroIVA',      label:'Libro IVA (Ventas/Compras)', icon:'📘', perm:'finanzas:read', section:'Administración' },
   { id:'exportContador',label:'Exportar para contador',icon:'🧾', perm:'finanzas:read',    section:'Administración' },
   { id:'usuarios',      label:'Usuarios',             icon:'👤', perm:'*',               section:'Administración' },
@@ -1811,7 +1812,7 @@ async function switchCompany(id) {
 async function applyCompanyTheme() {
   const m = currentMembership();
   const root = document.documentElement;
-  let color = '#15803d', informal = false, cajaTenedor = false;
+  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false;
   try {
     if (!state.cache.empresas) {
       const r = await api('/api/empresas');
@@ -1822,6 +1823,7 @@ async function applyCompanyTheme() {
       color = emp.color || '#15803d';
       informal = emp.informal === true;
       cajaTenedor = emp.cajaPorTenedor === true;
+      usaCC = emp.usaCentrosCosto === true;
     }
   } catch {}
   const wm = $('#company-watermark');
@@ -1842,6 +1844,7 @@ async function applyCompanyTheme() {
   root.style.setProperty('--company-tint-bg', `rgba(${r},${g},${b},0.09)`);
   state.companyInformal = informal;
   state.cajaPorTenedor = cajaTenedor;
+  state.usaCentrosCosto = usaCC;
 }
 
 // Estado de plegado de las secciones del sidebar (se persiste en localStorage por usuario).
@@ -2976,7 +2979,7 @@ pages.inicio = async function() {
   const atajos = state.userShortcuts
     .map(sid => MODULES.find(m => m.id === sid))
     .filter(Boolean)
-    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m) && !empresaOcultaModulo(m.id))
+    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m) && !empresaOcultaModulo(m.id) && (m.id !== 'centrosCosto' || state.usaCentrosCosto))
     .map(m => ({ id: m.id, label: m.label, sub: m.section, icon: m.icon }));
 
   const puedeVerKPIs = can('dashboard:read');
@@ -3018,6 +3021,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/10/2026',
+      titulo:'🎯 v2.289.0 — Imputá compras y gastos a tus centros de costo',
+      desc:'Segunda etapa de <b>Centros de costo</b> (para empresas que lo tengan activado): al cargar una <b>factura de compra</b> o un <b>gasto en Movimientos diarios</b> (efectivo, transferencia o débito) ahora aparece el bloque <b>“🎯 Repartir por centro de costo”</b>. Podés elegir cómo repartirlo: <b>100% a un centro</b>, <b>manual por porcentaje (%)</b>, <b>manual por monto ($)</b> o <b>prorratear automáticamente por hectáreas</b> de los campos vinculados a cada centro. El reparto es opcional: si no lo usás, nada cambia. Esta base alimenta los <b>reportes por centro de costo</b> que llegan en la próxima etapa.' },
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'09/10/2026',
+      titulo:'🎯 v2.288.0 — Centros de costo (configurable, por empresa)',
+      desc:'Nueva dimensión propia para imputar y repartir <b>gastos e inversiones</b> a la unidad que quieras: un <b>campo</b>, una <b>unidad de negocio</b>, un <b>proyecto</b>. Es <b>opcional y se activa por empresa</b> (en <b>Empresas → editar → “Usa centros de costo”</b>), así que quien no la use no ve ningún cambio. En esta primera etapa se habilita el <b>catálogo</b> (Administración → <b>Centros de costo</b>): das de alta cada centro con su nombre, clasificación (operativo/inversión), un <b>campo vinculado</b> opcional (para prorratear por hectáreas más adelante) y un <b>peso</b> para repartos. En próximas etapas vas a poder imputar compras y gastos a cada centro y ver reportes por centro.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'09/10/2026',
       titulo:'🧾 v2.287.0 — Pagar adelantos al empleado con cheque de terceros',
       desc:'En el pago inmediato de un adelanto/compra (dentro del movimiento del empleado) se sumó la opción <b>“Cheque de terceros (de cartera)”</b>: elegís un cheque de terceros que tenés <b>en cartera</b> y al guardar queda <b>Endosado / Entregado</b> al empleado y sale de la cartera. Si borrás el movimiento, el cheque <b>vuelve a cartera</b>. Ya estaban efectivo, transferencia y cheque propio.' },
@@ -10713,6 +10722,10 @@ function empForm(id=null) {
           <input id="f-tenedor" type="checkbox" ${it.cajaPorTenedor?'checked':''} class="mt-0.5" />
           <label for="f-tenedor" class="text-sm">Caja por tenedor <span class="text-slate-400">— el efectivo se maneja por persona que tiene la plata (Oficina, Lucas, Luciano), unificado entre las empresas del grupo. Activalo en todas las empresas del grupo que compartan la misma caja.</span></label>
         </div>
+        <div class="col-span-2 flex items-start gap-2 mt-1">
+          <input id="f-usacc" type="checkbox" ${it.usaCentrosCosto?'checked':''} class="mt-0.5" />
+          <label for="f-usacc" class="text-sm">Usar centros de costo <span class="text-slate-400">— habilita repartir gastos e inversiones por centro de costo (ej. por campo, actividad o sector). Opcional; si no lo activás, nada cambia. El catálogo se gestiona en Administración → Centros de costo.</span></label>
+        </div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='empSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
@@ -10750,6 +10763,7 @@ async function empSave(id) {
     email: $('#f-em').value.trim()||null,
     informal: $('#f-inf').checked,
     cajaPorTenedor: $('#f-tenedor')?.checked || false,
+    usaCentrosCosto: $('#f-usacc')?.checked || false,
   };
   if (!data.name) return toast('Nombre requerido','warn');
   try { await api('/api/empresas'+(id?'/'+id:''), { method: id?'PUT':'POST', body: JSON.stringify(data) });
@@ -16149,7 +16163,8 @@ async function compForm(pre) {
         <div id="comp-vtos"></div>
         <div class="text-[10px] text-amber-700 mt-1">Si cargás un vencimiento, se usa esa fecha (en vez de la condición de pago) para la deuda, el flujo y la alerta 3 días antes. Si hay 2+, el 1ro es el importe sin recargo.</div>
       </div>
-      <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>`,
+      <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
+      ${(typeof ccRepartoHTML==='function')?ccRepartoHTML('comp'):''}`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="compSave()">💾 ${state._compEdit?'Guardar cambios':'Registrar'}</button>`
   });
@@ -16193,7 +16208,27 @@ async function compForm(pre) {
       cc.addEventListener('change', toggle);
       toggle();
     }
+    // Reparto por centro de costo (opt-in). Total = importe de la factura (subtotal + IVA).
+    if (state.usaCentrosCosto && typeof ccRepartoInit === 'function') {
+      await ccRepartoEnsureCentros();
+      let preset = null;
+      if (state._compEdit) {
+        try { const r = await api('/api/imputaciones-cc?facturaCompraId=' + encodeURIComponent(state._compEdit)); preset = ccRepartoPresetFromImput(r.data || []); } catch {}
+      }
+      ccRepartoInit('comp', _compTotalActual, preset);
+      $('#fi-tbody')?.addEventListener('input', () => { if (typeof ccRepartoResumen === 'function') ccRepartoResumen('comp'); });
+    }
   }, 0);
+}
+function _compTotalActual() {
+  let sub = 0, iva = 0;
+  const noIva = (typeof factNoDiscriminaIVA === 'function') && factNoDiscriminaIVA();
+  document.querySelectorAll('#fi-tbody tr[data-fi]').forEach(tr => {
+    const g = f => Number(tr.querySelector(`[data-f="${f}"]`)?.value || 0);
+    const s = g('cantidad') * g('precioUnit');
+    sub += s; iva += noIva ? 0 : s * (g('alicuotaIva') / 100);
+  });
+  return sub + iva;
 }
 // === Vencimientos de pago en la factura de compra (servicios con 1 o varios) ===
 function compVtoRowHTML(v) {
@@ -16484,6 +16519,11 @@ async function compSave() {
     observaciones: $('#f-obs').value.trim()||null,
     items,
   };
+  // Reparto por centro de costo (opt-in). No aplica a notas de crédito.
+  if (state.usaCentrosCosto && data.clase !== 'nota_credito') {
+    const _cc = (typeof ccRepartoGet === 'function') ? ccRepartoGet('comp') : null;
+    if (_cc) data.imputacionCC = _cc;
+  }
   // Vínculo con remitos de compra (si se cargó desde remito): el stock no se vuelve a sumar.
   if (!state._compEdit && Array.isArray(state._compRemitoLinks) && state._compRemitoLinks.length) {
     data.remitoLinks = state._compRemitoLinks;
@@ -27659,6 +27699,239 @@ function catGastoTreeOptions(selectedId, opts) {
   walk(opts.startPadreId !== undefined ? opts.startPadreId : null, 0);
   return html;
 }
+/* ============ CENTROS DE COSTO (opt-in por empresa) ============ */
+pages.centrosCosto = async function() {
+  setHeader('Centros de costo', 'Dimensión propia para imputar y repartir gastos e inversiones (por campo, unidad de negocio, proyecto, etc.). Se activa por empresa.');
+  if (!state.usaCentrosCosto) {
+    $('#page-body').innerHTML = `<div class="kpi text-center text-slate-500 py-8">
+      Los Centros de costo no están activados para esta empresa.<br>
+      <span class="text-sm">Activalos en <b>Empresas → editar → Usa centros de costo</b>.</span></div>`;
+    return;
+  }
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('centrosCosto','Centros de costo'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let ccs = [];
+  try { ccs = (await api('/api/centros-costo')).data || []; } catch (e) { return toast(e.message,'error'); }
+  if (!state.cache.campos) { try { state.cache.campos = (await api('/api/campos')).data || []; } catch { state.cache.campos = []; } }
+  state.cache.centrosCosto = ccs;
+  centroCostoRender();
+};
+function _ccClasLabel(c){ return c==='operativo'?'Operativo':(c==='inversion'?'Inversión':'—'); }
+function centroCostoRender() {
+  const ccs = (state.cache.centrosCosto || []).slice().sort((a,b)=>((a.orden??999)-(b.orden??999))||(a.nombre||'').localeCompare(b.nombre||''));
+  const campos = state.cache.campos || [];
+  const campoNom = (id) => { const f = campos.find(x=>x.id===id); return f ? esc(f.nombre) : '—'; };
+  const puedeCrear = can('finanzas:create'), puedeEditar = can('finanzas:update'), puedeBorrar = can('finanzas:delete');
+  const filas = ccs.map(c => `<tr class="${c.activo===false?'opacity-50':''}">
+      <td class="font-medium">${c.orden!=null?`<span class="text-slate-400 text-xs mr-1">${c.orden}</span>`:''}${esc(c.nombre)}${c.activo===false?' <span class="badge badge-gray text-[10px]">inactivo</span>':''}</td>
+      <td>${_ccClasLabel(c.clasificacion)}</td>
+      <td>${c.campoId?('🗺️ '+campoNom(c.campoId)):'<span class="text-slate-400">—</span>'}</td>
+      <td class="text-right">${c.peso?fmtN(c.peso):'<span class="text-slate-400">—</span>'}</td>
+      <td class="text-slate-500 text-sm">${esc(c.observaciones||'')}</td>
+      <td class="text-right whitespace-nowrap">
+        ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar" onclick='centroCostoForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
+        ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='centroCostoDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
+      </td></tr>`).join('');
+  $('#page-body').innerHTML = `
+    <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-sm text-slate-600">${ccs.length} centro${ccs.length===1?'':'s'} de costo</div>
+      ${puedeCrear?`<button class="btn btn-primary" onclick="centroCostoForm(null)">+ Nuevo centro de costo</button>`:''}
+    </div>
+    <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mb-3">
+      💡 Un <b>centro de costo</b> es una unidad a la que querés asignar gastos e inversiones: un campo, una unidad de negocio, un proyecto. Si lo vinculás a un <b>campo</b>, más adelante vas a poder prorratear automáticamente por hectáreas; el <b>peso</b> sirve para repartos manuales por defecto.
+    </div>
+    <div class="kpi overflow-x-auto">
+      <table class="table w-full text-sm">
+        <thead><tr><th>Nombre</th><th>Clasificación</th><th>Campo vinculado</th><th class="text-right">Peso</th><th>Observaciones</th><th></th></tr></thead>
+        <tbody>${filas || `<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin centros de costo. Creá el primero con "+ Nuevo centro de costo".</td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+function centroCostoForm(id=null) {
+  const ccs = state.cache.centrosCosto || [];
+  const campos = state.cache.campos || [];
+  let c = { nombre:'', clasificacion:'', campoId:null, peso:0, orden:null, observaciones:'', activo:true };
+  if (id) { const cur = ccs.find(x=>x.id===id); if (cur) c = { ...c, ...cur }; }
+  const campoOpts = `<option value="">— Ninguno —</option>` + campos.map(f=>`<option value="${f.id}" ${c.campoId===f.id?'selected':''}>${esc(f.nombre)}</option>`).join('');
+  openModal({
+    title: (id?'Editar ':'Nuevo ')+'centro de costo', size:'max-w-md',
+    body: `
+      <div><label class="label">Nombre *</label><input id="cc-nombre" class="input" value="${esc(c.nombre||'')}" placeholder="Ej: Campo La Esperanza, Agricultura, Proyecto riego…"/></div>
+      <div class="grid grid-cols-2 gap-3 mt-3">
+        <div><label class="label">Clasificación</label>
+          <select id="cc-clas" class="input">
+            <option value="" ${!c.clasificacion?'selected':''}>— Sin clasificar —</option>
+            <option value="operativo" ${c.clasificacion==='operativo'?'selected':''}>Operativo (gasto)</option>
+            <option value="inversion" ${c.clasificacion==='inversion'?'selected':''}>Inversión</option>
+          </select>
+        </div>
+        <div><label class="label">Orden</label><input id="cc-orden" type="number" class="input" value="${c.orden!=null?c.orden:''}" placeholder="0"/></div>
+      </div>
+      <div class="mt-3"><label class="label">Campo vinculado (opcional)</label>
+        <select id="cc-campo" class="input">${campoOpts}</select>
+        <div class="text-[10px] text-slate-400 mt-1">Si lo vinculás a un campo, podrás prorratear por hectáreas más adelante.</div>
+      </div>
+      <div class="mt-3"><label class="label">Peso para reparto (opcional)</label>
+        <input id="cc-peso" type="number" step="0.01" class="input" value="${c.peso||0}"/>
+        <div class="text-[10px] text-slate-400 mt-1">Participación por defecto en repartos manuales (ej. hectáreas, %).</div>
+      </div>
+      <div class="mt-3"><label class="label">Observaciones</label><textarea id="cc-obs" class="input" rows="2">${esc(c.observaciones||'')}</textarea></div>
+      <div class="mt-3 flex items-center gap-2">
+        <input id="cc-act" type="checkbox" ${c.activo!==false?'checked':''}/>
+        <label for="cc-act">Activo</label>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick='centroCostoSave(${id?JSON.stringify(id):"null"})'>💾 Guardar</button>`
+  });
+}
+async function centroCostoSave(id) {
+  const nombre = ($('#cc-nombre')?.value||'').trim();
+  if (!nombre) return toast('Poné el nombre','warn');
+  const ordVal = $('#cc-orden')?.value;
+  const data = {
+    nombre,
+    clasificacion: $('#cc-clas')?.value || null,
+    campoId: $('#cc-campo')?.value || null,
+    peso: Number($('#cc-peso')?.value) || 0,
+    orden: ordVal==='' || ordVal==null ? null : Number(ordVal),
+    observaciones: ($('#cc-obs')?.value||'').trim() || null,
+    activo: $('#cc-act') ? !!$('#cc-act').checked : true,
+  };
+  try {
+    if (id) await api('/api/centros-costo/'+id, { method:'PUT', body: JSON.stringify(data) });
+    else    await api('/api/centros-costo',     { method:'POST', body: JSON.stringify(data) });
+    delete state.cache.centrosCosto;
+    toast('Guardado','success'); closeModal(); pages.centrosCosto();
+  } catch (e) { toast('No se pudo guardar: '+(e.message||e),'error'); }
+}
+async function centroCostoDel(id) {
+  if (!confirm('¿Eliminar este centro de costo?')) return;
+  try {
+    await api('/api/centros-costo/'+id, { method:'DELETE' });
+    delete state.cache.centrosCosto;
+    toast('Eliminado','success'); pages.centrosCosto();
+  } catch (e) { toast(e.message,'error'); }
+}
+
+/* ===== Componente reutilizable: Reparto por Centro de Costo (Etapa 2) =====
+   Se inserta en el form de compra y en el de movimiento diario. Opt-in por empresa.
+   Uso: insertar ccRepartoHTML('<prefijo>') en el body del modal; luego
+   await ccRepartoEnsureCentros(); ccRepartoInit('<prefijo>', getTotalFn, preset?).
+   Al guardar: const cc = ccRepartoGet('<prefijo>');  // null si no se usa */
+state._cc = state._cc || {};
+async function ccRepartoEnsureCentros() {
+  if (!state.cache.centrosCosto) { try { state.cache.centrosCosto = (await api('/api/centros-costo')).data || []; } catch { state.cache.centrosCosto = []; } }
+}
+function _ccOpts(sel) {
+  const cs = (state.cache.centrosCosto || []).filter(c => c.activo !== false)
+    .sort((a,b)=>((a.orden??999)-(b.orden??999))||(a.nombre||'').localeCompare(b.nombre||''));
+  return '<option value="">— Elegí un centro —</option>' + cs.map(c => `<option value="${c.id}" ${sel===c.id?'selected':''}>${esc(c.nombre)}${c.campoId?' 🗺️':''}</option>`).join('');
+}
+function ccRepartoHTML(p) {
+  if (!state.usaCentrosCosto) return '';
+  return `<div id="${p}-cc-wrap" class="mt-3 border-t border-slate-200 pt-3">
+    <label class="flex items-center gap-2 text-sm font-medium cursor-pointer">
+      <input type="checkbox" id="${p}-cc-on" onchange="ccRepartoToggle('${p}')"> 🎯 Repartir por centro de costo
+    </label>
+    <div id="${p}-cc-body" style="display:none" class="mt-2 space-y-2 bg-slate-50 border border-slate-200 rounded-lg p-2">
+      <div><label class="label text-xs">Forma de reparto</label>
+        <select id="${p}-cc-modo" class="input" onchange="ccRepartoRender('${p}')">
+          <option value="directo">100% a un centro</option>
+          <option value="porcentaje">Manual por porcentaje (%)</option>
+          <option value="monto">Manual por monto ($)</option>
+          <option value="hectareas">Prorratear por hectáreas (del campo vinculado)</option>
+        </select>
+      </div>
+      <div id="${p}-cc-rows" class="space-y-2"></div>
+      <button type="button" class="btn btn-ghost text-xs" id="${p}-cc-add" onclick="ccRepartoAddRow('${p}')">+ Agregar centro</button>
+      <div id="${p}-cc-resumen" class="text-xs text-slate-600"></div>
+    </div>
+  </div>`;
+}
+function ccRepartoInit(p, totalGetter, preset) {
+  state._cc[p] = { rows: [{}], totalGetter };
+  if (preset && preset.items && preset.items.length) {
+    const on = document.getElementById(`${p}-cc-on`); if (on) on.checked = true;
+    const body = document.getElementById(`${p}-cc-body`); if (body) body.style.display = '';
+    let fmodo = 'directo';
+    if (preset.modo === 'hectareas') fmodo = 'hectareas';
+    else if (preset.modo === 'manual') fmodo = 'monto';
+    else fmodo = (preset.items.length > 1) ? 'monto' : 'directo';
+    const modoSel = document.getElementById(`${p}-cc-modo`); if (modoSel) modoSel.value = fmodo;
+    state._cc[p].rows = preset.items.map(it => ({ centroCostoId: it.centroCostoId, val: fmodo === 'monto' ? it.monto : (fmodo === 'porcentaje' ? it.porcentaje : null) }));
+    ccRepartoRender(p);
+  }
+}
+function ccRepartoToggle(p) {
+  const on = document.getElementById(`${p}-cc-on`)?.checked;
+  const body = document.getElementById(`${p}-cc-body`); if (body) body.style.display = on ? '' : 'none';
+  if (on) { const st = state._cc[p] = state._cc[p] || { rows: [{}] }; if (!st.rows || !st.rows.length) st.rows = [{}]; ccRepartoRender(p); }
+}
+function ccRepartoReadInputs(p) {
+  const st = state._cc[p] = state._cc[p] || { rows: [{}] };
+  st.rows = (st.rows || []).map((r, i) => {
+    const sel = document.getElementById(`${p}-cc-sel-${i}`);
+    const val = document.getElementById(`${p}-cc-val-${i}`);
+    return { centroCostoId: sel ? sel.value : r.centroCostoId, val: val ? (val.value === '' ? null : Number(val.value)) : r.val };
+  });
+}
+function ccRepartoRender(p) {
+  ccRepartoReadInputs(p);
+  const modo = document.getElementById(`${p}-cc-modo`)?.value || 'directo';
+  const st = state._cc[p] = state._cc[p] || { rows: [{}] };
+  if (!st.rows || !st.rows.length) st.rows = [{}];
+  if (modo === 'directo') st.rows = [st.rows[0] || {}];
+  const rowsEl = document.getElementById(`${p}-cc-rows`); if (!rowsEl) return;
+  const addBtn = document.getElementById(`${p}-cc-add`); if (addBtn) addBtn.style.display = (modo === 'directo') ? 'none' : '';
+  const showVal = (modo === 'porcentaje' || modo === 'monto');
+  rowsEl.innerHTML = st.rows.map((r, i) => `<div class="flex items-center gap-2">
+      <select class="input flex-1" id="${p}-cc-sel-${i}" onchange="ccRepartoResumen('${p}')">${_ccOpts(r.centroCostoId)}</select>
+      ${showVal ? `<input type="number" step="0.01" min="0" class="input w-28" id="${p}-cc-val-${i}" value="${r.val != null ? r.val : ''}" placeholder="${modo === 'porcentaje' ? '%' : '$'}" oninput="ccRepartoResumen('${p}')">` : ''}
+      ${modo === 'hectareas' ? `<span class="text-xs text-slate-400 whitespace-nowrap">según ha</span>` : ''}
+      ${(modo !== 'directo') ? `<button type="button" class="btn btn-ghost text-xs text-red-600" onclick="ccRepartoDelRow('${p}',${i})">✕</button>` : '<span class="text-xs text-slate-400 whitespace-nowrap">100%</span>'}
+    </div>`).join('');
+  ccRepartoResumen(p);
+}
+function ccRepartoAddRow(p) { ccRepartoReadInputs(p); const st = state._cc[p] = state._cc[p] || { rows: [] }; st.rows.push({}); ccRepartoRender(p); }
+function ccRepartoDelRow(p, i) { ccRepartoReadInputs(p); const st = state._cc[p]; if (st && st.rows) { st.rows.splice(i, 1); if (!st.rows.length) st.rows = [{}]; } ccRepartoRender(p); }
+function ccRepartoResumen(p) {
+  ccRepartoReadInputs(p);
+  const st = state._cc[p] || { rows: [] };
+  const modo = document.getElementById(`${p}-cc-modo`)?.value || 'directo';
+  const total = (st.totalGetter ? Number(st.totalGetter()) : 0) || 0;
+  const el = document.getElementById(`${p}-cc-resumen`); if (!el) return;
+  let msg = '';
+  if (modo === 'porcentaje') {
+    const sum = st.rows.reduce((a, r) => a + (Number(r.val) || 0), 0);
+    msg = `Suma: ${fmtN(sum)}% ${Math.abs(sum - 100) < 0.01 ? '✓' : '— debe dar 100%'}`;
+  } else if (modo === 'monto') {
+    const sum = st.rows.reduce((a, r) => a + (Number(r.val) || 0), 0);
+    msg = `Suma: ${fmt$(sum)} de ${fmt$(total)} ${Math.abs(sum - total) < 0.5 ? '✓' : '— debe igualar el total'}`;
+  } else if (modo === 'hectareas') {
+    msg = 'Se reparte automáticamente según las hectáreas de los campos vinculados a cada centro.';
+  } else {
+    msg = `100% (${fmt$(total)}) al centro elegido.`;
+  }
+  el.textContent = msg;
+}
+function ccRepartoGet(p) {
+  const on = document.getElementById(`${p}-cc-on`); if (!on || !on.checked) return null;
+  ccRepartoReadInputs(p);
+  const modo = document.getElementById(`${p}-cc-modo`)?.value || 'directo';
+  const st = state._cc[p] || { rows: [] };
+  const rows = (st.rows || []).filter(r => r.centroCostoId);
+  if (!rows.length) { toast('Elegí al menos un centro de costo o destildá el reparto','warn'); return null; }
+  if (modo === 'directo') return { modo: 'directo', items: [{ centroCostoId: rows[0].centroCostoId }] };
+  if (modo === 'hectareas') return { modo: 'hectareas', items: rows.map(r => ({ centroCostoId: r.centroCostoId })) };
+  if (modo === 'porcentaje') return { modo: 'manual', items: rows.map(r => ({ centroCostoId: r.centroCostoId, porcentaje: Number(r.val) || 0 })) };
+  if (modo === 'monto') return { modo: 'manual', items: rows.map(r => ({ centroCostoId: r.centroCostoId, monto: Number(r.val) || 0 })) };
+  return null;
+}
+function ccRepartoPresetFromImput(rows) {
+  if (!rows || !rows.length) return null;
+  return { modo: rows[0].modo, items: rows.map(r => ({ centroCostoId: r.centroCostoId, monto: r.monto, porcentaje: r.porcentaje })) };
+}
+
 pages.catGastos = async function() {
   setHeader('Categorías de Gastos', 'Organizá tus gastos en un árbol (Categoría → Familia → Subfamilia). Se usan al cargar Movimientos Diarios.');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('catGastos','Categorías de Gasto'); return; }
@@ -29929,13 +30202,20 @@ async function movDiariosAbrir(pre=null) {
           <label class="label">Observaciones</label>
           <textarea id="md-obs" class="input" rows="2" placeholder="Detalles adicionales..."></textarea>
         </div>
+        <div class="col-span-2" id="md-cc-slot">${(!pre && typeof ccRepartoHTML==='function') ? ccRepartoHTML('md') : ''}</div>
       </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="movDiariosGuardar()">${pre?'💾 Guardar cambios':'💾 Registrar'}</button>`
   });
   state._mdEditRec = pre || null;
-  setTimeout(() => {
+  setTimeout(async () => {
     movDiariosMetodoCambio();
+    // Reparto por centro de costo (opt-in). Solo en alta; total = monto del gasto.
+    if (!pre && state.usaCentrosCosto && typeof ccRepartoInit === 'function') {
+      await ccRepartoEnsureCentros();
+      ccRepartoInit('md', () => Number(document.getElementById('md-monto')?.value || 0), null);
+      document.getElementById('md-monto')?.addEventListener('input', () => { if (typeof ccRepartoResumen === 'function') ccRepartoResumen('md'); });
+    }
     if (pre) {
       // Modo edición: prellenar y bloquear el método (no se cambia efectivo↔banco).
       const set=(sel,val)=>{ const el=$(sel); if(el) el.value=val; };
@@ -30100,6 +30380,11 @@ async function movDiariosGuardar() {
       state._mdEditRec = null; closeModal(); pages.movDiarios();
     } catch (e) { toast(e.message || 'Error al guardar', 'error'); }
     return;
+  }
+  // Reparto por centro de costo (opt-in). Solo egresos reales (no cheque ni intercompany).
+  if (state.usaCentrosCosto && tipo === 'egreso' && ['efectivo','externo','tarjeta','transferencia','debito'].includes(metodo)) {
+    const _cc = (typeof ccRepartoGet === 'function') ? ccRepartoGet('md') : null;
+    if (_cc) body.imputacionCC = _cc;
   }
   try {
     await api('/api/movimientos-diarios', { method:'POST', body: JSON.stringify(body) });

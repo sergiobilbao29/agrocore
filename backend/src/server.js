@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.287.0';
+const AGROCORE_VERSION = '2.289.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -721,6 +721,7 @@ async function serializeUser(u) {
     email: co.email || null, telefono: co.telefono || null,
     modulosOcultos: co.modulosOcultos || null,
     cajaPorTenedor: co.cajaPorTenedor === true,
+    usaCentrosCosto: co.usaCentrosCosto === true,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1806,6 +1807,7 @@ const empresaSchema = z.object({
   logoUrl: z.string().nullable().optional(),
   informal: z.boolean().optional(),
   cajaPorTenedor: z.boolean().optional(),
+  usaCentrosCosto: z.boolean().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
 });
@@ -3601,6 +3603,99 @@ mountCrud({
   searchFields: ['nombre'],
   readOpen: true,   // leer abierto; crear/editar/borrar requiere 'finanzas'
 });
+
+// ---------- CENTROS DE COSTO (gestión analítica, opt-in por empresa) ----------
+mountCrud({
+  path: 'centros-costo', modelName: 'centroCosto', perm: 'finanzas',
+  schema: z.object({
+    nombre: z.string().min(1),
+    clasificacion: z.string().nullable().optional(),  // operativo | inversion | null
+    campoId: z.string().nullable().optional(),
+    peso: z.number().nonnegative().optional(),
+    orden: z.number().int().optional(),
+    observaciones: z.string().nullable().optional(),
+    activo: z.boolean().optional(),
+  }),
+  orderBy: [{ orden: 'asc' }, { nombre: 'asc' }],
+  searchFields: ['nombre'],
+  readOpen: true,
+});
+
+// ============================================================
+// IMPUTACION A CENTROS DE COSTO (Etapa 2). Opt-in por empresa.
+// Reparte el total de una compra o gasto entre uno o varios centros de costo.
+//   modo "directo"   -> 100% a un centro
+//   modo "manual"    -> cada fila trae monto (o porcentaje) explicito
+//   modo "hectareas" -> prorrateo por hectareas del campo vinculado a cada centro
+// origenCampo: 'facturaCompraId' | 'efectivoId' | 'bancoMovimientoId'
+// Si la empresa no usa centros de costo, o no hay reparto, no hace nada.
+// ============================================================
+async function _guardarImputacionesCC(db, { companyId, origenTipo, origenCampo, origenId, fecha, total, modo, imputaciones }) {
+  try {
+    const tot = Number(total) || 0;
+    if (!origenId || !origenCampo || tot <= 0) return;
+    const comp = await db.company.findUnique({ where: { id: companyId }, select: { usaCentrosCosto: true } });
+    if (!comp || comp.usaCentrosCosto !== true) return;
+    let lista = Array.isArray(imputaciones) ? imputaciones.filter(x => x && x.centroCostoId) : [];
+    if (!lista.length) return;
+    const md = ['directo', 'manual', 'hectareas'].includes(modo) ? modo : 'directo';
+    // Resolver montos por fila
+    let montos = [];
+    if (md === 'hectareas') {
+      const ids = lista.map(x => x.centroCostoId);
+      const centros = await db.centroCosto.findMany({ where: { id: { in: ids }, companyId }, include: { campo: true } });
+      const pesoDe = (ccId) => { const c = centros.find(x => x.id === ccId); const h = c && c.campo ? Number(c.campo.hectareas || 0) : 0; return h > 0 ? h : 0; };
+      let pesos = lista.map(x => pesoDe(x.centroCostoId));
+      let suma = pesos.reduce((a, b) => a + b, 0);
+      if (suma <= 0) { pesos = lista.map(() => 1); suma = pesos.length; }   // sin ha: parte igual
+      montos = pesos.map(p => _round2(tot * p / suma));
+    } else if (md === 'directo') {
+      montos = lista.map(() => 0); montos[0] = tot; lista = [lista[0]];   // directo = 100% al primero
+    } else {
+      montos = lista.map(x => x.monto != null ? _round2(Number(x.monto)) : (x.porcentaje != null ? _round2(tot * Number(x.porcentaje) / 100) : 0));
+    }
+    // Ajuste de redondeo: la ultima fila absorbe la diferencia para cerrar el total
+    const sumaM = montos.reduce((a, b) => a + (Number(b) || 0), 0);
+    if (montos.length && Math.abs(sumaM - tot) >= 0.01 && md !== 'manual') {
+      montos[montos.length - 1] = _round2(montos[montos.length - 1] + (tot - sumaM));
+    }
+    const rows = lista.map((x, i) => ({
+      companyId, centroCostoId: x.centroCostoId, origenTipo, modo: md,
+      monto: Number(montos[i]) || 0,
+      porcentaje: tot > 0 ? _round2((Number(montos[i]) || 0) / tot * 100) : 0,
+      fecha: new Date(fecha), [origenCampo]: origenId,
+    })).filter(r => r.monto > 0 || md === 'manual');
+    if (rows.length) await db.imputacionCC.createMany({ data: rows });
+  } catch (e) { /* el reparto es informativo: no rompe la carga del comprobante */ }
+}
+
+// Lectura de imputaciones (para prellenar al editar o para reportes de Etapa 3).
+app.get('/api/imputaciones-cc', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.facturaCompraId) where.facturaCompraId = String(req.query.facturaCompraId);
+    if (req.query.efectivoId) where.efectivoId = String(req.query.efectivoId);
+    if (req.query.bancoMovimientoId) where.bancoMovimientoId = String(req.query.bancoMovimientoId);
+    if (req.query.centroCostoId) where.centroCostoId = String(req.query.centroCostoId);
+    if (req.query.desde || req.query.hasta) {
+      where.fecha = {};
+      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde));
+      if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59');
+    }
+    const data = await prisma.imputacionCC.findMany({ where, orderBy: { fecha: 'desc' }, include: { centroCosto: true } });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Esquema zod reutilizable del reparto que mandan los forms.
+const _imputCCSchema = z.object({
+  modo: z.enum(['directo', 'manual', 'hectareas']).optional(),
+  items: z.array(z.object({
+    centroCostoId: z.string(),
+    monto: z.number().nullable().optional(),
+    porcentaje: z.number().nullable().optional(),
+  })).optional(),
+}).nullable().optional();
 
 // Al borrar un nodo del árbol de gastos, sus hijos quedan como raíz (sin dato colgado).
 app.post('/api/categorias-gasto/:id/preparar-borrado', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
@@ -5716,6 +5811,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       emisorCuit: z.string().nullable().optional(),
       emisorRazonSocial: z.string().nullable().optional(),
       cae: z.string().nullable().optional(),
+      imputacionCC: _imputCCSchema,   // reparto por centro de costo (opt-in)
     });
     const input = schema.parse(req.body);
     const _vincRemito = Array.isArray(input.remitoLinks) && input.remitoLinks.length > 0;
@@ -5811,6 +5907,13 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
             data: { ultimoCostoCompra: Number(it.precioUnit), ultimoCostoMoneda: _mon },
           });
         }
+      }
+      // Reparto por centro de costo (opt-in). No aplica a notas de crédito (son reversas).
+      if (_clase !== 'nota_credito' && input.imputacionCC) {
+        await _guardarImputacionesCC(tx, {
+          companyId: req.companyId, origenTipo: 'compra', origenCampo: 'facturaCompraId', origenId: f.id,
+          fecha: input.fecha, total: totales.total, modo: input.imputacionCC.modo, imputaciones: input.imputacionCC.items,
+        });
       }
       return f;
     });
@@ -6049,6 +6152,7 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       emisorCuit: z.string().nullable().optional(),
       emisorRazonSocial: z.string().nullable().optional(),
       cae: z.string().nullable().optional(),
+      imputacionCC: _imputCCSchema,   // reparto por centro de costo (opt-in)
     });
     const input = schema.parse(req.body);
     const _vtos = (Array.isArray(input.vencimientos) ? input.vencimientos : [])
@@ -6102,6 +6206,14 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
           moneda: _mon, cotizacion: _cot, ...(esNC ? { haber: totales.total } : { debe: totales.total }), referencia: 'FACC', observaciones: input.observaciones || null }});
       }
       for (const it of input.items) { if (it.productoId && it.precioUnit != null) { await tx.producto.update({ where: { id: it.productoId }, data: { ultimoCostoCompra: Number(it.precioUnit), ultimoCostoMoneda: _mon } }); } }
+      // Reparto por centro de costo: reemplazar el anterior por el nuevo (si vino).
+      await tx.imputacionCC.deleteMany({ where: { facturaCompraId: req.params.id } });
+      if (_clase !== 'nota_credito' && input.imputacionCC) {
+        await _guardarImputacionesCC(tx, {
+          companyId: req.companyId, origenTipo: 'compra', origenCampo: 'facturaCompraId', origenId: f.id,
+          fecha: input.fecha, total: totales.total, modo: input.imputacionCC.modo, imputaciones: input.imputacionCC.items,
+        });
+      }
       return f;
     });
     res.json({ ok: true, data: factura });
@@ -7117,7 +7229,7 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
       empresas = await prisma.company.findMany({ where: { activo: true }, orderBy: { name: 'asc' } });
     } else {
       empresas = (req.user.userCompanies || []).map((uc) => ({
-        id: uc.companyId, name: uc.company.name, color: uc.company.color, cajaPorTenedor: uc.company.cajaPorTenedor === true,
+        id: uc.companyId, name: uc.company.name, color: uc.company.color, cajaPorTenedor: uc.company.cajaPorTenedor === true, usaCentrosCosto: uc.company.usaCentrosCosto === true,
       }));
     }
     if (!empresas.length) {
@@ -7243,6 +7355,7 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
         companyName: emp.name,
         color: emp.color || null,
         cajaPorTenedor: emp.cajaPorTenedor === true,
+        usaCentrosCosto: emp.usaCentrosCosto === true,
         cheques: {
           enCartera: chPend.length,
           montoEnCartera: sumMonto(chPend),
@@ -17667,6 +17780,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       contraparte: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       referencia: z.string().nullable().optional(),   // vínculo con otro módulo (ej. FACCOB-<facturaId>)
+      imputacionCC: _imputCCSchema,   // reparto por centro de costo (opt-in; solo egresos reales)
     });
     const d = schema.parse(req.body);
     const detalleObs = [
@@ -17776,6 +17890,19 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       });
     }
 
+    // Reparto por centro de costo (opt-in). Solo gastos reales (egreso) pagados con
+    // efectivo/externo/tarjeta (-> Efectivo) o transferencia/débito (-> BancoMovimiento).
+    // El cheque y el intercompany no llevan reparto en esta etapa.
+    if (d.tipo === 'egreso' && d.imputacionCC && resultado?.id) {
+      const origenCampo = (d.metodo === 'transferencia' || d.metodo === 'debito') ? 'bancoMovimientoId'
+        : (d.metodo === 'efectivo' || d.metodo === 'externo' || d.metodo === 'tarjeta') ? 'efectivoId' : null;
+      if (origenCampo) {
+        await _guardarImputacionesCC(prisma, {
+          companyId: req.companyId, origenTipo: 'gasto', origenCampo, origenId: resultado.id,
+          fecha: d.fecha, total: d.monto, modo: d.imputacionCC.modo, imputaciones: d.imputacionCC.items,
+        });
+      }
+    }
     res.status(201).json({ ok: true, data: { id: resultado?.id, metodo: d.metodo, tipo: d.tipo } });
   } catch (e) { next(e); }
 });

@@ -35,6 +35,7 @@ model Company {
   // la plata (Oficina, Lucas, Luciano), consolidado entre las empresas del grupo,
   // en vez de por caja separada por empresa. Opt-in: se activa por empresa del grupo.
   cajaPorTenedor  Boolean   @default(false)
+  usaCentrosCosto Boolean   @default(false) // habilita el reparto por centros de costo (gestión analítica). Opt-in por empresa.
   activo          Boolean   @default(true)
   // ---- Prueba gratuita self-service (instancia trial) ----
   plan            String    @default("full")  // "full" (cliente) | "trial" (prueba 30 días)
@@ -100,6 +101,8 @@ model Company {
   acoplados       Acoplado[]
   categoriasPlanilla CategoriaPlanilla[]
   categoriasHacienda CategoriaHaciendaConfig[]
+  centrosCosto    CentroCosto[]
+  imputacionesCC  ImputacionCC[]
   documentosEmitidos DocumentoEmitido[]
   secuencias         SecuenciaComprobante[]
   entregasCereal     EntregaCereal[]
@@ -275,6 +278,7 @@ model Campo {
 
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   lotes           Lote[]
+  centrosCosto    CentroCosto[]
   arrendamientos  Arrendamiento[]
   haciendaStocks  HaciendaStock[]
   haciendaMovs    HaciendaMovimiento[]
@@ -830,6 +834,7 @@ model FacturaCompra {
   viajes          Viaje[]   // viajes que esta factura cubre (fletes del transportista)
   remitoLinks     RemitoFacturaLink[]  // remitos de compra que esta factura liquida
   vinculadaRemito Boolean   @default(false)  // true = el stock entró por remito, la factura NO lo suma
+  imputacionesCC  ImputacionCC[]   // reparto por centro de costo (opt-in)
 
   @@unique([companyId, proveedorId, tipo, puntoVenta, numero])
   @@index([companyId])
@@ -1123,6 +1128,7 @@ model Efectivo {
   createdAt     DateTime @default(now())
 
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  imputacionesCC ImputacionCC[]   // reparto por centro de costo (opt-in)
 
   @@index([companyId])
   @@index([fecha])
@@ -2241,6 +2247,7 @@ model BancoMovimiento {
   cuenta          BancoCuenta @relation(fields: [cuentaId], references: [id], onDelete: Cascade)
   cuentaContra    BancoCuenta? @relation("BancoTransferOrigen", fields: [cuentaContraId], references: [id])
   user            User? @relation(fields: [userId], references: [id])
+  imputacionesCC  ImputacionCC[]   // reparto por centro de costo (opt-in)
 
   @@index([companyId])
   @@index([cuentaId])
@@ -2957,4 +2964,62 @@ model OrdenTrabajoInsumo {
   renglon  OrdenTrabajoRenglon @relation(fields: [renglonId], references: [id], onDelete: Cascade)
 
   @@index([renglonId])
+}
+
+// Centro de costo (dimensión de gestión analítica). Genérico y configurable por empresa.
+// Opt-in: solo se usa si la empresa tiene usaCentrosCosto = true. El vínculo opcional a
+// un Campo habilita el prorrateo por hectáreas; el peso sirve para prorrateo manual/por defecto.
+model CentroCosto {
+  id            String   @id @default(cuid())
+  companyId     String
+  nombre        String
+  clasificacion String?  // null | "operativo" (gasto/resultado) | "inversion" (bien de uso/mejora)
+  campoId       String?  // vínculo opcional a un Campo (habilita prorrateo por hectáreas)
+  peso          Float    @default(0)  // peso para prorrateo manual/por defecto
+  orden         Int?
+  observaciones String?
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  campo         Campo?   @relation(fields: [campoId], references: [id])
+  imputaciones  ImputacionCC[]
+
+  @@index([companyId])
+  @@index([campoId])
+}
+
+// Imputación de un gasto/compra a un Centro de costo (Etapa 2). Opt-in por empresa.
+// Cada fila reparte una parte del comprobante a un centro. El origen es polimórfico:
+// una factura de compra (facturaCompraId) o un movimiento diario de plata real
+// (efectivoId o bancoMovimientoId). Las FKs con Cascade limpian solo al borrar el origen.
+// modo: "directo" (100% a un centro) | "manual" (% o monto a varios) | "hectareas"
+// (prorrateo por hectáreas del campo vinculado a cada centro).
+model ImputacionCC {
+  id                String   @id @default(cuid())
+  companyId         String
+  centroCostoId     String
+  origenTipo        String   // "compra" | "gasto"
+  modo              String   @default("directo")  // directo | manual | hectareas
+  monto             Float    @default(0)   // importe imputado a este centro (moneda del comprobante)
+  porcentaje        Float    @default(0)   // % del total que representa (informativo)
+  fecha             DateTime                // copia de la fecha del comprobante (para reportes)
+  facturaCompraId   String?
+  efectivoId        String?
+  bancoMovimientoId String?
+  createdAt         DateTime @default(now())
+
+  company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  centroCosto     CentroCosto     @relation(fields: [centroCostoId], references: [id], onDelete: Cascade)
+  facturaCompra   FacturaCompra?  @relation(fields: [facturaCompraId], references: [id], onDelete: Cascade)
+  efectivo        Efectivo?       @relation(fields: [efectivoId], references: [id], onDelete: Cascade)
+  bancoMovimiento BancoMovimiento? @relation(fields: [bancoMovimientoId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([centroCostoId])
+  @@index([fecha])
+  @@index([facturaCompraId])
+  @@index([efectivoId])
+  @@index([bancoMovimientoId])
 }
