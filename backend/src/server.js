@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.294.0';
+const AGROCORE_VERSION = '2.295.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13468,6 +13468,9 @@ function _interpretarMensaje(texto, ctx) {
     const hayAnimal = (ctx.categorias || []).some(c => t.includes(_sinAcentos(c)))
       || /\b(vaca|vacas|novillo|ternero|ternera|toro|vaquillona|cabeza|cabezas|hacienda|animal|animales)\b/.test(t);
     const esGasto = /\b(gaste|gastamos|gasto|gastar|pague|pagamos|page|pagar|abone|abonamos|desembolse)\b/.test(t)
+      // Entrega de plata a una persona (adelanto/pago informal): "le di", "adelanté", "entregué", "presté", "anticipé".
+      // Solo si NO hay contexto de animales (para no pisar "di de baja 3 vacas").
+      || (/\b(le di|les di|di|dimos|dar|entregue|entregamos|adelante|adelantamos|adelantar|adelanto|preste|prestamos|anticipe|anticipamos|anticipar)\b/.test(t) && !hayAnimal)
       || (/\bcompr(e|amos|é|o|ar)?\b/.test(t) && !hayAnimal);
     const esIngreso = /\b(cobre|cobramos|cobrar|ingrese|ingresamos|entro|entraron|me pagaron|recibi|recibimos)\b/.test(t);
     if ((esGasto || esIngreso) && !/\?/.test(texto)) {
@@ -14777,6 +14780,15 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
       return res.json({ ok: true, status: 'faltante', accion: r.accion, faltante: r.faltante, params: r.params, mensaje: r.pregunta, data: m });
     }
     if (r.error) {
+      // Si el mensaje parece una ORDEN de carga (tiene un monto o verbo de plata/cantidad),
+      // NO contestamos con tutorial ni con agronomía: pedimos que lo repita más claro.
+      const _tieneMonto = (_parseMontoPesos(texto) || 0) > 0;
+      const _pareceOrden = _tieneMonto || /\b(le di|les di|di|adelante|adelanto|entregue|preste|anticipe|pague|gaste|compre|cobre|nacieron|murieron|aplique)\b/.test(_tn);
+      if (_pareceOrden) {
+        const msg = 'Mmm, no te agarré bien eso 🤔. Probá de nuevo más simple, por ejemplo: "le di 10000 a Denise", "gasté 5000 en nafta" o "pagué 30000 a Don José". Si querés, decime el nombre, el monto y para qué.';
+        const mm = await _logMensaje(req.companyId, 'asistente', req.user.id, 'assistant', 'Cora', msg, { status: 'ayuda' });
+        return res.json({ ok: true, status: 'ayuda', mensaje: msg, data: mm });
+      }
       // 2) Fallback: si no entendí el comando, intento ofrecer ayuda del manual.
       const e = _buscarAyuda(texto);
       if (e) {
