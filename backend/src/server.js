@@ -14845,7 +14845,7 @@ app.post('/api/asistente', requireCompany, async (req, res, next) => {
 // mucho más natural que la del navegador. Si la IA no está activada o algo falla,
 // devuelve ok:false y el frontend usa la voz del navegador como respaldo.
 //   voz: 'mujer' | 'hombre'  → mapea a voces neurales cálidas de OpenAI.
-const _TTS_VOCES = { mujer: 'coral', hombre: 'ash' };  // voces cálidas/naturales (ash suena menos "robótico" que onyx)
+const _TTS_VOCES = { mujer: 'nova', hombre: 'ash' };  // 'nova': voz femenina joven, simpática y agradable (Cora es mujer)
 app.post('/api/asistente/tts', requireCompany, async (req, res, next) => {
   try {
     const ia = await _iaConfig();
@@ -14869,7 +14869,7 @@ app.post('/api/asistente/tts', requireCompany, async (req, res, next) => {
         voice,
         input: texto,
         response_format: 'mp3',
-        instructions: 'Hablás en español rioplatense (Argentina). Tono cálido, cercano y amable, como un compañero de trabajo del campo que da una mano. Ritmo natural, claro y tranquilo, sin sonar robótico.',
+        instructions: 'Sos Cora, una chica joven argentina, simpática y con mucha onda. Hablás en español rioplatense con una voz dulce, cálida y amable, con una sonrisa en la voz. Sonás cercana y alegre, como una amiga que te da una mano, nunca robótica ni acartonada. Ritmo natural y relajado, entonación expresiva y suave.',
       }),
     });
     if (!r.ok) {
