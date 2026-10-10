@@ -3025,6 +3025,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/10/2026',
+      titulo:'🤖 v2.299.0 — Cora en la pestaña de chat y en la web',
+      desc:'Terminamos de ponerle la carita a <b>Cora</b> en todos lados: ahora también aparece en la <b>pestaña de chat</b> (antes decía “🤖 Asistente”, ahora muestra su cara y dice <b>“Cora”</b>) y en la <b>web</b> quedó arreglado el asistente, que mostraba la imagen vieja. 🌱' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/10/2026',
       titulo:'🤖 v2.298.0 — Cora tiene cara nueva',
       desc:'Estrenamos la imagen de <b>Cora</b>, la asistente de AgroCore: ahora su carita aparece en el <b>botón de arriba</b> (al lado de la campanita), en el <b>botón flotante</b> de voz y también en la <b>web</b>. Más linda y reconocible. 🌱' },
@@ -8648,7 +8651,7 @@ pages.mensajes = async function(){
     return `<button class="btn ${activo?'btn-primary':'btn-secondary'} text-sm relative" onclick="mensajesSel('${key}')">${label}${(!activo&&n)?` <span class="ml-1 text-[10px] font-bold bg-red-500 text-white rounded-full px-1.5">${n>99?'99+':n}</span>`:''}</button>`; };
   const chips = [ chip('general','👥 Equipo') ]
     .concat(grupos.map(g=>chip('grupo:'+g.id, '👪 '+esc(g.nombre))))
-    .concat([ chip('asistente','🤖 Asistente') ]).join(' ');
+    .concat([ chip('asistente','<img src="https://agrocore.ar/img/cora-avatar.png" alt="" style="width:18px;height:18px;border-radius:50%;object-fit:cover;vertical-align:-4px;margin-right:4px" onerror="this.outerHTML=String.fromCodePoint(0x1F916)+String.fromCharCode(32)">Cora') ]).join(' ');
 
   $('#page-body').innerHTML = `
     <div class="flex gap-2 mb-3 flex-wrap items-center">
