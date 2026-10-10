@@ -3027,7 +3027,7 @@ pages.inicio = async function() {
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/10/2026',
       titulo:'🤖 v2.300.0 — La cara de Cora en todo el sistema',
-      desc:'Ahora la <b>carita de Cora</b> (sin fondo) aparece en todo el sistema: el <b>botón de arriba</b>, la <b>pestaña de chat</b>, <b>Configuración → Asistente IA</b> y en cada respuesta del <b>chat</b>. Sacamos el <b>botón flotante</b> de abajo (era redundante, ya está arriba). Y en el <b>chat de la web</b>, al abrirlo, Cora aparece <b>más grande y con el saludo a su lado</b>, como si te estuviera hablando. Además, como Cora es mujer, el selector de voz del chat ahora solo ofrece <b>Mujer</b> o <b>Sin voz</b>. 🌱' },
+      desc:'Ahora la <b>carita de Cora</b> (sin fondo) aparece en todo el sistema: el <b>botón de arriba</b>, la <b>pestaña de chat</b>, <b>Configuración → Asistente IA</b> y en cada respuesta del <b>chat</b>. Sacamos el <b>botón flotante</b> de abajo (era redundante, ya está arriba). Y en el <b>chat de la web</b>, al abrirlo, Cora aparece <b>más grande y con el saludo a su lado</b>, como si te estuviera hablando. Además, como Cora es mujer, reemplazamos el selector de voz del chat por un simple botón de <b>🔊 Voz / 🔇 Sin voz</b> para silenciarla o activarla. 🌱' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/10/2026',
       titulo:'🤖 v2.299.0 — Cora en la pestaña de chat y en la web',
       desc:'Terminamos de ponerle la carita a <b>Cora</b> en todos lados: ahora también aparece en la <b>pestaña de chat</b> (antes decía “🤖 Asistente”, ahora muestra su cara y dice <b>“Cora”</b>) y en la <b>web</b> quedó arreglado el asistente, que mostraba la imagen vieja. 🌱' },
@@ -8634,8 +8634,18 @@ function chatTtsSet(v){
   try{ localStorage.setItem('agro_tts_voz', v); }catch{}
   try{ window.speechSynthesis.cancel(); }catch{}
   try{ if (state._ttsAudio){ state._ttsAudio.pause(); state._ttsAudio.currentTime = 0; } }catch{}
-  if (v!=='off'){ _ttsHablar(v==='hombre' ? 'Listo, ahora te hablo con voz de hombre.' : 'Listo, ahora te hablo con voz de mujer.'); }
+  if (v!=='off'){ _ttsHablar('Listo, ahora te hablo en voz alta.'); }
   else toast('🔇 Voz desactivada.','info');
+}
+// Toggle simple: silenciar / activar la voz de Cora (siempre voz de mujer).
+function chatTtsToggle(){
+  const nuevo = (_ttsVoz()==='off') ? 'mujer' : 'off';
+  chatTtsSet(nuevo);
+  const b = document.getElementById('chat-tts');
+  if (b){
+    b.innerHTML = (nuevo==='off') ? '🔇 Sin voz' : '🔊 Voz';
+    b.title = (nuevo==='off') ? 'Activar la voz de Cora' : 'Silenciar la voz de Cora';
+  }
 }
 pages.mensajes = async function(){
   setHeader('Mensajes y asistente', 'Chat del equipo, grupos y asistente');
@@ -8672,10 +8682,7 @@ pages.mensajes = async function(){
     <div id="chat-msgs" style="height:56vh;min-height:320px;overflow-y:auto" class="kpi p-3 mb-2 flex flex-col gap-2"></div>
     <div id="chat-confirm"></div>
     <div class="flex flex-wrap gap-2 items-end">
-      ${esAsistente?`<select id="chat-tts" class="btn btn-secondary" style="padding-right:1.6rem" title="Voz del asistente" onchange="chatTtsSet(this.value)">
-        <option value="off" ${_ttsVoz()==='off'?'selected':''}>🔇 Sin voz</option>
-        <option value="mujer" ${_ttsVoz()!=='off'?'selected':''}>👩 Mujer</option>
-      </select>
+      ${esAsistente?`<button id="chat-tts" class="btn btn-secondary" onclick="chatTtsToggle()" title="${_ttsVoz()==='off'?'Activar la voz de Cora':'Silenciar la voz de Cora'}">${_ttsVoz()==='off'?'🔇 Sin voz':'🔊 Voz'}</button>
       <button class="btn btn-secondary" id="chat-voz-stop" style="display:none" onclick="ttsStop()" title="Frenar la voz">⏹</button>`:''}
       <button class="btn btn-secondary" id="${esAsistente?'chat-voz-a':'chat-voz'}" onclick="chatVoz('${esAsistente?'chat-input-a':'chat-input'}')" title="Dictar por voz">🎤</button>
       ${esAsistente?`
