@@ -399,8 +399,8 @@
           <div id="global-search-results" class="hidden absolute top-full mt-1 right-0 w-96 max-w-[90vw] max-h-[60vh] overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-2xl z-40"></div>
         </div>
         <div class="relative">
-          <button onclick="abrirAsistente()" class="btn btn-ghost relative p-1" title="Asistente — preguntá cómo se hace algo o cargá cosas por vos" id="asist-btn">
-            <img src="https://agrocore.ar/img/cora-avatar.png" alt="Cora" class="w-8 h-8 rounded-full object-cover" onerror="this.outerHTML='<span class=\&quot;text-xl leading-none\&quot;>🤖</span>'">
+          <button onclick="abrirAsistente()" class="relative rounded-full flex items-center justify-center transition hover:scale-110" style="width:44px;height:44px;background:radial-gradient(circle at 50% 35%,#ecfdf5,#bbf7d0);border:2px solid #eab308;box-shadow:0 2px 10px rgba(21,128,61,.30)" title="Cora — preguntale cómo se hace algo o cargá cosas por vos" id="asist-btn">
+            <img src="https://agrocore.ar/img/cora-avatar.png" alt="Cora" class="w-10 h-10 object-contain" style="margin-top:1px" onerror="this.outerHTML='<span class=\&quot;text-xl leading-none\&quot;>🤖</span>'">
             <span id="asist-badge" class="hidden absolute -top-0.5 -right-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded-full min-w-[16px] h-[16px] px-1 flex items-center justify-center">0</span>
           </button>
         </div>
@@ -3025,6 +3025,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/10/2026',
+      titulo:'🤖 v2.300.0 — Cora: cara sin fondo, botón más vistoso y chat de la web más lindo',
+      desc:'Pulimos a <b>Cora</b>: en el sistema su carita se muestra <b>sin fondo</b> y el <b>botón de arriba</b> (al lado de la campanita) quedó <b>más vistoso</b>, con un anillo dorado. Sacamos el <b>botón flotante</b> de abajo (era redundante, ya está arriba). Y en el <b>chat de la web</b>, al abrirlo, Cora aparece <b>más grande y con el saludo a su lado</b>, como si te estuviera hablando. 🌱' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/10/2026',
       titulo:'🤖 v2.299.0 — Cora en la pestaña de chat y en la web',
       desc:'Terminamos de ponerle la carita a <b>Cora</b> en todos lados: ahora también aparece en la <b>pestaña de chat</b> (antes decía “🤖 Asistente”, ahora muestra su cara y dice <b>“Cora”</b>) y en la <b>web</b> quedó arreglado el asistente, que mostraba la imagen vieja. 🌱' },
@@ -8651,7 +8654,7 @@ pages.mensajes = async function(){
     return `<button class="btn ${activo?'btn-primary':'btn-secondary'} text-sm relative" onclick="mensajesSel('${key}')">${label}${(!activo&&n)?` <span class="ml-1 text-[10px] font-bold bg-red-500 text-white rounded-full px-1.5">${n>99?'99+':n}</span>`:''}</button>`; };
   const chips = [ chip('general','👥 Equipo') ]
     .concat(grupos.map(g=>chip('grupo:'+g.id, '👪 '+esc(g.nombre))))
-    .concat([ chip('asistente','<img src="https://agrocore.ar/img/cora-avatar.png" alt="" style="width:18px;height:18px;border-radius:50%;object-fit:cover;vertical-align:-4px;margin-right:4px" onerror="this.outerHTML=String.fromCodePoint(0x1F916)+String.fromCharCode(32)">Cora') ]).join(' ');
+    .concat([ chip('asistente','<img src="https://agrocore.ar/img/cora-avatar.png" alt="" style="width:20px;height:20px;object-fit:contain;vertical-align:-5px;margin-right:4px" onerror="this.outerHTML=String.fromCodePoint(0x1F916)+String.fromCharCode(32)">Cora') ]).join(' ');
 
   $('#page-body').innerHTML = `
     <div class="flex gap-2 mb-3 flex-wrap items-center">
@@ -8698,20 +8701,9 @@ function coraHablar(){ state._coraAutoMic = true; abrirAsistente(); }
 // Botón flotante (FAB) de Cora: siempre visible cuando estás logueado. Un toque abre
 // a Cora y arranca el micrófono para que le hables directo. Se crea una sola vez.
 function ensureCoraFab(){
-  try {
-    if (!state.user) { const ex=document.getElementById('cora-fab'); if(ex) ex.remove(); return; }
-    if (document.getElementById('cora-fab')) return;
-    const b = document.createElement('button');
-    b.id = 'cora-fab';
-    b.type = 'button';
-    b.title = 'Hablale a Cora (cargar por voz)';
-    b.setAttribute('aria-label','Hablale a Cora');
-    b.onclick = coraHablar;
-    b.style.cssText = 'position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:9000;width:62px;height:62px;border-radius:50%;background:#15803d;color:#fff;border:3px solid #eab308;box-shadow:0 6px 18px rgba(0,0,0,.28);font-size:26px;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;padding:0';
-    // Cara de Cora; si no carga (offline), cae al micrófono.
-    b.innerHTML = '<img src="https://agrocore.ar/img/cora-avatar.png" alt="Cora" style="width:100%;height:100%;object-fit:cover;border-radius:50%" onerror="this.parentNode.innerHTML=\'🎤\'">';
-    document.body.appendChild(b);
-  } catch {}
+  // Botón flotante de Cora DESACTIVADO: la cara ya está arriba (al lado de la campanita),
+  // tenerla también abajo era redundante. Si quedó uno viejo en pantalla, lo removemos.
+  try { const ex=document.getElementById('cora-fab'); if(ex) ex.remove(); } catch {}
 }
 // Manda un aviso de prueba a este dispositivo (activa avisos primero si hace falta).
 async function probarAviso(){
