@@ -3025,6 +3025,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'13/10/2026',
+      titulo:'🎯 v2.301.0 — Centros de costo en ventas y sueldos + adelantos en el resumen anual',
+      desc:'Ampliamos los <b>Centros de costo</b>: ahora también podés imputar las <b>ventas (ingresos)</b> por establecimiento —el reparto aparece en la factura de venta— y los <b>sueldos</b>: cada empleado tiene un <b>centro de costo por defecto</b> (se puede cambiar en cada liquidación). El <b>Reporte por centro de costo</b> pasó a mostrar <b>Ingresos, Egresos (compras + gastos + sueldos) y el Resultado neto</b> de cada centro. Además, en <b>Empleados</b>, el <b>Resumen anual</b> ahora muestra el <b>Total entregado</b> al empleado (neto liquidado <b>+ los adelantos de efectivo del año</b>) y una tarjeta aparte de <b>Adelantos</b>: antes el anticipo no se veía porque ya venía restado dentro del neto. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/10/2026',
       titulo:'🤖 v2.300.0 — La cara de Cora en todo el sistema',
       desc:'Ahora la <b>carita de Cora</b> (sin fondo) aparece en todo el sistema: el <b>botón de arriba</b>, la <b>pestaña de chat</b>, <b>Configuración → Asistente IA</b> y en cada respuesta del <b>chat</b>. Sacamos el <b>botón flotante</b> de abajo (era redundante, ya está arriba). Y en el <b>chat de la web</b>, al abrirlo, Cora aparece <b>más grande y con el saludo a su lado</b>, como si te estuviera hablando. Además, como Cora es mujer, reemplazamos el selector de voz del chat por un simple botón de <b>🔊 Voz / 🔇 Sin voz</b> para silenciarla o activarla. Y su <b>voz es más amable y agradable</b>, como la de una chica joven. 🌱' },
@@ -14605,6 +14608,7 @@ async function factForm(prefill = null) {
         <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís método se autoriza la factura Y se registra el cobro. Requiere que el cliente esté seleccionado (no consumidor final).</div>
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
+      ${(typeof ccRepartoHTML==='function')?ccRepartoHTML('vta'):''}
       <input type="hidden" id="f-labor-servicio" value="${esc(prefill?.laborServicioId||'')}"/>
       <input type="hidden" id="f-labor-servicio-ids" value='${esc(JSON.stringify(prefill?.laborServicioIds||[]))}'/>
       <input type="hidden" id="f-abono-sus" value="${esc(prefill?.suscripcionId||'')}"/>
@@ -14620,6 +14624,13 @@ async function factForm(prefill = null) {
     if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     factRenderDatalist();
     factClaseHint();
+    // Centros de costo: reparto del ingreso (opt-in). Prellena si estoy editando.
+    if (state.usaCentrosCosto && typeof ccRepartoInit === 'function') {
+      const _vtaTotal = () => { let t=0; document.querySelectorAll('#fi-tbody tr[data-fi]').forEach(tr=>{ const g=(f)=>Number(tr.querySelector(`[data-f="${f}"]`)?.value||0); const sub=g('cantidad')*g('precioUnit'); t += sub*(1+g('alicuotaIva')/100); }); return t; };
+      let _ccPreset = null;
+      if (state._factEdit) { try { const rr = await api('/api/imputaciones-cc?facturaId='+state._factEdit); if (rr.data && rr.data.length) _ccPreset = { modo: rr.data[0].modo, items: rr.data.map(x=>({ centroCostoId:x.centroCostoId, monto:x.monto, porcentaje:x.porcentaje })) }; } catch {} }
+      ccRepartoInit('vta', _vtaTotal, _ccPreset);
+    }
     // Pre-cargar datos para método si todavía no están
     if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
       try {
@@ -14998,6 +15009,7 @@ async function factSave() {
     laborServicioIds: (()=>{ try { return JSON.parse($('#f-labor-servicio-ids')?.value||'[]'); } catch { return []; } })(),
     suscripcionId: $('#f-abono-sus')?.value || null,
     abonoPeriodo: $('#f-abono-periodo')?.value || null,
+    imputacionCC: (state.usaCentrosCosto && typeof ccRepartoGet==='function') ? ccRepartoGet('vta') : null,
     items,
   };
   // Modo "ya emitida en ARCA": se registra con su CAE real (no se reenvía a ARCA).
@@ -24132,6 +24144,10 @@ function empleForm(id=null) {
             <input id="f-bancoNombre" class="input" value="${esc(it.bancoNombre||'')}" placeholder="Ej: Banco Nación"/>
           </div>
         </div>
+        ${state.usaCentrosCosto ? `<div class="mt-3"><label class="label">🎯 Centro de costo / establecimiento (sueldo)</label>
+          <select id="f-emp-cc" class="input">${(typeof _ccOpts==='function')?_ccOpts(it.centroCostoId||''):''}</select>
+          <div class="text-[11px] text-slate-500 mt-1">Al liquidar el sueldo se imputa a este centro de costo. Se puede cambiar en cada liquidación.</div>
+        </div>` : ''}
         <div class="text-[11px] text-slate-500 mt-2">💡 Estos datos aparecen en la <b>Planilla de pagos</b> (botón 🖨️ en la nómina) al lado del monto a transferir de cada uno.</div>
       </div>
       <div class="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
@@ -24176,6 +24192,10 @@ function empleForm(id=null) {
              <button class="btn btn-primary" onclick='empleSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
   empModalidadToggle();
+  // Centros de costo: asegurar el catálogo cargado para el selector del sueldo.
+  if (state.usaCentrosCosto && !state.cache.centrosCosto) {
+    api('/api/centros-costo').then(r => { state.cache.centrosCosto = r.data || []; const s=document.getElementById('f-emp-cc'); if (s && typeof _ccOpts==='function') s.innerHTML=_ccOpts(it.centroCostoId||''); }).catch(()=>{});
+  }
 }
 function emplToggleChofer() {
   const on = document.getElementById('f-esch')?.checked;
@@ -24239,6 +24259,7 @@ async function empleSave(id) {
     alias: $('#f-alias')?.value.trim() || null,
     cbu: $('#f-cbu')?.value.trim() || null,
     bancoNombre: $('#f-bancoNombre')?.value.trim() || null,
+    centroCostoId: $('#f-emp-cc')?.value || null,
     tipo: $('#f-tipo')?.value || 'propio',
     cobraPorcentaje: $('#f-cp')?.checked || false,
     porcentajeDefault: $('#f-pd')?.value ? Number($('#f-pd').value) : null,
@@ -24612,14 +24633,18 @@ function empFichaRender() {
   const totalGanAnio   = liqsAnio.reduce((a,l)=>a+Number(l.totalGanancias||0),0);
   const totalGastoAnio = liqsAnio.reduce((a,l)=>a+Number(l.totalGastos||0),0);
   const promedioAnio   = liqsAnio.length ? totalLiqAnio/liqsAnio.length : 0;
+  // Adelantos/anticipos de efectivo entregados en el año (plata real que recibió el
+  // empleado y que NO se ve en "pagado" porque ya está restada dentro del neto).
+  const adelantosAnio  = (movs||[]).filter(m=>m.tipo==='gasto' && String(m.categoria||'')==='adelanto' && String(m.periodo||'').startsWith(anio+'-')).reduce((a,m)=>a+Number(m.monto||0),0);
+  const totalEntregadoAnio = totalLiqAnio + adelantosAnio;   // lo REALMENTE entregado: neto pagado + adelantos
   const resumenAnioHtml = `
     <div class="mt-6">
       <h3 class="font-semibold text-slate-800 mb-2">Resumen anual ${anio}</h3>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-        <div class="kpi"><div class="text-xs text-slate-500">Total pagado ${anio}</div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(totalLiqAnio)}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Total entregado ${anio} <span class="text-slate-400" title="Neto pagado en las liquidaciones + adelantos de efectivo del año">ⓘ</span></div><div class="text-xl font-bold mt-1 text-emerald-700">${fmt$(totalEntregadoAnio)}</div><div class="text-[11px] text-slate-500 mt-0.5">Liquidado ${fmt$(totalLiqAnio)} + adelantos ${fmt$(adelantosAnio)}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Adelantos de efectivo ${anio}</div><div class="text-xl font-bold mt-1 text-amber-600">${fmt$(adelantosAnio)}</div></div>
         <div class="kpi"><div class="text-xs text-slate-500">Meses liquidados</div><div class="text-xl font-bold mt-1">${liqsAnio.length} / 12</div></div>
         <div class="kpi"><div class="text-xs text-slate-500">Promedio pagado mensual</div><div class="text-xl font-bold mt-1">${fmt$(promedioAnio)}</div></div>
-        <div class="kpi"><div class="text-xs text-slate-500">Ganancias / Gastos del año</div><div class="text-sm font-bold mt-1.5"><span class="text-emerald-700">${fmt$(totalGanAnio)}</span> <span class="text-slate-400">/</span> <span class="text-red-600">${fmt$(totalGastoAnio)}</span></div></div>
       </div>
       <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
         ${Array.from({length:12},(_,i)=>{
@@ -25317,6 +25342,7 @@ function empLiqForm(periodo){
         <div id="lq-cheque-wrap"><label class="label">N° de cheque *</label><input id="lq-cheque" class="input"/></div>
         <div id="lq-ref-wrap"><label class="label">N° operación / comprobante</label><input id="lq-ref" class="input"/></div>
         <div id="lq-interco-wrap" class="col-span-2"></div>
+        ${state.usaCentrosCosto ? `<div class="col-span-2"><label class="label">🎯 Centro de costo (establecimiento)</label><select id="lq-cc" class="input">${(typeof _ccOpts==='function')?_ccOpts(((state.cache.empleados||[]).find(x=>x.id===state.empFichaId)||{}).centroCostoId||''):''}</select></div>` : ''}
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="lq-obs" class="input" rows="2"></textarea></div>
       </div>
       <p id="lq-hint" class="text-xs text-slate-500 mt-2"></p>
@@ -25325,6 +25351,9 @@ function empLiqForm(periodo){
             <button class="btn btn-primary" onclick='empLiqSave(${JSON.stringify(periodo)})'>Confirmar liquidación</button>`
   });
   empLiqMedioChange();
+  if (state.usaCentrosCosto && !state.cache.centrosCosto) {
+    api('/api/centros-costo').then(r => { state.cache.centrosCosto = r.data || []; const s=document.getElementById('lq-cc'); if (s && typeof _ccOpts==='function') s.innerHTML=_ccOpts((((state.cache.empleados||[]).find(x=>x.id===state.empFichaId)||{}).centroCostoId)||''); }).catch(()=>{});
+  }
 }
 function empLiqSaldoPreview(aPagar){
   const el=$('#lq-saldo-preview'); if(!el) return;
@@ -25373,6 +25402,7 @@ async function empLiqSave(periodo){
     nroCheque: medio==='cheque' ? ($('#lq-cheque').value.trim()||null) : null,
     referencia: medio==='transferencia' ? ($('#lq-ref').value.trim()||null) : null,
     observaciones: $('#lq-obs').value.trim()||null,
+    centroCostoId: $('#lq-cc')?.value || null,
   };
   if(!data.fecha) return toast('Fecha de pago requerida','warn');
   if(medio==='efectivo'&&!data.caja) return toast('Elegí la caja de la que sale el pago','warn');
@@ -27910,7 +27940,7 @@ function _ccRepDefaultRango() {
   return { desde: iso(desde), hasta: iso(hoy) };
 }
 async function centroCostoReporte(desde, hasta) {
-  setHeader('Reporte por centro de costo', 'Gastos e inversiones imputados a cada centro, en el período elegido.');
+  setHeader('Reporte por centro de costo', 'Ingresos (ventas) y egresos (compras, gastos y sueldos) imputados a cada centro, con el resultado neto del período.');
   const r = state._ccRepRango || _ccRepDefaultRango();
   if (desde != null) r.desde = desde;
   if (hasta != null) r.hasta = hasta;
@@ -27929,15 +27959,18 @@ function centroCostoReporteRender() {
   const r = state._ccRepRango || _ccRepDefaultRango();
   const centros = rep.centros || [];
   const tot = rep.totales || {};
-  const maxTotal = centros.reduce((a, c) => Math.max(a, c.total || 0), 0) || 1;
+  const maxTotal = centros.reduce((a, c) => Math.max(a, Math.max(c.egresos||c.total||0, c.ingresos||0)), 0) || 1;
   const clasLabel = c => c === 'operativo' ? '<span class="badge badge-blue text-[10px]">Operativo</span>' : (c === 'inversion' ? '<span class="badge badge-amber text-[10px]">Inversión</span>' : '<span class="badge badge-gray text-[10px]">Sin clasificar</span>');
-  const filas = centros.map(c => `<tr class="cursor-pointer hover:bg-slate-50" onclick="centroCostoReporteDetalle(${JSON.stringify(c.centroCostoId)})">
+  const filas = centros.map(c => { const _eg=(c.egresos!=null?c.egresos:(c.total||0)); const _in=(c.ingresos||0); const _ne=(c.neto!=null?c.neto:(_in-_eg)); return `<tr class="cursor-pointer hover:bg-slate-50" onclick="centroCostoReporteDetalle(${JSON.stringify(c.centroCostoId)})">
       <td class="font-medium">${esc(c.nombre)} ${clasLabel(c.clasificacion)}</td>
+      <td class="text-right text-emerald-700">${_in?fmt$(_in):'—'}</td>
       <td class="text-right">${fmt$(c.compras)}</td>
       <td class="text-right">${fmt$(c.gastos)}</td>
-      <td class="text-right font-semibold">${fmt$(c.total)}</td>
-      <td class="w-40"><div class="bg-slate-100 rounded h-3 overflow-hidden"><div class="bg-emerald-500 h-3" style="width:${Math.round((c.total||0)/maxTotal*100)}%"></div></div></td>
-    </tr>`).join('');
+      <td class="text-right">${c.sueldos?fmt$(c.sueldos):'—'}</td>
+      <td class="text-right font-semibold text-red-600">${fmt$(_eg)}</td>
+      <td class="text-right font-bold ${_ne>=0?'text-emerald-700':'text-red-600'}">${fmt$(_ne)}</td>
+      <td class="w-32"><div class="bg-slate-100 rounded h-3 overflow-hidden"><div class="bg-red-400 h-3" style="width:${Math.round(_eg/maxTotal*100)}%"></div></div></td>
+    </tr>`; }).join('');
   $('#page-body').innerHTML = `
     <div class="mb-3 flex items-center gap-2 flex-wrap">
       <button class="btn btn-ghost text-sm" onclick="pages.centrosCosto()">← Volver al catálogo</button>
@@ -27949,15 +27982,15 @@ function centroCostoReporteRender() {
       </div>
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <div class="kpi"><div class="text-xs text-slate-500">Total período</div><div class="text-xl font-bold">${fmt$(tot.total||0)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Operativo (gasto)</div><div class="text-xl font-bold text-blue-700">${fmt$(tot.operativo||0)}</div></div>
-      <div class="kpi"><div class="text-xs text-slate-500">Inversión</div><div class="text-xl font-bold text-amber-700">${fmt$(tot.inversion||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Ingresos (ventas)</div><div class="text-xl font-bold text-emerald-700">${fmt$(tot.ingresos||0)}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Egresos (costos)</div><div class="text-xl font-bold text-red-600">${fmt$(tot.egresos!=null?tot.egresos:(tot.total||0))}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Resultado neto</div><div class="text-xl font-bold ${(tot.neto||0)>=0?'text-emerald-700':'text-red-600'}">${fmt$(tot.neto||0)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Movimientos</div><div class="text-xl font-bold">${fmtN(tot.cantidad||0)}</div></div>
     </div>
     <div class="kpi overflow-x-auto">
       <table class="table w-full text-sm">
-        <thead><tr><th>Centro de costo</th><th class="text-right">Compras</th><th class="text-right">Gastos diarios</th><th class="text-right">Total</th><th>Participación</th></tr></thead>
-        <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">No hay gastos imputados a centros de costo en este período.</td></tr>`}</tbody>
+        <thead><tr><th>Centro de costo</th><th class="text-right">Ingresos</th><th class="text-right">Compras</th><th class="text-right">Gastos</th><th class="text-right">Sueldos</th><th class="text-right">Egresos</th><th class="text-right">Neto</th><th>Egresos</th></tr></thead>
+        <tbody>${filas || `<tr><td colspan="8" class="text-center text-slate-400 py-6">No hay movimientos imputados a centros de costo en este período.</td></tr>`}</tbody>
       </table>
     </div>
     <div id="ccrep-detalle" class="mt-4"></div>`;

@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.300.0';
+const AGROCORE_VERSION = '2.301.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3704,6 +3704,8 @@ app.get('/api/centros-costo-reporte', requireCompany, requirePermission('finanza
       include: {
         centroCosto: { select: { id: true, nombre: true, clasificacion: true, campoId: true } },
         facturaCompra: { select: { tipo: true, puntoVenta: true, numero: true, proveedor: { select: { razonSocial: true, nombreFantasia: true } } } },
+        factura: { select: { tipo: true, puntoVenta: true, numero: true, cliente: { select: { razonSocial: true, nombreFantasia: true } } } },
+        liquidacionSueldo: { select: { periodo: true, empleado: { select: { nombre: true, apellido: true } } } },
         efectivo: { select: { concepto: true, caja: true } },
         bancoMovimiento: { select: { concepto: true, contraparte: true } },
       },
@@ -3714,19 +3716,30 @@ app.get('/api/centros-costo-reporte', requireCompany, requirePermission('finanza
       const cc = im.centroCosto; if (!cc) continue;
       if (!porCentro.has(cc.id)) porCentro.set(cc.id, {
         centroCostoId: cc.id, nombre: cc.nombre, clasificacion: cc.clasificacion || null, campoId: cc.campoId || null,
-        total: 0, compras: 0, gastos: 0, cantidad: 0,
+        total: 0, compras: 0, gastos: 0, sueldos: 0, ingresos: 0, egresos: 0, neto: 0, cantidad: 0,
       });
       const g = porCentro.get(cc.id);
       const m = Number(im.monto || 0);
-      g.total = _round2(g.total + m);
-      if (im.origenTipo === 'compra') g.compras = _round2(g.compras + m); else g.gastos = _round2(g.gastos + m);
+      if (im.origenTipo === 'venta') {
+        g.ingresos = _round2(g.ingresos + m);
+      } else {
+        g.egresos = _round2(g.egresos + m);
+        if (im.origenTipo === 'compra') g.compras = _round2(g.compras + m);
+        else if (im.origenTipo === 'sueldo') g.sueldos = _round2(g.sueldos + m);
+        else g.gastos = _round2(g.gastos + m);
+      }
+      g.total = g.egresos;                 // "total" = costos (compat. con la vista anterior)
+      g.neto = _round2(g.ingresos - g.egresos);
       g.cantidad += 1;
     }
-    const centros = [...porCentro.values()].sort((a, b) => b.total - a.total);
-    const totalGeneral = _round2(centros.reduce((a, c) => a + c.total, 0));
-    const totalOperativo = _round2(centros.filter(c => c.clasificacion === 'operativo').reduce((a, c) => a + c.total, 0));
-    const totalInversion = _round2(centros.filter(c => c.clasificacion === 'inversion').reduce((a, c) => a + c.total, 0));
-    const totalSinClasif = _round2(centros.filter(c => !c.clasificacion).reduce((a, c) => a + c.total, 0));
+    const centros = [...porCentro.values()].sort((a, b) => b.egresos - a.egresos);
+    const totalGeneral = _round2(centros.reduce((a, c) => a + c.egresos, 0));
+    const totalIngresos = _round2(centros.reduce((a, c) => a + c.ingresos, 0));
+    const totalEgresos = totalGeneral;
+    const totalNeto = _round2(totalIngresos - totalEgresos);
+    const totalOperativo = _round2(centros.filter(c => c.clasificacion === 'operativo').reduce((a, c) => a + c.egresos, 0));
+    const totalInversion = _round2(centros.filter(c => c.clasificacion === 'inversion').reduce((a, c) => a + c.egresos, 0));
+    const totalSinClasif = _round2(centros.filter(c => !c.clasificacion).reduce((a, c) => a + c.egresos, 0));
     // Detalle plano (para desglose por centro)
     const detalle = imps.map(im => {
       let origen = '';
@@ -3734,19 +3747,27 @@ app.get('/api/centros-costo-reporte', requireCompany, requirePermission('finanza
         const f = im.facturaCompra;
         const _prov = f.proveedor ? (f.proveedor.razonSocial || f.proveedor.nombreFantasia || '') : '';
         origen = `Compra ${f.tipo || ''} ${String(f.puntoVenta || 0).padStart(4, '0')}-${String(f.numero || 0).padStart(8, '0')}` + (_prov ? ` · ${_prov}` : '');
+      } else if (im.origenTipo === 'venta' && im.factura) {
+        const f = im.factura;
+        const _cli = f.cliente ? (f.cliente.razonSocial || f.cliente.nombreFantasia || '') : '';
+        origen = `Venta ${f.tipo || ''} ${String(f.puntoVenta || 0).padStart(4, '0')}-${String(f.numero || 0).padStart(8, '0')}` + (_cli ? ` · ${_cli}` : '');
+      } else if (im.origenTipo === 'sueldo' && im.liquidacionSueldo) {
+        const l = im.liquidacionSueldo;
+        const _emp = l.empleado ? `${l.empleado.apellido || ''}, ${l.empleado.nombre || ''}`.replace(/^, |, $/,'') : '';
+        origen = `Sueldo ${l.periodo || ''}` + (_emp ? ` · ${_emp}` : '');
       } else if (im.efectivo) {
         origen = `Gasto · ${im.efectivo.concepto || ''}` + (im.efectivo.caja ? ` (${im.efectivo.caja})` : '');
       } else if (im.bancoMovimiento) {
         origen = `Gasto · ${im.bancoMovimiento.concepto || ''}` + (im.bancoMovimiento.contraparte ? ` · ${im.bancoMovimiento.contraparte}` : '');
       } else {
-        origen = im.origenTipo === 'compra' ? 'Compra' : 'Gasto';
+        origen = im.origenTipo === 'compra' ? 'Compra' : (im.origenTipo === 'venta' ? 'Venta' : (im.origenTipo === 'sueldo' ? 'Sueldo' : 'Gasto'));
       }
       return {
         id: im.id, fecha: im.fecha, centroCostoId: im.centroCostoId, centroNombre: im.centroCosto?.nombre || '',
         origenTipo: im.origenTipo, modo: im.modo, monto: im.monto, porcentaje: im.porcentaje, origen,
       };
     });
-    res.json({ ok: true, data: { centros, detalle, totales: { total: totalGeneral, operativo: totalOperativo, inversion: totalInversion, sinClasif: totalSinClasif, cantidad: imps.length } } });
+    res.json({ ok: true, data: { centros, detalle, totales: { total: totalGeneral, ingresos: totalIngresos, egresos: totalEgresos, neto: totalNeto, operativo: totalOperativo, inversion: totalInversion, sinClasif: totalSinClasif, cantidad: imps.length } } });
   } catch (e) { next(e); }
 });
 
@@ -5453,6 +5474,7 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
       depositoId: z.string().nullable().optional(),
       sinStock: z.boolean().optional(),
       observaciones: z.string().nullable().optional(),
+      imputacionCC: _imputCCSchema,                        // reparto del INGRESO por centro de costo (opt-in)
       items: z.array(itemFacSchema).min(1),
     });
     const input = schema.parse(req.body);
@@ -5482,6 +5504,14 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
         },
         include: { cliente: true, items: true },
       });
+      // Imputación del INGRESO por centro de costo: borrar la anterior y recrear.
+      await tx.imputacionCC.deleteMany({ where: { facturaId: req.params.id } });
+      if (_clase !== 'nota_credito' && input.imputacionCC) {
+        await _guardarImputacionesCC(tx, {
+          companyId: req.companyId, origenTipo: 'venta', origenCampo: 'facturaId', origenId: f.id,
+          fecha: input.fecha, total: totales.total, modo: input.imputacionCC.modo, imputaciones: input.imputacionCC.items,
+        });
+      }
       if (_clase === 'factura') {
         if (!input.sinStock) await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'egreso', motivo: 'venta', contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA', userId: req.user?.id || null, depositoId: input.depositoId || null });
         await crearCtaCteDesdeFactura(tx, { companyId: req.companyId, factura: f, contactoTipo: 'cliente', contactoId: input.clienteId || null, refPrefix: 'FAC', motivo: 'Factura', condicion: input.condicionVenta, condicionDias: input.condicionDias, vencimientoFecha: input.vencimientoFecha || null });
@@ -5530,6 +5560,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       laborServicioIds: z.array(z.string()).optional(),    // varias labores a terceros en una misma factura
       suscripcionId: z.string().nullable().optional(),     // si la factura es la cuota de un abono, la vinculamos
       abonoPeriodo: z.string().nullable().optional(),      // período del abono (YYYY-MM)
+      imputacionCC: _imputCCSchema,                        // reparto del INGRESO por centro de costo (opt-in)
       items: z.array(itemFacSchema).min(1),
     });
     const input = schema.parse(req.body);
@@ -5580,6 +5611,13 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         },
         include: { cliente: true, items: true },
       });
+      // Imputación del INGRESO por centro de costo (no para notas de crédito).
+      if (_clase !== 'nota_credito' && input.imputacionCC) {
+        await _guardarImputacionesCC(tx, {
+          companyId: req.companyId, origenTipo: 'venta', origenCampo: 'facturaId', origenId: f.id,
+          fecha: input.fecha, total: totales.total, modo: input.imputacionCC.modo, imputaciones: input.imputacionCC.items,
+        });
+      }
       // Mantener la numeración correlativa al día (para la próxima carga manual).
       await _avanzarSecuencia(tx, req.companyId, _seqTipoFactura(_clase, input.tipo), input.puntoVenta, input.numero);
       if (_clase === 'factura') {
@@ -8191,6 +8229,7 @@ mountCrud({
     alias: z.string().nullable().optional(),
     cbu: z.string().nullable().optional(),
     bancoNombre: z.string().nullable().optional(),
+    centroCostoId: z.string().nullable().optional(),   // centro de costo / establecimiento por defecto para el sueldo
   }),
   orderBy: { apellido: 'asc' },
   searchFields: ['nombre', 'apellido', 'dni', 'cuil', 'puesto'],
@@ -8620,6 +8659,7 @@ const liqSchema = z.object({
   // Si no viene, se paga el neto del mes (comportamiento anterior).
   montoPagado: z.coerce.number().min(0).optional(),
   observaciones: z.string().nullable().optional(),
+  centroCostoId: z.string().nullable().optional(),   // centro de costo/establecimiento al que se imputa el sueldo
   // Intercompany: otra firma del grupo pone los fondos del sueldo.
   empresaOrigenId: z.string().nullable().optional(),
   recursoIntercompany: z.enum(['efectivo', 'cheque', 'transferencia', 'deuda']).nullable().optional(),
@@ -8785,6 +8825,15 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
         where: { empleadoId: emp.id, companyId: req.companyId, periodo: d.periodo },
         data: { liquidacionId: liq.id },
       });
+
+      // Imputar el sueldo (lo devengado del mes) a un centro de costo / establecimiento.
+      const ccSueldo = d.centroCostoId || emp.centroCostoId || null;
+      if (ccSueldo && totalGanancias > 0) {
+        await _guardarImputacionesCC(tx, {
+          companyId: req.companyId, origenTipo: 'sueldo', origenCampo: 'liquidacionSueldoId', origenId: liq.id,
+          fecha: d.fecha, total: totalGanancias, modo: 'directo', imputaciones: [{ centroCostoId: ccSueldo }],
+        });
+      }
 
       return liq;
     });

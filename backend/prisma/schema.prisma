@@ -773,6 +773,7 @@ model Factura {
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   cliente         Cliente?  @relation(fields: [clienteId], references: [id])
   items           FacturaItem[]
+  imputacionesCC  ImputacionCC[]
 
   @@unique([companyId, tipo, puntoVenta, numero])
   @@index([companyId])
@@ -1306,6 +1307,7 @@ model Empleado {
   alias           String?  // alias de la cuenta (CBU/CVU)
   cbu             String?  // CBU / CVU
   bancoNombre     String?  // banco de la cuenta
+  centroCostoId   String?  // centro de costo / establecimiento por defecto para imputar el sueldo
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   movimientos     MovimientoEmpleado[]
   liquidaciones   LiquidacionSueldo[]
@@ -1419,6 +1421,7 @@ model LiquidacionSueldo {
 
   company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   empleado       Empleado  @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
+  imputacionesCC ImputacionCC[]
 
   @@unique([empleadoId, periodo])
   @@index([companyId])
@@ -3000,12 +3003,14 @@ model ImputacionCC {
   id                String   @id @default(cuid())
   companyId         String
   centroCostoId     String
-  origenTipo        String   // "compra" | "gasto"
+  origenTipo        String   // "compra" | "gasto" | "venta" (ingreso) | "sueldo"
   modo              String   @default("directo")  // directo | manual | hectareas
   monto             Float    @default(0)   // importe imputado a este centro (moneda del comprobante)
   porcentaje        Float    @default(0)   // % del total que representa (informativo)
   fecha             DateTime                // copia de la fecha del comprobante (para reportes)
   facturaCompraId   String?
+  facturaId         String?                 // factura de VENTA (ingreso)
+  liquidacionSueldoId String?               // liquidación de sueldo (egreso de RRHH)
   efectivoId        String?
   bancoMovimientoId String?
   createdAt         DateTime @default(now())
@@ -3013,6 +3018,8 @@ model ImputacionCC {
   company         Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
   centroCosto     CentroCosto     @relation(fields: [centroCostoId], references: [id], onDelete: Cascade)
   facturaCompra   FacturaCompra?  @relation(fields: [facturaCompraId], references: [id], onDelete: Cascade)
+  factura         Factura?        @relation(fields: [facturaId], references: [id], onDelete: Cascade)
+  liquidacionSueldo LiquidacionSueldo? @relation(fields: [liquidacionSueldoId], references: [id], onDelete: Cascade)
   efectivo        Efectivo?       @relation(fields: [efectivoId], references: [id], onDelete: Cascade)
   bancoMovimiento BancoMovimiento? @relation(fields: [bancoMovimientoId], references: [id], onDelete: Cascade)
 
@@ -3020,6 +3027,8 @@ model ImputacionCC {
   @@index([centroCostoId])
   @@index([fecha])
   @@index([facturaCompraId])
+  @@index([facturaId])
+  @@index([liquidacionSueldoId])
   @@index([efectivoId])
   @@index([bancoMovimientoId])
 }
