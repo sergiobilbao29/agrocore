@@ -3026,6 +3026,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'13/10/2026',
+      titulo:'⛽ v2.303.0 — El lector de facturas por foto ahora entiende combustible (ICL / IDC)',
+      desc:'Al cargar una <b>factura por foto</b> en Movimientos de compras, la IA ahora lee el <b>detalle fiscal completo</b>: neto gravado, alícuota de IVA, conceptos no gravados y <b>otros impuestos</b> (ICL e IDC de los combustibles, impuestos internos, percepciones de IVA/IIBB, Ley 27.743). En las facturas de <b>nafta/gasoil</b> (YPF, Shell, Axion…) carga el neto con su IVA y <b>agrega un renglón aparte con ICL + IDC</b>, así el <b>total cierra exacto</b> sin tocar nada a mano. También mejora la lectura de la letra (A/B/C) y el CAE. 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'13/10/2026',
       titulo:'⏳ v2.302.0 — Días de prueba en Leads / Prospectos',
       desc:'En <b>Empresas → Leads / Prospectos</b> ahora cada lead que ya arrancó el trial muestra una columna <b>Prueba</b> con los <b>días que le quedan</b> (verde si tiene margen, amarillo cuando faltan 5 días o menos) o <b>⛔ Vencida</b> si ya se le terminó, con la fecha exacta al pasar el mouse. Los que ya contrataron aparecen como <b>contratado</b>. La información también se incluye en el <b>Exportar CSV</b>, para priorizar a quién contactar primero. 🌱' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'13/10/2026',
@@ -16474,6 +16477,21 @@ async function compCargarDesdePDF(input) {
         if (cant) cant.value = d.cantidadItem || 1;
         if (pu)   pu.value = (d.cantidadItem ? (neto / d.cantidadItem) : neto).toFixed(2);
         if (iv)   iv.value = iva;
+      }
+      // Combustibles y otros: ICL + IDC + impuestos internos + percepciones + no gravado → renglón aparte sin IVA
+      const otrosTot = Number(d.otrosImpuestos || 0) + Number(d.noGravado || 0);
+      if (otrosTot > 0.005) {
+        tbody.insertAdjacentHTML('beforeend', factItemRow());
+        const extra = tbody.querySelector('tr[data-fi]:last-child');
+        if (extra) {
+          const es = extra.querySelector('[data-f="productoId"]'), ed = extra.querySelector('[data-f="descripcion"]');
+          const ec = extra.querySelector('[data-f="cantidad"]'), ep = extra.querySelector('[data-f="precioUnit"]'), ei = extra.querySelector('[data-f="alicuotaIva"]');
+          if (es) es.value = '';
+          if (ed) ed.value = 'Impuestos a los combustibles (ICL + IDC) / otros tributos';
+          if (ec) ec.value = 1;
+          if (ep) ep.value = otrosTot.toFixed(2);
+          if (ei) ei.value = 0;
+        }
       }
       factRecalc();
     }

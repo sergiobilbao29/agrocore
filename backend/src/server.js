@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.302.0';
+const AGROCORE_VERSION = '2.303.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1760,7 +1760,8 @@ async function _iaAnalizarDocumento({ buffer, mime, filename, textoPdf }, ia) {
     'Sos un clasificador de documentos de una empresa agropecuaria argentina. Mirá el documento y respondé SOLO un JSON con esta forma:',
     '{ "tipo": "...", "resumen": "...", "datos": { ... } }',
     'tipo debe ser UNO de: factura_compra, liquidacion_cereal, liquidacion_animales, orden_trabajo, gasto, cheque, otro.',
-    '- factura_compra: factura/remito de un proveedor (nos venden algo). datos: proveedor, cuit, numero, fecha, total, moneda.',
+    '- factura_compra: factura/remito de un proveedor (nos venden algo). datos: proveedor, cuit, numero, fecha, letra (A/B/C), moneda, descripcion (del producto/servicio principal, ej "NAFTA SUPER XXI"), cantidad (del ítem principal si hay), netoGravado (neto/subtotal gravado antes de IVA), alicuotaIva (la alícuota de IVA predominante: 21, 10.5 o 27), iva (monto total de IVA discriminado), noGravado (conceptos no gravados o exentos), otrosImpuestos (SUMA de todos los otros tributos/impuestos: ICL e IDC de combustibles, impuestos internos, percepciones de IVA/IIBB, Ley 27.743, tasas), total.',
+    'MUY IMPORTANTE en facturas de COMBUSTIBLE (naftas/gasoil de estaciones YPF, Shell, Axion...): además del neto y el IVA 21%, traen ICL (Impuesto a los Combustibles Líquidos) e IDC (Impuesto al Dióxido de Carbono) y a veces un descuento. En esas, netoGravado = subtotal gravado, iva = IVA 21%, y otrosImpuestos = ICL + IDC sumados. Verificá que netoGravado + iva + noGravado + otrosImpuestos sea igual al total (si hay descuento, descontalo del neto).',
     '- liquidacion_cereal: liquidación primaria de granos / venta de cereal. datos: comprador, numero, fecha, grano, neto.',
     '- liquidacion_animales: liquidación de compra directa/faena de hacienda (porcinos/bovinos). datos: comprador, numero, fecha, categoria, cabezas, neto.',
     '- orden_trabajo: orden de trabajo/laboreo/aplicación a campo. datos: establecimiento, lote, cultivo, labor, hectareas, contratista, fecha, tarifa.',
@@ -1780,7 +1781,7 @@ async function _iaAnalizarDocumento({ buffer, mime, filename, textoPdf }, ia) {
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', temperature: 0, max_tokens: 500, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: sys }, { role: 'user', content: userContent }] }),
+      body: JSON.stringify({ model: cfg.model || 'gpt-4o-mini', temperature: 0, max_tokens: 800, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: sys }, { role: 'user', content: userContent }] }),
       signal: ctrl.signal,
     });
     clearTimeout(to);
@@ -19365,19 +19366,41 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     const _iaAFactura = (d) => {
       if (!d || d.tipo !== 'factura_compra' || !d.datos) return null;
       const dat = d.datos;
+      const _n = (v) => { const x = Number(v); return isFinite(x) ? x : 0; };
       const cuit = String(dat.cuit || '').replace(/\D/g, '');
       const numRaw = String(dat.numero || '');
       const mn = numRaw.match(/(\d{1,5})\D+(\d{1,8})/);
       const monRaw = String(dat.moneda || '').toUpperCase();
+      const letra = String(dat.letra || '').toUpperCase().replace(/[^ABC]/g, '') || 'C';
+      const total = dat.total != null ? _n(dat.total) : null;
+      const otros = _n(dat.otrosImpuestos);               // ICL + IDC + internos + percepciones...
+      const noGrav = _n(dat.noGravado);
+      // Alícuota de IVA predominante (21 por defecto si hay IVA discriminado)
+      let alic = _n(dat.alicuotaIva);
+      if (![21, 10.5, 27, 2.5, 5].includes(alic)) alic = 21;
+      // Neto gravado: lo que dijo la IA o, si no, deducido del total sacando otros impuestos y lo no gravado.
+      let neto = dat.netoGravado != null ? _n(dat.netoGravado) : null;
+      if ((neto == null || neto <= 0) && total != null) {
+        const base = total - otros - noGrav;
+        neto = base > 0 ? +(base / (1 + alic / 100)).toFixed(2) : null;
+      }
       return {
-        fuente: 'IA_VISION', cae: null, caeVencimiento: null,
+        fuente: 'IA_VISION', cae: dat.cae ? String(dat.cae) : null, caeVencimiento: null,
         fecha: dat.fecha ? String(dat.fecha).slice(0, 10) : null,
         cuitEmisor: cuit.length === 11 ? cuit : null, razonSocialEmisor: dat.proveedor || null,
         cuitReceptor: null, razonSocialReceptor: null,
         puntoVenta: mn ? Number(mn[1]) : null, numero: mn ? Number(mn[2]) : (numRaw.replace(/\D/g, '') ? Number(numRaw.replace(/\D/g, '')) : null),
-        tipoCmpCodigo: null, tipoCmpLetra: 'C', clase: 'factura',
-        total: dat.total != null ? Number(dat.total) : null, netoGravado: null,
-        iva21: null, iva105: null, iva27: null, iva25: null, iva5: null,
+        tipoCmpCodigo: null, tipoCmpLetra: letra, clase: 'factura',
+        total, netoGravado: neto,
+        // Los iva* funcionan como "bandera" de la alícuota para el front (elige la tasa).
+        iva21: alic === 21 ? (neto != null ? +(neto * 0.21).toFixed(2) : 1) : null,
+        iva105: alic === 10.5 ? (neto != null ? +(neto * 0.105).toFixed(2) : 1) : null,
+        iva27: alic === 27 ? (neto != null ? +(neto * 0.27).toFixed(2) : 1) : null,
+        iva25: null, iva5: null,
+        otrosImpuestos: otros > 0.005 ? +otros.toFixed(2) : 0,
+        noGravado: noGrav > 0.005 ? +noGrav.toFixed(2) : 0,
+        descripcionItem: dat.descripcion || null,
+        cantidadItem: dat.cantidad != null && _n(dat.cantidad) > 0 ? _n(dat.cantidad) : null,
         moneda: /US|USD|D[OÓ]LAR|DOL/.test(monRaw) ? 'DOL' : 'PES', cotizacion: 1,
       };
     };
