@@ -821,6 +821,11 @@ model FacturaCompra {
   iva             Float     @default(0)        // en moneda origen
   total           Float     @default(0)        // en moneda origen
   observaciones   String?
+  // Clasificacion del gasto: "empresa" (default) | "particular" (del dueño) | "socio".
+  // Permite separar gastos personales de los de la explotacion en reportes.
+  clasificacion    String?   @default("empresa")
+  // Categoria de gasto (arbol de Categorias de Gastos): combustible, seguros, servicios...
+  categoriaGastoId String?
   // Vencimiento(s) de pago. fechaVencimiento = 1er vencimiento (el que manda para la
   // deuda, el flujo de fondos y las alertas). vencimientos = lista completa
   // [{nro, fecha, importe}] para servicios con 2+ vencimientos (recargo si pagás tarde).
@@ -841,6 +846,7 @@ model FacturaCompra {
   @@index([companyId])
   @@index([fecha])
   @@index([fechaVencimiento])
+  @@index([categoriaGastoId])
 }
 
 model FacturaCompraItem {

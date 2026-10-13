@@ -3025,6 +3025,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'13/10/2026',
+      titulo:'🏷️ v2.304.0 — Clasificar las compras: empresa/dueño y categoría (combustible, seguros…)',
+      desc:'En la <b>factura de compra</b> ahora podés marcar la <b>Clasificación</b> (🏢 Empresa, 👤 Particular del dueño o 🤝 Socio) para separar los gastos personales de los del campo, y elegir la <b>Categoría de gasto</b> del árbol (combustible, seguros, servicios, etc.). Funciona también al importar la factura por PDF/foto. Recordá que para que un artículo <b>sume al stock</b>, elegilo en el buscador de "Producto" de la fila (o dejá el texto y el sistema crea el producto solo al guardar). Además, el lector ahora completa mejor la <b>fecha</b> en tickets de combustible. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'13/10/2026',
       titulo:'⛽ v2.303.0 — El lector de facturas por foto ahora entiende combustible (ICL / IDC)',
       desc:'Al cargar una <b>factura por foto</b> en Movimientos de compras, la IA ahora lee el <b>detalle fiscal completo</b>: neto gravado, alícuota de IVA, conceptos no gravados y <b>otros impuestos</b> (ICL e IDC de los combustibles, impuestos internos, percepciones de IVA/IIBB, Ley 27.743). En las facturas de <b>nafta/gasoil</b> (YPF, Shell, Axion…) carga el neto con su IVA y <b>agrega un renglón aparte con ICL + IDC</b>, así el <b>total cierra exacto</b> sin tocar nada a mano. También mejora la lectura de la letra (A/B/C) y el CAE. 🌱' },
@@ -16186,6 +16189,9 @@ async function compForm(pre) {
   if (!state.cache.depositos) {
     try { const dp = await api('/api/depositos'); state.cache.depositos = dp.data || []; } catch {}
   }
+  if (!state.cache.categoriasGasto) {
+    try { const cg = await api('/api/categorias-gasto'); state.cache.categoriasGasto = cg.data || []; } catch {}
+  }
   const _depsComp = (state.cache.depositos || []).filter(d => d.activo !== false);
   try {
     const r = await api('/api/stock-actual');
@@ -16238,6 +16244,18 @@ async function compForm(pre) {
             ${_depsComp.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}${d.tipo?` · ${esc(d.tipo)}`:''}</option>`).join('')}
           </select>
           <div class="text-[10px] text-slate-400 mt-1">A qué depósito entra el stock de esta compra.</div>
+        </div>
+        <div><label class="label">Clasificación</label>
+          <select id="fc-clasif" class="input">
+            <option value="empresa" ${(!pre||pre.clasificacion==='empresa'||!pre.clasificacion)?'selected':''}>🏢 Empresa</option>
+            <option value="particular" ${pre&&pre.clasificacion==='particular'?'selected':''}>👤 Particular (dueño)</option>
+            <option value="socio" ${pre&&pre.clasificacion==='socio'?'selected':''}>🤝 Socio</option>
+          </select>
+          <div class="text-[10px] text-slate-400 mt-1">Empresa o gasto personal del dueño/socio.</div>
+        </div>
+        <div><label class="label">Categoría de gasto</label>
+          <select id="fc-catgasto" class="input">${(typeof catGastoTreeOptions==='function')?catGastoTreeOptions((pre&&pre.categoriaGastoId)||'',{rootLabel:'(sin categoría)'}):'<option value="">(sin categoría)</option>'}</select>
+          <div class="text-[10px] text-slate-400 mt-1">Ej: Combustible, Seguros, Servicios…</div>
         </div>
       </div>
       <div id="f-pdf-msg" class="text-xs"></div>
@@ -16648,6 +16666,8 @@ async function compSave() {
     condicionDias,
     vencimientoFecha,
     vencimientos: vtos.length ? vtos : undefined,
+    clasificacion: $('#fc-clasif')?.value || 'empresa',
+    categoriaGastoId: $('#fc-catgasto')?.value || null,
     observaciones: $('#f-obs').value.trim()||null,
     items,
   };

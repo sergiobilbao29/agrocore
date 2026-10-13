@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.303.0';
+const AGROCORE_VERSION = '2.304.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5904,6 +5904,8 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
       depositoId: z.string().nullable().optional(),   // depósito destino del stock que entra
+      clasificacion: z.enum(['empresa', 'particular', 'socio']).nullable().optional(),
+      categoriaGastoId: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
       // Vínculo con remitos de compra: si viene, el stock YA entró por el remito,
@@ -5949,6 +5951,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
           companyId: req.companyId, proveedorId: input.proveedorId || null,
           tipo: input.tipo, clase: _clase, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
           condicionCompra: input.condicionCompra, observaciones: input.observaciones,
+          clasificacion: input.clasificacion || 'empresa', categoriaGastoId: input.categoriaGastoId || null,
           fechaVencimiento: _primerVto, vencimientos: _vtos.length ? _vtos : undefined,
           moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
@@ -6249,6 +6252,8 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
       depositoId: z.string().nullable().optional(),
+      clasificacion: z.enum(['empresa', 'particular', 'socio']).nullable().optional(),
+      categoriaGastoId: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
       emisorCuit: z.string().nullable().optional(),
@@ -6292,6 +6297,7 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
           proveedorId: input.proveedorId || null, tipo: input.tipo, clase: _clase,
           puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
           condicionCompra: input.condicionCompra, observaciones: input.observaciones,
+          clasificacion: input.clasificacion || 'empresa', categoriaGastoId: input.categoriaGastoId || null,
           fechaVencimiento: _primerVto, vencimientos: _vtos.length ? _vtos : null,
           moneda: _mon, cotizacion: _cot, subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
           items: { create: totales.items },
@@ -19451,7 +19457,7 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     };
     const fechaArg = (s) => {
       if (!s) return null;
-      const m = String(s).match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+      const m = String(s).match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
       if (!m) return null;
       const dd = m[1].padStart(2, '0');
       const mm = m[2].padStart(2, '0');
@@ -19575,8 +19581,10 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     const mFecha = texto.match(/Fecha\s+de\s+Emisi[oó]n\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i);
     if (mFecha && !resultado.fecha) resultado.fecha = fechaArg(mFecha[1]);
     // Si no hay fecha etiquetada, tomamos la primera fecha del documento.
+    // Aceptamos /, - o . como separador y año de 2 o 4 dígitos (tickets de combustible
+    // suelen traer "01/10/2026 08:43:03" sin la etiqueta "Fecha de Emisión").
     if (!resultado.fecha) {
-      const mF2 = texto.match(/\b(\d{1,2}[\/]\d{1,2}[\/]\d{4})\b/);
+      const mF2 = texto.match(/\b(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})\b/);
       if (mF2) resultado.fecha = fechaArg(mF2[1]);
     }
     // CAE — el número puede estar pegado a la etiqueta o suelto (el pdf-parse
