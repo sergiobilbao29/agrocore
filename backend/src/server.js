@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.305.0';
+const AGROCORE_VERSION = '2.306.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2135,11 +2135,26 @@ async function _generarCuotaAbono(companyId, sus, periodo) {
   const [anio, mes] = periodo.split('-').map(Number);
   const dia = Math.min(sus.diaVenc || 10, 28);
   const venc = new Date(anio, mes - 1, dia);
+  // El precio del abono puede estar en USD (u otra moneda) pero se factura y cobra
+  // EN PESOS: convertimos al TC del día y la cuenta a cobrar nace en ARS (sin que
+  // después aparezca deuda en dólares ni diferencia de cambio al cobrar).
+  let moneda = sus.moneda || 'ARS';
+  let debe = Number(sus.monto || 0);
+  let detalle = `${sus.concepto || 'Abono mensual'} · ${periodo}`;
+  if (moneda !== 'ARS' && debe > 0) {
+    let cot = 0;
+    try { cot = await getCotizacionARS(moneda, new Date(anio, mes - 1, dia), companyId); } catch (_) {}
+    if (cot && cot > 0) {
+      detalle += ` (${moneda === 'USD' ? 'US$' : moneda} ${debe} @ $${cot})`;
+      debe = _round2(debe * cot);
+      moneda = 'ARS';
+    }
+  }
   await prisma.ctaCte.create({ data: {
     companyId, contactoTipo: 'cliente', contactoId: sus.clienteId,
     fecha: new Date(anio, mes - 1, 1), vencimiento: venc,
-    detalle: `${sus.concepto || 'Abono mensual'} · ${periodo}`,
-    categoria: 'Abono', moneda: sus.moneda || 'ARS', debe: sus.monto || 0, haber: 0,
+    detalle,
+    categoria: 'Abono', moneda, debe, haber: 0,
     referencia: ref,
   }});
   return { creada: true, ref };

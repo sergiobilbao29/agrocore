@@ -3028,6 +3028,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/10/2026',
+      titulo:'💲 v2.306.0 — Abonos con precio en USD que se facturan y cobran en pesos',
+      desc:'En <b>Abonos / Clientes</b>, cuando el abono tiene el <b>precio en dólares</b> (ej: US$ 100), ahora la <b>cuota del mes y la factura se generan en PESOS</b> al tipo de cambio del día (queda anotado "US$ 100 @ $TC"). Así la <b>deuda nace en pesos</b> y el <b>cobro es en pesos</b>, sin que aparezca deuda en dólares ni diferencia de cambio. El precio sigue guardado en USD para que lo actualices una sola vez. 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/10/2026',
       titulo:'📅 v2.305.0 — Arreglo del desfasaje de fechas + sugerencias de Puesto',
       desc:'Corregimos de raíz el problema por el que algunos listados mostraban la fecha <b>un día antes</b> de la cargada (ej: cargabas 11/10 y figuraba 10/10). Pasaba en <b>Control de efectivo</b>, <b>Planilla de empleados</b> y otras listas por un tema de zona horaria al mostrar la fecha. Ahora <b>todas las pantallas muestran exactamente el día que cargaste</b>, igual que en el formulario (no hay que recargar nada: las fechas ya guardadas se ven bien al abrir la pantalla). Además, en la ficha del empleado el campo <b>Puesto</b> ahora sugiere una lista útil (Peón General, Encargado, Administración, Tractorista, Tambero, Chofer, Capataz…) y sigue siendo <b>de escritura libre</b>: podés elegir uno o escribir el que quieras. 🌱' },
@@ -10750,13 +10753,29 @@ async function abonoFacturar(id){
   const s=(state._abonos||[]).find(x=>x.id===id); if(!s) return;
   if(typeof factForm!=='function') return toast('Emití la factura desde Movimientos de ventas','info');
   const per=state._abonoPeriodo;
+  // El precio del abono puede estar en USD, pero se factura EN PESOS al TC del día:
+  // convertimos acá y emitimos una factura en ARS (así la deuda y el cobro quedan en pesos).
+  let moneda = s.moneda || 'ARS';
+  let precio = Number(s.monto || 0);
+  let desc = `${s.concepto||'Abono mensual AgroCore'} · ${per}`;
+  if (moneda !== 'ARS' && precio > 0) {
+    if (typeof cargarCotizVivas === 'function' && !state.cache.cotizVivas) { try { await cargarCotizVivas(); } catch(_){} }
+    const tc = Number((state.cache.cotizVivas||{})[moneda] || 0);
+    if (tc > 0) {
+      desc += ` (${moneda==='USD'?'US$':moneda} ${precio} @ $${Math.round(tc)})`;
+      precio = Math.round(precio * tc * 100) / 100;
+      moneda = 'ARS';
+    } else {
+      toast('No tengo la cotización de hoy; cargá el importe en pesos a mano en la factura.','warn');
+    }
+  }
   closeModal&&closeModal();
   // Abre el formulario de factura de venta que ya usás (con o sin ARCA), prellenado con el abono.
   await factForm({
     clienteId: s.clienteId,
-    items: [{ descripcion: `${s.concepto||'Abono mensual AgroCore'} · ${per}`, cantidad: 1, precioUnit: s.monto||0, alicuotaIva: 21 }],
+    items: [{ descripcion: desc, cantidad: 1, precioUnit: precio, alicuotaIva: 21 }],
     observaciones: `Abono ${per} · ref ${'ABONO-'+s.id+'-'+per}`,
-    moneda: s.moneda||'ARS',
+    moneda,
     suscripcionId: s.id,
     abonoPeriodo: per,
   });
