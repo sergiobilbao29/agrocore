@@ -3029,8 +3029,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/10/2026',
-      titulo:'📅 v2.305.0 — Arreglo del desfasaje de fechas (mostraba un día menos)',
-      desc:'Corregimos de raíz el problema por el que algunos listados mostraban la fecha <b>un día antes</b> de la cargada (ej: cargabas 11/10 y figuraba 10/10). Pasaba en <b>Control de efectivo</b>, <b>Planilla de empleados</b> y otras listas por un tema de zona horaria al mostrar la fecha. Ahora <b>todas las pantallas muestran exactamente el día que cargaste</b>, igual que en el formulario. No hay que recargar nada: las fechas ya guardadas se ven bien al abrir la pantalla. 🌱' },
+      titulo:'📅 v2.305.0 — Arreglo del desfasaje de fechas + sugerencias de Puesto',
+      desc:'Corregimos de raíz el problema por el que algunos listados mostraban la fecha <b>un día antes</b> de la cargada (ej: cargabas 11/10 y figuraba 10/10). Pasaba en <b>Control de efectivo</b>, <b>Planilla de empleados</b> y otras listas por un tema de zona horaria al mostrar la fecha. Ahora <b>todas las pantallas muestran exactamente el día que cargaste</b>, igual que en el formulario (no hay que recargar nada: las fechas ya guardadas se ven bien al abrir la pantalla). Además, en la ficha del empleado el campo <b>Puesto</b> ahora sugiere una lista útil (Peón General, Encargado, Administración, Tractorista, Tambero, Chofer, Capataz…) y sigue siendo <b>de escritura libre</b>: podés elegir uno o escribir el que quieras. 🌱' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'13/10/2026',
       titulo:'🏷️ v2.304.0 — Clasificar las compras: empresa/dueño y categoría (combustible, seguros…)',
       desc:'En la <b>factura de compra</b> ahora podés marcar la <b>Clasificación</b> (🏢 Empresa, 👤 Particular del dueño o 🤝 Socio) para separar los gastos personales de los del campo, y elegir la <b>Categoría de gasto</b> del árbol (combustible, seguros, servicios, etc.). Funciona también al importar la factura por PDF/foto. Recordá que para que un artículo <b>sume al stock</b>, elegilo en el buscador de "Producto" de la fila (o dejá el texto y el sistema crea el producto solo al guardar). Además, el lector ahora completa mejor la <b>fecha</b> en tickets de combustible. 🌱' },
@@ -24155,8 +24155,8 @@ function empleForm(id=null) {
         <div><label class="label">Apellido *</label><input id="f-ape" class="input" value="${esc(it.apellido||'')}"/></div>
         <div><label class="label">DNI</label><input id="f-dni" class="input" value="${esc(it.dni||'')}"/></div>
         <div><label class="label">CUIL</label><input id="f-cuil" class="input" value="${esc(it.cuil||'')}"/></div>
-        <div><label class="label">Puesto</label><input id="f-pto" class="input" list="f-puestos" value="${esc(it.puesto||'')}"/>
-          <datalist id="f-puestos">${catByTipo('Labor').map(x=>`<option value="${esc(x.nombre)}">`).join('')}</datalist>
+        <div><label class="label">Puesto</label><input id="f-pto" class="input" list="f-puestos" value="${esc(it.puesto||'')}" placeholder="Escribí o elegí…"/>
+          <datalist id="f-puestos">${['Peón General','Encargado','Administración','Tractorista','Tambero','Alambrador','Mecánico','Chofer','Capataz','Puestero','Sereno','Operario','Contratista'].map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
         </div>
         <div class="col-span-2 p-2 bg-slate-50 rounded border border-slate-200 grid grid-cols-2 gap-3">
           <label class="col-span-2 text-sm flex items-center gap-2 cursor-pointer font-medium"><input id="f-pordia" type="checkbox" ${it.porDia?'checked':''} onchange="empModalidadToggle()"/> 📅 Trabaja por día (jornal × días)</label>
