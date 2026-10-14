@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.306.0';
+const AGROCORE_VERSION = '2.307.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5830,7 +5830,7 @@ app.post('/api/facturas/:id/anular', requireCompany, requirePermission('ventas:u
 
 // Eliminar DEFINITIVAMENTE una factura de venta — solo si NO tiene CAE (no
 // autorizada por ARCA) y NO tiene cobros aplicados. Devuelve el stock.
-app.delete('/api/facturas/:id', requireCompany, requirePermission('ventas:delete'), async (req, res, next) => {
+app.delete('/api/facturas/:id', requireCompany, requirePermission('ventas:update'), async (req, res, next) => {
   try {
     const f = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!f) return res.status(404).json({ ok: false, error: 'No encontrada' });
