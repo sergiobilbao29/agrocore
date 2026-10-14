@@ -3028,6 +3028,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/10/2026',
+      titulo:'↩️ v2.308.0 — Al facturar o cobrar un abono, volvés a Abonos / Clientes',
+      desc:'Cuando emitís la factura del abono o registrás el cobro desde <b>Empresas → Abonos / Clientes</b>, al terminar el sistema te <b>devuelve a esa misma pantalla</b> (antes te dejaba en Movimientos de ventas o en Cuentas a cobrar). El flujo queda más prolijo para cargar varios abonos seguidos. 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/10/2026',
       titulo:'🗑️ v2.307.0 — Botón Eliminar en facturas anuladas (visible para más usuarios)',
       desc:'El botón <b>Eliminar</b> (🗑️) de una factura <b>anulada</b> ahora aparece para cualquier usuario con permiso de <b>editar ventas</b> (antes pedía un permiso aparte que casi nadie tenía, por eso no se veía). Sirve para <b>liberar el número</b> de una factura anulada y volver a cargarla; no afecta a ARCA. 🌱' },
@@ -10752,6 +10755,14 @@ async function abonoGenerarMes(){
   try{ const r=await api('/api/suscripciones/generar-mes',{method:'POST',body:JSON.stringify({periodo:state._abonoPeriodo})});
     toast(`Listo: ${r.data?.creadas||0} cuota(s) nueva(s) de ${r.data?.total||0} abonos`,'success'); abonosRender(); }catch(e){ toast(e.message,'error'); }
 }
+// Cuando se factura/cobra un abono desde Abonos/Clientes, dejamos esta marca para
+// volver a esa pantalla al terminar (en vez de quedar en Ventas / Cuentas a cobrar).
+function _volverAAbonosSiCorresponde(){
+  if(!state._abonoReturn) return false;
+  state._abonoReturn=false;
+  if(typeof pages.empresas==='function'){ pages.empresas(); return true; }
+  return false;
+}
 async function abonoFacturar(id){
   const s=(state._abonos||[]).find(x=>x.id===id); if(!s) return;
   if(typeof factForm!=='function') return toast('Emití la factura desde Movimientos de ventas','info');
@@ -10784,7 +10795,7 @@ async function abonoFacturar(id){
   });
 }
 async function abonoCobrar(clienteId){
-  if(typeof pagoCobroAbrir==='function'){ closeModal&&closeModal(); await pagoCobroAbrir('cobro',{ contactoId: clienteId }); }
+  if(typeof pagoCobroAbrir==='function'){ closeModal&&closeModal(); await pagoCobroAbrir('cobro',{ contactoId: clienteId, _fromAbono:true }); }
   else { toast('Andá a Cuentas a cobrar para registrar el cobro','info'); }
 }
 // Vincular una factura ya emitida (p. ej. importada de ARCA) a la cuota del abono.
@@ -14541,6 +14552,9 @@ function factTipoUI() {
 }
 async function factForm(prefill = null) {
   state._factEdit = (prefill && prefill._editId) ? prefill._editId : null;
+  // Si se entra a facturar desde Abonos/Clientes (viene con suscripcionId), al
+  // guardar volvemos a esa pantalla. Si no, limpiamos la marca.
+  state._abonoReturn = !!(prefill && prefill.suscripcionId);
   await cargarMonedas();
   const clientes = state.cache.clientes || [];
   const facturas = state.cache.facturas || [];
@@ -15097,7 +15111,7 @@ async function factSave() {
       toast('Factura actualizada','success');
       state._factEdit = null;
       delete state.cache.stockMap; delete state.cache.facturas; delete state.cache.ctasCtes;
-      closeModal(); pages.facturacion(); return;
+      closeModal(); if (_volverAAbonosSiCorresponde()) return; pages.facturacion(); return;
     }
     const r = await api('/api/facturas', { method:'POST', body: JSON.stringify(data) });
     const facturaId = r.data?.id;
@@ -15105,7 +15119,7 @@ async function factSave() {
     delete state.cache.stockMap;
     // Si condición Contado + método elegido, registrar el cobro / ingreso.
     await _cobroContadoDesdeVenta(facturaId, data, items);
-    closeModal(); pages.facturacion();
+    closeModal(); if (_volverAAbonosSiCorresponde()) return; pages.facturacion();
   } catch (e) { toast(e.message,'error'); }
 }
 
@@ -19437,6 +19451,8 @@ function ccLibreFilter(k,v){ state.ccLibreFilter = state.ccLibreFilter || { cate
  * ========================================================= */
 async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
   const esPago = modo === 'pago';
+  // Si el cobro se abre desde Abonos/Clientes, al confirmar volvemos a esa pantalla.
+  state._abonoReturn = !!opts._fromAbono;
   const tipoContacto = esPago ? 'proveedor' : 'cliente';
   // El caché de proveedores/clientes puede no estar cargado si se entra directo a
   // Movimientos diarios (sin pasar antes por Compras/Ventas). Lo cargamos on-demand.
@@ -20824,6 +20840,7 @@ async function pagoCobroConfirmar(modo) {
       ? (esPago ? '💸 Pago' : '💰 Cobro') + ` registrado por ${fmt$(monto)} (${comprobantes.length} comprobante${comprobantes.length===1?'':'s'}${_ncTxt})`
       : `🔗 Notas de crédito vinculadas (${comprobantes.length} comprobante${comprobantes.length===1?'':'s'}${_ncTxt}) — sin movimiento de plata`;
     toast(_msg, 'success');
+    if (!esPago && _volverAAbonosSiCorresponde()) return;
     pages.ctasCtes();
     // Orden de pago: sólo cuando fue un PAGO con salida de plata.
     if (esPago && monto > 0.01) {
