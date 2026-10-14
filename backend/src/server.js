@@ -5580,11 +5580,18 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       items: z.array(itemFacSchema).min(1),
     });
     const input = schema.parse(req.body);
-    // Evitar numeración duplicada: mismo comprobante (tipo+clase+PV+número) ya emitido.
+    // Evitar numeración duplicada: mismo comprobante (tipo+PV+número) ya existente.
+    // Nota: el número de una factura ANULADA tampoco se puede reutilizar (el índice
+    // único de la base no distingue el estado, y en ARCA un número consumido no se
+    // re-emite). Por eso avisamos claro en vez de dejar que explote "Registro duplicado".
     {
       const _clase0 = input.clase || 'factura';
-      const dup = await prisma.factura.findFirst({ where: { companyId: req.companyId, tipo: input.tipo, clase: _clase0, puntoVenta: input.puntoVenta, numero: input.numero, estado: { not: 'anulada' } } });
-      if (dup) return res.status(400).json({ ok: false, error: `Ya existe ${_labelComp(_clase0, input.tipo)} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}. Cambiá el número.` });
+      const dup = await prisma.factura.findFirst({ where: { companyId: req.companyId, tipo: input.tipo, puntoVenta: input.puntoVenta, numero: input.numero } });
+      if (dup) {
+        const _etq = `${_labelComp(_clase0, input.tipo)} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`;
+        const _anul = dup.estado === 'anulada' ? ' (está anulada, pero su número no se puede reutilizar). Usá el número siguiente.' : '. Cambiá el número.';
+        return res.status(400).json({ ok: false, error: `Ya existe ${_etq}${_anul}` });
+      }
     }
     // Si dicen que la factura ya está en ARCA, exigimos CAE + vto reales.
     if (input.origen === 'arca_externa') {
@@ -5827,7 +5834,10 @@ app.delete('/api/facturas/:id', requireCompany, requirePermission('ventas:delete
   try {
     const f = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!f) return res.status(404).json({ ok: false, error: 'No encontrada' });
-    if (f.cae) return res.status(400).json({ ok: false, error: 'La factura tiene CAE (autorizada por ARCA). No se puede eliminar; usá Anular.' });
+    // Con CAE no se elimina (hay que anularla primero). Pero una factura YA ANULADA
+    // sí se puede borrar aunque tenga CAE: está sin efecto y así se libera el número
+    // para volver a cargarla (no afecta a ARCA; el CAE real sigue existiendo allá).
+    if (f.cae && f.estado !== 'anulada') return res.status(400).json({ ok: false, error: 'La factura tiene CAE (autorizada por ARCA). Para eliminarla, primero Anulala; una vez anulada vas a poder borrarla.' });
     // ¿Tiene cobros aplicados? (contra-asientos haber con la misma referencia)
     const cobros = await prisma.ctaCte.count({ where: { companyId: req.companyId, referencia: `FAC-${req.params.id}`, haber: { gt: 0.01 } } });
     if (cobros > 0) return res.status(400).json({ ok: false, error: 'La factura tiene un cobro aplicado. Primero eliminá el pago/cobro y después la factura.' });
