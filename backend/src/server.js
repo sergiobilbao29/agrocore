@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.308.0';
+const AGROCORE_VERSION = '2.309.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -20918,7 +20918,20 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo)
       fecha: z.coerce.date(),
       cajaDestino: z.string().nullable().optional(),
-      chequeId: z.string().nullable().optional(),  // si recibimos un cheque NUEVO de terceros
+      chequeId: z.string().nullable().optional(),  // cheque de terceros YA cargado en cartera
+      // Cheque de terceros NUEVO recibido en la misma pantalla del cobro (sin darlo de
+      // alta antes en Tesorería). Se crea como "en_cartera" y queda a nombre nuestro.
+      nuevoCheque: z.object({
+        formato: z.enum(['fisico', 'electronico']).optional().default('fisico'),
+        banco: z.string().nullable().optional(),
+        cuenta: z.string().nullable().optional(),
+        nroCheque: z.string().min(1),
+        fechaEmision: z.coerce.date().nullable().optional(),
+        fechaPago: z.coerce.date(),
+        monto: z.number().nullable().optional(),
+        librador: z.string().nullable().optional(),
+        cuitTitular: z.string().nullable().optional(),
+      }).nullable().optional(),
       bancoCuentaId: z.string().nullable().optional(),
       empresaDestinoId: z.string().nullable().optional(),  // si el cliente paga a otra firma del grupo
       monedaPago: z.string().nullable().optional(),
@@ -20929,6 +20942,17 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         monto: z.number().positive(),
         cajaDestino: z.string().nullable().optional(),
         chequeId: z.string().nullable().optional(),   // cheque de terceros recibido (ya creado)
+        nuevoCheque: z.object({
+          formato: z.enum(['fisico', 'electronico']).optional().default('fisico'),
+          banco: z.string().nullable().optional(),
+          cuenta: z.string().nullable().optional(),
+          nroCheque: z.string().min(1),
+          fechaEmision: z.coerce.date().nullable().optional(),
+          fechaPago: z.coerce.date(),
+          monto: z.number().nullable().optional(),
+          librador: z.string().nullable().optional(),
+          cuitTitular: z.string().nullable().optional(),
+        }).nullable().optional(),
         bancoCuentaId: z.string().nullable().optional(),
         // Cobro en especie: el cliente nos paga con un producto (grano, hacienda…) → INGRESA al stock.
         productoPagoId: z.string().nullable().optional(),
@@ -20961,8 +20985,9 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       const _fmt = (n) => '$' + Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const _legsChk = (Array.isArray(d.pagos) && d.pagos.length)
         ? d.pagos
-        : [{ metodo: d.metodo, monto: d.monto, chequeId: d.chequeId }];
+        : [{ metodo: d.metodo, monto: d.monto, chequeId: d.chequeId, nuevoCheque: d.nuevoCheque }];
       for (const leg of _legsChk) {
+        // Cheque NUEVO cargado en esta pantalla: nace por el importe del cobro, no hay que validar.
         if (leg.metodo === 'cheque' && leg.chequeId) {
           const ch = await prisma.cheque.findFirst({ where: { id: leg.chequeId, companyId: req.companyId }, select: { monto: true, nroCheque: true } });
           if (ch && Math.abs(Number(ch.monto || 0) - Number(leg.monto || 0)) > 0.02) {
@@ -21106,8 +21131,23 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         const m = leg.metodo, monto = Number(leg.monto || 0);
         if (monto <= 0.01) return;
         if (m === 'cheque') {
-          // El cliente nos da un cheque de terceros → ya viene creado con chequeId
-          if (!leg.chequeId) throw new Error('Falta el cheque recibido');
+          // El cliente nos da un cheque de terceros. Puede venir ya cargado (chequeId)
+          // o cargarse NUEVO en esta misma pantalla (nuevoCheque): lo creamos en cartera.
+          if (!leg.chequeId && leg.nuevoCheque) {
+            const nc = leg.nuevoCheque;
+            await tx.cheque.create({ data: {
+              companyId: req.companyId, tipo: 'terceros', formato: nc.formato || 'fisico',
+              banco: nc.banco || null, cuenta: nc.cuenta || null, nroCheque: nc.nroCheque,
+              fechaEmision: nc.fechaEmision || d.fecha, fechaPago: nc.fechaPago,
+              monto: (nc.monto != null ? nc.monto : monto),
+              librador: nc.librador || null, cuitTitular: nc.cuitTitular || null,
+              endosante: cli.razonSocial, fechaRecepcion: d.fecha, estado: 'en_cartera',
+              observaciones: d.observaciones || ('Cheque recibido de ' + cli.razonSocial),
+            }});
+          } else if (!leg.chequeId) {
+            throw new Error('Falta el cheque recibido');
+          }
+          // Si viene chequeId (cheque ya en cartera), no se toca: representa la plata recibida.
         } else if (m === 'transferencia') {
           if (!leg.bancoCuentaId) throw new Error('Falta la cuenta bancaria para la transferencia');
           await tx.bancoMovimiento.create({ data: {

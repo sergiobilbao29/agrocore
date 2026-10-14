@@ -3029,6 +3029,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/10/2026',
+      titulo:'🧾 v2.309.0 — Cargar un cheque de terceros nuevo en la misma pantalla del cobro',
+      desc:'Al cobrar una factura de <b>contado con cheque</b> (en Emitir comprobante / Movimientos de ventas), ahora podés elegir <b>➕ Cargar un cheque nuevo</b> y completar banco, número, fecha de pago y librador <b>sin salir</b> a Tesorería. El cheque se crea como <b>de terceros en cartera</b> por el importe del cobro y queda listo en Tesorería → Cheques. Antes había que darlo de alta primero y volver a empezar. 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/10/2026',
       titulo:'↩️ v2.308.0 — Al facturar o cobrar un abono, volvés a Abonos / Clientes',
       desc:'Cuando emitís la factura del abono o registrás el cobro desde <b>Empresas → Abonos / Clientes</b>, al terminar el sistema te <b>devuelve a esa misma pantalla</b> (antes te dejaba en Movimientos de ventas o en Cuentas a cobrar). El flujo queda más prolijo para cargar varios abonos seguidos. 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'14/10/2026',
@@ -14789,6 +14792,31 @@ function factClaseHint(){
     el.innerHTML='🧾 <b>Factura</b>: descuenta el stock del depósito elegido y el cliente queda debiendo el total.';
   }
 }
+// Muestra/oculta el formulario de cheque nuevo cuando se elige "Cargar un cheque nuevo".
+function ventChequeToggle(prefix) {
+  const sel = document.getElementById(prefix + '-cheque');
+  const box = document.getElementById(prefix + '-cheque-nuevo');
+  if (!sel || !box) return;
+  box.classList.toggle('hidden', sel.value !== '__nuevo__');
+}
+// Lee los datos del cheque nuevo cargado en la pantalla de cobro (si corresponde).
+// Devuelve null si no se eligió "cheque nuevo". Tira error si faltan datos obligatorios.
+function ventChequeNuevoBody(prefix) {
+  const sel = document.getElementById(prefix + '-cheque');
+  if (!sel || sel.value !== '__nuevo__') return null;
+  const nro = (document.getElementById(prefix + '-ch-nro')?.value || '').trim();
+  const fpago = document.getElementById(prefix + '-ch-fpago')?.value || '';
+  if (!nro)   { toast('Poné el N° del cheque nuevo.', 'warn'); throw new Error('Falta N° de cheque'); }
+  if (!fpago) { toast('Poné la fecha de pago del cheque.', 'warn'); throw new Error('Falta fecha de pago'); }
+  return {
+    formato: document.getElementById(prefix + '-ch-formato')?.value || 'fisico',
+    banco: (document.getElementById(prefix + '-ch-banco')?.value || '').trim() || null,
+    nroCheque: nro,
+    fechaPago: new Date(fpago).toISOString(),
+    librador: (document.getElementById(prefix + '-ch-librador')?.value || '').trim() || null,
+    cuitTitular: (document.getElementById(prefix + '-ch-cuit')?.value || '').trim() || null,
+  };
+}
 // Reutilizable: cambia el detalle del método según la opción elegida
 // para los modales de factura de Venta (factForm y factFormExterna).
 function ventMetodoCambio(prefix) {
@@ -14803,10 +14831,24 @@ function ventMetodoCambio(prefix) {
       : `<label class="label">Caja</label><input id="${prefix}-caja" class="input" placeholder="Nombre de caja"/>`;
   } else if (met === 'cheque') {
     const cheques = (state.cache.cheques || []).filter(c => /en[_ ]?cartera/i.test(c.estado || ''));
-    det.innerHTML = cheques.length
-      ? `<label class="label">Cheque recibido (ya cargado en Tesorería)</label><select id="${prefix}-cheque" class="input"><option value="">— Elegir —</option>${cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||'?')} · ${fmt$(c.monto)}</option>`).join('')}</select>
-        <div class="text-[11px] text-amber-700 mt-1">💡 Si todavía no cargaste el cheque del cliente, cargalo primero en Tesorería → Cheques (estado "en_cartera") y volvé.</div>`
-      : `<div class="text-xs text-amber-700">⚠️ Sin cheques en cartera. Cargá uno en Tesorería → Cheques.</div>`;
+    const opcionesExistentes = cheques.map(c => `<option value="${esc(c.id)}">${esc(c.banco||'Banco')} #${esc(c.numero||c.nroCheque||'?')} · ${fmt$(c.monto)}</option>`).join('');
+    det.innerHTML = `
+      <label class="label">Cheque de terceros recibido</label>
+      <select id="${prefix}-cheque" class="input" onchange="ventChequeToggle('${prefix}')">
+        <option value="">— Elegir —</option>
+        ${opcionesExistentes}
+        <option value="__nuevo__">➕ Cargar un cheque nuevo…</option>
+      </select>
+      <div id="${prefix}-cheque-nuevo" class="hidden mt-2 p-2 rounded-lg bg-white border border-blue-200 grid grid-cols-2 gap-2">
+        <div><label class="label text-xs">Banco</label><input id="${prefix}-ch-banco" class="input" placeholder="Ej: Nación"/></div>
+        <div><label class="label text-xs">N° de cheque</label><input id="${prefix}-ch-nro" class="input" placeholder="Nro"/></div>
+        <div><label class="label text-xs">Fecha de pago (cobro)</label><input id="${prefix}-ch-fpago" type="date" class="input"/></div>
+        <div><label class="label text-xs">Tipo</label><select id="${prefix}-ch-formato" class="input"><option value="fisico">Físico</option><option value="electronico">e-Cheq</option></select></div>
+        <div><label class="label text-xs">Librador (de quién es)</label><input id="${prefix}-ch-librador" class="input" placeholder="Titular del cheque"/></div>
+        <div><label class="label text-xs">CUIT titular (opcional)</label><input id="${prefix}-ch-cuit" class="input" placeholder="Opcional"/></div>
+        <div class="col-span-2 text-[11px] text-slate-500">💡 El monto es el del cobro. Queda guardado en Tesorería → Cheques como "en cartera".</div>
+      </div>
+      ${cheques.length ? '' : `<div class="text-[11px] text-slate-500 mt-1">No tenés cheques en cartera: usá "Cargar un cheque nuevo" para darlo de alta acá mismo.</div>`}`;
   } else if (met === 'transferencia') {
     const cuentas = (state.cache.bancoCuentas || []).filter(c => c.activo !== false);
     det.innerHTML = cuentas.length
@@ -14995,7 +15037,11 @@ async function _cobroContadoDesdeVenta(facturaId, data, items) {
         observaciones: 'Cobro contado factura ' + compTxt,
       };
       if (metodo === 'efectivo')      cobroBody.cajaDestino   = document.getElementById('vent-caja')?.value || null;
-      if (metodo === 'cheque')        cobroBody.chequeId      = document.getElementById('vent-cheque')?.value || null;
+      if (metodo === 'cheque') {
+        const nc = ventChequeNuevoBody('vent');  // null si eligió un cheque existente
+        if (nc) { cobroBody.nuevoCheque = { ...nc, monto: total }; }
+        else    { cobroBody.chequeId    = document.getElementById('vent-cheque')?.value || null; }
+      }
       if (metodo === 'transferencia') cobroBody.bancoCuentaId = document.getElementById('vent-banco')?.value || null;
       if (metodo === 'externo')       cobroBody.cajaDestino   = document.getElementById('vent-medio')?.value || null;
       if (metodo === 'tarjeta')       cobroBody.cajaDestino   = document.getElementById('vent-tarjeta')?.value || null;
@@ -15008,7 +15054,11 @@ async function _cobroContadoDesdeVenta(facturaId, data, items) {
       else if (metodo === 'externo')  mov.caja = document.getElementById('vent-medio')?.value || null;
       else if (metodo === 'tarjeta')  mov.caja = document.getElementById('vent-tarjeta')?.value || null;
       else if (metodo === 'transferencia') mov.bancoCuentaId = document.getElementById('vent-banco')?.value || null;
-      else if (metodo === 'cheque')   mov.chequeId = document.getElementById('vent-cheque')?.value || null;
+      else if (metodo === 'cheque') {
+        const chSel = document.getElementById('vent-cheque')?.value || null;
+        if (chSel === '__nuevo__') { toast('Para cargar un cheque nuevo, elegí primero el cliente (no Consumidor final).','warn'); return; }
+        mov.chequeId = chSel;
+      }
       await api('/api/movimientos-diarios', { method:'POST', body: JSON.stringify(mov) });
     }
   } catch (pErr) {
@@ -15100,6 +15150,10 @@ async function factSave() {
     if (_met0==='efectivo'      && !document.getElementById('vent-caja')?.value)    { _focusCobro(); return toast('Elegí la CAJA donde ingresa el efectivo.','warn'); }
     if (_met0==='transferencia' && !document.getElementById('vent-banco')?.value)   { _focusCobro(); return toast('Elegí la CUENTA BANCARIA de la transferencia.','warn'); }
     if (_met0==='cheque'        && !document.getElementById('vent-cheque')?.value)  { _focusCobro(); return toast('Elegí el CHEQUE recibido (o cargá uno nuevo).','warn'); }
+    if (_met0==='cheque' && document.getElementById('vent-cheque')?.value==='__nuevo__') {
+      // Validar los datos del cheque nuevo ANTES de guardar la factura.
+      try { ventChequeNuevoBody('vent'); } catch(_) { _focusCobro(); return; }
+    }
     if (_met0==='externo'       && !document.getElementById('vent-medio')?.value)   { _focusCobro(); return toast('Elegí el medio externo donde ingresa.','warn'); }
     if (_met0==='tarjeta'       && !document.getElementById('vent-tarjeta')?.value) { _focusCobro(); return toast('Elegí la tarjeta.','warn'); }
   }
