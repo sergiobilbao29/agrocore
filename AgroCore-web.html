@@ -3029,6 +3029,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
+      titulo:'📍 v2.315.0 — Hacienda por lote/potrero en las pantallas',
+      desc:'Ya podés <b>operar la hacienda por lote/potrero</b> desde las pantallas. En <b>🐄 Movimientos de animales</b>, el formulario de movimiento ahora tiene un selector <b>Lote / potrero</b> (opcional; si lo dejás vacío, es a nivel campo como antes). En el <b>Traslado</b> podés elegir <b>lote origen y lote destino</b> y mover una parte de los animales <b>de un lote a otro</b>, incluso dentro del <b>mismo campo</b>. Cada tarjeta de campo muestra abajo un <b>detalle por lote/potrero</b> (cuántas cabezas de cada categoría hay en cada lote) y la tabla de movimientos recientes trae la columna <b>Lote</b>. Así un lote puede tener <b>varias categorías</b> conviviendo y ves dónde está parada cada tropa. 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
+      titulo:'🐄 v2.314.0 — Stock de hacienda por lote/potrero (base)',
+      desc:'Arranca el <b>stock de hacienda por lote/potrero</b>, no sólo por campo. Ahora cada <b>stock</b> y cada <b>movimiento de animales</b> puede indicar en qué <b>lote/potrero</b> está la hacienda, y un mismo lote puede tener <b>varias categorías</b> conviviendo. El <b>traslado</b> pasa a permitir mover una parte de los animales <b>de un lote a otro</b> (incluso dentro del mismo campo), no sólo de campo a campo. Todo lo cargado <b>sigue funcionando igual</b>: lo que estaba a nivel campo queda tal cual (lote vacío = campo). En esta versión va la <b>base</b> (datos + cálculo); las pantallas para verlo y operarlo cómodo por lote llegan en la próxima. 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
       titulo:'↩️ v2.313.0 — Deshacer un cobro/pago "suelto" desde la cuenta corriente',
       desc:'Si por idas y vueltas quedó un <b>cobro o pago suelto</b> en la cuenta corriente (una fila "Cobro de…" / "Pago de…" <b>sin Recibo/OP</b>, que antes tenía candado y no se podía sacar), ahora en el <b>visor de cuenta corriente</b> esa fila tiene un botón <b>↩️</b>: repone la deuda y revierte el ingreso/egreso de caja o banco (el cheque vuelve a cartera). Si el cobro <b>sí tiene</b> un Recibo/OP, el sistema te manda a deshacerlo desde ese comprobante. Sirve para limpiar los movimientos que quedaron trabados. Requiere permiso Finanzas: eliminar. 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'15/10/2026',
@@ -17955,6 +17961,7 @@ pages.hacienda = async function() {
   // para no esconder datos existentes). Los campos puramente agrícolas no aparecen acá.
   const _camposFull = (await api('/api/campos').catch(()=>({data:state.cache.campos||[]}))).data || [];
   state.cache.campos = _camposFull;
+  if (!state.cache.lotes || !state.cache.lotes.length) { try { state.cache.lotes = (await api('/api/lotes').catch(()=>({data:[]}))).data || []; } catch {} }
   const _tipoMap = new Map(_camposFull.map(c=>[c.id,(c.tipoExplotacion||'').toLowerCase()]));
   const _conHacienda = new Set([
     ..._filasAll.filter(f=>Number(f.declarado||0)||Number(f.real||0)).map(f=>f.campoId),
@@ -17972,6 +17979,13 @@ pages.hacienda = async function() {
   const porCampo = {};
   campos.forEach(c => { porCampo[c.id] = []; });
   filas.forEach(f => { (porCampo[f.campoId] = porCampo[f.campoId] || []).push(f); });
+  // Desglose por lote/potrero (solo filas con lote asignado) agrupado por campo → lote.
+  const _filasLote = (resumen.filasLote || []).filter(f => _permitCampo(f.campoId) && f.loteId);
+  const porCampoLote = {};
+  _filasLote.forEach(f => {
+    const g = (porCampoLote[f.campoId] = porCampoLote[f.campoId] || {});
+    (g[f.loteId] = g[f.loteId] || { nombre: f.loteNombre || 'Lote', filas: [] }).filas.push(f);
+  });
 
   const canC = can('stock:create');
   const canU = can('stock:update');
@@ -18067,6 +18081,23 @@ pages.hacienda = async function() {
                 </tr>`).join('')}
               </tbody>
             </table>` : `<div class="p-6 text-center text-slate-400 text-sm">Sin categorías cargadas en este campo. Tocá "+ Categoría" para empezar.</div>`}
+          ${(()=>{ const g = porCampoLote[campoId]; if (!g || !Object.keys(g).length) return '';
+            const lotesOrd = Object.entries(g).sort((a,b)=>String(a[1].nombre).localeCompare(String(b[1].nombre),'es'));
+            return `<div class="border-t border-slate-200 bg-slate-50/50 px-4 py-3">
+              <div class="text-xs font-semibold text-slate-600 mb-2">📍 Detalle por lote / potrero</div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                ${lotesOrd.map(([lid,info])=>{ const tot=info.filas.reduce((a,f)=>a+Number(f.real||0),0); return `
+                  <div class="bg-white rounded-lg border border-slate-200 p-2">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-sm font-semibold text-slate-700">${esc(info.nombre)}</span>
+                      <span class="text-xs text-slate-500">${fmtN(tot)} cab.</span>
+                    </div>
+                    <div class="text-xs text-slate-600 space-y-0.5">
+                      ${info.filas.filter(f=>Number(f.real||0)!==0).sort((x,y)=>(x.categoria||'').localeCompare(y.categoria||'','es')).map(f=>`<div class="flex justify-between"><span>${esc(f.categoria)}</span><span class="font-medium">${fmtN(f.real)}${f.kilosReal!=null?` · ${fmtN(f.kilosReal)} kg`:''}</span></div>`).join('')||'<div class="text-slate-300">Sin existencias</div>'}
+                    </div>
+                  </div>`; }).join('')}
+              </div>
+            </div>`; })()}
         </div>`;
     });
   }
@@ -18077,23 +18108,27 @@ pages.hacienda = async function() {
       <h3 class="font-semibold text-slate-800 mt-6 mb-2">Movimientos recientes</h3>
       <div class="kpi p-0 overflow-hidden">
         <table class="data">
-          <thead><tr><th>Fecha</th><th>Campo</th><th>Categoría</th><th>Tipo</th><th class="text-right">Cant.</th><th>Observaciones</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Campo</th><th>Lote</th><th>Categoría</th><th>Tipo</th><th class="text-right">Cant.</th><th>Observaciones</th><th></th></tr></thead>
           <tbody>
-            ${ultimos.map(m => {
+            ${(()=>{ const _loteNom=new Map((state.cache.lotes||[]).map(l=>[l.id,l.nombre])); return ultimos.map(m => {
               const s = hacTipoSigno(m.tipo);
               const c = Number(m.cantidad||0);
               const txt = (m.tipo==='ajuste') ? (c>=0?'+':'') + fmtN(c) : (s>0?'+':s<0?'-':'') + fmtN(Math.abs(c));
               const color = (m.tipo==='ajuste'?(c>0?'text-emerald-700':c<0?'text-red-600':'text-slate-500'):(s>0?'text-emerald-700':s<0?'text-red-600':'text-slate-500'));
+              const _loteTxt = (m.tipo==='traslado_in'||m.tipo==='traslado_out')
+                ? `${_loteNom.get(m.loteOrigen)||'—'} → ${_loteNom.get(m.loteDestino)||'—'}`
+                : (m.loteId ? (_loteNom.get(m.loteId)||'—') : '<span class="text-slate-300">campo</span>');
               return `<tr class="table-row">
                 <td>${fmtFecha(m.fecha)}</td>
                 <td>${esc((m.campo&&m.campo.nombre)||(camposMap.get(m.campoId)?.nombre)||'—')}</td>
+                <td class="text-xs text-slate-600">${_loteTxt}</td>
                 <td>${esc(m.categoria)}</td>
                 <td>${hacTipoLabel(m.tipo)}</td>
                 <td class="text-right font-semibold ${color}">${txt}</td>
                 <td class="text-slate-500 text-xs">${esc(m.observaciones||'')}</td>
                 <td class="text-right whitespace-nowrap">${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='hacMovEditar(${JSON.stringify(m.id)},"hacienda")'>✏️</button>`:''}${canD?`<button class="btn btn-ghost text-xs text-red-600" onclick='hacMovDel(${JSON.stringify(m.id)},"hacienda")'>🗑️</button>`:''}</td>
               </tr>`;
-            }).join('')}
+            }).join(''); })()}
           </tbody>
         </table>
       </div>`;
@@ -18232,6 +18267,7 @@ async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') 
   if (!campos || !campos.length) { try { campos = state.cache.campos = (await api('/api/campos')).data||[]; } catch {} }
   const todasCategorias = hacCategoriasDisponibles();
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
+  if (!state.cache.lotes || !state.cache.lotes.length) { try { state.cache.lotes = (await api('/api/lotes')).data || []; } catch {} }
   openModal({
     title: 'Nuevo movimiento de animales',
     body: `
@@ -18247,10 +18283,16 @@ async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') 
         </div>
         <div><label class="label">Fecha *</label><input id="h-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
         <div><label class="label" id="h-campo-lbl">Campo *</label>
-          <select id="h-campo" class="input">${campos.map(c=>`<option value="${c.id}" ${c.id===campoIdInit?'selected':''}>${esc(c.nombre)}</option>`).join('')||'<option value="">— Sin campos —</option>'}</select>
+          <select id="h-campo" class="input" onchange="hacMovLotesRefresh()">${campos.map(c=>`<option value="${c.id}" ${c.id===campoIdInit?'selected':''}>${esc(c.nombre)}</option>`).join('')||'<option value="">— Sin campos —</option>'}</select>
+        </div>
+        <div id="h-lote-wrap"><label class="label" id="h-lote-lbl">Lote / potrero (opcional)</label>
+          <select id="h-lote" class="input"><option value="">— Todo el campo —</option></select>
         </div>
         <div id="h-campodest-wrap" style="display:none"><label class="label">Campo destino *</label>
-          <select id="h-campodest" class="input">${campos.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
+          <select id="h-campodest" class="input" onchange="hacMovLotesRefresh()">${campos.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
+        </div>
+        <div id="h-lotedest-wrap" style="display:none"><label class="label">Lote / potrero destino (opcional)</label>
+          <select id="h-lotedest" class="input"><option value="">— Todo el campo —</option></select>
         </div>
         <div class="col-span-2"><label class="label">Categoría *</label>
           ${(()=>{ const cfgs=(state.cache.catHacienda||[]).filter(c=>c.activo!==false); const grupos={}; cfgs.forEach(c=>{ const raiz=_especieRaizHac(c.especie||'Otros'); (grupos[raiz]=grupos[raiz]||[]).push(c); }); const tieneGrupos=Object.keys(grupos).length>0; return tieneGrupos
@@ -18293,13 +18335,35 @@ async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') 
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="hacMovSave()">Registrar</button>`
   });
+  hacMovLotesRefresh();
   hacMovTipoChange();
+}
+// Llena los selectores de lote segun el campo elegido (origen y destino).
+function hacMovLotesRefresh() {
+  const lotes = state.cache.lotes || [];
+  const campoId = $('#h-campo')?.value || '';
+  const selO = $('#h-lote');
+  if (selO) {
+    const cur = selO.value;
+    const ls = lotes.filter(l => (l.campo?.id || l.campoId) === campoId);
+    selO.innerHTML = '<option value="">— Todo el campo —</option>' + ls.map(l=>`<option value="${esc(l.id)}">${esc(l.nombre)}</option>`).join('');
+    if (ls.some(l=>l.id===cur)) selO.value = cur;
+  }
+  const campoDest = $('#h-campodest')?.value || '';
+  const selD = $('#h-lotedest');
+  if (selD) {
+    const cur = selD.value;
+    const ls = lotes.filter(l => (l.campo?.id || l.campoId) === campoDest);
+    selD.innerHTML = '<option value="">— Todo el campo —</option>' + ls.map(l=>`<option value="${esc(l.id)}">${esc(l.nombre)}</option>`).join('');
+    if (ls.some(l=>l.id===cur)) selD.value = cur;
+  }
 }
 function hacMovTipoChange() {
   const t = $('#h-tipo').value;
   const esCambio = t==='cambio_categoria';
   const esVenta = t==='venta';
   $('#h-campodest-wrap').style.display = t==='traslado'?'':'none';
+  const ldw=$('#h-lotedest-wrap'); if(ldw) ldw.style.display = t==='traslado'?'':'none';
   $('#h-catdest-wrap').style.display   = esCambio?'':'none';
   const vw=$('#h-venta-wrap'); if(vw) vw.style.display = esVenta?'grid':'none';
   $('#h-ajuste-hint').style.display    = t==='ajuste'?'':'none';
@@ -18348,20 +18412,26 @@ async function hacMovSave() {
   const tipo = $('#h-tipo').value;
   const data = {
     campoId: $('#h-campo').value,
+    loteId: $('#h-lote')?.value || null,
     categoria: $('#h-cat').value.trim(),
     fecha: new Date($('#h-fec').value).toISOString(),
     tipo,
     cantidad: Number($('#h-cant').value||0),
     kilos: $('#h-kg')?.value ? Number($('#h-kg').value) : null,
     campoDestino: tipo==='traslado' ? $('#h-campodest').value : null,
+    loteDestino: tipo==='traslado' ? ($('#h-lotedest')?.value || null) : null,
     categoriaDestino: tipo==='cambio_categoria' ? $('#h-catdest').value : null,
     observaciones: $('#h-obs').value.trim()||null,
   };
   if (!data.campoId)   return toast('Elegí el campo','warn');
   if (!data.categoria) return toast('Categoría requerida','warn');
   if (!data.fecha)     return toast('Fecha requerida','warn');
-  if (tipo==='traslado' && (!data.campoDestino || data.campoDestino===data.campoId))
-    return toast('Elegí un campo destino distinto del origen','warn');
+  if (tipo==='traslado') {
+    const cDest = data.campoDestino || data.campoId;
+    // Permite traslado lote a lote dentro del mismo campo; solo bloquea mismo campo Y mismo lote.
+    if (cDest===data.campoId && (data.loteDestino||null)===(data.loteId||null))
+      return toast('Elegí un destino distinto del origen (otro campo u otro lote)','warn');
+  }
   if (tipo==='cambio_categoria') {
     if (!data.categoriaDestino) return toast('Elegí la categoría destino','warn');
     if (data.categoriaDestino===data.categoria) return toast('La categoría origen y destino deben ser distintas','warn');

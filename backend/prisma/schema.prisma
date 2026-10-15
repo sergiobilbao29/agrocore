@@ -1444,6 +1444,7 @@ model HaciendaStock {
   id            String   @id @default(cuid())
   companyId     String
   campoId       String
+  loteId        String?    // lote/potrero dentro del campo (null = nivel campo, como antes)
   categoria     String     // "Vacas", "Vaquillonas", "Terneros", "Toros", "Novillos"...
   declarado     Int       @default(0)   // lo registrado en SENASA / ARCA (CABEZAS)
   pesoPromedio  Float?     // kg promedio por cabeza (editable) — para proyección y banco
@@ -1454,7 +1455,7 @@ model HaciendaStock {
   company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   campo         Campo     @relation(fields: [campoId], references: [id], onDelete: Cascade)
 
-  @@unique([companyId, campoId, categoria])
+  @@unique([companyId, campoId, loteId, categoria])
   @@index([companyId])
   @@index([campoId])
 }
@@ -1463,6 +1464,7 @@ model HaciendaMovimiento {
   id            String   @id @default(cuid())
   companyId     String
   campoId       String
+  loteId        String?    // lote/potrero dentro del campo (null = nivel campo, como antes)
   categoria     String
   categoriaDestino String?  // destino en "cambio_categoria" (ej. Ternero -> Novillito)
   fecha         DateTime
@@ -1482,6 +1484,8 @@ model HaciendaMovimiento {
   facturaRef    String?    // link a la factura que generó la compra/venta (para revertir)
   campoOrigen   String?    // campo origen en traslados
   campoDestino  String?    // campo destino en traslados
+  loteOrigen    String?    // lote origen en traslados entre lotes
+  loteDestino   String?    // lote destino en traslados entre lotes
   observaciones String?
   createdAt     DateTime  @default(now())
 

@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.313.0';
+const AGROCORE_VERSION = '2.315.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -9112,6 +9112,7 @@ app.get('/api/dashboard/sueldos', requireCompany, requirePermission('dashboard:r
 // Validador del cuerpo de un stock declarado.
 const hacStockSchema = z.object({
   campoId: z.string(),
+  loteId: z.string().nullable().optional(),   // lote/potrero dentro del campo (null = nivel campo)
   categoria: z.string().min(1),
   declarado: z.number().int().nonnegative().optional(),
   pesoPromedio: z.number().nonnegative().nullable().optional(),
@@ -9121,6 +9122,11 @@ const hacStockSchema = z.object({
 async function _verifyCampo(req, campoId) {
   if (!campoId) return null;
   return prisma.campo.findFirst({ where: { id: campoId, companyId: req.companyId } });
+}
+// Verifica que un lote pertenezca a un campo de la empresa. Devuelve el lote o null.
+async function _verifyLote(req, loteId, campoId) {
+  if (!loteId) return null;
+  return prisma.lote.findFirst({ where: { id: loteId, campo: { id: campoId, companyId: req.companyId } } });
 }
 
 // Listar todos los stocks declarados de la empresa (con su campo).
@@ -9143,19 +9149,26 @@ app.post('/api/hacienda-stock', requireCompany, requirePermission('stock:create'
     const d = hacStockSchema.parse(req.body);
     const campo = await _verifyCampo(req, d.campoId);
     if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
-    const row = await prisma.haciendaStock.upsert({
-      where: { companyId_campoId_categoria: { companyId: req.companyId, campoId: d.campoId, categoria: d.categoria } },
-      create: {
-        companyId: req.companyId, campoId: d.campoId, categoria: d.categoria,
-        declarado: d.declarado || 0, pesoPromedio: d.pesoPromedio ?? null,
-        observaciones: d.observaciones || null,
-      },
-      update: {
+    const loteId = d.loteId || null;
+    if (loteId && !(await _verifyLote(req, loteId, d.campoId))) return res.status(400).json({ ok: false, error: 'Lote no válido para ese campo' });
+    // Upsert manual (el unique incluye loteId nullable, que Prisma no maneja bien en upsert).
+    const existente = await prisma.haciendaStock.findFirst({
+      where: { companyId: req.companyId, campoId: d.campoId, loteId, categoria: d.categoria },
+    });
+    let row;
+    if (existente) {
+      row = await prisma.haciendaStock.update({ where: { id: existente.id }, data: {
         declarado: d.declarado ?? 0,
         pesoPromedio: d.pesoPromedio !== undefined ? d.pesoPromedio : undefined,
         observaciones: d.observaciones ?? null,
-      },
-    });
+      }});
+    } else {
+      row = await prisma.haciendaStock.create({ data: {
+        companyId: req.companyId, campoId: d.campoId, loteId, categoria: d.categoria,
+        declarado: d.declarado || 0, pesoPromedio: d.pesoPromedio ?? null,
+        observaciones: d.observaciones || null,
+      }});
+    }
     res.status(201).json({ ok: true, data: row });
   } catch (e) { next(e); }
 });
@@ -9187,6 +9200,7 @@ app.delete('/api/hacienda-stock/:id', requireCompany, requirePermission('stock:d
 const HAC_TIPOS = ['nacimiento','muerte','compra','venta','traslado','ajuste','cambio_categoria'];
 const hacMovSchema = z.object({
   campoId: z.string(),
+  loteId: z.string().nullable().optional(),  // lote/potrero de origen (null = nivel campo)
   categoria: z.string().min(1),
   categoriaDestino: z.string().nullable().optional(),  // requerido si tipo='cambio_categoria'
   fecha: z.coerce.date(),
@@ -9194,6 +9208,7 @@ const hacMovSchema = z.object({
   cantidad: z.number().int(),  // CABEZAS. permite negativo para ajuste; resto positivos
   kilos: z.number().nonnegative().nullable().optional(),  // kg del movimiento (balanza)
   campoDestino: z.string().nullable().optional(),  // requerido si tipo='traslado'
+  loteDestino: z.string().nullable().optional(),  // lote destino del traslado (permite lote<->lote mismo campo)
   // --- Venta de hacienda (tipo='venta') ---
   precioKg: z.number().nonnegative().nullable().optional(),
   total: z.number().nonnegative().nullable().optional(),
@@ -9238,6 +9253,7 @@ app.get('/api/hacienda-movimientos', requireCompany, requirePermission('stock:re
   try {
     const where = { companyId: req.companyId };
     if (req.query.campoId) where.campoId = String(req.query.campoId);
+    if (req.query.loteId) where.loteId = String(req.query.loteId);
     if (req.query.categoria) where.categoria = String(req.query.categoria);
     const data = await prisma.haciendaMovimiento.findMany({
       where, orderBy: { fecha: 'desc' },
@@ -9254,28 +9270,38 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
     const d = hacMovSchema.parse(req.body);
     const campo = await _verifyCampo(req, d.campoId);
     if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
+    const loteId = d.loteId || null;
+    if (loteId && !(await _verifyLote(req, loteId, d.campoId))) return res.status(400).json({ ok: false, error: 'Lote de origen no válido para ese campo' });
 
     if (d.tipo === 'traslado') {
-      if (!d.campoDestino) return res.status(400).json({ ok: false, error: 'Falta el campo destino del traslado' });
-      if (d.campoDestino === d.campoId) return res.status(400).json({ ok: false, error: 'El campo origen y destino deben ser distintos' });
-      const destino = await _verifyCampo(req, d.campoDestino);
-      if (!destino) return res.status(400).json({ ok: false, error: 'Campo destino no válido' });
       if (d.cantidad <= 0) return res.status(400).json({ ok: false, error: 'La cantidad del traslado debe ser positiva' });
+      // El campo destino por defecto es el mismo (permite traslado lote<->lote dentro del campo).
+      const campoDestId = d.campoDestino || d.campoId;
+      const loteDestId = d.loteDestino || null;
+      const destino = await _verifyCampo(req, campoDestId);
+      if (!destino) return res.status(400).json({ ok: false, error: 'Campo destino no válido' });
+      if (loteDestId && !(await _verifyLote(req, loteDestId, campoDestId))) return res.status(400).json({ ok: false, error: 'Lote destino no válido para ese campo' });
+      // Origen y destino no pueden ser el mismo lugar (mismo campo Y mismo lote).
+      if (campoDestId === d.campoId && loteDestId === loteId) {
+        return res.status(400).json({ ok: false, error: 'El origen y el destino deben ser distintos (otro campo u otro lote)' });
+      }
 
       const result = await prisma.$transaction(async (tx) => {
         const out = await tx.haciendaMovimiento.create({
           data: {
-            companyId: req.companyId, campoId: d.campoId, categoria: d.categoria,
+            companyId: req.companyId, campoId: d.campoId, loteId, categoria: d.categoria,
             fecha: d.fecha, tipo: 'traslado_out', cantidad: d.cantidad,
-            campoOrigen: d.campoId, campoDestino: d.campoDestino,
+            campoOrigen: d.campoId, campoDestino: campoDestId,
+            loteOrigen: loteId, loteDestino: loteDestId,
             observaciones: d.observaciones || null,
           },
         });
         const inn = await tx.haciendaMovimiento.create({
           data: {
-            companyId: req.companyId, campoId: d.campoDestino, categoria: d.categoria,
+            companyId: req.companyId, campoId: campoDestId, loteId: loteDestId, categoria: d.categoria,
             fecha: d.fecha, tipo: 'traslado_in', cantidad: d.cantidad,
-            campoOrigen: d.campoId, campoDestino: d.campoDestino,
+            campoOrigen: d.campoId, campoDestino: campoDestId,
+            loteOrigen: loteId, loteDestino: loteDestId,
             observaciones: d.observaciones || null,
           },
         });
@@ -9293,7 +9319,7 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
       const esRend = d.modoVenta === 'rendimiento';
       const result = await prisma.$transaction(async (tx) => {
         const mov = await tx.haciendaMovimiento.create({ data: {
-          companyId: req.companyId, campoId: d.campoId, categoria: d.categoria,
+          companyId: req.companyId, campoId: d.campoId, loteId, categoria: d.categoria,
           fecha: d.fecha, tipo: 'venta', cantidad: d.cantidad, kilos: d.kilos ?? null,
           precioKg: d.precioKg ?? null, total: total || null, clienteId: d.clienteId || null,
           modoVenta: esRend ? 'rendimiento' : 'directo',
@@ -9326,7 +9352,7 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
       }
       const row = await prisma.haciendaMovimiento.create({
         data: {
-          companyId: req.companyId, campoId: d.campoId,
+          companyId: req.companyId, campoId: d.campoId, loteId,
           categoria: d.categoria, categoriaDestino: d.categoriaDestino,
           fecha: d.fecha, tipo: 'cambio_categoria', cantidad: d.cantidad,
           kilos: d.kilos ?? null, observaciones: d.observaciones || null,
@@ -9341,7 +9367,7 @@ app.post('/api/hacienda-movimientos', requireCompany, requirePermission('stock:c
     }
     const row = await prisma.haciendaMovimiento.create({
       data: {
-        companyId: req.companyId, campoId: d.campoId, categoria: d.categoria,
+        companyId: req.companyId, campoId: d.campoId, loteId, categoria: d.categoria,
         fecha: d.fecha, tipo: d.tipo, cantidad: d.cantidad,
         kilos: d.kilos ?? null, facturaRef: d.facturaRef || null,
         observaciones: d.observaciones || null,
@@ -9439,13 +9465,16 @@ app.delete('/api/hacienda-movimientos/:id', requireCompany, requirePermission('s
 // también del lado del servidor permite reportes y mejora performance.
 app.get('/api/hacienda-resumen', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
-    const [stocks, movs, campos] = await Promise.all([
+    const [stocks, movs, campos, lotes] = await Promise.all([
       prisma.haciendaStock.findMany({ where: { companyId: req.companyId } }),
       prisma.haciendaMovimiento.findMany({ where: { companyId: req.companyId } }),
       prisma.campo.findMany({ where: { companyId: req.companyId, activo: true }, select: { id: true, nombre: true } }),
+      prisma.lote.findMany({ where: { campo: { companyId: req.companyId } }, select: { id: true, nombre: true, campoId: true } }),
     ]);
+    const loteNombre = new Map(lotes.map(l => [l.id, l.nombre]));
     // Stock real por (campoId, categoria) a partir de movimientos.
     const real = {};   // key = `${campoId}::${categoria}` -> int
+    const realLote = {}; // key = `${campoId}::${loteId||''}::${categoria}` -> int (desglose por lote/potrero)
     const signo = (m) => {
       switch (m.tipo) {
         case 'nacimiento': case 'compra': case 'traslado_in':  return  Number(m.cantidad || 0);
@@ -9455,16 +9484,23 @@ app.get('/api/hacienda-resumen', requireCompany, requirePermission('stock:read')
       }
     };
     movs.forEach(m => {
+      const lo = m.loteId || '';
       if (m.tipo === 'cambio_categoria') {
-        // Baja en la categoría origen, alta en la destino (mismo campo).
+        // Baja en la categoría origen, alta en la destino (mismo campo y mismo lote).
         const kOut = m.campoId + '::' + m.categoria;
         const kIn  = m.campoId + '::' + (m.categoriaDestino || m.categoria);
         real[kOut] = (real[kOut] || 0) - Number(m.cantidad || 0);
         real[kIn]  = (real[kIn]  || 0) + Number(m.cantidad || 0);
+        const lOut = m.campoId + '::' + lo + '::' + m.categoria;
+        const lIn  = m.campoId + '::' + lo + '::' + (m.categoriaDestino || m.categoria);
+        realLote[lOut] = (realLote[lOut] || 0) - Number(m.cantidad || 0);
+        realLote[lIn]  = (realLote[lIn]  || 0) + Number(m.cantidad || 0);
         return;
       }
       const k = m.campoId + '::' + m.categoria;
       real[k] = (real[k] || 0) + signo(m);
+      const kl = m.campoId + '::' + lo + '::' + m.categoria;
+      realLote[kl] = (realLote[kl] || 0) + signo(m);
     });
     // Armar filas: unión de (declarados) y (categorías que aparecen sólo en movs).
     const claves = new Set([
@@ -9487,11 +9523,34 @@ app.get('/api/hacienda-resumen', requireCompany, requirePermission('stock:read')
         kilosDeclarado: pesoPromedio != null ? Math.round(declarado * pesoPromedio) : null,
       };
     });
+    // Desglose por lote/potrero (loteId vacío = nivel campo / sin lote asignado).
+    const clavesLote = new Set([
+      ...stocks.map(s => s.campoId + '::' + (s.loteId || '') + '::' + s.categoria),
+      ...Object.keys(realLote),
+    ]);
+    const filasLote = Array.from(clavesLote).map(k => {
+      const [campoId, loteId, categoria] = k.split('::');
+      const decl = stocks.find(s => s.campoId === campoId && (s.loteId || '') === loteId && s.categoria === categoria);
+      const declarado = decl ? decl.declarado : 0;
+      const r = realLote[k] || 0;
+      const pesoPromedio = decl?.pesoPromedio ?? null;
+      return {
+        campoId, loteId: loteId || null, loteNombre: loteId ? (loteNombre.get(loteId) || null) : null,
+        categoria,
+        stockId: decl ? decl.id : null,
+        declarado, real: r,
+        diferencia: r - declarado,
+        pesoPromedio,
+        kilosReal: pesoPromedio != null ? Math.round(r * pesoPromedio) : null,
+      };
+    }).filter(f => f.real !== 0 || f.declarado !== 0);
     res.json({
       ok: true,
       data: {
         campos,
         filas: filas.sort((a, b) => a.campoId.localeCompare(b.campoId) || a.categoria.localeCompare(b.categoria, 'es')),
+        filasLote: filasLote.sort((a, b) => a.campoId.localeCompare(b.campoId) || String(a.loteNombre||'~').localeCompare(String(b.loteNombre||'~'),'es') || a.categoria.localeCompare(b.categoria, 'es')),
+        lotes,
       },
     });
   } catch (e) { next(e); }
