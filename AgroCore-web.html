@@ -3028,6 +3028,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'15/10/2026',
+      titulo:'⏳ v2.312.0 — "Sin cobro ahora (queda a cobrar)" al editar/emitir una factura',
+      desc:'Al editar o emitir una factura de <b>Contado</b>, el selector de cobro tenía "Sin cobro" pero <b>no dejaba guardar</b> (lo tomaba como que no habías elegido). Ahora hay dos opciones claras: <b>"Elegí cómo cobrás"</b> (te obliga a completar) y <b>"⏳ Sin cobro ahora (queda pendiente / a cobrar)"</b>, que <b>sí guarda</b> la factura dejándola a cobrar. Esto sirve cuando el <b>cobro fue otro día</b>: dejás la factura sin cobro y después registrás el cobro desde <b>Cuentas a cobrar</b> con su <b>fecha real</b> (ahí se genera el Recibo que aparece en Movimientos de ventas). 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
       titulo:'✏️ v2.311.0 — Editar el cobro (cambiar método) + deshacer cobro más robusto',
       desc:'Ahora en <b>Movimientos de ventas</b>, en la fila de un <b>Cobro / Recibo</b>, hay un botón <b>✏️</b> para <b>corregir el pago</b> (por ejemplo, se cargó en <b>efectivo</b> y en realidad fue <b>transferencia</b>): deshace el cobro, repone la deuda y te reabre la pantalla de cobro para cargarlo con el método y la cuenta correctos. Además, el botón para editar una factura con cobro (🔓✏️) ahora <b>encuentra siempre el cobro</b> aunque no haya quedado un comprobante de Recibo (lo ubica por la deuda de la factura). 🌱' },
@@ -14668,7 +14671,8 @@ async function factForm(prefill = null) {
           <div>
             <label class="label">Método</label>
             <select id="vent-met" class="input" onchange="ventMetodoCambio('vent')">
-              <option value="">— Sin cobro (queda pendiente) —</option>
+              <option value="">— Elegí cómo cobrás —</option>
+              <option value="pendiente">⏳ Sin cobro ahora (queda pendiente / a cobrar)</option>
               <option value="efectivo">💵 Efectivo</option>
               <option value="cheque">💳 Cheque (de terceros recibido)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
@@ -14678,7 +14682,7 @@ async function factForm(prefill = null) {
           </div>
           <div id="vent-met-det"></div>
         </div>
-        <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís método se autoriza la factura Y se registra el cobro. Requiere que el cliente esté seleccionado (no consumidor final).</div>
+        <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís un método se registra el cobro junto con la factura (en la fecha de la factura). Si el cobro fue <b>otro día</b>, elegí <b>Sin cobro ahora</b> y después registrá el cobro desde <b>Cuentas a cobrar</b> con su fecha real.</div>
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
       ${(typeof ccRepartoHTML==='function')?ccRepartoHTML('vta'):''}
@@ -14829,7 +14833,7 @@ function ventMetodoCambio(prefix) {
   const met = document.getElementById(prefix + '-met')?.value;
   const det = document.getElementById(prefix + '-met-det');
   if (!det) return;
-  if (!met) { det.innerHTML = ''; return; }
+  if (!met || met === 'pendiente') { det.innerHTML = ''; return; }
   if (met === 'efectivo') {
     const cajas = state.cache.efectivoCajas || [];
     det.innerHTML = cajas.length
@@ -15027,7 +15031,7 @@ async function _cobroContadoDesdeVenta(facturaId, data, items) {
   if (data.condicionVenta !== 'Contado') return;
   const clienteId = document.getElementById('f-cli')?.value || null;
   const metodo = document.getElementById('vent-met')?.value;
-  if (!metodo) return;
+  if (!metodo || metodo === 'pendiente') return;  // "Sin cobro ahora": queda a cobrar
   const total = items.reduce((a, it) => a + Number(it.cantidad||0) * Number(it.precioUnit||0) * (1 + Number(it.alicuotaIva||0)/100), 0);
   const compTxt = data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0');
   try {
@@ -15149,10 +15153,11 @@ async function factSave() {
     const _met0 = document.getElementById('vent-met')?.value || '';
     const _focusCobro = () => { const w=document.getElementById('vent-cobro-wrap'); if(w){ w.classList.remove('hidden'); w.scrollIntoView({behavior:'smooth',block:'center'}); } const m=document.getElementById('vent-met'); if(m) m.focus(); };
     if (!_met0) {
-      // Contado: el cobro es OBLIGATORIO. No se puede guardar sin elegir cómo ingresa la plata.
+      // Contado: hay que elegir cómo ingresa la plata, O marcar "Sin cobro ahora" (queda pendiente).
       _focusCobro();
-      return toast('La venta es de CONTADO: elegí abajo CÓMO ingresa la plata (efectivo, transferencia, cheque…) y a qué caja/cuenta. Si querés dejarla a cobrar, cambiá la condición a Cuenta corriente.','warn');
+      return toast('Elegí abajo CÓMO ingresa la plata (efectivo, transferencia, cheque…) y a qué caja/cuenta. Si el cobro fue otro día o querés dejarla a cobrar, elegí "Sin cobro ahora".','warn');
     }
+    // _met0 === 'pendiente' pasa todas las validaciones de método de abajo (no registra cobro).
     if (_met0==='efectivo'      && !document.getElementById('vent-caja')?.value)    { _focusCobro(); return toast('Elegí la CAJA donde ingresa el efectivo.','warn'); }
     if (_met0==='transferencia' && !document.getElementById('vent-banco')?.value)   { _focusCobro(); return toast('Elegí la CUENTA BANCARIA de la transferencia.','warn'); }
     if (_met0==='cheque'        && !document.getElementById('vent-cheque')?.value)  { _focusCobro(); return toast('Elegí el CHEQUE recibido (o cargá uno nuevo).','warn'); }
