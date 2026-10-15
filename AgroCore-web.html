@@ -3028,6 +3028,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
+      titulo:'↩️ v2.313.0 — Deshacer un cobro/pago "suelto" desde la cuenta corriente',
+      desc:'Si por idas y vueltas quedó un <b>cobro o pago suelto</b> en la cuenta corriente (una fila "Cobro de…" / "Pago de…" <b>sin Recibo/OP</b>, que antes tenía candado y no se podía sacar), ahora en el <b>visor de cuenta corriente</b> esa fila tiene un botón <b>↩️</b>: repone la deuda y revierte el ingreso/egreso de caja o banco (el cheque vuelve a cartera). Si el cobro <b>sí tiene</b> un Recibo/OP, el sistema te manda a deshacerlo desde ese comprobante. Sirve para limpiar los movimientos que quedaron trabados. Requiere permiso Finanzas: eliminar. 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'15/10/2026',
       titulo:'⏳ v2.312.0 — "Sin cobro ahora (queda a cobrar)" al editar/emitir una factura',
       desc:'Al editar o emitir una factura de <b>Contado</b>, el selector de cobro tenía "Sin cobro" pero <b>no dejaba guardar</b> (lo tomaba como que no habías elegido). Ahora hay dos opciones claras: <b>"Elegí cómo cobrás"</b> (te obliga a completar) y <b>"⏳ Sin cobro ahora (queda pendiente / a cobrar)"</b>, que <b>sí guarda</b> la factura dejándola a cobrar. Esto sirve cuando el <b>cobro fue otro día</b>: dejás la factura sin cobro y después registrás el cobro desde <b>Cuentas a cobrar</b> con su <b>fecha real</b> (ahí se genera el Recibo que aparece en Movimientos de ventas). 🌱' },
@@ -19393,11 +19396,14 @@ function ccVerMovimientos(tipo, contactoId) {
         <tbody>
           ${movs.map(m => {
             saldoAc += Number(m.debe||0) - Number(m.haber||0);
+            const esCobroPago = /^(cobro|pago) de /i.test(m.detalle||'') && Number(m.haber||0) > 0.01;
             const esSistema = (m.referencia && /^(FAC|FACC|FACV|FACHR|GUIAH|GUIAHPAY|LIQ|LIQH|OP|REC|CPE|ARR|CRED)/i.test(m.referencia)) || /^(cobro|pago) de /i.test(m.detalle||'');
             const acc = (can('finanzas:update') && !esSistema)
               ? `<button class="text-slate-400 hover:text-sky-600" title="Editar" onclick="ccMovEditar('${tipo}','${contactoId}','${m.id}')">✏️</button>
                  <button class="text-slate-400 hover:text-red-600 ml-1" title="Eliminar" onclick="ccMovEliminar('${m.id}')">🗑️</button>`
-              : (esSistema ? `<span class="text-[10px] text-slate-300" title="Movimiento del sistema: se deshace desde su comprobante">🔒</span>` : '');
+              : (esCobroPago && can('finanzas:delete')
+                  ? `<button class="text-slate-400 hover:text-red-600" title="Deshacer este cobro/pago (repone la deuda y revierte caja/banco). Si tiene Recibo/OP, usá el ↩️ de ese comprobante." onclick="ccDeshacerCobroSuelto('${m.id}')">↩️</button>`
+                  : (esSistema ? `<span class="text-[10px] text-slate-300" title="Movimiento del sistema: se deshace desde su comprobante">🔒</span>` : ''));
             return `<tr class="table-row">
               <td>${fmtFecha(m.fecha)}</td>
               <td>${esc(m.detalle||'—')}${m.referencia?` <span class="text-[10px] text-slate-400">(${esc(m.referencia)})</span>`:''}</td>
@@ -19423,6 +19429,18 @@ async function ccMovEliminar(id){
     closeModal();
     delete state.cache.ctasCtes; pages.ctasCtes();
   } catch(e){ toast(e.message || 'No se pudo eliminar','error'); }
+}
+// Deshacer un cobro/pago SUELTO de la cuenta corriente (fila "Cobro de..."/"Pago de..."
+// que no tiene Recibo/OP asociado). Repone la deuda y revierte el ingreso/egreso.
+async function ccDeshacerCobroSuelto(id){
+  if (!confirm('¿Deshacer este cobro/pago?\n\nLa deuda vuelve a quedar PENDIENTE y se revierte el ingreso/egreso de caja o banco (si fue con cheque, vuelve a cartera).\n\nSi este cobro tiene un Recibo/OP, el sistema te va a pedir que lo deshagas desde ese comprobante.')) return;
+  try {
+    const r = await api('/api/ctas-ctes/'+id+'/deshacer-cobro-suelto', { method:'POST' });
+    if (r.warnings && r.warnings.length) alert('Atención:\n\n• ' + r.warnings.join('\n• '));
+    toast('Cobro/pago deshecho — la deuda quedó pendiente','success');
+    closeModal();
+    delete state.cache.ctasCtes; delete state.cache.cheques; pages.ctasCtes();
+  } catch(e){ toast(e.message || 'No se pudo deshacer','error'); }
 }
 // Editar un movimiento MANUAL (fecha, detalle, importe).
 function ccMovEditar(tipo, contactoId, movId){

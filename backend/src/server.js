@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.312.0';
+const AGROCORE_VERSION = '2.313.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7162,6 +7162,60 @@ app.post('/api/ctas-ctes/aplicar-credito', requireCompany, requirePermission('fi
       return { aplicadoTotal: Math.round(aplicadoTotal * 100) / 100 };
     });
     res.json({ ok: true, ...result });
+  } catch (e) { next(e); }
+});
+
+// Deshacer un COBRO/PAGO "huérfano" directamente desde el visor de cuenta corriente:
+// una fila "Cobro de..." / "Pago de..." (haber) que NO tiene un Recibo/OP asociado
+// (quedó suelta por idas y vueltas). Borra la fila, reabre la deuda con su misma
+// referencia y revierte el ingreso/egreso de caja o banco (best-effort). Si SÍ hay un
+// comprobante (Recibo/OP) que la respalda, no la borra: hay que usar el botón ↩️ de ese
+// comprobante en Movimientos de ventas/compras.
+app.post('/api/ctas-ctes/:id/deshacer-cobro-suelto', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const row = await prisma.ctaCte.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!row) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado' });
+    if (!(Number(row.haber || 0) > 0.01)) return res.status(400).json({ ok: false, error: 'Solo se puede deshacer una fila de COBRO/PAGO (haber).' });
+    const esCobroPago = /^(cobro|pago) de /i.test(row.detalle || '');
+    if (!esCobroPago) return res.status(400).json({ ok: false, error: 'Esta fila no es un cobro/pago. Editala o borrala con los botones de la fila.' });
+    // ¿Hay un Recibo/OP que la respalda? Si sí, redirigir a ↩️.
+    const docs = await prisma.documentoEmitido.findMany({
+      where: { companyId: req.companyId, tipo: { in: ['recibo_cobro', 'orden_pago'] }, ...(row.contactoId ? { contactoId: row.contactoId } : {}) },
+      select: { id: true, datos: true },
+    });
+    const respaldado = docs.some(d => {
+      const comps = (d.datos && Array.isArray(d.datos.comprobantes)) ? d.datos.comprobantes : [];
+      return comps.some(c => c && (c.ctaCteId === row.id || c.referencia === row.referencia));
+    });
+    if (respaldado) return res.status(400).json({ ok: false, error: 'Este cobro tiene un Recibo/OP asociado. Deshacelo con el botón ↩️ en la fila del Recibo/Orden de pago (Movimientos de ventas/compras).' });
+    const warns = [];
+    await prisma.$transaction(async (tx) => {
+      // Reabrir la deuda con la misma referencia (si tenía).
+      if (row.referencia) {
+        await tx.ctaCte.updateMany({ where: { companyId: req.companyId, contactoTipo: row.contactoTipo, contactoId: row.contactoId, referencia: row.referencia, debe: { gt: 0 } }, data: { pagado: false } });
+      }
+      await tx.ctaCte.delete({ where: { id: row.id } });
+      // Revertir el ingreso/egreso de caja/banco por contacto + monto + fecha (best-effort).
+      const monto = Number(row.haber || 0);
+      const nombre = row.contactoTipo === 'cliente'
+        ? (await tx.cliente.findFirst({ where: { id: row.contactoId, companyId: req.companyId }, select: { razonSocial: true } }))?.razonSocial
+        : (await tx.proveedor.findFirst({ where: { id: row.contactoId, companyId: req.companyId }, select: { razonSocial: true } }))?.razonSocial;
+      if (nombre && monto > 0.01) {
+        const desde = new Date(new Date(row.fecha).getTime() - 3 * 86400000);
+        const hasta = new Date(new Date(row.fecha).getTime() + 3 * 86400000);
+        const concepto = (row.contactoTipo === 'cliente' ? 'Cobro de ' : 'Pago de ') + nombre;
+        const efe = await tx.efectivo.findMany({ where: { companyId: req.companyId, concepto, fecha: { gte: desde, lte: hasta } } });
+        const efeT = efe.filter(e => Math.abs(Number(e.monto) - monto) < Math.max(1, monto * 0.02));
+        if (efeT.length) { await tx.efectivo.delete({ where: { id: efeT[0].id } }); }
+        else {
+          const ban = await tx.bancoMovimiento.findMany({ where: { companyId: req.companyId, concepto, fecha: { gte: desde, lte: hasta } } });
+          const banT = ban.filter(b => Math.abs(Number(b.monto) - monto) < Math.max(1, monto * 0.02));
+          if (banT.length) { await tx.bancoMovimiento.delete({ where: { id: banT[0].id } }); }
+          else warns.push('Borré el cobro de la cuenta corriente, pero revisá Tesorería: no pude ubicar con certeza el ingreso de caja/banco. Si fue con cheque, quedó en cartera.');
+        }
+      }
+    });
+    res.json({ ok: true, warnings: warns });
   } catch (e) { next(e); }
 });
 
