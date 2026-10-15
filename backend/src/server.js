@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.310.0';
+const AGROCORE_VERSION = '2.311.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5865,23 +5865,51 @@ app.post('/api/facturas/:id/deshacer-cobro', requireCompany, requirePermission('
     // Fila(s) de deuda (debe) de esta factura en la cuenta corriente.
     const debeRows = await prisma.ctaCte.findMany({ where: { companyId: req.companyId, referencia: `FAC-${req.params.id}`, debe: { gt: 0 } }, select: { id: true } });
     const debeIds = new Set(debeRows.map(r => r.id));
-    // Recibos de cobro del cliente que referencian alguna de esas filas en sus datos.
+    // Filas de COBRO (haber) de esta factura: el cobro crea un haber con la misma
+    // referencia FAC-<id> de la deuda. Si no hay haber, la factura no tiene cobro.
+    const haberRows = await prisma.ctaCte.findMany({ where: { companyId: req.companyId, referencia: `FAC-${req.params.id}`, haber: { gt: 0.01 } } });
+    if (!haberRows.length) {
+      return res.status(400).json({ ok: false, error: 'Esta factura no tiene un cobro registrado para deshacer.' });
+    }
+    // Recibos de cobro del cliente que referencian alguna fila (deuda o cobro) de esta factura.
     const recibos = await prisma.documentoEmitido.findMany({
       where: { companyId: req.companyId, tipo: 'recibo_cobro', ...(f.clienteId ? { contactoId: f.clienteId } : {}) },
       orderBy: { fecha: 'desc' },
     });
+    const refIds = new Set([...debeIds, ...haberRows.map(r => r.id)]);
     const objetivo = recibos.filter(doc => {
       const comps = (doc.datos && Array.isArray(doc.datos.comprobantes)) ? doc.datos.comprobantes : [];
-      return comps.some(c => debeIds.has(c && c.ctaCteId));
+      return comps.some(c => c && (refIds.has(c.ctaCteId) || c.referencia === `FAC-${req.params.id}`));
     });
-    if (!objetivo.length) {
-      return res.status(400).json({ ok: false, error: 'No encontré un Recibo de cobro vinculado a esta factura. Si el cobro se cargó aparte, deshacelo con el botón ↩️ en la fila del Recibo.' });
-    }
     let warns = [];
     await prisma.$transaction(async (tx) => {
-      for (const doc of objetivo) { warns = warns.concat(await _revertirReciboDocTx(tx, doc, req.companyId)); }
+      if (objetivo.length) {
+        // Camino preferido: revertir el/los Recibo(s) (repone deuda, saca ingreso, borra el doc).
+        for (const doc of objetivo) { warns = warns.concat(await _revertirReciboDocTx(tx, doc, req.companyId)); }
+      } else {
+        // Fallback: no hay comprobante de Recibo (p. ej. cobro de contado al emitir).
+        // Borramos las filas de cobro (haber) de esta factura, reabrimos la deuda y
+        // tratamos de revertir el ingreso de caja/banco por cliente + importe + fecha.
+        const cli = f.clienteId ? await tx.cliente.findFirst({ where: { id: f.clienteId, companyId: req.companyId } }) : null;
+        let total = 0; let fechaRef = null;
+        for (const h of haberRows) { total += Number(h.haber || 0); fechaRef = fechaRef || h.fecha; await tx.ctaCte.delete({ where: { id: h.id } }); }
+        await tx.ctaCte.updateMany({ where: { companyId: req.companyId, referencia: `FAC-${req.params.id}`, debe: { gt: 0 } }, data: { pagado: false } });
+        if (cli && total > 0.01 && fechaRef) {
+          const desde = new Date(new Date(fechaRef).getTime() - 3 * 86400000);
+          const hasta = new Date(new Date(fechaRef).getTime() + 3 * 86400000);
+          const efe = await tx.efectivo.findMany({ where: { companyId: req.companyId, tipo: 'ingreso', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
+          const efeT = efe.filter(e => Math.abs(Number(e.monto) - total) < Math.max(1, total * 0.02));
+          if (efeT.length) { await tx.efectivo.delete({ where: { id: efeT[0].id } }); }
+          else {
+            const ban = await tx.bancoMovimiento.findMany({ where: { companyId: req.companyId, tipo: 'transferencia_in', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
+            const banT = ban.filter(b => Math.abs(Number(b.monto) - total) < Math.max(1, total * 0.02));
+            if (banT.length) { await tx.bancoMovimiento.delete({ where: { id: banT[0].id } }); }
+            else { await tx.efectivo.deleteMany({ where: { companyId: req.companyId, referencia: `FACCOB-${req.params.id}` } }); await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, referencia: `FACCOB-${req.params.id}` } }); warns.push('Revisá Tesorería: no pude ubicar con certeza el ingreso de caja/banco del cobro. Si fue con cheque, quedó en cartera.'); }
+          }
+        }
+      }
     });
-    res.json({ ok: true, revertidos: objetivo.length, warnings: warns });
+    res.json({ ok: true, revertidos: objetivo.length || 1, warnings: warns });
   } catch (e) { next(e); }
 });
 

@@ -3029,6 +3029,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
+      titulo:'✏️ v2.311.0 — Editar el cobro (cambiar método) + deshacer cobro más robusto',
+      desc:'Ahora en <b>Movimientos de ventas</b>, en la fila de un <b>Cobro / Recibo</b>, hay un botón <b>✏️</b> para <b>corregir el pago</b> (por ejemplo, se cargó en <b>efectivo</b> y en realidad fue <b>transferencia</b>): deshace el cobro, repone la deuda y te reabre la pantalla de cobro para cargarlo con el método y la cuenta correctos. Además, el botón para editar una factura con cobro (🔓✏️) ahora <b>encuentra siempre el cobro</b> aunque no haya quedado un comprobante de Recibo (lo ubica por la deuda de la factura). 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
       titulo:'🔓 v2.310.0 — Editar una factura con cobro desde Movimientos de ventas',
       desc:'Una factura con un <b>cobro aplicado</b> aparecía bloqueada con candado 🔒 y no se podía corregir. Ahora, en <b>Movimientos de ventas</b>, ese candado es un botón <b>🔓✏️</b>: al tocarlo el sistema <b>deshace el cobro</b> (repone la deuda del cliente, revierte el ingreso de caja/banco y, si fue con cheque, el cheque vuelve a cartera) y te <b>abre el editor</b> en el mismo paso. Corregís la factura y la volvés a cobrar. Sirve para las facturas generadas desde Abonos / Clientes que habían quedado trabadas. Requiere permiso de Finanzas: eliminar. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/10/2026',
@@ -14102,7 +14105,7 @@ pages.facturacion = async function() {
               <td class="text-right whitespace-nowrap">
                 ${m.kind==='factura'
                   ? `<button class="btn btn-ghost text-xs" title="Ver comprobante" onclick='factVer(${JSON.stringify(m.id)})'>👁️</button>${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) ? (m.pagada ? (can('finanzas:delete') ? `<button class="btn btn-ghost text-xs" title="Tiene un cobro aplicado. Deshacer el cobro y editar." onclick='factDeshacerCobroYEditar(${JSON.stringify(m.id)})'>🔓✏️</button>` : `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un cobro aplicado. Deshacé el cobro (↩️ en la fila del Recibo) y después editá.">🔒</span>`) : `<button class="btn btn-ghost text-xs" title="Editar" onclick='factEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="${m.cae?'Anular':'Eliminar'}" onclick='${m.cae?`factAnular(${JSON.stringify(m.id)})`:`factVer(${JSON.stringify(m.id)})`}'>${m.cae?'🚫':'🗑️'}</button>`:''}${m.estado==='anulada' && (can('ventas:delete')||can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar definitivamente (libera el número para volver a cargarla)" onclick='factEliminar(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
-                  : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir recibo" onclick='reciboReabrir(${JSON.stringify(m.id)})'>🧾 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='reciboReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Deshacer cobro (repone la deuda y revierte caja/banco/pago de guía)" onclick='reciboRevertir(${JSON.stringify(m.id)})'>↩️</button>`:''}`}
+                  : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir recibo" onclick='reciboReabrir(${JSON.stringify(m.id)})'>🧾 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='reciboReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>${can('finanzas:delete')?`<button class="btn btn-ghost text-xs" title="Editar el cobro (método, caja/banco). Deshace este cobro y lo volvés a cargar correcto." onclick='cobroEditar(${JSON.stringify(m.id)})'>✏️</button><button class="btn btn-ghost text-xs text-red-600" title="Deshacer cobro (repone la deuda y revierte caja/banco/pago de guía)" onclick='reciboRevertir(${JSON.stringify(m.id)})'>↩️</button>`:''}`}
               </td>
             </tr>`).join('') || '<tr><td colspan="7" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
         </tbody>
@@ -20588,6 +20591,22 @@ async function reciboRevertir(docId){
     if (r.warnings && r.warnings.length) alert('Atención:\n\n• ' + r.warnings.join('\n• '));
     delete state.cache.ctasCtes; delete state.cache.cheques; closeModal();
     setTimeout(()=>location.reload(), 700);
+  } catch(e){ toast(e.message,'error'); }
+}
+// Editar un cobro: no se puede cambiar "en caliente" sin descuadrar la caja, así que
+// lo deshacemos (repone la deuda) y reabrimos el cobro para cargarlo con el método/
+// destino correctos (ej: estaba en efectivo y era transferencia).
+async function cobroEditar(docId){
+  if(!confirm('Para corregir el cobro (por ejemplo, estaba en EFECTIVO y fue TRANSFERENCIA) hay que deshacerlo y volver a cargarlo.\n\n¿Deshago este cobro ahora? La deuda del cliente queda pendiente y después lo cargás de nuevo con el método correcto.')) return;
+  try {
+    let contactoId = null;
+    try { const d = (await api('/api/documentos/'+docId)).data; contactoId = d && d.contactoId; } catch(_){}
+    const r = await api('/api/documentos/'+docId+'/revertir', { method:'POST' });
+    if (r.warnings && r.warnings.length) alert('Atención:\n\n• ' + r.warnings.join('\n• '));
+    delete state.cache.ctasCtes; delete state.cache.cheques;
+    toast('Cobro deshecho. Cargalo de nuevo con el método correcto.', 'success');
+    if (contactoId && typeof pagoCobroAbrir === 'function') { await pagoCobroAbrir('cobro', { contactoId }); }
+    else { toast('Abrí Cuentas a cobrar para registrar el cobro corregido.', 'info'); }
   } catch(e){ toast(e.message,'error'); }
 }
 
