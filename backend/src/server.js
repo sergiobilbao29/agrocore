@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.309.0';
+const AGROCORE_VERSION = '2.310.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1464,6 +1464,50 @@ app.post('/api/documentos/backfill-op', requireCompany, requirePermission('finan
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+// Helper reutilizable: revierte un Recibo de cobro (cliente) dentro de una tx ya abierta.
+// Borra los asientos "Cobro de..." del cliente en la fecha del recibo, reabre la deuda,
+// borra el pago de la guía si aplica, revierte el ingreso de caja/banco y borra el recibo.
+// Devuelve un array de avisos (best-effort). NO deshace cheques (quedan en cartera).
+async function _revertirReciboDocTx(tx, doc, companyId) {
+  const warns = [];
+  const total = Number(doc.total || (doc.datos || {}).monto || 0);
+  const cli = doc.contactoId ? await tx.cliente.findFirst({ where: { id: doc.contactoId, companyId } }) : null;
+  const desde = new Date(new Date(doc.fecha).getTime() - 2 * 86400000);
+  const hasta = new Date(new Date(doc.fecha).getTime() + 2 * 86400000);
+  const cobros = await tx.ctaCte.findMany({ where: {
+    companyId, contactoTipo: 'cliente', contactoId: doc.contactoId,
+    detalle: { startsWith: 'Cobro de' }, haber: { gt: 0 }, fecha: { gte: desde, lte: hasta },
+  }});
+  let restante = total; const refsReabrir = new Set();
+  for (const r of cobros.sort((a,b)=>Math.abs(new Date(a.fecha)-new Date(doc.fecha))-Math.abs(new Date(b.fecha)-new Date(doc.fecha)))) {
+    if (restante <= 0.01) break;
+    await tx.ctaCte.delete({ where: { id: r.id } });
+    if (r.referencia) refsReabrir.add(r.referencia);
+    restante = Math.round((restante - Number(r.haber || 0)) * 100) / 100;
+  }
+  for (const ref of refsReabrir) {
+    await tx.ctaCte.updateMany({ where: { companyId, contactoTipo:'cliente', contactoId: doc.contactoId, referencia: ref, debe:{ gt:0 } }, data:{ pagado:false } });
+    if (/^GUIAH-/.test(ref)) {
+      const guiaId = ref.replace(/^GUIAH-/, '');
+      await tx.guiaHaciendaPago.deleteMany({ where: { companyId, guiaId, observaciones: 'Cobro desde Cuenta corriente' } });
+    }
+  }
+  if (!cobros.length) warns.push('No encontré el asiento de cobro en la cuenta corriente; revisalo manualmente.');
+  if (cli && total > 0.01) {
+    const efe = await tx.efectivo.findMany({ where: { companyId, tipo:'ingreso', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
+    const efeT = efe.filter(e => Math.abs(Number(e.monto) - total) < Math.max(1, total*0.02));
+    if (efeT.length) { for (const e of efeT.slice(0,1)) await tx.efectivo.delete({ where: { id: e.id } }); }
+    else {
+      const ban = await tx.bancoMovimiento.findMany({ where: { companyId, tipo:'transferencia_in', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
+      const banT = ban.filter(b => Math.abs(Number(b.monto) - total) < Math.max(1, total*0.02));
+      if (banT.length) { for (const b of banT.slice(0,1)) await tx.bancoMovimiento.delete({ where: { id: b.id } }); }
+      else warns.push('No pude ubicar de forma unívoca el ingreso de caja/banco del cobro; revisá Tesorería. Si el cobro fue con cheque, el cheque quedó en cartera.');
+    }
+  }
+  await tx.documentoEmitido.delete({ where: { id: doc.id } });
+  return warns;
+}
+
 // Deshacer un pago (revertir una OP): repone la deuda del proveedor y revierte el
 // movimiento de caja/banco/cheque, y borra el comprobante. Transaccional.
 app.post('/api/documentos/:id/revertir', requireCompany, requirePermission('finanzas:delete'), async (req, res) => {
@@ -1478,49 +1522,8 @@ app.post('/api/documentos/:id/revertir', requireCompany, requirePermission('fina
     // reabre la deuda cobrada. Best-effort con avisos, igual que la OP.
     if (doc.tipo === 'recibo_cobro') {
       const companyId = req.companyId;
-      const rec = doc.datos || {};
-      const total = Number(doc.total || rec.monto || 0);
-      const cli = doc.contactoId ? await prisma.cliente.findFirst({ where: { id: doc.contactoId, companyId } }) : null;
-      const warns = [];
-      await prisma.$transaction(async (tx) => {
-        // 1) Asientos "Cobro de..." del cliente en la fecha del recibo → borrarlos y reabrir su deuda.
-        const desde = new Date(new Date(doc.fecha).getTime() - 2 * 86400000);
-        const hasta = new Date(new Date(doc.fecha).getTime() + 2 * 86400000);
-        const cobros = await tx.ctaCte.findMany({ where: {
-          companyId, contactoTipo: 'cliente', contactoId: doc.contactoId,
-          detalle: { startsWith: 'Cobro de' }, haber: { gt: 0 }, fecha: { gte: desde, lte: hasta },
-        }});
-        let restante = total; const refsReabrir = new Set();
-        for (const r of cobros.sort((a,b)=>Math.abs(new Date(a.fecha)-new Date(doc.fecha))-Math.abs(new Date(b.fecha)-new Date(doc.fecha)))) {
-          if (restante <= 0.01) break;
-          await tx.ctaCte.delete({ where: { id: r.id } });
-          if (r.referencia) refsReabrir.add(r.referencia);
-          restante = Math.round((restante - Number(r.haber || 0)) * 100) / 100;
-        }
-        for (const ref of refsReabrir) {
-          await tx.ctaCte.updateMany({ where: { companyId, contactoTipo:'cliente', contactoId: doc.contactoId, referencia: ref, debe:{ gt:0 } }, data:{ pagado:false } });
-          // 2) Si el cobro era de una guía DT-e, borrar el pago de la guía asociado.
-          if (/^GUIAH-/.test(ref)) {
-            const guiaId = ref.replace(/^GUIAH-/, '');
-            await tx.guiaHaciendaPago.deleteMany({ where: { companyId, guiaId, observaciones: 'Cobro desde Cuenta corriente' } });
-          }
-        }
-        if (!cobros.length) warns.push('No encontré el asiento de cobro en la cuenta corriente; revisalo manualmente.');
-        // 3) Recurso recibido (efectivo / banco) por el nombre del cliente y monto.
-        if (cli && total > 0.01) {
-          const efe = await tx.efectivo.findMany({ where: { companyId, tipo:'ingreso', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
-          const efeT = efe.filter(e => Math.abs(Number(e.monto) - total) < Math.max(1, total*0.02));
-          if (efeT.length) { for (const e of efeT.slice(0,1)) await tx.efectivo.delete({ where: { id: e.id } }); }
-          else {
-            const ban = await tx.bancoMovimiento.findMany({ where: { companyId, tipo:'transferencia_in', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
-            const banT = ban.filter(b => Math.abs(Number(b.monto) - total) < Math.max(1, total*0.02));
-            if (banT.length) { for (const b of banT.slice(0,1)) await tx.bancoMovimiento.delete({ where: { id: b.id } }); }
-            else warns.push('No pude ubicar de forma unívoca el ingreso de caja/banco del cobro; revisá Tesorería y ajustalo a mano si corresponde. Si el cobro fue con cheque, el cheque quedó en cartera.');
-          }
-        }
-        // 4) Borrar el recibo.
-        await tx.documentoEmitido.delete({ where: { id: doc.id } });
-      });
+      let warns = [];
+      await prisma.$transaction(async (tx) => { warns = await _revertirReciboDocTx(tx, doc, companyId); });
       return res.json({ ok:true, warnings: warns });
     }
 
@@ -5849,6 +5852,36 @@ app.delete('/api/facturas/:id', requireCompany, requirePermission('ventas:update
       await tx.factura.delete({ where: { id: req.params.id } }); // items caen por onDelete: Cascade
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Deshacer el COBRO aplicado a una factura de venta, para poder editarla luego.
+// Busca el/los Recibo(s) de cobro que cancelaron esta factura y los revierte
+// (repone la deuda, saca el ingreso de caja/banco; los cheques vuelven a cartera).
+app.post('/api/facturas/:id/deshacer-cobro', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const f = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId }, select: { id: true, clienteId: true } });
+    if (!f) return res.status(404).json({ ok: false, error: 'Factura no encontrada' });
+    // Fila(s) de deuda (debe) de esta factura en la cuenta corriente.
+    const debeRows = await prisma.ctaCte.findMany({ where: { companyId: req.companyId, referencia: `FAC-${req.params.id}`, debe: { gt: 0 } }, select: { id: true } });
+    const debeIds = new Set(debeRows.map(r => r.id));
+    // Recibos de cobro del cliente que referencian alguna de esas filas en sus datos.
+    const recibos = await prisma.documentoEmitido.findMany({
+      where: { companyId: req.companyId, tipo: 'recibo_cobro', ...(f.clienteId ? { contactoId: f.clienteId } : {}) },
+      orderBy: { fecha: 'desc' },
+    });
+    const objetivo = recibos.filter(doc => {
+      const comps = (doc.datos && Array.isArray(doc.datos.comprobantes)) ? doc.datos.comprobantes : [];
+      return comps.some(c => debeIds.has(c && c.ctaCteId));
+    });
+    if (!objetivo.length) {
+      return res.status(400).json({ ok: false, error: 'No encontré un Recibo de cobro vinculado a esta factura. Si el cobro se cargó aparte, deshacelo con el botón ↩️ en la fila del Recibo.' });
+    }
+    let warns = [];
+    await prisma.$transaction(async (tx) => {
+      for (const doc of objetivo) { warns = warns.concat(await _revertirReciboDocTx(tx, doc, req.companyId)); }
+    });
+    res.json({ ok: true, revertidos: objetivo.length, warnings: warns });
   } catch (e) { next(e); }
 });
 

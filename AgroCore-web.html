@@ -3028,6 +3028,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
+      titulo:'🔓 v2.310.0 — Editar una factura con cobro desde Movimientos de ventas',
+      desc:'Una factura con un <b>cobro aplicado</b> aparecía bloqueada con candado 🔒 y no se podía corregir. Ahora, en <b>Movimientos de ventas</b>, ese candado es un botón <b>🔓✏️</b>: al tocarlo el sistema <b>deshace el cobro</b> (repone la deuda del cliente, revierte el ingreso de caja/banco y, si fue con cheque, el cheque vuelve a cartera) y te <b>abre el editor</b> en el mismo paso. Corregís la factura y la volvés a cobrar. Sirve para las facturas generadas desde Abonos / Clientes que habían quedado trabadas. Requiere permiso de Finanzas: eliminar. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'14/10/2026',
       titulo:'🧾 v2.309.0 — Cargar un cheque de terceros nuevo en la misma pantalla del cobro',
       desc:'Al cobrar una factura de <b>contado con cheque</b> (en Emitir comprobante / Movimientos de ventas), ahora podés elegir <b>➕ Cargar un cheque nuevo</b> y completar banco, número, fecha de pago y librador <b>sin salir</b> a Tesorería. El cheque se crea como <b>de terceros en cartera</b> por el importe del cobro y queda listo en Tesorería → Cheques. Antes había que darlo de alta primero y volver a empezar. 🌱' },
@@ -14098,7 +14101,7 @@ pages.facturacion = async function() {
               <td>${m.kind==='factura'?(m.estado==='anulada'?'<span class="badge badge-red">Anulada</span>':(m.cae?'<span class="badge badge-green">Autorizada</span>':'<span class="badge badge-yellow">Sin CAE</span>')):'<span class="badge badge-green">Cobrado</span>'}</td>
               <td class="text-right whitespace-nowrap">
                 ${m.kind==='factura'
-                  ? `<button class="btn btn-ghost text-xs" title="Ver comprobante" onclick='factVer(${JSON.stringify(m.id)})'>👁️</button>${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) ? (m.pagada ? `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un cobro aplicado. Eliminá el cobro primero.">🔒</span>` : `<button class="btn btn-ghost text-xs" title="Editar" onclick='factEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="${m.cae?'Anular':'Eliminar'}" onclick='${m.cae?`factAnular(${JSON.stringify(m.id)})`:`factVer(${JSON.stringify(m.id)})`}'>${m.cae?'🚫':'🗑️'}</button>`:''}${m.estado==='anulada' && (can('ventas:delete')||can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar definitivamente (libera el número para volver a cargarla)" onclick='factEliminar(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
+                  ? `<button class="btn btn-ghost text-xs" title="Ver comprobante" onclick='factVer(${JSON.stringify(m.id)})'>👁️</button>${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) ? (m.pagada ? (can('finanzas:delete') ? `<button class="btn btn-ghost text-xs" title="Tiene un cobro aplicado. Deshacer el cobro y editar." onclick='factDeshacerCobroYEditar(${JSON.stringify(m.id)})'>🔓✏️</button>` : `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un cobro aplicado. Deshacé el cobro (↩️ en la fila del Recibo) y después editá.">🔒</span>`) : `<button class="btn btn-ghost text-xs" title="Editar" onclick='factEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="${m.cae?'Anular':'Eliminar'}" onclick='${m.cae?`factAnular(${JSON.stringify(m.id)})`:`factVer(${JSON.stringify(m.id)})`}'>${m.cae?'🚫':'🗑️'}</button>`:''}${m.estado==='anulada' && (can('ventas:delete')||can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar definitivamente (libera el número para volver a cargarla)" onclick='factEliminar(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
                   : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir recibo" onclick='reciboReabrir(${JSON.stringify(m.id)})'>🧾 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='reciboReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Deshacer cobro (repone la deuda y revierte caja/banco/pago de guía)" onclick='reciboRevertir(${JSON.stringify(m.id)})'>↩️</button>`:''}`}
               </td>
             </tr>`).join('') || '<tr><td colspan="7" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
@@ -15182,6 +15185,19 @@ async function factSave() {
 // en el portal de ARCA — entra al sistema con su CAE real para
 // mantener la trazabilidad, mover CtaCte y descontar stock.
 // ============================================================
+// Para una factura con cobro aplicado: deshace el cobro (repone deuda, saca el ingreso)
+// y, si sale bien, abre el editor. Así se puede corregir sin salir de Movimientos de ventas.
+async function factDeshacerCobroYEditar(id) {
+  if (!confirm('Esta factura tiene un COBRO aplicado, por eso está bloqueada.\n\n¿Deshago el cobro ahora para poder editarla?\n\n• Se repone la deuda del cliente y se revierte el ingreso de caja/banco.\n• Si el cobro fue con cheque, el cheque vuelve a cartera.\n• Después vas a poder editar la factura y volver a cobrarla.')) return;
+  try {
+    const r = await api('/api/facturas/'+id+'/deshacer-cobro', { method:'POST' });
+    const w = (r && r.warnings) || [];
+    if (w.length) toast('Cobro deshecho con observaciones: ' + w.join(' · '), 'warn');
+    else toast('Cobro deshecho. Ahora podés editar la factura.', 'success');
+    delete state.cache.facturas; delete state.cache.ctasCtes; delete state.cache.stockMap;
+    await factEditar(id);
+  } catch (e) { toast(e.message, 'error'); }
+}
 async function factEditar(id) {
   try {
     const r = await api('/api/facturas/'+id);
