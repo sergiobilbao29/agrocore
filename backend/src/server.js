@@ -145,6 +145,18 @@ function requirePermission(perm) {
     next();
   };
 }
+// Permite el acceso si el rol tiene AL MENOS UNO de los permisos indicados.
+// Útil para recursos compartidos entre módulos (ej: lotes los usan Producción y Ganadería/Stock).
+function requireAnyPermission(...permsReq) {
+  return (req, res, next) => {
+    if (req.user?.superAdmin) return next();
+    const perms = req.membership?.role?.permissions || [];
+    if (!permsReq.some(p => hasPermission(perms, p))) {
+      return res.status(403).json({ ok: false, error: 'Permiso denegado', required: permsReq.join(' o ') });
+    }
+    next();
+  };
+}
 
 // Categorías de producto que el rol activo puede VER en Stock. Devuelve null cuando
 // no hay restricción (superAdmin o el rol no configuró categorías = ve todas).
@@ -4189,7 +4201,7 @@ const loteSchema = z.object({
   activo: z.boolean().optional(),
 });
 
-app.get('/api/lotes', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+app.get('/api/lotes', requireCompany, requireAnyPermission('produccion:read','stock:read'), async (req, res, next) => {
   try {
     const rows = await prisma.lote.findMany({
       where: { campo: { companyId: req.companyId } },
