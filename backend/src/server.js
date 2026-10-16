@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.315.0';
+const AGROCORE_VERSION = '2.318.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -766,11 +766,19 @@ async function serializeUser(u) {
     }
   }
 
+  // ¿Este usuario es un vendedor/partner? (para habilitar su Panel de Partner)
+  let partnerVendedorId = null, partnerNombre = null;
+  try {
+    const pv = await prisma.vendedor.findFirst({ where: { userId: u.id }, select: { id: true, nombre: true } });
+    if (pv) { partnerVendedorId = pv.id; partnerNombre = pv.nombre; }
+  } catch (_) { /* tabla Vendedor puede no existir en instancias viejas */ }
+
   return {
     id: u.id, email: u.email, alias: u.alias || null,
     nombre: u.nombre, apellido: u.apellido,
     fotoUrl: u.fotoUrl || null,
     superAdmin: u.superAdmin,
+    partnerVendedorId, partnerNombre,
     oculto: u.oculto || false,
     empleadoId: u.empleadoId || null,
     choferId: u.choferId || null,
@@ -1826,6 +1834,8 @@ const empresaSchema = z.object({
   usaCentrosCosto: z.boolean().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
+  vendedorId: z.string().nullable().optional(),
+  facturarA: z.enum(['cliente','vendedor']).optional(),
 });
 
 app.get('/api/empresas', async (req, res, next) => {
@@ -1879,6 +1889,7 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
       ciudad: z.string().nullable().optional(),
       contactos: z.array(_contactoSchema).nullable().optional(),
       mantenimiento: z.boolean().optional(),
+      vendedorId: z.string().nullable().optional(),
       segEstado: z.string().nullable().optional(),
       segNotas: z.string().nullable().optional(),
       fechaAlta: z.coerce.date().nullable().optional(),
@@ -1897,6 +1908,7 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
       provincia: d.provincia || null, ciudad: d.ciudad || null,
       contactos: (_cont && _cont.length) ? _cont : undefined,
       mantenimiento: !!d.mantenimiento,
+      vendedorId: d.vendedorId || null,
       passwordHash: '', token, expiresAt: new Date(0),   // lead manual: no es un alta de prueba real
       verifiedAt: null, companyId: null,
       segEstado: d.segEstado || 'Nuevo', segNotas: d.segNotas || 'Cargado a mano',
@@ -1927,6 +1939,7 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
       ciudad: z.string().nullable().optional(),
       contactos: z.array(_contactoSchema).nullable().optional(),
       mantenimiento: z.boolean().optional(),
+      vendedorId: z.string().nullable().optional(),
       fechaAlta: z.coerce.date().nullable().optional(),
       origen: z.string().max(40).nullable().optional(),
       segPrimerContacto: z.coerce.date().nullable().optional(),
@@ -1948,6 +1961,7 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     ['cuit','telefono','actividad','provincia','ciudad'].forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
     if (d.contactos !== undefined) { const c = Array.isArray(d.contactos) ? d.contactos.filter(x => (x.nombre || x.tel || x.email)) : []; data.contactos = c.length ? c : null; }
     if (d.mantenimiento !== undefined) data.mantenimiento = !!d.mantenimiento;
+    if (d.vendedorId !== undefined) data.vendedorId = d.vendedorId || null;
     if (d.fechaAlta) data.createdAt = d.fechaAlta;
     // Resiliente: si el Prisma Client de esta instancia todavía no conoce las columnas
     // nuevas (falta prisma generate tras la migración v2.224), guardamos igual lo que
@@ -1956,9 +1970,9 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     try {
       row = await prisma.trialSignup.update({ where: { id: cur.id }, data });
     } catch (e1) {
-      const nuevos = ['provincia','ciudad','contactos','mantenimiento','origen','segPrimerContacto','segUltimoContacto'];
+      const nuevos = ['provincia','ciudad','contactos','mantenimiento','vendedorId','origen','segPrimerContacto','segUltimoContacto'];
       const msg = String(e1 && e1.message || '');
-      if (/Unknown arg|Unknown field|provincia|ciudad|contactos|mantenimiento|origen|segPrimerContacto|segUltimoContacto|column .* does not exist/i.test(msg)) {
+      if (/Unknown arg|Unknown field|provincia|ciudad|contactos|mantenimiento|vendedorId|origen|segPrimerContacto|segUltimoContacto|column .* does not exist/i.test(msg)) {
         const dataBase = { ...data }; nuevos.forEach(k => delete dataBase[k]);
         row = await prisma.trialSignup.update({ where: { id: cur.id }, data: dataBase });
         aviso = 'Se guardaron los datos principales. Provincia/Ciudad/Contactos/Mantenimiento requieren actualizar la base en esta instancia (corré Fix-Prisma).';
@@ -2009,6 +2023,261 @@ app.delete('/api/empresas/trial-leads/:id', async (req, res, next) => {
     if (!cur) return res.status(404).json({ ok: false, error: 'Lead no encontrado' });
     await prisma.trialSignup.delete({ where: { id: cur.id } });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── Vendedores / Partners (red comercial del dueño) ───────────────────────────
+// Modelo global (no por empresa). Solo superAdmin. Etapa 1: ABM + vínculos.
+const _vendedorEscala = z.array(z.object({
+  min: z.number().nonnegative(),
+  max: z.number().nullable().optional(),   // null = sin tope
+  pct: z.number().min(0).max(100),
+})).nullable().optional();
+const _vendedorSchema = z.object({
+  nombre: z.string().min(1),
+  email: z.string().nullable().optional(),
+  telefono: z.string().nullable().optional(),
+  cuit: z.string().nullable().optional(),
+  activo: z.boolean().optional(),
+  comisionEscala: _vendedorEscala,
+  pagoUnico: z.number().nonnegative().nullable().optional(),
+  mensualidad: z.number().nonnegative().nullable().optional(),
+  moneda: z.string().optional(),
+  userId: z.string().nullable().optional(),
+  notas: z.string().nullable().optional(),
+});
+// Defaults del esquema Renzo (editable por vendedor).
+const VEND_ESCALA_DEFAULT = [{ min: 1, max: 3, pct: 10 }, { min: 4, max: 9, pct: 15 }, { min: 10, max: null, pct: 20 }];
+const VEND_PAGO_UNICO_DEFAULT = 1000;
+const VEND_MENSUALIDAD_DEFAULT = 100;
+// Devuelve el % de comisión segun la cantidad historica de clientes (tramo vigente).
+function _comisionPct(escala, nClientes) {
+  const esc = (Array.isArray(escala) && escala.length) ? escala : VEND_ESCALA_DEFAULT;
+  const n = Number(nClientes || 0);
+  let pct = 0;
+  for (const t of esc) {
+    const min = Number(t.min || 0), max = (t.max == null ? Infinity : Number(t.max));
+    if (n >= min && n <= max) { pct = Number(t.pct || 0); break; }
+  }
+  // Si supera todos los tramos definidos, usa el pct del ultimo tramo (sin tope).
+  if (!pct && n > 0) { const ult = esc[esc.length - 1]; if (ult && (ult.max == null || n > Number(ult.max))) pct = Number(ult.pct || 0); }
+  return pct;
+}
+app.get('/api/vendedores', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const data = await prisma.vendedor.findMany({ orderBy: [{ activo: 'desc' }, { nombre: 'asc' }] });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/vendedores', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const d = _vendedorSchema.parse(req.body);
+    const row = await prisma.vendedor.create({ data: {
+      nombre: d.nombre.trim(), email: d.email || null, telefono: d.telefono || null,
+      cuit: d.cuit || null, activo: d.activo !== false,
+      comisionEscala: (d.comisionEscala && d.comisionEscala.length) ? d.comisionEscala : undefined,
+      pagoUnico: d.pagoUnico ?? null, mensualidad: d.mensualidad ?? null, moneda: d.moneda || 'USD',
+      userId: d.userId || null, notas: d.notas || null,
+    }});
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.put('/api/vendedores/:id', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const cur = await prisma.vendedor.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Vendedor no encontrado' });
+    const d = _vendedorSchema.partial().parse(req.body);
+    const data = {};
+    if (d.nombre !== undefined && d.nombre) data.nombre = d.nombre.trim();
+    ['email','telefono','cuit','userId','notas'].forEach(k => { if (d[k] !== undefined) data[k] = d[k] || null; });
+    if (d.activo !== undefined) data.activo = !!d.activo;
+    if (d.comisionEscala !== undefined) data.comisionEscala = (d.comisionEscala && d.comisionEscala.length) ? d.comisionEscala : null;
+    if (d.pagoUnico !== undefined) data.pagoUnico = d.pagoUnico ?? null;
+    if (d.mensualidad !== undefined) data.mensualidad = d.mensualidad ?? null;
+    if (d.moneda !== undefined && d.moneda) data.moneda = d.moneda;
+    const row = await prisma.vendedor.update({ where: { id: cur.id }, data });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.delete('/api/vendedores/:id', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const cur = await prisma.vendedor.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!cur) return res.status(404).json({ ok: false, error: 'Vendedor no encontrado' });
+    // No borrar si tiene empresas o leads vinculados: primero desvincular.
+    const [emp, leads] = await Promise.all([
+      prisma.company.count({ where: { vendedorId: cur.id } }),
+      prisma.trialSignup.count({ where: { vendedorId: cur.id } }),
+    ]);
+    if (emp || leads) return res.status(409).json({ ok: false, error: `No se puede borrar: tiene ${emp} empresa(s) y ${leads} lead(s) vinculados. Desvinculalos primero o marcalo inactivo.` });
+    await prisma.vendedor.delete({ where: { id: cur.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Calcula las metricas de comision/MRR/deuda de un vendedor para un periodo (YYYY-MM).
+function _vendedorMetricas(v, comps, periodo) {
+  const pagoUnico   = v.pagoUnico   != null ? v.pagoUnico   : VEND_PAGO_UNICO_DEFAULT;
+  const mensualidad = v.mensualidad != null ? v.mensualidad : VEND_MENSUALIDAD_DEFAULT;
+  const mias = comps.filter(c => c.vendedorId === v.id);
+  const activas = mias.filter(c => c.activo !== false);
+  const clientes = activas.length;
+  const clientesFactVend = activas.filter(c => c.facturarA === 'vendedor').length;
+  const pct = _comisionPct(v.comisionEscala, clientes);
+  const esMes = (d) => d && String(new Date(d).toISOString().slice(0, 7)) === periodo;
+  const altasMes = mias.filter(c => esMes(c.createdAt)).length;
+  return {
+    pagoUnico, mensualidad, moneda: v.moneda || 'USD',
+    clientes, clientesFactVend, pct,
+    altasMes,
+    comisionMes: _comisionMonto(altasMes, pagoUnico, pct), // altas del mes x pago unico x pct
+    mrr: mensualidad * clientes,
+    deudaMes: mensualidad * clientesFactVend,
+  };
+}
+function _comisionMonto(altas, pagoUnico, pct) { return Math.round(altas * pagoUnico * (pct / 100) * 100) / 100; }
+
+// Tablero de vendedores (vista del dueño): clientes, MRR, comision del mes, deuda del mes y saldo cta cte.
+app.get('/api/vendedores/tablero', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const periodo = String(req.query.periodo || new Date().toISOString().slice(0, 7));
+    const [vends, comps, movs] = await Promise.all([
+      prisma.vendedor.findMany({ orderBy: [{ activo: 'desc' }, { nombre: 'asc' }] }),
+      prisma.company.findMany({ select: { id: true, name: true, vendedorId: true, facturarA: true, activo: true, plan: true, createdAt: true } }),
+      prisma.vendedorMovimiento.findMany(),
+    ]);
+    const saldoById = {}; const liqPeriodoById = {};
+    movs.forEach(m => {
+      saldoById[m.vendedorId] = (saldoById[m.vendedorId] || 0) + Number(m.haber || 0) - Number(m.debe || 0);
+      if (m.periodo) (liqPeriodoById[m.vendedorId] = liqPeriodoById[m.vendedorId] || new Set()).add(m.periodo);
+    });
+    const data = vends.map(v => {
+      const met = _vendedorMetricas(v, comps, periodo);
+      const pagoUnico = met.pagoUnico;
+      met.comisionMes = _comisionMonto(met.altasMes, pagoUnico, met.pct);
+      met.comisionAcum = _comisionMonto(met.clientes, pagoUnico, met.pct);
+      return {
+        id: v.id, nombre: v.nombre, email: v.email, telefono: v.telefono, activo: v.activo,
+        ...met,
+        saldoCta: Math.round((saldoById[v.id] || 0) * 100) / 100,
+        liquidadoMes: !!(liqPeriodoById[v.id] && liqPeriodoById[v.id].has(periodo)),
+      };
+    });
+    // Totales directos (empresas sin vendedor) para los KPIs del tablero.
+    const directas = comps.filter(c => !c.vendedorId && c.activo !== false).length;
+    res.json({ ok: true, data, periodo, clientesDirectos: directas });
+  } catch (e) { next(e); }
+});
+
+// Cuenta corriente de un vendedor (movimientos + saldo + pendiente del mes).
+app.get('/api/vendedores/:id/cuenta', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const v = await prisma.vendedor.findUnique({ where: { id: req.params.id } });
+    if (!v) return res.status(404).json({ ok: false, error: 'Vendedor no encontrado' });
+    const periodo = String(req.query.periodo || new Date().toISOString().slice(0, 7));
+    const [comps, movs] = await Promise.all([
+      prisma.company.findMany({ select: { id: true, name: true, vendedorId: true, facturarA: true, activo: true, createdAt: true } }),
+      prisma.vendedorMovimiento.findMany({ where: { vendedorId: v.id }, orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }] }),
+    ]);
+    const met = _vendedorMetricas(v, comps, periodo);
+    met.comisionMes = _comisionMonto(met.altasMes, met.pagoUnico, met.pct);
+    const saldo = movs.reduce((a, m) => a + Number(m.haber || 0) - Number(m.debe || 0), 0);
+    const liquidadoMes = movs.some(m => m.periodo === periodo && (m.tipo === 'comision_alta' || m.tipo === 'deuda_mensual' || m.tipo === 'liquidacion'));
+    res.json({ ok: true, data: { vendedor: v, movimientos: movs, saldo: Math.round(saldo * 100) / 100, periodo, metricas: met, liquidadoMes } });
+  } catch (e) { next(e); }
+});
+
+// Liquidar un periodo: registra la comision del mes (a favor) y la deuda mensual (a cargo).
+app.post('/api/vendedores/:id/liquidar', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const v = await prisma.vendedor.findUnique({ where: { id: req.params.id } });
+    if (!v) return res.status(404).json({ ok: false, error: 'Vendedor no encontrado' });
+    const periodo = String((req.body && req.body.periodo) || new Date().toISOString().slice(0, 7));
+    const yaLiq = await prisma.vendedorMovimiento.count({ where: { vendedorId: v.id, periodo, tipo: { in: ['comision_alta', 'deuda_mensual'] } } });
+    if (yaLiq > 0) return res.status(409).json({ ok: false, error: `El período ${periodo} ya fue liquidado. Borrá esos movimientos si querés recalcularlo.` });
+    const comps = await prisma.company.findMany({ select: { id: true, vendedorId: true, facturarA: true, activo: true, createdAt: true } });
+    const met = _vendedorMetricas(v, comps, periodo);
+    const comisionMes = _comisionMonto(met.altasMes, met.pagoUnico, met.pct);
+    const deudaMes = met.deudaMes;
+    const moneda = v.moneda || 'USD';
+    const creados = [];
+    if (comisionMes > 0) creados.push(await prisma.vendedorMovimiento.create({ data: {
+      vendedorId: v.id, tipo: 'comision_alta', periodo, moneda,
+      detalle: `Comisión ${periodo}: ${met.altasMes} alta(s) × ${met.pct}% de ${moneda} ${met.pagoUnico}`,
+      haber: comisionMes, debe: 0,
+    }}));
+    if (deudaMes > 0) creados.push(await prisma.vendedorMovimiento.create({ data: {
+      vendedorId: v.id, tipo: 'deuda_mensual', periodo, moneda,
+      detalle: `Mantenimiento ${periodo}: ${met.clientesFactVend} cliente(s) × ${moneda} ${met.mensualidad} (facturado al partner)`,
+      debe: deudaMes, haber: 0,
+    }}));
+    if (!creados.length) return res.status(400).json({ ok: false, error: 'No hay comisión ni deuda para liquidar en este período.' });
+    res.status(201).json({ ok: true, data: creados, neto: Math.round((comisionMes - deudaMes) * 100) / 100 });
+  } catch (e) { next(e); }
+});
+
+// Alta manual de un movimiento de cuenta corriente del vendedor (pago / ajuste).
+app.post('/api/vendedores/:id/movimiento', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const v = await prisma.vendedor.findUnique({ where: { id: req.params.id } });
+    if (!v) return res.status(404).json({ ok: false, error: 'Vendedor no encontrado' });
+    const d = z.object({
+      tipo: z.enum(['liquidacion', 'ajuste']).optional(),
+      detalle: z.string().min(1),
+      debe: z.number().nonnegative().optional(),
+      haber: z.number().nonnegative().optional(),
+      fecha: z.coerce.date().optional(),
+    }).parse(req.body);
+    const row = await prisma.vendedorMovimiento.create({ data: {
+      vendedorId: v.id, tipo: d.tipo || 'ajuste', detalle: d.detalle.trim(),
+      debe: d.debe || 0, haber: d.haber || 0, moneda: v.moneda || 'USD',
+      fecha: d.fecha || new Date(),
+    }});
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+
+// Borrar un movimiento de cuenta corriente del vendedor.
+app.delete('/api/vendedores/:id/movimiento/:movId', async (req, res, next) => {
+  try {
+    if (!req.user.superAdmin) return res.status(403).json({ ok: false, error: 'Solo superAdmin' });
+    const m = await prisma.vendedorMovimiento.findFirst({ where: { id: req.params.movId, vendedorId: req.params.id } });
+    if (!m) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado' });
+    await prisma.vendedorMovimiento.delete({ where: { id: m.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Panel del Partner: el propio vendedor (usuario vinculado) ve LO SUYO.
+app.get('/api/partner/mi-panel', async (req, res, next) => {
+  try {
+    const v = await prisma.vendedor.findFirst({ where: { userId: req.user.id } });
+    if (!v) return res.status(403).json({ ok: false, error: 'Tu usuario no está vinculado a un vendedor/partner.' });
+    const periodo = String(req.query.periodo || new Date().toISOString().slice(0, 7));
+    const [comps, movs] = await Promise.all([
+      prisma.company.findMany({ where: { vendedorId: v.id }, select: { id: true, name: true, vendedorId: true, facturarA: true, activo: true, plan: true, createdAt: true } }),
+      prisma.vendedorMovimiento.findMany({ where: { vendedorId: v.id }, orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }] }),
+    ]);
+    let leads = [];
+    try { leads = await prisma.trialSignup.findMany({ where: { vendedorId: v.id }, orderBy: { createdAt: 'desc' }, select: { id: true, nombre: true, empresa: true, segEstado: true, createdAt: true } }); } catch (_) {}
+    const met = _vendedorMetricas(v, comps, periodo);
+    met.comisionMes = _comisionMonto(met.altasMes, met.pagoUnico, met.pct);
+    met.comisionAcum = _comisionMonto(met.clientes, met.pagoUnico, met.pct);
+    const saldo = movs.reduce((a, m) => a + Number(m.haber || 0) - Number(m.debe || 0), 0);
+    res.json({ ok: true, data: {
+      vendedor: { id: v.id, nombre: v.nombre, email: v.email, moneda: v.moneda || 'USD' },
+      periodo, metricas: met, saldo: Math.round(saldo * 100) / 100,
+      movimientos: movs,
+      clientes: comps.map(c => ({ id: c.id, name: c.name, facturarA: c.facturarA, activo: c.activo, plan: c.plan, createdAt: c.createdAt })),
+      leads,
+    }});
   } catch (e) { next(e); }
 });
 

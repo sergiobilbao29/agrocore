@@ -1059,6 +1059,7 @@ const MODULES = [
   { id:'inicio',        label:'Inicio',               icon:'🏠', perm:null,              section:'' },
   { id:'mensajes',      label:'Mensajes y asistente', icon:'💬', section:'' },
   { id:'ayuda',         label:'Ayuda y manual',       icon:'📖', perm:null,              section:'' },
+  { id:'partner',       label:'Mi panel (Partner)',   icon:'🤝', perm:'partner',         section:'' },
 
   // ===== TABLERO — vistas rápidas y resúmenes =====
   { id:'dashboard',     label:'Dashboard',            icon:'📊', perm:'dashboard:read',  section:'Tablero' },
@@ -1880,6 +1881,7 @@ function renderNav() {
   // visibles pero con lo de ARCA grisado. Libro IVA se muestra bloqueado (no aplica).
   let items = MODULES.filter(m => {
     if (!m.perm) return true;   // Inicio y similares: siempre visibles
+    if (m.perm === 'partner') return !!state.user?.partnerVendedorId;   // Panel de Partner: solo si el usuario es vendedor
     if (empresaOcultaModulo(m.id)) return false;   // oculto por actividad de la empresa
     if (!puedeVerModulo(m)) return false;   // lista blanca de menú por rol
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
@@ -3028,6 +3030,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/10/2026',
+      titulo:'📊 v2.318.0 — Tablero de vendedores + Panel de Partner',
+      desc:'Tercera y última etapa de la red de vendedores. Desde <b>Empresas → 📊 Tablero vendedores</b> (Super Admin) ves todo junto: KPIs de <b>clientes directos</b> y <b>por vendedores</b>, <b>MRR total</b>, <b>comisiones a pagar</b> y <b>deuda de vendedores</b>; la tabla de <b>vendedores</b> (clientes, MRR, comisión y deuda del mes, saldo y botón <b>Liquidar</b>), la de <b>clientes</b> con la columna <b>"Se factura a"</b>, y la de <b>leads</b> con su estado. Además, cada vendedor con un <b>usuario vinculado</b> entra con su login y ve su propio <b>Mi panel (Partner)</b>: sus clientes, su comisión del mes y su cuenta corriente. (Para habilitarlo, en la ficha del vendedor elegí su "Usuario para su Panel de Partner".) 🌱' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/10/2026',
+      titulo:'💰 v2.317.0 — Comisiones y cuenta corriente del vendedor',
+      desc:'Segunda etapa de la red de vendedores. Ahora cada <b>vendedor</b> tiene su <b>escala de comisión</b> (por ejemplo 1-3 clientes 10%, 4-9 15%, 10+ 20%), su <b>pago único</b> por alta y la <b>mensualidad</b> por cliente (editable en su ficha). Desde <b>Empresas → Vendedores → 💰</b> ves su <b>cuenta corriente</b>: clientes, MRR que genera, <b>comisión del mes</b> (altas × % según su escala) y <b>deuda del mes</b> (mantenimiento de los clientes facturados al partner). El botón <b>Liquidar</b> registra automáticamente esos movimientos en la cuenta, y con <b>+ Pago / ajuste</b> saldás lo que le pagaste. El <b>Tablero</b> con todos los vendedores juntos y el Panel del Partner llegan en la próxima etapa. 🌱' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
+      titulo:'🤝 v2.316.0 — Red de vendedores / partners (base de datos)',
+      desc:'Arranca la <b>gestión de vendedores / partners</b> (solo Super Admin, en <b>Empresas</b>). Hay un botón nuevo <b>🤝 Vendedores</b> para dar de alta tu red comercial (nombre, contacto, activo/inactivo). Ahora cada <b>empresa</b> y cada <b>lead</b> se pueden <b>vincular a un vendedor</b> (o dejarlos como "venta directa"), y en la empresa elegís <b>a quién se le factura</b>: al <b>cliente</b> o al <b>vendedor/partner</b>. En la tarjeta de cada empresa se ve quién la trajo. Esta versión deja la <b>base</b> armada; las <b>comisiones</b> (escala + liquidación) y el <b>Tablero de vendedores</b> llegan en las próximas etapas. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'15/10/2026',
       titulo:'📍 v2.315.0 — Hacienda por lote/potrero en las pantallas',
       desc:'Ya podés <b>operar la hacienda por lote/potrero</b> desde las pantallas. En <b>🐄 Movimientos de animales</b>, el formulario de movimiento ahora tiene un selector <b>Lote / potrero</b> (opcional; si lo dejás vacío, es a nivel campo como antes). En el <b>Traslado</b> podés elegir <b>lote origen y lote destino</b> y mover una parte de los animales <b>de un lote a otro</b>, incluso dentro del <b>mismo campo</b>. Cada tarjeta de campo muestra abajo un <b>detalle por lote/potrero</b> (cuántas cabezas de cada categoría hay en cada lote) y la tabla de movimientos recientes trae la columna <b>Lote</b>. Así un lote puede tener <b>varias categorías</b> conviviendo y ves dónde está parada cada tropa. 🌱' },
@@ -10419,13 +10430,17 @@ pages.empresas = async function() {
   if (esSuper) {
     try { const lr = await api('/api/empresas/trial-leads'); state._trialLeads = lr.data||[]; (state._trialLeads).forEach(l=>{ if(l.companyId && !leadByCompany[l.companyId]) leadByCompany[l.companyId]=l; }); }
     catch(_) { state._trialLeads = []; }
+    try { state._vendedores = (await api('/api/vendedores')).data||[]; } catch(_) { state._vendedores = []; }
   }
+  const vendById = {}; (state._vendedores||[]).forEach(v=>{ vendById[v.id]=v; });
   const ACTIV = { agricola:'Agrícola', ganadera:'Ganadera', mixta:'Mixta' };
 
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between">
       <h3 class="font-semibold text-slate-800">${rows.length} empresas</h3>
       <div class="flex gap-2">
+        ${esSuper?`<button class="btn btn-secondary" onclick="empTableroVendedores()">📊 Tablero vendedores</button>`:''}
+        ${esSuper?`<button class="btn btn-secondary" onclick="empVendedores()">🤝 Vendedores${(state._vendedores&&state._vendedores.length)?` (${state._vendedores.length})`:''}</button>`:''}
         ${esSuper?`<button class="btn btn-secondary" onclick="empTrialLeads()">📇 Leads / Prospectos${(state._trialLeads&&state._trialLeads.length)?` (${state._trialLeads.length})`:''}</button>`:''}
         ${esSuper?`<button class="btn btn-secondary" onclick="pages.abonos()">💳 Abonos / Clientes</button>`:''}
         ${puedeCrear ? `<button class="btn btn-primary" onclick="empForm()">+ Nueva empresa</button>` : ''}
@@ -10462,6 +10477,9 @@ pages.empresas = async function() {
             <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Localidad</div><div class="font-bold truncate">${esc(e.localidad||'—')}</div></div>
             <div class="bg-slate-50 rounded p-2"><div class="text-slate-500">Color</div><div class="flex items-center gap-1"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${esc(color)};border:1px solid rgba(0,0,0,.15);"></span><span class="font-mono text-[11px]">${esc(color)}</span></div></div>
           </div>
+          ${esSuper ? `<div class="mt-2 text-[11px]">${e.vendedorId && vendById[e.vendedorId]
+              ? `<span class="badge bg-emerald-100 text-emerald-800">🤝 ${esc(vendById[e.vendedorId].nombre)}</span> <span class="text-slate-400">· se factura a ${e.facturarA==='vendedor'?'<b>vendedor</b>':'cliente'}</span>`
+              : '<span class="text-slate-400">🤝 Venta directa</span>'}</div>` : ''}
           ${(esSuper && leadByCompany[e.id]) ? (l=>`
             <div class="mt-3 border-t pt-2 bg-amber-50/60 -mx-2 px-2 rounded-b">
               <div class="text-[10px] uppercase text-amber-700 font-semibold mb-1">📇 Contacto de la prueba</div>
@@ -10587,6 +10605,8 @@ async function empLeadForm(id){
   const conts = Array.isArray(l.contactos)? l.contactos : [];
   if(!state.cache) state.cache={};
   if(!state.cache.catalogos){ try{ state.cache.catalogos=(await api('/api/catalogos')).data||[]; }catch(_){ state.cache.catalogos=[]; } }
+  if(!state._vendedores){ try{ state._vendedores=(await api('/api/vendedores')).data||[]; }catch(_){ state._vendedores=[]; } }
+  const vendOpts = (sel)=> '<option value="">— Venta directa (AgroCore) —</option>' + (state._vendedores||[]).filter(v=>v.activo!==false||v.id===sel).map(v=>`<option value="${esc(v.id)}" ${sel===v.id?'selected':''}>${esc(v.nombre)}${v.activo===false?' (inactivo)':''}</option>`).join('');
   const provSel = catSelect('nl-prov','Provincia', l.provincia||'', { placeholder:'— Provincia —', class:'input text-sm' });
   const ciudadSel = catSelect('nl-ciudad','Ciudad', l.ciudad||'', { placeholder:'— Ciudad —', class:'input text-sm', parent: l.provincia||'', parentSelect:'nl-prov' });
   openModal2({ title: id?'Editar lead / prospecto':'+ Nuevo prospecto', size:'max-w-xl',
@@ -10609,6 +10629,7 @@ async function empLeadForm(id){
         <div><label class="label text-xs">Próximo contacto</label><input id="nl-prox" type="date" class="input" value="${l.segFecha?String(l.segFecha).slice(0,10):''}"/></div>
         <div><label class="label text-xs">1er contacto</label><input id="nl-prim" type="date" class="input" value="${l.segPrimerContacto?String(l.segPrimerContacto).slice(0,10):''}"/></div>
         <div><label class="label text-xs">Último contacto</label><input id="nl-ult" type="date" class="input" value="${l.segUltimoContacto?String(l.segUltimoContacto).slice(0,10):''}"/></div>
+        <div class="col-span-2"><label class="label text-xs">🤝 Vendedor / Partner</label><select id="nl-vend" class="input">${vendOpts(l.vendedorId||'')}</select></div>
       </div>
       <div class="mt-2 flex items-center gap-2"><input id="nl-mant" type="checkbox" ${l.mantenimiento?'checked':''}/><label for="nl-mant" class="text-sm">Contrató el <b>mantenimiento mensual</b> (activa alertas de facturación/cobranza)</label></div>
       <div class="mt-3">
@@ -10640,6 +10661,7 @@ async function empLeadFormSave(id){
       fechaAlta:val('nl-fecha')||null,
       origen:val('nl-origen')||null, segFecha:val('nl-prox')||null,
       segPrimerContacto:val('nl-prim')||null, segUltimoContacto:val('nl-ult')||null,
+      vendedorId:val('nl-vend')||null,
       mantenimiento:!!(g('nl-mant')&&g('nl-mant').checked), segEstado:val('nl-est')||'Nuevo', segNotas:val('nl-notas')||null };
     const r=await api('/api/empresas/trial-leads'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
     state._trialLeads=null;
@@ -10855,6 +10877,284 @@ async function abonoDesvincularFactura(id){
     toast('Factura desvinculada. Se regeneró la cuota del abono.','success'); abonosRender();
   }catch(e){ toast(e.message,'error'); }
 }
+// ───────── Vendedores / Partners (ABM, solo superAdmin) ─────────
+async function empVendedores(){
+  if(!state.user?.superAdmin){ return toast('Solo Super Admin','warn'); }
+  let vends = state._vendedores;
+  if(!vends){ try{ vends=(await api('/api/vendedores')).data||[]; state._vendedores=vends; }catch(e){ return toast(e.message,'error'); } }
+  const emps = state.cache.empresas || [];
+  const leads = state._trialLeads || [];
+  const cuenta = (vid)=>({
+    empresas: emps.filter(e=>e.vendedorId===vid).length,
+    leads: leads.filter(l=>l.vendedorId===vid).length,
+  });
+  const fila = (v)=>{ const c=cuenta(v.id); return `<tr class="border-t border-slate-100 ${v.activo===false?'opacity-50':''}">
+    <td class="p-2"><div class="font-semibold text-slate-800">${esc(v.nombre)}</div><div class="text-[11px] text-slate-500">${esc(v.email||'')}${v.telefono?' · '+esc(v.telefono):''}</div></td>
+    <td class="p-2 text-center">${c.empresas}</td>
+    <td class="p-2 text-center">${c.leads}</td>
+    <td class="p-2 text-center">${v.activo===false?'<span class="badge bg-slate-100 text-slate-500">inactivo</span>':'<span class="badge badge-green">activo</span>'}</td>
+    <td class="p-2 text-right whitespace-nowrap">
+      <button class="btn btn-ghost text-xs" title="Cuenta corriente / Liquidar" onclick='empVendedorCuenta(${JSON.stringify(v.id)})'>💰</button>
+      <button class="btn btn-ghost text-xs" onclick='empVendedorForm(${JSON.stringify(v.id)})'>✏️</button>
+      <button class="btn btn-ghost text-xs text-red-600" onclick='empVendedorEliminar(${JSON.stringify(v.id)},${JSON.stringify(v.nombre)})'>🗑️</button>
+    </td></tr>`; };
+  openModal2({ title:'🤝 Vendedores / Partners', size:'max-w-2xl',
+    body:`<div class="flex items-center justify-between mb-2">
+        <div class="text-[12px] text-slate-500">Red comercial. Cada vendedor trae empresas y leads; la comisión y su liquidación se agregan en la próxima etapa.</div>
+        <button class="btn btn-primary text-xs" onclick="empVendedorForm(null)">+ Nuevo vendedor</button>
+      </div>
+      <table class="w-full text-sm"><thead><tr class="text-left text-[11px] uppercase text-slate-400">
+        <th class="p-2">Vendedor</th><th class="p-2 text-center">Empresas</th><th class="p-2 text-center">Leads</th><th class="p-2 text-center">Estado</th><th class="p-2"></th>
+      </tr></thead><tbody>${vends.map(fila).join('')||'<tr><td colspan="5" class="p-4 text-center text-slate-400">Sin vendedores. Cargá el primero.</td></tr>'}</tbody></table>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cerrar</button>` });
+}
+async function empVendedorForm(id){
+  const v = id ? (state._vendedores||[]).find(x=>x.id===id)||{} : {};
+  if(!state._usuariosLista){ try{ state._usuariosLista=(await api('/api/usuarios')).data||[]; }catch(_){ state._usuariosLista=[]; } }
+  const userOpts = '<option value="">— Sin usuario (no accede al panel) —</option>' + (state._usuariosLista||[]).map(u=>`<option value="${esc(u.id)}" ${v.userId===u.id?'selected':''}>${esc(u.nombre||'')} ${esc(u.apellido||'')} ${u.email?'· '+esc(u.email):(u.alias?'· '+esc(u.alias):'')}</option>`).join('');
+  openModal({ title: id?'Editar vendedor':'+ Nuevo vendedor', size:'max-w-lg',
+    body:`<div class="grid grid-cols-2 gap-3">
+      <div class="col-span-2"><label class="label">Nombre *</label><input id="v-nom" class="input" value="${esc(v.nombre||'')}"/></div>
+      <div><label class="label">Email</label><input id="v-email" class="input" value="${esc(v.email||'')}"/></div>
+      <div><label class="label">Teléfono</label><input id="v-tel" class="input" value="${esc(v.telefono||'')}"/></div>
+      <div><label class="label">CUIT</label><input id="v-cuit" class="input" value="${esc(v.cuit||'')}"/></div>
+      <div><label class="label">Estado</label><select id="v-act" class="input"><option value="1" ${v.activo!==false?'selected':''}>Activo</option><option value="0" ${v.activo===false?'selected':''}>Inactivo</option></select></div>
+      <div class="col-span-2"><label class="label">Notas</label><input id="v-notas" class="input" value="${esc(v.notas||'')}" placeholder="Zona, acuerdo, etc."/></div>
+      <div class="col-span-2"><label class="label">Usuario para su Panel de Partner</label><select id="v-user" class="input">${userOpts}</select><div class="text-[10px] text-slate-400 mt-0.5">Vinculá un usuario del sistema para que el vendedor entre y vea su panel (clientes, comisiones, cuenta).</div></div>
+      <div class="col-span-2 mt-1 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+        <div class="text-[11px] font-semibold text-emerald-800 mb-2">💰 Comisión y mensualidad</div>
+        <div class="grid grid-cols-3 gap-2">
+          <div><label class="label text-xs">Pago único (alta)</label><input id="v-pu" type="number" step="1" min="0" class="input" value="${v.pagoUnico!=null?v.pagoUnico:1000}"/></div>
+          <div><label class="label text-xs">Mensualidad</label><input id="v-mens" type="number" step="1" min="0" class="input" value="${v.mensualidad!=null?v.mensualidad:100}"/></div>
+          <div><label class="label text-xs">Moneda</label><select id="v-mon" class="input"><option value="USD" ${(v.moneda||'USD')==='USD'?'selected':''}>USD</option><option value="ARS" ${(v.moneda||'')==='ARS'?'selected':''}>ARS</option></select></div>
+        </div>
+        <div class="text-[11px] text-slate-500 mt-2 mb-1">Escala de comisión sobre el pago único, según clientes acumulados:</div>
+        <div class="grid grid-cols-3 gap-2 text-xs">
+          ${(()=>{ const esc0=(Array.isArray(v.comisionEscala)&&v.comisionEscala.length)?v.comisionEscala:[{min:1,max:3,pct:10},{min:4,max:9,pct:15},{min:10,max:null,pct:20}]; const row=(i,t)=>`<div><label class="label text-[10px]">Desde</label><input id="v-e${i}-min" type="number" class="input text-xs" value="${t.min}"/></div><div><label class="label text-[10px]">Hasta (vacío=sin tope)</label><input id="v-e${i}-max" type="number" class="input text-xs" value="${t.max==null?'':t.max}"/></div><div><label class="label text-[10px]">% comisión</label><input id="v-e${i}-pct" type="number" step="0.5" class="input text-xs" value="${t.pct}"/></div>`; return [0,1,2].map(i=>row(i, esc0[i]||{min:'',max:'',pct:''})).join(''); })()}
+        </div>
+      </div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="empVendedorSave(${id?`'${esc(id)}'`:'null'})">${id?'Guardar':'Crear'}</button>` });
+}
+async function empVendedorSave(id){
+  const val=x=>{ const el=document.getElementById(x); return el?String(el.value).trim():''; };
+  const nombre=val('v-nom'); if(!nombre) return toast('Poné el nombre','warn');
+  const num=x=>{ const s=val(x); return s===''?null:Number(s); };
+  const escala=[0,1,2].map(i=>({ min:num('v-e'+i+'-min'), max:num('v-e'+i+'-max'), pct:num('v-e'+i+'-pct') }))
+    .filter(t=>t.min!=null && t.pct!=null).map(t=>({ min:t.min, max:t.max, pct:t.pct }));
+  const body={ nombre, email:val('v-email')||null, telefono:val('v-tel')||null, cuit:val('v-cuit')||null,
+    activo: (document.getElementById('v-act')?.value||'1')==='1', notas:val('v-notas')||null,
+    pagoUnico:num('v-pu'), mensualidad:num('v-mens'), moneda:val('v-mon')||'USD',
+    userId: val('v-user')||null,
+    comisionEscala: escala.length?escala:null };
+  try{ await api('/api/vendedores'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});
+    state._vendedores=null; toast(id?'Vendedor actualizado':'Vendedor creado','success'); closeModal(); empVendedores();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function empVendedorEliminar(id,nombre){
+  if(!confirm(`¿Eliminar al vendedor "${nombre}"?`)) return;
+  try{ await api('/api/vendedores/'+id,{method:'DELETE'}); state._vendedores=null; toast('Eliminado','success'); empVendedores(); }
+  catch(e){ toast(e.message||'No se pudo eliminar','error'); }
+}
+// Cuenta corriente del vendedor: saldo, comisión/deuda del mes y liquidación.
+async function empVendedorCuenta(id){
+  if(!state.user?.superAdmin){ return toast('Solo Super Admin','warn'); }
+  let r; try{ r=await api('/api/vendedores/'+id+'/cuenta'); }catch(e){ return toast(e.message,'error'); }
+  const d=r.data; const v=d.vendedor; const m=d.metricas||{}; const mon=v.moneda||'USD';
+  const money=n=>`${mon} ${fmtN(Math.round(Number(n||0)*100)/100)}`;
+  const saldoTxt = d.saldo>0?`<span class="text-emerald-700">A favor del vendedor: ${money(d.saldo)}</span>`
+    : d.saldo<0?`<span class="text-red-600">A favor de AgroCore: ${money(-d.saldo)}</span>`
+    : '<span class="text-slate-500">Saldo 0</span>';
+  const tipoLbl={comision_alta:'Comisión',deuda_mensual:'Mantenimiento',liquidacion:'Liquidación',ajuste:'Ajuste'};
+  const filas=(d.movimientos||[]).map(x=>`<tr class="border-t border-slate-100">
+      <td class="p-1.5">${fmtFecha(x.fecha)}</td>
+      <td class="p-1.5">${tipoLbl[x.tipo]||x.tipo}${x.periodo?` <span class="text-[10px] text-slate-400">${esc(x.periodo)}</span>`:''}<div class="text-[11px] text-slate-500">${esc(x.detalle||'')}</div></td>
+      <td class="p-1.5 text-right ${x.debe?'text-red-600':''}">${x.debe?money(x.debe):''}</td>
+      <td class="p-1.5 text-right ${x.haber?'text-emerald-700':''}">${x.haber?money(x.haber):''}</td>
+      <td class="p-1.5 text-right"><button class="btn btn-ghost text-xs text-red-600" onclick='empVendMovBorrar(${JSON.stringify(id)},${JSON.stringify(x.id)})'>🗑️</button></td>
+    </tr>`).join('')||'<tr><td colspan="5" class="p-3 text-center text-slate-400">Sin movimientos todavía</td></tr>';
+  openModal2({ title:`💰 Cuenta corriente · ${esc(v.nombre)}`, size:'max-w-2xl',
+    body:`<div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+        <div class="kpi"><div class="text-[11px] text-slate-500">Clientes</div><div class="text-xl font-bold">${m.clientes||0}</div></div>
+        <div class="kpi"><div class="text-[11px] text-slate-500">MRR genera</div><div class="text-xl font-bold">${money(m.mrr)}</div></div>
+        <div class="kpi"><div class="text-[11px] text-slate-500">Comisión ${esc(d.periodo)} (${m.pct||0}%)</div><div class="text-xl font-bold text-emerald-700">${money(m.comisionMes)}</div></div>
+        <div class="kpi"><div class="text-[11px] text-slate-500">Deuda ${esc(d.periodo)}</div><div class="text-xl font-bold text-red-600">${money(m.deudaMes)}</div></div>
+      </div>
+      <div class="flex items-center justify-between mb-2 p-2 rounded-lg bg-slate-50 border">
+        <div class="text-sm font-semibold">Saldo cuenta corriente: ${saldoTxt}</div>
+        <div class="flex gap-2">
+          ${d.liquidadoMes?`<span class="badge badge-green text-[11px]">${esc(d.periodo)} ya liquidado</span>`
+            :`<button class="btn btn-primary text-xs" onclick='empVendLiquidar(${JSON.stringify(id)},${JSON.stringify(d.periodo)})'>✅ Liquidar ${esc(d.periodo)}</button>`}
+          <button class="btn btn-secondary text-xs" onclick='empVendPago(${JSON.stringify(id)})'>+ Pago / ajuste</button>
+        </div>
+      </div>
+      <div class="text-[11px] text-slate-500 mb-1">Al liquidar se registran la <b>comisión</b> por las altas del mes (a favor) y el <b>mantenimiento</b> de sus clientes facturados al partner (a cargo). El pago final lo registrás con "+ Pago / ajuste".</div>
+      <table class="w-full text-sm"><thead><tr class="text-left text-[11px] uppercase text-slate-400">
+        <th class="p-1.5">Fecha</th><th class="p-1.5">Concepto</th><th class="p-1.5 text-right">Debe</th><th class="p-1.5 text-right">Haber</th><th class="p-1.5"></th>
+      </tr></thead><tbody>${filas}</tbody></table>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cerrar</button>` });
+}
+async function empVendLiquidar(id,periodo){
+  if(!confirm(`¿Liquidar el período ${periodo}? Se registran la comisión y la deuda del mes en la cuenta corriente.`)) return;
+  try{ const r=await api('/api/vendedores/'+id+'/liquidar',{method:'POST',body:JSON.stringify({periodo})});
+    toast('Liquidado. Neto: '+(r.neto>=0?'a favor del vendedor ':'a favor de AgroCore ')+Math.abs(r.neto),'success');
+    empVendedorCuenta(id);
+  }catch(e){ toast(e.message||'No se pudo liquidar','error'); }
+}
+function empVendPago(id){
+  openModal({ title:'Pago / ajuste de cuenta', size:'max-w-md',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div><label class="label">Concepto *</label><input id="vp-det" class="input" placeholder="Ej: Pago de comisiones octubre"/></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">A favor del vendedor (haber)</label><input id="vp-haber" type="number" step="0.01" min="0" class="input" placeholder="0"/></div>
+        <div><label class="label">A cargo del vendedor (debe)</label><input id="vp-debe" type="number" step="0.01" min="0" class="input" placeholder="0"/></div>
+      </div>
+      <div class="text-[11px] text-slate-500">Para registrar que <b>le pagaste</b> las comisiones, cargá el importe en <b>"a cargo del vendedor (debe)"</b> (salda el saldo a favor). Para un cobro de lo que te debe, usá "a favor".</div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick='empVendPagoSave(${JSON.stringify(id)})'>Guardar</button>` });
+}
+async function empVendPagoSave(id){
+  const det=(document.getElementById('vp-det')?.value||'').trim(); if(!det) return toast('Poné el concepto','warn');
+  const debe=Number(document.getElementById('vp-debe')?.value||0), haber=Number(document.getElementById('vp-haber')?.value||0);
+  if(!debe && !haber) return toast('Cargá un importe en debe o haber','warn');
+  try{ await api('/api/vendedores/'+id+'/movimiento',{method:'POST',body:JSON.stringify({tipo:'ajuste',detalle:det,debe,haber})});
+    toast('Movimiento registrado','success'); closeModal(); empVendedorCuenta(id);
+  }catch(e){ toast(e.message,'error'); }
+}
+async function empVendMovBorrar(id,movId){
+  if(!confirm('¿Borrar este movimiento de la cuenta corriente?')) return;
+  try{ await api('/api/vendedores/'+id+'/movimiento/'+movId,{method:'DELETE'}); toast('Borrado','success'); empVendedorCuenta(id); }
+  catch(e){ toast(e.message,'error'); }
+}
+// ───────── Tablero de vendedores (vista del dueño) ─────────
+async function empTableroVendedores(){
+  if(!state.user?.superAdmin){ return toast('Solo Super Admin','warn'); }
+  setHeader('Tablero de vendedores','Red comercial · clientes, MRR, comisiones y deuda');
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let tab, emps, leads;
+  try{
+    const [t, e, l] = await Promise.all([
+      api('/api/vendedores/tablero'),
+      api('/api/empresas'),
+      api('/api/empresas/trial-leads').catch(()=>({data:[]})),
+    ]);
+    tab=t; emps=e.data||[]; leads=l.data||[];
+    state.cache.empresas=emps; state._trialLeads=leads;
+  }catch(err){ return toast(err.message,'error'); }
+  const rows = tab.data||[];
+  const vById = {}; rows.forEach(v=>{ vById[v.id]=v; });
+  const money = n => `US$ ${fmtN(Math.round(Number(n||0)*100)/100)}`;
+  // KPIs
+  const clientesVend = rows.reduce((a,v)=>a+(v.clientes||0),0);
+  const mrrTotal = rows.reduce((a,v)=>a+(v.mrr||0),0);
+  const comisPagar = rows.reduce((a,v)=>a+(v.saldoCta>0?v.saldoCta:0),0);
+  const deudaVend = rows.reduce((a,v)=>a+(v.saldoCta<0?-v.saldoCta:0),0);
+  const comisMes = rows.reduce((a,v)=>a+(v.comisionMes||0),0);
+  const kpi=(t,v,c='')=>`<div class="kpi"><div class="text-xs text-slate-500">${t}</div><div class="text-2xl font-bold mt-1 ${c}">${v}</div></div>`;
+  // Tabla vendedores
+  const vendTabla = rows.length ? `<table class="data w-full"><thead><tr>
+      <th>Vendedor</th><th class="text-center">Clientes</th><th class="text-right">MRR</th>
+      <th class="text-center">%</th><th class="text-right">Comisión mes</th><th class="text-right">Deuda mes</th>
+      <th class="text-right">Saldo cta</th><th></th></tr></thead><tbody>
+      ${rows.map(v=>`<tr class="table-row ${v.activo===false?'opacity-50':''}">
+        <td><b>${esc(v.nombre)}</b>${v.email?`<div class="text-[11px] text-slate-400">${esc(v.email)}</div>`:''}</td>
+        <td class="text-center">${v.clientes}${v.clientesFactVend?` <span class="text-[10px] text-slate-400">(${v.clientesFactVend} a él)</span>`:''}</td>
+        <td class="text-right">${money(v.mrr)}</td>
+        <td class="text-center">${v.pct||0}%</td>
+        <td class="text-right text-emerald-700">${v.comisionMes?money(v.comisionMes):'—'}</td>
+        <td class="text-right text-red-600">${v.deudaMes?money(v.deudaMes):'—'}</td>
+        <td class="text-right font-semibold ${v.saldoCta>0?'text-emerald-700':v.saldoCta<0?'text-red-600':'text-slate-400'}">${v.saldoCta?money(v.saldoCta):'0'}</td>
+        <td class="text-right whitespace-nowrap">
+          <button class="btn btn-ghost text-xs" title="Cuenta corriente" onclick='empVendedorCuenta(${JSON.stringify(v.id)})'>💰</button>
+          ${v.liquidadoMes?`<span class="badge badge-green text-[10px]">${esc(tab.periodo)} ✓</span>`:`<button class="btn btn-secondary text-xs" onclick='empVendLiquidarTab(${JSON.stringify(v.id)},${JSON.stringify(tab.periodo)})'>Liquidar</button>`}
+        </td></tr>`).join('')}
+    </tbody></table>` : '<div class="stub-card">Todavía no cargaste vendedores. Usá el botón 🤝 Vendedores.</div>';
+  // Tabla clientes (empresas)
+  const cliTabla = `<table class="data w-full"><thead><tr><th>Empresa</th><th>Vendedor</th><th>Se factura a</th><th class="text-center">Plan</th></tr></thead><tbody>
+      ${emps.map(e=>`<tr class="table-row">
+        <td><b>${esc(e.name)}</b></td>
+        <td>${e.vendedorId&&vById[e.vendedorId]?esc(vById[e.vendedorId].nombre):'<span class="text-slate-400">Directo</span>'}</td>
+        <td>${e.facturarA==='vendedor'?'<span class="badge bg-amber-100 text-amber-800">Vendedor</span>':'<span class="badge bg-slate-100 text-slate-600">Cliente</span>'}</td>
+        <td class="text-center">${e.plan==='trial'?'<span class="badge bg-sky-100 text-sky-800">prueba</span>':'<span class="badge badge-green">cliente</span>'}</td>
+      </tr>`).join('')||'<tr><td colspan="4" class="p-3 text-center text-slate-400">Sin empresas</td></tr>'}
+    </tbody></table>`;
+  // Tabla leads de vendedores
+  const leadsVend = (leads||[]).filter(l=>l.vendedorId);
+  const leadTabla = `<table class="data w-full"><thead><tr><th>Lead</th><th>Empresa</th><th>Vendedor</th><th>Estado</th></tr></thead><tbody>
+      ${leadsVend.map(l=>`<tr class="table-row">
+        <td>${esc(l.nombre||'—')}</td><td>${esc(l.empresa||'—')}</td>
+        <td>${l.vendedorId&&vById[l.vendedorId]?esc(vById[l.vendedorId].nombre):'—'}</td>
+        <td><span class="badge ${(LEAD_ESTADOS.find(e=>e.v===(l.segEstado||'Nuevo'))||{}).c||'bg-slate-100'}">${esc(l.segEstado||'Nuevo')}</span></td>
+      </tr>`).join('')||'<tr><td colspan="4" class="p-3 text-center text-slate-400">Ningún lead asignado a vendedores todavía</td></tr>'}
+    </tbody></table>`;
+  $('#page-body').innerHTML = `
+    <div class="mb-3"><button class="btn btn-ghost text-sm" onclick="pages.empresas()">← Volver a Empresas</button>
+      <span class="text-xs text-slate-400 ml-2">Período ${esc(tab.periodo)}</span></div>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+      ${kpi('Clientes directos', tab.clientesDirectos||0)}
+      ${kpi('Clientes por vendedores', clientesVend)}
+      ${kpi('MRR total (red)', money(mrrTotal))}
+      ${kpi('Comisiones a pagar', money(comisPagar),'text-emerald-700')}
+      ${kpi('Deuda de vendedores', money(deudaVend),'text-red-600')}
+    </div>
+    <h3 class="font-semibold text-slate-800 mb-2">Vendedores <span class="text-xs text-slate-400">· comisión del mes: ${money(comisMes)}</span></h3>
+    <div class="kpi p-0 overflow-hidden mb-6">${vendTabla}</div>
+    <h3 class="font-semibold text-slate-800 mb-2">Clientes (empresas)</h3>
+    <div class="kpi p-0 overflow-hidden mb-6">${cliTabla}</div>
+    <h3 class="font-semibold text-slate-800 mb-2">Leads de vendedores</h3>
+    <div class="kpi p-0 overflow-hidden">${leadTabla}</div>`;
+}
+async function empVendLiquidarTab(id,periodo){
+  if(!confirm(`¿Liquidar el período ${periodo} de este vendedor?`)) return;
+  try{ const r=await api('/api/vendedores/'+id+'/liquidar',{method:'POST',body:JSON.stringify({periodo})});
+    toast('Liquidado. Neto: '+(r.neto>=0?'a favor del vendedor ':'a favor de AgroCore ')+Math.abs(r.neto),'success');
+    empTableroVendedores();
+  }catch(e){ toast(e.message||'No se pudo liquidar','error'); }
+}
+// ───────── Panel de Partner (vista del propio vendedor) ─────────
+pages.partner = async function(){
+  setHeader('Mi panel (Partner)', 'Tus clientes, comisiones y cuenta');
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let r; try{ r=await api('/api/partner/mi-panel'); }catch(e){
+    $('#page-body').innerHTML = `<div class="stub-card">${esc(e.message||'Tu usuario no está vinculado a un vendedor.')}</div>`; return;
+  }
+  const d=r.data; const v=d.vendedor; const m=d.metricas||{}; const mon=v.moneda||'USD';
+  const money=n=>`${mon} ${fmtN(Math.round(Number(n||0)*100)/100)}`;
+  const saldoTxt = d.saldo>0?`<span class="text-emerald-700">A tu favor: ${money(d.saldo)}</span>`
+    : d.saldo<0?`<span class="text-red-600">Debés: ${money(-d.saldo)}</span>`
+    : '<span class="text-slate-500">Saldo 0</span>';
+  const kpi=(t,val,c='')=>`<div class="kpi"><div class="text-xs text-slate-500">${t}</div><div class="text-2xl font-bold mt-1 ${c}">${val}</div></div>`;
+  const ESTC = (typeof LEAD_ESTADOS!=='undefined')?LEAD_ESTADOS:[];
+  const cli=(d.clientes||[]).map(c=>`<tr class="table-row"><td><b>${esc(c.name)}</b></td>
+      <td>${c.facturarA==='vendedor'?'<span class="badge bg-amber-100 text-amber-800">te lo facturo a vos</span>':'<span class="badge bg-slate-100 text-slate-600">al cliente</span>'}</td>
+      <td class="text-center">${c.plan==='trial'?'<span class="badge bg-sky-100 text-sky-800">prueba</span>':'<span class="badge badge-green">activo</span>'}</td></tr>`).join('')
+      ||'<tr><td colspan="3" class="p-3 text-center text-slate-400">Todavía no tenés clientes cargados</td></tr>';
+  const leadsR=(d.leads||[]).map(l=>`<tr class="table-row"><td>${esc(l.nombre||'—')}</td><td>${esc(l.empresa||'—')}</td>
+      <td><span class="badge ${(ESTC.find(e=>e.v===(l.segEstado||'Nuevo'))||{}).c||'bg-slate-100'}">${esc(l.segEstado||'Nuevo')}</span></td></tr>`).join('')
+      ||'<tr><td colspan="3" class="p-3 text-center text-slate-400">Sin prospectos asignados</td></tr>';
+  const tipoLbl={comision_alta:'Comisión',deuda_mensual:'Mantenimiento',liquidacion:'Liquidación',ajuste:'Ajuste/Pago'};
+  const movs=(d.movimientos||[]).map(x=>`<tr class="border-t border-slate-100">
+      <td class="p-1.5">${fmtFecha(x.fecha)}</td>
+      <td class="p-1.5">${tipoLbl[x.tipo]||x.tipo}${x.periodo?` <span class="text-[10px] text-slate-400">${esc(x.periodo)}</span>`:''}<div class="text-[11px] text-slate-500">${esc(x.detalle||'')}</div></td>
+      <td class="p-1.5 text-right ${x.debe?'text-red-600':''}">${x.debe?money(x.debe):''}</td>
+      <td class="p-1.5 text-right ${x.haber?'text-emerald-700':''}">${x.haber?money(x.haber):''}</td></tr>`).join('')
+      ||'<tr><td colspan="4" class="p-3 text-center text-slate-400">Sin movimientos todavía</td></tr>';
+  $('#page-body').innerHTML = `
+    <div class="mb-3 text-sm text-slate-600">Hola <b>${esc(v.nombre)}</b> 👋 · Período ${esc(d.periodo)}</div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+      ${kpi('Mis clientes', m.clientes||0)}
+      ${kpi('MRR que generás', money(m.mrr))}
+      ${kpi('Comisión del mes ('+(m.pct||0)+'%)', money(m.comisionMes),'text-emerald-700')}
+      ${kpi('Saldo cuenta', saldoTxt)}
+    </div>
+    <h3 class="font-semibold text-slate-800 mb-2">Mis clientes</h3>
+    <div class="kpi p-0 overflow-hidden mb-6"><table class="data w-full"><thead><tr><th>Empresa</th><th>Facturación</th><th class="text-center">Estado</th></tr></thead><tbody>${cli}</tbody></table></div>
+    <h3 class="font-semibold text-slate-800 mb-2">Mis prospectos</h3>
+    <div class="kpi p-0 overflow-hidden mb-6"><table class="data w-full"><thead><tr><th>Nombre</th><th>Empresa</th><th>Estado</th></tr></thead><tbody>${leadsR}</tbody></table></div>
+    <h3 class="font-semibold text-slate-800 mb-2">Mi cuenta corriente <span class="text-xs text-slate-400">· ${saldoTxt}</span></h3>
+    <div class="kpi p-0 overflow-hidden"><table class="w-full text-sm"><thead><tr class="text-left text-[11px] uppercase text-slate-400"><th class="p-1.5">Fecha</th><th class="p-1.5">Concepto</th><th class="p-1.5 text-right">Debe</th><th class="p-1.5 text-right">Haber</th></tr></thead><tbody>${movs}</tbody></table></div>`;
+};
+
 function empForm(id=null) {
   const it = id ? (state.cache.empresas||[]).find(x=>x.id===id)||{} : {};
   const iniciales = esc((it.name||'?').slice(0,2).toUpperCase());
@@ -10897,6 +11197,20 @@ function empForm(id=null) {
           <input id="f-usacc" type="checkbox" ${it.usaCentrosCosto?'checked':''} class="mt-0.5" />
           <label for="f-usacc" class="text-sm">Usar centros de costo <span class="text-slate-400">— habilita repartir gastos e inversiones por centro de costo (ej. por campo, actividad o sector). Opcional; si no lo activás, nada cambia. El catálogo se gestiona en Administración → Centros de costo.</span></label>
         </div>
+        ${state.user?.superAdmin ? `
+        <div class="col-span-2 grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+          <div class="col-span-2 text-[11px] font-semibold text-emerald-800">🤝 Red de vendedores / partners</div>
+          <div><label class="label text-xs">Vendedor / Partner</label>
+            <select id="f-vend" class="input">${'<option value="">— Venta directa (AgroCore) —</option>' + (state._vendedores||[]).filter(v=>v.activo!==false||v.id===(it.vendedorId||'')).map(v=>`<option value="${esc(v.id)}" ${(it.vendedorId||'')===v.id?'selected':''}>${esc(v.nombre)}${v.activo===false?' (inactivo)':''}</option>`).join('')}</select>
+          </div>
+          <div><label class="label text-xs">Se factura a</label>
+            <select id="f-factA" class="input">
+              <option value="cliente" ${(it.facturarA||'cliente')==='cliente'?'selected':''}>Cliente (le facturo al cliente)</option>
+              <option value="vendedor" ${(it.facturarA||'')==='vendedor'?'selected':''}>Vendedor / Partner (le facturo al partner)</option>
+            </select>
+          </div>
+          <div class="col-span-2 text-[10px] text-slate-500">Si el partner te paga la mensualidad y él le cobra al cliente, poné "Se factura a: Vendedor".</div>
+        </div>` : ''}
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='empSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
@@ -10936,6 +11250,10 @@ async function empSave(id) {
     cajaPorTenedor: $('#f-tenedor')?.checked || false,
     usaCentrosCosto: $('#f-usacc')?.checked || false,
   };
+  if (state.user?.superAdmin) {
+    data.vendedorId = $('#f-vend')?.value || null;
+    data.facturarA  = $('#f-factA')?.value || 'cliente';
+  }
   if (!data.name) return toast('Nombre requerido','warn');
   try { await api('/api/empresas'+(id?'/'+id:''), { method: id?'PUT':'POST', body: JSON.stringify(data) });
     toast(id?'Actualizada':'Creada','success'); closeModal(); delete state.cache.empresas;

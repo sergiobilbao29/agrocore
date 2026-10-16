@@ -37,6 +37,9 @@ model Company {
   cajaPorTenedor  Boolean   @default(false)
   usaCentrosCosto Boolean   @default(false) // habilita el reparto por centros de costo (gestión analítica). Opt-in por empresa.
   activo          Boolean   @default(true)
+  // ---- Red de vendedores / partners (vista del dueño) ----
+  vendedorId      String?   // vendedor/partner que trajo a esta empresa (null = venta directa)
+  facturarA       String    @default("cliente")  // "cliente" (le facturo al cliente) | "vendedor" (le facturo al partner)
   // ---- Prueba gratuita self-service (instancia trial) ----
   plan            String    @default("full")  // "full" (cliente) | "trial" (prueba 30 días)
   trialEndsAt     DateTime?                    // fecha de vencimiento de la prueba
@@ -2906,9 +2909,53 @@ model TrialSignup {
   ciudad       String?
   contactos    Json?     // [{nombre, tel}] — varios contactos por lead
   mantenimiento Boolean  @default(false)  // contrató el abono mensual (marca comercial)
+  vendedorId   String?   // vendedor/partner que trajo este lead (null = directo)
   createdAt    DateTime  @default(now())
 
   @@index([email])
+  @@index([vendedorId])
+}
+
+// Red de vendedores / partners (vista del dueño). Es global (no por empresa):
+// un vendedor trae EMPRESAS (tenants) y leads. La comisión y su cuenta corriente
+// se agregan en la Etapa 2.
+model Vendedor {
+  id             String   @id @default(cuid())
+  nombre         String
+  email          String?
+  telefono       String?
+  cuit           String?
+  activo         Boolean  @default(true)
+  comisionEscala Json?    // escala por volumen histórico de clientes: [{min,max,pct}]
+  pagoUnico      Float?   // pago único por alta de cliente (base de la comisión). Default 1000.
+  mensualidad    Float?   // mantenimiento mensual por cliente. Default 100.
+  moneda         String   @default("USD")  // moneda de comisión / mensualidad
+  userId         String?  // usuario que loguea como partner y ve su panel (Etapa 3)
+  notas          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Cuenta corriente del vendedor/partner: comisiones a favor (haber), deuda mensual
+// a cargo (debe) y liquidaciones. El saldo = sum(haber) - sum(debe).
+model VendedorMovimiento {
+  id         String   @id @default(cuid())
+  vendedorId String
+  fecha      DateTime @default(now())
+  tipo       String   // "comision_alta" | "deuda_mensual" | "liquidacion" | "ajuste"
+  detalle    String
+  debe       Float    @default(0)   // a cargo del vendedor (le debe a AgroCore)
+  haber      Float    @default(0)   // a favor del vendedor (AgroCore le debe)
+  moneda     String   @default("USD")
+  periodo    String?  // YYYY-MM al que corresponde (para liquidaciones por mes)
+  companyId  String?  // empresa relacionada (si aplica)
+  referencia String?
+  createdAt  DateTime @default(now())
+
+  @@index([vendedorId])
+  @@index([vendedorId, periodo])
 }
 
 // ============================================================
