@@ -3030,6 +3030,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/10/2026',
+      titulo:'📄 v2.319.0 — Estado de cuenta en PDF + filtros (clientes y proveedores)',
+      desc:'En <b>Cuentas a cobrar</b> y <b>Cuentas a pagar</b>, al abrir la cuenta corriente de un cliente/proveedor ahora podés <b>filtrar</b> los movimientos por <b>fecha (desde/hasta)</b>, por <b>tipo</b> (deudas o cobros/pagos) y <b>buscar</b> por detalle o N° de comprobante. Si filtrás por fecha, el detalle muestra el <b>saldo anterior</b> al período y el <b>saldo final</b>. Y sumamos dos botones para <b>pasar el detalle</b>: <b>📄 PDF</b> (descarga el estado de cuenta con el encabezado de la empresa, los datos del cliente/proveedor, los movimientos con saldo y el total, respetando los filtros) e <b>🖨️ Imprimir</b>. Ideal para enviarle el resumen a un cliente o proveedor. 🌱' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/10/2026',
       titulo:'📊 v2.318.0 — Tablero de vendedores + Panel de Partner',
       desc:'Tercera y última etapa de la red de vendedores. Desde <b>Empresas → 📊 Tablero vendedores</b> (Super Admin) ves todo junto: KPIs de <b>clientes directos</b> y <b>por vendedores</b>, <b>MRR total</b>, <b>comisiones a pagar</b> y <b>deuda de vendedores</b>; la tabla de <b>vendedores</b> (clientes, MRR, comisión y deuda del mes, saldo y botón <b>Liquidar</b>), la de <b>clientes</b> con la columna <b>"Se factura a"</b>, y la de <b>leads</b> con su estado. Además, cada vendedor con un <b>usuario vinculado</b> entra con su login y ve su propio <b>Mi panel (Partner)</b>: sus clientes, su comisión del mes y su cuenta corriente. (Para habilitarlo, en la ficha del vendedor elegí su "Usuario para su Panel de Partner".) 🌱' },
@@ -19762,52 +19765,135 @@ pages.ctasCtes = async function() {
 };
 function ccSwitchTab(t) { state.ccTab = t; pages.ctasCtes(); }
 
-// Modal con el detalle de movimientos de un contacto, con saldo corriente.
+// Modal con el detalle de movimientos de un contacto, con saldo corriente, filtros y export PDF.
 function ccVerMovimientos(tipo, contactoId) {
   const data = state._ccData || {};
   const grupos = tipo==='cliente' ? (data.clientesCC||[]) : (data.proveedoresCC||[]);
   const g = grupos.find(x => x.contacto.id === contactoId);
   if (!g) return;
-  const movs = g.movs.slice().sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
-  let saldoAc = 0;
+  state._ccVisor = { tipo, contactoId };   // contexto para los filtros y el PDF
   openModal({
     title: `Cuenta corriente — ${g.contacto.razonSocial}`,
-    size: 'max-w-3xl',
+    size: 'max-w-4xl',
     body: `
       <div class="mb-3 grid grid-cols-3 gap-2 text-center">
         <div class="bg-slate-50 rounded p-2"><div class="text-[11px] text-slate-500">Facturado</div><div class="font-bold">${ccSaldoCell(g.debePorMoneda)}</div></div>
         <div class="bg-emerald-50 rounded p-2"><div class="text-[11px] text-slate-500">Cobrado/Pagado</div><div class="font-bold text-emerald-700">${ccSaldoCell(g.haberPorMoneda)}</div></div>
         <div class="bg-amber-50 rounded p-2"><div class="text-[11px] text-slate-500">Saldo</div><div class="font-bold ${g.saldo>0?'text-amber-600':'text-slate-400'}">${ccSaldoCell(g.porMoneda)}</div></div>
       </div>
-      <table class="data">
-        <thead><tr><th>Fecha</th><th>Detalle</th><th class="text-right">Debe</th><th class="text-right">Haber</th><th class="text-right">Saldo</th><th></th></tr></thead>
-        <tbody>
-          ${movs.map(m => {
-            saldoAc += Number(m.debe||0) - Number(m.haber||0);
-            const esCobroPago = /^(cobro|pago) de /i.test(m.detalle||'') && Number(m.haber||0) > 0.01;
-            const esSistema = (m.referencia && /^(FAC|FACC|FACV|FACHR|GUIAH|GUIAHPAY|LIQ|LIQH|OP|REC|CPE|ARR|CRED)/i.test(m.referencia)) || /^(cobro|pago) de /i.test(m.detalle||'');
-            const acc = (can('finanzas:update') && !esSistema)
-              ? `<button class="text-slate-400 hover:text-sky-600" title="Editar" onclick="ccMovEditar('${tipo}','${contactoId}','${m.id}')">✏️</button>
-                 <button class="text-slate-400 hover:text-red-600 ml-1" title="Eliminar" onclick="ccMovEliminar('${m.id}')">🗑️</button>`
-              : (esCobroPago && can('finanzas:delete')
-                  ? `<button class="text-slate-400 hover:text-red-600" title="Deshacer este cobro/pago (repone la deuda y revierte caja/banco). Si tiene Recibo/OP, usá el ↩️ de ese comprobante." onclick="ccDeshacerCobroSuelto('${m.id}')">↩️</button>`
-                  : (esSistema ? `<span class="text-[10px] text-slate-300" title="Movimiento del sistema: se deshace desde su comprobante">🔒</span>` : ''));
-            return `<tr class="table-row">
-              <td>${fmtFecha(m.fecha)}</td>
-              <td>${esc(m.detalle||'—')}${m.referencia?` <span class="text-[10px] text-slate-400">(${esc(m.referencia)})</span>`:''}</td>
-              <td class="text-right">${m.debe?monedaFmt(m.moneda||'ARS', m.debe):'—'}</td>
-              <td class="text-right text-emerald-700">${m.haber?monedaFmt(m.moneda||'ARS', m.haber):'—'}</td>
-              <td class="text-right font-semibold">${monedaFmt(m.moneda||'ARS', saldoAc)}</td>
-              <td class="text-right whitespace-nowrap">${acc}</td>
-            </tr>`;
-          }).join('') || '<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin movimientos</td></tr>'}
-        </tbody>
-      </table>`,
+      <div class="flex flex-wrap items-end gap-2 mb-2 p-2 rounded-lg bg-slate-50 border border-slate-200">
+        <div><label class="label text-[11px]">Desde</label><input id="cc-f-desde" type="date" class="input input-sm" onchange="ccMovFiltrar()"/></div>
+        <div><label class="label text-[11px]">Hasta</label><input id="cc-f-hasta" type="date" class="input input-sm" onchange="ccMovFiltrar()"/></div>
+        <div><label class="label text-[11px]">Tipo</label>
+          <select id="cc-f-tipo" class="input input-sm" onchange="ccMovFiltrar()">
+            <option value="">Todos</option>
+            <option value="debe">Deudas (facturas)</option>
+            <option value="haber">Cobros / pagos</option>
+          </select></div>
+        <div class="flex-1 min-w-[160px]"><label class="label text-[11px]">Buscar</label><input id="cc-f-q" class="input input-sm" placeholder="Detalle o N° comprobante" oninput="ccMovFiltrar()"/></div>
+        <button class="btn btn-ghost text-xs" onclick="ccMovLimpiarFiltros()" title="Limpiar filtros">✖ Limpiar</button>
+      </div>
+      <div id="cc-mov-tabla">${_ccMovTablaHTML(tipo, contactoId)}</div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+             <button class="btn btn-secondary" onclick="ccMovImprimir()">🖨️ Imprimir</button>
+             <button class="btn btn-secondary" onclick="ccMovPDF()">📄 PDF</button>
              <button class="btn btn-secondary" onclick="ccDocumentos('${tipo}','${contactoId}')">${tipo==='cliente'?'🧾 Recibos':'📄 Órdenes de pago'}</button>
              ${can('finanzas:create') && g.saldo>0 ? `<button class="btn btn-primary" onclick="closeModal();ccCobroPagoForm('${tipo}','${contactoId}')">${tipo==='cliente'?'Registrar cobro':'Registrar pago'}</button>`:''}`
   });
 }
+// Lee los filtros del DOM y devuelve { grupo, movs, saldoAnterior, monBase } ya filtrados/ordenados.
+function _ccMovComputar(tipo, contactoId) {
+  const data = state._ccData || {};
+  const grupos = tipo==='cliente' ? (data.clientesCC||[]) : (data.proveedoresCC||[]);
+  const g = grupos.find(x => x.contacto.id === contactoId);
+  if (!g) return null;
+  const todos = g.movs.slice().sort((a,b)=>new Date(a.fecha)-new Date(b.fecha));
+  const desde = document.getElementById('cc-f-desde')?.value || '';
+  const hasta = document.getElementById('cc-f-hasta')?.value || '';
+  const fTipo = document.getElementById('cc-f-tipo')?.value || '';
+  const q = (document.getElementById('cc-f-q')?.value || '').trim().toLowerCase();
+  const d0 = desde ? new Date(desde+'T00:00:00') : null;
+  const d1 = hasta ? new Date(hasta+'T23:59:59') : null;
+  let saldoAnterior = 0;
+  const movs = todos.filter(m => {
+    const f = new Date(m.fecha);
+    if (d0 && f < d0) { saldoAnterior += Number(m.debe||0) - Number(m.haber||0); return false; }
+    if (d1 && f > d1) return false;
+    if (fTipo === 'debe'  && !(Number(m.debe||0)  > 0.01)) return false;
+    if (fTipo === 'haber' && !(Number(m.haber||0) > 0.01)) return false;
+    if (q) { const txt = ((m.detalle||'') + ' ' + (m.referencia||'')).toLowerCase(); if (!txt.includes(q)) return false; }
+    return true;
+  });
+  const monBase = (todos.find(m=>m.moneda)?.moneda) || 'ARS';
+  return { grupo: g, movs, saldoAnterior, monBase, desde, hasta };
+}
+function _ccMovTablaHTML(tipo, contactoId) {
+  const c = _ccMovComputar(tipo, contactoId);
+  if (!c) return '<div class="text-slate-400 py-6 text-center">Sin datos</div>';
+  let saldoAc = c.saldoAnterior;
+  const filaAnt = (c.desde && Math.abs(c.saldoAnterior) > 0.01)
+    ? `<tr class="bg-slate-50"><td colspan="4" class="text-right text-[11px] text-slate-500 py-1">Saldo anterior al ${fmtFecha(c.desde)}</td><td class="text-right font-semibold">${monedaFmt(c.monBase, c.saldoAnterior)}</td><td></td></tr>`
+    : '';
+  const cuerpo = c.movs.map(m => {
+    saldoAc += Number(m.debe||0) - Number(m.haber||0);
+    const esCobroPago = /^(cobro|pago) de /i.test(m.detalle||'') && Number(m.haber||0) > 0.01;
+    const esSistema = (m.referencia && /^(FAC|FACC|FACV|FACHR|GUIAH|GUIAHPAY|LIQ|LIQH|OP|REC|CPE|ARR|CRED)/i.test(m.referencia)) || /^(cobro|pago) de /i.test(m.detalle||'');
+    const acc = (can('finanzas:update') && !esSistema)
+      ? `<button class="text-slate-400 hover:text-sky-600" title="Editar" onclick="ccMovEditar('${tipo}','${contactoId}','${m.id}')">✏️</button>
+         <button class="text-slate-400 hover:text-red-600 ml-1" title="Eliminar" onclick="ccMovEliminar('${m.id}')">🗑️</button>`
+      : (esCobroPago && can('finanzas:delete')
+          ? `<button class="text-slate-400 hover:text-red-600" title="Deshacer este cobro/pago (repone la deuda y revierte caja/banco). Si tiene Recibo/OP, usá el ↩️ de ese comprobante." onclick="ccDeshacerCobroSuelto('${m.id}')">↩️</button>`
+          : (esSistema ? `<span class="text-[10px] text-slate-300" title="Movimiento del sistema: se deshace desde su comprobante">🔒</span>` : ''));
+    return `<tr class="table-row">
+      <td>${fmtFecha(m.fecha)}</td>
+      <td>${esc(m.detalle||'—')}${m.referencia?` <span class="text-[10px] text-slate-400">(${esc(m.referencia)})</span>`:''}</td>
+      <td class="text-right">${m.debe?monedaFmt(m.moneda||'ARS', m.debe):'—'}</td>
+      <td class="text-right text-emerald-700">${m.haber?monedaFmt(m.moneda||'ARS', m.haber):'—'}</td>
+      <td class="text-right font-semibold">${monedaFmt(m.moneda||'ARS', saldoAc)}</td>
+      <td class="text-right whitespace-nowrap">${acc}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="text-[11px] text-slate-500 mb-1">${c.movs.length} movimiento(s) · saldo final del detalle: <b>${monedaFmt(c.monBase, saldoAc)}</b></div>
+    <table class="data">
+      <thead><tr><th>Fecha</th><th>Detalle</th><th class="text-right">Debe</th><th class="text-right">Haber</th><th class="text-right">Saldo</th><th></th></tr></thead>
+      <tbody>${filaAnt}${cuerpo || (filaAnt?'':'<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin movimientos con esos filtros</td></tr>')}</tbody>
+    </table>`;
+}
+function ccMovFiltrar(){ const v=state._ccVisor; if(!v) return; const cont=document.getElementById('cc-mov-tabla'); if(cont) cont.innerHTML=_ccMovTablaHTML(v.tipo, v.contactoId); }
+function ccMovLimpiarFiltros(){ ['cc-f-desde','cc-f-hasta','cc-f-q'].forEach(id=>{const e=document.getElementById(id); if(e)e.value='';}); const t=document.getElementById('cc-f-tipo'); if(t)t.value=''; ccMovFiltrar(); }
+// Arma el estado de cuenta (respeta filtros) para PDF / impresión.
+function _ccMovBuildDoc() {
+  const v = state._ccVisor; if (!v) return null;
+  const c = _ccMovComputar(v.tipo, v.contactoId); if (!c) return null;
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if (!jsPDFCtor){ toast('Esperá un momento, todavía se está cargando la librería de PDF…','warn'); return null; }
+  const g=c.grupo, mon=c.monBase;
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  const pageW=doc.internal.pageSize.getWidth(); let y=40;
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(nombreEmpresaActiva(), pageW/2, y, {align:'center'}); y+=18;
+  doc.setFontSize(12); doc.text('Estado de cuenta corriente', pageW/2, y, {align:'center'}); y+=16;
+  doc.setFont('helvetica','normal'); doc.setFontSize(10);
+  doc.text(`${v.tipo==='cliente'?'Cliente':'Proveedor'}: ${g.contacto.razonSocial||''}`, 40, y); y+=14;
+  const sub=[]; if(c.desde) sub.push('desde '+fmtFecha(c.desde)); if(c.hasta) sub.push('hasta '+fmtFecha(c.hasta));
+  doc.setFontSize(9); doc.setTextColor(120);
+  doc.text(`Emitido ${fmtDate(new Date())}${sub.length?' · período '+sub.join(' '):''}`, 40, y); doc.setTextColor(0); y+=6;
+  let saldoAc=c.saldoAnterior; const body=[];
+  if (c.desde && Math.abs(c.saldoAnterior)>0.01) body.push(['', 'Saldo anterior al '+fmtFecha(c.desde), '', '', monedaFmt(mon,c.saldoAnterior)]);
+  c.movs.forEach(m=>{ saldoAc += Number(m.debe||0)-Number(m.haber||0);
+    body.push([ fmtFecha(m.fecha), (m.detalle||'—')+(m.referencia?` (${m.referencia})`:''),
+      m.debe?monedaFmt(m.moneda||'ARS',m.debe):'', m.haber?monedaFmt(m.moneda||'ARS',m.haber):'', monedaFmt(m.moneda||'ARS',saldoAc) ]); });
+  doc.autoTable({
+    head:[['Fecha','Detalle','Debe','Haber','Saldo']], body,
+    foot:[['','','','Saldo final', monedaFmt(mon, saldoAc)]],
+    startY:y+8, styles:{fontSize:8,cellPadding:3},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255]},
+    footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
+    columnStyles:{0:{cellWidth:60},2:{halign:'right'},3:{halign:'right'},4:{halign:'right'}},
+  });
+  return { doc, g };
+}
+function ccMovPDF(){ const r=_ccMovBuildDoc(); if(!r) return; const nom=(r.g.contacto.razonSocial||'cuenta').replace(/[^a-z0-9]+/gi,'-'); r.doc.save(`EstadoCuenta_${nom}_${new Date().toISOString().slice(0,10)}.pdf`); toast('PDF generado','success'); }
+function ccMovImprimir(){ const r=_ccMovBuildDoc(); if(!r) return; try{ r.doc.autoPrint(); window.open(r.doc.output('bloburl'),'_blank'); }catch(_){ r.doc.save('EstadoCuenta.pdf'); } }
 // Eliminar un movimiento MANUAL de la cuenta corriente (los del sistema quedan bloqueados en el backend).
 async function ccMovEliminar(id){
   if (!confirm('¿Eliminar este movimiento de la cuenta corriente? Esta acción no se puede deshacer.')) return;
