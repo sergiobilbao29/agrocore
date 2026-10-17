@@ -3030,6 +3030,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/10/2026',
+      titulo:'📋 v2.320.0 — Órdenes de trabajo: cantidad total → dosis/ha + arreglos de carga',
+      desc:'Mejoras en <b>Órdenes de trabajo</b> por pedido de uso: <b>(1)</b> en los insumos ahora cargás la <b>cantidad total</b> a aplicar y el sistema calcula solo la <b>dosis/ha</b> (total ÷ hectáreas); también funciona al revés (si ponés dosis/ha, calcula el total). Así ya no quedan diferencias por redondeo (2,5 lt reparte exacto). <b>(2)</b> Se corrigió el campo <b>Hectáreas</b>: antes, al tipear un número, perdía el foco y había que volver a tocarlo; ahora podés escribir de corrido. <b>(3)</b> Al elegir la <b>campaña</b>, se autocompleta el <b>nombre del campo</b>, el lote y las hectáreas. <b>(4)</b> Al <b>copiar catálogos entre empresas</b>, el anti-duplicados ahora compara también por <b>nombre</b> (no solo por código), así no se vuelven a crear ítems que ya existían. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/10/2026',
       titulo:'📄 v2.319.0 — Estado de cuenta en PDF + filtros (clientes y proveedores)',
       desc:'En <b>Cuentas a cobrar</b> y <b>Cuentas a pagar</b>, al abrir la cuenta corriente de un cliente/proveedor ahora podés <b>filtrar</b> los movimientos por <b>fecha (desde/hasta)</b>, por <b>tipo</b> (deudas o cobros/pagos) y <b>buscar</b> por detalle o N° de comprobante. Si filtrás por fecha, el detalle muestra el <b>saldo anterior</b> al período y el <b>saldo final</b>. Y sumamos dos botones para <b>pasar el detalle</b>: <b>📄 PDF</b> (descarga el estado de cuenta con el encabezado de la empresa, los datos del cliente/proveedor, los movimientos con saldo y el total, respetando los filtros) e <b>🖨️ Imprimir</b>. Ideal para enviarle el resumen a un cliente o proveedor. 🌱' },
@@ -28008,6 +28011,8 @@ async function _otCargarAux() {
   if (!state.cache.productos)   { try { state.cache.productos = (await api('/api/productos')).data||[]; } catch {} }
   if (!state.cache.depositos)   { try { state.cache.depositos = (await api('/api/depositos')).data||[]; } catch {} }
   if (!state.cache.laboresCat)  { try { const c=(await api('/api/catalogos')).data||[]; state.cache.catalogos=c; state.cache.laboresCat=c.filter(x=>x.tipo==='Labor'); } catch {} }
+  if (!state.cache.campos)      { try { state.cache.campos = (await api('/api/campos')).data||[]; } catch {} }
+  if (!state.cache.lotes)       { try { state.cache.lotes = (await api('/api/lotes')).data||[]; } catch {} }
 }
 
 async function otForm(id) {
@@ -28074,20 +28079,20 @@ function otRenderRows() {
         <div><label class="label">Campo</label><input class="input" value="${esc(r.campo||'')}" oninput="_otRows[${ri}].campo=this.value"/></div>
         <div><label class="label">Lote</label><input class="input" value="${esc(r.lote||'')}" oninput="_otRows[${ri}].lote=this.value"/></div>
         <div><label class="label">Cultivo</label><input class="input" value="${esc(r.cultivo||'')}" oninput="_otRows[${ri}].cultivo=this.value"/></div>
-        <div><label class="label">Hectáreas</label><input type="number" step="0.01" class="input" value="${r.hectareas??''}" oninput="_otRows[${ri}].hectareas=this.value; otRecalcInsumos(${ri})"/></div>
+        <div><label class="label">Hectáreas</label><input type="number" step="0.01" class="input" value="${r.hectareas??''}" oninput="_otRows[${ri}].hectareas=this.value; otHaChange(${ri})"/></div>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2">
         <div class="md:col-span-2"><label class="label">Labor *</label><input class="input" list="${_otLaboresDatalistId()}" placeholder="Pulverización, Siembra…" value="${esc(r.labor||'')}" oninput="_otRows[${ri}].labor=this.value"/></div>
         <div class="md:col-span-4"><label class="label">Observación del renglón</label><input class="input" value="${esc(r.observacion||'')}" oninput="_otRows[${ri}].observacion=this.value"/></div>
       </div>
-      <div class="text-[11px] font-semibold text-slate-500 mb-1">Insumos</div>
-      <table class="data text-sm"><thead><tr><th>Producto</th><th class="text-right">Dosis/ha</th><th class="text-right">Total</th><th>Unidad</th><th></th></tr></thead>
+      <div class="text-[11px] font-semibold text-slate-500 mb-1">Insumos <span class="font-normal text-slate-400">— cargá la <b>cantidad total</b> y el sistema calcula la dosis/ha (o al revés)</span></div>
+      <table class="data text-sm"><thead><tr><th>Producto</th><th class="text-right">Cantidad total</th><th class="text-right">Dosis/ha</th><th>Unidad</th><th></th></tr></thead>
         <tbody>${(r.insumos||[]).map((it,ii)=>`
           <tr>
             <td><select class="input" onchange="otPickProducto(${ri},${ii},this.value)"><option value="">— Insumo —</option>${prods.map(p=>`<option value="${esc(p.id)}" ${it.productoId===p.id?'selected':''}>${esc(p.nombre)}</option>`).join('')}</select>
                 ${!it.productoId&&it.nombre?`<input class="input mt-1" value="${esc(it.nombre)}" oninput="_otRows[${ri}].insumos[${ii}].nombre=this.value" placeholder="nombre libre"/>`:''}</td>
-            <td><input type="number" step="0.001" class="input text-right" value="${it.dosis??''}" oninput="_otRows[${ri}].insumos[${ii}].dosis=this.value; otRecalcInsumoTotal(${ri},${ii})"/></td>
-            <td><input type="number" step="0.001" class="input text-right" value="${it.total??''}" oninput="_otRows[${ri}].insumos[${ii}].total=this.value"/></td>
+            <td><input id="ot-t-${ri}-${ii}" type="number" step="0.001" class="input text-right" value="${it.total??''}" placeholder="total a aplicar" oninput="_otRows[${ri}].insumos[${ii}].total=this.value; otRecalcInsumoDosis(${ri},${ii})"/></td>
+            <td><input id="ot-d-${ri}-${ii}" type="number" step="0.000001" class="input text-right" value="${it.dosis??''}" placeholder="auto" oninput="_otRows[${ri}].insumos[${ii}].dosis=this.value; otRecalcInsumoTotal(${ri},${ii})"/></td>
             <td><input class="input" value="${esc(it.unidad||'')}" oninput="_otRows[${ri}].insumos[${ii}].unidad=this.value" placeholder="lt/kg"/></td>
             <td class="text-right">${(r.insumos.length>1)?`<button type="button" class="btn btn-ghost text-xs text-red-600" onclick="otDelInsumo(${ri},${ii})">✕</button>`:''}</td>
           </tr>`).join('')}</tbody></table>
@@ -28103,10 +28108,16 @@ function otPickCampana(ri, cid){
   _otRows[ri].campanaId = cid;
   const c = (state.cache.campanas||[]).find(x=>x.id===cid);
   if (c) {
-    _otRows[ri].campo = c.lote?.campo?.nombre || c.campo?.nombre || _otRows[ri].campo || '';
-    _otRows[ri].lote = c.lote?.nombre || _otRows[ri].lote || '';
+    // Buscar el lote y su campo tanto del objeto campaña como de los catálogos cacheados.
+    const lote = c.lote || (state.cache.lotes||[]).find(l=>l.id===c.loteId);
+    const campoNom = c.lote?.campo?.nombre || c.campo?.nombre || lote?.campo?.nombre
+      || (state.cache.campos||[]).find(cp=>cp.id===(lote?.campoId||lote?.campo?.id))?.nombre
+      || _otRows[ri].campo || '';
+    _otRows[ri].campo = campoNom;
+    _otRows[ri].lote = c.lote?.nombre || lote?.nombre || _otRows[ri].lote || '';
     _otRows[ri].cultivo = c.cultivo || c.cultivoNombre || _otRows[ri].cultivo || '';
-    if (c.lote?.hectareas) _otRows[ri].hectareas = c.lote.hectareas;
+    const ha = c.lote?.hectareas || lote?.hectareas;
+    if (ha) _otRows[ri].hectareas = ha;
   }
   otRenderRows();
 }
@@ -28114,15 +28125,28 @@ function otPickProducto(ri,ii,pid){
   _otRows[ri].insumos[ii].productoId = pid;
   const p = (state.cache.productos||[]).find(x=>x.id===pid);
   if (p){ _otRows[ri].insumos[ii].nombre = p.nombre; if(p.unidad) _otRows[ri].insumos[ii].unidad = p.unidad; }
-  otRecalcInsumoTotal(ri,ii);
   otRenderRows();
 }
+// dosis/ha editada -> recalcula total (ha x dosis) y actualiza el campo en vivo.
 function otRecalcInsumoTotal(ri,ii){
   const r=_otRows[ri], it=r.insumos[ii];
   const ha=Number(r.hectareas||0), d=Number(it.dosis||0);
-  if (ha>0 && d>0) it.total = Math.round(ha*d*1000)/1000;
+  if (ha>0 && d>0){ it.total = Math.round(ha*d*1000)/1000; const el=document.getElementById(`ot-t-${ri}-${ii}`); if(el) el.value = it.total; }
 }
-function otRecalcInsumos(ri){ (_otRows[ri].insumos||[]).forEach((_,ii)=>otRecalcInsumoTotal(ri,ii)); otRenderRows(); }
+// cantidad total editada -> recalcula la dosis/ha (total / ha) y actualiza el campo en vivo.
+function otRecalcInsumoDosis(ri,ii){
+  const r=_otRows[ri], it=r.insumos[ii];
+  const ha=Number(r.hectareas||0), t=Number(it.total||0);
+  if (ha>0 && t>0){ it.dosis = Math.round(t/ha*1000000)/1000000; const el=document.getElementById(`ot-d-${ri}-${ii}`); if(el) el.value = it.dosis; }
+}
+// Cambió las hectáreas: recalcula SIN re-renderizar (así no se pierde el foco al tipear).
+// Si el insumo tiene cantidad total, recalcula la dosis; si no, recalcula el total desde la dosis.
+function otHaChange(ri){
+  (_otRows[ri].insumos||[]).forEach((it,ii)=>{
+    if (it.total!=='' && it.total!=null && Number(it.total)>0) otRecalcInsumoDosis(ri,ii);
+    else otRecalcInsumoTotal(ri,ii);
+  });
+}
 
 async function otSave(){
   const renglones = _otRows.map(r=>({

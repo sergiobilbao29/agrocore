@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.319.0';
+const AGROCORE_VERSION = '2.320.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2608,8 +2608,21 @@ async function _copiarCatalogos(sourceCompanyId, targetCompanyId, excludeTipos =
     where: { companyId: targetCompanyId },
     select: { tipo: true, codigo: true, nombre: true },
   });
-  const existeKey = new Set(yaExistentes.map(c => `${(c.tipo||'').toLowerCase()}|${(c.codigo||c.nombre||'').toLowerCase()}`));
-  const nuevos = aCopiar.filter(c => !existeKey.has(`${(c.tipo||'').toLowerCase()}|${(c.codigo||c.nombre||'').toLowerCase()}`));
+  // Anti-duplicados robusto: existe si coincide por (tipo, codigo) O por (tipo, nombre).
+  // Antes solo miraba codigo||nombre y, si el codigo difería o faltaba en un lado,
+  // volvía a crear un item que en realidad ya existía (duplicado por nombre).
+  const existeKey = new Set();
+  yaExistentes.forEach(c => {
+    const t = (c.tipo||'').toLowerCase();
+    if (c.codigo) existeKey.add(`${t}|c|${String(c.codigo).toLowerCase().trim()}`);
+    if (c.nombre) existeKey.add(`${t}|n|${String(c.nombre).toLowerCase().trim()}`);
+  });
+  const nuevos = aCopiar.filter(c => {
+    const t = (c.tipo||'').toLowerCase();
+    const porCod = c.codigo ? existeKey.has(`${t}|c|${String(c.codigo).toLowerCase().trim()}`) : false;
+    const porNom = c.nombre ? existeKey.has(`${t}|n|${String(c.nombre).toLowerCase().trim()}`) : false;
+    return !porCod && !porNom;
+  });
   if (!nuevos.length) return 0;
   await prisma.catalogo.createMany({
     data: nuevos.map(c => ({
