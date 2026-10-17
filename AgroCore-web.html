@@ -404,6 +404,9 @@
             <span id="asist-badge" class="hidden absolute -top-0.5 -right-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded-full min-w-[16px] h-[16px] px-1 flex items-center justify-center">0</span>
           </button>
         </div>
+        <button onclick="refrescarVista(this)" class="btn btn-ghost p-1" title="Actualizar datos (recarga la pantalla con lo último, sin cerrar el sistema)" id="refresh-btn">
+          <span class="text-xl leading-none">🔄</span>
+        </button>
         <div class="relative">
           <button onclick="toggleNotifs(event)" class="btn btn-ghost relative p-1" title="Notificaciones" id="notifs-btn">
             <span class="text-xl leading-none">🔔</span>
@@ -1988,6 +1991,20 @@ function setHeader(title, sub) {
   $('#page-title').textContent = title || '';
   $('#page-sub').textContent = sub || '';
 }
+// Actualiza la pantalla actual con los datos más nuevos del servidor, sin tener que
+// cerrar y abrir el sistema. Limpia la caché en memoria y vuelve a renderizar la vista.
+async function refrescarVista(btn){
+  const ic = btn && btn.querySelector('span');
+  if (ic) { ic.style.transition='transform .6s'; ic.style.transform='rotate(360deg)'; }
+  try {
+    state.cache = {};                 // tira todas las listas cacheadas (productos, catálogos, etc.)
+    state._ccData = null; state._trialLeads = null; state._vendedores = null; state._usuariosLista = null;
+    const pg = state.currentPage || 'inicio';
+    if (pages[pg]) await pages[pg](); else go(pg, true);
+    toast('Datos actualizados','success');
+  } catch(e){ toast('No se pudo actualizar: '+(e&&e.message||e),'error'); }
+  finally { if (ic) setTimeout(()=>{ ic.style.transform=''; }, 650); }
+}
 function toggleUserMenu() { $('#user-menu').classList.toggle('hidden'); }
 
 /* ===================== BUSCADOR GLOBAL ===================== */
@@ -3030,6 +3047,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/10/2026',
+      titulo:'🤝 v2.322.0 — Órdenes de trabajo: imputar directo a la Sociedad/UTE',
+      desc:'En el renglón de una <b>Orden de trabajo</b> ahora podés elegir una <b>Sociedad/UTE</b> y el <b>campo de esa sociedad</b> (puede ser de otra empresa del grupo). Al marcar la orden como <b>realizada</b>, la <b>labor y los insumos se imputan directo a ese campo</b> dentro de la sociedad —en la empresa dueña y en su campaña—, <b>sin tener que ir a la Sociedad a cargarlo a mano</b>. Al elegir el campo se autocompletan el nombre, las hectáreas y el cultivo. Si el campo es de la misma empresa, además descuenta el stock como siempre. 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/10/2026',
+      titulo:'🔄 v2.321.0 — Botón "Actualizar" para ver los datos nuevos al instante',
+      desc:'Arriba a la derecha, al lado de la campanita 🔔, hay un botón nuevo <b>🔄 Actualizar</b>. Cuando cargás algo (por ejemplo productos en el catálogo) y no te aparece en otra pantalla, antes había que <b>cerrar y abrir el sistema</b>; ahora tocás 🔄 y la pantalla se <b>recarga con lo último</b> del servidor, sin salir. 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/10/2026',
       titulo:'📋 v2.320.0 — Órdenes de trabajo: cantidad total → dosis/ha + arreglos de carga',
       desc:'Mejoras en <b>Órdenes de trabajo</b> por pedido de uso: <b>(1)</b> en los insumos ahora cargás la <b>cantidad total</b> a aplicar y el sistema calcula solo la <b>dosis/ha</b> (total ÷ hectáreas); también funciona al revés (si ponés dosis/ha, calcula el total). Así ya no quedan diferencias por redondeo (2,5 lt reparte exacto). <b>(2)</b> Se corrigió el campo <b>Hectáreas</b>: antes, al tipear un número, perdía el foco y había que volver a tocarlo; ahora podés escribir de corrido. <b>(3)</b> Al elegir la <b>campaña</b>, se autocompleta el <b>nombre del campo</b>, el lote y las hectáreas. <b>(4)</b> Al <b>copiar catálogos entre empresas</b>, el anti-duplicados ahora compara también por <b>nombre</b> (no solo por código), así no se vuelven a crear ítems que ya existían. 🌱' },
@@ -28013,6 +28036,8 @@ async function _otCargarAux() {
   if (!state.cache.laboresCat)  { try { const c=(await api('/api/catalogos')).data||[]; state.cache.catalogos=c; state.cache.laboresCat=c.filter(x=>x.tipo==='Labor'); } catch {} }
   if (!state.cache.campos)      { try { state.cache.campos = (await api('/api/campos')).data||[]; } catch {} }
   if (!state.cache.lotes)       { try { state.cache.lotes = (await api('/api/lotes')).data||[]; } catch {} }
+  if (!state.cache.sociedades)  { try { state.cache.sociedades = (await api('/api/sociedades')).data||[]; } catch { state.cache.sociedades=[]; } }
+  if (!state._otSocCampos) state._otSocCampos = {};
 }
 
 async function otForm(id) {
@@ -28024,8 +28049,11 @@ async function otForm(id) {
   _otRows = (edit?.renglones?.length ? edit.renglones.map(r=>({
     campanaId:r.campanaId||'', campo:r.campo||'', lote:r.lote||'', cultivo:r.cultivo||'', hectareas:r.hectareas??'',
     labor:r.labor||'', observacion:r.observacion||'',
+    sociedadId:r.sociedadId||'', sociedadLinkId:r.sociedadLinkId||'',
     insumos:(r.insumos||[]).map(i=>({productoId:i.productoId||'', nombre:i.nombre||'', unidad:i.unidad||'', dosis:i.dosis??'', total:i.total??''})),
-  })) : [{ campanaId:'',campo:'',lote:'',cultivo:'',hectareas:'',labor:'',observacion:'',insumos:[{productoId:'',nombre:'',unidad:'',dosis:'',total:''}] }]);
+  })) : [{ campanaId:'',campo:'',lote:'',cultivo:'',hectareas:'',labor:'',observacion:'',sociedadId:'',sociedadLinkId:'',insumos:[{productoId:'',nombre:'',unidad:'',dosis:'',total:''}] }]);
+  // Si alguna OT en edición ya tiene campos de sociedad, precargo sus campos para los selects.
+  for (const rr of _otRows) { if (rr.sociedadId && !state._otSocCampos[rr.sociedadId]) { try { state._otSocCampos[rr.sociedadId] = (await api('/api/sociedades/'+rr.sociedadId+'/carga-datos')).data?.campos||[]; } catch {} } }
   const provs = (state.cache.proveedores||[]).filter(p=>p.activo!==false);
   const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
   openModal({
@@ -28072,9 +28100,18 @@ function otRenderRows() {
         <div class="text-xs font-semibold text-slate-600">Renglón ${ri+1}</div>
         ${_otRows.length>1?`<button type="button" class="btn btn-ghost text-xs text-red-600" onclick="otDelRow(${ri})">✕ quitar renglón</button>`:''}
       </div>
+      ${(()=>{ const socs=(state.cache.sociedades||[]); if(!socs.length) return ''; const socCampos = r.sociedadId ? (state._otSocCampos?.[r.sociedadId]||[]) : [];
+        return `<div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2 p-2 rounded bg-emerald-50 border border-emerald-200">
+        <div class="md:col-span-2"><label class="label text-xs">🤝 Sociedad/UTE (opcional)</label>
+          <select class="input" onchange="otPickSociedad(${ri}, this.value)"><option value="">— No, es mía —</option>${socs.map(s=>`<option value="${esc(s.id)}" ${r.sociedadId===s.id?'selected':''}>${esc(s.nombre)}</option>`).join('')}</select>
+        </div>
+        ${r.sociedadId?`<div class="md:col-span-3"><label class="label text-xs">Campo de la sociedad *</label>
+          <select class="input" onchange="otPickSocCampo(${ri}, this.value)"><option value="">— Elegí el campo —</option>${socCampos.map(c=>`<option value="${esc(c.linkId)}" ${r.sociedadLinkId===c.linkId?'selected':''}>${esc(c.nombre)} · ${esc(c.empresa||'')}${c.hectareas?(' · '+fmtN(c.hectareas)+' ha'):''}</option>`).join('')}</select></div>
+        <div class="md:col-span-1 flex items-end"><span class="text-[10px] text-emerald-700">Al realizar, se imputa directo a la sociedad.</span></div>`:''}
+      </div>`; })()}
       <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2">
         <div class="md:col-span-2"><label class="label">Campaña (opcional)</label>
-          <select class="input" onchange="otPickCampana(${ri}, this.value)"><option value="">— Ninguna —</option>${camps.map(c=>`<option value="${esc(c.id)}" ${r.campanaId===c.id?'selected':''}>${esc(campLabel(c))}</option>`).join('')}</select>
+          <select class="input" ${r.sociedadLinkId?'disabled title="Destino: Sociedad"':''} onchange="otPickCampana(${ri}, this.value)"><option value="">${r.sociedadLinkId?'— Va a la Sociedad —':'— Ninguna —'}</option>${camps.map(c=>`<option value="${esc(c.id)}" ${r.campanaId===c.id?'selected':''}>${esc(campLabel(c))}</option>`).join('')}</select>
         </div>
         <div><label class="label">Campo</label><input class="input" value="${esc(r.campo||'')}" oninput="_otRows[${ri}].campo=this.value"/></div>
         <div><label class="label">Lote</label><input class="input" value="${esc(r.lote||'')}" oninput="_otRows[${ri}].lote=this.value"/></div>
@@ -28100,12 +28137,13 @@ function otRenderRows() {
     </div>`).join('');
 }
 function otSyncDom(){ /* valores ya sincronizados por oninput; no-op para selects de campaña/producto que usan sus propios handlers */ }
-function otAddRow(){ otSyncDom(); _otRows.push({ campanaId:'',campo:'',lote:'',cultivo:'',hectareas:'',labor:'',observacion:'',insumos:[{productoId:'',nombre:'',unidad:'',dosis:'',total:''}] }); otRenderRows(); }
+function otAddRow(){ otSyncDom(); _otRows.push({ campanaId:'',campo:'',lote:'',cultivo:'',hectareas:'',labor:'',observacion:'',sociedadId:'',sociedadLinkId:'',insumos:[{productoId:'',nombre:'',unidad:'',dosis:'',total:''}] }); otRenderRows(); }
 function otDelRow(ri){ _otRows.splice(ri,1); otRenderRows(); }
 function otAddInsumo(ri){ _otRows[ri].insumos.push({productoId:'',nombre:'',unidad:'',dosis:'',total:''}); otRenderRows(); }
 function otDelInsumo(ri,ii){ _otRows[ri].insumos.splice(ii,1); otRenderRows(); }
 function otPickCampana(ri, cid){
   _otRows[ri].campanaId = cid;
+  if (cid){ _otRows[ri].sociedadId=''; _otRows[ri].sociedadLinkId=''; }   // campaña propia: no es sociedad
   const c = (state.cache.campanas||[]).find(x=>x.id===cid);
   if (c) {
     // Buscar el lote y su campo tanto del objeto campaña como de los catálogos cacheados.
@@ -28118,6 +28156,28 @@ function otPickCampana(ri, cid){
     _otRows[ri].cultivo = c.cultivo || c.cultivoNombre || _otRows[ri].cultivo || '';
     const ha = c.lote?.hectareas || lote?.hectareas;
     if (ha) _otRows[ri].hectareas = ha;
+  }
+  otRenderRows();
+}
+async function otPickSociedad(ri, sid){
+  _otRows[ri].sociedadId = sid || '';
+  _otRows[ri].sociedadLinkId = '';
+  if (sid){
+    _otRows[ri].campanaId = '';   // destino pasa a ser la sociedad
+    if (!state._otSocCampos[sid]) { try { state._otSocCampos[sid] = (await api('/api/sociedades/'+sid+'/carga-datos')).data?.campos||[]; } catch { state._otSocCampos[sid]=[]; } }
+  }
+  otRenderRows();
+}
+function otPickSocCampo(ri, linkId){
+  _otRows[ri].sociedadLinkId = linkId || '';
+  const campos = state._otSocCampos[_otRows[ri].sociedadId] || [];
+  const c = campos.find(x=>x.linkId===linkId);
+  if (c){
+    _otRows[ri].campo = c.nombre || _otRows[ri].campo || '';
+    if (c.hectareas) _otRows[ri].hectareas = c.hectareas;
+    if (c.cultivo) _otRows[ri].cultivo = c.cultivo;
+    _otRows[ri].campanaId = '';
+    otHaChange(ri);
   }
   otRenderRows();
 }
@@ -28153,6 +28213,7 @@ async function otSave(){
     campanaId: r.campanaId||null, campo:r.campo||null, lote:r.lote||null, cultivo:r.cultivo||null,
     hectareas: r.hectareas!==''&&r.hectareas!=null?Number(r.hectareas):null,
     labor: (r.labor||'').trim(), observacion: r.observacion||null,
+    sociedadId: r.sociedadId||null, sociedadLinkId: r.sociedadLinkId||null,
     insumos: (r.insumos||[]).filter(i=>(i.productoId||i.nombre)).map(i=>({
       productoId:i.productoId||null, nombre:(i.nombre||'').trim()||'(insumo)', unidad:i.unidad||null,
       dosis: i.dosis!==''&&i.dosis!=null?Number(i.dosis):null, total: i.total!==''&&i.total!=null?Number(i.total):null,

@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.320.0';
+const AGROCORE_VERSION = '2.322.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -16410,6 +16410,7 @@ function _serializeOT(o) {
     renglones: (o.renglones || []).map(r => ({
       id: r.id, campanaId: r.campanaId, campo: r.campo, lote: r.lote, cultivo: r.cultivo,
       hectareas: r.hectareas, labor: r.labor, observacion: r.observacion,
+      sociedadId: r.sociedadId || null, sociedadLinkId: r.sociedadLinkId || null,
       insumos: (r.insumos || []).map(i => ({
         id: i.id, productoId: i.productoId, nombre: i.nombre, unidad: i.unidad,
         dosis: i.dosis, total: i.total,
@@ -16427,6 +16428,8 @@ const otRenglonSchema = z.object({
   hectareas: z.coerce.number().nullable().optional(),
   labor: z.string().min(1),
   observacion: z.string().nullable().optional(),
+  sociedadId: z.string().nullable().optional(),
+  sociedadLinkId: z.string().nullable().optional(),
   insumos: z.array(z.object({
     productoId: z.string().nullable().optional(),
     nombre: z.string().min(1),
@@ -16487,6 +16490,7 @@ app.post('/api/ordenes-trabajo', requireCompany, requirePermission('produccion:c
               campanaId: r.campanaId || null, campo: r.campo || null, lote: r.lote || null,
               cultivo: r.cultivo || null, hectareas: r.hectareas ?? null, labor: r.labor,
               observacion: r.observacion || null,
+              sociedadId: r.sociedadId || null, sociedadLinkId: r.sociedadLinkId || null,
               insumos: { create: (r.insumos || []).map(i => ({
                 productoId: i.productoId || null, nombre: i.nombre, unidad: i.unidad || null,
                 dosis: i.dosis ?? null, total: i.total ?? null,
@@ -16521,6 +16525,7 @@ app.put('/api/ordenes-trabajo/:id', requireCompany, requirePermission('produccio
               campanaId: r.campanaId || null, campo: r.campo || null, lote: r.lote || null,
               cultivo: r.cultivo || null, hectareas: r.hectareas ?? null, labor: r.labor,
               observacion: r.observacion || null,
+              sociedadId: r.sociedadId || null, sociedadLinkId: r.sociedadLinkId || null,
               insumos: { create: (r.insumos || []).map(i => ({
                 productoId: i.productoId || null, nombre: i.nombre, unidad: i.unidad || null,
                 dosis: i.dosis ?? null, total: i.total ?? null,
@@ -16535,6 +16540,30 @@ app.put('/api/ordenes-trabajo/:id', requireCompany, requirePermission('produccio
   } catch (e) { next(e); }
 });
 // Marcar REALIZADA (opcionalmente descuenta stock de los insumos)
+// Asegura (dentro de una transacción) una campaña para el campo de la sociedad, en la
+// empresa dueña del campo y en el ciclo de la sociedad. Espejo de _sociedadEnsureCampana.
+async function _otEnsureCampanaSociedadTx(tx, link, soc, cultivoFallback) {
+  const campo = await tx.campo.findFirst({ where: { id: link.campoId }, include: { lotes: { select: { id: true } } } });
+  if (!campo) throw Object.assign(new Error('Campo de la sociedad no encontrado'), { status: 404 });
+  let loteId = campo.lotes[0]?.id;
+  if (!loteId) { const l = await tx.lote.create({ data: { campoId: campo.id, nombre: 'Lote único', hectareas: Number(campo.hectareas || 0) } }); loteId = l.id; }
+  const loteIds = campo.lotes.map(l => l.id); if (!loteIds.includes(loteId)) loteIds.push(loteId);
+  const ciclo = (soc.ciclo || '').trim();
+  let campana = (await tx.campana.findMany({ where: { loteId: { in: loteIds }, companyId: link.companyId }, orderBy: { createdAt: 'desc' } }))
+    .filter(c => String(c.estado || '') !== 'cerrada')
+    .filter(c => !ciclo || String(c.ciclo || '').trim() === ciclo)[0];
+  if (!campana) {
+    campana = await tx.campana.create({ data: {
+      companyId: link.companyId, loteId,
+      nombre: `Sociedad ${soc.nombre}${ciclo ? ' — ' + ciclo : ''}`,
+      cultivo: cultivoFallback || link.cultivo || 'Sin especificar',
+      ciclo: ciclo || null, hectareas: Number(link.hectareas || campo.hectareas || 0),
+      estado: 'en_curso',
+      observaciones: `Campaña creada automáticamente desde la Sociedad/UTE "${soc.nombre}" (Orden de trabajo).`,
+    }});
+  }
+  return campana;
+}
 app.post('/api/ordenes-trabajo/:id/realizar', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
   try {
     const body = z.object({ fechaRealizada: z.coerce.date().nullable().optional(), descontarStock: z.boolean().optional(), depositoId: z.string().nullable().optional() }).parse(req.body || {});
@@ -16546,51 +16575,72 @@ app.post('/api/ordenes-trabajo/:id/realizar', requireCompany, requirePermission(
     const fechaReal = body.fechaRealizada || new Date();
     const nroOT = `${String(o.puntoVenta).padStart(4,'0')}-${String(o.numero).padStart(8,'0')}`;
     const upd = await prisma.$transaction(async (tx) => {
-      // Mapa de insumoId -> movimiento de stock generado (para enlazarlo también al InsumoAplicado)
-      const movPorInsumo = {};
-      if (descontar && !o.stockMovido) {
-        for (const r of o.renglones) {
+      const doStock = descontar && !o.stockMovido;
+      const doCamp  = !o.aplicadoEnCampana;
+      for (const r of o.renglones) {
+        // 1) Resolver el destino del renglón: campo de una Sociedad/UTE (puede ser de
+        //    otra empresa del grupo) o la campaña propia elegida.
+        let campanaId = null, ownerCompany = req.companyId, esSoc = false;
+        if (r.sociedadLinkId) {
+          const link = await tx.sociedadCampo.findFirst({ where: { id: r.sociedadLinkId } });
+          if (link && link.campoId && link.companyId) {
+            const soc = await tx.sociedad.findFirst({ where: { id: r.sociedadId || link.sociedadId } });
+            if (soc) {
+              const camp = await _otEnsureCampanaSociedadTx(tx, link, soc, r.cultivo);
+              campanaId = camp.id; ownerCompany = link.companyId; esSoc = true;
+            }
+          }
+        } else if (r.campanaId) {
+          const camp = await tx.campana.findFirst({ where: { id: r.campanaId, companyId: req.companyId } });
+          if (camp) campanaId = camp.id;
+        }
+        // Resuelve el producto en la empresa dueña del campo (para sociedad cross-empresa,
+        // busca el equivalente por nombre; misma empresa usa el productoId del renglón).
+        const _prodOwner = async (i) => {
+          if (!esSoc || ownerCompany === req.companyId) return i.productoId || null;
+          if (!i.nombre) return null;
+          const p = await tx.producto.findFirst({ where: { companyId: ownerCompany, nombre: i.nombre, activo: true } });
+          return p?.id || null;
+        };
+        // 2) Egreso de stock (en la empresa dueña del campo).
+        const movPorInsumo = {};
+        if (doStock) {
           for (const i of r.insumos) {
-            if (!i.productoId || !(Number(i.total) > 0)) continue;
+            if (!(Number(i.total) > 0)) continue;
+            const prodId = await _prodOwner(i);
+            if (!prodId) continue;   // sin producto equivalente en la empresa dueña: no mueve stock
             const mov = await tx.movimiento.create({ data: {
-              companyId: req.companyId, productoId: i.productoId, depositoId: depId || null,
+              companyId: ownerCompany, productoId: prodId,
+              depositoId: (ownerCompany === req.companyId ? (depId || null) : null),
               fecha: fechaReal, tipo: 'egreso', motivo: 'aplicacion',
               cantidad: Number(i.total), precio: null, total: null,
               referencia: `OT-${o.numero}`,
-              observaciones: `Insumo de Orden de Trabajo ${nroOT}${r.labor ? ' · ' + r.labor : ''}`,
+              observaciones: `Insumo de Orden de Trabajo ${nroOT}${r.labor ? ' · ' + r.labor : ''}${esSoc ? ' · Sociedad' : ''}`,
               userId: req.user?.id || null,
             }});
-            await tx.ordenTrabajoInsumo.update({ where: { id: i.id }, data: { movimientoId: mov.id } });
+            if (ownerCompany === req.companyId) await tx.ordenTrabajoInsumo.update({ where: { id: i.id }, data: { movimientoId: mov.id } });
             movPorInsumo[i.id] = mov.id;
           }
         }
-      }
-      // Registrar la labor y los insumos en la campaña (si el renglón tiene campaña y no se cargó antes)
-      if (!o.aplicadoEnCampana) {
-        for (const r of o.renglones) {
-          if (!r.campanaId) continue;
-          const camp = await tx.campana.findFirst({ where: { id: r.campanaId, companyId: req.companyId } });
-          if (!camp) continue;
+        // 3) Registrar la labor y los insumos en la campaña destino.
+        if (doCamp && campanaId) {
           const ubic = [r.campo, r.lote && `Lote ${r.lote}`, r.cultivo].filter(Boolean).join(' · ');
-          const obsBase = `OT ${nroOT}${ubic ? ' · ' + ubic : ''}`;
-          // Labor
+          const obsBase = `OT ${nroOT}${ubic ? ' · ' + ubic : ''}${esSoc ? ' · Sociedad' : ''}`;
           if (r.labor) {
             await tx.laborAplicada.create({ data: {
-              campanaId: r.campanaId, tipo: r.labor, fecha: fechaReal,
+              campanaId, tipo: r.labor, fecha: fechaReal,
               hectareasAplicadas: r.hectareas != null ? Number(r.hectareas) : null,
               observaciones: [obsBase, r.observacion].filter(Boolean).join(' · '),
               ordenTrabajoId: o.id,
             }});
           }
-          // Insumos
           for (const i of r.insumos) {
             const ha = r.hectareas != null ? Number(r.hectareas) : null;
-            // cantidad por hectárea: dosis si está; si no, total/ha; si no hay ha, el total
             let cantHa = (i.dosis != null) ? Number(i.dosis)
               : (ha && ha > 0 && i.total != null) ? Number(i.total) / ha
               : (i.total != null ? Number(i.total) : 0);
             await tx.insumoAplicado.create({ data: {
-              campanaId: r.campanaId, productoId: i.productoId || null,
+              campanaId, productoId: await _prodOwner(i),
               nombre: i.nombre || 'Insumo', cantidad: cantHa || 0,
               unidad: i.unidad || 'u/ha', fecha: fechaReal,
               hectareasAplicadas: ha,
