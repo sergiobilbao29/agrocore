@@ -2993,16 +2993,18 @@ model OrdenTrabajo {
 }
 
 model OrdenTrabajoRenglon {
-  id          String  @id @default(cuid())
-  ordenId     String
-  campanaId   String?
-  campo       String?
-  lote        String?
-  cultivo     String?
-  hectareas   Float?
-  labor       String
-  observacion String?
-  createdAt   DateTime @default(now())
+  id            String  @id @default(cuid())
+  ordenId       String
+  campanaId     String?
+  campo         String?
+  lote          String?
+  cultivo       String?
+  hectareas     Float?
+  labor         String
+  observacion   String?
+  sociedadId    String?  // si el renglón es de un campo de una Sociedad/UTE
+  sociedadLinkId String? // id del SociedadCampo (campo dentro de la sociedad, puede ser de otra empresa)
+  createdAt     DateTime @default(now())
 
   orden    OrdenTrabajo        @relation(fields: [ordenId], references: [id], onDelete: Cascade)
   insumos  OrdenTrabajoInsumo[]
