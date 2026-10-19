@@ -3048,6 +3048,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/10/2026',
+      titulo:'📊 v2.324.0 — Exportar Movimientos de ventas/compras e Informe de saldos',
+      desc:'En <b>Movimientos de ventas</b> y <b>Movimientos de compras</b> ahora podés <b>descargar en PDF, imprimir o exportar a Excel</b> exactamente los registros que tenés filtrados en pantalla (por fecha, cliente/proveedor y tipo), con el total al pie. Además sumamos el botón <b>💰 Saldos por cliente</b> (en ventas) y <b>💰 Saldos por proveedor</b> (en compras): arma un <b>informe de saldos</b> con lo facturado, lo cobrado/pagado y el <b>saldo pendiente de cada uno</b>, más el <b>total a cobrar o a pagar</b>, también descargable en PDF o Excel. 🧾' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/10/2026',
       titulo:'📄 v2.323.0 — Estado de cuenta del empleado en PDF',
       desc:'En la ficha de cada empleado hay un botón nuevo <b>📄 Estado de cuenta</b> que genera un PDF con la <b>cuenta corriente mes por mes</b>: por cada período muestra <b>Ganancias, Gastos, Neto del mes, lo Pagado y el Saldo acumulado</b> (con arrastre de un mes al otro), más una fila de <b>Totales</b> y una aclaración del saldo final (a favor del empleado o lo que debe). Ideal para pasarle el detalle de la cuenta a cualquier empleado, igual que ya se hace con clientes y proveedores. 🧾' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/10/2026',
@@ -14449,6 +14452,15 @@ pages.facturacion = async function() {
       return true;
     });
     movs.sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
+    // Snapshot normalizado para exportar / imprimir lo que está filtrado en pantalla.
+    state._ventaMovsExport = movs.map(m=>({
+      fecha:m.fecha,
+      tipo: m.tipoKey==='nc'?'Nota de crédito':m.tipoKey==='nd'?'Nota de débito':m.tipoKey==='cobro'?'Cobro (recibo)':'Factura',
+      comp: m.kind==='factura' ? `${m.letra} ${String(m.pv).padStart(4,'0')}-${String(m.nro).padStart(8,'0')}` : ('Recibo'+(m.numero?' '+m.numero:'')),
+      cliente: m.clienteNombre || '—',
+      estado: m.kind==='factura' ? (m.estado==='anulada'?'Anulada':(m.cae?'Autorizada':'Sin CAE')) : 'Cobrado',
+      total: Number(m.total||0),
+    }));
     const badge = m => m.tipoKey==='nc'?'<span class="badge badge-yellow">NC</span>':m.tipoKey==='nd'?'<span class="badge badge-red">ND</span>':m.tipoKey==='cobro'?'<span class="badge badge-green">Cobro</span>':'<span class="badge badge-blue">Factura</span>';
     $('#fact-table').innerHTML = `
       <table class="data">
@@ -14483,6 +14495,10 @@ pages.facturacion = async function() {
         ${informal
           ? `<button class="btn btn-secondary opacity-40 cursor-not-allowed" disabled title="El Libro IVA no aplica en una empresa SIN ARCA.">📘 Libro IVA 🔒</button>`
           : `<button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>`}
+        <button class="btn btn-secondary" onclick="ventasMovPDF()" title="PDF de los movimientos filtrados">📄 PDF</button>
+        <button class="btn btn-secondary" onclick="ventasMovImprimir()" title="Imprimir los movimientos filtrados">🖨️ Imprimir</button>
+        <button class="btn btn-secondary" onclick="ventasMovXLSX()" title="Exportar a Excel los movimientos filtrados">📊 Excel</button>
+        <button class="btn btn-secondary" onclick="informeSaldos('cliente')" title="Informe de saldos por cliente con el total a cobrar">💰 Saldos por cliente</button>
         ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ventaImportArca()" title="Importar comprobantes de venta desde el Excel de ARCA → Mis Comprobantes → Emitidos">📤 Importar de ARCA</button>`:''}
         ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="factForm()">+ Emitir factura</button>`:''}
       </div>
@@ -14522,6 +14538,204 @@ pages.facturacion = async function() {
   render();
 };
 function factFiltrosLimpiar() { state.ventaFilter = { desde:'', hasta:'', clienteId:'', tipo:'' }; pages.facturacion(); }
+
+// ── Exportar / imprimir los Movimientos de ventas que están filtrados ──────────
+function _ventasExportMeta(){
+  const ff = state.ventaFilter || {};
+  const cli = ff.clienteId ? (state.cache.clientes||[]).find(c=>c.id===ff.clienteId) : null;
+  const sub=[];
+  if (ff.desde) sub.push('desde '+fmtFecha(ff.desde));
+  if (ff.hasta) sub.push('hasta '+fmtFecha(ff.hasta));
+  if (cli) sub.push('cliente '+(cli.razonSocial||''));
+  if (ff.tipo) sub.push('tipo '+({factura:'Factura',nc:'Nota de crédito',nd:'Nota de débito',cobro:'Cobro'})[ff.tipo]||ff.tipo);
+  return { movs: state._ventaMovsExport||[], sub, cli };
+}
+function _ventasBuildDoc(){
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if (!jsPDFCtor){ toast('Esperá un momento, todavía se está cargando la librería de PDF…','warn'); return null; }
+  const { movs, sub } = _ventasExportMeta();
+  if (!movs.length){ toast('No hay movimientos con esos filtros','warn'); return null; }
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  const pageW=doc.internal.pageSize.getWidth(); let y=40;
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(nombreEmpresaActiva(), pageW/2, y, {align:'center'}); y+=18;
+  doc.setFontSize(12); doc.text('Movimientos de ventas', pageW/2, y, {align:'center'}); y+=16;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120);
+  doc.text(`Emitido ${fmtDate(new Date())}${sub.length?' · '+sub.join(' · '):''}`, 40, y); doc.setTextColor(0); y+=6;
+  const total = movs.reduce((a,m)=>a+Number(m.total||0),0);
+  doc.autoTable({
+    head:[['Fecha','Tipo','Comprobante','Cliente','Estado','Total']],
+    body: movs.map(m=>[ fmtFecha(m.fecha), m.tipo, m.comp, m.cliente, m.estado, fmt$(m.total) ]),
+    foot:[['','','','',`${movs.length} mov.`, fmt$(total)]],
+    startY:y+8, styles:{fontSize:8,cellPadding:3},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255]},
+    footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
+    columnStyles:{0:{cellWidth:58},5:{halign:'right'}},
+  });
+  return { doc };
+}
+function ventasMovPDF(){ const r=_ventasBuildDoc(); if(!r) return; r.doc.save(`MovimientosVentas_${new Date().toISOString().slice(0,10)}.pdf`); toast('PDF generado','success'); }
+function ventasMovImprimir(){ const r=_ventasBuildDoc(); if(!r) return; try{ r.doc.autoPrint(); window.open(r.doc.output('bloburl'),'_blank'); }catch(_){ r.doc.save('MovimientosVentas.pdf'); } }
+function ventasMovXLSX(){
+  if (typeof XLSX==='undefined'){ toast('Esperá un momento, todavía se está cargando la librería de Excel…','warn'); return; }
+  const { movs, sub } = _ventasExportMeta();
+  if (!movs.length){ toast('No hay movimientos con esos filtros','warn'); return; }
+  const aoa=[[nombreEmpresaActiva()],['Movimientos de ventas'+(sub.length?' · '+sub.join(' · '):'')],[],
+    ['Fecha','Tipo','Comprobante','Cliente','Estado','Total']];
+  movs.forEach(m=>aoa.push([ fmtFecha(m.fecha), m.tipo, m.comp, m.cliente, m.estado, Number(m.total||0) ]));
+  aoa.push(['','','','',`${movs.length} mov.`, movs.reduce((a,m)=>a+Number(m.total||0),0)]);
+  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:12},{wch:16},{wch:24},{wch:30},{wch:12},{wch:16}];
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Ventas');
+  XLSX.writeFile(wb, `MovimientosVentas_${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast('Excel generado','success');
+}
+
+// ── Exportar / imprimir los Movimientos de compras que están filtrados ─────────
+function _comprasExportMeta(){
+  const ff = state.compraFilter || {};
+  const prov = ff.provId ? (state.cache.proveedores||[]).find(p=>p.id===ff.provId) : null;
+  const sub=[];
+  if (ff.desde) sub.push('desde '+fmtFecha(ff.desde));
+  if (ff.hasta) sub.push('hasta '+fmtFecha(ff.hasta));
+  if (prov) sub.push('proveedor '+(prov.razonSocial||''));
+  if (ff.tipo) sub.push('tipo '+({factura:'Factura',nc:'Nota de crédito',nd:'Nota de débito',pago:'Pago (OP)'})[ff.tipo]||ff.tipo);
+  const movs = state._compraMovsExport||[];
+  const hayMEx = movs.some(m=>m.moneda && m.moneda!=='ARS');
+  return { movs, sub, prov, hayMEx };
+}
+function _comprasBuildDoc(){
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if (!jsPDFCtor){ toast('Esperá un momento, todavía se está cargando la librería de PDF…','warn'); return null; }
+  const { movs, sub, hayMEx } = _comprasExportMeta();
+  if (!movs.length){ toast('No hay movimientos con esos filtros','warn'); return null; }
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  const pageW=doc.internal.pageSize.getWidth(); let y=40;
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(nombreEmpresaActiva(), pageW/2, y, {align:'center'}); y+=18;
+  doc.setFontSize(12); doc.text('Movimientos de compras', pageW/2, y, {align:'center'}); y+=16;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120);
+  doc.text(`Emitido ${fmtDate(new Date())}${sub.length?' · '+sub.join(' · '):''}`, 40, y); doc.setTextColor(0); y+=6;
+  const totalArs = movs.reduce((a,m)=>a+Number(m.totalArs||0),0);
+  doc.autoTable({
+    head:[['Fecha','Tipo','Comprobante','Proveedor','Mon.','Total']],
+    body: movs.map(m=>[ fmtFecha(m.fecha), m.tipo, m.comp, m.proveedor, m.moneda, fmtMon(m.moneda,m.total) ]),
+    foot:[['','','',`${movs.length} mov.`,'Total ARS', fmt$(totalArs)]],
+    startY:y+8, styles:{fontSize:8,cellPadding:3},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255]},
+    footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
+    columnStyles:{0:{cellWidth:58},4:{cellWidth:36,halign:'center'},5:{halign:'right'}},
+  });
+  if (hayMEx){ let yy=doc.lastAutoTable.finalY+14; doc.setFontSize(8); doc.setTextColor(120);
+    doc.text('El Total ARS valoriza las facturas en otra moneda a su cotización.', 40, yy); doc.setTextColor(0); }
+  return { doc };
+}
+function comprasMovPDF(){ const r=_comprasBuildDoc(); if(!r) return; r.doc.save(`MovimientosCompras_${new Date().toISOString().slice(0,10)}.pdf`); toast('PDF generado','success'); }
+function comprasMovImprimir(){ const r=_comprasBuildDoc(); if(!r) return; try{ r.doc.autoPrint(); window.open(r.doc.output('bloburl'),'_blank'); }catch(_){ r.doc.save('MovimientosCompras.pdf'); } }
+function comprasMovXLSX(){
+  if (typeof XLSX==='undefined'){ toast('Esperá un momento, todavía se está cargando la librería de Excel…','warn'); return; }
+  const { movs, sub } = _comprasExportMeta();
+  if (!movs.length){ toast('No hay movimientos con esos filtros','warn'); return; }
+  const aoa=[[nombreEmpresaActiva()],['Movimientos de compras'+(sub.length?' · '+sub.join(' · '):'')],[],
+    ['Fecha','Tipo','Comprobante','Proveedor','Moneda','Total','Total ARS']];
+  movs.forEach(m=>aoa.push([ fmtFecha(m.fecha), m.tipo, m.comp, m.proveedor, m.moneda, Number(m.total||0), Number(m.totalArs||0) ]));
+  aoa.push(['','','',`${movs.length} mov.`,'', '', movs.reduce((a,m)=>a+Number(m.totalArs||0),0)]);
+  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:12},{wch:16},{wch:24},{wch:30},{wch:8},{wch:16},{wch:16}];
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Compras');
+  XLSX.writeFile(wb, `MovimientosCompras_${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast('Excel generado','success');
+}
+
+// ── Informe de saldos por cliente (a cobrar) o por proveedor (a pagar) ─────────
+// Agrupa las cuentas corrientes por contacto y valoriza el saldo en ARS (igual
+// que la pantalla de Cuentas corrientes). Deja los datos en state._saldosInforme.
+async function _cargarSaldosInforme(tipo){
+  let rows=[], contactos=[];
+  const [r, c] = await Promise.all([
+    api('/api/ctas-ctes'),
+    api(tipo==='cliente' ? '/api/clientes' : '/api/proveedores'),
+  ]);
+  rows = r.data||[]; contactos = c.data||[];
+  let cotVivas={}; try { cotVivas = await cargarCotizVivas(); } catch { cotVivas = state.cache.cotizVivas||{}; }
+  const cotizAars = (m)=>{ const mo=m.moneda||'ARS'; if(mo==='ARS') return 1; return Number(m.cotizacion)||Number(cotVivas[mo])||0; };
+  const grupos = contactos.map(ct=>{
+    const movs = rows.filter(m=>m.contactoTipo===tipo && m.contactoId===ct.id);
+    const debe = movs.reduce((a,m)=>a+Number(m.debe||0),0);
+    const haber = movs.reduce((a,m)=>a+Number(m.haber||0),0);
+    const saldoArsEq = movs.reduce((a,m)=>a+((Number(m.debe||0)-Number(m.haber||0))*cotizAars(m)),0);
+    return { nombre: ct.razonSocial||'—', debe, haber, saldoArsEq };
+  }).filter(g=>Math.abs(g.saldoArsEq)>0.5).sort((a,b)=>b.saldoArsEq-a.saldoArsEq);
+  return grupos;
+}
+async function informeSaldos(tipo){
+  const esCli = tipo==='cliente';
+  toast('Calculando saldos…','info');
+  let grupos;
+  try { grupos = await _cargarSaldosInforme(tipo); }
+  catch(e){ return toast(e.message||'No se pudieron cargar los saldos','error'); }
+  if (!grupos.length) return toast(esCli?'No hay clientes con saldo a cobrar':'No hay proveedores con saldo a pagar','warn');
+  state._saldosInforme = { tipo, grupos };
+  const totalFmt = fmt$(grupos.reduce((a,g)=>a+g.saldoArsEq,0));
+  const filas = grupos.map(g=>`<tr class="table-row">
+      <td><b>${esc(g.nombre)}</b></td>
+      <td class="text-right">${fmt$(g.debe)}</td>
+      <td class="text-right text-emerald-700">${fmt$(g.haber)}</td>
+      <td class="text-right font-bold ${g.saldoArsEq>0?(esCli?'text-amber-600':'text-red-600'):'text-slate-400'}">${fmt$(g.saldoArsEq)}</td>
+    </tr>`).join('');
+  openModal({
+    title: esCli ? 'Saldos por cliente (a cobrar)' : 'Saldos por proveedor (a pagar)',
+    size: 'max-w-3xl',
+    body: `
+      <div class="mb-3 kpi" style="background:${esCli?'linear-gradient(135deg,#dcfce7,#f0fdf4)':'linear-gradient(135deg,#fee2e2,#fef2f2)'}">
+        <div class="text-xs text-slate-500">${esCli?'💰 Total a cobrar':'📤 Total a pagar'}</div>
+        <div class="text-2xl font-bold mt-1 ${esCli?'text-emerald-700':'text-red-600'}">${totalFmt}</div>
+        <div class="text-[11px] text-slate-400 mt-0.5">${grupos.length} ${esCli?'cliente(s)':'proveedor(es)'} con saldo · valorizado en ARS</div>
+      </div>
+      <div class="overflow-x-auto border border-slate-200 rounded-lg">
+        <table class="data">
+          <thead><tr><th>${esCli?'Cliente':'Proveedor'}</th><th class="text-right">Facturado</th><th class="text-right">${esCli?'Cobrado':'Pagado'}</th><th class="text-right">Saldo</th></tr></thead>
+          <tbody>${filas}</tbody>
+        </table>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+             <button class="btn btn-secondary" onclick="informeSaldosXLSX()">📊 Excel</button>
+             <button class="btn btn-primary" onclick="informeSaldosPDF()">📄 PDF</button>`
+  });
+}
+function _saldosBuildDoc(){
+  const d=state._saldosInforme; if(!d) return null;
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if (!jsPDFCtor){ toast('Esperá un momento, todavía se está cargando la librería de PDF…','warn'); return null; }
+  const esCli = d.tipo==='cliente';
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  const pageW=doc.internal.pageSize.getWidth(); let y=40;
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(nombreEmpresaActiva(), pageW/2, y, {align:'center'}); y+=18;
+  doc.setFontSize(12); doc.text(esCli?'Saldos por cliente (a cobrar)':'Saldos por proveedor (a pagar)', pageW/2, y, {align:'center'}); y+=16;
+  doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120);
+  doc.text(`Emitido ${fmtDate(new Date())} · saldos valorizados en ARS`, 40, y); doc.setTextColor(0); y+=6;
+  const total = d.grupos.reduce((a,g)=>a+g.saldoArsEq,0);
+  doc.autoTable({
+    head:[[esCli?'Cliente':'Proveedor','Facturado',esCli?'Cobrado':'Pagado','Saldo']],
+    body: d.grupos.map(g=>[ g.nombre, fmt$(g.debe), fmt$(g.haber), fmt$(g.saldoArsEq) ]),
+    foot:[[`${d.grupos.length} ${esCli?'cliente(s)':'proveedor(es)'}`,'','', fmt$(total)]],
+    startY:y+8, styles:{fontSize:9,cellPadding:4},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255]},
+    footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
+    columnStyles:{1:{halign:'right'},2:{halign:'right'},3:{halign:'right'}},
+  });
+  return { doc, esCli };
+}
+function informeSaldosPDF(){ const r=_saldosBuildDoc(); if(!r) return; r.doc.save(`Saldos_${r.esCli?'clientes':'proveedores'}_${new Date().toISOString().slice(0,10)}.pdf`); toast('PDF generado','success'); }
+function informeSaldosXLSX(){
+  const d=state._saldosInforme; if(!d) return;
+  if (typeof XLSX==='undefined'){ toast('Esperá un momento, todavía se está cargando la librería de Excel…','warn'); return; }
+  const esCli = d.tipo==='cliente';
+  const aoa=[[nombreEmpresaActiva()],[esCli?'Saldos por cliente (a cobrar)':'Saldos por proveedor (a pagar)'],['Valorizado en ARS'],[],
+    [esCli?'Cliente':'Proveedor','Facturado',esCli?'Cobrado':'Pagado','Saldo']];
+  d.grupos.forEach(g=>aoa.push([ g.nombre, Number(g.debe||0), Number(g.haber||0), Number(g.saldoArsEq||0) ]));
+  aoa.push([`${d.grupos.length} ${esCli?'cliente(s)':'proveedor(es)'}`,'','', d.grupos.reduce((a,g)=>a+g.saldoArsEq,0)]);
+  const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:34},{wch:16},{wch:16},{wch:16}];
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, esCli?'Saldos clientes':'Saldos prov');
+  XLSX.writeFile(wb, `Saldos_${esCli?'clientes':'proveedores'}_${new Date().toISOString().slice(0,10)}.xlsx`);
+  toast('Excel generado','success');
+}
 // Lista plana de items elegibles en factura (Producto + Catálogo insumos).
 // Memoizado por número de productos/catalogos para no recomputar en cada fila.
 // Sets de nombres (normalizados) de los artículos del Catálogo (insumos +
@@ -16475,6 +16689,16 @@ pages.compras = async function() {
       return true;
     });
     movs.sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
+    // Snapshot normalizado para exportar / imprimir lo que está filtrado en pantalla.
+    state._compraMovsExport = movs.map(m=>({
+      fecha:m.fecha,
+      tipo: m.tipoKey==='nc'?'Nota de crédito':m.tipoKey==='nd'?'Nota de débito':m.tipoKey==='pago'?'Pago (OP)':'Factura',
+      comp: m.comp || '—',
+      proveedor: m.proveedorNombre || '—',
+      moneda: m.moneda || 'ARS',
+      total: Number(m.total||0),
+      totalArs: Number(m.total||0) * ((m.moneda && m.moneda!=='ARS') ? Number(m.cotizacion||1) : 1),
+    }));
     const badge = m => m.tipoKey==='nc'?'<span class="badge badge-yellow">NC</span>':m.tipoKey==='nd'?'<span class="badge badge-red">ND</span>':m.tipoKey==='pago'?'<span class="badge badge-blue">Pago OP</span>':'<span class="badge badge-green">Factura</span>';
     $('#comp-table').innerHTML = `
       <table class="data">
@@ -16502,6 +16726,10 @@ pages.compras = async function() {
       <div class="text-sm text-slate-600">${rows.length} facturas de compra registradas</div>
       <div class="flex gap-2">
         <button class="btn btn-secondary" onclick="go('libroIVA')">📘 Libro IVA</button>
+        <button class="btn btn-secondary" onclick="comprasMovPDF()" title="PDF de los movimientos filtrados">📄 PDF</button>
+        <button class="btn btn-secondary" onclick="comprasMovImprimir()" title="Imprimir los movimientos filtrados">🖨️ Imprimir</button>
+        <button class="btn btn-secondary" onclick="comprasMovXLSX()" title="Exportar a Excel los movimientos filtrados">📊 Excel</button>
+        <button class="btn btn-secondary" onclick="informeSaldos('proveedor')" title="Informe de saldos por proveedor con el total a pagar">💰 Saldos por proveedor</button>
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="compImportArca()" title="Importar comprobantes de compra desde el Excel de ARCA → Mis Comprobantes → Recibidos">📥 Importar de ARCA</button>`:''}
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="compForm()">+ Nueva factura de compra</button>`:''}
       </div>
