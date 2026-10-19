@@ -3047,6 +3047,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/10/2026',
+      titulo:'🧮 v2.325.0 — PDF/Excel de ventas y compras: el total ahora es el saldo neto',
+      desc:'En el PDF y el Excel de <b>Movimientos de ventas</b> y <b>de compras</b>, el total al pie ya <b>no suma todo en bloque</b>: ahora respeta el signo de cada movimiento. En ventas, las <b>facturas y notas de débito suman</b> y los <b>cobros y notas de crédito restan</b>; en compras, las <b>facturas y ND suman</b> y los <b>pagos y NC restan</b> (las facturas anuladas no cuentan). Cada fila muestra el importe con su signo y el pie queda como <b>Saldo</b> real. 🧾' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/10/2026',
       titulo:'📊 v2.324.0 — Exportar Movimientos de ventas/compras e Informe de saldos',
       desc:'En <b>Movimientos de ventas</b> y <b>Movimientos de compras</b> ahora podés <b>descargar en PDF, imprimir o exportar a Excel</b> exactamente los registros que tenés filtrados en pantalla (por fecha, cliente/proveedor y tipo), con el total al pie. Además sumamos el botón <b>💰 Saldos por cliente</b> (en ventas) y <b>💰 Saldos por proveedor</b> (en compras): arma un <b>informe de saldos</b> con lo facturado, lo cobrado/pagado y el <b>saldo pendiente de cada uno</b>, más el <b>total a cobrar o a pagar</b>, también descargable en PDF o Excel. 🧾' },
@@ -14460,6 +14463,8 @@ pages.facturacion = async function() {
       cliente: m.clienteNombre || '—',
       estado: m.kind==='factura' ? (m.estado==='anulada'?'Anulada':(m.cae?'Autorizada':'Sin CAE')) : 'Cobrado',
       total: Number(m.total||0),
+      // Signo para el saldo: facturas y ND suman; NC y cobros restan. Las anuladas no cuentan.
+      signo: (m.estado==='anulada') ? 0 : (m.tipoKey==='nc'||m.tipoKey==='cobro' ? -1 : 1),
     }));
     const badge = m => m.tipoKey==='nc'?'<span class="badge badge-yellow">NC</span>':m.tipoKey==='nd'?'<span class="badge badge-red">ND</span>':m.tipoKey==='cobro'?'<span class="badge badge-green">Cobro</span>':'<span class="badge badge-blue">Factura</span>';
     $('#fact-table').innerHTML = `
@@ -14561,11 +14566,11 @@ function _ventasBuildDoc(){
   doc.setFontSize(12); doc.text('Movimientos de ventas', pageW/2, y, {align:'center'}); y+=16;
   doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120);
   doc.text(`Emitido ${fmtDate(new Date())}${sub.length?' · '+sub.join(' · '):''}`, 40, y); doc.setTextColor(0); y+=6;
-  const total = movs.reduce((a,m)=>a+Number(m.total||0),0);
+  const total = movs.reduce((a,m)=>a+Number(m.total||0)*(m.signo==null?1:m.signo),0);
   doc.autoTable({
     head:[['Fecha','Tipo','Comprobante','Cliente','Estado','Total']],
-    body: movs.map(m=>[ fmtFecha(m.fecha), m.tipo, m.comp, m.cliente, m.estado, fmt$(m.total) ]),
-    foot:[['','','','',`${movs.length} mov.`, fmt$(total)]],
+    body: movs.map(m=>{ const s=(m.signo==null?1:m.signo); return [ fmtFecha(m.fecha), m.tipo, m.comp, m.cliente, m.estado, (s<0?'-':'')+fmt$(m.total) ]; }),
+    foot:[['','','','',`${movs.length} mov. · Saldo`, fmt$(total)]],
     startY:y+8, styles:{fontSize:8,cellPadding:3},
     headStyles:{fillColor:[21,128,61],textColor:[255,255,255]},
     footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
@@ -14581,8 +14586,8 @@ function ventasMovXLSX(){
   if (!movs.length){ toast('No hay movimientos con esos filtros','warn'); return; }
   const aoa=[[nombreEmpresaActiva()],['Movimientos de ventas'+(sub.length?' · '+sub.join(' · '):'')],[],
     ['Fecha','Tipo','Comprobante','Cliente','Estado','Total']];
-  movs.forEach(m=>aoa.push([ fmtFecha(m.fecha), m.tipo, m.comp, m.cliente, m.estado, Number(m.total||0) ]));
-  aoa.push(['','','','',`${movs.length} mov.`, movs.reduce((a,m)=>a+Number(m.total||0),0)]);
+  movs.forEach(m=>aoa.push([ fmtFecha(m.fecha), m.tipo, m.comp, m.cliente, m.estado, Number(m.total||0)*(m.signo==null?1:m.signo) ]));
+  aoa.push(['','','','',`${movs.length} mov. · Saldo`, movs.reduce((a,m)=>a+Number(m.total||0)*(m.signo==null?1:m.signo),0)]);
   const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:12},{wch:16},{wch:24},{wch:30},{wch:12},{wch:16}];
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Ventas');
   XLSX.writeFile(wb, `MovimientosVentas_${new Date().toISOString().slice(0,10)}.xlsx`);
@@ -14613,11 +14618,11 @@ function _comprasBuildDoc(){
   doc.setFontSize(12); doc.text('Movimientos de compras', pageW/2, y, {align:'center'}); y+=16;
   doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120);
   doc.text(`Emitido ${fmtDate(new Date())}${sub.length?' · '+sub.join(' · '):''}`, 40, y); doc.setTextColor(0); y+=6;
-  const totalArs = movs.reduce((a,m)=>a+Number(m.totalArs||0),0);
+  const totalArs = movs.reduce((a,m)=>a+Number(m.totalArs||0)*(m.signo==null?1:m.signo),0);
   doc.autoTable({
     head:[['Fecha','Tipo','Comprobante','Proveedor','Mon.','Total']],
-    body: movs.map(m=>[ fmtFecha(m.fecha), m.tipo, m.comp, m.proveedor, m.moneda, fmtMon(m.moneda,m.total) ]),
-    foot:[['','','',`${movs.length} mov.`,'Total ARS', fmt$(totalArs)]],
+    body: movs.map(m=>{ const s=(m.signo==null?1:m.signo); return [ fmtFecha(m.fecha), m.tipo, m.comp, m.proveedor, m.moneda, (s<0?'-':'')+fmtMon(m.moneda,m.total) ]; }),
+    foot:[['','','',`${movs.length} mov.`,'Saldo ARS', fmt$(totalArs)]],
     startY:y+8, styles:{fontSize:8,cellPadding:3},
     headStyles:{fillColor:[21,128,61],textColor:[255,255,255]},
     footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
@@ -14635,8 +14640,8 @@ function comprasMovXLSX(){
   if (!movs.length){ toast('No hay movimientos con esos filtros','warn'); return; }
   const aoa=[[nombreEmpresaActiva()],['Movimientos de compras'+(sub.length?' · '+sub.join(' · '):'')],[],
     ['Fecha','Tipo','Comprobante','Proveedor','Moneda','Total','Total ARS']];
-  movs.forEach(m=>aoa.push([ fmtFecha(m.fecha), m.tipo, m.comp, m.proveedor, m.moneda, Number(m.total||0), Number(m.totalArs||0) ]));
-  aoa.push(['','','',`${movs.length} mov.`,'', '', movs.reduce((a,m)=>a+Number(m.totalArs||0),0)]);
+  movs.forEach(m=>{ const s=(m.signo==null?1:m.signo); aoa.push([ fmtFecha(m.fecha), m.tipo, m.comp, m.proveedor, m.moneda, Number(m.total||0)*s, Number(m.totalArs||0)*s ]); });
+  aoa.push(['','','',`${movs.length} mov.`,'Saldo ARS', '', movs.reduce((a,m)=>a+Number(m.totalArs||0)*(m.signo==null?1:m.signo),0)]);
   const ws=XLSX.utils.aoa_to_sheet(aoa); ws['!cols']=[{wch:12},{wch:16},{wch:24},{wch:30},{wch:8},{wch:16},{wch:16}];
   const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Compras');
   XLSX.writeFile(wb, `MovimientosCompras_${new Date().toISOString().slice(0,10)}.xlsx`);
@@ -16698,6 +16703,8 @@ pages.compras = async function() {
       moneda: m.moneda || 'ARS',
       total: Number(m.total||0),
       totalArs: Number(m.total||0) * ((m.moneda && m.moneda!=='ARS') ? Number(m.cotizacion||1) : 1),
+      // Signo para el saldo: facturas y ND suman; NC y pagos restan.
+      signo: (m.tipoKey==='nc'||m.tipoKey==='pago') ? -1 : 1,
     }));
     const badge = m => m.tipoKey==='nc'?'<span class="badge badge-yellow">NC</span>':m.tipoKey==='nd'?'<span class="badge badge-red">ND</span>':m.tipoKey==='pago'?'<span class="badge badge-blue">Pago OP</span>':'<span class="badge badge-green">Factura</span>';
     $('#comp-table').innerHTML = `
