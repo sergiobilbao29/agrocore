@@ -3047,6 +3047,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/10/2026',
+      titulo:'📄 v2.323.0 — Estado de cuenta del empleado en PDF',
+      desc:'En la ficha de cada empleado hay un botón nuevo <b>📄 Estado de cuenta</b> que genera un PDF con la <b>cuenta corriente mes por mes</b>: por cada período muestra <b>Ganancias, Gastos, Neto del mes, lo Pagado y el Saldo acumulado</b> (con arrastre de un mes al otro), más una fila de <b>Totales</b> y una aclaración del saldo final (a favor del empleado o lo que debe). Ideal para pasarle el detalle de la cuenta a cualquier empleado, igual que ya se hace con clientes y proveedores. 🧾' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/10/2026',
       titulo:'🤝 v2.322.0 — Órdenes de trabajo: imputar directo a la Sociedad/UTE',
       desc:'En el renglón de una <b>Orden de trabajo</b> ahora podés elegir una <b>Sociedad/UTE</b> y el <b>campo de esa sociedad</b> (puede ser de otra empresa del grupo). Al marcar la orden como <b>realizada</b>, la <b>labor y los insumos se imputan directo a ese campo</b> dentro de la sociedad —en la empresa dueña y en su campaña—, <b>sin tener que ir a la Sociedad a cargarlo a mano</b>. Al elegir el campo se autocompletan el nombre, las hectáreas y el cultivo. Si el campo es de la misma empresa, además descuenta el stock como siempre. 🌱' },
@@ -25435,6 +25438,7 @@ function empFichaRender() {
       <div class="flex-1"></div>
       <button class="btn btn-secondary" onclick="empExportXLSX()" title="Descargar la planilla del mes en Excel">📊 Excel</button>
       <button class="btn btn-secondary" onclick="empReciboPDF()" title="Recibo imprimible para entregar al empleado">🖨️ Recibo PDF</button>
+      <button class="btn btn-secondary" onclick="empEstadoCuentaPDF()" title="Estado de cuenta del empleado (cuenta corriente mes por mes, con arrastre) en PDF">📄 Estado de cuenta</button>
       ${canC?`<button class="btn btn-secondary" onclick="empCatManager()" title="Agregar o eliminar categorías de la planilla">⚙️ Categorías</button>`:''}
       ${canC?`<button class="btn btn-secondary" onclick="empConsumoForm()" title="Cargar consumo del kiosco / proveeduría del campo (se descuenta del sueldo)">🛒 Consumo kiosco</button>`:''}
       ${canC?`<button class="btn btn-secondary" onclick="empMovMultiForm()" title="Cargar varios movimientos de una sola vez">➕ Cargar varios</button>`:''}
@@ -26225,6 +26229,66 @@ function empExportXLSX(){
 
 // Genera un recibo de liquidación de sueldo en PDF, listo para imprimir y
 // entregar al empleado.
+// Ganancias y gastos de un período (para meses liquidados usa los totales congelados).
+function _empGanGastoPeriodo(emp, movs, liqs, p){
+  const liq=(liqs||[]).find(l=>l.periodo===p);
+  if(liq) return { gan:Number(liq.totalGanancias||0), gas:Number(liq.totalGastos||0) };
+  const mm=(movs||[]).filter(m=>m.periodo===p);
+  const haySueldoMov=mm.some(m=>m.categoria==='sueldo');
+  const sb=(!haySueldoMov && empSueldoBase(emp,p)>0)?empSueldoBase(emp,p):0;
+  const gan=mm.filter(m=>m.tipo==='ganancia').reduce((a,m)=>a+Number(m.monto||0),0)+sb;
+  const gas=mm.filter(m=>m.tipo==='gasto').reduce((a,m)=>a+Number(m.monto||0),0);
+  return { gan, gas };
+}
+// Estado de cuenta del empleado: cuenta corriente mes por mes con arrastre (saldo acumulado).
+function empEstadoCuentaPDF(){
+  const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
+  if (typeof jsPDFCtor==='undefined'){ toast('Esperá un momento, todavía se está cargando la librería de PDF…','warn'); return; }
+  if (!state.empFicha) return;
+  const { emp, movs, liqs } = state.empFicha;
+  const periodos=[...new Set([...(movs||[]).map(m=>m.periodo), ...(liqs||[]).map(l=>l.periodo)])]
+    .filter(Boolean).sort((a,b)=>String(a).localeCompare(String(b)));
+  if (!periodos.length){ toast('El empleado no tiene movimientos para armar el estado de cuenta','warn'); return; }
+
+  const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
+  const pageW=doc.internal.pageSize.getWidth(); let y=40;
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(nombreEmpresaActiva(), pageW/2, y, {align:'center'}); y+=18;
+  doc.setFontSize(12); doc.text('Estado de cuenta — Empleado', pageW/2, y, {align:'center'}); y+=16;
+  doc.setFont('helvetica','normal'); doc.setFontSize(10);
+  doc.text(`Empleado: ${emp.apellido||''}, ${emp.nombre||''}`, 40, y); y+=14;
+  if (emp.puesto || emp.dni){ doc.setFontSize(9); doc.setTextColor(120);
+    doc.text(`${emp.puesto?emp.puesto:''}${emp.puesto&&emp.dni?' · ':''}${emp.dni?'DNI '+emp.dni:''}`, 40, y); doc.setTextColor(0); y+=12; }
+  doc.setFontSize(9); doc.setTextColor(120);
+  doc.text(`Emitido ${fmtDate(new Date())}`, 40, y); doc.setTextColor(0); y+=6;
+
+  let saldo=0, tGan=0, tGas=0, tPag=0;
+  const body=periodos.map(p=>{
+    const { gan, gas }=_empGanGastoPeriodo(emp, movs, liqs, p);
+    const neto=gan-gas;
+    const pagado=empPagadoPeriodo(liqs, p);
+    saldo += neto - pagado;
+    tGan+=gan; tGas+=gas; tPag+=pagado;
+    return [ empMesLabel(p), fmt$(gan), fmt$(gas), fmt$(neto), fmt$(pagado), fmt$(saldo) ];
+  });
+  doc.autoTable({
+    head:[['Período','Ganancias','Gastos','Neto del mes','Pagado','Saldo acum.']], body,
+    foot:[['Totales', fmt$(tGan), fmt$(tGas), fmt$(tGan-tGas), fmt$(tPag), fmt$(saldo)]],
+    startY:y+8, styles:{fontSize:8,cellPadding:3},
+    headStyles:{fillColor:[21,128,61],textColor:[255,255,255]},
+    footStyles:{fillColor:[240,253,244],textColor:[20,83,45],fontStyle:'bold'},
+    columnStyles:{0:{cellWidth:80},1:{halign:'right'},2:{halign:'right'},3:{halign:'right'},4:{halign:'right'},5:{halign:'right'}},
+  });
+  let yy=doc.lastAutoTable.finalY+16;
+  doc.setFontSize(9); doc.setTextColor(90);
+  const saldoTxt = Math.abs(saldo)<0.5 ? 'Cuenta al día.'
+    : (saldo>0 ? `Saldo a favor del empleado: ${fmt$(saldo)} (la empresa le debe).`
+               : `El empleado queda debiendo: ${fmt$(-saldo)}.`);
+  doc.text(saldoTxt, 40, yy); doc.setTextColor(0);
+
+  const nom=`${emp.apellido||''}_${emp.nombre||''}`.replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'')||'empleado';
+  doc.save(`EstadoCuenta_${nom}_${new Date().toISOString().slice(0,10)}.pdf`);
+  toast('PDF generado','success');
+}
 function empReciboPDF(){
   const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
   if (typeof jsPDFCtor==='undefined'){ toast('Esperá un momento, todavía se está cargando la librería de PDF…','warn'); return; }
