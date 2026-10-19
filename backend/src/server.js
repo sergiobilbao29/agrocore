@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.325.0';
+const AGROCORE_VERSION = '2.327.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6379,7 +6379,9 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
           detalle: `${esNC ? 'Nota de crédito' : 'Nota de débito'} ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
           moneda: _mon, cotizacion: _cot,
           ...(esNC ? { haber: totales.total } : { debe: totales.total }),
-          referencia: 'FACC',
+          // Referencia ÚNICA por comprobante (antes era 'FACC' fija y se pisaba entre NC/ND,
+          // haciendo que una Nota de débito no apareciera al registrar el pago).
+          referencia: 'FACC-' + f.id,
           observaciones: input.observaciones || null,
         }});
       }
@@ -6596,7 +6598,7 @@ app.post('/api/facturas-compra/import-arca', requireCompany, requirePermission('
             const esNC = clase==='nota_credito';
             await tx.ctaCte.create({ data:{ companyId:req.companyId, contactoTipo:'proveedor', contactoId:prov.id, fecha,
               detalle:`${esNC?'Nota de crédito':'Nota de débito'} ${letra} ${String(pv).padStart(4,'0')}-${String(numero).padStart(8,'0')}`,
-              moneda, cotizacion:cotiz, ...(esNC?{haber:f.total}:{debe:f.total}), referencia:'FACC', observaciones:obs }});
+              moneda, cotizacion:cotiz, ...(esNC?{haber:f.total}:{debe:f.total}), referencia:'FACC-'+f.id, observaciones:obs }});
           }
           return { _dup:false, proveedor: prov.razonSocial, total:f.total };
         });
@@ -6691,7 +6693,7 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
         const esNC = _clase === 'nota_credito';
         await tx.ctaCte.create({ data: { companyId: req.companyId, contactoTipo: 'proveedor', contactoId: input.proveedorId || null, fecha: input.fecha,
           detalle: `${esNC ? 'Nota de crédito' : 'Nota de débito'} ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
-          moneda: _mon, cotizacion: _cot, ...(esNC ? { haber: totales.total } : { debe: totales.total }), referencia: 'FACC', observaciones: input.observaciones || null }});
+          moneda: _mon, cotizacion: _cot, ...(esNC ? { haber: totales.total } : { debe: totales.total }), referencia: 'FACC-' + f.id, observaciones: input.observaciones || null }});
       }
       for (const it of input.items) { if (it.productoId && it.precioUnit != null) { await tx.producto.update({ where: { id: it.productoId }, data: { ultimoCostoCompra: Number(it.precioUnit), ultimoCostoMoneda: _mon } }); } }
       // Reparto por centro de costo: reemplazar el anterior por el nuevo (si vino).
@@ -7378,7 +7380,11 @@ app.get('/api/ctas-ctes/pendientes', requireCompany, requirePermission('finanzas
     // comparten la 'referencia' del comprobante (típico en guías DT-e y cobros parciales),
     // y están marcados pagado:true (no entran arriba). Restamos esos haberes del saldo
     // pendiente del comprobante; si no, una guía/factura ya cobrada en parte muestra el total.
-    const refs = [...new Set(items.filter(i => i.referencia && Number(i.debe || 0) > 0).map(i => i.referencia))];
+    // Solo neteamos sobre referencias ÚNICAS por comprobante (contienen un id: "FACC-xxx",
+    // "GUIAH-xxx", "FAC-xxx"...). Las referencias genéricas sin id (ej. 'FACC' vieja de una
+    // NC/ND de compra) se comparten entre varios comprobantes: netearlas cruzaría pagos de
+    // uno con otro y podía ocultar una Nota de débito. Esas quedan fuera del neteo.
+    const refs = [...new Set(items.filter(i => i.referencia && /-/.test(i.referencia) && Number(i.debe || 0) > 0).map(i => i.referencia))];
     if (refs.length) {
       const contra = await prisma.ctaCte.findMany({
         where: { companyId: req.companyId, contactoTipo: tipo, ...(contactoId ? { contactoId } : {}), referencia: { in: refs }, haber: { gt: 0 }, debe: 0 },
@@ -20127,8 +20133,16 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     // Aceptamos /, - o . como separador y año de 2 o 4 dígitos (tickets de combustible
     // suelen traer "01/10/2026 08:43:03" sin la etiqueta "Fecha de Emisión").
     if (!resultado.fecha) {
-      const mF2 = texto.match(/\b(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})\b/);
-      if (mF2) resultado.fecha = fechaArg(mF2[1]);
+      // Primera fecha del documento, PERO salteando contextos que NO son la emisión
+      // (Inicio de Actividad, CBU, Ing. Brutos, vencimientos, CAE). Evita tomar
+      // "Inicion de Act.: 06/07/2005" como fecha de la factura.
+      const allF = [...texto.matchAll(/(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/g)];
+      for (const mf of allF) {
+        const ctx = texto.slice(Math.max(0, mf.index - 26), mf.index).toLowerCase();
+        if (/inic|activ|cbu|brutos|vto|venc|cae|c\.a\.e/.test(ctx)) continue;
+        resultado.fecha = fechaArg(mf[1]);
+        break;
+      }
     }
     // CAE — el número puede estar pegado a la etiqueta o suelto (el pdf-parse
     // suele separar etiquetas de valores). El CAE de ARCA es siempre de 14 dígitos.
@@ -20205,8 +20219,11 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     // junto a su etiqueta, tomamos el MAYOR monto con formato "$/,00" del comprobante
     // (el Importe Total casi siempre es el más grande).
     if (!resultado.total) {
-      const montos = [...texto.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2})/g)]
-        .map(mm => num(mm[1])).filter(v => v && v > 0);
+      // Captura importes completos en AMBOS formatos: AR "1.830.150,00" / "45,26"
+      // y US "45,260.46" / "54,765.16" (coma de miles, punto decimal). num() detecta
+      // el separador decimal por token, así que no confunde "45,260.46" con 45,26.
+      const montos = [...texto.matchAll(/\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\b/g)]
+        .map(mm => num(mm[0])).filter(v => v && v > 0);
       if (montos.length) resultado.total = Math.max(...montos);
     }
     // En Factura C (Monotributo) no hay IVA discriminado: neto = total.
@@ -20284,6 +20301,38 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     // El 1ro (más temprano) es el que manda para la deuda, el flujo y las alertas.
     resultado.vencimientos = _parseVencimientosServicio(texto, resultado.total);
     resultado.fechaVencimiento = resultado.vencimientos[0] ? resultado.vencimientos[0].fecha : null;
+
+    // === Refuerzo con IA cuando el texto vino desordenado y faltan datos clave ===
+    // Muchas facturas de sistemas de gestión propios (no ARCA) extraen el texto
+    // mezclado: el PV y el número quedan separados, la fecha de emisión se pierde, etc.
+    // Si no hubo QR y falta algún dato importante, le pedimos a la IA que lea el texto
+    // y completamos SOLO los campos que el parser no pudo resolver.
+    const _faltanClave = !fuenteQr && (!resultado.total || !resultado.puntoVenta || !resultado.numero || !resultado.fecha);
+    if (_faltanClave) {
+      try {
+        const ia = await _iaConfig();
+        if (ia.enabled) {
+          const doc = await _iaAnalizarDocumento({ textoPdf: texto }, ia);
+          const iaMap = _iaAFactura(doc);
+          if (iaMap) {
+            if (!resultado.puntoVenta && iaMap.puntoVenta) resultado.puntoVenta = iaMap.puntoVenta;
+            if (!resultado.numero && iaMap.numero) resultado.numero = iaMap.numero;
+            if (!resultado.fecha && iaMap.fecha) resultado.fecha = iaMap.fecha;
+            if (!resultado.total && iaMap.total) resultado.total = iaMap.total;
+            if (!resultado.netoGravado && iaMap.netoGravado) resultado.netoGravado = iaMap.netoGravado;
+            if (!resultado.cae && iaMap.cae) resultado.cae = iaMap.cae;
+            if (!resultado.cuitEmisor && iaMap.cuitEmisor) resultado.cuitEmisor = iaMap.cuitEmisor;
+            if (!resultado.razonSocialEmisor && iaMap.razonSocialEmisor) resultado.razonSocialEmisor = iaMap.razonSocialEmisor;
+            if (!resultado.descripcionItem && iaMap.descripcionItem) resultado.descripcionItem = iaMap.descripcionItem;
+            if (iaMap.cantidadItem && !resultado.cantidadItem) resultado.cantidadItem = iaMap.cantidadItem;
+            if (iaMap.otrosImpuestos) resultado.otrosImpuestos = (resultado.otrosImpuestos || 0) || iaMap.otrosImpuestos;
+            if (iaMap.noGravado) resultado.noGravado = (resultado.noGravado || 0) || iaMap.noGravado;
+            if (iaMap.moneda && (!resultado.moneda || resultado.moneda === 'PES')) resultado.moneda = iaMap.moneda;
+            resultado.fuente = (resultado.fuente || 'TEXTO_PDF') + '+IA';
+          }
+        }
+      } catch (_) { /* si la IA falla, seguimos con lo que sacó el parser de texto */ }
+    }
 
     res.json({
       ok: true,

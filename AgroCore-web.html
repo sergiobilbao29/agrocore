@@ -3048,6 +3048,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/10/2026',
+      titulo:'🧾 v2.327.0 — La Nota de débito del proveedor ahora aparece al registrar el pago',
+      desc:'Si un proveedor tenía <b>facturas + una Nota de débito</b>, al ir a <b>Registrar pago</b> la ND a veces <b>no aparecía</b> en la lista para seleccionar. Era porque las NC/ND de compra se guardaban con una referencia genérica que se pisaba entre sí. Ahora cada <b>NC/ND de compra lleva su referencia única</b> (como las facturas) y el listado de comprobantes a pagar <b>muestra todo</b>: facturas y notas de débito. También blindamos el cálculo para que un pago de un comprobante no afecte a otro. ✅' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/10/2026',
+      titulo:'📄 v2.326.0 — Importar varias facturas de compra en PDF + lector más inteligente',
+      desc:'En <b>Movimientos de compras</b> hay un botón nuevo <b>📄 Importar varios PDF</b>: subís de una vez todas las facturas (ideal para cargar las viejas impagas de un proveedor), el sistema lee cada una, te muestra una <b>lista para revisar</b> (comprobante, fecha, proveedor y total) y registrás <b>todas juntas</b> con un botón. Podés fijar el mismo proveedor para todas o dejar que lo detecte por el CUIT, y marca en amarillo las que tengan datos incompletos para que las revises. Además mejoramos el <b>lector de PDF</b>: ahora entiende los importes al estilo <b>45,260.46</b> (coma de miles), ya no toma por error la fecha de "Inicio de Actividad", y cuando el texto del PDF viene desordenado <b>se apoya en la IA</b> (si está activada) para completar número, fecha y total. 🧾' },
+    { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/10/2026',
       titulo:'🧮 v2.325.0 — PDF/Excel de ventas y compras: el total ahora es el saldo neto',
       desc:'En el PDF y el Excel de <b>Movimientos de ventas</b> y <b>de compras</b>, el total al pie ya <b>no suma todo en bloque</b>: ahora respeta el signo de cada movimiento. En ventas, las <b>facturas y notas de débito suman</b> y los <b>cobros y notas de crédito restan</b>; en compras, las <b>facturas y ND suman</b> y los <b>pagos y NC restan</b> (las facturas anuladas no cuentan). Cada fila muestra el importe con su signo y el pie queda como <b>Saldo</b> real. 🧾' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/10/2026',
@@ -16738,6 +16744,7 @@ pages.compras = async function() {
         <button class="btn btn-secondary" onclick="comprasMovXLSX()" title="Exportar a Excel los movimientos filtrados">📊 Excel</button>
         <button class="btn btn-secondary" onclick="informeSaldos('proveedor')" title="Informe de saldos por proveedor con el total a pagar">💰 Saldos por proveedor</button>
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="compImportArca()" title="Importar comprobantes de compra desde el Excel de ARCA → Mis Comprobantes → Recibidos">📥 Importar de ARCA</button>`:''}
+        ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="compImportMultiPDF()" title="Subir varias facturas en PDF y registrarlas todas juntas (revisás antes de guardar)">📄 Importar varios PDF</button>`:''}
         ${can('compras:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="compForm()">+ Nueva factura de compra</button>`:''}
       </div>
     </div>
@@ -17292,6 +17299,190 @@ async function compCrearProveedorDesdePDF() {
       if (aviso) aviso.remove();
     }
   } catch (e) { toast(e.message,'error'); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// IMPORTAR VARIAS FACTURAS DE COMPRA (PDF) DE UNA SOLA VEZ (revisar + registrar en lote)
+// Pensado para cargar de golpe las facturas viejas impagas de un proveedor.
+// ══════════════════════════════════════════════════════════════════════════════
+function compImportMultiPDF(){
+  state._multiPdf = { items: [], provFijo: '', condicion: 'Cta Cte' };
+  const provs = (state.cache.proveedores || []).slice().sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||''));
+  openModal({
+    title: '📥 Importar varias facturas (PDF)',
+    size: 'max-w-5xl',
+    body: `
+      <div class="text-sm text-slate-600 mb-3">Subí varios PDF de facturas de compra. El sistema lee cada uno, te muestra la lista para revisar y registrás todas juntas. Ideal para cargar las facturas viejas impagas de un proveedor.</div>
+      <div class="flex flex-wrap items-end gap-3 mb-3 p-3 rounded-lg bg-slate-50 border border-slate-200">
+        <div class="flex-1 min-w-[220px]">
+          <label class="label">Proveedor para todas</label>
+          <select id="mp-prov" class="input" onchange="state._multiPdf.provFijo=this.value;_mpRender()">
+            <option value="">(Detectar de cada PDF por el CUIT)</option>
+            ${provs.map(p=>`<option value="${p.id}">${esc(p.razonSocial)}${p.cuit?' · '+esc(p.cuit):''}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="label">Condición</label>
+          <select id="mp-cond" class="input" onchange="state._multiPdf.condicion=this.value">
+            <option value="Cta Cte">Cuenta corriente</option>
+            <option value="Contado">Contado</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">&nbsp;</label>
+          <label class="btn btn-secondary cursor-pointer">📎 Elegir PDFs
+            <input id="mp-files" type="file" accept=".pdf,image/*" multiple class="hidden" onchange="_mpAgregarArchivos(this)"/>
+          </label>
+        </div>
+      </div>
+      <div id="mp-lista"><div class="text-slate-400 text-sm text-center py-8">Todavía no subiste archivos.</div></div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+             <button id="mp-btn-reg" class="btn btn-primary" onclick="compMultiRegistrar()" disabled>Registrar todas</button>`
+  });
+}
+
+async function _mpAgregarArchivos(input){
+  const files = [...(input.files||[])];
+  input.value = '';
+  for (const file of files){
+    const item = { file, nombre: file.name, estado: 'parsing', data: null, error: null, incluir: true, provId: '' };
+    state._multiPdf.items.push(item);
+  }
+  _mpRender();
+  // Parsear de a uno (secuencial, para no saturar el server/IA)
+  for (const item of state._multiPdf.items){
+    if (item.estado !== 'parsing') continue;
+    try {
+      const fd = new FormData(); fd.append('archivo', item.file);
+      const r = await fetch(API_BASE + '/api/admin/parse-factura-pdf', {
+        method:'POST', headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body: fd,
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) { item.estado='error'; item.error = j.error || ('Error '+r.status); }
+      else {
+        item.data = j.data; item.estado='ok';
+        // Proveedor detectado por CUIT
+        if (j.data.cuitEmisor){
+          const cn = String(j.data.cuitEmisor).replace(/[-.\s]/g,'');
+          const pm = (state.cache.proveedores||[]).find(p=>String(p.cuit||'').replace(/[-.\s]/g,'')===cn);
+          if (pm) item.provId = pm.id;
+        }
+      }
+    } catch(e){ item.estado='error'; item.error=e.message; }
+    _mpRender();
+  }
+}
+
+function _mpItemTotal(d){
+  if (!d) return 0;
+  const neto = d.netoGravado || (d.total ? d.total/1.21 : 0);
+  const otros = Number(d.otrosImpuestos||0) + Number(d.noGravado||0);
+  return d.total || (neto*1.21 + otros);
+}
+
+function _mpRender(){
+  const cont = document.getElementById('mp-lista'); if (!cont) return;
+  const mp = state._multiPdf; const its = mp.items;
+  const provs = (state.cache.proveedores || []).slice().sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||''));
+  const provOpts = (sel)=>`<option value="">— sin proveedor —</option>`+provs.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${esc(p.razonSocial)}</option>`).join('');
+  if (!its.length){ cont.innerHTML = `<div class="text-slate-400 text-sm text-center py-8">Todavía no subiste archivos.</div>`; _mpUpdBtn(); return; }
+  const filas = its.map((it,i)=>{
+    const d = it.data || {};
+    const provEfectivo = mp.provFijo || it.provId || '';
+    const estadoCell = it.estado==='parsing' ? '<span class="text-blue-600">⏳ Leyendo…</span>'
+      : it.estado==='error' ? `<span class="text-red-600" title="${esc(it.error||'')}">❌ Error</span>`
+      : '<span class="text-emerald-700">✅ Leída</span>';
+    const comp = it.estado==='ok' ? `${esc(d.tipoCmpLetra||'?')} ${String(d.puntoVenta||0).padStart(4,'0')}-${String(d.numero||0).padStart(8,'0')}` : '—';
+    const falta = it.estado==='ok' && (!d.puntoVenta || !d.numero || !d.total || !d.fecha);
+    const provSelect = mp.provFijo
+      ? `<span class="text-xs text-slate-400">(fijo)</span>`
+      : `<select class="input input-sm" onchange="state._multiPdf.items[${i}].provId=this.value;_mpUpdBtn()">${provOpts(it.provId)}</select>`;
+    return `<tr class="table-row ${falta?'bg-amber-50':''}">
+      <td class="text-center"><input type="checkbox" ${it.incluir?'checked':''} ${it.estado!=='ok'?'disabled':''} onchange="state._multiPdf.items[${i}].incluir=this.checked;_mpUpdBtn()"></td>
+      <td class="text-xs">${esc(it.nombre)}</td>
+      <td>${estadoCell}</td>
+      <td class="text-xs font-mono">${comp}${falta?' <span title="Faltan datos: revisá PV/Nro, fecha o total" class="text-amber-600">⚠️</span>':''}</td>
+      <td class="text-xs">${it.estado==='ok' && d.fecha ? fmtFecha(d.fecha) : '<span class="text-amber-600">sin fecha</span>'}</td>
+      <td class="text-xs">${d.razonSocialEmisor?esc(d.razonSocialEmisor):(d.cuitEmisor?('CUIT '+esc(d.cuitEmisor)):'—')}</td>
+      <td>${it.estado==='ok'?provSelect:''}</td>
+      <td class="text-right font-semibold">${it.estado==='ok'?fmt$(_mpItemTotal(d)):'—'}</td>
+      <td class="text-right"><button class="btn btn-ghost text-xs text-red-600" onclick="state._multiPdf.items.splice(${i},1);_mpRender()">✖</button></td>
+    </tr>`;
+  }).join('');
+  const okCount = its.filter(x=>x.estado==='ok').length;
+  const totalGen = its.filter(x=>x.estado==='ok'&&x.incluir).reduce((a,x)=>a+_mpItemTotal(x.data),0);
+  cont.innerHTML = `
+    <div class="text-xs text-slate-500 mb-1">${okCount} de ${its.length} leídas · seleccionadas suman <b>${fmt$(totalGen)}</b>. Las filas en amarillo tienen datos incompletos: podés destildarlas y cargarlas a mano.</div>
+    <div class="overflow-x-auto border border-slate-200 rounded-lg" style="max-height:48vh">
+      <table class="data">
+        <thead><tr><th></th><th>Archivo</th><th>Estado</th><th>Comprobante</th><th>Fecha</th><th>Emisor</th><th>Proveedor</th><th class="text-right">Total</th><th></th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>`;
+  _mpUpdBtn();
+}
+
+function _mpUpdBtn(){
+  const btn = document.getElementById('mp-btn-reg'); if (!btn) return;
+  const mp = state._multiPdf;
+  const listas = mp.items.filter(x=>x.estado==='ok' && x.incluir);
+  btn.disabled = listas.length===0;
+  btn.textContent = listas.length ? `Registrar ${listas.length} factura${listas.length===1?'':'s'}` : 'Registrar todas';
+}
+
+async function compMultiRegistrar(){
+  const mp = state._multiPdf;
+  const listas = mp.items.filter(x=>x.estado==='ok' && x.incluir);
+  if (!listas.length) return;
+  const btn = document.getElementById('mp-btn-reg'); if (btn){ btn.disabled=true; btn.textContent='Registrando…'; }
+  let ok=0, fail=0; const errores=[];
+  for (const it of listas){
+    const d = it.data;
+    const provId = mp.provFijo || it.provId || null;
+    const letra = ['A','B','C','E'].includes(d.tipoCmpLetra) ? d.tipoCmpLetra : 'A';
+    const clase = ['factura','nota_credito','nota_debito'].includes(d.clase) ? d.clase : 'factura';
+    const neto = d.netoGravado || (d.total ? d.total/1.21 : 0);
+    const alic = d.iva21 ? 21 : d.iva105 ? 10.5 : d.iva27 ? 27 : 21;
+    const _monMap = { PES:'ARS', DOL:'USD', '060':'EUR', EUR:'EUR', USD:'USD', ARS:'ARS' };
+    const moneda = _monMap[String(d.moneda||'PES').toUpperCase()] || 'ARS';
+    const items = [{
+      productoId: null,
+      descripcion: d.descripcionItem || `Factura ${letra} ${String(d.puntoVenta||0).padStart(4,'0')}-${String(d.numero||0).padStart(8,'0')}${d.razonSocialEmisor?' — '+d.razonSocialEmisor:''}`,
+      cantidad: d.cantidadItem || 1,
+      precioUnit: (d.cantidadItem ? (neto/d.cantidadItem) : neto),
+      alicuotaIva: alic,
+    }];
+    const otrosTot = Number(d.otrosImpuestos||0) + Number(d.noGravado||0);
+    if (otrosTot > 0.005){
+      items.push({ productoId:null, descripcion:'Impuestos / otros tributos', cantidad:1, precioUnit:otrosTot, alicuotaIva:0 });
+    }
+    const body = {
+      tipo: letra, clase,
+      puntoVenta: Number(d.puntoVenta||1), numero: Number(d.numero||1),
+      fecha: new Date((d.fecha||new Date().toISOString().slice(0,10)) + 'T12:00:00').toISOString(),
+      proveedorId: provId,
+      condicionCompra: mp.condicion,
+      moneda, cotizacion: moneda==='ARS' ? 1 : (Number(d.cotizacion)>1 ? Number(d.cotizacion) : null),
+      clasificacion: 'empresa',
+      items,
+      emisorCuit: d.cuitEmisor || null,
+      emisorRazonSocial: d.razonSocialEmisor || null,
+      cae: d.cae || null,
+    };
+    try {
+      await api('/api/facturas-compra', { method:'POST', body: JSON.stringify(body) });
+      ok++; it.estado='registrada'; it.incluir=false;
+    } catch(e){ fail++; errores.push(`${it.nombre}: ${e.message}`); }
+    _mpRender();
+  }
+  delete state.cache.stockMap; delete state.cache.ctasCtes; delete state.cache.facturasCompra;
+  if (fail){
+    toast(`Registradas ${ok}. ${fail} con error.`, ok?'warn':'error');
+    console.warn('Importar varias facturas — errores:', errores);
+  } else {
+    toast(`Listo: ${ok} factura${ok===1?'':'s'} registrada${ok===1?'':'s'}.`, 'success');
+    closeModal(); pages.compras();
+  }
 }
 
 async function compVincularRemito(){
