@@ -2841,6 +2841,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Circuito-Campana-Forrajera-Multicorte.pdf', t:'Campaña forrajera multicorte', d:'Praderas y verdeos de varios cortes.' },
       { f:'Instructivo-Manejo-Integral-Hacienda.pdf', t:'Manejo integral de la hacienda', d:'Todo el ciclo en una guía: pastura/alimento, rodeos, gastos, alimentación con descuento de stock, compras/ventas, guías, liquidaciones y costo por kg con la ganancia.' },
       { f:'Instructivo-Manejo-de-Animales.pdf', t:'Manejo de animales', d:'Altas, movimientos, pesajes y eventos de la hacienda.' },
+      { f:'Instructivo-Stock-Hacienda.pdf', t:'Stock de hacienda: declarado (SENASA) vs real', d:'Los dos números de cada campo y cómo cargarlos bien: el Declarado (SENASA) a mano y el Real con Movimientos (Ajuste/Conteo). Carga inicial, día a día, lectura de la diferencia y cómo corregir si se cargó mal.' },
       { f:'Instructivo-Circuito-Rodeos.pdf', t:'Circuito de rodeos', d:'Armar rodeos, imputar alimentación y ver el costo del lote.' },
       { f:'Instructivo-Costo-Kilo-Carne.pdf', t:'Costo por kilo de carne', d:'Cómo se calcula el costo por kg y la ganancia del ciclo.' },
       { f:'Instructivo-Guias-Hacienda.pdf', t:'Guías de hacienda', d:'Emitir y controlar guías.' },
@@ -3047,6 +3048,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'23/10/2026',
+      titulo:'📄 v2.328.0 — Nuevo instructivo: Stock de hacienda (declarado SENASA vs real)',
+      desc:'En <b>Ayuda y manual → Instructivos de procesos → Ganadería</b> sumamos la guía <b>Stock de hacienda: declarado (SENASA) vs real</b>. Explica los dos números de cada campo y cómo cargarlos bien: el <b>Declarado (SENASA)</b> se escribe a mano (botones + Categoría / 📋 Declarado), y el <b>Real</b> sale de los <b>Movimientos</b> (la carga inicial se hace con <b>⚖️ Ajuste / Conteo</b>). Incluye el día a día, cómo leer la diferencia y cómo corregir si se cargó mal. 🐄' },
     { tag:'Fix', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/10/2026',
       titulo:'🧾 v2.327.0 — La Nota de débito del proveedor ahora aparece al registrar el pago',
       desc:'Si un proveedor tenía <b>facturas + una Nota de débito</b>, al ir a <b>Registrar pago</b> la ND a veces <b>no aparecía</b> en la lista para seleccionar. Era porque las NC/ND de compra se guardaban con una referencia genérica que se pisaba entre sí. Ahora cada <b>NC/ND de compra lleva su referencia única</b> (como las facturas) y el listado de comprobantes a pagar <b>muestra todo</b>: facturas y notas de débito. También blindamos el cálculo para que un pago de un comprobante no afecte a otro. ✅' },
