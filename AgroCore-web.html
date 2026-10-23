@@ -3048,6 +3048,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'23/10/2026',
+      titulo:'🐄 v2.329.0 — Movimientos de animales: se distingue mejor Real vs Declarado',
+      desc:'Para que no se confunda qué toca cada botón, en <b>Movimientos de animales</b> aclaramos (sin recargar la pantalla): el botón <b>+ Movimiento</b> ahora dice <b>(Real)</b> y el <b>+ Categoría</b> dice <b>(Declarado)</b>, cada uno con su ayuda al pasar el mouse. Al abrir <b>+ Movimiento</b> aparece una nota verde recordando que ajusta el <b>stock REAL</b> del campo, y al cargar una categoría se aclara que ese número es el <b>Declarado (SENASA)</b> y que el real se carga con un Movimiento. 📍' },
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'23/10/2026',
       titulo:'📄 v2.328.0 — Nuevo instructivo: Stock de hacienda (declarado SENASA vs real)',
       desc:'En <b>Ayuda y manual → Instructivos de procesos → Ganadería</b> sumamos la guía <b>Stock de hacienda: declarado (SENASA) vs real</b>. Explica los dos números de cada campo y cómo cargarlos bien: el <b>Declarado (SENASA)</b> se escribe a mano (botones + Categoría / 📋 Declarado), y el <b>Real</b> sale de los <b>Movimientos</b> (la carga inicial se hace con <b>⚖️ Ajuste / Conteo</b>). Incluye el día a día, cómo leer la diferencia y cómo corregir si se cargó mal. 🐄' },
@@ -18784,7 +18787,7 @@ pages.hacienda = async function() {
         <button class="btn btn-secondary" onclick="hacProyeccion()" title="Estado de situación y proyección de kg para presentar al banco">📈 Proyección</button>
         ${canU?`<button class="btn btn-secondary" onclick="state.catTab='categAn';go('catalogos')" title="Las categorías de animales se configuran en Catálogo (especie, rango de kg, peso y a qué categoría puede pasar)">⚙️ Categorías (Catálogo)</button>`:''}
         ${canC?`<button class="btn btn-secondary" onclick="hacVincularFactura()" title="Vincular una factura ya cargada que no movió el stock de animales">🔗 Vincular factura</button>`:''}
-        ${canC?`<button class="btn btn-primary" onclick="hacMovForm()">+ Movimiento</button>`:''}
+        ${canC?`<button class="btn btn-primary" onclick="hacMovForm()" title="Ajusta el stock REAL (lo que hay en el campo): nacimiento, muerte, traslado, cambio de categoría o ajuste/conteo">+ Movimiento <span class="text-[10px] opacity-80 font-normal">(Real)</span></button>`:''}
       </div>
     </div>
     <div class="kpi mb-3 flex flex-wrap items-end gap-2">
@@ -18832,8 +18835,8 @@ pages.hacienda = async function() {
               <div class="text-xs text-slate-500">${lst.length} categoría${lst.length===1?'':'s'} · declarado ${fmtN(declSum)} · real ${fmtN(realSum)} · ${dif===0?'<span class="text-emerald-700">sin diferencia</span>':'<span class="text-amber-700">'+(dif>0?'+':'')+fmtN(dif)+' de diferencia</span>'}</div>
             </div>
             <div class="flex gap-2">
-              ${canC?`<button class="btn btn-secondary text-xs" onclick='hacCategoriaForm(${JSON.stringify(campoId)})'>+ Categoría</button>`:''}
-              ${canC?`<button class="btn btn-secondary text-xs" onclick='hacMovForm(${JSON.stringify(campoId)})'>+ Movimiento</button>`:''}
+              ${canC?`<button class="btn btn-secondary text-xs" onclick='hacCategoriaForm(${JSON.stringify(campoId)})' title="Agrega una categoría al campo cargando su Declarado (SENASA)">+ Categoría <span class="text-[9px] text-slate-400 font-normal">(Declarado)</span></button>`:''}
+              ${canC?`<button class="btn btn-secondary text-xs" onclick='hacMovForm(${JSON.stringify(campoId)})' title="Ajusta el stock REAL del campo (nacimiento, muerte, traslado, cambio de categoría, ajuste/conteo)">+ Movimiento <span class="text-[9px] text-slate-400 font-normal">(Real)</span></button>`:''}
             </div>
           </div>
           ${lst.length ? `
@@ -18939,7 +18942,7 @@ function hacCategoriaForm(campoId) {
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="label">Stock declarado (cabezas)</label>
+            <label class="label">Stock declarado <span class="text-[10px] text-slate-400">(SENASA)</span></label>
             <input id="h-decl" type="number" min="0" step="1" class="input" value="0"/>
           </div>
           <div>
@@ -18947,6 +18950,7 @@ function hacCategoriaForm(campoId) {
             <input id="h-peso" type="number" min="0" step="0.1" class="input" placeholder="ej: 280"/>
           </div>
         </div>
+        <p class="text-xs text-slate-500 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">📋 Este número es el <b>Declarado (SENASA)</b>. El <b>stock real</b> del campo se carga con <b>+ Movimiento</b> (Ajuste / Conteo), no acá.</p>
         <p class="text-xs text-slate-400">El peso promedio se usa para estimar los kg totales y la proyección para el banco. Si elegís una categoría configurada, te sugerimos su peso.</p>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -19051,6 +19055,9 @@ async function hacMovForm(campoIdInit=null, categoriaInit=null, ctx='hacienda') 
   openModal({
     title: 'Nuevo movimiento de animales',
     body: `
+      <div class="text-xs rounded-lg px-3 py-2 mb-3" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534">
+        📍 Los movimientos ajustan el <b>stock REAL</b> (lo que hay en el campo). El <b>Declarado (SENASA)</b> se carga aparte, con <b>📋 Declarado / kg</b>.
+      </div>
       <div class="grid grid-cols-2 gap-3">
         <div><label class="label">Tipo *</label>
           <select id="h-tipo" class="input" onchange="hacMovTipoChange()">
