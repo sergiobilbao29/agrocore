@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.332.0';
+const AGROCORE_VERSION = '2.333.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -14583,6 +14583,15 @@ const _AYUDA_KB = [
       'Elegí ingreso, salida, traspaso entre depósitos o conversión (ej: grano ↔ semilla).',
       'Guardá: queda registrado en Movimientos.'],
     atajo:{ page:'stock', label:'Abrir Stock' } },
+  { id:'molienda', terms:['molienda','moler','fabrica','planta procesadora','expeller','aceite','pellet','merma','procesar soja','parte de molienda','formula de molienda','costo de fabricacion','plan canje','canje','paridad'],
+    titulo:'Molienda / Fábrica (procesar grano + plan canje)',
+    pasos:[
+      'Andá a Stock y depósitos → Molienda / Fábrica.',
+      'En "Fórmulas" definí el grano de origen y los coproductos por % (ej. Expeller 88, Aceite 10, Merma 2). Deben sumar 100%.',
+      'En "Partes de molienda" cargá solo los kilos de soja + costo del grano + costos de producción: el sistema descuenta la soja e ingresa expeller, aceite y merma solo, con el costo por kg.',
+      'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',
+      'En "Plan canje" entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie. El parte y el canje se pueden anular.'],
+    atajo:{ page:'molienda', label:'Abrir Molienda / Fábrica' } },
   { id:'arrendamiento', terms:['arrendamiento','alquiler de campo','contrato de arrendamiento','pagar arrendamiento','quintales','kg novillo'],
     titulo:'Cargar / pagar un arrendamiento',
     pasos:[

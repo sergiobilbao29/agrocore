@@ -2825,6 +2825,9 @@ pages.ayuda = async function() {
     { grupo:'Compras', items:[
       { f:'Instructivo-Remitos-de-Compra.pdf', t:'Remitos de compra (recepción → factura)', d:'Recibís la mercadería con remito (suma stock) y después la facturás vinculándola al remito, sin duplicar el inventario. Parciales, devoluciones y reporte de recibido no facturado.' },
     ]},
+    { grupo:'Stock y fábrica', items:[
+      { f:'Instructivo-Molienda-Fabrica.pdf', t:'Molienda / Fábrica (procesar grano + plan canje)', d:'Procesar soja y que el stock de expeller, aceite y merma se arme solo, con el costo de fabricación por kilo y el precio de venta sugerido. Incluye el plan canje (entregar producto y recibir grano por paridad).' },
+    ]},
     { grupo:'Producción', items:[
       { f:'Instructivo-Ordenes-de-Trabajo.pdf', t:'Órdenes de trabajo', d:'Indicarle al contratista qué labor hacer y qué insumos usar, entregarla (imprimir/WhatsApp) y después facturar el servicio.' },
       { f:'Instructivo-Presupuesto-de-Campana.pdf', t:'Presupuesto de campaña', d:'Armar el presupuesto a futuro (el sistema lo propone con las campañas anteriores) y controlar lo presupuestado contra lo realmente gastado durante la campaña.' },
@@ -3049,6 +3052,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/10/2026',
+      titulo:'📄 v2.333.0 — Instructivo de Molienda / Fábrica (y el bot ya lo explica)',
+      desc:'Sumamos el instructivo paso a paso <b>Molienda / Fábrica</b> en <b>Ayuda → Instructivos</b> (grupo Stock y fábrica) y en el manual de usuario de la web. Cubre: crear los artículos y depósitos, armar la fórmula, cargar el parte de molienda, el costo de fabricación y el precio de venta, y el plan canje. Además el <b>asistente</b> ya sabe explicar todo el módulo si le preguntás.' },
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/10/2026',
       titulo:'🔁 v2.332.0 — Plan canje: entregá producto y recibí grano (o al revés)',
       desc:'En <b>Molienda / Fábrica</b> se sumó la pestaña <b>Plan canje</b>. Cargás una <b>paridad</b> (relación fija, ej. 1 kg de expeller = 1,2 kg de soja) y al registrar una operación el sistema completa las cantidades solo y mueve el stock: <b>egreso</b> de lo que entregás e <b>ingreso</b> de lo que recibís. Sirve en los dos sentidos: venta cobrando en grano o compra pagando con producto. Es en especie (kilos). La operación se puede anular (revierte el stock). TRAE MIGRACION.' },
