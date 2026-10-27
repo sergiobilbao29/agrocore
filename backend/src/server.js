@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.334.0';
+const AGROCORE_VERSION = '2.336.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3701,6 +3701,8 @@ mountCrud({
     // v2.276 — doble unidad (hortícolas)
     unidad2: z.string().nullable().optional(),
     kgPorUnidad2: z.number().nullable().optional(),
+    // v2.336 — rol en fábrica/molienda (materia_prima | producto_final)
+    rolFabrica: z.string().nullable().optional(),
   }),
   orderBy: { nombre: 'asc' },
   searchFields: ['nombre', 'categoria', 'sku', 'codigoBarras'],
@@ -9762,6 +9764,279 @@ app.delete('/api/hacienda-movimientos/:id', requireCompany, requirePermission('s
   } catch (e) { next(e); }
 });
 
+// ============================================================
+// CARAVANAS / RECUENTO — padrón liviano de identificación individual + recuento
+// por manga. Cada alta/baja/traslado postea el HaciendaMovimiento correspondiente
+// para que el stock de hacienda por campo/lote/categoría quede sincronizado.
+// ============================================================
+function _caravanaDTO(c) {
+  return {
+    id: c.id, rfid: c.rfid, visual: c.visual, sexo: c.sexo, categoria: c.categoria,
+    estado: c.estado, campoId: c.campoId, loteId: c.loteId,
+    madreId: c.madreId, madreVisual: c.madreVisual,
+    madreRfid: c.madre?.rfid || null, madreVisualReal: c.madre?.visual || null,
+    tipoAlta: c.tipoAlta, fechaAlta: c.fechaAlta, fechaBaja: c.fechaBaja, motivoBaja: c.motivoBaja,
+    observaciones: c.observaciones,
+  };
+}
+function _normRfid(s) { return String(s == null ? '' : s).trim(); }
+
+// Listar el padrón (por defecto solo activas). Filtros: estado, campoId, loteId, q.
+app.get('/api/caravanas', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const estado = req.query.estado ? String(req.query.estado) : 'activa';
+    const where = { companyId: req.companyId };
+    if (estado && estado !== 'todas') where.estado = estado;
+    if (req.query.campoId) where.campoId = String(req.query.campoId);
+    if (req.query.loteId) where.loteId = String(req.query.loteId);
+    const q = req.query.q ? String(req.query.q).trim() : '';
+    if (q) where.OR = [{ rfid: { contains: q, mode: 'insensitive' } }, { visual: { contains: q, mode: 'insensitive' } }];
+    const rows = await prisma.caravana.findMany({
+      where, include: { madre: { select: { rfid: true, visual: true } } },
+      orderBy: [{ fechaAlta: 'desc' }], take: 5000,
+    });
+    res.json({ ok: true, data: rows.map(_caravanaDTO) });
+  } catch (e) { next(e); }
+});
+
+// Alta masiva por caravana (el "caravaneo"): crea el padrón y postea el ingreso
+// al stock de hacienda (una línea agregada por categoría).
+const caravanaAltaSchema = z.object({
+  campoId: z.string().min(1),
+  loteId: z.string().nullable().optional(),
+  categoria: z.string().min(1),
+  tipoAlta: z.enum(['nacimiento', 'compra', 'ajuste']).default('nacimiento'),
+  fecha: z.coerce.date().optional(),
+  items: z.array(z.object({
+    rfid: z.string().trim().nullable().optional(),
+    visual: z.string().trim().nullable().optional(),
+    sexo: z.enum(['macho', 'hembra']).nullable().optional(),
+    categoria: z.string().nullable().optional(),
+    madreRfid: z.string().nullable().optional(),
+    madreVisual: z.string().nullable().optional(),
+    observaciones: z.string().nullable().optional(),
+  })).min(1),
+});
+app.post('/api/caravanas/alta-masiva', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = caravanaAltaSchema.parse(req.body);
+    const campo = await _verifyCampo(req, d.campoId);
+    if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
+    const loteId = d.loteId || null;
+    if (loteId && !(await _verifyLote(req, loteId, d.campoId))) return res.status(400).json({ ok: false, error: 'Lote no válido para ese campo' });
+    const fecha = d.fecha || new Date();
+
+    // Normalizar + validar ítems (al menos rfid o visual).
+    const items = d.items.map(it => ({
+      rfid: _normRfid(it.rfid) || null, visual: _normRfid(it.visual) || null,
+      sexo: it.sexo || null, categoria: (it.categoria || d.categoria),
+      madreRfid: _normRfid(it.madreRfid) || null, madreVisual: _normRfid(it.madreVisual) || null,
+      observaciones: it.observaciones || null,
+    })).filter(it => it.rfid || it.visual);
+    if (!items.length) return res.status(400).json({ ok: false, error: 'Cargá al menos una caravana (RFID o visual) por fila' });
+
+    // Dedup contra caravanas ya existentes (mismo rfid o visual) y dentro del lote.
+    const rfids = items.map(i => i.rfid).filter(Boolean);
+    const visuales = items.map(i => i.visual).filter(Boolean);
+    const existentes = await prisma.caravana.findMany({
+      where: { companyId: req.companyId, OR: [{ rfid: { in: rfids.length ? rfids : ['__none__'] } }, { visual: { in: visuales.length ? visuales : ['__none__'] } }] },
+      select: { rfid: true, visual: true },
+    });
+    const yaRfid = new Set(existentes.map(e => e.rfid).filter(Boolean));
+    const yaVis = new Set(existentes.map(e => e.visual).filter(Boolean));
+    const nuevos = []; const duplicados = []; const vistosRfid = new Set(); const vistosVis = new Set();
+    for (const it of items) {
+      const dupExist = (it.rfid && yaRfid.has(it.rfid)) || (it.visual && yaVis.has(it.visual));
+      const dupBatch = (it.rfid && vistosRfid.has(it.rfid)) || (it.visual && vistosVis.has(it.visual));
+      if (dupExist || dupBatch) { duplicados.push(it.rfid || it.visual); continue; }
+      if (it.rfid) vistosRfid.add(it.rfid); if (it.visual) vistosVis.add(it.visual);
+      nuevos.push(it);
+    }
+    if (!nuevos.length) return res.status(400).json({ ok: false, error: `Todas las caravanas ya existían (${duplicados.length}). No se dio de alta ninguna.` });
+
+    // Resolver madres por RFID o visual (dentro del padrón).
+    const madreKeys = [...new Set(nuevos.flatMap(n => [n.madreRfid, n.madreVisual].filter(Boolean)))];
+    let madreMap = {};
+    if (madreKeys.length) {
+      const madres = await prisma.caravana.findMany({
+        where: { companyId: req.companyId, OR: [{ rfid: { in: madreKeys } }, { visual: { in: madreKeys } }] },
+        select: { id: true, rfid: true, visual: true },
+      });
+      for (const m of madres) { if (m.rfid) madreMap[m.rfid] = m.id; if (m.visual) madreMap[m.visual] = m.id; }
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Agrupar por categoría para postear el stock de hacienda agregado.
+      const porCat = {};
+      for (const n of nuevos) { porCat[n.categoria] = (porCat[n.categoria] || 0) + 1; }
+      const movPorCat = {};
+      for (const cat of Object.keys(porCat)) {
+        const mov = await tx.haciendaMovimiento.create({ data: {
+          companyId: req.companyId, campoId: d.campoId, loteId, categoria: cat,
+          fecha, tipo: d.tipoAlta, cantidad: porCat[cat],
+          observaciones: `Alta por caravaneo (${porCat[cat]} cab.)`,
+        }});
+        movPorCat[cat] = mov.id;
+      }
+      let creadas = 0;
+      for (const n of nuevos) {
+        const madreId = (n.madreRfid && madreMap[n.madreRfid]) || (n.madreVisual && madreMap[n.madreVisual]) || null;
+        await tx.caravana.create({ data: {
+          companyId: req.companyId, campoId: d.campoId, loteId,
+          rfid: n.rfid, visual: n.visual, sexo: n.sexo, categoria: n.categoria,
+          estado: 'activa', tipoAlta: d.tipoAlta, fechaAlta: fecha,
+          madreId, madreVisual: madreId ? null : (n.madreVisual || n.madreRfid || null),
+          haciendaMovAltaId: movPorCat[n.categoria] || null, observaciones: n.observaciones,
+        }});
+        creadas++;
+      }
+      return { creadas };
+    });
+    res.status(201).json({ ok: true, data: { creadas: result.creadas, duplicados: duplicados.length, duplicadosList: duplicados } });
+  } catch (e) { next(e); }
+});
+
+// Baja de una caravana (muerte / venta / error) → descuenta del stock de hacienda.
+app.post('/api/caravanas/:id/baja', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const c = await prisma.caravana.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!c) return res.status(404).json({ ok: false, error: 'Caravana no encontrada' });
+    if (c.estado === 'baja') return res.status(400).json({ ok: false, error: 'Esta caravana ya está dada de baja' });
+    const d = z.object({ motivo: z.enum(['muerte', 'venta', 'error']).default('muerte'), fecha: z.coerce.date().optional() }).parse(req.body || {});
+    const fecha = d.fecha || new Date();
+    const result = await prisma.$transaction(async (tx) => {
+      let movId = null;
+      if (c.campoId && c.categoria) {
+        const tipo = d.motivo === 'muerte' ? 'muerte' : (d.motivo === 'venta' ? 'venta' : 'ajuste');
+        const mov = await tx.haciendaMovimiento.create({ data: {
+          companyId: req.companyId, campoId: c.campoId, loteId: c.loteId, categoria: c.categoria,
+          fecha, tipo, cantidad: tipo === 'ajuste' ? -1 : 1,
+          cobroTipo: tipo === 'venta' ? 'ninguno' : null,
+          observaciones: `Baja de caravana ${c.rfid || c.visual || ''} (${d.motivo})`,
+        }});
+        movId = mov.id;
+      }
+      return tx.caravana.update({ where: { id: c.id }, data: { estado: 'baja', fechaBaja: fecha, motivoBaja: d.motivo, haciendaMovBajaId: movId } });
+    });
+    res.json({ ok: true, data: _caravanaDTO(result) });
+  } catch (e) { next(e); }
+});
+
+// Mover caravanas de lote (rotación). Postea traslados agregados por origen+categoría.
+app.post('/api/caravanas/mover', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      ids: z.array(z.string()).min(1),
+      campoDestino: z.string().nullable().optional(),
+      loteDestino: z.string().nullable().optional(),
+      fecha: z.coerce.date().optional(),
+    }).parse(req.body);
+    const fecha = d.fecha || new Date();
+    const caravanas = await prisma.caravana.findMany({ where: { id: { in: d.ids }, companyId: req.companyId, estado: 'activa' } });
+    if (!caravanas.length) return res.status(400).json({ ok: false, error: 'No hay caravanas activas para mover' });
+    // Resolver destino: si no se manda campoDestino, se usa el de cada caravana.
+    const loteDestino = d.loteDestino || null;
+    let campoDestFijo = d.campoDestino || null;
+    if (campoDestFijo && !(await _verifyCampo(req, campoDestFijo))) return res.status(400).json({ ok: false, error: 'Campo destino no válido' });
+    if (loteDestino) {
+      const campoParaLote = campoDestFijo || caravanas[0].campoId;
+      if (!campoParaLote || !(await _verifyLote(req, loteDestino, campoParaLote))) return res.status(400).json({ ok: false, error: 'Lote destino no válido para ese campo' });
+    }
+    const result = await prisma.$transaction(async (tx) => {
+      // Agrupar por (campoOrigen, loteOrigen, categoria) para los traslados de stock.
+      const grupos = {};
+      for (const c of caravanas) {
+        const campoDest = campoDestFijo || c.campoId;
+        if (campoDest === c.campoId && (loteDestino || null) === (c.loteId || null)) continue; // sin cambio
+        const k = `${c.campoId}||${c.loteId || ''}||${c.categoria || ''}||${campoDest}`;
+        (grupos[k] = grupos[k] || { campoOrigen: c.campoId, loteOrigen: c.loteId || null, categoria: c.categoria, campoDest, n: 0 }).n++;
+      }
+      for (const g of Object.values(grupos)) {
+        if (!g.campoOrigen || !g.categoria) continue;
+        await tx.haciendaMovimiento.create({ data: { companyId: req.companyId, campoId: g.campoOrigen, loteId: g.loteOrigen, categoria: g.categoria, fecha, tipo: 'traslado_out', cantidad: g.n, campoOrigen: g.campoOrigen, campoDestino: g.campoDest, loteOrigen: g.loteOrigen, loteDestino, observaciones: 'Traslado de caravanas' } });
+        await tx.haciendaMovimiento.create({ data: { companyId: req.companyId, campoId: g.campoDest, loteId: loteDestino, categoria: g.categoria, fecha, tipo: 'traslado_in', cantidad: g.n, campoOrigen: g.campoOrigen, campoDestino: g.campoDest, loteOrigen: g.loteOrigen, loteDestino, observaciones: 'Traslado de caravanas' } });
+      }
+      let movidas = 0;
+      for (const c of caravanas) {
+        const campoDest = campoDestFijo || c.campoId;
+        await tx.caravana.update({ where: { id: c.id }, data: { campoId: campoDest, loteId: loteDestino } });
+        movidas++;
+      }
+      return { movidas };
+    });
+    res.json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+
+// Borrar una caravana (error de carga). Si estaba activa, compensa el stock con un ajuste -1.
+app.delete('/api/caravanas/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const c = await prisma.caravana.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!c) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    await prisma.$transaction(async (tx) => {
+      if (c.estado === 'activa' && c.campoId && c.categoria) {
+        await tx.haciendaMovimiento.create({ data: {
+          companyId: req.companyId, campoId: c.campoId, loteId: c.loteId, categoria: c.categoria,
+          fecha: new Date(), tipo: 'ajuste', cantidad: -1,
+          observaciones: `Baja de caravana ${c.rfid || c.visual || ''} (eliminada)`,
+        }});
+      }
+      await tx.caravana.delete({ where: { id: c.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Recuento por manga: compara las caravanas leídas contra el padrón activo
+// del campo/lote. Devuelve presentes, faltantes y desconocidas. Opcional: guardar.
+app.post('/api/caravanas/recuento', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      campoId: z.string().nullable().optional(),
+      loteId: z.string().nullable().optional(),
+      rfids: z.array(z.string()).default([]),
+      guardar: z.boolean().optional(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body);
+    // Normalizar y deduplicar lecturas.
+    const leidasSet = new Set(d.rfids.map(_normRfid).filter(Boolean));
+    const where = { companyId: req.companyId, estado: 'activa' };
+    if (d.campoId) where.campoId = String(d.campoId);
+    if (d.loteId) where.loteId = String(d.loteId);
+    const padron = await prisma.caravana.findMany({ where, select: { id: true, rfid: true, visual: true, sexo: true, categoria: true } });
+    const padronRfid = new Set(padron.map(p => _normRfid(p.rfid)).filter(Boolean));
+    const presentes = []; const faltantes = [];
+    for (const p of padron) {
+      const r = _normRfid(p.rfid);
+      if (r && leidasSet.has(r)) presentes.push(p);
+      else faltantes.push({ id: p.id, rfid: p.rfid, visual: p.visual, sexo: p.sexo, categoria: p.categoria });
+    }
+    const desconocidas = [...leidasSet].filter(r => !padronRfid.has(r));
+    let recuentoId = null;
+    if (d.guardar) {
+      const rec = await prisma.recuentoCaravana.create({ data: {
+        companyId: req.companyId, campoId: d.campoId || null, loteId: d.loteId || null, fecha: new Date(),
+        totalPadron: padron.length, leidas: leidasSet.size, presentes: presentes.length,
+        faltantesCant: faltantes.length, desconocidasCant: desconocidas.length,
+        faltantes, desconocidas, observaciones: d.observaciones || null, userId: req.user?.id || null,
+      }});
+      recuentoId = rec.id;
+    }
+    res.json({ ok: true, data: {
+      totalPadron: padron.length, leidas: leidasSet.size, presentesCant: presentes.length,
+      faltantes, desconocidas, recuentoId,
+    }});
+  } catch (e) { next(e); }
+});
+
+// Historial de recuentos guardados.
+app.get('/api/recuentos-caravana', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const rows = await prisma.recuentoCaravana.findMany({ where: { companyId: req.companyId }, orderBy: { fecha: 'desc' }, take: 200 });
+    res.json({ ok: true, data: rows });
+  } catch (e) { next(e); }
+});
+
 // Resumen por campo y categoría: declarado vs real, con la diferencia.
 // El frontend puede armar esto también del lado del navegador, pero tenerlo
 // también del lado del servidor permite reportes y mejora performance.
@@ -14614,12 +14889,22 @@ const _AYUDA_KB = [
     titulo:'Molienda / Fábrica (procesar grano + plan canje)',
     pasos:[
       'Primero activá el módulo: Configuración → Empresa → tildá "Producción industrial / Fábrica". Solo las empresas procesadoras necesitan verlo. Recién ahí aparece "Molienda / Fábrica" en Stock y depósitos.',
+      'Tip: en la ficha de cada producto marcá su "Rol en fábrica" (materia prima = grano de origen, o producto final = coproducto). Así la fórmula solo te ofrece esos y no todo el catálogo (ni animales ni agroquímicos).',
       'En "Fórmulas" definí el grano de origen y los coproductos por % (ej. Expeller 88, Aceite 10, Merma 2). Deben sumar 100%.',
       'En "Partes de molienda" cargá solo los kilos de soja + costo del grano + costos de producción: el sistema descuenta la soja e ingresa expeller, aceite y merma solo, con el costo por kg. Ojo: no te deja procesar más grano del que hay en el silo (evita stock negativo).',
       'Si querés cargar lo que REALMENTE salió, tildá "Cargar rendimiento real" y poné los kg obtenidos de cada coproducto: la merma se recalcula sola como lo que falte y el costo por kg se ajusta a la producción real.',
       'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',
       'En "Plan canje" entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie. El parte y el canje se pueden anular.'],
     atajo:{ page:'molienda', label:'Abrir Molienda / Fábrica' } },
+  { id:'caravanas', terms:['caravana','caravanas','recuento','recontar','rfid','caravana electronica','caravana de control','manga','padron','cuantas faltan','contar hacienda','pasar por la manga','senalada','senalar','ternero caravana','lector'],
+    titulo:'Caravanas / Recuento (control de stock por caravana, sin fichas)',
+    pasos:[
+      'Es para empresas de cría que caravanean cada animal y controlan el stock pasando la tropa por la manga, sin usar Fichas 360° ni Rodeos. Está en Ganadería y Haras → Caravanas / Recuento.',
+      'Alta por caravana: pestaña "Alta por caravana". Elegí campo, lote y categoría por defecto, y escaneá/tecleá cada caravana (RFID y/o visual) con su sexo. Podés poner la caravana de la madre para dejar el ternero señalado. Al guardar, suma las cabezas al stock de hacienda de ese campo/lote/categoría.',
+      'Recuento por manga: pestaña "Recuento". Elegí el campo/lote, pegá o importá (archivo del lector) las caravanas leídas y tocá "Correr recuento". El sistema muestra las presentes, las FALTANTES (están en el padrón y no se leyeron, con su visual para ir a buscarlas) y las desconocidas (leídas sin alta).',
+      'Rotación de lotes: en el Padrón seleccioná caravanas y usá "Mover de lote"; mueve el stock entre lotes solo.',
+      'Bajas: en el Padrón, botón "Baja" (muerte o venta) descuenta la cabeza del stock. Podés guardar cada recuento en el Historial.'],
+    atajo:{ page:'caravanas', label:'Abrir Caravanas / Recuento' } },
   { id:'arrendamiento', terms:['arrendamiento','alquiler de campo','contrato de arrendamiento','pagar arrendamiento','quintales','kg novillo'],
     titulo:'Cargar / pagar un arrendamiento',
     pasos:[

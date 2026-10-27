@@ -1104,6 +1104,7 @@ const MODULES = [
   { id:'animales',      label:'Fichas de animales',   icon:'🐎', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'rodeos',        label:'Rodeos y Hacienda',    icon:'🐮', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'mapaHacienda',  label:'Traslado de hacienda', icon:'🔀', perm:'stock:read',      section:'Ganadería y Haras' },
+  { id:'caravanas',     label:'Caravanas / Recuento', icon:'🏷️', perm:'stock:read',      section:'Ganadería y Haras' },
   { id:'guiasHacienda', label:'Guías de hacienda (DT-e)',icon:'📋', perm:'stock:read',   section:'Ganadería y Haras' },
 
   // ===== STOCK Y DEPÓSITOS =====
@@ -2853,6 +2854,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Guias-Hacienda.pdf', t:'Guías de hacienda', d:'Emitir y controlar guías.' },
       { f:'Instructivo-Haras-Caballos.pdf', t:'Haras / caballos', d:'Gestión de equinos.' },
       { f:'Instructivo-Caravanas-Electronicas-RFID.pdf', t:'Caravanas electrónicas (RFID)', d:'Importar caravanas a un rodeo desde el bastón, pesar por caravana con auto-mapeo al rodeo, avisar faltantes y seguir la evolución de peso y GDP en la ficha del animal.' },
+      { f:'Instructivo-Caravanas-Recuento.pdf', t:'Caravanas / Recuento (control de stock, sin fichas)', d:'Para cría: caravanear cada animal (alta por caravana con sexo y madre) y controlar el stock pasando la tropa por la manga. Importás las caravanas leídas y el sistema te dice cuáles faltan. Sin usar Fichas 360° ni Rodeos; suma y resta al stock de hacienda solo.' },
     ]},
     { grupo:'Otros', items:[
       { f:'Instructivo-Remitos-Internos.pdf', t:'Remitos internos', d:'Movimientos internos entre establecimientos.' },
@@ -3054,6 +3056,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
+      titulo:'🏭 v2.336.0 — Molienda: marcá materia prima y producto final para filtrar la fórmula',
+      desc:'En las empresas con <b>Producción industrial / Fábrica</b>, cada artículo del catálogo ahora puede marcarse (en su ficha de producto) con un <b>rol de fábrica</b>: <b>🌱 Materia prima</b> (grano de origen) o <b>📦 Producto final</b> (coproducto). Con eso, la <b>fórmula de molienda</b> deja de ofrecer todo el catálogo: el <b>grano de origen</b> solo lista las materias primas y los <b>coproductos</b> solo los productos finales — nada de animales ni agroquímicos de otras actividades. El plan canje también se filtra. Mientras no marques ningún artículo, se siguen mostrando todos (excepto hacienda), así que no cambia nada hasta que empieces a marcar. TRAE MIGRACION.' },
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
+      titulo:'🏷️ v2.335.0 — Caravanas / Recuento: controlá el stock pasando la tropa por la manga',
+      desc:'Nuevo módulo en <b>Ganadería y Haras → Caravanas / Recuento</b> para empresas de cría que caravanean cada animal, <b>sin usar Fichas 360° ni Rodeos</b>. <b>Alta por caravana</b>: escaneás/tecleás cada caravana (RFID y/o visual) con su sexo y, si querés, la <b>madre</b> (ternero señalado); suma las cabezas al stock de hacienda del campo/lote/categoría. <b>Recuento por manga</b>: pegás o <b>importás el archivo del lector</b> con las caravanas leídas y el sistema te dice las <b>presentes</b>, las <b>faltantes</b> (para ir a buscarlas) y las <b>desconocidas</b>. Además <b>mover de lote</b> (rotación) y <b>baja</b> (muerte/venta), que ajustan el stock solos. Queda historial de recuentos. TRAE MIGRACION.' },
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/10/2026',
       titulo:'🏭 v2.334.0 — Molienda: rendimiento real, control de stock y módulo opcional por empresa',
       desc:'Mejoras en <b>Molienda / Fábrica</b>: <b>(1) Rendimiento real</b> — al cargar el parte podés tildar "Cargar rendimiento real" e ingresar los <b>kg que realmente salieron</b> de cada coproducto; la <b>merma</b> se recalcula sola como lo que falte y el <b>costo por kilo</b> se ajusta a la producción real. <b>(2) Control de stock</b> — el sistema ya no te deja procesar más grano del que hay disponible en el silo (evita stock negativo). <b>(3) Módulo opcional</b> — "Molienda / Fábrica" ahora se activa por empresa desde <b>Configuración → Empresa</b>, así solo lo ven las empresas que fabrican. TRAE MIGRACION.' },
@@ -7868,6 +7876,12 @@ async function prodForm(id=null, opts={}) {
             ${[['','— Sin definir —'],['stockeable','📦 Stockeable (descuenta stock)'],['cereal','🌾 Cereal / Grano'],['servicio','🚜 Servicio / Labor (no descuenta stock)']].map(([v,l])=>`<option value="${v}" ${(it.tipoArticulo||'')===v?'selected':''}>${l}</option>`).join('')}
           </select>
         </div>
+        ${state.usaProduccionIndustrial ? `<div><label class="label">🏭 Rol en fábrica / molienda</label>
+          <select id="f-rolfab" class="input">
+            ${[['','— No aplica —'],['materia_prima','🌱 Materia prima (grano de origen)'],['producto_final','📦 Producto final (coproducto)']].map(([v,l])=>`<option value="${v}" ${(it.rolFabrica||'')===v?'selected':''}>${l}</option>`).join('')}
+          </select>
+          <div class="text-[11px] text-slate-500 mt-1">Al marcarlo, la fórmula de molienda solo ofrece las materias primas como origen y los productos finales como coproductos.</div>
+        </div>` : ''}
         <div><label class="label">SKU / Código interno</label><input id="f-sku" class="input" value="${esc(it.sku||'')}" placeholder="Opcional"/></div>
         <div><label class="label">Código de barras</label><input id="f-ean" class="input font-mono" value="${esc(it.codigoBarras||'')}" placeholder="EAN / opcional"/></div>
         <div><label class="label">IVA por defecto</label>
@@ -7982,6 +7996,7 @@ async function prodSave(id) {
     esMezcla: !!$('#f-esmezcla')?.checked,
     unidad2: $('#f-uni2')?.value.trim() || null,
     kgPorUnidad2: $('#f-kgu2')?.value ? Number($('#f-kgu2').value) : null,
+    rolFabrica: $('#f-rolfab')?.value || null,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
   if (!caId && !cat) return toast('Elegí la categoría','warn');
@@ -18743,6 +18758,338 @@ function hacTipoLabel(t){
   const [l,c]=m[t]||[t,'badge-gray']; return `<span class="badge ${c}">${l}</span>`;
 }
 
+/* ============================================================
+   CARAVANAS / RECUENTO — padrón liviano por caravana + recuento por manga.
+   Para empresas de cría que caravanean cada animal y controlan stock por
+   lectura de la manga, sin usar Fichas 360° ni Rodeos. Cada alta/baja/traslado
+   mueve el stock de hacienda (HaciendaMovimiento) automáticamente.
+   ============================================================ */
+let _carav = { tab:'padron', campoId:'', loteId:'', q:'', list:[], recuentos:[], sel:new Set(), rec:null, prefill:null };
+function _carLotesDe(campoId){ return (state.cache.lotes||[]).filter(l=>l.campoId===campoId && l.activo!==false); }
+function _carCampoNombre(id){ return (state.cache.campos||[]).find(c=>c.id===id)?.nombre || '—'; }
+function _carLoteNombre(id){ return (state.cache.lotes||[]).find(l=>l.id===id)?.nombre || (id?'—':'General'); }
+
+pages.caravanas = async function() {
+  setHeader('Caravanas / Recuento', 'Padrón de caravanas y recuento por manga · sin fichas ni rodeos');
+  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('caravanas','Caravanas / Recuento'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  try {
+    const [cv, camp, lot, ch, cat, rec] = await Promise.all([
+      api('/api/caravanas?estado=activa'),
+      state.cache.campos ? {data:state.cache.campos} : api('/api/campos'),
+      state.cache.lotes ? {data:state.cache.lotes} : api('/api/lotes'),
+      state.cache.catHacienda ? {data:state.cache.catHacienda} : api('/api/categorias-hacienda').catch(()=>({data:[]})),
+      state.cache.catalogos ? {data:state.cache.catalogos} : api('/api/catalogos').catch(()=>({data:[]})),
+      api('/api/recuentos-caravana').catch(()=>({data:[]})),
+    ]);
+    _carav.list = cv.data||[]; state.cache.campos = camp.data||[]; state.cache.lotes = lot.data||[];
+    state.cache.catHacienda = ch.data||[]; state.cache.catalogos = cat.data||[]; _carav.recuentos = rec.data||[];
+  } catch(e) { $('#page-body').innerHTML = `<div class="text-red-600 text-sm">Error: ${esc(e.message)}</div>`; return; }
+  _carav.sel = new Set();
+  carRender();
+};
+function carRender(){
+  const tabs = [['padron','🏷️ Padrón'],['alta','➕ Alta por caravana'],['recuento','📋 Recuento por manga'],['hist','🕑 Historial']];
+  $('#page-body').innerHTML = `
+    <div class="flex gap-1 mb-3 flex-wrap">${tabs.map(([k,l])=>`<button class="btn btn-xs ${_carav.tab===k?'btn-primary':'btn-ghost'}" onclick="_carav.tab='${k}';carRender()">${l}</button>`).join('')}</div>
+    <div id="car-body"></div>`;
+  if (_carav.tab==='padron') carTabPadron();
+  else if (_carav.tab==='alta') carTabAlta();
+  else if (_carav.tab==='recuento') carTabRecuento();
+  else carTabHist();
+}
+function carCampoLoteFiltro(){
+  const campos = state.cache.campos||[];
+  const lotes = _carLotesDe(_carav.campoId);
+  return `<div class="flex gap-2 flex-wrap items-end mb-3">
+    <div><label class="label text-[11px]">Campo</label><select class="input text-sm" onchange="_carav.campoId=this.value;_carav.loteId='';carRender()">
+      <option value="">Todos</option>${campos.map(c=>`<option value="${c.id}" ${c.id===_carav.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
+    <div><label class="label text-[11px]">Lote</label><select class="input text-sm" ${_carav.campoId?'':'disabled'} onchange="_carav.loteId=this.value;carRender()">
+      <option value="">Todos</option>${lotes.map(l=>`<option value="${l.id}" ${l.id===_carav.loteId?'selected':''}>${esc(l.nombre)}</option>`).join('')}</select></div>
+    <div class="flex-1 min-w-[160px]"><label class="label text-[11px]">Buscar caravana</label><input class="input text-sm" value="${esc(_carav.q)}" placeholder="RFID o visual" oninput="_carav.q=this.value;carRenderPadronList()"/></div>
+  </div>`;
+}
+function carFiltradas(){
+  return (_carav.list||[]).filter(c=>{
+    if (_carav.campoId && c.campoId!==_carav.campoId) return false;
+    if (_carav.loteId && c.loteId!==_carav.loteId) return false;
+    if (_carav.q){ const q=_carav.q.toLowerCase(); if(!((c.rfid||'').toLowerCase().includes(q)||(c.visual||'').toLowerCase().includes(q))) return false; }
+    return true;
+  });
+}
+function carTabPadron(){
+  const rows = carFiltradas();
+  const machos = rows.filter(c=>c.sexo==='macho').length, hembras = rows.filter(c=>c.sexo==='hembra').length;
+  $('#car-body').innerHTML = `
+    ${carCampoLoteFiltro()}
+    <div class="grid grid-cols-3 gap-2 mb-3">
+      <div class="kpi"><div class="text-xs text-slate-500">Caravanas activas</div><div class="text-xl font-bold">${rows.length}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Machos</div><div class="text-xl font-bold">${machos}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Hembras</div><div class="text-xl font-bold">${hembras}</div></div>
+    </div>
+    <div class="mb-2 flex gap-2 flex-wrap">
+      ${can('stock:create')?`<button class="btn btn-primary btn-xs" onclick="_carav.tab='alta';carRender()">➕ Cargar caravanas</button>`:''}
+      ${can('stock:update')?`<button class="btn btn-secondary btn-xs" onclick="carMoverSel()">🔀 Mover seleccionadas de lote</button>`:''}
+      <span class="text-xs text-slate-500 self-center" id="car-selinfo"></span>
+    </div>
+    <div id="car-padron-list"></div>`;
+  carRenderPadronList();
+}
+function carRenderPadronList(){
+  const box = $('#car-padron-list'); if(!box) return;
+  const rows = carFiltradas();
+  if (!rows.length){ box.innerHTML = `<div class="kpi text-center text-slate-400 py-6">Sin caravanas. Cargá el padrón en <b>Alta por caravana</b>.</div>`; return; }
+  box.innerHTML = `<div class="kpi overflow-x-auto"><table class="table w-full text-sm">
+    <thead><tr><th></th><th>RFID</th><th>Visual</th><th>Sexo</th><th>Categoría</th><th>Campo / Lote</th><th>Madre</th><th></th></tr></thead>
+    <tbody>${rows.map(c=>`<tr class="table-row">
+      <td><input type="checkbox" ${_carav.sel.has(c.id)?'checked':''} onchange="carSel('${c.id}',this.checked)"/></td>
+      <td class="font-mono text-xs">${esc(c.rfid||'—')}</td>
+      <td>${esc(c.visual||'—')}</td>
+      <td>${c.sexo==='macho'?'♂ Macho':(c.sexo==='hembra'?'♀ Hembra':'—')}</td>
+      <td>${esc(c.categoria||'—')}</td>
+      <td class="text-xs">${esc(_carCampoNombre(c.campoId))}${c.loteId?' · '+esc(_carLoteNombre(c.loteId)):''}</td>
+      <td class="text-xs">${esc(c.madreRfid||c.madreVisualReal||c.madreVisual||'—')}</td>
+      <td class="text-right whitespace-nowrap">
+        ${can('stock:update')?`<button class="btn btn-ghost btn-xs" onclick="carBaja('${c.id}')">Baja</button>`:''}
+        ${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="carDel('${c.id}')">🗑️</button>`:''}
+      </td></tr>`).join('')}</tbody></table></div>`;
+  carSelInfo();
+}
+function carSel(id,on){ if(on) _carav.sel.add(id); else _carav.sel.delete(id); carSelInfo(); }
+function carSelInfo(){ const el=$('#car-selinfo'); if(el) el.textContent = _carav.sel.size ? `${_carav.sel.size} seleccionada(s)` : ''; }
+
+/* ---- Alta por caravana ---- */
+function carTabAlta(){
+  const campos = state.cache.campos||[]; const cats = hacCategoriasDisponibles();
+  const lotes = _carLotesDe(_carav.campoId);
+  const pf = _carav.prefill; _carav.prefill = null;
+  $('#car-body').innerHTML = `
+    <div class="kpi mb-3">
+      <div class="text-xs text-slate-500 mb-2">Datos por defecto de esta tanda (se aplican a todas las filas; podés cambiar la categoría fila por fila):</div>
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <div><label class="label text-[11px]">Campo *</label><select id="ca-campo" class="input text-sm" onchange="_carav.campoId=this.value;carTabAlta()">
+          <option value="">— Elegí —</option>${campos.map(c=>`<option value="${c.id}" ${c.id===_carav.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label text-[11px]">Lote</label><select id="ca-lote" class="input text-sm" ${_carav.campoId?'':'disabled'}>
+          <option value="">General</option>${lotes.map(l=>`<option value="${l.id}" ${l.id===_carav.loteId?'selected':''}>${esc(l.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label text-[11px]">Categoría *</label><select id="ca-cat" class="input text-sm">${cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select></div>
+        <div><label class="label text-[11px]">Alta por</label><select id="ca-tipo" class="input text-sm">
+          <option value="nacimiento">Nacimiento</option><option value="compra">Compra</option><option value="ajuste">Ajuste (sin motivo)</option></select></div>
+        <div><label class="label text-[11px]">Fecha</label><input id="ca-fecha" type="date" class="input text-sm" value="${new Date().toISOString().slice(0,10)}"/></div>
+      </div>
+    </div>
+    <div class="kpi">
+      <div class="flex justify-between items-center mb-2">
+        <div class="text-sm font-medium">Caravanas a dar de alta</div>
+        <div class="text-xs text-slate-500">Escaneá o tecleá cada caravana. Enter en la última fila agrega otra.</div>
+      </div>
+      <div class="overflow-x-auto"><table class="table w-full text-sm" id="ca-grid">
+        <thead><tr><th>RFID / electrónica</th><th>Visual</th><th>Sexo</th><th>Madre (RFID o visual)</th><th></th></tr></thead>
+        <tbody id="ca-rows"></tbody></table></div>
+      <div class="mt-2 flex gap-2">
+        <button class="btn btn-ghost btn-xs" onclick="carAltaAddRow()">➕ Agregar fila</button>
+        <button class="btn btn-ghost btn-xs" onclick="carAltaAddRow(10)">➕ 10 filas</button>
+      </div>
+      <div class="mt-3 flex justify-end gap-2">
+        <button class="btn btn-secondary" onclick="_carav.tab='padron';carRender()">Cancelar</button>
+        <button class="btn btn-primary" onclick="carAltaSave()">💾 Dar de alta</button>
+      </div>
+    </div>`;
+  $('#ca-rows').innerHTML='';
+  if (pf && pf.length){ pf.forEach(r=>carAltaAddRow(1,r)); } else { carAltaAddRow(3); }
+}
+function carAltaAddRow(n=1, data){
+  const tb=$('#ca-rows'); if(!tb) return;
+  for(let i=0;i<n;i++){
+    const tr=document.createElement('tr');
+    tr.innerHTML = `
+      <td><input class="input text-sm ca-rfid" value="${data?esc(data.rfid||''):''}" placeholder="982 000..." onkeydown="carAltaKey(event,this)"/></td>
+      <td><input class="input text-sm ca-visual" value="${data?esc(data.visual||''):''}" placeholder="N° visual"/></td>
+      <td><select class="input text-sm ca-sexo"><option value="">—</option><option value="hembra">♀ Hembra</option><option value="macho">♂ Macho</option></select></td>
+      <td><input class="input text-sm ca-madre" placeholder="caravana de la madre"/></td>
+      <td class="text-right"><button class="btn btn-ghost btn-xs text-red-600" onclick="this.closest('tr').remove()">✕</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+function carAltaKey(ev, inp){ if(ev.key==='Enter'){ ev.preventDefault(); const tb=$('#ca-rows'); const rows=tb.querySelectorAll('tr'); if(inp.closest('tr')===rows[rows.length-1]) carAltaAddRow(1); const next=tb.querySelectorAll('tr'); const idx=[...next].indexOf(inp.closest('tr'))+1; const nr=next[idx]; if(nr) nr.querySelector('.ca-rfid')?.focus(); } }
+async function carAltaSave(){
+  const campoId=$('#ca-campo')?.value, loteId=$('#ca-lote')?.value||null, categoria=$('#ca-cat')?.value, tipoAlta=$('#ca-tipo')?.value||'nacimiento';
+  const fecha=$('#ca-fecha')?.value? new Date($('#ca-fecha').value+'T12:00:00').toISOString():undefined;
+  if(!campoId) return toast('Elegí el campo','warn');
+  if(!categoria) return toast('Elegí la categoría','warn');
+  const items=[];
+  $('#ca-rows')?.querySelectorAll('tr').forEach(tr=>{
+    const rfid=tr.querySelector('.ca-rfid')?.value.trim(), visual=tr.querySelector('.ca-visual')?.value.trim();
+    const sexo=tr.querySelector('.ca-sexo')?.value||null, madre=tr.querySelector('.ca-madre')?.value.trim();
+    if(rfid||visual) items.push({ rfid:rfid||null, visual:visual||null, sexo, madreRfid:madre||null, madreVisual:madre||null });
+  });
+  if(!items.length) return toast('Cargá al menos una caravana','warn');
+  try{
+    const r=await api('/api/caravanas/alta-masiva',{method:'POST',body:JSON.stringify({campoId,loteId,categoria,tipoAlta,fecha,items})});
+    const d=r.data||{};
+    let msg=`${d.creadas} caravana(s) dada(s) de alta`; if(d.duplicados) msg+=` · ${d.duplicados} ya existían (omitidas)`;
+    toast(msg,'success');
+    delete state.cache.haciendaResumen; delete state.cache.haciendaMovs;
+    _carav.campoId=campoId; _carav.loteId=loteId||'';
+    _carav.list=(await api('/api/caravanas?estado=activa')).data||[];
+    _carav.tab='padron'; carRender();
+  }catch(e){ toast(e.message,'error'); }
+}
+
+/* ---- Baja / borrar / mover ---- */
+function carBaja(id){
+  const c=(_carav.list||[]).find(x=>x.id===id); if(!c) return;
+  openModal({ title:'Dar de baja la caravana', size:'max-w-md',
+    body:`<div class="text-sm mb-2">Caravana <b>${esc(c.rfid||c.visual||'')}</b> (${esc(c.categoria||'')}).</div>
+      <label class="label">Motivo</label>
+      <select id="cb-motivo" class="input"><option value="muerte">Muerte (descuenta del stock)</option><option value="venta">Venta (descuenta del stock)</option><option value="error">Error de carga (ajuste)</option></select>
+      <label class="label mt-2">Fecha</label><input id="cb-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="carBajaSave('${id}')">Dar de baja</button>` });
+}
+async function carBajaSave(id){
+  const motivo=$('#cb-motivo')?.value||'muerte'; const fecha=$('#cb-fecha')?.value? new Date($('#cb-fecha').value+'T12:00:00').toISOString():undefined;
+  try{ await api('/api/caravanas/'+id+'/baja',{method:'POST',body:JSON.stringify({motivo,fecha})});
+    toast('Caravana dada de baja','success'); closeModal(); delete state.cache.haciendaResumen;
+    _carav.list=(await api('/api/caravanas?estado=activa')).data||[]; carRender();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function carDel(id){
+  if(!confirm('¿Borrar esta caravana del padrón? Si estaba activa, se descuenta 1 cabeza del stock (ajuste).')) return;
+  try{ await api('/api/caravanas/'+id,{method:'DELETE'}); toast('Caravana borrada','success'); delete state.cache.haciendaResumen;
+    _carav.sel.delete(id); _carav.list=(await api('/api/caravanas?estado=activa')).data||[]; carRender();
+  }catch(e){ toast(e.message,'error'); }
+}
+function carMoverSel(){
+  if(!_carav.sel.size) return toast('Seleccioná caravanas en el padrón','warn');
+  const campos=state.cache.campos||[];
+  openModal({ title:`Mover ${_carav.sel.size} caravana(s) de lote`, size:'max-w-md',
+    body:`<label class="label">Campo destino</label>
+      <select id="cm-campo" class="input" onchange="const l=document.getElementById('cm-lote'); const ls=(state.cache.lotes||[]).filter(x=>x.campoId===this.value&&x.activo!==false); l.innerHTML='<option value=\\'\\'>General</option>'+ls.map(x=>'<option value=\\''+x.id+'\\'>'+x.nombre+'</option>').join('')">
+        <option value="">— Mismo campo —</option>${campos.map(c=>`<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
+      <label class="label mt-2">Lote destino</label><select id="cm-lote" class="input"><option value="">General</option></select>
+      <label class="label mt-2">Fecha</label><input id="cm-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/>
+      <div class="text-[11px] text-slate-500 mt-2">Mueve el stock de hacienda entre lotes automáticamente (traslado).</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="carMoverSave()">Mover</button>` });
+}
+async function carMoverSave(){
+  const campoDestino=$('#cm-campo')?.value||null, loteDestino=$('#cm-lote')?.value||null;
+  const fecha=$('#cm-fecha')?.value? new Date($('#cm-fecha').value+'T12:00:00').toISOString():undefined;
+  try{ const r=await api('/api/caravanas/mover',{method:'POST',body:JSON.stringify({ids:[..._carav.sel],campoDestino,loteDestino,fecha})});
+    toast(`${r.data?.movidas||0} caravana(s) movida(s)`,'success'); closeModal(); delete state.cache.haciendaResumen;
+    _carav.sel=new Set(); _carav.list=(await api('/api/caravanas?estado=activa')).data||[]; carRender();
+  }catch(e){ toast(e.message,'error'); }
+}
+
+/* ---- Recuento por manga ---- */
+function carTabRecuento(){
+  const campos=state.cache.campos||[]; const lotes=_carLotesDe(_carav.campoId);
+  $('#car-body').innerHTML = `
+    <div class="kpi mb-3">
+      <div class="text-xs text-slate-500 mb-2">Elegí el campo/lote que recontás, cargá las caravanas que pasaste por la manga y el sistema te dice <b>cuáles faltan</b>.</div>
+      <div class="flex gap-2 flex-wrap items-end mb-2">
+        <div><label class="label text-[11px]">Campo</label><select class="input text-sm" onchange="_carav.campoId=this.value;_carav.loteId='';carTabRecuento()">
+          <option value="">Todos</option>${campos.map(c=>`<option value="${c.id}" ${c.id===_carav.campoId?'selected':''}>${esc(c.nombre)}</option>`).join('')}</select></div>
+        <div><label class="label text-[11px]">Lote</label><select class="input text-sm" ${_carav.campoId?'':'disabled'} onchange="_carav.loteId=this.value;carTabRecuento()">
+          <option value="">Todos</option>${lotes.map(l=>`<option value="${l.id}" ${l.id===_carav.loteId?'selected':''}>${esc(l.nombre)}</option>`).join('')}</select></div>
+      </div>
+      <label class="label">Caravanas leídas (una por línea; o pegá lo que exporta el lector)</label>
+      <textarea id="cr-lista" class="input font-mono text-xs" rows="7" placeholder="982000123456789&#10;982000123456790&#10;..."></textarea>
+      <div class="mt-2 flex gap-2 flex-wrap items-center">
+        <button class="btn btn-ghost btn-xs" onclick="document.getElementById('cr-file').click()">📂 Importar archivo del lector</button>
+        <input type="file" id="cr-file" accept=".csv,.txt,.tsv,.xlsx,.xls" class="hidden" onchange="carRecFile(this)"/>
+        <span class="text-[11px] text-slate-500" id="cr-count"></span>
+        <div class="flex-1"></div>
+        <button class="btn btn-primary btn-xs" onclick="carRecCorrer()">🔍 Correr recuento</button>
+      </div>
+    </div>
+    <div id="cr-result"></div>`;
+  $('#cr-lista').addEventListener('input', carRecCount); carRecCount();
+}
+function carRecTokens(){
+  const txt=$('#cr-lista')?.value||'';
+  let toks=txt.split(/[\s,;\t]+/).map(s=>s.trim()).filter(Boolean);
+  const largos=toks.filter(t=>/\d{8,}/.test(t));
+  if(largos.length) toks=largos;
+  return [...new Set(toks)];
+}
+function carRecCount(){ const el=$('#cr-count'); if(el){ const n=carRecTokens().length; el.textContent=n?`${n} caravana(s) leída(s)`:''; } }
+function carRecFile(inp){
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  const name=(f.name||'').toLowerCase();
+  const done=(tokens)=>{ const ta=$('#cr-lista'); if(ta){ const prev=ta.value.trim(); ta.value=(prev?prev+'\n':'')+tokens.join('\n'); } carRecCount(); toast(`${tokens.length} caravana(s) importada(s)`,'success'); inp.value=''; };
+  if(name.endsWith('.xlsx')||name.endsWith('.xls')){
+    const rd=new FileReader();
+    rd.onload=e=>{ try{ const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'}); const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1}); const toks=[];
+      rows.forEach(r=>r.forEach(v=>{ const s=String(v==null?'':v).trim(); if(/\d{8,}/.test(s)) toks.push(s); else if(s&&!toks.length) {} }));
+      done([...new Set(toks)]);
+    }catch(err){ toast('No pude leer el Excel','error'); } };
+    rd.readAsArrayBuffer(f); return;
+  }
+  const rd=new FileReader();
+  rd.onload=e=>{ const txt=String(e.target.result||''); let toks=txt.split(/[\s,;\t\r\n]+/).map(s=>s.trim()).filter(Boolean); const largos=toks.filter(t=>/\d{8,}/.test(t)); if(largos.length) toks=largos; done([...new Set(toks)]); };
+  rd.readAsText(f);
+}
+async function carRecCorrer(){
+  const rfids=carRecTokens();
+  if(!rfids.length) return toast('Cargá las caravanas leídas','warn');
+  try{
+    const r=await api('/api/caravanas/recuento',{method:'POST',body:JSON.stringify({campoId:_carav.campoId||null,loteId:_carav.loteId||null,rfids})});
+    _carav.rec=r.data; carRecResult();
+  }catch(e){ toast(e.message,'error'); }
+}
+function carRecResult(){
+  const d=_carav.rec; const box=$('#cr-result'); if(!d||!box) return;
+  const falt=d.faltantes||[], desc=d.desconocidas||[];
+  box.innerHTML=`
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+      <div class="kpi"><div class="text-xs text-slate-500">Padrón esperado</div><div class="text-xl font-bold">${d.totalPadron}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Leídas</div><div class="text-xl font-bold">${d.leidas}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Presentes</div><div class="text-xl font-bold text-emerald-700">${d.presentesCant}</div></div>
+      <div class="kpi"><div class="text-xs text-slate-500">Faltan</div><div class="text-xl font-bold ${falt.length?'text-red-600':'text-emerald-700'}">${falt.length}</div></div>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div class="kpi"><div class="font-medium text-sm mb-2 text-red-700">❗ Faltantes (${falt.length}) — andá a buscarlas</div>
+        ${falt.length?`<div class="overflow-x-auto max-h-80 overflow-y-auto"><table class="table w-full text-sm"><thead><tr><th>RFID</th><th>Visual</th><th>Sexo</th><th>Cat.</th><th></th></tr></thead>
+          <tbody>${falt.map(f=>`<tr class="table-row"><td class="font-mono text-xs">${esc(f.rfid||'—')}</td><td>${esc(f.visual||'—')}</td><td>${f.sexo==='macho'?'♂':(f.sexo==='hembra'?'♀':'—')}</td><td class="text-xs">${esc(f.categoria||'')}</td>
+            <td class="text-right">${can('stock:update')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="carBaja('${f.id}')">Baja</button>`:''}</td></tr>`).join('')}</tbody></table></div>`
+          :`<div class="text-sm text-emerald-700">✅ No falta ninguna. Todas las del padrón se leyeron.</div>`}</div>
+      <div class="kpi"><div class="font-medium text-sm mb-2 text-amber-700">❓ Desconocidas (${desc.length}) — leídas sin alta</div>
+        ${desc.length?`<div class="text-xs text-slate-500 mb-2">Caravanas que pasaron por la manga pero no están en el padrón. Podés darlas de alta.</div>
+          <div class="font-mono text-xs max-h-72 overflow-y-auto">${desc.map(x=>esc(x)).join('<br>')}</div>
+          ${can('stock:create')?`<button class="btn btn-secondary btn-xs mt-2" onclick="carRecAltaDesc()">➕ Dar de alta las desconocidas</button>`:''}`
+          :`<div class="text-sm text-slate-500">Ninguna. Todo lo leído estaba en el padrón.</div>`}</div>
+    </div>
+    <div class="mt-3 flex justify-end">
+      ${can('stock:read')?`<button class="btn btn-primary btn-xs" onclick="carRecGuardar()">💾 Guardar este recuento</button>`:''}
+    </div>`;
+}
+function carRecAltaDesc(){
+  const desc=(_carav.rec?.desconocidas||[]); if(!desc.length) return;
+  _carav.prefill = desc.map(r=>({ rfid:r, visual:'' }));
+  _carav.tab='alta'; carRender();
+  toast('Revisá sexo/categoría y guardá el alta','info');
+}
+async function carRecGuardar(){
+  const d=_carav.rec; if(!d) return;
+  const rfids=carRecTokens();
+  try{ await api('/api/caravanas/recuento',{method:'POST',body:JSON.stringify({campoId:_carav.campoId||null,loteId:_carav.loteId||null,rfids,guardar:true})});
+    _carav.recuentos=(await api('/api/recuentos-caravana').catch(()=>({data:[]}))).data||[];
+    toast('Recuento guardado en el historial','success');
+  }catch(e){ toast(e.message,'error'); }
+}
+
+/* ---- Historial ---- */
+function carTabHist(){
+  const rows=_carav.recuentos||[];
+  $('#car-body').innerHTML = rows.length? `<div class="kpi overflow-x-auto"><table class="table w-full text-sm">
+    <thead><tr><th>Fecha</th><th>Campo / Lote</th><th class="text-right">Padrón</th><th class="text-right">Leídas</th><th class="text-right">Presentes</th><th class="text-right">Faltaron</th><th class="text-right">Desconocidas</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr class="table-row"><td>${fmtDate(r.fecha)}</td>
+      <td class="text-xs">${esc(_carCampoNombre(r.campoId))}${r.loteId?' · '+esc(_carLoteNombre(r.loteId)):''}</td>
+      <td class="text-right">${r.totalPadron}</td><td class="text-right">${r.leidas}</td><td class="text-right text-emerald-700">${r.presentes}</td>
+      <td class="text-right ${r.faltantesCant?'text-red-600 font-medium':''}">${r.faltantesCant}</td><td class="text-right">${r.desconocidasCant}</td></tr>`).join('')}</tbody></table></div>`
+    : `<div class="kpi text-center text-slate-400 py-6">Todavía no guardaste ningún recuento.</div>`;
+}
+
 pages.hacienda = async function() {
   setHeader('Movimientos de animales', 'Stock por campo · declarado (SENASA) vs real');
   if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('hacienda','Movimientos de animales'); return; }
@@ -29302,20 +29649,27 @@ function molTabFormulas() {
       <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin fórmulas. Creá la primera.</td></tr>`}</tbody>
     </table></div>`;
 }
+// Productos filtrados por su rol en la fábrica. Si NADIE marcó ese rol todavía,
+// cae a todos los activos no-hacienda (para no romper empresas que aún no marcaron).
+function _molProdPorRol(rol){
+  const all=(state.cache.productos||[]).filter(p=>p.activo!==false);
+  const conRol=all.filter(p=>p.rolFabrica===rol);
+  const base=conRol.length?conRol:all.filter(p=>(p.categoria||'').toLowerCase()!=='hacienda');
+  return base.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+}
+function _molOptRol(rol,sel){ return _molProdPorRol(rol).map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join(''); }
 function molFormulaForm(id) {
   const f = id ? (state._molFormulas||[]).find(x=>x.id===id) : null;
-  const prods = (state.cache.productos||[]).slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
-  const optP = (sel)=>prods.map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}</option>`).join('');
   const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
   const optD = (sel)=>`<option value="">— Depósito —</option>`+deps.map(d=>`<option value="${esc(d.id)}" ${sel===d.id?'selected':''}>${esc(d.nombre)}</option>`).join('');
   state._molEditItems = f ? (f.items||[]).map(i=>({...i})) : [{productoId:'',rendimientoPct:'',coefCosto:'',depositoDestinoId:'',esMerma:false}];
-  window._molOptP=optP; window._molOptD=optD;
+  window._molOptP=(sel)=>_molOptRol('producto_final',sel); window._molOptD=optD;
   openModal({
     title: (id?'Editar':'Nueva')+' fórmula de molienda', size:'max-w-2xl',
     body:`
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
         <div><label class="label">Nombre *</label><input id="mf-nombre" class="input" value="${esc(f?.nombre||'')}" placeholder="Molienda de soja"/></div>
-        <div><label class="label">Grano de origen *</label><select id="mf-origen" class="input">${optP(f?.origenProductoId)}</select></div>
+        <div><label class="label">Grano de origen *</label><select id="mf-origen" class="input">${_molOptRol('materia_prima', f?.origenProductoId)}</select></div>
       </div>
       <div class="label mb-1">Coproductos (deben sumar 100%)</div>
       <div id="mf-items"></div>
@@ -29412,7 +29766,12 @@ function molTabCanje() {
       <tbody>${filasP || `<tr><td colspan="4" class="text-center text-slate-400 py-4">Sin paridades. Creá una para autocompletar los canjes.</td></tr>`}</tbody>
     </table></div>`;
 }
-function _molProdOpts(sel){ return (state.cache.productos||[]).slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join(''); }
+function _molProdOpts(sel){
+  const all=(state.cache.productos||[]).filter(p=>p.activo!==false);
+  const conRol=all.filter(p=>p.rolFabrica==='materia_prima'||p.rolFabrica==='producto_final');
+  const base=conRol.length?conRol:all.filter(p=>(p.categoria||'').toLowerCase()!=='hacienda');
+  return base.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join('');
+}
 function molParidadForm() {
   openModal({ title:'Nueva paridad de canje', size:'max-w-lg',
     body:`<div class="grid grid-cols-1 gap-3">

@@ -129,6 +129,8 @@ model Company {
   partesMolienda     ParteMolienda[]
   canjes             Canje[]
   canjeParidades     CanjeParidad[]
+  caravanas          Caravana[]
+  recuentosCaravana  RecuentoCaravana[]
 
 }
 
@@ -595,6 +597,9 @@ model Producto {
   // v2.331: molienda / fábrica. Para coproductos de una molienda (expeller, aceite):
   costoFabricacionKg Float?  // último costo de fabricación por unidad (lo calcula el Parte de molienda)
   margenVentaPct     Float?  // % de ganancia para sugerir el precio de venta (precio = costo x (1+%/100))
+  // v2.336: rol del artículo en la fábrica/molienda. Filtra los pickers de fórmula.
+  // null = no aplica | "materia_prima" = grano de origen | "producto_final" = coproducto
+  rolFabrica         String?
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   categoriaArticulo CategoriaArticulo? @relation(fields: [categoriaArticuloId], references: [id], onDelete: SetNull)
@@ -1530,6 +1535,70 @@ model CategoriaHaciendaConfig {
 
   @@unique([companyId, nombre])
   @@index([companyId])
+}
+
+// ============================================================
+// CARAVANAS / RECUENTO (padrón liviano de identificación individual)
+// Para empresas de cría que caravanean cada animal con una caravana de control
+// (RFID / electrónica) y hacen recuentos pasando la tropa por la manga, SIN usar
+// las Fichas 360° ni Rodeos. Cada alta/baja/traslado postea el HaciendaMovimiento
+// correspondiente, así el stock de hacienda por campo/lote/categoría queda en
+// sincronía con el que la empresa ya lleva por movimientos.
+// ============================================================
+model Caravana {
+  id            String   @id @default(cuid())
+  companyId     String
+  campoId       String?    // campo donde está
+  loteId        String?    // lote/potrero dentro del campo
+  rfid          String?    // caravana electrónica / RFID (lo que lee la manga/bastón)
+  visual        String?    // caravana visual / número a la vista
+  sexo          String?    // macho | hembra
+  categoria     String?    // "Terneros", "Terneras", "Vacas"... (igual que el stock de hacienda)
+  estado        String   @default("activa")  // activa | baja
+  madreId       String?    // vínculo a la caravana madre (ternero señalado)
+  madreVisual   String?    // texto si la madre no está en el padrón
+  tipoAlta      String   @default("nacimiento") // nacimiento | compra | ajuste
+  fechaAlta     DateTime @default(now())
+  fechaBaja     DateTime?
+  motivoBaja    String?    // muerte | venta | error
+  haciendaMovAltaId String?  // HaciendaMovimiento del alta (para revertir)
+  haciendaMovBajaId String?  // HaciendaMovimiento de la baja (para revertir)
+  observaciones String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  madre         Caravana? @relation("CaravanaMadre", fields: [madreId], references: [id], onDelete: SetNull)
+  crias         Caravana[] @relation("CaravanaMadre")
+
+  @@index([companyId])
+  @@index([companyId, estado])
+  @@index([companyId, loteId])
+  @@index([rfid])
+}
+
+// Snapshot de un recuento por manga: qué se esperaba, qué se leyó, qué faltó.
+model RecuentoCaravana {
+  id               String   @id @default(cuid())
+  companyId        String
+  campoId          String?
+  loteId           String?
+  fecha            DateTime @default(now())
+  totalPadron      Int      @default(0)   // caravanas activas esperadas en ese campo/lote
+  leidas           Int      @default(0)   // caravanas leídas por la manga
+  presentes        Int      @default(0)   // leídas que estaban en el padrón
+  faltantesCant    Int      @default(0)   // del padrón, no leídas
+  desconocidasCant Int      @default(0)   // leídas que no están en el padrón
+  faltantes        Json?    // [{rfid,visual,sexo,categoria}]
+  desconocidas     Json?    // ["rfid1","rfid2"...]
+  observaciones    String?
+  userId           String?
+  createdAt        DateTime @default(now())
+
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([companyId, fecha])
 }
 
 // ============================================================
