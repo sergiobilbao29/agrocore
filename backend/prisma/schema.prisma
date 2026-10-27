@@ -36,6 +36,7 @@ model Company {
   // en vez de por caja separada por empresa. Opt-in: se activa por empresa del grupo.
   cajaPorTenedor  Boolean   @default(false)
   usaCentrosCosto Boolean   @default(false) // habilita el reparto por centros de costo (gestión analítica). Opt-in por empresa.
+  usaProduccionIndustrial Boolean @default(false) // habilita el módulo Molienda / Fábrica (transformación de materias primas). Opt-in por empresa.
   activo          Boolean   @default(true)
   // ---- Red de vendedores / partners (vista del dueño) ----
   vendedorId      String?   // vendedor/partner que trajo a esta empresa (null = venta directa)
@@ -3156,6 +3157,7 @@ model ParteMolienda {
   costoOrigenUnit  Float    @default(0)  // costo por kg del origen (soja)
   costoProduccion  Float    @default(0)  // costos de producción del lote (energía, mano de obra, etc.)
   costoTotal       Float    @default(0)  // costoOrigenUnit*kg + costoProduccion
+  modoReal         Boolean  @default(false) // true = los kg de los coproductos son los realmente producidos (no los teóricos)
   centroCostoId    String?
   observaciones    String?
   resultados       Json?    // snapshot: [{productoId,nombre,kg,coefCosto,costoKg,costoTotal}]

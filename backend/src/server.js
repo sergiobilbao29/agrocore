@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.333.0';
+const AGROCORE_VERSION = '2.334.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -734,6 +734,7 @@ async function serializeUser(u) {
     modulosOcultos: co.modulosOcultos || null,
     cajaPorTenedor: co.cajaPorTenedor === true,
     usaCentrosCosto: co.usaCentrosCosto === true,
+    usaProduccionIndustrial: co.usaProduccionIndustrial === true,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1832,6 +1833,7 @@ const empresaSchema = z.object({
   informal: z.boolean().optional(),
   cajaPorTenedor: z.boolean().optional(),
   usaCentrosCosto: z.boolean().optional(),
+  usaProduccionIndustrial: z.boolean().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
   vendedorId: z.string().nullable().optional(),
@@ -7777,7 +7779,7 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
       empresas = await prisma.company.findMany({ where: { activo: true }, orderBy: { name: 'asc' } });
     } else {
       empresas = (req.user.userCompanies || []).map((uc) => ({
-        id: uc.companyId, name: uc.company.name, color: uc.company.color, cajaPorTenedor: uc.company.cajaPorTenedor === true, usaCentrosCosto: uc.company.usaCentrosCosto === true,
+        id: uc.companyId, name: uc.company.name, color: uc.company.color, cajaPorTenedor: uc.company.cajaPorTenedor === true, usaCentrosCosto: uc.company.usaCentrosCosto === true, usaProduccionIndustrial: uc.company.usaProduccionIndustrial === true,
       }));
     }
     if (!empresas.length) {
@@ -10422,14 +10424,39 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
     const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: f.items.map(i => i.productoId) } }, select: { id: true, nombre: true } });
     const pName = Object.fromEntries(prods.map(p => [p.id, p.nombre]));
     const items = f.items.map(i => ({ ...i, nombre: pName[i.productoId] || '' }));
-    const { costoTotal, resultados } = _molCalcular(items, kg, d.costoOrigenUnit, d.costoProduccion);
+    const { costoTotal } = _molCalcular(items, kg, d.costoOrigenUnit, d.costoProduccion);
+    let { resultados } = _molCalcular(items, kg, d.costoOrigenUnit, d.costoProduccion);
+    // Rendimiento REAL: si vienen kilos realmente producidos, se usan esos (y la merma
+    // se recalcula como el remanente). El costo por kg se ajusta al kg real.
+    const modoReal = !!d.modoReal && Array.isArray(d.reales) && d.reales.length > 0;
+    if (modoReal) {
+      const realMap = {}; for (const r of d.reales) { if (r && r.productoId) realMap[r.productoId] = Number(r.kg) || 0; }
+      let sumNoMerma = 0;
+      resultados = resultados.map(x => {
+        if (x.esMerma) return x;
+        const rk = realMap[x.productoId] != null ? Number(realMap[x.productoId]) : x.kg;
+        sumNoMerma += rk;
+        return { ...x, kg: _round2(rk), costoKg: rk > 0 ? _round2(x.costoTotal / rk) : 0 };
+      });
+      const mermaReal = _round2(kg - sumNoMerma);
+      resultados = resultados.map(x => x.esMerma ? { ...x, kg: mermaReal > 0 ? mermaReal : 0 } : x);
+    }
     const fecha = d.fecha ? new Date(d.fecha) : new Date();
+
+    // Validación: no procesar más soja de la disponible (salvo que se permita negativo).
+    if (!d.permitirNegativo) {
+      const agg = await prisma.movimiento.groupBy({ by: ['tipo'],
+        where: { companyId: req.companyId, productoId: f.origenProductoId, ...(d.depositoOrigenId ? { depositoId: d.depositoOrigenId } : {}) },
+        _sum: { cantidad: true } });
+      let disp = 0; for (const a of agg) { const s = Number(a._sum.cantidad) || 0; disp += (a.tipo === 'ingreso' ? s : -s); }
+      if (kg > disp + 0.001) return res.status(400).json({ ok: false, error: `No hay materia prima suficiente: disponible ${disp.toLocaleString('es-AR')}, intentás procesar ${kg.toLocaleString('es-AR')}${d.depositoOrigenId ? ' en ese silo/depósito' : ''}.` });
+    }
 
     const parte = await prisma.$transaction(async (tx) => {
       const p = await tx.parteMolienda.create({ data: {
         companyId: req.companyId, fecha, formulaId: f.id, depositoOrigenId: d.depositoOrigenId || null,
         kgProcesados: kg, costoOrigenUnit: Number(d.costoOrigenUnit) || 0, costoProduccion: Number(d.costoProduccion) || 0,
-        costoTotal, centroCostoId: d.centroCostoId || null, observaciones: d.observaciones || null,
+        costoTotal, modoReal, centroCostoId: d.centroCostoId || null, observaciones: d.observaciones || null,
         resultados, userId: req.user?.id || null,
       } });
       const ref = 'MOL-' + p.id;
@@ -14583,12 +14610,13 @@ const _AYUDA_KB = [
       'Elegí ingreso, salida, traspaso entre depósitos o conversión (ej: grano ↔ semilla).',
       'Guardá: queda registrado en Movimientos.'],
     atajo:{ page:'stock', label:'Abrir Stock' } },
-  { id:'molienda', terms:['molienda','moler','fabrica','planta procesadora','expeller','aceite','pellet','merma','procesar soja','parte de molienda','formula de molienda','costo de fabricacion','plan canje','canje','paridad'],
+  { id:'molienda', terms:['molienda','moler','fabrica','planta procesadora','expeller','aceite','pellet','merma','procesar soja','parte de molienda','formula de molienda','costo de fabricacion','plan canje','canje','paridad','rendimiento real','kg reales','activar molienda','habilitar fabrica','produccion industrial'],
     titulo:'Molienda / Fábrica (procesar grano + plan canje)',
     pasos:[
-      'Andá a Stock y depósitos → Molienda / Fábrica.',
+      'Primero activá el módulo: Configuración → Empresa → tildá "Producción industrial / Fábrica". Solo las empresas procesadoras necesitan verlo. Recién ahí aparece "Molienda / Fábrica" en Stock y depósitos.',
       'En "Fórmulas" definí el grano de origen y los coproductos por % (ej. Expeller 88, Aceite 10, Merma 2). Deben sumar 100%.',
-      'En "Partes de molienda" cargá solo los kilos de soja + costo del grano + costos de producción: el sistema descuenta la soja e ingresa expeller, aceite y merma solo, con el costo por kg.',
+      'En "Partes de molienda" cargá solo los kilos de soja + costo del grano + costos de producción: el sistema descuenta la soja e ingresa expeller, aceite y merma solo, con el costo por kg. Ojo: no te deja procesar más grano del que hay en el silo (evita stock negativo).',
+      'Si querés cargar lo que REALMENTE salió, tildá "Cargar rendimiento real" y poné los kg obtenidos de cada coproducto: la merma se recalcula sola como lo que falte y el costo por kg se ajusta a la producción real.',
       'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',
       'En "Plan canje" entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie. El parte y el canje se pueden anular.'],
     atajo:{ page:'molienda', label:'Abrir Molienda / Fábrica' } },

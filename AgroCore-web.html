@@ -1820,7 +1820,7 @@ async function switchCompany(id) {
 async function applyCompanyTheme() {
   const m = currentMembership();
   const root = document.documentElement;
-  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false;
+  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false;
   try {
     if (!state.cache.empresas) {
       const r = await api('/api/empresas');
@@ -1832,6 +1832,7 @@ async function applyCompanyTheme() {
       informal = emp.informal === true;
       cajaTenedor = emp.cajaPorTenedor === true;
       usaCC = emp.usaCentrosCosto === true;
+      usaPI = emp.usaProduccionIndustrial === true;
     }
   } catch {}
   const wm = $('#company-watermark');
@@ -1853,6 +1854,7 @@ async function applyCompanyTheme() {
   state.companyInformal = informal;
   state.cajaPorTenedor = cajaTenedor;
   state.usaCentrosCosto = usaCC;
+  state.usaProduccionIndustrial = usaPI;
   try { ensureCoraFab(); } catch {}
 }
 
@@ -3010,7 +3012,7 @@ pages.inicio = async function() {
   const atajos = state.userShortcuts
     .map(sid => MODULES.find(m => m.id === sid))
     .filter(Boolean)
-    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m) && !empresaOcultaModulo(m.id) && (m.id !== 'centrosCosto' || state.usaCentrosCosto))
+    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m) && !empresaOcultaModulo(m.id) && (m.id !== 'centrosCosto' || state.usaCentrosCosto) && (m.id !== 'molienda' || state.usaProduccionIndustrial))
     .map(m => ({ id: m.id, label: m.label, sub: m.section, icon: m.icon }));
 
   const puedeVerKPIs = can('dashboard:read');
@@ -3052,6 +3054,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/10/2026',
+      titulo:'🏭 v2.334.0 — Molienda: rendimiento real, control de stock y módulo opcional por empresa',
+      desc:'Mejoras en <b>Molienda / Fábrica</b>: <b>(1) Rendimiento real</b> — al cargar el parte podés tildar "Cargar rendimiento real" e ingresar los <b>kg que realmente salieron</b> de cada coproducto; la <b>merma</b> se recalcula sola como lo que falte y el <b>costo por kilo</b> se ajusta a la producción real. <b>(2) Control de stock</b> — el sistema ya no te deja procesar más grano del que hay disponible en el silo (evita stock negativo). <b>(3) Módulo opcional</b> — "Molienda / Fábrica" ahora se activa por empresa desde <b>Configuración → Empresa</b>, así solo lo ven las empresas que fabrican. TRAE MIGRACION.' },
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/10/2026',
       titulo:'📄 v2.333.0 — Instructivo de Molienda / Fábrica (y el bot ya lo explica)',
       desc:'Sumamos el instructivo paso a paso <b>Molienda / Fábrica</b> en <b>Ayuda → Instructivos</b> (grupo Stock y fábrica) y en el manual de usuario de la web. Cubre: crear los artículos y depósitos, armar la fórmula, cargar el parte de molienda, el costo de fabricación y el precio de venta, y el plan canje. Además el <b>asistente</b> ya sabe explicar todo el módulo si le preguntás.' },
@@ -11267,6 +11272,10 @@ function empForm(id=null) {
           <input id="f-usacc" type="checkbox" ${it.usaCentrosCosto?'checked':''} class="mt-0.5" />
           <label for="f-usacc" class="text-sm">Usar centros de costo <span class="text-slate-400">— habilita repartir gastos e inversiones por centro de costo (ej. por campo, actividad o sector). Opcional; si no lo activás, nada cambia. El catálogo se gestiona en Administración → Centros de costo.</span></label>
         </div>
+        <div class="col-span-2 flex items-start gap-2 mt-1">
+          <input id="f-usapi" type="checkbox" ${it.usaProduccionIndustrial?'checked':''} class="mt-0.5" />
+          <label for="f-usapi" class="text-sm">Producción industrial / Fábrica <span class="text-slate-400">— habilita el módulo de Molienda / Fábrica (transformar un grano en coproductos con costeo, y plan canje) en Stock y depósitos. Solo para empresas procesadoras (molienda, balanceados, pellets, etc.).</span></label>
+        </div>
         ${state.user?.superAdmin ? `
         <div class="col-span-2 grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
           <div class="col-span-2 text-[11px] font-semibold text-emerald-800">🤝 Red de vendedores / partners</div>
@@ -11319,6 +11328,7 @@ async function empSave(id) {
     informal: $('#f-inf').checked,
     cajaPorTenedor: $('#f-tenedor')?.checked || false,
     usaCentrosCosto: $('#f-usacc')?.checked || false,
+    usaProduccionIndustrial: $('#f-usapi')?.checked || false,
   };
   if (state.user?.superAdmin) {
     data.vendedorId = $('#f-vend')?.value || null;
@@ -29192,6 +29202,8 @@ function molParteForm() {
         ${optCC}
         <div class="md:col-span-2"><label class="label">Observaciones</label><input id="mol-obs" class="input" placeholder="opcional"/></div>
       </div>
+      <div class="mt-2"><label class="flex items-center gap-2 text-sm"><input type="checkbox" id="mol-real" onchange="molRealToggle()"/> <span>Cargar <b>rendimiento real</b> (kg realmente obtenidos de cada coproducto)</span></label>
+        <div id="mol-realbox" class="mt-2"></div></div>
       <div id="mol-preview" class="mt-3"></div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="molParteSave()">💾 Registrar molienda</button>`
@@ -29203,7 +29215,24 @@ function molPrefillCosto() {
   if (!f) return;
   const prod = (state.cache.productos||[]).find(p=>p.id===f.origenProductoId);
   const el=$('#mol-costog'); if (el && !el.value && prod?.ultimoCostoCompra) el.value = prod.ultimoCostoCompra;
+  if ($('#mol-real')?.checked) molRealToggle();
   molPreview();
+}
+function molRealToggle() {
+  const box = $('#mol-realbox'); if (!box) return;
+  if (!$('#mol-real')?.checked) { box.innerHTML=''; molPreview(); return; }
+  const f = (state._molFormulas||[]).find(x=>x.id===$('#mol-formula')?.value);
+  if (!f) { box.innerHTML=`<div class="text-xs text-amber-600">Elegí una fórmula primero.</div>`; return; }
+  const items=(f.items||[]).filter(i=>!i.esMerma);
+  box.innerHTML = `<div class="kpi"><div class="text-xs text-slate-500 mb-2">Ingresá los <b>kg reales</b> obtenidos de cada coproducto. La merma se recalcula como lo que falte para los kg procesados.</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">${items.map(i=>`<div><label class="label">${esc(i.productoNombre||'')} <span class="text-[10px] text-slate-400">(teórico ${i.rendimientoPct}%)</span></label>
+      <input class="input mol-realkg" data-pid="${esc(i.productoId)}" type="number" step="0.01" placeholder="kg reales" oninput="molPreview()"/></div>`).join('')}</div></div>`;
+  molPreview();
+}
+function _molRealData() {
+  if (!$('#mol-real')?.checked) return null;
+  const reales = Array.from(document.querySelectorAll('.mol-realkg')).map(el=>({ productoId: el.getAttribute('data-pid'), kg: Number(el.value||0) })).filter(r=>r.productoId);
+  return reales.length ? reales : null;
 }
 let _molPrevTO=null;
 function molPreview() {
@@ -29215,7 +29244,16 @@ function molPreview() {
     try {
       const r = await api('/api/molienda/calcular', { method:'POST', body: JSON.stringify({
         formulaId, kgProcesados:kg, costoOrigenUnit:Number($('#mol-costog')?.value||0), costoProduccion:Number($('#mol-costop')?.value||0) }) });
-      const rows = (r.resultados||[]).map(x=>`<tr><td>${esc(x.nombre||'')}${x.esMerma?' <span class="text-[10px] text-slate-400">(merma)</span>':''}</td>
+      let resultados = r.resultados||[];
+      const reales = _molRealData();
+      if (reales) {
+        const m={}; reales.forEach(x=>m[x.productoId]=Number(x.kg)||0); let sumNM=0;
+        resultados = resultados.map(x=>{ if(x.esMerma) return x; const rk = m[x.productoId]!=null?m[x.productoId]:x.kg; sumNM+=rk;
+          return {...x, kg: Math.round(rk*100)/100, costoKg: rk>0?Math.round(x.costoTotal/rk*100)/100:0}; });
+        const merma=Math.round((kg-sumNM)*100)/100;
+        resultados = resultados.map(x=>x.esMerma?{...x, kg: merma>0?merma:0}:x);
+      }
+      const rows = resultados.map(x=>`<tr><td>${esc(x.nombre||'')}${x.esMerma?' <span class="text-[10px] text-slate-400">(merma)</span>':''}</td>
         <td class="text-right">${x.rendimientoPct}%</td><td class="text-right font-medium">${_molKg(x.kg)}</td>
         <td class="text-right">${x.esMerma?'—':_molFmt(x.costoKg)}</td><td class="text-right">${x.esMerma?'—':_molFmt(x.costoTotal)}</td></tr>`).join('');
       box.innerHTML = `<div class="kpi"><div class="text-xs text-slate-500 mb-1">Resultado (costo total del lote: <b>${_molFmt(r.costoTotal)}</b>)</div>
@@ -29230,6 +29268,8 @@ async function molParteSave() {
     costoOrigenUnit:Number($('#mol-costog')?.value||0), costoProduccion:Number($('#mol-costop')?.value||0),
     centroCostoId:$('#mol-cc')?.value||null, observaciones:$('#mol-obs')?.value||null,
   };
+  const reales = _molRealData();
+  if (reales) { body.modoReal = true; body.reales = reales; }
   if (!body.formulaId || !(body.kgProcesados>0)) return toast('Elegí la fórmula y los kilos procesados','warn');
   try { await api('/api/partes-molienda',{method:'POST',body:JSON.stringify(body)});
     toast('Molienda registrada: stock actualizado','success'); closeModal();
