@@ -126,6 +126,8 @@ model Company {
   remitosCompra   RemitoCompra[]
   formulasMolienda   FormulaMolienda[]
   partesMolienda     ParteMolienda[]
+  canjes             Canje[]
+  canjeParidades     CanjeParidad[]
 
 }
 
@@ -3166,4 +3168,53 @@ model ParteMolienda {
   @@index([companyId])
   @@index([fecha])
   @@index([formulaId])
+}
+
+// ============================================================
+// PLAN CANJE (v2.332): la fábrica entrega un producto y recibe grano
+// (o viceversa), con una paridad/relación fija. Movimiento en especie.
+// ============================================================
+
+// Paridad fija configurable: cuántas unidades de "recibe" por 1 de "entrega".
+model CanjeParidad {
+  id                String   @id @default(cuid())
+  companyId         String
+  nombre            String
+  entregaProductoId String   // lo que sale (producto terminado)
+  recibeProductoId  String   // lo que entra (grano)
+  factor            Float    // unidades que se reciben por 1 de entrega
+  activo            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+// Operación de canje. Genera egreso de lo entregado e ingreso de lo recibido
+// (referencia "CANJE-<id>"). tipo = 'venta' (cobra en grano) | 'compra' (paga con producto).
+model Canje {
+  id                String   @id @default(cuid())
+  companyId         String
+  fecha            DateTime
+  tipo             String    @default("venta") // venta | compra
+  contactoTipo     String?   // cliente | proveedor
+  contactoId       String?
+  contactoNombre   String?
+  entregaProductoId String
+  entregaCant      Float
+  entregaDepositoId String?
+  recibeProductoId  String
+  recibeCant       Float
+  recibeDepositoId  String?
+  factor           Float?    // paridad usada (recibeCant/entregaCant), informativo
+  observaciones    String?
+  userId           String?
+  createdAt        DateTime  @default(now())
+
+  company          Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([fecha])
 }

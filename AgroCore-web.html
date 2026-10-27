@@ -3050,6 +3050,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/10/2026',
+      titulo:'🔁 v2.332.0 — Plan canje: entregá producto y recibí grano (o al revés)',
+      desc:'En <b>Molienda / Fábrica</b> se sumó la pestaña <b>Plan canje</b>. Cargás una <b>paridad</b> (relación fija, ej. 1 kg de expeller = 1,2 kg de soja) y al registrar una operación el sistema completa las cantidades solo y mueve el stock: <b>egreso</b> de lo que entregás e <b>ingreso</b> de lo que recibís. Sirve en los dos sentidos: venta cobrando en grano o compra pagando con producto. Es en especie (kilos). La operación se puede anular (revierte el stock). TRAE MIGRACION.' },
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/10/2026',
       titulo:'🏭 v2.331.0 — Molienda / Fábrica: procesá soja y el stock se arma solo (con costo)',
       desc:'Nuevo módulo en <b>Stock y depósitos → Molienda / Fábrica</b> para plantas procesadoras (ej. molienda de soja). Definís una <b>fórmula</b> con el grano de origen y sus coproductos por porcentaje (ej. Expeller 88%, Aceite 10%, Merma 2%). Al cargar un <b>parte de molienda</b> ingresás solo los kilos procesados y el sistema calcula y contabiliza solo: descuenta la soja del silo e ingresa cada coproducto a su depósito. Además calcula el <b>costo de fabricación por kilo</b> (costo del grano + costos de producción, repartidos entre los coproductos) y, cargando un <b>% de ganancia</b>, te sugiere el <b>precio de venta</b>. El parte se puede anular (revierte el stock). TRAE MIGRACION.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'26/10/2026',
@@ -29121,6 +29124,10 @@ pages.molienda = async function() {
     state.cache.productos = prod.data || state.cache.productos || [];
     state.cache.depositos = dep.data || state.cache.depositos || [];
     if (state.usaCentrosCosto && !state.cache.centrosCosto) { try { state.cache.centrosCosto = (await api('/api/centros-costo')).data || []; } catch { state.cache.centrosCosto = []; } }
+    try { state._molCanjes = (await api('/api/canjes')).data || []; } catch { state._molCanjes = []; }
+    try { state._molParidades = (await api('/api/canje-paridades')).data || []; } catch { state._molParidades = []; }
+    if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data || []; } catch { state.cache.clientes = []; } }
+    if (!state.cache.proveedores) { try { state.cache.proveedores = (await api('/api/proveedores')).data || []; } catch { state.cache.proveedores = []; } }
     molRender();
   } catch (e) { $('#page-body').innerHTML = `<div class="kpi text-red-600">Error: ${esc(e.message)}</div>`; }
 };
@@ -29129,10 +29136,10 @@ function molRender() {
   const T = (id,txt)=>`<button class="btn ${tab===id?'btn-primary':'btn-ghost'} text-sm" onclick="state._molTab='${id}';molRender()">${txt}</button>`;
   $('#page-body').innerHTML = `
     <div class="mb-3 flex items-center gap-2 flex-wrap">
-      ${T('partes','🏭 Partes de molienda')} ${T('formulas','⚙️ Fórmulas')} ${T('productos','🏷️ Costo y precio')}
+      ${T('partes','🏭 Partes de molienda')} ${T('formulas','⚙️ Fórmulas')} ${T('productos','🏷️ Costo y precio')} ${T('canje','🔁 Plan canje')}
     </div>
     <div id="mol-body"></div>`;
-  if (tab==='partes') molTabPartes(); else if (tab==='formulas') molTabFormulas(); else molTabProductos();
+  if (tab==='partes') molTabPartes(); else if (tab==='formulas') molTabFormulas(); else if (tab==='productos') molTabProductos(); else molTabCanje();
 }
 /* ---- Partes de molienda ---- */
 function molTabPartes() {
@@ -29332,6 +29339,116 @@ async function molGuardarMargen(id) {
     toast('Guardado','success');
   } catch(e){ toast(e.message,'error'); }
 }
+/* ---- Plan canje ---- */
+function molTabCanje() {
+  const cs = state._molCanjes||[];
+  const pars = state._molParidades||[];
+  const filasP = pars.map(p=>`<tr class="table-row"><td>${esc(p.nombre)}</td>
+    <td class="text-xs">${esc(p.entregaNombre||'')} → ${esc(p.recibeNombre||'')}</td>
+    <td class="text-right">1 : ${p.factor}</td>
+    <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="molParidadDel('${p.id}')">🗑️</button>`:''}</td></tr>`).join('');
+  const filasC = cs.map(c=>`<tr class="table-row">
+    <td class="text-xs">${fmtDate(c.fecha)}</td>
+    <td><span class="badge ${c.tipo==='compra'?'badge-amber':'badge-blue'} text-[10px]">${c.tipo==='compra'?'Compra':'Venta'}</span> ${esc(c.contactoNombre||'')}</td>
+    <td class="text-xs">Entrega <b>${_molKg(c.entregaCant)}</b> ${esc(c.entregaNombre||'')}</td>
+    <td class="text-xs">Recibe <b>${_molKg(c.recibeCant)}</b> ${esc(c.recibeNombre||'')}</td>
+    <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="molCanjeAnular('${c.id}')">Anular</button>`:''}</td></tr>`).join('');
+  $('#mol-body').innerHTML = `
+    <div class="bg-sky-50 border border-sky-200 rounded p-3 text-xs text-sky-900 mb-3">En el <b>canje</b> entregás un producto (ej. expeller/aceite) y recibís grano (soja), o al revés. Cargás la <b>paridad</b> (relación fija) y el sistema completa las cantidades y mueve el stock solo. Es en especie (kilos), no toca cuentas en pesos.</div>
+    <div class="mb-3">${can('stock:create')?`<button class="btn btn-primary" onclick="molCanjeForm()">+ Nueva operación de canje</button>`:''}</div>
+    <div class="kpi overflow-x-auto mb-4"><table class="table w-full text-sm">
+      <thead><tr><th>Fecha</th><th>Tipo / contraparte</th><th>Entrega</th><th>Recibe</th><th></th></tr></thead>
+      <tbody>${filasC || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin canjes todavía.</td></tr>`}</tbody>
+    </table></div>
+    <div class="flex items-center justify-between mb-1"><div class="label">Paridades (relaciones fijas)</div>${can('stock:create')?`<button class="btn btn-ghost btn-xs" onclick="molParidadForm()">+ Paridad</button>`:''}</div>
+    <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Nombre</th><th>Relación</th><th class="text-right">Factor (recibe x 1 entrega)</th><th></th></tr></thead>
+      <tbody>${filasP || `<tr><td colspan="4" class="text-center text-slate-400 py-4">Sin paridades. Creá una para autocompletar los canjes.</td></tr>`}</tbody>
+    </table></div>`;
+}
+function _molProdOpts(sel){ return (state.cache.productos||[]).slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join(''); }
+function molParidadForm() {
+  openModal({ title:'Nueva paridad de canje', size:'max-w-lg',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div><label class="label">Nombre</label><input id="pa-nombre" class="input" placeholder="Expeller x Soja"/></div>
+      <div><label class="label">Entrego (sale) *</label><select id="pa-ent" class="input">${_molProdOpts()}</select></div>
+      <div><label class="label">Recibo (entra) *</label><select id="pa-rec" class="input">${_molProdOpts()}</select></div>
+      <div><label class="label">Relación: cuántos kg recibo por 1 kg que entrego *</label><input id="pa-factor" type="number" step="0.0001" class="input" placeholder="ej. 1.2"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="molParidadSave()">💾 Guardar</button>` });
+}
+async function molParidadSave() {
+  const body={ nombre:$('#pa-nombre')?.value, entregaProductoId:$('#pa-ent')?.value, recibeProductoId:$('#pa-rec')?.value, factor:Number($('#pa-factor')?.value||0) };
+  if (!body.entregaProductoId||!body.recibeProductoId||!(body.factor>0)) return toast('Completá productos y la relación','warn');
+  if (body.entregaProductoId===body.recibeProductoId) return toast('El producto que entregás y el que recibís no pueden ser el mismo','warn');
+  try { await api('/api/canje-paridades',{method:'POST',body:JSON.stringify(body)}); state._molParidades=(await api('/api/canje-paridades')).data||[]; toast('Paridad guardada','success'); closeModal(); molRender(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function molParidadDel(id){ if(!confirm('¿Eliminar esta paridad?'))return; try{ await api('/api/canje-paridades/'+id,{method:'DELETE'}); state._molParidades=(await api('/api/canje-paridades')).data||[]; molRender(); }catch(e){ toast(e.message,'error'); } }
+function molCanjeForm() {
+  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
+  const optD = (ph)=>`<option value="">${ph}</option>`+deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('');
+  const pars = state._molParidades||[];
+  const optPar = `<option value="">— Paridad (opcional, autocompleta) —</option>`+pars.map((p,i)=>`<option value="${i}">${esc(p.nombre)} · ${esc(p.entregaNombre)}→${esc(p.recibeNombre)} (1:${p.factor})</option>`).join('');
+  openModal({ title:'🔁 Nueva operación de canje', size:'max-w-2xl',
+    body:`
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label class="label">Tipo</label><select id="cj-tipo" class="input" onchange="molCanjeContacto()"><option value="venta">Venta (entrego producto, cobro en grano)</option><option value="compra">Compra (recibo grano, pago con producto)</option></select></div>
+        <div><label class="label">Fecha</label><input id="cj-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div class="md:col-span-2"><label class="label">Contraparte</label><select id="cj-contacto" class="input"></select></div>
+        <div class="md:col-span-2"><label class="label">Paridad</label><select id="cj-par" class="input" onchange="molCanjeAplicarPar()">${optPar}</select></div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
+        <div class="kpi"><div class="text-xs font-semibold text-red-600 mb-1">Entrego (sale de stock)</div>
+          <label class="label">Producto *</label><select id="cj-entp" class="input">${_molProdOpts()}</select>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <div><label class="label">Cantidad *</label><input id="cj-entc" type="number" step="0.01" class="input" oninput="molCanjeCalc('ent')"/></div>
+            <div><label class="label">Depósito</label><select id="cj-entd" class="input">${optD('— general —')}</select></div>
+          </div>
+        </div>
+        <div class="kpi"><div class="text-xs font-semibold text-emerald-700 mb-1">Recibo (entra a stock)</div>
+          <label class="label">Producto *</label><select id="cj-recp" class="input">${_molProdOpts()}</select>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <div><label class="label">Cantidad *</label><input id="cj-recc" type="number" step="0.01" class="input" oninput="molCanjeCalc('rec')"/></div>
+            <div><label class="label">Depósito</label><select id="cj-recd" class="input">${optD('— general —')}</select></div>
+          </div>
+        </div>
+      </div>
+      <div><label class="label mt-2">Observaciones</label><input id="cj-obs" class="input" placeholder="opcional"/></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="molCanjeSave()">💾 Registrar canje</button>` });
+  molCanjeContacto();
+}
+function molCanjeContacto() {
+  const tipo=$('#cj-tipo')?.value;
+  const list = tipo==='compra' ? (state.cache.proveedores||[]) : (state.cache.clientes||[]);
+  const sel=$('#cj-contacto'); if(sel) sel.innerHTML = `<option value="">— ${tipo==='compra'?'Proveedor':'Cliente'} (opcional) —</option>`+list.slice().sort((a,b)=>(a.razonSocial||'').localeCompare(b.razonSocial||'')).map(c=>`<option value="${esc(c.id)}">${esc(c.razonSocial||'')}</option>`).join('');
+}
+function molCanjeAplicarPar() {
+  const i=$('#cj-par')?.value; if(i==='') return; const p=(state._molParidades||[])[Number(i)]; if(!p) return;
+  if($('#cj-entp')) $('#cj-entp').value=p.entregaProductoId;
+  if($('#cj-recp')) $('#cj-recp').value=p.recibeProductoId;
+  $('#cj-entp').dataset.factor=p.factor; molCanjeCalc('ent');
+}
+function molCanjeCalc(src) {
+  const f=Number($('#cj-entp')?.dataset.factor||0); if(!(f>0)) return;
+  if(src==='ent'){ const e=Number($('#cj-entc')?.value||0); if(e>0&&$('#cj-recc')) $('#cj-recc').value=_round2b(e*f); }
+  else { const r=Number($('#cj-recc')?.value||0); if(r>0&&$('#cj-entc')) $('#cj-entc').value=_round2b(r/f); }
+}
+function _round2b(n){ return Math.round((Number(n)||0)*100)/100; }
+async function molCanjeSave() {
+  const body={ tipo:$('#cj-tipo')?.value, fecha:$('#cj-fecha')?.value?new Date($('#cj-fecha').value+'T12:00:00').toISOString():undefined,
+    contactoTipo:($('#cj-tipo')?.value==='compra'?'proveedor':'cliente'), contactoId:$('#cj-contacto')?.value||null,
+    entregaProductoId:$('#cj-entp')?.value, entregaCant:Number($('#cj-entc')?.value||0), entregaDepositoId:$('#cj-entd')?.value||null,
+    recibeProductoId:$('#cj-recp')?.value, recibeCant:Number($('#cj-recc')?.value||0), recibeDepositoId:$('#cj-recd')?.value||null,
+    observaciones:$('#cj-obs')?.value||null };
+  if(!body.entregaProductoId||!body.recibeProductoId) return toast('Elegí los productos','warn');
+  if(body.entregaProductoId===body.recibeProductoId) return toast('No pueden ser el mismo producto','warn');
+  if(!(body.entregaCant>0)||!(body.recibeCant>0)) return toast('Cargá las cantidades','warn');
+  try{ await api('/api/canjes',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock;
+    state._molCanjes=(await api('/api/canjes')).data||[]; toast('Canje registrado: stock actualizado','success'); closeModal(); molRender();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function molCanjeAnular(id){ if(!confirm('¿Anular este canje? Se revierten los movimientos de stock.'))return; try{ await api('/api/canjes/'+id,{method:'DELETE'}); delete state.cache.stock; state._molCanjes=(await api('/api/canjes')).data||[]; toast('Canje anulado','success'); molRender(); }catch(e){ toast(e.message,'error'); } }
 
 /* ============ CENTROS DE COSTO (opt-in por empresa) ============ */
 pages.centrosCosto = async function() {

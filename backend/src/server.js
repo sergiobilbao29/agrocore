@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.331.0';
+const AGROCORE_VERSION = '2.332.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10484,6 +10484,90 @@ app.patch('/api/productos/:id/venta', requireCompany, requirePermission('stock:u
     if (req.body?.aplicarPrecio && precioSugerido != null) data.precioReferencia = precioSugerido;
     const upd = await prisma.producto.update({ where: { id: prod.id }, data });
     res.json({ ok: true, data: upd, precioSugerido });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// PLAN CANJE (v2.332): entrega producto / recibe grano, con paridad fija.
+// ============================================================
+app.get('/api/canje-paridades', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const data = await prisma.canjeParidad.findMany({ where: { companyId: req.companyId }, orderBy: { createdAt: 'desc' } });
+    const ids = new Set(); data.forEach(p => { ids.add(p.entregaProductoId); ids.add(p.recibeProductoId); });
+    const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: [...ids] } }, select: { id: true, nombre: true, unidad: true } });
+    const pm = Object.fromEntries(prods.map(p => [p.id, p]));
+    res.json({ ok: true, data: data.map(p => ({ ...p, entregaNombre: pm[p.entregaProductoId]?.nombre || '', recibeNombre: pm[p.recibeProductoId]?.nombre || '' })) });
+  } catch (e) { next(e); }
+});
+app.post('/api/canje-paridades', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = req.body || {};
+    if (!d.entregaProductoId || !d.recibeProductoId || !(Number(d.factor) > 0)) return res.status(400).json({ ok: false, error: 'Elegí producto que entregás, el que recibís y la relación (factor > 0)' });
+    const p = await prisma.canjeParidad.create({ data: {
+      companyId: req.companyId, nombre: (d.nombre || '').trim() || 'Paridad',
+      entregaProductoId: d.entregaProductoId, recibeProductoId: d.recibeProductoId, factor: Number(d.factor), activo: d.activo !== false,
+    } });
+    res.status(201).json({ ok: true, data: p });
+  } catch (e) { next(e); }
+});
+app.delete('/api/canje-paridades/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const p = await prisma.canjeParidad.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!p) return res.status(404).json({ ok: false, error: 'Paridad no encontrada' });
+    await prisma.canjeParidad.delete({ where: { id: p.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.get('/api/canjes', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.desde || req.query.hasta) { where.fecha = {}; if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde)); if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59'); }
+    const data = await prisma.canje.findMany({ where, orderBy: { fecha: 'desc' } });
+    const ids = new Set(); data.forEach(c => { ids.add(c.entregaProductoId); ids.add(c.recibeProductoId); });
+    const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: [...ids] } }, select: { id: true, nombre: true, unidad: true } });
+    const pm = Object.fromEntries(prods.map(p => [p.id, p]));
+    res.json({ ok: true, data: data.map(c => ({ ...c, entregaNombre: pm[c.entregaProductoId]?.nombre || '', entregaUnidad: pm[c.entregaProductoId]?.unidad || '', recibeNombre: pm[c.recibeProductoId]?.nombre || '', recibeUnidad: pm[c.recibeProductoId]?.unidad || '' })) });
+  } catch (e) { next(e); }
+});
+app.post('/api/canjes', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = req.body || {};
+    const entCant = Number(d.entregaCant) || 0, recCant = Number(d.recibeCant) || 0;
+    if (!d.entregaProductoId || !d.recibeProductoId) return res.status(400).json({ ok: false, error: 'Elegí el producto que entregás y el que recibís' });
+    if (d.entregaProductoId === d.recibeProductoId) return res.status(400).json({ ok: false, error: 'El producto entregado y el recibido no pueden ser el mismo' });
+    if (!(entCant > 0) || !(recCant > 0)) return res.status(400).json({ ok: false, error: 'Las cantidades entregada y recibida deben ser mayores a 0' });
+    const fecha = d.fecha ? new Date(d.fecha) : new Date();
+    let contactoNombre = d.contactoNombre || null;
+    if (!contactoNombre && d.contactoId) {
+      try { const cli = d.contactoTipo === 'proveedor' ? await prisma.proveedor.findFirst({ where: { id: d.contactoId, companyId: req.companyId } }) : await prisma.cliente.findFirst({ where: { id: d.contactoId, companyId: req.companyId } }); contactoNombre = cli?.razonSocial || null; } catch (_) {}
+    }
+    const canje = await prisma.$transaction(async (tx) => {
+      const c = await tx.canje.create({ data: {
+        companyId: req.companyId, fecha, tipo: d.tipo === 'compra' ? 'compra' : 'venta',
+        contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null, contactoNombre,
+        entregaProductoId: d.entregaProductoId, entregaCant: entCant, entregaDepositoId: d.entregaDepositoId || null,
+        recibeProductoId: d.recibeProductoId, recibeCant: recCant, recibeDepositoId: d.recibeDepositoId || null,
+        factor: entCant > 0 ? _round2(recCant / entCant) : null, observaciones: d.observaciones || null, userId: req.user?.id || null,
+      } });
+      const ref = 'CANJE-' + c.id;
+      const nom = contactoNombre ? (' · ' + contactoNombre) : '';
+      await tx.movimiento.create({ data: { companyId: req.companyId, productoId: d.entregaProductoId, fecha, tipo: 'egreso', motivo: 'canje', cantidad: entCant, depositoId: d.entregaDepositoId || null, referencia: ref, contraparteTipo: d.contactoTipo || null, contraparteId: d.contactoId || null, observaciones: 'Canje: entrega' + nom, userId: req.user?.id || null } });
+      await tx.movimiento.create({ data: { companyId: req.companyId, productoId: d.recibeProductoId, fecha, tipo: 'ingreso', motivo: 'canje', cantidad: recCant, depositoId: d.recibeDepositoId || null, referencia: ref, contraparteTipo: d.contactoTipo || null, contraparteId: d.contactoId || null, observaciones: 'Canje: recibe' + nom, userId: req.user?.id || null } });
+      return c;
+    });
+    res.status(201).json({ ok: true, data: canje });
+  } catch (e) { next(e); }
+});
+app.delete('/api/canjes/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const c = await prisma.canje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!c) return res.status(404).json({ ok: false, error: 'Canje no encontrado' });
+    await prisma.$transaction(async (tx) => {
+      await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'CANJE-' + c.id } });
+      await tx.canje.delete({ where: { id: c.id } });
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
