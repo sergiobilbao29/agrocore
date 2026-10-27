@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.336.0';
+const AGROCORE_VERSION = '2.337.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10034,6 +10034,50 @@ app.get('/api/recuentos-caravana', requireCompany, requirePermission('stock:read
   try {
     const rows = await prisma.recuentoCaravana.findMany({ where: { companyId: req.companyId }, orderBy: { fecha: 'desc' }, take: 200 });
     res.json({ ok: true, data: rows });
+  } catch (e) { next(e); }
+});
+
+// Reporte de gastos por categoría de gasto (árbol): agrupa las facturas de compra
+// por categoría raíz → familia en un rango de fechas, convertido a ARS. Opcional:
+// incluir las compras de mercadería/insumos (facturas con items de stock); por
+// defecto solo "gastos" (facturas sin items de stock, ej. servicios, seguros).
+app.get('/api/reporte-gastos', requireCompany, requirePermission('reportes:read'), async (req, res, next) => {
+  try {
+    const desde = req.query.desde ? new Date(String(req.query.desde) + 'T00:00:00') : null;
+    const hasta = req.query.hasta ? new Date(String(req.query.hasta) + 'T23:59:59') : null;
+    const incluirCompras = String(req.query.incluirCompras || '') === '1';
+    const where = { companyId: req.companyId };
+    if (desde || hasta) { where.fecha = {}; if (desde) where.fecha.gte = desde; if (hasta) where.fecha.lte = hasta; }
+    const facturas = await prisma.facturaCompra.findMany({
+      where,
+      select: { total: true, moneda: true, cotizacion: true, clase: true, categoriaGastoId: true, items: { select: { productoId: true } } },
+    });
+    const cats = await prisma.categoriaGasto.findMany({ where: { companyId: req.companyId }, select: { id: true, nombre: true, padreId: true } });
+    const byId = {}; cats.forEach(c => { byId[c.id] = c; });
+    const rootOf = (id) => { let n = byId[id]; if (!n) return null; let guard = 0; while (n.padreId && byId[n.padreId] && guard++ < 20) n = byId[n.padreId]; return n; };
+    const grupos = {}; let total = 0; let sinCat = 0;
+    for (const f of facturas) {
+      const tieneStock = (f.items || []).some(i => i.productoId);
+      if (tieneStock && !incluirCompras) continue;
+      const signo = f.clase === 'nota_credito' ? -1 : 1;
+      const cot = (f.moneda && f.moneda !== 'ARS' && f.cotizacion) ? Number(f.cotizacion) : 1;
+      const ars = (Number(f.total) || 0) * cot * signo;
+      total += ars;
+      if (!f.categoriaGastoId || !byId[f.categoriaGastoId]) { sinCat += ars; continue; }
+      const root = rootOf(f.categoriaGastoId) || byId[f.categoriaGastoId];
+      const fam = byId[f.categoriaGastoId];
+      if (!grupos[root.id]) grupos[root.id] = { categoriaId: root.id, categoria: root.nombre, total: 0, familias: {} };
+      grupos[root.id].total += ars;
+      const famKey = (fam.id === root.id) ? '__root__' : fam.id;
+      const famName = (fam.id === root.id) ? '(sin familia)' : fam.nombre;
+      if (!grupos[root.id].familias[famKey]) grupos[root.id].familias[famKey] = { id: famKey, nombre: famName, total: 0 };
+      grupos[root.id].familias[famKey].total += ars;
+    }
+    const arr = Object.values(grupos).map(g => ({
+      categoriaId: g.categoriaId, categoria: g.categoria, total: _round2(g.total),
+      familias: Object.values(g.familias).map(fm => ({ ...fm, total: _round2(fm.total) })).sort((a, b) => b.total - a.total),
+    })).sort((a, b) => b.total - a.total);
+    res.json({ ok: true, data: { total: _round2(total), sinCategoria: _round2(sinCat), grupos: arr } });
   } catch (e) { next(e); }
 });
 

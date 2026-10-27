@@ -1070,6 +1070,7 @@ const MODULES = [
   { id:'flujoCaja',     label:'Flujo de caja',        icon:'📈', perm:'finanzas:read',   section:'Tablero' },
   { id:'resumenGlobal', label:'Resumen multi-empresa',icon:'🌐', perm:'reportes:read',   section:'Tablero' },
   { id:'balanceGeneral',label:'Balance Patrimonial',  icon:'⚖️', perm:'reportes:read',   section:'Tablero' },
+  { id:'reporteGastos', label:'Gastos por categoría', icon:'🧾', perm:'reportes:read',   section:'Tablero' },
   { id:'agenda',        label:'Agenda y recordatorios',icon:'📅', perm:'agenda:read',    section:'Tablero' },
 
   // ===== COMERCIAL — ventas y compras (lo que entra y lo que sale) =====
@@ -3056,6 +3057,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
+      titulo:'🧾 v2.337.0 — Nuevo reporte: Gastos por categoría',
+      desc:'En <b>Tablero → Gastos por categoría</b> tenés un reporte de los gastos agrupados por tu <b>árbol de Categorías de Gastos</b> (categoría → familia), con el <b>total</b> de cada una y el <b>% sobre el total</b>. Elegís un <b>rango de fechas</b>, ves un <b>gráfico de torta</b> con las mayores categorías y lo <b>exportás a Excel</b>. Por defecto muestra solo los gastos (servicios, seguros, fletes, etc.); con un tilde podés <b>incluir también las compras de insumos/mercadería</b>. Es de la empresa activa (cambiás arriba para ver otra).' },
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
       titulo:'🏭 v2.336.0 — Molienda: marcá materia prima y producto final para filtrar la fórmula',
       desc:'En las empresas con <b>Producción industrial / Fábrica</b>, cada artículo del catálogo ahora puede marcarse (en su ficha de producto) con un <b>rol de fábrica</b>: <b>🌱 Materia prima</b> (grano de origen) o <b>📦 Producto final</b> (coproducto). Con eso, la <b>fórmula de molienda</b> deja de ofrecer todo el catálogo: el <b>grano de origen</b> solo lista las materias primas y los <b>coproductos</b> solo los productos finales — nada de animales ni agroquímicos de otras actividades. El plan canje también se filtra. Mientras no marques ningún artículo, se siguen mostrando todos (excepto hacienda), así que no cambia nada hasta que empieces a marcar. TRAE MIGRACION.' },
@@ -38703,6 +38707,73 @@ function flujoDetalleExcel(){
 // ============================================================
 // BALANCE GENERAL: ingresos/egresos reales por categoría en un rango + gráfico.
 // ============================================================
+/* ============================================================
+   REPORTE DE GASTOS POR CATEGORÍA (árbol de Categorías de Gastos)
+   Rango de fechas + filtro empresa (la activa) + torta + export Excel.
+   Opción para incluir también las compras de mercadería/insumos.
+   ============================================================ */
+pages.reporteGastos = async function() {
+  setHeader('Gastos por categoría', 'Gastos agrupados por categoría de gasto, en un rango de fechas');
+  if (!can('reportes:read')) { $('#page-body').innerHTML = stubPage('reporteGastos','Gastos por categoría'); return; }
+  if (!state.rgDesde) { const h=new Date(); state.rgHasta=h.toISOString().slice(0,10); state.rgDesde=new Date(h.getFullYear(),0,1).toISOString().slice(0,10); }
+  if (state.rgCompras===undefined) state.rgCompras=false;
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  destroyCharts();
+  let d;
+  try { d=(await api(`/api/reporte-gastos?desde=${state.rgDesde}&hasta=${state.rgHasta}&incluirCompras=${state.rgCompras?1:0}`)).data; }
+  catch(e){ $('#page-body').innerHTML=`<div class="text-red-600 text-sm">Error: ${esc(e.message)}</div>`; return; }
+  rgRender(d);
+};
+function rgRender(d){
+  state._rgData=d;
+  const total=d.total||0, grupos=d.grupos||[], sinCat=d.sinCategoria||0;
+  const pct=(v)=> total? Math.round(v/total*1000)/10 : 0;
+  const filas = grupos.map(g=>{
+    const fam=(g.familias||[]).map(f=>`<tr class="table-row"><td class="pl-8 text-sm text-slate-600">${esc(f.nombre)}</td><td class="text-right text-sm">${fmt$(f.total)}</td><td class="text-right text-sm text-slate-500">${pct(f.total)}%</td></tr>`).join('');
+    return `<tr class="table-row bg-slate-50 font-semibold"><td>${esc(g.categoria)}</td><td class="text-right">${fmt$(g.total)}</td><td class="text-right">${pct(g.total)}%</td></tr>${fam}`;
+  }).join('');
+  $('#page-body').innerHTML = `
+    <div class="kpi mb-3">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+        <div><label class="label">Desde</label><input id="rg-desde" type="date" class="input" value="${state.rgDesde}"/></div>
+        <div><label class="label">Hasta</label><input id="rg-hasta" type="date" class="input" value="${state.rgHasta}"/></div>
+        <div><label class="flex items-center gap-2 text-sm mt-5"><input type="checkbox" id="rg-compras" ${state.rgCompras?'checked':''}/> Incluir compras de insumos/mercadería</label></div>
+        <div class="flex gap-2"><button class="btn btn-primary flex-1" onclick="rgAplicar()">Aplicar</button><button class="btn btn-secondary" onclick="rgExcel()">⬇️ Excel</button></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Agrupa las facturas de compra por su <b>categoría de gasto</b>. Por defecto muestra solo gastos (servicios, seguros, etc.); tildá la opción para sumar también las compras de insumos/mercadería. El reporte es de la <b>empresa activa</b> (cambiala arriba para ver otra).</div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+      <div class="kpi"><div class="text-xs text-slate-500">Total del período</div><div class="text-2xl font-bold text-red-600 mt-1">${fmt$(total)}</div>${sinCat?`<div class="text-[11px] text-amber-600 mt-1">Sin categoría asignada: ${fmt$(sinCat)}</div>`:''}</div>
+      <div class="kpi lg:col-span-2"><div class="text-xs text-slate-500 mb-1">Mayores categorías</div><div style="position:relative;height:250px">${grupos.length?'<canvas id="rg-pie"></canvas>':'<div class="text-slate-400 text-sm text-center pt-20">Sin gastos en el período</div>'}</div></div>
+    </div>
+    <div class="kpi p-0 overflow-hidden"><table class="table w-full text-sm">
+      <thead><tr><th>Categoría / Familia</th><th class="text-right">Total</th><th class="text-right">%</th></tr></thead>
+      <tbody>${filas || `<tr><td colspan="3" class="text-center text-slate-400 py-6">Sin datos en el período</td></tr>`}${sinCat?`<tr class="table-row text-amber-700"><td>(Sin categoría)</td><td class="text-right">${fmt$(sinCat)}</td><td class="text-right">${pct(sinCat)}%</td></tr>`:''}</tbody>
+      ${total?`<tfoot><tr class="font-bold border-t-2"><td>TOTAL</td><td class="text-right">${fmt$(total)}</td><td class="text-right">100%</td></tr></tfoot>`:''}
+    </table></div>`;
+  if (grupos.length && window.Chart) {
+    const ctx=$('#rg-pie');
+    if (ctx) { const top=grupos.slice(0,10);
+      state.charts.rgPie = new Chart(ctx.getContext('2d'), {
+        type:'doughnut',
+        data:{ labels: top.map(g=>g.categoria), datasets:[{ data: top.map(g=>g.total), backgroundColor:['#dc2626','#ea580c','#d97706','#ca8a04','#65a30d','#0d9488','#0284c7','#7c3aed','#c026d3','#64748b'] }] },
+        options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'right', labels:{ boxWidth:12, font:{size:11} } } } }
+      });
+    }
+  }
+}
+function rgAplicar(){ state.rgDesde=$('#rg-desde')?.value||state.rgDesde; state.rgHasta=$('#rg-hasta')?.value||state.rgHasta; state.rgCompras=!!$('#rg-compras')?.checked; pages.reporteGastos(); }
+function rgExcel(){
+  const d=state._rgData; if(!d) return;
+  const total=d.total||0; const pct=(v)=> total? Math.round(v/total*1000)/10 : 0;
+  const rows=[['Gastos por categoría'],['Desde',state.rgDesde,'Hasta',state.rgHasta],['Incluye compras/insumos', state.rgCompras?'Sí':'No'],[],['Categoría','Familia','Total','%']];
+  (d.grupos||[]).forEach(g=>{ rows.push([g.categoria,'',g.total,pct(g.total)]); (g.familias||[]).forEach(f=>rows.push(['',f.nombre,f.total,pct(f.total)])); });
+  if(d.sinCategoria) rows.push(['(Sin categoría)','',d.sinCategoria,pct(d.sinCategoria)]);
+  rows.push([]); rows.push(['TOTAL','',total,100]);
+  const ws=XLSX.utils.aoa_to_sheet(rows); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Gastos por categoria');
+  XLSX.writeFile(wb,`Gastos-por-categoria-${state.rgDesde}_a_${state.rgHasta}.xlsx`);
+}
+
 pages.balanceGeneral = async function() {
   setHeader('Balance Patrimonial', 'Estado de situación patrimonial: Activo = Pasivo + Patrimonio Neto, a una fecha de corte');
   if (!can('reportes:read')) { $('#page-body').innerHTML = stubPage('balanceGeneral','Balance Patrimonial'); return; }
