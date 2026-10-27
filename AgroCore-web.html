@@ -1822,7 +1822,7 @@ async function switchCompany(id) {
 async function applyCompanyTheme() {
   const m = currentMembership();
   const root = document.documentElement;
-  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false;
+  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false, catMan = false;
   try {
     if (!state.cache.empresas) {
       const r = await api('/api/empresas');
@@ -1835,6 +1835,7 @@ async function applyCompanyTheme() {
       cajaTenedor = emp.cajaPorTenedor === true;
       usaCC = emp.usaCentrosCosto === true;
       usaPI = emp.usaProduccionIndustrial === true;
+      catMan = emp.catalogoManual === true;
     }
   } catch {}
   const wm = $('#company-watermark');
@@ -1857,6 +1858,7 @@ async function applyCompanyTheme() {
   state.cajaPorTenedor = cajaTenedor;
   state.usaCentrosCosto = usaCC;
   state.usaProduccionIndustrial = usaPI;
+  state.catalogoManual = catMan;
   try { ensureCoraFab(); } catch {}
 }
 
@@ -3057,6 +3059,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
+      titulo:'🏭 v2.339.0 — Catálogo propio por empresa (fábrica separada)',
+      desc:'Nueva opción en <b>Configuración → Empresa</b>: <b>"Catálogo propio (no autogenerar)"</b>. Al activarla, esa empresa <b>deja de crear automáticamente</b> en Stock los insumos, animales y cereales del catálogo general — así una <b>fábrica</b> queda completamente separada y vos cargás solo los artículos que realmente usás (soja, expeller, aceite, merma). No borra lo que ya estaba; deja de generar nuevos. La soja la traés al depósito de la fábrica con un ingreso o transferencia de stock. TRAE MIGRACION.' },
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
+      titulo:'🏭 v2.338.0 — Molienda: filtro de artículos más claro + botón "Marcar artículos de fábrica"',
+      desc:'En las empresas de <b>fábrica</b>, la fórmula de molienda y el plan canje ahora muestran <b>únicamente los artículos marcados</b> como materia prima o producto final — nada de animales ni agroquímicos, aunque todavía no hayas marcado nada (antes, si no habías marcado, mostraba todo). Y para marcarlos rápido, en <b>Molienda / Fábrica → Fórmulas</b> hay un botón <b>🏭 Marcar artículos de fábrica</b>: una lista con buscador donde elegís de una cuáles son <b>materia prima</b> (el grano de origen) y cuáles <b>producto final</b> (expeller, aceite, merma). Marcás tus 4 artículos y la fórmula queda limpia.' },
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
       titulo:'🧾 v2.337.0 — Nuevo reporte: Gastos por categoría',
       desc:'En <b>Tablero → Gastos por categoría</b> tenés un reporte de los gastos agrupados por tu <b>árbol de Categorías de Gastos</b> (categoría → familia), con el <b>total</b> de cada una y el <b>% sobre el total</b>. Elegís un <b>rango de fechas</b>, ves un <b>gráfico de torta</b> con las mayores categorías y lo <b>exportás a Excel</b>. Por defecto muestra solo los gastos (servicios, seguros, fletes, etc.); con un tilde podés <b>incluir también las compras de insumos/mercadería</b>. Es de la empresa activa (cambiás arriba para ver otra).' },
@@ -11295,6 +11303,10 @@ function empForm(id=null) {
           <input id="f-usapi" type="checkbox" ${it.usaProduccionIndustrial?'checked':''} class="mt-0.5" />
           <label for="f-usapi" class="text-sm">Producción industrial / Fábrica <span class="text-slate-400">— habilita el módulo de Molienda / Fábrica (transformar un grano en coproductos con costeo, y plan canje) en Stock y depósitos. Solo para empresas procesadoras (molienda, balanceados, pellets, etc.).</span></label>
         </div>
+        <div class="col-span-2 flex items-start gap-2 mt-1">
+          <input id="f-catman" type="checkbox" ${it.catalogoManual?'checked':''} class="mt-0.5" />
+          <label for="f-catman" class="text-sm">Catálogo propio (no autogenerar) <span class="text-slate-400">— esta empresa NO crea automáticamente en Stock los insumos, animales y cereales del catálogo; vos cargás solo los artículos que usás. Ideal para una fábrica separada. (No borra lo ya creado; deja de generar nuevos.)</span></label>
+        </div>
         ${state.user?.superAdmin ? `
         <div class="col-span-2 grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
           <div class="col-span-2 text-[11px] font-semibold text-emerald-800">🤝 Red de vendedores / partners</div>
@@ -11348,6 +11360,7 @@ async function empSave(id) {
     cajaPorTenedor: $('#f-tenedor')?.checked || false,
     usaCentrosCosto: $('#f-usacc')?.checked || false,
     usaProduccionIndustrial: $('#f-usapi')?.checked || false,
+    catalogoManual: $('#f-catman')?.checked || false,
   };
   if (state.user?.superAdmin) {
     data.vendedorId = $('#f-vend')?.value || null;
@@ -29647,7 +29660,9 @@ function molTabFormulas() {
   }).join('');
   $('#mol-body').innerHTML = `
     <div class="mb-3">${can('stock:create')?`<button class="btn btn-primary" onclick="molFormulaForm(null)">+ Nueva fórmula</button>`:''}
-      <span class="text-xs text-slate-500 ml-2">La fórmula define el grano de origen y los coproductos con su % de rendimiento. Los % deben sumar 100%.</span></div>
+      ${can('stock:update')?`<button class="btn btn-secondary ml-2" onclick="molMarcarArticulos()">🏭 Marcar artículos de fábrica</button>`:''}
+      <span class="text-xs text-slate-500 ml-2">La fórmula define el grano de origen y los coproductos con su % de rendimiento. Los % deben sumar 100%.</span>
+      <div class="text-[11px] text-slate-500 mt-1">💡 La fórmula solo ofrece los artículos marcados como <b>materia prima</b> (origen) o <b>producto final</b> (coproductos). Marcalos con el botón de arriba.</div></div>
     <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
       <thead><tr><th>Fórmula</th><th>Origen</th><th>Coproductos</th><th class="text-right">Suma</th><th></th></tr></thead>
       <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin fórmulas. Creá la primera.</td></tr>`}</tbody>
@@ -29658,10 +29673,52 @@ function molTabFormulas() {
 function _molProdPorRol(rol){
   const all=(state.cache.productos||[]).filter(p=>p.activo!==false);
   const conRol=all.filter(p=>p.rolFabrica===rol);
+  // En empresas de fábrica: SOLO lo marcado (sin fallback), así no aparecen animales ni agroquímicos.
+  if (state.usaProduccionIndustrial) return conRol.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
   const base=conRol.length?conRol:all.filter(p=>(p.categoria||'').toLowerCase()!=='hacienda');
   return base.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
 }
-function _molOptRol(rol,sel){ return _molProdPorRol(rol).map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join(''); }
+// ---- Marcar artículos de fábrica (materia prima / producto final) en lote ----
+function molMarcarArticulos(){
+  state._maEdit={};
+  openModal2({ title:'🏭 Marcar artículos de fábrica', size:'max-w-2xl',
+    body:`<div class="text-xs text-slate-500 mb-2">Marcá cuáles de tus artículos son <b>materia prima</b> (grano de origen) y cuáles <b>producto final</b> (coproductos). Solo esos aparecerán en las fórmulas de molienda y en el canje.</div>
+      <input id="ma-q" class="input mb-2" placeholder="Buscar artículo (ej. soja, expeller)..." oninput="molMarcarRender()"/>
+      <div id="ma-list" class="max-h-[55vh] overflow-y-auto border border-slate-200 rounded"></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="molMarcarSave()">💾 Guardar</button>` });
+  molMarcarRender();
+}
+function molMarcarRender(){
+  const q=(document.getElementById('ma-q')?.value||'').toLowerCase();
+  const prods=(state.cache.productos||[]).filter(p=>p.activo!==false).slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  const list=document.getElementById('ma-list'); if(!list) return;
+  const rows=prods.filter(p=>!q||(p.nombre||'').toLowerCase().includes(q)).map(p=>{
+    const cur=(state._maEdit[p.id]!==undefined)?state._maEdit[p.id]:(p.rolFabrica||'');
+    return `<div class="flex items-center gap-2 px-2 py-1 border-b border-slate-100">
+      <div class="flex-1 text-sm">${esc(p.nombre)}${p.unidad?` <span class="text-slate-400 text-xs">(${esc(p.unidad)})</span>`:''}</div>
+      <select class="input text-sm" style="width:180px" onchange="state._maEdit['${p.id}']=this.value">
+        <option value="" ${cur===''?'selected':''}>—</option>
+        <option value="materia_prima" ${cur==='materia_prima'?'selected':''}>🌱 Materia prima</option>
+        <option value="producto_final" ${cur==='producto_final'?'selected':''}>📦 Producto final</option>
+      </select></div>`;
+  }).join('');
+  list.innerHTML = rows || '<div class="text-slate-400 text-sm py-4 text-center">Sin artículos</div>';
+}
+async function molMarcarSave(){
+  const toSave=Object.entries(state._maEdit||{}).filter(([id,rol])=>{ const p=(state.cache.productos||[]).find(x=>x.id===id); return p && (p.rolFabrica||'')!==(rol||''); });
+  if(!toSave.length){ closeModal2(); return; }
+  try{
+    for(const [id,rol] of toSave){ await api('/api/productos/'+id,{method:'PUT',body:JSON.stringify({rolFabrica:rol||null})}); }
+    toast(`${toSave.length} artículo(s) actualizados`,'success'); closeModal2();
+    state.cache.productos=(await api('/api/productos')).data||state.cache.productos;
+    if($('#mol-body')) molRender();
+  }catch(e){ toast(e.message,'error'); }
+}
+function _molOptRol(rol,sel){
+  const lista=_molProdPorRol(rol);
+  if(!lista.length) return `<option value="">— Marcá tus artículos con el botón "Marcar artículos de fábrica" —</option>`;
+  return lista.map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join('');
+}
 function molFormulaForm(id) {
   const f = id ? (state._molFormulas||[]).find(x=>x.id===id) : null;
   const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
@@ -29773,7 +29830,9 @@ function molTabCanje() {
 function _molProdOpts(sel){
   const all=(state.cache.productos||[]).filter(p=>p.activo!==false);
   const conRol=all.filter(p=>p.rolFabrica==='materia_prima'||p.rolFabrica==='producto_final');
-  const base=conRol.length?conRol:all.filter(p=>(p.categoria||'').toLowerCase()!=='hacienda');
+  let base;
+  if (state.usaProduccionIndustrial) base=conRol;   // fábrica: solo marcados
+  else base = conRol.length?conRol:all.filter(p=>(p.categoria||'').toLowerCase()!=='hacienda');
   return base.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join('');
 }
 function molParidadForm() {

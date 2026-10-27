@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.337.0';
+const AGROCORE_VERSION = '2.339.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -735,6 +735,7 @@ async function serializeUser(u) {
     cajaPorTenedor: co.cajaPorTenedor === true,
     usaCentrosCosto: co.usaCentrosCosto === true,
     usaProduccionIndustrial: co.usaProduccionIndustrial === true,
+    catalogoManual: co.catalogoManual === true,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1834,6 +1835,7 @@ const empresaSchema = z.object({
   cajaPorTenedor: z.boolean().optional(),
   usaCentrosCosto: z.boolean().optional(),
   usaProduccionIndustrial: z.boolean().optional(),
+  catalogoManual: z.boolean().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
   vendedorId: z.string().nullable().optional(),
@@ -4203,10 +4205,14 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     const depositoId = req.query.depositoId || null;
     // Aseguramos que cada categoría de animal y cada insumo del catálogo tengan su
     // producto, para verlos todos en Stock (existencia 0 hasta que se muevan).
-    try { await sincronizarProductosHacienda(req.companyId); } catch {}
-    try { await sincronizarProductosInsumos(req.companyId); } catch {}
-    try { await sincronizarProductosCereales(req.companyId); } catch {}
-    try { await sincronizarProductosFichas(req.companyId); } catch {}
+    // Salvo que la empresa tenga "catálogo propio" (ej. fábrica): no autogenera nada.
+    const _coCat = await prisma.company.findUnique({ where: { id: req.companyId }, select: { catalogoManual: true } });
+    if (!_coCat?.catalogoManual) {
+      try { await sincronizarProductosHacienda(req.companyId); } catch {}
+      try { await sincronizarProductosInsumos(req.companyId); } catch {}
+      try { await sincronizarProductosCereales(req.companyId); } catch {}
+      try { await sincronizarProductosFichas(req.companyId); } catch {}
+    }
     // Existencia de fichas de animales: CONTEO de fichas en el campo por especie+categoría
     // (no cuentan vendidas/prestadas/baja). Es la fuente de verdad de su stock.
     let fichaByNombre = {};
@@ -7781,7 +7787,7 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
       empresas = await prisma.company.findMany({ where: { activo: true }, orderBy: { name: 'asc' } });
     } else {
       empresas = (req.user.userCompanies || []).map((uc) => ({
-        id: uc.companyId, name: uc.company.name, color: uc.company.color, cajaPorTenedor: uc.company.cajaPorTenedor === true, usaCentrosCosto: uc.company.usaCentrosCosto === true, usaProduccionIndustrial: uc.company.usaProduccionIndustrial === true,
+        id: uc.companyId, name: uc.company.name, color: uc.company.color, cajaPorTenedor: uc.company.cajaPorTenedor === true, usaCentrosCosto: uc.company.usaCentrosCosto === true, usaProduccionIndustrial: uc.company.usaProduccionIndustrial === true, catalogoManual: uc.company.catalogoManual === true,
       }));
     }
     if (!empresas.length) {
@@ -10425,10 +10431,13 @@ const catHaciendaSchema = z.object({
 });
 app.get('/api/categorias-hacienda', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
-    await seedCategoriasHacienda(req.companyId);
-    await mergeCatalogoAnimalesEnConfig(req.companyId);
-    try { await sincronizarCatalogoEquinos(req.companyId); } catch {}
-    await sincronizarProductosHacienda(req.companyId);
+    const _coCatH = await prisma.company.findUnique({ where: { id: req.companyId }, select: { catalogoManual: true } });
+    if (!_coCatH?.catalogoManual) {
+      await seedCategoriasHacienda(req.companyId);
+      await mergeCatalogoAnimalesEnConfig(req.companyId);
+      try { await sincronizarCatalogoEquinos(req.companyId); } catch {}
+      await sincronizarProductosHacienda(req.companyId);
+    }
     const data = await prisma.categoriaHaciendaConfig.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { especie: 'asc' }, { nombre: 'asc' }] });
     res.json({ ok: true, data });
   } catch (e) { next(e); }
