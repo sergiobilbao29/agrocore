@@ -3060,6 +3060,15 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
+      titulo:'🏭 v2.342.0 — Flujo aislado + corregir depósito de compras',
+      desc:'<b>Flujo aislado por empresa</b> (Configuración → Empresa): cuando trabajás dentro de esa empresa (ej: la fábrica), el <b>resumen multi-empresa</b> muestra solo esa empresa; las demás empresas sí la siguen viendo. Ideal para separar la fábrica del resto.<br><b>Corregir depósito de una compra:</b> en el detalle de la compra hay un botón <b>📦 Corregir depósito</b> que mueve el stock al depósito correcto sin reeditar la factura (sirve cuando quedó en "Sin depósito" y ya tiene un pago aplicado).<br>Además, las empresas con <b>Catálogo propio</b> ya no reciben catálogos (ni cajas) copiados de otras empresas.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/10/2026',
+      titulo:'🗺️ v2.341.0 — Sociedades: aportar un lote (no solo hectáreas)',
+      desc:'Al agregar un campo a una <b>Sociedad/UTE</b> ahora podés elegir un <b>lote específico</b> (o dejar <b>Campo completo</b>). Al elegir el lote toma automáticamente sus hectáreas (editable) y el tablero consolida <b>solo las campañas de ese lote</b>, así no se mezclan los cultivos de los otros lotes del mismo campo. El lote aparece como etiqueta en el tablero de la sociedad.' },
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
+      titulo:'🧹 v2.340.0 — Limpiar catálogo autogenerado (fábrica)',
+      desc:'En las empresas con <b>Catálogo propio</b> activado, ahora en <b>Stock</b> hay un botón <b>🧹 Limpiar catálogo autogenerado</b>: <b>desactiva</b> (no borra) los productos que <b>no tienen movimientos</b> y <b>no están marcados</b> como materia prima / producto final. Así la fábrica queda con Stock limpio (solo tus artículos y lo que tenga existencias). Es reversible: podés reactivar cualquier producto cuando quieras.' },
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
       titulo:'🏭 v2.339.0 — Catálogo propio por empresa (fábrica separada)',
       desc:'Nueva opción en <b>Configuración → Empresa</b>: <b>"Catálogo propio (no autogenerar)"</b>. Al activarla, esa empresa <b>deja de crear automáticamente</b> en Stock los insumos, animales y cereales del catálogo general — así una <b>fábrica</b> queda completamente separada y vos cargás solo los artículos que realmente usás (soja, expeller, aceite, merma). No borra lo que ya estaba; deja de generar nuevos. La soja la traés al depósito de la fábrica con un ingreso o transferencia de stock. TRAE MIGRACION.' },
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
@@ -7616,6 +7625,7 @@ pages.stock = async function() {
       </div>
       ${depFilter ? `<div class="text-xs text-blue-700 mt-2">📍 Mostrando existencias <b>solo del depósito seleccionado</b>. Quitá el filtro para ver el consolidado de todos los depósitos.</div>` : `<div class="text-xs text-slate-500 mt-2">💡 Sin filtro de depósito, ves la <b>existencia total consolidada</b> (suma de todos los depósitos).</div>`}
       ${ocultosCat ? `<div class="text-xs text-amber-700 mt-2 flex items-center gap-2"><label class="inline-flex items-center gap-1 cursor-pointer"><input type="checkbox" id="st-verfuera" ${state.stockFilter.verFueraCat?'checked':''}/> Ver también <b>${ocultosCat}</b> producto(s) que no están en el Catálogo</label></div>` : ''}
+      ${(state.catalogoManual && can('stock:delete')) ? `<div class="text-xs mt-2"><button class="btn btn-ghost btn-xs text-red-600" onclick="stockLimpiarAutogenerados()">🧹 Limpiar catálogo autogenerado (desactiva lo que no uso)</button></div>` : ''}
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="stock-table"></div></div>`;
   $('#st-q').oninput   = e => { state.stockFilter.q = e.target.value; render(); };
@@ -7627,6 +7637,14 @@ pages.stock = async function() {
   render();
 };
 function stockFiltrosLimpiar() { state.stockFilter = { q:'', cats:[], fam:'', estado:'', depositoId:'' }; state._ms_stCat = false; pages.stock(); }
+async function stockLimpiarAutogenerados(){
+  if(!confirm('Esto DESACTIVA (no borra) los productos que NO tienen movimientos y NO están marcados como materia prima / producto final. Conserva lo que tenga stock o esté marcado. Es reversible (podés reactivarlos). ¿Continuar?')) return;
+  try{
+    const r=await api('/api/productos/limpiar-autogenerados',{method:'POST',body:'{}'});
+    toast(`${r.data?.desactivados||0} producto(s) desactivados`,'success');
+    pages.stock();
+  }catch(e){ toast(e.message,'error'); }
+}
 
 // === CONVERTIR GRANO → SEMILLA (una sola vía) ===
 // El GRANO (Cereales / Granos, producto final) se puede pasar a SEMILLA (insumo) para
@@ -9761,7 +9779,7 @@ async function socTablero(id){
   const fmtMon=(v)=>(mon==='ARS'?'$ ':'US$ ')+fmtN(v||0);
   const s=t.sociedad, canU=can('produccion:update');
   const filas=(t.filas||[]).map(f=>`<tr class="table-row">
-      <td>${f.campoId?`<a class="text-emerald-700 hover:underline cursor-pointer" onclick='socCampoDetalle(${JSON.stringify(id)},${JSON.stringify(f.linkId)})'>${f.externo?'📍 ':'🗺️ '}${esc(f.nombre)}</a>`:`${f.externo?'📍 ':'🗺️ '}${esc(f.nombre)}`}${f.externo?' <span class="badge badge-amber">externo</span>':''}${f.empresa?`<div class="text-[11px] text-slate-500">${esc(f.empresa)}</div>`:''}${f.titular?`<div class="text-[11px] text-slate-400">${esc(f.titular)}</div>`:''}</td>
+      <td>${f.campoId?`<a class="text-emerald-700 hover:underline cursor-pointer" onclick='socCampoDetalle(${JSON.stringify(id)},${JSON.stringify(f.linkId)})'>${f.externo?'📍 ':'🗺️ '}${esc(f.nombre)}</a>`:`${f.externo?'📍 ':'🗺️ '}${esc(f.nombre)}`}${f.externo?' <span class="badge badge-amber">externo</span>':''}${f.loteNombre?` <span class="badge badge-emerald">${esc(f.loteNombre)}</span>`:''}${f.empresa?`<div class="text-[11px] text-slate-500">${esc(f.empresa)}</div>`:''}${f.titular?`<div class="text-[11px] text-slate-400">${esc(f.titular)}</div>`:''}</td>
       <td class="text-right">${fmtN(f.hectareas)}</td>
       <td>${(f.cultivos||[]).map(c=>esc(c)).join(', ')||'—'}</td>
       <td class="text-right font-semibold">${f.kgCosechados?fmtN(f.kgCosechados)+' kg':'—'}</td>
@@ -9808,7 +9826,11 @@ function socCampoForm(id){
       </div>
       <div id="soc-campo-real">
         <label class="label">Campo (de cualquiera de tus empresas)</label>
-        <select id="soc-campoid" class="input"><option value="">Cargando…</option></select>
+        <select id="soc-campoid" class="input" onchange="socCampoChange()"><option value="">Cargando…</option></select>
+        <div class="mt-2"><label class="label text-xs">Lote</label>
+          <select id="soc-loteid" class="input" onchange="socLoteChange()"><option value="">— Campo completo —</option></select>
+          <div class="text-[11px] text-slate-500 mt-1">Elegí un lote para aportar solo esa fracción (toma sus hectáreas), o dejá "Campo completo".</div>
+        </div>
         <div class="grid grid-cols-2 gap-2 mt-2">
           <div><label class="label text-xs">Hectáreas a la sociedad</label><input id="soc-ha-r" type="number" step="0.01" class="input" placeholder="0 = todo el campo"/></div>
           <div><label class="label text-xs">Cultivo</label><input id="soc-cult-r" class="input" placeholder="Opcional"/></div>
@@ -9829,9 +9851,27 @@ function socCampoForm(id){
   state._socCampoModo='real';
   api('/api/sociedades-campos-grupo').then(r=>{
     const sel=document.getElementById('soc-campoid'); if(!sel) return;
-    const cs=r.data||[];
+    const cs=r.data||[]; state._socCamposGrupo=cs;
     sel.innerHTML=`<option value="">— Elegir campo —</option>`+cs.map(c=>`<option value="${esc(c.id)}" data-ha="${c.hectareas||0}">${esc(c.nombre)} · ${esc(c.empresa||'')}${c.hectareas?(' · '+fmtN(c.hectareas)+' ha'):''}</option>`).join('');
   }).catch(()=>{});
+}
+function socCampoChange(){
+  const campoId=document.getElementById('soc-campoid')?.value;
+  const loteSel=document.getElementById('soc-loteid'); const haInp=document.getElementById('soc-ha-r');
+  const campo=(state._socCamposGrupo||[]).find(c=>c.id===campoId);
+  const lotes=(campo&&campo.lotes)||[];
+  if(loteSel){
+    loteSel.innerHTML=`<option value="">— Campo completo —</option>`+lotes.map(l=>`<option value="${esc(l.id)}" data-ha="${l.hectareas||0}">${esc(l.nombre)}${l.hectareas?(' · '+fmtN(l.hectareas)+' ha'):''}</option>`).join('');
+  }
+  if(haInp) haInp.value=''; // al cambiar de campo, dejar que tome el total (0 = todo el campo)
+}
+function socLoteChange(){
+  const loteSel=document.getElementById('soc-loteid'); const haInp=document.getElementById('soc-ha-r');
+  if(!loteSel||!haInp) return;
+  const opt=loteSel.options[loteSel.selectedIndex];
+  const ha=opt?Number(opt.getAttribute('data-ha')||0):0;
+  // Al elegir un lote, autocompleta sus hectáreas (editable). "Campo completo" vuelve a vacío.
+  haInp.value = (loteSel.value && ha>0) ? ha : '';
 }
 function socCampoModo(m){ state._socCampoModo=m;
   document.getElementById('soc-campo-real')?.classList.toggle('hidden', m!=='real');
@@ -9843,7 +9883,8 @@ async function socCampoSave(id){
   let data;
   if((state._socCampoModo||'real')==='real'){
     const campoId=document.getElementById('soc-campoid')?.value; if(!campoId) return toast('Elegí un campo','warn');
-    data={ campoId, hectareas:Number(document.getElementById('soc-ha-r')?.value||0)||0, cultivo:document.getElementById('soc-cult-r')?.value.trim()||null, aportante:document.getElementById('soc-aportante')?.value.trim()||null };
+    const loteId=document.getElementById('soc-loteid')?.value||null;
+    data={ campoId, loteId, hectareas:Number(document.getElementById('soc-ha-r')?.value||0)||0, cultivo:document.getElementById('soc-cult-r')?.value.trim()||null, aportante:document.getElementById('soc-aportante')?.value.trim()||null };
   } else {
     const nombre=document.getElementById('soc-ext-nombre')?.value.trim(); if(!nombre) return toast('Poné el nombre del campo externo','warn');
     data={ externoNombre:nombre, externoTitular:document.getElementById('soc-ext-titular')?.value.trim()||null, externoCuit:document.getElementById('soc-ext-cuit')?.value.trim()||null,
@@ -11307,6 +11348,10 @@ function empForm(id=null) {
           <input id="f-catman" type="checkbox" ${it.catalogoManual?'checked':''} class="mt-0.5" />
           <label for="f-catman" class="text-sm">Catálogo propio (no autogenerar) <span class="text-slate-400">— esta empresa NO crea automáticamente en Stock los insumos, animales y cereales del catálogo; vos cargás solo los artículos que usás. Ideal para una fábrica separada. (No borra lo ya creado; deja de generar nuevos.)</span></label>
         </div>
+        <div class="col-span-2 flex items-start gap-2 mt-1">
+          <input id="f-flujoais" type="checkbox" ${it.flujoAislado?'checked':''} class="mt-0.5" />
+          <label for="f-flujoais" class="text-sm">Flujo aislado <span class="text-slate-400">— cuando trabajás DENTRO de esta empresa, el resumen multi-empresa muestra solo esta empresa (no ves el flujo de las demás). Las demás empresas sí siguen viendo el flujo de esta. Ideal para una fábrica separada.</span></label>
+        </div>
         ${state.user?.superAdmin ? `
         <div class="col-span-2 grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
           <div class="col-span-2 text-[11px] font-semibold text-emerald-800">🤝 Red de vendedores / partners</div>
@@ -11361,6 +11406,7 @@ async function empSave(id) {
     usaCentrosCosto: $('#f-usacc')?.checked || false,
     usaProduccionIndustrial: $('#f-usapi')?.checked || false,
     catalogoManual: $('#f-catman')?.checked || false,
+    flujoAislado: $('#f-flujoais')?.checked || false,
   };
   if (state.user?.superAdmin) {
     data.vendedorId = $('#f-vend')?.value || null;
@@ -17765,9 +17811,32 @@ async function compVer(id) {
         </table>
         ${f.observaciones ? `<div class="mt-3 text-sm text-slate-600"><b>Observaciones:</b> ${esc(f.observaciones)}</div>` : ''}
         <div class="mt-3 text-xs text-slate-500">💡 Para que una compra <b>nutra el stock</b>, editala y cargale los productos (cantidad + IVA). Esos ítems ingresan al depósito.</div>`,
-      footer: `${(can('compras:update')||can('finanzas:update')) ? (f.pagada ? `<span class="text-xs text-slate-400 mr-auto">🔒 Con pago aplicado — no editable</span>` : `<button class="btn btn-primary" onclick="closeModal(); compEditar('${esc(f.id)}')">✏️ Editar</button>`) : ''}<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+      footer: `${((can('compras:update')||can('finanzas:update')) && (f.items||[]).some(i=>i.productoId)) ? `<button class="btn btn-ghost text-xs mr-auto" onclick="compCorregirDeposito('${esc(f.id)}')" title="Mover el stock de esta compra a otro depósito (no toca importes ni pagos)">📦 Corregir depósito</button>` : ''}${(can('compras:update')||can('finanzas:update')) ? (f.pagada ? `<span class="text-xs text-slate-400">🔒 Con pago aplicado — no editable</span>` : `<button class="btn btn-primary" onclick="closeModal(); compEditar('${esc(f.id)}')">✏️ Editar</button>`) : ''}<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
     });
   } catch (e) { toast(e.message,'error'); }
+}
+
+// Corrige SOLO el depósito de los artículos de una compra (sin reeditar importes/pagos).
+// Resuelve el caso "Sin depósito" cuando la factura ya tiene un pago (que bloquea la edición).
+async function compCorregirDeposito(id) {
+  if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
+  const deps = (state.cache.depositos||[]).filter(d => d.activo!==false && d.tipo!=='cerealera');
+  openModal2({ title:'📦 Corregir depósito de la compra', size:'max-w-md',
+    body:`<label class="label text-sm">Depósito destino de los artículos</label>
+      <select id="cdep-sel" class="input">
+        <option value="">— Sin depósito —</option>
+        ${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}${d.compartido?' (compartido)':''}</option>`).join('')}
+      </select>
+      <div class="text-[11px] text-slate-500 mt-2">Mueve el stock de esta compra al depósito elegido. No cambia importes, cuenta corriente ni pagos. Útil cuando la compra quedó en "Sin depósito".</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="compCorregirDepositoSave('${esc(id)}')">Guardar</button>` });
+}
+async function compCorregirDepositoSave(id) {
+  const depositoId = document.getElementById('cdep-sel')?.value || null;
+  try {
+    const r = await api('/api/facturas-compra/'+id+'/deposito', { method:'PATCH', body: JSON.stringify({ depositoId }) });
+    toast(`Depósito actualizado (${r.movimientos} artículo/s)`, 'success');
+    delete state.cache.stockMap; closeModal2(); closeModal();
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 /* =========================================================

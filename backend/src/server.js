@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.339.0';
+const AGROCORE_VERSION = '2.342.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -736,6 +736,7 @@ async function serializeUser(u) {
     usaCentrosCosto: co.usaCentrosCosto === true,
     usaProduccionIndustrial: co.usaProduccionIndustrial === true,
     catalogoManual: co.catalogoManual === true,
+    flujoAislado: co.flujoAislado === true,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1836,6 +1837,7 @@ const empresaSchema = z.object({
   usaCentrosCosto: z.boolean().optional(),
   usaProduccionIndustrial: z.boolean().optional(),
   catalogoManual: z.boolean().optional(),
+  flujoAislado: z.boolean().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
   vendedorId: z.string().nullable().optional(),
@@ -2674,6 +2676,9 @@ async function _copiarArbol(model, sourceCompanyId, targetCompanyId) {
 }
 
 async function _autoSembrarCatalogosDesdeTemplate(newCompanyId) {
+  // Empresa con "Catalogo propio": no se le siembra nada (arranca vacia).
+  const _co = await prisma.company.findUnique({ where: { id: newCompanyId }, select: { catalogoManual: true } }).catch(() => null);
+  if (_co?.catalogoManual) return 0;
   const templateId = await _findTemplateCompany(newCompanyId);
   if (!templateId) return 0;
   const cat = await _copiarCatalogos(templateId, newCompanyId);
@@ -2720,9 +2725,18 @@ app.post('/api/admin/copiar-catalogos', authMiddleware, async (req, res, next) =
     } else {
       targetIds = d.targetCompanyIds.filter(id => id !== d.sourceCompanyId);
     }
+    // Las empresas con "Catalogo propio" (catalogoManual) NO reciben catalogos copiados:
+    // arrancan con su propio catalogo (ej: fabrica separada, sin cajas ni productos ajenos).
+    let omitidasCatalogoPropio = [];
+    if (targetIds.length) {
+      const propias = await prisma.company.findMany({ where: { id: { in: targetIds }, catalogoManual: true }, select: { id: true } });
+      const setPropias = new Set(propias.map(c => c.id));
+      omitidasCatalogoPropio = [...setPropias];
+      targetIds = targetIds.filter(id => !setPropias.has(id));
+    }
     if (!targetIds.length) {
-      return res.json({ ok: true, resultados: [], total: 0,
-        mensaje: 'No hay empresas destino para procesar.' });
+      return res.json({ ok: true, resultados: [], total: 0, omitidasCatalogoPropio,
+        mensaje: omitidasCatalogoPropio.length ? 'Las empresas con Catalogo propio no reciben catalogos copiados.' : 'No hay empresas destino para procesar.' });
     }
     const resultados = [];
     let total = 0, totalCatArt = 0, totalCatGasto = 0;
@@ -2737,7 +2751,7 @@ app.post('/api/admin/copiar-catalogos', authMiddleware, async (req, res, next) =
         resultados.push({ companyId: tid, copiados: 0, categoriasArt: 0, categoriasGasto: 0, error: String(e.message || e) });
       }
     }
-    res.json({ ok: true, resultados, total, totalCategoriasArt: totalCatArt, totalCategoriasGasto: totalCatGasto, excludeTipos: exclude, incluir: inc });
+    res.json({ ok: true, resultados, total, totalCategoriasArt: totalCatArt, totalCategoriasGasto: totalCatGasto, excludeTipos: exclude, incluir: inc, omitidasCatalogoPropio });
   } catch (e) { next(e); }
 });
 
@@ -4958,6 +4972,7 @@ app.post('/api/sociedades/:id/campos', requireCompany, requirePermission('produc
     if (!cur) return res.status(404).json({ ok: false, error: 'Sociedad no encontrada' });
     const d = z.object({
       campoId: z.string().nullable().optional(),
+      loteId: z.string().nullable().optional(),
       companyId: z.string().nullable().optional(),
       externoNombre: z.string().nullable().optional(),
       externoTitular: z.string().nullable().optional(),
@@ -4969,13 +4984,22 @@ app.post('/api/sociedades/:id/campos', requireCompany, requirePermission('produc
       observaciones: z.string().nullable().optional(),
     }).parse(req.body);
     let esExterno = false;
+    let loteNombre = null;
     // Campo real: verificar que sea de una empresa del grupo.
     if (d.campoId) {
       const grupo = _grupoCompanyIds(req);
-      const campo = await prisma.campo.findFirst({ where: { id: d.campoId, companyId: { in: grupo } } });
+      const campo = await prisma.campo.findFirst({ where: { id: d.campoId, companyId: { in: grupo } }, include: { lotes: { select: { id: true, nombre: true, hectareas: true } } } });
       if (!campo) return res.status(400).json({ ok: false, error: 'Campo no válido' });
       d.companyId = campo.companyId;
-      if (!d.hectareas) d.hectareas = Number(campo.hectareas || 0);
+      // Lote especifico (opcional): valida que pertenezca al campo y toma sus ha si no se indican.
+      if (d.loteId) {
+        const lote = (campo.lotes || []).find(l => l.id === d.loteId);
+        if (!lote) return res.status(400).json({ ok: false, error: 'Lote no válido para ese campo' });
+        loteNombre = lote.nombre;
+        if (!d.hectareas) d.hectareas = Number(lote.hectareas || 0);
+      } else if (!d.hectareas) {
+        d.hectareas = Number(campo.hectareas || 0);
+      }
     } else if (d.externoNombre) {
       // Campo EXTERNO de un socio: creamos un Campo "sombra" bajo la empresa dueña de la
       // sociedad (ownerCompany) con un lote único, para poder cargarle labores/insumos y
@@ -4993,7 +5017,8 @@ app.post('/api/sociedades/:id/campos', requireCompany, requirePermission('produc
       return res.status(400).json({ ok: false, error: 'Elegí un campo o cargá un campo externo (nombre)' });
     }
     const link = await prisma.sociedadCampo.create({ data: {
-      sociedadId: cur.id, campoId: d.campoId || null, companyId: d.companyId || null, esExterno,
+      sociedadId: cur.id, campoId: d.campoId || null, loteId: d.loteId || null, loteNombre: loteNombre,
+      companyId: d.companyId || null, esExterno,
       externoNombre: d.externoNombre || null, externoTitular: d.externoTitular || null,
       externoCuit: d.externoCuit || null, externoLocalidad: d.externoLocalidad || null,
       hectareas: d.hectareas || 0, cultivo: d.cultivo || null, aportante: d.aportante || null,
@@ -5356,7 +5381,9 @@ async function _sociedadCompute(req, cur, viewMoneda) {
       }
       const campo = await prisma.campo.findFirst({ where: { id: link.campoId }, include: { lotes: { select: { id: true } } } });
       if (!campo) { filas.push({ linkId: link.id, externo: false, nombre: '(campo eliminado)', empresa: _companyName[link.companyId] || '', hectareas: Number(link.hectareas || 0), cultivos: [], kgCosechados: 0, viajes: 0, labores: 0, insumos: 0, costoEstimado: 0, aportante: link.aportante || null }); continue; }
-      const loteIds = campo.lotes.map(l => l.id);
+      // Si el aporte es por un lote específico, sólo consolidamos ESE lote (evita mezclar
+      // campañas/cultivos de los otros lotes del mismo campo).
+      const loteIds = link.loteId ? [link.loteId] : campo.lotes.map(l => l.id);
       let campanas = loteIds.length ? await prisma.campana.findMany({ where: { loteId: { in: loteIds } }, select: { id: true, cultivo: true, ciclo: true, estado: true } }) : [];
       // No consolidamos campañas CERRADAS (ej. la 25/26 que ya se cerró) — sólo las vigentes de la sociedad.
       campanas = campanas.filter(c => String(c.estado || '') !== 'cerrada');
@@ -5378,6 +5405,7 @@ async function _sociedadCompute(req, cur, viewMoneda) {
       const filaCult = cultivos.length ? cultivos : (link.cultivo ? [link.cultivo] : []);
       _sumaCultivo(filaCult, kgCosechados);
       filas.push({ linkId: link.id, externo: !!link.esExterno, nombre: campo.nombre, campoId: campo.id,
+        loteNombre: link.loteNombre || null,
         empresa: link.esExterno ? null : (_companyName[link.companyId] || ''),
         titular: link.esExterno ? (link.externoTitular || campo.propietario || null) : (campo.propietario || null),
         hectareas: Number(link.hectareas || campo.hectareas || 0),
@@ -5537,7 +5565,8 @@ app.get('/api/sociedades-campos-grupo', requireCompany, requirePermission('produ
     const grupo = _grupoCompanyIds(req);
     const campos = await prisma.campo.findMany({
       where: { companyId: { in: grupo }, activo: true },
-      select: { id: true, nombre: true, companyId: true, hectareas: true, propietario: true, localidad: true },
+      select: { id: true, nombre: true, companyId: true, hectareas: true, propietario: true, localidad: true,
+        lotes: { where: { activo: true }, select: { id: true, nombre: true, hectareas: true }, orderBy: { nombre: 'asc' } } },
       orderBy: { nombre: 'asc' },
     });
     const cn = {}; for (const uc of (req.user?.userCompanies || [])) cn[uc.companyId] = uc.company?.name || '';
@@ -6744,6 +6773,27 @@ app.delete('/api/facturas-compra/:id', requireCompany, requirePermission('compra
   } catch (e) { next(e); }
 });
 
+// Corregir el DEPÓSITO de los artículos de una factura de compra SIN reeditarla.
+// Útil cuando se cargó "Sin depósito" y ya tiene un pago aplicado (que bloquea la
+// edición total). Solo mueve el stock de los movimientos CPR-<id> al depósito elegido;
+// no toca importes, cuenta corriente ni pagos.
+app.patch('/api/facturas-compra/:id/deposito', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const d = z.object({ depositoId: z.string().nullable().optional() }).parse(req.body || {});
+    const existing = await prisma.facturaCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId }, select: { id: true } });
+    if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    // Validar que el depósito (si vino) sea de la empresa o un compartido.
+    if (d.depositoId) {
+      const dep = await prisma.deposito.findFirst({ where: { id: d.depositoId, OR: [{ companyId: req.companyId }, { companyId: null, compartido: true }] }, select: { id: true } });
+      if (!dep) return res.status(400).json({ ok: false, error: 'Depósito no válido' });
+    }
+    const ref = `CPR-${req.params.id}`;
+    const r = await prisma.movimiento.updateMany({ where: { companyId: req.companyId, referencia: ref }, data: { depositoId: d.depositoId || null } });
+    if (!r.count) return res.status(400).json({ ok: false, error: 'Esta factura no tiene artículos de stock para reubicar (puede ser un gasto/servicio sin productos).' });
+    res.json({ ok: true, movimientos: r.count });
+  } catch (e) { next(e); }
+});
+
 // ============================================================
 // REMITO DE COMPRA (recepción de mercadería) → Factura de proveedor
 // El remito suma stock al recibir; la factura, si se vincula, NO lo duplica.
@@ -7793,6 +7843,13 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
     if (!empresas.length) {
       return res.json({ ok: true, data: { porEmpresa: [], totales: emptyTotales() } });
     }
+    // Flujo aislado: si la empresa ACTIVA (header X-Company-Id) tiene flujoAislado,
+    // el consolidado muestra SOLO esa empresa (no ve el flujo de las demás).
+    // Las demás empresas sí la siguen viendo cuando ellas son la activa.
+    if (req.companyId) {
+      const _coAct = await prisma.company.findUnique({ where: { id: req.companyId }, select: { flujoAislado: true } }).catch(() => null);
+      if (_coAct?.flujoAislado) empresas = empresas.filter((e) => e.id === req.companyId);
+    }
     const companyIds = empresas.map((e) => e.id);
     const hoy = new Date();
     const hoy15 = new Date(hoy.getTime() + 15 * 24 * 60 * 60 * 1000);
@@ -7993,6 +8050,11 @@ app.get('/api/resumen-multiempresa/stock', async (req, res, next) => {
       }));
     }
     if (!empresas.length) return res.json({ ok: true, data: { filas: [], empresas: [], depositos: [], productos: [] } });
+    // Flujo aislado: si la empresa activa lo tiene, el stock consolidado también muestra solo esa empresa.
+    if (req.companyId) {
+      const _coAct = await prisma.company.findUnique({ where: { id: req.companyId }, select: { flujoAislado: true } }).catch(() => null);
+      if (_coAct?.flujoAislado) empresas = empresas.filter((e) => e.id === req.companyId);
+    }
     const companyIds = empresas.map((e) => e.id);
 
     // Productos: cada empresa tiene los suyos. Los traemos todos.
@@ -10826,6 +10888,24 @@ app.delete('/api/partes-molienda/:id', requireCompany, requirePermission('stock:
 });
 
 // Guardar el % de ganancia de un producto (y devolver el precio sugerido).
+// Limpiar catálogo autogenerado (solo empresas con "Catálogo propio"): desactiva
+// los productos que NO tienen movimientos y NO están marcados como materia prima /
+// producto final. No borra (reversible reactivando el producto).
+app.post('/api/productos/limpiar-autogenerados', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const co = await prisma.company.findUnique({ where: { id: req.companyId }, select: { catalogoManual: true } });
+    if (!co?.catalogoManual) return res.status(400).json({ ok: false, error: 'Activá primero "Catálogo propio" en Configuración → Empresa.' });
+    const candidatos = await prisma.producto.findMany({
+      where: { companyId: req.companyId, activo: true, rolFabrica: null, movimientos: { none: {} } },
+      select: { id: true },
+    });
+    const ids = candidatos.map(c => c.id);
+    if (!ids.length) return res.json({ ok: true, data: { desactivados: 0 } });
+    await prisma.producto.updateMany({ where: { id: { in: ids } }, data: { activo: false } });
+    res.json({ ok: true, data: { desactivados: ids.length } });
+  } catch (e) { next(e); }
+});
+
 app.patch('/api/productos/:id/venta', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
   try {
     const prod = await prisma.producto.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
@@ -15182,7 +15262,7 @@ const _AYUDA_KB = [
     titulo:'Sociedades / UTE (negocio en participación entre empresas)',
     pasos:[
       'Entrá a Producción → Sociedades / UTE y tocá "+ Nueva sociedad". Ponele nombre (ej. SPL 2026/27), la campaña/ciclo y, si querés, cargá los socios y qué aporta cada uno (campos, maquinaria, líquidos, empleados).',
-      'Abrí la sociedad y con "+ Agregar campo" sumale los campos: podés elegir campos de CUALQUIERA de tus empresas (Del Pistrin, DLL, Gerardo…) o cargar un campo EXTERNO de un socio (con su titular/CUIT). No cambia la facturación: las cartas de porte siguen saliendo del titular real del campo. A los campos externos el sistema les crea un campo interno automáticamente, así también se les pueden cargar labores e insumos.',
+      'Abrí la sociedad y con "+ Agregar campo" sumale los campos: podés elegir campos de CUALQUIERA de tus empresas (Del Pistrin, DLL, Gerardo…) o cargar un campo EXTERNO de un socio (con su titular/CUIT). Si el campo tiene varios lotes, podés elegir un LOTE puntual (o dejar "Campo completo"): al elegir el lote toma sus hectáreas y el tablero consolida solo las campañas de ese lote, así no se mezclan los cultivos de los otros lotes. No cambia la facturación: las cartas de porte siguen saliendo del titular real del campo. A los campos externos el sistema les crea un campo interno automáticamente, así también se les pueden cargar labores e insumos.',
       'Cargá labores e insumos SIN cambiar de empresa: con el botón "➕ Cargar labor / insumo" elegís cualquier campo de la sociedad (de la empresa que sea, o externo) y lo cargás desde ahí. El dato queda guardado en la empresa dueña del campo (se ve también en su producción) y no se duplica. En insumos podés elegir descontar del stock de esa empresa o registrar solo el costo, y la MONEDA de cada movimiento (US$ o $).',
       'Ver detalle / editar / eliminar: tocá el campo (o el botón 📋) y ves la lista de labores e insumos cargados uno por uno, con ✏️ editar y 🗑️ eliminar cada uno (ya no hace falta borrar el campo). Arriba del tablero (y en la liquidación) hay un selector "Ver en US$ / $" que convierte todo a la moneda elegida con la cotización del día.',
       'El tablero consolida por campo: hectáreas, cultivo, kg cosechados (de las cartas de porte) y costo estimado (labores + insumos), con totales, cruzando todas tus empresas. Ojo: sólo suma las campañas del CICLO de la sociedad y que NO estén cerradas (por eso conviene cargarle el ciclo, ej. 26/27; así no se cuela una campaña vieja del campo).',

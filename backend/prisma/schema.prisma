@@ -38,6 +38,7 @@ model Company {
   usaCentrosCosto Boolean   @default(false) // habilita el reparto por centros de costo (gestión analítica). Opt-in por empresa.
   usaProduccionIndustrial Boolean @default(false) // habilita el módulo Molienda / Fábrica (transformación de materias primas). Opt-in por empresa.
   catalogoManual     Boolean @default(false) // true = la empresa NO autogenera productos (insumos/animales/cereales); arranca con catálogo propio/vacío. Para fábricas separadas.
+  flujoAislado       Boolean @default(false) // true = cuando esta empresa es la activa, el resumen multi-empresa muestra SOLO esta empresa (no ve el flujo de las demás). Las demás empresas sí la siguen viendo.
   activo          Boolean   @default(true)
   // ---- Red de vendedores / partners (vista del dueño) ----
   vendedorId      String?   // vendedor/partner que trajo a esta empresa (null = venta directa)
@@ -391,6 +392,8 @@ model SociedadCampo {
   id              String   @id @default(cuid())
   sociedadId      String
   campoId         String?                   // Campo real (de alguna empresa del grupo)
+  loteId          String?                   // Lote especifico del campo (null = campo completo)
+  loteNombre      String?                   // Nombre del lote (cache para listados, inc. cross-empresa)
   companyId       String?                   // empresa dueña del campo real (de dónde salen las CP)
   // Campo EXTERNO de un socio (no está en ninguna de nuestras empresas):
   externoNombre   String?
