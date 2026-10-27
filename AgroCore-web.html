@@ -1113,6 +1113,7 @@ const MODULES = [
   { id:'remitosInternos',label:'Remitos internos',    icon:'📤', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'cerealeras',    label:'Depósitos y cerealeras',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'molienda',      label:'Molienda / Fábrica',   icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA Y TRANSPORTE — fletes (cereal o hacienda) =====
@@ -3048,6 +3049,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'26/10/2026',
+      titulo:'🏭 v2.331.0 — Molienda / Fábrica: procesá soja y el stock se arma solo (con costo)',
+      desc:'Nuevo módulo en <b>Stock y depósitos → Molienda / Fábrica</b> para plantas procesadoras (ej. molienda de soja). Definís una <b>fórmula</b> con el grano de origen y sus coproductos por porcentaje (ej. Expeller 88%, Aceite 10%, Merma 2%). Al cargar un <b>parte de molienda</b> ingresás solo los kilos procesados y el sistema calcula y contabiliza solo: descuenta la soja del silo e ingresa cada coproducto a su depósito. Además calcula el <b>costo de fabricación por kilo</b> (costo del grano + costos de producción, repartidos entre los coproductos) y, cargando un <b>% de ganancia</b>, te sugiere el <b>precio de venta</b>. El parte se puede anular (revierte el stock). TRAE MIGRACION.' },
     { tag:'Arreglo', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'26/10/2026',
       titulo:'🎯 v2.330.0 — Reporte por centro de costo: ya abre el detalle al tocar el centro',
       desc:'En el <b>Reporte por centro de costo</b>, al tocar el nombre de un centro no se abría el <b>detalle</b> de los movimientos (aunque el <b>Excel</b> sí lo traía). Era un problema con el identificador del centro que rompía el botón. Ahora el detalle abre normal: fecha, origen, forma de reparto y monto de cada movimiento imputado.' },
@@ -29099,6 +29103,236 @@ function catGastoTreeOptions(selectedId, opts) {
   walk(opts.startPadreId !== undefined ? opts.startPadreId : null, 0);
   return html;
 }
+/* ============ MOLIENDA / FÁBRICA (v2.331) ============ */
+const _molFmt = n => '$ ' + (Number(n)||0).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const _molKg  = n => (Number(n)||0).toLocaleString('es-AR',{maximumFractionDigits:2}) + ' kg';
+pages.molienda = async function() {
+  setHeader('Molienda / Fábrica', 'Procesás un grano (ej. soja) y el sistema calcula y contabiliza solo los coproductos (expeller, aceite, merma), con el costo de fabricación por kilo.');
+  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('molienda','Molienda / Fábrica'); return; }
+  $('#page-body').innerHTML = `<div class="text-center text-slate-400 py-10">Cargando…</div>`;
+  try {
+    const [f, p, prod, dep] = await Promise.all([
+      api('/api/formulas-molienda'), api('/api/partes-molienda'),
+      state.cache.productos ? {data:state.cache.productos} : api('/api/productos'),
+      state.cache.depositos ? {data:state.cache.depositos} : api('/api/depositos'),
+    ]);
+    state._molFormulas = f.data || [];
+    state._molPartes = p.data || [];
+    state.cache.productos = prod.data || state.cache.productos || [];
+    state.cache.depositos = dep.data || state.cache.depositos || [];
+    if (state.usaCentrosCosto && !state.cache.centrosCosto) { try { state.cache.centrosCosto = (await api('/api/centros-costo')).data || []; } catch { state.cache.centrosCosto = []; } }
+    molRender();
+  } catch (e) { $('#page-body').innerHTML = `<div class="kpi text-red-600">Error: ${esc(e.message)}</div>`; }
+};
+function molRender() {
+  const tab = state._molTab || 'partes';
+  const T = (id,txt)=>`<button class="btn ${tab===id?'btn-primary':'btn-ghost'} text-sm" onclick="state._molTab='${id}';molRender()">${txt}</button>`;
+  $('#page-body').innerHTML = `
+    <div class="mb-3 flex items-center gap-2 flex-wrap">
+      ${T('partes','🏭 Partes de molienda')} ${T('formulas','⚙️ Fórmulas')} ${T('productos','🏷️ Costo y precio')}
+    </div>
+    <div id="mol-body"></div>`;
+  if (tab==='partes') molTabPartes(); else if (tab==='formulas') molTabFormulas(); else molTabProductos();
+}
+/* ---- Partes de molienda ---- */
+function molTabPartes() {
+  const fs = state._molFormulas||[];
+  const partes = state._molPartes||[];
+  const filas = partes.map(p => {
+    const fn = p.formula?.nombre || (fs.find(x=>x.id===p.formulaId)?.nombre) || '—';
+    const res = Array.isArray(p.resultados)?p.resultados:[];
+    const det = res.filter(r=>r.kg>0).map(r=>`${esc(r.nombre||'')}: ${_molKg(r.kg)}`).join(' · ');
+    return `<tr class="table-row">
+      <td class="text-xs">${fmtDate(p.fecha)}</td>
+      <td>${esc(fn)}</td>
+      <td class="text-right">${_molKg(p.kgProcesados)}</td>
+      <td class="text-right">${_molFmt(p.costoTotal)}</td>
+      <td class="text-xs text-slate-500">${det||'—'}</td>
+      <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="molParteAnular('${p.id}')">Anular</button>`:''}</td>
+    </tr>`;
+  }).join('');
+  $('#mol-body').innerHTML = `
+    <div class="mb-3">${can('stock:create')&&fs.length?`<button class="btn btn-primary" onclick="molParteForm()">+ Nuevo parte de molienda</button>`:(!fs.length?`<div class="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">Primero creá una <b>fórmula</b> (pestaña ⚙️ Fórmulas) para definir el grano de origen y sus coproductos con los porcentajes.</div>`:'')}</div>
+    <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Fecha</th><th>Fórmula</th><th class="text-right">Procesado</th><th class="text-right">Costo total</th><th>Resultado</th><th></th></tr></thead>
+      <tbody>${filas || `<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin partes de molienda todavía.</td></tr>`}</tbody>
+    </table></div>`;
+}
+function molParteForm() {
+  const fs = (state._molFormulas||[]).filter(f=>f.activo!==false);
+  if (!fs.length) return toast('Creá una fórmula primero','warn');
+  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
+  const ccs = (state.cache.centrosCosto||[]).filter(c=>c.activo!==false);
+  const optF = fs.map(f=>`<option value="${esc(f.id)}">${esc(f.nombre)} (origen: ${esc(f.origenNombre||'')})</option>`).join('');
+  const optD = `<option value="">— Silo / general —</option>`+deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('');
+  const optCC = state.usaCentrosCosto ? `<div><label class="label">Centro de costo</label><select id="mol-cc" class="input"><option value="">—</option>${ccs.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('')}</select></div>` : '';
+  openModal({
+    title:'🏭 Nuevo parte de molienda', size:'max-w-2xl',
+    body:`
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label class="label">Fórmula *</label><select id="mol-formula" class="input" onchange="molPrefillCosto()">${optF}</select></div>
+        <div><label class="label">Fecha *</label><input id="mol-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">Kg procesados *</label><input id="mol-kg" type="number" step="0.01" class="input" placeholder="30000" oninput="molPreview()"/></div>
+        <div><label class="label">Silo de origen</label><select id="mol-dep" class="input">${optD}</select></div>
+        <div><label class="label">Costo del grano ($/kg)</label><input id="mol-costog" type="number" step="0.0001" class="input" placeholder="0" oninput="molPreview()"/></div>
+        <div><label class="label">Costos de producción ($ del lote)</label><input id="mol-costop" type="number" step="0.01" class="input" placeholder="energía, mano de obra…" oninput="molPreview()"/></div>
+        ${optCC}
+        <div class="md:col-span-2"><label class="label">Observaciones</label><input id="mol-obs" class="input" placeholder="opcional"/></div>
+      </div>
+      <div id="mol-preview" class="mt-3"></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="molParteSave()">💾 Registrar molienda</button>`
+  });
+  molPrefillCosto(); molPreview();
+}
+function molPrefillCosto() {
+  const f = (state._molFormulas||[]).find(x=>x.id===$('#mol-formula')?.value);
+  if (!f) return;
+  const prod = (state.cache.productos||[]).find(p=>p.id===f.origenProductoId);
+  const el=$('#mol-costog'); if (el && !el.value && prod?.ultimoCostoCompra) el.value = prod.ultimoCostoCompra;
+  molPreview();
+}
+let _molPrevTO=null;
+function molPreview() {
+  clearTimeout(_molPrevTO);
+  _molPrevTO = setTimeout(async () => {
+    const box=$('#mol-preview'); if(!box) return;
+    const formulaId=$('#mol-formula')?.value, kg=Number($('#mol-kg')?.value||0);
+    if (!formulaId || !(kg>0)) { box.innerHTML=`<div class="text-xs text-slate-400">Ingresá los kilos para ver el resultado.</div>`; return; }
+    try {
+      const r = await api('/api/molienda/calcular', { method:'POST', body: JSON.stringify({
+        formulaId, kgProcesados:kg, costoOrigenUnit:Number($('#mol-costog')?.value||0), costoProduccion:Number($('#mol-costop')?.value||0) }) });
+      const rows = (r.resultados||[]).map(x=>`<tr><td>${esc(x.nombre||'')}${x.esMerma?' <span class="text-[10px] text-slate-400">(merma)</span>':''}</td>
+        <td class="text-right">${x.rendimientoPct}%</td><td class="text-right font-medium">${_molKg(x.kg)}</td>
+        <td class="text-right">${x.esMerma?'—':_molFmt(x.costoKg)}</td><td class="text-right">${x.esMerma?'—':_molFmt(x.costoTotal)}</td></tr>`).join('');
+      box.innerHTML = `<div class="kpi"><div class="text-xs text-slate-500 mb-1">Resultado (costo total del lote: <b>${_molFmt(r.costoTotal)}</b>)</div>
+        <table class="table w-full text-sm"><thead><tr><th>Coproducto</th><th class="text-right">Rend.</th><th class="text-right">Cantidad</th><th class="text-right">Costo/kg</th><th class="text-right">Costo</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    } catch(e){ box.innerHTML=`<div class="text-xs text-red-600">${esc(e.message)}</div>`; }
+  }, 250);
+}
+async function molParteSave() {
+  const body = {
+    formulaId:$('#mol-formula')?.value, fecha: $('#mol-fecha')?.value ? new Date($('#mol-fecha').value+'T12:00:00').toISOString() : undefined,
+    kgProcesados:Number($('#mol-kg')?.value||0), depositoOrigenId:$('#mol-dep')?.value||null,
+    costoOrigenUnit:Number($('#mol-costog')?.value||0), costoProduccion:Number($('#mol-costop')?.value||0),
+    centroCostoId:$('#mol-cc')?.value||null, observaciones:$('#mol-obs')?.value||null,
+  };
+  if (!body.formulaId || !(body.kgProcesados>0)) return toast('Elegí la fórmula y los kilos procesados','warn');
+  try { await api('/api/partes-molienda',{method:'POST',body:JSON.stringify(body)});
+    toast('Molienda registrada: stock actualizado','success'); closeModal();
+    delete state.cache.stock; state._molPartes=(await api('/api/partes-molienda')).data||[];
+    state.cache.productos=(await api('/api/productos')).data||state.cache.productos; state._molTab='partes'; molRender();
+  } catch(e){ toast(e.message,'error'); }
+}
+async function molParteAnular(id) {
+  if (!confirm('¿Anular este parte de molienda? Se revierten los movimientos de stock (vuelve la soja y salen los coproductos).')) return;
+  try { await api('/api/partes-molienda/'+id,{method:'DELETE'}); delete state.cache.stock;
+    state._molPartes=(await api('/api/partes-molienda')).data||[]; toast('Parte anulado','success'); molRender();
+  } catch(e){ toast(e.message,'error'); }
+}
+/* ---- Fórmulas ---- */
+function molTabFormulas() {
+  const fs = state._molFormulas||[];
+  const filas = fs.map(f=>{
+    const items=(f.items||[]).map(i=>`${esc(i.productoNombre||'')} ${i.rendimientoPct}%${i.esMerma?' (merma)':''}`).join(' · ');
+    const suma=(f.items||[]).reduce((a,i)=>a+(Number(i.rendimientoPct)||0),0);
+    return `<tr class="table-row"><td>${esc(f.nombre)} ${f.activo===false?'<span class="text-[10px] text-slate-400">(inactiva)</span>':''}</td>
+      <td class="text-xs">${esc(f.origenNombre||'')}</td><td class="text-xs text-slate-500">${items}</td>
+      <td class="text-right ${Math.abs(suma-100)<0.01?'text-emerald-700':'text-amber-600'}">${suma}%</td>
+      <td class="text-right">${can('stock:update')?`<button class="btn btn-ghost btn-xs" onclick="molFormulaForm('${f.id}')">Editar</button>`:''}${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="molFormulaDel('${f.id}')">🗑️</button>`:''}</td></tr>`;
+  }).join('');
+  $('#mol-body').innerHTML = `
+    <div class="mb-3">${can('stock:create')?`<button class="btn btn-primary" onclick="molFormulaForm(null)">+ Nueva fórmula</button>`:''}
+      <span class="text-xs text-slate-500 ml-2">La fórmula define el grano de origen y los coproductos con su % de rendimiento. Los % deben sumar 100%.</span></div>
+    <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Fórmula</th><th>Origen</th><th>Coproductos</th><th class="text-right">Suma</th><th></th></tr></thead>
+      <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin fórmulas. Creá la primera.</td></tr>`}</tbody>
+    </table></div>`;
+}
+function molFormulaForm(id) {
+  const f = id ? (state._molFormulas||[]).find(x=>x.id===id) : null;
+  const prods = (state.cache.productos||[]).slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  const optP = (sel)=>prods.map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}</option>`).join('');
+  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
+  const optD = (sel)=>`<option value="">— Depósito —</option>`+deps.map(d=>`<option value="${esc(d.id)}" ${sel===d.id?'selected':''}>${esc(d.nombre)}</option>`).join('');
+  state._molEditItems = f ? (f.items||[]).map(i=>({...i})) : [{productoId:'',rendimientoPct:'',coefCosto:'',depositoDestinoId:'',esMerma:false}];
+  window._molOptP=optP; window._molOptD=optD;
+  openModal({
+    title: (id?'Editar':'Nueva')+' fórmula de molienda', size:'max-w-2xl',
+    body:`
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div><label class="label">Nombre *</label><input id="mf-nombre" class="input" value="${esc(f?.nombre||'')}" placeholder="Molienda de soja"/></div>
+        <div><label class="label">Grano de origen *</label><select id="mf-origen" class="input">${optP(f?.origenProductoId)}</select></div>
+      </div>
+      <div class="label mb-1">Coproductos (deben sumar 100%)</div>
+      <div id="mf-items"></div>
+      <button class="btn btn-ghost btn-sm mt-2" onclick="molItemAdd()">+ Agregar coproducto</button>
+      <div class="text-[11px] text-slate-500 mt-2">El <b>coef. de costo</b> es opcional: por defecto el costo se reparte igual que el rendimiento. La <b>merma</b> no lleva costo.</div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="molFormulaSave('${id||''}')">💾 Guardar</button>`
+  });
+  molItemsRender();
+}
+function molItemsRender() {
+  const box=$('#mf-items'); if(!box) return;
+  box.innerHTML = (state._molEditItems||[]).map((it,idx)=>`
+    <div class="grid grid-cols-12 gap-2 mb-2 items-center">
+      <select class="input col-span-4 text-sm" onchange="state._molEditItems[${idx}].productoId=this.value">${window._molOptP(it.productoId)}</select>
+      <input type="number" step="0.01" class="input col-span-2 text-sm" placeholder="%" value="${it.rendimientoPct??''}" oninput="state._molEditItems[${idx}].rendimientoPct=this.value;molItemsSuma()"/>
+      <input type="number" step="0.01" class="input col-span-2 text-sm" placeholder="coef" value="${it.coefCosto??''}" oninput="state._molEditItems[${idx}].coefCosto=this.value"/>
+      <select class="input col-span-2 text-sm" onchange="state._molEditItems[${idx}].depositoDestinoId=this.value">${window._molOptD(it.depositoDestinoId)}</select>
+      <label class="col-span-1 text-[11px] flex items-center gap-1"><input type="checkbox" ${it.esMerma?'checked':''} onchange="state._molEditItems[${idx}].esMerma=this.checked"/>merma</label>
+      <button class="col-span-1 text-red-500 text-sm" onclick="state._molEditItems.splice(${idx},1);molItemsRender();molItemsSuma()">✕</button>
+    </div>`).join('') + `<div id="mf-suma" class="text-xs mt-1"></div>`;
+  molItemsSuma();
+}
+function molItemAdd(){ (state._molEditItems=state._molEditItems||[]).push({productoId:'',rendimientoPct:'',coefCosto:'',depositoDestinoId:'',esMerma:false}); molItemsRender(); }
+function molItemsSuma(){ const s=(state._molEditItems||[]).reduce((a,i)=>a+(Number(i.rendimientoPct)||0),0); const el=$('#mf-suma'); if(el) el.innerHTML=`Suma de rendimientos: <b class="${Math.abs(s-100)<0.01?'text-emerald-700':'text-amber-600'}">${s}%</b>${Math.abs(s-100)<0.01?'':' (debería ser 100%)'}`; }
+async function molFormulaSave(id) {
+  const nombre=$('#mf-nombre')?.value.trim(), origen=$('#mf-origen')?.value;
+  const items=(state._molEditItems||[]).filter(i=>i.productoId&&Number(i.rendimientoPct)>0);
+  if (!nombre||!origen) return toast('Nombre y grano de origen requeridos','warn');
+  if (!items.length) return toast('Cargá al menos un coproducto','warn');
+  const body={ nombre, origenProductoId:origen, items:items.map(i=>({ productoId:i.productoId, rendimientoPct:Number(i.rendimientoPct), coefCosto:(i.coefCosto===''||i.coefCosto==null)?null:Number(i.coefCosto), depositoDestinoId:i.depositoDestinoId||null, esMerma:!!i.esMerma })) };
+  try { if (id) await api('/api/formulas-molienda/'+id,{method:'PUT',body:JSON.stringify(body)}); else await api('/api/formulas-molienda',{method:'POST',body:JSON.stringify(body)});
+    toast('Fórmula guardada','success'); closeModal(); state._molFormulas=(await api('/api/formulas-molienda')).data||[]; molRender();
+  } catch(e){ toast(e.message,'error'); }
+}
+async function molFormulaDel(id) {
+  if (!confirm('¿Eliminar esta fórmula?')) return;
+  try { await api('/api/formulas-molienda/'+id,{method:'DELETE'}); state._molFormulas=(await api('/api/formulas-molienda')).data||[]; toast('Eliminada','success'); molRender(); }
+  catch(e){ toast(e.message,'error'); }
+}
+/* ---- Costo y precio (coproductos) ---- */
+function molTabProductos() {
+  // Productos que son coproductos de alguna fórmula (tienen costo de fabricación o aparecen como item).
+  const ids = new Set(); (state._molFormulas||[]).forEach(f=>(f.items||[]).forEach(i=>{ if(!i.esMerma) ids.add(i.productoId); }));
+  const prods = (state.cache.productos||[]).filter(p=>ids.has(p.id) || p.costoFabricacionKg!=null);
+  const filas = prods.map(p=>{
+    const costo=Number(p.costoFabricacionKg)||0;
+    const sug = costo>0 && p.margenVentaPct!=null ? costo*(1+Number(p.margenVentaPct)/100) : null;
+    return `<tr class="table-row"><td>${esc(p.nombre)}</td>
+      <td class="text-right">${costo>0?_molFmt(costo):'—'}</td>
+      <td class="text-right"><input type="number" step="0.01" class="input text-sm text-right" style="width:90px" id="mp-${p.id}" value="${p.margenVentaPct??''}" placeholder="%"/></td>
+      <td class="text-right font-medium text-emerald-700" id="mps-${p.id}">${sug!=null?_molFmt(sug):'—'}</td>
+      <td class="text-right">${can('stock:update')?`<button class="btn btn-ghost btn-xs" onclick="molGuardarMargen('${p.id}')">Guardar</button>`:''}</td></tr>`;
+  }).join('');
+  $('#mol-body').innerHTML = `
+    <div class="text-xs text-slate-500 mb-2">El <b>costo de fabricación/kg</b> lo calcula cada parte de molienda. Cargá el <b>% de ganancia</b> y el sistema te sugiere el precio de venta. "Guardar" también actualiza el precio de referencia del artículo.</div>
+    <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Coproducto</th><th class="text-right">Costo fabricación/kg</th><th class="text-right">% ganancia</th><th class="text-right">Precio sugerido/kg</th><th></th></tr></thead>
+      <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Todavía no hay coproductos con costo. Registrá un parte de molienda.</td></tr>`}</tbody>
+    </table></div>`;
+}
+async function molGuardarMargen(id) {
+  const margen = $('#mp-'+id)?.value;
+  try { const r = await api('/api/productos/'+id+'/venta',{method:'PATCH',body:JSON.stringify({ margenVentaPct: margen===''?null:Number(margen), aplicarPrecio:true })});
+    const el=$('#mps-'+id); if(el) el.textContent = r.precioSugerido!=null?_molFmt(r.precioSugerido):'—';
+    const prod=(state.cache.productos||[]).find(p=>p.id===id); if(prod){ prod.margenVentaPct=margen===''?null:Number(margen); if(r.data) prod.precioReferencia=r.data.precioReferencia; }
+    toast('Guardado','success');
+  } catch(e){ toast(e.message,'error'); }
+}
+
 /* ============ CENTROS DE COSTO (opt-in por empresa) ============ */
 pages.centrosCosto = async function() {
   setHeader('Centros de costo', 'Dimensión propia para imputar y repartir gastos e inversiones (por campo, unidad de negocio, proyecto, etc.). Se activa por empresa.');

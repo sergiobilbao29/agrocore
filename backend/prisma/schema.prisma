@@ -124,6 +124,8 @@ model Company {
   suscripciones      Suscripcion[]
   ordenesTrabajo     OrdenTrabajo[]
   remitosCompra   RemitoCompra[]
+  formulasMolienda   FormulaMolienda[]
+  partesMolienda     ParteMolienda[]
 
 }
 
@@ -587,6 +589,9 @@ model Producto {
   // v2.276: doble unidad de medida (hortícolas): ej. unidad="kg", unidad2="bolsa", kgPorUnidad2=20.
   unidad2         String?   // unidad secundaria / de presentación (bolsa, malla, bin, cajón)
   kgPorUnidad2    Float?    // cuántos kg equivale 1 unidad2 (para convertir bolsas <-> kg)
+  // v2.331: molienda / fábrica. Para coproductos de una molienda (expeller, aceite):
+  costoFabricacionKg Float?  // último costo de fabricación por unidad (lo calcula el Parte de molienda)
+  margenVentaPct     Float?  // % de ganancia para sugerir el precio de venta (precio = costo x (1+%/100))
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   categoriaArticulo CategoriaArticulo? @relation(fields: [categoriaArticuloId], references: [id], onDelete: SetNull)
@@ -3090,4 +3095,75 @@ model ImputacionCC {
   @@index([liquidacionSueldoId])
   @@index([efectivoId])
   @@index([bancoMovimientoId])
+}
+
+// ============================================================
+// MOLIENDA / FÁBRICA (v2.331): transformación de un insumo origen
+// (ej. Soja grano) en coproductos (Expeller, Aceite, Merma) con
+// rendimientos por % y costeo de fabricación. Producción propia.
+// ============================================================
+
+// Receta: define el origen y sus coproductos con rendimiento (%) y
+// coeficiente de reparto de costo. La merma lleva coefCosto 0.
+model FormulaMolienda {
+  id               String   @id @default(cuid())
+  companyId        String
+  nombre           String   // ej: "Molienda de soja"
+  origenProductoId String   // Producto que se procesa (Soja grano)
+  activo           Boolean  @default(true)
+  observaciones    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  items            FormulaMoliendaItem[]
+  partes           ParteMolienda[]
+
+  @@index([companyId])
+  @@index([origenProductoId])
+}
+
+model FormulaMoliendaItem {
+  id                String   @id @default(cuid())
+  companyId         String
+  formulaId         String
+  productoId        String   // coproducto resultante (Expeller, Aceite, Merma)
+  rendimientoPct    Float    // % del origen que queda como este coproducto
+  coefCosto         Float?   // peso para repartir el costo (default = rendimientoPct). Merma: 0
+  depositoDestinoId String?  // depósito/silo/tanque donde ingresa
+  esMerma           Boolean  @default(false)
+  orden             Int      @default(0)
+
+  formula           FormulaMolienda @relation(fields: [formulaId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([formulaId])
+  @@index([productoId])
+}
+
+// Parte de molienda: un lote procesado. Al guardarse genera los
+// Movimientos de stock (egreso origen + ingresos coproductos),
+// referenciados por "MOL-<id>".
+model ParteMolienda {
+  id               String   @id @default(cuid())
+  companyId        String
+  fecha            DateTime
+  formulaId        String
+  depositoOrigenId String?  // silo de donde sale la soja
+  kgProcesados     Float    // kilos de origen procesados
+  costoOrigenUnit  Float    @default(0)  // costo por kg del origen (soja)
+  costoProduccion  Float    @default(0)  // costos de producción del lote (energía, mano de obra, etc.)
+  costoTotal       Float    @default(0)  // costoOrigenUnit*kg + costoProduccion
+  centroCostoId    String?
+  observaciones    String?
+  resultados       Json?    // snapshot: [{productoId,nombre,kg,coefCosto,costoKg,costoTotal}]
+  userId           String?
+  createdAt        DateTime @default(now())
+
+  company          Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  formula          FormulaMolienda @relation(fields: [formulaId], references: [id])
+
+  @@index([companyId])
+  @@index([fecha])
+  @@index([formulaId])
 }

@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.330.0';
+const AGROCORE_VERSION = '2.331.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10277,6 +10277,215 @@ async function reconciliarCamposDeposito(companyId) {
     } catch (e) { /* carrera: ignorar */ }
   }
 }
+
+// ============================================================
+// MOLIENDA / FÁBRICA (v2.331): transformación con costeo.
+// ============================================================
+// Calcula kg y costo por coproducto a partir de la fórmula.
+// costoTotal = kg*costoOrigenUnit + costoProduccion; se reparte por coefCosto
+// (default = rendimientoPct; la merma lleva 0).
+function _molCalcular(items, kg, costoOrigenUnit, costoProduccion) {
+  const KG = Number(kg) || 0;
+  const costoTotal = _round2(KG * (Number(costoOrigenUnit) || 0) + (Number(costoProduccion) || 0));
+  const norm = (items || []).map(it => {
+    const rend = Number(it.rendimientoPct) || 0;
+    const esMerma = !!it.esMerma;
+    const coef = esMerma ? 0 : (it.coefCosto != null ? Number(it.coefCosto) : rend);
+    return { productoId: it.productoId, nombre: it.nombre || '', rendimientoPct: rend, esMerma,
+             depositoDestinoId: it.depositoDestinoId || null, coef, kg: _round2(KG * rend / 100) };
+  });
+  const sumCoef = norm.reduce((a, b) => a + (b.coef || 0), 0);
+  let acc = 0;
+  const res = norm.map((r, i) => {
+    let costoItem = sumCoef > 0 ? _round2(costoTotal * r.coef / sumCoef) : 0;
+    acc += costoItem;
+    // última fila con coef>0 absorbe redondeo
+    const esUltConCoef = r.coef > 0 && norm.slice(i + 1).every(x => x.coef <= 0);
+    if (esUltConCoef && Math.abs(acc - costoTotal) >= 0.01) { costoItem = _round2(costoItem + (costoTotal - acc)); }
+    const costoKg = r.kg > 0 ? _round2(costoItem / r.kg) : 0;
+    return { ...r, costoTotal: costoItem, costoKg };
+  });
+  return { costoTotal, resultados: res };
+}
+
+// Listar fórmulas de molienda (con items y nombres de producto/depósito)
+app.get('/api/formulas-molienda', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const formulas = await prisma.formulaMolienda.findMany({
+      where: { companyId: req.companyId },
+      include: { items: { orderBy: { orden: 'asc' } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    const prodIds = new Set();
+    formulas.forEach(f => { prodIds.add(f.origenProductoId); f.items.forEach(i => prodIds.add(i.productoId)); });
+    const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: [...prodIds] } }, select: { id: true, nombre: true, unidad: true } });
+    const pName = Object.fromEntries(prods.map(p => [p.id, p]));
+    res.json({ ok: true, data: formulas.map(f => ({
+      ...f,
+      origenNombre: pName[f.origenProductoId]?.nombre || '',
+      items: f.items.map(i => ({ ...i, productoNombre: pName[i.productoId]?.nombre || '' })),
+    })) });
+  } catch (e) { next(e); }
+});
+
+// Crear / reemplazar fórmula
+app.post('/api/formulas-molienda', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = req.body || {};
+    if (!d.nombre || !d.origenProductoId) return res.status(400).json({ ok: false, error: 'Nombre y producto de origen requeridos' });
+    const items = (d.items || []).filter(i => i.productoId && Number(i.rendimientoPct) > 0);
+    if (!items.length) return res.status(400).json({ ok: false, error: 'Cargá al menos un coproducto con rendimiento' });
+    const f = await prisma.formulaMolienda.create({ data: {
+      companyId: req.companyId, nombre: String(d.nombre).trim(), origenProductoId: d.origenProductoId,
+      activo: d.activo !== false, observaciones: d.observaciones || null,
+      items: { create: items.map((i, idx) => ({
+        companyId: req.companyId, productoId: i.productoId, rendimientoPct: Number(i.rendimientoPct),
+        coefCosto: i.coefCosto != null && i.coefCosto !== '' ? Number(i.coefCosto) : null,
+        depositoDestinoId: i.depositoDestinoId || null, esMerma: !!i.esMerma, orden: idx,
+      })) },
+    }, include: { items: true } });
+    res.status(201).json({ ok: true, data: f });
+  } catch (e) { next(e); }
+});
+
+app.put('/api/formulas-molienda/:id', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const d = req.body || {};
+    const f = await prisma.formulaMolienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!f) return res.status(404).json({ ok: false, error: 'Fórmula no encontrada' });
+    const items = (d.items || []).filter(i => i.productoId && Number(i.rendimientoPct) > 0);
+    await prisma.$transaction(async (tx) => {
+      await tx.formulaMolienda.update({ where: { id: f.id }, data: {
+        nombre: d.nombre != null ? String(d.nombre).trim() : f.nombre,
+        origenProductoId: d.origenProductoId || f.origenProductoId,
+        activo: d.activo != null ? !!d.activo : f.activo, observaciones: d.observaciones ?? f.observaciones,
+      } });
+      if (d.items) {
+        await tx.formulaMoliendaItem.deleteMany({ where: { formulaId: f.id } });
+        for (let idx = 0; idx < items.length; idx++) { const i = items[idx];
+          await tx.formulaMoliendaItem.create({ data: {
+            companyId: req.companyId, formulaId: f.id, productoId: i.productoId, rendimientoPct: Number(i.rendimientoPct),
+            coefCosto: i.coefCosto != null && i.coefCosto !== '' ? Number(i.coefCosto) : null,
+            depositoDestinoId: i.depositoDestinoId || null, esMerma: !!i.esMerma, orden: idx,
+          } });
+        }
+      }
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.delete('/api/formulas-molienda/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const f = await prisma.formulaMolienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!f) return res.status(404).json({ ok: false, error: 'Fórmula no encontrada' });
+    const usada = await prisma.parteMolienda.count({ where: { companyId: req.companyId, formulaId: f.id } });
+    if (usada > 0) return res.status(400).json({ ok: false, error: 'No se puede eliminar: la fórmula tiene partes de molienda cargados. Desactivala en su lugar.' });
+    await prisma.formulaMolienda.delete({ where: { id: f.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Previsualizar el cálculo (sin guardar)
+app.post('/api/molienda/calcular', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const d = req.body || {};
+    const f = await prisma.formulaMolienda.findFirst({ where: { id: d.formulaId, companyId: req.companyId }, include: { items: { orderBy: { orden: 'asc' } } } });
+    if (!f) return res.status(404).json({ ok: false, error: 'Fórmula no encontrada' });
+    const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: f.items.map(i => i.productoId) } }, select: { id: true, nombre: true } });
+    const pName = Object.fromEntries(prods.map(p => [p.id, p.nombre]));
+    const items = f.items.map(i => ({ ...i, nombre: pName[i.productoId] || '' }));
+    const calc = _molCalcular(items, d.kgProcesados, d.costoOrigenUnit, d.costoProduccion);
+    res.json({ ok: true, ...calc });
+  } catch (e) { next(e); }
+});
+
+// Listar partes de molienda
+app.get('/api/partes-molienda', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.desde || req.query.hasta) { where.fecha = {}; if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde)); if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59'); }
+    const partes = await prisma.parteMolienda.findMany({ where, include: { formula: { select: { nombre: true } } }, orderBy: { fecha: 'desc' } });
+    res.json({ ok: true, data: partes });
+  } catch (e) { next(e); }
+});
+
+// Registrar un parte de molienda: descuenta origen e ingresa coproductos (transacción).
+app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = req.body || {};
+    const kg = Number(d.kgProcesados) || 0;
+    if (!d.formulaId || kg <= 0) return res.status(400).json({ ok: false, error: 'Elegí la fórmula y los kilos procesados (mayor a 0)' });
+    const f = await prisma.formulaMolienda.findFirst({ where: { id: d.formulaId, companyId: req.companyId }, include: { items: { orderBy: { orden: 'asc' } } } });
+    if (!f) return res.status(404).json({ ok: false, error: 'Fórmula no encontrada' });
+    if (!f.items.length) return res.status(400).json({ ok: false, error: 'La fórmula no tiene coproductos' });
+    const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: f.items.map(i => i.productoId) } }, select: { id: true, nombre: true } });
+    const pName = Object.fromEntries(prods.map(p => [p.id, p.nombre]));
+    const items = f.items.map(i => ({ ...i, nombre: pName[i.productoId] || '' }));
+    const { costoTotal, resultados } = _molCalcular(items, kg, d.costoOrigenUnit, d.costoProduccion);
+    const fecha = d.fecha ? new Date(d.fecha) : new Date();
+
+    const parte = await prisma.$transaction(async (tx) => {
+      const p = await tx.parteMolienda.create({ data: {
+        companyId: req.companyId, fecha, formulaId: f.id, depositoOrigenId: d.depositoOrigenId || null,
+        kgProcesados: kg, costoOrigenUnit: Number(d.costoOrigenUnit) || 0, costoProduccion: Number(d.costoProduccion) || 0,
+        costoTotal, centroCostoId: d.centroCostoId || null, observaciones: d.observaciones || null,
+        resultados, userId: req.user?.id || null,
+      } });
+      const ref = 'MOL-' + p.id;
+      // Egreso del origen (soja)
+      await tx.movimiento.create({ data: {
+        companyId: req.companyId, productoId: f.origenProductoId, fecha, tipo: 'egreso', motivo: 'molienda',
+        cantidad: kg, precio: Number(d.costoOrigenUnit) || null, total: _round2(kg * (Number(d.costoOrigenUnit) || 0)) || null,
+        depositoId: d.depositoOrigenId || null, referencia: ref, observaciones: 'Molienda: ' + f.nombre, userId: req.user?.id || null,
+      } });
+      // Ingresos de coproductos
+      for (const r of resultados) {
+        if (r.kg <= 0) continue;
+        await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: r.productoId, fecha, tipo: 'ingreso', motivo: 'molienda',
+          cantidad: r.kg, precio: r.costoKg || null, total: r.costoTotal || null,
+          depositoId: r.depositoDestinoId || null, referencia: ref,
+          observaciones: 'Molienda ' + f.nombre + (r.esMerma ? ' (merma)' : ''), userId: req.user?.id || null,
+        } });
+        // Guardar el último costo de fabricación en el coproducto (no la merma)
+        if (!r.esMerma) { try { await tx.producto.update({ where: { id: r.productoId }, data: { costoFabricacionKg: r.costoKg } }); } catch (_) {} }
+      }
+      return p;
+    });
+    res.status(201).json({ ok: true, data: parte });
+  } catch (e) { next(e); }
+});
+
+// Anular un parte: borra los movimientos generados y el parte.
+app.delete('/api/partes-molienda/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const p = await prisma.parteMolienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!p) return res.status(404).json({ ok: false, error: 'Parte no encontrado' });
+    await prisma.$transaction(async (tx) => {
+      await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'MOL-' + p.id } });
+      await tx.parteMolienda.delete({ where: { id: p.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Guardar el % de ganancia de un producto (y devolver el precio sugerido).
+app.patch('/api/productos/:id/venta', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const prod = await prisma.producto.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!prod) return res.status(404).json({ ok: false, error: 'Producto no encontrado' });
+    const margen = req.body?.margenVentaPct;
+    const data = {};
+    if (margen != null && margen !== '') data.margenVentaPct = Number(margen);
+    const actualizar = { ...prod, ...data };
+    const costo = Number(actualizar.costoFabricacionKg) || 0;
+    const precioSugerido = costo > 0 && actualizar.margenVentaPct != null ? _round2(costo * (1 + Number(actualizar.margenVentaPct) / 100)) : null;
+    if (req.body?.aplicarPrecio && precioSugerido != null) data.precioReferencia = precioSugerido;
+    const upd = await prisma.producto.update({ where: { id: prod.id }, data });
+    res.json({ ok: true, data: upd, precioSugerido });
+  } catch (e) { next(e); }
+});
 
 app.get('/api/depositos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
