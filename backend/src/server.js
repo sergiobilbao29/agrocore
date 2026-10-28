@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.342.0';
+const AGROCORE_VERSION = '2.344.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -737,6 +737,7 @@ async function serializeUser(u) {
     usaProduccionIndustrial: co.usaProduccionIndustrial === true,
     catalogoManual: co.catalogoManual === true,
     flujoAislado: co.flujoAislado === true,
+    usaComercial: co.usaComercial === true,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1838,6 +1839,7 @@ const empresaSchema = z.object({
   usaProduccionIndustrial: z.boolean().optional(),
   catalogoManual: z.boolean().optional(),
   flujoAislado: z.boolean().optional(),
+  usaComercial: z.boolean().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
   vendedorId: z.string().nullable().optional(),
@@ -10903,6 +10905,25 @@ app.post('/api/productos/limpiar-autogenerados', requireCompany, requirePermissi
     if (!ids.length) return res.json({ ok: true, data: { desactivados: 0 } });
     await prisma.producto.updateMany({ where: { id: { in: ids } }, data: { activo: false } });
     res.json({ ok: true, data: { desactivados: ids.length } });
+  } catch (e) { next(e); }
+});
+
+// Eliminar DEFINITIVAMENTE los productos inactivos que no se usan: desactivados,
+// NO compartidos y SIN movimientos. Seguro: no toca artículos compartidos ni los que
+// tienen historial. Si algún producto está referenciado por otra tabla (factura, etc.)
+// se omite sin romper la operación.
+app.post('/api/productos/eliminar-inactivos', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const candidatos = await prisma.producto.findMany({
+      where: { companyId: req.companyId, activo: false, compartido: false, movimientos: { none: {} } },
+      select: { id: true },
+    });
+    let borrados = 0, omitidos = 0;
+    for (const c of candidatos) {
+      try { await prisma.producto.delete({ where: { id: c.id } }); borrados++; }
+      catch (_) { omitidos++; } // referenciado por factura/insumo/etc. -> se deja
+    }
+    res.json({ ok: true, data: { borrados, omitidos } });
   } catch (e) { next(e); }
 });
 
@@ -20249,6 +20270,44 @@ app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermissi
   } catch (e) { next(e); }
 });
 
+// Auto-actualiza el estado de los cheques a partir de los movimientos importados del
+// banco. Conservador: solo actúa cuando hay UN único cheque candidato por importe
+// (y, si hay empate, desempata por el N° de cheque que aparezca en el concepto).
+//  - DÉBITO (egreso): cheque PROPIO (emitido a un proveedor) que el banco debitó → "cobrado".
+//  - CRÉDITO (ingreso): cheque de TERCEROS que estaba "depositado" (en tránsito) y se
+//    acreditó → "cobrado".
+async function _matchChequesDesdeBanco(companyId, movs) {
+  if (!Array.isArray(movs) || !movs.length) return 0;
+  const [terceros, propios] = await Promise.all([
+    prisma.cheque.findMany({ where: { companyId, tipo: 'terceros', estado: 'depositado' } }),
+    prisma.cheque.findMany({ where: { companyId, tipo: 'propio', estado: { in: ['en_cartera', 'emitido', 'depositado'] } } }),
+  ]);
+  const cents = (v) => Math.round(Math.abs(Number(v || 0)) * 100);
+  const digits = (s) => String(s || '').replace(/\D/g, '');
+  let n = 0;
+  for (const m of movs) {
+    const esIngreso = BANCO_TIPOS_INGRESO.includes(m.tipo);
+    const esEgreso = BANCO_TIPOS_EGRESO.includes(m.tipo);
+    const pool = esIngreso ? terceros : esEgreso ? propios : null;
+    if (!pool || !pool.length) continue;
+    const monto = cents(m.monto);
+    if (!monto) continue;
+    const texto = digits((m.concepto || '') + ' ' + (m.referencia || ''));
+    let cands = pool.filter((c) => c.estado !== 'cobrado' && cents(c.monto) === monto);
+    if (cands.length > 1 && texto) {
+      const byNro = cands.filter((c) => c.nroCheque && digits(c.nroCheque).length >= 3 && texto.includes(digits(c.nroCheque)));
+      if (byNro.length === 1) cands = byNro;
+    }
+    if (cands.length === 1) {
+      const c = cands[0];
+      await prisma.cheque.update({ where: { id: c.id }, data: { estado: 'cobrado' } });
+      c.estado = 'cobrado'; // no volver a tocarlo con otro movimiento del mismo lote
+      n++;
+    }
+  }
+  return n;
+}
+
 // Paso 2: crear los movimientos revisados. Deduplica contra los ya cargados
 // (misma fecha + importe + referencia/concepto) y respeta la conciliación.
 app.post('/api/banco-cuentas/:id/import-movimientos', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
@@ -20295,6 +20354,9 @@ app.post('/api/banco-cuentas/:id/import-movimientos', requireCompany, requirePer
     }
     if (crear.length) await prisma.bancoMovimiento.createMany({ data: crear });
     resumen.creados = crear.length;
+    // Auto-conciliación de cheques: cambia a "cobrado" los cheques que el banco debitó
+    // (propios entregados) o acreditó (terceros depositados), de forma conservadora.
+    try { resumen.chequesActualizados = await _matchChequesDesdeBanco(cuenta.companyId, crear); } catch { resumen.chequesActualizados = 0; }
     // Sólo devolvemos el lote si realmente creó algo (para poder deshacer).
     res.json({ ok: true, resumen, importLote: crear.length ? importLote : null });
   } catch (e) { next(e); }

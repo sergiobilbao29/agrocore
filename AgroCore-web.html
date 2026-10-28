@@ -1054,7 +1054,7 @@ function can(perm) {
 const MENU_SECTIONS = [
   'Tablero', 'Comercial', 'Producción', 'Ganadería y Haras',
   'Stock y depósitos', 'Logística y transporte', 'Tesorería',
-  'Patrimonio y contratos', 'Administración'
+  'Patrimonio y contratos', 'Administración', 'Comercial / AgroCore'
 ];
 
 const MODULES = [
@@ -1151,6 +1151,10 @@ const MODULES = [
   { id:'roles',         label:'Roles y permisos',     icon:'🔐', perm:'*',               section:'Administración' },
   { id:'empresas',      label:'Empresas',             icon:'🏢', perm:'*',               section:'Administración' },
   { id:'configuracion', label:'Configuración',        icon:'⚙️', perm:null,              section:'Administración' },
+
+  // ===== COMERCIAL / AGROCORE — CRM de la empresa de software (vendedores, partners,
+  // prospectos/leads y abonos). Opt-in: solo visible si la empresa tiene usaComercial. =====
+  { id:'comercial',     label:'Comercial / Partners', icon:'🤝', perm:'*',               section:'Comercial / AgroCore' },
 ];
 
 /* ------------ Login ------------ */
@@ -1822,7 +1826,7 @@ async function switchCompany(id) {
 async function applyCompanyTheme() {
   const m = currentMembership();
   const root = document.documentElement;
-  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false, catMan = false;
+  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false, catMan = false, usaComercial = false;
   try {
     if (!state.cache.empresas) {
       const r = await api('/api/empresas');
@@ -1836,6 +1840,7 @@ async function applyCompanyTheme() {
       usaCC = emp.usaCentrosCosto === true;
       usaPI = emp.usaProduccionIndustrial === true;
       catMan = emp.catalogoManual === true;
+      usaComercial = emp.usaComercial === true;
     }
   } catch {}
   const wm = $('#company-watermark');
@@ -1858,6 +1863,7 @@ async function applyCompanyTheme() {
   state.cajaPorTenedor = cajaTenedor;
   state.usaCentrosCosto = usaCC;
   state.usaProduccionIndustrial = usaPI;
+  state.usaComercial = usaComercial;
   state.catalogoManual = catMan;
   try { ensureCoraFab(); } catch {}
 }
@@ -1893,6 +1899,7 @@ function renderNav() {
     if (!m.perm) return true;   // Inicio y similares: siempre visibles
     if (m.perm === 'partner') return !!state.user?.partnerVendedorId;   // Panel de Partner: solo si el usuario es vendedor
     if (empresaOcultaModulo(m.id)) return false;   // oculto por actividad de la empresa
+    if (m.section === 'Comercial / AgroCore' && !state.usaComercial) return false; // módulo comercial opt-in
     if (!puedeVerModulo(m)) return false;   // lista blanca de menú por rol
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!can(m.perm)) return false;
@@ -3059,6 +3066,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/10/2026',
+      titulo:'💳 v2.344.0 — El resumen del banco actualiza los cheques solos',
+      desc:'Al <b>importar el resumen bancario</b>, el sistema ahora <b>actualiza el estado de los cheques automáticamente</b>: si el banco <b>debitó</b> un cheque <b>propio</b> que entregaste a un proveedor, lo pasa a <b>Cobrado</b>; si <b>acreditó</b> el importe de un cheque de <b>terceros</b> que habías <b>depositado</b>, también lo pasa a <b>Cobrado</b>. Es conservador: solo actúa cuando hay un único cheque que coincide por importe (y desempata por el N° de cheque del concepto). Al terminar la importación te avisa cuántos cheques se actualizaron.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/10/2026',
+      titulo:'🧹 v2.343.0 — Limpiar catálogo + módulo Comercial aparte',
+      desc:'<b>Catálogos:</b> en las categorías de productos ahora podés <b>ocultar los inactivos</b> (vienen ocultos) y, con un botón, <b>borrar definitivamente los inactivos sin uso</b> (sin movimientos y no compartidos). No afecta a otras empresas ni a los depósitos compartidos.<br><b>Módulo Comercial / Partners:</b> las pantallas de AgroCore (vendedores, partners, prospectos/leads y abonos) se movieron a su propio módulo <b>oculto por defecto</b>. Se activa por empresa en <b>Configuración → Empresa → "Módulo Comercial"</b>, así no aparece en empresas que no lo usan.' },
     { tag:'Novedad', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'27/10/2026',
       titulo:'🏭 v2.342.0 — Flujo aislado + corregir depósito de compras',
       desc:'<b>Flujo aislado por empresa</b> (Configuración → Empresa): cuando trabajás dentro de esa empresa (ej: la fábrica), el <b>resumen multi-empresa</b> muestra solo esa empresa; las demás empresas sí la siguen viendo. Ideal para separar la fábrica del resto.<br><b>Corregir depósito de una compra:</b> en el detalle de la compra hay un botón <b>📦 Corregir depósito</b> que mueve el stock al depósito correcto sin reeditar la factura (sirve cuando quedó en "Sin depósito" y ya tiene un pago aplicado).<br>Además, las empresas con <b>Catálogo propio</b> ya no reciben catálogos (ni cajas) copiados de otras empresas.' },
@@ -10559,6 +10572,26 @@ async function campoSave(id) {
 }
 
 /* ----- EMPRESAS ----- */
+// Hub del módulo COMERCIAL / AgroCore (CRM de la empresa de software): vendedores/partners,
+// prospectos (leads del trial) y abonos/suscripciones. Opt-in por empresa (usaComercial).
+pages.comercial = async function() {
+  setHeader('Comercial / AgroCore', 'Vendedores y partners · prospectos · abonos y suscripciones');
+  if (!state.usaComercial) { $('#page-body').innerHTML = `<div class="stub-card">El módulo Comercial no está habilitado en esta empresa. Activalo en <b>Configuración → Empresa → "Módulo Comercial"</b>.</div>`; return; }
+  const card = (ico, tit, desc, onclick) => `
+    <button class="kpi text-left hover:ring-2 hover:ring-emerald-300 transition" onclick='${onclick}'>
+      <div class="text-3xl mb-1">${ico}</div>
+      <div class="font-semibold text-slate-800">${tit}</div>
+      <div class="text-xs text-slate-500 mt-0.5">${desc}</div>
+    </button>`;
+  $('#page-body').innerHTML = `
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      ${card('📊','Tablero vendedores','Resumen de ventas y comisiones por vendedor','empTableroVendedores()')}
+      ${card('🤝','Vendedores / Partners','ABM de la red de vendedores y partners','empVendedores()')}
+      ${card('📇','Leads / Prospectos','Prospectos del trial y seguimiento comercial','empTrialLeads()')}
+      ${card('💳','Abonos / Clientes','Suscripciones mensuales y cobranza','pages.abonos()')}
+    </div>`;
+};
+
 pages.empresas = async function() {
   setHeader('Empresas', 'Gestión de entidades del sistema');
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
@@ -10582,10 +10615,7 @@ pages.empresas = async function() {
     <div class="mb-4 flex items-center justify-between">
       <h3 class="font-semibold text-slate-800">${rows.length} empresas</h3>
       <div class="flex gap-2">
-        ${esSuper?`<button class="btn btn-secondary" onclick="empTableroVendedores()">📊 Tablero vendedores</button>`:''}
-        ${esSuper?`<button class="btn btn-secondary" onclick="empVendedores()">🤝 Vendedores${(state._vendedores&&state._vendedores.length)?` (${state._vendedores.length})`:''}</button>`:''}
-        ${esSuper?`<button class="btn btn-secondary" onclick="empTrialLeads()">📇 Leads / Prospectos${(state._trialLeads&&state._trialLeads.length)?` (${state._trialLeads.length})`:''}</button>`:''}
-        ${esSuper?`<button class="btn btn-secondary" onclick="pages.abonos()">💳 Abonos / Clientes</button>`:''}
+        ${(esSuper && state.usaComercial)?`<button class="btn btn-secondary" onclick="go('comercial')" title="Vendedores, partners, prospectos y abonos">🤝 Comercial / Partners</button>`:''}
         ${puedeCrear ? `<button class="btn btn-primary" onclick="empForm()">+ Nueva empresa</button>` : ''}
       </div>
     </div>
@@ -11352,6 +11382,10 @@ function empForm(id=null) {
           <input id="f-flujoais" type="checkbox" ${it.flujoAislado?'checked':''} class="mt-0.5" />
           <label for="f-flujoais" class="text-sm">Flujo aislado <span class="text-slate-400">— cuando trabajás DENTRO de esta empresa, el resumen multi-empresa muestra solo esta empresa (no ves el flujo de las demás). Las demás empresas sí siguen viendo el flujo de esta. Ideal para una fábrica separada.</span></label>
         </div>
+        <div class="col-span-2 flex items-start gap-2 mt-1">
+          <input id="f-comercial" type="checkbox" ${it.usaComercial?'checked':''} class="mt-0.5" />
+          <label for="f-comercial" class="text-sm">Módulo Comercial / Partners <span class="text-slate-400">— habilita el módulo comercial (vendedores, partners, prospectos/leads y abonos/suscripciones). Oculto por defecto; activalo solo donde se use (AgroCore o resellers).</span></label>
+        </div>
         ${state.user?.superAdmin ? `
         <div class="col-span-2 grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
           <div class="col-span-2 text-[11px] font-semibold text-emerald-800">🤝 Red de vendedores / partners</div>
@@ -11407,6 +11441,7 @@ async function empSave(id) {
     usaProduccionIndustrial: $('#f-usapi')?.checked || false,
     catalogoManual: $('#f-catman')?.checked || false,
     flujoAislado: $('#f-flujoais')?.checked || false,
+    usaComercial: $('#f-comercial')?.checked || false,
   };
   if (state.user?.superAdmin) {
     data.vendedorId = $('#f-vend')?.value || null;
@@ -30445,6 +30480,18 @@ async function catGastoDel(id) {
   } catch (e) { toast(e.message,'error'); }
 }
 
+// Borra DEFINITIVAMENTE los productos inactivos sin uso (sin movimientos, no compartidos).
+// Seguro: no toca artículos compartidos ni los que tienen historial. Pide confirmación.
+async function catBorrarInactivos() {
+  if (!confirm('¿Borrar definitivamente los artículos INACTIVOS que no tienen movimientos ni son compartidos?\n\nNo afecta a otras empresas ni a los depósitos compartidos. Esta acción no se puede deshacer.')) return;
+  try {
+    const r = await api('/api/productos/eliminar-inactivos', { method:'POST' });
+    const d = r.data || {};
+    toast(`Borrados: ${d.borrados||0}${d.omitidos?` · ${d.omitidos} con historial se conservaron`:''}`, 'success');
+    delete state.cache.productos; delete state.cache.stockMap; pages.catalogos();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 pages.catalogos = async function() {
   setHeader('Catálogos', 'Maestros del sistema: cereales, animales, labores, insumos, unidades…');
   if (!can('produccion:read') && !can('catalogos:read')) { $('#page-body').innerHTML = stubPage('catalogos','Catálogos'); return; }
@@ -30508,7 +30555,11 @@ pages.catalogos = async function() {
     ? configAnimales.slice().sort((a,b)=> (a.especie||'').localeCompare(b.especie||'') || (a.nombre||'').localeCompare(b.nombre||''))
     : esMonedas
     ? monedasCat.slice()
-    : (porTab[tab.id]||[]).slice().sort((a,b)=> (a.nombre||'').localeCompare(b.nombre||''));
+    : (porTab[tab.id]||[]).slice()
+        .filter(p => !(esProdCat && state.catOcultarInactivos!==false && p.activo===false))
+        .sort((a,b)=> (a.nombre||'').localeCompare(b.nombre||''));
+  // ¿Cuántos inactivos hay en esta categoría de productos? (para el contador del toggle)
+  const _nInactivos = esProdCat ? (porTab[tab.id]||[]).filter(p=>p.activo===false).length : 0;
 
   // Dentro de una pestaña agrupamos por tipo real (útil en "Insumos" donde hay varios)
   const subgrupos = {};
@@ -30632,6 +30683,10 @@ pages.catalogos = async function() {
 
         ${esProdCat ? `
           <div class="text-[11px] text-slate-500 mb-2">Artículos de la categoría <b>${esc(tab.label)}</b> del árbol. Se usan en compras, ventas y stock. Podés crear, editar o eliminar desde acá.</div>
+          ${_nInactivos ? `<div class="flex flex-wrap items-center gap-3 mb-2 text-xs bg-slate-50 border border-slate-200 rounded-lg p-2">
+            <label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" ${state.catOcultarInactivos!==false?'checked':''} onchange="state.catOcultarInactivos=this.checked; pages.catalogos();"/> Ocultar inactivos <span class="badge badge-gray">${_nInactivos}</span></label>
+            ${can('stock:delete') ? `<button class="btn btn-ghost btn-xs text-red-600" onclick="catBorrarInactivos()">🗑️ Borrar definitivamente los inactivos sin uso</button>` : ''}
+          </div>` : ''}
           ${items.length===0
             ? `<div class="stub-card">No hay artículos en <b>${esc(tab.label)}</b> todavía. Usá "+ Nuevo" para crear uno${otrosTab&&otrosTab.id===tab.id?', o vinculá artículos existentes a una familia desde Categorías y Familias':''}.</div>`
             : _famKeys.map(fk => { const arr=subgruposFam[fk]; return `
@@ -40773,6 +40828,7 @@ async function bcoImportResumenConfirmar() {
           ${(s.duplicados||0)?`<div class="text-slate-500">${s.duplicados} ya estaban cargados (no se duplicaron).</div>`:''}
           ${(s.bloqueados||0)?`<div class="text-amber-700">${s.bloqueados} en un mes conciliado (no se cargaron).</div>`:''}
           ${(s.omitidos||0)?`<div class="text-slate-500">${s.omitidos} sin datos válidos (omitidos).</div>`:''}
+          ${(s.chequesActualizados||0)?`<div class="text-emerald-700">💳 ${s.chequesActualizados} cheque${(s.chequesActualizados===1?'':'s')} pasó a <b>Cobrado</b> automáticamente (débito/acreditación detectada).</div>`:''}
         </div>
         ${cuadraBox}
         <div class="text-[11px] text-slate-400 mt-3">Si te equivocaste de archivo o de cuenta, podés <b>deshacer esta importación</b> (borra sólo estos ${s.creados||0} movimientos).</div>`,
