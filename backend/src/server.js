@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.347.0';
+const AGROCORE_VERSION = '2.348.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -209,6 +209,9 @@ async function authMiddleware(req, res, next) {
       }
       req.companyId = companyId;
       req.membership = m || null;
+      // Empresa activa SIEMPRE disponible (también para superAdmin, que no tiene
+      // fila en userCompanies). La usamos para leer flags como 'aislada'.
+      req.activeCompany = m?.company || await prisma.company.findUnique({ where: { id: companyId } }).catch(() => null);
     }
     next();
   } catch (err) { next(err); }
@@ -4911,7 +4914,7 @@ app.get('/api/campanas/:id/rinde', requireCompany, requirePermission('produccion
 function _grupoCompanyIds(req) {
   const ucs = req.user?.userCompanies || [];
   // Empresa AISLADA: si la empresa activa es aislada, su "grupo" es solo ella.
-  const activa = ucs.find(uc => uc.companyId === req.companyId)?.company;
+  const activa = req.activeCompany || ucs.find(uc => uc.companyId === req.companyId)?.company;
   if (activa && activa.aislada) return [req.companyId];
   // Desde una empresa normal, el grupo NUNCA incluye a las empresas aisladas.
   return ucs.filter(uc => !(uc.company && uc.company.aislada)).map(uc => uc.companyId);
@@ -10661,7 +10664,7 @@ const depositoSchema = z.object({
 // como "sin filtro" y devuelva el error "Argument companyId is missing".
 function _depositoWhere(req) {
   // Empresa AISLADA: solo sus propios depósitos, sin los compartidos del grupo.
-  const _act = (req.user?.userCompanies || []).find(uc => uc.companyId === req.companyId)?.company;
+  const _act = req.activeCompany || (req.user?.userCompanies || []).find(uc => uc.companyId === req.companyId)?.company;
   if (_act && _act.aislada) return { companyId: req.companyId };
   return { OR: [
     { companyId: req.companyId },
@@ -14715,7 +14718,7 @@ async function _empresasDeUsuario(req) {
   // Empresa AISLADA: desde la activa aislada, el grupo es solo ella; desde una normal,
   // se excluyen las aisladas del grupo.
   const ucs = req.user?.userCompanies || [];
-  const activa = ucs.find(uc => uc.companyId === req.companyId)?.company;
+  const activa = req.activeCompany || ucs.find(uc => uc.companyId === req.companyId)?.company;
   if (activa && activa.aislada) return [{ id: req.companyId, name: activa.name || 'Empresa' }];
   if (req.user?.superAdmin) {
     const all = await prisma.company.findMany({ where: { activo: { not: false }, aislada: { not: true } }, select: { id: true, name: true }, orderBy: { name: 'asc' } });
