@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.344.0';
+const AGROCORE_VERSION = '2.345.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -738,6 +738,7 @@ async function serializeUser(u) {
     catalogoManual: co.catalogoManual === true,
     flujoAislado: co.flujoAislado === true,
     usaComercial: co.usaComercial === true,
+    usaArroz: co.usaArroz === true,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1840,6 +1841,7 @@ const empresaSchema = z.object({
   catalogoManual: z.boolean().optional(),
   flujoAislado: z.boolean().optional(),
   usaComercial: z.boolean().optional(),
+  usaArroz: z.boolean().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
   vendedorId: z.string().nullable().optional(),
@@ -10927,6 +10929,83 @@ app.post('/api/productos/eliminar-inactivos', requireCompany, requirePermission(
   } catch (e) { next(e); }
 });
 
+// ============================================================
+// SECADERO (arroz y granos): partidas de secado con merma por humedad.
+// ============================================================
+function _kgSecoDe(kgHumedo, hEnt, hSal, mermaPct) {
+  const kh = Number(kgHumedo || 0), he = Number(hEnt || 0), hs = Number(hSal || 0), mv = Number(mermaPct || 0);
+  if (kh <= 0) return 0;
+  // Si la humedad de salida es mayor/igual a la de entrada, no hay merma por humedad.
+  const factorHum = (he > hs && hs < 100) ? (100 - he) / (100 - hs) : 1;
+  const seco = kh * factorHum * (1 - mv / 100);
+  return Math.max(0, Math.round(seco * 100) / 100);
+}
+app.get('/api/secados', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const rows = await prisma.secadoPartida.findMany({ where: { companyId: req.companyId }, orderBy: { fecha: 'desc' } });
+    res.json({ ok: true, data: rows });
+  } catch (e) { next(e); }
+});
+app.post('/api/secados', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      fecha: z.coerce.date(),
+      productoOrigenId: z.string().min(1),
+      productoDestinoId: z.string().min(1),
+      depositoId: z.string().nullable().optional(),
+      kgHumedo: z.coerce.number().positive(),
+      humedadEntrada: z.coerce.number().min(0).max(100),
+      humedadSalida: z.coerce.number().min(0).max(100).default(14),
+      mermaVolatilPct: z.coerce.number().min(0).max(100).default(0),
+      costoTotal: z.coerce.number().nullable().optional(),
+      moneda: z.string().nullable().optional(),
+      campanaId: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body);
+    if (d.productoOrigenId === d.productoDestinoId) return res.status(400).json({ ok: false, error: 'El grano húmedo y el grano seco deben ser artículos distintos.' });
+    const [po, pd] = await Promise.all([
+      prisma.producto.findFirst({ where: { id: d.productoOrigenId, companyId: req.companyId }, select: { id: true } }),
+      prisma.producto.findFirst({ where: { id: d.productoDestinoId, companyId: req.companyId }, select: { id: true } }),
+    ]);
+    if (!po || !pd) return res.status(400).json({ ok: false, error: 'Artículo de origen o destino no válido.' });
+    const kgSeco = _kgSecoDe(d.kgHumedo, d.humedadEntrada, d.humedadSalida, d.mermaVolatilPct);
+    const partida = await prisma.$transaction(async (tx) => {
+      const p = await tx.secadoPartida.create({ data: {
+        companyId: req.companyId, fecha: d.fecha,
+        productoOrigenId: d.productoOrigenId, productoDestinoId: d.productoDestinoId, depositoId: d.depositoId || null,
+        kgHumedo: d.kgHumedo, humedadEntrada: d.humedadEntrada, humedadSalida: d.humedadSalida,
+        mermaVolatilPct: d.mermaVolatilPct, kgSeco, costoTotal: d.costoTotal ?? null, moneda: d.moneda || 'ARS',
+        campanaId: d.campanaId || null, observaciones: d.observaciones || null,
+      }});
+      const ref = 'SEC-' + p.id;
+      // Egreso del grano húmedo + ingreso del grano seco (con el costo del secado, si se cargó).
+      await tx.movimiento.create({ data: {
+        companyId: req.companyId, productoId: d.productoOrigenId, fecha: d.fecha, tipo: 'egreso', motivo: 'secado',
+        cantidad: d.kgHumedo, referencia: ref, depositoId: d.depositoId || null,
+        observaciones: `Secado: ${d.kgHumedo} kg al ${d.humedadEntrada}% → ${kgSeco} kg al ${d.humedadSalida}%`, userId: req.user?.id || null,
+      }});
+      await tx.movimiento.create({ data: {
+        companyId: req.companyId, productoId: d.productoDestinoId, fecha: d.fecha, tipo: 'ingreso', motivo: 'secado',
+        cantidad: kgSeco, total: d.costoTotal != null ? Number(d.costoTotal) : null, referencia: ref, depositoId: d.depositoId || null,
+        observaciones: `Secado desde ${d.kgHumedo} kg húmedo`, userId: req.user?.id || null,
+      }});
+      return p;
+    });
+    res.status(201).json({ ok: true, data: partida });
+  } catch (e) { next(e); }
+});
+app.delete('/api/secados/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const p = await prisma.secadoPartida.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!p) return res.json({ ok: true });
+    await prisma.$transaction(async (tx) => {
+      await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'SEC-' + p.id } });
+      await tx.secadoPartida.delete({ where: { id: p.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 app.patch('/api/productos/:id/venta', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
   try {
     const prod = await prisma.producto.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
@@ -15050,6 +15129,15 @@ const _AYUDA_KB = [
       'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',
       'En "Plan canje" entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie. El parte y el canje se pueden anular.'],
     atajo:{ page:'molienda', label:'Abrir Molienda / Fábrica' } },
+  { id:'secado', terms:['secado','secadero','secar','arroz','humedad','merma por humedad','grano humedo','grano seco','secar grano','secar arroz','partida de secado'],
+    titulo:'Secadero (arroz y granos, con merma por humedad)',
+    pasos:[
+      'Primero activá el módulo: Configuración → Empresa → tildá "Circuito Arroz (Secadero)". Recién ahí aparece "Secadero" en Stock y depósitos.',
+      'En el catálogo conviene tener dos artículos: el grano HÚMEDO (ej. "Arroz cáscara húmedo") y el grano SECO (ej. "Arroz cáscara seco"), ambos en kg.',
+      'En Secadero → "+ Nueva partida de secado" cargá: kg húmedos, % de humedad de entrada, % de humedad objetivo (arroz ~14%) y, si querés, una merma extra por impurezas. El sistema calcula los kg secos.',
+      'Al guardar, da de baja el grano húmedo del stock e ingresa el grano seco (con el costo del secado si lo cargaste). Si te equivocaste, podés eliminar la partida y se revierte el stock.',
+      'Para el PELADO del arroz (cáscara → integral/blanco + afrechillo + cáscara + partido) usá Molienda / Fábrica con una fórmula de rendimiento.'],
+    atajo:{ page:'secado', label:'Abrir Secadero' } },
   { id:'caravanas', terms:['caravana','caravanas','recuento','recontar','rfid','caravana electronica','caravana de control','manga','padron','cuantas faltan','contar hacienda','pasar por la manga','senalada','senalar','ternero caravana','lector'],
     titulo:'Caravanas / Recuento (control de stock por caravana, sin fichas)',
     pasos:[

@@ -1116,6 +1116,7 @@ const MODULES = [
   { id:'cerealeras',    label:'Depósitos y cerealeras',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'molienda',      label:'Molienda / Fábrica',   icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'secado',        label:'Secadero (arroz/grano)',icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA Y TRANSPORTE — fletes (cereal o hacienda) =====
@@ -1826,7 +1827,7 @@ async function switchCompany(id) {
 async function applyCompanyTheme() {
   const m = currentMembership();
   const root = document.documentElement;
-  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false, catMan = false, usaComercial = false;
+  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false, catMan = false, usaComercial = false, usaArroz = false;
   try {
     if (!state.cache.empresas) {
       const r = await api('/api/empresas');
@@ -1841,6 +1842,7 @@ async function applyCompanyTheme() {
       usaPI = emp.usaProduccionIndustrial === true;
       catMan = emp.catalogoManual === true;
       usaComercial = emp.usaComercial === true;
+      usaArroz = emp.usaArroz === true;
     }
   } catch {}
   const wm = $('#company-watermark');
@@ -1864,6 +1866,7 @@ async function applyCompanyTheme() {
   state.usaCentrosCosto = usaCC;
   state.usaProduccionIndustrial = usaPI;
   state.usaComercial = usaComercial;
+  state.usaArroz = usaArroz;
   state.catalogoManual = catMan;
   try { ensureCoraFab(); } catch {}
 }
@@ -1900,6 +1903,7 @@ function renderNav() {
     if (m.perm === 'partner') return !!state.user?.partnerVendedorId;   // Panel de Partner: solo si el usuario es vendedor
     if (empresaOcultaModulo(m.id)) return false;   // oculto por actividad de la empresa
     if (m.section === 'Comercial / AgroCore' && !state.usaComercial) return false; // módulo comercial opt-in
+    if (m.id === 'secado' && !state.usaArroz) return false; // secadero opt-in (perfil arroz)
     if (!puedeVerModulo(m)) return false;   // lista blanca de menú por rol
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!can(m.perm)) return false;
@@ -3066,6 +3070,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/10/2026',
+      titulo:'🌾 v2.345.0 — Arroz: Secadero (con merma por humedad)',
+      desc:'Nuevo módulo <b>Secadero</b> para el circuito del arroz (y cualquier grano). Cargás una partida: grano <b>húmedo</b> que entra (kg + % de humedad), la <b>humedad objetivo</b> (arroz ~14%) y, opcional, una merma extra por impurezas; el sistema calcula los <b>kg secos</b>, da de <b>baja el grano húmedo</b> y de <b>alta el grano seco</b> en el stock, con el costo del secado. Para el <b>pelado</b> (cáscara → integral/blanco + subproductos) se usa <b>Molienda / Fábrica</b>. El módulo es <b>opt-in</b>: se activa por empresa en <b>Configuración → Empresa → "Circuito Arroz (Secadero)"</b>, así no aparece en empresas que no lo usan.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/10/2026',
       titulo:'💳 v2.344.0 — El resumen del banco actualiza los cheques solos',
       desc:'Al <b>importar el resumen bancario</b>, el sistema ahora <b>actualiza el estado de los cheques automáticamente</b>: si el banco <b>debitó</b> un cheque <b>propio</b> que entregaste a un proveedor, lo pasa a <b>Cobrado</b>; si <b>acreditó</b> el importe de un cheque de <b>terceros</b> que habías <b>depositado</b>, también lo pasa a <b>Cobrado</b>. Es conservador: solo actúa cuando hay un único cheque que coincide por importe (y desempata por el N° de cheque del concepto). Al terminar la importación te avisa cuántos cheques se actualizaron.' },
@@ -10572,6 +10579,84 @@ async function campoSave(id) {
 }
 
 /* ----- EMPRESAS ----- */
+// ====================== SECADERO (arroz / granos) ======================
+// Partidas de secado: entra grano húmedo y sale grano seco con la merma por humedad.
+function _secKgSeco(kgH, hEnt, hSal, merma) {
+  const kh=Number(kgH||0), he=Number(hEnt||0), hs=Number(hSal||0), mv=Number(merma||0);
+  if (kh<=0) return 0;
+  const fh = (he>hs && hs<100) ? (100-he)/(100-hs) : 1;
+  return Math.max(0, Math.round(kh*fh*(1-mv/100)*100)/100);
+}
+pages.secado = async function() {
+  setHeader('Secadero', 'Secado de grano (arroz y otros) con merma por humedad');
+  if (!state.usaArroz) { $('#page-body').innerHTML = `<div class="stub-card">El Secadero no está habilitado en esta empresa. Activalo en <b>Configuración → Empresa → "Circuito Arroz (Secadero)"</b>.</div>`; return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let rows=[]; try { rows=(await api('/api/secados')).data||[]; } catch(e){ return toast(e.message,'error'); }
+  if (!state.cache.productos) { try { state.cache.productos=(await api('/api/productos')).data||[]; } catch { state.cache.productos=[]; } }
+  if (!state.cache.depositos) { try { state.cache.depositos=(await api('/api/depositos')).data||[]; } catch { state.cache.depositos=[]; } }
+  const prodName = id => (state.cache.productos||[]).find(p=>p.id===id)?.nombre || '—';
+  const filas = rows.map(r=>`<tr class="table-row">
+      <td>${fmtFecha(r.fecha)}</td>
+      <td>${esc(prodName(r.productoOrigenId))} → <b>${esc(prodName(r.productoDestinoId))}</b></td>
+      <td class="text-right">${fmtN(r.kgHumedo)} kg</td>
+      <td class="text-right">${fmtN(r.humedadEntrada)}% → ${fmtN(r.humedadSalida)}%${r.mermaVolatilPct?` · merma ${fmtN(r.mermaVolatilPct)}%`:''}</td>
+      <td class="text-right font-semibold text-emerald-700">${fmtN(r.kgSeco)} kg</td>
+      <td class="text-right text-slate-500">${r.kgHumedo?fmtN(Math.round((r.kgHumedo-r.kgSeco)))+' kg':''}</td>
+      <td class="text-right whitespace-nowrap">${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='secDel(${JSON.stringify(r.id)})' title="Eliminar (revierte el stock)">🗑️</button>`:''}</td>
+    </tr>`).join('') || `<tr><td colspan="7" class="text-center text-slate-400 py-4">Sin partidas de secado todavía.</td></tr>`;
+  $('#page-body').innerHTML = `
+    <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
+      <div class="text-xs text-slate-500">El secado da de baja el grano húmedo y da de alta el grano seco, calculando la merma por humedad.</div>
+      ${can('stock:create')?`<button class="btn btn-primary" onclick="secForm()">+ Nueva partida de secado</button>`:''}
+    </div>
+    <div class="kpi p-0 overflow-hidden">
+      <table class="data text-sm">
+        <thead><tr><th>Fecha</th><th>Artículo (húmedo → seco)</th><th class="text-right">Kg húmedo</th><th class="text-right">Humedad</th><th class="text-right">Kg seco</th><th class="text-right">Merma</th><th></th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>`;
+};
+function secForm() {
+  const prods = (state.cache.productos||[]).filter(p=>p.activo!==false).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  const opts = sel => prods.map(p=>`<option value="${esc(p.id)}" ${p.id===sel?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join('');
+  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
+  const hoy = new Date().toISOString().slice(0,10);
+  openModal({ title:'🌾 Nueva partida de secado', size:'max-w-lg',
+    body:`
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="label text-xs">Fecha</label><input id="sec-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label text-xs">Depósito (opcional)</label><select id="sec-dep" class="input"><option value="">—</option>${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}</select></div>
+        <div class="col-span-2"><label class="label text-xs">Grano HÚMEDO (sale del stock)</label><select id="sec-origen" class="input"><option value="">— Elegir —</option>${opts()}</select></div>
+        <div class="col-span-2"><label class="label text-xs">Grano SECO (entra al stock)</label><select id="sec-destino" class="input"><option value="">— Elegir —</option>${opts()}</select></div>
+        <div><label class="label text-xs">Kg húmedos</label><input id="sec-kgh" type="number" step="0.01" class="input" oninput="secCalc()"/></div>
+        <div><label class="label text-xs">Humedad entrada (%)</label><input id="sec-he" type="number" step="0.1" class="input" oninput="secCalc()"/></div>
+        <div><label class="label text-xs">Humedad salida (%)</label><input id="sec-hs" type="number" step="0.1" class="input" value="14" oninput="secCalc()"/></div>
+        <div><label class="label text-xs">Merma extra (%) <span class="text-slate-400">impurezas</span></label><input id="sec-mv" type="number" step="0.1" class="input" value="0" oninput="secCalc()"/></div>
+        <div><label class="label text-xs">Costo del secado (opcional)</label><input id="sec-costo" type="number" step="0.01" class="input" placeholder="$"/></div>
+        <div><label class="label text-xs">&nbsp;</label><div id="sec-res" class="input bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold">— kg secos</div></div>
+      </div>
+      <div class="mt-2"><label class="label text-xs">Observaciones</label><input id="sec-obs" class="input" placeholder="Opcional"/></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="secSave()">Guardar</button>` });
+}
+function secCalc(){
+  const ks=_secKgSeco($('#sec-kgh')?.value, $('#sec-he')?.value, $('#sec-hs')?.value, $('#sec-mv')?.value);
+  const el=document.getElementById('sec-res'); if(el) el.textContent = ks ? (fmtN(ks)+' kg secos') : '— kg secos';
+}
+async function secSave(){
+  const d={ fecha:$('#sec-fecha')?.value, productoOrigenId:$('#sec-origen')?.value, productoDestinoId:$('#sec-destino')?.value,
+    depositoId:$('#sec-dep')?.value||null, kgHumedo:Number($('#sec-kgh')?.value||0), humedadEntrada:Number($('#sec-he')?.value||0),
+    humedadSalida:Number($('#sec-hs')?.value||14), mermaVolatilPct:Number($('#sec-mv')?.value||0),
+    costoTotal:$('#sec-costo')?.value?Number($('#sec-costo').value):null, observaciones:$('#sec-obs')?.value.trim()||null };
+  if(!d.productoOrigenId||!d.productoDestinoId) return toast('Elegí el grano húmedo y el grano seco','warn');
+  if(d.productoOrigenId===d.productoDestinoId) return toast('El húmedo y el seco deben ser artículos distintos','warn');
+  if(!(d.kgHumedo>0)) return toast('Cargá los kg húmedos','warn');
+  try{ await api('/api/secados',{method:'POST',body:JSON.stringify(d)}); toast('Partida de secado registrada','success'); delete state.cache.stockMap; closeModal(); pages.secado(); }catch(e){ toast(e.message,'error'); }
+}
+async function secDel(id){
+  if(!confirm('¿Eliminar esta partida de secado? Se revierte el stock (húmedo y seco).')) return;
+  try{ await api('/api/secados/'+id,{method:'DELETE'}); toast('Eliminada','success'); delete state.cache.stockMap; pages.secado(); }catch(e){ toast(e.message,'error'); }
+}
+
 // Hub del módulo COMERCIAL / AgroCore (CRM de la empresa de software): vendedores/partners,
 // prospectos (leads del trial) y abonos/suscripciones. Opt-in por empresa (usaComercial).
 pages.comercial = async function() {
@@ -11386,6 +11471,10 @@ function empForm(id=null) {
           <input id="f-comercial" type="checkbox" ${it.usaComercial?'checked':''} class="mt-0.5" />
           <label for="f-comercial" class="text-sm">Módulo Comercial / Partners <span class="text-slate-400">— habilita el módulo comercial (vendedores, partners, prospectos/leads y abonos/suscripciones). Oculto por defecto; activalo solo donde se use (AgroCore o resellers).</span></label>
         </div>
+        <div class="col-span-2 flex items-start gap-2 mt-1">
+          <input id="f-arroz" type="checkbox" ${it.usaArroz?'checked':''} class="mt-0.5" />
+          <label for="f-arroz" class="text-sm">Circuito Arroz (Secadero) <span class="text-slate-400">— habilita el módulo Secadero (secado de grano con merma por humedad). Para el pelado usá Molienda / Fábrica. Oculto por defecto; activalo en empresas arroceras.</span></label>
+        </div>
         ${state.user?.superAdmin ? `
         <div class="col-span-2 grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
           <div class="col-span-2 text-[11px] font-semibold text-emerald-800">🤝 Red de vendedores / partners</div>
@@ -11442,6 +11531,7 @@ async function empSave(id) {
     catalogoManual: $('#f-catman')?.checked || false,
     flujoAislado: $('#f-flujoais')?.checked || false,
     usaComercial: $('#f-comercial')?.checked || false,
+    usaArroz: $('#f-arroz')?.checked || false,
   };
   if (state.user?.superAdmin) {
     data.vendedorId = $('#f-vend')?.value || null;
