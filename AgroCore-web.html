@@ -1117,6 +1117,7 @@ const MODULES = [
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'molienda',      label:'Molienda / Fábrica',   icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'secado',        label:'Secadero (arroz/grano)',icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'arrozTablero',  label:'Tablero arroz',        icon:'📊', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
 
   // ===== LOGÍSTICA Y TRANSPORTE — fletes (cereal o hacienda) =====
@@ -1903,7 +1904,7 @@ function renderNav() {
     if (m.perm === 'partner') return !!state.user?.partnerVendedorId;   // Panel de Partner: solo si el usuario es vendedor
     if (empresaOcultaModulo(m.id)) return false;   // oculto por actividad de la empresa
     if (m.section === 'Comercial / AgroCore' && !state.usaComercial) return false; // módulo comercial opt-in
-    if (m.id === 'secado' && !state.usaArroz) return false; // secadero opt-in (perfil arroz)
+    if ((m.id === 'secado' || m.id === 'arrozTablero') && !state.usaArroz) return false; // circuito arroz opt-in
     if (!puedeVerModulo(m)) return false;   // lista blanca de menú por rol
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!can(m.perm)) return false;
@@ -2869,6 +2870,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Haras-Caballos.pdf', t:'Haras / caballos', d:'Gestión de equinos.' },
       { f:'Instructivo-Caravanas-Electronicas-RFID.pdf', t:'Caravanas electrónicas (RFID)', d:'Importar caravanas a un rodeo desde el bastón, pesar por caravana con auto-mapeo al rodeo, avisar faltantes y seguir la evolución de peso y GDP en la ficha del animal.' },
       { f:'Instructivo-Caravanas-Recuento.pdf', t:'Caravanas / Recuento (control de stock, sin fichas)', d:'Para cría: caravanear cada animal (alta por caravana con sexo y madre) y controlar el stock pasando la tropa por la manga. Importás las caravanas leídas y el sistema te dice cuáles faltan. Sin usar Fichas 360° ni Rodeos; suma y resta al stock de hacienda solo.' },
+      { f:'Instructivo-Circuito-Arroz.pdf', t:'Circuito del arroz (Secadero + Pelado + Tablero)', d:'De la cosecha al pelado: secado del grano con merma por humedad (baja el húmedo, alta el seco), pelado en Molienda / Fábrica con fórmula editable y Tablero arroz con rindes y costos. Botón "Preparar circuito arroz" para dejar la empresa lista. Opt-in por empresa.' },
     ]},
     { grupo:'Otros', items:[
       { f:'Instructivo-Remitos-Internos.pdf', t:'Remitos internos', d:'Movimientos internos entre establecimientos.' },
@@ -3071,8 +3073,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/10/2026',
-      titulo:'🌾 v2.345.0 — Arroz: Secadero (con merma por humedad)',
-      desc:'Nuevo módulo <b>Secadero</b> para el circuito del arroz (y cualquier grano). Cargás una partida: grano <b>húmedo</b> que entra (kg + % de humedad), la <b>humedad objetivo</b> (arroz ~14%) y, opcional, una merma extra por impurezas; el sistema calcula los <b>kg secos</b>, da de <b>baja el grano húmedo</b> y de <b>alta el grano seco</b> en el stock, con el costo del secado. Para el <b>pelado</b> (cáscara → integral/blanco + subproductos) se usa <b>Molienda / Fábrica</b>. El módulo es <b>opt-in</b>: se activa por empresa en <b>Configuración → Empresa → "Circuito Arroz (Secadero)"</b>, así no aparece en empresas que no lo usan.' },
+      titulo:'🌾 v2.345.0 — Arroz: Secadero + Tablero + "Preparar circuito arroz"',
+      desc:'Nuevo módulo <b>Secadero</b> para el circuito del arroz (y cualquier grano). Cargás una partida: grano <b>húmedo</b> que entra (kg + % de humedad), la <b>humedad objetivo</b> (arroz ~14%) y, opcional, una merma extra por impurezas; el sistema calcula los <b>kg secos</b>, da de <b>baja el grano húmedo</b> y de <b>alta el grano seco</b> en el stock, con el costo del secado.<br>Además hay un botón <b>⚙️ Preparar circuito arroz</b> que deja la empresa lista: crea los <b>artículos</b> (cáscara húmedo/seco, blanco/pulido, partido, afrechillo, cáscara) y una <b>fórmula de pelado editable</b> (cáscara seco → blanco 66% + afrechillo 10% + cáscara 20% + partido 4%), que corre en <b>Molienda / Fábrica</b>. Y un <b>Tablero arroz</b> que resume de la cosecha al pelado: kg que entraron húmedos, kg secos, merma, y los coproductos del pelado con su rinde. El módulo es <b>opt-in</b>: se activa en <b>Configuración → Empresa → "Circuito Arroz (Secadero)"</b> (o directamente con el botón Preparar).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/10/2026',
       titulo:'💳 v2.344.0 — El resumen del banco actualiza los cheques solos',
       desc:'Al <b>importar el resumen bancario</b>, el sistema ahora <b>actualiza el estado de los cheques automáticamente</b>: si el banco <b>debitó</b> un cheque <b>propio</b> que entregaste a un proveedor, lo pasa a <b>Cobrado</b>; si <b>acreditó</b> el importe de un cheque de <b>terceros</b> que habías <b>depositado</b>, también lo pasa a <b>Cobrado</b>. Es conservador: solo actúa cuando hay un único cheque que coincide por importe (y desempata por el N° de cheque del concepto). Al terminar la importación te avisa cuántos cheques se actualizaron.' },
@@ -10579,6 +10581,50 @@ async function campoSave(id) {
 }
 
 /* ----- EMPRESAS ----- */
+// ====================== TABLERO ARROZ ======================
+pages.arrozTablero = async function() {
+  setHeader('Tablero arroz', 'Del grano cosechado al pelado: rindes y costos por etapa');
+  if (!state.usaArroz) { $('#page-body').innerHTML = `<div class="stub-card">El circuito arroz no está habilitado. Activalo en <b>Configuración → Empresa → "Circuito Arroz (Secadero)"</b> o con el botón "Preparar circuito arroz" del Secadero.</div>`; return; }
+  const key='ac.arrozTabFechas'; let rango={}; try{ rango=JSON.parse(localStorage.getItem(key)||'{}'); }catch{}
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  const qs = new URLSearchParams(); if(rango.desde) qs.set('desde',rango.desde); if(rango.hasta) qs.set('hasta',rango.hasta);
+  let d; try{ d=(await api('/api/arroz/tablero'+(qs.toString()?'?'+qs:''))).data; }catch(e){ return toast(e.message,'error'); }
+  const s=d.secado||{}, p=d.pelado||{};
+  const kpi=(t,v,sub)=>`<div class="kpi"><div class="text-xs text-slate-500">${t}</div><div class="text-2xl font-bold">${v}</div>${sub?`<div class="text-[11px] text-slate-500 mt-0.5">${sub}</div>`:''}</div>`;
+  const copro = (p.coproductos||[]).map(c=>`<tr class="table-row"><td>${esc(c.nombre)}</td><td class="text-right font-semibold">${fmtN(c.kg)} kg</td><td class="text-right">${fmtN(c.pct)}%</td></tr>`).join('')
+    || `<tr><td colspan="3" class="text-center text-slate-400 py-3">Todavía no hay partes de pelado (cargalos en Molienda / Fábrica).</td></tr>`;
+  $('#page-body').innerHTML = `
+    <div class="flex flex-wrap items-end gap-2 mb-3 text-xs bg-slate-50 border border-slate-200 rounded-lg p-2">
+      <div><label class="label text-xs">Desde</label><input id="atab-desde" type="date" class="input" value="${rango.desde||''}"/></div>
+      <div><label class="label text-xs">Hasta</label><input id="atab-hasta" type="date" class="input" value="${rango.hasta||''}"/></div>
+      <button class="btn btn-secondary text-xs" onclick="arrozTabAplicar()">Aplicar</button>
+      <button class="btn btn-ghost text-xs" onclick="arrozTabLimpiar()">Limpiar</button>
+    </div>
+    <div class="text-sm font-semibold text-slate-700 mt-1 mb-1">🌾 Secado</div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      ${kpi('Partidas', fmtN(s.partidas||0))}
+      ${kpi('Entró húmedo', fmtN(s.kgHumedo||0)+' kg')}
+      ${kpi('Salió seco', fmtN(s.kgSeco||0)+' kg')}
+      ${kpi('Merma humedad', fmtN(s.mermaKg||0)+' kg', (s.mermaPct||0)+'% del húmedo')}
+    </div>
+    <div class="text-sm font-semibold text-slate-700 mt-1 mb-1">🏭 Pelado (molienda)</div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+      ${kpi('Partes de pelado', fmtN(p.partes||0))}
+      ${kpi('Cáscara seco procesado', fmtN(p.kgProcesados||0)+' kg')}
+      ${kpi('Costo de pelado', fmt$(p.costoTotal||0))}
+      ${kpi('Costo de secado', fmt$(s.costoTotal||0))}
+    </div>
+    <div class="kpi p-0 overflow-hidden">
+      <table class="data text-sm">
+        <thead><tr><th>Coproducto obtenido</th><th class="text-right">Kg</th><th class="text-right">Rinde</th></tr></thead>
+        <tbody>${copro}</tbody>
+      </table>
+    </div>
+    <div class="text-[11px] text-slate-500 mt-2">💡 El secado sale del Secadero; el pelado, de los Partes de Molienda de las fórmulas de arroz. La siembra/cosecha de las hectáreas se ve en Campañas y Viajes.</div>`;
+};
+function arrozTabAplicar(){ const r={desde:$('#atab-desde')?.value||'',hasta:$('#atab-hasta')?.value||''}; try{localStorage.setItem('ac.arrozTabFechas',JSON.stringify(r));}catch{} pages.arrozTablero(); }
+function arrozTabLimpiar(){ try{localStorage.removeItem('ac.arrozTabFechas');}catch{} pages.arrozTablero(); }
+
 // ====================== SECADERO (arroz / granos) ======================
 // Partidas de secado: entra grano húmedo y sale grano seco con la merma por humedad.
 function _secKgSeco(kgH, hEnt, hSal, merma) {
@@ -10607,7 +10653,10 @@ pages.secado = async function() {
   $('#page-body').innerHTML = `
     <div class="mb-3 flex items-center justify-between flex-wrap gap-2">
       <div class="text-xs text-slate-500">El secado da de baja el grano húmedo y da de alta el grano seco, calculando la merma por humedad.</div>
-      ${can('stock:create')?`<button class="btn btn-primary" onclick="secForm()">+ Nueva partida de secado</button>`:''}
+      <div class="flex gap-2">
+        ${can('stock:create')?`<button class="btn btn-secondary" onclick="arrozPreparar()" title="Crea los artículos del arroz y la fórmula de pelado">⚙️ Preparar circuito arroz</button>`:''}
+        ${can('stock:create')?`<button class="btn btn-primary" onclick="secForm()">+ Nueva partida de secado</button>`:''}
+      </div>
     </div>
     <div class="kpi p-0 overflow-hidden">
       <table class="data text-sm">
@@ -10655,6 +10704,18 @@ async function secSave(){
 async function secDel(id){
   if(!confirm('¿Eliminar esta partida de secado? Se revierte el stock (húmedo y seco).')) return;
   try{ await api('/api/secados/'+id,{method:'DELETE'}); toast('Eliminada','success'); delete state.cache.stockMap; pages.secado(); }catch(e){ toast(e.message,'error'); }
+}
+// Deja la empresa lista para arroz: crea artículos (cáscara húmedo/seco, blanco, partido,
+// afrechillo, cáscara) y la fórmula de pelado (editable en Molienda / Fábrica).
+async function arrozPreparar(){
+  if(!confirm('¿Preparar el circuito de arroz en esta empresa?\n\nCrea los artículos del arroz (cáscara húmedo/seco, blanco, partido, afrechillo, cáscara) y una fórmula de pelado editable. Activa Secadero y Molienda. No duplica lo que ya exista.')) return;
+  try{
+    const r = await api('/api/arroz/preparar',{method:'POST'});
+    const d = r.data||{};
+    toast(`Circuito arroz listo · ${d.productosCreados||0} artículos nuevos${d.formulaCreada?' · fórmula de pelado creada':''}`,'success');
+    delete state.cache.productos; delete state.cache.empresas; delete state.cache.stockMap;
+    await applyCompanyTheme(); renderNav(); pages.secado();
+  }catch(e){ toast(e.message,'error'); }
 }
 
 // Hub del módulo COMERCIAL / AgroCore (CRM de la empresa de software): vendedores/partners,

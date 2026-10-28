@@ -11006,6 +11006,102 @@ app.delete('/api/secados/:id', requireCompany, requirePermission('stock:delete')
   } catch (e) { next(e); }
 });
 
+// "Preparar circuito arroz": deja la empresa lista — activa los flags, crea los artículos
+// típicos del arroz (cáscara húmedo/seco, blanco, partido, afrechillo, cáscara) y una
+// fórmula de pelado editable. Idempotente: no duplica lo que ya exista.
+app.post('/api/arroz/preparar', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    await prisma.company.update({ where: { id: req.companyId }, data: { usaArroz: true, usaProduccionIndustrial: true } });
+    // Artículos del circuito (todos en kg). rolFabrica filtra los pickers de la fórmula.
+    const defs = [
+      { nombre: 'Arroz cáscara húmedo', rol: null },
+      { nombre: 'Arroz cáscara seco',   rol: 'materia_prima' },
+      { nombre: 'Arroz blanco/pulido',  rol: 'producto_final' },
+      { nombre: 'Arroz partido',        rol: 'producto_final' },
+      { nombre: 'Afrechillo de arroz',  rol: 'producto_final' },
+      { nombre: 'Cáscara de arroz',     rol: 'producto_final' },
+    ];
+    const existentes = await prisma.producto.findMany({ where: { companyId: req.companyId }, select: { id: true, nombre: true } });
+    const byNombre = {}; existentes.forEach(p => { byNombre[(p.nombre || '').toLowerCase().trim()] = p; });
+    let creados = 0;
+    const prodId = {};
+    for (const d of defs) {
+      const k = d.nombre.toLowerCase().trim();
+      let p = byNombre[k];
+      if (!p) {
+        p = await prisma.producto.create({ data: { companyId: req.companyId, nombre: d.nombre, categoria: 'granos', unidad: 'kg', rolFabrica: d.rol, activo: true } });
+        creados++;
+      } else if (d.rol) {
+        // Asegurar el rol de fábrica en los que ya existían (para que la fórmula los ofrezca).
+        await prisma.producto.update({ where: { id: p.id }, data: { rolFabrica: d.rol } });
+      }
+      prodId[d.nombre] = p.id;
+    }
+    // Fórmula de pelado (editable): % orientativos — suman 100.
+    let formulaCreada = false;
+    const yaForm = await prisma.formulaMolienda.findFirst({ where: { companyId: req.companyId, nombre: 'Pelado de arroz' } });
+    if (!yaForm) {
+      const items = [
+        { nombre: 'Arroz blanco/pulido', pct: 66 },
+        { nombre: 'Afrechillo de arroz', pct: 10 },
+        { nombre: 'Cáscara de arroz',    pct: 20 },
+        { nombre: 'Arroz partido',       pct: 4 },
+      ];
+      await prisma.formulaMolienda.create({ data: {
+        companyId: req.companyId, nombre: 'Pelado de arroz', origenProductoId: prodId['Arroz cáscara seco'],
+        observaciones: 'Rendimientos orientativos — ajustalos a tu molino.',
+        items: { create: items.map((it, i) => ({ companyId: req.companyId, productoId: prodId[it.nombre], rendimientoPct: it.pct, coefCosto: it.pct, orden: i })) },
+      }});
+      formulaCreada = true;
+    }
+    res.json({ ok: true, data: { productosCreados: creados, formulaCreada } });
+  } catch (e) { next(e); }
+});
+
+// Tablero arroz: de grano cosechado -> secado -> pelado, con rindes y costos.
+// Opcional ?desde=YYYY-MM-DD&hasta=YYYY-MM-DD
+app.get('/api/arroz/tablero', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const cid = req.companyId;
+    const desde = req.query.desde ? new Date(String(req.query.desde) + 'T00:00:00') : null;
+    const hasta = req.query.hasta ? new Date(String(req.query.hasta) + 'T23:59:59') : null;
+    const fFecha = (desde || hasta) ? { fecha: { ...(desde ? { gte: desde } : {}), ...(hasta ? { lte: hasta } : {}) } } : {};
+    // --- Secado ---
+    const secados = await prisma.secadoPartida.findMany({ where: { companyId: cid, ...fFecha } });
+    const sec = { partidas: secados.length, kgHumedo: 0, kgSeco: 0, costoTotal: 0 };
+    for (const s of secados) { sec.kgHumedo += Number(s.kgHumedo || 0); sec.kgSeco += Number(s.kgSeco || 0); sec.costoTotal += Number(s.costoTotal || 0); }
+    sec.mermaKg = Math.round((sec.kgHumedo - sec.kgSeco) * 100) / 100;
+    sec.mermaPct = sec.kgHumedo ? Math.round((sec.mermaKg / sec.kgHumedo) * 1000) / 10 : 0;
+    sec.kgHumedo = Math.round(sec.kgHumedo); sec.kgSeco = Math.round(sec.kgSeco); sec.costoTotal = Math.round(sec.costoTotal);
+    // --- Pelado (molienda de fórmulas de arroz) ---
+    const formulas = await prisma.formulaMolienda.findMany({ where: { companyId: cid } });
+    // Identificar fórmulas de arroz por nombre o por el nombre del origen.
+    const origenIds = [...new Set(formulas.map(f => f.origenProductoId).filter(Boolean))];
+    const origenProds = origenIds.length ? await prisma.producto.findMany({ where: { id: { in: origenIds } }, select: { id: true, nombre: true } }) : [];
+    const origenName = Object.fromEntries(origenProds.map(p => [p.id, (p.nombre || '').toLowerCase()]));
+    const esArroz = (f) => (f.nombre || '').toLowerCase().includes('arroz') || (origenName[f.origenProductoId] || '').includes('arroz');
+    const formIds = formulas.filter(esArroz).map(f => f.id);
+    const pel = { partes: 0, kgProcesados: 0, costoTotal: 0, coproductos: {} };
+    if (formIds.length) {
+      const partes = await prisma.parteMolienda.findMany({ where: { companyId: cid, formulaId: { in: formIds }, ...fFecha } });
+      pel.partes = partes.length;
+      for (const p of partes) {
+        pel.kgProcesados += Number(p.kgProcesados || 0);
+        pel.costoTotal += Number(p.costoTotal || 0);
+        let res2 = p.resultados; if (typeof res2 === 'string') { try { res2 = JSON.parse(res2); } catch { res2 = []; } }
+        for (const it of (Array.isArray(res2) ? res2 : [])) {
+          const nom = it.nombre || 'Coproducto';
+          pel.coproductos[nom] = (pel.coproductos[nom] || 0) + Number(it.kg || 0);
+        }
+      }
+    }
+    const copro = Object.entries(pel.coproductos).map(([nombre, kg]) => ({ nombre, kg: Math.round(kg), pct: pel.kgProcesados ? Math.round((kg / pel.kgProcesados) * 1000) / 10 : 0 }))
+      .sort((a, b) => b.kg - a.kg);
+    const pelado = { partes: pel.partes, kgProcesados: Math.round(pel.kgProcesados), costoTotal: Math.round(pel.costoTotal), coproductos: copro };
+    res.json({ ok: true, data: { secado: sec, pelado } });
+  } catch (e) { next(e); }
+});
+
 app.patch('/api/productos/:id/venta', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
   try {
     const prod = await prisma.producto.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
@@ -15129,14 +15225,14 @@ const _AYUDA_KB = [
       'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',
       'En "Plan canje" entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie. El parte y el canje se pueden anular.'],
     atajo:{ page:'molienda', label:'Abrir Molienda / Fábrica' } },
-  { id:'secado', terms:['secado','secadero','secar','arroz','humedad','merma por humedad','grano humedo','grano seco','secar grano','secar arroz','partida de secado'],
-    titulo:'Secadero (arroz y granos, con merma por humedad)',
+  { id:'secado', terms:['secado','secadero','secar','arroz','humedad','merma por humedad','grano humedo','grano seco','secar grano','secar arroz','partida de secado','circuito arroz','pelado de arroz','pelar arroz','preparar circuito arroz','tablero arroz'],
+    titulo:'Circuito del arroz (Secadero + Pelado + Tablero)',
     pasos:[
-      'Primero activá el módulo: Configuración → Empresa → tildá "Circuito Arroz (Secadero)". Recién ahí aparece "Secadero" en Stock y depósitos.',
-      'En el catálogo conviene tener dos artículos: el grano HÚMEDO (ej. "Arroz cáscara húmedo") y el grano SECO (ej. "Arroz cáscara seco"), ambos en kg.',
-      'En Secadero → "+ Nueva partida de secado" cargá: kg húmedos, % de humedad de entrada, % de humedad objetivo (arroz ~14%) y, si querés, una merma extra por impurezas. El sistema calcula los kg secos.',
-      'Al guardar, da de baja el grano húmedo del stock e ingresa el grano seco (con el costo del secado si lo cargaste). Si te equivocaste, podés eliminar la partida y se revierte el stock.',
-      'Para el PELADO del arroz (cáscara → integral/blanco + afrechillo + cáscara + partido) usá Molienda / Fábrica con una fórmula de rendimiento.'],
+      'Activá el circuito: Configuración → Empresa → tildá "Circuito Arroz (Secadero)". O de una, andá a Stock y depósitos → Secadero y tocá "⚙️ Preparar circuito arroz": crea los artículos (cáscara húmedo/seco, blanco, partido, afrechillo, cáscara) y la fórmula de pelado, y activa todo.',
+      'SECADO: en Secadero → "+ Nueva partida de secado" elegí el grano húmedo que entra y el seco que sale, cargá kg húmedos, % de humedad de entrada y objetivo (arroz ~14%) y una merma extra opcional. El sistema calcula los kg secos, da de baja el húmedo y de alta el seco, con el costo del secado.',
+      'PELADO: en Molienda / Fábrica → Partes de molienda, cargá un parte con la fórmula "Pelado de arroz" y los kg de cáscara seca. Descuenta la cáscara e ingresa arroz blanco, afrechillo, cáscara y partido según los rindes (editables en Fórmulas). Podés usar "rendimiento real".',
+      'TABLERO: en Stock y depósitos → "Tablero arroz" ves de la cosecha al pelado: kg húmedos, kg secos, merma, coproductos y rinde, con costos de secado y pelado. Filtrable por fechas.',
+      'La siembra/cosecha va por Campañas y Viajes; la venta/acopio/exportación por Posición de granos, Contratos de cereal y Liquidaciones, como con cualquier grano.'],
     atajo:{ page:'secado', label:'Abrir Secadero' } },
   { id:'caravanas', terms:['caravana','caravanas','recuento','recontar','rfid','caravana electronica','caravana de control','manga','padron','cuantas faltan','contar hacienda','pasar por la manga','senalada','senalar','ternero caravana','lector'],
     titulo:'Caravanas / Recuento (control de stock por caravana, sin fichas)',

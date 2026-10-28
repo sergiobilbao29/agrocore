@@ -40,6 +40,7 @@ model Company {
   catalogoManual     Boolean @default(false) // true = la empresa NO autogenera productos (insumos/animales/cereales); arranca con catálogo propio/vacío. Para fábricas separadas.
   flujoAislado       Boolean @default(false) // true = cuando esta empresa es la activa, el resumen multi-empresa muestra SOLO esta empresa (no ve el flujo de las demás). Las demás empresas sí la siguen viendo.
   usaComercial       Boolean @default(false) // habilita el módulo Comercial / AgroCore (vendedores, partners, leads/prospectos, abonos). Opt-in; pensado para AgroCore y resellers. Oculto por defecto para clientes finales.
+  usaArroz           Boolean @default(false) // habilita el circuito ARROZ (Secadero + pelado por molienda). Opt-in por empresa arrocera; oculto por defecto.
   activo          Boolean   @default(true)
   // ---- Red de vendedores / partners (vista del dueño) ----
   vendedorId      String?   // vendedor/partner que trajo a esta empresa (null = venta directa)
@@ -134,6 +135,7 @@ model Company {
   canjeParidades     CanjeParidad[]
   caravanas          Caravana[]
   recuentosCaravana  RecuentoCaravana[]
+  secados            SecadoPartida[]
 
 }
 
@@ -1604,6 +1606,35 @@ model RecuentoCaravana {
 
   @@index([companyId])
   @@index([companyId, fecha])
+}
+
+// ============================================================
+// SECADERO (arroz y otros granos): una PARTIDA de secado toma grano húmedo del stock
+// y lo transforma en grano seco, con la MERMA por humedad (y opcional por volátiles/
+// impurezas). Genera un egreso del producto húmedo y un ingreso del producto seco.
+//   kgSeco = kgHumedo × (100 − humedadEntrada)/(100 − humedadSalida) × (1 − mermaVolatilPct/100)
+// ============================================================
+model SecadoPartida {
+  id                String   @id @default(cuid())
+  companyId         String
+  fecha             DateTime
+  productoOrigenId  String?  // grano húmedo (sale del stock)
+  productoDestinoId String?  // grano seco (entra al stock)
+  depositoId        String?
+  kgHumedo          Float    @default(0)
+  humedadEntrada    Float    @default(0)   // % humedad de ingreso
+  humedadSalida     Float    @default(14)  // % humedad objetivo (arroz ~14)
+  mermaVolatilPct   Float    @default(0)   // % merma extra (zarandeo/impurezas)
+  kgSeco            Float    @default(0)   // calculado
+  costoTotal        Float?   // costo del secado (combustible/energía/servicio)
+  moneda            String?  @default("ARS")
+  campanaId         String?
+  observaciones     String?
+  createdAt         DateTime @default(now())
+
+  company           Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
 }
 
 // ============================================================
