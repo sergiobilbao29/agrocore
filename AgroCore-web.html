@@ -3072,6 +3072,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/10/2026',
+      titulo:'🛠️ v2.346.0 — Arreglo: borrar inactivos del catálogo',
+      desc:'Corregido el error "Unknown argument compartido" que aparecía al usar <b>🗑️ Borrar definitivamente los inactivos sin uso</b> en Catálogos. Ya borra sin problema los artículos inactivos sin movimientos de la empresa.' },
     { tag:'Novedad', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'28/10/2026',
       titulo:'🌾 v2.345.0 — Arroz: Secadero + Tablero + "Preparar circuito arroz"',
       desc:'Nuevo módulo <b>Secadero</b> para el circuito del arroz (y cualquier grano). Cargás una partida: grano <b>húmedo</b> que entra (kg + % de humedad), la <b>humedad objetivo</b> (arroz ~14%) y, opcional, una merma extra por impurezas; el sistema calcula los <b>kg secos</b>, da de <b>baja el grano húmedo</b> y de <b>alta el grano seco</b> en el stock, con el costo del secado.<br>Además hay un botón <b>⚙️ Preparar circuito arroz</b> que deja la empresa lista: crea los <b>artículos</b> (cáscara húmedo/seco, blanco/pulido, partido, afrechillo, cáscara) y una <b>fórmula de pelado editable</b> (cáscara seco → blanco 66% + afrechillo 10% + cáscara 20% + partido 4%), que corre en <b>Molienda / Fábrica</b>. Y un <b>Tablero arroz</b> que resume de la cosecha al pelado: kg que entraron húmedos, kg secos, merma, y los coproductos del pelado con su rinde. El módulo es <b>opt-in</b>: se activa en <b>Configuración → Empresa → "Circuito Arroz (Secadero)"</b> (o directamente con el botón Preparar).' },
@@ -30634,7 +30637,7 @@ async function catGastoDel(id) {
 // Borra DEFINITIVAMENTE los productos inactivos sin uso (sin movimientos, no compartidos).
 // Seguro: no toca artículos compartidos ni los que tienen historial. Pide confirmación.
 async function catBorrarInactivos() {
-  if (!confirm('¿Borrar definitivamente los artículos INACTIVOS que no tienen movimientos ni son compartidos?\n\nNo afecta a otras empresas ni a los depósitos compartidos. Esta acción no se puede deshacer.')) return;
+  if (!confirm('¿Borrar definitivamente los artículos INACTIVOS que no tienen movimientos?\n\nSon solo de esta empresa, así que no afecta a otras. Esta acción no se puede deshacer.')) return;
   try {
     const r = await api('/api/productos/eliminar-inactivos', { method:'POST' });
     const d = r.data || {};

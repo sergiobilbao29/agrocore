@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.345.0';
+const AGROCORE_VERSION = '2.346.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10917,7 +10917,7 @@ app.post('/api/productos/limpiar-autogenerados', requireCompany, requirePermissi
 app.post('/api/productos/eliminar-inactivos', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
   try {
     const candidatos = await prisma.producto.findMany({
-      where: { companyId: req.companyId, activo: false, compartido: false, movimientos: { none: {} } },
+      where: { companyId: req.companyId, activo: false, movimientos: { none: {} } },
       select: { id: true },
     });
     let borrados = 0, omitidos = 0;
