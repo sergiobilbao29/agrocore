@@ -41,6 +41,7 @@ model Company {
   flujoAislado       Boolean @default(false) // true = cuando esta empresa es la activa, el resumen multi-empresa muestra SOLO esta empresa (no ve el flujo de las demás). Las demás empresas sí la siguen viendo.
   usaComercial       Boolean @default(false) // habilita el módulo Comercial / AgroCore (vendedores, partners, leads/prospectos, abonos). Opt-in; pensado para AgroCore y resellers. Oculto por defecto para clientes finales.
   usaArroz           Boolean @default(false) // habilita el circuito ARROZ (Secadero + pelado por molienda). Opt-in por empresa arrocera; oculto por defecto.
+  aislada            Boolean @default(false) // true = empresa TOTALMENTE aislada del grupo: no ve ni usa depósitos compartidos, queda fuera del resumen multi-empresa (en ambos sentidos), y no se puede transferir cheques ni sumar a Sociedades hacia/desde ella.
   activo          Boolean   @default(true)
   // ---- Red de vendedores / partners (vista del dueño) ----
   vendedorId      String?   // vendedor/partner que trajo a esta empresa (null = venta directa)
@@ -3255,6 +3256,7 @@ model FormulaMoliendaItem {
 model ParteMolienda {
   id               String   @id @default(cuid())
   companyId        String
+  codigo           String?  // código corto legible (ej. MOL-2210-1) para la referencia de los movimientos
   fecha            DateTime
   formulaId        String
   depositoOrigenId String?  // silo de donde sale la soja

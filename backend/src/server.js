@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.346.0';
+const AGROCORE_VERSION = '2.347.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -739,6 +739,7 @@ async function serializeUser(u) {
     flujoAislado: co.flujoAislado === true,
     usaComercial: co.usaComercial === true,
     usaArroz: co.usaArroz === true,
+    aislada: co.aislada === true,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1842,6 +1843,7 @@ const empresaSchema = z.object({
   flujoAislado: z.boolean().optional(),
   usaComercial: z.boolean().optional(),
   usaArroz: z.boolean().optional(),
+  aislada: z.boolean().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
   vendedorId: z.string().nullable().optional(),
@@ -4224,7 +4226,8 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     // Aseguramos que cada categoría de animal y cada insumo del catálogo tengan su
     // producto, para verlos todos en Stock (existencia 0 hasta que se muevan).
     // Salvo que la empresa tenga "catálogo propio" (ej. fábrica): no autogenera nada.
-    const _coCat = await prisma.company.findUnique({ where: { id: req.companyId }, select: { catalogoManual: true } });
+    const _coCat = await prisma.company.findUnique({ where: { id: req.companyId }, select: { catalogoManual: true, aislada: true } });
+    const _empresaAislada = _coCat?.aislada === true; // no toca depósitos compartidos
     if (!_coCat?.catalogoManual) {
       try { await sincronizarProductosHacienda(req.companyId); } catch {}
       try { await sincronizarProductosInsumos(req.companyId); } catch {}
@@ -4269,9 +4272,11 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     let depFiltrado = null;
     if (depositoId) depFiltrado = await prisma.deposito.findFirst({ where: { id: depositoId }, select: { id: true, compartido: true } });
     const filtroEsCompartido = !!(depFiltrado && depFiltrado.compartido);
-    const { ids: sharedIds, byKey: sharedByKey } = await _stockCompartidoPorClave(
+    let { ids: sharedIds, byKey: sharedByKey } = await _stockCompartidoPorClave(
       depositoId ? (filtroEsCompartido ? depositoId : '__none__') : null
     );
+    // Empresa AISLADA: no participa del pozo de depósitos compartidos.
+    if (_empresaAislada) { sharedIds = []; sharedByKey = {}; }
     let movs = [];
     if (depositoId) {
       // Si el filtro es un depósito compartido, todo sale del pozo común (movs propios vacío).
@@ -4904,7 +4909,12 @@ app.get('/api/campanas/:id/rinde', requireCompany, requirePermission('produccion
 // porte) y costos (labores/insumos) de campos de varias empresas + campos externos.
 // ============================================================
 function _grupoCompanyIds(req) {
-  return (req.user?.userCompanies || []).map(uc => uc.companyId);
+  const ucs = req.user?.userCompanies || [];
+  // Empresa AISLADA: si la empresa activa es aislada, su "grupo" es solo ella.
+  const activa = ucs.find(uc => uc.companyId === req.companyId)?.company;
+  if (activa && activa.aislada) return [req.companyId];
+  // Desde una empresa normal, el grupo NUNCA incluye a las empresas aisladas.
+  return ucs.filter(uc => !(uc.company && uc.company.aislada)).map(uc => uc.companyId);
 }
 const _socioSchema = z.object({
   nombre: z.string().min(1),
@@ -7851,8 +7861,13 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
     // el consolidado muestra SOLO esa empresa (no ve el flujo de las demás).
     // Las demás empresas sí la siguen viendo cuando ellas son la activa.
     if (req.companyId) {
-      const _coAct = await prisma.company.findUnique({ where: { id: req.companyId }, select: { flujoAislado: true } }).catch(() => null);
-      if (_coAct?.flujoAislado) empresas = empresas.filter((e) => e.id === req.companyId);
+      const _ais = await prisma.company.findMany({ where: { id: { in: empresas.map(e => e.id) } }, select: { id: true, flujoAislado: true, aislada: true } }).catch(() => []);
+      const _aisById = Object.fromEntries(_ais.map(c => [c.id, c]));
+      const _act = _aisById[req.companyId];
+      // Empresa aislada o con flujo aislado: solo se ve a sí misma. Si la activa es normal,
+      // se excluyen las empresas aisladas del consolidado.
+      if (_act && (_act.aislada || _act.flujoAislado)) empresas = empresas.filter((e) => e.id === req.companyId);
+      else empresas = empresas.filter((e) => !_aisById[e.id]?.aislada);
     }
     const companyIds = empresas.map((e) => e.id);
     const hoy = new Date();
@@ -8056,8 +8071,13 @@ app.get('/api/resumen-multiempresa/stock', async (req, res, next) => {
     if (!empresas.length) return res.json({ ok: true, data: { filas: [], empresas: [], depositos: [], productos: [] } });
     // Flujo aislado: si la empresa activa lo tiene, el stock consolidado también muestra solo esa empresa.
     if (req.companyId) {
-      const _coAct = await prisma.company.findUnique({ where: { id: req.companyId }, select: { flujoAislado: true } }).catch(() => null);
-      if (_coAct?.flujoAislado) empresas = empresas.filter((e) => e.id === req.companyId);
+      const _ais = await prisma.company.findMany({ where: { id: { in: empresas.map(e => e.id) } }, select: { id: true, flujoAislado: true, aislada: true } }).catch(() => []);
+      const _aisById = Object.fromEntries(_ais.map(c => [c.id, c]));
+      const _act = _aisById[req.companyId];
+      // Empresa aislada o con flujo aislado: solo se ve a sí misma. Si la activa es normal,
+      // se excluyen las empresas aisladas del consolidado.
+      if (_act && (_act.aislada || _act.flujoAislado)) empresas = empresas.filter((e) => e.id === req.companyId);
+      else empresas = empresas.filter((e) => !_aisById[e.id]?.aislada);
     }
     const companyIds = empresas.map((e) => e.id);
 
@@ -10640,6 +10660,9 @@ const depositoSchema = z.object({
 // En Prisma 6 hay que envolver el `null` en `{ equals: null }` para que no lo interprete
 // como "sin filtro" y devuelva el error "Argument companyId is missing".
 function _depositoWhere(req) {
+  // Empresa AISLADA: solo sus propios depósitos, sin los compartidos del grupo.
+  const _act = (req.user?.userCompanies || []).find(uc => uc.companyId === req.companyId)?.company;
+  if (_act && _act.aislada) return { companyId: req.companyId };
   return { OR: [
     { companyId: req.companyId },
     { companyId: { equals: null }, compartido: true },
@@ -10846,14 +10869,21 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
       if (kg > disp + 0.001) return res.status(400).json({ ok: false, error: `No hay materia prima suficiente: disponible ${disp.toLocaleString('es-AR')}, intentás procesar ${kg.toLocaleString('es-AR')}${d.depositoOrigenId ? ' en ese silo/depósito' : ''}.` });
     }
 
+    // Código corto y legible: MOL-DDMM-N (N = correlativo del día en la empresa).
+    const _dd = String(fecha.getDate()).padStart(2, '0');
+    const _mm = String(fecha.getMonth() + 1).padStart(2, '0');
+    const _desde = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate(), 0, 0, 0);
+    const _hasta = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate(), 23, 59, 59);
+    const _nDia = await prisma.parteMolienda.count({ where: { companyId: req.companyId, fecha: { gte: _desde, lte: _hasta } } });
+    const codigo = `MOL-${_dd}${_mm}-${_nDia + 1}`;
     const parte = await prisma.$transaction(async (tx) => {
       const p = await tx.parteMolienda.create({ data: {
-        companyId: req.companyId, fecha, formulaId: f.id, depositoOrigenId: d.depositoOrigenId || null,
+        companyId: req.companyId, codigo, fecha, formulaId: f.id, depositoOrigenId: d.depositoOrigenId || null,
         kgProcesados: kg, costoOrigenUnit: Number(d.costoOrigenUnit) || 0, costoProduccion: Number(d.costoProduccion) || 0,
         costoTotal, modoReal, centroCostoId: d.centroCostoId || null, observaciones: d.observaciones || null,
         resultados, userId: req.user?.id || null,
       } });
-      const ref = 'MOL-' + p.id;
+      const ref = codigo;
       // Egreso del origen (soja)
       await tx.movimiento.create({ data: {
         companyId: req.companyId, productoId: f.origenProductoId, fecha, tipo: 'egreso', motivo: 'molienda',
@@ -10884,7 +10914,10 @@ app.delete('/api/partes-molienda/:id', requireCompany, requirePermission('stock:
     const p = await prisma.parteMolienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!p) return res.status(404).json({ ok: false, error: 'Parte no encontrado' });
     await prisma.$transaction(async (tx) => {
-      await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'MOL-' + p.id } });
+      // Borra los movimientos por la referencia guardada. Los partes nuevos usan el
+      // código corto (MOL-DDMM-N); los viejos usaban 'MOL-'+id. Cubrimos ambos.
+      const refs = [p.codigo, 'MOL-' + p.id].filter(Boolean);
+      await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: { in: refs } } });
       await tx.parteMolienda.delete({ where: { id: p.id } });
     });
     res.json({ ok: true });
@@ -14679,11 +14712,16 @@ async function _ctxAsistente(companyId) {
 }
 // Empresas a las que el usuario tiene acceso (para el bot general multi-empresa).
 async function _empresasDeUsuario(req) {
+  // Empresa AISLADA: desde la activa aislada, el grupo es solo ella; desde una normal,
+  // se excluyen las aisladas del grupo.
+  const ucs = req.user?.userCompanies || [];
+  const activa = ucs.find(uc => uc.companyId === req.companyId)?.company;
+  if (activa && activa.aislada) return [{ id: req.companyId, name: activa.name || 'Empresa' }];
   if (req.user?.superAdmin) {
-    const all = await prisma.company.findMany({ where: { activo: { not: false } }, select: { id: true, name: true }, orderBy: { name: 'asc' } });
+    const all = await prisma.company.findMany({ where: { activo: { not: false }, aislada: { not: true } }, select: { id: true, name: true }, orderBy: { name: 'asc' } });
     return all.map(c => ({ id: c.id, name: c.name }));
   }
-  return (req.user?.userCompanies || []).map(uc => ({ id: uc.companyId, name: uc.company?.name || 'Empresa' }));
+  return ucs.filter(uc => !(uc.company && uc.company.aislada)).map(uc => ({ id: uc.companyId, name: uc.company?.name || 'Empresa' }));
 }
 // Contexto del asistente COMBINADO de varias empresas: cada entidad-objeto queda
 // etiquetada con _cid/_cnombre para saber de qué empresa es (y decidir dónde cargar).
@@ -22898,6 +22936,49 @@ app.get('/api/contactos/saldos', requireCompany, requirePermission('finanzas:rea
     const saldoPagar  = await _saldoContactoARS(prisma, req.companyId, 'proveedor', proveedorId);
     const maxCompensable = Math.max(0, Math.min(saldoCobrar, saldoPagar));
     res.json({ ok: true, data: { saldoCobrar, saldoPagar, neto: Math.round((saldoCobrar - saldoPagar) * 100) / 100, maxCompensable } });
+  } catch (e) { next(e); }
+});
+
+// Saldo EN KILOS (granos/productos) de un cliente o proveedor, armado SOLO con los
+// movimientos de stock asociados a ese contacto (sin factura). Convención de signo:
+// INGRESO (entra a mi stock de ese contacto) = a FAVOR del contacto (le debo esa cantidad);
+// EGRESO (sale hacia el contacto) = baja su saldo. neto = ingresos - egresos por producto.
+app.get('/api/contactos/saldo-kg', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const tipo = String(req.query.tipo || '');
+    const contactoId = String(req.query.contactoId || '');
+    if (!['cliente', 'proveedor'].includes(tipo) || !contactoId) {
+      return res.status(400).json({ ok: false, error: 'Falta tipo (cliente|proveedor) o contactoId' });
+    }
+    const movs = await prisma.movimiento.findMany({
+      where: { companyId: req.companyId, contraparteTipo: tipo, contraparteId: contactoId },
+      select: {
+        tipo: true, cantidad: true, total: true, precio: true, fecha: true, motivo: true,
+        producto: { select: { id: true, nombre: true, unidad: true } },
+      },
+      orderBy: { fecha: 'asc' },
+    });
+    const byProd = {};
+    let totalMovs = 0;
+    for (const m of movs) {
+      if (!m.producto) continue;
+      totalMovs++;
+      const k = m.producto.id;
+      if (!byProd[k]) byProd[k] = { productoId: k, nombre: m.producto.nombre, unidad: m.producto.unidad || 'kg', ingresos: 0, egresos: 0, valorIng: 0, valorEgr: 0 };
+      const cant = Number(m.cantidad || 0);
+      const val = Number(m.total != null ? m.total : (m.precio != null ? m.precio * cant : 0)) || 0;
+      if (m.tipo === 'ingreso') { byProd[k].ingresos += cant; byProd[k].valorIng += val; }
+      else if (m.tipo === 'egreso') { byProd[k].egresos += cant; byProd[k].valorEgr += val; }
+    }
+    const items = Object.values(byProd).map(p => ({
+      productoId: p.productoId, nombre: p.nombre, unidad: p.unidad,
+      ingresos: Math.round(p.ingresos * 100) / 100,
+      egresos: Math.round(p.egresos * 100) / 100,
+      netoKg: Math.round((p.ingresos - p.egresos) * 100) / 100,       // + = a favor del contacto
+      netoValor: Math.round((p.valorIng - p.valorEgr) * 100) / 100,   // $ equivalente si se cargaron precios
+    })).filter(p => Math.abs(p.ingresos) > 0.001 || Math.abs(p.egresos) > 0.001)
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    res.json({ ok: true, data: { tipo, contactoId, items, totalMovimientos: totalMovs } });
   } catch (e) { next(e); }
 });
 

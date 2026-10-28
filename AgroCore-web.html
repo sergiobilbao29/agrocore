@@ -1828,7 +1828,7 @@ async function switchCompany(id) {
 async function applyCompanyTheme() {
   const m = currentMembership();
   const root = document.documentElement;
-  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false, catMan = false, usaComercial = false, usaArroz = false;
+  let color = '#15803d', informal = false, cajaTenedor = false, usaCC = false, usaPI = false, catMan = false, usaComercial = false, usaArroz = false, aislada = false;
   try {
     if (!state.cache.empresas) {
       const r = await api('/api/empresas');
@@ -1844,6 +1844,7 @@ async function applyCompanyTheme() {
       catMan = emp.catalogoManual === true;
       usaComercial = emp.usaComercial === true;
       usaArroz = emp.usaArroz === true;
+      aislada = emp.aislada === true;
     }
   } catch {}
   const wm = $('#company-watermark');
@@ -1868,6 +1869,7 @@ async function applyCompanyTheme() {
   state.usaProduccionIndustrial = usaPI;
   state.usaComercial = usaComercial;
   state.usaArroz = usaArroz;
+  state.aislada = aislada;
   state.catalogoManual = catMan;
   try { ensureCoraFab(); } catch {}
 }
@@ -3072,6 +3074,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/10/2026',
+      titulo:'🔒 v2.347.0 — Empresa aislada, movimiento de stock con cliente/proveedor y saldo en kilos',
+      desc:'Varias mejoras:<br>• <b>Empresa totalmente aislada:</b> en <b>Configuración → Empresa</b> se puede marcar <b>🔒 Empresa totalmente aislada</b>. Una empresa aislada <b>no ve ni usa los depósitos compartidos</b>, queda <b>fuera del resumen multi-empresa en ambos sentidos</b> (ni ve a las demás ni las demás la ven) y <b>no se le pueden transferir cheques ni sumar a Sociedades</b>. Es más fuerte que "Flujo aislado" e ideal para una fábrica que trabaja 100% separada.<br>• <b>Movimiento de stock con cliente/proveedor</b> (solo en empresas tipo <b>Fábrica</b> / Producción industrial): al cargar un <b>Nuevo movimiento</b> de stock se puede elegir un <b>cliente o proveedor</b> (por nombre) y un <b>motivo</b> (compra / venta / canje / ajuste…), <b>sin pedir factura</b>. Queda registrado de quién vino / para quién fue, moviendo solo el stock (no genera cuenta corriente ni factura). Ideal para la soja que entra por remito o el canje.<br>• <b>Saldo en kilos por cliente/proveedor</b> (solo en empresas tipo <b>Fábrica</b>): en <b>Clientes</b> y <b>Proveedores</b>, el botón <b>📦 kg</b> muestra el saldo en <b>kilos</b> de granos que tenés con ese contacto, armado con esos movimientos de stock. Dice cuánto entró, cuánto salió y a favor de quién queda (con el equivalente en $ si cargaste precio).<br>• <b>Código de molienda más corto:</b> los movimientos que genera un parte de molienda ahora usan una referencia corta y legible (ej. <b>MOL-2210-1</b>) en vez del código largo, para ubicarlos más fácil.<br>• <b>Cheques — filtro Físico / e-cheq:</b> nuevo filtro para ver solo los cheques <b>📄 físicos</b> o <b>💻 electrónicos (e-cheq)</b>.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/10/2026',
       titulo:'🛠️ v2.346.0 — Arreglo: borrar inactivos del catálogo',
       desc:'Corregido el error "Unknown argument compartido" que aparecía al usar <b>🗑️ Borrar definitivamente los inactivos sin uso</b> en Catálogos. Ya borra sin problema los artículos inactivos sin movimientos de la empresa.' },
@@ -7222,6 +7227,7 @@ pages.clientes = async function() {
               <td>${esc(c.localidad||'—')}</td>
               <td class="text-right ${saldo>0?'text-amber-600 font-semibold':''}">${saldo?fmt$(saldo):'—'}</td>
               <td class="text-right whitespace-nowrap">
+                ${state.usaProduccionIndustrial ? `<button class="btn btn-ghost text-xs" title="Saldo en kilos (granos)" onclick='ccSaldoGranos("cliente",${JSON.stringify(c.id)},${JSON.stringify(c.razonSocial)})'>📦 kg</button>` : ''}
                 ${can('contactos:update') ? `<button class="btn btn-ghost text-xs" onclick='clienteForm(${JSON.stringify(c.id)})'>✏️</button>` : ''}
                 ${can('contactos:delete') ? `<button class="btn btn-ghost text-xs text-red-600" onclick='clienteDel(${JSON.stringify(c.id)})'>🗑️</button>` : ''}
               </td>
@@ -7314,6 +7320,46 @@ async function clienteDel(id) {
   try { await api('/api/clientes/'+id, { method:'DELETE' }); toast('Cliente borrado','success'); delete state.cache.clientes; pages.clientes(); }
   catch (e) { toast(e.message,'error'); }
 }
+// Saldo EN KILOS (granos) de un cliente/proveedor: se arma con los movimientos de stock
+// asociados a ese contacto (sin factura). + = a favor del contacto (le debés); - = te debe.
+async function ccSaldoGranos(tipo, contactoId, nombre) {
+  const fkg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR', { minimumFractionDigits:0, maximumFractionDigits:2 });
+  openModal({
+    title: `Saldo en kilos — ${nombre||''}`,
+    size: 'max-w-2xl',
+    body: `<div id="sk-body" class="text-slate-500 text-sm py-6 text-center">Cargando…</div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+  });
+  let r;
+  try { r = await api(`/api/contactos/saldo-kg?tipo=${encodeURIComponent(tipo)}&contactoId=${encodeURIComponent(contactoId)}`); }
+  catch (e) { const b=$('#sk-body'); if(b) b.innerHTML = `<div class="text-red-600 py-4">${esc(e.message)}</div>`; return; }
+  const items = (r.data && r.data.items) || [];
+  const b = $('#sk-body'); if (!b) return;
+  if (!items.length) {
+    b.innerHTML = `<div class="text-slate-400 py-6 text-center">Todavía no hay movimientos de stock asociados a este ${tipo}.<br><span class="text-[12px]">Cargalos desde <b>Stock → Nuevo movimiento</b>, eligiendo este ${tipo} como contraparte.</span></div>`;
+    return;
+  }
+  const filas = items.map(it => {
+    const n = it.netoKg;
+    const favor = n > 0.001 ? `a favor de ${esc(nombre||'')}` : (n < -0.001 ? `${esc(nombre||'')} te debe` : 'saldado');
+    const col = n > 0.001 ? 'text-emerald-700' : (n < -0.001 ? 'text-red-600' : 'text-slate-400');
+    return `<tr class="table-row">
+      <td><b>${esc(it.nombre)}</b></td>
+      <td class="text-right text-emerald-700">+${fkg(it.ingresos)}</td>
+      <td class="text-right text-red-600">-${fkg(it.egresos)}</td>
+      <td class="text-right font-bold ${col}">${n>0?'+':''}${fkg(n)} ${esc(it.unidad||'kg')}</td>
+      <td class="text-[11px] text-slate-500">${favor}</td>
+      <td class="text-right text-slate-500">${it.netoValor?fmt$(it.netoValor):'—'}</td>
+    </tr>`;
+  }).join('');
+  b.innerHTML = `
+    <div class="text-[12px] text-slate-500 mb-2">Se arma solo con los <b>movimientos de stock</b> asociados a este ${tipo} (sin factura). <b>+</b> = a favor del ${tipo} (le debés); <b>−</b> = te debe.</div>
+    <div class="overflow-x-auto"><table class="data">
+      <thead><tr><th>Producto</th><th class="text-right">Entró</th><th class="text-right">Salió</th><th class="text-right">Saldo (kg)</th><th>Estado</th><th class="text-right">Equiv. $</th></tr></thead>
+      <tbody>${filas}</tbody>
+    </table></div>
+    <div class="text-[11px] text-slate-400 mt-2">El equivalente en $ aparece solo si cargaste un precio en el movimiento.</div>`;
+}
 
 /* ----- PROVEEDORES ----- */
 pages.proveedores = async function() {
@@ -7375,6 +7421,7 @@ pages.proveedores = async function() {
               <td>${esc(p.localidad||'—')}</td>
               <td class="text-right ${hayDeuda(m)?'text-red-600 font-semibold':''}">${fmtSaldos(m)}</td>
               <td class="text-right whitespace-nowrap">
+                ${state.usaProduccionIndustrial ? `<button class="btn btn-ghost text-xs" title="Saldo en kilos (granos)" onclick='ccSaldoGranos("proveedor",${JSON.stringify(p.id)},${JSON.stringify(p.razonSocial)})'>📦 kg</button>` : ''}
                 ${can('contactos:update') ? `<button class="btn btn-ghost text-xs" onclick='provForm(${JSON.stringify(p.id)})'>✏️</button>`:''}
                 ${can('contactos:delete') ? `<button class="btn btn-ghost text-xs text-red-600" onclick='provDel(${JSON.stringify(p.id)})'>🗑️</button>`:''}
               </td>
@@ -8492,6 +8539,8 @@ async function movForm(prodIdPreset=null, tipoPreset=null, editMov=null) {
   const prods = state.cache.productos || [];
   if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
   if (!state.cache.campanas) { try { state.cache.campanas = (await api('/api/campanas')).data || []; } catch { state.cache.campanas = []; } }
+  if (!state.cache.clientes)  { try { state.cache.clientes  = (await api('/api/clientes')).data  || []; } catch { state.cache.clientes  = []; } }
+  if (!state.cache.proveedores){ try { state.cache.proveedores= (await api('/api/proveedores')).data|| []; } catch { state.cache.proveedores= []; } }
   if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
   const _rootsMov = (state.cache.categoriasArt||[]).filter(c => !c.padreId && c.activo!==false).sort((a,b)=>(a.orden-b.orden)||(a.nombre||'').localeCompare(b.nombre||''));
   const deps = (state.cache.depositos || []).filter(d => d.activo !== false);
@@ -8531,7 +8580,21 @@ async function movForm(prodIdPreset=null, tipoPreset=null, editMov=null) {
           </select>
           <div class="text-[10px] text-slate-400 mt-1">Elegí a qué depósito entra/sale el stock. "Campo / general" es el stock por defecto.</div>
         </div>
-        <div class="col-span-2"><label class="label">Motivo *</label><input id="f-mot" class="input" placeholder="compra / venta / cosecha / consumo…" value="${esc(ed.motivo||'')}" /></div>
+        <div class="col-span-2"><label class="label">Motivo *</label><input id="f-mot" class="input" list="f-mot-list" placeholder="compra / venta / canje / ajuste / cosecha / consumo…" value="${esc(ed.motivo||'')}" />
+          <datalist id="f-mot-list"><option value="compra"></option><option value="venta"></option><option value="canje"></option><option value="ajuste"></option><option value="cosecha"></option><option value="consumo"></option><option value="propio"></option></datalist>
+        </div>
+        ${state.usaProduccionIndustrial ? `
+        <div class="col-span-2 grid grid-cols-2 gap-2 p-2 rounded-lg bg-slate-50 border border-slate-200">
+          <div class="col-span-2 text-[11px] text-slate-500">Asociar a un cliente/proveedor (opcional, sin factura): queda registrado de quién vino / para quién fue. No genera cuenta corriente.</div>
+          <div><label class="label text-xs">Contraparte</label>
+            <select id="f-ctipo" class="input" onchange="movCpartRefresh()">
+              <option value="">— Ninguno —</option>
+              <option value="cliente" ${ed.contraparteTipo==='cliente'?'selected':''}>Cliente</option>
+              <option value="proveedor" ${ed.contraparteTipo==='proveedor'?'selected':''}>Proveedor</option>
+            </select>
+          </div>
+          <div><label class="label text-xs">Nombre</label><select id="f-cpart" class="input"><option value="">—</option></select></div>
+        </div>` : ''}
         <div class="col-span-2"><label class="label">Campaña (para grano cosechado)</label>
           <select id="f-campana" class="input">
             <option value="" ${!ed.campanaId?'selected':''}>— Sin campaña —</option>
@@ -8547,7 +8610,21 @@ async function movForm(prodIdPreset=null, tipoPreset=null, editMov=null) {
              <button class="btn btn-primary" onclick="movSave(${editMov?`'${editMov.id}'`:'null'})">${editMov?'💾 Guardar':'Crear'}</button>`
   });
   // Poblar la lista de productos (filtrable por categoría/familia y buscador).
-  setTimeout(() => { const pre = $('#f-prod-preset')?.value || ''; movProdRefresh(pre); }, 0);
+  setTimeout(() => { const pre = $('#f-prod-preset')?.value || ''; movProdRefresh(pre); movCpartRefresh(ed.contraparteId||''); }, 0);
+}
+// Rellena el select de contraparte (cliente/proveedor) según el tipo elegido.
+function movCpartRefresh(preId) {
+  const tipo = document.getElementById('f-ctipo')?.value || '';
+  const sel = document.getElementById('f-cpart'); if (!sel) return;
+  const cur = (typeof preId==='string' && preId) ? preId : sel.value;
+  if (!tipo) { sel.innerHTML = '<option value="">—</option>'; sel.disabled = true; return; }
+  sel.disabled = false;
+  const lista = (tipo==='cliente' ? (state.cache.clientes||[]) : (state.cache.proveedores||[]))
+    .filter(x => x.activo !== false)
+    .sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  sel.innerHTML = '<option value="">— Elegir —</option>' +
+    lista.map(x => `<option value="${esc(x.id)}">${esc(x.nombre||x.razonSocial||'')}</option>`).join('');
+  if (cur && lista.some(x => x.id === cur)) sel.value = cur;
 }
 // Nombre del producto SIN el prefijo de especie para hacienda (ej. "Vaca" en vez de "Bovino - Vaca").
 function _movProdNombre(p) {
@@ -8602,6 +8679,8 @@ async function movSave(editId=null) {
     referencia: $('#f-ref').value.trim()||null,
     depositoId: $('#f-deposito')?.value || null,
     campanaId: $('#f-campana')?.value || null,
+    contraparteTipo: $('#f-ctipo')?.value || null,
+    contraparteId: ($('#f-ctipo')?.value && $('#f-cpart')?.value) ? $('#f-cpart').value : null,
   };
   if (!data.productoId || !data.motivo || !data.cantidad) return toast('Completá los campos requeridos','warn');
   // El GRANO entregado en una Cerealera solo se puede VENDER (venta / liquidación de cereal).
@@ -11532,6 +11611,10 @@ function empForm(id=null) {
           <label for="f-flujoais" class="text-sm">Flujo aislado <span class="text-slate-400">— cuando trabajás DENTRO de esta empresa, el resumen multi-empresa muestra solo esta empresa (no ves el flujo de las demás). Las demás empresas sí siguen viendo el flujo de esta. Ideal para una fábrica separada.</span></label>
         </div>
         <div class="col-span-2 flex items-start gap-2 mt-1">
+          <input id="f-aislada" type="checkbox" ${it.aislada?'checked':''} class="mt-0.5" />
+          <label for="f-aislada" class="text-sm">🔒 Empresa totalmente aislada <span class="text-slate-400">— aísla por completo a esta empresa del grupo: NO ve ni usa los depósitos compartidos, queda fuera del resumen multi-empresa en ambos sentidos (ni ve a las demás ni las demás la ven), y NO se puede transferir cheques ni sumar a Sociedades hacia/desde ella. Más fuerte que "Flujo aislado". Ideal para una fábrica que trabaja 100% separada.</span></label>
+        </div>
+        <div class="col-span-2 flex items-start gap-2 mt-1">
           <input id="f-comercial" type="checkbox" ${it.usaComercial?'checked':''} class="mt-0.5" />
           <label for="f-comercial" class="text-sm">Módulo Comercial / Partners <span class="text-slate-400">— habilita el módulo comercial (vendedores, partners, prospectos/leads y abonos/suscripciones). Oculto por defecto; activalo solo donde se use (AgroCore o resellers).</span></label>
         </div>
@@ -11594,6 +11677,7 @@ async function empSave(id) {
     usaProduccionIndustrial: $('#f-usapi')?.checked || false,
     catalogoManual: $('#f-catman')?.checked || false,
     flujoAislado: $('#f-flujoais')?.checked || false,
+    aislada: $('#f-aislada')?.checked || false,
     usaComercial: $('#f-comercial')?.checked || false,
     usaArroz: $('#f-arroz')?.checked || false,
   };
@@ -18436,7 +18520,7 @@ pages.cheques = async function() {
   try { state.cache.chequeEstados = (await api('/api/cheque-estados')).data || []; } catch { state.cache.chequeEstados = state.cache.chequeEstados || []; }
 
   // Por defecto mostramos los cheques EN CARTERA y sin orden fijo (se ordena por columna).
-  state.chequeFilter = Object.assign({ estado:'en_cartera', sortCol:null, sortDir:'asc', tipo:'', banco:'', cuenta:'', numero:'' }, state.chequeFilter||{});
+  state.chequeFilter = Object.assign({ estado:'en_cartera', sortCol:null, sortDir:'asc', tipo:'', formato:'', banco:'', cuenta:'', numero:'' }, state.chequeFilter||{});
   const total = rows.reduce((a,c)=>a+Number(c.monto||0),0);
   // Disponibles = cheques en cartera (recibidos, listos para usar)
   const enCartera = rows.filter(c => (c.estado||'').toLowerCase() === 'en_cartera');
@@ -18471,6 +18555,7 @@ pages.cheques = async function() {
     let filtered = rows.filter(c => {
       if (f.estado && (c.estado||'').toLowerCase() !== f.estado) return false;
       if (f.tipo   && c.tipo !== f.tipo) return false;
+      if (f.formato && ((c.formato||'fisico') !== f.formato)) return false;
       if (f.banco  && (c.banco||'') !== f.banco) return false;
       if (f.cuenta && (c.cuenta||'') !== f.cuenta) return false;
       if (f.numero && !((c.nroCheque||'').toLowerCase().includes(f.numero.toLowerCase()))) return false;
@@ -18534,6 +18619,14 @@ pages.cheques = async function() {
           </select>
         </div>
         <div class="md:col-span-2">
+          <label class="label">Formato</label>
+          <select id="chq-fformato" class="input">
+            <option value="">Todos</option>
+            <option value="fisico" ${state.chequeFilter.formato==='fisico'?'selected':''}>📄 Físico</option>
+            <option value="electronico" ${state.chequeFilter.formato==='electronico'?'selected':''}>💻 e-cheq</option>
+          </select>
+        </div>
+        <div class="md:col-span-2">
           <label class="label">Banco</label>
           <select id="chq-fbanco" class="input">
             <option value="">Todos</option>
@@ -18568,6 +18661,7 @@ pages.cheques = async function() {
     <div class="kpi p-0 overflow-hidden"><div id="cheques-tabla" class="overflow-x-auto"></div></div>`;
   $('#chq-festado').onchange = e => { state.chequeFilter.estado = e.target.value; render(); };
   $('#chq-ftipo').onchange   = e => { state.chequeFilter.tipo = e.target.value; render(); };
+  $('#chq-fformato') && ($('#chq-fformato').onchange = e => { state.chequeFilter.formato = e.target.value; render(); });
   $('#chq-fbanco').onchange  = e => { state.chequeFilter.banco = e.target.value; render(); };
   $('#chq-fcuenta').onchange = e => { state.chequeFilter.cuenta = e.target.value; render(); };
   $('#chq-fnum').oninput     = e => { state.chequeFilter.numero = e.target.value; render(); };
@@ -18584,6 +18678,7 @@ function chqExportExcel() {
   const rows = (state._chqRows || []).filter(c => {
     if (f.estado && (c.estado||'').toLowerCase() !== f.estado) return false;
     if (f.tipo   && c.tipo !== f.tipo) return false;
+    if (f.formato && ((c.formato||'fisico') !== f.formato)) return false;
     if (f.banco  && (c.banco||'') !== f.banco) return false;
     if (f.cuenta && (c.cuenta||'') !== f.cuenta) return false;
     if (f.numero && !((c.nroCheque||'').toLowerCase().includes(String(f.numero).toLowerCase()))) return false;
@@ -18622,6 +18717,7 @@ function chqExportPDF() {
   const rows = (state._chqRows || []).filter(c => {
     if (f.estado && (c.estado||'').toLowerCase() !== f.estado) return false;
     if (f.tipo   && c.tipo !== f.tipo) return false;
+    if (f.formato && ((c.formato||'fisico') !== f.formato)) return false;
     if (f.banco  && (c.banco||'') !== f.banco) return false;
     if (f.cuenta && (c.cuenta||'') !== f.cuenta) return false;
     if (f.numero && !((c.nroCheque||'').toLowerCase().includes(String(f.numero).toLowerCase()))) return false;
