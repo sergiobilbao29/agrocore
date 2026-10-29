@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.348.0';
+const AGROCORE_VERSION = '2.349.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11233,6 +11233,111 @@ app.delete('/api/canjes/:id', requireCompany, requirePermission('stock:delete'),
     await prisma.$transaction(async (tx) => {
       await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'CANJE-' + c.id } });
       await tx.canje.delete({ where: { id: c.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CUENTA DE CANJE EN ESPECIE (saldada en GRANO/soja), por cliente/proveedor.
+// Carga en dos pasos: 1) ingreso_grano (el cliente deja grano) suma a favor;
+// 2) retiro_producto (se lleva producto) descuenta su equivalente en grano.
+// Saldo = suma de equivSoja (+ a favor del cliente / - debe).
+// ============================================================
+async function _nombreContacto(req, tipo, id) {
+  if (!id) return null;
+  try {
+    const c = tipo === 'proveedor'
+      ? await prisma.proveedor.findFirst({ where: { id, companyId: req.companyId } })
+      : await prisma.cliente.findFirst({ where: { id, companyId: req.companyId } });
+    return c?.razonSocial || null;
+  } catch { return null; }
+}
+// Saldo de canje (en grano) agrupado por contacto.
+app.get('/api/canje-cta/saldos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const movs = await prisma.canjeCtaMov.findMany({ where: { companyId: req.companyId }, select: { contactoTipo: true, contactoId: true, contactoNombre: true, equivSoja: true, fecha: true } });
+    const by = {};
+    for (const m of movs) {
+      const k = m.contactoTipo + ':' + m.contactoId;
+      if (!by[k]) by[k] = { contactoTipo: m.contactoTipo, contactoId: m.contactoId, contactoNombre: m.contactoNombre, saldoSoja: 0, ultima: null };
+      by[k].saldoSoja += Number(m.equivSoja || 0);
+      if (!by[k].ultima || new Date(m.fecha) > new Date(by[k].ultima)) by[k].ultima = m.fecha;
+      if (m.contactoNombre) by[k].contactoNombre = m.contactoNombre;
+    }
+    const data = Object.values(by).map(x => ({ ...x, saldoSoja: Math.round(x.saldoSoja * 100) / 100 }))
+      .sort((a, b) => (a.contactoNombre || '').localeCompare(b.contactoNombre || ''));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+// Libro (ledger) de un contacto, con saldo acumulado.
+app.get('/api/canje-cta', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.contactoId) { where.contactoId = String(req.query.contactoId); where.contactoTipo = String(req.query.contactoTipo || 'cliente'); }
+    const movs = await prisma.canjeCtaMov.findMany({ where, orderBy: [{ fecha: 'asc' }, { createdAt: 'asc' }] });
+    const ids = [...new Set(movs.map(m => m.productoId).filter(Boolean))];
+    const prods = ids.length ? await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: ids } }, select: { id: true, nombre: true, unidad: true } }) : [];
+    const pm = Object.fromEntries(prods.map(p => [p.id, p]));
+    let acc = 0;
+    const data = movs.map(m => { acc += Number(m.equivSoja || 0); return { ...m, productoNombre: pm[m.productoId]?.nombre || '', saldoAcum: Math.round(acc * 100) / 100 }; });
+    res.json({ ok: true, data, saldoSoja: Math.round(acc * 100) / 100 });
+  } catch (e) { next(e); }
+});
+app.post('/api/canje-cta', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = req.body || {};
+    const tipo = ['ingreso_grano', 'retiro_producto', 'ajuste'].includes(d.tipo) ? d.tipo : null;
+    if (!tipo) return res.status(400).json({ ok: false, error: 'Tipo inválido' });
+    if (!d.contactoId) return res.status(400).json({ ok: false, error: 'Elegí el cliente/proveedor' });
+    const contactoTipo = d.contactoTipo === 'proveedor' ? 'proveedor' : 'cliente';
+    const fecha = d.fecha ? new Date(d.fecha) : new Date();
+    const cant = Number(d.cantidad) || 0;
+    const factor = Number(d.factor) || 1;
+    const contactoNombre = d.contactoNombre || await _nombreContacto(req, contactoTipo, d.contactoId);
+    // Equivalente en grano con signo + reglas por tipo.
+    let equivSoja = 0, generaStock = d.generaStock !== false, movTipo = null;
+    if (tipo === 'ingreso_grano') {
+      if (!(cant > 0)) return res.status(400).json({ ok: false, error: 'Cantidad de grano debe ser mayor a 0' });
+      equivSoja = cant;                 // deja grano → a favor del cliente
+      movTipo = 'ingreso';              // el grano entra a tu stock
+    } else if (tipo === 'retiro_producto') {
+      if (!(cant > 0)) return res.status(400).json({ ok: false, error: 'Cantidad de producto debe ser mayor a 0' });
+      equivSoja = -(cant * factor);     // se lleva producto → descuenta su equiv. en grano
+      movTipo = 'egreso';              // el producto sale de tu stock
+    } else { // ajuste
+      equivSoja = Number(d.equivSoja) || 0;   // + o - libre, en grano
+      generaStock = false;
+    }
+    const creado = await prisma.$transaction(async (tx) => {
+      const m = await tx.canjeCtaMov.create({ data: {
+        companyId: req.companyId, fecha, contactoTipo, contactoId: d.contactoId, contactoNombre,
+        tipo, productoId: d.productoId || null, cantidad: cant, factor, equivSoja: Math.round(equivSoja * 100) / 100,
+        depositoId: d.depositoId || null, generaStock, observaciones: d.observaciones || null, userId: req.user?.id || null,
+      } });
+      const ref = 'CANJECTA-' + m.id;
+      await tx.canjeCtaMov.update({ where: { id: m.id }, data: { referencia: ref } });
+      if (generaStock && movTipo && d.productoId) {
+        await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: d.productoId, fecha, tipo: movTipo, motivo: 'canje',
+          cantidad: cant, depositoId: d.depositoId || null, referencia: ref,
+          contraparteTipo: contactoTipo, contraparteId: d.contactoId,
+          observaciones: (tipo === 'ingreso_grano' ? 'Canje: grano recibido' : 'Canje: producto entregado') + (contactoNombre ? ' · ' + contactoNombre : ''),
+          userId: req.user?.id || null,
+        } });
+      }
+      return m;
+    });
+    res.status(201).json({ ok: true, data: creado });
+  } catch (e) { next(e); }
+});
+app.delete('/api/canje-cta/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const m = await prisma.canjeCtaMov.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!m) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado' });
+    await prisma.$transaction(async (tx) => {
+      await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'CANJECTA-' + m.id } });
+      await tx.canjeCtaMov.delete({ where: { id: m.id } });
     });
     res.json({ ok: true });
   } catch (e) { next(e); }

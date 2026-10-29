@@ -134,6 +134,7 @@ model Company {
   partesMolienda     ParteMolienda[]
   canjes             Canje[]
   canjeParidades     CanjeParidad[]
+  canjeCtaMovs       CanjeCtaMov[]
   caravanas          Caravana[]
   recuentosCaravana  RecuentoCaravana[]
   secados            SecadoPartida[]
@@ -3325,5 +3326,35 @@ model Canje {
   company          Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
+  @@index([fecha])
+}
+
+// Cuenta corriente de CANJE EN ESPECIE por cliente/proveedor, saldada en GRANO (soja).
+// Cada fila es un movimiento del libro: el cliente DEJA grano (le genera saldo a favor)
+// o SE LLEVA producto (se descuenta su equivalente en grano). El saldo vivo = suma de
+// equivSoja (con signo). + = a favor del cliente (le corresponde llevar); - = debe.
+model CanjeCtaMov {
+  id             String   @id @default(cuid())
+  companyId      String
+  fecha          DateTime
+  contactoTipo   String   // cliente | proveedor
+  contactoId     String
+  contactoNombre String?
+  tipo           String   // ingreso_grano | retiro_producto | ajuste
+  productoId     String?  // grano dejado (ingreso) o producto retirado (retiro)
+  cantidad       Float    @default(0)  // kg del producto movido
+  factor         Float    @default(1)  // kg de GRANO por 1 kg del producto (retiro); 1 para el propio grano
+  equivSoja      Float    @default(0)  // contribución al saldo EN GRANO, con signo (+ deja / - lleva)
+  depositoId     String?  // si mueve stock, en qué depósito
+  generaStock    Boolean  @default(true) // true = crea el movimiento de stock asociado
+  referencia     String?  // CANJECTA-<id>
+  observaciones  String?
+  userId         String?
+  createdAt      DateTime @default(now())
+
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([contactoTipo, contactoId])
   @@index([fecha])
 }

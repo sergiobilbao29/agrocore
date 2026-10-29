@@ -3074,9 +3074,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'29/10/2026',
+      titulo:'📒 v2.349.0 — Plan canje con cuenta en grano (saldo por cliente)',
+      desc:'En <b>Molienda / Fábrica</b> hay una pestaña nueva <b>📒 Cuenta canje (grano)</b> para llevar el canje en <b>dos pasos</b> y con <b>saldo que se arrastra por cliente</b>:<br>1) <b>🌾 Entró grano del cliente</b>: cargás la soja que deja → le queda saldo <b>a favor</b> (y el grano entra a tu stock).<br>2) <b>📦 Se llevó producto</b>: cada vez que retira expeller/aceite/etc., ponés la <b>equivalencia en soja</b> (ej. 1 kg expeller = 1,2 kg soja) y el sistema <b>descuenta</b> ese equivalente (y saca el producto del stock).<br>El tablero muestra, por cliente, el <b>saldo en kg de soja</b>: <b>+</b> le falta llevar, <b>−</b> se pasó / debe. Con "Ver detalle" ves todos los movimientos y el saldo acumulado, y podés hacer <b>ajustes manuales</b>. Así queda claro quién debe a quién y cuánto falta, saldado en soja. (Es aparte del "Plan canje" simple de una sola operación, que sigue estando.)' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'28/10/2026',
-      titulo:'🛠️ v2.348.0 — Arreglo: empresa aislada para administradores',
-      desc:'La opción <b>🔒 Empresa totalmente aislada</b> no tomaba efecto cuando entrabas como <b>Super administrador</b> (seguía mostrando los depósitos compartidos). Ya funciona para cualquier usuario: una empresa aislada no ve ni usa los depósitos compartidos y queda fuera del grupo en ambos sentidos.' },
+      titulo:'🛠️ v2.348.0 — Arreglos: empresa aislada para administradores + molienda',
+      desc:'Dos correcciones:<br>• La opción <b>🔒 Empresa totalmente aislada</b> no tomaba efecto cuando entrabas como <b>Super administrador</b> (seguía mostrando los depósitos compartidos). Ya funciona para cualquier usuario: una empresa aislada no ve ni usa los depósitos compartidos y queda fuera del grupo en ambos sentidos.<br>• <b>Molienda:</b> los movimientos de stock que genera una molienda (la soja que sale y el expeller/aceite/desperdicio que entra) ahora quedan <b>bloqueados en la grilla de Movimientos</b> 🔒 para no borrarlos sueltos por error. Si querés deshacer una molienda, usá <b>“Anular parte”</b> en <b>Molienda / Fábrica</b>: eso revierte TODO junto (vuelve la soja y salen los coproductos).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'28/10/2026',
       titulo:'🔒 v2.347.0 — Empresa aislada, movimiento de stock con cliente/proveedor y saldo en kilos',
       desc:'Varias mejoras:<br>• <b>Empresa totalmente aislada:</b> en <b>Configuración → Empresa</b> se puede marcar <b>🔒 Empresa totalmente aislada</b>. Una empresa aislada <b>no ve ni usa los depósitos compartidos</b>, queda <b>fuera del resumen multi-empresa en ambos sentidos</b> (ni ve a las demás ni las demás la ven) y <b>no se le pueden transferir cheques ni sumar a Sociedades</b>. Es más fuerte que "Flujo aislado" e ideal para una fábrica que trabaja 100% separada.<br>• <b>Movimiento de stock con cliente/proveedor</b> (solo en empresas tipo <b>Fábrica</b> / Producción industrial): al cargar un <b>Nuevo movimiento</b> de stock se puede elegir un <b>cliente o proveedor</b> (por nombre) y un <b>motivo</b> (compra / venta / canje / ajuste…), <b>sin pedir factura</b>. Queda registrado de quién vino / para quién fue, moviendo solo el stock (no genera cuenta corriente ni factura). Ideal para la soja que entra por remito o el canje.<br>• <b>Saldo en kilos por cliente/proveedor</b> (solo en empresas tipo <b>Fábrica</b>): en <b>Clientes</b> y <b>Proveedores</b>, el botón <b>📦 kg</b> muestra el saldo en <b>kilos</b> de granos que tenés con ese contacto, armado con esos movimientos de stock. Dice cuánto entró, cuánto salió y a favor de quién queda (con el equivalente en $ si cargaste precio).<br>• <b>Código de molienda más corto:</b> los movimientos que genera un parte de molienda ahora usan una referencia corta y legible (ej. <b>MOL-2210-1</b>) en vez del código largo, para ubicarlos más fácil.<br>• <b>Cheques — filtro Físico / e-cheq:</b> nuevo filtro para ver solo los cheques <b>📄 físicos</b> o <b>💻 electrónicos (e-cheq)</b>.' },
@@ -8298,11 +8301,11 @@ pages.movimientos = async function() {
               : '';
             const catBadge = m.producto?.categoria || p?.categoria;
             // Movimientos generados por facturas / viajes: se editan en su origen (no acá).
-            const esAuto = /^(VTA-|CPR-|VIAJE-|CANJE|LIQ-)/.test(m.referencia||'') || ['viaje','entrega_canje','liquidacion_cerealera','entrega_cerealera'].includes((m.motivo||'').toLowerCase());
+            const esAuto = /^(VTA-|CPR-|VIAJE-|CANJE|LIQ-|MOL-)/.test(m.referencia||'') || ['viaje','entrega_canje','liquidacion_cerealera','entrega_cerealera','molienda'].includes((m.motivo||'').toLowerCase());
             const actCell = m._hac
               ? `<td class="text-right whitespace-nowrap">${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='hacMovEditar(${JSON.stringify(m._hacId)},"mov")'>✏️</button>`:''}${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar movimiento" onclick='hacMovDel(${JSON.stringify(m._hacId)},"mov")'>🗑️</button>`:''}</td>`
               : esAuto
-                ? `<td class="text-center text-slate-300 text-xs" title="Generado automáticamente — editá/eliminá en la factura o viaje de origen">🔒</td>`
+                ? `<td class="text-center text-slate-300 text-xs" title="Generado automáticamente — editá/eliminá en su origen (factura, viaje, o 'Anular parte' en Molienda / Fábrica)">🔒</td>`
                 : `<td class="text-right whitespace-nowrap">${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar movimiento" onclick='movEditForm(${JSON.stringify(m.id)})'>✏️</button>`:''}${can('stock:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar movimiento" onclick='movDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}${!can('stock:update')&&!can('stock:delete')?'<span class="text-slate-300">—</span>':''}</td>`;
             return `<tr class="table-row">
               <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
@@ -29873,10 +29876,10 @@ function molRender() {
   const T = (id,txt)=>`<button class="btn ${tab===id?'btn-primary':'btn-ghost'} text-sm" onclick="state._molTab='${id}';molRender()">${txt}</button>`;
   $('#page-body').innerHTML = `
     <div class="mb-3 flex items-center gap-2 flex-wrap">
-      ${T('partes','🏭 Partes de molienda')} ${T('formulas','⚙️ Fórmulas')} ${T('productos','🏷️ Costo y precio')} ${T('canje','🔁 Plan canje')}
+      ${T('partes','🏭 Partes de molienda')} ${T('formulas','⚙️ Fórmulas')} ${T('productos','🏷️ Costo y precio')} ${T('canje','🔁 Plan canje')} ${T('ctacanje','📒 Cuenta canje (grano)')}
     </div>
     <div id="mol-body"></div>`;
-  if (tab==='partes') molTabPartes(); else if (tab==='formulas') molTabFormulas(); else if (tab==='productos') molTabProductos(); else molTabCanje();
+  if (tab==='partes') molTabPartes(); else if (tab==='formulas') molTabFormulas(); else if (tab==='productos') molTabProductos(); else if (tab==='ctacanje') molTabCtaCanje(); else molTabCanje();
 }
 /* ---- Partes de molienda ---- */
 function molTabPartes() {
@@ -30274,6 +30277,112 @@ async function molCanjeSave() {
   }catch(e){ toast(e.message,'error'); }
 }
 async function molCanjeAnular(id){ if(!confirm('¿Anular este canje? Se revierten los movimientos de stock.'))return; try{ await api('/api/canjes/'+id,{method:'DELETE'}); delete state.cache.stock; state._molCanjes=(await api('/api/canjes')).data||[]; toast('Canje anulado','success'); molRender(); }catch(e){ toast(e.message,'error'); } }
+
+/* ============ CUENTA DE CANJE EN GRANO (saldo por cliente) ============ */
+const _ccKg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:2});
+async function molTabCtaCanje() {
+  const b = $('#mol-body'); if (!b) return;
+  b.innerHTML = `<div class="text-slate-400 py-6 text-center">Cargando saldos…</div>`;
+  let saldos = [];
+  try { saldos = (await api('/api/canje-cta/saldos')).data || []; } catch (e) { b.innerHTML = `<div class="kpi text-red-600">${esc(e.message)}</div>`; return; }
+  const filas = saldos.map(s => {
+    const n = s.saldoSoja;
+    const estado = n > 0.001 ? `<span class="text-emerald-700">le falta llevar</span>` : (n < -0.001 ? `<span class="text-red-600">se pasó / debe</span>` : '<span class="text-slate-400">al día</span>');
+    const col = n > 0.001 ? 'text-emerald-700' : (n < -0.001 ? 'text-red-600' : 'text-slate-400');
+    return `<tr class="table-row">
+      <td><b>${esc(s.contactoNombre||'—')}</b> <span class="text-[10px] text-slate-400">${esc(s.contactoTipo)}</span></td>
+      <td class="text-right font-bold ${col}">${n>0?'+':''}${_ccKg(n)} kg</td>
+      <td class="text-xs">${estado}</td>
+      <td class="text-right"><button class="btn btn-ghost btn-xs" onclick='molCtaCanjeVer(${JSON.stringify(s.contactoTipo)},${JSON.stringify(s.contactoId)},${JSON.stringify(s.contactoNombre||"")})'>Ver detalle</button></td>
+    </tr>`;
+  }).join('');
+  b.innerHTML = `
+    <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900 mb-3">
+      <b>Cómo funciona:</b> registrás en <b>dos pasos</b>. 1) <b>Entró grano</b>: el cliente deja soja → le queda saldo <b>a favor</b>. 2) <b>Se llevó producto</b>: cada retiro descuenta su equivalente en grano (según la paridad que pongas). El saldo (en kg de soja) te dice si <b>le falta llevar</b> (+) o <b>se pasó / debe</b> (−).
+    </div>
+    <div class="mb-3 flex gap-2 flex-wrap">
+      ${can('stock:create')?`<button class="btn btn-primary" onclick="molCtaCanjeForm('ingreso_grano')">🌾 Entró grano del cliente</button>
+      <button class="btn btn-secondary" onclick="molCtaCanjeForm('retiro_producto')">📦 Se llevó producto</button>
+      <button class="btn btn-ghost" onclick="molCtaCanjeForm('ajuste')">✏️ Ajuste manual</button>`:''}
+    </div>
+    <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Cliente / Proveedor</th><th class="text-right">Saldo (kg soja)</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${filas || `<tr><td colspan="4" class="text-center text-slate-400 py-6">Todavía no hay movimientos de canje. Empezá con "Entró grano del cliente".</td></tr>`}</tbody>
+    </table></div>`;
+}
+function _ccContactoOpts(sel) {
+  const cli = (state.cache.clientes||[]).filter(c=>c.activo!==false).map(c=>`<option value="cliente:${esc(c.id)}" ${sel===('cliente:'+c.id)?'selected':''}>${esc(c.razonSocial||'')} (cliente)</option>`);
+  const prov = (state.cache.proveedores||[]).filter(c=>c.activo!==false).map(c=>`<option value="proveedor:${esc(c.id)}" ${sel===('proveedor:'+c.id)?'selected':''}>${esc(c.razonSocial||'')} (proveedor)</option>`);
+  return '<option value="">— Elegir —</option>' + cli.join('') + prov.join('');
+}
+function molCtaCanjeForm(tipo, presetContacto) {
+  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
+  const optD = `<option value="">— Sin depósito —</option>`+deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('');
+  const prods = (state.cache.productos||[]).filter(p=>p.activo!==false).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  const optP = `<option value="">— Elegir producto —</option>`+prods.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)} (${esc(p.unidad||'kg')})</option>`).join('');
+  const titulo = tipo==='ingreso_grano'?'🌾 Entró grano del cliente':(tipo==='retiro_producto'?'📦 Se llevó producto':'✏️ Ajuste de saldo (en grano)');
+  const esRetiro = tipo==='retiro_producto', esAjuste = tipo==='ajuste', esIngreso = tipo==='ingreso_grano';
+  openModal({
+    title: titulo, size:'max-w-xl',
+    body:`<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div class="md:col-span-2"><label class="label">Cliente / Proveedor *</label><select id="cc-cont" class="input">${_ccContactoOpts(presetContacto)}</select></div>
+      <div><label class="label">Fecha *</label><input id="cc-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+      ${!esAjuste?`<div><label class="label">${esIngreso?'Grano que deja':'Producto que se lleva'} *</label><select id="cc-prod" class="input">${optP}</select></div>
+      <div><label class="label">Cantidad (kg) *</label><input id="cc-cant" type="number" step="0.01" class="input" oninput="molCtaCanjeCalc()"/></div>`:''}
+      ${esRetiro?`<div><label class="label">Equivale a (kg soja por 1 kg producto) *</label><input id="cc-factor" type="number" step="0.0001" class="input" value="1" oninput="molCtaCanjeCalc()"/><div class="text-[10px] text-slate-400 mt-1">Ej.: si 1 kg de expeller equivale a 1,2 kg de soja, poné 1,2.</div></div>
+      <div class="md:col-span-2 text-sm bg-slate-50 rounded p-2" id="cc-prev">—</div>`:''}
+      ${esAjuste?`<div><label class="label">Ajuste en kg de soja (+ a favor / − en contra) *</label><input id="cc-equiv" type="number" step="0.01" class="input" placeholder="ej. -500"/></div>`:''}
+      ${!esAjuste?`<div class="md:col-span-2"><label class="label">Depósito (mueve stock)</label><select id="cc-dep" class="input">${optD}</select><div class="text-[10px] text-slate-400 mt-1">${esIngreso?'El grano ENTRA a este depósito.':'El producto SALE de este depósito.'} Dejá vacío si no querés mover stock.</div></div>`:''}
+      <div class="md:col-span-2"><label class="label">Observaciones</label><input id="cc-obs" class="input" placeholder="remito, nota…"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="molCtaCanjeSave('${tipo}')">💾 Guardar</button>`
+  });
+  molCtaCanjeCalc();
+}
+function molCtaCanjeCalc(){
+  const prev=$('#cc-prev'); if(!prev) return;
+  const cant=Number($('#cc-cant')?.value||0), f=Number($('#cc-factor')?.value||1);
+  prev.innerHTML = cant>0 ? `Descuenta <b>${_ccKg(cant*f)} kg de soja</b> del saldo del cliente.` : 'Ingresá la cantidad para ver el equivalente en soja.';
+}
+async function molCtaCanjeSave(tipo){
+  const cv = ($('#cc-cont')?.value||'').split(':');
+  if (cv.length<2 || !cv[1]) return toast('Elegí el cliente/proveedor','warn');
+  const body = { tipo, contactoTipo: cv[0], contactoId: cv[1],
+    fecha: $('#cc-fecha')?.value ? new Date($('#cc-fecha').value+'T12:00:00').toISOString() : undefined,
+    productoId: $('#cc-prod')?.value || null, cantidad: Number($('#cc-cant')?.value||0),
+    factor: Number($('#cc-factor')?.value||1), equivSoja: Number($('#cc-equiv')?.value||0),
+    depositoId: $('#cc-dep')?.value || null, observaciones: $('#cc-obs')?.value||null };
+  if (tipo!=='ajuste' && !(body.cantidad>0)) return toast('Cargá la cantidad','warn');
+  if (tipo!=='ajuste' && !body.productoId) return toast('Elegí el producto','warn');
+  if (tipo==='ajuste' && !body.equivSoja) return toast('Poné el ajuste en kg de soja','warn');
+  try { await api('/api/canje-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Guardado','success'); closeModal(); molTabCtaCanje(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function molCtaCanjeVer(tipo, id, nombre){
+  openModal({ title:`Cuenta de canje — ${nombre||''}`, size:'max-w-3xl', body:`<div id="cc-det" class="text-slate-400 py-6 text-center">Cargando…</div>`, footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+  let r; try { r = await api(`/api/canje-cta?contactoTipo=${encodeURIComponent(tipo)}&contactoId=${encodeURIComponent(id)}`); } catch(e){ const d=$('#cc-det'); if(d) d.innerHTML=`<div class="text-red-600">${esc(e.message)}</div>`; return; }
+  const movs = r.data||[]; const d=$('#cc-det'); if(!d) return;
+  const tLabel = t => t==='ingreso_grano'?'🌾 Entró grano':(t==='retiro_producto'?'📦 Se llevó':'✏️ Ajuste');
+  const filas = movs.map(m=>`<tr class="table-row">
+    <td class="text-xs">${fmtDate(m.fecha)}</td><td class="text-xs">${tLabel(m.tipo)}</td>
+    <td class="text-xs">${esc(m.productoNombre||'')}${m.cantidad?` · ${_ccKg(m.cantidad)}`:''}${m.tipo==='retiro_producto'&&m.factor?` ×${m.factor}`:''}</td>
+    <td class="text-right ${m.equivSoja>=0?'text-emerald-700':'text-red-600'}">${m.equivSoja>0?'+':''}${_ccKg(m.equivSoja)}</td>
+    <td class="text-right font-semibold">${_ccKg(m.saldoAcum)}</td>
+    <td class="text-right">${can('stock:delete')?`<button class="text-red-600 text-xs" onclick="molCtaCanjeDel('${m.id}','${tipo}','${id}',${JSON.stringify(nombre||'')})">🗑️</button>`:''}</td>
+  </tr>`).join('');
+  const saldo = r.saldoSoja||0;
+  d.innerHTML = `
+    <div class="mb-2 text-sm">Saldo actual: <b class="${saldo>0?'text-emerald-700':(saldo<0?'text-red-600':'')}">${saldo>0?'+':''}${_ccKg(saldo)} kg de soja</b> ${saldo>0?'(le falta llevar)':(saldo<0?'(se pasó / debe)':'(al día)')}</div>
+    <div class="overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th class="text-right">± soja</th><th class="text-right">Saldo</th><th></th></tr></thead>
+      <tbody>${filas||`<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin movimientos.</td></tr>`}</tbody>
+    </table></div>`;
+}
+async function molCtaCanjeDel(id, tipo, contactoId, nombre){
+  if(!confirm('¿Borrar este movimiento de la cuenta de canje? Si movió stock, también se revierte.'))return;
+  try{ await api('/api/canje-cta/'+id,{method:'DELETE'}); delete state.cache.stock; toast('Borrado','success'); molCtaCanjeVer(tipo, contactoId, nombre); }
+  catch(e){ toast(e.message,'error'); }
+}
 
 /* ============ CENTROS DE COSTO (opt-in por empresa) ============ */
 pages.centrosCosto = async function() {
