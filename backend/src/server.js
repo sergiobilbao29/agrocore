@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.350.0';
+const AGROCORE_VERSION = '2.351.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -20228,14 +20228,26 @@ function _parseResumenBancarioTexto(texto) {
     const joined = b.texto.join(' ');
     const matches = [...joined.matchAll(mkMoney())];
     if (!matches.length) continue;
-    const nums = matches.map(x => x[0]);
-    let imp = parseNum(nums[0]);                          // 1er token de plata = IMPORTE
-    // Signo SEPARADO del número (ej. Galicia: "- $ 300.000,00" / "+ $ 10.403,00"): el "-"
-    // no queda pegado al dígito, así que lo detectamos justo antes del importe (tolera "$" y espacios).
-    const antes = joined.slice(0, matches[0].index);
-    const sg = antes.match(/([+\-−])\s*\$?\s*$/);
-    if (sg && imp > 0 && (sg[1] === '-' || sg[1] === '−')) imp = -imp;
-    const saldo = (nums[1] != null) ? parseNum(nums[1]) : null; // 2do token = SALDO
+    // Signo del banco: viene SEPARADO del número con "$"/espacios ("- $ 300.000,00" / "+ $ 10.403,00").
+    // El token que tiene ese signo delante es SIEMPRE el IMPORTE; el otro (sin signo) es el SALDO.
+    // Esto cubre ambos layouts de Galicia/Office Banking: importe primero y saldo primero.
+    const signoDe = (idx) => {
+      const sg = joined.slice(0, idx).match(/([+\-−])\s*\$?\s*$/);
+      return sg ? (sg[1] === '+' ? 1 : -1) : 0;
+    };
+    let imp, saldo = null;
+    const idxImporte = matches.findIndex(m => signoDe(m.index) !== 0);
+    if (idxImporte >= 0) {
+      const mImp = matches[idxImporte];
+      imp = Math.abs(parseNum(mImp[0])) * signoDe(mImp.index);
+      // El saldo es el otro token de plata (el primero que no sea el importe).
+      const mSaldo = matches.find((m, i) => i !== idxImporte);
+      saldo = mSaldo ? parseNum(mSaldo[0]) : null;
+    } else {
+      // Sin signo separado (otros bancos): 1er token = importe (con su "-" pegado si lo tiene), 2do = saldo.
+      imp = parseNum(matches[0][0]);
+      saldo = (matches[1] != null) ? parseNum(matches[1][0]) : null;
+    }
     if (!isFinite(imp) || imp === 0) continue;
     // Concepto: sacar plata, "$", el rótulo CUIT/CUIL y el CUIT (11 dígitos). El comprobante
     // (2 a 9 dígitos pegado a letras al inicio) se separa como referencia.
