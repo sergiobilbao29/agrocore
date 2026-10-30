@@ -56,6 +56,13 @@ model Company {
   arcaPrivadaKey  String?   // contenido del privada.key (PEM). DEBE ir encriptado at-rest en producción.
   arcaModo        String    @default("prod")  // "homo" | "prod" — ambiente AFIP (afecta a TODOS los servicios)
   arcaConfigAt    DateTime? // última vez que se guardó la config ARCA
+  // ---- Configuración fiscal de RETENCIONES (la empresa como agente) ----
+  condGanancias   String?   // condición propia frente a Ganancias: "inscripto" | "exento" | "no_inscripto"
+  // Json: en qué regímenes actúa como AGENTE de retención y sus inscripciones. Ej:
+  // { "agente": { "ganancias": true, "iva": false, "suss": false,
+  //   "iibb": { "activo": true, "jurisdicciones": ["904","921"], "nros": {"904":"..."} } } }
+  // Distingue la OBLIGACIÓN fiscal real de la ACTIVACIÓN de la funcionalidad en el sistema.
+  fiscalRetencion Json?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -136,6 +143,7 @@ model Company {
   canjeParidades     CanjeParidad[]
   canjeCtaMovs       CanjeCtaMov[]
   tributos           TributoCatalogo[]
+  regimenesRetencion RegimenRetencion[]
   caravanas          Caravana[]
   recuentosCaravana  RecuentoCaravana[]
   secados            SecadoPartida[]
@@ -714,6 +722,13 @@ model Cliente {
   nombreFantasia  String?
   cuit            String?
   condIVA         String?   // "RI", "Monotributo", "Exento", "ConsumidorFinal"
+  // Condición frente a Ganancias (para retenciones): "inscripto" | "exento" | "no_inscripto"
+  condGanancias   String?
+  // Json de datos fiscales para retenciones (NO se presume por el nombre):
+  // { "iibb": { "904": {"nro":"...","alicuota":2.5}, ... },
+  //   "certExclusion": [ {"impuesto":"ganancias","pct":100,"desde":"2026-01-01","hasta":"2026-12-31","nro":"...","archivo":null} ],
+  //   "alicuotas": { "ganancias": 2, "iva": 1 } }
+  fiscalRetencion Json?
   email           String?
   telefono        String?
   direccion       String?
@@ -743,6 +758,11 @@ model Proveedor {
   nombreFantasia  String?
   cuit            String?
   condIVA         String?
+  // Condición frente a Ganancias (para retenciones): "inscripto" | "exento" | "no_inscripto"
+  condGanancias   String?
+  // Json de datos fiscales para retenciones (ver Cliente.fiscalRetencion): iibb por
+  // jurisdicción, certificados de exclusión (con vigencia) y alícuotas propias.
+  fiscalRetencion Json?
   rubro           String?   // específico de proveedores
   email           String?
   telefono        String?
@@ -3001,6 +3021,46 @@ model Retencion {
   @@index([impuesto])
   @@index([importLote])
   @@index([dedupeKey])
+}
+
+// Catálogo configurable de REGÍMENES de retención/percepción (por empresa).
+// NO define porcentajes universales en el código: los parámetros se cargan/revisan
+// según la normativa vigente. Las operaciones confirmadas guardan el snapshot de la
+// regla usada en el propio registro Retencion (régimen/alícuota/base como texto).
+model RegimenRetencion {
+  id              String   @id @default(cuid())
+  companyId       String
+  nombre          String                         // descripción legible (ej. "Ganancias - RG 830 - Bienes")
+  naturaleza      String   @default("practicada") // 'practicada' | 'sufrida'
+  clase           String   @default("retencion")  // 'retencion' | 'percepcion'
+  organismo       String?                         // 'AFIP' | 'ARBA' | 'API' | ... (organismo fiscal)
+  impuesto        String                          // 'ganancias' | 'iva' | 'iibb' | 'suss' | 'otro'
+  jurisdiccion    String?                         // código de jurisdicción (IIBB)
+  codigoRegimen   String?                         // código oficial del régimen (ej. '78', '019')
+  tipoOperacion   String?                         // 'pago' | 'compra' | 'cobro' | 'venta'
+  baseCalculo     String   @default("neto")       // 'neto' | 'total' | 'pago'
+  alicuota        Float    @default(0)            // % a aplicar (alícuota general)
+  alicuotaNoInscripto Float?                       // % si el sujeto NO está inscripto (opcional)
+  minimoNoSujeto  Float    @default(0)            // base por debajo de la cual no se retiene
+  minimoRetencion Float    @default(0)            // importe mínimo de retención (si queda por debajo, no se practica)
+  importeFijo     Float?                           // si el régimen es un importe fijo en vez de %
+  escala          Json?                            // escalas/tramos opcionales
+  acumulaPeriodo  Boolean  @default(false)         // acumula base por sujeto en el período (mensual)
+  redondeo        String   @default("2dec")        // '2dec' | 'entero'
+  sistema         String?                          // 'SICORE' | 'SIRE' | 'SIRCAR' | ... (declaración)
+  vigenciaDesde   DateTime?
+  vigenciaHasta   DateTime?
+  version         Int      @default(1)
+  activo          Boolean  @default(true)
+  orden           Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([impuesto])
+  @@index([naturaleza])
 }
 
 model RemitoRenglon {

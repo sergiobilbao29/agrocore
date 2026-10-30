@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.354.0';
+const AGROCORE_VERSION = '2.356.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -743,6 +743,8 @@ async function serializeUser(u) {
     usaComercial: co.usaComercial === true,
     usaArroz: co.usaArroz === true,
     aislada: co.aislada === true,
+    condGanancias: co.condGanancias || null,
+    fiscalRetencion: co.fiscalRetencion || null,
   });
   const companies = u.userCompanies.map((uc) => ({
     id: uc.company.id, name: uc.company.name,
@@ -1868,6 +1870,8 @@ const empresaSchema = z.object({
   usaComercial: z.boolean().optional(),
   usaArroz: z.boolean().optional(),
   aislada: z.boolean().optional(),
+  condGanancias: z.string().nullable().optional(),
+  fiscalRetencion: z.any().optional(),
   activo: z.boolean().optional(),
   modulosOcultos: z.string().nullable().optional(),
   vendedorId: z.string().nullable().optional(),
@@ -4473,6 +4477,8 @@ const clienteSchema = z.object({
   nombreFantasia: z.string().nullable().optional(),
   cuit: z.string().nullable().optional(),
   condIVA: z.string().nullable().optional(),
+  condGanancias: z.string().nullable().optional(),
+  fiscalRetencion: z.any().optional(),
   email: z.string().nullable().optional(),
   telefono: z.string().nullable().optional(),
   direccion: z.string().nullable().optional(),
@@ -11463,6 +11469,109 @@ app.delete('/api/tributos/:id', requireCompany, requirePermission('compras:delet
     const ex = await prisma.tributoCatalogo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.tributoCatalogo.delete({ where: { id: ex.id } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CATÁLOGO DE REGÍMENES DE RETENCIÓN / PERCEPCIÓN (por empresa, versionado).
+// Los parámetros (alícuotas, mínimos, códigos) son EDITABLES y deben revisarse según
+// la normativa vigente. El seed trae ejemplos marcados para revisar — NO son valores
+// oficiales garantizados. Permiso: finanzas:*.
+// ============================================================
+const _REGIMENES_SEED = [
+  { nombre:'Ganancias — RG 830 (Bienes/servicios) — REVISAR', naturaleza:'practicada', clase:'retencion', organismo:'AFIP', impuesto:'ganancias', codigoRegimen:'78', baseCalculo:'neto', alicuota:2, minimoNoSujeto:0, acumulaPeriodo:true, sistema:'SICORE', orden:1 },
+  { nombre:'IVA — RG 2854 — REVISAR', naturaleza:'practicada', clase:'retencion', organismo:'AFIP', impuesto:'iva', baseCalculo:'neto', alicuota:0, minimoNoSujeto:0, sistema:'SICORE', orden:2 },
+  { nombre:'IIBB (completar jurisdicción y alícuota) — REVISAR', naturaleza:'practicada', clase:'retencion', organismo:'IIBB', impuesto:'iibb', baseCalculo:'neto', alicuota:0, minimoNoSujeto:0, sistema:'SIRCAR', orden:3 },
+  { nombre:'SUSS — REVISAR', naturaleza:'practicada', clase:'retencion', organismo:'AFIP', impuesto:'suss', baseCalculo:'neto', alicuota:0, minimoNoSujeto:0, sistema:'SICORE', orden:4 },
+];
+app.get('/api/regimenes-retencion', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    let data = await prisma.regimenRetencion.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { nombre: 'asc' }] });
+    if (!data.length && req.query.seed === '1') {
+      await prisma.regimenRetencion.createMany({ data: _REGIMENES_SEED.map(r => ({ ...r, companyId: req.companyId })) });
+      data = await prisma.regimenRetencion.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { nombre: 'asc' }] });
+    }
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+const _regimenSchema = z.object({
+  nombre: z.string().min(1),
+  naturaleza: z.enum(['practicada', 'sufrida']).optional().default('practicada'),
+  clase: z.enum(['retencion', 'percepcion']).optional().default('retencion'),
+  organismo: z.string().nullable().optional(),
+  impuesto: z.enum(['ganancias', 'iva', 'iibb', 'suss', 'otro']),
+  jurisdiccion: z.string().nullable().optional(),
+  codigoRegimen: z.string().nullable().optional(),
+  tipoOperacion: z.string().nullable().optional(),
+  baseCalculo: z.enum(['neto', 'total', 'pago']).optional().default('neto'),
+  alicuota: z.number().nullable().optional(),
+  alicuotaNoInscripto: z.number().nullable().optional(),
+  minimoNoSujeto: z.number().nullable().optional(),
+  minimoRetencion: z.number().nullable().optional(),
+  importeFijo: z.number().nullable().optional(),
+  escala: z.any().optional(),
+  acumulaPeriodo: z.boolean().optional(),
+  redondeo: z.enum(['2dec', 'entero']).optional().default('2dec'),
+  sistema: z.string().nullable().optional(),
+  vigenciaDesde: z.coerce.date().nullable().optional(),
+  vigenciaHasta: z.coerce.date().nullable().optional(),
+  activo: z.boolean().optional(),
+  orden: z.number().int().nullable().optional(),
+});
+app.post('/api/regimenes-retencion', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const d = _regimenSchema.parse(req.body);
+    const r = await prisma.regimenRetencion.create({ data: {
+      companyId: req.companyId, nombre: d.nombre, naturaleza: d.naturaleza || 'practicada', clase: d.clase || 'retencion',
+      organismo: d.organismo || null, impuesto: d.impuesto, jurisdiccion: d.jurisdiccion || null, codigoRegimen: d.codigoRegimen || null,
+      tipoOperacion: d.tipoOperacion || null, baseCalculo: d.baseCalculo || 'neto',
+      alicuota: Number(d.alicuota) || 0, alicuotaNoInscripto: d.alicuotaNoInscripto != null ? Number(d.alicuotaNoInscripto) : null,
+      minimoNoSujeto: Number(d.minimoNoSujeto) || 0, minimoRetencion: Number(d.minimoRetencion) || 0,
+      importeFijo: d.importeFijo != null ? Number(d.importeFijo) : null, escala: d.escala ?? null,
+      acumulaPeriodo: !!d.acumulaPeriodo, redondeo: d.redondeo || '2dec', sistema: d.sistema || null,
+      vigenciaDesde: d.vigenciaDesde || null, vigenciaHasta: d.vigenciaHasta || null,
+      activo: d.activo !== false, orden: d.orden || 0,
+    }});
+    res.status(201).json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.put('/api/regimenes-retencion/:id', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const d = _regimenSchema.partial().parse(req.body);
+    const ex = await prisma.regimenRetencion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const num = (k) => (d[k] != null ? { [k]: Number(d[k]) || 0 } : {});
+    const r = await prisma.regimenRetencion.update({ where: { id: ex.id }, data: {
+      ...(d.nombre != null ? { nombre: d.nombre } : {}),
+      ...(d.naturaleza != null ? { naturaleza: d.naturaleza } : {}),
+      ...(d.clase != null ? { clase: d.clase } : {}),
+      ...(d.organismo !== undefined ? { organismo: d.organismo || null } : {}),
+      ...(d.impuesto != null ? { impuesto: d.impuesto } : {}),
+      ...(d.jurisdiccion !== undefined ? { jurisdiccion: d.jurisdiccion || null } : {}),
+      ...(d.codigoRegimen !== undefined ? { codigoRegimen: d.codigoRegimen || null } : {}),
+      ...(d.tipoOperacion !== undefined ? { tipoOperacion: d.tipoOperacion || null } : {}),
+      ...(d.baseCalculo != null ? { baseCalculo: d.baseCalculo } : {}),
+      ...num('alicuota'), ...num('minimoNoSujeto'), ...num('minimoRetencion'),
+      ...(d.alicuotaNoInscripto !== undefined ? { alicuotaNoInscripto: d.alicuotaNoInscripto != null ? Number(d.alicuotaNoInscripto) : null } : {}),
+      ...(d.importeFijo !== undefined ? { importeFijo: d.importeFijo != null ? Number(d.importeFijo) : null } : {}),
+      ...(d.escala !== undefined ? { escala: d.escala ?? null } : {}),
+      ...(d.acumulaPeriodo != null ? { acumulaPeriodo: !!d.acumulaPeriodo } : {}),
+      ...(d.redondeo != null ? { redondeo: d.redondeo } : {}),
+      ...(d.sistema !== undefined ? { sistema: d.sistema || null } : {}),
+      ...(d.vigenciaDesde !== undefined ? { vigenciaDesde: d.vigenciaDesde || null } : {}),
+      ...(d.vigenciaHasta !== undefined ? { vigenciaHasta: d.vigenciaHasta || null } : {}),
+      ...(d.activo != null ? { activo: d.activo } : {}),
+      ...(d.orden != null ? { orden: d.orden } : {}),
+    }});
+    res.json({ ok: true, data: r });
+  } catch (e) { next(e); }
+});
+app.delete('/api/regimenes-retencion/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const ex = await prisma.regimenRetencion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.regimenRetencion.delete({ where: { id: ex.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -21509,23 +21618,77 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       }
     }
 
-    // Importes (ARCA usa "1.830.150,00")
-    if (!resultado.total)        resultado.total        = matchEtiqueta('Importe\\s+Total');
-    if (!resultado.netoGravado)  resultado.netoGravado  = matchEtiqueta('Importe\\s+Neto\\s+Gravado|Subtotal');
-    // Respaldo: si el texto viene desordenado (ARCA online) y no encontramos el total
-    // junto a su etiqueta, tomamos el MAYOR monto con formato "$/,00" del comprobante
-    // (el Importe Total casi siempre es el más grande).
+    // Importes. Captura montos en formato AR con miles ("1.830.150,00") Y SIN miles
+    // ("23477,28"), que es como muchos sistemas de gestión imprimen el total. La regex
+    // vieja sólo tomaba el tramo "477,28" de "23477,28" → total mal.
+    const _reMontoAR = /(?:\d{1,3}(?:\.\d{3})+|\d{1,12}),\d{2}(?!\d)/g;
+    const _montosDe = (s) => [...String(s || '').matchAll(_reMontoAR)].map(mm => num(mm[0])).filter(v => v && v > 0);
+    const _montosDoc = _montosDe(texto);
+    // Toma el MAYOR monto que aparece DESPUÉS de la etiqueta (en una ventana que cruza
+    // saltos de línea). Usarlo con "TOTAL" saltea el "20,03" de "Cantidad total de
+    // artículos" y toma el importe real del pie. cs=true → sólo mayúsculas (pie de factura).
+    const _totalTrasEtiqueta = (labelRe, cs) => {
+      const re = new RegExp('(?:' + labelRe + ')([\\s\\S]{0,90})', cs ? '' : 'i');
+      const mm = texto.match(re);
+      if (!mm) return null;
+      const vs = _montosDe(mm[1]);
+      return vs.length ? Math.max(...vs) : null;
+    };
+    if (!resultado.netoGravado)  resultado.netoGravado  = _totalTrasEtiqueta('Importe\\s+Neto\\s+Gravado|Neto\\s+Gravado|SUBTOTAL', false);
+    // TOTAL: etiquetas de más a menos específicas. La última ("TOTAL" en mayúsculas) cubre
+    // las facturas de sistemas de gestión (Induferr, etc.) cuyo único rótulo es "TOTAL".
     if (!resultado.total) {
-      // Captura importes completos en AMBOS formatos: AR "1.830.150,00" / "45,26"
-      // y US "45,260.46" / "54,765.16" (coma de miles, punto decimal). num() detecta
-      // el separador decimal por token, así que no confunde "45,260.46" con 45,26.
-      const montos = [...texto.matchAll(/\d{1,3}(?:[.,]\d{3})*[.,]\d{2}\b/g)]
-        .map(mm => num(mm[0])).filter(v => v && v > 0);
-      if (montos.length) resultado.total = Math.max(...montos);
+      resultado.total =
+           _totalTrasEtiqueta('Importe\\s+Total(?!\\s+(?:Otros|Neto|Conceptos))', false)
+        || _totalTrasEtiqueta('Total\\s+a\\s+pagar', false)
+        || _totalTrasEtiqueta('Total\\s+final', false)
+        || _totalTrasEtiqueta('Total\\s+factura', false)
+        || _totalTrasEtiqueta('Total\\s+c\\/?\\s*iva', false)
+        || _totalTrasEtiqueta('Total\\s+general', false)
+        || _totalTrasEtiqueta('\\bTOTAL\\b', true);
     }
-    // En Factura C (Monotributo) no hay IVA discriminado: neto = total.
-    if (!resultado.netoGravado && resultado.total && (resultado.tipoCmpLetra === 'C')) {
-      resultado.netoGravado = resultado.total;
+    // Respaldo: si no hubo etiqueta de total, tomamos el MAYOR monto del comprobante.
+    if (!resultado.total && _montosDoc.length) resultado.total = Math.max(..._montosDoc);
+    // Control de coherencia: el total NUNCA puede quedar por debajo del neto gravado.
+    if (resultado.total && resultado.netoGravado && resultado.total < resultado.netoGravado - 0.5) {
+      const mx = _montosDoc.length ? Math.max(..._montosDoc) : resultado.total;
+      if (mx >= resultado.netoGravado - 0.5) resultado.total = mx;
+    }
+    // IVA discriminado: el rótulo puede venir "IVA", "I.V.A." (con puntos) y el importe
+    // en el renglón de abajo ("I.V.A.\n%21,00: $ 4.074,57"). Tomamos el MAYOR monto en la
+    // ventana (el 21,00 es la alícuota; el 4.074,57 es el importe). Fija la bandera iva*.
+    // Busca TODAS las apariciones de la etiqueta (ej. "Resp. IVA" arriba y "I.V.A."
+    // en el pie) y toma el mayor importe hallado en cualquiera de sus ventanas, menor
+    // al total. Así ignora el "Resp. IVA: Inscripto" (sin importes al lado).
+    const _ivaDe = (reLabel) => {
+      const re = new RegExp('(?:' + reLabel + ')([\\s\\S]{0,60})', 'gi');
+      let best = null;
+      for (const mm of texto.matchAll(re)) {
+        for (const v of _montosDe(mm[1])) {
+          if (resultado.total && v >= resultado.total) continue;
+          if (best == null || v > best) best = v;
+        }
+      }
+      return best;
+    };
+    if (!resultado.iva21 && !resultado.iva105 && !resultado.iva27) {
+      const ivaMonto = _ivaDe('I\\.?\\s*V\\.?\\s*A\\.?');
+      if (ivaMonto && resultado.total && ivaMonto < resultado.total) {
+        // Deducir la alícuota comparando el IVA contra el neto implícito (total - iva).
+        const netoImpl = resultado.total - ivaMonto;
+        const tasa = netoImpl > 0 ? (ivaMonto / netoImpl) * 100 : 21;
+        if (Math.abs(tasa - 10.5) < 1.2) resultado.iva105 = ivaMonto;
+        else if (Math.abs(tasa - 27) < 1.5) resultado.iva27 = ivaMonto;
+        else resultado.iva21 = ivaMonto;   // por defecto 21
+      }
+    }
+    // NETO GRAVADO: si no se leyó bien (texto pegado como "19.402,710,00") pero tenemos
+    // total, lo deducimos restando el IVA discriminado. Para Factura C, neto = total.
+    const _ivaMontoTot = (resultado.iva21 || 0) + (resultado.iva105 || 0) + (resultado.iva27 || 0) + (resultado.iva25 || 0) + (resultado.iva5 || 0);
+    if (resultado.total && (!resultado.netoGravado || resultado.netoGravado >= resultado.total - 0.5)) {
+      if (resultado.tipoCmpLetra === 'C') resultado.netoGravado = resultado.total;
+      else if (_ivaMontoTot > 0.5) resultado.netoGravado = +(resultado.total - _ivaMontoTot).toFixed(2);
+      else resultado.netoGravado = +(resultado.total / 1.21).toFixed(2);   // A/M sin IVA legible → asume 21%
     }
     resultado.iva21  = matchEtiqueta('IVA\\s*21\\s*%?') || resultado.iva21;
     resultado.iva105 = matchEtiqueta('IVA\\s*10[.,]5\\s*%?') || resultado.iva105;

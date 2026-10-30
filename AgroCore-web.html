@@ -3077,6 +3077,15 @@ pages.inicio = async function() {
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/10/2026',
       titulo:'🧾 v2.354.0 — Retenciones al pagar y al cobrar (integradas a cuenta corriente y banco)',
       desc:'Ahora las <b>retenciones</b> se cargan en el mismo momento del pago o del cobro, sin romper los saldos:<br>• Al <b>pagar a un proveedor</b> podés sumar las <b>retenciones practicadas</b> (Ganancias, IVA, IIBB, SUSS…). La <b>deuda se cancela por el total</b> de la factura, pero del <b>banco sale sólo el neto</b> (lo retenido no sale). Ej.: factura $1.000.000, retención $30.000 → transferís $970.000 y el proveedor queda saldado.<br>• Al <b>cobrar a un cliente</b> cargás las <b>retenciones sufridas</b> (las que te hicieron): la <b>factura queda saldada por el total</b> aunque al <b>banco entre sólo el neto</b>, y queda registrado el <b>crédito fiscal</b>.<br>En el modal aparece la sección <b>🧾 Retenciones</b> (impuesto, régimen, jurisdicción para IIBB, base, alícuota e importe). <b>No modifica el importe de las facturas</b>. Cada retención queda en el módulo de <b>Retenciones</b> para exportar a <b>SICORE / SIRE / SIRCAR</b>. Si deshacés la Orden de Pago o el recibo, también se borran las retenciones asociadas.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'01/11/2026',
+      titulo:'📄 v2.356.0 — Importar varias facturas de compra: ahora toma el TOTAL real',
+      desc:'Al subir varios <b>PDF de facturas de compra</b> de un proveedor, el sistema tomaba un importe equivocado cuando la factura era de un sistema de gestión (no de ARCA online): leía el número más grande del PDF o un renglón suelto. Ahora <b>lee el TOTAL del pie del comprobante</b> aunque el rótulo sea sólo "TOTAL" y aunque el importe venga sin punto de miles (ej. <i>23477,28</i>). Además deduce bien el <b>neto gravado</b> y el <b>IVA</b> aunque el texto venga pegado, y nunca deja el total por debajo del neto. Probado con facturas reales de Induferr.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'01/11/2026',
+      titulo:'🧾 v2.355.0 — Catálogo de regímenes + datos fiscales de contactos (retenciones más automáticas)',
+      desc:'Segunda parte de retenciones: ahora hay un <b>catálogo de regímenes</b> (⚙️ Regímenes, en la pantalla de Retenciones) donde cargás y revisás alícuotas, mínimo no sujeto, código, base y sistema (SICORE/SIRE/SIRCAR) — <b>editables, para mantenerlos al día con la normativa</b>. Al cargar una retención en el pago/cobro, elegís el <b>régimen</b> y el sistema <b>propone el importe</b> (base × alícuota) respetando el mínimo. En la ficha de <b>cliente/proveedor</b> podés cargar su <b>condición de Ganancias</b> y un <b>certificado de exclusión</b> (impuesto, %, vigencia): si está vigente, el sistema <b>avisa y reduce la retención automáticamente</b>. Las condiciones NO se presumen por el nombre. TRAE MIGRACIÓN.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'30/10/2026',
+      titulo:'🔁 v2.354.0 — Paridad de canje: ahora se carga como lo pensás (por cada kg que ingresa, cuánto se lleva)',
+      desc:'En <b>Molienda / Fábrica → Plan canje</b>, al crear una <b>paridad</b> el formulario quedaba al revés. Ahora se carga tal como lo vive el cliente: primero <b>lo que INGRESA</b> (el grano que trae, ej. soja), después <b>lo que SE LLEVA</b> (el producto, ej. expeller) y la relación es <b>“por cada 1 kg que ingresa, ¿cuántos kg se lleva?”</b>, con una vista previa que lo confirma. Las paridades ya cargadas siguen funcionando igual.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/10/2026',
       titulo:'🧾 v2.353.0 — Facturas de compra: "Otros impuestos y percepciones" (combustibles, IIBB, etc.)',
       desc:'Al cargar una <b>factura de compra</b> ahora hay una sección <b>🧾 Otros impuestos y percepciones</b> para los conceptos que van <b>después del IVA</b> (combustibles ITC/ICL, percepción IIBB/IVA/Ganancias, CO2, sellados…). Se cargan por <b>importe fijo</b> o por <b>% sobre una base</b> (neto gravado o total), desde un <b>catálogo reutilizable</b> (botón ⚙️ Gestionar) o como línea manual. <b>No tocan el cálculo del IVA</b>: se suman al total. Abajo ves <b>Neto · IVA · Otros · TOTAL calculado</b> y un campo para poner el <b>total informado en la factura</b> y confirmar que coincide. Así cierran bien las facturas de gasoil y similares. También funciona al importar la factura por <b>PDF/foto</b>: los otros tributos se cargan solos en esa sección.' },
@@ -7303,6 +7312,7 @@ function clienteForm(id=null) {
         <div><label class="label">Provincia</label>${catSelect('f-prov', 'Provincia', it.provincia||'', { placeholder:'— Elegir provincia —', parent: it.pais||'Argentina', parentSelect:'f-pais' })}</div>
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
+        ${_fiscalRetBlock(it)}
       </div>`,
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -7310,11 +7320,13 @@ function clienteForm(id=null) {
   });
 }
 async function clienteSave(id) {
+  const _fr = _fiscalRetRead();
   const data = {
     razonSocial: $('#f-rs').value.trim(),
     nombreFantasia: $('#f-nf').value.trim() || null,
     cuit: $('#f-cuit').value.trim() || null,
     condIVA: $('#f-iva').value || null,
+    condGanancias: _fr.condGanancias, fiscalRetencion: _fr.fiscalRetencion,
     email: $('#f-em').value.trim() || null,
     telefono: $('#f-tel').value.trim() || null,
     direccion: $('#f-dir').value.trim() || null,
@@ -7497,17 +7509,55 @@ function provForm(id=null) {
         <div><label class="label">Provincia</label>${catSelect('f-prov', 'Provincia', it.provincia||'', { placeholder:'— Elegir provincia —', parent: it.pais||'Argentina', parentSelect:'f-pais' })}</div>
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
+        ${_fiscalRetBlock(it)}
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='provSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
   });
 }
+// Bloque reutilizable de datos fiscales para retenciones (cliente/proveedor).
+function _fiscalRetBlock(it){
+  const fr = it.fiscalRetencion || {}; const cert = (Array.isArray(fr.certExclusion)&&fr.certExclusion[0]) || {};
+  const cg = it.condGanancias||'';
+  return `<div class="col-span-2 mt-1"><details ${cg||cert.impuesto?'open':''}>
+    <summary class="cursor-pointer text-sm font-semibold text-indigo-800">🧾 Datos fiscales para retenciones (opcional)</summary>
+    <div class="grid grid-cols-2 gap-3 mt-2 bg-indigo-50 rounded p-2">
+      <div><label class="label text-xs">Condición Ganancias</label>
+        <select id="f-cg" class="input">
+          <option value="">— Sin especificar —</option>
+          <option value="inscripto" ${cg==='inscripto'?'selected':''}>Inscripto</option>
+          <option value="no_inscripto" ${cg==='no_inscripto'?'selected':''}>No inscripto</option>
+          <option value="exento" ${cg==='exento'?'selected':''}>Exento</option>
+        </select></div>
+      <div></div>
+      <div class="col-span-2 text-[11px] text-indigo-700">Certificado de exclusión (si tiene). Las condiciones NO se presumen por el nombre.</div>
+      <div><label class="label text-xs">Impuesto excluido</label>
+        <select id="f-cert-imp" class="input"><option value="">— Ninguno —</option>
+          ${['ganancias','iva','iibb','suss'].map(k=>`<option value="${k}" ${cert.impuesto===k?'selected':''}>${esc(RET_IMPUESTOS[k]||k)}</option>`).join('')}
+        </select></div>
+      <div><label class="label text-xs">% de exclusión</label><input id="f-cert-pct" type="number" step="0.01" class="input" value="${cert.pct??''}" placeholder="ej. 100"/></div>
+      <div><label class="label text-xs">Vigente desde</label><input id="f-cert-desde" type="date" class="input" value="${esc(cert.desde||'')}"/></div>
+      <div><label class="label text-xs">Vigente hasta</label><input id="f-cert-hasta" type="date" class="input" value="${esc(cert.hasta||'')}"/></div>
+      <div class="col-span-2"><label class="label text-xs">N° de certificado</label><input id="f-cert-nro" class="input" value="${esc(cert.nro||'')}"/></div>
+    </div></details></div>`;
+}
+function _fiscalRetRead(){
+  const cg = $('#f-cg')?.value || null;
+  const impE = $('#f-cert-imp')?.value || '';
+  let fiscalRetencion = null;
+  if (impE) {
+    fiscalRetencion = { certExclusion: [{ impuesto: impE, pct: Number($('#f-cert-pct')?.value||0), desde: $('#f-cert-desde')?.value||null, hasta: $('#f-cert-hasta')?.value||null, nro: $('#f-cert-nro')?.value?.trim()||null }] };
+  }
+  return { condGanancias: cg, fiscalRetencion };
+}
 async function provSave(id) {
+  const _fr = _fiscalRetRead();
   const data = {
     razonSocial: $('#f-rs').value.trim(),
     nombreFantasia: $('#f-nf')?.value.trim()||null,
     cuit: $('#f-cuit').value.trim()||null, rubro: $('#f-rub').value.trim()||null,
     condIVA: $('#f-iva')?.value||null,
+    condGanancias: _fr.condGanancias, fiscalRetencion: _fr.fiscalRetencion,
     email: $('#f-em').value.trim()||null, telefono: $('#f-tel').value.trim()||null,
     direccion: $('#f-dir').value.trim()||null,
     localidad: $('#f-loc')?.value||null,
@@ -21635,22 +21685,69 @@ async function pagoCobroAplicarCredito(modo) {
 
 // ===== Retenciones practicadas/sufridas dentro del modal de pago/cobro =====
 function pcRetSuma(){ return (state._pagoCobroData?._retenciones||[]).reduce((a,r)=>a+(Number(r.importe)||0),0); }
+async function pcRetCargarRegimenes(){
+  if (state.cache.regimenesRet) return state.cache.regimenesRet;
+  try { state.cache.regimenesRet = (await api('/api/regimenes-retencion')).data || []; }
+  catch { state.cache.regimenesRet = []; }
+  return state.cache.regimenesRet;
+}
+// Contacto seleccionado (para certificados de exclusión y base sugerida)
+function _pcContactoSel(){
+  const d=state._pagoCobroData; const id=document.getElementById('pc-contacto')?.value;
+  const list = (d?.modo==='pago') ? (state.cache.proveedores||[]) : (state.cache.clientes||[]);
+  return list.find(c=>c.id===id) || null;
+}
+// ¿El contacto tiene certificado de EXCLUSIÓN vigente para este impuesto? → % de exclusión.
+function _pcCertExclusion(impuesto){
+  const c=_pcContactoSel(); if(!c) return null;
+  const fr = c.fiscalRetencion || {}; const certs = Array.isArray(fr.certExclusion)?fr.certExclusion:[];
+  const hoy = new Date().toISOString().slice(0,10);
+  return certs.find(x => x.impuesto===impuesto && (!x.desde||x.desde<=hoy) && (!x.hasta||x.hasta>=hoy)) || null;
+}
 function pcRetAdd(){
   const d = state._pagoCobroData; if(!d) return;
   d._retenciones = d._retenciones || [];
-  d._retenciones.push({ impuesto:'ganancias', regimen:'', jurisdiccion:'', baseImponible:null, alicuota:null, importe:0, numeroCertificado:'' });
-  pcRetRender();
+  d._retenciones.push({ regimenId:'', impuesto:'ganancias', regimen:'', jurisdiccion:'', baseImponible:null, alicuota:null, importe:0, numeroCertificado:'' });
+  pcRetCargarRegimenes().then(pcRetRender);
 }
 function pcRetDel(i){ const d=state._pagoCobroData; if(!d?._retenciones) return; d._retenciones.splice(i,1); pcRetRender(); pagoCobroRecalcular(); }
+// Motor: calcula el importe sugerido desde base + alícuota, respetando mínimo no sujeto
+// y certificado de exclusión del contacto. No pisa un importe tipeado a mano salvo que
+// se recalculen base/alícuota/régimen.
+function _pcRetCalcImporte(r){
+  const base=Number(r.baseImponible||0), alic=Number(r.alicuota||0);
+  if(!(base>0)||!(alic>0)) return r.importe||0;
+  if(r._minimoNoSujeto && base < r._minimoNoSujeto) return 0;   // por debajo del mínimo no se retiene
+  let imp = Math.round(base*alic)/100;
+  const cert=_pcCertExclusion(r.impuesto);
+  if(cert && Number(cert.pct)>0) imp = Math.round(imp*(1-Number(cert.pct)/100)*100)/100;  // reduce por exclusión
+  if(r._minimoRetencion && imp>0 && imp < r._minimoRetencion) return 0;  // por debajo del mínimo de retención
+  return imp;
+}
+function pcRetAplicarRegimen(i, regId){
+  const d=state._pagoCobroData; const r=d?._retenciones?.[i]; if(!r) return;
+  const reg=(state.cache.regimenesRet||[]).find(x=>x.id===regId);
+  r.regimenId = regId||'';
+  if(reg){
+    r.impuesto = reg.impuesto; r.regimen = reg.codigoRegimen || reg.nombre; r.jurisdiccion = reg.jurisdiccion||'';
+    // alícuota: general o de no inscripto según condición Ganancias del contacto
+    const c=_pcContactoSel(); const noInsc = c && c.condGanancias==='no_inscripto';
+    r.alicuota = (noInsc && reg.alicuotaNoInscripto!=null) ? reg.alicuotaNoInscripto : (reg.alicuota||0);
+    r._minimoNoSujeto = reg.minimoNoSujeto||0; r._minimoRetencion = reg.minimoRetencion||0; r._baseCalculo = reg.baseCalculo||'neto';
+    // base sugerida: el total de la factura tildada (neto/total) si no hay base cargada
+    if(!r.baseImponible){ const tot=Number(state._pagoCobroData?._deudaArs||0)||Number(document.getElementById('pc-total-tildado')?.textContent?.replace(/[^\d,-]/g,'').replace('.','').replace(',','.')||0); if(tot>0) r.baseImponible=Math.round(tot*100)/100; }
+    r.importe=_pcRetCalcImporte(r);
+  }
+  pcRetRender(); pcRetTotal(); pagoCobroRecalcular();
+}
 function pcRetField(i, campo, val){
   const d=state._pagoCobroData; if(!d?._retenciones?.[i]) return;
   const r=d._retenciones[i];
   if(campo==='baseImponible'||campo==='alicuota'||campo==='importe') r[campo]= val===''?(campo==='importe'?0:null):Number(val);
   else r[campo]=val;
-  // Si hay base y alícuota y no tocó el importe a mano, lo calcula.
-  if((campo==='baseImponible'||campo==='alicuota') && r.baseImponible && r.alicuota){
-    r.importe = Math.round(r.baseImponible * r.alicuota) / 100;
-    const imp=document.querySelector(`.pc-ret-imp[data-i="${i}"]`); if(imp) imp.value=r.importe.toFixed(2);
+  if(campo==='baseImponible'||campo==='alicuota'){
+    r.importe = _pcRetCalcImporte(r);
+    const imp=document.querySelector(`.pc-ret-imp[data-i="${i}"]`); if(imp) imp.value=r.importe?r.importe.toFixed(2):'';
   }
   pcRetTotal(); pagoCobroRecalcular();
 }
@@ -21661,25 +21758,34 @@ function pcRetTotal(){
 function pcRetRender(){
   const cont=document.getElementById('pc-ret-rows'); if(!cont) return;
   const d=state._pagoCobroData; const rets=d._retenciones||[];
+  const nat = d.modo==='pago' ? 'practicada' : 'sufrida';
+  const regs=(state.cache.regimenesRet||[]).filter(x=>x.activo!==false && (x.naturaleza||'practicada')===nat);
   const esIibb = r => r.impuesto==='iibb';
-  cont.innerHTML = rets.length ? rets.map((r,i)=>`
+  cont.innerHTML = rets.length ? rets.map((r,i)=>{
+    const cert=_pcCertExclusion(r.impuesto);
+    return `
     <div class="grid grid-cols-12 gap-1 items-end mb-1 bg-white rounded p-2 border border-indigo-100">
-      <div class="col-span-3"><label class="label text-[10px]">Impuesto</label>
+      <div class="col-span-4"><label class="label text-[10px]">Régimen (catálogo)</label>
+        <select class="input text-xs py-1" onchange="pcRetAplicarRegimen(${i},this.value)">
+          <option value="">— Elegir / manual —</option>
+          ${regs.map(g=>`<option value="${esc(g.id)}" ${r.regimenId===g.id?'selected':''}>${esc(g.nombre)}</option>`).join('')}
+        </select></div>
+      <div class="col-span-2"><label class="label text-[10px]">Impuesto</label>
         <select class="input text-xs py-1" onchange="pcRetField(${i},'impuesto',this.value)">
           ${Object.entries(RET_IMPUESTOS).map(([k,v])=>`<option value="${k}" ${r.impuesto===k?'selected':''}>${esc(v)}</option>`).join('')}
         </select></div>
-      <div class="col-span-2"><label class="label text-[10px]">Régimen</label><input class="input text-xs py-1" value="${esc(r.regimen||'')}" oninput="pcRetField(${i},'regimen',this.value)" placeholder="ej. RG 830"/></div>
       <div class="col-span-2" style="${esIibb(r)?'':'visibility:hidden'}"><label class="label text-[10px]">Jurisdicción</label>
         <select class="input text-xs py-1" onchange="pcRetField(${i},'jurisdiccion',this.value)">
           <option value="">—</option>
           ${Object.entries(JURISDICCIONES).map(([k,v])=>`<option value="${k}" ${r.jurisdiccion===k?'selected':''}>${esc(v)}</option>`).join('')}
         </select></div>
-      <div class="col-span-1"><label class="label text-[10px]">Base</label><input type="number" step="0.01" class="input text-xs py-1" value="${r.baseImponible??''}" oninput="pcRetField(${i},'baseImponible',this.value)"/></div>
+      <div class="col-span-2"><label class="label text-[10px]">Base</label><input type="number" step="0.01" class="input text-xs py-1" value="${r.baseImponible??''}" oninput="pcRetField(${i},'baseImponible',this.value)"/></div>
       <div class="col-span-1"><label class="label text-[10px]">Alíc.%</label><input type="number" step="0.01" class="input text-xs py-1" value="${r.alicuota??''}" oninput="pcRetField(${i},'alicuota',this.value)"/></div>
-      <div class="col-span-2"><label class="label text-[10px]">Importe $ *</label><input type="number" step="0.01" class="input text-xs py-1 pc-ret-imp" data-i="${i}" value="${r.importe||''}" oninput="pcRetField(${i},'importe',this.value)"/></div>
-      <div class="col-span-1 text-right"><button type="button" class="text-red-600 text-xs" onclick="pcRetDel(${i})">🗑️</button></div>
-      <div class="col-span-12"><input class="input text-xs py-1" value="${esc(r.numeroCertificado||'')}" oninput="pcRetField(${i},'numeroCertificado',this.value)" placeholder="N° de certificado (opcional)"/></div>
-    </div>`).join('') : '<div class="text-[11px] text-indigo-400 text-center py-1">Sin retenciones. Tocá "+ Agregar" si corresponde.</div>';
+      <div class="col-span-1 text-right pt-4"><button type="button" class="text-red-600 text-xs" onclick="pcRetDel(${i})">🗑️</button></div>
+      <div class="col-span-6"><label class="label text-[10px]">Importe $ *</label><input type="number" step="0.01" class="input text-xs py-1 pc-ret-imp" data-i="${i}" value="${r.importe||''}" oninput="pcRetField(${i},'importe',this.value)"/></div>
+      <div class="col-span-6"><label class="label text-[10px]">N° certificado</label><input class="input text-xs py-1" value="${esc(r.numeroCertificado||'')}" oninput="pcRetField(${i},'numeroCertificado',this.value)" placeholder="opcional"/></div>
+      ${cert?`<div class="col-span-12 text-[10px] text-amber-700">⚠️ El contacto tiene certificado de exclusión vigente de ${esc(RET_IMPUESTOS[r.impuesto]||r.impuesto)} (${cert.pct}%). El importe se reduce automáticamente.</div>`:''}
+    </div>`;}).join('') : '<div class="text-[11px] text-indigo-400 text-center py-1">Sin retenciones. Tocá "+ Agregar" si corresponde.</div>';
   pcRetTotal();
 }
 
@@ -30407,10 +30513,12 @@ async function molGuardarMargen(id) {
 function molTabCanje() {
   const cs = state._molCanjes||[];
   const pars = state._molParidades||[];
-  const filasP = pars.map(p=>`<tr class="table-row"><td>${esc(p.nombre)}</td>
-    <td class="text-xs">${esc(p.entregaNombre||'')} → ${esc(p.recibeNombre||'')}</td>
-    <td class="text-right">1 : ${p.factor}</td>
-    <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="molParidadDel('${p.id}')">🗑️</button>`:''}</td></tr>`).join('');
+  const filasP = pars.map(p=>{
+    const r = p.factor>0 ? Math.round((1/p.factor)*10000)/10000 : 0;   // se lleva por 1 que ingresa
+    return `<tr class="table-row"><td>${esc(p.nombre)}</td>
+    <td class="text-xs">Ingresa <b>${esc(p.recibeNombre||'')}</b> → se lleva <b>${esc(p.entregaNombre||'')}</b></td>
+    <td class="text-right">1 kg ingresa = <b>${r}</b> kg se lleva</td>
+    <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="molParidadDel('${p.id}')">🗑️</button>`:''}</td></tr>`;}).join('');
   const filasC = cs.map(c=>`<tr class="table-row">
     <td class="text-xs">${fmtDate(c.fecha)}</td>
     <td><span class="badge ${c.tipo==='compra'?'badge-amber':'badge-blue'} text-[10px]">${c.tipo==='compra'?'Compra':'Venta'}</span> ${esc(c.contactoNombre||'')}</td>
@@ -30426,7 +30534,7 @@ function molTabCanje() {
     </table></div>
     <div class="flex items-center justify-between mb-1"><div class="label">Paridades (relaciones fijas)</div>${can('stock:create')?`<button class="btn btn-ghost btn-xs" onclick="molParidadForm()">+ Paridad</button>`:''}</div>
     <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
-      <thead><tr><th>Nombre</th><th>Relación</th><th class="text-right">Factor (recibe x 1 entrega)</th><th></th></tr></thead>
+      <thead><tr><th>Nombre</th><th>Relación</th><th class="text-right">Cuánto se lleva x 1 kg que ingresa</th><th></th></tr></thead>
       <tbody>${filasP || `<tr><td colspan="4" class="text-center text-slate-400 py-4">Sin paridades. Creá una para autocompletar los canjes.</td></tr>`}</tbody>
     </table></div>`;
 }
@@ -30441,17 +30549,31 @@ function _molProdOpts(sel){
 function molParidadForm() {
   openModal({ title:'Nueva paridad de canje', size:'max-w-lg',
     body:`<div class="grid grid-cols-1 gap-3">
-      <div><label class="label">Nombre</label><input id="pa-nombre" class="input" placeholder="Expeller x Soja"/></div>
-      <div><label class="label">Entrego (sale) *</label><select id="pa-ent" class="input">${_molProdOpts()}</select></div>
-      <div><label class="label">Recibo (entra) *</label><select id="pa-rec" class="input">${_molProdOpts()}</select></div>
-      <div><label class="label">Relación: cuántos kg recibo por 1 kg que entrego *</label><input id="pa-factor" type="number" step="0.0001" class="input" placeholder="ej. 1.2"/></div>
+      <div class="bg-sky-50 border border-sky-200 rounded p-2 text-[12px] text-sky-900">Pensalo como lo vive el cliente: <b>trae grano (ingresa)</b> y <b>se lleva un producto</b>. Cargá cuánto se lleva por cada kilo que ingresa.</div>
+      <div><label class="label">Nombre</label><input id="pa-nombre" class="input" placeholder="Soja x Expeller"/></div>
+      <div><label class="label">Lo que INGRESA (lo que trae el cliente) *</label><select id="pa-rec" class="input" onchange="molParidadPrev()">${_molProdOpts()}</select></div>
+      <div><label class="label">Lo que SE LLEVA (producto que retira) *</label><select id="pa-ent" class="input" onchange="molParidadPrev()">${_molProdOpts()}</select></div>
+      <div><label class="label">Relación: por cada 1 kg que INGRESA, ¿cuántos kg SE LLEVA? *</label><input id="pa-ratio" type="number" step="0.0001" class="input" placeholder="ej. 0.83" oninput="molParidadPrev()"/>
+        <div class="text-[11px] text-slate-500 mt-1">Ej.: si por cada 1 kg de soja que entra se lleva 0,83 kg de expeller, poné 0,83. (Equivale a 1 kg de expeller = 1,2 kg de soja.)</div></div>
+      <div id="pa-prev" class="text-[12px] text-emerald-700"></div>
     </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="molParidadSave()">💾 Guardar</button>` });
 }
+function molParidadPrev(){
+  const r=Number($('#pa-ratio')?.value||0); const prev=$('#pa-prev'); if(!prev) return;
+  const ing=$('#pa-rec')?.selectedOptions?.[0]?.textContent||'lo que ingresa';
+  const lle=$('#pa-ent')?.selectedOptions?.[0]?.textContent||'lo que se lleva';
+  prev.innerHTML = r>0 ? `✅ Por cada <b>1 kg</b> de <b>${esc(ing)}</b> que ingresa, se lleva <b>${_round2b(r)} kg</b> de <b>${esc(lle)}</b>.` : '';
+}
 async function molParidadSave() {
-  const body={ nombre:$('#pa-nombre')?.value, entregaProductoId:$('#pa-ent')?.value, recibeProductoId:$('#pa-rec')?.value, factor:Number($('#pa-factor')?.value||0) };
-  if (!body.entregaProductoId||!body.recibeProductoId||!(body.factor>0)) return toast('Completá productos y la relación','warn');
-  if (body.entregaProductoId===body.recibeProductoId) return toast('El producto que entregás y el que recibís no pueden ser el mismo','warn');
+  // La usuaria carga la relación en dirección "se lleva por 1 que ingresa" (ratio).
+  // El modelo guarda factor = recibo por 1 entrego (lo que entra por lo que sale) = 1/ratio.
+  const ratio=Number($('#pa-ratio')?.value||0);
+  const entregaProductoId=$('#pa-ent')?.value, recibeProductoId=$('#pa-rec')?.value;
+  if (!entregaProductoId||!recibeProductoId||!(ratio>0)) return toast('Completá los productos y la relación','warn');
+  if (entregaProductoId===recibeProductoId) return toast('El producto que ingresa y el que se lleva no pueden ser el mismo','warn');
+  const factor = Math.round((1/ratio)*10000)/10000;   // recibo por 1 entrego
+  const body={ nombre:$('#pa-nombre')?.value, entregaProductoId, recibeProductoId, factor };
   try { await api('/api/canje-paridades',{method:'POST',body:JSON.stringify(body)}); state._molParidades=(await api('/api/canje-paridades')).data||[]; toast('Paridad guardada','success'); closeModal(); molRender(); }
   catch(e){ toast(e.message,'error'); }
 }
@@ -39848,6 +39970,7 @@ pages.retenciones = async function() {
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="retArcaImport()" title="Subir el Excel de 'Mis Retenciones' de ARCA (.xls/.xlsx) y cargar las retenciones/percepciones sufridas">🏦 Importar de ARCA (Excel)</button>`:''}
         ${can('finanzas:read')?`<button class="btn btn-secondary" onclick="retSicoreExport()" title="Exportar las retenciones practicadas a SICORE/SIRE (.txt) para presentar en ARCA">📄 Exportar SICORE/SIRE</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="retImportar()" title="Subir el PDF de una Orden de Pago y cargar sus retenciones solas">📥 Importar OP (PDF)</button>`:''}
+        ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="regManager()" title="Configurar el catálogo de regímenes (alícuotas, mínimos, códigos). Se usan al cargar una retención en el pago/cobro.">⚙️ Regímenes</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick="retForm()">+ Nueva retención</button>`:''}
       </div>
       <input type="file" id="ret-op-file" accept=".pdf" class="hidden" onchange="retImportarSubir(this)"/>
@@ -39957,6 +40080,61 @@ async function retArcaDeshacer(lote) {
     await pages.retenciones();
   } catch (e) { toast(e.message || 'No pude deshacer', 'error'); }
 }
+
+// ---------- Catálogo de REGÍMENES de retención/percepción ----------
+async function regManager(){
+  let regs=[]; try{ regs=(await api('/api/regimenes-retencion')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  state.cache.regimenesRet = regs;
+  const filas = regs.map(g=>`<tr class="table-row">
+    <td class="text-xs"><b>${esc(g.nombre)}</b> ${g.activo===false?'<span class="text-slate-400">(inactivo)</span>':''}</td>
+    <td class="text-xs">${esc(RET_IMPUESTOS[g.impuesto]||g.impuesto)}${g.jurisdiccion?(' · '+esc(JURISDICCIONES[g.jurisdiccion]||g.jurisdiccion)):''}</td>
+    <td class="text-xs">${g.naturaleza==='sufrida'?'Sufrida':'Practicada'}</td>
+    <td class="text-right text-xs">${g.alicuota||0}%${g.minimoNoSujeto?` · mín. ${fmt$(g.minimoNoSujeto)}`:''}</td>
+    <td class="text-right"><button class="btn btn-ghost btn-xs" onclick="regForm('${g.id}')">✏️</button><button class="btn btn-ghost btn-xs text-red-600" onclick="regDel('${g.id}')">🗑️</button></td></tr>`).join('');
+  openModal({ title:'⚙️ Regímenes de retención / percepción', size:'max-w-3xl',
+    body:`<div class="bg-amber-50 border border-amber-300 rounded p-2 text-[12px] text-amber-800 mb-2">Revisá las <b>alícuotas, mínimos y códigos</b> según la normativa vigente antes de usarlos. Estos parámetros se aplican al cargar una retención en el pago/cobro.</div>
+      <div class="mb-2 flex gap-2"><button class="btn btn-primary btn-sm" onclick="regForm()">+ Nuevo régimen</button>${regs.length?'':`<button class="btn btn-secondary btn-sm" onclick="regSeed()">Cargar ejemplos (revisar)</button>`}</div>
+      <div class="kpi overflow-x-auto"><table class="table w-full text-sm"><thead><tr><th>Nombre</th><th>Impuesto</th><th>Tipo</th><th class="text-right">Alíc./mín.</th><th></th></tr></thead>
+      <tbody>${filas||`<tr><td colspan="5" class="text-center text-slate-400 py-4">Sin regímenes. Creá uno o cargá los ejemplos.</td></tr>`}</tbody></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+async function regSeed(){ try{ await api('/api/regimenes-retencion?seed=1'); delete state.cache.regimenesRet; regManager(); }catch(e){ toast(e.message,'error'); } }
+function regForm(id){
+  const g = id ? (state.cache.regimenesRet||[]).find(x=>x.id===id)||{} : {};
+  const impOpts = Object.entries(RET_IMPUESTOS).map(([k,v])=>`<option value="${k}" ${g.impuesto===k?'selected':''}>${esc(v)}</option>`).join('');
+  const jurOpts = `<option value="">—</option>`+Object.entries(JURISDICCIONES).map(([k,v])=>`<option value="${k}" ${g.jurisdiccion===k?'selected':''}>${esc(v)}</option>`).join('');
+  openModal({ title: id?'Editar régimen':'Nuevo régimen', size:'max-w-2xl',
+    body:`<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div class="md:col-span-2"><label class="label">Nombre *</label><input id="rg-nombre" class="input" value="${esc(g.nombre||'')}" placeholder="ej. Ganancias - RG 830 - Bienes"/></div>
+      <div><label class="label">Tipo</label><select id="rg-nat" class="input"><option value="practicada" ${g.naturaleza!=='sufrida'?'selected':''}>Practicada (yo retengo)</option><option value="sufrida" ${g.naturaleza==='sufrida'?'selected':''}>Sufrida (me retienen)</option></select></div>
+      <div><label class="label">Clase</label><select id="rg-clase" class="input"><option value="retencion" ${g.clase!=='percepcion'?'selected':''}>Retención</option><option value="percepcion" ${g.clase==='percepcion'?'selected':''}>Percepción</option></select></div>
+      <div><label class="label">Impuesto *</label><select id="rg-imp" class="input" onchange="document.getElementById('rg-jur-wrap').style.display=this.value==='iibb'?'':'none'">${impOpts}</select></div>
+      <div id="rg-jur-wrap" style="${g.impuesto==='iibb'?'':'display:none'}"><label class="label">Jurisdicción (IIBB)</label><select id="rg-jur" class="input">${jurOpts}</select></div>
+      <div><label class="label">Organismo</label><input id="rg-org" class="input" value="${esc(g.organismo||'')}" placeholder="AFIP / ARBA / API…"/></div>
+      <div><label class="label">Código de régimen</label><input id="rg-cod" class="input" value="${esc(g.codigoRegimen||'')}" placeholder="ej. 78"/></div>
+      <div><label class="label">Base de cálculo</label><select id="rg-base" class="input"><option value="neto" ${g.baseCalculo!=='total'&&g.baseCalculo!=='pago'?'selected':''}>Neto gravado</option><option value="total" ${g.baseCalculo==='total'?'selected':''}>Total</option><option value="pago" ${g.baseCalculo==='pago'?'selected':''}>Monto del pago</option></select></div>
+      <div><label class="label">Sistema de declaración</label><select id="rg-sis" class="input"><option value="">—</option><option ${g.sistema==='SICORE'?'selected':''}>SICORE</option><option ${g.sistema==='SIRE'?'selected':''}>SIRE</option><option ${g.sistema==='SIRCAR'?'selected':''}>SIRCAR</option></select></div>
+      <div><label class="label">Alícuota % (general)</label><input id="rg-alic" type="number" step="0.0001" class="input" value="${g.alicuota??''}"/></div>
+      <div><label class="label">Alícuota % (no inscripto)</label><input id="rg-alicni" type="number" step="0.0001" class="input" value="${g.alicuotaNoInscripto??''}" placeholder="opcional"/></div>
+      <div><label class="label">Mínimo no sujeto $</label><input id="rg-mns" type="number" step="0.01" class="input" value="${g.minimoNoSujeto??''}" placeholder="0"/></div>
+      <div><label class="label">Mínimo de retención $</label><input id="rg-minret" type="number" step="0.01" class="input" value="${g.minimoRetencion??''}" placeholder="0"/></div>
+      <div class="md:col-span-2 flex items-center gap-2"><input type="checkbox" id="rg-activo" ${g.activo===false?'':'checked'}/><label for="rg-activo" class="text-sm">Activo</label></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="regManager()">Volver</button><button class="btn btn-primary" onclick="regSave('${id||''}')">💾 Guardar</button>` });
+}
+async function regSave(id){
+  const body={ nombre:$('#rg-nombre')?.value?.trim(), naturaleza:$('#rg-nat')?.value, clase:$('#rg-clase')?.value,
+    impuesto:$('#rg-imp')?.value, jurisdiccion:($('#rg-imp')?.value==='iibb'?($('#rg-jur')?.value||null):null),
+    organismo:$('#rg-org')?.value||null, codigoRegimen:$('#rg-cod')?.value||null, baseCalculo:$('#rg-base')?.value,
+    sistema:$('#rg-sis')?.value||null,
+    alicuota:Number($('#rg-alic')?.value||0), alicuotaNoInscripto:$('#rg-alicni')?.value===''?null:Number($('#rg-alicni').value),
+    minimoNoSujeto:Number($('#rg-mns')?.value||0), minimoRetencion:Number($('#rg-minret')?.value||0),
+    activo:$('#rg-activo')?.checked!==false };
+  if(!body.nombre||!body.impuesto) return toast('Completá nombre e impuesto','warn');
+  try{ await api(id?('/api/regimenes-retencion/'+id):'/api/regimenes-retencion',{method:id?'PUT':'POST',body:JSON.stringify(body)});
+    delete state.cache.regimenesRet; toast('Régimen guardado','success'); regManager(); }catch(e){ toast(e.message,'error'); }
+}
+async function regDel(id){ if(!confirm('¿Eliminar este régimen?'))return; try{ await api('/api/regimenes-retencion/'+id,{method:'DELETE'}); delete state.cache.regimenesRet; regManager(); }catch(e){ toast(e.message,'error'); } }
 
 // ---------- Exportar retenciones PRACTICADAS: SICORE/SIRE (Nacional) o SIRCAR (IIBB) ----------
 function retSicoreExport() {
