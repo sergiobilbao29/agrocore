@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.353.0';
+const AGROCORE_VERSION = '2.354.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1522,6 +1522,17 @@ async function _revertirReciboDocTx(tx, doc, companyId) {
     }
   }
   if (!cobros.length) warns.push('No encontré el asiento de cobro en la cuenta corriente; revisalo manualmente.');
+  // Retenciones sufridas: borrar el registro fiscal y el asiento "Retención sufrida s/…"
+  // para que la factura vuelva a quedar pendiente por el total.
+  const _datos = doc.datos || {};
+  if (Array.isArray(_datos.retencionIds) && _datos.retencionIds.length) {
+    await tx.retencion.deleteMany({ where: { id: { in: _datos.retencionIds }, companyId } });
+  }
+  const retRows = await tx.ctaCte.findMany({ where: { companyId, contactoTipo:'cliente', contactoId: doc.contactoId, detalle:{ startsWith:'Retención sufrida' }, haber:{ gt:0 }, fecha:{ gte: desde, lte: hasta } } });
+  for (const r of retRows) {
+    await tx.ctaCte.delete({ where: { id: r.id } });
+    if (r.referencia) await tx.ctaCte.updateMany({ where: { companyId, contactoTipo:'cliente', contactoId: doc.contactoId, referencia: r.referencia, debe:{ gt:0 } }, data:{ pagado:false } });
+  }
   if (cli && total > 0.01) {
     const efe = await tx.efectivo.findMany({ where: { companyId, tipo:'ingreso', concepto: 'Cobro de ' + cli.razonSocial, fecha: { gte: desde, lte: hasta } } });
     const efeT = efe.filter(e => Math.abs(Number(e.monto) - total) < Math.max(1, total*0.02));
@@ -1606,6 +1617,16 @@ app.post('/api/documentos/:id/revertir', requireCompany, requirePermission('fina
           .sort((a, b) => a.diff - b.diff);
         if (cand.length) { await tx.movimiento.delete({ where: { id: cand[0].m.id } }); warns.push('Se repuso al stock el producto entregado en el pago en especie.'); }
         else warns.push('No pude ubicar el egreso de stock del pago en especie; revisá Stock y reponelo a mano si corresponde.');
+      }
+      // 2c) Retenciones practicadas: borrar el registro fiscal y el asiento de cta cte
+      // ("Retención practicada s/…") para que la deuda vuelva a quedar pendiente por el total.
+      if (Array.isArray(op.retencionIds) && op.retencionIds.length) {
+        await tx.retencion.deleteMany({ where: { id: { in: op.retencionIds }, companyId } });
+      }
+      const retRows = await tx.ctaCte.findMany({ where: { companyId, contactoTipo:'proveedor', contactoId: doc.contactoId, detalle:{ startsWith:'Retención practicada' }, haber:{ gt:0 } } });
+      for (const r of retRows.filter(r => Math.abs(new Date(r.fecha) - new Date(doc.fecha)) < 86400000)) {
+        await tx.ctaCte.delete({ where: { id: r.id } });
+        if (r.referencia) await tx.ctaCte.updateMany({ where: { companyId, contactoTipo:'proveedor', contactoId: doc.contactoId, referencia: r.referencia, debe:{ gt:0 } }, data:{ pagado:false } });
       }
       // 3) Borrar el comprobante de OP.
       await tx.documentoEmitido.delete({ where: { id: doc.id } });
@@ -22392,11 +22413,29 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       descontarStock: z.boolean().optional().default(true),  // pago en especie de método único: mover stock o no
       // Excedente: se pagó más que las facturas tildadas → el resto queda como saldo a favor.
       excedenteACuenta: z.number().nonnegative().optional().default(0),
+      // Retenciones PRACTICADAS al proveedor: cancelan deuda SIN salir del banco.
+      // No modifican el importe de las facturas; se registran aparte (módulo fiscal).
+      retenciones: z.array(z.object({
+        impuesto: z.enum(['ganancias', 'iva', 'iibb', 'suss', 'otro']),
+        clase: z.enum(['retencion', 'percepcion']).optional().default('retencion'),
+        regimen: z.string().nullable().optional(),
+        jurisdiccion: z.string().nullable().optional(),
+        baseImponible: z.number().nullable().optional(),
+        alicuota: z.number().nullable().optional(),
+        importe: z.number().positive(),
+        numeroCertificado: z.string().nullable().optional(),
+        cuit: z.string().nullable().optional(),
+        observaciones: z.string().nullable().optional(),
+      })).optional().default([]),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
     const sumaCreditos = d.creditos.reduce((a, c) => a + c.importeAplicado, 0);
+    const sumaRetenciones = (d.retenciones || []).reduce((a, r) => a + Number(r.importe || 0), 0);
+    if (sumaRetenciones > 0.01 && d.comprobantes.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Para registrar retenciones practicadas tenés que aplicar el pago a una o más facturas (no se pueden retener en un pago a cuenta).' });
+    }
     // Pago con varios medios: la suma de los legs debe coincidir con el monto pagado.
     if (Array.isArray(d.pagos) && d.pagos.length) {
       const sumaPagos = d.pagos.reduce((a, p) => a + Number(p.monto || 0), 0);
@@ -22409,8 +22448,8 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
     // Si se paga en otra moneda (ej: deuda USD, pago ARS) no se exige igualdad.
     const _mismaMoneda = !d.monedaPago;
     // El neto de facturas MÁS el excedente que queda a favor debe dar el monto pagado.
-    if (d.comprobantes.length && _mismaMoneda && Math.abs((sumaAplicada - sumaCreditos + (d.excedenteACuenta || 0)) - d.monto) > 0.01) {
-      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + (d.excedenteACuenta ? ' + excedente ' + d.excedenteACuenta.toFixed(2) : '') + ') no coincide con el monto pagado (' + d.monto + ')' });
+    if (d.comprobantes.length && _mismaMoneda && Math.abs((sumaAplicada - sumaCreditos - sumaRetenciones + (d.excedenteACuenta || 0)) - d.monto) > 0.01) {
+      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + (sumaRetenciones ? ' − retenciones ' + sumaRetenciones.toFixed(2) : '') + (d.excedenteACuenta ? ' + excedente ' + d.excedenteACuenta.toFixed(2) : '') + ') no coincide con el monto pagado (' + d.monto + ')' });
     }
     if (sumaCreditos > sumaAplicada + 0.01) {
       return res.status(400).json({ ok: false, error: 'Las notas de crédito aplicadas (' + sumaCreditos.toFixed(2) + ') superan el total de comprobantes tildados (' + sumaAplicada.toFixed(2) + ')' });
@@ -22443,6 +22482,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       let deudaArsConocida = true;
       let monedaDeuda = null;
       let credRestante = sumaCreditos;   // notas de crédito a repartir entre las facturas (FIFO)
+      let retRestante = sumaRetenciones; // retenciones practicadas a repartir entre facturas (FIFO)
       for (const c of d.comprobantes) {
         const cc = await tx.ctaCte.findFirst({ where: { id: c.ctaCteId, companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId } });
         if (!cc) throw new Error('Comprobante no encontrado: ' + c.ctaCteId);
@@ -22456,10 +22496,27 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         // Parte de este comprobante cubierta por notas de crédito vs. por plata.
         const credAplic = Math.min(credRestante, c.importeAplicado);
         credRestante = Math.round((credRestante - credAplic) * 100) / 100;
-        const cashPortion = Math.round((c.importeAplicado - credAplic) * 100) / 100;
-        // Marcar como pagado si se cancela todo el saldo del comprobante (plata + NC).
+        // Parte cubierta por RETENCIONES practicadas: cancela deuda pero NO sale del banco.
+        const retAplic = Math.min(retRestante, Math.round((c.importeAplicado - credAplic) * 100) / 100);
+        retRestante = Math.round((retRestante - retAplic) * 100) / 100;
+        const cashPortion = Math.round((c.importeAplicado - credAplic - retAplic) * 100) / 100;
+        // Marcar como pagado si se cancela todo el saldo del comprobante (plata + NC + retención).
         if (Math.abs(c.importeAplicado - saldoPendiente) < 0.01) {
           await tx.ctaCte.update({ where: { id: cc.id }, data: { pagado: true } });
+        }
+        // Contra-asiento de la RETENCIÓN practicada: cancela deuda en la cta cte del
+        // proveedor (haber) pero sin movimiento de banco/caja. Fila aparte y SALDADA.
+        if (retAplic > 0.01) {
+          await tx.ctaCte.create({ data: {
+            companyId: req.companyId,
+            contactoTipo: 'proveedor', contactoId: d.proveedorId,
+            fecha: d.fecha,
+            detalle: 'Retención practicada s/ ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
+            moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
+            haber: retAplic,
+            referencia: cc.referencia, pagado: true,
+            observaciones: 'Retención impositiva (no sale del banco)' + (d.observaciones ? ' · ' + d.observaciones : ''),
+          }});
         }
         // Contra-asiento del PAGO (parte en plata). Fila aparte y SALDADA (pagado:true)
         // para que no reaparezca como pendiente ni como saldo a favor. El comprobante
@@ -22726,7 +22783,36 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       }
       } // fin "if (d.monto > 0.01)"
 
-      return { ok: true, comprobantesAplicados: d.comprobantes.length, creditosAplicados: d.creditos.length };
+      // Registro fiscal de las RETENCIONES PRACTICADAS (módulo de retenciones, para
+      // SICORE/SIRE/SIRCAR). No vuelve a mover plata: la deuda ya se saldó arriba y el
+      // banco bajó sólo el neto. Guardamos ids para poder deshacerlas si se revierte la OP.
+      const _refOP = d.comprobantes.length ? ('Pago a ' + prov.razonSocial) : null;
+      const retencionIds = [];
+      for (const r of (d.retenciones || [])) {
+        const rec = await tx.retencion.create({ data: {
+          companyId: req.companyId,
+          naturaleza: 'practicada',
+          clase: r.clase || 'retencion',
+          impuesto: r.impuesto,
+          regimen: r.regimen || null,
+          jurisdiccion: r.jurisdiccion || null,
+          fecha: d.fecha,
+          contactoTipo: 'proveedor', contactoId: d.proveedorId, contactoNombre: prov.razonSocial || null,
+          cuit: r.cuit || prov.cuit || null,
+          numeroCertificado: r.numeroCertificado || null,
+          baseImponible: r.baseImponible ?? null,
+          alicuota: r.alicuota ?? null,
+          importe: Number(r.importe),
+          comprobanteRef: _refOP,
+          moneda: 'ARS',
+          observaciones: r.observaciones || null,
+          origen: 'op',
+          userId: req.user?.id || null,
+        }});
+        retencionIds.push(rec.id);
+      }
+
+      return { ok: true, comprobantesAplicados: d.comprobantes.length, creditosAplicados: d.creditos.length, retencionIds, totalRetenciones: sumaRetenciones };
     });
 
     res.json({ ok: true, ...result });
@@ -22806,13 +22892,32 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       })).optional(),
       // Excedente: se cobró más que las facturas → el resto queda como saldo a favor del cliente.
       excedenteACuenta: z.number().nonnegative().optional().default(0),
+      // Retenciones SUFRIDAS: el cliente/agente nos retuvo al pagarnos. Cancelan la deuda
+      // (la factura queda saldada por el total) aunque al banco entre sólo el neto. Se
+      // registran como crédito fiscal (módulo de retenciones) sin tocar el importe facturado.
+      retenciones: z.array(z.object({
+        impuesto: z.enum(['ganancias', 'iva', 'iibb', 'suss', 'otro']),
+        clase: z.enum(['retencion', 'percepcion']).optional().default('retencion'),
+        regimen: z.string().nullable().optional(),
+        jurisdiccion: z.string().nullable().optional(),
+        baseImponible: z.number().nullable().optional(),
+        alicuota: z.number().nullable().optional(),
+        importe: z.number().positive(),
+        numeroCertificado: z.string().nullable().optional(),
+        cuit: z.string().nullable().optional(),
+        observaciones: z.string().nullable().optional(),
+      })).optional().default([]),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
     const sumaAplicada = d.comprobantes.reduce((a, c) => a + c.importeAplicado, 0);
     const sumaCreditos = d.creditos.reduce((a, c) => a + c.importeAplicado, 0);
-    if (d.comprobantes.length && !d.monedaPago && Math.abs((sumaAplicada - sumaCreditos + (d.excedenteACuenta || 0)) - d.monto) > 0.01) {
-      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + (d.excedenteACuenta ? ' + excedente ' + d.excedenteACuenta.toFixed(2) : '') + ') no coincide con el monto cobrado (' + d.monto + ')' });
+    const sumaRetenciones = (d.retenciones || []).reduce((a, r) => a + Number(r.importe || 0), 0);
+    if (sumaRetenciones > 0.01 && d.comprobantes.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Para registrar retenciones sufridas tenés que aplicar el cobro a una o más facturas.' });
+    }
+    if (d.comprobantes.length && !d.monedaPago && Math.abs((sumaAplicada - sumaCreditos - sumaRetenciones + (d.excedenteACuenta || 0)) - d.monto) > 0.01) {
+      return res.status(400).json({ ok: false, error: 'El neto (comprobantes ' + sumaAplicada.toFixed(2) + ' − notas de crédito ' + sumaCreditos.toFixed(2) + (sumaRetenciones ? ' − retenciones ' + sumaRetenciones.toFixed(2) : '') + (d.excedenteACuenta ? ' + excedente ' + d.excedenteACuenta.toFixed(2) : '') + ') no coincide con el monto cobrado (' + d.monto + ')' });
     }
     if (Array.isArray(d.pagos) && d.pagos.length) {
       const sumaPagos = d.pagos.reduce((a, p) => a + Number(p.monto || 0), 0);
@@ -22863,6 +22968,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
     const result = await prisma.$transaction(async (tx) => {
       let deudaArs = 0, deudaArsConocida = true, monedaDeuda = null;
       let credRestante = sumaCreditos;   // notas de crédito a repartir entre las facturas (FIFO)
+      let retRestante = sumaRetenciones; // retenciones sufridas a repartir entre facturas (FIFO)
       for (const c of d.comprobantes) {
         const cc = await tx.ctaCte.findFirst({ where: { id: c.ctaCteId, companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId } });
         if (!cc) throw new Error('Comprobante no encontrado');
@@ -22873,9 +22979,26 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         if (cotDeuda == null) deudaArsConocida = false; else deudaArs += c.importeAplicado * cotDeuda;
         const credAplic = Math.min(credRestante, c.importeAplicado);
         credRestante = Math.round((credRestante - credAplic) * 100) / 100;
-        const cashPortion = Math.round((c.importeAplicado - credAplic) * 100) / 100;
+        // Parte cubierta por RETENCIONES sufridas: cancela deuda pero NO entra al banco.
+        const retAplic = Math.min(retRestante, Math.round((c.importeAplicado - credAplic) * 100) / 100);
+        retRestante = Math.round((retRestante - retAplic) * 100) / 100;
+        const cashPortion = Math.round((c.importeAplicado - credAplic - retAplic) * 100) / 100;
         if (Math.abs(c.importeAplicado - saldoPendiente) < 0.01) {
           await tx.ctaCte.update({ where: { id: cc.id }, data: { pagado: true } });
+        }
+        // Contra-asiento de la RETENCIÓN sufrida: cancela deuda en la cta cte del cliente
+        // (haber) sin que entre plata al banco. Fila aparte y SALDADA.
+        if (retAplic > 0.01) {
+          await tx.ctaCte.create({ data: {
+            companyId: req.companyId,
+            contactoTipo: 'cliente', contactoId: d.clienteId,
+            fecha: d.fecha,
+            detalle: 'Retención sufrida s/ ' + (cc.detalle || 'comprobante ' + cc.id.slice(-6)),
+            moneda: cc.moneda || 'ARS', cotizacion: cc.cotizacion ?? null,
+            haber: retAplic,
+            referencia: cc.referencia, pagado: true,
+            observaciones: 'Retención que nos practicaron (no entra al banco)' + (d.observaciones ? ' · ' + d.observaciones : ''),
+          }});
         }
         // Contra-asiento del cobro (parte en plata). Fila aparte y SALDADA; el
         // comprobante original conserva su importe total. Si las NC cubren todo, no hay fila.
@@ -23076,7 +23199,34 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         for (const leg of legs) await cobLeg(leg);
       }
       } // fin "if (d.monto > 0.01)"
-      return { ok: true, comprobantesAplicados: d.comprobantes.length, creditosAplicados: d.creditos.length };
+      // Registro fiscal de las RETENCIONES SUFRIDAS (crédito fiscal, para conciliar y
+      // aplicar a DDJJ). No vuelve a mover plata. Ids para deshacer si se revierte el recibo.
+      const _refRec = d.comprobantes.length ? ('Cobro de ' + (cli.razonSocial || '')) : null;
+      const retencionIds = [];
+      for (const r of (d.retenciones || [])) {
+        const rec = await tx.retencion.create({ data: {
+          companyId: req.companyId,
+          naturaleza: 'sufrida',
+          clase: r.clase || 'retencion',
+          impuesto: r.impuesto,
+          regimen: r.regimen || null,
+          jurisdiccion: r.jurisdiccion || null,
+          fecha: d.fecha,
+          contactoTipo: 'cliente', contactoId: d.clienteId, contactoNombre: cli.razonSocial || null,
+          cuit: r.cuit || cli.cuit || null,
+          numeroCertificado: r.numeroCertificado || null,
+          baseImponible: r.baseImponible ?? null,
+          alicuota: r.alicuota ?? null,
+          importe: Number(r.importe),
+          comprobanteRef: _refRec,
+          moneda: 'ARS',
+          observaciones: r.observaciones || null,
+          origen: 'cobro',
+          userId: req.user?.id || null,
+        }});
+        retencionIds.push(rec.id);
+      }
+      return { ok: true, comprobantesAplicados: d.comprobantes.length, creditosAplicados: d.creditos.length, retencionIds, totalRetenciones: sumaRetenciones };
     });
     res.json({ ok: true, ...result });
   } catch (e) { next(e); }

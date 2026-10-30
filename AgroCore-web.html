@@ -3075,6 +3075,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/10/2026',
+      titulo:'🧾 v2.354.0 — Retenciones al pagar y al cobrar (integradas a cuenta corriente y banco)',
+      desc:'Ahora las <b>retenciones</b> se cargan en el mismo momento del pago o del cobro, sin romper los saldos:<br>• Al <b>pagar a un proveedor</b> podés sumar las <b>retenciones practicadas</b> (Ganancias, IVA, IIBB, SUSS…). La <b>deuda se cancela por el total</b> de la factura, pero del <b>banco sale sólo el neto</b> (lo retenido no sale). Ej.: factura $1.000.000, retención $30.000 → transferís $970.000 y el proveedor queda saldado.<br>• Al <b>cobrar a un cliente</b> cargás las <b>retenciones sufridas</b> (las que te hicieron): la <b>factura queda saldada por el total</b> aunque al <b>banco entre sólo el neto</b>, y queda registrado el <b>crédito fiscal</b>.<br>En el modal aparece la sección <b>🧾 Retenciones</b> (impuesto, régimen, jurisdicción para IIBB, base, alícuota e importe). <b>No modifica el importe de las facturas</b>. Cada retención queda en el módulo de <b>Retenciones</b> para exportar a <b>SICORE / SIRE / SIRCAR</b>. Si deshacés la Orden de Pago o el recibo, también se borran las retenciones asociadas.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/10/2026',
       titulo:'🧾 v2.353.0 — Facturas de compra: "Otros impuestos y percepciones" (combustibles, IIBB, etc.)',
       desc:'Al cargar una <b>factura de compra</b> ahora hay una sección <b>🧾 Otros impuestos y percepciones</b> para los conceptos que van <b>después del IVA</b> (combustibles ITC/ICL, percepción IIBB/IVA/Ganancias, CO2, sellados…). Se cargan por <b>importe fijo</b> o por <b>% sobre una base</b> (neto gravado o total), desde un <b>catálogo reutilizable</b> (botón ⚙️ Gestionar) o como línea manual. <b>No tocan el cálculo del IVA</b>: se suman al total. Abajo ves <b>Neto · IVA · Otros · TOTAL calculado</b> y un campo para poner el <b>total informado en la factura</b> y confirmar que coincide. Así cierran bien las facturas de gasoil y similares. También funciona al importar la factura por <b>PDF/foto</b>: los otros tributos se cargan solos en esa sección.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'30/10/2026',
@@ -21479,9 +21482,19 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
       <div id="pc-metodo-detalle" class="mb-3"></div>
       <div id="pc-legs" class="mb-3" style="display:none"></div>
       <div id="pc-moneda-zone" class="mb-3"></div>
+      <div id="pc-ret-zone" class="border border-indigo-200 rounded-lg p-3 mb-3 bg-indigo-50" style="display:none">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-sm font-semibold text-indigo-900">🧾 Retenciones ${esPago?'practicadas':'sufridas'}</div>
+          <button type="button" class="btn btn-secondary btn-xs" onclick="pcRetAdd()">+ Agregar</button>
+        </div>
+        <div class="text-[11px] text-indigo-700 mb-2">${esPago?'Lo que le retenés al proveedor: cancela la deuda pero NO sale del banco.':'Lo que te retuvieron al pagarte: cancela la factura aunque al banco entre sólo el neto.'} No modifica el importe de las facturas.</div>
+        <div id="pc-ret-rows"></div>
+        <div class="flex justify-between text-sm mt-1"><span class="text-indigo-900">Total retenciones:</span><b id="pc-ret-total" class="text-indigo-900">$ 0</b></div>
+      </div>
       <div class="bg-amber-50 border border-amber-300 rounded p-3 text-sm">
         <div class="flex justify-between mb-1"><span>Total tildado:</span><b id="pc-total-tildado">$ 0</b></div>
-        <div class="flex justify-between items-center"><span>Total a ${esPago?'pagar':'cobrar'}:</span><input id="pc-total-pago" type="number" class="input text-right w-32 py-0 text-sm" value="0" oninput="pagoCobroTotalManual('${modo}')"/></div>
+        <div id="pc-ret-linea" class="flex justify-between mb-1 text-indigo-700" style="display:none"><span>− Retenciones:</span><b id="pc-ret-resta">$ 0</b></div>
+        <div class="flex justify-between items-center"><span>${esPago?'Sale del banco':'Entra al banco'} (neto):</span><input id="pc-total-pago" type="number" class="input text-right w-32 py-0 text-sm" value="0" oninput="pagoCobroTotalManual('${modo}')"/></div>
         <div id="pc-diff" class="text-xs mt-2"></div>
       </div>
       <div>
@@ -21493,7 +21506,7 @@ async function pagoCobroAbrir(modo /* 'pago' | 'cobro' */, opts = {}) {
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-primary" onclick="pagoCobroConfirmar('${modo}')">${esPago?'💸 Registrar pago':'💰 Registrar cobro'}</button>`
   });
-  state._pagoCobroData = { modo, comprobantes: [], tildados: {} };
+  state._pagoCobroData = { modo, comprobantes: [], tildados: {}, _retenciones: [] };
   // Dibujar el detalle del método inicial (Efectivo por defecto) para que la caja
   // aparezca desde el arranque, sin tener que cambiar de método y volver.
   try { pagoCobroMetodoCambio(modo); } catch {}
@@ -21558,6 +21571,8 @@ async function pagoCobroCargarComprobantes(modo) {
     }).filter(i => i.saldoPendiente > 0.01);
     state._pagoCobroData.comprobantes = items;
     state._pagoCobroData.tildados = {};
+    state._pagoCobroData._retenciones = [];   // al cambiar de contacto se limpian las retenciones
+    try { pcRetRender(); } catch {}
     state._pagoCobroData.saldoAFavor = Number(r.saldoAFavor || 0);
     state._pagoCobroData.contactoId = contactoId;
     state._pagoCobroData.tipoContacto = tipo;
@@ -21616,6 +21631,56 @@ async function pagoCobroAplicarCredito(modo) {
     delete state.cache.ctasCtes;
     await pagoCobroCargarComprobantes(modo);   // recargar: las facturas saldadas ya no salen pendientes
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ===== Retenciones practicadas/sufridas dentro del modal de pago/cobro =====
+function pcRetSuma(){ return (state._pagoCobroData?._retenciones||[]).reduce((a,r)=>a+(Number(r.importe)||0),0); }
+function pcRetAdd(){
+  const d = state._pagoCobroData; if(!d) return;
+  d._retenciones = d._retenciones || [];
+  d._retenciones.push({ impuesto:'ganancias', regimen:'', jurisdiccion:'', baseImponible:null, alicuota:null, importe:0, numeroCertificado:'' });
+  pcRetRender();
+}
+function pcRetDel(i){ const d=state._pagoCobroData; if(!d?._retenciones) return; d._retenciones.splice(i,1); pcRetRender(); pagoCobroRecalcular(); }
+function pcRetField(i, campo, val){
+  const d=state._pagoCobroData; if(!d?._retenciones?.[i]) return;
+  const r=d._retenciones[i];
+  if(campo==='baseImponible'||campo==='alicuota'||campo==='importe') r[campo]= val===''?(campo==='importe'?0:null):Number(val);
+  else r[campo]=val;
+  // Si hay base y alícuota y no tocó el importe a mano, lo calcula.
+  if((campo==='baseImponible'||campo==='alicuota') && r.baseImponible && r.alicuota){
+    r.importe = Math.round(r.baseImponible * r.alicuota) / 100;
+    const imp=document.querySelector(`.pc-ret-imp[data-i="${i}"]`); if(imp) imp.value=r.importe.toFixed(2);
+  }
+  pcRetTotal(); pagoCobroRecalcular();
+}
+function pcRetTotal(){
+  const t=pcRetSuma();
+  const el=document.getElementById('pc-ret-total'); if(el) el.textContent=fmt$(t);
+}
+function pcRetRender(){
+  const cont=document.getElementById('pc-ret-rows'); if(!cont) return;
+  const d=state._pagoCobroData; const rets=d._retenciones||[];
+  const esIibb = r => r.impuesto==='iibb';
+  cont.innerHTML = rets.length ? rets.map((r,i)=>`
+    <div class="grid grid-cols-12 gap-1 items-end mb-1 bg-white rounded p-2 border border-indigo-100">
+      <div class="col-span-3"><label class="label text-[10px]">Impuesto</label>
+        <select class="input text-xs py-1" onchange="pcRetField(${i},'impuesto',this.value)">
+          ${Object.entries(RET_IMPUESTOS).map(([k,v])=>`<option value="${k}" ${r.impuesto===k?'selected':''}>${esc(v)}</option>`).join('')}
+        </select></div>
+      <div class="col-span-2"><label class="label text-[10px]">Régimen</label><input class="input text-xs py-1" value="${esc(r.regimen||'')}" oninput="pcRetField(${i},'regimen',this.value)" placeholder="ej. RG 830"/></div>
+      <div class="col-span-2" style="${esIibb(r)?'':'visibility:hidden'}"><label class="label text-[10px]">Jurisdicción</label>
+        <select class="input text-xs py-1" onchange="pcRetField(${i},'jurisdiccion',this.value)">
+          <option value="">—</option>
+          ${Object.entries(JURISDICCIONES).map(([k,v])=>`<option value="${k}" ${r.jurisdiccion===k?'selected':''}>${esc(v)}</option>`).join('')}
+        </select></div>
+      <div class="col-span-1"><label class="label text-[10px]">Base</label><input type="number" step="0.01" class="input text-xs py-1" value="${r.baseImponible??''}" oninput="pcRetField(${i},'baseImponible',this.value)"/></div>
+      <div class="col-span-1"><label class="label text-[10px]">Alíc.%</label><input type="number" step="0.01" class="input text-xs py-1" value="${r.alicuota??''}" oninput="pcRetField(${i},'alicuota',this.value)"/></div>
+      <div class="col-span-2"><label class="label text-[10px]">Importe $ *</label><input type="number" step="0.01" class="input text-xs py-1 pc-ret-imp" data-i="${i}" value="${r.importe||''}" oninput="pcRetField(${i},'importe',this.value)"/></div>
+      <div class="col-span-1 text-right"><button type="button" class="text-red-600 text-xs" onclick="pcRetDel(${i})">🗑️</button></div>
+      <div class="col-span-12"><input class="input text-xs py-1" value="${esc(r.numeroCertificado||'')}" oninput="pcRetField(${i},'numeroCertificado',this.value)" placeholder="N° de certificado (opcional)"/></div>
+    </div>`).join('') : '<div class="text-[11px] text-indigo-400 text-center py-1">Sin retenciones. Tocá "+ Agregar" si corresponde.</div>';
+  pcRetTotal();
 }
 
 function pagoCobroRecalcular() {
@@ -21693,6 +21758,14 @@ function pagoCobroRecalcular() {
 
   if (monedaDeuda === 'ARS') {
     if (zone.innerHTML && monedas.length<=1) zone.innerHTML = '';
+    // Retenciones: sólo aplican en ARS y con facturas tildadas. Mostramos/ocultamos la sección.
+    const retZone = document.getElementById('pc-ret-zone');
+    const mostrarRet = totalTildado > 0.01;
+    if (retZone) { retZone.style.display = mostrarRet ? '' : 'none'; if (!mostrarRet && (d._retenciones||[]).length) { d._retenciones = []; pcRetRender(); } }
+    const sumaRet = pcRetSuma();
+    const retLinea = document.getElementById('pc-ret-linea'); const retResta = document.getElementById('pc-ret-resta');
+    if (retLinea) retLinea.style.display = sumaRet > 0.01 ? '' : 'none';
+    if (retResta) retResta.textContent = fmt$(sumaRet);
     // Neto negativo: las notas de crédito superan a las facturas tildadas.
     if (totalTildado < -0.01) {
       if (!inpTotal.dataset.touched) inpTotal.value = '0.00';
@@ -21700,19 +21773,24 @@ function pagoCobroRecalcular() {
       diffEl.innerHTML = `<span class="text-red-700">❌ Las notas de crédito superan por $${(-totalTildado).toFixed(2)} a las facturas tildadas. Destildá alguna NC o tildá más facturas.</span>`;
       return;
     }
-    if (!inpTotal.dataset.touched) inpTotal.value = totalTildado.toFixed(2);
+    // El neto a mover por banco/caja = total tildado − retenciones.
+    const netoAMover = Math.round((totalTildado - sumaRet) * 100) / 100;
+    if (sumaRet > 0.01 || !inpTotal.dataset.touched) inpTotal.value = netoAMover.toFixed(2);
     const totalPago = Number(inpTotal.value || 0);
-    const diff = totalPago - totalTildado;
+    const diff = totalPago - netoAMover;
     d._monedaPago = null; d._cotizPago = null; d._montoPago = totalPago;
     // Neto 0: las NC cubren exactamente las facturas → sólo vinculación, sin plata.
     if (totalTildado <= 0.01) {
       diffEl.innerHTML = '<span class="text-emerald-700">🔗 Las notas de crédito cubren todo: se vincula sin mover plata (no hace falta caja/banco).</span>';
     }
+    else if (sumaRet > 0.01 && Math.abs(diff) < 0.01) diffEl.innerHTML = `<span class="text-emerald-700">✅ La factura se cancela por ${fmt$(totalTildado)} · retención ${fmt$(sumaRet)} (no ${esPago?'sale':'entra'} del banco) · ${esPago?'sale':'entra'} ${fmt$(totalPago)}.</span>`;
     else if (Math.abs(diff) < 0.01) diffEl.innerHTML = '<span class="text-emerald-700">✅ Total (facturas − notas de crédito) listo para ' + (esPago?'pagar':'cobrar') + '.</span>';
     else if (diff > 0) diffEl.innerHTML = `<span class="text-amber-700">⚠️ Estás ${esPago?'pagando':'cobrando'} $${diff.toFixed(2)} más que el neto. Ajustá los importes.</span>`;
     else diffEl.innerHTML = `<span class="text-red-700">❌ El neto supera por $${(-diff).toFixed(2)} al monto. Bajá importes o destildá.</span>`;
     return;
   }
+  // Fuera de ARS no hay retenciones en esta pantalla.
+  { const rz=document.getElementById('pc-ret-zone'); if(rz){ rz.style.display='none'; if((d._retenciones||[]).length){ d._retenciones=[]; try{pcRetRender();}catch{} } } }
 
   // ----- Deuda en moneda extranjera / granos -----
   if (monedas.length <= 1) {
@@ -22599,14 +22677,28 @@ async function pagoCobroConfirmar(modo) {
   const pagaOtraMoneda = !esACuenta && monedaPago && monedaPago !== monedaDeuda;
   const sumaComp = comprobantes.reduce((a,c) => a+c.importeAplicado, 0);
   const sumaCred = creditos.reduce((a,c) => a+c.importeAplicado, 0);
-  // El neto (facturas − NC) debe coincidir con el monto cuando se paga en la misma moneda.
-  if (comprobantes.length && !pagaOtraMoneda && Math.abs((sumaComp - sumaCred) - monto) > 0.01)
-    return toast(`El neto (facturas ${monedaFmt(monedaDeuda,sumaComp)} − NC ${monedaFmt(monedaDeuda,sumaCred)}) no coincide con el monto (${monedaFmt(monedaDeuda,monto)})`, 'error');
+  // Retenciones (sólo ARS). Validar y armar la lista limpia.
+  const retenciones = (monedaDeuda === 'ARS' && !esACuenta) ? (d._retenciones || []).filter(r => Number(r.importe) > 0).map(r => ({
+    impuesto: r.impuesto || 'ganancias',
+    clase: r.clase || 'retencion',
+    regimen: (r.regimen||'').trim() || null,
+    jurisdiccion: r.impuesto==='iibb' ? (r.jurisdiccion || null) : null,
+    baseImponible: r.baseImponible!=null && r.baseImponible!=='' ? Number(r.baseImponible) : null,
+    alicuota: r.alicuota!=null && r.alicuota!=='' ? Number(r.alicuota) : null,
+    importe: Number(r.importe),
+    numeroCertificado: (r.numeroCertificado||'').trim() || null,
+  })) : [];
+  const sumaRet = retenciones.reduce((a,r)=>a+r.importe, 0);
+  if (retenciones.length && !comprobantes.length) return toast('Para registrar retenciones tenés que tildar al menos una factura.', 'warn');
+  // El neto (facturas − NC − retenciones) debe coincidir con el monto cuando se paga en la misma moneda.
+  if (comprobantes.length && !pagaOtraMoneda && Math.abs((sumaComp - sumaCred - sumaRet) - monto) > 0.01)
+    return toast(`El neto (facturas ${monedaFmt(monedaDeuda,sumaComp)} − NC ${monedaFmt(monedaDeuda,sumaCred)}${sumaRet?` − retenciones ${monedaFmt(monedaDeuda,sumaRet)}`:''}) no coincide con el monto (${monedaFmt(monedaDeuda,monto)})`, 'error');
 
   const body = {
     [esPago ? 'proveedorId' : 'clienteId']: contactoId,
     comprobantes, creditos, metodo, monto, fecha, observaciones: obs,
   };
+  if (retenciones.length) body.retenciones = retenciones;
   if (monedaPago && (esACuenta || pagaOtraMoneda)) { body.monedaPago = monedaPago; body.cotizacionPago = d._cotizPago || null; }
   // Neto 0 (las NC cubren todo): es sólo vinculación, no se pide caja/banco/cheque.
   if (monto > 0.01) {
@@ -22813,7 +22905,9 @@ async function pagoCobroConfirmar(modo) {
                    proveedor: prov.razonSocial||'', proveedorCuit: prov.cuit||'', proveedorEmail: prov.email||'',
                    proveedorDomicilio: prov.direccion||'', proveedorLocalidad: prov.localidad||'', proveedorIva: prov.condicionIva||prov.condicionIVA||'',
                    fecha, metodo, monto, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'',
-                   comprobantes: opComps, cheques: [], retenciones: [],
+                   comprobantes: opComps, cheques: [],
+                   retenciones: (body.retenciones||[]).map(r=>({ impuesto:r.impuesto, concepto:(RET_IMPUESTOS[r.impuesto]||r.impuesto)+(r.regimen?(' · '+r.regimen):''), regimen:r.regimen, jurisdiccion:r.jurisdiccion, baseImponible:r.baseImponible, alicuota:r.alicuota, importe:r.importe, numeroCertificado:r.numeroCertificado })),
+                   retencionIds: _rsp?.data?.retencionIds || [],
                    totalEfectivo: metodo==='efectivo'?monto:0, totalTransferencias: metodo==='transferencia'?monto:0, totalCheques: 0 };
       // Pago con varios medios: la OP arma los totales y los cheques desde los legs.
       if (body.pagos && body.pagos.length) {
@@ -22862,7 +22956,9 @@ async function pagoCobroConfirmar(modo) {
       // Nombre de una cuenta bancaria por id (para detallar transferencias en el recibo).
       const _bcoNombre = (id)=>{ const b=(state.cache.bancoCuentas||[]).find(x=>x.id===id); return b?`${b.banco}${b.numero?' '+b.numero:''}`:''; };
       const rec = { numero:_rsp?.data?.numero||null, cliente: cli.razonSocial||'', clienteCuit: cli.cuit||'', clienteEmail: cli.email||'', clienteTel: cli.telefono||'',
-        fecha, metodo, monto: montoRec, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', cheques: [], otros: [], comprobantes: recComps };
+        fecha, metodo, monto: montoRec, obs, caja: body.cajaOrigen||'', bancoNombre:'', chequeInfo:'', cheques: [], otros: [], comprobantes: recComps,
+        retenciones: (body.retenciones||[]).map(r=>({ impuesto:r.impuesto, concepto:(RET_IMPUESTOS[r.impuesto]||r.impuesto)+(r.regimen?(' · '+r.regimen):''), regimen:r.regimen, jurisdiccion:r.jurisdiccion, baseImponible:r.baseImponible, alicuota:r.alicuota, importe:r.importe, numeroCertificado:r.numeroCertificado })),
+        retencionIds: _rsp?.data?.retencionIds || [] };
       if (metodo==='transferencia' && body.bancoCuentaId){ const b=_bcoNombre(body.bancoCuentaId); if(b) rec.bancoNombre=b; rec.otros.push({ label:'Transferencia'+(b?' · '+b:''), importe: montoRec }); }
       if (metodo==='efectivo' && !(body.pagos&&body.pagos.length)){ rec.otros.push({ label:'Efectivo'+(body.cajaOrigen?' · '+body.cajaOrigen:''), importe: montoRec }); }
       if (metodo==='cheque' && (body.chequeDatos||body.chequeId)){ const cd=body.chequeDatos; const ch=cd||(state.cache.cheques||[]).find(x=>x.id===body.chequeId)||{}; rec.chequeInfo=`${ch.banco||''} N° ${ch.nroCheque||ch.numero||''}`; rec.cheques.push({ banco:ch.banco||'', nroCheque:ch.nroCheque||ch.numero||'', fechaPago:ch.fechaPago, importe:Number(ch.importe!=null?ch.importe:ch.monto)||montoRec }); }
