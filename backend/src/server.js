@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.349.0';
+const AGROCORE_VERSION = '2.350.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -20226,9 +20226,15 @@ function _parseResumenBancarioTexto(texto) {
       continue;
     }
     const joined = b.texto.join(' ');
-    const nums = [...joined.matchAll(mkMoney())].map(x => x[0]);
-    if (!nums.length) continue;
-    const imp = parseNum(nums[0]);                        // 1er token de plata = IMPORTE (con su signo)
+    const matches = [...joined.matchAll(mkMoney())];
+    if (!matches.length) continue;
+    const nums = matches.map(x => x[0]);
+    let imp = parseNum(nums[0]);                          // 1er token de plata = IMPORTE
+    // Signo SEPARADO del número (ej. Galicia: "- $ 300.000,00" / "+ $ 10.403,00"): el "-"
+    // no queda pegado al dígito, así que lo detectamos justo antes del importe (tolera "$" y espacios).
+    const antes = joined.slice(0, matches[0].index);
+    const sg = antes.match(/([+\-−])\s*\$?\s*$/);
+    if (sg && imp > 0 && (sg[1] === '-' || sg[1] === '−')) imp = -imp;
     const saldo = (nums[1] != null) ? parseNum(nums[1]) : null; // 2do token = SALDO
     if (!isFinite(imp) || imp === 0) continue;
     // Concepto: sacar plata, "$", el rótulo CUIT/CUIL y el CUIT (11 dígitos). El comprobante
@@ -20236,6 +20242,7 @@ function _parseResumenBancarioTexto(texto) {
     let con = joined
       .replace(mkMoney(), ' ').replace(/\$/g, ' ')
       .replace(/CUIT\/CUIL:?\s*\d*/ig, ' ').replace(/\b\d{11}\b/g, ' ')
+      .replace(/\s[+\-−]\s/g, ' ')                        // signo suelto (+/-) que quedó de "- $"
       .replace(/\s{2,}/g, ' ').trim();
     let ref = '';
     const lg = con.match(/^(\d{2,9})\s*([A-Za-z].*)$/);
