@@ -3074,6 +3074,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/10/2026',
+      titulo:'🧾 v2.353.0 — Facturas de compra: "Otros impuestos y percepciones" (combustibles, IIBB, etc.)',
+      desc:'Al cargar una <b>factura de compra</b> ahora hay una sección <b>🧾 Otros impuestos y percepciones</b> para los conceptos que van <b>después del IVA</b> (combustibles ITC/ICL, percepción IIBB/IVA/Ganancias, CO2, sellados…). Se cargan por <b>importe fijo</b> o por <b>% sobre una base</b> (neto gravado o total), desde un <b>catálogo reutilizable</b> (botón ⚙️ Gestionar) o como línea manual. <b>No tocan el cálculo del IVA</b>: se suman al total. Abajo ves <b>Neto · IVA · Otros · TOTAL calculado</b> y un campo para poner el <b>total informado en la factura</b> y confirmar que coincide. Así cierran bien las facturas de gasoil y similares. También funciona al importar la factura por <b>PDF/foto</b>: los otros tributos se cargan solos en esa sección.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'30/10/2026',
       titulo:'🛠️ v2.352.0 — Arreglo (definitivo): importar resumen Galicia tomaba el saldo como importe',
       desc:'En el extracto de <b>Banco Galicia / Office Banking</b> cada fila trae primero el <b>saldo</b> y después el <b>importe con su signo</b> (<i>“… $ 3.067.236,78  + $ 10.403,00”</i>). El importador agarraba el <b>saldo</b> como importe, por eso cargaba todo <b>en positivo y por millones</b>. Ahora identifica el importe por su <b>signo</b> (<b>+</b>/<b>−</b>) sin importar el orden de las columnas: los <b>débitos entran como egreso</b> y los <b>créditos como ingreso</b>, con el importe y el saldo correctos. Si ya importaste mal un lote, usá <b>“Deshacer importación”</b> y volvé a importarlo.' },
@@ -17309,6 +17312,11 @@ async function compForm(pre) {
   if (!state.cache.categoriasGasto) {
     try { const cg = await api('/api/categorias-gasto'); state.cache.categoriasGasto = cg.data || []; } catch {}
   }
+  if (!state.cache.tributos) {
+    try { const tb = await api('/api/tributos'); state.cache.tributos = tb.data || []; } catch { state.cache.tributos = []; }
+  }
+  // Otros impuestos/percepciones de esta factura (se arrancan de la factura si es edición).
+  state._compTributos = (pre && Array.isArray(pre.otrosTributos)) ? pre.otrosTributos.map(t => ({ ...t })) : [];
   const _depsComp = (state.cache.depositos || []).filter(d => d.activo !== false);
   try {
     const r = await api('/api/stock-actual');
@@ -17415,6 +17423,24 @@ async function compForm(pre) {
         <div id="comp-vtos"></div>
         <div class="text-[10px] text-amber-700 mt-1">Si cargás un vencimiento, se usa esa fecha (en vez de la condición de pago) para la deuda, el flujo y la alerta 3 días antes. Si hay 2+, el 1ro es el importe sin recargo.</div>
       </div>
+      <div class="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+        <div class="flex items-center justify-between gap-2 flex-wrap mb-1">
+          <div class="text-xs font-semibold text-slate-800">🧾 Otros impuestos y percepciones <span class="font-normal text-slate-500">— combustibles (ITC/ICL), percepciones IIBB/IVA, CO2… Se suman al total DESPUÉS del IVA.</span></div>
+          <div class="flex gap-2">
+            <button type="button" class="btn btn-secondary text-xs" onclick="compOtroAdd()">+ Agregar</button>
+            <button type="button" class="btn btn-ghost text-xs" onclick="compTributosGestionar()">⚙️ Gestionar</button>
+          </div>
+        </div>
+        <div id="comp-otros"></div>
+      </div>
+      <div class="mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-lg grid grid-cols-2 md:grid-cols-4 gap-2 text-sm items-end">
+        <div><div class="text-[11px] text-slate-500">Neto gravado</div><div id="comp-t-neto" class="font-semibold">—</div></div>
+        <div><div class="text-[11px] text-slate-500">IVA</div><div id="comp-t-iva" class="font-semibold">—</div></div>
+        <div><div class="text-[11px] text-slate-500">Otros tributos</div><div id="comp-t-otros" class="font-semibold">—</div></div>
+        <div><div class="text-[11px] text-slate-500">TOTAL calculado</div><div id="comp-t-total" class="font-bold text-emerald-800 text-base">—</div></div>
+        <div class="col-span-2 md:col-span-2"><label class="label text-[11px]">Total informado en la factura (para comparar)</label><input id="comp-t-informado" type="number" step="0.01" class="input input-sm" placeholder="ej. 20007.96" oninput="compTotRender()"/></div>
+        <div class="col-span-2 md:col-span-2"><div id="comp-t-check" class="text-xs"></div></div>
+      </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
       ${(typeof ccRepartoHTML==='function')?ccRepartoHTML('comp'):''}`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -17434,6 +17460,8 @@ async function compForm(pre) {
     factTipoUI();
     if (!state.cache.categoriasArt) { try { state.cache.categoriasArt = (await api('/api/categorias-articulo')).data || []; } catch {} }
     factRenderDatalist();
+    $('#fi-tbody').addEventListener('input', () => { try { compTotRender(); } catch {} });
+    try { compOtrosRender(); } catch {}
     // Pre-cargar datos para método de pago si todavía no están
     if (!state.cache.efectivoCajas || !state.cache.cheques || !state.cache.bancoCuentas) {
       try {
@@ -17473,6 +17501,11 @@ async function compForm(pre) {
   }, 0);
 }
 function _compTotalActual() {
+  const c = _compCalc();
+  return c.total;
+}
+// Neto + IVA (de los items) + otros tributos (state._compTributos) = total.
+function _compCalc() {
   let sub = 0, iva = 0;
   const noIva = (typeof factNoDiscriminaIVA === 'function') && factNoDiscriminaIVA();
   document.querySelectorAll('#fi-tbody tr[data-fi]').forEach(tr => {
@@ -17480,7 +17513,121 @@ function _compTotalActual() {
     const s = g('cantidad') * g('precioUnit');
     sub += s; iva += noIva ? 0 : s * (g('alicuotaIva') / 100);
   });
-  return sub + iva;
+  const r2 = n => Math.round(n * 100) / 100;
+  sub = r2(sub); iva = r2(iva);
+  let otros = 0;
+  (state._compTributos || []).forEach(t => { t.importe = _compImporteTributo(t, sub, iva); otros += t.importe; });
+  otros = r2(otros);
+  return { sub, iva, otros, total: r2(sub + iva + otros) };
+}
+function _compImporteTributo(t, sub, iva) {
+  if ((t.tipo || 'fijo') === 'porcentaje') {
+    const base = (t.base === 'total') ? (sub + iva) : sub;
+    return Math.round(base * (Number(t.alicuota) || 0) / 100 * 100) / 100;
+  }
+  return Math.round((Number(t.importe) || 0) * 100) / 100;
+}
+function compTotRender() {
+  const c = _compCalc();
+  const mon = (document.getElementById('fc-moneda')?.value) || 'ARS';
+  const f = n => (typeof monedaFmt === 'function') ? monedaFmt(mon, n) : ('$ ' + (Math.round(n*100)/100).toLocaleString('es-AR'));
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.innerHTML = v; };
+  set('comp-t-neto', f(c.sub)); set('comp-t-iva', f(c.iva)); set('comp-t-otros', f(c.otros)); set('comp-t-total', f(c.total));
+  const infEl = document.getElementById('comp-t-informado');
+  const chk = document.getElementById('comp-t-check');
+  if (chk) {
+    const inf = infEl && infEl.value !== '' ? Number(infEl.value) : null;
+    if (inf == null) chk.innerHTML = '';
+    else {
+      const dif = Math.round((c.total - inf) * 100) / 100;
+      chk.innerHTML = Math.abs(dif) < 0.5
+        ? `<span class="text-emerald-700 font-semibold">✅ Coincide con el total de la factura.</span>`
+        : `<span class="text-red-600 font-semibold">⚠️ Diferencia de ${f(dif)} (calculado ${f(c.total)} vs informado ${f(inf)}).</span> <span class="text-slate-500">Revisá ítems o agregá el tributo que falte.</span>`;
+    }
+  }
+  try { if (state.usaCentrosCosto && typeof ccRepartoResumen === 'function') ccRepartoResumen('comp'); } catch {}
+}
+function compOtrosRender() {
+  const box = document.getElementById('comp-otros'); if (!box) return;
+  const cat = (state.cache.tributos || []).filter(t => t.activo !== false);
+  const opt = '<option value="">— Elegir del catálogo —</option>' + cat.map(t => `<option value="${esc(t.id)}">${esc(t.nombre)}${t.tipo==='porcentaje'?` (${t.alicuota}% ${t.base==='total'?'s/total':'s/neto'})`:' (fijo)'}</option>`).join('');
+  const lineas = (state._compTributos || []).map((t, i) => {
+    const esPorc = (t.tipo || 'fijo') === 'porcentaje';
+    return `<tr class="table-row">
+      <td><input class="input input-sm" value="${esc(t.descripcion||'')}" oninput="compOtroField(${i},'descripcion',this.value)"/></td>
+      <td><select class="input input-sm" onchange="compOtroField(${i},'tipo',this.value)">
+        <option value="fijo" ${!esPorc?'selected':''}>Importe fijo</option>
+        <option value="porcentaje" ${esPorc?'selected':''}>% sobre base</option></select></td>
+      <td>${esPorc ? `<select class="input input-sm" onchange="compOtroField(${i},'base',this.value)"><option value="neto" ${t.base!=='total'?'selected':''}>Neto</option><option value="total" ${t.base==='total'?'selected':''}>Total</option></select>` : '<span class="text-slate-300 text-xs">—</span>'}</td>
+      <td>${esPorc ? `<input class="input input-sm text-right" type="number" step="0.01" value="${t.alicuota!=null?t.alicuota:''}" oninput="compOtroField(${i},'alicuota',this.value)" style="width:70px"/> %` : '<span class="text-slate-300 text-xs">—</span>'}</td>
+      <td class="text-right">${esPorc ? `<b>${(Math.round((t.importe||0)*100)/100).toLocaleString('es-AR',{minimumFractionDigits:2})}</b>` : `<input class="input input-sm text-right" type="number" step="0.01" value="${t.importe!=null?t.importe:''}" oninput="compOtroField(${i},'importe',this.value)" style="width:110px"/>`}</td>
+      <td class="text-right"><button type="button" class="text-red-600 text-xs" onclick="compOtroDel(${i})">🗑️</button></td>
+    </tr>`;
+  }).join('');
+  box.innerHTML = `
+    <div class="flex gap-2 mb-2 items-end flex-wrap">
+      <div class="flex-1 min-w-[220px]"><select class="input input-sm" onchange="compOtroFromCat(this.value); this.value='';">${opt}</select></div>
+    </div>
+    ${(state._compTributos||[]).length ? `<div class="overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Concepto</th><th>Tipo</th><th>Base</th><th>Alíc.</th><th class="text-right">Importe</th><th></th></tr></thead>
+      <tbody>${lineas}</tbody></table></div>` : '<div class="text-[11px] text-slate-400">Sin otros impuestos. Agregá del catálogo o con "+ Agregar" si la factura trae ITC, percepciones, CO2, etc.</div>'}`;
+  compTotRender();
+}
+function compOtroAdd() {
+  state._compTributos = state._compTributos || [];
+  state._compTributos.push({ descripcion: '', tipo: 'fijo', base: 'neto', alicuota: 0, importe: 0 });
+  compOtrosRender();
+}
+function compOtroFromCat(id) {
+  if (!id) return;
+  const t = (state.cache.tributos || []).find(x => x.id === id); if (!t) return;
+  state._compTributos = state._compTributos || [];
+  state._compTributos.push({ tributoId: t.id, descripcion: t.nombre, tipo: t.tipo || 'fijo', base: t.base || 'neto', alicuota: Number(t.alicuota) || 0, importe: 0 });
+  compOtrosRender();
+}
+function compOtroField(i, campo, val) {
+  const t = (state._compTributos || [])[i]; if (!t) return;
+  if (campo === 'alicuota' || campo === 'importe') t[campo] = val === '' ? 0 : Number(val);
+  else t[campo] = val;
+  // Cambiar tipo/base/alícuota recalcula; si cambió el tipo hay que re-renderizar la fila.
+  if (campo === 'tipo' || campo === 'base') compOtrosRender(); else compTotRender();
+}
+function compOtroDel(i) {
+  state._compTributos.splice(i, 1);
+  compOtrosRender();
+}
+// ABM rápido del catálogo de impuestos (reutilizable).
+async function compTributosGestionar() {
+  let data = state.cache.tributos || [];
+  const rows = data.map(t => `<tr class="table-row">
+    <td>${esc(t.nombre)}</td><td>${t.tipo==='porcentaje'?`${t.alicuota}% s/${t.base==='total'?'total':'neto'}`:'Importe fijo'}</td>
+    <td class="text-right"><button class="text-red-600 text-xs" onclick="compTributoDel('${t.id}')">🗑️</button></td></tr>`).join('');
+  openModal2({ title:'⚙️ Catálogo de impuestos y percepciones', size:'max-w-lg',
+    body:`<div class="grid grid-cols-1 md:grid-cols-4 gap-2 items-end mb-3">
+        <div class="md:col-span-2"><label class="label text-xs">Nombre *</label><input id="trib-nom" class="input input-sm" placeholder="Percepción IIBB Córdoba"/></div>
+        <div><label class="label text-xs">Tipo</label><select id="trib-tipo" class="input input-sm" onchange="document.getElementById('trib-alic-wrap').style.display=this.value==='porcentaje'?'':'none'"><option value="fijo">Fijo</option><option value="porcentaje">%</option></select></div>
+        <div id="trib-alic-wrap" style="display:none"><label class="label text-xs">Alíc. % / base</label><div class="flex gap-1"><input id="trib-alic" class="input input-sm" type="number" step="0.01" style="width:60px"/><select id="trib-base" class="input input-sm"><option value="neto">neto</option><option value="total">total</option></select></div></div>
+        <div class="md:col-span-4"><button class="btn btn-primary btn-sm" onclick="compTributoAdd()">+ Agregar al catálogo</button></div>
+      </div>
+      <div class="overflow-x-auto"><table class="table w-full text-sm"><thead><tr><th>Nombre</th><th>Tipo</th><th></th></tr></thead><tbody id="trib-tbody">${rows||'<tr><td colspan="3" class="text-center text-slate-400 py-4">Sin impuestos aún.</td></tr>'}</tbody></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cerrar</button>` });
+}
+async function compTributoAdd() {
+  const nombre = document.getElementById('trib-nom')?.value.trim();
+  if (!nombre) return toast('Poné un nombre','warn');
+  const tipo = document.getElementById('trib-tipo')?.value || 'fijo';
+  const body = { nombre, tipo, alicuota: Number(document.getElementById('trib-alic')?.value || 0), base: document.getElementById('trib-base')?.value || 'neto' };
+  try { await api('/api/tributos', { method:'POST', body: JSON.stringify(body) });
+    state.cache.tributos = (await api('/api/tributos')).data || [];
+    toast('Impuesto agregado','success'); compTributosGestionar(); compOtrosRender();
+  } catch (e) { toast(e.message,'error'); }
+}
+async function compTributoDel(id) {
+  if (!confirm('¿Borrar este impuesto del catálogo? (No afecta las facturas ya cargadas)')) return;
+  try { await api('/api/tributos/'+id, { method:'DELETE' });
+    state.cache.tributos = (await api('/api/tributos')).data || [];
+    compTributosGestionar(); compOtrosRender();
+  } catch (e) { toast(e.message,'error'); }
 }
 // === Vencimientos de pago en la factura de compra (servicios con 1 o varios) ===
 function compVtoRowHTML(v) {
@@ -17613,22 +17760,18 @@ async function compCargarDesdePDF(input) {
         if (pu)   pu.value = (d.cantidadItem ? (neto / d.cantidadItem) : neto).toFixed(2);
         if (iv)   iv.value = iva;
       }
-      // Combustibles y otros: ICL + IDC + impuestos internos + percepciones + no gravado → renglón aparte sin IVA
-      const otrosTot = Number(d.otrosImpuestos || 0) + Number(d.noGravado || 0);
-      if (otrosTot > 0.005) {
-        tbody.insertAdjacentHTML('beforeend', factItemRow());
-        const extra = tbody.querySelector('tr[data-fi]:last-child');
-        if (extra) {
-          const es = extra.querySelector('[data-f="productoId"]'), ed = extra.querySelector('[data-f="descripcion"]');
-          const ec = extra.querySelector('[data-f="cantidad"]'), ep = extra.querySelector('[data-f="precioUnit"]'), ei = extra.querySelector('[data-f="alicuotaIva"]');
-          if (es) es.value = '';
-          if (ed) ed.value = 'Impuestos a los combustibles (ICL + IDC) / otros tributos';
-          if (ec) ec.value = 1;
-          if (ep) ep.value = otrosTot.toFixed(2);
-          if (ei) ei.value = 0;
-        }
-      }
+      // Combustibles y otros: ICL/IDC + impuestos internos + percepciones + no gravado →
+      // van a "Otros impuestos y percepciones" (DESPUÉS del IVA), NO como ítem (no inflan el neto/IVA).
+      state._compTributos = state._compTributos || [];
+      const _otrosImp = Number(d.otrosImpuestos || 0);
+      const _noGrav = Number(d.noGravado || 0);
+      if (_otrosImp > 0.005) state._compTributos.push({ descripcion: 'Impuestos internos / combustibles (ICL, IDC) y percepciones', tipo: 'fijo', base: 'neto', alicuota: 0, importe: Math.round(_otrosImp * 100) / 100 });
+      if (_noGrav > 0.005) state._compTributos.push({ descripcion: 'Conceptos no gravados', tipo: 'fijo', base: 'neto', alicuota: 0, importe: Math.round(_noGrav * 100) / 100 });
+      try { compOtrosRender(); } catch {}
       factRecalc();
+      // Pre-cargar el total informado para la comparación visual.
+      const _infEl = document.getElementById('comp-t-informado'); if (_infEl && d.total) _infEl.value = Number(d.total).toFixed(2);
+      try { compTotRender(); } catch {}
     }
 
     // Vencimientos de servicios (luz/gas/teléfono): autocompletar la lista editable
@@ -17971,6 +18114,7 @@ async function compSave() {
     categoriaGastoId: $('#fc-catgasto')?.value || null,
     observaciones: $('#f-obs').value.trim()||null,
     items,
+    otrosTributos: (state._compTributos || []).filter(t => t.descripcion || t.importe || t.alicuota),
   };
   // Reparto por centro de costo (opt-in). No aplica a notas de crédito.
   if (state.usaCentrosCosto && data.clase !== 'nota_credito') {
@@ -18005,7 +18149,7 @@ async function compSave() {
     if (facturaId && esContado && metodo && proveedorId) {
       try {
         // Buscar CtaCte recién creada por el monto total
-        const totalFactura = items.reduce((a,i) => a + Number(i.cantidad||0) * Number(i.precioUnit||0) * (1 + Number(i.alicuotaIva||0)/100), 0);
+        const totalFactura = (typeof _compCalc === 'function') ? _compCalc().total : items.reduce((a,i) => a + Number(i.cantidad||0) * Number(i.precioUnit||0) * (1 + Number(i.alicuotaIva||0)/100), 0);
         const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=proveedor&contactoId=${encodeURIComponent(proveedorId)}`);
         const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.haber||0) - totalFactura) < 1)
           .sort((a,b) => new Date(b.fecha) - new Date(a.fecha));

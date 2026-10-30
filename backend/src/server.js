@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.352.0';
+const AGROCORE_VERSION = '2.353.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5592,7 +5592,7 @@ app.get('/api/sociedades-campos-grupo', requireCompany, requirePermission('produ
 });
 
 // ---------- VENTAS (facturas con items + CAE simulado) ----------
-function calcFactura(items) {
+function calcFactura(items, otrosTributos) {
   let subtotal = 0, iva = 0;
   const det = items.map((it) => {
     const sub = it.cantidad * it.precioUnit;
@@ -5603,7 +5603,25 @@ function calcFactura(items) {
              alicuotaIva: alic, subtotal: sub, ivaImporte: ivaImp, total: sub + ivaImp,
              campoId: it.campoId || null, cabezas: (it.cabezas != null ? it.cabezas : null) };
   });
-  return { items: det, subtotal, iva, total: subtotal + iva };
+  // Otros impuestos / percepciones: se suman al TOTAL después del IVA (no modifican el IVA).
+  // 'fijo' = importe manual; 'porcentaje' = base (neto gravado o total) × alícuota.
+  let totalOtros = 0;
+  const trib = (Array.isArray(otrosTributos) ? otrosTributos : []).map((t) => {
+    const tipo = t.tipo === 'porcentaje' ? 'porcentaje' : 'fijo';
+    const base = t.base === 'total' ? 'total' : 'neto';
+    const alic = Number(t.alicuota) || 0;
+    let importe;
+    if (tipo === 'porcentaje') {
+      const b = base === 'total' ? (subtotal + iva) : subtotal;
+      importe = Math.round(b * (alic / 100) * 100) / 100;
+    } else {
+      importe = Math.round((Number(t.importe) || 0) * 100) / 100;
+    }
+    totalOtros += importe;
+    return { tributoId: t.tributoId || null, descripcion: t.descripcion || 'Otro tributo', tipo, base, alicuota: alic, importe };
+  }).filter((t) => t.importe !== 0 || t.descripcion);
+  totalOtros = Math.round(totalOtros * 100) / 100;
+  return { items: det, subtotal, iva, otrosTributos: trib, totalOtrosTributos: totalOtros, total: subtotal + iva + totalOtros };
 }
 
 // Helpers para generar/borrar movimientos de stock asociados a facturas.
@@ -6344,6 +6362,14 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       categoriaGastoId: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
+      otrosTributos: z.array(z.object({
+        tributoId: z.string().nullable().optional(),
+        descripcion: z.string(),
+        tipo: z.enum(['fijo', 'porcentaje']).optional(),
+        base: z.enum(['neto', 'total']).optional(),
+        alicuota: z.number().nullable().optional(),
+        importe: z.number().nullable().optional(),
+      })).nullable().optional(),
       // Vínculo con remitos de compra: si viene, el stock YA entró por el remito,
       // así que la factura NO lo suma (solo genera la deuda y liquida el remito).
       remitoLinks: z.array(z.object({ remitoItemId: z.string(), remitoId: z.string(), cantidad: z.number().positive() })).optional(),
@@ -6378,7 +6404,7 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       for (const it of input.items) {
         it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
       }
-      const totales = calcFactura(input.items);
+      const totales = calcFactura(input.items, input.otrosTributos);
       const _mon = input.moneda || 'ARS';
       const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
       const _clase = input.clase || 'factura';
@@ -6391,6 +6417,8 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
           fechaVencimiento: _primerVto, vencimientos: _vtos.length ? _vtos : undefined,
           moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
+          otrosTributos: totales.otrosTributos.length ? totales.otrosTributos : undefined,
+          totalOtrosTributos: totales.totalOtrosTributos,
           items: { create: totales.items },
         },
         include: { proveedor: true, items: true },
@@ -6694,6 +6722,14 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       categoriaGastoId: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       items: z.array(itemFacSchema).min(1),
+      otrosTributos: z.array(z.object({
+        tributoId: z.string().nullable().optional(),
+        descripcion: z.string(),
+        tipo: z.enum(['fijo', 'porcentaje']).optional(),
+        base: z.enum(['neto', 'total']).optional(),
+        alicuota: z.number().nullable().optional(),
+        importe: z.number().nullable().optional(),
+      })).nullable().optional(),
       emisorCuit: z.string().nullable().optional(),
       emisorRazonSocial: z.string().nullable().optional(),
       cae: z.string().nullable().optional(),
@@ -6715,7 +6751,7 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
     }
     const factura = await prisma.$transaction(async (tx) => {
       for (const it of input.items) it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
-      const totales = calcFactura(input.items);
+      const totales = calcFactura(input.items, input.otrosTributos);
       const _mon = input.moneda || 'ARS';
       const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
       const _clase = input.clase || 'factura';
@@ -6738,6 +6774,8 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
           clasificacion: input.clasificacion || 'empresa', categoriaGastoId: input.categoriaGastoId || null,
           fechaVencimiento: _primerVto, vencimientos: _vtos.length ? _vtos : null,
           moneda: _mon, cotizacion: _cot, subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
+          otrosTributos: totales.otrosTributos.length ? totales.otrosTributos : null,
+          totalOtrosTributos: totales.totalOtrosTributos,
           items: { create: totales.items },
         },
         include: { proveedor: true, items: true },
@@ -11339,6 +11377,71 @@ app.delete('/api/canje-cta/:id', requireCompany, requirePermission('stock:delete
       await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'CANJECTA-' + m.id } });
       await tx.canjeCtaMov.delete({ where: { id: m.id } });
     });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// CATÁLOGO de "Otros impuestos y percepciones" (ITC/ICL combustible, percepciones
+// IIBB/IVA/Ganancias, CO2, etc.) para usar al cargar facturas de compra.
+// ============================================================
+const _TRIBUTOS_SEED = [
+  { nombre: 'ITC / ICL (combustibles)', tipo: 'fijo', alicuota: 0, base: 'neto', orden: 1 },
+  { nombre: 'Impuesto CO2', tipo: 'fijo', alicuota: 0, base: 'neto', orden: 2 },
+  { nombre: 'Percepción IIBB', tipo: 'porcentaje', alicuota: 3, base: 'neto', orden: 3 },
+  { nombre: 'Percepción IVA', tipo: 'porcentaje', alicuota: 3, base: 'neto', orden: 4 },
+  { nombre: 'Percepción Ganancias', tipo: 'porcentaje', alicuota: 2, base: 'total', orden: 5 },
+  { nombre: 'Otro tributo / sellado', tipo: 'fijo', alicuota: 0, base: 'neto', orden: 6 },
+];
+app.get('/api/tributos', requireCompany, requirePermission('compras:read'), async (req, res, next) => {
+  try {
+    let data = await prisma.tributoCatalogo.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { nombre: 'asc' }] });
+    if (!data.length) {
+      await prisma.tributoCatalogo.createMany({ data: _TRIBUTOS_SEED.map(t => ({ ...t, companyId: req.companyId })) });
+      data = await prisma.tributoCatalogo.findMany({ where: { companyId: req.companyId }, orderBy: [{ orden: 'asc' }, { nombre: 'asc' }] });
+    }
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+const _tributoSchema = z.object({
+  nombre: z.string().min(1),
+  tipo: z.enum(['fijo', 'porcentaje']).optional().default('fijo'),
+  alicuota: z.number().nullable().optional(),
+  base: z.enum(['neto', 'total']).optional().default('neto'),
+  activo: z.boolean().optional(),
+  orden: z.number().int().nullable().optional(),
+});
+app.post('/api/tributos', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const d = _tributoSchema.parse(req.body);
+    const t = await prisma.tributoCatalogo.create({ data: {
+      companyId: req.companyId, nombre: d.nombre, tipo: d.tipo || 'fijo',
+      alicuota: Number(d.alicuota) || 0, base: d.base || 'neto', activo: d.activo !== false, orden: d.orden || 0,
+    }});
+    res.status(201).json({ ok: true, data: t });
+  } catch (e) { next(e); }
+});
+app.put('/api/tributos/:id', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const d = _tributoSchema.partial().parse(req.body);
+    const ex = await prisma.tributoCatalogo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const t = await prisma.tributoCatalogo.update({ where: { id: ex.id }, data: {
+      ...(d.nombre != null ? { nombre: d.nombre } : {}),
+      ...(d.tipo != null ? { tipo: d.tipo } : {}),
+      ...(d.alicuota != null ? { alicuota: Number(d.alicuota) || 0 } : {}),
+      ...(d.base != null ? { base: d.base } : {}),
+      ...(d.activo != null ? { activo: d.activo } : {}),
+      ...(d.orden != null ? { orden: d.orden } : {}),
+    }});
+    res.json({ ok: true, data: t });
+  } catch (e) { next(e); }
+});
+app.delete('/api/tributos/:id', requireCompany, requirePermission('compras:delete'), async (req, res, next) => {
+  try {
+    const ex = await prisma.tributoCatalogo.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.tributoCatalogo.delete({ where: { id: ex.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

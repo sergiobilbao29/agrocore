@@ -135,6 +135,7 @@ model Company {
   canjes             Canje[]
   canjeParidades     CanjeParidad[]
   canjeCtaMovs       CanjeCtaMov[]
+  tributos           TributoCatalogo[]
   caravanas          Caravana[]
   recuentosCaravana  RecuentoCaravana[]
   secados            SecadoPartida[]
@@ -842,9 +843,14 @@ model FacturaCompra {
   condicionCompra String?
   moneda          String    @default("ARS")  // ARS | USD | EUR | SOJA | MAIZ | TRIGO | ...
   cotizacion      Float?    // ARS por 1 unidad de la moneda, al día de la factura
-  subtotal        Float     @default(0)       // en moneda origen
-  iva             Float     @default(0)        // en moneda origen
-  total           Float     @default(0)        // en moneda origen
+  subtotal        Float     @default(0)       // neto gravado, en moneda origen
+  iva             Float     @default(0)        // IVA, en moneda origen
+  total           Float     @default(0)        // subtotal + iva + otros tributos
+  // Otros impuestos / percepciones que van DESPUÉS del IVA (no modifican el IVA):
+  // combustibles (ITC/ICL), percepciones IIBB/IVA/Ganancias, CO2, etc.
+  // [{tributoId?, descripcion, tipo:'fijo'|'porcentaje', base:'neto'|'total', alicuota, importe}]
+  otrosTributos   Json?
+  totalOtrosTributos Float  @default(0)        // suma de los otros tributos, en moneda origen
   observaciones   String?
   // Clasificacion del gasto: "empresa" (default) | "particular" (del dueño) | "socio".
   // Permite separar gastos personales de los de la explotacion en reportes.
@@ -872,6 +878,25 @@ model FacturaCompra {
   @@index([fecha])
   @@index([fechaVencimiento])
   @@index([categoriaGastoId])
+}
+
+// Catálogo reutilizable de "Otros impuestos y percepciones" (ITC/ICL combustible,
+// percepciones IIBB/IVA/Ganancias, CO2, etc.). Se eligen al cargar una factura de compra.
+model TributoCatalogo {
+  id         String   @id @default(cuid())
+  companyId  String
+  nombre     String
+  tipo       String   @default("fijo")   // fijo | porcentaje
+  alicuota   Float    @default(0)         // % cuando tipo=porcentaje
+  base       String   @default("neto")    // neto | total (base del % )
+  activo     Boolean  @default(true)
+  orden      Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
 }
 
 model FacturaCompraItem {
