@@ -3077,6 +3077,9 @@ pages.inicio = async function() {
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'30/10/2026',
       titulo:'🧾 v2.354.0 — Retenciones al pagar y al cobrar (integradas a cuenta corriente y banco)',
       desc:'Ahora las <b>retenciones</b> se cargan en el mismo momento del pago o del cobro, sin romper los saldos:<br>• Al <b>pagar a un proveedor</b> podés sumar las <b>retenciones practicadas</b> (Ganancias, IVA, IIBB, SUSS…). La <b>deuda se cancela por el total</b> de la factura, pero del <b>banco sale sólo el neto</b> (lo retenido no sale). Ej.: factura $1.000.000, retención $30.000 → transferís $970.000 y el proveedor queda saldado.<br>• Al <b>cobrar a un cliente</b> cargás las <b>retenciones sufridas</b> (las que te hicieron): la <b>factura queda saldada por el total</b> aunque al <b>banco entre sólo el neto</b>, y queda registrado el <b>crédito fiscal</b>.<br>En el modal aparece la sección <b>🧾 Retenciones</b> (impuesto, régimen, jurisdicción para IIBB, base, alícuota e importe). <b>No modifica el importe de las facturas</b>. Cada retención queda en el módulo de <b>Retenciones</b> para exportar a <b>SICORE / SIRE / SIRCAR</b>. Si deshacés la Orden de Pago o el recibo, también se borran las retenciones asociadas.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/11/2026',
+      titulo:'🧾 v2.357.0 — Retenciones: liquidación al fisco, créditos fiscales y estado de certificados',
+      desc:'Tercera parte de retenciones, en la pantalla de <b>Retenciones</b>:<br>• <b>📥 A ingresar al fisco</b>: junta las <b>practicadas</b> que todavía no depositaste, agrupadas por impuesto y período. Con "Registrar pago" se mueve el <b>banco o caja</b> y bajan del pendiente (no es un gasto). Se puede deshacer.<br>• <b>🧾 Créditos fiscales</b>: las <b>sufridas</b> con su <b>saldo pendiente</b> de computar; "Aplicar a DDJJ" imputa total o parcial contra un período y nunca deja aplicar dos veces el mismo saldo.<br>• <b>Estado del certificado</b> en cada retención (pendiente, emitido, verificado, informado, anulado).<br>Todo con trazabilidad y aislamiento por empresa. TRAE MIGRACIÓN.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'01/11/2026',
       titulo:'📄 v2.356.0 — Importar varias facturas de compra: ahora toma el TOTAL real',
       desc:'Al subir varios <b>PDF de facturas de compra</b> de un proveedor, el sistema tomaba un importe equivocado cuando la factura era de un sistema de gestión (no de ARCA online): leía el número más grande del PDF o un renglón suelto. Ahora <b>lee el TOTAL del pie del comprobante</b> aunque el rótulo sea sólo "TOTAL" y aunque el importe venga sin punto de miles (ej. <i>23477,28</i>). Además deduce bien el <b>neto gravado</b> y el <b>IVA</b> aunque el texto venga pegado, y nunca deja el total por debajo del neto. Probado con facturas reales de Induferr.' },
@@ -39968,6 +39971,8 @@ pages.retenciones = async function() {
       </div>
       <div class="flex items-center gap-2">
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="retArcaImport()" title="Subir el Excel de 'Mis Retenciones' de ARCA (.xls/.xlsx) y cargar las retenciones/percepciones sufridas">🏦 Importar de ARCA (Excel)</button>`:''}
+        ${can('finanzas:read')?`<button class="btn btn-secondary" onclick="retObligaciones()" title="Retenciones practicadas pendientes de depositar al fisco, agrupadas por impuesto y período">📥 A ingresar al fisco</button>`:''}
+        ${can('finanzas:read')?`<button class="btn btn-secondary" onclick="retCreditos()" title="Créditos fiscales por retenciones sufridas: saldo pendiente de aplicar a DDJJ">🧾 Créditos fiscales</button>`:''}
         ${can('finanzas:read')?`<button class="btn btn-secondary" onclick="retSicoreExport()" title="Exportar las retenciones practicadas a SICORE/SIRE (.txt) para presentar en ARCA">📄 Exportar SICORE/SIRE</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="retImportar()" title="Subir el PDF de una Orden de Pago y cargar sus retenciones solas">📥 Importar OP (PDF)</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-secondary" onclick="regManager()" title="Configurar el catálogo de regímenes (alícuotas, mínimos, códigos). Se usan al cargar una retención en el pago/cobro.">⚙️ Regímenes</button>`:''}
@@ -40079,6 +40084,92 @@ async function retArcaDeshacer(lote) {
     toast(`Importación deshecha (${res.eliminadas} eliminadas)`, 'info');
     await pages.retenciones();
   } catch (e) { toast(e.message || 'No pude deshacer', 'error'); }
+}
+
+// ---------- P3: Obligaciones a ingresar (practicadas) ----------
+async function retObligaciones(){
+  let data=[]; try{ data=(await api('/api/retenciones/obligaciones')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  const filas = data.map(g=>`<tr class="table-row">
+    <td class="text-xs">${esc(g.periodo)}</td>
+    <td class="text-xs">${esc(RET_IMPUESTOS[g.impuesto]||g.impuesto)}${g.jurisdiccion?(' · '+esc(jurisNombre(g.jurisdiccion))):''}</td>
+    <td class="text-xs">${esc(g.sistema||'')}</td>
+    <td class="text-center">${g.cantidad}</td>
+    <td class="text-right font-bold">${fmt$(g.total)}</td>
+    <td class="text-right">${can('finanzas:create')?`<button class="btn btn-primary btn-xs" onclick='retIngresarForm(${JSON.stringify(g)})'>Registrar pago</button>`:''}</td></tr>`).join('');
+  openModal({ title:'📥 Retenciones practicadas a ingresar al fisco', size:'max-w-3xl',
+    body:`<div class="bg-sky-50 border border-sky-200 rounded p-2 text-[12px] text-sky-900 mb-2">Son las retenciones que le practicaste a tus proveedores y todavía <b>no depositaste</b>. Al registrar el pago se mueve el banco/caja y bajan del pendiente (no es un gasto).</div>
+      <div class="kpi overflow-x-auto"><table class="table w-full text-sm"><thead><tr><th>Período</th><th>Impuesto</th><th>Sistema</th><th class="text-center">Cant.</th><th class="text-right">Total</th><th></th></tr></thead>
+      <tbody>${filas||`<tr><td colspan="6" class="text-center text-slate-400 py-4">No hay retenciones pendientes de ingresar. 🎉</td></tr>`}</tbody></table></div>
+      <div class="mt-2 text-right"><button class="btn btn-ghost btn-xs" onclick="retPagosFiscales()">Ver pagos ya hechos</button></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+function retIngresarForm(g){
+  const bcos=(state.cache.bancoCuentas||[]).filter(c=>c.activo!==false);
+  openModal({ title:'Registrar depósito al fisco', size:'max-w-lg',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div class="bg-slate-50 rounded p-2 text-sm">${esc(RET_IMPUESTOS[g.impuesto]||g.impuesto)} · Período <b>${esc(g.periodo)}</b>${g.jurisdiccion?(' · '+esc(jurisNombre(g.jurisdiccion))):''} · <b>${g.cantidad}</b> retenciones · Total <b>${fmt$(g.total)}</b></div>
+      <div><label class="label">Fecha de pago *</label><input id="rif-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+      <div><label class="label">Medio *</label><select id="rif-metodo" class="input" onchange="document.getElementById('rif-banco-w').style.display=this.value==='transferencia'?'':'none';document.getElementById('rif-caja-w').style.display=this.value==='efectivo'?'':'none'">
+        <option value="transferencia">🏛️ Transferencia</option><option value="efectivo">💵 Efectivo</option></select></div>
+      <div id="rif-banco-w"><label class="label">Cuenta bancaria *</label><select id="rif-banco" class="input"><option value="">— Elegir —</option>${bcos.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre||c.banco)}${c.numero?' · '+esc(c.numero):''}</option>`).join('')}</select></div>
+      <div id="rif-caja-w" style="display:none"><label class="label">Caja</label><input id="rif-caja" class="input" placeholder="Ej: Oficina"/></div>
+      <div><label class="label">Observaciones</label><input id="rif-obs" class="input" placeholder="N° de VEP, etc."/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="retObligaciones()">Volver</button><button class="btn btn-primary" onclick='retIngresarSave(${JSON.stringify(g)})'>💾 Registrar pago</button>` });
+}
+async function retIngresarSave(g){
+  const metodo=$('#rif-metodo')?.value;
+  const body={ impuesto:g.impuesto, periodo:g.periodo, jurisdiccion:g.jurisdiccion||null, fecha:$('#rif-fecha')?.value, metodo,
+    bancoCuentaId: metodo==='transferencia'?($('#rif-banco')?.value||null):null, cajaOrigen: metodo==='efectivo'?($('#rif-caja')?.value||null):null,
+    observaciones:$('#rif-obs')?.value||null };
+  if(metodo==='transferencia' && !body.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn');
+  try{ const r=await api('/api/retenciones/ingresar',{method:'POST',body:JSON.stringify(body)}); toast(`Depósito registrado: ${fmt$(r.total)} (${r.cantidad} ret.)`,'success'); delete state.cache.bancoMovs; retObligaciones(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function retPagosFiscales(){
+  let data=[]; try{ data=(await api('/api/pagos-fiscales')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  const filas=data.map(p=>`<tr class="table-row"><td class="text-xs">${fmtDate(p.fecha)}</td><td class="text-xs">${esc(RET_IMPUESTOS[p.impuesto]||p.impuesto)} · ${esc(p.periodo)}</td><td class="text-xs">${esc(p.metodo)}</td><td class="text-right">${fmt$(p.importe)}</td><td class="text-right">${can('finanzas:delete')?`<button class="text-red-600 text-xs" onclick="retPagoFiscalDel('${p.id}')">Deshacer</button>`:''}</td></tr>`).join('');
+  openModal({ title:'Pagos al fisco realizados', size:'max-w-2xl',
+    body:`<div class="kpi overflow-x-auto"><table class="table w-full text-sm"><thead><tr><th>Fecha</th><th>Impuesto/Período</th><th>Medio</th><th class="text-right">Importe</th><th></th></tr></thead><tbody>${filas||`<tr><td colspan="5" class="text-center text-slate-400 py-4">Sin pagos todavía.</td></tr>`}</tbody></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="retObligaciones()">Volver</button>` });
+}
+async function retPagoFiscalDel(id){ if(!confirm('¿Deshacer este pago al fisco? Se revierte el movimiento bancario/caja y las retenciones vuelven a quedar pendientes.'))return; try{ await api('/api/pagos-fiscales/'+id,{method:'DELETE'}); delete state.cache.bancoMovs; toast('Pago deshecho','success'); retPagosFiscales(); }catch(e){ toast(e.message,'error'); } }
+
+// ---------- P3: Créditos fiscales (sufridas) ----------
+async function retCreditos(){
+  let data=[]; try{ data=(await api('/api/retenciones/creditos?soloPendientes=0')).data||[]; }catch(e){ return toast(e.message,'error'); }
+  const totPend=data.reduce((a,r)=>a+(Number(r.saldoPendiente)||0),0);
+  const filas=data.map(r=>`<tr class="table-row">
+    <td class="text-xs">${fmtDate(r.fecha)}</td>
+    <td class="text-xs">${esc(RET_IMPUESTOS[r.impuesto]||r.impuesto)}${r.jurisdiccion?(' · '+esc(jurisNombre(r.jurisdiccion))):''}</td>
+    <td class="text-xs">${esc(r.contactoNombre||'')}</td>
+    <td class="text-right">${fmt$(r.importe)}</td>
+    <td class="text-right text-slate-500">${fmt$(r.aplicado)}</td>
+    <td class="text-right font-bold ${r.saldoPendiente>0.01?'text-emerald-700':'text-slate-400'}">${fmt$(r.saldoPendiente)}</td>
+    <td class="text-right">${(can('finanzas:create')&&r.saldoPendiente>0.01)?`<button class="btn btn-primary btn-xs" onclick='retAplicarForm(${JSON.stringify({id:r.id,impuesto:r.impuesto,saldo:r.saldoPendiente,nombre:r.contactoNombre||""})})'>Aplicar a DDJJ</button>`:''}</td></tr>`).join('');
+  openModal({ title:'🧾 Créditos fiscales — retenciones sufridas', size:'max-w-4xl',
+    body:`<div class="bg-sky-50 border border-sky-200 rounded p-2 text-[12px] text-sky-900 mb-2">Lo que te retuvieron y podés computar como <b>pago a cuenta</b> en tus DDJJ. El <b>saldo pendiente</b> es lo que todavía no aplicaste. Total a aplicar: <b>${fmt$(totPend)}</b>.</div>
+      <div class="kpi overflow-x-auto"><table class="table w-full text-sm"><thead><tr><th>Fecha</th><th>Impuesto</th><th>Agente</th><th class="text-right">Importe</th><th class="text-right">Aplicado</th><th class="text-right">Saldo</th><th></th></tr></thead>
+      <tbody>${filas||`<tr><td colspan="7" class="text-center text-slate-400 py-4">No hay retenciones sufridas en el período.</td></tr>`}</tbody></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+function retAplicarForm(r){
+  openModal({ title:'Aplicar crédito a DDJJ', size:'max-w-md',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div class="bg-slate-50 rounded p-2 text-sm">${esc(RET_IMPUESTOS[r.impuesto]||r.impuesto)} · ${esc(r.nombre||'')} · Saldo disponible <b>${fmt$(r.saldo)}</b></div>
+      <div><label class="label">Período de la DDJJ (YYYY-MM) *</label><input id="rac-per" class="input" placeholder="2026-10" value="${new Date().toISOString().slice(0,7)}"/></div>
+      <div><label class="label">Importe a aplicar *</label><input id="rac-imp" type="number" step="0.01" class="input" value="${r.saldo}"/></div>
+      <div><label class="label">Fecha *</label><input id="rac-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+      <div><label class="label">Observaciones</label><input id="rac-obs" class="input" placeholder="opcional"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="retCreditos()">Volver</button><button class="btn btn-primary" onclick="retAplicarSave('${r.id}')">💾 Aplicar</button>` });
+}
+async function retAplicarSave(id){
+  const body={ retencionId:id, importeAplicado:Number($('#rac-imp')?.value||0), periodoDDJJ:$('#rac-per')?.value?.trim(), fecha:$('#rac-fecha')?.value, observaciones:$('#rac-obs')?.value||null };
+  if(!(body.importeAplicado>0)) return toast('Ingresá el importe a aplicar','warn');
+  if(!body.periodoDDJJ) return toast('Ingresá el período de la DDJJ','warn');
+  try{ await api('/api/retenciones/aplicar-credito',{method:'POST',body:JSON.stringify(body)}); toast('Crédito aplicado','success'); retCreditos(); }
+  catch(e){ toast(e.message,'error'); }
 }
 
 // ---------- Catálogo de REGÍMENES de retención/percepción ----------
@@ -40222,6 +40313,10 @@ function retForm(id) {
         <div><label class="label">Nombre (si es manual)</label><input id="ret-nombre" class="input" value="${esc(p.contactoNombre||'')}"/></div>
         <div><label class="label">CUIT</label><input id="ret-cuit" class="input" value="${esc(p.cuit||'')}"/></div>
         <div><label class="label">N° de certificado</label><input id="ret-cert" class="input" value="${esc(p.numeroCertificado||'')}"/></div>
+        <div><label class="label">Estado del certificado</label>
+          <select id="ret-estado" class="input">
+            ${[['','—'],['pendiente','Pendiente de emisión/recepción'],['emitido','Emitido / recibido'],['verificado','Verificado'],['informado','Informado al organismo'],['anulado','Anulado / rectificado']].map(([k,v])=>`<option value="${k}" ${(p.estado||'')===k?'selected':''}>${v}</option>`).join('')}
+          </select></div>
         <div><label class="label">Comprobante asociado</label><input id="ret-comp" class="input" value="${esc(p.comprobanteRef||'')}" placeholder="Factura / OP / recibo"/></div>
         <div><label class="label">Base imponible</label><input id="ret-base" type="number" step="0.01" class="input" value="${p.baseImponible!=null?p.baseImponible:''}" oninput="retFormCalc()"/></div>
         <div><label class="label">Alícuota %</label><input id="ret-alic" type="number" step="0.01" class="input" value="${p.alicuota!=null?p.alicuota:''}" oninput="retFormCalc()"/></div>
@@ -40281,6 +40376,7 @@ async function retSave(id) {
     alicuota: g('ret-alic') ? Number(g('ret-alic')) : null,
     importe: Number(g('ret-importe')||0),
     observaciones: g('ret-obs')?.trim() || null,
+    estado: g('ret-estado') || null,
   };
   if (!body.fecha) return toast('Elegí la fecha','error');
   if (!(body.importe > 0)) return toast('Cargá el importe retenido','error');

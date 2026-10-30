@@ -144,6 +144,8 @@ model Company {
   canjeCtaMovs       CanjeCtaMov[]
   tributos           TributoCatalogo[]
   regimenesRetencion RegimenRetencion[]
+  pagosFiscales      PagoFiscal[]
+  aplicCreditoFiscal AplicacionCreditoFiscal[]
   caravanas          Caravana[]
   recuentosCaravana  RecuentoCaravana[]
   secados            SecadoPartida[]
@@ -3006,9 +3008,14 @@ model Retencion {
   comprobanteRef    String?                      // factura / OP / recibo asociado (texto)
   moneda            String   @default("ARS")
   observaciones     String?
-  origen            String   @default("manual")   // 'manual' | 'arca_csv' | 'op_pdf' | 'liquidacion'
+  origen            String   @default("manual")   // 'manual' | 'arca_csv' | 'op_pdf' | 'liquidacion' | 'op' | 'cobro'
   importLote        String?                        // id del lote de importación (para deshacer)
   dedupeKey         String?                        // clave anti-duplicado (cuit+certificado+importe+fecha)
+  // ── Prioridad 3: certificados + liquidación + créditos fiscales ──
+  estado            String?                        // ciclo del certificado: 'pendiente'|'emitido'|'verificado'|'informado'|'anulado'
+  periodo           String?                        // período fiscal "YYYY-MM" (si null se deduce de fecha)
+  ingresadoRef      String?                        // PRACTICADAS: id del pago al fisco que la depositó (null = pendiente de ingresar)
+  aplicadoCredito   Float    @default(0)           // SUFRIDAS: cuánto del crédito ya se aplicó a una DDJJ
   userId            String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -3021,6 +3028,55 @@ model Retencion {
   @@index([impuesto])
   @@index([importLote])
   @@index([dedupeKey])
+  @@index([ingresadoRef])
+}
+
+// PRACTICADAS: pago de una obligación de retenciones al organismo (depósito al fisco).
+// Agrupa un conjunto de retenciones practicadas de un período/impuesto y registra el
+// movimiento de tesorería. NO se contabiliza como gasto (es la baja del pasivo fiscal).
+model PagoFiscal {
+  id            String   @id @default(cuid())
+  companyId     String
+  fecha         DateTime
+  impuesto      String                       // 'ganancias'|'iva'|'iibb'|'suss'|'otro'
+  periodo       String                       // "YYYY-MM"
+  jurisdiccion  String?
+  sistema       String?                      // 'SICORE'|'SIRE'|'SIRCAR'...
+  importe       Float
+  cantidad      Int      @default(0)         // nº de retenciones incluidas
+  metodo        String   @default("transferencia") // 'transferencia'|'efectivo'
+  bancoCuentaId String?
+  cajaOrigen    String?
+  observaciones String?
+  userId        String?
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([impuesto])
+  @@index([periodo])
+}
+
+// SUFRIDAS: aplicación (total o parcial) de una retención sufrida como pago a cuenta
+// contra una DDJJ. La suma de aplicaciones de una retención no puede superar su importe.
+model AplicacionCreditoFiscal {
+  id            String   @id @default(cuid())
+  companyId     String
+  retencionId   String
+  fecha         DateTime
+  impuesto      String
+  periodoDDJJ   String                       // "YYYY-MM" de la DDJJ donde se imputó
+  importeAplicado Float
+  observaciones String?
+  userId        String?
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([retencionId])
+  @@index([periodoDDJJ])
 }
 
 // Catálogo configurable de REGÍMENES de retención/percepción (por empresa).

@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.356.0';
+const AGROCORE_VERSION = '2.357.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12215,7 +12215,11 @@ const retencionSchema = z.object({
   comprobanteRef: z.string().nullable().optional(),
   moneda: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
+  estado: z.enum(['pendiente', 'emitido', 'verificado', 'informado', 'anulado']).nullable().optional(),
+  periodo: z.string().nullable().optional(),
 });
+// Período fiscal "YYYY-MM" a partir de una fecha (retenciones).
+const _periodoRet = (f) => { const d = new Date(f); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 
 app.get('/api/retenciones', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
   try {
@@ -12242,6 +12246,7 @@ app.post('/api/retenciones', requireCompany, requirePermission('finanzas:create'
       cuit: d.cuit || null, numeroCertificado: d.numeroCertificado || null,
       baseImponible: d.baseImponible ?? null, alicuota: d.alicuota ?? null, importe: d.importe,
       comprobanteRef: d.comprobanteRef || null, moneda: d.moneda || 'ARS', observaciones: d.observaciones || null,
+      estado: d.estado || null, periodo: d.periodo || _periodoRet(d.fecha),
       userId: req.user?.id || null,
     }});
     res.status(201).json({ ok: true, data: row });
@@ -12263,12 +12268,27 @@ app.put('/api/retenciones/:id', requireCompany, requirePermission('finanzas:upda
       cuit: d.cuit || null, numeroCertificado: d.numeroCertificado || null,
       baseImponible: d.baseImponible ?? null, alicuota: d.alicuota ?? null, importe: d.importe,
       comprobanteRef: d.comprobanteRef || null, moneda: d.moneda || 'ARS', observaciones: d.observaciones || null,
+      estado: d.estado ?? ex.estado, periodo: d.periodo || ex.periodo || _periodoRet(d.fecha),
     }});
     res.json({ ok: true, data: row });
   } catch (e) {
     if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
     next(e);
   }
+});
+
+// Cambiar sólo el ESTADO del certificado (pendiente/emitido/verificado/informado/anulado).
+app.put('/api/retenciones/:id/estado', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const ex = await prisma.retencion.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'Retención no encontrada' });
+    const estado = String(req.body?.estado || '');
+    if (!['pendiente', 'emitido', 'verificado', 'informado', 'anulado'].includes(estado)) {
+      return res.status(400).json({ ok: false, error: 'Estado inválido' });
+    }
+    const row = await prisma.retencion.update({ where: { id: ex.id }, data: { estado } });
+    res.json({ ok: true, data: row });
+  } catch (e) { next(e); }
 });
 
 app.delete('/api/retenciones/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
@@ -12632,6 +12652,181 @@ app.get('/api/retenciones/export-sircar', requireCompany, requirePermission('fin
     res.json({ ok: true, sistema: 'sircar', registros: rows.length, sinJurisdiccion: sinJur, filename, contenido,
       advertencia: 'Archivo PROVISORIO de IIBB (SIRCAR). Verificá los códigos de jurisdicción y el formato con tu contador/aplicativo antes de presentar.',
     });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// PRIORIDAD 3 — LIQUIDACIÓN de retenciones PRACTICADAS (obligaciones a ingresar al
+// fisco) y CONTROL de CRÉDITOS fiscales de las SUFRIDAS (aplicación a DDJJ).
+// ============================================================
+const _sistemaRet = (impuesto) => (impuesto === 'iibb' ? 'SIRCAR' : 'SICORE');
+const _perDeRet = (r) => r.periodo || _periodoRet(r.fecha);
+
+// Panel de OBLIGACIONES A INGRESAR: agrupa las practicadas aún NO depositadas por
+// impuesto + período + jurisdicción. Devuelve total y cantidad por grupo.
+app.get('/api/retenciones/obligaciones', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const rows = await prisma.retencion.findMany({
+      where: { companyId: req.companyId, naturaleza: 'practicada', ingresadoRef: null, estado: { not: 'anulado' } },
+      orderBy: [{ fecha: 'asc' }],
+    });
+    const grupos = {};
+    for (const r of rows) {
+      const per = _perDeRet(r);
+      const key = `${r.impuesto}|${per}|${r.jurisdiccion || ''}`;
+      if (!grupos[key]) grupos[key] = { impuesto: r.impuesto, periodo: per, jurisdiccion: r.jurisdiccion || null, sistema: _sistemaRet(r.impuesto), total: 0, cantidad: 0 };
+      grupos[key].total = Math.round((grupos[key].total + Number(r.importe || 0)) * 100) / 100;
+      grupos[key].cantidad++;
+    }
+    const data = Object.values(grupos).sort((a, b) => (a.periodo < b.periodo ? 1 : -1) || a.impuesto.localeCompare(b.impuesto));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Registrar el PAGO de una obligación al fisco: marca el grupo de practicadas como
+// ingresado, mueve la tesorería (banco/caja) y da de baja el pasivo. NO es un gasto.
+app.post('/api/retenciones/ingresar', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      impuesto: z.enum(['ganancias', 'iva', 'iibb', 'suss', 'otro']),
+      periodo: z.string().min(6),
+      jurisdiccion: z.string().nullable().optional(),
+      fecha: z.coerce.date(),
+      metodo: z.enum(['transferencia', 'efectivo']).optional().default('transferencia'),
+      bancoCuentaId: z.string().nullable().optional(),
+      cajaOrigen: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const result = await prisma.$transaction(async (tx) => {
+      // Las practicadas del grupo que todavía no se ingresaron.
+      const todas = await tx.retencion.findMany({ where: { companyId: req.companyId, naturaleza: 'practicada', impuesto: d.impuesto, ingresadoRef: null, estado: { not: 'anulado' } } });
+      const delGrupo = todas.filter(r => _perDeRet(r) === d.periodo && (d.jurisdiccion ? (r.jurisdiccion === d.jurisdiccion) : true));
+      if (!delGrupo.length) throw new Error('No hay retenciones pendientes de ingresar para ese período/impuesto.');
+      const total = Math.round(delGrupo.reduce((a, r) => a + Number(r.importe || 0), 0) * 100) / 100;
+      const pago = await tx.pagoFiscal.create({ data: {
+        companyId: req.companyId, fecha: d.fecha, impuesto: d.impuesto, periodo: d.periodo,
+        jurisdiccion: d.jurisdiccion || null, sistema: _sistemaRet(d.impuesto), importe: total, cantidad: delGrupo.length,
+        metodo: d.metodo, bancoCuentaId: d.bancoCuentaId || null, cajaOrigen: d.cajaOrigen || null,
+        observaciones: d.observaciones || null, userId: req.user?.id || null,
+      }});
+      const ref = 'PAGOFISC-' + pago.id;
+      const concepto = `Depósito de retenciones ${d.impuesto.toUpperCase()} ${d.periodo}${d.jurisdiccion ? ' (' + d.jurisdiccion + ')' : ''} al fisco`;
+      if (d.metodo === 'transferencia') {
+        if (!d.bancoCuentaId) throw new Error('Elegí la cuenta bancaria del pago.');
+        await tx.bancoMovimiento.create({ data: {
+          companyId: req.companyId, cuentaId: d.bancoCuentaId, fecha: d.fecha, tipo: 'transferencia_out',
+          concepto, monto: total, referencia: ref, observaciones: 'Obligación fiscal (no es gasto)', userId: req.user?.id || null,
+        }});
+      } else {
+        await tx.efectivo.create({ data: {
+          companyId: req.companyId, fecha: d.fecha, tipo: 'egreso', concepto, monto: total,
+          caja: d.cajaOrigen || null, clasificacion: 'fiscal', referencia: ref, observaciones: 'Obligación fiscal (no es gasto)',
+        }});
+      }
+      await tx.retencion.updateMany({ where: { id: { in: delGrupo.map(r => r.id) }, companyId: req.companyId }, data: { ingresadoRef: pago.id, estado: 'informado' } });
+      return { pagoId: pago.id, total, cantidad: delGrupo.length };
+    });
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// Listado de pagos al fisco hechos (historial).
+app.get('/api/pagos-fiscales', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const data = await prisma.pagoFiscal.findMany({ where: { companyId: req.companyId }, orderBy: [{ fecha: 'desc' }, { createdAt: 'desc' }] });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Deshacer un pago al fisco: revierte la tesorería y deja las retenciones otra vez
+// pendientes de ingresar.
+app.delete('/api/pagos-fiscales/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const pago = await prisma.pagoFiscal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!pago) return res.status(404).json({ ok: false, error: 'Pago fiscal no encontrado' });
+    await prisma.$transaction(async (tx) => {
+      const ref = 'PAGOFISC-' + pago.id;
+      await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, referencia: ref } });
+      await tx.efectivo.deleteMany({ where: { companyId: req.companyId, referencia: ref } });
+      await tx.retencion.updateMany({ where: { companyId: req.companyId, ingresadoRef: pago.id }, data: { ingresadoRef: null, estado: 'verificado' } });
+      await tx.pagoFiscal.delete({ where: { id: pago.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// CRÉDITOS FISCALES de las SUFRIDAS: importe, lo ya aplicado a DDJJ y el saldo pendiente.
+app.get('/api/retenciones/creditos', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId, naturaleza: 'sufrida', estado: { not: 'anulado' } };
+    if (req.query.impuesto) where.impuesto = String(req.query.impuesto);
+    if (req.query.desde || req.query.hasta) {
+      where.fecha = {};
+      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde) + 'T00:00:00');
+      if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59');
+    }
+    const rows = await prisma.retencion.findMany({ where, orderBy: [{ fecha: 'desc' }] });
+    const data = rows.map(r => {
+      const aplicado = Number(r.aplicadoCredito || 0);
+      const saldo = Math.round((Number(r.importe || 0) - aplicado) * 100) / 100;
+      return { ...r, aplicado, saldoPendiente: Math.max(saldo, 0) };
+    });
+    if (req.query.soloPendientes === '1') return res.json({ ok: true, data: data.filter(r => r.saldoPendiente > 0.01) });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+
+// Aplicar (total/parcial) una retención sufrida como pago a cuenta contra una DDJJ.
+app.post('/api/retenciones/aplicar-credito', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const schema = z.object({
+      retencionId: z.string().min(1),
+      importeAplicado: z.number().positive(),
+      periodoDDJJ: z.string().min(6),
+      fecha: z.coerce.date(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body);
+    const result = await prisma.$transaction(async (tx) => {
+      const r = await tx.retencion.findFirst({ where: { id: d.retencionId, companyId: req.companyId, naturaleza: 'sufrida' } });
+      if (!r) throw new Error('Retención sufrida no encontrada');
+      const saldo = Math.round((Number(r.importe || 0) - Number(r.aplicadoCredito || 0)) * 100) / 100;
+      if (d.importeAplicado > saldo + 0.01) throw new Error('El importe a aplicar (' + d.importeAplicado.toFixed(2) + ') supera el saldo disponible del crédito (' + saldo.toFixed(2) + ').');
+      const ap = await tx.aplicacionCreditoFiscal.create({ data: {
+        companyId: req.companyId, retencionId: r.id, fecha: d.fecha, impuesto: r.impuesto,
+        periodoDDJJ: d.periodoDDJJ, importeAplicado: d.importeAplicado, observaciones: d.observaciones || null, userId: req.user?.id || null,
+      }});
+      await tx.retencion.update({ where: { id: r.id }, data: { aplicadoCredito: Math.round((Number(r.aplicadoCredito || 0) + d.importeAplicado) * 100) / 100 } });
+      return { aplicacionId: ap.id };
+    });
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) {
+    if (e instanceof ZodError) return res.status(400).json({ ok: false, error: e.errors?.[0]?.message || 'Datos inválidos' });
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+// Aplicaciones de crédito de una retención (historial) + deshacer.
+app.get('/api/retenciones/:id/aplicaciones', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const data = await prisma.aplicacionCreditoFiscal.findMany({ where: { companyId: req.companyId, retencionId: req.params.id }, orderBy: [{ fecha: 'desc' }] });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.delete('/api/aplicaciones-credito/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const ap = await prisma.aplicacionCreditoFiscal.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ap) return res.status(404).json({ ok: false, error: 'Aplicación no encontrada' });
+    await prisma.$transaction(async (tx) => {
+      const r = await tx.retencion.findFirst({ where: { id: ap.retencionId, companyId: req.companyId } });
+      if (r) await tx.retencion.update({ where: { id: r.id }, data: { aplicadoCredito: Math.max(0, Math.round((Number(r.aplicadoCredito || 0) - Number(ap.importeAplicado || 0)) * 100) / 100) } });
+      await tx.aplicacionCreditoFiscal.delete({ where: { id: ap.id } });
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
