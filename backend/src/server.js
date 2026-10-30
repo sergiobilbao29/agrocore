@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.351.0';
+const AGROCORE_VERSION = '2.352.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -20213,10 +20213,24 @@ function _parseResumenBancarioTexto(texto) {
       const mt = b.tabla.match(filaTabla);
       const fechaT = `${mt[3]}-${mt[2]}-${mt[1]}`;
       const rest = mt[4];
-      const montos = [...rest.matchAll(dineroG)];
+      // Capturamos cada importe CON el signo que pueda venir antes del "$" (ej. Galicia:
+      // "... $ 3.067.236,78 + $ 10.403,00" → saldo primero, importe con signo después).
+      const montos = [...rest.matchAll(/([+\-−])?\s*\$\s*(-?[\d.]+,\d{2})/g)];
       if (montos.length) {
-        const imp = _numAr(montos[0][1]);
-        const saldo = montos[1] ? _numAr(montos[1][1]) : null;
+        // Signo SEPARADO antes del "$" (+/-): identifica al IMPORTE sin importar el orden
+        // de las columnas (Galicia pone el saldo primero). El otro token es el SALDO.
+        const sepSign = (m) => (m[1] === '+' ? 1 : (m[1] === '-' || m[1] === '−') ? -1 : 0);
+        const mImpSep = montos.find(m => sepSign(m) !== 0);
+        let imp, saldo = null;
+        if (mImpSep) {
+          imp = Math.abs(_numAr(mImpSep[2])) * sepSign(mImpSep);
+          const o = montos.find(m => m !== mImpSep);
+          saldo = o ? _numAr(o[2]) : null;
+        } else {
+          // Sin signo separado (otros bancos tipo Technisys): 1er token = importe, 2do = saldo.
+          imp = _numAr(montos[0][2]);
+          saldo = montos[1] ? _numAr(montos[1][2]) : null;
+        }
         let head = rest.slice(0, montos[0].index).trim();
         const cm = head.match(/^(\d+)?\s*(.*)$/);
         const ref = (cm && cm[1]) ? cm[1] : '';

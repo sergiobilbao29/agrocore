@@ -3075,7 +3075,7 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'30/10/2026',
-      titulo:'🛠️ v2.351.0 — Arreglo (definitivo): importar resumen Galicia tomaba el saldo como importe',
+      titulo:'🛠️ v2.352.0 — Arreglo (definitivo): importar resumen Galicia tomaba el saldo como importe',
       desc:'En el extracto de <b>Banco Galicia / Office Banking</b> cada fila trae primero el <b>saldo</b> y después el <b>importe con su signo</b> (<i>“… $ 3.067.236,78  + $ 10.403,00”</i>). El importador agarraba el <b>saldo</b> como importe, por eso cargaba todo <b>en positivo y por millones</b>. Ahora identifica el importe por su <b>signo</b> (<b>+</b>/<b>−</b>) sin importar el orden de las columnas: los <b>débitos entran como egreso</b> y los <b>créditos como ingreso</b>, con el importe y el saldo correctos. Si ya importaste mal un lote, usá <b>“Deshacer importación”</b> y volvé a importarlo.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'29/10/2026',
       titulo:'📒 v2.349.0 — Plan canje con cuenta en grano (saldo por cliente)',
