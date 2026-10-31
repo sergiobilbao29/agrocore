@@ -3078,6 +3078,9 @@ pages.inicio = async function() {
       titulo:'🧾 v2.354.0 — Retenciones al pagar y al cobrar (integradas a cuenta corriente y banco)',
       desc:'Ahora las <b>retenciones</b> se cargan en el mismo momento del pago o del cobro, sin romper los saldos:<br>• Al <b>pagar a un proveedor</b> podés sumar las <b>retenciones practicadas</b> (Ganancias, IVA, IIBB, SUSS…). La <b>deuda se cancela por el total</b> de la factura, pero del <b>banco sale sólo el neto</b> (lo retenido no sale). Ej.: factura $1.000.000, retención $30.000 → transferís $970.000 y el proveedor queda saldado.<br>• Al <b>cobrar a un cliente</b> cargás las <b>retenciones sufridas</b> (las que te hicieron): la <b>factura queda saldada por el total</b> aunque al <b>banco entre sólo el neto</b>, y queda registrado el <b>crédito fiscal</b>.<br>En el modal aparece la sección <b>🧾 Retenciones</b> (impuesto, régimen, jurisdicción para IIBB, base, alícuota e importe). <b>No modifica el importe de las facturas</b>. Cada retención queda en el módulo de <b>Retenciones</b> para exportar a <b>SICORE / SIRE / SIRCAR</b>. Si deshacés la Orden de Pago o el recibo, también se borran las retenciones asociadas.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/11/2026',
+      titulo:'📄 v2.358.0 — Retenciones: presentación por período + Excel para el contador',
+      desc:'Cierre del circuito fiscal de retenciones:<br>• En <b>Exportar SICORE/SIRE/SIRCAR</b> podés generar el archivo <b>por período</b> y, con un tilde, dejar las retenciones incluidas <b>marcadas como informadas</b> al organismo.<br>• Nuevo botón <b>📊 Excel para el contador</b>: una planilla con <b>todas las retenciones y percepciones del período</b> (practicadas y sufridas) con sus datos, lista para cargar en SIRE/SICORE/SIRCAR o conciliar.<br>Nota: SIRE/SICORE/SIRCAR <b>no tienen conexión automática</b> (se presentan con Clave Fiscal en ARCA/provincia). Los .txt salen como <b>borrador</b> para validar el formato con el contador la primera vez. Dejamos un informe explicativo en la Ayuda.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'02/11/2026',
       titulo:'🧾 v2.357.0 — Retenciones: liquidación al fisco, créditos fiscales y estado de certificados',
       desc:'Tercera parte de retenciones, en la pantalla de <b>Retenciones</b>:<br>• <b>📥 A ingresar al fisco</b>: junta las <b>practicadas</b> que todavía no depositaste, agrupadas por impuesto y período. Con "Registrar pago" se mueve el <b>banco o caja</b> y bajan del pendiente (no es un gasto). Se puede deshacer.<br>• <b>🧾 Créditos fiscales</b>: las <b>sufridas</b> con su <b>saldo pendiente</b> de computar; "Aplicar a DDJJ" imputa total o parcial contra un período y nunca deja aplicar dos veces el mismo saldo.<br>• <b>Estado del certificado</b> en cada retención (pendiente, emitido, verificado, informado, anulado).<br>Todo con trazabilidad y aislamiento por empresa. TRAE MIGRACIÓN.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'01/11/2026',
@@ -40244,12 +40247,27 @@ function retSicoreExport() {
         <div><label class="label">Desde</label><input id="exp-desde" type="date" class="input" value="${desde}"/></div>
         <div><label class="label">Hasta</label><input id="exp-hasta" type="date" class="input" value="${hasta}"/></div>
         <div class="col-span-2" id="exp-extra"></div>
+        <div class="col-span-2"><label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" id="exp-informar"/> Marcar las retenciones incluidas como <b>informadas al organismo</b> al generar el archivo</label></div>
       </div>
       <div id="exp-nota" class="mt-3"></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-ghost" onclick="retExpExcel()" title="Planilla con todas las retenciones y percepciones del período (practicadas y sufridas) para el contador">📊 Excel para el contador</button>
              <button class="btn btn-primary" onclick="retExpDescargar()">Generar .txt</button>`,
   });
   retExpSistema();
+}
+// Excel/CSV de retenciones y percepciones del período (ambas naturalezas) para el contador.
+async function retExpExcel(){
+  const desde=$('#exp-desde')?.value, hasta=$('#exp-hasta')?.value;
+  const qs=new URLSearchParams({ desde:desde||'', hasta:hasta||'' });
+  try{
+    const j=await api('/api/retenciones/export-excel?'+qs.toString());
+    if(!j.registros){ toast('No hay retenciones en ese período','info'); return; }
+    const blob=new Blob([j.contenido],{type:'text/csv;charset=utf-8'});
+    const u=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=u; a.download=j.filename||'Retenciones.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
+    toast(`✓ ${j.filename} (${j.registros} registros) — abrilo con Excel`,'success');
+  }catch(e){ toast(e.message||'Error al exportar','error'); }
 }
 function retExpSistema() {
   const sis = $('#exp-sistema')?.value || 'sicore';
@@ -40268,6 +40286,7 @@ async function retExpDescargar() {
   const sis = $('#exp-sistema')?.value || 'sicore';
   const desde = $('#exp-desde')?.value, hasta = $('#exp-hasta')?.value;
   const qs = new URLSearchParams({ desde: desde || '', hasta: hasta || '' });
+  if ($('#exp-informar')?.checked) qs.set('marcarInformado', '1');
   let url;
   if (sis === 'sircar') { url = '/api/retenciones/export-sircar?' + qs.toString(); }
   else { qs.set('formato', 'sicore'); const imp = $('#exp-imp')?.value || ''; if (imp) qs.set('impuesto', imp); url = '/api/retenciones/export-sicore?' + qs.toString(); }
@@ -40280,7 +40299,8 @@ async function retExpDescargar() {
     a.remove(); URL.revokeObjectURL(u);
     closeModal();
     const extra = j.sinJurisdiccion ? ` (${j.sinJurisdiccion} sin provincia — completalas)` : '';
-    toast(`✓ ${j.filename} (${j.registros} registros)${extra}. ${j.advertencia || ''}`, 'success');
+    const inf = j.informadas ? ` · ${j.informadas} marcadas como informadas` : '';
+    toast(`✓ ${j.filename} (${j.registros} registros)${extra}${inf}. ${j.advertencia || ''}`, 'success');
   } catch (e) { toast(e.message || 'Error al generar el archivo', 'error'); }
 }
 

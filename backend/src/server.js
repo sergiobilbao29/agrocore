@@ -68,7 +68,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.357.0';
+const AGROCORE_VERSION = '2.358.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12585,16 +12585,29 @@ app.get('/api/retenciones/export-sicore', requireCompany, requirePermission('fin
     } else {
       where.impuesto = { in: ['ganancias', 'iva', 'suss'] };
     }
-    if (req.query.desde || req.query.hasta) {
+    // Filtro por PERÍODO "YYYY-MM" (tiene prioridad sobre desde/hasta).
+    let desde = req.query.desde, hasta = req.query.hasta;
+    if (req.query.periodo && /^\d{4}-\d{2}$/.test(String(req.query.periodo))) {
+      const [yy, mm] = String(req.query.periodo).split('-').map(Number);
+      desde = `${yy}-${String(mm).padStart(2,'0')}-01`;
+      hasta = new Date(yy, mm, 0).toISOString().slice(0, 10);
+    }
+    if (desde || hasta) {
       where.fecha = {};
-      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde) + 'T00:00:00');
-      if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59');
+      if (desde) where.fecha.gte = new Date(String(desde) + 'T00:00:00');
+      if (hasta) where.fecha.lte = new Date(String(hasta) + 'T23:59:59');
     }
     const rows = await prisma.retencion.findMany({ where, orderBy: [{ fecha: 'asc' }] });
     const contenido = rows.map(_sicoreLinea).join('\r\n') + (rows.length ? '\r\n' : '');
-    const per = `${String(req.query.desde || '').slice(0, 7)}`.replace(/-/g, '') || 'periodo';
+    const per = `${String(req.query.periodo || desde || '').slice(0, 7)}`.replace(/-/g, '') || 'periodo';
     const filename = `${formato.toUpperCase()}_practicadas_${per}_PROVISORIO.txt`;
-    res.json({ ok: true, formato, registros: rows.length, filename, contenido,
+    // Marcar como INFORMADAS al organismo (cierra el circuito con el estado del certificado).
+    let informadas = 0;
+    if (String(req.query.marcarInformado || '') === '1' && rows.length) {
+      const r = await prisma.retencion.updateMany({ where: { id: { in: rows.map(x => x.id) }, companyId: req.companyId }, data: { estado: 'informado' } });
+      informadas = r.count;
+    }
+    res.json({ ok: true, formato, registros: rows.length, informadas, filename, contenido,
       advertencia: 'Archivo PROVISORIO: validá el layout (anchos y códigos de impuesto/régimen) contra un archivo real de tu contador antes de presentarlo en ARCA.',
     });
   } catch (e) { next(e); }
@@ -12638,20 +12651,63 @@ function _sircarLinea(r) {
 app.get('/api/retenciones/export-sircar', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
   try {
     const where = { companyId: req.companyId, naturaleza: 'practicada', impuesto: 'iibb' };
-    if (req.query.desde || req.query.hasta) {
+    let desde = req.query.desde, hasta = req.query.hasta;
+    if (req.query.periodo && /^\d{4}-\d{2}$/.test(String(req.query.periodo))) {
+      const [yy, mm] = String(req.query.periodo).split('-').map(Number);
+      desde = `${yy}-${String(mm).padStart(2,'0')}-01`;
+      hasta = new Date(yy, mm, 0).toISOString().slice(0, 10);
+    }
+    if (desde || hasta) {
       where.fecha = {};
-      if (req.query.desde) where.fecha.gte = new Date(String(req.query.desde) + 'T00:00:00');
-      if (req.query.hasta) where.fecha.lte = new Date(String(req.query.hasta) + 'T23:59:59');
+      if (desde) where.fecha.gte = new Date(String(desde) + 'T00:00:00');
+      if (hasta) where.fecha.lte = new Date(String(hasta) + 'T23:59:59');
     }
     const rows = await prisma.retencion.findMany({ where, orderBy: [{ fecha: 'asc' }] });
     const sinJur = rows.filter(r => !_jurisCodigo(r.jurisdiccion)).length;
     const header = 'Jurisdiccion;CUIT;Fecha;TipoComp;NroComp;Base;Alicuota;Retenido';
     const contenido = [header, ...rows.map(_sircarLinea)].join('\r\n') + (rows.length ? '\r\n' : '');
-    const per = `${String(req.query.desde || '').slice(0, 7)}`.replace(/-/g, '') || 'periodo';
+    const per = `${String(req.query.periodo || desde || '').slice(0, 7)}`.replace(/-/g, '') || 'periodo';
     const filename = `SIRCAR_IIBB_${per}_PROVISORIO.txt`;
-    res.json({ ok: true, sistema: 'sircar', registros: rows.length, sinJurisdiccion: sinJur, filename, contenido,
+    let informadas = 0;
+    if (String(req.query.marcarInformado || '') === '1' && rows.length) {
+      const r = await prisma.retencion.updateMany({ where: { id: { in: rows.map(x => x.id) }, companyId: req.companyId }, data: { estado: 'informado' } });
+      informadas = r.count;
+    }
+    res.json({ ok: true, sistema: 'sircar', registros: rows.length, informadas, sinJurisdiccion: sinJur, filename, contenido,
       advertencia: 'Archivo PROVISORIO de IIBB (SIRCAR). Verificá los códigos de jurisdicción y el formato con tu contador/aplicativo antes de presentar.',
     });
+  } catch (e) { next(e); }
+});
+
+// Export Excel/CSV de retenciones y percepciones por período (para el contador: cargar
+// en SIRE/SICORE/SIRCAR o conciliar). Dos secciones: practicadas y sufridas.
+app.get('/api/retenciones/export-excel', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    let desde = req.query.desde, hasta = req.query.hasta;
+    if (req.query.periodo && /^\d{4}-\d{2}$/.test(String(req.query.periodo))) {
+      const [yy, mm] = String(req.query.periodo).split('-').map(Number);
+      desde = `${yy}-${String(mm).padStart(2,'0')}-01`;
+      hasta = new Date(yy, mm, 0).toISOString().slice(0, 10);
+    }
+    if (desde || hasta) {
+      where.fecha = {};
+      if (desde) where.fecha.gte = new Date(String(desde) + 'T00:00:00');
+      if (hasta) where.fecha.lte = new Date(String(hasta) + 'T23:59:59');
+    }
+    const rows = await prisma.retencion.findMany({ where, orderBy: [{ naturaleza: 'asc' }, { fecha: 'asc' }] });
+    const esc = (s) => { const v = String(s == null ? '' : s); return /[",;\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const head = ['Naturaleza', 'Clase', 'Impuesto', 'Régimen', 'Jurisdicción', 'Fecha', 'Período', 'Contacto', 'CUIT', 'N° Certificado', 'Base', 'Alícuota', 'Importe', 'Estado', 'Comprobante'];
+    const linea = (r) => [
+      r.naturaleza, r.clase, r.impuesto, r.regimen || '', r.jurisdiccion || '',
+      new Date(r.fecha).toISOString().slice(0, 10), r.periodo || _periodoRet(r.fecha),
+      r.contactoNombre || '', r.cuit || '', r.numeroCertificado || '',
+      (r.baseImponible != null ? r.baseImponible : ''), (r.alicuota != null ? r.alicuota : ''),
+      r.importe, r.estado || '', r.comprobanteRef || '',
+    ].map(esc).join(';');
+    const contenido = '﻿' + [head.join(';'), ...rows.map(linea)].join('\r\n') + '\r\n';
+    const per = `${String(req.query.periodo || desde || '').slice(0, 7)}`.replace(/-/g, '') || 'periodo';
+    res.json({ ok: true, registros: rows.length, filename: `Retenciones_${per}.csv`, contenido });
   } catch (e) { next(e); }
 });
 
