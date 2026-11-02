@@ -7,6 +7,21 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { z, ZodError } from 'zod';
 import { PrismaClient } from '@prisma/client';
+
+// === Fecha robusta a zona horaria (reemplaza a z.coerce.date() en todo el sistema) ===
+// Una fecha "sólo día" (YYYY-MM-DD) se guarda al MEDIODÍA local, no a medianoche. Así
+// ninguna conversión a zona horaria (ej. Argentina UTC-3) la corre un día para atrás
+// (bug: cargar 30/10 y que quede/figurara como 29/10). Un timestamp completo (con hora)
+// se respeta tal cual. Vale para .nullable()/.optional() igual que z.coerce.date().
+const zFecha = z.preprocess((v) => {
+  if (typeof v === 'string') {
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0);  // mediodía local
+  }
+  if (v === '' || v == null) return v;
+  const d = new Date(v);
+  return isNaN(d) ? v : d;
+}, z.date());
 import path from 'node:path';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
@@ -68,7 +83,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.358.0';
+const AGROCORE_VERSION = '2.360.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -525,7 +540,7 @@ app.get('/api/cotizaciones-historico', authMiddleware, async (req, res, next) =>
 });
 app.post('/api/cotizaciones-historico', authMiddleware, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
-    const d = z.object({ moneda: z.string().min(1), fecha: z.coerce.date(), valor: z.number().positive() }).parse(req.body);
+    const d = z.object({ moneda: z.string().min(1), fecha: zFecha, valor: z.number().positive() }).parse(req.body);
     const fecha = new Date(d.fecha); fecha.setHours(0,0,0,0);
     // Prisma no permite null en el where de una unique compuesta, así que hacemos
     // el upsert a mano (las cotizaciones de mercado son globales: companyId = null).
@@ -1325,7 +1340,7 @@ app.post('/api/documentos', requireCompany, async (req, res) => {
       contactoEmail: z.string().optional().nullable(),
       total: z.number().optional().nullable(),
       moneda: z.string().optional().default('ARS'),
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
       datos: z.any(),
     });
     const d = schema.parse(req.body);
@@ -1932,11 +1947,11 @@ app.post('/api/empresas/trial-leads', async (req, res, next) => {
       vendedorId: z.string().nullable().optional(),
       segEstado: z.string().nullable().optional(),
       segNotas: z.string().nullable().optional(),
-      fechaAlta: z.coerce.date().nullable().optional(),
+      fechaAlta: zFecha.nullable().optional(),
       origen: z.string().nullable().optional(),
-      segFecha: z.coerce.date().nullable().optional(),
-      segPrimerContacto: z.coerce.date().nullable().optional(),
-      segUltimoContacto: z.coerce.date().nullable().optional(),
+      segFecha: zFecha.nullable().optional(),
+      segPrimerContacto: zFecha.nullable().optional(),
+      segUltimoContacto: zFecha.nullable().optional(),
     });
     const d = schema.parse(req.body);
     const _cont = Array.isArray(d.contactos) ? d.contactos.filter(c => (c.nombre || c.tel || c.email)) : null;
@@ -1967,7 +1982,7 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
     const _contactoSchema = z.object({ nombre: z.string().optional().nullable(), tel: z.string().optional().nullable(), email: z.string().optional().nullable() });
     const schema = z.object({
       segEstado: z.string().max(40).nullable().optional(),
-      segFecha: z.coerce.date().nullable().optional(),
+      segFecha: zFecha.nullable().optional(),
       segNotas: z.string().max(2000).nullable().optional(),
       nombre: z.string().nullable().optional(),
       empresa: z.string().nullable().optional(),
@@ -1980,10 +1995,10 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
       contactos: z.array(_contactoSchema).nullable().optional(),
       mantenimiento: z.boolean().optional(),
       vendedorId: z.string().nullable().optional(),
-      fechaAlta: z.coerce.date().nullable().optional(),
+      fechaAlta: zFecha.nullable().optional(),
       origen: z.string().max(40).nullable().optional(),
-      segPrimerContacto: z.coerce.date().nullable().optional(),
-      segUltimoContacto: z.coerce.date().nullable().optional(),
+      segPrimerContacto: zFecha.nullable().optional(),
+      segUltimoContacto: zFecha.nullable().optional(),
     });
     const d = schema.parse(req.body);
     const cur = await prisma.trialSignup.findUnique({ where: { id: req.params.id }, select: { id: true } });
@@ -2273,7 +2288,7 @@ app.post('/api/vendedores/:id/movimiento', async (req, res, next) => {
       detalle: z.string().min(1),
       debe: z.number().nonnegative().optional(),
       haber: z.number().nonnegative().optional(),
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
     }).parse(req.body);
     const row = await prisma.vendedorMovimiento.create({ data: {
       vendedorId: v.id, tipo: d.tipo || 'ajuste', detalle: d.detalle.trim(),
@@ -2329,7 +2344,7 @@ const _susSchema = z.object({
   moneda: z.string().optional(),
   diaVenc: z.number().int().min(1).max(28).optional(),
   activo: z.boolean().optional(),
-  inicio: z.coerce.date().nullable().optional(),
+  inicio: zFecha.nullable().optional(),
   notas: z.string().nullable().optional(),
   leadId: z.string().nullable().optional(),
 });
@@ -4198,7 +4213,7 @@ mountCrud({
   path: 'movimientos', modelName: 'movimiento', perm: 'stock', scopeCampana: 'campanaId',
   schema: z.object({
     productoId: z.string(),
-    fecha: z.coerce.date(),
+    fecha: zFecha,
     tipo: z.enum(['ingreso', 'egreso']),
     motivo: z.string().min(1),
     cantidad: z.number(),
@@ -4675,7 +4690,7 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
       costoHa: z.number().nullable().optional(),
       moneda: z.string().nullable().optional(),
       hectareasAplicadas: z.number().nullable().optional(),
-      fecha: z.coerce.date().nullable().optional(),
+      fecha: zFecha.nullable().optional(),
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
@@ -4739,7 +4754,7 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
       moneda: z.string().nullable().optional(),
       monedaCosto: z.string().nullable().optional(),
       hectareasAplicadas: z.number().nullable().optional(),
-      fecha: z.coerce.date().nullable().optional(),
+      fecha: zFecha.nullable().optional(),
       observaciones: z.string().nullable().optional(),
       // Insumos consumidos de una labor (si se manda, se reemplazan por completo).
       insumos: z.array(z.object({
@@ -4894,8 +4909,8 @@ mountCrud({
     hectareas: z.number().optional(),
     rindeEstimado: z.number().nullable().optional(),
     rindeReal: z.number().nullable().optional(),
-    fechaSiembra: z.coerce.date().nullable().optional(),
-    fechaCosecha: z.coerce.date().nullable().optional(),
+    fechaSiembra: zFecha.nullable().optional(),
+    fechaCosecha: zFecha.nullable().optional(),
     estado: z.string().optional(),
     observaciones: z.string().nullable().optional(),
     analisisSuelo: z.string().nullable().optional(),
@@ -4950,8 +4965,8 @@ const _socioSchema = z.object({
   nombre: z.string().min(1),
   descripcion: z.string().nullable().optional(),
   ciclo: z.string().nullable().optional(),
-  fechaInicio: z.coerce.date().nullable().optional(),
-  fechaFin: z.coerce.date().nullable().optional(),
+  fechaInicio: zFecha.nullable().optional(),
+  fechaFin: zFecha.nullable().optional(),
   activa: z.boolean().optional(),
   socios: z.array(z.object({ nombre: z.string(), aporta: z.string().nullable().optional(), participacion: z.coerce.number().nullable().optional() })).nullable().optional(),
   observaciones: z.string().nullable().optional(),
@@ -5170,7 +5185,7 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
       linkId: z.string(),
       tipo: z.enum(['insumo', 'labor']),
       item: z.string().min(1),                       // insumo: nombre / labor: tipo de labor
-      fecha: z.coerce.date().nullable().optional(),
+      fecha: zFecha.nullable().optional(),
       hectareasAplicadas: z.coerce.number().nullable().optional(),
       costoHa: z.coerce.number().nullable().optional(),
       monedaCosto: z.string().nullable().optional(),
@@ -5324,7 +5339,7 @@ app.put('/api/sociedades/:id/aplicacion/:itemId', requireCompany, requirePermiss
       costoHa: z.coerce.number().nullable().optional(),
       monedaCosto: z.string().nullable().optional(),
       hectareasAplicadas: z.coerce.number().nullable().optional(),
-      fecha: z.coerce.date().nullable().optional(),
+      fecha: zFecha.nullable().optional(),
       observaciones: z.string().nullable().optional(),
       aporteSocioId: z.string().nullable().optional(),
     }).parse(req.body || {});
@@ -5879,10 +5894,10 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
       clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
       puntoVenta: z.number().int(),
       numero: z.number().int(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       condicionVenta: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),
-      vencimientoFecha: z.coerce.date().nullable().optional(),
+      vencimientoFecha: zFecha.nullable().optional(),
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
       depositoId: z.string().nullable().optional(),
@@ -5958,10 +5973,10 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
       puntoVenta: z.number().int(),
       numero: z.number().int(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       condicionVenta: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo de Condiciones de pago
-      vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
+      vencimientoFecha: zFecha.nullable().optional(),       // si la condición es "a fecha fija"
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
       depositoId: z.string().nullable().optional(),   // depósito de donde sale el stock vendido
@@ -5969,7 +5984,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       observaciones: z.string().nullable().optional(),
       origen: z.enum(['agrocore', 'arca_externa']).optional().default('agrocore'),
       cae: z.string().optional(),
-      caeVto: z.coerce.date().optional(),
+      caeVto: zFecha.optional(),
       laborServicioId: z.string().nullable().optional(),   // si la factura sale de una labor a terceros, la vinculamos
       laborServicioIds: z.array(z.string()).optional(),    // varias labores a terceros en una misma factura
       suscripcionId: z.string().nullable().optional(),     // si la factura es la cuota de un abono, la vinculamos
@@ -6371,15 +6386,15 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
       puntoVenta: z.number().int(),
       numero: z.number().int(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       condicionCompra: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo
-      vencimientoFecha: z.coerce.date().nullable().optional(),       // si la condición es "a fecha fija"
+      vencimientoFecha: zFecha.nullable().optional(),       // si la condición es "a fecha fija"
       // Vencimientos de pago (servicios: luz/gas/teléfono). El 1ro manda para la
       // deuda/flujo/alertas; los demás son "si pagás después, pagás este importe".
       vencimientos: z.array(z.object({
         nro: z.number().int().optional(),
-        fecha: z.coerce.date(),
+        fecha: zFecha,
         importe: z.number().nullable().optional(),
       })).nullable().optional(),
       moneda: z.string().optional(),
@@ -6733,13 +6748,13 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
       puntoVenta: z.number().int(),
       numero: z.number().int(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       condicionCompra: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),
-      vencimientoFecha: z.coerce.date().nullable().optional(),
+      vencimientoFecha: zFecha.nullable().optional(),
       vencimientos: z.array(z.object({
         nro: z.number().int().optional(),
-        fecha: z.coerce.date(),
+        fecha: zFecha,
         importe: z.number().nullable().optional(),
       })).nullable().optional(),
       moneda: z.string().optional(),
@@ -7006,7 +7021,7 @@ app.post('/api/remitos-compra', requireCompany, requirePermission('compras:creat
     const schema = z.object({
       proveedorId: z.string().nullable().optional(),
       numeroProveedor: z.string().nullable().optional(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       depositoId: z.string().nullable().optional(),
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
@@ -7054,7 +7069,7 @@ app.put('/api/remitos-compra/:id', requireCompany, requirePermission('compras:cr
     const schema = z.object({
       proveedorId: z.string().nullable().optional(),
       numeroProveedor: z.string().nullable().optional(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       depositoId: z.string().nullable().optional(),
       moneda: z.string().optional(),
       cotizacion: z.number().positive().nullable().optional(),
@@ -7098,7 +7113,7 @@ app.post('/api/remitos-compra/:id/devolucion', requireCompany, requirePermission
     if (!orig) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
     if (orig.tipo !== 'entrada') return res.status(400).json({ ok: false, error: 'Solo se devuelve sobre un remito de entrada.' });
     const schema = z.object({
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       observaciones: z.string().nullable().optional(),
       items: z.array(z.object({ remitoItemId: z.string(), cantidad: z.number().positive() })).min(1),
     });
@@ -7195,15 +7210,15 @@ mountCrud({
     cuenta: z.string().nullable().optional(),
     cuentaBancoId: z.string().nullable().optional(),  // cuenta REAL de Bancos: de dónde se debita (propios) al marcar Pagado
     nroCheque: z.string().min(1),
-    fechaEmision: z.coerce.date(),
-    fechaPago: z.coerce.date(),
+    fechaEmision: zFecha,
+    fechaPago: zFecha,
     monto: z.number(),
     beneficiario: z.string().nullable().optional(),
     librador: z.string().nullable().optional(),
     cuitTitular: z.string().nullable().optional(),
     endosante: z.string().nullable().optional(),
-    fechaRecepcion: z.coerce.date().nullable().optional(),
-    fechaEndoso: z.coerce.date().nullable().optional(),
+    fechaRecepcion: zFecha.nullable().optional(),
+    fechaEndoso: zFecha.nullable().optional(),
     enPoderDe: z.string().nullable().optional(),
     estado: z.string().optional(),
     observaciones: z.string().nullable().optional(),
@@ -7303,7 +7318,7 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
     const schema = z.object({
       estado: z.string().min(1),
       cuentaBancoId: z.string().nullable().optional(),
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
       referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
     });
@@ -7386,7 +7401,7 @@ app.post('/api/cheques/:id/cambiar-estado', requireCompany, requirePermission('f
 const venderChequesSchema = z.object({
   chequeIds: z.array(z.string()).min(1),
   cuentaBancoId: z.string().min(1),
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   netoAcreditado: z.number().nonnegative(),
   tasa: z.number().nullable().optional(),
   plazoDias: z.number().nullable().optional(),
@@ -7446,7 +7461,7 @@ app.post('/api/cheques/vender', requireCompany, requirePermission('finanzas:upda
 // ============================================================
 const transferirChequeSchema = z.object({
   empresaDestinoId: z.string().min(1),
-  fecha: z.coerce.date().optional(),
+  fecha: zFecha.optional(),
   observaciones: z.string().nullable().optional(),
 });
 app.post('/api/cheques/:id/transferir-empresa', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
@@ -7667,8 +7682,8 @@ mountCrud({
     contactoTipo: z.enum(['cliente', 'proveedor', 'libre']).nullable().optional(),
     contactoId: z.string().nullable().optional(),
     nombreLibre: z.string().nullable().optional(),
-    fecha: z.coerce.date(),
-    vencimiento: z.coerce.date().nullable().optional(),
+    fecha: zFecha,
+    vencimiento: zFecha.nullable().optional(),
     detalle: z.string().min(1),
     categoria: z.string().nullable().optional(),
     moneda: z.string().nullable().optional(),
@@ -7708,7 +7723,7 @@ mountCrud({
     hectareas: z.number(),
     importeHa: z.number().nullable().optional(),
     tipoPago: z.string().nullable().optional(),
-    vencimiento: z.coerce.date().nullable().optional(),
+    vencimiento: zFecha.nullable().optional(),
     pagado: z.boolean().optional(),
     modalidad: z.string().nullable().optional(),
     grano: z.string().nullable().optional(),
@@ -7740,7 +7755,7 @@ mountCrud({
 mountCrud({
   path: 'efectivo', modelName: 'efectivo', perm: 'finanzas',
   schema: z.object({
-    fecha: z.coerce.date(),
+    fecha: zFecha,
     tipo: z.enum(['ingreso', 'egreso', 'transferencia']),
     concepto: z.string().min(1),
     monto: z.number(),
@@ -7768,7 +7783,7 @@ app.post('/api/efectivo/transferencia-intercompany', requireCompany, requirePerm
       empresaDestinoId: z.string().min(1),  // la que la USÓ (queda deudora)
       tenedor: z.string().min(1),           // persona/caja física (se usa igual en ambas)
       monto: z.number().positive(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       motivo: z.string().min(1),
     });
     const d = schema.parse(req.body);
@@ -7887,7 +7902,7 @@ app.get('/api/efectivo-consolidado-tenedor', requireCompany, requirePermission('
 mountCrud({
   path: 'flujo-caja', modelName: 'flujoCaja', perm: 'finanzas',
   schema: z.object({
-    fecha: z.coerce.date(),
+    fecha: zFecha,
     concepto: z.string().min(1),
     categoria: z.string().nullable().optional(),
     monto: z.number(),
@@ -8217,7 +8232,7 @@ app.get('/api/resumen-multiempresa/stock', async (req, res, next) => {
 // ---------- LOGISTICA / RRHH / CATALOGOS ----------
 // ---------- VIAJES (custom: con estado, factura vinculada y auto-settlement) ----------
 const viajeSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   origen: z.string().nullable().optional(),
   destino: z.string().nullable().optional(),
   producto: z.string().nullable().optional(),
@@ -8274,8 +8289,8 @@ const viajeSchema = z.object({
       cpeNroComprobante:   z.string().nullable().optional(),
       cpeEstado:           z.string().nullable().optional(),
       cpeTipo:             z.string().nullable().optional(),
-      cpeFechaEmision:     z.coerce.date().nullable().optional(),
-      cpeFechaArribo:      z.coerce.date().nullable().optional(),
+      cpeFechaEmision:     zFecha.nullable().optional(),
+      cpeFechaArribo:      zFecha.nullable().optional(),
       cpeObservaciones:    z.string().nullable().optional(),
       cpeOrigenCuit:       z.string().nullable().optional(),
       cpeOrigenRenspa:     z.string().nullable().optional(),
@@ -8810,8 +8825,8 @@ mountCrud({
     dni: z.string().nullable().optional(),
     cuil: z.string().nullable().optional(),
     puesto: z.string().nullable().optional(),
-    fechaIngreso: z.coerce.date().nullable().optional(),
-    fechaEgreso: z.coerce.date().nullable().optional(),
+    fechaIngreso: zFecha.nullable().optional(),
+    fechaEgreso: zFecha.nullable().optional(),
     sueldo: z.number().nullable().optional(),
     jornalDiario: z.coerce.number().nullable().optional(),   // precio por día
     porDia: z.boolean().optional(),                          // cobra por día (sueldo = jornal × diasMes)
@@ -8865,7 +8880,7 @@ async function getEmpleadoScoped(req) {
 }
 
 const movEmpSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   tipo: z.enum(['ganancia', 'gasto']),
   categoria: z.string().nullable().optional(),
   concepto: z.string().min(1),
@@ -9026,7 +9041,7 @@ app.delete('/api/empleados/:id/movimientos/:movId', requireCompany, requirePermi
 // (cantidad × precio por ítem) que se le descuenta del sueldo. NO genera factura.
 // El descuento de stock es OPCIONAL (por defecto no toca stock).
 const consumoProvSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   items: z.array(z.object({
     productoId: z.string().nullable().optional(),
     nombre: z.string().min(1),
@@ -9081,7 +9096,7 @@ app.post('/api/empleados/:id/consumo-proveeduria', requireCompany, requirePermis
 // Historial simple por empleado: cuándo se le entregó, qué prenda, talle,
 // cuánta cantidad y una observación. No mueve stock, es un registro/control.
 const entregaRopaSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   prenda: z.string().min(1),
   talle: z.string().nullable().optional(),
   cantidad: z.coerce.number().int().min(1).optional(),
@@ -9258,7 +9273,7 @@ app.get('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('r
 
 const liqSchema = z.object({
   periodo: z.string().regex(/^\d{4}-\d{2}$/, 'Período inválido (YYYY-MM)'),
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'tarjeta', 'intercompany']),
   caja: z.string().nullable().optional(),
   banco: z.string().nullable().optional(),
@@ -9667,7 +9682,7 @@ const hacMovSchema = z.object({
   loteId: z.string().nullable().optional(),  // lote/potrero de origen (null = nivel campo)
   categoria: z.string().min(1),
   categoriaDestino: z.string().nullable().optional(),  // requerido si tipo='cambio_categoria'
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   tipo: z.enum(HAC_TIPOS),
   cantidad: z.number().int(),  // CABEZAS. permite negativo para ajuste; resto positivos
   kilos: z.number().nonnegative().nullable().optional(),  // kg del movimiento (balanza)
@@ -9856,7 +9871,7 @@ app.put('/api/hacienda-movimientos/:id/rendimiento', requireCompany, requirePerm
       clienteId: z.string().nullable().optional(),
       caja: z.string().nullable().optional(),
       bancoCuentaId: z.string().nullable().optional(),
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
     }).parse(req.body || {});
     const total = (d.total != null ? d.total : (d.kilos * (d.precioKg || 0))) || 0;
     const dd = { categoria: mov.categoria, cantidad: mov.cantidad, fecha: d.fecha || mov.fecha, kilos: d.kilos, cobroTipo: d.cobroTipo, clienteId: d.clienteId ?? mov.clienteId, caja: d.caja, bancoCuentaId: d.bancoCuentaId };
@@ -9888,7 +9903,7 @@ app.put('/api/hacienda-movimientos/:id', requireCompany, requirePermission('stoc
     const d = z.object({
       campoId: z.string().optional(),
       categoria: z.string().min(1).optional(),
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
       cantidad: z.number().optional(),
       kilos: z.number().nonnegative().nullable().optional(),
       observaciones: z.string().nullable().optional(),
@@ -9966,7 +9981,7 @@ const caravanaAltaSchema = z.object({
   loteId: z.string().nullable().optional(),
   categoria: z.string().min(1),
   tipoAlta: z.enum(['nacimiento', 'compra', 'ajuste']).default('nacimiento'),
-  fecha: z.coerce.date().optional(),
+  fecha: zFecha.optional(),
   items: z.array(z.object({
     rfid: z.string().trim().nullable().optional(),
     visual: z.string().trim().nullable().optional(),
@@ -10062,7 +10077,7 @@ app.post('/api/caravanas/:id/baja', requireCompany, requirePermission('stock:upd
     const c = await prisma.caravana.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!c) return res.status(404).json({ ok: false, error: 'Caravana no encontrada' });
     if (c.estado === 'baja') return res.status(400).json({ ok: false, error: 'Esta caravana ya está dada de baja' });
-    const d = z.object({ motivo: z.enum(['muerte', 'venta', 'error']).default('muerte'), fecha: z.coerce.date().optional() }).parse(req.body || {});
+    const d = z.object({ motivo: z.enum(['muerte', 'venta', 'error']).default('muerte'), fecha: zFecha.optional() }).parse(req.body || {});
     const fecha = d.fecha || new Date();
     const result = await prisma.$transaction(async (tx) => {
       let movId = null;
@@ -10089,7 +10104,7 @@ app.post('/api/caravanas/mover', requireCompany, requirePermission('stock:update
       ids: z.array(z.string()).min(1),
       campoDestino: z.string().nullable().optional(),
       loteDestino: z.string().nullable().optional(),
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
     }).parse(req.body);
     const fecha = d.fecha || new Date();
     const caravanas = await prisma.caravana.findMany({ where: { id: { in: d.ids }, companyId: req.companyId, estado: 'activa' } });
@@ -11050,7 +11065,7 @@ app.get('/api/secados', requireCompany, requirePermission('stock:read'), async (
 app.post('/api/secados', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
     const d = z.object({
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       productoOrigenId: z.string().min(1),
       productoDestinoId: z.string().min(1),
       depositoId: z.string().nullable().optional(),
@@ -11514,8 +11529,8 @@ const _regimenSchema = z.object({
   acumulaPeriodo: z.boolean().optional(),
   redondeo: z.enum(['2dec', 'entero']).optional().default('2dec'),
   sistema: z.string().nullable().optional(),
-  vigenciaDesde: z.coerce.date().nullable().optional(),
-  vigenciaHasta: z.coerce.date().nullable().optional(),
+  vigenciaDesde: zFecha.nullable().optional(),
+  vigenciaHasta: zFecha.nullable().optional(),
   activo: z.boolean().optional(),
   orden: z.number().int().nullable().optional(),
 });
@@ -11692,7 +11707,7 @@ app.post('/api/entregas-cerealera', requireCompany, requirePermission('stock:cre
       cantidad: z.number().positive(),
       depositoDestinoId: z.string(),
       depositoOrigenId: z.string().nullable().optional(),  // null = campo
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       remito: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
     });
@@ -11769,7 +11784,7 @@ app.get('/api/remitos-internos', requireCompany, requirePermission('stock:read')
 app.post('/api/remitos-internos', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
     const schema = z.object({
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       tipo: z.enum(['a_campo', 'entre_depositos']),
       depositoOrigenId: z.string().nullable().optional(),   // null = campo
       depositoDestinoId: z.string().nullable().optional(),
@@ -12203,7 +12218,7 @@ const retencionSchema = z.object({
   impuesto: z.enum(['ganancias', 'iva', 'iibb', 'suss', 'otro']),
   regimen: z.string().nullable().optional(),
   jurisdiccion: z.string().nullable().optional(),
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   contactoTipo: z.enum(['cliente', 'proveedor']).nullable().optional(),
   contactoId: z.string().nullable().optional(),
   contactoNombre: z.string().nullable().optional(),
@@ -12747,7 +12762,7 @@ app.post('/api/retenciones/ingresar', requireCompany, requirePermission('finanza
       impuesto: z.enum(['ganancias', 'iva', 'iibb', 'suss', 'otro']),
       periodo: z.string().min(6),
       jurisdiccion: z.string().nullable().optional(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       metodo: z.enum(['transferencia', 'efectivo']).optional().default('transferencia'),
       bancoCuentaId: z.string().nullable().optional(),
       cajaOrigen: z.string().nullable().optional(),
@@ -12843,7 +12858,7 @@ app.post('/api/retenciones/aplicar-credito', requireCompany, requirePermission('
       retencionId: z.string().min(1),
       importeAplicado: z.number().positive(),
       periodoDDJJ: z.string().min(6),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
@@ -13033,7 +13048,7 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
       productoId: z.string(),
       clienteId: z.string().nullable().optional(),
       contratoCerealId: z.string().nullable().optional(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       numero: z.string().nullable().optional(),
       kilosBrutos: z.number().nonnegative(),
       porcMerma: z.number().min(0).max(100).default(0),
@@ -13041,7 +13056,7 @@ app.post('/api/liquidaciones-cereal', requireCompany, requirePermission('ventas:
       alicuotaIva: z.number().min(0).max(100).default(0),
       conceptos: z.array(concSchema).default([]),
       deducciones: z.array(z.object({ concepto: z.string().min(1), importe: z.coerce.number().positive(), facturaCompraId: z.string().nullable().optional(), proveedorId: z.string().nullable().optional(), observaciones: z.string().nullable().optional() })).nullable().optional(),
-      fechaCobroEst: z.coerce.date().nullable().optional(),
+      fechaCobroEst: zFecha.nullable().optional(),
       observaciones: z.string().nullable().optional(),
       viajeIds: z.array(z.string()).nullable().optional(),
     });
@@ -13182,7 +13197,7 @@ app.post('/api/liquidaciones-cereal/:id/deducciones', requireCompany, requirePer
     const d = z.object({
       concepto: z.string().min(1),
       importe: z.coerce.number().positive(),
-      fecha: z.coerce.date().nullable().optional(),
+      fecha: zFecha.nullable().optional(),
       facturaCompraId: z.string().nullable().optional(),
       proveedorId: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
@@ -13274,11 +13289,11 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
     const schema = z.object({
       depositoId: z.string(), productoId: z.string(), clienteId: z.string().nullable().optional(),
       contratoCerealId: z.string().nullable().optional(),
-      fecha: z.coerce.date(), numero: z.string().nullable().optional(),
+      fecha: zFecha, numero: z.string().nullable().optional(),
       kilosBrutos: z.number().nonnegative(), porcMerma: z.number().min(0).max(100).default(0),
       precioPorTn: z.number().nonnegative(), conceptos: z.array(concSchema).default([]),
       deducciones: z.array(z.object({ concepto: z.string().min(1), importe: z.coerce.number().positive(), facturaCompraId: z.string().nullable().optional(), proveedorId: z.string().nullable().optional(), observaciones: z.string().nullable().optional() })).nullable().optional(),
-      fechaCobroEst: z.coerce.date().nullable().optional(), observaciones: z.string().nullable().optional(),
+      fechaCobroEst: zFecha.nullable().optional(), observaciones: z.string().nullable().optional(),
       viajeIds: z.array(z.string()).nullable().optional(),
     });
     const d = schema.parse(req.body);
@@ -13355,7 +13370,7 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
 const contratoCerealSchema = z.object({
   numeroInterno: z.string().nullable().optional(),
   numeroCorredor: z.string().nullable().optional(),
-  fecha: z.coerce.date().nullable().optional(),
+  fecha: zFecha.nullable().optional(),
   cosecha: z.string().nullable().optional(),
   productoId: z.string().nullable().optional(),
   cereal: z.string().nullable().optional(),
@@ -13381,8 +13396,8 @@ const contratoCerealSchema = z.object({
   pagoDias: z.coerce.number().int().nullable().optional(),
   porcParcial: z.coerce.number().nullable().optional(),
   porcFinal: z.coerce.number().nullable().optional(),
-  plazoEntregaDesde: z.coerce.date().nullable().optional(),
-  plazoEntregaHasta: z.coerce.date().nullable().optional(),
+  plazoEntregaDesde: zFecha.nullable().optional(),
+  plazoEntregaHasta: zFecha.nullable().optional(),
   reciboHasta: z.coerce.number().nullable().optional(),
   condiciones: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
@@ -13655,7 +13670,7 @@ app.get('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission('ve
 // el resumen + los IDs para poder listarla y editarla despues.
 // ============================================================
 const faenaSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   frigorifico: z.string().nullable().optional(),
   frigorificoCuit: z.string().nullable().optional(),
   tropa: z.string().nullable().optional(),
@@ -13674,7 +13689,7 @@ const faenaSchema = z.object({
   ivaFaenado: z.coerce.number().nullable().optional(),
   facturaPv: z.coerce.number().int().nullable().optional(),
   facturaNro: z.coerce.number().int().nullable().optional(),
-  fechaFactura: z.coerce.date().nullable().optional(),
+  fechaFactura: zFecha.nullable().optional(),
   depositoId: z.string().nullable().optional(),
   liquidacionId: z.string().nullable().optional(),
   facturaCompraId: z.string().nullable().optional(),
@@ -13729,10 +13744,10 @@ app.post('/api/liquidaciones-hacienda', requireCompany, requirePermission('venta
     const schema = z.object({
       campoId: z.string(),
       clienteId: z.string().nullable().optional(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       numero: z.string().nullable().optional(),
       cae: z.string().nullable().optional(),
-      caeVto: z.coerce.date().nullable().optional(),
+      caeVto: zFecha.nullable().optional(),
       emisorNombre: z.string().nullable().optional(),
       emisorCuit: z.string().nullable().optional(),
       receptorNombre: z.string().nullable().optional(),
@@ -13740,7 +13755,7 @@ app.post('/api/liquidaciones-hacienda', requireCompany, requirePermission('venta
       gastosTotal: z.coerce.number().default(0),
       ivaGastos: z.coerce.number().default(0),
       neto: z.coerce.number(),
-      fechaCobroEst: z.coerce.date().nullable().optional(),
+      fechaCobroEst: zFecha.nullable().optional(),
       descontarSenasa: z.boolean().default(true),
       observaciones: z.string().nullable().optional(),
       renglones: z.array(rengSchema).min(1),
@@ -13855,12 +13870,12 @@ app.put('/api/liquidaciones-hacienda/:id', requireCompany, requirePermission('ve
       iva: z.coerce.number().nonnegative().nullable().optional(),
     });
     const schema = z.object({
-      campoId: z.string(), clienteId: z.string().nullable().optional(), fecha: z.coerce.date(),
-      numero: z.string().nullable().optional(), cae: z.string().nullable().optional(), caeVto: z.coerce.date().nullable().optional(),
+      campoId: z.string(), clienteId: z.string().nullable().optional(), fecha: zFecha,
+      numero: z.string().nullable().optional(), cae: z.string().nullable().optional(), caeVto: zFecha.nullable().optional(),
       emisorNombre: z.string().nullable().optional(), emisorCuit: z.string().nullable().optional(),
       receptorNombre: z.string().nullable().optional(), receptorCuit: z.string().nullable().optional(),
       gastosTotal: z.coerce.number().default(0), ivaGastos: z.coerce.number().default(0), neto: z.coerce.number(),
-      fechaCobroEst: z.coerce.date().nullable().optional(), descontarSenasa: z.boolean().default(true),
+      fechaCobroEst: zFecha.nullable().optional(), descontarSenasa: z.boolean().default(true),
       observaciones: z.string().nullable().optional(), renglones: z.array(rengSchema).min(1),
     });
     const d = schema.parse(req.body);
@@ -14132,7 +14147,7 @@ app.get('/api/guias-hacienda/:id', requireCompany, requirePermission('stock:read
 
 const _guiaSchema = z.object({
   campoId: z.string().nullable().optional(),
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   sentido: z.enum(['ingreso', 'egreso']),
   motivo: z.enum(['compra', 'venta', 'faena', 'invernada', 'traslado', 'otro']),
   numeroDte: z.string().nullable().optional(),
@@ -14344,7 +14359,7 @@ app.post('/api/guias-hacienda/:id/pagos', requireCompany, requirePermission('sto
     const cur = await prisma.guiaHacienda.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!cur) return res.status(404).json({ ok: false, error: 'Guía no encontrada' });
     const schema = z.object({
-      fecha: z.coerce.date(), monto: z.coerce.number().positive(),
+      fecha: zFecha, monto: z.coerce.number().positive(),
       metodo: z.string().default('efectivo'), referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       cajaDestino: z.string().nullable().optional(),
@@ -14381,7 +14396,7 @@ app.put('/api/guias-hacienda/:id/pagos/:pagoId', requireCompany, requirePermissi
     const pago = await prisma.guiaHaciendaPago.findFirst({ where: { id: req.params.pagoId, guiaId: cur.id } });
     if (!pago) return res.status(404).json({ ok: false, error: 'Pago no encontrado' });
     const schema = z.object({
-      fecha: z.coerce.date(), monto: z.coerce.number().positive(),
+      fecha: zFecha, monto: z.coerce.number().positive(),
       metodo: z.string().default('efectivo'), referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
       cajaDestino: z.string().nullable().optional(),
@@ -14464,9 +14479,9 @@ app.post('/api/guias-hacienda/:id/vincular-liquidacion', requireCompany, require
     if (!cur.campoId) return res.status(400).json({ ok: false, error: 'La guía no tiene campo asignado.' });
     // El body puede traer overrides reales (kilos/precios/retenciones) y datos del comprobante
     const schema = z.object({
-      numero: z.string().nullable().optional(), fecha: z.coerce.date().nullable().optional(),
+      numero: z.string().nullable().optional(), fecha: zFecha.nullable().optional(),
       neto: z.coerce.number().nullable().optional(), gastosTotal: z.coerce.number().default(0), ivaGastos: z.coerce.number().default(0),
-      fechaCobroEst: z.coerce.date().nullable().optional(), observaciones: z.string().nullable().optional(),
+      fechaCobroEst: zFecha.nullable().optional(), observaciones: z.string().nullable().optional(),
       renglones: z.array(z.object({
         categoria: z.string().min(1), especie: z.string().nullable().optional(),
         cabezas: z.coerce.number().int().nonnegative(), kilos: z.coerce.number().nonnegative().default(0),
@@ -14613,7 +14628,7 @@ const animalSchema = z.object({
   especie: z.string().optional(),
   nombre: z.string().min(1),
   sexo: z.string().nullable().optional(),
-  fechaNac: z.coerce.date().nullable().optional(),
+  fechaNac: zFecha.nullable().optional(),
   pelaje: z.string().nullable().optional(),
   raza: z.string().nullable().optional(),
   categoria: z.string().nullable().optional(),
@@ -14633,7 +14648,7 @@ const animalSchema = z.object({
   ubicacion: z.string().nullable().optional(),
   rodeoId: z.string().nullable().optional(),
   moneda: z.string().nullable().optional(),
-  fechaIngreso: z.coerce.date().nullable().optional(),
+  fechaIngreso: zFecha.nullable().optional(),
   costoIngreso: z.number().nullable().optional(),
   origen: z.string().nullable().optional(),
   valuacion: z.number().nullable().optional(),
@@ -14644,7 +14659,7 @@ const animalSchema = z.object({
   foto2: z.string().nullable().optional(),
 });
 const animalEventoSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   tipo: z.string().min(1),
   concepto: z.string().nullable().optional(),
   costo: z.number().nullable().optional(),
@@ -14653,7 +14668,7 @@ const animalEventoSchema = z.object({
   productoId: z.string().nullable().optional(),
   cantidad: z.number().nullable().optional(),
   peso: z.number().nullable().optional(),        // kg de un pesaje individual
-  proximaFecha: z.coerce.date().nullable().optional(),
+  proximaFecha: zFecha.nullable().optional(),
   aCobrar: z.boolean().optional(),
   datos: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
@@ -17244,7 +17259,7 @@ app.get('/api/creditos/:id', requireCompany, requirePermission('finanzas:read'),
 // Esquema de una cuota cargada a mano (plan manual).
 const _cuotaManualSchema = z.object({
   numero: z.number().int().positive(),
-  vencimiento: z.coerce.date(),
+  vencimiento: zFecha,
   importeCapital: z.number().nullable().optional(),
   importeInteres: z.number().nullable().optional(),
   importeOtros: z.number().nullable().optional(),
@@ -17260,7 +17275,7 @@ app.post('/api/creditos', requireCompany, requirePermission('finanzas:create'), 
       tasaAnual: z.number().nullable().optional(),
       cantCuotas: z.number().int().positive(),
       periodicidad: z.enum(['mensual', 'bimestral', 'trimestral', 'semestral', 'anual']).default('mensual'),
-      fechaPrimera: z.coerce.date(),
+      fechaPrimera: zFecha,
       destino: z.string().nullable().optional(),
       moneda: z.string().default('ARS'),
       cotizacionAlta: z.number().positive().nullable().optional(),
@@ -17337,7 +17352,7 @@ app.put('/api/creditos/:id', requireCompany, requirePermission('finanzas:update'
       tasaAnual: z.number().nullable().optional(),
       cantCuotas: z.number().int().positive().optional(),
       periodicidad: z.enum(['mensual', 'bimestral', 'trimestral', 'semestral', 'anual']).optional(),
-      fechaPrimera: z.coerce.date().optional(),
+      fechaPrimera: zFecha.optional(),
       destino: z.string().nullable().optional(),
       estado: z.enum(['activo', 'cancelado', 'refinanciado']).optional(),
       moneda: z.string().optional(),
@@ -17435,7 +17450,7 @@ app.post('/api/creditos/:id/marcar-pagadas-hasta', requireCompany, requirePermis
     if (!credito) return res.status(404).json({ ok: false, error: 'Crédito no encontrado' });
     const d = z.object({
       numero: z.coerce.number().int().min(0),
-      fechaPago: z.coerce.date().optional(),
+      fechaPago: zFecha.optional(),
       medioPago: z.string().optional(),
     }).parse(req.body || {});
     const r = await prisma.cuotaCredito.updateMany({
@@ -17453,7 +17468,7 @@ app.put('/api/creditos/:credId/cuotas/:cuotaId/pagar', requireCompany, requirePe
     const cuota = await prisma.cuotaCredito.findFirst({ where: { id: req.params.cuotaId, creditoId: req.params.credId } });
     if (!cuota) return res.status(404).json({ ok: false, error: 'Cuota no encontrada' });
     const schema = z.object({
-      fechaPago: z.coerce.date().optional(),
+      fechaPago: zFecha.optional(),
       medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'debito_automatico', 'tarjeta']).optional(),
       referencia: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
@@ -17574,7 +17589,7 @@ app.get('/api/creditos/:id/entregas', requireCompany, requirePermission('finanza
 app.post('/api/creditos/:id/entregas', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
   try {
     const schema = z.object({
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       cantidad: z.number().positive(),        // toneladas
       depositoId: z.string().nullable().optional(),
       productoId: z.string().nullable().optional(),
@@ -17736,7 +17751,7 @@ app.put('/api/arrendamientos/:id/cuotas/:idx/pagar', requireCompany, requirePerm
     if (!cuotas[idx]) return res.status(404).json({ ok: false, error: 'Cuota no encontrada' });
     if (cuotas[idx].pagado) return res.status(400).json({ ok: false, error: 'La cuota ya está pagada' });
     const schema = z.object({
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
       metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta']),
       monto: z.number().positive(),
       caja: z.string().nullable().optional(),
@@ -17783,7 +17798,7 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
       esServicio: z.boolean().optional(),        // labor realizada a un tercero (facturable)
       clienteId: z.string().nullable().optional(),
       tipo: z.string().min(1),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       hectareasAplicadas: z.number().nullable().optional(),
       costo: z.number().nullable().optional(),
       monedaCosto: z.string().nullable().optional(),
@@ -18029,8 +18044,8 @@ const otRenglonSchema = z.object({
 });
 const otSchema = z.object({
   puntoVenta: z.number().int().optional().default(1),
-  fecha: z.coerce.date(),
-  fechaLabor: z.coerce.date().nullable().optional(),
+  fecha: zFecha,
+  fechaLabor: zFecha.nullable().optional(),
   contratistaId: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
   descuentaStock: z.boolean().optional().default(false),
@@ -18155,7 +18170,7 @@ async function _otEnsureCampanaSociedadTx(tx, link, soc, cultivoFallback) {
 }
 app.post('/api/ordenes-trabajo/:id/realizar', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
   try {
-    const body = z.object({ fechaRealizada: z.coerce.date().nullable().optional(), descontarStock: z.boolean().optional(), depositoId: z.string().nullable().optional() }).parse(req.body || {});
+    const body = z.object({ fechaRealizada: zFecha.nullable().optional(), descontarStock: z.boolean().optional(), depositoId: z.string().nullable().optional() }).parse(req.body || {});
     const o = await prisma.ordenTrabajo.findFirst({ where: { id: req.params.id, companyId: req.companyId }, include: _otInclude });
     if (!o) return res.status(404).json({ ok: false, error: 'Orden no encontrada' });
     if (o.estado === 'anulada') return res.status(400).json({ ok: false, error: 'La orden está anulada.' });
@@ -18845,8 +18860,8 @@ const rodeoSchema = z.object({
   loteId: z.string().nullable().optional(),
   corral: z.string().nullable().optional(),
   categoria: z.string().nullable().optional(),
-  fechaInicio: z.coerce.date().nullable().optional(),
-  fechaFin: z.coerce.date().nullable().optional(),
+  fechaInicio: zFecha.nullable().optional(),
+  fechaFin: zFecha.nullable().optional(),
   estado: z.enum(['activo','cerrado']).optional(),
   cabezasInicial: z.coerce.number().int().nullable().optional(),
   kgInicial: z.coerce.number().nullable().optional(),
@@ -18857,7 +18872,7 @@ const rodeoSchema = z.object({
   objetivoGpd: z.coerce.number().nullable().optional(),
 });
 const rodeoEventoSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   tipo: z.enum(['ingreso','nacimiento','pesaje','venta','baja','alimentacion','sanidad','labor','pension','capitalizacion','servicio','otro']),
   concepto: z.string().nullable().optional(),
   cabezas: z.coerce.number().int().nullable().optional(),
@@ -19171,7 +19186,7 @@ app.put('/api/rodeos/:id/eventos/:eid', requireCompany, requirePermission('stock
     const ev = await prisma.rodeoEvento.findFirst({ where: { id: req.params.eid, rodeoId: req.params.id, companyId: req.companyId } });
     if (!ev) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const d = z.object({
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
       concepto: z.string().nullable().optional(),
       cabezas: z.coerce.number().int().nullable().optional(),
       kg: z.coerce.number().nullable().optional(),
@@ -19233,7 +19248,7 @@ app.get('/api/ordenes-empaque/:id', requireCompany, requirePermission('stock:rea
 app.post('/api/ordenes-empaque', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
     const d = z.object({
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       campanaId: z.string().nullable().optional(),
       productoGranelId: z.string().min(1),
       kgEntrada: z.coerce.number().positive(),
@@ -19419,7 +19434,7 @@ app.post('/api/rodeos/:id/imputar-forrajera', requireCompany, requirePermission(
     const schema = z.object({
       campanaId: z.string().min(1),
       porcentaje: z.coerce.number().min(0).max(100).default(100),
-      fecha: z.coerce.date().optional(),
+      fecha: zFecha.optional(),
       monto: z.coerce.number().nullable().optional(), // override manual opcional
       concepto: z.string().nullable().optional(),
     });
@@ -19500,7 +19515,7 @@ app.post('/api/rodeos/:id/caravanas-importar', requireCompany, requirePermission
         rfid: z.string().min(1),
         visual: z.string().nullable().optional(),
         peso: z.coerce.number().nullable().optional(),
-        fecha: z.coerce.date().nullable().optional(),
+        fecha: zFecha.nullable().optional(),
       })).min(1),
       especie: z.string().optional(),
       categoria: z.string().nullable().optional(),
@@ -19563,7 +19578,7 @@ app.post('/api/pesaje-rfid', requireCompany, requirePermission('stock:update'), 
         rfid: z.string().min(1),
         visual: z.string().nullable().optional(),
         peso: z.coerce.number(),
-        fecha: z.coerce.date().nullable().optional(),
+        fecha: zFecha.nullable().optional(),
       })).min(1),
       rodeoId: z.string().nullable().optional(),
       registrarEvento: z.boolean().optional(),
@@ -19623,7 +19638,7 @@ app.post('/api/pesaje-rfid', requireCompany, requirePermission('stock:update'), 
 // C) Resolver faltantes: marcar extraviado/muerto (baja) o dejar pendiente
 app.post('/api/animales/marcar-faltantes', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
   try {
-    const d = z.object({ ids: z.array(z.string()).min(1), accion: z.enum(['extraviado', 'muerto', 'pendiente']), fecha: z.coerce.date().nullable().optional() }).parse(req.body);
+    const d = z.object({ ids: z.array(z.string()).min(1), accion: z.enum(['extraviado', 'muerto', 'pendiente']), fecha: zFecha.nullable().optional() }).parse(req.body);
     if (d.accion === 'pendiente') return res.json({ ok: true, actualizados: 0 });
     const fecha = d.fecha ? new Date(d.fecha) : new Date();
     const nota = d.accion === 'muerto' ? 'Baja por mortandad (detectado en pesaje por caravana)' : 'Baja por extravío (no leído en pesaje por caravana)';
@@ -19644,7 +19659,7 @@ app.post('/api/animales/marcar-faltantes', requireCompany, requirePermission('st
 // e ingresan al galpon con su costo unitario, o pastoreo directo.
 // ============================================================
 const corteForrajeSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   trabajo: z.enum(['corte','hilerado','enrollado','enfardado','pastoreo','otro']).optional(),
   destino: z.enum(['galpon','pastoreo']).optional(),
   cantidad: z.coerce.number().nullable().optional(),
@@ -19779,7 +19794,7 @@ const bancoCuentaSchema = z.object({
   alias: z.string().nullable().optional(),
   titular: z.string().nullable().optional(),
   saldoInicial: z.number().optional(),
-  fechaInicial: z.coerce.date().nullable().optional(),
+  fechaInicial: zFecha.nullable().optional(),
   esBilleteraVirtual: z.boolean().optional(),
   observaciones: z.string().nullable().optional(),
   activo: z.boolean().optional(),
@@ -19899,7 +19914,7 @@ app.get('/api/banco-movimientos', requireCompany, requirePermission('finanzas:re
 
 const bancoMovSchema = z.object({
   cuentaId: z.string(),
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   tipo: z.enum(BANCO_TIPOS_TODOS),
   concepto: z.string().min(1),
   monto: z.number().positive(),
@@ -19976,7 +19991,7 @@ app.post('/api/banco-cuentas/cambio-divisas', requireCompany, requirePermission(
       montoUsd: z.number().positive(),
       tipoCambio: z.number().positive(),
       montoArs: z.number().positive().nullable().optional(),  // si no viene, = montoUsd × tipoCambio
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       observaciones: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body);
@@ -20032,7 +20047,7 @@ app.post('/api/banco-cuentas/cambio-divisas', requireCompany, requirePermission(
 app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const schema = z.object({
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       tipo: z.enum(['ingreso', 'egreso', 'ajuste_in', 'ajuste_out']),
       concepto: z.string().min(1),
       categoria: z.string().nullable().optional(),
@@ -20273,14 +20288,14 @@ const activoFijoSchema = z.object({
   modelo: z.string().nullable().optional(),
   anio: z.coerce.number().int().nullable().optional(),
   identificacion: z.string().nullable().optional(),
-  fechaAlta: z.coerce.date().nullable().optional(),
+  fechaAlta: zFecha.nullable().optional(),
   valorOrigen: z.coerce.number().nullable().optional(),
   moneda: z.enum(['ARS','USD']).optional(),
   amortiza: z.boolean().optional(),
   vidaUtilAnios: z.coerce.number().int().nullable().optional(),
   valorResidual: z.coerce.number().nullable().optional(),
   estado: z.enum(['activo','baja','vendido']).optional(),
-  fechaBaja: z.coerce.date().nullable().optional(),
+  fechaBaja: zFecha.nullable().optional(),
   valorVenta: z.coerce.number().nullable().optional(),
   controlaUso: z.boolean().optional(),
   unidadUso: z.enum(['km','horas']).nullable().optional(),
@@ -20290,13 +20305,13 @@ const activoFijoSchema = z.object({
   aseguradora: z.string().nullable().optional(),
   seguroTipo: z.string().nullable().optional(),
   polizaNumero: z.string().nullable().optional(),
-  polizaDesde: z.coerce.date().nullable().optional(),
-  polizaHasta: z.coerce.date().nullable().optional(),
+  polizaDesde: zFecha.nullable().optional(),
+  polizaHasta: zFecha.nullable().optional(),
   seguroContacto: z.string().nullable().optional(),
   observaciones: z.string().nullable().optional(),
 });
 const mantenimientoSchema = z.object({
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   tipo: z.string().optional(),
   usoLectura: z.coerce.number().nullable().optional(),
   descripcion: z.string().nullable().optional(),
@@ -20305,7 +20320,7 @@ const mantenimientoSchema = z.object({
   costo: z.coerce.number().nullable().optional(),
   moneda: z.enum(['ARS','USD']).optional(),
   proximoUso: z.coerce.number().nullable().optional(),
-  proximaFecha: z.coerce.date().nullable().optional(),
+  proximaFecha: zFecha.nullable().optional(),
 });
 
 // Valor neto contable de un activo a una fecha (amortizacion lineal).
@@ -20921,6 +20936,17 @@ function _excelToMatrix(buffer) {
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
   return rows.map(r => (r || []).map(c => String(c == null ? '' : c)));
 }
+// Lee TODAS las hojas del Excel como matrices. Algunos bancos (ej. BBVA) traen dos
+// hojas: "Movimientos del Día" y "Movimientos Históricos"; según cómo se exporte, los
+// movimientos quedan en una u otra. Devolvemos todas para no perder ninguno.
+function _excelTodasLasHojas(buffer) {
+  const wb = XLSX.read(buffer, { type: 'buffer', raw: false, cellDates: false });
+  return (wb.SheetNames || []).map(name => {
+    const ws = wb.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+    return rows.map(r => (r || []).map(c => String(c == null ? '' : c)));
+  });
+}
 
 function _matrixToMovs(matrix) {
   if (!Array.isArray(matrix) || !matrix.length) return [];
@@ -20993,18 +21019,34 @@ app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermissi
       movs = _parseResumenBancarioTexto(texto); fuente = 'texto';
       if ((!movs || !movs.length) && ia.enabled) { const m2 = await _iaParseResumenBancario(texto, ia); if (m2 && m2.length) { movs = m2; fuente = 'IA'; } }
     } else {
-      // Excel o CSV → matriz.
-      let matrix = [];
-      if (esCsv && !esXlsx) matrix = _csvToMatrix(buffer.toString('utf8'));
+      // Excel o CSV → matriz. En Excel leemos TODAS las hojas (BBVA trae "Día" e
+      // "Históricos") y combinamos los movimientos, deduplicando por fecha+importe+concepto.
+      let hojas = [];
+      if (esCsv && !esXlsx) { hojas = [_csvToMatrix(buffer.toString('utf8'))]; }
       else {
-        // SheetJS lee .xls binario viejo, .xlsx y hasta CSV; si falla, probamos el parser propio.
-        try { matrix = _excelToMatrix(buffer); }
-        catch (_) { try { matrix = _xlsxToMatrix(buffer); } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el Excel/CSV: ' + e.message }); } }
+        try { hojas = _excelTodasLasHojas(buffer); }
+        catch (_) { try { hojas = [_xlsxToMatrix(buffer)]; } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el Excel/CSV: ' + e.message }); } }
       }
-      if (!matrix.length) return res.status(422).json({ ok: false, error: 'El archivo no tiene datos legibles.' });
-      movs = _matrixToMovs(matrix); fuente = 'tabla';
+      hojas = (hojas || []).filter(m => Array.isArray(m) && m.length);
+      if (!hojas.length) return res.status(422).json({ ok: false, error: 'El archivo no tiene datos legibles.' });
+      // Combinar hojas deduplicando SOLO entre hojas (una hoja "Históricos" suele
+      // repetir lo que está en "Día"). Dentro de una misma hoja se respetan los
+      // movimientos idénticos (ej. dos comisiones iguales el mismo día): por eso nos
+      // quedamos con la MAYOR cantidad de cada movimiento vista en una sola hoja.
+      const globalByKey = {}; movs = [];
+      const _k = (m) => `${m.fecha}|${m.importe}|${(m.concepto || '').slice(0, 40)}`;
+      for (const matrix of hojas) {
+        const byKey = {};
+        for (const m of (_matrixToMovs(matrix) || [])) { (byKey[_k(m)] = byKey[_k(m)] || []).push(m); }
+        for (const k in byKey) {
+          const have = globalByKey[k] || 0, need = byKey[k].length;
+          for (let i = have; i < need; i++) movs.push(byKey[k][i]);
+          globalByKey[k] = Math.max(have, need);
+        }
+      }
+      fuente = 'tabla';
       if ((!movs || !movs.length) && ia.enabled) {
-        const texto = matrix.slice(0, 400).map(r => (r || []).join('\t')).join('\n');
+        const texto = hojas.flat().slice(0, 400).map(r => (r || []).join('\t')).join('\n');
         movs = await _iaParseResumenBancario(texto, ia); if (movs && movs.length) fuente = 'IA';
       }
     }
@@ -22167,7 +22209,7 @@ app.post('/api/liquidaciones-cereal/importar', requireCompany, requirePermission
       productoId: z.string().min(1),
       clienteId: z.string().nullable().optional(),
       clienteNuevo: z.object({ razonSocial: z.string().min(1), cuit: z.string().nullable().optional() }).nullable().optional(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       numero: z.string().nullable().optional(),
       cantidadKg: z.number().positive(),
       precioKg: z.number().nonnegative().nullable().optional(),
@@ -22766,7 +22808,7 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
       })).optional().default([]),
       metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'intercompany', 'cereal', 'producto', 'externo', 'tarjeta']),
       monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo, sin plata)
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       cajaOrigen: z.string().nullable().optional(),
       chequeId: z.string().nullable().optional(),
       // Cheque PROPIO nuevo cargado en la misma pantalla del pago (sin darlo de
@@ -22776,8 +22818,8 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
         banco: z.string().nullable().optional(),
         cuenta: z.string().nullable().optional(),
         nroCheque: z.string().min(1),
-        fechaEmision: z.coerce.date().nullable().optional(),
-        fechaPago: z.coerce.date(),
+        fechaEmision: zFecha.nullable().optional(),
+        fechaPago: zFecha,
         monto: z.number().nullable().optional(),
         librador: z.string().nullable().optional(),
       }).nullable().optional(),
@@ -22818,8 +22860,8 @@ app.post('/api/pagos-proveedores', requireCompany, requirePermission('finanzas:c
           banco: z.string().nullable().optional(),
           cuenta: z.string().nullable().optional(),
           nroCheque: z.string().min(1),
-          fechaEmision: z.coerce.date().nullable().optional(),
-          fechaPago: z.coerce.date(),
+          fechaEmision: zFecha.nullable().optional(),
+          fechaPago: zFecha,
           monto: z.number().nullable().optional(),
           librador: z.string().nullable().optional(),
         }).nullable().optional(),
@@ -23259,7 +23301,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
       })).optional().default([]),
       metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'externo', 'tarjeta', 'intercompany']),
       monto: z.number().nonnegative(),   // 0 = solo vinculación (NC cubre todo)
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       cajaDestino: z.string().nullable().optional(),
       chequeId: z.string().nullable().optional(),  // cheque de terceros YA cargado en cartera
       // Cheque de terceros NUEVO recibido en la misma pantalla del cobro (sin darlo de
@@ -23269,8 +23311,8 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
         banco: z.string().nullable().optional(),
         cuenta: z.string().nullable().optional(),
         nroCheque: z.string().min(1),
-        fechaEmision: z.coerce.date().nullable().optional(),
-        fechaPago: z.coerce.date(),
+        fechaEmision: zFecha.nullable().optional(),
+        fechaPago: zFecha,
         monto: z.number().nullable().optional(),
         librador: z.string().nullable().optional(),
         cuitTitular: z.string().nullable().optional(),
@@ -23290,8 +23332,8 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
           banco: z.string().nullable().optional(),
           cuenta: z.string().nullable().optional(),
           nroCheque: z.string().min(1),
-          fechaEmision: z.coerce.date().nullable().optional(),
-          fechaPago: z.coerce.date(),
+          fechaEmision: zFecha.nullable().optional(),
+          fechaPago: zFecha,
           monto: z.number().nullable().optional(),
           librador: z.string().nullable().optional(),
           cuitTitular: z.string().nullable().optional(),
@@ -23821,7 +23863,7 @@ app.post('/api/compensaciones', requireCompany, requirePermission('finanzas:crea
       clienteId: z.string().min(1),
       proveedorId: z.string().min(1),
       monto: z.number().positive(),
-      fecha: z.coerce.date(),
+      fecha: zFecha,
       observaciones: z.string().nullable().optional(),
     }).parse(req.body);
     const cli = await prisma.cliente.findFirst({ where: { id: d.clienteId, companyId: req.companyId } });
@@ -26549,7 +26591,7 @@ app.get('/api/recordatorios/todas-empresas', async (req, res, next) => {
 const recordatorioSchema = z.object({
   titulo: z.string().min(1),
   descripcion: z.string().nullable().optional(),
-  fecha: z.coerce.date(),
+  fecha: zFecha,
   categoria: z.enum(['vacunacion','credito','vencimiento','campania','impuesto','evento','otro']).optional(),
   prioridad: z.enum(['alta','media','baja']).optional(),
   avisarDiasAntes: z.number().int().min(0).max(365).optional(),
