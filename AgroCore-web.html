@@ -3074,6 +3074,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
+      titulo:'🔄 v2.367.0 — Anular/borrar factura de abono devuelve la cuota a pendiente',
+      desc:'Cuando una factura estaba vinculada a una <b>cuota de abono</b> (Clientes → Abonos) y la <b>anulabas o borrabas</b>, la cuota del período quedaba como “sin generar” y no volvía a aparecer como <b>pendiente de facturar</b>. Ahora, al anular o eliminar esa factura, AgroCore <b>regenera automáticamente la cuota del período</b> y vuelve a quedar lista para facturar de nuevo.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/11/2026',
       titulo:'🧾 v2.366.0 — Factura electrónica REAL con ARCA (CAE de verdad)',
       desc:'Hasta ahora, al autorizar una factura, AgroCore generaba un <b>CAE simulado</b> (no válido) y la factura <b>no aparecía en ARCA</b>. Ahora, si la empresa tiene <b>ARCA configurado</b>, AgroCore <b>le pide el CAE real a ARCA (WSFE)</b> al autorizar: toma el <b>número que sigue</b> directo de ARCA, envía los importes e IVA, y guarda el <b>CAE verdadero</b> con su vencimiento. La factura queda <b>registrada en ARCA</b> (la ves en “Mis Comprobantes”). Soporta Factura/NC/ND <b>A, B y C</b> en pesos o dólares. Si ARCA rechaza algo, <b>no crea la factura</b> y te muestra el motivo exacto (así nunca queda un CAE trucho). Las empresas <b>sin ARCA</b> (informales) siguen con comprobante interno simulado.<br><b>Ojo:</b> si ya tenías una factura con CAE simulado (ej. la 00000023), <b>anulala y borrala</b>: su número lo va a tomar ARCA al emitir la real.' },

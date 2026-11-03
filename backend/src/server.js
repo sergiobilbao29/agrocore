@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.366.0';
+const AGROCORE_VERSION = '2.367.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6540,6 +6540,12 @@ app.post('/api/facturas/:id/anular', requireCompany, requirePermission('ventas:u
       await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FAC', facturaId: req.params.id });
       return tx.factura.update({ where: { id: req.params.id }, data: { estado: 'anulada' } });
     });
+    // Si era la factura de un abono, al anularla regeneramos la cuota del período
+    // para que el abono vuelva a figurar como pendiente (y no quede "sin generar").
+    if (existing.suscripcionId && existing.abonoPeriodo) {
+      const sus = await prisma.suscripcion.findFirst({ where: { id: existing.suscripcionId, companyId: req.companyId } });
+      if (sus) await _generarCuotaAbono(req.companyId, sus, existing.abonoPeriodo).catch(() => {});
+    }
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
@@ -6564,6 +6570,12 @@ app.delete('/api/facturas/:id', requireCompany, requirePermission('ventas:update
       await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, referencia: `FACCOB-${req.params.id}` } });
       await tx.factura.delete({ where: { id: req.params.id } }); // items caen por onDelete: Cascade
     });
+    // Si era la factura de un abono, regeneramos la cuota del período para que el
+    // abono vuelva a quedar pendiente (y no "sin generar") tras borrar la factura.
+    if (f.suscripcionId && f.abonoPeriodo) {
+      const sus = await prisma.suscripcion.findFirst({ where: { id: f.suscripcionId, companyId: req.companyId } });
+      if (sus) await _generarCuotaAbono(req.companyId, sus, f.abonoPeriodo).catch(() => {});
+    }
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
