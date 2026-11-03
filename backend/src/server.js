@@ -7,6 +7,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { z, ZodError } from 'zod';
 import { PrismaClient } from '@prisma/client';
+import https from 'node:https';
 
 // === Fecha robusta a zona horaria (reemplaza a z.coerce.date() en todo el sistema) ===
 // Una fecha "sólo día" (YYYY-MM-DD) se guarda al MEDIODÍA local, no a medianoche. Así
@@ -83,7 +84,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.362.0';
+const AGROCORE_VERSION = '2.363.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3087,6 +3088,30 @@ function _arcaNetErr(e, url) {
   const detalle = MAP[code] || (cau && cau.message) || (e && e.message) || 'error de red';
   return `${detalle}${code ? ' ['+code+']' : ''} al conectar con ${host}. El certificado puede estar OK; esto es un problema de red/salida del servidor hacia ARCA.`;
 }
+// Los servidores de ARCA (servicios1.afip.gov.ar, serviciosjava, etc.) todavía negocian
+// Diffie-Hellman de 1024 bits. El OpenSSL moderno de Node lo rechaza por defecto
+// (SECLEVEL 2) con "dh key too small". Bajamos el nivel de seguridad SOLO para las
+// llamadas a ARCA (SECLEVEL=1 permite DH de 1024). El fetch global (undici) no acepta
+// un agente TLS propio, así que usamos https.request con un Agent configurado.
+const _arcaAgent = new https.Agent({ keepAlive: false, ciphers: 'DEFAULT@SECLEVEL=1', minVersion: 'TLSv1.2' });
+function _arcaSoapPost(urlStr, { headers = {}, body = '', timeoutMs = 20000 } = {}) {
+  return new Promise((resolve, reject) => {
+    let u; try { u = new URL(urlStr); } catch (e) { return reject(e); }
+    const data = Buffer.from(body || '', 'utf8');
+    const req = https.request({
+      protocol: u.protocol, hostname: u.hostname, port: u.port || 443,
+      path: u.pathname + u.search, method: 'POST', agent: _arcaAgent,
+      headers: { ...headers, 'Content-Length': data.length },
+    }, (resp) => {
+      const chunks = [];
+      resp.on('data', (c) => chunks.push(c));
+      resp.on('end', () => resolve({ ok: resp.statusCode >= 200 && resp.statusCode < 300, status: resp.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })));
+    req.write(data); req.end();
+  });
+}
 // Cache de Tickets de Acceso (TA) por (companyId, modo, service). TTL ~11h.
 const _arcaTaCache = new Map();
 
@@ -3160,13 +3185,11 @@ async function _arcaLoginWsaa(cmsBase64, modo) {
 </soapenv:Envelope>`;
   let res, xml;
   try {
-    res = await fetch(_arcaUrl('wsaa', modo), {
-      method: 'POST',
+    res = await _arcaSoapPost(_arcaUrl('wsaa', modo), {
       headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '' },
       body: envelope,
-      signal: AbortSignal.timeout(20000),
     });
-    xml = await res.text();
+    xml = res.text;
   } catch (e) {
     throw new Error('No se pudo conectar a WSAA: ' + _arcaNetErr(e, _arcaUrl('wsaa', modo)));
   }
@@ -3210,13 +3233,11 @@ async function _arcaWsfeDummy(modo) {
 </soap:Envelope>`;
   let res, xml;
   try {
-    res = await fetch(_arcaUrl('wsfe', modo), {
-      method: 'POST',
+    res = await _arcaSoapPost(_arcaUrl('wsfe', modo), {
       headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://ar.gov.afip.dif.FEV1/FEDummy' },
       body: envelope,
-      signal: AbortSignal.timeout(20000),
     });
-    xml = await res.text();
+    xml = res.text;
   } catch (e) {
     throw new Error('No se pudo conectar a WSFE: ' + _arcaNetErr(e, _arcaUrl('wsfe', modo)));
   }
@@ -3250,13 +3271,11 @@ async function _arcaConsultarCTG({ token, sign, cuit, ctgNumero, modo }) {
 </soapenv:Envelope>`;
   let res, xml;
   try {
-    res = await fetch(_arcaUrl('wsctg', modo), {
-      method: 'POST',
+    res = await _arcaSoapPost(_arcaUrl('wsctg', modo), {
       headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '' },
       body: envelope,
-      signal: AbortSignal.timeout(20000),
     });
-    xml = await res.text();
+    xml = res.text;
   } catch (e) {
     throw new Error('No se pudo conectar a WSCTG: ' + _arcaNetErr(e, _arcaUrl('wsctg', modo)));
   }
@@ -26839,15 +26858,14 @@ async function _arcaWsCpeCall({ companyId, modo, operacion, bodyXmlInner }) {
 </soapenv:Envelope>`;
   let res, xml;
   try {
-    res = await fetch(_arcaUrl('wscpe', modo), {
-      method: 'POST',
+    res = await _arcaSoapPost(_arcaUrl('wscpe', modo), {
       headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '' },
       body: envelope,
     });
-    xml = await res.text();
+    xml = res.text;
   } catch (e) {
-    if (modo === 'homo') return { __mock: true, __mockReason: 'WSCPE conn: ' + e.message };
-    throw new Error('No se pudo conectar a WSCPE: ' + e.message);
+    if (modo === 'homo') return { __mock: true, __mockReason: 'WSCPE conn: ' + _arcaNetErr(e, _arcaUrl('wscpe', modo)) };
+    throw new Error('No se pudo conectar a WSCPE: ' + _arcaNetErr(e, _arcaUrl('wscpe', modo)));
   }
   if (!res.ok) {
     const f = _arcaXmlGet(xml, 'faultstring') || xml.slice(0, 400);
