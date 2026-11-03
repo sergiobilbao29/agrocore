@@ -3075,6 +3075,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
+      titulo:'🧾 v2.364.0 — Emitir comprobante: ahora trae los clientes',
+      desc:'Al abrir <b>Emitir comprobante</b> directo desde <b>Abonos / Clientes</b> (botón Facturar) sin haber entrado antes a la página de <b>Clientes</b>, el selector de cliente mostraba sólo “<b>Consumidor final</b>”. Ahora el formulario <b>carga la lista de clientes</b> al abrirse, así podés elegir el cliente (y si venís de un abono, queda <b>preseleccionado</b> el del abono).' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
       titulo:'🏦 v2.363.0 — Conexión con ARCA arreglada (“dh key too small”)',
       desc:'Los servidores de ARCA (facturación, granos) todavía usan una <b>clave de seguridad TLS vieja</b> (Diffie-Hellman de 1024 bits) que las versiones nuevas de Node/OpenSSL <b>rechazaban</b> con el error “<i>dh key too small</i>”. Por eso <b>Probar conexión</b> y la facturación fallaban aunque el <b>certificado estuviera bien</b> y el servidor tuviera internet. Ahora AgroCore se conecta a ARCA <b>bajando el nivel de seguridad TLS sólo para esas llamadas</b> (nivel 1, que permite la clave de 1024 bits de AFIP), sin afectar el resto del sistema. Con esto <b>Probar conexión</b> debería dar <b>OK</b> y ya se puede <b>facturar y verificar cartas de porte</b>.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
@@ -15709,6 +15712,10 @@ async function factForm(prefill = null) {
   // guardar volvemos a esa pantalla. Si no, limpiamos la marca.
   state._abonoReturn = !!(prefill && prefill.suscripcionId);
   await cargarMonedas();
+  // Asegurar que los clientes estén en cache: si se entra directo a "Emitir comprobante"
+  // (ej. desde Abonos) sin pasar por la página Clientes, el cache estaría vacío y el
+  // selector solo mostraría "Consumidor final".
+  if (!state.cache.clientes) { try { state.cache.clientes = (await crudList('clientes')) || []; } catch { state.cache.clientes = []; } }
   const clientes = state.cache.clientes || [];
   const facturas = state.cache.facturas || [];
   const nextNro = (facturas[0]?.numero || 0) + 1;
