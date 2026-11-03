@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.365.0';
+const AGROCORE_VERSION = '2.366.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3273,6 +3273,183 @@ async function _arcaWsfeDummy(modo) {
     AuthServer: _arcaXmlGet(xml, 'AuthServer') || '?',
   };
 }
+
+// ===== WSFE: Facturación Electrónica (pedir CAE real a ARCA) =====
+// Mapa (clase, letra) -> código de comprobante AFIP (CbteTipo).
+const _AFIP_CBTE_TIPO = {
+  'factura:A': 1, 'factura:B': 6, 'factura:C': 11,
+  'nota_debito:A': 2, 'nota_debito:B': 7, 'nota_debito:C': 12,
+  'nota_credito:A': 3, 'nota_credito:B': 8, 'nota_credito:C': 13,
+};
+// Código de alícuota de IVA de AFIP según el %.
+function _afipIvaId(pct) {
+  const p = Number(pct) || 0;
+  if (Math.abs(p - 0) < 0.01) return 3;      // 0%
+  if (Math.abs(p - 10.5) < 0.2) return 4;    // 10,5%
+  if (Math.abs(p - 21) < 0.2) return 5;      // 21%
+  if (Math.abs(p - 27) < 0.2) return 6;      // 27%
+  if (Math.abs(p - 5) < 0.2) return 8;       // 5%
+  if (Math.abs(p - 2.5) < 0.2) return 9;     // 2,5%
+  return 5;
+}
+function _afipFecha(d) { // Date -> yyyymmdd
+  const x = new Date(d); const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, '0');
+  const dd = String(x.getDate()).padStart(2, '0');
+  return `${y}${m}${dd}`;
+}
+function _afipParseFecha(s) { // yyyymmdd -> Date (mediodía local, TZ-safe)
+  const m = String(s || '').match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (!m) return null;
+  return new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0);
+}
+// Llama a un método de WSFE con el sobre SOAP ya armado (incluye Auth). Devuelve el XML.
+async function _arcaWsfeCall(method, bodyInner, modo) {
+  const envelope = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ar="http://ar.gov.afip.dif.FEV1/">
+  <soap:Body><ar:${method}>${bodyInner}</ar:${method}></soap:Body>
+</soap:Envelope>`;
+  let res;
+  try {
+    res = await _arcaSoapPost(_arcaUrl('wsfe', modo), {
+      headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': `http://ar.gov.afip.dif.FEV1/${method}` },
+      body: envelope, timeoutMs: 30000,
+    });
+  } catch (e) { throw new Error('No se pudo conectar a WSFE: ' + _arcaNetErr(e, _arcaUrl('wsfe', modo))); }
+  if (!res.ok) {
+    const f = _arcaXmlGet(res.text, 'faultstring') || res.text.slice(0, 400);
+    throw new Error(`WSFE error ${res.status}: ${f}`);
+  }
+  return res.text;
+}
+function _authXml(token, sign, cuit) {
+  return `<ar:Auth><ar:Token>${_arcaXmlEsc(token)}</ar:Token><ar:Sign>${_arcaXmlEsc(sign)}</ar:Sign><ar:Cuit>${_arcaXmlEsc(String(cuit))}</ar:Cuit></ar:Auth>`;
+}
+// Último N° autorizado por ARCA para (PtoVta, CbteTipo). Si no hay ninguno, devuelve 0.
+async function _arcaWsfeUltimoAutorizado({ token, sign, cuit, ptoVta, cbteTipo, modo }) {
+  const inner = `${_authXml(token, sign, cuit)}<ar:PtoVta>${ptoVta}</ar:PtoVta><ar:CbteTipo>${cbteTipo}</ar:CbteTipo>`;
+  const xml = await _arcaWsfeCall('FECompUltimoAutorizado', inner, modo);
+  const nro = _arcaXmlGet(xml, 'CbteNro');
+  if (nro == null) {
+    const msg = _arcaXmlGet(xml, 'Msg') || _arcaXmlGet(xml, 'faultstring') || xml.slice(0, 300);
+    throw new Error('ARCA (último autorizado): ' + msg);
+  }
+  return Number(nro) || 0;
+}
+// Solicita el CAE real a ARCA (FECAESolicitar) para UN comprobante. Devuelve
+// { cae, caeVto (Date), numero }. Lanza error con el detalle de ARCA si rechaza.
+async function _arcaWsfeSolicitarCAE({ token, sign, cuit, ptoVta, cbteTipo, numero, fecha,
+  docTipo, docNro, impTotal, impNeto, impIVA, impTotConc, impOpEx, impTrib, ivaArray,
+  concepto, fchServDesde, fchServHasta, fchVtoPago, monId, monCotiz, condIvaReceptorId, modo }) {
+  const r2 = (n) => (Math.round((Number(n) || 0) * 100) / 100).toFixed(2);
+  const ivaXml = (ivaArray && ivaArray.length)
+    ? `<ar:Iva>${ivaArray.map(i => `<ar:AlicIva><ar:Id>${i.id}</ar:Id><ar:BaseImp>${r2(i.base)}</ar:BaseImp><ar:Importe>${r2(i.importe)}</ar:Importe></ar:AlicIva>`).join('')}</ar:Iva>`
+    : '';
+  const servXml = (concepto === 2 || concepto === 3)
+    ? `<ar:FchServDesde>${fchServDesde}</ar:FchServDesde><ar:FchServHasta>${fchServHasta}</ar:FchServHasta><ar:FchVtoPago>${fchVtoPago}</ar:FchVtoPago>`
+    : '';
+  const det = `<ar:FECAEDetRequest>
+    <ar:Concepto>${concepto}</ar:Concepto>
+    <ar:DocTipo>${docTipo}</ar:DocTipo>
+    <ar:DocNro>${docNro}</ar:DocNro>
+    <ar:CbteDesde>${numero}</ar:CbteDesde>
+    <ar:CbteHasta>${numero}</ar:CbteHasta>
+    <ar:CbteFch>${fecha}</ar:CbteFch>
+    <ar:ImpTotal>${r2(impTotal)}</ar:ImpTotal>
+    <ar:ImpTotConc>${r2(impTotConc)}</ar:ImpTotConc>
+    <ar:ImpNeto>${r2(impNeto)}</ar:ImpNeto>
+    <ar:ImpOpEx>${r2(impOpEx)}</ar:ImpOpEx>
+    <ar:ImpTrib>${r2(impTrib)}</ar:ImpTrib>
+    <ar:ImpIVA>${r2(impIVA)}</ar:ImpIVA>
+    ${servXml}
+    <ar:MonId>${monId}</ar:MonId>
+    <ar:MonCotiz>${r2(monCotiz)}</ar:MonCotiz>
+    <ar:CondicionIVAReceptorId>${condIvaReceptorId}</ar:CondicionIVAReceptorId>
+    ${ivaXml}
+  </ar:FECAEDetRequest>`;
+  const inner = `${_authXml(token, sign, cuit)}<ar:FeCAEReq>
+    <ar:FeCabReq><ar:CantReg>1</ar:CantReg><ar:PtoVta>${ptoVta}</ar:PtoVta><ar:CbteTipo>${cbteTipo}</ar:CbteTipo></ar:FeCabReq>
+    <ar:FeDetReq>${det}</ar:FeDetReq>
+  </ar:FeCAEReq>`;
+  const xml = await _arcaWsfeCall('FECAESolicitar', inner, modo);
+  const resultado = _arcaXmlGet(xml, 'Resultado');
+  const cae = _arcaXmlGet(xml, 'CAE');
+  const caeVtoStr = _arcaXmlGet(xml, 'CAEFchVto');
+  if (resultado === 'A' && cae && /^\d{14}$/.test(cae)) {
+    return { cae, caeVto: _afipParseFecha(caeVtoStr), numero };
+  }
+  // Rechazo: juntar observaciones y errores de ARCA para el mensaje.
+  const msgs = [];
+  for (const mm of String(xml).matchAll(/<(?:Obs|Err)>[\s\S]*?<Code>(\d+)<\/Code>[\s\S]*?<Msg>([\s\S]*?)<\/Msg>[\s\S]*?<\/(?:Obs|Err)>/g)) {
+    msgs.push(`[${mm[1]}] ${mm[2].trim()}`);
+  }
+  const fault = _arcaXmlGet(xml, 'faultstring');
+  throw new Error('ARCA rechazó el comprobante: ' + (msgs.join(' · ') || fault || 'sin detalle') );
+}
+
+// Orquesta la emisión real en ARCA: autentica, pide el N° siguiente y solicita el CAE.
+// `f` trae: clase, tipo, fecha(Date), moneda, cotizacion, subtotal, iva, total, items[],
+//           cliente (con cuit), ptoVenta. Devuelve { cae, caeVto, numero }.
+async function _arcaEmitirFacturaReal(company, f) {
+  const modo = company.arcaModo || 'prod';
+  const cbteTipo = _AFIP_CBTE_TIPO[`${f.clase || 'factura'}:${f.tipo}`];
+  if (!cbteTipo) throw new Error(`ARCA no soporta este comprobante (${f.clase} ${f.tipo}) por WSFE. Emitilo en el portal de ARCA y cargalo como "ya emitido".`);
+  const monId = f.moneda === 'USD' ? 'DOL' : (f.moneda === 'ARS' || !f.moneda ? 'PES' : null);
+  if (!monId) throw new Error(`ARCA por WSFE solo admite ARS o USD acá. Para ${f.moneda}, emitilo en el portal de ARCA.`);
+  const monCotiz = monId === 'PES' ? 1 : (Number(f.cotizacion) > 0 ? Number(f.cotizacion) : 1);
+  const cuit = String(company.arcaCuit || '').replace(/\D/g, '');
+  const ta = await _arcaGetTA(company.id, 'wsfe', company.arcaCertCrt, company.arcaPrivadaKey, modo);
+  const ultimo = await _arcaWsfeUltimoAutorizado({ token: ta.token, sign: ta.sign, cuit, ptoVta: f.ptoVenta, cbteTipo, modo });
+  const numero = ultimo + 1;
+  // Receptor: si el cliente tiene CUIT -> DocTipo 80; si no, Consumidor Final (99/0).
+  const docCuit = String(f.cliente?.cuit || '').replace(/\D/g, '');
+  let docTipo = 99, docNro = 0;
+  if (docCuit.length === 11) { docTipo = 80; docNro = docCuit; }
+  // Importes. Factura C (monotributo): no discrimina IVA (neto = total, IVA 0).
+  const esC = f.tipo === 'C';
+  let impNeto, impIVA, ivaArray = [];
+  if (esC) {
+    impNeto = Number(f.total) || 0; impIVA = 0; ivaArray = [];
+  } else {
+    impNeto = Number(f.subtotal) || 0; impIVA = Number(f.iva) || 0;
+    // Armar el array de IVA agrupando los items por alícuota.
+    const byAlic = {};
+    for (const it of (f.items || [])) {
+      const pct = Number(it.alicuotaIva ?? it.alicIva ?? 21);
+      const base = Number(it.subtotal != null ? it.subtotal : (Number(it.precioUnit || 0) * Number(it.cantidad || 0)));
+      const imp = base * pct / 100;
+      const id = _afipIvaId(pct);
+      if (!byAlic[id]) byAlic[id] = { id, base: 0, importe: 0 };
+      byAlic[id].base += base; byAlic[id].importe += imp;
+    }
+    ivaArray = Object.values(byAlic);
+    // Ajuste por redondeo: forzar que la suma de importes IVA cuadre con f.iva.
+    if (ivaArray.length) {
+      const sum = ivaArray.reduce((a, x) => a + x.importe, 0);
+      const diff = (Number(f.iva) || 0) - sum;
+      ivaArray[0].importe += diff;
+    }
+  }
+  // Concepto: 1 (productos) por defecto. (Para servicios puros ARCA pide fechas de
+  // servicio; lo dejamos en productos, que ARCA acepta para la mayoría de los casos.)
+  const concepto = 1;
+  // Condición de IVA del receptor (obligatorio desde RG 5616). Mapeo por la condición
+  // cargada en la ficha del cliente; si no está, asumimos RI (con CUIT) o Cons. Final.
+  const condTxt = String(f.cliente?.condIVA || f.cliente?.condicionIva || f.cliente?.condicionIVA || '').toLowerCase();
+  let condIvaReceptorId;
+  if (/responsable\s*inscripto|resp.*insc|\bri\b/.test(condTxt)) condIvaReceptorId = 1;
+  else if (/monotrib/.test(condTxt)) condIvaReceptorId = 6;
+  else if (/exento/.test(condTxt)) condIvaReceptorId = 4;
+  else if (/consumidor/.test(condTxt)) condIvaReceptorId = 5;
+  else condIvaReceptorId = (docTipo === 80) ? 1 : 5;
+  return await _arcaWsfeSolicitarCAE({
+    token: ta.token, sign: ta.sign, cuit, ptoVta: f.ptoVenta, cbteTipo, numero,
+    fecha: _afipFecha(f.fecha), docTipo, docNro,
+    impTotal: f.total, impNeto, impIVA, impTotConc: 0, impOpEx: 0, impTrib: 0,
+    ivaArray, concepto, monId, monCotiz, condIvaReceptorId, modo,
+  });
+}
+
 // Consulta un CTG en WSCTG.consultarCTG. Devuelve detalles parseados.
 async function _arcaConsultarCTG({ token, sign, cuit, ctgNumero, modo }) {
   const envelope = `<?xml version="1.0" encoding="UTF-8"?>
@@ -6050,11 +6227,11 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
       } else if (_clase === 'nota_credito') {
         await crearMovimientosDesdeFactura(tx, { companyId: req.companyId, factura: f, tipo: 'ingreso', motivo: 'devolucion_venta', contraparteId: input.clienteId || null, contraparteTipo: 'cliente', refPrefix: 'VTA', userId: req.user?.id || null, depositoId: input.depositoId || null });
         await tx.ctaCte.create({ data: { companyId: req.companyId, contactoTipo: 'cliente', contactoId: input.clienteId || null, fecha: input.fecha,
-          detalle: `Nota de crédito ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
+          detalle: `Nota de crédito ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(numeroFinal).padStart(8,'0')}`,
           moneda: _mon, cotizacion: _cot, haber: totales.total, referencia: `FAC-${f.id}`, observaciones: input.observaciones || null }});
       } else {
         await tx.ctaCte.create({ data: { companyId: req.companyId, contactoTipo: 'cliente', contactoId: input.clienteId || null, fecha: input.fecha,
-          detalle: `Nota de débito ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`,
+          detalle: `Nota de débito ${input.tipo} ${String(input.puntoVenta).padStart(4,'0')}-${String(numeroFinal).padStart(8,'0')}`,
           moneda: _mon, cotizacion: _cot, debe: totales.total, referencia: `FAC-${f.id}`, observaciones: input.observaciones || null }});
       }
       return f;
@@ -6096,36 +6273,59 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       items: z.array(itemFacSchema).min(1),
     });
     const input = schema.parse(req.body);
-    // Evitar numeración duplicada: mismo comprobante (tipo+PV+número) ya existente.
-    // Nota: el número de una factura ANULADA tampoco se puede reutilizar (el índice
-    // único de la base no distingue el estado, y en ARCA un número consumido no se
-    // re-emite). Por eso avisamos claro en vez de dejar que explote "Registro duplicado".
-    {
-      const _clase0 = input.clase || 'factura';
-      const dup = await prisma.factura.findFirst({ where: { companyId: req.companyId, tipo: input.tipo, puntoVenta: input.puntoVenta, numero: input.numero } });
-      if (dup) {
-        const _etq = `${_labelComp(_clase0, input.tipo)} ${String(input.puntoVenta).padStart(4,'0')}-${String(input.numero).padStart(8,'0')}`;
-        const _anul = dup.estado === 'anulada' ? ' (está anulada, pero su número no se puede reutilizar). Usá el número siguiente.' : '. Cambiá el número.';
-        return res.status(400).json({ ok: false, error: `Ya existe ${_etq}${_anul}` });
-      }
-    }
-    // Si dicen que la factura ya está en ARCA, exigimos CAE + vto reales.
+    const _clase0 = input.clase || 'factura';
+    // Config ARCA de la empresa (para emitir con CAE REAL vía WSFE).
+    const _co = await prisma.company.findUnique({
+      where: { id: req.companyId },
+      select: { id: true, arcaCuit: true, arcaCertCrt: true, arcaPrivadaKey: true, arcaModo: true, informal: true },
+    });
+    const _arcaOk = !!(_co && _co.arcaCertCrt && _co.arcaPrivadaKey && _co.arcaCuit);
+    // ¿Emitimos de verdad contra ARCA? Solo si: origen agrocore, empresa NO informal,
+    // ARCA configurado y es un comprobante que WSFE soporta (A/B/C).
+    const _usarArca = input.origen === 'agrocore' && _arcaOk && !_co.informal && ['A','B','C'].includes(input.tipo);
+
+    let cae, caeVto, numeroFinal = input.numero;
+
     if (input.origen === 'arca_externa') {
+      // La factura ya se emitió en el portal de ARCA: exigimos CAE + vto reales.
       if (!input.cae || !/^\d{14}$/.test(input.cae)) {
         return res.status(400).json({ ok: false, error: 'CAE inválido. Debe ser de 14 dígitos (el que devolvió ARCA al emitir).' });
       }
-      if (!input.caeVto) {
-        return res.status(400).json({ ok: false, error: 'Falta la fecha de vencimiento del CAE.' });
+      if (!input.caeVto) return res.status(400).json({ ok: false, error: 'Falta la fecha de vencimiento del CAE.' });
+      cae = input.cae; caeVto = input.caeVto;
+    } else if (_usarArca) {
+      // Emisión REAL: pedimos a ARCA el N° siguiente y el CAE. El número lo MANDA ARCA
+      // (es la fuente de verdad), así nunca choca con "número ya usado".
+      try {
+        let _cli = null;
+        if (input.clienteId) _cli = await prisma.cliente.findFirst({ where: { id: input.clienteId, companyId: req.companyId }, select: { cuit: true, condIVA: true } });
+        const _tot = calcFactura(input.items);
+        const _emit = await _arcaEmitirFacturaReal(_co, {
+          clase: _clase0, tipo: input.tipo, fecha: input.fecha,
+          moneda: input.moneda || 'ARS', cotizacion: input.cotizacion,
+          subtotal: _tot.subtotal, iva: _tot.iva, total: _tot.total, items: _tot.items,
+          cliente: _cli, ptoVenta: input.puntoVenta,
+        });
+        cae = _emit.cae; caeVto = _emit.caeVto; numeroFinal = _emit.numero;
+      } catch (e) {
+        // No creamos nada si ARCA no autorizó: evita facturas "truchas" con CAE inventado.
+        return res.status(400).json({ ok: false, error: 'No se pudo emitir en ARCA: ' + e.message });
       }
-    }
-    const cae = input.origen === 'arca_externa'
-      ? input.cae
-      : Math.floor(1e13 + Math.random() * 9e13).toString();
-    let caeVto;
-    if (input.origen === 'arca_externa') {
-      caeVto = input.caeVto;
     } else {
+      // Sin ARCA configurado (empresa informal / sin certificado): comprobante interno,
+      // con CAE simulado (NO es válido fiscalmente). Mantiene el número elegido.
+      cae = Math.floor(1e13 + Math.random() * 9e13).toString();
       caeVto = new Date(input.fecha); caeVto.setDate(caeVto.getDate() + 10);
+    }
+    // Evitar numeración duplicada: mismo comprobante (tipo+PV+número) ya existente.
+    // (Con ARCA el número viene de ellos, igual chequeamos por las dudas.)
+    {
+      const dup = await prisma.factura.findFirst({ where: { companyId: req.companyId, tipo: input.tipo, puntoVenta: input.puntoVenta, numero: numeroFinal } });
+      if (dup) {
+        const _etq = `${_labelComp(_clase0, input.tipo)} ${String(input.puntoVenta).padStart(4,'0')}-${String(numeroFinal).padStart(8,'0')}`;
+        const _anul = dup.estado === 'anulada' ? ' (está anulada, pero su número no se puede reutilizar). Usá el número siguiente.' : '. Cambiá el número.';
+        return res.status(400).json({ ok: false, error: `Ya existe ${_etq}${_anul}` });
+      }
     }
     // Transaccion: crear factura + descontar stock con movimientos egreso.
     const factura = await prisma.$transaction(async (tx) => {
@@ -6140,7 +6340,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       const f = await tx.factura.create({
         data: {
           companyId: req.companyId, clienteId: input.clienteId || null,
-          tipo: input.tipo, clase: _clase, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
+          tipo: input.tipo, clase: _clase, puntoVenta: input.puntoVenta, numero: numeroFinal, fecha: input.fecha,
           condicionVenta: input.condicionVenta, observaciones: input.observaciones,
           moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
@@ -6158,7 +6358,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         });
       }
       // Mantener la numeración correlativa al día (para la próxima carga manual).
-      await _avanzarSecuencia(tx, req.companyId, _seqTipoFactura(_clase, input.tipo), input.puntoVenta, input.numero);
+      await _avanzarSecuencia(tx, req.companyId, _seqTipoFactura(_clase, input.tipo), input.puntoVenta, numeroFinal);
       if (_clase === 'factura') {
         // Factura de venta: sale stock (egreso) + el cliente queda debiendo (debe).
         // Si es "Sin depósito", no se descuenta stock (ventas de servicios, etc.).

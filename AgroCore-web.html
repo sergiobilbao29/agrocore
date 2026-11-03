@@ -3074,6 +3074,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/11/2026',
+      titulo:'🧾 v2.366.0 — Factura electrónica REAL con ARCA (CAE de verdad)',
+      desc:'Hasta ahora, al autorizar una factura, AgroCore generaba un <b>CAE simulado</b> (no válido) y la factura <b>no aparecía en ARCA</b>. Ahora, si la empresa tiene <b>ARCA configurado</b>, AgroCore <b>le pide el CAE real a ARCA (WSFE)</b> al autorizar: toma el <b>número que sigue</b> directo de ARCA, envía los importes e IVA, y guarda el <b>CAE verdadero</b> con su vencimiento. La factura queda <b>registrada en ARCA</b> (la ves en “Mis Comprobantes”). Soporta Factura/NC/ND <b>A, B y C</b> en pesos o dólares. Si ARCA rechaza algo, <b>no crea la factura</b> y te muestra el motivo exacto (así nunca queda un CAE trucho). Las empresas <b>sin ARCA</b> (informales) siguen con comprobante interno simulado.<br><b>Ojo:</b> si ya tenías una factura con CAE simulado (ej. la 00000023), <b>anulala y borrala</b>: su número lo va a tomar ARCA al emitir la real.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
       titulo:'📄 v2.365.0 — Importar facturas de compra (PDF): total correcto + duplicados claros',
       desc:'Dos arreglos en la <b>importación de varias facturas de compra en PDF</b>:<br>• <b>Totales correctos:</b> en algunas facturas (ej. de Agro Partes) el sistema tomaba un importe <b>inventado</b> (ej. $456.943 en vez de $68.902). Pasaba porque al leer el PDF los números del pie quedaban <b>pegados</b> entre sí y se armaba un número que no existía. Ahora el lector <b>reconstruye las columnas</b> del PDF y toma el <b>Total real</b> de la factura. Probado contra 12 facturas reales: coincide exacto en todas.<br>• <b>Duplicados claros:</b> si intentás importar una factura con un <b>número ya cargado</b>, ya no figura como “error”: se marca como <b>“ya estaba cargada (se salteó)”</b> y el resto se registra igual. <b>Importante:</b> las facturas que cargaste con el importe equivocado conviene <b>eliminarlas</b> (Movimientos de compras) y <b>volver a importarlas</b> con esta versión para que tomen el total correcto.' },
@@ -15814,7 +15817,7 @@ async function factForm(prefill = null) {
       </div>
       <div class="flex items-center justify-between">
         <button class="btn btn-secondary text-sm" onclick="document.getElementById('fi-tbody').insertAdjacentHTML('beforeend', factItemRow()); factTipoUI();">+ Agregar item</button>
-        <div id="f-cae-hint" class="text-xs text-slate-500">💡 El CAE se genera simulado al autorizar</div>
+        <div id="f-cae-hint" class="text-xs text-slate-500">💡 Al autorizar se solicita el CAE a ARCA (si la empresa tiene ARCA configurado)</div>
       </div>
       <div id="vent-cobro-wrap" class="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
         <div class="text-xs font-semibold text-blue-900 mb-2">💰 Cobro — Condición Contado (se registra junto con la factura)</div>
@@ -16092,7 +16095,7 @@ function factExternaToggle(){
   const btn = document.getElementById('f-save-btn');
   if (btn) btn.innerHTML = on ? '📥 Registrar (ARCA externa)' : '💾 Autorizar';
   const hint = document.getElementById('f-cae-hint');
-  if (hint) hint.textContent = on ? '📥 Se registra la factura ya emitida con su CAE real (no se reenvía a ARCA)' : '💡 El CAE se genera simulado al autorizar';
+  if (hint) hint.textContent = on ? '📥 Se registra la factura ya emitida con su CAE real (no se reenvía a ARCA)' : '💡 Al autorizar se solicita el CAE a ARCA (si la empresa tiene ARCA configurado)';
   // Sugerir vencimiento del CAE (hoy + 10 días) la primera vez que se activa.
   if (on) {
     const v = document.getElementById('f-caevto');
