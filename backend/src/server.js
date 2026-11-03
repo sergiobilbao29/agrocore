@@ -83,7 +83,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.361.0';
+const AGROCORE_VERSION = '2.362.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3067,6 +3067,26 @@ function _arcaUrl(servicio, modo) {
   const m = (modo === 'homo') ? 'homo' : 'prod';
   return ARCA_URLS[servicio]?.[m];
 }
+// Node envuelve los errores de red en un genérico "fetch failed" y esconde la causa
+// real en e.cause. Esto la saca a la luz y la traduce para que el usuario entienda
+// si es DNS, firewall, timeout o TLS (clave para diagnosticar el "Probar conexión").
+function _arcaNetErr(e, url) {
+  const cau = e && e.cause ? e.cause : e;
+  const code = (cau && (cau.code || cau.errno)) || '';
+  const host = (() => { try { return new URL(url).host; } catch { return url; } })();
+  const MAP = {
+    ENOTFOUND: 'no se pudo resolver el dominio (DNS)',
+    EAI_AGAIN: 'no se pudo resolver el dominio (DNS temporal)',
+    ECONNREFUSED: 'el servidor rechazó la conexión',
+     ECONNRESET: 'el servidor cortó la conexión',
+    ETIMEDOUT: 'se agotó el tiempo de espera (posible firewall/salida bloqueada)',
+    UND_ERR_CONNECT_TIMEOUT: 'se agotó el tiempo de conexión (posible firewall/salida bloqueada)',
+    CERT_HAS_EXPIRED: 'el certificado TLS del servidor de ARCA está vencido',
+    DEPTH_ZERO_SELF_SIGNED_CERT: 'problema con el certificado TLS de ARCA',
+  };
+  const detalle = MAP[code] || (cau && cau.message) || (e && e.message) || 'error de red';
+  return `${detalle}${code ? ' ['+code+']' : ''} al conectar con ${host}. El certificado puede estar OK; esto es un problema de red/salida del servidor hacia ARCA.`;
+}
 // Cache de Tickets de Acceso (TA) por (companyId, modo, service). TTL ~11h.
 const _arcaTaCache = new Map();
 
@@ -3144,10 +3164,11 @@ async function _arcaLoginWsaa(cmsBase64, modo) {
       method: 'POST',
       headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '' },
       body: envelope,
+      signal: AbortSignal.timeout(20000),
     });
     xml = await res.text();
   } catch (e) {
-    throw new Error('No se pudo conectar a WSAA: ' + e.message);
+    throw new Error('No se pudo conectar a WSAA: ' + _arcaNetErr(e, _arcaUrl('wsaa', modo)));
   }
   if (!res.ok) {
     const f = _arcaXmlGet(xml, 'faultstring') || xml.slice(0, 400);
@@ -3193,10 +3214,11 @@ async function _arcaWsfeDummy(modo) {
       method: 'POST',
       headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': 'http://ar.gov.afip.dif.FEV1/FEDummy' },
       body: envelope,
+      signal: AbortSignal.timeout(20000),
     });
     xml = await res.text();
   } catch (e) {
-    throw new Error('No se pudo conectar a WSFE: ' + e.message);
+    throw new Error('No se pudo conectar a WSFE: ' + _arcaNetErr(e, _arcaUrl('wsfe', modo)));
   }
   if (!res.ok) {
     const f = _arcaXmlGet(xml, 'faultstring') || xml.slice(0, 400);
@@ -3232,10 +3254,11 @@ async function _arcaConsultarCTG({ token, sign, cuit, ctgNumero, modo }) {
       method: 'POST',
       headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '' },
       body: envelope,
+      signal: AbortSignal.timeout(20000),
     });
     xml = await res.text();
   } catch (e) {
-    throw new Error('No se pudo conectar a WSCTG: ' + e.message);
+    throw new Error('No se pudo conectar a WSCTG: ' + _arcaNetErr(e, _arcaUrl('wsctg', modo)));
   }
   if (!res.ok) {
     const f = _arcaXmlGet(xml, 'faultstring') || xml.slice(0, 400);
