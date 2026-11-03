@@ -52,6 +52,28 @@ async function getPdfParse() {
     throw _pdfParseErr;
   }
 }
+// pagerender que RECONSTRUYE EL LAYOUT (filas por coordenada Y, columnas por X, con
+// espacios entre celdas). El render por defecto de pdf-parse PEGA los números entre sí
+// (ej. "56.943,9456.943,94") y eso hacía que el importador tomara importes inventados.
+// Con el layout, cada número queda separado y el total se lee de su columna correcta.
+// Si algo falla, cae al render simple para no romper la lectura.
+function _pdfPagerenderLayout(pageData) {
+  const opts = { normalizeWhitespace: true, disableCombineTextItems: false };
+  return pageData.getTextContent(opts).then((tc) => {
+    const rows = {};
+    for (const it of tc.items) {
+      const y = Math.round(it.transform[5]);
+      (rows[y] = rows[y] || []).push([it.transform[4], it.str]);
+    }
+    return Object.keys(rows).map(Number).sort((a, b) => b - a)
+      .map((y) => rows[y].sort((a, b) => a[0] - b[0]).map((p) => p[1]).join('  ').replace(/[ \t]+/g, ' ').trim())
+      .filter((l) => l.length)
+      .join('\n');
+  }).catch(() => {
+    // Fallback: render simple (comportamiento viejo) si el layout falla.
+    return pageData.getTextContent().then((tc) => tc.items.map((i) => i.str).join(' '));
+  });
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = process.env.STATIC_DIR || path.resolve(__dirname, '..', '..');
@@ -84,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.364.0';
+const AGROCORE_VERSION = '2.365.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -21779,7 +21801,11 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
         error: 'El parser de PDF no está disponible en este servidor (pdf-parse no instalado). Reinstalá las dependencias con: cd C:\\AgroCore\\backend; npm install pdf-parse. Mientras tanto, cargá la factura a mano.' });
     }
     try {
-      const data = await pdfParse(req.file.buffer);
+      // Usamos el render con layout para que los importes queden separados por columnas
+      // (clave para leer el TOTAL correcto). Si falla, reintentamos con el render normal.
+      let data;
+      try { data = await pdfParse(req.file.buffer, { pagerender: _pdfPagerenderLayout }); }
+      catch { data = await pdfParse(req.file.buffer); }
       texto = data.text || '';
     } catch (e) {
       return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message });

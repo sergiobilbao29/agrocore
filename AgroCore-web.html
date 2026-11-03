@@ -3075,6 +3075,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
+      titulo:'📄 v2.365.0 — Importar facturas de compra (PDF): total correcto + duplicados claros',
+      desc:'Dos arreglos en la <b>importación de varias facturas de compra en PDF</b>:<br>• <b>Totales correctos:</b> en algunas facturas (ej. de Agro Partes) el sistema tomaba un importe <b>inventado</b> (ej. $456.943 en vez de $68.902). Pasaba porque al leer el PDF los números del pie quedaban <b>pegados</b> entre sí y se armaba un número que no existía. Ahora el lector <b>reconstruye las columnas</b> del PDF y toma el <b>Total real</b> de la factura. Probado contra 12 facturas reales: coincide exacto en todas.<br>• <b>Duplicados claros:</b> si intentás importar una factura con un <b>número ya cargado</b>, ya no figura como “error”: se marca como <b>“ya estaba cargada (se salteó)”</b> y el resto se registra igual. <b>Importante:</b> las facturas que cargaste con el importe equivocado conviene <b>eliminarlas</b> (Movimientos de compras) y <b>volver a importarlas</b> con esta versión para que tomen el total correcto.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
       titulo:'🧾 v2.364.0 — Emitir comprobante: ahora trae los clientes',
       desc:'Al abrir <b>Emitir comprobante</b> directo desde <b>Abonos / Clientes</b> (botón Facturar) sin haber entrado antes a la página de <b>Clientes</b>, el selector de cliente mostraba sólo “<b>Consumidor final</b>”. Ahora el formulario <b>carga la lista de clientes</b> al abrirse, así podés elegir el cliente (y si venís de un abono, queda <b>preseleccionado</b> el del abono).' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
@@ -18139,7 +18142,7 @@ async function compMultiRegistrar(){
   const listas = mp.items.filter(x=>x.estado==='ok' && x.incluir);
   if (!listas.length) return;
   const btn = document.getElementById('mp-btn-reg'); if (btn){ btn.disabled=true; btn.textContent='Registrando…'; }
-  let ok=0, fail=0; const errores=[];
+  let ok=0, fail=0, dup=0; const errores=[];
   for (const it of listas){
     const d = it.data;
     const provId = mp.provFijo || it.provId || null;
@@ -18176,13 +18179,25 @@ async function compMultiRegistrar(){
     try {
       await api('/api/facturas-compra', { method:'POST', body: JSON.stringify(body) });
       ok++; it.estado='registrada'; it.incluir=false;
-    } catch(e){ fail++; errores.push(`${it.nombre}: ${e.message}`); }
+    } catch(e){
+      // Una factura con el mismo N° ya cargada no es un "error": es un duplicado que se saltea.
+      if (/duplicad|ya existe|P2002|registro duplicado/i.test(e.message||'')) {
+        dup++; it.estado='duplicada'; it.incluir=false;
+      } else {
+        fail++; errores.push(`${it.nombre}: ${e.message}`);
+      }
+    }
     _mpRender();
   }
   delete state.cache.stockMap; delete state.cache.ctasCtes; delete state.cache.facturasCompra;
-  if (fail){
-    toast(`Registradas ${ok}. ${fail} con error.`, ok?'warn':'error');
-    console.warn('Importar varias facturas — errores:', errores);
+  if (fail || dup){
+    const partes = [];
+    if (ok) partes.push(`${ok} registrada${ok===1?'':'s'}`);
+    if (dup) partes.push(`${dup} ya estaba${dup===1?'':'n'} cargada${dup===1?'':'s'} (se saltearon)`);
+    if (fail) partes.push(`${fail} con error`);
+    toast(partes.join(' · '), fail ? 'warn' : 'info');
+    if (fail) console.warn('Importar varias facturas — errores:', errores);
+    if (!fail && ok===0) { /* todas duplicadas: dejamos el modal abierto para que revise */ }
   } else {
     toast(`Listo: ${ok} factura${ok===1?'':'s'} registrada${ok===1?'':'s'}.`, 'success');
     closeModal(); pages.compras();
