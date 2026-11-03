@@ -83,7 +83,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.360.0';
+const AGROCORE_VERSION = '2.361.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4523,6 +4523,45 @@ mountCrud({
   ],
 });
 
+// Alta de un proveedor en VARIAS empresas a la vez (cuando el mismo proveedor le vende
+// a varias firmas del grupo). Crea una copia por empresa. Dedup por CUIT: si ya existe
+// un proveedor con ese CUIT en una empresa, se omite esa empresa (no se duplica).
+const _provMultiSchema = clienteSchema.extend({ rubro: z.string().nullable().optional() });
+app.post('/api/proveedores/multi', authMiddleware, async (req, res, next) => {
+  try {
+    if (!req.user) return res.status(401).json({ ok: false, error: 'No autenticado' });
+    const empresasIds = Array.isArray(req.body?.empresas) ? [...new Set(req.body.empresas.filter(Boolean))] : [];
+    if (!empresasIds.length) return res.status(400).json({ ok: false, error: 'Elegí al menos una empresa.' });
+    const data = _provMultiSchema.parse(req.body?.data || {});
+    const cuit = (data.cuit || '').trim();
+
+    // Empresas a las que el usuario tiene acceso con permiso contactos:create (superAdmin: todas).
+    const accesibles = new Map(); // companyId -> name
+    if (req.user.superAdmin) {
+      const all = await prisma.company.findMany({ where: { id: { in: empresasIds } }, select: { id: true, name: true } });
+      all.forEach((c) => accesibles.set(c.id, c.name));
+    } else {
+      for (const uc of (req.user.userCompanies || [])) {
+        if (!empresasIds.includes(uc.companyId)) continue;
+        if (hasPermission(uc.role?.permissions || [], 'contactos:create')) accesibles.set(uc.companyId, uc.company?.name || uc.companyId);
+      }
+    }
+
+    const creados = [], omitidos = [], sinAcceso = [];
+    for (const cid of empresasIds) {
+      if (!accesibles.has(cid)) { sinAcceso.push(cid); continue; }
+      // Dedup por CUIT (si tiene). Si no hay CUIT, dedup por razón social exacta.
+      let existe = null;
+      if (cuit) existe = await prisma.proveedor.findFirst({ where: { companyId: cid, cuit } });
+      else existe = await prisma.proveedor.findFirst({ where: { companyId: cid, razonSocial: data.razonSocial } });
+      if (existe) { omitidos.push({ companyId: cid, companyName: accesibles.get(cid), motivo: 'ya existía' }); continue; }
+      const row = await prisma.proveedor.create({ data: { ...data, cuit: cuit || null, companyId: cid } });
+      creados.push({ companyId: cid, companyName: accesibles.get(cid), id: row.id });
+    }
+    res.status(201).json({ ok: true, data: { creados, omitidos, sinAcceso } });
+  } catch (e) { next(e); }
+});
+
 // ---------- PRODUCCION ----------
 mountCrud({
   path: 'campos', modelName: 'campo', perm: 'produccion',
@@ -7960,13 +7999,14 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
     const hoy30 = new Date(hoy.getTime() + 30 * 24 * 60 * 60 * 1000);
     const mesAct = hoy.toISOString().slice(0, 7);
     // Traemos los registros relevantes de TODAS las empresas en una sola query c/u
-    const [cheques, efectivos, flujos, cuotas, ctas, arrends] = await Promise.all([
+    const [cheques, efectivos, flujos, cuotas, ctas, arrends, proveedores] = await Promise.all([
       prisma.cheque.findMany({ where: { companyId: { in: companyIds } } }),
       prisma.efectivo.findMany({ where: { companyId: { in: companyIds } } }),
       prisma.flujoCaja.findMany({ where: { companyId: { in: companyIds } } }),
       prisma.cuotaCredito.findMany({ where: { credito: { companyId: { in: companyIds } }, pagada: false }, include: { credito: { select: { companyId: true } } } }),
       prisma.ctaCte.findMany({ where: { companyId: { in: companyIds }, pagado: false } }),
       prisma.arrendamiento.findMany({ where: { companyId: { in: companyIds }, pagado: false } }),
+      prisma.proveedor.findMany({ where: { companyId: { in: companyIds } }, select: { id: true, companyId: true, razonSocial: true, nombreFantasia: true, cuit: true } }),
     ]);
 
     const porEmpresa = empresas.map((emp) => {
@@ -8046,13 +8086,33 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
       // Cuentas corrientes: a cobrar (clientes/libres a favor) y a pagar (proveedores/libres en contra).
       const cc = ctas.filter((c) => c.companyId === emp.id);
       let aCobrar = 0, aPagar = 0;
+      // Saldo por proveedor (neto debe - haber), para el consolidado "cuánto se le debe
+      // a cada proveedor" del resumen multi-empresa.
+      const provsEmp = proveedores.filter((p) => p.companyId === emp.id);
+      const provById = Object.fromEntries(provsEmp.map((p) => [p.id, p]));
+      const saldoProvMap = new Map();
       for (const c of cc) {
         const saldo = Number(c.debe || 0) - Number(c.haber || 0);
         if (Math.abs(saldo) < 0.01) continue;
         if (c.contactoTipo === 'proveedor') { if (saldo > 0) aPagar += saldo; else aCobrar += -saldo; }
         else if (c.contactoTipo === 'cliente') { if (saldo > 0) aCobrar += saldo; else aPagar += -saldo; }
         else { if (saldo > 0) aCobrar += saldo; else aPagar += -saldo; }
+        if (c.contactoTipo === 'proveedor' && c.contactoId) {
+          saldoProvMap.set(c.contactoId, (saldoProvMap.get(c.contactoId) || 0) + saldo);
+        }
       }
+      const proveedoresDet = [...saldoProvMap.entries()]
+        .map(([pid, saldo]) => {
+          const p = provById[pid] || {};
+          return {
+            proveedorId: pid,
+            nombre: p.razonSocial || p.nombreFantasia || '(proveedor sin nombre)',
+            cuit: p.cuit || null,
+            saldo, // positivo = se le debe (a pagar); negativo = saldo a favor nuestro
+          };
+        })
+        .filter((x) => Math.abs(x.saldo) > 0.009)
+        .sort((a, b) => b.saldo - a.saldo);
 
       // Arrendamientos pendientes: cantidad + monto en efectivo (los en especie no se valorizan acá).
       const ar = arrends.filter((a) => a.companyId === emp.id);
@@ -8089,6 +8149,7 @@ app.get('/api/resumen-multiempresa', async (req, res, next) => {
         flujoCaja: { saldoActual: saldoFlujo, movimientos: fc.length },
         creditos: { cantCuotas: qs.length, monto: creditosMonto, prox30: creditosProx30 },
         ctaCte: { aCobrar, aPagar },
+        proveedores: proveedoresDet,
         arrendamientos: { pendientes: ar.length, montoEfectivo: arrendMontoEf },
         gastos: { mes: gastosMes },
       };

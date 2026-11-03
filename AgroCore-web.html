@@ -3074,6 +3074,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/11/2026',
+      titulo:'🏬 v2.361.0 — Saldo por proveedor en el Resumen multi-empresa + alta de proveedor en varias empresas',
+      desc:'Dos mejoras para trabajar con proveedores que le venden a varias firmas del grupo:<br>• En <b>Tablero → Resumen multi-empresa</b> aparece el recuadro <b>🏬 Saldo por proveedor (consolidado)</b>: muestra <b>cuánto se le debe a cada proveedor</b> en cada empresa (el detalle por empresa) y el <b>total adeudado</b> sumando todas las empresas seleccionadas. Agrupa por CUIT, así el mismo proveedor cargado en distintas firmas se junta en una sola fila. Respeta los tildes de empresas de arriba.<br>• En el <b>alta de un proveedor nuevo</b> podés marcar <b>varias empresas a la vez</b> (recuadro "🏢 Crear en varias empresas"): se da de alta en todas de una sola vez, sin tener que cargarlo empresa por empresa. Si el proveedor <b>ya existe</b> (mismo CUIT) en alguna, esa se saltea para no duplicar.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'02/11/2026',
       titulo:'📅 v2.360.0 — Corrección de fechas en todo el sistema (ya no se corren un día)',
       desc:'Se corrigió un problema por el que, al cargar un movimiento con una fecha (por ejemplo en <b>Efectivo</b>, cargabas el <b>30/10</b> y quedaba guardado como <b>29/10</b>), la fecha se <b>corría un día hacia atrás</b>. Pasaba por la diferencia de <b>huso horario</b> (Argentina es UTC-3): las fechas se guardaban a medianoche en horario universal y, al mostrarlas, retrocedían un día. Ahora <b>todas las fechas del sistema</b> (efectivo, movimientos, facturas, cheques, viajes, pagos, cobros, etc.) se guardan al <b>mediodía local</b>, así siempre muestran el <b>día correcto</b>. <b>Nota:</b> los registros ya cargados <b>antes</b> de esta versión no se tocan; sólo aplica a lo que cargues o edites de ahora en más.' },
@@ -6758,6 +6761,61 @@ pages.resumenGlobal = async function() {
       })()}
 
       ${(() => {
+        // ===== Saldo por PROVEEDOR (consolidado entre empresas) =====
+        // Cuánto se le debe a cada proveedor sumando todas las empresas seleccionadas.
+        // Agrupa por CUIT (si tiene); si no, por razón social.
+        const pmap = new Map();
+        for (const e of porEmp) {
+          if (!seleccionadas.has(e.companyId)) continue;
+          for (const p of (e.proveedores || [])) {
+            const key = (p.cuit && String(p.cuit).trim()) || ('n:' + (p.nombre||'').toLowerCase().trim());
+            if (!pmap.has(key)) pmap.set(key, { nombre:p.nombre, cuit:p.cuit||null, total:0, porEmp:[] });
+            const g = pmap.get(key);
+            if (p.cuit && !g.cuit) g.cuit = p.cuit;
+            if ((p.nombre||'').length > (g.nombre||'').length) g.nombre = p.nombre;
+            g.total += Number(p.saldo||0);
+            g.porEmp.push({ empresaName:e.companyName, color:e.color, saldo:Number(p.saldo||0) });
+          }
+        }
+        const provs = [...pmap.values()].filter(p=>Math.abs(p.total)>0.009).sort((a,b)=> b.total - a.total);
+        const totalProv = provs.reduce((a,p)=>a+p.total,0);
+        if (!provs.length) {
+          return `
+          <div class="kpi p-0 overflow-hidden mt-4">
+            <div class="px-4 py-3 bg-slate-50 border-b">
+              <h3 class="font-semibold text-slate-800">🏬 Saldo por proveedor <span class="text-slate-400 font-normal">(consolidado)</span></h3>
+              <div class="text-xs text-slate-500">Cuánto se le debe a cada proveedor sumando todas las empresas seleccionadas.</div>
+            </div>
+            <div class="text-center text-slate-400 py-8 px-4">Las empresas seleccionadas no tienen saldos pendientes con proveedores.</div>
+          </div>`;
+        }
+        return `
+        <div class="kpi p-0 overflow-hidden mt-4">
+          <div class="px-4 py-3 bg-slate-50 border-b flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 class="font-semibold text-slate-800">🏬 Saldo por proveedor <span class="text-slate-400 font-normal">(consolidado · ${provs.length})</span></h3>
+              <div class="text-xs text-slate-500">Cuánto se le debe a cada proveedor sumando todas las empresas. El detalle muestra cuánto en cada una. (+) se le debe · (−) saldo a favor.</div>
+            </div>
+            <div class="text-right"><div class="text-[11px] text-slate-500">Total a pagar a proveedores</div><div class="text-lg font-bold text-red-700">${fmt$(totalProv)}</div></div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="data text-sm">
+              <thead><tr><th>Proveedor</th><th>CUIT</th><th>Detalle por empresa</th><th class="text-right">Total adeudado</th></tr></thead>
+              <tbody>
+                ${provs.map(p=>`<tr class="table-row">
+                  <td class="font-semibold">${esc(p.nombre||'—')}</td>
+                  <td class="text-xs font-mono text-slate-500">${esc(p.cuit||'—')}</td>
+                  <td><div class="flex flex-wrap gap-1.5">${p.porEmp.filter(x=>Math.abs(x.saldo)>0.009).map(x=>`<span class="inline-flex items-center gap-1 text-[11px] bg-slate-100 rounded px-1.5 py-0.5">${x.color?`<span class="w-2 h-2 rounded-full" style="background:${esc(x.color)}"></span>`:''}${esc(x.empresaName)}: <b>${fmt$(x.saldo)}</b></span>`).join('')||'<span class="text-xs text-slate-400">—</span>'}</div></td>
+                  <td class="text-right font-bold ${p.total<0?'text-emerald-700':'text-red-700'}">${fmt$(p.total)}</td>
+                </tr>`).join('')}
+              </tbody>
+              <tfoot><tr class="font-bold bg-slate-50"><td colspan="3" class="text-right">TOTAL</td><td class="text-right text-red-700">${fmt$(totalProv)}</td></tr></tfoot>
+            </table>
+          </div>
+        </div>`;
+      })()}
+
+      ${(() => {
         // ===== Efectivo por TENEDOR (consolidado entre empresas) =====
         // Solo se muestra si alguna empresa seleccionada trabaja con "caja por tenedor".
         const grupoTenedor = porEmp.some(e => seleccionadas.has(e.companyId) && e.cajaPorTenedor === true);
@@ -7522,6 +7580,20 @@ function provForm(id=null) {
         <div><label class="label">Localidad</label>${catSelect('f-loc', 'Ciudad', it.localidad||'', { placeholder:'— Elegir ciudad —', parent: it.provincia||'', parentSelect:'f-prov' })}</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
         ${_fiscalRetBlock(it)}
+        ${(!id && (state.user?.companies||[]).length>1) ? `
+        <div class="col-span-2 mt-1"><details open>
+          <summary class="cursor-pointer text-sm font-semibold text-emerald-800">🏢 Crear en varias empresas</summary>
+          <div class="mt-2 bg-emerald-50 rounded p-2">
+            <div class="text-[11px] text-emerald-700 mb-2">Si este proveedor le vende a varias firmas del grupo, marcá todas: se crea en cada una de una sola vez. Si ya existe (mismo CUIT) en alguna, esa se saltea.</div>
+            <div class="grid grid-cols-2 gap-1">
+              ${(state.user.companies||[]).map(c=>`
+                <label style="display:flex;align-items:center;gap:7px;padding:4px 6px;font-size:13px;cursor:pointer;border-radius:6px" onmouseover="this.style.background='#d1fae5'" onmouseout="this.style.background=''">
+                  <input type="checkbox" class="prov-emp-cb" value="${esc(c.id)}" ${c.id===state.companyId?'checked':''}/>
+                  <span>${esc(c.name)}</span>
+                </label>`).join('')}
+            </div>
+          </div>
+        </details></div>` : ''}
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='provSave(${JSON.stringify(id)})'>${id?'Guardar':'Crear'}</button>`
@@ -7578,8 +7650,23 @@ async function provSave(id) {
     observaciones: $('#f-obs')?.value.trim()||null,
   };
   if (!data.razonSocial) return toast('Razón social requerida','warn');
-  try { await api('/api/proveedores'+(id?'/'+id:''), { method: id?'PUT':'POST', body: JSON.stringify(data) });
-    toast(id?'Actualizado':'Creado','success'); closeModal(); delete state.cache.proveedores; pages.proveedores();
+  // Alta en varias empresas a la vez (solo en alta nueva, si eligió más de una).
+  const empCbs = id ? [] : [...document.querySelectorAll('.prov-emp-cb:checked')].map(c=>c.value);
+  const multi = !id && empCbs.length > 1;
+  try {
+    if (multi) {
+      const r = await api('/api/proveedores/multi', { method:'POST', body: JSON.stringify({ empresas: empCbs, data }) });
+      const d = r.data || {};
+      const nC = (d.creados||[]).length, nO = (d.omitidos||[]).length, nS = (d.sinAcceso||[]).length;
+      let msg = `Creado en ${nC} empresa${nC===1?'':'s'}`;
+      if (nO) msg += ` · ${nO} ya existía${nO===1?'':'n'}`;
+      if (nS) msg += ` · ${nS} sin permiso`;
+      toast(msg, nC?'success':'warn');
+    } else {
+      await api('/api/proveedores'+(id?'/'+id:''), { method: id?'PUT':'POST', body: JSON.stringify(data) });
+      toast(id?'Actualizado':'Creado','success');
+    }
+    closeModal(); delete state.cache.proveedores; pages.proveedores();
   } catch (e) { toast(e.message,'error'); }
 }
 async function provDel(id) {
