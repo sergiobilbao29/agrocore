@@ -810,6 +810,7 @@ model Factura {
   total           Float     @default(0)        // en moneda origen
   cae             String?
   caeVto          DateTime?
+  arcaReal        Boolean   @default(false) // true = CAE real obtenido de ARCA (WSFE). No se puede anular ni borrar: se anula con Nota de Crédito.
   estado          String    @default("pendiente") // pendiente, autorizada, anulada
   origen          String    @default("agrocore") // "agrocore" (emitida desde el sistema) | "arca_externa" (emitida directamente en ARCA y cargada manualmente)
   suscripcionId   String?   // si esta factura corresponde a la cuota de un abono, lo vinculamos acá

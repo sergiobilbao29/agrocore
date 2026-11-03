@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.367.0';
+const AGROCORE_VERSION = '2.368.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6345,6 +6345,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
           moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
           cae, caeVto, estado: 'autorizada',
+          arcaReal: !!_usarArca,
           origen: input.origen,
           items: { create: totales.items },
         },
@@ -6533,6 +6534,9 @@ app.post('/api/facturas/:id/anular', requireCompany, requirePermission('ventas:u
   try {
     const existing = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    // Una factura con CAE REAL de ARCA no se anula ni se borra internamente: ante ARCA ya
+    // quedó emitida. La única forma válida de anularla es emitir una Nota de Crédito.
+    if (existing.arcaReal) return res.status(400).json({ ok: false, error: 'ARCA_REAL: Esta factura tiene CAE real de ARCA: no se puede anular ni eliminar. Para anularla, emití una Nota de Crédito.' });
     // Anulacion: marcar la factura como anulada, devolver el stock y quitar el
     // movimiento de cuenta corriente.
     const data = await prisma.$transaction(async (tx) => {
@@ -6556,6 +6560,8 @@ app.delete('/api/facturas/:id', requireCompany, requirePermission('ventas:update
   try {
     const f = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!f) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    // CAE real de ARCA: no se elimina nunca desde el sistema (se anula con Nota de Crédito).
+    if (f.arcaReal) return res.status(400).json({ ok: false, error: 'ARCA_REAL: Esta factura tiene CAE real de ARCA: no se puede eliminar. Para anularla, emití una Nota de Crédito.' });
     // Con CAE no se elimina (hay que anularla primero). Pero una factura YA ANULADA
     // sí se puede borrar aunque tenga CAE: está sin efecto y así se libera el número
     // para volver a cargarla (no afecta a ARCA; el CAE real sigue existiendo allá).
