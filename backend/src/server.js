@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.368.0';
+const AGROCORE_VERSION = '2.371.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3336,6 +3336,20 @@ async function _arcaWsfeUltimoAutorizado({ token, sign, cuit, ptoVta, cbteTipo, 
   }
   return Number(nro) || 0;
 }
+// Consulta a ARCA si un comprobante (PtoVta, CbteTipo, N°) está realmente autorizado.
+// Devuelve { enArca, cae, caeVto(Date|null), resultado, msg }. Es la fuente de verdad.
+async function _arcaWsfeConsultar({ token, sign, cuit, ptoVta, cbteTipo, numero, modo }) {
+  const inner = `${_authXml(token, sign, cuit)}<ar:FeCompConsReq><ar:CbteTipo>${cbteTipo}</ar:CbteTipo><ar:CbteNro>${numero}</ar:CbteNro><ar:PtoVta>${ptoVta}</ar:PtoVta></ar:FeCompConsReq>`;
+  const xml = await _arcaWsfeCall('FECompConsultar', inner, modo);
+  const cae = _arcaXmlGet(xml, 'CodAutorizacion');
+  const resultado = _arcaXmlGet(xml, 'Resultado');
+  if (cae) {
+    const vto = _arcaXmlGet(xml, 'FchVto');
+    return { enArca: true, cae, caeVto: vto ? _afipParseFecha(vto) : null, resultado: resultado || 'A', msg: '' };
+  }
+  const err = _arcaXmlGet(xml, 'Msg') || _arcaXmlGet(xml, 'faultstring') || '';
+  return { enArca: false, cae: null, caeVto: null, resultado: null, msg: err };
+}
 // Solicita el CAE real a ARCA (FECAESolicitar) para UN comprobante. Devuelve
 // { cae, caeVto (Date), numero }. Lanza error con el detalle de ARCA si rechaza.
 async function _arcaWsfeSolicitarCAE({ token, sign, cuit, ptoVta, cbteTipo, numero, fecha,
@@ -4969,6 +4983,7 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
       precioUnit: z.number().nullable().optional(),
       costoHa: z.number().nullable().optional(),
       moneda: z.string().nullable().optional(),
+      depositoId: z.string().nullable().optional(),   // depósito del que se descuenta el stock
       hectareasAplicadas: z.number().nullable().optional(),
       fecha: zFecha.nullable().optional(),
       observaciones: z.string().nullable().optional(),
@@ -4997,7 +5012,7 @@ app.post('/api/aplicaciones', requireCompany, requirePermission('produccion:crea
           const total = (d.precioUnit || 0) * cantConsumida;
           const mov = await tx.movimiento.create({
             data: {
-              companyId: req.companyId, productoId: prod.id, depositoId: null,
+              companyId: req.companyId, productoId: prod.id, depositoId: d.depositoId || null,
               fecha, tipo: 'egreso', motivo: 'aplicacion',
               cantidad: cantConsumida, precio: d.precioUnit ?? null, total: total || null,
               referencia: `INS-${ins.id.slice(-6).toUpperCase()}`,
@@ -5037,6 +5052,7 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
       fecha: zFecha.nullable().optional(),
       observaciones: z.string().nullable().optional(),
       // Insumos consumidos de una labor (si se manda, se reemplazan por completo).
+      depositoId: z.string().nullable().optional(),   // depósito del que se descuenta el stock
       insumos: z.array(z.object({
         productoId: z.string(),
         cantidad: z.coerce.number().nullable().optional(),
@@ -5098,7 +5114,7 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
             let movId = null;
             if (cant > 0) {
               const mov = await tx.movimiento.create({ data: {
-                companyId: req.companyId, productoId: it.productoId, depositoId: null,
+                companyId: req.companyId, productoId: it.productoId, depositoId: d.depositoId || null,
                 fecha: nuevaFecha, tipo: 'egreso', motivo: 'aplicacion',
                 cantidad: cant, precio: it.precioUnit ?? null, total: total || null,
                 referencia: `LAB-${id.slice(-6).toUpperCase()}`,
@@ -6161,6 +6177,35 @@ app.get('/api/facturas/:id', requireCompany, requirePermission('ventas:read'), a
     if (!row) return res.status(404).json({ ok: false, error: 'No encontrada' });
     const pagada = await _ventaTienePago(req.companyId, row.id);
     res.json({ ok: true, data: { ...row, pagada } });
+  } catch (e) { next(e); }
+});
+
+// Verificar contra ARCA si una factura está REALMENTE autorizada (consulta WSFE
+// FECompConsultar). Es la fuente de verdad: si ARCA la tiene, marcamos arcaReal=true
+// y guardamos el CAE/vto reales. Sirve para despejar dudas con el "simulado".
+app.post('/api/facturas/:id/verificar-arca', requireCompany, requirePermission('ventas:read'), async (req, res, next) => {
+  try {
+    const f = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!f) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    const co = await prisma.company.findUnique({ where: { id: req.companyId } });
+    const arcaOk = !!(co && co.arcaCertCrt && co.arcaPrivadaKey && co.arcaCuit);
+    if (!arcaOk) return res.status(400).json({ ok: false, error: 'La empresa no tiene ARCA configurado: no se puede verificar.' });
+    const cbteTipo = _AFIP_CBTE_TIPO[`${f.clase || 'factura'}:${f.tipo}`];
+    if (!cbteTipo) return res.status(400).json({ ok: false, error: 'Este tipo de comprobante no se puede consultar por WSFE.' });
+    const modo = co.arcaModo || 'prod';
+    const cuit = String(co.arcaCuit || '').replace(/\D/g, '');
+    const ta = await _arcaGetTA(co.id, 'wsfe', co.arcaCertCrt, co.arcaPrivadaKey, modo);
+    const r = await _arcaWsfeConsultar({ token: ta.token, sign: ta.sign, cuit, ptoVta: f.puntoVenta, cbteTipo, numero: f.numero, modo });
+    if (r.enArca) {
+      const data = { arcaReal: true };
+      if (r.cae) data.cae = r.cae;
+      if (r.caeVto) data.caeVto = r.caeVto;
+      if (f.estado !== 'anulada') data.estado = 'autorizada';
+      const upd = await prisma.factura.update({ where: { id: f.id }, data });
+      const pagada = await _ventaTienePago(req.companyId, upd.id);
+      return res.json({ ok: true, enArca: true, data: { ...upd, pagada } });
+    }
+    return res.json({ ok: true, enArca: false, msg: r.msg || 'ARCA no tiene registrado este comprobante (puede ser un CAE simulado o aún no procesado).' });
   } catch (e) { next(e); }
 });
 
@@ -16118,6 +16163,17 @@ const _AYUDA_KB = [
       'Se abre solo para imprimir/descargar y podés enviarlo por WhatsApp o email.',
       'Genera la cuenta a cobrar y descuenta stock. Las NC reingresan stock; las ND no.'],
     atajo:{ page:'facturacion', label:'Abrir Movimientos de ventas' } },
+  { id:'arca_punto_venta', terms:['punto de venta','punto de venta web services','web services','rece','arca no autoriza','10005','no autorizado a emitir','el punto de venta informado','dar de alta punto de venta','configurar arca','facturar con arca','no aparece en arca','habilitar web services','abm puntos de venta','error al emitir','cae simulado','no la veo en arca'],
+    titulo:'Configurar ARCA para facturar (Punto de Venta Web Services)',
+    pasos:[
+      'Para que AgroCore facture solo (web services) necesitás DOS cosas en ARCA: (1) el certificado cargado en AgroCore y (2) un PUNTO DE VENTA de tipo "Web Services" dado de alta en ARCA.',
+      'OJO: el punto de venta de "Comprobantes en línea" (el que usás para facturar a mano en la web) NO sirve para web services. ARCA no deja usar el mismo número para los dos; tenés que crear uno nuevo.',
+      'En ARCA (clave fiscal) entrá a "Administración de puntos de venta y domicilios" → elegí la empresa → "A/B/M de puntos de venta" → Agregar (el +).',
+      'En "Sistema" elegí la opción de Web Services: "Factura Electrónica - Monotributo - Web Services" (si sos Monotributo) o "RECE / Factura Electrónica - Web Services" (si sos Responsable Inscripto). Completá Nombre de Fantasía, Dominio y Domicilio y Aceptá.',
+      'ARCA te asigna un NÚMERO nuevo (por ej. 00003). Ese es el que tenés que usar en AgroCore al emitir (campo Punto de Venta).',
+      'Si al emitir te sale el error [10005] "NO AUTORIZADO A EMITIR... EL PUNTO DE VENTA DEBE SER DEL TIPO RECE", es justamente que ese punto de venta no está dado de alta como Web Services: creá el punto de venta Web Services y usá ese número.',
+      'Si una factura salió con "CAE sin confirmar" y no la ves en ARCA, abrí la factura y tocá "🔍 Verificar en ARCA": consulta en el momento si ARCA la tiene autorizada. (El portal "Mis Comprobantes" puede tardar horas en mostrarla, pero el CAE ya vale).'],
+    atajo:{ page:'empresas', label:'Abrir Empresas (ARCA)' } },
   { id:'pago_proveedor', terms:['pagar','pago a proveedor','orden de pago','pagar una factura','cancelar deuda','pagar cuenta','como pago','pago en especie','pagar con producto','pagar con mercaderia','lechones','varios medios','pago dividido','pagar mitad'],
     titulo:'Pagar a un proveedor (Orden de Pago)',
     pasos:[
@@ -18145,6 +18201,7 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
       hectareasAplicadas: z.number().nullable().optional(),
       costo: z.number().nullable().optional(),
       monedaCosto: z.string().nullable().optional(),
+      depositoId: z.string().nullable().optional(),   // depósito del que se descuenta el stock de los insumos
       observaciones: z.string().nullable().optional(),
       empleadoId: z.string().nullable().optional(),
       precioReferencia: z.number().nullable().optional(),
@@ -18227,7 +18284,7 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
         const total = (it.precioUnit || 0) * it.cantidad;
         const mov = await tx.movimiento.create({
           data: {
-            companyId: req.companyId, productoId: it.productoId, depositoId: null,
+            companyId: req.companyId, productoId: it.productoId, depositoId: d.depositoId || null,
             fecha: d.fecha, tipo: 'egreso', motivo: 'aplicacion',
             cantidad: it.cantidad, precio: it.precioUnit ?? null, total: total || null,
             referencia: `LAB-${labor.id.slice(-6).toUpperCase()}`,
@@ -21913,6 +21970,11 @@ app.post('/api/admin/instalar-actualizacion', authMiddleware, async (req, res, n
         '@echo off',
         // Asegurar git y node en el PATH (la tarea corre como SYSTEM y puede no tenerlos).
         'set "PATH=%PATH%;%ProgramFiles%\\Git\\cmd;%ProgramFiles%\\Git\\bin;%ProgramFiles%\\nodejs;%ProgramFiles(x86)%\\nodejs;%LOCALAPPDATA%\\Programs\\nodejs;%APPDATA%\\npm"',
+        // Git SIEMPRE no-interactivo: corriendo como SYSTEM, si el repo es privado git
+        // pediria credenciales y la tarea quedaria COLGADA (timeout de 5 min). Asi falla rapido.
+        'set "GIT_TERMINAL_PROMPT=0"',
+        'set "GCM_INTERACTIVE=Never"',
+        'set "GIT_ASKPASS=echo"',
         'ping 127.0.0.1 -n 3 >nul',   // le da tiempo al backend a responder antes de frenarse
         psLine,
         'schtasks /delete /tn "' + taskName + '" /f >nul 2>&1',   // limpieza: borra la tarea

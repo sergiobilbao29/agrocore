@@ -53,6 +53,24 @@ function Pause-IfInteractive($prompt) {
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+# --- Git SIEMPRE no-interactivo -------------------------------------------------
+# Si el repo es privado y el update corre como SYSTEM (lo lanza el boton "Instalar"
+# via Programador de tareas), git pediria usuario/contrasena y se COLGARIA hasta el
+# timeout (de ahi el "error que no dice nada" / timeout de 5 min). Con esto, git
+# FALLA RAPIDO en vez de colgarse, y el reset --hard de mas abajo deja un mensaje claro.
+$env:GIT_TERMINAL_PROMPT = '0'
+$env:GCM_INTERACTIVE     = 'Never'
+$env:GIT_ASKPASS         = 'echo'
+$env:SSH_ASKPASS         = 'echo'
+
+# --- Log a disco (para poder diagnosticar fallas silenciosas) -------------------
+try {
+  $logDir = Join-Path $InstallDir 'logs'
+  if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+  $logFile = Join-Path $logDir ('update-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+  Start-Transcript -Path $logFile -Append -Force | Out-Null
+} catch {}
+
 function H1($msg) { Write-Host "`n========================================" -ForegroundColor Cyan; Write-Host " $msg" -ForegroundColor Cyan; Write-Host "========================================" -ForegroundColor Cyan }
 function Ok($msg) { Write-Host "[OK] $msg" -ForegroundColor Green }
 function Info($msg) { Write-Host "[..] $msg" -ForegroundColor Gray }
@@ -227,8 +245,13 @@ try {
         # instancias cliente NO deben tener cambios propios, forzamos la version publicada:
         # fetch + reset --hard al remoto. (El backup de la base ya se hizo en el paso 4.)
         Warn "git pull --ff-only fallo (exit $LASTEXITCODE). Forzando a la version publicada (reset --hard)..."
-        & git fetch origin 2>&1 | ForEach-Object { Write-Host "    $_" }
-        if ($LASTEXITCODE -ne 0) { throw "git fetch fallo (exit $LASTEXITCODE)" }
+        $fetchOut = & git fetch origin 2>&1; $fetchOut | ForEach-Object { Write-Host "    $_" }
+        if ($LASTEXITCODE -ne 0) {
+          if ("$fetchOut" -match 'Authentication|could not read Username|terminal prompts disabled|403|401|fatal: Authentication failed') {
+            throw "git fetch fallo por AUTENTICACION con GitHub. Si el update lo lanzo el boton (corre como SYSTEM) y el repo es privado, SYSTEM no tiene las credenciales de git. Solucion: corre la actualizacion a mano desde una PowerShell abierta como TU usuario (que si tiene las credenciales): powershell -ExecutionPolicy Bypass -File $InstallDir\Forzar-Actualizacion.ps1 -InstallDir `"$InstallDir`" -Servicio `"$svcName`" -Puerto $Puerto"
+          }
+          throw "git fetch fallo (exit $LASTEXITCODE)"
+        }
         # Branch remoto por defecto: main (con fallback a master).
         $branch = "main"
         & git show-ref --verify --quiet refs/remotes/origin/main

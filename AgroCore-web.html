@@ -1490,7 +1490,7 @@ async function instalarActualizacionEjecutar(versionEsperada) {
 
   function intentar() {
     if (Date.now() - inicio > maxMs) {
-      if (stepEl()) stepEl().innerHTML = `<span class="text-red-700">⚠️ Timeout (5 minutos): el sistema no terminó de actualizarse (suele ser por cambios locales que bloquean el <code>git pull</code>).<br>En el servidor de esta instancia ejecutá:<br><code class="text-[11px]">powershell -ExecutionPolicy Bypass -File C:\\AgroCore\\Forzar-Actualizacion.ps1 -Servicio AgroCore-Backend -Puerto 3100</code><br>(ajustá Servicio/Puerto según la instancia) y después recargá con Ctrl+Shift+R.</span>`;
+      if (stepEl()) stepEl().innerHTML = `<span class="text-red-700">⚠️ Timeout (5 minutos): el sistema no terminó de actualizarse. Suele ser porque el actualizador corre como SYSTEM y, si el repositorio es privado, <code>git</code> queda esperando usuario/contraseña.<br><b>Solución:</b> en el servidor de esta instancia, abrí <b>PowerShell como TU usuario</b> (clic derecho → “Ejecutar como administrador”) y corré:<br><code class="text-[11px]">powershell -ExecutionPolicy Bypass -File C:\\AgroCore\\Forzar-Actualizacion.ps1 -Servicio AgroCore-Backend -Puerto 3100</code><br>(en otra instancia ajustá: ej. Bovio → <code>-InstallDir C:\\AgroCore-Bovio -Servicio AgroCore-Bovio-Backend -Puerto 3102</code>). Después recargá con Ctrl+Shift+R.</span>`;
       const btn = document.getElementById('upd-close-btn');
       if (btn) { btn.disabled = false; btn.textContent = 'Cerrar'; btn.onclick = closeModal; }
       return;
@@ -3074,6 +3074,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
+      titulo:'🔧 v2.371.0 — El actualizador ya no se cuelga (y deja un log)',
+      desc:'Algunas instancias quedaban en “Actualizando…” hasta el timeout de 5 minutos sin un error claro. La causa: el actualizador corre como <b>SYSTEM</b> y, si el repositorio es privado, <b>git</b> quedaba esperando usuario/contraseña. Ahora git está forzado a <b>modo no-interactivo</b> (falla rápido en vez de colgarse), el actualizador deja un <b>log</b> en <code>C:\\AgroCore\\logs\\update-*.log</code> y el aviso de timeout explica la causa real y el comando exacto para destrabar la instancia (correr <b>Forzar-Actualizacion.ps1</b> desde una PowerShell abierta como tu usuario). Se agregó ese script a la raíz de cada instalación.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/11/2026',
+      titulo:'📦 v2.370.0 — Insumos de campaña: elegir de qué depósito se descuenta el stock',
+      desc:'Al cargar <b>insumos al lote</b> o una <b>labor con insumos</b> (Insumos y labores), ahora hay un selector <b>“Descontar del depósito”</b>. El egreso de stock se hace del depósito que elijas (galpón, barraca, etc.), así el stock por depósito queda bien. Si no elegís ninguno, queda como “sin depósito” (campo / general), igual que antes. Aplica al alta y a la edición.' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/11/2026',
+      titulo:'🔍 v2.369.0 — Verificar factura en ARCA + PDF (logo y letra arreglados)',
+      desc:'Ahora podés <b>consultar en el momento a ARCA</b> si una factura está realmente autorizada: abrí la factura y tocá <b>“🔍 Verificar en ARCA”</b>. AgroCore consulta el web service (FECompConsultar) y, si ARCA la tiene, la marca como <b>CAE real</b> y guarda el CAE/vencimiento verdaderos. Ojo: el portal “Mis Comprobantes” de ARCA puede <b>tardar horas</b> en mostrar una factura emitida por web service, pero el CAE ya es válido; esta verificación te saca la duda al instante. <br>El cartel de la factura dejó de decir “simulado” cuando en realidad el CAE no estaba confirmado: ahora dice <b>“CAE sin confirmar con ARCA”</b> con el botón para verificar. <br>En el <b>PDF</b> arreglamos el <b>logo</b> (ahora respeta la proporción con la que lo subís, no se deforma) y la <b>línea que cruzaba la letra</b> del comprobante. <br>Además sumamos a la ayuda (bot, manual e instructivo) el paso de <b>crear el Punto de Venta “Web Services” en ARCA</b> (necesario para facturar; el de “Comprobantes en línea” no sirve) y la explicación del error <b>[10005] “debe ser del tipo RECE”</b>.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/11/2026',
       titulo:'🧾 v2.368.0 — Factura ARCA: sello “CAE real”, anulación con Nota de Crédito y PDF mejorado',
       desc:'Cuando una factura se autoriza con <b>CAE real de ARCA</b>, ahora te lo muestra con un <b>cartel verde “✅ Autorizada por ARCA — CAE real”</b> (distinto del “🧪 comprobante interno/simulado” de las empresas sin ARCA). Y como ante ARCA ya quedó emitida, <b>no se puede anular ni eliminar</b>: el botón pasa a ser <b>“↩️ Anular con Nota de Crédito”</b>, que abre una NC con el mismo cliente e ítems para revertirla correctamente. <br>Además mejoramos la <b>impresión/PDF del comprobante</b>: (1) ya <b>no se muestran las alícuotas de IVA en 0</b> (solo las que tienen importe); (2) se puede incluir el <b>logo</b> cargado en la empresa y el <b>nombre de fantasía</b>; (3) se arreglaron las <b>líneas que cruzaban el texto</b> y la que tapaba el <b>Importe Total</b>; (4) ahora sale el <b>código QR oficial de ARCA</b> en facturas con CAE real.' },
@@ -16748,7 +16757,7 @@ async function factVer(id) {
     const esFactura = (f.clase||'factura')==='factura';
     const badge = arcaReal
       ? `<div style="margin:0 0 8px;padding:7px 10px;border-radius:8px;background:#dcfce7;border:1px solid #86efac;color:#166534;font-size:12px">✅ <b>Autorizada por ARCA</b> — CAE real <b>${esc(f.cae||'')}</b>. No se puede anular ni eliminar: para anularla, emití una <b>Nota de Crédito</b>.</div>`
-      : (f.cae ? `<div style="margin:0 0 8px;padding:7px 10px;border-radius:8px;background:#fef9c3;border:1px solid #fde047;color:#854d0e;font-size:12px">🧪 <b>Comprobante interno</b> — CAE simulado (no válido ante ARCA). La empresa no tiene ARCA configurado o es informal.</div>` : '');
+      : (f.cae ? `<div style="margin:0 0 8px;padding:7px 10px;border-radius:8px;background:#fef9c3;border:1px solid #fde047;color:#854d0e;font-size:12px">❓ <b>CAE sin confirmar con ARCA</b> — este comprobante tiene un CAE cargado pero AgroCore todavía no verificó contra ARCA si es real. Tocá <b>“🔍 Verificar en ARCA”</b> para consultarlo (si la empresa tiene ARCA). Las facturas emitidas en empresas informales/sin ARCA usan CAE simulado (no válido).</div>` : '');
     openModal({
       title: `${_factClaseTxt(f)} ${f.tipo} ${String(f.puntoVenta).padStart(4,'0')}-${String(f.numero).padStart(8,'0')}`,
       size:'max-w-3xl',
@@ -16759,6 +16768,7 @@ async function factVer(id) {
                <button class="btn btn-secondary" onclick="factWhatsApp()">💬 WhatsApp</button>
                <button class="btn btn-primary" onclick="factEmail()">✉️ Email</button>
                ${!arcaReal && f.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) && !f.pagada ? `<button class="btn btn-secondary" onclick="closeModal(); factEditar('${esc(f.id)}')">✏️ Editar</button>` : ''}
+               ${!arcaReal && f.cae ? `<button class="btn btn-secondary text-blue-700" onclick='factVerificarArca(${JSON.stringify(f.id)})'>🔍 Verificar en ARCA</button>` : ''}
                ${arcaReal && esFactura && f.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) ? `<button class="btn btn-secondary text-amber-700" onclick='factNotaCredito(${JSON.stringify(f.id)})'>↩️ Anular con Nota de Crédito</button>` : ''}
                ${!arcaReal && sinCae && (can('ventas:delete')||can('ventas:update')) ? `<button class="btn btn-secondary text-red-600" onclick='factEliminar(${JSON.stringify(f.id)})'>🗑️ Eliminar</button>` : ''}`
     });
@@ -16903,15 +16913,21 @@ function _factPDFPage(doc, f, copia, extras){
   // ===== Encabezado =====
   const hTop=M+22, hBot=hTop+98;
   doc.line(midX, hTop, midX, hBot);                 // divisoria emisor/comprobante
-  // caja letra centrada sobre la divisoria
-  doc.setLineWidth(0.9); doc.rect(midX-20, hTop+6, 40, 40);
+  // caja letra centrada sobre la divisoria (fondo blanco para que la línea no cruce la letra)
+  doc.setFillColor(255,255,255); doc.setLineWidth(0.9); doc.rect(midX-20, hTop+6, 40, 40, 'FD');
   doc.setFont('helvetica','bold'); doc.setFontSize(24); doc.text(letra, midX, hTop+34, {align:'center'});
   doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.text('COD. '+_factCod(letra), midX, hTop+44, {align:'center'});
-  // Emisor (izquierda): logo opcional + nombre de fantasía
-  const emCx=(M+midX-24)/2;
-  if(extras.logoData){ try{ doc.addImage(extras.logoData, 'PNG', emCx-22, hTop+6, 44, 26, undefined, 'FAST'); }catch(e){} }
-  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text(emp.fantasia||emp.razonSocial, emCx, extras.logoData?hTop+42:hTop+28, {align:'center'});
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); let ey=extras.logoData?hTop+56:hTop+46;
+  // Emisor (izquierda): logo opcional (respetando su proporción) + nombre de fantasía
+  const emCx=(M+midX-24)/2; let logoH=0;
+  if(extras.logoData){ try{
+    const p=doc.getImageProperties(extras.logoData);
+    const maxW=120, maxH=40; const rr=Math.min(maxW/p.width, maxH/p.height, 1);
+    const w=p.width*rr, h=p.height*rr; logoH=h;
+    doc.addImage(extras.logoData, (p.fileType||'PNG').toUpperCase(), emCx-w/2, hTop+6, w, h, undefined, 'FAST');
+  }catch(e){ logoH=0; } }
+  const nameY = hTop + 6 + (logoH?logoH+12:18);
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text(emp.fantasia||emp.razonSocial, emCx, nameY, {align:'center'});
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); let ey=nameY+16;
   doc.text('Razon Social: '+emp.razonSocial, M+8, ey); ey+=13;
   if(emp.direccion){ doc.text('Domicilio Comercial: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), M+8, ey); ey+=13; }
   doc.text('Condicion frente al IVA: '+(emp.iva||'IVA Responsable Inscripto'), M+8, ey);
@@ -17041,6 +17057,15 @@ async function factAnular(id) {
   if (!confirm('¿Anular esta factura? Si tenia items vinculados a productos, se devolveran al stock.')) return;
   try { await api('/api/facturas/'+id+'/anular',{method:'POST'}); toast('Anulada','success'); delete state.cache.stockMap; pages.facturacion(); }
   catch (e) { toast(e.message,'error'); }
+}
+// Verifica contra ARCA (WSFE FECompConsultar) si la factura está realmente autorizada.
+async function factVerificarArca(id) {
+  try {
+    toast('Consultando a ARCA…','info');
+    const r = await api('/api/facturas/'+id+'/verificar-arca', { method:'POST' });
+    if (r.enArca) { toast('✅ ARCA confirma: la factura está autorizada (CAE real).','success'); delete state.cache.stockMap; factVer(id); }
+    else { toast('ARCA NO tiene registrada esta factura. Puede ser un CAE simulado o aún no procesado por ARCA. '+(r.msg||''),'warn'); }
+  } catch (e) { toast('No se pudo verificar: '+e.message,'error'); }
 }
 // Emitir una Nota de Crédito que anula una factura autorizada (ARCA). Abre el form de
 // comprobante preseteado en Nota de Crédito con el mismo cliente e ítems de la factura.
@@ -28897,7 +28922,9 @@ function insTipoChange(sel){
 }
 // Formulario de carga de insumos: se elige la campaña/lote y la fecha UNA vez,
 // y se cargan VARIOS insumos en la misma pantalla (una fila por insumo).
-function aplicForm(tipo, campanaId) {
+async function aplicForm(tipo, campanaId) {
+  if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
+  const _deps = state.cache.depositos || [];
   const campanas = state.cache.campanas || [];
   const insumosCat = state.cache.insumosCat || [];
   const prodsIns = (state.cache.productos || []).filter(p => ['insumo','insumos','cereal','cereales','grano','granos','combustible','combustibles','herramienta','repuesto','repuestos','otro','otros'].includes((p.categoria||'').toLowerCase()));
@@ -28920,7 +28947,14 @@ function aplicForm(tipo, campanaId) {
       <div class="kpi p-0 overflow-hidden mb-2">
         <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
           <span class="text-sm font-medium text-slate-700">🧪 Insumos a cargar en este lote</span>
-          <button class="btn btn-secondary text-xs" onclick="insAddRow()">+ Agregar insumo</button>
+          <div class="flex items-center gap-2 flex-wrap">
+            <label class="text-xs text-slate-500">Descontar del depósito:</label>
+            <select id="f-ins-dep" class="input text-xs py-1" style="width:auto" title="Depósito del que se descuenta el stock de los insumos">
+              <option value="">🌱 Sin depósito (campo / general)</option>
+              ${_deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}${d.tipo?` · ${esc(d.tipo)}`:''}</option>`).join('')}
+            </select>
+            <button class="btn btn-secondary text-xs" onclick="insAddRow()">+ Agregar insumo</button>
+          </div>
         </div>
         <div class="overflow-x-auto">
           <table class="data text-sm">
@@ -29004,6 +29038,7 @@ async function aplicSaveMulti(){
   const fecha = fecRaw ? new Date(fecRaw+'T12:00:00').toISOString() : null;
   if (!campanaId) return toast('Campaña requerida','warn');
   const moneda = $('#f-moneda')?.value || 'USD';
+  const depositoId = $('#f-ins-dep')?.value || null;
   const rows = $$('#f-ins-body tr[data-ins]');
   const items = [];
   for (const tr of rows){
@@ -29024,6 +29059,7 @@ async function aplicSaveMulti(){
       precioUnit: pu ? Number(pu) : null,
       costoHa: cha || 0,
       moneda,
+      depositoId,
       hectareasAplicadas: ha,
       fecha,
       observaciones: null,
@@ -29142,8 +29178,12 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
       } catch {}
     }
     laboresCat = state.cache.laboresCat || [];
+    if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
     try { await _cargarVademecum(); } catch {}
   } catch (err) { return toast(err.message, 'error'); }
+  const _depsLabor = state.cache.depositos || [];
+  const _depOpts = (sel) => `<option value="">🌱 Sin depósito (campo / general)</option>` +
+    _depsLabor.map(d=>`<option value="${esc(d.id)}" ${sel===d.id?'selected':''}>${esc(d.nombre)}${d.tipo?` · ${esc(d.tipo)}`:''}</option>`).join('');
   // (Sin campañas igual se puede cargar un SERVICIO a terceros; la campaña es opcional.)
   // Bloque % cobro empleado: solo en modo avanzada.
   // Si el usuario NO tiene permiso de modificación sobre catálogos / labores,
@@ -29221,9 +29261,13 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
       ${empleadosSection}
 
       <div class="kpi p-0 overflow-hidden mb-3">
-        <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between flex-wrap gap-2">
           <span class="text-sm font-medium text-slate-700">🧪 Insumos consumidos (descuentan del stock)</span>
-          <button class="btn btn-secondary text-xs" onclick="laAddIns()">+ Insumo</button>
+          <div class="flex items-center gap-2 flex-wrap">
+            <label class="text-xs text-slate-500">Descontar del depósito:</label>
+            <select id="la-dep" class="input text-xs py-1" style="width:auto" title="Depósito del que se descuenta el stock de los insumos">${_depOpts(edit?.depositoId || '')}</select>
+            <button class="btn btn-secondary text-xs" onclick="laAddIns()">+ Insumo</button>
+          </div>
         </div>
         <table class="data">
           <thead><tr><th>Producto</th><th class="text-right">Cantidad</th><th class="text-right">Precio unit.</th><th class="text-right">Total</th><th></th></tr></thead>
@@ -29502,6 +29546,7 @@ async function laborSave() {
       hectareasAplicadas: ha,
       fecha: $('#la-fec').value ? new Date($('#la-fec').value+'T12:00:00').toISOString() : null,
       observaciones: $('#la-obs').value.trim() || null,
+      depositoId: $('#la-dep')?.value || null,
       insumos: insumosEd,
     };
     try {
@@ -29538,6 +29583,7 @@ async function laborSave() {
     tipoPrecio: pr != null ? tp : null,
     costo: costoHaLabor,
     monedaCosto: $('#la-mon')?.value || 'ARS',
+    depositoId: $('#la-dep')?.value || null,
     empleados,
     insumos,
   };
