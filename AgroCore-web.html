@@ -3079,6 +3079,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
+      titulo:'🧾 v2.377.0 — Fábrica: cargar una venta SIN factura (comprobante interno)',
+      desc:'En las empresas con <b>Producción industrial / Fábrica</b>, al emitir una venta aparece la opción <b>«🧾 Cargar sin factura (comprobante interno)»</b>: registra la operación <b>moviendo la cuenta corriente y el stock</b>, pero <b>sin emitir a ARCA ni CAE</b> (no es un comprobante fiscal). Si no querés IVA, ponés la alícuota en 0 en cada renglón. Las ventas <b>con factura</b> (CAE real de ARCA) siguen igual. En <b>compras</b> no hace falta: ya se registran sin emitir a ARCA (cargás el comprobante que te dieron, o ninguno).' },
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
       titulo:'🏭 v2.376.0 — Fábrica: canje en Comercial, molienda en Producción y cuentas en kilos',
       desc:'En las empresas con <b>Producción industrial / Fábrica</b> reordenamos el menú: <b>«Molienda / Fábrica» pasa a la sección Producción</b> y en <b>Comercial</b> aparecen <b>«Plan canje (grano)»</b> y <b>«Cuenta canje (grano)»</b> (antes había que entrar por Molienda). Además, <b>Cuentas a cobrar y a pagar</b> suman una pestaña <b>«📦 En kilos»</b> que lista todos los clientes/proveedores con su <b>saldo en kilos</b> por producto; y tanto ahí como en el saldo <b>📦 kg</b> de cada contacto podés escribir un <b>precio $/kg</b> y ver el <b>equivalente en pesos</b> por renglón y el total, pero <b>el saldo se sigue viendo siempre en kilos</b> (el precio no modifica nada, es solo para valorizar).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
@@ -15871,6 +15874,13 @@ async function factForm(prefill = null) {
           <div class="text-[11px] text-slate-500 mt-1">El CAE y su vencimiento los devolvió ARCA cuando se emitió la factura (están en el PDF). El sistema NO la reenvía a ARCA: solo registra el comprobante ya emitido.</div>
         </div>
       </div>`:''}
+      ${(!state._factEdit && !state._factInformal && state.usaProduccionIndustrial) ? `
+      <div class="bg-sky-50 border border-sky-200 rounded-lg p-2.5 mb-3">
+        <label class="flex items-center gap-2 cursor-pointer text-sm text-sky-900">
+          <input type="checkbox" id="f-interno" class="w-4 h-4" onchange="factInternoToggle()"/>
+          <span>🧾 <b>Cargar sin factura</b> (comprobante interno) — mueve la cuenta corriente y el stock, <b>sin emitir a ARCA ni CAE</b>. Si no querés IVA, poné la alícuota en 0 en cada renglón.</span>
+        </label>
+      </div>`:''}
       <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
         <div><label class="label">Comprobante *</label>
           <select id="f-clase" class="input" onchange="factClaseHint(); factSugerirNro()">
@@ -16205,7 +16215,17 @@ function factExternaToggle(){
   if (on) {
     const v = document.getElementById('f-caevto');
     if (v && !v.value) { const d = new Date(); d.setDate(d.getDate()+10); v.value = d.toISOString().slice(0,10); }
+    const int = document.getElementById('f-interno'); if (int && int.checked) { int.checked = false; factInternoToggle(); }
   }
+}
+// "Cargar sin factura" (comprobante interno, no fiscal). Excluyente con "ya emitida en ARCA".
+function factInternoToggle(){
+  const on = document.getElementById('f-interno')?.checked;
+  if (on) { const ext = document.getElementById('f-externa'); if (ext && ext.checked) { ext.checked = false; factExternaToggle(); } }
+  const btn = document.getElementById('f-save-btn');
+  if (btn) btn.innerHTML = on ? '💾 Cargar venta (sin factura)' : '💾 Autorizar';
+  const hint = document.getElementById('f-cae-hint');
+  if (hint) hint.textContent = on ? '🧾 Comprobante interno: mueve cuenta corriente y stock, sin CAE ni ARCA' : '💡 Al autorizar se solicita el CAE a ARCA (si la empresa tiene ARCA configurado)';
 }
 // Sube el PDF de ARCA y autopobla los campos del MISMO formulario de venta.
 async function factPdfCargar(input){
@@ -16395,6 +16415,9 @@ async function factSave() {
     imputacionCC: (state.usaCentrosCosto && typeof ccRepartoGet==='function') ? ccRepartoGet('vta') : null,
     items,
   };
+  // "Cargar sin factura": comprobante interno (no fiscal, no va a ARCA).
+  const interno = !!document.getElementById('f-interno')?.checked;
+  if (interno && !externa) data.origen = 'interno';
   // Modo "ya emitida en ARCA": se registra con su CAE real (no se reenvía a ARCA).
   if (externa) {
     const cae = ($('#f-cae')?.value||'').trim();

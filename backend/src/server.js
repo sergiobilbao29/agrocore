@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.376.0';
+const AGROCORE_VERSION = '2.377.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6307,7 +6307,7 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       depositoId: z.string().nullable().optional(),   // depósito de donde sale el stock vendido
       sinStock: z.boolean().optional(),               // "Sin depósito": no descuenta stock
       observaciones: z.string().nullable().optional(),
-      origen: z.enum(['agrocore', 'arca_externa']).optional().default('agrocore'),
+      origen: z.enum(['agrocore', 'arca_externa', 'interno']).optional().default('agrocore'),
       cae: z.string().optional(),
       caeVto: zFecha.optional(),
       laborServicioId: z.string().nullable().optional(),   // si la factura sale de una labor a terceros, la vinculamos
@@ -6356,6 +6356,10 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         // No creamos nada si ARCA no autorizó: evita facturas "truchas" con CAE inventado.
         return res.status(400).json({ ok: false, error: 'No se pudo emitir en ARCA: ' + e.message });
       }
+    } else if (input.origen === 'interno') {
+      // "Sin factura": comprobante interno de la empresa (NO fiscal, NO va a ARCA).
+      // Mueve cuenta corriente y stock, pero sin CAE. Mantiene el número elegido.
+      cae = null; caeVto = null;
     } else {
       // Sin ARCA configurado (empresa informal / sin certificado): comprobante interno,
       // con CAE simulado (NO es válido fiscalmente). Mantiene el número elegido.
