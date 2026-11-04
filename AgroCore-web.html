@@ -1147,7 +1147,7 @@ const MODULES = [
   // ===== ADMINISTRACIÓN =====
   { id:'empleados',     label:'Empleados',            icon:'👷', perm:'finanzas:read',   section:'Administración' },
   { id:'catalogos',     label:'Catálogos',            icon:'📚', perm:'produccion:read', section:'Administración' },
-  { id:'categoriasArt', label:'Categorías y Familias', icon:'🗂️', perm:'produccion:read', section:'Administración' },
+  { id:'categoriasArt', label:'Organización de artículos', icon:'🗂️', perm:'produccion:read', section:'Administración' },
   { id:'catGastos',     label:'Categorías de Gastos',  icon:'🏷️', perm:'finanzas:read',    section:'Administración' },
   { id:'centrosCosto',  label:'Centros de costo',      icon:'🎯', perm:'finanzas:read',    section:'Administración' },
   { id:'libroIVA',      label:'Libro IVA (Ventas/Compras)', icon:'📘', perm:'finanzas:read', section:'Administración' },
@@ -3078,6 +3078,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
+      titulo:'🗂️ v2.383.0 — Catálogo más claro: ruta completa de cada artículo, buscador global y nombres unificados',
+      desc:'Segundo paso de la reorganización (todo visual, sin tocar datos). <b>"Catálogos" ahora se llama "Catálogo de artículos"</b> y <b>"Categorías y Familias" pasó a "Organización de artículos"</b>. En el catálogo, cada artículo muestra su <b>ubicación completa</b> en el árbol (ej. <i>Agroindustria / Soja / Derivados</i>) en vez de solo la familia, y sumamos un <b>buscador global</b> arriba que encuentra cualquier artículo sin importar en qué subfamilia esté (no hace falta abrir todas las carpetas). Los artículos que cuelgan directo de una categoría se agrupan como <b>"Directo en la categoría"</b> y los que no tienen familia como <b>"Sin clasificar"</b> (antes todo caía en "Sin Familia"). En <b>Organización de artículos</b>, cada nodo del árbol muestra <b>cuántos artículos contiene</b> (incluyendo sus subfamilias) y se aclaró que podés anidar subfamilias <b>sin límite</b>.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'04/11/2026',
       titulo:'🔎 v2.382.0 — Diagnóstico de artículos: ordená tu catálogo y pasá a artículos lo que estaba en el formato viejo',
       desc:'Sumamos una pantalla <b>Diagnóstico de artículos</b> (botón arriba en <b>Catálogos</b>) que te muestra, sin cambiar nada: los <b>ítems del formato anterior</b> que deberían ser artículos reales (por eso no aparecían en stock ni en compras/ventas), los <b>artículos sin clasificar</b> en el árbol y los <b>posibles duplicados</b> por nombre. Desde ahí, con un botón, podés <b>pasar a artículos</b> los que elijas: se crean como artículos de stock (comprables y vendibles) y la ficha vieja queda inactiva (reversible, no se borra nada). Además, al crear un insumo o cereal nuevo en una pestaña vieja, el sistema te lleva directo al <b>formulario de artículo completo</b> (antes abría un formulario reducido que no movía stock). Nada se fusiona solo: los duplicados los revisás vos. Primer paso de la reorganización de Categorías / Familias / Artículos.' },
@@ -30420,6 +30423,16 @@ async function otWhatsapp(id){
 // producto es la RAÍZ de su rama en el árbol de Categorías y Familias.
 function _catNodo(id){ return (state.cache.categoriasArt||[]).find(c=>c.id===id)||null; }
 function _catRaizNodo(caId){ let c=_catNodo(caId); if(!c) return null; let i=0; while(c.padreId){ const p=_catNodo(c.padreId); if(!p||++i>30) break; c=p; } return c; }
+// Ruta completa del árbol para una categoría/familia: "Categoría / Familia / Subfamilia…"
+function _catRutaArr(caId){ const arr=[]; let c=_catNodo(caId), i=0; while(c && i++<30){ arr.unshift(c.nombre||''); c=c.padreId?_catNodo(c.padreId):null; } return arr; }
+function _catRutaStr(caId){ return _catRutaArr(caId).join(' / '); }
+// Cantidad de artículos (Producto) bajo un nodo del árbol, contando sus descendientes.
+function _catConteoArticulos(id){
+  const prods = state.cache.productos || [];
+  const descend = new Set([id]); let crece=true;
+  while(crece){ crece=false; (state.cache.categoriasArt||[]).forEach(c=>{ if(c.padreId && descend.has(c.padreId) && !descend.has(c.id)){ descend.add(c.id); crece=true; } }); }
+  return prods.filter(p => p.categoriaArticuloId && descend.has(p.categoriaArticuloId) && p.activo!==false).length;
+}
 // Nombre de la categoría raíz del árbol para un producto (unifica Stock/Movimientos/Catálogos).
 function prodCategoriaRaiz(p){
   if (!p) return '';
@@ -30536,13 +30549,30 @@ async function catLegacyAltaArticulo(){
   }
   prodForm(null,{after:'catalogos'});
 }
+// Buscador global del catálogo: filtra TODOS los artículos (Producto) por nombre/código,
+// sin importar en qué subfamilia estén, y muestra su ruta completa. Client-side (no recarga).
+function catBuscarFiltrar(q){
+  q=(q||'').toLowerCase().trim();
+  const box=document.getElementById('cat-search-results'); if(!box) return;
+  if(!q){ box.innerHTML=''; return; }
+  const prods=(state.cache.productos||[]).filter(p=>p.activo!==false && ((p.nombre||'').toLowerCase().includes(q)||(p.sku||'').toLowerCase().includes(q)));
+  if(!prods.length){ box.innerHTML=`<div class="stub-card">Sin resultados para "${esc(q)}".</div>`; return; }
+  box.innerHTML=`<div class="text-xs text-slate-500 mb-1">${prods.length} resultado${prods.length===1?'':'s'}</div>
+    <div class="kpi p-0 overflow-hidden"><table class="data w-full"><thead><tr><th>Artículo</th><th>Ubicación</th><th>Unidad</th><th></th></tr></thead><tbody>`+
+    prods.slice(0,200).map(p=>{ const ruta=p.categoriaArticuloId?_catRutaStr(p.categoriaArticuloId):''; return `<tr class="table-row">
+      <td class="font-semibold text-slate-800">${esc(p.nombre)}${p.sku?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.sku)}</div>`:''}</td>
+      <td class="text-[11px] text-slate-600">${esc(ruta||'—')}</td>
+      <td class="text-slate-600">${esc(p.unidad||'—')}</td>
+      <td class="text-right">${can('stock:update')?`<button class="btn btn-ghost text-xs" title="Editar" onclick='prodForm(${JSON.stringify(p.id)},{after:"catalogos"})'>✏️</button>`:''}</td>
+    </tr>`; }).join('')+`</tbody></table></div>`;
+}
 
 // ============================================================
 // v2.8.0 — CATEGORÍAS Y FAMILIAS (árbol de artículos, padre/hijo)
 // ============================================================
 pages.categoriasArt = async function() {
-  setHeader('Categorías y Familias', 'Organizá tus productos y servicios en un árbol de categorías (familia madre → subcategorías). Sirve para el agro o cualquier rubro.');
-  if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('categoriasArt','Categorías y Familias'); return; }
+  setHeader('Organización de artículos', 'Armá el árbol de tus artículos: Categoría → Familia → Subfamilias (las que necesites, sin límite). Sirve para el agro, fábricas o comercios.');
+  if (!can('produccion:read')) { $('#page-body').innerHTML = stubPage('categoriasArt','Organización de artículos'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let cats = [];
   try { cats = (await api('/api/categorias-articulo')).data || []; } catch (e) { return toast(e.message,'error'); }
@@ -30555,6 +30585,7 @@ pages.categoriasArt = async function() {
     } catch (e) { /* si falla, mostramos vacío */ }
   }
   state.cache.categoriasArt = cats;
+  try { state.cache.productos = (await api('/api/productos')).data || []; } catch {}
   catArtRender();
 };
 function catArtRender() {
@@ -30572,8 +30603,9 @@ function catArtRender() {
       ${puedeEditar?`<button class="btn btn-ghost text-xs" title="Editar" onclick='catArtForm(${JSON.stringify(n.id)}, null)'>✏️</button>`:''}
       ${puedeBorrar?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='catArtDel(${JSON.stringify(n.id)})'>🗑️</button>`:''}
     </span>`;
+    const _nArt = _catConteoArticulos(n.id);
     const fila = `<div class="flex items-center justify-between gap-2 ${esRaiz?'font-bold text-slate-800':'text-sm text-slate-700'}">
-      <span>${esRaiz?'':'↳ '}${n.icono?esc(n.icono)+' ':''}${esc(n.nombre)}${n.activo===false?' <span class="badge badge-gray text-[10px]">inactiva</span>':''}</span>
+      <span>${esRaiz?'':'↳ '}${n.icono?esc(n.icono)+' ':''}${esc(n.nombre)}${_nArt?` <span class="badge badge-gray text-[10px]" title="Artículos en este nodo y sus subfamilias">${_nArt}</span>`:''}${n.activo===false?' <span class="badge badge-gray text-[10px]">inactiva</span>':''}</span>
       ${acciones}
     </div>`;
     const hijosHtml = hijos.length
@@ -30591,7 +30623,7 @@ function catArtRender() {
       </div>
     </div>
     <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mb-3">
-      💡 Estructura de 3 niveles: <b>Categoría</b> (ej. Animales) → <b>Familia</b> (ej. Vacunos) → <b>Producto/ítem</b> (ej. Vaca, que vive en Catálogos). Acá manejás las Categorías y sus Familias; la Familia de cada ítem se elige en Catálogos.
+      💡 <b>Categoría</b> (ej. Animales) → <b>Familia</b> (ej. Vacunos) → <b>Subfamilias</b> (las que quieras: podés anidar sin límite). Los <b>artículos</b> (ej. Vaca) se cargan en <b>Catálogo de artículos</b> y se ubican en cualquier nodo de este árbol. El número al lado de cada nodo es la cantidad de artículos que contiene.
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       ${raices.map(r => nodo(r, 0)).join('') || `<div class="kpi md:col-span-2 text-center text-slate-400 py-8">Sin categorías. Creá la primera con "+ Nueva categoría".</div>`}
@@ -31760,7 +31792,7 @@ async function catBorrarInactivos() {
 }
 
 pages.catalogos = async function() {
-  setHeader('Catálogos', 'Maestros del sistema: cereales, animales, labores, insumos, unidades…');
+  setHeader('Catálogo de artículos', 'Tus artículos y maestros del sistema, organizados por categoría y familia. Buscá cualquier artículo sin importar en qué subfamilia esté.');
   if (!can('produccion:read') && !can('catalogos:read')) { $('#page-body').innerHTML = stubPage('catalogos','Catálogos'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   let rows=[];
@@ -31859,8 +31891,10 @@ pages.catalogos = async function() {
   };
   const agrupaFamilia = esProdCat || !!_rootIdTab;
   const subgruposFam = {};
-  if (agrupaFamilia) items.forEach(i => { const fam=_familiaDeItem(i.categoriaArticuloId); const k=fam?fam.nombre:'Sin Familia'; (subgruposFam[k]=subgruposFam[k]||[]).push(i); });
-  const _famKeys = Object.keys(subgruposFam).sort((a,b)=> a==='Sin Familia'?1 : (b==='Sin Familia'?-1 : a.localeCompare(b)));
+  const _DIRECTO='📂 Directo en la categoría', _SINCLAS='📦 Sin clasificar';
+  if (agrupaFamilia) items.forEach(i => { const fam=_familiaDeItem(i.categoriaArticuloId); const k = fam ? fam.nombre : ((i.categoriaArticuloId && i.categoriaArticuloId===_rootIdTab) ? _DIRECTO : _SINCLAS); (subgruposFam[k]=subgruposFam[k]||[]).push(i); });
+  const _esEspecial = k => k===_DIRECTO || k===_SINCLAS;
+  const _famKeys = Object.keys(subgruposFam).sort((a,b)=> _esEspecial(a)&&_esEspecial(b) ? (a===_DIRECTO?-1:1) : _esEspecial(a)?1 : _esEspecial(b)?-1 : a.localeCompare(b));
 
   // Sidebar vertical (desktop) + select desplegable (mobile), AGRUPADOS por familia.
   const sideHtml = CAT_GRUPOS.map(gr => {
@@ -31941,9 +31975,11 @@ pages.catalogos = async function() {
       <span class="text-slate-500">🗂️ Los maestros están agrupados por familia. Para el <b>árbol de categorías</b> de tus productos, entrá a</span>
       <div class="flex items-center gap-2">
         <button class="btn btn-secondary text-xs" onclick="go('diagnosticoArticulos')">🔎 Diagnóstico de artículos</button>
-        <button class="btn btn-secondary text-xs" onclick="go('categoriasArt')">🗂️ Categorías y Familias →</button>
+        <button class="btn btn-secondary text-xs" onclick="go('categoriasArt')">🗂️ Organización de artículos →</button>
       </div>
     </div>
+    <div class="mb-2"><input class="input text-sm" style="max-width:360px" placeholder="🔎 Buscar un artículo en todo el catálogo (sin importar la subfamilia)…" oninput="catBuscarFiltrar(this.value)"/></div>
+    <div id="cat-search-results" class="mb-2"></div>
     <div class="cat-wrap">
       <!-- Sidebar desktop -->
       <nav class="cat-side">${sideHtml}</nav>
@@ -31973,15 +32009,15 @@ pages.catalogos = async function() {
           ${items.length===0
             ? `<div class="stub-card">No hay artículos en <b>${esc(tab.label)}</b> todavía. Usá "+ Nuevo" para crear uno${otrosTab&&otrosTab.id===tab.id?', o vinculá artículos existentes a una familia desde Categorías y Familias':''}.</div>`
             : _famKeys.map(fk => { const arr=subgruposFam[fk]; return `
-              <div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-3">${fk==='Sin Familia'?'📦 ':''}${esc(fk)} · ${arr.length}</div>
+              <div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-3">${esc(fk)} · ${arr.length}</div>
               <div class="kpi p-0 overflow-hidden mb-3">
                 <table class="data">
-                  <thead><tr><th>Artículo</th><th>Familia</th><th>Unidad</th><th>Estado</th><th></th></tr></thead>
+                  <thead><tr><th>Artículo</th><th>Ubicación</th><th>Unidad</th><th>Estado</th><th></th></tr></thead>
                   <tbody>
-                    ${arr.map(p => { const fam=p.categoriaArticuloId?_catNodo(p.categoriaArticuloId):null; return `
+                    ${arr.map(p => { const ruta=p.categoriaArticuloId?_catRutaStr(p.categoriaArticuloId):''; return `
                       <tr class="table-row">
                         <td class="font-semibold text-slate-800">${esc(p.nombre)}${p.sku?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.sku)}</div>`:''}</td>
-                        <td>${fam?`<span class="badge badge-blue text-[11px]">${esc(fam.nombre)}</span>`:'<span class="text-slate-300">—</span>'}</td>
+                        <td>${ruta?`<span class="text-[11px] text-slate-600">${esc(ruta)}</span>`:'<span class="text-slate-300">—</span>'}</td>
                         <td class="text-slate-600">${esc(p.unidad||'—')}</td>
                         <td>${p.activo===false?'<span class="badge badge-gray">Inactivo</span>':'<span class="badge badge-green">Activo</span>'}</td>
                         <td class="text-right whitespace-nowrap">
