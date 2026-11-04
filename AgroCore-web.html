@@ -3078,6 +3078,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
+      titulo:'🏭 v2.381.0 — Molienda: la fórmula ahora se entiende de un vistazo (lo que ENTRA arriba, lo que SALE abajo)',
+      desc:'Rediseñamos el formulario de <b>Nueva fórmula de molienda</b> para que sea mucho más claro. Ahora está dividido en dos bloques: <b>①&nbsp;⬇️ LO QUE ENTRA</b> (el grano/materia prima de origen y los insumos adicionales que se consumen al procesar) y <b>②&nbsp;⬆️ LO QUE SALE</b> (los coproductos obtenidos, cuyos rendimientos deben sumar 100%). Antes el grano de origen quedaba arriba, los coproductos en el medio y los insumos de entrada al final, y confundía. No cambia cómo funciona el cálculo: solo se ordenó para que se lea de arriba hacia abajo siguiendo el proceso real.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'04/11/2026',
+      titulo:'🧭 v2.380.0 — Tablero comercial: Empresas y Prospectos editables (origen, estado y facturación)',
+      desc:'En el <b>Tablero de vendedores</b> (Super Admin) ahora podés gestionar todo desde una sola pantalla. En <b>Clientes (empresas)</b> editás en línea de <b>quién provienen</b> (vendedor o Directo), <b>a quién se factura</b> (al cliente o al vendedor —así le pasás la deuda al vendedor—) y si están <b>🧪 en prueba</b> o <b>✅ Cliente</b> (ya contratando). En <b>Prospectos y leads</b> ves <b>todos</b> (no solo los de vendedores): les asignás vendedor, cambiás el <b>estado</b> (Nuevo, Contactado, Demo, En prueba, etc.) y con <b>"→ Cliente"</b> los convertís en cliente al toque. Los cambios se guardan solos. <i>Próximamente: facturar el mes en curso desde acá.</i>' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'04/11/2026',
       titulo:'🗂️ v2.379.0 — Catálogos: tus categorías del árbol mandan (fuera las pestañas viejas de Insumos/Cereales)',
       desc:'Si armaste tus <b>Categorías y Familias</b> en el árbol, en <b>Catálogos</b> ahora ves <b>solo esas categorías</b>, y en todas <b>"+ Nuevo" abre el formulario completo de artículo</b> (nombre, categoría, unidad, stock mínimo, precio, IVA…) que queda disponible en compras/ventas/stock. Dejan de aparecer las pestañas <b>viejas</b> "Insumos" y "Cereales/Granos" que abrían el formulario reducido y confundían (eran de un sistema anterior). Las de <b>Servicios y Labores</b>, <b>Animales</b>, <b>Unidades</b> y <b>Monedas</b> siguen igual. Si una empresa todavía no armó el árbol, las pestañas viejas quedan como respaldo.' },
@@ -11763,23 +11769,25 @@ async function empTableroVendedores(){
           ${v.liquidadoMes?`<span class="badge badge-green text-[10px]">${esc(tab.periodo)} ✓</span>`:`<button class="btn btn-secondary text-xs" onclick='empVendLiquidarTab(${JSON.stringify(v.id)},${JSON.stringify(tab.periodo)})'>Liquidar</button>`}
         </td></tr>`).join('')}
     </tbody></table>` : '<div class="stub-card">Todavía no cargaste vendedores. Usá el botón 🤝 Vendedores.</div>';
-  // Tabla clientes (empresas)
-  const cliTabla = `<table class="data w-full"><thead><tr><th>Empresa</th><th>Vendedor</th><th>Se factura a</th><th class="text-center">Plan</th></tr></thead><tbody>
+  // Selector de vendedor reutilizable (origen del cliente/prospecto).
+  const _vendOpts = sel => `<option value="">Directo</option>`+rows.map(v=>`<option value="${esc(v.id)}" ${sel===v.id?'selected':''}>${esc(v.nombre)}</option>`).join('');
+  // Tabla clientes (empresas): origen, a quién se factura y plan/estado EDITABLES en línea.
+  const cliTabla = `<table class="data w-full"><thead><tr><th>Empresa</th><th>Origen (vendedor)</th><th>Se factura a</th><th>Estado</th></tr></thead><tbody>
       ${emps.map(e=>`<tr class="table-row">
         <td><b>${esc(e.name)}</b></td>
-        <td>${e.vendedorId&&vById[e.vendedorId]?esc(vById[e.vendedorId].nombre):'<span class="text-slate-400">Directo</span>'}</td>
-        <td>${e.facturarA==='vendedor'?'<span class="badge bg-amber-100 text-amber-800">Vendedor</span>':'<span class="badge bg-slate-100 text-slate-600">Cliente</span>'}</td>
-        <td class="text-center">${e.plan==='trial'?'<span class="badge bg-sky-100 text-sky-800">prueba</span>':'<span class="badge badge-green">cliente</span>'}</td>
+        <td><select class="input text-xs" style="min-width:130px" onchange="empTabSet('${e.id}','vendedorId',this.value)">${_vendOpts(e.vendedorId)}</select></td>
+        <td><select class="input text-xs" style="min-width:110px" onchange="empTabSet('${e.id}','facturarA',this.value)"><option value="cliente" ${e.facturarA==='vendedor'?'':'selected'}>Al cliente</option><option value="vendedor" ${e.facturarA==='vendedor'?'selected':''}>Al vendedor</option></select></td>
+        <td><select class="input text-xs" style="min-width:120px" onchange="empTabSet('${e.id}','plan',this.value)"><option value="trial" ${e.plan==='cliente'?'':'selected'}>🧪 En prueba</option><option value="cliente" ${e.plan==='cliente'?'selected':''}>✅ Cliente</option></select></td>
       </tr>`).join('')||'<tr><td colspan="4" class="p-3 text-center text-slate-400">Sin empresas</td></tr>'}
     </tbody></table>`;
-  // Tabla leads de vendedores
-  const leadsVend = (leads||[]).filter(l=>l.vendedorId);
-  const leadTabla = `<table class="data w-full"><thead><tr><th>Lead</th><th>Empresa</th><th>Vendedor</th><th>Estado</th></tr></thead><tbody>
-      ${leadsVend.map(l=>`<tr class="table-row">
+  // Tabla prospectos / leads: TODOS (no solo los de vendedores), con origen y estado editables.
+  const leadTabla = `<table class="data w-full"><thead><tr><th>Prospecto</th><th>Empresa</th><th>Origen (vendedor)</th><th>Estado</th><th></th></tr></thead><tbody>
+      ${(leads||[]).map(l=>`<tr class="table-row">
         <td>${esc(l.nombre||'—')}</td><td>${esc(l.empresa||'—')}</td>
-        <td>${l.vendedorId&&vById[l.vendedorId]?esc(vById[l.vendedorId].nombre):'—'}</td>
-        <td><span class="badge ${(LEAD_ESTADOS.find(e=>e.v===(l.segEstado||'Nuevo'))||{}).c||'bg-slate-100'}">${esc(l.segEstado||'Nuevo')}</span></td>
-      </tr>`).join('')||'<tr><td colspan="4" class="p-3 text-center text-slate-400">Ningún lead asignado a vendedores todavía</td></tr>'}
+        <td><select class="input text-xs" style="min-width:130px" onchange="leadTabSet('${l.id}','vendedorId',this.value)">${_vendOpts(l.vendedorId)}</select></td>
+        <td><select class="input text-xs" style="min-width:130px" onchange="leadTabSet('${l.id}','segEstado',this.value)">${LEAD_ESTADOS.map(es=>`<option value="${esc(es.v)}" ${(l.segEstado||'Nuevo')===es.v?'selected':''}>${esc(es.v)}</option>`).join('')}</select></td>
+        <td class="text-right">${(l.segEstado!=='Cliente')?`<button class="btn btn-secondary text-xs" title="Crear el cliente a partir de este prospecto" onclick='leadTabConvertir(${JSON.stringify(l.id)},${JSON.stringify(l.empresa||l.nombre||"")})'>→ Cliente</button>`:'<span class="badge badge-green text-[10px]">Cliente</span>'}</td>
+      </tr>`).join('')||'<tr><td colspan="5" class="p-3 text-center text-slate-400">Sin prospectos todavía</td></tr>'}
     </tbody></table>`;
   $('#page-body').innerHTML = `
     <div class="mb-3"><button class="btn btn-ghost text-sm" onclick="pages.empresas()">← Volver a Empresas</button>
@@ -11793,10 +11801,29 @@ async function empTableroVendedores(){
     </div>
     <h3 class="font-semibold text-slate-800 mb-2">Vendedores <span class="text-xs text-slate-400">· comisión del mes: ${money(comisMes)}</span></h3>
     <div class="kpi p-0 overflow-hidden mb-6">${vendTabla}</div>
-    <h3 class="font-semibold text-slate-800 mb-2">Clientes (empresas)</h3>
+    <h3 class="font-semibold text-slate-800 mb-2">Clientes (empresas) <span class="text-xs text-slate-400 font-normal">· editá de quién provienen, a quién se factura y si están en prueba o ya contratando</span></h3>
     <div class="kpi p-0 overflow-hidden mb-6">${cliTabla}</div>
-    <h3 class="font-semibold text-slate-800 mb-2">Leads de vendedores</h3>
+    <h3 class="font-semibold text-slate-800 mb-2">Prospectos y leads <span class="text-xs text-slate-400 font-normal">· asigná vendedor, cambiá el estado o convertilos en cliente</span></h3>
     <div class="kpi p-0 overflow-hidden">${leadTabla}</div>`;
+}
+// --- Tablero comercial: edicion en linea (origen / facturacion / estado) ---
+async function empTabSet(id, campo, val){
+  const body = {}; body[campo] = (campo==='vendedorId') ? (val||null) : val;
+  try{ await api('/api/empresas/'+id,{method:'PUT',body:JSON.stringify(body)});
+    toast('Guardado','success');
+  }catch(e){ toast(e.message||'No se pudo guardar','error'); empTableroVendedores(); }
+}
+async function leadTabSet(id, campo, val){
+  const body = {}; body[campo] = (campo==='vendedorId') ? (val||null) : val;
+  try{ await api('/api/empresas/trial-leads/'+id,{method:'PUT',body:JSON.stringify(body)});
+    toast('Guardado','success');
+  }catch(e){ toast(e.message||'No se pudo guardar','error'); empTableroVendedores(); }
+}
+async function leadTabConvertir(id, nombre){
+  if(!confirm('¿Convertir "'+(nombre||'este prospecto')+'" en cliente? Se creará el cliente a partir de los datos del prospecto.')) return;
+  try{ await api('/api/empresas/trial-leads/'+id+'/convertir-cliente',{method:'POST',body:'{}'});
+    toast('Convertido a cliente','success'); empTableroVendedores();
+  }catch(e){ toast(e.message||'No se pudo convertir','error'); }
 }
 async function empVendLiquidarTab(id,periodo){
   if(!confirm(`¿Liquidar el período ${periodo} de este vendedor?`)) return;
@@ -30843,18 +30870,31 @@ function molFormulaForm(id) {
   openModal({
     title: (id?'Editar':'Nueva')+' fórmula de molienda', size:'max-w-2xl',
     body:`
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-        <div><label class="label">Nombre *</label><input id="mf-nombre" class="input" value="${esc(f?.nombre||'')}" placeholder="Molienda de soja"/></div>
-        <div><label class="label">Grano de origen *</label><select id="mf-origen" class="input">${_molOptRol('materia_prima', f?.origenProductoId)}</select></div>
+      <div class="mb-4"><label class="label">Nombre de la fórmula *</label><input id="mf-nombre" class="input" value="${esc(f?.nombre||'')}" placeholder="Molienda de soja"/></div>
+
+      <div class="rounded-lg border border-sky-200 bg-sky-50/60 p-3 mb-4">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-sky-600 text-white text-xs font-bold">1</span>
+          <span class="font-semibold text-sky-900">⬇️ LO QUE ENTRA</span>
+          <span class="text-[11px] text-sky-700">· la materia prima y los insumos que se consumen al procesar</span>
+        </div>
+        <div class="mb-2"><label class="label">Grano / materia prima de origen *</label><select id="mf-origen" class="input">${_molOptRol('materia_prima', f?.origenProductoId)}</select></div>
+        <div class="label mb-1 mt-3">Insumos adicionales que se consumen <span class="text-slate-400 font-normal">(opcional — ej. un aditivo)</span></div>
+        <div id="mf-entradas"></div>
+        <button class="btn btn-ghost btn-sm mt-2" onclick="molEntradaAdd()">+ Agregar insumo de entrada</button>
+        <div class="text-[11px] text-slate-500 mt-2">El <b>%</b> es sobre los kilos procesados: si procesás 10.000 kg y el insumo es 0,5%, se descuentan 50 kg de ese insumo del depósito elegido.</div>
       </div>
-      <div class="label mb-1">Coproductos que SALEN (deben sumar 100%)</div>
-      <div id="mf-items"></div>
-      <button class="btn btn-ghost btn-sm mt-2" onclick="molItemAdd()">+ Agregar coproducto</button>
-      <div class="text-[11px] text-slate-500 mt-2">El <b>coef. de costo</b> es opcional: por defecto el costo se reparte igual que el rendimiento. La <b>merma</b> no lleva costo.</div>
-      <div class="label mb-1 mt-4">Insumos que ENTRAN y se consumen <span class="text-slate-400 font-normal">(opcional — ej. un aditivo. Se descuenta del stock un % de los kilos procesados)</span></div>
-      <div id="mf-entradas"></div>
-      <button class="btn btn-ghost btn-sm mt-2" onclick="molEntradaAdd()">+ Agregar insumo de entrada</button>
-      <div class="text-[11px] text-slate-500 mt-2">El <b>%</b> es sobre los kilos procesados: si procesás 10.000 kg y el insumo es 0,5%, se descuentan 50 kg de ese insumo del depósito elegido.</div>`,
+
+      <div class="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-bold">2</span>
+          <span class="font-semibold text-emerald-900">⬆️ LO QUE SALE</span>
+          <span class="text-[11px] text-emerald-700">· los coproductos obtenidos (los rendimientos deben sumar 100%)</span>
+        </div>
+        <div id="mf-items"></div>
+        <button class="btn btn-ghost btn-sm mt-2" onclick="molItemAdd()">+ Agregar coproducto</button>
+        <div class="text-[11px] text-slate-500 mt-2">El <b>coef. de costo</b> es opcional: por defecto el costo se reparte igual que el rendimiento. La <b>merma</b> no lleva costo.</div>
+      </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="molFormulaSave('${id||''}')">💾 Guardar</button>`
   });
