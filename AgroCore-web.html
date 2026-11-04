@@ -3078,6 +3078,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'04/11/2026',
+      titulo:'🧪 v2.378.0 — Catálogos: "Insumos" ahora crea artículos completos (y aparecen en el catálogo)',
+      desc:'En <b>Catálogos</b>, la pestaña <b>Insumos</b> abría un formulario reducido (solo nombre, familia y descripción) y lo que cargabas <b>no aparecía</b> en el catálogo ni en Stock. Ahora, si tenés la categoría <b>Insumos</b> en el árbol de <b>Categorías y Familias</b>, funciona igual que las demás (Soja, etc.): "+ Nuevo" abre el <b>formulario completo de artículo</b> (nombre, categoría, unidad, stock mínimo, precio de referencia, IVA, etc.) y el insumo <b>queda disponible en compras, ventas y stock</b>. <i>Nota: los insumos que habías cargado con el formulario viejo conviene volver a crearlos con el nuevo para que aparezcan.</i>' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
       titulo:'🧾 v2.377.0 — Fábrica: cargar una venta SIN factura (comprobante interno)',
       desc:'En las empresas con <b>Producción industrial / Fábrica</b>, al emitir una venta aparece la opción <b>«🧾 Cargar sin factura (comprobante interno)»</b>: registra la operación <b>moviendo la cuenta corriente y el stock</b>, pero <b>sin emitir a ARCA ni CAE</b> (no es un comprobante fiscal). Si no querés IVA, ponés la alícuota en 0 en cada renglón. Las ventas <b>con factura</b> (CAE real de ARCA) siguen igual. En <b>compras</b> no hace falta: ya se registran sin emitir a ARCA (cargás el comprobante que te dieron, o ninguno).' },
@@ -31659,15 +31662,21 @@ pages.catalogos = async function() {
   let prods = [];
   try { prods = await crudList('productos'); state.cache.productos = prods; } catch {}
   const _norm = s => (s||'').toLowerCase().replace(/\s+/g,' ').trim();
-  const ROOT2TAB = { 'cereales / granos':'cereales', 'cereales':'cereales', 'insumos':'insumos', 'servicios y labores':'labores', 'labores':'labores', 'hacienda':'categAn', 'animales':'categAn' };
+  // 'insumos' YA NO se mapea a la pestaña maestro legacy: si la empresa tiene la raíz
+  // "Insumos" en el árbol, se trata como categoría de PRODUCTOS (form completo + aparece
+  // en Stock), igual que cualquier otra categoría. La pestaña legacy solo queda como
+  // respaldo si NO existe esa raíz (empresas viejas sin árbol).
+  const ROOT2TAB = { 'cereales / granos':'cereales', 'cereales':'cereales', 'servicios y labores':'labores', 'labores':'labores', 'hacienda':'categAn', 'animales':'categAn' };
   const staticProd = CAT_TABS.filter(t => t.g==='prod');
   const roots = arbol.filter(c => !c.padreId && c.activo!==false)
                      .sort((a,b)=> (a.orden||0)-(b.orden||0) || (a.nombre||'').localeCompare(b.nombre||''));
   const prodTabs = []; const usados = new Set();
   roots.forEach(r => {
-    const mapId = ROOT2TAB[_norm(r.nombre)];
+    const nn = _norm(r.nombre);
+    const mapId = ROOT2TAB[nn];
     if (mapId) { const st = staticProd.find(t=>t.id===mapId); if (st && !usados.has(st.id)) { prodTabs.push(st); usados.add(st.id); } }
-    else prodTabs.push({ id:'pc_'+r.id, label:r.nombre, icon:r.icono||'📦', g:'prod', esProdCat:true, catId:r.id, singular:'Artículo', tipos:[] });
+    else { prodTabs.push({ id:'pc_'+r.id, label:r.nombre, icon:r.icono||'📦', g:'prod', esProdCat:true, catId:r.id, singular:'Artículo', tipos:[] });
+           if (nn === 'insumos') usados.add('insumos'); }  // hay raíz Insumos: no mostrar la pestaña maestro legacy
   });
   staticProd.forEach(t => { if (!usados.has(t.id)) prodTabs.push(t); });
   state._catProdTabs = prodTabs.filter(t => t.esProdCat).map(t => t.id);
