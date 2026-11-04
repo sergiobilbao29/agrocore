@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.381.0';
+const AGROCORE_VERSION = '2.382.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4224,6 +4224,90 @@ app.post('/api/categorias-articulo/vincular', requireCompany, requirePermission(
       }
     });
     res.json({ ok: true, catalogos: cats, productos: prods });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// v2.382 — Reorganizacion de articulos. ETAPA 0: diagnostico (SOLO LECTURA).
+//  Detecta por empresa: (a) items del maestro legacy "Catalogo" que en realidad
+//  son articulos de stock (insumos/cereales) y deberian estar en Producto;
+//  (b) productos sin clasificar en el arbol; (c) posibles duplicados por nombre.
+//  NO modifica ningun dato.
+// ============================================================
+const _artNorm = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+app.get('/api/diagnostico-articulos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const cid = req.companyId;
+    const [cats, prods, arbolN] = await Promise.all([
+      prisma.catalogo.findMany({ where: { companyId: cid } }),
+      prisma.producto.findMany({ where: { companyId: cid } }),
+      prisma.categoriaArticulo.count({ where: { companyId: cid } }),
+    ]);
+    const tiposInsumo = cats.filter(c => c.tipo === 'Tipo de insumo').map(c => (c.nombre||'').trim());
+    const tiposArticulo = new Set([...tiposInsumo, 'Cereal'].map(_artNorm));
+    const nombresProd = new Set(prods.map(p => _artNorm(p.nombre)));
+    const catalogoComoArticulo = cats
+      .filter(c => c.activo !== false && tiposArticulo.has(_artNorm(c.tipo)) && !nombresProd.has(_artNorm(c.nombre)))
+      .map(c => ({ id: c.id, nombre: c.nombre, tipo: c.tipo }))
+      .sort((a,b)=> (a.tipo||'').localeCompare(b.tipo||'') || (a.nombre||'').localeCompare(b.nombre||''));
+    const sinClasificar = prods
+      .filter(p => !p.categoriaArticuloId && p.activo !== false)
+      .map(p => ({ id: p.id, nombre: p.nombre, categoria: p.categoria }))
+      .sort((a,b)=> (a.nombre||'').localeCompare(b.nombre||''));
+    const byName = {};
+    prods.filter(p => p.activo !== false).forEach(p => { const k=_artNorm(p.nombre); (byName[k]=byName[k]||[]).push({ id:p.id, nombre:p.nombre, categoria:p.categoria }); });
+    const duplicados = Object.values(byName).filter(g => g.length > 1);
+    res.json({ ok: true, data: {
+      hayArbol: arbolN > 0,
+      totales: { productos: prods.length, catalogos: cats.length,
+        catalogoComoArticulo: catalogoComoArticulo.length, sinClasificar: sinClasificar.length, gruposDuplicados: duplicados.length },
+      catalogoComoArticulo, sinClasificar, duplicados,
+    }});
+  } catch (e) { next(e); }
+});
+
+// ETAPA 1: "pasar a articulo". Convierte items elegidos del maestro legacy Catalogo
+//  en Productos reales (alta), vinculandolos a la familia del arbol si existe. NO borra
+//  el Catalogo: lo marca activo=false (reversible). Solo lo que el usuario elige; nunca
+//  fusiona: si ya existe un Producto con el mismo nombre, lo omite.
+app.post('/api/diagnostico-articulos/convertir', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const cid = req.companyId;
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ ok:false, error:'No se indicaron items a convertir.' });
+    const unidadPorTipo = (tipo) => {
+      const t=_artNorm(tipo);
+      if (t==='cereal') return 'tn';
+      if (t==='semilla') return 'kg';
+      if (['fertilizante','herbicida','insecticida','fungicida','coadyuvante','insumo'].includes(t)) return 'lt';
+      return 'u';
+    };
+    const categoriaPorTipo = (tipo) => _artNorm(tipo)==='cereal' ? 'granos' : 'insumos';
+    let creados = 0, omitidos = 0; const detalle = [];
+    await prisma.$transaction(async (tx) => {
+      const nodos = await tx.categoriaArticulo.findMany({ where: { companyId: cid } });
+      const byName = {}; nodos.forEach(n => { byName[_artNorm(n.nombre)] = n.id; });
+      const roots = {}; nodos.filter(n=>!n.padreId).forEach(n => { roots[_artNorm(n.nombre)] = n.id; });
+      const prodsExist = await tx.producto.findMany({ where: { companyId: cid }, select: { nombre:true } });
+      const nombresProd = new Set(prodsExist.map(p=>_artNorm(p.nombre)));
+      for (const id of ids) {
+        const c = await tx.catalogo.findFirst({ where: { id, companyId: cid } });
+        if (!c) { omitidos++; continue; }
+        if (nombresProd.has(_artNorm(c.nombre))) { omitidos++; detalle.push({ nombre:c.nombre, estado:'ya existia' }); continue; }
+        const famId = c.categoriaArticuloId || byName[_artNorm(c.tipo)]
+          || roots[_artNorm(c.tipo)==='cereal' ? 'cereales / granos' : 'insumos'] || roots['insumos'] || null;
+        await tx.producto.create({ data: {
+          companyId: cid, nombre: c.nombre, unidad: unidadPorTipo(c.tipo),
+          categoria: categoriaPorTipo(c.tipo), categoriaArticuloId: famId,
+          tipoArticulo: _artNorm(c.tipo)==='cereal' ? 'cereal' : 'stockeable',
+          precioReferencia: c.precioReferencia ?? null, observaciones: c.descripcion || null,
+          activo: true,
+        }});
+        await tx.catalogo.update({ where: { id: c.id }, data: { activo: false } });
+        nombresProd.add(_artNorm(c.nombre)); creados++; detalle.push({ nombre:c.nombre, estado:'convertido' });
+      }
+    });
+    res.json({ ok: true, creados, omitidos, detalle });
   } catch (e) { next(e); }
 });
 

@@ -3078,6 +3078,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'04/11/2026',
+      titulo:'🔎 v2.382.0 — Diagnóstico de artículos: ordená tu catálogo y pasá a artículos lo que estaba en el formato viejo',
+      desc:'Sumamos una pantalla <b>Diagnóstico de artículos</b> (botón arriba en <b>Catálogos</b>) que te muestra, sin cambiar nada: los <b>ítems del formato anterior</b> que deberían ser artículos reales (por eso no aparecían en stock ni en compras/ventas), los <b>artículos sin clasificar</b> en el árbol y los <b>posibles duplicados</b> por nombre. Desde ahí, con un botón, podés <b>pasar a artículos</b> los que elijas: se crean como artículos de stock (comprables y vendibles) y la ficha vieja queda inactiva (reversible, no se borra nada). Además, al crear un insumo o cereal nuevo en una pestaña vieja, el sistema te lleva directo al <b>formulario de artículo completo</b> (antes abría un formulario reducido que no movía stock). Nada se fusiona solo: los duplicados los revisás vos. Primer paso de la reorganización de Categorías / Familias / Artículos.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
       titulo:'🏭 v2.381.0 — Molienda: la fórmula ahora se entiende de un vistazo (lo que ENTRA arriba, lo que SALE abajo)',
       desc:'Rediseñamos el formulario de <b>Nueva fórmula de molienda</b> para que sea mucho más claro. Ahora está dividido en dos bloques: <b>①&nbsp;⬇️ LO QUE ENTRA</b> (el grano/materia prima de origen y los insumos adicionales que se consumen al procesar) y <b>②&nbsp;⬆️ LO QUE SALE</b> (los coproductos obtenidos, cuyos rendimientos deben sumar 100%). Antes el grano de origen quedaba arriba, los coproductos en el medio y los insumos de entrada al final, y confundía. No cambia cómo funciona el cálculo: solo se ordenó para que se lea de arriba hacia abajo siguiendo el proceso real.' },
@@ -30458,6 +30461,83 @@ const CAT_TABS = [
 if (!state.catTab || !CAT_TABS.find(t => t.id === state.catTab)) state.catTab = 'cereales';
 
 // ============================================================
+// v2.382 — DIAGNÓSTICO DE ARTÍCULOS (Etapa 0/1). Solo lectura + "pasar a artículo".
+// ============================================================
+pages.diagnosticoArticulos = async function() {
+  setHeader('Diagnóstico de artículos', 'Revisá qué conviene ordenar en tu catálogo. No cambia nada hasta que vos lo confirmes.');
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Analizando…</div>`;
+  let d;
+  try { d = (await api('/api/diagnostico-articulos')).data; }
+  catch(e){ return toast(e.message||'No se pudo analizar','error'); }
+  state._diagArt = d;
+  const t = d.totales;
+  const kpi=(l,v,c='')=>`<div class="kpi"><div class="text-xs text-slate-500">${l}</div><div class="text-2xl font-bold mt-1 ${c}">${v}</div></div>`;
+  const chk = id => `<input type="checkbox" class="diag-chk" value="${esc(id)}" checked>`;
+  const listCA = d.catalogoComoArticulo || [];
+  $('#page-body').innerHTML = `
+    <div class="mb-3"><button class="btn btn-ghost text-sm" onclick="go('catalogos')">← Volver a Catálogos</button></div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      ${kpi('Artículos (Producto)', t.productos)}
+      ${kpi('Lista vieja a pasar', t.catalogoComoArticulo, t.catalogoComoArticulo?'text-amber-600':'')}
+      ${kpi('Sin clasificar', t.sinClasificar, t.sinClasificar?'text-amber-600':'')}
+      ${kpi('Grupos duplicados', t.gruposDuplicados, t.gruposDuplicados?'text-red-600':'')}
+    </div>
+    ${!d.hayArbol ? `<div class="mb-4 p-3 rounded-lg border border-sky-200 bg-sky-50 text-sm text-sky-900">
+       Esta empresa todavía no armó su <b>árbol de Categorías y Familias</b>. Te recomendamos crearlo: ordena tus artículos y habilita el formulario completo.
+       <button class="btn btn-primary btn-sm mt-2" onclick="diagSembrarArbol()">🌱 Crear árbol de categorías</button>
+     </div>` : ''}
+
+    <h3 class="font-semibold text-slate-800 mb-1">📦 Items de la lista vieja que deberían ser artículos</h3>
+    <div class="text-xs text-slate-500 mb-2">Se cargaron con el formulario anterior (tabla Catálogo) y por eso <b>no aparecen en stock ni en compras/ventas</b>. Pasalos a artículos reales. No se borra nada: la ficha vieja queda inactiva y se puede recuperar.</div>
+    ${listCA.length ? `
+      <div class="kpi p-0 overflow-hidden mb-2">
+        <table class="data w-full"><thead><tr><th style="width:36px"></th><th>Nombre</th><th>Tipo</th></tr></thead><tbody>
+        ${listCA.map(c=>`<tr class="table-row"><td class="text-center">${chk(c.id)}</td><td class="font-semibold">${esc(c.nombre)}</td><td>${esc(c.tipo||'')}</td></tr>`).join('')}
+        </tbody></table>
+      </div>
+      <div class="flex items-center gap-2 mb-6 flex-wrap">
+        <button class="btn btn-primary btn-sm" onclick="diagConvertir()">➡️ Pasar seleccionados a artículos</button>
+        <span class="text-xs text-slate-400">Se crean como artículos de stock, comprables y vendibles.</span>
+      </div>` : `<div class="stub-card mb-6">No hay items pendientes de pasar a artículo. 👍</div>`}
+
+    <h3 class="font-semibold text-slate-800 mb-1">🏷️ Artículos sin clasificar en el árbol</h3>
+    <div class="text-xs text-slate-500 mb-2">Están en Producto pero sin una familia asignada. Podés ubicarlos desde Catálogos o Categorías y Familias.</div>
+    ${d.sinClasificar.length ? `<div class="kpi p-0 overflow-hidden mb-6"><table class="data w-full"><thead><tr><th>Nombre</th><th>Categoría</th></tr></thead><tbody>
+      ${d.sinClasificar.map(p=>`<tr class="table-row"><td class="font-semibold">${esc(p.nombre)}</td><td>${esc(p.categoria||'—')}</td></tr>`).join('')}
+    </tbody></table></div>` : `<div class="stub-card mb-6">Todos los artículos están clasificados. 👍</div>`}
+
+    <h3 class="font-semibold text-slate-800 mb-1">⚠️ Posibles duplicados</h3>
+    <div class="text-xs text-slate-500 mb-2">Artículos con el mismo nombre. Revisalos: solo son el mismo si representan el mismo producto físico. <b>El sistema no los fusiona por su cuenta.</b></div>
+    ${d.duplicados.length ? d.duplicados.map(g=>`<div class="kpi p-2 mb-2"><div class="text-sm font-semibold text-slate-700 mb-1">${esc(g[0].nombre)} <span class="badge badge-gray">${g.length}</span></div><div class="text-xs text-slate-500">${g.map(x=>esc(x.categoria||'—')).join(' · ')}</div></div>`).join('') : `<div class="stub-card">Sin duplicados evidentes. 👍</div>`}
+  `;
+};
+async function diagSembrarArbol(){
+  if(!confirm('Vamos a crear el árbol de Categorías y Familias por defecto y a ubicar tus artículos. ¿Continuar?')) return;
+  try{ await api('/api/categorias-articulo/sembrar',{method:'POST',body:'{}'}); state.cache.categoriasArt=null; toast('Árbol creado','success'); pages.diagnosticoArticulos(); }
+  catch(e){ toast(e.message||'No se pudo crear','error'); }
+}
+async function diagConvertir(){
+  const ids=[...document.querySelectorAll('.diag-chk:checked')].map(c=>c.value);
+  if(!ids.length) return toast('Elegí al menos un item','warn');
+  if(!confirm('Vas a pasar '+ids.length+' item(s) a artículos reales. La ficha vieja queda inactiva (reversible). ¿Continuar?')) return;
+  try{ const r=await api('/api/diagnostico-articulos/convertir',{method:'POST',body:JSON.stringify({ids})});
+    toast('Convertidos: '+r.creados+(r.omitidos?(' · omitidos (ya existían): '+r.omitidos):''),'success');
+    state.cache.productos=null; pages.diagnosticoArticulos();
+  }catch(e){ toast(e.message||'No se pudo convertir','error'); }
+}
+async function catLegacyAltaArticulo(){
+  // "+ Nuevo" en una pestaña vieja de Insumos/Cereales: en vez del form reducido (que crea
+  // un Catalogo que no mueve stock), llevamos al usuario al formulario de ARTÍCULO real.
+  if(!(state.cache.categoriasArt||[]).length){ try{ state.cache.categoriasArt=(await api('/api/categorias-articulo')).data||[]; }catch{} }
+  const hayArbol=(state.cache.categoriasArt||[]).some(c=>!c.padreId);
+  if(!hayArbol && confirm('Para cargar artículos ordenados conviene crear primero tu árbol de Categorías y Familias. ¿Lo creamos ahora?')){
+    try{ await api('/api/categorias-articulo/sembrar',{method:'POST',body:'{}'}); state.cache.categoriasArt=(await api('/api/categorias-articulo')).data||[]; toast('Árbol creado','success'); return pages.catalogos(); }
+    catch(e){ toast(e.message||'No se pudo crear el árbol','error'); }
+  }
+  prodForm(null,{after:'catalogos'});
+}
+
+// ============================================================
 // v2.8.0 — CATEGORÍAS Y FAMILIAS (árbol de artículos, padre/hijo)
 // ============================================================
 pages.categoriasArt = async function() {
@@ -31859,7 +31939,10 @@ pages.catalogos = async function() {
 
     <div class="mb-3 flex items-center justify-between flex-wrap gap-2 text-xs bg-slate-50 border border-slate-200 rounded-lg p-2">
       <span class="text-slate-500">🗂️ Los maestros están agrupados por familia. Para el <b>árbol de categorías</b> de tus productos, entrá a</span>
-      <button class="btn btn-secondary text-xs" onclick="go('categoriasArt')">🗂️ Categorías y Familias →</button>
+      <div class="flex items-center gap-2">
+        <button class="btn btn-secondary text-xs" onclick="go('diagnosticoArticulos')">🔎 Diagnóstico de artículos</button>
+        <button class="btn btn-secondary text-xs" onclick="go('categoriasArt')">🗂️ Categorías y Familias →</button>
+      </div>
     </div>
     <div class="cat-wrap">
       <!-- Sidebar desktop -->
@@ -31877,8 +31960,9 @@ pages.catalogos = async function() {
             <div class="text-[11px] md:text-xs text-slate-600">${items.length} ${items.length===1?'ítem cargado':'ítems cargados'} · disponibles en todo el sistema</div>
           </div>
           ${(esProdCat ? (can('stock:create')) : (can('catalogos:create')||can('produccion:create')))
-            ? `<button class="btn btn-primary text-sm whitespace-nowrap" onclick='${esAnimales?'hacCatForm(null,true)':esMonedas?'monedaCatForm()':esProdCat?`prodForm(null,{presetCatId:"${tab.catId}",after:"catalogos"})`:`catForm(null,"${tab.id}")`}'>+ Nuevo ${esc(tab.singular)}</button>` : ''}
+            ? `<button class="btn btn-primary text-sm whitespace-nowrap" onclick='${esAnimales?'hacCatForm(null,true)':esMonedas?'monedaCatForm()':esProdCat?`prodForm(null,{presetCatId:"${tab.catId}",after:"catalogos"})`:(tab.id==='insumos'||tab.id==='cereales')?'catLegacyAltaArticulo()':`catForm(null,"${tab.id}")`}'>+ Nuevo ${esc(tab.singular)}</button>` : ''}
         </div>
+        ${(!esProdCat && (tab.id==='insumos'||tab.id==='cereales')) ? `<div class="mb-2 text-xs bg-amber-50 border border-amber-200 rounded-lg p-2 text-amber-800">⚠️ Esta es una lista del formato <b>anterior</b>. Para que tus artículos funcionen en stock, compras y ventas, pasalos a artículos reales. <button class="btn btn-secondary btn-xs" onclick="go('diagnosticoArticulos')">🔎 Diagnóstico de artículos</button></div>` : ''}
 
         ${esProdCat ? `
           <div class="text-[11px] text-slate-500 mb-2">Artículos de la categoría <b>${esc(tab.label)}</b> del árbol. Se usan en compras, ventas y stock. Podés crear, editar o eliminar desde acá.</div>
