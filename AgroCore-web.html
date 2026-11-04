@@ -3075,6 +3075,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
+      titulo:'🔤 v2.373.0 — Letra del comprobante centrada en la previsualización e impresión',
+      desc:'Reorganizamos el encabezado del comprobante en pantalla (previsualización e impresión) para que la <b>letra A/B/C quede en una columna propia, centrada a toda la altura</b> del encabezado — igual que en el PDF — y que ninguna línea la corte.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
       titulo:'🧾 v2.372.0 — Comprobante: líneas, letra e impresión arregladas',
       desc:'En el <b>PDF</b> el bloque del emisor se compactó para que la línea de vencimiento <b>no pise "Condición frente al IVA"</b> cuando hay logo. En la <b>previsualización</b> y al <b>imprimir</b>, la letra del comprobante (A/B/C) queda <b>centrada</b> y ya no la corta ninguna línea, y el <b>renglón del artículo arranca arriba</b> de la tabla (antes salía en el medio de la hoja). <br>En <b>WhatsApp</b>: como WhatsApp Web no deja adjuntar archivos por link, ahora al tocar “💬 WhatsApp” <b>se descarga el PDF</b> y te avisa para que lo <b>adjuntes en el chat</b> (el texto con los datos y el CAE se manda igual). Para enviarla ya adjunta, usá <b>✉️ Email</b>.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
@@ -16840,7 +16843,7 @@ function _factDocHTML(f, copia){
   return `<div class="fact-copia" style="font-family:Arial,Helvetica,sans-serif;color:#000;font-size:11px;border:1px solid #000;margin:0 auto 12px;max-width:770px">
     <div style="text-align:center;font-weight:bold;font-size:13px;border-bottom:1px solid #000;padding:3px">${copia||'ORIGINAL'}</div>
     <table style="width:100%;border-collapse:collapse"><tr>
-      <td style="width:48%;border-right:1px solid #000;padding:8px 10px;vertical-align:top">
+      <td style="width:45%;border-right:1px solid #000;padding:8px 10px;vertical-align:top">
         <div style="text-align:center;margin-bottom:6px">
           ${emp.logoUrl?`<img src="${esc(emp.logoUrl)}" style="max-height:48px;max-width:160px;object-fit:contain;display:block;margin:0 auto 4px"/>`:''}
           <div style="font-size:15px;font-weight:bold">${esc(emp.fantasia||emp.razonSocial)}</div>
@@ -16849,18 +16852,16 @@ function _factDocHTML(f, copia){
         ${emp.direccion?`<div><b>Domicilio Comercial:</b> ${esc(emp.direccion)}${emp.localidad?' - '+esc(emp.localidad):''}</div>`:''}
         <div><b>Condición frente al IVA:</b> ${esc(emp.iva||'IVA Responsable Inscripto')}</div>
       </td>
-      <td style="width:52%;padding:0;vertical-align:top">
-        <table style="width:100%;border-collapse:collapse"><tr>
-          <td style="width:56px;text-align:center;border-bottom:1px solid #000;border-right:1px solid #000;vertical-align:middle">
-            <div style="font-size:26px;font-weight:bold;line-height:1.1">${esc(letra)}</div>
-            <div style="font-size:8px">COD. ${_factCod(letra)}</div></td>
-          <td style="border-bottom:1px solid #000;border-left:1px solid #000;padding:6px 10px;vertical-align:top">
-            <div style="font-size:16px;font-weight:bold">${_factClaseTxt(f)}</div>
-            <div><b>Punto de Venta:</b> ${String(f.puntoVenta).padStart(5,'0')}&nbsp;&nbsp;<b>Comp. Nro:</b> ${String(f.numero).padStart(8,'0')}</div>
-            <div><b>Fecha de Emisión:</b> ${fmtDate(f.fecha)}</div></td></tr>
-          <tr><td colspan="2" style="padding:6px 10px">
-            <div><b>CUIT:</b> ${esc(emp.cuit||'—')}</div>
-            <div><b>Condición frente al IVA:</b> ${esc(emp.iva||'IVA Responsable Inscripto')}</div></td></tr></table>
+      <td style="width:54px;text-align:center;border-right:1px solid #000;vertical-align:middle">
+        <div style="font-size:30px;font-weight:bold;line-height:1">${esc(letra)}</div>
+        <div style="font-size:8px">COD. ${_factCod(letra)}</div>
+      </td>
+      <td style="padding:6px 10px;vertical-align:top">
+        <div style="font-size:16px;font-weight:bold">${_factClaseTxt(f)}</div>
+        <div><b>Punto de Venta:</b> ${String(f.puntoVenta).padStart(5,'0')}&nbsp;&nbsp;<b>Comp. Nro:</b> ${String(f.numero).padStart(8,'0')}</div>
+        <div><b>Fecha de Emisión:</b> ${fmtDate(f.fecha)}</div>
+        <div style="margin-top:4px"><b>CUIT:</b> ${esc(emp.cuit||'—')}</div>
+        <div><b>Condición frente al IVA:</b> ${esc(emp.iva||'IVA Responsable Inscripto')}</div>
       </td></tr></table>
     <div style="border-top:1px solid #000;border-bottom:1px solid #000;padding:3px 10px"><b>Fecha de Vto. para el pago:</b> ${f.vencimientoFecha?fmtDate(f.vencimientoFecha):fmtDate(f.fecha)}</div>
     <div style="padding:6px 10px;border-bottom:1px solid #000">
