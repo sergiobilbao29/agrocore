@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.374.0';
+const AGROCORE_VERSION = '2.375.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11230,14 +11230,14 @@ app.post('/api/formulas-molienda', requireCompany, requirePermission('stock:crea
     const d = req.body || {};
     if (!d.nombre || !d.origenProductoId) return res.status(400).json({ ok: false, error: 'Nombre y producto de origen requeridos' });
     const items = (d.items || []).filter(i => i.productoId && Number(i.rendimientoPct) > 0);
-    if (!items.length) return res.status(400).json({ ok: false, error: 'Cargá al menos un coproducto con rendimiento' });
+    if (!items.filter(i => !i.esEntrada).length) return res.status(400).json({ ok: false, error: 'Cargá al menos un coproducto de salida con rendimiento' });
     const f = await prisma.formulaMolienda.create({ data: {
       companyId: req.companyId, nombre: String(d.nombre).trim(), origenProductoId: d.origenProductoId,
       activo: d.activo !== false, observaciones: d.observaciones || null,
       items: { create: items.map((i, idx) => ({
         companyId: req.companyId, productoId: i.productoId, rendimientoPct: Number(i.rendimientoPct),
         coefCosto: i.coefCosto != null && i.coefCosto !== '' ? Number(i.coefCosto) : null,
-        depositoDestinoId: i.depositoDestinoId || null, esMerma: !!i.esMerma, orden: idx,
+        depositoDestinoId: i.depositoDestinoId || null, esMerma: !!i.esMerma, esEntrada: !!i.esEntrada, orden: idx,
       })) },
     }, include: { items: true } });
     res.status(201).json({ ok: true, data: f });
@@ -11262,7 +11262,7 @@ app.put('/api/formulas-molienda/:id', requireCompany, requirePermission('stock:u
           await tx.formulaMoliendaItem.create({ data: {
             companyId: req.companyId, formulaId: f.id, productoId: i.productoId, rendimientoPct: Number(i.rendimientoPct),
             coefCosto: i.coefCosto != null && i.coefCosto !== '' ? Number(i.coefCosto) : null,
-            depositoDestinoId: i.depositoDestinoId || null, esMerma: !!i.esMerma, orden: idx,
+            depositoDestinoId: i.depositoDestinoId || null, esMerma: !!i.esMerma, esEntrada: !!i.esEntrada, orden: idx,
           } });
         }
       }
@@ -11290,9 +11290,12 @@ app.post('/api/molienda/calcular', requireCompany, requirePermission('stock:read
     if (!f) return res.status(404).json({ ok: false, error: 'Fórmula no encontrada' });
     const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: f.items.map(i => i.productoId) } }, select: { id: true, nombre: true } });
     const pName = Object.fromEntries(prods.map(p => [p.id, p.nombre]));
-    const items = f.items.map(i => ({ ...i, nombre: pName[i.productoId] || '' }));
+    const items = f.items.filter(i => !i.esEntrada).map(i => ({ ...i, nombre: pName[i.productoId] || '' }));
     const calc = _molCalcular(items, d.kgProcesados, d.costoOrigenUnit, d.costoProduccion);
-    res.json({ ok: true, ...calc });
+    // Insumos de entrada que se consumen (kg = % de kg procesados).
+    const KG = Number(d.kgProcesados) || 0;
+    const entradas = f.items.filter(i => i.esEntrada).map(i => ({ productoId: i.productoId, nombre: pName[i.productoId] || '', rendimientoPct: Number(i.rendimientoPct) || 0, kg: _round2(KG * (Number(i.rendimientoPct) || 0) / 100), depositoDestinoId: i.depositoDestinoId || null }));
+    res.json({ ok: true, ...calc, entradas });
   } catch (e) { next(e); }
 });
 
@@ -11314,10 +11317,12 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
     if (!d.formulaId || kg <= 0) return res.status(400).json({ ok: false, error: 'Elegí la fórmula y los kilos procesados (mayor a 0)' });
     const f = await prisma.formulaMolienda.findFirst({ where: { id: d.formulaId, companyId: req.companyId }, include: { items: { orderBy: { orden: 'asc' } } } });
     if (!f) return res.status(404).json({ ok: false, error: 'Fórmula no encontrada' });
-    if (!f.items.length) return res.status(400).json({ ok: false, error: 'La fórmula no tiene coproductos' });
+    const _salidas = f.items.filter(i => !i.esEntrada);
+    const _entradas = f.items.filter(i => i.esEntrada);
+    if (!_salidas.length) return res.status(400).json({ ok: false, error: 'La fórmula no tiene coproductos de salida' });
     const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: f.items.map(i => i.productoId) } }, select: { id: true, nombre: true } });
     const pName = Object.fromEntries(prods.map(p => [p.id, p.nombre]));
-    const items = f.items.map(i => ({ ...i, nombre: pName[i.productoId] || '' }));
+    const items = _salidas.map(i => ({ ...i, nombre: pName[i.productoId] || '' }));
     const { costoTotal } = _molCalcular(items, kg, d.costoOrigenUnit, d.costoProduccion);
     let { resultados } = _molCalcular(items, kg, d.costoOrigenUnit, d.costoProduccion);
     // Rendimiento REAL: si vienen kilos realmente producidos, se usan esos (y la merma
@@ -11378,6 +11383,16 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
         } });
         // Guardar el último costo de fabricación en el coproducto (no la merma)
         if (!r.esMerma) { try { await tx.producto.update({ where: { id: r.productoId }, data: { costoFabricacionKg: r.costoKg } }); } catch (_) {} }
+      }
+      // Egresos de insumos de ENTRADA (aditivos): se consume % de kg procesados, descuenta stock.
+      for (const e of _entradas) {
+        const consumo = _round2(kg * (Number(e.rendimientoPct) || 0) / 100);
+        if (consumo <= 0) continue;
+        await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: e.productoId, fecha, tipo: 'egreso', motivo: 'molienda',
+          cantidad: consumo, depositoId: e.depositoDestinoId || null, referencia: ref,
+          observaciones: 'Molienda ' + f.nombre + ' (insumo de entrada)', userId: req.user?.id || null,
+        } });
       }
       return p;
     });

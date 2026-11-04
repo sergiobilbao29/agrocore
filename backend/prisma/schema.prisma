@@ -3379,11 +3379,12 @@ model FormulaMoliendaItem {
   id                String   @id @default(cuid())
   companyId         String
   formulaId         String
-  productoId        String   // coproducto resultante (Expeller, Aceite, Merma)
-  rendimientoPct    Float    // % del origen que queda como este coproducto
+  productoId        String   // coproducto resultante (Expeller, Aceite, Merma) o insumo de entrada
+  rendimientoPct    Float    // salida: % del origen que queda como coproducto · entrada: % de kg procesados que se consume
   coefCosto         Float?   // peso para repartir el costo (default = rendimientoPct). Merma: 0
-  depositoDestinoId String?  // depósito/silo/tanque donde ingresa
+  depositoDestinoId String?  // salida: depósito donde ingresa · entrada: depósito de donde se descuenta
   esMerma           Boolean  @default(false)
+  esEntrada         Boolean  @default(false) // v2.375: insumo adicional que ENTRA y se consume en la molienda (ej. aditivo), descuenta stock por % de kg procesados
   orden             Int      @default(0)
 
   formula           FormulaMolienda @relation(fields: [formulaId], references: [id], onDelete: Cascade)

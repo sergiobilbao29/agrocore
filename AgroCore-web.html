@@ -3074,6 +3074,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
+      titulo:'🏭 v2.375.0 — Molienda: insumos que entran y se consumen',
+      desc:'En la <b>fórmula de molienda</b> ahora podés cargar, además de los coproductos que salen, <b>insumos que ENTRAN y se consumen</b> (ej. un aditivo que se le agrega a la soja). Indicás el artículo, un <b>% sobre los kilos procesados</b> y el depósito; al cargar el parte, el sistema <b>descuenta del stock</b> la cantidad que corresponde (ej. 0,5% de 10.000 kg = 50 kg). Así le llevás control de stock también a esos insumos.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'04/11/2026',
+      titulo:'🧾 v2.375.0 — Factura: al emitir se abre el comprobante + pie "AgroCore.ar"',
+      desc:'Al <b>emitir una factura</b> ahora se <b>abre automáticamente el comprobante</b> con las opciones de imprimir / PDF / email / WhatsApp (antes se cerraba sin mostrarlo). Además el comprobante lleva al pie la leyenda <b>«Comprobante generado con AgroCore.ar»</b>, tanto en el PDF como en la impresión.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'04/11/2026',
       titulo:'🗑️ v2.374.0 — Cuenta de canje: ya se puede borrar cada movimiento',
       desc:'Arreglamos el botón de <b>eliminar movimiento en la Cuenta de canje (grano)</b> de Molienda/Fábrica: cuando el nombre del contacto tenía ciertos caracteres, el tacho no respondía. Ahora borra el movimiento (y revierte el stock si corresponde) sin problemas.' },
@@ -16366,6 +16372,8 @@ async function factSave() {
     // Si condición Contado + método elegido, registrar el cobro / ingreso.
     await _cobroContadoDesdeVenta(facturaId, data, items);
     closeModal(); if (_volverAAbonosSiCorresponde()) return; pages.facturacion();
+    // Mostrar la factura recién emitida con las opciones (imprimir/PDF/email/WhatsApp).
+    if (facturaId) setTimeout(()=>factVer(facturaId), 250);
   } catch (e) { toast(e.message,'error'); }
 }
 
@@ -16905,6 +16913,7 @@ function _factDocHTML(f, copia){
       <div style="flex:1">${f.cae?'<b>Comprobante Autorizado</b><br><span style="font-size:8px">Esta Agencia no se responsabiliza por los datos ingresados en el detalle de la operación</span>':'<b>Comprobante NO autorizado por ARCA</b>'}</div>
       <div style="text-align:right;flex:0 0 auto">${f.cae?`<b>CAE N°:</b> ${esc(f.cae)}<br><b>Fecha de Vto. de CAE:</b> ${f.caeVto?fmtDate(f.caeVto):'—'}`:''}</div>
     </div>
+    <div style="text-align:center;font-size:7px;color:#8a8a8a;padding:3px 0 1px">Comprobante generado con AgroCore.ar</div>
   </div>`;
 }
 function _factPDFPage(doc, f, copia, extras){
@@ -17011,6 +17020,10 @@ function _factPDFPage(doc, f, copia, extras){
   } else {
     doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.text('Comprobante NO autorizado por ARCA', M+8, footY+24);
   }
+  // Pie de página: leyenda de origen del comprobante.
+  doc.setFont('helvetica','normal'); doc.setFontSize(6); doc.setTextColor(140);
+  doc.text('Comprobante generado con AgroCore.ar', W/2, H-12, {align:'center'});
+  doc.setTextColor(0);
 }
 async function _factBuildPDF(f){
   const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
@@ -30643,8 +30656,9 @@ async function molParteAnular(id) {
 function molTabFormulas() {
   const fs = state._molFormulas||[];
   const filas = fs.map(f=>{
-    const items=(f.items||[]).map(i=>`${esc(i.productoNombre||'')} ${i.rendimientoPct}%${i.esMerma?' (merma)':''}`).join(' · ');
-    const suma=(f.items||[]).reduce((a,i)=>a+(Number(i.rendimientoPct)||0),0);
+    const _sal=(f.items||[]).filter(i=>!i.esEntrada); const _ent=(f.items||[]).filter(i=>i.esEntrada);
+    const items=_sal.map(i=>`${esc(i.productoNombre||'')} ${i.rendimientoPct}%${i.esMerma?' (merma)':''}`).join(' · ')+(_ent.length?` <span class="text-slate-400">+ entra: ${_ent.map(i=>`${esc(i.productoNombre||'')} ${i.rendimientoPct}%`).join(', ')}</span>`:'');
+    const suma=_sal.reduce((a,i)=>a+(Number(i.rendimientoPct)||0),0);
     return `<tr class="table-row"><td>${esc(f.nombre)} ${f.activo===false?'<span class="text-[10px] text-slate-400">(inactiva)</span>':''}</td>
       <td class="text-xs">${esc(f.origenNombre||'')}</td><td class="text-xs text-slate-500">${items}</td>
       <td class="text-right ${Math.abs(suma-100)<0.01?'text-emerald-700':'text-amber-600'}">${suma}%</td>
@@ -30717,6 +30731,8 @@ function molFormulaForm(id) {
   const optD = (sel)=>`<option value="">— Depósito —</option>`+deps.map(d=>`<option value="${esc(d.id)}" ${sel===d.id?'selected':''}>${esc(d.nombre)}</option>`).join('');
   state._molEditItems = f ? (f.items||[]).map(i=>({...i})) : [{productoId:'',rendimientoPct:'',coefCosto:'',depositoDestinoId:'',esMerma:false}];
   window._molOptP=(sel)=>_molOptRol('producto_final',sel); window._molOptD=optD;
+  // Insumos de entrada: cualquier artículo del catálogo (ej. un aditivo que se agrega a la soja).
+  window._molOptAll=(sel)=>`<option value="">— Insumo —</option>`+(state.cache.productos||[]).filter(p=>p.activo!==false).map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join('');
   openModal({
     title: (id?'Editar':'Nueva')+' fórmula de molienda', size:'max-w-2xl',
     body:`
@@ -30724,18 +30740,23 @@ function molFormulaForm(id) {
         <div><label class="label">Nombre *</label><input id="mf-nombre" class="input" value="${esc(f?.nombre||'')}" placeholder="Molienda de soja"/></div>
         <div><label class="label">Grano de origen *</label><select id="mf-origen" class="input">${_molOptRol('materia_prima', f?.origenProductoId)}</select></div>
       </div>
-      <div class="label mb-1">Coproductos (deben sumar 100%)</div>
+      <div class="label mb-1">Coproductos que SALEN (deben sumar 100%)</div>
       <div id="mf-items"></div>
       <button class="btn btn-ghost btn-sm mt-2" onclick="molItemAdd()">+ Agregar coproducto</button>
-      <div class="text-[11px] text-slate-500 mt-2">El <b>coef. de costo</b> es opcional: por defecto el costo se reparte igual que el rendimiento. La <b>merma</b> no lleva costo.</div>`,
+      <div class="text-[11px] text-slate-500 mt-2">El <b>coef. de costo</b> es opcional: por defecto el costo se reparte igual que el rendimiento. La <b>merma</b> no lleva costo.</div>
+      <div class="label mb-1 mt-4">Insumos que ENTRAN y se consumen <span class="text-slate-400 font-normal">(opcional — ej. un aditivo. Se descuenta del stock un % de los kilos procesados)</span></div>
+      <div id="mf-entradas"></div>
+      <button class="btn btn-ghost btn-sm mt-2" onclick="molEntradaAdd()">+ Agregar insumo de entrada</button>
+      <div class="text-[11px] text-slate-500 mt-2">El <b>%</b> es sobre los kilos procesados: si procesás 10.000 kg y el insumo es 0,5%, se descuentan 50 kg de ese insumo del depósito elegido.</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="molFormulaSave('${id||''}')">💾 Guardar</button>`
   });
   molItemsRender();
 }
 function molItemsRender() {
-  const box=$('#mf-items'); if(!box) return;
-  box.innerHTML = (state._molEditItems||[]).map((it,idx)=>`
+  const box=$('#mf-items');
+  const its=(state._molEditItems||[]);
+  if(box) box.innerHTML = its.map((it,idx)=> it.esEntrada ? '' : `
     <div class="grid grid-cols-12 gap-2 mb-2 items-center">
       <select class="input col-span-4 text-sm" onchange="state._molEditItems[${idx}].productoId=this.value">${window._molOptP(it.productoId)}</select>
       <input type="number" step="0.01" class="input col-span-2 text-sm" placeholder="%" value="${it.rendimientoPct??''}" oninput="state._molEditItems[${idx}].rendimientoPct=this.value;molItemsSuma()"/>
@@ -30744,16 +30765,25 @@ function molItemsRender() {
       <label class="col-span-1 text-[11px] flex items-center gap-1"><input type="checkbox" ${it.esMerma?'checked':''} onchange="state._molEditItems[${idx}].esMerma=this.checked"/>merma</label>
       <button class="col-span-1 text-red-500 text-sm" onclick="state._molEditItems.splice(${idx},1);molItemsRender();molItemsSuma()">✕</button>
     </div>`).join('') + `<div id="mf-suma" class="text-xs mt-1"></div>`;
+  const boxE=$('#mf-entradas');
+  if(boxE) boxE.innerHTML = its.map((it,idx)=> !it.esEntrada ? '' : `
+    <div class="grid grid-cols-12 gap-2 mb-2 items-center">
+      <select class="input col-span-6 text-sm" onchange="state._molEditItems[${idx}].productoId=this.value">${window._molOptAll(it.productoId)}</select>
+      <input type="number" step="0.001" class="input col-span-2 text-sm" placeholder="% kg" value="${it.rendimientoPct??''}" oninput="state._molEditItems[${idx}].rendimientoPct=this.value"/>
+      <select class="input col-span-3 text-sm" onchange="state._molEditItems[${idx}].depositoDestinoId=this.value">${window._molOptD(it.depositoDestinoId)}</select>
+      <button class="col-span-1 text-red-500 text-sm" onclick="state._molEditItems.splice(${idx},1);molItemsRender()">✕</button>
+    </div>`).join('');
   molItemsSuma();
 }
-function molItemAdd(){ (state._molEditItems=state._molEditItems||[]).push({productoId:'',rendimientoPct:'',coefCosto:'',depositoDestinoId:'',esMerma:false}); molItemsRender(); }
-function molItemsSuma(){ const s=(state._molEditItems||[]).reduce((a,i)=>a+(Number(i.rendimientoPct)||0),0); const el=$('#mf-suma'); if(el) el.innerHTML=`Suma de rendimientos: <b class="${Math.abs(s-100)<0.01?'text-emerald-700':'text-amber-600'}">${s}%</b>${Math.abs(s-100)<0.01?'':' (debería ser 100%)'}`; }
+function molItemAdd(){ (state._molEditItems=state._molEditItems||[]).push({productoId:'',rendimientoPct:'',coefCosto:'',depositoDestinoId:'',esMerma:false,esEntrada:false}); molItemsRender(); }
+function molEntradaAdd(){ (state._molEditItems=state._molEditItems||[]).push({productoId:'',rendimientoPct:'',depositoDestinoId:'',esEntrada:true}); molItemsRender(); }
+function molItemsSuma(){ const s=(state._molEditItems||[]).filter(i=>!i.esEntrada).reduce((a,i)=>a+(Number(i.rendimientoPct)||0),0); const el=$('#mf-suma'); if(el) el.innerHTML=`Suma de rendimientos: <b class="${Math.abs(s-100)<0.01?'text-emerald-700':'text-amber-600'}">${s}%</b>${Math.abs(s-100)<0.01?'':' (debería ser 100%)'}`; }
 async function molFormulaSave(id) {
   const nombre=$('#mf-nombre')?.value.trim(), origen=$('#mf-origen')?.value;
   const items=(state._molEditItems||[]).filter(i=>i.productoId&&Number(i.rendimientoPct)>0);
   if (!nombre||!origen) return toast('Nombre y grano de origen requeridos','warn');
-  if (!items.length) return toast('Cargá al menos un coproducto','warn');
-  const body={ nombre, origenProductoId:origen, items:items.map(i=>({ productoId:i.productoId, rendimientoPct:Number(i.rendimientoPct), coefCosto:(i.coefCosto===''||i.coefCosto==null)?null:Number(i.coefCosto), depositoDestinoId:i.depositoDestinoId||null, esMerma:!!i.esMerma })) };
+  if (!items.filter(i=>!i.esEntrada).length) return toast('Cargá al menos un coproducto de salida','warn');
+  const body={ nombre, origenProductoId:origen, items:items.map(i=>({ productoId:i.productoId, rendimientoPct:Number(i.rendimientoPct), coefCosto:(i.coefCosto===''||i.coefCosto==null)?null:Number(i.coefCosto), depositoDestinoId:i.depositoDestinoId||null, esMerma:!!i.esMerma, esEntrada:!!i.esEntrada })) };
   try { if (id) await api('/api/formulas-molienda/'+id,{method:'PUT',body:JSON.stringify(body)}); else await api('/api/formulas-molienda',{method:'POST',body:JSON.stringify(body)});
     toast('Fórmula guardada','success'); closeModal(); state._molFormulas=(await api('/api/formulas-molienda')).data||[]; molRender();
   } catch(e){ toast(e.message,'error'); }
@@ -30766,7 +30796,7 @@ async function molFormulaDel(id) {
 /* ---- Costo y precio (coproductos) ---- */
 function molTabProductos() {
   // Productos que son coproductos de alguna fórmula (tienen costo de fabricación o aparecen como item).
-  const ids = new Set(); (state._molFormulas||[]).forEach(f=>(f.items||[]).forEach(i=>{ if(!i.esMerma) ids.add(i.productoId); }));
+  const ids = new Set(); (state._molFormulas||[]).forEach(f=>(f.items||[]).forEach(i=>{ if(!i.esMerma && !i.esEntrada) ids.add(i.productoId); }));
   const prods = (state.cache.productos||[]).filter(p=>ids.has(p.id) || p.costoFabricacionKg!=null);
   const filas = prods.map(p=>{
     const costo=Number(p.costoFabricacionKg)||0;
