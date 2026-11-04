@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.383.0';
+const AGROCORE_VERSION = '2.384.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4022,8 +4022,15 @@ mountCrud({
     // v2.276 — doble unidad (hortícolas)
     unidad2: z.string().nullable().optional(),
     kgPorUnidad2: z.number().nullable().optional(),
-    // v2.336 — rol en fábrica/molienda (materia_prima | producto_final)
+    // v2.336 — rol en fábrica/molienda (materia_prima | producto_final) — DEPRECADO
     rolFabrica: z.string().nullable().optional(),
+    // v2.384 — capacidades combinables (qué puede hacer el artículo)
+    controlaStock: z.boolean().optional(),
+    sePuedeComprar: z.boolean().optional(),
+    sePuedeVender: z.boolean().optional(),
+    seConsumeEnProduccion: z.boolean().optional(),
+    seObtieneEnProduccion: z.boolean().optional(),
+    esServicio: z.boolean().optional(),
   }),
   orderBy: { nombre: 'asc' },
   searchFields: ['nombre', 'categoria', 'sku', 'codigoBarras'],

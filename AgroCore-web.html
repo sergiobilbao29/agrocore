@@ -3078,6 +3078,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'04/11/2026',
+      titulo:'✅ v2.384.0 — El artículo ahora dice qué puede hacer (se compra, se vende, se consume/obtiene en producción, es servicio)',
+      desc:'Tercer paso de la reorganización. En la ficha de cada <b>artículo</b> sumamos <b>capacidades combinables</b>: podés marcar, de forma independiente, si <b>🛒 se compra</b>, <b>💵 se vende</b>, <b>📦 controla stock</b>, <b>🌱 se consume en producción</b>, <b>🏭 se obtiene por producción</b> y si <b>🚜 es un servicio</b>. Se pueden combinar: la <b>misma soja</b> puede comprarse, venderse <b>y</b> consumirse en la molienda, sin duplicar el artículo. Antes había que elegir un único rol excluyente (materia prima <b>o</b> producto final). En el <b>Catálogo de artículos</b> cada fila muestra chips con sus usos habilitados. La <b>fórmula de molienda</b> ahora ofrece como origen lo marcado "se consume en producción" y como coproducto lo marcado "se obtiene por producción". Migración automática: tus artículos ya quedaron con las capacidades derivadas de cómo estaban cargados (no se pierde nada).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
       titulo:'🗂️ v2.383.0 — Catálogo más claro: ruta completa de cada artículo, buscador global y nombres unificados',
       desc:'Segundo paso de la reorganización (todo visual, sin tocar datos). <b>"Catálogos" ahora se llama "Catálogo de artículos"</b> y <b>"Categorías y Familias" pasó a "Organización de artículos"</b>. En el catálogo, cada artículo muestra su <b>ubicación completa</b> en el árbol (ej. <i>Agroindustria / Soja / Derivados</i>) en vez de solo la familia, y sumamos un <b>buscador global</b> arriba que encuentra cualquier artículo sin importar en qué subfamilia esté (no hace falta abrir todas las carpetas). Los artículos que cuelgan directo de una categoría se agrupan como <b>"Directo en la categoría"</b> y los que no tienen familia como <b>"Sin clasificar"</b> (antes todo caía en "Sin Familia"). En <b>Organización de artículos</b>, cada nodo del árbol muestra <b>cuántos artículos contiene</b> (incluyendo sus subfamilias) y se aclaró que podés anidar subfamilias <b>sin límite</b>.' },
@@ -8256,6 +8259,15 @@ async function prodForm(id=null, opts={}) {
   // Al crear desde una categoría del árbol (ej. Repuestos) preseleccionamos esa categoría/familia.
   const presetCat = (!id && opts.presetCatId) ? opts.presetCatId : (it.categoriaArticuloId||'');
   const flatDefault = it.categoria || (!id && opts.presetCatId ? 'otro' : '');
+  // v2.384 — capacidades combinables (con fallback a los datos viejos si el cache es previo).
+  const _cap = {
+    controlaStock: it.controlaStock!==undefined ? !!it.controlaStock : ((it.tipoArticulo||'')!=='servicio'),
+    sePuedeComprar: it.sePuedeComprar!==undefined ? !!it.sePuedeComprar : true,
+    sePuedeVender: it.sePuedeVender!==undefined ? !!it.sePuedeVender : true,
+    seConsumeEnProduccion: it.seConsumeEnProduccion!==undefined ? !!it.seConsumeEnProduccion : (it.rolFabrica==='materia_prima'),
+    seObtieneEnProduccion: it.seObtieneEnProduccion!==undefined ? !!it.seObtieneEnProduccion : (it.rolFabrica==='producto_final'),
+    esServicio: it.esServicio!==undefined ? !!it.esServicio : ((it.tipoArticulo||'')==='servicio'),
+  };
   openModal({
     title: id?'Editar producto':'Nuevo producto',
     body: `
@@ -8283,12 +8295,18 @@ async function prodForm(id=null, opts={}) {
             ${[['','— Sin definir —'],['stockeable','📦 Stockeable (descuenta stock)'],['cereal','🌾 Cereal / Grano'],['servicio','🚜 Servicio / Labor (no descuenta stock)']].map(([v,l])=>`<option value="${v}" ${(it.tipoArticulo||'')===v?'selected':''}>${l}</option>`).join('')}
           </select>
         </div>
-        ${state.usaProduccionIndustrial ? `<div><label class="label">🏭 Rol en fábrica / molienda</label>
-          <select id="f-rolfab" class="input">
-            ${[['','— No aplica —'],['materia_prima','🌱 Materia prima (grano de origen)'],['producto_final','📦 Producto final (coproducto)']].map(([v,l])=>`<option value="${v}" ${(it.rolFabrica||'')===v?'selected':''}>${l}</option>`).join('')}
-          </select>
-          <div class="text-[11px] text-slate-500 mt-1">Al marcarlo, la fórmula de molienda solo ofrece las materias primas como origen y los productos finales como coproductos.</div>
-        </div>` : ''}
+        <div class="col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-2 mt-1">
+          <div class="text-[11px] font-semibold text-slate-600 mb-1">✅ ¿Qué se puede hacer con este artículo? <span class="font-normal text-slate-400">Se pueden combinar. Clasificar (la categoría) y usar son cosas distintas: la misma soja puede comprarse, venderse y consumirse en molienda.</span></div>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-sm">
+            <label class="flex items-center gap-2"><input type="checkbox" id="f-cap-comprar" ${_cap.sePuedeComprar?'checked':''}/> 🛒 Se compra</label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="f-cap-vender" ${_cap.sePuedeVender?'checked':''}/> 💵 Se vende</label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="f-cap-stock" ${_cap.controlaStock?'checked':''}/> 📦 Controla stock</label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="f-cap-consume" ${_cap.seConsumeEnProduccion?'checked':''}/> 🌱 Se consume en producción</label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="f-cap-obtiene" ${_cap.seObtieneEnProduccion?'checked':''}/> 🏭 Se obtiene por producción</label>
+            <label class="flex items-center gap-2"><input type="checkbox" id="f-cap-servicio" onchange="if(this.checked){document.getElementById('f-cap-stock').checked=false;}" ${_cap.esServicio?'checked':''}/> 🚜 Es un servicio</label>
+          </div>
+          ${state.usaProduccionIndustrial?`<div class="text-[11px] text-slate-500 mt-1">En molienda, la fórmula ofrece como <b>origen</b> lo marcado "se consume en producción" y como <b>coproducto</b> lo marcado "se obtiene por producción".</div>`:''}
+        </div>
         <div><label class="label">SKU / Código interno</label><input id="f-sku" class="input" value="${esc(it.sku||'')}" placeholder="Opcional"/></div>
         <div><label class="label">Código de barras</label><input id="f-ean" class="input font-mono" value="${esc(it.codigoBarras||'')}" placeholder="EAN / opcional"/></div>
         <div><label class="label">IVA por defecto</label>
@@ -8403,8 +8421,18 @@ async function prodSave(id) {
     esMezcla: !!$('#f-esmezcla')?.checked,
     unidad2: $('#f-uni2')?.value.trim() || null,
     kgPorUnidad2: $('#f-kgu2')?.value ? Number($('#f-kgu2').value) : null,
-    rolFabrica: $('#f-rolfab')?.value || null,
   };
+  // v2.384 — capacidades combinables. Si están los checkboxes nuevos, los leemos; y
+  // derivamos rolFabrica (deprecado) para compatibilidad con molienda y pantallas viejas.
+  if ($('#f-cap-comprar')) {
+    data.sePuedeComprar = !!$('#f-cap-comprar').checked;
+    data.sePuedeVender = !!$('#f-cap-vender').checked;
+    data.esServicio = !!$('#f-cap-servicio').checked;
+    data.controlaStock = data.esServicio ? false : !!$('#f-cap-stock').checked;
+    data.seConsumeEnProduccion = !!$('#f-cap-consume').checked;
+    data.seObtieneEnProduccion = !!$('#f-cap-obtiene').checked;
+    data.rolFabrica = data.seConsumeEnProduccion ? 'materia_prima' : (data.seObtieneEnProduccion ? 'producto_final' : null);
+  }
   if (!data.nombre) return toast('Nombre requerido','warn');
   if (!caId && !cat) return toast('Elegí la categoría','warn');
   // Fórmula de la mezcla (si aplica).
@@ -30426,6 +30454,25 @@ function _catRaizNodo(caId){ let c=_catNodo(caId); if(!c) return null; let i=0; 
 // Ruta completa del árbol para una categoría/familia: "Categoría / Familia / Subfamilia…"
 function _catRutaArr(caId){ const arr=[]; let c=_catNodo(caId), i=0; while(c && i++<30){ arr.unshift(c.nombre||''); c=c.padreId?_catNodo(c.padreId):null; } return arr; }
 function _catRutaStr(caId){ return _catRutaArr(caId).join(' / '); }
+// v2.384 — chips de "usos habilitados" de un artículo (capacidades combinables, con fallback).
+function _prodUsoChips(p){
+  const cap = {
+    comprar: p.sePuedeComprar!==undefined?p.sePuedeComprar:true,
+    vender: p.sePuedeVender!==undefined?p.sePuedeVender:true,
+    stock: p.controlaStock!==undefined?p.controlaStock:((p.tipoArticulo||'')!=='servicio'),
+    consume: p.seConsumeEnProduccion!==undefined?p.seConsumeEnProduccion:(p.rolFabrica==='materia_prima'),
+    obtiene: p.seObtieneEnProduccion!==undefined?p.seObtieneEnProduccion:(p.rolFabrica==='producto_final'),
+    servicio: p.esServicio!==undefined?p.esServicio:((p.tipoArticulo||'')==='servicio'),
+  };
+  const ch=[];
+  if(cap.servicio) ch.push(['🚜','Servicio']);
+  if(cap.comprar) ch.push(['🛒','Se compra']);
+  if(cap.vender) ch.push(['💵','Se vende']);
+  if(cap.stock) ch.push(['📦','Controla stock']);
+  if(cap.consume) ch.push(['🌱','Se consume en producción']);
+  if(cap.obtiene) ch.push(['🏭','Se obtiene por producción']);
+  return ch.map(([e,t])=>`<span class="badge badge-gray text-[9px]" title="${esc(t)}">${e}</span>`).join(' ');
+}
 // Cantidad de artículos (Producto) bajo un nodo del árbol, contando sus descendientes.
 function _catConteoArticulos(id){
   const prods = state.cache.productos || [];
@@ -30924,7 +30971,11 @@ function molTabFormulas() {
 // cae a todos los activos no-hacienda (para no romper empresas que aún no marcaron).
 function _molProdPorRol(rol){
   const all=(state.cache.productos||[]).filter(p=>p.activo!==false);
-  const conRol=all.filter(p=>p.rolFabrica===rol);
+  // v2.384: filtra por la capacidad combinable; cae a rolFabrica (deprecado) para datos viejos.
+  const _match = (p) => rol==='materia_prima'
+    ? (p.seConsumeEnProduccion || p.rolFabrica==='materia_prima')
+    : (p.seObtieneEnProduccion || p.rolFabrica==='producto_final');
+  const conRol=all.filter(_match);
   // En empresas de fábrica: SOLO lo marcado (sin fallback), así no aparecen animales ni agroquímicos.
   if (state.usaProduccionIndustrial) return conRol.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
   const base=conRol.length?conRol:all.filter(p=>(p.categoria||'').toLowerCase()!=='hacienda');
@@ -32016,7 +32067,7 @@ pages.catalogos = async function() {
                   <tbody>
                     ${arr.map(p => { const ruta=p.categoriaArticuloId?_catRutaStr(p.categoriaArticuloId):''; return `
                       <tr class="table-row">
-                        <td class="font-semibold text-slate-800">${esc(p.nombre)}${p.sku?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.sku)}</div>`:''}</td>
+                        <td class="font-semibold text-slate-800">${esc(p.nombre)}${p.sku?`<div class="text-[11px] text-slate-500 font-mono">${esc(p.sku)}</div>`:''}<div class="mt-0.5">${_prodUsoChips(p)}</div></td>
                         <td>${ruta?`<span class="text-[11px] text-slate-600">${esc(ruta)}</span>`:'<span class="text-slate-300">—</span>'}</td>
                         <td class="text-slate-600">${esc(p.unidad||'—')}</td>
                         <td>${p.activo===false?'<span class="badge badge-gray">Inactivo</span>':'<span class="badge badge-green">Activo</span>'}</td>

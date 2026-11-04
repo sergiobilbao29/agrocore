@@ -619,7 +619,18 @@ model Producto {
   margenVentaPct     Float?  // % de ganancia para sugerir el precio de venta (precio = costo x (1+%/100))
   // v2.336: rol del artículo en la fábrica/molienda. Filtra los pickers de fórmula.
   // null = no aplica | "materia_prima" = grano de origen | "producto_final" = coproducto
+  // DEPRECADO desde v2.384: se conserva por compatibilidad. El rol real se deriva de las
+  // capacidades combinables de abajo (seConsumeEnProduccion / seObtieneEnProduccion).
   rolFabrica         String?
+  // v2.384: CAPACIDADES COMBINABLES del artículo (qué puede hacer; no excluyentes).
+  // Clasificar (árbol) y usar (estas flags) son cosas distintas: un mismo artículo
+  // puede comprarse, venderse y además consumirse/obtenerse en producción.
+  controlaStock          Boolean @default(true)   // descuenta/suma stock
+  sePuedeComprar         Boolean @default(true)
+  sePuedeVender          Boolean @default(true)
+  seConsumeEnProduccion  Boolean @default(false)  // materia prima / insumo de molienda
+  seObtieneEnProduccion  Boolean @default(false)  // coproducto / producto final
+  esServicio             Boolean @default(false)  // no descuenta stock
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   categoriaArticulo CategoriaArticulo? @relation(fields: [categoriaArticuloId], references: [id], onDelete: SetNull)
