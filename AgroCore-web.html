@@ -3079,6 +3079,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'04/11/2026',
+      titulo:'🗂️ v2.379.0 — Catálogos: tus categorías del árbol mandan (fuera las pestañas viejas de Insumos/Cereales)',
+      desc:'Si armaste tus <b>Categorías y Familias</b> en el árbol, en <b>Catálogos</b> ahora ves <b>solo esas categorías</b>, y en todas <b>"+ Nuevo" abre el formulario completo de artículo</b> (nombre, categoría, unidad, stock mínimo, precio, IVA…) que queda disponible en compras/ventas/stock. Dejan de aparecer las pestañas <b>viejas</b> "Insumos" y "Cereales/Granos" que abrían el formulario reducido y confundían (eran de un sistema anterior). Las de <b>Servicios y Labores</b>, <b>Animales</b>, <b>Unidades</b> y <b>Monedas</b> siguen igual. Si una empresa todavía no armó el árbol, las pestañas viejas quedan como respaldo.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'04/11/2026',
       titulo:'🧪 v2.378.0 — Catálogos: "Insumos" ahora crea artículos completos (y aparecen en el catálogo)',
       desc:'En <b>Catálogos</b>, la pestaña <b>Insumos</b> abría un formulario reducido (solo nombre, familia y descripción) y lo que cargabas <b>no aparecía</b> en el catálogo ni en Stock. Ahora, si tenés la categoría <b>Insumos</b> en el árbol de <b>Categorías y Familias</b>, funciona igual que las demás (Soja, etc.): "+ Nuevo" abre el <b>formulario completo de artículo</b> (nombre, categoría, unidad, stock mínimo, precio de referencia, IVA, etc.) y el insumo <b>queda disponible en compras, ventas y stock</b>. <i>Nota: los insumos que habías cargado con el formulario viejo conviene volver a crearlos con el nuevo para que aparezcan.</i>' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
@@ -31662,23 +31665,29 @@ pages.catalogos = async function() {
   let prods = [];
   try { prods = await crudList('productos'); state.cache.productos = prods; } catch {}
   const _norm = s => (s||'').toLowerCase().replace(/\s+/g,' ').trim();
-  // 'insumos' YA NO se mapea a la pestaña maestro legacy: si la empresa tiene la raíz
-  // "Insumos" en el árbol, se trata como categoría de PRODUCTOS (form completo + aparece
-  // en Stock), igual que cualquier otra categoría. La pestaña legacy solo queda como
-  // respaldo si NO existe esa raíz (empresas viejas sin árbol).
-  const ROOT2TAB = { 'cereales / granos':'cereales', 'cereales':'cereales', 'servicios y labores':'labores', 'labores':'labores', 'hacienda':'categAn', 'animales':'categAn' };
+  // Productos físicos: TODA categoría del árbol es una pestaña de PRODUCTOS (form completo
+  // de artículo + aparece en Stock). Las pestañas maestro LEGACY de productos físicos
+  // (Insumos, Cereales/Granos) ya no se mapean: si la empresa tiene categorías propias en
+  // el árbol, se reemplazan por esas categorías; solo quedan como respaldo si el árbol no
+  // tiene ninguna categoría de productos. Labores/servicios y hacienda siguen como antes.
+  const ROOT2TAB = { 'servicios y labores':'labores', 'labores':'labores', 'hacienda':'categAn', 'animales':'categAn' };
   const staticProd = CAT_TABS.filter(t => t.g==='prod');
   const roots = arbol.filter(c => !c.padreId && c.activo!==false)
                      .sort((a,b)=> (a.orden||0)-(b.orden||0) || (a.nombre||'').localeCompare(b.nombre||''));
   const prodTabs = []; const usados = new Set();
   roots.forEach(r => {
-    const nn = _norm(r.nombre);
-    const mapId = ROOT2TAB[nn];
+    const mapId = ROOT2TAB[_norm(r.nombre)];
     if (mapId) { const st = staticProd.find(t=>t.id===mapId); if (st && !usados.has(st.id)) { prodTabs.push(st); usados.add(st.id); } }
-    else { prodTabs.push({ id:'pc_'+r.id, label:r.nombre, icon:r.icono||'📦', g:'prod', esProdCat:true, catId:r.id, singular:'Artículo', tipos:[] });
-           if (nn === 'insumos') usados.add('insumos'); }  // hay raíz Insumos: no mostrar la pestaña maestro legacy
+    else prodTabs.push({ id:'pc_'+r.id, label:r.nombre, icon:r.icono||'📦', g:'prod', esProdCat:true, catId:r.id, singular:'Artículo', tipos:[] });
   });
-  staticProd.forEach(t => { if (!usados.has(t.id)) prodTabs.push(t); });
+  // Si ya hay categorías de productos en el árbol, no mostramos las pestañas maestro legacy
+  // de productos físicos (Insumos, Cereales): confunden (form viejo + no aparecen en el catálogo).
+  const hayRootsProd = prodTabs.some(t => t.esProdCat);
+  staticProd.forEach(t => {
+    if (usados.has(t.id)) return;
+    if (hayRootsProd && (t.id==='insumos' || t.id==='cereales')) return;
+    prodTabs.push(t);
+  });
   state._catProdTabs = prodTabs.filter(t => t.esProdCat).map(t => t.id);
   const TABS = [...prodTabs, ...CAT_TABS.filter(t => t.g!=='prod')];
   // Categoría raíz de cada producto (para agrupar en las pestañas propias).
