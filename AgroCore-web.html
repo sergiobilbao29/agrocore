@@ -3075,6 +3075,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
+      titulo:'🧾 v2.372.0 — Comprobante: líneas, letra e impresión arregladas',
+      desc:'En el <b>PDF</b> el bloque del emisor se compactó para que la línea de vencimiento <b>no pise "Condición frente al IVA"</b> cuando hay logo. En la <b>previsualización</b> y al <b>imprimir</b>, la letra del comprobante (A/B/C) queda <b>centrada</b> y ya no la corta ninguna línea, y el <b>renglón del artículo arranca arriba</b> de la tabla (antes salía en el medio de la hoja). <br>En <b>WhatsApp</b>: como WhatsApp Web no deja adjuntar archivos por link, ahora al tocar “💬 WhatsApp” <b>se descarga el PDF</b> y te avisa para que lo <b>adjuntes en el chat</b> (el texto con los datos y el CAE se manda igual). Para enviarla ya adjunta, usá <b>✉️ Email</b>.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
       titulo:'🔧 v2.371.0 — El actualizador ya no se cuelga (y deja un log)',
       desc:'Algunas instancias quedaban en “Actualizando…” hasta el timeout de 5 minutos sin un error claro. La causa: el actualizador corre como <b>SYSTEM</b> y, si el repositorio es privado, <b>git</b> quedaba esperando usuario/contraseña. Ahora git está forzado a <b>modo no-interactivo</b> (falla rápido en vez de colgarse), el actualizador deja un <b>log</b> en <code>C:\\AgroCore\\logs\\update-*.log</code> y el aviso de timeout explica la causa real y el comando exacto para destrabar la instancia (correr <b>Forzar-Actualizacion.ps1</b> desde una PowerShell abierta como tu usuario). Se agregó ese script a la raíz de cada instalación.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'03/11/2026',
@@ -16825,15 +16828,15 @@ function _factDocHTML(f, copia){
   const cliIva=_ivaLabel(cli.condicionIva||cli.condIVA) || 'Consumidor Final';
   const items=(f.items||[]).map((i,idx)=>{ const a=Number(i.alicuotaIva||0); const tot=Number(i.total||0); const sub=tot/(1+a/100);
     return `<tr>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px">${String(idx+1).padStart(2,'0')}</td>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px">${esc(i.descripcion||'')}</td>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">${fmtN(i.cantidad)}</td>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px">${esc(i.productoUnidad||i.unidad||'unidad')}</td>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">${fmtN(i.precioUnit,2)}</td>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">0,00</td>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">${fmtN(sub,2)}</td>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:center">${fmtN(a,a%1?1:0)}%</td>
-      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right">${fmtN(tot,2)}</td></tr>`; }).join('');
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;vertical-align:top">${String(idx+1).padStart(2,'0')}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;vertical-align:top">${esc(i.descripcion||'')}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right;vertical-align:top">${fmtN(i.cantidad)}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;vertical-align:top">${esc(i.productoUnidad||i.unidad||'unidad')}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right;vertical-align:top">${fmtN(i.precioUnit,2)}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right;vertical-align:top">0,00</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right;vertical-align:top">${fmtN(sub,2)}</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:center;vertical-align:top">${fmtN(a,a%1?1:0)}%</td>
+      <td style="border-bottom:1px solid #ccc;padding:3px 4px;text-align:right;vertical-align:top">${fmtN(tot,2)}</td></tr>`; }).join('');
   return `<div class="fact-copia" style="font-family:Arial,Helvetica,sans-serif;color:#000;font-size:11px;border:1px solid #000;margin:0 auto 12px;max-width:770px">
     <div style="text-align:center;font-weight:bold;font-size:13px;border-bottom:1px solid #000;padding:3px">${copia||'ORIGINAL'}</div>
     <table style="width:100%;border-collapse:collapse"><tr>
@@ -16848,8 +16851,8 @@ function _factDocHTML(f, copia){
       </td>
       <td style="width:52%;padding:0;vertical-align:top">
         <table style="width:100%;border-collapse:collapse"><tr>
-          <td style="width:56px;text-align:center;border-bottom:1px solid #000;vertical-align:top;padding-top:4px">
-            <div style="font-size:26px;font-weight:bold;line-height:1">${esc(letra)}</div>
+          <td style="width:56px;text-align:center;border-bottom:1px solid #000;border-right:1px solid #000;vertical-align:middle">
+            <div style="font-size:26px;font-weight:bold;line-height:1.1">${esc(letra)}</div>
             <div style="font-size:8px">COD. ${_factCod(letra)}</div></td>
           <td style="border-bottom:1px solid #000;border-left:1px solid #000;padding:6px 10px;vertical-align:top">
             <div style="font-size:16px;font-weight:bold">${_factClaseTxt(f)}</div>
@@ -16917,19 +16920,21 @@ function _factPDFPage(doc, f, copia, extras){
   doc.setFillColor(255,255,255); doc.setLineWidth(0.9); doc.rect(midX-20, hTop+6, 40, 40, 'FD');
   doc.setFont('helvetica','bold'); doc.setFontSize(24); doc.text(letra, midX, hTop+34, {align:'center'});
   doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.text('COD. '+_factCod(letra), midX, hTop+44, {align:'center'});
-  // Emisor (izquierda): logo opcional (respetando su proporción) + nombre de fantasía
+  // Emisor (izquierda): logo opcional (respetando su proporción) + nombre de fantasía.
+  // Layout COMPACTO: logo chico + nombre + 3 líneas tienen que entrar antes de hBot (la
+  // banda de vencimiento), si no la línea pisa "Condición frente al IVA".
   const emCx=(M+midX-24)/2; let logoH=0;
   if(extras.logoData){ try{
     const p=doc.getImageProperties(extras.logoData);
-    const maxW=120, maxH=40; const rr=Math.min(maxW/p.width, maxH/p.height, 1);
+    const maxW=110, maxH=26; const rr=Math.min(maxW/p.width, maxH/p.height, 1);
     const w=p.width*rr, h=p.height*rr; logoH=h;
-    doc.addImage(extras.logoData, (p.fileType||'PNG').toUpperCase(), emCx-w/2, hTop+6, w, h, undefined, 'FAST');
+    doc.addImage(extras.logoData, (p.fileType||'PNG').toUpperCase(), emCx-w/2, hTop+4, w, h, undefined, 'FAST');
   }catch(e){ logoH=0; } }
-  const nameY = hTop + 6 + (logoH?logoH+12:18);
+  const nameY = hTop + 4 + (logoH?logoH+11:14);
   doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text(emp.fantasia||emp.razonSocial, emCx, nameY, {align:'center'});
-  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); let ey=nameY+16;
-  doc.text('Razon Social: '+emp.razonSocial, M+8, ey); ey+=13;
-  if(emp.direccion){ doc.text('Domicilio Comercial: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), M+8, ey); ey+=13; }
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.5); let ey=nameY+14;
+  doc.text('Razon Social: '+emp.razonSocial, M+8, ey); ey+=12;
+  if(emp.direccion){ doc.text('Domicilio Comercial: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), M+8, ey); ey+=12; }
   doc.text('Condicion frente al IVA: '+(emp.iva||'IVA Responsable Inscripto'), M+8, ey);
   // Comprobante (derecha)
   const rx=midX+28;
@@ -17035,10 +17040,14 @@ async function factEmail(){
   await enviarComprobanteEmail({ to, asunto, mensaje, pdfBase64:pdf, filename:_factFilename(f), tipo:'factura_venta', textoFallback });
 }
 function _factTexto(f){ const emp=_opEmpresa(); return _factClaseTxt(f)+' '+_factNroFmt(f)+' - '+emp.nombre+'\nCliente: '+(_factCliente(f).razonSocial||'')+'\nFecha: '+fmtDate(f.fecha)+'\nTotal: '+fmt$(f.total)+(f.cae?'\nCAE: '+f.cae:''); }
-function factWhatsApp(){ const f=state._factActual; if(!f) return;
+async function factWhatsApp(){ const f=state._factActual; if(!f) return;
+  // WhatsApp (wa.me) NO permite adjuntar archivos por link: solo se puede mandar texto.
+  // Por eso descargamos el PDF y avisamos para que lo adjunte a mano en el chat.
+  try { const doc=await _factBuildPDF(f); if(doc){ doc.save(_factFilename(f)); toast('📎 Descargamos el PDF de la factura. Adjuntalo en el chat de WhatsApp (botón 📎).','info'); } } catch(e){}
   const tel=(_factClienteTel(f)||'').replace(/[^0-9]/g,'');
   const base=tel?('https://wa.me/'+(tel.startsWith('54')?tel:'549'+tel)):'https://wa.me/';
-  window.open(base+'?text='+encodeURIComponent(_factTexto(f)),'_blank'); }
+  const texto=_factTexto(f)+'\n\n(Te adjunto la factura en PDF.)';
+  setTimeout(()=>window.open(base+'?text='+encodeURIComponent(texto),'_blank'), 400); }
 async function factEliminar(id){
   const f=state._factActual; const fid=id||f?.id; if(!fid) return;
   if(!confirm('¿Eliminar definitivamente esta factura?\nSolo se permite si no tiene CAE o si ya está anulada. Se devuelve el stock de los ítems y se libera el número. Esta acción no se puede deshacer.')) return;
