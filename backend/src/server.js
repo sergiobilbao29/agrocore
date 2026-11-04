@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.375.0';
+const AGROCORE_VERSION = '2.376.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -24259,6 +24259,47 @@ app.get('/api/contactos/saldo-kg', requireCompany, requirePermission('finanzas:r
     })).filter(p => Math.abs(p.ingresos) > 0.001 || Math.abs(p.egresos) > 0.001)
       .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
     res.json({ ok: true, data: { tipo, contactoId, items, totalMovimientos: totalMovs } });
+  } catch (e) { next(e); }
+});
+
+// Saldo en kilos CONSOLIDADO: todos los clientes (o proveedores) con saldo en especie.
+// Se usa en la pestaña "En kilos" de Cuentas a cobrar / a pagar (solo empresas fábrica).
+app.get('/api/contactos/saldo-kg-todos', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const tipo = String(req.query.tipo || '');
+    if (!['cliente', 'proveedor'].includes(tipo)) return res.status(400).json({ ok: false, error: 'Falta tipo (cliente|proveedor)' });
+    const movs = await prisma.movimiento.findMany({
+      where: { companyId: req.companyId, contraparteTipo: tipo, contraparteId: { not: null } },
+      select: { tipo: true, cantidad: true, total: true, precio: true, contraparteId: true, producto: { select: { id: true, nombre: true, unidad: true } } },
+    });
+    const byCont = {};
+    for (const m of movs) {
+      if (!m.producto || !m.contraparteId) continue;
+      const c = (byCont[m.contraparteId] = byCont[m.contraparteId] || { contactoId: m.contraparteId, prods: {} });
+      const k = m.producto.id;
+      const p = (c.prods[k] = c.prods[k] || { productoId: k, nombre: m.producto.nombre, unidad: m.producto.unidad || 'kg', ingresos: 0, egresos: 0, valorIng: 0, valorEgr: 0 });
+      const cant = Number(m.cantidad || 0);
+      const val = Number(m.total != null ? m.total : (m.precio != null ? m.precio * cant : 0)) || 0;
+      if (m.tipo === 'ingreso') { p.ingresos += cant; p.valorIng += val; }
+      else if (m.tipo === 'egreso') { p.egresos += cant; p.valorEgr += val; }
+    }
+    const ids = Object.keys(byCont);
+    let nombres = {};
+    if (ids.length) {
+      const rows = tipo === 'cliente'
+        ? await prisma.cliente.findMany({ where: { companyId: req.companyId, id: { in: ids } }, select: { id: true, razonSocial: true } })
+        : await prisma.proveedor.findMany({ where: { companyId: req.companyId, id: { in: ids } }, select: { id: true, razonSocial: true } });
+      nombres = Object.fromEntries(rows.map(r => [r.id, r.razonSocial]));
+    }
+    const data = ids.map(cid => {
+      const items = Object.values(byCont[cid].prods).map(p => ({
+        productoId: p.productoId, nombre: p.nombre, unidad: p.unidad,
+        netoKg: Math.round((p.ingresos - p.egresos) * 100) / 100,
+        netoValor: Math.round((p.valorIng - p.valorEgr) * 100) / 100,
+      })).filter(p => Math.abs(p.netoKg) > 0.001).sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+      return { contactoId: cid, nombre: nombres[cid] || '(sin nombre)', items };
+    }).filter(c => c.items.length).sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
 

@@ -1084,6 +1084,9 @@ const MODULES = [
   { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Comercial' },
   { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Comercial' },
   { id:'compensaciones',label:'Compensación de cuentas',icon:'🔀', perm:'finanzas:read',  section:'Comercial' },
+  // Fábrica (usaProduccionIndustrial): el canje de grano es parte de la comercialización.
+  { id:'canjeGrano',    label:'Plan canje (grano)',   icon:'🔁', perm:'stock:read',      section:'Comercial' },
+  { id:'ctaCanjeGrano', label:'Cuenta canje (grano)', icon:'📒', perm:'stock:read',      section:'Comercial' },
 
   // ===== PRODUCCIÓN — herramientas compartidas (campos, campañas, insumos, labores, servicios) =====
   { id:'campos',        label:'Campos y lotes',       icon:'🗺️', perm:'produccion:read', section:'Producción' },
@@ -1115,7 +1118,7 @@ const MODULES = [
   { id:'remitosInternos',label:'Remitos internos',    icon:'📤', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'cerealeras',    label:'Depósitos y cerealeras',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
-  { id:'molienda',      label:'Molienda / Fábrica',   icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
+  { id:'molienda',      label:'Molienda / Fábrica',   icon:'🏭', perm:'stock:read',      section:'Producción' },
   { id:'secado',        label:'Secadero (arroz/grano)',icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'arrozTablero',  label:'Tablero arroz',        icon:'📊', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
@@ -1907,6 +1910,7 @@ function renderNav() {
     if (empresaOcultaModulo(m.id)) return false;   // oculto por actividad de la empresa
     if (m.section === 'Comercial / AgroCore' && !state.usaComercial) return false; // módulo comercial opt-in
     if ((m.id === 'secado' || m.id === 'arrozTablero') && !state.usaArroz) return false; // circuito arroz opt-in
+    if ((m.id === 'molienda' || m.id === 'canjeGrano' || m.id === 'ctaCanjeGrano') && !state.usaProduccionIndustrial) return false; // fábrica opt-in
     if (!puedeVerModulo(m)) return false;   // lista blanca de menú por rol
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!can(m.perm)) return false;
@@ -3074,6 +3078,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
+      titulo:'🏭 v2.376.0 — Fábrica: canje en Comercial, molienda en Producción y cuentas en kilos',
+      desc:'En las empresas con <b>Producción industrial / Fábrica</b> reordenamos el menú: <b>«Molienda / Fábrica» pasa a la sección Producción</b> y en <b>Comercial</b> aparecen <b>«Plan canje (grano)»</b> y <b>«Cuenta canje (grano)»</b> (antes había que entrar por Molienda). Además, <b>Cuentas a cobrar y a pagar</b> suman una pestaña <b>«📦 En kilos»</b> que lista todos los clientes/proveedores con su <b>saldo en kilos</b> por producto; y tanto ahí como en el saldo <b>📦 kg</b> de cada contacto podés escribir un <b>precio $/kg</b> y ver el <b>equivalente en pesos</b> por renglón y el total, pero <b>el saldo se sigue viendo siempre en kilos</b> (el precio no modifica nada, es solo para valorizar).' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
       titulo:'🏭 v2.375.0 — Molienda: insumos que entran y se consumen',
       desc:'En la <b>fórmula de molienda</b> ahora podés cargar, además de los coproductos que salen, <b>insumos que ENTRAN y se consumen</b> (ej. un aditivo que se le agrega a la soja). Indicás el artículo, un <b>% sobre los kilos procesados</b> y el depósito; al cargar el parte, el sistema <b>descuenta del stock</b> la cantidad que corresponde (ej. 0,5% de 10.000 kg = 50 kg). Así le llevás control de stock también a esos insumos.' },
@@ -7484,7 +7491,9 @@ async function ccSaldoGranos(tipo, contactoId, nombre) {
     b.innerHTML = `<div class="text-slate-400 py-6 text-center">Todavía no hay movimientos de stock asociados a este ${tipo}.<br><span class="text-[12px]">Cargalos desde <b>Stock → Nuevo movimiento</b>, eligiendo este ${tipo} como contraparte.</span></div>`;
     return;
   }
-  const filas = items.map(it => {
+  // Guardamos los ítems para recalcular los pesos cuando se tipea un precio $/kg.
+  state._skItems = items.map(it => ({ ...it, precioKg: (Number(it.netoKg) ? (Number(it.netoValor||0) / Number(it.netoKg)) : 0) || '' }));
+  const filas = state._skItems.map((it, idx) => {
     const n = it.netoKg;
     const favor = n > 0.001 ? `a favor de ${esc(nombre||'')}` : (n < -0.001 ? `${esc(nombre||'')} te debe` : 'saldado');
     const col = n > 0.001 ? 'text-emerald-700' : (n < -0.001 ? 'text-red-600' : 'text-slate-400');
@@ -7494,16 +7503,79 @@ async function ccSaldoGranos(tipo, contactoId, nombre) {
       <td class="text-right text-red-600">-${fkg(it.egresos)}</td>
       <td class="text-right font-bold ${col}">${n>0?'+':''}${fkg(n)} ${esc(it.unidad||'kg')}</td>
       <td class="text-[11px] text-slate-500">${favor}</td>
-      <td class="text-right text-slate-500">${it.netoValor?fmt$(it.netoValor):'—'}</td>
+      <td class="text-right"><input type="number" step="0.01" class="input text-sm text-right" style="width:100px" value="${it.precioKg!==''?(Math.round(Number(it.precioKg)*100)/100):''}" placeholder="$/kg" oninput="_skPrecio(${idx}, this.value)"/></td>
+      <td class="text-right font-semibold" id="sk-val-${idx}">—</td>
     </tr>`;
   }).join('');
   b.innerHTML = `
-    <div class="text-[12px] text-slate-500 mb-2">Se arma solo con los <b>movimientos de stock</b> asociados a este ${tipo} (sin factura). <b>+</b> = a favor del ${tipo} (le debés); <b>−</b> = te debe.</div>
+    <div class="text-[12px] text-slate-500 mb-2">Se arma solo con los <b>movimientos de stock</b> asociados a este ${tipo} (sin factura). <b>+</b> = a favor del ${tipo} (le debés); <b>−</b> = te debe. El saldo se ve siempre <b>en kilos</b>; si cargás un <b>precio $/kg</b> te lo pasa a pesos.</div>
     <div class="overflow-x-auto"><table class="data">
-      <thead><tr><th>Producto</th><th class="text-right">Entró</th><th class="text-right">Salió</th><th class="text-right">Saldo (kg)</th><th>Estado</th><th class="text-right">Equiv. $</th></tr></thead>
+      <thead><tr><th>Producto</th><th class="text-right">Entró</th><th class="text-right">Salió</th><th class="text-right">Saldo (kg)</th><th>Estado</th><th class="text-right">Precio $/kg</th><th class="text-right">= $</th></tr></thead>
       <tbody>${filas}</tbody>
+      <tfoot><tr class="font-bold border-t"><td colspan="6" class="text-right">Total en pesos (a los precios cargados):</td><td class="text-right" id="sk-total">—</td></tr></tfoot>
     </table></div>
-    <div class="text-[11px] text-slate-400 mt-2">El equivalente en $ aparece solo si cargaste un precio en el movimiento.</div>`;
+    <div class="text-[11px] text-slate-400 mt-2">Los precios son solo para ver el equivalente en pesos; no modifican el saldo en kilos ni se guardan.</div>`;
+  _skRecalc();
+}
+// Pestaña "En kilos" de Cuentas a cobrar / a pagar (solo empresas fábrica):
+// lista todos los clientes/proveedores con saldo en especie, con precio $/kg opcional.
+async function ccTabKilos(){
+  const body = document.getElementById('cc-body'); if(!body) return;
+  body.innerHTML = `<div class="text-slate-500 text-sm py-6 text-center">Cargando saldos en kilos…</div>`;
+  let cli=[], prov=[];
+  try { const [c,p] = await Promise.all([ api('/api/contactos/saldo-kg-todos?tipo=cliente'), api('/api/contactos/saldo-kg-todos?tipo=proveedor') ]); cli=c.data||[]; prov=p.data||[]; }
+  catch(e){ body.innerHTML = `<div class="kpi text-red-600">${esc(e.message)}</div>`; return; }
+  const fkg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{maximumFractionDigits:2});
+  state._ckItems = [];
+  const seccion = (titulo, lista, tipo, favorTxt, debeTxt) => {
+    if(!lista.length) return `<div class="kpi mb-3"><div class="font-semibold mb-1">${titulo}</div><div class="text-slate-400 text-sm">Sin saldos en kilos.</div></div>`;
+    const filas = lista.map(c => c.items.map((it,i) => {
+      const idx = state._ckItems.length;
+      state._ckItems.push({ netoKg: it.netoKg, precioKg: '' });
+      const n = it.netoKg; const col = n>0.001?'text-emerald-700':(n<-0.001?'text-red-600':'text-slate-400');
+      const est = n>0.001?favorTxt:(n<-0.001?debeTxt:'saldado');
+      return `<tr class="table-row">
+        <td>${i===0?`<b>${esc(c.nombre)}</b>`:'<span class="text-slate-300">↳</span>'}</td>
+        <td>${esc(it.nombre)}</td>
+        <td class="text-right font-bold ${col}">${n>0?'+':''}${fkg(n)} ${esc(it.unidad||'kg')}</td>
+        <td class="text-[11px] text-slate-500">${est}</td>
+        <td class="text-right"><input type="number" step="0.01" class="input text-sm text-right" style="width:100px" placeholder="$/kg" oninput="_ckPrecio(${idx},this.value)"/></td>
+        <td class="text-right font-semibold" id="ck-val-${idx}">—</td>
+      </tr>`;
+    }).join('')).join('');
+    return `<div class="kpi p-0 overflow-hidden mb-3">
+      <div class="px-3 py-2 font-semibold border-b">${titulo}</div>
+      <div class="overflow-x-auto"><table class="data">
+        <thead><tr><th>${tipo}</th><th>Producto</th><th class="text-right">Saldo (kg)</th><th>Estado</th><th class="text-right">Precio $/kg</th><th class="text-right">= $</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table></div></div>`;
+  };
+  body.innerHTML = `
+    <div class="text-[12px] text-slate-500 mb-2">Saldo en <b>kilos</b> con cada contacto, armado con los <b>movimientos de stock</b> asociados (sin factura). Cargá un <b>precio $/kg</b> para ver el equivalente en pesos; el saldo se sigue viendo en kilos.</div>
+    ${seccion('💰 Clientes — a cobrar (en kilos)', cli, 'Cliente', 'a favor del cliente (le debés)', 'el cliente te debe')}
+    ${seccion('📤 Proveedores — a pagar (en kilos)', prov, 'Proveedor', 'a favor del proveedor (le debés)', 'el proveedor te debe')}
+    <div class="text-right font-bold mt-1">Total valorizado (a los precios cargados): <span id="ck-total">—</span></div>
+    <div class="text-[11px] text-slate-400 mt-1">Los precios son solo para valorizar: no modifican el saldo en kilos ni se guardan.</div>`;
+  _ckRecalc();
+}
+function _ckPrecio(idx, val){ if(state._ckItems && state._ckItems[idx]) state._ckItems[idx].precioKg = (val===''?'':Number(val)); _ckRecalc(); }
+function _ckRecalc(){
+  const fmtP = n => '$ ' + (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  let total=0;
+  (state._ckItems||[]).forEach((it,idx)=>{ const p=Number(it.precioKg)||0; const v=Number(it.netoKg||0)*p; total+=v;
+    const el=document.getElementById('ck-val-'+idx); if(el) el.textContent = p?((v>0?'+':'')+fmtP(v)):'—'; });
+  const t=document.getElementById('ck-total'); if(t) t.textContent = (total>0?'+':'')+fmtP(total);
+}
+// Recalcula el equivalente en pesos de cada renglón y el total del saldo en kilos.
+function _skPrecio(idx, val){ if(state._skItems && state._skItems[idx]) state._skItems[idx].precioKg = (val===''?'':Number(val)); _skRecalc(); }
+function _skRecalc(){
+  const fmtP = n => '$ ' + (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  let total=0;
+  (state._skItems||[]).forEach((it,idx)=>{
+    const p = Number(it.precioKg)||0; const v = Number(it.netoKg||0)*p; total+=v;
+    const el=document.getElementById('sk-val-'+idx); if(el) el.textContent = p? (v>0?'+':'')+fmtP(v) : '—';
+  });
+  const t=document.getElementById('sk-total'); if(t) t.textContent = (total>0?'+':'')+fmtP(total);
 }
 
 /* ----- PROVEEDORES ----- */
@@ -21288,6 +21360,7 @@ pages.ctasCtes = async function() {
         ${tabBtn('cobrar', '💰 A cobrar', tab==='cobrar')}
         ${tabBtn('pagar', '📤 A pagar', tab==='pagar')}
         ${tabBtn('otros', '📋 Otros / Manuales', tab==='otros')}
+        ${state.usaProduccionIndustrial ? tabBtn('kg', '📦 En kilos', tab==='kg') : ''}
       </div>
       <div class="flex gap-2 items-center flex-wrap">
         ${can('finanzas:create') && (tab==='cobrar') ? `<button class="btn btn-primary" onclick="pagoCobroAbrir('cobro')">💰 Cobrar (multi-comprobante)</button>` : ''}
@@ -21424,6 +21497,8 @@ pages.ctasCtes = async function() {
         </table>
       </div>
       <p class="text-xs text-slate-500 mt-2">💡 Los totales de manuales son <b>independientes</b> de los de clientes y proveedores.</p>`;
+  } else if (tab === 'kg') {
+    ccTabKilos();
   } else {
     body.innerHTML = `
       <div class="kpi p-0 overflow-hidden">
@@ -30516,6 +30591,9 @@ pages.molienda = async function() {
     molRender();
   } catch (e) { $('#page-body').innerHTML = `<div class="kpi text-red-600">Error: ${esc(e.message)}</div>`; }
 };
+// Accesos directos desde el menú "Comercial" (fábrica): abren Molienda en la pestaña del canje.
+pages.canjeGrano = async function(){ state._molTab='canje'; await pages.molienda(); setHeader('Plan canje (grano)','Entregás producto terminado y recibís grano (o viceversa), con una paridad fija. Movimiento en especie.'); };
+pages.ctaCanjeGrano = async function(){ state._molTab='ctacanje'; await pages.molienda(); setHeader('Cuenta canje (grano)','Saldo en kilos de grano con cada cliente: cuánto entró, cuánto se llevó y cuánto falta/sobra.'); };
 function molRender() {
   const tab = state._molTab || 'partes';
   const T = (id,txt)=>`<button class="btn ${tab===id?'btn-primary':'btn-ghost'} text-sm" onclick="state._molTab='${id}';molRender()">${txt}</button>`;
