@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.384.0';
+const AGROCORE_VERSION = '2.385.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -16226,6 +16226,15 @@ function _completarPendiente(texto, pendiente, ctx) {
 //  ofrece hacerlo pidiendo los datos con un ejemplo.
 // ============================================================
 const _AYUDA_KB = [
+  { id:'catalogo_articulos', terms:['catalogo','catalogos','articulo','articulos','categoria','categorias','familia','familias','subfamilia','organizacion de articulos','organizar articulos','producto nuevo','nuevo articulo','nuevo insumo','cargar producto','cargar articulo','no aparece en stock','no aparece el insumo','duplicado','clasificar producto','capacidades del articulo','se compra se vende','materia prima','coproducto','diagnostico de articulos','pasar a articulo'],
+    titulo:'Catalogo de articulos: como organizarlo y cargarlo bien',
+    pasos:[
+      'Pensalo en 3 niveles: Categoria -> Familia -> Subfamilias (las que quieras, sin limite). Se arma en Administracion -> Organizacion de articulos (antes "Categorias y Familias").',
+      'Un ARTICULO es lo real que se compra, vende, consume o fabrica (ej: Soja, Expeller, Aceite 15W40). Se carga en Catalogo de articulos con "+ Nuevo", eligiendo su ubicacion en el arbol.',
+      'No dupliques: un mismo articulo fisico es UN solo articulo. En su ficha marca las capacidades combinables: se compra / se vende / controla stock / se consume en produccion / se obtiene por produccion / es servicio. La misma soja puede comprarse, venderse y molerse sin crear copias.',
+      'Si cargaste algo con el formato viejo y no aparece en stock ni en compras/ventas, entra a Catalogo -> boton "Diagnostico de articulos" y usa "Pasar a articulo" para convertirlo (no borra nada).',
+      'Ejemplos: Fabrica -> Agroindustria / Soja / Derivados -> Expeller, Aceite. Comercio -> Lubricantes / Aceites de motor / 15W40 -> Bidon x4 L, Bidon x20 L.'],
+    atajo:{ page:'catalogos', label:'Abrir Catalogo de articulos' } },
   { id:'centros_costo', terms:['centro de costo','centros de costo','centro costo','imputar gasto','repartir gasto','prorratear','prorrateo','por hectareas','reparto por campo','unidad de negocio','a que campo','imputacion','distribuir gasto','gasto por campo','gasto por actividad'],
     titulo:'Centros de costo: imputar y repartir gastos e inversiones',
     pasos:[

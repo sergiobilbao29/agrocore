@@ -2834,6 +2834,7 @@ pages.ayuda = async function() {
     { grupo:'Primeros pasos', items:[
       { f:'Instructivo-Inicio-1Pagina.pdf', t:'Inicio rápido (1 página)', d:'Lo esencial para empezar a usar AgroCore.' },
       { f:'Instructivo-Puesta-en-Marcha.pdf', t:'Puesta en marcha (paso a paso)', d:'Configurar la empresa y cargar los datos iniciales, completo.' },
+      { f:'Instructivo-Catalogo-Articulos.pdf', t:'Catálogo de artículos: configuración y uso correcto', d:'Cómo organizar Categorías → Familias → Subfamilias y cargar artículos bien: un solo artículo por producto físico, con sus capacidades (se compra / se vende / stock / se consume o se obtiene en producción / servicio). Incluye ejemplos de fábrica y comercio, el Diagnóstico de artículos y cómo pasar lo viejo a artículos.' },
       { f:'Instructivo-Acomodar-Cuentas-Bancarias.pdf', t:'Acomodar cuentas bancarias', d:'Cargar saldos iniciales y ordenar tus bancos.' },
     ]},
     { grupo:'Finanzas', items:[
@@ -3078,6 +3079,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
+      titulo:'🧹 v2.385.0 — Catálogo: avisos de duplicados y ayuda con ejemplos (fábrica y comercio)',
+      desc:'Pulido final de la reorganización. Al crear un <b>artículo</b>, si ya existe uno con el mismo nombre en la <b>misma categoría/familia</b>, el sistema te avisa para que no dupliques (el mismo nombre en ramas distintas sigue permitido). En <b>Organización de artículos</b>, no te deja crear dos categorías/familias con el mismo nombre colgando del mismo padre. Y sumamos <b>ejemplos</b> en la ayuda para que se entienda cómo armarlo tanto en una <b>fábrica</b> (Agroindustria / Soja / Derivados → Expeller, Aceite) como en un <b>comercio</b> (Lubricantes / Aceites / 15W40 → Bidón x4 L, x20 L). También hay un <b>instructivo nuevo</b> en Ayuda: "Catálogo de artículos: configuración y uso correcto".' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'04/11/2026',
       titulo:'✅ v2.384.0 — El artículo ahora dice qué puede hacer (se compra, se vende, se consume/obtiene en producción, es servicio)',
       desc:'Tercer paso de la reorganización. En la ficha de cada <b>artículo</b> sumamos <b>capacidades combinables</b>: podés marcar, de forma independiente, si <b>🛒 se compra</b>, <b>💵 se vende</b>, <b>📦 controla stock</b>, <b>🌱 se consume en producción</b>, <b>🏭 se obtiene por producción</b> y si <b>🚜 es un servicio</b>. Se pueden combinar: la <b>misma soja</b> puede comprarse, venderse <b>y</b> consumirse en la molienda, sin duplicar el artículo. Antes había que elegir un único rol excluyente (materia prima <b>o</b> producto final). En el <b>Catálogo de artículos</b> cada fila muestra chips con sus usos habilitados. La <b>fórmula de molienda</b> ahora ofrece como origen lo marcado "se consume en producción" y como coproducto lo marcado "se obtiene por producción". Migración automática: tus artículos ya quedaron con las capacidades derivadas de cómo estaban cargados (no se pierde nada).' },
@@ -8435,6 +8439,13 @@ async function prodSave(id) {
   }
   if (!data.nombre) return toast('Nombre requerido','warn');
   if (!caId && !cat) return toast('Elegí la categoría','warn');
+  // v2.385 — aviso de duplicado en la MISMA ubicación (se permite el mismo nombre en ramas
+  // distintas; acá avisamos solo si ya hay un artículo igual en la misma categoría/familia).
+  {
+    const _n = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+    const dup = (state.cache.productos||[]).some(p => p.id!==id && (p.categoriaArticuloId||'')===(data.categoriaArticuloId||'') && _n(p.nombre)===_n(data.nombre));
+    if (dup && !confirm('Ya existe un artículo llamado "'+data.nombre+'" en la misma ubicación. ¿Querés crearlo igual? (Si es el mismo producto físico, mejor cancelá y editá el existente.)')) return;
+  }
   // Fórmula de la mezcla (si aplica).
   const esMezcla = data.esMezcla;
   const comps = esMezcla ? _mezLeerComponentes() : [];
@@ -30671,6 +30682,7 @@ function catArtRender() {
     </div>
     <div class="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded p-2 mb-3">
       💡 <b>Categoría</b> (ej. Animales) → <b>Familia</b> (ej. Vacunos) → <b>Subfamilias</b> (las que quieras: podés anidar sin límite). Los <b>artículos</b> (ej. Vaca) se cargan en <b>Catálogo de artículos</b> y se ubican en cualquier nodo de este árbol. El número al lado de cada nodo es la cantidad de artículos que contiene.
+      <div class="mt-1 text-slate-500">Ejemplos: <b>Fábrica</b> → Agroindustria / Soja / Derivados → <i>Expeller, Aceite</i>. &nbsp;·&nbsp; <b>Comercio</b> → Lubricantes / Aceites de motor / 15W40 → <i>Bidón x4 L, Bidón x20 L</i>.</div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       ${raices.map(r => nodo(r, 0)).join('') || `<div class="kpi md:col-span-2 text-center text-slate-400 py-8">Sin categorías. Creá la primera con "+ Nueva categoría".</div>`}
@@ -30724,6 +30736,13 @@ function catArtForm(id=null, padreIdDefault=null) {
 async function catArtSave(id) {
   const nombre = ($('#ca-nombre')?.value||'').trim();
   if (!nombre) return toast('Poné el nombre','warn');
+  const padreSel = $('#ca-padre')?.value || null;
+  // v2.385 — no permitir dos nodos con el mismo nombre bajo el mismo padre (confunde).
+  {
+    const _n = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+    const dup = (state.cache.categoriasArt||[]).some(c => c.id!==id && (c.padreId||null)===(padreSel||null) && _n(c.nombre)===_n(nombre));
+    if (dup) return toast('Ya existe "'+nombre+'" en el mismo nivel. Usá otro nombre o colgalo de otra categoría.','warn');
+  }
   const data = {
     nombre,
     padreId: $('#ca-padre')?.value || null,
