@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.373.0';
+const AGROCORE_VERSION = '2.374.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8218,7 +8218,13 @@ app.get('/api/efectivo-consolidado-tenedor', requireCompany, requirePermission('
     let empresas = req.user.superAdmin
       ? await prisma.company.findMany({ where: { activo: true }, orderBy: { name: 'asc' } })
       : (req.user.userCompanies || []).map((uc) => uc.company);
+    // Empresa activa (para respetar el aislamiento total).
+    const _actCo = (empresas || []).find((e) => e && e.id === req.companyId);
     empresas = empresas.filter((e) => e && e.cajaPorTenedor === true);
+    // Las empresas TOTALMENTE AISLADAS no participan del consolidado de caja del grupo:
+    // desde una aislada se ve solo a sí misma; desde una normal se excluyen las aisladas.
+    if (_actCo && _actCo.aislada) empresas = empresas.filter((e) => e.id === req.companyId);
+    else empresas = empresas.filter((e) => !e.aislada);
     if (!empresas.length) return res.json({ ok: true, data: { activo: false, tenedores: [], total: 0, movimientos: [] } });
     const ids = empresas.map((e) => e.id);
     const empById = Object.fromEntries(empresas.map((e) => [e.id, e]));

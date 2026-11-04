@@ -3074,6 +3074,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'04/11/2026',
+      titulo:'🗑️ v2.374.0 — Cuenta de canje: ya se puede borrar cada movimiento',
+      desc:'Arreglamos el botón de <b>eliminar movimiento en la Cuenta de canje (grano)</b> de Molienda/Fábrica: cuando el nombre del contacto tenía ciertos caracteres, el tacho no respondía. Ahora borra el movimiento (y revierte el stock si corresponde) sin problemas.' },
+    { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'04/11/2026',
+      titulo:'🔒 v2.374.0 — Empresa totalmente aislada: no aparece en Control de efectivo del grupo',
+      desc:'Corregimos el <b>Control de efectivo (caja por tenedor)</b>: una empresa marcada como <b>«totalmente aislada»</b> ya no se suma ni aparece en el consolidado de efectivo del grupo. Desde una empresa aislada se ve solo su propia caja; desde una empresa normal, las aisladas quedan excluidas del total y del detalle por tenedor.' },
     { tag:'Arreglo', color:'bg-red-100 text-red-800 border-red-300', fecha:'03/11/2026',
       titulo:'🔤 v2.373.0 — Letra del comprobante centrada en la previsualización e impresión',
       desc:'Reorganizamos el encabezado del comprobante en pantalla (previsualización e impresión) para que la <b>letra A/B/C quede en una columna propia, centrada a toda la altura</b> del encabezado — igual que en el PDF — y que ninguna línea la corte.' },
@@ -31010,7 +31016,7 @@ async function molCtaCanjeVer(tipo, id, nombre){
     <td class="text-xs">${esc(m.productoNombre||'')}${m.cantidad?` · ${_ccKg(m.cantidad)}`:''}${m.tipo==='retiro_producto'&&m.factor?` ×${m.factor}`:''}</td>
     <td class="text-right ${m.equivSoja>=0?'text-emerald-700':'text-red-600'}">${m.equivSoja>0?'+':''}${_ccKg(m.equivSoja)}</td>
     <td class="text-right font-semibold">${_ccKg(m.saldoAcum)}</td>
-    <td class="text-right">${can('stock:delete')?`<button class="text-red-600 text-xs" onclick="molCtaCanjeDel('${m.id}','${tipo}','${id}',${JSON.stringify(nombre||'')})">🗑️</button>`:''}</td>
+    <td class="text-right">${can('stock:delete')?`<button class="text-red-600 text-xs" onclick="molCtaCanjeDel('${m.id}','${tipo}','${id}','${String(nombre||'').replace(/[\\'"]/g,'')}')">🗑️</button>`:''}</td>
   </tr>`).join('');
   const saldo = r.saldoSoja||0;
   d.innerHTML = `
