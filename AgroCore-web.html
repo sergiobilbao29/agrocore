@@ -3080,6 +3080,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'05/11/2026',
+      titulo:'🧾 v2.390.0 — Comprobante interno: arreglado el alta (se veían todos los campos)',
+      desc:'Corregimos un detalle del <b>comprobante interno</b>: al tildarlo, antes se ocultaba de más y no se podían elegir el <b>proveedor/cliente</b>, la <b>fecha</b>, el <b>depósito</b> ni la condición. Ahora al tildar <b>Comprobante interno</b> se ocultan <b>solo</b> los campos fiscales (Comprobante, Tipo, Punto de venta, Número) y quedan visibles todos los demás, como corresponde.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'05/11/2026',
       titulo:'🧾 v2.389.0 — Comprobante interno en Compras y Ventas (se factura después)',
       desc:'Ahora en <b>Ventas</b> y <b>Compras</b> podés cargar un <b>Comprobante interno</b>: tildás la opción al dar de alta y el sistema le asigna un <b>Nº interno propio</b> (ej. <b>CI-0007</b>), automático y editable. Mueve igual la <b>cuenta corriente y el stock</b>, pero sin factura fiscal ni ARCA. Cuando llega la factura (muchas veces se hace el comprobante un día y se factura después), tocás <b>🧾➡️ Facturar</b> y le cargás el <b>nº de factura</b> (tipo, punto de venta y número; y el CAE si corresponde) <b>sobre el mismo comprobante</b>: se conservan los dos números y <b>no se duplica</b> nada. En los listados de movimientos lo ves como <b>"🧾 Interno CI-####"</b> y sumamos un <b>buscador por Nº interno / comprobante</b> para encontrarlo al toque. Los comprobantes internos no entran al Libro IVA (no son fiscales).' },
@@ -16327,10 +16330,10 @@ async function factInternoToggle(){
   if (btn) btn.innerHTML = on ? '💾 Cargar comprobante interno' : '💾 Autorizar';
   const hint = document.getElementById('f-cae-hint');
   if (hint) hint.textContent = on ? '🧾 Comprobante interno: mueve cuenta corriente y stock, sin CAE ni ARCA' : '💡 Al autorizar se solicita el CAE a ARCA (si la empresa tiene ARCA configurado)';
-  // Mostrar/ocultar los campos fiscales y el Nº interno.
-  const grid = document.getElementById('f-fiscal-grid');
+  // Ocultar SOLO los campos fiscales (comprobante, tipo, PV, numero) — se mantienen
+  // cliente, fecha, deposito, condicion, moneda, etc. Mostrar el Nº interno.
+  ['f-clase','f-tipo','f-pv','f-nro'].forEach(id => { const el=document.getElementById(id); const cell=el&&el.closest('div'); if (cell) cell.classList.toggle('hidden', !!on); });
   const wrap = document.getElementById('f-interno-nro-wrap');
-  if (grid) grid.classList.toggle('hidden', !!on);
   if (wrap) wrap.classList.toggle('hidden', !on);
   if (on) {
     const inp = document.getElementById('f-nro-interno');
@@ -18664,9 +18667,10 @@ function compDesvincularRemito(){
 
 async function compInternoToggle(){
   const on = document.getElementById('fc-interno')?.checked;
-  const grid = document.getElementById('fc-fiscal-grid');
+  // Ocultar SOLO los campos fiscales (comprobante, tipo, PV, numero) — se mantienen
+  // proveedor, fecha, deposito, condicion, moneda, clasificacion, categoria, etc.
+  ['f-clase','f-tipo','f-pv','f-nro'].forEach(id => { const el=document.getElementById(id); const cell=el&&el.closest('div'); if (cell) cell.classList.toggle('hidden', !!on); });
   const wrap = document.getElementById('fc-interno-nro-wrap');
-  if (grid) grid.classList.toggle('hidden', !!on);
   if (wrap) wrap.classList.toggle('hidden', !on);
   if (on) {
     const inp = document.getElementById('fc-nro-interno');
