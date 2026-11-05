@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.388.0';
+const AGROCORE_VERSION = '2.389.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1413,6 +1413,113 @@ async function _avanzarSecuencia(tx, companyId, tipo, puntoVenta, numero) {
   if (!seq) await tx.secuenciaComprobante.create({ data: { companyId, tipo, puntoVenta, proximoNumero: prox } });
   else if (seq.proximoNumero < prox) await tx.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: prox } });
 }
+
+// ---- Comprobante interno (nº propio CI-#### por empresa, para compras y ventas) ----
+// Secuencia guardada en SecuenciaComprobante con tipo 'comp_interno_venta'/'comp_interno_compra'
+// y puntoVenta 0 (no choca con las secuencias fiscales).
+function _tipoCompInterno(ambito) { return ambito === 'compra' ? 'comp_interno_compra' : 'comp_interno_venta'; }
+function _fmtCompInterno(n) { return 'CI-' + String(n).padStart(4, '0'); }
+// Entero contenido en un nº interno escrito a mano (ej "CI-0012" -> 12), o null.
+function _intDeCompInterno(s) { const m = String(s || '').match(/(\d+)/); return m ? parseInt(m[1], 10) : null; }
+// Próximo nº interno sugerido (no avanza la secuencia).
+async function _proximoCompInterno(client, companyId, ambito) {
+  const tipo = _tipoCompInterno(ambito);
+  let seq = await client.secuenciaComprobante.findFirst({ where: { companyId, tipo, puntoVenta: 0 } });
+  if (!seq) seq = await client.secuenciaComprobante.create({ data: { companyId, tipo, puntoVenta: 0, proximoNumero: 1 } });
+  return { numeroInt: seq.proximoNumero, numeroInterno: _fmtCompInterno(seq.proximoNumero) };
+}
+// Deja la secuencia en numeroInt+1 si venía atrás (tras usar un número).
+async function _avanzarCompInterno(tx, companyId, ambito, numeroInt) {
+  if (numeroInt == null) return;
+  const tipo = _tipoCompInterno(ambito);
+  const prox = Number(numeroInt) + 1;
+  const seq = await tx.secuenciaComprobante.findFirst({ where: { companyId, tipo, puntoVenta: 0 } });
+  if (!seq) await tx.secuenciaComprobante.create({ data: { companyId, tipo, puntoVenta: 0, proximoNumero: prox } });
+  else if (seq.proximoNumero < prox) await tx.secuenciaComprobante.update({ where: { id: seq.id }, data: { proximoNumero: prox } });
+}
+// Devuelve el nº interno a guardar (usa el que mandó el usuario o genera el siguiente)
+// y avanza la secuencia. Pensado para usar DENTRO de una transacción.
+async function _resolverCompInterno(tx, companyId, ambito, numeroInternoPedido) {
+  let numeroInterno = (numeroInternoPedido || '').trim();
+  let numeroInt;
+  if (numeroInterno) {
+    numeroInt = _intDeCompInterno(numeroInterno);
+  } else {
+    const p = await _proximoCompInterno(tx, companyId, ambito);
+    numeroInterno = p.numeroInterno; numeroInt = p.numeroInt;
+  }
+  await _avanzarCompInterno(tx, companyId, ambito, numeroInt);
+  return { numeroInterno, numeroInt };
+}
+
+// Próximo nº de comprobante interno (para precargar el formulario, editable).
+app.get('/api/comprobante-interno/proximo', requireCompany, async (req, res, next) => {
+  try {
+    const ambito = req.query.ambito === 'compra' ? 'compra' : 'venta';
+    const r = await _proximoCompInterno(prisma, req.companyId, ambito);
+    res.json({ ok: true, proximo: r.numeroInterno, numeroInt: r.numeroInt });
+  } catch (e) { next(e); }
+});
+
+// Facturar un comprobante interno de VENTA: le agrega los datos fiscales (tipo/PV/nº
+// y CAE si corresponde) sobre el MISMO registro, conservando el nº interno.
+// No duplica cuenta corriente ni stock (ya se movieron al crearlo).
+app.post('/api/facturas/:id/facturar', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      tipo: z.enum(['A', 'B', 'C', 'E']),
+      puntoVenta: z.number().int(),
+      numero: z.number().int(),
+      cae: z.string().nullable().optional(),
+      caeVto: zFecha.nullable().optional(),
+    }).parse(req.body);
+    const ex = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    if (!ex.esInterno) return res.status(400).json({ ok: false, error: 'Este comprobante ya está facturado (no es interno).' });
+    const dup = await prisma.factura.findFirst({ where: { companyId: req.companyId, tipo: d.tipo, puntoVenta: d.puntoVenta, numero: d.numero, NOT: { id: ex.id } } });
+    if (dup) return res.status(400).json({ ok: false, error: `Ya existe ${_labelComp('factura', d.tipo)} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')}. Cambiá el número.` });
+    const out = await prisma.$transaction(async (tx) => {
+      const f = await tx.factura.update({
+        where: { id: ex.id },
+        data: { tipo: d.tipo, puntoVenta: d.puntoVenta, numero: d.numero, esInterno: false, cae: d.cae || null, caeVto: d.caeVto || null, estado: 'autorizada' },
+        include: { cliente: true, items: true },
+      });
+      // Prolijidad: dejar el nº fiscal en el detalle de la cuenta corriente (fila del interno).
+      const lbl = `Factura ${d.tipo} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')}`;
+      await tx.ctaCte.updateMany({ where: { companyId: req.companyId, referencia: `FAC-${f.id}`, detalle: { startsWith: 'Factura X ' } }, data: { detalle: lbl } });
+      return f;
+    });
+    res.json({ ok: true, data: out });
+  } catch (e) { next(e); }
+});
+
+// Facturar un comprobante interno de COMPRA (mismo criterio).
+app.post('/api/facturas-compra/:id/facturar', requireCompany, requirePermission('compras:create'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      tipo: z.enum(['A', 'B', 'C', 'E']),
+      puntoVenta: z.number().int(),
+      numero: z.number().int(),
+      cae: z.string().nullable().optional(),
+    }).parse(req.body);
+    const ex = await prisma.facturaCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!ex) return res.status(404).json({ ok: false, error: 'No encontrada' });
+    if (!ex.esInterno) return res.status(400).json({ ok: false, error: 'Este comprobante ya está facturado (no es interno).' });
+    const dup = await prisma.facturaCompra.findFirst({ where: { companyId: req.companyId, proveedorId: ex.proveedorId, tipo: d.tipo, puntoVenta: d.puntoVenta, numero: d.numero, NOT: { id: ex.id } } });
+    if (dup) return res.status(400).json({ ok: false, error: `Ya existe ${_labelComp('factura', d.tipo)} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')} para este proveedor. Cambiá el número.` });
+    const out = await prisma.$transaction(async (tx) => {
+      const f = await tx.facturaCompra.update({
+        where: { id: ex.id },
+        data: { tipo: d.tipo, puntoVenta: d.puntoVenta, numero: d.numero, esInterno: false },
+        include: { proveedor: true, items: true },
+      });
+      const lbl = `Compra ${d.tipo} ${String(d.puntoVenta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')}`;
+      await tx.ctaCte.updateMany({ where: { companyId: req.companyId, referencia: `FACC-${f.id}`, detalle: { startsWith: 'Compra X ' } }, data: { detalle: lbl } });
+      return f;
+    });
+    res.json({ ok: true, data: out });
+  } catch (e) { next(e); }
+});
 
 // Configuración de numeración (soporta múltiples puntos de venta y tipos).
 app.get('/api/numeradores', requireCompany, async (req, res) => {
@@ -6288,7 +6395,7 @@ app.get('/api/facturas/libroIva/:anio/:mes', requireCompany, requirePermission('
       ok: true,
       periodo: { anio, mes },
       data: await prisma.factura.findMany({
-        where: { companyId: req.companyId, fecha: { gte: desde, lte: hasta }, estado: { not: 'anulada' } },
+        where: { companyId: req.companyId, fecha: { gte: desde, lte: hasta }, estado: { not: 'anulada' }, esInterno: false },
         include: { items: true, cliente: true }, orderBy: { fecha: 'asc' },
       }),
     });
@@ -6342,10 +6449,12 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
   try {
     const schema = z.object({
       clienteId: z.string().nullable().optional(),
-      tipo: z.enum(['A', 'B', 'C', 'E']),
+      tipo: z.enum(['A', 'B', 'C', 'E']).optional(),      // opcional si es comprobante interno
       clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
-      puntoVenta: z.number().int(),
-      numero: z.number().int(),
+      puntoVenta: z.number().int().optional(),            // opcional si es comprobante interno
+      numero: z.number().int().optional(),                // opcional si es comprobante interno
+      esInterno: z.boolean().optional(),                  // true = comprobante interno (sin factura fiscal todavia)
+      numeroInterno: z.string().nullable().optional(),    // nº interno (ej "CI-0007"); si no viene y esInterno, se autogenera
       fecha: zFecha,
       condicionVenta: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),
@@ -6362,12 +6471,24 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
     const existing = await prisma.factura.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
     if (await _ventaTienePago(req.companyId, req.params.id)) return res.status(400).json({ ok: false, error: 'No se puede editar: la factura tiene un cobro aplicado. Primero eliminá el cobro (Recibo → deshacer) y después editá.' });
+    // Un comprobante interno mantiene su identidad interna al editar (no se pide tipo/PV fiscales).
+    const _esInt = !!existing.esInterno;
+    if (!_esInt) {
+      if (!input.tipo) return res.status(400).json({ ok: false, error: 'Falta el tipo de comprobante (A/B/C/E).' });
+      if (input.puntoVenta == null || input.numero == null) return res.status(400).json({ ok: false, error: 'Falta el punto de venta o el número.' });
+    }
     const factura = await prisma.$transaction(async (tx) => {
       for (const it of input.items) it.productoId = await _ensureProductoFromItem(tx, req.companyId, it);
       const totales = calcFactura(input.items);
       const _mon = input.moneda || existing.moneda || 'ARS';
       const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
-      const _clase = input.clase || 'factura';
+      const _clase = _esInt ? 'factura' : (input.clase || 'factura');
+      // Interno: conserva tipo 'X', PV 0 y su nº; se puede corregir solo el nº interno.
+      const _tipoU = _esInt ? 'X' : input.tipo;
+      const _pvU   = _esInt ? 0 : input.puntoVenta;
+      const _numU  = _esInt ? existing.numero : input.numero;
+      let _numIntU = (input.numeroInterno !== undefined) ? (String(input.numeroInterno || '').trim() || null) : (existing.numeroInterno || null);
+      if (_esInt && !_numIntU) _numIntU = existing.numeroInterno;
       await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'VTA', facturaId: req.params.id });
       await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FAC', facturaId: req.params.id });
       // Revertir un eventual cobro de CONTADO de Consumidor final (ingreso directo a caja/banco).
@@ -6377,8 +6498,9 @@ app.put('/api/facturas/:id', requireCompany, requirePermission('ventas:create'),
       const f = await tx.factura.update({
         where: { id: req.params.id },
         data: {
-          clienteId: input.clienteId || null, tipo: input.tipo, clase: _clase,
-          puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
+          clienteId: input.clienteId || null, tipo: _tipoU, clase: _clase,
+          puntoVenta: _pvU, numero: _numU, fecha: input.fecha,
+          numeroInterno: _numIntU, esInterno: _esInt,
           condicionVenta: input.condicionVenta, observaciones: input.observaciones,
           moneda: _mon, cotizacion: _cot, subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
           items: { create: totales.items },
@@ -6421,10 +6543,12 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
     //    CAE y CAE vto reales en el body — el sistema no inventa nada.
     const schema = z.object({
       clienteId: z.string().nullable().optional(),
-      tipo: z.enum(['A', 'B', 'C', 'E']),
+      tipo: z.enum(['A', 'B', 'C', 'E']).optional(),      // opcional si es comprobante interno
       clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
-      puntoVenta: z.number().int(),
-      numero: z.number().int(),
+      puntoVenta: z.number().int().optional(),            // opcional si es comprobante interno
+      numero: z.number().int().optional(),                // opcional si es comprobante interno
+      esInterno: z.boolean().optional(),                  // true = comprobante interno (sin factura fiscal todavia)
+      numeroInterno: z.string().nullable().optional(),    // nº interno (ej "CI-0007"); si no viene y esInterno, se autogenera
       fecha: zFecha,
       condicionVenta: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo de Condiciones de pago
@@ -6452,13 +6576,27 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       select: { id: true, arcaCuit: true, arcaCertCrt: true, arcaPrivadaKey: true, arcaModo: true, informal: true },
     });
     const _arcaOk = !!(_co && _co.arcaCertCrt && _co.arcaPrivadaKey && _co.arcaCuit);
-    // ¿Emitimos de verdad contra ARCA? Solo si: origen agrocore, empresa NO informal,
-    // ARCA configurado y es un comprobante que WSFE soporta (A/B/C).
-    const _usarArca = input.origen === 'agrocore' && _arcaOk && !_co.informal && ['A','B','C'].includes(input.tipo);
+    // Comprobante interno: no es fiscal, no va a ARCA. Identidad "interna"
+    // (tipo 'X', punto de venta 0) para no chocar con la numeración fiscal; el
+    // nº propio (CI-####) se asigna dentro de la transacción.
+    const _interno = !!input.esInterno;
+    if (!_interno) {
+      if (!input.tipo) return res.status(400).json({ ok: false, error: 'Falta el tipo de comprobante (A/B/C/E).' });
+      if (input.puntoVenta == null || input.numero == null) return res.status(400).json({ ok: false, error: 'Falta el punto de venta o el número.' });
+    }
+    const _tipoFinal = _interno ? 'X' : input.tipo;
+    const _pvFinal   = _interno ? 0 : input.puntoVenta;
+    let _numInternoFmt = null;  // "CI-0007" resuelto dentro de la transacción
+    // ¿Emitimos de verdad contra ARCA? Solo si: NO interno, origen agrocore, empresa
+    // NO informal, ARCA configurado y es un comprobante que WSFE soporta (A/B/C).
+    const _usarArca = !_interno && input.origen === 'agrocore' && _arcaOk && !_co.informal && ['A','B','C'].includes(input.tipo);
 
     let cae, caeVto, numeroFinal = input.numero;
 
-    if (input.origen === 'arca_externa') {
+    if (_interno) {
+      // Comprobante interno: sin CAE. El número lo asigna la secuencia interna en la transacción.
+      cae = null; caeVto = null;
+    } else if (input.origen === 'arca_externa') {
       // La factura ya se emitió en el portal de ARCA: exigimos CAE + vto reales.
       if (!input.cae || !/^\d{14}$/.test(input.cae)) {
         return res.status(400).json({ ok: false, error: 'CAE inválido. Debe ser de 14 dígitos (el que devolvió ARCA al emitir).' });
@@ -6495,7 +6633,8 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
     }
     // Evitar numeración duplicada: mismo comprobante (tipo+PV+número) ya existente.
     // (Con ARCA el número viene de ellos, igual chequeamos por las dudas.)
-    {
+    // Los comprobantes internos usan su propia secuencia (no aplica este chequeo).
+    if (!_interno) {
       const dup = await prisma.factura.findFirst({ where: { companyId: req.companyId, tipo: input.tipo, puntoVenta: input.puntoVenta, numero: numeroFinal } });
       if (dup) {
         const _etq = `${_labelComp(_clase0, input.tipo)} ${String(input.puntoVenta).padStart(4,'0')}-${String(numeroFinal).padStart(8,'0')}`;
@@ -6512,17 +6651,24 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
       const totales = calcFactura(input.items);
       const _mon = input.moneda || 'ARS';
       const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
-      const _clase = input.clase || 'factura';
+      // Interno: clase siempre 'factura' (NC/ND interno no aplica) y nº propio de la secuencia interna.
+      const _clase = _interno ? 'factura' : (input.clase || 'factura');
+      if (_interno) {
+        const r = await _resolverCompInterno(tx, req.companyId, 'venta', input.numeroInterno);
+        numeroFinal = r.numeroInt; _numInternoFmt = r.numeroInterno;
+      }
       const f = await tx.factura.create({
         data: {
           companyId: req.companyId, clienteId: input.clienteId || null,
-          tipo: input.tipo, clase: _clase, puntoVenta: input.puntoVenta, numero: numeroFinal, fecha: input.fecha,
+          tipo: _tipoFinal, clase: _clase, puntoVenta: _pvFinal, numero: numeroFinal, fecha: input.fecha,
+          numeroInterno: _interno ? _numInternoFmt : (input.numeroInterno || null),
+          esInterno: _interno,
           condicionVenta: input.condicionVenta, observaciones: input.observaciones,
           moneda: _mon, cotizacion: _cot,
           subtotal: totales.subtotal, iva: totales.iva, total: totales.total,
           cae, caeVto, estado: 'autorizada',
           arcaReal: !!_usarArca,
-          origen: input.origen,
+          origen: _interno ? 'interno' : input.origen,
           items: { create: totales.items },
         },
         include: { cliente: true, items: true },
@@ -6535,7 +6681,8 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
         });
       }
       // Mantener la numeración correlativa al día (para la próxima carga manual).
-      await _avanzarSecuencia(tx, req.companyId, _seqTipoFactura(_clase, input.tipo), input.puntoVenta, numeroFinal);
+      // (El interno ya avanzó su propia secuencia en _resolverCompInterno.)
+      if (!_interno) await _avanzarSecuencia(tx, req.companyId, _seqTipoFactura(_clase, input.tipo), input.puntoVenta, numeroFinal);
       if (_clase === 'factura') {
         // Factura de venta: sale stock (egreso) + el cliente queda debiendo (debe).
         // Si es "Sin depósito", no se descuenta stock (ventas de servicios, etc.).
@@ -6856,7 +7003,7 @@ app.get('/api/facturas-compra/libroIva/:anio/:mes', requireCompany, requirePermi
       ok: true,
       periodo: { anio, mes },
       data: await prisma.facturaCompra.findMany({
-        where: { companyId: req.companyId, fecha: { gte: desde, lte: hasta } },
+        where: { companyId: req.companyId, fecha: { gte: desde, lte: hasta }, esInterno: false },
         include: { items: true, proveedor: true }, orderBy: { fecha: 'asc' },
       }),
     });
@@ -6879,10 +7026,12 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
   try {
     const schema = z.object({
       proveedorId: z.string().nullable().optional(),
-      tipo: z.enum(['A', 'B', 'C', 'E']),
+      tipo: z.enum(['A', 'B', 'C', 'E']).optional(),      // opcional si es comprobante interno
       clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
-      puntoVenta: z.number().int(),
-      numero: z.number().int(),
+      puntoVenta: z.number().int().optional(),            // opcional si es comprobante interno
+      numero: z.number().int().optional(),                // opcional si es comprobante interno
+      esInterno: z.boolean().optional(),                  // true = comprobante interno (sin factura fiscal todavia)
+      numeroInterno: z.string().nullable().optional(),    // nº interno (ej "CI-0007"); si no viene y esInterno, se autogenera
       fecha: zFecha,
       condicionCompra: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),  // del catálogo
@@ -6919,6 +7068,14 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       imputacionCC: _imputCCSchema,   // reparto por centro de costo (opt-in)
     });
     const input = schema.parse(req.body);
+    // Comprobante interno de compra: nº propio (CI-####), sin identidad fiscal.
+    const _interno = !!input.esInterno;
+    if (!_interno) {
+      if (!input.tipo) return res.status(400).json({ ok: false, error: 'Falta el tipo de comprobante (A/B/C/E).' });
+      if (input.puntoVenta == null || input.numero == null) return res.status(400).json({ ok: false, error: 'Falta el punto de venta o el número.' });
+    }
+    const _tipoFinal = _interno ? 'X' : input.tipo;
+    const _pvFinal   = _interno ? 0 : input.puntoVenta;
     const _vincRemito = Array.isArray(input.remitoLinks) && input.remitoLinks.length > 0;
     // Vencimientos: normalizo a [{nro,fecha(ISO),importe}] ordenados por fecha.
     // El 1er vencimiento es el que manda para la deuda / flujo / alertas.
@@ -6946,11 +7103,17 @@ app.post('/api/facturas-compra', requireCompany, requirePermission('compras:crea
       const totales = calcFactura(input.items, input.otrosTributos);
       const _mon = input.moneda || 'ARS';
       const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
-      const _clase = input.clase || 'factura';
+      const _clase = _interno ? 'factura' : (input.clase || 'factura');
+      let _numeroFinal = input.numero, _numInternoFmt = input.numeroInterno || null;
+      if (_interno) {
+        const r = await _resolverCompInterno(tx, req.companyId, 'compra', input.numeroInterno);
+        _numeroFinal = r.numeroInt; _numInternoFmt = r.numeroInterno;
+      }
       const f = await tx.facturaCompra.create({
         data: {
           companyId: req.companyId, proveedorId: input.proveedorId || null,
-          tipo: input.tipo, clase: _clase, puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
+          tipo: _tipoFinal, clase: _clase, puntoVenta: _pvFinal, numero: _numeroFinal, fecha: input.fecha,
+          numeroInterno: _numInternoFmt, esInterno: _interno,
           condicionCompra: input.condicionCompra, observaciones: input.observaciones,
           clasificacion: input.clasificacion || 'empresa', categoriaGastoId: input.categoriaGastoId || null,
           fechaVencimiento: _primerVto, vencimientos: _vtos.length ? _vtos : undefined,
@@ -7241,10 +7404,12 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
   try {
     const schema = z.object({
       proveedorId: z.string().nullable().optional(),
-      tipo: z.enum(['A', 'B', 'C', 'E']),
+      tipo: z.enum(['A', 'B', 'C', 'E']).optional(),      // opcional si es comprobante interno
       clase: z.enum(['factura', 'nota_credito', 'nota_debito']).optional().default('factura'),
-      puntoVenta: z.number().int(),
-      numero: z.number().int(),
+      puntoVenta: z.number().int().optional(),            // opcional si es comprobante interno
+      numero: z.number().int().optional(),                // opcional si es comprobante interno
+      esInterno: z.boolean().optional(),                  // true = comprobante interno (sin factura fiscal todavia)
+      numeroInterno: z.string().nullable().optional(),    // nº interno (ej "CI-0007"); si no viene y esInterno, se autogenera
       fecha: zFecha,
       condicionCompra: z.string().nullable().optional(),
       condicionDias: z.number().int().min(0).nullable().optional(),
@@ -7284,6 +7449,11 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
     const existing = await prisma.facturaCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrada' });
     if (await _compraTienePago(req.companyId, req.params.id)) return res.status(400).json({ ok: false, error: 'No se puede editar: la compra tiene un pago aplicado (OP). Primero deshacé el pago desde la Orden de pago.' });
+    const _esInt = !!existing.esInterno;
+    if (!_esInt) {
+      if (!input.tipo) return res.status(400).json({ ok: false, error: 'Falta el tipo de comprobante (A/B/C/E).' });
+      if (input.puntoVenta == null || input.numero == null) return res.status(400).json({ ok: false, error: 'Falta el punto de venta o el número.' });
+    }
     if (!input.proveedorId && (input.emisorCuit || input.emisorRazonSocial)) {
       const ext = [ input.emisorRazonSocial ? `Emisor: ${input.emisorRazonSocial}` : null, input.emisorCuit ? `CUIT ${input.emisorCuit}` : null, input.cae ? `CAE ${input.cae}` : null ].filter(Boolean).join(' · ');
       input.observaciones = ext + (input.observaciones ? ' | ' + input.observaciones : '');
@@ -7293,7 +7463,13 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       const totales = calcFactura(input.items, input.otrosTributos);
       const _mon = input.moneda || 'ARS';
       const _cot = _mon === 'ARS' ? 1 : (input.cotizacion ?? await getCotizacionARS(_mon, input.fecha, req.companyId));
-      const _clase = input.clase || 'factura';
+      const _clase = _esInt ? 'factura' : (input.clase || 'factura');
+      // Interno: conserva tipo 'X', PV 0 y su nº; solo se puede corregir el nº interno.
+      const _tipoU = _esInt ? 'X' : input.tipo;
+      const _pvU   = _esInt ? 0 : input.puntoVenta;
+      const _numU  = _esInt ? existing.numero : input.numero;
+      let _numIntU = (input.numeroInterno !== undefined) ? (String(input.numeroInterno || '').trim() || null) : (existing.numeroInterno || null);
+      if (_esInt && !_numIntU) _numIntU = existing.numeroInterno;
       // revertir lo anterior
       await borrarMovimientosDeFactura(tx, { companyId: req.companyId, refPrefix: 'CPR', facturaId: req.params.id });
       await borrarCtaCteDeFactura(tx, { companyId: req.companyId, refPrefix: 'FACC', facturaId: req.params.id });
@@ -7307,8 +7483,9 @@ app.put('/api/facturas-compra/:id', requireCompany, requirePermission('compras:c
       const f = await tx.facturaCompra.update({
         where: { id: req.params.id },
         data: {
-          proveedorId: input.proveedorId || null, tipo: input.tipo, clase: _clase,
-          puntoVenta: input.puntoVenta, numero: input.numero, fecha: input.fecha,
+          proveedorId: input.proveedorId || null, tipo: _tipoU, clase: _clase,
+          puntoVenta: _pvU, numero: _numU, fecha: input.fecha,
+          numeroInterno: _numIntU, esInterno: _esInt,
           condicionCompra: input.condicionCompra, observaciones: input.observaciones,
           clasificacion: input.clasificacion || 'empresa', categoriaGastoId: input.categoriaGastoId || null,
           fechaVencimiento: _primerVto, vencimientos: _vtos.length ? _vtos : null,
@@ -16391,6 +16568,15 @@ function _completarPendiente(texto, pendiente, ctx) {
 //  ofrece hacerlo pidiendo los datos con un ejemplo.
 // ============================================================
 const _AYUDA_KB = [
+  { id:'comprobante_interno', terms:['comprobante interno','comprobantes internos','sin factura','cargar sin factura','numero interno','nro interno','ci-','facturar despues','facturarlo despues','se factura despues','agregar numero de factura','asociar factura','comprobante propio','numerar comprobante','comprobante no fiscal'],
+    titulo:'Comprobante interno en Compras y Ventas (se factura despues)',
+    pasos:[
+      'Al dar de alta una venta o una compra, tilda "Comprobante interno (sin factura)". El sistema le pone un Numero interno propio (ej CI-0007), automatico y editable.',
+      'El comprobante interno mueve igual la cuenta corriente y el stock, pero NO es fiscal: no va a ARCA ni tiene CAE, y no entra al Libro IVA.',
+      'Cuando llega la factura (muchas veces se hace el comprobante un dia y se factura despues), en el listado de movimientos toca el boton "Facturar" (icono 🧾->) de esa fila y carga tipo (A/B/C), punto de venta y numero de la factura (y el CAE si corresponde).',
+      'Al facturar, los datos fiscales se agregan al MISMO comprobante conservando el numero interno: quedan los dos numeros asociados y no se duplica la cuenta corriente ni el stock.',
+      'Para buscarlo despues, usa el buscador "Nro interno / comprobante" arriba de Movimientos de ventas o de compras (escribi el CI-#### o el numero de factura).'],
+    atajo:{ page:'facturacion', label:'Abrir Movimientos de ventas' } },
   { id:'catalogo_articulos', terms:['catalogo','catalogos','articulo','articulos','categoria','categorias','familia','familias','subfamilia','organizacion de articulos','organizar articulos','producto nuevo','nuevo articulo','nuevo insumo','cargar producto','cargar articulo','no aparece en stock','no aparece el insumo','duplicado','clasificar producto','capacidades del articulo','se compra se vende','materia prima','coproducto','diagnostico de articulos','pasar a articulo'],
     titulo:'Catalogo de articulos: como organizarlo y cargarlo bien',
     pasos:[

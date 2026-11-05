@@ -3080,6 +3080,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'05/11/2026',
+      titulo:'🧾 v2.389.0 — Comprobante interno en Compras y Ventas (se factura después)',
+      desc:'Ahora en <b>Ventas</b> y <b>Compras</b> podés cargar un <b>Comprobante interno</b>: tildás la opción al dar de alta y el sistema le asigna un <b>Nº interno propio</b> (ej. <b>CI-0007</b>), automático y editable. Mueve igual la <b>cuenta corriente y el stock</b>, pero sin factura fiscal ni ARCA. Cuando llega la factura (muchas veces se hace el comprobante un día y se factura después), tocás <b>🧾➡️ Facturar</b> y le cargás el <b>nº de factura</b> (tipo, punto de venta y número; y el CAE si corresponde) <b>sobre el mismo comprobante</b>: se conservan los dos números y <b>no se duplica</b> nada. En los listados de movimientos lo ves como <b>"🧾 Interno CI-####"</b> y sumamos un <b>buscador por Nº interno / comprobante</b> para encontrarlo al toque. Los comprobantes internos no entran al Libro IVA (no son fiscales).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/11/2026',
       titulo:'📚 v2.388.0 — Empleados compartidos: ayuda, instructivo y asistente actualizados',
       desc:'Documentamos la función de <b>empleados compartidos</b> (jornaleros del grupo). El <b>asistente</b> ahora te explica cómo compartir un empleado, cargarle labores desde cualquier empresa y hacer la <b>liquidación única</b>. En <b>Ayuda</b> sumamos el instructivo <b>"Empleados compartidos (jornaleros del grupo)"</b> y actualizamos el manual con la nueva sección.' },
@@ -15195,8 +15198,9 @@ pages.facturacion = async function() {
     rows = f.data||[]; clientes = c.data||[]; cobros = cobR.data||[]; state.cache.clientes = clientes;
   } catch (e) { return toast(e.message,'error'); }
   state.cache.facturas = rows;
-  state.ventaFilter = state.ventaFilter || { desde:'', hasta:'', clienteId:'', tipo:'' };
+  state.ventaFilter = state.ventaFilter || { desde:'', hasta:'', clienteId:'', tipo:'', q:'' };
   if (state.ventaFilter.tipo === undefined) state.ventaFilter.tipo = '';
+  if (state.ventaFilter.q === undefined) state.ventaFilter.q = '';
   const mesActual = new Date().toISOString().slice(0,7);
   const totalMes = rows.filter(f => (f.fecha||'').slice(0,7)===mesActual && f.estado!=='anulada').reduce((a,f)=>a+Number(f.total||0),0);
   const totalAcum = rows.filter(f=>f.estado!=='anulada').reduce((a,f)=>a+Number(f.total||0),0);
@@ -15210,6 +15214,7 @@ pages.facturacion = async function() {
       clienteNombre:r.cliente?.razonSocial||'Consumidor final',
       tipoKey: r.clase==='nota_credito'?'nc':(r.clase==='nota_debito'?'nd':'factura'),
       letra:r.tipo, pv:r.puntoVenta, nro:r.numero, cae:r.cae, estado:r.estado, origen:r.origen, total:r.total, pagada:r.pagada,
+      numeroInterno:r.numeroInterno||null, esInterno:!!r.esInterno,
     }));
     const movCob = cobros.map(o => ({
       kind:'cobro', id:o.id, fecha:o.fecha, clienteId:o.contactoId,
@@ -15219,6 +15224,7 @@ pages.facturacion = async function() {
       if (ff.desde && (m.fecha||'') < ff.desde) return false;
       if (ff.hasta && (m.fecha||'') > ff.hasta+'T23:59:59') return false;
       if (ff.clienteId && m.clienteId !== ff.clienteId) return false;
+      if (ff.q) { const q=ff.q.toLowerCase(); const hay=`${m.numeroInterno||''} ${m.letra||''} ${m.pv!=null?String(m.pv).padStart(4,'0')+'-'+String(m.nro).padStart(8,'0'):''} ${m.clienteNombre||''}`.toLowerCase(); if(!hay.includes(q)) return false; }
       if (ff.tipo && m.tipoKey !== ff.tipo) return false;
       return true;
     });
@@ -15244,14 +15250,16 @@ pages.facturacion = async function() {
               <td>${fmtFecha(m.fecha)}</td>
               <td>${badge(m)}</td>
               <td class="text-xs">${m.kind==='factura'
-                ? `<span class="badge badge-blue">${esc(m.letra)}</span> <span class="font-mono">${String(m.pv).padStart(4,'0')}-${String(m.nro).padStart(8,'0')}</span>${m.origen==='arca_externa'?` <span class="badge badge-yellow text-[10px]" title="Cargada manualmente desde ARCA">📥 ARCA ext.</span>`:''}`
+                ? (m.esInterno
+                    ? `<span class="badge badge-gray" title="Comprobante interno (sin factura fiscal)">🧾 Interno</span> <span class="font-mono">${esc(m.numeroInterno||'')}</span>`
+                    : `<span class="badge badge-blue">${esc(m.letra)}</span> <span class="font-mono">${String(m.pv).padStart(4,'0')}-${String(m.nro).padStart(8,'0')}</span>${m.origen==='arca_externa'?` <span class="badge badge-yellow text-[10px]" title="Cargada manualmente desde ARCA">📥 ARCA ext.</span>`:''}${m.numeroInterno?` <span class="text-[10px] text-slate-400" title="Nº de comprobante interno">· int ${esc(m.numeroInterno)}</span>`:''}`)
                 : `<span class="text-slate-500">Recibo${m.numero?' '+esc(m.numero):''}</span>${m.enviado?' <span title="Enviado por email">✉️</span>':''}`}</td>
               <td>${esc(m.clienteNombre)}</td>
               <td class="text-right font-bold">${fmt$(m.total)}</td>
-              <td>${m.kind==='factura'?(m.estado==='anulada'?'<span class="badge badge-red">Anulada</span>':(m.cae?'<span class="badge badge-green">Autorizada</span>':'<span class="badge badge-yellow">Sin CAE</span>')):'<span class="badge badge-green">Cobrado</span>'}</td>
+              <td>${m.kind==='factura'?(m.estado==='anulada'?'<span class="badge badge-red">Anulada</span>':(m.esInterno?'<span class="badge badge-gray" title="Comprobante interno: todavía sin factura fiscal">🧾 A facturar</span>':(m.cae?'<span class="badge badge-green">Autorizada</span>':'<span class="badge badge-yellow">Sin CAE</span>'))):'<span class="badge badge-green">Cobrado</span>'}</td>
               <td class="text-right whitespace-nowrap">
                 ${m.kind==='factura'
-                  ? `<button class="btn btn-ghost text-xs" title="Ver comprobante" onclick='factVer(${JSON.stringify(m.id)})'>👁️</button>${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) ? (m.pagada ? (can('finanzas:delete') ? `<button class="btn btn-ghost text-xs" title="Tiene un cobro aplicado. Deshacer el cobro y editar." onclick='factDeshacerCobroYEditar(${JSON.stringify(m.id)})'>🔓✏️</button>` : `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un cobro aplicado. Deshacé el cobro (↩️ en la fila del Recibo) y después editá.">🔒</span>`) : `<button class="btn btn-ghost text-xs" title="Editar" onclick='factEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="${m.cae?'Anular':'Eliminar'}" onclick='${m.cae?`factAnular(${JSON.stringify(m.id)})`:`factVer(${JSON.stringify(m.id)})`}'>${m.cae?'🚫':'🗑️'}</button>`:''}${m.estado==='anulada' && (can('ventas:delete')||can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar definitivamente (libera el número para volver a cargarla)" onclick='factEliminar(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
+                  ? `<button class="btn btn-ghost text-xs" title="Ver comprobante" onclick='factVer(${JSON.stringify(m.id)})'>👁️</button>${m.esInterno && m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) ? `<button class="btn btn-ghost text-xs text-emerald-700" title="Facturar: agregarle el nº de factura (se conserva el nº interno)" onclick='factFacturarInterno(${JSON.stringify(m.id)}, ${JSON.stringify(m.numeroInterno||"")})'>🧾➡️</button>` : ''}${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update')) ? (m.pagada ? (can('finanzas:delete') ? `<button class="btn btn-ghost text-xs" title="Tiene un cobro aplicado. Deshacer el cobro y editar." onclick='factDeshacerCobroYEditar(${JSON.stringify(m.id)})'>🔓✏️</button>` : `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un cobro aplicado. Deshacé el cobro (↩️ en la fila del Recibo) y después editá.">🔒</span>`) : `<button class="btn btn-ghost text-xs" title="Editar" onclick='factEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${m.estado!=='anulada' && (can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="${m.cae?'Anular':'Eliminar'}" onclick='${m.cae?`factAnular(${JSON.stringify(m.id)})`:`factVer(${JSON.stringify(m.id)})`}'>${m.cae?'🚫':'🗑️'}</button>`:''}${m.estado==='anulada' && (can('ventas:delete')||can('ventas:update')||can('finanzas:update'))?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar definitivamente (libera el número para volver a cargarla)" onclick='factEliminar(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
                   : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir recibo" onclick='reciboReabrir(${JSON.stringify(m.id)})'>🧾 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='reciboReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>${can('finanzas:delete')?`<button class="btn btn-ghost text-xs" title="Editar el cobro (método, caja/banco). Deshace este cobro y lo volvés a cargar correcto." onclick='cobroEditar(${JSON.stringify(m.id)})'>✏️</button><button class="btn btn-ghost text-xs text-red-600" title="Deshacer cobro (repone la deuda y revierte caja/banco/pago de guía)" onclick='reciboRevertir(${JSON.stringify(m.id)})'>↩️</button>`:''}`}
               </td>
             </tr>`).join('') || '<tr><td colspan="7" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
@@ -15297,20 +15305,21 @@ pages.facturacion = async function() {
             ${[['','Todos'],['factura','Factura'],['nc','Nota de crédito'],['nd','Nota de débito'],['cobro','Cobro (recibo)']].map(([v,l])=>`<option value="${v}" ${v===state.ventaFilter.tipo?'selected':''}>${l}</option>`).join('')}
           </select>
         </div>
+        <div><label class="label">Buscar (Nº interno / comprobante)</label><input id="fv-q" class="input" placeholder="CI-0007, 0001-00000123…" value="${esc(state.ventaFilter.q||'')}"/></div>
         <div class="flex gap-2">
           <button class="btn btn-secondary flex-1" onclick="factFiltrosLimpiar()">Limpiar</button>
         </div>
       </div>
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="fact-table"></div></div>`;
-  ['desde','hasta','cli','tipo'].forEach(k => {
+  ['desde','hasta','cli','tipo','q'].forEach(k => {
     const el = $('#fv-'+k); if (!el) return;
     const evt = (el.tagName==='SELECT' || el.type==='date') ? 'change' : 'input';
     el.addEventListener(evt, e => { state.ventaFilter[k==='cli'?'clienteId':k] = e.target.value; render(); });
   });
   render();
 };
-function factFiltrosLimpiar() { state.ventaFilter = { desde:'', hasta:'', clienteId:'', tipo:'' }; pages.facturacion(); }
+function factFiltrosLimpiar() { state.ventaFilter = { desde:'', hasta:'', clienteId:'', tipo:'', q:'' }; pages.facturacion(); }
 
 // ── Exportar / imprimir los Movimientos de ventas que están filtrados ──────────
 function _ventasExportMeta(){
@@ -15962,14 +15971,18 @@ async function factForm(prefill = null) {
           <div class="text-[11px] text-slate-500 mt-1">El CAE y su vencimiento los devolvió ARCA cuando se emitió la factura (están en el PDF). El sistema NO la reenvía a ARCA: solo registra el comprobante ya emitido.</div>
         </div>
       </div>`:''}
-      ${(!state._factEdit && !state._factInformal && state.usaProduccionIndustrial) ? `
+      ${(!state._factEdit) ? `
       <div class="bg-sky-50 border border-sky-200 rounded-lg p-2.5 mb-3">
         <label class="flex items-center gap-2 cursor-pointer text-sm text-sky-900">
           <input type="checkbox" id="f-interno" class="w-4 h-4" onchange="factInternoToggle()"/>
-          <span>🧾 <b>Cargar sin factura</b> (comprobante interno) — mueve la cuenta corriente y el stock, <b>sin emitir a ARCA ni CAE</b>. Si no querés IVA, poné la alícuota en 0 en cada renglón.</span>
+          <span>🧾 <b>Comprobante interno</b> (sin factura) — le asigno un <b>Nº interno propio</b>, mueve la cuenta corriente y el stock, <b>sin ARCA ni CAE</b>. Después lo podés <b>facturar</b> y se le agrega el nº de factura. Si no querés IVA, poné la alícuota en 0 en cada renglón.</span>
         </label>
+        <div id="f-interno-nro-wrap" class="hidden mt-2 flex items-end gap-2">
+          <div><label class="label">Nº comprobante interno</label><input id="f-nro-interno" class="input font-mono" style="max-width:170px" placeholder="CI-0001"/></div>
+          <div class="text-[11px] text-slate-500 pb-2">Automático y editable. Después lo podés buscar por este número.</div>
+        </div>
       </div>`:''}
-      <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
+      <div id="f-fiscal-grid" class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
         <div><label class="label">Comprobante *</label>
           <select id="f-clase" class="input" onchange="factClaseHint(); factSugerirNro()">
             <option value="factura">Factura</option>
@@ -16307,13 +16320,24 @@ function factExternaToggle(){
   }
 }
 // "Cargar sin factura" (comprobante interno, no fiscal). Excluyente con "ya emitida en ARCA".
-function factInternoToggle(){
+async function factInternoToggle(){
   const on = document.getElementById('f-interno')?.checked;
   if (on) { const ext = document.getElementById('f-externa'); if (ext && ext.checked) { ext.checked = false; factExternaToggle(); } }
   const btn = document.getElementById('f-save-btn');
-  if (btn) btn.innerHTML = on ? '💾 Cargar venta (sin factura)' : '💾 Autorizar';
+  if (btn) btn.innerHTML = on ? '💾 Cargar comprobante interno' : '💾 Autorizar';
   const hint = document.getElementById('f-cae-hint');
   if (hint) hint.textContent = on ? '🧾 Comprobante interno: mueve cuenta corriente y stock, sin CAE ni ARCA' : '💡 Al autorizar se solicita el CAE a ARCA (si la empresa tiene ARCA configurado)';
+  // Mostrar/ocultar los campos fiscales y el Nº interno.
+  const grid = document.getElementById('f-fiscal-grid');
+  const wrap = document.getElementById('f-interno-nro-wrap');
+  if (grid) grid.classList.toggle('hidden', !!on);
+  if (wrap) wrap.classList.toggle('hidden', !on);
+  if (on) {
+    const inp = document.getElementById('f-nro-interno');
+    if (inp && !inp.value.trim()) {
+      try { const r = await api('/api/comprobante-interno/proximo?ambito=venta'); inp.value = r.proximo || ''; } catch(_) {}
+    }
+  }
 }
 // Sube el PDF de ARCA y autopobla los campos del MISMO formulario de venta.
 async function factPdfCargar(input){
@@ -16503,9 +16527,12 @@ async function factSave() {
     imputacionCC: (state.usaCentrosCosto && typeof ccRepartoGet==='function') ? ccRepartoGet('vta') : null,
     items,
   };
-  // "Cargar sin factura": comprobante interno (no fiscal, no va a ARCA).
+  // Comprobante interno (no fiscal, no va a ARCA): nº propio CI-####, se factura después.
   const interno = !!document.getElementById('f-interno')?.checked;
-  if (interno && !externa) data.origen = 'interno';
+  if (interno && !externa) {
+    data.esInterno = true;
+    data.numeroInterno = (document.getElementById('f-nro-interno')?.value || '').trim() || null;
+  }
   // Modo "ya emitida en ARCA": se registra con su CAE real (no se reenvía a ARCA).
   if (externa) {
     const cae = ($('#f-cae')?.value||'').trim();
@@ -16577,6 +16604,43 @@ async function factDeshacerCobroYEditar(id) {
     delete state.cache.facturas; delete state.cache.ctasCtes; delete state.cache.stockMap;
     await factEditar(id);
   } catch (e) { toast(e.message, 'error'); }
+}
+// Facturar un comprobante interno de venta: pedir los datos de la factura y asociarlos
+// al mismo registro (conserva el nº interno). No duplica cta cte ni stock.
+function factFacturarInterno(id, numInterno){
+  openModal({ title:'🧾➡️ Facturar comprobante interno', size:'max-w-md', body:`
+    <div class="text-sm text-slate-600 mb-3">Interno <b class="font-mono">${esc(numInterno||'')}</b>. Cargá los datos de la factura que le corresponde; el nº interno se conserva.</div>
+    <div class="grid grid-cols-3 gap-3">
+      <div><label class="label">Tipo *</label><select id="fi-fact-tipo" class="input">${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}</select></div>
+      <div><label class="label">Pto. venta *</label><input id="fi-fact-pv" class="input" type="number" value="1"/></div>
+      <div><label class="label">Número *</label><input id="fi-fact-nro" class="input" type="number" placeholder="123"/></div>
+    </div>
+    <div class="grid grid-cols-2 gap-3 mt-3">
+      <div><label class="label">CAE (opcional)</label><input id="fi-fact-cae" class="input font-mono" maxlength="14" placeholder="si ya tenés el CAE"/></div>
+      <div><label class="label">Vto. CAE (opcional)</label><input id="fi-fact-caevto" class="input" type="date"/></div>
+    </div>
+    <div class="text-[11px] text-slate-500 mt-2">Si la empresa factura por ARCA, emití la factura en ARCA y copiá acá el nº y el CAE que te devolvió.</div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="factFacturarInternoSave(${JSON.stringify(id)})">Facturar</button>
+    </div>`});
+}
+async function factFacturarInternoSave(id){
+  const tipo = document.getElementById('fi-fact-tipo')?.value;
+  const pv = Number(document.getElementById('fi-fact-pv')?.value||0);
+  const nro = Number(document.getElementById('fi-fact-nro')?.value||0);
+  if (!pv || !nro) return toast('Completá el punto de venta y el número de factura.','warn');
+  const cae = (document.getElementById('fi-fact-cae')?.value||'').trim();
+  const caevto = document.getElementById('fi-fact-caevto')?.value;
+  const body = { tipo, puntoVenta: pv, numero: nro };
+  if (cae) body.cae = cae;
+  if (caevto) body.caeVto = new Date(caevto).toISOString();
+  try {
+    await api('/api/facturas/'+id+'/facturar', { method:'POST', body: JSON.stringify(body) });
+    toast('Comprobante facturado','success');
+    delete state.cache.facturas; delete state.cache.ctasCtes;
+    closeModal(); pages.facturacion();
+  } catch(e){ toast(e.message,'error'); }
 }
 async function factEditar(id) {
   try {
@@ -17563,7 +17627,8 @@ pages.compras = async function() {
   } catch (e) { return toast(e.message,'error'); }
   await cargarMonedas();
   state.cache.facturasCompra = rows;
-  state.compraFilter = state.compraFilter || { desde:'', hasta:'', provId:'', tipo:'' };
+  state.compraFilter = state.compraFilter || { desde:'', hasta:'', provId:'', tipo:'', q:'' };
+  if (state.compraFilter.q === undefined) state.compraFilter.q = '';
   if (state.compraFilter.tipo === undefined) state.compraFilter.tipo = '';
   const mesActual = new Date().toISOString().slice(0,7);
   // KPIs en pesos: las facturas en otra moneda se convierten con su cotización.
@@ -17580,7 +17645,10 @@ pages.compras = async function() {
       proveedorNombre:r.proveedor?.razonSocial||'—',
       tipoKey: r.clase==='nota_credito'?'nc':(r.clase==='nota_debito'?'nd':'factura'),
       moneda:r.moneda, total:r.total, cotizacion:r.cotizacion,
-      comp:`${r.tipo} ${String(r.puntoVenta).padStart(4,'0')}-${String(r.numero).padStart(8,'0')}`,
+      esInterno:!!r.esInterno, numeroInterno:r.numeroInterno||null,
+      comp: r.esInterno
+        ? `🧾 Interno ${r.numeroInterno||''}`
+        : `${r.tipo} ${String(r.puntoVenta).padStart(4,'0')}-${String(r.numero).padStart(8,'0')}${r.numeroInterno?` · int ${r.numeroInterno}`:''}`,
     }));
     const movOps = ops.map(o => ({
       kind:'op', id:o.id, fecha:o.fecha, proveedorId:o.contactoId,
@@ -17593,6 +17661,7 @@ pages.compras = async function() {
       if (ff.hasta && (m.fecha||'') > ff.hasta+'T23:59:59') return false;
       if (ff.provId && m.proveedorId !== ff.provId) return false;
       if (ff.tipo && m.tipoKey !== ff.tipo) return false;
+      if (ff.q) { const q=ff.q.toLowerCase(); const hay=`${m.numeroInterno||''} ${m.comp||''} ${m.proveedorNombre||''}`.toLowerCase(); if(!hay.includes(q)) return false; }
       return true;
     });
     movs.sort((a,b)=> new Date(b.fecha)-new Date(a.fecha));
@@ -17622,7 +17691,7 @@ pages.compras = async function() {
               <td class="text-right font-bold">${fmtMon(m.moneda, m.total)}${m.moneda&&m.moneda!=='ARS'&&m.cotizacion?`<div class="text-[10px] text-slate-400 font-normal">TC ${fmtN(m.cotizacion||0)}</div>`:''}</td>
               <td class="text-right whitespace-nowrap">
                 ${m.kind==='factura'
-                  ? `<button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(m.id)})'>👁️</button>${(can('compras:update')||can('finanzas:update')) ? (m.pagada ? `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un pago aplicado (OP). Deshacé el pago primero.">🔒</span>` : `<button class="btn btn-ghost text-xs" title="Editar" onclick='compEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${can('compras:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='compDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
+                  ? `<button class="btn btn-ghost text-xs" title="Ver detalle" onclick='compVer(${JSON.stringify(m.id)})'>👁️</button>${m.esInterno && (can('compras:update')||can('finanzas:update')) ? `<button class="btn btn-ghost text-xs text-emerald-700" title="Facturar: agregarle el nº de factura del proveedor (se conserva el nº interno)" onclick='compFacturarInterno(${JSON.stringify(m.id)}, ${JSON.stringify(m.numeroInterno||"")})'>🧾➡️</button>` : ''}${(can('compras:update')||can('finanzas:update')) ? (m.pagada ? `<span class="text-xs text-slate-300 px-1" title="No se puede editar: tiene un pago aplicado (OP). Deshacé el pago primero.">🔒</span>` : `<button class="btn btn-ghost text-xs" title="Editar" onclick='compEditar(${JSON.stringify(m.id)})'>✏️</button>`) : ''}${can('compras:delete')||can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Borrar" onclick='compDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}`
                   : `<button class="btn btn-ghost text-xs text-green-700" title="Abrir / reimprimir orden de pago" onclick='ordenPagoReabrir(${JSON.stringify(m.id)})'>📄 Abrir</button><button class="btn btn-ghost text-xs" title="Reenviar por email" onclick='ordenPagoReabrir(${JSON.stringify(m.id)}, "email")'>✉️</button>${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Deshacer pago (repone la deuda y revierte caja/banco/cheque)" onclick='ordenPagoRevertir(${JSON.stringify(m.id)})'>↩️</button>`:''}`}
               </td>
             </tr>`).join('') || '<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin movimientos con esos filtros</td></tr>'}
@@ -17651,7 +17720,7 @@ pages.compras = async function() {
       <div class="kpi"><div class="text-xs text-slate-500">IVA crédito fiscal</div><div class="text-2xl font-bold mt-1 text-blue-600">${fmt$(ivaAcum)}</div></div>
     </div>
     <div class="kpi mb-3">
-      <div class="grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
+      <div class="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
         <div><label class="label">Desde</label><input id="cm-desde" type="date" class="input" value="${state.compraFilter.desde||''}"/></div>
         <div><label class="label">Hasta</label><input id="cm-hasta" type="date" class="input" value="${state.compraFilter.hasta||''}"/></div>
         <div><label class="label">Proveedor</label>
@@ -17665,20 +17734,21 @@ pages.compras = async function() {
             ${[['','Todos'],['factura','Factura'],['nc','Nota de crédito'],['nd','Nota de débito'],['pago','Pago (OP)']].map(([v,l])=>`<option value="${v}" ${v===state.compraFilter.tipo?'selected':''}>${l}</option>`).join('')}
           </select>
         </div>
+        <div><label class="label">Buscar (Nº interno / comprobante)</label><input id="cm-q" class="input" placeholder="CI-0007, 0001-00000123…" value="${esc(state.compraFilter.q||'')}"/></div>
         <div class="flex gap-2">
           <button class="btn btn-secondary flex-1" onclick="compFiltrosLimpiar()">Limpiar</button>
         </div>
       </div>
     </div>
     <div class="kpi p-0 overflow-hidden"><div id="comp-table"></div></div>`;
-  ['desde','hasta','prov','tipo'].forEach(k => {
+  ['desde','hasta','prov','tipo','q'].forEach(k => {
     const el = $('#cm-'+k); if (!el) return;
     const evt = (el.tagName==='SELECT' || el.type==='date') ? 'change' : 'input';
     el.addEventListener(evt, e => { state.compraFilter[k==='prov'?'provId':k] = e.target.value; render(); });
   });
   render();
 };
-function compFiltrosLimpiar() { state.compraFilter = { desde:'', hasta:'', provId:'', tipo:'' }; pages.compras(); }
+function compFiltrosLimpiar() { state.compraFilter = { desde:'', hasta:'', provId:'', tipo:'', q:'' }; pages.compras(); }
 
 // ── Importar "Mis Comprobantes → Recibidos" (ARCA) ────────────────────────────
 function compImportArca(){
@@ -17836,7 +17906,18 @@ async function compForm(pre) {
         <button class="btn btn-secondary text-xs" onclick="compVincularRemito()">📦 Vincular desde remito</button>
       </div>
       <div id="comp-remito-banner"></div>
-      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+      ${(!state._compEdit) ? `
+      <div class="bg-sky-50 border border-sky-200 rounded-lg p-2.5 mb-3">
+        <label class="flex items-center gap-2 cursor-pointer text-sm text-sky-900">
+          <input type="checkbox" id="fc-interno" class="w-4 h-4" onchange="compInternoToggle()"/>
+          <span>🧾 <b>Comprobante interno</b> (sin factura) — le asigno un <b>Nº interno propio</b>, mueve la cuenta corriente y el stock. Después, cuando llegue la factura del proveedor, lo <b>facturás</b> y se le agrega el nº.</span>
+        </label>
+        <div id="fc-interno-nro-wrap" class="hidden mt-2 flex items-end gap-2">
+          <div><label class="label">Nº comprobante interno</label><input id="fc-nro-interno" class="input font-mono" style="max-width:170px" placeholder="CI-0001"/></div>
+          <div class="text-[11px] text-slate-500 pb-2">Automático y editable. Después lo podés buscar por este número.</div>
+        </div>
+      </div>`:''}
+      <div id="fc-fiscal-grid" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
         <div><label class="label">Comprobante *</label>
           <select id="f-clase" class="input">
             <option value="factura">🧾 Factura</option>
@@ -18581,6 +18662,19 @@ function compDesvincularRemito(){
   toast('Vínculo quitado. Si guardás así, la factura sumará stock normalmente.','info');
 }
 
+async function compInternoToggle(){
+  const on = document.getElementById('fc-interno')?.checked;
+  const grid = document.getElementById('fc-fiscal-grid');
+  const wrap = document.getElementById('fc-interno-nro-wrap');
+  if (grid) grid.classList.toggle('hidden', !!on);
+  if (wrap) wrap.classList.toggle('hidden', !on);
+  if (on) {
+    const inp = document.getElementById('fc-nro-interno');
+    if (inp && !inp.value.trim()) {
+      try { const r = await api('/api/comprobante-interno/proximo?ambito=compra'); inp.value = r.proximo || ''; } catch(_) {}
+    }
+  }
+}
 async function compSave() {
   const items = $$('#fi-tbody tr[data-fi]').map(tr => ({
     productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
@@ -18625,6 +18719,11 @@ async function compSave() {
     items,
     otrosTributos: (state._compTributos || []).filter(t => t.descripcion || t.importe || t.alicuota),
   };
+  // Comprobante interno de compra: nº propio CI-####, se factura después.
+  if (!state._compEdit && document.getElementById('fc-interno')?.checked) {
+    data.esInterno = true;
+    data.numeroInterno = (document.getElementById('fc-nro-interno')?.value || '').trim() || null;
+  }
   // Reparto por centro de costo (opt-in). No aplica a notas de crédito.
   if (state.usaCentrosCosto && data.clase !== 'nota_credito') {
     const _cc = (typeof ccRepartoGet === 'function') ? ccRepartoGet('comp') : null;
@@ -18700,6 +18799,32 @@ async function compDel(id) {
   if (!confirm('¿Borrar esta factura de compra? Si tiene items vinculados a productos, se devolveran al stock.')) return;
   try { await api('/api/facturas-compra/'+id,{method:'DELETE'}); toast('Borrada','success'); delete state.cache.stockMap; pages.compras(); }
   catch (e) { toast(e.message,'error'); }
+}
+// Facturar un comprobante interno de compra: cargar los datos de la factura del proveedor.
+function compFacturarInterno(id, numInterno){
+  openModal({ title:'🧾➡️ Facturar comprobante interno (compra)', size:'max-w-md', body:`
+    <div class="text-sm text-slate-600 mb-3">Interno <b class="font-mono">${esc(numInterno||'')}</b>. Cargá los datos de la factura del proveedor; el nº interno se conserva.</div>
+    <div class="grid grid-cols-3 gap-3">
+      <div><label class="label">Tipo *</label><select id="fci-tipo" class="input">${['A','B','C','E'].map(t=>`<option>${t}</option>`).join('')}</select></div>
+      <div><label class="label">Pto. venta *</label><input id="fci-pv" class="input" type="number" value="1"/></div>
+      <div><label class="label">Número *</label><input id="fci-nro" class="input" type="number" placeholder="123"/></div>
+    </div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="compFacturarInternoSave(${JSON.stringify(id)})">Facturar</button>
+    </div>`});
+}
+async function compFacturarInternoSave(id){
+  const tipo = document.getElementById('fci-tipo')?.value;
+  const pv = Number(document.getElementById('fci-pv')?.value||0);
+  const nro = Number(document.getElementById('fci-nro')?.value||0);
+  if (!pv || !nro) return toast('Completá el punto de venta y el número de factura.','warn');
+  try {
+    await api('/api/facturas-compra/'+id+'/facturar', { method:'POST', body: JSON.stringify({ tipo, puntoVenta: pv, numero: nro }) });
+    toast('Comprobante facturado','success');
+    delete state.cache.ctasCtes;
+    closeModal(); pages.compras();
+  } catch(e){ toast(e.message,'error'); }
 }
 async function compEditar(id) {
   try {

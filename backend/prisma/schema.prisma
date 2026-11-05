@@ -812,6 +812,10 @@ model Factura {
   clase           String    @default("factura")  // factura | nota_credito | nota_debito
   puntoVenta      Int
   numero          Int
+  // Comprobante interno: nº propio (ej "CI-0007") independiente del nº fiscal.
+  // esInterno = true mientras NO tiene factura fiscal (se factura después, mismo registro).
+  numeroInterno   String?
+  esInterno       Boolean   @default(false)
   fecha           DateTime
   condicionVenta  String?   // "contado", "cuenta_corriente"
   moneda          String    @default("ARS")  // ARS | USD | EUR | SOJA | MAIZ | TRIGO | ...
@@ -873,6 +877,10 @@ model FacturaCompra {
   clase           String    @default("factura")  // factura | nota_credito | nota_debito
   puntoVenta      Int
   numero          Int
+  // Comprobante interno: nº propio (ej "CI-0007") independiente del nº fiscal.
+  // esInterno = true mientras NO tiene factura fiscal (se factura después, mismo registro).
+  numeroInterno   String?
+  esInterno       Boolean   @default(false)
   fecha           DateTime
   condicionCompra String?
   moneda          String    @default("ARS")  // ARS | USD | EUR | SOJA | MAIZ | TRIGO | ...
