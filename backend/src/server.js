@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.391.0';
+const AGROCORE_VERSION = '2.392.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7849,6 +7849,35 @@ app.post('/api/remitos-compra/:id/anular', requireCompany, requirePermission('co
         await _recalcEstadoRemitoCompra(tx, r.remitoOrigenId);
       }
       await tx.remitoCompra.update({ where: { id: r.id }, data: { estado: 'anulado', stockMovido: false } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Cerrar un remito de ENTRADA SIN facturarlo: la mercaderia ya entro y QUEDA en stock,
+// pero el remito sale de los pendientes (no se va a facturar). No toca stock ni cuenta corriente.
+app.post('/api/remitos-compra/:id/cerrar', requireCompany, requirePermission('compras:update'), async (req, res, next) => {
+  try {
+    const r = await prisma.remitoCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!r) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if (r.tipo !== 'entrada') return res.status(400).json({ ok: false, error: 'Solo se cierran remitos de entrada.' });
+    if (!['pendiente', 'parcial'].includes(r.estado)) return res.status(400).json({ ok: false, error: 'Solo se cierran remitos pendientes o parciales.' });
+    const motivo = (req.body && typeof req.body.motivo === 'string') ? req.body.motivo.trim() : '';
+    const obs = motivo ? `${r.observaciones ? r.observaciones + ' | ' : ''}Cerrado sin facturar: ${motivo}` : r.observaciones;
+    await prisma.remitoCompra.update({ where: { id: r.id }, data: { estado: 'cerrado', observaciones: obs } });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Reabrir un remito cerrado: vuelve a pendiente/parcial/facturado segun lo facturado.
+app.post('/api/remitos-compra/:id/reabrir', requireCompany, requirePermission('compras:update'), async (req, res, next) => {
+  try {
+    const r = await prisma.remitoCompra.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!r) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if (r.estado !== 'cerrado') return res.status(400).json({ ok: false, error: 'El remito no esta cerrado.' });
+    await prisma.$transaction(async (tx) => {
+      await tx.remitoCompra.update({ where: { id: r.id }, data: { estado: 'pendiente' } });
+      await _recalcEstadoRemitoCompra(tx, r.id);
     });
     res.json({ ok: true });
   } catch (e) { next(e); }

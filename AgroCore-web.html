@@ -3080,6 +3080,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/11/2026',
+      titulo:'📦 v2.392.0 — Remitos de compra: cerrar los que no se van a facturar',
+      desc:'Si recibiste mercadería con un remito que el proveedor <b>nunca va a facturar</b> (acuerdo, muestra, bonificación), ahora podés tocarle <b>🔒 Cerrar sin facturar</b>: la mercadería <b>queda en el stock</b> (no se toca el inventario ni la cuenta corriente), pero el remito <b>sale de los pendientes</b> y del reporte “Recibido no facturado”, así no molesta en la vista de pendientes reales. Pasa al estado <b>🔒 Cerrado</b> y, si al final llega la factura, con <b>🔓 Reabrir</b> vuelve a Pendiente para facturarlo normal. También funciona sobre remitos <b>Parciales</b> (cierra el saldo que no se factura). Ojo: <b>Cerrar</b> ≠ <b>Anular</b> — anular borra el stock; cerrar lo deja.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'05/11/2026',
       titulo:'🧾 v2.391.0 — Arreglos en recibo/orden de pago (WhatsApp y logo) y fórmulas de molienda',
       desc:'Cuatro mejoras: (1) En el <b>comprobante interno</b>, al tildarlo antes se ocultaba de más y no se podían elegir el <b>proveedor/cliente</b>, la <b>fecha</b> ni el <b>depósito</b>; ahora se ocultan <b>solo</b> los campos fiscales (Comprobante, Tipo, Punto de venta, Número) y el resto queda visible. (2) Al enviar un <b>Recibo</b> o una <b>Orden de pago</b> por <b>WhatsApp</b>, ahora se <b>descarga el PDF</b> automáticamente (igual que en las facturas) para adjuntarlo en el chat. (3) El <b>logo de la empresa</b> ahora también aparece en el PDF del <b>Recibo</b> y de la <b>Orden de pago</b>. (4) <b>Fórmulas de molienda</b>: se corrigió un error por el que un coproducto podía <b>no guardarse</b> si se dejaba el desplegable en su valor por defecto; ahora cada fila arranca en <b>“— Elegí el coproducto —”</b> y, si una fila tiene % pero no elegís el artículo, el sistema te avisa en vez de descartarla.' },
@@ -17450,7 +17453,9 @@ pages.remitosCompra = async function(){
       if(r.tipo==='entrada' && can('compras:create') && r.estado==='pendiente' && !r.facturado) acc+=` <button class="btn btn-ghost text-xs" title="Editar" onclick='rcForm(${JSON.stringify(r.id)})'>✏️</button>`;
       if(r.tipo==='entrada' && can('compras:create') && (r.estado==='pendiente'||r.estado==='parcial')) acc+=` <button class="btn btn-primary text-xs" title="Facturar este remito" onclick='rcFacturar(${JSON.stringify(r.id)})'>🧾 Facturar</button>`;
       if(r.tipo==='entrada' && can('compras:create') && r.pendienteTotal>0.0001 && r.estado!=='anulado') acc+=` <button class="btn btn-ghost text-xs" title="Devolución a proveedor" onclick='rcDevolucion(${JSON.stringify(r.id)})'>↩️</button>`;
-      if(can('compras:update') && r.estado!=='anulado' && !r.facturado) acc+=` <button class="btn btn-ghost text-xs text-amber-700" title="Anular" onclick='rcAnular(${JSON.stringify(r.id)})'>🚫</button>`;
+      if(r.tipo==='entrada' && can('compras:update') && (r.estado==='pendiente'||r.estado==='parcial')) acc+=` <button class="btn btn-ghost text-xs text-slate-600" title="Cerrar sin facturar (la mercadería ya entró y queda en stock, pero sale de los pendientes)" onclick='rcCerrar(${JSON.stringify(r.id)})'>🔒</button>`;
+      if(r.tipo==='entrada' && can('compras:update') && r.estado==='cerrado') acc+=` <button class="btn btn-ghost text-xs text-emerald-700" title="Reabrir (vuelve a pendiente para poder facturarlo)" onclick='rcReabrir(${JSON.stringify(r.id)})'>🔓</button>`;
+      if(can('compras:update') && r.estado!=='anulado' && !r.facturado) acc+=` <button class="btn btn-ghost text-xs text-amber-700" title="Anular (revierte el stock)" onclick='rcAnular(${JSON.stringify(r.id)})'>🚫</button>`;
       if(can('compras:delete') && !r.facturado) acc+=` <button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='rcDel(${JSON.stringify(r.id)})'>🗑️</button>`;
       return `<tr class="table-row">
         <td class="font-medium">${esc(r.nro)} ${tipoTag}</td>
@@ -17475,7 +17480,7 @@ pages.remitosCompra = async function(){
     </div>
     <div class="kpi mb-3"><div class="grid grid-cols-2 md:grid-cols-5 gap-2 items-end">
       <div><label class="label">Estado</label><select id="rcf-estado" class="input"><option value="">Todos</option>
-        <option value="pendiente">⏳ Pendiente</option><option value="parcial">◐ Parcial</option><option value="facturado">🧾 Facturado</option><option value="anulado">🚫 Anulado</option></select></div>
+        <option value="pendiente">⏳ Pendiente</option><option value="parcial">◐ Parcial</option><option value="facturado">🧾 Facturado</option><option value="cerrado">🔒 Cerrado</option><option value="anulado">🚫 Anulado</option></select></div>
       <div><label class="label">Proveedor</label><select id="rcf-prov" class="input"><option value="">Todos</option>${provOpts}</select></div>
       <div><label class="label">Desde</label><input id="rcf-desde" type="date" class="input" value="${esc(state.rcFilter.desde||'')}"/></div>
       <div><label class="label">Hasta</label><input id="rcf-hasta" type="date" class="input" value="${esc(state.rcFilter.hasta||'')}"/></div>
@@ -17593,6 +17598,16 @@ async function rcAnular(id){
   const ok=await uiConfirm('¿Anular este remito? Se revierte el stock que había sumado.',{title:'Anular remito',icon:'🚫',okText:'Sí, anular',cancelText:'No'});
   if(!ok) return;
   try{ await api('/api/remitos-compra/'+id+'/anular',{method:'POST',body:'{}'}); toast('Remito anulado','success'); delete state.cache.stockMap; pages.remitosCompra(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function rcCerrar(id){
+  const ok=await uiConfirm('¿Cerrar este remito sin facturar? La mercadería ya entró y <b>queda en el stock</b>; el remito sale de los pendientes. Después lo podés reabrir si hace falta.',{title:'Cerrar sin facturar',icon:'🔒',okText:'Sí, cerrar',cancelText:'No'});
+  if(!ok) return;
+  try{ await api('/api/remitos-compra/'+id+'/cerrar',{method:'POST',body:'{}'}); toast('Remito cerrado (no se va a facturar)','success'); pages.remitosCompra(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function rcReabrir(id){
+  try{ await api('/api/remitos-compra/'+id+'/reabrir',{method:'POST',body:'{}'}); toast('Remito reabierto','success'); pages.remitosCompra(); }
   catch(e){ toast(e.message,'error'); }
 }
 async function rcDel(id){
