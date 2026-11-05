@@ -1376,6 +1376,9 @@ model Empleado {
   observaciones   String?
   fotoUrl         String?   // foto base64 o URL
   activo          Boolean  @default(true)
+  // v2.386 — empleado compartido/centralizado: un jornalero que trabaja en varias empresas
+  // del grupo. Vive bajo su companyId (empresa dueña) pero se usa/liquida desde todo el grupo.
+  compartido      Boolean  @default(false)
   // ---- Empleado propio vs externo + porcentaje por labor ----
   tipo            String   @default("propio") // "propio" | "externo" (contratista, fasón, etc.)
   cobraPorcentaje Boolean  @default(false)    // si cobra % por labor realizada
@@ -1506,6 +1509,9 @@ model LiquidacionSueldo {
   efectivoId     String?    // id del egreso generado en Control de Efectivo
   chequeId       String?    // id del cheque propio generado
   intercompanyRef String?   // si el pago fue Intercompany, ref para revertir el asiento
+  // v2.386 — liquidación consolidada de empleado compartido (abarca movimientos de varias empresas)
+  esConsolidada    Boolean @default(false)
+  empresaPagadoraId String?  // empresa desde la que se registró el pago del neto único
   observaciones  String?
   createdAt      DateTime @default(now())
 

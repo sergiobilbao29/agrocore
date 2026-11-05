@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.385.0';
+const AGROCORE_VERSION = '2.388.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3917,7 +3917,27 @@ app.delete('/api/usuarios/:id', async (req, res, next) => {
 // ============================================================
 // FACTORIA CRUD GENERICA (empresa-scoped)
 // ============================================================
-function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc' }, include, searchFields = [], injectUserId = false, readOpen = false, dependencias = [], bloquearSi = null, scopeCampana = null }) {
+// Empresas del GRUPO (no aisladas) a las que el usuario tiene acceso, para compartir
+// recursos (ej. empleados jornaleros). Si la empresa activa esta aislada, no participa
+// del grupo (devuelve lista vacia). superAdmin ve todas las empresas no aisladas.
+async function _companyIdsGrupo(req) {
+  try {
+    const actual = await prisma.company.findUnique({ where: { id: req.companyId }, select: { aislada: true } });
+    if (actual?.aislada) return [];
+    let comps;
+    if (req.user?.superAdmin) comps = await prisma.company.findMany({ select: { id: true, aislada: true } });
+    else {
+      const ids = (req.user?.userCompanies || []).map((uc) => uc.companyId);
+      comps = await prisma.company.findMany({ where: { id: { in: ids } }, select: { id: true, aislada: true } });
+    }
+    return comps.filter((c) => !c.aislada).map((c) => c.id);
+  } catch { return [req.companyId]; }
+}
+
+// sharedFlag: nombre de un campo booleano del modelo (ej. 'compartido'). Cuando esta
+// seteado, la LISTA y el detalle incluyen tambien los registros marcados compartido=true
+// de las demas empresas del grupo (no aisladas). La escritura sigue scoping normal + compartido.
+function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc' }, include, searchFields = [], injectUserId = false, readOpen = false, dependencias = [], bloquearSi = null, scopeCampana = null, sharedFlag = null }) {
   // scopeCampana: si el rol activo tiene campañas limitadas (rol "Socio"), filtra la
   // LISTA por campaña. 'id' → el propio registro es la campaña; 'campanaId' → tiene ese campo.
   const full = `/api/${path}`;
@@ -3929,22 +3949,33 @@ function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc
 
   app.get(full, requireCompany, readGuard, async (req, res, next) => {
     try {
-      const where = { companyId: req.companyId };
-      const q = req.query.q?.toString().trim();
-      if (q && searchFields.length) {
-        where.OR = searchFields.map((f) => ({ [f]: { contains: q, mode: 'insensitive' } }));
+      // Alcance base: solo la empresa activa, o (si sharedFlag) tambien los compartidos del grupo.
+      let scope = { companyId: req.companyId };
+      if (sharedFlag) {
+        const grupo = await _companyIdsGrupo(req);
+        const otros = grupo.filter((id) => id !== req.companyId);
+        scope = { OR: [{ companyId: req.companyId }, ...(otros.length ? [{ [sharedFlag]: true, companyId: { in: otros } }] : [])] };
       }
+      const q = req.query.q?.toString().trim();
+      const andBits = [];
+      if (q && searchFields.length) andBits.push({ OR: searchFields.map((f) => ({ [f]: { contains: q, mode: 'insensitive' } })) });
       if (scopeCampana) {
         const sc = _scopeCampanas(req);
-        if (sc) { if (scopeCampana === 'id') where.id = { in: sc }; else where[scopeCampana] = { in: sc }; }
+        if (sc) andBits.push(scopeCampana === 'id' ? { id: { in: sc } } : { [scopeCampana]: { in: sc } });
       }
+      const where = andBits.length ? { AND: [scope, ...andBits] } : scope;
       res.json({ ok: true, data: await model().findMany({ where, orderBy, include }) });
     } catch (e) { next(e); }
   });
 
   app.get(`${full}/:id`, requireCompany, readGuard, async (req, res, next) => {
     try {
-      const row = await model().findFirst({ where: { id: req.params.id, companyId: req.companyId }, include });
+      let row = await model().findFirst({ where: { id: req.params.id, companyId: req.companyId }, include });
+      if (!row && sharedFlag) {
+        // Permitir ver un registro compartido de otra empresa del grupo.
+        const grupo = await _companyIdsGrupo(req);
+        row = await model().findFirst({ where: { id: req.params.id, [sharedFlag]: true, companyId: { in: grupo } }, include });
+      }
       if (!row) return res.status(404).json({ ok: false, error: 'No encontrado' });
       res.json({ ok: true, data: row });
     } catch (e) { next(e); }
@@ -3962,7 +3993,11 @@ function mountCrud({ path, modelName, perm, schema, orderBy = { createdAt: 'desc
 
   app.put(`${full}/:id`, requireCompany, requirePermission(`${perm}:update`), async (req, res, next) => {
     try {
-      const existing = await model().findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+      let existing = await model().findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+      if (!existing && sharedFlag) {
+        const grupo = await _companyIdsGrupo(req);
+        existing = await model().findFirst({ where: { id: req.params.id, [sharedFlag]: true, companyId: { in: grupo } } });
+      }
       if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
       const data = schema.partial().parse(req.body);
       res.json({ ok: true, data: await model().update({ where: { id: req.params.id }, data, include }) });
@@ -9346,9 +9381,12 @@ mountCrud({
     cbu: z.string().nullable().optional(),
     bancoNombre: z.string().nullable().optional(),
     centroCostoId: z.string().nullable().optional(),   // centro de costo / establecimiento por defecto para el sueldo
+    // v2.386 — empleado compartido/centralizado: visible y usable desde todas las empresas del grupo
+    compartido: z.boolean().optional(),
   }),
   orderBy: { apellido: 'asc' },
   searchFields: ['nombre', 'apellido', 'dni', 'cuil', 'puesto'],
+  sharedFlag: 'compartido',
 });
 
 // ---------- PLANILLA DEL EMPLEADO (movimientos + liquidación de sueldo) ----------
@@ -9364,9 +9402,15 @@ function periodoDe(fecha) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-// Verifica que el empleado exista y pertenezca a la empresa del request.
+// Verifica que el empleado exista y pertenezca a la empresa del request, o sea un
+// empleado COMPARTIDO de otra empresa del grupo (v2.386).
 async function getEmpleadoScoped(req) {
-  return prisma.empleado.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+  let emp = await prisma.empleado.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+  if (!emp) {
+    const grupo = await _companyIdsGrupo(req);
+    emp = await prisma.empleado.findFirst({ where: { id: req.params.id, compartido: true, companyId: { in: grupo } } });
+  }
+  return emp;
 }
 
 const movEmpSchema = z.object({
@@ -10004,6 +10048,127 @@ app.delete('/api/empleados/:id/liquidaciones/:liqId', requireCompany, requirePer
     });
 
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// v2.387 — LIQUIDACIÓN CONSOLIDADA de un empleado COMPARTIDO (jornalero del grupo).
+// Junta los movimientos del período de TODAS las empresas del grupo (no aisladas),
+// calcula un neto único con desglose por empresa y paga todo desde una empresa pagadora
+// que el usuario elige. El costo de cada jornal ya quedó en su empresa (movimiento).
+// ============================================================
+app.get('/api/empleados/:id/liquidacion-consolidada', requireCompany, requirePermission('rrhh:read'), async (req, res, next) => {
+  try {
+    const emp = await getEmpleadoScoped(req);
+    if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
+    if (!emp.compartido) return res.status(400).json({ ok: false, error: 'Este empleado no es compartido. Usá la liquidación normal.' });
+    const periodo = String(req.query.periodo || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(periodo)) return res.status(400).json({ ok: false, error: 'Período inválido (YYYY-MM)' });
+    const grupo = await _companyIdsGrupo(req);
+    const movs = await prisma.movimientoEmpleado.findMany({
+      where: { empleadoId: emp.id, periodo, companyId: { in: grupo }, liquidacionId: null },
+      orderBy: { fecha: 'asc' },
+    });
+    const comps = await prisma.company.findMany({ where: { id: { in: grupo } }, select: { id: true, name: true } });
+    const nombreCo = {}; comps.forEach(c => { nombreCo[c.id] = c.name; });
+    const porEmpresa = {};
+    for (const m of movs) {
+      const k = m.companyId;
+      if (!porEmpresa[k]) porEmpresa[k] = { companyId: k, nombre: nombreCo[k] || k, totalGanancias: 0, totalGastos: 0, neto: 0, nMovs: 0 };
+      if (m.tipo === 'ganancia') porEmpresa[k].totalGanancias += Number(m.monto || 0);
+      else porEmpresa[k].totalGastos += Number(m.monto || 0);
+      porEmpresa[k].nMovs++;
+    }
+    const detalle = Object.values(porEmpresa).map(e => ({ ...e, neto: e.totalGanancias - e.totalGastos }))
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    const totalNeto = detalle.reduce((a, e) => a + e.neto, 0);
+    const yaLiq = await prisma.liquidacionSueldo.findFirst({ where: { empleadoId: emp.id, periodo, esConsolidada: true } });
+    res.json({ ok: true, data: {
+      empleado: { id: emp.id, nombre: emp.nombre, apellido: emp.apellido },
+      periodo, detalle, totalNeto,
+      empresasPago: comps.map(c => ({ id: c.id, nombre: c.name })).sort((a, b) => a.nombre.localeCompare(b.nombre)),
+      yaLiquidada: !!yaLiq,
+    }});
+  } catch (e) { next(e); }
+});
+
+const liqConsolSchema = z.object({
+  periodo: z.string().regex(/^\d{4}-\d{2}$/),
+  empresaPagadoraId: z.string().min(1),
+  fecha: zFecha,
+  medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'tarjeta']),
+  caja: z.string().nullable().optional(),
+  banco: z.string().nullable().optional(),
+  nroCheque: z.string().nullable().optional(),
+  referencia: z.string().nullable().optional(),
+  montoPagado: z.coerce.number().min(0).optional(),
+  observaciones: z.string().nullable().optional(),
+});
+app.post('/api/empleados/:id/liquidar-consolidado', requireCompany, requirePermission('rrhh:create'), async (req, res, next) => {
+  try {
+    const emp = await getEmpleadoScoped(req);
+    if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
+    if (!emp.compartido) return res.status(400).json({ ok: false, error: 'Este empleado no es compartido.' });
+    const d = liqConsolSchema.parse(req.body);
+    const grupo = await _companyIdsGrupo(req);
+    if (!grupo.includes(d.empresaPagadoraId)) return res.status(400).json({ ok: false, error: 'La empresa pagadora no pertenece al grupo.' });
+    if (!_userTieneAcceso(req, d.empresaPagadoraId)) return res.status(403).json({ ok: false, error: 'No tenés acceso a la empresa pagadora.' });
+    if ((d.medioPago === 'efectivo' || d.medioPago === 'tarjeta') && !d.caja) return res.status(400).json({ ok: false, error: 'Elegí la caja de la empresa pagadora.' });
+    if (d.medioPago === 'cheque' && !d.nroCheque) return res.status(400).json({ ok: false, error: 'Ingresá el número de cheque.' });
+
+    const yaLiq = await prisma.liquidacionSueldo.findFirst({ where: { empleadoId: emp.id, periodo: d.periodo, esConsolidada: true } });
+    if (yaLiq) return res.status(409).json({ ok: false, error: 'Ya existe una liquidación consolidada para ese mes. Anulala primero si querés rehacerla.' });
+
+    const movs = await prisma.movimientoEmpleado.findMany({ where: { empleadoId: emp.id, periodo: d.periodo, companyId: { in: grupo }, liquidacionId: null } });
+    if (!movs.length) return res.status(400).json({ ok: false, error: 'No hay movimientos sin liquidar para ese período.' });
+    const totalGastos = movs.filter(m => m.tipo === 'gasto').reduce((a, m) => a + Number(m.monto || 0), 0);
+    const totalGanancias = movs.filter(m => m.tipo === 'ganancia').reduce((a, m) => a + Number(m.monto || 0), 0);
+    const neto = totalGanancias - totalGastos;
+    const pagado = (d.montoPagado != null) ? Number(d.montoPagado) : neto;
+
+    // Desglose por empresa (para el comprobante / contador).
+    const comps = await prisma.company.findMany({ where: { id: { in: grupo } }, select: { id: true, name: true } });
+    const nombreCo = {}; comps.forEach(c => { nombreCo[c.id] = c.name; });
+    const porEmp = {};
+    movs.forEach(m => { const k = m.companyId; porEmp[k] = (porEmp[k] || 0) + (m.tipo === 'ganancia' ? 1 : -1) * Number(m.monto || 0); });
+    const desglose = Object.entries(porEmp).map(([cid, n]) => `${nombreCo[cid] || cid}: ${n.toFixed(2)}`).join(' · ');
+    const nombreCompleto = `${emp.apellido}, ${emp.nombre}`;
+
+    const liquidacion = await prisma.$transaction(async (tx) => {
+      let efectivoId = null, chequeId = null;
+      // El pago REAL sale de la empresa pagadora elegida (no necesariamente la activa).
+      if (pagado > 0 && (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta')) {
+        const ef = await tx.efectivo.create({ data: {
+          companyId: d.empresaPagadoraId, fecha: d.fecha, tipo: 'egreso',
+          concepto: `Sueldo (grupo) ${nombreCompleto} · ${d.periodo}`, monto: pagado, caja: d.caja,
+          clasificacion: 'empresa', observaciones: `Liquidación consolidada ${d.periodo} · ${desglose}`,
+        }});
+        efectivoId = ef.id;
+      } else if (pagado > 0 && d.medioPago === 'cheque') {
+        const ch = await tx.cheque.create({ data: {
+          companyId: d.empresaPagadoraId, tipo: 'propio', banco: d.banco || null, nroCheque: d.nroCheque,
+          fechaEmision: d.fecha, fechaPago: d.fecha, monto: pagado, beneficiario: nombreCompleto,
+          estado: 'en_cartera', observaciones: `Liquidación consolidada ${d.periodo}`,
+        }});
+        chequeId = ch.id;
+      }
+      const liq = await tx.liquidacionSueldo.create({ data: {
+        companyId: d.empresaPagadoraId, empleadoId: emp.id, periodo: d.periodo, fecha: d.fecha,
+        sueldoBase: 0, totalGanancias, totalGastos, neto, pagado, medioPago: d.medioPago,
+        caja: (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta') ? d.caja : null,
+        banco: (d.medioPago !== 'efectivo' && d.medioPago !== 'tarjeta') ? (d.banco || null) : null,
+        nroCheque: d.medioPago === 'cheque' ? d.nroCheque : null, referencia: d.referencia || null,
+        efectivoId, chequeId, esConsolidada: true, empresaPagadoraId: d.empresaPagadoraId,
+        observaciones: `Consolidada del grupo · ${desglose}${d.observaciones ? ' · ' + d.observaciones : ''}`,
+      }});
+      // Marcar TODOS los movimientos del grupo de ese período como liquidados.
+      await tx.movimientoEmpleado.updateMany({
+        where: { empleadoId: emp.id, periodo: d.periodo, companyId: { in: grupo }, liquidacionId: null },
+        data: { liquidacionId: liq.id },
+      });
+      return liq;
+    });
+    res.status(201).json({ ok: true, data: liquidacion, desglose });
   } catch (e) { next(e); }
 });
 
@@ -16235,6 +16400,15 @@ const _AYUDA_KB = [
       'Si cargaste algo con el formato viejo y no aparece en stock ni en compras/ventas, entra a Catalogo -> boton "Diagnostico de articulos" y usa "Pasar a articulo" para convertirlo (no borra nada).',
       'Ejemplos: Fabrica -> Agroindustria / Soja / Derivados -> Expeller, Aceite. Comercio -> Lubricantes / Aceites de motor / 15W40 -> Bidon x4 L, Bidon x20 L.'],
     atajo:{ page:'catalogos', label:'Abrir Catalogo de articulos' } },
+  { id:'empleado_compartido', terms:['empleado compartido','empleados compartidos','jornalero','jornaleros','empleado en varias empresas','mismo empleado en varias empresas','centralizar empleados','liquidacion unica','liquidacion consolidada','una sola liquidacion','labores de otra empresa','empleado del grupo','compartir empleado'],
+    titulo:'Empleados compartidos (jornaleros que trabajan en varias empresas)',
+    pasos:[
+      'En la ficha del empleado, tilda "Compartir con todo el grupo". Queda disponible desde todas las empresas (menos las aisladas) y en la nomina aparece el chip "Grupo".',
+      'Carga sus labores/jornales desde cualquier empresa (Labores o la Planilla del empleado). El costo de cada jornal queda en la empresa donde se hizo (flujo de fondos y centros de costo).',
+      'A fin de mes, en su ficha, toca "Liquidacion unica (grupo)": junta los movimientos del mes de TODAS las empresas, muestra el neto total con desglose por empresa y lo pagas desde la empresa que elijas (efectivo, transferencia o cheque).',
+      'La liquidacion unica es una vista de gestion (cuanto le debo y pagarle de una). Para AFIP cada razon social puede necesitar su propio recibo: por eso se muestra el desglose por empresa para el contador.',
+      'Para anular una liquidacion consolidada, hacelo desde la empresa pagadora (es donde quedo registrado el pago).'],
+    atajo:{ page:'empleados', label:'Abrir Empleados' } },
   { id:'centros_costo', terms:['centro de costo','centros de costo','centro costo','imputar gasto','repartir gasto','prorratear','prorrateo','por hectareas','reparto por campo','unidad de negocio','a que campo','imputacion','distribuir gasto','gasto por campo','gasto por actividad'],
     titulo:'Centros de costo: imputar y repartir gastos e inversiones',
     pasos:[

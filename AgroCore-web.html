@@ -2844,6 +2844,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Caja-por-Tenedor.pdf', t:'Caja por tenedor', d:'Controlar efectivo por persona que lo tiene a cargo.' },
       { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
       { f:'Instructivo-Empleados-y-Sueldos.pdf', t:'Empleados y sueldos (completo)', d:'Guía completa: alta, sueldo fijo/variable/por día, labores con %, gastos, adelantos, entregas, cuenta corriente con arrastre y liquidación.' },
+      { f:'Instructivo-Empleados-Compartidos.pdf', t:'Empleados compartidos (jornaleros del grupo)', d:'Un jornalero que trabaja en varias empresas: compartirlo con todo el grupo, cargarle labores desde cualquier empresa (el costo queda donde se hizo) y hacer una liquidación única con desglose por empresa.' },
       { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
       { f:'Instructivo-Centros-de-Costo.pdf', t:'Centros de costo (configurar, usar y reportes)', d:'Saber cuánto gastaste e invertiste en cada campo, actividad o proyecto: activar por empresa, armar el catálogo, imputar compras y gastos (100% / %, monto o por hectáreas) y ver el reporte con detalle y export a Excel.' },
     ]},
@@ -3079,6 +3080,15 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/11/2026',
+      titulo:'📚 v2.388.0 — Empleados compartidos: ayuda, instructivo y asistente actualizados',
+      desc:'Documentamos la función de <b>empleados compartidos</b> (jornaleros del grupo). El <b>asistente</b> ahora te explica cómo compartir un empleado, cargarle labores desde cualquier empresa y hacer la <b>liquidación única</b>. En <b>Ayuda</b> sumamos el instructivo <b>"Empleados compartidos (jornaleros del grupo)"</b> y actualizamos el manual con la nueva sección.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'05/11/2026',
+      titulo:'🤝 v2.387.0 — Empleados compartidos: labores de todas las empresas + liquidación única (Etapas 2 y 3)',
+      desc:'Completamos el circuito del jornalero del grupo. Ahora, un empleado marcado como <b>compartido</b> aparece en los pickers de <b>Labores</b> y en la <b>Planilla</b> desde cualquier empresa: cargás sus jornales donde trabajó y <b>el costo queda en esa empresa</b> (flujo de fondos y centros de costo), sin duplicarlo. Y en su ficha, el botón <b>"🤝 Liquidación única (grupo)"</b> junta los jornales/labores del mes de <b>todas las empresas</b>, muestra el <b>neto total con desglose por empresa</b> (para el contador) y te deja <b>pagar todo desde la empresa que elijas</b> (efectivo, transferencia o cheque). Recordá: la liquidación única es una <b>vista de gestión</b>; para AFIP cada razón social puede necesitar su propio recibo, por eso se muestra el desglose.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'05/11/2026',
+      titulo:'🤝 v2.386.0 — Empleados compartidos: un jornalero para todas las empresas del grupo (Etapa 1)',
+      desc:'Primer paso para centralizar a los <b>jornaleros</b> que trabajan en varias empresas. En la ficha del empleado hay un nuevo tilde <b>"🤝 Compartir con todo el grupo"</b>: al marcarlo, ese empleado queda <b>disponible desde todas las empresas</b> del grupo (en la nómina se identifica con el chip <b>🤝 Grupo</b>), sin duplicarlo. Las empresas <b>aisladas</b> no lo ven. Los empleados que no marques siguen 100% privados de su empresa, como hasta ahora. <i>Próximamente (Etapa 2 y 3): cargarle labores/jornales desde cualquier empresa —el costo queda en la empresa donde se hizo— y una liquidación única consolidada.</i>' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'04/11/2026',
       titulo:'🧹 v2.385.0 — Catálogo: avisos de duplicados y ayuda con ejemplos (fábrica y comercio)',
       desc:'Pulido final de la reorganización. Al crear un <b>artículo</b>, si ya existe uno con el mismo nombre en la <b>misma categoría/familia</b>, el sistema te avisa para que no dupliques (el mismo nombre en ramas distintas sigue permitido). En <b>Organización de artículos</b>, no te deja crear dos categorías/familias con el mismo nombre colgando del mismo padre. Y sumamos <b>ejemplos</b> en la ayuda para que se entienda cómo armarlo tanto en una <b>fábrica</b> (Agroindustria / Soja / Derivados → Expeller, Aceite) como en un <b>comercio</b> (Lubricantes / Aceites / 15W40 → Bidón x4 L, x20 L). También hay un <b>instructivo nuevo</b> en Ayuda: "Catálogo de artículos: configuración y uso correcto".' },
@@ -26766,7 +26776,7 @@ pages.empleados = async function() {
                   ? `<img src="${esc(e.fotoUrl)}" class="w-9 h-9 rounded-full object-cover border border-slate-200"/>`
                   : `<div class="w-9 h-9 rounded-full bg-slate-200 flex items-center justify-center font-semibold text-slate-600 text-sm">${esc(iniciales)}</div>`}
               </td>
-              <td><b>${esc(e.apellido)}, ${esc(e.nombre)}</b><br><span class="text-[11px] text-slate-500">${esc(e.email||'')}</span></td>
+              <td><b>${esc(e.apellido)}, ${esc(e.nombre)}</b>${e.compartido?` <span class="badge bg-sky-100 text-sky-800 text-[10px]" title="Jornalero compartido con todo el grupo">🤝 Grupo</span>`:''}<br><span class="text-[11px] text-slate-500">${esc(e.email||'')}</span></td>
               <td class="font-mono text-xs">${esc(e.dni||'—')}</td>
               <td>${esc(e.puesto||'—')}</td>
               <td>${e.fechaIngreso?fmtDate(e.fechaIngreso):'—'}</td>
@@ -26860,6 +26870,12 @@ function empleForm(id=null) {
           <div class="text-[11px] text-slate-500 mt-1">Al liquidar el sueldo se imputa a este centro de costo. Se puede cambiar en cada liquidación.</div>
         </div>` : ''}
         <div class="text-[11px] text-slate-500 mt-2">💡 Estos datos aparecen en la <b>Planilla de pagos</b> (botón 🖨️ en la nómina) al lado del monto a transferir de cada uno.</div>
+      </div>
+      <div class="mt-4 p-3 bg-sky-50 rounded-lg border border-sky-200">
+        <label class="flex items-center gap-2 text-sm font-semibold text-sky-900">
+          <input id="f-emp-compartido" type="checkbox" ${it.compartido?'checked':''}/> 🤝 Compartir con todo el grupo (jornalero que trabaja en varias empresas)
+        </label>
+        <div class="text-[11px] text-sky-800 mt-1">Al marcarlo, este empleado queda <b>disponible desde todas las empresas</b> del grupo: podés cargarle labores/jornales desde cualquiera (el costo queda en la empresa donde se hizo) y más adelante hacer una <b>liquidación única</b>. Las empresas aisladas no lo ven.</div>
       </div>
       <div class="mt-4 p-3 bg-slate-50 rounded-lg border border-slate-200">
         <div class="text-xs text-slate-600 font-semibold mb-2">⚙️ Tipo de empleado y forma de cobro</div>
@@ -26971,6 +26987,7 @@ async function empleSave(id) {
     cbu: $('#f-cbu')?.value.trim() || null,
     bancoNombre: $('#f-bancoNombre')?.value.trim() || null,
     centroCostoId: $('#f-emp-cc')?.value || null,
+    compartido: $('#f-emp-compartido')?.checked || false,
     tipo: $('#f-tipo')?.value || 'propio',
     cobraPorcentaje: $('#f-cp')?.checked || false,
     porcentajeDefault: $('#f-pd')?.value ? Number($('#f-pd').value) : null,
@@ -27300,7 +27317,10 @@ function empFichaRender() {
           <div class="text-2xl font-extrabold mt-0.5 ${aPagarAcum>=0?'text-emerald-700':'text-red-600'}">${fmt$(aPagarAcum)}</div>
           <div class="text-xs text-slate-400 mt-1">${saldoAntTxt}Neto del mes ${fmt$(neto)} (Ganancias ${fmt$(ganancias)} − Gastos ${fmt$(gastos)})</div>
         </div>
-        ${canC?`<button class="btn btn-primary" onclick='empLiqForm(${JSON.stringify(mes)})'>💵 Registrar pago</button>`:''}
+        <div class="flex items-center gap-2">
+          ${canC?`<button class="btn btn-primary" onclick='empLiqForm(${JSON.stringify(mes)})'>💵 Registrar pago</button>`:''}
+          ${canC && state.empFicha?.emp?.compartido?`<button class="btn btn-secondary" title="Juntar las labores/jornales de todas las empresas del grupo en una sola liquidación" onclick='empLiqConsolForm(${JSON.stringify(mes)})'>🤝 Liquidación única (grupo)</button>`:''}
+        </div>
       </div>
     </div>`;
   }
@@ -28149,6 +28169,74 @@ async function empLiqAnular(liqId){
     delete state.cache.efectivo; delete state.cache.cheques;
     await empleAbrir(empId, false);
   }catch(e){ toast(e.message,'error'); }
+}
+// v2.387 — Liquidación ÚNICA consolidada de un jornalero compartido del grupo.
+async function empLiqConsolForm(periodo){
+  const empId=state.empFichaId;
+  let d;
+  try{ d=(await api('/api/empleados/'+empId+'/liquidacion-consolidada?periodo='+encodeURIComponent(periodo))).data; }
+  catch(e){ return toast(e.message||'No se pudo calcular','error'); }
+  if(d.yaLiquidada) return toast('Ya existe una liquidación consolidada para este mes. Anulala desde la empresa pagadora para rehacerla.','warn');
+  if(!d.detalle.length) return toast('No hay movimientos sin liquidar en ninguna empresa del grupo para este mes.','warn');
+  state._liqConsol = d;
+  const filas = d.detalle.map(e=>`<tr class="table-row"><td>${esc(e.nombre)}</td><td class="text-right">${fmt$(e.totalGanancias)}</td><td class="text-right">${fmt$(e.totalGastos)}</td><td class="text-right font-semibold">${fmt$(e.neto)}</td></tr>`).join('');
+  openModal({
+    title:'🤝 Liquidación única del grupo · '+empMesLabel(periodo), size:'max-w-xl',
+    body:`
+      <div class="text-xs text-slate-600 mb-2">Junta los jornales/labores de este empleado en <b>todas las empresas del grupo</b> para el mes. El costo de cada jornal ya quedó en su empresa; acá se paga el <b>neto total</b> desde la empresa que elijas.</div>
+      <div class="kpi p-0 overflow-hidden mb-3"><table class="data w-full"><thead><tr><th>Empresa</th><th class="text-right">Ganancias</th><th class="text-right">Gastos</th><th class="text-right">Neto</th></tr></thead>
+        <tbody>${filas}</tbody>
+        <tfoot><tr><td class="font-bold">TOTAL a pagar</td><td></td><td></td><td class="text-right font-extrabold text-emerald-700">${fmt$(d.totalNeto)}</td></tr></tfoot>
+      </table></div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Empresa pagadora *</label>
+          <select id="lc-pagadora" class="input">${d.empresasPago.map(e=>`<option value="${esc(e.id)}">${esc(e.nombre)}</option>`).join('')}</select>
+          <div class="text-[10px] text-slate-400 mt-1">De esta empresa sale el pago del neto total.</div>
+        </div>
+        <div><label class="label">Fecha *</label><input id="lc-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">Medio de pago *</label>
+          <select id="lc-medio" class="input" onchange="empLiqConsolMedio()">
+            <option value="efectivo">💵 Efectivo</option><option value="transferencia">🏦 Transferencia</option><option value="cheque">🧾 Cheque propio</option>
+          </select>
+        </div>
+        <div id="lc-wrap-caja"><label class="label">Caja (efectivo)</label><input id="lc-caja" class="input" placeholder="Ej: Oficina"/></div>
+        <div id="lc-wrap-banco" style="display:none"><label class="label">Banco</label><input id="lc-banco" class="input" placeholder="Banco"/></div>
+        <div id="lc-wrap-cheque" style="display:none"><label class="label">N° de cheque</label><input id="lc-nrocheque" class="input"/></div>
+        <div><label class="label">Monto a pagar</label><input id="lc-pagado" type="number" step="0.01" class="input" value="${Math.max(0,d.totalNeto).toFixed(2)}"/><div class="text-[10px] text-slate-400 mt-1">Si pagás menos, la diferencia queda registrada.</div></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><input id="lc-obs" class="input" placeholder="Opcional"/></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick='empLiqConsolSave(${JSON.stringify(periodo)})'>Confirmar liquidación única</button>`
+  });
+}
+function empLiqConsolMedio(){
+  const m=$('#lc-medio')?.value;
+  const show=(id,on)=>{ const el=document.getElementById(id); if(el) el.style.display=on?'':'none'; };
+  show('lc-wrap-caja', m==='efectivo');
+  show('lc-wrap-banco', m==='transferencia'||m==='cheque');
+  show('lc-wrap-cheque', m==='cheque');
+}
+async function empLiqConsolSave(periodo){
+  const empId=state.empFichaId;
+  const medio=$('#lc-medio')?.value||'efectivo';
+  const data={
+    periodo, empresaPagadoraId:$('#lc-pagadora')?.value||'',
+    fecha:$('#lc-fecha')?.value, medioPago:medio,
+    caja: medio==='efectivo' ? ($('#lc-caja')?.value.trim()||null) : null,
+    banco: (medio==='transferencia'||medio==='cheque') ? ($('#lc-banco')?.value.trim()||null) : null,
+    nroCheque: medio==='cheque' ? ($('#lc-nrocheque')?.value.trim()||null) : null,
+    montoPagado: $('#lc-pagado')?.value ? Number($('#lc-pagado').value) : undefined,
+    observaciones: $('#lc-obs')?.value.trim()||null,
+  };
+  if(!data.empresaPagadoraId) return toast('Elegí la empresa pagadora','warn');
+  if(medio==='efectivo' && !data.caja) return toast('Indicá la caja de la empresa pagadora','warn');
+  if(medio==='cheque' && !data.nroCheque) return toast('Ingresá el número de cheque','warn');
+  try{
+    const r=await api('/api/empleados/'+empId+'/liquidar-consolidado',{method:'POST',body:JSON.stringify(data)});
+    toast('Liquidación única registrada','success'); closeModal();
+    delete state.cache.efectivo; delete state.cache.cheques;
+    state.empMes=periodo; await empleAbrir(empId,false);
+  }catch(e){ toast(e.message||'No se pudo liquidar','error'); }
 }
 
 // Junta los datos de la planilla del mes seleccionado (reutilizado por Excel y PDF).
