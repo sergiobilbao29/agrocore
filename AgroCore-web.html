@@ -3080,6 +3080,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/11/2026',
+      titulo:'↔️ v2.395.0 — Transferir cheques desde/hacia una empresa aislada (fábrica)',
+      desc:'Ahora la <b>transferencia de cheques de terceros</b> (botón ↔️ en Tesorería → Cheques) puede cruzar hacia o desde una <b>empresa aislada</b> (por ejemplo una fábrica). Antes, si la empresa estaba aislada, el sistema no dejaba elegirla como origen ni destino (“la empresa destino no pertenece al grupo”). Esta excepción aplica <b>solo a la transferencia de cheques</b>: el resto del aislamiento de la empresa (catálogo, stock y flujo de fondos) <b>no cambia</b>. El cheque sale de la cartera de una y aparece en la de la otra, con la nota de dónde vino; no genera deuda entre empresas.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/11/2026',
+      titulo:'🧾 v2.394.0 — Remitos de compra: IVA discriminado en cada renglón',
+      desc:'En el <b>remito de compra</b> ahora cada renglón tiene su <b>columna de IVA</b> (Sin IVA / 10,5% / 21% / 27%). El <b>precio estimado</b> se carga <b>neto (sin IVA)</b> y abajo se muestran <b>Neto</b>, <b>IVA</b> y <b>Total c/IVA</b> por separado, así los importes <b>coinciden con el papel</b> del remito. Al <b>importar desde PDF/foto</b>, el sistema detecta la alícuota y carga el precio neto automáticamente. Los remitos viejos quedan en “Sin IVA” (podés ajustarlos editándolos).' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'05/11/2026',
       titulo:'📎 v2.393.0 — Remitos de compra: importar desde PDF o foto (uno o varios)',
       desc:'Al cargar un <b>nuevo remito de compra</b> ahora hay un botón <b>📎 Importar PDF/foto</b>: elegís <b>uno o varios</b> archivos (el remito en PDF o una foto sacada con el celular) y el sistema <b>completa solo</b> el <b>proveedor</b> (lo busca por CUIT), la <b>fecha</b>, el <b>N° de remito</b> y agrega <b>un renglón por archivo</b> con la descripción, la cantidad y un precio estimado. Después revisás, ajustás lo que haga falta y guardás. Las fotos se leen con el Asistente IA (si está activado); los PDF con texto se leen siempre. Si algún archivo no se pudo leer o el proveedor no está en tu lista, te avisa para completarlo a mano.' },
@@ -17405,26 +17411,35 @@ function rcPickItem(inp){
   if(prc && (!prc.value||Number(prc.value)===0) && match.dataset.precio) prc.value=match.dataset.precio;
   rcRecalc();
 }
+const RC_ALICUOTAS=[0,10.5,21,27];
 function rcItemRow(i=0, it={}){
   const pid=it.productoId||''; const uni=it.unidad||'';
   const valor = it.descripcion ? (uni?`${it.descripcion} (${uni})`:it.descripcion) : '';
+  const al = it.alicuotaIva!=null ? Number(it.alicuotaIva) : 21;
+  const ivaOpts = RC_ALICUOTAS.map(a=>`<option value="${a}" ${Math.abs(a-al)<0.01?'selected':''}>${a===0?'Sin IVA':a+'%'}</option>`).join('');
   return `<tr data-rci>
     <td><div class="flex gap-1"><input list="rc-datalist" class="input text-sm flex-1" data-f="buscar" placeholder="🔎 Artículo…" value="${esc(valor)}" oninput="rcPickItem(this)" onchange="rcPickItem(this)" autocomplete="off"/><input type="hidden" data-f="productoId" value="${esc(pid)}"/></div></td>
     <td><input class="input text-sm" data-f="descripcion" value="${esc(it.descripcion||'')}" placeholder="Detalle"/></td>
     <td><input class="input text-sm w-24 text-right" type="number" step="0.01" data-f="cantidad" value="${it.cantidad||1}" oninput="rcRecalc()"/></td>
     <td><input class="input text-sm w-20" data-f="unidad" value="${esc(uni)}" placeholder="u/kg/l"/></td>
-    <td><input class="input text-sm w-28 text-right" type="number" step="0.01" data-f="precioEstim" value="${it.precioEstim!=null?it.precioEstim:''}" placeholder="estim." oninput="rcRecalc()"/></td>
+    <td><input class="input text-sm w-28 text-right" type="number" step="0.01" data-f="precioEstim" value="${it.precioEstim!=null?it.precioEstim:''}" placeholder="neto s/IVA" oninput="rcRecalc()"/></td>
+    <td><select class="input text-sm w-24" data-f="alicuotaIva" onchange="rcRecalc()">${ivaOpts}</select></td>
     <td class="text-right text-xs text-slate-500" data-rct>$ 0,00</td>
     <td class="text-center"><button class="btn btn-ghost text-red-600" onclick="this.closest('tr').remove(); rcRecalc()">×</button></td>
   </tr>`;
 }
 function rcRecalc(){
-  let tot=0;
+  let neto=0, iva=0;
   $$('#rc-tbody tr[data-rci]').forEach(tr=>{
-    const c=Number(tr.querySelector('[data-f="cantidad"]')?.value||0); const p=Number(tr.querySelector('[data-f="precioEstim"]')?.value||0);
-    const sub=c*p; tot+=sub; const cell=tr.querySelector('[data-rct]'); if(cell) cell.textContent='$ '+fmtN(sub);
+    const c=Number(tr.querySelector('[data-f="cantidad"]')?.value||0);
+    const p=Number(tr.querySelector('[data-f="precioEstim"]')?.value||0);
+    const al=Number(tr.querySelector('[data-f="alicuotaIva"]')?.value||0);
+    const nb=c*p; const iv=nb*al/100; neto+=nb; iva+=iv;
+    const cell=tr.querySelector('[data-rct]'); if(cell) cell.textContent='$ '+fmtN(nb+iv);
   });
-  const t=$('#rc-tot'); if(t) t.textContent='$ '+fmtN(tot);
+  const en=$('#rc-neto'); if(en) en.textContent='$ '+fmtN(neto);
+  const ei=$('#rc-iva'); if(ei) ei.textContent='$ '+fmtN(iva);
+  const t=$('#rc-tot'); if(t) t.textContent='$ '+fmtN(neto+iva);
 }
 
 pages.remitosCompra = async function(){
@@ -17528,12 +17543,16 @@ async function rcForm(id=null){
         <div class="col-span-2"><label class="label">Observaciones</label><input id="rc-obs" class="input" value="${esc(r?.observaciones||'')}"/></div>
       </div>
       <div class="kpi p-0 overflow-hidden mb-2"><table class="data">
-        <thead><tr><th class="w-1/4">Artículo</th><th>Descripción</th><th class="text-right">Cantidad</th><th>Unidad</th><th class="text-right">P. estim.</th><th class="text-right">Subtotal</th><th></th></tr></thead>
+        <thead><tr><th class="w-1/4">Artículo</th><th>Descripción</th><th class="text-right">Cantidad</th><th>Unidad</th><th class="text-right">P. estim. neto</th><th>IVA</th><th class="text-right">Subtotal c/IVA</th><th></th></tr></thead>
         <tbody id="rc-tbody">${items.map((it,i)=>rcItemRow(i,it)).join('')}</tbody>
-        <tfoot><tr><td colspan="5" class="text-right font-bold">Valor estimado</td><td class="text-right font-bold text-green-700" id="rc-tot">$ 0,00</td><td></td></tr></tfoot>
+        <tfoot>
+          <tr><td colspan="6" class="text-right text-slate-500">Neto</td><td class="text-right text-slate-600" id="rc-neto">$ 0,00</td><td></td></tr>
+          <tr><td colspan="6" class="text-right text-slate-500">IVA</td><td class="text-right text-slate-600" id="rc-iva">$ 0,00</td><td></td></tr>
+          <tr><td colspan="6" class="text-right font-bold">Total c/IVA</td><td class="text-right font-bold text-green-700" id="rc-tot">$ 0,00</td><td></td></tr>
+        </tfoot>
       </table></div>
       <button class="btn btn-secondary text-sm" onclick="document.getElementById('rc-tbody').insertAdjacentHTML('beforeend', rcItemRow()); rcRecalc();">+ Agregar ítem</button>
-      <div class="text-[11px] text-slate-500 mt-2">El <b>precio estimado</b> es orientativo (para valorizar lo pendiente). El costo real entra con la factura.</div>
+      <div class="text-[11px] text-slate-500 mt-2">El <b>precio estimado</b> va <b>neto (sin IVA)</b> y el <b>IVA</b> se discrimina en su columna, así el Total c/IVA coincide con el remito. Es orientativo (para valorizar lo pendiente); el costo real entra con la factura.</div>
     `,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="rcSave()">💾 Guardar remito</button>`
   });
@@ -17556,10 +17575,14 @@ async function rcImportFiles(input){
       if(!r.ok||!j.ok) throw new Error(j.error||('Error '+r.status));
       const d=j.data; okCount++; if(!firstHeader) firstHeader=d;
       const cant=(d.cantidadItem!=null && Number(d.cantidadItem)>0)?Number(d.cantidadItem):1;
-      const base=d.netoGravado!=null?Number(d.netoGravado):(d.total!=null?Number(d.total):null);
+      // Alícuota de IVA detectada por el parser (banderas iva21/iva105/iva27); default 21.
+      const alic = d.iva27!=null?27 : (d.iva105!=null?10.5 : (d.iva21!=null?21 : 21));
+      // precio estimado = NETO unitario (sin IVA). Preferimos netoGravado; si no, deducimos del total.
+      let base = d.netoGravado!=null ? Number(d.netoGravado) : null;
+      if(base==null && d.total!=null){ const otros=Number(d.otrosImpuestos||0)+Number(d.noGravado||0); base=(Number(d.total)-otros)/(1+alic/100); }
       const precio=(base!=null && cant>0)?+(base/cant).toFixed(2):null;
       const desc=d.descripcionItem||('Remito '+(f.name||'').replace(/\.[^.]+$/,''));
-      $('#rc-tbody').insertAdjacentHTML('beforeend', rcItemRow(0,{ descripcion:desc, cantidad:cant, precioEstim:precio }));
+      $('#rc-tbody').insertAdjacentHTML('beforeend', rcItemRow(0,{ descripcion:desc, cantidad:cant, precioEstim:precio, alicuotaIva:alic }));
       itemCount++;
     }catch(e){ fail++; }
   }
@@ -17604,6 +17627,7 @@ async function rcSave(){
     cantidad: Number(tr.querySelector('[data-f="cantidad"]').value||0),
     unidad: tr.querySelector('[data-f="unidad"]').value.trim() || null,
     precioEstim: tr.querySelector('[data-f="precioEstim"]').value!=='' ? Number(tr.querySelector('[data-f="precioEstim"]').value) : null,
+    alicuotaIva: Number(tr.querySelector('[data-f="alicuotaIva"]')?.value||0),
   })).filter(it=>it.descripcion && it.cantidad>0);
   if(!items.length) return toast('Agregá al menos un ítem','warn');
   const data={
@@ -17623,10 +17647,10 @@ async function rcSave(){
 async function rcDetalle(id){
   let r; try{ r=(await api('/api/remitos-compra/'+id)).data; }catch(e){ return toast(e.message,'error'); }
   const est=RC_ESTADOS[r.estado]||RC_ESTADOS.pendiente;
-  const filas=r.items.map(i=>`<tr><td>${esc(i.productoNombre||i.descripcion)}</td><td class="text-right">${fmtN(i.cantidad)} ${esc(i.unidad||'')}</td><td class="text-right">${fmtN(i.cantidadFacturada)}</td><td class="text-right">${fmtN(i.cantidadDevuelta)}</td><td class="text-right font-semibold ${i.pendiente>0?'text-amber-700':'text-emerald-700'}">${fmtN(i.pendiente)}</td><td class="text-right">${i.precioEstim!=null?'$ '+fmtN(i.precioEstim):'—'}</td></tr>`).join('');
+  const filas=r.items.map(i=>`<tr><td>${esc(i.productoNombre||i.descripcion)}</td><td class="text-right">${fmtN(i.cantidad)} ${esc(i.unidad||'')}</td><td class="text-right">${fmtN(i.cantidadFacturada)}</td><td class="text-right">${fmtN(i.cantidadDevuelta)}</td><td class="text-right font-semibold ${i.pendiente>0?'text-amber-700':'text-emerald-700'}">${fmtN(i.pendiente)}</td><td class="text-right">${i.precioEstim!=null?'$ '+fmtN(i.precioEstim):'—'}</td><td class="text-right">${i.alicuotaIva?i.alicuotaIva+'%':'—'}</td></tr>`).join('');
   openModal2({ title:`Remito ${r.nro}`, size:'max-w-3xl',
     body:`<div class="text-sm mb-2"><b>${esc(r.proveedorNombre||'—')}</b> · ${fmtDate(r.fecha)} · <span class="badge ${est.cls}">${est.lbl}</span>${r.numeroProveedor?` · N° prov. ${esc(r.numeroProveedor)}`:''}${r.depositoNombre?` · 📦 ${esc(r.depositoNombre)}`:''}</div>
-      <div class="kpi p-0 overflow-hidden"><table class="data"><thead><tr><th>Artículo</th><th class="text-right">Recibido</th><th class="text-right">Facturado</th><th class="text-right">Devuelto</th><th class="text-right">Pendiente</th><th class="text-right">P. estim.</th></tr></thead><tbody>${filas}</tbody></table></div>
+      <div class="kpi p-0 overflow-hidden"><table class="data"><thead><tr><th>Artículo</th><th class="text-right">Recibido</th><th class="text-right">Facturado</th><th class="text-right">Devuelto</th><th class="text-right">Pendiente</th><th class="text-right">P. estim. neto</th><th class="text-right">IVA</th></tr></thead><tbody>${filas}</tbody></table></div>
       ${r.observaciones?`<div class="text-xs text-slate-500 mt-2">📝 ${esc(r.observaciones)}</div>`:''}
       <div class="text-xs text-slate-500 mt-2">Valor pendiente de facturar: <b>$ ${fmtN(r.valorPendiente)}</b></div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cerrar</button>` });

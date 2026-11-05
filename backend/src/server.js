@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.393.0';
+const AGROCORE_VERSION = '2.395.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -7581,7 +7581,7 @@ function _serializeRemitoCompra(r) {
     return {
       id: i.id, productoId: i.productoId, descripcion: i.descripcion,
       cantidad: i.cantidad, cantidadFacturada: i.cantidadFacturada, cantidadDevuelta: i.cantidadDevuelta,
-      pendiente: pend, precioEstim: i.precioEstim, unidad: i.unidad || i.producto?.unidad || null,
+      pendiente: pend, precioEstim: i.precioEstim, alicuotaIva: i.alicuotaIva || 0, unidad: i.unidad || i.producto?.unidad || null,
       campoId: i.campoId, cabezas: i.cabezas,
       valorPendiente: pend * Number(i.precioEstim || 0),
       productoNombre: i.producto?.nombre || i.descripcion,
@@ -7636,6 +7636,7 @@ const remitoItemSchema = z.object({
   descripcion: z.string().min(1),
   cantidad: z.number().positive(),
   precioEstim: z.number().nullable().optional(),
+  alicuotaIva: z.number().nullable().optional(),
   unidad: z.string().nullable().optional(),
   campoId: z.string().nullable().optional(),
   cabezas: z.number().nullable().optional(),
@@ -7716,6 +7717,7 @@ app.post('/api/remitos-compra', requireCompany, requirePermission('compras:creat
           items: { create: input.items.map(it => ({
             productoId: it.productoId || null, descripcion: it.descripcion, cantidad: Number(it.cantidad),
             precioEstim: it.precioEstim != null ? Number(it.precioEstim) : null, unidad: it.unidad || null,
+            alicuotaIva: it.alicuotaIva != null ? Number(it.alicuotaIva) : 0,
             campoId: it.campoId || null, cabezas: it.cabezas != null ? Number(it.cabezas) : null,
           })) },
         },
@@ -7764,6 +7766,7 @@ app.put('/api/remitos-compra/:id', requireCompany, requirePermission('compras:cr
           items: { create: input.items.map(it => ({
             productoId: it.productoId || null, descripcion: it.descripcion, cantidad: Number(it.cantidad),
             precioEstim: it.precioEstim != null ? Number(it.precioEstim) : null, unidad: it.unidad || null,
+            alicuotaIva: it.alicuotaIva != null ? Number(it.alicuotaIva) : 0,
             campoId: it.campoId || null, cabezas: it.cabezas != null ? Number(it.cabezas) : null,
           })) },
         },
@@ -8175,9 +8178,13 @@ app.post('/api/cheques/:id/transferir-empresa', requireCompany, requirePermissio
     if (cheque.tipo !== 'terceros') return res.status(400).json({ ok: false, error: 'Solo se pueden transferir cheques de terceros.' });
     if (!/en[_ ]?cartera/i.test(cheque.estado || '')) return res.status(400).json({ ok: false, error: 'Solo se puede transferir un cheque que esta en cartera.' });
     if (d.empresaDestinoId === req.companyId) return res.status(400).json({ ok: false, error: 'Elegi una empresa distinta a la actual.' });
-    // La empresa destino tiene que pertenecer al mismo grupo economico del usuario.
-    const cids = await _cidsGrupo(req);
-    if (!cids.includes(d.empresaDestinoId)) return res.status(403).json({ ok: false, error: 'La empresa destino no pertenece a tu grupo.' });
+    // Excepcion de aislamiento SOLO para transferir cheques: la empresa destino puede ser
+    // cualquiera a la que pertenezca el usuario, incluidas las empresas AISLADAS (p. ej. una
+    // fabrica). El resto del aislamiento (catalogo, stock, flujo) no se toca.
+    const _cidsUsuario = req.user?.superAdmin
+      ? (await prisma.company.findMany({ where: { activo: { not: false } }, select: { id: true } })).map(c => c.id)
+      : [...new Set((req.user?.userCompanies || []).map(uc => uc.companyId))];
+    if (!_cidsUsuario.includes(d.empresaDestinoId)) return res.status(403).json({ ok: false, error: 'La empresa destino no pertenece a tus empresas.' });
     const destino = await prisma.company.findUnique({ where: { id: d.empresaDestinoId }, select: { id: true, name: true } });
     if (!destino) return res.status(404).json({ ok: false, error: 'Empresa destino no encontrada' });
     const origenNombre = (await prisma.company.findUnique({ where: { id: req.companyId }, select: { name: true } }))?.name || 'otra empresa';
