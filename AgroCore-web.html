@@ -3080,6 +3080,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'05/11/2026',
+      titulo:'📎 v2.393.0 — Remitos de compra: importar desde PDF o foto (uno o varios)',
+      desc:'Al cargar un <b>nuevo remito de compra</b> ahora hay un botón <b>📎 Importar PDF/foto</b>: elegís <b>uno o varios</b> archivos (el remito en PDF o una foto sacada con el celular) y el sistema <b>completa solo</b> el <b>proveedor</b> (lo busca por CUIT), la <b>fecha</b>, el <b>N° de remito</b> y agrega <b>un renglón por archivo</b> con la descripción, la cantidad y un precio estimado. Después revisás, ajustás lo que haga falta y guardás. Las fotos se leen con el Asistente IA (si está activado); los PDF con texto se leen siempre. Si algún archivo no se pudo leer o el proveedor no está en tu lista, te avisa para completarlo a mano.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/11/2026',
       titulo:'📦 v2.392.0 — Remitos de compra: cerrar los que no se van a facturar',
       desc:'Si recibiste mercadería con un remito que el proveedor <b>nunca va a facturar</b> (acuerdo, muestra, bonificación), ahora podés tocarle <b>🔒 Cerrar sin facturar</b>: la mercadería <b>queda en el stock</b> (no se toca el inventario ni la cuenta corriente), pero el remito <b>sale de los pendientes</b> y del reporte “Recibido no facturado”, así no molesta en la vista de pendientes reales. Pasa al estado <b>🔒 Cerrado</b> y, si al final llega la factura, con <b>🔓 Reabrir</b> vuelve a Pendiente para facturarlo normal. También funciona sobre remitos <b>Parciales</b> (cierra el saldo que no se factura). Ojo: <b>Cerrar</b> ≠ <b>Anular</b> — anular borra el stock; cerrar lo deja.' },
@@ -17511,6 +17514,12 @@ async function rcForm(id=null){
   openModal({ title: id?'Editar remito de compra':'Nuevo remito de compra', size:'max-w-5xl',
     body:`
       ${_rcDatalistHTML()}
+      <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-2 mb-3 flex items-center gap-2 flex-wrap">
+        <span class="text-sm">📄 ¿Tenés el remito en <b>PDF</b> o <b>foto</b>? Importalo (podés elegir <b>varios</b>) y se completan solos el proveedor, la fecha y los renglones.</span>
+        <input id="rc-import-files" type="file" accept="application/pdf,image/*" multiple class="hidden" onchange="rcImportFiles(this)"/>
+        <button type="button" class="btn btn-secondary text-sm" onclick="document.getElementById('rc-import-files').click()">📎 Importar PDF/foto</button>
+        <span id="rc-import-msg" class="text-xs text-slate-600"></span>
+      </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
         <div class="col-span-2"><label class="label">Proveedor</label><select id="rc-prov" class="input"><option value="">—</option>${provs.map(p=>`<option value="${esc(p.id)}" ${r&&r.proveedorId===p.id?'selected':''}>${esc(p.razonSocial||p.nombreFantasia||'')}</option>`).join('')}</select></div>
         <div><label class="label">N° remito (papel)</label><input id="rc-nprov" class="input" value="${esc(r?.numeroProveedor||'')}" placeholder="0001-00001234"/></div>
@@ -17529,6 +17538,61 @@ async function rcForm(id=null){
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="rcSave()">💾 Guardar remito</button>`
   });
   rcRecalc();
+}
+// Importa uno o varios remitos en PDF/foto y autopuebla proveedor/fecha/N° + un renglón por archivo.
+// Reutiliza el mismo parser de facturas (/api/admin/parse-factura-pdf): texto para PDF, IA-visión para fotos.
+async function rcImportFiles(input){
+  const files=Array.from(input?.files||[]);
+  if(!files.length) return;
+  const msg=$('#rc-import-msg'); const setMsg=(h)=>{ if(msg) msg.innerHTML=h; };
+  setMsg('<span class="text-blue-700">⏳ Leyendo '+files.length+' archivo(s)…</span>');
+  let okCount=0, itemCount=0, fail=0, firstHeader=null;
+  for(const f of files){
+    try{
+      const fd=new FormData(); fd.append('archivo', f);
+      const r=await fetch(API_BASE+'/api/admin/parse-factura-pdf',{ method:'POST',
+        headers:{ 'Authorization':'Bearer '+state.token, 'X-Company-Id':state.companyId }, body:fd });
+      const j=await r.json();
+      if(!r.ok||!j.ok) throw new Error(j.error||('Error '+r.status));
+      const d=j.data; okCount++; if(!firstHeader) firstHeader=d;
+      const cant=(d.cantidadItem!=null && Number(d.cantidadItem)>0)?Number(d.cantidadItem):1;
+      const base=d.netoGravado!=null?Number(d.netoGravado):(d.total!=null?Number(d.total):null);
+      const precio=(base!=null && cant>0)?+(base/cant).toFixed(2):null;
+      const desc=d.descripcionItem||('Remito '+(f.name||'').replace(/\.[^.]+$/,''));
+      $('#rc-tbody').insertAdjacentHTML('beforeend', rcItemRow(0,{ descripcion:desc, cantidad:cant, precioEstim:precio }));
+      itemCount++;
+    }catch(e){ fail++; }
+  }
+  // Sacar filas vacías (la que arranca por defecto) si ya cargamos algo real
+  if(itemCount){
+    $$('#rc-tbody tr[data-rci]').forEach(tr=>{
+      const b=tr.querySelector('[data-f="buscar"]')?.value.trim()||'';
+      const d=tr.querySelector('[data-f="descripcion"]')?.value.trim()||'';
+      if(!b && !d) tr.remove();
+    });
+  }
+  // Encabezado desde el primer archivo leído
+  if(firstHeader){
+    const d=firstHeader;
+    if(d.cuitEmisor){
+      const cu=String(d.cuitEmisor).replace(/\D/g,'');
+      const prov=(state.cache.proveedores||[]).find(p=>String(p.cuit||'').replace(/\D/g,'')===cu);
+      const sel=$('#rc-prov'); if(prov && sel) sel.value=prov.id;
+    }
+    if(d.fecha){ const fe=$('#rc-fecha'); if(fe) fe.value=String(d.fecha).slice(0,10); }
+    if(d.puntoVenta!=null && d.numero!=null){ const nr=$('#rc-nprov'); if(nr && !nr.value.trim()) nr.value=String(d.puntoVenta).padStart(4,'0')+'-'+String(d.numero).padStart(8,'0'); }
+  }
+  rcRecalc(); input.value='';
+  const parts=[];
+  if(okCount) parts.push('✅ '+itemCount+' renglón(es) de '+okCount+' archivo(s)');
+  if(fail) parts.push('⚠️ '+fail+' no se pudo(ieron) leer (cargalo a mano)');
+  const provSel=$('#rc-prov');
+  if(firstHeader && firstHeader.cuitEmisor && provSel && !provSel.value && firstHeader.razonSocialEmisor){
+    parts.push('ℹ️ Proveedor “'+esc(firstHeader.razonSocialEmisor)+'” no está en tu lista: elegilo o crealo');
+  }
+  setMsg(parts.length?parts.map(p=>'<span>'+p+'</span>').join(' · '):'<span class="text-amber-600">No se pudo leer ningún archivo. Cargalo a mano.</span>');
+  if(itemCount) toast('Importado: '+itemCount+' renglón(es). Revisá y guardá.','success');
+  else if(fail) toast('No pude leer el/los archivo(s). Probá con una foto más nítida o cargalo a mano.','warn');
 }
 async function rcSave(){
   const items=$$('#rc-tbody tr[data-rci]').map(tr=>({
