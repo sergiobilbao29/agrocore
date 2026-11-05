@@ -3081,8 +3081,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'05/11/2026',
-      titulo:'🧾 v2.390.0 — Comprobante interno: arreglado el alta (se veían todos los campos)',
-      desc:'Corregimos un detalle del <b>comprobante interno</b>: al tildarlo, antes se ocultaba de más y no se podían elegir el <b>proveedor/cliente</b>, la <b>fecha</b>, el <b>depósito</b> ni la condición. Ahora al tildar <b>Comprobante interno</b> se ocultan <b>solo</b> los campos fiscales (Comprobante, Tipo, Punto de venta, Número) y quedan visibles todos los demás, como corresponde.' },
+      titulo:'🧾 v2.391.0 — Arreglos en recibo/orden de pago (WhatsApp y logo) y fórmulas de molienda',
+      desc:'Cuatro mejoras: (1) En el <b>comprobante interno</b>, al tildarlo antes se ocultaba de más y no se podían elegir el <b>proveedor/cliente</b>, la <b>fecha</b> ni el <b>depósito</b>; ahora se ocultan <b>solo</b> los campos fiscales (Comprobante, Tipo, Punto de venta, Número) y el resto queda visible. (2) Al enviar un <b>Recibo</b> o una <b>Orden de pago</b> por <b>WhatsApp</b>, ahora se <b>descarga el PDF</b> automáticamente (igual que en las facturas) para adjuntarlo en el chat. (3) El <b>logo de la empresa</b> ahora también aparece en el PDF del <b>Recibo</b> y de la <b>Orden de pago</b>. (4) <b>Fórmulas de molienda</b>: se corrigió un error por el que un coproducto podía <b>no guardarse</b> si se dejaba el desplegable en su valor por defecto; ahora cada fila arranca en <b>“— Elegí el coproducto —”</b> y, si una fila tiene % pero no elegís el artículo, el sistema te avisa en vez de descartarla.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'05/11/2026',
       titulo:'🧾 v2.389.0 — Comprobante interno en Compras y Ventas (se factura después)',
       desc:'Ahora en <b>Ventas</b> y <b>Compras</b> podés cargar un <b>Comprobante interno</b>: tildás la opción al dar de alta y el sistema le asigna un <b>Nº interno propio</b> (ej. <b>CI-0007</b>), automático y editable. Mueve igual la <b>cuenta corriente y el stock</b>, pero sin factura fiscal ni ARCA. Cuando llega la factura (muchas veces se hace el comprobante un día y se factura después), tocás <b>🧾➡️ Facturar</b> y le cargás el <b>nº de factura</b> (tipo, punto de venta y número; y el CAE si corresponde) <b>sobre el mismo comprobante</b>: se conservan los dos números y <b>no se duplica</b> nada. En los listados de movimientos lo ves como <b>"🧾 Interno CI-####"</b> y sumamos un <b>buscador por Nº interno / comprobante</b> para encontrarlo al toque. Los comprobantes internos no entran al Libro IVA (no son fiscales).' },
@@ -23045,10 +23045,11 @@ function ordenPagoImprimir(){
   w.document.write('<html><head><title>Orden de pago</title><meta charset="utf-8">'+st+'</head><body>'+cont.outerHTML+'</body></html>');
   w.document.close(); w.focus(); setTimeout(()=>{ try{w.print();}catch(e){} }, 350);
 }
-function _opBuildPDF(op){
+async function _opBuildPDF(op){
   const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
   if(!jsPDFCtor){ toast('Todavía se está cargando la librería de PDF…','warn'); return null; }
   const emp=_opEmpresa();
+  let _logoData=''; if(emp.logoUrl){ try{ _logoData=await _urlToDataURL(emp.logoUrl); }catch(e){} }
   const cheques=op.cheques||[];
   const totalCh=op.totalCheques!=null?op.totalCheques:cheques.reduce((a,c)=>a+(Number(c.importe)||0),0);
   const rets=op.retenciones||[]; const totalRet=rets.reduce((a,r)=>a+(Number(r.importe)||0),0);
@@ -23060,10 +23061,12 @@ function _opBuildPDF(op){
   doc.setDrawColor(0); doc.setLineWidth(0.9); doc.rect(M, M, W-2*M, H-2*M);
   // Recuadros: empresa (izq) | ORDEN DE PAGO (der)
   doc.setLineWidth(0.7); doc.rect(M, y, emW, 60); doc.rect(M+emW, y, W-2*M-emW, 60);
-  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(emp.nombre, M+emW/2, y+18, {align:'center'});
+  let _opTx = M+8;
+  if(_logoData){ try{ const p=doc.getImageProperties(_logoData); const rr=Math.min(46/p.width, 42/p.height); const w=p.width*rr, h=p.height*rr; doc.addImage(_logoData,(p.fileType||'PNG').toUpperCase(), M+6, y+(60-h)/2, w, h, undefined, 'FAST'); _opTx = M+6+w+8; }catch(e){} }
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.text(emp.nombre, M+(_opTx-M)+((emW-(_opTx-M))/2), y+16, {align:'center'});
   doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
-  if(emp.direccion) doc.text('Direccion: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), M+8, y+36);
-  doc.text('I.V.A.: '+(emp.iva||'Resp. Inscripto')+(emp.cuit?'    C.U.I.T.: '+emp.cuit:''), M+8, y+50);
+  if(emp.direccion) doc.text('Direccion: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), _opTx, y+36);
+  doc.text('I.V.A.: '+(emp.iva||'Resp. Inscripto')+(emp.cuit?'    C.U.I.T.: '+emp.cuit:''), _opTx, y+50);
   const ox=M+emW+10;
   doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.text('ORDEN DE PAGO', ox, y+18);
   doc.setFont('helvetica','normal'); doc.setFontSize(9); let ry=y+34;
@@ -23127,9 +23130,9 @@ function _opBuildPDF(op){
   return doc;
 }
 function _opFilename(op){ return 'Orden-de-pago-'+String(op.proveedor||'prov').replace(/[^\w]+/g,'_')+'.pdf'; }
-function ordenPagoPDF(){
+async function ordenPagoPDF(){
   const op=state._opActual; if(!op) return;
-  const doc=_opBuildPDF(op); if(!doc) return;
+  const doc=await _opBuildPDF(op); if(!doc) return;
   doc.save(_opFilename(op));
 }
 function _opTexto(op){
@@ -23142,12 +23145,18 @@ function _opTexto(op){
   l.push('', 'TOTAL: '+fmt$(op.monto), 'Son: '+_opTextoLetras(op.monto)+'.'); if(op.obs) l.push('Obs: '+op.obs);
   return l.join('\n');
 }
-function ordenPagoWhatsApp(){ const op=state._opActual; if(!op) return; window.open('https://wa.me/?text='+encodeURIComponent(_opTexto(op)),'_blank'); }
+async function ordenPagoWhatsApp(){ const op=state._opActual; if(!op) return;
+  // wa.me no adjunta archivos: descargamos el PDF y avisamos para adjuntarlo a mano.
+  try { const doc=await _opBuildPDF(op); if(doc){ doc.save(_opFilename(op)); toast('📎 Descargamos el PDF de la orden de pago. Adjuntalo en el chat de WhatsApp (botón 📎).','info'); } } catch(e){}
+  const tel=((op.proveedorTel||op.proveedorTelefono)||'').replace(/[^0-9]/g,'');
+  const base=tel?('https://wa.me/'+(tel.startsWith('54')?tel:'549'+tel)):'https://wa.me/';
+  const texto=_opTexto(op)+'\n\n(Te adjunto la orden de pago en PDF.)';
+  setTimeout(()=>window.open(base+'?text='+encodeURIComponent(texto),'_blank'), 400); }
 async function ordenPagoEmail(){
   const op=state._opActual; if(!op) return;
   let to = op.proveedorEmail || '';
   if (!to) { to = (prompt('Email del proveedor para enviar la orden de pago:','')||'').trim(); if(!to) return; }
-  const doc=_opBuildPDF(op); const pdf = doc ? _pdfDocToBase64(doc) : null;
+  const doc=await _opBuildPDF(op); const pdf = doc ? _pdfDocToBase64(doc) : null;
   const emp=_opEmpresa();
   const asunto = 'Orden de pago — '+emp.nombre+(op.numero?' N° '+op.numero:'');
   const mensaje = 'Estimados,\n\nAdjuntamos la orden de pago'+(op.numero?' N° '+op.numero:'')+' por '+fmt$(op.monto)+'.\n\nSaludos,\n'+emp.nombre;
@@ -23287,17 +23296,20 @@ function _recHTML(r){
       <td style="text-align:center;width:45%"><div style="border-top:1px solid #94a3b8;padding-top:4px">Recibí conforme</div></td>
     </tr></table></div>`;
 }
-function _recBuildPDF(r){
+async function _recBuildPDF(r){
   const jsPDFCtor=(window.jspdf&&window.jspdf.jsPDF)||window.jsPDF;
   if(!jsPDFCtor){ toast('Todavía se está cargando la librería de PDF…','warn'); return null; }
   const emp=_opEmpresa();
+  let _logoData=''; if(emp.logoUrl){ try{ _logoData=await _urlToDataURL(emp.logoUrl); }catch(e){} }
   const doc=new jsPDFCtor({orientation:'portrait',unit:'pt',format:'a4'});
   const W=doc.internal.pageSize.getWidth(); const M=40; let y=44;
   doc.setDrawColor(51,65,85); doc.setLineWidth(0.8); doc.rect(M,y,330,54); doc.rect(M+330,y,W-M-M-330,54);
-  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text(emp.nombre, M+165, y+16, {align:'center'});
+  let _recTx = M+6;
+  if(_logoData){ try{ const p=doc.getImageProperties(_logoData); const rr=Math.min(42/p.width, 38/p.height); const w=p.width*rr, h=p.height*rr; doc.addImage(_logoData,(p.fileType||'PNG').toUpperCase(), M+5, y+(54-h)/2, w, h, undefined, 'FAST'); _recTx = M+5+w+6; }catch(e){} }
+  doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.text(emp.nombre, _recTx+((330-(_recTx-M))/2), y+16, {align:'center'});
   doc.setFont('helvetica','normal'); doc.setFontSize(8);
-  if(emp.direccion) doc.text('Direccion: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), M+6, y+32);
-  doc.text('IVA: '+(emp.iva||'Resp. Inscripto')+(emp.cuit?'   CUIT: '+emp.cuit:''), M+6, y+46);
+  if(emp.direccion) doc.text('Direccion: '+emp.direccion+(emp.localidad?' - '+emp.localidad:''), _recTx, y+32);
+  doc.text('IVA: '+(emp.iva||'Resp. Inscripto')+(emp.cuit?'   CUIT: '+emp.cuit:''), _recTx, y+46);
   doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text('RECIBO', M+340, y+16);
   doc.setFont('helvetica','normal'); doc.setFontSize(8); let ry=y+30;
   if(r.numero){ doc.text('Numero: '+r.numero, M+340, ry); ry+=11; }
@@ -23336,10 +23348,16 @@ function reciboAbrir(r){
       <button class="btn btn-primary" onclick="reciboEmail()">✉️ Email</button>` });
 }
 function reciboImprimir(){ const r=state._recActual; if(!r) return; const c=document.getElementById('rec-doc'); if(!c) return; const st='<style>@page{size:A4;margin:10mm} body{margin:0} #rec-doc{min-height:277mm;display:flex;flex-direction:column} #rec-doc>table:last-of-type{margin-top:auto}</style>'; const w=window.open('','_blank','width=820,height=980'); if(!w) return toast('Permití las ventanas emergentes','warn'); w.document.write('<html><head><title>Recibo</title><meta charset="utf-8">'+st+'</head><body>'+c.outerHTML+'</body></html>'); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch(e){}},350); }
-function reciboPDF(){ const r=state._recActual; if(!r) return; const doc=_recBuildPDF(r); if(!doc) return; doc.save(_recFilename(r)); }
+async function reciboPDF(){ const r=state._recActual; if(!r) return; const doc=await _recBuildPDF(r); if(!doc) return; doc.save(_recFilename(r)); }
 function _recTexto(r){ const emp=_opEmpresa(); return 'RECIBO — '+emp.nombre+(r.numero?' N° '+r.numero:'')+'\nFecha: '+fmtDate(r.fecha)+'\nRecibí de: '+(r.cliente||'')+'\nSuma: '+fmt$(r.monto)+'\nConcepto: '+((r.comprobantes||[]).map(c=>c.detalle).join(' · ')||'Cobro a cuenta'); }
-function reciboWhatsApp(){ const r=state._recActual; if(!r) return; const tel=(r.clienteTel||'').replace(/[^0-9]/g,''); const base=tel?('https://wa.me/'+(tel.startsWith('54')?tel:'549'+tel)):'https://wa.me/'; window.open(base+'?text='+encodeURIComponent(_recTexto(r)),'_blank'); }
-async function reciboEmail(){ const r=state._recActual; if(!r) return; let to=r.clienteEmail||''; if(!to){ to=(prompt('Email del cliente:','')||'').trim(); if(!to) return; } const doc=_recBuildPDF(r); const pdf=doc?_pdfDocToBase64(doc):null; const emp=_opEmpresa(); const asunto='Recibo de cobro — '+emp.nombre+(r.numero?' N° '+r.numero:''); const mensaje='Estimados,\n\nAdjuntamos el recibo por '+fmt$(r.monto)+'.\n\nSaludos,\n'+emp.nombre; await enviarComprobanteEmail({ to, asunto, mensaje, pdfBase64:pdf, filename:_recFilename(r), tipo:'recibo_cobro', documentoId:r._docId||null, textoFallback:_recTexto(r) }); }
+async function reciboWhatsApp(){ const r=state._recActual; if(!r) return;
+  // WhatsApp (wa.me) NO permite adjuntar archivos por link: solo texto. Por eso
+  // descargamos el PDF y avisamos para que lo adjunte a mano en el chat.
+  try { const doc=await _recBuildPDF(r); if(doc){ doc.save(_recFilename(r)); toast('📎 Descargamos el PDF del recibo. Adjuntalo en el chat de WhatsApp (botón 📎).','info'); } } catch(e){}
+  const tel=(r.clienteTel||'').replace(/[^0-9]/g,''); const base=tel?('https://wa.me/'+(tel.startsWith('54')?tel:'549'+tel)):'https://wa.me/';
+  const texto=_recTexto(r)+'\n\n(Te adjunto el recibo en PDF.)';
+  setTimeout(()=>window.open(base+'?text='+encodeURIComponent(texto),'_blank'), 400); }
+async function reciboEmail(){ const r=state._recActual; if(!r) return; let to=r.clienteEmail||''; if(!to){ to=(prompt('Email del cliente:','')||'').trim(); if(!to) return; } const doc=await _recBuildPDF(r); const pdf=doc?_pdfDocToBase64(doc):null; const emp=_opEmpresa(); const asunto='Recibo de cobro — '+emp.nombre+(r.numero?' N° '+r.numero:''); const mensaje='Estimados,\n\nAdjuntamos el recibo por '+fmt$(r.monto)+'.\n\nSaludos,\n'+emp.nombre; await enviarComprobanteEmail({ to, asunto, mensaje, pdfBase64:pdf, filename:_recFilename(r), tipo:'recibo_cobro', documentoId:r._docId||null, textoFallback:_recTexto(r) }); }
 async function reciboReabrir(id, accion){ try { const doc=(await api('/api/documentos/'+id)).data; const r=doc.datos||{}; r._docId=doc.id; if(accion==='email'){ state._recActual=r; return reciboEmail(); } reciboAbrir(r); } catch(e){ toast(e.message,'error'); } }
 
 async function pagoCobroConfirmar(modo) {
@@ -31277,7 +31295,7 @@ function molFormulaForm(id) {
           <span class="font-semibold text-sky-900">⬇️ LO QUE ENTRA</span>
           <span class="text-[11px] text-sky-700">· la materia prima y los insumos que se consumen al procesar</span>
         </div>
-        <div class="mb-2"><label class="label">Grano / materia prima de origen *</label><select id="mf-origen" class="input">${_molOptRol('materia_prima', f?.origenProductoId)}</select></div>
+        <div class="mb-2"><label class="label">Grano / materia prima de origen *</label><select id="mf-origen" class="input"><option value="" ${!f?.origenProductoId?'selected':''}>— Elegí el grano de origen —</option>${_molOptRol('materia_prima', f?.origenProductoId)}</select></div>
         <div class="label mb-1 mt-3">Insumos adicionales que se consumen <span class="text-slate-400 font-normal">(opcional — ej. un aditivo)</span></div>
         <div id="mf-entradas"></div>
         <button class="btn btn-ghost btn-sm mt-2" onclick="molEntradaAdd()">+ Agregar insumo de entrada</button>
@@ -31304,7 +31322,7 @@ function molItemsRender() {
   const its=(state._molEditItems||[]);
   if(box) box.innerHTML = its.map((it,idx)=> it.esEntrada ? '' : `
     <div class="grid grid-cols-12 gap-2 mb-2 items-center">
-      <select class="input col-span-4 text-sm" onchange="state._molEditItems[${idx}].productoId=this.value">${window._molOptP(it.productoId)}</select>
+      <select class="input col-span-4 text-sm" onchange="state._molEditItems[${idx}].productoId=this.value"><option value="" ${!it.productoId?'selected':''}>— Elegí el coproducto —</option>${window._molOptP(it.productoId)}</select>
       <input type="number" step="0.01" class="input col-span-2 text-sm" placeholder="%" value="${it.rendimientoPct??''}" oninput="state._molEditItems[${idx}].rendimientoPct=this.value;molItemsSuma()"/>
       <input type="number" step="0.01" class="input col-span-2 text-sm" placeholder="coef" value="${it.coefCosto??''}" oninput="state._molEditItems[${idx}].coefCosto=this.value"/>
       <select class="input col-span-2 text-sm" onchange="state._molEditItems[${idx}].depositoDestinoId=this.value">${window._molOptD(it.depositoDestinoId)}</select>
@@ -31326,6 +31344,9 @@ function molEntradaAdd(){ (state._molEditItems=state._molEditItems||[]).push({pr
 function molItemsSuma(){ const s=(state._molEditItems||[]).filter(i=>!i.esEntrada).reduce((a,i)=>a+(Number(i.rendimientoPct)||0),0); const el=$('#mf-suma'); if(el) el.innerHTML=`Suma de rendimientos: <b class="${Math.abs(s-100)<0.01?'text-emerald-700':'text-amber-600'}">${s}%</b>${Math.abs(s-100)<0.01?'':' (debería ser 100%)'}`; }
 async function molFormulaSave(id) {
   const nombre=$('#mf-nombre')?.value.trim(), origen=$('#mf-origen')?.value;
+  // Avisar si hay filas con % cargado pero sin coproducto/insumo elegido (así no se pierden en silencio).
+  const _sinProd=(state._molEditItems||[]).filter(i=>Number(i.rendimientoPct)>0 && !i.productoId);
+  if (_sinProd.length) return toast('Hay '+_sinProd.length+' fila(s) con % pero sin artículo elegido. Elegí el coproducto/insumo en cada fila (o borrala).','warn');
   const items=(state._molEditItems||[]).filter(i=>i.productoId&&Number(i.rendimientoPct)>0);
   if (!nombre||!origen) return toast('Nombre y grano de origen requeridos','warn');
   if (!items.filter(i=>!i.esEntrada).length) return toast('Cargá al menos un coproducto de salida','warn');
