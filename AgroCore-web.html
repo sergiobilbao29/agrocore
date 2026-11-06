@@ -3081,6 +3081,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/11/2026',
+      titulo:'✅ v2.400.0 — Versión consolidada',
+      desc:'Versión de mantenimiento que deja a todas las instancias en la misma base, con todo lo de los últimos días ya aplicado: <b>comprobante interno</b>, mejoras en <b>recibo/orden de pago</b> y <b>molienda</b>, <b>remitos de compra</b> (cerrar sin facturar, importar PDF/foto, IVA discriminado), <b>transferir cheques desde/hacia la fábrica</b>, <b>liquidación de sueldos combinada</b>, <b>canje con entregas parciales</b> y el módulo de <b>Proveedores de granos</b> (cuenta en kilos, plazos, alarma de vencidos y liquidar en pesos o por canje). Sin cambios nuevos.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'06/11/2026',
+      titulo:'🔧 v2.399.1 — Fix: Proveedores de granos no abría',
+      desc:'Corregimos un error por el que la pantalla <b>Proveedores de granos</b> mostraba un mensaje rojo al abrir (faltaba una referencia interna de la base de datos). Ya funciona normal.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
       titulo:'⏰ v2.399.0 — Proveedores de granos: plazos, alarma de vencidos y liquidar por canje',
       desc:'Mejoras al módulo de <b>Proveedores de granos</b>. <b>(1) Plazo:</b> cada entrega de kilos lleva un <b>plazo para liquidar</b> (contado / 15 / 30 / 60 días). <b>(2) Alarma de vencidos:</b> cuando pasa el plazo y esos kilos no se liquidaron, quedan marcados en <b>rojo ⏰</b> en la lista, con un aviso arriba (“hay X kg vencidos para liquidar”). Aunque un proveedor tenga 150.000 kg entregados, te muestra cuántos ya <b>cumplieron la fecha</b> (lo calcula por orden de vencimiento, los más viejos primero). <b>(3) Liquidar por canje:</b> además de liquidar en pesos, ahora podés liquidar <b>pagando con un producto</b> (ej. un camión de expeller): ingresás los kilos de ese producto y <b>sale del stock</b>, cancelando los kilos de soja. En el libro de cada proveedor ves el <b>vencimiento y el estado</b> (pendiente / vencido / liquidado) de cada entrega.' },
