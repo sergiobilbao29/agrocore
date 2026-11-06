@@ -3081,6 +3081,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
+      titulo:'🔁 v2.397.0 — Canje: entregas parciales (cuenta corriente en producto)',
+      desc:'En la <b>operación de canje</b> ahora separás lo que <b>corresponde entregar</b> (según la paridad) de lo que <b>entregás ahora</b>. Si entregás menos (ej. corresponden 44.000 kg y se lleva 35.000), el canje queda <b>Parcial</b> y guarda el <b>pendiente</b>; el stock descuenta solo lo realmente entregado. Cuando el cliente vuelve por el resto, tocás <b>📦 Entregar</b> en la fila y cargás la cantidad, hasta completar. Cada canje muestra <b>Corresponde / Entregado / Pendiente</b> y un estado (⏳ Sin entregar · ◐ Parcial · ✓ Entregado). Así queda la cuenta abierta de cuánto producto le debés a cada uno. <i>Los canjes ya cargados quedan como “Entregado” (ya habían descontado el total).</i>' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
       titulo:'➗ v2.396.0 — Liquidación de sueldos: pago combinado (dividido)',
       desc:'Al liquidar el sueldo de un empleado ahora el <b>Medio de pago</b> incluye la opción <b>➗ Combinado (dividido)</b>: cargás <b>varias partes</b> —por ejemplo una en <b>efectivo</b> y otra por <b>transferencia</b>, o sumando un <b>cheque</b>— cada una con su monto, y el total se suma solo. Cada parte genera su movimiento como corresponde (la parte en efectivo descuenta de la caja, la de cheque crea el cheque propio en cartera, la de transferencia queda registrada). Al <b>anular</b> la liquidación se revierten todas las partes. El saldo del mes (arrastre a favor/en contra) se calcula igual, sobre el total pagado.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/11/2026',
@@ -31580,12 +31583,20 @@ function molTabCanje() {
     <td class="text-xs">Ingresa <b>${esc(p.recibeNombre||'')}</b> → se lleva <b>${esc(p.entregaNombre||'')}</b></td>
     <td class="text-right">1 kg ingresa = <b>${r}</b> kg se lleva</td>
     <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="molParidadDel('${p.id}')">🗑️</button>`:''}</td></tr>`;}).join('');
-  const filasC = cs.map(c=>`<tr class="table-row">
+  const filasC = cs.map(c=>{
+    const pend = c.pendienteEntrega!=null ? c.pendienteEntrega : Math.max(0,(Number(c.entregaCant||0)-Number(c.entregadoCant||0)));
+    const est = c.estadoEntrega || (pend<=0.001?'completo':(Number(c.entregadoCant||0)>0.001?'parcial':'pendiente'));
+    const badge = est==='completo' ? '<span class="badge badge-green text-[10px]">✓ Entregado</span>'
+      : est==='parcial' ? '<span class="badge badge-amber text-[10px]">◐ Parcial</span>'
+      : '<span class="badge badge-yellow text-[10px]">⏳ Sin entregar</span>';
+    const entregaTxt = `Corresponde <b>${_molKg(c.entregaCant)}</b> · entregado <b>${_molKg(c.entregadoCant||0)}</b>${pend>0.001?` · <span class="text-amber-700">pend ${_molKg(pend)}</span>`:''} ${esc(c.entregaNombre||'')}`;
+    const btnEntregar = (pend>0.001 && can('stock:create')) ? `<button class="btn btn-ghost btn-xs text-emerald-700" onclick='molCanjeEntregar(${JSON.stringify(c.id)})'>📦 Entregar</button>` : '';
+    return `<tr class="table-row">
     <td class="text-xs">${fmtDate(c.fecha)}</td>
     <td><span class="badge ${c.tipo==='compra'?'badge-amber':'badge-blue'} text-[10px]">${c.tipo==='compra'?'Compra':'Venta'}</span> ${esc(c.contactoNombre||'')}</td>
-    <td class="text-xs">Entrega <b>${_molKg(c.entregaCant)}</b> ${esc(c.entregaNombre||'')}</td>
+    <td class="text-xs">${entregaTxt} ${badge}</td>
     <td class="text-xs">Recibe <b>${_molKg(c.recibeCant)}</b> ${esc(c.recibeNombre||'')}</td>
-    <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick="molCanjeAnular('${c.id}')">Anular</button>`:''}</td></tr>`).join('');
+    <td class="text-right whitespace-nowrap">${btnEntregar}${can('stock:delete')?` <button class="btn btn-ghost btn-xs text-red-600" onclick="molCanjeAnular('${c.id}')">Anular</button>`:''}</td></tr>`;}).join('');
   $('#mol-body').innerHTML = `
     <div class="bg-sky-50 border border-sky-200 rounded p-3 text-xs text-sky-900 mb-3">En el <b>canje</b> entregás un producto (ej. expeller/aceite) y recibís grano (soja), o al revés. Cargás la <b>paridad</b> (relación fija) y el sistema completa las cantidades y mueve el stock solo. Es en especie (kilos), no toca cuentas en pesos.</div>
     <div class="mb-3">${can('stock:create')?`<button class="btn btn-primary" onclick="molCanjeForm()">+ Nueva operación de canje</button>`:''}</div>
@@ -31656,9 +31667,11 @@ function molCanjeForm() {
         <div class="kpi"><div class="text-xs font-semibold text-red-600 mb-1">Entrego (sale de stock)</div>
           <label class="label">Producto *</label><select id="cj-entp" class="input">${_molProdOpts()}</select>
           <div class="grid grid-cols-2 gap-2 mt-2">
-            <div><label class="label">Cantidad *</label><input id="cj-entc" type="number" step="0.01" class="input" oninput="molCanjeCalc('ent')"/></div>
-            <div><label class="label">Depósito</label><select id="cj-entd" class="input">${optD('— general —')}</select></div>
+            <div><label class="label">Corresponde entregar *</label><input id="cj-entc" type="number" step="0.01" class="input" oninput="molCanjeCalc('ent')"/></div>
+            <div><label class="label">Entregado ahora</label><input id="cj-enth" type="number" step="0.01" class="input" oninput="this.dataset.manual='1'; molCanjePendPreview()"/></div>
           </div>
+          <div><label class="label mt-2">Depósito</label><select id="cj-entd" class="input">${optD('— general —')}</select></div>
+          <p id="cj-pend" class="text-[11px] text-amber-700 mt-1"></p>
         </div>
         <div class="kpi"><div class="text-xs font-semibold text-emerald-700 mb-1">Recibo (entra a stock)</div>
           <label class="label">Producto *</label><select id="cj-recp" class="input">${_molProdOpts()}</select>
@@ -31684,15 +31697,30 @@ function molCanjeAplicarPar() {
   $('#cj-entp').dataset.factor=p.factor; molCanjeCalc('ent');
 }
 function molCanjeCalc(src) {
-  const f=Number($('#cj-entp')?.dataset.factor||0); if(!(f>0)) return;
-  if(src==='ent'){ const e=Number($('#cj-entc')?.value||0); if(e>0&&$('#cj-recc')) $('#cj-recc').value=_round2b(e*f); }
-  else { const r=Number($('#cj-recc')?.value||0); if(r>0&&$('#cj-entc')) $('#cj-entc').value=_round2b(r/f); }
+  const f=Number($('#cj-entp')?.dataset.factor||0);
+  if(f>0){
+    if(src==='ent'){ const e=Number($('#cj-entc')?.value||0); if(e>0&&$('#cj-recc')) $('#cj-recc').value=_round2b(e*f); }
+    else { const r=Number($('#cj-recc')?.value||0); if(r>0&&$('#cj-entc')) $('#cj-entc').value=_round2b(r/f); }
+  }
+  // Por defecto "Entregado ahora" = lo que corresponde entregar (hasta que el usuario lo cambie a mano).
+  const enth=$('#cj-enth');
+  if(enth && enth.dataset.manual!=='1'){ enth.value=$('#cj-entc')?.value||''; }
+  molCanjePendPreview();
+}
+function molCanjePendPreview(){
+  const corr=Number($('#cj-entc')?.value||0), ent=Number($('#cj-enth')?.value||0);
+  const el=$('#cj-pend'); if(!el) return;
+  const pend=Math.round((corr-ent)*100)/100;
+  if(corr<=0){ el.textContent=''; return; }
+  if(pend>0.001) el.textContent='Queda pendiente de entregar: '+_molKg(pend);
+  else if(pend<-0.001) el.textContent='⚠️ Estás entregando más de lo que corresponde';
+  else el.textContent='Se entrega el total.';
 }
 function _round2b(n){ return Math.round((Number(n)||0)*100)/100; }
 async function molCanjeSave() {
   const body={ tipo:$('#cj-tipo')?.value, fecha:$('#cj-fecha')?.value?new Date($('#cj-fecha').value+'T12:00:00').toISOString():undefined,
     contactoTipo:($('#cj-tipo')?.value==='compra'?'proveedor':'cliente'), contactoId:$('#cj-contacto')?.value||null,
-    entregaProductoId:$('#cj-entp')?.value, entregaCant:Number($('#cj-entc')?.value||0), entregaDepositoId:$('#cj-entd')?.value||null,
+    entregaProductoId:$('#cj-entp')?.value, entregaCant:Number($('#cj-entc')?.value||0), entregadoCant:($('#cj-enth')?.value!==''&&$('#cj-enth')?.value!=null)?Number($('#cj-enth').value):undefined, entregaDepositoId:$('#cj-entd')?.value||null,
     recibeProductoId:$('#cj-recp')?.value, recibeCant:Number($('#cj-recc')?.value||0), recibeDepositoId:$('#cj-recd')?.value||null,
     observaciones:$('#cj-obs')?.value||null };
   if(!body.entregaProductoId||!body.recibeProductoId) return toast('Elegí los productos','warn');
@@ -31703,6 +31731,27 @@ async function molCanjeSave() {
   }catch(e){ toast(e.message,'error'); }
 }
 async function molCanjeAnular(id){ if(!confirm('¿Anular este canje? Se revierten los movimientos de stock.'))return; try{ await api('/api/canjes/'+id,{method:'DELETE'}); delete state.cache.stock; state._molCanjes=(await api('/api/canjes')).data||[]; toast('Canje anulado','success'); molRender(); }catch(e){ toast(e.message,'error'); } }
+function molCanjeEntregar(id){
+  const c=(state._molCanjes||[]).find(x=>x.id===id); if(!c) return;
+  const pend = c.pendienteEntrega!=null ? c.pendienteEntrega : Math.max(0,(Number(c.entregaCant||0)-Number(c.entregadoCant||0)));
+  const deps=(state.cache.depositos||[]).filter(d=>d.activo!==false);
+  openModal2({ title:'📦 Registrar entrega', size:'max-w-md',
+    body:`<div class="text-sm mb-2">Canje con <b>${esc(c.contactoNombre||'—')}</b>. Pendiente de entregar: <b>${_molKg(pend)}</b> ${esc(c.entregaNombre||'')}.</div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="label">Cantidad a entregar *</label><input id="cje-cant" type="number" step="0.01" class="input" value="${pend}"/></div>
+        <div><label class="label">Fecha</label><input id="cje-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+      </div>
+      <div class="mt-2"><label class="label">Depósito</label><select id="cje-dep" class="input"><option value="">— general —</option>${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}</select></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='molCanjeEntregarSave(${JSON.stringify(id)})'>📦 Entregar</button>` });
+}
+async function molCanjeEntregarSave(id){
+  const cant=Number($('#cje-cant')?.value||0);
+  if(!(cant>0)) return toast('Cargá la cantidad a entregar','warn');
+  const body={ cantidad:cant, fecha:$('#cje-fecha')?.value?new Date($('#cje-fecha').value+'T12:00:00').toISOString():undefined, depositoId:$('#cje-dep')?.value||null };
+  try{ await api('/api/canjes/'+id+'/entregar',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock;
+    state._molCanjes=(await api('/api/canjes')).data||[]; toast('Entrega registrada','success'); closeModal2(); molRender();
+  }catch(e){ toast(e.message,'error'); }
+}
 
 /* ============ CUENTA DE CANJE EN GRANO (saldo por cliente) ============ */
 const _ccKg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:2});

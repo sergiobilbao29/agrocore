@@ -3482,7 +3482,8 @@ model Canje {
   contactoId       String?
   contactoNombre   String?
   entregaProductoId String
-  entregaCant      Float
+  entregaCant      Float                      // lo que CORRESPONDE entregar (segun paridad)
+  entregadoCant    Float     @default(0)      // lo realmente entregado (puede ser parcial); el resto queda pendiente
   entregaDepositoId String?
   recibeProductoId  String
   recibeCant       Float

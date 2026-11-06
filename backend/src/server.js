@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.396.0';
+const AGROCORE_VERSION = '2.397.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12210,13 +12210,21 @@ app.get('/api/canjes', requireCompany, requirePermission('stock:read'), async (r
     const ids = new Set(); data.forEach(c => { ids.add(c.entregaProductoId); ids.add(c.recibeProductoId); });
     const prods = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: [...ids] } }, select: { id: true, nombre: true, unidad: true } });
     const pm = Object.fromEntries(prods.map(p => [p.id, p]));
-    res.json({ ok: true, data: data.map(c => ({ ...c, entregaNombre: pm[c.entregaProductoId]?.nombre || '', entregaUnidad: pm[c.entregaProductoId]?.unidad || '', recibeNombre: pm[c.recibeProductoId]?.nombre || '', recibeUnidad: pm[c.recibeProductoId]?.unidad || '' })) });
+    res.json({ ok: true, data: data.map(c => {
+      const pend = _round2(Number(c.entregaCant || 0) - Number(c.entregadoCant || 0));
+      const estado = pend <= 0.001 ? 'completo' : (Number(c.entregadoCant || 0) > 0.001 ? 'parcial' : 'pendiente');
+      return { ...c, pendienteEntrega: pend, estadoEntrega: estado, entregaNombre: pm[c.entregaProductoId]?.nombre || '', entregaUnidad: pm[c.entregaProductoId]?.unidad || '', recibeNombre: pm[c.recibeProductoId]?.nombre || '', recibeUnidad: pm[c.recibeProductoId]?.unidad || '' };
+    }) });
   } catch (e) { next(e); }
 });
 app.post('/api/canjes', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
     const d = req.body || {};
     const entCant = Number(d.entregaCant) || 0, recCant = Number(d.recibeCant) || 0;
+    // Lo realmente entregado AHORA (puede ser parcial). Si no viene, se entrega el total (compat.).
+    let entregado = (d.entregadoCant != null) ? Number(d.entregadoCant) || 0 : entCant;
+    if (entregado < 0) entregado = 0;
+    if (entregado > entCant) entregado = entCant;
     if (!d.entregaProductoId || !d.recibeProductoId) return res.status(400).json({ ok: false, error: 'Elegí el producto que entregás y el que recibís' });
     if (d.entregaProductoId === d.recibeProductoId) return res.status(400).json({ ok: false, error: 'El producto entregado y el recibido no pueden ser el mismo' });
     if (!(entCant > 0) || !(recCant > 0)) return res.status(400).json({ ok: false, error: 'Las cantidades entregada y recibida deben ser mayores a 0' });
@@ -12229,13 +12237,14 @@ app.post('/api/canjes', requireCompany, requirePermission('stock:create'), async
       const c = await tx.canje.create({ data: {
         companyId: req.companyId, fecha, tipo: d.tipo === 'compra' ? 'compra' : 'venta',
         contactoTipo: d.contactoTipo || null, contactoId: d.contactoId || null, contactoNombre,
-        entregaProductoId: d.entregaProductoId, entregaCant: entCant, entregaDepositoId: d.entregaDepositoId || null,
+        entregaProductoId: d.entregaProductoId, entregaCant: entCant, entregadoCant: entregado, entregaDepositoId: d.entregaDepositoId || null,
         recibeProductoId: d.recibeProductoId, recibeCant: recCant, recibeDepositoId: d.recibeDepositoId || null,
         factor: entCant > 0 ? _round2(recCant / entCant) : null, observaciones: d.observaciones || null, userId: req.user?.id || null,
       } });
       const ref = 'CANJE-' + c.id;
       const nom = contactoNombre ? (' · ' + contactoNombre) : '';
-      await tx.movimiento.create({ data: { companyId: req.companyId, productoId: d.entregaProductoId, fecha, tipo: 'egreso', motivo: 'canje', cantidad: entCant, depositoId: d.entregaDepositoId || null, referencia: ref, contraparteTipo: d.contactoTipo || null, contraparteId: d.contactoId || null, observaciones: 'Canje: entrega' + nom, userId: req.user?.id || null } });
+      // El egreso de stock es por lo REALMENTE entregado (parcial). El resto queda pendiente.
+      if (entregado > 0) await tx.movimiento.create({ data: { companyId: req.companyId, productoId: d.entregaProductoId, fecha, tipo: 'egreso', motivo: 'canje', cantidad: entregado, depositoId: d.entregaDepositoId || null, referencia: ref, contraparteTipo: d.contactoTipo || null, contraparteId: d.contactoId || null, observaciones: 'Canje: entrega' + nom, userId: req.user?.id || null } });
       await tx.movimiento.create({ data: { companyId: req.companyId, productoId: d.recibeProductoId, fecha, tipo: 'ingreso', motivo: 'canje', cantidad: recCant, depositoId: d.recibeDepositoId || null, referencia: ref, contraparteTipo: d.contactoTipo || null, contraparteId: d.contactoId || null, observaciones: 'Canje: recibe' + nom, userId: req.user?.id || null } });
       return c;
     });
@@ -12249,6 +12258,29 @@ app.delete('/api/canjes/:id', requireCompany, requirePermission('stock:delete'),
     await prisma.$transaction(async (tx) => {
       await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'CANJE-' + c.id } });
       await tx.canje.delete({ where: { id: c.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// Registrar una ENTREGA parcial adicional sobre un canje existente (descuenta stock del
+// producto entregado). Suma a entregadoCant; no puede superar lo que corresponde entregar.
+app.post('/api/canjes/:id/entregar', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const c = await prisma.canje.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!c) return res.status(404).json({ ok: false, error: 'Canje no encontrado' });
+    const cant = Number(req.body?.cantidad) || 0;
+    if (!(cant > 0)) return res.status(400).json({ ok: false, error: 'La cantidad a entregar debe ser mayor a 0' });
+    const pend = _round2(Number(c.entregaCant || 0) - Number(c.entregadoCant || 0));
+    if (cant > pend + 0.001) return res.status(400).json({ ok: false, error: `Solo quedan ${pend} pendientes de entregar` });
+    const fecha = req.body?.fecha ? new Date(req.body.fecha) : new Date();
+    const depositoId = req.body?.depositoId || c.entregaDepositoId || null;
+    await prisma.$transaction(async (tx) => {
+      await tx.movimiento.create({ data: {
+        companyId: req.companyId, productoId: c.entregaProductoId, fecha, tipo: 'egreso', motivo: 'canje',
+        cantidad: cant, depositoId, referencia: 'CANJE-' + c.id, contraparteTipo: c.contactoTipo || null, contraparteId: c.contactoId || null,
+        observaciones: 'Canje: entrega (parcial)' + (c.contactoNombre ? ' · ' + c.contactoNombre : ''), userId: req.user?.id || null,
+      } });
+      await tx.canje.update({ where: { id: c.id }, data: { entregadoCant: _round2(Number(c.entregadoCant || 0) + cant) } });
     });
     res.json({ ok: true });
   } catch (e) { next(e); }
