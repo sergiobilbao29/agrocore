@@ -3080,6 +3080,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
+      titulo:'➗ v2.396.0 — Liquidación de sueldos: pago combinado (dividido)',
+      desc:'Al liquidar el sueldo de un empleado ahora el <b>Medio de pago</b> incluye la opción <b>➗ Combinado (dividido)</b>: cargás <b>varias partes</b> —por ejemplo una en <b>efectivo</b> y otra por <b>transferencia</b>, o sumando un <b>cheque</b>— cada una con su monto, y el total se suma solo. Cada parte genera su movimiento como corresponde (la parte en efectivo descuenta de la caja, la de cheque crea el cheque propio en cartera, la de transferencia queda registrada). Al <b>anular</b> la liquidación se revierten todas las partes. El saldo del mes (arrastre a favor/en contra) se calcula igual, sobre el total pagado.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'05/11/2026',
       titulo:'↔️ v2.395.0 — Transferir cheques desde/hacia una empresa aislada (fábrica)',
       desc:'Ahora la <b>transferencia de cheques de terceros</b> (botón ↔️ en Tesorería → Cheques) puede cruzar hacia o desde una <b>empresa aislada</b> (por ejemplo una fábrica). Antes, si la empresa estaba aislada, el sistema no dejaba elegirla como origen ni destino (“la empresa destino no pertenece al grupo”). Esta excepción aplica <b>solo a la transferencia de cheques</b>: el resto del aislamiento de la empresa (catálogo, stock y flujo de fondos) <b>no cambia</b>. El cheque sale de la cartera de una y aparece en la de la otra, con la nota de dónde vino; no genera deuda entre empresas.' },
@@ -27540,6 +27543,7 @@ function empFichaRender() {
     const detalle = liq.medioPago==='efectivo' ? `Efectivo · caja ${esc(liq.caja||'—')}`
       : liq.medioPago==='cheque' ? `Cheque propio N° ${esc(liq.nroCheque||'—')}${liq.banco?` · ${esc(liq.banco)}`:''}`
       : liq.medioPago==='intercompany' ? `🔄 Intercompany (pagó otra firma del grupo)`
+      : liq.medioPago==='combinado' ? `➗ Combinado${liq.observaciones&&/Pago combinado:/.test(liq.observaciones)?` · ${esc(liq.observaciones.split('Pago combinado:').pop().trim())}`:''}`
       : `Transferencia${liq.banco?` · ${esc(liq.banco)}`:''}${liq.referencia?` · ${esc(liq.referencia)}`:''}`;
     const saldoTxt = Math.abs(saldoCierre) < 0.5 ? 'Cuenta al día' :
       (saldoCierre>0 ? `Queda a favor del empleado ${fmt$(saldoCierre)} (pasa al mes siguiente)` : `El empleado queda debiendo ${fmt$(-saldoCierre)} (pasa al mes siguiente)`);
@@ -28304,7 +28308,7 @@ function empLiqForm(periodo){
       </div>
       <div class="mb-3">
         <label class="label">Monto que pagás ahora *</label>
-        <input id="lq-monto" class="input" type="number" step="0.01" value="${sugerido}" oninput="empLiqSaldoPreview(${saldoAnt+neto})"/>
+        <input id="lq-monto" class="input" type="number" step="0.01" value="${sugerido}" data-apagar="${saldoAnt+neto}" oninput="empLiqSaldoPreview(${saldoAnt+neto})"/>
         <p id="lq-saldo-preview" class="text-xs text-slate-500 mt-1"></p>
       </div>
       <div class="grid grid-cols-2 gap-3">
@@ -28315,8 +28319,15 @@ function empLiqForm(periodo){
             <option value="cheque">Cheque propio</option>
             <option value="transferencia">Transferencia bancaria</option>
             <option value="tarjeta">💳 Tarjeta de crédito</option>
+            <option value="combinado">➗ Combinado (dividido)</option>
             ${(state.user?.companies||[]).length > 1 ? `<option value="intercompany">🔄 Intercompany (otra firma paga)</option>` : ''}
           </select>
+        </div>
+        <div id="lq-combinado-wrap" class="col-span-2" style="display:none">
+          <label class="label">Partes del pago (efectivo, transferencia, cheque…)</label>
+          <div id="lq-combo-rows"></div>
+          <button type="button" class="btn btn-secondary text-xs mt-1" onclick="empLiqComboAdd()">+ Agregar parte</button>
+          <p id="lq-combo-tot" class="text-xs mt-1 text-slate-500"></p>
         </div>
         <div id="lq-caja-wrap"><label class="label">${state.cajaPorTenedor?'Tenedor *':'Caja *'}</label>${catSelect('lq-caja','Caja','',{placeholder: state.cajaPorTenedor?'— Quién tiene la plata —':'— Elegir caja —'})}</div>
         <div id="lq-tarjeta-wrap">${tarjetaPicker('lq-tarjeta')}</div>
@@ -28349,15 +28360,24 @@ function empLiqMedioChange(){
   const medio=$('#lq-medio').value;
   const show=(id,v)=>{ const el=$('#'+id); if(el) el.style.display=v?'':'none'; };
   const esInterco = medio==='intercompany';
+  const esCombo = medio==='combinado';
   show('lq-caja-wrap',   medio==='efectivo');
   show('lq-tarjeta-wrap',medio==='tarjeta');
-  show('lq-banco-wrap',  medio!=='efectivo' && medio!=='tarjeta' && !esInterco);
+  show('lq-banco-wrap',  medio!=='efectivo' && medio!=='tarjeta' && !esInterco && !esCombo);
   show('lq-cheque-wrap', medio==='cheque');
   show('lq-ref-wrap',    medio==='transferencia');
+  show('lq-combinado-wrap', esCombo);
   const icWrap = $('#lq-interco-wrap');
   if (icWrap) {
     icWrap.style.display = esInterco ? '' : 'none';
     if (esInterco && !icWrap.dataset.built) { icWrap.innerHTML = intercoSubform('lq'); icWrap.dataset.built = '1'; }
+  }
+  // En combinado, el monto a pagar es la SUMA de las partes: lo autocompletamos.
+  const mi = $('#lq-monto'); if (mi) { mi.readOnly = esCombo; mi.classList.toggle('bg-slate-100', esCombo); }
+  if (esCombo) {
+    const rows = $('#lq-combo-rows');
+    if (rows && !rows.children.length) empLiqComboAdd();
+    empLiqComboTot();
   }
   $('#lq-hint').textContent = medio==='efectivo'
     ? 'Se va a registrar un egreso por el neto en la caja elegida de Control de Efectivo.'
@@ -28365,9 +28385,47 @@ function empLiqMedioChange(){
     ? 'Se registra el pago a nombre de la tarjeta (como una caja en Control de Efectivo). No impacta cuentas bancarias.'
     : medio==='cheque'
     ? 'Se va a generar un cheque propio en cartera a nombre del empleado.'
+    : esCombo
+    ? 'Pago dividido: cargá cada parte (efectivo, transferencia, cheque…). El total se suma solo y es lo que se paga.'
     : esInterco
     ? 'Otra firma del grupo paga el sueldo: esta empresa le queda debiendo y se mueve el recurso real de la otra firma.'
     : 'Sólo queda registrada la transferencia; no afecta otros módulos.';
+}
+function empLiqComboExtra(medio, idx){
+  if (medio==='efectivo') return `<label class="label text-xs">${state.cajaPorTenedor?'Tenedor':'Caja'}</label>${catSelect('lqc-caja-'+idx,'Caja','',{placeholder: state.cajaPorTenedor?'— Quién —':'— Caja —'})}`;
+  if (medio==='tarjeta') return `<label class="label text-xs">Tarjeta</label>${tarjetaPicker('lqc-tarj-'+idx)}`;
+  if (medio==='cheque') return `<div class="grid grid-cols-2 gap-1"><div><label class="label text-xs">Banco</label>${catSelect('lqc-banco-'+idx,'Banco','',{placeholder:'— Banco —'})}</div><div><label class="label text-xs">N° cheque</label><input class="input text-sm" data-cf="nroCheque"/></div></div>`;
+  return `<div class="grid grid-cols-2 gap-1"><div><label class="label text-xs">Banco</label>${catSelect('lqc-banco-'+idx,'Banco','',{placeholder:'— Banco —'})}</div><div><label class="label text-xs">N° oper.</label><input class="input text-sm" data-cf="ref"/></div></div>`;
+}
+function empLiqComboAdd(){
+  const rows = $('#lq-combo-rows'); if (!rows) return;
+  const idx = (state._lqComboIdx = (state._lqComboIdx||0) + 1);
+  const div = document.createElement('div');
+  div.className = 'grid grid-cols-12 gap-2 mb-1 items-end'; div.dataset.comboRow='1'; div.dataset.idx=idx;
+  div.innerHTML = `
+    <div class="col-span-3"><label class="label text-xs">Medio</label>
+      <select class="input text-sm" data-cf="medio" onchange="empLiqComboRowChange(this)">
+        <option value="efectivo">Efectivo</option>
+        <option value="transferencia">Transferencia</option>
+        <option value="cheque">Cheque propio</option>
+        <option value="tarjeta">💳 Tarjeta</option>
+      </select></div>
+    <div class="col-span-3"><label class="label text-xs">Monto</label><input type="number" step="0.01" class="input text-sm" data-cf="monto" oninput="empLiqComboTot()"/></div>
+    <div class="col-span-5" data-cf-extra>${empLiqComboExtra('efectivo',idx)}</div>
+    <div class="col-span-1 text-right"><button type="button" class="btn btn-ghost text-red-600" onclick="this.closest('[data-combo-row]').remove(); empLiqComboTot()">×</button></div>`;
+  rows.appendChild(div);
+}
+function empLiqComboRowChange(sel){
+  const row = sel.closest('[data-combo-row]'); if (!row) return;
+  const extra = row.querySelector('[data-cf-extra]');
+  if (extra) extra.innerHTML = empLiqComboExtra(sel.value, row.dataset.idx);
+}
+function empLiqComboTot(){
+  let sum=0;
+  $$('#lq-combo-rows [data-combo-row]').forEach(r=>{ sum += Number(r.querySelector('[data-cf="monto"]')?.value||0); });
+  sum = Math.round(sum*100)/100;
+  const el=$('#lq-combo-tot'); if(el) el.textContent = 'Total del pago: '+fmt$(sum);
+  const mi=$('#lq-monto'); if(mi){ mi.value = sum; if(typeof empLiqSaldoPreview==='function'){ const ap = Number(mi.dataset.apagar||0); if(ap) empLiqSaldoPreview(ap); } }
 }
 async function empLiqSave(periodo){
   const empId=state.empFichaId;
@@ -28390,6 +28448,26 @@ async function empLiqSave(periodo){
   if(medio==='efectivo'&&!data.caja) return toast('Elegí la caja de la que sale el pago','warn');
   if(medio==='tarjeta'&&!data.caja) return toast('Elegí la tarjeta de crédito','warn');
   if(medio==='cheque'&&!data.nroCheque) return toast('Ingresá el número de cheque','warn');
+  if(medio==='combinado'){
+    const pagos=[];
+    let err='';
+    $$('#lq-combo-rows [data-combo-row]').forEach(row=>{
+      const idx=row.dataset.idx;
+      const m=row.querySelector('[data-cf="medio"]')?.value;
+      const monto=Number(row.querySelector('[data-cf="monto"]')?.value||0);
+      if(!(monto>0)) return;
+      const p={medioPago:m, monto};
+      if(m==='efectivo'){ p.caja=document.getElementById('lqc-caja-'+idx)?.value||null; if(!p.caja) err='Elegí la caja en la parte en efectivo.'; }
+      else if(m==='tarjeta'){ p.caja=document.getElementById('lqc-tarj-'+idx)?.value?.trim()||null; if(!p.caja) err='Elegí la tarjeta.'; }
+      else if(m==='cheque'){ p.banco=document.getElementById('lqc-banco-'+idx)?.value?.trim()||null; p.nroCheque=row.querySelector('[data-cf="nroCheque"]')?.value?.trim()||null; if(!p.nroCheque) err='Ingresá el N° de cheque en la parte con cheque.'; }
+      else { p.banco=document.getElementById('lqc-banco-'+idx)?.value?.trim()||null; p.referencia=row.querySelector('[data-cf="ref"]')?.value?.trim()||null; }
+      pagos.push(p);
+    });
+    if(!pagos.length) return toast('Cargá al menos una parte con monto en el pago combinado','warn');
+    if(err) return toast(err,'warn');
+    data.pagos=pagos;
+    data.montoPagado=Math.round(pagos.reduce((a,p)=>a+p.monto,0)*100)/100;
+  }
   if(medio==='intercompany'){
     const ic = intercoLeerRecurso('lq');
     if(!ic.empresaOrigenId) return toast('Elegí la firma que paga el sueldo','warn');

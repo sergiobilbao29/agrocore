@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.395.0';
+const AGROCORE_VERSION = '2.396.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10021,11 +10021,20 @@ app.get('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('r
 const liqSchema = z.object({
   periodo: z.string().regex(/^\d{4}-\d{2}$/, 'Período inválido (YYYY-MM)'),
   fecha: zFecha,
-  medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'tarjeta', 'intercompany']),
+  medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'tarjeta', 'intercompany', 'combinado']),
   caja: z.string().nullable().optional(),
   banco: z.string().nullable().optional(),
   nroCheque: z.string().nullable().optional(),
   referencia: z.string().nullable().optional(),
+  // Pago COMBINADO (dividido): una parte en efectivo, otra en transferencia/cheque, etc.
+  pagos: z.array(z.object({
+    medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'tarjeta']),
+    monto: z.coerce.number().positive(),
+    caja: z.string().nullable().optional(),       // caja (efectivo) o tarjeta
+    banco: z.string().nullable().optional(),
+    nroCheque: z.string().nullable().optional(),
+    referencia: z.string().nullable().optional(), // N° operación (transferencia)
+  })).optional(),
   incluirSueldoBase: z.boolean().optional(),
   // Monto realmente pagado (cuenta corriente): puede diferir del neto del mes; la
   // diferencia queda como saldo a favor/en contra que arrastra al mes siguiente.
@@ -10076,6 +10085,13 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
          (uc.role?.permissions || []).includes('*:*')));
       if (!tienePerm) return res.status(403).json({ ok: false, error: 'No tenés permiso finanzas:intercompany' });
     }
+    if (d.medioPago === 'combinado') {
+      if (!d.pagos || !d.pagos.length) return res.status(400).json({ ok: false, error: 'Agregá al menos un medio de pago en el pago combinado.' });
+      for (const p of d.pagos) {
+        if ((p.medioPago === 'efectivo' || p.medioPago === 'tarjeta') && !p.caja) return res.status(400).json({ ok: false, error: p.medioPago === 'tarjeta' ? 'Elegí la tarjeta en cada parte del pago combinado.' : 'Elegí la caja en cada parte en efectivo del pago combinado.' });
+        if (p.medioPago === 'cheque' && !p.nroCheque) return res.status(400).json({ ok: false, error: 'Ingresá el número de cheque en la parte con cheque del pago combinado.' });
+      }
+    }
 
     const movs = await prisma.movimientoEmpleado.findMany({
       where: { empleadoId: emp.id, companyId: req.companyId, periodo: d.periodo },
@@ -10095,7 +10111,10 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
     const neto = totalGanancias - totalGastos;
     // Cuenta corriente: el monto que realmente se paga puede diferir del neto del
     // mes (la diferencia arrastra como saldo). Si no se especifica, se paga el neto.
-    const pagado = (d.montoPagado != null) ? Number(d.montoPagado) : neto;
+    // En COMBINADO el monto pagado es la suma de las partes.
+    const pagado = (d.medioPago === 'combinado')
+      ? Math.round((d.pagos || []).reduce((a, p) => a + Number(p.monto || 0), 0) * 100) / 100
+      : ((d.montoPagado != null) ? Number(d.montoPagado) : neto);
 
     const nombreCompleto = `${emp.apellido}, ${emp.nombre}`;
     const liquidacion = await prisma.$transaction(async (tx) => {
@@ -10135,6 +10154,32 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
           cajaOrigen: d.cajaOrigen, chequeIdOrigen: d.chequeIdOrigen, bancoCuentaIdOrigen: d.bancoCuentaIdOrigen,
         });
         intercompanyRef = interRef;
+      }
+
+      // Pago COMBINADO (dividido): una parte por cada medio. Cada movimiento generado
+      // se etiqueta con [liq:ref] en observaciones para poder revertirlo al anular.
+      let combinadoRef = null;
+      if (pagado > 0 && d.medioPago === 'combinado') {
+        combinadoRef = `liq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+        const tag = `[liq:${combinadoRef}]`;
+        for (const p of (d.pagos || [])) {
+          const monto = Number(p.monto || 0);
+          if (!(monto > 0)) continue;
+          if (p.medioPago === 'efectivo' || p.medioPago === 'tarjeta') {
+            await tx.efectivo.create({ data: {
+              companyId: req.companyId, fecha: d.fecha, tipo: 'egreso',
+              concepto: `Sueldo ${nombreCompleto} · ${d.periodo}`, monto, caja: p.caja, clasificacion: 'empresa',
+              observaciones: `Liquidación de sueldo ${d.periodo} (combinado)` + (p.medioPago === 'tarjeta' ? ' · Tarjeta: ' + (p.caja || '') : '') + ' ' + tag,
+            }});
+          } else if (p.medioPago === 'cheque') {
+            await tx.cheque.create({ data: {
+              companyId: req.companyId, tipo: 'propio', banco: p.banco || null, nroCheque: p.nroCheque,
+              fechaEmision: d.fecha, fechaPago: d.fecha, monto, beneficiario: nombreCompleto, estado: 'en_cartera',
+              observaciones: `Liquidación de sueldo ${d.periodo} (combinado) ${tag}`,
+            }});
+          }
+          // transferencia: queda sólo registrada (como el medio 'transferencia' simple), no mueve otro módulo.
+        }
       }
 
       // Sólo generamos el pago en otros módulos si el monto pagado es positivo.
@@ -10185,11 +10230,13 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
           caja: (d.medioPago === 'efectivo' || d.medioPago === 'tarjeta') ? d.caja : null,
           banco: (d.medioPago !== 'efectivo' && d.medioPago !== 'tarjeta') ? (d.banco || null) : null,
           nroCheque: d.medioPago === 'cheque' ? d.nroCheque : null,
-          referencia: d.referencia || null,
+          referencia: (d.medioPago === 'combinado') ? combinadoRef : (d.referencia || null),
           efectivoId,
           chequeId,
           intercompanyRef,
-          observaciones: d.observaciones || null,
+          observaciones: (d.medioPago === 'combinado')
+            ? [(d.observaciones || ''), 'Pago combinado: ' + (d.pagos || []).map(p => `${_round2(p.monto)} ${p.medioPago}`).join(' + ')].filter(Boolean).join(' · ')
+            : (d.observaciones || null),
         },
       });
 
@@ -10232,6 +10279,12 @@ app.delete('/api/empleados/:id/liquidaciones/:liqId', requireCompany, requirePer
       }
       if (liq.chequeId) {
         await tx.cheque.deleteMany({ where: { id: liq.chequeId, companyId: req.companyId } });
+      }
+      // Pago combinado: borrar los movimientos (efectivo/cheque) etiquetados con [liq:ref].
+      if (liq.medioPago === 'combinado' && liq.referencia) {
+        const tag = `[liq:${liq.referencia}]`;
+        await tx.efectivo.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } });
+        await tx.cheque.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } });
       }
       // Reversa del pago Intercompany: se identifica por la referencia guardada.
       if (liq.intercompanyRef) {
