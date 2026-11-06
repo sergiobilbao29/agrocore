@@ -3545,8 +3545,13 @@ model GranoCtaMov {
   kilos           Float    @default(0)   // kilos del movimiento (siempre positivo)
   signo           Int      @default(1)   // +1 entrega, -1 liquidacion (ajuste ±)
   kilosNeto       Float    @default(0)   // kilos*signo (para sumar el saldo disponible)
-  precio          Float?                 // $/kg (liquidacion)
-  importe         Float?                 // kilos*precio (liquidacion)
+  precio          Float?                 // $/kg (liquidacion en pesos)
+  importe         Float?                 // kilos*precio (liquidacion en pesos)
+  plazoDias       Int?                   // plazo para liquidar (0 contado / 15 / 30 / 60...) (entrega)
+  vencimiento     DateTime?              // fecha limite para liquidar esos kilos (entrega)
+  modoLiquidacion String?                // 'pesos' | 'canje' (liquidacion)
+  productoEntregaId String?              // producto entregado como pago en canje (ej. expeller)
+  kilosEntregaProd  Float?               // kilos del producto entregado (liquidacion canje)
   numeroComprobante String?              // nro de remito/comprobante (entrega)
   depositoId      String?
   generaStock     Boolean  @default(false) // entrega con ingreso de stock de grano

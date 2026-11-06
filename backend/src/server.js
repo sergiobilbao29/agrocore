@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.398.0';
+const AGROCORE_VERSION = '2.399.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12397,23 +12397,49 @@ app.delete('/api/canje-cta/:id', requireCompany, requirePermission('stock:delete
 // (tipo 'liquidacion', -) a un precio. Saldo = kilos disponibles sin liquidar.
 // La liquidacion genera la deuda en $ (CtaCte haber del proveedor) por kilos*precio.
 // ============================================================
-// Saldo en kilos por proveedor de granos (entregado / liquidado / disponible).
+// Asigna por FIFO las liquidaciones sobre las entregas (más viejas primero por vencimiento).
+// Devuelve, por entrega, cuánto queda pendiente de liquidar y si está vencida.
+function _granosFifo(movsProv, hoy) {
+  const entregas = movsProv.filter(m => m.tipo === 'entrega')
+    .map(m => ({ id: m.id, kilos: Number(m.kilos || 0), vto: m.vencimiento ? new Date(m.vencimiento) : null, fecha: new Date(m.fecha), pendiente: Number(m.kilos || 0) }))
+    .sort((a, b) => (a.vto || a.fecha) - (b.vto || b.fecha));
+  let liq = movsProv.filter(m => m.tipo === 'liquidacion').reduce((a, m) => a + Number(m.kilos || 0), 0);
+  // los ajustes negativos también consumen disponible (como una salida)
+  liq += movsProv.filter(m => m.tipo === 'ajuste' && Number(m.kilosNeto || 0) < 0).reduce((a, m) => a + Math.abs(Number(m.kilosNeto || 0)), 0);
+  for (const e of entregas) {
+    if (liq <= 0) break;
+    const usa = Math.min(e.pendiente, liq);
+    e.pendiente -= usa; liq -= usa;
+  }
+  let vencido = 0, proximoVto = null;
+  for (const e of entregas) {
+    if (e.pendiente <= 0.001) continue;
+    if (e.vto && e.vto <= hoy) vencido += e.pendiente;
+    else if (e.vto) { if (!proximoVto || e.vto < proximoVto) proximoVto = e.vto; }
+  }
+  return { vencido: Math.round(vencido * 100) / 100, proximoVto };
+}
+// Saldo en kilos por proveedor de granos (entregado / liquidado / disponible / vencido).
 app.get('/api/granos-cta/saldos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
-    const movs = await prisma.granoCtaMov.findMany({ where: { companyId: req.companyId }, select: { proveedorId: true, proveedorNombre: true, tipo: true, kilos: true, kilosNeto: true, importe: true, fecha: true } });
+    const movs = await prisma.granoCtaMov.findMany({ where: { companyId: req.companyId }, select: { id: true, proveedorId: true, proveedorNombre: true, tipo: true, kilos: true, kilosNeto: true, importe: true, fecha: true, vencimiento: true } });
     const by = {};
     for (const m of movs) {
       const k = m.proveedorId;
-      if (!by[k]) by[k] = { proveedorId: k, proveedorNombre: m.proveedorNombre, entregado: 0, liquidado: 0, disponible: 0, importeLiquidado: 0, ultima: null };
+      if (!by[k]) by[k] = { proveedorId: k, proveedorNombre: m.proveedorNombre, entregado: 0, liquidado: 0, disponible: 0, importeLiquidado: 0, ultima: null, _movs: [] };
       if (m.tipo === 'entrega') by[k].entregado += Number(m.kilos || 0);
       else if (m.tipo === 'liquidacion') { by[k].liquidado += Number(m.kilos || 0); by[k].importeLiquidado += Number(m.importe || 0); }
       by[k].disponible += Number(m.kilosNeto || 0);
+      by[k]._movs.push(m);
       if (m.proveedorNombre) by[k].proveedorNombre = m.proveedorNombre;
       if (!by[k].ultima || new Date(m.fecha) > new Date(by[k].ultima)) by[k].ultima = m.fecha;
     }
+    const hoy = new Date();
     const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-    const data = Object.values(by).map(x => ({ ...x, entregado: r2(x.entregado), liquidado: r2(x.liquidado), disponible: r2(x.disponible), importeLiquidado: r2(x.importeLiquidado) }))
-      .sort((a, b) => (a.proveedorNombre || '').localeCompare(b.proveedorNombre || ''));
+    const data = Object.values(by).map(x => {
+      const f = _granosFifo(x._movs, hoy);
+      return { proveedorId: x.proveedorId, proveedorNombre: x.proveedorNombre, entregado: r2(x.entregado), liquidado: r2(x.liquidado), disponible: r2(x.disponible), importeLiquidado: r2(x.importeLiquidado), ultima: x.ultima, vencidoSinLiquidar: f.vencido, proximoVto: f.proximoVto };
+    }).sort((a, b) => (a.proveedorNombre || '').localeCompare(b.proveedorNombre || ''));
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
@@ -12423,11 +12449,27 @@ app.get('/api/granos-cta', requireCompany, requirePermission('stock:read'), asyn
     const where = { companyId: req.companyId };
     if (req.query.proveedorId) where.proveedorId = String(req.query.proveedorId);
     const movs = await prisma.granoCtaMov.findMany({ where, orderBy: [{ fecha: 'asc' }, { createdAt: 'asc' }] });
-    const ids = [...new Set(movs.map(m => m.productoId).filter(Boolean))];
+    const ids = [...new Set(movs.flatMap(m => [m.productoId, m.productoEntregaId]).filter(Boolean))];
     const prods = ids.length ? await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: ids } }, select: { id: true, nombre: true } }) : [];
     const pm = Object.fromEntries(prods.map(p => [p.id, p]));
+    // Estado por entrega (FIFO): cuánto de cada entrega queda sin liquidar.
+    const hoy = new Date();
+    const entregasOrd = movs.filter(m => m.tipo === 'entrega').map(m => ({ id: m.id, pend: Number(m.kilos || 0), vto: m.vencimiento ? new Date(m.vencimiento) : null, fecha: new Date(m.fecha) })).sort((a, b) => (a.vto || a.fecha) - (b.vto || b.fecha));
+    let liq = movs.filter(m => m.tipo === 'liquidacion').reduce((a, m) => a + Number(m.kilos || 0), 0)
+            + movs.filter(m => m.tipo === 'ajuste' && Number(m.kilosNeto || 0) < 0).reduce((a, m) => a + Math.abs(Number(m.kilosNeto || 0)), 0);
+    const pendById = {};
+    for (const e of entregasOrd) { const usa = Math.min(e.pend, Math.max(0, liq)); e.pend -= usa; liq -= usa; pendById[e.id] = e.pend; }
     let acc = 0;
-    const data = movs.map(m => { acc += Number(m.kilosNeto || 0); return { ...m, productoNombre: pm[m.productoId]?.nombre || '', saldoAcum: Math.round(acc * 100) / 100 }; });
+    const data = movs.map(m => {
+      acc += Number(m.kilosNeto || 0);
+      let estadoLiq = null;
+      if (m.tipo === 'entrega') {
+        const pend = pendById[m.id] != null ? Math.round(pendById[m.id] * 100) / 100 : Number(m.kilos || 0);
+        estadoLiq = pend <= 0.001 ? 'liquidado' : ((m.vencimiento && new Date(m.vencimiento) <= hoy) ? 'vencido' : (pend < Number(m.kilos || 0) - 0.001 ? 'parcial' : 'pendiente'));
+        return { ...m, productoNombre: pm[m.productoId]?.nombre || '', productoEntregaNombre: pm[m.productoEntregaId]?.nombre || '', pendienteLiq: pend, estadoLiq, saldoAcum: Math.round(acc * 100) / 100 };
+      }
+      return { ...m, productoNombre: pm[m.productoId]?.nombre || '', productoEntregaNombre: pm[m.productoEntregaId]?.nombre || '', saldoAcum: Math.round(acc * 100) / 100 };
+    });
     res.json({ ok: true, data, disponible: Math.round(acc * 100) / 100 });
   } catch (e) { next(e); }
 });
@@ -12441,10 +12483,14 @@ app.post('/api/granos-cta', requireCompany, requirePermission('stock:create'), a
     const kilos = Math.abs(Number(d.kilos) || 0);
     const proveedorNombre = d.proveedorNombre || await _nombreContacto(req, 'proveedor', d.proveedorId);
     let signo = 1, kilosNeto = 0, precio = null, importe = null, generaStock = false, movTipo = null;
+    let plazoDias = null, vencimiento = null, modoLiquidacion = null, productoEntregaId = null, kilosEntregaProd = null;
     if (tipo === 'entrega') {
       if (!(kilos > 0)) return res.status(400).json({ ok: false, error: 'Los kilos entregados deben ser mayores a 0' });
       signo = 1; kilosNeto = kilos;
       generaStock = d.generaStock !== false && !!d.productoId; movTipo = 'ingreso';
+      plazoDias = (d.plazoDias != null && d.plazoDias !== '') ? Number(d.plazoDias) : null;
+      vencimiento = d.vencimiento ? new Date(d.vencimiento) : null;
+      if (!vencimiento && plazoDias != null && plazoDias >= 0) { vencimiento = new Date(fecha); vencimiento.setDate(vencimiento.getDate() + plazoDias); }
     } else if (tipo === 'liquidacion') {
       if (!(kilos > 0)) return res.status(400).json({ ok: false, error: 'Los kilos a liquidar deben ser mayores a 0' });
       // No se puede liquidar más de lo disponible.
@@ -12452,8 +12498,15 @@ app.post('/api/granos-cta', requireCompany, requirePermission('stock:create'), a
       const disp = previos.reduce((a, m) => a + Number(m.kilosNeto || 0), 0);
       if (kilos > disp + 0.001) return res.status(400).json({ ok: false, error: `Solo hay ${Math.round(disp * 100) / 100} kg disponibles para liquidar` });
       signo = -1; kilosNeto = -kilos;
-      precio = Number(d.precio) || 0;
-      importe = Math.round(kilos * precio * 100) / 100;
+      modoLiquidacion = d.modoLiquidacion === 'canje' ? 'canje' : 'pesos';
+      if (modoLiquidacion === 'canje') {
+        productoEntregaId = d.productoEntregaId || null;
+        kilosEntregaProd = Math.abs(Number(d.kilosEntregaProd) || 0);
+        if (!productoEntregaId || !(kilosEntregaProd > 0)) return res.status(400).json({ ok: false, error: 'Para liquidar por canje elegí el producto a entregar y sus kilos' });
+      } else {
+        precio = Number(d.precio) || 0;
+        importe = Math.round(kilos * precio * 100) / 100;
+      }
     } else { // ajuste
       signo = Number(d.signo) === -1 ? -1 : 1; kilosNeto = kilos * signo;
     }
@@ -12461,7 +12514,8 @@ app.post('/api/granos-cta', requireCompany, requirePermission('stock:create'), a
       const m = await tx.granoCtaMov.create({ data: {
         companyId: req.companyId, fecha, proveedorId: d.proveedorId, proveedorNombre,
         tipo, productoId: d.productoId || null, kilos, signo, kilosNeto,
-        precio, importe, numeroComprobante: d.numeroComprobante || null,
+        precio, importe, plazoDias, vencimiento, modoLiquidacion, productoEntregaId, kilosEntregaProd,
+        numeroComprobante: d.numeroComprobante || null,
         depositoId: d.depositoId || null, generaStock, observaciones: d.observaciones || null, userId: req.user?.id || null,
       } });
       const ref = 'GRANOCTA-' + m.id;
@@ -12475,7 +12529,7 @@ app.post('/api/granos-cta', requireCompany, requirePermission('stock:create'), a
           userId: req.user?.id || null,
         } });
       }
-      if (tipo === 'liquidacion' && importe > 0) {
+      if (tipo === 'liquidacion' && modoLiquidacion === 'pesos' && importe > 0) {
         // Deuda en $ al proveedor por los kilos liquidados (haber = a pagar).
         await tx.ctaCte.create({ data: {
           companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId,
@@ -12483,6 +12537,16 @@ app.post('/api/granos-cta', requireCompany, requirePermission('stock:create'), a
           referencia: ref, observaciones: d.observaciones || null,
         } });
         ctaCteRef = ref;
+      }
+      if (tipo === 'liquidacion' && modoLiquidacion === 'canje' && productoEntregaId) {
+        // Pago en especie: sale del stock el producto entregado (ej. expeller).
+        await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: productoEntregaId, fecha, tipo: 'egreso', motivo: 'canje',
+          cantidad: kilosEntregaProd, depositoId: d.depositoId || null, referencia: ref,
+          contraparteTipo: 'proveedor', contraparteId: d.proveedorId,
+          observaciones: 'Liquidación granos por canje' + (proveedorNombre ? ' · ' + proveedorNombre : ''),
+          userId: req.user?.id || null,
+        } });
       }
       if (ctaCteRef) await tx.granoCtaMov.update({ where: { id: m.id }, data: { ctaCteRef } });
       await tx.granoCtaMov.update({ where: { id: m.id }, data: { referencia: ref } });

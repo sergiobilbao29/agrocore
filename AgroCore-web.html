@@ -3082,6 +3082,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
+      titulo:'⏰ v2.399.0 — Proveedores de granos: plazos, alarma de vencidos y liquidar por canje',
+      desc:'Mejoras al módulo de <b>Proveedores de granos</b>. <b>(1) Plazo:</b> cada entrega de kilos lleva un <b>plazo para liquidar</b> (contado / 15 / 30 / 60 días). <b>(2) Alarma de vencidos:</b> cuando pasa el plazo y esos kilos no se liquidaron, quedan marcados en <b>rojo ⏰</b> en la lista, con un aviso arriba (“hay X kg vencidos para liquidar”). Aunque un proveedor tenga 150.000 kg entregados, te muestra cuántos ya <b>cumplieron la fecha</b> (lo calcula por orden de vencimiento, los más viejos primero). <b>(3) Liquidar por canje:</b> además de liquidar en pesos, ahora podés liquidar <b>pagando con un producto</b> (ej. un camión de expeller): ingresás los kilos de ese producto y <b>sale del stock</b>, cancelando los kilos de soja. En el libro de cada proveedor ves el <b>vencimiento y el estado</b> (pendiente / vencido / liquidado) de cada entrega.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
       titulo:'🌾 v2.398.0 — Proveedores de granos: cuenta corriente en kilos',
       desc:'Nueva pantalla <b>Comercial → Proveedores de granos</b> para llevar la cuenta de la <b>soja</b> por separado del resto. En la ficha de un proveedor tildás <b>🌾 Proveedor de granos</b> y en la pantalla, por cada uno, ves <b>Entregado / Liquidado / Disponible</b> en kilos. Cargás las <b>entregas</b> (los kilos de cada comprobante, con o sin precio, y si querés que entren al stock elegís grano + depósito) y se van <b>acumulando los kilos</b> disponibles. Cuando se liquidan, con <b>💵 Liquidar</b> ingresás <b>kilos + precio</b>: descuenta esos kilos del disponible y genera la <b>deuda en pesos</b> al proveedor (va a Cuentas a pagar). Cada proveedor tiene su <b>libro</b> con el saldo en kilos acumulado. Incluye migración de base de datos (aditiva).' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
@@ -31877,24 +31880,31 @@ pages.proveedoresGranos = async function(){
   try{ saldos=(await api('/api/granos-cta/saldos')).data||[]; }catch(e){ b.innerHTML=`<div class="kpi text-red-600">${esc(e.message)}</div>`; return; }
   const granos=(state.cache.proveedores||[]).filter(p=>p.esGranos);
   const smap=Object.fromEntries(saldos.map(s=>[s.proveedorId,s]));
+  const hoyStr=new Date().toISOString().slice(0,10);
+  const totVenc=saldos.reduce((a,s)=>a+Number(s.vencidoSinLiquidar||0),0);
+  const alarmas=saldos.filter(s=>Number(s.vencidoSinLiquidar||0)>0.001).map(s=>`${esc(s.proveedorNombre||'')}: <b>${_pgKg(s.vencidoSinLiquidar)} kg</b>`);
   const filas=granos.map(p=>{
-    const s=smap[p.id]||{entregado:0,liquidado:0,disponible:0};
+    const s=smap[p.id]||{entregado:0,liquidado:0,disponible:0,vencidoSinLiquidar:0,proximoVto:null};
     const disp=s.disponible||0;
     const col=disp>0.001?'text-emerald-700':(disp<-0.001?'text-red-600':'text-slate-400');
-    return `<tr class="table-row">
+    const venc=Number(s.vencidoSinLiquidar||0);
+    const vencCell = venc>0.001 ? `<span class="badge badge-red text-[10px]">⏰ ${_pgKg(venc)} kg vencidos</span>` : (s.proximoVto?`<span class="text-[11px] text-slate-500">vence ${fmtDate(s.proximoVto)}</span>`:'<span class="text-slate-300">—</span>');
+    return `<tr class="table-row ${venc>0.001?'bg-red-50':''}">
       <td><b>${esc(p.razonSocial||'—')}</b></td>
       <td class="text-right">${_pgKg(s.entregado)}</td>
       <td class="text-right">${_pgKg(s.liquidado)}</td>
       <td class="text-right font-bold ${col}">${_pgKg(disp)} kg</td>
+      <td class="text-center">${vencCell}</td>
       <td class="text-right whitespace-nowrap">
         ${can('stock:create')?`<button class="btn btn-ghost btn-xs text-emerald-700" onclick='pgEntregaForm(${JSON.stringify(p.id)})'>➕ Entrega</button>`:''}
         ${can('stock:create')&&disp>0.001?`<button class="btn btn-ghost btn-xs text-indigo-700" onclick='pgLiquidarForm(${JSON.stringify(p.id)})'>💵 Liquidar</button>`:''}
         <button class="btn btn-ghost btn-xs" onclick='pgVer(${JSON.stringify(p.id)})'>👁️ Ver</button>
       </td></tr>`;}).join('');
   b.innerHTML=`
-    <div class="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-900 mb-3">🌾 Marcá un proveedor como <b>"de granos"</b> en su ficha (Proveedores) y acá vas cargando los <b>kilos que entrega</b> (de cada comprobante, con o sin precio). Después, con <b>💵 Liquidar</b>, ingresás los <b>kilos a liquidar y el precio</b>: descuenta esos kilos y genera la <b>deuda en pesos</b> (va a Cuentas a pagar).</div>
+    <div class="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-900 mb-3">🌾 Marcá un proveedor como <b>"de granos"</b> en su ficha (Proveedores) y acá vas cargando los <b>kilos que entrega</b> con su <b>plazo</b> (contado/15/30/60 días). Al vencer el plazo, los kilos sin liquidar te quedan marcados en <b>rojo ⏰</b>. Después liquidás <b>en pesos</b> (genera la deuda, va a Cuentas a pagar) <b>o por canje</b> (pagás con producto, ej. expeller, por equivalencia de kilos).</div>
+    ${totVenc>0.001?`<div class="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-800 mb-3">⏰ <b>Hay ${_pgKg(totVenc)} kg vencidos para liquidar.</b> ${alarmas.slice(0,6).join(' · ')}${alarmas.length>6?' …':''}</div>`:''}
     ${granos.length?`<div class="kpi p-0 overflow-hidden"><table class="data">
-      <thead><tr><th>Proveedor</th><th class="text-right">Entregado (kg)</th><th class="text-right">Liquidado (kg)</th><th class="text-right">Disponible</th><th class="text-right">Acciones</th></tr></thead>
+      <thead><tr><th>Proveedor</th><th class="text-right">Entregado (kg)</th><th class="text-right">Liquidado (kg)</th><th class="text-right">Disponible</th><th class="text-center">A liquidar / vencimiento</th><th class="text-right">Acciones</th></tr></thead>
       <tbody>${filas}</tbody></table></div>`
       :`<div class="kpi text-center text-slate-400 py-8">No hay proveedores marcados como "de granos". Entrá a <b>Proveedores</b>, editá uno y tildá <b>🌾 Proveedor de granos</b>.</div>`}
     <div id="pg-det" class="mt-4"></div>`;
@@ -31906,11 +31916,19 @@ function pgEntregaForm(provId){
     body:`<div class="grid grid-cols-2 gap-2">
         <div><label class="label">Kilos entregados *</label><input id="pg-kilos" type="number" step="0.01" class="input"/></div>
         <div><label class="label">Fecha</label><input id="pg-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">Plazo para liquidar</label>
+          <select id="pg-plazo" class="input">
+            <option value="">— sin plazo —</option>
+            <option value="0">Contado</option>
+            <option value="15">15 días</option>
+            <option value="30" selected>30 días</option>
+            <option value="60">60 días</option>
+          </select></div>
         <div><label class="label">N° comprobante</label><input id="pg-comp" class="input" placeholder="remito / CP"/></div>
         <div><label class="label">Grano</label><select id="pg-prod" class="input"><option value="">— (opcional) —</option>${_pgProd()}</select></div>
+        <div><label class="label">Depósito (si entra al stock)</label><select id="pg-dep" class="input"><option value="">— no mover stock —</option>${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}</select></div>
       </div>
-      <div class="mt-2"><label class="label">Depósito (si entra al stock)</label><select id="pg-dep" class="input"><option value="">— no mover stock —</option>${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}</select></div>
-      <p class="text-[11px] text-slate-500 mt-1">Si elegís grano + depósito, los kilos entran al stock. Si no, solo se acumulan en la cuenta en kilos.</p>`,
+      <p class="text-[11px] text-slate-500 mt-1">El <b>plazo</b> fija cuándo hay que liquidar esos kilos (al vencer sin liquidar, salta la alarma ⏰). Si elegís grano + depósito, los kilos entran al stock.</p>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='pgEntregaSave(${JSON.stringify(provId)})'>Guardar</button>` });
 }
 async function pgEntregaSave(provId){
@@ -31919,32 +31937,57 @@ async function pgEntregaSave(provId){
   const prod=$('#pg-prod')?.value||null, dep=$('#pg-dep')?.value||null;
   const body={ tipo:'entrega', proveedorId:provId, kilos,
     fecha:$('#pg-fecha')?.value?new Date($('#pg-fecha').value+'T12:00:00').toISOString():undefined,
+    plazoDias:($('#pg-plazo')?.value!==''&&$('#pg-plazo')?.value!=null)?Number($('#pg-plazo').value):null,
     numeroComprobante:$('#pg-comp')?.value?.trim()||null, productoId:prod, depositoId:dep, generaStock:!!(prod&&dep) };
   try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Entrega cargada','success'); closeModal2(); pages.proveedoresGranos(); }
   catch(e){ toast(e.message,'error'); }
 }
 async function pgLiquidarForm(provId){
   let disp=0; try{ const r=await api('/api/granos-cta?proveedorId='+encodeURIComponent(provId)); disp=r.disponible||0; }catch{}
-  openModal2({ title:'💵 Liquidar kilos', size:'max-w-md',
+  const deps=(state.cache.depositos||[]).filter(d=>d.activo!==false);
+  openModal2({ title:'💵 Liquidar kilos', size:'max-w-lg',
     body:`<div class="text-sm mb-2">Disponible: <b>${_pgKg(disp)} kg</b></div>
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">Kilos a liquidar *</label><input id="pgl-kilos" type="number" step="0.01" class="input" value="${disp}" oninput="pgLiqCalc()"/></div>
-        <div><label class="label">Precio $/kg *</label><input id="pgl-precio" type="number" step="0.0001" class="input" oninput="pgLiqCalc()"/></div>
         <div><label class="label">Fecha</label><input id="pgl-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div class="col-span-2"><label class="label">Forma de liquidación</label>
+          <select id="pgl-modo" class="input" onchange="pgLiqModo()">
+            <option value="pesos">💵 En pesos (genera la deuda a pagar)</option>
+            <option value="canje">🔁 Por canje (pago con producto, ej. expeller)</option>
+          </select></div>
+      </div>
+      <div id="pgl-pesos" class="grid grid-cols-2 gap-2 mt-1">
+        <div><label class="label">Precio $/kg *</label><input id="pgl-precio" type="number" step="0.0001" class="input" oninput="pgLiqCalc()"/></div>
         <div><label class="label">Importe</label><input id="pgl-imp" class="input bg-slate-100" readonly/></div>
       </div>
-      <p class="text-[11px] text-slate-500 mt-1">Descuenta esos kilos del disponible y genera la deuda en pesos al proveedor (Cuentas a pagar).</p>`,
+      <div id="pgl-canje" class="grid grid-cols-2 gap-2 mt-1" style="display:none">
+        <div><label class="label">Producto a entregar *</label><select id="pgl-prod" class="input"><option value="">— elegí —</option>${_pgProd()}</select></div>
+        <div><label class="label">Kilos de ese producto *</label><input id="pgl-kprod" type="number" step="0.01" class="input"/></div>
+        <div class="col-span-2"><label class="label">Depósito de salida</label><select id="pgl-dep" class="input"><option value="">— general —</option>${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}</select></div>
+      </div>
+      <p class="text-[11px] text-slate-500 mt-1">En pesos: descuenta los kilos y arma la deuda (Cuentas a pagar). Por canje: descuenta los kilos de soja y <b>saca del stock</b> los kilos del producto que entregás (expeller u otro).</p>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='pgLiquidarSave(${JSON.stringify(provId)})'>💵 Liquidar</button>` });
   pgLiqCalc();
 }
+function pgLiqModo(){ const m=$('#pgl-modo')?.value; const sp=$('#pgl-pesos'), sc=$('#pgl-canje'); if(sp) sp.style.display=m==='canje'?'none':''; if(sc) sc.style.display=m==='canje'?'':'none'; }
 function pgLiqCalc(){ const k=Number($('#pgl-kilos')?.value||0), p=Number($('#pgl-precio')?.value||0); const el=$('#pgl-imp'); if(el) el.value='$ '+_pgKg(k*p); }
 async function pgLiquidarSave(provId){
-  const kilos=Number($('#pgl-kilos')?.value||0), precio=Number($('#pgl-precio')?.value||0);
+  const kilos=Number($('#pgl-kilos')?.value||0);
   if(!(kilos>0)) return toast('Cargá los kilos a liquidar','warn');
-  if(!(precio>0)) return toast('Cargá el precio por kilo','warn');
-  const body={ tipo:'liquidacion', proveedorId:provId, kilos, precio,
+  const modo=$('#pgl-modo')?.value||'pesos';
+  const body={ tipo:'liquidacion', proveedorId:provId, kilos, modoLiquidacion:modo,
     fecha:$('#pgl-fecha')?.value?new Date($('#pgl-fecha').value+'T12:00:00').toISOString():undefined };
-  try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); toast('Liquidación registrada','success'); closeModal2(); pages.proveedoresGranos(); }
+  if(modo==='canje'){
+    const prod=$('#pgl-prod')?.value||null, kprod=Number($('#pgl-kprod')?.value||0);
+    if(!prod) return toast('Elegí el producto a entregar','warn');
+    if(!(kprod>0)) return toast('Cargá los kilos del producto a entregar','warn');
+    body.productoEntregaId=prod; body.kilosEntregaProd=kprod; body.depositoId=$('#pgl-dep')?.value||null;
+  } else {
+    const precio=Number($('#pgl-precio')?.value||0);
+    if(!(precio>0)) return toast('Cargá el precio por kilo','warn');
+    body.precio=precio;
+  }
+  try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Liquidación registrada','success'); closeModal2(); pages.proveedoresGranos(); }
   catch(e){ toast(e.message,'error'); }
 }
 async function pgVer(provId){
@@ -31953,8 +31996,19 @@ async function pgVer(provId){
   const prov=(state.cache.proveedores||[]).find(p=>p.id===provId);
   const filas=(r.data||[]).map(m=>{
     const et = m.tipo==='entrega'?'<span class="badge badge-green text-[10px]">Entrega</span>':(m.tipo==='liquidacion'?'<span class="badge badge-blue text-[10px]">Liquidación</span>':'<span class="badge badge-gray text-[10px]">Ajuste</span>');
-    const extra = m.tipo==='liquidacion'&&m.precio?` · $${_pgKg(m.precio)}/kg · <b>$ ${_pgKg(m.importe)}</b>`:(m.numeroComprobante?` · comp. ${esc(m.numeroComprobante)}`:'');
-    return `<tr class="table-row"><td class="text-xs">${fmtDate(m.fecha)}</td><td>${et}${extra}</td>
+    let extra='';
+    if(m.tipo==='liquidacion'){
+      extra = m.modoLiquidacion==='canje'
+        ? ` · 🔁 canje: ${_pgKg(m.kilosEntregaProd)} kg ${esc(m.productoEntregaNombre||'')}`
+        : (m.precio?` · $${_pgKg(m.precio)}/kg · <b>$ ${_pgKg(m.importe)}</b>`:'');
+    } else if(m.tipo==='entrega'){
+      const estB = m.estadoLiq==='liquidado'?'<span class="badge badge-green text-[9px]">liquidado</span>'
+        : m.estadoLiq==='vencido'?'<span class="badge badge-red text-[9px]">⏰ vencido</span>'
+        : m.estadoLiq==='parcial'?'<span class="badge badge-amber text-[9px]">parcial</span>'
+        : '<span class="badge badge-yellow text-[9px]">pendiente</span>';
+      extra = ` ${estB}${m.vencimiento?` · vence ${fmtDate(m.vencimiento)}`:''}${m.numeroComprobante?` · comp. ${esc(m.numeroComprobante)}`:''}`;
+    }
+    return `<tr class="table-row"><td class="text-xs">${fmtDate(m.fecha)}</td><td class="text-xs">${et}${extra}</td>
       <td class="text-right ${m.kilosNeto>=0?'text-emerald-700':'text-red-600'}">${m.kilosNeto>=0?'+':''}${_pgKg(m.kilos)} kg</td>
       <td class="text-right font-semibold">${_pgKg(m.saldoAcum)} kg</td>
       <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick='pgDel(${JSON.stringify(m.id)},${JSON.stringify(provId)})'>🗑️</button>`:''}</td></tr>`;}).join('');
