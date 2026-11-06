@@ -1080,6 +1080,7 @@ const MODULES = [
   { id:'liquidacionesHacienda', label:'Liquidaciones animales', icon:'🐄', perm:'ventas:read', section:'Comercial' },
   { id:'ctasCobrar',    label:'Cuentas a cobrar',     icon:'💰', perm:'finanzas:read',   section:'Comercial' },
   { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Comercial' },
+  { id:'proveedoresGranos', label:'Proveedores de granos', icon:'🌾', perm:'stock:read',  section:'Comercial' },
   { id:'remitosCompra', label:'Remitos de compra',    icon:'📦', perm:'compras:read',    section:'Comercial' },
   { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Comercial' },
   { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Comercial' },
@@ -3080,6 +3081,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
+      titulo:'🌾 v2.398.0 — Proveedores de granos: cuenta corriente en kilos',
+      desc:'Nueva pantalla <b>Comercial → Proveedores de granos</b> para llevar la cuenta de la <b>soja</b> por separado del resto. En la ficha de un proveedor tildás <b>🌾 Proveedor de granos</b> y en la pantalla, por cada uno, ves <b>Entregado / Liquidado / Disponible</b> en kilos. Cargás las <b>entregas</b> (los kilos de cada comprobante, con o sin precio, y si querés que entren al stock elegís grano + depósito) y se van <b>acumulando los kilos</b> disponibles. Cuando se liquidan, con <b>💵 Liquidar</b> ingresás <b>kilos + precio</b>: descuenta esos kilos del disponible y genera la <b>deuda en pesos</b> al proveedor (va a Cuentas a pagar). Cada proveedor tiene su <b>libro</b> con el saldo en kilos acumulado. Incluye migración de base de datos (aditiva).' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'06/11/2026',
       titulo:'🔁 v2.397.0 — Canje: entregas parciales (cuenta corriente en producto)',
       desc:'En la <b>operación de canje</b> ahora separás lo que <b>corresponde entregar</b> (según la paridad) de lo que <b>entregás ahora</b>. Si entregás menos (ej. corresponden 44.000 kg y se lleva 35.000), el canje queda <b>Parcial</b> y guarda el <b>pendiente</b>; el stock descuenta solo lo realmente entregado. Cuando el cliente vuelve por el resto, tocás <b>📦 Entregar</b> en la fila y cargás la cantidad, hasta completar. Cada canje muestra <b>Corresponde / Entregado / Pendiente</b> y un estado (⏳ Sin entregar · ◐ Parcial · ✓ Entregado). Así queda la cuenta abierta de cuánto producto le debés a cada uno. <i>Los canjes ya cargados quedan como “Entregado” (ya habían descontado el total).</i>' },
@@ -7754,6 +7758,7 @@ function provForm(id=null) {
         <div><label class="label">CUIT</label><input id="f-cuit" class="input" value="${esc(it.cuit||'')}" /></div>
         <div><label class="label">Condición IVA</label>${catSelect('f-iva', 'Condición IVA', it.condIVA||'', { placeholder:'— Elegir —' })}</div>
         <div><label class="label">Rubro</label><input id="f-rub" class="input" value="${esc(it.rubro||'')}" /></div>
+        <div class="col-span-2"><label style="display:flex;align-items:center;gap:7px;cursor:pointer" class="text-sm"><input type="checkbox" id="f-granos" ${it.esGranos?'checked':''}/> 🌾 <b>Proveedor de granos</b> <span class="text-xs text-slate-500">(cuenta corriente en kilos de soja, aparte del resto)</span></label></div>
         <div><label class="label">Email</label><input id="f-em" class="input" value="${esc(it.email||'')}" /></div>
         <div><label class="label">Teléfono</label><input id="f-tel" class="input" value="${esc(it.telefono||'')}" /></div>
         <div class="col-span-2"><label class="label">Dirección</label><input id="f-dir" class="input" value="${esc(it.direccion||'')}" placeholder="Calle y número"/></div>
@@ -7822,6 +7827,7 @@ async function provSave(id) {
     razonSocial: $('#f-rs').value.trim(),
     nombreFantasia: $('#f-nf')?.value.trim()||null,
     cuit: $('#f-cuit').value.trim()||null, rubro: $('#f-rub').value.trim()||null,
+    esGranos: !!$('#f-granos')?.checked,
     condIVA: $('#f-iva')?.value||null,
     condGanancias: _fr.condGanancias, fiscalRetencion: _fr.fiscalRetencion,
     email: $('#f-em').value.trim()||null, telefono: $('#f-tel').value.trim()||null,
@@ -31856,6 +31862,109 @@ async function molCtaCanjeVer(tipo, id, nombre){
 async function molCtaCanjeDel(id, tipo, contactoId, nombre){
   if(!confirm('¿Borrar este movimiento de la cuenta de canje? Si movió stock, también se revierte.'))return;
   try{ await api('/api/canje-cta/'+id,{method:'DELETE'}); delete state.cache.stock; toast('Borrado','success'); molCtaCanjeVer(tipo, contactoId, nombre); }
+  catch(e){ toast(e.message,'error'); }
+}
+
+/* ============ PROVEEDORES DE GRANOS — cuenta corriente en KILOS ============ */
+const _pgKg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:2});
+pages.proveedoresGranos = async function(){
+  setHeader('Proveedores de granos', 'Cuenta corriente en kilos de soja: cada proveedor va entregando kilos y después se le liquidan en pesos. Separado del resto de los proveedores.');
+  const b = $('#page-body'); if(!b) return;
+  b.innerHTML = `<div class="text-slate-400 py-6 text-center">Cargando…</div>`;
+  if(!state.cache.proveedores){ try{ state.cache.proveedores=(await api('/api/proveedores')).data||[]; }catch{} }
+  if(!state.cache.productos){ try{ state.cache.productos=(await api('/api/productos')).data||[]; }catch{} }
+  let saldos=[];
+  try{ saldos=(await api('/api/granos-cta/saldos')).data||[]; }catch(e){ b.innerHTML=`<div class="kpi text-red-600">${esc(e.message)}</div>`; return; }
+  const granos=(state.cache.proveedores||[]).filter(p=>p.esGranos);
+  const smap=Object.fromEntries(saldos.map(s=>[s.proveedorId,s]));
+  const filas=granos.map(p=>{
+    const s=smap[p.id]||{entregado:0,liquidado:0,disponible:0};
+    const disp=s.disponible||0;
+    const col=disp>0.001?'text-emerald-700':(disp<-0.001?'text-red-600':'text-slate-400');
+    return `<tr class="table-row">
+      <td><b>${esc(p.razonSocial||'—')}</b></td>
+      <td class="text-right">${_pgKg(s.entregado)}</td>
+      <td class="text-right">${_pgKg(s.liquidado)}</td>
+      <td class="text-right font-bold ${col}">${_pgKg(disp)} kg</td>
+      <td class="text-right whitespace-nowrap">
+        ${can('stock:create')?`<button class="btn btn-ghost btn-xs text-emerald-700" onclick='pgEntregaForm(${JSON.stringify(p.id)})'>➕ Entrega</button>`:''}
+        ${can('stock:create')&&disp>0.001?`<button class="btn btn-ghost btn-xs text-indigo-700" onclick='pgLiquidarForm(${JSON.stringify(p.id)})'>💵 Liquidar</button>`:''}
+        <button class="btn btn-ghost btn-xs" onclick='pgVer(${JSON.stringify(p.id)})'>👁️ Ver</button>
+      </td></tr>`;}).join('');
+  b.innerHTML=`
+    <div class="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-900 mb-3">🌾 Marcá un proveedor como <b>"de granos"</b> en su ficha (Proveedores) y acá vas cargando los <b>kilos que entrega</b> (de cada comprobante, con o sin precio). Después, con <b>💵 Liquidar</b>, ingresás los <b>kilos a liquidar y el precio</b>: descuenta esos kilos y genera la <b>deuda en pesos</b> (va a Cuentas a pagar).</div>
+    ${granos.length?`<div class="kpi p-0 overflow-hidden"><table class="data">
+      <thead><tr><th>Proveedor</th><th class="text-right">Entregado (kg)</th><th class="text-right">Liquidado (kg)</th><th class="text-right">Disponible</th><th class="text-right">Acciones</th></tr></thead>
+      <tbody>${filas}</tbody></table></div>`
+      :`<div class="kpi text-center text-slate-400 py-8">No hay proveedores marcados como "de granos". Entrá a <b>Proveedores</b>, editá uno y tildá <b>🌾 Proveedor de granos</b>.</div>`}
+    <div id="pg-det" class="mt-4"></div>`;
+};
+function _pgProd(){ return (state.cache.productos||[]).filter(p=>p.activo!==false).map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join(''); }
+function pgEntregaForm(provId){
+  const deps=(state.cache.depositos||[]).filter(d=>d.activo!==false);
+  openModal2({ title:'➕ Entrega de granos (kilos)', size:'max-w-md',
+    body:`<div class="grid grid-cols-2 gap-2">
+        <div><label class="label">Kilos entregados *</label><input id="pg-kilos" type="number" step="0.01" class="input"/></div>
+        <div><label class="label">Fecha</label><input id="pg-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">N° comprobante</label><input id="pg-comp" class="input" placeholder="remito / CP"/></div>
+        <div><label class="label">Grano</label><select id="pg-prod" class="input"><option value="">— (opcional) —</option>${_pgProd()}</select></div>
+      </div>
+      <div class="mt-2"><label class="label">Depósito (si entra al stock)</label><select id="pg-dep" class="input"><option value="">— no mover stock —</option>${deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('')}</select></div>
+      <p class="text-[11px] text-slate-500 mt-1">Si elegís grano + depósito, los kilos entran al stock. Si no, solo se acumulan en la cuenta en kilos.</p>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='pgEntregaSave(${JSON.stringify(provId)})'>Guardar</button>` });
+}
+async function pgEntregaSave(provId){
+  const kilos=Number($('#pg-kilos')?.value||0);
+  if(!(kilos>0)) return toast('Cargá los kilos','warn');
+  const prod=$('#pg-prod')?.value||null, dep=$('#pg-dep')?.value||null;
+  const body={ tipo:'entrega', proveedorId:provId, kilos,
+    fecha:$('#pg-fecha')?.value?new Date($('#pg-fecha').value+'T12:00:00').toISOString():undefined,
+    numeroComprobante:$('#pg-comp')?.value?.trim()||null, productoId:prod, depositoId:dep, generaStock:!!(prod&&dep) };
+  try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Entrega cargada','success'); closeModal2(); pages.proveedoresGranos(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function pgLiquidarForm(provId){
+  let disp=0; try{ const r=await api('/api/granos-cta?proveedorId='+encodeURIComponent(provId)); disp=r.disponible||0; }catch{}
+  openModal2({ title:'💵 Liquidar kilos', size:'max-w-md',
+    body:`<div class="text-sm mb-2">Disponible: <b>${_pgKg(disp)} kg</b></div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="label">Kilos a liquidar *</label><input id="pgl-kilos" type="number" step="0.01" class="input" value="${disp}" oninput="pgLiqCalc()"/></div>
+        <div><label class="label">Precio $/kg *</label><input id="pgl-precio" type="number" step="0.0001" class="input" oninput="pgLiqCalc()"/></div>
+        <div><label class="label">Fecha</label><input id="pgl-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><label class="label">Importe</label><input id="pgl-imp" class="input bg-slate-100" readonly/></div>
+      </div>
+      <p class="text-[11px] text-slate-500 mt-1">Descuenta esos kilos del disponible y genera la deuda en pesos al proveedor (Cuentas a pagar).</p>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='pgLiquidarSave(${JSON.stringify(provId)})'>💵 Liquidar</button>` });
+  pgLiqCalc();
+}
+function pgLiqCalc(){ const k=Number($('#pgl-kilos')?.value||0), p=Number($('#pgl-precio')?.value||0); const el=$('#pgl-imp'); if(el) el.value='$ '+_pgKg(k*p); }
+async function pgLiquidarSave(provId){
+  const kilos=Number($('#pgl-kilos')?.value||0), precio=Number($('#pgl-precio')?.value||0);
+  if(!(kilos>0)) return toast('Cargá los kilos a liquidar','warn');
+  if(!(precio>0)) return toast('Cargá el precio por kilo','warn');
+  const body={ tipo:'liquidacion', proveedorId:provId, kilos, precio,
+    fecha:$('#pgl-fecha')?.value?new Date($('#pgl-fecha').value+'T12:00:00').toISOString():undefined };
+  try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); toast('Liquidación registrada','success'); closeModal2(); pages.proveedoresGranos(); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function pgVer(provId){
+  const det=$('#pg-det'); if(det) det.innerHTML=`<div class="text-slate-400 py-4 text-center">Cargando movimientos…</div>`;
+  let r; try{ r=await api('/api/granos-cta?proveedorId='+encodeURIComponent(provId)); }catch(e){ if(det) det.innerHTML=`<div class="text-red-600">${esc(e.message)}</div>`; return; }
+  const prov=(state.cache.proveedores||[]).find(p=>p.id===provId);
+  const filas=(r.data||[]).map(m=>{
+    const et = m.tipo==='entrega'?'<span class="badge badge-green text-[10px]">Entrega</span>':(m.tipo==='liquidacion'?'<span class="badge badge-blue text-[10px]">Liquidación</span>':'<span class="badge badge-gray text-[10px]">Ajuste</span>');
+    const extra = m.tipo==='liquidacion'&&m.precio?` · $${_pgKg(m.precio)}/kg · <b>$ ${_pgKg(m.importe)}</b>`:(m.numeroComprobante?` · comp. ${esc(m.numeroComprobante)}`:'');
+    return `<tr class="table-row"><td class="text-xs">${fmtDate(m.fecha)}</td><td>${et}${extra}</td>
+      <td class="text-right ${m.kilosNeto>=0?'text-emerald-700':'text-red-600'}">${m.kilosNeto>=0?'+':''}${_pgKg(m.kilos)} kg</td>
+      <td class="text-right font-semibold">${_pgKg(m.saldoAcum)} kg</td>
+      <td class="text-right">${can('stock:delete')?`<button class="btn btn-ghost btn-xs text-red-600" onclick='pgDel(${JSON.stringify(m.id)},${JSON.stringify(provId)})'>🗑️</button>`:''}</td></tr>`;}).join('');
+  if(det) det.innerHTML=`<div class="kpi p-0 overflow-hidden"><div class="p-2 text-sm font-semibold">📒 ${esc(prov?.razonSocial||'')} · disponible <b>${_pgKg(r.disponible)} kg</b></div>
+    <table class="data"><thead><tr><th>Fecha</th><th>Movimiento</th><th class="text-right">Kilos</th><th class="text-right">Saldo</th><th></th></tr></thead>
+    <tbody>${filas||`<tr><td colspan="5" class="text-center text-slate-400 py-4">Sin movimientos.</td></tr>`}</tbody></table></div>`;
+}
+async function pgDel(id, provId){
+  if(!confirm('¿Borrar este movimiento? Si generó stock o deuda en pesos, también se revierte.'))return;
+  try{ await api('/api/granos-cta/'+id,{method:'DELETE'}); delete state.cache.stock; toast('Borrado','success'); await pages.proveedoresGranos(); pgVer(provId); }
   catch(e){ toast(e.message,'error'); }
 }
 

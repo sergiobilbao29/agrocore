@@ -777,6 +777,7 @@ model Proveedor {
   // jurisdicción, certificados de exclusión (con vigencia) y alícuotas propias.
   fiscalRetencion Json?
   rubro           String?   // específico de proveedores
+  esGranos        Boolean   @default(false)  // proveedor de GRANOS: cuenta corriente en kilos (soja) separada
   email           String?
   telefono        String?
   direccion       String?
@@ -3526,5 +3527,38 @@ model CanjeCtaMov {
 
   @@index([companyId])
   @@index([contactoTipo, contactoId])
+  @@index([fecha])
+}
+
+// Cuenta corriente EN KILOS de un PROVEEDOR DE GRANOS (soja). El proveedor va
+// entregando kilos (entrega, +) y despues se le liquidan en pesos (liquidacion, -);
+// el saldo vivo = kilos disponibles sin liquidar. La liquidacion ademas genera la
+// deuda en $ (CtaCte haber del proveedor) por kilos*precio.
+model GranoCtaMov {
+  id              String   @id @default(cuid())
+  companyId       String
+  fecha           DateTime
+  proveedorId     String
+  proveedorNombre String?
+  tipo            String   // entrega | liquidacion | ajuste
+  productoId      String?  // grano (soja)
+  kilos           Float    @default(0)   // kilos del movimiento (siempre positivo)
+  signo           Int      @default(1)   // +1 entrega, -1 liquidacion (ajuste ±)
+  kilosNeto       Float    @default(0)   // kilos*signo (para sumar el saldo disponible)
+  precio          Float?                 // $/kg (liquidacion)
+  importe         Float?                 // kilos*precio (liquidacion)
+  numeroComprobante String?              // nro de remito/comprobante (entrega)
+  depositoId      String?
+  generaStock     Boolean  @default(false) // entrega con ingreso de stock de grano
+  ctaCteRef       String?                // ref de la deuda en $ generada (liquidacion)
+  referencia      String?                // GRANOCTA-<id>
+  observaciones   String?
+  userId          String?
+  createdAt       DateTime @default(now())
+
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([proveedorId])
   @@index([fecha])
 }

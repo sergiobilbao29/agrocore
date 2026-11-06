@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.397.0';
+const AGROCORE_VERSION = '2.398.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5003,7 +5003,7 @@ mountCrud({
 });
 mountCrud({
   path: 'proveedores', modelName: 'proveedor', perm: 'contactos',
-  schema: clienteSchema.extend({ rubro: z.string().nullable().optional() }),
+  schema: clienteSchema.extend({ rubro: z.string().nullable().optional(), esGranos: z.boolean().optional() }),
   orderBy: { razonSocial: 'asc' },
   searchFields: ['razonSocial', 'nombreFantasia', 'cuit', 'rubro'],
   dependencias: [
@@ -12386,6 +12386,120 @@ app.delete('/api/canje-cta/:id', requireCompany, requirePermission('stock:delete
     await prisma.$transaction(async (tx) => {
       await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'CANJECTA-' + m.id } });
       await tx.canjeCtaMov.delete({ where: { id: m.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// PROVEEDORES DE GRANOS — Cuenta corriente EN KILOS (soja).
+// El proveedor entrega kilos (tipo 'entrega', +) y despues se le liquidan en pesos
+// (tipo 'liquidacion', -) a un precio. Saldo = kilos disponibles sin liquidar.
+// La liquidacion genera la deuda en $ (CtaCte haber del proveedor) por kilos*precio.
+// ============================================================
+// Saldo en kilos por proveedor de granos (entregado / liquidado / disponible).
+app.get('/api/granos-cta/saldos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const movs = await prisma.granoCtaMov.findMany({ where: { companyId: req.companyId }, select: { proveedorId: true, proveedorNombre: true, tipo: true, kilos: true, kilosNeto: true, importe: true, fecha: true } });
+    const by = {};
+    for (const m of movs) {
+      const k = m.proveedorId;
+      if (!by[k]) by[k] = { proveedorId: k, proveedorNombre: m.proveedorNombre, entregado: 0, liquidado: 0, disponible: 0, importeLiquidado: 0, ultima: null };
+      if (m.tipo === 'entrega') by[k].entregado += Number(m.kilos || 0);
+      else if (m.tipo === 'liquidacion') { by[k].liquidado += Number(m.kilos || 0); by[k].importeLiquidado += Number(m.importe || 0); }
+      by[k].disponible += Number(m.kilosNeto || 0);
+      if (m.proveedorNombre) by[k].proveedorNombre = m.proveedorNombre;
+      if (!by[k].ultima || new Date(m.fecha) > new Date(by[k].ultima)) by[k].ultima = m.fecha;
+    }
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const data = Object.values(by).map(x => ({ ...x, entregado: r2(x.entregado), liquidado: r2(x.liquidado), disponible: r2(x.disponible), importeLiquidado: r2(x.importeLiquidado) }))
+      .sort((a, b) => (a.proveedorNombre || '').localeCompare(b.proveedorNombre || ''));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+// Libro (ledger) en kilos de un proveedor, con saldo acumulado.
+app.get('/api/granos-cta', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.proveedorId) where.proveedorId = String(req.query.proveedorId);
+    const movs = await prisma.granoCtaMov.findMany({ where, orderBy: [{ fecha: 'asc' }, { createdAt: 'asc' }] });
+    const ids = [...new Set(movs.map(m => m.productoId).filter(Boolean))];
+    const prods = ids.length ? await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: ids } }, select: { id: true, nombre: true } }) : [];
+    const pm = Object.fromEntries(prods.map(p => [p.id, p]));
+    let acc = 0;
+    const data = movs.map(m => { acc += Number(m.kilosNeto || 0); return { ...m, productoNombre: pm[m.productoId]?.nombre || '', saldoAcum: Math.round(acc * 100) / 100 }; });
+    res.json({ ok: true, data, disponible: Math.round(acc * 100) / 100 });
+  } catch (e) { next(e); }
+});
+app.post('/api/granos-cta', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const d = req.body || {};
+    const tipo = ['entrega', 'liquidacion', 'ajuste'].includes(d.tipo) ? d.tipo : null;
+    if (!tipo) return res.status(400).json({ ok: false, error: 'Tipo inválido' });
+    if (!d.proveedorId) return res.status(400).json({ ok: false, error: 'Elegí el proveedor de granos' });
+    const fecha = d.fecha ? new Date(d.fecha) : new Date();
+    const kilos = Math.abs(Number(d.kilos) || 0);
+    const proveedorNombre = d.proveedorNombre || await _nombreContacto(req, 'proveedor', d.proveedorId);
+    let signo = 1, kilosNeto = 0, precio = null, importe = null, generaStock = false, movTipo = null;
+    if (tipo === 'entrega') {
+      if (!(kilos > 0)) return res.status(400).json({ ok: false, error: 'Los kilos entregados deben ser mayores a 0' });
+      signo = 1; kilosNeto = kilos;
+      generaStock = d.generaStock !== false && !!d.productoId; movTipo = 'ingreso';
+    } else if (tipo === 'liquidacion') {
+      if (!(kilos > 0)) return res.status(400).json({ ok: false, error: 'Los kilos a liquidar deben ser mayores a 0' });
+      // No se puede liquidar más de lo disponible.
+      const previos = await prisma.granoCtaMov.findMany({ where: { companyId: req.companyId, proveedorId: d.proveedorId }, select: { kilosNeto: true } });
+      const disp = previos.reduce((a, m) => a + Number(m.kilosNeto || 0), 0);
+      if (kilos > disp + 0.001) return res.status(400).json({ ok: false, error: `Solo hay ${Math.round(disp * 100) / 100} kg disponibles para liquidar` });
+      signo = -1; kilosNeto = -kilos;
+      precio = Number(d.precio) || 0;
+      importe = Math.round(kilos * precio * 100) / 100;
+    } else { // ajuste
+      signo = Number(d.signo) === -1 ? -1 : 1; kilosNeto = kilos * signo;
+    }
+    const creado = await prisma.$transaction(async (tx) => {
+      const m = await tx.granoCtaMov.create({ data: {
+        companyId: req.companyId, fecha, proveedorId: d.proveedorId, proveedorNombre,
+        tipo, productoId: d.productoId || null, kilos, signo, kilosNeto,
+        precio, importe, numeroComprobante: d.numeroComprobante || null,
+        depositoId: d.depositoId || null, generaStock, observaciones: d.observaciones || null, userId: req.user?.id || null,
+      } });
+      const ref = 'GRANOCTA-' + m.id;
+      let ctaCteRef = null;
+      if (generaStock && movTipo && d.productoId) {
+        await tx.movimiento.create({ data: {
+          companyId: req.companyId, productoId: d.productoId, fecha, tipo: movTipo, motivo: 'compra',
+          cantidad: kilos, depositoId: d.depositoId || null, referencia: ref,
+          contraparteTipo: 'proveedor', contraparteId: d.proveedorId,
+          observaciones: 'Grano recibido' + (d.numeroComprobante ? ' · comp. ' + d.numeroComprobante : '') + (proveedorNombre ? ' · ' + proveedorNombre : ''),
+          userId: req.user?.id || null,
+        } });
+      }
+      if (tipo === 'liquidacion' && importe > 0) {
+        // Deuda en $ al proveedor por los kilos liquidados (haber = a pagar).
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo: 'proveedor', contactoId: d.proveedorId,
+          fecha, detalle: `Liquidación granos: ${kilos} kg × $${precio}`, haber: importe,
+          referencia: ref, observaciones: d.observaciones || null,
+        } });
+        ctaCteRef = ref;
+      }
+      if (ctaCteRef) await tx.granoCtaMov.update({ where: { id: m.id }, data: { ctaCteRef } });
+      await tx.granoCtaMov.update({ where: { id: m.id }, data: { referencia: ref } });
+      return m;
+    });
+    res.status(201).json({ ok: true, data: creado });
+  } catch (e) { next(e); }
+});
+app.delete('/api/granos-cta/:id', requireCompany, requirePermission('stock:delete'), async (req, res, next) => {
+  try {
+    const m = await prisma.granoCtaMov.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!m) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado' });
+    const ref = 'GRANOCTA-' + m.id;
+    await prisma.$transaction(async (tx) => {
+      await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: ref } });
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: ref } });
+      await tx.granoCtaMov.delete({ where: { id: m.id } });
     });
     res.json({ ok: true });
   } catch (e) { next(e); }
