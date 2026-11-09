@@ -142,6 +142,7 @@ model Company {
   canjes             Canje[]
   canjeParidades     CanjeParidad[]
   canjeCtaMovs       CanjeCtaMov[]
+  granoCtaMovs       GranoCtaMov[]
   tributos           TributoCatalogo[]
   regimenesRetencion RegimenRetencion[]
   pagosFiscales      PagoFiscal[]

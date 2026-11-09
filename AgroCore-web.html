@@ -3081,6 +3081,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'09/11/2026',
+      titulo:'🔧 v2.400.1 — Fix definitivo de Proveedores de granos',
+      desc:'Quedaba un error al <b>editar un proveedor</b> o abrir <b>Proveedores de granos</b> (por una referencia interna de la base que no se habia publicado). Ahora si quedo corregido en el sistema. No se pierde nada de lo cargado.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'06/11/2026',
       titulo:'✅ v2.400.0 — Versión consolidada',
       desc:'Versión de mantenimiento que deja a todas las instancias en la misma base, con todo lo de los últimos días ya aplicado: <b>comprobante interno</b>, mejoras en <b>recibo/orden de pago</b> y <b>molienda</b>, <b>remitos de compra</b> (cerrar sin facturar, importar PDF/foto, IVA discriminado), <b>transferir cheques desde/hacia la fábrica</b>, <b>liquidación de sueldos combinada</b>, <b>canje con entregas parciales</b> y el módulo de <b>Proveedores de granos</b> (cuenta en kilos, plazos, alarma de vencidos y liquidar en pesos o por canje). Sin cambios nuevos.' },
