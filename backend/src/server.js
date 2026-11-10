@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.400.1';
+const AGROCORE_VERSION = '2.401.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12566,6 +12566,55 @@ app.delete('/api/granos-cta/:id', requireCompany, requirePermission('stock:delet
       await tx.granoCtaMov.delete({ where: { id: m.id } });
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// Remitos de compra YA CARGADOS de un proveedor de granos que todavia NO se importaron
+// a su cuenta en kilos (para traer los kilos sin recargar). Dedup por remitoCompraId.
+app.get('/api/granos-cta/remitos-pendientes', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const proveedorId = String(req.query.proveedorId || '');
+    if (!proveedorId) return res.status(400).json({ ok: false, error: 'Falta proveedorId' });
+    const remitos = await prisma.remitoCompra.findMany({
+      where: { companyId: req.companyId, proveedorId, tipo: 'entrada', estado: { notIn: ['anulado'] } },
+      include: { items: true }, orderBy: { fecha: 'asc' },
+    });
+    const imp = await prisma.granoCtaMov.findMany({ where: { companyId: req.companyId, remitoCompraId: { not: null } }, select: { remitoCompraId: true } });
+    const impSet = new Set(imp.map(x => x.remitoCompraId));
+    const data = remitos.filter(r => !impSet.has(r.id)).map(r => {
+      const kilos = (r.items || []).reduce((a, i) => a + Number(i.cantidad || 0), 0);
+      return { id: r.id, numero: r.numero, nro: `R-${String(r.numero || 0).padStart(8, '0')}`, numeroProveedor: r.numeroProveedor, fecha: r.fecha, kilos: Math.round(kilos * 100) / 100, productoId: (r.items || [])[0]?.productoId || null };
+    }).filter(r => r.kilos > 0.001);
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+// Importar un remito de compra ya cargado como ENTREGA en kilos (NO mueve stock de nuevo:
+// el remito ya lo ingreso). Se vincula por remitoCompraId para no duplicar.
+app.post('/api/granos-cta/importar-remito', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const remitoCompraId = String(req.body?.remitoCompraId || '');
+    if (!remitoCompraId) return res.status(400).json({ ok: false, error: 'Falta remitoCompraId' });
+    const r = await prisma.remitoCompra.findFirst({ where: { id: remitoCompraId, companyId: req.companyId }, include: { items: true } });
+    if (!r) return res.status(404).json({ ok: false, error: 'Remito no encontrado' });
+    if (!r.proveedorId) return res.status(400).json({ ok: false, error: 'El remito no tiene proveedor' });
+    const dup = await prisma.granoCtaMov.findFirst({ where: { companyId: req.companyId, remitoCompraId } });
+    if (dup) return res.status(409).json({ ok: false, error: 'Ese remito ya está importado en la cuenta de granos' });
+    const kilos = (r.items || []).reduce((a, i) => a + Number(i.cantidad || 0), 0);
+    if (!(kilos > 0)) return res.status(400).json({ ok: false, error: 'El remito no tiene kilos' });
+    const plazoDias = (req.body?.plazoDias != null && req.body.plazoDias !== '') ? Number(req.body.plazoDias) : null;
+    let vencimiento = null;
+    if (plazoDias != null && plazoDias >= 0) { vencimiento = new Date(r.fecha); vencimiento.setDate(vencimiento.getDate() + plazoDias); }
+    const proveedorNombre = await _nombreContacto(req, 'proveedor', r.proveedorId);
+    const creado = await prisma.granoCtaMov.create({ data: {
+      companyId: req.companyId, fecha: r.fecha, proveedorId: r.proveedorId, proveedorNombre,
+      tipo: 'entrega', productoId: (r.items || [])[0]?.productoId || null,
+      kilos, signo: 1, kilosNeto: kilos,
+      plazoDias, vencimiento,
+      numeroComprobante: r.numeroProveedor || `R-${String(r.numero || 0).padStart(8, '0')}`,
+      remitoCompraId, generaStock: false, // el stock ya entro con el remito
+      observaciones: 'Importado del remito de compra', userId: req.user?.id || null,
+    } });
+    await prisma.granoCtaMov.update({ where: { id: creado.id }, data: { referencia: 'GRANOCTA-' + creado.id } });
+    res.status(201).json({ ok: true, data: creado });
   } catch (e) { next(e); }
 });
 

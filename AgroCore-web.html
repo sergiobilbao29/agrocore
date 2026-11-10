@@ -3081,6 +3081,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/11/2026',
+      titulo:'🌾 v2.401.0 — Vincular remitos a granos + canje ordenado',
+      desc:'Dos cosas: 1) En <b>Proveedores de granos</b> cada proveedor tiene el botón <b>📥 De remitos</b>: trae los <b>remitos de compra ya cargados</b> de ese proveedor que todavía no estaban en la cuenta de kilos y los suma de una, sin recargarlos. Como los kilos ya entraron al stock con el remito, <b>no se mueve stock de nuevo</b>. Elegís cuáles importar y les ponés un plazo. 2) <b>Plan canje</b> y <b>Cuenta canje (grano)</b> ahora viven solo en el menú <b>Comercial</b> (antes estaban repetidos como pestañas dentro de Molienda). En <b>Molienda / Fábrica</b> quedó un acceso directo <b>🔁 Ir al canje</b> que te lleva ahí. Los datos del canje son los mismos.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'09/11/2026',
       titulo:'🔧 v2.400.1 — Fix definitivo de Proveedores de granos',
       desc:'Quedaba un error al <b>editar un proveedor</b> o abrir <b>Proveedores de granos</b> (por una referencia interna de la base que no se habia publicado). Ahora si quedo corregido en el sistema. No se pierde nada de lo cargado.' },
@@ -31263,17 +31266,34 @@ pages.molienda = async function() {
   } catch (e) { $('#page-body').innerHTML = `<div class="kpi text-red-600">Error: ${esc(e.message)}</div>`; }
 };
 // Accesos directos desde el menú "Comercial" (fábrica): abren Molienda en la pestaña del canje.
-pages.canjeGrano = async function(){ state._molTab='canje'; await pages.molienda(); setHeader('Plan canje (grano)','Entregás producto terminado y recibís grano (o viceversa), con una paridad fija. Movimiento en especie.'); };
-pages.ctaCanjeGrano = async function(){ state._molTab='ctacanje'; await pages.molienda(); setHeader('Cuenta canje (grano)','Saldo en kilos de grano con cada cliente: cuánto entró, cuánto se llevó y cuánto falta/sobra.'); };
+// Plan canje y Cuenta canje viven en Comercial (lo pidieron los usuarios). Son paginas
+// propias: reutilizan molTabCanje/molTabCtaCanje (que renderizan en #mol-body) pero sin la
+// barra de pestañas de Molienda. Arriba, un toggle para pasar de una a la otra.
+function _canjeNav(activo){
+  const B=(id,txt)=>`<button class="btn ${activo===id?'btn-primary':'btn-ghost'} text-sm" onclick="go('${id}')">${txt}</button>`;
+  return `<div class="mb-3 flex items-center gap-2 flex-wrap">${B('canjeGrano','🔁 Plan canje')} ${B('ctaCanjeGrano','📒 Cuenta canje (grano)')}</div>`;
+}
+pages.canjeGrano = async function(){
+  setHeader('Plan canje (grano)','Entregás producto terminado y recibís grano (o viceversa), con una paridad fija. Movimiento en especie.');
+  $('#page-body').innerHTML = _canjeNav('canjeGrano') + `<div id="mol-body"></div>`;
+  molTabCanje();
+};
+pages.ctaCanjeGrano = async function(){
+  setHeader('Cuenta canje (grano)','Saldo en kilos de grano con cada cliente: cuánto entró, cuánto se llevó y cuánto falta/sobra.');
+  $('#page-body').innerHTML = _canjeNav('ctaCanjeGrano') + `<div id="mol-body"></div>`;
+  molTabCtaCanje();
+};
 function molRender() {
   const tab = state._molTab || 'partes';
   const T = (id,txt)=>`<button class="btn ${tab===id?'btn-primary':'btn-ghost'} text-sm" onclick="state._molTab='${id}';molRender()">${txt}</button>`;
   $('#page-body').innerHTML = `
     <div class="mb-3 flex items-center gap-2 flex-wrap">
-      ${T('partes','🏭 Partes de molienda')} ${T('formulas','⚙️ Fórmulas')} ${T('productos','🏷️ Costo y precio')} ${T('canje','🔁 Plan canje')} ${T('ctacanje','📒 Cuenta canje (grano)')}
+      ${T('partes','🏭 Partes de molienda')} ${T('formulas','⚙️ Fórmulas')} ${T('productos','🏷️ Costo y precio')}
+      <span class="mx-1 text-slate-300">|</span>
+      <button class="btn btn-ghost text-sm text-indigo-700" onclick="go('canjeGrano')" title="El canje está en el menú Comercial">🔁 Ir al canje (grano) ↗</button>
     </div>
     <div id="mol-body"></div>`;
-  if (tab==='partes') molTabPartes(); else if (tab==='formulas') molTabFormulas(); else if (tab==='productos') molTabProductos(); else if (tab==='ctacanje') molTabCtaCanje(); else molTabCanje();
+  if (tab==='partes') molTabPartes(); else if (tab==='formulas') molTabFormulas(); else if (tab==='productos') molTabProductos(); else molTabPartes();
 }
 /* ---- Partes de molienda ---- */
 function molTabPartes() {
@@ -31664,10 +31684,10 @@ async function molParidadSave() {
   if (entregaProductoId===recibeProductoId) return toast('El producto que ingresa y el que se lleva no pueden ser el mismo','warn');
   const factor = Math.round((1/ratio)*10000)/10000;   // recibo por 1 entrego
   const body={ nombre:$('#pa-nombre')?.value, entregaProductoId, recibeProductoId, factor };
-  try { await api('/api/canje-paridades',{method:'POST',body:JSON.stringify(body)}); state._molParidades=(await api('/api/canje-paridades')).data||[]; toast('Paridad guardada','success'); closeModal(); molRender(); }
+  try { await api('/api/canje-paridades',{method:'POST',body:JSON.stringify(body)}); state._molParidades=(await api('/api/canje-paridades')).data||[]; toast('Paridad guardada','success'); closeModal(); molTabCanje(); }
   catch(e){ toast(e.message,'error'); }
 }
-async function molParidadDel(id){ if(!confirm('¿Eliminar esta paridad?'))return; try{ await api('/api/canje-paridades/'+id,{method:'DELETE'}); state._molParidades=(await api('/api/canje-paridades')).data||[]; molRender(); }catch(e){ toast(e.message,'error'); } }
+async function molParidadDel(id){ if(!confirm('¿Eliminar esta paridad?'))return; try{ await api('/api/canje-paridades/'+id,{method:'DELETE'}); state._molParidades=(await api('/api/canje-paridades')).data||[]; molTabCanje(); }catch(e){ toast(e.message,'error'); } }
 function molCanjeForm() {
   const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
   const optD = (ph)=>`<option value="">${ph}</option>`+deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('');
@@ -31745,10 +31765,10 @@ async function molCanjeSave() {
   if(body.entregaProductoId===body.recibeProductoId) return toast('No pueden ser el mismo producto','warn');
   if(!(body.entregaCant>0)||!(body.recibeCant>0)) return toast('Cargá las cantidades','warn');
   try{ await api('/api/canjes',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock;
-    state._molCanjes=(await api('/api/canjes')).data||[]; toast('Canje registrado: stock actualizado','success'); closeModal(); molRender();
+    state._molCanjes=(await api('/api/canjes')).data||[]; toast('Canje registrado: stock actualizado','success'); closeModal(); molTabCanje();
   }catch(e){ toast(e.message,'error'); }
 }
-async function molCanjeAnular(id){ if(!confirm('¿Anular este canje? Se revierten los movimientos de stock.'))return; try{ await api('/api/canjes/'+id,{method:'DELETE'}); delete state.cache.stock; state._molCanjes=(await api('/api/canjes')).data||[]; toast('Canje anulado','success'); molRender(); }catch(e){ toast(e.message,'error'); } }
+async function molCanjeAnular(id){ if(!confirm('¿Anular este canje? Se revierten los movimientos de stock.'))return; try{ await api('/api/canjes/'+id,{method:'DELETE'}); delete state.cache.stock; state._molCanjes=(await api('/api/canjes')).data||[]; toast('Canje anulado','success'); molTabCanje(); }catch(e){ toast(e.message,'error'); } }
 function molCanjeEntregar(id){
   const c=(state._molCanjes||[]).find(x=>x.id===id); if(!c) return;
   const pend = c.pendienteEntrega!=null ? c.pendienteEntrega : Math.max(0,(Number(c.entregaCant||0)-Number(c.entregadoCant||0)));
@@ -31767,7 +31787,7 @@ async function molCanjeEntregarSave(id){
   if(!(cant>0)) return toast('Cargá la cantidad a entregar','warn');
   const body={ cantidad:cant, fecha:$('#cje-fecha')?.value?new Date($('#cje-fecha').value+'T12:00:00').toISOString():undefined, depositoId:$('#cje-dep')?.value||null };
   try{ await api('/api/canjes/'+id+'/entregar',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock;
-    state._molCanjes=(await api('/api/canjes')).data||[]; toast('Entrega registrada','success'); closeModal2(); molRender();
+    state._molCanjes=(await api('/api/canjes')).data||[]; toast('Entrega registrada','success'); closeModal2(); molTabCanje();
   }catch(e){ toast(e.message,'error'); }
 }
 
@@ -31906,6 +31926,7 @@ pages.proveedoresGranos = async function(){
       <td class="text-center">${vencCell}</td>
       <td class="text-right whitespace-nowrap">
         ${can('stock:create')?`<button class="btn btn-ghost btn-xs text-emerald-700" onclick='pgEntregaForm(${JSON.stringify(p.id)})'>➕ Entrega</button>`:''}
+        ${can('stock:create')?`<button class="btn btn-ghost btn-xs text-sky-700" onclick='pgRemitosForm(${JSON.stringify(p.id)})'>📥 De remitos</button>`:''}
         ${can('stock:create')&&disp>0.001?`<button class="btn btn-ghost btn-xs text-indigo-700" onclick='pgLiquidarForm(${JSON.stringify(p.id)})'>💵 Liquidar</button>`:''}
         <button class="btn btn-ghost btn-xs" onclick='pgVer(${JSON.stringify(p.id)})'>👁️ Ver</button>
       </td></tr>`;}).join('');
@@ -31950,6 +31971,47 @@ async function pgEntregaSave(provId){
     numeroComprobante:$('#pg-comp')?.value?.trim()||null, productoId:prod, depositoId:dep, generaStock:!!(prod&&dep) };
   try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Entrega cargada','success'); closeModal2(); pages.proveedoresGranos(); }
   catch(e){ toast(e.message,'error'); }
+}
+async function pgRemitosForm(provId){
+  let rems=[];
+  try{ const r=await api('/api/granos-cta/remitos-pendientes?proveedorId='+encodeURIComponent(provId)); rems=r.data||[]; }
+  catch(e){ return toast(e.message,'error'); }
+  if(!rems.length) return toast('No hay remitos de compra sin vincular para este proveedor','info');
+  const filas = rems.map(r=>`<tr class="border-t">
+      <td class="p-1"><input type="checkbox" class="pgr-chk" value="${esc(r.id)}" data-prod="${esc(r.productoId||'')}" checked/></td>
+      <td class="p-1 text-xs">${esc(r.nro||'')}${r.numeroProveedor?` <span class="text-slate-400">(${esc(r.numeroProveedor)})</span>`:''}</td>
+      <td class="p-1 text-xs">${fmtDate(r.fecha)}</td>
+      <td class="p-1 text-right text-xs font-semibold">${_pgKg(r.kilos)} kg</td>
+    </tr>`).join('');
+  openModal2({ title:'📥 Importar kilos de remitos ya cargados', size:'max-w-lg',
+    body:`<p class="text-xs text-slate-600 mb-2">Estos remitos de compra ya cargados todavía no están vinculados a la cuenta de granos. Elegí cuáles sumar (los kilos ya están en stock, <b>no se mueve stock de nuevo</b>).</p>
+      <div><label class="label">Plazo para liquidar (aplica a todos)</label>
+        <select id="pgr-plazo" class="input">
+          <option value="">— sin plazo —</option>
+          <option value="0">Contado</option>
+          <option value="15">15 días</option>
+          <option value="30" selected>30 días</option>
+          <option value="60">60 días</option>
+        </select></div>
+      <div class="border rounded mt-2 overflow-auto max-h-64"><table class="w-full text-sm">
+        <thead class="bg-slate-50 text-xs"><tr><th class="p-1"><input type="checkbox" id="pgr-all" checked/></th><th class="p-1 text-left">Remito</th><th class="p-1 text-left">Fecha</th><th class="p-1 text-right">Kilos</th></tr></thead>
+        <tbody>${filas}</tbody></table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='pgRemitosSave(${JSON.stringify(provId)})'>Importar seleccionados</button>` });
+  const all=$('#pgr-all'); if(all) all.onclick=()=>{ document.querySelectorAll('.pgr-chk').forEach(c=>c.checked=all.checked); };
+}
+async function pgRemitosSave(provId){
+  const chks=[...document.querySelectorAll('.pgr-chk:checked')];
+  if(!chks.length) return toast('Elegí al menos un remito','warn');
+  const plazoV=$('#pgr-plazo')?.value;
+  const plazoDias=(plazoV!==''&&plazoV!=null)?Number(plazoV):null;
+  let ok=0, err=0;
+  for(const c of chks){
+    try{ await api('/api/granos-cta/importar-remito',{method:'POST',body:JSON.stringify({ remitoCompraId:c.value, plazoDias })}); ok++; }
+    catch(e){ err++; }
+  }
+  delete state.cache.stock;
+  toast(`Importados ${ok} remito(s)${err?`, ${err} con error`:''}`, err?'warn':'success');
+  closeModal2(); pages.proveedoresGranos();
 }
 async function pgLiquidarForm(provId){
   let disp=0; try{ const r=await api('/api/granos-cta?proveedorId='+encodeURIComponent(provId)); disp=r.disponible||0; }catch{}
