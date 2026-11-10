@@ -1724,12 +1724,13 @@ function catSelect(id, tipos, selected='', opts={}) {
 // origen que usa la liquidación y Posición de granos, para que el nombre matchee siempre.
 function granoSelect(id, selected='', opts={}) {
   const placeholder = opts.placeholder || '— Grano —';
+  const extraAttr = opts.attr || '';
   const granos = (state.cache.productos||[])
     .filter(p => p.activo!==false && (typeof _esProdGrano==='function' ? _esProdGrano(p) : /cereal|grano/i.test(p.categoria||'')))
     .map(p => p.nombre).filter(Boolean);
   const uniq = [...new Set(granos)].sort((a,b)=>a.localeCompare(b));
   const hasSel = selected && uniq.includes(selected);
-  return `<select id="${id}" class="input">
+  return `<select id="${id}" class="input" ${extraAttr}>
     <option value="">${placeholder}</option>
     ${uniq.map(n=>`<option value="${esc(n)}" ${n===selected?'selected':''}>${esc(n)}</option>`).join('')}
     ${(selected && !hasSel) ? `<option value="${esc(selected)}" selected>${esc(selected)} (legado)</option>` : ''}
@@ -3082,6 +3083,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/11/2026',
+      titulo:'🌱 v2.405.0 — Cultivos de campaña desde el catálogo de productos',
+      desc:'Ahora el <b>cultivo</b> de la campaña (y el <b>cultivo actual</b> del lote) se eligen de los <b>cereales/granos cargados en el Catálogo de productos</b>, no de una lista fija. Si cargás un cereal nuevo (por ejemplo <b>Alfalfa</b>) ya aparece para poder armar su campaña, sin tener que esperar a que lo agreguemos nosotros.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/11/2026',
       titulo:'🔄 v2.404.0 — Pagar arrendamientos con Intercompany',
       desc:'En el pago de arrendamientos ahora se puede elegir <b>🔄 Intercompany (otra firma paga)</b>: otra empresa del grupo pone los fondos. Aplica tanto a las <b>cuotas</b> (efectivo, quintales, Kg Novillo) como a las <b>entregas</b> de la modalidad en kilos. Elegís la firma que paga y cómo pone la plata (solo deuda entre firmas, efectivo de una caja de esa firma, cheque de esa firma o transferencia de una cuenta de esa firma). El sistema arma solo los asientos espejo en Cuentas Intercompany y mueve el recurso real de la firma que financia. Requiere permiso <b>finanzas:intercompany</b> y tener acceso a más de una empresa.' },
@@ -10853,7 +10857,7 @@ function loteForm(id=null, campoId=null) {
         </div>
         <div><label class="label">Nombre *</label><input id="f-nom" class="input" value="${esc(it.nombre||'')}"/></div>
         <div><label class="label">Hectáreas *</label><input id="f-ha" type="number" step="0.01" class="input" value="${it.hectareas||''}"/></div>
-        <div class="col-span-2"><label class="label">Cultivo actual</label>${catSelect('f-cul','Cereal', it.cultivoActual||'', {placeholder:'— Elegir cultivo —'})}</div>
+        <div class="col-span-2"><label class="label">Cultivo actual</label>${granoSelect('f-cul', it.cultivoActual||'', {placeholder:'— Elegir cultivo —'})}</div>
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2">${esc(it.observaciones||'')}</textarea></div>
       </div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -14320,7 +14324,8 @@ function campanasFiltrosLimpiar(){
   state._ms_campCiclo=false; state._ms_campCultivo=false; state._ms_campEstado=false; state._ms_campCampo=false; state._ms_campLote=false;
   pages.campanas();
 }
-function campanaForm(id=null) {
+async function campanaForm(id=null) {
+  if (!state.cache.productos) { try { state.cache.productos = (await api('/api/productos')).data || []; } catch { state.cache.productos = []; } }
   const it = id ? (state.cache.campanas||[]).find(x=>x.id===id)||{} : {};
   const lotes = state.cache.lotes || [];
   const estados = ['planificada','sembrada','cosechando','cosechada','finalizada'];
@@ -14341,7 +14346,7 @@ function campanaForm(id=null) {
             ${lotes.map(l=>`<option value="${l.id}" ${l.id===it.loteId?'selected':''}>${esc(l.campo?.nombre||'')} · ${esc(l.nombre)}</option>`).join('')}
           </select>
         </div>
-        <div><label class="label">Cultivo *</label>${catSelect('f-cul', 'Cereal', it.cultivo||'', {attr:'onchange="campNomSug()"'})}</div>
+        <div><label class="label">Cultivo *</label>${granoSelect('f-cul', it.cultivo||'', {placeholder:'— Elegir cultivo —', attr:'onchange="campNomSug()"'})}</div>
         <div><label class="label">Tipo de campaña</label>
           <select id="f-tipo" class="input">
             <option value="cosecha_unica" ${(it.tipoCampana||'cosecha_unica')==='cosecha_unica'?'selected':''}>Cosecha única (Soja, Maíz…)</option>
