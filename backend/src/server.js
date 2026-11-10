@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.403.0';
+const AGROCORE_VERSION = '2.404.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -19041,26 +19041,42 @@ app.put('/api/arrendamientos/:id/cuotas/:idx/pagar', requireCompany, requirePerm
     if (cuotas[idx].pagado) return res.status(400).json({ ok: false, error: 'La cuota ya está pagada' });
     const schema = z.object({
       fecha: zFecha.optional(),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta', 'intercompany']),
       monto: z.number().positive(),
       caja: z.string().nullable().optional(),
       chequeId: z.string().nullable().optional(),
       bancoCuentaId: z.string().nullable().optional(),
       contraparte: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      // Intercompany: otra firma del grupo pone los fondos.
+      empresaOrigenId: z.string().nullable().optional(),
+      recursoIntercompany: z.enum(['efectivo', 'cheque', 'transferencia', 'deuda']).nullable().optional(),
+      cajaOrigen: z.string().nullable().optional(),
+      chequeIdOrigen: z.string().nullable().optional(),
+      bancoCuentaIdOrigen: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body || {});
+    if (d.metodo === 'intercompany') { const err = _validarIntercompany(req, d.empresaOrigenId); if (err) return res.status(403).json({ ok: false, error: err }); }
     const fecha = d.fecha || new Date();
     const concepto = `Arrendamiento ${arr.propietario}${cuotas[idx].etiqueta ? ' · ' + cuotas[idx].etiqueta : ''}`;
     const result = await prisma.$transaction(async (tx) => {
-      await _moverRecursoPagoDiario(tx, req, {
-        metodo: d.metodo, monto: d.monto, fecha, concepto,
-        caja: d.caja, chequeId: d.chequeId, bancoCuentaId: d.bancoCuentaId,
-        contraparte: d.contraparte || arr.propietario, observaciones: d.observaciones,
-      });
+      let interRef = null;
+      if (d.metodo === 'intercompany') {
+        interRef = await _pagoIntercompanyAsientos(tx, req, {
+          empresaOrigenId: d.empresaOrigenId, recurso: d.recursoIntercompany || 'deuda', monto: d.monto, fecha, concepto,
+          cajaOrigen: d.cajaOrigen, chequeIdOrigen: d.chequeIdOrigen, bancoCuentaIdOrigen: d.bancoCuentaIdOrigen, obsExtra: d.observaciones,
+        });
+      } else {
+        await _moverRecursoPagoDiario(tx, req, {
+          metodo: d.metodo, monto: d.monto, fecha, concepto,
+          caja: d.caja, chequeId: d.chequeId, bancoCuentaId: d.bancoCuentaId,
+          contraparte: d.contraparte || arr.propietario, observaciones: d.observaciones,
+        });
+      }
       cuotas[idx] = { ...cuotas[idx], pagado: true, pago: {
         fecha, metodo: d.metodo, monto: d.monto,
         caja: d.caja || null, chequeId: d.chequeId || null, bancoCuentaId: d.bancoCuentaId || null,
+        empresaOrigenId: d.empresaOrigenId || null, recursoIntercompany: d.recursoIntercompany || null, intercompanyRef: interRef,
       }};
       const todasPagas = cuotas.length > 0 && cuotas.every(c => c.pagado);
       return tx.arrendamiento.update({ where: { id: arr.id }, data: { cuotas, pagado: todasPagas ? true : arr.pagado } });
@@ -19174,23 +19190,38 @@ app.post('/api/arrendamientos/:id/ventas/:vid/pagos', requireCompany, requirePer
     if (!v) return res.status(404).json({ ok: false, error: 'Venta no encontrada' });
     const schema = z.object({
       fecha: zFecha.optional(),
-      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta']),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta', 'intercompany']),
       importe: z.number().positive(),
       kilosEntregados: z.number().nonnegative().nullable().optional(),
       caja: z.string().nullable().optional(),
       chequeId: z.string().nullable().optional(),
       bancoCuentaId: z.string().nullable().optional(),
       observaciones: z.string().nullable().optional(),
+      // Intercompany: otra firma del grupo pone los fondos.
+      empresaOrigenId: z.string().nullable().optional(),
+      recursoIntercompany: z.enum(['efectivo', 'cheque', 'transferencia', 'deuda']).nullable().optional(),
+      cajaOrigen: z.string().nullable().optional(),
+      chequeIdOrigen: z.string().nullable().optional(),
+      bancoCuentaIdOrigen: z.string().nullable().optional(),
     });
     const d = schema.parse(req.body || {});
+    if (d.metodo === 'intercompany') { const err = _validarIntercompany(req, d.empresaOrigenId); if (err) return res.status(403).json({ ok: false, error: err }); }
     const fecha = d.fecha || new Date();
     const concepto = `Arrendamiento ${arr.propietario} · entrega ${v.etiqueta || v.periodo}`;
     const result = await prisma.$transaction(async (tx) => {
-      const mov = await _moverRecursoPagoDiario(tx, req, {
-        metodo: d.metodo, monto: d.importe, fecha, concepto,
-        caja: d.caja, chequeId: d.chequeId, bancoCuentaId: d.bancoCuentaId,
-        contraparte: arr.propietario, observaciones: d.observaciones,
-      });
+      let mov = null, interRef = null;
+      if (d.metodo === 'intercompany') {
+        interRef = await _pagoIntercompanyAsientos(tx, req, {
+          empresaOrigenId: d.empresaOrigenId, recurso: d.recursoIntercompany || 'deuda', monto: d.importe, fecha, concepto,
+          cajaOrigen: d.cajaOrigen, chequeIdOrigen: d.chequeIdOrigen, bancoCuentaIdOrigen: d.bancoCuentaIdOrigen, obsExtra: d.observaciones,
+        });
+      } else {
+        mov = await _moverRecursoPagoDiario(tx, req, {
+          metodo: d.metodo, monto: d.importe, fecha, concepto,
+          caja: d.caja, chequeId: d.chequeId, bancoCuentaId: d.bancoCuentaId,
+          contraparte: arr.propietario, observaciones: d.observaciones,
+        });
+      }
       // mov es el registro creado (Efectivo o BancoMovimiento) o el cheque actualizado.
       const esEfectivo = (d.metodo === 'efectivo' || d.metodo === 'externo' || d.metodo === 'tarjeta');
       const esBanco = (d.metodo === 'transferencia' || d.metodo === 'debito');
@@ -19200,6 +19231,8 @@ app.post('/api/arrendamientos/:id/ventas/:vid/pagos', requireCompany, requirePer
         caja: d.caja || null, chequeId: d.chequeId || null, bancoCuentaId: d.bancoCuentaId || null,
         movEfectivoId: esEfectivo ? (mov?.id || null) : null,
         movBancoId: esBanco ? (mov?.id || null) : null,
+        empresaOrigenId: d.metodo === 'intercompany' ? (d.empresaOrigenId || null) : null,
+        intercompanyRef: interRef,
         observaciones: d.observaciones || null,
       } });
       const pagos = await tx.arrendamientoVentaPago.findMany({ where: { ventaId: v.id } });
@@ -19220,10 +19253,14 @@ app.delete('/api/arrendamientos/:id/ventas/:vid/pagos/:pid', requireCompany, req
     if (!pago) return res.status(404).json({ ok: false, error: 'Entrega no encontrada' });
     await prisma.$transaction(async (tx) => {
       // Revertir el movimiento de plata segun el medio.
-      if (pago.movEfectivoId) { try { await tx.efectivo.delete({ where: { id: pago.movEfectivoId } }); } catch {} }
-      if (pago.movBancoId) { try { await tx.bancoMovimiento.delete({ where: { id: pago.movBancoId } }); } catch {} }
-      if (pago.metodo === 'cheque' && pago.chequeId) {
-        try { await tx.cheque.update({ where: { id: pago.chequeId }, data: { estado: 'en_cartera', beneficiario: null, enPoderDe: null, fechaEndoso: null } }); } catch {}
+      if (pago.metodo === 'intercompany') {
+        await _revertirPagoIntercompany(tx, pago.intercompanyRef);
+      } else {
+        if (pago.movEfectivoId) { try { await tx.efectivo.delete({ where: { id: pago.movEfectivoId } }); } catch {} }
+        if (pago.movBancoId) { try { await tx.bancoMovimiento.delete({ where: { id: pago.movBancoId } }); } catch {} }
+        if (pago.metodo === 'cheque' && pago.chequeId) {
+          try { await tx.cheque.update({ where: { id: pago.chequeId }, data: { estado: 'en_cartera', beneficiario: null, enPoderDe: null, fechaEndoso: null } }); } catch {}
+        }
       }
       await tx.arrendamientoVentaPago.delete({ where: { id: pago.id } });
       const pagos = await tx.arrendamientoVentaPago.findMany({ where: { ventaId: v.id } });
@@ -21433,6 +21470,62 @@ async function _intercompanyMoverRecurso(tx, o) {
     }});
   }
   // 'deuda' (o vacío): no se mueve ningún recurso, queda solo la deuda intercompany.
+}
+
+// Pago INTERCOMPANY generico (reutilizable): otra firma del grupo pone los fondos.
+// Deja los asientos espejo en cuenta corriente, el registro central y mueve el recurso
+// real de la firma que financia. Devuelve el intercompanyRef (para poder revertirlo).
+async function _pagoIntercompanyAsientos(tx, req, o) {
+  const { empresaOrigenId, recurso, monto, fecha, concepto, cajaOrigen, chequeIdOrigen, bancoCuentaIdOrigen, obsExtra } = o;
+  const interRef = `ic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const obsIc = `${concepto}${obsExtra ? ' · ' + obsExtra : ''} [ic:${interRef}]`;
+  // Esta empresa (destino) queda debiendo a la otra: haber = monto.
+  await tx.ctaCte.create({ data: {
+    companyId: req.companyId, contactoTipo: 'intercompany',
+    empresaContraparteId: empresaOrigenId, intercompanyRef: interRef,
+    fecha, detalle: concepto + ' — pagado por otra firma del grupo', haber: monto, observaciones: obsIc,
+  }});
+  // La firma que paga queda con saldo a favor: debe = monto.
+  await tx.ctaCte.create({ data: {
+    companyId: empresaOrigenId, contactoTipo: 'intercompany',
+    empresaContraparteId: req.companyId, intercompanyRef: interRef,
+    fecha, detalle: 'Pago para otra firma del grupo: ' + concepto, debe: monto, observaciones: obsIc,
+  }});
+  await tx.intercompanyMovimiento.create({ data: {
+    fecha, empresaOrigenId, empresaDestinoId: req.companyId,
+    monto, motivo: concepto, intercompanyRef: interRef, observaciones: obsIc, userId: req.user?.id || null,
+  }});
+  await _intercompanyMoverRecurso(tx, {
+    empresaOrigenId, recurso: recurso || 'deuda', monto, fecha, concepto, observaciones: obsIc,
+    userId: req.user?.id || null, cajaOrigen, chequeIdOrigen, bancoCuentaIdOrigen,
+  });
+  return interRef;
+}
+// Revertir un pago intercompany por su ref: borra los asientos, el registro central y el recurso real.
+async function _revertirPagoIntercompany(tx, interRef) {
+  if (!interRef) return;
+  const tag = `[ic:${interRef}]`;
+  try { await tx.efectivo.deleteMany({ where: { observaciones: { contains: tag } } }); } catch {}
+  try { await tx.bancoMovimiento.deleteMany({ where: { observaciones: { contains: tag } } }); } catch {}
+  try {
+    const chs = await tx.cheque.findMany({ where: { observaciones: { contains: tag } } });
+    for (const ch of chs) { await tx.cheque.update({ where: { id: ch.id }, data: { estado: 'en_cartera', fechaEndoso: null, beneficiario: null, enPoderDe: null } }); }
+  } catch {}
+  try { await tx.ctaCte.deleteMany({ where: { intercompanyRef: interRef } }); } catch {}
+  try { await tx.intercompanyMovimiento.deleteMany({ where: { intercompanyRef: interRef } }); } catch {}
+}
+// Chequea permiso + validez de la firma origen para un pago intercompany. Devuelve string de error o null.
+function _validarIntercompany(req, empresaOrigenId) {
+  if (!empresaOrigenId) return 'Elegí la firma del grupo que paga';
+  if (empresaOrigenId === req.companyId) return 'La firma que paga no puede ser la misma';
+  if (!_userTieneAcceso(req, empresaOrigenId)) return 'No tenés acceso a la firma que paga';
+  const tienePerm = req.user.superAdmin || (req.user.userCompanies || []).some(uc =>
+    uc.companyId === req.companyId &&
+    ((uc.role?.permissions || []).includes('finanzas:intercompany') ||
+     (uc.role?.permissions || []).includes('finanzas:*') ||
+     (uc.role?.permissions || []).includes('*:*')));
+  if (!tienePerm) return 'No tenés permiso finanzas:intercompany';
+  return null;
 }
 
 // Compra / venta de dólares en el banco: se mueven pesos en una cuenta ARS y

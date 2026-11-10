@@ -1260,6 +1260,8 @@ model ArrendamientoVentaPago {
   chequeId        String?
   bancoCuentaId   String?
   kilosEntregados Float?    // kilos fisicos entregados en esta entrega (informativo)
+  empresaOrigenId String?   // intercompany: firma del grupo que puso los fondos
+  intercompanyRef String?   // intercompany: ref para revertir los asientos
   movEfectivoId   String?   // id del movimiento de Efectivo generado (para revertir)
   movBancoId      String?   // id del movimiento Bancario generado (para revertir)
   observaciones   String?

@@ -3082,6 +3082,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/11/2026',
+      titulo:'🔄 v2.404.0 — Pagar arrendamientos con Intercompany',
+      desc:'En el pago de arrendamientos ahora se puede elegir <b>🔄 Intercompany (otra firma paga)</b>: otra empresa del grupo pone los fondos. Aplica tanto a las <b>cuotas</b> (efectivo, quintales, Kg Novillo) como a las <b>entregas</b> de la modalidad en kilos. Elegís la firma que paga y cómo pone la plata (solo deuda entre firmas, efectivo de una caja de esa firma, cheque de esa firma o transferencia de una cuenta de esa firma). El sistema arma solo los asientos espejo en Cuentas Intercompany y mueve el recurso real de la firma que financia. Requiere permiso <b>finanzas:intercompany</b> y tener acceso a más de una empresa.' },
     { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/11/2026',
       titulo:'🌾 v2.403.0 — Arrendamiento en kilos de soja (venta mensual a pizarra)',
       desc:'Nueva modalidad de arrendamiento <b>Kilos de grano (venta mensual a pizarra)</b>. Cargás el <b>total en kilos</b> (ej. 115.200), los <b>kilos por mes</b> (ej. 9.600) y el <b>mes de inicio</b>, y el sistema arma el <b>plan de meses</b>. Después, en <b>🌾 Ventas</b>, por cada venta cargás los <b>kilos reales</b> y el <b>precio pizarra del día ($/tonelada)</b> y el sistema calcula cuánto corresponde pagarle. Además registrás las <b>entregas (pagos parciales)</b> sobre cada venta — con los <b>kilos entregados</b> si querés anotarlos: cada entrega <b>mueve la plata</b> (efectivo, cheque, transferencia…) a <b>Movimientos diarios</b> y descuenta del saldo, hasta saldar. Se puede deshacer una entrega. Incluye <b>instructivo</b> en Ayuda.' },
@@ -33577,8 +33580,10 @@ async function arrPagarCuota(id, idx){
           <option value="transferencia">Transferencia bancaria</option>
           <option value="debito">Débito bancario</option>
           <option value="tarjeta">💳 Tarjeta de crédito</option>
+          ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (otra firma paga)</option>` : ''}
         </select>
       </div>
+      <div id="ap-ic-wrap" style="display:none"></div>
       <div id="ap-efectivo-wrap"><label class="label">${state.cajaPorTenedor?'Tenedor (quién tiene la plata)':'Caja de la que sale el pago'}</label>
         <select id="ap-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select>
         ${cajas.length?'':'<div class="text-[11px] text-amber-700 mt-1">No hay cajas cargadas. Cargá una en Catálogos → Cajas.</div>'}</div>
@@ -33605,11 +33610,12 @@ async function arrPagarCuota(id, idx){
 }
 function arrPagarCuotaToggle(){
   const m = $('#ap-med')?.value||'efectivo';
-  const ef=$('#ap-efectivo-wrap'), chq=$('#ap-cheque-wrap'), bco=$('#ap-banco-wrap'), tj=$('#ap-tarjeta-wrap');
+  const ef=$('#ap-efectivo-wrap'), chq=$('#ap-cheque-wrap'), bco=$('#ap-banco-wrap'), tj=$('#ap-tarjeta-wrap'), ic=$('#ap-ic-wrap');
   if(ef) ef.style.display = m==='efectivo'?'':'none';
   if(chq) chq.style.display = m==='cheque'?'':'none';
   if(bco) bco.style.display = (m==='transferencia'||m==='debito')?'':'none';
   if(tj) tj.style.display = m==='tarjeta'?'':'none';
+  if(ic){ ic.style.display = m==='intercompany'?'':'none'; if(m==='intercompany' && !ic.dataset.loaded){ ic.innerHTML = intercoSubform('ap'); ic.dataset.loaded='1'; } }
 }
 async function arrPagarCuotaConfirmar(){
   if(!_arrPagoCtx) return;
@@ -33626,6 +33632,15 @@ async function arrPagarCuotaConfirmar(){
   if(metodo==='tarjeta' && !data.caja) return toast('Elegí la tarjeta de crédito','warn');
   if(metodo==='cheque' && !data.chequeId) return toast('Elegí el cheque','warn');
   if((metodo==='transferencia'||metodo==='debito') && !data.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn');
+  if(metodo==='intercompany'){
+    const ic = intercoLeerRecurso('ap');
+    if(!ic.empresaOrigenId) return toast('Elegí la firma que pone los fondos','warn');
+    if(ic.recurso==='efectivo' && !ic.caja) return toast('Elegí la caja de la otra firma','warn');
+    if(ic.recurso==='cheque' && !ic.cheque) return toast('Elegí el cheque de la otra firma','warn');
+    if(ic.recurso==='transferencia' && !ic.cuenta) return toast('Elegí la cuenta de la otra firma','warn');
+    data.empresaOrigenId = ic.empresaOrigenId; data.recursoIntercompany = ic.recurso;
+    data.cajaOrigen = ic.caja; data.chequeIdOrigen = ic.cheque; data.bancoCuentaIdOrigen = ic.cuenta;
+  }
   try {
     await api('/api/arrendamientos/'+id+'/cuotas/'+idx+'/pagar',{method:'PUT',body:JSON.stringify(data)});
     toast('Cuota pagada · registrada en Movimientos diarios','success');
@@ -33719,7 +33734,9 @@ async function arrEntregaForm(id, vid){
           <option value="transferencia">Transferencia bancaria</option>
           <option value="debito">Débito bancario</option>
           <option value="tarjeta">💳 Tarjeta de crédito</option>
+          ${(state.user?.companies || []).length > 1 ? `<option value="intercompany">🔄 Intercompany (otra firma paga)</option>` : ''}
         </select></div>
+      <div id="ae-ic-wrap" style="display:none"></div>
       <div id="ae-efectivo-wrap"><label class="label">Caja de la que sale</label>
         <select id="ae-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select></div>
       <div id="ae-tarjeta-wrap" style="display:none">${tarjetaPicker('ae-tarjeta')}</div>
@@ -33736,11 +33753,12 @@ async function arrEntregaForm(id, vid){
 }
 function arrEntregaToggle(){
   const m=$('#ae-med')?.value||'efectivo';
-  const ef=$('#ae-efectivo-wrap'), chq=$('#ae-cheque-wrap'), bco=$('#ae-banco-wrap'), tj=$('#ae-tarjeta-wrap');
+  const ef=$('#ae-efectivo-wrap'), chq=$('#ae-cheque-wrap'), bco=$('#ae-banco-wrap'), tj=$('#ae-tarjeta-wrap'), ic=$('#ae-ic-wrap');
   if(ef) ef.style.display=m==='efectivo'?'':'none';
   if(chq) chq.style.display=m==='cheque'?'':'none';
   if(bco) bco.style.display=(m==='transferencia'||m==='debito')?'':'none';
   if(tj) tj.style.display=m==='tarjeta'?'':'none';
+  if(ic){ ic.style.display=m==='intercompany'?'':'none'; if(m==='intercompany' && !ic.dataset.loaded){ ic.innerHTML = intercoSubform('ae'); ic.dataset.loaded='1'; } }
 }
 async function arrEntregaSave(){
   if(!_arrEntregaCtx) return; const { id, vid }=_arrEntregaCtx;
@@ -33757,6 +33775,15 @@ async function arrEntregaSave(){
   if(metodo==='cheque' && !data.chequeId) return toast('Elegí el cheque','warn');
   if((metodo==='transferencia'||metodo==='debito') && !data.bancoCuentaId) return toast('Elegí la cuenta','warn');
   if(metodo==='tarjeta' && !data.caja) return toast('Elegí la tarjeta','warn');
+  if(metodo==='intercompany'){
+    const ic = intercoLeerRecurso('ae');
+    if(!ic.empresaOrigenId) return toast('Elegí la firma que pone los fondos','warn');
+    if(ic.recurso==='efectivo' && !ic.caja) return toast('Elegí la caja de la otra firma','warn');
+    if(ic.recurso==='cheque' && !ic.cheque) return toast('Elegí el cheque de la otra firma','warn');
+    if(ic.recurso==='transferencia' && !ic.cuenta) return toast('Elegí la cuenta de la otra firma','warn');
+    data.empresaOrigenId = ic.empresaOrigenId; data.recursoIntercompany = ic.recurso;
+    data.cajaOrigen = ic.caja; data.chequeIdOrigen = ic.cheque; data.bancoCuentaIdOrigen = ic.cuenta;
+  }
   try{ await api('/api/arrendamientos/'+id+'/ventas/'+vid+'/pagos',{method:'POST',body:JSON.stringify(data)});
     toast('Entrega registrada · movida a Movimientos diarios','success');
     delete state.cache.bancoCuentas; delete state.cache.chequesCartera; closeModal2(); arrVentasModal(id);
