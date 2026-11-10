@@ -3082,8 +3082,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/11/2026',
-      titulo:'🌾 v2.401.0 — Vincular remitos a granos + canje ordenado',
-      desc:'Dos cosas: 1) En <b>Proveedores de granos</b> cada proveedor tiene el botón <b>📥 De remitos</b>: trae los <b>remitos de compra ya cargados</b> de ese proveedor que todavía no estaban en la cuenta de kilos y los suma de una, sin recargarlos. Como los kilos ya entraron al stock con el remito, <b>no se mueve stock de nuevo</b>. Elegís cuáles importar y les ponés un plazo. 2) <b>Plan canje</b> y <b>Cuenta canje (grano)</b> ahora viven solo en el menú <b>Comercial</b> (antes estaban repetidos como pestañas dentro de Molienda). En <b>Molienda / Fábrica</b> quedó un acceso directo <b>🔁 Ir al canje</b> que te lleva ahí. Los datos del canje son los mismos.' },
+      titulo:'🌾 v2.402.0 — Vincular comprobantes a granos + canje ordenado',
+      desc:'Dos cosas: 1) En <b>Proveedores de granos</b> cada proveedor tiene el botón <b>📥 De comprobantes</b>: trae los <b>comprobantes internos de compra ya cargados</b> de ese proveedor que todavía no estaban en la cuenta de kilos y los suma de una, sin recargarlos — de ahí saca los kilos. Como los kilos ya entraron al stock con el comprobante, <b>no se mueve stock de nuevo</b>. Elegís cuáles importar y les ponés un plazo. 2) <b>Plan canje</b> y <b>Cuenta canje (grano)</b> ahora viven solo en el menú <b>Comercial</b> (antes estaban repetidos como pestañas dentro de Molienda). En <b>Molienda / Fábrica</b> quedó un acceso directo <b>🔁 Ir al canje</b> que te lleva ahí. Los datos del canje son los mismos.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'09/11/2026',
       titulo:'🔧 v2.400.1 — Fix definitivo de Proveedores de granos',
       desc:'Quedaba un error al <b>editar un proveedor</b> o abrir <b>Proveedores de granos</b> (por una referencia interna de la base que no se habia publicado). Ahora si quedo corregido en el sistema. No se pierde nada de lo cargado.' },
@@ -31926,7 +31926,7 @@ pages.proveedoresGranos = async function(){
       <td class="text-center">${vencCell}</td>
       <td class="text-right whitespace-nowrap">
         ${can('stock:create')?`<button class="btn btn-ghost btn-xs text-emerald-700" onclick='pgEntregaForm(${JSON.stringify(p.id)})'>➕ Entrega</button>`:''}
-        ${can('stock:create')?`<button class="btn btn-ghost btn-xs text-sky-700" onclick='pgRemitosForm(${JSON.stringify(p.id)})'>📥 De remitos</button>`:''}
+        ${can('stock:create')?`<button class="btn btn-ghost btn-xs text-sky-700" onclick='pgCompIntForm(${JSON.stringify(p.id)})'>📥 De comprobantes</button>`:''}
         ${can('stock:create')&&disp>0.001?`<button class="btn btn-ghost btn-xs text-indigo-700" onclick='pgLiquidarForm(${JSON.stringify(p.id)})'>💵 Liquidar</button>`:''}
         <button class="btn btn-ghost btn-xs" onclick='pgVer(${JSON.stringify(p.id)})'>👁️ Ver</button>
       </td></tr>`;}).join('');
@@ -31972,19 +31972,19 @@ async function pgEntregaSave(provId){
   try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Entrega cargada','success'); closeModal2(); pages.proveedoresGranos(); }
   catch(e){ toast(e.message,'error'); }
 }
-async function pgRemitosForm(provId){
-  let rems=[];
-  try{ const r=await api('/api/granos-cta/remitos-pendientes?proveedorId='+encodeURIComponent(provId)); rems=r.data||[]; }
+async function pgCompIntForm(provId){
+  let comps=[];
+  try{ const r=await api('/api/granos-cta/comprobantes-pendientes?proveedorId='+encodeURIComponent(provId)); comps=r.data||[]; }
   catch(e){ return toast(e.message,'error'); }
-  if(!rems.length) return toast('No hay remitos de compra sin vincular para este proveedor','info');
-  const filas = rems.map(r=>`<tr class="border-t">
-      <td class="p-1"><input type="checkbox" class="pgr-chk" value="${esc(r.id)}" data-prod="${esc(r.productoId||'')}" checked/></td>
-      <td class="p-1 text-xs">${esc(r.nro||'')}${r.numeroProveedor?` <span class="text-slate-400">(${esc(r.numeroProveedor)})</span>`:''}</td>
-      <td class="p-1 text-xs">${fmtDate(r.fecha)}</td>
-      <td class="p-1 text-right text-xs font-semibold">${_pgKg(r.kilos)} kg</td>
+  if(!comps.length) return toast('No hay comprobantes internos sin vincular para este proveedor','info');
+  const filas = comps.map(c=>`<tr class="border-t">
+      <td class="p-1"><input type="checkbox" class="pgr-chk" value="${esc(c.id)}" data-prod="${esc(c.productoId||'')}" checked/></td>
+      <td class="p-1 text-xs">${esc(c.numeroInterno||'')}</td>
+      <td class="p-1 text-xs">${fmtDate(c.fecha)}</td>
+      <td class="p-1 text-right text-xs font-semibold">${_pgKg(c.kilos)} kg</td>
     </tr>`).join('');
-  openModal2({ title:'📥 Importar kilos de remitos ya cargados', size:'max-w-lg',
-    body:`<p class="text-xs text-slate-600 mb-2">Estos remitos de compra ya cargados todavía no están vinculados a la cuenta de granos. Elegí cuáles sumar (los kilos ya están en stock, <b>no se mueve stock de nuevo</b>).</p>
+  openModal2({ title:'📥 Importar kilos de comprobantes internos', size:'max-w-lg',
+    body:`<p class="text-xs text-slate-600 mb-2">Estos <b>comprobantes internos de compra</b> de este proveedor todavía no están vinculados a la cuenta de granos. Elegí cuáles sumar — de ahí salen los kilos (los kilos ya están en stock, <b>no se mueve stock de nuevo</b>).</p>
       <div><label class="label">Plazo para liquidar (aplica a todos)</label>
         <select id="pgr-plazo" class="input">
           <option value="">— sin plazo —</option>
@@ -31994,23 +31994,23 @@ async function pgRemitosForm(provId){
           <option value="60">60 días</option>
         </select></div>
       <div class="border rounded mt-2 overflow-auto max-h-64"><table class="w-full text-sm">
-        <thead class="bg-slate-50 text-xs"><tr><th class="p-1"><input type="checkbox" id="pgr-all" checked/></th><th class="p-1 text-left">Remito</th><th class="p-1 text-left">Fecha</th><th class="p-1 text-right">Kilos</th></tr></thead>
+        <thead class="bg-slate-50 text-xs"><tr><th class="p-1"><input type="checkbox" id="pgr-all" checked/></th><th class="p-1 text-left">Comprobante</th><th class="p-1 text-left">Fecha</th><th class="p-1 text-right">Kilos</th></tr></thead>
         <tbody>${filas}</tbody></table></div>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='pgRemitosSave(${JSON.stringify(provId)})'>Importar seleccionados</button>` });
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='pgCompIntSave(${JSON.stringify(provId)})'>Importar seleccionados</button>` });
   const all=$('#pgr-all'); if(all) all.onclick=()=>{ document.querySelectorAll('.pgr-chk').forEach(c=>c.checked=all.checked); };
 }
-async function pgRemitosSave(provId){
+async function pgCompIntSave(provId){
   const chks=[...document.querySelectorAll('.pgr-chk:checked')];
-  if(!chks.length) return toast('Elegí al menos un remito','warn');
+  if(!chks.length) return toast('Elegí al menos un comprobante','warn');
   const plazoV=$('#pgr-plazo')?.value;
   const plazoDias=(plazoV!==''&&plazoV!=null)?Number(plazoV):null;
   let ok=0, err=0;
   for(const c of chks){
-    try{ await api('/api/granos-cta/importar-remito',{method:'POST',body:JSON.stringify({ remitoCompraId:c.value, plazoDias })}); ok++; }
+    try{ await api('/api/granos-cta/importar-comprobante',{method:'POST',body:JSON.stringify({ facturaCompraId:c.value, plazoDias })}); ok++; }
     catch(e){ err++; }
   }
   delete state.cache.stock;
-  toast(`Importados ${ok} remito(s)${err?`, ${err} con error`:''}`, err?'warn':'success');
+  toast(`Importados ${ok} comprobante(s)${err?`, ${err} con error`:''}`, err?'warn':'success');
   closeModal2(); pages.proveedoresGranos();
 }
 async function pgLiquidarForm(provId){

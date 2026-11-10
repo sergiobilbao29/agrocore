@@ -3555,6 +3555,7 @@ model GranoCtaMov {
   kilosEntregaProd  Float?               // kilos del producto entregado (liquidacion canje)
   numeroComprobante String?              // nro de remito/comprobante (entrega)
   remitoCompraId  String?                // si la entrega se importo de un remito de compra ya cargado (dedup)
+  facturaCompraId String?                // si la entrega se importo de un comprobante interno de compra ya cargado (dedup)
   depositoId      String?
   generaStock     Boolean  @default(false) // entrega con ingreso de stock de grano
   ctaCteRef       String?                // ref de la deuda en $ generada (liquidacion)

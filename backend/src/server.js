@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.401.0';
+const AGROCORE_VERSION = '2.402.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12612,6 +12612,56 @@ app.post('/api/granos-cta/importar-remito', requireCompany, requirePermission('s
       numeroComprobante: r.numeroProveedor || `R-${String(r.numero || 0).padStart(8, '0')}`,
       remitoCompraId, generaStock: false, // el stock ya entro con el remito
       observaciones: 'Importado del remito de compra', userId: req.user?.id || null,
+    } });
+    await prisma.granoCtaMov.update({ where: { id: creado.id }, data: { referencia: 'GRANOCTA-' + creado.id } });
+    res.status(201).json({ ok: true, data: creado });
+  } catch (e) { next(e); }
+});
+// Comprobantes internos de COMPRA (FacturaCompra esInterno) del proveedor que todavia no
+// se importaron a la cuenta de granos. De cada uno se sacan los kilos (suma de items).
+app.get('/api/granos-cta/comprobantes-pendientes', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const proveedorId = String(req.query.proveedorId || '');
+    if (!proveedorId) return res.status(400).json({ ok: false, error: 'Falta proveedorId' });
+    const comps = await prisma.facturaCompra.findMany({
+      where: { companyId: req.companyId, proveedorId, esInterno: true, clase: 'factura' },
+      include: { items: true }, orderBy: { fecha: 'asc' },
+    });
+    const imp = await prisma.granoCtaMov.findMany({ where: { companyId: req.companyId, facturaCompraId: { not: null } }, select: { facturaCompraId: true } });
+    const impSet = new Set(imp.map(x => x.facturaCompraId));
+    const data = comps.filter(c => !impSet.has(c.id)).map(c => {
+      const kilos = (c.items || []).reduce((a, i) => a + Number(i.cantidad || 0), 0);
+      return { id: c.id, numeroInterno: c.numeroInterno || `CI-${String(c.numero || 0).padStart(4, '0')}`, fecha: c.fecha, kilos: Math.round(kilos * 100) / 100, productoId: (c.items || []).find(i => i.productoId)?.productoId || null };
+    }).filter(c => c.kilos > 0.001);
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+// Importar un comprobante interno de compra ya cargado como ENTREGA en kilos (NO mueve stock
+// de nuevo: el comprobante ya lo ingreso). Se vincula por facturaCompraId para no duplicar.
+app.post('/api/granos-cta/importar-comprobante', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    const facturaCompraId = String(req.body?.facturaCompraId || '');
+    if (!facturaCompraId) return res.status(400).json({ ok: false, error: 'Falta facturaCompraId' });
+    const c = await prisma.facturaCompra.findFirst({ where: { id: facturaCompraId, companyId: req.companyId }, include: { items: true } });
+    if (!c) return res.status(404).json({ ok: false, error: 'Comprobante no encontrado' });
+    if (!c.proveedorId) return res.status(400).json({ ok: false, error: 'El comprobante no tiene proveedor' });
+    const dup = await prisma.granoCtaMov.findFirst({ where: { companyId: req.companyId, facturaCompraId } });
+    if (dup) return res.status(409).json({ ok: false, error: 'Ese comprobante ya está importado en la cuenta de granos' });
+    const kilos = (c.items || []).reduce((a, i) => a + Number(i.cantidad || 0), 0);
+    if (!(kilos > 0)) return res.status(400).json({ ok: false, error: 'El comprobante no tiene kilos' });
+    const plazoDias = (req.body?.plazoDias != null && req.body.plazoDias !== '') ? Number(req.body.plazoDias) : null;
+    let vencimiento = null;
+    if (plazoDias != null && plazoDias >= 0) { vencimiento = new Date(c.fecha); vencimiento.setDate(vencimiento.getDate() + plazoDias); }
+    const proveedorNombre = await _nombreContacto(req, 'proveedor', c.proveedorId);
+    const nro = c.numeroInterno || `CI-${String(c.numero || 0).padStart(4, '0')}`;
+    const creado = await prisma.granoCtaMov.create({ data: {
+      companyId: req.companyId, fecha: c.fecha, proveedorId: c.proveedorId, proveedorNombre,
+      tipo: 'entrega', productoId: (c.items || []).find(i => i.productoId)?.productoId || null,
+      kilos, signo: 1, kilosNeto: kilos,
+      plazoDias, vencimiento,
+      numeroComprobante: nro,
+      facturaCompraId, generaStock: false, // el stock ya entro con el comprobante interno
+      observaciones: 'Importado del comprobante interno', userId: req.user?.id || null,
     } });
     await prisma.granoCtaMov.update({ where: { id: creado.id }, data: { referencia: 'GRANOCTA-' + creado.id } });
     res.status(201).json({ ok: true, data: creado });
