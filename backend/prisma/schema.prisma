@@ -80,6 +80,8 @@ model Company {
   cheques         Cheque[]
   ctasCtes        CtaCte[]
   arrendamientos  Arrendamiento[]
+  arrendamientoVentas ArrendamientoVenta[]
+  arrendamientoVentaPagos ArrendamientoVentaPago[]
   efectivos       Efectivo[]
   flujosCaja      FlujoCaja[]
   viajes          Viaje[]
@@ -1205,14 +1207,69 @@ model Arrendamiento {
   quintalesHaNegro  Float?  // qq/ha en negro (sin factura)
   moneda          String?   // moneda de referencia del contrato (ARS/USD)
   cuotas          Json?     // [{ etiqueta, vencimiento, quintalesHa, color('blanco'|'negro'), pagado }]
+  // Modalidad "kilos_venta": el total del contrato es en kilos de grano; el dueño va
+  // vendiendo por mes y al vender se valúa a precio pizarra del dia. Se paga en entregas.
+  kilosTotal      Float?    // kilos totales del contrato (ej. 115200)
+  kilosPorMes     Float?    // kilos que vende por mes segun el arreglo (ej. 9600)
+  mesInicio       String?   // primer mes del plan "YYYY-MM" (ej. "2026-10")
   observaciones   String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   campo           Campo?    @relation(fields: [campoId], references: [id])
+  ventas          ArrendamientoVenta[]
 
   @@index([companyId])
+}
+
+// Una venta mensual del dueño dentro de un arrendamiento en modalidad "kilos_venta".
+// Al cargar el precio pizarra del dia se valúa (importe = kilos/1000 * precioPizarra, $/tn).
+model ArrendamientoVenta {
+  id              String   @id @default(cuid())
+  companyId       String
+  arrendamientoId String
+  periodo         String    // "YYYY-MM"
+  etiqueta        String?   // "Octubre 2026"
+  fechaVenta      DateTime?
+  kilos           Float     @default(0)   // kilos reales vendidos (arranca con el plan)
+  precioPizarra   Float?    // $/tonelada del grano el dia de la venta
+  importe         Float?    // kilos valuados a pizarra (lo que hay que pagarle)
+  estado          String    @default("pendiente")  // pendiente | vendida | pagada
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  company         Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  arrendamiento   Arrendamiento  @relation(fields: [arrendamientoId], references: [id], onDelete: Cascade)
+  pagos           ArrendamientoVentaPago[]
+
+  @@index([companyId])
+  @@index([arrendamientoId])
+}
+
+// Una entrega / pago parcial sobre una venta. Mueve plata real (Movimientos diarios).
+model ArrendamientoVentaPago {
+  id              String   @id @default(cuid())
+  companyId       String
+  ventaId         String
+  fecha           DateTime
+  importe         Float
+  metodo          String    // efectivo | cheque | transferencia | debito | externo | tarjeta
+  caja            String?
+  chequeId        String?
+  bancoCuentaId   String?
+  kilosEntregados Float?    // kilos fisicos entregados en esta entrega (informativo)
+  movEfectivoId   String?   // id del movimiento de Efectivo generado (para revertir)
+  movBancoId      String?   // id del movimiento Bancario generado (para revertir)
+  observaciones   String?
+  createdAt       DateTime  @default(now())
+
+  company         Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  venta           ArrendamientoVenta @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([ventaId])
 }
 
 model Efectivo {

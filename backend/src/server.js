@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.402.0';
+const AGROCORE_VERSION = '2.403.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8440,6 +8440,9 @@ mountCrud({
     quintalesHaBlanco: z.number().nullable().optional(),
     quintalesHaNegro: z.number().nullable().optional(),
     moneda: z.string().nullable().optional(),
+    kilosTotal: z.number().nullable().optional(),
+    kilosPorMes: z.number().nullable().optional(),
+    mesInicio: z.string().nullable().optional(),
     cuotas: z.array(z.object({
       etiqueta: z.string().nullable().optional(),
       vencimiento: z.string().nullable().optional(),
@@ -17171,12 +17174,15 @@ const _AYUDA_KB = [
       'Rotación de lotes: en el Padrón seleccioná caravanas y usá "Mover de lote"; mueve el stock entre lotes solo.',
       'Bajas: en el Padrón, botón "Baja" (muerte o venta) descuenta la cabeza del stock. Podés guardar cada recuento en el Historial.'],
     atajo:{ page:'caravanas', label:'Abrir Caravanas / Recuento' } },
-  { id:'arrendamiento', terms:['arrendamiento','alquiler de campo','contrato de arrendamiento','pagar arrendamiento','quintales','kg novillo'],
+  { id:'arrendamiento', terms:['arrendamiento','alquiler de campo','contrato de arrendamiento','pagar arrendamiento','quintales','kg novillo','kilos de soja','venta mensual','precio pizarra','entregas parciales'],
     titulo:'Cargar / pagar un arrendamiento',
     pasos:[
-      'Entrá a Arrendamientos → "Nuevo contrato" y ponele nombre.',
-      'Elegí la modalidad (quintales fijos, % , Kg Novillo, etc.), especie y valuación.',
-      'Se generan las cuotas; pagalas con cualquier medio y quedan en Movimientos diarios.'],
+      'Entrá a Finanzas → Arrendamientos → "Nuevo arrendamiento": nombre, propietario, hectáreas y modalidad.',
+      'Modalidades: Efectivo ($/ha), Quintales de grano, Kg Novillo, Porcentaje del rinde, y Kilos de grano (venta mensual a pizarra).',
+      'En efectivo/quintales/Kg Novillo cargás cuotas y las pagás con el botón 📅; cada pago queda en Movimientos diarios.',
+      'En "Kilos de grano": cargás total en kilos, kilos por mes y mes de inicio; el sistema arma el plan de meses.',
+      'Botón 🌾 Ventas: por cada mes cargás los kilos reales vendidos y el precio pizarra ($/tonelada) del día → el sistema calcula cuánto pagar.',
+      'Entregas: con 💵 Entrega registrás pagos parciales sobre cada venta (y los kilos entregados, opcional). Cada entrega mueve la plata real y descuenta del saldo hasta saldar.'],
     atajo:{ page:'arrendamientos', label:'Abrir Arrendamientos' } },
   { id:'credito', terms:['credito','prestamo','credito bancario','cuota de credito','financiacion','plan de cuotas'],
     titulo:'Cargar un crédito bancario',
@@ -19060,6 +19066,173 @@ app.put('/api/arrendamientos/:id/cuotas/:idx/pagar', requireCompany, requirePerm
       return tx.arrendamiento.update({ where: { id: arr.id }, data: { cuotas, pagado: todasPagas ? true : arr.pagado } });
     });
     res.json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// ARRENDAMIENTO modalidad "kilos_venta": plan de ventas mensuales + entregas parciales.
+// El total del contrato es en kilos; el dueño vende por mes y al vender se valúa a
+// precio pizarra del dia (importe = kilos/1000 * precioPizarra $/tn). Se paga en entregas.
+// ============================================================
+const _MESES_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+function _etiquetaMes(periodo) { // "2026-10" -> "Octubre 2026"
+  const [y, m] = String(periodo || '').split('-').map(Number);
+  if (!y || !m) return periodo || '';
+  return `${_MESES_ES[m - 1] || ''} ${y}`;
+}
+function _addMes(periodo, n) { // "2026-10" + n meses -> "YYYY-MM"
+  let [y, m] = String(periodo || '').split('-').map(Number);
+  if (!y || !m) { const d = new Date(); y = d.getFullYear(); m = d.getMonth() + 1; }
+  const total = (y * 12 + (m - 1)) + n;
+  const ny = Math.floor(total / 12), nm = (total % 12) + 1;
+  return `${ny}-${String(nm).padStart(2, '0')}`;
+}
+async function _arrVentaConSaldo(tx, v) {
+  const pagos = v.pagos || await tx.arrendamientoVentaPago.findMany({ where: { ventaId: v.id } });
+  const pagado = pagos.reduce((a, p) => a + Number(p.importe || 0), 0);
+  const importe = Number(v.importe || 0);
+  const saldo = Math.round((importe - pagado) * 100) / 100;
+  return { ...v, pagos, pagado: Math.round(pagado * 100) / 100, saldo };
+}
+// Listar las ventas de un arrendamiento (con pagos y saldo)
+app.get('/api/arrendamientos/:id/ventas', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const arr = await prisma.arrendamiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!arr) return res.status(404).json({ ok: false, error: 'Arrendamiento no encontrado' });
+    const ventas = await prisma.arrendamientoVenta.findMany({ where: { companyId: req.companyId, arrendamientoId: arr.id }, include: { pagos: true }, orderBy: { periodo: 'asc' } });
+    const data = ventas.map(v => {
+      const pagado = (v.pagos || []).reduce((a, p) => a + Number(p.importe || 0), 0);
+      const importe = Number(v.importe || 0);
+      return { ...v, pagado: Math.round(pagado * 100) / 100, saldo: Math.round((importe - pagado) * 100) / 100 };
+    });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+// Generar / completar el plan de ventas mensuales a partir de kilosTotal + kilosPorMes + mesInicio.
+// Crea solo los periodos que falten (no pisa los ya cargados).
+app.post('/api/arrendamientos/:id/ventas/generar', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const arr = await prisma.arrendamiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!arr) return res.status(404).json({ ok: false, error: 'Arrendamiento no encontrado' });
+    const schema = z.object({ kilosTotal: z.number().positive(), kilosPorMes: z.number().positive(), mesInicio: z.string().min(6) });
+    const d = schema.parse(req.body || {});
+    const n = Math.max(1, Math.ceil(d.kilosTotal / d.kilosPorMes));
+    const existentes = await prisma.arrendamientoVenta.findMany({ where: { companyId: req.companyId, arrendamientoId: arr.id }, select: { periodo: true } });
+    const setExist = new Set(existentes.map(x => x.periodo));
+    let restante = d.kilosTotal, creadas = 0;
+    for (let i = 0; i < n; i++) {
+      const periodo = _addMes(d.mesInicio, i);
+      const kilos = Math.min(d.kilosPorMes, restante);
+      restante = Math.round((restante - kilos) * 100) / 100;
+      if (setExist.has(periodo)) continue;
+      await prisma.arrendamientoVenta.create({ data: {
+        companyId: req.companyId, arrendamientoId: arr.id, periodo, etiqueta: _etiquetaMes(periodo),
+        kilos, estado: 'pendiente',
+      } });
+      creadas++;
+      if (restante <= 0.001) break;
+    }
+    await prisma.arrendamiento.update({ where: { id: arr.id }, data: { kilosTotal: d.kilosTotal, kilosPorMes: d.kilosPorMes, mesInicio: d.mesInicio } });
+    res.json({ ok: true, creadas });
+  } catch (e) { next(e); }
+});
+// Editar una venta: kilos reales vendidos + precio pizarra -> valúa importe y pasa a "vendida".
+app.put('/api/arrendamientos/:id/ventas/:vid', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const v = await prisma.arrendamientoVenta.findFirst({ where: { id: req.params.vid, companyId: req.companyId, arrendamientoId: req.params.id } });
+    if (!v) return res.status(404).json({ ok: false, error: 'Venta no encontrada' });
+    const schema = z.object({
+      kilos: z.number().nonnegative().optional(),
+      precioPizarra: z.number().nonnegative().nullable().optional(),
+      fechaVenta: zFecha.nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body || {});
+    const kilos = d.kilos != null ? d.kilos : v.kilos;
+    const precio = d.precioPizarra != null ? d.precioPizarra : v.precioPizarra;
+    const importe = (precio != null && kilos != null) ? Math.round((kilos / 1000) * precio * 100) / 100 : v.importe;
+    // Estado: si tiene precio y fecha -> vendida (o pagada si ya está saldada); si no, pendiente.
+    const pagos = await prisma.arrendamientoVentaPago.findMany({ where: { ventaId: v.id } });
+    const pagado = pagos.reduce((a, p) => a + Number(p.importe || 0), 0);
+    let estado = v.estado;
+    if (precio != null) estado = (importe != null && pagado >= importe - 0.01 && importe > 0) ? 'pagada' : 'vendida';
+    const upd = await prisma.arrendamientoVenta.update({ where: { id: v.id }, data: {
+      kilos, precioPizarra: precio, importe,
+      fechaVenta: d.fechaVenta !== undefined ? d.fechaVenta : v.fechaVenta,
+      observaciones: d.observaciones !== undefined ? d.observaciones : v.observaciones,
+      estado,
+    } });
+    res.json({ ok: true, data: upd });
+  } catch (e) { next(e); }
+});
+// Registrar una entrega / pago parcial sobre una venta -> mueve plata (Movimientos diarios).
+app.post('/api/arrendamientos/:id/ventas/:vid/pagos', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const arr = await prisma.arrendamiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!arr) return res.status(404).json({ ok: false, error: 'Arrendamiento no encontrado' });
+    const v = await prisma.arrendamientoVenta.findFirst({ where: { id: req.params.vid, companyId: req.companyId, arrendamientoId: arr.id } });
+    if (!v) return res.status(404).json({ ok: false, error: 'Venta no encontrada' });
+    const schema = z.object({
+      fecha: zFecha.optional(),
+      metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta']),
+      importe: z.number().positive(),
+      kilosEntregados: z.number().nonnegative().nullable().optional(),
+      caja: z.string().nullable().optional(),
+      chequeId: z.string().nullable().optional(),
+      bancoCuentaId: z.string().nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    });
+    const d = schema.parse(req.body || {});
+    const fecha = d.fecha || new Date();
+    const concepto = `Arrendamiento ${arr.propietario} · entrega ${v.etiqueta || v.periodo}`;
+    const result = await prisma.$transaction(async (tx) => {
+      const mov = await _moverRecursoPagoDiario(tx, req, {
+        metodo: d.metodo, monto: d.importe, fecha, concepto,
+        caja: d.caja, chequeId: d.chequeId, bancoCuentaId: d.bancoCuentaId,
+        contraparte: arr.propietario, observaciones: d.observaciones,
+      });
+      // mov es el registro creado (Efectivo o BancoMovimiento) o el cheque actualizado.
+      const esEfectivo = (d.metodo === 'efectivo' || d.metodo === 'externo' || d.metodo === 'tarjeta');
+      const esBanco = (d.metodo === 'transferencia' || d.metodo === 'debito');
+      const pago = await tx.arrendamientoVentaPago.create({ data: {
+        companyId: req.companyId, ventaId: v.id, fecha, importe: d.importe, metodo: d.metodo,
+        kilosEntregados: (d.kilosEntregados != null && d.kilosEntregados > 0) ? d.kilosEntregados : null,
+        caja: d.caja || null, chequeId: d.chequeId || null, bancoCuentaId: d.bancoCuentaId || null,
+        movEfectivoId: esEfectivo ? (mov?.id || null) : null,
+        movBancoId: esBanco ? (mov?.id || null) : null,
+        observaciones: d.observaciones || null,
+      } });
+      const pagos = await tx.arrendamientoVentaPago.findMany({ where: { ventaId: v.id } });
+      const pagado = pagos.reduce((a, p) => a + Number(p.importe || 0), 0);
+      const imp = Number(v.importe || 0);
+      if (imp > 0 && pagado >= imp - 0.01) await tx.arrendamientoVenta.update({ where: { id: v.id }, data: { estado: 'pagada' } });
+      return pago;
+    });
+    res.status(201).json({ ok: true, data: result });
+  } catch (e) { next(e); }
+});
+// Deshacer una entrega: revierte el movimiento de plata y borra el pago.
+app.delete('/api/arrendamientos/:id/ventas/:vid/pagos/:pid', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const v = await prisma.arrendamientoVenta.findFirst({ where: { id: req.params.vid, companyId: req.companyId, arrendamientoId: req.params.id } });
+    if (!v) return res.status(404).json({ ok: false, error: 'Venta no encontrada' });
+    const pago = await prisma.arrendamientoVentaPago.findFirst({ where: { id: req.params.pid, companyId: req.companyId, ventaId: v.id } });
+    if (!pago) return res.status(404).json({ ok: false, error: 'Entrega no encontrada' });
+    await prisma.$transaction(async (tx) => {
+      // Revertir el movimiento de plata segun el medio.
+      if (pago.movEfectivoId) { try { await tx.efectivo.delete({ where: { id: pago.movEfectivoId } }); } catch {} }
+      if (pago.movBancoId) { try { await tx.bancoMovimiento.delete({ where: { id: pago.movBancoId } }); } catch {} }
+      if (pago.metodo === 'cheque' && pago.chequeId) {
+        try { await tx.cheque.update({ where: { id: pago.chequeId }, data: { estado: 'en_cartera', beneficiario: null, enPoderDe: null, fechaEndoso: null } }); } catch {}
+      }
+      await tx.arrendamientoVentaPago.delete({ where: { id: pago.id } });
+      const pagos = await tx.arrendamientoVentaPago.findMany({ where: { ventaId: v.id } });
+      const pagado = pagos.reduce((a, p) => a + Number(p.importe || 0), 0);
+      const imp = Number(v.importe || 0);
+      const estado = (v.precioPizarra != null) ? ((imp > 0 && pagado >= imp - 0.01) ? 'pagada' : 'vendida') : 'pendiente';
+      await tx.arrendamientoVenta.update({ where: { id: v.id }, data: { estado } });
+    });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

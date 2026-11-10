@@ -2848,6 +2848,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Empleados-Compartidos.pdf', t:'Empleados compartidos (jornaleros del grupo)', d:'Un jornalero que trabaja en varias empresas: compartirlo con todo el grupo, cargarle labores desde cualquier empresa (el costo queda donde se hizo) y hacer una liquidación única con desglose por empresa.' },
       { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
       { f:'Instructivo-Centros-de-Costo.pdf', t:'Centros de costo (configurar, usar y reportes)', d:'Saber cuánto gastaste e invertiste en cada campo, actividad o proyecto: activar por empresa, armar el catálogo, imputar compras y gastos (100% / %, monto o por hectáreas) y ver el reporte con detalle y export a Excel.' },
+      { f:'Instructivo-Arrendamientos.pdf', t:'Arrendamientos (todas las modalidades)', d:'Cargar y pagar contratos de alquiler de campo: efectivo, quintales, Kg Novillo, porcentaje y la modalidad en kilos de grano con venta mensual a precio pizarra (plan de meses, cargar kilos reales + pizarra del día y pagar en entregas parciales que mueven la plata).' },
     ]},
     { grupo:'Compras', items:[
       { f:'Instructivo-Remitos-de-Compra.pdf', t:'Remitos de compra (recepción → factura)', d:'Recibís la mercadería con remito (suma stock) y después la facturás vinculándola al remito, sin duplicar el inventario. Parciales, devoluciones y reporte de recibido no facturado.' },
@@ -3081,6 +3082,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Nuevo', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'10/11/2026',
+      titulo:'🌾 v2.403.0 — Arrendamiento en kilos de soja (venta mensual a pizarra)',
+      desc:'Nueva modalidad de arrendamiento <b>Kilos de grano (venta mensual a pizarra)</b>. Cargás el <b>total en kilos</b> (ej. 115.200), los <b>kilos por mes</b> (ej. 9.600) y el <b>mes de inicio</b>, y el sistema arma el <b>plan de meses</b>. Después, en <b>🌾 Ventas</b>, por cada venta cargás los <b>kilos reales</b> y el <b>precio pizarra del día ($/tonelada)</b> y el sistema calcula cuánto corresponde pagarle. Además registrás las <b>entregas (pagos parciales)</b> sobre cada venta — con los <b>kilos entregados</b> si querés anotarlos: cada entrega <b>mueve la plata</b> (efectivo, cheque, transferencia…) a <b>Movimientos diarios</b> y descuenta del saldo, hasta saldar. Se puede deshacer una entrega. Incluye <b>instructivo</b> en Ayuda.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'10/11/2026',
       titulo:'🌾 v2.402.0 — Vincular comprobantes a granos + canje ordenado',
       desc:'Dos cosas: 1) En <b>Proveedores de granos</b> cada proveedor tiene el botón <b>📥 De comprobantes</b>: trae los <b>comprobantes internos de compra ya cargados</b> de ese proveedor que todavía no estaban en la cuenta de kilos y los suma de una, sin recargarlos — de ahí saca los kilos. Como los kilos ya entraron al stock con el comprobante, <b>no se mueve stock de nuevo</b>. Elegís cuáles importar y les ponés un plazo. 2) <b>Plan canje</b> y <b>Cuenta canje (grano)</b> ahora viven solo en el menú <b>Comercial</b> (antes estaban repetidos como pestañas dentro de Molienda). En <b>Molienda / Fábrica</b> quedó un acceso directo <b>🔁 Ir al canje</b> que te lleva ahí. Los datos del canje son los mismos.' },
@@ -33174,6 +33178,11 @@ pages.arrendamientos = async function() {
       return { tipo:'quintales', porHa: `${fmtN(qqHa)} qq/ha${r.grano?' '+r.grano.toLowerCase():''}`, total: ars, totalTxt: arsTxt(ars), tipoTxt:`En especie${cuoTxt}` };
     }
     if (mod==='porcentaje') return { tipo:'porcentaje', porHa: r.importeHa?fmtN(r.importeHa)+'%':'—', total:0, totalTxt:'—', tipoTxt:'Porcentaje del rinde' };
+    if (mod==='kilos_venta') {
+      const piz = Number(_cv[_claveGrano(r.grano)]||0);
+      const ars = (Number(r.kilosTotal||0)/1000)*piz;
+      return { tipo:'kilos_venta', porHa: r.kilosPorMes?`${fmtN(r.kilosPorMes)} kg/mes`:'—', total:ars, totalTxt: (Number(r.kilosTotal||0)?`${fmtN(r.kilosTotal)} kg`+(ars?` · ${arsTxt(ars)}`:''):'—'), tipoTxt:`Kilos (venta a pizarra)${r.grano?' · '+r.grano.toLowerCase():''}` };
+    }
     if (mod==='kgnovillo') {
       const p = Number(_cv.KGN||0);
       const totKg = cuotas.length ? cuotas.reduce((a,c)=>a+Number(c.kgNovillo||0),0) : (Number(r.kgNovilloHa||r.importeHa||0)*ha);
@@ -33234,6 +33243,7 @@ pages.arrendamientos = async function() {
                 <td class="px-3 py-2 ${vencido?'text-red-600 font-semibold':''}">${venc}</td>
                 <td class="px-3 py-2">${r.pagado?'<span class="badge badge-green">Pagado</span>':(vencido?'<span class="badge badge-red">Vencido</span>':'<span class="badge badge-yellow">Pendiente</span>')}</td>
                 <td class="px-3 py-2 text-right">
+                  ${r.modalidad==='kilos_venta'?`<button class="btn btn-ghost text-xs text-emerald-700" title="Ventas y entregas" onclick='arrVentasModal(${JSON.stringify(r.id)})'>🌾 Ventas</button>`:''}
                   ${(Array.isArray(r.cuotas)&&r.cuotas.length)?`<button class="btn btn-ghost text-xs" title="Cuotas / pagos" onclick='arrCuotasModal(${JSON.stringify(r.id)})'>📅</button>`:''}
                   ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" onclick='arrForm(${JSON.stringify(r.id)})'>✏️</button>`:''}
                   ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='arrDel(${JSON.stringify(r.id)})'>🗑️</button>`:''}
@@ -33272,6 +33282,7 @@ async function arrForm(id=null) {
             <option value="efectivo" ${modalidad==='efectivo'?'selected':''}>Efectivo ($ / ha)</option>
             <option value="quintales" ${modalidad==='quintales'?'selected':''}>Quintales de grano (en especie)</option>
             <option value="kgnovillo" ${modalidad==='kgnovillo'?'selected':''}>Kg Novillo (precio Cañuelas)</option>
+            <option value="kilos_venta" ${modalidad==='kilos_venta'?'selected':''}>Kilos de grano (venta mensual a pizarra)</option>
             <option value="porcentaje" ${modalidad==='porcentaje'?'selected':''}>Porcentaje del rinde</option>
           </select>
         </div>
@@ -33298,6 +33309,18 @@ async function arrForm(id=null) {
         <div id="arr-kgnovillo" class="col-span-2 grid grid-cols-2 gap-3" style="display:none">
           <div><label class="label">Kg Novillo / Ha</label><input id="f-kgnha" class="input" type="number" step="0.01" value="${modalidad==='kgnovillo'?(it.kgNovilloHa||it.importeHa||''):''}" oninput="arrCuotasRecalc()"/><p class="text-[10px] text-slate-500 mt-1">Se valoriza al precio del Kg Novillo (Cañuelas) cargado en Cotizaciones.</p></div>
           <div><label class="label">Vencimiento (pago único)</label><input id="f-venckgn" class="input" type="date" value="${vencStr}"/></div>
+        </div>
+
+        <div id="arr-kilosventa" class="col-span-2" style="display:none">
+          <div class="grid grid-cols-4 gap-3">
+            <div><label class="label">Grano</label>
+              ${catSelect('f-kvgrano', 'Cereal', it.grano||'Soja', { placeholder:'— Grano —' })}
+            </div>
+            <div><label class="label">Kilos totales *</label><input id="f-kvtotal" class="input" type="number" step="1" value="${it.kilosTotal||''}" placeholder="115200"/></div>
+            <div><label class="label">Kilos por mes *</label><input id="f-kvmes" class="input" type="number" step="1" value="${it.kilosPorMes||''}" placeholder="9600"/></div>
+            <div><label class="label">Mes de inicio *</label><input id="f-kvini" class="input" type="month" value="${it.mesInicio||''}"/></div>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-2">El dueño va <b>vendiendo por mes</b>; el sistema arma el plan de meses. Después, desde <b>🌾 Ventas</b> cargás los kilos reales de cada venta y el <b>precio pizarra</b> del día, y vas registrando las <b>entregas</b> (pagos parciales) hasta saldar. Pizarra en <b>$/tonelada</b>.</p>
         </div>
 
         <div id="arr-porcentaje" class="col-span-2 grid grid-cols-2 gap-3" style="display:none">
@@ -33335,13 +33358,14 @@ async function arrForm(id=null) {
 function arrModalActual(){ return $('#f-modal')?.value || 'efectivo'; }
 function arrModalidadChange(){
   const m = arrModalActual();
-  const ef=$('#arr-efectivo'), qq=$('#arr-quintales'), kn=$('#arr-kgnovillo'), pc=$('#arr-porcentaje'), cw=$('#arr-cuotas-wrap');
+  const ef=$('#arr-efectivo'), qq=$('#arr-quintales'), kn=$('#arr-kgnovillo'), pc=$('#arr-porcentaje'), cw=$('#arr-cuotas-wrap'), kv=$('#arr-kilosventa');
   if(ef) ef.style.display = m==='efectivo'?'':'none';
   if(qq) qq.style.display = m==='quintales'?'':'none';
   if(kn) kn.style.display = m==='kgnovillo'?'':'none';
   if(pc) pc.style.display = m==='porcentaje'?'':'none';
-  // Cuotas para todas las modalidades menos "porcentaje".
-  if(cw) cw.style.display = (m==='porcentaje')?'none':'';
+  if(kv) kv.style.display = m==='kilos_venta'?'':'none';
+  // Cuotas para todas las modalidades menos "porcentaje" y "kilos_venta" (esta usa su propio plan de ventas).
+  if(cw) cw.style.display = (m==='porcentaje'||m==='kilos_venta')?'none':'';
   // Encabezado de la columna de valor según modalidad.
   const vh=$('#arr-cuota-valhead');
   if(vh) vh.textContent = m==='quintales'?'qq/ha' : m==='kgnovillo'?'Kg novillo' : 'Importe';
@@ -33449,6 +33473,13 @@ async function arrSave(id) {
       data.tipoPago = 'Kg Novillo';
       data.vencimiento = vs[0] || $('#f-venckgn').value || null;
     }
+  } else if (modalidad==='kilos_venta') {
+    data.grano = $('#f-kvgrano')?.value || null;
+    data.kilosTotal = $('#f-kvtotal').value ? Number($('#f-kvtotal').value) : null;
+    data.kilosPorMes = $('#f-kvmes').value ? Number($('#f-kvmes').value) : null;
+    data.mesInicio = $('#f-kvini').value || null;
+    data.tipoPago = 'Kilos venta';
+    if (!(data.kilosTotal>0) || !(data.kilosPorMes>0) || !data.mesInicio) return toast('Cargá kilos totales, kilos por mes y mes de inicio','warn');
   } else {
     data.importeHa = $('#f-pct').value ? Number($('#f-pct').value) : null;
     data.tipoPago = 'Porcentual';
@@ -33456,8 +33487,15 @@ async function arrSave(id) {
   }
   if (!data.propietario) return toast('Propietario requerido','warn');
   if (!data.hectareas)   return toast('Hectáreas requeridas','warn');
-  try { await api('/api/arrendamientos'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});
+  try {
+    const r = await api('/api/arrendamientos'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(data)});
+    const arrId = id || r?.data?.id;
+    // En modalidad kilos_venta, generamos/completamos el plan de ventas mensuales.
+    if (modalidad==='kilos_venta' && arrId && data.kilosTotal>0 && data.kilosPorMes>0 && data.mesInicio) {
+      try { await api('/api/arrendamientos/'+arrId+'/ventas/generar',{method:'POST',body:JSON.stringify({ kilosTotal:data.kilosTotal, kilosPorMes:data.kilosPorMes, mesInicio:data.mesInicio })}); } catch(e){ toast('Contrato guardado, pero el plan no se generó: '+e.message,'warn'); }
+    }
     toast(id?'Actualizado':'Creado','success'); closeModal(); delete state.cache.arrendamientos; pages.arrendamientos();
+    if (modalidad==='kilos_venta' && arrId) arrVentasModal(arrId);
   } catch (e) { toast(e.message,'error'); }
 }
 async function arrDel(id) {
@@ -33595,6 +33633,140 @@ async function arrPagarCuotaConfirmar(){
     delete state.cache.arrendamientos; delete state.cache.bancoCuentas; delete state.cache.chequesCartera;
     pages.arrendamientos();
   } catch (e) { toast(e.message,'error'); }
+}
+
+/* ===== ARRENDAMIENTO · modalidad kilos de grano (venta mensual a pizarra) ===== */
+const _kvKg = n => (Math.round(Number(n||0))).toLocaleString('es-AR');
+function _kvEstadoBadge(e){
+  if(e==='pagada') return '<span class="badge badge-green text-[10px]">pagada</span>';
+  if(e==='vendida') return '<span class="badge badge-yellow text-[10px]">vendida · a pagar</span>';
+  return '<span class="badge text-[10px] bg-slate-100 text-slate-600">pendiente</span>';
+}
+async function arrVentasModal(id){
+  const arr = (state.cache.arrendamientos||[]).find(x=>x.id===id);
+  let ventas=[];
+  try{ const r=await api('/api/arrendamientos/'+id+'/ventas'); ventas=r.data||[]; }catch(e){ return toast(e.message,'error'); }
+  const totKg = ventas.reduce((a,v)=>a+Number(v.kilos||0),0);
+  const totImp = ventas.reduce((a,v)=>a+Number(v.importe||0),0);
+  const totPag = ventas.reduce((a,v)=>a+Number(v.pagado||0),0);
+  const totSaldo = Math.round((totImp-totPag)*100)/100;
+  const filas = ventas.map(v=>{
+    const pend = v.estado!=='pendiente';
+    const entregasBtn = (pend && Number(v.saldo||0)>0.01) ? `<button class="btn btn-ghost btn-xs text-indigo-700" onclick='arrEntregaForm(${JSON.stringify(id)},${JSON.stringify(v.id)})'>💵 Entrega</button>` : '';
+    const entregasList = (v.pagos||[]).map(p=>`<div class="flex items-center justify-between text-[11px] text-slate-600 pl-2">
+        <span>· ${fmtDate(p.fecha)} · ${esc(({efectivo:'Efectivo',cheque:'Cheque',transferencia:'Transfer.',debito:'Débito',tarjeta:'Tarjeta',externo:'Externo'})[p.metodo]||p.metodo)} · <b>${fmt$(p.importe)}</b>${p.kilosEntregados?` · ${_kvKg(p.kilosEntregados)} kg`:''}</span>
+        <button class="text-red-500 hover:underline" onclick='arrEntregaDel(${JSON.stringify(id)},${JSON.stringify(v.id)},${JSON.stringify(p.id)})'>deshacer</button>
+      </div>`).join('');
+    return `<tr class="border-t align-top">
+      <td class="p-1 text-xs font-medium">${esc(v.etiqueta||v.periodo)} ${_kvEstadoBadge(v.estado)}
+        ${entregasList?`<div class="mt-1">${entregasList}</div>`:''}</td>
+      <td class="p-1 text-right"><input type="number" step="1" class="input text-sm text-right" style="width:90px" value="${v.kilos||''}" id="kv-k-${v.id}"/></td>
+      <td class="p-1 text-right"><input type="number" step="0.01" class="input text-sm text-right" style="width:110px" placeholder="$/tn" value="${v.precioPizarra||''}" id="kv-p-${v.id}"/></td>
+      <td class="p-1"><input type="date" class="input text-sm" style="width:135px" value="${v.fechaVenta?String(v.fechaVenta).slice(0,10):''}" id="kv-f-${v.id}"/></td>
+      <td class="p-1 text-right text-xs">${v.importe?`<b>${fmt$(v.importe)}</b>`:'—'}</td>
+      <td class="p-1 text-right text-xs ${Number(v.saldo||0)>0.01?'text-red-600 font-semibold':'text-emerald-700'}">${v.importe?fmt$(v.saldo):'—'}</td>
+      <td class="p-1 text-right whitespace-nowrap">
+        <button class="btn btn-ghost btn-xs text-emerald-700" onclick='arrVentaGuardar(${JSON.stringify(id)},${JSON.stringify(v.id)})'>💾</button>
+        ${entregasBtn}
+      </td>
+    </tr>`;
+  }).join('');
+  openModal({ title:`🌾 Ventas y entregas · ${esc(arr?.propietario||'')}`, size:'max-w-4xl',
+    body:`<div class="text-xs text-slate-600 mb-2">Contrato: <b>${_kvKg(arr?.kilosTotal)} kg</b> de ${esc(arr?.grano||'grano')} · ~${_kvKg(arr?.kilosPorMes)} kg/mes. Cargá los <b>kilos reales</b> y el <b>precio pizarra ($/tn)</b> de cada venta y guardá (💾); después registrá las <b>entregas</b> (pagos parciales).</div>
+      <div class="border rounded overflow-auto max-h-[60vh]"><table class="w-full text-sm">
+        <thead class="bg-slate-50 text-xs sticky top-0"><tr>
+          <th class="p-1 text-left">Mes / entregas</th><th class="p-1 text-right">Kilos</th><th class="p-1 text-right">Pizarra $/tn</th><th class="p-1 text-left">Fecha venta</th><th class="p-1 text-right">A pagar</th><th class="p-1 text-right">Saldo</th><th class="p-1"></th>
+        </tr></thead>
+        <tbody>${filas||'<tr><td colspan="7" class="p-3 text-center text-slate-400">Sin ventas. Generá el plan desde el contrato.</td></tr>'}</tbody>
+        <tfoot class="bg-slate-50 text-xs font-semibold"><tr>
+          <td class="p-1">Totales</td><td class="p-1 text-right">${_kvKg(totKg)} kg</td><td></td><td></td>
+          <td class="p-1 text-right">${fmt$(totImp)}</td><td class="p-1 text-right ${totSaldo>0.01?'text-red-600':'text-emerald-700'}">${fmt$(totSaldo)}</td><td></td>
+        </tr></tfoot>
+      </table></div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+async function arrVentaGuardar(id, vid){
+  const kilos = $('#kv-k-'+vid)?.value, precio = $('#kv-p-'+vid)?.value, fecha = $('#kv-f-'+vid)?.value;
+  const body = {};
+  if(kilos!==''&&kilos!=null) body.kilos = Number(kilos);
+  body.precioPizarra = (precio!==''&&precio!=null) ? Number(precio) : null;
+  body.fechaVenta = fecha ? new Date(fecha+'T12:00:00').toISOString() : null;
+  try{ await api('/api/arrendamientos/'+id+'/ventas/'+vid,{method:'PUT',body:JSON.stringify(body)}); toast('Venta guardada','success'); arrVentasModal(id); }
+  catch(e){ toast(e.message,'error'); }
+}
+let _arrEntregaCtx=null;
+async function arrEntregaForm(id, vid){
+  await cargarCotizVivas();
+  let cuentas=state.cache.bancoCuentas; if(!cuentas){ try{ cuentas=(await api('/api/banco-cuentas')).data||[]; state.cache.bancoCuentas=cuentas; }catch{ cuentas=[]; } }
+  let cheques=state.cache.chequesCartera; if(!cheques){ try{ cheques=(await api('/api/cheques')).data||[]; state.cache.chequesCartera=cheques; }catch{ cheques=[]; } }
+  const chDisp=(cheques||[]).filter(ch=>['en_cartera','pendiente','emitido'].includes(ch.estado||''));
+  let cajas=state.cache.efectivoCajas||[];
+  // Saldo de la venta
+  let venta=null; try{ const r=await api('/api/arrendamientos/'+id+'/ventas'); venta=(r.data||[]).find(x=>x.id===vid); }catch{}
+  const saldo = venta ? Number(venta.saldo||0) : 0;
+  _arrEntregaCtx={ id, vid };
+  openModal2({ title:'💵 Registrar entrega (pago parcial)', size:'max-w-md',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div class="text-sm">Venta <b>${esc(venta?.etiqueta||'')}</b> · saldo a pagar: <b class="${saldo>0.01?'text-red-600':''}">${fmt$(saldo)}</b></div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="label">Importe de esta entrega ($) *</label><input id="ae-monto" type="number" step="0.01" class="input" value="${saldo>0?Math.round(saldo):''}"/></div>
+        <div><label class="label">Kilos entregados (opcional)</label><input id="ae-kilos" type="number" step="1" class="input" placeholder="informativo"/></div>
+      </div>
+      <div><label class="label">Método de pago *</label>
+        <select id="ae-med" class="input" onchange="arrEntregaToggle()">
+          <option value="efectivo">Efectivo</option>
+          <option value="cheque">Cheque (entregar/endosar)</option>
+          <option value="transferencia">Transferencia bancaria</option>
+          <option value="debito">Débito bancario</option>
+          <option value="tarjeta">💳 Tarjeta de crédito</option>
+        </select></div>
+      <div id="ae-efectivo-wrap"><label class="label">Caja de la que sale</label>
+        <select id="ae-caja" class="input"><option value="">— Elegir caja —</option>${cajas.map(x=>`<option>${esc(x)}</option>`).join('')}</select></div>
+      <div id="ae-tarjeta-wrap" style="display:none">${tarjetaPicker('ae-tarjeta')}</div>
+      <div id="ae-cheque-wrap" style="display:none"><label class="label">Cheque</label>
+        <select id="ae-cheque" class="input"><option value="">— Elegí un cheque en cartera —</option>
+          ${chDisp.map(ch=>`<option value="${ch.id}">${ch.tipo==='propio'?'🧾 propio':'📩 tercero'} N° ${esc(ch.nroCheque||'')} · ${esc(ch.banco||'')} · ${fmt$(ch.monto||0)}</option>`).join('')}</select></div>
+      <div id="ae-banco-wrap" style="display:none"><label class="label">Cuenta bancaria</label>
+        <select id="ae-cta" class="input"><option value="">— Elegí una cuenta —</option>
+          ${(cuentas||[]).filter(x=>x.activo).map(x=>`<option value="${x.id}">🏛️ ${esc(x.banco)}${x.alias?' · '+esc(x.alias):''}</option>`).join('')}</select></div>
+      <div><label class="label">Fecha</label><input id="ae-fec" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick="arrEntregaSave()">💵 Registrar</button>` });
+  arrEntregaToggle();
+}
+function arrEntregaToggle(){
+  const m=$('#ae-med')?.value||'efectivo';
+  const ef=$('#ae-efectivo-wrap'), chq=$('#ae-cheque-wrap'), bco=$('#ae-banco-wrap'), tj=$('#ae-tarjeta-wrap');
+  if(ef) ef.style.display=m==='efectivo'?'':'none';
+  if(chq) chq.style.display=m==='cheque'?'':'none';
+  if(bco) bco.style.display=(m==='transferencia'||m==='debito')?'':'none';
+  if(tj) tj.style.display=m==='tarjeta'?'':'none';
+}
+async function arrEntregaSave(){
+  if(!_arrEntregaCtx) return; const { id, vid }=_arrEntregaCtx;
+  const metodo=$('#ae-med').value, importe=Number($('#ae-monto').value||0);
+  if(!(importe>0)) return toast('Ingresá el importe','warn');
+  const kilosE = $('#ae-kilos')?.value;
+  const data={ metodo, importe,
+    kilosEntregados: (kilosE!==''&&kilosE!=null) ? Number(kilosE) : null,
+    fecha: $('#ae-fec').value ? new Date($('#ae-fec').value+'T00:00:00').toISOString() : undefined,
+    caja: metodo==='efectivo' ? ($('#ae-caja').value.trim()||null) : (metodo==='tarjeta' ? ($('#ae-tarjeta')?.value?.trim()||null) : null),
+    chequeId: metodo==='cheque' ? ($('#ae-cheque').value||null) : null,
+    bancoCuentaId: (metodo==='transferencia'||metodo==='debito') ? ($('#ae-cta').value||null) : null,
+  };
+  if(metodo==='cheque' && !data.chequeId) return toast('Elegí el cheque','warn');
+  if((metodo==='transferencia'||metodo==='debito') && !data.bancoCuentaId) return toast('Elegí la cuenta','warn');
+  if(metodo==='tarjeta' && !data.caja) return toast('Elegí la tarjeta','warn');
+  try{ await api('/api/arrendamientos/'+id+'/ventas/'+vid+'/pagos',{method:'POST',body:JSON.stringify(data)});
+    toast('Entrega registrada · movida a Movimientos diarios','success');
+    delete state.cache.bancoCuentas; delete state.cache.chequesCartera; closeModal2(); arrVentasModal(id);
+  }catch(e){ toast(e.message,'error'); }
+}
+async function arrEntregaDel(id, vid, pid){
+  if(!confirm('¿Deshacer esta entrega? Se revierte el movimiento de plata.')) return;
+  try{ await api('/api/arrendamientos/'+id+'/ventas/'+vid+'/pagos/'+pid,{method:'DELETE'});
+    delete state.cache.bancoCuentas; delete state.cache.chequesCartera; toast('Entrega deshecha','success'); arrVentasModal(id);
+  }catch(e){ toast(e.message,'error'); }
 }
 
 /* ---------- CONTROL DE EFECTIVO ---------- */
