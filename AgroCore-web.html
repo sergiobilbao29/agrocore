@@ -3083,6 +3083,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'11/11/2026',
+      titulo:'🔁 v2.406.0 — Canje: los productos de la paridad ya aparecen',
+      desc:'Arreglado: al crear una <b>paridad de canje</b> (o una operación de canje) entrando desde <b>Comercial → Plan canje</b>, los selectores <b>Lo que ingresa</b> y <b>Lo que se lleva</b> no traían productos. Ahora la pantalla <b>precarga el catálogo</b> aunque no hayas pasado por Molienda, y si todavía no marcaste ningún producto con rol de fábrica, igual aparecen todos tus productos (menos hacienda) para poder cargar la paridad.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'10/11/2026',
       titulo:'🌱 v2.405.0 — Cultivos de campaña desde el catálogo de productos',
       desc:'Ahora el <b>cultivo</b> de la campaña (y el <b>cultivo actual</b> del lote) se eligen de los <b>cereales/granos cargados en el Catálogo de productos</b>, no de una lista fija. Si cargás un cereal nuevo (por ejemplo <b>Alfalfa</b>) ya aparece para poder armar su campaña, sin tener que esperar a que lo agreguemos nosotros.' },
@@ -31285,14 +31288,26 @@ function _canjeNav(activo){
   const B=(id,txt)=>`<button class="btn ${activo===id?'btn-primary':'btn-ghost'} text-sm" onclick="go('${id}')">${txt}</button>`;
   return `<div class="mb-3 flex items-center gap-2 flex-wrap">${B('canjeGrano','🔁 Plan canje')} ${B('ctaCanjeGrano','📒 Cuenta canje (grano)')}</div>`;
 }
+async function _canjeCargarDatos(){
+  // Estas paginas viven en Comercial y se pueden abrir sin pasar por Molienda,
+  // asi que aca cargamos lo que molTabCanje/molTabCtaCanje y sus formularios necesitan.
+  if (!state.cache.productos) { try { state.cache.productos = (await api('/api/productos')).data || []; } catch { state.cache.productos = []; } }
+  if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
+  if (!state.cache.clientes) { try { state.cache.clientes = (await api('/api/clientes')).data || []; } catch { state.cache.clientes = []; } }
+  if (!state.cache.proveedores) { try { state.cache.proveedores = (await api('/api/proveedores')).data || []; } catch { state.cache.proveedores = []; } }
+  try { state._molCanjes = (await api('/api/canjes')).data || []; } catch { state._molCanjes = state._molCanjes||[]; }
+  try { state._molParidades = (await api('/api/canje-paridades')).data || []; } catch { state._molParidades = state._molParidades||[]; }
+}
 pages.canjeGrano = async function(){
   setHeader('Plan canje (grano)','Entregás producto terminado y recibís grano (o viceversa), con una paridad fija. Movimiento en especie.');
-  $('#page-body').innerHTML = _canjeNav('canjeGrano') + `<div id="mol-body"></div>`;
+  $('#page-body').innerHTML = _canjeNav('canjeGrano') + `<div id="mol-body"><div class="text-center text-slate-400 py-10">Cargando…</div></div>`;
+  await _canjeCargarDatos();
   molTabCanje();
 };
 pages.ctaCanjeGrano = async function(){
   setHeader('Cuenta canje (grano)','Saldo en kilos de grano con cada cliente: cuánto entró, cuánto se llevó y cuánto falta/sobra.');
-  $('#page-body').innerHTML = _canjeNav('ctaCanjeGrano') + `<div id="mol-body"></div>`;
+  $('#page-body').innerHTML = _canjeNav('ctaCanjeGrano') + `<div id="mol-body"><div class="text-center text-slate-400 py-10">Cargando…</div></div>`;
+  await _canjeCargarDatos();
   molTabCtaCanje();
 };
 function molRender() {
@@ -31663,9 +31678,13 @@ function molTabCanje() {
 function _molProdOpts(sel){
   const all=(state.cache.productos||[]).filter(p=>p.activo!==false);
   const conRol=all.filter(p=>p.rolFabrica==='materia_prima'||p.rolFabrica==='producto_final');
+  const noHacienda = all.filter(p=>(p.categoria||'').toLowerCase()!=='hacienda');
   let base;
-  if (state.usaProduccionIndustrial) base=conRol;   // fábrica: solo marcados
-  else base = conRol.length?conRol:all.filter(p=>(p.categoria||'').toLowerCase()!=='hacienda');
+  // Fábrica: preferimos los marcados con rol; pero si todavía no marcaron ninguno
+  // (caso común al arrancar), caemos a todos los productos (sin hacienda) para que
+  // el selector nunca quede vacío y se pueda cargar la paridad/canje igual.
+  if (state.usaProduccionIndustrial) base = conRol.length ? conRol : noHacienda;
+  else base = conRol.length ? conRol : noHacienda;
   return base.slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||'')).map(p=>`<option value="${esc(p.id)}" ${sel===p.id?'selected':''}>${esc(p.nombre)}${p.unidad?` (${esc(p.unidad)})`:''}</option>`).join('');
 }
 function molParidadForm() {
