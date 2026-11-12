@@ -3083,6 +3083,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/11/2026',
+      titulo:'💬 v2.407.0 — Asistente de la web: mejores respuestas',
+      desc:'Mejoramos al asistente (Cora) de la web y del sistema. Ahora entiende que AgroCore es un sistema <b>integral</b> y <b>ya no dice que no puede ayudar</b> con módulos del sistema (por ejemplo "cómo agrego un puesto en empleados"): explica el paso a paso. Cuando preguntan por <b>videos, charlas o tutoriales</b>, deriva al <b>canal de YouTube</b> de AgroCore. Y ante dudas de <b>inicio de sesión</b>, ofrece la prueba gratis o el soporte, sin pedir contraseñas.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'11/11/2026',
       titulo:'🔁 v2.406.0 — Canje: los productos de la paridad ya aparecen',
       desc:'Arreglado: al crear una <b>paridad de canje</b> (o una operación de canje) entrando desde <b>Comercial → Plan canje</b>, los selectores <b>Lo que ingresa</b> y <b>Lo que se lleva</b> no traían productos. Ahora la pantalla <b>precarga el catálogo</b> aunque no hayas pasado por Molienda, y si todavía no marcaste ningún producto con rol de fábrica, igual aparecen todos tus productos (menos hacienda) para poder cargar la paridad.' },
