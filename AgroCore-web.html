@@ -2979,9 +2979,9 @@ pages.ayuda = async function() {
 async function botWebLogsAbrir() {
   openModal({ title:'🌐 Consultas del asistente de la web', size:'max-w-3xl',
     body:`<div id="bwl-body" class="text-sm text-slate-500">Cargando…</div>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+    footer:`<button class="btn btn-secondary" onclick="botWebLogsExportar()">⬇️ Exportar CSV</button><button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
   try {
-    const r = await api('/api/bot-web/logs?take=300');
+    const r = await api('/api/bot-web/logs?take=1000');
     const rows = r.data || [];
     const body = $('#bwl-body'); if (!body) return;
     if (!rows.length) { body.innerHTML = '<div class="text-center text-slate-400 py-8">Todavía no hay consultas registradas.</div>'; return; }
@@ -3004,6 +3004,31 @@ async function botWebLogsAbrir() {
   } catch (e) {
     const body = $('#bwl-body'); if (body) body.innerHTML = `<div class="text-red-600">${esc(e.message||'No se pudo cargar')}</div>`;
   }
+}
+// Exporta TODAS las consultas del asistente web a un CSV (para revisar y mejorar
+// respuestas). Trae hasta 1000 y baja un archivo con fecha, pregunta, respuesta y fuente.
+async function botWebLogsExportar() {
+  try {
+    const r = await api('/api/bot-web/logs?take=1000');
+    const rows = r.data || [];
+    if (!rows.length) return toast('No hay consultas para exportar','warn');
+    const csvCell = v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"';
+    const lineas = [['Fecha','Hora','Pregunta','Respuesta','Fuente','IP'].map(csvCell).join(',')];
+    for (const x of rows) {
+      const d = new Date(x.createdAt);
+      lineas.push([
+        d.toLocaleDateString('es-AR'),
+        d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}),
+        x.pregunta||'', x.respuesta||'', x.fuente||'', x.ip||''
+      ].map(csvCell).join(','));
+    }
+    const blob = new Blob(['﻿'+lineas.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `consultas-asistente-web-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast(`Exportadas ${rows.length} consultas`,'success');
+  } catch (e) { toast(e.message||'No se pudo exportar','error'); }
 }
 
 /* ----- INICIO ----- */
@@ -3083,6 +3108,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/11/2026',
+      titulo:'💬 v2.408.0 — Asistente: Instagram + exportar consultas a CSV',
+      desc:'El asistente (Cora) ahora también deriva a <b>Instagram</b> (@agrocore.argentina) cuando preguntan por redes o novedades, además del YouTube. Y en <b>Consultas del asistente de la web</b> (solo superadmin) sumamos el botón <b>⬇️ Exportar CSV</b>: bajás todas las consultas registradas para revisarlas y seguir mejorando las respuestas.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/11/2026',
       titulo:'💬 v2.407.0 — Asistente de la web: mejores respuestas',
       desc:'Mejoramos al asistente (Cora) de la web y del sistema. Ahora entiende que AgroCore es un sistema <b>integral</b> y <b>ya no dice que no puede ayudar</b> con módulos del sistema (por ejemplo "cómo agrego un puesto en empleados"): explica el paso a paso. Cuando preguntan por <b>videos, charlas o tutoriales</b>, deriva al <b>canal de YouTube</b> de AgroCore. Y ante dudas de <b>inicio de sesión</b>, ofrece la prueba gratis o el soporte, sin pedir contraseñas.' },
