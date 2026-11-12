@@ -631,6 +631,19 @@ function isQueueable(path) { return QUEUEABLE.some((p) => path === p || path.sta
 function isNetworkError(e) { return !navigator.onLine || (e instanceof TypeError); }
 
 /* ------------ API helper (offline-aware) ------------ */
+// Arma un mensaje de error legible: si el backend mandó el detalle de validación
+// (issues: [{path, message}]), lo mostramos en vez del genérico "Datos inválidos".
+function _apiErrMsg(body, fallback){
+  let msg = (body && body.error) || fallback || 'Error';
+  if (body && Array.isArray(body.issues) && body.issues.length){
+    const det = body.issues.slice(0,3).map(i=>{
+      const campo = (i.path||'').toString().replace(/^items\.\d+\./,'').replace(/\./g,' › ');
+      return campo ? `${campo}: ${i.message}` : i.message;
+    }).join(' · ');
+    if (det) msg = (/datos inv/i.test(msg) ? 'Revisá los datos' : msg) + ' — ' + det;
+  }
+  return msg;
+}
 async function api(path, opts = {}) {
   const method = (opts.method || 'GET').toUpperCase();
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -643,7 +656,7 @@ async function api(path, opts = {}) {
       const res = await fetch(API_BASE + path, { ...opts, headers });
       let body = null; try { body = await res.json(); } catch {}
       if (!res.ok) {
-        const err = new Error((body && body.error) || res.statusText);
+        const err = new Error(_apiErrMsg(body, res.statusText));
         err.status = res.status; err.body = body;
         if (res.status === 402 && body && body.trialExpired) { try { trialBloqueoMostrar(body); } catch {} }
         if (res.status === 401 && state.token) logout(true);
@@ -670,7 +683,7 @@ async function api(path, opts = {}) {
     const res = await fetch(API_BASE + path, { ...opts, headers });
     let body = null; try { body = await res.json(); } catch {}
     if (!res.ok) {
-      const err = new Error((body && body.error) || res.statusText);
+      const err = new Error(_apiErrMsg(body, res.statusText));
       err.status = res.status; err.body = body;
       if (res.status === 401 && state.token) logout(true);
       throw err;
@@ -3108,6 +3121,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/11/2026',
+      titulo:'🧾 v2.410.0 — Errores más claros al guardar',
+      desc:'Cuando un formulario no se puede guardar, ahora el aviso dice <b>qué campo falla y por qué</b> (por ejemplo "cantidad: debe ser mayor a 0"), en vez del genérico "Datos inválidos". Así es más fácil corregir y volver a guardar.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/11/2026',
+      titulo:'🔒 v2.410.0 — Trial: cada empresa aislada por defecto',
+      desc:'En la instancia de <b>prueba gratis (trial)</b>, cada empresa nueva nace <b>aislada</b>: no ve ni usa depósitos compartidos ni aparece en el consolidado multi-empresa, así ningún prospecto ve datos de otro. Para un caso especial (un grupo real probando varias empresas juntas), un superadmin le destilda la opción <b>Aislada</b> a la empresa.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/11/2026',
       titulo:'💬 v2.409.0 — Asistente de la web: respuestas más precisas',
       desc:'Revisamos las consultas reales al asistente de la web y le sumamos a su base de conocimiento respuestas certeras sobre temas que antes respondía mal o de más: <b>cómo iniciar sesión</b>, <b>qué servicios ofrece AgroCore</b>, <b>cargar retenciones</b>, <b>cargar/importar comprobantes</b>, <b>empleados y puestos</b>, <b>si guarda los datos</b>, dónde ver <b>videos</b> y si funciona en el celular/sin señal. Ahora contesta con datos del sistema en vez de desviar o inventar.' },

@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.409.0';
+const AGROCORE_VERSION = '2.410.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -1188,6 +1188,11 @@ app.get('/api/public/trial/verify', async (req, res) => {
       name: su.empresa, cuit: su.cuit || null, email: su.email, telefono: su.telefono || null,
       provincia: su.provincia || null, localidad: su.ciudad || null, pais: 'Argentina',
       plan: 'trial', trialEndsAt: new Date(Date.now() + TRIAL_DIAS * 86400000),
+      // En el trial cada empresa nace AISLADA: no ve ni usa depósitos compartidos
+      // ni aparece en el consolidado multi-empresa, para que un prospecto nunca
+      // vea datos de otro. Si hace falta algún caso especial (ej. un grupo real
+      // probando varias empresas juntas), un superadmin le destilda "aislada".
+      aislada: true,
       informal: true, activo: true,
     }});
     // El alias del usuario es el CUIT (si está libre), así puede loguear con el CUIT o el email.
