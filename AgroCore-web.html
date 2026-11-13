@@ -3121,6 +3121,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'13/11/2026',
+      titulo:'🔁 v2.411.0 — Canje: elegí UNA forma (no las dos)',
+      desc:'Aclaramos la confusión del canje: <b>Plan canje</b> y <b>Cuenta canje (grano)</b> son <b>dos formas alternativas</b>, no dos pasos. Si cargás la misma operación en las dos, el saldo se <b>duplica</b>. Ahora ambas pantallas tienen un aviso bien claro de cuándo usar cada una, y actualizamos el <b>instructivo de canje</b> (en Ayuda) y el asistente. Usá <b>Plan canje</b> para operaciones que entran y salen completas; <b>Cuenta canje</b> para la cuenta corriente por cliente.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'13/11/2026',
+      titulo:'🔁 v2.410.0 — Canje: cuenta corriente por cliente más a mano',
+      desc:'Para los canjes donde el cliente <b>a veces entrega y a veces saca</b> (no siempre lo mismo), usá <b>📒 Cuenta canje (grano)</b>: lleva la cuenta en kilos de cada cliente/proveedor con <b>todos los movimientos y el saldo</b> (le falta llevar / se pasó). Ahora desde "Ver detalle" de cada cliente podés <b>cargar los movimientos ahí mismo</b> (🌾 entró grano, 📦 se llevó, ✏️ ajuste) y desde <b>Plan canje</b> hay un acceso directo que te lleva a esa cuenta.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'12/11/2026',
       titulo:'🧾 v2.410.0 — Errores más claros al guardar',
       desc:'Cuando un formulario no se puede guardar, ahora el aviso dice <b>qué campo falla y por qué</b> (por ejemplo "cantidad: debe ser mayor a 0"), en vez del genérico "Datos inválidos". Así es más fácil corregir y volver a guardar.' },
@@ -31717,6 +31723,13 @@ function molTabCanje() {
     <td class="text-right whitespace-nowrap">${btnEntregar}${can('stock:delete')?` <button class="btn btn-ghost btn-xs text-red-600" onclick="molCanjeAnular('${c.id}')">Anular</button>`:''}</td></tr>`;}).join('');
   $('#mol-body').innerHTML = `
     <div class="bg-sky-50 border border-sky-200 rounded p-3 text-xs text-sky-900 mb-3">En el <b>canje</b> entregás un producto (ej. expeller/aceite) y recibís grano (soja), o al revés. Cargás la <b>paridad</b> (relación fija) y el sistema completa las cantidades y mueve el stock solo. Es en especie (kilos), no toca cuentas en pesos.</div>
+    <div class="bg-amber-50 border border-amber-300 rounded p-3 text-xs text-amber-900 mb-3 flex items-start gap-2 flex-wrap">
+      <span class="flex-1 min-w-[220px]"><b>⚠️ Elegí UNA sola forma de registrar el canje</b> (no las dos, o el saldo se duplica):<br>
+      • <b>🔁 Plan canje</b> (esta pantalla): cada operación <b>entra y sale completa</b> con una <b>paridad fija</b> (ej. entrego expeller y recibo soja de una).<br>
+      • <b>📒 Cuenta canje (grano)</b>: <b>cuenta corriente</b> por cliente, cuando <b>a veces entrega y a veces saca</b> distinto. Ahí ves todos los movimientos y el saldo.<br>
+      Si ya cargás en una, <b>no vuelvas a cargar lo mismo en la otra</b>.</span>
+      <button class="btn btn-secondary btn-sm" onclick="go('ctaCanjeGrano')">📒 Ir a la Cuenta canje</button>
+    </div>
     <div class="mb-3">${can('stock:create')?`<button class="btn btn-primary" onclick="molCanjeForm()">+ Nueva operación de canje</button>`:''}</div>
     <div class="kpi overflow-x-auto mb-4"><table class="table w-full text-sm">
       <thead><tr><th>Fecha</th><th>Tipo / contraparte</th><th>Entrega</th><th>Recibe</th><th></th></tr></thead>
@@ -31895,8 +31908,9 @@ async function molTabCtaCanje() {
   }).join('');
   b.innerHTML = `
     <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900 mb-3">
-      <b>Cómo funciona:</b> registrás en <b>dos pasos</b>. 1) <b>Entró grano</b>: el cliente deja soja → le queda saldo <b>a favor</b>. 2) <b>Se llevó producto</b>: cada retiro descuenta su equivalente en grano (según la paridad que pongas). El saldo (en kg de soja) te dice si <b>le falta llevar</b> (+) o <b>se pasó / debe</b> (−).
+      <b>Cómo funciona:</b> es la <b>cuenta corriente</b> del cliente. Cargás cada movimiento a medida que pasa: 1) <b>Entró grano</b>: el cliente deja soja → le queda saldo <b>a favor</b>. 2) <b>Se llevó producto</b>: cada retiro descuenta su equivalente en grano (según la paridad que pongas). El saldo (en kg de soja) te dice si <b>le falta llevar</b> (+) o <b>se pasó / debe</b> (−).
     </div>
+    <div class="bg-amber-50 border border-amber-300 rounded-lg p-2.5 text-[12px] text-amber-900 mb-3"><b>⚠️ Ojo:</b> esta es <b>una de las dos formas</b> de llevar el canje. Si una operación ya la cargaste en <b>🔁 Plan canje</b>, <b>no la cargues también acá</b> (se duplicaría el saldo). Usá <b>Plan canje</b> para operaciones que entran y salen completas, y <b>esta cuenta</b> cuando el cliente a veces entrega y a veces saca distinto.</div>
     <div class="mb-3 flex gap-2 flex-wrap">
       ${can('stock:create')?`<button class="btn btn-primary" onclick="molCtaCanjeForm('ingreso_grano')">🌾 Entró grano del cliente</button>
       <button class="btn btn-secondary" onclick="molCtaCanjeForm('retiro_producto')">📦 Se llevó producto</button>
@@ -31952,8 +31966,18 @@ async function molCtaCanjeSave(tipo){
   if (tipo!=='ajuste' && !(body.cantidad>0)) return toast('Cargá la cantidad','warn');
   if (tipo!=='ajuste' && !body.productoId) return toast('Elegí el producto','warn');
   if (tipo==='ajuste' && !body.equivSoja) return toast('Poné el ajuste en kg de soja','warn');
-  try { await api('/api/canje-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Guardado','success'); closeModal(); molTabCtaCanje(); }
+  try {
+    await api('/api/canje-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Guardado','success'); closeModal();
+    // Si venía del detalle de un cliente, volvemos a esa cuenta (así ve el movimiento recién cargado y el saldo nuevo).
+    const v = state._ccVolver; state._ccVolver = null;
+    if (v) molCtaCanjeVer(v.tipo, v.id, v.nombre); else molTabCtaCanje();
+  }
   catch(e){ toast(e.message,'error'); }
+}
+// Abre el form de carga preseteado al cliente de la cuenta que se está viendo, y marca que al guardar hay que volver a ese detalle.
+function molCtaCanjeFormDesde(tipoMov, contactoTipo, contactoId, nombre){
+  state._ccVolver = { tipo: contactoTipo, id: contactoId, nombre: nombre };
+  molCtaCanjeForm(tipoMov, `${contactoTipo}:${contactoId}`);
 }
 async function molCtaCanjeVer(tipo, id, nombre){
   openModal({ title:`Cuenta de canje — ${nombre||''}`, size:'max-w-3xl', body:`<div id="cc-det" class="text-slate-400 py-6 text-center">Cargando…</div>`, footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
@@ -31968,7 +31992,15 @@ async function molCtaCanjeVer(tipo, id, nombre){
     <td class="text-right">${can('stock:delete')?`<button class="text-red-600 text-xs" onclick="molCtaCanjeDel('${m.id}','${tipo}','${id}','${String(nombre||'').replace(/[\\'"]/g,'')}')">🗑️</button>`:''}</td>
   </tr>`).join('');
   const saldo = r.saldoSoja||0;
+  const nombreJS = JSON.stringify(nombre||'');
+  const botones = can('stock:create') ? `
+    <div class="mb-3 flex gap-2 flex-wrap">
+      <button class="btn btn-primary btn-sm" onclick='molCtaCanjeFormDesde("ingreso_grano",${JSON.stringify(tipo)},${JSON.stringify(id)},${nombreJS})'>🌾 Entró grano</button>
+      <button class="btn btn-secondary btn-sm" onclick='molCtaCanjeFormDesde("retiro_producto",${JSON.stringify(tipo)},${JSON.stringify(id)},${nombreJS})'>📦 Se llevó producto</button>
+      <button class="btn btn-ghost btn-sm" onclick='molCtaCanjeFormDesde("ajuste",${JSON.stringify(tipo)},${JSON.stringify(id)},${nombreJS})'>✏️ Ajuste</button>
+    </div>` : '';
   d.innerHTML = `
+    ${botones}
     <div class="mb-2 text-sm">Saldo actual: <b class="${saldo>0?'text-emerald-700':(saldo<0?'text-red-600':'')}">${saldo>0?'+':''}${_ccKg(saldo)} kg de soja</b> ${saldo>0?'(le falta llevar)':(saldo<0?'(se pasó / debe)':'(al día)')}</div>
     <div class="overflow-x-auto"><table class="table w-full text-sm">
       <thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th class="text-right">± soja</th><th class="text-right">Saldo</th><th></th></tr></thead>

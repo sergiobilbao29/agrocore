@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.410.0';
+const AGROCORE_VERSION = '2.411.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17174,7 +17174,8 @@ const _AYUDA_KB = [
       'En "Partes de molienda" cargá solo los kilos de soja + costo del grano + costos de producción: el sistema descuenta la soja e ingresa expeller, aceite y merma solo, con el costo por kg. Ojo: no te deja procesar más grano del que hay en el silo (evita stock negativo).',
       'Si querés cargar lo que REALMENTE salió, tildá "Cargar rendimiento real" y poné los kg obtenidos de cada coproducto: la merma se recalcula sola como lo que falte y el costo por kg se ajusta a la producción real.',
       'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',
-      'En "Plan canje" entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie. El parte y el canje se pueden anular.'],
+      'CANJE — hay dos formas y conviene no mezclarlas: (A) "Plan canje": una operación cerrada, entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie y se puede anular. Úsalo cuando la operación entra y sale completa.',
+      'CANJE (B) "Cuenta canje (grano)": es la CUENTA CORRIENTE en kilos de cada cliente/proveedor, para cuando NO siempre entrega y lleva lo mismo (a veces deja soja, a veces se lleva producto, a veces se pasa). Tiene tres botones: 🌾 "Entró grano del cliente" (deja soja → saldo a favor), 📦 "Se llevó producto" (retira → descuenta su equivalente en grano según la paridad que pongas) y ✏️ "Ajuste". En "Ver detalle" ves TODOS los movimientos del cliente con el saldo acumulado; el saldo te dice si "le falta llevar" (+) o "se pasó / debe" (−). Desde el detalle podés cargar más movimientos sin salir. Está en el menú Comercial → "Cuenta canje (grano)".'],
     atajo:{ page:'molienda', label:'Abrir Molienda / Fábrica' } },
   { id:'secado', terms:['secado','secadero','secar','arroz','humedad','merma por humedad','grano humedo','grano seco','secar grano','secar arroz','partida de secado','circuito arroz','pelado de arroz','pelar arroz','preparar circuito arroz','tablero arroz'],
     titulo:'Circuito del arroz (Secadero + Pelado + Tablero)',
