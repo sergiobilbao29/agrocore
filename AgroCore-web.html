@@ -3121,6 +3121,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/11/2026',
+      titulo:'🧩 v2.416.0 — Tablero de vendedores: una sola lista de Cuentas',
+      desc:'En el <b>Tablero de vendedores</b> juntamos las dos tablas que se repetían (<b>Clientes (empresas)</b> y <b>Prospectos y leads</b>) en <b>una sola lista: "Cuentas comerciales"</b>. Cada empresa aparece con su <b>contacto</b> (la persona que la trajo), el <b>origen/vendedor</b>, <b>a quién se factura</b> y un único <b>Estado de embudo</b> (Nuevo → Contactado → Demo → En prueba → Cliente). Los prospectos que todavía no tienen empresa creada salen igual como filas, y el botón <b>"→ Cliente"</b> queda en la misma fila. Se termina la confusión de ver lo mismo dos veces.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/11/2026',
+      titulo:'🧹 v2.415.0 — Pasar un lead de prueba a Cliente y borrar la empresa de prueba',
+      desc:'Al <b>convertir un lead en Cliente</b> (en Empresas → Prospectos/Leads) ahora podés, de paso, <b>eliminar la empresa de prueba</b> de ese lead para no acumular empresas cargadas de gusto. Te pregunta antes: si decís que sí, borra todos los datos de prueba de esa empresa y deja solo el <b>Cliente</b> en tu empresa de facturación para poder facturarle el abono. <b>Ojo:</b> solo borra empresas en plan de prueba (nunca un cliente ya activo) y nunca la empresa en la que estás trabajando (para eso, cambiá primero a tu empresa de facturación).' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
       titulo:'🧾 v2.414.0 — Liquidaciones en el Excel "Ventas y Compras" del contador',
       desc:'Las <b>liquidaciones de cereal y de hacienda</b> ahora también aparecen en el Excel <b>"Ventas y Compras"</b> de <b>Exportar para contador</b> (antes solo salían las facturas). Van en la hoja de Ventas, con su neto e <b>IVA 10,5%</b> por alícuota, el comprobante y el CUIT del comprador. Así el estudio contable las ve junto con el resto.' },
@@ -11556,11 +11562,26 @@ async function empLeadFormSave(id){
 }
 async function empLeadConvertir(id){
   if(!confirm('¿Convertir este lead en Cliente de la empresa actual? Después podés cargarle el abono mensual en “Abonos”.')) return;
+  // Si el lead tiene una empresa de PRUEBA (trial) distinta de la activa, ofrecer borrarla
+  // para no acumular empresas cargadas de gusto.
+  const l=(state._trialLeads||[]).find(x=>x.id===id);
+  let eliminarEmpresa=false;
+  const co=l&&l.company;
+  const esTrialBorrable = l && l.companyId && co && (!co.plan||co.plan==='trial') && l.companyId!==state.companyId;
+  if(esTrialBorrable){
+    eliminarEmpresa=confirm('¿Eliminar también la empresa de prueba “'+(co.name||co.razonSocial||'sin nombre')+'”?\n\nBorra TODOS sus datos de prueba (no se puede deshacer) y deja solo el cliente para facturarle. Cancelá si querés conservar la empresa.');
+  } else if(l && l.companyId && l.companyId===state.companyId){
+    toast('Ojo: la empresa de prueba de este lead es la que estás usando ahora. Para borrarla, cambiá a tu empresa de facturación y convertí desde ahí.','warn');
+  }
   try{
-    const r=await api('/api/empresas/trial-leads/'+id+'/convertir-cliente',{method:'POST',body:JSON.stringify({})});
-    const l=(state._trialLeads||[]).find(x=>x.id===id); if(l) l.segEstado='Cliente';
-    toast('Cliente creado: '+(r.data?.razonSocial||'')+(r.data?.suscripcionCreada?' · abono activado':''),'success');
+    const r=await api('/api/empresas/trial-leads/'+id+'/convertir-cliente',{method:'POST',body:JSON.stringify({eliminarEmpresa})});
+    if(l){ l.segEstado='Cliente'; if(r.data?.empresaEliminada){ l.companyId=null; l.company=null; } }
+    let msg='Cliente creado: '+(r.data?.razonSocial||'')+(r.data?.suscripcionCreada?' · abono activado':'');
+    if(r.data?.empresaEliminada) msg+=' · empresa de prueba eliminada';
+    toast(msg,'success');
+    if(r.data?.empresaAviso) toast(r.data.empresaAviso,'warn');
     if(state.cache) state.cache.clientes=null;
+    state._empresas=null;
     empTrialLeads();
   }catch(e){ toast(e.message,'error'); }
 }
@@ -11953,23 +11974,46 @@ async function empTableroVendedores(){
     </tbody></table>` : '<div class="stub-card">Todavía no cargaste vendedores. Usá el botón 🤝 Vendedores.</div>';
   // Selector de vendedor reutilizable (origen del cliente/prospecto).
   const _vendOpts = sel => `<option value="">Directo</option>`+rows.map(v=>`<option value="${esc(v.id)}" ${sel===v.id?'selected':''}>${esc(v.nombre)}</option>`).join('');
-  // Tabla clientes (empresas): origen, a quién se factura y plan/estado EDITABLES en línea.
-  const cliTabla = `<table class="data w-full"><thead><tr><th>Empresa</th><th>Origen (vendedor)</th><th>Se factura a</th><th>Estado</th></tr></thead><tbody>
-      ${emps.map(e=>`<tr class="table-row">
-        <td><b>${esc(e.name)}</b></td>
-        <td><select class="input text-xs" style="min-width:130px" onchange="empTabSet('${e.id}','vendedorId',this.value)">${_vendOpts(e.vendedorId)}</select></td>
-        <td><select class="input text-xs" style="min-width:110px" onchange="empTabSet('${e.id}','facturarA',this.value)"><option value="cliente" ${e.facturarA==='vendedor'?'':'selected'}>Al cliente</option><option value="vendedor" ${e.facturarA==='vendedor'?'selected':''}>Al vendedor</option></select></td>
-        <td><select class="input text-xs" style="min-width:120px" onchange="empTabSet('${e.id}','plan',this.value)"><option value="trial" ${e.plan==='cliente'?'':'selected'}>🧪 En prueba</option><option value="cliente" ${e.plan==='cliente'?'selected':''}>✅ Cliente</option></select></td>
-      </tr>`).join('')||'<tr><td colspan="4" class="p-3 text-center text-slate-400">Sin empresas</td></tr>'}
-    </tbody></table>`;
-  // Tabla prospectos / leads: TODOS (no solo los de vendedores), con origen y estado editables.
-  const leadTabla = `<table class="data w-full"><thead><tr><th>Prospecto</th><th>Empresa</th><th>Origen (vendedor)</th><th>Estado</th><th></th></tr></thead><tbody>
-      ${(leads||[]).map(l=>`<tr class="table-row">
-        <td>${esc(l.nombre||'—')}</td><td>${esc(l.empresa||'—')}</td>
-        <td><select class="input text-xs" style="min-width:130px" onchange="leadTabSet('${l.id}','vendedorId',this.value)">${_vendOpts(l.vendedorId)}</select></td>
-        <td><select class="input text-xs" style="min-width:130px" onchange="leadTabSet('${l.id}','segEstado',this.value)">${LEAD_ESTADOS.map(es=>`<option value="${esc(es.v)}" ${(l.segEstado||'Nuevo')===es.v?'selected':''}>${esc(es.v)}</option>`).join('')}</select></td>
-        <td class="text-right">${(l.segEstado!=='Cliente')?`<button class="btn btn-secondary text-xs" title="Crear el cliente a partir de este prospecto" onclick='leadTabConvertir(${JSON.stringify(l.id)},${JSON.stringify(l.empresa||l.nombre||"")})'>→ Cliente</button>`:'<span class="badge badge-green text-[10px]">Cliente</span>'}</td>
-      </tr>`).join('')||'<tr><td colspan="5" class="p-3 text-center text-slate-400">Sin prospectos todavía</td></tr>'}
+  // ── Unificación: UNA sola lista de "Cuentas comerciales" (empresa + su prospecto). ──
+  // Cada cuenta es una empresa (si ya existe) con el contacto/prospecto que la trajo.
+  // Los prospectos que todavía NO tienen empresa creada aparecen igual como filas.
+  const _norm = s => String(s||'').trim().toLowerCase().replace(/\s+/g,' ');
+  const _leadByCompany = {}, _leadByName = {};
+  (leads||[]).forEach(l=>{ if(l.companyId && !_leadByCompany[l.companyId]) _leadByCompany[l.companyId]=l; const n=_norm(l.empresa); if(n && !_leadByName[n]) _leadByName[n]=l; });
+  const _usedLead = new Set();
+  const cuentas = (emps||[]).map(e=>{
+    let lead = _leadByCompany[e.id] || _leadByName[_norm(e.name)] || null;
+    if(lead) _usedLead.add(lead.id);
+    return { company:e, lead };
+  });
+  (leads||[]).forEach(l=>{ if(!_usedLead.has(l.id)){ cuentas.push({ company:null, lead:l }); _usedLead.add(l.id); } });
+  // Estado unificado (embudo): si hay empresa ya está al menos "En prueba"; si está contratada, "Cliente".
+  const _estadoCuenta = (c, l) => {
+    if((c && c.plan==='cliente') || (l && l.segEstado==='Cliente')) return 'Cliente';
+    if(c) return 'En prueba';
+    return (l && l.segEstado) || 'Nuevo';
+  };
+  // Orden: Clientes arriba, después en prueba/embudo, y dentro alfabético por empresa.
+  const _rank = { 'Cliente':0, 'En prueba':1, 'Demo hecha':2, 'Demo agendada':3, 'Contactado':4, 'Nuevo':5, 'Perdido':6 };
+  cuentas.sort((a,b)=>{ const ea=_estadoCuenta(a.company,a.lead), eb=_estadoCuenta(b.company,b.lead);
+    const ra=(_rank[ea]??9), rb=(_rank[eb]??9); if(ra!==rb) return ra-rb;
+    return _norm((a.company&&a.company.name)||(a.lead&&a.lead.empresa)).localeCompare(_norm((b.company&&b.company.name)||(b.lead&&b.lead.empresa))); });
+  const estadoBadge = v => { const e=LEAD_ESTADOS.find(x=>x.v===v); return e?e.c:'bg-slate-100 text-slate-700'; };
+  const cuentasTabla = `<table class="data w-full"><thead><tr>
+      <th>Empresa / Cuenta</th><th>Contacto</th><th>Origen (vendedor)</th><th>Se factura a</th><th>Estado</th><th></th></tr></thead><tbody>
+      ${cuentas.map(({company:c, lead:l})=>{
+        const cid = c?c.id:'', lid = l?l.id:'';
+        const nombre = (c&&c.name) || (l&&l.empresa) || '—';
+        const est = _estadoCuenta(c, l);
+        const vendSel = c ? c.vendedorId : (l?l.vendedorId:null);
+        return `<tr class="table-row">
+        <td><b>${esc(nombre)}</b>${!c?`<div class="text-[10px] text-slate-400">prospecto · sin empresa creada</div>`:''}</td>
+        <td class="text-slate-600">${l?esc(l.nombre||'—'):'<span class="text-slate-300">—</span>'}</td>
+        <td><select class="input text-xs" style="min-width:130px" onchange="cuentaSetVendedor('${cid}','${lid}',this.value)">${_vendOpts(vendSel)}</select></td>
+        <td>${c?`<select class="input text-xs" style="min-width:110px" onchange="empTabSet('${c.id}','facturarA',this.value)"><option value="cliente" ${c.facturarA==='vendedor'?'':'selected'}>Al cliente</option><option value="vendedor" ${c.facturarA==='vendedor'?'selected':''}>Al vendedor</option></select>`:'<span class="text-slate-300 text-xs">—</span>'}</td>
+        <td><select class="input text-xs ${estadoBadge(est)}" style="min-width:140px" onchange="cuentaSetEstado('${cid}','${lid}',this.value)">${LEAD_ESTADOS.map(es=>`<option value="${esc(es.v)}" ${est===es.v?'selected':''}>${esc(es.v)}</option>`).join('')}</select></td>
+        <td class="text-right">${est!=='Cliente'?`<button class="btn btn-secondary text-xs" title="Marcar como Cliente (crea el cliente para facturarle${c?' y pasa la empresa a contratada':''})" onclick='cuentaConvertir(${JSON.stringify(lid)},${JSON.stringify(cid)},${JSON.stringify(nombre)})'>→ Cliente</button>`:'<span class="badge badge-green text-[10px]">Cliente</span>'}</td>
+      </tr>`;}).join('')||'<tr><td colspan="6" class="p-3 text-center text-slate-400">Sin cuentas todavía</td></tr>'}
     </tbody></table>`;
   $('#page-body').innerHTML = `
     <div class="mb-3"><button class="btn btn-ghost text-sm" onclick="pages.empresas()">← Volver a Empresas</button>
@@ -11983,10 +12027,8 @@ async function empTableroVendedores(){
     </div>
     <h3 class="font-semibold text-slate-800 mb-2">Vendedores <span class="text-xs text-slate-400">· comisión del mes: ${money(comisMes)}</span></h3>
     <div class="kpi p-0 overflow-hidden mb-6">${vendTabla}</div>
-    <h3 class="font-semibold text-slate-800 mb-2">Clientes (empresas) <span class="text-xs text-slate-400 font-normal">· editá de quién provienen, a quién se factura y si están en prueba o ya contratando</span></h3>
-    <div class="kpi p-0 overflow-hidden mb-6">${cliTabla}</div>
-    <h3 class="font-semibold text-slate-800 mb-2">Prospectos y leads <span class="text-xs text-slate-400 font-normal">· asigná vendedor, cambiá el estado o convertilos en cliente</span></h3>
-    <div class="kpi p-0 overflow-hidden">${leadTabla}</div>`;
+    <h3 class="font-semibold text-slate-800 mb-2">Cuentas comerciales <span class="text-xs text-slate-400 font-normal">· empresas y prospectos en una sola lista · editá origen, a quién se factura y el estado del embudo</span></h3>
+    <div class="kpi p-0 overflow-hidden">${cuentasTabla}</div>`;
 }
 // --- Tablero comercial: edicion en linea (origen / facturacion / estado) ---
 async function empTabSet(id, campo, val){
@@ -12001,10 +12043,33 @@ async function leadTabSet(id, campo, val){
     toast('Guardado','success');
   }catch(e){ toast(e.message||'No se pudo guardar','error'); empTableroVendedores(); }
 }
-async function leadTabConvertir(id, nombre){
-  if(!confirm('¿Convertir "'+(nombre||'este prospecto')+'" en cliente? Se creará el cliente a partir de los datos del prospecto.')) return;
-  try{ await api('/api/empresas/trial-leads/'+id+'/convertir-cliente',{method:'POST',body:'{}'});
-    toast('Convertido a cliente','success'); empTableroVendedores();
+// Cuenta unificada (empresa + prospecto): origen, estado y conversión en una sola fila.
+async function cuentaSetVendedor(companyId, leadId, val){
+  const v = val||null;
+  try{
+    if(companyId) await api('/api/empresas/'+companyId,{method:'PUT',body:JSON.stringify({vendedorId:v})});
+    if(leadId) await api('/api/empresas/trial-leads/'+leadId,{method:'PUT',body:JSON.stringify({vendedorId:v})});
+    toast('Guardado','success');
+  }catch(e){ toast(e.message||'No se pudo guardar','error'); empTableroVendedores(); }
+}
+async function cuentaSetEstado(companyId, leadId, val){
+  try{
+    // Empresa: "Cliente" = contratada (plan cliente); cualquier otro estado = en prueba (trial).
+    if(companyId) await api('/api/empresas/'+companyId,{method:'PUT',body:JSON.stringify({plan: val==='Cliente'?'cliente':'trial'})});
+    // Prospecto: guarda el estado exacto del embudo.
+    if(leadId) await api('/api/empresas/trial-leads/'+leadId,{method:'PUT',body:JSON.stringify({segEstado: val})});
+    toast('Guardado','success');
+    // Si cambió algo que afecta el orden/derivado, re-render para reflejarlo.
+    empTableroVendedores();
+  }catch(e){ toast(e.message||'No se pudo guardar','error'); empTableroVendedores(); }
+}
+async function cuentaConvertir(leadId, companyId, nombre){
+  if(!confirm('¿Marcar "'+(nombre||'esta cuenta')+'" como Cliente?\n\nSe crea el cliente para poder facturarle'+(companyId?' y la empresa pasa a contratada':'')+'.')) return;
+  try{
+    if(leadId) await api('/api/empresas/trial-leads/'+leadId+'/convertir-cliente',{method:'POST',body:'{}'});
+    if(companyId) await api('/api/empresas/'+companyId,{method:'PUT',body:JSON.stringify({plan:'cliente'})});
+    if(state.cache) state.cache.clientes=null;
+    toast('Marcada como Cliente','success'); empTableroVendedores();
   }catch(e){ toast(e.message||'No se pudo convertir','error'); }
 }
 async function empVendLiquidarTab(id,periodo){

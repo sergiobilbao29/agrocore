@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.414.0';
+const AGROCORE_VERSION = '2.416.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2217,7 +2217,33 @@ app.post('/api/empresas/trial-leads/:id/convertir-cliente', requireCompany, requ
         suscripcionCreada = true;
       }
     }
-    res.status(201).json({ ok: true, data: { clienteId: cli.id, razonSocial: cli.razonSocial, suscripcionCreada } });
+    // Si se pidió, borrar la empresa de PRUEBA del lead (para no acumular empresas
+    // cargadas "de gusto"). Guardas de seguridad:
+    //  - solo borra la empresa vinculada al lead (l.companyId), nunca la activa
+    //  - solo si es plan 'trial'
+    //  - desvincula el lead (companyId = null) tras borrar
+    let empresaEliminada = false, empresaAviso = null;
+    if (req.body?.eliminarEmpresa && l.companyId) {
+      if (l.companyId === req.companyId) {
+        empresaAviso = 'No se borró la empresa: es la empresa en la que estás trabajando. Cambiá a tu empresa de facturación y volvé a convertir, o borrala desde Empresas.';
+      } else {
+        const emp = await prisma.company.findUnique({ where: { id: l.companyId }, select: { id: true, plan: true, razonSocial: true } });
+        if (!emp) {
+          empresaAviso = 'La empresa de prueba ya no existe.';
+        } else if (emp.plan !== 'trial') {
+          empresaAviso = `No se borró "${emp.razonSocial || 'la empresa'}": no es una empresa de prueba (es un cliente activo). Si querés borrarla, hacelo desde Empresas.`;
+        } else {
+          const r = await _eliminarEmpresaCascada(emp.id, { force: true });
+          if (r.ok) {
+            empresaEliminada = true;
+            await prisma.trialSignup.update({ where: { id: l.id }, data: { companyId: null } }).catch(() => null);
+          } else {
+            empresaAviso = 'No se pudo borrar la empresa de prueba automáticamente.';
+          }
+        }
+      }
+    }
+    res.status(201).json({ ok: true, data: { clienteId: cli.id, razonSocial: cli.razonSocial, suscripcionCreada, empresaEliminada, empresaAviso } });
   } catch (e) { next(e); }
 });
 
@@ -3004,6 +3030,54 @@ app.put('/api/empresas/:id', async (req, res, next) => {
 //      Limpiar Empresa (vacía movimientos) y después este endpoint.
 //   3) ?force=1 borra cascada en todo (UserCompany, BancoCuenta, Deposito,
 //      Catalogo, etc.) — solo recomendado si se sabe lo que se está haciendo.
+// Borra una empresa en cascada (atómico). Primero intenta el borrado simple;
+// si choca contra una FK, hace una cascada manual amplia (lista guardada con `?.`
+// y `catch`, así los modelos que no existan o no tengan companyId son no-op).
+// Devuelve { ok:true } o { ok:false, tieneRelacionados:true } si no se forzó.
+async function _eliminarEmpresaCascada(empresaId, { force = false } = {}) {
+  try {
+    await prisma.userCompany.deleteMany({ where: { companyId: empresaId } });
+    await prisma.company.delete({ where: { id: empresaId } });
+    return { ok: true };
+  } catch (e) {
+    const isFK = e?.code === 'P2003' || /Foreign key|violates foreign key/i.test(String(e?.message || ''));
+    if (!isFK) throw e;
+    if (!force) return { ok: false, tieneRelacionados: true };
+    await prisma.$transaction(async (tx) => {
+      const m = (model) => tx[model] ? tx[model].deleteMany({ where: { companyId: empresaId } }).catch(() => null) : null;
+      await tx.userCompany.deleteMany({ where: { companyId: empresaId } });
+      // Detalles e items que dependen de cabeceras (se borran primero por FK)
+      await m('facturaItem'); await m('facturaCompraItem'); await m('laborInsumo');
+      await m('liquidacionCerealConcepto'); await m('liquidacionCerealRetencion');
+      await m('liquidacionDeduccion'); await m('liquidacionHaciendaRenglon');
+      await m('cuotaCredito'); await m('insumoAplicado'); await m('laborAplicada');
+      await m('guiaHaciendaRenglon'); await m('guiaHaciendaPago'); await m('rodeoEvento');
+      await m('mantenimientoActivo'); await m('recuentoCaravana'); await m('imputacionCC');
+      await m('entregaGrano'); await m('granoCtaMov'); await m('moliendaParte'); await m('canjeOperacion');
+      await m('retencion'); await m('vendedorMovimiento'); await m('compensacion');
+      // Cabeceras transaccionales
+      await m('movimientoEmpleado'); await m('liquidacionSueldo'); await m('liquidacionCereal');
+      await m('liquidacionHacienda'); await m('credito'); await m('cheque'); await m('factura');
+      await m('facturaCompra'); await m('remitoCompra'); await m('remitoInterno'); await m('ctaCte');
+      await m('efectivo'); await m('flujoCaja'); await m('arrendamiento'); await m('viaje');
+      await m('guiaHacienda'); await m('faena'); await m('contratoCereal'); await m('molienda');
+      await m('haciendaMovimiento'); await m('haciendaStock'); await m('bancoMovimiento');
+      await m('bancoCuenta'); await m('conciliacionBancaria'); await m('movimiento');
+      await m('animal'); await m('caravana'); await m('activoFijo');
+      // Maestros
+      await m('rodeo'); await m('lote'); await m('campana'); await m('campo'); await m('empleado');
+      await m('suscripcion'); await m('secuenciaComprobante'); await m('categoriaGasto');
+      await m('categoriaArticulo'); await m('categoriaPlanilla'); await m('cliente'); await m('proveedor');
+      await m('catalogo'); await m('producto');
+      // Depósitos: pueden ser compartidos (companyId null). Solo borrar los exclusivos.
+      if (tx.deposito) await tx.deposito.deleteMany({ where: { companyId: empresaId } }).catch(() => null);
+      // Borrar la empresa misma
+      await tx.company.delete({ where: { id: empresaId } });
+    });
+    return { ok: true, forzado: true };
+  }
+}
+
 app.delete('/api/empresas/:id', async (req, res, next) => {
   try {
     const empresaId = req.params.id;
@@ -3019,71 +3093,16 @@ app.delete('/api/empresas/:id', async (req, res, next) => {
     }
 
     const force = String(req.query.force || '') === '1';
-    try {
-      // Limpiar UserCompany (los memberships con esta empresa)
-      await prisma.userCompany.deleteMany({ where: { companyId: empresaId } });
-      await prisma.company.delete({ where: { id: empresaId } });
-      return res.json({ ok: true });
-    } catch (e) {
-      const isFK = e?.code === 'P2003' || /Foreign key|violates foreign key/i.test(String(e?.message || ''));
-      if (!isFK) throw e;
-      if (!force) {
-        return res.status(409).json({
-          ok: false,
-          error: 'La empresa tiene datos asociados (clientes, facturas, movimientos, etc.). Por seguridad no se borra automáticamente.',
-          tieneRelacionados: true,
-          sugerencia: 'Usá primero "Limpiar empresa" en Configuración → Sistema para vaciar los movimientos. Si igual querés borrar todo, podés forzar — eso borra TODOS los datos de la empresa en cascada.',
-        });
-      }
-      // Force: cascada manual de las tablas que pueden tener referencias.
-      // Lo hacemos en transacción para que sea atómico (todo o nada).
-      // El orden importa: tablas hoja primero, raíz al final.
-      await prisma.$transaction(async (tx) => {
-        const m = (model) => tx[model] ? tx[model].deleteMany({ where: { companyId: empresaId } }).catch(() => null) : null;
-        // Memberships del usuario en la empresa
-        await tx.userCompany.deleteMany({ where: { companyId: empresaId } });
-        // Detalles e items que dependen de cabeceras (se borran primero por FK)
-        await m('facturaItem');             // por si tiene companyId directo
-        await m('facturaCompraItem');
-        await m('laborInsumo');
-        await m('liquidacionCerealConcepto');
-        await m('cuotaCredito');
-        await m('insumoAplicado');
-        // Cabeceras transaccionales
-        await m('movimientoEmpleado');
-        await m('liquidacionSueldo');
-        await m('liquidacionCereal');
-        await m('credito');
-        await m('laborAplicada');
-        await m('cheque');
-        await m('factura');
-        await m('facturaCompra');
-        await m('ctaCte');
-        await m('efectivo');
-        await m('flujoCaja');
-        await m('arrendamiento');
-        await m('viaje');
-        await m('haciendaMovimiento');
-        await m('haciendaStock');
-        await m('bancoMovimiento');
-        await m('bancoCuenta');
-        await m('movimiento');
-        // Maestros
-        await m('lote');
-        await m('campana');
-        await m('campo');
-        await m('empleado');
-        await m('cliente');
-        await m('proveedor');
-        await m('catalogo');
-        // Depósitos: pueden ser compartidos (companyId null). Solo borrar los exclusivos.
-        if (tx.deposito) await tx.deposito.deleteMany({ where: { companyId: empresaId } }).catch(() => null);
-        // Setting global no es por empresa, no se toca
-        // Borrar la empresa misma
-        await tx.company.delete({ where: { id: empresaId } });
+    const r = await _eliminarEmpresaCascada(empresaId, { force });
+    if (!r.ok && r.tieneRelacionados) {
+      return res.status(409).json({
+        ok: false,
+        error: 'La empresa tiene datos asociados (clientes, facturas, movimientos, etc.). Por seguridad no se borra automáticamente.',
+        tieneRelacionados: true,
+        sugerencia: 'Usá primero "Limpiar empresa" en Configuración → Sistema para vaciar los movimientos. Si igual querés borrar todo, podés forzar — eso borra TODOS los datos de la empresa en cascada.',
       });
-      return res.json({ ok: true, forzado: true });
     }
+    return res.json({ ok: true, forzado: !!r.forzado });
   } catch (e) { next(e); }
 });
 
