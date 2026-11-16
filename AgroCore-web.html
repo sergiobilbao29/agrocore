@@ -3122,6 +3122,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
+      titulo:'💳 v2.419.0 — Factura de compra pagada con cheque/e-cheque: ahora sí queda PAGA (también al editar)',
+      desc:'Arreglamos el pago de una <b>factura de compra de Contado</b>. Antes, al elegir el método (cheque/e-cheque, efectivo, transferencia), a veces la factura quedaba <b>impaga</b> porque el pago no se enganchaba bien, y si la <b>editabas</b> para corregirlo el pago <b>no se registraba</b>. Ahora: (1) el pago se asocia a la factura por su número interno exacto (no por el importe), así siempre la encuentra; (2) al <b>editar</b> una factura que quedó impaga y elegir el método, se registra el pago y queda <b>PAGA</b>; (3) si falta algo (no elegiste el cheque, la caja o la cuenta) te lo <b>avisa claramente</b> en vez de dejarla impaga en silencio. <b>Recordá:</b> para pagar al cargar la factura, dejá condición <b>Contado</b> y elegí el método; el cheque/e-cheque tiene que estar <b>en cartera</b> (Tesorería → Cheques). Si no es Contado, queda pendiente y se paga desde <b>Cuentas a pagar</b>.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
+      titulo:'📄 v2.418.0 — Importar factura de venta por PDF: lee bien el cliente y propone crearlo',
+      desc:'Mejoramos la lectura del PDF al <b>cargar una factura externa de venta</b>. En los PDF de ARCA "Comprobante en línea" el texto a veces sale desordenado y el sistema traía mal el <b>cliente</b> (CUIT y nombre), la <b>descripción</b> (se mezclaba con el CAE y textos legales) y la <b>cantidad</b> (quedaba pegada al código, dando números enormes). Ahora detecta el <b>CUIT y la razón social del cliente/receptor</b> aunque el texto venga mezclado, limpia la descripción y descarta cantidades imposibles. Y cuando el <b>cliente no está en tu lista</b>, aparece el aviso con el botón <b>“+ Crear cliente con estos datos”</b> para darlo de alta en el momento y poder facturarle/cargarlo a la cuenta.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
       titulo:'🧾 v2.417.0 — Al editar una liquidación de cereal ahora se guarda el IVA',
       desc:'Se corrigió un error al <b>editar una liquidación de cereal</b>: si cambiabas la <b>alícuota de IVA</b> (por ejemplo de "Sin IVA" a 10,5%), el total se actualizaba en pantalla pero <b>el cambio no se guardaba</b>. Ahora sí guarda bien la alícuota, el IVA y el <b>total a cobrar (neto + IVA)</b>, y lo deja correcto también en la cuenta corriente del cliente. (El alta nueva ya funcionaba; esto era solo al modificar.)' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/11/2026',
@@ -18275,7 +18281,7 @@ async function compForm(pre) {
           </div>
           <div id="comp-met-det"></div>
         </div>
-        <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís método se crea la factura Y se registra el pago en una operación. Requiere que el proveedor esté seleccionado.</div>
+        <div class="text-[11px] text-blue-700 mt-2">💡 Este bloque aparece solo con condición <b>Contado</b>. Si elegís un método, al guardar se registra el pago y la factura queda <b>PAGA</b> (requiere proveedor). Con <b>Cheque</b> elegís el cheque/e-cheque de la lista: tiene que estar cargado y <b>en cartera</b> en Tesorería → Cheques. Si lo dejás en <b>“Sin pago”</b>, o la condición es Cuenta corriente, la factura queda <b>pendiente</b> y la pagás después desde <b>Cuentas a pagar</b>. Esto también funciona al <b>editar</b> una factura que quedó impaga.</div>
       </div>
       <div class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
         <div class="flex items-center justify-between gap-2 flex-wrap mb-1">
@@ -18960,6 +18966,43 @@ async function compInternoToggle(){
     }
   }
 }
+// Registra el pago de una factura de compra Contado (al crear o al editar).
+// Busca la deuda de ESTA factura por su referencia única (FACC-<id>), así no
+// depende de que el importe coincida al centavo. Lanza errores claros si falta
+// algo (cheque/caja/cuenta) para no dejar la factura "impaga" sin avisar.
+// Devuelve true si registró el pago, false si quedó pendiente a propósito (Sin pago).
+async function _compRegistrarPagoContado(facturaId, data, proveedorId) {
+  if (data.condicionCompra !== 'Contado') return false;
+  const metodoEl = document.getElementById('comp-met');
+  const metodo = metodoEl ? metodoEl.value : null;
+  if (!metodo) return false;                       // "Sin pago (queda pendiente)"
+  if (!proveedorId) throw new Error('Para registrar el pago necesitás elegir el proveedor.');
+  // Ubicar la cuenta corriente pendiente de esta factura (por referencia; fallback por importe).
+  const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=proveedor&contactoId=${encodeURIComponent(proveedorId)}`);
+  const lista = pendRsp.data || [];
+  let pend = lista.find(c => String(c.referencia || '') === 'FACC-' + facturaId);
+  if (!pend) {
+    const totalFactura = (typeof _compCalc === 'function') ? _compCalc().total : 0;
+    pend = lista.filter(c => Math.abs(Number(c.haber || 0) - totalFactura) < 1)
+                .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
+  }
+  if (!pend) return false;                          // ya estaba pagada: no duplicar
+  const ctaCteId = pend.id, importe = Number(pend.haber || 0);
+  if (!(importe > 0)) return false;
+  const pagoBody = {
+    proveedorId,
+    comprobantes: [{ ctaCteId, importeAplicado: importe }],
+    metodo, monto: importe, fecha: data.fecha,
+    observaciones: 'Pago contado factura ' + data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0'),
+  };
+  if (metodo === 'efectivo') { const v = document.getElementById('comp-caja')?.value || null; if (!v) throw new Error('Elegí (o escribí) la caja de efectivo.'); pagoBody.cajaOrigen = v; }
+  if (metodo === 'cheque')   { const v = document.getElementById('comp-cheque')?.value || null; if (!v) throw new Error('Elegí el cheque a entregar. Si no aparece, cargalo en Tesorería → Cheques (queda en cartera).'); pagoBody.chequeId = v; }
+  if (metodo === 'transferencia') { const v = document.getElementById('comp-banco')?.value || null; if (!v) throw new Error('Elegí la cuenta bancaria de donde sale la transferencia.'); pagoBody.bancoCuentaId = v; }
+  if (metodo === 'externo')  { const v = document.getElementById('comp-medio')?.value || null; if (!v) throw new Error('Elegí (o escribí) el medio externo.'); pagoBody.cajaOrigen = v; }
+  if (metodo === 'tarjeta')  { const v = document.getElementById('comp-tarjeta')?.value || null; if (!v) throw new Error('Elegí la tarjeta.'); pagoBody.cajaOrigen = v; }
+  await api('/api/pagos-proveedores', { method:'POST', body: JSON.stringify(pagoBody) });
+  return true;
+}
 async function compSave() {
   const items = $$('#fi-tbody tr[data-fi]').map(tr => ({
     productoId: tr.querySelector('[data-f="productoId"]')?.value || null,
@@ -19026,8 +19069,16 @@ async function compSave() {
   }
   try {
     if (state._compEdit) {
-      await api('/api/facturas-compra/'+state._compEdit, { method:'PUT', body: JSON.stringify(data) });
-      toast('Compra actualizada','success');
+      const _fid = state._compEdit;
+      await api('/api/facturas-compra/'+_fid, { method:'PUT', body: JSON.stringify(data) });
+      // Si quedó en Contado y se eligió un método, registrar el pago también al EDITAR
+      // (antes solo se registraba al crear → la factura seguía figurando impaga).
+      try {
+        const pago = await _compRegistrarPagoContado(_fid, data, proveedorId);
+        toast(pago ? 'Compra actualizada y pago registrado' : 'Compra actualizada','success');
+      } catch (pErr) {
+        toast('Compra actualizada, pero el pago NO se registró: ' + pErr.message + ' — la factura sigue pendiente.', 'error');
+      }
       state._compEdit = null;
       delete state.cache.stockMap; delete state.cache.ctasCtes; delete state._compraPdfData;
       closeModal(); pages.compras(); return;
@@ -19035,35 +19086,12 @@ async function compSave() {
     const facRsp = await api('/api/facturas-compra', { method:'POST', body: JSON.stringify(data) });
     const facturaId = facRsp.data?.id;
 
-    // Si condición = Contado y se eligió método, registrar el pago
-    const esContado = data.condicionCompra === 'Contado';
-    const metodoEl = document.getElementById('comp-met');
-    const metodo = metodoEl ? metodoEl.value : null;
-    if (facturaId && esContado && metodo && proveedorId) {
+    // Si condición = Contado y se eligió método, registrar el pago en la misma operación.
+    if (facturaId) {
       try {
-        // Buscar CtaCte recién creada por el monto total
-        const totalFactura = (typeof _compCalc === 'function') ? _compCalc().total : items.reduce((a,i) => a + Number(i.cantidad||0) * Number(i.precioUnit||0) * (1 + Number(i.alicuotaIva||0)/100), 0);
-        const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=proveedor&contactoId=${encodeURIComponent(proveedorId)}`);
-        const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.haber||0) - totalFactura) < 1)
-          .sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
-        if (pend.length) {
-          const ctaCteId = pend[0].id;
-          const pagoBody = {
-            proveedorId,
-            comprobantes: [{ ctaCteId, importeAplicado: totalFactura }],
-            metodo, monto: totalFactura,
-            fecha: data.fecha,
-            observaciones: 'Pago contado factura ' + data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0'),
-          };
-          if (metodo === 'efectivo')      pagoBody.cajaOrigen    = document.getElementById('comp-caja')?.value || null;
-          if (metodo === 'cheque')        pagoBody.chequeId      = document.getElementById('comp-cheque')?.value || null;
-          if (metodo === 'transferencia') pagoBody.bancoCuentaId = document.getElementById('comp-banco')?.value || null;
-          if (metodo === 'externo')       pagoBody.cajaOrigen    = document.getElementById('comp-medio')?.value || null;
-          if (metodo === 'tarjeta')       pagoBody.cajaOrigen    = document.getElementById('comp-tarjeta')?.value || null;
-          await api('/api/pagos-proveedores', { method:'POST', body: JSON.stringify(pagoBody) });
-        }
+        await _compRegistrarPagoContado(facturaId, data, proveedorId);
       } catch (pErr) {
-        toast('Factura registrada pero hubo un problema con el pago: ' + pErr.message, 'warn');
+        toast('Factura registrada, pero el pago NO se pudo registrar: ' + pErr.message + ' — quedó pendiente. Registrala desde Cuentas a pagar.', 'error');
       }
     }
 

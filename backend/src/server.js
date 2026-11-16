@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.417.0';
+const AGROCORE_VERSION = '2.419.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -23745,6 +23745,29 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     const mRsR = texto.match(/Apellido\s+y\s+Nombre\s*\/\s*Raz[oó]n\s+Social\s*:[ \t]*([^\n]+)/i);
     if (mRsR && !_esEtiqueta(mRsR[1])) resultado.razonSocialReceptor = mRsR[1].trim().replace(/\s{2,}/g, ' ').slice(0, 120);
 
+    // === Fallback ARCA "comprobante en línea" (texto desordenado) ===
+    // En estos PDF los CUIT suelen venir como números sueltos (la etiqueta "CUIT:"
+    // queda separada de su número) y el del receptor aparece PEGADO a su nombre,
+    // ej "20227642417FENOGLIO EZEQUIEL ELVIO". Rescatamos emisor/receptor y el
+    // nombre del receptor cuando el parseo por etiqueta no los encontró.
+    const _esCuit = (c) => /^(20|23|24|27|30|33|34|50|51|55)\d{9}$/.test(c);
+    if (!resultado.cuitEmisor || !resultado.cuitReceptor || !resultado.razonSocialReceptor) {
+      const cuitTokens = [...texto.matchAll(/(?<!\d)(\d{11})(?!\d)/g)].map(m => m[1]).filter(_esCuit);
+      // CUIT del receptor pegado al nombre (en mayúsculas).
+      const mGlue = texto.match(/(?<!\d)(\d{11})([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ'.\- ]{3,60})/);
+      const cuitPegado = (mGlue && _esCuit(mGlue[1])) ? mGlue[1] : null;
+      if (!resultado.cuitEmisor && cuitTokens.length) {
+        resultado.cuitEmisor = cuitTokens.find(c => c !== cuitPegado) || cuitTokens[0];
+      }
+      if (!resultado.cuitReceptor) {
+        resultado.cuitReceptor = cuitPegado || cuitTokens.find(c => c !== resultado.cuitEmisor) || null;
+      }
+      if (!resultado.razonSocialReceptor && mGlue && mGlue[1] === resultado.cuitReceptor) {
+        const nm = mGlue[2].trim().replace(/\s{2,}/g, ' ');
+        if (nm && !_esEtiqueta(nm)) resultado.razonSocialReceptor = nm.slice(0, 120);
+      }
+    }
+
     // === Descripción del item ===
     // Heurística: buscar las líneas entre la cabecera "Código Producto / Servicio..." y
     // las líneas de totales ("Importe Neto Gravado"). Tomar las líneas que tengan texto
@@ -23758,10 +23781,19 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       const candidatas = lineas.slice(idxHdr + 1, idxFin).filter(l => {
         if (l.length < 4) return false;
         if (/^[\d.,%$\s\-]+$/.test(l)) return false; // solo números/símbolos
-        if (/^(Cantidad|U\.\s*medida|Precio|Bonif|Subtotal|Alicuota|IVA)$/i.test(l)) return false;
+        // Cabecera de la grilla (a veces el texto ARCA pega varias etiquetas en una línea)
+        if (/^(C[oó]digo|Cantidad|U\.?\s*medida|Precio|Bonif|Subtotal|Alicuota|IVA\b)/i.test(l)) return false;
+        // Pie / legales / CAE / datos de contacto: NO son descripción del item.
+        if (/(CAE|Comprobante\s+Autorizado|Esta\s+Agencia|P[aá]g\.|Mail\s*:|@|www\.|ELABORACI[OÓ]N|Transporte\s+y\s+Servicios|Importe\s)/i.test(l)) return false;
         return /[A-Za-zÁÉÍÓÚáéíóúÑñ]{3,}/.test(l);
       });
-      if (candidatas.length) descripcionItem = candidatas.join(' ').replace(/\s{2,}/g, ' ').slice(0, 400);
+      if (candidatas.length) {
+        descripcionItem = candidatas.join(' ').replace(/\s{2,}/g, ' ').slice(0, 400);
+        // En el layout ARCA desordenado la cantidad queda PEGADA al final de la
+        // descripción (ej "SERVICIO DE FASON CPD 25829220,00"). Si termina en un
+        // importe con 2 decimales, lo sacamos para no ensuciar la descripción.
+        descripcionItem = descripcionItem.replace(/\s*\d[\d.]*,\d{2}\s*$/, '').trim() || descripcionItem;
+      }
     }
     // Fallback: si no encontramos descripción, usar "Producto / Servicio: <razon social emisor> Factura X PV-NRO"
     resultado.descripcionItem = descripcionItem;
@@ -23772,6 +23804,15 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       if (mCant) {
         resultado.cantidadItem = num(mCant[1]);
         resultado.unidadItem = mCant[2];
+      }
+      // Guarda anti "cantidad pegada": en el layout ARCA desordenado el código del
+      // producto y la cantidad quedan unidos (ej "CPD 258"+"29220,00" → "25829220,00"),
+      // dando una cantidad absurda. Si el precio unitario que saldría (neto/cantidad)
+      // es implausiblemente bajo, descartamos la cantidad y dejamos que el front use
+      // cantidad 1 con precio = neto (el usuario ajusta kg y precio a mano).
+      if (resultado.cantidadItem && resultado.netoGravado) {
+        const puImplicito = resultado.netoGravado / resultado.cantidadItem;
+        if (puImplicito < 1) { resultado.cantidadItem = null; resultado.unidadItem = null; }
       }
     }
 
