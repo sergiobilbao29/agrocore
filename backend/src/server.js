@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.411.0';
+const AGROCORE_VERSION = '2.413.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13410,6 +13410,99 @@ app.get('/api/export-libro-iva', requireCompany, requirePermission('finanzas:rea
       resumen.ventas++;
     }
 
+    // ---- VENTAS: LIQUIDACIONES DE CEREAL (Liquidación Primaria de Granos) ----
+    // La LPG es una VENTA del productor con IVA debito (10,5%). Se registra en el
+    // Libro IVA Digital con tipo de comprobante 033 (RG/SIR granos); PV = primeros
+    // 4 digitos del COE y numero = ultimos 8. El comprador (cerealera) es el cliente.
+    const LPG_COD = 33;  // Liquidacion Primaria de Granos (confirmar con el contador si usa otro)
+    const liqs = await prisma.liquidacionCereal.findMany({
+      where: { companyId: cid, fecha: { gte: desde, lte: hasta } },
+      orderBy: [{ fecha: 'asc' }, { numero: 'asc' }],
+    });
+    if (liqs.length) {
+      const cliIds = [...new Set(liqs.map(l => l.clienteId).filter(Boolean))];
+      const clis = cliIds.length ? await prisma.cliente.findMany({ where: { id: { in: cliIds } }, select: { id: true, razonSocial: true, cuit: true } }) : [];
+      const cliById = Object.fromEntries(clis.map(c => [c.id, c]));
+      for (const l of liqs) {
+        const base = Number(l.bruto) || 0;            // neto gravado (subtotal sin IVA)
+        const ivaL = Number(l.iva) || 0;
+        const alic = Number(l.alicuotaIva) || 0;
+        if (base <= 0.005) continue;                   // sin base gravada: no va al libro
+        const cli = l.clienteId ? cliById[l.clienteId] : null;
+        const doc = _libDoc(cli?.cuit);
+        if (doc.codDoc === '99') resumen.sinCuit++;
+        // COE / numero: dejamos solo digitos. 12+ digitos -> PV = primeros 4, nro = ultimos 8.
+        const coe = String(l.numero || '').replace(/\D/g, '');
+        const pvL = _libN(coe.length >= 12 ? coe.slice(0, 4) : 0, 5);
+        const nroL = _libN(coe.length >= 12 ? coe.slice(-8) : (coe || 0), 20);
+        const totalL = base + ivaL;
+        const tieneAlic = alic > 0 && ivaL > 0.005;
+        const cantAlic = tieneAlic ? 1 : 0;
+        const codOp = tieneAlic ? ' ' : (base > 0.005 ? 'E' : ' ');
+        const tc3 = String(LPG_COD).padStart(3, '0');
+        vCbte.push(
+          _libFecha(l.fecha) + tc3 + pvL + nroL + nroL +
+          doc.codDoc + doc.nroId + _libTxt(cli?.razonSocial || 'Comprador de granos', 30) +
+          _libImp(totalL) + _libImp(0) + _libImp(0) + _libImp(tieneAlic ? 0 : base) +
+          _libImp(0) + _libImp(0) + _libImp(0) + _libImp(0) +
+          'PES' + _libTC(1) + String(cantAlic) + codOp + _libImp(0) + '00000000'
+        );
+        if (tieneAlic) { vAlic.push(tc3 + pvL + nroL + _libImp(base) + _libroAlicCod(alic) + _libImp(ivaL)); resumen.ventasAlic++; }
+        resumen.ventas++;
+      }
+    }
+
+    // ---- VENTAS: LIQUIDACIONES DE HACIENDA (Cuenta de Venta y Líquido Producto) ----
+    // La venta de hacienda por consignatario/frigorífico se documenta con una
+    // "Cuenta de Venta y Líquido Producto" (CVyLP): es una VENTA del productor con
+    // IVA debito (10,5% sobre el bruto). Se registra con tipo de comprobante 60
+    // (CVyLP "A") por defecto; si el contador usa otro (ej. 180 sector pecuario),
+    // se cambia aca. Los gastos/comision del consignatario NO se incluyen aca (van
+    // como compra/credito fiscal aparte, segun lo que indique el contador).
+    const CVLP_COD = 60; // Cuenta de Venta y Liquido Producto "A" (confirmar con el contador)
+    const liqsH = await prisma.liquidacionHacienda.findMany({
+      where: { companyId: cid, fecha: { gte: desde, lte: hasta } },
+      orderBy: [{ fecha: 'asc' }, { numero: 'asc' }],
+    });
+    if (liqsH.length) {
+      const cliIdsH = [...new Set(liqsH.map(l => l.clienteId).filter(Boolean))];
+      const clisH = cliIdsH.length ? await prisma.cliente.findMany({ where: { id: { in: cliIdsH } }, select: { id: true, razonSocial: true, cuit: true } }) : [];
+      const cliByIdH = Object.fromEntries(clisH.map(c => [c.id, c]));
+      for (const l of liqsH) {
+        const base = Number(l.brutoTotal) || 0;      // neto gravado (bruto de la venta)
+        const ivaL = Number(l.ivaBruto) || 0;
+        if (base <= 0.005) continue;
+        // Alicuota: la deducimos del IVA/bruto y la ajustamos a la válida más cercana (hacienda = 10,5%).
+        let alic = base > 0 ? (ivaL / base) * 100 : 0;
+        if (Math.abs(alic - 10.5) < 0.6) alic = 10.5; else if (Math.abs(alic - 21) < 0.6) alic = 21; else if (ivaL <= 0.005) alic = 0;
+        const cli = l.clienteId ? cliByIdH[l.clienteId] : null;
+        // Contraparte: el comprador (receptor); si no, el cliente cargado o el emisor.
+        const cuitCp = l.receptorCuit || cli?.cuit || l.emisorCuit;
+        const nomCp = l.receptorNombre || cli?.razonSocial || l.emisorNombre || 'Comprador de hacienda';
+        const doc = _libDoc(cuitCp);
+        if (doc.codDoc === '99') resumen.sinCuit++;
+        // Numero formato "PV-NRO" (ej. 00003-00001366). Si no, solo dígitos.
+        const partes = String(l.numero || '').split('-');
+        let pvH, nroH;
+        if (partes.length >= 2) { pvH = _libN(partes[0].replace(/\D/g, '') || 0, 5); nroH = _libN(partes[1].replace(/\D/g, '') || 0, 20); }
+        else { const d = String(l.numero || '').replace(/\D/g, ''); pvH = _libN(0, 5); nroH = _libN(d || 0, 20); }
+        const totalL = base + ivaL;
+        const tieneAlic = alic > 0 && ivaL > 0.005;
+        const cantAlic = tieneAlic ? 1 : 0;
+        const codOp = tieneAlic ? ' ' : (base > 0.005 ? 'E' : ' ');
+        const tc3 = String(CVLP_COD).padStart(3, '0');
+        vCbte.push(
+          _libFecha(l.fecha) + tc3 + pvH + nroH + nroH +
+          doc.codDoc + doc.nroId + _libTxt(nomCp, 30) +
+          _libImp(totalL) + _libImp(0) + _libImp(0) + _libImp(tieneAlic ? 0 : base) +
+          _libImp(0) + _libImp(0) + _libImp(0) + _libImp(0) +
+          'PES' + _libTC(1) + String(cantAlic) + codOp + _libImp(0) + '00000000'
+        );
+        if (tieneAlic) { vAlic.push(tc3 + pvH + nroH + _libImp(base) + _libroAlicCod(alic) + _libImp(ivaL)); resumen.ventasAlic++; }
+        resumen.ventas++;
+      }
+    }
+
     // ---- COMPRAS ----
     const compras = await prisma.facturaCompra.findMany({
       where: { companyId: cid, fecha: { gte: desde, lte: hasta } },
@@ -17517,7 +17610,7 @@ const _AYUDA_KB = [
       'Descargá "Ventas y Compras": facturas emitidas y de compra con CUIT, condición IVA, neto e IVA por alícuota (21/10,5/27), moneda/cotización, CAE y total.',
       'Descargá "Cobros, Pagos y Cheques": cobranzas y pagos con el medio usado, más la cartera de cheques/e-cheqs (banco, número, vencimiento, estado).',
       'Descargá "Stock valuado" a la fecha de corte (Hasta): inventario de insumos y de granos con cantidad y valor, para el cierre de ejercicio. El botón "Descargar todo (Excel)" junta esas hojas en un solo Excel (NO incluye el Libro IVA Digital, que se baja aparte).',
-      'LIBRO IVA DIGITAL (ARCA): con el botón "Descargar Libro IVA Digital" se generan los archivos .txt de ancho fijo oficiales de ARCA (Comprobantes y Alícuotas de Ventas y de Compras) para importar directo en el portal. Baja un ZIP por empresa; el período lo toma del mes de "Hasta". Avisa si hay comprobantes sin CUIT para corregir.',
+      'LIBRO IVA DIGITAL (ARCA): con el botón "Descargar Libro IVA Digital" se generan los archivos .txt de ancho fijo oficiales de ARCA (Comprobantes y Alícuotas de Ventas y de Compras) para importar directo en el portal. Baja un ZIP por empresa; el período lo toma del mes de "Hasta". Avisa si hay comprobantes sin CUIT para corregir. En VENTAS ahora también entran las Liquidaciones de cereal (Liquidación Primaria de Granos, tipo 033) y las Liquidaciones de hacienda (Cuenta de Venta y Líquido Producto, tipo 60), con su IVA del 10,5% — si tu contador usa otros códigos de comprobante, avisanos y los ajustamos (los gastos/comisión del consignatario no se incluyen en Ventas; van aparte).',
       'Las retenciones/percepciones se cargan en Tesorería → Retenciones y salen en la exportación (hoja "Retenciones").'],
     atajo:{ page:'exportContador', label:'Abrir Exportar para contador' } },
   { id:'retenciones', terms:['retencion','retenciones','percepcion','percepciones','certificado de retencion','iibb','ingresos brutos','sicore','sire','sircar','suss','me retuvieron','retencion de ganancias','retencion de iva','retencion sufrida','retencion practicada','mis retenciones','importar retenciones','importar de arca','exportar sicore','exportar retenciones','jurisdiccion'],

@@ -3121,6 +3121,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
+      titulo:'🧾 v2.413.0 — Liquidaciones de hacienda en el Libro IVA Ventas',
+      desc:'Igual que las de cereal, las <b>liquidaciones de hacienda</b> (venta de animales por consignatario/frigorífico) ahora <b>entran en el Libro IVA Digital de Ventas</b> con su <b>IVA del 10,5%</b>. Se registran como <b>Cuenta de Venta y Líquido Producto</b> (tipo de comprobante <b>60</b>), con el punto de venta y número del comprobante. La comisión/gastos del consignatario no van en Ventas (son crédito aparte). Si tu contador usa otro código, lo ajustamos.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
+      titulo:'🧾 v2.412.0 — Liquidaciones de cereal en el Libro IVA Ventas',
+      desc:'Las <b>liquidaciones de cereal</b> (venta de grano a la cerealera) ahora <b>entran en el Libro IVA Digital de Ventas</b> con su <b>IVA del 10,5%</b>. Antes no aparecían. Se registran como <b>Liquidación Primaria de Granos</b> (tipo de comprobante <b>033</b>), tomando el punto de venta y número del <b>COE</b>. Nota: si tu contador registra la LPG con otro código, avisanos y lo ajustamos.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'13/11/2026',
       titulo:'🔁 v2.411.0 — Canje: elegí UNA forma (no las dos)',
       desc:'Aclaramos la confusión del canje: <b>Plan canje</b> y <b>Cuenta canje (grano)</b> son <b>dos formas alternativas</b>, no dos pasos. Si cargás la misma operación en las dos, el saldo se <b>duplica</b>. Ahora ambas pantallas tienen un aviso bien claro de cuándo usar cada una, y actualizamos el <b>instructivo de canje</b> (en Ayuda) y el asistente. Usá <b>Plan canje</b> para operaciones que entran y salen completas; <b>Cuenta canje</b> para la cuenta corriente por cliente.' },
