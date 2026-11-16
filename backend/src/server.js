@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.419.0';
+const AGROCORE_VERSION = '2.420.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -23521,6 +23521,17 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
 
     // === Parser de TEXTO (siempre se ejecuta, complementa el QR y es el único método cuando el QR no está como texto) ===
     // Punto de Venta + Número — soporta varios formatos de distintos sistemas.
+    // Caso ARCA "comprobante en línea": las etiquetas "Punto de Venta:" y "Comp. Nro:"
+    // quedan juntas en una línea y los DOS valores en la siguiente, separados por
+    // espacio ("00003 00000529" = PV 3 + Nro 529). Hay que leerlos JUNTOS y en orden,
+    // porque si no, el regex de "Comp. Nro:" toma el PV (3) como número. Esto va ANTES
+    // de los regex individuales para que ganen estos valores (los de abajo sólo
+    // completan si quedó algo sin resolver).
+    const mPvNro = texto.match(/Punto\s+de\s+Venta\s*:?[^\d\n]*Comp\.?\s*Nro\.?\s*:?\s*\n?\s*0*(\d{1,5})\s+0*(\d{1,8})(?!\d)/i);
+    if (mPvNro) {
+      if (!resultado.puntoVenta) resultado.puntoVenta = Number(mPvNro[1]);
+      if (!resultado.numero) resultado.numero = Number(mPvNro[2]);
+    }
     const mPv = texto.match(/Punto\s+de\s+Venta\s*:?\s*0*(\d{1,5})(?!\d)/i);
     if (mPv && !resultado.puntoVenta) resultado.puntoVenta = Number(mPv[1]);
     const mNro = texto.match(/(?:Comp\.\s*Nro|Comprobante\s+Nro|N[°º]\s*Comp)\s*:?\s*0*(\d{1,8})(?!\d)/i);
