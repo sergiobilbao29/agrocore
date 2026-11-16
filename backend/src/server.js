@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.416.0';
+const AGROCORE_VERSION = '2.417.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -14703,7 +14703,8 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
       contratoCerealId: z.string().nullable().optional(),
       fecha: zFecha, numero: z.string().nullable().optional(),
       kilosBrutos: z.number().nonnegative(), porcMerma: z.number().min(0).max(100).default(0),
-      precioPorTn: z.number().nonnegative(), conceptos: z.array(concSchema).default([]),
+      precioPorTn: z.number().nonnegative(), alicuotaIva: z.number().min(0).max(100).default(0),
+      conceptos: z.array(concSchema).default([]),
       deducciones: z.array(z.object({ concepto: z.string().min(1), importe: z.coerce.number().positive(), facturaCompraId: z.string().nullable().optional(), proveedorId: z.string().nullable().optional(), observaciones: z.string().nullable().optional() })).nullable().optional(),
       fechaCobroEst: zFecha.nullable().optional(), observaciones: z.string().nullable().optional(),
       viajeIds: z.array(z.string()).nullable().optional(),
@@ -14713,7 +14714,9 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
     const bruto = (kilosNetos / 1000) * d.precioPorTn;
     let totalDescuentos = 0, totalImpuestos = 0;
     d.conceptos.forEach(c => { if (c.tipo === 'descuento') totalDescuentos += c.importe; else totalImpuestos += c.importe; });
-    const neto = bruto - totalDescuentos - totalImpuestos;
+    const neto = bruto - totalDescuentos - totalImpuestos;       // mercadería neta (sin IVA)
+    const iva = _round2(bruto * (d.alicuotaIva || 0) / 100);      // IVA que SE SUMA al cobro
+    const aCobrar = _round2(neto + iva);                          // total que el cliente paga
     await prisma.$transaction(async (tx) => {
       await _revertirLiqCereal(tx, req.companyId, existing);
       await tx.liquidacionCerealConcepto.deleteMany({ where: { liquidacionId: existing.id } });
@@ -14721,7 +14724,8 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
         depositoId: d.depositoId, productoId: d.productoId, clienteId: d.clienteId || null,
         contratoCerealId: d.contratoCerealId || null,
         fecha: d.fecha, numero: d.numero || null, kilosBrutos: d.kilosBrutos, porcMerma: d.porcMerma,
-        kilosNetos, precioPorTn: d.precioPorTn, bruto, totalDescuentos, totalImpuestos, neto,
+        kilosNetos, precioPorTn: d.precioPorTn, bruto, totalDescuentos, totalImpuestos,
+        alicuotaIva: d.alicuotaIva || 0, iva, neto,
         fechaCobroEst: d.fechaCobroEst || null, observaciones: d.observaciones || null,
         conceptos: { create: d.conceptos.map(c => ({ tipo: c.tipo, concepto: c.concepto, importe: c.importe, porcentaje: c.porcentaje ?? null })) },
       }});
@@ -14735,7 +14739,7 @@ app.put('/api/liquidaciones-cereal/:id', requireCompany, requirePermission('vent
         await tx.ctaCte.create({ data: {
           companyId: req.companyId, contactoTipo: 'cliente', contactoId: d.clienteId, fecha: d.fecha,
           detalle: `Liquidación cereal ${d.numero || ''}`.trim(), referencia: `LIQCER-${existing.id}`,
-          debe: neto, haber: 0, vencimiento: d.fechaCobroEst || null, categoria: 'liquidacion_cereal',
+          debe: aCobrar, haber: 0, vencimiento: d.fechaCobroEst || null, categoria: 'liquidacion_cereal',
         }});
       }
       // Vínculos con viajes: solo se tocan si el body los trae (la edición manual no los reenvía → se preservan).

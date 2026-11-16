@@ -3121,6 +3121,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
+      titulo:'🧾 v2.417.0 — Al editar una liquidación de cereal ahora se guarda el IVA',
+      desc:'Se corrigió un error al <b>editar una liquidación de cereal</b>: si cambiabas la <b>alícuota de IVA</b> (por ejemplo de "Sin IVA" a 10,5%), el total se actualizaba en pantalla pero <b>el cambio no se guardaba</b>. Ahora sí guarda bien la alícuota, el IVA y el <b>total a cobrar (neto + IVA)</b>, y lo deja correcto también en la cuenta corriente del cliente. (El alta nueva ya funcionaba; esto era solo al modificar.)' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'16/11/2026',
       titulo:'🧩 v2.416.0 — Tablero de vendedores: una sola lista de Cuentas',
       desc:'En el <b>Tablero de vendedores</b> juntamos las dos tablas que se repetían (<b>Clientes (empresas)</b> y <b>Prospectos y leads</b>) en <b>una sola lista: "Cuentas comerciales"</b>. Cada empresa aparece con su <b>contacto</b> (la persona que la trajo), el <b>origen/vendedor</b>, <b>a quién se factura</b> y un único <b>Estado de embudo</b> (Nuevo → Contactado → Demo → En prueba → Cliente). Los prospectos que todavía no tienen empresa creada salen igual como filas, y el botón <b>"→ Cliente"</b> queda en la misma fila. Se termina la confusión de ver lo mismo dos veces.' },
