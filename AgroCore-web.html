@@ -3122,6 +3122,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
+      titulo:'🧾 v2.414.0 — Liquidaciones en el Excel "Ventas y Compras" del contador',
+      desc:'Las <b>liquidaciones de cereal y de hacienda</b> ahora también aparecen en el Excel <b>"Ventas y Compras"</b> de <b>Exportar para contador</b> (antes solo salían las facturas). Van en la hoja de Ventas, con su neto e <b>IVA 10,5%</b> por alícuota, el comprobante y el CUIT del comprador. Así el estudio contable las ve junto con el resto.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
       titulo:'🧾 v2.413.0 — Liquidaciones de hacienda en el Libro IVA Ventas',
       desc:'Igual que las de cereal, las <b>liquidaciones de hacienda</b> (venta de animales por consignatario/frigorífico) ahora <b>entran en el Libro IVA Digital de Ventas</b> con su <b>IVA del 10,5%</b>. Se registran como <b>Cuenta de Venta y Líquido Producto</b> (tipo de comprobante <b>60</b>), con el punto de venta y número del comprobante. La comisión/gastos del consignatario no van en Ventas (son crédito aparte). Si tu contador usa otro código, lo ajustamos.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',

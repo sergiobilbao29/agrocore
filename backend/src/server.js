@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.413.0';
+const AGROCORE_VERSION = '2.414.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13243,6 +13243,38 @@ app.get('/api/export-contador', requireCompany, requirePermission('finanzas:read
       orderBy: [{ fecha: 'asc' }],
     });
     const ventas = facturas.map(f => armarComprobante(f, f.items, f.cliente?.razonSocial, f.cliente?.cuit, f.cliente?.condIVA));
+    // VENTAS: liquidaciones de cereal y de hacienda (son ventas con IVA 10,5%).
+    // Van en la misma hoja de Ventas para que el contador las vea junto con las facturas.
+    {
+      const liqC = await prisma.liquidacionCereal.findMany({ where: { companyId: cid, fecha: { gte: desde, lte: hasta } }, orderBy: { fecha: 'asc' } });
+      const liqH = await prisma.liquidacionHacienda.findMany({ where: { companyId: cid, fecha: { gte: desde, lte: hasta } }, orderBy: { fecha: 'asc' } });
+      const cliIds = [...new Set([...liqC.map(l => l.clienteId), ...liqH.map(l => l.clienteId)].filter(Boolean))];
+      const cliMap = cliIds.length ? Object.fromEntries((await prisma.cliente.findMany({ where: { id: { in: cliIds } }, select: { id: true, razonSocial: true, cuit: true, condIVA: true } })).map(c => [c.id, c])) : {};
+      const filaLiq = (fecha, tipoLabel, comprobante, contacto, cuit, condIVA, base, iva) => ({
+        fecha, tipo: tipoLabel, clase: 'liquidacion', comprobante: comprobante || '',
+        contacto: contacto || '', cuit: cuit || '', condIVA: condIVA || '',
+        moneda: 'ARS', cotizacion: null,
+        neto21: 0, iva21: 0, neto105: Number(base || 0), iva105: Number(iva || 0),
+        neto27: 0, iva27: 0, netoNoGravado: 0,
+        totalNeto: Number(base || 0), totalIVA: Number(iva || 0), total: Number(base || 0) + Number(iva || 0),
+        cae: '', caeVto: null, origen: null,
+      });
+      for (const l of liqC) {
+        if ((Number(l.bruto) || 0) <= 0.005) continue;
+        const c = l.clienteId ? cliMap[l.clienteId] : null;
+        ventas.push(filaLiq(l.fecha, 'Liquidación cereal', l.numero, c?.razonSocial, c?.cuit, c?.condIVA, l.bruto, l.iva));
+      }
+      for (const l of liqH) {
+        if ((Number(l.brutoTotal) || 0) <= 0.005) continue;
+        const c = l.clienteId ? cliMap[l.clienteId] : null;
+        const contacto = l.receptorNombre || c?.razonSocial || l.emisorNombre || '';
+        const cuit = l.receptorCuit || c?.cuit || l.emisorCuit || '';
+        const fh = filaLiq(l.fecha, 'Liquidación hacienda', l.numero, contacto, cuit, c?.condIVA, l.brutoTotal, l.ivaBruto);
+        fh.cae = l.cae || ''; fh.caeVto = l.caeVto || null;
+        ventas.push(fh);
+      }
+      ventas.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+    }
     // COMPRAS
     const compras0 = await prisma.facturaCompra.findMany({
       where: { companyId: cid, fecha: { gte: desde, lte: hasta } },
