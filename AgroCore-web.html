@@ -3123,6 +3123,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
+      titulo:'💳 v2.424.0 — Factura Contado: el medio de pago ahora es obligatorio (y el cheque al editar sí se guarda)',
+      desc:'Dos arreglos en facturas de <b>compra y venta</b>. (1) Si la <b>condición es Contado</b>, ahora es <b>obligatorio</b> elegir el <b>medio de pago/cobro</b> (efectivo, cheque/e-cheque, transferencia, tarjeta o billetera): ya no se puede guardar una factura de Contado <b>sin registrar cómo se pagó</b>. Si todavía <b>no la pagaste/cobraste</b>, el sistema te pide cambiar la condición a <b>Cuenta corriente</b> y la factura queda pendiente (la pagás/cobrás después desde Cuentas a pagar/cobrar). Sacamos la opción “Sin pago / Sin cobro” que confundía. (2) Al <b>editar</b> una factura y ponerle el pago con un <b>cheque</b>, ese pago ahora <b>sí queda guardado y vinculado</b> (antes podía perderse): el pago se asocia a la factura por su referencia exacta, no por el importe, así siempre la encuentra.' },
     { tag:'Documentación', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/11/2026',
       titulo:'📘 v2.423.0 — Instructivo de Gastos diarios + el asistente ya explica gastos y créditos',
       desc:'Sumamos el <b>instructivo paso a paso de Gastos diarios</b> (circuito completo) en <b>Ayuda y manual → Finanzas</b> y en el Manual web: armar el <b>árbol de Categorías de Gasto</b>, cargar cada gasto/ingreso en <b>Movimientos diarios</b> (categoría, de quién —🏢 Empresa o 👤 Personal del dueño— y método), y verlo mes a mes en el <b>Reporte de Gastos por categoría</b> con filtros. Además el <b>asistente (🤖)</b> ahora explica el <b>circuito de gastos</b> (cargar un gasto, el reporte por categoría y de quién son) y los <b>créditos bancarios</b> (plan automático/manual, crédito ya empezado con “Marcar pagadas hasta…”, pagar cuotas y sus alertas en el calendario), y te lleva directo a la pantalla.' },
@@ -16255,7 +16258,6 @@ async function factForm(prefill = null) {
             <label class="label">Método</label>
             <select id="vent-met" class="input" onchange="ventMetodoCambio('vent')">
               <option value="">— Elegí cómo cobrás —</option>
-              <option value="pendiente">⏳ Sin cobro ahora (queda pendiente / a cobrar)</option>
               <option value="efectivo">💵 Efectivo</option>
               <option value="cheque">💳 Cheque (de terceros recibido)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
@@ -16265,7 +16267,7 @@ async function factForm(prefill = null) {
           </div>
           <div id="vent-met-det"></div>
         </div>
-        <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís un método se registra el cobro junto con la factura (en la fecha de la factura). Si el cobro fue <b>otro día</b>, elegí <b>Sin cobro ahora</b> y después registrá el cobro desde <b>Cuentas a cobrar</b> con su fecha real.</div>
+        <div class="text-[11px] text-blue-700 mt-2">💡 Con condición <b>Contado</b> es <b>obligatorio</b> elegir cómo entra la plata (y su caja/cuenta): se registra el cobro junto con la factura. Si <b>todavía no cobraste</b> (el cobro es otro día), cambiá la <b>Condición</b> a <b>Cuenta corriente</b> y después registrás el cobro desde <b>Cuentas a cobrar</b> con su fecha real.</div>
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
       ${(typeof ccRepartoHTML==='function')?ccRepartoHTML('vta'):''}
@@ -16640,14 +16642,19 @@ async function _cobroContadoDesdeVenta(facturaId, data, items) {
   const compTxt = data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0');
   try {
     if (clienteId) {
+      // Ubicar la cuenta corriente de ESTA factura por su referencia única (FAC-<id>),
+      // así no depende de que el importe coincida al centavo. Fallback por importe.
       const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=cliente&contactoId=${encodeURIComponent(clienteId)}`);
-      const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.debe||0) - total) < 1)
-        .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
-      if (!pend.length) return;
+      const lista = pendRsp.data || [];
+      let pend0 = facturaId ? lista.find(c => String(c.referencia||'') === 'FAC-' + facturaId) : null;
+      if (!pend0) pend0 = lista.filter(c => Math.abs(Number(c.debe||0) - total) < 1)
+        .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
+      if (!pend0) return;   // ya cobrada o no se encontró
+      const importeCobro = Number(pend0.debe || total);
       const cobroBody = {
         clienteId,
-        comprobantes: [{ ctaCteId: pend[0].id, importeAplicado: total }],
-        metodo, monto: total, fecha: data.fecha,
+        comprobantes: [{ ctaCteId: pend0.id, importeAplicado: importeCobro }],
+        metodo, monto: importeCobro, fecha: data.fecha,
         observaciones: 'Cobro contado factura ' + compTxt,
       };
       if (metodo === 'efectivo')      cobroBody.cajaDestino   = document.getElementById('vent-caja')?.value || null;
@@ -16762,12 +16769,11 @@ async function factSave() {
   if (!externa && data.condicionVenta === 'Contado') {
     const _met0 = document.getElementById('vent-met')?.value || '';
     const _focusCobro = () => { const w=document.getElementById('vent-cobro-wrap'); if(w){ w.classList.remove('hidden'); w.scrollIntoView({behavior:'smooth',block:'center'}); } const m=document.getElementById('vent-met'); if(m) m.focus(); };
-    if (!_met0) {
-      // Contado: hay que elegir cómo ingresa la plata, O marcar "Sin cobro ahora" (queda pendiente).
+    if (!_met0 || _met0 === 'pendiente') {
+      // Contado SIEMPRE registra el cobro. Si todavía no cobraste, va a Cuenta corriente.
       _focusCobro();
-      return toast('Elegí abajo CÓMO ingresa la plata (efectivo, transferencia, cheque…) y a qué caja/cuenta. Si el cobro fue otro día o querés dejarla a cobrar, elegí "Sin cobro ahora".','warn');
+      return toast('Es Contado: elegí CÓMO entra la plata (efectivo, transferencia, cheque…) y a qué caja/cuenta. Si todavía NO cobraste, cambiá arriba la Condición a "Cuenta corriente" y después registrás el cobro desde Cuentas a cobrar.','warn');
     }
-    // _met0 === 'pendiente' pasa todas las validaciones de método de abajo (no registra cobro).
     if (_met0==='efectivo'      && !document.getElementById('vent-caja')?.value)    { _focusCobro(); return toast('Elegí la CAJA donde ingresa el efectivo.','warn'); }
     if (_met0==='transferencia' && !document.getElementById('vent-banco')?.value)   { _focusCobro(); return toast('Elegí la CUENTA BANCARIA de la transferencia.','warn'); }
     if (_met0==='cheque'        && !document.getElementById('vent-cheque')?.value)  { _focusCobro(); return toast('Elegí el CHEQUE recibido (o cargá uno nuevo).','warn'); }
@@ -16950,7 +16956,7 @@ async function factFormExterna() {
           <div>
             <label class="label">Método</label>
             <select id="vente-met" class="input" onchange="ventMetodoCambio('vente')">
-              <option value="">— Sin cobro (queda pendiente) —</option>
+              <option value="">— Elegí el medio de cobro —</option>
               <option value="efectivo">💵 Efectivo</option>
               <option value="cheque">💳 Cheque (de terceros recibido)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
@@ -16960,7 +16966,7 @@ async function factFormExterna() {
           </div>
           <div id="vente-met-det"></div>
         </div>
-        <div class="text-[11px] text-blue-700 mt-2">💡 Si elegís método se registra la factura externa Y se registra el cobro. Requiere cliente seleccionado.</div>
+        <div class="text-[11px] text-blue-700 mt-2">💡 Como es <b>Contado, el medio de cobro es obligatorio</b>: al registrar la factura externa se registra también el cobro (requiere cliente). Si <b>todavía NO cobraste</b>, cambiá la Condición a <b>Cuenta corriente</b>.</div>
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="fe-obs" class="input" rows="2" placeholder="Ej: emitida por el contador el 15/05"></textarea></div>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -17148,6 +17154,17 @@ async function factSaveExterna() {
     cabezas: tr.querySelector('[data-f="cabezas"]')?.value ? Number(tr.querySelector('[data-f="cabezas"]').value) : null,
   })).filter(it => it.descripcion && it.cantidad > 0);
   if (!items.length) return toast('Agregá al menos un item','warn');
+  // CONTADO: el medio de cobro es obligatorio. Si todavía no se cobró, hay que
+  // pasar la condición a Cuenta corriente (no se admite Contado sin cobro).
+  if ($('#fe-cv')?.value === 'Contado') {
+    const _mfe = document.getElementById('vente-met')?.value || '';
+    if (!_mfe) {
+      const _w=document.getElementById('vente-cobro-wrap'); if(_w){ _w.classList.remove('hidden'); _w.scrollIntoView({behavior:'smooth',block:'center'}); }
+      const _s=document.getElementById('vente-met'); if(_s){ try{_s.focus();}catch(e){} }
+      return toast('Es Contado: elegí CÓMO entra la plata (Efectivo, Cheque, Transferencia…). Si todavía NO cobraste, cambiá la Condición a "Cuenta corriente".','warn');
+    }
+    if (!($('#fe-cli')?.value)) return toast('Para cobrar al Contado necesitás elegir el cliente (o cambiá la condición a Cuenta corriente).','warn');
+  }
   // Mismo control de stock que el form normal — la factura externa también
   // descuenta stock real, así que avisamos si vamos a quedar en negativo.
   const stockMap = state.cache.stockMap || {};
@@ -17200,13 +17217,19 @@ async function factSaveExterna() {
       try {
         const total = items.reduce((a, it) => a + Number(it.cantidad||0) * Number(it.precioUnit||0) * (1 + Number(it.alicuotaIva||0)/100), 0);
         const pendRsp = await api(`/api/ctas-ctes/pendientes?tipo=cliente&contactoId=${encodeURIComponent(clienteId)}`);
-        const pend = (pendRsp.data || []).filter(c => Math.abs(Number(c.debe||0) - total) < 1)
-          .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
-        if (pend.length) {
+        const _ref = 'FAC-' + facturaId;
+        // Enlazar por referencia exacta de la factura; si no, fallback por importe.
+        let pend0 = (pendRsp.data || []).find(c => c.referencia === _ref);
+        if (!pend0) {
+          pend0 = (pendRsp.data || []).filter(c => Math.abs(Number(c.debe||0) - total) < 1)
+            .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0];
+        }
+        if (pend0) {
+          const importeCobro = Number(pend0.debe || total);
           const cobroBody = {
             clienteId,
-            comprobantes: [{ ctaCteId: pend[0].id, importeAplicado: total }],
-            metodo, monto: total,
+            comprobantes: [{ ctaCteId: pend0.id, importeAplicado: importeCobro }],
+            metodo, monto: importeCobro,
             fecha: data.fecha,
             observaciones: 'Cobro contado factura externa ' + data.tipo + ' ' + String(data.puntoVenta).padStart(4,'0') + '-' + String(data.numero).padStart(8,'0'),
           };
@@ -18285,7 +18308,7 @@ async function compForm(pre) {
           <div>
             <label class="label">Método</label>
             <select id="comp-met" class="input" onchange="compMetodoCambio()">
-              <option value="">— Sin pago (queda pendiente) —</option>
+              <option value="">— Elegí el medio de pago —</option>
               <option value="efectivo">💵 Efectivo</option>
               <option value="cheque">💳 Cheque (propio o de terceros endosado)</option>
               <option value="transferencia">🏛️ Transferencia bancaria</option>
@@ -18295,7 +18318,7 @@ async function compForm(pre) {
           </div>
           <div id="comp-met-det"></div>
         </div>
-        <div class="text-[11px] text-blue-700 mt-2">💡 Este bloque aparece solo con condición <b>Contado</b>. Si elegís un método, al guardar se registra el pago y la factura queda <b>PAGA</b> (requiere proveedor). Con <b>Cheque</b> elegís el cheque/e-cheque de la lista: tiene que estar cargado y <b>en cartera</b> en Tesorería → Cheques. Si lo dejás en <b>“Sin pago”</b>, o la condición es Cuenta corriente, la factura queda <b>pendiente</b> y la pagás después desde <b>Cuentas a pagar</b>. Esto también funciona al <b>editar</b> una factura que quedó impaga.</div>
+        <div class="text-[11px] text-blue-700 mt-2">💡 Este bloque aparece solo con condición <b>Contado</b>. Como es <b>Contado, el medio de pago es obligatorio</b>: elegí cómo salió la plata y, al guardar, se registra el pago y la factura queda <b>PAGA</b> (requiere proveedor). Con <b>Cheque</b> elegís el cheque/e-cheque de la lista: tiene que estar cargado y <b>en cartera</b> en Tesorería → Cheques. Si <b>todavía NO pagaste</b>, cambiá arriba la Condición a <b>Cuenta corriente</b> y la factura queda <b>pendiente</b> para pagarla después desde <b>Cuentas a pagar</b>. Esto también funciona al <b>editar</b> una factura que quedó impaga.</div>
       </div>
       <div class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
         <div class="flex items-center justify-between gap-2 flex-wrap mb-1">
@@ -19032,6 +19055,16 @@ async function compSave() {
   })).filter(it => it.descripcion && it.cantidad > 0);
   if (!items.length) return toast('Agregá al menos un item','warn');
   const proveedorId = $('#f-prov').value || null;
+  // CONTADO: el medio de pago es obligatorio. Si todavía no se pagó, hay que
+  // pasar la condición a Cuenta corriente (no se admite Contado sin pago).
+  if ($('#f-cc')?.value === 'Contado') {
+    const _mc = document.getElementById('comp-met')?.value || '';
+    if (!_mc) {
+      const _sel = document.getElementById('comp-met');
+      if (_sel) { try { _sel.focus(); } catch(e){} }
+      return toast('Es Contado: elegí CÓMO salió la plata (Efectivo, Cheque o Transferencia). Si todavía NO pagaste, cambiá arriba la Condición a "Cuenta corriente".','warn');
+    }
+  }
   const pdfData = state._compraPdfData || null;
   // Extraer días + fecha fija del option seleccionado del catálogo de Condición de pago
   const ccSel = $('#f-cc');
