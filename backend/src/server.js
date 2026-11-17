@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.429.0';
+const AGROCORE_VERSION = '2.430.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6877,6 +6877,14 @@ app.post('/api/facturas/importar-arca-ws', requireCompany, requirePermission('ve
       pvSeq.forEach(x => x.puntoVenta && pvSet.add(Number(x.puntoVenta)));
     } catch {}
     if (Array.isArray(req.body?.ptosVenta)) req.body.ptosVenta.forEach(n => { const v=Number(n); if(v>0) pvSet.add(v); });
+    // SONDEO: además de los PV conocidos, probamos un rango bajo (1..probeMax) por si
+    // hay comprobantes en un PV que ARCA no listó por web service. En el loop, cada PV
+    // sin comprobantes se descarta rápido (FECompUltimoAutorizado devuelve 0). El usuario
+    // puede subir el tope con `probeMax`. OJO: un PV que se emite SOLO por el portal
+    // ("Comprobantes en línea") puede NO ser consultable por web service; esos solo se
+    // traen con el import del Excel de "Mis Comprobantes Emitidos".
+    const probeMax = Math.min(Math.max(Number(req.body?.probeMax) || 12, 0), 50);
+    for (let p = 1; p <= probeMax; p++) pvSet.add(p);
     let ptos = [...pvSet].filter(n => n > 0).sort((a,b)=>a-b);
     if (!ptos.length) ptos = [1];
     const _dstr = (dt) => { const z2=n=>String(n).padStart(2,'0'); return `${dt.getFullYear()}-${z2(dt.getMonth()+1)}-${z2(dt.getDate())}`; };

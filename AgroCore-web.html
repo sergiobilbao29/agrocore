@@ -3123,6 +3123,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/11/2026',
+      titulo:'🔄 v2.430.0 — Traer ventas de ARCA: sondea más puntos de venta y aclara los del portal',
+      desc:'El importador de ventas de ARCA ahora <b>sondea un rango de puntos de venta</b> (no solo los que informa ARCA o los que ya tenés cargados), por si hay comprobantes en un PV que ARCA no lista por web service. <b>Importante</b>: por web service solo se pueden traer los puntos de venta <b>habilitados para web service</b>; los que emitís por el <b>portal de ARCA</b> ("Comprobantes en línea") pueden no ser consultables por este medio. Para esos, usá <b>“Importar de ARCA (Excel)”</b>, que trae todos los puntos de venta. Lo aclaramos en la pantalla.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
       titulo:'📄 v2.429.0 — Importar factura de compra por PDF: arregla el neto cuando la cantidad es mayor a 1',
       desc:'Corregimos que, al importar una factura de compra por PDF con <b>cantidad mayor a 1</b> (ej. 2 unidades), el sistema tomaba el <b>precio unitario</b> como neto y el total quedaba <b>a la mitad</b> (te marcaba "Diferencia" con el total informado). Ahora lee bien el <b>Neto gravado</b> del pie del comprobante y, además, hace un <b>control cruzado</b> (neto = total − IVA) para que el importe cargado coincida con el real de la factura.' },
@@ -18216,7 +18219,7 @@ function ventaTraerArcaWS(){
           <div><label class="label">Desde</label><input id="arcaws-desde" type="date" class="input" value="${fmtI(d1)}"></div>
           <div><label class="label">Hasta</label><input id="arcaws-hasta" type="date" class="input" value="${fmtI(hoy)}"></div>
         </div>
-        <p class="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">⚠️ ARCA no trae los renglones/productos ni mueve stock (son ventas ya emitidas): sirve para completar historial, cuenta a cobrar y Libro IVA. La consulta puede demorar según la cantidad de comprobantes.</p>
+        <p class="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">⚠️ Por web service solo se pueden traer los <b>puntos de venta habilitados para web service</b>. Si tenés comprobantes emitidos por el <b>portal de ARCA</b> ("Comprobantes en línea") en otro punto de venta, esos quizás no aparezcan acá: para esos usá <b>“Importar de ARCA (Excel)”</b>, que trae todos. ARCA tampoco trae los renglones/productos ni mueve stock (son ventas ya emitidas). La consulta puede demorar según la cantidad de comprobantes.</p>
         <div id="arcaws-status" class="text-sm mt-1"></div>
         <div id="arcaws-list"></div>
       </div>`,
