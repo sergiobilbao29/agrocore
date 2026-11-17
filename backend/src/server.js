@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.427.0';
+const AGROCORE_VERSION = '2.428.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -6861,14 +6861,24 @@ app.post('/api/facturas/importar-arca-ws', requireCompany, requirePermission('ve
     try { ta = await _arcaGetTA(co.id, 'wsfe', co.arcaCertCrt, co.arcaPrivadaKey, modo); }
     catch (e) { return res.status(400).json({ ok:false, error:'No pude autenticar contra ARCA (WSAA): '+(e.message||e) }); }
     const auth = { token: ta.token, sign: ta.sign, cuit, modo };
-    // Puntos de venta habilitados (si ARCA no los lista, uso los que ya tengo cargados).
-    let ptos = [];
-    try { ptos = await _arcaWsfeParamPtosVenta(auth); } catch {}
-    if (!ptos.length) {
+    // Puntos de venta a recorrer. OJO: FEParamGetPtosVenta de ARCA SOLO lista los
+    // PV habilitados para WEB SERVICE; los que se emiten por el PORTAL ("Comprobantes
+    // en línea") NO aparecen ahí. Por eso unimos varias fuentes: ARCA + los PV de las
+    // facturas ya cargadas + los PV de la numeración configurada + los que fuerce el
+    // usuario. Así no se nos escapa ningún punto de venta.
+    const pvSet = new Set();
+    try { (await _arcaWsfeParamPtosVenta(auth)).forEach(n => pvSet.add(Number(n))); } catch {}
+    try {
       const pvLocales = await prisma.factura.findMany({ where:{ companyId:req.companyId, puntoVenta:{ gt:0 } }, select:{ puntoVenta:true }, distinct:['puntoVenta'] });
-      ptos = [...new Set(pvLocales.map(x=>x.puntoVenta).filter(Boolean))];
-      if (!ptos.length) ptos = [1];
-    }
+      pvLocales.forEach(x => x.puntoVenta && pvSet.add(Number(x.puntoVenta)));
+    } catch {}
+    try {
+      const pvSeq = await prisma.secuenciaComprobante.findMany({ where:{ companyId:req.companyId, puntoVenta:{ gt:0 } }, select:{ puntoVenta:true }, distinct:['puntoVenta'] });
+      pvSeq.forEach(x => x.puntoVenta && pvSet.add(Number(x.puntoVenta)));
+    } catch {}
+    if (Array.isArray(req.body?.ptosVenta)) req.body.ptosVenta.forEach(n => { const v=Number(n); if(v>0) pvSet.add(v); });
+    let ptos = [...pvSet].filter(n => n > 0).sort((a,b)=>a-b);
+    if (!ptos.length) ptos = [1];
     const _dstr = (dt) => { const z2=n=>String(n).padStart(2,'0'); return `${dt.getFullYear()}-${z2(dt.getMonth()+1)}-${z2(dt.getDate())}`; };
     const filas = [];
     let consultas = 0; const MAX_CONSULTAS = 4000;

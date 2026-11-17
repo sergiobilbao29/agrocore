@@ -3123,6 +3123,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
+      titulo:'🔄 v2.428.0 — Traer ventas de ARCA: ahora recorre TODOS tus puntos de venta',
+      desc:'Arreglamos que "Traer ventas de ARCA" traía solo algunos comprobantes. ARCA, por web service, solo informa los <b>puntos de venta habilitados para web service</b>; los que emitís por el <b>portal</b> ("Comprobantes en línea") no los lista. Ahora, además de los que informa ARCA, también recorremos los puntos de venta de tus <b>facturas ya cargadas</b> y los de tu <b>numeración de comprobantes</b> (Configuración), así no se escapa ningún PV. Si igual te faltara alguno, lo podés sumar en la numeración.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/11/2026',
       titulo:'🔄 v2.427.0 — Traer tus ventas directo de ARCA (sin bajar el Excel)',
       desc:'En <b>Movimientos de ventas</b> sumamos el botón <b>“🔄 Traer ventas de ARCA”</b>: se conecta al <b>web service oficial de ARCA</b> con el mismo certificado que usás para emitir, trae tus comprobantes <b>emitidos</b> de un período y los <b>concilia</b> con lo que ya tenés cargado. Elegís el rango (ideal de a un mes), ves en una tabla cuáles <b>ya están cargados</b> y cuáles <b>faltan</b>, marcás los que quieras y se cargan solos (alta del cliente por CUIT, IVA, cuenta a cobrar y Libro IVA Ventas, con el <b>CAE real</b>). No mueve stock (son ventas ya emitidas). Es oficial y gratis. Para <b>compras y retenciones</b> seguí usando el import del Excel de ARCA (no hay web service oficial para esos).' },
