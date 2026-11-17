@@ -2857,6 +2857,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Pago-Dividido-Producto-y-Cheque.pdf', t:'Pago dividido (producto y cheque)', d:'Cancelar con parte producto y parte cheque.' },
       { f:'Instructivo-Cheques-Propios-y-Terceros.pdf', t:'Cheques propios y de terceros', d:'Manejo completo de cheques en cartera.' },
       { f:'Instructivo-Creditos-Bancarios.pdf', t:'Créditos bancarios (carga, pago y calendario)', d:'Cargar un crédito nuevo o ya empezado (plan automático francés o manual con cuotas distintas, moneda extranjera e IVA de intereses), marcar cuotas ya pagadas, pagar cada cuota con cualquier medio, y cómo cada vencimiento aparece y alerta solo en la Agenda, el Inicio y el Flujo de fondos.' },
+      { f:'Instructivo-Gastos-Diarios.pdf', t:'Gastos diarios (circuito completo)', d:'De la categoría al reporte: armar el árbol de Categorías de Gasto, cargar cada gasto/ingreso en Movimientos diarios (categoría, de quién —🏢 Empresa o 👤 Personal del dueño— y método de pago), y ver todo mes a mes en el Reporte de Gastos por categoría con filtros por categoría, empresa/propio y caja/tenedor/contraparte.' },
       { f:'Instructivo-Caja-por-Tenedor.pdf', t:'Caja por tenedor', d:'Controlar efectivo por persona que lo tiene a cargo.' },
       { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
       { f:'Instructivo-Empleados-y-Sueldos.pdf', t:'Empleados y sueldos (completo)', d:'Guía completa: alta, sueldo fijo/variable/por día, labores con %, gastos, adelantos, entregas, cuenta corriente con arrastre y liquidación.' },
@@ -3122,6 +3123,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Documentación', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/11/2026',
+      titulo:'📘 v2.423.0 — Instructivo de Gastos diarios + el asistente ya explica gastos y créditos',
+      desc:'Sumamos el <b>instructivo paso a paso de Gastos diarios</b> (circuito completo) en <b>Ayuda y manual → Finanzas</b> y en el Manual web: armar el <b>árbol de Categorías de Gasto</b>, cargar cada gasto/ingreso en <b>Movimientos diarios</b> (categoría, de quién —🏢 Empresa o 👤 Personal del dueño— y método), y verlo mes a mes en el <b>Reporte de Gastos por categoría</b> con filtros. Además el <b>asistente (🤖)</b> ahora explica el <b>circuito de gastos</b> (cargar un gasto, el reporte por categoría y de quién son) y los <b>créditos bancarios</b> (plan automático/manual, crédito ya empezado con “Marcar pagadas hasta…”, pagar cuotas y sus alertas en el calendario), y te lleva directo a la pantalla.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/11/2026',
+      titulo:'📊 v2.422.0 — Gastos diarios: ahora el Reporte por categoría los incluye (de quién y de qué son)',
+      desc:'Conectamos todo el circuito de gastos del día a día. Antes, los gastos que cargabas en <b>Movimientos diarios</b> guardaban la categoría como texto y <b>no aparecían</b> en el Reporte de Gastos por categoría (que solo miraba las facturas). Ahora cada movimiento diario (efectivo y banco) guarda la <b>categoría del árbol</b> y la <b>clasificación 🏢 Empresa / 👤 Personal del dueño</b>, y el <b>Reporte de Gastos por categoría</b> suma <b>las facturas + los movimientos diarios</b>. Le agregamos filtros: <b>De quién</b> (Todos / 🏢 Empresa / 👤 Personal del dueño) y <b>Caja/tenedor/contraparte</b> (buscás los gastos de una persona o proveedor), más un toggle para incluir o no los movimientos diarios. Los gastos viejos (sin categoría guardada) se reconstruyen por su texto cuando se puede. Así ves fácil, mes a mes, <b>cuánto, de quién y de qué categoría</b> son los gastos. <b>Trae migración.</b>' },
     { tag:'Documentación', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/11/2026',
       titulo:'📘 v2.421.0 — Nuevo instructivo: Créditos bancarios (carga, pago y calendario)',
       desc:'Sumamos un <b>instructivo paso a paso de Créditos bancarios</b> en <b>Ayuda y manual → Finanzas</b> (y en el Manual de usuario web). Cubre: cargar un crédito <b>nuevo o ya empezado</b> (con el botón <b>“✅ Marcar pagadas hasta…”</b> para las cuotas que ya pagaste), <b>plan automático (francés)</b> vs <b>manual</b> (cuotas distintas), créditos en <b>moneda extranjera</b> e <b>IVA de intereses</b>, cómo <b>pagar cada cuota</b> con cualquier medio (transferencia/débito/efectivo/cheque/tarjeta), y cómo cada vencimiento <b>aparece y alerta solo</b> en la Agenda (🔗 Auto), el Inicio y el Flujo de fondos.' },
@@ -35291,7 +35298,7 @@ async function movDiariosGuardar() {
   if (!fecha) return toast('Falta la fecha', 'warn');
   const body = {
     fecha: new Date(fecha).toISOString(),
-    tipo, concepto, monto, categoria, clasificacion, contraparte, observaciones, metodo,
+    tipo, concepto, monto, categoria, categoriaGastoId: (_famId || _rootId) || null, clasificacion, contraparte, observaciones, metodo,
   };
   if (metodo === 'efectivo')      body.caja          = document.getElementById('md-caja')?.value?.trim() || null;
   if (metodo === 'externo')       body.caja          = document.getElementById('md-medio')?.value?.trim() || null;
@@ -35325,12 +35332,12 @@ async function movDiariosGuardar() {
       if (rec.tabla === 'banco') {
         await api('/api/banco-movimientos/'+rec.id, { method:'PUT', body: JSON.stringify({
           fecha: new Date(fecha).toISOString(), concepto, monto,
-          contraparte: contraparte || null, clasificacion, observaciones: obsFull, syncMirror: true,
+          contraparte: contraparte || null, clasificacion, categoriaGastoId: (_famId || _rootId) || null, observaciones: obsFull, syncMirror: true,
         })});
       } else {
         await api('/api/efectivo/'+rec.id, { method:'PUT', body: JSON.stringify({
           fecha: new Date(fecha).toISOString(), tipo, concepto, monto,
-          caja: (body.caja || rec.caja || null), clasificacion, observaciones: obsFull,
+          caja: (body.caja || rec.caja || null), clasificacion, categoriaGastoId: (_famId || _rootId) || null, observaciones: obsFull,
         })});
       }
       toast('✅ Movimiento actualizado', 'success');
@@ -41411,10 +41418,13 @@ pages.reporteGastos = async function() {
   if (!can('reportes:read')) { $('#page-body').innerHTML = stubPage('reporteGastos','Gastos por categoría'); return; }
   if (!state.rgDesde) { const h=new Date(); state.rgHasta=h.toISOString().slice(0,10); state.rgDesde=new Date(h.getFullYear(),0,1).toISOString().slice(0,10); }
   if (state.rgCompras===undefined) state.rgCompras=false;
+  if (state.rgDiarios===undefined) state.rgDiarios=true;   // incluir Movimientos diarios (día a día)
+  if (state.rgClasif===undefined) state.rgClasif='';       // '' | 'empresa' | 'propio'
+  if (state.rgQuien===undefined) state.rgQuien='';         // caja/tenedor o contraparte (contiene)
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
   destroyCharts();
   let d;
-  try { d=(await api(`/api/reporte-gastos?desde=${state.rgDesde}&hasta=${state.rgHasta}&incluirCompras=${state.rgCompras?1:0}`)).data; }
+  try { d=(await api(`/api/reporte-gastos?desde=${state.rgDesde}&hasta=${state.rgHasta}&incluirCompras=${state.rgCompras?1:0}&incluirDiarios=${state.rgDiarios?1:0}&clasificacion=${encodeURIComponent(state.rgClasif||'')}&quien=${encodeURIComponent(state.rgQuien||'')}`)).data; }
   catch(e){ $('#page-body').innerHTML=`<div class="text-red-600 text-sm">Error: ${esc(e.message)}</div>`; return; }
   rgRender(d);
 };
@@ -41428,13 +41438,24 @@ function rgRender(d){
   }).join('');
   $('#page-body').innerHTML = `
     <div class="kpi mb-3">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-2 items-end">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 items-end">
         <div><label class="label">Desde</label><input id="rg-desde" type="date" class="input" value="${state.rgDesde}"/></div>
         <div><label class="label">Hasta</label><input id="rg-hasta" type="date" class="input" value="${state.rgHasta}"/></div>
-        <div><label class="flex items-center gap-2 text-sm mt-5"><input type="checkbox" id="rg-compras" ${state.rgCompras?'checked':''}/> Incluir compras de insumos/mercadería</label></div>
-        <div class="flex gap-2"><button class="btn btn-primary flex-1" onclick="rgAplicar()">Aplicar</button><button class="btn btn-secondary" onclick="rgExcel()">⬇️ Excel</button></div>
+        <div><label class="label">De quién</label>
+          <select id="rg-clasif" class="input">
+            <option value="" ${state.rgClasif?'':'selected'}>Todos</option>
+            <option value="empresa" ${state.rgClasif==='empresa'?'selected':''}>🏢 Empresa</option>
+            <option value="propio" ${state.rgClasif==='propio'?'selected':''}>👤 Personal del dueño</option>
+          </select>
+        </div>
+        <div><label class="label">Caja / tenedor / contraparte</label><input id="rg-quien" class="input" placeholder="Ej: Lucas, Oficina, proveedor…" value="${esc(state.rgQuien||'')}"/></div>
       </div>
-      <div class="text-[11px] text-slate-500 mt-2">Agrupa las facturas de compra por su <b>categoría de gasto</b>. Por defecto muestra solo gastos (servicios, seguros, etc.); tildá la opción para sumar también las compras de insumos/mercadería. El reporte es de la <b>empresa activa</b> (cambiala arriba para ver otra).</div>
+      <div class="flex flex-wrap items-center gap-4 mt-2">
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="rg-diarios" ${state.rgDiarios?'checked':''}/> Incluir movimientos diarios (día a día)</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="rg-compras" ${state.rgCompras?'checked':''}/> Incluir compras de insumos/mercadería</label>
+        <div class="flex gap-2 ml-auto"><button class="btn btn-primary" onclick="rgAplicar()">Aplicar</button><button class="btn btn-secondary" onclick="rgExcel()">⬇️ Excel</button></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Junta los gastos por su <b>categoría de gasto</b>: las <b>facturas de compra</b> y los <b>Movimientos diarios</b> (efectivo y banco). Con <b>De quién</b> filtrás por 🏢 Empresa o 👤 Personal del dueño, y con <b>Caja/tenedor/contraparte</b> buscás los gastos de una persona o proveedor. Por defecto no suma las compras de insumos/mercadería (tildá la opción si las querés). El reporte es de la <b>empresa activa</b> (cambiala arriba para ver otra).</div>
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
       <div class="kpi"><div class="text-xs text-slate-500">Total del período</div><div class="text-2xl font-bold text-red-600 mt-1">${fmt$(total)}</div>${sinCat?`<div class="text-[11px] text-amber-600 mt-1">Sin categoría asignada: ${fmt$(sinCat)}</div>`:''}</div>
@@ -41456,11 +41477,12 @@ function rgRender(d){
     }
   }
 }
-function rgAplicar(){ state.rgDesde=$('#rg-desde')?.value||state.rgDesde; state.rgHasta=$('#rg-hasta')?.value||state.rgHasta; state.rgCompras=!!$('#rg-compras')?.checked; pages.reporteGastos(); }
+function rgAplicar(){ state.rgDesde=$('#rg-desde')?.value||state.rgDesde; state.rgHasta=$('#rg-hasta')?.value||state.rgHasta; state.rgCompras=!!$('#rg-compras')?.checked; state.rgDiarios=!!$('#rg-diarios')?.checked; state.rgClasif=$('#rg-clasif')?.value||''; state.rgQuien=($('#rg-quien')?.value||'').trim(); pages.reporteGastos(); }
 function rgExcel(){
   const d=state._rgData; if(!d) return;
   const total=d.total||0; const pct=(v)=> total? Math.round(v/total*1000)/10 : 0;
-  const rows=[['Gastos por categoría'],['Desde',state.rgDesde,'Hasta',state.rgHasta],['Incluye compras/insumos', state.rgCompras?'Sí':'No'],[],['Categoría','Familia','Total','%']];
+  const _quienLbl = state.rgClasif==='empresa'?'Empresa':state.rgClasif==='propio'?'Personal del dueño':'Todos';
+  const rows=[['Gastos por categoría'],['Desde',state.rgDesde,'Hasta',state.rgHasta],['De quién',_quienLbl],['Caja/tenedor/contraparte', state.rgQuien||'(todas)'],['Incluye movimientos diarios', state.rgDiarios?'Sí':'No'],['Incluye compras/insumos', state.rgCompras?'Sí':'No'],[],['Categoría','Familia','Total','%']];
   (d.grupos||[]).forEach(g=>{ rows.push([g.categoria,'',g.total,pct(g.total)]); (g.familias||[]).forEach(f=>rows.push(['',f.nombre,f.total,pct(f.total)])); });
   if(d.sinCategoria) rows.push(['(Sin categoría)','',d.sinCategoria,pct(d.sinCategoria)]);
   rows.push([]); rows.push(['TOTAL','',total,100]);

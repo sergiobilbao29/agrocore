@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.421.0';
+const AGROCORE_VERSION = '2.423.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8514,6 +8514,7 @@ mountCrud({
     caja: z.string().nullable().optional(),
     cajaDestino: z.string().nullable().optional(),
     clasificacion: z.string().nullable().optional(),
+    categoriaGastoId: z.string().nullable().optional(),
     observaciones: z.string().nullable().optional(),
   }),
   orderBy: { fecha: 'desc' },
@@ -11184,33 +11185,100 @@ app.get('/api/reporte-gastos', requireCompany, requirePermission('reportes:read'
     const desde = req.query.desde ? new Date(String(req.query.desde) + 'T00:00:00') : null;
     const hasta = req.query.hasta ? new Date(String(req.query.hasta) + 'T23:59:59') : null;
     const incluirCompras = String(req.query.incluirCompras || '') === '1';
-    const where = { companyId: req.companyId };
-    if (desde || hasta) { where.fecha = {}; if (desde) where.fecha.gte = desde; if (hasta) where.fecha.lte = hasta; }
-    const facturas = await prisma.facturaCompra.findMany({
-      where,
-      select: { total: true, moneda: true, cotizacion: true, clase: true, categoriaGastoId: true, items: { select: { productoId: true } } },
-    });
+    // Por defecto SÍ incluimos los gastos del día a día (Movimientos diarios). Se puede apagar con incluirDiarios=0.
+    const incluirDiarios = String(req.query.incluirDiarios ?? '1') !== '0';
+    // "De quién": filtro por clasificación (empresa | propio) y por caja/tenedor o contraparte.
+    const fClasif = String(req.query.clasificacion || '').toLowerCase();   // '', 'empresa', 'propio'
+    const fQuien = String(req.query.quien || '').trim().toLowerCase();     // caja/tenedor o contraparte (contains)
+    const rangoFecha = {}; if (desde) rangoFecha.gte = desde; if (hasta) rangoFecha.lte = hasta;
+    const whereFecha = (desde || hasta) ? { fecha: rangoFecha } : {};
+
+    // Árbol de categorías de gasto (para agrupar por raíz → familia).
     const cats = await prisma.categoriaGasto.findMany({ where: { companyId: req.companyId }, select: { id: true, nombre: true, padreId: true } });
     const byId = {}; cats.forEach(c => { byId[c.id] = c; });
     const rootOf = (id) => { let n = byId[id]; if (!n) return null; let guard = 0; while (n.padreId && byId[n.padreId] && guard++ < 20) n = byId[n.padreId]; return n; };
+    // Para movimientos viejos sin categoriaGastoId: intentar reconstruir desde el texto
+    // "Categoría: Raíz / Familia" guardado en observaciones, buscando la categoría por nombre.
+    const _norm = (s) => String(s || '').trim().toLowerCase();
+    const byNombre = {}; cats.forEach(c => { const k = _norm(c.nombre); if (!byNombre[k]) byNombre[k] = c; });
+    const catIdFromTexto = (obs) => {
+      if (!obs) return null;
+      const m = String(obs).match(/Categor[ií]a:\s*([^·\n]+)/i);
+      if (!m) return null;
+      const partes = m[1].split('/').map(x => _norm(x)).filter(Boolean);
+      const famNom = partes[partes.length - 1];
+      const c = byNombre[famNom];
+      return c ? c.id : null;
+    };
+    // ¿La clasificación "no empresa" cuenta como propio? (facturas usan empresa/particular/socio; diarios usan empresa/propio)
+    const esPropio = (c) => { const v = _norm(c); return v && v !== 'empresa'; };
+    const pasaClasif = (c) => { if (!fClasif) return true; return fClasif === 'propio' ? esPropio(c) : !esPropio(c); };
+    const pasaQuien = (...txts) => { if (!fQuien) return true; return txts.some(t => _norm(t).includes(fQuien)); };
+
     const grupos = {}; let total = 0; let sinCat = 0;
+    const addGasto = (ars, categoriaGastoId) => {
+      total += ars;
+      const cat = categoriaGastoId && byId[categoriaGastoId] ? byId[categoriaGastoId] : null;
+      if (!cat) { sinCat += ars; return; }
+      const root = rootOf(categoriaGastoId) || cat;
+      if (!grupos[root.id]) grupos[root.id] = { categoriaId: root.id, categoria: root.nombre, total: 0, familias: {} };
+      grupos[root.id].total += ars;
+      const famKey = (cat.id === root.id) ? '__root__' : cat.id;
+      const famName = (cat.id === root.id) ? '(sin familia)' : cat.nombre;
+      if (!grupos[root.id].familias[famKey]) grupos[root.id].familias[famKey] = { id: famKey, nombre: famName, total: 0 };
+      grupos[root.id].familias[famKey].total += ars;
+    };
+
+    // 1) Facturas de compra (como antes).
+    const facturas = await prisma.facturaCompra.findMany({
+      where: { companyId: req.companyId, ...whereFecha },
+      select: { total: true, moneda: true, cotizacion: true, clase: true, categoriaGastoId: true, clasificacion: true, proveedor: { select: { nombre: true } }, items: { select: { productoId: true } } },
+    });
     for (const f of facturas) {
       const tieneStock = (f.items || []).some(i => i.productoId);
       if (tieneStock && !incluirCompras) continue;
+      if (!pasaClasif(f.clasificacion)) continue;
+      if (!pasaQuien(f.proveedor?.nombre)) continue;
       const signo = f.clase === 'nota_credito' ? -1 : 1;
       const cot = (f.moneda && f.moneda !== 'ARS' && f.cotizacion) ? Number(f.cotizacion) : 1;
-      const ars = (Number(f.total) || 0) * cot * signo;
-      total += ars;
-      if (!f.categoriaGastoId || !byId[f.categoriaGastoId]) { sinCat += ars; continue; }
-      const root = rootOf(f.categoriaGastoId) || byId[f.categoriaGastoId];
-      const fam = byId[f.categoriaGastoId];
-      if (!grupos[root.id]) grupos[root.id] = { categoriaId: root.id, categoria: root.nombre, total: 0, familias: {} };
-      grupos[root.id].total += ars;
-      const famKey = (fam.id === root.id) ? '__root__' : fam.id;
-      const famName = (fam.id === root.id) ? '(sin familia)' : fam.nombre;
-      if (!grupos[root.id].familias[famKey]) grupos[root.id].familias[famKey] = { id: famKey, nombre: famName, total: 0 };
-      grupos[root.id].familias[famKey].total += ars;
+      addGasto((Number(f.total) || 0) * cot * signo, f.categoriaGastoId);
     }
+
+    // 2) Movimientos diarios: EGRESOS de efectivo + banco (pagos del día a día).
+    if (incluirDiarios) {
+      const efe = await prisma.efectivo.findMany({
+        where: { companyId: req.companyId, tipo: 'egreso', ...whereFecha },
+        select: { monto: true, categoriaGastoId: true, clasificacion: true, caja: true, observaciones: true },
+      });
+      for (const e of efe) {
+        // Solo los gastos cargados desde Movimientos diarios (tienen categoría del árbol
+        // o el texto "Categoría:"). Así NO contamos dos veces los pagos a proveedor/sueldos
+        // pagados en efectivo (esos ya se cuentan por su factura y no son gasto por categoría).
+        const esDiario = !!e.categoriaGastoId || /Categor[ií]a:/i.test(e.observaciones || '');
+        if (!esDiario) continue;
+        if (!pasaClasif(e.clasificacion)) continue;
+        if (!pasaQuien(e.caja, e.observaciones)) continue;
+        addGasto(Number(e.monto) || 0, e.categoriaGastoId || catIdFromTexto(e.observaciones));
+      }
+      // Banco: EGRESOS del día a día (débito / transferencia saliente). Solo contamos
+      // los que vienen de Movimientos diarios (tienen categoriaGastoId o el texto
+      // "Categoría:"), para NO sumar extracciones, comisiones, cuotas, impuestos u otros
+      // movimientos del banco que no son gastos cargados a mano.
+      const EGRESO_BANCO = ['debito', 'transferencia_out'];
+      const ban = await prisma.bancoMovimiento.findMany({
+        where: { companyId: req.companyId, tipo: { in: EGRESO_BANCO }, ...whereFecha },
+        select: { monto: true, categoriaGastoId: true, clasificacion: true, contraparte: true, observaciones: true },
+      });
+      for (const b of ban) {
+        const catId = b.categoriaGastoId || catIdFromTexto(b.observaciones);
+        const esDiario = !!b.categoriaGastoId || /Categor[ií]a:/i.test(b.observaciones || '');
+        if (!esDiario) continue;   // movimiento bancario que no salió del día a día → no es gasto por categoría
+        if (!pasaClasif(b.clasificacion)) continue;
+        if (!pasaQuien(b.contraparte, b.observaciones)) continue;
+        addGasto(Number(b.monto) || 0, catId);
+      }
+    }
+
     const arr = Object.values(grupos).map(g => ({
       categoriaId: g.categoriaId, categoria: g.categoria, total: _round2(g.total),
       familias: Object.values(g.familias).map(fm => ({ ...fm, total: _round2(fm.total) })).sort((a, b) => b.total - a.total),
@@ -17353,13 +17421,15 @@ const _AYUDA_KB = [
       'Botón 🌾 Ventas: por cada mes cargás los kilos reales vendidos y el precio pizarra ($/tonelada) del día → el sistema calcula cuánto pagar.',
       'Entregas: con 💵 Entrega registrás pagos parciales sobre cada venta (y los kilos entregados, opcional). Cada entrega mueve la plata real y descuenta del saldo hasta saldar.'],
     atajo:{ page:'arrendamientos', label:'Abrir Arrendamientos' } },
-  { id:'credito', terms:['credito','prestamo','credito bancario','cuota de credito','financiacion','plan de cuotas'],
-    titulo:'Cargar un crédito bancario',
+  { id:'credito', terms:['credito','prestamo','credito bancario','cuota de credito','financiacion','plan de cuotas','credito ya empezado','cuotas ya pagadas','marcar pagadas','pagar cuota','plan manual','credito en dolares','vencimiento de cuota','cuota en el calendario'],
+    titulo:'Créditos bancarios: cargar, pagar y ver los vencimientos',
     pasos:[
-      'Entrá a Créditos → "Nuevo crédito".',
-      'Elegí el banco (del catálogo), monto, moneda y tipo de cambio, tasa y cantidad de cuotas (o plan manual).',
-      'El sistema arma el plan de cuotas (capital + interés + IVA del interés).',
-      'Pagá cada cuota con el medio que quieras; podés editar y cargar cuotas ya pagadas.'],
+      'Entrá a Tesorería → 🏦 Créditos bancarios y tocá "+ Nuevo crédito".',
+      'Cargá banco (del catálogo), monto, moneda (con TC si es en dólares), tasa (TNA), IVA de intereses opcional, cantidad de cuotas, periodicidad y fecha de la primera.',
+      'Elegí el plan: Automático (sistema francés, cuota constante) o Manual (cargás vos el importe de cada cuota — ideal si son distintas). El sistema arma todas las cuotas.',
+      'Crédito YA EMPEZADO: cargalo completo y en 👁 Ver usá "✅ Marcar pagadas hasta…" para marcar de una las cuotas ya pagadas. (Editar un plan automático regenera las cuotas y borra las marcas.)',
+      'Pagar una cuota: 💸 Pagar → elegí el medio (transferencia/débito con la cuenta, efectivo con la caja, cheque de cartera o tarjeta). En moneda extranjera ponés el TC del día del pago.',
+      'Calendario: cada cuota pendiente aparece sola en la Agenda (🔗 Auto), en el Inicio y en el Flujo de fondos; al pagarla desaparece.'],
     atajo:{ page:'creditos', label:'Abrir Créditos' } },
   { id:'cotizacion', terms:['cotizacion','dolar','tipo de cambio','valor del dolar','moneda','cambio'],
     titulo:'Ver / cargar cotizaciones',
@@ -17517,13 +17587,24 @@ const _AYUDA_KB = [
       'Cargá razón social, CUIT y condición de IVA.',
       'También se crean solos cuando cargás una compra/venta o un viaje.'],
     atajo:{ page:'clientes', label:'Abrir Clientes' } },
-  { id:'movdiarios', terms:['movimiento diario','caja','ingreso de dinero','egreso','gasto sin factura','movimientos diarios','plata','efectivo'],
-    titulo:'Movimientos diarios (caja/banco)',
+  { id:'movdiarios', terms:['movimiento diario','caja','ingreso de dinero','egreso','gasto sin factura','movimientos diarios','plata','efectivo','gasto diario','gastos diarios','cargar un gasto','gasto del dia','gasto personal','gasto del dueno','gasto propio','de quien es el gasto','clasificacion del gasto'],
+    titulo:'Cargar un gasto (Movimientos diarios)',
     pasos:[
-      'Entrá a Movimientos diarios y tocá "Nuevo".',
-      'Elegí ingreso o egreso, el medio (efectivo, banco, tarjeta) y la Categoría + Familia del árbol de gastos.',
-      'Podés marcarlo como intercompany si es entre tus empresas.'],
+      'Entrá a Tesorería → Movimientos diarios y tocá "Nuevo".',
+      'Elegí Egreso (gasto) o Ingreso, la fecha y escribí el concepto.',
+      'Elegí la Categoría + Familia del árbol de gastos (es lo que agrupa el reporte) y "De quién es": 🏢 Empresa o 👤 Personal del dueño.',
+      'Cargá el monto, una contraparte opcional, y el método (efectivo+caja, cheque, transferencia/débito+cuenta, billetera/medio externo, tarjeta o intercompany). El sistema arma solo el movimiento (caja/banco/cheque).',
+      'Después lo ves agrupado en Tablero → Gastos por categoría (ver "reporte de gastos").'],
     atajo:{ page:'movDiarios', label:'Abrir Movimientos diarios' } },
+  { id:'reporte_gastos', terms:['reporte de gastos','gastos por categoria','en que gasto','en que se va la plata','cuanto gaste','gastos del mes','gasto por categoria','ver gastos','informe de gastos','gastos de cada uno','gasto por persona','gastos personales vs empresa','categorias de gasto','arbol de gastos','categoria de gasto'],
+    titulo:'Ver los gastos por categoría (y de quién son)',
+    pasos:[
+      'Primero armá tu árbol en Administración → Categorías de Gasto (Categoría → Familia → subfamilias). La primera vez se siembra solo.',
+      'Cargá los gastos del día a día en Movimientos diarios eligiendo siempre su Categoría y "De quién" (Empresa / Personal del dueño).',
+      'Entrá a Tablero → 🧾 Gastos por categoría y elegí el rango de fechas.',
+      'Filtrá por "De quién" (Todos / 🏢 Empresa / 👤 Personal del dueño) y por "Caja/tenedor/contraparte" para ver los gastos de una persona o proveedor.',
+      'El reporte suma las facturas de compra + los Movimientos diarios por categoría, con total, torta y export a Excel. No cuenta doble: un pago de factura en efectivo va por su factura, no como gasto suelto.'],
+    atajo:{ page:'reporteGastos', label:'Abrir Gastos por categoría' } },
   { id:'usuarios', terms:['usuario','usuarios','permiso','permisos','rol','roles','dar acceso','alta de usuario','contraseña'],
     titulo:'Usuarios, roles y permisos',
     pasos:[
@@ -21582,6 +21663,8 @@ const bancoMovSchema = z.object({
   concepto: z.string().min(1),
   monto: z.number().positive(),
   contraparte: z.string().nullable().optional(),
+  clasificacion: z.string().nullable().optional(),      // "empresa" | "propio" (Movimientos diarios)
+  categoriaGastoId: z.string().nullable().optional(),   // categoría de gasto del árbol (Movimientos diarios)
   referencia: z.string().nullable().optional(),
   cuentaContraId: z.string().nullable().optional(),     // solo en transferencias internas
   cajaEfectivo: z.string().nullable().optional(),       // depósito/extracción vinculado a una caja de efectivo
@@ -21770,6 +21853,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
       tipo: z.enum(['ingreso', 'egreso', 'ajuste_in', 'ajuste_out']),
       concepto: z.string().min(1),
       categoria: z.string().nullable().optional(),
+      categoriaGastoId: z.string().nullable().optional(), // id del árbol de Categorías de Gasto
       clasificacion: z.string().nullable().optional(),   // "empresa" | "propio"
       monto: z.number().positive(),
       metodo: z.enum(['efectivo', 'cheque', 'transferencia', 'debito', 'externo', 'tarjeta', 'intercompany']),
@@ -21809,6 +21893,7 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
           monto: d.monto,
           caja: d.caja || null,
           clasificacion: d.clasificacion || 'empresa',
+          categoriaGastoId: d.categoriaGastoId || null,
           referencia: d.referencia || null,
           observaciones: detalleObs || null,
         },
@@ -21830,6 +21915,8 @@ app.post('/api/movimientos-diarios', requireCompany, requirePermission('finanzas
           concepto: d.concepto,
           monto: d.monto,
           contraparte: d.contraparte || null,
+          clasificacion: d.clasificacion || 'empresa',
+          categoriaGastoId: d.categoriaGastoId || null,
           referencia: d.referencia || null,
           observaciones: detalleObs || null,
           userId: req.user?.id || null,

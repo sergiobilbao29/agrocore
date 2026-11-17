@@ -1284,6 +1284,7 @@ model Efectivo {
   caja          String?    // caja de origen (o caja única para ingreso/egreso)
   cajaDestino   String?    // caja de destino (solo para transferencia entre cajas)
   clasificacion String?    // "empresa" | "propio" (para ingresos y egresos)
+  categoriaGastoId String? // categoría de gasto del árbol (Movimientos diarios → reporte por categoría)
   referencia    String?    // vínculo con otro módulo (ej. FACCOB-<facturaId> para revertir)
   observaciones String?
   createdAt     DateTime @default(now())
@@ -1294,6 +1295,7 @@ model Efectivo {
   @@index([companyId])
   @@index([fecha])
   @@index([referencia])
+  @@index([categoriaGastoId])
 }
 
 model FlujoCaja {
@@ -2495,6 +2497,8 @@ model BancoMovimiento {
   concepto        String                      // descripción libre
   monto           Float                       // siempre positivo; el tipo define si suma o resta al saldo
   contraparte     String?                     // nombre del tercero (cliente/proveedor/banco)
+  clasificacion   String?                     // "empresa" | "propio" (gasto de la empresa o personal del dueño) — Movimientos diarios
+  categoriaGastoId String?                    // categoría de gasto del árbol — Movimientos diarios → reporte por categoría
   referencia      String?                     // nro de operación, ID de transferencia, etc.
   // Cuenta destino: solo cuando es transferencia interna entre cuentas propias
   cuentaContraId  String?
@@ -2522,6 +2526,7 @@ model BancoMovimiento {
   @@index([chequeId])
   @@index([cuotaCreditoId])
   @@index([importLote])
+  @@index([categoriaGastoId])
 }
 
 // Conciliacion bancaria mensual, por cuenta. Cuando se confirma un periodo
