@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
+      titulo:'📄 v2.429.0 — Importar factura de compra por PDF: arregla el neto cuando la cantidad es mayor a 1',
+      desc:'Corregimos que, al importar una factura de compra por PDF con <b>cantidad mayor a 1</b> (ej. 2 unidades), el sistema tomaba el <b>precio unitario</b> como neto y el total quedaba <b>a la mitad</b> (te marcaba "Diferencia" con el total informado). Ahora lee bien el <b>Neto gravado</b> del pie del comprobante y, además, hace un <b>control cruzado</b> (neto = total − IVA) para que el importe cargado coincida con el real de la factura.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
       titulo:'🔄 v2.428.0 — Traer ventas de ARCA: ahora recorre TODOS tus puntos de venta',
       desc:'Arreglamos que "Traer ventas de ARCA" traía solo algunos comprobantes. ARCA, por web service, solo informa los <b>puntos de venta habilitados para web service</b>; los que emitís por el <b>portal</b> ("Comprobantes en línea") no los lista. Ahora, además de los que informa ARCA, también recorremos los puntos de venta de tus <b>facturas ya cargadas</b> y los de tu <b>numeración de comprobantes</b> (Configuración), así no se escapa ningún PV. Si igual te faltara alguno, lo podés sumar en la numeración.' },
     { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/11/2026',

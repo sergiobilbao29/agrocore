@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.428.0';
+const AGROCORE_VERSION = '2.429.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -23952,7 +23952,10 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
       const vs = _montosDe(mm[1]);
       return vs.length ? Math.max(...vs) : null;
     };
-    if (!resultado.netoGravado)  resultado.netoGravado  = _totalTrasEtiqueta('Importe\\s+Neto\\s+Gravado|Neto\\s+Gravado|SUBTOTAL', false);
+    // OJO: "Subtotal" a secas aparece como ENCABEZADO de la grilla de items (sin ":")
+    // y hace que se tome el PRECIO UNITARIO como neto. Exigimos los rótulos del PIE
+    // ("Neto Gravado" o "Subtotal :" con dos puntos), no el encabezado de la columna.
+    if (!resultado.netoGravado)  resultado.netoGravado  = _totalTrasEtiqueta('Importe\\s+Neto\\s+Gravado|Neto\\s+Gravado|Subtotal\\s*:', false);
     // TOTAL: etiquetas de más a menos específicas. La última ("TOTAL" en mayúsculas) cubre
     // las facturas de sistemas de gestión (Induferr, etc.) cuyo único rótulo es "TOTAL".
     if (!resultado.total) {
@@ -24013,6 +24016,23 @@ app.post('/api/admin/parse-factura-pdf', authMiddleware, requireCompany, upload.
     resultado.iva27  = matchEtiqueta('IVA\\s*27\\s*%?') || resultado.iva27;
     resultado.iva25  = matchEtiqueta('IVA\\s*2[.,]5\\s*%?') || resultado.iva25;
     resultado.iva5   = matchEtiqueta('IVA\\s*5\\s*%?') || resultado.iva5;
+
+    // Cruce de consistencia del NETO (red de seguridad). En facturas con CANTIDAD > 1,
+    // a veces se toma el PRECIO UNITARIO como neto (queda la mitad / un tercio). Si el
+    // comprobante NO tiene "no gravado" ni "otros impuestos", el neto DEBE ser
+    // total − IVA. Si el neto leído no cuadra con eso, lo corregimos desde el pie
+    // (total e IVA discriminado son confiables). No tocamos combustibles (traen otros
+    // impuestos) ni Factura C (sin IVA, neto = total).
+    {
+      const _ivaTotF = (resultado.iva21||0)+(resultado.iva105||0)+(resultado.iva27||0)+(resultado.iva25||0)+(resultado.iva5||0);
+      const _noGravF = Number(resultado.noGravado||0), _otrosF = Number(resultado.otrosImpuestos||0);
+      if (resultado.total && resultado.tipoCmpLetra !== 'C' && _ivaTotF > 0.5 && _noGravF < 0.5 && _otrosF < 0.5) {
+        const _netoCalc = +(resultado.total - _ivaTotF).toFixed(2);
+        if (_netoCalc > 0 && (!resultado.netoGravado || Math.abs(_netoCalc - resultado.netoGravado) > Math.max(1, resultado.netoGravado * 0.02))) {
+          resultado.netoGravado = _netoCalc;
+        }
+      }
+    }
 
     // CUIT emisor / receptor. Los CUIT con etiqueta "CUIT:" suelen ser del receptor
     // (en el bloque del comprador). El emisor viene del nombre de archivo / QR; si no,
