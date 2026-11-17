@@ -2856,6 +2856,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Pagos-y-Cobros.pdf', t:'Pagos y cobros', d:'Registrar pagos a proveedores y cobros de clientes.' },
       { f:'Instructivo-Pago-Dividido-Producto-y-Cheque.pdf', t:'Pago dividido (producto y cheque)', d:'Cancelar con parte producto y parte cheque.' },
       { f:'Instructivo-Cheques-Propios-y-Terceros.pdf', t:'Cheques propios y de terceros', d:'Manejo completo de cheques en cartera.' },
+      { f:'Instructivo-Creditos-Bancarios.pdf', t:'Créditos bancarios (carga, pago y calendario)', d:'Cargar un crédito nuevo o ya empezado (plan automático francés o manual con cuotas distintas, moneda extranjera e IVA de intereses), marcar cuotas ya pagadas, pagar cada cuota con cualquier medio, y cómo cada vencimiento aparece y alerta solo en la Agenda, el Inicio y el Flujo de fondos.' },
       { f:'Instructivo-Caja-por-Tenedor.pdf', t:'Caja por tenedor', d:'Controlar efectivo por persona que lo tiene a cargo.' },
       { f:'Instructivo-Sueldos-Cuenta-Corriente.pdf', t:'Sueldos por cuenta corriente', d:'Liquidar y pagar sueldos de empleados.' },
       { f:'Instructivo-Empleados-y-Sueldos.pdf', t:'Empleados y sueldos (completo)', d:'Guía completa: alta, sueldo fijo/variable/por día, labores con %, gastos, adelantos, entregas, cuenta corriente con arrastre y liquidación.' },
@@ -3121,6 +3122,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Documentación', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/11/2026',
+      titulo:'📘 v2.421.0 — Nuevo instructivo: Créditos bancarios (carga, pago y calendario)',
+      desc:'Sumamos un <b>instructivo paso a paso de Créditos bancarios</b> en <b>Ayuda y manual → Finanzas</b> (y en el Manual de usuario web). Cubre: cargar un crédito <b>nuevo o ya empezado</b> (con el botón <b>“✅ Marcar pagadas hasta…”</b> para las cuotas que ya pagaste), <b>plan automático (francés)</b> vs <b>manual</b> (cuotas distintas), créditos en <b>moneda extranjera</b> e <b>IVA de intereses</b>, cómo <b>pagar cada cuota</b> con cualquier medio (transferencia/débito/efectivo/cheque/tarjeta), y cómo cada vencimiento <b>aparece y alerta solo</b> en la Agenda (🔗 Auto), el Inicio y el Flujo de fondos.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'16/11/2026',
       titulo:'📄 v2.420.0 — Importar factura PDF: arregla el Punto de Venta y el Número',
       desc:'En algunos PDF de ARCA el <b>Punto de Venta</b> y el <b>Número</b> vienen juntos ("00003 00000529") y el sistema tomaba <b>mal el número</b> (traía el punto de venta en lugar del número, ej. "3" en vez de "529", y dejaba el PV vacío). Ahora los lee <b>juntos y en orden</b>, así el <b>Punto de Venta (3)</b> y el <b>Número (529)</b> quedan bien. El resto (cliente, CUIT, CAE, total) ya se leía correcto.' },
