@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.426.0';
+const AGROCORE_VERSION = '2.427.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -3497,6 +3497,45 @@ async function _arcaWsfeConsultar({ token, sign, cuit, ptoVta, cbteTipo, numero,
   const err = _arcaXmlGet(xml, 'Msg') || _arcaXmlGet(xml, 'faultstring') || '';
   return { enArca: false, cae: null, caeVto: null, resultado: null, msg: err };
 }
+// Como _arcaWsfeConsultar pero devuelve TODOS los campos del comprobante emitido
+// (para el autoimportador de ventas desde ARCA). Si no existe/está rechazado -> {enArca:false}.
+async function _arcaWsfeConsultarFull({ token, sign, cuit, ptoVta, cbteTipo, numero, modo }) {
+  const inner = `${_authXml(token, sign, cuit)}<ar:FeCompConsReq><ar:CbteTipo>${cbteTipo}</ar:CbteTipo><ar:CbteNro>${numero}</ar:CbteNro><ar:PtoVta>${ptoVta}</ar:PtoVta></ar:FeCompConsReq>`;
+  const xml = await _arcaWsfeCall('FECompConsultar', inner, modo);
+  const cae = _arcaXmlGet(xml, 'CodAutorizacion');
+  if (!cae) return { enArca: false };
+  const n = (t) => { const v = _arcaXmlGet(xml, t); return v == null ? 0 : (Number(v) || 0); };
+  const fch = _arcaXmlGet(xml, 'CbteFch'); // YYYYMMDD
+  return {
+    enArca: true,
+    cbteTipo: n('CbteTipo') || cbteTipo,
+    ptoVta: n('PtoVta') || ptoVta,
+    numero: n('CbteDesde') || numero,
+    fecha: fch ? _afipParseFecha(fch) : null,
+    docTipo: n('DocTipo'),
+    docNro: _arcaXmlGet(xml, 'DocNro') || '',
+    impTotal: n('ImpTotal'),
+    impNeto: n('ImpNeto'),
+    impIVA: n('ImpIVA'),
+    impTotConc: n('ImpTotConc'),
+    impOpEx: n('ImpOpEx'),
+    impTrib: n('ImpTrib'),
+    monId: _arcaXmlGet(xml, 'MonId') || 'PES',
+    monCotiz: n('MonCotiz') || 1,
+    cae,
+    caeVto: (() => { const v = _arcaXmlGet(xml, 'FchVto'); return v ? _afipParseFecha(v) : null; })(),
+    resultado: _arcaXmlGet(xml, 'Resultado') || 'A',
+  };
+}
+// Devuelve los N° de Punto de Venta habilitados de la empresa (FEParamGetPtosVenta).
+async function _arcaWsfeParamPtosVenta({ token, sign, cuit, modo }) {
+  const inner = _authXml(token, sign, cuit);
+  const xml = await _arcaWsfeCall('FEParamGetPtosVenta', inner, modo);
+  const nums = [];
+  const re = /<Nro>\s*(\d+)\s*<\/Nro>/gi; let m;
+  while ((m = re.exec(xml))) { const n = Number(m[1]); if (n > 0 && !nums.includes(n)) nums.push(n); }
+  return nums;
+}
 // Solicita el CAE real a ARCA (FECAESolicitar) para UN comprobante. Devuelve
 // { cae, caeVto (Date), numero }. Lanza error con el detalle de ARCA si rechaza.
 async function _arcaWsfeSolicitarCAE({ token, sign, cuit, ptoVta, cbteTipo, numero, fecha,
@@ -6791,6 +6830,156 @@ app.post('/api/facturas', requireCompany, requirePermission('ventas:create'), as
 // ============================================================
 // IMPORTAR "Mis Comprobantes -> Emitidos" de ARCA (Excel).
 // Crea una Factura (venta) por comprobante: alta de cliente por CUIT (receptor),
+// ============================================================
+// AUTOIMPORTADOR DE VENTAS DESDE ARCA (web service oficial WSFE).
+// Trae tus comprobantes EMITIDOS de un período consultándolos a ARCA
+// (FEParamGetPtosVenta + FECompUltimoAutorizado + FECompConsultar) y los
+// concilia con lo cargado. commit:false = solo preview; commit:true = crea los
+// que faltan (igual que el import por Excel: origen arca_externa, cta a cobrar,
+// sin stock, dedup por tipo+PV+numero). Es oficial y gratis (reusa el mismo
+// certificado/clave que ya se usa para emitir).
+// ============================================================
+const _ARCA_TIPOS_VENTA = [1,2,3,6,7,8,11,12,13,19,20,21,51,52,53];
+app.post('/api/facturas/importar-arca-ws', requireCompany, requirePermission('ventas:create'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      desde: zFecha, hasta: zFecha,
+      commit: z.boolean().optional().default(false),
+      seleccion: z.array(z.object({ tipo:z.number().int(), ptoVta:z.number().int(), numero:z.number().int() })).optional(),
+    }).parse(req.body);
+    const desde = new Date(d.desde); desde.setHours(0,0,0,0);
+    const hasta = new Date(d.hasta); hasta.setHours(23,59,59,999);
+    if (hasta < desde) return res.status(400).json({ ok:false, error:'El rango de fechas está invertido (Hasta es anterior a Desde).' });
+    const co = await prisma.company.findUnique({ where:{ id:req.companyId }, select:{ id:true, arcaCuit:true, arcaCertCrt:true, arcaPrivadaKey:true, arcaModo:true, informal:true } });
+    if (!co || !(co.arcaCertCrt && co.arcaPrivadaKey && co.arcaCuit)) {
+      return res.status(400).json({ ok:false, error:'Esta empresa no tiene ARCA configurado (certificado + clave privada + CUIT). Cargalo en Administración → Empresas → ARCA para poder traer las ventas.' });
+    }
+    if (co.informal) return res.status(400).json({ ok:false, error:'La empresa está marcada como informal (sin ARCA). No hay ventas fiscales para traer.' });
+    const modo = co.arcaModo || 'prod';
+    const cuit = String(co.arcaCuit || '').replace(/\D/g,'');
+    let ta;
+    try { ta = await _arcaGetTA(co.id, 'wsfe', co.arcaCertCrt, co.arcaPrivadaKey, modo); }
+    catch (e) { return res.status(400).json({ ok:false, error:'No pude autenticar contra ARCA (WSAA): '+(e.message||e) }); }
+    const auth = { token: ta.token, sign: ta.sign, cuit, modo };
+    // Puntos de venta habilitados (si ARCA no los lista, uso los que ya tengo cargados).
+    let ptos = [];
+    try { ptos = await _arcaWsfeParamPtosVenta(auth); } catch {}
+    if (!ptos.length) {
+      const pvLocales = await prisma.factura.findMany({ where:{ companyId:req.companyId, puntoVenta:{ gt:0 } }, select:{ puntoVenta:true }, distinct:['puntoVenta'] });
+      ptos = [...new Set(pvLocales.map(x=>x.puntoVenta).filter(Boolean))];
+      if (!ptos.length) ptos = [1];
+    }
+    const _dstr = (dt) => { const z2=n=>String(n).padStart(2,'0'); return `${dt.getFullYear()}-${z2(dt.getMonth()+1)}-${z2(dt.getDate())}`; };
+    const filas = [];
+    let consultas = 0; const MAX_CONSULTAS = 4000;
+    for (const pv of ptos) {
+      for (const tipo of _ARCA_TIPOS_VENTA) {
+        if (!ARCA_TIPO_MAP[tipo]) continue;
+        let ultimo = 0;
+        try { ultimo = await _arcaWsfeUltimoAutorizado({ ...auth, ptoVta: pv, cbteTipo: tipo }); } catch { continue; }
+        if (!ultimo) continue;
+        // Recorremos hacia atrás desde el último; cuando pasamos a fechas anteriores
+        // al "desde", cortamos (los números son cronológicos ascendentes).
+        for (let n = ultimo; n >= 1; n--) {
+          if (consultas >= MAX_CONSULTAS) break;
+          let c; try { c = await _arcaWsfeConsultarFull({ ...auth, ptoVta: pv, cbteTipo: tipo, numero: n }); consultas++; }
+          catch { continue; }
+          if (!c || !c.enArca || !c.fecha) continue;
+          const f = new Date(c.fecha);
+          if (f < desde) break;          // ya entramos en meses anteriores → cortar este pv/tipo
+          if (f > hasta) continue;       // todavía más nuevo que el rango → seguir bajando
+          filas.push(c);
+        }
+        if (consultas >= MAX_CONSULTAS) break;
+      }
+      if (consultas >= MAX_CONSULTAS) break;
+    }
+    // Marcar cuáles ya están cargadas en AgroCore.
+    const detalle = [];
+    for (const c of filas) {
+      const map = ARCA_TIPO_MAP[c.cbteTipo]; if (!map) continue;
+      const [letra, clase] = map;
+      const ya = await prisma.factura.findFirst({ where:{ companyId:req.companyId, tipo:letra, clase, puntoVenta:c.ptoVta, numero:c.numero, estado:{ not:'anulada' } }, select:{ id:true } });
+      detalle.push({
+        tipo: c.cbteTipo, letra, clase, ptoVta: c.ptoVta, numero: c.numero,
+        fecha: _dstr(new Date(c.fecha)),
+        docTipo: c.docTipo, docNro: String(c.docNro||''),
+        neto: c.impNeto, iva: c.impIVA, noGrav: (c.impTotConc||0)+(c.impOpEx||0), otros: c.impTrib||0,
+        total: c.impTotal, moneda: c.monId==='DOL'?'USD':'ARS', cotiz: c.monCotiz||1,
+        cae: c.cae, caeVto: c.caeVto ? _dstr(new Date(c.caeVto)) : null,
+        yaExiste: !!ya,
+      });
+    }
+    detalle.sort((a,b)=> a.fecha.localeCompare(b.fecha) || a.ptoVta-b.ptoVta || a.numero-b.numero);
+    const nuevas = detalle.filter(x=>!x.yaExiste);
+
+    if (!d.commit) {
+      return res.json({ ok:true, preview:true, resumen:{ total:detalle.length, nuevas:nuevas.length, yaCargadas:detalle.length-nuevas.length, consultados:consultas, topeAlcanzado: consultas>=MAX_CONSULTAS }, detalle });
+    }
+
+    // COMMIT: crear las nuevas (opcionalmente filtradas por `seleccion`).
+    const selKey = d.seleccion ? new Set(d.seleccion.map(s=>`${s.tipo}|${s.ptoVta}|${s.numero}`)) : null;
+    const resumen = { creadas:0, duplicados:0, errores:0 };
+    const hechas = [];
+    for (const row of nuevas) {
+      if (selKey && !selKey.has(`${row.tipo}|${row.ptoVta}|${row.numero}`)) continue;
+      try {
+        const esC = row.letra === 'C';
+        const items = [];
+        if (esC) {
+          items.push({ descripcion:'Comprobante C (ARCA)', cantidad:1, precioUnit: row.total, alicuotaIva:0 });
+        } else {
+          if (row.neto > 0.005) {
+            let pct = row.iva > 0.005 ? Math.round((row.iva/row.neto)*1000)/10 : 0;
+            const snap=[2.5,5,10.5,21,27]; const near=snap.find(s=>Math.abs(s-pct)<0.6); if(near) pct=near;
+            items.push({ descripcion:`Neto gravado ${pct}%`, cantidad:1, precioUnit: row.neto, alicuotaIva: pct });
+          }
+          if (row.noGrav > 0.005) items.push({ descripcion:'No gravado / exento', cantidad:1, precioUnit: row.noGrav, alicuotaIva:0 });
+          if (row.otros > 0.005)  items.push({ descripcion:'Otros tributos / percepciones', cantidad:1, precioUnit: row.otros, alicuotaIva:0 });
+          if (!items.length) items.push({ descripcion:'Importe total (comprobante ARCA)', cantidad:1, precioUnit: row.total, alicuotaIva:0 });
+        }
+        const creada = await prisma.$transaction(async (tx)=>{
+          const dup = await tx.factura.findFirst({ where:{ companyId:req.companyId, tipo:row.letra, clase:row.clase, puntoVenta:row.ptoVta, numero:row.numero, estado:{ not:'anulada' } } });
+          if (dup) return { _dup:true };
+          let cli = null;
+          const docCuit = String(row.docNro||'').replace(/\D/g,'');
+          if (row.docTipo===80 && docCuit.length===11) {
+            cli = await tx.cliente.findFirst({ where:{ companyId:req.companyId, cuit:docCuit } });
+            if (!cli) cli = await tx.cliente.create({ data:{ companyId:req.companyId, razonSocial:`Cliente ${docCuit}`, cuit:docCuit } });
+          }
+          let calc = calcFactura(items);
+          const dif = row.total - calc.total;
+          if (Math.abs(dif) > 0.5) { items.push({ descripcion:'Ajuste (redondeo ARCA)', cantidad:1, precioUnit:dif, alicuotaIva:0 }); calc = calcFactura(items); }
+          const obs = `Importada de ARCA (web service)${row.cae?` · CAE ${row.cae}`:''}`;
+          const f = await tx.factura.create({ data:{
+            companyId:req.companyId, clienteId: cli?cli.id:null, tipo:row.letra, clase:row.clase,
+            puntoVenta:row.ptoVta, numero:row.numero, fecha:new Date(row.fecha),
+            moneda:row.moneda, cotizacion:row.cotiz, observaciones:obs,
+            subtotal:calc.subtotal, iva:calc.iva, total:calc.total,
+            cae:row.cae||null, caeVto: row.caeVto? new Date(row.caeVto):null,
+            estado:'autorizada', arcaReal:true, origen:'arca_externa',
+            items:{ create: calc.items },
+          }, include:{ items:true } });
+          if (row.clase==='factura') {
+            await crearCtaCteDesdeFactura(tx, { companyId:req.companyId, factura:f, contactoTipo:'cliente', contactoId: cli?cli.id:null, refPrefix:'FAC', motivo:'Factura' });
+          } else if (cli) {
+            const esNC = row.clase==='nota_credito';
+            await tx.ctaCte.create({ data:{ companyId:req.companyId, contactoTipo:'cliente', contactoId:cli.id, fecha:new Date(row.fecha),
+              detalle:`${esNC?'Nota de crédito':'Nota de débito'} ${row.letra} ${String(row.ptoVta).padStart(4,'0')}-${String(row.numero).padStart(8,'0')}`,
+              moneda:row.moneda, cotizacion:row.cotiz, ...(esNC?{haber:f.total}:{debe:f.total}), referencia:`FAC-${f.id}`, observaciones:obs }});
+          }
+          return { _dup:false, total:f.total };
+        });
+        if (creada._dup) { resumen.duplicados++; hechas.push({ ref:`${row.letra} ${row.ptoVta}-${row.numero}`, estado:'duplicado' }); }
+        else { resumen.creadas++; hechas.push({ ref:`${row.letra} ${row.ptoVta}-${row.numero}`, estado:'creada', total:creada.total }); }
+      } catch (eRow) {
+        resumen.errores++; hechas.push({ ref:`${row.letra} ${row.ptoVta}-${row.numero}`, estado:'error', motivo:String(eRow.message||eRow).slice(0,160) });
+      }
+    }
+    res.json({ ok:true, preview:false, resumen, detalle: hechas });
+  } catch (e) { next(e); }
+});
+
 // IVA por alicuota y cuenta a COBRAR. Marca origen 'arca_externa' + estado
 // 'autorizada' con el CAE real. Deduplica por (companyId, tipo, PV, numero).
 // NO mueve stock (ARCA no trae renglones); son ventas ya emitidas.

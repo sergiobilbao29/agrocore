@@ -3123,6 +3123,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/11/2026',
+      titulo:'🔄 v2.427.0 — Traer tus ventas directo de ARCA (sin bajar el Excel)',
+      desc:'En <b>Movimientos de ventas</b> sumamos el botón <b>“🔄 Traer ventas de ARCA”</b>: se conecta al <b>web service oficial de ARCA</b> con el mismo certificado que usás para emitir, trae tus comprobantes <b>emitidos</b> de un período y los <b>concilia</b> con lo que ya tenés cargado. Elegís el rango (ideal de a un mes), ves en una tabla cuáles <b>ya están cargados</b> y cuáles <b>faltan</b>, marcás los que quieras y se cargan solos (alta del cliente por CUIT, IVA, cuenta a cobrar y Libro IVA Ventas, con el <b>CAE real</b>). No mueve stock (son ventas ya emitidas). Es oficial y gratis. Para <b>compras y retenciones</b> seguí usando el import del Excel de ARCA (no hay web service oficial para esos).' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
       titulo:'💳 v2.426.0 — Factura de compra Contado: el cheque ahora SÍ se vincula y la factura queda PAGA',
       desc:'Arreglamos un bug que dejaba impaga una <b>factura de compra de Contado</b> aunque le cargaras el <b>cheque/e-cheque</b> como medio de pago. El sistema buscaba el importe de la deuda en el campo equivocado, así que no encontraba cuánto pagar y <b>no registraba el pago</b> (ni al crear ni al editar): el cheque nunca quedaba vinculado y la factura seguía figurando en Cuentas a pagar. Ahora toma el importe correcto y, al elegir el cheque y guardar, <b>registra el pago, endosa el cheque al proveedor y la factura queda PAGA</b>. También se arregla que al <b>editar</b> una factura de compra se <b>precargue la condición de pago real</b> (antes quedaba siempre en "Contado").' },
@@ -15499,7 +15502,8 @@ pages.facturacion = async function() {
         <button class="btn btn-secondary" onclick="ventasMovImprimir()" title="Imprimir los movimientos filtrados">🖨️ Imprimir</button>
         <button class="btn btn-secondary" onclick="ventasMovXLSX()" title="Exportar a Excel los movimientos filtrados">📊 Excel</button>
         <button class="btn btn-secondary" onclick="informeSaldos('cliente')" title="Informe de saldos por cliente con el total a cobrar">💰 Saldos por cliente</button>
-        ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ventaImportArca()" title="Importar comprobantes de venta desde el Excel de ARCA → Mis Comprobantes → Emitidos">📤 Importar de ARCA</button>`:''}
+        ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ventaTraerArcaWS()" title="Traer tus ventas directamente de ARCA por web service (sin bajar Excel). Concilia y carga las que falten.">🔄 Traer ventas de ARCA</button>`:''}
+        ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-secondary" onclick="ventaImportArca()" title="Importar comprobantes de venta desde el Excel de ARCA → Mis Comprobantes → Emitidos">📤 Importar de ARCA (Excel)</button>`:''}
         ${can('ventas:create') || can('finanzas:create') ? `<button class="btn btn-primary" onclick="factForm()">+ Emitir factura</button>`:''}
       </div>
     </div>
@@ -18190,6 +18194,82 @@ async function ventaImportArcaRun(){
     delete state.cache.facturas; delete state.cache.ctasCtes;
     pages.facturacion();
   } catch(e){ toast(e.message,'error'); if(btn){ btn.disabled=false; btn.textContent='Importar'; } }
+}
+// ===== Autoimportador de ventas desde ARCA por web service (oficial) =====
+function ventaTraerArcaWS(){
+  const hoy = new Date();
+  const d1 = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  const fmtI = d => { const z=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`; };
+  openModal({
+    title:'🔄 Traer ventas de ARCA (web service)',
+    size:'max-w-4xl',
+    body:`
+      <div class="text-sm text-slate-600 space-y-2">
+        <p>Trae tus comprobantes <b>emitidos</b> directo de ARCA (sin bajar el Excel), usando el mismo certificado con el que emitís. Elegí un <b>período</b> (te recomiendo de a <b>un mes</b>, porque consulta comprobante por comprobante) y conciliamos: te marcamos los que <b>ya están cargados</b> y los que <b>faltan</b>, y cargás los que quieras.</p>
+        <div class="grid grid-cols-2 gap-3 max-w-md">
+          <div><label class="label">Desde</label><input id="arcaws-desde" type="date" class="input" value="${fmtI(d1)}"></div>
+          <div><label class="label">Hasta</label><input id="arcaws-hasta" type="date" class="input" value="${fmtI(hoy)}"></div>
+        </div>
+        <p class="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">⚠️ ARCA no trae los renglones/productos ni mueve stock (son ventas ya emitidas): sirve para completar historial, cuenta a cobrar y Libro IVA. La consulta puede demorar según la cantidad de comprobantes.</p>
+        <div id="arcaws-status" class="text-sm mt-1"></div>
+        <div id="arcaws-list"></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+            <button id="arcaws-consultar" class="btn btn-primary" onclick="ventaTraerArcaWSPreview()">🔎 Consultar ARCA</button>
+            <button id="arcaws-importar" class="btn btn-primary hidden" onclick="ventaTraerArcaWSCommit()">⬇️ Cargar seleccionadas</button>`
+  });
+  state._arcaWsPreview = null;
+}
+async function ventaTraerArcaWSPreview(){
+  const desde = document.getElementById('arcaws-desde')?.value;
+  const hasta = document.getElementById('arcaws-hasta')?.value;
+  if(!desde || !hasta) return toast('Elegí el rango de fechas.','warn');
+  const btn = document.getElementById('arcaws-consultar'); if(btn){ btn.disabled=true; btn.textContent='Consultando ARCA…'; }
+  document.getElementById('arcaws-status').innerHTML = '<span class="text-slate-500">Consultando a ARCA, puede demorar un momento…</span>';
+  document.getElementById('arcaws-list').innerHTML = '';
+  try {
+    const r = await api('/api/facturas/importar-arca-ws', { method:'POST', body: JSON.stringify({ desde, hasta, commit:false }) });
+    const s = r.resumen||{}; const det = r.detalle||[];
+    state._arcaWsPreview = { desde, hasta };
+    document.getElementById('arcaws-status').innerHTML = `
+      <div class="grid grid-cols-3 gap-2 my-2 text-center max-w-md">
+        <div class="kpi"><div class="text-xs text-slate-500">En ARCA</div><div class="text-xl font-bold">${s.total||0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Faltan cargar</div><div class="text-xl font-bold text-green-700">${s.nuevas||0}</div></div>
+        <div class="kpi"><div class="text-xs text-slate-500">Ya cargadas</div><div class="text-xl font-bold text-slate-500">${s.yaCargadas||0}</div></div>
+      </div>
+      ${s.topeAlcanzado?'<div class="text-[11px] text-amber-700">Se alcanzó el tope de consultas; si falta algo, probá un rango más corto.</div>':''}`;
+    if(!det.length){ document.getElementById('arcaws-list').innerHTML = '<div class="text-sm text-slate-500 mt-2">No se encontraron comprobantes emitidos en ese período.</div>'; }
+    else {
+      const rowHtml = d => {
+        const etq = `${esc(d.letra)} ${String(d.ptoVta).padStart(4,'0')}-${String(d.numero).padStart(8,'0')}`;
+        const chk = d.yaExiste
+          ? '<span class="badge badge-blue text-[10px]">ya cargada</span>'
+          : `<input type="checkbox" class="arcaws-chk" checked data-tipo="${d.tipo}" data-pv="${d.ptoVta}" data-nro="${d.numero}">`;
+        return `<tr class="${d.yaExiste?'opacity-60':''}"><td class="text-center">${chk}</td><td class="text-xs">${esc(d.fecha)}</td><td class="text-xs font-mono">${etq}</td><td class="text-xs">${d.docNro?('CUIT '+esc(d.docNro)):'Cons. final'}</td><td class="text-right text-xs">${fmt$(d.total)}</td></tr>`;
+      };
+      document.getElementById('arcaws-list').innerHTML = `
+        <div class="max-h-72 overflow-auto border rounded mt-2"><table class="data">
+          <thead><tr><th><input type="checkbox" id="arcaws-all" checked onchange="document.querySelectorAll('.arcaws-chk').forEach(c=>c.checked=this.checked)"></th><th>Fecha</th><th>Comprobante</th><th>Receptor</th><th class="text-right">Total</th></tr></thead>
+          <tbody>${det.map(rowHtml).join('')}</tbody>
+        </table></div>`;
+      const impBtn = document.getElementById('arcaws-importar');
+      if(impBtn){ impBtn.classList.toggle('hidden', (s.nuevas||0)===0); }
+    }
+  } catch(e){ document.getElementById('arcaws-status').innerHTML = `<span class="text-red-600">${esc(e.message)}</span>`; }
+  finally { if(btn){ btn.disabled=false; btn.textContent='🔎 Consultar ARCA'; } }
+}
+async function ventaTraerArcaWSCommit(){
+  const p = state._arcaWsPreview; if(!p) return;
+  const sel = [...document.querySelectorAll('.arcaws-chk')].filter(c=>c.checked).map(c=>({ tipo:+c.dataset.tipo, ptoVta:+c.dataset.pv, numero:+c.dataset.nro }));
+  if(!sel.length) return toast('Marcá al menos un comprobante para cargar.','warn');
+  const btn = document.getElementById('arcaws-importar'); if(btn){ btn.disabled=true; btn.textContent='Cargando…'; }
+  try {
+    const r = await api('/api/facturas/importar-arca-ws', { method:'POST', body: JSON.stringify({ desde:p.desde, hasta:p.hasta, commit:true, seleccion:sel }) });
+    const s = r.resumen||{};
+    toast(`Cargadas ${s.creadas||0} ventas de ARCA${s.errores?` · ${s.errores} con error`:''}`, s.errores?'warn':'success');
+    delete state.cache.facturas; delete state.cache.ctasCtes; delete state.cache.stockMap;
+    closeModal(); pages.facturacion();
+  } catch(e){ toast(e.message,'error'); if(btn){ btn.disabled=false; btn.textContent='⬇️ Cargar seleccionadas'; } }
 }
 async function compForm(pre) {
   state._compEdit = (pre && pre.id) ? pre.id : null;
