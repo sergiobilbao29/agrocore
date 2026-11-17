@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
+      titulo:'🔓 v2.425.0 — Editar una factura Contado ya no se traba (podés corregirla y registrar el cheque)',
+      desc:'Ajustamos la regla de v2.424. Ahora la obligación de elegir el medio de pago aplica <b>solo al CREAR</b> una factura de Contado (para no cargar una compra/venta sin registrar cómo se pagó). Al <b>editar</b> una factura que ya existía (por ejemplo una vieja que quedó impaga), ya <b>no te bloquea</b>: si elegís el método se registra el pago y queda <b>PAGA</b>; si no elegís ninguno, igual podés <b>guardar</b> (para corregir un dato) o pasarla a <b>Cuenta corriente</b>. Además, al editar una factura de compra ahora se <b>precarga bien la condición de pago</b> real (antes quedaba siempre en "Contado"). Vale para compras y ventas.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
       titulo:'💳 v2.424.0 — Factura Contado: el medio de pago ahora es obligatorio (y el cheque al editar sí se guarda)',
       desc:'Dos arreglos en facturas de <b>compra y venta</b>. (1) Si la <b>condición es Contado</b>, ahora es <b>obligatorio</b> elegir el <b>medio de pago/cobro</b> (efectivo, cheque/e-cheque, transferencia, tarjeta o billetera): ya no se puede guardar una factura de Contado <b>sin registrar cómo se pagó</b>. Si todavía <b>no la pagaste/cobraste</b>, el sistema te pide cambiar la condición a <b>Cuenta corriente</b> y la factura queda pendiente (la pagás/cobrás después desde Cuentas a pagar/cobrar). Sacamos la opción “Sin pago / Sin cobro” que confundía. (2) Al <b>editar</b> una factura y ponerle el pago con un <b>cheque</b>, ese pago ahora <b>sí queda guardado y vinculado</b> (antes podía perderse): el pago se asocia a la factura por su referencia exacta, no por el importe, así siempre la encuentra.' },
     { tag:'Documentación', color:'bg-sky-100 text-sky-800 border-sky-300', fecha:'17/11/2026',
@@ -16769,8 +16772,10 @@ async function factSave() {
   if (!externa && data.condicionVenta === 'Contado') {
     const _met0 = document.getElementById('vent-met')?.value || '';
     const _focusCobro = () => { const w=document.getElementById('vent-cobro-wrap'); if(w){ w.classList.remove('hidden'); w.scrollIntoView({behavior:'smooth',block:'center'}); } const m=document.getElementById('vent-met'); if(m) m.focus(); };
-    if (!_met0 || _met0 === 'pendiente') {
-      // Contado SIEMPRE registra el cobro. Si todavía no cobraste, va a Cuenta corriente.
+    // Al CREAR exigimos el método (no dejar un contado sin registrar el cobro).
+    // Al EDITAR una factura existente NO bloqueamos: si elegís método se registra
+    // el cobro; si no, se guarda igual (evita trabar la corrección de una factura vieja).
+    if (!state._factEdit && (!_met0 || _met0 === 'pendiente')) {
       _focusCobro();
       return toast('Es Contado: elegí CÓMO entra la plata (efectivo, transferencia, cheque…) y a qué caja/cuenta. Si todavía NO cobraste, cambiá arriba la Condición a "Cuenta corriente" y después registrás el cobro desde Cuentas a cobrar.','warn');
     }
@@ -18357,6 +18362,8 @@ async function compForm(pre) {
       sv('f-clase', pre.clase||'factura'); sv('f-tipo', pre.tipo); sv('f-pv', pre.puntoVenta); sv('f-nro', pre.numero);
       if(pre.fecha) sv('f-fec', String(pre.fecha).slice(0,10));
       sv('f-prov', pre.proveedorId||''); sv('f-obs', pre.observaciones||'');
+      // Condición de pago real de la factura (antes quedaba en el default "Contado" al editar).
+      if (pre.condicionCompra) sv('f-cc', pre.condicionCompra);
       try { (pre.vencimientos||[]).forEach(v=>compVtoAdd(v)); } catch {}
       const _m=document.getElementById('fc-moneda');
       if(_m&&pre.moneda){ _m.value=pre.moneda; const _w=document.getElementById('fc-cotiz-wrap'); if(_w)_w.style.display=(pre.moneda==='ARS')?'none':''; const _c=document.getElementById('fc-cotiz'); if(_c&&pre.cotizacion){ _c.value=pre.cotizacion; _c.dataset.manual='1'; } }
@@ -19055,9 +19062,12 @@ async function compSave() {
   })).filter(it => it.descripcion && it.cantidad > 0);
   if (!items.length) return toast('Agregá al menos un item','warn');
   const proveedorId = $('#f-prov').value || null;
-  // CONTADO: el medio de pago es obligatorio. Si todavía no se pagó, hay que
-  // pasar la condición a Cuenta corriente (no se admite Contado sin pago).
-  if ($('#f-cc')?.value === 'Contado') {
+  // CONTADO: al CREAR, el medio de pago es obligatorio (así no queda una compra
+  // de contado sin registrar cómo se pagó). Al EDITAR una factura que ya existe
+  // NO se bloquea: si elegís un método se registra el pago; si no, se guarda igual
+  // (podés dejarla pendiente o pasarla a Cuenta corriente). Esto evita el callejón
+  // sin salida al corregir una factura vieja impaga.
+  if (!state._compEdit && $('#f-cc')?.value === 'Contado') {
     const _mc = document.getElementById('comp-met')?.value || '';
     if (!_mc) {
       const _sel = document.getElementById('comp-met');
