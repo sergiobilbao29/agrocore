@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
+      titulo:'📄 v2.435.0 — El resumen en PDF ahora también trae los movimientos',
+      desc:'Hasta ahora, importando el resumen en <b>PDF</b> sólo se leía el total y el vencimiento (el detalle venía sólo del Excel). Ahora el <b>PDF también trae los consumos y conceptos</b> para poder importarlos como movimientos de la tarjeta, igual que el Excel. <i>Nota: si al pasar los movimientos te aparecía un error de “resumenId”, era porque la base todavía no tenía la actualización; se corrige al actualizar el sistema a esta versión.</i> 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
       titulo:'🔗 v2.434.0 — Resumen de tarjeta: no se duplica + importa sus movimientos (sin repetir)',
       desc:'Dos mejoras al importar el resumen. <b>(1) Anti-duplicado:</b> si cargás el <b>mismo resumen</b> (aunque sea una vez en Excel y otra en PDF), el sistema lo <b>detecta</b> por tarjeta + vencimiento + total y te avisa antes de repetirlo. <b>(2) Movimientos del resumen:</b> al guardar un resumen con detalle, podés <b>importar sus consumos como gastos de la tarjeta</b>, <b>vinculados</b> al resumen. Antes de cargarlos, el sistema <b>revisa si alguno ya lo habías cargado a mano</b> (por fecha + monto) y, en vez de duplicarlo, lo <b>vincula</b>. Después, desde cada resumen tenés <b>👁</b> para ver <b>sólo los movimientos de ese resumen</b> y <b>📋</b> para volver a importar/vincular. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',

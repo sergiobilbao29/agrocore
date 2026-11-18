@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.434.0';
+const AGROCORE_VERSION = '2.435.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -23069,7 +23069,34 @@ function _parseResumenTarjetaPdf(texto) {
   const fechasYY = (T.match(/\b\d{1,2}\/\d{1,2}\/\d{2}\b/g) || []);
   if (fechasYY.length >= 4) { fechaCierre = _resTjFecha(fechasYY[2]); vencimiento = _resTjFecha(fechasYY[3]); }
   else { const fechas = (T.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g) || []); if (fechas.length >= 4) { fechaCierre = _resTjFecha(fechas[2]); vencimiento = _resTjFecha(fechas[3]); } }
-  return { origen: 'pdf', tarjetaHint, numero, fechaCierre, vencimiento, totalPesos, totalDolares, minimoPesos, detalle: null };
+  // Detalle: cada movimiento viene en su propia línea (fecha+desc+cuota+comprobante+monto).
+  const detalle = { consumos: [], pagos: [], otros: [] };
+  const lines = T.split('\n').map(l => l.trim()).filter(Boolean);
+  let sec = null, lastFecha = null;
+  for (const l of lines) {
+    if (/^Movimientos de /i.test(l)) { sec = 'consumos'; lastFecha = null; continue; }
+    if (/^Pago anterior y devoluciones|^Pago de tarjeta/i.test(l)) { sec = 'pagos'; lastFecha = null; continue; }
+    if (/^Impuestos, intereses y percepciones|^Otros conceptos/i.test(l)) { sec = 'otros'; lastFecha = null; continue; }
+    if (/^Total a pagar/i.test(l)) { sec = null; continue; }
+    if (/^Subtotal de|^Total consumido|^Total de|^Saldo del resumen|^T[ée]rminos|^Copia fiel|^Fecha\s*Descrip|^FechaDescrip|^L[íi]mites|^Tasas/i.test(l)) continue;
+    if (!sec) continue;
+    const mAmt = /(U\$S|\$)\s*([\d.]+,\d{2})\s*$/.exec(l);
+    if (!mAmt) continue;
+    const esUsd = mAmt[1] === 'U$S';
+    const monto = _resTjNum(mAmt[2]);
+    let rest = l.slice(0, mAmt.index).trim();
+    const mF = /^(\d{1,2}\/\d{1,2}\/\d{2,4})/.exec(rest);
+    let fecha = lastFecha;
+    if (mF) { fecha = mF[1]; lastFecha = mF[1]; rest = rest.slice(mF[0].length).trim(); }
+    const mc = /\b(\d+\s+de\s+\d+)/.exec(rest);
+    const cuotas = mc ? mc[1].replace(/\s+/g, ' ') : null;
+    // Descripción: quitamos la cola de cuota/comprobante (dígitos) para que quede legible.
+    let desc = rest.replace(/\d+\s+de\s+\d+.*$/, '').replace(/\d{4,}\s*$/, '').replace(/[-*]\s*$/, '').trim();
+    if (!desc) desc = rest.replace(/\d/g, '').trim() || 'Consumo';
+    if (sec === 'otros') { if (!esUsd) detalle.otros.push({ descripcion: desc, montoPesos: monto }); }
+    else detalle[sec].push({ fecha, descripcion: desc, cuotas, comprobante: null, montoPesos: esUsd ? null : monto, montoDolares: esUsd ? monto : null });
+  }
+  return { origen: 'pdf', tarjetaHint, numero, fechaCierre, vencimiento, totalPesos, totalDolares, minimoPesos, detalle };
 }
 // Paso 1: subir el resumen (Excel o PDF) y obtener la vista previa (no crea nada).
 app.post('/api/resumenes-tarjeta/parse', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
