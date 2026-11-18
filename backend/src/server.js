@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.438.0';
+const AGROCORE_VERSION = '2.439.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -28964,13 +28964,15 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
     if (!incluirVencidos && vg < today) continue;
     const _tj = (g.caja || '').trim();
     const _int = Number(g.interes || 0);
+    const _cap = Number(g.monto || 0);
+    const _tot = _cap + _int;   // saldo a pagar = capital + intereses
     items.push({
       id: `auto:tarjeta_gasto:${g.id}`,
       origen: 'auto',
       autoTipo: 'tarjeta_gasto',
       autoRefId: g.id,
       titulo: `Vence tarjeta${_tj ? ' ' + _tj : ''}: ${g.concepto || 'gasto'}`.trim(),
-      descripcion: `Importe: $${(Number(g.monto || 0)).toFixed(2)}${_int > 0 ? ` (incluye $${_int.toFixed(2)} de intereses)` : ''}${g.articuloLabel ? ` · ${g.articuloLabel}` : ''}${_tj ? ` · 💳 ${_tj}` : ''}`.trim(),
+      descripcion: `Importe: $${_tot.toFixed(2)}${_int > 0 ? ` (capital $${_cap.toFixed(2)} + intereses $${_int.toFixed(2)})` : ''}${g.articuloLabel ? ` · ${g.articuloLabel}` : ''}${_tj ? ` · 💳 ${_tj}` : ''}`.trim(),
       fecha: g.vencimiento,
       categoria: 'vencimiento',
       prioridad: 'media',

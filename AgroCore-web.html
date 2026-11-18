@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
+      titulo:'💳 v2.439.0 — Gasto de tarjeta: el saldo gastado suma capital + intereses',
+      desc:'Afinamos el <b>gasto de tarjeta</b>: ahora el <b>Monto es sólo el capital</b> y los <b>Intereses van aparte</b>, y el <b>saldo gastado de la tarjeta es la suma de los dos</b> (capital + intereses) — el total que realmente tenés que pagar. En el formulario, al cargar los intereses, se muestra el <b>total en vivo</b> (capital + intereses). Así ves de un vistazo cuánto es capital y cuánto es interés, pero el saldo, los vencimientos de la Agenda y lo que pagás toman el <b>total</b>. 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/11/2026',
       titulo:'🛠️ v2.438.0 — Empleados compartidos: ya se pueden asignar en labores',
       desc:'Arreglamos un error que daba <b>"Empleado no encontrado"</b> al cargar una <b>labor</b> (Insumos y labores, y labores de Sociedades) cuando se asignaba un <b>empleado compartido</b> del grupo (un jornalero que pertenece a otra empresa pero se usa en varias). Ahora el sistema lo <b>reconoce en todo el grupo</b> y la labor se guarda normal, con su ganancia en la planilla del mes.' },
@@ -44006,9 +44009,10 @@ async function tarjetaVerMovs(cardId, resumenFilter) {
   // Solo los movimientos cuya caja es esta tarjeta.
   let movs = ef.filter(e => (e.caja||'').trim() === (card.nombre||'').trim());
   // Saldo gastado acumulado (deuda) POR MONEDA: egreso suma, ingreso/pago resta. De viejo a nuevo.
+  // El GASTO suma CAPITAL (monto) + INTERESES: el saldo gastado es el total a pagar.
   const acumMon = { ARS: 0, USD: 0 };
   [...movs].sort((a,b) => new Date(a.fecha) - new Date(b.fecha) || (a.createdAt||'').localeCompare(b.createdAt||''))
-    .forEach(m => { const mon = (m.moneda||'ARS'); acumMon[mon] = (acumMon[mon]||0) + (m.tipo === 'ingreso' ? -1 : 1) * Number(m.monto || 0); m._acum = acumMon[mon]; });
+    .forEach(m => { const mon = (m.moneda||'ARS'); const efect = Number(m.monto || 0) + (m.tipo === 'ingreso' ? 0 : Number(m.interes || 0)); acumMon[mon] = (acumMon[mon]||0) + (m.tipo === 'ingreso' ? -1 : 1) * efect; m._acum = acumMon[mon]; });
   state._tjSaldoArs = acumMon.ARS || 0; state._tjSaldoUsd = acumMon.USD || 0;
   movs.sort((a,b) => new Date(b.fecha) - new Date(a.fecha) || (b.createdAt||'').localeCompare(a.createdAt||''));
   state._tjMovsAll = movs;
@@ -44033,7 +44037,7 @@ function tarjetaMovRender() {
     return true;
   });
   const _ars = m => (m.moneda||'ARS')==='ARS';
-  const gastado = movs.filter(m=>m.tipo!=='ingreso'&&_ars(m)).reduce((a,m)=>a+Number(m.monto||0),0);
+  const gastado = movs.filter(m=>m.tipo!=='ingreso'&&_ars(m)).reduce((a,m)=>a+Number(m.monto||0)+Number(m.interes||0),0);
   const pagos   = movs.filter(m=>m.tipo==='ingreso'&&_ars(m)).reduce((a,m)=>a+Number(m.monto||0),0);
   const totalGastadoTarjeta = state._tjSaldoArs || 0;
   const saldoUsd = state._tjSaldoUsd || 0;
@@ -44129,8 +44133,9 @@ async function tarjetaGastoForm(cardId, id=null) {
             <div id="tg-art-ctrl" class="col-span-2"></div>
           </div>
         </div>
-        <div><label class="label">Monto $ *</label><input id="tg-monto" type="number" step="0.01" class="input" value="${mov?(mov.monto||''):''}"/></div>
-        <div><label class="label">Intereses $</label><input id="tg-interes" type="number" step="0.01" class="input" value="${mov&&mov.interes?mov.interes:''}" placeholder="0,00"/></div>
+        <div><label class="label">Monto $ (capital) *</label><input id="tg-monto" type="number" step="0.01" class="input" value="${mov?(mov.monto||''):''}" oninput="tarjetaGastoTotal()"/></div>
+        <div><label class="label">Intereses $</label><input id="tg-interes" type="number" step="0.01" class="input" value="${mov&&mov.interes?mov.interes:''}" placeholder="0,00" oninput="tarjetaGastoTotal()"/>
+          <div id="tg-total" class="text-[11px] text-slate-500 mt-1"></div></div>
         <div><label class="label">Fecha de vencimiento de pago</label><input id="tg-venc" type="date" class="input" value="${vencVal}"/>
           <div class="text-[10px] text-slate-400 mt-1">⏰ Aparece en la Agenda de vencimientos (avisa 5 días antes).</div></div>
         <div></div>
@@ -44139,7 +44144,7 @@ async function tarjetaGastoForm(cardId, id=null) {
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick='tarjetaGastoSave(${JSON.stringify(cardId)},${id?JSON.stringify(id):'null'},${JSON.stringify(banco)})'>💾 Guardar</button>`
   });
-  tarjetaGastoArtRender();
+  tarjetaGastoArtRender(); tarjetaGastoTotal();
 }
 // Dibuja el control de artículo según el tipo elegido.
 function tarjetaGastoArtRender() {
@@ -44165,6 +44170,13 @@ function tarjetaGastoArtRender() {
   } else {
     cont.innerHTML = `<input id="tg-art-ref" class="input" value="${esc(prev.tipo==='libre'?(prev.label||''):'')}" placeholder="Escribí qué se pagó"/>`;
   }
+}
+// Muestra el total (capital + intereses) en vivo bajo el campo de intereses.
+function tarjetaGastoTotal() {
+  const cap = Number(document.getElementById('tg-monto')?.value||0);
+  const int = Number(document.getElementById('tg-interes')?.value||0);
+  const el = document.getElementById('tg-total'); if (!el) return;
+  el.innerHTML = int > 0 ? `Total a pagar (capital + intereses): <b>${fmt$(cap+int)}</b>` : '';
 }
 async function tarjetaGastoSave(cardId, id, banco) {
   const card = (state.cache.catalogos||[]).find(x => x.id === cardId && x.tipo === TARJETA_CAT_TIPO);
