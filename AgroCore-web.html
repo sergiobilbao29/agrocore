@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/11/2026',
+      titulo:'🛠️ v2.438.0 — Empleados compartidos: ya se pueden asignar en labores',
+      desc:'Arreglamos un error que daba <b>"Empleado no encontrado"</b> al cargar una <b>labor</b> (Insumos y labores, y labores de Sociedades) cuando se asignaba un <b>empleado compartido</b> del grupo (un jornalero que pertenece a otra empresa pero se usa en varias). Ahora el sistema lo <b>reconoce en todo el grupo</b> y la labor se guarda normal, con su ganancia en la planilla del mes.' },
     { tag:'Novedad', color:'bg-blue-100 text-blue-800 border-blue-300', fecha:'18/11/2026',
       titulo:'📘 v2.437.0 — Instructivo completo de Tarjetas de crédito',
       desc:'Sumamos un <b>instructivo paso a paso de Tarjetas de crédito</b> en <b>Ayuda y manual → Finanzas</b> (y como PDF descargable y en el Manual de usuario web). Cubre todo el circuito: <b>cargar la tarjeta</b>, registrar cada <b>gasto</b> (con artículo, intereses y vencimiento que va a la Agenda), <b>pagar con tarjeta</b> en todo el sistema, <b>importar el resumen</b> del banco (Excel o PDF) con sus movimientos —sin duplicar los cargados a mano— y <b>pagarlo</b> con su vencimiento (parte en pesos y parte en <b>dólares</b>, valorizando o pagando en US$). El <b>asistente</b> también aprendió a explicarlo.' },

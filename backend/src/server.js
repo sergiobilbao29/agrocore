@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.437.0';
+const AGROCORE_VERSION = '2.438.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5855,7 +5855,11 @@ app.post('/api/sociedades/:id/carga', requireCompany, requirePermission('producc
     // Labor
     let responsable = null;
     if (d.empleadoId) {
-      const emp = await prisma.empleado.findFirst({ where: { id: d.empleadoId, companyId: tgt } });
+      let emp = await prisma.empleado.findFirst({ where: { id: d.empleadoId, companyId: tgt } });
+      if (!emp) {   // empleado compartido de otra empresa del grupo (v2.386)
+        const grupo = await _companyIdsGrupo(req);
+        emp = await prisma.empleado.findFirst({ where: { id: d.empleadoId, compartido: true, companyId: { in: grupo } } });
+      }
       if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado en la empresa del campo' });
       responsable = `${emp.nombre} ${emp.apellido || ''}`.trim();
     }
@@ -19813,9 +19817,16 @@ app.post('/api/labores-avanzada', requireCompany, requirePermission('produccion:
     const baseDe = (haEmp) => d.tipoPrecio === 'por_hectarea'
       ? Number(haEmp != null ? haEmp : (d.hectareasAplicadas || 0)) * Number(d.precioReferencia || 0)
       : Number(d.precioReferencia || 0);
+    // Empleados compartidos (v2.386): un jornalero puede pertenecer a otra empresa del
+    // grupo y usarse en labores de cualquiera. Resolvemos el grupo una sola vez.
+    let _grupoEmp = null;
     const empCalcs = [];
     for (const e of listaEmp) {
-      const emp = await prisma.empleado.findFirst({ where: { id: e.empleadoId, companyId: req.companyId } });
+      let emp = await prisma.empleado.findFirst({ where: { id: e.empleadoId, companyId: req.companyId } });
+      if (!emp) {
+        if (!_grupoEmp) _grupoEmp = await _companyIdsGrupo(req);
+        emp = await prisma.empleado.findFirst({ where: { id: e.empleadoId, compartido: true, companyId: { in: _grupoEmp } } });
+      }
       if (!emp) return res.status(404).json({ ok: false, error: 'Empleado no encontrado' });
       const pct = e.porcentaje != null ? e.porcentaje : (emp.porcentajeDefault ?? null);
       let ganancia = null;
