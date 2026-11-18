@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.430.0';
+const AGROCORE_VERSION = '2.431.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -11439,13 +11439,13 @@ app.get('/api/reporte-gastos', requireCompany, requirePermission('reportes:read'
     // 1) Facturas de compra (como antes).
     const facturas = await prisma.facturaCompra.findMany({
       where: { companyId: req.companyId, ...whereFecha },
-      select: { total: true, moneda: true, cotizacion: true, clase: true, categoriaGastoId: true, clasificacion: true, proveedor: { select: { nombre: true } }, items: { select: { productoId: true } } },
+      select: { total: true, moneda: true, cotizacion: true, clase: true, categoriaGastoId: true, clasificacion: true, proveedor: { select: { razonSocial: true } }, items: { select: { productoId: true } } },
     });
     for (const f of facturas) {
       const tieneStock = (f.items || []).some(i => i.productoId);
       if (tieneStock && !incluirCompras) continue;
       if (!pasaClasif(f.clasificacion)) continue;
-      if (!pasaQuien(f.proveedor?.nombre)) continue;
+      if (!pasaQuien(f.proveedor?.razonSocial)) continue;
       const signo = f.clase === 'nota_credito' ? -1 : 1;
       const cot = (f.moneda && f.moneda !== 'ARS' && f.cotizacion) ? Number(f.cotizacion) : 1;
       addGasto((Number(f.total) || 0) * cot * signo, f.categoriaGastoId);

@@ -3123,6 +3123,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
+      titulo:'🧾 v2.431.0 — Gastos por categoría: arreglado el error al abrir el reporte',
+      desc:'El reporte de <b>Gastos por categoría</b> tiraba un error y no cargaba (buscaba un campo del proveedor que no existe). Ya quedó corregido y el reporte abre normal, sumando facturas de compra y movimientos diarios por categoría.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'17/11/2026',
       titulo:'🔄 v2.430.0 — Traer ventas de ARCA: sondea más puntos de venta y aclara los del portal',
       desc:'El importador de ventas de ARCA ahora <b>sondea un rango de puntos de venta</b> (no solo los que informa ARCA o los que ya tenés cargados), por si hay comprobantes en un PV que ARCA no lista por web service. <b>Importante</b>: por web service solo se pueden traer los puntos de venta <b>habilitados para web service</b>; los que emitís por el <b>portal de ARCA</b> ("Comprobantes en línea") pueden no ser consultables por este medio. Para esos, usá <b>“Importar de ARCA (Excel)”</b>, que trae todos los puntos de venta. Lo aclaramos en la pantalla.' },
