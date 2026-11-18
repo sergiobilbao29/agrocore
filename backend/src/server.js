@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.436.0';
+const AGROCORE_VERSION = '2.437.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17648,6 +17648,16 @@ const _AYUDA_KB = [
       'Pagar una cuota: 💸 Pagar → elegí el medio (transferencia/débito con la cuenta, efectivo con la caja, cheque de cartera o tarjeta). En moneda extranjera ponés el TC del día del pago.',
       'Calendario: cada cuota pendiente aparece sola en la Agenda (🔗 Auto), en el Inicio y en el Flujo de fondos; al pagarla desaparece.'],
     atajo:{ page:'creditos', label:'Abrir Créditos' } },
+  { id:'tarjeta_credito', terms:['tarjeta','tarjeta de credito','visa','mastercard','naranja','resumen de tarjeta','resumen tarjeta','pagar tarjeta','gasto de tarjeta','consumo tarjeta','importar resumen','saldo de tarjeta','vencimiento de la tarjeta','pagar el resumen','tarjeta en dolares'],
+    titulo:'Tarjetas de crédito: gastos, resumen y pago',
+    pasos:[
+      'Cargá la tarjeta en Tesorería → Bancos → 💳 Tarjetas de crédito → "+ Nueva tarjeta" (nombre, banco emisor, marca, número, titular).',
+      'La tarjeta no toca tus cuentas bancarias: funciona como una caja aparte y va sumando lo gastado (su "saldo gastado"). Podés pagar con ella en compras, ventas, sueldos, cuotas y viajes.',
+      'Gasto de tarjeta: abrí la tarjeta y tocá "+ Gasto de tarjeta". Poné fecha, detalle, qué se pagó (categoría de gasto / producto / cuota de crédito / texto), monto, intereses y vencimiento. Si le ponés categoría entra al reporte de Gastos por categoría; el vencimiento va a la Agenda.',
+      'Importar el resumen: en 📄 Resúmenes → Importar resumen subí el Excel del homebanking o el PDF. Lee el total, el vencimiento, el cierre y el detalle. Avisa si cargás el mismo resumen dos veces (no se duplica).',
+      'Pasar los movimientos: al guardar el resumen, importá sus consumos como gastos de la tarjeta. Si alguno ya estaba cargado a mano (misma fecha y monto), lo vincula en vez de duplicarlo.',
+      'Pagar el resumen: 💵 Pagar → la parte en pesos (transferencia/débito/efectivo) y, si hay dólares, valorizarlos a pesos (con el TC) o pagarlos en dólares. Se genera el egreso real y baja el saldo de la tarjeta (en pesos y en dólares). El vencimiento del resumen aparece en la Agenda hasta pagarlo.'],
+    atajo:{ page:'bancos', label:'Abrir Bancos / Tarjetas' } },
   { id:'cotizacion', terms:['cotizacion','dolar','tipo de cambio','valor del dolar','moneda','cambio'],
     titulo:'Ver / cargar cotizaciones',
     pasos:[
