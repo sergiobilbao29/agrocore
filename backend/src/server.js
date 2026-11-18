@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.439.0';
+const AGROCORE_VERSION = '2.440.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5371,6 +5371,14 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
         precioUnit: z.coerce.number().nullable().optional(),
         observaciones: z.string().nullable().optional(),
       })).optional(),
+      // Empleados de la labor (si se manda, se reemplaza la lista y su ganancia en planilla).
+      precioReferencia: z.number().nullable().optional(),
+      tipoPrecio: z.enum(['por_hectarea', 'total']).nullable().optional(),
+      empleados: z.array(z.object({
+        empleadoId: z.string(),
+        hectareas: z.number().nullable().optional(),
+        porcentaje: z.number().nullable().optional(),
+      })).optional(),
     });
     const d = schema.parse(req.body || {});
     const ins = await prisma.insumoAplicado.findFirst({ where: { id, campana: { companyId: req.companyId } } });
@@ -5443,11 +5451,80 @@ app.put('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:u
             }});
           }
         }
+        // Empleados: si se manda la lista, se reemplaza (y su ganancia en la planilla).
+        if (d.empleados !== undefined) {
+          // Borramos los movimientos de planilla de ESTA labor que no estén liquidados.
+          await tx.movimientoEmpleado.deleteMany({ where: { companyId: req.companyId, categoria: 'labor', observaciones: { contains: id }, liquidacionId: null } });
+          const lista = (d.empleados || []).filter(e => e.empleadoId);
+          const precioRef = d.precioReferencia != null ? d.precioReferencia : lab.precioReferencia;
+          const tipoP = d.tipoPrecio || lab.tipoPrecio || 'por_hectarea';
+          const haLabor = d.hectareasAplicadas != null ? d.hectareasAplicadas : lab.hectareasAplicadas;
+          const baseDe = (haEmp) => tipoP === 'por_hectarea'
+            ? Number(haEmp != null ? haEmp : (haLabor || 0)) * Number(precioRef || 0)
+            : Number(precioRef || 0);
+          // Resolvemos cada empleado (incluye compartidos del grupo) y calculamos su ganancia.
+          let _grp = null; const calcs = [];
+          for (const e of lista) {
+            let emp = await tx.empleado.findFirst({ where: { id: e.empleadoId, companyId: req.companyId } });
+            if (!emp) { if (!_grp) _grp = await _companyIdsGrupo(req); emp = await tx.empleado.findFirst({ where: { id: e.empleadoId, compartido: true, companyId: { in: _grp } } }); }
+            if (!emp) continue;
+            const pct = e.porcentaje != null ? e.porcentaje : (emp.porcentajeDefault ?? null);
+            let gan = null;
+            if (emp.cobraPorcentaje && precioRef != null && pct != null) gan = baseDe(e.hectareas) * (pct / 100);
+            calcs.push({ emp, hectareas: e.hectareas ?? null, porcentaje: pct, ganancia: gan });
+          }
+          const periodo = (nuevaFecha instanceof Date ? nuevaFecha : new Date(nuevaFecha)).toISOString().slice(0, 7);
+          let primerMovEmpId = null;
+          for (const c of calcs) {
+            if (c.ganancia != null && c.ganancia > 0) {
+              const haTxt = (c.hectareas != null ? c.hectareas : haLabor);
+              const me = await tx.movimientoEmpleado.create({ data: {
+                companyId: req.companyId, empleadoId: c.emp.id,
+                fecha: nuevaFecha, periodo, tipo: 'ganancia', categoria: 'labor',
+                concepto: `Labor ${nuevoTipo}${haTxt ? ' · ' + haTxt + ' ha' : ''} (${c.porcentaje}%)`,
+                monto: c.ganancia,
+                observaciones: `Generado automáticamente por labor ${id}`,
+              }});
+              if (!primerMovEmpId) primerMovEmpId = me.id;
+            }
+          }
+          const gananciaTotal = calcs.reduce((a, c) => a + (c.ganancia || 0), 0) || null;
+          const responsable = calcs.length ? calcs.map(c => `${c.emp.nombre} ${c.emp.apellido || ''}`.trim()).join(' + ') : null;
+          const primero = calcs[0] || null;
+          await tx.laborAplicada.update({ where: { id }, data: {
+            empleadoId: primero ? primero.emp.id : null,
+            porcentajeEmpleado: primero ? (primero.porcentaje ?? null) : null,
+            precioReferencia: precioRef ?? null,
+            tipoPrecio: (precioRef != null) ? tipoP : null,
+            gananciaEmpleado: gananciaTotal,
+            responsable,
+            movimientoEmpleadoId: primerMovEmpId,
+          }});
+        }
         return r;
       });
       return res.json({ ok: true, data: { ...row, tipo: 'labor' } });
     }
     res.status(404).json({ ok: false, error: 'No encontrado' });
+  } catch (e) { next(e); }
+});
+// Empleados actuales de una labor (para prellenar el formulario de edición).
+// Se reconstruyen de los movimientos de planilla que generó la labor; si no hay
+// (empleado sin %), se usa el empleado principal guardado en la labor.
+app.get('/api/aplicaciones/:id/labor-empleados', requireCompany, requirePermission('produccion:read'), async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    const lab = await prisma.laborAplicada.findFirst({ where: { id, campana: { companyId: req.companyId } } });
+    if (!lab) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const movs = await prisma.movimientoEmpleado.findMany({ where: { companyId: req.companyId, categoria: 'labor', observaciones: { contains: id } } });
+    let empleados = movs.map(m => {
+      const mp = /\(([\d.,]+)%\)/.exec(m.concepto || ''); const mh = / · ([\d.,]+) ha/.exec(m.concepto || '');
+      return { empleadoId: m.empleadoId, porcentaje: mp ? Number(mp[1].replace(',', '.')) : null, hectareas: mh ? Number(mh[1].replace(',', '.')) : null };
+    });
+    if (!empleados.length && lab.empleadoId) {
+      empleados = [{ empleadoId: lab.empleadoId, porcentaje: lab.porcentajeEmpleado ?? null, hectareas: lab.hectareasAplicadas ?? null }];
+    }
+    res.json({ ok: true, data: { empleados, precioReferencia: lab.precioReferencia ?? null, tipoPrecio: lab.tipoPrecio || null } });
   } catch (e) { next(e); }
 });
 app.delete('/api/aplicaciones/:id', requireCompany, requirePermission('produccion:delete'), async (req, res, next) => {
@@ -5464,7 +5541,14 @@ app.delete('/api/aplicaciones/:id', requireCompany, requirePermission('produccio
       return res.json({ ok: true });
     }
     const lab = await prisma.laborAplicada.findFirst({ where: { id, campana: { companyId: req.companyId } } });
-    if (lab) { await prisma.laborAplicada.delete({ where: { id } }); return res.json({ ok: true }); }
+    if (lab) {
+      await prisma.$transaction(async (tx) => {
+        // Sacar de la planilla la ganancia que generó esta labor (si no está liquidada).
+        await tx.movimientoEmpleado.deleteMany({ where: { companyId: req.companyId, categoria: 'labor', observaciones: { contains: id }, liquidacionId: null } });
+        await tx.laborAplicada.delete({ where: { id } });
+      });
+      return res.json({ ok: true });
+    }
     res.status(404).json({ ok: false, error: 'No encontrado' });
   } catch (e) { next(e); }
 });

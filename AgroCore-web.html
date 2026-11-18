@@ -3125,6 +3125,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
+      titulo:'👥 v2.440.0 — Editar labor: ahora podés cambiar los empleados',
+      desc:'Al <b>editar una labor</b> ya aparece la <b>planilla de empleados</b>: podés <b>agregar, quitar o reasignar</b> quién la hizo, con sus <b>hectáreas y porcentaje</b>, sin tener que borrarla y cargarla de nuevo. Al guardar, el sistema <b>recalcula las ganancias</b> del mes automáticamente (reemplaza los movimientos de empleado de esa labor por los nuevos). Funciona también con <b>empleados compartidos</b> del grupo. 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
       titulo:'💳 v2.439.0 — Gasto de tarjeta: el saldo gastado suma capital + intereses',
       desc:'Afinamos el <b>gasto de tarjeta</b>: ahora el <b>Monto es sólo el capital</b> y los <b>Intereses van aparte</b>, y el <b>saldo gastado de la tarjeta es la suma de los dos</b> (capital + intereses) — el total que realmente tenés que pagar. En el formulario, al cargar los intereses, se muestra el <b>total en vivo</b> (capital + intereses). Así ves de un vistazo cuánto es capital y cuánto es interés, pero el saldo, los vencimientos de la Agenda y lo que pagás toman el <b>total</b>. 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'18/11/2026',
@@ -30197,7 +30200,7 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
       <div class="p-3 bg-blue-50 rounded-lg border border-blue-200 mb-3">
         <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
           <div class="text-xs text-blue-800 font-semibold">💰 Precio / costo de la labor${!puedeEditarCobro?' <span class="text-[10px] text-blue-600 font-normal">(solo lectura)</span>':''}</div>
-          ${editMode?'':'<button type="button" class="btn btn-secondary text-xs" onclick="laAddEmp()">+ Empleado</button>'}
+          <button type="button" class="btn btn-secondary text-xs" onclick="laAddEmp()">+ Empleado</button>
         </div>
         <div class="grid grid-cols-3 gap-3 items-end mb-2">
           <div><label class="label">Tipo precio</label>
@@ -30211,16 +30214,12 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
             <select id="la-mon" class="input" ${lock}>${monedasOpts().map(([k,l])=>`<option value="${k}" ${k==='ARS'?'selected':''}>${esc(l)}</option>`).join('')}</select>
           </div>
         </div>
-        ${editMode ? `
-        <div class="text-[11px] text-slate-500">Este es el precio/costo de la labor por hectárea (se muestra en la campaña en la moneda elegida). Los <b>insumos consumidos</b> se editan abajo. Para cambiar los <b>empleados</b>, borrá la labor y volvé a cargarla.</div>
-        ` : `
-        <div class="text-[11px] text-slate-500 mb-3">El % de cada empleado se aplica sobre el precio de referencia. La labor se valoriza en la moneda elegida (en la campaña se convierte a la moneda que elijas).</div>
+        <div class="text-[11px] text-slate-500 mb-3">El % de cada empleado se aplica sobre el precio de referencia. La labor se valoriza en la moneda elegida (en la campaña se convierte a la moneda que elijas).${editMode?' <b>Al guardar</b> se recalculan las ganancias de la planilla según los empleados que dejes.':''}</div>
         <table class="data text-sm">
           <thead><tr><th>Empleado</th><th class="text-right">Ha que hizo</th><th class="text-right">%</th><th class="text-right">Ganancia</th><th></th></tr></thead>
           <tbody id="la-emp-body"></tbody>
         </table>
         <div class="text-[11px] text-slate-600 mt-2" id="la-emp-foot">—</div>
-        `}
       </div>`;
   openModal({
     title: editMode ? '🛠️ Editar labor' : '🛠️ Cargar labor', size:'max-w-4xl',
@@ -30296,7 +30295,7 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
       if ($('#la-tipo')) $('#la-tipo').value = edit.item || '';
       if (edit.fecha && $('#la-fec')) $('#la-fec').value = String(edit.fecha).slice(0,10);
       if ($('#la-ha')) { $('#la-ha').value = edit.hectareasAplicadas ?? ''; $('#la-ha').dataset.manual = '1'; }
-      if ($('#la-pr')) $('#la-pr').value = edit.costoHa ?? '';   // costo por ha
+      if ($('#la-pr')) $('#la-pr').value = edit.costoHa ?? '';   // costo por ha (se ajusta abajo con el precio de referencia real)
       if ($('#la-tp')) $('#la-tp').value = 'por_hectarea';
       if ($('#la-mon') && edit.moneda) $('#la-mon').value = edit.moneda;
       if ($('#la-obs')) $('#la-obs').value = edit.observaciones || '';
@@ -30305,6 +30304,18 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
         $('#la-ins').innerHTML = '';
         edit.insumos.forEach(i => laAddIns({ productoId: i.productoId, cantidad: i.cantidad, precioUnit: i.precioUnit }));
       }
+      // Prefill de EMPLEADOS actuales de la labor (para poder cambiarlos).
+      (async () => {
+        try {
+          const r = await api('/api/aplicaciones/'+edit.id+'/labor-empleados');
+          const d = r.data || {};
+          if (d.precioReferencia != null && $('#la-pr')) $('#la-pr').value = d.precioReferencia;
+          if (d.tipoPrecio && $('#la-tp')) $('#la-tp').value = d.tipoPrecio;
+          const body = $('#la-emp-body'); if (body) body.innerHTML = '';
+          (d.empleados || []).forEach(e => laAddEmpPrefill(e.empleadoId, e.hectareas, e.porcentaje));
+          laRecalc();
+        } catch {}
+      })();
       laRecalc();
     } else {
       setHa();
@@ -30336,6 +30347,17 @@ function laEmpRowHTML(){
 function laAddEmp(){
   const b = $('#la-emp-body'); if (!b) return;
   b.insertAdjacentHTML('beforeend', laEmpRowHTML());
+  laRecalc();
+}
+// Agrega una fila de empleado ya cargada (para el modo edición).
+function laAddEmpPrefill(empleadoId, hectareas, porcentaje){
+  const b = $('#la-emp-body'); if (!b) return;
+  b.insertAdjacentHTML('beforeend', laEmpRowHTML());
+  const tr = b.lastElementChild;
+  const sel = tr.querySelector('[data-le="emp"]');
+  if (sel) { sel.value = empleadoId || ''; }
+  const haEl = tr.querySelector('[data-le="ha"]'); if (haEl && hectareas != null) haEl.value = hectareas;
+  const pctEl = tr.querySelector('[data-le="pct"]'); if (pctEl && porcentaje != null) pctEl.value = porcentaje;
   laRecalc();
 }
 function laPickEmpRow(sel){
@@ -30536,6 +30558,12 @@ async function laborSave() {
       cantidad: Number(tr.querySelector('[data-laf="cantidad"]').value || 0),
       precioUnit: Number(tr.querySelector('[data-laf="precioUnit"]').value || 0),
     })).filter(i => i.productoId && i.cantidad > 0);
+    // Empleados editados (uno o varios): se reemplaza la lista y se recalcula la planilla.
+    const empleadosEd = $$('#la-emp-body tr[data-laemp]').map(tr => ({
+      empleadoId: tr.querySelector('[data-le="emp"]')?.value || null,
+      hectareas: tr.querySelector('[data-le="ha"]')?.value ? Number(tr.querySelector('[data-le="ha"]').value) : null,
+      porcentaje: tr.querySelector('[data-le="pct"]')?.value ? Number(tr.querySelector('[data-le="pct"]').value) : null,
+    })).filter(e => e.empleadoId);
     const data = {
       item: tipo,
       costoHa,
@@ -30545,6 +30573,9 @@ async function laborSave() {
       observaciones: $('#la-obs').value.trim() || null,
       depositoId: $('#la-dep')?.value || null,
       insumos: insumosEd,
+      precioReferencia: pr,
+      tipoPrecio: pr != null ? tp : null,
+      empleados: empleadosEd,
     };
     try {
       await api('/api/aplicaciones/'+editId, { method:'PUT', body: JSON.stringify(data) });
