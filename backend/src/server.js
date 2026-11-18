@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.433.0';
+const AGROCORE_VERSION = '2.434.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8730,6 +8730,7 @@ mountCrud({
     articuloRefId: z.string().nullable().optional(),
     articuloLabel: z.string().nullable().optional(),
     bancoTarjeta: z.string().nullable().optional(),
+    resumenId: z.string().nullable().optional(),
   }),
   orderBy: { fecha: 'desc' },
   searchFields: ['concepto', 'caja'],
@@ -23123,8 +23124,79 @@ app.get('/api/resumenes-tarjeta', requireCompany, requirePermission('finanzas:re
 app.post('/api/resumenes-tarjeta', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
     const d = resumenTjSchema.parse(req.body);
+    const force = !!req.body?.force;
+    // Dedup: mismo resumen (misma tarjeta + mismo vencimiento o cierre + total parecido).
+    if (!force) {
+      const candidatos = await prisma.resumenTarjeta.findMany({ where: { companyId: req.companyId, tarjeta: d.tarjeta || null } });
+      const sameDay = (a, b) => a && b && new Date(a).toISOString().slice(0, 10) === new Date(b).toISOString().slice(0, 10);
+      const dup = candidatos.find(c => {
+        const vencIgual = d.vencimiento && c.vencimiento && sameDay(d.vencimiento, c.vencimiento);
+        const cierreIgual = d.fechaCierre && c.fechaCierre && sameDay(d.fechaCierre, c.fechaCierre);
+        const totalIgual = d.totalPesos != null && c.totalPesos != null && Math.abs(Number(c.totalPesos) - Number(d.totalPesos)) < 1;
+        return (vencIgual || cierreIgual) && (totalIgual || !d.totalPesos);
+      });
+      if (dup) {
+        return res.status(409).json({ ok: false, duplicado: true,
+          error: `Ya cargaste un resumen de ${d.tarjeta || 'esta tarjeta'} con ${dup.vencimiento ? 'vencimiento ' + new Date(dup.vencimiento).toLocaleDateString('es-AR') : 'ese cierre'}${dup.totalPesos ? ' por $' + Number(dup.totalPesos).toFixed(2) : ''}. ¿Querés cargarlo igual?`,
+          data: { id: dup.id } });
+      }
+    }
     const row = await prisma.resumenTarjeta.create({ data: { ...d, detalle: d.detalle || undefined, companyId: req.companyId, estado: 'pendiente' } });
     res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+// Plan de importación de los movimientos del resumen: para cada consumo, dice si
+// es NUEVO o si YA EXISTE un gasto cargado a mano (para vincular y no duplicar).
+app.get('/api/resumenes-tarjeta/:id/movimientos-plan', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const r = await prisma.resumenTarjeta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const det = r.detalle || {};
+    const items = [...(Array.isArray(det.consumos) ? det.consumos : []), ...(Array.isArray(det.otros) ? det.otros : [])]
+      .filter(it => it && it.montoPesos != null && Number(it.montoPesos) !== 0)
+      .map(it => ({ fecha: it.fecha ? _resTjFecha(it.fecha) : (r.fechaCierre || null), descripcion: it.descripcion || 'Consumo', montoPesos: Number(it.montoPesos), cuotas: it.cuotas || null, comprobante: it.comprobante || null }));
+    // Gastos de la tarjeta ya cargados (para hacer el match por fecha + monto).
+    const existentes = await prisma.efectivo.findMany({ where: { companyId: req.companyId, tipo: 'egreso', caja: r.tarjeta || undefined } });
+    const sameDay = (a, b) => a && b && new Date(a).toISOString().slice(0, 10) === new Date(b).toISOString().slice(0, 10);
+    const usados = new Set();
+    const plan = items.map(it => {
+      let estado = 'nuevo', efectivoId = null;
+      const match = existentes.find(e => !usados.has(e.id) && Math.abs(Number(e.monto) - it.montoPesos) < 1 && (!it.fecha || !e.fecha || sameDay(e.fecha, it.fecha)));
+      if (match) { usados.add(match.id); efectivoId = match.id; estado = (match.resumenId === r.id) ? 'ya_vinculado' : (match.resumenId ? 'otro_resumen' : 'existe'); }
+      return { ...it, estado, efectivoId };
+    });
+    res.json({ ok: true, data: { plan, resumen: { id: r.id, tarjeta: r.tarjeta, banco: null } } });
+  } catch (e) { next(e); }
+});
+// Commit: crea los movimientos nuevos y vincula los existentes al resumen.
+app.post('/api/resumenes-tarjeta/:id/importar-movimientos', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const r = await prisma.resumenTarjeta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    const items = Array.isArray(req.body?.items) ? req.body.items : null;
+    if (!items || !items.length) return res.status(400).json({ ok: false, error: 'No hay movimientos para importar.' });
+    let creados = 0, vinculados = 0;
+    const bancoTj = r.tarjeta ? null : null;
+    await prisma.$transaction(async (tx) => {
+      for (const it of items) {
+        if (it.efectivoId) {
+          const upd = await tx.efectivo.updateMany({ where: { id: it.efectivoId, companyId: req.companyId, resumenId: null }, data: { resumenId: r.id } });
+          if (upd.count) vinculados += upd.count;
+        } else {
+          await tx.efectivo.create({ data: {
+            companyId: req.companyId,
+            fecha: it.fecha ? new Date(it.fecha) : (r.fechaCierre || new Date()),
+            tipo: 'egreso', concepto: it.descripcion || 'Consumo', monto: Number(it.montoPesos) || 0,
+            caja: r.tarjeta, clasificacion: 'empresa',
+            articuloTipo: 'libre', articuloLabel: it.descripcion || null,
+            bancoTarjeta: bancoTj, resumenId: r.id, referencia: 'RESMOV-' + r.id,
+            observaciones: (it.cuotas ? 'Cuota ' + it.cuotas + ' · ' : '') + 'Importado del resumen',
+          } });
+          creados++;
+        }
+      }
+    });
+    res.json({ ok: true, data: { creados, vinculados } });
   } catch (e) { next(e); }
 });
 app.delete('/api/resumenes-tarjeta/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
@@ -23135,6 +23207,10 @@ app.delete('/api/resumenes-tarjeta/:id', requireCompany, requirePermission('fina
       if (r.movEfectivoId) await tx.efectivo.deleteMany({ where: { id: r.movEfectivoId, companyId: req.companyId } });
       if (r.cardIngresoId) await tx.efectivo.deleteMany({ where: { id: r.cardIngresoId, companyId: req.companyId } });
       if (r.movBancoId) await tx.bancoMovimiento.deleteMany({ where: { id: r.movBancoId } });
+      // Gastos importados del resumen: los creados por la importación se borran;
+      // los que ya existían (cargados a mano, luego vinculados) sólo se desvinculan.
+      await tx.efectivo.deleteMany({ where: { companyId: req.companyId, resumenId: r.id, referencia: 'RESMOV-' + r.id } });
+      await tx.efectivo.updateMany({ where: { companyId: req.companyId, resumenId: r.id }, data: { resumenId: null } });
       await tx.resumenTarjeta.delete({ where: { id: r.id } });
     });
     res.json({ ok: true });

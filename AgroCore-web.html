@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
+      titulo:'🔗 v2.434.0 — Resumen de tarjeta: no se duplica + importa sus movimientos (sin repetir)',
+      desc:'Dos mejoras al importar el resumen. <b>(1) Anti-duplicado:</b> si cargás el <b>mismo resumen</b> (aunque sea una vez en Excel y otra en PDF), el sistema lo <b>detecta</b> por tarjeta + vencimiento + total y te avisa antes de repetirlo. <b>(2) Movimientos del resumen:</b> al guardar un resumen con detalle, podés <b>importar sus consumos como gastos de la tarjeta</b>, <b>vinculados</b> al resumen. Antes de cargarlos, el sistema <b>revisa si alguno ya lo habías cargado a mano</b> (por fecha + monto) y, en vez de duplicarlo, lo <b>vincula</b>. Después, desde cada resumen tenés <b>👁</b> para ver <b>sólo los movimientos de ese resumen</b> y <b>📋</b> para volver a importar/vincular. 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
       titulo:'📄 v2.433.0 — Tarjetas: importar el resumen del banco y pagarlo con su vencimiento',
       desc:'Ya podés <b>importar el resumen</b> de la tarjeta desde el homebanking. En <b>Tesorería → Bancos → la tarjeta → 📄 Resúmenes → ⬆️ Importar resumen</b> subís el <b>Excel</b> (el que descargás del banco) o el <b>PDF</b>: AgroCore lee el <b>total a pagar</b>, el <b>vencimiento</b> y el cierre (y, del Excel, el detalle de consumos y conceptos), los mostramos para que revises y guardás. Cada resumen queda con su <b>vencimiento en la Agenda</b> (avisa 5 días antes) hasta que lo pagues. Con <b>💵 Pagar</b> registrás el pago por <b>transferencia, débito en cuenta o efectivo</b>: se genera el <b>egreso real</b> y <b>baja el saldo gastado</b> de la tarjeta. Si te equivocaste, podés <b>deshacer el pago</b>. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
@@ -43977,10 +43980,11 @@ async function bcoReabrirConcil(id, periodo) {
 // ===== Movimientos de una TARJETA de crédito (funciona como una cuenta) =====
 // Los pagos con tarjeta se guardan como movimientos de Efectivo con caja = nombre de la
 // tarjeta. Acá los listamos y mostramos el saldo gastado acumulado (deuda) + filtro de fecha.
-async function tarjetaVerMovs(cardId) {
+async function tarjetaVerMovs(cardId, resumenFilter) {
   const card = (state.cache.catalogos||[]).find(x => x.id === cardId && x.tipo === TARJETA_CAT_TIPO);
   if (!card) return toast('Tarjeta no encontrada','error');
   state._tjCardId = cardId; state._tjCardNombre = card.nombre;
+  state._tjFilterResumen = resumenFilter || null;
   const rr = tarjetaResumen(card);
   setHeader(`💳 ${card.nombre}`, rr || 'Movimientos de la tarjeta');
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando movimientos…</div>`;
@@ -44002,10 +44006,13 @@ function tarjetaMovAplicarFiltro() {
   tarjetaMovRender();
 }
 function tarjetaMovLimpiarFiltro() { state._tjMovFilter = _ultimoMesRango(); tarjetaMovRender(); }
+function tarjetaMovQuitarResumen() { state._tjFilterResumen = null; tarjetaMovRender(); }
 function tarjetaMovRender() {
   const f = state._tjMovFilter || _ultimoMesRango();
   const all = state._tjMovsAll || [];
+  const filtroResumen = state._tjFilterResumen || null;
   const movs = all.filter(m => {
+    if (filtroResumen) return String(m.resumenId||'') === String(filtroResumen);
     const d = (m.fecha||'').slice(0,10);
     if (f.desde && d < f.desde) return false;
     if (f.hasta && d > f.hasta) return false;
@@ -44028,7 +44035,12 @@ function tarjetaMovRender() {
       <div class="kpi"><div class="text-xs text-slate-500">Pagos/reintegros en el rango</div><div class="text-xl font-bold mt-1 text-green-700">${fmt$(pagos)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Saldo gastado acumulado</div><div class="text-xl font-bold mt-1 ${totalGastadoTarjeta>=0?'text-slate-800':'text-green-700'}">${fmt$(totalGastadoTarjeta)}</div></div>
     </div>
-    ${movFiltroFechaBar('tjf', f, 'tarjetaMovAplicarFiltro', 'tarjetaMovLimpiarFiltro')}
+    ${filtroResumen
+      ? `<div class="mb-3 bg-blue-50 border border-blue-200 rounded p-2 text-xs text-blue-800 flex items-center justify-between gap-2">
+           <span>📄 Mostrando sólo los movimientos de <b>un resumen</b>.</span>
+           <button class="btn btn-secondary text-xs" onclick="tarjetaMovQuitarResumen()">✕ Quitar filtro</button>
+         </div>`
+      : movFiltroFechaBar('tjf', f, 'tarjetaMovAplicarFiltro', 'tarjetaMovLimpiarFiltro')}
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
         <thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle / Artículo</th><th class="text-right">Monto</th><th class="text-right">Intereses</th><th class="whitespace-nowrap">Vencimiento</th><th class="text-right">Saldo gastado</th><th></th></tr></thead>
@@ -44199,6 +44211,8 @@ async function tarjetaResumenes(cardId) {
       <td class="text-right font-semibold">${imp}</td>
       <td class="text-center">${pagado?`<span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Pagado</span>`:`<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">Pendiente</span>`}</td>
       <td class="text-right whitespace-nowrap">
+        <button class="btn btn-ghost text-xs" title="Ver sólo estos movimientos" onclick='tarjetaResumenVerMovs(${JSON.stringify(r.id)},${JSON.stringify(cardId)})'>👁</button>
+        ${can('finanzas:create')?`<button class="btn btn-ghost text-xs" title="Importar/vincular movimientos del resumen" onclick='tarjetaResumenMovs(${JSON.stringify(r.id)},${JSON.stringify(cardId)})'>📋</button>`:''}
         ${(!pagado&&can('finanzas:create'))?`<button class="btn btn-primary text-xs" onclick='tarjetaResumenPagar(${JSON.stringify(r.id)},${JSON.stringify(cardId)})'>💵 Pagar</button>`:''}
         ${(pagado&&can('finanzas:update'))?`<button class="btn btn-ghost text-xs" title="Deshacer pago" onclick='tarjetaResumenDeshacer(${JSON.stringify(r.id)},${JSON.stringify(cardId)})'>↩️</button>`:''}
         ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='tarjetaResumenDel(${JSON.stringify(r.id)},${JSON.stringify(cardId)})'>🗑️</button>`:''}
@@ -44280,10 +44294,80 @@ async function tarjetaResumenSave(cardId, origen) {
   };
   if (!data.totalPesos && !data.totalDolares) return toast('Poné el total a pagar','warn');
   if (!data.vencimiento) return toast('Poné la fecha de vencimiento','warn');
-  try {
-    await api('/api/resumenes-tarjeta', { method:'POST', body: JSON.stringify(data) });
+  const tieneMovs = !!(state._trjDetalle && ((state._trjDetalle.consumos||[]).length || (state._trjDetalle.otros||[]).length));
+  const guardar = async (force) => {
+    const r = await api('/api/resumenes-tarjeta', { method:'POST', body: JSON.stringify({ ...data, force }) });
     state._trjDetalle = null;
-    toast('Resumen guardado','success'); closeModal(); tarjetaResumenes(cardId);
+    toast('Resumen guardado','success'); closeModal();
+    const nuevoId = r.data?.id;
+    // Si el resumen trae detalle de consumos, ofrecemos importarlos como movimientos.
+    if (nuevoId && tieneMovs) { tarjetaResumenMovs(nuevoId, cardId); }
+    else { tarjetaResumenes(cardId); }
+  };
+  try {
+    await guardar(false);
+  } catch (e) {
+    if (e.status === 409 && e.body && e.body.duplicado) {
+      if (confirm(e.message || 'Ya existe un resumen parecido. ¿Cargarlo igual?')) {
+        try { await guardar(true); } catch (e2) { toast(e2.message,'error'); }
+      }
+    } else { toast(e.message,'error'); }
+  }
+}
+// Plan de movimientos del resumen: muestra cuáles se crean nuevos y cuáles ya
+// existen (cargados a mano) para vincular sin duplicar.
+async function tarjetaResumenMovs(resumenId, cardId) {
+  let plan = [];
+  try { const r = await api('/api/resumenes-tarjeta/'+resumenId+'/movimientos-plan'); plan = r.data?.plan || []; } catch (e) { return toast(e.message,'error'); }
+  if (!plan.length) return tarjetaResumenes(cardId);
+  const BADGE = {
+    nuevo:        '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">➕ Nuevo</span>',
+    existe:       '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">🔗 Ya existe → vincular</span>',
+    ya_vinculado: '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Ya vinculado</span>',
+    otro_resumen: '<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">otro resumen</span>',
+  };
+  state._trjPlan = plan;
+  const nNuevos = plan.filter(p=>p.estado==='nuevo').length;
+  const nLink = plan.filter(p=>p.estado==='existe').length;
+  const filas = plan.map((p,i) => `
+    <tr class="table-row">
+      <td class="whitespace-nowrap text-xs">${p.fecha?fmtDate(p.fecha):'—'}</td>
+      <td><b>${esc(p.descripcion||'—')}</b>${p.cuotas?`<span class="text-[11px] text-slate-500"> · cuota ${esc(p.cuotas)}</span>`:''}</td>
+      <td class="text-right font-semibold">${fmt$(p.montoPesos)}</td>
+      <td class="text-center">${BADGE[p.estado]||p.estado}</td>
+    </tr>`).join('');
+  openModal({
+    title: '📋 Movimientos del resumen', size:'max-w-3xl',
+    body: `
+      <div class="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded p-2 mb-3">
+        Encontramos <b>${plan.length}</b> movimientos en pesos. Al importar: se <b>crean ${nNuevos} nuevos</b> y se <b>vinculan ${nLink}</b> que ya tenías cargados a mano (no se duplican). Los que ya estaban vinculados se dejan como están.
+      </div>
+      <div class="kpi p-0 overflow-hidden" style="max-height:52vh;overflow:auto">
+        <table class="data">
+          <thead><tr><th>Fecha</th><th>Descripción</th><th class="text-right">Monto</th><th class="text-center">Acción</th></tr></thead>
+          <tbody>${filas}</tbody>
+        </table>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick='tarjetaResumenes(${JSON.stringify(cardId)})'>Ahora no</button>
+             <button class="btn btn-primary" onclick='tarjetaResumenMovsCommit(${JSON.stringify(resumenId)},${JSON.stringify(cardId)})'>⬇️ Importar ${nNuevos+nLink} movimientos</button>`
+  });
+}
+function tarjetaResumenVerMovs(resumenId, cardId) {
+  closeModal();
+  tarjetaVerMovs(cardId, resumenId);
+}
+async function tarjetaResumenMovsCommit(resumenId, cardId) {
+  const plan = (state._trjPlan||[]).filter(p => p.estado==='nuevo' || p.estado==='existe');
+  if (!plan.length) { toast('No hay movimientos nuevos para importar','warn'); return tarjetaResumenes(cardId); }
+  const items = plan.map(p => ({ fecha: p.fecha, descripcion: p.descripcion, montoPesos: p.montoPesos, cuotas: p.cuotas, efectivoId: p.estado==='existe'?p.efectivoId:null }));
+  try {
+    const r = await api('/api/resumenes-tarjeta/'+resumenId+'/importar-movimientos', { method:'POST', body: JSON.stringify({ items }) });
+    state._trjPlan = null;
+    const c = r.data||{};
+    toast(`Importado: ${c.creados||0} nuevos, ${c.vinculados||0} vinculados`,'success');
+    closeModal();
+    // Dejamos la tarjeta filtrada por este resumen para ver sólo sus movimientos.
+    tarjetaVerMovs(cardId, resumenId);
   } catch (e) { toast(e.message,'error'); }
 }
 async function tarjetaResumenPagar(resumenId, cardId) {

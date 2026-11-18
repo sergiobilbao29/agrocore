@@ -1295,6 +1295,7 @@ model Efectivo {
   articuloRefId String?    // id del artículo vinculado (categoría de gasto / producto / cuota de crédito)
   articuloLabel String?    // etiqueta legible de lo que se pagó
   bancoTarjeta  String?    // banco de la tarjeta (se completa solo desde la tarjeta)
+  resumenId     String?    // gasto vinculado a un resumen de tarjeta importado
   createdAt     DateTime @default(now())
 
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -1305,6 +1306,7 @@ model Efectivo {
   @@index([referencia])
   @@index([categoriaGastoId])
   @@index([vencimiento])
+  @@index([resumenId])
 }
 
 // Resumen (estado de cuenta) de una tarjeta de crédito: se importa del homebanking
