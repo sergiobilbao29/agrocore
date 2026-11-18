@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.431.0';
+const AGROCORE_VERSION = '2.432.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8723,6 +8723,13 @@ mountCrud({
     clasificacion: z.string().nullable().optional(),
     categoriaGastoId: z.string().nullable().optional(),
     observaciones: z.string().nullable().optional(),
+    // Gasto de tarjeta de crédito (ficha enriquecida)
+    vencimiento: zFecha.nullable().optional(),
+    interes: z.number().nullable().optional(),
+    articuloTipo: z.string().nullable().optional(),
+    articuloRefId: z.string().nullable().optional(),
+    articuloLabel: z.string().nullable().optional(),
+    bancoTarjeta: z.string().nullable().optional(),
   }),
   orderBy: { fecha: 'desc' },
   searchFields: ['concepto', 'caja'],
@@ -28592,6 +28599,35 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
       repetir: 'ninguno',
       relacionTipo: 'orden_trabajo',
       relacionId: o.id,
+    });
+  }
+
+  // O) Gastos de tarjeta de crédito con fecha de vencimiento de pago
+  const gastosTarjeta = await prisma.efectivo.findMany({
+    where: { companyId, tipo: 'egreso', vencimiento: { not: null, lte: limiteFuturo } },
+    orderBy: { vencimiento: 'asc' },
+  });
+  for (const g of gastosTarjeta) {
+    if (setOcultos.has(`tarjeta_gasto:${g.id}`)) continue;
+    const vg = new Date(g.vencimiento); vg.setHours(0,0,0,0);
+    if (!incluirVencidos && vg < today) continue;
+    const _tj = (g.caja || '').trim();
+    const _int = Number(g.interes || 0);
+    items.push({
+      id: `auto:tarjeta_gasto:${g.id}`,
+      origen: 'auto',
+      autoTipo: 'tarjeta_gasto',
+      autoRefId: g.id,
+      titulo: `Vence tarjeta${_tj ? ' ' + _tj : ''}: ${g.concepto || 'gasto'}`.trim(),
+      descripcion: `Importe: $${(Number(g.monto || 0)).toFixed(2)}${_int > 0 ? ` (incluye $${_int.toFixed(2)} de intereses)` : ''}${g.articuloLabel ? ` · ${g.articuloLabel}` : ''}${_tj ? ` · 💳 ${_tj}` : ''}`.trim(),
+      fecha: g.vencimiento,
+      categoria: 'vencimiento',
+      prioridad: 'media',
+      avisarDiasAntes: 5,
+      completado: false,
+      repetir: 'ninguno',
+      relacionTipo: null,
+      relacionId: null,
     });
   }
 

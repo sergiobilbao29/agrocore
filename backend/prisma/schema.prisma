@@ -1287,6 +1287,13 @@ model Efectivo {
   categoriaGastoId String? // categoría de gasto del árbol (Movimientos diarios → reporte por categoría)
   referencia    String?    // vínculo con otro módulo (ej. FACCOB-<facturaId> para revertir)
   observaciones String?
+  // --- Gasto de tarjeta de crédito (ficha enriquecida; caja = nombre de la tarjeta) ---
+  vencimiento   DateTime?  // fecha de vencimiento del pago de la tarjeta (va a la Agenda)
+  interes       Float?     // intereses $ del gasto de tarjeta
+  articuloTipo  String?    // qué se pagó: categoria | producto | cuota | libre
+  articuloRefId String?    // id del artículo vinculado (categoría de gasto / producto / cuota de crédito)
+  articuloLabel String?    // etiqueta legible de lo que se pagó
+  bancoTarjeta  String?    // banco de la tarjeta (se completa solo desde la tarjeta)
   createdAt     DateTime @default(now())
 
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
@@ -1296,6 +1303,7 @@ model Efectivo {
   @@index([fecha])
   @@index([referencia])
   @@index([categoriaGastoId])
+  @@index([vencimiento])
 }
 
 model FlujoCaja {

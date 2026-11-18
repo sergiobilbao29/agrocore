@@ -3123,6 +3123,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
+      titulo:'💳 v2.432.0 — Tarjetas de crédito: ficha de gasto completa + vencimiento en la Agenda',
+      desc:'Ahora cada tarjeta tiene su propio botón <b>“+ Gasto de tarjeta”</b> (en <b>Tesorería → Bancos → la tarjeta</b>) con una ficha más completa: <b>fecha de pago</b>, <b>detalle/nombre</b>, <b>qué se pagó</b> (podés vincularlo a una <b>categoría de gasto</b>, un <b>producto del catálogo</b>, una <b>cuota de crédito</b> o escribirlo libre), <b>monto</b>, <b>banco</b> (se completa solo según la tarjeta), <b>intereses $</b>, <b>fecha de vencimiento de pago</b> y <b>observaciones</b>. El gasto sigue <b>impactando el saldo de la tarjeta</b> como siempre, y si le ponés categoría de gasto entra al <b>reporte de Gastos por categoría</b>. Lo nuevo: esa <b>fecha de vencimiento aparece sola en la Agenda</b> (y avisa 5 días antes) para que no se te pase ningún pago. La lista de la tarjeta ahora muestra columnas de <b>intereses</b>, <b>vencimiento</b> (en rojo si ya venció) y el <b>artículo</b> que se pagó. <i>Próximamente: importar el resumen de la tarjeta y pagarlo con su vencimiento.</i> 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
       titulo:'🧾 v2.431.0 — Gastos por categoría: arreglado el error al abrir el reporte',
       desc:'El reporte de <b>Gastos por categoría</b> tiraba un error y no cargaba (buscaba un campo del proveedor que no existe). Ya quedó corregido y el reporte abre normal, sumando facturas de compra y movimientos diarios por categoría.' },
@@ -44011,8 +44014,11 @@ function tarjetaMovRender() {
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <button class="btn btn-secondary" onclick="pages.bancos()">← Volver a Bancos</button>
-      <div class="text-xs text-slate-500">💳 La tarjeta no impacta cuentas bancarias. El “saldo gastado” es lo cargado a la tarjeta menos los pagos/reintegros registrados.</div>
+      <div class="flex items-center gap-2">
+        ${can('finanzas:create')?`<button class="btn btn-primary" onclick='tarjetaGastoForm(${JSON.stringify(state._tjCardId)})'>+ Gasto de tarjeta</button>`:''}
+      </div>
     </div>
+    <div class="text-[11px] text-slate-500 mb-3">💳 La tarjeta no impacta cuentas bancarias. El “saldo gastado” es lo cargado a la tarjeta menos los pagos/reintegros registrados. Si cargás un <b>vencimiento de pago</b>, aparece en la <b>Agenda</b>.</div>
     <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Gastado en el rango</div><div class="text-xl font-bold mt-1 text-red-700">${fmt$(gastado)}</div></div>
       <div class="kpi"><div class="text-xs text-slate-500">Pagos/reintegros en el rango</div><div class="text-xl font-bold mt-1 text-green-700">${fmt$(pagos)}</div></div>
@@ -44021,26 +44027,156 @@ function tarjetaMovRender() {
     ${movFiltroFechaBar('tjf', f, 'tarjetaMovAplicarFiltro', 'tarjetaMovLimpiarFiltro')}
     <div class="kpi p-0 overflow-hidden">
       <table class="data">
-        <thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th class="text-right">Monto</th><th class="text-right">Saldo gastado</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle / Artículo</th><th class="text-right">Monto</th><th class="text-right">Intereses</th><th class="whitespace-nowrap">Vencimiento</th><th class="text-right">Saldo gastado</th><th></th></tr></thead>
         <tbody>
           ${movs.map(m => {
             const esPago = m.tipo === 'ingreso';
+            const esGastoTj = !esPago && (m.articuloTipo || m.vencimiento || m.interes);
             const obs = (m.observaciones||'').split(' · ').filter(p=>!/^Categor[ií]a:/i.test(p.trim())&&!/^Tarjeta:/i.test(p.trim())).join(' · ');
+            const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
+            const vencido = m.vencimiento && new Date(m.vencimiento) < hoy0;
+            const artBadge = m.articuloLabel ? `<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600">${esc(TARJ_ART_ICON[m.articuloTipo]||'🏷️')} ${esc(m.articuloLabel)}</span>` : '';
             return `<tr class="table-row">
               <td class="whitespace-nowrap">${fmtDate(m.fecha)}</td>
               <td><span class="text-xs">${esPago?'⬆️ Pago/reintegro':'💳 Gasto'}</span></td>
-              <td><b>${esc(m.concepto||'—')}</b>${obs?`<div class="text-[11px] text-slate-500">${esc(obs)}</div>`:''}</td>
+              <td><b>${esc(m.concepto||'—')}</b>${artBadge?`<div class="mt-0.5">${artBadge}</div>`:''}${obs?`<div class="text-[11px] text-slate-500">${esc(obs)}</div>`:''}</td>
               <td class="text-right font-semibold ${esPago?'text-green-700':'text-red-700'}">${esPago?'−':'+'} ${fmtMon(m.moneda||'ARS', m.monto)}</td>
+              <td class="text-right text-xs ${m.interes?'text-amber-700':'text-slate-400'}">${m.interes?fmtMon('ARS', m.interes):'—'}</td>
+              <td class="whitespace-nowrap text-xs ${vencido?'text-rose-700 font-semibold':'text-slate-600'}">${m.vencimiento?(vencido?'⏰ ':'')+fmtDate(m.vencimiento):'—'}</td>
               <td class="text-right text-xs">${fmtMon('ARS', m._acum)}</td>
               <td class="text-right whitespace-nowrap">
+                ${(can('finanzas:update')&&esGastoTj)?`<button class="btn btn-ghost text-xs" title="Editar gasto" onclick='tarjetaGastoForm(${JSON.stringify(state._tjCardId)},${JSON.stringify(m.id)})'>✏️</button>`:''}
                 ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar movimiento" onclick='tarjetaMovDel(${JSON.stringify(m.id)})'>🗑️</button>`:''}
               </td>
             </tr>`;
-          }).join('') || `<tr><td colspan="6" class="text-center text-slate-400 py-8">Sin movimientos en el rango elegido. Pagá algo con esta tarjeta o ampliá las fechas.</td></tr>`}
+          }).join('') || `<tr><td colspan="8" class="text-center text-slate-400 py-8">Sin movimientos en el rango elegido. Cargá un gasto con "+ Gasto de tarjeta" o ampliá las fechas.</td></tr>`}
         </tbody>
-        <tfoot><tr class="font-semibold bg-slate-50"><td colspan="6" class="text-xs text-slate-600">${movs.length} movimiento${movs.length===1?'':'s'} en el rango${f.desde?' · desde '+fmtDate(f.desde):''}${f.hasta?' hasta '+fmtDate(f.hasta):''}</td></tr></tfoot>
+        <tfoot><tr class="font-semibold bg-slate-50"><td colspan="8" class="text-xs text-slate-600">${movs.length} movimiento${movs.length===1?'':'s'} en el rango${f.desde?' · desde '+fmtDate(f.desde):''}${f.hasta?' hasta '+fmtDate(f.hasta):''}</td></tr></tfoot>
       </table>
     </div>`;
+}
+// Íconos por tipo de artículo pagado con la tarjeta.
+const TARJ_ART_ICON = { categoria:'📂', producto:'📦', cuota:'🏦', libre:'✏️' };
+
+// Formulario de "Gasto de tarjeta": ficha enriquecida (detalle, artículo, intereses,
+// vencimiento). Se guarda como un egreso de Efectivo con caja = nombre de la tarjeta
+// (impacta el saldo gastado como cualquier gasto de tarjeta). El vencimiento va a la Agenda.
+async function tarjetaGastoForm(cardId, id=null) {
+  const card = (state.cache.catalogos||[]).find(x => x.id === cardId && x.tipo === TARJETA_CAT_TIPO);
+  if (!card) return toast('Tarjeta no encontrada','error');
+  const banco = (tarjetaMeta(card).banco || '').trim();
+  const mov = id ? (state._tjMovsAll||[]).find(x => x.id === id) : null;
+  // Cargar catálogos necesarios para el picker de artículo.
+  if (!state.cache.categoriasGasto) { try { state.cache.categoriasGasto = (await api('/api/categorias-gasto')).data || []; } catch {} }
+  if (!state.cache.productos)       { try { state.cache.productos = (await api('/api/productos')).data || []; } catch {} }
+  if (!state.cache.creditos)        { try { state.cache.creditos = (await api('/api/creditos')).data || []; } catch {} }
+  const hoy = new Date().toISOString().slice(0,10);
+  const fecVal  = mov && mov.fecha ? String(mov.fecha).slice(0,10) : hoy;
+  const vencVal = mov && mov.vencimiento ? String(mov.vencimiento).slice(0,10) : '';
+  const artTipo = (mov && mov.articuloTipo) || 'categoria';
+  state._tjGastoArt = { tipo: artTipo, refId: (mov&&mov.articuloRefId)||'', label: (mov&&mov.articuloLabel)||'' };
+  openModal({
+    title: (id?'✏️ Editar':'+ Nuevo')+' gasto de tarjeta · 💳 '+esc(card.nombre), size:'max-w-2xl',
+    body: `
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha de pago *</label><input id="tg-fecha" type="date" class="input" value="${fecVal}"/></div>
+        <div><label class="label">Banco</label><input id="tg-banco" class="input bg-slate-50" value="${esc(banco||'—')}" readonly/>
+          <div class="text-[10px] text-slate-400 mt-1">Se toma del banco de la tarjeta.</div></div>
+        <div class="col-span-2"><label class="label">Detalle / nombre *</label>
+          <input id="tg-detalle" class="input" value="${mov?esc(mov.concepto||''):''}" placeholder="Ej: Combustible YPF, Supermercado, Repuesto tractor..."/></div>
+        <div class="col-span-2 border-t border-slate-100 pt-2">
+          <label class="label">¿Qué se pagó? (artículo)</label>
+          <div class="grid grid-cols-3 gap-2">
+            <select id="tg-art-tipo" class="input col-span-1" onchange="tarjetaGastoArtRender()">
+              <option value="categoria" ${artTipo==='categoria'?'selected':''}>📂 Categoría de gasto</option>
+              <option value="producto"  ${artTipo==='producto'?'selected':''}>📦 Producto del catálogo</option>
+              <option value="cuota"     ${artTipo==='cuota'?'selected':''}>🏦 Cuota de crédito</option>
+              <option value="libre"     ${artTipo==='libre'?'selected':''}>✏️ Texto libre</option>
+            </select>
+            <div id="tg-art-ctrl" class="col-span-2"></div>
+          </div>
+        </div>
+        <div><label class="label">Monto $ *</label><input id="tg-monto" type="number" step="0.01" class="input" value="${mov?(mov.monto||''):''}"/></div>
+        <div><label class="label">Intereses $</label><input id="tg-interes" type="number" step="0.01" class="input" value="${mov&&mov.interes?mov.interes:''}" placeholder="0,00"/></div>
+        <div><label class="label">Fecha de vencimiento de pago</label><input id="tg-venc" type="date" class="input" value="${vencVal}"/>
+          <div class="text-[10px] text-slate-400 mt-1">⏰ Aparece en la Agenda de vencimientos (avisa 5 días antes).</div></div>
+        <div></div>
+        <div class="col-span-2"><label class="label">Observaciones</label><textarea id="tg-obs" class="input" rows="2" placeholder="Algún dato extra...">${mov?esc((mov.observaciones||'').split(' · ').filter(p=>!/^Categor[ií]a:/i.test(p.trim())&&!/^Tarjeta:/i.test(p.trim())).join(' · ')):''}</textarea></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick='tarjetaGastoSave(${JSON.stringify(cardId)},${id?JSON.stringify(id):'null'},${JSON.stringify(banco)})'>💾 Guardar</button>`
+  });
+  tarjetaGastoArtRender();
+}
+// Dibuja el control de artículo según el tipo elegido.
+function tarjetaGastoArtRender() {
+  const cont = document.getElementById('tg-art-ctrl'); if (!cont) return;
+  const tipo = document.getElementById('tg-art-tipo')?.value || 'categoria';
+  const prev = state._tjGastoArt || {};
+  const selId = prev.tipo === tipo ? (prev.refId||'') : '';
+  if (tipo === 'categoria') {
+    cont.innerHTML = `<select id="tg-art-ref" class="input">${(typeof catGastoTreeOptions==='function')?catGastoTreeOptions(selId,{rootLabel:'— Elegir categoría —'}):'<option value="">—</option>'}</select>`;
+  } else if (tipo === 'producto') {
+    const prods = (state.cache.productos||[]).filter(p=>!(p.esHacienda)).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+    cont.innerHTML = `<select id="tg-art-ref" class="input"><option value="">— Elegir producto —</option>${prods.map(p=>`<option value="${esc(p.id)}" ${p.id===selId?'selected':''}>${esc(p.nombre)}${p.codigo?' ('+esc(p.codigo)+')':''}</option>`).join('')}</select>`;
+  } else if (tipo === 'cuota') {
+    const opts = [];
+    (state.cache.creditos||[]).forEach(cr => {
+      const tot = (cr.cuotas||[]).length;
+      (cr.cuotas||[]).filter(c=>!c.pagada).forEach(c => {
+        const venc = c.vencimiento?fmtDate(c.vencimiento):'';
+        opts.push(`<option value="${esc(c.id)}" ${c.id===selId?'selected':''}>${esc(cr.banco||cr.entidad||'Crédito')} · cuota ${c.numero}/${tot} · ${fmt$(c.importeTotal||0)}${venc?' · vence '+venc:''}</option>`);
+      });
+    });
+    cont.innerHTML = `<select id="tg-art-ref" class="input"><option value="">— Elegir cuota pendiente —</option>${opts.join('')}</select>${opts.length?'':'<div class="text-[10px] text-amber-700 mt-1">No hay cuotas de crédito pendientes.</div>'}`;
+  } else {
+    cont.innerHTML = `<input id="tg-art-ref" class="input" value="${esc(prev.tipo==='libre'?(prev.label||''):'')}" placeholder="Escribí qué se pagó"/>`;
+  }
+}
+async function tarjetaGastoSave(cardId, id, banco) {
+  const card = (state.cache.catalogos||[]).find(x => x.id === cardId && x.tipo === TARJETA_CAT_TIPO);
+  if (!card) return toast('Tarjeta no encontrada','error');
+  const detalle = (document.getElementById('tg-detalle')?.value||'').trim();
+  const monto = Number(document.getElementById('tg-monto')?.value||0);
+  if (!detalle) return toast('Poné el detalle / nombre del gasto','warn');
+  if (!monto || monto <= 0) return toast('Poné el monto del gasto','warn');
+  const fec = document.getElementById('tg-fecha')?.value || new Date().toISOString().slice(0,10);
+  const venc = document.getElementById('tg-venc')?.value || '';
+  const interes = Number(document.getElementById('tg-interes')?.value||0) || null;
+  const artTipo = document.getElementById('tg-art-tipo')?.value || 'categoria';
+  const artEl = document.getElementById('tg-art-ref');
+  let articuloRefId = null, articuloLabel = null, categoriaGastoId = null;
+  if (artTipo === 'libre') {
+    articuloLabel = (artEl?.value||'').trim() || null;
+  } else if (artEl && artEl.value) {
+    articuloRefId = artEl.value;
+    const opt = artEl.options ? artEl.options[artEl.selectedIndex] : null;
+    articuloLabel = opt ? opt.text.replace(/^—.*—$/,'').trim() : null;
+    if (artTipo === 'categoria') categoriaGastoId = artEl.value;
+  }
+  const data = {
+    fecha: new Date(fec+'T12:00:00').toISOString(),
+    tipo: 'egreso',
+    concepto: detalle,
+    monto,
+    caja: card.nombre,
+    clasificacion: 'empresa',
+    categoriaGastoId,
+    vencimiento: venc ? new Date(venc+'T12:00:00').toISOString() : null,
+    interes,
+    articuloTipo: artTipo,
+    articuloRefId,
+    articuloLabel,
+    bancoTarjeta: banco && banco !== '—' ? banco : null,
+    observaciones: (document.getElementById('tg-obs')?.value||'').trim() || null,
+  };
+  try {
+    if (id) await api('/api/efectivo/'+id, { method:'PUT', body: JSON.stringify(data) });
+    else    await api('/api/efectivo',     { method:'POST', body: JSON.stringify(data) });
+    toast(id?'Gasto actualizado':'Gasto de tarjeta cargado','success');
+    closeModal();
+    tarjetaVerMovs(cardId);
+  } catch (e) { toast('No se pudo guardar: '+(e.message||e),'error'); }
 }
 async function tarjetaMovDel(id) {
   if (!confirm('¿Eliminar este movimiento de la tarjeta?')) return;
