@@ -1296,6 +1296,8 @@ model Efectivo {
   articuloLabel String?    // etiqueta legible de lo que se pagó
   bancoTarjeta  String?    // banco de la tarjeta (se completa solo desde la tarjeta)
   resumenId     String?    // gasto vinculado a un resumen de tarjeta importado
+  moneda        String   @default("ARS")  // "ARS" | "USD" (ej. consumo de tarjeta en dólares)
+  cotizacion    Float?     // TC usado si se valorizó a pesos
   createdAt     DateTime @default(now())
 
   company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)

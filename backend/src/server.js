@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.435.0';
+const AGROCORE_VERSION = '2.436.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8731,6 +8731,8 @@ mountCrud({
     articuloLabel: z.string().nullable().optional(),
     bancoTarjeta: z.string().nullable().optional(),
     resumenId: z.string().nullable().optional(),
+    moneda: z.string().nullable().optional(),
+    cotizacion: z.number().nullable().optional(),
   }),
   orderBy: { fecha: 'desc' },
   searchFields: ['concepto', 'caja'],
@@ -23180,15 +23182,18 @@ app.get('/api/resumenes-tarjeta/:id/movimientos-plan', requireCompany, requirePe
     if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
     const det = r.detalle || {};
     const items = [...(Array.isArray(det.consumos) ? det.consumos : []), ...(Array.isArray(det.otros) ? det.otros : [])]
-      .filter(it => it && it.montoPesos != null && Number(it.montoPesos) !== 0)
-      .map(it => ({ fecha: it.fecha ? _resTjFecha(it.fecha) : (r.fechaCierre || null), descripcion: it.descripcion || 'Consumo', montoPesos: Number(it.montoPesos), cuotas: it.cuotas || null, comprobante: it.comprobante || null }));
-    // Gastos de la tarjeta ya cargados (para hacer el match por fecha + monto).
+      .filter(it => it && ((it.montoPesos != null && Number(it.montoPesos) !== 0) || (it.montoDolares != null && Number(it.montoDolares) !== 0)))
+      .map(it => {
+        const esUsd = (it.montoPesos == null || Number(it.montoPesos) === 0) && it.montoDolares != null;
+        return { fecha: it.fecha ? _resTjFecha(it.fecha) : (r.fechaCierre || null), descripcion: it.descripcion || 'Consumo', moneda: esUsd ? 'USD' : 'ARS', monto: esUsd ? Number(it.montoDolares) : Number(it.montoPesos), cuotas: it.cuotas || null, comprobante: it.comprobante || null };
+      });
+    // Gastos de la tarjeta ya cargados (para hacer el match por fecha + monto + moneda).
     const existentes = await prisma.efectivo.findMany({ where: { companyId: req.companyId, tipo: 'egreso', caja: r.tarjeta || undefined } });
     const sameDay = (a, b) => a && b && new Date(a).toISOString().slice(0, 10) === new Date(b).toISOString().slice(0, 10);
     const usados = new Set();
     const plan = items.map(it => {
       let estado = 'nuevo', efectivoId = null;
-      const match = existentes.find(e => !usados.has(e.id) && Math.abs(Number(e.monto) - it.montoPesos) < 1 && (!it.fecha || !e.fecha || sameDay(e.fecha, it.fecha)));
+      const match = existentes.find(e => !usados.has(e.id) && (e.moneda || 'ARS') === it.moneda && Math.abs(Number(e.monto) - it.monto) < 1 && (!it.fecha || !e.fecha || sameDay(e.fecha, it.fecha)));
       if (match) { usados.add(match.id); efectivoId = match.id; estado = (match.resumenId === r.id) ? 'ya_vinculado' : (match.resumenId ? 'otro_resumen' : 'existe'); }
       return { ...it, estado, efectivoId };
     });
@@ -23210,10 +23215,12 @@ app.post('/api/resumenes-tarjeta/:id/importar-movimientos', requireCompany, requ
           const upd = await tx.efectivo.updateMany({ where: { id: it.efectivoId, companyId: req.companyId, resumenId: null }, data: { resumenId: r.id } });
           if (upd.count) vinculados += upd.count;
         } else {
+          const mon = (it.moneda === 'USD') ? 'USD' : 'ARS';
+          const monto = Number(it.monto != null ? it.monto : it.montoPesos) || 0;
           await tx.efectivo.create({ data: {
             companyId: req.companyId,
             fecha: it.fecha ? new Date(it.fecha) : (r.fechaCierre || new Date()),
-            tipo: 'egreso', concepto: it.descripcion || 'Consumo', monto: Number(it.montoPesos) || 0,
+            tipo: 'egreso', concepto: it.descripcion || 'Consumo', monto, moneda: mon,
             caja: r.tarjeta, clasificacion: 'empresa',
             articuloTipo: 'libre', articuloLabel: it.descripcion || null,
             bancoTarjeta: bancoTj, resumenId: r.id, referencia: 'RESMOV-' + r.id,
@@ -23231,9 +23238,9 @@ app.delete('/api/resumenes-tarjeta/:id', requireCompany, requirePermission('fina
     const r = await prisma.resumenTarjeta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.$transaction(async (tx) => {
-      if (r.movEfectivoId) await tx.efectivo.deleteMany({ where: { id: r.movEfectivoId, companyId: req.companyId } });
-      if (r.cardIngresoId) await tx.efectivo.deleteMany({ where: { id: r.cardIngresoId, companyId: req.companyId } });
-      if (r.movBancoId) await tx.bancoMovimiento.deleteMany({ where: { id: r.movBancoId } });
+      // Movimientos del PAGO (pesos/dólares + ingresos que bajaron el saldo), por referencia.
+      await tx.efectivo.deleteMany({ where: { companyId: req.companyId, referencia: { in: ['RESTJPAGO-' + r.id, 'RESTJ-' + r.id] } } });
+      await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'RESTJPAGO-' + r.id } });
       // Gastos importados del resumen: los creados por la importación se borran;
       // los que ya existían (cargados a mano, luego vinculados) sólo se desvinculan.
       await tx.efectivo.deleteMany({ where: { companyId: req.companyId, resumenId: r.id, referencia: 'RESMOV-' + r.id } });
@@ -23250,31 +23257,63 @@ app.post('/api/resumenes-tarjeta/:id/pagar', requireCompany, requirePermission('
     if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
     if (r.estado === 'pagado') return res.status(400).json({ ok: false, error: 'El resumen ya está pagado. Deshacé el pago primero si querés recargarlo.' });
     const metodo = String(req.body?.metodo || 'efectivo');
-    const importe = Number(req.body?.importe || 0);
-    if (!importe || importe <= 0) return res.status(400).json({ ok: false, error: 'Falta el importe a pagar.' });
+    const importe = Number(req.body?.importe || 0);      // importe real en PESOS a egresar
     const fecha = req.body?.fecha ? new Date(req.body.fecha) : new Date();
     const caja = req.body?.caja ? String(req.body.caja) : null;
     const bancoCuentaId = req.body?.bancoCuentaId ? String(req.body.bancoCuentaId) : null;
+    // Dólares: 'pesos' (valorizar al TC, va dentro del importe en pesos) | 'dolares' (pagar en USD) | 'none'
+    const usdModo = String(req.body?.usd?.modo || 'none');
+    const usdImporte = Number(req.body?.usd?.importe || r.totalDolares || 0);
+    const usdCotiz = Number(req.body?.usd?.cotizacion || 0);
+    const usdMetodo = String(req.body?.usd?.metodo || 'efectivo');
+    const usdCaja = req.body?.usd?.caja ? String(req.body.usd.caja) : null;
+    const usdBancoCuentaId = req.body?.usd?.bancoCuentaId ? String(req.body.usd.bancoCuentaId) : null;
+    if ((!importe || importe <= 0) && !(usdModo === 'dolares' && usdImporte > 0)) {
+      return res.status(400).json({ ok: false, error: 'Falta el importe a pagar.' });
+    }
     const tjNombre = r.tarjeta || 'Tarjeta';
-    const concepto = `Pago resumen tarjeta ${tjNombre}${r.vencimiento ? ' (vto ' + new Date(r.vencimiento).toLocaleDateString('es-AR') + ')' : ''}`;
+    const vtoTxt = r.vencimiento ? ' (vto ' + new Date(r.vencimiento).toLocaleDateString('es-AR') + ')' : '';
+    const concepto = `Pago resumen tarjeta ${tjNombre}${vtoTxt}`;
     const out = await prisma.$transaction(async (tx) => {
       let movEfectivoId = null, movBancoId = null;
-      if (metodo === 'efectivo') {
-        if (!caja) throw new Error('Elegí la caja de efectivo.');
-        const ef = await tx.efectivo.create({ data: { companyId: req.companyId, fecha, tipo: 'egreso', concepto, monto: importe, caja, clasificacion: 'empresa', referencia: 'RESTJPAGO-' + r.id } });
-        movEfectivoId = ef.id;
-      } else if (metodo === 'transferencia' || metodo === 'debito') {
-        if (!bancoCuentaId) throw new Error('Elegí la cuenta bancaria.');
-        const cuenta = await tx.bancoCuenta.findFirst({ where: { id: bancoCuentaId, companyId: req.companyId } });
-        if (!cuenta) throw new Error('Cuenta bancaria no encontrada.');
-        const bm = await tx.bancoMovimiento.create({ data: { companyId: cuenta.companyId, cuentaId: bancoCuentaId, fecha, tipo: metodo === 'transferencia' ? 'transferencia_out' : 'debito', concepto, monto: importe, contraparte: tjNombre, referencia: 'RESTJPAGO-' + r.id, userId: req.user?.id || null } });
-        movBancoId = bm.id;
-      } else {
-        throw new Error('Método de pago no válido.');
+      // --- Egreso real en PESOS (consumos en pesos + dólares valorizados si usdModo='pesos') ---
+      if (importe > 0) {
+        if (metodo === 'efectivo') {
+          if (!caja) throw new Error('Elegí la caja de efectivo.');
+          const ef = await tx.efectivo.create({ data: { companyId: req.companyId, fecha, tipo: 'egreso', concepto, monto: importe, moneda: 'ARS', caja, clasificacion: 'empresa', referencia: 'RESTJPAGO-' + r.id } });
+          movEfectivoId = ef.id;
+        } else if (metodo === 'transferencia' || metodo === 'debito') {
+          if (!bancoCuentaId) throw new Error('Elegí la cuenta bancaria.');
+          const cuenta = await tx.bancoCuenta.findFirst({ where: { id: bancoCuentaId, companyId: req.companyId } });
+          if (!cuenta) throw new Error('Cuenta bancaria no encontrada.');
+          const bm = await tx.bancoMovimiento.create({ data: { companyId: cuenta.companyId, cuentaId: bancoCuentaId, fecha, tipo: metodo === 'transferencia' ? 'transferencia_out' : 'debito', concepto, monto: importe, contraparte: tjNombre, referencia: 'RESTJPAGO-' + r.id, userId: req.user?.id || null } });
+          movBancoId = bm.id;
+        } else { throw new Error('Método de pago no válido.'); }
       }
-      // Baja el saldo gastado de la tarjeta (ingreso/pago en la "caja" de la tarjeta).
-      const ing = await tx.efectivo.create({ data: { companyId: req.companyId, fecha, tipo: 'ingreso', concepto: `Pago de resumen`, monto: importe, caja: tjNombre, clasificacion: 'empresa', referencia: 'RESTJ-' + r.id, observaciones: 'Pago del resumen de la tarjeta' } });
-      const upd = await tx.resumenTarjeta.update({ where: { id: r.id }, data: { estado: 'pagado', pagoFecha: fecha, pagoMetodo: metodo, pagoImporte: importe, movEfectivoId, movBancoId, cardIngresoId: ing.id } });
+      // --- Egreso real en DÓLARES (si se paga la parte en USD con dólares) ---
+      if (usdModo === 'dolares' && usdImporte > 0) {
+        if (usdMetodo === 'efectivo') {
+          if (!usdCaja) throw new Error('Elegí la caja en dólares.');
+          await tx.efectivo.create({ data: { companyId: req.companyId, fecha, tipo: 'egreso', concepto: concepto + ' (U$S)', monto: usdImporte, moneda: 'USD', caja: usdCaja, clasificacion: 'empresa', referencia: 'RESTJPAGO-' + r.id } });
+        } else {
+          if (!usdBancoCuentaId) throw new Error('Elegí la cuenta bancaria en dólares.');
+          const cu = await tx.bancoCuenta.findFirst({ where: { id: usdBancoCuentaId, companyId: req.companyId } });
+          if (!cu) throw new Error('Cuenta bancaria en dólares no encontrada.');
+          await tx.bancoMovimiento.create({ data: { companyId: cu.companyId, cuentaId: usdBancoCuentaId, fecha, tipo: usdMetodo === 'transferencia' ? 'transferencia_out' : 'debito', concepto: concepto + ' (U$S)', monto: usdImporte, contraparte: tjNombre, referencia: 'RESTJPAGO-' + r.id, userId: req.user?.id || null } });
+        }
+      }
+      // --- Baja el saldo gastado de la tarjeta (ingreso/pago en la "caja" de la tarjeta) ---
+      // Pesos: cancela el saldo en pesos.
+      const cardArs = Number(r.totalPesos || (usdModo === 'pesos' ? Math.max(importe - usdImporte * usdCotiz, 0) : importe)) || 0;
+      let ing = null;
+      if (cardArs > 0) {
+        ing = await tx.efectivo.create({ data: { companyId: req.companyId, fecha, tipo: 'ingreso', concepto: 'Pago de resumen', monto: cardArs, moneda: 'ARS', caja: tjNombre, clasificacion: 'empresa', referencia: 'RESTJ-' + r.id, observaciones: 'Pago del resumen de la tarjeta' } });
+      }
+      // Dólares: cancela el saldo en dólares (sea pagado en USD o valorizado a pesos).
+      if (usdImporte > 0 && usdModo !== 'none') {
+        await tx.efectivo.create({ data: { companyId: req.companyId, fecha, tipo: 'ingreso', concepto: 'Pago de resumen (U$S)', monto: usdImporte, moneda: 'USD', cotizacion: usdModo === 'pesos' ? (usdCotiz || null) : null, caja: tjNombre, clasificacion: 'empresa', referencia: 'RESTJ-' + r.id, observaciones: usdModo === 'pesos' ? 'Dólares valorizados a pesos' : 'Pagado en dólares' } });
+      }
+      const upd = await tx.resumenTarjeta.update({ where: { id: r.id }, data: { estado: 'pagado', pagoFecha: fecha, pagoMetodo: metodo, pagoImporte: importe, movEfectivoId, movBancoId, cardIngresoId: ing ? ing.id : null } });
       return upd;
     });
     res.json({ ok: true, data: out });
@@ -23286,9 +23325,8 @@ app.post('/api/resumenes-tarjeta/:id/deshacer-pago', requireCompany, requirePerm
     const r = await prisma.resumenTarjeta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
     if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.$transaction(async (tx) => {
-      if (r.movEfectivoId) await tx.efectivo.deleteMany({ where: { id: r.movEfectivoId, companyId: req.companyId } });
-      if (r.cardIngresoId) await tx.efectivo.deleteMany({ where: { id: r.cardIngresoId, companyId: req.companyId } });
-      if (r.movBancoId) await tx.bancoMovimiento.deleteMany({ where: { id: r.movBancoId } });
+      await tx.efectivo.deleteMany({ where: { companyId: req.companyId, referencia: { in: ['RESTJPAGO-' + r.id, 'RESTJ-' + r.id] } } });
+      await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'RESTJPAGO-' + r.id } });
       await tx.resumenTarjeta.update({ where: { id: r.id }, data: { estado: 'pendiente', pagoFecha: null, pagoMetodo: null, pagoImporte: null, movEfectivoId: null, movBancoId: null, cardIngresoId: null } });
     });
     res.json({ ok: true });
