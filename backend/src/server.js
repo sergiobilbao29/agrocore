@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.432.0';
+const AGROCORE_VERSION = '2.433.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -23003,6 +23003,195 @@ function _matrixToMovs(matrix) {
   return movs;
 }
 
+// ============================================================
+// RESUMEN DE TARJETA DE CRÉDITO — importar (Excel del homebanking o PDF),
+// guardar el total + vencimiento, y PAGARLO generando el egreso real y
+// bajando el saldo gastado de la tarjeta. El vencimiento pendiente va a la Agenda.
+// ============================================================
+function _resTjNum(s) {
+  if (s == null) return null;
+  let t = String(s).replace(/[^0-9,.\-]/g, '').trim();
+  if (!t) return null;
+  t = t.replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(t);
+  return isNaN(n) ? null : n;
+}
+function _resTjFecha(s) {
+  const m = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(String(s || ''));
+  if (!m) return null;
+  let [_, d, mo, y] = m; y = y.length === 2 ? '20' + y : y;
+  const dt = new Date(Number(y), Number(mo) - 1, Number(d), 12, 0, 0);
+  return isNaN(dt.getTime()) ? null : dt;
+}
+// Parser del Excel que exporta el homebanking (formato Santander "Movimientos del resumen").
+function _parseResumenTarjetaXlsx(buf) {
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  const txt = r => r.map(c => String(c == null ? '' : c).trim());
+  const isFecha = s => /^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(String(s || '').trim());
+  let fechaCierre = null, vencimiento = null, totalPesos = null, totalDolares = null, minimoPesos = null, tarjetaHint = null;
+  const detalle = { consumos: [], pagos: [], otros: [] };
+  let seccion = null, lastFecha = null;
+  for (let i = 0; i < rows.length; i++) {
+    const c = txt(rows[i]); const j = c.join(' ').toLowerCase();
+    if (!tarjetaHint) { const mt = /terminad[ao]\s+en\s+(\d{3,4})/i.exec(c.join(' ')); if (mt) tarjetaHint = mt[1]; }
+    if (j.includes('fecha de cierre') && j.includes('vencimiento')) { const nx = rows[i + 1] || []; fechaCierre = _resTjFecha(nx[0]); vencimiento = _resTjFecha(nx[1]); continue; }
+    if (j.startsWith('total a pagar')) { const nx = rows[i + 1] || []; totalPesos = _resTjNum(nx[0]); totalDolares = _resTjNum(nx[1]); continue; }
+    if (j.startsWith('mínimo a pagar') || j.startsWith('minimo a pagar')) { const nx = rows[i + 1] || []; minimoPesos = _resTjNum(nx[0]); continue; }
+    if (j.includes('pago de tarjeta y devolucion') || j.includes('pago anterior')) { seccion = 'pagos'; continue; }
+    if (j.startsWith('tarjeta de ') && !j.includes('incluidas')) { seccion = 'consumos'; continue; }
+    if (j.includes('otros conceptos')) { seccion = 'otros'; continue; }
+    if (!seccion) continue;
+    if (j.startsWith('fecha') || j.startsWith('total de') || j.startsWith('descripción') || j.startsWith('descripcion') || !j.trim()) continue;
+    if (seccion === 'otros') { const desc = c[0]; const mp = _resTjNum(c[1]); if (desc && mp != null) detalle.otros.push({ descripcion: desc, montoPesos: mp }); continue; }
+    let fecha = null, desc = null, cuotas = null, comp = null, mp = null, md = null;
+    if (isFecha(c[0])) { lastFecha = c[0]; fecha = c[0]; desc = c[1]; cuotas = c[2]; comp = c[3]; mp = _resTjNum(c[4]); md = _resTjNum(c[5]); }
+    else { fecha = lastFecha; desc = c[0] || c[1]; cuotas = (c[1] && /de|\d/.test(c[1])) ? c[1] : (c[2] || null); comp = c[3] || c[2]; mp = _resTjNum(c[4]) != null ? _resTjNum(c[4]) : _resTjNum(c[3]); md = _resTjNum(c[5]) != null ? _resTjNum(c[5]) : _resTjNum(c[4]); }
+    if (desc && (mp != null || md != null)) detalle[seccion].push({ fecha, descripcion: desc, cuotas: (cuotas && /de|\d/.test(cuotas)) ? cuotas : null, comprobante: comp || null, montoPesos: mp, montoDolares: md });
+  }
+  return { origen: 'xlsx', tarjetaHint, numero: null, fechaCierre, vencimiento, totalPesos, totalDolares, minimoPesos, detalle };
+}
+// Parser best-effort del PDF del resumen (saca total, usd, mínimo, cierre y vencimiento).
+function _parseResumenTarjetaPdf(texto) {
+  const T = String(texto || '').replace(/ /g, ' ');
+  const mNum = re => { const m = re.exec(T); return m ? _resTjNum(m[1]) : null; };
+  const totalPesos = mNum(/Total a pagar[\s\S]{0,120}?\$\s*([\d.]+,\d{2})/i);
+  const totalDolares = mNum(/Total a pagar[\s\S]{0,200}?U\$S\s*([\d.]+,\d{2})/i);
+  const minimoPesos = mNum(/M[ií]nimo a pagar[\s\S]{0,120}?\$\s*([\d.]+,\d{2})/i);
+  let numero = null; { const m = /N[°º]\s*0*(\d{4,})/.exec(T); if (m) numero = m[1]; }
+  let tarjetaHint = null; { const m = /[Tt]erminad[ao]\s+en\s+(\d{3,4})/.exec(T); if (m) tarjetaHint = m[1]; }
+  // Fila de 6 fechas del período (orden: cierre ant, venc ant, cierre ACTUAL,
+  // venc ACTUAL, próx cierre, próx venc). Tomamos la 3ra y 4ta (índices 2 y 3).
+  // Filtramos a fechas con año de 2 dígitos (las del resumen) para evitar ruido.
+  let fechaCierre = null, vencimiento = null;
+  const fechasYY = (T.match(/\b\d{1,2}\/\d{1,2}\/\d{2}\b/g) || []);
+  if (fechasYY.length >= 4) { fechaCierre = _resTjFecha(fechasYY[2]); vencimiento = _resTjFecha(fechasYY[3]); }
+  else { const fechas = (T.match(/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g) || []); if (fechas.length >= 4) { fechaCierre = _resTjFecha(fechas[2]); vencimiento = _resTjFecha(fechas[3]); } }
+  return { origen: 'pdf', tarjetaHint, numero, fechaCierre, vencimiento, totalPesos, totalDolares, minimoPesos, detalle: null };
+}
+// Paso 1: subir el resumen (Excel o PDF) y obtener la vista previa (no crea nada).
+app.post('/api/resumenes-tarjeta/parse', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const rawB64 = String(req.body?.fileB64 || '');
+    const b64 = rawB64.replace(/^data:[^,]+,/, '');
+    if (!b64) return res.status(400).json({ ok: false, error: 'No recibí el archivo.' });
+    const buffer = Buffer.from(b64, 'base64');
+    const filename = String(req.body?.filename || '').toLowerCase();
+    const mimeMatch = /^data:([^;]+)/.exec(rawB64);
+    const mime = (req.body?.mime || (mimeMatch ? mimeMatch[1] : '')).toLowerCase();
+    const esCsv = /\.csv$/.test(filename) || /text\/csv|application\/csv/.test(mime);
+    const esXlsx = /\.xlsx?$/.test(filename) || /spreadsheet|excel|ms-excel/.test(mime) || (buffer.length > 1 && buffer[0] === 0x50 && buffer[1] === 0x4B && !esCsv);
+    const esPdf = /\.pdf$/.test(filename) || /application\/pdf/.test(mime) || (buffer.slice(0, 4).toString('latin1') === '%PDF');
+    let parsed = null;
+    if (esXlsx) {
+      try { parsed = _parseResumenTarjetaXlsx(buffer); } catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el Excel: ' + e.message }); }
+    } else if (esPdf) {
+      let texto = '';
+      try { const pdfParse = await getPdfParse(); texto = (await pdfParse(buffer)).text || ''; }
+      catch (e) { return res.status(400).json({ ok: false, error: 'No pude leer el PDF: ' + e.message }); }
+      if (!texto || texto.trim().length < 20) return res.status(422).json({ ok: false, error: 'El PDF no tiene texto (parece escaneado). Descargá el resumen en Excel desde el homebanking, o un PDF real (no foto).' });
+      parsed = _parseResumenTarjetaPdf(texto);
+    } else {
+      return res.status(422).json({ ok: false, error: 'Subí el resumen en Excel (.xlsx) o PDF del homebanking.' });
+    }
+    if (!parsed.totalPesos && !parsed.totalDolares && !parsed.vencimiento) {
+      return res.status(422).json({ ok: false, error: 'No pude reconocer el total ni el vencimiento en el archivo. Cargalos a mano.' });
+    }
+    res.json({ ok: true, data: parsed });
+  } catch (e) { next(e); }
+});
+const resumenTjSchema = z.object({
+  tarjeta: z.string().nullable().optional(),
+  numero: z.string().nullable().optional(),
+  fechaCierre: zFecha.nullable().optional(),
+  vencimiento: zFecha.nullable().optional(),
+  totalPesos: z.number().nullable().optional(),
+  totalDolares: z.number().nullable().optional(),
+  minimoPesos: z.number().nullable().optional(),
+  origen: z.string().nullable().optional(),
+  detalle: z.any().nullable().optional(),
+});
+app.get('/api/resumenes-tarjeta', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const where = { companyId: req.companyId };
+    if (req.query.tarjeta) where.tarjeta = String(req.query.tarjeta);
+    const data = await prisma.resumenTarjeta.findMany({ where, orderBy: [{ vencimiento: 'desc' }, { createdAt: 'desc' }] });
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+app.post('/api/resumenes-tarjeta', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const d = resumenTjSchema.parse(req.body);
+    const row = await prisma.resumenTarjeta.create({ data: { ...d, detalle: d.detalle || undefined, companyId: req.companyId, estado: 'pendiente' } });
+    res.status(201).json({ ok: true, data: row });
+  } catch (e) { next(e); }
+});
+app.delete('/api/resumenes-tarjeta/:id', requireCompany, requirePermission('finanzas:delete'), async (req, res, next) => {
+  try {
+    const r = await prisma.resumenTarjeta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.$transaction(async (tx) => {
+      if (r.movEfectivoId) await tx.efectivo.deleteMany({ where: { id: r.movEfectivoId, companyId: req.companyId } });
+      if (r.cardIngresoId) await tx.efectivo.deleteMany({ where: { id: r.cardIngresoId, companyId: req.companyId } });
+      if (r.movBancoId) await tx.bancoMovimiento.deleteMany({ where: { id: r.movBancoId } });
+      await tx.resumenTarjeta.delete({ where: { id: r.id } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// Pagar el resumen: genera el egreso real (efectivo o banco) + baja el saldo de la tarjeta.
+app.post('/api/resumenes-tarjeta/:id/pagar', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const r = await prisma.resumenTarjeta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    if (r.estado === 'pagado') return res.status(400).json({ ok: false, error: 'El resumen ya está pagado. Deshacé el pago primero si querés recargarlo.' });
+    const metodo = String(req.body?.metodo || 'efectivo');
+    const importe = Number(req.body?.importe || 0);
+    if (!importe || importe <= 0) return res.status(400).json({ ok: false, error: 'Falta el importe a pagar.' });
+    const fecha = req.body?.fecha ? new Date(req.body.fecha) : new Date();
+    const caja = req.body?.caja ? String(req.body.caja) : null;
+    const bancoCuentaId = req.body?.bancoCuentaId ? String(req.body.bancoCuentaId) : null;
+    const tjNombre = r.tarjeta || 'Tarjeta';
+    const concepto = `Pago resumen tarjeta ${tjNombre}${r.vencimiento ? ' (vto ' + new Date(r.vencimiento).toLocaleDateString('es-AR') + ')' : ''}`;
+    const out = await prisma.$transaction(async (tx) => {
+      let movEfectivoId = null, movBancoId = null;
+      if (metodo === 'efectivo') {
+        if (!caja) throw new Error('Elegí la caja de efectivo.');
+        const ef = await tx.efectivo.create({ data: { companyId: req.companyId, fecha, tipo: 'egreso', concepto, monto: importe, caja, clasificacion: 'empresa', referencia: 'RESTJPAGO-' + r.id } });
+        movEfectivoId = ef.id;
+      } else if (metodo === 'transferencia' || metodo === 'debito') {
+        if (!bancoCuentaId) throw new Error('Elegí la cuenta bancaria.');
+        const cuenta = await tx.bancoCuenta.findFirst({ where: { id: bancoCuentaId, companyId: req.companyId } });
+        if (!cuenta) throw new Error('Cuenta bancaria no encontrada.');
+        const bm = await tx.bancoMovimiento.create({ data: { companyId: cuenta.companyId, cuentaId: bancoCuentaId, fecha, tipo: metodo === 'transferencia' ? 'transferencia_out' : 'debito', concepto, monto: importe, contraparte: tjNombre, referencia: 'RESTJPAGO-' + r.id, userId: req.user?.id || null } });
+        movBancoId = bm.id;
+      } else {
+        throw new Error('Método de pago no válido.');
+      }
+      // Baja el saldo gastado de la tarjeta (ingreso/pago en la "caja" de la tarjeta).
+      const ing = await tx.efectivo.create({ data: { companyId: req.companyId, fecha, tipo: 'ingreso', concepto: `Pago de resumen`, monto: importe, caja: tjNombre, clasificacion: 'empresa', referencia: 'RESTJ-' + r.id, observaciones: 'Pago del resumen de la tarjeta' } });
+      const upd = await tx.resumenTarjeta.update({ where: { id: r.id }, data: { estado: 'pagado', pagoFecha: fecha, pagoMetodo: metodo, pagoImporte: importe, movEfectivoId, movBancoId, cardIngresoId: ing.id } });
+      return upd;
+    });
+    res.json({ ok: true, data: out });
+  } catch (e) { next(e); }
+});
+// Deshacer el pago del resumen (borra los movimientos y vuelve a pendiente).
+app.post('/api/resumenes-tarjeta/:id/deshacer-pago', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const r = await prisma.resumenTarjeta.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!r) return res.status(404).json({ ok: false, error: 'No encontrado' });
+    await prisma.$transaction(async (tx) => {
+      if (r.movEfectivoId) await tx.efectivo.deleteMany({ where: { id: r.movEfectivoId, companyId: req.companyId } });
+      if (r.cardIngresoId) await tx.efectivo.deleteMany({ where: { id: r.cardIngresoId, companyId: req.companyId } });
+      if (r.movBancoId) await tx.bancoMovimiento.deleteMany({ where: { id: r.movBancoId } });
+      await tx.resumenTarjeta.update({ where: { id: r.id }, data: { estado: 'pendiente', pagoFecha: null, pagoMetodo: null, pagoImporte: null, movEfectivoId: null, movBancoId: null, cardIngresoId: null } });
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 // Paso 1: subir el resumen (PDF, Excel o CSV) y obtener la vista previa (no crea nada).
 app.post('/api/banco-cuentas/:id/parse-resumen', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
   try {
@@ -28623,6 +28812,35 @@ async function _construirRecordatoriosAuto(companyId, opts = {}) {
       fecha: g.vencimiento,
       categoria: 'vencimiento',
       prioridad: 'media',
+      avisarDiasAntes: 5,
+      completado: false,
+      repetir: 'ninguno',
+      relacionTipo: null,
+      relacionId: null,
+    });
+  }
+
+  // P) Resúmenes de tarjeta pendientes de pago (vencimiento)
+  const resumenesTj = await prisma.resumenTarjeta.findMany({
+    where: { companyId, estado: 'pendiente', vencimiento: { not: null, lte: limiteFuturo } },
+    orderBy: { vencimiento: 'asc' },
+  });
+  for (const rt of resumenesTj) {
+    if (setOcultos.has(`resumen_tarjeta:${rt.id}`)) continue;
+    const vr = new Date(rt.vencimiento); vr.setHours(0,0,0,0);
+    if (!incluirVencidos && vr < today) continue;
+    const _tp = Number(rt.totalPesos || 0), _tu = Number(rt.totalDolares || 0);
+    const _imp = [_tp ? `$${_tp.toFixed(2)}` : '', _tu ? `U$S${_tu.toFixed(2)}` : ''].filter(Boolean).join(' + ');
+    items.push({
+      id: `auto:resumen_tarjeta:${rt.id}`,
+      origen: 'auto',
+      autoTipo: 'resumen_tarjeta',
+      autoRefId: rt.id,
+      titulo: `Vence resumen tarjeta${rt.tarjeta ? ' ' + rt.tarjeta : ''}`.trim(),
+      descripcion: `Total a pagar: ${_imp || 's/d'}${rt.minimoPesos ? ` · mínimo $${Number(rt.minimoPesos).toFixed(2)}` : ''}`,
+      fecha: rt.vencimiento,
+      categoria: 'vencimiento',
+      prioridad: 'alta',
       avisarDiasAntes: 5,
       completado: false,
       repetir: 'ninguno',

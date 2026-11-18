@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
+      titulo:'📄 v2.433.0 — Tarjetas: importar el resumen del banco y pagarlo con su vencimiento',
+      desc:'Ya podés <b>importar el resumen</b> de la tarjeta desde el homebanking. En <b>Tesorería → Bancos → la tarjeta → 📄 Resúmenes → ⬆️ Importar resumen</b> subís el <b>Excel</b> (el que descargás del banco) o el <b>PDF</b>: AgroCore lee el <b>total a pagar</b>, el <b>vencimiento</b> y el cierre (y, del Excel, el detalle de consumos y conceptos), los mostramos para que revises y guardás. Cada resumen queda con su <b>vencimiento en la Agenda</b> (avisa 5 días antes) hasta que lo pagues. Con <b>💵 Pagar</b> registrás el pago por <b>transferencia, débito en cuenta o efectivo</b>: se genera el <b>egreso real</b> y <b>baja el saldo gastado</b> de la tarjeta. Si te equivocaste, podés <b>deshacer el pago</b>. 🌱' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
       titulo:'💳 v2.432.0 — Tarjetas de crédito: ficha de gasto completa + vencimiento en la Agenda',
       desc:'Ahora cada tarjeta tiene su propio botón <b>“+ Gasto de tarjeta”</b> (en <b>Tesorería → Bancos → la tarjeta</b>) con una ficha más completa: <b>fecha de pago</b>, <b>detalle/nombre</b>, <b>qué se pagó</b> (podés vincularlo a una <b>categoría de gasto</b>, un <b>producto del catálogo</b>, una <b>cuota de crédito</b> o escribirlo libre), <b>monto</b>, <b>banco</b> (se completa solo según la tarjeta), <b>intereses $</b>, <b>fecha de vencimiento de pago</b> y <b>observaciones</b>. El gasto sigue <b>impactando el saldo de la tarjeta</b> como siempre, y si le ponés categoría de gasto entra al <b>reporte de Gastos por categoría</b>. Lo nuevo: esa <b>fecha de vencimiento aparece sola en la Agenda</b> (y avisa 5 días antes) para que no se te pase ningún pago. La lista de la tarjeta ahora muestra columnas de <b>intereses</b>, <b>vencimiento</b> (en rojo si ya venció) y el <b>artículo</b> que se pagó. <i>Próximamente: importar el resumen de la tarjeta y pagarlo con su vencimiento.</i> 🌱' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'17/11/2026',
@@ -44014,7 +44017,8 @@ function tarjetaMovRender() {
   $('#page-body').innerHTML = `
     <div class="mb-4 flex items-center justify-between flex-wrap gap-2">
       <button class="btn btn-secondary" onclick="pages.bancos()">← Volver a Bancos</button>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-wrap">
+        ${can('finanzas:read')?`<button class="btn btn-secondary" onclick='tarjetaResumenes(${JSON.stringify(state._tjCardId)})'>📄 Resúmenes</button>`:''}
         ${can('finanzas:create')?`<button class="btn btn-primary" onclick='tarjetaGastoForm(${JSON.stringify(state._tjCardId)})'>+ Gasto de tarjeta</button>`:''}
       </div>
     </div>
@@ -44177,6 +44181,177 @@ async function tarjetaGastoSave(cardId, id, banco) {
     closeModal();
     tarjetaVerMovs(cardId);
   } catch (e) { toast('No se pudo guardar: '+(e.message||e),'error'); }
+}
+// ---- Resúmenes de tarjeta (importar del homebanking + pagar con vencimiento) ----
+async function tarjetaResumenes(cardId) {
+  const card = (state.cache.catalogos||[]).find(x => x.id === cardId && x.tipo === TARJETA_CAT_TIPO);
+  if (!card) return toast('Tarjeta no encontrada','error');
+  let lista = [];
+  try { lista = (await api('/api/resumenes-tarjeta?tarjeta='+encodeURIComponent(card.nombre))).data || []; } catch (e) { return toast(e.message,'error'); }
+  const hoy0 = new Date(); hoy0.setHours(0,0,0,0);
+  const filas = lista.map(r => {
+    const pagado = r.estado === 'pagado';
+    const vencido = !pagado && r.vencimiento && new Date(r.vencimiento) < hoy0;
+    const imp = [r.totalPesos?fmt$(r.totalPesos):'', r.totalDolares?('U$S'+fmtN(r.totalDolares)):''].filter(Boolean).join(' + ') || '—';
+    return `<tr class="table-row">
+      <td class="whitespace-nowrap text-xs">${r.fechaCierre?fmtDate(r.fechaCierre):'—'}</td>
+      <td class="whitespace-nowrap text-xs ${vencido?'text-rose-700 font-semibold':''}">${r.vencimiento?(vencido?'⏰ ':'')+fmtDate(r.vencimiento):'—'}</td>
+      <td class="text-right font-semibold">${imp}</td>
+      <td class="text-center">${pagado?`<span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Pagado</span>`:`<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">Pendiente</span>`}</td>
+      <td class="text-right whitespace-nowrap">
+        ${(!pagado&&can('finanzas:create'))?`<button class="btn btn-primary text-xs" onclick='tarjetaResumenPagar(${JSON.stringify(r.id)},${JSON.stringify(cardId)})'>💵 Pagar</button>`:''}
+        ${(pagado&&can('finanzas:update'))?`<button class="btn btn-ghost text-xs" title="Deshacer pago" onclick='tarjetaResumenDeshacer(${JSON.stringify(r.id)},${JSON.stringify(cardId)})'>↩️</button>`:''}
+        ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar" onclick='tarjetaResumenDel(${JSON.stringify(r.id)},${JSON.stringify(cardId)})'>🗑️</button>`:''}
+      </td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Sin resúmenes cargados. Importá el último con el botón de arriba.</td></tr>`;
+  openModal({
+    title: '📄 Resúmenes de 💳 '+esc(card.nombre), size:'max-w-3xl',
+    body: `
+      <div class="flex items-center justify-between mb-3">
+        <div class="text-[11px] text-slate-500">Importá el resumen del homebanking (Excel o PDF). El vencimiento pendiente aparece en la Agenda. Al pagarlo, se registra el egreso real y baja el saldo de la tarjeta.</div>
+        ${can('finanzas:create')?`<button class="btn btn-secondary text-xs" onclick='tarjetaResumenImport(${JSON.stringify(cardId)})'>⬆️ Importar resumen</button>`:''}
+      </div>
+      <div class="kpi p-0 overflow-hidden">
+        <table class="data">
+          <thead><tr><th>Cierre</th><th>Vencimiento</th><th class="text-right">Total a pagar</th><th class="text-center">Estado</th><th></th></tr></thead>
+          <tbody>${filas}</tbody>
+        </table>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+function tarjetaResumenImport(cardId) {
+  openModal({
+    title: '⬆️ Importar resumen de tarjeta', size:'max-w-lg',
+    body: `
+      <div class="text-sm text-slate-600 mb-3">Subí el <b>Excel</b> (descargado del homebanking) o el <b>PDF</b> del resumen. Leemos el <b>total a pagar</b> y el <b>vencimiento</b>; después revisás y guardás.</div>
+      <input id="trj-file" type="file" accept=".xlsx,.xls,.pdf" class="input"/>
+      <div id="trj-import-msg" class="text-[11px] text-slate-500 mt-2"></div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick='tarjetaResumenParse(${JSON.stringify(cardId)})'>Leer archivo →</button>`
+  });
+}
+async function tarjetaResumenParse(cardId) {
+  const inp = document.getElementById('trj-file');
+  const f = inp?.files?.[0];
+  if (!f) return toast('Elegí un archivo','warn');
+  const msg = document.getElementById('trj-import-msg'); if (msg) msg.textContent = 'Leyendo archivo…';
+  const b64 = await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result)); fr.onerror=()=>rej(new Error('No pude leer el archivo')); fr.readAsDataURL(f); });
+  try {
+    const r = await api('/api/resumenes-tarjeta/parse', { method:'POST', body: JSON.stringify({ fileB64: b64, filename: f.name, mime: f.type }) });
+    tarjetaResumenPreview(cardId, r.data || {});
+  } catch (e) { if (msg) msg.textContent = ''; toast(e.message,'error'); }
+}
+function tarjetaResumenPreview(cardId, p) {
+  const d = v => v ? String(v).slice(0,10) : '';
+  state._trjDetalle = p.detalle || null;
+  const nCons = p.detalle?.consumos?.length || 0, nOtros = p.detalle?.otros?.length || 0;
+  openModal({
+    title: '📄 Revisar resumen leído', size:'max-w-xl',
+    body: `
+      <div class="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2 mb-3">✓ Archivo leído (${esc(p.origen||'archivo').toUpperCase()}).${p.tarjetaHint?` Tarjeta terminada en <b>${esc(p.tarjetaHint)}</b>.`:''}${nCons?` ${nCons} consumos y ${nOtros} conceptos detectados.`:''} Revisá y guardá.</div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">Fecha de cierre</label><input id="trp-cierre" type="date" class="input" value="${d(p.fechaCierre)}"/></div>
+        <div><label class="label">Fecha de vencimiento *</label><input id="trp-venc" type="date" class="input" value="${d(p.vencimiento)}"/></div>
+        <div><label class="label">Total a pagar ($) *</label><input id="trp-totp" type="number" step="0.01" class="input" value="${p.totalPesos!=null?p.totalPesos:''}"/></div>
+        <div><label class="label">Total en dólares (U$S)</label><input id="trp-totu" type="number" step="0.01" class="input" value="${p.totalDolares!=null?p.totalDolares:''}"/></div>
+        <div><label class="label">Mínimo a pagar ($)</label><input id="trp-min" type="number" step="0.01" class="input" value="${p.minimoPesos!=null?p.minimoPesos:''}"/></div>
+        <div><label class="label">N° de resumen</label><input id="trp-num" class="input" value="${esc(p.numero||'')}"/></div>
+      </div>`,
+    footer: `<button class="btn btn-secondary" onclick='tarjetaResumenImport(${JSON.stringify(cardId)})'>← Volver</button>
+             <button class="btn btn-primary" onclick='tarjetaResumenSave(${JSON.stringify(cardId)},${JSON.stringify(p.origen||"")})'>💾 Guardar resumen</button>`
+  });
+}
+async function tarjetaResumenSave(cardId, origen) {
+  const card = (state.cache.catalogos||[]).find(x => x.id === cardId && x.tipo === TARJETA_CAT_TIPO);
+  const num = v => { const n = Number(v); return isNaN(n)||v===''?null:n; };
+  const toIso = v => v ? new Date(v+'T12:00:00').toISOString() : null;
+  const data = {
+    tarjeta: card?.nombre || null,
+    numero: (document.getElementById('trp-num')?.value||'').trim() || null,
+    fechaCierre: toIso(document.getElementById('trp-cierre')?.value),
+    vencimiento: toIso(document.getElementById('trp-venc')?.value),
+    totalPesos: num(document.getElementById('trp-totp')?.value),
+    totalDolares: num(document.getElementById('trp-totu')?.value),
+    minimoPesos: num(document.getElementById('trp-min')?.value),
+    origen: origen || 'manual',
+    detalle: state._trjDetalle || null,
+  };
+  if (!data.totalPesos && !data.totalDolares) return toast('Poné el total a pagar','warn');
+  if (!data.vencimiento) return toast('Poné la fecha de vencimiento','warn');
+  try {
+    await api('/api/resumenes-tarjeta', { method:'POST', body: JSON.stringify(data) });
+    state._trjDetalle = null;
+    toast('Resumen guardado','success'); closeModal(); tarjetaResumenes(cardId);
+  } catch (e) { toast(e.message,'error'); }
+}
+async function tarjetaResumenPagar(resumenId, cardId) {
+  let lista = [];
+  try { lista = (state.cache.bancoCuentas||[]); if (!lista.length) lista = (await api('/api/banco-cuentas')).data || []; state.cache.bancoCuentas = lista; } catch {}
+  let resumen = null;
+  try { resumen = ((await api('/api/resumenes-tarjeta')).data||[]).find(x=>x.id===resumenId); } catch {}
+  const total = resumen?.totalPesos || resumen?.minimoPesos || 0;
+  const hoy = new Date().toISOString().slice(0,10);
+  const cuentas = (lista||[]).filter(c=>c.activo!==false);
+  openModal({
+    title: '💵 Pagar resumen de tarjeta', size:'max-w-lg',
+    body: `
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="label">Medio de pago *</label>
+          <select id="trpg-metodo" class="input" onchange="tarjetaResumenPagoMedio()">
+            <option value="transferencia">🏦 Transferencia bancaria</option>
+            <option value="debito">🏦 Débito en cuenta</option>
+            <option value="efectivo">💵 Efectivo (caja)</option>
+          </select>
+        </div>
+        <div class="col-span-2" id="trpg-banco-wrap">
+          <label class="label">Cuenta bancaria *</label>
+          <select id="trpg-banco" class="input">${cuentas.map(c=>`<option value="${c.id}">${c.esBilleteraVirtual?'📲':'🏛️'} ${esc(c.nombre||c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('')||'<option value="">— Sin cuentas —</option>'}</select>
+        </div>
+        <div class="col-span-2 hidden" id="trpg-caja-wrap">
+          <label class="label">Caja de efectivo *</label>
+          ${catSelect('trpg-caja','Caja','',{placeholder:'— Elegir caja —'})}
+        </div>
+        <div><label class="label">Fecha *</label><input id="trpg-fecha" type="date" class="input" value="${hoy}"/></div>
+        <div><label class="label">Importe $ *</label><input id="trpg-importe" type="number" step="0.01" class="input" value="${total||''}"/></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-2">Se registra el egreso real (banco/caja) y baja el saldo gastado de la tarjeta.</div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+             <button class="btn btn-primary" onclick='tarjetaResumenPagarConfirm(${JSON.stringify(resumenId)},${JSON.stringify(cardId)})'>💾 Registrar pago</button>`
+  });
+  tarjetaResumenPagoMedio();
+}
+function tarjetaResumenPagoMedio() {
+  const m = document.getElementById('trpg-metodo')?.value;
+  const bw = document.getElementById('trpg-banco-wrap'), cw = document.getElementById('trpg-caja-wrap');
+  const esEf = m === 'efectivo';
+  if (bw) bw.classList.toggle('hidden', esEf);
+  if (cw) cw.classList.toggle('hidden', !esEf);
+}
+async function tarjetaResumenPagarConfirm(resumenId, cardId) {
+  const metodo = document.getElementById('trpg-metodo')?.value || 'transferencia';
+  const importe = Number(document.getElementById('trpg-importe')?.value||0);
+  const fecha = document.getElementById('trpg-fecha')?.value;
+  if (!importe || importe<=0) return toast('Poné el importe','warn');
+  const body = { metodo, importe, fecha: fecha?new Date(fecha+'T12:00:00').toISOString():undefined };
+  if (metodo === 'efectivo') { body.caja = document.getElementById('trpg-caja')?.value || null; if (!body.caja) return toast('Elegí la caja','warn'); }
+  else { body.bancoCuentaId = document.getElementById('trpg-banco')?.value || null; if (!body.bancoCuentaId) return toast('Elegí la cuenta bancaria','warn'); }
+  try {
+    await api('/api/resumenes-tarjeta/'+resumenId+'/pagar', { method:'POST', body: JSON.stringify(body) });
+    delete state.cache.bancoMovs;
+    toast('Pago del resumen registrado','success'); closeModal(); tarjetaVerMovs(cardId);
+  } catch (e) { toast(e.message,'error'); }
+}
+async function tarjetaResumenDeshacer(resumenId, cardId) {
+  if (!confirm('¿Deshacer el pago de este resumen? Se borran los movimientos generados y vuelve a pendiente.')) return;
+  try { await api('/api/resumenes-tarjeta/'+resumenId+'/deshacer-pago', { method:'POST', body:'{}' }); delete state.cache.bancoMovs; toast('Pago deshecho','success'); tarjetaResumenes(cardId); }
+  catch (e) { toast(e.message,'error'); }
+}
+async function tarjetaResumenDel(resumenId, cardId) {
+  if (!confirm('¿Eliminar este resumen? Si estaba pagado, también se borran los movimientos generados.')) return;
+  try { await api('/api/resumenes-tarjeta/'+resumenId, { method:'DELETE' }); toast('Resumen eliminado','success'); tarjetaResumenes(cardId); }
+  catch (e) { toast(e.message,'error'); }
 }
 async function tarjetaMovDel(id) {
   if (!confirm('¿Eliminar este movimiento de la tarjeta?')) return;

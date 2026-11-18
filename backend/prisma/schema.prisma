@@ -152,6 +152,7 @@ model Company {
   caravanas          Caravana[]
   recuentosCaravana  RecuentoCaravana[]
   secados            SecadoPartida[]
+  resumenesTarjeta   ResumenTarjeta[]
 
 }
 
@@ -1303,6 +1304,38 @@ model Efectivo {
   @@index([fecha])
   @@index([referencia])
   @@index([categoriaGastoId])
+  @@index([vencimiento])
+}
+
+// Resumen (estado de cuenta) de una tarjeta de crédito: se importa del homebanking
+// (Excel/PDF) o se carga a mano. Guarda el total a pagar y el vencimiento, y se puede
+// "pagar" generando el egreso real + bajando el saldo gastado de la tarjeta. El
+// vencimiento, mientras está pendiente, aparece en la Agenda.
+model ResumenTarjeta {
+  id            String   @id @default(cuid())
+  companyId     String
+  tarjeta       String?    // nombre de la tarjeta (catálogo 'Tarjeta de crédito')
+  numero        String?    // N° de resumen
+  fechaCierre   DateTime?
+  vencimiento   DateTime?
+  totalPesos    Float?
+  totalDolares  Float?
+  minimoPesos   Float?
+  estado        String   @default("pendiente")  // pendiente | pagado
+  origen        String?    // xlsx | pdf | manual
+  detalle       Json?      // { consumos:[], pagos:[], otros:[], tarjetas:[] }
+  pagoFecha     DateTime?
+  pagoMetodo    String?    // efectivo | transferencia | debito
+  pagoImporte   Float?
+  movEfectivoId String?    // Efectivo egreso (pago en efectivo) para revertir
+  movBancoId    String?    // BancoMovimiento (pago por banco) para revertir
+  cardIngresoId String?    // Efectivo ingreso que baja el saldo de la tarjeta
+  createdAt     DateTime @default(now())
+
+  company       Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([tarjeta])
   @@index([vencimiento])
 }
 
