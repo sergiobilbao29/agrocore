@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.447.0';
+const AGROCORE_VERSION = '2.448.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17882,7 +17882,8 @@ const _AYUDA_KB = [
       'En "Kilos de grano": cargás total en kilos, kilos por mes y mes de inicio; el sistema arma el plan de meses.',
       'Botón 🌾 Ventas: por cada mes cargás los kilos reales vendidos y el precio pizarra ($/tonelada) del día → el sistema calcula cuánto pagar.',
       'Entregas: con 💵 Entrega registrás pagos parciales sobre cada venta (y los kilos entregados, opcional). Cada entrega mueve la plata real y descuenta del saldo hasta saldar.',
-      'Pagar de MÁS / saldo a favor: si le entregás un cheque por MÁS de lo que figura (ej. porque cubre un mes anterior o uno que todavía no cargaste), poné el importe completo del cheque en la entrega. Arriba, el arrendamiento muestra un resumen GLOBAL (Total vendido vs. Entregado) y, si pagaste de más, un "Saldo a favor nuestro". Ese saldo a favor se descuenta solo de las próximas ventas: cuando cargues la siguiente venta, el "Falta pagar" ya viene restado. No hace falta registrar otra entrega hasta consumir el saldo a favor. Tip: si la venta de un mes anterior la tenías aparte (en Excel), cargala también como venta del plan para que el total cierre.'],
+      'Pagar de MÁS / saldo a favor: si le entregás un cheque por MÁS de lo que figura (ej. porque cubre un mes anterior o uno que todavía no cargaste), poné el importe completo del cheque en la entrega. Arriba, el arrendamiento muestra un resumen GLOBAL (Total vendido vs. Entregado) y, si pagaste de más, un "Saldo a favor nuestro". Ese saldo a favor se descuenta solo de las próximas ventas: cuando cargues la siguiente venta, el "Falta pagar" ya viene restado. No hace falta registrar otra entrega hasta consumir el saldo a favor.',
+      'Saldo de la CAMPAÑA ANTERIOR (el contrato se carga uno por año/campaña): si el dueño vende en una misma operación kilos de la campaña vieja + kilos de la nueva (ej. 5.000 kg de la 25/26 + 10.000 kg de la 26/27), cargá en el contrato nuevo los kilos del mes normal y, con el botón "➕ Venta manual (otra campaña / ajuste)", agregá una venta extra con esos 5.000 kg y una ETIQUETA que la identifique (ej. "Campaña 25/26 — saldo"). Así el total cierra en un solo lugar, esos kilos quedan marcados como de la campaña vieja y el saldo a favor / lo que falta pagar se calcula bien. No hace falta cargar todo el historial de la campaña anterior, solo los kilos que faltaban. Una venta manual sin entregas se puede borrar con la 🗑️.'],
     atajo:{ page:'arrendamientos', label:'Abrir Arrendamientos' } },
   { id:'credito', terms:['credito','prestamo','credito bancario','cuota de credito','financiacion','plan de cuotas','credito ya empezado','cuotas ya pagadas','marcar pagadas','pagar cuota','plan manual','credito en dolares','vencimiento de cuota','cuota en el calendario'],
     titulo:'Créditos bancarios: cargar, pagar y ver los vencimientos',
@@ -19886,6 +19887,42 @@ app.post('/api/arrendamientos/:id/ventas/generar', requireCompany, requirePermis
     }
     await prisma.arrendamiento.update({ where: { id: arr.id }, data: { kilosTotal: d.kilosTotal, kilosPorMes: d.kilosPorMes, mesInicio: d.mesInicio } });
     res.json({ ok: true, creadas });
+  } catch (e) { next(e); }
+});
+// Agregar una venta MANUAL (fuera del plan de meses): sirve para cargar, por ejemplo,
+// el saldo de kilos que quedó de la CAMPAÑA ANTERIOR (otro contrato) que se vendió
+// junto con los de la campaña nueva. Lleva una etiqueta libre para identificarla.
+app.post('/api/arrendamientos/:id/ventas', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const arr = await prisma.arrendamiento.findFirst({ where: { id: req.params.id, companyId: req.companyId } });
+    if (!arr) return res.status(404).json({ ok: false, error: 'Arrendamiento no encontrado' });
+    const d = z.object({
+      etiqueta: z.string().min(1),
+      kilos: z.coerce.number().nonnegative().default(0),
+      precioPizarra: z.coerce.number().nonnegative().nullable().optional(),
+      fechaVenta: zFecha.nullable().optional(),
+      observaciones: z.string().nullable().optional(),
+    }).parse(req.body);
+    const importe = (d.precioPizarra != null && d.kilos != null) ? Math.round((d.kilos / 1000) * d.precioPizarra * 100) / 100 : null;
+    // periodo: el mes de la fecha de venta (para ordenar cerca de ese mes) o "manual".
+    const periodo = d.fechaVenta ? new Date(d.fechaVenta).toISOString().slice(0, 7) : 'manual';
+    const estado = (importe != null) ? 'vendida' : 'pendiente';
+    const v = await prisma.arrendamientoVenta.create({ data: {
+      companyId: req.companyId, arrendamientoId: arr.id, periodo, etiqueta: String(d.etiqueta).trim(),
+      kilos: d.kilos || 0, precioPizarra: d.precioPizarra ?? null, importe, fechaVenta: d.fechaVenta || null,
+      estado, observaciones: d.observaciones || null,
+    } });
+    res.status(201).json({ ok: true, data: v });
+  } catch (e) { next(e); }
+});
+// Borrar una venta (manual o del plan). No se puede si tiene entregas.
+app.delete('/api/arrendamientos/:id/ventas/:vid', requireCompany, requirePermission('finanzas:update'), async (req, res, next) => {
+  try {
+    const v = await prisma.arrendamientoVenta.findFirst({ where: { id: req.params.vid, companyId: req.companyId, arrendamientoId: req.params.id }, include: { pagos: true } });
+    if (!v) return res.status(404).json({ ok: false, error: 'Venta no encontrada' });
+    if ((v.pagos || []).length) return res.status(400).json({ ok: false, error: 'La venta tiene entregas cargadas. Deshacé las entregas primero.' });
+    await prisma.arrendamientoVenta.delete({ where: { id: v.id } });
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 // Editar una venta: kilos reales vendidos + precio pizarra -> valúa importe y pasa a "vendida".

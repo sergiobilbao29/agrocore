@@ -3126,6 +3126,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
+      titulo:'🌾 v2.448.0 — Arrendamiento: venta manual para el saldo de la campaña anterior',
+      desc:'El contrato de arrendamiento se carga <b>uno por año/campaña</b>. Cuando el dueño vende en una misma operación kilos de la <b>campaña vieja</b> + de la <b>nueva</b> (ej. 5.000 kg de la 25/26 + 10.000 kg de la 26/27), ahora en <b>🌾 Ventas y entregas</b> tenés el botón <b>"➕ Venta manual (otra campaña / ajuste)"</b>: cargás esos 5.000 kg aparte, con una <b>etiqueta</b> que los identifique (ej. <i>"Campaña 25/26 — saldo"</i>) y su pizarra. Así el total y el saldo a favor <b>cierran en un solo lugar</b> y esos kilos quedan marcados como de la campaña anterior, sin tener que cargar todo el historial viejo. Una venta manual sin entregas se puede <b>borrar</b> con la 🗑️. Actualizamos el instructivo, el manual y el asistente.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
       titulo:'⚡ v2.447.0 — Fábrica: costos indirectos individualizados (luz, gasoil, personal)',
       desc:'En el <b>parte de producción</b> de la fábrica ahora cargás los <b>costos indirectos por separado</b>: luz, gasoil de la secadora, personal, mantenimiento… (grilla editable, viene prellenada con los típicos). La <b>suma</b> es el costo de producción del lote y se reparte entre los productos obtenidos, sumado al costo de las materias primas. Si un gasto es <b>mensual</b> (ej. la factura de luz), cargás en cada jornada la parte proporcional. Actualizamos el instructivo, el manual y el asistente. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
@@ -34337,6 +34340,7 @@ async function arrVentasModal(id){
       <td class="p-1 text-right whitespace-nowrap">
         <button class="btn btn-ghost btn-xs text-emerald-700" onclick='arrVentaGuardar(${JSON.stringify(id)},${JSON.stringify(v.id)})'>💾</button>
         ${entregasBtn}
+        ${(!(v.pagos||[]).length)?`<button class="btn btn-ghost btn-xs text-red-600" title="Borrar esta venta" onclick='arrVentaDel(${JSON.stringify(id)},${JSON.stringify(v.id)})'>🗑️</button>`:''}
       </td>
     </tr>`;
   }).join('');
@@ -34364,7 +34368,35 @@ async function arrVentasModal(id){
           <td class="p-1 text-right">${fmt$(totImp)}</td><td class="p-1 text-right ${totSaldo>0.01?'text-red-600':'text-emerald-700'}">${fmt$(totSaldo)}</td><td></td>
         </tr></tfoot>
       </table></div>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+    footer:`<button class="btn btn-ghost mr-auto" onclick='arrVentaManualForm(${JSON.stringify(id)})'>➕ Venta manual (otra campaña / ajuste)</button><button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+}
+function arrVentaManualForm(id){
+  openModal2({ title:'➕ Venta manual', size:'max-w-md',
+    body:`<div class="grid grid-cols-1 gap-3">
+      <div class="text-[12px] bg-sky-50 border border-sky-200 rounded p-2 text-sky-900">Usá esto para cargar una venta que <b>no es de los meses del plan</b>: por ejemplo el <b>saldo de kilos de la campaña anterior</b> (otro contrato) que se vendió junto con los de la nueva. La <b>etiqueta</b> queda para identificarla (ej. "Campaña 25/26 — saldo").</div>
+      <div><label class="label">Etiqueta / identificación *</label><input id="vm-et" class="input" placeholder="Ej. Campaña 25/26 (saldo anterior)" value="Campaña anterior"/></div>
+      <div class="grid grid-cols-2 gap-2">
+        <div><label class="label">Kilos *</label><input id="vm-kg" type="number" step="1" class="input" placeholder="5000"/></div>
+        <div><label class="label">Pizarra $/tn</label><input id="vm-pz" type="number" step="0.01" class="input" placeholder="$/tn"/></div>
+      </div>
+      <div><label class="label">Fecha de la venta</label><input id="vm-fe" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+      <div><label class="label">Observaciones</label><input id="vm-obs" class="input" placeholder="opcional"/></div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal2()">Cancelar</button><button class="btn btn-primary" onclick='arrVentaManualSave(${JSON.stringify(id)})'>💾 Agregar</button>` });
+}
+async function arrVentaManualSave(id){
+  const etiqueta=($('#vm-et')?.value||'').trim(); const kilos=Number($('#vm-kg')?.value||0);
+  if(!etiqueta) return toast('Poné una etiqueta para identificar la venta','warn');
+  if(!(kilos>0)) return toast('Cargá los kilos','warn');
+  const body={ etiqueta, kilos, precioPizarra: $('#vm-pz')?.value!==''?Number($('#vm-pz').value):null,
+    fechaVenta: $('#vm-fe')?.value?new Date($('#vm-fe').value+'T12:00:00').toISOString():null, observaciones: $('#vm-obs')?.value||null };
+  try{ await api('/api/arrendamientos/'+id+'/ventas',{method:'POST',body:JSON.stringify(body)}); toast('Venta manual agregada','success'); closeModal2(); arrVentasModal(id); }
+  catch(e){ toast(e.message,'error'); }
+}
+async function arrVentaDel(id, vid){
+  if(!confirm('¿Borrar esta venta? (solo si no tiene entregas cargadas)')) return;
+  try{ await api('/api/arrendamientos/'+id+'/ventas/'+vid,{method:'DELETE'}); toast('Venta borrada','success'); arrVentasModal(id); }
+  catch(e){ toast(e.message,'error'); }
 }
 async function arrVentaGuardar(id, vid){
   const kilos = $('#kv-k-'+vid)?.value, precio = $('#kv-p-'+vid)?.value, fecha = $('#kv-f-'+vid)?.value;
