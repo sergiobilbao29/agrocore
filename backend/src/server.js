@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.443.0';
+const AGROCORE_VERSION = '2.444.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12945,6 +12945,65 @@ app.get('/api/granos-cta/saldos', requireCompany, requirePermission('stock:read'
     res.json({ ok: true, data });
   } catch (e) { next(e); }
 });
+// ============================================================
+// FÁBRICA — Cuenta 360 del contacto (v2.444): consolida en una sola ficha, por
+// VÍNCULO cliente↔proveedor, el saldo en PESOS (cta a cobrar como cliente de
+// subproducto − cta a pagar como proveedor de grano) y el saldo en KILOS (canje
+// en especie + grano entregado pendiente de liquidar). Reúne a un contacto que es
+// a la vez proveedor de grano, cliente de subproducto y canjeador.
+// ============================================================
+app.get('/api/fabrica/cuentas-360', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const companyId = req.companyId;
+    const [clientes, provs, ctas, canjeMovs, granoMovs] = await Promise.all([
+      prisma.cliente.findMany({ where: { companyId }, select: { id: true, razonSocial: true, cuit: true, vinculoId: true } }),
+      prisma.proveedor.findMany({ where: { companyId }, select: { id: true, razonSocial: true, cuit: true, vinculoId: true, esGranos: true } }),
+      prisma.ctaCte.findMany({ where: { companyId, OR: [{ moneda: 'ARS' }, { moneda: null }] }, select: { contactoTipo: true, contactoId: true, debe: true, haber: true } }),
+      prisma.canjeCtaMov.findMany({ where: { companyId }, select: { contactoTipo: true, contactoId: true, equivSoja: true } }),
+      prisma.granoCtaMov.findMany({ where: { companyId }, select: { proveedorId: true, kilosNeto: true } }),
+    ]);
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    // Saldo $ por contacto (cliente o proveedor).
+    const saldoArs = {}; // key = tipo:id
+    for (const c of ctas) { const k = c.contactoTipo + ':' + c.contactoId; saldoArs[k] = (saldoArs[k] || 0) + (Number(c.debe || 0) - Number(c.haber || 0)); }
+    // Saldo kg canje por contacto.
+    const kgCanje = {};
+    for (const m of canjeMovs) { const k = m.contactoTipo + ':' + m.contactoId; kgCanje[k] = (kgCanje[k] || 0) + Number(m.equivSoja || 0); }
+    // Saldo kg grano disponible por proveedor.
+    const kgGrano = {};
+    for (const m of granoMovs) { kgGrano[m.proveedorId] = (kgGrano[m.proveedorId] || 0) + Number(m.kilosNeto || 0); }
+    // Agrupar por vínculo (o standalone).
+    const grupos = {}; // groupKey -> grupo
+    const gkeyCli = c => c.vinculoId ? ('v:' + c.vinculoId) : ('cli:' + c.id);
+    const gkeyProv = p => p.vinculoId ? ('v:' + p.vinculoId) : ('prov:' + p.id);
+    function ensure(k, nombre, cuit) {
+      if (!grupos[k]) grupos[k] = { key: k, nombre: nombre || '—', cuit: cuit || null, clienteId: null, proveedorId: null, esGranos: false, saldoCobrar: 0, saldoPagar: 0, kgCanje: 0, kgGrano: 0 };
+      const g = grupos[k]; if (!g.nombre || g.nombre === '—') g.nombre = nombre || g.nombre; if (!g.cuit && cuit) g.cuit = cuit; return g;
+    }
+    for (const c of clientes) {
+      const g = ensure(gkeyCli(c), c.razonSocial, c.cuit); g.clienteId = c.id;
+      g.saldoCobrar += (saldoArs['cliente:' + c.id] || 0);
+      g.kgCanje += (kgCanje['cliente:' + c.id] || 0);
+    }
+    for (const p of provs) {
+      const g = ensure(gkeyProv(p), p.razonSocial, p.cuit); g.proveedorId = p.id; if (p.esGranos) g.esGranos = true;
+      g.saldoPagar += (saldoArs['proveedor:' + p.id] || 0);
+      g.kgCanje += (kgCanje['proveedor:' + p.id] || 0);
+      g.kgGrano += (kgGrano[p.id] || 0);
+    }
+    // Solo grupos con actividad de fábrica: canje, grano o marcado como proveedor de granos.
+    const data = Object.values(grupos)
+      .filter(g => Math.abs(g.kgCanje) > 0.001 || Math.abs(g.kgGrano) > 0.001 || g.esGranos)
+      .map(g => ({
+        key: g.key, nombre: g.nombre, cuit: g.cuit, clienteId: g.clienteId, proveedorId: g.proveedorId, esGranos: g.esGranos,
+        saldoCobrar: r2(g.saldoCobrar), saldoPagar: r2(g.saldoPagar), netoArs: r2(g.saldoCobrar - g.saldoPagar),
+        kgCanje: r2(g.kgCanje), kgGrano: r2(g.kgGrano), kgTotal: r2(g.kgCanje + g.kgGrano),
+        vinculado: g.key.startsWith('v:'),
+      }))
+      .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+    res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
 // Libro (ledger) en kilos de un proveedor, con saldo acumulado.
 app.get('/api/granos-cta', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
   try {
@@ -17783,6 +17842,7 @@ const _AYUDA_KB = [
       'Antes de producir podés tocar "🖨️ Imprimir planilla en blanco": sale una hoja para que el operario anote a mano los kg de lo que usa y lo que obtiene durante la jornada, y después cargás todo al sistema.',
       'Los kilos nunca son exactos: cargá siempre los reales, el sistema ajusta el costo por kg a la producción real del día.',
       'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',
+      'CUENTAS DE FÁBRICA (360): en Fábrica → "Cuentas de Fábrica (360)" ves, por contacto, TODO junto en una sola ficha: lo que te debe en pesos (como cliente de subproducto), lo que le debés en pesos (como proveedor de grano) y su saldo en kilos (canje en especie + grano pendiente de liquidar), valorizado a la pizarra de soja del día. Agrupa por el vínculo cliente↔proveedor (Compensación de cuentas); si el contacto no está vinculado, la ficha te ofrece vincularlo. Todo el módulo (Molienda, Plan canje, Cuenta canje, Proveedores de granos y Cuentas 360) está en la sección "Fábrica" del menú, visible solo en empresas con Producción industrial.',
       'CANJE — hay dos formas y conviene no mezclarlas: (A) "Plan canje": una operación cerrada, entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie y se puede anular. Úsalo cuando la operación entra y sale completa.',
       'CANJE (B) "Cuenta canje (grano)": es la CUENTA CORRIENTE en kilos de cada cliente/proveedor, para cuando NO siempre entrega y lleva lo mismo (a veces deja soja, a veces se lleva producto, a veces se pasa). Tiene tres botones: 🌾 "Entró grano del cliente" (deja soja → saldo a favor), 📦 "Se llevó producto" (retira → descuenta su equivalente en grano según la paridad que pongas) y ✏️ "Ajuste". En "Ver detalle" ves TODOS los movimientos del cliente con el saldo acumulado; el saldo te dice si "le falta llevar" (+) o "se pasó / debe" (−). Desde el detalle podés cargar más movimientos sin salir. Está en el menú Comercial → "Cuenta canje (grano)".'],
     atajo:{ page:'molienda', label:'Abrir Molienda / Fábrica' } },

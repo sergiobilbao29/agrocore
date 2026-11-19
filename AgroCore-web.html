@@ -1065,7 +1065,7 @@ function can(perm) {
 // Orden de las secciones del menú: sigue el flujo administrativo real
 // (vistas rápidas → ventas → compras → tesorería → producción → stock → logística → rrhh → admin).
 const MENU_SECTIONS = [
-  'Tablero', 'Comercial', 'Producción', 'Ganadería y Haras',
+  'Tablero', 'Comercial', 'Producción', 'Fábrica', 'Ganadería y Haras',
   'Stock y depósitos', 'Logística y transporte', 'Tesorería',
   'Patrimonio y contratos', 'Administración', 'Comercial / AgroCore'
 ];
@@ -1093,14 +1093,15 @@ const MODULES = [
   { id:'liquidacionesHacienda', label:'Liquidaciones animales', icon:'🐄', perm:'ventas:read', section:'Comercial' },
   { id:'ctasCobrar',    label:'Cuentas a cobrar',     icon:'💰', perm:'finanzas:read',   section:'Comercial' },
   { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Comercial' },
-  { id:'proveedoresGranos', label:'Proveedores de granos', icon:'🌾', perm:'stock:read',  section:'Comercial' },
+  { id:'proveedoresGranos', label:'Proveedores de granos', icon:'🌾', perm:'stock:read',  section:'Fábrica' },
   { id:'remitosCompra', label:'Remitos de compra',    icon:'📦', perm:'compras:read',    section:'Comercial' },
   { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Comercial' },
   { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Comercial' },
   { id:'compensaciones',label:'Compensación de cuentas',icon:'🔀', perm:'finanzas:read',  section:'Comercial' },
-  // Fábrica (usaProduccionIndustrial): el canje de grano es parte de la comercialización.
-  { id:'canjeGrano',    label:'Plan canje (grano)',   icon:'🔁', perm:'stock:read',      section:'Comercial' },
-  { id:'ctaCanjeGrano', label:'Cuenta canje (grano)', icon:'📒', perm:'stock:read',      section:'Comercial' },
+  // Fábrica (usaProduccionIndustrial): molienda/canje/granos + ficha 360 del contacto.
+  { id:'fabricaCuentas',label:'Cuentas de Fábrica (360)', icon:'🧮', perm:'stock:read',  section:'Fábrica' },
+  { id:'canjeGrano',    label:'Plan canje (grano)',   icon:'🔁', perm:'stock:read',      section:'Fábrica' },
+  { id:'ctaCanjeGrano', label:'Cuenta canje (grano)', icon:'📒', perm:'stock:read',      section:'Fábrica' },
 
   // ===== PRODUCCIÓN — herramientas compartidas (campos, campañas, insumos, labores, servicios) =====
   { id:'campos',        label:'Campos y lotes',       icon:'🗺️', perm:'produccion:read', section:'Producción' },
@@ -1132,7 +1133,7 @@ const MODULES = [
   { id:'remitosInternos',label:'Remitos internos',    icon:'📤', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'cerealeras',    label:'Depósitos y cerealeras',icon:'🏭', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'posicionGranos',label:'Posición de granos',   icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
-  { id:'molienda',      label:'Molienda / Fábrica',   icon:'🏭', perm:'stock:read',      section:'Producción' },
+  { id:'molienda',      label:'Molienda / Fábrica',   icon:'🏭', perm:'stock:read',      section:'Fábrica' },
   { id:'secado',        label:'Secadero (arroz/grano)',icon:'🌾', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'arrozTablero',  label:'Tablero arroz',        icon:'📊', perm:'stock:read',      section:'Stock y depósitos' },
   { id:'contratosCereal',label:'Contratos de cereal', icon:'📄', perm:'ventas:read',     section:'Stock y depósitos' },
@@ -1925,7 +1926,7 @@ function renderNav() {
     if (empresaOcultaModulo(m.id)) return false;   // oculto por actividad de la empresa
     if (m.section === 'Comercial / AgroCore' && !state.usaComercial) return false; // módulo comercial opt-in
     if ((m.id === 'secado' || m.id === 'arrozTablero') && !state.usaArroz) return false; // circuito arroz opt-in
-    if ((m.id === 'molienda' || m.id === 'canjeGrano' || m.id === 'ctaCanjeGrano') && !state.usaProduccionIndustrial) return false; // fábrica opt-in
+    if (m.section === 'Fábrica' && !state.usaProduccionIndustrial) return false; // sección Fábrica: opt-in por empresa
     if (!puedeVerModulo(m)) return false;   // lista blanca de menú por rol
     if (m.perm === '*') return state.user.superAdmin || can('*:*') || can('usuarios:*') || can('roles:*') || can('empresas:*');
     if (!can(m.perm)) return false;
@@ -3082,7 +3083,7 @@ pages.inicio = async function() {
   const atajos = state.userShortcuts
     .map(sid => MODULES.find(m => m.id === sid))
     .filter(Boolean)
-    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m) && !empresaOcultaModulo(m.id) && (m.id !== 'centrosCosto' || state.usaCentrosCosto) && (m.id !== 'molienda' || state.usaProduccionIndustrial))
+    .filter(m => (!m.perm || m.perm === '*' || can(m.perm)) && puedeVerModulo(m) && !empresaOcultaModulo(m.id) && (m.id !== 'centrosCosto' || state.usaCentrosCosto) && (m.section !== 'Fábrica' || state.usaProduccionIndustrial))
     .map(m => ({ id: m.id, label: m.label, sub: m.section, icon: m.icon }));
 
   const puedeVerKPIs = can('dashboard:read');
@@ -3124,6 +3125,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
+      titulo:'🏭 v2.444.0 — Fábrica: ficha 360 del contacto + sección propia en el menú',
+      desc:'Nueva <b>sección "Fábrica"</b> en el menú (empresas con Producción industrial) que junta <b>Molienda/Fábrica, Plan canje, Cuenta canje, Proveedores de granos</b> y la nueva <b>Cuentas de Fábrica (360)</b>. La <b>ficha 360</b> muestra, para un mismo contacto, <b>todo en una sola pantalla</b>: lo que te debe en pesos (como <b>cliente de subproducto</b>), lo que le debés en pesos (como <b>proveedor de grano</b>) y su <b>saldo en kilos</b> (canje en especie + grano pendiente), valorizado a la <b>soja del día</b>. Agrupa al contacto por el <b>vínculo cliente↔proveedor</b>; si no está vinculado, te ofrece vincularlo. Así, un proveedor de grano que también es cliente de expeller y canjeador se ve unificado, con su neto en $ y su saldo en kg juntos. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
       titulo:'💲 v2.443.0 — Cuenta canje: saldo en kilos y en pesos',
       desc:'En la <b>Cuenta canje (grano)</b>, el saldo de cada cliente/proveedor ahora se muestra en <b>kilos de soja</b> y también en su <b>equivalente en pesos</b>, valorizado a la <b>pizarra de soja del día</b>. Arriba ves el <b>total del grupo</b> (kg y $) y el precio usado. Si no hay cotización del día, se muestran solo los kilos. Así ves de un vistazo cuánto representa en plata lo que cada uno tiene a favor o en contra.' },
@@ -21683,6 +21687,81 @@ function ccSaldoCell(porMoneda){
  * Netea lo que un contacto nos debe (cliente) contra lo que le debemos
  * (proveedor), cuando es la misma persona. No mueve caja ni banco.
  * ================================================================== */
+// ===== FÁBRICA — Cuentas 360 (ficha unificada $ + kg por contacto) =====
+pages.fabricaCuentas = async function() {
+  setHeader('Cuentas de Fábrica (360)', 'Un contacto, una ficha: proveedor de grano + cliente de subproducto + canjeador, con saldo en $ y en kg');
+  if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('fabricaCuentas','Cuentas de Fábrica'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let data = [];
+  try { data = (await api('/api/fabrica/cuentas-360')).data || []; }
+  catch(e){ $('#page-body').innerHTML = `<div class="kpi text-red-600">${esc(e.message)}</div>`; return; }
+  let precioSojaTn = 0;
+  try { await cargarCotizVivas(); precioSojaTn = Number((state.cache.cotizVivas||{}).SOJA||0); } catch {}
+  state._fabCuentas = data; state._fabSojaTn = precioSojaTn;
+  const _kgPesos = kg => precioSojaTn>0 ? (Number(kg||0)/1000)*precioSojaTn : null;
+  const _kg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{maximumFractionDigits:2})+' kg';
+  const filas = data.map((g,i) => {
+    const kgP = _kgPesos(g.kgTotal);
+    const kgCol = g.kgTotal>0.001?'text-emerald-700':(g.kgTotal<-0.001?'text-red-600':'text-slate-400');
+    const netoCol = g.netoArs>0.01?'text-emerald-700':(g.netoArs<-0.01?'text-amber-700':'text-slate-400');
+    return `<tr class="table-row">
+      <td><b>${esc(g.nombre)}</b>${g.cuit?`<div class="text-[11px] text-slate-500 font-mono">${esc(g.cuit)}</div>`:''}
+        <div class="text-[10px] text-slate-400">${g.vinculado?'🔗 vinculado':(g.clienteId&&g.proveedorId?'cliente+proveedor':(g.proveedorId?'proveedor':'cliente'))}${g.esGranos?' · 🌾 granos':''}</div></td>
+      <td class="text-right font-semibold ${netoCol}">${fmt$(g.netoArs)}</td>
+      <td class="text-right font-semibold ${kgCol}">${g.kgTotal>0?'+':''}${_kg(g.kgTotal)}</td>
+      <td class="text-right ${kgCol}">${kgP==null?'<span class="text-slate-300">—</span>':((g.kgTotal<0?'-':(g.kgTotal>0?'+':''))+fmt$(Math.abs(kgP)))}</td>
+      <td class="text-right"><button class="btn btn-ghost btn-xs" onclick="fabCuentaVer(${i})">Ver ficha 360</button></td>
+    </tr>`;
+  }).join('');
+  const totKg = data.reduce((a,g)=>a+Number(g.kgTotal||0),0);
+  const totNeto = data.reduce((a,g)=>a+Number(g.netoArs||0),0);
+  const totKgP = _kgPesos(totKg);
+  $('#page-body').innerHTML = `
+    <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900 mb-3">
+      Reúne en <b>una sola ficha</b> todo lo de un contacto en la fábrica: lo que te <b>debe en pesos</b> (como cliente de subproducto), lo que le <b>debés en pesos</b> (como proveedor de grano) y su <b>saldo en kilos</b> (canje en especie + grano pendiente de liquidar), valorizado a la pizarra de soja del día. Se agrupa por el <b>vínculo cliente↔proveedor</b>; si no está vinculado, podés vincularlo desde la ficha.
+    </div>
+    ${precioSojaTn>0?`<div class="text-[11px] text-slate-500 mb-2">💲 Kilos valorizados a la soja de hoy: ${fmt$(precioSojaTn)}/tn · Totales: <b class="${totNeto>=0?'text-emerald-700':'text-amber-700'}">${fmt$(totNeto)}</b> en $ · <b class="${totKg>=0?'text-emerald-700':'text-red-600'}">${totKg>0?'+':''}${_kg(totKg)}</b>${totKgP!=null?` ≈ ${(totKg<0?'-':'+')}${fmt$(Math.abs(totKgP))}`:''}</div>`:`<div class="text-[11px] text-amber-600 mb-2">Sin cotización de soja de hoy: los kilos se muestran sin valorizar.</div>`}
+    <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
+      <thead><tr><th>Contacto</th><th class="text-right">Neto $ (cobrar − pagar)</th><th class="text-right">Saldo kg</th><th class="text-right">Valor kg ($)</th><th></th></tr></thead>
+      <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Todavía no hay contactos con actividad de fábrica (canje, grano o proveedor de granos).</td></tr>`}</tbody>
+    </table></div>`;
+};
+function fabCuentaVer(i){
+  const g = (state._fabCuentas||[])[i]; if(!g) return;
+  const precioSojaTn = state._fabSojaTn||0;
+  const kgP = kg => precioSojaTn>0 ? (Number(kg||0)/1000)*precioSojaTn : null;
+  const _kg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{maximumFractionDigits:2})+' kg';
+  const row = (lbl, val, cls) => `<div class="flex justify-between py-1.5 border-b border-slate-100"><span class="text-slate-600">${lbl}</span><span class="font-semibold ${cls||''}">${val}</span></div>`;
+  const kgCanjeP = kgP(g.kgCanje), kgGranoP = kgP(g.kgGrano), kgTotP = kgP(g.kgTotal);
+  const vPesos = (kg, p) => p==null?'':` <span class="text-[11px] text-slate-400">(${(kg<0?'-':'')}${fmt$(Math.abs(p))})</span>`;
+  openModal({
+    title:'🏭 Ficha 360 — '+esc(g.nombre), size:'max-w-lg',
+    body:`
+      ${g.cuit?`<div class="text-xs text-slate-500 font-mono mb-2">CUIT ${esc(g.cuit)}</div>`:''}
+      <div class="kpi mb-3">
+        <div class="text-xs font-semibold text-slate-500 mb-1">💲 En pesos</div>
+        ${row('Te debe (cliente de subproducto)', fmt$(g.saldoCobrar), 'text-emerald-700')}
+        ${row('Le debés (proveedor de grano)', fmt$(g.saldoPagar), 'text-amber-700')}
+        ${row('<b>Neto en $</b>', fmt$(g.netoArs), g.netoArs>=0?'text-emerald-700':'text-amber-700')}
+      </div>
+      <div class="kpi mb-3">
+        <div class="text-xs font-semibold text-slate-500 mb-1">⚖️ En kilos de soja${precioSojaTn>0?` · pizarra ${fmt$(precioSojaTn)}/tn`:''}</div>
+        ${row('Canje en especie', (g.kgCanje>0?'+':'')+_kg(g.kgCanje)+vPesos(g.kgCanje,kgCanjeP))}
+        ${row('Grano pendiente de liquidar', (g.kgGrano>0?'+':'')+_kg(g.kgGrano)+vPesos(g.kgGrano,kgGranoP))}
+        ${row('<b>Saldo total en kg</b>', (g.kgTotal>0?'+':'')+_kg(g.kgTotal)+vPesos(g.kgTotal,kgTotP), g.kgTotal>=0?'text-emerald-700':'text-red-600')}
+      </div>
+      <div class="text-[11px] text-slate-500">+ = a favor del contacto (le debés / le falta llevar) · − = a tu favor (te debe / debe).</div>
+      ${(!g.vinculado && g.clienteId && g.proveedorId)?'':(!g.vinculado?`<div class="text-[11px] text-amber-600 mt-2">⚠️ Este contacto no está vinculado como cliente↔proveedor; el neto puede estar incompleto. Vinculalo para unificarlo.</div>`:'')}`,
+    footer:`
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctaCanjeGrano')">📒 Canje</button>
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('proveedoresGranos')">🌾 Granos</button>
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasCobrar')">💰 A cobrar</button>
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasPagar')">💸 A pagar</button>
+      ${(!g.vinculado && can('contactos:update'))?`<button class="btn btn-secondary text-xs" onclick="closeModal();contactoVincularForm()">🔗 Vincular</button>`:''}
+      <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+
 pages.compensaciones = async function() {
   setHeader('Compensación de cuentas', 'Netear cliente ↔ proveedor (misma persona)');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('compensaciones','Compensación de cuentas'); return; }
