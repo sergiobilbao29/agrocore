@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.444.0';
+const AGROCORE_VERSION = '2.445.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12958,7 +12958,7 @@ app.get('/api/fabrica/cuentas-360', requireCompany, requirePermission('stock:rea
     const [clientes, provs, ctas, canjeMovs, granoMovs] = await Promise.all([
       prisma.cliente.findMany({ where: { companyId }, select: { id: true, razonSocial: true, cuit: true, vinculoId: true } }),
       prisma.proveedor.findMany({ where: { companyId }, select: { id: true, razonSocial: true, cuit: true, vinculoId: true, esGranos: true } }),
-      prisma.ctaCte.findMany({ where: { companyId, OR: [{ moneda: 'ARS' }, { moneda: null }] }, select: { contactoTipo: true, contactoId: true, debe: true, haber: true } }),
+      prisma.ctaCte.findMany({ where: { companyId, moneda: 'ARS' }, select: { contactoTipo: true, contactoId: true, debe: true, haber: true } }),
       prisma.canjeCtaMov.findMany({ where: { companyId }, select: { contactoTipo: true, contactoId: true, equivSoja: true } }),
       prisma.granoCtaMov.findMany({ where: { companyId }, select: { proveedorId: true, kilosNeto: true } }),
     ]);
@@ -26384,7 +26384,7 @@ app.post('/api/cobros-clientes', requireCompany, requirePermission('finanzas:cre
 // (cliente: nos debe / proveedor: le debemos).
 async function _saldoContactoARS(client, companyId, tipo, contactoId) {
   const rows = await client.ctaCte.findMany({
-    where: { companyId, contactoTipo: tipo, contactoId, OR: [{ moneda: 'ARS' }, { moneda: null }] },
+    where: { companyId, contactoTipo: tipo, contactoId, moneda: 'ARS' },
     select: { debe: true, haber: true },
   });
   return Math.round(rows.reduce((a, r) => a + (Number(r.debe || 0) - Number(r.haber || 0)), 0) * 100) / 100;

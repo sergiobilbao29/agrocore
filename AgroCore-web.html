@@ -3125,6 +3125,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
+      titulo:'🛠️ v2.445.0 — Fix: Cuentas de Fábrica (360) abría con error',
+      desc:'Corregimos un error que hacía que <b>Cuentas de Fábrica (360)</b> no abriera (decía <i>"Argument moneda is missing"</i>). Era un filtro de la cuenta corriente en pesos. Ya funciona normal.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
       titulo:'🏭 v2.444.0 — Fábrica: ficha 360 del contacto + sección propia en el menú',
       desc:'Nueva <b>sección "Fábrica"</b> en el menú (empresas con Producción industrial) que junta <b>Molienda/Fábrica, Plan canje, Cuenta canje, Proveedores de granos</b> y la nueva <b>Cuentas de Fábrica (360)</b>. La <b>ficha 360</b> muestra, para un mismo contacto, <b>todo en una sola pantalla</b>: lo que te debe en pesos (como <b>cliente de subproducto</b>), lo que le debés en pesos (como <b>proveedor de grano</b>) y su <b>saldo en kilos</b> (canje en especie + grano pendiente), valorizado a la <b>soja del día</b>. Agrupa al contacto por el <b>vínculo cliente↔proveedor</b>; si no está vinculado, te ofrece vincularlo. Así, un proveedor de grano que también es cliente de expeller y canjeador se ve unificado, con su neto en $ y su saldo en kg juntos. 🌱' },
