@@ -3126,6 +3126,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
+      titulo:'🌾 v2.448.2 — Arrendamiento: grilla de ventas más ancha, sin scroll lateral',
+      desc:'La pantalla de <b>Ventas y entregas</b> ahora se abre más <b>ancha</b> y la tabla entra completa, sin tener que correrla para los costados para ver el botón de guardar, entregas o borrar. Dejamos <b>un solo botón</b> de "Venta manual" (arriba de la tabla) para que no quede duplicado.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
       titulo:'🌾 v2.448.1 — Arrendamiento: botón "Venta manual" más visible',
       desc:'Dejamos bien a la vista el botón para cargar el <b>saldo de la campaña anterior</b>: ahora es un <b>botón verde</b> arriba de la tabla de ventas (y también en el pie). Las ventas manuales se marcan con un cartelito <b>MANUAL</b> ámbar para distinguirlas de los meses del plan, y la grilla quedó más clara y aireada.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
@@ -34360,7 +34363,7 @@ async function arrVentasModal(id){
     </div>
     ${rs.aFavor>0.01?`<div class="text-[11px] text-emerald-700 mt-1">Le pagaste de más (ej. un cheque mayor). Ese saldo a favor se <b>descuenta solo</b> de las próximas ventas: cuando cargues la siguiente venta, "Falta pagar" ya va a venir restado. No hace falta registrar otra entrega hasta consumirlo.</div>`:''}
   </div>`;
-  openModal({ title:`🌾 Ventas y entregas · ${esc(arr?.propietario||'')}`, size:'max-w-4xl',
+  openModal({ title:`🌾 Ventas y entregas · ${esc(arr?.propietario||'')}`, size:'max-w-6xl',
     body:`${banner}<div class="text-xs text-slate-600 mb-2">Contrato: <b>${_kvKg(arr?.kilosTotal)} kg</b> de ${esc(arr?.grano||'grano')} · ~${_kvKg(arr?.kilosPorMes)} kg/mes. Cargá los <b>kilos reales</b> y el <b>precio pizarra ($/tn)</b> de cada venta y guardá (💾); después registrá las <b>entregas</b> (pagos parciales). Si entregás un cheque por <b>más</b> de un mes, cargá el importe completo: el excedente queda <b>a favor</b> y se descuenta de las próximas ventas.</div>
       <div class="flex items-center justify-between gap-2 mb-2">
         <div class="text-xs font-semibold text-slate-600">Ventas del plan</div>
@@ -34376,7 +34379,7 @@ async function arrVentasModal(id){
           <td class="p-2 text-right">${fmt$(totImp)}</td><td class="p-2 text-right ${totSaldo>0.01?'text-red-600':'text-emerald-700'}">${fmt$(totSaldo)}</td><td></td>
         </tr></tfoot>
       </table></div>`,
-    footer:`<button class="btn bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-700 mr-auto" onclick='arrVentaManualForm(${JSON.stringify(id)})'>➕ Venta manual (otra campaña / ajuste)</button><button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+    footer:`<button class="btn btn-secondary ml-auto" onclick="closeModal()">Cerrar</button>` });
 }
 function arrVentaManualForm(id){
   openModal2({ title:'➕ Venta manual', size:'max-w-md',
