@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.449.0';
+const AGROCORE_VERSION = '2.450.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -25170,6 +25170,45 @@ app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermissio
     let huerfanos = { del: 0, off: 0 }; try { huerfanos = await _limpiarHaciendaHuerfana(req.companyId, true); } catch {}
     let huerfanosIns = { del: 0, off: 0 }; try { huerfanosIns = await _limpiarInsumosHuerfanos(req.companyId, true); } catch {}
     res.json({ ok: true, data: { grupos: grupos.length, fusionados, eliminados, familias, huerfanos: huerfanos.del + huerfanos.off, huerfanosDel: huerfanos.del, huerfanosOff: huerfanos.off, huerfanosIns: huerfanosIns.del + huerfanosIns.off, huerfanosInsDel: huerfanosIns.del, huerfanosInsOff: huerfanosIns.off, errores } });
+  } catch (e) { next(e); }
+});
+// FUSION MANUAL de dos articulos de stock que NO tienen el mismo nombre (ej. unir
+// "2,4-D" dentro de "2,4-D ETIL HEXIL"). Mueve stock, movimientos y referencias del
+// ORIGEN al DESTINO, hereda datos que al destino le falten, BORRA el producto origen y
+// -- clave -- borra tambien su articulo del Catalogo (mismo nombre) para que la
+// sincronizacion catalogo->stock NO lo vuelva a crear. Solo admin.
+app.post('/api/admin/stock/fusionar', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador puede fusionar artículos.' });
+    const { origenId, destinoId } = z.object({ origenId: z.string().min(1), destinoId: z.string().min(1) }).parse(req.body || {});
+    if (origenId === destinoId) return res.status(400).json({ ok: false, error: 'Elegí dos artículos distintos.' });
+    const [origen, destino] = await Promise.all([
+      prisma.producto.findFirst({ where: { id: origenId, companyId: req.companyId } }),
+      prisma.producto.findFirst({ where: { id: destinoId, companyId: req.companyId } }),
+    ]);
+    if (!origen || !destino) return res.status(404).json({ ok: false, error: 'No se encontró alguno de los artículos.' });
+    const nrm = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim();
+    await prisma.$transaction(async (tx) => {
+      // Reasignar todo lo que apunte al origen -> destino
+      await tx.movimiento.updateMany({ where: { productoId: origen.id }, data: { productoId: destino.id } });
+      await tx.insumoAplicado.updateMany({ where: { productoId: origen.id }, data: { productoId: destino.id } });
+      await tx.facturaItem.updateMany({ where: { productoId: origen.id }, data: { productoId: destino.id } });
+      await tx.facturaCompraItem.updateMany({ where: { productoId: origen.id }, data: { productoId: destino.id } });
+      try { await tx.liquidacionCereal.updateMany({ where: { productoId: origen.id }, data: { productoId: destino.id } }); } catch {}
+      // Heredar datos que al destino le falten
+      const upd = {};
+      if (!destino.categoriaArticuloId && origen.categoriaArticuloId) upd.categoriaArticuloId = origen.categoriaArticuloId;
+      if (!destino.sku && origen.sku) upd.sku = origen.sku;
+      if (!destino.codigoBarras && origen.codigoBarras) upd.codigoBarras = origen.codigoBarras;
+      if (destino.precioReferencia == null && origen.precioReferencia != null) upd.precioReferencia = origen.precioReferencia;
+      if (/(unidad|^u$)/i.test(destino.unidad || '') && origen.unidad && !/(unidad|^u$)/i.test(origen.unidad)) upd.unidad = origen.unidad;
+      if (Object.keys(upd).length) await tx.producto.update({ where: { id: destino.id }, data: upd });
+      // Borrar el producto origen
+      await tx.producto.delete({ where: { id: origen.id } });
+      // Borrar su articulo del Catalogo (mismo nombre) para que el sync no lo recree
+      try { await tx.catalogo.deleteMany({ where: { companyId: req.companyId, nombre: { equals: origen.nombre, mode: 'insensitive' } } }); } catch {}
+    });
+    res.json({ ok: true, data: { origen: origen.nombre, destino: destino.nombre } });
   } catch (e) { next(e); }
 });
 // Detecta la categoría del sistema a partir del texto "Categoría / Raza".

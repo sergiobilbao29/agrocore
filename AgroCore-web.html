@@ -3125,6 +3125,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
+      titulo:'🔗 v2.450.0 — Stock: Fusionar artículos (unir dos con nombres distintos)',
+      desc:'Nuevo botón <b>🔗 Fusionar artículos</b> en Stock (administradores). Lo usás cuando el mismo producto quedó cargado con <b>dos nombres distintos</b> (ej. <b>"2,4-D"</b> y <b>"2,4-D ETIL HEXIL"</b>): elegís cuál <b>eliminar</b> y cuál <b>queda</b>, y el sistema le pasa <b>todo el stock, los movimientos y las referencias</b> al que queda, borra el viejo y también su artículo del Catálogo <b>para que no vuelva a aparecer</b> (antes, al borrarlo solo del Catálogo, la sincronización lo volvía a crear). No se pierde ningún movimiento.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
       titulo:'🧹 v2.449.0 — Stock: "Depurar duplicados" limpia insumos huérfanos (renombrados)',
       desc:'Cuando <b>renombrabas un insumo en el Catálogo</b> (ej. "2,4-D" → "2,4-D ENLIST COLEX"), el artículo viejo quedaba <b>colgado en Stock y en el selector de labores</b>, sin descripción ni familia, aunque en el Catálogo ya no estaba. Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>detecta y limpia esos huérfanos de Insumos/Cereales</b> (los que ya no están en el Catálogo): si no tienen movimientos se borran, y si tienen historial se desactivan. Corré el botón una vez en cada empresa y la lista queda prolija. Nota: "copiar a otras empresas" copia el <b>artículo</b> del catálogo, no borra el producto viejo de cada empresa — por eso hay que correr el depurador en cada una.' },
@@ -8215,6 +8218,7 @@ pages.stock = async function() {
       ${can('stock:update')?`<button class="btn btn-secondary text-sm" onclick="reubicarForm()" title="Cambiar la categoría/familia de varios artículos a la vez">🔀 Reubicar categoría</button>`:''}
       ${can('stock:read')?`<button class="btn btn-secondary text-sm" onclick="stockControlMenu()" title="Exportar planilla para conteo físico e importar el conteo">📋 Control de stock</button>`:''}
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="depurarDuplicados()" title="Detectar y unir productos duplicados (mismo nombre) conservando el que tiene stock">🧹 Depurar duplicados</button>`:''}
+      ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="fusionarArticulosForm()" title="Unir manualmente dos artículos con nombres distintos (ej. '2,4-D' dentro de '2,4-D ETIL HEXIL'): le pasa el stock y los movimientos al que queda y borra el otro.">🔗 Fusionar artículos</button>`:''}
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Total SKU</div><div class="text-2xl font-bold mt-1">${totalSKU}</div></div>
@@ -8729,6 +8733,39 @@ async function prodDel(id, nombre) {
 
 /* ----- MOVIMIENTOS ----- */
 // ---- Depurar productos duplicados en Stock ----
+async function fusionarArticulosForm(){
+  let prods=[];
+  try{ const r=await api('/api/stock-actual'); prods=(r.data||[]).filter(p=>p && p.id && !String(p.id).startsWith('comp:')); }catch(e){ return toast(e.message,'error'); }
+  if(prods.length<2) return toast('Necesitás al menos 2 artículos en Stock para fusionar.','warn');
+  prods.sort((a,b)=>String(a.nombre).localeCompare(String(b.nombre)));
+  const opt=(p)=>`<option value="${p.id}">${esc(p.nombre)} · ${esc(p.categoria||'')}${p.subtipo?' / '+esc(p.subtipo):''} · existencia ${fmtN(p.existencia||0)}</option>`;
+  openModal({ title:'🔗 Fusionar artículos', size:'max-w-xl',
+    body:`<div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2 mb-3">Usá esto cuando el mismo producto quedó cargado con <b>dos nombres distintos</b> (ej. <b>"2,4-D"</b> y <b>"2,4-D ETIL HEXIL"</b>). Le <b>paso el stock, los movimientos y las referencias</b> del que elijas eliminar al que quede, <b>borro el viejo</b> y también su artículo del Catálogo para que <b>no vuelva a aparecer</b>. No se pierde ningún movimiento.</div>
+      <div class="grid grid-cols-1 gap-3">
+        <div><label class="label">Artículo a ELIMINAR (origen)</label>
+          <select id="fus-origen" class="input">${prods.map(opt).join('')}</select></div>
+        <div class="text-center text-slate-400 text-sm">⬇️ se une dentro de ⬇️</div>
+        <div><label class="label">Artículo que QUEDA (destino)</label>
+          <select id="fus-destino" class="input">${prods.map(opt).join('')}</select></div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="fusionarArticulosRun()">🔗 Fusionar</button>` });
+  // Preseleccionar el destino en el 2do item distinto, para no arrancar con origen=destino
+  const d=$('#fus-destino'); if(d&&d.options.length>1) d.selectedIndex=1;
+}
+async function fusionarArticulosRun(){
+  const origenId=$('#fus-origen')?.value, destinoId=$('#fus-destino')?.value;
+  const origenTxt=$('#fus-origen')?.selectedOptions?.[0]?.text||'', destinoTxt=$('#fus-destino')?.selectedOptions?.[0]?.text||'';
+  if(!origenId||!destinoId) return toast('Elegí los dos artículos','warn');
+  if(origenId===destinoId) return toast('Elegí dos artículos distintos','warn');
+  if(!confirm(`¿Fusionar?\n\nSe ELIMINA: ${origenTxt}\nQueda: ${destinoTxt}\n\nEl stock y los movimientos pasan al que queda. Esta acción no se puede deshacer.`)) return;
+  try{
+    const r=await api('/api/admin/stock/fusionar',{method:'POST',body:JSON.stringify({origenId,destinoId})});
+    closeModal();
+    toast(`Listo: "${r.data?.origen||''}" se unió dentro de "${r.data?.destino||''}"`,'success');
+    pages.stock();
+  }catch(e){ toast(e.message,'error'); }
+}
 async function depurarDuplicados(){
   let grupos=[], familias=0, huerfanos=0, huerfanosIns=0;
   try{ const r=await api('/api/admin/stock/duplicados'); grupos=r.data||[]; familias=r.familias||0; huerfanos=r.huerfanos||0; huerfanosIns=r.huerfanosIns||0; }catch(e){ return toast(e.message,'error'); }
