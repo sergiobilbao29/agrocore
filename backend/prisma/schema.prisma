@@ -38,6 +38,7 @@ model Company {
   usaCentrosCosto Boolean   @default(false) // habilita el reparto por centros de costo (gestión analítica). Opt-in por empresa.
   usaProduccionIndustrial Boolean @default(false) // habilita el módulo Molienda / Fábrica (transformación de materias primas). Opt-in por empresa.
   catalogoManual     Boolean @default(false) // true = la empresa NO autogenera productos (insumos/animales/cereales); arranca con catálogo propio/vacío. Para fábricas separadas.
+  articulosUnificados Boolean @default(false) // v2.452: true = los articulos de insumo/cereal viven SOLO en producto (ya se migraron desde catalogo). Apaga la sincronizacion catalogo->producto para que no resuciten duplicados.
   flujoAislado       Boolean @default(false) // true = cuando esta empresa es la activa, el resumen multi-empresa muestra SOLO esta empresa (no ve el flujo de las demás). Las demás empresas sí la siguen viendo.
   usaComercial       Boolean @default(false) // habilita el módulo Comercial / AgroCore (vendedores, partners, leads/prospectos, abonos). Opt-in; pensado para AgroCore y resellers. Oculto por defecto para clientes finales.
   usaArroz           Boolean @default(false) // habilita el circuito ARROZ (Secadero + pelado por molienda). Opt-in por empresa arrocera; oculto por defecto.
@@ -635,6 +636,9 @@ model Producto {
   seConsumeEnProduccion  Boolean @default(false)  // materia prima / insumo de molienda
   seObtieneEnProduccion  Boolean @default(false)  // coproducto / producto final
   esServicio             Boolean @default(false)  // no descuenta stock
+  // v2.452: UNIFICACION de articulos. producto es la fuente unica (ya no se duplica en catalogo).
+  // predefinido = articulo que vino del catalogo/seed del sistema (vs. alta manual del usuario).
+  predefinido            Boolean @default(false)
 
   company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   categoriaArticulo CategoriaArticulo? @relation(fields: [categoriaArticuloId], references: [id], onDelete: SetNull)

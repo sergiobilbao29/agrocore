@@ -3125,6 +3125,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
+      titulo:'🧩 v2.452.0 — Artículos unificados: una sola lista (se terminó la duplicación)',
+      desc:'Arreglo de fondo al tema de los artículos. Hasta ahora los insumos/cereales vivían en <b>dos lugares</b> (el catálogo y el stock) que se "sincronizaban" adivinando por nombre: de ahí los duplicados, los fantasmas y los que reaparecían. Ahora hay un botón <b>🧩 Unificar artículos</b> en Stock (administradores) que deja <b>una sola lista</b>: migra al stock lo que faltaba del catálogo (nombre, familia, precio), quita del catálogo viejo solo las filas de artículo de insumo/cereal (no toca Labores, animales ni otros listados) y <b>apaga la duplicación</b> — nunca más reaparecen artículos borrados. <b>No se pierde ningún dato</b>: ningún movimiento, factura ni labor apunta al catálogo. Se corre <b>una vez por empresa</b>. Y un insumo/cereal <b>siempre se ve</b> en Stock y en los selectores, aunque se haya cargado desde una factura. Para los que queden con nombres distintos, usá 🔗 Fusionar artículos.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
       titulo:'♻️ v2.451.0 — Stock: la limpieza ya no esconde artículos en uso + botón Recuperar',
       desc:'Ajustamos la limpieza de huérfanos para que sea <b>no destructiva</b>: ahora <b>solo borra artículos totalmente vacíos</b> (sin ningún movimiento). Si un artículo tiene historial (se cargó desde una factura o se usó en una labor), <b>ya no se esconde</b> aunque no esté en el Catálogo — se queda visible y, si querés unificarlo, usás 🔗 Fusionar artículos. Y sumamos el botón <b>♻️ Recuperar artículos</b>: si por una limpieza anterior te desapareció un insumo que sí usabas (ej. "glifo granulado"), lo <b>vuelve a mostrar</b> en Stock y en los selectores de labores. Corré ese botón una vez en cada empresa.' },
@@ -8223,6 +8226,7 @@ pages.stock = async function() {
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="depurarDuplicados()" title="Detectar y unir productos duplicados (mismo nombre) conservando el que tiene stock">🧹 Depurar duplicados</button>`:''}
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="fusionarArticulosForm()" title="Unir manualmente dos artículos con nombres distintos (ej. '2,4-D' dentro de '2,4-D ETIL HEXIL'): le pasa el stock y los movimientos al que queda y borra el otro.">🔗 Fusionar artículos</button>`:''}
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="recuperarArticulos()" title="Volver a mostrar artículos de insumos/cereales que quedaron desactivados pero tienen historial (ej. uno cargado desde factura que desapareció).">♻️ Recuperar artículos</button>`:''}
+      ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="unificarArticulosForm()" title="Dejar una sola lista de artículos: migra los insumos/cereales del catálogo viejo al stock y apaga la duplicación. Se hace una vez por empresa.">🧩 Unificar artículos</button>`:''}
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Total SKU</div><div class="text-2xl font-bold mt-1">${totalSKU}</div></div>
@@ -8737,6 +8741,35 @@ async function prodDel(id, nombre) {
 
 /* ----- MOVIMIENTOS ----- */
 // ---- Depurar productos duplicados en Stock ----
+async function unificarArticulosForm(){
+  let d={};
+  try{ const r=await api('/api/admin/unificar-articulos'); d=r.data||{}; }catch(e){ return toast(e.message,'error'); }
+  if(d.yaUnificada){ return toast('Esta empresa ya está unificada: los artículos ya viven en una sola lista ✅','success'); }
+  openModal({ title:'🧩 Unificar artículos (una sola lista)', size:'max-w-lg',
+    body:`<div class="text-sm space-y-3">
+      <p>Hoy los insumos/cereales viven en <b>dos lados</b> (el catálogo viejo y el stock) y por eso se duplican o reaparecen. Esto lo deja en <b>una sola lista</b> (la de Stock):</p>
+      <ul class="list-disc pl-5 text-slate-700 space-y-1 text-[13px]">
+        <li>Migra al stock lo que faltaba del catálogo (nombre, familia, precio): <b>${d.aCrear||0}</b> a crear.</li>
+        <li>Saca del catálogo viejo <b>${d.aBorrarCatalogo||0}</b> fila(s) de artículo de insumo/cereal (NO toca Labores, animales ni ningún otro listado).</li>
+        <li>Apaga la duplicación: de acá en más <b>no vuelven a reaparecer</b> artículos borrados.</li>
+      </ul>
+      <div class="bg-emerald-50 border border-emerald-200 text-emerald-900 text-[12px] rounded p-2">No se pierde ningún dato: ningún movimiento, factura ni labor apunta al catálogo. Después podés usar <b>🔗 Fusionar artículos</b> para unir los que te hayan quedado con nombres distintos.</div>
+      <div class="bg-amber-50 border border-amber-200 text-amber-900 text-[12px] rounded p-2">⚠️ Importante: tené un <b>backup</b> reciente de la base antes de aplicar (como con cualquier cambio grande).</div>
+    </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="unificarArticulosRun()">🧩 Unificar ahora</button>` });
+}
+async function unificarArticulosRun(){
+  if(!confirm('¿Unificar los artículos de esta empresa en una sola lista? Es un cambio grande (asegurate de tener backup). No se pierden movimientos.')) return;
+  try{
+    const r=await api('/api/admin/unificar-articulos',{method:'POST',body:'{}'});
+    const d=r.data||{};
+    closeModal();
+    toast(`Unificación lista: ${d.articulos||0} artículo(s) procesados, ${d.borradosCatalogo||0} fila(s) viejas del catálogo quitadas. Ya hay una sola lista ✅`,'success');
+    delete state.cache.catalogos; delete state.cache.productos;
+    pages.stock();
+  }catch(e){ toast(e.message,'error'); }
+}
 async function recuperarArticulos(){
   if(!confirm('¿Volver a mostrar los insumos/cereales que quedaron desactivados pero tienen historial (movimientos, labores, facturas)?')) return;
   try{
@@ -15962,6 +15995,11 @@ function prodEnCatalogo(p, sets){
   // "en catálogo" — así los artículos nuevos y de categorías propias (ej. Repuestos)
   // aparecen en Stock y en el buscador de Compras/Ventas.
   if (p.categoriaArticuloId) return true;
+  // v2.452: UNIFICACIÓN — producto es la fuente única. Un artículo de insumo/cereal
+  // activo SIEMPRE se ve, aunque no tenga familia ni esté en el catálogo viejo
+  // (ej. uno cargado desde una factura). Así no se esconde nada nunca más.
+  const _cat = (p.categoria||'').toLowerCase();
+  if (_cat==='insumos' || _cat==='cereales' || _cat==='granos') return true;
   const n = norm(p.nombre);
   if (nombres.has(n) || animales.has(n)) return true;
   return false;

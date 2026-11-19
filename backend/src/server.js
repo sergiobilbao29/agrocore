@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.451.0';
+const AGROCORE_VERSION = '2.452.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -4836,12 +4836,16 @@ app.get('/api/stock-actual', requireCompany, requirePermission('stock:read'), as
     // Aseguramos que cada categoría de animal y cada insumo del catálogo tengan su
     // producto, para verlos todos en Stock (existencia 0 hasta que se muevan).
     // Salvo que la empresa tenga "catálogo propio" (ej. fábrica): no autogenera nada.
-    const _coCat = await prisma.company.findUnique({ where: { id: req.companyId }, select: { catalogoManual: true, aislada: true } });
+    const _coCat = await prisma.company.findUnique({ where: { id: req.companyId }, select: { catalogoManual: true, aislada: true, articulosUnificados: true } });
     const _empresaAislada = _coCat?.aislada === true; // no toca depósitos compartidos
     if (!_coCat?.catalogoManual) {
       try { await sincronizarProductosHacienda(req.companyId); } catch {}
-      try { await sincronizarProductosInsumos(req.companyId); } catch {}
-      try { await sincronizarProductosCereales(req.companyId); } catch {}
+      // v2.452: si la empresa ya unificó sus artículos, producto es la fuente única y
+      // NO volvemos a sincronizar insumos/cereales desde catalogo (asi no resucitan duplicados).
+      if (!_coCat?.articulosUnificados) {
+        try { await sincronizarProductosInsumos(req.companyId); } catch {}
+        try { await sincronizarProductosCereales(req.companyId); } catch {}
+      }
       try { await sincronizarProductosFichas(req.companyId); } catch {}
     }
     // Existencia de fichas de animales: CONTEO de fichas en el campo por especie+categoría
@@ -25237,6 +25241,75 @@ app.post('/api/admin/stock/fusionar', requireCompany, requirePermission('stock:c
       try { await tx.catalogo.deleteMany({ where: { companyId: req.companyId, nombre: { equals: origen.nombre, mode: 'insensitive' } } }); } catch {}
     });
     res.json({ ok: true, data: { origen: origen.nombre, destino: destino.nombre } });
+  } catch (e) { next(e); }
+});
+// ============================================================
+// UNIFICACION DE ARTICULOS (v2.452) — producto como fuente unica de insumos/cereales.
+// Idempotente y NO destructivo para transacciones: ningun movimiento/factura apunta a
+// catalogo. Lo que hace, por empresa:
+//   1. Asegura que cada articulo de insumo/cereal del catalogo tenga su producto.
+//   2. Migra al producto lo que solo vivia en el catalogo: familia (categoriaArticuloId),
+//      precio de referencia, moneda y (si falta) unidad.
+//   3. BORRA del catalogo SOLO las filas de ARTICULO de insumo/cereal (deja intactos los
+//      'Tipo de insumo', 'Labor', animales y todos los lookups). Asi el sync ya no las resucita.
+//   4. Marca company.articulosUnificados = true (apaga definitivamente el sync insumos/cereales).
+// En preview (apply=false) solo cuenta, no toca nada.
+async function _unificarArticulos(companyId, apply) {
+  const nrm = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim();
+  const familias = await insumoTipoNombresSet(companyId); // nombres de familias de insumo (Herbicida, etc.)
+  const esArticuloCat = (c) => {
+    const t = (c.tipo || '').trim();
+    if (t === 'Tipo de insumo') return false;            // meta, NO es articulo
+    if (familias.has(t)) return true;                    // insumo
+    if (CEREAL_TIPOS.has(t.toLowerCase())) return true;  // cereal/grano
+    return false;
+  };
+  const cats = await prisma.catalogo.findMany({ where: { companyId } });
+  const arts = cats.filter(esArticuloCat);
+  // Resumen para preview
+  if (!apply) {
+    const prods = await prisma.producto.findMany({ where: { companyId, activo: true }, select: { nombre: true } });
+    const have = new Set(prods.map(p => nrm(p.nombre)));
+    const aCrear = arts.filter(a => !have.has(nrm(a.nombre))).length;
+    return { articulos: arts.length, aCrear, aBorrarCatalogo: arts.length };
+  }
+  // 1. Asegurar productos (reusa el sync; la empresa aun no esta "unificada" asi que corre).
+  try { await sincronizarProductosInsumos(companyId); } catch {}
+  try { await sincronizarProductosCereales(companyId); } catch {}
+  // 2a. Familia (categoriaArticuloId) al producto desde el catalogo/arbol.
+  try { await _repararFamiliasDesdeCatalogo(companyId, true); } catch {}
+  // 2b. Precio/moneda/unidad + marcar predefinido en los productos que vienen de un articulo.
+  const prodsAll = await prisma.producto.findMany({ where: { companyId } });
+  const prodByNombre = {}; prodsAll.forEach(p => { if (!prodByNombre[nrm(p.nombre)]) prodByNombre[nrm(p.nombre)] = p; });
+  for (const a of arts) {
+    const p = prodByNombre[nrm(a.nombre)];
+    if (!p) continue;
+    const upd = {};
+    if (p.precioReferencia == null && a.precioReferencia != null) upd.precioReferencia = a.precioReferencia;
+    if (!p.ultimoCostoMoneda && a.monedaPrecio) upd.ultimoCostoMoneda = a.monedaPrecio;
+    if (!p.categoriaArticuloId && a.categoriaArticuloId) upd.categoriaArticuloId = a.categoriaArticuloId;
+    if (!p.predefinido) upd.predefinido = true;
+    if (Object.keys(upd).length) { try { await prisma.producto.update({ where: { id: p.id }, data: upd }); } catch {} }
+  }
+  // 3. Borrar SOLO las filas de articulo de insumo/cereal del catalogo.
+  let borrados = 0;
+  for (const a of arts) { try { await prisma.catalogo.delete({ where: { id: a.id } }); borrados++; } catch {} }
+  // 4. Marcar la empresa como unificada (apaga el sync insumos/cereales de aca en mas).
+  try { await prisma.company.update({ where: { id: companyId }, data: { articulosUnificados: true } }); } catch {}
+  return { articulos: arts.length, borradosCatalogo: borrados };
+}
+app.get('/api/admin/unificar-articulos', requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+  try {
+    const co = await prisma.company.findUnique({ where: { id: req.companyId }, select: { articulosUnificados: true } });
+    const prev = await _unificarArticulos(req.companyId, false);
+    res.json({ ok: true, data: { ...prev, yaUnificada: !!co?.articulosUnificados } });
+  } catch (e) { next(e); }
+});
+app.post('/api/admin/unificar-articulos', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
+  try {
+    if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador puede unificar artículos.' });
+    const r = await _unificarArticulos(req.companyId, true);
+    res.json({ ok: true, data: r });
   } catch (e) { next(e); }
 });
 // Detecta la categoría del sistema a partir del texto "Categoría / Raza".
