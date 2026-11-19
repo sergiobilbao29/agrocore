@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.445.0';
+const AGROCORE_VERSION = '2.446.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17872,7 +17872,8 @@ const _AYUDA_KB = [
       'En efectivo/quintales/Kg Novillo cargás cuotas y las pagás con el botón 📅; cada pago queda en Movimientos diarios.',
       'En "Kilos de grano": cargás total en kilos, kilos por mes y mes de inicio; el sistema arma el plan de meses.',
       'Botón 🌾 Ventas: por cada mes cargás los kilos reales vendidos y el precio pizarra ($/tonelada) del día → el sistema calcula cuánto pagar.',
-      'Entregas: con 💵 Entrega registrás pagos parciales sobre cada venta (y los kilos entregados, opcional). Cada entrega mueve la plata real y descuenta del saldo hasta saldar.'],
+      'Entregas: con 💵 Entrega registrás pagos parciales sobre cada venta (y los kilos entregados, opcional). Cada entrega mueve la plata real y descuenta del saldo hasta saldar.',
+      'Pagar de MÁS / saldo a favor: si le entregás un cheque por MÁS de lo que figura (ej. porque cubre un mes anterior o uno que todavía no cargaste), poné el importe completo del cheque en la entrega. Arriba, el arrendamiento muestra un resumen GLOBAL (Total vendido vs. Entregado) y, si pagaste de más, un "Saldo a favor nuestro". Ese saldo a favor se descuenta solo de las próximas ventas: cuando cargues la siguiente venta, el "Falta pagar" ya viene restado. No hace falta registrar otra entrega hasta consumir el saldo a favor. Tip: si la venta de un mes anterior la tenías aparte (en Excel), cargala también como venta del plan para que el total cierre.'],
     atajo:{ page:'arrendamientos', label:'Abrir Arrendamientos' } },
   { id:'credito', terms:['credito','prestamo','credito bancario','cuota de credito','financiacion','plan de cuotas','credito ya empezado','cuotas ya pagadas','marcar pagadas','pagar cuota','plan manual','credito en dolares','vencimiento de cuota','cuota en el calendario'],
     titulo:'Créditos bancarios: cargar, pagar y ver los vencimientos',
@@ -19834,7 +19835,20 @@ app.get('/api/arrendamientos/:id/ventas', requireCompany, requirePermission('fin
       const importe = Number(v.importe || 0);
       return { ...v, pagado: Math.round(pagado * 100) / 100, saldo: Math.round((importe - pagado) * 100) / 100 };
     });
-    res.json({ ok: true, data });
+    // Resumen GLOBAL del arrendamiento: lo vendido (lo que le debemos) vs. lo entregado
+    // (plata real). Si entregamos de más, queda saldo A FAVOR nuestro, que se descuenta
+    // de las ventas siguientes. Permite pagar con un cheque mayor y que el excedente
+    // quede a cuenta de lo próximo.
+    const totalVendido = Math.round(ventas.reduce((a, v) => a + Number(v.importe || 0), 0) * 100) / 100;
+    const totalEntregado = Math.round(ventas.reduce((a, v) => a + (v.pagos || []).reduce((s, p) => s + Number(p.importe || 0), 0), 0) * 100) / 100;
+    const saldoGlobal = Math.round((totalVendido - totalEntregado) * 100) / 100; // + = falta pagar · − = a favor nuestro
+    const resumen = {
+      totalVendido, totalEntregado,
+      saldo: saldoGlobal > 0 ? saldoGlobal : 0,          // lo que todavía falta pagarle
+      aFavor: saldoGlobal < 0 ? Math.round(-saldoGlobal * 100) / 100 : 0, // saldo a favor nuestro (pagado de más)
+      neto: saldoGlobal,
+    };
+    res.json({ ok: true, data, resumen });
   } catch (e) { next(e); }
 });
 // Generar / completar el plan de ventas mensuales a partir de kilosTotal + kilosPorMes + mesInicio.

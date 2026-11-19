@@ -3125,6 +3125,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
+      titulo:'🌾 v2.446.0 — Arrendamiento (kilos a pizarra): saldo global y saldo a favor',
+      desc:'En la pantalla de <b>🌾 Ventas y entregas</b> del arrendamiento ahora hay un <b>resumen global</b> arriba: <b>Total vendido</b> vs. <b>Entregado</b>, y si le pagaste de más (ej. un <b>cheque mayor</b> que cubre un mes anterior o uno que todavía no cargaste), muestra el <b>Saldo a favor nuestro</b>. Ese saldo a favor <b>se descuenta solo</b> de las próximas ventas: cuando cargues la siguiente, el "Falta pagar" ya viene restado. Podés registrar la entrega con el <b>importe completo del cheque</b> sin problema. Actualizamos el instructivo y el asistente con un ejemplo.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
       titulo:'🛠️ v2.445.0 — Fix: Cuentas de Fábrica (360) abría con error',
       desc:'Corregimos un error que hacía que <b>Cuentas de Fábrica (360)</b> no abriera (decía <i>"Argument moneda is missing"</i>). Era un filtro de la cuenta corriente en pesos. Ya funciona normal.' },
@@ -34290,8 +34293,9 @@ function _kvEstadoBadge(e){
 }
 async function arrVentasModal(id){
   const arr = (state.cache.arrendamientos||[]).find(x=>x.id===id);
-  let ventas=[];
-  try{ const r=await api('/api/arrendamientos/'+id+'/ventas'); ventas=r.data||[]; }catch(e){ return toast(e.message,'error'); }
+  let ventas=[], resumen=null;
+  try{ const r=await api('/api/arrendamientos/'+id+'/ventas'); ventas=r.data||[]; resumen=r.resumen||null; }catch(e){ return toast(e.message,'error'); }
+  state._arrResumen = resumen;
   const totKg = ventas.reduce((a,v)=>a+Number(v.kilos||0),0);
   const totImp = ventas.reduce((a,v)=>a+Number(v.importe||0),0);
   const totPag = ventas.reduce((a,v)=>a+Number(v.pagado||0),0);
@@ -34317,8 +34321,20 @@ async function arrVentasModal(id){
       </td>
     </tr>`;
   }).join('');
+  // Banner de saldo GLOBAL del arrendamiento: vendido vs entregado, con el saldo a favor.
+  const rs = resumen || { totalVendido: totImp, totalEntregado: totPag, saldo: Math.max(0,totImp-totPag), aFavor: Math.max(0,totPag-totImp) };
+  const banner = `<div class="rounded-lg p-3 mb-3 ${rs.aFavor>0.01?'bg-emerald-50 border border-emerald-300':'bg-slate-50 border border-slate-200'}">
+    <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
+      <div>Total vendido: <b>${fmt$(rs.totalVendido)}</b></div>
+      <div>Entregado (plata): <b>${fmt$(rs.totalEntregado)}</b></div>
+      ${rs.aFavor>0.01
+        ? `<div class="font-semibold text-emerald-700">✅ Saldo a favor nuestro: ${fmt$(rs.aFavor)}</div>`
+        : `<div class="font-semibold ${rs.saldo>0.01?'text-red-600':'text-slate-500'}">${rs.saldo>0.01?'Falta pagar: '+fmt$(rs.saldo):'Al día ✓'}</div>`}
+    </div>
+    ${rs.aFavor>0.01?`<div class="text-[11px] text-emerald-700 mt-1">Le pagaste de más (ej. un cheque mayor). Ese saldo a favor se <b>descuenta solo</b> de las próximas ventas: cuando cargues la siguiente venta, "Falta pagar" ya va a venir restado. No hace falta registrar otra entrega hasta consumirlo.</div>`:''}
+  </div>`;
   openModal({ title:`🌾 Ventas y entregas · ${esc(arr?.propietario||'')}`, size:'max-w-4xl',
-    body:`<div class="text-xs text-slate-600 mb-2">Contrato: <b>${_kvKg(arr?.kilosTotal)} kg</b> de ${esc(arr?.grano||'grano')} · ~${_kvKg(arr?.kilosPorMes)} kg/mes. Cargá los <b>kilos reales</b> y el <b>precio pizarra ($/tn)</b> de cada venta y guardá (💾); después registrá las <b>entregas</b> (pagos parciales).</div>
+    body:`${banner}<div class="text-xs text-slate-600 mb-2">Contrato: <b>${_kvKg(arr?.kilosTotal)} kg</b> de ${esc(arr?.grano||'grano')} · ~${_kvKg(arr?.kilosPorMes)} kg/mes. Cargá los <b>kilos reales</b> y el <b>precio pizarra ($/tn)</b> de cada venta y guardá (💾); después registrá las <b>entregas</b> (pagos parciales). Si entregás un cheque por <b>más</b> de un mes, cargá el importe completo: el excedente queda <b>a favor</b> y se descuenta de las próximas ventas.</div>
       <div class="border rounded overflow-auto max-h-[60vh]"><table class="w-full text-sm">
         <thead class="bg-slate-50 text-xs sticky top-0"><tr>
           <th class="p-1 text-left">Mes / entregas</th><th class="p-1 text-right">Kilos</th><th class="p-1 text-right">Pizarra $/tn</th><th class="p-1 text-left">Fecha venta</th><th class="p-1 text-right">A pagar</th><th class="p-1 text-right">Saldo</th><th class="p-1"></th>
@@ -34351,9 +34367,12 @@ async function arrEntregaForm(id, vid){
   let venta=null; try{ const r=await api('/api/arrendamientos/'+id+'/ventas'); venta=(r.data||[]).find(x=>x.id===vid); }catch{}
   const saldo = venta ? Number(venta.saldo||0) : 0;
   _arrEntregaCtx={ id, vid };
+  const aFav = Number((state._arrResumen||{}).aFavor||0);
   openModal2({ title:'💵 Registrar entrega (pago parcial)', size:'max-w-md',
     body:`<div class="grid grid-cols-1 gap-3">
       <div class="text-sm">Venta <b>${esc(venta?.etiqueta||'')}</b> · saldo a pagar: <b class="${saldo>0.01?'text-red-600':''}">${fmt$(saldo)}</b></div>
+      ${aFav>0.01?`<div class="text-[12px] bg-emerald-50 border border-emerald-200 rounded p-2 text-emerald-800">✅ Tenés <b>${fmt$(aFav)}</b> a favor de pagos anteriores. Podés pagar <b>solo la diferencia</b> (o nada, si el saldo a favor cubre esta venta). Si igual entregás plata, el saldo a favor queda disponible para la próxima.</div>`:''}
+      ${saldo>0.01?`<div class="text-[11px] text-slate-500">Tip: si entregás un cheque por <b>más</b> de este saldo, poné el importe completo del cheque; el excedente queda <b>a favor</b> para las próximas ventas.</div>`:''}
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">Importe de esta entrega ($) *</label><input id="ae-monto" type="number" step="0.01" class="input" value="${saldo>0?Math.round(saldo):''}"/></div>
         <div><label class="label">Kilos entregados (opcional)</label><input id="ae-kilos" type="number" step="1" class="input" placeholder="informativo"/></div>
