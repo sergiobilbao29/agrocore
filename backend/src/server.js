@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.450.0';
+const AGROCORE_VERSION = '2.451.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -25116,7 +25116,10 @@ async function _limpiarInsumosHuerfanos(companyId, apply) {
   let del = 0, off = 0;
   for (const p of prods) {
     if (vivos.has(nrm(p.nombre))) continue; // sigue en el Catalogo -> se queda
-    if (!apply) { del++; continue; }
+    // SEGURIDAD: solo tocamos los que NO tienen NINGUN movimiento/referencia (leftovers vacios).
+    // Si un articulo tiene historial (ej. se cargo desde una factura o se uso en una labor),
+    // NO lo tocamos aunque no este en el Catalogo: el usuario lo sigue necesitando. Para esos
+    // esta la "Fusionar articulos" (manual). Asi nunca mas escondemos un producto en uso.
     const [nm, ia, fi, fci] = await Promise.all([
       prisma.movimiento.count({ where: { productoId: p.id } }),
       prisma.insumoAplicado.count({ where: { productoId: p.id } }),
@@ -25124,15 +25127,40 @@ async function _limpiarInsumosHuerfanos(companyId, apply) {
       prisma.facturaCompraItem.count({ where: { productoId: p.id } }),
     ]);
     let lc = 0; try { lc = await prisma.liquidacionCereal.count({ where: { productoId: p.id } }); } catch {}
-    if (nm + ia + fi + fci + lc === 0) {
-      try { await prisma.producto.delete({ where: { id: p.id } }); del++; }
-      catch { try { await prisma.producto.update({ where: { id: p.id }, data: { activo: false } }); off++; } catch {} }
-    } else {
-      try { await prisma.producto.update({ where: { id: p.id }, data: { activo: false } }); off++; } catch {}
-    }
+    if (nm + ia + fi + fci + lc > 0) continue; // tiene historial -> se deja visible
+    if (!apply) { del++; continue; }
+    try { await prisma.producto.delete({ where: { id: p.id } }); del++; } catch {}
   }
   return { del, off };
 }
+// RECUPERACION: reactiva los productos de Insumos/Cereales que quedaron DESACTIVADOS
+// pero que tienen historial (movimientos, labores, facturas). Deshace cualquier
+// desactivacion agresiva previa que los haya escondido de Stock y de los selectores.
+async function _reactivarInsumosConHistorial(companyId) {
+  const inactivos = (await prisma.producto.findMany({
+    where: { companyId, activo: false },
+    select: { id: true, nombre: true, categoria: true },
+  })).filter(p => ['insumos', 'cereales'].includes((p.categoria || '').toLowerCase()));
+  let reactivados = 0;
+  for (const p of inactivos) {
+    const [nm, ia, fi, fci] = await Promise.all([
+      prisma.movimiento.count({ where: { productoId: p.id } }),
+      prisma.insumoAplicado.count({ where: { productoId: p.id } }),
+      prisma.facturaItem.count({ where: { productoId: p.id } }),
+      prisma.facturaCompraItem.count({ where: { productoId: p.id } }),
+    ]);
+    let lc = 0; try { lc = await prisma.liquidacionCereal.count({ where: { productoId: p.id } }); } catch {}
+    if (nm + ia + fi + fci + lc > 0) { try { await prisma.producto.update({ where: { id: p.id }, data: { activo: true } }); reactivados++; } catch {} }
+  }
+  return reactivados;
+}
+app.post('/api/admin/stock/reactivar-insumos', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador puede reactivar artículos.' });
+    const reactivados = await _reactivarInsumosConHistorial(req.companyId);
+    res.json({ ok: true, data: { reactivados } });
+  } catch (e) { next(e); }
+});
 app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
     if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador puede depurar duplicados.' });

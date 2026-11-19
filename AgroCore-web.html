@@ -3125,6 +3125,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
+      titulo:'♻️ v2.451.0 — Stock: la limpieza ya no esconde artículos en uso + botón Recuperar',
+      desc:'Ajustamos la limpieza de huérfanos para que sea <b>no destructiva</b>: ahora <b>solo borra artículos totalmente vacíos</b> (sin ningún movimiento). Si un artículo tiene historial (se cargó desde una factura o se usó en una labor), <b>ya no se esconde</b> aunque no esté en el Catálogo — se queda visible y, si querés unificarlo, usás 🔗 Fusionar artículos. Y sumamos el botón <b>♻️ Recuperar artículos</b>: si por una limpieza anterior te desapareció un insumo que sí usabas (ej. "glifo granulado"), lo <b>vuelve a mostrar</b> en Stock y en los selectores de labores. Corré ese botón una vez en cada empresa.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
       titulo:'🔗 v2.450.0 — Stock: Fusionar artículos (unir dos con nombres distintos)',
       desc:'Nuevo botón <b>🔗 Fusionar artículos</b> en Stock (administradores). Lo usás cuando el mismo producto quedó cargado con <b>dos nombres distintos</b> (ej. <b>"2,4-D"</b> y <b>"2,4-D ETIL HEXIL"</b>): elegís cuál <b>eliminar</b> y cuál <b>queda</b>, y el sistema le pasa <b>todo el stock, los movimientos y las referencias</b> al que queda, borra el viejo y también su artículo del Catálogo <b>para que no vuelva a aparecer</b> (antes, al borrarlo solo del Catálogo, la sincronización lo volvía a crear). No se pierde ningún movimiento.' },
@@ -8219,6 +8222,7 @@ pages.stock = async function() {
       ${can('stock:read')?`<button class="btn btn-secondary text-sm" onclick="stockControlMenu()" title="Exportar planilla para conteo físico e importar el conteo">📋 Control de stock</button>`:''}
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="depurarDuplicados()" title="Detectar y unir productos duplicados (mismo nombre) conservando el que tiene stock">🧹 Depurar duplicados</button>`:''}
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="fusionarArticulosForm()" title="Unir manualmente dos artículos con nombres distintos (ej. '2,4-D' dentro de '2,4-D ETIL HEXIL'): le pasa el stock y los movimientos al que queda y borra el otro.">🔗 Fusionar artículos</button>`:''}
+      ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="recuperarArticulos()" title="Volver a mostrar artículos de insumos/cereales que quedaron desactivados pero tienen historial (ej. uno cargado desde factura que desapareció).">♻️ Recuperar artículos</button>`:''}
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Total SKU</div><div class="text-2xl font-bold mt-1">${totalSKU}</div></div>
@@ -8733,6 +8737,15 @@ async function prodDel(id, nombre) {
 
 /* ----- MOVIMIENTOS ----- */
 // ---- Depurar productos duplicados en Stock ----
+async function recuperarArticulos(){
+  if(!confirm('¿Volver a mostrar los insumos/cereales que quedaron desactivados pero tienen historial (movimientos, labores, facturas)?')) return;
+  try{
+    const r=await api('/api/admin/stock/reactivar-insumos',{method:'POST',body:'{}'});
+    const n=r.data?.reactivados||0;
+    toast(n>0?`Listo: ${n} artículo(s) recuperado(s) y de vuelta en Stock.`:'No había artículos desactivados con historial para recuperar.','success');
+    if(n>0) pages.stock();
+  }catch(e){ toast(e.message,'error'); }
+}
 async function fusionarArticulosForm(){
   let prods=[];
   try{ const r=await api('/api/stock-actual'); prods=(r.data||[]).filter(p=>p && p.id && !String(p.id).startsWith('comp:')); }catch(e){ return toast(e.message,'error'); }
