@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
+      titulo:'🧾 v2.442.0 — Movimientos: abrir el recibo/OP nunca falla',
+      desc:'En <b>Movimientos de ventas y de compras</b>, el botón <b>Abrir</b> de un <b>cobro (recibo)</b> o de un <b>pago (orden de pago)</b> ya no tira "Comprobante no encontrado": si el documento no se encuentra, el sistema <b>reconstruye el comprobante</b> con los datos del movimiento para que <b>siempre</b> lo puedas ver, imprimir o reenviar. El <b>detalle (👁️) de las facturas</b> se puede ver siempre, en cualquier estado (autorizada, sin CAE, anulada, con pago aplicado).' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
       titulo:'🏭 v2.441.0 — Fábrica: planilla de producción diaria (expeller)',
       desc:'El <b>parte de molienda</b> ahora es una <b>planilla de producción diaria</b> unificada y más clara. Cargás <b>varias materias primas con los kilos reales</b> de cada una (soja, un poco de maní, carbonato…), los <b>productos obtenidos reales</b> (expeller, aceite, desperdicio) y una <b>línea aparte de merma de secado</b> (desactivación). Lleva <b>fecha de jornada</b> con hora de inicio/fin (23:00→17:00) y te muestra en vivo el <b>balance</b> (procesado vs. obtenido vs. merma) y el <b>costo por producto</b>. Además, botón <b>🖨️ Imprimir planilla en blanco</b> para que el operario la complete a mano durante la producción y después cargue todo al sistema. El stock se actualiza solo: descuenta cada materia prima e ingresa cada producto. 🌱' },
@@ -15461,6 +15464,7 @@ pages.facturacion = async function() {
     const [f, c, cobR] = await Promise.all([api('/api/facturas'), api('/api/clientes'), api('/api/documentos?tipo=recibo_cobro').catch(()=>({data:[]}))]);
     if (!state.cache.campos) { try { state.cache.campos = (await api('/api/campos')).data || []; } catch {} }
     rows = f.data||[]; clientes = c.data||[]; cobros = cobR.data||[]; state.cache.clientes = clientes;
+    state._ventaCobros = cobros; // para reconstruir el recibo si el documento no se encuentra
   } catch (e) { return toast(e.message,'error'); }
   state.cache.facturas = rows;
   state.ventaFilter = state.ventaFilter || { desde:'', hasta:'', clienteId:'', tipo:'', q:'' };
@@ -18001,6 +18005,7 @@ pages.compras = async function() {
     const [f, p, opsR] = await Promise.all([api('/api/facturas-compra'), api('/api/proveedores'), api('/api/documentos?tipo=orden_pago').catch(()=>({data:[]}))]);
     if (!state.cache.campos) { try { state.cache.campos = (await api('/api/campos')).data || []; } catch {} }
     rows = f.data||[]; provs = p.data||[]; ops = opsR.data||[]; state.cache.proveedores = provs;
+    state._compraOps = ops; // para reconstruir la OP si el documento no se encuentra
   } catch (e) { return toast(e.message,'error'); }
   await cargarMonedas();
   state.cache.facturasCompra = rows;
@@ -23685,7 +23690,20 @@ async function ordenPagoReabrir(id, accion){
     op._docId = doc.id;
     if (accion === 'email') { state._opActual = op; return ordenPagoEmail(); }
     ordenPagoAbrir(op);
-  } catch(e){ toast(e.message,'error'); }
+  } catch(e){
+    // Fallback: si el documento no se encuentra, reconstruimos la OP con lo que hay
+    // en la lista para que SIEMPRE se pueda ver/reimprimir.
+    const o = (state._compraOps||[]).find(x=>x.id===id);
+    if (o) {
+      const op = { _docId:o.id, numero:o.numero||'', fecha:o.fecha, proveedor:o.contactoNombre||'—',
+        proveedorEmail:o.contactoEmail||'', monto:Number(o.total||0),
+        comprobantes:[{ detalle:'Pago', importe:Number(o.total||0) }] };
+      if (accion === 'email') { state._opActual = op; return ordenPagoEmail(); }
+      ordenPagoAbrir(op);
+    } else {
+      toast(e.message,'error');
+    }
+  }
 }
 // Reconstruir OP de pagos anteriores (para que aparezcan y se puedan reimprimir/enviar/deshacer).
 async function comprasBackfillOP(){
@@ -23846,7 +23864,26 @@ async function reciboWhatsApp(){ const r=state._recActual; if(!r) return;
   const texto=_recTexto(r)+'\n\n(Te adjunto el recibo en PDF.)';
   setTimeout(()=>window.open(base+'?text='+encodeURIComponent(texto),'_blank'), 400); }
 async function reciboEmail(){ const r=state._recActual; if(!r) return; let to=r.clienteEmail||''; if(!to){ to=(prompt('Email del cliente:','')||'').trim(); if(!to) return; } const doc=await _recBuildPDF(r); const pdf=doc?_pdfDocToBase64(doc):null; const emp=_opEmpresa(); const asunto='Recibo de cobro — '+emp.nombre+(r.numero?' N° '+r.numero:''); const mensaje='Estimados,\n\nAdjuntamos el recibo por '+fmt$(r.monto)+'.\n\nSaludos,\n'+emp.nombre; await enviarComprobanteEmail({ to, asunto, mensaje, pdfBase64:pdf, filename:_recFilename(r), tipo:'recibo_cobro', documentoId:r._docId||null, textoFallback:_recTexto(r) }); }
-async function reciboReabrir(id, accion){ try { const doc=(await api('/api/documentos/'+id)).data; const r=doc.datos||{}; r._docId=doc.id; if(accion==='email'){ state._recActual=r; return reciboEmail(); } reciboAbrir(r); } catch(e){ toast(e.message,'error'); } }
+async function reciboReabrir(id, accion){
+  try {
+    const doc=(await api('/api/documentos/'+id)).data; const r=doc.datos||{}; r._docId=doc.id;
+    if(accion==='email'){ state._recActual=r; return reciboEmail(); }
+    reciboAbrir(r);
+  } catch(e){
+    // Si el documento no se encuentra (recibos viejos o migrados), reconstruimos el
+    // recibo con lo que ya tenemos en la lista para que SIEMPRE se pueda ver/imprimir.
+    const o = (state._ventaCobros||[]).find(x=>x.id===id);
+    if (o) {
+      const r = { _docId:o.id, numero:o.numero||'', fecha:o.fecha, cliente:o.contactoNombre||'—',
+        clienteEmail:o.contactoEmail||'', monto:Number(o.total||0),
+        comprobantes:[{ detalle:'Cobro', importe:Number(o.total||0) }] };
+      if(accion==='email'){ state._recActual=r; return reciboEmail(); }
+      reciboAbrir(r);
+    } else {
+      toast(e.message,'error');
+    }
+  }
+}
 
 async function pagoCobroConfirmar(modo) {
   const esPago = modo === 'pago';
@@ -31719,8 +31756,8 @@ function molTabPartes() {
 }
 // ---- Planilla de producción unificada (v2.441): materias primas con kg reales
 //      + productos obtenidos reales + merma de secado aparte + jornada ----
-function _molProdOpts(selId) {
-  const prods = (state.cache.productos||[]).filter(p=>p.activo!==false);
+function _mpProdOpts(selId) {
+  const prods = (state.cache.productos||[]).filter(p=>p.activo!==false).slice().sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
   return `<option value="">— elegir —</option>`+prods.map(p=>`<option value="${esc(p.id)}" ${p.id===selId?'selected':''}>${esc(p.nombre)}</option>`).join('');
 }
 function _molDepOpts(selId) {
@@ -31730,7 +31767,7 @@ function _molDepOpts(selId) {
 function _molProdCosto(pid){ const p=(state.cache.productos||[]).find(x=>x.id===pid); return p? (p.ultimoCostoCompra||p.costoFabricacionKg||0):0; }
 function molMpRow(pre){ pre=pre||{};
   return `<tr data-mpr>
-    <td><select class="input text-sm" data-mp="prod" onchange="molMpPickCosto(this);molParteCalc()">${_molProdOpts(pre.productoId)}</select></td>
+    <td><select class="input text-sm" data-mp="prod" onchange="molMpPickCosto(this);molParteCalc()">${_mpProdOpts(pre.productoId)}</select></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-mp="kg" style="width:110px" placeholder="kg" value="${pre.kg!=null?pre.kg:''}" oninput="molParteCalc()"/></td>
     <td><input type="number" step="0.0001" class="input text-sm text-right" data-mp="cu" style="width:100px" placeholder="$/kg" value="${pre.costoUnit!=null?pre.costoUnit:''}" oninput="molParteCalc()"/></td>
     <td><select class="input text-sm" data-mp="dep" style="width:130px">${_molDepOpts(pre.depositoId)}</select></td>
@@ -31738,7 +31775,7 @@ function molMpRow(pre){ pre=pre||{};
 }
 function molSalRow(pre){ pre=pre||{};
   return `<tr data-salr>
-    <td><select class="input text-sm" data-sl="prod" onchange="molParteCalc()">${_molProdOpts(pre.productoId)}</select></td>
+    <td><select class="input text-sm" data-sl="prod" onchange="molParteCalc()">${_mpProdOpts(pre.productoId)}</select></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-sl="kg" style="width:110px" placeholder="kg" value="${pre.kg!=null?pre.kg:''}" oninput="molParteCalc()"/></td>
     <td><select class="input text-sm" data-sl="dep" style="width:130px">${_molDepOpts(pre.depositoId)}</select></td>
     <td class="text-center"><input type="checkbox" data-sl="merma" ${pre.esMerma?'checked':''} onchange="molParteCalc()" title="Es merma/desperdicio (no ingresa stock ni lleva costo)"/></td>
@@ -31772,13 +31809,18 @@ function molParteCalc(){
   const kgSal=sals.reduce((a,s)=>a+s.kg,0);
   const kgSalNoMerma=sals.filter(s=>!s.esMerma).reduce((a,s)=>a+s.kg,0);
   const dif=Math.round((kgProc-kgSal-mermaSec)*100)/100;
-  const pName=id=>((state.cache.productos||[]).find(p=>p.id===id)?.nombre)||'';
+  const _prod=id=>((state.cache.productos||[]).find(p=>p.id===id))||{};
+  const pName=id=>_prod(id).nombre||'';
+  const pPrecio=id=>Number(_prod(id).precioReferencia||0);
   // reparto de costo por kg de salidas que no son merma
   const sumNoM=kgSalNoMerma;
+  let valVentaTot=0;
   const rows=sals.map(s=>{ const costo=(!s.esMerma&&sumNoM>0)?costoTotal*s.kg/sumNoM:0; const rend=kgProc>0?(s.kg/kgProc*100):0;
+    const pr=pPrecio(s.productoId); const val=(!s.esMerma&&pr>0)?pr*s.kg:0; if(val>0) valVentaTot+=val;
     return `<tr><td>${esc(pName(s.productoId)||'—')}${s.esMerma?' <span class="text-[10px] text-slate-400">(merma)</span>':''}</td>
       <td class="text-right">${rend.toFixed(1)}%</td><td class="text-right font-medium">${_molKg(s.kg)}</td>
-      <td class="text-right">${s.esMerma?'—':_molFmt(s.kg>0?costo/s.kg:0)}</td><td class="text-right">${s.esMerma?'—':_molFmt(costo)}</td></tr>`;}).join('');
+      <td class="text-right">${s.esMerma?'—':_molFmt(s.kg>0?costo/s.kg:0)}</td><td class="text-right">${s.esMerma?'—':_molFmt(costo)}</td>
+      <td class="text-right">${(!s.esMerma&&pr>0)?_molFmt(val):'<span class="text-slate-300">—</span>'}</td></tr>`;}).join('');
   const difTxt = Math.abs(dif)<0.5 ? `<span class="text-emerald-600">balanceado ✓</span>` : (dif>0?`<span class="text-amber-600">faltan declarar ${_molKg(dif)} (merma/ajuste)</span>`:`<span class="text-red-600">salen ${_molKg(-dif)} de más que lo procesado</span>`);
   box.innerHTML = `<div class="kpi">
     <div class="flex flex-wrap gap-4 text-xs text-slate-600 mb-2">
@@ -31787,9 +31829,11 @@ function molParteCalc(){
       <div>Merma de secado: <b>${_molKg(mermaSec)}</b></div>
       <div>Balance: ${difTxt}</div>
       <div>Costo total del lote: <b>${_molFmt(costoTotal)}</b></div>
+      ${valVentaTot>0?`<div>Valor de venta (ref.): <b class="text-emerald-700">${_molFmt(valVentaTot)}</b></div>`:''}
     </div>
-    <table class="table w-full text-sm"><thead><tr><th>Producto obtenido</th><th class="text-right">Rend.</th><th class="text-right">Cantidad</th><th class="text-right">Costo/kg</th><th class="text-right">Costo</th></tr></thead>
-    <tbody>${rows||`<tr><td colspan="5" class="text-center text-slate-400 py-3">Cargá los productos obtenidos.</td></tr>`}</tbody></table></div>`;
+    <table class="table w-full text-sm"><thead><tr><th>Producto obtenido</th><th class="text-right">Rend.</th><th class="text-right">Cantidad</th><th class="text-right">Costo/kg</th><th class="text-right">Costo</th><th class="text-right">Valor venta</th></tr></thead>
+    <tbody>${rows||`<tr><td colspan="6" class="text-center text-slate-400 py-3">Cargá los productos obtenidos.</td></tr>`}</tbody></table>
+    <div class="text-[11px] text-slate-400 mt-1">El "Valor de venta" usa el precio de referencia de cada producto (lo cargás en el Catálogo). Los kg quedan registrados aunque no tengan precio.</div></div>`;
 }
 function molParteForm() {
   const fs = (state._molFormulas||[]).filter(f=>f.activo!==false);

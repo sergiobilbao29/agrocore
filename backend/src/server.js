@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.441.0';
+const AGROCORE_VERSION = '2.442.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17774,13 +17774,14 @@ const _AYUDA_KB = [
       'Guardá: queda registrado en Movimientos.'],
     atajo:{ page:'stock', label:'Abrir Stock' } },
   { id:'molienda', terms:['molienda','moler','fabrica','planta procesadora','expeller','aceite','pellet','merma','procesar soja','parte de molienda','formula de molienda','costo de fabricacion','plan canje','canje','paridad','rendimiento real','kg reales','activar molienda','habilitar fabrica','produccion industrial'],
-    titulo:'Molienda / Fábrica (procesar grano + plan canje)',
+    titulo:'Molienda / Fábrica (planilla de producción de expeller + plan canje)',
     pasos:[
       'Primero activá el módulo: Configuración → Empresa → tildá "Producción industrial / Fábrica". Solo las empresas procesadoras necesitan verlo. Recién ahí aparece "Molienda / Fábrica" en Stock y depósitos.',
       'Tip: en la ficha de cada producto marcá su "Rol en fábrica" (materia prima = grano de origen, o producto final = coproducto). Así la fórmula solo te ofrece esos y no todo el catálogo (ni animales ni agroquímicos).',
-      'En "Fórmulas" definí el grano de origen y los coproductos por % (ej. Expeller 88, Aceite 10, Merma 2). Deben sumar 100%.',
-      'En "Partes de molienda" cargá solo los kilos de soja + costo del grano + costos de producción: el sistema descuenta la soja e ingresa expeller, aceite y merma solo, con el costo por kg. Ojo: no te deja procesar más grano del que hay en el silo (evita stock negativo).',
-      'Si querés cargar lo que REALMENTE salió, tildá "Cargar rendimiento real" y poné los kg obtenidos de cada coproducto: la merma se recalcula sola como lo que falte y el costo por kg se ajusta a la producción real.',
+      'En "Fórmulas" definí el grano de origen y los coproductos por % (ej. Expeller 88, Aceite 10, Merma 2). Sirve de plantilla: precarga las materias primas y los productos de la planilla.',
+      'PLANILLA DIARIA (parte de producción): es un parte por jornada. Cargás la fecha de jornada (y hora de inicio/fin, ej. 23:00→17:00), la grilla de MATERIAS PRIMAS con los KILOS REALES de cada una (soja, un poco de maní, carbonato…), y la grilla de PRODUCTOS OBTENIDOS reales (expeller, aceite, desperdicio). Marcá "Merma" en el desperdicio/merma (no ingresa stock ni lleva costo). Cargás aparte la "Merma de secado" (desactivación de la soja). El sistema descuenta cada materia prima e ingresa cada producto, y te muestra en vivo el balance (procesado vs. obtenido vs. merma), el costo por kg y, si el producto tiene precio de referencia, el valor de venta. Ojo: no te deja usar más materia prima de la que hay en stock.',
+      'Antes de producir podés tocar "🖨️ Imprimir planilla en blanco": sale una hoja para que el operario anote a mano los kg de lo que usa y lo que obtiene durante la jornada, y después cargás todo al sistema.',
+      'Los kilos nunca son exactos: cargá siempre los reales, el sistema ajusta el costo por kg a la producción real del día.',
       'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',
       'CANJE — hay dos formas y conviene no mezclarlas: (A) "Plan canje": una operación cerrada, entregás producto y recibís grano (o al revés) por una paridad fija; mueve el stock en especie y se puede anular. Úsalo cuando la operación entra y sale completa.',
       'CANJE (B) "Cuenta canje (grano)": es la CUENTA CORRIENTE en kilos de cada cliente/proveedor, para cuando NO siempre entrega y lleva lo mismo (a veces deja soja, a veces se lleva producto, a veces se pasa). Tiene tres botones: 🌾 "Entró grano del cliente" (deja soja → saldo a favor), 📦 "Se llevó producto" (retira → descuenta su equivalente en grano según la paridad que pongas) y ✏️ "Ajuste". En "Ver detalle" ves TODOS los movimientos del cliente con el saldo acumulado; el saldo te dice si "le falta llevar" (+) o "se pasó / debe" (−). Desde el detalle podés cargar más movimientos sin salir. Está en el menú Comercial → "Cuenta canje (grano)".'],
