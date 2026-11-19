@@ -3125,6 +3125,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
+      titulo:'🧹 v2.449.0 — Stock: "Depurar duplicados" limpia insumos huérfanos (renombrados)',
+      desc:'Cuando <b>renombrabas un insumo en el Catálogo</b> (ej. "2,4-D" → "2,4-D ENLIST COLEX"), el artículo viejo quedaba <b>colgado en Stock y en el selector de labores</b>, sin descripción ni familia, aunque en el Catálogo ya no estaba. Ahora <b>Stock → 🧹 Depurar duplicados</b> también <b>detecta y limpia esos huérfanos de Insumos/Cereales</b> (los que ya no están en el Catálogo): si no tienen movimientos se borran, y si tienen historial se desactivan. Corré el botón una vez en cada empresa y la lista queda prolija. Nota: "copiar a otras empresas" copia el <b>artículo</b> del catálogo, no borra el producto viejo de cada empresa — por eso hay que correr el depurador en cada una.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
       titulo:'🌾 v2.448.2 — Arrendamiento: grilla de ventas más ancha, sin scroll lateral',
       desc:'La pantalla de <b>Ventas y entregas</b> ahora se abre más <b>ancha</b> y la tabla entra completa, sin tener que correrla para los costados para ver el botón de guardar, entregas o borrar. Dejamos <b>un solo botón</b> de "Venta manual" (arriba de la tabla) para que no quede duplicado.' },
@@ -8727,11 +8730,12 @@ async function prodDel(id, nombre) {
 /* ----- MOVIMIENTOS ----- */
 // ---- Depurar productos duplicados en Stock ----
 async function depurarDuplicados(){
-  let grupos=[], familias=0, huerfanos=0;
-  try{ const r=await api('/api/admin/stock/duplicados'); grupos=r.data||[]; familias=r.familias||0; huerfanos=r.huerfanos||0; }catch(e){ return toast(e.message,'error'); }
-  if(!grupos.length && !familias && !huerfanos) return toast('No hay duplicados, familias ni artículos huérfanos para limpiar. Todo en orden ✅','success');
+  let grupos=[], familias=0, huerfanos=0, huerfanosIns=0;
+  try{ const r=await api('/api/admin/stock/duplicados'); grupos=r.data||[]; familias=r.familias||0; huerfanos=r.huerfanos||0; huerfanosIns=r.huerfanosIns||0; }catch(e){ return toast(e.message,'error'); }
+  if(!grupos.length && !familias && !huerfanos && !huerfanosIns) return toast('No hay duplicados, familias ni artículos huérfanos para limpiar. Todo en orden ✅','success');
   const notaFam = familias>0 ? `<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2 mb-2">🏷️ Además, a <b>${familias}</b> producto${familias===1?'':'s'} se le${familias===1?'':'s'} va a <b>corregir la familia</b> según el Catálogo (Herbicida, Fungicida, Fertilizante, etc.).</div>` : '';
   const notaHuerf = huerfanos>0 ? `<div class="bg-red-50 border border-red-200 text-red-900 text-xs rounded-lg p-2 mb-2">🗑️ Además, se van a <b>eliminar ${huerfanos}</b> artículo${huerfanos===1?'':'s'} de <b>Animales</b> que ya no están en el Catálogo (ej. Cabra, Chivo). Los que tengan movimientos se desactivan en vez de borrarse, para no perder el historial.</div>` : '';
+  const notaHuerfIns = huerfanosIns>0 ? `<div class="bg-red-50 border border-red-200 text-red-900 text-xs rounded-lg p-2 mb-2">🗑️ Además, se van a <b>limpiar ${huerfanosIns}</b> artículo${huerfanosIns===1?'':'s'} de <b>Insumos/Cereales</b> que quedaron <b>huérfanos</b> (su nombre ya no está en el Catálogo, ej. un insumo que renombraste y el viejo quedó colgado sin descripción en Stock). Los que tengan movimientos se desactivan, el resto se borra.</div>` : '';
   const body = grupos.map(g=>`
     <div class="border border-slate-200 rounded-lg p-2 mb-2">
       <div class="font-semibold text-agro-900 text-sm mb-1">${esc(g.nombre)} <span class="text-slate-400 font-normal">· ${esc(g.categoria)}</span></div>
@@ -8743,7 +8747,8 @@ async function depurarDuplicados(){
     body:`${grupos.length?`<div class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg p-2 mb-2">Voy a <b>unir</b> cada grupo en un solo producto: conservo el que está en el <b>Catálogo</b> (✅, con su familia) y le <b>muevo el stock, los movimientos y la unidad</b> del otro. Después borro el duplicado. No se pierde ningún movimiento.</div>`:''}
       ${notaFam}
       ${notaHuerf}
-      <div style="max-height:50vh;overflow:auto">${body || ((familias||huerfanos)?'<div class="text-slate-500 text-sm">No hay duplicados; se corregirán familias y/o se limpiarán huérfanos.</div>':'')}</div>`,
+      ${notaHuerfIns}
+      <div style="max-height:50vh;overflow:auto">${body || ((familias||huerfanos||huerfanosIns)?'<div class="text-slate-500 text-sm">No hay duplicados; se corregirán familias y/o se limpiarán huérfanos.</div>':'')}</div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="depurarDuplicadosRun()">🧹 Aplicar</button>` });
 }
@@ -8755,6 +8760,7 @@ async function depurarDuplicadosRun(){
     const partes=[`${d.fusionados} grupo(s) unido(s)`,`${d.eliminados} duplicado(s) eliminado(s)`];
     if(d.familias)partes.push(`${d.familias} familia(s) corregida(s)`);
     if(d.huerfanos)partes.push(`${d.huerfanos} huérfano(s) de hacienda limpiado(s)`);
+    if(d.huerfanosIns)partes.push(`${d.huerfanosIns} huérfano(s) de insumos/cereales limpiado(s)`);
     toast(`Listo: ${partes.join(', ')}${(d.errores&&d.errores.length)?` · ${d.errores.length} con referencias no se pudieron`:''}`,'success');
     if(d.errores&&d.errores.length) console.warn('Depurar duplicados — pendientes:',d.errores);
     pages.stock();

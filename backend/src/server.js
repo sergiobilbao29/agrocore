@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.448.2';
+const AGROCORE_VERSION = '2.449.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -25063,7 +25063,8 @@ app.get('/api/admin/stock/duplicados', requireCompany, requirePermission('stock:
     const grupos = await _gruposDuplicados(req.companyId);
     let familias = 0; try { familias = await _repararFamiliasDesdeCatalogo(req.companyId, false); } catch {}
     let huerfanos = 0; try { huerfanos = (await _limpiarHaciendaHuerfana(req.companyId, false)).del; } catch {}
-    res.json({ ok: true, data: grupos, familias, huerfanos });
+    let huerfanosIns = 0; try { huerfanosIns = (await _limpiarInsumosHuerfanos(req.companyId, false)).del; } catch {}
+    res.json({ ok: true, data: grupos, familias, huerfanos, huerfanosIns });
   } catch (e) { next(e); }
 });
 // Elimina productos de HACIENDA cuya categoria de animal ya no existe en el catalogo
@@ -25089,6 +25090,41 @@ async function _limpiarHaciendaHuerfana(companyId, apply) {
     ]);
     let hm = 0; try { hm = await prisma.haciendaMovimiento.count({ where: { companyId, categoria: p.categoriaHacienda || p.nombre } }); } catch {}
     if (nm + ia + fi + fci + hm === 0) {
+      try { await prisma.producto.delete({ where: { id: p.id } }); del++; }
+      catch { try { await prisma.producto.update({ where: { id: p.id }, data: { activo: false } }); off++; } catch {} }
+    } else {
+      try { await prisma.producto.update({ where: { id: p.id }, data: { activo: false } }); off++; } catch {}
+    }
+  }
+  return { del, off };
+}
+// Elimina productos de INSUMOS/CEREALES cuyo nombre ya NO existe en el Catalogo (tabla
+// catalogo). Pasa cuando se RENOMBRA un articulo del catalogo (ej. "2,4-D" -> "2,4-D ENLIST"):
+// la sincronizacion crea el producto nuevo pero el viejo queda HUERFANO y seguia apareciendo
+// en Stock y en el selector de labores, sin familia. Si tiene movimientos/referencias se
+// DESACTIVA (no se pierde historial); si no tiene nada, se BORRA. En preview (apply=false)
+// solo cuenta los que se borrarian. No toca productos de fabrica (rolFabrica) ni otras categorias.
+async function _limpiarInsumosHuerfanos(companyId, apply) {
+  const nrm = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim();
+  const items = await prisma.catalogo.findMany({ where: { companyId }, select: { nombre: true } });
+  const vivos = new Set(items.map(c => nrm(c.nombre)).filter(Boolean));
+  if (!vivos.size) return { del: 0, off: 0 }; // sin catalogo no hay referencia autoritativa
+  const prods = (await prisma.producto.findMany({
+    where: { companyId, activo: true, rolFabrica: null },
+    select: { id: true, nombre: true, categoria: true },
+  })).filter(p => ['insumos', 'cereales'].includes((p.categoria || '').toLowerCase()));
+  let del = 0, off = 0;
+  for (const p of prods) {
+    if (vivos.has(nrm(p.nombre))) continue; // sigue en el Catalogo -> se queda
+    if (!apply) { del++; continue; }
+    const [nm, ia, fi, fci] = await Promise.all([
+      prisma.movimiento.count({ where: { productoId: p.id } }),
+      prisma.insumoAplicado.count({ where: { productoId: p.id } }),
+      prisma.facturaItem.count({ where: { productoId: p.id } }),
+      prisma.facturaCompraItem.count({ where: { productoId: p.id } }),
+    ]);
+    let lc = 0; try { lc = await prisma.liquidacionCereal.count({ where: { productoId: p.id } }); } catch {}
+    if (nm + ia + fi + fci + lc === 0) {
       try { await prisma.producto.delete({ where: { id: p.id } }); del++; }
       catch { try { await prisma.producto.update({ where: { id: p.id }, data: { activo: false } }); off++; } catch {} }
     } else {
@@ -25132,7 +25168,8 @@ app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermissio
     }
     let familias = 0; try { familias = await _repararFamiliasDesdeCatalogo(req.companyId, true); } catch {}
     let huerfanos = { del: 0, off: 0 }; try { huerfanos = await _limpiarHaciendaHuerfana(req.companyId, true); } catch {}
-    res.json({ ok: true, data: { grupos: grupos.length, fusionados, eliminados, familias, huerfanos: huerfanos.del + huerfanos.off, huerfanosDel: huerfanos.del, huerfanosOff: huerfanos.off, errores } });
+    let huerfanosIns = { del: 0, off: 0 }; try { huerfanosIns = await _limpiarInsumosHuerfanos(req.companyId, true); } catch {}
+    res.json({ ok: true, data: { grupos: grupos.length, fusionados, eliminados, familias, huerfanos: huerfanos.del + huerfanos.off, huerfanosDel: huerfanos.del, huerfanosOff: huerfanos.off, huerfanosIns: huerfanosIns.del + huerfanosIns.off, huerfanosInsDel: huerfanosIns.del, huerfanosInsOff: huerfanosIns.off, errores } });
   } catch (e) { next(e); }
 });
 // Detecta la categoría del sistema a partir del texto "Categoría / Raza".
