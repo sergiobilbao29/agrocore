@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
+      titulo:'💲 v2.443.0 — Cuenta canje: saldo en kilos y en pesos',
+      desc:'En la <b>Cuenta canje (grano)</b>, el saldo de cada cliente/proveedor ahora se muestra en <b>kilos de soja</b> y también en su <b>equivalente en pesos</b>, valorizado a la <b>pizarra de soja del día</b>. Arriba ves el <b>total del grupo</b> (kg y $) y el precio usado. Si no hay cotización del día, se muestran solo los kilos. Así ves de un vistazo cuánto representa en plata lo que cada uno tiene a favor o en contra.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
       titulo:'🧾 v2.442.0 — Movimientos: abrir el recibo/OP nunca falla',
       desc:'En <b>Movimientos de ventas y de compras</b>, el botón <b>Abrir</b> de un <b>cobro (recibo)</b> o de un <b>pago (orden de pago)</b> ya no tira "Comprobante no encontrado": si el documento no se encuentra, el sistema <b>reconstruye el comprobante</b> con los datos del movimiento para que <b>siempre</b> lo puedas ver, imprimir o reenviar. El <b>detalle (👁️) de las facturas</b> se puede ver siempre, en cualquier estado (autorizada, sin CAE, anulada, con pago aplicado).' },
@@ -32322,17 +32325,26 @@ async function molTabCtaCanje() {
   b.innerHTML = `<div class="text-slate-400 py-6 text-center">Cargando saldos…</div>`;
   let saldos = [];
   try { saldos = (await api('/api/canje-cta/saldos')).data || []; } catch (e) { b.innerHTML = `<div class="kpi text-red-600">${esc(e.message)}</div>`; return; }
+  // Precio de soja del día (pesos por tonelada) para valorizar el saldo en kg.
+  let precioSojaTn = 0;
+  try { await cargarCotizVivas(); precioSojaTn = Number((state.cache.cotizVivas||{}).SOJA||0); } catch {}
+  const _ccPesos = kg => precioSojaTn>0 ? (Number(kg||0)/1000)*precioSojaTn : null;
   const filas = saldos.map(s => {
     const n = s.saldoSoja;
     const estado = n > 0.001 ? `<span class="text-emerald-700">le falta llevar</span>` : (n < -0.001 ? `<span class="text-red-600">se pasó / debe</span>` : '<span class="text-slate-400">al día</span>');
     const col = n > 0.001 ? 'text-emerald-700' : (n < -0.001 ? 'text-red-600' : 'text-slate-400');
+    const pesos = _ccPesos(n);
+    const pesosTxt = pesos==null ? '<span class="text-slate-300">—</span>' : `<span class="${col}">${n>0?'+':''}${fmt$(Math.abs(pesos)*(n<0?-1:1))}</span>`;
     return `<tr class="table-row">
       <td><b>${esc(s.contactoNombre||'—')}</b> <span class="text-[10px] text-slate-400">${esc(s.contactoTipo)}</span></td>
       <td class="text-right font-bold ${col}">${n>0?'+':''}${_ccKg(n)} kg</td>
+      <td class="text-right">${pesosTxt}</td>
       <td class="text-xs">${estado}</td>
       <td class="text-right"><button class="btn btn-ghost btn-xs" onclick='molCtaCanjeVer(${JSON.stringify(s.contactoTipo)},${JSON.stringify(s.contactoId)},${JSON.stringify(s.contactoNombre||"")})'>Ver detalle</button></td>
     </tr>`;
   }).join('');
+  const totalKg = saldos.reduce((a,s)=>a+Number(s.saldoSoja||0),0);
+  const totalPesos = _ccPesos(totalKg);
   b.innerHTML = `
     <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900 mb-3">
       <b>Cómo funciona:</b> es la <b>cuenta corriente</b> del cliente. Cargás cada movimiento a medida que pasa: 1) <b>Entró grano</b>: el cliente deja soja → le queda saldo <b>a favor</b>. 2) <b>Se llevó producto</b>: cada retiro descuenta su equivalente en grano (según la paridad que pongas). El saldo (en kg de soja) te dice si <b>le falta llevar</b> (+) o <b>se pasó / debe</b> (−).
@@ -32343,9 +32355,10 @@ async function molTabCtaCanje() {
       <button class="btn btn-secondary" onclick="molCtaCanjeForm('retiro_producto')">📦 Se llevó producto</button>
       <button class="btn btn-ghost" onclick="molCtaCanjeForm('ajuste')">✏️ Ajuste manual</button>`:''}
     </div>
+    ${precioSojaTn>0 ? `<div class="text-[11px] text-slate-500 mb-2">💲 Saldos valorizados a la <b>soja de hoy</b>: ${fmt$(precioSojaTn)}/tn${totalPesos!=null?` · Total del grupo: <b class="${totalKg>0?'text-emerald-700':(totalKg<0?'text-red-600':'')}">${totalKg>0?'+':''}${_ccKg(totalKg)} kg ≈ ${totalPesos>0?'+':''}${fmt$(Math.abs(totalPesos)*(totalKg<0?-1:1))}</b>`:''}</div>` : `<div class="text-[11px] text-amber-600 mb-2">Sin cotización de soja de hoy: los saldos se muestran solo en kg. (El valor en pesos aparece cuando hay pizarra del día.)</div>`}
     <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
-      <thead><tr><th>Cliente / Proveedor</th><th class="text-right">Saldo (kg soja)</th><th>Estado</th><th></th></tr></thead>
-      <tbody>${filas || `<tr><td colspan="4" class="text-center text-slate-400 py-6">Todavía no hay movimientos de canje. Empezá con "Entró grano del cliente".</td></tr>`}</tbody>
+      <thead><tr><th>Cliente / Proveedor</th><th class="text-right">Saldo (kg soja)</th><th class="text-right">Valor (ARS)</th><th>Estado</th><th></th></tr></thead>
+      <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Todavía no hay movimientos de canje. Empezá con "Entró grano del cliente".</td></tr>`}</tbody>
     </table></div>`;
 }
 function _ccContactoOpts(sel) {
