@@ -3126,6 +3126,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
+      titulo:'🌾 v2.448.1 — Arrendamiento: botón "Venta manual" más visible',
+      desc:'Dejamos bien a la vista el botón para cargar el <b>saldo de la campaña anterior</b>: ahora es un <b>botón verde</b> arriba de la tabla de ventas (y también en el pie). Las ventas manuales se marcan con un cartelito <b>MANUAL</b> ámbar para distinguirlas de los meses del plan, y la grilla quedó más clara y aireada.' },
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
       titulo:'🌾 v2.448.0 — Arrendamiento: venta manual para el saldo de la campaña anterior',
       desc:'El contrato de arrendamiento se carga <b>uno por año/campaña</b>. Cuando el dueño vende en una misma operación kilos de la <b>campaña vieja</b> + de la <b>nueva</b> (ej. 5.000 kg de la 25/26 + 10.000 kg de la 26/27), ahora en <b>🌾 Ventas y entregas</b> tenés el botón <b>"➕ Venta manual (otra campaña / ajuste)"</b>: cargás esos 5.000 kg aparte, con una <b>etiqueta</b> que los identifique (ej. <i>"Campaña 25/26 — saldo"</i>) y su pizarra. Así el total y el saldo a favor <b>cierran en un solo lugar</b> y esos kilos quedan marcados como de la campaña anterior, sin tener que cargar todo el historial viejo. Una venta manual sin entregas se puede <b>borrar</b> con la 🗑️. Actualizamos el instructivo, el manual y el asistente.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
