@@ -34329,16 +34329,17 @@ async function arrVentasModal(id){
         <span>· ${fmtDate(p.fecha)} · ${esc(({efectivo:'Efectivo',cheque:'Cheque',transferencia:'Transfer.',debito:'Débito',tarjeta:'Tarjeta',externo:'Externo'})[p.metodo]||p.metodo)} · <b>${fmt$(p.importe)}</b>${p.kilosEntregados?` · ${_kvKg(p.kilosEntregados)} kg`:''}</span>
         <button class="text-red-500 hover:underline" onclick='arrEntregaDel(${JSON.stringify(id)},${JSON.stringify(v.id)},${JSON.stringify(p.id)})'>deshacer</button>
       </div>`).join('');
-    return `<tr class="border-t align-top">
-      <td class="p-1 text-xs font-medium">${esc(v.etiqueta||v.periodo)} ${_kvEstadoBadge(v.estado)}
+    const esManual = (v.periodo==='manual' || !/^\d{4}-\d{2}$/.test(String(v.periodo||'')));
+    return `<tr class="border-t align-top ${esManual?'bg-amber-50/50':''}">
+      <td class="p-2 text-xs font-medium">${esManual?'<span class="inline-block px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 text-[10px] font-semibold mr-1">MANUAL</span>':''}${esc(v.etiqueta||v.periodo)} ${_kvEstadoBadge(v.estado)}
         ${entregasList?`<div class="mt-1">${entregasList}</div>`:''}</td>
-      <td class="p-1 text-right"><input type="number" step="1" class="input text-sm text-right" style="width:90px" value="${v.kilos||''}" id="kv-k-${v.id}"/></td>
-      <td class="p-1 text-right"><input type="number" step="0.01" class="input text-sm text-right" style="width:110px" placeholder="$/tn" value="${v.precioPizarra||''}" id="kv-p-${v.id}"/></td>
-      <td class="p-1"><input type="date" class="input text-sm" style="width:135px" value="${v.fechaVenta?String(v.fechaVenta).slice(0,10):''}" id="kv-f-${v.id}"/></td>
-      <td class="p-1 text-right text-xs">${v.importe?`<b>${fmt$(v.importe)}</b>`:'—'}</td>
-      <td class="p-1 text-right text-xs ${Number(v.saldo||0)>0.01?'text-red-600 font-semibold':'text-emerald-700'}">${v.importe?fmt$(v.saldo):'—'}</td>
-      <td class="p-1 text-right whitespace-nowrap">
-        <button class="btn btn-ghost btn-xs text-emerald-700" onclick='arrVentaGuardar(${JSON.stringify(id)},${JSON.stringify(v.id)})'>💾</button>
+      <td class="p-2 text-right"><input type="number" step="1" class="input text-sm text-right" style="width:90px" value="${v.kilos||''}" id="kv-k-${v.id}"/></td>
+      <td class="p-2 text-right"><input type="number" step="0.01" class="input text-sm text-right" style="width:110px" placeholder="$/tn" value="${v.precioPizarra||''}" id="kv-p-${v.id}"/></td>
+      <td class="p-2"><input type="date" class="input text-sm" style="width:135px" value="${v.fechaVenta?String(v.fechaVenta).slice(0,10):''}" id="kv-f-${v.id}"/></td>
+      <td class="p-2 text-right text-xs">${v.importe?`<b>${fmt$(v.importe)}</b>`:'—'}</td>
+      <td class="p-2 text-right text-xs ${Number(v.saldo||0)>0.01?'text-red-600 font-semibold':'text-emerald-700'}">${v.importe?fmt$(v.saldo):'—'}</td>
+      <td class="p-2 text-right whitespace-nowrap">
+        <button class="btn btn-ghost btn-xs text-emerald-700" title="Guardar" onclick='arrVentaGuardar(${JSON.stringify(id)},${JSON.stringify(v.id)})'>💾</button>
         ${entregasBtn}
         ${(!(v.pagos||[]).length)?`<button class="btn btn-ghost btn-xs text-red-600" title="Borrar esta venta" onclick='arrVentaDel(${JSON.stringify(id)},${JSON.stringify(v.id)})'>🗑️</button>`:''}
       </td>
@@ -34358,17 +34359,21 @@ async function arrVentasModal(id){
   </div>`;
   openModal({ title:`🌾 Ventas y entregas · ${esc(arr?.propietario||'')}`, size:'max-w-4xl',
     body:`${banner}<div class="text-xs text-slate-600 mb-2">Contrato: <b>${_kvKg(arr?.kilosTotal)} kg</b> de ${esc(arr?.grano||'grano')} · ~${_kvKg(arr?.kilosPorMes)} kg/mes. Cargá los <b>kilos reales</b> y el <b>precio pizarra ($/tn)</b> de cada venta y guardá (💾); después registrá las <b>entregas</b> (pagos parciales). Si entregás un cheque por <b>más</b> de un mes, cargá el importe completo: el excedente queda <b>a favor</b> y se descuenta de las próximas ventas.</div>
-      <div class="border rounded overflow-auto max-h-[60vh]"><table class="w-full text-sm">
-        <thead class="bg-slate-50 text-xs sticky top-0"><tr>
-          <th class="p-1 text-left">Mes / entregas</th><th class="p-1 text-right">Kilos</th><th class="p-1 text-right">Pizarra $/tn</th><th class="p-1 text-left">Fecha venta</th><th class="p-1 text-right">A pagar</th><th class="p-1 text-right">Saldo</th><th class="p-1"></th>
+      <div class="flex items-center justify-between gap-2 mb-2">
+        <div class="text-xs font-semibold text-slate-600">Ventas del plan</div>
+        <button class="btn btn-sm bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-700 whitespace-nowrap" onclick='arrVentaManualForm(${JSON.stringify(id)})'>➕ Agregar venta manual (campaña anterior / ajuste)</button>
+      </div>
+      <div class="border rounded overflow-auto max-h-[56vh]"><table class="w-full text-sm">
+        <thead class="bg-slate-100 text-xs sticky top-0 z-10"><tr>
+          <th class="p-2 text-left">Mes / entregas</th><th class="p-2 text-right">Kilos</th><th class="p-2 text-right">Pizarra $/tn</th><th class="p-2 text-left">Fecha venta</th><th class="p-2 text-right">A pagar</th><th class="p-2 text-right">Saldo</th><th class="p-2 text-right">Acciones</th>
         </tr></thead>
-        <tbody>${filas||'<tr><td colspan="7" class="p-3 text-center text-slate-400">Sin ventas. Generá el plan desde el contrato.</td></tr>'}</tbody>
-        <tfoot class="bg-slate-50 text-xs font-semibold"><tr>
-          <td class="p-1">Totales</td><td class="p-1 text-right">${_kvKg(totKg)} kg</td><td></td><td></td>
-          <td class="p-1 text-right">${fmt$(totImp)}</td><td class="p-1 text-right ${totSaldo>0.01?'text-red-600':'text-emerald-700'}">${fmt$(totSaldo)}</td><td></td>
+        <tbody>${filas||'<tr><td colspan="7" class="p-3 text-center text-slate-400">Sin ventas. Generá el plan desde el contrato o agregá una venta manual.</td></tr>'}</tbody>
+        <tfoot class="bg-slate-100 text-xs font-semibold sticky bottom-0"><tr>
+          <td class="p-2">Totales</td><td class="p-2 text-right">${_kvKg(totKg)} kg</td><td></td><td></td>
+          <td class="p-2 text-right">${fmt$(totImp)}</td><td class="p-2 text-right ${totSaldo>0.01?'text-red-600':'text-emerald-700'}">${fmt$(totSaldo)}</td><td></td>
         </tr></tfoot>
       </table></div>`,
-    footer:`<button class="btn btn-ghost mr-auto" onclick='arrVentaManualForm(${JSON.stringify(id)})'>➕ Venta manual (otra campaña / ajuste)</button><button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
+    footer:`<button class="btn bg-emerald-600 text-white hover:bg-emerald-700 border border-emerald-700 mr-auto" onclick='arrVentaManualForm(${JSON.stringify(id)})'>➕ Venta manual (otra campaña / ajuste)</button><button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>` });
 }
 function arrVentaManualForm(id){
   openModal2({ title:'➕ Venta manual', size:'max-w-md',
