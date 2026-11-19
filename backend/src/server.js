@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.440.0';
+const AGROCORE_VERSION = '2.441.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12255,10 +12255,97 @@ app.get('/api/partes-molienda', requireCompany, requirePermission('stock:read'),
 app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
     const d = req.body || {};
-    const kg = Number(d.kgProcesados) || 0;
-    if (!d.formulaId || kg <= 0) return res.status(400).json({ ok: false, error: 'Elegí la fórmula y los kilos procesados (mayor a 0)' });
+    // Materias primas realmente consumidas (planilla unificada): [{productoId,kg,depositoId,costoUnit}]
+    const entradasIn = Array.isArray(d.entradas)
+      ? d.entradas.map(e => ({ productoId: e.productoId, kg: Number(e.kg) || 0, depositoId: e.depositoId || null, costoUnit: Number(e.costoUnit) || 0 })).filter(e => e.productoId && e.kg > 0)
+      : null;
+    // kg procesados = lo cargado o, si hay materias primas reales, su suma.
+    let kg = Number(d.kgProcesados) || 0;
+    if ((!kg || kg <= 0) && entradasIn && entradasIn.length) kg = _round2(entradasIn.reduce((a, e) => a + e.kg, 0));
+    if (!d.formulaId || kg <= 0) return res.status(400).json({ ok: false, error: 'Elegí la fórmula y cargá los kilos procesados o las materias primas (mayor a 0)' });
     const f = await prisma.formulaMolienda.findFirst({ where: { id: d.formulaId, companyId: req.companyId }, include: { items: { orderBy: { orden: 'asc' } } } });
     if (!f) return res.status(404).json({ ok: false, error: 'Fórmula no encontrada' });
+
+    // ---- PLANILLA UNIFICADA (v2.441): materias primas y salidas con kg REALES ----
+    // Si el parte trae entradas[] (materias primas reales) y/o salidas[], se usan esos kg
+    // en vez de los teóricos de la fórmula. La merma de secado se guarda aparte.
+    const salidasIn = Array.isArray(d.salidas)
+      ? d.salidas.map(s => ({ productoId: s.productoId, kg: Number(s.kg) || 0, depositoId: s.depositoId || null, esMerma: !!s.esMerma, coefCosto: (s.coefCosto != null && s.coefCosto !== '') ? Number(s.coefCosto) : null, nombre: s.nombre || '' })).filter(s => s.productoId && s.kg > 0)
+      : null;
+    if ((entradasIn && entradasIn.length) || (salidasIn && salidasIn.length)) {
+      if (!salidasIn || !salidasIn.length) return res.status(400).json({ ok: false, error: 'Cargá al menos un producto obtenido (expeller, aceite, etc.).' });
+      const mermaSecadoKg = d.mermaSecadoKg != null && d.mermaSecadoKg !== '' ? Number(d.mermaSecadoKg) || 0 : null;
+      // Entradas efectivas: las cargadas, o el origen de la fórmula por los kg procesados.
+      const entradas = (entradasIn && entradasIn.length)
+        ? entradasIn
+        : [{ productoId: f.origenProductoId, kg, depositoId: d.depositoOrigenId || null, costoUnit: Number(d.costoOrigenUnit) || 0 }];
+      // Nombres de producto para el snapshot.
+      const allIds = [...new Set([...entradas.map(e => e.productoId), ...salidasIn.map(s => s.productoId)])];
+      const prods2 = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: allIds } }, select: { id: true, nombre: true } });
+      const pN = Object.fromEntries(prods2.map(p => [p.id, p.nombre]));
+      const costoTotal = _round2(entradas.reduce((a, e) => a + e.kg * e.costoUnit, 0) + (Number(d.costoProduccion) || 0));
+      // Reparto del costo entre las salidas que NO son merma (por coefCosto, o por kg).
+      const salNoMerma = salidasIn.filter(s => !s.esMerma && s.kg > 0);
+      const sumCoef = salNoMerma.reduce((a, s) => a + (s.coefCosto != null ? s.coefCosto : s.kg), 0);
+      let acc = 0;
+      const resultados = salidasIn.map((s, i) => {
+        const coef = s.esMerma ? 0 : (s.coefCosto != null ? s.coefCosto : s.kg);
+        let costoItem = (!s.esMerma && sumCoef > 0) ? _round2(costoTotal * coef / sumCoef) : 0;
+        acc += costoItem;
+        const esUlt = coef > 0 && salidasIn.slice(i + 1).every(x => (x.esMerma ? 0 : (x.coefCosto != null ? x.coefCosto : x.kg)) <= 0);
+        if (esUlt && Math.abs(acc - costoTotal) >= 0.01) costoItem = _round2(costoItem + (costoTotal - acc));
+        const rendimientoPct = kg > 0 ? _round2(s.kg / kg * 100) : 0;
+        return { productoId: s.productoId, nombre: pN[s.productoId] || s.nombre || '', kg: _round2(s.kg), esMerma: s.esMerma, depositoDestinoId: s.depositoId, coef, rendimientoPct, costoTotal: costoItem, costoKg: s.kg > 0 ? _round2(costoItem / s.kg) : 0 };
+      });
+      const fecha2 = d.fecha ? new Date(d.fecha) : new Date();
+      // Validación de stock por cada materia prima.
+      if (!d.permitirNegativo) {
+        for (const e of entradas) {
+          const agg = await prisma.movimiento.groupBy({ by: ['tipo'], where: { companyId: req.companyId, productoId: e.productoId, ...(e.depositoId ? { depositoId: e.depositoId } : {}) }, _sum: { cantidad: true } });
+          let disp = 0; for (const a of agg) { const su = Number(a._sum.cantidad) || 0; disp += (a.tipo === 'ingreso' ? su : -su); }
+          if (e.kg > disp + 0.001) return res.status(400).json({ ok: false, error: `No hay stock suficiente de ${pN[e.productoId] || 'una materia prima'}: disponible ${disp.toLocaleString('es-AR')}, necesitás ${e.kg.toLocaleString('es-AR')}${e.depositoId ? ' en ese depósito' : ''}.` });
+        }
+      }
+      const _dd2 = String(fecha2.getDate()).padStart(2, '0'), _mm2 = String(fecha2.getMonth() + 1).padStart(2, '0');
+      const _d0 = new Date(fecha2.getFullYear(), fecha2.getMonth(), fecha2.getDate(), 0, 0, 0);
+      const _d1 = new Date(fecha2.getFullYear(), fecha2.getMonth(), fecha2.getDate(), 23, 59, 59);
+      const _n2 = await prisma.parteMolienda.count({ where: { companyId: req.companyId, fecha: { gte: _d0, lte: _d1 } } });
+      const codigo2 = `MOL-${_dd2}${_mm2}-${_n2 + 1}`;
+      const entradasSnap = entradas.map(e => ({ productoId: e.productoId, nombre: pN[e.productoId] || '', kg: _round2(e.kg), depositoId: e.depositoId, costoUnit: e.costoUnit, costoTotal: _round2(e.kg * e.costoUnit) }));
+      const parte2 = await prisma.$transaction(async (tx) => {
+        const p = await tx.parteMolienda.create({ data: {
+          companyId: req.companyId, codigo: codigo2, fecha: fecha2, formulaId: f.id,
+          depositoOrigenId: d.depositoOrigenId || entradas[0]?.depositoId || null,
+          kgProcesados: kg, costoOrigenUnit: entradas[0]?.costoUnit || 0, costoProduccion: Number(d.costoProduccion) || 0,
+          costoTotal, modoReal: true, horaInicio: d.horaInicio || null, horaFin: d.horaFin || null,
+          entradas: entradasSnap, mermaSecadoKg, centroCostoId: d.centroCostoId || null,
+          observaciones: d.observaciones || null, resultados, userId: req.user?.id || null,
+        } });
+        const ref = codigo2;
+        // Egreso de cada materia prima
+        for (const e of entradas) {
+          await tx.movimiento.create({ data: {
+            companyId: req.companyId, productoId: e.productoId, fecha: fecha2, tipo: 'egreso', motivo: 'molienda',
+            cantidad: _round2(e.kg), precio: e.costoUnit || null, total: _round2(e.kg * e.costoUnit) || null,
+            depositoId: e.depositoId || null, referencia: ref, observaciones: 'Molienda: ' + f.nombre + ' (materia prima)', userId: req.user?.id || null,
+          } });
+        }
+        // Ingreso de cada producto obtenido que NO es merma (expeller, aceite, etc.)
+        for (const r of resultados) {
+          if (r.esMerma || r.kg <= 0) continue;
+          await tx.movimiento.create({ data: {
+            companyId: req.companyId, productoId: r.productoId, fecha: fecha2, tipo: 'ingreso', motivo: 'molienda',
+            cantidad: r.kg, precio: r.costoKg || null, total: r.costoTotal || null,
+            depositoId: r.depositoDestinoId || null, referencia: ref, observaciones: 'Molienda ' + f.nombre, userId: req.user?.id || null,
+          } });
+          try { await tx.producto.update({ where: { id: r.productoId }, data: { costoFabricacionKg: r.costoKg } }); } catch (_) {}
+        }
+        return p;
+      });
+      return res.status(201).json({ ok: true, data: parte2 });
+    }
+    // ---- fin planilla unificada; sigue el camino clásico por fórmula ----
+
     const _salidas = f.items.filter(i => !i.esEntrada);
     const _entradas = f.items.filter(i => i.esEntrada);
     if (!_salidas.length) return res.status(400).json({ ok: false, error: 'La fórmula no tiene coproductos de salida' });

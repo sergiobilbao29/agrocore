@@ -3124,6 +3124,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
+      titulo:'🏭 v2.441.0 — Fábrica: planilla de producción diaria (expeller)',
+      desc:'El <b>parte de molienda</b> ahora es una <b>planilla de producción diaria</b> unificada y más clara. Cargás <b>varias materias primas con los kilos reales</b> de cada una (soja, un poco de maní, carbonato…), los <b>productos obtenidos reales</b> (expeller, aceite, desperdicio) y una <b>línea aparte de merma de secado</b> (desactivación). Lleva <b>fecha de jornada</b> con hora de inicio/fin (23:00→17:00) y te muestra en vivo el <b>balance</b> (procesado vs. obtenido vs. merma) y el <b>costo por producto</b>. Además, botón <b>🖨️ Imprimir planilla en blanco</b> para que el operario la complete a mano durante la producción y después cargue todo al sistema. El stock se actualiza solo: descuenta cada materia prima e ingresa cada producto. 🌱' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'18/11/2026',
       titulo:'👥 v2.440.0 — Editar labor: ahora podés cambiar los empleados',
       desc:'Al <b>editar una labor</b> ya aparece la <b>planilla de empleados</b>: podés <b>agregar, quitar o reasignar</b> quién la hizo, con sus <b>hectáreas y porcentaje</b>, sin tener que borrarla y cargarla de nuevo. Al guardar, el sistema <b>recalcula las ganancias</b> del mes automáticamente (reemplaza los movimientos de empleado de esa labor por los nuevos). Funciona también con <b>empleados compartidos</b> del grupo. 🌱' },
@@ -31714,101 +31717,172 @@ function molTabPartes() {
       <tbody>${filas || `<tr><td colspan="6" class="text-center text-slate-400 py-6">Sin partes de molienda todavía.</td></tr>`}</tbody>
     </table></div>`;
 }
+// ---- Planilla de producción unificada (v2.441): materias primas con kg reales
+//      + productos obtenidos reales + merma de secado aparte + jornada ----
+function _molProdOpts(selId) {
+  const prods = (state.cache.productos||[]).filter(p=>p.activo!==false);
+  return `<option value="">— elegir —</option>`+prods.map(p=>`<option value="${esc(p.id)}" ${p.id===selId?'selected':''}>${esc(p.nombre)}</option>`).join('');
+}
+function _molDepOpts(selId) {
+  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
+  return `<option value="">—</option>`+deps.map(d=>`<option value="${esc(d.id)}" ${d.id===selId?'selected':''}>${esc(d.nombre)}</option>`).join('');
+}
+function _molProdCosto(pid){ const p=(state.cache.productos||[]).find(x=>x.id===pid); return p? (p.ultimoCostoCompra||p.costoFabricacionKg||0):0; }
+function molMpRow(pre){ pre=pre||{};
+  return `<tr data-mpr>
+    <td><select class="input text-sm" data-mp="prod" onchange="molMpPickCosto(this);molParteCalc()">${_molProdOpts(pre.productoId)}</select></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-mp="kg" style="width:110px" placeholder="kg" value="${pre.kg!=null?pre.kg:''}" oninput="molParteCalc()"/></td>
+    <td><input type="number" step="0.0001" class="input text-sm text-right" data-mp="cu" style="width:100px" placeholder="$/kg" value="${pre.costoUnit!=null?pre.costoUnit:''}" oninput="molParteCalc()"/></td>
+    <td><select class="input text-sm" data-mp="dep" style="width:130px">${_molDepOpts(pre.depositoId)}</select></td>
+    <td class="text-center"><button class="btn btn-ghost btn-xs text-red-600" onclick="this.closest('tr').remove();molParteCalc()">✕</button></td></tr>`;
+}
+function molSalRow(pre){ pre=pre||{};
+  return `<tr data-salr>
+    <td><select class="input text-sm" data-sl="prod" onchange="molParteCalc()">${_molProdOpts(pre.productoId)}</select></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-sl="kg" style="width:110px" placeholder="kg" value="${pre.kg!=null?pre.kg:''}" oninput="molParteCalc()"/></td>
+    <td><select class="input text-sm" data-sl="dep" style="width:130px">${_molDepOpts(pre.depositoId)}</select></td>
+    <td class="text-center"><input type="checkbox" data-sl="merma" ${pre.esMerma?'checked':''} onchange="molParteCalc()" title="Es merma/desperdicio (no ingresa stock ni lleva costo)"/></td>
+    <td class="text-center"><button class="btn btn-ghost btn-xs text-red-600" onclick="this.closest('tr').remove();molParteCalc()">✕</button></td></tr>`;
+}
+function molMpPickCosto(sel){ const tr=sel.closest('tr'); const cu=tr.querySelector('[data-mp="cu"]'); if(cu&&!cu.value){ const c=_molProdCosto(sel.value); if(c) cu.value=c; } }
+function molAddMp(){ const b=$('#mol-mp-body'); if(b) b.insertAdjacentHTML('beforeend', molMpRow()); }
+function molAddSal(){ const b=$('#mol-sal-body'); if(b) b.insertAdjacentHTML('beforeend', molSalRow()); }
+function molFormulaChange(){
+  const f=(state._molFormulas||[]).find(x=>x.id===$('#mol-formula')?.value);
+  const mb=$('#mol-mp-body'), sb=$('#mol-sal-body'); if(!f||!mb||!sb) return;
+  // Materias primas: origen + items de entrada
+  const mps=[{productoId:f.origenProductoId, costoUnit:_molProdCosto(f.origenProductoId), depositoId:null}];
+  (f.items||[]).filter(i=>i.esEntrada).forEach(i=>mps.push({productoId:i.productoId, costoUnit:_molProdCosto(i.productoId), depositoId:i.depositoDestinoId||null}));
+  mb.innerHTML = mps.map(m=>molMpRow(m)).join('');
+  // Salidas: coproductos de la fórmula (no entradas)
+  const sals=(f.items||[]).filter(i=>!i.esEntrada).map(i=>({productoId:i.productoId, esMerma:!!i.esMerma, depositoId:i.depositoDestinoId||null}));
+  sb.innerHTML = sals.map(s=>molSalRow(s)).join('');
+  molParteCalc();
+}
+function _molReadMp(){ return $$('#mol-mp-body tr[data-mpr]').map(tr=>({ productoId:tr.querySelector('[data-mp="prod"]')?.value||'', kg:Number(tr.querySelector('[data-mp="kg"]')?.value||0), costoUnit:Number(tr.querySelector('[data-mp="cu"]')?.value||0), depositoId:tr.querySelector('[data-mp="dep"]')?.value||null })).filter(m=>m.productoId&&m.kg>0); }
+function _molReadSal(){ return $$('#mol-sal-body tr[data-salr]').map(tr=>({ productoId:tr.querySelector('[data-sl="prod"]')?.value||'', kg:Number(tr.querySelector('[data-sl="kg"]')?.value||0), depositoId:tr.querySelector('[data-sl="dep"]')?.value||null, esMerma:!!tr.querySelector('[data-sl="merma"]')?.checked })).filter(s=>s.productoId&&s.kg>0); }
+function molParteCalc(){
+  const box=$('#mol-preview'); if(!box) return;
+  const mps=_molReadMp(), sals=_molReadSal();
+  const mermaSec=Number($('#mol-mermasec')?.value||0);
+  const costoProd=Number($('#mol-costop')?.value||0);
+  const kgProc=mps.reduce((a,m)=>a+m.kg,0);
+  const costoMp=mps.reduce((a,m)=>a+m.kg*m.costoUnit,0);
+  const costoTotal=Math.round((costoMp+costoProd)*100)/100;
+  const kgSal=sals.reduce((a,s)=>a+s.kg,0);
+  const kgSalNoMerma=sals.filter(s=>!s.esMerma).reduce((a,s)=>a+s.kg,0);
+  const dif=Math.round((kgProc-kgSal-mermaSec)*100)/100;
+  const pName=id=>((state.cache.productos||[]).find(p=>p.id===id)?.nombre)||'';
+  // reparto de costo por kg de salidas que no son merma
+  const sumNoM=kgSalNoMerma;
+  const rows=sals.map(s=>{ const costo=(!s.esMerma&&sumNoM>0)?costoTotal*s.kg/sumNoM:0; const rend=kgProc>0?(s.kg/kgProc*100):0;
+    return `<tr><td>${esc(pName(s.productoId)||'—')}${s.esMerma?' <span class="text-[10px] text-slate-400">(merma)</span>':''}</td>
+      <td class="text-right">${rend.toFixed(1)}%</td><td class="text-right font-medium">${_molKg(s.kg)}</td>
+      <td class="text-right">${s.esMerma?'—':_molFmt(s.kg>0?costo/s.kg:0)}</td><td class="text-right">${s.esMerma?'—':_molFmt(costo)}</td></tr>`;}).join('');
+  const difTxt = Math.abs(dif)<0.5 ? `<span class="text-emerald-600">balanceado ✓</span>` : (dif>0?`<span class="text-amber-600">faltan declarar ${_molKg(dif)} (merma/ajuste)</span>`:`<span class="text-red-600">salen ${_molKg(-dif)} de más que lo procesado</span>`);
+  box.innerHTML = `<div class="kpi">
+    <div class="flex flex-wrap gap-4 text-xs text-slate-600 mb-2">
+      <div>Procesado (materias primas): <b>${_molKg(kgProc)}</b></div>
+      <div>Obtenido (salidas): <b>${_molKg(kgSal)}</b></div>
+      <div>Merma de secado: <b>${_molKg(mermaSec)}</b></div>
+      <div>Balance: ${difTxt}</div>
+      <div>Costo total del lote: <b>${_molFmt(costoTotal)}</b></div>
+    </div>
+    <table class="table w-full text-sm"><thead><tr><th>Producto obtenido</th><th class="text-right">Rend.</th><th class="text-right">Cantidad</th><th class="text-right">Costo/kg</th><th class="text-right">Costo</th></tr></thead>
+    <tbody>${rows||`<tr><td colspan="5" class="text-center text-slate-400 py-3">Cargá los productos obtenidos.</td></tr>`}</tbody></table></div>`;
+}
 function molParteForm() {
   const fs = (state._molFormulas||[]).filter(f=>f.activo!==false);
   if (!fs.length) return toast('Creá una fórmula primero','warn');
-  const deps = (state.cache.depositos||[]).filter(d=>d.activo!==false);
   const ccs = (state.cache.centrosCosto||[]).filter(c=>c.activo!==false);
   const optF = fs.map(f=>`<option value="${esc(f.id)}">${esc(f.nombre)} (origen: ${esc(f.origenNombre||'')})</option>`).join('');
-  const optD = `<option value="">— Silo / general —</option>`+deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('');
   const optCC = state.usaCentrosCosto ? `<div><label class="label">Centro de costo</label><select id="mol-cc" class="input"><option value="">—</option>${ccs.map(c=>`<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('')}</select></div>` : '';
   openModal({
-    title:'🏭 Nuevo parte de molienda', size:'max-w-2xl',
+    title:'🏭 Parte de producción (planilla diaria)', size:'max-w-3xl',
     body:`
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div><label class="label">Fórmula *</label><select id="mol-formula" class="input" onchange="molPrefillCosto()">${optF}</select></div>
-        <div><label class="label">Fecha *</label><input id="mol-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
-        <div><label class="label">Kg procesados *</label><input id="mol-kg" type="number" step="0.01" class="input" placeholder="30000" oninput="molPreview()"/></div>
-        <div><label class="label">Silo de origen</label><select id="mol-dep" class="input">${optD}</select></div>
-        <div><label class="label">Costo del grano ($/kg)</label><input id="mol-costog" type="number" step="0.0001" class="input" placeholder="0" oninput="molPreview()"/></div>
-        <div><label class="label">Costos de producción ($ del lote)</label><input id="mol-costop" type="number" step="0.01" class="input" placeholder="energía, mano de obra…" oninput="molPreview()"/></div>
-        ${optCC}
-        <div class="md:col-span-2"><label class="label">Observaciones</label><input id="mol-obs" class="input" placeholder="opcional"/></div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="col-span-2"><label class="label">Fórmula *</label><select id="mol-formula" class="input" onchange="molFormulaChange()">${optF}</select></div>
+        <div><label class="label">Fecha de jornada *</label><input id="mol-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div class="grid grid-cols-2 gap-1"><div><label class="label">Inicio</label><input id="mol-hini" type="time" class="input" value="23:00"/></div><div><label class="label">Fin</label><input id="mol-hfin" type="time" class="input" value="17:00"/></div></div>
       </div>
-      <div class="mt-2"><label class="flex items-center gap-2 text-sm"><input type="checkbox" id="mol-real" onchange="molRealToggle()"/> <span>Cargar <b>rendimiento real</b> (kg realmente obtenidos de cada coproducto)</span></label>
-        <div id="mol-realbox" class="mt-2"></div></div>
+
+      <div class="mt-3">
+        <div class="flex items-center justify-between mb-1"><label class="label !mb-0">🌾 Materias primas consumidas (kg reales)</label><button class="btn btn-ghost btn-xs" onclick="molAddMp()">+ Materia prima</button></div>
+        <table class="table w-full text-sm"><thead><tr><th>Producto</th><th class="text-right">Kg</th><th class="text-right">$/kg</th><th>Depósito</th><th></th></tr></thead>
+          <tbody id="mol-mp-body"></tbody></table>
+      </div>
+
+      <div class="mt-3">
+        <div class="flex items-center justify-between mb-1"><label class="label !mb-0">🏭 Productos obtenidos (kg reales)</label><button class="btn btn-ghost btn-xs" onclick="molAddSal()">+ Producto</button></div>
+        <table class="table w-full text-sm"><thead><tr><th>Producto</th><th class="text-right">Kg</th><th>Depósito destino</th><th class="text-center">Merma</th><th></th></tr></thead>
+          <tbody id="mol-sal-body"></tbody></table>
+        <div class="text-[11px] text-slate-400 mt-1">Marcá "Merma" en desperdicio/merma: no ingresa stock ni lleva costo. El costo del lote se reparte entre los productos no-merma según sus kg.</div>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+        <div><label class="label">Merma de secado (kg)</label><input id="mol-mermasec" type="number" step="0.01" class="input" placeholder="merma por humedad" oninput="molParteCalc()"/></div>
+        <div><label class="label">Costos de producción ($ del lote)</label><input id="mol-costop" type="number" step="0.01" class="input" placeholder="energía, mano de obra…" oninput="molParteCalc()"/></div>
+        ${optCC}
+      </div>
+      <div class="mt-2"><label class="label">Observaciones</label><input id="mol-obs" class="input" placeholder="opcional"/></div>
       <div id="mol-preview" class="mt-3"></div>`,
-    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick="molParteSave()">💾 Registrar molienda</button>`
+    footer:`<button class="btn btn-ghost" onclick="molPrintPlanilla()">🖨️ Imprimir planilla en blanco</button>
+            <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="molParteSave()">💾 Registrar producción</button>`
   });
-  molPrefillCosto(); molPreview();
-}
-function molPrefillCosto() {
-  const f = (state._molFormulas||[]).find(x=>x.id===$('#mol-formula')?.value);
-  if (!f) return;
-  const prod = (state.cache.productos||[]).find(p=>p.id===f.origenProductoId);
-  const el=$('#mol-costog'); if (el && !el.value && prod?.ultimoCostoCompra) el.value = prod.ultimoCostoCompra;
-  if ($('#mol-real')?.checked) molRealToggle();
-  molPreview();
-}
-function molRealToggle() {
-  const box = $('#mol-realbox'); if (!box) return;
-  if (!$('#mol-real')?.checked) { box.innerHTML=''; molPreview(); return; }
-  const f = (state._molFormulas||[]).find(x=>x.id===$('#mol-formula')?.value);
-  if (!f) { box.innerHTML=`<div class="text-xs text-amber-600">Elegí una fórmula primero.</div>`; return; }
-  const items=(f.items||[]).filter(i=>!i.esMerma);
-  box.innerHTML = `<div class="kpi"><div class="text-xs text-slate-500 mb-2">Ingresá los <b>kg reales</b> obtenidos de cada coproducto. La merma se recalcula como lo que falte para los kg procesados.</div>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">${items.map(i=>`<div><label class="label">${esc(i.productoNombre||'')} <span class="text-[10px] text-slate-400">(teórico ${i.rendimientoPct}%)</span></label>
-      <input class="input mol-realkg" data-pid="${esc(i.productoId)}" type="number" step="0.01" placeholder="kg reales" oninput="molPreview()"/></div>`).join('')}</div></div>`;
-  molPreview();
-}
-function _molRealData() {
-  if (!$('#mol-real')?.checked) return null;
-  const reales = Array.from(document.querySelectorAll('.mol-realkg')).map(el=>({ productoId: el.getAttribute('data-pid'), kg: Number(el.value||0) })).filter(r=>r.productoId);
-  return reales.length ? reales : null;
-}
-let _molPrevTO=null;
-function molPreview() {
-  clearTimeout(_molPrevTO);
-  _molPrevTO = setTimeout(async () => {
-    const box=$('#mol-preview'); if(!box) return;
-    const formulaId=$('#mol-formula')?.value, kg=Number($('#mol-kg')?.value||0);
-    if (!formulaId || !(kg>0)) { box.innerHTML=`<div class="text-xs text-slate-400">Ingresá los kilos para ver el resultado.</div>`; return; }
-    try {
-      const r = await api('/api/molienda/calcular', { method:'POST', body: JSON.stringify({
-        formulaId, kgProcesados:kg, costoOrigenUnit:Number($('#mol-costog')?.value||0), costoProduccion:Number($('#mol-costop')?.value||0) }) });
-      let resultados = r.resultados||[];
-      const reales = _molRealData();
-      if (reales) {
-        const m={}; reales.forEach(x=>m[x.productoId]=Number(x.kg)||0); let sumNM=0;
-        resultados = resultados.map(x=>{ if(x.esMerma) return x; const rk = m[x.productoId]!=null?m[x.productoId]:x.kg; sumNM+=rk;
-          return {...x, kg: Math.round(rk*100)/100, costoKg: rk>0?Math.round(x.costoTotal/rk*100)/100:0}; });
-        const merma=Math.round((kg-sumNM)*100)/100;
-        resultados = resultados.map(x=>x.esMerma?{...x, kg: merma>0?merma:0}:x);
-      }
-      const rows = resultados.map(x=>`<tr><td>${esc(x.nombre||'')}${x.esMerma?' <span class="text-[10px] text-slate-400">(merma)</span>':''}</td>
-        <td class="text-right">${x.rendimientoPct}%</td><td class="text-right font-medium">${_molKg(x.kg)}</td>
-        <td class="text-right">${x.esMerma?'—':_molFmt(x.costoKg)}</td><td class="text-right">${x.esMerma?'—':_molFmt(x.costoTotal)}</td></tr>`).join('');
-      box.innerHTML = `<div class="kpi"><div class="text-xs text-slate-500 mb-1">Resultado (costo total del lote: <b>${_molFmt(r.costoTotal)}</b>)</div>
-        <table class="table w-full text-sm"><thead><tr><th>Coproducto</th><th class="text-right">Rend.</th><th class="text-right">Cantidad</th><th class="text-right">Costo/kg</th><th class="text-right">Costo</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-    } catch(e){ box.innerHTML=`<div class="text-xs text-red-600">${esc(e.message)}</div>`; }
-  }, 250);
+  molFormulaChange();
 }
 async function molParteSave() {
+  const entradas=_molReadMp(), salidas=_molReadSal();
   const body = {
-    formulaId:$('#mol-formula')?.value, fecha: $('#mol-fecha')?.value ? new Date($('#mol-fecha').value+'T12:00:00').toISOString() : undefined,
-    kgProcesados:Number($('#mol-kg')?.value||0), depositoOrigenId:$('#mol-dep')?.value||null,
-    costoOrigenUnit:Number($('#mol-costog')?.value||0), costoProduccion:Number($('#mol-costop')?.value||0),
+    formulaId:$('#mol-formula')?.value,
+    fecha: $('#mol-fecha')?.value ? new Date($('#mol-fecha').value+'T12:00:00').toISOString() : undefined,
+    horaInicio:$('#mol-hini')?.value||null, horaFin:$('#mol-hfin')?.value||null,
+    entradas, salidas, mermaSecadoKg: $('#mol-mermasec')?.value!==''?Number($('#mol-mermasec').value||0):null,
+    costoProduccion:Number($('#mol-costop')?.value||0),
     centroCostoId:$('#mol-cc')?.value||null, observaciones:$('#mol-obs')?.value||null,
   };
-  const reales = _molRealData();
-  if (reales) { body.modoReal = true; body.reales = reales; }
-  if (!body.formulaId || !(body.kgProcesados>0)) return toast('Elegí la fórmula y los kilos procesados','warn');
+  if (!body.formulaId) return toast('Elegí la fórmula','warn');
+  if (!entradas.length) return toast('Cargá al menos una materia prima con kg','warn');
+  if (!salidas.length) return toast('Cargá al menos un producto obtenido con kg','warn');
   try { await api('/api/partes-molienda',{method:'POST',body:JSON.stringify(body)});
-    toast('Molienda registrada: stock actualizado','success'); closeModal();
+    toast('Producción registrada: stock actualizado','success'); closeModal();
     delete state.cache.stock; state._molPartes=(await api('/api/partes-molienda')).data||[];
     state.cache.productos=(await api('/api/productos')).data||state.cache.productos; state._molTab='partes'; molRender();
   } catch(e){ toast(e.message,'error'); }
+}
+function molPrintPlanilla() {
+  const f=(state._molFormulas||[]).find(x=>x.id===$('#mol-formula')?.value);
+  const emp = ((state.user?.companies||[]).find(c=>c.id===state.companyId) || {}).name || 'AgroCore';
+  const mps=[]; if(f){ mps.push(f.origenNombre||'Soja'); (f.items||[]).filter(i=>i.esEntrada).forEach(i=>mps.push(i.productoNombre||'')); }
+  while(mps.length<4) mps.push('');
+  const sals=[]; if(f){ (f.items||[]).filter(i=>!i.esEntrada).forEach(i=>sals.push((i.productoNombre||'')+(i.esMerma?' (merma)':''))); }
+  while(sals.length<5) sals.push('');
+  const rowsMp=mps.map(n=>`<tr><td>${esc(n||'')}</td><td class="bl"></td><td class="bl"></td><td class="bl"></td></tr>`).join('');
+  const rowsSal=sals.map(n=>`<tr><td>${esc(n||'')}</td><td class="bl"></td><td class="bl"></td></tr>`).join('');
+  const w=window.open('','_blank'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
+  w.document.write(`<html><head><title>Planilla de producción</title><meta charset="utf-8"/>
+  <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:24px;font-size:13px}
+  h1{font-size:18px;margin:0 0 2px} h2{font-size:13px;margin:16px 0 4px;color:#166534}
+  .sub{color:#555;font-size:12px;margin-bottom:12px}
+  table{width:100%;border-collapse:collapse;margin-bottom:6px}
+  th,td{border:1px solid #999;padding:7px 8px;text-align:left} th{background:#f0fdf4;font-size:12px}
+  td.bl{height:26px} .meta td{border:none;padding:3px 8px 3px 0}
+  .fw{width:140px} .firma{margin-top:36px;display:flex;gap:40px} .firma div{flex:1;border-top:1px solid #333;padding-top:4px;text-align:center;font-size:11px;color:#555}
+  @media print{body{padding:10px}}</style></head><body>
+  <h1>Planilla de producción diaria — ${esc(emp)}</h1>
+  <div class="sub">Fórmula: <b>${esc(f?.nombre||'')}</b> · El operario completa a mano los kg durante la jornada; luego se cargan al sistema.</div>
+  <table class="meta"><tr><td class="fw"><b>Fecha de jornada:</b></td><td>____ / ____ / ________</td><td class="fw"><b>Hora inicio:</b></td><td>______ hs</td><td class="fw"><b>Hora fin:</b></td><td>______ hs</td></tr>
+  <tr><td><b>Operario:</b></td><td colspan="5">____________________________</td></tr></table>
+  <h2>🌾 Materias primas consumidas</h2>
+  <table><thead><tr><th>Producto</th><th>Kg usados</th><th>Humedad %</th><th>Observaciones</th></tr></thead><tbody>${rowsMp}<tr><td class="bl"></td><td class="bl"></td><td class="bl"></td><td class="bl"></td></tr></tbody></table>
+  <h2>💧 Secado / desactivación</h2>
+  <table><thead><tr><th>Kg que entran al secado</th><th>Kg que salen (secos)</th><th>Merma de secado (kg)</th></tr></thead><tbody><tr><td class="bl"></td><td class="bl"></td><td class="bl"></td></tr></tbody></table>
+  <h2>🏭 Productos obtenidos</h2>
+  <table><thead><tr><th>Producto</th><th>Kg obtenidos</th><th>Observaciones</th></tr></thead><tbody>${rowsSal}</tbody></table>
+  <div class="firma"><div>Firma operario</div><div>Firma responsable</div></div>
+  </body></html>`);
+  w.document.close(); setTimeout(()=>{ try{w.print();}catch(_){}} , 300);
 }
 async function molParteAnular(id) {
   if (!confirm('¿Anular este parte de molienda? Se revierten los movimientos de stock (vuelve la soja y salen los coproductos).')) return;

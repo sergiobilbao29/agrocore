@@ -3541,14 +3541,18 @@ model ParteMolienda {
   fecha            DateTime
   formulaId        String
   depositoOrigenId String?  // silo de donde sale la soja
-  kgProcesados     Float    // kilos de origen procesados
+  kgProcesados     Float    // kilos de origen procesados (= suma de materias primas si se cargan entradas reales)
   costoOrigenUnit  Float    @default(0)  // costo por kg del origen (soja)
   costoProduccion  Float    @default(0)  // costos de producción del lote (energía, mano de obra, etc.)
-  costoTotal       Float    @default(0)  // costoOrigenUnit*kg + costoProduccion
+  costoTotal       Float    @default(0)  // costoOrigenUnit*kg + costoProduccion (o Σ materias primas + producción)
   modoReal         Boolean  @default(false) // true = los kg de los coproductos son los realmente producidos (no los teóricos)
+  horaInicio       String?  // jornada productiva (dato): ej. "23:00"
+  horaFin          String?  // ej. "17:00"
+  entradas         Json?    // v2.441: materias primas realmente consumidas [{productoId,nombre,kg,depositoId,costoUnit,costoTotal}]
+  mermaSecadoKg    Float?   // v2.441: merma del secado/desactivación de la soja (aparte de la merma de molienda)
   centroCostoId    String?
   observaciones    String?
-  resultados       Json?    // snapshot: [{productoId,nombre,kg,coefCosto,costoKg,costoTotal}]
+  resultados       Json?    // snapshot: [{productoId,nombre,kg,coefCosto,costoKg,costoTotal,esMerma,depositoDestinoId}]
   userId           String?
   createdAt        DateTime @default(now())
 
