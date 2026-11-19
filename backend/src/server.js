@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.446.0';
+const AGROCORE_VERSION = '2.447.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12275,6 +12275,14 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
     if ((entradasIn && entradasIn.length) || (salidasIn && salidasIn.length)) {
       if (!salidasIn || !salidasIn.length) return res.status(400).json({ ok: false, error: 'Cargá al menos un producto obtenido (expeller, aceite, etc.).' });
       const mermaSecadoKg = d.mermaSecadoKg != null && d.mermaSecadoKg !== '' ? Number(d.mermaSecadoKg) || 0 : null;
+      // Costos indirectos individualizados (luz, gasoil, personal…). Si vienen, su suma
+      // es el costo de produccion del lote; si no, se usa el costoProduccion suelto.
+      const costosIndirectos = Array.isArray(d.costosIndirectos)
+        ? d.costosIndirectos.map(c => ({ concepto: String(c.concepto || '').trim() || 'Otros', importe: Number(c.importe) || 0 })).filter(c => c.importe > 0)
+        : null;
+      const costoProdLote = (costosIndirectos && costosIndirectos.length)
+        ? _round2(costosIndirectos.reduce((a, c) => a + c.importe, 0))
+        : (Number(d.costoProduccion) || 0);
       // Entradas efectivas: las cargadas, o el origen de la fórmula por los kg procesados.
       const entradas = (entradasIn && entradasIn.length)
         ? entradasIn
@@ -12283,7 +12291,7 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
       const allIds = [...new Set([...entradas.map(e => e.productoId), ...salidasIn.map(s => s.productoId)])];
       const prods2 = await prisma.producto.findMany({ where: { companyId: req.companyId, id: { in: allIds } }, select: { id: true, nombre: true } });
       const pN = Object.fromEntries(prods2.map(p => [p.id, p.nombre]));
-      const costoTotal = _round2(entradas.reduce((a, e) => a + e.kg * e.costoUnit, 0) + (Number(d.costoProduccion) || 0));
+      const costoTotal = _round2(entradas.reduce((a, e) => a + e.kg * e.costoUnit, 0) + costoProdLote);
       // Reparto del costo entre las salidas que NO son merma (por coefCosto, o por kg).
       const salNoMerma = salidasIn.filter(s => !s.esMerma && s.kg > 0);
       const sumCoef = salNoMerma.reduce((a, s) => a + (s.coefCosto != null ? s.coefCosto : s.kg), 0);
@@ -12316,9 +12324,9 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
         const p = await tx.parteMolienda.create({ data: {
           companyId: req.companyId, codigo: codigo2, fecha: fecha2, formulaId: f.id,
           depositoOrigenId: d.depositoOrigenId || entradas[0]?.depositoId || null,
-          kgProcesados: kg, costoOrigenUnit: entradas[0]?.costoUnit || 0, costoProduccion: Number(d.costoProduccion) || 0,
+          kgProcesados: kg, costoOrigenUnit: entradas[0]?.costoUnit || 0, costoProduccion: costoProdLote,
           costoTotal, modoReal: true, horaInicio: d.horaInicio || null, horaFin: d.horaFin || null,
-          entradas: entradasSnap, mermaSecadoKg, centroCostoId: d.centroCostoId || null,
+          entradas: entradasSnap, mermaSecadoKg, costosIndirectos: costosIndirectos && costosIndirectos.length ? costosIndirectos : null, centroCostoId: d.centroCostoId || null,
           observaciones: d.observaciones || null, resultados, userId: req.user?.id || null,
         } });
         const ref = codigo2;
@@ -17839,6 +17847,7 @@ const _AYUDA_KB = [
       'Tip: en la ficha de cada producto marcá su "Rol en fábrica" (materia prima = grano de origen, o producto final = coproducto). Así la fórmula solo te ofrece esos y no todo el catálogo (ni animales ni agroquímicos).',
       'En "Fórmulas" definí el grano de origen y los coproductos por % (ej. Expeller 88, Aceite 10, Merma 2). Sirve de plantilla: precarga las materias primas y los productos de la planilla.',
       'PLANILLA DIARIA (parte de producción): es un parte por jornada. Cargás la fecha de jornada (y hora de inicio/fin, ej. 23:00→17:00), la grilla de MATERIAS PRIMAS con los KILOS REALES de cada una (soja, un poco de maní, carbonato…), y la grilla de PRODUCTOS OBTENIDOS reales (expeller, aceite, desperdicio). Marcá "Merma" en el desperdicio/merma (no ingresa stock ni lleva costo). Cargás aparte la "Merma de secado" (desactivación de la soja). El sistema descuenta cada materia prima e ingresa cada producto, y te muestra en vivo el balance (procesado vs. obtenido vs. merma), el costo por kg y, si el producto tiene precio de referencia, el valor de venta. Ojo: no te deja usar más materia prima de la que hay en stock.',
+      'Costos indirectos individualizados: en el parte cargás por separado la luz, el gasoil de la secadora, el personal, el mantenimiento, etc. (grilla "Costos indirectos del lote"). La SUMA es el costo de producción del lote y se reparte entre los productos obtenidos, sumado al costo de las materias primas. Si tenés un gasto mensual (ej. la factura de luz), poné en cada jornada la parte que corresponde (ej. mensual dividido las jornadas del mes).',
       'Antes de producir podés tocar "🖨️ Imprimir planilla en blanco": sale una hoja para que el operario anote a mano los kg de lo que usa y lo que obtiene durante la jornada, y después cargás todo al sistema.',
       'Los kilos nunca son exactos: cargá siempre los reales, el sistema ajusta el costo por kg a la producción real del día.',
       'En "Costo y precio" cargás el % de ganancia y te sugiere el precio de venta por kilo.',

@@ -3550,6 +3550,7 @@ model ParteMolienda {
   horaFin          String?  // ej. "17:00"
   entradas         Json?    // v2.441: materias primas realmente consumidas [{productoId,nombre,kg,depositoId,costoUnit,costoTotal}]
   mermaSecadoKg    Float?   // v2.441: merma del secado/desactivación de la soja (aparte de la merma de molienda)
+  costosIndirectos Json?    // v2.447: costos indirectos individualizados del lote [{concepto,importe}] (luz, gasoil, personal…). Su suma = costoProduccion.
   centroCostoId    String?
   observaciones    String?
   resultados       Json?    // snapshot: [{productoId,nombre,kg,coefCosto,costoKg,costoTotal,esMerma,depositoDestinoId}]
