@@ -2851,6 +2851,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Inicio-1Pagina.pdf', t:'Inicio rápido (1 página)', d:'Lo esencial para empezar a usar AgroCore.' },
       { f:'Instructivo-Puesta-en-Marcha.pdf', t:'Puesta en marcha (paso a paso)', d:'Configurar la empresa y cargar los datos iniciales, completo.' },
       { f:'Instructivo-Catalogo-Articulos.pdf', t:'Catálogo de artículos: configuración y uso correcto', d:'Cómo organizar Categorías → Familias → Subfamilias y cargar artículos bien: un solo artículo por producto físico, con sus capacidades (se compra / se vende / stock / se consume o se obtiene en producción / servicio). Incluye ejemplos de fábrica y comercio, el Diagnóstico de artículos y cómo pasar lo viejo a artículos.' },
+      { f:'Instructivo-Stock.pdf', t:'Stock de artículos: la pantalla y todas sus funciones', d:'Recorre toda la pantalla de Stock: tarjetas y filtros (incluido el Estado "Sin clasificar"), + Nuevo e ingresos/egresos, y cada botón de la barra — Reporte de margen, Ir a Movimientos, Convertir grano a semilla, Reubicar categoría, Control de stock (conteo físico), Depurar duplicados, Fusionar artículos, Recuperar artículos y Unificar artículos (dejar una sola lista sin duplicados).' },
       { f:'Instructivo-Acomodar-Cuentas-Bancarias.pdf', t:'Acomodar cuentas bancarias', d:'Cargar saldos iniciales y ordenar tus bancos.' },
     ]},
     { grupo:'Finanzas', items:[
@@ -3125,6 +3126,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
+      titulo:'📘 v2.454.0 — Nuevo instructivo "Stock de artículos" (todas las funciones)',
+      desc:'Sumamos un instructivo completo de la pantalla de <b>Stock</b> en <b>Ayuda del sistema</b>: recorre las tarjetas y filtros (incluido el Estado <b>"Sin clasificar"</b>), el <b>+ Nuevo</b> e ingresos/egresos, y cada botón de la barra — <b>Reporte de margen, Ir a Movimientos, Convertir grano a semilla, Reubicar categoría, Control de stock, Depurar duplicados, Fusionar, Recuperar y Unificar artículos</b>. También lo agregamos al manual web y el asistente ya lo explica.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
       titulo:'🔎 v2.453.0 — Stock: filtro "Sin clasificar" para acomodar artículos sueltos',
       desc:'Después de unificar, algunos productos de <b>otras categorías</b> (Otros, Servicios, etc.) pueden quedar <b>sin familia</b> asignada en el árbol y Stock los oculta con el aviso "ver también X que no están en el Catálogo". Ahora los encontrás y los acomodás fácil: en <b>Stock</b>, el filtro <b>Estado → "⚠️ Sin clasificar"</b> muestra <b>solo esos</b>; y en <b>🔀 Reubicar categoría</b> hay un check <b>"Mostrar solo los sin clasificar"</b> (con el total) más un botón <b>"Tildar los visibles"</b> para elegirlos todos de una, asignarles su categoría/familia y acomodarlos de a varios. Quedan clasificados y desaparecen del aviso.' },

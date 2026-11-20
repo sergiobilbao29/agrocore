@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.453.0';
+const AGROCORE_VERSION = '2.454.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17839,13 +17839,15 @@ const _AYUDA_KB = [
       'Podés cargar varios insumos por lote sin salir.',
       'Guardá: descuenta el stock (salida) con la fecha de aplicación.'],
     atajo:{ page:'insumos', label:'Abrir Insumos' } },
-  { id:'stock', terms:['stock','movimiento de stock','ajuste de stock','ingreso de stock','traspaso','conversion','deposito','silo','silobolsa','existencias'],
-    titulo:'Mover o ajustar stock',
+  { id:'stock', terms:['stock','movimiento de stock','ajuste de stock','ingreso de stock','traspaso','conversion','deposito','silo','silobolsa','existencias','control de stock','conteo fisico','inventario','reporte de margen','reubicar categoria','sin clasificar','no aparece en stock','recuperar articulo','fusionar articulo','unificar articulos','depurar duplicados','herramientas de stock'],
+    titulo:'Stock: ver existencias, mover y mantener la lista prolija',
     pasos:[
-      'Entrá a Stock para ver existencias por artículo y depósito.',
-      'Tocá "Nuevo movimiento" y usá el buscador con filtro por categoría/familia.',
-      'Elegí ingreso, salida, traspaso entre depósitos o conversión (ej: grano ↔ semilla).',
-      'Guardá: queda registrado en Movimientos.'],
+      'Entrá a Stock para ver existencias por artículo y depósito (sin filtro de depósito ves el total consolidado).',
+      'El stock NO se edita a mano: es la suma de los movimientos. Para corregir, cargá un movimiento (ingreso/salida/ajuste) o usá "Control de stock" (conteo físico: descargás planilla, la completás y al subirla genera los ajustes).',
+      'Tocá "+ Nuevo" para dar de alta un artículo, o el ícono de ingreso/salida de cada fila para moverlo. Hay traspaso entre depósitos y conversión grano ↔ semilla.',
+      'Botones de la barra (administrador): "🧩 Unificar artículos" deja UNA sola lista de insumos/cereales (una vez por empresa, con backup); "🔗 Fusionar artículos" une dos con nombres distintos; "♻️ Recuperar artículos" vuelve a mostrar uno que desapareció; "🧹 Depurar duplicados" une duplicados exactos y corrige familias.',
+      'Si Stock avisa "ver también X que no están en el Catálogo": filtro Estado → "⚠️ Sin clasificar" para verlos, y "🔀 Reubicar categoría" (check "mostrar solo los sin clasificar" + "Tildar los visibles") para asignarles su familia.',
+      'Más detalle en el instructivo "Stock de artículos: la pantalla y todas sus funciones" (Ayuda del sistema).'],
     atajo:{ page:'stock', label:'Abrir Stock' } },
   { id:'molienda', terms:['molienda','moler','fabrica','planta procesadora','expeller','aceite','pellet','merma','procesar soja','parte de molienda','formula de molienda','costo de fabricacion','plan canje','canje','paridad','rendimiento real','kg reales','activar molienda','habilitar fabrica','produccion industrial'],
     titulo:'Molienda / Fábrica (planilla de producción de expeller + plan canje)',
