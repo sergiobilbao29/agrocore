@@ -3125,9 +3125,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'19/11/2026',
+      titulo:'🔎 v2.453.0 — Stock: filtro "Sin clasificar" para acomodar artículos sueltos',
+      desc:'Después de unificar, algunos productos de <b>otras categorías</b> (Otros, Servicios, etc.) pueden quedar <b>sin familia</b> asignada en el árbol y Stock los oculta con el aviso "ver también X que no están en el Catálogo". Ahora los encontrás y los acomodás fácil: en <b>Stock</b>, el filtro <b>Estado → "⚠️ Sin clasificar"</b> muestra <b>solo esos</b>; y en <b>🔀 Reubicar categoría</b> hay un check <b>"Mostrar solo los sin clasificar"</b> (con el total) más un botón <b>"Tildar los visibles"</b> para elegirlos todos de una, asignarles su categoría/familia y acomodarlos de a varios. Quedan clasificados y desaparecen del aviso.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
       titulo:'🧩 v2.452.0 — Artículos unificados: una sola lista (se terminó la duplicación)',
-      desc:'Arreglo de fondo al tema de los artículos. Hasta ahora los insumos/cereales vivían en <b>dos lugares</b> (el catálogo y el stock) que se "sincronizaban" adivinando por nombre: de ahí los duplicados, los fantasmas y los que reaparecían. Ahora hay un botón <b>🧩 Unificar artículos</b> en Stock (administradores) que deja <b>una sola lista</b>: migra al stock lo que faltaba del catálogo (nombre, familia, precio), quita del catálogo viejo solo las filas de artículo de insumo/cereal (no toca Labores, animales ni otros listados) y <b>apaga la duplicación</b> — nunca más reaparecen artículos borrados. <b>No se pierde ningún dato</b>: ningún movimiento, factura ni labor apunta al catálogo. Se corre <b>una vez por empresa</b>. Y un insumo/cereal <b>siempre se ve</b> en Stock y en los selectores, aunque se haya cargado desde una factura. Para los que queden con nombres distintos, usá 🔗 Fusionar artículos.' },
+      desc:'Arreglo de fondo al tema de los artículos. Hasta ahora los insumos/cereales vivían en <b>dos lugares</b> (el catálogo y el stock) que se "sincronizaban" adivinando por nombre: de ahí los duplicados, los fantasmas y los que reaparecían. Ahora hay un botón <b>🧩 Unificar artículos</b> en Stock (administradores) que deja <b>una sola lista</b>: migra al stock lo que faltaba del catálogo (nombre, familia, precio), quita del catálogo viejo solo las filas de artículo de insumo/cereal (no toca Labores, animales ni otros listados) y <b>apaga la duplicación</b> — nunca más reaparecen artículos borrados. <b>No se pierde ningún dato</b>: ningún movimiento, factura ni labor apunta al catálogo. Se corre <b>una vez por empresa</b>. Y un insumo/cereal <b>siempre se ve</b> en Stock y en los selectores, aunque se haya cargado desde una factura. Para los que queden con nombres distintos, usá 🔗 Fusionar artículos. Si algún producto de <b>otra categoría</b> quedó sin clasificar en el árbol, ahora en Stock tenés el filtro de estado <b>"⚠️ Sin clasificar"</b> para encontrarlos, y en <b>🔀 Reubicar categoría</b> un check <b>"Mostrar solo los sin clasificar"</b> con "Tildar los visibles" para acomodarlos de a varios.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'19/11/2026',
       titulo:'♻️ v2.451.0 — Stock: la limpieza ya no esconde artículos en uso + botón Recuperar',
       desc:'Ajustamos la limpieza de huérfanos para que sea <b>no destructiva</b>: ahora <b>solo borra artículos totalmente vacíos</b> (sin ningún movimiento). Si un artículo tiene historial (se cargó desde una factura o se usó en una labor), <b>ya no se esconde</b> aunque no esté en el Catálogo — se queda visible y, si querés unificarlo, usás 🔗 Fusionar artículos. Y sumamos el botón <b>♻️ Recuperar artículos</b>: si por una limpieza anterior te desapareció un insumo que sí usabas (ej. "glifo granulado"), lo <b>vuelve a mostrar</b> en Stock y en los selectores de labores. Corré ese botón una vez en cada empresa.' },
@@ -8171,9 +8174,13 @@ pages.stock = async function() {
     const estado = state.stockFilter.estado || '';
     const verFuera = !!state.stockFilter.verFueraCat;
     const filtered = rows.filter(p => {
+      const _enCat = !_hayCat || prodEnCatalogo(p, _sets);
+      // Estado "Sin clasificar": muestra SOLO los que estan fuera del catalogo (sin familia
+      // en el arbol), para encontrarlos y reubicarlos. Ignora el ocultamiento normal.
+      if (estado === 'sincat') { if (_enCat) return false; }
       // Catálogo = maestro: ocultamos los productos que no están en el catálogo
       // (salvo que se active "ver fuera de catálogo"). No se borran, solo no se listan.
-      if (_hayCat && !verFuera && !prodEnCatalogo(p, _sets)) return false;
+      else if (_hayCat && !verFuera && !_enCat) return false;
       if (catSel.length && !catSel.includes(catRaizStock(p))) return false;
       if (state.stockFilter.fam) { if (!_prodEnFamilia(p, state.stockFilter.fam) && !_prodEnFamilia(_pmap[p.id], state.stockFilter.fam)) return false; }
       if (estado === 'bajo' && !p.bajoMinimo) return false;
@@ -8261,6 +8268,7 @@ pages.stock = async function() {
             <option value="">Todos</option>
             <option value="bajo" ${state.stockFilter.estado==='bajo'?'selected':''}>Bajo</option>
             <option value="ok"   ${state.stockFilter.estado==='ok'  ?'selected':''}>OK</option>
+            <option value="sincat" ${state.stockFilter.estado==='sincat'?'selected':''}>⚠️ Sin clasificar (fuera de catálogo)</option>
           </select>
         </div>
         <div class="md:col-span-2 flex gap-2">
@@ -8350,24 +8358,32 @@ async function traspasoSave() {
 function reubicarForm() {
   const prods = (state.cache.productos||[]).filter(p => !(p.esHacienda || (p.categoria||'').toLowerCase()==='hacienda')).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
   if (!prods.length) return toast('No hay artículos para reubicar.','warn');
+  const _setsRb = _catalogoArtSets();
+  const _sinCat = (p) => !prodEnCatalogo(p, _setsRb); // sin familia en el arbol = sin clasificar
+  const nSin = prods.filter(_sinCat).length;
   openModal({
     title:'🔀 Reubicar categoría / familia', size:'max-w-2xl',
     body:`
       <div class="text-[12px] text-slate-600 mb-2">Tildá los artículos y elegí a qué <b>categoría/familia</b> pasarlos. Ej: mover una semilla que quedó en Insumos a <b>Cereales / Granos</b>.</div>
-      <div class="grid grid-cols-2 gap-3 mb-3">
+      <div class="grid grid-cols-2 gap-3 mb-2">
         <div><label class="label">Categoría / Familia destino *</label><select id="rb-fam" class="input">${catArtTreeOptions('', { rootLabel:'— Elegir categoría o familia —' })}</select></div>
         <div class="flex items-end"><input id="rb-q" class="input" placeholder="🔎 Filtrar lista..." oninput="reubicarFiltrar()"/></div>
       </div>
-      <div class="kpi p-0 overflow-hidden" style="max-height:340px;overflow:auto">
+      <div class="flex items-center justify-between mb-2">
+        <label class="inline-flex items-center gap-1 text-[12px] cursor-pointer ${nSin?'text-amber-800 font-medium':'text-slate-400'}"><input type="checkbox" id="rb-solosin" ${nSin?'':'disabled'} onchange="reubicarFiltrar()"/> ⚠️ Mostrar solo los <b>sin clasificar</b> (${nSin})</label>
+        <button class="btn btn-ghost btn-xs" onclick="reubicarTildarVisibles()">Tildar los visibles</button>
+      </div>
+      <div class="kpi p-0 overflow-hidden" style="max-height:320px;overflow:auto">
         <table class="data text-sm"><thead><tr><th style="width:32px"></th><th>Artículo</th><th>Categoría actual</th></tr></thead>
-          <tbody id="rb-body">${prods.map(p=>{ const fam=p.categoriaArticuloId?_catNodo(p.categoriaArticuloId):null; return `<tr class="table-row" data-nom="${esc((p.nombre||'').toLowerCase())}"><td><input type="checkbox" class="rb-chk" value="${esc(p.id)}"/></td><td>${esc(p.nombre)}</td><td>${fam?`<span class="badge badge-blue text-[11px]">${esc(fam.nombre)}</span>`:`<span class="text-slate-500">${esc(p.categoria||'—')}</span>`}</td></tr>`; }).join('')}</tbody>
+          <tbody id="rb-body">${prods.map(p=>{ const fam=p.categoriaArticuloId?_catNodo(p.categoriaArticuloId):null; const sin=_sinCat(p); return `<tr class="table-row" data-nom="${esc((p.nombre||'').toLowerCase())}" data-sincat="${sin?'1':'0'}"><td><input type="checkbox" class="rb-chk" value="${esc(p.id)}"/></td><td>${esc(p.nombre)}${sin?' <span class="badge text-[10px]" style="background:#fef3c7;color:#92400e">⚠️ sin clasificar</span>':''}</td><td>${fam?`<span class="badge badge-blue text-[11px]">${esc(fam.nombre)}</span>`:`<span class="text-slate-500">${esc(p.categoria||'—')}</span>`}</td></tr>`; }).join('')}</tbody>
         </table>
       </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="reubicarSave()">💾 Reubicar seleccionados</button>`
   });
 }
-function reubicarFiltrar() { const q=($('#rb-q')?.value||'').toLowerCase(); $$('#rb-body tr').forEach(tr=>{ tr.style.display = (!q || (tr.getAttribute('data-nom')||'').includes(q))?'':'none'; }); }
+function reubicarFiltrar() { const q=($('#rb-q')?.value||'').toLowerCase(); const soloSin=!!$('#rb-solosin')?.checked; $$('#rb-body tr').forEach(tr=>{ const okQ=(!q || (tr.getAttribute('data-nom')||'').includes(q)); const okSin=(!soloSin || tr.getAttribute('data-sincat')==='1'); tr.style.display=(okQ&&okSin)?'':'none'; }); }
+function reubicarTildarVisibles() { $$('#rb-body tr').forEach(tr=>{ if(tr.style.display!=='none'){ const c=tr.querySelector('.rb-chk'); if(c) c.checked=true; } }); }
 async function reubicarSave() {
   const famId=$('#rb-fam')?.value||'';
   if (!famId) return toast('Elegí la categoría/familia destino','warn');

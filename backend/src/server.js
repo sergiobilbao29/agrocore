@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.452.0';
+const AGROCORE_VERSION = '2.453.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17684,6 +17684,9 @@ const _AYUDA_KB = [
       'Un ARTICULO es lo real que se compra, vende, consume o fabrica (ej: Soja, Expeller, Aceite 15W40). Se carga en Catalogo de articulos con "+ Nuevo", eligiendo su ubicacion en el arbol.',
       'No dupliques: un mismo articulo fisico es UN solo articulo. En su ficha marca las capacidades combinables: se compra / se vende / controla stock / se consume en produccion / se obtiene por produccion / es servicio. La misma soja puede comprarse, venderse y molerse sin crear copias.',
       'Si cargaste algo con el formato viejo y no aparece en stock ni en compras/ventas, entra a Catalogo -> boton "Diagnostico de articulos" y usa "Pasar a articulo" para convertirlo (no borra nada).',
+      'UNA SOLA LISTA (unificacion): los insumos/cereales viven SOLO en Stock (el catalogo viejo ya no los duplica). Si todavia ves duplicados o articulos que reaparecen, entra a Stock -> boton "Unificar articulos" (solo administrador): migra lo que faltaba (nombre, familia, precio) a Stock y quita las filas viejas del catalogo. Se hace UNA VEZ por empresa y conviene tener backup. No se pierde ningun movimiento.',
+      'Si te quedaron DOS articulos del mismo producto con nombres distintos (ej. "2,4-D" y "2,4-D ETIL HEXIL"): Stock -> "Fusionar articulos", elegis cual se elimina y cual queda; el stock y los movimientos pasan al que queda.',
+      'Si te desaparecio un insumo que si usabas (ej. uno cargado desde una factura): Stock -> "Recuperar articulos" lo vuelve a mostrar. Y "Depurar duplicados" une duplicados exactos y corrige familias.',
       'Ejemplos: Fabrica -> Agroindustria / Soja / Derivados -> Expeller, Aceite. Comercio -> Lubricantes / Aceites de motor / 15W40 -> Bidon x4 L, Bidon x20 L.'],
     atajo:{ page:'catalogos', label:'Abrir Catalogo de articulos' } },
   { id:'empleado_compartido', terms:['empleado compartido','empleados compartidos','jornalero','jornaleros','empleado en varias empresas','mismo empleado en varias empresas','centralizar empleados','liquidacion unica','liquidacion consolidada','una sola liquidacion','labores de otra empresa','empleado del grupo','compartir empleado'],
