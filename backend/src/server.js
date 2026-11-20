@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.458.0';
+const AGROCORE_VERSION = '2.459.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -25176,6 +25176,110 @@ app.post('/api/admin/stock/reactivar-insumos', requireCompany, requirePermission
     if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador puede reactivar artículos.' });
     const reactivados = await _reactivarInsumosConHistorial(req.companyId);
     res.json({ ok: true, data: { reactivados } });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// v2.459 — RECUPERAR ARTICULOS BORRADOS DESDE EL BACKUP (remoto, 1 click).
+//  Para clientes donde no se puede entrar al server por consola: lee un backup
+//  .sql (pg_dump) que esta en <install>/backups y vuelve a INSERTAR en la tabla
+//  "Producto" SOLO los articulos que hoy faltan (por id). Es NO destructivo:
+//  usa createMany({ skipDuplicates }) = ON CONFLICT (id) DO NOTHING, asi los que
+//  ya existen NO se tocan y ninguna otra tabla se modifica. Restaura en la tabla
+//  NUEVA Y UNICA (Producto); no toca el Catalogo viejo. Solo admin.
+// ============================================================
+function _backupsDir() { return path.join(STATIC_DIR, 'backups'); }
+function _listarBackups() {
+  try {
+    const dir = _backupsDir();
+    return fs.readdirSync(dir)
+      .filter(n => /\.sql$/i.test(n))
+      .map(n => ({ nombre: n, mtime: fs.statSync(path.join(dir, n)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch { return []; }
+}
+// Des-escapa un campo en formato COPY TEXT de Postgres.
+function _copyUnescape(campo) {
+  if (campo === '\\N') return null;
+  let out = '';
+  for (let i = 0; i < campo.length; i++) {
+    const c = campo[i];
+    if (c === '\\' && i + 1 < campo.length) {
+      const n = campo[++i];
+      if (n === 't') out += '\t';
+      else if (n === 'n') out += '\n';
+      else if (n === 'r') out += '\r';
+      else if (n === 'b') out += '\b';
+      else if (n === 'f') out += '\f';
+      else if (n === 'v') out += '\v';
+      else out += n; // \\ -> \ ; cualquier otro -> el char
+    } else out += c;
+  }
+  return out;
+}
+const _PROD_FLOAT = new Set(['stockMinimo','precioReferencia','ultimoCostoCompra','ivaDefault','kgPorUnidad2','costoFabricacionKg','margenVentaPct']);
+const _PROD_BOOL  = new Set(['activo','esMezcla','controlaStock','sePuedeComprar','sePuedeVender','seConsumeEnProduccion','seObtieneEnProduccion','esServicio']);
+const _PROD_DATE  = new Set(['createdAt','updatedAt']);
+// Campos del modelo Producto que SI podemos escribir via createMany (ignora el resto).
+const _PROD_CAMPOS = new Set(['id','companyId','categoria','nombre','unidad','stockMinimo','precioReferencia','observaciones','activo','createdAt','updatedAt','categoriaHacienda','ultimoCostoCompra','ultimoCostoMoneda','sku','codigoBarras','ivaDefault','tipoArticulo','categoriaArticuloId','vademecumId','esMezcla','unidad2','kgPorUnidad2','costoFabricacionKg','margenVentaPct','rolFabrica','controlaStock','sePuedeComprar','sePuedeVender','seConsumeEnProduccion','seObtieneEnProduccion','esServicio']);
+// Extrae las filas de "Producto" de un dump pg_dump (bloque COPY ... FROM stdin;).
+function _extraerProductosDeBackup(sqlText) {
+  const lines = sqlText.split('\n');
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) { if (/^COPY public\."Producto" \(/.test(lines[i])) { start = i; break; } }
+  if (start < 0) return null;
+  const cols = lines[start].replace(/^COPY public\."Producto" \((.*)\) FROM stdin;.*$/, '$1')
+    .split(',').map(s => s.trim().replace(/^"|"$/g, ''));
+  const filas = [];
+  for (let j = start + 1; j < lines.length; j++) {
+    if (lines[j] === '\\.') break;
+    const campos = lines[j].split('\t');
+    if (campos.length !== cols.length) continue;
+    const obj = {};
+    for (let k = 0; k < cols.length; k++) {
+      const col = cols[k];
+      if (!_PROD_CAMPOS.has(col)) continue;
+      let v = _copyUnescape(campos[k]);
+      if (v === null) { obj[col] = null; continue; }
+      if (_PROD_FLOAT.has(col)) v = Number(v);
+      else if (_PROD_BOOL.has(col)) v = (v === 't' || v === 'true');
+      else if (_PROD_DATE.has(col)) v = new Date(v);
+      obj[col] = v;
+    }
+    filas.push(obj);
+  }
+  return filas;
+}
+app.get('/api/admin/stock/backups', requireCompany, async (req, res, next) => {
+  try {
+    if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador.' });
+    res.json({ ok: true, data: _listarBackups().slice(0, 40).map(b => ({ nombre: b.nombre, fecha: new Date(b.mtime).toISOString() })) });
+  } catch (e) { next(e); }
+});
+app.post('/api/admin/stock/recuperar-desde-backup', requireCompany, async (req, res, next) => {
+  try {
+    if (!(req.user.superAdmin || _permOk(req, 'usuarios:*'))) return res.status(403).json({ ok: false, error: 'Solo un administrador puede recuperar artículos.' });
+    const lista = _listarBackups();
+    if (!lista.length) return res.status(404).json({ ok: false, error: 'No hay backups en la carpeta backups del servidor.' });
+    const pedido = (req.body?.archivo || '').toString().trim();
+    const elegido = pedido ? lista.find(b => b.nombre === pedido) : lista[0];
+    if (!elegido) return res.status(404).json({ ok: false, error: 'No se encontró el backup indicado.' });
+    const sqlText = fs.readFileSync(path.join(_backupsDir(), elegido.nombre), 'utf8');
+    const filas = _extraerProductosDeBackup(sqlText);
+    if (!filas) return res.status(400).json({ ok: false, error: 'El backup no contiene la tabla Producto.' });
+    // Seguridad FK: si un producto apunta a una familia (categoriaArticuloId) que ya
+    // no existe, lo dejamos sin familia (null) para no romper la restauración.
+    const nodos = await prisma.categoriaArticulo.findMany({ select: { id: true } });
+    const nodoIds = new Set(nodos.map(n => n.id));
+    for (const f of filas) { if (f.categoriaArticuloId && !nodoIds.has(f.categoriaArticuloId)) f.categoriaArticuloId = null; }
+    const antes = await prisma.producto.count();
+    // Insertamos en lotes; skipDuplicates = ON CONFLICT (id) DO NOTHING.
+    const CHUNK = 200;
+    for (let i = 0; i < filas.length; i += CHUNK) {
+      await prisma.producto.createMany({ data: filas.slice(i, i + CHUNK), skipDuplicates: true });
+    }
+    const despues = await prisma.producto.count();
+    res.json({ ok: true, data: { backup: elegido.nombre, fecha: new Date(elegido.mtime).toISOString(), enBackup: filas.length, antes, despues, recuperados: despues - antes } });
   } catch (e) { next(e); }
 });
 app.post('/api/admin/stock/depurar-duplicados', requireCompany, requirePermission('stock:create'), async (req, res, next) => {

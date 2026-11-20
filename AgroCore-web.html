@@ -3126,6 +3126,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'20/11/2026',
+      titulo:'🗄️ v2.459.0 — Recuperar artículos desde un respaldo (1 clic)',
+      desc:'Nuevo botón en la barra de <b>Stock</b> (solo admin): <b>Recuperar desde backup</b>. Si se borraron artículos, los vuelve a traer tomándolos del último respaldo del servidor, con un solo clic y sin entrar a la base. Es <b>no destructivo</b>: no toca los artículos que ya existen ni ningún otro dato (movimientos, facturas, etc.), y los artículos vuelven directo a la lista única con su clasificación. Elegís el respaldo (por defecto el más reciente) y listo.' },
     { tag:'Corrección', color:'bg-red-100 text-red-800 border-red-300', fecha:'20/11/2026',
       titulo:'🛡️ v2.458.0 — Depurar duplicados ya no borra insumos en empresas unificadas',
       desc:'Corregimos un problema serio: en una empresa ya <b>unificada</b>, usar <b>Depurar duplicados</b> podía borrar insumos/cereales que no tenían movimientos (los tomaba como "sobrantes" porque la unificación los había sacado del Catálogo viejo). Ahora, si la empresa está unificada, la limpieza <b>nunca</b> borra artículos por no estar en el Catálogo — la lista única de artículos es la que manda. Los artículos con historial (compras, labores, movimientos) nunca estuvieron en riesgo.' },
@@ -8252,6 +8255,7 @@ pages.stock = async function() {
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="fusionarArticulosForm()" title="Unir manualmente dos artículos con nombres distintos (ej. '2,4-D' dentro de '2,4-D ETIL HEXIL'): le pasa el stock y los movimientos al que queda y borra el otro.">🔗 Fusionar artículos</button>`:''}
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="recuperarArticulos()" title="Volver a mostrar artículos de insumos/cereales que quedaron desactivados pero tienen historial (ej. uno cargado desde factura que desapareció).">♻️ Recuperar artículos</button>`:''}
       ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="unificarArticulosForm()" title="Dejar una sola lista de artículos: migra los insumos/cereales del catálogo viejo al stock y apaga la duplicación. Se hace una vez por empresa.">🧩 Unificar artículos</button>`:''}
+      ${(state.user?.superAdmin||can('usuarios:*'))?`<button class="btn btn-secondary text-sm" onclick="recuperarDesdeBackupForm()" title="Volver a traer artículos que se borraron, tomándolos del último respaldo del servidor. No toca los que ya existen ni ningún otro dato.">🗄️ Recuperar desde backup</button>`:''}
     </div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="kpi"><div class="text-xs text-slate-500">Total SKU</div><div class="text-2xl font-bold mt-1">${totalSKU}</div></div>
@@ -8818,6 +8822,31 @@ async function recuperarArticulos(){
     const n=r.data?.reactivados||0;
     toast(n>0?`Listo: ${n} artículo(s) recuperado(s) y de vuelta en Stock.`:'No había artículos desactivados con historial para recuperar.','success');
     if(n>0) pages.stock();
+  }catch(e){ toast(e.message,'error'); }
+}
+async function recuperarDesdeBackupForm(){
+  let backups=[];
+  try{ const r=await api('/api/admin/stock/backups'); backups=r.data||[]; }catch(e){ return toast(e.message,'error'); }
+  if(!backups.length) return toast('No hay respaldos (backups) en el servidor para recuperar.','warn');
+  const fmtF=(iso)=>{ try{ return new Date(iso).toLocaleString('es-AR'); }catch{ return iso; } };
+  openModal({ title:'🗄️ Recuperar artículos desde un respaldo', size:'max-w-xl',
+    body:`<div class="bg-blue-50 border border-blue-200 text-blue-900 text-xs rounded-lg p-2 mb-3">Vuelve a traer los artículos que se hayan <b>borrado</b>, tomándolos del respaldo que elijas. <b>No toca</b> los artículos que ya existen ni ningún otro dato (movimientos, facturas, etc. quedan igual). Los artículos vuelven directo a la <b>lista única</b>. Elegí un respaldo con fecha <b>anterior</b> al momento en que se borraron.</div>
+      <div><label class="label">Respaldo a usar</label>
+        <select id="rec-bk" class="input">${backups.map(b=>`<option value="${esc(b.nombre)}">${esc(b.nombre)} — ${esc(fmtF(b.fecha))}</option>`).join('')}</select>
+        <div class="text-[11px] text-slate-500 mt-1">Por defecto el más reciente. Si recién actualizaste, suele ser el correcto.</div>
+      </div>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="recuperarDesdeBackupRun()">🗄️ Recuperar</button>` });
+}
+async function recuperarDesdeBackupRun(){
+  const archivo=$('#rec-bk')?.value||'';
+  if(!confirm('¿Recuperar los artículos borrados desde ese respaldo? No se toca nada de lo que ya existe.')) return;
+  try{
+    const r=await api('/api/admin/stock/recuperar-desde-backup',{method:'POST',body:JSON.stringify({archivo})});
+    const d=r.data||{};
+    closeModal();
+    toast(`Listo: ${d.recuperados||0} artículo(s) recuperado(s) (de ${d.antes} a ${d.despues}). Respaldo: ${d.backup}.`,'success');
+    pages.stock();
   }catch(e){ toast(e.message,'error'); }
 }
 async function fusionarArticulosForm(){
