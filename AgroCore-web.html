@@ -3126,6 +3126,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-red-100 text-red-800 border-red-300', fecha:'20/11/2026',
+      titulo:'🚑 v2.457.0 — Stock volvía a mostrar los artículos',
+      desc:'Corregimos un error que en algunos casos dejaba la <b>lista de Stock en blanco</b> (aunque las tarjetas mostraran el total de SKU y los artículos siguieran en el Catálogo). Ya se ven todos los artículos con sus existencias normalmente. No se perdió ningún dato: era solo un problema de visualización.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'20/11/2026',
       titulo:'📦 v2.456.0 — Importar artículos con familia (carga masiva)',
       desc:'Mejoramos la <b>plantilla de Productos</b> de Configuración → Importación para que la carga masiva quede bien clasificada. Ahora la plantilla tiene una columna <b>familia</b>: poné el nombre exacto de la familia del árbol de Categorías (Herbicida, Fertilizante, Semilla, Cereal, etc.) y el artículo entra directo en esa familia del <b>Stock</b>. Si la dejás vacía o no coincide, el artículo se clasifica en la <b>raíz de su categoría</b> (no queda "Sin clasificar") y lo podés reubicar después. También se importa el <b>código/SKU</b> y se respeta la unificación de artículos (cada producto es único, sin duplicados).' },
@@ -8199,7 +8202,7 @@ pages.stock = async function() {
       return [p.nombre, p.categoria, p.subtipo, p.codigo, p.ubicacion].some(v => (v||'').toLowerCase().includes(q));
     });
     // Guardamos lo que se ve (ya filtrado) para que "Control de stock" exporte EXACTAMENTE esto.
-    state._stockVisible = { ids: filtered.map(p=>p.id).filter(id=>id && !String(id).startsWith('comp:')), depositoId: depositoId||null, total: filtered.length };
+    state._stockVisible = { ids: filtered.map(p=>p.id).filter(id=>id && !String(id).startsWith('comp:')), depositoId: depFilter||null, total: filtered.length };
     $('#stock-table').innerHTML = `
       <table class="data">
         <thead><tr>
