@@ -3126,6 +3126,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'20/11/2026',
+      titulo:'📦 v2.456.0 — Importar artículos con familia (carga masiva)',
+      desc:'Mejoramos la <b>plantilla de Productos</b> de Configuración → Importación para que la carga masiva quede bien clasificada. Ahora la plantilla tiene una columna <b>familia</b>: poné el nombre exacto de la familia del árbol de Categorías (Herbicida, Fertilizante, Semilla, Cereal, etc.) y el artículo entra directo en esa familia del <b>Stock</b>. Si la dejás vacía o no coincide, el artículo se clasifica en la <b>raíz de su categoría</b> (no queda "Sin clasificar") y lo podés reubicar después. También se importa el <b>código/SKU</b> y se respeta la unificación de artículos (cada producto es único, sin duplicados).' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'20/11/2026',
+      titulo:'📋 v2.455.0 — Control de stock: la planilla respeta los filtros',
+      desc:'Antes la planilla de <b>Control de stock</b> exportaba TODO el inventario aunque estuvieras filtrando. Ahora exporta <b>exactamente lo que estás viendo</b>: respeta el <b>depósito</b>, la <b>categoría/familia</b>, el <b>estado</b> y la <b>búsqueda</b> activos. Si filtrás por un depósito, trae solo ese (sin la fila "Mi campo") y lista los artículos aunque estén en cero, para que los puedas contar. El modal te avisa cuántos artículos va a exportar.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'19/11/2026',
       titulo:'📘 v2.454.0 — Nuevo instructivo "Stock de artículos" (todas las funciones)',
       desc:'Sumamos un instructivo completo de la pantalla de <b>Stock</b> en <b>Ayuda del sistema</b>: recorre las tarjetas y filtros (incluido el Estado <b>"Sin clasificar"</b>), el <b>+ Nuevo</b> e ingresos/egresos, y cada botón de la barra — <b>Reporte de margen, Ir a Movimientos, Convertir grano a semilla, Reubicar categoría, Control de stock, Depurar duplicados, Fusionar, Recuperar y Unificar artículos</b>. También lo agregamos al manual web y el asistente ya lo explica.' },
@@ -8192,6 +8198,8 @@ pages.stock = async function() {
       if (!q) return true;
       return [p.nombre, p.categoria, p.subtipo, p.codigo, p.ubicacion].some(v => (v||'').toLowerCase().includes(q));
     });
+    // Guardamos lo que se ve (ya filtrado) para que "Control de stock" exporte EXACTAMENTE esto.
+    state._stockVisible = { ids: filtered.map(p=>p.id).filter(id=>id && !String(id).startsWith('comp:')), depositoId: depositoId||null, total: filtered.length };
     $('#stock-table').innerHTML = `
       <table class="data">
         <thead><tr>
@@ -8405,19 +8413,23 @@ async function reubicarSave() {
 // que el usuario haga el conteo físico. Después lo re-sube y el sistema genera
 // los movimientos de ajuste con motivo "control_stock", firmados con su usuario.
 function stockControlMenu() {
-  const cat = state.stockFilter?.cat || '';
+  const vis = state._stockVisible || { ids:[], depositoId:null, total:0 };
+  const dep = vis.depositoId ? ((state.cache.depositos||[]).find(d=>d.id===vis.depositoId)?.nombre || 'el depósito filtrado') : null;
+  const hayFiltro = (vis.ids.length && vis.ids.length < (state.cache.productos||[]).length) || vis.depositoId;
   openModal({
     title:'📋 Control de stock', size:'max-w-lg',
     body: `
       <div class="bg-blue-50 border border-blue-200 text-blue-900 text-sm rounded-lg p-3 mb-3">
-        Hacé el conteo físico del depósito en 3 pasos:
+        Hacé el conteo físico en 3 pasos:
         <ol class="list-decimal ml-5 mt-1 space-y-0.5 text-xs">
           <li>Descargá la planilla Excel con el stock actual del sistema.</li>
           <li>Imprimila o llenala digitalmente: completá la columna <b>conteo</b> con la cantidad real encontrada.</li>
           <li>Subila al sistema — se generan automáticamente los ajustes de stock con tu usuario y la fecha actual.</li>
         </ol>
       </div>
-      <div class="text-xs text-slate-500 mb-2">${cat?`Filtro activo: <b>${esc(cat)}</b> · solo se exportan esa categoría.`:'Se exporta el stock completo (sin filtro de categoría).'}</div>
+      <div class="text-xs ${hayFiltro?'text-emerald-700':'text-slate-500'} mb-2">${hayFiltro
+        ? `✅ Se exporta <b>exactamente lo que estás viendo</b> (${vis.total} artículo${vis.total===1?'':'s'}${dep?` · depósito <b>${esc(dep)}</b>`:''}, con los filtros activos).`
+        : 'Se exporta el stock completo (no tenés filtros activos).'}</div>
       <div class="flex flex-col gap-2 mt-3">
         <button class="btn btn-primary" onclick="stockControlDescargar()">📥 Descargar planilla actual</button>
         <button class="btn btn-secondary" onclick="$('#stock-control-file').click()">📤 Subir planilla con conteo</button>
@@ -8427,10 +8439,13 @@ function stockControlMenu() {
   });
 }
 async function stockControlDescargar() {
-  const cat = state.stockFilter?.cat || '';
+  const vis = state._stockVisible || { ids:[], depositoId:null };
   try {
-    const url = '/api/admin/control-stock/exportar' + (cat ? '?categoria=' + encodeURIComponent(cat) : '');
-    const r = await fetch(url, { headers: { 'Authorization': 'Bearer '+state.token, 'X-Company-Id': state.companyId } });
+    const r = await fetch('/api/admin/control-stock/exportar', {
+      method:'POST',
+      headers: { 'Authorization': 'Bearer '+state.token, 'X-Company-Id': state.companyId, 'Content-Type':'application/json' },
+      body: JSON.stringify({ ids: vis.ids, depositoId: vis.depositoId || null }),
+    });
     if (!r.ok) throw new Error(await r.text());
     const blob = await r.blob();
     const stamp = new Date().toISOString().slice(0,10);

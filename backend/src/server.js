@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.454.0';
+const AGROCORE_VERSION = '2.456.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -27464,9 +27464,9 @@ const PLANTILLAS = {
     instrucciones: 'Importa proveedores. razonSocial es obligatorio.',
   },
   productos: {
-    headers: ['categoria*', 'nombre*', 'unidad*', 'codigo', 'stockMinimo', 'precioReferencia', 'observaciones'],
-    ejemplo: ['granos', 'Soja 1ra', 'tn', 'SOJ1', '0', '0', 'Soja primera calidad'],
-    instrucciones: 'categoria: granos / insumos / hacienda / repuestos / combustibles / otros. unidad: tn, kg, lt, cabezas, unidad.',
+    headers: ['categoria*', 'familia', 'nombre*', 'unidad*', 'codigo', 'stockMinimo', 'precioReferencia', 'observaciones'],
+    ejemplo: ['insumos', 'Herbicida', 'Glifosato 48', 'lt', 'GLI48', '0', '0', 'Herbicida sistémico'],
+    instrucciones: 'categoria: granos / insumos / hacienda / repuestos / combustibles / otros. familia: nombre EXACTO de la familia del árbol de Categorías de artículos (ej. Herbicida, Fertilizante, Semilla, Cereal). Si la dejás vacía o no coincide con ninguna familia, el artículo se clasifica en la raíz de su categoría y podés reubicarlo después desde Stock. unidad: tn, kg, lt, cabezas, unidad. codigo: código interno / SKU (opcional).',
   },
   cheques: {
     headers: ['tipo*', 'formato', 'banco', 'nroCheque*', 'fechaEmision*', 'fechaPago*', 'monto*', 'beneficiario', 'librador', 'estado', 'observaciones'],
@@ -28851,6 +28851,38 @@ app.post('/api/admin/importar/:tipo', authMiddleware, requireCompany, upload.sin
     const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
     let ok = 0;
     const errores = [];
+    // Cache del arbol de familias (categoriaArticulo) para el importador de productos.
+    // Se carga una sola vez (en la primera fila) para no consultar por cada fila.
+    let _impFamIndex = null;
+    const _artNormImp = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+    const _loadFamIndex = async () => {
+      if (_impFamIndex) return _impFamIndex;
+      const nodos = await prisma.categoriaArticulo.findMany({ where: { companyId: req.companyId } });
+      const byName = {}; nodos.forEach(n => { byName[_artNormImp(n.nombre)] = n.id; });
+      const roots = {}; nodos.filter(n => !n.padreId).forEach(n => { roots[_artNormImp(n.nombre)] = n.id; });
+      _impFamIndex = { byName, roots };
+      return _impFamIndex;
+    };
+    // Dada una categoria (granos/insumos/...), devuelve el id del nodo raiz candidato.
+    const _raizDeCategoria = (idx, categoria) => {
+      const c = _artNormImp(categoria);
+      const cands = {
+        granos: ['granos', 'cereales / granos', 'cereales', 'cereal'],
+        insumos: ['insumos', 'insumo'],
+        hacienda: ['hacienda'],
+        repuestos: ['repuestos', 'repuesto'],
+        combustibles: ['combustibles', 'combustible'],
+        otros: ['otros', 'otro'],
+      }[c] || [c];
+      for (const k of cands) { if (idx.roots[k]) return idx.roots[k]; }
+      return null;
+    };
+    const _tipoArtDeCategoria = (categoria) => {
+      const c = _artNormImp(categoria);
+      if (c === 'granos') return 'cereal';
+      if (c === 'hacienda') return 'hacienda';
+      return 'stockeable';
+    };
     // Importadores por tipo
     const importers = {
       clientes: async (r) => {
@@ -28876,17 +28908,31 @@ app.post('/api/admin/importar/:tipo', authMiddleware, requireCompany, upload.sin
         }});
       },
       productos: async (r) => {
-        if (!r['categoria*'] && !r.categoria) throw new Error('Falta categoría');
-        if (!r['nombre*'] && !r.nombre) throw new Error('Falta nombre');
-        if (!r['unidad*'] && !r.unidad) throw new Error('Falta unidad');
+        const categoria = r['categoria*'] || r.categoria;
+        const nombre = r['nombre*'] || r.nombre;
+        const unidad = r['unidad*'] || r.unidad;
+        if (!categoria) throw new Error('Falta categoría');
+        if (!nombre) throw new Error('Falta nombre');
+        if (!unidad) throw new Error('Falta unidad');
+        // Clasificacion en el arbol: familia exacta -> nodo; si no coincide, raiz de la categoria.
+        const idx = await _loadFamIndex();
+        const famRaw = (r.familia || '').toString().trim();
+        let categoriaArticuloId = null;
+        if (famRaw) categoriaArticuloId = idx.byName[_artNormImp(famRaw)] || null;
+        if (!categoriaArticuloId) categoriaArticuloId = _raizDeCategoria(idx, categoria);
+        const codigo = (r.codigo || '').toString().trim() || null;
         return prisma.producto.create({ data: {
           companyId: req.companyId,
-          categoria: r['categoria*'] || r.categoria,
-          nombre: r['nombre*'] || r.nombre,
-          unidad: r['unidad*'] || r.unidad,
+          categoria,
+          nombre,
+          unidad,
+          sku: codigo,
           stockMinimo: Number(r.stockMinimo || 0),
           precioReferencia: r.precioReferencia ? Number(r.precioReferencia) : null,
           observaciones: r.observaciones || null,
+          categoriaArticuloId,
+          tipoArticulo: _tipoArtDeCategoria(categoria),
+          predefinido: false,
         }});
       },
       cheques: async (r) => {
@@ -29085,16 +29131,27 @@ app.post('/api/admin/importar/:tipo', authMiddleware, requireCompany, upload.sin
 // Exporta xlsx con productos × depósitos + columna "Conteo" vacía para que el
 // usuario haga el conteo físico y vuelva a subir. Al importar, se generan
 // movimientos de ajuste con motivo "control_stock".
-app.get('/api/admin/control-stock/exportar', authMiddleware, requireCompany, requirePermission('stock:read'), async (req, res, next) => {
+const _controlStockExportar = async (req, res, next) => {
   try {
+    // Respeta lo que el usuario está viendo en Stock: si manda ids[] (lista filtrada) y/o
+    // depositoId, exporta SOLO eso. Compat: GET con ?categoria= sigue andando.
+    const body = req.body || {};
     const filterCat = req.query.categoria || null;
+    const ids = Array.isArray(body.ids) ? body.ids.filter(x => x && typeof x === 'string') : null;
+    const soloDepositoId = body.depositoId || req.query.depositoId || null;
     const productos = await prisma.producto.findMany({
-      where: { companyId: req.companyId, activo: true, ...(filterCat ? { categoria: String(filterCat) } : {}) },
+      where: {
+        companyId: req.companyId, activo: true,
+        ...(ids && ids.length ? { id: { in: ids } } : {}),
+        ...(filterCat ? { categoria: String(filterCat) } : {}),
+      },
       orderBy: { nombre: 'asc' },
     });
-    const depositos = await prisma.deposito.findMany({
+    let depositos = await prisma.deposito.findMany({
       where: { OR: [{ companyId: req.companyId }, { companyId: null, compartido: true }], activo: true },
     });
+    // Si se filtró por un depósito en Stock, exportamos solo ese (y no la fila "Mi campo").
+    if (soloDepositoId) depositos = depositos.filter(d => d.id === soloDepositoId);
     const movs = await prisma.movimiento.groupBy({
       by: ['productoId', 'depositoId', 'tipo'],
       where: { companyId: req.companyId },
@@ -29105,13 +29162,17 @@ app.get('/api/admin/control-stock/exportar', authMiddleware, requireCompany, req
     const headers = ['producto*', 'categoria', 'unidad', 'depositoId', 'deposito', 'stockSistema', 'conteo'];
     const aoa = [headers];
     productos.forEach(p => {
-      // __campo__ + cada depósito
-      const ubics = [{ id: '__campo__', nombre: 'Mi campo', depositoId: '' }, ...depositos.map(d => ({ id: d.id, nombre: d.nombre, depositoId: d.id }))];
+      // Si NO se filtró por un depósito: __campo__ + cada depósito. Si SÍ: solo ese depósito.
+      const ubics = soloDepositoId
+        ? depositos.map(d => ({ id: d.id, nombre: d.nombre, depositoId: d.id }))
+        : [{ id: '__campo__', nombre: 'Mi campo', depositoId: '' }, ...depositos.map(d => ({ id: d.id, nombre: d.nombre, depositoId: d.id }))];
       ubics.forEach(u => {
         const ing = movs.filter(m => m.productoId === p.id && (m.depositoId === (u.id === '__campo__' ? null : u.id)) && m.tipo === 'ingreso').reduce((a, m) => a + Number(m._sum?.cantidad || 0), 0);
         const egr = movs.filter(m => m.productoId === p.id && (m.depositoId === (u.id === '__campo__' ? null : u.id)) && m.tipo === 'egreso').reduce((a, m) => a + Number(m._sum?.cantidad || 0), 0);
         const stock = ing - egr;
-        if (stock !== 0 || u.id === '__campo__') {
+        // Al filtrar por depósito o por lista de ids, incluimos SIEMPRE el artículo (aunque esté en 0)
+        // para poder contarlo. Sin filtro, mantenemos la lógica vieja (solo con stock + Mi campo).
+        if (stock !== 0 || u.id === '__campo__' || soloDepositoId || (ids && ids.length)) {
           aoa.push([p.nombre, p.categoria, p.unidad, u.depositoId, u.nombre, stock, '']);
         }
       });
@@ -29138,7 +29199,9 @@ app.get('/api/admin/control-stock/exportar', authMiddleware, requireCompany, req
     res.setHeader('Content-Disposition', `attachment; filename="control-stock-${stamp}.xlsx"`);
     res.end(buf);
   } catch (e) { next(e); }
-});
+};
+app.get('/api/admin/control-stock/exportar', authMiddleware, requireCompany, requirePermission('stock:read'), _controlStockExportar);
+app.post('/api/admin/control-stock/exportar', authMiddleware, requireCompany, requirePermission('stock:read'), _controlStockExportar);
 
 app.post('/api/admin/control-stock/importar', authMiddleware, requireCompany, requirePermission('stock:update'), upload.single('archivo'), async (req, res, next) => {
   try {
