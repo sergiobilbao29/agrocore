@@ -3127,6 +3127,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-red-100 text-red-800 border-red-300', fecha:'20/11/2026',
+      titulo:'🛡️ v2.458.0 — Depurar duplicados ya no borra insumos en empresas unificadas',
+      desc:'Corregimos un problema serio: en una empresa ya <b>unificada</b>, usar <b>Depurar duplicados</b> podía borrar insumos/cereales que no tenían movimientos (los tomaba como "sobrantes" porque la unificación los había sacado del Catálogo viejo). Ahora, si la empresa está unificada, la limpieza <b>nunca</b> borra artículos por no estar en el Catálogo — la lista única de artículos es la que manda. Los artículos con historial (compras, labores, movimientos) nunca estuvieron en riesgo.' },
+    { tag:'Corrección', color:'bg-red-100 text-red-800 border-red-300', fecha:'20/11/2026',
       titulo:'🚑 v2.457.0 — Stock volvía a mostrar los artículos',
       desc:'Corregimos un error que en algunos casos dejaba la <b>lista de Stock en blanco</b> (aunque las tarjetas mostraran el total de SKU y los artículos siguieran en el Catálogo). Ya se ven todos los artículos con sus existencias normalmente. No se perdió ningún dato: era solo un problema de visualización.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'20/11/2026',

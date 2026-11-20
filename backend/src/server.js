@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.457.0';
+const AGROCORE_VERSION = '2.458.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -25115,6 +25115,14 @@ async function _limpiarHaciendaHuerfana(companyId, apply) {
 // solo cuenta los que se borrarian. No toca productos de fabrica (rolFabrica) ni otras categorias.
 async function _limpiarInsumosHuerfanos(companyId, apply) {
   const nrm = (s) => _sinAcentos(s || '').replace(/\s+/g, ' ').trim();
+  // v2.458: SEGURIDAD CRITICA. Si la empresa ya esta UNIFICADA, el Catalogo YA NO es la
+  // lista autoritativa de insumos (la unificacion borro esos items del Catalogo a proposito;
+  // ahora la fuente unica es Producto). En ese caso NUNCA hay que borrar productos por "no
+  // estar en el Catalogo" -> seria borrar TODOS los insumos sin movimientos. Salimos.
+  try {
+    const co = await prisma.company.findUnique({ where: { id: companyId }, select: { articulosUnificados: true } });
+    if (co?.articulosUnificados) return { del: 0, off: 0 };
+  } catch {}
   const items = await prisma.catalogo.findMany({ where: { companyId }, select: { nombre: true } });
   const vivos = new Set(items.map(c => nrm(c.nombre)).filter(Boolean));
   if (!vivos.size) return { del: 0, off: 0 }; // sin catalogo no hay referencia autoritativa
