@@ -3127,6 +3127,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
+      titulo:'📄 v2.465.0 — Importar e-cheques desde el PDF del homebanking',
+      desc:'En <b>Cheques</b> sumamos <b>📄 Importar PDF</b>: subís el PDF del e-cheq que te da el homebanking (Galicia y similares) y el sistema lee solo el <b>N°, importe, banco, fechas de emisión y pago, beneficiario/librador, CUIT y motivo</b>, detecta si es <b>propio o de terceros</b> y te abre el cheque listo para revisar y guardar. Podés subir <b>varios a la vez</b> (te muestra la lista para confirmar) y avisa si alguno <b>ya está cargado</b> para no duplicar. Mucho más rápido que cargarlos a mano.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
       titulo:'🧪 v2.464.0 — Carga masiva de insumos: volver a elegir el producto',
       desc:'Corregimos un problema en la <b>carga de insumos al lote</b> (varios de una): al elegir el <b>tipo</b> (Herbicida, Coadyuvante, etc.), el buscador de <b>producto</b> no mostraba nada en las empresas que ya <b>unificaron</b> sus artículos, porque seguía buscando en el catálogo viejo. Ahora toma los productos de la <b>lista única de Stock</b> por su familia, así podés elegirlos normalmente (y si alguno quedó sin clasificar, igual aparece). Además, los montos convertidos a dólares se muestran con <b>2 decimales</b> (ej. US$ 408,67) para que no confundan.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
@@ -20142,6 +20145,8 @@ pages.cheques = async function() {
           ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Vender / descontar cheques de terceros en el banco" onclick="chqVenderForm()">💵 Vender cheques</button>`:''}
           ${colMenuBtn('cheques')}
           ${can('finanzas:update') ? `<button class="btn btn-secondary" title="Agregar, renombrar o quitar estados de cheque" onclick="chqEstadosManager()">⚙️ Estados</button>`:''}
+          ${can('finanzas:create') ? `<button class="btn btn-secondary" title="Importar un e-cheq desde el PDF del homebanking (Galicia, etc.)" onclick="document.getElementById('chq-pdf-file').click()">📄 Importar PDF</button>`:''}
+          ${can('finanzas:create') ? `<input type="file" id="chq-pdf-file" accept="application/pdf,.pdf" class="hidden" multiple onchange="chqImportarPdf(this)"/>`:''}
           ${can('finanzas:create') ? `<button class="btn btn-primary" onclick="chqForm()">+ Nuevo</button>`:''}
         </div>
       </div>
@@ -20382,8 +20387,65 @@ function chqAplicarTipo(limpiar){
   _chqCampo('f-endo', !esProp, limpiar);
   _chqCampo('f-frec', !esProp, limpiar);
 }
-async function chqForm(id=null) {
-  const it = id ? (state.cache.cheques||[]).find(x=>x.id===id)||{} : {};
+// --- Importar e-cheq desde PDF del homebanking (v2.465) ---
+function _chqFileB64(f){ return new Promise(res=>{ const r=new FileReader(); r.onload=()=>res(String(r.result||'')); r.onerror=()=>res(''); r.readAsDataURL(f); }); }
+async function chqImportarPdf(inp){
+  const files = Array.from(inp.files||[]); inp.value='';
+  if(!files.length) return;
+  toast('Leyendo '+files.length+' PDF…','info');
+  const parsed=[];
+  for(const f of files){
+    try{
+      const b64 = await _chqFileB64(f);
+      const r = await api('/api/cheques/importar-pdf',{method:'POST',body:JSON.stringify({ base64:b64 })});
+      parsed.push({ ...(r.data||{}), yaExiste:r.yaExiste, _file:f.name });
+    }catch(e){ parsed.push({ _error:e.message, _file:f.name }); }
+  }
+  const ok = parsed.filter(p=>!p._error);
+  if(!ok.length) return toast('No pude leer el cheque: '+(parsed[0]?._error||'formato no reconocido'),'error');
+  if(files.length===1 && ok.length===1){ return chqForm(null, ok[0]); }   // 1 solo → revisar en el form
+  chqImportarPreview(parsed);                                              // varios → lista + guardar todos
+}
+function chqImportarPreview(parsed){
+  const rows = parsed.map((p,i)=>{
+    if(p._error) return `<tr class="text-red-600"><td class="py-1">${esc(p._file)}</td><td colspan="4" class="py-1 text-xs">No se pudo leer: ${esc(p._error)}</td></tr>`;
+    const dup = p.yaExiste ? ` <span class="badge badge-yellow text-[10px]">ya existe</span>` : '';
+    return `<tr data-chqimp="${i}"><td class="py-1"><input type="checkbox" class="chqimp-ck" ${p.yaExiste?'':'checked'} data-i="${i}"/></td>
+      <td class="py-1">${esc(p.nroCheque||'s/n')}${dup}</td>
+      <td class="py-1">${esc(p.tipo||'')}/${esc(p.banco||'')}</td>
+      <td class="py-1">${esc(p.beneficiario||p.librador||'')}</td>
+      <td class="py-1 text-right font-semibold">${fmt$(p.monto||0)}</td></tr>`;
+  }).join('');
+  state._chqImp = parsed;
+  openModal({ title:'📄 Importar cheques desde PDF', size:'max-w-2xl',
+    body:`<div class="text-xs text-slate-500 mb-2">Revisá y destildá los que no quieras cargar. Los marcados <b>"ya existe"</b> vienen destildados para no duplicar.</div>
+      <table class="w-full text-sm"><thead class="text-slate-500 text-xs"><tr><th></th><th class="text-left">N°</th><th class="text-left">Tipo/Banco</th><th class="text-left">Beneficiario/Librador</th><th class="text-right">Monto</th></tr></thead><tbody>${rows}</tbody></table>`,
+    footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="chqImportarGuardar()">💾 Guardar seleccionados</button>` });
+}
+async function chqImportarGuardar(){
+  const idxs = $$('.chqimp-ck').filter(c=>c.checked).map(c=>Number(c.dataset.i));
+  const parsed = state._chqImp||[];
+  let ok=0, err=0;
+  for(const i of idxs){
+    const p = parsed[i]; if(!p||p._error) continue;
+    try{
+      await api('/api/cheques',{method:'POST',body:JSON.stringify({
+        tipo:p.tipo||'terceros', formato:p.formato||'electronico', estado:p.estado||null,
+        banco:p.banco||null, nroCheque:String(p.nroCheque||''), monto:Number(p.monto||0),
+        fechaEmision:p.fechaEmision, fechaPago:p.fechaPago,
+        beneficiario:p.beneficiario||null, librador:p.librador||null, cuitTitular:p.cuitTitular||null,
+        observaciones:p.observaciones||null,
+      })});
+      ok++;
+    }catch(e){ err++; }
+  }
+  closeModal(); delete state.cache.cheques;
+  toast(`${ok} cheque(s) importado(s)`+(err?` · ${err} con error`:''), err?'warn':'success');
+  pages.cheques();
+}
+async function chqForm(id=null, prefill=null) {
+  const it = id ? ((state.cache.cheques||[]).find(x=>x.id===id)||{}) : (prefill||{});
   // Default de estado según tipo: cheque de terceros → "en_cartera"; propio → "emitido".
   const estadoDefault = it.estado || (it.tipo==='terceros' ? 'en_cartera' : 'emitido');
   // Cargar las cuentas bancarias reales (creadas en Bancos) para los selectores.

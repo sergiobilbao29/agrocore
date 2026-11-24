@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.464.0';
+const AGROCORE_VERSION = '2.465.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -8275,6 +8275,94 @@ mountCrud({
   ],
 });
 
+// ============================================================
+// IMPORTAR CHEQUE DESDE PDF (e-cheq Galicia "Detalle de cheque electronico").
+// Extrae los datos del PDF y los devuelve para prefilar el formulario.
+// ============================================================
+function _chqMontoAr(s){
+  if(!s) return null;
+  let t = String(s).replace(/[^\d.,-]/g,'').replace(/\./g,'').replace(',', '.');
+  const n = Number(t); return isNaN(n) ? null : n;
+}
+function _chqFechaIso(s){
+  const m = /(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(s||''));
+  return m ? `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}T12:00:00.000Z` : null;
+}
+function _chqBancoNorm(s){
+  const t = (s||'').toUpperCase();
+  if(/GALICIA/.test(t)) return 'Galicia';
+  if(/MACRO/.test(t)) return 'Banco Macro';
+  if(/BBVA|FRANCES/.test(t)) return 'BBVA Francés';
+  if(/SANTANDER/.test(t)) return 'Santander';
+  if(/NACION/.test(t)) return 'Banco Nación';
+  if(/CREDICOOP/.test(t)) return 'Credicoop';
+  if(/SUPERVIELLE/.test(t)) return 'Supervielle';
+  if(/PATAGONIA/.test(t)) return 'Patagonia';
+  if(/PROVINCIA/.test(t)) return 'Banco Provincia';
+  if(/CIUDAD/.test(t)) return 'Banco Ciudad';
+  if(/HSBC/.test(t)) return 'HSBC'; if(/ICBC/.test(t)) return 'ICBC'; if(/COMAFI/.test(t)) return 'Comafi';
+  return (s||'').replace(/BANCO DE /i,'').replace(/\s+S\.?A\.?U?\.?$/i,'').trim() || null;
+}
+function _parseEcheqPdf(texto){
+  // El PDF del homebanking aplana el layout de 2 columnas: primero las ETIQUETAS de
+  // la fila, luego los VALORES en el mismo orden. Parseamos por lineas + anclas.
+  const lines = String(texto||'').split('\n').map(s => s.trim()).filter(Boolean);
+  const isDate = s => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s);
+  let monto = null, iMonto = -1;
+  for (let i = 0; i < lines.length; i++) { if (/[\d.]+,\d{2}$/.test(lines[i])) { monto = _chqMontoAr(lines[i]); iMonto = i; break; } }
+  let nro = null, iNro = -1;
+  for (let i = iMonto + 1; i < lines.length; i++) { const d = lines[i].replace(/\D/g,''); if (/^0*\d{3,10}$/.test(lines[i]) && d.length <= 10) { nro = lines[i].trim(); iNro = i; break; } }
+  const fechas = lines.filter(isDate);   // orden del PDF: [pago, emision, (footer)]
+  let beneficiario = null, cuitBenef = null;
+  { const buf = []; for (let i = iNro + 1; i < lines.length; i++) { const d = lines[i].replace(/\D/g,''); if (d.length === 11) { cuitBenef = d; break; } if (/^Estado$/i.test(lines[i])) break; if (/[A-Za-zÁÉÍÓÚ]/.test(lines[i])) buf.push(lines[i]); else if (buf.length) break; } if (buf.length) beneficiario = buf.join(' ').replace(/\s+/g,' ').trim(); }
+  let estadoRaw = null; { const i = lines.findIndex(l => /^Estado$/i.test(l)); if (i >= 0) estadoRaw = lines[i+1] || null; }
+  let motivo = null; { const i = lines.findIndex(l => /Motivo y descripci/i.test(l)); if (i >= 0) { const vals = []; for (let j = i+1; j < lines.length && vals.length < 2; j++) { if (/^(Emitido a|CUIT|Cl[aá]usula|ID |Fecha |Importe|N[º°])/i.test(lines[j])) continue; if (/[A-Za-z]/.test(lines[j])) vals.push(lines[j]); } motivo = vals[1] || vals[0] || null; } }
+  let librador = null, libradorCuit = null, bancoLib = null;
+  { const k = lines.findIndex(l => /Datos del librador/i.test(l)); const seg = k >= 0 ? lines.slice(k+1) : []; const bbuf = [];
+    for (const l of seg) { const d = l.replace(/\D/g,''); if (/Datos del beneficiario/i.test(l)) break;
+      if (!librador && /[A-Za-z]/.test(l) && !/^(Raz[oó]n|CUIT|Banco|CP)/i.test(l) && !/BANCO|AIRES|S\.A/i.test(l)) librador = l.trim();
+      if (!libradorCuit && d.length === 11) libradorCuit = d;
+      if (/BANCO|GALICIA|MACRO|BBVA|SANTANDER|NACION|CREDICOOP|SUPERVIELLE|PATAGONIA|AIRES|S\.A\.U/i.test(l)) bbuf.push(l.trim());
+    }
+    if (bbuf.length) bancoLib = bbuf.join(' ').replace(/\s+/g,' ').trim();
+  }
+  return { nroCheque: nro || null, monto, fechaEmision: _chqFechaIso(fechas[1]), fechaPago: _chqFechaIso(fechas[0]),
+    beneficiario, cuitBenef, librador, libradorCuit, banco: _chqBancoNorm(bancoLib), estadoRaw, observaciones: motivo };
+}
+app.post('/api/cheques/importar-pdf', requireCompany, requirePermission('finanzas:create'), async (req, res, next) => {
+  try {
+    const rawB64 = String(req.body?.base64 || '').replace(/^data:[^,]*,/, '');
+    if (!rawB64) return res.status(400).json({ ok:false, error:'Falta el PDF.' });
+    const buffer = Buffer.from(rawB64, 'base64');
+    if (buffer.slice(0,4).toString('latin1') !== '%PDF') return res.status(422).json({ ok:false, error:'El archivo no es un PDF.' });
+    let texto = '';
+    try { const pdfParse = await getPdfParse(); texto = (await pdfParse(buffer)).text || ''; }
+    catch (e) { return res.status(400).json({ ok:false, error:'No pude leer el PDF: ' + e.message }); }
+    if (!texto || texto.trim().length < 20) return res.status(422).json({ ok:false, error:'El PDF no tiene texto (parece escaneado/foto). Usá el PDF original del homebanking.' });
+    const p = _parseEcheqPdf(texto);
+    if (!p.nroCheque && p.monto == null) return res.status(422).json({ ok:false, error:'No reconocí el cheque en el PDF. ¿Es un e-cheq (detalle del homebanking)?' });
+    let tipo = 'terceros';
+    try {
+      const co = await prisma.company.findUnique({ where:{ id: req.companyId }, select:{ cuit:true } });
+      const coCuit = (co?.cuit||'').replace(/\D/g,'');
+      if (coCuit && p.libradorCuit && coCuit === p.libradorCuit) tipo = 'propio';
+    } catch {}
+    const estado = /rechaz/i.test(p.estadoRaw||'') ? 'rechazado'
+      : /(cobrad|acredit)/i.test(p.estadoRaw||'') ? (tipo==='propio'?'pagado':'cobrado')
+      : /depositad/i.test(p.estadoRaw||'') ? 'depositado'
+      : (tipo==='propio'?'emitido':'en_cartera');
+    let yaExiste = false;
+    if (p.nroCheque) { const dup = await prisma.cheque.findFirst({ where:{ companyId: req.companyId, nroCheque: String(p.nroCheque) } }); yaExiste = !!dup; }
+    res.json({ ok:true, data: {
+      tipo, formato:'electronico', estado, nroCheque: p.nroCheque, banco: p.banco, monto: p.monto,
+      fechaEmision: p.fechaEmision, fechaPago: p.fechaPago,
+      beneficiario: tipo==='propio' ? (p.beneficiario||null) : null,
+      librador: tipo==='terceros' ? (p.librador||null) : null,
+      cuitTitular: tipo==='propio' ? (p.cuitBenef||null) : (p.libradorCuit||null),
+      observaciones: p.observaciones || null,
+    }, yaExiste });
+  } catch (e) { next(e); }
+});
 // ============================================================
 // CHEQUE → BANCO: cambiar estado del cheque y, si corresponde, generar
 // (o eliminar) el movimiento bancario asociado.
