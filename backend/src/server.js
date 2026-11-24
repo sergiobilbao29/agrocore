@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.459.0';
+const AGROCORE_VERSION = '2.460.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -10376,6 +10376,7 @@ const liqSchema = z.object({
   medioPago: z.enum(['efectivo', 'cheque', 'transferencia', 'tarjeta', 'intercompany', 'combinado']),
   caja: z.string().nullable().optional(),
   banco: z.string().nullable().optional(),
+  bancoCuentaId: z.string().nullable().optional(),   // v2.460 — cuenta bancaria de la transferencia (genera movimiento en Bancos)
   nroCheque: z.string().nullable().optional(),
   referencia: z.string().nullable().optional(),
   // Pago COMBINADO (dividido): una parte en efectivo, otra en transferencia/cheque, etc.
@@ -10384,6 +10385,7 @@ const liqSchema = z.object({
     monto: z.coerce.number().positive(),
     caja: z.string().nullable().optional(),       // caja (efectivo) o tarjeta
     banco: z.string().nullable().optional(),
+    bancoCuentaId: z.string().nullable().optional(), // v2.460 — cuenta bancaria (transferencia)
     nroCheque: z.string().nullable().optional(),
     referencia: z.string().nullable().optional(), // N° operación (transferencia)
   })).optional(),
@@ -10472,6 +10474,7 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
     const liquidacion = await prisma.$transaction(async (tx) => {
       let efectivoId = null;
       let chequeId = null;
+      let bancoMovimientoId = null;
       let intercompanyRef = null;
 
       // Intercompany: otra firma del grupo paga el sueldo. Deja los asientos espejo
@@ -10529,8 +10532,16 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
               fechaEmision: d.fecha, fechaPago: d.fecha, monto, beneficiario: nombreCompleto, estado: 'en_cartera',
               observaciones: `Liquidación de sueldo ${d.periodo} (combinado) ${tag}`,
             }});
+          } else if (p.medioPago === 'transferencia' && p.bancoCuentaId) {
+            // v2.460: la parte por transferencia ahora SÍ genera el egreso en Bancos.
+            await tx.bancoMovimiento.create({ data: {
+              companyId: req.companyId, cuentaId: p.bancoCuentaId, fecha: d.fecha, tipo: 'transferencia_out',
+              concepto: `Sueldo ${nombreCompleto} · ${d.periodo}`, monto, contraparte: nombreCompleto,
+              referencia: p.referencia || null, observaciones: `Liquidación de sueldo ${d.periodo} (combinado) ${tag}`,
+              userId: req.user?.id || null,
+            }});
           }
-          // transferencia: queda sólo registrada (como el medio 'transferencia' simple), no mueve otro módulo.
+          // transferencia sin cuenta elegida: queda sólo registrada (no mueve Bancos).
         }
       }
 
@@ -10565,6 +10576,17 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
           },
         });
         chequeId = ch.id;
+      } else if (pagado > 0 && d.medioPago === 'transferencia' && d.bancoCuentaId) {
+        // v2.460: pago de sueldo por TRANSFERENCIA ahora genera el egreso real en Bancos.
+        const bm = await tx.bancoMovimiento.create({
+          data: {
+            companyId: req.companyId, cuentaId: d.bancoCuentaId, fecha: d.fecha, tipo: 'transferencia_out',
+            concepto: `Sueldo ${nombreCompleto} · ${d.periodo}`, monto: pagado, contraparte: nombreCompleto,
+            referencia: d.referencia || null, observaciones: `Liquidación de sueldo ${d.periodo}`,
+            userId: req.user?.id || null,
+          },
+        });
+        bancoMovimientoId = bm.id;
       }
 
       const liq = await tx.liquidacionSueldo.create({
@@ -10585,6 +10607,7 @@ app.post('/api/empleados/:id/liquidaciones', requireCompany, requirePermission('
           referencia: (d.medioPago === 'combinado') ? combinadoRef : (d.referencia || null),
           efectivoId,
           chequeId,
+          bancoMovimientoId,
           intercompanyRef,
           observaciones: (d.medioPago === 'combinado')
             ? [(d.observaciones || ''), 'Pago combinado: ' + (d.pagos || []).map(p => `${_round2(p.monto)} ${p.medioPago}`).join(' + ')].filter(Boolean).join(' · ')
@@ -10632,11 +10655,16 @@ app.delete('/api/empleados/:id/liquidaciones/:liqId', requireCompany, requirePer
       if (liq.chequeId) {
         await tx.cheque.deleteMany({ where: { id: liq.chequeId, companyId: req.companyId } });
       }
-      // Pago combinado: borrar los movimientos (efectivo/cheque) etiquetados con [liq:ref].
+      // v2.460: revertir el movimiento bancario del pago por transferencia.
+      if (liq.bancoMovimientoId) {
+        await tx.bancoMovimiento.deleteMany({ where: { id: liq.bancoMovimientoId, companyId: req.companyId } });
+      }
+      // Pago combinado: borrar los movimientos (efectivo/cheque/banco) etiquetados con [liq:ref].
       if (liq.medioPago === 'combinado' && liq.referencia) {
         const tag = `[liq:${liq.referencia}]`;
         await tx.efectivo.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } });
         await tx.cheque.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } });
+        await tx.bancoMovimiento.deleteMany({ where: { companyId: req.companyId, observaciones: { contains: tag } } });
       }
       // Reversa del pago Intercompany: se identifica por la referencia guardada.
       if (liq.intercompanyRef) {
@@ -17686,7 +17714,7 @@ const _AYUDA_KB = [
       'Si cargaste algo con el formato viejo y no aparece en stock ni en compras/ventas, entra a Catalogo -> boton "Diagnostico de articulos" y usa "Pasar a articulo" para convertirlo (no borra nada).',
       'UNA SOLA LISTA (unificacion): los insumos/cereales viven SOLO en Stock (el catalogo viejo ya no los duplica). Si todavia ves duplicados o articulos que reaparecen, entra a Stock -> boton "Unificar articulos" (solo administrador): migra lo que faltaba (nombre, familia, precio) a Stock y quita las filas viejas del catalogo. Se hace UNA VEZ por empresa y conviene tener backup. No se pierde ningun movimiento.',
       'Si te quedaron DOS articulos del mismo producto con nombres distintos (ej. "2,4-D" y "2,4-D ETIL HEXIL"): Stock -> "Fusionar articulos", elegis cual se elimina y cual queda; el stock y los movimientos pasan al que queda.',
-      'Si te desaparecio un insumo que si usabas (ej. uno cargado desde una factura): Stock -> "Recuperar articulos" lo vuelve a mostrar. Y "Depurar duplicados" une duplicados exactos y corrige familias.',
+      'Si te desaparecio un insumo que si usabas (ej. uno cargado desde una factura): Stock -> "Recuperar articulos" lo vuelve a mostrar. Si un articulo se BORRO del todo (no esta ni desactivado), usa Stock -> "Recuperar desde backup": lo trae del ultimo respaldo del servidor sin tocar nada mas. Y "Depurar duplicados" une duplicados exactos y corrige familias.',
       'Ejemplos: Fabrica -> Agroindustria / Soja / Derivados -> Expeller, Aceite. Comercio -> Lubricantes / Aceites de motor / 15W40 -> Bidon x4 L, Bidon x20 L.'],
     atajo:{ page:'catalogos', label:'Abrir Catalogo de articulos' } },
   { id:'empleado_compartido', terms:['empleado compartido','empleados compartidos','jornalero','jornaleros','empleado en varias empresas','mismo empleado en varias empresas','centralizar empleados','liquidacion unica','liquidacion consolidada','una sola liquidacion','labores de otra empresa','empleado del grupo','compartir empleado'],
@@ -17845,7 +17873,7 @@ const _AYUDA_KB = [
       'Entrá a Stock para ver existencias por artículo y depósito (sin filtro de depósito ves el total consolidado).',
       'El stock NO se edita a mano: es la suma de los movimientos. Para corregir, cargá un movimiento (ingreso/salida/ajuste) o usá "Control de stock" (conteo físico: descargás planilla, la completás y al subirla genera los ajustes).',
       'Tocá "+ Nuevo" para dar de alta un artículo, o el ícono de ingreso/salida de cada fila para moverlo. Hay traspaso entre depósitos y conversión grano ↔ semilla.',
-      'Botones de la barra (administrador): "🧩 Unificar artículos" deja UNA sola lista de insumos/cereales (una vez por empresa, con backup); "🔗 Fusionar artículos" une dos con nombres distintos; "♻️ Recuperar artículos" vuelve a mostrar uno que desapareció; "🧹 Depurar duplicados" une duplicados exactos y corrige familias.',
+      'Botones de la barra (administrador): "🧩 Unificar artículos" deja UNA sola lista de insumos/cereales (una vez por empresa, con backup); "🔗 Fusionar artículos" une dos con nombres distintos; "♻️ Recuperar artículos" vuelve a mostrar uno que desapareció; "🧹 Depurar duplicados" une duplicados exactos y corrige familias; "🗄️ Recuperar desde backup" vuelve a traer artículos que se hayan BORRADO, tomándolos del último respaldo del servidor (elegís el respaldo, por defecto el más reciente). No toca los que ya existen ni ningún otro dato; los artículos vuelven a la lista única con su clasificación.',
       'Si Stock avisa "ver también X que no están en el Catálogo": filtro Estado → "⚠️ Sin clasificar" para verlos, y "🔀 Reubicar categoría" (check "mostrar solo los sin clasificar" + "Tildar los visibles") para asignarles su familia.',
       'Más detalle en el instructivo "Stock de artículos: la pantalla y todas sus funciones" (Ayuda del sistema).'],
     atajo:{ page:'stock', label:'Abrir Stock' } },

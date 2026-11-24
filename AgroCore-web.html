@@ -3126,6 +3126,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
+      titulo:'🏦 v2.460.0 — Pago de sueldo por transferencia ahora impacta en el Banco',
+      desc:'Al liquidar un sueldo por <b>transferencia</b>, ahora elegís la <b>cuenta bancaria</b> y el sistema genera el <b>egreso en Bancos</b> (antes quedaba solo registrado y no se veía el movimiento). Vale también para el pago <b>combinado</b> (la parte por transferencia). Al <b>anular</b> la liquidación, el movimiento bancario se revierte solo. El efectivo y el cheque ya funcionaban; esto completa la transferencia.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'20/11/2026',
       titulo:'🗄️ v2.459.0 — Recuperar artículos desde un respaldo (1 clic)',
       desc:'Nuevo botón en la barra de <b>Stock</b> (solo admin): <b>Recuperar desde backup</b>. Si se borraron artículos, los vuelve a traer tomándolos del último respaldo del servidor, con un solo clic y sin entrar a la base. Es <b>no destructivo</b>: no toca los artículos que ya existen ni ningún otro dato (movimientos, facturas, etc.), y los artículos vuelven directo a la lista única con su clasificación. Elegís el respaldo (por defecto el más reciente) y listo.' },
@@ -29015,6 +29018,7 @@ function empLiqForm(periodo){
         <div id="lq-caja-wrap"><label class="label">${state.cajaPorTenedor?'Tenedor *':'Caja *'}</label>${catSelect('lq-caja','Caja','',{placeholder: state.cajaPorTenedor?'— Quién tiene la plata —':'— Elegir caja —'})}</div>
         <div id="lq-tarjeta-wrap">${tarjetaPicker('lq-tarjeta')}</div>
         <div id="lq-banco-wrap"><label class="label">Banco</label>${catSelect('lq-banco','Banco','',{placeholder:'— Elegir banco —'})}</div>
+        <div id="lq-cuenta-wrap"><label class="label">Cuenta bancaria *</label><select id="lq-cuenta" class="input"><option value="">— Elegir cuenta —</option>${(state.cache.bancoCuentas||[]).filter(c=>c.activo!==false).map(c=>`<option value="${esc(c.id)}">${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('')}</select></div>
         <div id="lq-cheque-wrap"><label class="label">N° de cheque *</label><input id="lq-cheque" class="input"/></div>
         <div id="lq-ref-wrap"><label class="label">N° operación / comprobante</label><input id="lq-ref" class="input"/></div>
         <div id="lq-interco-wrap" class="col-span-2"></div>
@@ -29027,6 +29031,15 @@ function empLiqForm(periodo){
             <button class="btn btn-primary" onclick='empLiqSave(${JSON.stringify(periodo)})'>Confirmar liquidación</button>`
   });
   empLiqMedioChange();
+  // Cargar las cuentas bancarias si no estan en cache, para el pago por transferencia.
+  if (!state.cache.bancoCuentas) {
+    api('/api/banco-cuentas').then(r => {
+      state.cache.bancoCuentas = r.data || [];
+      const ctas = (state.cache.bancoCuentas||[]).filter(c=>c.activo!==false);
+      const opts = '<option value="">— Elegir cuenta —</option>' + ctas.map(c=>`<option value="${esc(c.id)}">${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('');
+      const s = document.getElementById('lq-cuenta'); if (s) s.innerHTML = opts;
+    }).catch(()=>{});
+  }
   if (state.usaCentrosCosto && !state.cache.centrosCosto) {
     api('/api/centros-costo').then(r => { state.cache.centrosCosto = r.data || []; const s=document.getElementById('lq-cc'); if (s && typeof _ccOpts==='function') s.innerHTML=_ccOpts((((state.cache.empleados||[]).find(x=>x.id===state.empFichaId)||{}).centroCostoId)||''); }).catch(()=>{});
   }
@@ -29046,7 +29059,8 @@ function empLiqMedioChange(){
   const esCombo = medio==='combinado';
   show('lq-caja-wrap',   medio==='efectivo');
   show('lq-tarjeta-wrap',medio==='tarjeta');
-  show('lq-banco-wrap',  medio!=='efectivo' && medio!=='tarjeta' && !esInterco && !esCombo);
+  show('lq-banco-wrap',  medio==='cheque');
+  show('lq-cuenta-wrap', medio==='transferencia');
   show('lq-cheque-wrap', medio==='cheque');
   show('lq-ref-wrap',    medio==='transferencia');
   show('lq-combinado-wrap', esCombo);
@@ -29078,7 +29092,9 @@ function empLiqComboExtra(medio, idx){
   if (medio==='efectivo') return `<label class="label text-xs">${state.cajaPorTenedor?'Tenedor':'Caja'}</label>${catSelect('lqc-caja-'+idx,'Caja','',{placeholder: state.cajaPorTenedor?'— Quién —':'— Caja —'})}`;
   if (medio==='tarjeta') return `<label class="label text-xs">Tarjeta</label>${tarjetaPicker('lqc-tarj-'+idx)}`;
   if (medio==='cheque') return `<div class="grid grid-cols-2 gap-1"><div><label class="label text-xs">Banco</label>${catSelect('lqc-banco-'+idx,'Banco','',{placeholder:'— Banco —'})}</div><div><label class="label text-xs">N° cheque</label><input class="input text-sm" data-cf="nroCheque"/></div></div>`;
-  return `<div class="grid grid-cols-2 gap-1"><div><label class="label text-xs">Banco</label>${catSelect('lqc-banco-'+idx,'Banco','',{placeholder:'— Banco —'})}</div><div><label class="label text-xs">N° oper.</label><input class="input text-sm" data-cf="ref"/></div></div>`;
+  // transferencia: elegí la CUENTA bancaria para que genere el egreso en Bancos.
+  const _ctas=(state.cache.bancoCuentas||[]).filter(c=>c.activo!==false);
+  return `<div class="grid grid-cols-2 gap-1"><div><label class="label text-xs">Cuenta</label><select class="input text-sm" id="lqc-cuenta-${idx}"><option value="">— Cuenta —</option>${_ctas.map(c=>`<option value="${esc(c.id)}">${esc(c.banco)}${c.alias?' · '+esc(c.alias):''}</option>`).join('')}</select></div><div><label class="label text-xs">N° oper.</label><input class="input text-sm" data-cf="ref"/></div></div>`;
 }
 function empLiqComboAdd(){
   const rows = $('#lq-combo-rows'); if (!rows) return;
@@ -29121,7 +29137,8 @@ async function empLiqSave(periodo){
     medioPago:medio,
     montoPagado,
     caja: medio==='efectivo' ? ($('#lq-caja').value||null) : (medio==='tarjeta' ? ($('#lq-tarjeta')?.value?.trim()||null) : null),
-    banco: (medio!=='efectivo' && medio!=='tarjeta') ? ($('#lq-banco').value.trim()||null) : null,
+    banco: medio==='cheque' ? ($('#lq-banco').value.trim()||null) : null,
+    bancoCuentaId: medio==='transferencia' ? ($('#lq-cuenta')?.value||null) : null,
     nroCheque: medio==='cheque' ? ($('#lq-cheque').value.trim()||null) : null,
     referencia: medio==='transferencia' ? ($('#lq-ref').value.trim()||null) : null,
     observaciones: $('#lq-obs').value.trim()||null,
@@ -29131,6 +29148,7 @@ async function empLiqSave(periodo){
   if(medio==='efectivo'&&!data.caja) return toast('Elegí la caja de la que sale el pago','warn');
   if(medio==='tarjeta'&&!data.caja) return toast('Elegí la tarjeta de crédito','warn');
   if(medio==='cheque'&&!data.nroCheque) return toast('Ingresá el número de cheque','warn');
+  if(medio==='transferencia'&&!data.bancoCuentaId) return toast('Elegí la cuenta bancaria de la que sale la transferencia','warn');
   if(medio==='combinado'){
     const pagos=[];
     let err='';
@@ -29143,7 +29161,7 @@ async function empLiqSave(periodo){
       if(m==='efectivo'){ p.caja=document.getElementById('lqc-caja-'+idx)?.value||null; if(!p.caja) err='Elegí la caja en la parte en efectivo.'; }
       else if(m==='tarjeta'){ p.caja=document.getElementById('lqc-tarj-'+idx)?.value?.trim()||null; if(!p.caja) err='Elegí la tarjeta.'; }
       else if(m==='cheque'){ p.banco=document.getElementById('lqc-banco-'+idx)?.value?.trim()||null; p.nroCheque=row.querySelector('[data-cf="nroCheque"]')?.value?.trim()||null; if(!p.nroCheque) err='Ingresá el N° de cheque en la parte con cheque.'; }
-      else { p.banco=document.getElementById('lqc-banco-'+idx)?.value?.trim()||null; p.referencia=row.querySelector('[data-cf="ref"]')?.value?.trim()||null; }
+      else { p.bancoCuentaId=document.getElementById('lqc-cuenta-'+idx)?.value||null; p.referencia=row.querySelector('[data-cf="ref"]')?.value?.trim()||null; if(!p.bancoCuentaId) err='Elegí la cuenta bancaria en la parte por transferencia.'; }
       pagos.push(p);
     });
     if(!pagos.length) return toast('Cargá al menos una parte con monto en el pago combinado','warn');

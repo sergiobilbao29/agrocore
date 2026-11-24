@@ -1629,6 +1629,7 @@ model LiquidacionSueldo {
   referencia     String?    // nro de operación / comprobante de transferencia
   efectivoId     String?    // id del egreso generado en Control de Efectivo
   chequeId       String?    // id del cheque propio generado
+  bancoMovimientoId String? // v2.460 — id del movimiento bancario generado (pago por transferencia)
   intercompanyRef String?   // si el pago fue Intercompany, ref para revertir el asiento
   // v2.386 — liquidación consolidada de empleado compartido (abarca movimientos de varias empresas)
   esConsolidada    Boolean @default(false)
