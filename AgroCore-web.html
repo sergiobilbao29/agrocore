@@ -3127,6 +3127,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
+      titulo:'🚜 v2.471.0 — Cargar la misma labor en varias campañas de una vez',
+      desc:'Igual que con los insumos, ahora al <b>Cargar labor</b> aparece un desplegable opcional <b>"➕ Cargar esta misma labor en otras campañas / lotes"</b>. Tildás una o varias campañas y la <b>misma labor</b> (con sus insumos y empleados) se carga en cada una, usando las <b>hectáreas del lote de cada campaña</b> (los insumos escalan solos a esas hectáreas). Perfecto para los lotes de al lado de Montenegro que se hacen igual. Si no lo usás, la carga funciona igual que siempre. No aplica a servicios a terceros ni al editar una labor existente.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
       titulo:'🧪 v2.470.0 — Cargar los mismos insumos en varias campañas de una vez',
       desc:'En <b>Cargar insumos al lote</b> sumamos una opción (desplegable): <b>"➕ Aplicar también a otras campañas / lotes"</b>. Tildás una o varias campañas y los <b>mismos insumos</b> se cargan en cada una, usando las <b>hectáreas del lote de cada campaña</b>. Ideal para lotes de al lado (ej. Montenegro) que se hacen igual pero van con distinta empresa/lote — ya no hay que cargarlos dos veces. Cada campaña descuenta su propio stock. Si no la usás, todo funciona igual que siempre. <i>(La misma opción para labores llega en breve.)</i>' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
@@ -30835,6 +30838,14 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
         ${editMode?'<div class="text-[11px] text-slate-500 px-3 py-2">Podés agregar, cambiar o quitar insumos. Al guardar se recalcula el stock consumido por esta labor.</div>':''}
       </div>
 
+      ${(!editMode && !servicio && (state.cache.campanas||[]).length>1) ? `<details id="la-extra-wrap" class="mb-3 border border-slate-200 rounded-lg p-2">
+        <summary class="text-sm text-indigo-700 cursor-pointer">➕ Cargar esta misma labor en otras campañas / lotes (opcional)</summary>
+        <div class="text-[11px] text-slate-500 my-1">Se repite la <b>misma labor</b> (y sus insumos) en cada campaña que tildes, usando las <b>hectáreas del lote de cada una</b>. Ideal para lotes de al lado que se hacen igual. Cada campaña descuenta su propio stock y arma su ganancia de empleados.</div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1 max-h-44 overflow-auto">
+          ${(state.cache.campanas||[]).map(c=>`<label class="flex items-center gap-1 text-xs"><input type="checkbox" class="la-extra-camp" value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}"/> <span>${esc(campLabel(c))} <span class="text-slate-400">(${fmtN(c.lote?.hectareas||0)} ha)</span></span></label>`).join('')}
+        </div>
+      </details>` : ''}
+
       <div><label class="label">Observaciones</label><textarea id="la-obs" class="input" rows="2"></textarea></div>
       <input type="hidden" id="la-mode" value="${avanzada?'avanzada':'simple'}"/>
       <input type="hidden" id="la-editid" value="${edit?esc(edit.id):''}"/>`,
@@ -31193,11 +31204,28 @@ async function laborSave() {
     empleados,
     insumos,
   };
+  // v2.471 — Cargar la MISMA labor en otras campañas/lotes (aditivo, opcional).
+  // Por cada campaña extra tildada se repite la labor con las hectáreas de SU lote;
+  // los insumos escalan proporcional a la ha y los empleados usan la ha del lote extra.
+  const extrasCamp = (!esServicio && ha>0)
+    ? $$('.la-extra-camp').filter(c=>c.checked && c.value && c.value!==camp)
+        .map(c=>({ id:c.value, ha:Number(c.dataset.ha||0) })).filter(e=>e.ha>0)
+    : [];
   try {
     const res = await api('/api/labores-avanzada', { method:'POST', body: JSON.stringify(data) });
     const nuevoId = res?.data?.id || null;
+    let extraOk = 0;
+    for (const ex of extrasCamp){
+      const factor = ex.ha / ha;
+      const dataEx = {
+        ...data, campanaId: ex.id, hectareasAplicadas: ex.ha,
+        insumos: insumos.map(i => ({ ...i, cantidad: Math.round(i.cantidad * factor * 1000)/1000 })),
+        empleados: empleados.map(e => ({ ...e, hectareas: ex.ha })),
+      };
+      try { await api('/api/labores-avanzada', { method:'POST', body: JSON.stringify(dataEx) }); extraOk++; } catch {}
+    }
     const nEmp = empleados.length;
-    toast('Labor cargada' + (esServicio?' · 🤝 servicio a terceros':'') + (nEmp?` · ${nEmp} empleado${nEmp===1?'':'s'}`:'') + (insumos.length?` · ${insumos.length} insumo${insumos.length===1?'':'s'} del stock`:''),'success');
+    toast('Labor cargada' + (esServicio?' · 🤝 servicio a terceros':'') + (extraOk?` en ${extraOk+1} campañas`:'') + (nEmp?` · ${nEmp} empleado${nEmp===1?'':'s'}`:'') + (insumos.length?` · ${insumos.length} insumo${insumos.length===1?'':'s'} del stock`:''),'success');
     state._insScrollTo = camp;
     closeModal();
     delete state.cache.stockMap;
