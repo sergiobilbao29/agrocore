@@ -3127,6 +3127,18 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
+      titulo:'🧪 v2.470.0 — Cargar los mismos insumos en varias campañas de una vez',
+      desc:'En <b>Cargar insumos al lote</b> sumamos una opción (desplegable): <b>"➕ Aplicar también a otras campañas / lotes"</b>. Tildás una o varias campañas y los <b>mismos insumos</b> se cargan en cada una, usando las <b>hectáreas del lote de cada campaña</b>. Ideal para lotes de al lado (ej. Montenegro) que se hacen igual pero van con distinta empresa/lote — ya no hay que cargarlos dos veces. Cada campaña descuenta su propio stock. Si no la usás, todo funciona igual que siempre. <i>(La misma opción para labores llega en breve.)</i>' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
+      titulo:'🌐 v2.469.0 — Campos compartidos con el grupo económico (Etapa 1)',
+      desc:'Igual que el <b>empleado compartido</b>, ahora podés marcar un <b>campo como compartido</b> con el grupo: en la ficha del campo tildás <b>"Compartir con el grupo"</b> y ese campo (con sus lotes) se ve y se usa desde <b>todas tus empresas</b>. Así cargás <b>una sola vez</b> un campo como <b>Montenegro</b> y cada campaña la hacés con la empresa que corresponda esa temporada, eligiendo el lote y las hectáreas — sin recargar el campo. Cada campaña sigue siendo de su empresa; el campo/lote es solo el lugar físico. Los campos de otra empresa del grupo aparecen con el cartel <b>🌐 Compartido</b> y solo los edita su dueño. <i>(Próxima etapa: cargar una labor/insumo en varios lotes a la vez.)</i>' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
+      titulo:'🌾 v2.468.0 — Rinde: la planilla económica ya convierte kg/ha a tn/ha',
+      desc:'Corregimos un error en la <b>Planilla de resultado económico</b>: la campaña se carga con el <b>rinde estimado en kg/ha</b> (ej. 7000) y la planilla trabaja en <b>tn/ha</b>, pero tomaba el número tal cual (7000 tn/ha en vez de 7). Ahora convierte solo (kg ÷ 1000), así el rinde estimado y el ingreso bruto dan bien. Si ya habías guardado un rinde a mano en la planilla, ese se respeta.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
+      titulo:'🧹 v2.467.0 — Cheques: barra de botones más prolija',
+      desc:'Reordenamos la barra de botones de <b>Cheques</b>: ahora ocupan todo el ancho y se alinean a la izquierda en una sola fila (o se acomodan prolijo si no entran), en vez de amontonarse a la derecha. Quedó más claro con el botón nuevo de <b>Importar PDF</b>.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
       titulo:'🌿 v2.466.0 — Insumos dentro de la labor por hectárea + tarjetas de campaña',
       desc:'Dos mejoras: <b>(1)</b> al cargar una <b>labor</b> con sus insumos en el mismo cuadro, ahora podés poner la <b>dosis por hectárea</b> y el sistema calcula solo la <b>cantidad total</b> (dosis × hectáreas) — igual que el cargador de insumos suelto; y el precio y el total se muestran en la <b>moneda de la labor</b> (pesos o dólares, la de arriba). <b>(2)</b> En las <b>tarjetas de campaña forrajera</b>, que tienen el botón extra <b>🌿 Cortes</b>, los botones ahora <b>se acomodan en dos líneas</b> así el tachito de eliminar ya no se sale del cuadro.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
@@ -11154,17 +11166,19 @@ pages.campos = async function() {
       ${campos.map(c => {
         const lts = lotesPorCampo(c.id);
         const haLotes = lts.reduce((a,l)=>a+Number(l.hectareas||0),0);
+        const esMio = !c.companyId || c.companyId === state.companyId;
+        const ownerName = esMio ? '' : (((state.user?.companies||[]).find(x=>x.id===c.companyId)||{}).name || 'otra empresa');
         return `
         <div class="kpi">
           <div class="flex items-start justify-between">
             <div>
-              <div class="font-bold text-slate-800 text-base">📍 ${esc(c.nombre)}</div>
-              <div class="text-[11px] text-slate-500 mt-0.5">${esc(c.ubicacion||'—')} · ${fmtN(c.hectareas||0)} ha totales</div>
+              <div class="font-bold text-slate-800 text-base">📍 ${esc(c.nombre)}${c.compartido?` <span class="badge badge-blue text-[10px] align-middle">🌐 Compartido</span>`:''}</div>
+              <div class="text-[11px] text-slate-500 mt-0.5">${esc(c.ubicacion||'—')} · ${fmtN(c.hectareas||0)} ha totales${esMio?'':` · <span class="text-blue-700">🌐 de ${esc(ownerName)}</span>`}</div>
             </div>
             <div class="flex gap-1">
               ${c.geolocalizacion?`<button class="btn btn-ghost text-base text-emerald-600 hover:text-emerald-800" onclick='campoCompartirUbicacionCard(${JSON.stringify(c.id)}, "${esc(c.geolocalizacion)}", ${JSON.stringify(c.nombre)})' title="📱 Compartir ubicación por WhatsApp">📱</button>`:''}
-              ${can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campoForm(${JSON.stringify(c.id)})' title="Editar campo">✏️</button>`:''}
-              ${can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='campoDel(${JSON.stringify(c.id)})' title="Eliminar campo">🗑️</button>`:''}
+              ${esMio && can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campoForm(${JSON.stringify(c.id)})' title="Editar campo">✏️</button>`:''}
+              ${esMio && can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='campoDel(${JSON.stringify(c.id)})' title="Eliminar campo">🗑️</button>`:''}
             </div>
           </div>
           <div class="grid grid-cols-2 gap-2 mt-3 text-xs">
@@ -11390,6 +11404,12 @@ function campoForm(id=null) {
           <div class="text-[11px] text-slate-500 mt-1">Al tildarlo, se crea un depósito con el nombre del campo: vas a poder usarlo para guardar granos/insumos y para los movimientos de animales por campo. Aparece en Stock, Movimientos y Animales.</div>
         </div>
 
+        ${(state.user?.companies||[]).length>1 ? `${sectionHeader('🌐','Grupo económico')}
+        <div class="col-span-2">
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="f-comp" ${it.compartido?'checked':''}/> <span><b>Compartir con el grupo</b> (todas tus empresas)</span></label>
+          <div class="text-[11px] text-slate-500 mt-1">Cargás el campo <b>una sola vez</b> y lo ves en todas tus empresas. Cada campaña sigue siendo de la empresa que la siembra esa temporada: el campo/lote es solo el lugar físico. Ideal para campos (ej. Montenegro) que un año usa una empresa y otro año otra.</div>
+        </div>` : ''}
+
         ${sectionHeader('📝','Notas')}
         <div class="col-span-2"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2" placeholder="Cualquier dato adicional del campo">${esc(it.observaciones||'')}</textarea></div>
 
@@ -11421,6 +11441,7 @@ async function campoSave(id) {
     provincia: $('#f-prov')?.value || null,
     observaciones: $('#f-obs')?.value.trim()||null,
     esDeposito: $('#f-esdep')?.checked || false,
+    compartido: $('#f-comp')?.checked || false,
   };
   if (!data.nombre) return toast('Nombre requerido','warn');
   try { await api('/api/campos'+(id?'/'+id:''),{ method: id?'PUT':'POST', body: JSON.stringify(data) });
@@ -20138,10 +20159,10 @@ pages.cheques = async function() {
           <label class="label">Nº de cheque</label>
           <input id="chq-fnum" class="input" value="${esc(state.chequeFilter.numero||'')}" placeholder="Buscar Nº..."/>
         </div>
-        <div class="md:col-span-4 flex items-end">
+        <div class="md:col-span-12">
           <div class="text-[11px] text-slate-500">💡 Tocá el título de cualquier columna para ordenar (1 clic ascendente, 2 descendente).</div>
         </div>
-        <div class="md:col-span-8 flex gap-2 justify-end flex-wrap">
+        <div class="md:col-span-12 flex gap-2 justify-start flex-wrap">
           <button class="btn btn-secondary" onclick="chqFiltroDisponibles()">Ver disponibles</button>
           <button class="btn btn-secondary" title="Descargar a Excel los cheques que se ven (respeta los filtros)" onclick="chqExportExcel()">📊 Exportar Excel</button>
           <button class="btn btn-secondary" title="Descargar a PDF los cheques que se ven (respeta los filtros)" onclick="chqExportPDF()">📄 Exportar PDF</button>
@@ -29781,7 +29802,9 @@ async function campanaPlanilla(id){
   const savedPrecio = pl.precioBruto ?? pl.precioBrutoUsd ?? null;
   const savedComerc = pl.gastosComerc ?? pl.gastosComercUsd ?? null;
   const savedFlete  = pl.flete ?? pl.fleteUsd ?? null;
-  const savedRinde  = pl.rindeEstimado ?? (camp.rindeEstimado ?? null);
+  // El rinde de la campaña se carga en KG/HA, pero esta planilla trabaja en TN/HA.
+  // Si todavía no se guardó un rinde propio de la planilla, convertimos kg → tn (÷1000).
+  const savedRinde  = pl.rindeEstimado ?? (camp.rindeEstimado != null ? Math.round(Number(camp.rindeEstimado)/1000*100)/100 : null);
   const precioSug = mon==='ARS' ? (pizarraArs?Math.round(pizarraArs):'') : (pizarraUsd?Math.round(pizarraUsd*100)/100:'');
   // Aplicaciones (insumos + labores) → base en USD (se convierte al mostrar).
   const appRows = aplics.map(a=>{
@@ -30489,6 +30512,13 @@ async function aplicForm(tipo, campanaId) {
         </div>
       </div>
       <div class="text-[11px] text-slate-500 mb-1">Cargá todos los insumos del lote de una sola vez, en la <b>moneda</b> que elegiste arriba (pesos o dólares). Las hectáreas aplicadas vienen del lote; cambialas por fila si aplicaste solo en una parte. Cada insumo descuenta del stock al guardar.</div>
+      ${campanas.length>1 ? `<details class="mb-2 border border-slate-200 rounded-lg p-2">
+        <summary class="text-sm text-indigo-700 cursor-pointer">➕ Aplicar también a otras campañas / lotes (opcional)</summary>
+        <div class="text-[11px] text-slate-500 my-1">Se cargan <b>los mismos insumos</b> en cada campaña que tildes, usando las <b>hectáreas del lote de cada una</b>. Ideal para lotes de al lado que se hacen igual. El descuento de stock se hace una vez por cada campaña.</div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1 max-h-44 overflow-auto">
+          ${campanas.map(c=>`<label class="flex items-center gap-1 text-xs"><input type="checkbox" class="f-extra-camp" value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}"/> <span>${esc(campLabel(c))} <span class="text-slate-400">(${fmtN(c.lote?.hectareas||0)} ha)</span></span></label>`).join('')}
+        </div>
+      </details>` : ''}
       <datalist id="f-catlist">${itemNames.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="aplicSaveMulti()">💾 Guardar insumos</button>`
@@ -30587,10 +30617,21 @@ async function aplicSaveMulti(){
     });
   }
   if (!items.length) return toast('Cargá al menos un insumo','warn');
+  // v2.470 — Aplicar también a otras campañas/lotes (opcional, aditivo). Por cada campaña
+  // extra tildada, se repiten los mismos insumos usando las hectáreas de SU lote.
+  const extras = $$('.f-extra-camp').filter(c=>c.checked && c.value && c.value!==campanaId)
+    .map(c=>({ id:c.value, ha: Number(c.dataset.ha||0) }));
+  const todos = [...items];
+  let campsExtra = 0;
+  for (const ex of extras){
+    if (!(ex.ha>0)) continue;   // sin hectáreas en el lote: no la cargamos
+    for (const it of items){ todos.push({ ...it, campanaId: ex.id, hectareasAplicadas: ex.ha }); }
+    campsExtra++;
+  }
   try {
     let ok = 0;
-    for (const it of items){ await api('/api/aplicaciones', { method:'POST', body: JSON.stringify(it) }); ok++; }
-    toast(`${ok} insumo${ok===1?'':'s'} cargado${ok===1?'':'s'}`,'success');
+    for (const it of todos){ await api('/api/aplicaciones', { method:'POST', body: JSON.stringify(it) }); ok++; }
+    toast(`${items.length} insumo${items.length===1?'':'s'} cargado${items.length===1?'':'s'}`+(campsExtra?` en ${campsExtra+1} campañas`:''),'success');
     state._insScrollTo = campanaId;
     closeModal(); delete state.cache.aplicaciones; delete state.cache.stockMap; pages.insumos();
   } catch (e) {

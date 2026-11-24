@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.466.0';
+const AGROCORE_VERSION = '2.470.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -5153,11 +5153,13 @@ mountCrud({
     geolocalizacion: z.string().nullable().optional(),
     observaciones: z.string().nullable().optional(),
     esDeposito: z.boolean().optional(),
+    compartido: z.boolean().optional(),   // v2.469 — compartir el campo con el grupo
     activo: z.boolean().optional(),
   }),
   orderBy: { nombre: 'asc' },
   include: { lotes: true },
   searchFields: ['nombre', 'localidad'],
+  sharedFlag: 'compartido',   // v2.469 — el campo compartido se ve en todas las empresas del grupo
 });
 
 // Lotes: el modelo no tiene companyId directo (esta en campo) -> ruta manual
@@ -5173,8 +5175,14 @@ const loteSchema = z.object({
 
 app.get('/api/lotes', requireCompany, requireAnyPermission('produccion:read','stock:read'), async (req, res, next) => {
   try {
+    // v2.469 — incluye los lotes de los campos propios Y de los campos COMPARTIDOS del grupo.
+    const grupo = await _companyIdsGrupo(req);
+    const otros = grupo.filter((id) => id !== req.companyId);
+    const campoWhere = otros.length
+      ? { OR: [{ companyId: req.companyId }, { compartido: true, companyId: { in: otros } }] }
+      : { companyId: req.companyId };
     const rows = await prisma.lote.findMany({
-      where: { campo: { companyId: req.companyId } },
+      where: { campo: campoWhere },
       include: { campo: true },
       orderBy: { nombre: 'asc' },
     });
@@ -5182,10 +5190,19 @@ app.get('/api/lotes', requireCompany, requireAnyPermission('produccion:read','st
   } catch (e) { next(e); }
 });
 
+// v2.469 — where de campo que acepta el propio o uno COMPARTIDO del grupo.
+async function _campoScopeWhere(req, extra = {}) {
+  const grupo = await _companyIdsGrupo(req);
+  const otros = grupo.filter((id) => id !== req.companyId);
+  const base = otros.length
+    ? { OR: [{ companyId: req.companyId }, { compartido: true, companyId: { in: otros } }] }
+    : { companyId: req.companyId };
+  return Object.keys(extra).length ? { AND: [base, extra] } : base;
+}
 app.post('/api/lotes', requireCompany, requirePermission('produccion:create'), async (req, res, next) => {
   try {
     const data = loteSchema.parse(req.body);
-    const campo = await prisma.campo.findFirst({ where: { id: data.campoId, companyId: req.companyId } });
+    const campo = await prisma.campo.findFirst({ where: await _campoScopeWhere(req, { id: data.campoId }) });
     if (!campo) return res.status(400).json({ ok: false, error: 'Campo no valido' });
     res.status(201).json({ ok: true, data: await prisma.lote.create({ data }) });
   } catch (e) { next(e); }
@@ -5194,7 +5211,7 @@ app.post('/api/lotes', requireCompany, requirePermission('produccion:create'), a
 app.put('/api/lotes/:id', requireCompany, requirePermission('produccion:update'), async (req, res, next) => {
   try {
     const existing = await prisma.lote.findFirst({
-      where: { id: req.params.id, campo: { companyId: req.companyId } },
+      where: { id: req.params.id, campo: await _campoScopeWhere(req) },
     });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     res.json({ ok: true, data: await prisma.lote.update({ where: { id: req.params.id }, data: loteSchema.partial().parse(req.body) }) });
@@ -5204,7 +5221,7 @@ app.put('/api/lotes/:id', requireCompany, requirePermission('produccion:update')
 app.delete('/api/lotes/:id', requireCompany, requirePermission('produccion:delete'), async (req, res, next) => {
   try {
     const existing = await prisma.lote.findFirst({
-      where: { id: req.params.id, campo: { companyId: req.companyId } },
+      where: { id: req.params.id, campo: await _campoScopeWhere(req) },
     });
     if (!existing) return res.status(404).json({ ok: false, error: 'No encontrado' });
     await prisma.lote.delete({ where: { id: req.params.id } });
