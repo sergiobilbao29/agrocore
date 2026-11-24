@@ -3127,6 +3127,12 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
+      titulo:'🧪 v2.464.0 — Carga masiva de insumos: volver a elegir el producto',
+      desc:'Corregimos un problema en la <b>carga de insumos al lote</b> (varios de una): al elegir el <b>tipo</b> (Herbicida, Coadyuvante, etc.), el buscador de <b>producto</b> no mostraba nada en las empresas que ya <b>unificaron</b> sus artículos, porque seguía buscando en el catálogo viejo. Ahora toma los productos de la <b>lista única de Stock</b> por su familia, así podés elegirlos normalmente (y si alguno quedó sin clasificar, igual aparece). Además, los montos convertidos a dólares se muestran con <b>2 decimales</b> (ej. US$ 408,67) para que no confundan.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
+      titulo:'🔎 v2.463.0 — Cheques: aviso claro cuando el filtro los oculta',
+      desc:'La pantalla de <b>Cheques</b> arranca mostrando solo los <b>"En cartera"</b>. Si cargaste cheques en otro estado (emitido, depositado, transferido…), antes la lista aparecía vacía y daba la sensación de que no se habían guardado. Ahora, cuando el filtro deja la lista vacía pero hay cheques, aparece un aviso <b>"Tenés N cheques en total"</b> con un botón <b>👁 Ver todos los cheques</b> que limpia los filtros y te los muestra. Los cheques nunca se perdieron: estaban en otro estado.' },
+    { tag:'Corrección', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
       titulo:'🔗 v2.462.0 — Detalle y Recibo de sueldo ahora muestran el arrastre',
       desc:'El <b>👁 Detalle</b> y el <b>🧾 Recibo</b> de cada liquidación ahora reflejan el <b>saldo del mes anterior (arrastre)</b>: muestran el neto del mes, el saldo que venía de antes, el <b>total a pagar (con arrastre)</b>, lo pagado y el <b>saldo que pasa al mes siguiente</b>. Así coinciden exacto con la tarjeta de la liquidación (antes el detalle mostraba solo el neto del mes y podía dar un número distinto).' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
@@ -10876,7 +10882,7 @@ async function socCampoDetalle(id, linkId){
       <td class="text-xs whitespace-nowrap">${fmtFecha(it.fecha)}</td>
       <td>${it.tipo==='insumo'?'🧪':'🚜'} ${esc(it.nombre||'')}${it.aporteSocioNombre?`<span class="text-[10px] bg-emerald-100 text-emerald-800 rounded px-1 ml-1">👤 ${esc(it.aporteSocioNombre)}</span>`:''}${it.observaciones?`<div class="text-[11px] text-slate-400">${esc(it.observaciones)}</div>`:''}</td>
       <td class="text-right text-xs">${it.hectareasAplicadas!=null?fmtN(it.hectareasAplicadas)+' ha':'—'}</td>
-      <td class="text-right text-xs">${monTxt(it.moneda)} ${fmtN(it.monto)}${(it.moneda||'USD')!==mon?`<div class="text-[11px] text-slate-400">= ${monTxt(mon)} ${fmtN(it.montoVista)}</div>`:''}</td>
+      <td class="text-right text-xs">${monTxt(it.moneda)} ${fmtN(Math.round(Number(it.monto||0)*100)/100)}${(it.moneda||'USD')!==mon?`<div class="text-[11px] text-slate-400">= ${monTxt(mon)} ${fmtN(Math.round(Number(it.montoVista||0)*100)/100)}</div>`:''}</td>
       <td class="text-center text-xs">${it.tipo==='insumo'?(it.tieneStock?'📦':'—'):'—'}</td>
       <td class="text-right whitespace-nowrap">${canU?`<button class="btn btn-ghost text-xs" title="Editar" onclick='socAplicacionEdit(${JSON.stringify(it.id)})'>✏️</button>`:''}${canD?`<button class="btn btn-ghost text-red-600 text-xs" title="Eliminar" onclick='socAplicacionDel(${JSON.stringify(id)},${JSON.stringify(it.id)})'>🗑️</button>`:''}</td>
     </tr>`).join('')||`<tr><td colspan="6" class="text-center text-slate-400 py-4">Sin labores ni insumos cargados en este campo todavía.</td></tr>`;
@@ -20071,7 +20077,7 @@ pages.cheques = async function() {
                 ${can('finanzas:update')?`<button class="btn btn-ghost text-xs" onclick='chqForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
                 ${can('finanzas:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='chqDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
               </td>
-            </tr>`).join('') || `<tr><td colspan="${cols.length+1}" class="text-center text-slate-400 py-8">${rows.length?'Sin cheques en este filtro':'Sin cheques'}</td></tr>`}
+            </tr>`).join('') || `<tr><td colspan="${cols.length+1}" class="text-center py-8">${rows.length?`<div class="text-slate-500">No hay cheques que coincidan con los filtros.</div><div class="text-xs text-slate-400 mt-1">Tenés <b>${rows.length}</b> cheque(s) en total (en otros estados: emitido, depositado, transferido, etc.).</div><button class="btn btn-secondary text-sm mt-3" onclick="state.chequeFilter={estado:'',sortCol:null,sortDir:'asc',tipo:'',formato:'',banco:'',cuenta:'',numero:''};pages.cheques()">👁 Ver todos los cheques</button>`:'<span class="text-slate-400">Sin cheques</span>'}</td></tr>`}
         </tbody>
       </table>`;
   };
@@ -30343,8 +30349,24 @@ function insumosExportarExcel() {
 let _insRowSeq = 0;
 // Opciones de insumos del catálogo filtradas por el Tipo de insumo elegido.
 function insDatalistOpts(tipo){
+  const tnorm = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+  // 1) Catálogo viejo (empresas NO unificadas): items del tipo elegido.
   const cat = state.cache.insumosCat || [];
-  return cat.filter(c => c.tipo === tipo).map(c => `<option value="${esc(c.nombre)}">`).join('');
+  const fromCat = cat.filter(c => c.tipo === tipo).map(c => (c.nombre||'').trim());
+  // 2) v2.464: fuente ÚNICA (empresas unificadas). La lista de insumos ya no vive en el
+  //    catálogo viejo, sino en Productos. Traemos los productos cuya FAMILIA = tipo.
+  const prods = (state.cache.productos||[]).filter(p => p.activo!==false);
+  const nodo = (state.cache.categoriasArt||[]).find(c => tnorm(c.nombre) === tnorm(tipo));
+  let fromProd = nodo ? prods.filter(p => _prodEnFamilia(p, nodo.id)).map(p => (p.nombre||'').trim()) : [];
+  let lista = [...fromCat, ...fromProd];
+  // 3) Si no hay nada por familia (producto sin clasificar), no bloqueamos: mostramos
+  //    todos los insumos/cereales/combustibles/repuestos para poder elegirlos igual.
+  if (!lista.length) {
+    lista = prods.filter(p => ['insumo','insumos','cereal','cereales','grano','granos','combustible','combustibles','repuesto','repuestos','otro','otros'].includes((p.categoria||'').toLowerCase())).map(p => (p.nombre||'').trim());
+  }
+  const seen = new Set(); const out = [];
+  lista.filter(Boolean).forEach(n => { const k = n.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(n); } });
+  return out.sort((a,b)=>a.localeCompare(b,'es')).map(n => `<option value="${esc(n)}">`).join('');
 }
 // Al cambiar el tipo, refrescamos la lista de productos de esa fila (solo los de ese tipo).
 function insTipoChange(sel){
