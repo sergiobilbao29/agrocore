@@ -305,6 +305,10 @@ model Campo {
   // labores/insumos y consolidar costos. NO cambia la titularidad fiscal de las cartas de porte.
   esExternoSociedad Boolean @default(false)
   sociedadId      String?   // sociedad a la que pertenece este campo sombra (si esExternoSociedad)
+  // v2.469 — Campo COMPARTIDO con el grupo economico: se carga una vez y se ve/usa desde
+  // todas las empresas del grupo (como el empleado compartido). Cada campana sigue siendo
+  // de la empresa que la siembra esa temporada; el campo/lote es solo el lugar fisico.
+  compartido      Boolean  @default(false)
   activo          Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
