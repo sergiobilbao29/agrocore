@@ -3127,8 +3127,11 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
+      titulo:'🔗 v2.462.0 — Detalle y Recibo de sueldo ahora muestran el arrastre',
+      desc:'El <b>👁 Detalle</b> y el <b>🧾 Recibo</b> de cada liquidación ahora reflejan el <b>saldo del mes anterior (arrastre)</b>: muestran el neto del mes, el saldo que venía de antes, el <b>total a pagar (con arrastre)</b>, lo pagado y el <b>saldo que pasa al mes siguiente</b>. Así coinciden exacto con la tarjeta de la liquidación (antes el detalle mostraba solo el neto del mes y podía dar un número distinto).' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
       titulo:'🧾 v2.461.0 — Sueldos: ver el detalle y reimprimir el recibo',
-      desc:'En el <b>Historial de liquidaciones</b> de cada empleado sumamos dos botones: <b>👁 Detalle</b> (muestra cómo se compone la liquidación — ganancias, gastos/adelantos, neto, saldo y medio de pago) y <b>🧾 Recibo</b> (genera un <b>recibo de pago imprimible</b> o PDF, con el encabezado de la empresa, los datos del empleado, el desglose y las firmas). Podés consultarlo o reimprimirlo cuando quieras.' },
+      desc:'En el <b>Historial de liquidaciones</b> de cada empleado sumamos dos botones: <b>👁 Detalle</b> (muestra cómo se compone la liquidación — ganancias, gastos/adelantos, neto y medio de pago) y <b>🧾 Recibo</b> (genera un <b>recibo de pago imprimible</b> o PDF, con el encabezado de la empresa, los datos del empleado, el desglose y las firmas). Podés consultarlo o reimprimirlo cuando quieras.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
       titulo:'🏦 v2.460.0 — Pago de sueldo por transferencia impacta en el Banco',
       desc:'Al liquidar un sueldo por <b>transferencia</b>, ahora elegís la <b>cuenta bancaria</b> y el sistema genera el <b>egreso en Bancos</b> (antes quedaba solo registrado). Vale también para el pago <b>combinado</b> (la parte por transferencia), y al <b>anular</b> la liquidación el movimiento se revierte solo.' },
@@ -29226,12 +29229,16 @@ function _empLiqMedioTxt(l){
   return m||'—';
 }
 function empLiqDetalle(liqId){
-  const { l, movs } = _empLiqGet(liqId);
+  const { l, emp, movs } = _empLiqGet(liqId);
   if(!l) return toast('No encontré la liquidación','error');
   const { gan, gas } = _empLiqDesglose(l, movs);
+  const f = state.empFicha||{};
   const sueldoBase = Number(l.sueldoBase||0);
   const neto = Number(l.neto||0), pagado = Number(l.pagado!=null?l.pagado:neto);
-  const saldo = Math.round((neto-pagado)*100)/100;
+  // Arrastre: saldo que venía de meses anteriores (cuenta corriente del empleado).
+  const saldoAnt = (typeof empSaldoAnterior==='function') ? Math.round(empSaldoAnterior(emp||f.emp, f.movs||movs, f.liqs||[], l.periodo)*100)/100 : 0;
+  const aPagar = Math.round((saldoAnt+neto)*100)/100;        // total a pagar con arrastre
+  const saldo = Math.round((aPagar-pagado)*100)/100;          // lo que pasa al mes siguiente
   const fila=(c,m,extra)=>`<tr><td class="py-1">${esc(c)}${extra?` <span class="text-[11px] text-slate-400">${esc(extra)}</span>`:''}</td><td class="py-1 text-right">${fmt$(m)}</td></tr>`;
   const ganRows = (sueldoBase>0?fila('Sueldo base',sueldoBase):'') + gan.map(m=>fila(m.concepto||m.categoria||'Ganancia', m.monto, m.horas?`${fmtN(m.horas)} hs × ${fmt$(m.valorHora||0)}`:'')).join('');
   const gasRows = gas.length? gas.map(m=>fila(m.concepto||m.categoria||'Gasto', m.monto)).join('') : `<tr><td class="py-1 text-slate-400" colspan="2">Sin gastos/adelantos</td></tr>`;
@@ -29247,6 +29254,8 @@ function empLiqDetalle(liqId){
       <table class="w-full mb-3 border-t border-slate-100">${gasRows}<tr class="border-t border-slate-200 font-semibold"><td class="py-1">Total gastos</td><td class="py-1 text-right text-red-600">${fmt$(l.totalGastos)}</td></tr></table>
       <table class="w-full border-t-2 border-slate-300">
         <tr class="font-semibold"><td class="py-1">Neto del mes</td><td class="py-1 text-right">${fmt$(neto)}</td></tr>
+        ${Math.abs(saldoAnt)>=0.5?`<tr><td class="py-1 text-xs ${saldoAnt>0?'text-emerald-700':'text-red-600'}">${saldoAnt>0?'Saldo a favor del mes anterior (+)':'Saldo en contra del mes anterior (−)'}</td><td class="py-1 text-right text-xs ${saldoAnt>0?'text-emerald-700':'text-red-600'}">${fmt$(Math.abs(saldoAnt))}</td></tr>
+        <tr class="font-semibold"><td class="py-1">Total a pagar (con arrastre)</td><td class="py-1 text-right">${fmt$(aPagar)}</td></tr>`:''}
         <tr class="font-bold text-base"><td class="py-1">Neto pagado</td><td class="py-1 text-right">${fmt$(pagado)}</td></tr>
         ${Math.abs(saldo)>=0.5?`<tr><td class="py-1 text-xs ${saldo>0?'text-emerald-700':'text-red-600'}">${saldo>0?'Queda a favor del empleado (pasa al mes siguiente)':'El empleado queda debiendo (pasa al mes siguiente)'}</td><td class="py-1 text-right text-xs ${saldo>0?'text-emerald-700':'text-red-600'}">${fmt$(Math.abs(saldo))}</td></tr>`:''}
       </table>
@@ -29261,8 +29270,12 @@ function empLiqRecibo(liqId){
   const { gan, gas } = _empLiqDesglose(l, movs);
   const empresa = (currentMembership()?.name)||(currentMembership()?.razonSocial)||'Empresa';
   const nombre = emp?`${esc(emp.apellido||'')}, ${esc(emp.nombre||'')}`:'Empleado';
+  const f = state.empFicha||{};
   const sueldoBase = Number(l.sueldoBase||0);
   const neto = Number(l.neto||0), pagado = Number(l.pagado!=null?l.pagado:neto);
+  const saldoAnt = (typeof empSaldoAnterior==='function') ? Math.round(empSaldoAnterior(emp||f.emp, f.movs||movs, f.liqs||[], l.periodo)*100)/100 : 0;
+  const aPagar = Math.round((saldoAnt+neto)*100)/100;
+  const saldo = Math.round((aPagar-pagado)*100)/100;
   const row=(c,m,extra)=>`<tr><td style="padding:3px 6px">${esc(c)}${extra?` <small style="color:#888">${esc(extra)}</small>`:''}</td><td style="padding:3px 6px;text-align:right">${fmt$(m)}</td></tr>`;
   const ganRows=(sueldoBase>0?row('Sueldo base',sueldoBase):'')+gan.map(m=>row(m.concepto||m.categoria||'Ganancia',m.monto,m.horas?`${fmtN(m.horas)} hs`:'')).join('');
   const gasRows=gas.length?gas.map(m=>row(m.concepto||m.categoria||'Gasto',m.monto)).join(''):`<tr><td colspan="2" style="padding:3px 6px;color:#999">Sin gastos/adelantos</td></tr>`;
@@ -29282,7 +29295,10 @@ function empLiqRecibo(liqId){
     </table>
     <table style="width:100%;border-collapse:collapse;font-size:14px;border-top:2px solid #334155">
       <tr><td style="padding:5px 6px">Neto del mes</td><td style="padding:5px 6px;text-align:right">${fmt$(neto)}</td></tr>
+      ${Math.abs(saldoAnt)>=0.5?`<tr><td style="padding:5px 6px;color:#555">Saldo mes anterior ${saldoAnt>0?'(a favor)':'(en contra)'}</td><td style="padding:5px 6px;text-align:right;color:#555">${saldoAnt>0?'+':'−'}${fmt$(Math.abs(saldoAnt))}</td></tr>
+      <tr style="font-weight:bold"><td style="padding:5px 6px">Total a pagar (con arrastre)</td><td style="padding:5px 6px;text-align:right">${fmt$(aPagar)}</td></tr>`:''}
       <tr style="font-weight:bold;font-size:16px"><td style="padding:5px 6px">NETO PAGADO</td><td style="padding:5px 6px;text-align:right">${fmt$(pagado)}</td></tr>
+      ${Math.abs(saldo)>=0.5?`<tr><td style="padding:5px 6px;color:${saldo>0?'#166534':'#b91c1c'}">${saldo>0?'Queda a favor del empleado (pasa al mes siguiente)':'El empleado queda debiendo (pasa al mes siguiente)'}</td><td style="padding:5px 6px;text-align:right;color:${saldo>0?'#166534':'#b91c1c'}">${fmt$(Math.abs(saldo))}</td></tr>`:''}
       <tr><td style="padding:5px 6px;color:#555">Medio de pago</td><td style="padding:5px 6px;text-align:right;color:#555">${esc(_empLiqMedioTxt(l))}</td></tr>
     </table>
     ${l.observaciones?`<div style="font-size:12px;color:#666;margin-top:8px"><b>Observaciones:</b> ${esc(l.observaciones)}</div>`:''}
