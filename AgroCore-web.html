@@ -2857,6 +2857,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Catalogo-Articulos.pdf', t:'Catálogo de artículos: configuración y uso correcto', d:'Cómo organizar Categorías → Familias → Subfamilias y cargar artículos bien: un solo artículo por producto físico, con sus capacidades (se compra / se vende / stock / se consume o se obtiene en producción / servicio). Incluye ejemplos de fábrica y comercio, el Diagnóstico de artículos y cómo pasar lo viejo a artículos.' },
       { f:'Instructivo-Stock.pdf', t:'Stock de artículos: la pantalla y todas sus funciones', d:'Recorre toda la pantalla de Stock: tarjetas y filtros (incluido el Estado "Sin clasificar"), + Nuevo e ingresos/egresos, y cada botón de la barra — Reporte de margen, Ir a Movimientos, Convertir grano a semilla, Reubicar categoría, Control de stock (conteo físico), Depurar duplicados, Fusionar artículos, Recuperar artículos y Unificar artículos (dejar una sola lista sin duplicados).' },
       { f:'Instructivo-Acomodar-Cuentas-Bancarias.pdf', t:'Acomodar cuentas bancarias', d:'Cargar saldos iniciales y ordenar tus bancos.' },
+      { f:'Instructivo-Alta-Cliente-Nuevo.pdf', t:'Alta de cliente nuevo (instancia separada)', d:'Dar de alta un cliente/empresa nuevo en su propia instancia, paso a paso.' },
     ]},
     { grupo:'Finanzas', items:[
       { f:'Instructivo-Pagos-y-Cobros.pdf', t:'Pagos y cobros', d:'Registrar pagos a proveedores y cobros de clientes.' },
@@ -2872,9 +2873,15 @@ pages.ayuda = async function() {
       { f:'Instructivo-Compensacion-Cliente-Proveedor.pdf', t:'Compensación de cuentas (cliente y proveedor)', d:'Cuando la misma persona te compra y te vende: netear lo que te debe contra lo que le debés.' },
       { f:'Instructivo-Centros-de-Costo.pdf', t:'Centros de costo (configurar, usar y reportes)', d:'Saber cuánto gastaste e invertiste en cada campo, actividad o proyecto: activar por empresa, armar el catálogo, imputar compras y gastos (100% / %, monto o por hectáreas) y ver el reporte con detalle y export a Excel.' },
       { f:'Instructivo-Arrendamientos.pdf', t:'Arrendamientos (todas las modalidades)', d:'Cargar y pagar contratos de alquiler de campo: efectivo, quintales, Kg Novillo, porcentaje y la modalidad en kilos de grano con venta mensual a precio pizarra (plan de meses, cargar kilos reales + pizarra del día y pagar en entregas parciales que mueven la plata).' },
+      { f:'Instructivo-Retenciones-y-Percepciones.pdf', t:'Retenciones y percepciones', d:'Configuración y uso paso a paso: al pagar, al cobrar, liquidar al fisco, créditos fiscales y presentación.' },
+      { f:'Instructivo-Otros-Impuestos-y-Percepciones.pdf', t:'Otros impuestos y percepciones', d:'Cargar en una factura de compra los tributos que van después del IVA (combustibles, percepciones, impuestos internos).' },
+      { f:'Instructivo-Certificados-ARCA-Facturacion.pdf', t:'Certificados de ARCA para facturar', d:'Instalar y usar los certificados de ARCA para facturar electrónicamente desde AgroCore.' },
     ]},
     { grupo:'Compras', items:[
       { f:'Instructivo-Remitos-de-Compra.pdf', t:'Remitos de compra (recepción → factura)', d:'Recibís la mercadería con remito (suma stock) y después la facturás vinculándola al remito, sin duplicar el inventario. Parciales, devoluciones y reporte de recibido no facturado.' },
+      { f:'Instructivo-Comprobante-Interno.pdf', t:'Comprobante interno (Compras y Ventas)', d:'Registrar una operación con un número propio y facturarla después, sin duplicar nada.' },
+      { f:'Instructivo-Proveedores-de-Granos.pdf', t:'Proveedores de granos (cuenta en kilos)', d:'Llevar la cuenta de la soja en KILOS, aparte del resto de los proveedores.' },
+      { f:'Instructivo-Cuenta-Canje-en-Grano.pdf', t:'Cuenta canje en grano', d:'Llevar la cuenta de cada cliente: lo que entrego de grano, lo que se lleva en producto y lo que falta.' },
     ]},
     { grupo:'Stock y fábrica', items:[
       { f:'Instructivo-Molienda-Fabrica.pdf', t:'Molienda / Fábrica (procesar grano + plan canje)', d:'Procesar soja y que el stock de expeller, aceite y merma se arme solo, con el costo de fabricación por kilo y el precio de venta sugerido. Incluye el plan canje (entregar producto y recibir grano por paridad).' },
@@ -2887,6 +2894,7 @@ pages.ayuda = async function() {
     { grupo:'Cereal', items:[
       { f:'Instructivo-Sociedades-UTE.pdf', t:'Sociedades / UTE (negocio en participación)', d:'Armar una sociedad de campaña entre empresas y socios: asignar campos, consolidar cosecha/costos y liquidar la participación de cada socio.' },
       { f:'Instructivo-Circuito-Campana-Cereal.pdf', t:'Circuito campaña cereal', d:'De la siembra a la cosecha, paso a paso.' },
+      { f:'Instructivo-Campo-Declarado-Parcial.pdf', t:'Campo con parte declarada y parte no', d:'Cargar los rindes y controlar que no se entregue (CP) más de lo declarado.' },
       { f:'Instructivo-Contratos-de-Cereal.pdf', t:'Contratos de cereal', d:'Cargar y seguir contratos de venta.' },
       { f:'Instructivo-Cartas-de-Porte-y-Liquidaciones.pdf', t:'Cartas de porte y liquidaciones', d:'Cargar cartas de porte y armar la liquidación del cereal.' },
       { f:'Instructivo-Liquidacion-Cereal-Comprador-y-Camiones.pdf', t:'Liquidación de cereal, comprador y camiones', d:'Cartas de porte, viajes y liquidación.' },
@@ -2895,10 +2903,8 @@ pages.ayuda = async function() {
     { grupo:'Forrajera y hacienda', items:[
       { f:'Instructivo-Circuito-Campana-Forrajera-Multicorte.pdf', t:'Campaña forrajera multicorte', d:'Praderas y verdeos de varios cortes.' },
       { f:'Instructivo-Manejo-Integral-Hacienda.pdf', t:'Manejo integral de la hacienda', d:'Todo el ciclo en una guía: pastura/alimento, rodeos, gastos, alimentación con descuento de stock, compras/ventas, guías, liquidaciones y costo por kg con la ganancia.' },
-      { f:'Instructivo-Manejo-de-Animales.pdf', t:'Manejo de animales', d:'Altas, movimientos, pesajes y eventos de la hacienda.' },
       { f:'Instructivo-Stock-Hacienda.pdf', t:'Stock de hacienda: declarado (SENASA) vs real', d:'Los dos números de cada campo y cómo cargarlos bien: el Declarado (SENASA) a mano y el Real con Movimientos (Ajuste/Conteo). Carga inicial, día a día, lectura de la diferencia y cómo corregir si se cargó mal.' },
       { f:'Instructivo-Circuito-Rodeos.pdf', t:'Circuito de rodeos', d:'Armar rodeos, imputar alimentación y ver el costo del lote.' },
-      { f:'Instructivo-Costo-Kilo-Carne.pdf', t:'Costo por kilo de carne', d:'Cómo se calcula el costo por kg y la ganancia del ciclo.' },
       { f:'Instructivo-Guias-Hacienda.pdf', t:'Guías de hacienda', d:'Emitir y controlar guías.' },
       { f:'Instructivo-Haras-Caballos.pdf', t:'Haras / caballos', d:'Gestión de equinos.' },
       { f:'Instructivo-Caravanas-Electronicas-RFID.pdf', t:'Caravanas electrónicas (RFID)', d:'Importar caravanas a un rodeo desde el bastón, pesar por caravana con auto-mapeo al rodeo, avisar faltantes y seguir la evolución de peso y GDP en la ficha del animal.' },
@@ -3130,6 +3136,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/11/2026',
+      titulo:'📚 v2.476.0 — Instructivos: ortografía, menú ordenado y contenido al día',
+      desc:'Repasamos <b>todos los instructivos</b>: ahora se muestran con la <b>ortografía correcta</b> (ñ y tildes), se acomodó el menú de <b>Ayuda</b> (arreglamos enlaces que no abrían y sumamos 8 instructivos que faltaban: Alta de cliente, Comprobante interno, Proveedores de granos, Cuenta canje, Retenciones, Otros impuestos, Certificados ARCA y Campo declarado parcial) y actualizamos el contenido de los que habían quedado atrás: <b>Cheques</b> (importar e-cheques por PDF + filtro por defecto “En cartera”), <b>Empleados y sueldos</b> (transferencia que impacta en el banco, botón Detalle y pago Combinado), <b>Catálogo</b> (carga masiva por plantilla) y <b>Campaña de cereal</b> (las finalizadas no aparecen al cargar insumos/labores).' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/11/2026',
       titulo:'✅ v2.475.0 — Insumos y Labores: se ocultan las campañas finalizadas',
       desc:'Al cargar <b>insumos</b> o <b>labores</b> (y al elegir <b>otras campañas/lotes</b> para repetir la carga), ya <b>no aparecen las campañas finalizadas</b>: solo se puede cargar en campañas activas. Además, la pantalla de <b>Insumos y labores</b> ahora oculta por defecto las campañas finalizadas; si necesitás verlas, tildá <b>"Ver campañas finalizadas"</b> arriba a la derecha de los filtros.' },

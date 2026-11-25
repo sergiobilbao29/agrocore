@@ -56,8 +56,8 @@ def header_footer(canvas, doc):
     canvas.setFont("Helvetica", 10); canvas.drawRightString(w-15*mm, h-15*mm, "Instructivo")
     canvas.setStrokeColor(G100); canvas.setLineWidth(0.6); canvas.line(15*mm, 15*mm, w-15*mm, 15*mm)
     canvas.setFillColor(SLATE); canvas.setFont("Helvetica", 8)
-    canvas.drawString(15*mm, 10*mm, "AgroCore - El corazon del negocio agricola")
-    canvas.drawRightString(w-15*mm, 10*mm, "Pagina %d" % doc.page)
+    canvas.drawString(15*mm, 10*mm, "AgroCore - El corazón del negocio agrícola")
+    canvas.drawRightString(w-15*mm, 10*mm, "Página %d" % doc.page)
     canvas.restoreState()
 
 def build():
@@ -65,148 +65,148 @@ def build():
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='f')
     doc.addPageTemplates([PageTemplate(id='main', frames=[frame], onPage=header_footer)])
     E = []
-    E.append(Paragraph("Creditos bancarios", st_title))
-    E.append(Paragraph("Cargar un credito (nuevo o ya empezado), pagar las cuotas y ver sus vencimientos en el calendario", st_sub))
+    E.append(Paragraph("Créditos bancarios", st_title))
+    E.append(Paragraph("Cargar un crédito (nuevo o ya empezado), pagar las cuotas y ver sus vencimientos en el calendario", st_sub))
     E.append(Paragraph(
-        "Un <b>credito bancario</b> en AgroCore es un prestamo del banco con un <b>plan de cuotas</b>. Cuando lo cargas, el "
-        "sistema <b>arma solo todas las cuotas</b> con su vencimiento e importe. Despues vas <b>pagando cada cuota</b> con el "
-        "medio que uses (transferencia, debito, efectivo, cheque o tarjeta) y el sistema lleva la cuenta de lo pagado y lo "
-        "pendiente. Ademas, <b>cada cuota que vence aparece sola en la Agenda / Calendario</b> como recordatorio y en el "
+        "Un <b>crédito bancario</b> en AgroCore es un préstamo del banco con un <b>plan de cuotas</b>. Cuando lo cargás, el "
+        "sistema <b>arma solo todas las cuotas</b> con su vencimiento e importe. Después vas <b>pagando cada cuota</b> con el "
+        "medio que uses (transferencia, débito, efectivo, cheque o tarjeta) y el sistema lleva la cuenta de lo pagado y lo "
+        "pendiente. Además, <b>cada cuota que vence aparece sola en la Agenda / Calendario</b> como recordatorio y en el "
         "<b>Flujo de fondos</b> como egreso proyectado, para que nunca se te pase un pago.", st_intro))
-    E.append(callout("<b>La idea en una linea:</b> &nbsp; cargas el credito con su plan de cuotas &rarr; el sistema arma todas las "
-                     "cuotas &rarr; las pagas una por una &rarr; cada vencimiento te aparece en la Agenda y el Flujo de fondos.",
+    E.append(callout("<b>La idea en una línea:</b> &nbsp; cargás el crédito con su plan de cuotas &rarr; el sistema arma todas las "
+                     "cuotas &rarr; las pagás una por una &rarr; cada vencimiento te aparece en la Agenda y el Flujo de fondos.",
                      G100, G600, G900))
-    E.append(callout("<b>Donde esta:</b> menu <b>Tesoreria &rarr; \U0001F3E6 Creditos bancarios</b>. Para cargar hace falta el "
-                     "permiso de Finanzas; para pagar cuotas, el permiso de <b>Marcar cuotas de credito como pagadas</b> (se "
-                     "asignan por rol en Administracion &rarr; Roles).", BLUE_BG, BLUE_BD, BLUE_TX))
+    E.append(callout("<b>Dónde está:</b> menú <b>Tesorería &rarr; \U0001F3E6 Créditos bancarios</b>. Para cargar hace falta el "
+                     "permiso de Finanzas; para pagar cuotas, el permiso de <b>Marcar cuotas de crédito como pagadas</b> (se "
+                     "asignan por rol en Administración &rarr; Roles).", BLUE_BG, BLUE_BD, BLUE_TX))
 
     # ----- Antes de empezar
-    E.append(Paragraph("Antes de empezar: cargar el banco en el catalogo", st_h2))
+    E.append(Paragraph("Antes de empezar: cargar el banco en el catálogo", st_h2))
     E.append(steps([
-        "El <b>Banco</b> del credito se elige de una lista. Si todavia no esta, cargalo en "
-        "<b>Configuracion &rarr; Catalogos &rarr; Bancos</b> (ej. Nacion, Galicia, BBVA...).",
-        "Opcional pero recomendado: tene cargada la <b>cuenta bancaria</b> (Tesoreria &rarr; Bancos) de donde vas a pagar "
-        "las cuotas, asi el pago queda registrado en el extracto.",
+        "El <b>Banco</b> del crédito se elige de una lista. Si todavía no está, cargalo en "
+        "<b>Configuración &rarr; Catálogos &rarr; Bancos</b> (ej. Nación, Galicia, BBVA...).",
+        "Opcional pero recomendado: tené cargada la <b>cuenta bancaria</b> (Tesorería &rarr; Bancos) de donde vas a pagar "
+        "las cuotas, así el pago queda registrado en el extracto.",
     ]))
 
     # ----- PASO 1 credito nuevo
-    E.append(Paragraph("PASO 1 &nbsp;&mdash;&nbsp; Cargar un credito NUEVO", st_h2))
+    E.append(Paragraph("PASO 1 &nbsp;&mdash;&nbsp; Cargar un crédito NUEVO", st_h2))
     E.append(steps([
-        "Anda a <b>Tesoreria &rarr; Creditos bancarios</b> y toca <b>+ Nuevo credito</b>.",
-        "Completa los datos: <b>Banco</b> (*), <b>Nro de operacion</b> (opcional), <b>Monto del credito</b> (*), "
+        "Andá a <b>Tesorería &rarr; Créditos bancarios</b> y toca <b>+ Nuevo crédito</b>.",
+        "Completa los datos: <b>Banco</b> (*), <b>Nro de operación</b> (opcional), <b>Monto del crédito</b> (*), "
         "<b>Moneda</b> (*), <b>Tasa anual % (TNA)</b> y, si corresponde, <b>IVA sobre intereses (%)</b>.",
         "Define el plan: <b>Cantidad de cuotas</b> (*), <b>Periodicidad</b> (mensual, bimestral, trimestral, semestral o "
         "anual) y <b>Fecha de la primera cuota</b> (*).",
         "Opcional: <b>Destino</b> (ej. capital de trabajo, cosechadora) y <b>Observaciones</b>.",
-        "Elegi el <b>Plan de cuotas</b> (ver PASO 2) y toca <b>\U0001F4BE Crear credito</b>. El sistema <b>genera todas las "
+        "Elegí el <b>Plan de cuotas</b> (ver PASO 2) y toca <b>\U0001F4BE Crear crédito</b>. El sistema <b>genera todas las "
         "cuotas</b> con su vencimiento e importe.",
     ]))
-    E.append(callout("<b>Tasa e IVA de intereses:</b> en el plan <b>automatico</b> el sistema calcula el interes de cada cuota "
-                     "con la TNA (sistema frances, cuota constante) y, si cargas el <b>IVA sobre intereses</b>, lo suma a cada "
-                     "cuota. Si no sabes la tasa, dejala vacia y usa el <b>plan manual</b> poniendo los importes que te paso el "
+    E.append(callout("<b>Tasa e IVA de intereses:</b> en el plan <b>automático</b> el sistema calcula el interés de cada cuota "
+                     "con la TNA (sistema francés, cuota constante) y, si cargás el <b>IVA sobre intereses</b>, lo suma a cada "
+                     "cuota. Si no sabés la tasa, dejala vacía y usa el <b>plan manual</b> poniendo los importes que te pasó el "
                      "banco.", AMBER_BG, AMBER_BD, AMBER_TX))
 
     # ----- PASO 2 plan auto vs manual
-    E.append(Paragraph("PASO 2 &nbsp;&mdash;&nbsp; Plan de cuotas: Automatico o Manual", st_h2))
-    E.append(Paragraph("En el formulario elegis como se arman las cuotas:", st_intro))
+    E.append(Paragraph("PASO 2 &nbsp;&mdash;&nbsp; Plan de cuotas: Automático o Manual", st_h2))
+    E.append(Paragraph("En el formulario elegís cómo se arman las cuotas:", st_intro))
     E.append(bullets([
-        "<b>Automatico (sistema frances):</b> <b>cuota constante</b>. Solo cargas monto, tasa, cantidad de cuotas, "
-        "periodicidad y fecha de la primera; el sistema reparte capital e interes en cada cuota. Ideal para creditos "
+        "<b>Automático (sistema francés):</b> <b>cuota constante</b>. Solo cargás monto, tasa, cantidad de cuotas, "
+        "periodicidad y fecha de la primera; el sistema reparte capital e interés en cada cuota. Ideal para créditos "
         "comunes con cuota fija.",
-        "<b>Manual (cargo cada cuota):</b> <b>vos pones el importe de cada cuota</b>. Toca <b>↻ Generar fechas</b> para "
-        "que arme las filas segun la periodicidad (y reparta el monto en partes iguales) y despues <b>editas cada importe</b>. "
-        "Con <b>+ Cuota</b> agregas filas. Ideal cuando las cuotas son <b>distintas</b> (ej. dan U$S 70.000 y las cuotas van "
+        "<b>Manual (cargo cada cuota):</b> <b>vos ponés el importe de cada cuota</b>. Toca <b>↻ Generar fechas</b> para "
+        "que arme las filas según la periodicidad (y reparta el monto en partes iguales) y después <b>editás cada importe</b>. "
+        "Con <b>+ Cuota</b> agregás filas. Ideal cuando las cuotas son <b>distintas</b> (ej. dan U$S 70.000 y las cuotas van "
         "10, 12, 15... mil hasta completar).",
     ]))
-    E.append(callout("Abajo de la tabla manual el sistema muestra la <b>suma de las cuotas vs el monto del credito</b> y te "
+    E.append(callout("Abajo de la tabla manual el sistema muestra la <b>suma de las cuotas vs el monto del crédito</b> y te "
                      "avisa si hay <b>diferencia</b> o si <b>✓ coincide</b>. No es obligatorio que cierre exacto, pero sirve "
                      "de control.", BLUE_BG, BLUE_BD, BLUE_TX))
 
     # ----- PASO 3 credito ya empezado
-    E.append(Paragraph("PASO 3 &nbsp;&mdash;&nbsp; Cargar un credito YA EMPEZADO (con cuotas ya pagas)", st_h2))
-    E.append(Paragraph("Si el credito ya venia de antes y tiene cuotas pagadas, cargalo igual que uno nuevo y despues marca lo "
+    E.append(Paragraph("PASO 3 &nbsp;&mdash;&nbsp; Cargar un crédito YA EMPEZADO (con cuotas ya pagas)", st_h2))
+    E.append(Paragraph("Si el crédito ya venía de antes y tiene cuotas pagadas, cargalo igual que uno nuevo y después marca lo "
                        "que ya pagaste. Dos formas:", st_intro))
     E.append(bullets([
-        "<b>Opcion A &mdash; Marcar pagadas hasta (lo mas rapido):</b> cargá el credito completo (todas las cuotas, desde la "
-        "primera original). Despues abrilo con <b>\U0001F441 Ver</b> y toca <b>✅ Marcar pagadas hasta...</b>: escribis el "
-        "numero de la ultima cuota que ya pagaste (ej. 6) y el sistema marca <b>de la 1 a la 6 como pagadas</b> de una. Quedan "
+        "<b>Opción A &mdash; Marcar pagadas hasta (lo más rápido):</b> cargá el crédito completo (todas las cuotas, desde la "
+        "primera original). Después abrilo con <b>\U0001F441 Ver</b> y toca <b>✅ Marcar pagadas hasta...</b>: escribís el "
+        "número de la última cuota que ya pagaste (ej. 6) y el sistema marca <b>de la 1 a la 6 como pagadas</b> de una. Quedan "
         "pendientes solo las que faltan.",
-        "<b>Opcion B &mdash; Plan manual con fechas reales:</b> usa el plan <b>manual</b> y carga cada cuota con su "
-        "<b>vencimiento real</b> (incluidas las que ya vencieron). Despues marcas las pagadas con la Opcion A o pagandolas una "
+        "<b>Opción B &mdash; Plan manual con fechas reales:</b> usa el plan <b>manual</b> y carga cada cuota con su "
+        "<b>vencimiento real</b> (incluidas las que ya vencieron). Después marcás las pagadas con la Opción A o pagándolas una "
         "por una.",
     ]))
-    E.append(callout("<b>Importante:</b> cuando <b>editas</b> un credito en plan automatico y cambias monto, tasa, cantidad de "
+    E.append(callout("<b>Importante:</b> cuando <b>editás</b> un crédito en plan automático y cambiás monto, tasa, cantidad de "
                      "cuotas, periodicidad o la fecha de la primera, el plan <b>se regenera</b> y se <b>pierden las marcas de "
-                     "pago</b>. Por eso, para creditos ya empezados conviene <b>primero cargarlo bien</b> y recien despues marcar "
+                     "pago</b>. Por eso, para créditos ya empezados conviene <b>primero cargarlo bien</b> y recién después marcar "
                      "las cuotas pagas.", RED_BG, RED_BD, RED_TX))
 
     # ----- PASO 4 pagar cuotas
     E.append(Paragraph("PASO 4 &nbsp;&mdash;&nbsp; Pagar una cuota", st_h2))
     E.append(steps([
-        "En la lista de Creditos (o en <b>\U0001F441 Ver</b> el credito) busca la cuota pendiente y toca <b>\U0001F4B8 Pagar</b> "
+        "En la lista de Créditos (o en <b>\U0001F441 Ver</b> el crédito) busca la cuota pendiente y toca <b>\U0001F4B8 Pagar</b> "
         "(o <b>Marcar pagada</b>).",
-        "Elegi el <b>Medio de pago</b>: <b>Transferencia</b> o <b>Debito automatico</b> (elegis la <b>cuenta bancaria</b> de "
-        "donde sale), <b>Efectivo</b> (elegis la <b>caja</b>), <b>Cheque</b> (elegis un <b>cheque en cartera</b>) o "
-        "<b>\U0001F4B3 Tarjeta de credito</b>.",
-        "Opcional: <b>Gastos / IVA adicional</b> (sellos, gastos del credito, IVA de intereses que cargas a mano), "
-        "<b>Referencia</b> (nro de operacion o cheque) y <b>Fecha de pago</b>.",
+        "Elegí el <b>Medio de pago</b>: <b>Transferencia</b> o <b>Débito automático</b> (elegís la <b>cuenta bancaria</b> de "
+        "donde sale), <b>Efectivo</b> (elegís la <b>caja</b>), <b>Cheque</b> (elegís un <b>cheque en cartera</b>) o "
+        "<b>\U0001F4B3 Tarjeta de crédito</b>.",
+        "Opcional: <b>Gastos / IVA adicional</b> (sellos, gastos del crédito, IVA de intereses que cargás a mano), "
+        "<b>Referencia</b> (nro de operación o cheque) y <b>Fecha de pago</b>.",
         "Toca <b>\U0001F4B8 Confirmar pago</b>. La cuota queda <b>Pagada</b> con su fecha, y si elegiste una cuenta/caja/cheque "
         "se registra el <b>egreso</b> correspondiente (en el extracto del banco, la caja o el cheque entregado).",
     ]))
-    E.append(callout("<b>Credito en dolares u otra moneda:</b> al pagar una cuota en moneda extranjera, pone el <b>tipo de "
-                     "cambio del dia del pago</b> y el sistema calcula <b>cuanto es en pesos</b> (el dolar varia hasta el dia que "
-                     "pagas). El egreso en la cuenta bancaria queda en pesos a ese TC.", AMBER_BG, AMBER_BD, AMBER_TX))
+    E.append(callout("<b>Crédito en dólares u otra moneda:</b> al pagar una cuota en moneda extranjera, pone el <b>tipo de "
+                     "cambio del día del pago</b> y el sistema calcula <b>cuánto es en pesos</b> (el dólar varía hasta el día que "
+                     "pagás). El egreso en la cuenta bancaria queda en pesos a ese TC.", AMBER_BG, AMBER_BD, AMBER_TX))
 
     # ----- PASO 5 seguimiento
-    E.append(Paragraph("PASO 5 &nbsp;&mdash;&nbsp; Ver el estado del credito", st_h2))
+    E.append(Paragraph("PASO 5 &nbsp;&mdash;&nbsp; Ver el estado del crédito", st_h2))
     E.append(bullets([
-        "Toca <b>\U0001F441 Ver</b> en el credito para abrir su <b>detalle</b>: datos del prestamo, KPIs de <b>cuotas pagadas / "
-        "pendientes / % completado</b> y la <b>tabla de cuotas</b> con capital, interes, total, estado (Pagada / Pendiente) y "
+        "Toca <b>\U0001F441 Ver</b> en el crédito para abrir su <b>detalle</b>: datos del préstamo, KPIs de <b>cuotas pagadas / "
+        "pendientes / % completado</b> y la <b>tabla de cuotas</b> con capital, interés, total, estado (Pagada / Pendiente) y "
         "la fecha de pago.",
-        "Desde ahi tambien podes <b>✏️ Editar</b> el credito, <b>✅ Marcar pagadas hasta...</b> o "
+        "Desde ahí también podés <b>✏️ Editar</b> el crédito, <b>✅ Marcar pagadas hasta...</b> o "
         "<b>\U0001F5D1️ Eliminar</b> (si no tiene cuotas pagadas).",
-        "Un credito con <b>cuotas ya pagadas no se puede eliminar</b>: primero hay que deshacer esos pagos. Asi no se pierden "
+        "Un crédito con <b>cuotas ya pagadas no se puede eliminar</b>: primero hay que deshacer esos pagos. Así no se pierden "
         "datos por accidente.",
     ]))
 
     # ----- PASO 6 calendario
-    E.append(Paragraph("PASO 6 &nbsp;&mdash;&nbsp; Como se ven y alertan en el Calendario / Agenda", st_h2))
-    E.append(Paragraph("No hace falta cargar nada a mano: las cuotas de credito <b>aparecen solas</b> en varios lugares.", st_intro))
+    E.append(Paragraph("PASO 6 &nbsp;&mdash;&nbsp; Cómo se ven y alertan en el Calendario / Agenda", st_h2))
+    E.append(Paragraph("No hace falta cargar nada a mano: las cuotas de crédito <b>aparecen solas</b> en varios lugares.", st_intro))
     E.append(bullets([
         "<b>Agenda / Calendario:</b> cada <b>cuota pendiente</b> aparece como recordatorio en su <b>fecha de vencimiento</b>, "
-        "con un badge azul <b>\U0001F517 Auto</b> que la distingue de las que cargas a mano. Al tocarla, podes "
-        "<b>“Abrir credito”</b> para ir directo a pagarla.",
-        "<b>Inicio (alertas):</b> las cuotas proximas a vencer se muestran entre los avisos del tablero de inicio.",
+        "con un badge azul <b>\U0001F517 Auto</b> que la distingue de las que cargás a mano. Al tocarla, podés "
+        "<b>“Abrir crédito”</b> para ir directo a pagarla.",
+        "<b>Inicio (alertas):</b> las cuotas próximas a vencer se muestran entre los avisos del tablero de inicio.",
         "<b>Flujo de fondos:</b> cada cuota futura se proyecta como <b>egreso</b> en el mes de su vencimiento (en pesos, o "
-        "valorizada al TC de proyeccion si el credito es en dolares), para ver cuando cae la plata.",
-        "<b>Estado de situacion / urgencia:</b> los vencimientos se pintan por urgencia (<b>rojo</b> si vence en menos de 7 "
-        "dias, <b>ambar</b> dentro de 30, gris el resto).",
+        "valorizada al TC de proyección si el crédito es en dólares), para ver cuándo cae la plata.",
+        "<b>Estado de situación / urgencia:</b> los vencimientos se pintan por urgencia (<b>rojo</b> si vence en menos de 7 "
+        "días, <b>ámbar</b> dentro de 30, gris el resto).",
     ]))
-    E.append(callout("<b>Se actualiza solo:</b> cuando <b>pagas</b> la cuota desde el credito, <b>desaparece sola</b> de la "
-                     "Agenda y deja de proyectarse en el Flujo. Si una cuota la arreglaste por fuera y no queres verla, podes "
+    E.append(callout("<b>Se actualiza solo:</b> cuando <b>pagás</b> la cuota desde el crédito, <b>desaparece sola</b> de la "
+                     "Agenda y deja de proyectarse en el Flujo. Si una cuota la arreglaste por fuera y no querés verla, podés "
                      "<b>ocultarla</b> con \U0001F5D1️ en la Agenda: eso NO borra la cuota, solo la saca del recordatorio.",
                      G100, G600, G900))
-    E.append(callout("<b>Alarmas editables:</b> las alertas automaticas (creditos, cheques, cuentas corrientes) se pueden "
-                     "<b>editar/personalizar</b> desde la Agenda: al editar una automatica se crea una alarma propia que "
-                     "reemplaza a la original (ej. para avisarte unos dias antes).", BLUE_BG, BLUE_BD, BLUE_TX))
+    E.append(callout("<b>Alarmas editables:</b> las alertas automáticas (créditos, cheques, cuentas corrientes) se pueden "
+                     "<b>editar/personalizar</b> desde la Agenda: al editar una automática se crea una alarma propia que "
+                     "reemplaza a la original (ej. para avisarte unos días antes).", BLUE_BG, BLUE_BD, BLUE_TX))
 
     # ----- FAQ
     E.append(Paragraph("Preguntas frecuentes", st_h2))
     faqs = [
-        ("Cargue mal un credito nuevo y quiero rehacerlo. Puedo?",
+        ("Cargué mal un crédito nuevo y quiero rehacerlo. ¿Puedo?",
          "Si no tiene cuotas pagadas, abrilo con Ver y Eliminar, o editalo (al cambiar monto/tasa/cuotas/periodicidad/fecha se regenera el plan). Si ya tiene cuotas pagas, primero hay que deshacer esos pagos."),
-        ("El banco me dio cuotas distintas (no son todas iguales). Como lo cargo?",
-         "Usa el plan MANUAL: toca Generar fechas y despues edita el importe de cada cuota con el valor real que te paso el banco. La suma vs el monto del credito te sirve de control."),
-        ("Es un credito viejo que ya tiene 8 cuotas pagas. Que hago?",
-         "Cargalo completo (todas las cuotas desde la primera) y despues, en Ver, usa 'Marcar pagadas hasta... 8'. Quedan pendientes solo las que faltan y la Agenda solo te muestra esas."),
-        ("Al pagar una cuota, me descuenta del banco?",
-         "Solo si elegis la cuenta bancaria (transferencia o debito), la caja (efectivo), un cheque en cartera o una tarjeta. Si dejas 'Sin registrar en banco', la cuota queda marcada pagada pero no mueve ninguna cuenta (util para cargar historia vieja)."),
-        ("Por que una cuota no me aparece en la Agenda?",
+        ("El banco me dio cuotas distintas (no son todas iguales). ¿Cómo lo cargo?",
+         "Usa el plan MANUAL: toca Generar fechas y después edita el importe de cada cuota con el valor real que te pasó el banco. La suma vs el monto del crédito te sirve de control."),
+        ("Es un crédito viejo que ya tiene 8 cuotas pagas. ¿Qué hago?",
+         "Cargalo completo (todas las cuotas desde la primera) y después, en Ver, usa 'Marcar pagadas hasta... 8'. Quedan pendientes solo las que faltan y la Agenda solo te muestra esas."),
+        ("¿Al pagar una cuota, me descuenta del banco?",
+         "Solo si elegís la cuenta bancaria (transferencia o débito), la caja (efectivo), un cheque en cartera o una tarjeta. Si dejás 'Sin registrar en banco', la cuota queda marcada pagada pero no mueve ninguna cuenta (útil para cargar historia vieja)."),
+        ("¿Por qué una cuota no me aparece en la Agenda?",
          "Aparecen solo las cuotas PENDIENTES (no pagadas) con su fecha de vencimiento. Si ya la pagaste, desaparece. Si la ocultaste a mano en la Agenda, se puede restaurar."),
-        ("El credito es en dolares. Como se maneja?",
-         "Al cargarlo pones el TC del dia que te lo habilitaron (para ver el total en pesos ingresado). Al pagar cada cuota pones el TC del dia del pago y el sistema calcula el equivalente en pesos del egreso."),
-        ("Quien puede cargar y quien puede pagar cuotas?",
-         "Depende de los permisos del rol: 'Finanzas' para cargar/editar el credito y 'Marcar cuotas de credito como pagadas' para registrar los pagos. Se configuran en Administracion -> Roles."),
+        ("El crédito es en dólares. ¿Cómo se maneja?",
+         "Al cargarlo ponés el TC del día que te lo habilitaron (para ver el total en pesos ingresado). Al pagar cada cuota ponés el TC del día del pago y el sistema calcula el equivalente en pesos del egreso."),
+        ("¿Quién puede cargar y quién puede pagar cuotas?",
+         "Depende de los permisos del rol: 'Finanzas' para cargar/editar el crédito y 'Marcar cuotas de crédito como pagadas' para registrar los pagos. Se configuran en Administración -> Roles."),
     ]
     for q,a in faqs:
         E.append(Paragraph(q, st_faq_q)); E.append(Paragraph(a, st_faq_a))

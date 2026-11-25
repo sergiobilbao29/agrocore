@@ -54,8 +54,8 @@ def _hf(titulo):
         canvas.setFont("Helvetica", 10); canvas.drawRightString(w-15*mm, h-15*mm, titulo)
         canvas.setStrokeColor(G100); canvas.setLineWidth(0.6); canvas.line(15*mm, 15*mm, w-15*mm, 15*mm)
         canvas.setFillColor(SLATE); canvas.setFont("Helvetica", 8)
-        canvas.drawString(15*mm, 10*mm, "AgroCore - El corazon del negocio agricola")
-        canvas.drawRightString(w-15*mm, 10*mm, "Pagina %d" % doc.page)
+        canvas.drawString(15*mm, 10*mm, "AgroCore - El corazón del negocio agrícola")
+        canvas.drawRightString(w-15*mm, 10*mm, "Página %d" % doc.page)
         canvas.restoreState()
     return header_footer
 
@@ -71,61 +71,61 @@ def build_haras():
     doc = _doc(OUT, "Haras / Caballos")
     E = []
     E.append(Paragraph("Fichas de animales (Haras / Caballos)", st_title))
-    E.append(Paragraph("Ficha individual, foto, stock por tipo, prestamos y venta", st_sub))
+    E.append(Paragraph("Ficha individual, foto, stock por tipo, préstamos y venta", st_sub))
     E.append(Paragraph(
         "Cada caballo (o cualquier animal individual) se carga como una <b>Ficha</b> con su identidad, "
-        "genealogia, sanidad, costos y venta. Ademas, cada ficha <b>suma 1 cabeza al Stock general</b> "
-        "agrupada por <b>Animal &rarr; Equino &rarr; categoria</b> (Padrillo, Yegua madre, Potrillo, etc.).", st_intro))
-    E.append(callout("<b>Novedad:</b> ahora las fichas aparecen en <b>Stock</b> y sus altas, ventas, prestamos "
+        "genealogía, sanidad, costos y venta. Además, cada ficha <b>suma 1 cabeza al Stock general</b> "
+        "agrupada por <b>Animal &rarr; Equino &rarr; categoría</b> (Padrillo, Yegua madre, Potrillo, etc.).", st_intro))
+    E.append(callout("<b>Novedad:</b> ahora las fichas aparecen en <b>Stock</b> y sus altas, ventas, préstamos "
                      "y devoluciones quedan como <b>movimientos de stock</b>. Los <b>vendidos</b>, <b>prestados</b> "
                      "y de <b>baja</b> NO cuentan en el stock del campo.", G100, G600, G900))
 
     E.append(Paragraph("1) Cargar una ficha", st_h2))
     E.append(steps([
-        "Entra a <b>Fichas de animales</b> y toca <b>+ Nuevo animal</b>.",
-        "Completa <b>Nombre</b>, <b>Especie</b> (Equino) y la <b>Categoria</b> (elegila del desplegable: Padrillo, Yegua madre, Potrillo...).",
-        "Cargas identificacion (microchip, RFID, N&deg; registro), genealogia (padre/madre) y datos economicos (costo de alta, moneda).",
-        "<b>Foto:</b> arriba del formulario, toca <b>Seleccionar archivo</b> y elegi la imagen; se reduce sola. Tambien podes cargarla despues con el boton <b>Agregar/Cambiar foto</b> dentro de la ficha.",
-        "Guarda. La ficha suma <b>1 cabeza</b> al Stock (Equino &middot; su categoria).",
+        "Entrá a <b>Fichas de animales</b> y tocá <b>+ Nuevo animal</b>.",
+        "Completá <b>Nombre</b>, <b>Especie</b> (Equino) y la <b>Categoría</b> (elegila del desplegable: Padrillo, Yegua madre, Potrillo...).",
+        "Cargás identificación (microchip, RFID, N&deg; registro), genealogía (padre/madre) y datos económicos (costo de alta, moneda).",
+        "<b>Foto:</b> arriba del formulario, tocá <b>Seleccionar archivo</b> y elegí la imagen; se reduce sola. También podés cargarla después con el botón <b>Agregar/Cambiar foto</b> dentro de la ficha.",
+        "Guardá. La ficha suma <b>1 cabeza</b> al Stock (Equino &middot; su categoría).",
     ]))
 
-    E.append(Paragraph("2) El catalogo de equinos", st_h2))
-    E.append(Paragraph("En <b>Catalogos &rarr; Animales</b> ya vienen cargadas todas las categorias de equinos "
+    E.append(Paragraph("2) El catálogo de equinos", st_h2))
+    E.append(Paragraph("En <b>Catálogos &rarr; Animales</b> ya vienen cargadas todas las categorías de equinos "
         "(Padrillo, Yegua madre, Yegua, Potrillo, Potranca, Caballo de polo, etc.). Se usan en la ficha y para "
-        "agrupar el stock. Podes agregar mas categorias si las necesitas.", st_intro))
+        "agrupar el stock. Podés agregar más categorías si las necesitás.", st_intro))
 
     E.append(Paragraph("3) Prestar y devolver un caballo", st_h2))
     E.append(Paragraph("Cuando un caballo sale del campo de forma provisoria (por ejemplo se va a jugar), "
-        "usa <b>Prestar</b>: sale del stock del campo pero <b>puede volver</b>.", st_intro))
+        "usá <b>Prestar</b>: sale del stock del campo pero <b>puede volver</b>.", st_intro))
     E.append(steps([
-        "Abri la ficha del caballo y toca <b>Prestar</b>.",
-        "Indica <b>a quien / donde</b>, la fecha y (opcional) la <b>fecha estimada de vuelta</b> (agenda un recordatorio).",
+        "Abrí la ficha del caballo y tocá <b>Prestar</b>.",
+        "Indicá <b>a quién / dónde</b>, la fecha y (opcional) la <b>fecha estimada de vuelta</b> (agenda un recordatorio).",
         "El caballo queda en estado <b>Prestado</b> y <b>deja de sumar</b> al stock del campo.",
-        "Cuando vuelve, abri la ficha y toca <b>Devolver</b>: se reintegra al stock.",
+        "Cuando vuelve, abrí la ficha y tocá <b>Devolver</b>: se reintegra al stock.",
     ]))
 
     E.append(Paragraph("4) Vender un caballo", st_h2))
     E.append(steps([
-        "Abri la ficha y toca <b>Vender</b>: cargas precio, moneda y referencia.",
-        "Queda en estado <b>Vendido</b> (no suma al campo) y se guarda a quien se vendio; lo podes <b>filtrar por estado Vendido</b>.",
+        "Abrí la ficha y tocá <b>Vender</b>: cargás precio, moneda y referencia.",
+        "Queda en estado <b>Vendido</b> (no suma al campo) y se guarda a quién se vendió; lo podés <b>filtrar por estado Vendido</b>.",
     ]))
 
-    E.append(Paragraph("5) Caballos de terceros (pension / hoteleria)", st_h2))
-    E.append(Paragraph("Si recibis caballos de un tercero, marca la ficha como <b>externo</b> con su <b>propietario</b>. "
-        "Se contabilizan en el stock pero en un <b>renglon aparte</b> (\"Equino &middot; categoria <b>(terceros)</b>\"), "
-        "separado de los propios. Para cobrar la pension usa los eventos <b>Pension</b> o el resumen de "
-        "<b>Hoteleria (terceros)</b>.", st_intro))
-    E.append(callout("<b>Tip:</b> en <b>Stock</b>, filtra por <b>Familia = Equino</b> para ver el total por categoria; "
+    E.append(Paragraph("5) Caballos de terceros (pensión / hotelería)", st_h2))
+    E.append(Paragraph("Si recibís caballos de un tercero, marcá la ficha como <b>externo</b> con su <b>propietario</b>. "
+        "Se contabilizan en el stock pero en un <b>renglón aparte</b> (\"Equino &middot; categoría <b>(terceros)</b>\"), "
+        "separado de los propios. Para cobrar la pensión usá los eventos <b>Pensión</b> o el resumen de "
+        "<b>Hotelería (terceros)</b>.", st_intro))
+    E.append(callout("<b>Tip:</b> en <b>Stock</b>, filtrá por <b>Familia = Equino</b> para ver el total por categoría; "
                      "los de terceros aparecen con la etiqueta <b>(terceros)</b>.", BLUE_BG, BLUE_BD, BLUE_TX))
 
     E.append(Paragraph("Preguntas frecuentes", st_h2))
     for q,a in [
-        ("&#191;Por que un caballo no figura en el stock del campo?",
-         "Porque esta <b>Vendido</b>, <b>Prestado</b> o de <b>Baja</b>. Esos no cuentan como stock propio en el campo."),
+        ("&#191;Por qué un caballo no figura en el stock del campo?",
+         "Porque está <b>Vendido</b>, <b>Prestado</b> o de <b>Baja</b>. Esos no cuentan como stock propio en el campo."),
         ("&#191;Los de terceros suman a mi stock?",
-         "Se muestran para que los controles, pero en un renglon <b>(terceros)</b> separado; no se mezclan con los propios."),
-        ("&#191;Puedo ver como se movio el stock?",
-         "Si, en <b>Movimientos</b> vas a ver el alta, la venta, el prestamo y la devolucion de cada ficha."),
+         "Se muestran para que los controles, pero en un renglón <b>(terceros)</b> separado; no se mezclan con los propios."),
+        ("&#191;Puedo ver cómo se movió el stock?",
+         "Sí, en <b>Movimientos</b> vas a ver el alta, la venta, el préstamo y la devolución de cada ficha."),
     ]:
         E.append(Paragraph(q, st_faq_q)); E.append(Paragraph(a, st_faq_a))
     doc.build(E); print("PDF generado:", OUT)
@@ -133,51 +133,57 @@ def build_haras():
 # ============================================================ CIRCUITO RODEOS
 def build_rodeos():
     OUT = os.path.join(INSTR, "Instructivo-Circuito-Rodeos.pdf")
-    doc = _doc(OUT, "Circuito de Rodeos")
+    doc = _doc(OUT, "Rodeos y Hacienda")
     E = []
-    E.append(Paragraph("Circuito de Rodeos (Costo de hacienda)", st_title))
-    E.append(Paragraph("Lotes de engorde/cria, costo por kg, capitalizacion de terceros", st_sub))
+    E.append(Paragraph("Circuito de Rodeos", st_title))
+    E.append(Paragraph("En el menú: <b>Rodeos y Hacienda</b> - Lotes de engorde/cría, costo por kg, capitalización de terceros", st_sub))
     E.append(Paragraph(
-        "Un <b>Rodeo</b> es un lote de hacienda (engorde o cria) que agrupa cabezas para medir su "
-        "<b>costo por kilo producido</b>. Podes vincular <b>Fichas de animales</b> con caravana/collar a un lote "
+        "Un <b>Rodeo</b> es un lote de hacienda (engorde o cría) que agrupa cabezas para medir su "
+        "<b>costo por kilo producido</b>. Podés vincular <b>Fichas de animales</b> con caravana/collar a un lote "
         "para sumar su peso individual al pesaje del lote.", st_intro))
 
     E.append(Paragraph("1) Crear un lote (rodeo)", st_h2))
     E.append(steps([
-        "Entra a <b>Costo de hacienda</b> y toca <b>+ Lote</b>.",
-        "Completa nombre, <b>sistema</b> (Feedlot, Pastoril...), <b>categoria</b>, cabezas y kg iniciales.",
-        "Guarda. El lote queda <b>Activo</b> y empieza a acumular costos.",
+        "Entrá a <b>Rodeos y Hacienda</b> y tocá <b>+ Lote</b>.",
+        "Completá nombre, <b>sistema</b> (Feedlot, Pastoril...), <b>categoría</b>, cabezas y kg iniciales.",
+        "Guardá. El lote queda <b>Activo</b> y empieza a acumular costos.",
     ]))
 
     E.append(Paragraph("2) Cargar costos y consumos", st_h2))
     E.append(steps([
-        "En el lote, carga los <b>eventos</b>: alimentacion (consumo de galpon/silo), sanidad, labores, etc.",
+        "En el lote, cargá los <b>eventos</b>: alimentación (consumo de galpón/silo), sanidad, labores, etc.",
         "El sistema calcula el <b>costo acumulado</b> y el <b>$/kg producido</b> (costos &divide; kilos ganados).",
-        "Con caravana/collar, usa <b>Pesaje desde balanzas</b> para armar el pesaje del lote sumando el peso de las fichas vinculadas.",
+        "Con caravana/collar, usá <b>Pesaje desde balanzas</b> para armar el pesaje del lote sumando el peso de las fichas vinculadas.",
     ]))
 
-    E.append(Paragraph("3) Hacienda de terceros (capitalizacion / hoteleria)", st_h2))
-    E.append(Paragraph("Si recibis hacienda de un tercero para engordar y cobrar el servicio, en el lote marca "
-        "<b>Hacienda de terceros</b> y cargas el <b>propietario</b>.", st_intro))
+    E.append(Paragraph("3) Hacienda de terceros (capitalización / hotelería)", st_h2))
+    E.append(Paragraph("Si recibís hacienda de un tercero para engordar y cobrar el servicio, en el lote marcá "
+        "<b>Hacienda de terceros</b> y cargás el <b>propietario</b>.", st_intro))
     E.append(steps([
-        "Al editar el lote, tilda <b>\"Hacienda de terceros (capitalizacion / hoteleria de engorde)\"</b> y escribi el <b>propietario</b>.",
-        "Carga los cargos con el tipo <b>Capitalizacion / Pension</b> marcando <b>\"Cobrar al propietario\"</b>.",
-        "Con <b>Hoteleria / capitalizacion (terceros)</b> sacas un <b>resumen por propietario</b> (cabezas + total a cobrar), listo para facturar.",
+        "Al editar el lote, tildá <b>\"Hacienda de terceros (capitalización / hotelería de engorde)\"</b> y escribí el <b>propietario</b>.",
+        "Cargá los cargos con el tipo <b>Capitalización / Pensión</b> marcando <b>\"Cobrar al propietario\"</b>.",
+        "Con <b>Hotelería / capitalización (terceros)</b> sacás un <b>resumen por propietario</b> (cabezas + total a cobrar), listo para facturar.",
     ]))
     E.append(callout("<b>Importante:</b> la hacienda de terceros se maneja <b>separada</b> de la propia: se controla y "
                      "se cobra, pero no se mezcla con tu stock propio.", AMBER_BG, AMBER_BD, AMBER_TX))
 
-    E.append(Paragraph("4) Relacion con Fichas y Stock", st_h2))
+    E.append(Paragraph("4) Relación con Fichas y Stock", st_h2))
     E.append(Paragraph("Las <b>Fichas de animales</b> individuales (con caravana) pueden vincularse a un lote desde el "
-        "campo <b>Lote / rodeo</b> de la ficha. Asi el peso individual suma al lote, y a la vez cada ficha cuenta como "
-        "1 cabeza en el <b>Stock general</b> por su categoria.", st_intro))
+        "campo <b>Lote / rodeo</b> de la ficha. Así el peso individual suma al lote, y a la vez cada ficha cuenta como "
+        "1 cabeza en el <b>Stock general</b> por su categoría.", st_intro))
+    E.append(callout("<b>Novedad:</b> igual que el rodeo, los <b>eventos de cada ficha</b> ahora se conectan solos con "
+        "el resto del sistema: un <b>gasto</b> genera la cuenta a pagar del proveedor (o la factura de compra); una "
+        "<b>labor</b> de un empleado propio suma su comisión a la <b>planilla de sueldos</b>; un <b>servicio de tercero</b> "
+        "va a cuentas a pagar; un <b>cobro</b> (pensión/servicio) va a la <b>cuenta a cobrar del cliente</b>; el "
+        "<b>consumo de un producto</b> descuenta <b>stock</b>; y la <b>venta</b> del animal genera la cuenta a cobrar "
+        "(cliente / factura / liquidación). Si borrás el evento, el movimiento se revierte solo.", G100, G600, G900))
 
     E.append(Paragraph("Preguntas frecuentes", st_h2))
     for q,a in [
         ("&#191;El costo/kg incluye la compra de los animales?",
          "Incluye el costo de alta/compra cargado + todos los eventos de costo del lote, dividido por los kilos producidos."),
-        ("&#191;Como diferencio lo propio de lo de terceros?",
-         "El lote marcado como <b>terceros</b> muestra su propietario y se totaliza aparte en el resumen de hoteleria/capitalizacion."),
+        ("&#191;Cómo diferencio lo propio de lo de terceros?",
+         "El lote marcado como <b>terceros</b> muestra su propietario y se totaliza aparte en el resumen de hotelería/capitalización."),
     ]:
         E.append(Paragraph(q, st_faq_q)); E.append(Paragraph(a, st_faq_a))
     doc.build(E); print("PDF generado:", OUT)

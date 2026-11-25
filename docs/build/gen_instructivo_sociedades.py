@@ -99,8 +99,9 @@ def build():
     E.append(steps([
         "Dentro de la sociedad, toc&aacute; <b>&#10133; Cargar labor / insumo</b>.",
         "Eleg&iacute; el <b>campo</b> (aparecen todos los de la sociedad: de la empresa que sea, o los externos) y si es <b>insumo</b> o <b>labor</b>.",
-        "Complet&aacute; los datos (fecha, hect&aacute;reas, producto/labor, costo...). En insumos pod&eacute;s tildar <b>&ldquo;descontar del stock&rdquo;</b> de la empresa due&ntilde;a del campo, o dejarlo sin tildar para registrar <b>solo el costo</b>.",
+        "Complet&aacute; los datos (fecha, hect&aacute;reas, producto/labor, costo, <b>moneda US$ o $</b>). En insumos pod&eacute;s tildar <b>&ldquo;descontar del stock&rdquo;</b> de la empresa due&ntilde;a del campo, o dejarlo sin tildar para registrar <b>solo el costo</b>.",
         "Guard&aacute;. El dato queda <b>en la empresa due&ntilde;a del campo</b> (se ve tambi&eacute;n en su producci&oacute;n) y <b>no se duplica</b>.",
+        "<b>Ver / editar / eliminar:</b> toc&aacute; el campo (o el bot&oacute;n &#128203;) y ves la lista de lo cargado uno por uno, con &#9999;&#65039; editar y &#128465;&#65039; eliminar cada movimiento (ya no hace falta borrar el campo). Con el selector <b>&ldquo;Ver en US$ / $&rdquo;</b> del tablero convert&iacute;s todo a la moneda que quieras.",
     ]))
     E.append(callout("<b>Tambi&eacute;n pod&eacute;s</b> seguir cargando como siempre desde cada empresa (Insumos y labores) &mdash; "
                      "la sociedad lo toma igual. Y las <b>cartas de porte</b> se cargan como <b>Viajes</b>: si la CP sale de un socio, "

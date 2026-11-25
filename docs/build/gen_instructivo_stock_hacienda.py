@@ -71,8 +71,8 @@ def header_footer(canvas, doc):
     canvas.setFont("Helvetica", 10); canvas.drawRightString(w-15*mm, h-15*mm, "Instructivo")
     canvas.setStrokeColor(G100); canvas.setLineWidth(0.6); canvas.line(15*mm, 15*mm, w-15*mm, 15*mm)
     canvas.setFillColor(SLATE); canvas.setFont("Helvetica", 8)
-    canvas.drawString(15*mm, 10*mm, "AgroCore - El corazon del negocio agricola")
-    canvas.drawRightString(w-15*mm, 10*mm, "Pagina %d" % doc.page)
+    canvas.drawString(15*mm, 10*mm, "AgroCore - El corazón del negocio agrícola")
+    canvas.drawRightString(w-15*mm, 10*mm, "Página %d" % doc.page)
     canvas.restoreState()
 
 def build():
@@ -81,87 +81,87 @@ def build():
     doc.addPageTemplates([PageTemplate(id='main', frames=[frame], onPage=header_footer)])
     E = []
     E.append(Paragraph("Stock de hacienda: declarado (SENASA) vs real", st_title))
-    E.append(Paragraph("Como cargar y mantener bien las cabezas de cada campo en Ganaderia y Haras &rarr; Movimientos de animales", st_sub))
+    E.append(Paragraph("Cómo cargar y mantener bien las cabezas de cada campo en Ganadería y Haras &rarr; Movimientos de animales", st_sub))
     E.append(Paragraph(
-        "El sistema lleva, para cada <b>campo</b> y cada <b>categoria</b> (Vaca, Novillo, Ternero&hellip;), <b>dos numeros distintos</b>: "
+        "El sistema lleva, para cada <b>campo</b> y cada <b>categoría</b> (Vaca, Novillo, Ternero&hellip;), <b>dos números distintos</b>: "
         "lo <b>Declarado</b> en SENASA/ARCA y lo <b>Real</b> que hay en el campo. Entender esta diferencia resuelve casi todas las dudas "
         "de carga. La regla principal: el <b>Declarado se escribe a mano</b> y el <b>Real sale de los Movimientos</b>.", st_intro))
-    E.append(callout("<b>La idea en una linea:</b> &nbsp; configura las categorias &rarr; carga el <b>Declarado (SENASA)</b> a mano &rarr; "
-                     "carga el <b>Real</b> con un <b>Movimiento de Ajuste / Conteo</b> &rarr; de ahi en mas, los movimientos del dia a dia "
+    E.append(callout("<b>La idea en una línea:</b> &nbsp; configurá las categorías &rarr; cargá el <b>Declarado (SENASA)</b> a mano &rarr; "
+                     "cargá el <b>Real</b> con un <b>Movimiento de Ajuste / Conteo</b> &rarr; de ahí en más, los movimientos del día a día "
                      "mantienen el Real actualizado solos.", G100, G600, G900))
 
-    E.append(Paragraph("Los DOS numeros de cada campo", st_h2))
+    E.append(Paragraph("Los DOS números de cada campo", st_h2))
     E.append(tabla([
-        ["Numero", "Que es", "Como se carga"],
+        ["Número", "Qué es", "Cómo se carga"],
         ["Declarado (SENASA)", "Las cabezas que figuran en tu <b>SENASA / ARCA</b> (lo declarado, en papel).",
-         "A mano, con <b>+ Categoria</b> o <b>Declarado / kg</b>."],
+         "A mano, con <b>+ Categoría</b> o <b>Declarado / kg</b>."],
         ["Real (en el campo)", "Las cabezas que <b>realmente hay</b> hoy en el campo.",
          "<b>NO se escribe a mano:</b> sale de los <b>Movimientos</b> (+ Movimiento)."],
         ["Diferencia", "Real menos Declarado. Avisa si el campo coincide con SENASA.",
          "La calcula el sistema sola."],
     ], [32*mm, 76*mm, 57*mm]))
-    E.append(callout("<b>El error mas comun:</b> cargar las cabezas reales del campo con <b>+ Categoria</b> o <b>Declarado / kg</b>. "
+    E.append(callout("<b>El error más común:</b> cargar las cabezas reales del campo con <b>+ Categoría</b> o <b>Declarado / kg</b>. "
                      "Esos botones cargan el <b>Declarado (SENASA)</b> &mdash; por eso parece que &ldquo;lo toma como SENASA&rdquo;. "
                      "El <b>Real</b> siempre se carga con <b>+ Movimiento</b>.", AMBER_BG, AMBER_BD, AMBER_TX))
 
-    E.append(Paragraph("PASO 1 &nbsp;&mdash;&nbsp; Configurar las categorias (una sola vez)", st_h2))
-    E.append(Paragraph("Las categorias de animales (con su especie, rango de kg y peso promedio) se definen en el <b>Catalogo</b>, "
-                       "asi todos los campos usan las mismas y no se generan duplicados (ej. ternero/terneros):", st_intro))
+    E.append(Paragraph("PASO 1 &nbsp;&mdash;&nbsp; Configurar las categorías (una sola vez)", st_h2))
+    E.append(Paragraph("Las categorías de animales (con su especie, rango de kg y peso promedio) se definen en el <b>Catálogo</b>, "
+                       "así todos los campos usan las mismas y no se generan duplicados (ej. ternero/terneros):", st_intro))
     E.append(bullets([
-        "En <b>Movimientos de animales</b> toca <b>Categorias (Catalogo)</b>.",
-        "Carga cada categoria con su <b>especie</b> (Bovino, Equino&hellip;), <b>peso promedio</b> (kg/cabeza) y, si queres, la <b>matriz</b> de a que categoria puede pasar (ej. Ternero &rarr; Novillito).",
-        "El <b>peso promedio</b> se usa para estimar los kg totales y la proyeccion para el banco.",
+        "En <b>Movimientos de animales</b> tocá <b>Categorías (Catálogo)</b>.",
+        "Cargá cada categoría con su <b>especie</b> (Bovino, Equino&hellip;), <b>peso promedio</b> (kg/cabeza) y, si querés, la <b>matriz</b> de a qué categoría puede pasar (ej. Ternero &rarr; Novillito).",
+        "El <b>peso promedio</b> se usa para estimar los kg totales y la proyección para el banco.",
     ]))
 
     E.append(Paragraph("PASO 2 &nbsp;&mdash;&nbsp; Carga inicial del stock (por campo)", st_h2))
-    E.append(Paragraph("Para cada campo ganadero, categoria por categoria:", st_intro))
+    E.append(Paragraph("Para cada campo ganadero, categoría por categoría:", st_intro))
     E.append(Paragraph("A) Cargar el DECLARADO (SENASA)", st_faq_q))
     E.append(bullets([
-        "En la tarjeta del campo toca <b>+ Categoria</b>.",
-        "Elegi la <b>categoria</b>, poni las <b>cabezas declaradas en SENASA</b> y el <b>peso promedio</b>.",
-        "Si en esa empresa <b>no llevas SENASA</b>, deja el declarado en <b>0</b> (asi la diferencia muestra directo lo real).",
+        "En la tarjeta del campo tocá <b>+ Categoría</b>.",
+        "Elegí la <b>categoría</b>, poné las <b>cabezas declaradas en SENASA</b> y el <b>peso promedio</b>.",
+        "Si en esa empresa <b>no llevás SENASA</b>, dejá el declarado en <b>0</b> (así la diferencia muestra directo lo real).",
     ]))
     E.append(Paragraph("B) Cargar el REAL (lo que hay en el campo)", st_faq_q))
     E.append(steps([
-        "Toca <b>+ Movimiento</b>.",
-        "En <b>Tipo</b> elegi <b>Ajuste / Conteo</b>.",
-        "Elegi el <b>Campo</b> (y lote/potrero si corresponde) y la <b>Categoria</b>.",
-        "En <b>Cantidad (cabezas)</b> poni las cabezas que <b>contaste en el campo</b>. Opcional: los <b>kilos</b> de balanza.",
-        "Toca <b>Registrar</b>: ese numero queda como el <b>Real</b> de esa categoria en ese campo.",
+        "Tocá <b>+ Movimiento</b>.",
+        "En <b>Tipo</b> elegí <b>Ajuste / Conteo</b>.",
+        "Elegí el <b>Campo</b> (y lote/potrero si corresponde) y la <b>Categoría</b>.",
+        "En <b>Cantidad (cabezas)</b> poné las cabezas que <b>contaste en el campo</b>. Opcional: los <b>kilos</b> de balanza.",
+        "Tocá <b>Registrar</b>: ese número queda como el <b>Real</b> de esa categoría en ese campo.",
     ]))
     E.append(callout("<b>Regla de oro:</b> el <b>Declarado</b> se escribe a mano (dato de SENASA). El <b>Real</b> se construye con movimientos: "
-                     "el primero es un <b>Ajuste / Conteo</b> con las cabezas que hay. De ahi en mas, el sistema lo mantiene solo.",
+                     "el primero es un <b>Ajuste / Conteo</b> con las cabezas que hay. De ahí en más, el sistema lo mantiene solo.",
                      G100, G600, G900))
 
-    E.append(Paragraph("PASO 3 &nbsp;&mdash;&nbsp; El dia a dia: mantener el REAL actualizado", st_h2))
+    E.append(Paragraph("PASO 3 &nbsp;&mdash;&nbsp; El día a día: mantener el REAL actualizado", st_h2))
     E.append(Paragraph("Cada vez que pasa algo con los animales, cargalo con <b>+ Movimiento</b>. El Real se recalcula solo:", st_intro))
     E.append(tabla([
-        ["Movimiento", "Cuando usarlo", "Efecto en el Real"],
-        ["Nacimiento", "Nacen terneros / crias.", "Suma (+)"],
+        ["Movimiento", "Cuándo usarlo", "Efecto en el Real"],
+        ["Nacimiento", "Nacen terneros / crías.", "Suma (+)"],
         ["Muerte", "Se muere un animal.", "Resta (-)"],
-        ["Traslado", "Pasas animales de un campo/lote a otro.", "Resta en origen, suma en destino"],
-        ["Cambio de categoria", "Un ternero pasa a novillito, vaquillona a vaca, etc.", "Resta en la de origen, suma en la nueva"],
-        ["Ajuste / Conteo", "Conteo fisico y hay diferencia (faltan o sobran).", "Suma o resta (admite negativo, ej. -2)"],
+        ["Traslado", "Pasás animales de un campo/lote a otro.", "Resta en origen, suma en destino"],
+        ["Cambio de categoría", "Un ternero pasa a novillito, vaquillona a vaca, etc.", "Resta en la de origen, suma en la nueva"],
+        ["Ajuste / Conteo", "Conteo físico y hay diferencia (faltan o sobran).", "Suma o resta (admite negativo, ej. -2)"],
     ], [38*mm, 78*mm, 49*mm]))
-    E.append(callout("<b>Compras y ventas de hacienda:</b> no se cargan aca. Se registran en <b>Liquidaciones de animales</b> / <b>Guias</b> "
-                     "o como venta por kg, y descuentan o suman el <b>Real</b> (y el SENASA) automaticamente.", BLUE_BG, BLUE_BD, BLUE_TX))
+    E.append(callout("<b>Compras y ventas de hacienda:</b> no se cargan acá. Se registran en <b>Liquidaciones de animales</b> / <b>Guías</b> "
+                     "o como venta por kg, y descuentan o suman el <b>Real</b> (y el SENASA) automáticamente.", BLUE_BG, BLUE_BD, BLUE_TX))
 
-    E.append(Paragraph("Como leer la Diferencia", st_h2))
+    E.append(Paragraph("Cómo leer la Diferencia", st_h2))
     E.append(bullets([
         "<b>Diferencia = 0</b> &rarr; el campo coincide con lo declarado en SENASA. Todo en orden.",
-        "<b>Diferencia positiva (+)</b> &rarr; hay <b>mas</b> cabezas en el campo que las declaradas (ej. nacimientos sin declarar).",
+        "<b>Diferencia positiva (+)</b> &rarr; hay <b>más</b> cabezas en el campo que las declaradas (ej. nacimientos sin declarar).",
         "<b>Diferencia negativa (-)</b> &rarr; hay <b>menos</b> que lo declarado (ventas/muertes sin declarar, o falta cargar el conteo real).",
     ]))
     E.append(callout("<b>Si el Real te da negativo o raro:</b> casi siempre es porque se cargaron muertes/salidas <b>sin haber cargado antes "
-                     "el conteo inicial</b>. Solucion: carga un <b>Ajuste / Conteo</b> con las cabezas reales de hoy y el numero se acomoda.",
+                     "el conteo inicial</b>. Solución: cargá un <b>Ajuste / Conteo</b> con las cabezas reales de hoy y el número se acomoda.",
                      AMBER_BG, AMBER_BD, AMBER_TX))
 
-    E.append(Paragraph("Si ya cargaste mal: como corregirlo", st_h2))
-    E.append(Paragraph("<b>Caso tipico:</b> cargaste lo real del campo pero quedo como Declarado (SENASA). Se arregla asi:", st_intro))
+    E.append(Paragraph("Si ya cargaste mal: cómo corregirlo", st_h2))
+    E.append(Paragraph("<b>Caso típico:</b> cargaste lo real del campo pero quedó como Declarado (SENASA). Se arregla así:", st_intro))
     E.append(steps([
-        "En la fila de la categoria toca <b>Declarado / kg</b> y poni el Declarado correcto: el numero real de SENASA, o <b>0</b> si no llevas SENASA en esa empresa.",
-        "Despues carga el <b>Real</b> con <b>+ Movimiento &rarr; Ajuste / Conteo</b> y las cabezas que hay en el campo.",
-        "Si el Real quedo con un numero equivocado, <b>borra el movimiento</b> mal cargado (se recalcula) o carga un <b>Ajuste</b> por la diferencia (positivo o negativo).",
+        "En la fila de la categoría tocá <b>Declarado / kg</b> y poné el Declarado correcto: el número real de SENASA, o <b>0</b> si no llevás SENASA en esa empresa.",
+        "Después cargá el <b>Real</b> con <b>+ Movimiento &rarr; Ajuste / Conteo</b> y las cabezas que hay en el campo.",
+        "Si el Real quedó con un número equivocado, <b>borrá el movimiento</b> mal cargado (se recalcula) o cargá un <b>Ajuste</b> por la diferencia (positivo o negativo).",
     ]))
 
     E.append(Spacer(1, 4))
