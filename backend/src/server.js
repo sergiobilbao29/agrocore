@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.471.0';
+const AGROCORE_VERSION = '2.472.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -17801,6 +17801,32 @@ function _completarPendiente(texto, pendiente, ctx) {
 //  ofrece hacerlo pidiendo los datos con un ejemplo.
 // ============================================================
 const _AYUDA_KB = [
+  { id:'grupo_compartido', terms:['campo compartido','compartir campo','campo en varias empresas','mismo campo varias empresas','grupo economico','empleado compartido','compartir empleado','campo montenegro','lote compartido','compartir lote','usar el mismo campo','cargar campo una vez','compartido con el grupo'],
+    titulo:'Compartir campos y empleados con el grupo economico',
+    pasos:[
+      'Empleado: en la ficha del empleado tilda "Compartir con el grupo". Queda dado de alta una sola vez y lo ves/usas en todas tus empresas.',
+      'Campo: en la ficha del campo (Produccion -> Campos), en la seccion "Grupo economico", tilda "Compartir con el grupo". El campo y todos sus lotes quedan visibles en todas tus empresas.',
+      'Cargas el campo (ej. Montenegro) UNA sola vez; despues, en cada campania elegis el lote y las hectareas con la empresa que corresponda esa temporada.',
+      'El campo/lote es solo el lugar fisico: cada campania sigue siendo de su empresa. Asi se mantiene la comparacion ano a ano.',
+      'Los campos de otra empresa del grupo aparecen con el cartel "Compartido" y solo los edita su dueno; vos los usas pero no los editas.',
+    ] },
+  { id:'carga_multilote', terms:['cargar en varios lotes','varios lotes a la vez','mismo insumo varios lotes','misma labor varios lotes','aplicar a otras campanias','cargar en dos lotes','lotes de al lado','no cargar dos veces','repetir labor','repetir insumo','multi lote','cargar varias campanias'],
+    titulo:'Cargar un insumo o labor en varios lotes a la vez',
+    pasos:[
+      'Insumos: en + Insumo, cargas el lote principal y los insumos, y abris el desplegable "Aplicar tambien a otras campanias / lotes". Tilda las campanias y guarda.',
+      'Labores: en + Labor, cargas la labor y abris "Cargar esta misma labor en otras campanias / lotes". Tilda las campanias y guarda.',
+      'Se repite lo mismo en cada campania tildada, usando las hectareas del lote de cada una. Los insumos escalan solos a esas hectareas y cada campania descuenta su propio stock.',
+      'Es opcional: si no abris el desplegable, la carga funciona igual que siempre (una sola campania). En labores no aplica a servicios a terceros ni al editar.',
+    ] },
+  { id:'importar_cheque_pdf', terms:['importar cheque','cheque pdf','subir cheque','echeq pdf','importar echeq','cheque desde pdf','cargar cheque pdf','detalle de cheque electronico','importar pdf cheque'],
+    titulo:'Importar e-cheques desde el PDF del homebanking',
+    pasos:[
+      'En Tesoreria -> Cheques, toca "Importar PDF" y elegi uno o varios PDF del e-cheque (el "Detalle de cheque electronico" del homebanking).',
+      'El sistema lee N, importe, banco, fechas, beneficiario/librador, CUIT y motivo, y detecta si es propio o de terceros.',
+      'Si es uno, te abre el cheque prellenado para revisar y guardar. Si son varios, muestra la lista para confirmar y Guardar seleccionados.',
+      'Avisa si un cheque ya esta cargado (por su N) para no duplicar. El PDF tiene que ser el original del homebanking, no una foto.',
+      'Recorda: Cheques arranca filtrando "En cartera"; para ver emitidos/depositados/transferidos poné Estado -> Todos.',
+    ] },
   { id:'comprobante_interno', terms:['comprobante interno','comprobantes internos','sin factura','cargar sin factura','numero interno','nro interno','ci-','facturar despues','facturarlo despues','se factura despues','agregar numero de factura','asociar factura','comprobante propio','numerar comprobante','comprobante no fiscal'],
     titulo:'Comprobante interno en Compras y Ventas (se factura despues)',
     pasos:[
