@@ -3131,8 +3131,8 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
-      titulo:'🧹 v2.473.0 — Tarjetas de campaña: botones más ordenados',
-      desc:'Reordenamos los botones de las <b>tarjetas de campaña</b>: los de <b>navegación</b> (Insumos/Labores, Cortes, Planilla) quedan a la izquierda y los de <b>acción</b> (✅ finalizar, ✏️ editar, 🗑️ eliminar) agrupados a la derecha. Ya no queda el tachito colgando solo en otra fila, y se ve prolijo también en las campañas forrajeras (que tienen el botón extra de Cortes).' },
+      titulo:'🧹 v2.474.0 — Tarjetas de campaña: botones en una sola línea',
+      desc:'Compactamos los botones de las <b>tarjetas de campaña</b> para que entren todos en una sola fila: a la izquierda los de <b>navegación</b> (🧪 Insumos, 🌿 Cortes, 📊 Planilla) y a la derecha, pegados al borde, los de <b>acción</b> (✅ finalizar, ✏️ editar, 🗑️ eliminar). Ya no se desacomoda ni queda el tachito colgando en otra fila.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
       titulo:'📘 v2.472.0 — Instructivos nuevos (uno por tema)',
       desc:'Sumamos en <b>Ayuda del sistema</b> <b>4 instructivos nuevos</b>, uno por cada función nueva, para que leas solo el que necesitás: <b>🌐 Compartir campos (y empleados) con el grupo</b>, <b>🧪 Cargar insumos o labores en varios lotes a la vez</b>, <b>📄 Importar e-cheques desde el PDF</b>, y <b>🏦 Sueldos: pago por transferencia, detalle y recibo</b>. El <b>asistente</b> también aprendió estos temas: preguntale "cómo comparto un campo", "cargar insumos en varios lotes" o "importar cheque por PDF".' },
@@ -14751,16 +14751,14 @@ pages.campanas = async function() {
             ${c.fechaCosecha?`<span>🚜 ${fmtDate(c.fechaCosecha)}</span>`:''}
           </div>`:''}
           ${proj ? `<div class="text-xs text-slate-600 mt-2 bg-emerald-50 text-emerald-700 rounded p-1.5 text-center"><b>Proyección:</b> ${fmtN(proj)} kg totales</div>`:''}
-          <div class="mt-3 pt-2 border-t flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-            <div class="flex flex-wrap items-center gap-1">
-              <button class="btn btn-ghost text-xs" onclick="state.insFilter={campana:'${c.id}'}; go('insumos')">🧪 Insumos/Labores</button>
-              ${c.tipoCampana==='forrajera'?`<button class="btn btn-ghost text-xs text-amber-700" title="Cortes / rollos" onclick='cortesModal(${JSON.stringify(c.id)})'>🌿 Cortes</button>`:''}
-              <button class="btn btn-ghost text-xs text-indigo-700" title="Planilla de resultado económico" onclick='campanaPlanilla(${JSON.stringify(c.id)})'>📊 Planilla</button>
-            </div>
-            <div class="flex items-center gap-1 ml-auto">
-              ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar finalizada" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅</button>`:''}
-              ${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar campaña" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
-              ${can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar campaña" onclick='campanaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
+          <div class="mt-3 pt-2 border-t flex items-center flex-nowrap gap-1">
+            <button class="btn btn-ghost text-xs px-1.5 whitespace-nowrap" title="Insumos / Labores" onclick="state.insFilter={campana:'${c.id}'}; go('insumos')">🧪 Insumos</button>
+            ${c.tipoCampana==='forrajera'?`<button class="btn btn-ghost text-xs px-1.5 text-amber-700 whitespace-nowrap" title="Cortes / rollos" onclick='cortesModal(${JSON.stringify(c.id)})'>🌿 Cortes</button>`:''}
+            <button class="btn btn-ghost text-xs px-1.5 text-indigo-700 whitespace-nowrap" title="Planilla de resultado económico" onclick='campanaPlanilla(${JSON.stringify(c.id)})'>📊 Planilla</button>
+            <div class="flex items-center gap-0.5 ml-auto">
+              ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs px-1 text-emerald-700" title="Marcar finalizada" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅</button>`:''}
+              ${can('produccion:update')?`<button class="btn btn-ghost text-xs px-1" title="Editar campaña" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
+              ${can('produccion:delete')?`<button class="btn btn-ghost text-xs px-1 text-red-600" title="Eliminar campaña" onclick='campanaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
             </div>
           </div>
         </div>`;
