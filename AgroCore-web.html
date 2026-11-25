@@ -3130,6 +3130,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'25/11/2026',
+      titulo:'✅ v2.475.0 — Insumos y Labores: se ocultan las campañas finalizadas',
+      desc:'Al cargar <b>insumos</b> o <b>labores</b> (y al elegir <b>otras campañas/lotes</b> para repetir la carga), ya <b>no aparecen las campañas finalizadas</b>: solo se puede cargar en campañas activas. Además, la pantalla de <b>Insumos y labores</b> ahora oculta por defecto las campañas finalizadas; si necesitás verlas, tildá <b>"Ver campañas finalizadas"</b> arriba a la derecha de los filtros.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
       titulo:'🧹 v2.474.0 — Tarjetas de campaña: botones en una sola línea',
       desc:'Compactamos los botones de las <b>tarjetas de campaña</b> para que entren todos en una sola fila: a la izquierda los de <b>navegación</b> (🧪 Insumos, 🌿 Cortes, 📊 Planilla) y a la derecha, pegados al borde, los de <b>acción</b> (✅ finalizar, ✏️ editar, 🗑️ eliminar). Ya no se desacomoda ni queda el tachito colgando en otra fila.' },
@@ -30085,12 +30088,16 @@ pages.insumos = async function() {
   await cargarCotizVivas();  // para convertir costos a la moneda elegida
   if (!state.insMoneda) { try { state.insMoneda = localStorage.getItem('ac.insMoneda') || 'USD'; } catch { state.insMoneda = 'USD'; } }
 
-  state.insFilter = state.insFilter || { campana:'', insumos:[], tipos:[], labor:'', campoId:'', ciclo:'' };
+  state.insFilter = state.insFilter || { campana:'', insumos:[], tipos:[], labor:'', campoId:'', ciclo:'', verFinalizadas:false };
   const f = state.insFilter;
   // El filtro de insumo pasó de uno solo (string) a multi-selección (array).
   if (!Array.isArray(f.insumos)) f.insumos = f.insumo ? [f.insumo] : [];
   if (!Array.isArray(f.tipos)) f.tipos = [];
+  if (f.verFinalizadas === undefined) f.verFinalizadas = false;
   delete f.insumo;
+  // Por defecto NO se muestran las campañas finalizadas (salvo que se tilde "Ver finalizadas"
+  // o que se haya seleccionado una campaña puntual en el filtro).
+  const campsVisibles = f.verFinalizadas ? campanas : campanas.filter(c => c.estado !== 'finalizada' || c.id === f.campana);
 
   // Tipo de cada insumo según el CATÁLOGO (insumo del catálogo → su Tipo de insumo).
   // Si no está en el catálogo, caemos al tipo que se guardó en la aplicación.
@@ -30146,9 +30153,9 @@ pages.insumos = async function() {
   if (f.campana) {
     campanasFiltradas = campanas.filter(c => c.id === f.campana);
   } else if (f.insumos.length || f.tipos.length || f.labor || f.campoId) {
-    campanasFiltradas = campanas.filter(c => idsCampanasFiltradas.has(c.id));
+    campanasFiltradas = campsVisibles.filter(c => idsCampanasFiltradas.has(c.id));
   } else {
-    campanasFiltradas = campanas;
+    campanasFiltradas = campsVisibles;
   }
   if (f.ciclo) campanasFiltradas = campanasFiltradas.filter(c => (c.ciclo||'').trim() === f.ciclo);
   // Campaña a preseleccionar al usar los botones generales (respeta el filtro activo).
@@ -30204,7 +30211,7 @@ pages.insumos = async function() {
           <label class="label">Campaña</label>
           <select id="ins-filtro" class="input">
             <option value="">Todas</option>
-            ${campanas.map(c => `<option value="${c.id}" ${c.id===f.campana?'selected':''}>${esc(campLabel(c))}</option>`).join('')}
+            ${campsVisibles.map(c => `<option value="${c.id}" ${c.id===f.campana?'selected':''}>${esc(campLabel(c))}</option>`).join('')}
           </select>
         </div>
         <div class="md:col-span-2">
@@ -30237,9 +30244,10 @@ pages.insumos = async function() {
           </select>
         </div>
       </div>
-      <div class="mt-2 flex gap-2 flex-wrap">
+      <div class="mt-2 flex gap-2 flex-wrap items-center">
         ${filtroActivo ? `<button class="btn btn-secondary text-xs" onclick="insumosFiltrosLimpiar()">✕ Limpiar filtros</button>` : ''}
         <button class="btn btn-secondary text-xs" onclick="insumosExportarExcel()">📥 Exportar Excel</button>
+        <label class="text-xs text-slate-600 flex items-center gap-1 ml-auto cursor-pointer" title="Por defecto se ocultan las campañas finalizadas"><input type="checkbox" id="ins-verfin" ${f.verFinalizadas?'checked':''}/> Ver campañas finalizadas</label>
       </div>
     </div>
 
@@ -30361,6 +30369,8 @@ pages.insumos = async function() {
   bindFilter('ins-ciclo',  'ciclo');
   bindFilter('ins-campo',  'campoId');
   bindFilter('ins-labor',  'labor');
+  const verFinEl = document.getElementById('ins-verfin');
+  if (verFinEl) verFinEl.onchange = e => { state.insFilter.verFinalizadas = e.target.checked; pages.insumos(); };
   // Filtros multi-selección (mismo componente que Stock/Movimientos).
   msWire('ins-tipo',   'insTipo', vals => { state.insFilter.tipos   = vals; }, () => pages.insumos(), 'Todos');
   msWire('ins-insumo', 'insIns',  vals => { state.insFilter.insumos = vals; }, () => pages.insumos(), 'Todos');
@@ -30374,7 +30384,7 @@ pages.insumos = async function() {
   }
 };
 function insumosFiltrosLimpiar() {
-  state.insFilter = { campana:'', insumos:[], tipos:[], labor:'', campoId:'', ciclo:'' };
+  state.insFilter = { campana:'', insumos:[], tipos:[], labor:'', campoId:'', ciclo:'', verFinalizadas:false };
   state._ms_insIns = false; state._ms_insTipo = false;
   pages.insumos();
 }
@@ -30484,11 +30494,13 @@ function insTipoChange(sel){
 async function aplicForm(tipo, campanaId) {
   if (!state.cache.depositos) { try { state.cache.depositos = (await api('/api/depositos')).data || []; } catch { state.cache.depositos = []; } }
   const _deps = state.cache.depositos || [];
-  const campanas = state.cache.campanas || [];
+  const campanasAll = state.cache.campanas || [];
+  // No se cargan insumos/labores en campañas finalizadas (salvo que se abra una ya seleccionada).
+  const campanas = campanasAll.filter(c => c.estado !== 'finalizada' || c.id === campanaId);
   const insumosCat = state.cache.insumosCat || [];
   const prodsIns = (state.cache.productos || []).filter(p => ['insumo','insumos','cereal','cereales','grano','granos','combustible','combustibles','herramienta','repuesto','repuestos','otro','otros'].includes((p.categoria||'').toLowerCase()));
   const itemNames = [...new Set([...insumosCat.map(x=>x.nombre), ...prodsIns.map(p=>p.nombre)].filter(Boolean))].sort();
-  if (!campanas.length) return toast('No hay campañas — cargá una primero.','warn');
+  if (!campanas.length) return toast('No hay campañas activas — todas están finalizadas o no hay cargadas.','warn');
   openModal({
     title: 'Cargar insumos al lote', size:'max-w-5xl',
     body: `
@@ -30739,7 +30751,8 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
       api('/api/productos'),
       api('/api/clientes').catch(()=>({data: state.cache.clientes||[]})),
     ]);
-    campanas = c.data || [];
+    // No se cargan labores en campañas finalizadas (salvo la ya seleccionada, al editar).
+    campanas = (c.data || []).filter(x => x.estado !== 'finalizada' || x.id === campanaId);
     empleados = (e.data || []).filter(x => x.activo !== false);
     productos = (p.data || []).filter(x => x.activo !== false);
     state.cache.clientes = (cl.data || state.cache.clientes || []).filter(x => x.activo !== false);
@@ -30850,11 +30863,11 @@ async function laborForm(avanzada = false, campanaId = null, edit = null, servic
         ${editMode?'<div class="text-[11px] text-slate-500 px-3 py-2">Podés agregar, cambiar o quitar insumos. Al guardar se recalcula el stock consumido por esta labor.</div>':''}
       </div>
 
-      ${(!editMode && !servicio && (state.cache.campanas||[]).length>1) ? `<details id="la-extra-wrap" class="mb-3 border border-slate-200 rounded-lg p-2">
+      ${(!editMode && !servicio && campanas.length>1) ? `<details id="la-extra-wrap" class="mb-3 border border-slate-200 rounded-lg p-2">
         <summary class="text-sm text-indigo-700 cursor-pointer">➕ Cargar esta misma labor en otras campañas / lotes (opcional)</summary>
         <div class="text-[11px] text-slate-500 my-1">Se repite la <b>misma labor</b> (y sus insumos) en cada campaña que tildes, usando las <b>hectáreas del lote de cada una</b>. Ideal para lotes de al lado que se hacen igual. Cada campaña descuenta su propio stock y arma su ganancia de empleados.</div>
         <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1 max-h-44 overflow-auto">
-          ${(state.cache.campanas||[]).map(c=>`<label class="flex items-center gap-1 text-xs"><input type="checkbox" class="la-extra-camp" value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}"/> <span>${esc(campLabel(c))} <span class="text-slate-400">(${fmtN(c.lote?.hectareas||0)} ha)</span></span></label>`).join('')}
+          ${campanas.map(c=>`<label class="flex items-center gap-1 text-xs"><input type="checkbox" class="la-extra-camp" value="${c.id}" data-ha="${Number(c.lote?.hectareas||0)}"/> <span>${esc(campLabel(c))} <span class="text-slate-400">(${fmtN(c.lote?.hectareas||0)} ha)</span></span></label>`).join('')}
         </div>
       </details>` : ''}
 
