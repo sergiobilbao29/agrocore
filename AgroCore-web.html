@@ -2849,7 +2849,10 @@ pages.ayuda = async function() {
   const INSTRUCTIVOS = [
     { grupo:'Primeros pasos', items:[
       { f:'Instructivo-Inicio-1Pagina.pdf', t:'Inicio rápido (1 página)', d:'Lo esencial para empezar a usar AgroCore.' },
-      { f:'Instructivo-Novedades.pdf', t:'🆕 Novedades y cómo usarlas', d:'Las funciones nuevas: grupo económico (empleados y campos compartidos), cargar insumos/labores en varios lotes de una vez, importar e-cheques desde el PDF del homebanking, y sueldos por transferencia con detalle y recibo.' },
+      { f:'Instructivo-Campos-Compartidos.pdf', t:'🌐 Compartir campos (y empleados) con el grupo', d:'Cargar un campo o un empleado una sola vez y usarlo en todas tus empresas. Cada campaña sigue siendo de su empresa; el campo/lote es solo el lugar físico.' },
+      { f:'Instructivo-Carga-Varios-Lotes.pdf', t:'🧪 Cargar insumos o labores en varios lotes a la vez', d:'Para lotes que se hacen igual: cargás una vez y lo aplicás a varias campañas/lotes; cada uno usa sus hectáreas y descuenta su stock.' },
+      { f:'Instructivo-Importar-Cheques-PDF.pdf', t:'📄 Importar e-cheques desde el PDF', d:'Subís el PDF del e-cheque del homebanking (Galicia y similares) y el sistema carga el cheque solo. Soporta varios juntos y avisa duplicados.' },
+      { f:'Instructivo-Sueldos-Transferencia.pdf', t:'🏦 Sueldos: pago por transferencia, detalle y recibo', d:'Que el pago de sueldo por transferencia impacte en el banco, y ver/imprimir el detalle y el recibo de cada liquidación (con arrastre del saldo).' },
       { f:'Instructivo-Puesta-en-Marcha.pdf', t:'Puesta en marcha (paso a paso)', d:'Configurar la empresa y cargar los datos iniciales, completo.' },
       { f:'Instructivo-Catalogo-Articulos.pdf', t:'Catálogo de artículos: configuración y uso correcto', d:'Cómo organizar Categorías → Familias → Subfamilias y cargar artículos bien: un solo artículo por producto físico, con sus capacidades (se compra / se vende / stock / se consume o se obtiene en producción / servicio). Incluye ejemplos de fábrica y comercio, el Diagnóstico de artículos y cómo pasar lo viejo a artículos.' },
       { f:'Instructivo-Stock.pdf', t:'Stock de artículos: la pantalla y todas sus funciones', d:'Recorre toda la pantalla de Stock: tarjetas y filtros (incluido el Estado "Sin clasificar"), + Nuevo e ingresos/egresos, y cada botón de la barra — Reporte de margen, Ir a Movimientos, Convertir grano a semilla, Reubicar categoría, Control de stock (conteo físico), Depurar duplicados, Fusionar artículos, Recuperar artículos y Unificar artículos (dejar una sola lista sin duplicados).' },
@@ -3128,8 +3131,11 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'24/11/2026',
-      titulo:'📘 v2.472.0 — Instructivo nuevo: "Novedades y cómo usarlas"',
-      desc:'Sumamos en <b>Ayuda del sistema</b> un instructivo nuevo <b>"🆕 Novedades y cómo usarlas"</b> que explica paso a paso todo lo nuevo: <b>grupo económico</b> (empleados y campos compartidos), <b>cargar insumos/labores en varios lotes</b> de una vez, <b>importar e-cheques desde el PDF</b> del homebanking, y <b>sueldos por transferencia</b> con detalle y recibo. El <b>asistente</b> también aprendió estos temas: preguntale "cómo comparto un campo", "cargar insumos en varios lotes" o "importar cheque por PDF".' },
+      titulo:'🧹 v2.473.0 — Tarjetas de campaña: botones más ordenados',
+      desc:'Reordenamos los botones de las <b>tarjetas de campaña</b>: los de <b>navegación</b> (Insumos/Labores, Cortes, Planilla) quedan a la izquierda y los de <b>acción</b> (✅ finalizar, ✏️ editar, 🗑️ eliminar) agrupados a la derecha. Ya no queda el tachito colgando solo en otra fila, y se ve prolijo también en las campañas forrajeras (que tienen el botón extra de Cortes).' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
+      titulo:'📘 v2.472.0 — Instructivos nuevos (uno por tema)',
+      desc:'Sumamos en <b>Ayuda del sistema</b> <b>4 instructivos nuevos</b>, uno por cada función nueva, para que leas solo el que necesitás: <b>🌐 Compartir campos (y empleados) con el grupo</b>, <b>🧪 Cargar insumos o labores en varios lotes a la vez</b>, <b>📄 Importar e-cheques desde el PDF</b>, y <b>🏦 Sueldos: pago por transferencia, detalle y recibo</b>. El <b>asistente</b> también aprendió estos temas: preguntale "cómo comparto un campo", "cargar insumos en varios lotes" o "importar cheque por PDF".' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'24/11/2026',
       titulo:'🚜 v2.471.0 — Cargar la misma labor en varias campañas de una vez',
       desc:'Igual que con los insumos, ahora al <b>Cargar labor</b> aparece un desplegable opcional <b>"➕ Cargar esta misma labor en otras campañas / lotes"</b>. Tildás una o varias campañas y la <b>misma labor</b> (con sus insumos y empleados) se carga en cada una, usando las <b>hectáreas del lote de cada campaña</b> (los insumos escalan solos a esas hectáreas). Perfecto para los lotes de al lado de Montenegro que se hacen igual. Si no lo usás, la carga funciona igual que siempre. No aplica a servicios a terceros ni al editar una labor existente.' },
@@ -14745,13 +14751,17 @@ pages.campanas = async function() {
             ${c.fechaCosecha?`<span>🚜 ${fmtDate(c.fechaCosecha)}</span>`:''}
           </div>`:''}
           ${proj ? `<div class="text-xs text-slate-600 mt-2 bg-emerald-50 text-emerald-700 rounded p-1.5 text-center"><b>Proyección:</b> ${fmtN(proj)} kg totales</div>`:''}
-          <div class="flex flex-wrap items-center gap-1 mt-3 pt-2 border-t">
-            <button class="btn btn-ghost text-xs" onclick="state.insFilter={campana:'${c.id}'}; go('insumos')">🧪 Insumos/Labores</button>
-            ${c.tipoCampana==='forrajera'?`<button class="btn btn-ghost text-xs text-amber-700" title="Cortes / rollos" onclick='cortesModal(${JSON.stringify(c.id)})'>🌿 Cortes</button>`:''}
-            <button class="btn btn-ghost text-xs text-indigo-700" title="Planilla de resultado económico" onclick='campanaPlanilla(${JSON.stringify(c.id)})'>📊 Planilla</button>
-            ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar finalizada" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅</button>`:''}
-            ${can('produccion:update')?`<button class="btn btn-ghost text-xs" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
-            ${can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" onclick='campanaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
+          <div class="mt-3 pt-2 border-t flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <div class="flex flex-wrap items-center gap-1">
+              <button class="btn btn-ghost text-xs" onclick="state.insFilter={campana:'${c.id}'}; go('insumos')">🧪 Insumos/Labores</button>
+              ${c.tipoCampana==='forrajera'?`<button class="btn btn-ghost text-xs text-amber-700" title="Cortes / rollos" onclick='cortesModal(${JSON.stringify(c.id)})'>🌿 Cortes</button>`:''}
+              <button class="btn btn-ghost text-xs text-indigo-700" title="Planilla de resultado económico" onclick='campanaPlanilla(${JSON.stringify(c.id)})'>📊 Planilla</button>
+            </div>
+            <div class="flex items-center gap-1 ml-auto">
+              ${(can('produccion:update') && c.estado!=='finalizada')?`<button class="btn btn-ghost text-xs text-emerald-700" title="Marcar finalizada" onclick='campanaFinalizar(${JSON.stringify(c.id)})'>✅</button>`:''}
+              ${can('produccion:update')?`<button class="btn btn-ghost text-xs" title="Editar campaña" onclick='campanaForm(${JSON.stringify(c.id)})'>✏️</button>`:''}
+              ${can('produccion:delete')?`<button class="btn btn-ghost text-xs text-red-600" title="Eliminar campaña" onclick='campanaDel(${JSON.stringify(c.id)})'>🗑️</button>`:''}
+            </div>
           </div>
         </div>`;
       }).join('') || (hayFiltro
