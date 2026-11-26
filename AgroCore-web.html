@@ -3136,6 +3136,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'26/11/2026',
+      titulo:'🖨️ v2.478.0 — Planilla de molienda en 1 hoja + copiar catálogos a fábrica aislada',
+      desc:'Dos arreglos. <b>(1)</b> La <b>planilla en blanco de Molienda</b> ahora entra en <b>una sola hoja</b> (antes salían dos) y dejamos de forzar el modo horizontal, así podés elegir la orientación desde el diálogo de impresión. <b>(2)</b> Al <b>copiar catálogos</b> a una empresa con <b>“Catálogo propio”</b> (ej. una fábrica aislada), antes copiaba 0 sin explicar por qué. Ahora te <b>avisa</b> cuando se saltea una empresa por tener catálogo propio, y agregamos la opción <b>“Copiar igual a empresas con Catálogo propio”</b> para forzar la copia cuando la elegís a mano.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'26/11/2026',
       titulo:'🏭 v2.477.0 — Molienda: nueva planilla en blanco + CUIL en Planilla de pagos',
       desc:'Dos mejoras. <b>(1) Planilla de producción en blanco de Molienda</b> (botón 🖨️): ahora las <b>materias primas</b> se dividen en <b>3 turnos</b> y cada fila tiene las columnas <b>producto, Kg entrada, humedad, secado (SÍ/NO), Kg salida, humedad salida, calor, velocidad, merma de secado y observación</b> (se sacó la sección aparte de Secado/Desactivación, ahora va integrada). En <b>productos obtenidos</b> se agregaron <b>Kg inicial</b> y <b>Kg final</b> (porque el depósito puede tener producto de días anteriores), y antes de las firmas quedó un recuadro grande para <b>observaciones generales del día</b>. Sale en horizontal para que entren todas las columnas. <b>(2)</b> La <b>Planilla de pagos</b> ahora muestra el <b>CUIL</b> de cada empleado junto al alias/CBU, en pantalla y en la impresión.' },
@@ -13896,6 +13899,12 @@ async function catalogosCompartirAbrir() {
           </label>
         </div>
       </div>
+
+      <label class="flex items-start gap-2 text-sm p-3 mb-1 border border-amber-200 bg-amber-50 rounded-lg cursor-pointer">
+        <input id="cc-forzar-propio" type="checkbox"/>
+        <span>Copiar <b>igual</b> a empresas con <b>“Catálogo propio”</b> (fábrica aislada)
+        <span class="block text-[11px] text-amber-700">Por defecto, las empresas con catálogo propio NO reciben catálogos copiados. Tildá esto si querés forzar la copia a esa empresa igual.</span></span>
+      </label>
     `,
     footer: `
       <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
@@ -13912,6 +13921,7 @@ function ccToggleExcl() {
 async function catalogosCompartirEjecutar() {
   const sourceCompanyId = document.getElementById('cc-origen').value;
   const setTemplate = document.getElementById('cc-set-template').checked;
+  const forzarCatalogoPropio = !!document.getElementById('cc-forzar-propio')?.checked;
   const targetCompanyIds = Array.from(document.querySelectorAll('.cc-target:checked'))
     .map(c => c.dataset.id).filter(id => id !== sourceCompanyId);
   const excludeTipos = Array.from(document.querySelectorAll('.cc-exclude:checked')).map(c => c.value);
@@ -13938,7 +13948,7 @@ async function catalogosCompartirEjecutar() {
     }
     const r = await api('/api/admin/copiar-catalogos', {
       method: 'POST',
-      body: JSON.stringify({ sourceCompanyId, targetCompanyIds, excludeTipos, incluir }),
+      body: JSON.stringify({ sourceCompanyId, targetCompanyIds, excludeTipos, incluir, forzarCatalogoPropio }),
     });
     closeModal();
     const empName = id => (state.cache.empresas||[]).find(e=>e.id===id)?.name || id;
@@ -13951,6 +13961,11 @@ async function catalogosCompartirEjecutar() {
         ${r.resultados.length ? `
           <div class="text-xs text-slate-600 bg-slate-50 border rounded p-2 max-h-48 overflow-y-auto">
             ${r.resultados.map(x => `<div>• ${esc(empName(x.companyId))} → ${x.copiados||0} cat.${(x.categoriasArt||x.categoriasGasto)?` · ${x.categoriasArt||0} c.art · ${x.categoriasGasto||0} c.gasto`:''} ${x.error ? `<span class="text-red-600">— ${esc(x.error)}</span>` : ''}</div>`).join('')}
+          </div>` : ''}
+        ${(r.omitidasCatalogoPropio && r.omitidasCatalogoPropio.length) ? `
+          <div class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-3">
+            ⚠️ ${r.omitidasCatalogoPropio.length} empresa(s) con <b>“Catálogo propio”</b> se saltearon y no recibieron catálogos.
+            Si querés copiarles igual, volvé a abrir <b>📋 Copiar</b> y tildá <b>“Copiar igual a empresas con Catálogo propio”</b>.
           </div>` : ''}
         <div class="text-[11px] text-slate-500 mt-3">
           💡 Si una empresa destino dice 0, es porque ya tenía esa configuración (no se duplica).
@@ -32528,28 +32543,29 @@ function molPrintPlanilla() {
   const _bl=(n)=>`<td class="bl"></td>`.repeat(n);
   const mpRows=(names)=>{
     const llenas=(names||[]).filter(Boolean).map(n=>`<tr><td>${esc(n)}</td>${_bl(9)}</tr>`).join('');
-    const vacias=(`<tr>${_bl(10)}</tr>`).repeat(2);
+    const vacias=(`<tr>${_bl(10)}</tr>`).repeat(1);
     return llenas+vacias;
   };
   const mpThead=`<thead><tr><th>Producto</th><th>Kg entrada</th><th>Hum. %</th><th>Secado (SÍ/NO)</th><th>Kg salida</th><th>Hum. salida %</th><th>Calor</th><th>Velocidad</th><th>Merma secado (kg)</th><th>Observación</th></tr></thead>`;
   const turno=(nro)=>`<div class="turno"><b>Turno ${nro}</b> &nbsp; Operario: ______________________ &nbsp; Hora inicio: ______ hs &nbsp; Hora fin: ______ hs</div>
     <table class="mp">${mpThead}<tbody>${mpRows(mps)}</tbody></table>`;
   // Productos obtenidos (al final del día): Kg inicial (lo que ya había) + Kg obtenido + Kg final.
-  const rowsSal=((sals.filter(Boolean)).map(n=>`<tr><td>${esc(n)}</td>${_bl(4)}</tr>`).join(''))+(`<tr>${_bl(5)}</tr>`).repeat(2);
+  const rowsSal=((sals.filter(Boolean)).map(n=>`<tr><td>${esc(n)}</td>${_bl(4)}</tr>`).join(''))+(`<tr>${_bl(5)}</tr>`).repeat(1);
   const w=window.open('','_blank'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
   w.document.write(`<html><head><title>Planilla de producción</title><meta charset="utf-8"/>
-  <style>@page{size:A4 landscape;margin:10mm} body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:14px;font-size:12px}
-  h1{font-size:17px;margin:0 0 2px} h2{font-size:13px;margin:14px 0 4px;color:#166534}
-  .sub{color:#555;font-size:12px;margin-bottom:10px}
-  table{width:100%;border-collapse:collapse;margin-bottom:4px}
-  th,td{border:1px solid #999;padding:5px 6px;text-align:left} th{background:#f0fdf4;font-size:11px}
-  table.mp th,table.mp td{font-size:10.5px;padding:4px 4px}
-  td.bl{height:24px} .meta td{border:none;padding:3px 8px 3px 0}
-  .fw{width:120px} .turno{margin:10px 0 3px;font-size:12px;color:#166534}
-  .obsbox{border:1px solid #999;min-height:70px;margin-top:4px;padding:6px}
-  .obslabel{font-size:12px;color:#166534;font-weight:bold;margin:14px 0 3px}
-  .firma{margin-top:30px;display:flex;gap:40px} .firma div{flex:1;border-top:1px solid #333;padding-top:4px;text-align:center;font-size:11px;color:#555}
-  @media print{body{padding:6px}}</style></head><body>
+  <style>@page{margin:7mm} body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:6px;font-size:10px}
+  h1{font-size:15px;margin:0 0 1px} h2{font-size:11px;margin:7px 0 2px;color:#166534}
+  .sub{color:#555;font-size:9.5px;margin-bottom:5px}
+  table{width:100%;border-collapse:collapse;margin-bottom:2px}
+  th,td{border:1px solid #999;padding:2px 4px;text-align:left} th{background:#f0fdf4;font-size:9px}
+  table.mp th,table.mp td{font-size:8px;padding:1px 2px}
+  td.bl{height:16px} .meta td{border:none;padding:1px 8px 1px 0}
+  .fw{width:110px} .turno{margin:5px 0 1px;font-size:9.5px;color:#166534}
+  .turno,table{page-break-inside:avoid}
+  .obsbox{border:1px solid #999;min-height:42px;margin-top:2px}
+  .obslabel{font-size:10px;color:#166534;font-weight:bold;margin:7px 0 2px}
+  .firma{margin-top:16px;display:flex;gap:40px} .firma div{flex:1;border-top:1px solid #333;padding-top:3px;text-align:center;font-size:10px;color:#555}
+  @media print{body{padding:3px}}</style></head><body>
   <h1>Planilla de producción diaria — ${esc(emp)}</h1>
   <div class="sub">Fórmula: <b>${esc(f?.nombre||'')}</b> · El operario completa a mano los kg durante la jornada; luego se cargan al sistema. <b>Todos los valores en kg.</b></div>
   <table class="meta"><tr><td class="fw"><b>Fecha de jornada:</b></td><td>____ / ____ / ________</td></tr></table>

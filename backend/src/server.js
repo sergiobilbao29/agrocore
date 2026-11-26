@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.477.0';
+const AGROCORE_VERSION = '2.478.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2928,6 +2928,9 @@ app.post('/api/admin/copiar-catalogos', authMiddleware, async (req, res, next) =
       sourceCompanyId: z.string().min(1),
       targetCompanyIds: z.union([z.array(z.string()), z.literal('all')]),
       excludeTipos: z.array(z.string()).optional(),
+      // Forzar la copia también a empresas con "Catálogo propio" (catalogoManual).
+      // Por defecto esas empresas se saltean; cuando el usuario las elige a mano, puede forzar.
+      forzarCatalogoPropio: z.boolean().optional(),
       // Qué copiar (opcional). Si no viene, por compatibilidad copia solo catálogos.
       incluir: z.object({
         catalogos: z.boolean().optional(),
@@ -2953,8 +2956,9 @@ app.post('/api/admin/copiar-catalogos', authMiddleware, async (req, res, next) =
     }
     // Las empresas con "Catalogo propio" (catalogoManual) NO reciben catalogos copiados:
     // arrancan con su propio catalogo (ej: fabrica separada, sin cajas ni productos ajenos).
+    // Las empresas con "Catalogo propio" se saltean SALVO que el usuario fuerce la copia.
     let omitidasCatalogoPropio = [];
-    if (targetIds.length) {
+    if (targetIds.length && !d.forzarCatalogoPropio) {
       const propias = await prisma.company.findMany({ where: { id: { in: targetIds }, catalogoManual: true }, select: { id: true } });
       const setPropias = new Set(propias.map(c => c.id));
       omitidasCatalogoPropio = [...setPropias];
