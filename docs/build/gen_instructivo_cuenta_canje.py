@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Instructivo: Cuenta canje en grano (dónde cargarlo y cómo ver el resumen)."""
+"""Instructivo: Canje (grano) - cuenta corriente flexible en kg de soja."""
 import os
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -68,105 +68,70 @@ def build():
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id='f')
     doc.addPageTemplates([PageTemplate(id='main', frames=[frame], onPage=header_footer)])
     E = []
-    E.append(Paragraph("Cuenta canje en grano", st_title))
-    E.append(Paragraph("Llevar la cuenta de cada cliente: lo que entrego de grano, lo que se lleva en producto y lo que falta", st_sub))
+    E.append(Paragraph("Canje (grano): cuenta corriente flexible", st_title))
+    E.append(Paragraph("Una sola pantalla para llevarle a cada cliente el canje como cuenta corriente en kilos de soja", st_sub))
     E.append(Paragraph(
-        "El <b>canje</b> es: el cliente te deja <b>grano (soja)</b> y se lleva <b>producto</b> "
-        "(expeller, aceite, balanceado...), o al revés. AgroCore tiene <b>dos formas</b> de registrarlo y "
-        "lo más importante es <b>elegir UNA sola</b> según cómo opera cada cliente. Si cargás la misma "
-        "operación en las dos, el saldo se <b>duplica</b>.", st_intro))
+        "<b>Plan canje</b> y <b>Cuenta canje</b> se <b>unificaron</b> en una sola pantalla flexible llamada "
+        "<b>Canje (grano)</b> (menú <b>Fábrica</b>). Es una cuenta corriente con cada cliente o proveedor, "
+        "medida en <b>kilos de soja</b>: cargás el acuerdo pero <b>no es estricto</b>, vas registrando los "
+        "movimientos a medida que pasan y el saldo se ajusta solo.", st_intro))
 
-    # --- Dos formas: elegir una ---
-    E.append(Paragraph("Primero: elegí UNA de las dos formas", st_h2))
-    comp = [
-        [Paragraph("Forma", st_cellb), Paragraph("Cuándo usarla", st_cellb), Paragraph("Qué hace", st_cellb)],
-        [Paragraph("&#128257; Plan canje", st_cellb),
-         Paragraph("La operación <b>entra y sale completa</b> (ej. entrego expeller y recibo soja de una), con una paridad fija.", st_cell),
-         Paragraph("Una operación cerrada. Mueve el stock en especie. No lleva cuenta corriente.", st_cell)],
-        [Paragraph("&#128210; Cuenta canje (grano)", st_cellb),
-         Paragraph("El cliente <b>a veces entrega y a veces saca</b>, no siempre lo mismo, y querés llevarle la <b>cuenta corriente</b>.", st_cell),
-         Paragraph("Cuenta corriente en kg de soja por cliente: todos los movimientos y el saldo (le falta llevar / se pasó).", st_cell)],
-    ]
-    tc = Table(comp, colWidths=[38*mm, 68*mm, 59*mm])
-    tc.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),G100), ("BOX",(0,0),(-1,-1),0.6,G600), ("INNERGRID",(0,0),(-1,-1),0.4,colors.HexColor("#bbf7d0")),
-        ("VALIGN",(0,0),(-1,-1),"MIDDLE"), ("LEFTPADDING",(0,0),(-1,-1),6), ("RIGHTPADDING",(0,0),(-1,-1),6),
-        ("TOPPADDING",(0,0),(-1,-1),4), ("BOTTOMPADDING",(0,0),(-1,-1),4),
-    ]))
-    E.append(tc)
-    E.append(Spacer(1, 4))
-    E.append(callout("<b>&#9888; No cargues la misma operación en las dos.</b> Si ya la registraste en <b>Plan canje</b>, "
-                     "no vuelvas a cargarla en <b>Cuenta canje</b> (y al revés): se sumaría dos veces y el saldo quedaría mal. "
-                     "Este instructivo explica la <b>Cuenta canje</b>, que es la que lleva el saldo por cliente.",
-                     AMBER_BG, AMBER_BD, AMBER_TX))
-
-    # --- Donde esta ---
-    E.append(Paragraph("1) Dónde se carga la Cuenta canje", st_h2))
-    E.append(steps([
-        "Menú <b>Comercial &rarr; &#128210; Cuenta canje (grano)</b>. (En las empresas de fábrica también se llega "
-        "desde <b>Industria / Molienda</b>, pero vive en Comercial.)",
-        "Esa es la pantalla donde se lleva el canje con saldo y donde ves el resumen por cliente.",
-        "Al lado está la solapa <b>&#128257; Plan canje</b>: es la OTRA forma (operación cerrada). Usa una o la otra, no las dos.",
-    ]))
-    E.append(callout("Ruta corta: <b>Comercial &rarr; &#128210; Cuenta canje (grano)</b>.", BLUE_BG, BLUE_BD, BLUE_TX))
-
-    # --- Dos pasos ---
-    E.append(Paragraph("2) Se carga en dos pasos", st_h2))
-    E.append(Paragraph("La cuenta se arma con dos tipos de movimiento (hay un botón para cada uno):", st_intro))
-    E.append(bullets([
-        "<b>&#127782; Entró grano del cliente:</b> el cliente te deja soja. Le queda <b>saldo a favor</b> "
-        "(tiene crédito para llevar producto). Elegís cliente, producto (grano), cantidad en kg y, si querés, "
-        "el <b>depósito</b> donde entra el grano.",
-        "<b>&#128230; Se llevó producto:</b> cada vez que retira expeller, aceite, etc. Acá además de la cantidad "
-        "cargás la <b>paridad</b>: <b>cuántos kg de soja equivale 1 kg de ese producto</b> (campo "
-        "&ldquo;Equivale a&rdquo;). Eso descuenta el equivalente en grano del saldo.",
-        "<b>&#9999;&#65039; Ajuste manual:</b> para corregir el saldo a mano (en kg de soja, con + a favor o - en contra). "
-        "Se usa poco, solo para acomodar diferencias.",
-    ]))
-    E.append(callout("<b>La paridad es la clave.</b> Ejemplo: si acordaste que <b>1 kg de expeller = 1,2 kg de soja</b>, "
-                     "en &ldquo;Se llevó producto&rdquo; pones <b>1,2</b> en &ldquo;Equivale a&rdquo;. Si retira 1.000 kg de "
-                     "expeller, le descuenta <b>1.200 kg de soja</b> del saldo. El sistema te muestra ese cálculo antes de guardar.",
-                     G100, G600, G900))
-
-    # --- Resumen ---
-    E.append(Paragraph("3) El resumen: qué entrego, qué se lleva, qué falta", st_h2))
+    # --- Que es ---
+    E.append(Paragraph("¿Qué es?", st_h2))
     E.append(Paragraph(
-        "En la misma pantalla de <b>Cuenta canje (grano)</b>, arriba de los botones, hay una tabla con "
-        "<b>una fila por cliente</b>. Esto es lo que la usuaria quería tener a la vista:", st_intro))
-    data = [
-        [Paragraph("Columna", st_cellb), Paragraph("Qué te dice", st_cellb)],
-        [Paragraph("Cliente / Proveedor", st_cell), Paragraph("Cada persona que tiene canje abierto", st_cell)],
-        [Paragraph("Saldo (kg soja)", st_cell), Paragraph("Cuánto grano le queda a favor (o en contra), neto de lo que ya se llevó", st_cell)],
-        [Paragraph("Estado", st_cell), Paragraph("En palabras: le falta llevar / se pasó-debe / al día", st_cell)],
-        [Paragraph("Ver detalle", st_cell), Paragraph("Abre TODOS los movimientos de ese cliente: cada grano que entró y cada retiro", st_cell)],
-    ]
-    t = Table(data, colWidths=[46*mm, 119*mm])
-    t.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),G100), ("BOX",(0,0),(-1,-1),0.6,G600), ("INNERGRID",(0,0),(-1,-1),0.4,colors.HexColor("#bbf7d0")),
-        ("VALIGN",(0,0),(-1,-1),"MIDDLE"), ("LEFTPADDING",(0,0),(-1,-1),6), ("RIGHTPADDING",(0,0),(-1,-1),6),
-        ("TOPPADDING",(0,0),(-1,-1),4), ("BOTTOMPADDING",(0,0),(-1,-1),4),
-    ]))
-    E.append(t)
-    E.append(Spacer(1, 4))
-    E.append(Paragraph("Cómo leer el saldo:", st_intro))
-    E.append(bullets([
-        "<b>Saldo en verde con +</b> (ej. +1.200 kg) &rarr; <b>le falta llevar</b>: dejó más grano del que retiró, "
-        "tiene crédito a favor.",
-        "<b>Saldo en rojo con -</b> (ej. -300 kg) &rarr; <b>se pasó / debe</b>: retiró más de lo que dejó.",
-        "<b>En cero</b> &rarr; <b>al día</b>: no debe ni le deben.",
-    ]))
-    E.append(callout("Para ver el movimiento por movimiento de un cliente (cada entrada de grano y cada retiro, con fecha "
-                     "y cantidad), toca <b>Ver detalle</b> en su fila. Ahí también podés borrar un movimiento si te equivocaste.",
+        "Una sola pantalla donde llevás el canje con cada cliente o proveedor como <b>cuenta corriente en "
+        "kilos de soja</b>. Cargás el acuerdo, pero <b>no es estricto</b>: registrás los movimientos a medida "
+        "que pasan y el saldo refleja siempre cómo estás parado con esa persona.", st_intro))
+    E.append(callout("Está en el menú <b>Fábrica &rarr; &#128210; Canje (grano)</b>. Es la misma pantalla para todo: "
+                     "ya no hay que elegir entre &ldquo;Plan canje&rdquo; y &ldquo;Cuenta canje&rdquo;, ahora es una sola.",
                      BLUE_BG, BLUE_BD, BLUE_TX))
 
+    # --- Movimientos ---
+    E.append(Paragraph("Movimientos", st_h2))
+    E.append(Paragraph("La cuenta se arma con los movimientos que vas cargando (hay un botón para cada uno):", st_intro))
+    E.append(bullets([
+        "<b>&#127782; Entró grano del cliente:</b> deja soja &rarr; le queda saldo <b>a favor</b> (+kg). "
+        "Si elegís un <b>depósito</b>, el grano entra al stock.",
+        "<b>&#128230; Se llevó producto:</b> cada retiro descuenta su equivalente en grano según la <b>paridad</b> "
+        "que ponés en el momento (ej. 1 kg de expeller = 1,2 kg de soja). Si elegís un <b>depósito</b>, el producto "
+        "sale del stock.",
+        "<b>&#128181; Liquidar en pesos (NUEVO):</b> cuando en vez de llevarse producto te dice &ldquo;liquidame tantos "
+        "kilos y pagámelos&rdquo;. Ponés los <b>kilos</b> y el <b>precio</b> ($/kg; viene de la <b>pizarra de soja del "
+        "día</b>, editable). Baja el saldo en kg y <b>genera la deuda a pagar</b> (va a <b>Cuentas a pagar</b>). Si borrás "
+        "el movimiento, se borra la deuda.",
+        "<b>&#9999;&#65039; Ajuste manual:</b> sumás o restás kg de soja a mano.",
+    ]))
+    E.append(callout("<b>La paridad es la clave.</b> Ejemplo: si acordaste que <b>1 kg de expeller = 1,2 kg de soja</b>, "
+                     "en &ldquo;Se llevó producto&rdquo; pones <b>1,2</b>. Si retira 1.000 kg de expeller, le descuenta "
+                     "<b>1.200 kg de soja</b> del saldo. El sistema te muestra ese cálculo antes de guardar.",
+                     G100, G600, G900))
+
+    # --- Saldo ---
+    E.append(Paragraph("El saldo", st_h2))
+    E.append(Paragraph(
+        "El saldo va siempre en <b>kg de soja</b> (y te muestra su valor en $ según la pizarra del día). "
+        "Así lo leés:", st_intro))
+    E.append(bullets([
+        "<b>Saldo con +</b> (ej. +1.200 kg) &rarr; <b>le falta llevar / le debés</b>: dejó más grano del que retiró o liquidó.",
+        "<b>Saldo con -</b> (ej. -300 kg) &rarr; <b>se pasó / te debe</b>: retiró o liquidó más de lo que dejó.",
+        "<b>En cero</b> &rarr; <b>al día</b>: no debe ni le deben.",
+    ]))
+
+    # --- Operacion completa ---
+    E.append(Paragraph("Operación completa", st_h2))
+    E.append(Paragraph(
+        "Si una operación <b>entra y sale junta</b> con un acuerdo fijo (ej. entrego expeller y recibo soja de una), "
+        "no necesitás cargar los movimientos uno por uno: dentro de la misma pantalla está el botón "
+        "<b>&#128257; Operación completa</b>. La cargás ahí y volvés con un botón.", st_intro))
+
     # --- Ejemplo ---
-    E.append(Paragraph("Ejemplo completo", st_h2))
+    E.append(Paragraph("Ejemplo", st_h2))
     ej = [
-        [Paragraph("Movimiento", st_cellb), Paragraph("Qué cargo", st_cellb), Paragraph("Saldo del cliente", st_cellb)],
+        [Paragraph("Movimiento", st_cellb), Paragraph("Qué cargás", st_cellb), Paragraph("Saldo del cliente", st_cellb)],
         [Paragraph("Entró grano", st_cell), Paragraph("Deja 10.000 kg de soja", st_cell), Paragraph("+10.000 kg (a favor)", st_cellr)],
         [Paragraph("Se llevó producto", st_cell), Paragraph("Retira 5.000 kg expeller, paridad 1,2", st_cell), Paragraph("+4.000 kg", st_cellr)],
-        [Paragraph("Se llevó producto", st_cell), Paragraph("Retira 3.000 kg expeller, paridad 1,2", st_cell), Paragraph("+400 kg", st_cellr)],
-        [Paragraph("Estado hoy", st_cellb), Paragraph("Le falta llevar", st_cellb), Paragraph("+400 kg soja", st_cellr)],
+        [Paragraph("Liquidar en pesos", st_cell), Paragraph("Liquida 3.600 kg a $400/kg", st_cell), Paragraph("+400 kg", st_cellr)],
+        [Paragraph("Estado hoy", st_cellb), Paragraph("Le falta llevar / le debés", st_cellb), Paragraph("+400 kg soja", st_cellr)],
     ]
     te = Table(ej, colWidths=[36*mm, 85*mm, 44*mm])
     te.setStyle(TableStyle([
@@ -178,7 +143,8 @@ def build():
     ]))
     E.append(te)
     E.append(Spacer(1, 2))
-    E.append(Paragraph("Cálculo del 2do retiro: 3.000 kg x 1,2 = 3.600 kg de soja. 4.000 - 3.600 = 400 kg a favor.", st_sub))
+    E.append(Paragraph("La liquidación de 3.600 kg a $400/kg baja el saldo a +400 kg y genera una deuda de "
+                       "$1.440.000 en Cuentas a pagar.", st_sub))
 
     # --- Stock ---
     E.append(Paragraph("¿Mueve el stock?", st_h2))
@@ -190,16 +156,18 @@ def build():
 
     E.append(Paragraph("Preguntas frecuentes", st_h2))
     faqs = [
-        ("Cargué la operación en Plan canje y también en Cuenta canje. ¿Está mal?",
-         "Sí, hay que elegir UNA sola. Son dos formas distintas de registrar lo mismo: si cargás en las dos, el saldo se duplica. Borra la que sobre y deja solo una (Plan canje para operaciones cerradas, Cuenta canje para la cuenta corriente)."),
-        ("¿Dónde veo lo que entrego, lo que se lleva y lo que falta?",
-         "En la tabla de la solapa 'Cuenta canje (grano)': columna Saldo (kg soja) y Estado. Con 'Ver detalle' ves cada movimiento del cliente."),
+        ("¿Dónde veo lo que le tengo que pagar tras liquidar?",
+         "En Cuentas a pagar (y también en la Ficha del contacto). Cuando liquidás en pesos, la deuda se genera sola; si borrás el movimiento, la deuda se borra."),
+        ("¿Puedo retirar más o menos de lo acordado?",
+         "Sí, es flexible: cada movimiento ajusta el saldo. Cargás el acuerdo como referencia, pero registrás lo que realmente va pasando."),
         ("¿Por qué el saldo está en kg de soja y no en producto?",
          "Porque el grano es la 'moneda' del canje. Cada retiro de producto se convierte a su equivalente en soja con la paridad que cargás, así todo queda en la misma unidad."),
-        ("¿Qué pongo en 'Equivale a'?",
-         "Cuántos kg de soja vale 1 kg del producto que se lleva. Si 1 kg de expeller = 1,2 kg de soja, pones 1,2. Es el acuerdo que tengas con el cliente."),
+        ("¿Qué paridad pongo cuando se lleva producto?",
+         "Cuántos kg de soja vale 1 kg del producto que se lleva. Si 1 kg de expeller = 1,2 kg de soja, pones 1,2. Es el acuerdo que tengas con el cliente, y lo ponés en el momento de cada retiro."),
+        ("¿De dónde sale el precio cuando liquido en pesos?",
+         "De la pizarra de soja del día, y lo podés editar antes de guardar. Con ese precio por kg se arma la deuda a pagar."),
         ("Me equivoqué en un movimiento. ¿Lo puedo borrar?",
-         "Sí. Entra a 'Ver detalle' del cliente y borra la línea (si tenés permiso). El saldo se recalcula solo."),
+         "Sí. Entrá al detalle del cliente y borrá la línea (si tenés permiso). El saldo se recalcula solo, y si era una liquidación también se borra la deuda."),
         ("¿Sirve para proveedores también?",
          "Sí. En el desplegable de contacto podés elegir clientes o proveedores."),
     ]

@@ -125,12 +125,18 @@ def build():
         "maní, carbonato), con su <b>$/kg</b> (viene prellenado) y el <b>depósito</b> de donde sale. Agregá o quita "
         "filas con <b>&#65291; Materia prima</b>.",
         "<b>Productos obtenidos:</b> cargá los <b>kilos reales</b> de expeller, aceite y desperdicio, con su "
-        "<b>depósito destino</b>. Tildá <b>Merma</b> en el desperdicio/merma (no ingresa stock ni lleva costo).",
+        "<b>depósito destino</b>. Tildá <b>Merma</b> en el desperdicio/merma (no ingresa stock ni lleva costo). Al lado del "
+        "<b>Kg real</b> que cargás a mano ahora ves el <b>Kg estimado</b> (kg procesados &times; rendimiento de la fórmula), "
+        "así comparás de un vistazo cuánto tendría que haber salido contra lo que salió de verdad.",
         "Cargá aparte la <b>Merma de secado</b> (desactivación de la soja).",
-        "<b>Costos indirectos del lote (individualizados):</b> en la grilla cargá por separado la <b>luz</b>, el <b>gasoil "
-        "de la secadora</b>, el <b>personal</b>, el <b>mantenimiento</b>, etc. La <b>suma</b> es el costo de producción del "
-        "lote y se reparte entre los productos. Si el gasto es mensual (ej. la factura de luz), poné en cada jornada la "
-        "parte que corresponde (mensual &divide; jornadas del mes).",
+        "<b>Costos indirectos del lote (individualizados):</b> cargalos por separado. Algunos van <b>por unidad</b>: la "
+        "<b>luz en kWh</b> y el <b>gasoil en litros</b> (el sistema calcula el $ solo); el resto &mdash;<b>personal</b>, "
+        "<b>mantenimiento</b>&mdash; los cargás como <b>&ldquo;$ directo&rdquo;</b>. La <b>suma</b> es el costo de producción "
+        "del lote y se reparte entre los productos.",
+        "<b>Gasoil (con descuento de stock):</b> en el renglón del gasoil elegí el <b>artículo</b> y el <b>depósito "
+        "(cisterna)</b> de donde sale. El <b>$/litro</b> se completa solo con el costo de la <b>última compra</b> de ese "
+        "artículo. Al <b>registrar el parte</b>, esos litros se <b>descuentan del stock</b> de la cisterna (y vuelven solos "
+        "si anulás el parte).",
         "Mirá el <b>balance en vivo</b>: procesado vs. obtenido vs. merma, el <b>costo por kg</b> de cada producto y, si "
         "el producto tiene precio de referencia, el <b>valor de venta</b>. Si está todo bien, toca <b>Registrar "
         "producción</b>: el sistema descuenta cada materia prima e ingresa cada producto. Lo ves al toque en <b>Stock</b>.",
@@ -144,6 +150,40 @@ def build():
                      "(así no queda stock negativo).", AMBER_BG, AMBER_BD, AMBER_TX))
     E.append(callout("<b>¿Te equivocaste?</b> En la lista de partes, el botón <b>Anular</b> revierte todo: vuelve la soja "
                      "al silo y saca los coproductos. Después lo volvés a cargar bien.", BLUE_BG, BLUE_BD, BLUE_TX))
+
+    E.append(Paragraph("Costo de luz por factura (valorización automática)", st_h2))
+    E.append(Paragraph(
+        "En las empresas con <b>Producción industrial / Fábrica</b>, la luz se puede valorizar sola desde la <b>factura de "
+        "compra</b>, sin que calcules el $ a mano. Vos cargás en cada parte los <b>kWh</b> consumidos y, cuando llega la "
+        "factura, el sistema reparte el total del mes entre los partes según esos kWh.", st_intro))
+    E.append(steps([
+        "Al cargar la <b>factura de compra</b> de la luz aparece el check <b>&ldquo;Es factura de luz que aplica a la "
+        "producción&rdquo;</b>. Tildalo.",
+        "Al tildarlo, poné el <b>período facturado</b>: la fecha <b>desde</b> y la fecha <b>hasta</b> que cubre la factura.",
+        "Al <b>guardar</b>, el <b>total</b> de la factura se <b>reparte entre los Partes de producción</b> de ese período "
+        "según los <b>kWh</b> cargados en cada uno. El sistema <b>recalcula</b> el costo de cada parte y, con eso, el costo "
+        "por kg de los productos.",
+    ]))
+    E.append(callout("<b>Qué ganás:</b> en cada parte cargás solo los <b>kWh</b> (el dato que mide el tablero) y el <b>$ de "
+                     "la luz</b> queda exacto recién cuando entra la factura real. No hay que estimar el precio del kWh ni "
+                     "repartir la factura a mano entre las jornadas.", G100, G600, G900))
+
+    E.append(Paragraph("Planilla en blanco para imprimir (botón &#128424;&#65039;)", st_h2))
+    E.append(Paragraph(
+        "Antes de arrancar la jornada, el botón <b>&#128424;&#65039; Imprimir planilla en blanco</b> saca una hoja para que "
+        "el operario anote los datos a mano durante la producción y después los cargue al sistema. Entra en <b>una sola "
+        "hoja</b> y está dividida así:", st_intro))
+    E.append(bullets([
+        "<b>Materias primas</b> divididas en <b>3 turnos</b>, con columnas: <b>producto &middot; Kg entrada &middot; humedad "
+        "&middot; secado (SÍ/NO) &middot; Kg salida &middot; humedad salida &middot; calor &middot; velocidad &middot; merma "
+        "de secado &middot; observación</b>.",
+        "<b>Productos obtenidos</b> con <b>Kg inicial</b> (lo que ya había en el depósito), <b>Kg obtenido del día</b> y "
+        "<b>Kg final</b>.",
+        "Un recuadro de <b>observaciones generales del día</b> antes de las firmas.",
+    ]))
+    E.append(callout("<b>Tip:</b> los kilos nunca son exactos. El operario anota lo real en la planilla impresa y después "
+                     "esos valores se cargan al parte del sistema, que compara el <b>Kg real</b> contra el <b>Kg "
+                     "estimado</b>.", BLUE_BG, BLUE_BD, BLUE_TX))
 
     E.append(Paragraph("PASO 4 &nbsp;&mdash;&nbsp; Costo de fabricación y precio de venta", st_h2))
     E.append(steps([

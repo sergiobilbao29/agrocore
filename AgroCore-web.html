@@ -2858,6 +2858,7 @@ pages.ayuda = async function() {
       { f:'Instructivo-Alta-Cliente-Nuevo.pdf', t:'Alta de cliente nuevo (instancia separada)', d:'Dar de alta un cliente/empresa nuevo en su propia instancia, paso a paso.' },
     ]},
     { grupo:'Finanzas', items:[
+      { f:'Instructivo-Ficha-Cliente-Proveedor.pdf', t:'Ficha de Cliente/Proveedor (todo junto + compensar)', d:'Elegís un contacto y un rango de fechas y ves todos sus movimientos en pesos (y en kilos si es proveedor de grano) con el saldo. Desde ahí hacés ventas, compras, cobros, pagos, grano y la compensación (vinculando por CUIT). Reemplazó a Compensación de cuentas.' },
       { f:'Instructivo-Pagos-y-Cobros.pdf', t:'Pagos y cobros', d:'Registrar pagos a proveedores y cobros de clientes.' },
       { f:'Instructivo-Pago-Dividido-Producto-y-Cheque.pdf', t:'Pago dividido (producto y cheque)', d:'Cancelar con parte producto y parte cheque.' },
       { f:'Instructivo-Cheques-Propios-y-Terceros.pdf', t:'Cheques propios y de terceros', d:'Manejo completo de cheques en cartera.' },
@@ -2878,11 +2879,12 @@ pages.ayuda = async function() {
     { grupo:'Compras', items:[
       { f:'Instructivo-Remitos-de-Compra.pdf', t:'Remitos de compra (recepción → factura)', d:'Recibís la mercadería con remito (suma stock) y después la facturás vinculándola al remito, sin duplicar el inventario. Parciales, devoluciones y reporte de recibido no facturado.' },
       { f:'Instructivo-Comprobante-Interno.pdf', t:'Comprobante interno (Compras y Ventas)', d:'Registrar una operación con un número propio y facturarla después, sin duplicar nada.' },
-      { f:'Instructivo-Proveedores-de-Granos.pdf', t:'Proveedores de granos (cuenta en kilos)', d:'Llevar la cuenta de la soja en KILOS, aparte del resto de los proveedores.' },
-      { f:'Instructivo-Cuenta-Canje-en-Grano.pdf', t:'Cuenta canje en grano', d:'Llevar la cuenta de cada cliente: lo que entrego de grano, lo que se lleva en producto y lo que falta.' },
+      { f:'Instructivo-Proveedores-de-Granos.pdf', t:'Proveedores de granos (cuenta en kilos)', d:'Llevar la cuenta de la soja en KILOS. Ahora se maneja desde Cuentas de Fábrica (ver ese instructivo).' },
+      { f:'Instructivo-Cuenta-Canje-en-Grano.pdf', t:'Canje (grano): cuenta corriente flexible', d:'Una sola pantalla flexible: entró grano, se llevó producto, liquidar en pesos (deuda a pagar) o ajuste, con el saldo en kilos por cliente. La operación completa queda como opción.' },
     ]},
     { grupo:'Stock y fábrica', items:[
-      { f:'Instructivo-Molienda-Fabrica.pdf', t:'Molienda / Fábrica (procesar grano + plan canje)', d:'Procesar soja y que el stock de expeller, aceite y merma se arme solo, con el costo de fabricación por kilo y el precio de venta sugerido. Incluye el plan canje (entregar producto y recibir grano por paridad).' },
+      { f:'Instructivo-Molienda-Fabrica.pdf', t:'Molienda / Fábrica (parte de producción, luz y gasoil)', d:'Procesar soja (expeller, aceite, merma) con costo por kilo y precio sugerido. Parte de producción con Kg estimado vs real, costos indirectos de luz (kWh) y gasoil (litros, con artículo/depósito y descuento de stock), reparto de la factura de luz entre los partes, y la planilla en blanco por turnos.' },
+      { f:'Instructivo-Cuentas-de-Fabrica.pdf', t:'Cuentas de Fábrica (saldos $ y kg + proveedores de grano)', d:'Una sola lista por contacto: saldo en pesos, saldo en kilos y la cuenta en kilos de cada proveedor de grano (entregado, liquidado, disponible, vencimientos) con las acciones de entrega, liquidación y comprobantes. Unifica lo que antes eran Proveedores de granos y Cuentas de Fábrica 360.' },
     ]},
     { grupo:'Producción', items:[
       { f:'Instructivo-Ordenes-de-Trabajo.pdf', t:'Órdenes de trabajo', d:'Indicarle al contratista qué labor hacer y qué insumos usar, entregarla (imprimir/WhatsApp) y después facturar el servicio.' },
@@ -3134,6 +3136,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/11/2026',
+      titulo:'📚 v2.487.0 — Documentación al día: instructivos, manual y asistente',
+      desc:'Actualizamos toda la documentación de lo nuevo de <b>Fábrica/Molienda</b>: los instructivos de <b>Molienda</b> (parte con Kg estimado vs real, luz en kWh, gasoil con stock, reparto de la factura de luz, planilla por turnos), <b>Canje (grano)</b> (pantalla única flexible + liquidar en pesos) y dos instructivos nuevos: <b>Cuentas de Fábrica</b> y <b>Ficha de Cliente/Proveedor</b>. Quedaron registrados en <b>Ayuda → Instructivos</b>, sumamos las secciones al <b>Manual de usuario</b> y el <b>asistente 🤖</b> aprendió a explicar todo esto.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/11/2026',
       titulo:'🔁 v2.486.0 — Canje (grano) unificado y flexible + liquidar en pesos',
       desc:'Unificamos el canje en una <b>sola pantalla flexible</b> (se fue "Cuenta canje" como ítem aparte). Cargás el acuerdo y después registrás los movimientos a medida que pasan, sin que sea estricto: <b>🌾 entró grano</b>, <b>📦 se llevó producto</b>, <b>✏️ ajuste</b> y lo nuevo: <b>💵 Liquidar en pesos</b> — cuando en vez de llevarse producto el cliente te dice "liquidame tantos kilos y pagámelos", baja el saldo en kg y <b>genera la deuda a pagar</b> (va a Cuentas a pagar), con el precio de la <b>pizarra de soja del día</b> (editable). La <b>operación completa</b> (entra y sale junto, con acuerdo fijo) quedó como una opción dentro de la misma pantalla.' },

@@ -9,8 +9,8 @@ Multi-empresa · Multi-usuario · En la nube o servidor propio.
 
 ---
 
-**Versión del manual:** 1.1 — mayo 2026
-**Sistema:** AgroCore v0.2 (API)
+**Versión del manual:** 2.0 — julio 2026 · cubre AgroCore v2.15
+**Sistema:** AgroCore v2.15
 **Soporte:** vía WhatsApp / mail · Respuesta en 24 hs hábiles
 
 ---
@@ -31,6 +31,8 @@ Multi-empresa · Multi-usuario · En la nube o servidor propio.
    - 6.6 Finanzas
    - 6.7 Logística y RRHH
    - 6.8 Administración
+   - 6.9 Agenda y recordatorios
+   - 6.10 Resumen multi-empresa
 7. Flujos de trabajo típicos
 8. Preguntas frecuentes
 9. Soporte y contacto
@@ -272,6 +274,20 @@ Sección que agrupa la gestión de campos, lotes, campañas e insumos.
 
 **Reporte por lote:** vista que muestra todas las aplicaciones realizadas en un lote durante una campaña, con costo acumulado vs presupuesto.
 
+**Labor con varios empleados e insumos:** en una misma labor podés cargar varios operarios (con su % de cobro cada uno) y varios insumos por lote sin salir del formulario.
+
+#### Servicios a terceros (labores facturables)
+
+**Qué hace:** cuando hacés una labor **para otro campo/cliente**, al cargarla tildás "Servicio a terceros" y elegís el cliente (la campaña queda opcional). La labor se registra igual (los insumos siguen descontando stock y se calcula el % de ganancia del empleado **solo sobre el precio de la labor**, no sobre los insumos que se le cobran al cliente).
+
+**Facturar:** en **Producción → Servicios a terceros** ves la lista con un botón **Facturar**, que abre la factura de venta ya cargada con el cliente + la línea de la labor + los insumos como líneas aparte. Al autorizarla, el servicio queda marcado como facturado y vinculado a esa factura.
+
+#### Hacienda (por campo)
+
+**Qué hace:** gestiona el ganado por campo. Definís las **categorías de animales por especie** (bovino, porcino, ovino, etc.) desde el catálogo "Categorías de animales", registrás los movimientos de hacienda y el sistema lleva el **stock por campo**, comparando el declarado (SENASA / RENSPA) con el real.
+
+**Datos:** especie y categoría, cantidad de cabezas, kg/peso por categoría, campo, fecha. Funciona incluso **sin conexión** y las cabezas se consolidan en los KPIs del Inicio. En empresas solo agrícolas, los campos de hacienda se ocultan.
+
 ---
 
 ### 6.4 Stock
@@ -306,6 +322,14 @@ Análisis económico que cruza compras vs ventas (de granos u otros productos) c
 - Ganancia total
 
 Filtros: por producto, campaña, cliente / proveedor, período. Exportable a Excel.
+
+#### Traspaso / conversión y reubicación
+
+**Traspaso entre artículos:** convertís stock de un artículo en otro (ej. **grano → semilla**), descontando de uno e ingresando al otro en un solo paso, con la trazabilidad del movimiento.
+
+**Reubicar en lote:** cambiás la categoría / familia de varios artículos a la vez, útil cuando reorganizás el catálogo.
+
+**Catálogo con árbol:** el stock y los buscadores muestran **solo artículos del catálogo**, ordenados por el árbol **Categoría → Familia → Producto** (ver Administración → Catálogos), con filtros por categoría y familia.
 
 ---
 
@@ -360,7 +384,15 @@ La sección más amplia del sistema. Agrupa toda la gestión económica y financ
 
 **Tipos soportados:** Facturas A/B/C/M, Notas de crédito y débito, Recibos, Remitos, Comprobantes de cobro.
 
-**Modo informal:** si tu empresa no factura por ARCA, el sistema genera comprobantes internos sin CAE pero con el mismo formato visual.
+**Modo informal:** si tu empresa no factura por ARCA, el sistema genera comprobantes internos sin CAE pero con el mismo formato visual. En empresas informales, todo lo relativo a ARCA queda deshabilitado (grisado).
+
+**Envío y reimpresión:** cada comprobante se puede **enviar por email o por WhatsApp** al cliente, reimprimir en PDF (la factura ARCA sale por triplicado) y **reabrir** desde la cuenta corriente.
+
+**Notas de crédito y débito:** la **NC** reingresa el stock; la **ND** no mueve stock.
+
+**Saldo a favor:** si un cliente paga de más o se le emite una NC, queda un **saldo a favor** que luego se aplica a otras facturas.
+
+**Numeración:** los comprobantes internos (órdenes de pago, recibos) llevan numeración automática y correlativa, configurable en Administración → numeradores.
 
 #### Compras
 
@@ -375,7 +407,9 @@ La sección más amplia del sistema. Agrupa toda la gestión económica y financ
 - Forma de pago: contado, cheque, cuenta corriente, transferencia
 - Adjuntar PDF / imagen del comprobante físico (opcional)
 
-**Importación masiva:** desde Excel o desde el portal "Mis Comprobantes" de ARCA.
+**Importación masiva:** desde Excel o desde el portal "Mis Comprobantes" de ARCA. Un lector de **PDF de factura ARCA** autocompleta el formulario leyendo el código QR o el nombre del archivo.
+
+**Pago y Orden de Pago:** al pagar una factura de compra (efectivo, cheque propio, transferencia, **tarjeta de crédito** o medio externo del catálogo) el sistema genera una **Orden de Pago** imprimible / PDF con el detalle de comprobantes aplicados, cheques entregados, retenciones e importe en letras. Se puede enviar por email / WhatsApp y **deshacer / reabrir** el pago desde la cuenta corriente.
 
 #### Libro IVA
 
@@ -410,6 +444,8 @@ La sección más amplia del sistema. Agrupa toda la gestión económica y financ
 
 **Conciliación:** permite "atar" un cobro a una factura específica, dejando claro qué está pago y qué no.
 
+**Tipos de cuenta:** a **cobrar** (clientes), a **pagar** (proveedores) y **manuales / libres** (contratos u obligaciones sin factura). Pueden estar en pesos, dólares, kg novillo o quintales de grano; los totales de arriba suman también la moneda extranjera **valorizada a su cotización**.
+
 #### Arrendamientos
 
 **Qué hace:** registra los contratos de arrendamiento de campos cuando explotás campos que no son propios.
@@ -428,14 +464,31 @@ La sección más amplia del sistema. Agrupa toda la gestión económica y financ
 
 #### Control de efectivo
 
-**Qué hace:** registro de movimientos de caja chica: ingresos y egresos en efectivo con saldo actualizado.
+**Qué hace:** registro de movimientos de caja: ingresos y egresos en efectivo con saldo actualizado. Soporta **varias cajas** (multi-caja) y cada movimiento se clasifica como **de la empresa** o **propio / personal** (los personales también se contabilizan porque salen de activos de la empresa).
 
-**Datos por movimiento:**
-- Fecha
-- Tipo (ingreso o egreso)
-- Concepto (sueldos, viáticos, gastos varios, retiro de socio, etc.)
-- Importe
-- Comprobante asociado (recibo, ticket)
+**Datos por movimiento:** fecha, tipo (ingreso / egreso), caja, concepto (categoría + familia desde el árbol de Categorías de Gastos), importe, comprobante asociado.
+
+**Movimientos internos:** cuando la plata **cambia de lugar pero sigue en la empresa** (extracción o depósito banco↔caja, o transferencia entre cuentas propias), el sistema muestra las **dos patas** del movimiento pero **no las cuenta como ingreso ni egreso** en los totales, para no inflar los números.
+
+#### Movimientos diarios
+
+**Qué hace:** una vista única con **todos los movimientos de plata del período** (banco, caja, cuentas) ordenados por fecha, con su categoría y familia. Los movimientos internos aparecen etiquetados "🔁 interno · no suma", y el método de pago se muestra (efectivo, cheque, transferencia, 💳 tarjeta) con filtros. Estos egresos impactan también en el Dashboard.
+
+#### Órdenes de pago
+
+**Qué hace:** cada pago a proveedor genera una **Orden de Pago** numerada, con comprobantes aplicados, cheques entregados, retenciones e importe en letras. Imprimible / PDF, enviable por email o WhatsApp, con opción de **deshacer** el pago (reabre la cuenta corriente).
+
+#### Créditos y préstamos
+
+**Qué hace:** registra créditos bancarios o de proveedores con su **plan de cuotas** (automático o manual), moneda (pesos, dólares o kg novillo) y tipo de cambio. Permite cargar cuotas ya pagadas, editar / eliminar, sumar IVA de intereses y gastos, y arma solo las alarmas de vencimiento en la Agenda.
+
+#### Bancos y tarjetas de crédito
+
+**Qué hace:** administra las cuentas bancarias (saldos en vivo) y sus movimientos (depósitos, extracciones, débitos, transferencias, comisiones, impuestos, intereses), más las **tarjetas de crédito** de la empresa como medio de pago disponible en todos los formularios de cobro / pago.
+
+#### Cotizaciones (multimoneda)
+
+**Qué hace:** guarda la cotización diaria (dólar oficial / blue / MEP / CCL, **kg novillo** y granos de pizarra BCR). Facturas, cuentas corrientes, créditos y arrendamientos pueden operar en **otra moneda**, y el sistema calcula la **diferencia de cambio** en pesos al cobrar o pagar.
 
 ---
 
@@ -476,6 +529,10 @@ Sección que agrupa los movimientos de transporte y la gestión del personal.
 
 **Recibos de sueldo:** generación mensual con cálculo automático de descuentos (jubilación, obra social), aguinaldo, vacaciones, horas extras. Exportables a PDF para imprimir o enviar por mail.
 
+**Propios o externos:** además del personal en relación de dependencia, podés cargar **contratistas / fasoneros** que cobran por **% de la labor**. Un empleado puede además estar **vinculado a un usuario y a un chofer** (misma persona, una sola ficha).
+
+**Planilla mensual:** adelantos, horas, premios y descuentos con categorías configurables (cantidad × valor). La liquidación descuenta desde efectivo, cheque o transferencia y se exporta a Excel.
+
 ---
 
 ### 6.8 Administración
@@ -484,15 +541,16 @@ Sección al pie de la barra lateral, agrupa los parámetros del sistema.
 
 #### Catálogos
 
-Master data que alimenta a todos los módulos.
+Master data que alimenta a todos los módulos. Las pestañas se arman solas desde el árbol de categorías.
 
-- **Productos:** insumos, granos, combustible, repuestos. Con código, categoría, unidad, alícuota IVA por defecto, stock mínimo.
-- **Cultivos:** soja, maíz, trigo, girasol, etc., con tipo (gruesa / fina) y datos agronómicos.
-- **Bancos:** lista de bancos para usar al cargar cheques y cuentas corrientes.
-- **Conceptos de tesorería:** tipologías de movimientos de efectivo (sueldos, viáticos, gastos, etc.).
-- **Provincias y localidades:** cargados de inicio.
+- **Árbol de Categorías y Familias:** estructura **Categoría → Familia → Producto** (Insumos, Hacienda, Cereales…). Define cómo se agrupan y filtran productos, insumos y labores en todo el sistema.
+- **Categorías de Gastos:** árbol propio para clasificar los movimientos de plata (categoría + familia).
+- **Productos / Insumos / Cereales / Labores:** artículos del catálogo con unidad, alícuota IVA, stock mínimo, tipo y familia. Las labores llevan **precio sugerido** que se autocarga en el formulario.
+- **Categorías de animales:** por especie (bovino, porcino, ovino…) con kg / peso, para Hacienda.
+- **Cerealeras, depósitos propios y cajas físicas · Bancos y Tarjetas de crédito · Ciclos.**
+- **Geografía:** País → Provincia → Ciudad (cargada de inicio).
 
-Hay sidebar con filtros jerárquicos para encontrar rápido el ítem que buscás.
+**Copiar configuración entre empresas:** desde Configuración podés **transferir** a otra empresa los Catálogos, el árbol de Categorías y Familias y/o el de Categorías de Gastos (cada uno opcional, sin duplicar). Una empresa nueva se arma en minutos.
 
 #### Usuarios
 
@@ -514,19 +572,15 @@ Alta de personas que pueden iniciar sesión.
 
 Roles vienen pre-cargados (Admin, Contable, Operaciones, Lectura), y podés crear roles a medida.
 
-**Permisos disponibles** (granularidad por módulo + acción):
-- `produccion:read` / `produccion:write`
-- `stock:read` / `stock:write`
-- `contactos:read` / `contactos:write`
-- `finanzas:read` / `finanzas:write`
-- `dashboard:read`
-- Wildcards: `produccion:*`, `*:read`, `*:*`
+**Cómo se configura:** por cada rol elegís **pantalla por pantalla** qué ve (se lista cada ítem del menú de la izquierda y se marca exactamente lo permitido, ej. Stock sí / Hacienda no). Aparte están los **permisos de acción** (Crear / Editar / Eliminar) por área. Las **categorías de stock** que ve un rol salen del árbol de Categorías y Familias, así que se pueden limitar por tipo de producto.
 
 **Ejemplos de roles típicos:**
-- **Admin empresa:** todos los permisos sobre la empresa.
-- **Contable externo:** finanzas:* + stock:read + dashboard:read.
-- **Operaciones campo:** producción:* + stock:write.
-- **Solo lectura:** *:read.
+- **Admin empresa:** ve todas las pantallas y puede Crear / Editar / Eliminar en todo.
+- **Contable externo:** Finanzas y Dashboard; Stock solo lectura.
+- **Operaciones de campo:** Producción y Stock (Crear / Editar), sin Finanzas.
+- **Solo lectura:** todas las pantallas visibles, sin acciones.
+
+**Vínculo con la persona:** un usuario puede estar asociado a su **Empleado / Chofer**, para que solo vea lo suyo.
 
 #### Empresas
 
@@ -549,6 +603,31 @@ Solo accesible para Super Admin.
 - Asignar usuarios y roles.
 - Configurar integración ARCA (certificado digital, modo, punto de venta).
 - Desactivar (no se pierden datos pero no se puede operar).
+
+---
+
+### 6.9 Agenda y recordatorios
+
+**Qué hace:** un **calendario** con los vencimientos y alarmas del sistema — cheques, cuotas de crédito, arrendamientos y recordatorios manuales — con avisos automáticos (por ejemplo, revisar un cheque 7 días después de la fecha). Se puede ver por **una empresa o por todas** a la vez.
+
+### 6.10 Resumen multi-empresa
+
+**Qué hace:** consolida los indicadores (stock, cuentas por cobrar / pagar, saldos) de **todas tus empresas** en una sola pantalla, pensado para el dueño que maneja varias firmas.
+
+### 6.11 Fábrica (producción industrial)
+
+**Qué hace:** sección del menú que aparece en las empresas con **Producción industrial / Fábrica** activada (Configuración → Empresa). Reúne la molienda, el canje y las cuentas de la fábrica.
+
+- **Molienda / Fábrica:** se define una **fórmula** (grano de origen + coproductos con su % de rendimiento) y se cargan los **partes de producción** diarios con los kilos reales. En productos obtenidos se ve el **Kg estimado** (según la fórmula) al lado del **Kg real**. Los **costos indirectos** se cargan por unidad: la **luz en kWh** y el **gasoil en litros** (eligiendo el artículo y el depósito de la cisterna, que descuenta stock y toma el precio de la última compra); el resto va como "$ directo". Hay una **planilla en blanco** para imprimir (materias primas en 3 turnos y productos obtenidos con Kg inicial/obtenido/final).
+- **Costo de luz por factura:** al cargar la **factura de compra** de la luz, un check "aplica a la producción" + el período reparte el total de la factura entre los partes del período según los **kWh** de cada uno.
+- **Canje (grano):** una sola pantalla **flexible** (cuenta corriente en kilos por cliente): entró grano, se llevó producto, **liquidar en pesos** (baja el saldo en kg y genera la deuda a pagar) o ajuste. La operación completa (entra y sale junto con acuerdo fijo) queda como opción.
+- **Cuentas de Fábrica:** una sola lista por contacto con el saldo en **pesos** y en **kilos**, y —para los proveedores de grano— su cuenta en kilos (entregado, liquidado, disponible, vencimientos) con las acciones de entrega, liquidación y comprobantes. Unifica lo que antes eran "Proveedores de granos" y "Cuentas de Fábrica 360".
+
+> Para el detalle paso a paso, en **Ayuda → Instructivos** están: *Molienda / Fábrica*, *Canje (grano)* y *Cuentas de Fábrica*.
+
+### 6.12 Ficha de Cliente/Proveedor
+
+**Qué hace:** en **Comercial → Ficha Cliente/Proveedor** (reemplazó a "Compensación de cuentas"). Elegís un contacto y un rango de fechas (arranca con el último mes) y ves **todos sus movimientos** en **pesos** (ventas, compras, cobros, pagos) con el saldo neto, y —si es proveedor de grano— también en **kilos**. Desde la misma ficha hacés ventas, compras, cobros, pagos, entregas/retiros de grano y la **compensación** (neteo cliente↔proveedor, vinculando por **CUIT**). Unifica los dos roles de una misma persona sin fusionar tablas.
 
 ---
 
@@ -650,7 +729,7 @@ Solo accesible para Super Admin.
 > Estándares bancarios: HTTPS/TLS 1.3, encriptación AES-256, hash bcrypt para contraseñas, backups con retención, auditoría completa, OWASP Top 10. Firmamos NDA y los datos nunca salen de tu infraestructura.
 
 **¿Puedo ver Hacienda en algún lado?**
-> En esta versión, los KPIs del Inicio muestran "Cabezas" como dato consolidado. La gestión completa de Hacienda (categorías, pesadas, sanidad) está prevista para una próxima versión. Si es crítico para tu operatoria, lo conversamos en el alcance de implementación.
+> AgroCore tiene un módulo de **Hacienda por campo**: definís las categorías de animales por especie (bovino, porcino, ovino, etc.) desde el catálogo, registrás los movimientos de hacienda y el sistema lleva el **stock por campo**, comparando el declarado (SENASA / RENSPA) con el real. Funciona incluso sin conexión y las cabezas se consolidan también en los KPIs del Inicio.
 
 ---
 
