@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.485.0';
+const AGROCORE_VERSION = '2.486.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13097,16 +13097,17 @@ app.get('/api/canje-cta', requireCompany, requirePermission('stock:read'), async
 app.post('/api/canje-cta', requireCompany, requirePermission('stock:create'), async (req, res, next) => {
   try {
     const d = req.body || {};
-    const tipo = ['ingreso_grano', 'retiro_producto', 'ajuste'].includes(d.tipo) ? d.tipo : null;
+    const tipo = ['ingreso_grano', 'retiro_producto', 'ajuste', 'liquidacion_pesos'].includes(d.tipo) ? d.tipo : null;
     if (!tipo) return res.status(400).json({ ok: false, error: 'Tipo inválido' });
     if (!d.contactoId) return res.status(400).json({ ok: false, error: 'Elegí el cliente/proveedor' });
     const contactoTipo = d.contactoTipo === 'proveedor' ? 'proveedor' : 'cliente';
     const fecha = d.fecha ? new Date(d.fecha) : new Date();
     const cant = Number(d.cantidad) || 0;
     const factor = Number(d.factor) || 1;
+    const precioKg = Number(d.precio) || 0; // $/kg (solo liquidacion_pesos)
     const contactoNombre = d.contactoNombre || await _nombreContacto(req, contactoTipo, d.contactoId);
     // Equivalente en grano con signo + reglas por tipo.
-    let equivSoja = 0, generaStock = d.generaStock !== false, movTipo = null;
+    let equivSoja = 0, generaStock = d.generaStock !== false, movTipo = null, importeLiq = 0, obsFinal = d.observaciones || null;
     if (tipo === 'ingreso_grano') {
       if (!(cant > 0)) return res.status(400).json({ ok: false, error: 'Cantidad de grano debe ser mayor a 0' });
       equivSoja = cant;                 // deja grano → a favor del cliente
@@ -13115,6 +13116,14 @@ app.post('/api/canje-cta', requireCompany, requirePermission('stock:create'), as
       if (!(cant > 0)) return res.status(400).json({ ok: false, error: 'Cantidad de producto debe ser mayor a 0' });
       equivSoja = -(cant * factor);     // se lleva producto → descuenta su equiv. en grano
       movTipo = 'egreso';              // el producto sale de tu stock
+    } else if (tipo === 'liquidacion_pesos') {
+      // En vez de llevarse producto, se le liquidan kilos y se le pagan en pesos.
+      if (!(cant > 0)) return res.status(400).json({ ok: false, error: 'Los kilos a liquidar deben ser mayor a 0' });
+      if (!(precioKg > 0)) return res.status(400).json({ ok: false, error: 'Poné el precio ($/kg) de la liquidación' });
+      equivSoja = -cant;                // baja el saldo a favor (le liquidamos esos kilos)
+      generaStock = false;
+      importeLiq = Math.round(cant * precioKg * 100) / 100;
+      obsFinal = `Liquidación en pesos: ${cant} kg × $${precioKg}/kg = $${importeLiq}` + (d.observaciones ? ' · ' + d.observaciones : '');
     } else { // ajuste
       equivSoja = Number(d.equivSoja) || 0;   // + o - libre, en grano
       generaStock = false;
@@ -13123,7 +13132,7 @@ app.post('/api/canje-cta', requireCompany, requirePermission('stock:create'), as
       const m = await tx.canjeCtaMov.create({ data: {
         companyId: req.companyId, fecha, contactoTipo, contactoId: d.contactoId, contactoNombre,
         tipo, productoId: d.productoId || null, cantidad: cant, factor, equivSoja: Math.round(equivSoja * 100) / 100,
-        depositoId: d.depositoId || null, generaStock, observaciones: d.observaciones || null, userId: req.user?.id || null,
+        depositoId: d.depositoId || null, generaStock, observaciones: obsFinal, userId: req.user?.id || null,
       } });
       const ref = 'CANJECTA-' + m.id;
       await tx.canjeCtaMov.update({ where: { id: m.id }, data: { referencia: ref } });
@@ -13134,6 +13143,14 @@ app.post('/api/canje-cta', requireCompany, requirePermission('stock:create'), as
           contraparteTipo: contactoTipo, contraparteId: d.contactoId,
           observaciones: (tipo === 'ingreso_grano' ? 'Canje: grano recibido' : 'Canje: producto entregado') + (contactoNombre ? ' · ' + contactoNombre : ''),
           userId: req.user?.id || null,
+        } });
+      }
+      // Liquidación en pesos: genera la deuda a pagar (igual que la liquidación de granos).
+      if (tipo === 'liquidacion_pesos' && importeLiq > 0) {
+        await tx.ctaCte.create({ data: {
+          companyId: req.companyId, contactoTipo, contactoId: d.contactoId, fecha,
+          detalle: `Liquidación canje: ${cant} kg × $${precioKg}/kg`, moneda: 'ARS', cotizacion: 1,
+          haber: importeLiq, referencia: ref, observaciones: d.observaciones || null,
         } });
       }
       return m;
@@ -13147,6 +13164,7 @@ app.delete('/api/canje-cta/:id', requireCompany, requirePermission('stock:delete
     if (!m) return res.status(404).json({ ok: false, error: 'Movimiento no encontrado' });
     await prisma.$transaction(async (tx) => {
       await tx.movimiento.deleteMany({ where: { companyId: req.companyId, referencia: 'CANJECTA-' + m.id } });
+      await tx.ctaCte.deleteMany({ where: { companyId: req.companyId, referencia: 'CANJECTA-' + m.id } });
       await tx.canjeCtaMov.delete({ where: { id: m.id } });
     });
     res.json({ ok: true });

@@ -1099,8 +1099,7 @@ const MODULES = [
   { id:'fichaComercial',label:'Ficha Cliente/Proveedor',icon:'📒', perm:'finanzas:read',  section:'Comercial' },
   // Fábrica (usaProduccionIndustrial): molienda/canje/granos + ficha 360 del contacto.
   { id:'fabricaCuentas',label:'Cuentas de Fábrica', icon:'🧮', perm:'stock:read',  section:'Fábrica' },
-  { id:'canjeGrano',    label:'Plan canje (grano)',   icon:'🔁', perm:'stock:read',      section:'Fábrica' },
-  { id:'ctaCanjeGrano', label:'Cuenta canje (grano)', icon:'📒', perm:'stock:read',      section:'Fábrica' },
+  { id:'canjeGrano',    label:'Canje (grano)',        icon:'🔁', perm:'stock:read',      section:'Fábrica' },
 
   // ===== PRODUCCIÓN — herramientas compartidas (campos, campañas, insumos, labores, servicios) =====
   { id:'campos',        label:'Campos y lotes',       icon:'🗺️', perm:'produccion:read', section:'Producción' },
@@ -3135,6 +3134,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/11/2026',
+      titulo:'🔁 v2.486.0 — Canje (grano) unificado y flexible + liquidar en pesos',
+      desc:'Unificamos el canje en una <b>sola pantalla flexible</b> (se fue "Cuenta canje" como ítem aparte). Cargás el acuerdo y después registrás los movimientos a medida que pasan, sin que sea estricto: <b>🌾 entró grano</b>, <b>📦 se llevó producto</b>, <b>✏️ ajuste</b> y lo nuevo: <b>💵 Liquidar en pesos</b> — cuando en vez de llevarse producto el cliente te dice "liquidame tantos kilos y pagámelos", baja el saldo en kg y <b>genera la deuda a pagar</b> (va a Cuentas a pagar), con el precio de la <b>pizarra de soja del día</b> (editable). La <b>operación completa</b> (entra y sale junto, con acuerdo fijo) quedó como una opción dentro de la misma pantalla.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/11/2026',
       titulo:'⚡ v2.485.0 — Factura de luz que aplica a producción + Ficha arranca con el último mes',
       desc:'<b>(1) Luz:</b> en empresas <b>fábrica</b>, al cargar una <b>factura de compra</b> aparece un check <b>“Es factura de luz que aplica a la producción”</b>. Al tildarlo ponés el <b>período facturado</b> (desde/hasta) y, al guardar, el <b>total</b> de la factura se <b>reparte automáticamente entre los Partes de producción</b> de ese período según los <b>kWh</b> cargados en cada uno (y se recalcula el costo de cada parte y de los productos). <b>(2)</b> La <b>Ficha Cliente/Proveedor</b> ahora arranca con las fechas del <b>último mes</b> por defecto.' },
@@ -22158,7 +22160,7 @@ function fabCuentaVer(i){
       <div class="text-[11px] text-slate-500">+ = a favor del contacto (le debés / le falta llevar) · − = a tu favor (te debe / debe).</div>
       ${(!g.vinculado && g.clienteId && g.proveedorId)?'':(!g.vinculado?`<div class="text-[11px] text-amber-600 mt-2">⚠️ Este contacto no está vinculado como cliente↔proveedor; el neto puede estar incompleto. Vinculalo para unificarlo.</div>`:'')}`,
     footer:`
-      <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctaCanjeGrano')">📒 Canje</button>
+      <button class="btn btn-ghost text-xs" onclick="state._canjeTab='cuenta';closeModal();go('canjeGrano')">📒 Canje</button>
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('fabricaCuentas')">🌾 Granos</button>
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasCobrar')">💰 A cobrar</button>
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasPagar')">💸 A pagar</button>
@@ -32539,9 +32541,15 @@ pages.molienda = async function() {
 // Plan canje y Cuenta canje viven en Comercial (lo pidieron los usuarios). Son paginas
 // propias: reutilizan molTabCanje/molTabCtaCanje (que renderizan en #mol-body) pero sin la
 // barra de pestañas de Molienda. Arriba, un toggle para pasar de una a la otra.
-function _canjeNav(activo){
-  const B=(id,txt)=>`<button class="btn ${activo===id?'btn-primary':'btn-ghost'} text-sm" onclick="go('${id}')">${txt}</button>`;
-  return `<div class="mb-3 flex items-center gap-2 flex-wrap">${B('canjeGrano','🔁 Plan canje')} ${B('ctaCanjeGrano','📒 Cuenta canje (grano)')}</div>`;
+function _canjeNav(){
+  const t = state._canjeTab || 'plan';
+  const B=(id,txt)=>`<button class="btn ${t===id?'btn-primary':'btn-ghost'} text-sm" onclick="state._canjeTab='${id}';_canjeRender()">${txt}</button>`;
+  return `<div class="mb-3 flex items-center gap-2 flex-wrap">${B('plan','🔁 Plan canje')} ${B('cuenta','📒 Cuenta canje (cuenta corriente)')}
+    <span class="text-[11px] text-slate-500 ml-1">Dos formas del canje, en un solo lugar: <b>Plan</b> para operaciones que entran y salen completas; <b>Cuenta</b> para la cuenta corriente en kilos por cliente.</span></div>`;
+}
+function _canjeRender(){
+  $('#page-body').innerHTML = _canjeNav() + `<div id="mol-body"></div>`;
+  if ((state._canjeTab||'plan')==='cuenta') molTabCtaCanje(); else molTabCanje();
 }
 async function _canjeCargarDatos(){
   // Estas paginas viven en Comercial y se pueden abrir sin pasar por Molienda,
@@ -32554,17 +32562,13 @@ async function _canjeCargarDatos(){
   try { state._molParidades = (await api('/api/canje-paridades')).data || []; } catch { state._molParidades = state._molParidades||[]; }
 }
 pages.canjeGrano = async function(){
-  setHeader('Plan canje (grano)','Entregás producto terminado y recibís grano (o viceversa), con una paridad fija. Movimiento en especie.');
-  $('#page-body').innerHTML = _canjeNav('canjeGrano') + `<div id="mol-body"><div class="text-center text-slate-400 py-10">Cargando…</div></div>`;
-  await _canjeCargarDatos();
-  molTabCanje();
-};
-pages.ctaCanjeGrano = async function(){
-  setHeader('Cuenta canje (grano)','Saldo en kilos de grano con cada cliente: cuánto entró, cuánto se llevó y cuánto falta/sobra.');
-  $('#page-body').innerHTML = _canjeNav('ctaCanjeGrano') + `<div id="mol-body"><div class="text-center text-slate-400 py-10">Cargando…</div></div>`;
+  setHeader('Canje (grano)','Cuenta corriente flexible del canje: entra grano, retira producto, liquidá en pesos o ajustá — todo en un solo lugar. La operación completa (entra y sale junto) está como opción.');
+  $('#page-body').innerHTML = `<div id="mol-body"><div class="text-center text-slate-400 py-10">Cargando…</div></div>`;
   await _canjeCargarDatos();
   molTabCtaCanje();
 };
+// Alias: "Cuenta canje" ahora es la misma pantalla flexible de Canje (grano).
+pages.ctaCanjeGrano = async function(){ return pages.canjeGrano(); };
 function molRender() {
   const tab = state._molTab || 'partes';
   const T = (id,txt)=>`<button class="btn ${tab===id?'btn-primary':'btn-ghost'} text-sm" onclick="state._molTab='${id}';molRender()">${txt}</button>`;
@@ -33069,7 +33073,7 @@ function molTabCanje() {
       • <b>🔁 Plan canje</b> (esta pantalla): cada operación <b>entra y sale completa</b> con una <b>paridad fija</b> (ej. entrego expeller y recibo soja de una).<br>
       • <b>📒 Cuenta canje (grano)</b>: <b>cuenta corriente</b> por cliente, cuando <b>a veces entrega y a veces saca</b> distinto. Ahí ves todos los movimientos y el saldo.<br>
       Si ya cargás en una, <b>no vuelvas a cargar lo mismo en la otra</b>.</span>
-      <button class="btn btn-secondary btn-sm" onclick="go('ctaCanjeGrano')">📒 Ir a la Cuenta canje</button>
+      <button class="btn btn-secondary btn-sm" onclick="molTabCtaCanje()">← Volver a la cuenta flexible</button>
     </div>
     <div class="mb-3">${can('stock:create')?`<button class="btn btn-primary" onclick="molCanjeForm()">+ Nueva operación de canje</button>`:''}</div>
     <div class="kpi overflow-x-auto mb-4"><table class="table w-full text-sm">
@@ -33260,11 +33264,13 @@ async function molTabCtaCanje() {
     <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900 mb-3">
       <b>Cómo funciona:</b> es la <b>cuenta corriente</b> del cliente. Cargás cada movimiento a medida que pasa: 1) <b>Entró grano</b>: el cliente deja soja → le queda saldo <b>a favor</b>. 2) <b>Se llevó producto</b>: cada retiro descuenta su equivalente en grano (según la paridad que pongas). El saldo (en kg de soja) te dice si <b>le falta llevar</b> (+) o <b>se pasó / debe</b> (−).
     </div>
-    <div class="bg-amber-50 border border-amber-300 rounded-lg p-2.5 text-[12px] text-amber-900 mb-3"><b>⚠️ Ojo:</b> esta es <b>una de las dos formas</b> de llevar el canje. Si una operación ya la cargaste en <b>🔁 Plan canje</b>, <b>no la cargues también acá</b> (se duplicaría el saldo). Usá <b>Plan canje</b> para operaciones que entran y salen completas, y <b>esta cuenta</b> cuando el cliente a veces entrega y a veces saca distinto.</div>
-    <div class="mb-3 flex gap-2 flex-wrap">
+    <div class="mb-3 flex gap-2 flex-wrap items-center">
       ${can('stock:create')?`<button class="btn btn-primary" onclick="molCtaCanjeForm('ingreso_grano')">🌾 Entró grano del cliente</button>
       <button class="btn btn-secondary" onclick="molCtaCanjeForm('retiro_producto')">📦 Se llevó producto</button>
+      <button class="btn btn-secondary" onclick="molCtaCanjeForm('liquidacion_pesos')" title="En vez de llevarse producto, le liquidás kilos y se los pagás (deuda en pesos)">💵 Liquidar en pesos</button>
       <button class="btn btn-ghost" onclick="molCtaCanjeForm('ajuste')">✏️ Ajuste manual</button>`:''}
+      <span class="mx-1 text-slate-300">|</span>
+      <button class="btn btn-ghost text-sm" onclick="molTabCanje()" title="Operación completa: entregás producto y recibís grano en un solo paso (acuerdo fijo)">🔁 Operación completa</button>
     </div>
     ${precioSojaTn>0 ? `<div class="text-[11px] text-slate-500 mb-2">💲 Saldos valorizados a la <b>soja de hoy</b>: ${fmt$(precioSojaTn)}/tn${totalPesos!=null?` · Total del grupo: <b class="${totalKg>0?'text-emerald-700':(totalKg<0?'text-red-600':'')}">${totalKg>0?'+':''}${_ccKg(totalKg)} kg ≈ ${totalPesos>0?'+':''}${fmt$(Math.abs(totalPesos)*(totalKg<0?-1:1))}</b>`:''}</div>` : `<div class="text-[11px] text-amber-600 mb-2">Sin cotización de soja de hoy: los saldos se muestran solo en kg. (El valor en pesos aparece cuando hay pizarra del día.)</div>`}
     <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
@@ -33282,19 +33288,24 @@ function molCtaCanjeForm(tipo, presetContacto) {
   const optD = `<option value="">— Sin depósito —</option>`+deps.map(d=>`<option value="${esc(d.id)}">${esc(d.nombre)}</option>`).join('');
   const prods = (state.cache.productos||[]).filter(p=>p.activo!==false).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
   const optP = `<option value="">— Elegir producto —</option>`+prods.map(p=>`<option value="${esc(p.id)}">${esc(p.nombre)} (${esc(p.unidad||'kg')})</option>`).join('');
-  const titulo = tipo==='ingreso_grano'?'🌾 Entró grano del cliente':(tipo==='retiro_producto'?'📦 Se llevó producto':'✏️ Ajuste de saldo (en grano)');
-  const esRetiro = tipo==='retiro_producto', esAjuste = tipo==='ajuste', esIngreso = tipo==='ingreso_grano';
+  const titulo = tipo==='ingreso_grano'?'🌾 Entró grano del cliente':(tipo==='retiro_producto'?'📦 Se llevó producto':(tipo==='liquidacion_pesos'?'💵 Liquidar en pesos (pagar kilos)':'✏️ Ajuste de saldo (en grano)'));
+  const esRetiro = tipo==='retiro_producto', esAjuste = tipo==='ajuste', esIngreso = tipo==='ingreso_grano', esLiq = tipo==='liquidacion_pesos';
+  const precioSojaTn = Number((state.cache.cotizVivas||{}).SOJA||0);
+  const _pizKg = precioSojaTn>0 ? Math.round(precioSojaTn/1000*10000)/10000 : '';
   openModal({
     title: titulo, size:'max-w-xl',
     body:`<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
       <div class="md:col-span-2"><label class="label">Cliente / Proveedor *</label><select id="cc-cont" class="input">${_ccContactoOpts(presetContacto)}</select></div>
       <div><label class="label">Fecha *</label><input id="cc-fecha" type="date" class="input" value="${new Date().toISOString().slice(0,10)}"/></div>
-      ${!esAjuste?`<div><label class="label">${esIngreso?'Grano que deja':'Producto que se lleva'} *</label><select id="cc-prod" class="input">${optP}</select></div>
+      ${(esIngreso||esRetiro)?`<div><label class="label">${esIngreso?'Grano que deja':'Producto que se lleva'} *</label><select id="cc-prod" class="input">${optP}</select></div>
       <div><label class="label">Cantidad (kg) *</label><input id="cc-cant" type="number" step="0.01" class="input" oninput="molCtaCanjeCalc()"/></div>`:''}
       ${esRetiro?`<div><label class="label">Equivale a (kg soja por 1 kg producto) *</label><input id="cc-factor" type="number" step="0.0001" class="input" value="1" oninput="molCtaCanjeCalc()"/><div class="text-[10px] text-slate-400 mt-1">Ej.: si 1 kg de expeller equivale a 1,2 kg de soja, poné 1,2.</div></div>
       <div class="md:col-span-2 text-sm bg-slate-50 rounded p-2" id="cc-prev">—</div>`:''}
+      ${esLiq?`<div><label class="label">Kilos a liquidar *</label><input id="cc-cant" type="number" step="0.01" class="input" oninput="molCtaCanjeCalc()"/></div>
+      <div><label class="label">Precio ($/kg) *</label><input id="cc-precio" type="number" step="0.0001" class="input" value="${_pizKg}" oninput="molCtaCanjeCalc()"/><div class="text-[10px] text-slate-400 mt-1">${precioSojaTn>0?`Pizarra soja hoy: $${_pizKg}/kg ($${fmtN(precioSojaTn)}/tn). Editable.`:'Poné el precio por kg (podés usar la pizarra de soja).'}</div></div>
+      <div class="md:col-span-2 text-sm bg-amber-50 rounded p-2" id="cc-prev">—</div>`:''}
       ${esAjuste?`<div><label class="label">Ajuste en kg de soja (+ a favor / − en contra) *</label><input id="cc-equiv" type="number" step="0.01" class="input" placeholder="ej. -500"/></div>`:''}
-      ${!esAjuste?`<div class="md:col-span-2"><label class="label">Depósito (mueve stock)</label><select id="cc-dep" class="input">${optD}</select><div class="text-[10px] text-slate-400 mt-1">${esIngreso?'El grano ENTRA a este depósito.':'El producto SALE de este depósito.'} Dejá vacío si no querés mover stock.</div></div>`:''}
+      ${(esIngreso||esRetiro)?`<div class="md:col-span-2"><label class="label">Depósito (mueve stock)</label><select id="cc-dep" class="input">${optD}</select><div class="text-[10px] text-slate-400 mt-1">${esIngreso?'El grano ENTRA a este depósito.':'El producto SALE de este depósito.'} Dejá vacío si no querés mover stock.</div></div>`:''}
       <div class="md:col-span-2"><label class="label">Observaciones</label><input id="cc-obs" class="input" placeholder="remito, nota…"/></div>
     </div>`,
     footer:`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="molCtaCanjeSave('${tipo}')">💾 Guardar</button>`
@@ -33303,7 +33314,13 @@ function molCtaCanjeForm(tipo, presetContacto) {
 }
 function molCtaCanjeCalc(){
   const prev=$('#cc-prev'); if(!prev) return;
-  const cant=Number($('#cc-cant')?.value||0), f=Number($('#cc-factor')?.value||1);
+  const cant=Number($('#cc-cant')?.value||0);
+  if ($('#cc-precio')) { // liquidación en pesos
+    const pr=Number($('#cc-precio')?.value||0);
+    prev.innerHTML = (cant>0&&pr>0) ? `Se liquidan <b>${_ccKg(cant)} kg</b> × $${pr}/kg = <b>${fmt$(cant*pr)}</b> → <b>deuda a pagar</b> al contacto, y baja su saldo en <b>${_ccKg(cant)} kg</b>.` : 'Ingresá kilos y precio.';
+    return;
+  }
+  const f=Number($('#cc-factor')?.value||1);
   prev.innerHTML = cant>0 ? `Descuenta <b>${_ccKg(cant*f)} kg de soja</b> del saldo del cliente.` : 'Ingresá la cantidad para ver el equivalente en soja.';
 }
 async function molCtaCanjeSave(tipo){
@@ -33313,9 +33330,16 @@ async function molCtaCanjeSave(tipo){
     fecha: $('#cc-fecha')?.value ? new Date($('#cc-fecha').value+'T12:00:00').toISOString() : undefined,
     productoId: $('#cc-prod')?.value || null, cantidad: Number($('#cc-cant')?.value||0),
     factor: Number($('#cc-factor')?.value||1), equivSoja: Number($('#cc-equiv')?.value||0),
+    precio: Number($('#cc-precio')?.value||0),
     depositoId: $('#cc-dep')?.value || null, observaciones: $('#cc-obs')?.value||null };
-  if (tipo!=='ajuste' && !(body.cantidad>0)) return toast('Cargá la cantidad','warn');
-  if (tipo!=='ajuste' && !body.productoId) return toast('Elegí el producto','warn');
+  if ((tipo==='ingreso_grano'||tipo==='retiro_producto')) {
+    if (!(body.cantidad>0)) return toast('Cargá la cantidad','warn');
+    if (!body.productoId) return toast('Elegí el producto','warn');
+  }
+  if (tipo==='liquidacion_pesos') {
+    if (!(body.cantidad>0)) return toast('Cargá los kilos a liquidar','warn');
+    if (!(body.precio>0)) return toast('Poné el precio ($/kg)','warn');
+  }
   if (tipo==='ajuste' && !body.equivSoja) return toast('Poné el ajuste en kg de soja','warn');
   try {
     await api('/api/canje-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Guardado','success'); closeModal();
