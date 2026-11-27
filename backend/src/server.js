@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.478.0';
+const AGROCORE_VERSION = '2.479.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12418,8 +12418,17 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
       const mermaSecadoKg = d.mermaSecadoKg != null && d.mermaSecadoKg !== '' ? Number(d.mermaSecadoKg) || 0 : null;
       // Costos indirectos individualizados (luz, gasoil, personal…). Si vienen, su suma
       // es el costo de produccion del lote; si no, se usa el costoProduccion suelto.
+      // v2.479: cada costo indirecto puede venir por unidad (luz en kWh, gasoil en litros)
+      // además del importe en $. Guardamos cantidad/unidad/precioUnit para poder valorarlos
+      // luego contra el precio del gasoil comprado o la factura de luz.
       const costosIndirectos = Array.isArray(d.costosIndirectos)
-        ? d.costosIndirectos.map(c => ({ concepto: String(c.concepto || '').trim() || 'Otros', importe: Number(c.importe) || 0 })).filter(c => c.importe > 0)
+        ? d.costosIndirectos.map(c => ({
+            concepto: String(c.concepto || '').trim() || 'Otros',
+            unidad: (c.unidad === 'kwh' || c.unidad === 'litro') ? c.unidad : 'peso',
+            cantidad: (c.cantidad != null && c.cantidad !== '') ? Number(c.cantidad) : null,
+            precioUnit: (c.precioUnit != null && c.precioUnit !== '') ? Number(c.precioUnit) : null,
+            importe: Number(c.importe) || 0,
+          })).filter(c => c.importe > 0 || (c.unidad !== 'peso' && c.cantidad > 0))
         : null;
       const costoProdLote = (costosIndirectos && costosIndirectos.length)
         ? _round2(costosIndirectos.reduce((a, c) => a + c.importe, 0))
@@ -13151,6 +13160,87 @@ app.get('/api/fabrica/cuentas-360', requireCompany, requirePermission('stock:rea
       }))
       .sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
     res.json({ ok: true, data });
+  } catch (e) { next(e); }
+});
+// ============================================================
+// FICHA UNIFICADA de un contacto (Cliente/Proveedor) — v2.479
+//   Junta TODO lo de un contacto en una sola ficha, relacionando cliente y
+//   proveedor por su vinculoId (misma persona). Devuelve:
+//   - saldos $ (a cobrar del cliente, a pagar al proveedor, neto)
+//   - detalle de movimientos en $ (CtaCte de ambos roles) con saldo neto corrido
+//   - detalle de movimientos en Kg (grano pendiente + canje) con saldo corrido
+//     (solo si el contacto es proveedor de grano / tiene actividad en kg)
+//   NO fusiona tablas: usa el vinculoId existente (enfoque elegido).
+// ============================================================
+app.get('/api/contacto-ficha', requireCompany, requirePermission('finanzas:read'), async (req, res, next) => {
+  try {
+    const companyId = req.companyId;
+    let clienteId = req.query.clienteId ? String(req.query.clienteId) : null;
+    let proveedorId = req.query.proveedorId ? String(req.query.proveedorId) : null;
+    if (!clienteId && !proveedorId) return res.status(400).json({ ok: false, error: 'Indicá clienteId y/o proveedorId' });
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+    let cli = clienteId ? await prisma.cliente.findFirst({ where: { id: clienteId, companyId } }) : null;
+    let prov = proveedorId ? await prisma.proveedor.findFirst({ where: { id: proveedorId, companyId } }) : null;
+    // Resolver el otro rol por vinculoId si falta (para unificar siempre).
+    if (cli && !prov && cli.vinculoId) { prov = await prisma.proveedor.findFirst({ where: { companyId, vinculoId: cli.vinculoId } }); }
+    if (prov && !cli && prov.vinculoId) { cli = await prisma.cliente.findFirst({ where: { companyId, vinculoId: prov.vinculoId } }); }
+    clienteId = cli?.id || null; proveedorId = prov?.id || null;
+    if (!cli && !prov) return res.status(404).json({ ok: false, error: 'Contacto no encontrado' });
+
+    const nombre = cli?.razonSocial || prov?.razonSocial || '—';
+    const cuit = cli?.cuit || prov?.cuit || null;
+    const esGranos = !!prov?.esGranos;
+    const vinculado = !!(cli?.vinculoId && prov?.vinculoId && cli.vinculoId === prov.vinculoId);
+
+    // ---- Movimientos en $ (CtaCte ARS de ambos roles) ----
+    const orCta = [];
+    if (clienteId) orCta.push({ contactoTipo: 'cliente', contactoId: clienteId });
+    if (proveedorId) orCta.push({ contactoTipo: 'proveedor', contactoId: proveedorId });
+    const ctas = await prisma.ctaCte.findMany({
+      where: { companyId, moneda: 'ARS', OR: orCta },
+      orderBy: [{ fecha: 'asc' }, { createdAt: 'asc' }],
+    });
+    let saldoCobrar = 0, saldoPagar = 0, net = 0;
+    const movDinero = ctas.map(c => {
+      const base = Number(c.debe || 0) - Number(c.haber || 0);
+      if (c.contactoTipo === 'cliente') saldoCobrar += base; else saldoPagar += base;
+      // Neto desde NUESTRO lado: + = nos deben (a favor nuestro); - = debemos.
+      const delta = c.contactoTipo === 'cliente' ? base : -base;
+      net = r2(net + delta);
+      return { fecha: c.fecha, detalle: c.detalle, referencia: c.referencia || null, rol: c.contactoTipo, delta: r2(delta), saldo: net };
+    });
+
+    // ---- Movimientos en Kg (grano pendiente + canje) ----
+    // Convención de signo: + = a favor del contacto (le debemos / le falta llevar).
+    const movKgRaw = [];
+    if (proveedorId) {
+      const g = await prisma.granoCtaMov.findMany({ where: { companyId, proveedorId }, orderBy: [{ fecha: 'asc' }, { createdAt: 'asc' }] });
+      for (const m of g) {
+        const et = m.tipo === 'entrega' ? 'Entrega de grano' : (m.tipo === 'liquidacion' ? 'Liquidación' : 'Ajuste');
+        movKgRaw.push({ fecha: m.fecha, createdAt: m.createdAt, detalle: `${et}${m.numeroComprobante ? ' · ' + m.numeroComprobante : ''} · ${r2(m.kilos)} kg${m.importe ? ' · $' + r2(m.importe) : ''}`, kg: r2(m.kilosNeto), origen: 'grano' });
+      }
+    }
+    const orCanje = [];
+    if (clienteId) orCanje.push({ contactoTipo: 'cliente', contactoId: clienteId });
+    if (proveedorId) orCanje.push({ contactoTipo: 'proveedor', contactoId: proveedorId });
+    if (orCanje.length) {
+      const cj = await prisma.canjeCtaMov.findMany({ where: { companyId, OR: orCanje }, orderBy: [{ fecha: 'asc' }, { createdAt: 'asc' }] });
+      for (const m of cj) {
+        const et = m.tipo === 'ingreso_grano' ? 'Dejó grano (canje)' : (m.tipo === 'retiro_producto' ? 'Retiró producto (canje)' : 'Ajuste canje');
+        movKgRaw.push({ fecha: m.fecha, createdAt: m.createdAt, detalle: `${et} · ${r2(m.cantidad)} kg`, kg: r2(m.equivSoja), origen: 'canje' });
+      }
+    }
+    movKgRaw.sort((a, b) => new Date(a.fecha) - new Date(b.fecha) || new Date(a.createdAt) - new Date(b.createdAt));
+    let saldoKg = 0;
+    const movKg = movKgRaw.map(m => { saldoKg = r2(saldoKg + m.kg); return { fecha: m.fecha, detalle: m.detalle, kg: m.kg, saldo: saldoKg, origen: m.origen }; });
+    const tieneKg = esGranos || movKg.length > 0;
+
+    res.json({ ok: true, data: {
+      nombre, cuit, clienteId, proveedorId, esGranos, vinculado,
+      saldoCobrar: r2(saldoCobrar), saldoPagar: r2(saldoPagar), saldoNetoArs: r2(saldoCobrar - saldoPagar),
+      movDinero, tieneKg, saldoKg: r2(saldoKg), movKg,
+    }});
   } catch (e) { next(e); }
 });
 // Libro (ledger) en kilos de un proveedor, con saldo acumulado.

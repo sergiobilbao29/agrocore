@@ -3136,6 +3136,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'26/11/2026',
+      titulo:'🏭 v2.479.0 — Parte de producción (estimado vs real, luz/gasoil por unidad) + Ficha unificada Cliente/Proveedor',
+      desc:'Dos cosas grandes. <b>(1) Parte de producción de fábrica:</b> en los <b>productos obtenidos</b> ahora ves el <b>Kg estimado</b> según la fórmula al lado del <b>Kg real</b> que cargás a mano; y los <b>costos indirectos</b> se cargan por <b>unidad</b> — la <b>luz en kWh</b> y el <b>gasoil en litros</b> con su <b>$/unidad</b> (lo sacás de la factura de luz o del precio del gasoil comprado) y el importe se calcula solo. <b>(2) Ficha unificada de Cliente/Proveedor:</b> botón <b>📒 Ficha</b> en Clientes, Proveedores y en Cuentas de Fábrica (360). Junta en un solo lugar <b>todos los movimientos</b> de ese contacto: en <b>pesos</b> (ventas, compras, cobros, pagos) con el <b>saldo neto</b>, y en <b>kilos</b> (grano + canje) con su saldo —esta parte solo aparece si es proveedor de grano—. Relaciona cliente y proveedor por el <b>vínculo/CUIT</b> (sin fusionar tablas), y desde ahí accedés a venta, compra, cobro, pago, grano y compensación.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'26/11/2026',
       titulo:'🖨️ v2.478.0 — Planilla de molienda en 1 hoja + copiar catálogos a fábrica aislada',
       desc:'Dos arreglos. <b>(1)</b> La <b>planilla en blanco de Molienda</b> ahora entra en <b>una sola hoja</b> (antes salían dos) y dejamos de forzar el modo horizontal, así podés elegir la orientación desde el diálogo de impresión. <b>(2)</b> Al <b>copiar catálogos</b> a una empresa con <b>“Catálogo propio”</b> (ej. una fábrica aislada), antes copiaba 0 sin explicar por qué. Ahora te <b>avisa</b> cuando se saltea una empresa por tener catálogo propio, y agregamos la opción <b>“Copiar igual a empresas con Catálogo propio”</b> para forzar la copia cuando la elegís a mano.' },
@@ -7746,6 +7749,7 @@ pages.clientes = async function() {
               <td>${esc(c.localidad||'—')}</td>
               <td class="text-right ${saldo>0?'text-amber-600 font-semibold':''}">${saldo?fmt$(saldo):'—'}</td>
               <td class="text-right whitespace-nowrap">
+                <button class="btn btn-ghost text-xs" title="Ficha unificada: todos los movimientos en $ y kg" onclick='fichaContacto(${JSON.stringify(c.id)},null)'>📒 Ficha</button>
                 ${state.usaProduccionIndustrial ? `<button class="btn btn-ghost text-xs" title="Saldo en kilos (granos)" onclick='ccSaldoGranos("cliente",${JSON.stringify(c.id)},${JSON.stringify(c.razonSocial)})'>📦 kg</button>` : ''}
                 ${can('contactos:update') ? `<button class="btn btn-ghost text-xs" onclick='clienteForm(${JSON.stringify(c.id)})'>✏️</button>` : ''}
                 ${can('contactos:delete') ? `<button class="btn btn-ghost text-xs text-red-600" onclick='clienteDel(${JSON.stringify(c.id)})'>🗑️</button>` : ''}
@@ -8008,6 +8012,7 @@ pages.proveedores = async function() {
               <td>${esc(p.localidad||'—')}</td>
               <td class="text-right ${hayDeuda(m)?'text-red-600 font-semibold':''}">${fmtSaldos(m)}</td>
               <td class="text-right whitespace-nowrap">
+                <button class="btn btn-ghost text-xs" title="Ficha unificada: todos los movimientos en $ y kg" onclick='fichaContacto(null,${JSON.stringify(p.id)})'>📒 Ficha</button>
                 ${state.usaProduccionIndustrial ? `<button class="btn btn-ghost text-xs" title="Saldo en kilos (granos)" onclick='ccSaldoGranos("proveedor",${JSON.stringify(p.id)},${JSON.stringify(p.razonSocial)})'>📦 kg</button>` : ''}
                 ${can('contactos:update') ? `<button class="btn btn-ghost text-xs" onclick='provForm(${JSON.stringify(p.id)})'>✏️</button>`:''}
                 ${can('contactos:delete') ? `<button class="btn btn-ghost text-xs text-red-600" onclick='provDel(${JSON.stringify(p.id)})'>🗑️</button>`:''}
@@ -22086,6 +22091,59 @@ function fabCuentaVer(i){
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasCobrar')">💰 A cobrar</button>
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasPagar')">💸 A pagar</button>
       ${(!g.vinculado && can('contactos:update'))?`<button class="btn btn-secondary text-xs" onclick="closeModal();contactoVincularForm()">🔗 Vincular</button>`:''}
+      <button class="btn btn-secondary text-xs" onclick='closeModal();fichaContacto(${JSON.stringify(g.clienteId)},${JSON.stringify(g.proveedorId)})'>📒 Ver movimientos</button>
+      <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
+  });
+}
+
+// ===== FICHA UNIFICADA de un contacto (Cliente/Proveedor) — v2.479 =====
+// Trae el detalle de TODOS los movimientos del contacto (en $ y en kg),
+// unificando cliente y proveedor por su vínculo. La parte de kg solo aparece
+// si es proveedor de grano / tiene canje.
+async function fichaContacto(clienteId, proveedorId){
+  const qs = [clienteId?('clienteId='+encodeURIComponent(clienteId)):null, proveedorId?('proveedorId='+encodeURIComponent(proveedorId)):null].filter(Boolean).join('&');
+  if(!qs) return toast('Falta el contacto','warn');
+  let d; try { d = (await api('/api/contacto-ficha?'+qs)).data; } catch(e){ return toast(e.message,'error'); }
+  const _kg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{maximumFractionDigits:2})+' kg';
+  const chips = [ d.clienteId?'<span class="badge badge-blue text-[10px]">Cliente</span>':'', d.proveedorId?'<span class="badge badge-amber text-[10px]">Proveedor</span>':'', d.esGranos?'<span class="badge badge-green text-[10px]">🌾 Granos</span>':'', d.vinculado?'<span class="text-[10px] text-slate-400">🔗 vinculado</span>':'' ].filter(Boolean).join(' ');
+  const dineroRows = d.movDinero.length ? d.movDinero.map(m=>`<tr>
+      <td class="whitespace-nowrap">${fmtFecha(m.fecha)}</td>
+      <td>${esc(m.detalle||'')}${m.referencia?` <span class="text-[10px] text-slate-400 font-mono">${esc(m.referencia)}</span>`:''}</td>
+      <td class="text-[10px] text-slate-400">${m.rol==='cliente'?'venta/cobro':'compra/pago'}</td>
+      <td class="text-right ${m.delta>=0?'text-emerald-700':'text-amber-700'}">${m.delta>=0?'+':''}${fmt$(m.delta)}</td>
+      <td class="text-right font-medium ${m.saldo>=0?'text-emerald-700':'text-amber-700'}">${fmt$(m.saldo)}</td></tr>`).join('') : `<tr><td colspan="5" class="text-center text-slate-400 py-3">Sin movimientos en pesos.</td></tr>`;
+  const kgRows = (d.movKg||[]).length ? d.movKg.map(m=>`<tr>
+      <td class="whitespace-nowrap">${fmtFecha(m.fecha)}</td>
+      <td>${esc(m.detalle||'')}</td>
+      <td class="text-right ${m.kg>=0?'text-emerald-700':'text-red-600'}">${m.kg>=0?'+':''}${_kg(m.kg)}</td>
+      <td class="text-right font-medium">${_kg(m.saldo)}</td></tr>`).join('') : `<tr><td colspan="4" class="text-center text-slate-400 py-3">Sin movimientos en kilos.</td></tr>`;
+  openModal({
+    title:'📒 Ficha de '+esc(d.nombre), size:'max-w-3xl',
+    body:`
+      <div class="flex items-center gap-2 mb-2 flex-wrap">${chips}${d.cuit?`<span class="text-xs text-slate-500 font-mono ml-auto">CUIT ${esc(d.cuit)}</span>`:''}</div>
+      <div class="kpi mb-3">
+        <div class="flex flex-wrap gap-4 text-xs mb-2">
+          <div>Te debe (cliente): <b class="text-emerald-700">${fmt$(d.saldoCobrar)}</b></div>
+          <div>Le debés (proveedor): <b class="text-amber-700">${fmt$(d.saldoPagar)}</b></div>
+          <div>Neto $: <b class="${d.saldoNetoArs>=0?'text-emerald-700':'text-amber-700'}">${fmt$(d.saldoNetoArs)}</b> ${d.saldoNetoArs>=0?'(a tu favor)':'(a favor del contacto)'}</div>
+        </div>
+        <div class="text-xs font-semibold text-slate-500 mb-1">💵 Movimientos en pesos</div>
+        <div class="overflow-x-auto" style="max-height:300px;overflow-y:auto"><table class="table w-full text-sm"><thead><tr><th>Fecha</th><th>Detalle</th><th>Tipo</th><th class="text-right">Importe</th><th class="text-right">Saldo neto</th></tr></thead><tbody>${dineroRows}</tbody></table></div>
+        <div class="text-[11px] text-slate-400 mt-1">Desde tu lado: <b>+</b> = te debe (a cobrar), <b>−</b> = le debés (a pagar).</div>
+      </div>
+      ${d.tieneKg?`<div class="kpi mb-3">
+        <div class="flex flex-wrap gap-4 text-xs mb-2"><div>Saldo en kilos: <b class="${d.saldoKg>=0?'text-emerald-700':'text-red-600'}">${d.saldoKg>=0?'+':''}${_kg(d.saldoKg)}</b> ${d.saldoKg>=0?'(le falta llevar / le debés)':'(se llevó de más)'}</div></div>
+        <div class="text-xs font-semibold text-slate-500 mb-1">⚖️ Movimientos en kilos (grano + canje)</div>
+        <div class="overflow-x-auto" style="max-height:260px;overflow-y:auto"><table class="table w-full text-sm"><thead><tr><th>Fecha</th><th>Detalle</th><th class="text-right">Kg</th><th class="text-right">Saldo kg</th></tr></thead><tbody>${kgRows}</tbody></table></div>
+        <div class="text-[11px] text-slate-400 mt-1">Solo para proveedores de grano / con canje. <b>+</b> = dejó grano (le debés kg), <b>−</b> = retiró producto.</div>
+      </div>`:''}`,
+    footer:`
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('facturacion')">🧾 Venta</button>
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('compras')">🛒 Compra</button>
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasCobrar')">💰 Cobrar</button>
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasPagar')">💸 Pagar</button>
+      ${d.esGranos?`<button class="btn btn-ghost text-xs" onclick="closeModal();go('proveedoresGranos')">🌾 Grano</button>`:''}
+      ${(d.clienteId&&d.proveedorId)?`<button class="btn btn-secondary text-xs" onclick='closeModal();compensarForm(${JSON.stringify(d.clienteId)},${JSON.stringify(d.proveedorId)})'>🔀 Compensar</button>`:''}
       <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
   });
 }
@@ -32399,7 +32457,8 @@ function molMpRow(pre){ pre=pre||{};
 function molSalRow(pre){ pre=pre||{};
   return `<tr data-salr>
     <td><select class="input text-sm" data-sl="prod" onchange="molParteCalc()">${_mpProdOpts(pre.productoId)}</select></td>
-    <td><input type="number" step="0.01" class="input text-sm text-right" data-sl="kg" style="width:110px" placeholder="kg" value="${pre.kg!=null?pre.kg:''}" oninput="molParteCalc()"/></td>
+    <td class="text-right text-slate-400 text-xs" title="Estimado según la fórmula (kg procesados × rendimiento)"><span data-sl="est" data-rend="${pre.rend!=null?pre.rend:''}">—</span></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-sl="kg" style="width:100px" placeholder="kg real" value="${pre.kg!=null?pre.kg:''}" oninput="molParteCalc()"/></td>
     <td><select class="input text-sm" data-sl="dep" style="width:130px">${_molDepOpts(pre.depositoId)}</select></td>
     <td class="text-center"><input type="checkbox" data-sl="merma" ${pre.esMerma?'checked':''} onchange="molParteCalc()" title="Es merma/desperdicio (no ingresa stock ni lleva costo)"/></td>
     <td class="text-center"><button class="btn btn-ghost btn-xs text-red-600" onclick="this.closest('tr').remove();molParteCalc()">✕</button></td></tr>`;
@@ -32415,7 +32474,7 @@ function molFormulaChange(){
   (f.items||[]).filter(i=>i.esEntrada).forEach(i=>mps.push({productoId:i.productoId, costoUnit:_molProdCosto(i.productoId), depositoId:i.depositoDestinoId||null}));
   mb.innerHTML = mps.map(m=>molMpRow(m)).join('');
   // Salidas: coproductos de la fórmula (no entradas)
-  const sals=(f.items||[]).filter(i=>!i.esEntrada).map(i=>({productoId:i.productoId, esMerma:!!i.esMerma, depositoId:i.depositoDestinoId||null}));
+  const sals=(f.items||[]).filter(i=>!i.esEntrada).map(i=>({productoId:i.productoId, esMerma:!!i.esMerma, depositoId:i.depositoDestinoId||null, rend:i.rendimientoPct}));
   sb.innerHTML = sals.map(s=>molSalRow(s)).join('');
   molParteCalc();
 }
@@ -32427,6 +32486,8 @@ function molParteCalc(){
   const mermaSec=Number($('#mol-mermasec')?.value||0);
   const costoProd=_molCostoProd();
   const kgProc=mps.reduce((a,m)=>a+m.kg,0);
+  // Actualizar la columna "Estimado" de cada producto obtenido (kg procesados × rendimiento de la fórmula).
+  $$('#mol-sal-body tr[data-salr]').forEach(tr=>{ const sp=tr.querySelector('[data-sl="est"]'); if(sp){ const rend=Number(sp.dataset.rend||0); sp.textContent = (rend>0 && kgProc>0) ? _molKg(Math.round(kgProc*rend/100*100)/100) : '—'; } });
   const costoMp=mps.reduce((a,m)=>a+m.kg*m.costoUnit,0);
   const costoTotal=Math.round((costoMp+costoProd)*100)/100;
   const kgSal=sals.reduce((a,s)=>a+s.kg,0);
@@ -32459,14 +32520,38 @@ function molParteCalc(){
     <div class="text-[11px] text-slate-400 mt-1">El "Valor de venta" usa el precio de referencia de cada producto (lo cargás en el Catálogo). Los kg quedan registrados aunque no tengan precio.</div></div>`;
 }
 function molCiRow(pre){ pre=pre||{};
+  const u=pre.unidad||'peso'; const esP=(u==='peso');
   return `<tr data-cir>
     <td><input class="input text-sm" data-ci="concepto" placeholder="ej. Luz" value="${esc(pre.concepto||'')}"/></td>
-    <td><input type="number" step="0.01" class="input text-sm text-right" data-ci="importe" style="width:130px" placeholder="$" value="${pre.importe!=null?pre.importe:''}" oninput="molParteCalc()"/></td>
+    <td><select class="input text-sm" data-ci="unidad" style="width:120px" onchange="molCiUnidad(this)">
+        <option value="peso" ${u==='peso'?'selected':''}>$ (directo)</option>
+        <option value="kwh" ${u==='kwh'?'selected':''}>kWh (luz)</option>
+        <option value="litro" ${u==='litro'?'selected':''}>Litros (gasoil)</option></select></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-ci="cantidad" style="width:90px" placeholder="${esP?'—':'cant.'}" value="${pre.cantidad!=null?pre.cantidad:''}" ${esP?'disabled':''} oninput="molCiCalc(this)"/></td>
+    <td><input type="number" step="0.0001" class="input text-sm text-right" data-ci="precio" style="width:90px" placeholder="${esP?'—':'$/u'}" value="${pre.precioUnit!=null?pre.precioUnit:''}" ${esP?'disabled':''} oninput="molCiCalc(this)"/></td>
+    <td><input type="number" step="0.01" class="input text-sm text-right" data-ci="importe" style="width:120px" placeholder="$" value="${pre.importe!=null?pre.importe:''}" ${esP?'':'readonly'} oninput="molParteCalc()"/></td>
     <td class="text-center"><button class="btn btn-ghost btn-xs text-red-600" onclick="this.closest('tr').remove();molParteCalc()">✕</button></td></tr>`;
 }
+function molCiUnidad(sel){ const tr=sel.closest('tr'); const esP=(sel.value==='peso');
+  const cant=tr.querySelector('[data-ci="cantidad"]'), pre=tr.querySelector('[data-ci="precio"]'), imp=tr.querySelector('[data-ci="importe"]');
+  if(cant){ cant.disabled=esP; cant.placeholder=esP?'—':'cant.'; if(esP) cant.value=''; }
+  if(pre){ pre.disabled=esP; pre.placeholder=esP?'—':'$/u'; if(esP) pre.value=''; }
+  if(imp){ imp.readOnly=!esP; }
+  molCiCalc(cant); }
+function molCiCalc(el){ const tr=el&&el.closest?el.closest('tr'):null;
+  if(tr){ const u=tr.querySelector('[data-ci="unidad"]')?.value||'peso';
+    if(u!=='peso'){ const c=Number(tr.querySelector('[data-ci="cantidad"]')?.value||0); const p=Number(tr.querySelector('[data-ci="precio"]')?.value||0);
+      const imp=tr.querySelector('[data-ci="importe"]'); if(imp) imp.value=(c>0&&p>0)?Math.round(c*p*100)/100:''; } }
+  molParteCalc(); }
 function molAddCi(pre){ const b=$('#mol-ci-body'); if(b) b.insertAdjacentHTML('beforeend', molCiRow(pre)); }
-function _molReadCi(){ return $$('#mol-ci-body tr[data-cir]').map(tr=>({ concepto:(tr.querySelector('[data-ci="concepto"]')?.value||'').trim(), importe:Number(tr.querySelector('[data-ci="importe"]')?.value||0) })).filter(c=>c.importe>0); }
-function _molCostoProd(){ return _molReadCi().reduce((a,c)=>a+c.importe,0); }
+function _molReadCi(){ return $$('#mol-ci-body tr[data-cir]').map(tr=>{
+    const unidad=tr.querySelector('[data-ci="unidad"]')?.value||'peso';
+    const cantidad=Number(tr.querySelector('[data-ci="cantidad"]')?.value||0);
+    const precioUnit=Number(tr.querySelector('[data-ci="precio"]')?.value||0);
+    const importe=Number(tr.querySelector('[data-ci="importe"]')?.value||0);
+    return { concepto:(tr.querySelector('[data-ci="concepto"]')?.value||'').trim(), unidad, cantidad:cantidad||null, precioUnit:precioUnit||null, importe };
+  }).filter(c=>c.importe>0 || (c.unidad!=='peso' && c.cantidad>0)); }
+function _molCostoProd(){ return _molReadCi().reduce((a,c)=>a+(Number(c.importe)||0),0); }
 function molParteForm() {
   const fs = (state._molFormulas||[]).filter(f=>f.activo!==false);
   if (!fs.length) return toast('Creá una fórmula primero','warn');
@@ -32490,9 +32575,9 @@ function molParteForm() {
 
       <div class="mt-3">
         <div class="flex items-center justify-between mb-1"><label class="label !mb-0">🏭 Productos obtenidos (kg reales)</label><button class="btn btn-ghost btn-xs" onclick="molAddSal()">+ Producto</button></div>
-        <table class="table w-full text-sm"><thead><tr><th>Producto</th><th class="text-right">Kg</th><th>Depósito destino</th><th class="text-center">Merma</th><th></th></tr></thead>
+        <table class="table w-full text-sm"><thead><tr><th>Producto</th><th class="text-right">Estimado</th><th class="text-right">Kg real</th><th>Depósito destino</th><th class="text-center">Merma</th><th></th></tr></thead>
           <tbody id="mol-sal-body"></tbody></table>
-        <div class="text-[11px] text-slate-400 mt-1">Marcá "Merma" en desperdicio/merma: no ingresa stock ni lleva costo. El costo del lote se reparte entre los productos no-merma según sus kg.</div>
+        <div class="text-[11px] text-slate-400 mt-1"><b>Estimado</b> = kg procesados × rendimiento de la fórmula (referencia); el <b>Kg real</b> lo cargás a mano con lo que salió. Marcá "Merma" en desperdicio: no ingresa stock ni lleva costo. El costo del lote se reparte entre los productos no-merma según sus kg.</div>
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
@@ -32501,9 +32586,9 @@ function molParteForm() {
       </div>
       <div class="mt-3">
         <div class="flex items-center justify-between mb-1"><label class="label !mb-0">⚡ Costos indirectos del lote (individualizados)</label><button class="btn btn-ghost btn-xs" onclick="molAddCi()">+ Costo</button></div>
-        <table class="table w-full text-sm"><thead><tr><th>Concepto</th><th class="text-right">Importe $</th><th></th></tr></thead>
+        <table class="table w-full text-sm"><thead><tr><th>Concepto</th><th>Unidad</th><th class="text-right">Cantidad</th><th class="text-right">$/unidad</th><th class="text-right">Importe $</th><th></th></tr></thead>
           <tbody id="mol-ci-body"></tbody></table>
-        <div class="text-[11px] text-slate-400 mt-1">Cargá cada costo por separado: luz, gasoil de la secadora, personal, mantenimiento… Su <b>suma</b> es el costo de producción del lote y se reparte entre los productos. Si tenés el gasto <b>mensual</b>, poné en cada jornada la parte que corresponde (ej. mensual ÷ jornadas del mes).</div>
+        <div class="text-[11px] text-slate-400 mt-1">La <b>luz</b> se carga en <b>kWh</b> y el <b>gasoil</b> en <b>litros</b>; poné el <b>$/unidad</b> (lo sacás de la factura de luz o del precio del gasoil que compraste) y el importe se calcula solo. El resto (personal, mantenimiento…) va como <b>$ directo</b>. La <b>suma</b> es el costo del lote y se reparte entre los productos. Si no sabés el precio todavía, cargá igual la cantidad (kWh/litros) y después la valorás.</div>
       </div>
       <div class="mt-2"><label class="label">Observaciones</label><input id="mol-obs" class="input" placeholder="opcional"/></div>
       <div id="mol-preview" class="mt-3"></div>`,
@@ -32513,7 +32598,7 @@ function molParteForm() {
   });
   molFormulaChange();
   // Prefill de costos indirectos típicos (editables / se pueden quitar).
-  const cib=$('#mol-ci-body'); if(cib && !cib.children.length){ ['Luz','Gasoil secadora','Personal'].forEach(c=>molAddCi({concepto:c})); }
+  const cib=$('#mol-ci-body'); if(cib && !cib.children.length){ [{concepto:'Luz',unidad:'kwh'},{concepto:'Gasoil secadora',unidad:'litro'},{concepto:'Personal',unidad:'peso'}].forEach(c=>molAddCi(c)); }
 }
 async function molParteSave() {
   const entradas=_molReadMp(), salidas=_molReadSal();
