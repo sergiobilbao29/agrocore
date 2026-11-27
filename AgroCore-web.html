@@ -3136,6 +3136,9 @@ pages.inicio = async function() {
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/11/2026',
+      titulo:'⚡ v2.485.0 — Factura de luz que aplica a producción + Ficha arranca con el último mes',
+      desc:'<b>(1) Luz:</b> en empresas <b>fábrica</b>, al cargar una <b>factura de compra</b> aparece un check <b>“Es factura de luz que aplica a la producción”</b>. Al tildarlo ponés el <b>período facturado</b> (desde/hasta) y, al guardar, el <b>total</b> de la factura se <b>reparte automáticamente entre los Partes de producción</b> de ese período según los <b>kWh</b> cargados en cada uno (y se recalcula el costo de cada parte y de los productos). <b>(2)</b> La <b>Ficha Cliente/Proveedor</b> ahora arranca con las fechas del <b>último mes</b> por defecto.' },
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/11/2026',
       titulo:'⛽ v2.484.0 — Parte de producción: gasoil con artículo, precio y descuento de stock',
       desc:'En los <b>costos indirectos</b> del parte de producción, el <b>gasoil</b> (en litros) ahora tiene <b>artículo</b> y <b>depósito (cisterna)</b>: al elegir el artículo, el <b>$/litro</b> se completa solo con el <b>costo de la última compra</b> y, al guardar el parte, esos litros <b>se descuentan del stock</b> de la cisterna (y vuelven si anulás el parte). Así el gasoil queda valorizado y el stock controlado.' },
     { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/11/2026',
@@ -18773,6 +18776,15 @@ async function compForm(pre) {
         <div class="col-span-2 md:col-span-2"><div id="comp-t-check" class="text-xs"></div></div>
       </div>
       <div class="mt-3"><label class="label">Observaciones</label><textarea id="f-obs" class="input" rows="2"></textarea></div>
+      ${(state.usaProduccionIndustrial && !state._compEdit) ? `
+      <div class="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+        <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" id="comp-luz-prod" onchange="var r=document.getElementById('comp-luz-rango'); if(r) r.style.display=this.checked?'grid':'none'"/> ⚡ <b>Es factura de luz que aplica a la producción</b></label>
+        <div id="comp-luz-rango" class="grid grid-cols-2 gap-2 mt-2" style="display:none">
+          <div><label class="label text-[11px]">Período facturado — desde</label><input id="comp-luz-desde" type="date" class="input input-sm" value="${new Date(Date.now()-30*864e5).toISOString().slice(0,10)}"/></div>
+          <div><label class="label text-[11px]">hasta</label><input id="comp-luz-hasta" type="date" class="input input-sm" value="${new Date().toISOString().slice(0,10)}"/></div>
+          <div class="col-span-2 text-[11px] text-slate-600">Al guardar, el <b>total</b> de la factura se reparte entre los <b>partes de producción</b> de ese período según los <b>kWh</b> cargados en cada uno.</div>
+        </div>
+      </div>` : ''}
       ${(typeof ccRepartoHTML==='function')?ccRepartoHTML('comp'):''}`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
              <button class="btn btn-primary" onclick="compSave()">💾 ${state._compEdit?'Guardar cambios':'Registrar'}</button>`
@@ -19564,6 +19576,21 @@ async function compSave() {
     }
     const facRsp = await api('/api/facturas-compra', { method:'POST', body: JSON.stringify(data) });
     const facturaId = facRsp.data?.id;
+
+    // ⚡ Factura de luz que aplica a producción (solo fábricas): reparte el total
+    // entre los partes de producción del período según los kWh de cada uno.
+    if (facturaId && document.getElementById('comp-luz-prod')?.checked) {
+      const lzDesde = document.getElementById('comp-luz-desde')?.value;
+      const lzHasta = document.getElementById('comp-luz-hasta')?.value;
+      const totalFac = Number(facRsp.data?.total || 0) || items.reduce((a,it)=>a+(it.cantidad*it.precioUnit),0);
+      if (lzDesde && lzHasta && totalFac>0) {
+        try {
+          const rl = await api('/api/fabrica/valorizar-luz', { method:'POST', body: JSON.stringify({ total: totalFac, desde: lzDesde, hasta: lzHasta, facturaCompraId: facturaId }) });
+          const rd = rl.data||{};
+          toast(`⚡ Luz repartida: ${fmt$(totalFac)} entre ${rd.partesAfectados||0} parte(s)${rd.precioKwh?` · ${fmt$(rd.precioKwh)}/kWh`:''}`, 'success');
+        } catch(e){ toast('Factura registrada, pero no se pudo repartir la luz: '+e.message, 'warn'); }
+      }
+    }
 
     // Si condición = Contado y se eligió método, registrar el pago en la misma operación.
     if (facturaId) {
@@ -22213,7 +22240,10 @@ pages.fichaComercial = async function() {
   prov.forEach(p => { const g = ensureG(keyOf(p,'prov')); g.proveedorId = p.id; g.nombre = g.nombre || p.razonSocial; g.cuit = g.cuit || p.cuit; if (p.esGranos) g.esGranos = true; });
   const contactos = Object.values(groups).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
   state._fichaContactos = contactos;
-  state._fichaSel = state._fichaSel || { idx:'', desde:'', hasta:'' };
+  // Por defecto, el último mes (desde hace 1 mes hasta hoy).
+  const _hoyFc = new Date(); const _hastaFc = _hoyFc.toISOString().slice(0,10);
+  const _desdeFcD = new Date(_hoyFc); _desdeFcD.setMonth(_desdeFcD.getMonth()-1); const _desdeFc = _desdeFcD.toISOString().slice(0,10);
+  state._fichaSel = state._fichaSel || { idx:'', desde:_desdeFc, hasta:_hastaFc };
   const opts = contactos.map((g,i)=>`<option value="${i}" ${String(i)===String(state._fichaSel.idx)?'selected':''}>${esc(g.nombre)}${g.cuit?' · '+esc(g.cuit):''} ${g.clienteId&&g.proveedorId?'(cliente+proveedor)':(g.proveedorId?'(proveedor)':'(cliente)')}${g.esGranos?' 🌾':''}</option>`).join('');
   $('#page-body').innerHTML = `
     <div class="kpi mb-3">

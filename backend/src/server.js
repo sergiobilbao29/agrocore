@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.484.0';
+const AGROCORE_VERSION = '2.485.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12614,6 +12614,94 @@ app.delete('/api/partes-molienda/:id', requireCompany, requirePermission('stock:
       await tx.parteMolienda.delete({ where: { id: p.id } });
     });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// VALORIZAR LUZ (v2.485): reparte el total de una factura de luz entre los
+// Partes de producción de un período, proporcional a los kWh de cada uno.
+//   body: { total, desde, hasta, facturaCompraId? }
+//   - Busca partes en [desde,hasta] con un costo indirecto en kWh (cantidad>0).
+//   - precioKwh = total / Σ kWh. A cada parte le asigna luzImporte = kWh*precioKwh.
+//   - Actualiza ese costo indirecto (importe + precioUnit), recalcula el costo de
+//     producción y el reparto por producto, y ajusta la valorización del stock
+//     (movimientos de ingreso) de ese parte.
+// ============================================================
+app.post('/api/fabrica/valorizar-luz', requireCompany, requirePermission('stock:update'), async (req, res, next) => {
+  try {
+    const d = z.object({
+      total: z.number().positive(),
+      desde: z.string().min(1),
+      hasta: z.string().min(1),
+      facturaCompraId: z.string().nullable().optional(),
+    }).parse(req.body || {});
+    const _round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const d0 = new Date(d.desde + 'T00:00:00');
+    const d1 = new Date(d.hasta + 'T23:59:59');
+    const partes = await prisma.parteMolienda.findMany({
+      where: { companyId: req.companyId, fecha: { gte: d0, lte: d1 } },
+      orderBy: { fecha: 'asc' },
+    });
+    // kWh de cada parte (suma de costos indirectos en kWh).
+    const conKwh = [];
+    for (const p of partes) {
+      const cis = Array.isArray(p.costosIndirectos) ? p.costosIndirectos : [];
+      const kwh = cis.filter(c => c && c.unidad === 'kwh').reduce((a, c) => a + (Number(c.cantidad) || 0), 0);
+      if (kwh > 0) conKwh.push({ parte: p, kwh });
+    }
+    const totalKwh = conKwh.reduce((a, x) => a + x.kwh, 0);
+    if (!conKwh.length || totalKwh <= 0) {
+      return res.status(400).json({ ok: false, error: 'No hay partes de producción con kWh cargados en ese período. Cargá la luz en kWh en cada parte y volvé a intentar.' });
+    }
+    const precioKwh = _round2(d.total / totalKwh);
+    let repartido = 0;
+    const result = await prisma.$transaction(async (tx) => {
+      let afectados = 0;
+      for (let i = 0; i < conKwh.length; i++) {
+        const { parte, kwh } = conKwh[i];
+        // Última parte: ajusta el redondeo para que la suma dé exactamente el total.
+        let luzImporte = (i === conKwh.length - 1) ? _round2(d.total - repartido) : _round2(d.total * kwh / totalKwh);
+        repartido = _round2(repartido + luzImporte);
+        const cis = (Array.isArray(parte.costosIndirectos) ? parte.costosIndirectos : []).map(c => ({ ...c }));
+        // Reparte el importe de luz del parte entre sus filas de kWh (si hay más de una).
+        const kwhRows = cis.filter(c => c && c.unidad === 'kwh');
+        const kwhParte = kwhRows.reduce((a, c) => a + (Number(c.cantidad) || 0), 0);
+        for (const c of kwhRows) {
+          const porc = kwhParte > 0 ? (Number(c.cantidad) || 0) / kwhParte : 0;
+          c.importe = _round2(luzImporte * porc);
+          c.precioUnit = precioKwh;
+        }
+        const costoProd = _round2(cis.reduce((a, c) => a + (Number(c.importe) || 0), 0));
+        // Recalcular costo total y reparto por producto (mismo criterio que al crear).
+        const entradas = Array.isArray(parte.entradas) ? parte.entradas : [];
+        const costoMp = _round2(entradas.reduce((a, e) => a + (Number(e.costoTotal) || (Number(e.kg) || 0) * (Number(e.costoUnit) || 0)), 0));
+        const costoTotal = _round2(costoMp + costoProd);
+        const resultados = (Array.isArray(parte.resultados) ? parte.resultados : []).map(r => ({ ...r }));
+        const noMerma = resultados.filter(r => !r.esMerma && (Number(r.kg) || 0) > 0);
+        const sumCoef = noMerma.reduce((a, r) => a + (r.coef != null ? Number(r.coef) : (Number(r.kg) || 0)), 0);
+        let acc = 0;
+        for (let j = 0; j < resultados.length; j++) {
+          const r = resultados[j];
+          const coef = r.esMerma ? 0 : (r.coef != null ? Number(r.coef) : (Number(r.kg) || 0));
+          let costoItem = (!r.esMerma && sumCoef > 0) ? _round2(costoTotal * coef / sumCoef) : 0;
+          acc = _round2(acc + costoItem);
+          const esUlt = coef > 0 && resultados.slice(j + 1).every(x => (x.esMerma ? 0 : (x.coef != null ? Number(x.coef) : (Number(x.kg) || 0))) <= 0);
+          if (esUlt && Math.abs(acc - costoTotal) >= 0.01) { costoItem = _round2(costoItem + (costoTotal - acc)); }
+          r.costoTotal = costoItem;
+          r.costoKg = (Number(r.kg) || 0) > 0 ? _round2(costoItem / r.kg) : 0;
+        }
+        await tx.parteMolienda.update({ where: { id: parte.id }, data: { costosIndirectos: cis, costoProduccion: costoProd, costoTotal, resultados } });
+        // Ajustar la valorización de los movimientos de stock (ingreso) de ese parte.
+        for (const r of resultados) {
+          if (r.esMerma || (Number(r.kg) || 0) <= 0) continue;
+          await tx.movimiento.updateMany({ where: { companyId: req.companyId, referencia: parte.codigo, tipo: 'ingreso', productoId: r.productoId }, data: { precio: r.costoKg || null, total: r.costoTotal || null } });
+          try { await tx.producto.update({ where: { id: r.productoId }, data: { costoFabricacionKg: r.costoKg } }); } catch (_) {}
+        }
+        afectados++;
+      }
+      return { afectados };
+    });
+    res.json({ ok: true, data: { partesAfectados: result.afectados, totalKwh: _round2(totalKwh), precioKwh, totalRepartido: _round2(repartido) } });
   } catch (e) { next(e); }
 });
 
