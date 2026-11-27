@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.487.0';
+const AGROCORE_VERSION = '2.488.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12397,12 +12397,23 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
   try {
     const d = req.body || {};
     // Materias primas realmente consumidas (planilla unificada): [{productoId,kg,depositoId,costoUnit}]
+    // Materias primas: kg ENTRADA (lo que sale del stock y se costea) + kg SALIDA
+    // (ya secos; sobre estos se aplica la fórmula). La merma de secado = entrada − salida.
     const entradasIn = Array.isArray(d.entradas)
-      ? d.entradas.map(e => ({ productoId: e.productoId, kg: Number(e.kg) || 0, depositoId: e.depositoId || null, costoUnit: Number(e.costoUnit) || 0 })).filter(e => e.productoId && e.kg > 0)
+      ? d.entradas.map(e => {
+          const kgEntrada = Number(e.kgEntrada != null ? e.kgEntrada : e.kg) || 0; // compat con 'kg' viejo
+          const kgSalida = Number(e.kgSalida != null && e.kgSalida !== '' ? e.kgSalida : kgEntrada) || 0;
+          return { productoId: e.productoId, kg: kgEntrada, kgEntrada, kgSalida,
+            merma: _round2(Math.max(0, kgEntrada - kgSalida)),
+            humEntrada: e.humEntrada != null ? Number(e.humEntrada) : null,
+            humSalida: e.humSalida != null ? Number(e.humSalida) : null,
+            secado: e.secado || null, calor: e.calor || null, velocidad: e.velocidad || null,
+            depositoId: e.depositoId || null, costoUnit: Number(e.costoUnit) || 0 };
+        }).filter(e => e.productoId && e.kgEntrada > 0)
       : null;
-    // kg procesados = lo cargado o, si hay materias primas reales, su suma.
+    // kg PROCESADOS = suma de kg de SALIDA (ya secos), que es lo que entra a la fórmula.
     let kg = Number(d.kgProcesados) || 0;
-    if ((!kg || kg <= 0) && entradasIn && entradasIn.length) kg = _round2(entradasIn.reduce((a, e) => a + e.kg, 0));
+    if ((!kg || kg <= 0) && entradasIn && entradasIn.length) kg = _round2(entradasIn.reduce((a, e) => a + e.kgSalida, 0));
     if (!d.formulaId || kg <= 0) return res.status(400).json({ ok: false, error: 'Elegí la fórmula y cargá los kilos procesados o las materias primas (mayor a 0)' });
     const f = await prisma.formulaMolienda.findFirst({ where: { id: d.formulaId, companyId: req.companyId }, include: { items: { orderBy: { orden: 'asc' } } } });
     if (!f) return res.status(404).json({ ok: false, error: 'Fórmula no encontrada' });
@@ -12472,7 +12483,11 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
       const _d1 = new Date(fecha2.getFullYear(), fecha2.getMonth(), fecha2.getDate(), 23, 59, 59);
       const _n2 = await prisma.parteMolienda.count({ where: { companyId: req.companyId, fecha: { gte: _d0, lte: _d1 } } });
       const codigo2 = `MOL-${_dd2}${_mm2}-${_n2 + 1}`;
-      const entradasSnap = entradas.map(e => ({ productoId: e.productoId, nombre: pN[e.productoId] || '', kg: _round2(e.kg), depositoId: e.depositoId, costoUnit: e.costoUnit, costoTotal: _round2(e.kg * e.costoUnit) }));
+      const entradasSnap = entradas.map(e => ({ productoId: e.productoId, nombre: pN[e.productoId] || '', kg: _round2(e.kg),
+        kgEntrada: _round2(e.kgEntrada != null ? e.kgEntrada : e.kg), kgSalida: _round2(e.kgSalida != null ? e.kgSalida : e.kg),
+        merma: _round2(e.merma || 0), humEntrada: e.humEntrada ?? null, humSalida: e.humSalida ?? null,
+        secado: e.secado || null, calor: e.calor || null, velocidad: e.velocidad || null,
+        depositoId: e.depositoId, costoUnit: e.costoUnit, costoTotal: _round2(e.kg * e.costoUnit) }));
       const parte2 = await prisma.$transaction(async (tx) => {
         const p = await tx.parteMolienda.create({ data: {
           companyId: req.companyId, codigo: codigo2, fecha: fecha2, formulaId: f.id,
