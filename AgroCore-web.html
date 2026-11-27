@@ -1093,13 +1093,12 @@ const MODULES = [
   { id:'liquidacionesHacienda', label:'Liquidaciones animales', icon:'🐄', perm:'ventas:read', section:'Comercial' },
   { id:'ctasCobrar',    label:'Cuentas a cobrar',     icon:'💰', perm:'finanzas:read',   section:'Comercial' },
   { id:'proveedores',   label:'Proveedores',          icon:'🏬', perm:'contactos:read',  section:'Comercial' },
-  { id:'proveedoresGranos', label:'Proveedores de granos', icon:'🌾', perm:'stock:read',  section:'Fábrica' },
   { id:'remitosCompra', label:'Remitos de compra',    icon:'📦', perm:'compras:read',    section:'Comercial' },
   { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Comercial' },
   { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Comercial' },
   { id:'fichaComercial',label:'Ficha Cliente/Proveedor',icon:'📒', perm:'finanzas:read',  section:'Comercial' },
   // Fábrica (usaProduccionIndustrial): molienda/canje/granos + ficha 360 del contacto.
-  { id:'fabricaCuentas',label:'Cuentas de Fábrica (360)', icon:'🧮', perm:'stock:read',  section:'Fábrica' },
+  { id:'fabricaCuentas',label:'Cuentas de Fábrica', icon:'🧮', perm:'stock:read',  section:'Fábrica' },
   { id:'canjeGrano',    label:'Plan canje (grano)',   icon:'🔁', perm:'stock:read',      section:'Fábrica' },
   { id:'ctaCanjeGrano', label:'Cuenta canje (grano)', icon:'📒', perm:'stock:read',      section:'Fábrica' },
 
@@ -3136,6 +3135,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'26/11/2026',
+      titulo:'🧮 v2.482.0 — Fábrica: "Proveedores de granos" y "Cuentas de Fábrica" ahora juntos',
+      desc:'En el menú <b>Fábrica</b> unificamos las dos secciones en una sola: <b>Cuentas de Fábrica</b>. En una misma lista ves, por contacto, el <b>saldo en pesos</b>, el <b>saldo en kilos</b> (canje + grano) y —para los <b>proveedores de grano</b>— su <b>cuenta en kilos</b> (entregado, liquidado, disponible y vencimientos), con las acciones de <b>➕ Entrega</b>, <b>📥 De comprobantes</b>, <b>💵 Liquidar</b> y <b>📄 ver kg</b>, más la <b>📒 Ficha</b> completa de cada uno. La alarma de kilos vencidos sigue arriba. Ya no hace falta saltar entre dos pantallas.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'26/11/2026',
       titulo:'📒 v2.481.0 — Ficha Cliente/Proveedor (reemplaza Compensación de cuentas)',
       desc:'En <b>Comercial</b>, "Compensación de cuentas" pasó a ser <b>Ficha Cliente/Proveedor</b>. Elegís un <b>contacto</b> (obligatorio) y, si querés, un <b>rango de fechas</b>, y ves <b>todos sus movimientos</b>: en <b>pesos</b> (ventas, compras, cobros, pagos) con el <b>saldo neto corrido</b>, y en <b>kilos</b> (grano + canje, solo si es proveedor de grano) con su saldo. Unifica cliente y proveedor por <b>CUIT/vínculo</b>. Desde la misma ficha <b>operás</b>: nueva venta, compra, cobro, pago, entrega/retiro de grano, y <b>compensás</b> (vinculando por CUIT). La compensación sigue estando, ahora adentro de la ficha.' },
@@ -22026,30 +22028,59 @@ function ccSaldoCell(porMoneda){
  * Netea lo que un contacto nos debe (cliente) contra lo que le debemos
  * (proveedor), cuando es la misma persona. No mueve caja ni banco.
  * ================================================================== */
-// ===== FÁBRICA — Cuentas 360 (ficha unificada $ + kg por contacto) =====
+// ===== FÁBRICA — Cuentas (combinado: 360 + Proveedores de granos juntos) =====
+// Una sola lista: por contacto muestra el saldo en $ (cobrar−pagar), el saldo en
+// kg (canje + grano) y, si es proveedor de grano, su cuenta en kilos (entregado,
+// liquidado, disponible, vencimiento) con las acciones de grano (entrega, liquidar,
+// de comprobantes, ver). Unifica "Proveedores de granos" y "Cuentas de Fábrica".
 pages.fabricaCuentas = async function() {
-  setHeader('Cuentas de Fábrica (360)', 'Un contacto, una ficha: proveedor de grano + cliente de subproducto + canjeador, con saldo en $ y en kg');
+  setHeader('Cuentas de Fábrica', 'Todo junto: saldo en $ y en kg por contacto + la cuenta en kilos de cada proveedor de grano (entregas, liquidaciones y vencimientos)');
   if (!can('stock:read')) { $('#page-body').innerHTML = stubPage('fabricaCuentas','Cuentas de Fábrica'); return; }
   $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
-  let data = [];
+  let data = [], saldosKg = [];
   try { data = (await api('/api/fabrica/cuentas-360')).data || []; }
   catch(e){ $('#page-body').innerHTML = `<div class="kpi text-red-600">${esc(e.message)}</div>`; return; }
+  try { saldosKg = (await api('/api/granos-cta/saldos')).data || []; } catch {}
+  if (!state.cache.proveedores) { try { state.cache.proveedores = (await api('/api/proveedores')).data || []; } catch {} }
+  if (!state.cache.productos)   { try { state.cache.productos   = (await api('/api/productos')).data || []; } catch {} }
+  if (!state.cache.depositos)   { try { state.cache.depositos   = (await api('/api/depositos')).data || []; } catch {} }
   let precioSojaTn = 0;
   try { await cargarCotizVivas(); precioSojaTn = Number((state.cache.cotizVivas||{}).SOJA||0); } catch {}
   state._fabCuentas = data; state._fabSojaTn = precioSojaTn;
+  const smap = Object.fromEntries(saldosKg.map(s=>[s.proveedorId, s]));
   const _kgPesos = kg => precioSojaTn>0 ? (Number(kg||0)/1000)*precioSojaTn : null;
   const _kg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{maximumFractionDigits:2})+' kg';
+  const totVenc = saldosKg.reduce((a,s)=>a+Number(s.vencidoSinLiquidar||0),0);
+  const alarmas = saldosKg.filter(s=>Number(s.vencidoSinLiquidar||0)>0.001).map(s=>`${esc(s.proveedorNombre||'')}: <b>${_kg(s.vencidoSinLiquidar)}</b>`);
   const filas = data.map((g,i) => {
     const kgP = _kgPesos(g.kgTotal);
     const kgCol = g.kgTotal>0.001?'text-emerald-700':(g.kgTotal<-0.001?'text-red-600':'text-slate-400');
     const netoCol = g.netoArs>0.01?'text-emerald-700':(g.netoArs<-0.01?'text-amber-700':'text-slate-400');
-    return `<tr class="table-row">
+    const esGr = g.esGranos && g.proveedorId;
+    const sg = esGr ? (smap[g.proveedorId]||{entregado:0,liquidado:0,disponible:0,vencidoSinLiquidar:0,proximoVto:null}) : null;
+    const disp = sg ? Number(sg.disponible||0) : 0;
+    const venc = sg ? Number(sg.vencidoSinLiquidar||0) : 0;
+    const dispCol = disp>0.001?'text-emerald-700':(disp<-0.001?'text-red-600':'text-slate-400');
+    const vencCell = !esGr ? '<span class="text-slate-300">—</span>'
+      : (venc>0.001 ? `<span class="badge badge-red text-[10px]">⏰ ${_kg(venc)}</span>` : (sg.proximoVto?`<span class="text-[11px] text-slate-500">vence ${fmtDate(sg.proximoVto)}</span>`:'<span class="text-slate-300">—</span>'));
+    const pj = JSON.stringify(g.proveedorId);
+    return `<tr class="table-row ${venc>0.001?'bg-red-50':''}">
       <td><b>${esc(g.nombre)}</b>${g.cuit?`<div class="text-[11px] text-slate-500 font-mono">${esc(g.cuit)}</div>`:''}
         <div class="text-[10px] text-slate-400">${g.vinculado?'🔗 vinculado':(g.clienteId&&g.proveedorId?'cliente+proveedor':(g.proveedorId?'proveedor':'cliente'))}${g.esGranos?' · 🌾 granos':''}</div></td>
       <td class="text-right font-semibold ${netoCol}">${fmt$(g.netoArs)}</td>
-      <td class="text-right font-semibold ${kgCol}">${g.kgTotal>0?'+':''}${_kg(g.kgTotal)}</td>
-      <td class="text-right ${kgCol}">${kgP==null?'<span class="text-slate-300">—</span>':((g.kgTotal<0?'-':(g.kgTotal>0?'+':''))+fmt$(Math.abs(kgP)))}</td>
-      <td class="text-right"><button class="btn btn-ghost btn-xs" onclick="fabCuentaVer(${i})">Ver ficha 360</button></td>
+      <td class="text-right ${kgCol}">${g.kgTotal>0?'+':''}${_kg(g.kgTotal)}${kgP!=null?`<div class="text-[10px] text-slate-400">${(g.kgTotal<0?'-':(g.kgTotal>0?'+':''))}${fmt$(Math.abs(kgP))}</div>`:''}</td>
+      <td class="text-right text-xs">${esGr?_kg(sg.entregado):'<span class="text-slate-300">—</span>'}</td>
+      <td class="text-right text-xs">${esGr?_kg(sg.liquidado):'<span class="text-slate-300">—</span>'}</td>
+      <td class="text-right font-bold ${esGr?dispCol:''}">${esGr?_kg(disp):'<span class="text-slate-300">—</span>'}</td>
+      <td class="text-center">${vencCell}</td>
+      <td class="text-right whitespace-nowrap">
+        <button class="btn btn-ghost btn-xs" title="Ficha 360 (resumen)" onclick="fabCuentaVer(${i})">👁️ 360</button>
+        <button class="btn btn-ghost btn-xs" title="Ficha con todos los movimientos" onclick='fichaContacto(${JSON.stringify(g.clienteId)},${JSON.stringify(g.proveedorId)})'>📒 Ficha</button>
+        ${esGr&&can('stock:create')?`<button class="btn btn-ghost btn-xs text-emerald-700" onclick='pgEntregaForm(${pj})'>➕ Entrega</button>`:''}
+        ${esGr&&can('stock:create')?`<button class="btn btn-ghost btn-xs text-sky-700" onclick='pgCompIntForm(${pj})'>📥 De comprob.</button>`:''}
+        ${esGr&&can('stock:create')&&disp>0.001?`<button class="btn btn-ghost btn-xs text-indigo-700" onclick='pgLiquidarForm(${pj})'>💵 Liquidar</button>`:''}
+        ${esGr?`<button class="btn btn-ghost btn-xs" onclick='pgVer(${pj})'>📄 kg</button>`:''}
+      </td>
     </tr>`;
   }).join('');
   const totKg = data.reduce((a,g)=>a+Number(g.kgTotal||0),0);
@@ -22057,13 +22088,15 @@ pages.fabricaCuentas = async function() {
   const totKgP = _kgPesos(totKg);
   $('#page-body').innerHTML = `
     <div class="bg-sky-50 border border-sky-200 rounded-lg p-3 text-[12px] text-sky-900 mb-3">
-      Reúne en <b>una sola ficha</b> todo lo de un contacto en la fábrica: lo que te <b>debe en pesos</b> (como cliente de subproducto), lo que le <b>debés en pesos</b> (como proveedor de grano) y su <b>saldo en kilos</b> (canje en especie + grano pendiente de liquidar), valorizado a la pizarra de soja del día. Se agrupa por el <b>vínculo cliente↔proveedor</b>; si no está vinculado, podés vincularlo desde la ficha.
+      Todo lo de la fábrica por contacto, en una lista: lo que te <b>debe/le debés en pesos</b>, su <b>saldo en kilos</b> (canje + grano pendiente), y para los <b>proveedores de grano</b> su <b>cuenta en kilos</b> (entregado, liquidado, disponible y vencimientos) con las acciones de <b>entrega, liquidación y comprobantes</b>. Antes estaba separado en "Proveedores de granos" y "Cuentas de Fábrica"; ahora va junto.
     </div>
+    ${totVenc>0.001?`<div class="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-800 mb-3">⏰ <b>Hay ${_kg(totVenc)} de grano vencidos para liquidar.</b> ${alarmas.slice(0,6).join(' · ')}${alarmas.length>6?' …':''}</div>`:''}
     ${precioSojaTn>0?`<div class="text-[11px] text-slate-500 mb-2">💲 Kilos valorizados a la soja de hoy: ${fmt$(precioSojaTn)}/tn · Totales: <b class="${totNeto>=0?'text-emerald-700':'text-amber-700'}">${fmt$(totNeto)}</b> en $ · <b class="${totKg>=0?'text-emerald-700':'text-red-600'}">${totKg>0?'+':''}${_kg(totKg)}</b>${totKgP!=null?` ≈ ${(totKg<0?'-':'+')}${fmt$(Math.abs(totKgP))}`:''}</div>`:`<div class="text-[11px] text-amber-600 mb-2">Sin cotización de soja de hoy: los kilos se muestran sin valorizar.</div>`}
     <div class="kpi overflow-x-auto"><table class="table w-full text-sm">
-      <thead><tr><th>Contacto</th><th class="text-right">Neto $ (cobrar − pagar)</th><th class="text-right">Saldo kg</th><th class="text-right">Valor kg ($)</th><th></th></tr></thead>
-      <tbody>${filas || `<tr><td colspan="5" class="text-center text-slate-400 py-6">Todavía no hay contactos con actividad de fábrica (canje, grano o proveedor de granos).</td></tr>`}</tbody>
-    </table></div>`;
+      <thead><tr><th>Contacto</th><th class="text-right">Neto $</th><th class="text-right">Saldo kg</th><th class="text-right">Entregado</th><th class="text-right">Liquidado</th><th class="text-right">Disponible</th><th class="text-center">Vto</th><th class="text-right">Acciones</th></tr></thead>
+      <tbody>${filas || `<tr><td colspan="8" class="text-center text-slate-400 py-6">Todavía no hay contactos con actividad de fábrica (canje, grano o proveedor de granos).</td></tr>`}</tbody>
+    </table></div>
+    <div id="pg-det" class="mt-4"></div>`;
 };
 function fabCuentaVer(i){
   const g = (state._fabCuentas||[])[i]; if(!g) return;
@@ -22093,7 +22126,7 @@ function fabCuentaVer(i){
       ${(!g.vinculado && g.clienteId && g.proveedorId)?'':(!g.vinculado?`<div class="text-[11px] text-amber-600 mt-2">⚠️ Este contacto no está vinculado como cliente↔proveedor; el neto puede estar incompleto. Vinculalo para unificarlo.</div>`:'')}`,
     footer:`
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctaCanjeGrano')">📒 Canje</button>
-      <button class="btn btn-ghost text-xs" onclick="closeModal();go('proveedoresGranos')">🌾 Granos</button>
+      <button class="btn btn-ghost text-xs" onclick="closeModal();go('fabricaCuentas')">🌾 Granos</button>
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasCobrar')">💰 A cobrar</button>
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasPagar')">💸 A pagar</button>
       ${(!g.vinculado && can('contactos:update'))?`<button class="btn btn-secondary text-xs" onclick="closeModal();contactoVincularForm()">🔗 Vincular</button>`:''}
@@ -22148,7 +22181,7 @@ async function fichaContacto(clienteId, proveedorId){
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('compras')">🛒 Compra</button>
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasCobrar')">💰 Cobrar</button>
       <button class="btn btn-ghost text-xs" onclick="closeModal();go('ctasPagar')">💸 Pagar</button>
-      ${d.esGranos?`<button class="btn btn-ghost text-xs" onclick="closeModal();go('proveedoresGranos')">🌾 Grano</button>`:''}
+      ${d.esGranos?`<button class="btn btn-ghost text-xs" onclick="closeModal();go('fabricaCuentas')">🌾 Grano</button>`:''}
       ${(d.clienteId&&d.proveedorId)?`<button class="btn btn-secondary text-xs" onclick='closeModal();compensarForm(${JSON.stringify(d.clienteId)},${JSON.stringify(d.proveedorId)})'>🔀 Compensar</button>`:''}
       <button class="btn btn-primary" onclick="closeModal()">Cerrar</button>`
   });
@@ -33287,6 +33320,9 @@ async function molCtaCanjeDel(id, tipo, contactoId, nombre){
 
 /* ============ PROVEEDORES DE GRANOS — cuenta corriente en KILOS ============ */
 const _pgKg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:2});
+// Refresca la pantalla activa tras una acción de grano (la lista combinada de
+// Cuentas de Fábrica o, si se usa la vieja, Proveedores de granos).
+function _pgRefresh(){ return state.currentPage==='fabricaCuentas' ? pages.fabricaCuentas() : pages.proveedoresGranos(); }
 pages.proveedoresGranos = async function(){
   setHeader('Proveedores de granos', 'Cuenta corriente en kilos de soja: cada proveedor va entregando kilos y después se le liquidan en pesos. Separado del resto de los proveedores.');
   const b = $('#page-body'); if(!b) return;
@@ -33357,7 +33393,7 @@ async function pgEntregaSave(provId){
     fecha:$('#pg-fecha')?.value?new Date($('#pg-fecha').value+'T12:00:00').toISOString():undefined,
     plazoDias:($('#pg-plazo')?.value!==''&&$('#pg-plazo')?.value!=null)?Number($('#pg-plazo').value):null,
     numeroComprobante:$('#pg-comp')?.value?.trim()||null, productoId:prod, depositoId:dep, generaStock:!!(prod&&dep) };
-  try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Entrega cargada','success'); closeModal2(); pages.proveedoresGranos(); }
+  try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Entrega cargada','success'); closeModal2(); _pgRefresh(); }
   catch(e){ toast(e.message,'error'); }
 }
 async function pgCompIntForm(provId){
@@ -33399,7 +33435,7 @@ async function pgCompIntSave(provId){
   }
   delete state.cache.stock;
   toast(`Importados ${ok} comprobante(s)${err?`, ${err} con error`:''}`, err?'warn':'success');
-  closeModal2(); pages.proveedoresGranos();
+  closeModal2(); _pgRefresh();
 }
 async function pgLiquidarForm(provId){
   let disp=0; try{ const r=await api('/api/granos-cta?proveedorId='+encodeURIComponent(provId)); disp=r.disponible||0; }catch{}
@@ -33446,7 +33482,7 @@ async function pgLiquidarSave(provId){
     if(!(precio>0)) return toast('Cargá el precio por kilo','warn');
     body.precio=precio;
   }
-  try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Liquidación registrada','success'); closeModal2(); pages.proveedoresGranos(); }
+  try{ await api('/api/granos-cta',{method:'POST',body:JSON.stringify(body)}); delete state.cache.stock; toast('Liquidación registrada','success'); closeModal2(); _pgRefresh(); }
   catch(e){ toast(e.message,'error'); }
 }
 async function pgVer(provId){
@@ -33477,7 +33513,7 @@ async function pgVer(provId){
 }
 async function pgDel(id, provId){
   if(!confirm('¿Borrar este movimiento? Si generó stock o deuda en pesos, también se revierte.'))return;
-  try{ await api('/api/granos-cta/'+id,{method:'DELETE'}); delete state.cache.stock; toast('Borrado','success'); await pages.proveedoresGranos(); pgVer(provId); }
+  try{ await api('/api/granos-cta/'+id,{method:'DELETE'}); delete state.cache.stock; toast('Borrado','success'); await _pgRefresh(); pgVer(provId); }
   catch(e){ toast(e.message,'error'); }
 }
 
