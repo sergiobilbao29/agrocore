@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.489.0';
+const AGROCORE_VERSION = '2.490.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -16962,7 +16962,7 @@ app.post('/api/guias-hacienda/import', requireCompany, requirePermission('stock:
 // ============================================================
 // ANIMALES — Ficha individual (360°) genérica + eventos/costos + IoT-ready
 // ============================================================
-const _animalEspecies = ['equino','bovino','porcino','otro'];
+const _animalEspecies = ['equino','bovino','ovino','porcino','otro'];
 const animalSchema = z.object({
   especie: z.string().optional(),
   nombre: z.string().min(1),
@@ -17121,7 +17121,7 @@ app.get('/api/animales/:id', requireCompany, requirePermission('stock:read'), as
     // Descendencia: animales cuyo padre o madre es éste (genealogía enlazada por id).
     const hijos = await prisma.animal.findMany({
       where: { companyId: req.companyId, OR: [{ padreId: a.id }, { madreId: a.id }] },
-      select: { id: true, nombre: true, sexo: true, especie: true, estado: true, fechaNac: true },
+      select: { id: true, nombre: true, sexo: true, especie: true, estado: true, fechaNac: true, foto: true, caravanaVisual: true },
       orderBy: { fechaNac: 'desc' },
     });
     res.json({ ok: true, data: { ..._animalConCostos(a), hijos } });
@@ -18731,12 +18731,13 @@ const _AYUDA_KB = [
       'Pesaje del lote automático: en Rodeos y Hacienda, abrí el lote y tocá "⚖️ Pesaje desde balanzas". El sistema suma el peso de todas las fichas vinculadas y crea el pesaje del lote (kg total + cabezas), sin pesar la tropa a mano.',
       'Resumen: los sensores viven en la Ficha (individual) y el costo/kg vive en el Rodeo (lote); vincularlos conecta las dos cosas.'],
     atajo:{ page:'animales', label:'Abrir Fichas de animales' } },
-  { id:'fichas_animales', terms:['ficha de animal','caballo','equino','haras','polo','ficha individual','animal individual','pedigree','genealogia','microchip','coggins','vaca madre','toro','padrillo','yegua','reproduccion','transferencia embrionaria','collar','sensor','rfid','costo por animal','vender caballo'],
+  { id:'fichas_animales', terms:['ficha de animal','caballo','equino','haras','polo','ficha individual','animal individual','pedigree','genealogia','microchip','coggins','vaca madre','toro','padrillo','yegua','reproduccion','transferencia embrionaria','collar','sensor','rfid','costo por animal','vender caballo','oveja','ovino','cordero','cerdo','porcino','ternero','vaca','manejo de animales','conteo de hacienda','foto del ternero','cria','caravana electronica','senasa electronico','manto','pelaje','desparasitar','vacunar','parto','dar de baja animal','adp','ganancia de peso'],
     titulo:'Fichas de animales (ficha individual 360°)',
     pasos:[
       'Entrá a Ganadería y Haras → Fichas de animales.',
-      'Tocá "+ Nuevo animal" y cargá la ficha: nombre, especie (equino/bovino/porcino), sexo, categoría, estado, pelaje, raza y fecha de nacimiento.',
-      'Cargá los identificadores (microchip, caravana RFID, N° de registro SRA/AACCP/RP, pasaporte) y la genealogía (padre, madre y receptora si fue transferencia embrionaria).',
+      'Dos formas que se complementan: para el CONTEO del rodeo por campo y categoría (vacas, toros, terneros, ovejas, corderos, cerdos) usá "Movimientos de animales" (stock de hacienda, declarado SENASA vs real). La FICHA individual es para seguir un animal en particular.',
+      'Tocá "+ Nuevo animal" y cargá la ficha: nombre, especie (equino/bovino/ovino/porcino), sexo, categoría, estado, pelaje (manto/color), raza, fecha de nacimiento (de ahí sale la edad) y el campo donde está.',
+      'Cargá los identificadores: caravana visual y caravana electrónica (RFID / SENASA electrónico), microchip, N° de registro, pasaporte. En Genealogía elegí la madre (y el padre) de las fichas ya cargadas; subí la FOTO del animal (y de un ternero recién nacido): en la ficha de la madre vas a ver sus crías con la foto.',
       'Poné el costo de alta/compra (si nació, dejalo en 0) y la moneda.',
       'Abrí la ficha y con "+ Agregar evento" cargás sanidad, vacunas, herrajes, reproducción, doma/entrenamiento, torneos, pesajes o traslados. Cada evento puede llevar un COSTO que se suma al costo acumulado del animal.',
       'En un evento de vacuna o Coggins, poné el "próximo control": el sistema te avisa cuando está por vencer.',
