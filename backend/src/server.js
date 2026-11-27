@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.479.0';
+const AGROCORE_VERSION = '2.481.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -13193,6 +13193,13 @@ app.get('/api/contacto-ficha', requireCompany, requirePermission('finanzas:read'
     const esGranos = !!prov?.esGranos;
     const vinculado = !!(cli?.vinculoId && prov?.vinculoId && cli.vinculoId === prov.vinculoId);
 
+    // Filtro de fechas (opcional). El saldo total es SIEMPRE el actual (todos los
+    // movimientos); el filtro solo acota la LISTA, pero el saldo corrido de cada
+    // fila acumula desde el inicio (incluye el saldo anterior al "desde").
+    const desde = req.query.desde ? new Date(String(req.query.desde) + 'T00:00:00') : null;
+    const hasta = req.query.hasta ? new Date(String(req.query.hasta) + 'T23:59:59') : null;
+    const inRange = (f) => { const d = new Date(f); return (!desde || d >= desde) && (!hasta || d <= hasta); };
+
     // ---- Movimientos en $ (CtaCte ARS de ambos roles) ----
     const orCta = [];
     if (clienteId) orCta.push({ contactoTipo: 'cliente', contactoId: clienteId });
@@ -13201,15 +13208,16 @@ app.get('/api/contacto-ficha', requireCompany, requirePermission('finanzas:read'
       where: { companyId, moneda: 'ARS', OR: orCta },
       orderBy: [{ fecha: 'asc' }, { createdAt: 'asc' }],
     });
-    let saldoCobrar = 0, saldoPagar = 0, net = 0;
-    const movDinero = ctas.map(c => {
+    let saldoCobrar = 0, saldoPagar = 0, cumNet = 0;
+    const movDinero = [];
+    for (const c of ctas) {
       const base = Number(c.debe || 0) - Number(c.haber || 0);
       if (c.contactoTipo === 'cliente') saldoCobrar += base; else saldoPagar += base;
       // Neto desde NUESTRO lado: + = nos deben (a favor nuestro); - = debemos.
       const delta = c.contactoTipo === 'cliente' ? base : -base;
-      net = r2(net + delta);
-      return { fecha: c.fecha, detalle: c.detalle, referencia: c.referencia || null, rol: c.contactoTipo, delta: r2(delta), saldo: net };
-    });
+      cumNet = r2(cumNet + delta);
+      if (inRange(c.fecha)) movDinero.push({ fecha: c.fecha, detalle: c.detalle, referencia: c.referencia || null, rol: c.contactoTipo, delta: r2(delta), saldo: cumNet });
+    }
 
     // ---- Movimientos en Kg (grano pendiente + canje) ----
     // Convención de signo: + = a favor del contacto (le debemos / le falta llevar).
@@ -13232,9 +13240,10 @@ app.get('/api/contacto-ficha', requireCompany, requirePermission('finanzas:read'
       }
     }
     movKgRaw.sort((a, b) => new Date(a.fecha) - new Date(b.fecha) || new Date(a.createdAt) - new Date(b.createdAt));
-    let saldoKg = 0;
-    const movKg = movKgRaw.map(m => { saldoKg = r2(saldoKg + m.kg); return { fecha: m.fecha, detalle: m.detalle, kg: m.kg, saldo: saldoKg, origen: m.origen }; });
-    const tieneKg = esGranos || movKg.length > 0;
+    let cumKg = 0, saldoKg = 0;
+    const movKg = [];
+    for (const m of movKgRaw) { cumKg = r2(cumKg + m.kg); saldoKg = cumKg; if (inRange(m.fecha)) movKg.push({ fecha: m.fecha, detalle: m.detalle, kg: m.kg, saldo: cumKg, origen: m.origen }); }
+    const tieneKg = esGranos || movKgRaw.length > 0;
 
     res.json({ ok: true, data: {
       nombre, cuit, clienteId, proveedorId, esGranos, vinculado,

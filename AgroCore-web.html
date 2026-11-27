@@ -1097,7 +1097,7 @@ const MODULES = [
   { id:'remitosCompra', label:'Remitos de compra',    icon:'📦', perm:'compras:read',    section:'Comercial' },
   { id:'compras',       label:'Movimientos de compras', icon:'🛒', perm:'finanzas:read',   section:'Comercial' },
   { id:'ctasPagar',     label:'Cuentas a pagar',      icon:'💸', perm:'finanzas:read',   section:'Comercial' },
-  { id:'compensaciones',label:'Compensación de cuentas',icon:'🔀', perm:'finanzas:read',  section:'Comercial' },
+  { id:'fichaComercial',label:'Ficha Cliente/Proveedor',icon:'📒', perm:'finanzas:read',  section:'Comercial' },
   // Fábrica (usaProduccionIndustrial): molienda/canje/granos + ficha 360 del contacto.
   { id:'fabricaCuentas',label:'Cuentas de Fábrica (360)', icon:'🧮', perm:'stock:read',  section:'Fábrica' },
   { id:'canjeGrano',    label:'Plan canje (grano)',   icon:'🔁', perm:'stock:read',      section:'Fábrica' },
@@ -3136,6 +3136,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'26/11/2026',
+      titulo:'📒 v2.481.0 — Ficha Cliente/Proveedor (reemplaza Compensación de cuentas)',
+      desc:'En <b>Comercial</b>, "Compensación de cuentas" pasó a ser <b>Ficha Cliente/Proveedor</b>. Elegís un <b>contacto</b> (obligatorio) y, si querés, un <b>rango de fechas</b>, y ves <b>todos sus movimientos</b>: en <b>pesos</b> (ventas, compras, cobros, pagos) con el <b>saldo neto corrido</b>, y en <b>kilos</b> (grano + canje, solo si es proveedor de grano) con su saldo. Unifica cliente y proveedor por <b>CUIT/vínculo</b>. Desde la misma ficha <b>operás</b>: nueva venta, compra, cobro, pago, entrega/retiro de grano, y <b>compensás</b> (vinculando por CUIT). La compensación sigue estando, ahora adentro de la ficha.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'26/11/2026',
+      titulo:'🖨️ v2.480.0 — Planilla de molienda: llena la hoja completa',
+      desc:'La <b>planilla en blanco de Molienda</b> ahora aprovecha toda la hoja: <b>filas más altas</b> para escribir cómodo, <b>un renglón libre más</b> en cada turno de materias primas y el recuadro de <b>observaciones generales del día</b> más grande.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'26/11/2026',
       titulo:'🏭 v2.479.0 — Parte de producción (estimado vs real, luz/gasoil por unidad) + Ficha unificada Cliente/Proveedor',
       desc:'Dos cosas grandes. <b>(1) Parte de producción de fábrica:</b> en los <b>productos obtenidos</b> ahora ves el <b>Kg estimado</b> según la fórmula al lado del <b>Kg real</b> que cargás a mano; y los <b>costos indirectos</b> se cargan por <b>unidad</b> — la <b>luz en kWh</b> y el <b>gasoil en litros</b> con su <b>$/unidad</b> (lo sacás de la factura de luz o del precio del gasoil comprado) y el importe se calcula solo. <b>(2) Ficha unificada de Cliente/Proveedor:</b> botón <b>📒 Ficha</b> en Clientes, Proveedores y en Cuentas de Fábrica (360). Junta en un solo lugar <b>todos los movimientos</b> de ese contacto: en <b>pesos</b> (ventas, compras, cobros, pagos) con el <b>saldo neto</b>, y en <b>kilos</b> (grano + canje) con su saldo —esta parte solo aparece si es proveedor de grano—. Relaciona cliente y proveedor por el <b>vínculo/CUIT</b> (sin fusionar tablas), y desde ahí accedés a venta, compra, cobro, pago, grano y compensación.' },
@@ -22148,6 +22154,95 @@ async function fichaContacto(clienteId, proveedorId){
   });
 }
 
+// ===== FICHA CLIENTE/PROVEEDOR (reemplaza Compensación) — v2.481 =====
+// Exige elegir un contacto + filtrar por fecha, muestra TODOS sus movimientos
+// en $ y en kg (si es proveedor de grano), y desde ahí se opera (venta, compra,
+// cobro, pago, entrega/retiro de grano) y se compensa (vinculando por CUIT).
+pages.fichaComercial = async function() {
+  setHeader('Ficha Cliente/Proveedor', 'Todos los movimientos de un contacto, en $ y en kg · operá y compensá desde acá');
+  if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('fichaComercial','Ficha Cliente/Proveedor'); return; }
+  $('#page-body').innerHTML = `<div class="text-slate-500 text-sm">Cargando…</div>`;
+  let cli = [], prov = [];
+  try { cli = state.cache.clientes || await crudList('clientes'); } catch {}
+  try { prov = state.cache.proveedores || await crudList('proveedores'); } catch {}
+  // Unificar por vínculo → CUIT → id. Misma persona (cliente+proveedor) = un contacto.
+  const norm = s => (s||'').replace(/\D/g,'');
+  const groups = {};
+  const keyOf = (o, role) => o.vinculoId ? ('v:'+o.vinculoId) : (norm(o.cuit) ? ('cuit:'+norm(o.cuit)) : (role+':'+o.id));
+  const ensureG = k => (groups[k] = groups[k] || { key:k, nombre:'', cuit:null, clienteId:null, proveedorId:null, esGranos:false });
+  cli.forEach(c => { const g = ensureG(keyOf(c,'cli')); g.clienteId = c.id; g.nombre = g.nombre || c.razonSocial; g.cuit = g.cuit || c.cuit; });
+  prov.forEach(p => { const g = ensureG(keyOf(p,'prov')); g.proveedorId = p.id; g.nombre = g.nombre || p.razonSocial; g.cuit = g.cuit || p.cuit; if (p.esGranos) g.esGranos = true; });
+  const contactos = Object.values(groups).sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  state._fichaContactos = contactos;
+  state._fichaSel = state._fichaSel || { idx:'', desde:'', hasta:'' };
+  const opts = contactos.map((g,i)=>`<option value="${i}" ${String(i)===String(state._fichaSel.idx)?'selected':''}>${esc(g.nombre)}${g.cuit?' · '+esc(g.cuit):''} ${g.clienteId&&g.proveedorId?'(cliente+proveedor)':(g.proveedorId?'(proveedor)':'(cliente)')}${g.esGranos?' 🌾':''}</option>`).join('');
+  $('#page-body').innerHTML = `
+    <div class="kpi mb-3">
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+        <div class="md:col-span-6"><label class="label">Cliente / Proveedor *</label>
+          <select id="fc-contacto" class="input"><option value="">— Elegí un contacto —</option>${opts}</select></div>
+        <div class="md:col-span-2"><label class="label">Desde</label><input id="fc-desde" type="date" class="input" value="${state._fichaSel.desde||''}"/></div>
+        <div class="md:col-span-2"><label class="label">Hasta</label><input id="fc-hasta" type="date" class="input" value="${state._fichaSel.hasta||''}"/></div>
+        <div class="md:col-span-2"><button class="btn btn-primary w-full" onclick="fichaComercialVer()">📒 Ver ficha</button></div>
+      </div>
+      <div class="text-[11px] text-slate-500 mt-1">Elegí un contacto (obligatorio) y, si querés, un rango de fechas. La parte de <b>kilos</b> solo aparece para proveedores de grano.</div>
+    </div>
+    <div id="fc-body"><div class="stub-card col-span-full">Elegí un contacto para ver todos sus movimientos en $ y en kg.</div></div>`;
+  if (state._fichaSel.idx !== '' && contactos[Number(state._fichaSel.idx)]) fichaComercialVer();
+};
+async function fichaComercialVer(){
+  const idx = $('#fc-contacto')?.value; const desde = $('#fc-desde')?.value||''; const hasta = $('#fc-hasta')?.value||'';
+  if (idx === '' || idx == null) return toast('Elegí un contacto','warn');
+  const g = (state._fichaContactos||[])[Number(idx)]; if (!g) return;
+  state._fichaSel = { idx, desde, hasta };
+  const qs = [g.clienteId?('clienteId='+encodeURIComponent(g.clienteId)):null, g.proveedorId?('proveedorId='+encodeURIComponent(g.proveedorId)):null, desde?('desde='+desde):null, hasta?('hasta='+hasta):null].filter(Boolean).join('&');
+  const box = $('#fc-body'); if (box) box.innerHTML = '<div class="text-slate-500 text-sm">Cargando…</div>';
+  let d; try { d = (await api('/api/contacto-ficha?'+qs)).data; } catch(e){ if(box) box.innerHTML = `<div class="kpi text-red-600">${esc(e.message)}</div>`; return; }
+  state._fichaData = d; state._fichaGroup = g;
+  const _kg = n => (Math.round(Number(n||0)*100)/100).toLocaleString('es-AR',{maximumFractionDigits:2})+' kg';
+  const chips = [ d.clienteId?'<span class="badge badge-blue text-[10px]">Cliente</span>':'', d.proveedorId?'<span class="badge badge-amber text-[10px]">Proveedor</span>':'', d.esGranos?'<span class="badge badge-green text-[10px]">🌾 Granos</span>':'', d.vinculado?'<span class="text-[10px] text-slate-400">🔗 vinculado</span>':'' ].filter(Boolean).join(' ');
+  const rango = (desde||hasta) ? `<span class="text-[11px] text-slate-500">· ${desde?('desde '+desde):''} ${hasta?('hasta '+hasta):''}</span>` : '';
+  const dineroRows = d.movDinero.length ? d.movDinero.map(m=>`<tr>
+      <td class="whitespace-nowrap">${fmtFecha(m.fecha)}</td>
+      <td>${esc(m.detalle||'')}${m.referencia?` <span class="text-[10px] text-slate-400 font-mono">${esc(m.referencia)}</span>`:''}</td>
+      <td class="text-[10px] text-slate-400">${m.rol==='cliente'?'venta/cobro':'compra/pago'}</td>
+      <td class="text-right ${m.delta>=0?'text-emerald-700':'text-amber-700'}">${m.delta>=0?'+':''}${fmt$(m.delta)}</td>
+      <td class="text-right font-medium ${m.saldo>=0?'text-emerald-700':'text-amber-700'}">${fmt$(m.saldo)}</td></tr>`).join('') : `<tr><td colspan="5" class="text-center text-slate-400 py-3">Sin movimientos en pesos${(desde||hasta)?' en el rango':''}.</td></tr>`;
+  const kgRows = (d.movKg||[]).length ? d.movKg.map(m=>`<tr>
+      <td class="whitespace-nowrap">${fmtFecha(m.fecha)}</td>
+      <td>${esc(m.detalle||'')}</td>
+      <td class="text-right ${m.kg>=0?'text-emerald-700':'text-red-600'}">${m.kg>=0?'+':''}${_kg(m.kg)}</td>
+      <td class="text-right font-medium">${_kg(m.saldo)}</td></tr>`).join('') : `<tr><td colspan="4" class="text-center text-slate-400 py-3">Sin movimientos en kilos${(desde||hasta)?' en el rango':''}.</td></tr>`;
+  const b = g.clienteId, p = g.proveedorId, nom = JSON.stringify(g.nombre);
+  box.innerHTML = `
+    <div class="flex items-center gap-2 mb-2 flex-wrap"><h3 class="font-semibold text-slate-800">${esc(d.nombre)}</h3> ${chips} ${rango} ${d.cuit?`<span class="text-xs text-slate-500 font-mono ml-auto">CUIT ${esc(d.cuit)}</span>`:''}</div>
+    <div class="flex flex-wrap gap-2 mb-3">
+      ${b?`<button class="btn btn-secondary text-xs" onclick="go('facturacion')">🧾 Nueva venta</button>`:''}
+      ${p?`<button class="btn btn-secondary text-xs" onclick="go('compras')">🛒 Nueva compra</button>`:''}
+      ${b?`<button class="btn btn-secondary text-xs" onclick='ccCobroPagoForm("cliente",${JSON.stringify(b)})'>💰 Registrar cobro</button>`:''}
+      ${p?`<button class="btn btn-secondary text-xs" onclick='ccCobroPagoForm("proveedor",${JSON.stringify(p)})'>💸 Registrar pago</button>`:''}
+      ${(p&&d.esGranos)?`<button class="btn btn-secondary text-xs" onclick='molCtaCanjeFormDesde("ingreso_grano","proveedor",${JSON.stringify(p)},${nom})'>🌾 Entrega de grano</button>`:''}
+      ${d.tieneKg?`<button class="btn btn-secondary text-xs" onclick='molCtaCanjeFormDesde("retiro_producto",${p?'"proveedor"':'"cliente"'},${JSON.stringify(p||b)},${nom})'>📦 Retiro de producto</button>`:''}
+      ${(b&&p)?`<button class="btn btn-primary text-xs" onclick='compensarForm(${JSON.stringify(b)},${JSON.stringify(p)})'>🔀 Compensar</button>`:(d.cuit?`<button class="btn btn-ghost text-xs" onclick="contactoVincularForm()">🔗 Vincular cliente↔proveedor</button>`:'')}
+    </div>
+    <div class="kpi mb-3">
+      <div class="flex flex-wrap gap-4 text-xs mb-2">
+        <div>Te debe (cliente): <b class="text-emerald-700">${fmt$(d.saldoCobrar)}</b></div>
+        <div>Le debés (proveedor): <b class="text-amber-700">${fmt$(d.saldoPagar)}</b></div>
+        <div>Neto $: <b class="${d.saldoNetoArs>=0?'text-emerald-700':'text-amber-700'}">${fmt$(d.saldoNetoArs)}</b> ${d.saldoNetoArs>=0?'(a tu favor)':'(a favor del contacto)'}</div>
+      </div>
+      <div class="text-xs font-semibold text-slate-500 mb-1">💵 Movimientos en pesos</div>
+      <div class="overflow-x-auto" style="max-height:340px;overflow-y:auto"><table class="table w-full text-sm"><thead><tr><th>Fecha</th><th>Detalle</th><th>Tipo</th><th class="text-right">Importe</th><th class="text-right">Saldo neto</th></tr></thead><tbody>${dineroRows}</tbody></table></div>
+      <div class="text-[11px] text-slate-400 mt-1">Desde tu lado: <b>+</b> = te debe (a cobrar), <b>−</b> = le debés (a pagar). El saldo corrido incluye lo anterior al "desde".</div>
+    </div>
+    ${d.tieneKg?`<div class="kpi mb-3">
+      <div class="flex flex-wrap gap-4 text-xs mb-2"><div>Saldo en kilos: <b class="${d.saldoKg>=0?'text-emerald-700':'text-red-600'}">${d.saldoKg>=0?'+':''}${_kg(d.saldoKg)}</b> ${d.saldoKg>=0?'(le falta llevar / le debés)':'(se llevó de más)'}</div></div>
+      <div class="text-xs font-semibold text-slate-500 mb-1">⚖️ Movimientos en kilos (grano + canje)</div>
+      <div class="overflow-x-auto" style="max-height:300px;overflow-y:auto"><table class="table w-full text-sm"><thead><tr><th>Fecha</th><th>Detalle</th><th class="text-right">Kg</th><th class="text-right">Saldo kg</th></tr></thead><tbody>${kgRows}</tbody></table></div>
+      <div class="text-[11px] text-slate-400 mt-1"><b>+</b> = dejó grano (le debés kg), <b>−</b> = retiró producto.</div>
+    </div>`:''}`;
+}
+
 pages.compensaciones = async function() {
   setHeader('Compensación de cuentas', 'Netear cliente ↔ proveedor (misma persona)');
   if (!can('finanzas:read')) { $('#page-body').innerHTML = stubPage('compensaciones','Compensación de cuentas'); return; }
@@ -22266,6 +22361,7 @@ async function compensarSave() {
     closeModal();
     if (r.data) compensacionComprobante(r.data);
     if (state.currentPage === 'compensaciones') pages.compensaciones();
+    if (state.currentPage === 'fichaComercial') fichaComercialVer();
   } catch (e) { toast(e.message,'error'); if (btn) { btn.disabled = false; btn.textContent = 'Compensar'; } }
 }
 async function compensacionDeshacer(id) {
@@ -22325,7 +22421,7 @@ async function contactoVincularSave() {
   const clienteId = $('#vinc-cli').value, proveedorId = $('#vinc-pro').value;
   if (!clienteId || !proveedorId) return toast('Elegí cliente y proveedor','warn');
   try { await api('/api/contactos/vincular', { method:'POST', body: JSON.stringify({ clienteId, proveedorId }) });
-    toast('Vinculados ✓','success'); closeModal(); if (state.currentPage==='compensaciones') pages.compensaciones();
+    toast('Vinculados ✓','success'); closeModal(); if (state.currentPage==='compensaciones') pages.compensaciones(); if (state.currentPage==='fichaComercial') pages.fichaComercial();
   } catch (e) { toast(e.message,'error'); }
 }
 
@@ -22370,6 +22466,7 @@ async function contactoAltaSave() {
     toast('Contacto creado ✓','success'); closeModal();
     delete state.cache.clientes; delete state.cache.proveedores;
     if (state.currentPage==='compensaciones') pages.compensaciones();
+    if (state.currentPage==='fichaComercial') fichaComercialVer();
   } catch (e) { toast(e.message,'error'); }
 }
 
@@ -32628,29 +32725,29 @@ function molPrintPlanilla() {
   const _bl=(n)=>`<td class="bl"></td>`.repeat(n);
   const mpRows=(names)=>{
     const llenas=(names||[]).filter(Boolean).map(n=>`<tr><td>${esc(n)}</td>${_bl(9)}</tr>`).join('');
-    const vacias=(`<tr>${_bl(10)}</tr>`).repeat(1);
+    const vacias=(`<tr>${_bl(10)}</tr>`).repeat(3);
     return llenas+vacias;
   };
   const mpThead=`<thead><tr><th>Producto</th><th>Kg entrada</th><th>Hum. %</th><th>Secado (SÍ/NO)</th><th>Kg salida</th><th>Hum. salida %</th><th>Calor</th><th>Velocidad</th><th>Merma secado (kg)</th><th>Observación</th></tr></thead>`;
   const turno=(nro)=>`<div class="turno"><b>Turno ${nro}</b> &nbsp; Operario: ______________________ &nbsp; Hora inicio: ______ hs &nbsp; Hora fin: ______ hs</div>
     <table class="mp">${mpThead}<tbody>${mpRows(mps)}</tbody></table>`;
   // Productos obtenidos (al final del día): Kg inicial (lo que ya había) + Kg obtenido + Kg final.
-  const rowsSal=((sals.filter(Boolean)).map(n=>`<tr><td>${esc(n)}</td>${_bl(4)}</tr>`).join(''))+(`<tr>${_bl(5)}</tr>`).repeat(1);
+  const rowsSal=((sals.filter(Boolean)).map(n=>`<tr><td>${esc(n)}</td>${_bl(4)}</tr>`).join(''))+(`<tr>${_bl(5)}</tr>`).repeat(2);
   const w=window.open('','_blank'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
   w.document.write(`<html><head><title>Planilla de producción</title><meta charset="utf-8"/>
-  <style>@page{margin:7mm} body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:6px;font-size:10px}
-  h1{font-size:15px;margin:0 0 1px} h2{font-size:11px;margin:7px 0 2px;color:#166534}
-  .sub{color:#555;font-size:9.5px;margin-bottom:5px}
-  table{width:100%;border-collapse:collapse;margin-bottom:2px}
-  th,td{border:1px solid #999;padding:2px 4px;text-align:left} th{background:#f0fdf4;font-size:9px}
-  table.mp th,table.mp td{font-size:8px;padding:1px 2px}
-  td.bl{height:16px} .meta td{border:none;padding:1px 8px 1px 0}
-  .fw{width:110px} .turno{margin:5px 0 1px;font-size:9.5px;color:#166534}
+  <style>@page{margin:8mm} body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:6px;font-size:11px}
+  h1{font-size:17px;margin:0 0 2px} h2{font-size:12.5px;margin:10px 0 3px;color:#166534}
+  .sub{color:#555;font-size:10.5px;margin-bottom:7px}
+  table{width:100%;border-collapse:collapse;margin-bottom:3px}
+  th,td{border:1px solid #999;padding:4px 5px;text-align:left} th{background:#f0fdf4;font-size:10px}
+  table.mp th,table.mp td{font-size:9px;padding:3px 3px}
+  td.bl{height:30px} .meta td{border:none;padding:2px 8px 2px 0;font-size:12px}
+  .fw{width:120px} .turno{margin:9px 0 2px;font-size:11px;color:#166534}
   .turno,table{page-break-inside:avoid}
-  .obsbox{border:1px solid #999;min-height:42px;margin-top:2px}
-  .obslabel{font-size:10px;color:#166534;font-weight:bold;margin:7px 0 2px}
-  .firma{margin-top:16px;display:flex;gap:40px} .firma div{flex:1;border-top:1px solid #333;padding-top:3px;text-align:center;font-size:10px;color:#555}
-  @media print{body{padding:3px}}</style></head><body>
+  .obsbox{border:1px solid #999;min-height:130px;margin-top:3px}
+  .obslabel{font-size:11.5px;color:#166534;font-weight:bold;margin:10px 0 3px}
+  .firma{margin-top:26px;display:flex;gap:40px} .firma div{flex:1;border-top:1px solid #333;padding-top:4px;text-align:center;font-size:11px;color:#555}
+  @media print{body{padding:4px}}</style></head><body>
   <h1>Planilla de producción diaria — ${esc(emp)}</h1>
   <div class="sub">Fórmula: <b>${esc(f?.nombre||'')}</b> · El operario completa a mano los kg durante la jornada; luego se cargan al sistema. <b>Todos los valores en kg.</b></div>
   <table class="meta"><tr><td class="fw"><b>Fecha de jornada:</b></td><td>____ / ____ / ________</td></tr></table>
