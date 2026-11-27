@@ -3135,6 +3135,12 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/11/2026',
+      titulo:'⛽ v2.484.0 — Parte de producción: gasoil con artículo, precio y descuento de stock',
+      desc:'En los <b>costos indirectos</b> del parte de producción, el <b>gasoil</b> (en litros) ahora tiene <b>artículo</b> y <b>depósito (cisterna)</b>: al elegir el artículo, el <b>$/litro</b> se completa solo con el <b>costo de la última compra</b> y, al guardar el parte, esos litros <b>se descuentan del stock</b> de la cisterna (y vuelven si anulás el parte). Así el gasoil queda valorizado y el stock controlado.' },
+    { tag:'Corrección', color:'bg-amber-100 text-amber-800 border-amber-300', fecha:'27/11/2026',
+      titulo:'🖨️ v2.483.0 — Planilla de molienda: entra en 1 hoja (4 filas por turno)',
+      desc:'Ajustamos la <b>planilla en blanco de Molienda</b> para que entre en <b>una sola hoja</b>: <b>4 filas por turno</b> de materias primas y un poco más compacta, manteniendo las filas cómodas para escribir y el recuadro de observaciones del día.' },
     { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'26/11/2026',
       titulo:'🧮 v2.482.0 — Fábrica: "Proveedores de granos" y "Cuentas de Fábrica" ahora juntos',
       desc:'En el menú <b>Fábrica</b> unificamos las dos secciones en una sola: <b>Cuentas de Fábrica</b>. En una misma lista ves, por contacto, el <b>saldo en pesos</b>, el <b>saldo en kilos</b> (canje + grano) y —para los <b>proveedores de grano</b>— su <b>cuenta en kilos</b> (entregado, liquidado, disponible y vencimientos), con las acciones de <b>➕ Entrega</b>, <b>📥 De comprobantes</b>, <b>💵 Liquidar</b> y <b>📄 ver kg</b>, más la <b>📒 Ficha</b> completa de cada uno. La alarma de kilos vencidos sigue arriba. Ya no hace falta saltar entre dos pantallas.' },
@@ -32660,14 +32666,21 @@ function molCiRow(pre){ pre=pre||{};
     <td><input type="number" step="0.01" class="input text-sm text-right" data-ci="cantidad" style="width:90px" placeholder="${esP?'—':'cant.'}" value="${pre.cantidad!=null?pre.cantidad:''}" ${esP?'disabled':''} oninput="molCiCalc(this)"/></td>
     <td><input type="number" step="0.0001" class="input text-sm text-right" data-ci="precio" style="width:90px" placeholder="${esP?'—':'$/u'}" value="${pre.precioUnit!=null?pre.precioUnit:''}" ${esP?'disabled':''} oninput="molCiCalc(this)"/></td>
     <td><input type="number" step="0.01" class="input text-sm text-right" data-ci="importe" style="width:120px" placeholder="$" value="${pre.importe!=null?pre.importe:''}" ${esP?'':'readonly'} oninput="molParteCalc()"/></td>
+    <td><select class="input text-sm" data-ci="prod" style="width:130px" title="Artículo gasoil (para valorizar y descontar stock)" ${u==='litro'?'':'disabled'} onchange="molCiProd(this)">${_mpProdOpts(pre.productoId)}</select></td>
+    <td><select class="input text-sm" data-ci="dep" style="width:120px" title="Depósito del que sale el gasoil (cisterna)" ${u==='litro'?'':'disabled'}>${_molDepOpts(pre.depositoId)}</select></td>
     <td class="text-center"><button class="btn btn-ghost btn-xs text-red-600" onclick="this.closest('tr').remove();molParteCalc()">✕</button></td></tr>`;
 }
-function molCiUnidad(sel){ const tr=sel.closest('tr'); const esP=(sel.value==='peso');
+function molCiUnidad(sel){ const tr=sel.closest('tr'); const esP=(sel.value==='peso'); const esLitro=(sel.value==='litro');
   const cant=tr.querySelector('[data-ci="cantidad"]'), pre=tr.querySelector('[data-ci="precio"]'), imp=tr.querySelector('[data-ci="importe"]');
+  const prod=tr.querySelector('[data-ci="prod"]'), dep=tr.querySelector('[data-ci="dep"]');
   if(cant){ cant.disabled=esP; cant.placeholder=esP?'—':'cant.'; if(esP) cant.value=''; }
   if(pre){ pre.disabled=esP; pre.placeholder=esP?'—':'$/u'; if(esP) pre.value=''; }
   if(imp){ imp.readOnly=!esP; }
+  if(prod){ prod.disabled=!esLitro; if(!esLitro) prod.value=''; }
+  if(dep){ dep.disabled=!esLitro; if(!esLitro) dep.value=''; }
   molCiCalc(cant); }
+// Al elegir el artículo gasoil, autocompleta el $/litro con el costo de la última compra.
+function molCiProd(sel){ const tr=sel.closest('tr'); const pr=tr.querySelector('[data-ci="precio"]'); if(pr && !pr.value){ const c=_molProdCosto(sel.value); if(c) pr.value=c; } molCiCalc(tr.querySelector('[data-ci="cantidad"]')); }
 function molCiCalc(el){ const tr=el&&el.closest?el.closest('tr'):null;
   if(tr){ const u=tr.querySelector('[data-ci="unidad"]')?.value||'peso';
     if(u!=='peso'){ const c=Number(tr.querySelector('[data-ci="cantidad"]')?.value||0); const p=Number(tr.querySelector('[data-ci="precio"]')?.value||0);
@@ -32679,7 +32692,9 @@ function _molReadCi(){ return $$('#mol-ci-body tr[data-cir]').map(tr=>{
     const cantidad=Number(tr.querySelector('[data-ci="cantidad"]')?.value||0);
     const precioUnit=Number(tr.querySelector('[data-ci="precio"]')?.value||0);
     const importe=Number(tr.querySelector('[data-ci="importe"]')?.value||0);
-    return { concepto:(tr.querySelector('[data-ci="concepto"]')?.value||'').trim(), unidad, cantidad:cantidad||null, precioUnit:precioUnit||null, importe };
+    const productoId = unidad==='litro' ? (tr.querySelector('[data-ci="prod"]')?.value||null) : null;
+    const depositoId = unidad==='litro' ? (tr.querySelector('[data-ci="dep"]')?.value||null) : null;
+    return { concepto:(tr.querySelector('[data-ci="concepto"]')?.value||'').trim(), unidad, cantidad:cantidad||null, precioUnit:precioUnit||null, importe, productoId, depositoId };
   }).filter(c=>c.importe>0 || (c.unidad!=='peso' && c.cantidad>0)); }
 function _molCostoProd(){ return _molReadCi().reduce((a,c)=>a+(Number(c.importe)||0),0); }
 function molParteForm() {
@@ -32716,9 +32731,9 @@ function molParteForm() {
       </div>
       <div class="mt-3">
         <div class="flex items-center justify-between mb-1"><label class="label !mb-0">⚡ Costos indirectos del lote (individualizados)</label><button class="btn btn-ghost btn-xs" onclick="molAddCi()">+ Costo</button></div>
-        <table class="table w-full text-sm"><thead><tr><th>Concepto</th><th>Unidad</th><th class="text-right">Cantidad</th><th class="text-right">$/unidad</th><th class="text-right">Importe $</th><th></th></tr></thead>
+        <table class="table w-full text-sm"><thead><tr><th>Concepto</th><th>Unidad</th><th class="text-right">Cantidad</th><th class="text-right">$/unidad</th><th class="text-right">Importe $</th><th>Artículo (gasoil)</th><th>Depósito</th><th></th></tr></thead>
           <tbody id="mol-ci-body"></tbody></table>
-        <div class="text-[11px] text-slate-400 mt-1">La <b>luz</b> se carga en <b>kWh</b> y el <b>gasoil</b> en <b>litros</b>; poné el <b>$/unidad</b> (lo sacás de la factura de luz o del precio del gasoil que compraste) y el importe se calcula solo. El resto (personal, mantenimiento…) va como <b>$ directo</b>. La <b>suma</b> es el costo del lote y se reparte entre los productos. Si no sabés el precio todavía, cargá igual la cantidad (kWh/litros) y después la valorás.</div>
+        <div class="text-[11px] text-slate-400 mt-1">La <b>luz</b> se carga en <b>kWh</b> y el <b>gasoil</b> en <b>litros</b>. En el <b>gasoil</b>, elegí el <b>artículo</b> y el <b>depósito (cisterna)</b>: el <b>$/litro</b> se completa solo con el costo de la última compra y al guardar <b>descuenta esos litros del stock</b> de la cisterna. El resto (personal, mantenimiento…) va como <b>$ directo</b>. La <b>suma</b> es el costo del lote y se reparte entre los productos. (La luz también se puede valorizar después repartiendo la factura entre los partes del período.)</div>
       </div>
       <div class="mt-2"><label class="label">Observaciones</label><input id="mol-obs" class="input" placeholder="opcional"/></div>
       <div id="mol-preview" class="mt-3"></div>`,
@@ -32757,15 +32772,16 @@ function molPrintPlanilla() {
   // Materias primas: 10 columnas, con secado integrado (ya no hay sección aparte).
   const _bl=(n)=>`<td class="bl"></td>`.repeat(n);
   const mpRows=(names)=>{
-    const llenas=(names||[]).filter(Boolean).map(n=>`<tr><td>${esc(n)}</td>${_bl(9)}</tr>`).join('');
-    const vacias=(`<tr>${_bl(10)}</tr>`).repeat(3);
+    const nn=(names||[]).filter(Boolean);
+    const llenas=nn.map(n=>`<tr><td>${esc(n)}</td>${_bl(9)}</tr>`).join('');
+    const vacias=(`<tr>${_bl(10)}</tr>`).repeat(Math.max(1, 4 - nn.length)); // 4 filas por turno en total
     return llenas+vacias;
   };
   const mpThead=`<thead><tr><th>Producto</th><th>Kg entrada</th><th>Hum. %</th><th>Secado (SÍ/NO)</th><th>Kg salida</th><th>Hum. salida %</th><th>Calor</th><th>Velocidad</th><th>Merma secado (kg)</th><th>Observación</th></tr></thead>`;
   const turno=(nro)=>`<div class="turno"><b>Turno ${nro}</b> &nbsp; Operario: ______________________ &nbsp; Hora inicio: ______ hs &nbsp; Hora fin: ______ hs</div>
     <table class="mp">${mpThead}<tbody>${mpRows(mps)}</tbody></table>`;
   // Productos obtenidos (al final del día): Kg inicial (lo que ya había) + Kg obtenido + Kg final.
-  const rowsSal=((sals.filter(Boolean)).map(n=>`<tr><td>${esc(n)}</td>${_bl(4)}</tr>`).join(''))+(`<tr>${_bl(5)}</tr>`).repeat(2);
+  const rowsSal=((sals.filter(Boolean)).map(n=>`<tr><td>${esc(n)}</td>${_bl(4)}</tr>`).join(''))+(`<tr>${_bl(5)}</tr>`).repeat(1);
   const w=window.open('','_blank'); if(!w) return toast('Permití las ventanas emergentes para imprimir','warn');
   w.document.write(`<html><head><title>Planilla de producción</title><meta charset="utf-8"/>
   <style>@page{margin:8mm} body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:6px;font-size:11px}
@@ -32774,12 +32790,12 @@ function molPrintPlanilla() {
   table{width:100%;border-collapse:collapse;margin-bottom:3px}
   th,td{border:1px solid #999;padding:4px 5px;text-align:left} th{background:#f0fdf4;font-size:10px}
   table.mp th,table.mp td{font-size:9px;padding:3px 3px}
-  td.bl{height:30px} .meta td{border:none;padding:2px 8px 2px 0;font-size:12px}
-  .fw{width:120px} .turno{margin:9px 0 2px;font-size:11px;color:#166534}
+  td.bl{height:28px} .meta td{border:none;padding:2px 8px 2px 0;font-size:12px}
+  .fw{width:120px} .turno{margin:8px 0 2px;font-size:11px;color:#166534}
   .turno,table{page-break-inside:avoid}
-  .obsbox{border:1px solid #999;min-height:130px;margin-top:3px}
-  .obslabel{font-size:11.5px;color:#166534;font-weight:bold;margin:10px 0 3px}
-  .firma{margin-top:26px;display:flex;gap:40px} .firma div{flex:1;border-top:1px solid #333;padding-top:4px;text-align:center;font-size:11px;color:#555}
+  .obsbox{border:1px solid #999;min-height:100px;margin-top:3px}
+  .obslabel{font-size:11.5px;color:#166534;font-weight:bold;margin:9px 0 3px}
+  .firma{margin-top:20px;display:flex;gap:40px} .firma div{flex:1;border-top:1px solid #333;padding-top:4px;text-align:center;font-size:11px;color:#555}
   @media print{body{padding:4px}}</style></head><body>
   <h1>Planilla de producción diaria — ${esc(emp)}</h1>
   <div class="sub">Fórmula: <b>${esc(f?.nombre||'')}</b> · El operario completa a mano los kg durante la jornada; luego se cargan al sistema. <b>Todos los valores en kg.</b></div>

@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.482.0';
+const AGROCORE_VERSION = '2.484.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -12428,6 +12428,9 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
             cantidad: (c.cantidad != null && c.cantidad !== '') ? Number(c.cantidad) : null,
             precioUnit: (c.precioUnit != null && c.precioUnit !== '') ? Number(c.precioUnit) : null,
             importe: Number(c.importe) || 0,
+            // Gasoil (litro): artículo + depósito de la cisterna para descontar stock.
+            productoId: (c.unidad === 'litro' && c.productoId) ? String(c.productoId) : null,
+            depositoId: (c.unidad === 'litro' && c.depositoId) ? String(c.depositoId) : null,
           })).filter(c => c.importe > 0 || (c.unidad !== 'peso' && c.cantidad > 0))
         : null;
       const costoProdLote = (costosIndirectos && costosIndirectos.length)
@@ -12497,6 +12500,17 @@ app.post('/api/partes-molienda', requireCompany, requirePermission('stock:create
             depositoId: r.depositoDestinoId || null, referencia: ref, observaciones: 'Molienda ' + f.nombre, userId: req.user?.id || null,
           } });
           try { await tx.producto.update({ where: { id: r.productoId }, data: { costoFabricacionKg: r.costoKg } }); } catch (_) {}
+        }
+        // Egreso de GASOIL (costo indirecto en litros con artículo + depósito): descuenta
+        // del stock de la cisterna, valorizado al precio cargado (última compra).
+        for (const c of (costosIndirectos || [])) {
+          if (c.unidad !== 'litro' || !c.productoId || !c.depositoId) continue;
+          const litros = Number(c.cantidad) || 0; if (!(litros > 0)) continue;
+          await tx.movimiento.create({ data: {
+            companyId: req.companyId, productoId: c.productoId, fecha: fecha2, tipo: 'egreso', motivo: 'molienda',
+            cantidad: _round2(litros), precio: c.precioUnit || null, total: _round2(c.importe) || null,
+            depositoId: c.depositoId, referencia: ref, observaciones: 'Molienda: ' + (c.concepto || 'gasoil') + ' (combustible)', userId: req.user?.id || null,
+          } });
         }
         return p;
       });
