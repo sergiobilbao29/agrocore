@@ -3136,6 +3136,9 @@ pages.inicio = async function() {
 
   // Lo guardamos en state asi la funcion verTodasNovedades() (fuera del scope) lo puede leer.
   state._novedades = [
+    { tag:'Mejora', color:'bg-emerald-100 text-emerald-800 border-emerald-300', fecha:'27/11/2026',
+      titulo:'⏳ v2.489.0 — Leads: extender la prueba de un cliente + documentación al día',
+      desc:'En <b>Empresas → Leads / Prospectos</b>, en la columna <b>Prueba</b> ahora el administrador tiene un botón <b>⏳ +días</b> para <b>sumarle días de prueba</b> a ese cliente (los que quieras, las veces que haga falta). Útil cuando el cliente ya confirmó la compra y necesita unos días más mientras se migra. Además, actualizamos el <b>instructivo de Molienda</b> y el <b>asistente</b> con las columnas de <b>secado</b> del parte de producción.' },
     { tag:'Novedad', color:'bg-indigo-100 text-indigo-800 border-indigo-300', fecha:'27/11/2026',
       titulo:'🏭 v2.488.0 — Parte de producción: materias primas con secado (entrada → salida)',
       desc:'En el <b>Parte de producción</b>, las <b>materias primas</b> ahora tienen las mismas columnas que la planilla: <b>Kg entrada, Hum. %, Secado (Sí/No), Kg salida, Hum. salida %, Calor, Velocidad y Merma de secado</b>. La <b>merma de secado se calcula sola</b> (Kg entrada − Kg salida) y la <b>fórmula se aplica sobre los Kg de salida</b> (ya secos). El <b>$/kg</b> viene del costo del producto (editable) y el <b>stock se descuenta por los Kg de entrada</b> del depósito elegido. Además, en la <b>planilla impresa</b> agrandamos el recuadro de observaciones del día y bajamos las firmas.' },
@@ -11803,7 +11806,7 @@ async function empTrialLeads(){
       <td class="p-1 whitespace-nowrap align-top">${fmtFecha(l.createdAt)}<div class="text-[10px] text-slate-400">${l.verifiedAt?'✔ verificó':'⏳ sin verif.'}</div></td>
       <td class="p-1 align-top"><b>${esc(l.nombre||'—')}</b><div class="text-[10px] text-slate-400">${esc(l.empresa||'')}${esc(ACTIV[l.actividad]?(' · '+ACTIV[l.actividad]):'')}</div>${(l.provincia||l.ciudad)?`<div class="text-[10px] text-slate-400">📍 ${esc([l.ciudad,l.provincia].filter(Boolean).join(', '))}</div>`:''}</td>
       <td class="p-1 align-top">${waCel}${l.email?`<div class="text-[11px]"><a class="text-emerald-700" href="mailto:${esc(l.email)}">${esc(l.email)}</a></div>`:''}${(Array.isArray(l.contactos)&&l.contactos.length)?`<div class="text-[10px] text-slate-500 mt-0.5">${l.contactos.map(c=>`👤 ${esc(c.nombre||'')}${c.tel?` · ${esc(c.tel)}`:''}${c.email?` · ${esc(c.email)}`:''}`).join('<br/>')}</div>`:''}</td>
-      <td class="p-1 align-top text-center">${trialCel(l)}</td>
+      <td class="p-1 align-top text-center">${trialCel(l)}${(l.companyId && l.company && (!l.company.plan || l.company.plan==='trial')) ? `<div><button class="btn btn-ghost text-[10px] text-indigo-700" title="Sumar días de prueba" onclick="empLeadExtenderPrueba('${esc(l.id)}')">⏳ +días</button></div>` : ''}</td>
       <td class="p-1 align-top"><select class="input text-xs" data-lf="segEstado">${estOpts(l.segEstado)}</select></td>
       <td class="p-1 align-top"><input type="date" class="input text-xs" data-lf="segFecha" value="${dt(l.segFecha)}"/></td>
       <td class="p-1 align-top"><input class="input text-xs" data-lf="segNotas" value="${esc(l.segNotas||'')}" placeholder="Notas…"/></td>
@@ -11841,6 +11844,17 @@ async function empLeadGuardar(id){
       }catch(_){ toast('Seguimiento guardado','success'); }
     } else { toast('Seguimiento guardado','success'); }
   }catch(e){ toast(e.message,'error'); }
+}
+async function empLeadExtenderPrueba(id){
+  const d = prompt('¿Cuántos días de prueba querés sumarle a este cliente?', '10');
+  if (d==null) return;
+  const dias = Number(d); if (!(dias>0)) return toast('Poné una cantidad de días válida','warn');
+  try {
+    const r = await api('/api/empresas/trial-leads/'+id+'/extender-prueba', { method:'POST', body: JSON.stringify({ dias }) });
+    const l=(state._trialLeads||[]).find(x=>x.id===id); if(l && l.company){ l.company.trialEndsAt = r.trialEndsAt; }
+    toast(`Prueba extendida ${dias} día(s): vence el ${fmtFecha(r.trialEndsAt)} (${r.diasRestantes} días restantes)`, 'success');
+    empTrialLeads();
+  } catch(e){ toast(e.message,'error'); }
 }
 async function empLeadEliminar(id){
   if(!confirm('¿Eliminar este lead? No se puede deshacer.')) return;

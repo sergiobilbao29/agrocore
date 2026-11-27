@@ -69,8 +69,9 @@ def build():
     E.append(Paragraph(
         "El módulo <b>Molienda / Fábrica</b> es para plantas que transforman un grano en varios productos (expeller de "
         "soja, aceite, etc.). Cada jornada cargás una <b>planilla de producción diaria</b>: las <b>materias primas</b> "
-        "realmente consumidas (soja, un poco de maní, carbonato) con sus <b>kilos reales</b>, y los <b>productos "
-        "obtenidos</b> reales (expeller, aceite, desperdicio), más la <b>merma de secado</b> aparte. El sistema "
+        "realmente consumidas (soja, un poco de maní, carbonato) con sus <b>kilos de entrada y de salida</b> (si llevan "
+        "secado), y los <b>productos obtenidos</b> reales (expeller, aceite, desperdicio). La <b>merma de secado</b> de "
+        "cada materia prima la calcula sola el sistema. El sistema "
         "<b>descuenta cada materia prima e ingresa cada producto</b> en el stock, calcula el <b>costo de fabricación por "
         "kilo</b> y, con un <b>% de ganancia</b>, te sugiere el precio de venta. Está en <b>Stock y depósitos &rarr; "
         "Molienda / Fábrica</b>.", st_intro))
@@ -121,14 +122,25 @@ def build():
         "En <b>Molienda / Fábrica &rarr; &#127981; Partes de molienda</b>, toca <b>&#65291; Nuevo parte de producción</b>.",
         "Elegí la <b>fórmula</b> (precarga las materias primas y los productos) y la <b>fecha de jornada</b>. Poné la "
         "<b>hora de inicio y fin</b> (ej. 23:00 &rarr; 17:00) como dato.",
-        "<b>Materias primas consumidas:</b> en la grilla cargá los <b>kilos reales</b> de cada una (soja, un poco de "
-        "maní, carbonato), con su <b>$/kg</b> (viene prellenado) y el <b>depósito</b> de donde sale. Agregá o quita "
-        "filas con <b>&#65291; Materia prima</b>.",
+        "<b>Materias primas consumidas:</b> cada materia prima tiene ahora las mismas columnas que la planilla impresa: "
+        "<b>Producto, Kg entrada, Hum. %, Secado (Sí/No), Kg salida, Hum. salida %, Calor, Velocidad y Merma de secado</b>. "
+        "Cargá los <b>Kg de entrada</b> reales de cada una (soja, un poco de maní, carbonato), elegí el <b>depósito</b> de "
+        "donde sale y, si la secaste, tildá <b>Secado</b> y poné los <b>Kg de salida</b> (ya secos). Agregá o quita filas "
+        "con <b>&#65291; Materia prima</b>.",
+        "La <b>Merma de secado se calcula sola</b> por cada materia prima: es <b>Kg entrada &minus; Kg salida</b> (lo que "
+        "perdió al desactivarse/secarse). Ya no hay un único campo global de merma de secado: ahora la merma es "
+        "<b>por materia prima</b> y la hace el sistema.",
+        "La <b>fórmula se aplica sobre los Kg de salida</b> (ya secos): el <b>estimado de cada producto</b> es "
+        "<b>Kg de salida &times; rendimiento</b> de la fórmula, así comparás contra los kilos que de verdad salieron.",
+        "El <b>stock de la materia prima se descuenta por los Kg de entrada</b> del depósito elegido (lo que realmente "
+        "sacaste, antes de secar). El <b>$/kg</b> viene del <b>costo del producto</b> y es <b>editable</b> por si querés "
+        "ajustarlo en ese parte.",
         "<b>Productos obtenidos:</b> cargá los <b>kilos reales</b> de expeller, aceite y desperdicio, con su "
         "<b>depósito destino</b>. Tildá <b>Merma</b> en el desperdicio/merma (no ingresa stock ni lleva costo). Al lado del "
         "<b>Kg real</b> que cargás a mano ahora ves el <b>Kg estimado</b> (kg procesados &times; rendimiento de la fórmula), "
         "así comparás de un vistazo cuánto tendría que haber salido contra lo que salió de verdad.",
-        "Cargá aparte la <b>Merma de secado</b> (desactivación de la soja).",
+        "Ya no cargás una <b>Merma de secado</b> global: la merma de secado ahora es <b>por materia prima</b> y la calcula "
+        "sola el sistema (Kg entrada &minus; Kg salida) en la grilla de arriba.",
         "<b>Costos indirectos del lote (individualizados):</b> cargalos por separado. Algunos van <b>por unidad</b>: la "
         "<b>luz en kWh</b> y el <b>gasoil en litros</b> (el sistema calcula el $ solo); el resto &mdash;<b>personal</b>, "
         "<b>mantenimiento</b>&mdash; los cargás como <b>&ldquo;$ directo&rdquo;</b>. La <b>suma</b> es el costo de producción "
@@ -236,7 +248,9 @@ def build():
         ("¿Puedo cargar varias materias primas con kilos distintos cada día?",
          "Sí. La planilla trae una grilla de materias primas: cargás los kilos reales de la soja, el maní y el carbonato (o lo que uses) de esa jornada. La fórmula las precarga, pero vos editás los kilos reales, que siempre varían un poco."),
         ("¿La merma de secado va junto con la merma de molienda?",
-         "No. El secado/desactivación se carga en su propio campo 'Merma de secado', aparte de la merma/desperdicio de la molienda, para que el rendimiento real quede claro."),
+         "No. La merma de secado es por materia prima y la calcula sola el sistema (Kg entrada menos Kg salida), aparte de la merma/desperdicio de la molienda, para que el rendimiento real quede claro. Ya no hay un campo global de merma de secado."),
+        ("¿Sobre qué kilos se aplica la fórmula ahora que hay secado?",
+         "Sobre los Kg de salida (ya secos) de cada materia prima. El estimado de cada producto es Kg de salida por el rendimiento de la fórmula. El stock, en cambio, se descuenta por los Kg de entrada, que es lo que de verdad sacaste del depósito."),
         ("¿Puedo imprimir una planilla para que el operario la complete a mano?",
          "Sí. En el parte de producción toca 'Imprimir planilla en blanco': sale una hoja con materias primas, secado y productos obtenidos para anotar los kilos en la planta y después cargarlos al sistema."),
         ("¿Tengo que calcular yo los kilos de expeller y aceite?",

@@ -106,7 +106,7 @@ const uploadMedia = multer({ storage: multer.memoryStorage(), limits: { fileSize
 // Versión actual del sistema. Se incrementa con cada release.
 // Endpoint /api/system/version la expone para que el frontend la muestre
 // y para que el script Update-AgroCore.ps1 compare antes de pullear.
-const AGROCORE_VERSION = '2.488.0';
+const AGROCORE_VERSION = '2.489.0';
 const AGROCORE_BUILD = new Date('2026-09-18').toISOString().slice(0, 10);
 
 // ============================================================
@@ -2185,6 +2185,27 @@ app.put('/api/empresas/trial-leads/:id', async (req, res, next) => {
       } else { throw e1; }
     }
     res.json({ ok: true, data: { id: row.id }, aviso });
+  } catch (e) { next(e); }
+});
+
+// Extender la PRUEBA de la empresa de un lead N días (acción de administración).
+// A diferencia del auto-servicio (1 vez, 15 días), acá el super admin puede sumar
+// los días que quiera, las veces que haga falta.
+app.post('/api/empresas/trial-leads/:id/extender-prueba', authMiddleware, async (req, res, next) => {
+  try {
+    if (!req.user?.superAdmin) return res.status(403).json({ ok: false, error: 'Solo super admin' });
+    const dias = Math.round(Number((req.body || {}).dias) || 0);
+    if (!(dias > 0) || dias > 3650) return res.status(400).json({ ok: false, error: 'Indicá una cantidad de días válida' });
+    const l = await prisma.trialSignup.findUnique({ where: { id: req.params.id } });
+    if (!l || !l.companyId) return res.status(404).json({ ok: false, error: 'El lead no tiene una empresa de prueba asociada' });
+    const co = await prisma.company.findUnique({ where: { id: l.companyId } });
+    if (!co) return res.status(404).json({ ok: false, error: 'Empresa no encontrada' });
+    if (co.plan !== 'trial') return res.status(400).json({ ok: false, error: 'Esa empresa ya no está en prueba (está contratada)' });
+    // Suma los días desde el vencimiento actual, o desde hoy si ya venció.
+    const base = co.trialEndsAt && new Date(co.trialEndsAt) > new Date() ? new Date(co.trialEndsAt) : new Date();
+    const nuevo = new Date(base.getTime() + dias * 86400000);
+    await prisma.company.update({ where: { id: co.id }, data: { trialEndsAt: nuevo } });
+    res.json({ ok: true, trialEndsAt: nuevo.toISOString(), diasRestantes: Math.ceil((nuevo.getTime() - Date.now()) / 86400000) });
   } catch (e) { next(e); }
 });
 
@@ -18253,7 +18274,8 @@ const _AYUDA_KB = [
       'Tip: en la ficha de cada producto marcá su "Rol en fábrica" (materia prima = grano de origen, o producto final = coproducto). Así la fórmula solo te ofrece esos y no todo el catálogo (ni animales ni agroquímicos).',
       'En "Fórmulas" definí el grano de origen y los coproductos por % (ej. Expeller 88, Aceite 10, Merma 2). Sirve de plantilla: precarga las materias primas y los productos de la planilla.',
       'PLANILLA DIARIA (parte de producción): es un parte por jornada. Cargás la fecha de jornada (y hora de inicio/fin, ej. 23:00→17:00), la grilla de MATERIAS PRIMAS con los KILOS REALES de cada una (soja, un poco de maní, carbonato…), y la grilla de PRODUCTOS OBTENIDOS reales (expeller, aceite, desperdicio). Marcá "Merma" en el desperdicio/merma (no ingresa stock ni lleva costo). Cargás aparte la "Merma de secado" (desactivación de la soja). El sistema descuenta cada materia prima e ingresa cada producto, y te muestra en vivo el balance (procesado vs. obtenido vs. merma), el costo por kg y, si el producto tiene precio de referencia, el valor de venta. Ojo: no te deja usar más materia prima de la que hay en stock.',
-      'En Productos obtenidos ahora ves el Kg ESTIMADO (según la fórmula: kg procesados × rendimiento) al lado del Kg REAL que cargás a mano, para comparar.',
+      'MATERIAS PRIMAS con secado: cada materia prima tiene Kg entrada, Hum. %, Secado (Sí/No), Kg salida, Hum. salida %, Calor, Velocidad y Merma de secado. La merma de secado se calcula sola (Kg entrada − Kg salida) y la FÓRMULA se aplica sobre los Kg de SALIDA (ya secos). El stock se descuenta por los Kg de ENTRADA del depósito elegido y el $/kg viene del costo del producto (editable).',
+      'En Productos obtenidos ves el Kg ESTIMADO (según la fórmula: kg de salida × rendimiento) al lado del Kg REAL que cargás a mano, para comparar.',
       'Costos indirectos por UNIDAD: la luz se carga en kWh y el gasoil en litros (el resto —personal, mantenimiento— como "$ directo"). En el gasoil elegís el ARTÍCULO y el DEPÓSITO (cisterna): el $/litro se completa solo con el costo de la última compra y, al guardar el parte, esos litros se descuentan del stock de la cisterna (vuelven si anulás el parte). La suma es el costo de producción del lote y se reparte entre los productos.',
       'COSTO DE LUZ POR FACTURA: en empresas fábrica, al cargar la factura de compra de la luz aparece un check "Es factura de luz que aplica a la producción". Tildalo, poné el período facturado (desde/hasta) y, al guardar, el total de la factura se reparte entre los Partes de producción de ese período según los kWh de cada uno (recalcula el costo de cada parte y de los productos).',
       'Antes de producir podés tocar "🖨️ Imprimir planilla en blanco": sale una hoja para que el operario anote a mano los kg de lo que usa y lo que obtiene durante la jornada, y después cargás todo al sistema.',
